@@ -5,6 +5,7 @@ import type { ProgramContext } from "./context.js";
 const hasEmittedCliBannerMock = vi.fn(() => false);
 const formatCliBannerLineMock = vi.fn(() => "BANNER-LINE");
 const formatDocsLinkMock = vi.fn((_path: string, full: string) => `https://${full}`);
+const resolveCommitHashMock = vi.fn<() => string | null>(() => "abc1234");
 
 vi.mock("../../terminal/links.js", () => ({
   formatDocsLink: formatDocsLinkMock,
@@ -24,6 +25,10 @@ vi.mock("../../terminal/theme.js", () => ({
 vi.mock("../banner.js", () => ({
   formatCliBannerLine: formatCliBannerLineMock,
   hasEmittedCliBanner: hasEmittedCliBannerMock,
+}));
+
+vi.mock("../../infra/git-commit.js", () => ({
+  resolveCommitHash: resolveCommitHashMock,
 }));
 
 vi.mock("../cli-name.js", () => ({
@@ -55,6 +60,7 @@ describe("configureProgramHelp", () => {
     vi.clearAllMocks();
     originalArgv = [...process.argv];
     hasEmittedCliBannerMock.mockReturnValue(false);
+    resolveCommitHashMock.mockReturnValue("abc1234");
   });
 
   afterEach(() => {
@@ -116,7 +122,25 @@ describe("configureProgramHelp", () => {
 
     const program = makeProgramWithCommands();
     expect(() => configureProgramHelp(program, testProgramContext)).toThrow("exit:0");
-    expect(logSpy).toHaveBeenCalledWith("9.9.9-test");
+    expect(logSpy).toHaveBeenCalledWith("OpenClaw 9.9.9-test (abc1234)");
+    expect(exitSpy).toHaveBeenCalledWith(0);
+
+    logSpy.mockRestore();
+    exitSpy.mockRestore();
+  });
+
+  it("prints version and exits immediately without commit metadata", () => {
+    process.argv = ["node", "openclaw", "--version"];
+    resolveCommitHashMock.mockReturnValue(null);
+
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+    const exitSpy = vi.spyOn(process, "exit").mockImplementation(((code?: number) => {
+      throw new Error(`exit:${code ?? ""}`);
+    }) as typeof process.exit);
+
+    const program = makeProgramWithCommands();
+    expect(() => configureProgramHelp(program, testProgramContext)).toThrow("exit:0");
+    expect(logSpy).toHaveBeenCalledWith("OpenClaw 9.9.9-test");
     expect(exitSpy).toHaveBeenCalledWith(0);
 
     logSpy.mockRestore();

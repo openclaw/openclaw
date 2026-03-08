@@ -9,6 +9,7 @@ Docs: https://docs.openclaw.ai
 - TUI: infer the active agent from the current workspace when launched inside a configured agent workspace, while preserving explicit `agent:` session targets. (#39591) thanks @arceus77-7.
 - Tools/Brave web search: add opt-in `tools.web.search.brave.mode: "llm-context"` so `web_search` can call Brave's LLM Context endpoint and return extracted grounding snippets with source metadata, plus config/docs/test coverage. (#33383) Thanks @thirumaleshp.
 - Talk mode: add top-level `talk.silenceTimeoutMs` config so Talk waits a configurable amount of silence before auto-sending the current transcript, while keeping each platform's existing default pause window when unset. (#39607) Thanks @danodoesdesign. Fixes #17147.
+- CLI/install: include the short git commit hash in `openclaw --version` output when metadata is available, and keep installer version checks compatible with the decorated format. (#39712) thanks @sourman.
 
 ### Fixes
 
