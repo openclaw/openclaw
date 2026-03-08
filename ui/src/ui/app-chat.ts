@@ -205,9 +205,7 @@ export async function handleSendChat(
 export async function refreshChat(host: ChatHost, opts?: { scheduleScroll?: boolean }) {
   await Promise.all([
     loadChatHistory(host as unknown as OpenClawApp),
-    loadSessions(host as unknown as OpenClawApp, {
-      activeMinutes: CHAT_SESSIONS_ACTIVE_MINUTES,
-    }),
+    loadSessions(host as unknown as OpenClawApp),
     refreshChatAvatar(host),
   ]);
   if (opts?.scheduleScroll !== false) {
