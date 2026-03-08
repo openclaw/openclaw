@@ -14,6 +14,7 @@ import { saveSessionStore } from "../config/sessions.js";
 import { canonicalizeMainSessionAlias } from "../config/sessions/main-session.js";
 import type { SessionScope } from "../config/sessions/types.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { resolveChannelAllowFromPath } from "../pairing/pairing-store.js";
 import {
   buildAgentMainSessionKey,
   DEFAULT_ACCOUNT_ID,
@@ -617,10 +618,11 @@ export async function detectLegacyStateMigrations(params: {
   const hasLegacyWhatsAppAuth =
     fileExists(path.join(oauthDir, "creds.json")) &&
     !fileExists(path.join(targetWhatsAppAuthDir, "creds.json"));
-  const legacyTelegramAllowFromPath = path.join(oauthDir, "telegram-allowFrom.json");
-  const targetTelegramAllowFromPath = path.join(
-    oauthDir,
-    `telegram-${DEFAULT_ACCOUNT_ID}-allowFrom.json`,
+  const legacyTelegramAllowFromPath = resolveChannelAllowFromPath("telegram", env);
+  const targetTelegramAllowFromPath = resolveChannelAllowFromPath(
+    "telegram",
+    env,
+    DEFAULT_ACCOUNT_ID,
   );
   const hasLegacyTelegramAllowFrom =
     fileExists(legacyTelegramAllowFromPath) && !fileExists(targetTelegramAllowFromPath);
