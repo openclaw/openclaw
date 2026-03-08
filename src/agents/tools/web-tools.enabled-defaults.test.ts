@@ -772,7 +772,25 @@ describe("web_search external content wrapping", () => {
     expect(mockFetch).not.toHaveBeenCalled();
   });
 
-  it("rejects date_after/date_before in Brave llm-context mode", async () => {
+  it.each([
+    [
+      "rejects date_after/date_before in Brave llm-context mode",
+      {
+        query: "test",
+        date_after: "2025-01-01",
+        date_before: "2025-01-31",
+      },
+      "unsupported_date_filter",
+    ],
+    [
+      "rejects ui_lang in Brave llm-context mode",
+      {
+        query: "test",
+        ui_lang: "de-DE",
+      },
+      "unsupported_ui_lang",
+    ],
+  ])("%s", async (_name, input, expectedError) => {
     vi.stubEnv("BRAVE_API_KEY", "test-key");
     const mockFetch = installBraveLlmContextFetch({
       title: "unused",
@@ -795,45 +813,9 @@ describe("web_search external content wrapping", () => {
       },
       sandboxed: true,
     });
-    const result = await tool?.execute?.("call-1", {
-      query: "test",
-      date_after: "2025-01-01",
-      date_before: "2025-01-31",
-    });
+    const result = await tool?.execute?.("call-1", input);
 
-    expect(result?.details).toMatchObject({ error: "unsupported_date_filter" });
-    expect(mockFetch).not.toHaveBeenCalled();
-  });
-
-  it("rejects ui_lang in Brave llm-context mode", async () => {
-    vi.stubEnv("BRAVE_API_KEY", "test-key");
-    const mockFetch = installBraveLlmContextFetch({
-      title: "unused",
-      url: "https://example.com",
-      snippets: ["unused"],
-    });
-
-    const tool = createWebSearchTool({
-      config: {
-        tools: {
-          web: {
-            search: {
-              provider: "brave",
-              brave: {
-                mode: "llm-context",
-              },
-            },
-          },
-        },
-      },
-      sandboxed: true,
-    });
-    const result = await tool?.execute?.("call-1", {
-      query: "test",
-      ui_lang: "de-DE",
-    });
-
-    expect(result?.details).toMatchObject({ error: "unsupported_ui_lang" });
+    expect(result?.details).toMatchObject({ error: expectedError });
     expect(mockFetch).not.toHaveBeenCalled();
   });
 
