@@ -2002,7 +2002,11 @@ export async function runEmbeddedAttempt(
         )
         .map((entry) => ({ toolName: entry.toolName, meta: entry.meta }));
 
-      if (hookRunner?.hasHooks("llm_output")) {
+      // Only fire llm_output hook when the LLM actually produced output.
+      // After a timeout with no assistant response, lastAssistant is undefined and
+      // usage may be undefined — plugin handlers that enumerate these crash with
+      // "Cannot convert undefined or null to object".
+      if (hookRunner?.hasHooks("llm_output") && lastAssistant) {
         hookRunner
           .runLlmOutput(
             {
@@ -2012,7 +2016,7 @@ export async function runEmbeddedAttempt(
               model: params.modelId,
               assistantTexts,
               lastAssistant,
-              usage: getUsageTotals(),
+              usage: getUsageTotals() ?? undefined,
             },
             {
               agentId: hookAgentId,
