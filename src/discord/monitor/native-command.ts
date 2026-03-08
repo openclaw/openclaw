@@ -52,8 +52,7 @@ import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { getAgentScopedMediaLocalRoots } from "../../media/local-roots.js";
 import { buildPairingReply } from "../../pairing/pairing-messages.js";
 import { executePluginCommand, matchPluginCommand } from "../../plugins/commands.js";
-import { resolveAgentRoute } from "../../routing/resolve-route.js";
-import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
+import type { ResolvedAgentRoute } from "../../routing/resolve-route.js";
 import { buildUntrustedChannelMetadata } from "../../security/channel-metadata.js";
 import { chunkItems } from "../../utils/chunk-items.js";
 import { withTimeout } from "../../utils/with-timeout.js";
@@ -86,6 +85,11 @@ import {
   toDiscordModelPickerMessagePayload,
   type DiscordModelPickerCommandContext,
 } from "./model-picker.js";
+import {
+  buildDiscordRoutePeer,
+  resolveDiscordConversationRoute,
+  resolveDiscordEffectiveRoute,
+} from "./route-resolution.js";
 import { resolveDiscordSenderIdentity } from "./sender-identity.js";
 import type { ThreadBindingManager } from "./thread-bindings.js";
 import { resolveDiscordThreadParentInfo } from "./threading.js";
@@ -448,36 +452,32 @@ async function resolveDiscordModelPickerRoute(params: {
     threadParentId = parentInfo.id;
   }
 
-  const route = resolveAgentRoute({
+  const route = resolveDiscordConversationRoute({
     cfg,
-    channel: "discord",
     accountId,
     guildId: interaction.guild?.id ?? undefined,
     memberRoleIds,
-    peer: {
-      kind: isDirectMessage ? "direct" : isGroupDm ? "group" : "channel",
-      id: isDirectMessage ? (interaction.user?.id ?? rawChannelId) : rawChannelId,
-    },
-    parentPeer: threadParentId ? { kind: "channel", id: threadParentId } : undefined,
+    peer: buildDiscordRoutePeer({
+      isDirectMessage,
+      isGroupDm,
+      directUserId: interaction.user?.id ?? rawChannelId,
+      conversationId: rawChannelId,
+    }),
+    parentConversationId: threadParentId,
   });
 
   const threadBinding = isThreadChannel
     ? params.threadBindings.getByThreadId(rawChannelId)
     : undefined;
-  const boundSessionKey = threadBinding?.targetSessionKey?.trim();
-  const boundAgentId = boundSessionKey ? resolveAgentIdFromSessionKey(boundSessionKey) : undefined;
-  return boundSessionKey
-    ? {
-        ...route,
-        sessionKey: boundSessionKey,
-        agentId: boundAgentId ?? route.agentId,
-      }
-    : route;
+  return resolveDiscordEffectiveRoute({
+    route,
+    boundSessionKey: threadBinding?.targetSessionKey,
+  });
 }
 
 function resolveDiscordModelPickerCurrentModel(params: {
   cfg: ReturnType<typeof loadConfig>;
-  route: ReturnType<typeof resolveAgentRoute>;
+  route: ResolvedAgentRoute;
   data: Awaited<ReturnType<typeof loadDiscordModelPickerData>>;
 }): string {
   const fallback = buildDiscordModelPickerCurrentModel(
@@ -1606,17 +1606,18 @@ async function dispatchDiscordCommandInteraction(params: {
   const isGuild = Boolean(interaction.guild);
   const channelId = rawChannelId || "unknown";
   const interactionId = interaction.rawData.id;
-  const route = resolveAgentRoute({
+  const route = resolveDiscordConversationRoute({
     cfg,
-    channel: "discord",
     accountId,
     guildId: interaction.guild?.id ?? undefined,
     memberRoleIds,
-    peer: {
-      kind: isDirectMessage ? "direct" : isGroupDm ? "group" : "channel",
-      id: isDirectMessage ? user.id : channelId,
-    },
-    parentPeer: threadParentId ? { kind: "channel", id: threadParentId } : undefined,
+    peer: buildDiscordRoutePeer({
+      isDirectMessage,
+      isGroupDm,
+      directUserId: user.id,
+      conversationId: channelId,
+    }),
+    parentConversationId: threadParentId,
   });
   const threadBinding = isThreadChannel ? threadBindings.getByThreadId(rawChannelId) : undefined;
   const configuredRoute =
@@ -1646,15 +1647,12 @@ async function dispatchDiscordCommandInteraction(params: {
   }
   const configuredBoundSessionKey = configuredRoute?.boundSessionKey?.trim() || undefined;
   const boundSessionKey = threadBinding?.targetSessionKey?.trim() || configuredBoundSessionKey;
-  const boundAgentId = boundSessionKey ? resolveAgentIdFromSessionKey(boundSessionKey) : undefined;
-  const effectiveRoute = boundSessionKey
-    ? {
-        ...route,
-        sessionKey: boundSessionKey,
-        agentId: boundAgentId ?? route.agentId,
-        ...(configuredBinding ? { matchedBy: "binding.channel" as const } : {}),
-      }
-    : (configuredRoute?.route ?? route);
+  const effectiveRoute = resolveDiscordEffectiveRoute({
+    route,
+    boundSessionKey,
+    configuredRoute,
+    matchedBy: configuredBinding ? "binding.channel" : undefined,
+  });
   const conversationLabel = isDirectMessage ? (user.globalName ?? user.username) : channelId;
   const ownerAllowFrom = resolveDiscordOwnerAllowFrom({
     channelConfig,
