@@ -206,6 +206,7 @@ if (command === "prompt") {
     openclawShell,
   });
   const requestId = "req-1";
+  const lingerAfterDone = agent === "opencode" && stdinText.includes("slow-exit-after-done");
 
   emitJson({
     jsonrpc: "2.0",
@@ -297,7 +298,11 @@ if (command === "prompt") {
     content: { type: "text", text: "echo:" + stdinText.trim() },
   });
   emitJson({ type: "done", stopReason: "end_turn" });
-  process.exit(0);
+  if (lingerAfterDone) {
+    setTimeout(() => process.exit(0), 3000);
+  } else {
+    process.exit(0);
+  }
 }
 
 writeLog({ kind: "unknown", args });

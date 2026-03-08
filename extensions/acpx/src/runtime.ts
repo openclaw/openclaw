@@ -1,3 +1,4 @@
+import type { ChildProcessWithoutNullStreams } from "node:child_process";
 import { createInterface } from "node:readline";
 import type {
   AcpRuntimeCapabilities,
@@ -27,6 +28,7 @@ import {
   resolveSpawnFailure,
   type SpawnCommandCache,
   type SpawnCommandOptions,
+  type SpawnExit,
   type SpawnResolutionEvent,
   spawnAndCollect,
   spawnWithResolvedCommand,
@@ -47,9 +49,31 @@ export const ACPX_BACKEND_ID = "acpx";
 const ACPX_RUNTIME_HANDLE_PREFIX = "acpx:v1:";
 const DEFAULT_AGENT_FALLBACK = "codex";
 const ACPX_EXIT_CODE_PERMISSION_DENIED = 5;
+const ACPX_PROMPT_DONE_EXIT_GRACE_MS = 400;
+const ACPX_PROMPT_FORCE_EXIT_GRACE_MS = 400;
 const ACPX_CAPABILITIES: AcpRuntimeCapabilities = {
   controls: ["session/set_mode", "session/set_config_option", "session/status"],
 };
+
+async function waitWithTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T | null> {
+  if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) {
+    return await promise;
+  }
+  let timeoutHandle: NodeJS.Timeout | undefined;
+  try {
+    return await Promise.race<T | null>([
+      promise,
+      new Promise<null>((resolve) => {
+        timeoutHandle = setTimeout(() => resolve(null), timeoutMs);
+        timeoutHandle.unref?.();
+      }),
+    ]);
+  } finally {
+    if (timeoutHandle) {
+      clearTimeout(timeoutHandle);
+    }
+  }
+}
 
 function formatPermissionModeGuidance(): string {
   return "Configure plugins.entries.acpx.config.permissionMode to one of: approve-reads, approve-all, deny-all.";
@@ -162,6 +186,57 @@ export class AcpxRuntime implements AcpRuntime {
     this.loggedSpawnResolutions.add(key);
     this.logger?.debug?.(
       `acpx spawn resolver: command=${event.command} mode=${event.strictWindowsCmdWrapper ? "strict" : "compat"} resolution=${event.resolution}`,
+    );
+  }
+
+  private async waitForPromptExit(params: {
+    child: ChildProcessWithoutNullStreams;
+    exitPromise: Promise<SpawnExit>;
+    sawTerminalEvent: boolean;
+    agent: string;
+    sessionName: string;
+  }): Promise<SpawnExit> {
+    if (!params.sawTerminalEvent) {
+      return await params.exitPromise;
+    }
+
+    const gracefulExit = await waitWithTimeout(params.exitPromise, ACPX_PROMPT_DONE_EXIT_GRACE_MS);
+    if (gracefulExit) {
+      return gracefulExit;
+    }
+
+    this.logger?.warn?.(
+      `acpx prompt lingered after terminal event; forcing shutdown (agent=${params.agent} session=${params.sessionName})`,
+    );
+
+    try {
+      params.child.kill("SIGTERM");
+    } catch {
+      // Ignore kill races when process already exited.
+    }
+
+    const terminatedExit = await waitWithTimeout(
+      params.exitPromise,
+      ACPX_PROMPT_FORCE_EXIT_GRACE_MS,
+    );
+    if (terminatedExit) {
+      return terminatedExit;
+    }
+
+    try {
+      params.child.kill("SIGKILL");
+    } catch {
+      // Ignore kill races when process already exited.
+    }
+
+    const killedExit = await waitWithTimeout(params.exitPromise, ACPX_PROMPT_FORCE_EXIT_GRACE_MS);
+    if (killedExit) {
+      return killedExit;
+    }
+
+    throw new AcpRuntimeError(
+      "ACP_TURN_FAILED",
+      `ACP prompt process did not exit after terminal event (agent=${params.agent}, session=${params.sessionName}).`,
     );
   }
 
@@ -331,6 +406,10 @@ export class AcpxRuntime implements AcpRuntime {
             continue;
           }
           sawDone = true;
+          yield parsed;
+          // Some harness adapters can keep the process alive after a terminal
+          // done event. Stop reading and enforce shutdown below.
+          break;
         }
         if (parsed.type === "error") {
           sawError = true;
@@ -338,7 +417,13 @@ export class AcpxRuntime implements AcpRuntime {
         yield parsed;
       }
 
-      const exit = await waitForExit(child);
+      const exit = await this.waitForPromptExit({
+        child,
+        exitPromise: waitForExit(child),
+        sawTerminalEvent: sawDone || sawError,
+        agent: state.agent,
+        sessionName: state.name,
+      });
       if (exit.error) {
         const spawnFailure = resolveSpawnFailure(exit.error, state.cwd);
         if (spawnFailure === "missing-command") {

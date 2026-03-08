@@ -195,6 +195,40 @@ describe("AcpxRuntime", () => {
     expect(doneCount).toBe(1);
   });
 
+  it("completes opencode turns even when the process lingers after done", async () => {
+    const runtime = sharedFixture?.runtime;
+    expect(runtime).toBeDefined();
+    if (!runtime) {
+      throw new Error("shared runtime fixture missing");
+    }
+    const handle = await runtime.ensureSession({
+      sessionKey: "agent:opencode:acp:linger-after-done",
+      agent: "opencode",
+      mode: "persistent",
+    });
+
+    const startedAt = Date.now();
+    const events = [];
+    for await (const event of runtime.runTurn({
+      handle,
+      text: "slow-exit-after-done",
+      mode: "prompt",
+      requestId: "req-linger-after-done",
+    })) {
+      events.push(event);
+    }
+    const durationMs = Date.now() - startedAt;
+
+    expect(events).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: "done",
+        }),
+      ]),
+    );
+    expect(durationMs).toBeLessThan(2_500);
+  });
+
   it("maps acpx error events into ACP runtime error events", async () => {
     const runtime = sharedFixture?.runtime;
     expect(runtime).toBeDefined();
