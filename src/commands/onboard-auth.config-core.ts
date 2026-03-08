@@ -223,8 +223,8 @@ export function applyKimiCodeProviderConfig(cfg: OpenClawConfig): OpenClawConfig
   return applyProviderConfigWithDefaultModel(cfg, {
     agentModels: models,
     providerId: "kimi-coding",
-    api: "anthropic-messages",
-    baseUrl: "https://api.kimi.com/coding/",
+    api: "openai-completions",
+    baseUrl: "https://api.kimi.com/coding/v1",
     defaultModel,
     defaultModelId: KIMI_CODING_MODEL_ID,
   });

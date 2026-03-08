@@ -129,7 +129,7 @@ const MOONSHOT_DEFAULT_COST = {
   cacheWrite: 0,
 };
 
-const KIMI_CODING_BASE_URL = "https://api.kimi.com/coding/";
+const KIMI_CODING_BASE_URL = "https://api.kimi.com/coding/v1";
 const KIMI_CODING_DEFAULT_MODEL_ID = "k2p5";
 const KIMI_CODING_DEFAULT_CONTEXT_WINDOW = 262144;
 const KIMI_CODING_DEFAULT_MAX_TOKENS = 32768;
@@ -819,7 +819,7 @@ function buildMoonshotProvider(): ProviderConfig {
 export function buildKimiCodingProvider(): ProviderConfig {
   return {
     baseUrl: KIMI_CODING_BASE_URL,
-    api: "anthropic-messages",
+    api: "openai-completions",
     models: [
       {
         id: KIMI_CODING_DEFAULT_MODEL_ID,
@@ -829,6 +829,7 @@ export function buildKimiCodingProvider(): ProviderConfig {
         cost: KIMI_CODING_DEFAULT_COST,
         contextWindow: KIMI_CODING_DEFAULT_CONTEXT_WINDOW,
         maxTokens: KIMI_CODING_DEFAULT_MAX_TOKENS,
+        compat: { supportsDeveloperRole: false },
       },
     ],
   };

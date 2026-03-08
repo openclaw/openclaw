@@ -14,17 +14,17 @@ describe("kimi-coding implicit provider (#22409)", () => {
     try {
       const providers = await resolveImplicitProviders({ agentDir });
       expect(providers?.["kimi-coding"]).toBeDefined();
-      expect(providers?.["kimi-coding"]?.api).toBe("anthropic-messages");
-      expect(providers?.["kimi-coding"]?.baseUrl).toBe("https://api.kimi.com/coding/");
+      expect(providers?.["kimi-coding"]?.api).toBe("openai-completions");
+      expect(providers?.["kimi-coding"]?.baseUrl).toBe("https://api.kimi.com/coding/v1");
     } finally {
       envSnapshot.restore();
     }
   });
 
-  it("should build kimi-coding provider with anthropic-messages API", () => {
+  it("should build kimi-coding provider with openai-completions API", () => {
     const provider = buildKimiCodingProvider();
-    expect(provider.api).toBe("anthropic-messages");
-    expect(provider.baseUrl).toBe("https://api.kimi.com/coding/");
+    expect(provider.api).toBe("openai-completions");
+    expect(provider.baseUrl).toBe("https://api.kimi.com/coding/v1");
     expect(provider.models).toBeDefined();
     expect(provider.models.length).toBeGreaterThan(0);
     expect(provider.models[0].id).toBe("k2p5");
