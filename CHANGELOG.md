@@ -30,6 +30,7 @@ Docs: https://docs.openclaw.ai
 <<<<<<< HEAD
 - Browser/CDP: normalize loopback direct WebSocket CDP URLs back to HTTP(S) for `/json/*` tab operations so local `ws://` / `wss://` profiles can still list, focus, open, and close tabs after the new direct-WS support lands. (#31085) Thanks @shrey150.
 - Context engine registry: keep context-engine registrations on a `globalThis` singleton so duplicated bundled module copies share one registry map at runtime. (#40115) thanks @jalehman.
+- Context engine registry/bundled builds: share the registry state through a `globalThis` singleton so duplicated bundled module copies can resolve engines registered by each other at runtime, with regression coverage for duplicate-module imports. (#40115) thanks @jalehman.
 
 ## 2026.3.7
 
