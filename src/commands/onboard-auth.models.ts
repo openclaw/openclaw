@@ -224,3 +224,41 @@ export function buildKilocodeModelDefinition(): ModelDefinitionConfig {
     maxTokens: KILOCODE_DEFAULT_MAX_TOKENS,
   };
 }
+
+export const CLAWPANE_BASE_URL = "https://clawpane.co/route";
+export const CLAWPANE_DEFAULT_MODEL_ID = "auto";
+export const CLAWPANE_DEFAULT_MODEL_REF = `clawpane/${CLAWPANE_DEFAULT_MODEL_ID}`;
+export const CLAWPANE_DEFAULT_CONTEXT_WINDOW = 200000;
+export const CLAWPANE_DEFAULT_MAX_TOKENS = 16000;
+export const CLAWPANE_DEFAULT_COST = {
+  input: 0,
+  output: 0,
+  cacheRead: 0,
+  cacheWrite: 0,
+};
+
+const CLAWPANE_MODEL_CATALOG = {
+  auto: { name: "Clawpane Auto (balanced)", reasoning: false },
+  fast: { name: "Clawpane Fast (latency-first)", reasoning: false },
+  economy: { name: "Clawpane Economy (cost-first)", reasoning: false },
+  quality: { name: "Clawpane Quality (quality-first)", reasoning: false },
+} as const;
+
+type ClawpaneCatalogId = keyof typeof CLAWPANE_MODEL_CATALOG;
+
+export const CLAWPANE_MODEL_IDS = Object.keys(CLAWPANE_MODEL_CATALOG) as ClawpaneCatalogId[];
+
+export function buildClawpaneModelDefinition(
+  id: string = CLAWPANE_DEFAULT_MODEL_ID,
+): ModelDefinitionConfig {
+  const catalog = CLAWPANE_MODEL_CATALOG[id as ClawpaneCatalogId];
+  return {
+    id,
+    name: catalog?.name ?? `Clawpane ${id}`,
+    reasoning: catalog?.reasoning ?? false,
+    input: ["text", "image"],
+    cost: CLAWPANE_DEFAULT_COST,
+    contextWindow: CLAWPANE_DEFAULT_CONTEXT_WINDOW,
+    maxTokens: CLAWPANE_DEFAULT_MAX_TOKENS,
+  };
+}

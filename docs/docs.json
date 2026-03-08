@@ -1116,6 +1116,7 @@
                   "providers/qianfan",
                   "providers/qwen",
                   "providers/synthetic",
+                  "providers/clawpane"
                   "providers/together",
                   "providers/vercel-ai-gateway",
                   "providers/venice",
