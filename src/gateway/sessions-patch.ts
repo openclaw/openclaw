@@ -81,9 +81,9 @@ export async function applySessionsPatchToStore(params: {
   const existing = store[storeKey];
   const next: SessionEntry = existing
     ? {
-        ...existing,
-        updatedAt: Math.max(existing.updatedAt ?? 0, now),
-      }
+      ...existing,
+      updatedAt: Math.max(existing.updatedAt ?? 0, now),
+    }
     : { sessionId: randomUUID(), updatedAt: now };
 
   if ("spawnedBy" in patch) {
@@ -138,15 +138,19 @@ export async function applySessionsPatchToStore(params: {
       if (!parsed.ok) {
         return invalid(parsed.error);
       }
-      for (const [key, entry] of Object.entries(store)) {
-        if (key === storeKey) {
-          continue;
+      if (parsed.label === undefined) {
+        delete next.label;
+      } else {
+        for (const [key, entry] of Object.entries(store)) {
+          if (key === storeKey) {
+            continue;
+          }
+          if (entry?.label === parsed.label) {
+            return invalid(`label already in use: ${parsed.label}`);
+          }
         }
-        if (entry?.label === parsed.label) {
-          return invalid(`label already in use: ${parsed.label}`);
-        }
+        next.label = parsed.label;
       }
-      next.label = parsed.label;
     }
   }
 

@@ -1,6 +1,8 @@
 export const SESSION_LABEL_MAX_LENGTH = 64;
 
-export type ParsedSessionLabel = { ok: true; label: string } | { ok: false; error: string };
+export type ParsedSessionLabel =
+  | { ok: true; label: string | undefined }
+  | { ok: false; error: string };
 
 export function parseSessionLabel(raw: unknown): ParsedSessionLabel {
   if (typeof raw !== "string") {
@@ -8,7 +10,7 @@ export function parseSessionLabel(raw: unknown): ParsedSessionLabel {
   }
   const trimmed = raw.trim();
   if (!trimmed) {
-    return { ok: false, error: "invalid label: empty" };
+    return { ok: true, label: undefined };
   }
   if (trimmed.length > SESSION_LABEL_MAX_LENGTH) {
     return {

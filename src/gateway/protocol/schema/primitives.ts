@@ -9,7 +9,7 @@ export const ChatSendSessionKeyString = Type.String({
   maxLength: CHAT_SEND_SESSION_KEY_MAX_LENGTH,
 });
 export const SessionLabelString = Type.String({
-  minLength: 1,
+  minLength: 0,
   maxLength: SESSION_LABEL_MAX_LENGTH,
 });
 
