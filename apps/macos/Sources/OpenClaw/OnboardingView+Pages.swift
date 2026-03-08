@@ -199,6 +199,14 @@ extension OnboardingView {
                         .pickerStyle(.segmented)
                         .frame(width: fieldWidth)
                     }
+                    GridRow {
+                        Text("Gateway token")
+                            .font(.callout.weight(.semibold))
+                            .frame(width: labelWidth, alignment: .leading)
+                        SecureField("remote gateway auth token (gateway.auth.token)", text: self.$state.remoteToken)
+                            .textFieldStyle(.roundedBorder)
+                            .frame(width: fieldWidth)
+                    }
                     if self.state.remoteTransport == .direct {
                         GridRow {
                             Text("Gateway URL")

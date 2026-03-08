@@ -149,6 +149,7 @@ struct GeneralSettings: View {
             } else {
                 self.remoteDirectRow
             }
+            self.remoteTokenRow
 
             GatewayDiscoveryInlineList(
                 discovery: self.gatewayDiscovery,
@@ -285,6 +286,23 @@ struct GeneralSettings: View {
             }
             Text(
                 "Direct mode requires wss:// for remote hosts. ws:// is only allowed for localhost/127.0.0.1.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .padding(.leading, self.remoteLabelWidth + 10)
+        }
+    }
+
+    private var remoteTokenRow: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(alignment: .center, spacing: 10) {
+                Text("Gateway token")
+                    .font(.callout.weight(.semibold))
+                    .frame(width: self.remoteLabelWidth, alignment: .leading)
+                SecureField("remote gateway auth token (gateway.auth.token)", text: self.$state.remoteToken)
+                    .textFieldStyle(.roundedBorder)
+                    .frame(maxWidth: .infinity)
+            }
+            Text("Used when the remote gateway requires token auth.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .padding(.leading, self.remoteLabelWidth + 10)
@@ -692,6 +710,7 @@ extension GeneralSettings {
         state.remoteTransport = .ssh
         state.remoteTarget = "user@host:2222"
         state.remoteUrl = "wss://gateway.example.ts.net"
+        state.remoteToken = "example-token"
         state.remoteIdentity = "/tmp/id_ed25519"
         state.remoteProjectRoot = "/tmp/openclaw"
         state.remoteCliPath = "/tmp/openclaw"
