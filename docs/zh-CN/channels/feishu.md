@@ -26,6 +26,14 @@ openclaw plugins install @openclaw/feishu
 openclaw plugins install ./extensions/feishu
 ```
 
+确保飞书插件已启用：
+
+```
+openclaw plugins list
+# 如果插件未启用
+openclaw plugins enable feishu
+```
+
 ---
 
 ## 快速开始
@@ -100,6 +108,8 @@ Lark（国际版）请使用 https://open.larksuite.com/app，并在配置中设
 
 在 **权限管理** 页面，点击 **批量导入** 按钮，粘贴以下 JSON 配置一键导入所需权限：
 
+飞书（国内版）
+
 ```json
 {
   "scopes": {
@@ -132,6 +142,28 @@ Lark（国际版）请使用 https://open.larksuite.com/app，并在配置中设
 }
 ```
 
+Lark（国际版）
+
+```json
+{
+  "scopes": {
+    "tenant": [
+      "application:application:self_manage",
+      "application:bot.menu:write",
+      "contact:user.employee_id:readonly",
+      "event:ip_list",
+      "im:chat.members:bot_access",
+      "im:message",
+      "im:message.group_at_msg:readonly",
+      "im:message.p2p_msg:readonly",
+      "im:message:readonly",
+      "im:message:send_as_bot",
+      "im:resource"
+    ]
+  }
+}
+```
+
 ![配置应用权限](/images/feishu-step4-permissions.png)
 
 ### 5. 启用机器人能力
@@ -147,7 +179,7 @@ Lark（国际版）请使用 https://open.larksuite.com/app，并在配置中设
 
 ⚠️ **重要提醒**：在配置事件订阅前，请务必确保已完成以下步骤：
 
-1. 运行 `openclaw channels add` 添加了 Feishu 渠道
+1. 运行 `openclaw channels add` 添加了 Feishu 渠道（请参考第二步：配置 OpenClaw）
 2. 网关处于启动状态（可通过 `openclaw gateway status` 检查状态）
 
 在 **事件订阅** 页面：
