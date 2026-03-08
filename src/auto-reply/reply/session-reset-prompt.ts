@@ -16,6 +16,3 @@ export function buildBareSessionResetPrompt(cfg?: OpenClawConfig, nowMs?: number
     nowMs ?? Date.now(),
   );
 }
-
-/** @deprecated Use buildBareSessionResetPrompt(cfg) instead */
-export const BARE_SESSION_RESET_PROMPT = BARE_SESSION_RESET_PROMPT_BASE;
