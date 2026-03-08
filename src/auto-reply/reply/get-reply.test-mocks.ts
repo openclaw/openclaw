@@ -13,10 +13,14 @@ export function registerGetReplyCommonMocks(): void {
   vi.mock("../../agents/timeout.js", () => ({
     resolveAgentTimeoutMs: vi.fn(() => 60000),
   }));
-  vi.mock("../../agents/workspace.js", () => ({
-    DEFAULT_AGENT_WORKSPACE_DIR: "/tmp/workspace",
-    ensureAgentWorkspace: vi.fn(async () => ({ dir: "/tmp/workspace" })),
-  }));
+  vi.mock("../../agents/workspace.js", async (importOriginal) => {
+    const actual = await importOriginal<typeof import("../../agents/workspace.js")>();
+    return {
+      ...actual,
+      DEFAULT_AGENT_WORKSPACE_DIR: "/tmp/workspace",
+      ensureAgentWorkspace: vi.fn(async () => ({ dir: "/tmp/workspace" })),
+    };
+  });
   vi.mock("../../channels/model-overrides.js", () => ({
     resolveChannelModelOverride: vi.fn(() => undefined),
   }));

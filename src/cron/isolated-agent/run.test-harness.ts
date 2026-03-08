@@ -63,9 +63,13 @@ vi.mock("../../agents/skills/refresh.js", () => ({
   getSkillsSnapshotVersion: vi.fn().mockReturnValue(42),
 }));
 
-vi.mock("../../agents/workspace.js", () => ({
-  ensureAgentWorkspace: vi.fn().mockResolvedValue({ dir: "/tmp/workspace" }),
-}));
+vi.mock("../../agents/workspace.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../agents/workspace.js")>();
+  return {
+    ...actual,
+    ensureAgentWorkspace: vi.fn().mockResolvedValue({ dir: "/tmp/workspace" }),
+  };
+});
 
 vi.mock("../../agents/model-catalog.js", () => ({
   loadModelCatalog: vi.fn().mockResolvedValue({ models: [] }),

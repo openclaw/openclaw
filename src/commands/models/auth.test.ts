@@ -37,9 +37,13 @@ vi.mock("../../agents/agent-scope.js", () => ({
   resolveAgentWorkspaceDir: mocks.resolveAgentWorkspaceDir,
 }));
 
-vi.mock("../../agents/workspace.js", () => ({
-  resolveDefaultAgentWorkspaceDir: mocks.resolveDefaultAgentWorkspaceDir,
-}));
+vi.mock("../../agents/workspace.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../agents/workspace.js")>();
+  return {
+    ...actual,
+    resolveDefaultAgentWorkspaceDir: mocks.resolveDefaultAgentWorkspaceDir,
+  };
+});
 
 vi.mock("../../agents/auth-profiles.js", () => ({
   upsertAuthProfile: mocks.upsertAuthProfile,
