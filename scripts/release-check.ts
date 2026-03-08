@@ -22,6 +22,11 @@ type PackageJson = {
     };
   };
 };
+type BundledExtension = { id: string; packageJson: PackageJson };
+type BundledExtensionMetadata = BundledExtension & {
+  npmSpec?: string;
+  rootDependencyMirrorAllowlist: string[];
+};
 
 const requiredPathGroups = [
   ["dist/index.js", "dist/index.mjs"],
@@ -133,7 +138,7 @@ function normalizePluginSyncVersion(version: string): string {
 
 export function collectBundledExtensionRootDependencyGapErrors(params: {
   rootPackage: PackageJson;
-  extensions: Array<{ id: string; packageJson: PackageJson }>;
+  extensions: BundledExtension[];
 }): string[] {
   const rootDeps = {
     ...params.rootPackage.dependencies,
@@ -141,17 +146,15 @@ export function collectBundledExtensionRootDependencyGapErrors(params: {
   };
   const errors: string[] = [];
 
-  for (const extension of params.extensions) {
-    if (!extension.packageJson.openclaw?.install?.npmSpec) {
+  for (const extension of normalizeBundledExtensionMetadata(params.extensions)) {
+    if (!extension.npmSpec) {
       continue;
     }
 
     const missing = Object.keys(extension.packageJson.dependencies ?? {})
       .filter((dep) => dep !== "openclaw" && !rootDeps[dep])
       .toSorted();
-    const allowlisted = [
-      ...(extension.packageJson.openclaw?.releaseChecks?.rootDependencyMirrorAllowlist ?? []),
-    ].toSorted();
+    const allowlisted = extension.rootDependencyMirrorAllowlist.toSorted();
     if (missing.join("\n") !== allowlisted.join("\n")) {
       const unexpected = missing.filter((dep) => !allowlisted.includes(dep));
       const resolved = allowlisted.filter((dep) => !missing.includes(dep));
@@ -172,7 +175,56 @@ export function collectBundledExtensionRootDependencyGapErrors(params: {
   return errors;
 }
 
-function collectBundledExtensions(): Array<{ id: string; packageJson: PackageJson }> {
+function normalizeBundledExtensionMetadata(
+  extensions: BundledExtension[],
+): BundledExtensionMetadata[] {
+  return extensions.map((extension) => ({
+    ...extension,
+    npmSpec:
+      typeof extension.packageJson.openclaw?.install?.npmSpec === "string"
+        ? extension.packageJson.openclaw.install.npmSpec.trim()
+        : undefined,
+    rootDependencyMirrorAllowlist:
+      extension.packageJson.openclaw?.releaseChecks?.rootDependencyMirrorAllowlist?.filter(
+        (entry): entry is string => typeof entry === "string" && entry.trim().length > 0,
+      ) ?? [],
+  }));
+}
+
+export function collectBundledExtensionManifestErrors(extensions: BundledExtension[]): string[] {
+  const errors: string[] = [];
+  for (const extension of extensions) {
+    const install = extension.packageJson.openclaw?.install;
+    if (
+      install &&
+      (!install.npmSpec || typeof install.npmSpec !== "string" || !install.npmSpec.trim())
+    ) {
+      errors.push(
+        `bundled extension '${extension.id}' manifest invalid | openclaw.install.npmSpec must be a non-empty string`,
+      );
+    }
+
+    const allowlist = extension.packageJson.openclaw?.releaseChecks?.rootDependencyMirrorAllowlist;
+    if (allowlist === undefined) {
+      continue;
+    }
+    if (!Array.isArray(allowlist)) {
+      errors.push(
+        `bundled extension '${extension.id}' manifest invalid | openclaw.releaseChecks.rootDependencyMirrorAllowlist must be an array of non-empty strings`,
+      );
+      continue;
+    }
+    const invalidEntries = allowlist.filter((entry) => typeof entry !== "string" || !entry.trim());
+    if (invalidEntries.length > 0) {
+      errors.push(
+        `bundled extension '${extension.id}' manifest invalid | openclaw.releaseChecks.rootDependencyMirrorAllowlist must contain only non-empty strings`,
+      );
+    }
+  }
+  return errors;
+}
+
+function collectBundledExtensions(): BundledExtension[] {
   const extensionsDir = resolve("extensions");
   const entries = readdirSync(extensionsDir, { withFileTypes: true }).filter((entry) =>
     entry.isDirectory(),
@@ -195,9 +247,18 @@ function collectBundledExtensions(): Array<{ id: string; packageJson: PackageJso
 
 function checkBundledExtensionRootDependencyMirrors() {
   const rootPackage = JSON.parse(readFileSync(resolve("package.json"), "utf8")) as PackageJson;
+  const extensions = collectBundledExtensions();
+  const manifestErrors = collectBundledExtensionManifestErrors(extensions);
+  if (manifestErrors.length > 0) {
+    console.error("release-check: bundled extension manifest validation failed:");
+    for (const error of manifestErrors) {
+      console.error(`  - ${error}`);
+    }
+    process.exit(1);
+  }
   const errors = collectBundledExtensionRootDependencyGapErrors({
     rootPackage,
-    extensions: collectBundledExtensions(),
+    extensions,
   });
   if (errors.length > 0) {
     console.error("release-check: bundled extension root dependency mirror validation failed:");
