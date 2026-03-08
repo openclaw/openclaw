@@ -27,7 +27,7 @@ describe("plugin-sdk root alias", () => {
     expect(parsed.success).toBe(false);
   });
 
-  it("loads legacy root exports lazily through the proxy", { timeout: 240_000 }, () => {
+  it("loads legacy root exports through the merged root wrapper", { timeout: 240_000 }, () => {
     expect(typeof rootSdk.resolveControlCommandGate).toBe("function");
     expect(typeof rootSdk.default).toBe("object");
     expect(rootSdk.default).toBe(rootSdk);
