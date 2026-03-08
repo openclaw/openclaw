@@ -82,6 +82,8 @@ export const SUBAGENT_SPAWN_ACCEPTED_NOTE =
   "Auto-announce is push-based. After spawning children, do NOT call sessions_list, sessions_history, exec sleep, or any polling tool. Wait for completion events to arrive as user messages, track expected child session keys, and only send your final answer after ALL expected completions arrive. If a child completion event arrives AFTER your final answer, reply ONLY with NO_REPLY.";
 export const SUBAGENT_SPAWN_SESSION_ACCEPTED_NOTE =
   "thread-bound session stays active after this task; continue in-thread for follow-ups.";
+export const SUBAGENT_SPAWN_HEADLESS_SESSION_ACCEPTED_NOTE =
+  "Headless session started — session will persist for orchestrator communication.";
 
 export type SpawnSubagentResult = {
   status: "accepted" | "forbidden" | "error";
@@ -627,6 +629,13 @@ export async function spawnSubagentDirect(
       } catch {
         // Best-effort only.
       }
+    } else if (spawnMode === "session") {
+      // Headless session (mode="session" without thread=true): clean up the
+      // provisional session created by patchChildSession to avoid a session leak.
+      await cleanupProvisionalSession(childSessionKey, {
+        emitLifecycleHooks: false,
+        deleteTranscript: true,
+      });
     }
     const messageText = summarizeError(err);
     return {
@@ -714,7 +723,9 @@ export async function spawnSubagentDirect(
   const isCronSession = isCronSessionKey(ctx.agentSessionKey);
   const note =
     spawnMode === "session"
-      ? SUBAGENT_SPAWN_SESSION_ACCEPTED_NOTE
+      ? requestThreadBinding
+        ? SUBAGENT_SPAWN_SESSION_ACCEPTED_NOTE
+        : SUBAGENT_SPAWN_HEADLESS_SESSION_ACCEPTED_NOTE
       : isCronSession
         ? undefined
         : SUBAGENT_SPAWN_ACCEPTED_NOTE;
