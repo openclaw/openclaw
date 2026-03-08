@@ -214,6 +214,51 @@ For threat model + hardening guidance (including `openclaw security audit --deep
 - `tools.fs.workspaceOnly: true` (optional): restricts `read`/`write`/`edit`/`apply_patch` paths and native prompt image auto-load paths to the workspace directory.
 - Avoid setting `tools.exec.applyPatch.workspaceOnly: false` unless you fully trust who can trigger tool execution.
 
+## CaMeL Prompt Injection Defense
+
+OpenClaw includes an optional CaMeL-inspired prompt injection defense layer for tool-enabled agents.
+
+### Architecture and Trust Flow
+
+- `P-LLM` stage: generates a structured JSON execution plan (tool names + arguments + references).
+- Tool outputs are wrapped as `CaMeLValue<T>` with source metadata and dependency links.
+- Untrusted outputs are parsed through a quarantined extraction stage (`Q-LLM`) where extracted values inherit taint from their source.
+- Every side-effect tool invocation is checked by `SecurityPolicyEngine` before execution.
+- Default behavior for tainted side-effect arguments is deny, with optional explicit user approval.
+
+### What CaMeL Protects Against
+
+- Prompt-injection-driven data exfiltration attempts (for example, untrusted web/email content steering `message.send`).
+- Injection chains that pivot from read-like tools (`web_fetch`, search, email/webhook bodies) into side-effect tools (`exec`, outbound messaging, gateway actions).
+- Multi-step taint propagation where attacker-controlled values are transformed before tool use.
+
+### What CaMeL Does Not Protect Against
+
+- Direct, intentional actions by a trusted operator.
+- Misconfiguration that marks risky tools as no-side-effect or broadly trusted recipients.
+- Compromised host/runtime boundaries outside OpenClaw policy enforcement.
+- Scenarios where CaMeL is not enabled (default is disabled).
+
+### Configuration
+
+CaMeL is configured under `agents.camel` and is opt-in:
+
+- `enabled`: `false` by default.
+- `mode`: `strict` (default) or `permissive`.
+- `qModel`: optional quarantined extraction model override.
+- `policies.trustedRecipients`: allowlist for tainted recipient values.
+- `policies.requireApproval`: tool patterns that require explicit approval when tainted.
+- `policies.noSideEffectTools`: read-only/safe tools exempt from side-effect blocking.
+
+### Approval Behavior
+
+When a tainted argument is denied for a side-effect tool, OpenClaw can request explicit user approval using the same interactive approval style as exec prompts. If approval is denied or unavailable (non-interactive context), the call is blocked.
+
+### References
+
+- CaMeL paper: https://arxiv.org/abs/2503.18813
+- Google DeepMind blog: https://deepmind.google/discover/blog/camel-a-family-of-defenses-against-prompt-injection-attacks/
+
 ### Sub-agent delegation hardening
 
 - Keep `sessions_spawn` denied unless you explicitly need delegated runs.

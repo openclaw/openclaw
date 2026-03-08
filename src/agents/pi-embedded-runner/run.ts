@@ -21,6 +21,7 @@ import {
   markAuthProfileUsed,
   resolveProfilesUnavailableReason,
 } from "../auth-profiles.js";
+import { resolveCaMeLConfig } from "../camel/config.js";
 import {
   CONTEXT_WINDOW_HARD_MIN_TOKENS,
   CONTEXT_WINDOW_WARN_BELOW_TOKENS,
@@ -277,6 +278,18 @@ export async function runEmbeddedPiAgent(
         sessionKey: params.sessionKey,
         agentId: params.agentId,
         config: params.config,
+      });
+      const globalCamel = params.config?.agents?.camel;
+      const agentCamel = params.config?.agents?.list?.find(
+        (entry) => entry.id === workspaceResolution.agentId,
+      )?.camel;
+      const camelConfig = resolveCaMeLConfig({
+        ...globalCamel,
+        ...agentCamel,
+        policies: {
+          ...globalCamel?.policies,
+          ...agentCamel?.policies,
+        },
       });
       const resolvedWorkspace = workspaceResolution.workspaceDir;
       const redactedSessionId = redactRunIdentifier(params.sessionId);
@@ -908,6 +921,7 @@ export async function runEmbeddedPiAgent(
             bootstrapPromptWarningSignaturesSeen,
             bootstrapPromptWarningSignature:
               bootstrapPromptWarningSignaturesSeen[bootstrapPromptWarningSignaturesSeen.length - 1],
+            camelConfig,
           });
 
           const {
