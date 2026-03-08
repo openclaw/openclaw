@@ -1,6 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { BROWSER_BRIDGES } from "./browser-bridges.js";
-import { ensureSandboxBrowser } from "./browser.js";
+import {
+  applySandboxBridgeAccessToDockerConfig,
+  ensureSandboxBrowser,
+  resolveSandboxBridgeAccess,
+} from "./browser.js";
 import { resetNoVncObserverTokensForTests } from "./novnc-auth.js";
 import { collectDockerFlagValues, findDockerArgsCall } from "./test-args.js";
 import type { SandboxConfig } from "./types.js";
@@ -124,6 +128,7 @@ describe("ensureSandboxBrowser create args", () => {
       server: {} as never,
       port: 19000,
       baseUrl: "http://127.0.0.1:19000",
+      advertisedBaseUrl: "http://host.docker.internal:19000",
       state: {
         server: null,
         port: 19000,
@@ -152,8 +157,16 @@ describe("ensureSandboxBrowser create args", () => {
       entry.startsWith("OPENCLAW_BROWSER_NOVNC_PASSWORD="),
     );
     expect(passwordEntry).toMatch(/^OPENCLAW_BROWSER_NOVNC_PASSWORD=[A-Za-z0-9]{8}$/);
+    expect(result?.bridgeUrl).toBe("http://host.docker.internal:19000");
     expect(result?.noVncUrl).toMatch(/^http:\/\/127\.0\.0\.1:19000\/sandbox\/novnc\?token=/);
     expect(result?.noVncUrl).not.toContain("password=");
+    expect(bridgeMocks.startBrowserBridgeServer).toHaveBeenCalledWith(
+      expect.objectContaining({
+        host: "0.0.0.0",
+        advertisedHost: "host.docker.internal",
+        allowNonLoopbackHost: true,
+      }),
+    );
   });
 
   it("does not inject noVNC password env when noVNC is disabled", async () => {
@@ -205,5 +218,39 @@ describe("ensureSandboxBrowser create args", () => {
     expect(createArgs).toBeDefined();
     expect(createArgs).toContain("/tmp/workspace:/workspace");
     expect(createArgs).not.toContain("/tmp/workspace:/workspace:ro");
+  });
+
+  it("adds host-gateway alias for linux sandbox containers", () => {
+    const resolved = applySandboxBridgeAccessToDockerConfig({
+      cfg: buildConfig(false),
+      platform: "linux",
+    });
+
+    expect(resolved.docker.extraHosts).toContain("host.docker.internal:host-gateway");
+  });
+
+  it("does not duplicate host-gateway alias when already configured", () => {
+    const cfg = buildConfig(false);
+    cfg.docker.extraHosts = ["host.docker.internal:host-gateway"];
+
+    const resolved = applySandboxBridgeAccessToDockerConfig({
+      cfg,
+      platform: "linux",
+    });
+
+    expect(resolved.docker.extraHosts).toEqual(["host.docker.internal:host-gateway"]);
+  });
+
+  it("honors explicit bridgeHost override", () => {
+    const access = resolveSandboxBridgeAccess({
+      browserHost: "gateway.internal",
+      dockerExtraHosts: [],
+      platform: "linux",
+    });
+
+    expect(access).toEqual({
+      listenHost: "0.0.0.0",
+      advertisedHost: "gateway.internal",
+    });
   });
 });

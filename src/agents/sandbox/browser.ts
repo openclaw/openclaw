@@ -37,6 +37,74 @@ import { appendWorkspaceMountArgs } from "./workspace-mounts.js";
 
 const HOT_BROWSER_WINDOW_MS = 5 * 60 * 1000;
 const CDP_SOURCE_RANGE_ENV_KEY = "OPENCLAW_BROWSER_CDP_SOURCE_RANGE";
+const SANDBOX_BRIDGE_CONTAINER_HOST = "host.docker.internal";
+const SANDBOX_BRIDGE_HOST_GATEWAY = `${SANDBOX_BRIDGE_CONTAINER_HOST}:host-gateway`;
+
+type SandboxBridgeAccess = {
+  listenHost: string;
+  advertisedHost: string;
+  requiredExtraHost?: string;
+};
+
+function uniqueExtraHosts(extraHosts: string[] | undefined, entry: string): string[] {
+  const merged = [...(extraHosts ?? [])];
+  if (!merged.includes(entry)) {
+    merged.push(entry);
+  }
+  return merged;
+}
+
+export function resolveSandboxBridgeAccess(params: {
+  browserHost?: string;
+  dockerExtraHosts?: string[];
+  platform?: NodeJS.Platform;
+}): SandboxBridgeAccess {
+  const configuredHost = params.browserHost?.trim();
+  if (configuredHost) {
+    return {
+      listenHost: "0.0.0.0",
+      advertisedHost: configuredHost,
+    };
+  }
+  if (params.platform === "linux") {
+    const hasHostGatewayAlias = (params.dockerExtraHosts ?? []).some(
+      (entry) => entry.trim() === SANDBOX_BRIDGE_HOST_GATEWAY,
+    );
+    return {
+      listenHost: "0.0.0.0",
+      advertisedHost: SANDBOX_BRIDGE_CONTAINER_HOST,
+      requiredExtraHost: hasHostGatewayAlias ? undefined : SANDBOX_BRIDGE_HOST_GATEWAY,
+    };
+  }
+  return {
+    listenHost: "0.0.0.0",
+    advertisedHost: SANDBOX_BRIDGE_CONTAINER_HOST,
+  };
+}
+
+export function applySandboxBridgeAccessToDockerConfig(params: {
+  cfg: SandboxConfig;
+  platform?: NodeJS.Platform;
+}): SandboxConfig {
+  if (!params.cfg.browser.enabled) {
+    return params.cfg;
+  }
+  const access = resolveSandboxBridgeAccess({
+    browserHost: params.cfg.browser.bridgeHost,
+    dockerExtraHosts: params.cfg.docker.extraHosts,
+    platform: params.platform ?? process.platform,
+  });
+  if (!access.requiredExtraHost) {
+    return params.cfg;
+  }
+  return {
+    ...params.cfg,
+    docker: {
+      ...params.cfg.docker,
+      extraHosts: uniqueExtraHosts(params.cfg.docker.extraHosts, access.requiredExtraHost),
+    },
+  };
+}
 
 async function waitForSandboxCdp(params: { cdpPort: number; timeoutMs: number }): Promise<boolean> {
   const deadline = Date.now() + Math.max(0, params.timeoutMs);
@@ -329,6 +397,12 @@ export async function ensureSandboxBrowser(params: {
       return bridge;
     }
 
+    const bridgeAccess = resolveSandboxBridgeAccess({
+      browserHost: params.cfg.browser.bridgeHost,
+      dockerExtraHosts: params.cfg.docker.extraHosts,
+      platform: process.platform,
+    });
+
     const onEnsureAttachTarget = params.cfg.browser.autoStart
       ? async () => {
           const state = await dockerContainerState(containerName);
@@ -354,6 +428,9 @@ export async function ensureSandboxBrowser(params: {
         headless: params.cfg.browser.headless,
         evaluateEnabled: params.evaluateEnabled ?? DEFAULT_BROWSER_EVALUATE_ENABLED,
       }),
+      host: bridgeAccess.listenHost,
+      advertisedHost: bridgeAccess.advertisedHost,
+      allowNonLoopbackHost: bridgeAccess.listenHost !== "127.0.0.1",
       authToken: desiredAuthToken,
       authPassword: desiredAuthPassword,
       onEnsureAttachTarget,
@@ -394,7 +471,7 @@ export async function ensureSandboxBrowser(params: {
       : undefined;
 
   return {
-    bridgeUrl: resolvedBridge.baseUrl,
+    bridgeUrl: resolvedBridge.advertisedBaseUrl,
     noVncUrl,
     containerName,
   };

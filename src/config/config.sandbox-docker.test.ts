@@ -276,6 +276,33 @@ describe("sandbox browser binds config", () => {
     expect(resolved.network).toBe("openclaw-sandbox-browser-agent");
   });
 
+  it("prefers agent bridgeHost over global browser bridgeHost", () => {
+    const resolved = resolveSandboxBrowserConfig({
+      scope: "agent",
+      globalBrowser: { bridgeHost: "global-host.internal" },
+      agentBrowser: { bridgeHost: "agent-host.internal" },
+    });
+    expect(resolved.bridgeHost).toBe("agent-host.internal");
+  });
+
+  it("accepts sandbox.browser.bridgeHost in config", () => {
+    const res = validateConfigObject({
+      agents: {
+        defaults: {
+          sandbox: {
+            browser: {
+              bridgeHost: "gateway.internal",
+            },
+          },
+        },
+      },
+    });
+    expect(res.ok).toBe(true);
+    if (res.ok) {
+      expect(res.config.agents?.defaults?.sandbox?.browser?.bridgeHost).toBe("gateway.internal");
+    }
+  });
+
   it("merges cdpSourceRange with agent override", () => {
     const resolved = resolveSandboxBrowserConfig({
       scope: "agent",

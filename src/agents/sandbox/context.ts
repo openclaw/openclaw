@@ -7,7 +7,7 @@ import { defaultRuntime } from "../../runtime.js";
 import { resolveUserPath } from "../../utils.js";
 import { syncSkillsToWorkspace } from "../skills.js";
 import { DEFAULT_AGENT_WORKSPACE_DIR } from "../workspace.js";
-import { ensureSandboxBrowser } from "./browser.js";
+import { applySandboxBridgeAccessToDockerConfig, ensureSandboxBrowser } from "./browser.js";
 import { resolveSandboxConfigForAgent } from "./config.js";
 import { ensureSandboxContainer } from "./docker.js";
 import { createSandboxFsBridge } from "./fs-bridge.js";
@@ -129,7 +129,9 @@ export async function resolveSandboxContext(params: {
     docker: cfg.docker,
     workspaceDir,
   });
-  const resolvedCfg = docker === cfg.docker ? cfg : { ...cfg, docker };
+  const resolvedCfg = applySandboxBridgeAccessToDockerConfig({
+    cfg: docker === cfg.docker ? cfg : { ...cfg, docker },
+  });
 
   const containerName = await ensureSandboxContainer({
     sessionKey: rawSessionKey,
