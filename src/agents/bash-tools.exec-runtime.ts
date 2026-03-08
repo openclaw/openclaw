@@ -96,7 +96,12 @@ const DEFAULT_APPROVAL_RUNNING_NOTICE_MS = 10_000;
 const APPROVAL_SLUG_LENGTH = 8;
 
 export const execSchema = Type.Object({
-  command: Type.String({ description: "Shell command to execute" }),
+  command: Type.Optional(Type.String({ description: "Shell command to execute" })),
+  cmd: Type.Optional(
+    Type.String({
+      description: "Alias for command (some providers/models emit cmd instead of command).",
+    }),
+  ),
   workdir: Type.Optional(Type.String({ description: "Working directory (defaults to cwd)" })),
   env: Type.Optional(Type.Record(Type.String(), Type.String())),
   yieldMs: Type.Optional(
