@@ -19,6 +19,9 @@ export function isAssistantMessageWithContent(message: AgentMessage): message is
  * a synthetic `{ type: "text", text: "" }` block to preserve turn structure
  * (some providers require strict user/assistant alternation).
  *
+ * Also handles assistant messages with empty content arrays - adds synthetic
+ * text block to prevent "roles must alternate" errors.
+ *
  * Returns the original array reference when nothing was changed (callers can
  * use reference equality to skip downstream work).
  */
@@ -39,6 +42,11 @@ export function dropThinkingBlocks(messages: AgentMessage[]): AgentMessage[] {
         continue;
       }
       nextContent.push(block);
+    }
+    // Handle empty content - add synthetic text block to preserve role alternation
+    if (msg.content.length > 0 && nextContent.length === 0) {
+      changed = true;
+      touched = true;
     }
     if (!changed) {
       out.push(msg);

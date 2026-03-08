@@ -99,15 +99,21 @@ export function resolveTranscriptPolicy(params: {
   // GitHub Copilot's Claude endpoints can reject persisted `thinking` blocks with
   // non-binary/non-base64 signatures (e.g. thinkingSignature: "reasoning_text").
   // Drop these blocks at send-time to keep sessions usable.
-  const dropThinkingBlocks = isCopilotClaude;
+  // Also enable for OpenAI-compatible providers (like MiniMax) that may return empty
+  // content with reasoning, which can cause "roles must alternate" errors.
+  const isOpenAICompatibleApi = params.modelApi === "openai-messages";
+  const dropThinkingBlocks = isCopilotClaude || isOpenAICompatibleApi;
 
   const needsNonImageSanitize = isGoogle || isAnthropic || isMistral || isOpenRouterGemini;
 
   const sanitizeToolCallIds =
     isGoogle || isMistral || isAnthropic || requiresOpenAiCompatibleToolIdSanitization;
+  // Also sanitize tool call IDs for OpenAI-compatible APIs (like MiniMax) to ensure
+  // call_id matches between tool_calls and tool results
+  const sanitizeToolCallIdsForOpenAICompat = isOpenAICompatibleApi;
   const toolCallIdMode: ToolCallIdMode | undefined = isMistral
     ? "strict9"
-    : sanitizeToolCallIds
+    : sanitizeToolCallIds || sanitizeToolCallIdsForOpenAICompat
       ? "strict"
       : undefined;
   // All providers need orphaned tool_result repair after history truncation.
@@ -120,7 +126,9 @@ export function resolveTranscriptPolicy(params: {
   return {
     sanitizeMode: isOpenAi ? "images-only" : needsNonImageSanitize ? "full" : "images-only",
     sanitizeToolCallIds:
-      (!isOpenAi && sanitizeToolCallIds) || requiresOpenAiCompatibleToolIdSanitization,
+      (!isOpenAi && sanitizeToolCallIds) ||
+      requiresOpenAiCompatibleToolIdSanitization ||
+      sanitizeToolCallIdsForOpenAICompat,
     toolCallIdMode,
     repairToolUseResultPairing,
     preserveSignatures: isAnthropic,
