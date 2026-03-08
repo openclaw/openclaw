@@ -641,9 +641,7 @@ function resolveSearchProvider(search?: WebSearchConfig): (typeof SEARCH_PROVIDE
     // 6. ZAI
     const zaiConfig = resolveZaiConfig(search);
     if (resolveZaiApiKey(zaiConfig)) {
-      logVerbose(
-        'web_search: no provider configured, auto-detected "zai" from available API keys',
-      );
+      logVerbose('web_search: no provider configured, auto-detected "zai" from available API keys');
       return "zai";
     }
   }
@@ -1591,10 +1589,7 @@ async function runZaiSearch(params: {
         }
       }
 
-      const content =
-        results.length > 0
-          ? results.join("\n\n---\n\n")
-          : "No search results found.";
+      const content = results.length > 0 ? results.join("\n\n---\n\n") : "No search results found.";
 
       return { content, citations };
     },
