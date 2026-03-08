@@ -6,7 +6,7 @@ export interface BackupRotationFs {
   unlink: (path: string) => Promise<void>;
   rename: (from: string, to: string) => Promise<void>;
   chmod?: (path: string, mode: number) => Promise<void>;
-  readdir?: (path: string) => Promise<string[]>;
+  readdir: (path: string) => Promise<string[]>;
 }
 
 export interface BackupMaintenanceFs extends BackupRotationFs {
@@ -24,8 +24,12 @@ function formatBackupTimestamp(date: Date = new Date()): string {
   return `${y}${mo}${d}-${h}${mi}${s}`;
 }
 
-/** Pattern that matches a datetime suffix: YYYYMMDD-HHmmss with optional -N collision suffix. */
-const DATETIME_SUFFIX_RE = /^\d{8}-\d{6}(?:-\d+)?$/;
+/**
+ * Pattern that matches a datetime suffix: YYYYMMDD-HHmmss with optional
+ * zero-padded collision suffix (-02, -03, …). The collision counter starts
+ * at 02, so -0 and -1 are never produced and are intentionally excluded.
+ */
+const DATETIME_SUFFIX_RE = /^\d{8}-\d{6}(?:-\d{2,})?$/;
 
 /** Check whether a suffix looks like a datetime backup suffix. */
 export function isDatetimeSuffix(suffix: string): boolean {
@@ -50,18 +54,16 @@ export async function rotateConfigBackups(
   const stamp = formatBackupTimestamp();
   let dest = `${backupBase}.${stamp}`;
 
-  // Handle sub-second collision: append -2, -3, … suffix.
-  if (ioFs.readdir) {
-    const dir = path.dirname(configPath);
-    const entries = await ioFs.readdir(dir).catch(() => [] as string[]);
-    const destBasename = path.basename(dest);
-    if (entries.includes(destBasename)) {
-      let seq = 2;
-      while (entries.includes(`${destBasename}-${seq}`)) {
-        seq += 1;
-      }
-      dest = `${dest}-${seq}`;
+  // Handle sub-second collision: append zero-padded -02, -03, … suffix.
+  const dir = path.dirname(configPath);
+  const entries = await ioFs.readdir(dir).catch(() => [] as string[]);
+  const destBasename = path.basename(dest);
+  if (entries.includes(destBasename)) {
+    let seq = 2;
+    while (entries.includes(`${destBasename}-${String(seq).padStart(2, "0")}`)) {
+      seq += 1;
     }
+    dest = `${dest}-${String(seq).padStart(2, "0")}`;
   }
 
   await ioFs.rename(backupBase, dest).catch(() => {
@@ -92,18 +94,16 @@ export async function hardenBackupPermissions(
   });
 
   // Harden all datetime-stamped backups
-  if (ioFs.readdir) {
-    const entries = await ioFs.readdir(dir).catch(() => [] as string[]);
-    for (const entry of entries) {
-      if (!entry.startsWith(`${bakExact}.`)) {
-        continue;
-      }
-      const suffix = entry.slice(bakExact.length + 1);
-      if (isDatetimeSuffix(suffix)) {
-        await ioFs.chmod(path.join(dir, entry), 0o600).catch(() => {
-          // best-effort
-        });
-      }
+  const entries = await ioFs.readdir(dir).catch(() => [] as string[]);
+  for (const entry of entries) {
+    if (!entry.startsWith(`${bakExact}.`)) {
+      continue;
+    }
+    const suffix = entry.slice(bakExact.length + 1);
+    if (isDatetimeSuffix(suffix)) {
+      await ioFs.chmod(path.join(dir, entry), 0o600).catch(() => {
+        // best-effort
+      });
     }
   }
 }
@@ -121,9 +121,6 @@ export async function cleanOrphanBackups(
   configPath: string,
   ioFs: BackupRotationFs,
 ): Promise<void> {
-  if (!ioFs.readdir) {
-    return;
-  }
   const dir = path.dirname(configPath);
   const base = path.basename(configPath);
   const bakPrefix = `${base}.bak.`;
