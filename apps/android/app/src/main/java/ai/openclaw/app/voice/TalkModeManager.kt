@@ -107,7 +107,9 @@ class TalkModeManager(
     }
 
     internal fun resolvedSilenceTimeoutMs(talk: JsonObject?): Long {
-      val timeout = talk?.get("silenceTimeoutMs").asDoubleOrNull() ?: return defaultSilenceTimeoutMs
+      val primitive = talk?.get("silenceTimeoutMs") as? JsonPrimitive ?: return defaultSilenceTimeoutMs
+      if (primitive.isString) return defaultSilenceTimeoutMs
+      val timeout = primitive.content.toDoubleOrNull() ?: return defaultSilenceTimeoutMs
       if (timeout <= 0 || timeout % 1.0 != 0.0 || timeout > Long.MAX_VALUE.toDouble()) {
         return defaultSilenceTimeoutMs
       }
