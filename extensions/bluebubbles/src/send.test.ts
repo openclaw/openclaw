@@ -76,7 +76,7 @@ describe("send", () => {
       };
       return await resolveChatGuidForTarget({
         baseUrl: "http://localhost:1234",
-        password: "test",
+        password: "test", // pragma: allowlist secret
         target,
       });
     };
@@ -448,6 +448,32 @@ describe("send", () => {
       expect(body.method).toBeUndefined();
     });
 
+    it("uses private-api for plain text when BlueBubbles Private API is enabled", async () => {
+      mockBlueBubblesPrivateApiStatusOnce(
+        privateApiStatusMock,
+        BLUE_BUBBLES_PRIVATE_API_STATUS.enabled,
+      );
+      mockResolvedHandleTarget();
+      mockSendResponse({ data: { guid: "msg-uuid-plain-private" } });
+
+      const result = await sendMessageBlueBubbles("+15551234567", "Plain text over REST", {
+        serverUrl: "http://localhost:1234",
+        password: "test",
+      });
+
+      expect(result.messageId).toBe("msg-uuid-plain-private");
+      expect(mockFetch).toHaveBeenCalledTimes(2);
+
+      const sendCall = mockFetch.mock.calls[1];
+      const body = JSON.parse(sendCall[1].body);
+      expect(body.chatGuid).toBe("iMessage;-;+15551234567");
+      expect(body.message).toBe("Plain text over REST");
+      expect(body.method).toBe("private-api");
+      expect(body.selectedMessageGuid).toBeUndefined();
+      expect(body.partIndex).toBeUndefined();
+      expect(body.effectId).toBeUndefined();
+    });
+
     it("strips markdown formatting from outbound messages", async () => {
       mockResolvedHandleTarget();
       mockSendResponse({ data: { guid: "msg-uuid-stripped" } });
@@ -754,7 +780,7 @@ describe("send", () => {
           channels: {
             bluebubbles: {
               serverUrl: "http://config-server:5678",
-              password: "config-pass",
+              password: "config-pass", // pragma: allowlist secret
             },
           },
         },

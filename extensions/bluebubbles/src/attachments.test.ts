@@ -2,7 +2,10 @@ import type { PluginRuntime } from "openclaw/plugin-sdk/bluebubbles";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import "./test-mocks.js";
 import { downloadBlueBubblesAttachment, sendBlueBubblesAttachment } from "./attachments.js";
-import { getCachedBlueBubblesPrivateApiStatus } from "./probe.js";
+import {
+  getCachedBlueBubblesPrivateApiStatus,
+  resolveBlueBubblesPrivateApiStatus,
+} from "./probe.js";
 import { setBlueBubblesRuntime } from "./runtime.js";
 import {
   BLUE_BUBBLES_PRIVATE_API_STATUS,
@@ -76,7 +79,7 @@ describe("downloadBlueBubblesAttachment", () => {
     await expect(
       downloadBlueBubblesAttachment(attachment, {
         serverUrl: "http://localhost:1234",
-        password: "test",
+        password: "test", // pragma: allowlist secret
         ...(params.maxBytes === undefined ? {} : { maxBytes: params.maxBytes }),
       }),
     ).rejects.toThrow("too large");
@@ -87,7 +90,7 @@ describe("downloadBlueBubblesAttachment", () => {
     await expect(
       downloadBlueBubblesAttachment(attachment, {
         serverUrl: "http://localhost:1234",
-        password: "test-password",
+        password: "test-password", // pragma: allowlist secret
       }),
     ).rejects.toThrow("guid is required");
   });
@@ -151,7 +154,7 @@ describe("downloadBlueBubblesAttachment", () => {
     const attachment: BlueBubblesAttachment = { guid: "att-456" };
     await downloadBlueBubblesAttachment(attachment, {
       serverUrl: "http://localhost:1234",
-      password: "my-secret-password",
+      password: "my-secret-password", // pragma: allowlist secret
     });
 
     const calledUrl = mockFetch.mock.calls[0][0] as string;
@@ -257,7 +260,7 @@ describe("downloadBlueBubblesAttachment", () => {
         channels: {
           bluebubbles: {
             serverUrl: "http://config-server:5678",
-            password: "config-password",
+            password: "config-password", // pragma: allowlist secret
           },
         },
       },
@@ -338,6 +341,7 @@ describe("sendBlueBubblesAttachment", () => {
     fetchRemoteMediaMock.mockClear();
     setBlueBubblesRuntime(runtimeStub);
     vi.mocked(getCachedBlueBubblesPrivateApiStatus).mockReset();
+    vi.mocked(resolveBlueBubblesPrivateApiStatus).mockClear();
     mockBlueBubblesPrivateApiStatus(
       vi.mocked(getCachedBlueBubblesPrivateApiStatus),
       BLUE_BUBBLES_PRIVATE_API_STATUS.unknown,
@@ -406,6 +410,7 @@ describe("sendBlueBubblesAttachment", () => {
         opts: { serverUrl: "http://localhost:1234", password: "test" },
       }),
     ).rejects.toThrow("voice messages require audio");
+    expect(vi.mocked(resolveBlueBubblesPrivateApiStatus)).not.toHaveBeenCalled();
     expect(mockFetch).not.toHaveBeenCalled();
   });
 
@@ -420,6 +425,21 @@ describe("sendBlueBubblesAttachment", () => {
         opts: { serverUrl: "http://localhost:1234", password: "test" },
       }),
     ).rejects.toThrow("require mp3 or caf");
+    expect(vi.mocked(resolveBlueBubblesPrivateApiStatus)).not.toHaveBeenCalled();
+    expect(mockFetch).not.toHaveBeenCalled();
+  });
+
+  it("rejects malformed prefixed targets before probing private API", async () => {
+    await expect(
+      sendBlueBubblesAttachment({
+        to: "chat_id:not-a-number",
+        buffer: new Uint8Array([1, 2, 3]),
+        filename: "photo.jpg",
+        contentType: "image/jpeg",
+        opts: { serverUrl: "http://localhost:1234", password: "test" },
+      }),
+    ).rejects.toThrow("Invalid chat_id: not-a-number");
+    expect(vi.mocked(resolveBlueBubblesPrivateApiStatus)).not.toHaveBeenCalled();
     expect(mockFetch).not.toHaveBeenCalled();
   });
 
