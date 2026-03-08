@@ -8,6 +8,10 @@ import android.content.Context
 import android.content.Intent
 import android.service.notification.NotificationListenerService
 import android.service.notification.StatusBarNotification
+import ai.openclaw.app.NotificationBurstLimiter
+import ai.openclaw.app.SecurePrefs
+import ai.openclaw.app.allowsPackage
+import ai.openclaw.app.isWithinQuietHours
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
@@ -126,6 +130,9 @@ private object DeviceNotificationStore {
 }
 
 class DeviceNotificationListenerService : NotificationListenerService() {
+  private val securePrefs by lazy { SecurePrefs(applicationContext) }
+  private val forwardingLimiter = NotificationBurstLimiter()
+
   override fun onListenerConnected() {
     super.onListenerConnected()
     activeService = this
@@ -156,21 +163,8 @@ class DeviceNotificationListenerService : NotificationListenerService() {
     if (entry.packageName == packageName) {
       return
     }
-    emitNotificationsChanged(
-      buildJsonObject {
-        put("change", JsonPrimitive("posted"))
-        put("key", JsonPrimitive(entry.key))
-        put("packageName", JsonPrimitive(entry.packageName))
-        put("postTimeMs", JsonPrimitive(entry.postTimeMs))
-        put("isOngoing", JsonPrimitive(entry.isOngoing))
-        put("isClearable", JsonPrimitive(entry.isClearable))
-        entry.title?.let { put("title", JsonPrimitive(it)) }
-        entry.text?.let { put("text", JsonPrimitive(it)) }
-        entry.subText?.let { put("subText", JsonPrimitive(it)) }
-        entry.category?.let { put("category", JsonPrimitive(it)) }
-        entry.channelId?.let { put("channelId", JsonPrimitive(it)) }
-      }.toString(),
-    )
+    val payload = notificationChangedPayload(entry) ?: return
+    emitNotificationsChanged(payload)
   }
 
   override fun onNotificationRemoved(sbn: StatusBarNotification?) {
@@ -185,16 +179,72 @@ class DeviceNotificationListenerService : NotificationListenerService() {
     if (removed.packageName == packageName) {
       return
     }
-    emitNotificationsChanged(
-      buildJsonObject {
-        put("change", JsonPrimitive("removed"))
-        put("key", JsonPrimitive(key))
-        val packageName = removed.packageName.trim()
-        if (packageName.isNotEmpty()) {
-          put("packageName", JsonPrimitive(packageName))
-        }
-      }.toString(),
+    val packageName = removed.packageName.trim()
+    val payload =
+      notificationChangedPayload(
+        entry = null,
+        change = "removed",
+        key = key,
+        packageName = packageName,
+        postTimeMs = removed.postTime,
+        isOngoing = removed.isOngoing,
+        isClearable = removed.isClearable,
+      ) ?: return
+    emitNotificationsChanged(payload)
+  }
+
+  private fun notificationChangedPayload(entry: DeviceNotificationEntry): String? {
+    return notificationChangedPayload(
+      entry = entry,
+      change = "posted",
+      key = entry.key,
+      packageName = entry.packageName,
+      postTimeMs = entry.postTimeMs,
+      isOngoing = entry.isOngoing,
+      isClearable = entry.isClearable,
     )
+  }
+
+  private fun notificationChangedPayload(
+    entry: DeviceNotificationEntry?,
+    change: String,
+    key: String,
+    packageName: String,
+    postTimeMs: Long,
+    isOngoing: Boolean,
+    isClearable: Boolean,
+  ): String? {
+    val normalizedPackage = packageName.trim()
+    if (normalizedPackage.isEmpty()) {
+      return null
+    }
+    val policy = securePrefs.getNotificationForwardingPolicy(appPackageName = this.packageName)
+    if (!policy.enabled) {
+      return null
+    }
+    if (!policy.allowsPackage(normalizedPackage)) {
+      return null
+    }
+    if (policy.isWithinQuietHours(nowEpochMs = postTimeMs)) {
+      return null
+    }
+    if (change == "posted" && !forwardingLimiter.allow(postTimeMs, policy.maxEventsPerMinute)) {
+      return null
+    }
+    return buildJsonObject {
+      put("change", JsonPrimitive(change))
+      put("key", JsonPrimitive(key))
+      put("packageName", JsonPrimitive(normalizedPackage))
+      put("postTimeMs", JsonPrimitive(postTimeMs))
+      put("isOngoing", JsonPrimitive(isOngoing))
+      put("isClearable", JsonPrimitive(isClearable))
+      policy.sessionKey?.let { put("sessionKey", JsonPrimitive(it)) }
+      entry?.title?.let { put("title", JsonPrimitive(it)) }
+      entry?.text?.let { put("text", JsonPrimitive(it)) }
+      entry?.subText?.let { put("subText", JsonPrimitive(it)) }
+      entry?.category?.let { put("category", JsonPrimitive(it)) }
+      entry?.channelId?.let { put("channelId", JsonPrimitive(it)) }
+    }.toString()
   }
 
   private fun refreshActiveNotifications() {
