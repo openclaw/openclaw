@@ -184,11 +184,10 @@ function normalizeTelegramOpenAllowFrom(value: {
           changed = true;
         }
       } else {
-        const next = ensureStar(value.allowFrom);
-        if (next.changed) {
-          value.allowFrom = next.list;
-          changed = true;
-        }
+        // Do NOT mutate shared top-level allowFrom to satisfy an account-level open intent.
+        // If this account is open and does not provide allowFrom, default it to ["*"].
+        account.allowFrom = ["*"];
+        changed = true;
       }
     }
   }
