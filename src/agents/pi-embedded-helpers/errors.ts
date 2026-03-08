@@ -628,11 +628,18 @@ export function formatAssistantErrorText(
     return formatRawAssistantErrorForUi(raw);
   }
 
-  // Never return raw unhandled errors - log for debugging but return safe message
-  if (raw.length > 600) {
-    log.warn(`Long error truncated: ${raw.slice(0, 200)}`);
+  // Catch JSON parse errors from malformed LLM streaming responses (SSE chunk corruption).
+  // These occur when the provider SDK fails to parse a streamed response chunk and surface
+  // native Node.js JSON.parse() errors like "Expected ':' after property name in JSON at
+  // position 87" or "Bad control character in string literal in JSON at position 144".
+  if (isJsonParseError(raw)) {
+    return "The AI service returned a malformed response. Please try again.";
   }
-  return raw.length > 600 ? `${raw.slice(0, 600)}…` : raw;
+
+  // Never forward raw unclassified error text to user-facing channels.
+  // Log for debugging but return a generic safe message.
+  log.warn(`Unclassified agent error (not forwarded verbatim): ${raw.slice(0, 300)}`);
+  return "An unexpected error occurred. Please try again.";
 }
 
 export function sanitizeUserFacingText(text: string, opts?: { errorContext?: boolean }): string {
@@ -667,6 +674,11 @@ export function sanitizeUserFacingText(text: string, opts?: { errorContext?: boo
       return BILLING_ERROR_USER_MESSAGE;
     }
 
+    // Catch JSON parse errors from malformed LLM streaming responses (defense-in-depth).
+    if (isJsonParseError(trimmed)) {
+      return "The AI service returned a malformed response. Please try again.";
+    }
+
     if (isRawApiErrorPayload(trimmed) || isLikelyHttpErrorText(trimmed)) {
       return formatRawAssistantErrorForUi(trimmed);
     }
@@ -681,6 +693,12 @@ export function sanitizeUserFacingText(text: string, opts?: { errorContext?: boo
       }
       return formatRawAssistantErrorForUi(trimmed);
     }
+
+    // Generic fallback for errorContext — never forward raw unclassified error text.
+    // This mirrors the catch-all in formatAssistantErrorText and closes the gap for
+    // exception-path errors that bypass formatAssistantErrorText entirely.
+    log.warn(`Unclassified caught error (not forwarded verbatim): ${trimmed.slice(0, 300)}`);
+    return "An unexpected error occurred. Please try again.";
   }
 
   // Strip leading blank lines (including whitespace-only lines) without clobbering indentation on
@@ -705,6 +723,23 @@ const IMAGE_DIMENSION_ERROR_RE =
   /image dimensions exceed max allowed size for many-image requests:\s*(\d+)\s*pixels/i;
 const IMAGE_DIMENSION_PATH_RE = /messages\.(\d+)\.content\.(\d+)\.image/i;
 const IMAGE_SIZE_ERROR_RE = /image exceeds\s*(\d+(?:\.\d+)?)\s*mb/i;
+
+/**
+ * Detect JSON parse errors from malformed LLM streaming responses. These occur when the
+ * provider SDK's SSE parser encounters corrupt chunks — e.g., truncated deltas, bad control
+ * characters, or partial JSON payloads. The resulting native `JSON.parse()` errors should
+ * never be forwarded verbatim to user-facing channels.
+ */
+const JSON_PARSE_ERROR_RE =
+  /(?:Expected|Unexpected|Bad control character|Unterminated).*(?:in JSON(?: at position)?|JSON input)/i;
+const SYNTAX_ERROR_JSON_RE = /SyntaxError.*JSON/i;
+
+export function isJsonParseError(raw: string): boolean {
+  if (!raw) {
+    return false;
+  }
+  return JSON_PARSE_ERROR_RE.test(raw) || SYNTAX_ERROR_JSON_RE.test(raw);
+}
 
 export function isMissingToolCallInputError(raw: string): boolean {
   if (!raw) {

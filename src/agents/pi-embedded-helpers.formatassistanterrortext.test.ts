@@ -5,6 +5,7 @@ import {
   formatBillingErrorMessage,
   formatAssistantErrorText,
   formatRawAssistantErrorForUi,
+  isJsonParseError,
 } from "./pi-embedded-helpers.js";
 import { makeAssistantMessageFixture } from "./test-helpers/assistant-message-fixtures.js";
 
@@ -116,6 +117,87 @@ describe("formatAssistantErrorText", () => {
   it("returns a friendly message for empty stream chunk errors", () => {
     const msg = makeAssistantError("request ended without sending any chunks");
     expect(formatAssistantErrorText(msg)).toBe("LLM request timed out.");
+  });
+
+  it("returns a friendly message for JSON parse errors from SSE stream corruption", () => {
+    const msg = makeAssistantError(
+      "Bad control character in string literal in JSON at position 144 (line 1 column 145)",
+    );
+    expect(formatAssistantErrorText(msg)).toBe(
+      "The AI service returned a malformed response. Please try again.",
+    );
+  });
+
+  it("returns a friendly message for 'Expected' JSON parse errors", () => {
+    const msg = makeAssistantError(
+      "Expected ':' after property name in JSON at position 87 (line 1 column 88)",
+    );
+    expect(formatAssistantErrorText(msg)).toBe(
+      "The AI service returned a malformed response. Please try again.",
+    );
+  });
+
+  it("returns a friendly message for 'Unexpected end of JSON input'", () => {
+    const msg = makeAssistantError("Unexpected end of JSON input");
+    expect(formatAssistantErrorText(msg)).toBe(
+      "The AI service returned a malformed response. Please try again.",
+    );
+  });
+
+  it("never returns raw unclassified error text to users", () => {
+    const msg = makeAssistantError("some completely unknown error that no pattern matches");
+    const result = formatAssistantErrorText(msg);
+    expect(result).not.toContain("some completely unknown error");
+    expect(result).toBe("An unexpected error occurred. Please try again.");
+  });
+
+  it("never leaks long raw error text to users", () => {
+    const msg = makeAssistantError("x".repeat(1000));
+    const result = formatAssistantErrorText(msg);
+    expect(result.length).toBeLessThan(100);
+    expect(result).toBe("An unexpected error occurred. Please try again.");
+  });
+});
+
+  it("detects 'Unterminated' string errors", () => {
+    expect(isJsonParseError("Unterminated string in JSON at position 42")).toBe(true);
+  });
+
+  it("detects 'Unexpected end of JSON input'", () => {
+    expect(isJsonParseError("Unexpected end of JSON input")).toBe(true);
+  });
+        "Bad control character in string literal in JSON at position 144 (line 1 column 145)",
+      ),
+    ).toBe(true);
+  });
+
+  it("detects 'Expected' errors", () => {
+    expect(
+      isJsonParseError(
+        "Expected ',' or '}' after property value in JSON at position 91 (line 1 column 92)",
+      ),
+    ).toBe(true);
+  });
+
+  it("detects 'Unexpected' token errors", () => {
+    expect(isJsonParseError("Unexpected token < in JSON at position 0")).toBe(true);
+  });
+
+  it("detects 'Unterminated' string errors", () => {
+    expect(isJsonParseError("Unterminated string in JSON at position 42")).toBe(true);
+  });
+
+  it("detects SyntaxError wrapping", () => {
+    expect(isJsonParseError("SyntaxError: Unexpected token in JSON")).toBe(true);
+  });
+
+  it("returns false for empty input", () => {
+    expect(isJsonParseError("")).toBe(false);
+  });
+
+  it("returns false for non-JSON errors", () => {
+    expect(isJsonParseError("Connection refused")).toBe(false);
+    expect(isJsonParseError("rate limit exceeded")).toBe(false);
   });
 });
 
