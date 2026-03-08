@@ -9,7 +9,49 @@ import { highlight, supportsLanguage } from "cli-highlight";
 import type { SearchableSelectListTheme } from "../components/searchable-select-list.js";
 import { createSyntaxTheme } from "./syntax-theme.js";
 
-const palette = {
+function isLightBackground(): boolean {
+  const explicit = process.env.OPENCLAW_THEME?.toLowerCase();
+  if (explicit === "light") {
+    return true;
+  }
+  if (explicit === "dark") {
+    return false;
+  }
+
+  const colorfgbg = process.env.COLORFGBG;
+  if (colorfgbg && colorfgbg.length <= 64) {
+    const sep = colorfgbg.lastIndexOf(";");
+    const bg = Number.parseInt(sep >= 0 ? colorfgbg.slice(sep + 1) : colorfgbg, 10);
+    if (bg >= 0 && bg <= 255) {
+      // 16-colour palette: 0-6 dark, 7 silver (light), 8-14 dark, 15 white (light).
+      if (bg <= 15) {
+        return bg === 7 || bg === 15;
+      }
+      // 256-colour: indices 232-255 are a greyscale ramp (232=near-black,
+      // 255=near-white). Index 244+ maps to roughly 50%+ grey - treat as light.
+      // Indices 16-231 are a 6x6x6 colour cube; approximate luminance and
+      // compare against a 50% threshold.
+      if (bg >= 232) {
+        return bg >= 244;
+      }
+      const cubeIndex = bg - 16;
+      // xterm 6x6x6 cube maps indices 0-5 to these RGB channel values.
+      const xtermLevels = [0, 95, 135, 175, 215, 255];
+      const bVal = xtermLevels[cubeIndex % 6]!;
+      const gVal = xtermLevels[Math.floor(cubeIndex / 6) % 6]!;
+      const rVal = xtermLevels[Math.floor(cubeIndex / 36)]!;
+      // BT.601 perceived luminance on actual RGB values (0-255 scale).
+      const lum = 0.299 * rVal + 0.587 * gVal + 0.114 * bVal;
+      return lum >= 128;
+    }
+  }
+  return false;
+}
+
+/** Whether the terminal has a light background. Exported for testing only. */
+export const lightMode = isLightBackground();
+
+const darkPalette = {
   text: "#E8E3D5",
   dim: "#7B7F87",
   accent: "#F6C453",
@@ -33,10 +75,36 @@ const palette = {
   success: "#7DD3A5",
 };
 
+const lightPalette = {
+  text: "#1E1E1E",
+  dim: "#6B7280",
+  accent: "#B45309",
+  accentSoft: "#C2410C",
+  border: "#D1D5DB",
+  userBg: "#F3F0E8",
+  userText: "#1E1E1E",
+  systemText: "#4B5563",
+  toolPendingBg: "#EFF6FF",
+  toolSuccessBg: "#ECFDF5",
+  toolErrorBg: "#FEF2F2",
+  toolTitle: "#B45309",
+  toolOutput: "#374151",
+  quote: "#1D4ED8",
+  quoteBorder: "#93C5FD",
+  code: "#92400E",
+  codeBlock: "#F9FAFB",
+  codeBorder: "#D1D5DB",
+  link: "#047857",
+  error: "#DC2626",
+  success: "#047857",
+};
+
+const palette = lightMode ? lightPalette : darkPalette;
+
 const fg = (hex: string) => (text: string) => chalk.hex(hex)(text);
 const bg = (hex: string) => (text: string) => chalk.bgHex(hex)(text);
 
-const syntaxTheme = createSyntaxTheme(fg(palette.code));
+const syntaxTheme = createSyntaxTheme(fg(palette.code), lightMode);
 
 /**
  * Highlight code with syntax coloring.

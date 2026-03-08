@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const cliHighlightMocks = vi.hoisted(() => ({
   highlight: vi.fn((code: string) => code),
@@ -58,6 +58,125 @@ describe("theme", () => {
   it("keeps assistant text in terminal default foreground", () => {
     expect(theme.assistantText("hello")).toBe("hello");
     expect(stripAnsi(theme.assistantText("hello"))).toBe("hello");
+  });
+});
+
+describe("light background detection", () => {
+  const originalEnv = { ...process.env };
+
+  afterEach(() => {
+    process.env = { ...originalEnv };
+    vi.resetModules();
+  });
+
+  async function importThemeWithEnv(env: Record<string, string | undefined>) {
+    // Reset so we get a fresh module evaluation with new env vars
+    vi.resetModules();
+    for (const [k, v] of Object.entries(env)) {
+      if (v === undefined) {
+        delete process.env[k];
+      } else {
+        process.env[k] = v;
+      }
+    }
+    return import("./theme.js");
+  }
+
+  it("uses dark palette by default", async () => {
+    const mod = await importThemeWithEnv({
+      OPENCLAW_THEME: undefined,
+      COLORFGBG: undefined,
+    });
+    expect(mod.lightMode).toBe(false);
+  });
+
+  it("selects light palette when OPENCLAW_THEME=light", async () => {
+    const mod = await importThemeWithEnv({ OPENCLAW_THEME: "light" });
+    expect(mod.lightMode).toBe(true);
+  });
+
+  it("selects dark palette when OPENCLAW_THEME=dark", async () => {
+    const mod = await importThemeWithEnv({ OPENCLAW_THEME: "dark" });
+    expect(mod.lightMode).toBe(false);
+  });
+
+  it("detects light background from COLORFGBG", async () => {
+    const mod = await importThemeWithEnv({
+      OPENCLAW_THEME: undefined,
+      COLORFGBG: "0;15",
+    });
+    expect(mod.lightMode).toBe(true);
+  });
+
+  it("treats COLORFGBG bg=7 (silver) as light", async () => {
+    const mod = await importThemeWithEnv({
+      OPENCLAW_THEME: undefined,
+      COLORFGBG: "0;7",
+    });
+    expect(mod.lightMode).toBe(true);
+  });
+
+  it("treats COLORFGBG bg=8 (bright black / dark gray) as dark", async () => {
+    const mod = await importThemeWithEnv({
+      OPENCLAW_THEME: undefined,
+      COLORFGBG: "15;8",
+    });
+    expect(mod.lightMode).toBe(false);
+  });
+
+  it("treats COLORFGBG bg < 7 as dark", async () => {
+    const mod = await importThemeWithEnv({
+      OPENCLAW_THEME: undefined,
+      COLORFGBG: "15;0",
+    });
+    expect(mod.lightMode).toBe(false);
+  });
+
+  it("treats 256-color COLORFGBG bg=232 (near-black greyscale) as dark", async () => {
+    const mod = await importThemeWithEnv({
+      OPENCLAW_THEME: undefined,
+      COLORFGBG: "15;232",
+    });
+    expect(mod.lightMode).toBe(false);
+  });
+
+  it("treats 256-color COLORFGBG bg=255 (near-white greyscale) as light", async () => {
+    const mod = await importThemeWithEnv({
+      OPENCLAW_THEME: undefined,
+      COLORFGBG: "0;255",
+    });
+    expect(mod.lightMode).toBe(true);
+  });
+
+  it("treats 256-color COLORFGBG bg=231 (white cube entry) as light", async () => {
+    const mod = await importThemeWithEnv({
+      OPENCLAW_THEME: undefined,
+      COLORFGBG: "0;231",
+    });
+    expect(mod.lightMode).toBe(true);
+  });
+
+  it("treats 256-color COLORFGBG bg=16 (black cube entry) as dark", async () => {
+    const mod = await importThemeWithEnv({
+      OPENCLAW_THEME: undefined,
+      COLORFGBG: "15;16",
+    });
+    expect(mod.lightMode).toBe(false);
+  });
+
+  it("OPENCLAW_THEME overrides COLORFGBG", async () => {
+    const mod = await importThemeWithEnv({
+      OPENCLAW_THEME: "dark",
+      COLORFGBG: "0;15",
+    });
+    expect(mod.lightMode).toBe(false);
+  });
+
+  it("keeps assistantText as identity in both modes", async () => {
+    const lightMod = await importThemeWithEnv({ OPENCLAW_THEME: "light" });
+    const darkMod = await importThemeWithEnv({ OPENCLAW_THEME: "dark" });
+    expect(lightMod.theme.assistantText("hello")).toBe("hello");
+    expect(darkMod.theme.assistantText("hello")).toBe("hello");
   });
 });
 

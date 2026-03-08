@@ -6,7 +6,55 @@ type HighlightTheme = Record<string, (text: string) => string>;
  * Syntax highlighting theme for code blocks.
  * Uses chalk functions to style different token types.
  */
-export function createSyntaxTheme(fallback: (text: string) => string): HighlightTheme {
+export function createSyntaxTheme(
+  fallback: (text: string) => string,
+  light = false,
+): HighlightTheme {
+  if (light) {
+    return {
+      keyword: chalk.hex("#AF00DB"), // purple
+      built_in: chalk.hex("#267F99"), // teal-dark
+      type: chalk.hex("#267F99"), // teal-dark
+      literal: chalk.hex("#0000FF"), // blue
+      number: chalk.hex("#098658"), // green-dark
+      string: chalk.hex("#A31515"), // red-brown
+      regexp: chalk.hex("#811F3F"), // dark red
+      symbol: chalk.hex("#098658"), // green-dark
+      class: chalk.hex("#267F99"), // teal-dark
+      function: chalk.hex("#795E26"), // dark yellow
+      title: chalk.hex("#795E26"), // dark yellow
+      params: chalk.hex("#001080"), // dark blue
+      comment: chalk.hex("#008000"), // green
+      doctag: chalk.hex("#008000"), // green
+      meta: chalk.hex("#001080"), // dark blue
+      "meta-keyword": chalk.hex("#AF00DB"), // purple
+      "meta-string": chalk.hex("#A31515"), // red-brown
+      section: chalk.hex("#795E26"), // dark yellow
+      tag: chalk.hex("#800000"), // dark red
+      name: chalk.hex("#001080"), // dark blue
+      attr: chalk.hex("#C50000"), // dark red (WCAG AA ≥4.5:1 on white)
+      attribute: chalk.hex("#C50000"), // dark red (WCAG AA ≥4.5:1 on white)
+      variable: chalk.hex("#001080"), // dark blue
+      bullet: chalk.hex("#795E26"), // dark yellow
+      code: chalk.hex("#A31515"), // red-brown
+      emphasis: chalk.italic, // italic
+      strong: chalk.bold, // bold
+      formula: chalk.hex("#AF00DB"), // purple
+      link: chalk.hex("#267F99"), // teal-dark
+      quote: chalk.hex("#008000"), // green
+      addition: chalk.hex("#098658"), // green-dark
+      deletion: chalk.hex("#A31515"), // red-brown
+      "selector-tag": chalk.hex("#800000"), // dark red
+      "selector-id": chalk.hex("#800000"), // dark red
+      "selector-class": chalk.hex("#800000"), // dark red
+      "selector-attr": chalk.hex("#800000"), // dark red
+      "selector-pseudo": chalk.hex("#800000"), // dark red
+      "template-tag": chalk.hex("#AF00DB"), // purple
+      "template-variable": chalk.hex("#001080"), // dark blue
+      default: fallback,
+    };
+  }
+
   return {
     keyword: chalk.hex("#C586C0"), // purple - if, const, function, etc.
     built_in: chalk.hex("#4EC9B0"), // teal - console, Math, etc.
