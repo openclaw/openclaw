@@ -135,7 +135,7 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
     const storePath = resolveStorePath(deps.cfg.session?.store, {
       agentId: route.agentId,
     });
-    const envelopeOptions = resolveEnvelopeFormatOptions(deps.cfg);
+    const envelopeOptions = resolveEnvelopeFormatOptions(deps.cfg, { agentId: route.agentId });
     const previousTimestamp = readSessionUpdatedAt({
       storePath,
       sessionKey: route.sessionKey,

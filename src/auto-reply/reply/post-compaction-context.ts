@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
+import { resolveAgentUserTimezone } from "../../agents/agent-scope.js";
 import { resolveCronStyleNow } from "../../agents/current-time.js";
-import { resolveUserTimezone } from "../../agents/date-time.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { openBoundaryFile } from "../../infra/boundary-file-read.js";
 
@@ -64,6 +64,7 @@ export async function readPostCompactionContext(
   workspaceDir: string,
   cfg?: OpenClawConfig,
   nowMs?: number,
+  agentId?: string,
 ): Promise<string | null> {
   const agentsPath = path.join(workspaceDir, "AGENTS.md");
 
@@ -118,11 +119,11 @@ export async function readPostCompactionContext(
     const displayNames = foundSectionNames.length > 0 ? foundSectionNames : sectionNames;
 
     const resolvedNowMs = nowMs ?? Date.now();
-    const timezone = resolveUserTimezone(cfg?.agents?.defaults?.userTimezone);
+    const timezone = resolveAgentUserTimezone(cfg ?? {}, agentId);
     const dateStamp = formatDateStamp(resolvedNowMs, timezone);
     // Always append the real runtime timestamp — AGENTS.md content may itself contain
     // "Current time:" as user-authored text, so we must not gate on that substring.
-    const { timeLine } = resolveCronStyleNow(cfg ?? {}, resolvedNowMs);
+    const { timeLine } = resolveCronStyleNow(cfg ?? {}, resolvedNowMs, agentId);
 
     const combined = sections.join("\n\n").replaceAll("YYYY-MM-DD", dateStamp);
     const safeContent =

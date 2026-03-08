@@ -102,3 +102,64 @@ describe("buildSystemPromptParams repo root", () => {
     expect(runtimeInfo.repoRoot).toBeUndefined();
   });
 });
+
+describe("buildSystemPromptParams user timezone", () => {
+  it("uses the per-agent userTimezone override when configured", () => {
+    const config: OpenClawConfig = {
+      agents: {
+        defaults: {
+          userTimezone: "America/New_York",
+        },
+        list: [
+          {
+            id: "work",
+            userTimezone: "America/Los_Angeles",
+          },
+        ],
+      },
+    };
+
+    const { userTimezone } = buildSystemPromptParams({
+      config,
+      agentId: "work",
+      runtime: {
+        host: "host",
+        os: "os",
+        arch: "arch",
+        node: "node",
+        model: "model",
+      },
+    });
+
+    expect(userTimezone).toBe("America/Los_Angeles");
+  });
+
+  it("falls back to agents.defaults.userTimezone when no per-agent override exists", () => {
+    const config: OpenClawConfig = {
+      agents: {
+        defaults: {
+          userTimezone: "America/New_York",
+        },
+        list: [
+          {
+            id: "work",
+          },
+        ],
+      },
+    };
+
+    const { userTimezone } = buildSystemPromptParams({
+      config,
+      agentId: "work",
+      runtime: {
+        host: "host",
+        os: "os",
+        arch: "arch",
+        node: "node",
+        model: "model",
+      },
+    });
+
+    expect(userTimezone).toBe("America/New_York");
+  });
+});

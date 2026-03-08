@@ -98,6 +98,7 @@ includes a timestamp line.
 Configure with:
 
 - `agents.defaults.userTimezone`
+- `agents.list[].userTimezone` to override the default for a specific agent
 - `agents.defaults.timeFormat` (`auto` | `12` | `24`)
 
 See [Date & Time](/date-time) for full behavior details.

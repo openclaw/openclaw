@@ -336,7 +336,7 @@ export async function runCronIsolatedAgentTurn(params: {
     deliveryContract,
   });
 
-  const { formattedTime, timeLine } = resolveCronStyleNow(params.cfg, now);
+  const { formattedTime, timeLine } = resolveCronStyleNow(params.cfg, now, agentId);
   const base = `[cron:${params.job.id} ${params.job.name}] ${params.message}`.trim();
 
   // SECURITY: Wrap external hook content with security boundaries to prevent prompt injection

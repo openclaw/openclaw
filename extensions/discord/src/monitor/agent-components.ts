@@ -347,7 +347,7 @@ async function dispatchDiscordComponentEvent(params: {
     allowNameMatching,
   });
   const storePath = resolveStorePath(ctx.cfg.session?.store, { agentId });
-  const envelopeOptions = resolveEnvelopeFormatOptions(ctx.cfg);
+  const envelopeOptions = resolveEnvelopeFormatOptions(ctx.cfg, { agentId });
   const previousTimestamp = readSessionUpdatedAt({
     storePath,
     sessionKey,

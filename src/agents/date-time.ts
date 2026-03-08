@@ -1,18 +1,18 @@
 import { execFileSync } from "node:child_process";
+import { resolveTimezone } from "../infra/format-time/format-datetime.ts";
 
 export type TimeFormatPreference = "auto" | "12" | "24";
 export type ResolvedTimeFormat = "12" | "24";
 
 let cachedTimeFormat: ResolvedTimeFormat | undefined;
 
+/** Normalize a configured IANA timezone string, or fall back to the host timezone. */
 export function resolveUserTimezone(configured?: string): string {
   const trimmed = configured?.trim();
   if (trimmed) {
-    try {
-      new Intl.DateTimeFormat("en-US", { timeZone: trimmed }).format(new Date());
-      return trimmed;
-    } catch {
-      // ignore invalid timezone
+    const resolved = resolveTimezone(trimmed);
+    if (resolved) {
+      return resolved;
     }
   }
   const host = Intl.DateTimeFormat().resolvedOptions().timeZone;

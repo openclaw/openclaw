@@ -31,13 +31,15 @@ export function createInboundEnvelopeBuilder<TConfig, TEnvelope>(params: {
   sessionStore?: string;
   resolveStorePath: (store: string | undefined, opts: { agentId: string }) => string;
   readSessionUpdatedAt: (params: { storePath: string; sessionKey: string }) => number | undefined;
-  resolveEnvelopeFormatOptions: (cfg: TConfig) => TEnvelope;
+  resolveEnvelopeFormatOptions: (cfg: TConfig, opts?: { agentId?: string }) => TEnvelope;
   formatAgentEnvelope: (params: InboundEnvelopeFormatParams<TEnvelope>) => string;
 }) {
   const storePath = params.resolveStorePath(params.sessionStore, {
     agentId: params.route.agentId,
   });
-  const envelopeOptions = params.resolveEnvelopeFormatOptions(params.cfg);
+  const envelopeOptions = params.resolveEnvelopeFormatOptions(params.cfg, {
+    agentId: params.route.agentId,
+  });
   return (input: { channel: string; from: string; body: string; timestamp?: number }) => {
     const previousTimestamp = params.readSessionUpdatedAt({
       storePath,
@@ -70,7 +72,7 @@ export function resolveInboundRouteEnvelopeBuilder<
   sessionStore?: string;
   resolveStorePath: (store: string | undefined, opts: { agentId: string }) => string;
   readSessionUpdatedAt: (params: { storePath: string; sessionKey: string }) => number | undefined;
-  resolveEnvelopeFormatOptions: (cfg: TConfig) => TEnvelope;
+  resolveEnvelopeFormatOptions: (cfg: TConfig, opts?: { agentId?: string }) => TEnvelope;
   formatAgentEnvelope: (params: InboundEnvelopeFormatParams<TEnvelope>) => string;
 }): {
   route: TRoute;
@@ -108,7 +110,7 @@ type InboundRouteEnvelopeRuntime<
     readSessionUpdatedAt: (params: { storePath: string; sessionKey: string }) => number | undefined;
   };
   reply: {
-    resolveEnvelopeFormatOptions: (cfg: TConfig) => TEnvelope;
+    resolveEnvelopeFormatOptions: (cfg: TConfig, opts?: { agentId?: string }) => TEnvelope;
     formatAgentEnvelope: (params: InboundEnvelopeFormatParams<TEnvelope>) => string;
   };
 };

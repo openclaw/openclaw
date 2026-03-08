@@ -71,6 +71,8 @@ export type AgentConfig = {
   reasoningDefault?: "on" | "off" | "stream";
   /** Optional per-agent default for fast mode. */
   fastModeDefault?: boolean;
+  /** Optional IANA timezone for this agent's user context. */
+  userTimezone?: string;
   /** Optional allowlist of skills for this agent (omit = all skills; empty = none). */
   skills?: string[];
   memorySearch?: MemorySearchConfig;

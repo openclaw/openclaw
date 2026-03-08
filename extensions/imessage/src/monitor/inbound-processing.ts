@@ -396,7 +396,9 @@ export function buildIMessageInboundContext(params: {
   imessageTo: string;
   inboundHistory?: Array<{ sender: string; body: string; timestamp?: number }>;
 } {
-  const envelopeOptions = params.envelopeOptions ?? resolveEnvelopeFormatOptions(params.cfg);
+  const envelopeOptions =
+    params.envelopeOptions ??
+    resolveEnvelopeFormatOptions(params.cfg, { agentId: params.decision.route.agentId });
   const { decision } = params;
   const chatId = decision.chatId;
   const chatTarget =
