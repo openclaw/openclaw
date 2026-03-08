@@ -814,18 +814,14 @@ async function dispatchDiscordComponentEvent(params: {
 }): Promise<void> {
   const { ctx, interaction, interactionCtx, channelCtx, guildInfo, eventText } = params;
   const runtime = ctx.runtime ?? createNonExitingRuntime();
-  const route = resolveAgentRoute({
-    cfg: ctx.cfg,
-    channel: "discord",
-    accountId: ctx.accountId,
-    guildId: interactionCtx.rawGuildId,
+  const route = resolveAgentComponentRoute({
+    ctx,
+    rawGuildId: interactionCtx.rawGuildId,
     memberRoleIds: interactionCtx.memberRoleIds,
-    text: eventText,
-    peer: {
-      kind: interactionCtx.isDirectMessage ? "direct" : "channel",
-      id: interactionCtx.isDirectMessage ? interactionCtx.userId : interactionCtx.channelId,
-    },
-    parentPeer: channelCtx.parentId ? { kind: "channel", id: channelCtx.parentId } : undefined,
+    isDirectMessage: interactionCtx.isDirectMessage,
+    userId: interactionCtx.userId,
+    channelId: interactionCtx.channelId,
+    parentId: channelCtx.parentId,
   });
   const sessionKey = params.routeOverrides?.sessionKey ?? route.sessionKey;
   const agentId = params.routeOverrides?.agentId ?? route.agentId;

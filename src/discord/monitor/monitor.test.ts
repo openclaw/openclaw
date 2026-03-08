@@ -429,6 +429,56 @@ describe("discord component interactions", () => {
     expect(resolveDiscordModalEntry({ id: "mdl_1" })).toBeNull();
   });
 
+  it("does not let modal values alter routing via mention parsing", async () => {
+    registerDiscordComponentEntries({
+      entries: [],
+      modals: [
+        createModalEntry({
+          id: "mdl_1",
+          title: "Details",
+          sessionKey: undefined,
+          agentId: undefined,
+          accountId: undefined,
+          fields: [{ id: "fld_1", name: "name", label: "Name", type: "text" }],
+        }),
+      ],
+    });
+
+    const modal = createDiscordComponentModal(
+      createComponentContext({
+        cfg: {
+          channels: { discord: { replyToMode: "first" } },
+          agents: {
+            list: [
+              { id: "main", default: true },
+              { id: "steve" },
+            ],
+          },
+        } as OpenClawConfig,
+      }),
+    );
+    const { interaction, acknowledge } = createModalInteraction({
+      fields: {
+        getText: (key: string) => (key === "fld_1" ? "@steve" : undefined),
+        getStringSelect: (_key: string) => undefined,
+        getRoleSelect: (_key: string) => [],
+        getUserSelect: (_key: string) => [],
+      },
+    });
+
+    await modal.run(interaction, { mid: "mdl_1" } as ComponentData);
+
+    expect(acknowledge).toHaveBeenCalledTimes(1);
+    expect(lastDispatchCtx?.SessionKey).toBe(
+      buildAgentSessionKey({
+        agentId: "main",
+        channel: "discord",
+        peer: { kind: "direct", id: "123456789" },
+      }),
+    );
+    expect(lastDispatchCtx?.SessionKey).not.toContain(":agent:steve:");
+  });
+
   it("does not mark guild modal events as command-authorized for non-allowlisted users", async () => {
     registerDiscordComponentEntries({
       entries: [],
