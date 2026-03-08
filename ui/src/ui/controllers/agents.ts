@@ -1,6 +1,7 @@
 import type { GatewayBrowserClient } from "../gateway.ts";
 import type { AgentsListResult, ToolsCatalogResult } from "../types.ts";
 import { saveConfig } from "./config.ts";
+import type { ConfigState } from "./config.ts";
 
 export type AgentsState = {
   client: GatewayBrowserClient | null;
@@ -14,16 +15,7 @@ export type AgentsState = {
   toolsCatalogResult: ToolsCatalogResult | null;
 };
 
-export type AgentsConfigSaveState = AgentsState & {
-  configSaving: boolean;
-  configSnapshot: { hash?: string | null } | null;
-  configFormDirty: boolean;
-  configFormMode: "form" | "raw";
-  configForm: Record<string, unknown> | null;
-  configRaw: string;
-  configSchema: unknown;
-  lastError: string | null;
-};
+export type AgentsConfigSaveState = AgentsState & ConfigState;
 
 export async function loadAgents(state: AgentsState) {
   if (!state.client || !state.connected) {
