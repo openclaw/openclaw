@@ -627,7 +627,20 @@ export function resolveHooksGmailModel(params: {
   cfg: OpenClawConfig;
   defaultProvider: string;
 }): ModelRef | null {
-  const hooksModel = params.cfg.hooks?.gmail?.model;
+  return resolveHooksModel(params.cfg.hooks?.gmail?.model, params);
+}
+
+export function resolveHooksWsEventsModel(params: {
+  cfg: OpenClawConfig;
+  defaultProvider: string;
+}): ModelRef | null {
+  return resolveHooksModel(params.cfg.hooks?.workspaceEvents?.model, params);
+}
+
+function resolveHooksModel(
+  hooksModel: string | undefined,
+  params: { cfg: OpenClawConfig; defaultProvider: string },
+): ModelRef | null {
   if (!hooksModel?.trim()) {
     return null;
   }

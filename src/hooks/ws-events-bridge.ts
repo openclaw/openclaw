@@ -34,7 +34,7 @@ export function extractResourceType(eventType: string): string {
  * Build a human-readable summary from a CloudEvent.
  */
 export function buildEventSummary(eventType: string, source: string): string {
-  const action = eventType.split(".").pop() ?? "unknown";
+  const action = eventType.split(".").pop() || "unknown";
   const resource = extractResourceType(eventType);
   return `${resource} ${action} from ${source}`;
 }

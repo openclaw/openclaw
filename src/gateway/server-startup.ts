@@ -6,6 +6,7 @@ import {
   getModelRefStatus,
   resolveConfiguredModelRef,
   resolveHooksGmailModel,
+  resolveHooksWsEventsModel,
 } from "../agents/model-selection.js";
 import { resolveAgentSessionDirs } from "../agents/session-dirs.js";
 import { cleanStaleLockFiles } from "../agents/session-write-lock.js";
@@ -110,6 +111,39 @@ export async function startGatewaySidecars(params: {
       if (!status.inCatalog) {
         params.logHooks.warn(
           `hooks.gmail.model "${status.key}" not in the model catalog (may fail at runtime)`,
+        );
+      }
+    }
+  }
+
+  // Validate hooks.workspaceEvents.model if configured.
+  if (params.cfg.hooks?.workspaceEvents?.model) {
+    const wsEventsModelRef = resolveHooksWsEventsModel({
+      cfg: params.cfg,
+      defaultProvider: DEFAULT_PROVIDER,
+    });
+    if (wsEventsModelRef) {
+      const { provider: defaultProvider, model: defaultModel } = resolveConfiguredModelRef({
+        cfg: params.cfg,
+        defaultProvider: DEFAULT_PROVIDER,
+        defaultModel: DEFAULT_MODEL,
+      });
+      const catalog = await loadModelCatalog({ config: params.cfg });
+      const status = getModelRefStatus({
+        cfg: params.cfg,
+        catalog,
+        ref: wsEventsModelRef,
+        defaultProvider,
+        defaultModel,
+      });
+      if (!status.allowed) {
+        params.logHooks.warn(
+          `hooks.workspaceEvents.model "${status.key}" not in agents.defaults.models allowlist (will use primary instead)`,
+        );
+      }
+      if (!status.inCatalog) {
+        params.logHooks.warn(
+          `hooks.workspaceEvents.model "${status.key}" not in the model catalog (may fail at runtime)`,
         );
       }
     }

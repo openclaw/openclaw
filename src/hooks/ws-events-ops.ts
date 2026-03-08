@@ -1,3 +1,4 @@
+import type { ChildProcess } from "node:child_process";
 import { formatCliCommand } from "../cli/command-format.js";
 import {
   type OpenClawConfig,
@@ -164,17 +165,21 @@ export async function runWsEventsService(opts: WsEventsRunOptions) {
   process.on("SIGINT", shutdown);
   process.on("SIGTERM", shutdown);
 
-  child.on("exit", () => {
-    if (shuttingDown) {
-      detachSignals();
-      return;
-    }
-    defaultRuntime.log("gws events +subscribe exited; restarting in 2s");
-    setTimeout(() => {
+  function attachExitHandler(proc: ChildProcess) {
+    proc.on("exit", () => {
       if (shuttingDown) {
+        detachSignals();
         return;
       }
-      child = spawnGwsEventsSubscribe(runtimeConfig);
-    }, 2000);
-  });
+      defaultRuntime.log("gws events +subscribe exited; restarting in 2s");
+      setTimeout(() => {
+        if (shuttingDown) {
+          return;
+        }
+        child = spawnGwsEventsSubscribe(runtimeConfig);
+        attachExitHandler(child);
+      }, 2000);
+    });
+  }
+  attachExitHandler(child);
 }
