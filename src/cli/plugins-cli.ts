@@ -394,7 +394,22 @@ export function registerPluginsCli(program: Command) {
       }
 
       if (list.length === 0) {
-        defaultRuntime.log(theme.muted("No plugins found."));
+        defaultRuntime.log(
+          theme.muted(`
+        No plugins found.
+
+        If you're running from source:
+        - Run: pnpm install
+        - Then run: pnpm build
+        - Make sure you're in the repository root.
+
+        If you're using GitHub Codespaces:
+        Channel plugins may not be available by default.
+        - Try running: pnpm openclaw onboard
+
+       Docs: https://docs.openclaw.ai
+      `),
+        );
         return;
       }
 
