@@ -34,6 +34,43 @@ Good output in one line:
 - `openclaw channels status --probe` → channels report `connected` or `ready`.
 - `openclaw logs --follow` → steady activity, no repeating fatal errors.
 
+## Assistant feels limited or missing tools
+
+If your assistant replies normally but feels unexpectedly limited (for example, missing file access,
+runtime commands, browser automation, or other first-class tools), check the configured tool profile
+before assuming the runtime or channel is broken.
+
+Run:
+
+```bash
+openclaw status
+openclaw status --all
+openclaw doctor
+```
+
+What to check first:
+
+- `tools.profile: "messaging"` is intentionally narrow by design and favors messaging-only workflows.
+- `tools.profile: "full"` provides the broadest global command/control baseline.
+- `tools.profile: "coding"` is a better fit for repo/file/runtime-heavy workflows than `messaging`.
+- Per-agent overrides (`agents.list[].tools.profile`) and provider-specific overrides can still differ from the global baseline.
+
+Typical symptoms of a narrow profile:
+
+- The assistant can reply, but cannot use filesystem or runtime tools.
+- Messaging/session/status tools are available, but browser, gateway, cron, canvas, or node tools are missing.
+- A messaging-first setup works, but feels "crippled" compared with local or richer sessions.
+
+Fastest fix path:
+
+1. Inspect the `Global tools profile` row in `openclaw status` / `openclaw status --all`.
+2. Check `tools.profile` in config.
+3. If you want a broader tool surface, switch to `tools.profile: "full"`.
+4. If only one agent should differ, prefer `agents.list[].tools.profile` instead of changing every agent globally.
+5. Restart the gateway after config changes.
+
+Use the tools docs for the exact profile meanings: [/tools](/tools)
+
 ## Anthropic long context 429
 
 If you see:
