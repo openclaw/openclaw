@@ -20,7 +20,9 @@ OpenClaw has two log “surfaces”:
 - Default rolling log file is under `/tmp/openclaw/` (one file per day): `openclaw-YYYY-MM-DD.log`
   - Date uses the gateway host's local timezone.
 - The log file path and level can be configured via `~/.openclaw/openclaw.json`:
+  - `logging.dir` (directory for rolling daily files)
   - `logging.file`
+    - `logging.file` takes precedence over `logging.dir` when both are set.
   - `logging.level`
 
 The file format is one JSON object per line.

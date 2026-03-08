@@ -60,7 +60,7 @@ Flags emit logs into the standard diagnostics log file. By default:
 /tmp/openclaw/openclaw-YYYY-MM-DD.log
 ```
 
-If you set `logging.file`, use that path instead. Logs are JSONL (one JSON object per line). Redaction still applies based on `logging.redactSensitive`.
+If you set `logging.file` or `logging.dir`, use that path instead. Logs are JSONL (one JSON object per line). Redaction still applies based on `logging.redactSensitive`.
 
 ## Extract logs
 

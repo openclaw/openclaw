@@ -167,6 +167,7 @@ export type SessionMaintenanceConfig = {
 
 export type LoggingConfig = {
   level?: "silent" | "fatal" | "error" | "warn" | "info" | "debug" | "trace";
+  dir?: string;
   file?: string;
   /** Maximum size of a single log file in bytes before writes are suppressed. Default: 500 MB. */
   maxFileBytes?: number;

@@ -24,6 +24,7 @@ const requireConfig = resolveNodeRequireFromMeta(import.meta.url);
 
 export type LoggerSettings = {
   level?: LogLevel;
+  dir?: string;
   file?: string;
   maxFileBytes?: number;
   consoleLevel?: LogLevel;
@@ -77,7 +78,7 @@ function resolveSettings(): ResolvedSettings {
   if (canUseSilentVitestFileLogFastPath(envLevel)) {
     return {
       level: "silent",
-      file: defaultRollingPathForToday(),
+      file: rollingPathForToday(cfg?.dir),
       maxFileBytes: DEFAULT_MAX_LOG_FILE_BYTES,
     };
   }
@@ -100,7 +101,7 @@ function resolveSettings(): ResolvedSettings {
     process.env.VITEST === "true" && process.env.OPENCLAW_TEST_FILE_LOG !== "1" ? "silent" : "info";
   const fromConfig = normalizeLogLevel(cfg?.level, defaultLevel);
   const level = envLevel ?? fromConfig;
-  const file = cfg?.file ?? defaultRollingPathForToday();
+  const file = cfg?.file ?? rollingPathForToday(cfg?.dir);
   const maxFileBytes = resolveMaxLogFileBytes(cfg?.maxFileBytes);
   return { level, file, maxFileBytes };
 }
@@ -306,9 +307,13 @@ function formatLocalDate(date: Date): string {
   return `${year}-${month}-${day}`;
 }
 
-function defaultRollingPathForToday(): string {
+function resolveLogDir(loggingDir: string | undefined): string {
+  return loggingDir ?? DEFAULT_LOG_DIR;
+}
+
+function rollingPathForToday(loggingDir: string | undefined): string {
   const today = formatLocalDate(new Date());
-  return path.join(DEFAULT_LOG_DIR, `${LOG_PREFIX}-${today}${LOG_SUFFIX}`);
+  return path.join(resolveLogDir(loggingDir), `${LOG_PREFIX}-${today}${LOG_SUFFIX}`);
 }
 
 function isRollingPath(file: string): boolean {
