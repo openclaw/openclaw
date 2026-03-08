@@ -112,6 +112,7 @@ On **Permissions**, click **Batch import** and paste:
       "cardkit:card:read",
       "cardkit:card:write",
       "contact:user.employee_id:readonly",
+      "contact:user.base:readonly",
       "corehr:file:download",
       "event:ip_list",
       "im:chat.access_event.bot_p2p_chat:read",
@@ -129,6 +130,9 @@ On **Permissions**, click **Batch import** and paste:
 ```
 
 ![Configure permissions](../images/feishu-step4-permissions.png)
+
+> Tip: keep at least one contact-read scope enabled (for example `contact:user.base:readonly`).
+> Without a contact-read scope, Feishu may return an Access denied error during sender resolution/pairing.
 
 ### 5. Enable bot capability
 
