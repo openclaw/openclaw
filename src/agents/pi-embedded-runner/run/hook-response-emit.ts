@@ -211,8 +211,11 @@ export async function applyBeforeResponseEmitHook(
       `applying allContent modification (${emitResult.allContent.length} entries, original ${assistantTexts.length})`,
     );
     rewriteAllAssistantContent(runMessages, activeSession.messages, emitResult.allContent);
-    // Rebuild per-turn texts from the now-modified session messages.
-    const postRewriteTexts = runMessages
+    // Rebuild per-turn texts from activeSession.messages (NOT runMessages,
+    // which is a stale slice that still contains spliced-out objects).
+    // Re-scope to get a fresh view of the current run after splicing.
+    const freshRunMessages = getRunScopedMessages(activeSession.messages, scopeCount);
+    const postRewriteTexts = freshRunMessages
       .filter((m) => m.role === "assistant" && extractAssistantText(m).length > 0)
       .map((m) => extractAssistantText(m));
     return {
