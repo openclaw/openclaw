@@ -51,10 +51,16 @@ function isCronAddAction(args: unknown): boolean {
 
 function buildToolCallSummary(toolName: string, args: unknown, meta?: string): ToolCallSummary {
   const mutation = buildToolMutationState(toolName, args, meta);
+  // Estimate serialized argument size for payload-size telemetry.
+  let argChars: number | undefined;
+  if (args != null) {
+    argChars = typeof args === "string" ? args.length : JSON.stringify(args).length;
+  }
   return {
     meta,
     mutatingAction: mutation.mutatingAction,
     actionFingerprint: mutation.actionFingerprint,
+    argChars,
   };
 }
 
@@ -495,7 +501,7 @@ export async function handleToolExecutionEnd(
   toolStartData.delete(toolStartKey);
   const callSummary = ctx.state.toolMetaById.get(toolCallId);
   const meta = callSummary?.meta;
-  ctx.state.toolMetas.push({ toolName, meta });
+  ctx.state.toolMetas.push({ toolName, meta, argChars: callSummary?.argChars });
   ctx.state.toolMetaById.delete(toolCallId);
   ctx.state.toolSummaryById.delete(toolCallId);
   if (isToolError) {

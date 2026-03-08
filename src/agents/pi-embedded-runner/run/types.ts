@@ -45,7 +45,7 @@ export type EmbeddedRunAttemptResult = {
   systemPromptReport?: SessionSystemPromptReport;
   messagesSnapshot: AgentMessage[];
   assistantTexts: string[];
-  toolMetas: Array<{ toolName: string; meta?: string }>;
+  toolMetas: Array<{ toolName: string; meta?: string; argChars?: number }>;
   lastAssistant: AssistantMessage | undefined;
   lastToolError?: ToolErrorSummary;
   didSendViaMessagingTool: boolean;

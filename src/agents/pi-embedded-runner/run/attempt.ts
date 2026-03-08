@@ -1747,7 +1747,8 @@ export async function runEmbeddedAttempt(
             const responseChars =
               assistantTexts.reduce((sum, t) => sum + t.length, 0) +
               toolMetas.reduce(
-                (sum, t) => sum + (t.toolName?.length ?? 0) + (t.meta?.length ?? 0),
+                (sum, t) =>
+                  sum + (t.toolName?.length ?? 0) + (t.meta?.length ?? 0) + (t.argChars ?? 0),
                 0,
               );
             logModelApiResponse({

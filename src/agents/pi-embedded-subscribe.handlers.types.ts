@@ -22,11 +22,13 @@ export type ToolCallSummary = {
   meta?: string;
   mutatingAction: boolean;
   actionFingerprint?: string;
+  /** Approximate character count of the serialized tool-call arguments. */
+  argChars?: number;
 };
 
 export type EmbeddedPiSubscribeState = {
   assistantTexts: string[];
-  toolMetas: Array<{ toolName?: string; meta?: string }>;
+  toolMetas: Array<{ toolName?: string; meta?: string; argChars?: number }>;
   toolMetaById: Map<string, ToolCallSummary>;
   toolSummaryById: Set<string>;
   lastToolError?: ToolErrorSummary;
