@@ -288,6 +288,63 @@ describe("sendMediaFeishu msg_type routing", () => {
     );
   });
 
+  it("uses channels.feishu.localRoots 'any' and passes readFile for local paths", async () => {
+    loadWebMediaMock.mockResolvedValue({
+      buffer: Buffer.from("local-file"),
+      fileName: "pic.png",
+      kind: "image",
+      contentType: "image/png",
+    });
+    resolveFeishuAccountMock.mockReturnValueOnce({
+      configured: true,
+      accountId: "main",
+      config: { localRoots: "any" },
+    });
+
+    await sendMediaFeishu({
+      cfg: { channels: { feishu: { localRoots: "any" } } } as any,
+      to: "user:ou_target",
+      mediaUrl: "/local/feishu/workspace/ask_official.png",
+    });
+
+    expect(loadWebMediaMock).toHaveBeenCalledWith(
+      "/local/feishu/workspace/ask_official.png",
+      expect.objectContaining({
+        localRoots: "any",
+        readFile: expect.any(Function),
+      }),
+    );
+  });
+
+  it("uses channels.feishu.localRoots array over context mediaLocalRoots", async () => {
+    loadWebMediaMock.mockResolvedValue({
+      buffer: Buffer.from("local-file"),
+      fileName: "doc.pdf",
+      kind: "document",
+      contentType: "application/pdf",
+    });
+
+    const channelRoots = ["/custom/feishu/root"];
+    resolveFeishuAccountMock.mockReturnValueOnce({
+      configured: true,
+      accountId: "main",
+      config: { localRoots: channelRoots },
+    });
+    await sendMediaFeishu({
+      cfg: { channels: { feishu: { localRoots: channelRoots } } } as any,
+      to: "user:ou_target",
+      mediaUrl: "/custom/feishu/root/file.pdf",
+      mediaLocalRoots: ["/other/context/root"],
+    });
+
+    expect(loadWebMediaMock).toHaveBeenCalledWith(
+      "/custom/feishu/root/file.pdf",
+      expect.objectContaining({
+        localRoots: channelRoots,
+      }),
+    );
+  });
+
   it("fails closed when media URL fetch is blocked", async () => {
     loadWebMediaMock.mockRejectedValueOnce(
       new Error("Blocked: resolves to private/internal IP address"),

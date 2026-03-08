@@ -8,6 +8,7 @@ import { normalizeFeishuExternalKey } from "./external-keys.js";
 import { getFeishuRuntime } from "./runtime.js";
 import { assertFeishuMessageApiSuccess, toFeishuSendResult } from "./send-result.js";
 import { resolveFeishuSendTarget } from "./send-target.js";
+import type { FeishuConfig } from "./types.js";
 
 const FEISHU_MEDIA_HTTP_TIMEOUT_MS = 120_000;
 
@@ -414,9 +415,27 @@ export function detectFileType(
 }
 
 /**
+ * Resolve effective localRoots for loadWebMedia from merged account config (so
+ * channels.feishu.accounts.<id>.localRoots overrides top-level). Supports "any" or string[].
+ */
+function resolveFeishuMediaLocalRoots(params: {
+  feishuConfig: FeishuConfig | undefined;
+  mediaLocalRoots?: readonly string[];
+}): readonly string[] | "any" | undefined {
+  const channelRoots = params.feishuConfig?.localRoots;
+  if (channelRoots === "any") {
+    return "any";
+  }
+  if (Array.isArray(channelRoots) && channelRoots.length > 0) {
+    return channelRoots;
+  }
+  return params.mediaLocalRoots?.length ? params.mediaLocalRoots : undefined;
+}
+
+/**
  * Upload and send media (image or file) from URL, local path, or buffer.
- * When mediaUrl is a local path, mediaLocalRoots (from core outbound context)
- * must be passed so loadWebMedia allows the path (post CVE-2026-26321).
+ * When mediaUrl is a local path, allowed roots come from merged Feishu config
+ * (channels.feishu.localRoots or channels.feishu.accounts.<id>.localRoots) or core mediaLocalRoots.
  */
 export async function sendMediaFeishu(params: {
   cfg: ClawdbotConfig;
@@ -427,7 +446,7 @@ export async function sendMediaFeishu(params: {
   replyToMessageId?: string;
   replyInThread?: boolean;
   accountId?: string;
-  /** Allowed roots for local path reads; required for local filePath to work. */
+  /** Allowed roots for local path reads (from core); overridden by channels.feishu.localRoots. */
   mediaLocalRoots?: readonly string[];
 }): Promise<SendMediaResult> {
   const {
@@ -454,11 +473,25 @@ export async function sendMediaFeishu(params: {
     buffer = mediaBuffer;
     name = fileName ?? "file";
   } else if (mediaUrl) {
-    const loaded = await getFeishuRuntime().media.loadWebMedia(mediaUrl, {
+    const localRoots = resolveFeishuMediaLocalRoots({
+      feishuConfig: account.config,
+      mediaLocalRoots,
+    });
+    const loadOptions: {
+      maxBytes: number;
+      optimizeImages: boolean;
+      localRoots: readonly string[] | "any" | undefined;
+      readFile?: (filePath: string) => Promise<Buffer>;
+    } = {
       maxBytes: mediaMaxBytes,
       optimizeImages: false,
-      localRoots: mediaLocalRoots?.length ? mediaLocalRoots : undefined,
-    });
+      localRoots,
+    };
+    // Core requires readFile override when localRoots is "any" (unsafe-bypass guard).
+    if (localRoots === "any") {
+      loadOptions.readFile = (filePath: string) => fs.promises.readFile(filePath);
+    }
+    const loaded = await getFeishuRuntime().media.loadWebMedia(mediaUrl, loadOptions);
     buffer = loaded.buffer;
     name = fileName ?? loaded.fileName ?? "file";
   } else {
