@@ -356,11 +356,12 @@ function loadSkillEntries(
     dir: personalAgentsSkillsDir,
     source: "agents-skills-personal",
   });
-  const projectAgentsSkillsDir = path.resolve(workspaceDir, ".agents", "skills");
-  const projectAgentsSkills = loadSkills({
-    dir: projectAgentsSkillsDir,
-    source: "agents-skills-project",
-  });
+  const projectAgentsSkills = [".agent", ".agents", ".github", ".claude"].flatMap((dir) =>
+    loadSkills({
+      dir: path.resolve(workspaceDir, dir),
+      source: `project-${dir.replace(/^\./, "")}`,
+    }),
+  );
   const workspaceSkills = loadSkills({
     dir: workspaceSkillsDir,
     source: "openclaw-workspace",

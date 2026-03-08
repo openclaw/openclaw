@@ -292,17 +292,346 @@ export function buildGatewayCronService(params: {
       });
     },
     runIsolatedAgentJob: async ({ job, message, abortSignal }) => {
-      const { agentId, cfg: runtimeConfig } = resolveCronAgent(job.agentId);
-      return await runCronIsolatedAgentTurn({
-        cfg: runtimeConfig,
-        deps: params.deps,
-        job,
-        message,
-        abortSignal,
-        agentId,
-        sessionKey: `cron:${job.id}`,
-        lane: "cron",
-      });
+      const WF_CHAIN_PREFIX = "__wf_chain__:";
+
+      // =============================================
+      // DEBUG: Log job execution start
+      // =============================================
+      cronLogger.info(
+        {
+          jobId: job.id,
+          jobName: job.name,
+          description: job.description?.substring(0, 200),
+          schedule: job.schedule,
+          payload: job.payload,
+        },
+        `cron: starting job execution`,
+      );
+
+      // Kiểm tra xem job có encode workflow chain không
+      const desc = typeof job.description === "string" ? job.description : "";
+      const chainStart = desc.indexOf(WF_CHAIN_PREFIX);
+
+      cronLogger.debug(
+        { jobId: job.id, chainStart, descLength: desc.length },
+        `cron: checking for workflow chain`,
+      );
+
+      // Không có chain → hành vi mặc định (1 agent)
+      if (chainStart === -1) {
+        cronLogger.info(
+          { jobId: job.id },
+          `cron: no workflow chain found, running single agent turn`,
+        );
+        const { agentId, cfg: runtimeConfig } = resolveCronAgent(job.agentId);
+        return await runCronIsolatedAgentTurn({
+          cfg: runtimeConfig,
+          deps: params.deps,
+          job,
+          message,
+          abortSignal,
+          agentId,
+          sessionKey: `cron:${job.id}`,
+          lane: "cron",
+        });
+      }
+
+      // Parse chain từ description
+      type WfChainStep = {
+        nodeId: string;
+        actionType: string;
+        label: string;
+        agentId?: string;
+        prompt?: string;
+        body?: string;
+      };
+
+      let chain: WfChainStep[];
+      const chainJson = desc.slice(chainStart + WF_CHAIN_PREFIX.length);
+
+      cronLogger.info(
+        { jobId: job.id, chainJson: chainJson.substring(0, 500) },
+        `cron: parsing workflow chain from description`,
+      );
+
+      try {
+        chain = JSON.parse(chainJson) as WfChainStep[];
+        cronLogger.info(
+          {
+            jobId: job.id,
+            chainLength: chain.length,
+            steps: chain.map((s) => ({
+              nodeId: s.nodeId,
+              actionType: s.actionType,
+              label: s.label,
+            })),
+          },
+          `cron: workflow chain parsed successfully`,
+        );
+      } catch (parseErr) {
+        cronLogger.error(
+          {
+            jobId: job.id,
+            error: parseErr instanceof Error ? parseErr.message : String(parseErr),
+            chainJson: chainJson.substring(0, 300),
+          },
+          "cron: failed to parse workflow chain, falling back to single step",
+        );
+        const { agentId, cfg: runtimeConfig } = resolveCronAgent(job.agentId);
+        return await runCronIsolatedAgentTurn({
+          cfg: runtimeConfig,
+          deps: params.deps,
+          job,
+          message,
+          abortSignal,
+          agentId,
+          sessionKey: `cron:${job.id}`,
+          lane: "cron",
+        });
+      }
+
+      // =============================================
+      // Sequential chain execution
+      // Output của mỗi bước được truyền sang bước tiếp qua {{input}}
+      // =============================================
+      let currentInput = message;
+      let lastResult: Awaited<ReturnType<typeof runCronIsolatedAgentTurn>> | undefined;
+
+      cronLogger.info(
+        { jobId: job.id, totalSteps: chain.length, initialMessage: currentInput.substring(0, 100) },
+        `cron: starting sequential chain execution`,
+      );
+
+      for (let stepIdx = 0; stepIdx < chain.length; stepIdx++) {
+        const step = chain[stepIdx];
+        const stepStartTime = Date.now();
+
+        // Dừng sớm nếu abortSignal kích hoạt
+        if (abortSignal?.aborted) {
+          cronLogger.warn(
+            { jobId: job.id, step: stepIdx + 1, reason: abortSignal.reason },
+            "cron: workflow chain aborted by signal",
+          );
+          return {
+            status: "error" as const,
+            error: "workflow chain aborted",
+            sessionId: `cron:${job.id}:step${stepIdx}`,
+            sessionKey: `cron:${job.id}:step${stepIdx}`,
+          };
+        }
+
+        cronLogger.info(
+          {
+            jobId: job.id,
+            step: stepIdx + 1,
+            total: chain.length,
+            nodeId: step.nodeId,
+            actionType: step.actionType,
+            label: step.label,
+            promptPreview: step.prompt?.substring(0, 100),
+          },
+          `cron: executing workflow chain step ${stepIdx + 1}/${chain.length}`,
+        );
+
+        if (step.actionType === "agent-prompt" || step.label === "AI Agent Prompt") {
+          // Render template: thay {{input}} bằng output của bước trước
+          const rawPrompt = step.prompt || currentInput;
+          const prompt = rawPrompt.replace(/\{\{input\}\}/g, currentInput);
+
+          cronLogger.debug(
+            {
+              jobId: job.id,
+              step: stepIdx + 1,
+              rawPrompt: rawPrompt.substring(0, 150),
+              currentInput: currentInput.substring(0, 150),
+            },
+            `cron: agent-prompt step - rendering template`,
+          );
+
+          const { agentId: stepAgentId, cfg: stepCfg } = resolveCronAgent(step.agentId || null);
+
+          cronLogger.info(
+            {
+              jobId: job.id,
+              step: stepIdx + 1,
+              agentId: stepAgentId,
+              sessionKey: `cron:${job.id}:step${stepIdx}:${step.nodeId}`,
+            },
+            `cron: calling runCronIsolatedAgentTurn for step ${stepIdx + 1}`,
+          );
+
+          cronLogger.info(
+            {
+              jobId: job.id,
+              step: stepIdx + 1,
+              nodeId: step.nodeId,
+              prompt: prompt,
+            },
+            `cron: [STEP ${stepIdx + 1}/${chain.length}] STARTING - Node "${step.label || step.nodeId}"`,
+          );
+
+          const stepResult = await runCronIsolatedAgentTurn({
+            cfg: stepCfg,
+            deps: params.deps,
+            job,
+            message: prompt,
+            abortSignal,
+            agentId: stepAgentId,
+            // Mỗi bước có sessionKey riêng để tránh xung đột lịch sử
+            sessionKey: `cron:${job.id}:step${stepIdx}:${step.nodeId}`,
+            lane: "cron",
+          });
+
+          const stepDuration = Date.now() - stepStartTime;
+
+          // Nếu bước này thất bại, dừng chain ngay
+          if (stepResult.status === "error") {
+            cronLogger.error(
+              {
+                jobId: job.id,
+                step: stepIdx + 1,
+                nodeId: step.nodeId,
+                error: stepResult.error,
+                durationMs: stepDuration,
+                sessionId: stepResult.sessionId,
+                sessionKey: stepResult.sessionKey,
+              },
+              `cron: [STEP ${stepIdx + 1}/${chain.length}] ❌ FAILED - Node "${step.label || step.nodeId}"`,
+            );
+            return stepResult;
+          }
+
+          cronLogger.info(
+            {
+              jobId: job.id,
+              step: stepIdx + 1,
+              nodeId: step.nodeId,
+              durationMs: stepDuration,
+              status: stepResult.status,
+              sessionId: stepResult.sessionId,
+              sessionKey: stepResult.sessionKey,
+              outputTextLength: stepResult.outputText?.length ?? 0,
+              delivered: stepResult.delivered,
+              deliveryAttempted: stepResult.deliveryAttempted,
+            },
+            `cron: [STEP ${stepIdx + 1}/${chain.length}] ✅ COMPLETED - Node "${step.label || step.nodeId}"`,
+          );
+
+          // Log full output cho step này
+          if (stepResult.outputText) {
+            cronLogger.info(
+              {
+                jobId: job.id,
+                step: stepIdx + 1,
+                nodeId: step.nodeId,
+                outputText: stepResult.outputText,
+              },
+              `cron: [STEP ${stepIdx + 1}/${chain.length}] 📝 OUTPUT - Node "${step.label || step.nodeId}"`,
+            );
+          }
+
+          // Truyền outputText sang bước tiếp theo
+          if (stepResult.outputText) {
+            currentInput = stepResult.outputText;
+            cronLogger.info(
+              {
+                jobId: job.id,
+                step: stepIdx + 1,
+                nextStep: stepIdx + 2,
+                newInputLength: currentInput.length,
+                newInputPreview: currentInput.substring(0, 300),
+              },
+              `cron: [CHAIN] Passing output from step ${stepIdx + 1} to step ${stepIdx + 2} as {{input}}`,
+            );
+          }
+          lastResult = stepResult;
+        } else if (step.actionType === "send-message" || step.label === "Send Message") {
+          // Send message: inject vào session cuối, không chờ AI
+          const body = (step.body || currentInput).replace(/\{\{input\}\}/g, currentInput);
+          const { agentId: stepAgentId } = resolveCronAgent(null);
+          const sessionKey = `cron:${job.id}:step${stepIdx}:${step.nodeId}`;
+
+          cronLogger.info(
+            {
+              jobId: job.id,
+              step: stepIdx + 1,
+              nodeId: step.nodeId,
+              sessionKey,
+              body: body,
+            },
+            `cron: [STEP ${stepIdx + 1}/${chain.length}] 📤 SEND-MESSAGE - Node "${step.label || step.nodeId}"`,
+          );
+
+          enqueueSystemEvent(body, { sessionKey });
+
+          cronLogger.info(
+            {
+              jobId: job.id,
+              step: stepIdx + 1,
+              nodeId: step.nodeId,
+              sessionKey,
+              enqueued: true,
+            },
+            `cron: [STEP ${stepIdx + 1}/${chain.length}] ✅ ENQUEUED - Node "${step.label || step.nodeId}"`,
+          );
+
+          // send-message không thay đổi currentInput
+          lastResult = {
+            status: "ok" as const,
+            sessionId: sessionKey,
+            sessionKey,
+          };
+          void stepAgentId; // suppress unused warning
+        } else {
+          // Action type chưa được hỗ trợ — log và bỏ qua
+          cronLogger.warn(
+            {
+              jobId: job.id,
+              step: stepIdx + 1,
+              nodeId: step.nodeId,
+              actionType: step.actionType,
+              label: step.label,
+            },
+            "cron: unsupported workflow chain action type, skipping step",
+          );
+        }
+      }
+
+      const _totalDuration = Date.now();
+      const successCount = chain.filter((_, idx) => {
+        const step = chain[idx];
+        return (
+          step.actionType === "agent-prompt" ||
+          step.label === "AI Agent Prompt" ||
+          step.actionType === "send-message" ||
+          step.label === "Send Message"
+        );
+      }).length;
+
+      cronLogger.info(
+        {
+          jobId: job.id,
+          totalSteps: chain.length,
+          executedSteps: successCount,
+          finalStatus: lastResult?.status ?? "unknown",
+          finalSessionId: lastResult?.sessionId,
+          finalSessionKey: lastResult?.sessionKey,
+          finalOutputLength: lastResult?.outputText?.length ?? 0,
+          finalOutput: lastResult?.outputText,
+          delivered: lastResult?.delivered,
+          deliveryAttempted: lastResult?.deliveryAttempted,
+        },
+        `cron: [WORKFLOW COMPLETE] ✅ Chain execution finished - ${successCount}/${chain.length} steps executed`,
+      );
+
+      // Trả về kết quả của bước cuối cùng
+      return (
+        lastResult ?? {
+          status: "ok" as const,
+          sessionId: `cron:${job.id}`,
+          sessionKey: `cron:${job.id}`,
+        }
+      );
     },
     sendCronFailureAlert: async ({ job, text, channel, to, mode, accountId }) => {
       const { agentId, cfg: runtimeConfig } = resolveCronAgent(job.agentId);

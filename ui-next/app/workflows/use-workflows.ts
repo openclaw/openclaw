@@ -12,6 +12,84 @@ export interface WorkflowItem {
   cronJobIds?: string[];
 }
 
+// ============================================
+// Workflow Chain Step — encode vào description của Cron Job.
+// Backend (server-cron.ts) parse để chạy sequential.
+// ============================================
+export interface WorkflowChainStep {
+  nodeId: string;
+  actionType: string; // "agent-prompt" | "send-message" | "unknown"
+  label: string;
+  agentId?: string;
+  prompt?: string; // Hỗ trợ {{input}} — backend replace bằng output bước trước
+  body?: string; // Dùng cho "send-message"
+}
+
+const WF_CHAIN_PREFIX = "__wf_chain__:";
+
+/**
+ * BFS từ triggerId, trả về danh sách action nodes theo thứ tự kết nối.
+ * Logic nodes được traverse qua (để tiếp tục tìm action phía sau) nhưng
+ * không thêm vào chain (chưa có runtime support).
+ */
+function extractChainFromTrigger(
+  triggerId: string,
+  nodes: Node[],
+  edges: Edge[],
+): WorkflowChainStep[] {
+  const chain: WorkflowChainStep[] = [];
+  const visited = new Set<string>();
+  const queue: string[] = [];
+
+  // Seed BFS từ các edge xuất phát từ trigger
+  for (const e of edges) {
+    if (e.source === triggerId) {
+      queue.push(e.target);
+    }
+  }
+
+  while (queue.length > 0) {
+    const nodeId = queue.shift()!;
+    if (visited.has(nodeId)) {
+      continue;
+    }
+    visited.add(nodeId);
+
+    const node = nodes.find((n) => n.id === nodeId);
+    if (!node) {
+      continue;
+    }
+
+    if (node.type === "action") {
+      const label = (node.data?.label as string) || "";
+      const rawActionType = node.data?.actionType as string | undefined;
+      const actionType =
+        rawActionType ||
+        (label === "AI Agent Prompt" ? "agent-prompt" : "") ||
+        (label === "Send Message" ? "send-message" : "") ||
+        "unknown";
+
+      chain.push({
+        nodeId,
+        actionType,
+        label,
+        agentId: (node.data?.agentId as string) || undefined,
+        prompt: (node.data?.prompt as string) || undefined,
+        body: (node.data?.body as string) || undefined,
+      });
+    }
+
+    // Tiếp tục BFS qua node tiếp theo (kể cả logic node)
+    for (const e of edges) {
+      if (e.source === nodeId && !visited.has(e.target)) {
+        queue.push(e.target);
+      }
+    }
+  }
+
+  return chain;
+}
+
 export function useWorkflows() {
   const [workflows, setWorkflows] = useState<WorkflowItem[]>([]);
   const [currentId, setCurrentId] = useState<string | null>(null);
@@ -46,74 +124,120 @@ export function useWorkflows() {
   }, [request, state]);
 
   const saveWorkflow = async (id: string, name: string, nodes: Node[], edges: Edge[]) => {
-    // 1. Delete existing cron jobs for this workflow
+    console.log("[WORKFLOW DEBUG] saveWorkflow called:", {
+      id,
+      name,
+      nodesCount: nodes.length,
+      edgesCount: edges.length,
+    });
+
+    // 1. Xoá các cron jobs cũ của workflow này
     const existingWorkflow = workflows.find((w) => w.id === id);
     if (existingWorkflow?.cronJobIds) {
+      console.log("[WORKFLOW DEBUG] Removing old cron jobs:", existingWorkflow.cronJobIds);
       for (const cronId of existingWorkflow.cronJobIds) {
         try {
           await request("cron.remove", { jobId: cronId });
+          console.log("[WORKFLOW DEBUG] Removed cron job:", cronId);
         } catch (e) {
-          console.error("Failed to remove old cron job", e);
+          console.error("[WORKFLOW DEBUG] Failed to remove old cron job", cronId, e);
         }
       }
     }
 
     const newCronJobIds: string[] = [];
 
-    // 2. Discover new trigger-action links and create cron jobs
-    const triggers = nodes.filter(
+    // 2. Với mỗi Schedule (Cron) trigger, BFS toàn bộ chain
+    const cronTriggers = nodes.filter(
       (n) => n.type === "trigger" && n.data?.label === "Schedule (Cron)",
     );
-    for (const trigger of triggers) {
-      const outgoingEdges = edges.filter((e) => e.source === trigger.id);
-      for (const edge of outgoingEdges) {
-        const actionNode = nodes.find((n) => n.id === edge.target);
-        if (actionNode && actionNode.data?.label === "AI Agent Prompt") {
-          const cronExpr = (trigger.data.cronExpr as string) || "* * * * *";
-          const agentId = (actionNode.data.agentId as string) || undefined;
-          const prompt = (actionNode.data.prompt as string) || "Ping from Workflow";
 
-          const jobCreate: CronJobCreate = {
-            name: `Workflow: ${name}`,
-            description: `Generated from Workflow Editor (Node: ${trigger.id})`,
-            enabled: true,
-            agentId,
-            schedule: { kind: "cron", expr: cronExpr },
-            sessionTarget: "isolated",
-            wakeMode: "now",
-            payload: { kind: "agentTurn", message: prompt },
-          };
+    console.log("[WORKFLOW DEBUG] Found cron triggers:", cronTriggers.length);
 
-          try {
-            const res = await request<{ id: string }>("cron.add", jobCreate);
-            newCronJobIds.push(res.id);
-          } catch (e) {
-            console.error("Failed to add cron job", e);
-          }
-        } else if (actionNode && actionNode.data?.label === "Send Message") {
-          const cronExpr = (trigger.data.cronExpr as string) || "* * * * *";
-          const body = (actionNode.data.body as string) || "Hello from workflow!";
+    for (const trigger of cronTriggers) {
+      const cronExpr = (trigger.data.cronExpr as string) || "*/5 * * * *"; // Default: every 5 minutes
 
-          const jobCreate: CronJobCreate = {
-            name: `Workflow: ${name}`,
-            description: `Generated from Workflow Editor (Node: ${trigger.id})`,
-            enabled: true,
-            schedule: { kind: "cron", expr: cronExpr },
-            sessionTarget: "isolated",
-            wakeMode: "now",
-            payload: { kind: "systemEvent", text: body },
-            delivery: { mode: "announce" },
-          };
+      console.log("[WORKFLOW DEBUG] Processing trigger:", {
+        triggerId: trigger.id,
+        cronExpr,
+        triggerData: trigger.data,
+      });
 
-          try {
-            const res = await request<{ id: string }>("cron.add", jobCreate);
-            newCronJobIds.push(res.id);
-          } catch (e) {
-            console.error("Failed to add cron job for send message", e);
-          }
-        }
+      // BFS lấy toàn bộ chuỗi action nodes từ trigger này
+      const chain = extractChainFromTrigger(trigger.id, nodes, edges);
+      console.log("[WORKFLOW DEBUG] Extracted chain:", {
+        chainLength: chain.length,
+        steps: chain.map((s) => ({ nodeId: s.nodeId, actionType: s.actionType, label: s.label })),
+      });
+
+      if (chain.length === 0) {
+        console.log("[WORKFLOW DEBUG] Chain is empty, skipping");
+        continue;
+      }
+
+      const firstStep = chain[0];
+
+      // Encode chain vào description (chỉ khi có nhiều hơn 1 bước)
+      // Backend sẽ parse __wf_chain__:<json> để chạy sequential
+      const description =
+        chain.length > 1
+          ? `${WF_CHAIN_PREFIX}${JSON.stringify(chain)}`
+          : `Generated from Workflow Editor (trigger: ${trigger.id})`;
+
+      console.log("[WORKFLOW DEBUG] Chain description:", description.substring(0, 500));
+
+      // agentId từ bước đầu tiên (nếu là agent-prompt)
+      const agentId =
+        firstStep.actionType === "agent-prompt" ? firstStep.agentId || undefined : undefined;
+
+      // Payload cho cron job (dựa theo bước đầu tiên)
+      // Nếu có chain > 1, luôn dùng agentTurn để bước 1 có outputText truyền sang bước tiếp theo
+      let jobCreate: CronJobCreate;
+
+      if (firstStep.actionType === "agent-prompt" || chain.length > 1) {
+        const firstPrompt = firstStep.prompt || firstStep.body || "Ping from Workflow";
+        jobCreate = {
+          name: `Workflow: ${name}`,
+          description,
+          enabled: true,
+          agentId,
+          schedule: { kind: "cron", expr: cronExpr },
+          sessionTarget: "isolated",
+          wakeMode: "now",
+          payload: { kind: "agentTurn", message: firstPrompt },
+        };
+      } else {
+        // Chain đơn, bước duy nhất là send-message
+        jobCreate = {
+          name: `Workflow: ${name}`,
+          description,
+          enabled: true,
+          schedule: { kind: "cron", expr: cronExpr },
+          sessionTarget: "isolated",
+          wakeMode: "now",
+          payload: { kind: "systemEvent", text: firstStep.body || "Hello from workflow!" },
+          delivery: { mode: "announce" },
+        };
+      }
+
+      console.log("[WORKFLOW DEBUG] Creating cron job:", {
+        name: jobCreate.name,
+        schedule: jobCreate.schedule,
+        payload: jobCreate.payload,
+        descriptionPreview: jobCreate.description?.substring(0, 200),
+      });
+
+      try {
+        const res = await request<{ id: string }>("cron.add", jobCreate);
+        console.log("[WORKFLOW DEBUG] Cron job created:", res.id);
+        newCronJobIds.push(res.id);
+      } catch (e) {
+        console.error("[WORKFLOW DEBUG] Failed to add cron job for workflow chain", e);
+        throw e; // Re-throw to let caller know save failed
       }
     }
+
+    console.log("[WORKFLOW DEBUG] New cron job IDs:", newCronJobIds);
 
     setWorkflows((prev) => {
       const existing = prev.find((w) => w.id === id);
