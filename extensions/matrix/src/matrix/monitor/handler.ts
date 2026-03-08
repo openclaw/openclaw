@@ -419,6 +419,26 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
 
       const messageId = event.event_id ?? "";
       const replyToEventId = content["m.relates_to"]?.["m.in_reply_to"]?.event_id;
+
+      // Fetch reply context (quoted message body + sender) when replying to a message
+      let replyToBody: string | undefined;
+      let replyToSender: string | undefined;
+      if (replyToEventId && !content["m.relates_to"]?.rel_type) {
+        try {
+          const repliedEvent = await fetchEventSummary(client, roomId, replyToEventId);
+          if (repliedEvent?.body) {
+            replyToBody = repliedEvent.body;
+            replyToSender = repliedEvent.sender
+              ? await getMemberDisplayName(roomId, repliedEvent.sender)
+              : undefined;
+          }
+        } catch (err) {
+          logVerboseMessage(
+            `matrix: failed to fetch reply context ${replyToEventId}: ${String(err)}`,
+          );
+        }
+      }
+
       const threadRootId = resolveMatrixThreadRootId({ event, content });
       const threadTarget = resolveMatrixThreadTarget({
         threadReplies,
@@ -531,6 +551,8 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
         WasMentioned: isRoom ? wasMentioned : undefined,
         MessageSid: messageId,
         ReplyToId: threadTarget ? undefined : (replyToEventId ?? undefined),
+        ReplyToBody: threadTarget ? undefined : replyToBody,
+        ReplyToSender: threadTarget ? undefined : replyToSender,
         MessageThreadId: threadTarget,
         Timestamp: eventTs ?? undefined,
         MediaPath: media?.path,
