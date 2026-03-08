@@ -6,6 +6,7 @@ export function splitArgsPreservingQuotes(
 ): string[] {
   const args: string[] = [];
   let current = "";
+  let tokenStarted = false;
   let inQuotes = false;
   const escapeMode = options?.escapeMode ?? "none";
 
@@ -14,6 +15,7 @@ export function splitArgsPreservingQuotes(
     if (escapeMode === "backslash" && char === "\\") {
       if (i + 1 < value.length) {
         current += value[i + 1];
+        tokenStarted = true;
         i++;
       }
       continue;
@@ -25,23 +27,27 @@ export function splitArgsPreservingQuotes(
       value[i + 1] === '"'
     ) {
       current += '"';
+      tokenStarted = true;
       i++;
       continue;
     }
     if (char === '"') {
+      tokenStarted = true;
       inQuotes = !inQuotes;
       continue;
     }
     if (!inQuotes && /\s/.test(char)) {
-      if (current) {
+      if (tokenStarted) {
         args.push(current);
         current = "";
+        tokenStarted = false;
       }
       continue;
     }
     current += char;
+    tokenStarted = true;
   }
-  if (current) {
+  if (tokenStarted) {
     args.push(current);
   }
   return args;

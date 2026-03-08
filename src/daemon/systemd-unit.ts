@@ -11,6 +11,9 @@ function assertNoSystemdLineBreaks(value: string, label: string): void {
 
 function systemdEscapeArg(value: string): string {
   assertNoSystemdLineBreaks(value, "Systemd unit values");
+  if (value === "") {
+    return '""';
+  }
   if (!/[\s"\\]/.test(value)) {
     return value;
   }
@@ -98,7 +101,7 @@ export function parseSystemdEnvAssignment(raw: string): { key: string; value: st
         escapeNext = false;
         continue;
       }
-      if (ch === "\\\\") {
+      if (ch === "\\") {
         escapeNext = true;
         continue;
       }
