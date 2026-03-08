@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { CURRENT_SESSION_VERSION } from "@mariozechner/pi-coding-agent";
+import { CURRENT_SESSION_VERSION, SessionManager } from "@mariozechner/pi-coding-agent";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { MsgContext } from "../../auto-reply/templating.js";
 import { GATEWAY_CLIENT_CAPS, GATEWAY_CLIENT_MODES } from "../protocol/client-info.js";
@@ -16,6 +16,8 @@ const mockState = vi.hoisted(() => ({
   finalText: "[[reply_to_current]]",
   triggerAgentRunStart: false,
   agentRunId: "run-agent-1",
+  persistAssistantBeforeFinal: false,
+  persistedAssistantText: "",
   sessionEntry: {} as Record<string, unknown>,
   lastDispatchCtx: undefined as MsgContext | undefined,
 }));
@@ -67,6 +69,16 @@ vi.mock("../../auto-reply/dispatch.js", () => ({
       if (mockState.triggerAgentRunStart) {
         params.replyOptions?.onAgentRunStart?.(mockState.agentRunId);
       }
+      if (mockState.persistAssistantBeforeFinal) {
+        const sessionManager = SessionManager.open(mockState.transcriptPath);
+        sessionManager.appendMessage({
+          role: "assistant",
+          content: [{ type: "text", text: mockState.persistedAssistantText }],
+          timestamp: Date.now(),
+          stopReason: "stop",
+          usage: { input: 0, output: 0, totalTokens: 0 },
+        });
+      }
       params.dispatcher.sendFinalReply({ text: mockState.finalText });
       params.dispatcher.markComplete();
       await params.dispatcher.waitForIdle();
@@ -93,6 +105,27 @@ function createTranscriptFixture(prefix: string) {
     "utf-8",
   );
   mockState.transcriptPath = transcriptPath;
+}
+
+function readTranscriptAssistantMessages(transcriptPath: string): Array<Record<string, unknown>> {
+  const lines = fs.readFileSync(transcriptPath, "utf-8").split(/\r?\n/).filter(Boolean);
+  return lines
+    .map((line) => {
+      try {
+        return JSON.parse(line) as { message?: unknown };
+      } catch {
+        return null;
+      }
+    })
+    .filter((entry): entry is { message: Record<string, unknown> } => {
+      return (
+        Boolean(entry) &&
+        Boolean(entry?.message) &&
+        typeof entry?.message === "object" &&
+        (entry.message as { role?: unknown }).role === "assistant"
+      );
+    })
+    .map((entry) => entry.message);
 }
 
 function extractFirstTextBlock(payload: unknown): string | undefined {
@@ -210,6 +243,8 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     mockState.mainSessionKey = "main";
     mockState.triggerAgentRunStart = false;
     mockState.agentRunId = "run-agent-1";
+    mockState.persistAssistantBeforeFinal = false;
+    mockState.persistedAssistantText = "";
     mockState.sessionEntry = {};
     mockState.lastDispatchCtx = undefined;
   });
@@ -325,6 +360,25 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       }),
     );
     expect(extractFirstTextBlock(payload)).toBe("");
+  });
+
+  it("chat.send avoids duplicate transcript append when a matching assistant message was already persisted", async () => {
+    createTranscriptFixture("openclaw-chat-send-dedup-existing-assistant-");
+    mockState.finalText = "Perfect - right there in Starred, one click away.";
+    mockState.persistAssistantBeforeFinal = true;
+    mockState.persistedAssistantText = `\n\n${mockState.finalText}`;
+    const respond = vi.fn();
+    const context = createChatContext();
+
+    const payload = await runNonStreamingChatSend({
+      context,
+      respond,
+      idempotencyKey: "idem-existing-assistant",
+    });
+
+    const assistantMessages = readTranscriptAssistantMessages(mockState.transcriptPath);
+    expect(assistantMessages).toHaveLength(1);
+    expect(extractFirstTextBlock(payload)?.trim()).toBe(mockState.finalText);
   });
 
   it("rejects oversized chat.send session keys before dispatch", async () => {
