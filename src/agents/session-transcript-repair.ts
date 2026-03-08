@@ -327,6 +327,65 @@ export function sanitizeToolCallInputs(
   return repairToolCallInputs(messages, options).messages;
 }
 
+export function dropOrphanToolResults(messages: AgentMessage[]): AgentMessage[] {
+  let changed = false;
+  const out: AgentMessage[] = [];
+  let expectedToolCallIds: Set<string> | null = null;
+  let seenToolResultIds: Set<string> | null = null;
+
+  for (const msg of messages) {
+    if (!msg || typeof msg !== "object") {
+      expectedToolCallIds = null;
+      seenToolResultIds = null;
+      out.push(msg);
+      continue;
+    }
+
+    const role = (msg as { role?: unknown }).role;
+    if (role === "assistant") {
+      out.push(msg);
+      const assistant = msg as Extract<AgentMessage, { role: "assistant" }>;
+      const stopReason = (assistant as { stopReason?: string }).stopReason;
+      if (stopReason === "error" || stopReason === "aborted") {
+        expectedToolCallIds = null;
+        seenToolResultIds = null;
+        continue;
+      }
+      const toolCalls = extractToolCallsFromAssistant(assistant);
+      if (toolCalls.length > 0) {
+        expectedToolCallIds = new Set(toolCalls.map((toolCall) => toolCall.id));
+        seenToolResultIds = new Set<string>();
+      } else {
+        expectedToolCallIds = null;
+        seenToolResultIds = null;
+      }
+      continue;
+    }
+
+    if (role === "toolResult") {
+      if (!expectedToolCallIds || !seenToolResultIds) {
+        changed = true;
+        continue;
+      }
+      const toolResult = msg as Extract<AgentMessage, { role: "toolResult" }>;
+      const id = extractToolResultId(toolResult);
+      if (!id || !expectedToolCallIds.has(id) || seenToolResultIds.has(id)) {
+        changed = true;
+        continue;
+      }
+      seenToolResultIds.add(id);
+      out.push(msg);
+      continue;
+    }
+
+    expectedToolCallIds = null;
+    seenToolResultIds = null;
+    out.push(msg);
+  }
+
+  return changed ? out : messages;
+}
+
 export function sanitizeToolUseResultPairing(messages: AgentMessage[]): AgentMessage[] {
   return repairToolUseResultPairing(messages).messages;
 }

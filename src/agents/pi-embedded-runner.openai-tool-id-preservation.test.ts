@@ -70,4 +70,44 @@ describe("sanitizeSessionHistory openai tool id preservation", () => {
     const toolResult = result[1] as { toolCallId?: string };
     expect(toolResult.toolCallId).toBe(expectedToolId);
   });
+
+  it("drops orphaned tool results after openai tool calls are filtered by allowlist", async () => {
+    const sessionEntries = [
+      makeModelSnapshotEntry({
+        provider: "openai",
+        modelApi: "openai-responses",
+        modelId: "gpt-5.3-codex",
+      }),
+    ];
+    const sessionManager = makeInMemorySessionManager(sessionEntries);
+
+    const messages: AgentMessage[] = [
+      {
+        role: "assistant",
+        content: [
+          { type: "toolCall", id: "toolu_019CU6ZMYwjLMkaWELaqJMS2", name: "bash", arguments: {} },
+        ],
+      } as unknown as AgentMessage,
+      {
+        role: "toolResult",
+        toolCallId: "toolu_019CU6ZMYwjLMkaWELaqJMS2",
+        toolName: "bash",
+        content: [{ type: "text", text: "ok" }],
+        isError: false,
+      } as unknown as AgentMessage,
+      { role: "user", content: "continue" } as unknown as AgentMessage,
+    ];
+
+    const result = await sanitizeSessionHistory({
+      messages,
+      modelApi: "openai-responses",
+      provider: "openai",
+      modelId: "gpt-5.3-codex",
+      allowedToolNames: ["read"],
+      sessionManager,
+      sessionId: "test-session",
+    });
+
+    expect(result.map((msg) => msg.role)).toEqual(["user"]);
+  });
 });

@@ -1,6 +1,7 @@
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import { describe, expect, it } from "vitest";
 import {
+  dropOrphanToolResults,
   sanitizeToolCallInputs,
   sanitizeToolUseResultPairing,
   repairToolUseResultPairing,
@@ -236,6 +237,57 @@ describe("sanitizeToolUseResultPairing", () => {
     expect(result.messages[1]?.role).toBe("user");
     // No synthetic results should be added
     expect(result.added).toHaveLength(0);
+  });
+});
+
+describe("dropOrphanToolResults", () => {
+  it("drops tool results that are no longer matched after tool calls are filtered", () => {
+    const input = [
+      {
+        role: "assistant",
+        content: [{ type: "toolCall", id: "call_1", name: "read", arguments: {} }],
+      },
+      {
+        role: "toolResult",
+        toolCallId: "call_1",
+        toolName: "read",
+        content: [{ type: "text", text: "ok" }],
+      },
+      { role: "user", content: "next" },
+      {
+        role: "toolResult",
+        toolCallId: "call_stale",
+        toolName: "exec",
+        content: [{ type: "text", text: "stale" }],
+      },
+    ] as unknown as AgentMessage[];
+
+    const out = dropOrphanToolResults(input);
+    expect(out.map((m) => m.role)).toEqual(["assistant", "toolResult", "user"]);
+  });
+
+  it("drops duplicate tool results for the same call within one assistant turn", () => {
+    const input = [
+      {
+        role: "assistant",
+        content: [{ type: "toolCall", id: "call_1", name: "read", arguments: {} }],
+      },
+      {
+        role: "toolResult",
+        toolCallId: "call_1",
+        toolName: "read",
+        content: [{ type: "text", text: "first" }],
+      },
+      {
+        role: "toolResult",
+        toolCallId: "call_1",
+        toolName: "read",
+        content: [{ type: "text", text: "duplicate" }],
+      },
+    ] as unknown as AgentMessage[];
+
+    const out = dropOrphanToolResults(input);
+    expect(out.filter((m) => m.role === "toolResult")).toHaveLength(1);
   });
 });
 
