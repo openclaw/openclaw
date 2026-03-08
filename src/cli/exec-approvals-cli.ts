@@ -498,11 +498,19 @@ export function registerExecApprovalsCli(program: Command) {
     .option("--force", "Allow exceeding default max duration", false)
     .action(async (opts: TrustOpts) => {
       try {
-        // TTY gate: prevent agent self-escalation
+        // TTY gate: prevent agent self-escalation.
+        // Check both TTY and the absence of agent-session markers in the environment.
+        // Agents running via PTY exec have OPENCLAW_SESSION_KEY set.
         if (!process.stdin.isTTY) {
           exitWithError(
             "Trust window grants require an interactive terminal.\n" +
               "This prevents automated processes from escalating their own privileges.",
+          );
+        }
+        if (process.env.OPENCLAW_SESSION_KEY || process.env.OPENCLAW_AGENT_ID) {
+          exitWithError(
+            "Trust window grants cannot be issued from within an agent session.\n" +
+              "Use the Discord /trust command or a direct terminal session.",
           );
         }
 

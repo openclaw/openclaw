@@ -137,7 +137,20 @@ export function summarizeTrustAudit(params: {
   startedAt?: number;
   endedAt?: number;
 }): string | null {
-  const { entries } = loadTrustAudit({ agentId: params.agentId });
+  const { entries: allEntries } = loadTrustAudit({ agentId: params.agentId });
+  // Filter entries to only those within the trust window's time range.
+  const entries =
+    typeof params.startedAt === "number" || typeof params.endedAt === "number"
+      ? allEntries.filter((e) => {
+          if (typeof params.startedAt === "number" && e.ts < params.startedAt) {
+            return false;
+          }
+          if (typeof params.endedAt === "number" && e.ts > params.endedAt) {
+            return false;
+          }
+          return true;
+        })
+      : allEntries;
   const total = entries.length;
   const failed = entries.filter(
     (entry) => typeof entry.code === "number" && entry.code !== 0,

@@ -108,9 +108,11 @@ class DiscordTrustCommand extends Command {
   options: CommandOptions = [
     {
       name: "minutes",
-      description: `Duration in minutes (default: ${DEFAULT_MAX_TRUST_MINUTES}, max: ${DEFAULT_MAX_TRUST_MINUTES} via Discord)`,
+      description: `Duration in minutes (default: ${DEFAULT_MAX_TRUST_MINUTES}, max: ${DEFAULT_MAX_TRUST_MINUTES})`,
       type: ApplicationCommandOptionType.Number,
       required: false,
+      min_value: 1,
+      max_value: DEFAULT_MAX_TRUST_MINUTES,
     },
     {
       name: "agent",
