@@ -1,5 +1,7 @@
 import { Type } from "@sinclair/typebox";
 import type { OpenClawConfig } from "../../config/config.js";
+import { normalizeResolvedSecretInputString } from "../../config/types.secrets.js";
+import type { SecretInput } from "../../config/types.secrets.js";
 import { SsrFBlockedError } from "../../infra/net/ssrf.js";
 import { logDebug } from "../../logger.js";
 import { wrapExternalContent, wrapWebContent } from "../../security/external-content.js";
@@ -71,7 +73,7 @@ type WebFetchConfig = NonNullable<OpenClawConfig["tools"]>["web"] extends infer 
 type FirecrawlFetchConfig =
   | {
       enabled?: boolean;
-      apiKey?: string;
+      apiKey?: SecretInput;
       baseUrl?: string;
       onlyMainContent?: boolean;
       maxAgeMs?: number;
@@ -136,10 +138,14 @@ function resolveFirecrawlConfig(fetch?: WebFetchConfig): FirecrawlFetchConfig {
 }
 
 function resolveFirecrawlApiKey(firecrawl?: FirecrawlFetchConfig): string | undefined {
-  const fromConfig =
-    firecrawl && "apiKey" in firecrawl && typeof firecrawl.apiKey === "string"
-      ? normalizeSecretInput(firecrawl.apiKey)
-      : "";
+  const fromConfigRaw =
+    firecrawl && "apiKey" in firecrawl
+      ? normalizeResolvedSecretInputString({
+          value: firecrawl.apiKey,
+          path: "tools.web.fetch.firecrawl.apiKey",
+        })
+      : undefined;
+  const fromConfig = normalizeSecretInput(fromConfigRaw);
   const fromEnv = normalizeSecretInput(process.env.FIRECRAWL_API_KEY);
   return fromConfig || fromEnv || undefined;
 }
