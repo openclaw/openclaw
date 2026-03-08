@@ -636,7 +636,22 @@ export async function sendMessageTelegram(
         label,
         opts.verbose,
         async (effectiveParams, retryLabel) =>
-          requestWithChatNotFound(() => sender(effectiveParams), retryLabel),
+          htmlCaption
+            ? withTelegramHtmlParseFallback({
+                label: retryLabel,
+                verbose: opts.verbose,
+                requestHtml: (htmlLabel) =>
+                  requestWithChatNotFound(() => sender(effectiveParams), htmlLabel),
+                requestPlain: (plainLabel) => {
+                  const plainParams = { ...effectiveParams };
+                  delete plainParams.parse_mode;
+                  if (caption) {
+                    plainParams.caption = caption;
+                  }
+                  return requestWithChatNotFound(() => sender(plainParams), plainLabel);
+                },
+              })
+            : requestWithChatNotFound(() => sender(effectiveParams), retryLabel),
       );
 
     const mediaSender = (() => {

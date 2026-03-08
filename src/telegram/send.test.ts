@@ -480,6 +480,40 @@ describe("sendMessageTelegram", () => {
     });
   });
 
+  it("retries media caption as plain text on HTML parse error", async () => {
+    const chatId = "123";
+    const parseErr = new Error(
+      "400: Bad Request: can't parse entities: Can't find end of the entity starting at byte offset 5",
+    );
+    const sendPhoto = vi
+      .fn()
+      .mockRejectedValueOnce(parseErr)
+      .mockResolvedValueOnce({ message_id: 80, chat: { id: chatId } });
+    const api = { sendPhoto } as unknown as {
+      sendPhoto: typeof sendPhoto;
+    };
+
+    mockLoadedMedia({
+      buffer: Buffer.from("fake-image"),
+      contentType: "image/jpeg",
+      fileName: "test.jpg",
+    });
+
+    const result = await sendMessageTelegram(chatId, "_bad<html_", {
+      token: "tok",
+      api,
+      mediaUrl: "https://example.com/photo.jpg",
+    });
+
+    expect(sendPhoto).toHaveBeenCalledTimes(2);
+    const firstCall = sendPhoto.mock.calls[0];
+    expect(firstCall[2]).toMatchObject({ parse_mode: "HTML" });
+    const secondCall = sendPhoto.mock.calls[1];
+    expect(secondCall[2]).not.toHaveProperty("parse_mode");
+    expect(secondCall[2]).toHaveProperty("caption");
+    expect(result.messageId).toBe("80");
+  });
+
   it("splits long captions into media + text messages when text exceeds 1024 chars", async () => {
     const chatId = "123";
     const longText = "A".repeat(1100);
