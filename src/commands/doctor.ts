@@ -7,6 +7,7 @@ import {
   getModelRefStatus,
   resolveConfiguredModelRef,
   resolveHooksGmailModel,
+  resolveHooksImapModel,
 } from "../agents/model-selection.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import type { OpenClawConfig } from "../config/config.js";
@@ -265,6 +266,44 @@ export async function doctorCommand(
       if (!status.inCatalog) {
         warnings.push(
           `- hooks.gmail.model "${status.key}" not in the model catalog (may fail at runtime)`,
+        );
+      }
+      if (warnings.length > 0) {
+        note(warnings.join("\n"), "Hooks");
+      }
+    }
+  }
+
+  if (cfg.hooks?.imap?.model?.trim()) {
+    const hooksImapModelRef = resolveHooksImapModel({
+      cfg,
+      defaultProvider: DEFAULT_PROVIDER,
+    });
+    if (!hooksImapModelRef) {
+      note(`- hooks.imap.model "${cfg.hooks.imap.model}" could not be resolved`, "Hooks");
+    } else {
+      const { provider: defaultProvider, model: defaultModel } = resolveConfiguredModelRef({
+        cfg,
+        defaultProvider: DEFAULT_PROVIDER,
+        defaultModel: DEFAULT_MODEL,
+      });
+      const catalog = await loadModelCatalog({ config: cfg });
+      const status = getModelRefStatus({
+        cfg,
+        catalog,
+        ref: hooksImapModelRef,
+        defaultProvider,
+        defaultModel,
+      });
+      const warnings: string[] = [];
+      if (!status.allowed) {
+        warnings.push(
+          `- hooks.imap.model "${status.key}" not in agents.defaults.models allowlist (will use primary instead)`,
+        );
+      }
+      if (!status.inCatalog) {
+        warnings.push(
+          `- hooks.imap.model "${status.key}" not in the model catalog (may fail at runtime)`,
         );
       }
       if (warnings.length > 0) {

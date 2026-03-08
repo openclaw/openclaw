@@ -315,7 +315,7 @@ export function isExternalHookSession(sessionKey: string): boolean {
  */
 export function getHookType(sessionKey: string): ExternalContentSource {
   const normalized = sessionKey.trim().toLowerCase();
-  if (normalized.startsWith("hook:gmail:")) {
+  if (normalized.startsWith("hook:gmail:") || normalized.startsWith("hook:imap:")) {
     return "email";
   }
   if (normalized.startsWith("hook:webhook:")) {

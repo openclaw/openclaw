@@ -1277,6 +1277,34 @@ export const FIELD_HELP: Record<string, string> = {
     "Optional model override for Gmail-triggered runs when mailbox automations should use dedicated model behavior. Keep unset to inherit agent defaults unless mailbox tasks need specialization.",
   "hooks.gmail.thinking":
     'Thinking effort override for Gmail-driven agent runs: "off", "minimal", "low", "medium", or "high". Keep modest defaults for routine inbox automations to control cost and latency.',
+  "hooks.imap":
+    "IMAP email integration settings using himalaya for poll-based inbox watching. Works with any IMAP provider (Gmail, Outlook, Fastmail, self-hosted, etc.) without external infrastructure.",
+  "hooks.imap.account":
+    "Himalaya account name (from himalaya config.toml) used for IMAP operations. Use a dedicated automation mailbox to isolate operational permissions.",
+  "hooks.imap.folder":
+    'IMAP folder to watch for new messages. Defaults to "INBOX". Keep filters narrow to avoid flooding automations with unrelated traffic.',
+  "hooks.imap.pollIntervalSeconds":
+    "Interval in seconds between IMAP mailbox polls. Lower values increase responsiveness but may hit provider rate limits. Default: 30.",
+  "hooks.imap.includeBody":
+    "When true, fetch and include email body content for downstream mapping/agent processing. Keep false unless body text is required.",
+  "hooks.imap.maxBytes":
+    "Maximum email body bytes processed per message when includeBody is enabled. Keep conservative limits to reduce oversized message processing cost.",
+  "hooks.imap.markSeen":
+    "When true, mark messages as seen after processing to prevent re-processing on subsequent polls. Default: true.",
+  "hooks.imap.hookUrl":
+    "Callback URL the IMAP watcher uses to deliver email notifications into the hook pipeline. Defaults to the local gateway hooks endpoint.",
+  "hooks.imap.model":
+    "Optional model override for IMAP-triggered runs when mailbox automations should use dedicated model behavior. Keep unset to inherit agent defaults.",
+  "hooks.imap.thinking":
+    'Thinking effort override for IMAP-driven agent runs: "off", "minimal", "low", "medium", or "high". Keep modest defaults for routine inbox automations.',
+  "hooks.imap.allowUnsafeExternalContent":
+    "Allows less-sanitized external email content to pass into processing when enabled. Keep disabled for safer defaults.",
+  "hooks.imap.himalayaConfig":
+    "Path to himalaya configuration file. When omitted, himalaya uses its default config location (~/.config/himalaya/config.toml).",
+  "hooks.imap.query":
+    'Himalaya envelope filter query applied when listing envelopes. Default: "not flag Seen" (unread messages). Supports himalaya query syntax (from, subject, date, flag operators). Flag names are case-sensitive (e.g., "Seen", "Answered").',
+  "hooks.imap.allowedSenders":
+    "Allowlist of sender email addresses permitted to reach agent hooks. Required for IMAP hooks; messages from other senders are ignored.",
   "hooks.internal":
     "Internal hook runtime settings for bundled/custom event handlers loaded from module paths. Use this for trusted in-process automations and keep handler loading tightly scoped.",
   "hooks.internal.enabled":

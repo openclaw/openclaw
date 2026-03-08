@@ -6,6 +6,7 @@ import {
   getModelRefStatus,
   resolveConfiguredModelRef,
   resolveHooksGmailModel,
+  resolveHooksImapModel,
 } from "../agents/model-selection.js";
 import { resolveAgentSessionDirs } from "../agents/session-dirs.js";
 import { cleanStaleLockFiles } from "../agents/session-write-lock.js";
@@ -13,6 +14,7 @@ import type { CliDeps } from "../cli/deps.js";
 import type { loadConfig } from "../config/config.js";
 import { resolveStateDir } from "../config/paths.js";
 import { startGmailWatcherWithLogs } from "../hooks/gmail-watcher-lifecycle.js";
+import { startImapWatcherWithLogs } from "../hooks/imap-watcher-lifecycle.js";
 import {
   clearInternalHooks,
   createInternalHookEvent,
@@ -75,6 +77,12 @@ export async function startGatewaySidecars(params: {
     log: params.logHooks,
   });
 
+  // Start IMAP watcher if configured (hooks.imap.account).
+  await startImapWatcherWithLogs({
+    cfg: params.cfg,
+    log: params.logHooks,
+  });
+
   // Validate hooks.gmail.model if configured.
   if (params.cfg.hooks?.gmail?.model) {
     const hooksModelRef = resolveHooksGmailModel({
@@ -103,6 +111,39 @@ export async function startGatewaySidecars(params: {
       if (!status.inCatalog) {
         params.logHooks.warn(
           `hooks.gmail.model "${status.key}" not in the model catalog (may fail at runtime)`,
+        );
+      }
+    }
+  }
+
+  // Validate hooks.imap.model if configured.
+  if (params.cfg.hooks?.imap?.model) {
+    const hooksImapModelRef = resolveHooksImapModel({
+      cfg: params.cfg,
+      defaultProvider: DEFAULT_PROVIDER,
+    });
+    if (hooksImapModelRef) {
+      const { provider: defaultProvider, model: defaultModel } = resolveConfiguredModelRef({
+        cfg: params.cfg,
+        defaultProvider: DEFAULT_PROVIDER,
+        defaultModel: DEFAULT_MODEL,
+      });
+      const catalog = await loadModelCatalog({ config: params.cfg });
+      const status = getModelRefStatus({
+        cfg: params.cfg,
+        catalog,
+        ref: hooksImapModelRef,
+        defaultProvider,
+        defaultModel,
+      });
+      if (!status.allowed) {
+        params.logHooks.warn(
+          `hooks.imap.model "${status.key}" not in agents.defaults.models allowlist (will use primary instead)`,
+        );
+      }
+      if (!status.inCatalog) {
+        params.logHooks.warn(
+          `hooks.imap.model "${status.key}" not in the model catalog (may fail at runtime)`,
         );
       }
     }

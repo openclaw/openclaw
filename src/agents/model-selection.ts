@@ -647,6 +647,33 @@ export function resolveHooksGmailModel(params: {
 }
 
 /**
+ * Resolve the model configured for IMAP hook processing.
+ * Returns null if hooks.imap.model is not set.
+ */
+export function resolveHooksImapModel(params: {
+  cfg: OpenClawConfig;
+  defaultProvider: string;
+}): ModelRef | null {
+  const hooksModel = params.cfg.hooks?.imap?.model;
+  if (!hooksModel?.trim()) {
+    return null;
+  }
+
+  const aliasIndex = buildModelAliasIndex({
+    cfg: params.cfg,
+    defaultProvider: params.defaultProvider,
+  });
+
+  const resolved = resolveModelRefFromString({
+    raw: hooksModel,
+    defaultProvider: params.defaultProvider,
+    aliasIndex,
+  });
+
+  return resolved?.ref ?? null;
+}
+
+/**
  * Normalize a model selection value (string or `{primary?: string}`) to a
  * plain trimmed string.  Returns `undefined` when the input is empty/missing.
  * Shared by sessions-spawn and cron isolated-agent model resolution.

@@ -21,6 +21,7 @@ import {
   resolveAllowedModelRef,
   resolveConfiguredModelRef,
   resolveHooksGmailModel,
+  resolveHooksImapModel,
   resolveThinkingDefault,
 } from "../../agents/model-selection.js";
 import { runEmbeddedPiAgent } from "../../agents/pi-embedded.js";
@@ -301,6 +302,29 @@ export async function runCronIsolatedAgentTurn(params: {
       hooksGmailModelApplied = true;
     }
   }
+  // Resolve model - prefer hooks.imap.model for IMAP hooks.
+  const isImapHook = baseSessionKey.startsWith("hook:imap:");
+  let hooksImapModelApplied = false;
+  const hooksImapModelRef = isImapHook
+    ? resolveHooksImapModel({
+        cfg: params.cfg,
+        defaultProvider: DEFAULT_PROVIDER,
+      })
+    : null;
+  if (hooksImapModelRef) {
+    const status = getModelRefStatus({
+      cfg: params.cfg,
+      catalog: await loadCatalog(),
+      ref: hooksImapModelRef,
+      defaultProvider: resolvedDefault.provider,
+      defaultModel: resolvedDefault.model,
+    });
+    if (status.allowed) {
+      provider = hooksImapModelRef.provider;
+      model = hooksImapModelRef.model;
+      hooksImapModelApplied = true;
+    }
+  }
   const modelOverrideRaw =
     params.job.payload.kind === "agentTurn" ? params.job.payload.model : undefined;
   const modelOverride = typeof modelOverrideRaw === "string" ? modelOverrideRaw.trim() : undefined;
@@ -371,7 +395,7 @@ export async function runCronIsolatedAgentTurn(params: {
   // Respect session model override — check session.modelOverride before falling
   // back to the default config model. This ensures /model changes are honoured
   // by cron and isolated agent runs.
-  if (!modelOverride && !hooksGmailModelApplied) {
+  if (!modelOverride && !hooksGmailModelApplied && !hooksImapModelApplied) {
     const sessionModelOverride = cronSession.sessionEntry.modelOverride?.trim();
     if (sessionModelOverride) {
       const sessionProviderOverride =
@@ -390,15 +414,18 @@ export async function runCronIsolatedAgentTurn(params: {
     }
   }
 
-  // Resolve thinking level - job thinking > hooks.gmail.thinking > model/global defaults
+  // Resolve thinking level - job thinking > hooks thinking > model/global defaults
   const hooksGmailThinking = isGmailHook
     ? normalizeThinkLevel(params.cfg.hooks?.gmail?.thinking)
+    : undefined;
+  const hooksImapThinking = isImapHook
+    ? normalizeThinkLevel(params.cfg.hooks?.imap?.thinking)
     : undefined;
   const jobThink = normalizeThinkLevel(
     (params.job.payload.kind === "agentTurn" ? params.job.payload.thinking : undefined) ??
       undefined,
   );
-  let thinkLevel = jobThink ?? hooksGmailThinking;
+  let thinkLevel = jobThink ?? hooksGmailThinking ?? hooksImapThinking;
   if (!thinkLevel) {
     thinkLevel = resolveThinkingDefault({
       cfg: cfgWithAgentDefaults,

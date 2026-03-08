@@ -6,6 +6,8 @@ import { isRestartEnabled } from "../config/commands.js";
 import type { loadConfig } from "../config/config.js";
 import { startGmailWatcherWithLogs } from "../hooks/gmail-watcher-lifecycle.js";
 import { stopGmailWatcher } from "../hooks/gmail-watcher.js";
+import { startImapWatcherWithLogs } from "../hooks/imap-watcher-lifecycle.js";
+import { stopImapWatcher } from "../hooks/imap-watcher.js";
 import { isTruthyEnvValue } from "../infra/env.js";
 import type { HeartbeatRunner } from "../infra/heartbeat-runner.js";
 import { resetDirectoryCache } from "../infra/outbound/target-resolver.js";
@@ -108,6 +110,16 @@ export function createGatewayReloadHandlers(params: {
         log: params.logHooks,
         onSkipped: () =>
           params.logHooks.info("skipping gmail watcher restart (OPENCLAW_SKIP_GMAIL_WATCHER=1)"),
+      });
+    }
+
+    if (plan.restartImapWatcher) {
+      await stopImapWatcher().catch(() => {});
+      await startImapWatcherWithLogs({
+        cfg: nextConfig,
+        log: params.logHooks,
+        onSkipped: () =>
+          params.logHooks.info("skipping imap watcher restart (OPENCLAW_SKIP_IMAP_WATCHER=1)"),
       });
     }
 
