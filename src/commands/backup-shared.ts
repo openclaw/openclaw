@@ -127,7 +127,7 @@ export async function resolveBackupPlanFromDisk(
   });
   const workspaceDirs = includeWorkspace ? cleanupPlan.workspaceDirs : [];
 
-  const rawCandidates = [
+  const rawCandidates: Array<Pick<BackupAssetCandidate, "kind" | "sourcePath">> = [
     { kind: "state", sourcePath: path.resolve(stateDir) },
     ...(cleanupPlan.configInsideState
       ? []
