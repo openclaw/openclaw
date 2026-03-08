@@ -133,6 +133,16 @@ describe("resolveTranscriptPolicy", () => {
     expect(policy.validateAnthropicTurns).toBe(true);
   });
 
+  it("does not preserve signatures for kimi-coding using anthropic-messages API (#39798)", () => {
+    const policy = resolveTranscriptPolicy({
+      provider: "kimi-coding",
+      modelId: "k2p5",
+      modelApi: "anthropic-messages",
+    });
+    expect(policy.preserveSignatures).toBe(false);
+    expect(policy.dropThinkingBlocks).toBe(true);
+  });
+
   it("keeps OpenRouter on its existing turn-validation path", () => {
     const policy = resolveTranscriptPolicy({
       provider: "openrouter",

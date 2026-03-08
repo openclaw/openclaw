@@ -94,12 +94,22 @@ export function resolveTranscriptPolicy(params: {
     (provider === "openrouter" || provider === "opencode" || provider === "kilocode") &&
     modelId.toLowerCase().includes("gemini");
   const isCopilotClaude = provider === "github-copilot" && modelId.toLowerCase().includes("claude");
+  const isKimiCoding = provider === "kimi-coding";
   const requiresOpenAiCompatibleToolIdSanitization = params.modelApi === "openai-completions";
+
+  // Some providers use `anthropic-messages` modelApi but cannot handle re-sent
+  // thinking block signatures. For these, we must detect native Anthropic
+  // providers (anthropic, amazon-bedrock) rather than relying on isAnthropic
+  // which also matches third-party API-compatible providers like kimi-coding.
+  const isNativeAnthropic =
+    isAnthropic && (provider === "anthropic" || provider === "amazon-bedrock");
 
   // GitHub Copilot's Claude endpoints can reject persisted `thinking` blocks with
   // non-binary/non-base64 signatures (e.g. thinkingSignature: "reasoning_text").
+  // kimi-coding uses anthropic-messages API but cannot parse re-sent thinking
+  // signatures, causing JSON parse crashes on turn 2+ (#39798).
   // Drop these blocks at send-time to keep sessions usable.
-  const dropThinkingBlocks = isCopilotClaude;
+  const dropThinkingBlocks = isCopilotClaude || isKimiCoding;
 
   const needsNonImageSanitize = isGoogle || isAnthropic || isMistral || isOpenRouterGemini;
 
@@ -123,7 +133,7 @@ export function resolveTranscriptPolicy(params: {
       (!isOpenAi && sanitizeToolCallIds) || requiresOpenAiCompatibleToolIdSanitization,
     toolCallIdMode,
     repairToolUseResultPairing,
-    preserveSignatures: isAnthropic,
+    preserveSignatures: isNativeAnthropic,
     sanitizeThoughtSignatures: isOpenAi ? undefined : sanitizeThoughtSignatures,
     sanitizeThinkingSignatures: false,
     dropThinkingBlocks,
