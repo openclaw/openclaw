@@ -26,10 +26,10 @@ Build a DNS blocklist filter that blocks outbound requests to known-malicious do
   3. Domains not in the blocklist return false (no false positives)
   4. The blocked-domain error message includes the specific domain name that was blocked
   5. Unit tests pass covering exact match, subdomain match, non-blocked domains, and normalization edge cases (trailing dots, case, whitespace)
-**Plans**: TBD
+**Plans**: 1 plan
 
 Plans:
-- [ ] 01-01: Build dns-blocklist module and unit tests
+- [ ] 01-01-PLAN.md -- TDD: domain-filter module with isDomainBlocked, Set management, DnsBlocklistError, and unit tests
 
 ### Phase 2: SSRF Pipeline Integration
 **Goal**: Outbound HTTP requests to blocked domains are rejected before any DNS resolution or network call occurs
