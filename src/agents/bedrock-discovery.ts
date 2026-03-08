@@ -1,7 +1,9 @@
 import {
   BedrockClient,
   ListFoundationModelsCommand,
+  ListInferenceProfilesCommand,
   type ListFoundationModelsCommandOutput,
+  type ListInferenceProfilesCommandOutput,
 } from "@aws-sdk/client-bedrock";
 import type { BedrockDiscoveryConfig, ModelDefinitionConfig } from "../config/types.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
@@ -9,6 +11,7 @@ import { createSubsystemLogger } from "../logging/subsystem.js";
 const log = createSubsystemLogger("bedrock-discovery");
 
 const DEFAULT_REFRESH_INTERVAL_SECONDS = 3600;
+const PARTIAL_FAILURE_CACHE_TTL_SECONDS = 60;
 const DEFAULT_CONTEXT_WINDOW = 32000;
 const DEFAULT_MAX_TOKENS = 4096;
 const DEFAULT_COST = {
@@ -19,6 +22,9 @@ const DEFAULT_COST = {
 };
 
 type BedrockModelSummary = NonNullable<ListFoundationModelsCommandOutput["modelSummaries"]>[number];
+type InferenceProfileSummary = NonNullable<
+  ListInferenceProfilesCommandOutput["inferenceProfileSummaries"]
+>[number];
 
 type BedrockDiscoveryCacheEntry = {
   expiresAt: number;
@@ -28,6 +34,21 @@ type BedrockDiscoveryCacheEntry = {
 
 const discoveryCache = new Map<string, BedrockDiscoveryCacheEntry>();
 let hasLoggedBedrockError = false;
+const INFERENCE_PROFILE_PAGE_SIZE = 100;
+const INFERENCE_PROFILE_LOCATION_PREFIXES = new Set([
+  "us",
+  "eu",
+  "ap",
+  "sa",
+  "ca",
+  "me",
+  "af",
+  "apac",
+  "latam",
+  "emea",
+  "global",
+]);
+const INFERENCE_PROFILE_REGION_PREFIX_PATTERN = /^[a-z]{2}(?:-[a-z0-9-]+)?$/;
 
 function normalizeProviderFilter(filter?: string[]): string[] {
   if (!filter || filter.length === 0) {
@@ -58,6 +79,11 @@ function isActive(summary: BedrockModelSummary): boolean {
   return typeof status === "string" ? status.toUpperCase() === "ACTIVE" : false;
 }
 
+function isInferenceProfileActive(summary: InferenceProfileSummary): boolean {
+  const status = summary.status;
+  return typeof status === "string" ? status.toUpperCase() === "ACTIVE" : false;
+}
+
 function mapInputModalities(summary: BedrockModelSummary): Array<"text" | "image"> {
   const inputs = summary.inputModalities ?? [];
   const mapped = new Set<"text" | "image">();
@@ -76,8 +102,8 @@ function mapInputModalities(summary: BedrockModelSummary): Array<"text" | "image
   return Array.from(mapped);
 }
 
-function inferReasoningSupport(summary: BedrockModelSummary): boolean {
-  const haystack = `${summary.modelId ?? ""} ${summary.modelName ?? ""}`.toLowerCase();
+function inferReasoningSupport(id: string | undefined, name: string | undefined): boolean {
+  const haystack = `${id ?? ""} ${name ?? ""}`.toLowerCase();
   return haystack.includes("reasoning") || haystack.includes("thinking");
 }
 
@@ -91,7 +117,7 @@ function resolveDefaultMaxTokens(config?: BedrockDiscoveryConfig): number {
   return value > 0 ? value : DEFAULT_MAX_TOKENS;
 }
 
-function matchesProviderFilter(summary: BedrockModelSummary, filter: string[]): boolean {
+function matchesFoundationProviderFilter(summary: BedrockModelSummary, filter: string[]): boolean {
   if (filter.length === 0) {
     return true;
   }
@@ -105,11 +131,48 @@ function matchesProviderFilter(summary: BedrockModelSummary, filter: string[]): 
   return filter.includes(normalized);
 }
 
-function shouldIncludeSummary(summary: BedrockModelSummary, filter: string[]): boolean {
+function isInferenceProfileLocationPrefix(part: string): boolean {
+  if (INFERENCE_PROFILE_LOCATION_PREFIXES.has(part)) {
+    return true;
+  }
+  return INFERENCE_PROFILE_REGION_PREFIX_PATTERN.test(part);
+}
+
+function extractInferenceProviderId(summary: InferenceProfileSummary): string | undefined {
+  const rawId = summary.inferenceProfileId?.trim().toLowerCase();
+  if (!rawId) {
+    return undefined;
+  }
+  const idTail = rawId.includes("/") ? (rawId.split("/").pop() ?? rawId) : rawId;
+  const parts = idTail.split(".").filter((part) => part.length > 0);
+  if (parts.length === 0) {
+    return undefined;
+  }
+  if (parts.length > 1 && isInferenceProfileLocationPrefix(parts[0])) {
+    return parts[1];
+  }
+  return parts[0];
+}
+
+function matchesInferenceProviderFilter(
+  summary: InferenceProfileSummary,
+  filter: string[],
+): boolean {
+  if (filter.length === 0) {
+    return true;
+  }
+  const providerId = extractInferenceProviderId(summary);
+  if (!providerId) {
+    return false;
+  }
+  return filter.includes(providerId);
+}
+
+function shouldIncludeFoundationModel(summary: BedrockModelSummary, filter: string[]): boolean {
   if (!summary.modelId?.trim()) {
     return false;
   }
-  if (!matchesProviderFilter(summary, filter)) {
+  if (!matchesFoundationProviderFilter(summary, filter)) {
     return false;
   }
   if (summary.responseStreamingSupported !== true) {
@@ -124,7 +187,23 @@ function shouldIncludeSummary(summary: BedrockModelSummary, filter: string[]): b
   return true;
 }
 
-function toModelDefinition(
+function shouldIncludeInferenceProfile(
+  summary: InferenceProfileSummary,
+  filter: string[],
+): boolean {
+  if (!summary.inferenceProfileId?.trim()) {
+    return false;
+  }
+  if (!matchesInferenceProviderFilter(summary, filter)) {
+    return false;
+  }
+  if (!isInferenceProfileActive(summary)) {
+    return false;
+  }
+  return true;
+}
+
+function toModelDefinitionFromFoundationModel(
   summary: BedrockModelSummary,
   defaults: { contextWindow: number; maxTokens: number },
 ): ModelDefinitionConfig {
@@ -132,12 +211,58 @@ function toModelDefinition(
   return {
     id,
     name: summary.modelName?.trim() || id,
-    reasoning: inferReasoningSupport(summary),
+    reasoning: inferReasoningSupport(summary.modelId, summary.modelName),
     input: mapInputModalities(summary),
     cost: DEFAULT_COST,
     contextWindow: defaults.contextWindow,
     maxTokens: defaults.maxTokens,
   };
+}
+
+function toModelDefinitionFromInferenceProfile(
+  summary: InferenceProfileSummary,
+  defaults: { contextWindow: number; maxTokens: number },
+): ModelDefinitionConfig {
+  const id = summary.inferenceProfileId?.trim() ?? "";
+  return {
+    id,
+    name: summary.inferenceProfileName?.trim() || id,
+    reasoning: inferReasoningSupport(summary.inferenceProfileId, summary.inferenceProfileName),
+    // Inference profile summaries do not expose full modality metadata.
+    input: ["text"],
+    cost: DEFAULT_COST,
+    contextWindow: defaults.contextWindow,
+    maxTokens: defaults.maxTokens,
+  };
+}
+
+async function listInferenceProfileSummaries(
+  client: BedrockClient,
+): Promise<InferenceProfileSummary[]> {
+  const summaries: InferenceProfileSummary[] = [];
+  let nextToken: string | undefined;
+  do {
+    const response = await client.send(
+      new ListInferenceProfilesCommand({
+        maxResults: INFERENCE_PROFILE_PAGE_SIZE,
+        ...(nextToken ? { nextToken } : {}),
+      }),
+    );
+    summaries.push(...(response.inferenceProfileSummaries ?? []));
+    nextToken = response.nextToken;
+  } while (nextToken);
+  return summaries;
+}
+
+function dedupeModelsById(models: ModelDefinitionConfig[]): ModelDefinitionConfig[] {
+  const byId = new Map<string, ModelDefinitionConfig>();
+  for (const model of models) {
+    if (!model.id || byId.has(model.id)) {
+      continue;
+    }
+    byId.set(model.id, model);
+  }
+  return Array.from(byId.values());
 }
 
 export function resetBedrockDiscoveryCacheForTest(): void {
@@ -179,22 +304,50 @@ export async function discoverBedrockModels(params: {
 
   const clientFactory = params.clientFactory ?? ((region: string) => new BedrockClient({ region }));
   const client = clientFactory(params.region);
+  let hadPartialFailure = false;
 
   const discoveryPromise = (async () => {
-    const response = await client.send(new ListFoundationModelsCommand({}));
+    const defaults = {
+      contextWindow: defaultContextWindow,
+      maxTokens: defaultMaxTokens,
+    };
+
     const discovered: ModelDefinitionConfig[] = [];
-    for (const summary of response.modelSummaries ?? []) {
-      if (!shouldIncludeSummary(summary, providerFilter)) {
-        continue;
+    const partialFailures: unknown[] = [];
+
+    try {
+      const response = await client.send(new ListFoundationModelsCommand({}));
+      for (const summary of response.modelSummaries ?? []) {
+        if (!shouldIncludeFoundationModel(summary, providerFilter)) {
+          continue;
+        }
+        discovered.push(toModelDefinitionFromFoundationModel(summary, defaults));
       }
-      discovered.push(
-        toModelDefinition(summary, {
-          contextWindow: defaultContextWindow,
-          maxTokens: defaultMaxTokens,
-        }),
-      );
+    } catch (error) {
+      hadPartialFailure = true;
+      log.warn(`Failed to list foundation models during Bedrock discovery: ${String(error)}`);
+      partialFailures.push(error);
     }
-    return discovered.toSorted((a, b) => a.name.localeCompare(b.name));
+
+    try {
+      const inferenceProfiles = await listInferenceProfileSummaries(client);
+      for (const summary of inferenceProfiles) {
+        if (!shouldIncludeInferenceProfile(summary, providerFilter)) {
+          continue;
+        }
+        discovered.push(toModelDefinitionFromInferenceProfile(summary, defaults));
+      }
+    } catch (error) {
+      hadPartialFailure = true;
+      log.warn(`Failed to list inference profiles during Bedrock discovery: ${String(error)}`);
+      partialFailures.push(error);
+    }
+
+    if (discovered.length === 0 && partialFailures.length > 0) {
+      throw partialFailures[0];
+    }
+
+    return dedupeModelsById(discovered).toSorted((a, b) => a.name.localeCompare(b.name));
   })();
 
   if (refreshIntervalSeconds > 0) {
@@ -207,10 +360,25 @@ export async function discoverBedrockModels(params: {
   try {
     const value = await discoveryPromise;
     if (refreshIntervalSeconds > 0) {
-      discoveryCache.set(cacheKey, {
-        expiresAt: now + refreshIntervalSeconds * 1000,
-        value,
-      });
+      if (hadPartialFailure) {
+        const partialTtlSeconds = Math.min(
+          refreshIntervalSeconds,
+          PARTIAL_FAILURE_CACHE_TTL_SECONDS,
+        );
+        if (partialTtlSeconds > 0) {
+          discoveryCache.set(cacheKey, {
+            expiresAt: now + partialTtlSeconds * 1000,
+            value,
+          });
+        } else {
+          discoveryCache.delete(cacheKey);
+        }
+      } else {
+        discoveryCache.set(cacheKey, {
+          expiresAt: now + refreshIntervalSeconds * 1000,
+          value,
+        });
+      }
     }
     return value;
   } catch (error) {
