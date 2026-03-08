@@ -1,3 +1,5 @@
+import { loadSessionEntry } from "./session-utils.js";
+
 export type NodeSendEventFn = (opts: {
   nodeId: string;
   event: string;
@@ -33,6 +35,7 @@ export type NodeSubscriptionManager = {
 export function createNodeSubscriptionManager(): NodeSubscriptionManager {
   const nodeSubscriptions = new Map<string, Set<string>>();
   const sessionSubscribers = new Map<string, Set<string>>();
+  const spawnedBySubscriberCache = new Map<string, string | null>();
 
   const toPayloadJSON = (payload: unknown) => (payload ? JSON.stringify(payload) : null);
 
@@ -59,6 +62,7 @@ export function createNodeSubscriptionManager(): NodeSubscriptionManager {
       sessionSubscribers.set(normalizedSessionKey, sessionSet);
     }
     sessionSet.add(normalizedNodeId);
+    spawnedBySubscriberCache.clear();
   };
 
   const unsubscribe = (nodeId: string, sessionKey: string) => {
@@ -79,6 +83,7 @@ export function createNodeSubscriptionManager(): NodeSubscriptionManager {
     if (sessionSet?.size === 0) {
       sessionSubscribers.delete(normalizedSessionKey);
     }
+    spawnedBySubscriberCache.clear();
   };
 
   const unsubscribeAll = (nodeId: string) => {
@@ -95,6 +100,62 @@ export function createNodeSubscriptionManager(): NodeSubscriptionManager {
       }
     }
     nodeSubscriptions.delete(normalizedNodeId);
+    spawnedBySubscriberCache.clear();
+  };
+
+  const resolveSessionSubscribers = (sessionKey: string): Set<string> | undefined => {
+    const direct = sessionSubscribers.get(sessionKey);
+    if (direct && direct.size > 0) {
+      return direct;
+    }
+
+    const cachedAncestor = spawnedBySubscriberCache.get(sessionKey);
+    if (cachedAncestor !== undefined) {
+      return cachedAncestor ? sessionSubscribers.get(cachedAncestor) : undefined;
+    }
+
+    const visited = new Set<string>([sessionKey]);
+    let current = sessionKey;
+    for (let depth = 0; depth < 8; depth += 1) {
+      let parentKey = "";
+      try {
+        const loaded = loadSessionEntry(current);
+        parentKey =
+          typeof loaded.entry?.spawnedBy === "string" ? loaded.entry.spawnedBy.trim() : "";
+      } catch {
+        parentKey = "";
+      }
+      if (!parentKey) {
+        break;
+      }
+
+      const parentSubscribers = sessionSubscribers.get(parentKey);
+      if (parentSubscribers && parentSubscribers.size > 0) {
+        spawnedBySubscriberCache.set(sessionKey, parentKey);
+        return parentSubscribers;
+      }
+
+      let canonicalParentKey = parentKey;
+      try {
+        canonicalParentKey = loadSessionEntry(parentKey).canonicalKey.trim() || parentKey;
+      } catch {}
+
+      const canonicalParentSubscribers = sessionSubscribers.get(canonicalParentKey);
+      if (canonicalParentSubscribers && canonicalParentSubscribers.size > 0) {
+        spawnedBySubscriberCache.set(sessionKey, canonicalParentKey);
+        return canonicalParentSubscribers;
+      }
+
+      if (visited.has(parentKey) || visited.has(canonicalParentKey)) {
+        break;
+      }
+      visited.add(parentKey);
+      visited.add(canonicalParentKey);
+      current = canonicalParentKey;
+    }
+
+    spawnedBySubscriberCache.set(sessionKey, null);
+    return undefined;
   };
 
   const sendToSession = (
@@ -107,7 +168,7 @@ export function createNodeSubscriptionManager(): NodeSubscriptionManager {
     if (!normalizedSessionKey || !sendEvent) {
       return;
     }
-    const subs = sessionSubscribers.get(normalizedSessionKey);
+    const subs = resolveSessionSubscribers(normalizedSessionKey);
     if (!subs || subs.size === 0) {
       return;
     }
@@ -150,6 +211,7 @@ export function createNodeSubscriptionManager(): NodeSubscriptionManager {
   const clear = () => {
     nodeSubscriptions.clear();
     sessionSubscribers.clear();
+    spawnedBySubscriberCache.clear();
   };
 
   return {
