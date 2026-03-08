@@ -153,4 +153,20 @@ describe("resolveTranscriptPolicy", () => {
     expect(policy.validateGeminiTurns).toBe(false);
     expect(policy.validateAnthropicTurns).toBe(false);
   });
+
+  it.each([
+    { provider: "openrouter", modelId: "google/gemini-2.5-pro-preview" },
+    { provider: "opencode", modelId: "google/gemini-2.5-flash" },
+    { provider: "kilocode", modelId: "gemini-2.0-flash" },
+  ])("sanitizes Gemini thought signatures for $provider routes", ({ provider, modelId }) => {
+    const policy = resolveTranscriptPolicy({
+      provider,
+      modelId,
+      modelApi: "openai-completions",
+    });
+    expect(policy.sanitizeThoughtSignatures).toEqual({
+      allowBase64Only: true,
+      includeCamelCase: true,
+    });
+  });
 });
