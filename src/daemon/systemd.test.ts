@@ -601,7 +601,7 @@ describe("readSystemdServiceExecStart", () => {
     });
     expect(command?.environmentValueSources).toEqual({
       OPENCLAW_GATEWAY_TOKEN: "file",
-      OPENCLAW_GATEWAY_PASSWORD: "file",
+      OPENCLAW_GATEWAY_PASSWORD: "file", // pragma: allowlist secret
     });
   });
 });
