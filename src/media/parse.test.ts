@@ -86,9 +86,21 @@ describe("splitMediaFromOutput", () => {
     expect(result.text).toBe("");
   });
 
+  it("keeps quoted local filenames containing apostrophes", () => {
+    const result = splitMediaFromOutput("MEDIA:'/tmp/it's good.mp3'");
+    expect(result.mediaUrls).toEqual(["/tmp/it's good.mp3"]);
+    expect(result.text).toBe("");
+  });
+
   it("supports multiple media tokens on one MEDIA line", () => {
     const result = splitMediaFromOutput("MEDIA:a.png b.png");
     expect(result.mediaUrls).toEqual(["a.png", "b.png"]);
+    expect(result.text).toBe("");
+  });
+
+  it("supports multiple quoted media tokens when the first contains apostrophes", () => {
+    const result = splitMediaFromOutput("MEDIA:'/tmp/it's good.mp3' '/tmp/next clip.mp3'");
+    expect(result.mediaUrls).toEqual(["/tmp/it's good.mp3", "/tmp/next clip.mp3"]);
     expect(result.text).toBe("");
   });
 });

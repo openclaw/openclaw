@@ -133,6 +133,20 @@ function shouldStopBeforeNextToken(candidate: string, nextToken: string): boolea
   return !looksLikePathContinuationToken(nextToken);
 }
 
+function isQuotedRemainderBoundary(remainder: string): boolean {
+  if (!remainder) {
+    return true;
+  }
+  if (/^\s/.test(remainder)) {
+    return true;
+  }
+  const trimmed = remainder.trimStart();
+  if (!trimmed) {
+    return true;
+  }
+  return looksLikeStructuredTail(trimmed) || /^[`"'})\],.:;!?-]/.test(trimmed);
+}
+
 function extractLeadingMediaCandidate(payload: string): ExtractedMediaCandidate | undefined {
   const trimmed = payload.trimStart();
   if (!trimmed) {
@@ -141,17 +155,21 @@ function extractLeadingMediaCandidate(payload: string): ExtractedMediaCandidate 
 
   const firstChar = trimmed[0];
   if (firstChar === `"` || firstChar === "'" || firstChar === "`") {
-    const closingIndex = trimmed.indexOf(firstChar, 1);
-    if (closingIndex > 0) {
+    for (let closingIndex = trimmed.indexOf(firstChar, 1); closingIndex > 0; ) {
+      const remainder = trimmed.slice(closingIndex + 1);
+      if (!isQuotedRemainderBoundary(remainder)) {
+        closingIndex = trimmed.indexOf(firstChar, closingIndex + 1);
+        continue;
+      }
       const candidate = normalizeMediaSource(trimmed.slice(1, closingIndex).trim());
       if (isValidMedia(candidate, { allowSpaces: true, allowBareFilename: true })) {
-        const remainder = trimmed.slice(closingIndex + 1);
         return {
           candidate,
           remainder,
           dropRemainder: looksLikeStructuredTail(remainder.trimStart()),
         };
       }
+      closingIndex = trimmed.indexOf(firstChar, closingIndex + 1);
     }
   }
 
