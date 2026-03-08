@@ -218,6 +218,47 @@ describe("memory plugin e2e", () => {
     }
   });
 
+  test("config schema accepts storageOptions with string values", async () => {
+    const { default: memoryPlugin } = await import("./index.js");
+
+    const config = memoryPlugin.configSchema?.parse?.({
+      embedding: {
+        apiKey: OPENAI_API_KEY,
+        model: "text-embedding-3-small",
+      },
+      dbPath,
+      storageOptions: {
+        region: "us-west-2",
+        access_key: "test-key",
+        secret_key: "test-secret",
+      },
+    });
+
+    expect(config?.storageOptions).toEqual({
+      region: "us-west-2",
+      access_key: "test-key",
+      secret_key: "test-secret",
+    });
+  });
+
+  test("config schema rejects storageOptions with non-string values", async () => {
+    const { default: memoryPlugin } = await import("./index.js");
+
+    expect(() => {
+      memoryPlugin.configSchema?.parse?.({
+        embedding: {
+          apiKey: OPENAI_API_KEY,
+          model: "text-embedding-3-small",
+        },
+        dbPath,
+        storageOptions: {
+          region: "us-west-2",
+          timeout: 30, // number, should fail
+        },
+      });
+    }).toThrow("storageOptions.timeout must be a string");
+  });
+
   test("shouldCapture applies real capture rules", async () => {
     const { shouldCapture } = await import("./index.js");
 
