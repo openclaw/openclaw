@@ -276,19 +276,6 @@ function resolveNestedSkillsRoot(
   return { baseDir: dir };
 }
 
-function unwrapLoadedSkills(loaded: unknown): Skill[] {
-  if (Array.isArray(loaded)) {
-    return loaded as Skill[];
-  }
-  if (loaded && typeof loaded === "object" && "skills" in loaded) {
-    const skills = (loaded as { skills?: unknown }).skills;
-    if (Array.isArray(skills)) {
-      return skills as Skill[];
-    }
-  }
-  return [];
-}
-
 function loadSkillEntries(
   workspaceDir: string,
   opts?: {
@@ -343,9 +330,13 @@ function loadSkillEntries(
         return [];
       }
 
-      const loaded = loadSkillsFromDir({ dir: baseDir, source: params.source });
+      const loaded = loadSkillsWithDiagnostics({
+        dir: baseDir,
+        source: params.source,
+        fallbackSkillFilePath: rootSkillMd,
+      });
       return filterLoadedSkillsInsideRoot({
-        skills: unwrapLoadedSkills(loaded),
+        skills: loaded,
         source: params.source,
         rootDir,
         rootRealPath: baseDirRealPath,
@@ -417,10 +408,14 @@ function loadSkillEntries(
         continue;
       }
 
-      const loaded = loadSkillsFromDir({ dir: skillDir, source: params.source });
+      const loaded = loadSkillsWithDiagnostics({
+        dir: skillDir,
+        source: params.source,
+        fallbackSkillFilePath: skillMd,
+      });
       loadedSkills.push(
         ...filterLoadedSkillsInsideRoot({
-          skills: unwrapLoadedSkills(loaded),
+          skills: loaded,
           source: params.source,
           rootDir,
           rootRealPath: baseDirRealPath,
@@ -599,6 +594,96 @@ type WorkspaceSkillBuildOptions = {
   skillFilter?: string[];
   eligibility?: SkillEligibilityContext;
 };
+
+type LoadedSkillsWithDiagnostics = {
+  skills: Skill[];
+  diagnostics: Array<{ message?: string; path?: string }>;
+};
+
+function parseFrontmatterBoolString(value: string | undefined, fallback: boolean): boolean {
+  const normalized = value?.trim().toLowerCase();
+  if (!normalized) {
+    return fallback;
+  }
+  if (["true", "1", "yes", "on"].includes(normalized)) {
+    return true;
+  }
+  if (["false", "0", "no", "off"].includes(normalized)) {
+    return false;
+  }
+  return fallback;
+}
+
+function loadSkillFromFileFallback(filePath: string, source: string): Skill | null {
+  try {
+    const rawContent = fs.readFileSync(filePath, "utf-8");
+    const frontmatter = parseFrontmatter(rawContent);
+    const description = frontmatter.description?.trim();
+    if (!description) {
+      return null;
+    }
+    const skillDir = path.dirname(filePath);
+    return {
+      name: frontmatter.name?.trim() || path.basename(skillDir),
+      description,
+      filePath,
+      baseDir: skillDir,
+      source,
+      disableModelInvocation: parseFrontmatterBoolString(
+        frontmatter["disable-model-invocation"],
+        false,
+      ),
+    };
+  } catch {
+    return null;
+  }
+}
+
+function loadSkillsWithDiagnostics(params: {
+  dir: string;
+  source: string;
+  fallbackSkillFilePath?: string;
+}): Skill[] {
+  const loaded = loadSkillsFromDir({ dir: params.dir, source: params.source });
+  const normalized = (() => {
+    if (Array.isArray(loaded)) {
+      return { skills: loaded as Skill[], diagnostics: [] } as LoadedSkillsWithDiagnostics;
+    }
+    if (loaded && typeof loaded === "object" && "skills" in loaded) {
+      const result = loaded as { skills?: unknown; diagnostics?: unknown };
+      return {
+        skills: Array.isArray(result.skills) ? (result.skills as Skill[]) : [],
+        diagnostics: Array.isArray(result.diagnostics)
+          ? (result.diagnostics as Array<{ message?: string; path?: string }>)
+          : [],
+      } satisfies LoadedSkillsWithDiagnostics;
+    }
+    return { skills: [], diagnostics: [] } as LoadedSkillsWithDiagnostics;
+  })();
+
+  if (normalized.skills.length > 0) {
+    return normalized.skills;
+  }
+
+  const fallbackFile = params.fallbackSkillFilePath;
+  if (!fallbackFile || !fs.existsSync(fallbackFile)) {
+    return normalized.skills;
+  }
+
+  const fallback = loadSkillFromFileFallback(fallbackFile, params.source);
+  if (!fallback) {
+    return normalized.skills;
+  }
+
+  const summary = normalized.diagnostics
+    .map((diag) => diag.message?.trim())
+    .filter((message): message is string => Boolean(message))
+    .join("; ");
+  skillsLogger.warn(
+    `Skill parser fallback loaded ${path.basename(path.dirname(fallbackFile))} from ${fallbackFile}${summary ? ` (${summary})` : ""}. If your description contains ':', quote it in frontmatter to avoid YAML parser issues.`,
+  );
+  return [fallback];
+}
 
 function resolveWorkspaceSkillPromptState(
   workspaceDir: string,
