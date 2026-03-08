@@ -57,7 +57,7 @@ Optional legacy controls:
       search: {
         provider: "perplexity",
         perplexity: {
-          apiKey: "sk-or-v1-...",
+          apiKey: "sk-or-v1-...", // pragma: allowlist secret
           baseUrl: "https://openrouter.ai/api/v1",
           model: "perplexity/sonar-pro",
         },
