@@ -180,16 +180,15 @@ export async function resolveReplyDirectives(params: {
     .filter((alias): alias is string => Boolean(alias))
     .filter((alias) => !reservedCommands.has(alias.toLowerCase()));
 
-  // Only load workspace skill commands when we actually need them to filter aliases.
-  // This avoids scanning skills for messages that only use inline directives like /think:/verbose:.
-  const skillCommands =
-    allowTextCommands && rawAliases.length > 0
-      ? listSkillCommandsForWorkspace({
-          workspaceDir,
-          cfg,
-          skillFilter,
-        })
-      : [];
+  // Load workspace skill commands when text commands are allowed.
+  // This is needed for both alias filtering and skill command invocation.
+  const skillCommands = allowTextCommands
+    ? listSkillCommandsForWorkspace({
+        workspaceDir,
+        cfg,
+        skillFilter,
+      })
+    : [];
   for (const command of skillCommands) {
     reservedCommands.add(command.name.toLowerCase());
   }
