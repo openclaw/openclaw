@@ -471,7 +471,12 @@ export async function ensureSandboxBrowser(params: {
       : undefined;
 
   return {
-    bridgeUrl: resolvedBridge.advertisedBaseUrl,
+    // Keep the host-local bridge URL for host-side browser tool calls so loopback auth still applies.
+    bridgeUrl: resolvedBridge.baseUrl,
+    advertisedBridgeUrl:
+      resolvedBridge.advertisedBaseUrl === resolvedBridge.baseUrl
+        ? undefined
+        : resolvedBridge.advertisedBaseUrl,
     noVncUrl,
     containerName,
   };

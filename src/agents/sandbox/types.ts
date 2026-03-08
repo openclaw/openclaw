@@ -65,7 +65,10 @@ export type SandboxConfig = {
 };
 
 export type SandboxBrowserContext = {
+  // Host-side tools still talk to the local bridge URL so loopback auth keeps working.
   bridgeUrl: string;
+  // Sandboxed agents/containers need a separately advertised, container-reachable URL.
+  advertisedBridgeUrl?: string;
   noVncUrl?: string;
   containerName: string;
 };
