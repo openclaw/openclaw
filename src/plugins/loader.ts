@@ -41,6 +41,12 @@ export type PluginLoadOptions = {
   runtimeOptions?: CreatePluginRuntimeOptions;
   cache?: boolean;
   mode?: "full" | "validate";
+  /**
+   * Additional module names to load via Node's native require instead of
+   * jiti's transpiler. Useful for plugins that depend on native addons not
+   * covered by the built-in list (e.g. "sharp", "canvas", "node-hid").
+   */
+  additionalNativeModules?: string[];
 };
 
 const registryCache = new Map<string, PluginRegistry>();
@@ -611,7 +617,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
       // resolvers here delegates them to Node's native require, preserving
       // correct path resolution for any addon that depends on them.
       // See: https://github.com/openclaw/openclaw/issues/21676
-      nativeModules: ["bindings", "node-gyp-build"],
+      nativeModules: ["bindings", "node-gyp-build", ...(options.additionalNativeModules ?? [])],
       ...(Object.keys(aliasMap).length > 0
         ? {
             alias: aliasMap,
