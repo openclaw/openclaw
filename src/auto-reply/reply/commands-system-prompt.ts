@@ -94,6 +94,7 @@ export async function resolveCommandsSystemPromptBundle(
       node: process.version,
       model: `${params.provider}/${params.model}`,
       defaultModel: defaultModelLabel,
+      sessionId: params.sessionEntry?.sessionId,
     },
   });
   const sandboxInfo = sandboxRuntime.sandboxed
