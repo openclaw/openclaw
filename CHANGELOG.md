@@ -42,6 +42,7 @@ Docs: https://docs.openclaw.ai
 - macOS/Tailscale gateway discovery: keep Tailscale Serve probing alive when other remote gateways are already discovered, prefer direct transport for resolved `.ts.net` and Tailscale Serve gateways, and set `TERM=dumb` for GUI-launched Tailscale CLI discovery. (#40167) thanks @ngutman.
 - Podman/setup: fix `cannot chdir: Permission denied` in `run_as_user` when `setup-podman.sh` is invoked from a directory the target user cannot access, by wrapping user-switch calls in a subshell that cd's to `/tmp` with `/` fallback. (#39435) Thanks @langdon and @jlcbk.
 - Podman/SELinux: auto-detect SELinux enforcing/permissive mode and add `:Z` relabel to bind mounts in `run-openclaw-podman.sh` and the Quadlet template, fixing `EACCES` on Fedora/RHEL hosts. Supports `OPENCLAW_BIND_MOUNT_OPTIONS` override. (#39449) Thanks @langdon and @githubbzxs.
+- TUI/theme: detect light terminal backgrounds via `COLORFGBG` and pick a WCAG AA-compliant light palette, with `OPENCLAW_THEME=light|dark` override for terminals without auto-detection. (#38636) Thanks @ademczuk and @vincentkoc.
 
 ## 2026.3.7
 
