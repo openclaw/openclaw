@@ -268,7 +268,7 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     expect(streamingInstances[0].start).toHaveBeenCalledTimes(1);
     expect(streamingInstances[0].start).toHaveBeenCalledWith("oc_chat", "chat_id", {
       replyToMessageId: undefined,
-      replyInThread: undefined,
+      replyInThread: true,
       rootId: "om_root_topic",
     });
     expect(streamingInstances[0].close).toHaveBeenCalledTimes(1);
@@ -564,6 +564,29 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
       expect.objectContaining({
         replyToMessageId: "om_msg",
         replyInThread: true,
+      }),
+    );
+  });
+
+  it("honors replyInThread=false when only threadReply is true but rootId is absent", async () => {
+    createFeishuReplyDispatcher({
+      cfg: {} as never,
+      agentId: "agent",
+      runtime: { log: vi.fn(), error: vi.fn() } as never,
+      chatId: "oc_chat",
+      replyToMessageId: "om_msg",
+      replyInThread: false,
+      threadReply: true,
+    });
+
+    const options = createReplyDispatcherWithTypingMock.mock.calls[0]?.[0];
+    await options.deliver({ text: "```ts\nconst x = 1\n```" }, { kind: "final" });
+
+    expect(streamingInstances).toHaveLength(0);
+    expect(sendMarkdownCardFeishuMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        replyToMessageId: "om_msg",
+        replyInThread: false,
       }),
     );
   });
