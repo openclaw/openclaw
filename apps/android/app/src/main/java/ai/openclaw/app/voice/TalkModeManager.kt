@@ -813,7 +813,7 @@ class TalkModeManager(
     _lastAssistantText.value = cleaned
 
     val requestedVoice = directive?.voiceId?.trim()?.takeIf { it.isNotEmpty() }
-    val resolvedVoice = resolveVoiceAlias(requestedVoice)
+    val resolvedVoice = TalkModeVoiceResolver.resolveVoiceAlias(requestedVoice, voiceAliases)
     if (requestedVoice != null && resolvedVoice == null) {
       Log.w(tag, "unknown voice alias: $requestedVoice")
     }
@@ -836,12 +836,35 @@ class TalkModeManager(
       apiKey?.trim()?.takeIf { it.isNotEmpty() }
         ?: System.getenv("ELEVENLABS_API_KEY")?.trim()
     val preferredVoice = resolvedVoice ?: currentVoiceId ?: defaultVoiceId
-    val voiceId =
+    val resolvedPlaybackVoice =
       if (!apiKey.isNullOrEmpty()) {
-        resolveVoiceId(preferredVoice, apiKey)
+        try {
+          TalkModeVoiceResolver.resolveVoiceId(
+            preferred = preferredVoice,
+            fallbackVoiceId = fallbackVoiceId,
+            defaultVoiceId = defaultVoiceId,
+            currentVoiceId = currentVoiceId,
+            voiceOverrideActive = voiceOverrideActive,
+            listVoices = { TalkModeVoiceResolver.listVoices(apiKey, json) },
+          )
+        } catch (err: Throwable) {
+          Log.w(tag, "list voices failed: ${err.message ?: err::class.simpleName}")
+          null
+        }
       } else {
         null
       }
+    resolvedPlaybackVoice?.let { resolved ->
+      fallbackVoiceId = resolved.fallbackVoiceId
+      defaultVoiceId = resolved.defaultVoiceId
+      currentVoiceId = resolved.currentVoiceId
+      resolved.selectedVoiceName?.let { name ->
+        resolved.voiceId?.let { voiceId ->
+          Log.d(tag, "default voice selected $name ($voiceId)")
+        }
+      }
+    }
+    val voiceId = resolvedPlaybackVoice?.voiceId
 
     _statusText.value = "Speaking…"
     _isSpeaking.value = true
@@ -1702,82 +1725,6 @@ class TalkModeManager(
       }
     }
   }
-
-  private fun resolveVoiceAlias(value: String?): String? {
-    val trimmed = value?.trim().orEmpty()
-    if (trimmed.isEmpty()) return null
-    val normalized = normalizeAliasKey(trimmed)
-    voiceAliases[normalized]?.let { return it }
-    if (voiceAliases.values.any { it.equals(trimmed, ignoreCase = true) }) return trimmed
-    return if (isLikelyVoiceId(trimmed)) trimmed else null
-  }
-
-  private suspend fun resolveVoiceId(preferred: String?, apiKey: String): String? {
-    val trimmed = preferred?.trim().orEmpty()
-    if (trimmed.isNotEmpty()) {
-      val resolved = resolveVoiceAlias(trimmed)
-      // If it resolves as an alias, use the alias target.
-      // Otherwise treat it as a direct voice ID (e.g. "21m00Tcm4TlvDq8ikWAM").
-      return resolved ?: trimmed
-    }
-    fallbackVoiceId?.let { return it }
-
-    return try {
-      val voices = listVoices(apiKey)
-      val first = voices.firstOrNull() ?: return null
-      fallbackVoiceId = first.voiceId
-      if (defaultVoiceId.isNullOrBlank()) {
-        defaultVoiceId = first.voiceId
-      }
-      if (!voiceOverrideActive) {
-        currentVoiceId = first.voiceId
-      }
-      val name = first.name ?: "unknown"
-      Log.d(tag, "default voice selected $name (${first.voiceId})")
-      first.voiceId
-    } catch (err: Throwable) {
-      Log.w(tag, "list voices failed: ${err.message ?: err::class.simpleName}")
-      null
-    }
-  }
-
-  private suspend fun listVoices(apiKey: String): List<ElevenLabsVoice> {
-    return withContext(Dispatchers.IO) {
-      val url = URL("https://api.elevenlabs.io/v1/voices")
-      val conn = url.openConnection() as HttpURLConnection
-      conn.requestMethod = "GET"
-      conn.connectTimeout = 15_000
-      conn.readTimeout = 15_000
-      conn.setRequestProperty("xi-api-key", apiKey)
-
-      val code = conn.responseCode
-      val stream = if (code >= 400) conn.errorStream else conn.inputStream
-      val data = stream.readBytes()
-      if (code >= 400) {
-        val message = data.toString(Charsets.UTF_8)
-        throw IllegalStateException("ElevenLabs voices failed: $code $message")
-      }
-
-      val root = json.parseToJsonElement(data.toString(Charsets.UTF_8)).asObjectOrNull()
-      val voices = (root?.get("voices") as? JsonArray) ?: JsonArray(emptyList())
-      voices.mapNotNull { entry ->
-        val obj = entry.asObjectOrNull() ?: return@mapNotNull null
-        val voiceId = obj["voice_id"].asStringOrNull() ?: return@mapNotNull null
-        val name = obj["name"].asStringOrNull()
-        ElevenLabsVoice(voiceId, name)
-      }
-    }
-  }
-
-  private fun isLikelyVoiceId(value: String): Boolean {
-    if (value.length < 10) return false
-    return value.all { it.isLetterOrDigit() || it == '-' || it == '_' }
-  }
-
-  private fun normalizeAliasKey(value: String): String =
-    value.trim().lowercase()
-
-  private data class ElevenLabsVoice(val voiceId: String, val name: String?)
 
   private val listener =
     object : RecognitionListener {
