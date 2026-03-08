@@ -437,7 +437,7 @@ export function isCronSessionKey(key: string): boolean {
   return rest.startsWith("cron:");
 }
 
-function resolveSessionOptions(
+export function resolveSessionOptions(
   sessionKey: string,
   sessions: SessionsListResult | null,
   mainSessionKey?: string | null,
@@ -472,16 +472,19 @@ function resolveSessionOptions(
   }
 
   // Add sessions from the result, optionally filtering out cron sessions.
+  // Sort by most recent activity (updatedAt descending).
   if (sessions?.sessions) {
-    for (const s of sessions.sessions) {
-      if (!seen.has(s.key) && !(hideCron && isCronSessionKey(s.key))) {
-        seen.add(s.key);
-        options.push({
-          key: s.key,
-          displayName: resolveSessionDisplayName(s.key, s),
-          hasUnread: sessionsWithUnread?.has(s.key) ?? false,
-        });
-      }
+    const remaining = sessions.sessions
+      .filter((s) => !seen.has(s.key) && !(hideCron && isCronSessionKey(s.key)))
+      .toSorted((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0));
+
+    for (const s of remaining) {
+      seen.add(s.key);
+      options.push({
+        key: s.key,
+        displayName: resolveSessionDisplayName(s.key, s),
+        hasUnread: sessionsWithUnread?.has(s.key) ?? false,
+      });
     }
   }
 

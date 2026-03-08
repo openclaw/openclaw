@@ -3,6 +3,7 @@ import {
   isCronSessionKey,
   parseSessionKey,
   resolveSessionDisplayName,
+  resolveSessionOptions,
 } from "./app-render.helpers.ts";
 import type { SessionsListResult } from "./types.ts";
 
@@ -282,5 +283,104 @@ describe("isCronSessionKey", () => {
     expect(isCronSessionKey("main")).toBe(false);
     expect(isCronSessionKey("discord:group:eng")).toBe(false);
     expect(isCronSessionKey("agent:main:slack:cron:job:run:uuid")).toBe(false);
+  });
+});
+
+/* ================================================================
+ *  resolveSessionOptions – sorting by recent activity
+ * ================================================================ */
+
+describe("resolveSessionOptions", () => {
+  function makeSession(
+    key: string,
+    updatedAt: number,
+    overrides?: Partial<SessionRow>,
+  ): SessionRow {
+    return { kind: "direct", updatedAt, ...overrides, key };
+  }
+
+  it("sorts sessions by updatedAt descending (most recent first)", () => {
+    const sessions = [
+      makeSession("old-session", 1000),
+      makeSession("new-session", 3000),
+      makeSession("mid-session", 2000),
+    ];
+
+    const result = resolveSessionOptions("main", {
+      ts: Date.now(),
+      sessions,
+      defaults: { model: null, contextTokens: null },
+    });
+
+    // Main session first, then sorted by updatedAt
+    expect(result[0].key).toBe("main");
+    expect(result[1].key).toBe("new-session");
+    expect(result[2].key).toBe("mid-session");
+    expect(result[3].key).toBe("old-session");
+  });
+
+  it("places main and current session before sorted sessions", () => {
+    const sessions = [
+      makeSession("other-a", 5000),
+      makeSession("current-key", 100),
+      makeSession("other-b", 4000),
+      makeSession("main", 50),
+    ];
+
+    const result = resolveSessionOptions("current-key", {
+      ts: Date.now(),
+      sessions,
+      defaults: { model: null, contextTokens: null },
+    });
+
+    // Main first, current second, then sorted
+    expect(result[0].key).toBe("main");
+    expect(result[1].key).toBe("current-key");
+    expect(result[2].key).toBe("other-a");
+    expect(result[3].key).toBe("other-b");
+  });
+
+  it("handles sessions with null updatedAt (treats as 0)", () => {
+    const sessions = [
+      makeSession("with-time", 1000),
+      makeSession("no-time", null as unknown as number),
+      makeSession("newer-time", 2000),
+    ];
+
+    const result = resolveSessionOptions("main", {
+      ts: Date.now(),
+      sessions,
+      defaults: { model: null, contextTokens: null },
+    });
+
+    // Main first, then sorted: newer-time (2000) > with-time (1000) > no-time (0)
+    expect(result[0].key).toBe("main");
+    expect(result[1].key).toBe("newer-time");
+    expect(result[2].key).toBe("with-time");
+    expect(result[3].key).toBe("no-time");
+  });
+
+  it("filters out cron sessions when hideCron is true", () => {
+    const sessions = [
+      makeSession("regular", 1000),
+      makeSession("cron:job-1", 2000),
+      makeSession("agent:main:cron:job-2", 3000),
+    ];
+
+    const result = resolveSessionOptions(
+      "main",
+      {
+        ts: Date.now(),
+        sessions,
+        defaults: { model: null, contextTokens: null },
+      },
+      "main",
+      true, // hideCron
+    );
+
+    // Only main and regular session
+    expect(result.length).toBe(2);
+    expect(result[0].key).toBe("main");
+    expect(result[1].key).toBe("regular");
   });
 });
