@@ -2,7 +2,7 @@ import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import type { AssistantMessage } from "@mariozechner/pi-ai";
 import { extractTextFromChatContent } from "../shared/chat-content.js";
 import { stripReasoningTagsFromText } from "../shared/text/reasoning-tags.js";
-import { sanitizeUserFacingText } from "./pi-embedded-helpers.js";
+import { deriveErrorKind, sanitizeUserFacingText } from "./pi-embedded-helpers.js";
 import { formatToolDetail, resolveToolDisplay } from "./tool-display.js";
 
 export function isAssistantMessage(msg: AgentMessage | undefined): msg is AssistantMessage {
@@ -220,7 +220,9 @@ export function extractAssistantText(msg: AssistantMessage): string {
   // Only apply keyword-based error rewrites when the assistant message is actually an error.
   // Otherwise normal prose that *mentions* errors (e.g. "context overflow") can get clobbered.
   const errorContext = msg.stopReason === "error" || Boolean(msg.errorMessage?.trim());
-  return sanitizeUserFacingText(extracted, { errorContext });
+  const errorKind =
+    errorContext && msg.errorMessage ? deriveErrorKind(msg.errorMessage) : undefined;
+  return sanitizeUserFacingText(extracted, { errorContext, errorKind });
 }
 
 export function extractAssistantThinking(msg: AssistantMessage): string {

@@ -200,6 +200,11 @@ describe("sendMediaFeishu msg_type routing", () => {
       fileName: "photo.png",
     });
 
+    expect(imageCreateMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.any(Object),
+      }),
+    );
     expectMediaTimeoutClientConfigured();
     expect(messageCreateMock).toHaveBeenCalledWith(
       expect.objectContaining({

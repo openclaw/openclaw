@@ -28,7 +28,7 @@ export {
   shouldVerifyRequesterSpawnedSessionVisibility,
 } from "./sessions-resolution.js";
 import { extractTextFromChatContent } from "../../shared/chat-content.js";
-import { sanitizeUserFacingText } from "../pi-embedded-helpers.js";
+import { deriveErrorKind, sanitizeUserFacingText } from "../pi-embedded-helpers.js";
 import {
   stripDowngradedToolCallText,
   stripMinimaxToolCallXml,
@@ -167,5 +167,10 @@ export function extractAssistantText(message: unknown): string | undefined {
   const errorContext =
     stopReason === "error" || (typeof errorMessage === "string" && Boolean(errorMessage.trim()));
 
-  return joined ? sanitizeUserFacingText(joined, { errorContext }) : undefined;
+  if (!joined) {
+    return undefined;
+  }
+  const errorKind =
+    errorContext && typeof errorMessage === "string" ? deriveErrorKind(errorMessage) : undefined;
+  return sanitizeUserFacingText(joined, { errorContext, errorKind });
 }

@@ -178,6 +178,7 @@ export async function runAgentTurnWithFallback(params: {
         }
         const sanitized = sanitizeUserFacingText(text, {
           errorContext: Boolean(payload.isError),
+          errorKind: payload.errorKind,
         });
         if (!sanitized.trim()) {
           return { skip: true };
@@ -606,7 +607,7 @@ export async function runAgentTurnWithFallback(params: {
 
       defaultRuntime.error(`Embedded agent failed before reply: ${message}`);
       const safeMessage = isTransientHttp
-        ? sanitizeUserFacingText(message, { errorContext: true })
+        ? sanitizeUserFacingText(message, { errorContext: true, errorKind: "timeout" })
         : message;
       const trimmedMessage = safeMessage.replace(/\.\s*$/, "");
       const fallbackText = isContextOverflow

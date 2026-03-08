@@ -6,12 +6,14 @@ import { formatToolAggregate } from "../../../auto-reply/tool-meta.js";
 import type { OpenClawConfig } from "../../../config/config.js";
 import {
   BILLING_ERROR_USER_MESSAGE,
+  deriveErrorKind,
   formatAssistantErrorText,
   formatRawAssistantErrorForUi,
   getApiErrorPayloadFingerprint,
   isRawApiErrorPayload,
   normalizeTextForComparison,
 } from "../../pi-embedded-helpers.js";
+import type { ErrorKind } from "../../pi-embedded-helpers/types.js";
 import type { ToolResultFormat } from "../../pi-embedded-subscribe.js";
 import {
   extractAssistantText,
@@ -109,6 +111,7 @@ export function buildEmbeddedRunPayloads(params: {
   replyToId?: string;
   isError?: boolean;
   isReasoning?: boolean;
+  errorKind?: ErrorKind;
   audioAsVoice?: boolean;
   replyToTag?: boolean;
   replyToCurrent?: boolean;
@@ -118,6 +121,7 @@ export function buildEmbeddedRunPayloads(params: {
     media?: string[];
     isError?: boolean;
     isReasoning?: boolean;
+    errorKind?: ErrorKind;
     audioAsVoice?: boolean;
     replyToId?: string;
     replyToTag?: boolean;
@@ -137,6 +141,9 @@ export function buildEmbeddedRunPayloads(params: {
   const rawErrorMessage = lastAssistantErrored
     ? params.lastAssistant?.errorMessage?.trim() || undefined
     : undefined;
+  const errorKind: ErrorKind | undefined = rawErrorMessage
+    ? deriveErrorKind(rawErrorMessage)
+    : undefined;
   const rawErrorFingerprint = rawErrorMessage
     ? getApiErrorPayloadFingerprint(rawErrorMessage)
     : null;
@@ -153,7 +160,7 @@ export function buildEmbeddedRunPayloads(params: {
   const normalizedGenericBillingErrorText = normalizeTextForComparison(BILLING_ERROR_USER_MESSAGE);
   const genericErrorText = "The AI service returned an error. Please try again.";
   if (errorText) {
-    replyItems.push({ text: errorText, isError: true });
+    replyItems.push({ text: errorText, isError: true, errorKind });
   }
 
   const inlineToolResults =
@@ -323,6 +330,7 @@ export function buildEmbeddedRunPayloads(params: {
       mediaUrls: item.media?.length ? item.media : undefined,
       mediaUrl: item.media?.[0],
       isError: item.isError,
+      errorKind: item.errorKind,
       replyToId: item.replyToId,
       replyToTag: item.replyToTag,
       replyToCurrent: item.replyToCurrent,
