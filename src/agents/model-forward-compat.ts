@@ -12,6 +12,8 @@ const OPENAI_GPT_54_TEMPLATE_MODEL_IDS = ["gpt-5.2"] as const;
 const OPENAI_GPT_54_PRO_TEMPLATE_MODEL_IDS = ["gpt-5.2-pro", "gpt-5.2"] as const;
 
 const OPENAI_CODEX_GPT_54_MODEL_ID = "gpt-5.4";
+const OPENAI_CODEX_GPT_54_CONTEXT_TOKENS = 1_000_000;
+const OPENAI_CODEX_GPT_54_MAX_TOKENS = 128_000;
 const OPENAI_CODEX_GPT_54_TEMPLATE_MODEL_IDS = ["gpt-5.3-codex", "gpt-5.2-codex"] as const;
 const OPENAI_CODEX_GPT_53_MODEL_ID = "gpt-5.3-codex";
 const OPENAI_CODEX_TEMPLATE_MODEL_IDS = ["gpt-5.2-codex"] as const;
@@ -147,8 +149,8 @@ function resolveOpenAICodexForwardCompatModel(
       name: trimmedModelId,
     };
     if (lower === OPENAI_CODEX_GPT_54_MODEL_ID) {
-      overrides.contextWindow = 1_000_000;
-      overrides.maxTokens = 1_000_000;
+      overrides.contextWindow = OPENAI_CODEX_GPT_54_CONTEXT_TOKENS;
+      overrides.maxTokens = OPENAI_CODEX_GPT_54_MAX_TOKENS;
     }
     return normalizeModelCompat({
       ...template,
@@ -165,8 +167,8 @@ function resolveOpenAICodexForwardCompatModel(
     reasoning: true,
     input: ["text", "image"],
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-    contextWindow: lower === OPENAI_CODEX_GPT_54_MODEL_ID ? 1_000_000 : DEFAULT_CONTEXT_TOKENS,
-    maxTokens: lower === OPENAI_CODEX_GPT_54_MODEL_ID ? 1_000_000 : DEFAULT_CONTEXT_TOKENS,
+    contextWindow: lower === OPENAI_CODEX_GPT_54_MODEL_ID ? OPENAI_CODEX_GPT_54_CONTEXT_TOKENS : DEFAULT_CONTEXT_TOKENS,
+    maxTokens: lower === OPENAI_CODEX_GPT_54_MODEL_ID ? OPENAI_CODEX_GPT_54_MAX_TOKENS : DEFAULT_CONTEXT_TOKENS,
   } as Model<Api>);
 }
 
