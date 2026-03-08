@@ -8,17 +8,35 @@ import {
 import { createSessionManagerRuntimeRegistry } from "./pi-extensions/session-manager-runtime-registry.js";
 
 describe("applyDiscoveredContextWindows", () => {
-  it("keeps the smallest context window when duplicate model ids are discovered", () => {
+  it("keeps the smallest context window when the same bare model id appears under multiple providers", () => {
     const cache = new Map<string, number>();
     applyDiscoveredContextWindows({
       cache,
       models: [
-        { id: "claude-sonnet-4-5", contextWindow: 1_000_000 },
-        { id: "claude-sonnet-4-5", contextWindow: 200_000 },
+        { id: "gemini-3.1-pro-preview", contextWindow: 128_000 },
+        { id: "gemini-3.1-pro-preview", contextWindow: 1_048_576 },
       ],
     });
 
-    expect(cache.get("claude-sonnet-4-5")).toBe(200_000);
+    // Keep the conservative (minimum) value: this cache feeds runtime paths such
+    // as flush thresholds and session persistence, not just /status display.
+    // Callers with a known provider should use resolveContextTokensForModel which
+    // tries the provider-qualified key first.
+    expect(cache.get("gemini-3.1-pro-preview")).toBe(128_000);
+  });
+
+  it("stores provider-qualified entries independently", () => {
+    const cache = new Map<string, number>();
+    applyDiscoveredContextWindows({
+      cache,
+      models: [
+        { id: "github-copilot/gemini-3.1-pro-preview", contextWindow: 128_000 },
+        { id: "google-gemini-cli/gemini-3.1-pro-preview", contextWindow: 1_048_576 },
+      ],
+    });
+
+    expect(cache.get("github-copilot/gemini-3.1-pro-preview")).toBe(128_000);
+    expect(cache.get("google-gemini-cli/gemini-3.1-pro-preview")).toBe(1_048_576);
   });
 });
 

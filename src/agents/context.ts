@@ -41,8 +41,12 @@ export function applyDiscoveredContextWindows(params: {
       continue;
     }
     const existing = params.cache.get(model.id);
-    // When multiple providers expose the same model id with different limits,
-    // prefer the smaller window so token budgeting is fail-safe (no overestimation).
+    // When the same bare model id appears under multiple providers with different
+    // limits, keep the smaller window. This cache feeds both display paths and
+    // runtime paths (flush thresholds, session context-token persistence), so
+    // overestimating the limit could delay compaction and cause context overflow.
+    // Callers that know the active provider should use resolveContextTokensForModel,
+    // which tries the provider-qualified key first and falls back here.
     if (existing === undefined || contextWindow < existing) {
       params.cache.set(model.id, contextWindow);
     }
@@ -269,5 +273,13 @@ export function resolveContextTokensForModel(params: {
     }
   }
 
-  return lookupContextTokens(params.model) ?? params.fallbackContextTokens;
+  // When provider is known, prefer the provider-qualified key so the correct
+  // entry is found even when the same bare model id is catalogued under
+  // multiple providers with different context limits.
+  const qualifiedKey = ref ? `${ref.provider}/${ref.model}` : undefined;
+  return (
+    (qualifiedKey ? lookupContextTokens(qualifiedKey) : undefined) ??
+    lookupContextTokens(params.model) ??
+    params.fallbackContextTokens
+  );
 }
