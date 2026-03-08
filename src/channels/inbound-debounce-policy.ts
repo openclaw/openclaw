@@ -61,7 +61,7 @@ export function createChannelInboundDebouncer<T>(
 
   // Create smart debounce resolver if enabled
   const resolveDebounceMs =
-    smartDebounce?.enabled !== false
+    smartDebounce?.enabled === true
       ? createSmartDebounceResolver<T>(debounceMs, smartDebounce, extractText)
       : undefined;
 

@@ -52,6 +52,11 @@ export interface SmartDebounceConfig {
 }
 
 /**
+ * Route mode for message routing
+ */
+export type RouteMode = "chat" | "orchestrated_execution" | "followup_processing";
+
+/**
  * Result of user intent analysis
  */
 export interface IntentAnalysisResult {
@@ -67,6 +72,8 @@ export interface IntentAnalysisResult {
   suggest_create_task: boolean;
   /** Queue mode */
   queue_mode: "chat" | "execution_pending" | "followup";
+  /** Route mode for message routing */
+  route_mode: RouteMode;
   /** Reason for the decision */
   reason: string;
 }
@@ -297,6 +304,40 @@ export function detectUserIntent(
 }
 
 /**
+ * Calculate route mode based on intent analysis
+ */
+function calculateRouteMode(params: {
+  intent: UserIntentType;
+  execution_required: boolean;
+  queue_mode: "chat" | "execution_pending" | "followup";
+  input_finalized: boolean;
+}): RouteMode {
+  const { intent, execution_required, queue_mode, input_finalized } = params;
+
+  if (!input_finalized) {
+    return "chat";
+  }
+
+  // Case 2: Execution intent request
+  if (execution_required && intent === UserIntentType.EXECUTION) {
+    return "orchestrated_execution";
+  }
+
+  // Case 3: Busy session with execution intent
+  if (queue_mode === "execution_pending") {
+    return "orchestrated_execution";
+  }
+
+  // Case 4: Follow-up request
+  if (intent === UserIntentType.FOLLOWUP || queue_mode === "followup") {
+    return "followup_processing";
+  }
+
+  // Default: chat
+  return "chat";
+}
+
+/**
  * Analyze message and return structured intent analysis result
  */
 export function analyzeIntent(
@@ -312,6 +353,7 @@ export function analyzeIntent(
       execution_required: false,
       suggest_create_task: false,
       queue_mode: "chat",
+      route_mode: "chat",
       reason: "input not finalized",
     };
   }
@@ -331,6 +373,14 @@ export function analyzeIntent(
         ? "followup"
         : "chat";
 
+  // Calculate route mode
+  const route_mode = calculateRouteMode({
+    intent,
+    execution_required,
+    queue_mode,
+    input_finalized: true,
+  });
+
   // Calculate confidence
   let intent_confidence = 0.75;
   if (intent === UserIntentType.UNCLEAR) {
@@ -342,7 +392,7 @@ export function analyzeIntent(
   }
 
   // Reasoning
-  let reason = `matched ${intent} intent`;
+  let reason = `matched ${intent} intent, route_mode=${route_mode}`;
   if (context.session_busy && execution_required) {
     reason = "session busy with execution intent";
   }
@@ -354,6 +404,7 @@ export function analyzeIntent(
     execution_required: execution_required,
     suggest_create_task: suggest_create_task,
     queue_mode: queue_mode,
+    route_mode: route_mode,
     reason: reason,
   };
 }

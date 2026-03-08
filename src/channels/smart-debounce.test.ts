@@ -184,6 +184,47 @@ describe("smart-debounce", () => {
       expect(result.intent_confidence).toBeGreaterThan(0);
       expect(result.intent_confidence).toBeLessThanOrEqual(1);
     });
+
+    it("returns route_mode=orchestrated_execution for execution intent", () => {
+      const result = analyzeIntent("帮我查一下这个配置", { input_finalized: true });
+      expect(result.input_finalized).toBe(true);
+      expect(result.intent_type).toBe(UserIntentType.EXECUTION);
+      expect(result.execution_required).toBe(true);
+      expect(result.route_mode).toBe("orchestrated_execution");
+    });
+
+    it("returns route_mode=chat for chat intent", () => {
+      const result = analyzeIntent("你好，在吗？", { input_finalized: true });
+      expect(result.input_finalized).toBe(true);
+      expect(result.intent_type).toBe(UserIntentType.CHAT);
+      expect(result.execution_required).toBe(false);
+      expect(result.route_mode).toBe("chat");
+    });
+
+    it("returns route_mode=followup_processing for followup intent", () => {
+      const result = analyzeIntent("跟进这个问题", { input_finalized: true });
+      expect(result.input_finalized).toBe(true);
+      expect(result.intent_type).toBe(UserIntentType.FOLLOWUP);
+      expect(result.route_mode).toBe("followup_processing");
+    });
+
+    it("returns route_mode=orchestrated_execution for execution intent with session_busy=true", () => {
+      const result = analyzeIntent("帮我查一下这个配置", {
+        input_finalized: true,
+        session_busy: true,
+      });
+      expect(result.input_finalized).toBe(true);
+      expect(result.intent_type).toBe(UserIntentType.EXECUTION);
+      expect(result.execution_required).toBe(true);
+      expect(result.queue_mode).toBe("execution_pending");
+      expect(result.route_mode).toBe("orchestrated_execution");
+    });
+
+    it("returns route_mode=chat when input not finalized", () => {
+      const result = analyzeIntent("帮我查一下这个配置", { input_finalized: false });
+      expect(result.input_finalized).toBe(false);
+      expect(result.route_mode).toBe("chat");
+    });
   });
 
   describe("isCompleteMessage", () => {

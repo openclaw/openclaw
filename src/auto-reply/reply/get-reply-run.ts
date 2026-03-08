@@ -7,6 +7,7 @@ import {
   isEmbeddedPiRunStreaming,
   resolveEmbeddedSessionLane,
 } from "../../agents/pi-embedded.js";
+import { type IntentAnalysisResult } from "../../channels/smart-debounce.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import {
   resolveGroupSessionKey,
@@ -124,6 +125,7 @@ async function sendResetSessionNotice(params: {
 }
 
 type RunPreparedReplyParams = {
+  intentResult?: IntentAnalysisResult;
   ctx: MsgContext;
   sessionCtx: TemplateContext;
   cfg: OpenClawConfig;
@@ -218,6 +220,7 @@ export async function runPreparedReply(
     storePath,
     workspaceDir,
     sessionStore,
+    intentResult,
   } = params;
   let {
     sessionEntry,
@@ -332,6 +335,22 @@ export async function runPreparedReply(
   });
   const isGroupSession = sessionEntry?.chatType === "group" || sessionEntry?.chatType === "channel";
   const isMainSession = !isGroupSession && sessionKey === normalizeMainKey(sessionCfg?.mainKey);
+
+  // Intent-based routing logic
+  if (intentResult && intentResult.execution_required && intentResult.input_finalized) {
+    // For execution intent, check if we should go to tracked orchestrator
+    // First, check if we have pending follow-ups
+    const hasPendingFollowups = false; // TODO: Implement check for pending follow-ups
+    if (hasPendingFollowups) {
+      // TODO: Implement logic for pending follow-ups
+      // For now, continue with normal flow
+    } else {
+      // Check if we should start a tracked execution
+      // TODO: Implement tracked execution path
+      // For now, continue with normal flow
+      console.log("Execution intent detected, should route to tracked orchestrator");
+    }
+  }
   // Extract first-token think hint from the user body BEFORE prepending system events.
   // If done after, the System: prefix becomes parts[0] and silently shadows any
   // low|medium|high shorthand the user typed.

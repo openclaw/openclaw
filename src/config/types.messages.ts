@@ -25,6 +25,8 @@ export type InboundDebounceByProvider = Record<string, number>;
 export type InboundDebounceConfig = {
   debounceMs?: number;
   byChannel?: InboundDebounceByProvider;
+  /** Smart debounce configuration for dynamic debounce times based on message content. */
+  smartDebounce?: import("../channels/smart-debounce.js").SmartDebounceConfig;
 };
 
 export type BroadcastStrategy = "parallel" | "sequential";

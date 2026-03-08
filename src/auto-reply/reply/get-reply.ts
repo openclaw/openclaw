@@ -8,6 +8,12 @@ import { resolveModelRefFromString } from "../../agents/model-selection.js";
 import { resolveAgentTimeoutMs } from "../../agents/timeout.js";
 import { DEFAULT_AGENT_WORKSPACE_DIR, ensureAgentWorkspace } from "../../agents/workspace.js";
 import { resolveChannelModelOverride } from "../../channels/model-overrides.js";
+import {
+  analyzeIntent,
+  DEFAULT_SMART_DEBOUNCE_CONFIG,
+  type IntentAnalysisContext,
+  type IntentAnalysisResult,
+} from "../../channels/smart-debounce.js";
 import { type OpenClawConfig, loadConfig } from "../../config/config.js";
 import { applyLinkUnderstanding } from "../../link-understanding/apply.js";
 import { applyMediaUnderstanding } from "../../media-understanding/apply.js";
@@ -124,6 +130,20 @@ export async function getReplyFromConfig(
   opts?.onTypingController?.(typing);
 
   const finalized = finalizeInboundContext(ctx);
+
+  // Analyze user intent
+  const smartDebounceConfig = cfg.messages?.inbound?.smartDebounce ?? DEFAULT_SMART_DEBOUNCE_CONFIG;
+  const intentContext: IntentAnalysisContext = {
+    input_finalized: true,
+    // We don't have session busy state here yet, will determine later
+    session_busy: undefined,
+  };
+  const messageText = finalized.BodyForAgent ?? finalized.Body ?? "";
+  const intentResult: IntentAnalysisResult = analyzeIntent(
+    messageText,
+    intentContext,
+    smartDebounceConfig,
+  );
 
   if (!isFastTestEnv) {
     await applyMediaUnderstanding({
@@ -399,5 +419,6 @@ export async function getReplyFromConfig(
     storePath,
     workspaceDir,
     abortedLastRun,
+    intentResult,
   });
 }
