@@ -42,6 +42,14 @@ function resolveInboundChannel(ctx: TemplateContext): string | undefined {
   return channelValue;
 }
 
+function isInternalUiChannel(channel: string | undefined): boolean {
+  if (!channel) {
+    return false;
+  }
+  const normalized = channel.trim().toLowerCase();
+  return normalized === "webchat" || normalized === "openclaw-control-ui";
+}
+
 export function buildInboundMetaSystemPrompt(ctx: TemplateContext): string {
   const chatType = normalizeChatType(ctx.ChatType);
   const isDirect = !chatType || chatType === "direct";
@@ -87,7 +95,7 @@ export function buildInboundUserContextPrefix(ctx: TemplateContext): string {
   const isDirect = !chatType || chatType === "direct";
   const directChannelValue = resolveInboundChannel(ctx);
   const includeDirectConversationInfo = Boolean(
-    directChannelValue && directChannelValue !== "webchat",
+    directChannelValue && !isInternalUiChannel(directChannelValue),
   );
   const shouldIncludeConversationInfo = !isDirect || includeDirectConversationInfo;
 
@@ -149,7 +157,8 @@ export function buildInboundUserContextPrefix(ctx: TemplateContext): string {
     tag: safeTrim(ctx.SenderTag),
     e164: safeTrim(ctx.SenderE164),
   };
-  if (senderInfo?.label) {
+  const shouldIncludeSenderInfo = !isDirect || !isInternalUiChannel(directChannelValue);
+  if (senderInfo?.label && shouldIncludeSenderInfo) {
     blocks.push(
       ["Sender (untrusted metadata):", "```json", JSON.stringify(senderInfo, null, 2), "```"].join(
         "\n",
