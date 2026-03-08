@@ -8,6 +8,35 @@ import { makeIrcMessageId } from "./protocol.js";
 import { getIrcRuntime } from "./runtime.js";
 import type { CoreConfig, IrcInboundMessage } from "./types.js";
 
+const activeClients = new Map<string, IrcClient>();
+
+function setActiveClient(accountId: string, client: IrcClient | null): void {
+  if (!accountId) {
+    return;
+  }
+  if (!client) {
+    activeClients.delete(accountId);
+    return;
+  }
+  const existing = activeClients.get(accountId);
+  if (existing && existing !== client) {
+    try {
+      existing.quit("restart");
+    } catch {
+      // Ignore shutdown errors while replacing active client.
+    }
+  }
+  activeClients.set(accountId, client);
+}
+
+export function _testResetActiveIrcClients() {
+  activeClients.clear();
+}
+
+export function _testSetActiveIrcClient(accountId: string, client: IrcClient | null) {
+  setActiveClient(accountId, client);
+}
+
 export type IrcMonitorOptions = {
   accountId?: string;
   config?: CoreConfig;
@@ -133,6 +162,8 @@ export async function monitorIrcProvider(opts: IrcMonitorOptions): Promise<{ sto
     }),
   );
 
+  setActiveClient(account.accountId, client);
+
   logger.info(
     `[${account.accountId}] connected to ${account.host}:${account.port}${account.tls ? " (tls)" : ""} as ${client.nick}`,
   );
@@ -140,6 +171,9 @@ export async function monitorIrcProvider(opts: IrcMonitorOptions): Promise<{ sto
   return {
     stop: () => {
       client?.quit("shutdown");
+      if (client && activeClients.get(account.accountId) === client) {
+        setActiveClient(account.accountId, null);
+      }
       client = null;
     },
   };

@@ -1,5 +1,9 @@
-import { describe, expect, it } from "vitest";
-import { resolveIrcInboundTarget } from "./monitor.js";
+import { describe, expect, it, vi } from "vitest";
+import {
+  _testResetActiveIrcClients,
+  _testSetActiveIrcClient,
+  resolveIrcInboundTarget,
+} from "./monitor.js";
 
 describe("irc monitor inbound target", () => {
   it("keeps channel target for group messages", () => {
@@ -39,5 +43,39 @@ describe("irc monitor inbound target", () => {
       target: "openclaw-bot",
       rawTarget: "openclaw-bot",
     });
+  });
+});
+
+describe("irc monitor active client replacement", () => {
+  it("quits previous active client when replacing same account", () => {
+    _testResetActiveIrcClients();
+
+    const previousQuit = vi.fn();
+    const previous = {
+      nick: "OpenClaw",
+      isReady: () => true,
+      sendRaw: () => {},
+      join: () => {},
+      sendPrivmsg: () => {},
+      quit: previousQuit,
+      close: () => {},
+    };
+
+    const next = {
+      nick: "OpenClaw",
+      isReady: () => true,
+      sendRaw: () => {},
+      join: () => {},
+      sendPrivmsg: () => {},
+      quit: vi.fn(),
+      close: () => {},
+    };
+
+    _testSetActiveIrcClient("default", previous);
+    _testSetActiveIrcClient("default", next);
+
+    expect(previousQuit).toHaveBeenCalledWith("restart");
+
+    _testResetActiveIrcClients();
   });
 });
