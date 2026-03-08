@@ -18,11 +18,6 @@ import {
   promoteThinkingTagsToBlocks,
 } from "./pi-embedded-utils.js";
 
-// FIX #28632: Thinking token budget to prevent output limit exhaustion.
-// When thinking content approaches this limit, agent truncates and proceeds with action.
-const THINKING_TOKEN_BUDGET_LIMIT = 4000;
-const THINKING_BUDGET_EXHAUSTION_THRESHOLD = 0.8; // 80% of limit
-
 const stripTrailingDirective = (text: string): string => {
   const openIndex = text.lastIndexOf("[[");
   if (openIndex < 0) {

@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
+import { emitAgentEvent } from "../infra/agent-events.js";
 import { createInlineCodeState } from "../markdown/code-spans.js";
 import { handleAgentEnd } from "./pi-embedded-subscribe.handlers.lifecycle.js";
-import { emitAgentEvent } from "../infra/agent-events.js";
 import type { EmbeddedPiSubscribeContext } from "./pi-embedded-subscribe.handlers.types.js";
 
 vi.mock("../infra/agent-events.js", () => ({
@@ -109,13 +109,21 @@ describe("handleAgentEnd", () => {
       }),
     );
 
-    // Should notify user via onAgentEvent
-    expect(onAgentEvent).toHaveBeenCalledWith({
-      stream: "system",
-      data: expect.objectContaining({
-        type: "warning",
-        message: expect.stringContaining("truncated"),
+    // Should notify user via lifecycle stream (consumed by normal onAgentEvent handlers)
+    expect(onAgentEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        stream: "lifecycle",
+        data: expect.objectContaining({
+          phase: "truncated",
+          message: expect.stringContaining("truncated"),
+        }),
       }),
+    );
+
+    // Should emit terminal end phase so consumers don't hang
+    expect(onAgentEvent).toHaveBeenCalledWith({
+      stream: "lifecycle",
+      data: { phase: "end", truncated: true },
     });
   });
 
@@ -144,12 +152,20 @@ describe("handleAgentEnd", () => {
       }),
     );
 
-    // Should notify user
-    expect(onAgentEvent).toHaveBeenCalledWith({
-      stream: "system",
-      data: expect.objectContaining({
-        type: "warning",
+    // Should notify user via lifecycle stream
+    expect(onAgentEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        stream: "lifecycle",
+        data: expect.objectContaining({
+          phase: "truncated",
+        }),
       }),
+    );
+
+    // Should emit terminal end phase
+    expect(onAgentEvent).toHaveBeenCalledWith({
+      stream: "lifecycle",
+      data: { phase: "end", truncated: true },
     });
   });
 });
