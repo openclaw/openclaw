@@ -151,20 +151,30 @@ export function buildToolActionFingerprint(
   if (action) {
     parts.push(`action=${action}`);
   }
+  // For messaging tools, path/filePath represent attachments — not the core
+  // action identity.  Exclude them so a retry with a corrected file path
+  // still matches the original failed action (same target, same intent).
+  const isMessageTool =
+    normalizedTool === "message" ||
+    normalizedTool.startsWith("message_") ||
+    normalizedTool.includes("send");
+  const fingerprintKeys = isMessageTool
+    ? ["to", "target", "messageId", "sessionKey", "jobId", "id"]
+    : [
+        "path",
+        "filePath",
+        "oldPath",
+        "newPath",
+        "to",
+        "target",
+        "messageId",
+        "sessionKey",
+        "jobId",
+        "id",
+        "model",
+      ];
   let hasStableTarget = false;
-  for (const key of [
-    "path",
-    "filePath",
-    "oldPath",
-    "newPath",
-    "to",
-    "target",
-    "messageId",
-    "sessionKey",
-    "jobId",
-    "id",
-    "model",
-  ]) {
+  for (const key of fingerprintKeys) {
     const value = normalizeFingerprintValue(record?.[key]);
     if (value) {
       parts.push(`${key.toLowerCase()}=${value}`);
