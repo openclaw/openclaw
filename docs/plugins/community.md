@@ -45,12 +45,12 @@ Use this format when adding entries:
 
 ## Listed plugins
 
-- **WeChat** — Connect OpenClaw to WeChat personal accounts via WeChatPadPro (iPad protocol). Supports text, image, and file exchange with keyword-triggered conversations.
-  npm: `@icesword760/openclaw-wechat`
-  repo: `https://github.com/icesword0760/openclaw-wechat`
-  install: `openclaw plugins install @icesword760/openclaw-wechat`
-
 - **JuhBDI** — BDI (Belief-Desire-Intention) governance for AI agents. Intent verification, SHA-256 audit trails, cross-linked memory recall, trust scoring, and principle extraction. 5 tools, 2 hooks. Works with any LLM.
   npm: `@juhlabs/openclaw-bdi`
   repo: `https://github.com/JuhLabs/juhbdi`
   install: `openclaw plugins install @juhlabs/openclaw-bdi`
+
+- **WeChat** — Connect OpenClaw to WeChat personal accounts via WeChatPadPro (iPad protocol). Supports text, image, and file exchange with keyword-triggered conversations.
+  npm: `@icesword760/openclaw-wechat`
+  repo: `https://github.com/icesword0760/openclaw-wechat`
+  install: `openclaw plugins install @icesword760/openclaw-wechat`
