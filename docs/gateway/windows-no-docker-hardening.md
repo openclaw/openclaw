@@ -172,19 +172,21 @@ openclaw status
 Remove explicit ACL entries for the constrained user:
 
 ```powershell
+$Workspace = "D:\OpenClawWorkspace"
 $Principal = "$env:COMPUTERNAME\openclaw_bot"
 
-icacls "D:\OpenClawWorkspace" /remove "$Principal" /T /C
-icacls "D:\OpenClawWorkspace" /remove:d "$Principal" /T /C
+icacls $Workspace /remove "$Principal" /T /C
+icacls $Workspace /remove:d "$Principal" /T /C
 ```
 
 Remove deny entries from sibling directories if you added them:
 
 ```powershell
+$Workspace = "D:\OpenClawWorkspace"
 $Principal = "$env:COMPUTERNAME\openclaw_bot"
-$Parent = "D:\"
+$Parent = Split-Path -Parent $Workspace
 Get-ChildItem -LiteralPath $Parent -Directory |
-  Where-Object { $_.FullName -ne "D:\OpenClawWorkspace" } |
+  Where-Object { $_.FullName -ne $Workspace } |
   ForEach-Object {
     icacls $_.FullName /remove:d "$Principal" /T /C
   }
