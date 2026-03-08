@@ -2755,6 +2755,83 @@ describe("QmdMemoryManager", () => {
       }
     });
   });
+
+  it("interval timer fires and runs qmd update", async () => {
+    vi.useFakeTimers();
+    cfg = {
+      ...cfg,
+      memory: {
+        backend: "qmd",
+        qmd: {
+          includeDefaultMemory: false,
+          update: { interval: "1s", debounceMs: 0, onBoot: false },
+          paths: [{ path: workspaceDir, pattern: "**/*.md", name: "workspace" }],
+        },
+      },
+    } as OpenClawConfig;
+
+    const resolved = resolveMemoryBackendConfig({ cfg, agentId });
+    const createPromise = QmdMemoryManager.create({ cfg, agentId, resolved, mode: "full" });
+    await vi.advanceTimersByTimeAsync(0);
+    const manager = await createPromise;
+    if (!manager) {
+      throw new Error("manager missing");
+    }
+
+    const baselineCalls = spawnMock.mock.calls.length;
+
+    await vi.advanceTimersByTimeAsync(1100);
+
+    const newCalls = spawnMock.mock.calls.slice(baselineCalls);
+    const updateCalls = newCalls.filter(
+      (call: unknown[]) => Array.isArray(call[1]) && (call[1] as string[])[0] === "update",
+    );
+    expect(updateCalls.length).toBeGreaterThanOrEqual(1);
+
+    await manager.close();
+  });
+
+  it("abandons stale pending update on next interval tick", async () => {
+    vi.useFakeTimers();
+    cfg = {
+      ...cfg,
+      memory: {
+        backend: "qmd",
+        qmd: {
+          includeDefaultMemory: false,
+          update: {
+            interval: "1s",
+            debounceMs: 0,
+            onBoot: false,
+            updateTimeoutMs: 50,
+            embedTimeoutMs: 50,
+          },
+          paths: [{ path: workspaceDir, pattern: "**/*.md", name: "workspace" }],
+        },
+      },
+    } as OpenClawConfig;
+
+    const resolved = resolveMemoryBackendConfig({ cfg, agentId });
+    const createPromise = QmdMemoryManager.create({ cfg, agentId, resolved, mode: "full" });
+    await vi.advanceTimersByTimeAsync(0);
+    const manager = await createPromise;
+    if (!manager) {
+      throw new Error("manager missing");
+    }
+
+    const internal = manager as unknown as {
+      pendingUpdate: Promise<void> | null;
+      pendingUpdateStartedAt: number | null;
+    };
+    internal.pendingUpdate = new Promise<void>(() => {});
+    internal.pendingUpdateStartedAt = Date.now() - (50 + 50) * 2 - 10;
+
+    await vi.advanceTimersByTimeAsync(1100);
+
+    expect(logWarnMock).toHaveBeenCalledWith(expect.stringContaining("stale"));
+
+    await manager.close();
+  });
 });
 
 function createDeferred<T>() {
