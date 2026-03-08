@@ -175,7 +175,7 @@ describe("loadPluginManifestRegistry", () => {
     expect(warnings[0]?.message).toContain("plugins.load.paths");
   });
 
-  it("emits actionable warning with correct winner when global is discovered before bundled", () => {
+  it("suppresses all warnings when the higher-precedence global plugin is discovered before bundled", () => {
     const dirA = makeTempDir();
     const dirB = makeTempDir();
     const manifest = { id: "feishu", configSchema: { type: "object" } };
