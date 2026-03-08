@@ -7,6 +7,20 @@ import { getChromeExtensionRelayAuthHeaders } from "./extension-relay.js";
 
 export { isLoopbackHost };
 
+/**
+ * Returns true when the URL uses a WebSocket protocol (ws: or wss:).
+ * Used to distinguish direct-WebSocket CDP endpoints
+ * from HTTP(S) endpoints that require /json/version discovery.
+ */
+export function isWebSocketUrl(url: string): boolean {
+  try {
+    const parsed = new URL(url);
+    return parsed.protocol === "ws:" || parsed.protocol === "wss:";
+  } catch {
+    return false;
+  }
+}
+
 type CdpResponse = {
   id: number;
   result?: unknown;

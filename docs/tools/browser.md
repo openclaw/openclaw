@@ -196,6 +196,53 @@ Notes:
 - Replace `<BROWSERLESS_API_KEY>` with your real Browserless token.
 - Choose the region endpoint that matches your Browserless account (see their docs).
 
+## Direct WebSocket CDP providers
+
+Some hosted browser services expose a **direct WebSocket** endpoint rather than
+the standard HTTP-based CDP discovery (`/json/version`). OpenClaw supports both:
+
+- **HTTP(S) endpoints** (e.g. Browserless) — OpenClaw calls `/json/version` to
+  discover the WebSocket debugger URL, then connects.
+- **WebSocket endpoints** (`ws://` / `wss://`) — OpenClaw connects directly,
+  skipping `/json/version`. Use this for services like
+  [Browserbase](https://www.browserbase.com) or any provider that hands you a
+  WebSocket URL.
+
+### Browserbase
+
+[Browserbase](https://www.browserbase.com) is a cloud platform for running
+headless browsers with built-in CAPTCHA solving, stealth mode, and residential
+proxies.
+
+```json5
+{
+  browser: {
+    enabled: true,
+    defaultProfile: "browserbase",
+    remoteCdpTimeoutMs: 3000,
+    remoteCdpHandshakeTimeoutMs: 5000,
+    profiles: {
+      browserbase: {
+        cdpUrl: "wss://connect.browserbase.com?apiKey=<BROWSERBASE_API_KEY>",
+        color: "#F97316",
+      },
+    },
+  },
+}
+```
+
+Notes:
+
+- [Sign up](https://www.browserbase.com/sign-up) and copy your **API Key**
+  from the [Overview dashboard](https://www.browserbase.com/overview).
+- Replace `<BROWSERBASE_API_KEY>` with your real Browserbase API key.
+- Browserbase auto-creates a browser session on WebSocket connect, so no
+  manual session creation step is needed.
+- The free tier allows one concurrent session and one browser hour per month.
+  See [pricing](https://www.browserbase.com/pricing) for paid plan limits.
+- See the [Browserbase docs](https://docs.browserbase.com) for full API
+  reference, SDK guides, and integration examples.
+
 ## Security
 
 Key ideas:
@@ -207,7 +254,7 @@ Key ideas:
 
 Remote CDP tips:
 
-- Prefer HTTPS endpoints and short-lived tokens where possible.
+- Prefer encrypted endpoints (HTTPS or WSS) and short-lived tokens where possible.
 - Avoid embedding long-lived tokens directly in config files.
 
 ## Profiles (multi-browser)
