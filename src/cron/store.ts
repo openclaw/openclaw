@@ -3,11 +3,23 @@ import fs from "node:fs";
 import path from "node:path";
 import JSON5 from "json5";
 import { expandHomePrefix } from "../infra/home-dir.js";
-import { CONFIG_DIR } from "../utils.js";
+import { resolveConfigDir } from "../utils.js";
 import type { CronStoreFile } from "./types.js";
 
-export const DEFAULT_CRON_DIR = path.join(CONFIG_DIR, "cron");
-export const DEFAULT_CRON_STORE_PATH = path.join(DEFAULT_CRON_DIR, "jobs.json");
+/** Resolve cron dir at call time so `--profile` / `OPENCLAW_STATE_DIR` is respected. */
+export function getDefaultCronDir(): string {
+  return path.join(resolveConfigDir(), "cron");
+}
+
+/** Resolve default cron store path at call time so profile overrides apply. */
+export function getDefaultCronStorePath(): string {
+  return path.join(getDefaultCronDir(), "jobs.json");
+}
+
+// Keep legacy constants for backwards compat with external consumers.
+// These still resolve once at import time; prefer the functions above.
+export const DEFAULT_CRON_DIR = getDefaultCronDir();
+export const DEFAULT_CRON_STORE_PATH = getDefaultCronStorePath();
 const serializedStoreCache = new Map<string, string>();
 
 export function resolveCronStorePath(storePath?: string) {
@@ -18,7 +30,7 @@ export function resolveCronStorePath(storePath?: string) {
     }
     return path.resolve(raw);
   }
-  return DEFAULT_CRON_STORE_PATH;
+  return getDefaultCronStorePath();
 }
 
 export async function loadCronStore(storePath: string): Promise<CronStoreFile> {
