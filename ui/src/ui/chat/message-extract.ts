@@ -1,18 +1,41 @@
 import { stripInboundMetadata } from "../../../../src/auto-reply/reply/strip-inbound-meta.js";
 import { stripEnvelope } from "../../../../src/shared/chat-envelope.js";
-import { stripThinkingTags } from "../format.ts";
+import { stripThinkingTags, truncateText } from "../format.ts";
 
 const textCache = new WeakMap<object, string | null>();
 const thinkingCache = new WeakMap<object, string | null>();
+const TOOL_TEXT_RENDER_LIMIT = 4000;
+
+function isToolLikeRole(role: string): boolean {
+  const normalized = role.trim().toLowerCase();
+  return (
+    normalized === "toolresult" ||
+    normalized === "tool_result" ||
+    normalized === "tool" ||
+    normalized === "function"
+  );
+}
+
+function clampToolTextForRender(text: string, role: string): string {
+  if (!isToolLikeRole(role)) {
+    return text;
+  }
+  const truncated = truncateText(text, TOOL_TEXT_RENDER_LIMIT);
+  if (!truncated.truncated) {
+    return text;
+  }
+  return `${truncated.text}\n\n... truncated tool output (${truncated.total} chars, showing first ${truncated.text.length}).`;
+}
 
 function processMessageText(text: string, role: string): string {
   const shouldStripInboundMetadata = role.toLowerCase() === "user";
   if (role === "assistant") {
     return stripThinkingTags(text);
   }
-  return shouldStripInboundMetadata
+  const processed = shouldStripInboundMetadata
     ? stripInboundMetadata(stripEnvelope(text))
     : stripEnvelope(text);
+  return clampToolTextForRender(processed, role);
 }
 
 export function extractText(message: unknown): string | null {
