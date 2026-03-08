@@ -4,7 +4,7 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { withEnvAsync } from "../test-utils/env.js";
 import { createConfigIO } from "./io.js";
-import { normalizeTalkSection } from "./talk.js";
+import { buildTalkConfigResponse, normalizeTalkSection } from "./talk.js";
 
 const envVar = (...parts: string[]) => parts.join("_");
 const elevenLabsApiKeyEnv = ["ELEVENLABS_API", "KEY"].join("_");
@@ -117,6 +117,103 @@ describe("talk normalization", () => {
           expect(snapshot.config.talk?.providers?.elevenlabs?.voiceId).toBe("voice-123");
           expect(snapshot.config.talk?.providers?.elevenlabs?.apiKey).toBe(elevenLabsApiKey);
           expect(snapshot.config.talk?.apiKey).toBe(elevenLabsApiKey);
+        },
+      );
+    });
+  });
+
+  describe("talk.tts field", () => {
+    it("preserves talk.tts with edge provider through normalization", () => {
+      const normalized = normalizeTalkSection({
+        tts: {
+          provider: "edge",
+          edge: { voice: "de-DE-KatjaNeural" },
+        },
+        interruptOnSpeech: true,
+      });
+
+      expect(normalized?.tts).toEqual({
+        provider: "edge",
+        edge: { voice: "de-DE-KatjaNeural" },
+      });
+      expect(normalized?.interruptOnSpeech).toBe(true);
+    });
+
+    it("preserves talk.tts with openai provider through normalization", () => {
+      const normalized = normalizeTalkSection({
+        tts: {
+          provider: "openai",
+          openai: { voice: "nova", model: "gpt-4o-mini-tts" },
+        },
+      });
+
+      expect(normalized?.tts).toEqual({
+        provider: "openai",
+        openai: { voice: "nova", model: "gpt-4o-mini-tts" },
+      });
+    });
+
+    it("allows talk.tts to coexist with legacy provider fields", () => {
+      const normalized = normalizeTalkSection({
+        voiceId: "voice-123",
+        modelId: "eleven_v3",
+        tts: {
+          provider: "edge",
+          edge: { voice: "en-US-MichelleNeural" },
+        },
+      });
+
+      expect(normalized?.tts?.provider).toBe("edge");
+      expect(normalized?.tts?.edge?.voice).toBe("en-US-MichelleNeural");
+      expect(normalized?.voiceId).toBe("voice-123");
+    });
+
+    it("includes talk.tts in buildTalkConfigResponse", () => {
+      const response = buildTalkConfigResponse({
+        tts: {
+          provider: "edge",
+          edge: { voice: "en-US-MichelleNeural" },
+        },
+        interruptOnSpeech: false,
+      });
+
+      expect(response?.tts).toEqual({
+        provider: "edge",
+        edge: { voice: "en-US-MichelleNeural" },
+      });
+      expect(response?.interruptOnSpeech).toBe(false);
+    });
+
+    it("preserves talk.tts with elevenlabs provider config", () => {
+      const normalized = normalizeTalkSection({
+        tts: {
+          provider: "elevenlabs",
+          elevenlabs: {
+            voiceId: "pMsXgVXv3BLzUgSXRplE",
+            modelId: "eleven_multilingual_v2",
+          },
+        },
+      });
+
+      expect(normalized?.tts?.provider).toBe("elevenlabs");
+      expect(normalized?.tts?.elevenlabs?.voiceId).toBe("pMsXgVXv3BLzUgSXRplE");
+    });
+
+    it("validates talk.tts via config schema", async () => {
+      await withTempConfig(
+        {
+          talk: {
+            tts: {
+              provider: "edge",
+              edge: { voice: "de-DE-KatjaNeural", lang: "de-DE" },
+            },
+          },
+        },
+        async (configPath) => {
+          const io = createConfigIO({ configPath });
+          const snapshot = await io.readConfigFileSnapshot();
+          expect(snapshot.config.talk?.tts?.provider).toBe("edge");
+          expect(snapshot.config.talk?.tts?.edge?.voice).toBe("de-DE-KatjaNeural");
         },
       );
     });

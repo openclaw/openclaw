@@ -48,6 +48,8 @@ export type CanvasHostConfig = {
   liveReload?: boolean;
 };
 
+import type { TtsConfig } from "./types.tts.js";
+
 export type TalkProviderConfig = {
   /** Default voice ID for the provider's Talk mode implementation. */
   voiceId?: string;
@@ -70,6 +72,16 @@ export type TalkConfig = {
   providers?: Record<string, TalkProviderConfig>;
   /** Stop speaking when user starts talking (default: true). */
   interruptOnSpeech?: boolean;
+
+  /**
+   * TTS configuration for Talk mode.
+   * Accepts the same schema as `messages.tts` (provider + provider config + fallback).
+   * Supports `provider: "edge"` (no API key), `"openai"`, or `"elevenlabs"`.
+   * When set, this config is surfaced to native clients via talk.config so they
+   * can use the standard TTS provider system instead of the default ElevenLabs
+   * streaming path.
+   */
+  tts?: TtsConfig;
 
   /**
    * Legacy ElevenLabs compatibility fields.

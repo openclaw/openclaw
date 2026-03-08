@@ -2,7 +2,7 @@
 read_when:
   - 在 macOS/iOS/Android 上实现 Talk 模式
   - 更改语音/TTS/中断行为
-summary: Talk 模式：使用 ElevenLabs TTS 进行连续语音对话
+summary: Talk 模式：使用可配置 TTS（Edge、OpenAI、ElevenLabs）进行连续语音对话
 title: Talk 模式
 x-i18n:
   generated_at: "2026-02-03T10:07:59Z"
@@ -20,7 +20,7 @@ Talk 模式是一个连续的语音对话循环：
 1. 监听语音
 2. 将转录文本发送到模型（main 会话，chat.send）
 3. 等待响应
-4. 通过 ElevenLabs 朗读（流式播放）
+4. 通过配置的 TTS 提供商朗读
 
 ## 行为（macOS）
 
@@ -56,6 +56,36 @@ Talk 模式是一个连续的语音对话循环：
 
 ## 配置（`~/.openclaw/openclaw.json`）
 
+### 使用 Edge TTS（免费，无需 API 密钥）
+
+```json5
+{
+  talk: {
+    tts: {
+      provider: "edge",
+      edge: { voice: "zh-CN-XiaoxiaoNeural", lang: "zh-CN" },
+    },
+    interruptOnSpeech: true,
+  },
+}
+```
+
+### 使用 OpenAI TTS
+
+```json5
+{
+  talk: {
+    tts: {
+      provider: "openai",
+      openai: { voice: "nova", model: "gpt-4o-mini-tts" },
+    },
+    interruptOnSpeech: true,
+  },
+}
+```
+
+### 使用 ElevenLabs（旧版格式，仍受支持）
+
 ```json5
 {
   talk: {
@@ -67,6 +97,21 @@ Talk 模式是一个连续的语音对话循环：
   },
 }
 ```
+
+### talk.tts 字段
+
+`talk.tts` 接受与 [`messages.tts`](/tts) 和 `channels.discord.voice.tts` 相同的配置格式。
+设置后，该配置通过 `talk.config` 传递给原生客户端，以便使用所选提供商进行 TTS 合成。
+
+`talk.tts.provider` 支持的值：
+
+- `"edge"` — Microsoft Edge 神经 TTS（无需 API 密钥，免费）
+- `"openai"` — OpenAI TTS（需要 `OPENAI_API_KEY`）
+- `"elevenlabs"` — ElevenLabs TTS（需要 `ELEVENLABS_API_KEY`）
+
+完整的提供商配置选项请参阅[文字转语音](/tts)。
+
+### 旧版 ElevenLabs 字段（仍受支持）
 
 默认值：
 
@@ -91,7 +136,7 @@ Talk 模式是一个连续的语音对话循环：
 
 - 需要语音 + 麦克风权限。
 - 使用 `chat.send` 针对会话键 `main`。
-- TTS 使用带有 `ELEVENLABS_API_KEY` 的 ElevenLabs 流式 API，并在 macOS/iOS/Android 上进行增量播放以降低延迟。
+- TTS 提供商通过 `talk.tts` 配置（Edge、OpenAI 或 ElevenLabs）。未设置 `talk.tts` 时，默认使用带有 `ELEVENLABS_API_KEY` 的 ElevenLabs 流式 API，并在 macOS/iOS/Android 上进行增量播放以降低延迟。
 - `eleven_v3` 的 `stability` 验证为 `0.0`、`0.5` 或 `1.0`；其他模型接受 `0..1`。
 - 设置时 `latency_tier` 验证为 `0..4`。
 - Android 支持 `pcm_16000`、`pcm_22050`、`pcm_24000` 和 `pcm_44100` 输出格式，用于低延迟 AudioTrack 流式传输。

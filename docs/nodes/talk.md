@@ -1,8 +1,9 @@
 ---
-summary: "Talk mode: continuous speech conversations with ElevenLabs TTS"
+summary: "Talk mode: continuous speech conversations with configurable TTS (Edge, OpenAI, ElevenLabs)"
 read_when:
   - Implementing Talk mode on macOS/iOS/Android
   - Changing voice/TTS/interrupt behavior
+  - Using Edge TTS or OpenAI TTS in Talk mode without ElevenLabs
 title: "Talk Mode"
 ---
 
@@ -13,7 +14,7 @@ Talk mode is a continuous voice conversation loop:
 1. Listen for speech
 2. Send transcript to the model (main session, chat.send)
 3. Wait for the response
-4. Speak it via ElevenLabs (streaming playback)
+4. Speak it via the configured TTS provider
 
 ## Behavior (macOS)
 
@@ -49,6 +50,36 @@ Supported keys:
 
 ## Config (`~/.openclaw/openclaw.json`)
 
+### Using Edge TTS (free, no API key)
+
+```json5
+{
+  talk: {
+    tts: {
+      provider: "edge",
+      edge: { voice: "en-US-MichelleNeural", lang: "en-US" },
+    },
+    interruptOnSpeech: true,
+  },
+}
+```
+
+### Using OpenAI TTS
+
+```json5
+{
+  talk: {
+    tts: {
+      provider: "openai",
+      openai: { voice: "nova", model: "gpt-4o-mini-tts" },
+    },
+    interruptOnSpeech: true,
+  },
+}
+```
+
+### Using ElevenLabs (legacy style, still supported)
+
 ```json5
 {
   talk: {
@@ -60,6 +91,40 @@ Supported keys:
   },
 }
 ```
+
+### Using ElevenLabs via talk.tts
+
+```json5
+{
+  talk: {
+    tts: {
+      provider: "elevenlabs",
+      elevenlabs: {
+        voiceId: "elevenlabs_voice_id",
+        modelId: "eleven_v3",
+        apiKey: "elevenlabs_api_key",
+      },
+    },
+    interruptOnSpeech: true,
+  },
+}
+```
+
+### talk.tts field
+
+`talk.tts` accepts the same schema as [`messages.tts`](/tts) and
+`channels.discord.voice.tts`. When set, it is surfaced to native clients
+via `talk.config` so they can use the chosen provider for TTS synthesis.
+
+Supported values for `talk.tts.provider`:
+
+- `"edge"` — Microsoft Edge neural TTS (no API key required, free)
+- `"openai"` — OpenAI TTS (requires `OPENAI_API_KEY`)
+- `"elevenlabs"` — ElevenLabs TTS (requires `ELEVENLABS_API_KEY`)
+
+See [Text-to-Speech](/tts) for full provider configuration options.
+
+### Legacy ElevenLabs fields (still supported)
 
 Defaults:
 
@@ -84,7 +149,7 @@ Defaults:
 
 - Requires Speech + Microphone permissions.
 - Uses `chat.send` against session key `main`.
-- TTS uses ElevenLabs streaming API with `ELEVENLABS_API_KEY` and incremental playback on macOS/iOS/Android for lower latency.
+- TTS provider is configured via `talk.tts` (Edge, OpenAI, or ElevenLabs). When `talk.tts` is not set, defaults to ElevenLabs streaming with `ELEVENLABS_API_KEY` and incremental playback on macOS/iOS/Android for lower latency.
 - `stability` for `eleven_v3` is validated to `0.0`, `0.5`, or `1.0`; other models accept `0..1`.
 - `latency_tier` is validated to `0..4` when set.
 - Android supports `pcm_16000`, `pcm_22050`, `pcm_24000`, and `pcm_44100` output formats for low-latency AudioTrack streaming.
