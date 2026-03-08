@@ -25,10 +25,12 @@ vi.mock("../pairing/pairing-store.js", () => ({
 describe("native command auth in groups", () => {
   function setup(params: {
     cfg?: OpenClawConfig;
+    telegramCfg?: TelegramAccountConfig;
     allowFrom?: string[];
     groupAllowFrom?: string[];
     useAccessGroups?: boolean;
     groupConfig?: Record<string, unknown>;
+    resolveGroupPolicy?: () => ChannelGroupPolicy;
   }) {
     const handlers: Record<string, (ctx: unknown) => Promise<void>> = {};
     const sendMessage = vi.fn().mockResolvedValue(undefined);
@@ -47,7 +49,7 @@ describe("native command auth in groups", () => {
       cfg: params.cfg ?? ({} as OpenClawConfig),
       runtime: {} as unknown as RuntimeEnv,
       accountId: "default",
-      telegramCfg: {} as TelegramAccountConfig,
+      telegramCfg: params.telegramCfg ?? ({} as TelegramAccountConfig),
       allowFrom: params.allowFrom ?? [],
       groupAllowFrom: params.groupAllowFrom ?? [],
       replyToMode: "off",
@@ -56,11 +58,13 @@ describe("native command auth in groups", () => {
       nativeEnabled: true,
       nativeSkillsEnabled: false,
       nativeDisabledExplicit: false,
-      resolveGroupPolicy: () =>
-        ({
-          allowlistEnabled: false,
-          allowed: true,
-        }) as ChannelGroupPolicy,
+      resolveGroupPolicy:
+        params.resolveGroupPolicy ??
+        (() =>
+          ({
+            allowlistEnabled: false,
+            allowed: true,
+          }) as ChannelGroupPolicy),
       resolveTelegramGroupConfig: () => ({
         groupConfig: params.groupConfig as undefined,
         topicConfig: undefined,
@@ -161,6 +165,83 @@ describe("native command auth in groups", () => {
     expect(sendMessage).toHaveBeenCalledWith(
       -100999,
       "You are not authorized to use this command.",
+      expect.objectContaining({ message_thread_id: 42 }),
+    );
+  });
+
+  it("keeps groupPolicy disabled enforced when commands.allowFrom is configured", async () => {
+    const { handlers, sendMessage } = setup({
+      cfg: {
+        commands: {
+          allowFrom: {
+            telegram: ["12345"],
+          },
+        },
+      } as OpenClawConfig,
+      telegramCfg: {
+        groupPolicy: "disabled",
+      } as TelegramAccountConfig,
+      useAccessGroups: true,
+      resolveGroupPolicy: () =>
+        ({
+          allowlistEnabled: false,
+          allowed: false,
+        }) as ChannelGroupPolicy,
+    });
+
+    const ctx = {
+      message: {
+        chat: { id: -100999, type: "supergroup", is_forum: true },
+        from: { id: 12345, username: "testuser" },
+        message_thread_id: 42,
+        message_id: 1,
+        date: 1700000000,
+      },
+      match: "",
+    };
+
+    await handlers.status?.(ctx);
+
+    expect(sendMessage).toHaveBeenCalledWith(
+      -100999,
+      "Telegram group commands are disabled.",
+      expect.objectContaining({ message_thread_id: 42 }),
+    );
+  });
+
+  it("keeps group chat allowlists enforced when commands.allowFrom is configured", async () => {
+    const { handlers, sendMessage } = setup({
+      cfg: {
+        commands: {
+          allowFrom: {
+            telegram: ["12345"],
+          },
+        },
+      } as OpenClawConfig,
+      useAccessGroups: true,
+      resolveGroupPolicy: () =>
+        ({
+          allowlistEnabled: true,
+          allowed: false,
+        }) as ChannelGroupPolicy,
+    });
+
+    const ctx = {
+      message: {
+        chat: { id: -100999, type: "supergroup", is_forum: true },
+        from: { id: 12345, username: "testuser" },
+        message_thread_id: 42,
+        message_id: 1,
+        date: 1700000000,
+      },
+      match: "",
+    };
+
+    await handlers.status?.(ctx);
+
+    expect(sendMessage).toHaveBeenCalledWith(
+      -100999,
+      "This group is not allowed.",
       expect.objectContaining({ message_thread_id: 42 }),
     );
   });
