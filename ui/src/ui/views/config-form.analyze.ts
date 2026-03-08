@@ -47,6 +47,16 @@ function normalizeSchemaNode(
     return { schema, unsupportedPaths: [pathLabel] };
   }
 
+  if (isAnySchema(schema)) {
+    return {
+      schema: {
+        ...schema,
+        type: "string",
+      },
+      unsupportedPaths: [],
+    };
+  }
+
   const nullable = Array.isArray(schema.type) && schema.type.includes("null");
   const type =
     schemaType(schema) ?? (schema.properties || schema.additionalProperties ? "object" : undefined);
@@ -221,6 +231,47 @@ function normalizeUnion(
     return secretInput;
   }
 
+  const primitiveTypes = new Set(["string", "number", "integer", "boolean"]);
+  const primitiveEntries = remaining.filter((entry) => {
+    const type = schemaType(entry);
+    return type ? primitiveTypes.has(type) : false;
+  });
+  if (primitiveEntries.length > 0 && primitiveEntries.length < remaining.length) {
+    if (primitiveEntries.length === 1) {
+      return normalizeSchemaNode(
+        {
+          ...schema,
+          ...primitiveEntries[0],
+          nullable,
+          anyOf: undefined,
+          oneOf: undefined,
+          allOf: undefined,
+        },
+        path,
+      );
+    }
+    return {
+      schema: {
+        ...schema,
+        anyOf: primitiveEntries,
+        oneOf: undefined,
+        allOf: undefined,
+        nullable,
+      },
+      unsupportedPaths: [],
+    };
+  }
+
+  const discriminatedObjectUnion = normalizeDiscriminatedObjectUnion(
+    schema,
+    path,
+    remaining,
+    nullable,
+  );
+  if (discriminatedObjectUnion) {
+    return discriminatedObjectUnion;
+  }
+
   if (literals.length > 0 && remaining.length === 0) {
     const unique: unknown[] = [];
     for (const value of literals) {
@@ -249,7 +300,6 @@ function normalizeUnion(
     return res;
   }
 
-  const primitiveTypes = new Set(["string", "number", "integer", "boolean"]);
   if (
     remaining.length > 0 &&
     literals.length === 0 &&
@@ -265,4 +315,78 @@ function normalizeUnion(
   }
 
   return null;
+}
+
+function normalizeDiscriminatedObjectUnion(
+  schema: JsonSchema,
+  path: Array<string | number>,
+  remaining: JsonSchema[],
+  nullable: boolean,
+): ConfigSchemaAnalysis | null {
+  if (remaining.length < 2 || remaining.some((entry) => schemaType(entry) !== "object")) {
+    return null;
+  }
+
+  const variantProps = remaining.map((entry) => entry.properties ?? {});
+  const discriminators = Object.keys(variantProps[0] ?? {}).filter((key) =>
+    variantProps.every((props) => typeof props[key]?.const === "string"),
+  );
+  const discriminator = discriminators[0];
+  if (!discriminator) {
+    return null;
+  }
+
+  const discriminatorValues = variantProps.map((props) => props[discriminator]?.const);
+  if (discriminatorValues.some((value): value is undefined => typeof value !== "string")) {
+    return null;
+  }
+
+  const mergedProperties: Record<string, JsonSchema> = {
+    [discriminator]: {
+      type: "string",
+      enum: Array.from(new Set(discriminatorValues)),
+    },
+  };
+
+  for (const props of variantProps) {
+    for (const [key, value] of Object.entries(props)) {
+      if (key === discriminator) {
+        continue;
+      }
+      const existing = mergedProperties[key];
+      if (!existing) {
+        mergedProperties[key] = value;
+        continue;
+      }
+      if (JSON.stringify(existing) === JSON.stringify(value)) {
+        continue;
+      }
+      mergedProperties[key] = {
+        anyOf: [existing, value],
+      };
+    }
+  }
+
+  const requiredLists = remaining.map((entry) => new Set(entry.required ?? []));
+  const required = Object.keys(mergedProperties).filter((key) =>
+    requiredLists.every((variantRequired) => variantRequired.has(key)),
+  );
+  const additionalProperties = remaining.every((entry) => entry.additionalProperties === false)
+    ? false
+    : undefined;
+
+  return normalizeSchemaNode(
+    {
+      ...schema,
+      type: "object",
+      properties: mergedProperties,
+      required,
+      additionalProperties,
+      nullable,
+      anyOf: undefined,
+      oneOf: undefined,
+      allOf: undefined,
+    },
+    path,
+  );
 }
