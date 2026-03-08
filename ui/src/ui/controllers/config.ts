@@ -217,3 +217,41 @@ export function removeConfigFormValue(state: ConfigState, path: Array<string | n
     state.configRaw = serializeConfigForm(base);
   }
 }
+
+export function findAgentConfigEntryIndex(
+  config: Record<string, unknown> | null,
+  agentId: string,
+): number {
+  const normalizedAgentId = agentId.trim();
+  if (!normalizedAgentId) {
+    return -1;
+  }
+  const list = (config as { agents?: { list?: unknown[] } } | null)?.agents?.list;
+  if (!Array.isArray(list)) {
+    return -1;
+  }
+  return list.findIndex(
+    (entry) =>
+      entry &&
+      typeof entry === "object" &&
+      "id" in entry &&
+      (entry as { id?: string }).id === normalizedAgentId,
+  );
+}
+
+export function ensureAgentConfigEntry(state: ConfigState, agentId: string): number {
+  const normalizedAgentId = agentId.trim();
+  if (!normalizedAgentId) {
+    return -1;
+  }
+  const source =
+    state.configForm ?? (state.configSnapshot?.config as Record<string, unknown> | null);
+  const existingIndex = findAgentConfigEntryIndex(source, normalizedAgentId);
+  if (existingIndex >= 0) {
+    return existingIndex;
+  }
+  const list = (source as { agents?: { list?: unknown[] } } | null)?.agents?.list;
+  const nextIndex = Array.isArray(list) ? list.length : 0;
+  updateConfigFormValue(state, ["agents", "list", nextIndex, "id"], normalizedAgentId);
+  return nextIndex;
+}
