@@ -1,5 +1,6 @@
-# Opt-in extension dependencies at build time (space-separated directory names).
-# Example: docker build --build-arg OPENCLAW_EXTENSIONS="diagnostics-otel matrix" .
+# Additional opt-in extension dependencies at build time (space-separated
+# directory names).
+# Example: docker build --build-arg OPENCLAW_EXTENSIONS="diagnostics-otel" .
 #
 # Multi-stage build produces a minimal runtime image without build tools,
 # source code, or Bun. Works with Docker, Buildx, and Podman.
@@ -10,6 +11,7 @@
 # Two runtime variants:
 #   Default (bookworm):      docker build .
 #   Slim (bookworm-slim):    docker build --build-arg OPENCLAW_VARIANT=slim .
+ARG OPENCLAW_BUNDLED_RUNTIME_EXTENSIONS="matrix"
 ARG OPENCLAW_EXTENSIONS=""
 ARG OPENCLAW_VARIANT=default
 ARG OPENCLAW_NODE_BOOKWORM_IMAGE="node:22-bookworm@sha256:b501c082306a4f528bc4038cbf2fbb58095d583d0419a259b2114b5ac53d12e9"
@@ -23,11 +25,13 @@ ARG OPENCLAW_NODE_BOOKWORM_SLIM_DIGEST="sha256:9c2c405e3ff9b9afb2873232d24bb0636
 # and replace the digest below with the current multi-arch manifest list entry.
 
 FROM ${OPENCLAW_NODE_BOOKWORM_IMAGE} AS ext-deps
+ARG OPENCLAW_BUNDLED_RUNTIME_EXTENSIONS
 ARG OPENCLAW_EXTENSIONS
 COPY extensions /tmp/extensions
 # Copy package.json for opted-in extensions so pnpm resolves their deps.
 RUN mkdir -p /out && \
-    for ext in $OPENCLAW_EXTENSIONS; do \
+    for ext in $OPENCLAW_BUNDLED_RUNTIME_EXTENSIONS $OPENCLAW_EXTENSIONS; do \
+      [ -n "$ext" ] || continue; \
       if [ -f "/tmp/extensions/$ext/package.json" ]; then \
         mkdir -p "/out/$ext" && \
         cp "/tmp/extensions/$ext/package.json" "/out/$ext/package.json"; \
