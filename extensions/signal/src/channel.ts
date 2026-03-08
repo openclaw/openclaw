@@ -261,6 +261,41 @@ export const signalPlugin: ChannelPlugin<ResolvedSignalAccount> = {
     chunker: (text, limit) => getSignalRuntime().channel.text.chunkText(text, limit),
     chunkerMode: "text",
     textChunkLimit: 4000,
+    sendPayload: async (ctx) => {
+      const text = ctx.payload.text ?? "";
+      const urls = ctx.payload.mediaUrls?.length
+        ? ctx.payload.mediaUrls
+        : ctx.payload.mediaUrl
+          ? [ctx.payload.mediaUrl]
+          : [];
+      if (!text && urls.length === 0) {
+        return { channel: "signal", messageId: "" };
+      }
+      if (urls.length > 0) {
+        let lastResult = await signalPlugin.outbound!.sendMedia!({
+          ...ctx,
+          text,
+          mediaUrl: urls[0],
+        });
+        for (let i = 1; i < urls.length; i++) {
+          lastResult = await signalPlugin.outbound!.sendMedia!({
+            ...ctx,
+            text: "",
+            mediaUrl: urls[i],
+          });
+        }
+        return lastResult;
+      }
+      const outbound = signalPlugin.outbound!;
+      const limit = outbound.textChunkLimit;
+      const chunks = limit && outbound.chunker ? outbound.chunker(text, limit) : [text];
+      if (!chunks.length) return { channel: "signal", messageId: "" };
+      let lastResult: Awaited<ReturnType<NonNullable<typeof outbound.sendText>>>;
+      for (const chunk of chunks) {
+        lastResult = await outbound.sendText!({ ...ctx, text: chunk });
+      }
+      return lastResult!;
+    },
     sendText: async ({ cfg, to, text, accountId, deps }) => {
       const result = await sendSignalOutbound({
         cfg,
