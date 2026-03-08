@@ -116,9 +116,29 @@ export function createGatewayTool(opts?: {
         // session, the live context belongs to the wrong session and would
         // misroute the post-restart reply. Fall back to extractDeliveryInfo()
         // so the server uses the correct routing for the target session.
+        // Canonicalize both keys before comparing so that aliases like "main"
+        // and "agent:main:main" are treated as the same session. Without this,
+        // an operator passing sessionKey="main" would be incorrectly treated as
+        // targeting a different session, suppressing live deliveryContext and
+        // falling back to the stale session store. See #18612.
+        const ownKey = opts?.agentSessionKey?.trim() || undefined;
+        const agentId = resolveAgentIdFromSessionKey(ownKey);
+        // Canonicalize each key using its OWN agentId — not the current session's.
+        // If a non-default agent passes sessionKey="main", resolveAgentIdFromSessionKey
+        // returns DEFAULT_AGENT_ID ("main") so "main" → "agent:main:main". Using the
+        // current session's agentId instead would map "main" to the current agent's main
+        // session, falsely treating a cross-agent request as same-session. See #18612.
+        const canonicalizeOwn = (k: string) =>
+          canonicalizeMainSessionAlias({ cfg: opts?.config, agentId, sessionKey: k });
+        const canonicalizeTarget = (k: string) =>
+          canonicalizeMainSessionAlias({
+            cfg: opts?.config,
+            agentId: resolveAgentIdFromSessionKey(k),
+            sessionKey: k,
+          });
         const isTargetingOtherSession =
           explicitSessionKey != null &&
-          explicitSessionKey !== (opts?.agentSessionKey?.trim() || undefined);
+          canonicalizeTarget(explicitSessionKey) !== (ownKey ? canonicalizeOwn(ownKey) : undefined);
         // Only forward live context when both channel and to are present.
         // Forwarding a partial context (channel without to) causes the server
         // to write a sentinel without `to`, and scheduleRestartSentinelWake
@@ -228,12 +248,26 @@ export function createGatewayTool(opts?: {
             ? Math.floor(params.restartDelayMs)
             : undefined;
         // Only forward live context when the target session is this agent's
-        // own session. When an explicit sessionKey points to a different
-        // session, omit deliveryContext so the server falls back to
-        // extractDeliveryInfo(sessionKey) which uses that session's routing.
+        // own session. Canonicalize both keys before comparing so that aliases
+        // like "main" and "agent:main:main" are treated as the same session.
+        // When an explicit sessionKey points to a different session, omit
+        // deliveryContext so the server falls back to extractDeliveryInfo(sessionKey).
+        const rpcOwnKey = opts?.agentSessionKey?.trim() || undefined;
+        const rpcAgentId = resolveAgentIdFromSessionKey(rpcOwnKey);
+        // Same cross-agent alias fix as the restart path: derive agentId from each key
+        // independently so that "main" resolves to the default agent, not the current one.
+        const rpcCanonicalizeOwn = (k: string) =>
+          canonicalizeMainSessionAlias({ cfg: opts?.config, agentId: rpcAgentId, sessionKey: k });
+        const rpcCanonicalizeTarget = (k: string) =>
+          canonicalizeMainSessionAlias({
+            cfg: opts?.config,
+            agentId: resolveAgentIdFromSessionKey(k),
+            sessionKey: k,
+          });
         const isTargetingOtherSession =
           explicitSessionKey != null &&
-          explicitSessionKey !== (opts?.agentSessionKey?.trim() || undefined);
+          rpcCanonicalizeTarget(explicitSessionKey) !==
+            (rpcOwnKey ? rpcCanonicalizeOwn(rpcOwnKey) : undefined);
         const deliveryContext = isTargetingOtherSession ? undefined : liveDeliveryContextForRpc;
         return { sessionKey, note, restartDelayMs, deliveryContext };
       };
