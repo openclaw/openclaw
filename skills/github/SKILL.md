@@ -43,6 +43,11 @@ Use the `gh` CLI to interact with GitHub repositories, issues, PRs, and CI.
 - Querying GitHub API for repository data
 - Listing repos, releases, or collaborators
 
+✅ **Also use this skill whenever you need to publish changes to GitHub**:
+
+- Prefer `gh pr create` + `gh pr merge` over directly pushing to `main`
+- Only push directly when the user explicitly asks for a direct push
+
 ## When NOT to Use
 
 ❌ **DON'T use this skill when:**
