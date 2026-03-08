@@ -44,7 +44,7 @@ import {
   formatSignalSenderDisplay,
   formatSignalSenderId,
   isSignalSenderAllowed,
-  looksLikeUuid,
+  isStrictUuid,
   normalizeSignalAllowRecipient,
   resolveSignalPeerId,
   resolveSignalRecipient,
@@ -113,16 +113,28 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
   }): string =>
     entry.isGroup ? `group:${entry.groupId ?? "unknown"}` : `dm:${entry.senderPeerId}`;
 
+  // Strict E.164: + followed by 7–15 digits (ITU-T E.164 range).
+  const STRICT_E164_RE = /^\+\d{7,15}$/;
+
   const normalizeCachedMessageAuthor = (raw?: string) => {
     const trimmed = raw?.trim();
     if (!trimmed) {
       return undefined;
     }
-    if (trimmed.toLowerCase().startsWith("uuid:")) {
-      const uuid = trimmed.slice("uuid:".length).trim();
-      return uuid ? `uuid:${uuid}` : undefined;
+    // Strip uuid: prefix and validate strictly.
+    const unprefixed = trimmed.toLowerCase().startsWith("uuid:")
+      ? trimmed.slice("uuid:".length).trim()
+      : undefined;
+    if (unprefixed !== undefined) {
+      return isStrictUuid(unprefixed) ? `uuid:${unprefixed}` : undefined;
     }
-    return looksLikeUuid(trimmed) ? `uuid:${trimmed}` : trimmed;
+    // Bare UUID without prefix.
+    if (isStrictUuid(trimmed)) {
+      return `uuid:${trimmed}`;
+    }
+    // E.164 phone number — normalize then validate.
+    const normalized = normalizeE164(trimmed);
+    return STRICT_E164_RE.test(normalized) ? normalized : undefined;
   };
 
   const rememberMessageAuthor = (params: {
@@ -902,18 +914,13 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
 
     // Record (conversation, messageId) -> senderRecipient so later explicit reply tags
     // ([[reply_to:<id>]]) can resolve a correct quote-author.
+    // SECURITY: Only cache from actual envelope senders — never from quote metadata,
+    // which is attacker-controlled and could poison the author cache.
     rememberMessageAuthor({
       conversationKey,
       messageId,
       senderRecipient,
     });
-    if (quoteTarget?.id && quoteTarget.author) {
-      rememberMessageAuthor({
-        conversationKey,
-        messageId: quoteTarget.id,
-        senderRecipient: quoteTarget.author,
-      });
-    }
 
     await inboundDebouncer.enqueue({
       senderName,

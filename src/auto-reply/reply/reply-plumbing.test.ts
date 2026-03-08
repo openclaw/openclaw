@@ -170,6 +170,28 @@ describe("applyReplyThreading auto-threading", () => {
     expect(result[0].replyToId).toBeNull();
   });
 
+  it("treats blank explicit replyToId as undefined so implicit threading still applies", () => {
+    const result = applyReplyThreading({
+      payloads: [{ text: "Hello", replyToId: "   " }],
+      replyToMode: "all",
+      currentMessageId: "42",
+    });
+
+    expect(result).toHaveLength(1);
+    expect(result[0].replyToId).toBe("42");
+  });
+
+  it("trims non-empty explicit replyToId before preserving it", () => {
+    const result = applyReplyThreading({
+      payloads: [{ text: "Hello", replyToId: "  abc-123  " }],
+      replyToMode: "all",
+      currentMessageId: "42",
+    });
+
+    expect(result).toHaveLength(1);
+    expect(result[0].replyToId).toBe("abc-123");
+  });
+
   it("threads only first payload when mode is 'first'", () => {
     const result = applyReplyThreading({
       payloads: [{ text: "A" }, { text: "B" }],
