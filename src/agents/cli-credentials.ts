@@ -176,7 +176,18 @@ function readCodexKeychainCredentials(options?: {
       },
     ).trim();
 
-    const parsed = JSON.parse(secret) as Record<string, unknown>;
+    if (!secret) {
+      return null;
+    }
+
+    let parsed: Record<string, unknown>;
+    try {
+      parsed = JSON.parse(secret) as Record<string, unknown>;
+    } catch (parseError) {
+      log.warn("Failed to parse codex credentials from keychain", { error: String(parseError) });
+      return null;
+    }
+
     const tokens = parsed.tokens as Record<string, unknown> | undefined;
     const accessToken = tokens?.access_token;
     const refreshToken = tokens?.refresh_token;
@@ -211,7 +222,8 @@ function readCodexKeychainCredentials(options?: {
       expires,
       accountId,
     };
-  } catch {
+  } catch (error) {
+    log.warn("Failed to read codex credentials from keychain", { error: String(error) });
     return null;
   }
 }
