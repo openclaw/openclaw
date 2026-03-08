@@ -42,16 +42,21 @@ export function createSessionsListTool(opts?: {
     execute: async (_toolCallId, args) => {
       const params = args as Record<string, unknown>;
       const cfg = loadConfig();
+      const requesterAgentId = opts?.agentSessionKey
+        ? resolveAgentIdFromSessionKey(opts.agentSessionKey)
+        : undefined;
       const { mainKey, alias, requesterInternalKey, restrictToSpawned } =
         resolveSandboxedSessionToolContext({
           cfg,
           agentSessionKey: opts?.agentSessionKey,
+          agentId: requesterAgentId,
           sandboxed: opts?.sandboxed,
         });
       const effectiveRequesterKey = requesterInternalKey ?? alias;
       const visibility = resolveEffectiveSessionToolsVisibility({
         cfg,
         sandboxed: opts?.sandboxed === true,
+        agentId: requesterAgentId,
       });
 
       const kindsRaw = readStringArrayParam(params, "kinds")?.map((value) =>

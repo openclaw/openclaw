@@ -44,11 +44,38 @@ describe("resolveEffectiveSessionToolsVisibility", () => {
     } as unknown as OpenClawConfig;
     expect(resolveEffectiveSessionToolsVisibility({ cfg, sandboxed: true })).toBe("all");
   });
+
+  it("uses per-agent sandbox clamp override when provided", () => {
+    const cfg = {
+      tools: { sessions: { visibility: "all" } },
+      agents: {
+        defaults: { sandbox: { sessionToolsVisibility: "spawned" } },
+        list: [{ id: "tony", sandbox: { sessionToolsVisibility: "all" } }],
+      },
+    } as unknown as OpenClawConfig;
+    expect(
+      resolveEffectiveSessionToolsVisibility({
+        cfg,
+        sandboxed: true,
+        agentId: "tony",
+      }),
+    ).toBe("all");
+  });
 });
 
 describe("sandbox session-tools context", () => {
   it("defaults sandbox visibility clamp to spawned", () => {
     expect(resolveSandboxSessionToolsVisibility({} as unknown as OpenClawConfig)).toBe("spawned");
+  });
+
+  it("prefers per-agent sandbox visibility override over defaults", () => {
+    const cfg = {
+      agents: {
+        defaults: { sandbox: { sessionToolsVisibility: "spawned" } },
+        list: [{ id: "tony", sandbox: { sessionToolsVisibility: "all" } }],
+      },
+    } as unknown as OpenClawConfig;
+    expect(resolveSandboxSessionToolsVisibility(cfg, "tony")).toBe("all");
   });
 
   it("restricts non-subagent sandboxed sessions to spawned visibility", () => {

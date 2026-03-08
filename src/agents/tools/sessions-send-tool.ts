@@ -47,10 +47,14 @@ export function createSessionsSendTool(opts?: {
       const params = args as Record<string, unknown>;
       const message = readStringParam(params, "message", { required: true });
       const cfg = loadConfig();
+      const requesterAgentId = opts?.agentSessionKey
+        ? resolveAgentIdFromSessionKey(opts.agentSessionKey)
+        : undefined;
       const { mainKey, alias, effectiveRequesterKey, restrictToSpawned } =
         resolveSandboxedSessionToolContext({
           cfg,
           agentSessionKey: opts?.agentSessionKey,
+          agentId: requesterAgentId,
           sandboxed: opts?.sandboxed,
         });
 
@@ -58,6 +62,7 @@ export function createSessionsSendTool(opts?: {
       const sessionVisibility = resolveEffectiveSessionToolsVisibility({
         cfg,
         sandboxed: opts?.sandboxed === true,
+        agentId: requesterAgentId,
       });
 
       const sessionKeyParam = readStringParam(params, "sessionKey");
