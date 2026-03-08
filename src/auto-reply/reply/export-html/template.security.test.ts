@@ -319,3 +319,25 @@ describe("export html security hardening", () => {
     expect(img?.getAttribute("src")).toBe(dataImage);
   });
 });
+
+describe("export html template placeholders", () => {
+  const requiredTokens = ["{{CSS}}", "{{SESSION_DATA}}", "{{MARKED_JS}}", "{{HIGHLIGHT_JS}}", "{{JS}}"];
+
+  it("contains each required placeholder exactly once (guards against formatter breakage)", () => {
+    for (const token of requiredTokens) {
+      const count = templateHtml.split(token).length - 1;
+      expect(count, `placeholder ${token} should appear exactly once`).toBe(1);
+    }
+  });
+
+  it("leaves no unreplaced placeholders after rendering", () => {
+    const html = templateHtml
+      .replace("{{CSS}}", "")
+      .replace("{{SESSION_DATA}}", "dGVzdA==")
+      .replace("{{MARKED_JS}}", "")
+      .replace("{{HIGHLIGHT_JS}}", "")
+      .replace("{{JS}}", "");
+
+    expect(html).not.toMatch(/\{\{[^}]+\}\}/);
+  });
+});
