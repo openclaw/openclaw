@@ -57,3 +57,36 @@ export function resetWorkspaceTemplateDirCache() {
   cachedTemplateDir = undefined;
   resolvingTemplateDir = undefined;
 }
+
+/**
+ * Valid segment template names.
+ */
+export const SEGMENT_TEMPLATES = ["clinic", "personal", "construction", "law-firm"] as const;
+export type SegmentTemplate = (typeof SEGMENT_TEMPLATES)[number];
+
+/**
+ * Resolve the directory for a segment template (base or overlay).
+ * Tries: {packageRoot}/templates/{segment}/ first, then cwd-relative.
+ */
+export async function resolveSegmentTemplateDir(
+  segment: string,
+  opts?: { cwd?: string; argv1?: string; moduleUrl?: string },
+): Promise<string | undefined> {
+  const moduleUrl = opts?.moduleUrl ?? import.meta.url;
+  const argv1 = opts?.argv1 ?? process.argv[1];
+  const cwd = opts?.cwd ?? process.cwd();
+
+  const packageRoot = await resolveOpenClawPackageRoot({ moduleUrl, argv1, cwd });
+  const candidates = [
+    packageRoot ? path.join(packageRoot, "templates", segment) : null,
+    cwd ? path.resolve(cwd, "templates", segment) : null,
+    path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../templates", segment),
+  ].filter(Boolean) as string[];
+
+  for (const candidate of candidates) {
+    if (await pathExists(candidate)) {
+      return candidate;
+    }
+  }
+  return undefined;
+}
