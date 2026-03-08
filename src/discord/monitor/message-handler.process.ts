@@ -190,7 +190,9 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
     } else {
       // Main channel: route through A2A flow
       const senderAgentId = getAgentIdForBot(author.id);
-      const mentionsUs = message.mentionedUsers?.some((user: User) => user.id === ctx.botUserId);
+      const mentionsUs = message.mentionedUsers?.some(
+        (user: { id: string }) => user.id === ctx.botUserId,
+      );
       if (senderAgentId && mentionsUs) {
         try {
           const freshCfg = loadConfig();
@@ -622,7 +624,9 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
   });
 
   // --- Discord draft stream (edit-based preview streaming) ---
-  const discordStreamMode = resolveDiscordPreviewStreamMode(discordConfig);
+  const discordStreamMode = resolveDiscordPreviewStreamMode(
+    discordConfig as { streamMode?: unknown; streaming?: unknown } | undefined,
+  );
   const draftMaxChars = Math.min(textLimit, 2000);
   const accountBlockStreamingEnabled =
     typeof discordConfig?.blockStreaming === "boolean"
@@ -864,7 +868,7 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
           rest: client.rest,
           runtime,
           replyToId,
-          replyToMode,
+          replyToMode: replyToMode === "off" ? undefined : replyToMode,
           textLimit,
           maxLinesPerMessage: discordConfig?.maxLinesPerMessage,
           tableMode,

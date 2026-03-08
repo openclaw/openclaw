@@ -402,6 +402,7 @@
     "oxfmt": "0.36.0",
     "oxlint": "^1.51.0",
     "oxlint-tsgolint": "^0.16.0",
+    "rolldown": "1.0.0-rc.7",
     "signal-utils": "0.21.1",
     "tsdown": "0.21.0",
     "tsx": "^4.21.0",

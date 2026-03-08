@@ -1,4 +1,6 @@
-import type { DiscordSlashCommandConfig } from "../../config/types.discord.js";
+export type DiscordSlashCommandConfig = {
+  ephemeral?: boolean;
+};
 
 export function resolveDiscordSlashCommandConfig(
   raw?: DiscordSlashCommandConfig,

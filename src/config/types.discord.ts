@@ -1,5 +1,6 @@
 import type { DiscordPluralKitConfig } from "../discord/pluralkit.js";
 import type {
+  BlockStreamingChunkConfig,
   BlockStreamingCoalesceConfig,
   DmPolicy,
   GroupPolicy,
@@ -312,6 +313,8 @@ export type DiscordAccountConfig = {
   blockStreaming?: boolean;
   /** Merge streamed block replies before sending. */
   blockStreamingCoalesce?: BlockStreamingCoalesceConfig;
+  /** Draft streaming chunk size configuration. */
+  draftChunk?: BlockStreamingChunkConfig;
   /**
    * Soft max line count per Discord message.
    * Discord clients can clip/collapse very tall messages; splitting by lines
