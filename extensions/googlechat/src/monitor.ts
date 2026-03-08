@@ -282,6 +282,7 @@ async function processMessageWithPipeline(params: {
     typingIndicator = "message";
   }
   let typingMessageName: string | undefined;
+  let cleanupDeletePromise: Promise<void> | undefined;
 
   // Start typing indicator (message mode only, reaction mode not supported with app auth)
   if (typingIndicator === "message") {
@@ -295,7 +296,7 @@ async function processMessageWithPipeline(params: {
         account,
         space: spaceId,
         text: `_${botName} is typing..._`,
-        thread: message.thread?.name,
+        thread: isGroup ? message.thread?.name : undefined,
       });
       typingMessageName = result?.messageName;
     } catch (err) {
@@ -310,35 +311,62 @@ async function processMessageWithPipeline(params: {
     accountId: route.accountId,
   });
 
-  await core.channel.reply.dispatchReplyWithBufferedBlockDispatcher({
-    ctx: ctxPayload,
-    cfg: config,
-    dispatcherOptions: {
-      ...prefixOptions,
-      deliver: async (payload) => {
-        await deliverGoogleChatReply({
-          payload,
-          account,
-          spaceId,
-          runtime,
-          core,
-          config,
-          statusSink,
-          typingMessageName,
-        });
-        // Only use typing message for first delivery
-        typingMessageName = undefined;
+  try {
+    await core.channel.reply.dispatchReplyWithBufferedBlockDispatcher({
+      ctx: ctxPayload,
+      cfg: config,
+      dispatcherOptions: {
+        ...prefixOptions,
+        deliver: async (payload) => {
+          await deliverGoogleChatReply({
+            payload,
+            account,
+            spaceId,
+            runtime,
+            core,
+            config,
+            statusSink,
+            typingMessageName,
+            isGroup,
+          });
+          typingMessageName = undefined;
+        },
+        onError: (err, info) => {
+          runtime.error?.(
+            `[${account.accountId}] Google Chat ${info.kind} reply failed: ${String(err)}`,
+          );
+        },
+        onCleanup: () => {
+          const nameToDelete = typingMessageName;
+          typingMessageName = undefined;
+          if (nameToDelete) {
+            cleanupDeletePromise = deleteGoogleChatMessage({
+              account,
+              messageName: nameToDelete,
+            }).catch((err) => {
+              runtime.error?.(`Failed deleting typing message on cleanup: ${String(err)}`);
+              typingMessageName = nameToDelete;
+            });
+          }
+        },
       },
-      onError: (err, info) => {
-        runtime.error?.(
-          `[${account.accountId}] Google Chat ${info.kind} reply failed: ${String(err)}`,
-        );
+      replyOptions: {
+        onModelSelected,
       },
-    },
-    replyOptions: {
-      onModelSelected,
-    },
-  });
+    });
+  } finally {
+    if (cleanupDeletePromise) {
+      await cleanupDeletePromise;
+    }
+    if (typingMessageName) {
+      try {
+        await deleteGoogleChatMessage({ account, messageName: typingMessageName });
+      } catch (err) {
+        runtime.error?.(`Failed cleaning up typing message: ${String(err)}`);
+      }
+      typingMessageName = undefined;
+    }
+  }
 }
 
 async function downloadAttachment(
@@ -372,9 +400,12 @@ async function deliverGoogleChatReply(params: {
   config: OpenClawConfig;
   statusSink?: (patch: { lastInboundAt?: number; lastOutboundAt?: number }) => void;
   typingMessageName?: string;
+  isGroup?: boolean;
 }): Promise<void> {
   const { payload, account, spaceId, runtime, core, config, statusSink, typingMessageName } =
     params;
+  // DMs don't support threading — passing a thread name causes API 400.
+  const thread = params.isGroup ? payload.replyToId : undefined;
   const mediaList = payload.mediaUrls?.length
     ? payload.mediaUrls
     : payload.mediaUrl
@@ -431,7 +462,7 @@ async function deliverGoogleChatReply(params: {
           account,
           space: spaceId,
           text: caption,
-          thread: payload.replyToId,
+          thread,
           attachments: [
             { attachmentUploadToken: upload.attachmentUploadToken, contentName: loaded.fileName },
           ],
@@ -463,12 +494,35 @@ async function deliverGoogleChatReply(params: {
             account,
             space: spaceId,
             text: chunk,
-            thread: payload.replyToId,
+            thread,
           });
         }
         statusSink?.({ lastOutboundAt: Date.now() });
       } catch (err) {
-        runtime.error?.(`Google Chat message send failed: ${String(err)}`);
+        runtime.error?.(`Google Chat message send failed (chunk ${i}): ${String(err)}`);
+        // Retry: when the update path failed (i === 0 + typingMessageName),
+        // the error is unrelated to threading so preserve the thread param.
+        // When the threaded send failed, drop thread (likely "invalid thread
+        // resource name" 400) — unthreaded is better than losing the message.
+        try {
+          const failedUpdate = i === 0 && !!typingMessageName;
+          if (failedUpdate) {
+            await deleteGoogleChatMessage({ account, messageName: typingMessageName }).catch(
+              () => {},
+            );
+          }
+          await new Promise((r) => setTimeout(r, 1000));
+          await sendGoogleChatMessage({
+            account,
+            space: spaceId,
+            text: chunk,
+            thread: failedUpdate ? thread : undefined,
+          });
+          statusSink?.({ lastOutboundAt: Date.now() });
+          continue;
+        } catch (retryErr) {
+          runtime.error?.(`Google Chat message retry failed (chunk ${i}): ${String(retryErr)}`);
+        }
       }
     }
   }
