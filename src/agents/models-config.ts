@@ -150,7 +150,9 @@ async function resolveProvidersForModelsJson(params: {
   const explicitProviders = cfg.models?.providers ?? {};
   const implicitProviders = await resolveImplicitProviders({ agentDir, explicitProviders });
   const authoritativeImplicitBaseUrlProviders = new Set<string>(
-    [...AUTHORITATIVE_IMPLICIT_BASEURL_PROVIDERS].filter((key) => Boolean(implicitProviders[key])),
+    [...AUTHORITATIVE_IMPLICIT_BASEURL_PROVIDERS].filter((key) =>
+      Boolean(implicitProviders?.[key]),
+    ),
   );
   const providers: Record<string, ProviderConfig> = mergeProviders({
     implicit: implicitProviders,
