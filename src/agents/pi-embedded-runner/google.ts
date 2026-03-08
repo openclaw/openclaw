@@ -57,6 +57,7 @@ const GOOGLE_SCHEMA_UNSUPPORTED_KEYWORDS = new Set([
   "uniqueItems",
   "minProperties",
   "maxProperties",
+  "propertyNames",
 ]);
 
 const INTER_SESSION_PREFIX_BASE = "[Inter-session message]";
