@@ -878,6 +878,7 @@ Primary reference:
 - `channels.telegram.network.autoSelectFamily`: override Node autoSelectFamily (true=enable, false=disable). Defaults to enabled on Node 22+, with WSL2 defaulting to disabled.
 - `channels.telegram.network.dnsResultOrder`: override DNS result order (`ipv4first` or `verbatim`). Defaults to `ipv4first` on Node 22+.
 - `channels.telegram.proxy`: proxy URL for Bot API calls (SOCKS/HTTP).
+- `channels.telegram.apiRoot`: custom Telegram Bot API base URL (grammY `apiRoot`). Defaults to `https://api.telegram.org`. Useful for self-hosted Bot API servers or custom routing proxies.
 - `channels.telegram.webhookUrl`: enable webhook mode (requires `channels.telegram.webhookSecret`).
 - `channels.telegram.webhookSecret`: webhook secret (required when webhookUrl is set).
 - `channels.telegram.webhookPath`: local webhook path (default `/telegram-webhook`).
@@ -900,7 +901,7 @@ Telegram-specific high-signal fields:
 - threading/replies: `replyToMode`
 - streaming: `streaming` (preview), `blockStreaming`
 - formatting/delivery: `textChunkLimit`, `chunkMode`, `linkPreview`, `responsePrefix`
-- media/network: `mediaMaxMb`, `timeoutSeconds`, `retry`, `network.autoSelectFamily`, `proxy`
+- media/network: `mediaMaxMb`, `timeoutSeconds`, `retry`, `network.autoSelectFamily`, `proxy`, `apiRoot`
 - webhook: `webhookUrl`, `webhookSecret`, `webhookPath`, `webhookHost`
 - actions/capabilities: `capabilities.inlineButtons`, `actions.sendMessage|editMessage|deleteMessage|reactions|sticker`
 - reactions: `reactionNotifications`, `reactionLevel`
