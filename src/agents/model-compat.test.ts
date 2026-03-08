@@ -355,7 +355,7 @@ describe("resolveForwardCompatModel", () => {
     expect(model?.maxTokens).toBe(128_000);
   });
 
-  it("resolves openai-codex gpt-5.4 via codex template fallback", () => {
+  it("resolves openai-codex gpt-5.4 via codex template fallback with native context window", () => {
     const registry = createRegistry({
       "openai-codex/gpt-5.2-codex": createOpenAICodexTemplateModel("gpt-5.2-codex"),
     });
@@ -363,7 +363,8 @@ describe("resolveForwardCompatModel", () => {
     expectResolvedForwardCompat(model, { provider: "openai-codex", id: "gpt-5.4" });
     expect(model?.api).toBe("openai-codex-responses");
     expect(model?.baseUrl).toBe("https://chatgpt.com/backend-api");
-    expect(model?.contextWindow).toBe(272_000);
+    // GPT-5.4 gets its native 1.05M context window, not the template's 272k
+    expect(model?.contextWindow).toBe(1_050_000);
     expect(model?.maxTokens).toBe(128_000);
   });
 

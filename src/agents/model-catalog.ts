@@ -39,12 +39,14 @@ const OPENAI_GPT54_PRO_MODEL_ID = "gpt-5.4-pro";
 const OPENAI_CODEX_GPT53_MODEL_ID = "gpt-5.3-codex";
 const OPENAI_CODEX_GPT53_SPARK_MODEL_ID = "gpt-5.3-codex-spark";
 const OPENAI_CODEX_GPT54_MODEL_ID = "gpt-5.4";
+const OPENAI_GPT54_CONTEXT_TOKENS = 1_050_000;
 const NON_PI_NATIVE_MODEL_PROVIDERS = new Set(["kilocode"]);
 
 type SyntheticCatalogFallback = {
   provider: string;
   id: string;
   templateIds: readonly string[];
+  patch?: Partial<ModelCatalogEntry>;
 };
 
 const SYNTHETIC_CATALOG_FALLBACKS: readonly SyntheticCatalogFallback[] = [
@@ -62,6 +64,7 @@ const SYNTHETIC_CATALOG_FALLBACKS: readonly SyntheticCatalogFallback[] = [
     provider: CODEX_PROVIDER,
     id: OPENAI_CODEX_GPT54_MODEL_ID,
     templateIds: ["gpt-5.3-codex", "gpt-5.2-codex"],
+    patch: { contextWindow: OPENAI_GPT54_CONTEXT_TOKENS },
   },
   {
     provider: CODEX_PROVIDER,
@@ -92,6 +95,7 @@ function applySyntheticCatalogFallbacks(models: ModelCatalogEntry[]): void {
       ...template,
       id: fallback.id,
       name: fallback.id,
+      ...fallback.patch,
     });
   }
 }

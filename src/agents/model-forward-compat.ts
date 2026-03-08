@@ -123,9 +123,17 @@ function resolveOpenAICodexForwardCompatModel(
 
   let templateIds: readonly string[];
   let eligibleProviders: Set<string>;
+  // GPT-5.4 on the Codex path supports the same native 1.05M context window as the
+  // direct OpenAI provider. Apply the correct capability patch so users see the full
+  // context window instead of inheriting the smaller template value.
+  let patch: Partial<Model<Api>> | undefined;
   if (lower === OPENAI_CODEX_GPT_54_MODEL_ID) {
     templateIds = OPENAI_CODEX_GPT_54_TEMPLATE_MODEL_IDS;
     eligibleProviders = CODEX_GPT54_ELIGIBLE_PROVIDERS;
+    patch = {
+      contextWindow: OPENAI_GPT_54_CONTEXT_TOKENS,
+      maxTokens: OPENAI_GPT_54_MAX_TOKENS,
+    };
   } else if (lower === OPENAI_CODEX_GPT_53_MODEL_ID) {
     templateIds = OPENAI_CODEX_TEMPLATE_MODEL_IDS;
     eligibleProviders = CODEX_GPT53_ELIGIBLE_PROVIDERS;
@@ -146,6 +154,7 @@ function resolveOpenAICodexForwardCompatModel(
       ...template,
       id: trimmedModelId,
       name: trimmedModelId,
+      ...patch,
     } as Model<Api>);
   }
 
@@ -158,8 +167,8 @@ function resolveOpenAICodexForwardCompatModel(
     reasoning: true,
     input: ["text", "image"],
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-    contextWindow: DEFAULT_CONTEXT_TOKENS,
-    maxTokens: DEFAULT_CONTEXT_TOKENS,
+    contextWindow: patch?.contextWindow ?? DEFAULT_CONTEXT_TOKENS,
+    maxTokens: patch?.maxTokens ?? DEFAULT_CONTEXT_TOKENS,
   } as Model<Api>);
 }
 
