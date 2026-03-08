@@ -651,6 +651,25 @@ export async function runHeartbeatOnce(opts: {
   }
   const { entry, sessionKey, storePath } = preflight.session;
   const previousUpdatedAt = entry?.updatedAt;
+
+  // Kai fork: Skip heartbeat if session was updated within last 5 minutes
+  // AND this is a regular interval heartbeat (not cron/exec/wake event).
+  // Prevents heartbeat from injecting into active conversations, burning
+  // context tokens, and derailing work.
+  // Original: Patch 28 (dist, Feb 27, 2026)
+  const isRegularHeartbeat = !opts.reason || opts.reason === "interval";
+  if (isRegularHeartbeat && previousUpdatedAt) {
+    const msSinceActivity = (opts.deps?.nowMs?.() ?? Date.now()) - previousUpdatedAt;
+    if (msSinceActivity < 5 * 60 * 1000) {
+      emitHeartbeatEvent({
+        status: "skipped",
+        reason: "active-conversation",
+        durationMs: (opts.deps?.nowMs?.() ?? Date.now()) - startedAt,
+      });
+      return { status: "skipped", reason: "active-conversation" };
+    }
+  }
+
   const delivery = resolveHeartbeatDeliveryTarget({ cfg, entry, heartbeat });
   const heartbeatAccountId = heartbeat?.accountId?.trim();
   if (delivery.reason === "unknown-account") {
