@@ -16,6 +16,27 @@ export type SkillInstallSpec = {
   targetDir?: string;
 };
 
+/**
+ * Declared permission scopes for a skill. Declarative only — not enforced at runtime.
+ * Agents can inspect these to apply proportionality judgments before invoking a skill.
+ */
+export type SkillPermissions = {
+  /** Skill may read files from the workspace or filesystem. */
+  readFiles?: boolean;
+  /** Skill may write or delete files. */
+  writeFiles?: boolean;
+  /** Skill may execute shell commands or subprocesses. */
+  execCommands?: boolean;
+  /** Skill may make outbound network requests. */
+  network?: boolean;
+  /** Skill may send messages to external channels (email, Discord, etc.). */
+  sendMessages?: boolean;
+  /** Skill may access or modify memory files (MEMORY.md, memory/*.md). */
+  memory?: boolean;
+  /** Free-form list of additional permission notes. */
+  notes?: string[];
+};
+
 export type OpenClawSkillMetadata = {
   always?: boolean;
   skillKey?: string;
@@ -30,6 +51,8 @@ export type OpenClawSkillMetadata = {
     config?: string[];
   };
   install?: SkillInstallSpec[];
+  /** Declared permissions this skill requires. Declarative only — not enforced. */
+  permissions?: SkillPermissions;
 };
 
 export type SkillInvocationPolicy = {
