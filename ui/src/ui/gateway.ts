@@ -222,9 +222,10 @@ export class GatewayBrowserClient {
     }
     authToken = explicitGatewayToken ?? deviceToken;
     const auth =
-      authToken || this.opts.password
+      authToken || this.opts.password || deviceToken
         ? {
             token: authToken,
+            deviceToken: deviceToken,
             password: this.opts.password,
           }
         : undefined;
@@ -242,6 +243,7 @@ export class GatewayBrowserClient {
     if (isSecureContext && deviceIdentity) {
       const signedAtMs = Date.now();
       const nonce = this.connectNonce ?? "";
+      const tokenForPayload = deviceToken ?? authToken ?? null;
       const payload = buildDeviceAuthPayload({
         deviceId: deviceIdentity.deviceId,
         clientId: this.opts.clientName ?? GATEWAY_CLIENT_NAMES.CONTROL_UI,
@@ -249,7 +251,7 @@ export class GatewayBrowserClient {
         role,
         scopes,
         signedAtMs,
-        token: authToken ?? null,
+        token: tokenForPayload,
         nonce,
       });
       const signature = await signDevicePayload(deviceIdentity.privateKey, payload);
