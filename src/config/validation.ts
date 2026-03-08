@@ -326,7 +326,13 @@ function resolveWorkspaceDirFromRawConfig(raw: unknown): string | undefined {
     : undefined;
 }
 
+function hasPluginEntryIssue(issues: ConfigValidationIssue[]): boolean {
+  return issues.some((issue) => issue.path.startsWith("plugins.entries."));
+}
+
 function parseUnrecognizedKeyNames(message: string): string[] {
+  // Coupled to Zod's current strict-object wording; if that changes,
+  // this helper degrades by skipping hints rather than emitting bad paths.
   const singular = /^Unrecognized key: "([^"]+)"$/.exec(message);
   if (singular) {
     return [singular[1]];
@@ -352,7 +358,7 @@ function resolveMisplacedPluginConfigHints(
 
   const rawPlugins = isRecord(raw.plugins) ? raw.plugins : null;
   const rawEntries = rawPlugins && isRecord(rawPlugins.entries) ? rawPlugins.entries : null;
-  if (!rawEntries) {
+  if (!rawEntries || !hasPluginEntryIssue(issues)) {
     return issues;
   }
 
@@ -361,12 +367,16 @@ function resolveMisplacedPluginConfigHints(
 
   const registry = loadPluginManifestRegistry({
     config: { ...agentsConfig, plugins: rawPlugins } as OpenClawConfig,
-    workspaceDir: workspaceDir ?? undefined,
+    workspaceDir,
     cache: false,
   });
-  const pluginSchemas = new Map(
-    registry.plugins.map((record) => [record.id, record.configSchema] as const),
-  );
+  const pluginSchemas = new Map<string, Record<string, unknown>>();
+  for (const record of registry.plugins) {
+    if (!record.configSchema || pluginSchemas.has(record.id)) {
+      continue;
+    }
+    pluginSchemas.set(record.id, record.configSchema);
+  }
 
   return issues.map((issue) => {
     const misplacedKeys = parseUnrecognizedKeyNames(issue.message);
