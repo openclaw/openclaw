@@ -4,6 +4,10 @@ import type { WizardPrompter } from "../wizard/prompts.js";
 import { normalizeLegacyOnboardAuthChoice } from "./auth-choice-legacy.js";
 import { applyAuthChoiceApiProviders } from "./auth-choice.apply.api-providers.js";
 import { normalizeApiKeyTokenProviderAuthChoice } from "./auth-choice.apply.api-providers.js";
+import { applyAuthChoiceAzureOpenAI } from "./auth-choice.apply.azure-openai.js";
+import { normalizeApiKeyTokenProviderAuthChoice } from "./auth-choice.apply.api-providers.js";
+import { applyAuthChoiceAzureOpenAI } from "./auth-choice.apply.azure-openai.js";
+import { applyAuthChoiceMiniMax } from "./auth-choice.apply.minimax.js";
 import { applyAuthChoiceOAuth } from "./auth-choice.apply.oauth.js";
 import { applyAuthChoiceLoadedPluginProvider } from "./auth-choice.apply.plugin-provider.js";
 import type { AuthChoice, OnboardOptions } from "./onboard-types.js";
@@ -32,8 +36,6 @@ export async function applyAuthChoice(
   const normalizedProviderAuthChoice = normalizeApiKeyTokenProviderAuthChoice({
     authChoice: normalizedAuthChoice,
     tokenProvider: params.opts?.tokenProvider,
-    config: params.config,
-    env: process.env,
   });
   const normalizedParams =
     normalizedProviderAuthChoice === params.authChoice
@@ -41,8 +43,10 @@ export async function applyAuthChoice(
       : { ...params, authChoice: normalizedProviderAuthChoice };
   const handlers: Array<(p: ApplyAuthChoiceParams) => Promise<ApplyAuthChoiceResult | null>> = [
     applyAuthChoiceLoadedPluginProvider,
+    applyAuthChoiceAzureOpenAI,
     applyAuthChoiceOAuth,
     applyAuthChoiceApiProviders,
+    applyAuthChoiceMiniMax,
   ];
 
   for (const handler of handlers) {

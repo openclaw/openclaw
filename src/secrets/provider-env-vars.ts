@@ -1,6 +1,7 @@
 import { BUNDLED_PROVIDER_AUTH_ENV_VAR_CANDIDATES } from "../plugins/bundled-provider-auth-env-vars.js";
 
 const CORE_PROVIDER_AUTH_ENV_VAR_CANDIDATES = {
+  "azure-openai-responses": ["AZURE_OPENAI_API_KEY"],
   chutes: ["CHUTES_OAUTH_TOKEN", "CHUTES_API_KEY"],
   voyage: ["VOYAGE_API_KEY"],
   groq: ["GROQ_API_KEY"],

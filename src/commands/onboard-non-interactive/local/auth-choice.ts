@@ -4,11 +4,21 @@ import type { SecretInput } from "../../../config/types.secrets.js";
 import type { RuntimeEnv } from "../../../runtime.js";
 import { resolveDefaultSecretProviderAlias } from "../../../secrets/ref-contract.js";
 import { normalizeSecretInputModeInput } from "../../auth-choice.apply-helpers.js";
-import { normalizeApiKeyTokenProviderAuthChoice } from "../../auth-choice.apply.api-providers.js";
+import {
+  applyAzureOpenAIConfig,
+  normalizeAzureOpenAIBaseUrl,
+  normalizeAzureOpenAIModelId,
+} from "../../azure-openai-config.js";
 import {
   applyAuthProfileConfig,
   applyCloudflareAiGatewayConfig,
+  applyMinimaxApiConfig,
+  applyMinimaxApiConfigCn,
+  applyZaiConfig,
   setCloudflareAiGatewayConfig,
+  setAzureOpenaiApiKey,
+  setMinimaxApiKey,
+  setZaiApiKey,
 } from "../../onboard-auth.js";
 import {
   applyCustomApiConfig,
@@ -17,6 +27,7 @@ import {
   resolveCustomProviderId,
 } from "../../onboard-custom.js";
 import type { AuthChoice, OnboardOptions } from "../../onboard-types.js";
+import { detectZaiEndpoint } from "../../zai-endpoint-detect.js";
 import { resolveNonInteractiveApiKey } from "../api-keys.js";
 import { applySimpleNonInteractiveApiKeyChoice } from "./auth-choice.api-key-providers.js";
 import { applyNonInteractivePluginProviderChoice } from "./auth-choice.plugin-providers.js";
@@ -32,13 +43,7 @@ export async function applyNonInteractiveAuthChoice(params: {
   runtime: RuntimeEnv;
   baseConfig: OpenClawConfig;
 }): Promise<OpenClawConfig | null> {
-  const { opts, runtime, baseConfig } = params;
-  const authChoice = normalizeApiKeyTokenProviderAuthChoice({
-    authChoice: params.authChoice,
-    tokenProvider: opts.tokenProvider,
-    config: params.nextConfig,
-    env: process.env,
-  });
+  const { authChoice, opts, runtime, baseConfig } = params;
   let nextConfig = params.nextConfig;
   const requestedSecretInputMode = normalizeSecretInputModeInput(opts.secretInputMode);
   if (opts.secretInputMode && !requestedSecretInputMode) {
@@ -157,24 +162,6 @@ export async function applyNonInteractiveAuthChoice(params: {
     return null;
   }
 
-  const pluginProviderChoice = await applyNonInteractivePluginProviderChoice({
-    nextConfig,
-    authChoice,
-    opts,
-    runtime,
-    baseConfig,
-    resolveApiKey: (input) =>
-      resolveApiKey({
-        ...input,
-        cfg: baseConfig,
-        runtime,
-      }),
-    toApiKeyCredential,
-  });
-  if (pluginProviderChoice !== undefined) {
-    return pluginProviderChoice;
-  }
-
   const simpleApiKeyChoice = await applySimpleNonInteractiveApiKeyChoice({
     authChoice,
     nextConfig,
@@ -189,6 +176,127 @@ export async function applyNonInteractiveAuthChoice(params: {
     return simpleApiKeyChoice;
   }
 
+  if (
+    authChoice === "zai-api-key" ||
+    authChoice === "zai-coding-global" ||
+    authChoice === "zai-coding-cn" ||
+    authChoice === "zai-global" ||
+    authChoice === "zai-cn"
+  ) {
+    const resolved = await resolveApiKey({
+      provider: "zai",
+      cfg: baseConfig,
+      flagValue: opts.zaiApiKey,
+      flagName: "--zai-api-key",
+      envVar: "ZAI_API_KEY",
+      runtime,
+    });
+    if (!resolved) {
+      return null;
+    }
+    if (
+      !(await maybeSetResolvedApiKey(resolved, (value) =>
+        setZaiApiKey(value, undefined, apiKeyStorageOptions),
+      ))
+    ) {
+      return null;
+    }
+    nextConfig = applyAuthProfileConfig(nextConfig, {
+      profileId: "zai:default",
+      provider: "zai",
+      mode: "api_key",
+    });
+
+    // Determine endpoint from authChoice or detect from the API key.
+    let endpoint: "global" | "cn" | "coding-global" | "coding-cn" | undefined;
+    let modelIdOverride: string | undefined;
+
+    if (authChoice === "zai-coding-global") {
+      endpoint = "coding-global";
+    } else if (authChoice === "zai-coding-cn") {
+      endpoint = "coding-cn";
+    } else if (authChoice === "zai-global") {
+      endpoint = "global";
+    } else if (authChoice === "zai-cn") {
+      endpoint = "cn";
+    }
+
+    if (endpoint) {
+      const detected = await detectZaiEndpoint({ apiKey: resolved.key, endpoint });
+      if (detected) {
+        modelIdOverride = detected.modelId;
+      }
+    } else {
+      const detected = await detectZaiEndpoint({ apiKey: resolved.key });
+      if (detected) {
+        endpoint = detected.endpoint;
+        modelIdOverride = detected.modelId;
+      } else {
+        endpoint = "global";
+      }
+    }
+
+    return applyZaiConfig(nextConfig, {
+      endpoint,
+      ...(modelIdOverride ? { modelId: modelIdOverride } : {}),
+    });
+  }
+
+  if (authChoice === "azure-openai-api-key") {
+    const resolved = await resolveApiKey({
+      provider: "azure-openai-responses",
+      cfg: baseConfig,
+      flagValue: opts.azureOpenaiApiKey,
+      flagName: "--azure-openai-api-key",
+      envVar: "AZURE_OPENAI_API_KEY",
+      envVarName: "AZURE_OPENAI_API_KEY",
+      runtime,
+    });
+    if (!resolved) {
+      return null;
+    }
+
+    const rawBaseUrl = opts.azureOpenaiBaseUrl?.trim();
+    const rawModelId = opts.azureOpenaiModelId?.trim();
+    if (!rawBaseUrl || !rawModelId) {
+      runtime.error(
+        [
+          'Auth choice "azure-openai-api-key" requires Azure base URL and model/deployment ID.',
+          "Use --azure-openai-base-url and --azure-openai-model-id.",
+        ].join("\n"),
+      );
+      runtime.exit(1);
+      return null;
+    }
+
+    let baseUrl: string;
+    let modelId: string;
+    let apiVersion: string | undefined;
+    try {
+      baseUrl = normalizeAzureOpenAIBaseUrl(rawBaseUrl);
+      modelId = normalizeAzureOpenAIModelId(rawModelId);
+      apiVersion = opts.azureOpenaiApiVersion?.trim() || undefined;
+    } catch (error) {
+      runtime.error(error instanceof Error ? error.message : String(error));
+      runtime.exit(1);
+      return null;
+    }
+
+    if (
+      !(await maybeSetResolvedApiKey(resolved, (value) =>
+        setAzureOpenaiApiKey(value, undefined, apiKeyStorageOptions),
+      ))
+    ) {
+      return null;
+    }
+    nextConfig = applyAuthProfileConfig(nextConfig, {
+      profileId: "azure-openai-responses:default",
+      provider: "azure-openai-responses",
+      mode: "api_key",
+    });
+
+    return applyAzureOpenAIConfig(nextConfig, { baseUrl, modelId, apiVersion });
+  }
   if (authChoice === "cloudflare-ai-gateway-api-key") {
     const accountId = opts.cloudflareAiGatewayAccountId?.trim() ?? "";
     const gatewayId = opts.cloudflareAiGatewayGatewayId?.trim() ?? "";
@@ -253,6 +361,38 @@ export async function applyNonInteractiveAuthChoice(params: {
     );
     runtime.exit(1);
     return null;
+  }
+
+  if (authChoice === "minimax-global-api" || authChoice === "minimax-cn-api") {
+    const isCn = authChoice === "minimax-cn-api";
+    const profileId = isCn ? "minimax:cn" : "minimax:global";
+    const resolved = await resolveApiKey({
+      provider: "minimax",
+      cfg: baseConfig,
+      flagValue: opts.minimaxApiKey,
+      flagName: "--minimax-api-key",
+      envVar: "MINIMAX_API_KEY",
+      runtime,
+      // Disable profile fallback: both regions share provider "minimax", so an existing
+      // Global profile key must not be silently reused when configuring CN (and vice versa).
+      allowProfile: false,
+    });
+    if (!resolved) {
+      return null;
+    }
+    if (
+      !(await maybeSetResolvedApiKey(resolved, (value) =>
+        setMinimaxApiKey(value, undefined, profileId, apiKeyStorageOptions),
+      ))
+    ) {
+      return null;
+    }
+    nextConfig = applyAuthProfileConfig(nextConfig, {
+      profileId,
+      provider: "minimax",
+      mode: "api_key",
+    });
+    return isCn ? applyMinimaxApiConfigCn(nextConfig) : applyMinimaxApiConfig(nextConfig);
   }
 
   if (authChoice === "custom-api-key") {
@@ -325,6 +465,24 @@ export async function applyNonInteractiveAuthChoice(params: {
       runtime.exit(1);
       return null;
     }
+  }
+
+  const pluginProviderChoice = await applyNonInteractivePluginProviderChoice({
+    nextConfig,
+    authChoice,
+    opts,
+    runtime,
+    baseConfig,
+    resolveApiKey: (input) =>
+      resolveApiKey({
+        ...input,
+        cfg: baseConfig,
+        runtime,
+      }),
+    toApiKeyCredential,
+  });
+  if (pluginProviderChoice !== undefined) {
+    return pluginProviderChoice;
   }
 
   if (

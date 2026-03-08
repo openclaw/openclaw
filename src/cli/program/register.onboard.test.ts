@@ -154,6 +154,27 @@ describe("registerOnboardCommand", () => {
     );
   });
 
+  it("forwards Azure OpenAI version/base/model flags", async () => {
+    await runCli([
+      "onboard",
+      "--azure-openai-base-url",
+      "https://example.openai.azure.com",
+      "--azure-openai-model-id",
+      "gpt-5.4",
+      "--azure-openai-api-version",
+      "2025-04-01-preview",
+    ]);
+
+    expect(setupWizardCommandMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        azureOpenaiBaseUrl: "https://example.openai.azure.com",
+        azureOpenaiModelId: "gpt-5.4",
+        azureOpenaiApiVersion: "2025-04-01-preview",
+      }),
+      runtime,
+    );
+  });
+
   it("reports errors via runtime on setup wizard command failures", async () => {
     setupWizardCommandMock.mockRejectedValueOnce(new Error("setup failed"));
 

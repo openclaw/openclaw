@@ -81,6 +81,18 @@ discovers it. Treat it as entitlement-dependent and experimental: Codex Spark is
 separate from GPT-5.4 `/fast`, and availability depends on the signed-in Codex /
 ChatGPT account.
 
+## Azure OpenAI
+
+Azure OpenAI has moved to a dedicated provider guide:
+
+- [Azure OpenAI](/providers/azure-openai)
+
+That page covers:
+
+- `--azure-openai-api-version` (default `v1` and preview versions)
+- Supported Azure host patterns
+- v1 and preview setup examples
+
 ### Transport default
 
 OpenClaw uses `pi-ai` for model streaming. For both `openai/*` and
