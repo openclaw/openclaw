@@ -15,8 +15,10 @@ import {
 import type { ToolResultFormat } from "../../pi-embedded-subscribe.js";
 import {
   extractAssistantText,
+  extractAssistantRawText,
   extractAssistantThinking,
   formatReasoningMessage,
+  containsDowngradedToolCallText,
 } from "../../pi-embedded-utils.js";
 import { isLikelyMutatingToolName } from "../../tool-mutation.js";
 
@@ -43,9 +45,32 @@ const RECOVERABLE_TOOL_ERROR_KEYWORDS = [
   "requires",
 ] as const;
 
+const NON_EXECUTING_REPLY_PATTERNS = [
+  /\bone sec\b/i,
+  /\bhold on\b/i,
+  /\bstill planning to\b/i,
+  /\bworking on it\b/i,
+  /\blet me (?:actually )?(?:check|do|look|read|run|test|open|inspect|verify|fetch|pull)\b/i,
+  /\bi(?:'|’)ll (?:check|do|look|read|run|test|open|inspect|verify|fetch|pull)\b.*\bnow\b/i,
+] as const;
+
+const NON_EXECUTING_REPLY_MAX_CHARS = 220;
+
 function isRecoverableToolError(error: string | undefined): boolean {
   const errorLower = (error ?? "").toLowerCase();
   return RECOVERABLE_TOOL_ERROR_KEYWORDS.some((keyword) => errorLower.includes(keyword));
+}
+
+function isLikelyNonExecutingPlaceholderReply(text: string): boolean {
+  const normalized = text.trim();
+  if (!normalized || normalized.length > NON_EXECUTING_REPLY_MAX_CHARS) {
+    return false;
+  }
+  const lineCount = normalized.split(/\r?\n/).filter(Boolean).length;
+  if (lineCount > 4) {
+    return false;
+  }
+  return NON_EXECUTING_REPLY_PATTERNS.some((pattern) => pattern.test(normalized));
 }
 
 function isVerboseToolDetailEnabled(level?: VerboseLevel): boolean {
@@ -193,6 +218,15 @@ export function buildEmbeddedRunPayloads(params: {
   }
 
   const fallbackAnswerText = params.lastAssistant ? extractAssistantText(params.lastAssistant) : "";
+  const rawAssistantText = params.lastAssistant
+    ? extractAssistantRawText(params.lastAssistant)
+    : "";
+  const hadStructuredToolActivity =
+    params.toolMetas.length > 0 || params.didSendViaMessagingTool === true;
+  const downgradedToolCallDetected =
+    !lastAssistantErrored &&
+    !hadStructuredToolActivity &&
+    containsDowngradedToolCallText(rawAssistantText);
   const shouldSuppressRawErrorText = (text: string) => {
     if (!lastAssistantErrored) {
       return false;
@@ -251,28 +285,56 @@ export function buildEmbeddedRunPayloads(params: {
         : []
   ).filter((text) => !shouldSuppressRawErrorText(text));
 
+  const placeholderReplyDetected =
+    !lastAssistantErrored &&
+    !hadStructuredToolActivity &&
+    answerTexts.length > 0 &&
+    answerTexts.every((text) => isLikelyNonExecutingPlaceholderReply(text));
+
   let hasUserFacingAssistantReply = false;
-  for (const text of answerTexts) {
-    const {
-      text: cleanedText,
-      mediaUrls,
-      audioAsVoice,
-      replyToId,
-      replyToTag,
-      replyToCurrent,
-    } = parseReplyDirectives(text);
-    if (!cleanedText && (!mediaUrls || mediaUrls.length === 0) && !audioAsVoice) {
-      continue;
+  if (!downgradedToolCallDetected && !placeholderReplyDetected) {
+    for (const text of answerTexts) {
+      const {
+        text: cleanedText,
+        mediaUrls,
+        audioAsVoice,
+        replyToId,
+        replyToTag,
+        replyToCurrent,
+      } = parseReplyDirectives(text);
+      if (!cleanedText && (!mediaUrls || mediaUrls.length === 0) && !audioAsVoice) {
+        continue;
+      }
+      replyItems.push({
+        text: cleanedText,
+        media: mediaUrls,
+        audioAsVoice,
+        replyToId,
+        replyToTag,
+        replyToCurrent,
+      });
+      hasUserFacingAssistantReply = true;
     }
+  }
+
+  if (downgradedToolCallDetected) {
     replyItems.push({
-      text: cleanedText,
+      text: "⚠️ The model emitted a text-form tool call instead of executing a real tool. No tool action was actually run. Please retry, or switch to a provider/model with reliable tool calling.",
+      isError: true,
+    });
+  } else if (placeholderReplyDetected) {
+    const { mediaUrls, audioAsVoice, replyToId, replyToTag, replyToCurrent } = parseReplyDirectives(
+      answerTexts[0] ?? "",
+    );
+    replyItems.push({
+      text: "⚠️ The agent returned a placeholder reply without starting any real tool work. Please retry, or switch to a provider/model with reliable tool execution.",
       media: mediaUrls,
       audioAsVoice,
       replyToId,
       replyToTag,
       replyToCurrent,
+      isError: true,
     });
-    hasUserFacingAssistantReply = true;
   }
 
   if (params.lastToolError) {

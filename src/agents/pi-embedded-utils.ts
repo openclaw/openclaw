@@ -198,6 +198,22 @@ export function stripDowngradedToolCallText(text: string): string {
   return cleaned.trim();
 }
 
+export function containsDowngradedToolCallText(text: string): boolean {
+  if (!text) {
+    return false;
+  }
+  return /\[Tool (?:Call|Result):?/i.test(text) || /\[Tool Result for ID/i.test(text);
+}
+
+export function extractAssistantRawText(msg: AssistantMessage): string {
+  return (
+    extractTextFromChatContent(msg.content, {
+      joinWith: "\n",
+      normalizeText: (text) => text,
+    }) ?? ""
+  );
+}
+
 /**
  * Strip thinking tags and their content from text.
  * This is a safety net for cases where the model outputs <think> tags

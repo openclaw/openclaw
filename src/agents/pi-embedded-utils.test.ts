@@ -1,6 +1,8 @@
 import type { AssistantMessage } from "@mariozechner/pi-ai";
 import { describe, expect, it } from "vitest";
 import {
+  containsDowngradedToolCallText,
+  extractAssistantRawText,
   extractAssistantText,
   formatReasoningMessage,
   promoteThinkingTagsToBlocks,
@@ -29,6 +31,27 @@ function makeAssistantMessage(
 }
 
 describe("extractAssistantText", () => {
+  it("extracts raw assistant text without stripping downgraded tool markers", () => {
+    const msg = makeAssistantMessage({
+      role: "assistant",
+      content: [
+        {
+          type: "text",
+          text: `[Tool Call: read (ID: toolu_1)]\nArguments: {"path":"notes.md"}`,
+        },
+      ],
+      timestamp: Date.now(),
+    });
+
+    expect(extractAssistantRawText(msg)).toContain("[Tool Call: read");
+  });
+
+  it("detects downgraded tool call markers", () => {
+    expect(containsDowngradedToolCallText(`[Tool Call: read (ID: toolu_1)]`)).toBe(true);
+    expect(containsDowngradedToolCallText(`[Tool Result for ID toolu_1] ok`)).toBe(true);
+    expect(containsDowngradedToolCallText("normal assistant reply")).toBe(false);
+  });
+
   it("strips tool-only Minimax invocation XML from text", () => {
     const cases = [
       `<invoke name="Bash">

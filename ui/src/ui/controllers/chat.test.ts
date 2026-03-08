@@ -278,6 +278,50 @@ describe("handleChatEvent", () => {
     expect(state.chatMessages).toEqual([existingMessage, partialMessage]);
   });
 
+  it("appends an inline chat error message for failed runs", () => {
+    const state = createState({
+      sessionKey: "main",
+      chatRunId: "run-1",
+      chatStream: "Working...",
+      chatStreamStartedAt: 100,
+    });
+    const payload: ChatEventPayload = {
+      runId: "run-1",
+      sessionKey: "main",
+      state: "error",
+      errorMessage: "LLM request timed out.",
+    };
+
+    expect(handleChatEvent(state, payload)).toBe("error");
+    expect(state.chatRunId).toBe(null);
+    expect(state.chatStream).toBe(null);
+    expect(state.lastError).toBe("LLM request timed out.");
+    expect(state.chatMessages).toHaveLength(1);
+    expect(state.chatMessages[0]).toMatchObject({
+      role: "assistant",
+      content: [{ type: "text", text: "⚠️ LLM request timed out." }],
+    });
+  });
+
+  it("does not double-prefix warning markers for failed runs", () => {
+    const state = createState({
+      sessionKey: "main",
+      chatRunId: "run-1",
+    });
+    const payload: ChatEventPayload = {
+      runId: "run-1",
+      sessionKey: "main",
+      state: "error",
+      errorMessage: "⚠️ API rate limit reached. Please try again later.",
+    };
+
+    expect(handleChatEvent(state, payload)).toBe("error");
+    expect(state.chatMessages[0]).toMatchObject({
+      role: "assistant",
+      content: [{ type: "text", text: "⚠️ API rate limit reached. Please try again later." }],
+    });
+  });
+
   it("falls back to streamed partial when aborted payload message is invalid", () => {
     const existingMessage = {
       role: "user",
