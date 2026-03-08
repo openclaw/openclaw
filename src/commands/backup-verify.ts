@@ -67,6 +67,9 @@ function normalizeArchivePath(entryPath: string, label: string): string {
   if (trimmed.startsWith("/") || WINDOWS_ABSOLUTE_ARCHIVE_PATH_RE.test(trimmed)) {
     throw new Error(`${label} must be relative: ${entryPath}`);
   }
+  if (trimmed.includes("\\")) {
+    throw new Error(`${label} must use forward slashes: ${entryPath}`);
+  }
   if (trimmed.split("/").some((segment) => segment === "." || segment === "..")) {
     throw new Error(`${label} contains path traversal segments: ${entryPath}`);
   }
@@ -260,6 +263,19 @@ function formatResult(result: BackupVerifyResult): string {
   ].join("\n");
 }
 
+function findDuplicateNormalizedEntryPath(
+  entries: Array<{ normalized: string }>,
+): string | undefined {
+  const seen = new Set<string>();
+  for (const entry of entries) {
+    if (seen.has(entry.normalized)) {
+      return entry.normalized;
+    }
+    seen.add(entry.normalized);
+  }
+  return undefined;
+}
+
 export async function backupVerifyCommand(
   runtime: RuntimeEnv,
   opts: BackupVerifyOptions,
@@ -279,6 +295,10 @@ export async function backupVerifyCommand(
   const manifestMatches = entries.filter((entry) => isRootManifestEntry(entry.normalized));
   if (manifestMatches.length !== 1) {
     throw new Error(`Expected exactly one backup manifest entry, found ${manifestMatches.length}.`);
+  }
+  const duplicateEntryPath = findDuplicateNormalizedEntryPath(entries);
+  if (duplicateEntryPath) {
+    throw new Error(`Archive contains duplicate entry path: ${duplicateEntryPath}`);
   }
   const manifestEntryPath = manifestMatches[0]?.raw;
   if (!manifestEntryPath) {
