@@ -54,8 +54,6 @@ function expectLaunchdSupervisedWithoutKickstart(params?: { launchJobLabel?: str
   process.env.OPENCLAW_LAUNCHD_LABEL = "ai.openclaw.gateway";
   const result = restartGatewayProcessWithFreshPid();
   expect(result.mode).toBe("supervised");
-  // launchd path no longer calls triggerOpenClawRestart — it relies on
-  // KeepAlive=true to restart the service after the caller exits.
   expect(triggerOpenClawRestartMock).not.toHaveBeenCalled();
   expect(spawnMock).not.toHaveBeenCalled();
 }
@@ -74,7 +72,6 @@ describe("restartGatewayProcessWithFreshPid", () => {
     process.env.LAUNCH_JOB_LABEL = "ai.openclaw.gateway";
     const result = restartGatewayProcessWithFreshPid();
     expect(result.mode).toBe("supervised");
-    // launchd relies on KeepAlive=true — no kickstart call needed.
     expect(triggerOpenClawRestartMock).not.toHaveBeenCalled();
     expect(spawnMock).not.toHaveBeenCalled();
   });
