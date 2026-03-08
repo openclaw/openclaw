@@ -362,6 +362,7 @@ export function renderApp(state: AppViewState) {
                 onSessionKeyChange: (next) => {
                   state.sessionKey = next;
                   state.chatMessage = "";
+                  state.resetChatInputHistoryNavigation();
                   state.resetToolStream();
                   state.applySettings({
                     ...state.settings,
@@ -958,6 +959,7 @@ export function renderApp(state: AppViewState) {
                 onSessionKeyChange: (next) => {
                   state.sessionKey = next;
                   state.chatMessage = "";
+                  state.resetChatInputHistoryNavigation();
                   state.chatAttachments = [];
                   state.chatStream = null;
                   state.chatStreamStartedAt = null;
@@ -1008,7 +1010,8 @@ export function renderApp(state: AppViewState) {
                   });
                 },
                 onChatScroll: (event) => state.handleChatScroll(event),
-                onDraftChange: (next) => (state.chatMessage = next),
+                onDraftChange: (next) => state.handleChatDraftChange(next),
+                onHistoryKeydown: (input) => state.handleChatInputHistoryKey(input),
                 attachments: state.chatAttachments,
                 onAttachmentsChange: (next) => (state.chatAttachments = next),
                 onSend: () => state.handleSendChat(),

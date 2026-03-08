@@ -6,6 +6,8 @@ import {
   renderReadingIndicatorGroup,
   renderStreamingGroup,
 } from "../chat/grouped-render.ts";
+import { CHAT_HISTORY_RENDER_LIMIT } from "../chat/history-limits.ts";
+import type { ChatInputHistoryKeyInput, ChatInputHistoryKeyResult } from "../chat/input-history.ts";
 import { normalizeMessage, normalizeRoleForGrouping } from "../chat/message-normalizer.ts";
 import { icons } from "../icons.ts";
 import { detectTextDirection } from "../text-direction.ts";
@@ -74,6 +76,7 @@ export type ChatProps = {
   onToggleFocusMode: () => void;
   onDraftChange: (next: string) => void;
   onSend: () => void;
+  onHistoryKeydown?: (input: ChatInputHistoryKeyInput) => ChatInputHistoryKeyResult;
   onAbort?: () => void;
   onQueueRemove: (id: string) => void;
   onNewSession: () => void;
@@ -89,6 +92,20 @@ const FALLBACK_TOAST_DURATION_MS = 8000;
 function adjustTextareaHeight(el: HTMLTextAreaElement) {
   el.style.height = "auto";
   el.style.height = `${el.scrollHeight}px`;
+}
+
+function restoreHistoryCaret(target: HTMLTextAreaElement, direction: "up" | "down") {
+  requestAnimationFrame(() => {
+    if (document.activeElement !== target) {
+      return;
+    }
+    // History navigation updates the textarea value programmatically, so sync its
+    // height in the same post-render step as caret restoration.
+    adjustTextareaHeight(target);
+    const caret = direction === "up" ? 0 : target.value.length;
+    target.selectionStart = caret;
+    target.selectionEnd = caret;
+  });
 }
 
 function renderCompactionIndicator(status: CompactionIndicatorStatus | null | undefined) {
@@ -427,11 +444,45 @@ export function renderChat(props: ChatProps) {
           <label class="field chat-compose__field">
             <span>Message</span>
             <textarea
-              ${ref((el) => el && adjustTextareaHeight(el as HTMLTextAreaElement))}
+              ${ref((el) => {
+                if (!el) {
+                  return;
+                }
+                adjustTextareaHeight(el as HTMLTextAreaElement);
+              })}
               .value=${props.draft}
               dir=${detectTextDirection(props.draft)}
               ?disabled=${!props.connected}
               @keydown=${(e: KeyboardEvent) => {
+                if (e.key === "ArrowUp" || e.key === "ArrowDown") {
+                  const handleHistoryKeydown = props.onHistoryKeydown;
+                  if (!handleHistoryKeydown) {
+                    return;
+                  }
+                  const target = e.target as HTMLTextAreaElement;
+                  const result = handleHistoryKeydown({
+                    key: e.key,
+                    selectionStart: target.selectionStart,
+                    selectionEnd: target.selectionEnd,
+                    valueLength: target.value.length,
+                    altKey: e.altKey,
+                    ctrlKey: e.ctrlKey,
+                    metaKey: e.metaKey,
+                    shiftKey: e.shiftKey,
+                    isComposing: e.isComposing,
+                    keyCode: e.keyCode,
+                  });
+                  if (!result.handled) {
+                    return;
+                  }
+                  if (result.preventDefault) {
+                    e.preventDefault();
+                  }
+                  if (result.restoreCaret) {
+                    restoreHistoryCaret(target, result.restoreCaret);
+                  }
+                  return;
+                }
                 if (e.key !== "Enter") {
                   return;
                 }
@@ -479,8 +530,6 @@ export function renderChat(props: ChatProps) {
     </section>
   `;
 }
-
-const CHAT_HISTORY_RENDER_LIMIT = 200;
 
 function groupMessages(items: ChatItem[]): Array<ChatItem | MessageGroup> {
   const result: Array<ChatItem | MessageGroup> = [];
