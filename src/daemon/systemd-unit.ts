@@ -61,7 +61,7 @@ export function buildSystemdUnit({
     `ExecStart=${execStart}`,
     "Restart=always",
     "RestartSec=5",
-    watchdog ? "NotifyAccess=main" : null,
+    watchdog ? "NotifyAccess=all" : null,
     watchdog ? "WatchdogSec=90" : null,
     "TimeoutStopSec=30",
     "TimeoutStartSec=30",
