@@ -41,6 +41,34 @@ function isPersistentBrowserProfileMutation(method: string, path: string): boole
   return method === "DELETE" && /^\/profiles\/[^/]+$/.test(normalizedPath);
 }
 
+const ABORT_AWARE_LOCAL_ACT_KINDS = new Set([
+  "click",
+  "type",
+  "press",
+  "hover",
+  "scrollIntoView",
+  "drag",
+  "select",
+  "fill",
+  "resize",
+  "wait",
+  "evaluate",
+  "close",
+]);
+
+function shouldWrapLocalBrowserRequestWithTimeout(params: { path: string; body?: unknown }) {
+  const path = normalizeBrowserRequestPath(params.path);
+  if (path === "/navigate" || path === "/pdf") {
+    return true;
+  }
+  if (path !== "/act" || !params.body || typeof params.body !== "object") {
+    return false;
+  }
+  const kind =
+    "kind" in params.body && typeof params.body.kind === "string" ? params.body.kind.trim() : "";
+  return ABORT_AWARE_LOCAL_ACT_KINDS.has(kind);
+}
+
 function resolveRequestedProfile(params: {
   query?: Record<string, unknown>;
   body?: unknown;
@@ -276,20 +304,30 @@ export const browserHandlers: GatewayRequestHandlers = {
       return;
     }
 
+    const shouldApplyLocalTimeout =
+      timeoutMs !== undefined && shouldWrapLocalBrowserRequestWithTimeout({ path, body });
+
     let result;
     try {
-      result = await withTimeout(
-        async (signal) =>
-          await dispatcher.dispatch({
+      result = shouldApplyLocalTimeout
+        ? await withTimeout(
+            async (signal) =>
+              await dispatcher.dispatch({
+                method: methodRaw,
+                path,
+                query,
+                body,
+                signal,
+              }),
+            timeoutMs,
+            "browser request",
+          )
+        : await dispatcher.dispatch({
             method: methodRaw,
             path,
             query,
             body,
-            signal,
-          }),
-        timeoutMs,
-        "browser request",
-      );
+          });
     } catch (err) {
       respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, String(err)));
       return;
