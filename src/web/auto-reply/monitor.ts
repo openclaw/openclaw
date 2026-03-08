@@ -5,6 +5,7 @@ import { DEFAULT_GROUP_HISTORY_LIMIT } from "../../auto-reply/reply/history.js";
 import { formatCliCommand } from "../../cli/command-format.js";
 import { waitForever } from "../../cli/wait.js";
 import { loadConfig } from "../../config/config.js";
+import { createConnectedChannelStatusPatch } from "../../gateway/channel-status-patches.js";
 import { logVerbose } from "../../globals.js";
 import { formatDurationPrecise } from "../../infra/format-time/format-duration.ts";
 import { enqueueSystemEvent } from "../../infra/system-events.js";
@@ -12,7 +13,7 @@ import { registerUnhandledRejectionHandler } from "../../infra/unhandled-rejecti
 import { getChildLogger } from "../../logging.js";
 import { resolveAgentRoute } from "../../routing/resolve-route.js";
 import { defaultRuntime, type RuntimeEnv } from "../../runtime.js";
-import { resolveWhatsAppAccount } from "../accounts.js";
+import { resolveWhatsAppAccount, resolveWhatsAppMediaMaxBytes } from "../accounts.js";
 import { setActiveWebListener } from "../active-listener.js";
 import { monitorWebInbox } from "../inbound.js";
 import {
@@ -23,7 +24,6 @@ import {
   sleepWithAbort,
 } from "../reconnect.js";
 import { formatError, getWebAuthAgeMs, readWebSelfId } from "../session.js";
-import { DEFAULT_WEB_MEDIA_BYTES } from "./constants.js";
 import { whatsappHeartbeatLog, whatsappLog } from "./loggers.js";
 import { buildMentionConfig } from "./mentions.js";
 import { createEchoTracker } from "./monitor/echo.js";
@@ -93,11 +93,7 @@ export async function monitorWebChannel(
     },
   } satisfies ReturnType<typeof loadConfig>;
 
-  const configuredMaxMb = cfg.agents?.defaults?.mediaMaxMb;
-  const maxMediaBytes =
-    typeof configuredMaxMb === "number" && configuredMaxMb > 0
-      ? configuredMaxMb * 1024 * 1024
-      : DEFAULT_WEB_MEDIA_BYTES;
+  const maxMediaBytes = resolveWhatsAppMediaMaxBytes(account);
   const heartbeatSeconds = resolveHeartbeatSeconds(cfg, tuning.heartbeatSeconds);
   const reconnectPolicy = resolveReconnectPolicy(cfg, tuning.reconnect);
   const baseMentionConfig = buildMentionConfig(cfg);
@@ -215,9 +211,7 @@ export async function monitorWebChannel(
       },
     });
 
-    status.connected = true;
-    status.lastConnectedAt = Date.now();
-    status.lastEventAt = status.lastConnectedAt;
+    Object.assign(status, createConnectedChannelStatusPatch());
     status.lastError = null;
     emitStatus();
 

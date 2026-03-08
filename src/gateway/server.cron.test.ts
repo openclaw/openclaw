@@ -151,6 +151,35 @@ async function addMainSystemEventCronJob(params: { ws: WebSocket; name: string; 
   return expectCronJobIdFromResponse(response);
 }
 
+async function addWebhookCronJob(params: {
+  ws: WebSocket;
+  name: string;
+  sessionTarget?: "main" | "isolated";
+  payloadText?: string;
+  delivery: Record<string, unknown>;
+}) {
+  const response = await rpcReq(params.ws, "cron.add", {
+    name: params.name,
+    enabled: true,
+    schedule: { kind: "every", everyMs: 60_000 },
+    sessionTarget: params.sessionTarget ?? "main",
+    wakeMode: "next-heartbeat",
+    payload: {
+      kind: params.sessionTarget === "isolated" ? "agentTurn" : "systemEvent",
+      ...(params.sessionTarget === "isolated"
+        ? { message: params.payloadText ?? "test" }
+        : { text: params.payloadText ?? "send webhook" }),
+    },
+    delivery: params.delivery,
+  });
+  return expectCronJobIdFromResponse(response);
+}
+
+async function runCronJobForce(ws: WebSocket, id: string) {
+  const response = await rpcReq(ws, "cron.run", { id, mode: "force" }, 20_000);
+  expect(response.ok).toBe(true);
+}
+
 function getWebhookCall(index: number) {
   const [args] = fetchWithSsrFGuardMock.mock.calls[index] as unknown as [
     {
@@ -574,22 +603,12 @@ describe("gateway server cron", () => {
       });
       expect(invalidWebhookRes.ok).toBe(false);
 
-      const notifyRes = await rpcReq(ws, "cron.add", {
+      const notifyJobId = await addWebhookCronJob({
+        ws,
         name: "webhook enabled",
-        enabled: true,
-        schedule: { kind: "every", everyMs: 60_000 },
-        sessionTarget: "main",
-        wakeMode: "next-heartbeat",
-        payload: { kind: "systemEvent", text: "send webhook" },
         delivery: { mode: "webhook", to: "https://example.invalid/cron-finished" },
       });
-      expect(notifyRes.ok).toBe(true);
-      const notifyJobIdValue = (notifyRes.payload as { id?: unknown } | null)?.id;
-      const notifyJobId = typeof notifyJobIdValue === "string" ? notifyJobIdValue : "";
-      expect(notifyJobId.length > 0).toBe(true);
-
-      const notifyRunRes = await rpcReq(ws, "cron.run", { id: notifyJobId, mode: "force" }, 20_000);
-      expect(notifyRunRes.ok).toBe(true);
+      await runCronJobForce(ws, notifyJobId);
 
       await waitForCondition(
         () => fetchWithSsrFGuardMock.mock.calls.length === 1,
@@ -644,13 +663,10 @@ describe("gateway server cron", () => {
 
       fetchWithSsrFGuardMock.mockClear();
       cronIsolatedRun.mockResolvedValueOnce({ status: "error", summary: "delivery failed" });
-      const failureDestRes = await rpcReq(ws, "cron.add", {
+      const failureDestJobId = await addWebhookCronJob({
+        ws,
         name: "failure destination webhook",
-        enabled: true,
-        schedule: { kind: "every", everyMs: 60_000 },
         sessionTarget: "isolated",
-        wakeMode: "next-heartbeat",
-        payload: { kind: "agentTurn", message: "test" },
         delivery: {
           mode: "announce",
           channel: "telegram",
@@ -661,19 +677,7 @@ describe("gateway server cron", () => {
           },
         },
       });
-      expect(failureDestRes.ok).toBe(true);
-      const failureDestJobIdValue = (failureDestRes.payload as { id?: unknown } | null)?.id;
-      const failureDestJobId =
-        typeof failureDestJobIdValue === "string" ? failureDestJobIdValue : "";
-      expect(failureDestJobId.length > 0).toBe(true);
-
-      const failureDestRunRes = await rpcReq(
-        ws,
-        "cron.run",
-        { id: failureDestJobId, mode: "force" },
-        20_000,
-      );
-      expect(failureDestRunRes.ok).toBe(true);
+      await runCronJobForce(ws, failureDestJobId);
       await waitForCondition(
         () => fetchWithSsrFGuardMock.mock.calls.length === 1,
         CRON_WAIT_TIMEOUT_MS,
@@ -686,27 +690,13 @@ describe("gateway server cron", () => {
       );
 
       cronIsolatedRun.mockResolvedValueOnce({ status: "ok", summary: "" });
-      const noSummaryRes = await rpcReq(ws, "cron.add", {
+      const noSummaryJobId = await addWebhookCronJob({
+        ws,
         name: "webhook no summary",
-        enabled: true,
-        schedule: { kind: "every", everyMs: 60_000 },
         sessionTarget: "isolated",
-        wakeMode: "next-heartbeat",
-        payload: { kind: "agentTurn", message: "test" },
         delivery: { mode: "webhook", to: "https://example.invalid/cron-finished" },
       });
-      expect(noSummaryRes.ok).toBe(true);
-      const noSummaryJobIdValue = (noSummaryRes.payload as { id?: unknown } | null)?.id;
-      const noSummaryJobId = typeof noSummaryJobIdValue === "string" ? noSummaryJobIdValue : "";
-      expect(noSummaryJobId.length > 0).toBe(true);
-
-      const noSummaryRunRes = await rpcReq(
-        ws,
-        "cron.run",
-        { id: noSummaryJobId, mode: "force" },
-        20_000,
-      );
-      expect(noSummaryRunRes.ok).toBe(true);
+      await runCronJobForce(ws, noSummaryJobId);
       await yieldToEventLoop();
       await yieldToEventLoop();
       expect(fetchWithSsrFGuardMock).toHaveBeenCalledTimes(1);
@@ -746,22 +736,12 @@ describe("gateway server cron", () => {
     await connectOk(ws);
 
     try {
-      const notifyRes = await rpcReq(ws, "cron.add", {
+      const notifyJobId = await addWebhookCronJob({
+        ws,
         name: "webhook secretinput object",
-        enabled: true,
-        schedule: { kind: "every", everyMs: 60_000 },
-        sessionTarget: "main",
-        wakeMode: "next-heartbeat",
-        payload: { kind: "systemEvent", text: "send webhook" },
         delivery: { mode: "webhook", to: "https://example.invalid/cron-finished" },
       });
-      expect(notifyRes.ok).toBe(true);
-      const notifyJobIdValue = (notifyRes.payload as { id?: unknown } | null)?.id;
-      const notifyJobId = typeof notifyJobIdValue === "string" ? notifyJobIdValue : "";
-      expect(notifyJobId.length > 0).toBe(true);
-
-      const notifyRunRes = await rpcReq(ws, "cron.run", { id: notifyJobId, mode: "force" }, 20_000);
-      expect(notifyRunRes.ok).toBe(true);
+      await runCronJobForce(ws, notifyJobId);
 
       await waitForCondition(
         () => fetchWithSsrFGuardMock.mock.calls.length === 1,

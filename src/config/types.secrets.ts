@@ -1,4 +1,4 @@
-export type SecretRefSource = "env" | "file" | "exec";
+export type SecretRefSource = "env" | "file" | "exec"; // pragma: allowlist secret
 
 /**
  * Stable identifier for a secret in a configured source.
@@ -14,13 +14,18 @@ export type SecretRef = {
 };
 
 export type SecretInput = string | SecretRef;
-export const DEFAULT_SECRET_PROVIDER_ALIAS = "default";
+export const DEFAULT_SECRET_PROVIDER_ALIAS = "default"; // pragma: allowlist secret
+export const ENV_SECRET_REF_ID_RE = /^[A-Z][A-Z0-9_]{0,127}$/;
 const ENV_SECRET_TEMPLATE_RE = /^\$\{([A-Z][A-Z0-9_]{0,127})\}$/;
 type SecretDefaults = {
   env?: string;
   file?: string;
   exec?: string;
 };
+
+export function isValidEnvSecretRefId(value: string): boolean {
+  return ENV_SECRET_REF_ID_RE.test(value);
+}
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -174,7 +179,7 @@ export type EnvSecretProviderConfig = {
   allowlist?: string[];
 };
 
-export type FileSecretProviderMode = "singleValue" | "json";
+export type FileSecretProviderMode = "singleValue" | "json"; // pragma: allowlist secret
 
 export type FileSecretProviderConfig = {
   source: "file";

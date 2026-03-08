@@ -10,6 +10,7 @@ import { isRecord } from "./shared.js";
 
 type ProviderLike = {
   apiKey?: unknown;
+  headers?: unknown;
   enabled?: unknown;
 };
 
@@ -24,18 +25,37 @@ function collectModelProviderAssignments(params: {
   context: ResolverContext;
 }): void {
   for (const [providerId, provider] of Object.entries(params.providers)) {
+    const providerIsActive = provider.enabled !== false;
     collectSecretInputAssignment({
       value: provider.apiKey,
       path: `models.providers.${providerId}.apiKey`,
       expected: "string",
       defaults: params.defaults,
       context: params.context,
-      active: provider.enabled !== false,
+      active: providerIsActive,
       inactiveReason: "provider is disabled.",
       apply: (value) => {
         provider.apiKey = value;
       },
     });
+    const headers = isRecord(provider.headers) ? provider.headers : undefined;
+    if (!headers) {
+      continue;
+    }
+    for (const [headerKey, headerValue] of Object.entries(headers)) {
+      collectSecretInputAssignment({
+        value: headerValue,
+        path: `models.providers.${providerId}.headers.${headerKey}`,
+        expected: "string",
+        defaults: params.defaults,
+        context: params.context,
+        active: providerIsActive,
+        inactiveReason: "provider is disabled.",
+        apply: (value) => {
+          headers[headerKey] = value;
+        },
+      });
+    }
   }
 }
 
@@ -202,6 +222,18 @@ function collectGatewayAssignments(params: {
     defaults: params.defaults,
   });
   if (auth) {
+    collectSecretInputAssignment({
+      value: auth.token,
+      path: "gateway.auth.token",
+      expected: "string",
+      defaults: params.defaults,
+      context: params.context,
+      active: gatewaySurfaceStates["gateway.auth.token"].active,
+      inactiveReason: gatewaySurfaceStates["gateway.auth.token"].reason,
+      apply: (value) => {
+        auth.token = value;
+      },
+    });
     collectSecretInputAssignment({
       value: auth.password,
       path: "gateway.auth.password",

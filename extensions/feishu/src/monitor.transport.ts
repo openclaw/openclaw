@@ -7,6 +7,7 @@ import {
 } from "openclaw/plugin-sdk/feishu";
 import { createFeishuWSClient } from "./client.js";
 import {
+  botNames,
   botOpenIds,
   FEISHU_WEBHOOK_BODY_TIMEOUT_MS,
   FEISHU_WEBHOOK_MAX_BODY_BYTES,
@@ -42,6 +43,7 @@ export async function monitorWebSocket({
     const cleanup = () => {
       wsClients.delete(accountId);
       botOpenIds.delete(accountId);
+      botNames.delete(accountId);
     };
 
     const handleAbort = () => {
@@ -134,6 +136,7 @@ export async function monitorWebhook({
       server.close();
       httpServers.delete(accountId);
       botOpenIds.delete(accountId);
+      botNames.delete(accountId);
     };
 
     const handleAbort = () => {
