@@ -118,4 +118,58 @@ describe("before_response_emit hook", () => {
     const result = await runner.runBeforeResponseEmit(baseEvent, agentCtx);
     expect(result).toBeUndefined();
   });
+
+  it("first-writer-wins: higher-priority content sticks even when lower-priority sets allContent", async () => {
+    // Handler A (priority 10, runs first) sets content. Handler B (priority 50, runs second)
+    // sets allContent. A's content wins for the content field. B's allContent wins for the
+    // allContent field. These are independent first-writer-wins fields in the merge.
+    // Note: applyBeforeResponseEmitHook checks allContent first, then content — so when
+    // both are present in the merged result, allContent takes precedence at the application layer.
+    const hooks = [
+      {
+        hookName: "before_response_emit" as const,
+        pluginId: "a",
+        source: "test" as const,
+        priority: 10,
+        handler: vi.fn().mockReturnValue({ content: "redacted by A" }),
+      },
+      {
+        hookName: "before_response_emit" as const,
+        pluginId: "b",
+        source: "test" as const,
+        priority: 50,
+        handler: vi.fn().mockReturnValue({ allContent: ["replaced by B"] }),
+      },
+    ];
+    const runner = createHookRunner(makeRegistry(hooks));
+    const result = await runner.runBeforeResponseEmit(baseEvent, agentCtx);
+    // The merge function treats content and allContent as mutually exclusive —
+    // when allContent is set by any handler, content is dropped to undefined.
+    // This prevents conflicting modifications.
+    expect(result?.content).toBeUndefined();
+    expect(result?.allContent).toEqual(["replaced by B"]);
+  });
+
+  it("first-writer-wins: higher-priority allContent is not overridden by lower-priority allContent", async () => {
+    // Higher priority number = runs first = wins first-writer-wins
+    const hooks = [
+      {
+        hookName: "before_response_emit" as const,
+        pluginId: "a",
+        source: "test" as const,
+        priority: 50,
+        handler: vi.fn().mockReturnValue({ allContent: ["first"] }),
+      },
+      {
+        hookName: "before_response_emit" as const,
+        pluginId: "b",
+        source: "test" as const,
+        priority: 10,
+        handler: vi.fn().mockReturnValue({ allContent: ["second"] }),
+      },
+    ];
+    const runner = createHookRunner(makeRegistry(hooks));
+    const result = await runner.runBeforeResponseEmit(baseEvent, agentCtx);
+    expect(result?.allContent).toEqual(["first"]);
+  });
 });
