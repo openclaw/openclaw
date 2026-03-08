@@ -316,12 +316,12 @@ jobs:
         run: |
           set -euo pipefail
 
-          if [ "${{ github.ref }}" = "refs/heads/main" ]; then
+          if [ "$GITHUB_REF" = "refs/heads/main" ]; then
             echo "Skipping detect-secrets on main until the allowlist cleanup lands."
             exit 0
           fi
 
-          if [ "${{ github.event_name }}" = "push" ]; then
+          if [ "$GITHUB_EVENT_NAME" = "push" ]; then
             echo "Running full detect-secrets scan on push."
             pre-commit run --all-files detect-secrets
             exit 0
@@ -358,7 +358,7 @@ jobs:
         run: |
           set -euo pipefail
 
-          if [ "${{ github.event_name }}" = "push" ]; then
+          if [ "$GITHUB_EVENT_NAME" = "push" ]; then
             BASE="${{ github.event.before }}"
           else
             BASE="${{ github.event.pull_request.base.sha }}"
