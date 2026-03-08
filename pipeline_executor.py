@@ -150,6 +150,17 @@ class PipelineExecutor:
                 "\n3. 90/10 Rule (STAR Framework): Spend 90% of your effort Planning and creating check-lists (e.g., task.md), and only 10% coding. Be deterministic."
             )
 
+            # Inject BRAIN.md for Planners
+            if "Planner" in role_name or "Orchestrator" in role_name or "Foreman" in role_name:
+                brain_path = os.path.join(os.path.abspath(os.path.dirname(__file__)), "BRAIN.md")
+                if os.path.exists(brain_path):
+                    try:
+                        with open(brain_path, "r", encoding="utf-8") as f:
+                            brain_content = f.read()
+                        system_prompt += f"\n\n[LATEST BRAIN.md CONTEXT]\n{brain_content}"
+                    except Exception as e:
+                        logger.warning(f"Failed to read BRAIN.md: {e}")
+
             # Build context-aware prompt for this step
             if i == 0:
                 # First step: gets the raw user prompt
@@ -195,6 +206,52 @@ class PipelineExecutor:
                 except ValueError:
                     pass
 
+            # AGGRESSIVE PARSER RETRY
+            if not extracted_json_str and ("Planner" in role_name or "Foreman" in role_name):
+                lower_resp = response.lower()
+                if any(kw in lower_resp for kw in ["создай", "запиши", "выполни", "create", "write", "execute"]):
+                    logger.warning(f"No JSON found from {role_name} but action keywords present. Forcing re-generation.")
+                    if status_callback:
+                        await status_callback(role_name, model, "Оркестратор забыл JSON. Требую по протоколу...")
+                    
+                    retry_prompt = "Ошибка формата. Выдай только JSON-инструкцию для Исполнителя согласно протоколу."
+                    retry_messages = [
+                        {"role": "system", "content": system_prompt},
+                        {"role": "user", "content": step_prompt},
+                        {"role": "assistant", "content": response},
+                        {"role": "user", "content": retry_prompt}
+                    ]
+                    
+                    # Manual ad-hoc retry request without tool wrapping
+                    import aiohttp
+                    payload = {
+                        "model": model,
+                        "messages": retry_messages,
+                        "stream": False,
+                        "keep_alive": 0,
+                    }
+                    try:
+                        async with aiohttp.ClientSession() as session:
+                            async with session.post(f"{self.ollama_url}/api/chat", json=payload, timeout=60) as retry_resp:
+                                if retry_resp.status == 200:
+                                    r_data = await retry_resp.json()
+                                    new_response = r_data["message"]["content"].strip()
+                                    new_response = re.sub(r"<think>.*?</think>", "", new_response, flags=re.DOTALL).strip()
+                                    response += "\n\n[Correction]:\n" + new_response
+                                    
+                                    json_match = re.search(r'```json\s*(.*?)\s*```', new_response, re.DOTALL)
+                                    if json_match:
+                                        extracted_json_str = json_match.group(1)
+                                    else:
+                                        try:
+                                            if new_response.strip().startswith('{') or new_response.strip().startswith('['):
+                                                json.loads(new_response.strip())
+                                                extracted_json_str = new_response.strip()
+                                        except ValueError:
+                                            pass
+                    except Exception as e:
+                        logger.error(f"Retry request failed: {e}")
+
             did_handoff = False
             if extracted_json_str:
                 try:
@@ -227,7 +284,7 @@ class PipelineExecutor:
                         
                         executor_role = "Executor_Tools"
                         executor_model = "qwen2.5-coder:14b"
-                        executor_sys = "Ты — исполнитель. Твоя задача брать JSON-план Оркестратора и нативно вызывать инструменты MCP. Верни только результат выполнения и проанализируй его."
+                        executor_sys = "ТЫ — ТЕХНИЧЕСКИЙ ТЕРМИНАЛ. Тебе ЗАПРЕЩЕНО использовать любые имена функций, кроме read_query, write_query, list_tables, describe_table. ДЛЯ ЗАПИСИ/СОЗДАНИЯ В БД: всегда используй write_query. ДЛЯ ЧТЕНИЯ ИЗ БД: всегда используй read_query или list_tables. ОШИБКА В ИМЕНИ ИНСТРУМЕНТА ПРИРАВНИВАЕТСЯ К ПОЛОМКЕ ВСЕЙ СИСТЕМЫ."
                         executor_prompt = f"Выполни эту инструкцию через MCP инструменты SQLite или Filesystem:\n```json\n{extracted_json_str}\n```"
                         
                         if status_callback:
@@ -239,15 +296,101 @@ class PipelineExecutor:
                         
                         executor_config = {"model": executor_model}
                         async with self._vram_protection(executor_model, model):
-                            executor_response = await self._call_ollama(
-                                executor_model, executor_sys, executor_prompt, executor_role, executor_config, active_mcp
-                            )
+                            max_retries = 3
+                            for attempt in range(max_retries):
+                                executor_response = await self._call_ollama(
+                                    executor_model, executor_sys, executor_prompt, executor_role, executor_config, active_mcp
+                                )
+                                
+                                # Auto-Correction Loop
+                                valid_tools = ["read_query", "write_query", "list_tables", "describe_table", "read_file", "write_file", "list_directory"]
+                                json_match = re.search(r"```json\n(.*?)\n```", executor_response, re.DOTALL)
+                                if not json_match:
+                                    json_match = re.search(r"{.*?}", executor_response, re.DOTALL)
+                                
+                                if json_match:
+                                    try:
+                                        exec_json = json.loads(json_match.group(1) if "```" in executor_response else json_match.group(0))
+                                        tool_name = exec_json.get("name")
+                                        
+                                        if tool_name == "create_table":
+                                            logger.warning(f"Executor tried unsafe create_table. Retrying (Attempt {attempt+1}/{max_retries})")
+                                            executor_prompt += f"\n\nОшибка: Инструмент create_table небезопасен. Используй write_query для этой задачи."
+                                            continue
+                                        elif tool_name and tool_name not in valid_tools:
+                                            logger.warning(f"Executor hallucinated tool name: {tool_name}. Retrying (Attempt {attempt+1}/{max_retries})")
+                                            executor_prompt += f"\n\nОшибка: инструмента '{tool_name}' не существует. Доступные инструменты для SQLite: 'read_query', 'write_query', 'list_tables', 'describe_table'. Перепиши свой JSON, используя строго только разрешенные имена."
+                                            continue
+                                        
+                                    except json.JSONDecodeError:
+                                        pass
+                                
+                                # If valid tool name or no JSON matched (meaning it might have explicitly run via native tool calls), break loop
+                                break
                         
                         steps_results.append({
                             "role": executor_role,
                             "model": executor_model,
                             "response": executor_response
                         })
+                        
+                        # --- PHYSICAL MCP EXECUTION BLOCK ---
+                        # Execute the parsed tool call on the MCP server
+                        json_match = re.search(r"```json\n(.*?)\n```", executor_response, re.DOTALL)
+                        if not json_match:
+                            json_match = re.search(r"{.*?}", executor_response, re.DOTALL)
+                        
+                        if json_match:
+                            try:
+                                exec_json = json.loads(json_match.group(1) if "```" in executor_response else json_match.group(0))
+                                tool_name = exec_json.get("name")
+                                tool_args = exec_json.get("arguments", {})
+                                
+                                if tool_name:
+                                    # --- STUPIDITY INSURANCE: Normalize argument names ---
+                                    if tool_name == "write_query":
+                                        for hallucinated_key in ["command", "sql"]:
+                                            if hallucinated_key in tool_args and "query" not in tool_args:
+                                                logger.info(f"Normalizing hallucinated argument '{hallucinated_key}' to 'query'")
+                                                tool_args["query"] = tool_args.pop(hallucinated_key)
+                                    # ----------------------------------------------------
+                                    
+                                    logger.info(f"Executing tool {tool_name} on MCP server with args: {tool_args}")
+                                    tool_result = await active_mcp.call_tool(tool_name, tool_args)
+                                    print(f"\n[MCP RAW OUTPUT]: {tool_result}")
+                                    executor_response += f"\n\n[MCP Execution Result]:\n{tool_result}"
+                            except Exception as e:
+                                logger.error(f"Failed to execute tool on MCP: {e}")
+                                executor_response += f"\n\n[MCP Execution Error]:\n{e}"
+                        # ------------------------------------
+                        
+                        # Proof of Work Verification
+                        if status_callback:
+                            await status_callback(
+                                executor_role,
+                                executor_model,
+                                "🔎 Ядро проверяет Proof of Work через MCP..."
+                            )
+                        
+                        pow_result = ""
+                        try:
+                            # Print available tools for debugging
+                            if active_mcp and hasattr(active_mcp, '_tool_route_map'):
+                                print(f"Available tools for verification: {list(active_mcp._tool_route_map.keys())}")
+                            
+                            if "sqlite" in extracted_json_str.lower() or "table" in extracted_json_str.lower():
+                                query_result = await active_mcp.call_tool("list_tables", {})
+                                pow_result = f"[DB Tables]:\n{query_result}"
+                            elif "pandera" in extracted_json_str.lower() or "test" in extracted_json_str.lower() or "python" in extracted_json_str.lower() or "script" in extracted_json_str.lower():
+                                path = os.path.abspath(os.path.dirname(__file__))
+                                dir_result = await active_mcp.call_tool("list_directory", {"path": path})
+                                pow_result = f"[Dir Listing]:\n{dir_result}"
+                        except Exception as e:
+                            pow_result = f"Verification failed: {e}"
+                        
+                        if pow_result:
+                            executor_response += f"\n\n[Proof of Work Auto-Verification]:\n{pow_result}"
+                            steps_results[-1]["response"] = executor_response
                         
                         did_handoff = True
                         # Pipeline logical break since executor has completed the task
@@ -359,7 +502,7 @@ class PipelineExecutor:
                                     logger.info(f"Executing tool: {function_name} with args: {function_args}")
                                     
                                     try:
-                                        result = await mcp_client.call_tool(function_name, **function_args)
+                                        result = await mcp_client.call_tool(function_name, function_args)
                                         tool_results.append({
                                             "type": "tool_result",
                                             "tool_code": tool_call["id"],
