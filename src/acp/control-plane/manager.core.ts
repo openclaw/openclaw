@@ -720,15 +720,15 @@ export class AcpSessionManager {
         if (streamError) {
           throw streamError;
         }
-        this.recordTurnCompletion({
-          startedAt: turnStartedAt,
-          sessionKey,
-        });
         await this.setSessionState({
           cfg: input.cfg,
           sessionKey,
           state: "idle",
           clearLastError: true,
+        });
+        this.recordTurnCompletion({
+          startedAt: turnStartedAt,
+          sessionKey,
         });
       } catch (error) {
         const acpError = toAcpRuntimeError({
