@@ -817,6 +817,9 @@ export function buildKimiCodingProvider(): ProviderConfig {
   return {
     baseUrl: KIMI_CODING_BASE_URL,
     api: "anthropic-messages",
+    // Kimi Code API requires this User-Agent for subscription-tier authentication.
+    // Without it, requests are rejected or silently fall back to pay-per-use.
+    headers: { "User-Agent": "claude-code/0.1.0" },
     models: [
       {
         id: KIMI_CODING_DEFAULT_MODEL_ID,
