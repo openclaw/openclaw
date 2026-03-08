@@ -933,7 +933,7 @@ export async function compactEmbeddedPiSession(
           tokenBudget: ceCtxInfo.tokens,
           customInstructions: params.customInstructions,
           force: params.trigger === "manual",
-          legacyParams: params as Record<string, unknown>,
+          runtimeContext: params as Record<string, unknown>,
         });
         return {
           ok: result.ok,
