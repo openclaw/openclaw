@@ -104,6 +104,7 @@ export const AgentDefaultsSchema = z
           .strict()
           .optional(),
         postCompactionSections: z.array(z.string()).optional(),
+        model: z.string().optional(),
         memoryFlush: z
           .object({
             enabled: z.boolean().optional(),
