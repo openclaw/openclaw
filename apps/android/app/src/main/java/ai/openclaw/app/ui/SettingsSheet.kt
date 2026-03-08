@@ -62,7 +62,6 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
-import androidx.core.net.toUri
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
@@ -246,11 +245,6 @@ fun SettingsSheet(viewModel: MainViewModel) {
       motionPermissionGranted = granted
     }
 
-  var appUpdateInstallEnabled by
-    remember {
-      mutableStateOf(canInstallUnknownApps(context))
-    }
-
   var smsPermissionGranted by
     remember {
       mutableStateOf(
@@ -290,7 +284,6 @@ fun SettingsSheet(viewModel: MainViewModel) {
             !motionPermissionRequired ||
               ContextCompat.checkSelfPermission(context, Manifest.permission.ACTIVITY_RECOGNITION) ==
               PackageManager.PERMISSION_GRANTED
-          appUpdateInstallEnabled = canInstallUnknownApps(context)
           smsPermissionGranted =
             ContextCompat.checkSelfPermission(context, Manifest.permission.SEND_SMS) ==
               PackageManager.PERMISSION_GRANTED
@@ -759,41 +752,6 @@ fun SettingsSheet(viewModel: MainViewModel) {
       }
       item { HorizontalDivider(color = mobileBorder) }
 
-    // System
-      item {
-        Text(
-          "SYSTEM",
-          style = mobileCaption1.copy(fontWeight = FontWeight.Bold, letterSpacing = 1.sp),
-          color = mobileAccent,
-        )
-      }
-      item {
-        ListItem(
-          modifier = Modifier.settingsRowModifier(),
-          colors = listItemColors,
-          headlineContent = { Text("Install App Updates", style = mobileHeadline) },
-          supportingContent = {
-            Text(
-              "Enable install access for `app.update` package installs.",
-              style = mobileCallout,
-            )
-          },
-          trailingContent = {
-            Button(
-              onClick = { openUnknownAppSourcesSettings(context) },
-              colors = settingsPrimaryButtonColors(),
-              shape = RoundedCornerShape(14.dp),
-            ) {
-              Text(
-                if (appUpdateInstallEnabled) "Manage" else "Enable",
-                style = mobileCallout.copy(fontWeight = FontWeight.Bold),
-              )
-            }
-          },
-        )
-      }
-      item { HorizontalDivider(color = mobileBorder) }
-
     // Location
       item {
         Text(
@@ -865,7 +823,6 @@ fun SettingsSheet(viewModel: MainViewModel) {
         color = mobileTextSecondary,
       )
     }
-
       item { HorizontalDivider(color = mobileBorder) }
 
     // Screen
@@ -970,19 +927,6 @@ private fun openNotificationListenerSettings(context: Context) {
   }
 }
 
-private fun openUnknownAppSourcesSettings(context: Context) {
-  val intent =
-    Intent(
-      Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,
-      "package:${context.packageName}".toUri(),
-    )
-  runCatching {
-    context.startActivity(intent)
-  }.getOrElse {
-    openAppSettings(context)
-  }
-}
-
 private fun hasNotificationsPermission(context: Context): Boolean {
   if (Build.VERSION.SDK_INT < 33) return true
   return ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) ==
@@ -991,10 +935,6 @@ private fun hasNotificationsPermission(context: Context): Boolean {
 
 private fun isNotificationListenerEnabled(context: Context): Boolean {
   return DeviceNotificationListenerService.isAccessEnabled(context)
-}
-
-private fun canInstallUnknownApps(context: Context): Boolean {
-  return context.packageManager.canRequestPackageInstalls()
 }
 
 private fun hasMotionCapabilities(context: Context): Boolean {
