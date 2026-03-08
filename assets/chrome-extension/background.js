@@ -41,12 +41,37 @@ const reattachPending = new Set()
 let reconnectAttempt = 0
 let reconnectTimer = null
 
+const TAB_VALIDATION_ATTEMPTS = 2
+const TAB_VALIDATION_RETRY_DELAY_MS = 1000
+
 function nowStack() {
   try {
     return new Error().stack || ''
   } catch {
     return ''
   }
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms))
+}
+
+async function validateAttachedTab(tabId) {
+  for (let attempt = 0; attempt < TAB_VALIDATION_ATTEMPTS; attempt++) {
+    try {
+      await chrome.tabs.get(tabId)
+      await chrome.debugger.sendCommand({ tabId }, 'Runtime.evaluate', {
+        expression: '1',
+        returnByValue: true,
+      })
+      return true
+    } catch {
+      if (attempt < TAB_VALIDATION_ATTEMPTS - 1) {
+        await sleep(TAB_VALIDATION_RETRY_DELAY_MS)
+      }
+    }
+  }
+  return false
 }
 
 async function getRelayPort() {
@@ -109,14 +134,10 @@ async function rehydrateState() {
       setBadge(entry.tabId, 'on')
     }
     // Phase 2: validate asynchronously, remove dead tabs.
+    // Retry once to avoid dropping tabs during transient busy/navigation states.
     for (const entry of entries) {
-      try {
-        await chrome.tabs.get(entry.tabId)
-        await chrome.debugger.sendCommand({ tabId: entry.tabId }, 'Runtime.evaluate', {
-          expression: '1',
-          returnByValue: true,
-        })
-      } catch {
+      const valid = await validateAttachedTab(entry.tabId)
+      if (!valid) {
         tabs.delete(entry.tabId)
         tabBySession.delete(entry.sessionId)
         setBadge(entry.tabId, 'off')
@@ -260,12 +281,9 @@ async function reannounceAttachedTabs() {
     if (tab.state !== 'connected' || !tab.sessionId || !tab.targetId) continue
 
     // Verify debugger is still attached.
-    try {
-      await chrome.debugger.sendCommand({ tabId }, 'Runtime.evaluate', {
-        expression: '1',
-        returnByValue: true,
-      })
-    } catch {
+    // Retry once to tolerate transient failures right after relay reconnect.
+    const valid = await validateAttachedTab(tabId)
+    if (!valid) {
       tabs.delete(tabId)
       if (tab.sessionId) tabBySession.delete(tab.sessionId)
       setBadge(tabId, 'off')
@@ -672,6 +690,11 @@ async function handleForwardCdpCommand(msg) {
     const toClose = target ? getTabByTargetId(target) : tabId
     if (!toClose) return { success: false }
     try {
+      const allTabs = await chrome.tabs.query({})
+      if (allTabs.length <= 1) {
+        console.warn('Refusing to close the last tab: this would kill the browser process')
+        return { success: false, error: 'Cannot close the last tab' }
+      }
       await chrome.tabs.remove(toClose)
     } catch {
       return { success: false }
