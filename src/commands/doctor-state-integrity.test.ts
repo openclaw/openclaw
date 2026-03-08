@@ -139,23 +139,45 @@ describe("doctor state integrity oauth dir checks", () => {
     expect(stateIntegrityText()).toContain("CRITICAL: OAuth dir missing");
   });
 
-  it("detects orphan transcripts and offers archival remediation", async () => {
+  it("does not archive unreferenced transcripts that contain history", async () => {
     const cfg: OpenClawConfig = {};
     setupSessionState(cfg, process.env, process.env.HOME ?? "");
     const sessionsDir = resolveSessionTranscriptsDirForAgent("main", process.env, () => tempHome);
     fs.writeFileSync(path.join(sessionsDir, "orphan-session.jsonl"), '{"type":"session"}\n');
-    const confirmSkipInNonInteractive = vi.fn(async (params: { message: string }) =>
-      params.message.includes("orphan transcript file"),
-    );
+    const confirmSkipInNonInteractive = vi.fn(async () => true);
+
     await noteStateIntegrity(cfg, { confirmSkipInNonInteractive });
-    expect(stateIntegrityText()).toContain("orphan transcript file");
-    expect(confirmSkipInNonInteractive).toHaveBeenCalledWith(
+
+    expect(stateIntegrityText()).not.toContain("orphan transcript file");
+    expect(confirmSkipInNonInteractive).not.toHaveBeenCalledWith(
       expect.objectContaining({
         message: expect.stringContaining("orphan transcript file"),
       }),
     );
     const files = fs.readdirSync(sessionsDir);
-    expect(files.some((name) => name.startsWith("orphan-session.jsonl.deleted."))).toBe(true);
+    expect(files).toContain("orphan-session.jsonl");
+    expect(files.some((name) => name.startsWith("orphan-session.jsonl.deleted."))).toBe(false);
+  });
+
+  it("archives empty unreferenced transcript files", async () => {
+    const cfg: OpenClawConfig = {};
+    setupSessionState(cfg, process.env, process.env.HOME ?? "");
+    const sessionsDir = resolveSessionTranscriptsDirForAgent("main", process.env, () => tempHome);
+    fs.writeFileSync(path.join(sessionsDir, "orphan-empty.jsonl"), "");
+    const confirmSkipInNonInteractive = vi.fn(async (params: { message: string }) =>
+      params.message.includes("empty orphan transcript file"),
+    );
+
+    await noteStateIntegrity(cfg, { confirmSkipInNonInteractive });
+
+    expect(stateIntegrityText()).toContain("empty orphan transcript file");
+    expect(confirmSkipInNonInteractive).toHaveBeenCalledWith(
+      expect.objectContaining({
+        message: expect.stringContaining("empty orphan transcript file"),
+      }),
+    );
+    const files = fs.readdirSync(sessionsDir);
+    expect(files.some((name) => name.startsWith("orphan-empty.jsonl.deleted."))).toBe(true);
   });
 
   it("prints openclaw-only verification hints when recent sessions are missing transcripts", async () => {
