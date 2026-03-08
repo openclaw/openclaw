@@ -164,6 +164,82 @@ Common property formats for database items:
 - **Parent in responses:** Pages show `parent.data_source_id` alongside `parent.database_id`
 - **Finding the data_source_id:** Search for the database, or call `GET /v1/data_sources/{data_source_id}`
 
+## File Uploads
+
+Upload files (images, PDFs, etc.) directly to Notion-managed storage via the API. Three steps: create upload → send file → attach to block/page.
+
+> **Note:** Max 20 MB per file for direct upload. For larger files, use [multi-part uploads](https://developers.notion.com/guides/data-apis/sending-larger-files).
+
+**Step 1 — Create a file upload object:**
+
+```bash
+curl -X POST "https://api.notion.com/v1/file_uploads" \
+  -H "Authorization: Bearer $NOTION_KEY" \
+  -H "Content-Type: application/json" \
+  -H "Notion-Version: 2025-09-03" \
+  -d '{}'
+```
+
+Save the returned `id`.
+
+**Step 2 — Upload the file binary:**
+
+```bash
+curl -X POST "https://api.notion.com/v1/file_uploads/{file_upload_id}/send" \
+  -H "Authorization: Bearer $NOTION_KEY" \
+  -H "Notion-Version: 2025-09-03" \
+  -F "file=@/path/to/file.pdf"
+```
+
+Status changes from `pending` → `uploaded`. Note: this endpoint expects `multipart/form-data`, not JSON.
+
+**Step 3 — Attach to a page or block:**
+
+```bash
+# As a file block
+curl -X PATCH "https://api.notion.com/v1/blocks/{page_id}/children" \
+  -H "Authorization: Bearer $NOTION_KEY" \
+  -H "Content-Type: application/json" \
+  -H "Notion-Version: 2025-09-03" \
+  -d '{
+    "children": [{
+      "type": "file",
+      "file": {
+        "type": "file_upload",
+        "file_upload": {"id": "file_upload_id"},
+        "name": "document.pdf"
+      }
+    }]
+  }'
+```
+
+Works with `file`, `image`, `video`, `audio`, and `pdf` block types. Also works with `files` properties on database pages:
+
+```bash
+curl -X PATCH "https://api.notion.com/v1/pages/{page_id}" \
+  -H "Authorization: Bearer $NOTION_KEY" \
+  -H "Content-Type: application/json" \
+  -H "Notion-Version: 2025-09-03" \
+  -d '{
+    "properties": {
+      "Attachments": {
+        "files": [{
+          "type": "file_upload",
+          "file_upload": {"id": "file_upload_id"},
+          "name": "receipt.pdf"
+        }]
+      }
+    }
+  }'
+```
+
+**Tips:**
+
+- Files must be attached within **1 hour** of creation or they expire
+- Upload once, attach many times — the same `file_upload` ID is reusable
+- After first attachment, the file becomes permanent (no more expiry)
+- Download URLs from Notion expire after 1 hour — re-fetch the block to refresh
+
 ## Notes
 
 - Page/database IDs are UUIDs (with or without dashes)
