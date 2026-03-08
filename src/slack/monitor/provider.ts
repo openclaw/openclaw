@@ -207,6 +207,21 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
           clientOptions,
         },
   );
+
+  // Disable the Slack SDK's built-in auto-reconnect so OpenClaw's own backoff
+  // loop (with exponential backoff and auth-error detection) controls all
+  // reconnection logic.  Without this, the SocketModeClient retries internally
+  // at ~1.5s intervals on auth failures, flooding logs and bypassing our
+  // circuit-breaker.
+  if (slackMode === "socket") {
+    const smClient = (
+      app as unknown as { receiver?: { client?: { autoReconnectEnabled?: boolean } } }
+    ).receiver?.client;
+    if (smClient && "autoReconnectEnabled" in smClient) {
+      smClient.autoReconnectEnabled = false;
+    }
+  }
+
   const slackHttpHandler =
     slackMode === "http" && receiver
       ? async (req: IncomingMessage, res: ServerResponse) => {
