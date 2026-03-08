@@ -55,6 +55,12 @@ export function normalizeAzureOpenAIBaseUrl(value: string): string {
     );
   }
 
+  if (parsed.protocol !== "https:") {
+    throw new Error(
+      `Azure OpenAI base URL must use HTTPS (received: ${parsed.protocol.replace(":", "")}).`,
+    );
+  }
+
   return `${parsed.origin}/openai/v1`;
 }
 
@@ -114,7 +120,7 @@ export function applyAzureOpenAIProviderConfig(
     baseUrl,
     api: "openai-responses",
     ...(normalizedApiKey ? { apiKey: normalizedApiKey } : {}),
-    models: mergedModels.length > 0 ? mergedModels : [defaultModel],
+    models: mergedModels,
   };
 
   return applyOnboardAuthAgentModelsAndProviders(cfg, {
@@ -128,5 +134,8 @@ export function applyAzureOpenAIConfig(
   params: { baseUrl: string; modelId: string; apiVersion?: string },
 ): OpenClawConfig {
   const next = applyAzureOpenAIProviderConfig(cfg, params);
-  return applyAgentDefaultModelPrimary(next, `${AZURE_OPENAI_PROVIDER_ID}/${params.modelId.trim()}`);
+  return applyAgentDefaultModelPrimary(
+    next,
+    `${AZURE_OPENAI_PROVIDER_ID}/${normalizeAzureOpenAIModelId(params.modelId)}`,
+  );
 }
