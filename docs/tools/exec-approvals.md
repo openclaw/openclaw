@@ -30,6 +30,9 @@ Trust model note:
 - Gateway-authenticated callers are trusted operators for that Gateway.
 - Paired nodes extend that trusted operator capability onto the node host.
 - Exec approvals reduce accidental execution risk, but are not a per-user auth boundary.
+- Approved node-host runs also bind canonical execution context: canonical cwd, pinned executable
+  path when applicable, and interpreter-style script operands. If a bound script changes after
+  approval but before execution, the run is denied instead of executing drifted content.
 
 macOS split:
 
@@ -165,6 +168,10 @@ and no `$VARS` expansion) for stdin-only segments, so patterns like `*` or `$HOM
 used to smuggle file reads.
 Safe bins must also resolve from trusted binary directories (system defaults plus optional
 `tools.exec.safeBinTrustedDirs`). `PATH` entries are never auto-trusted.
+Default trusted safe-bin directories are intentionally minimal: `/bin`, `/usr/bin`.
+If your safe-bin executable lives in package-manager/user paths (for example
+`/opt/homebrew/bin`, `/usr/local/bin`, `/opt/local/bin`, `/snap/bin`), add them explicitly
+to `tools.exec.safeBinTrustedDirs`.
 Shell chaining and redirections are not auto-allowed in allowlist mode.
 
 Shell chaining (`&&`, `||`, `;`) is allowed when every top-level segment satisfies the allowlist
@@ -247,6 +254,10 @@ CLI: `openclaw approvals` supports gateway or node editing (see [Approvals CLI](
 When a prompt is required, the gateway broadcasts `exec.approval.requested` to operator clients.
 The Control UI and macOS app resolve it via `exec.approval.resolve`, then the gateway forwards the
 approved request to the node host.
+
+For `host=node`, approval requests include a canonical `systemRunPlan` payload. The gateway uses
+that plan as the authoritative command/cwd/session context when forwarding approved `system.run`
+requests.
 
 When approvals are required, the exec tool returns immediately with an approval id. Use that id to
 correlate later system events (`Exec finished` / `Exec denied`). If no decision arrives before the

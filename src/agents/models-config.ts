@@ -1,99 +1,137 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { type OpenClawConfig, loadConfig } from "../config/config.js";
+import {
+  getRuntimeConfigSnapshot,
+  getRuntimeConfigSourceSnapshot,
+  type OpenClawConfig,
+  loadConfig,
+} from "../config/config.js";
+import { createConfigRuntimeEnv } from "../config/env-vars.js";
 import { isRecord } from "../utils.js";
 import { resolveOpenClawAgentDir } from "./agent-paths.js";
 import {
+  mergeProviders,
+  mergeWithExistingProviderSecrets,
+  type ExistingProviderConfig,
+} from "./models-config.merge.js";
+import {
   normalizeProviders,
   type ProviderConfig,
-  resolveImplicitBedrockProvider,
-  resolveImplicitCopilotProvider,
   resolveImplicitProviders,
 } from "./models-config.providers.js";
 
 type ModelsConfig = NonNullable<OpenClawConfig["models"]>;
 
 const DEFAULT_MODE: NonNullable<ModelsConfig["mode"]> = "merge";
+const MODELS_JSON_WRITE_LOCKS = new Map<string, Promise<void>>();
 
-function mergeProviderModels(implicit: ProviderConfig, explicit: ProviderConfig): ProviderConfig {
-  const implicitModels = Array.isArray(implicit.models) ? implicit.models : [];
-  const explicitModels = Array.isArray(explicit.models) ? explicit.models : [];
-  if (implicitModels.length === 0) {
-    return { ...implicit, ...explicit };
-  }
-
-  const getId = (model: unknown): string => {
-    if (!model || typeof model !== "object") {
-      return "";
-    }
-    const id = (model as { id?: unknown }).id;
-    return typeof id === "string" ? id.trim() : "";
-  };
-  const implicitById = new Map(
-    implicitModels.map((model) => [getId(model), model] as const).filter(([id]) => Boolean(id)),
-  );
-  const seen = new Set<string>();
-
-  const mergedModels = explicitModels.map((explicitModel) => {
-    const id = getId(explicitModel);
-    if (!id) {
-      return explicitModel;
-    }
-    seen.add(id);
-    const implicitModel = implicitById.get(id);
-    if (!implicitModel) {
-      return explicitModel;
-    }
-
-    // Refresh capability metadata from the implicit catalog while preserving
-    // user-specific fields (cost, headers, compat, etc.) on explicit entries.
-    return {
-      ...explicitModel,
-      input: implicitModel.input,
-      reasoning: implicitModel.reasoning,
-      contextWindow: implicitModel.contextWindow,
-      maxTokens: implicitModel.maxTokens,
-    };
-  });
-
-  for (const implicitModel of implicitModels) {
-    const id = getId(implicitModel);
-    if (!id || seen.has(id)) {
-      continue;
-    }
-    seen.add(id);
-    mergedModels.push(implicitModel);
-  }
-
-  return {
-    ...implicit,
-    ...explicit,
-    models: mergedModels,
-  };
-}
-
-function mergeProviders(params: {
-  implicit?: Record<string, ProviderConfig> | null;
-  explicit?: Record<string, ProviderConfig> | null;
-}): Record<string, ProviderConfig> {
-  const out: Record<string, ProviderConfig> = params.implicit ? { ...params.implicit } : {};
-  for (const [key, explicit] of Object.entries(params.explicit ?? {})) {
-    const providerKey = key.trim();
-    if (!providerKey) {
-      continue;
-    }
-    const implicit = out[providerKey];
-    out[providerKey] = implicit ? mergeProviderModels(implicit, explicit) : explicit;
-  }
-  return out;
-}
-
-async function readJson(pathname: string): Promise<unknown> {
+async function readExistingModelsFile(pathname: string): Promise<{
+  raw: string;
+  parsed: unknown;
+}> {
   try {
     const raw = await fs.readFile(pathname, "utf8");
-    return JSON.parse(raw) as unknown;
+    return {
+      raw,
+      parsed: JSON.parse(raw) as unknown,
+    };
   } catch {
-    return null;
+    return {
+      raw: "",
+      parsed: null,
+    };
+  }
+}
+
+async function resolveProvidersForModelsJson(params: {
+  cfg: OpenClawConfig;
+  agentDir: string;
+  env: NodeJS.ProcessEnv;
+}): Promise<Record<string, ProviderConfig>> {
+  const { cfg, agentDir, env } = params;
+  const explicitProviders = cfg.models?.providers ?? {};
+  const implicitProviders = await resolveImplicitProviders({
+    agentDir,
+    config: cfg,
+    env,
+    explicitProviders,
+  });
+  const providers: Record<string, ProviderConfig> = mergeProviders({
+    implicit: implicitProviders,
+    explicit: explicitProviders,
+  });
+  return providers;
+}
+
+async function resolveProvidersForMode(params: {
+  mode: NonNullable<ModelsConfig["mode"]>;
+  existingParsed: unknown;
+  providers: Record<string, ProviderConfig>;
+  secretRefManagedProviders: ReadonlySet<string>;
+  explicitBaseUrlProviders: ReadonlySet<string>;
+}): Promise<Record<string, ProviderConfig>> {
+  if (params.mode !== "merge") {
+    return params.providers;
+  }
+  const existing = params.existingParsed;
+  if (!isRecord(existing) || !isRecord(existing.providers)) {
+    return params.providers;
+  }
+  const existingProviders = existing.providers as Record<
+    string,
+    NonNullable<ModelsConfig["providers"]>[string]
+  >;
+  return mergeWithExistingProviderSecrets({
+    nextProviders: params.providers,
+    existingProviders: existingProviders as Record<string, ExistingProviderConfig>,
+    secretRefManagedProviders: params.secretRefManagedProviders,
+    explicitBaseUrlProviders: params.explicitBaseUrlProviders,
+  });
+}
+
+async function ensureModelsFileMode(pathname: string): Promise<void> {
+  await fs.chmod(pathname, 0o600).catch(() => {
+    // best-effort
+  });
+}
+
+async function writeModelsFileAtomic(targetPath: string, contents: string): Promise<void> {
+  const tempPath = `${targetPath}.${process.pid}.${Date.now()}.tmp`;
+  await fs.writeFile(tempPath, contents, { mode: 0o600 });
+  await fs.rename(tempPath, targetPath);
+}
+
+function resolveModelsConfigInput(config?: OpenClawConfig): OpenClawConfig {
+  const runtimeSource = getRuntimeConfigSourceSnapshot();
+  if (!runtimeSource) {
+    return config ?? loadConfig();
+  }
+  if (!config) {
+    return runtimeSource;
+  }
+  const runtimeResolved = getRuntimeConfigSnapshot();
+  if (runtimeResolved && config === runtimeResolved) {
+    return runtimeSource;
+  }
+  return config;
+}
+
+async function withModelsJsonWriteLock<T>(targetPath: string, run: () => Promise<T>): Promise<T> {
+  const prior = MODELS_JSON_WRITE_LOCKS.get(targetPath) ?? Promise.resolve();
+  let release: () => void = () => {};
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const pending = prior.then(() => gate);
+  MODELS_JSON_WRITE_LOCKS.set(targetPath, pending);
+  try {
+    await prior;
+    return await run();
+  } finally {
+    release();
+    if (MODELS_JSON_WRITE_LOCKS.get(targetPath) === pending) {
+      MODELS_JSON_WRITE_LOCKS.delete(targetPath);
+    }
   }
 }
 
@@ -101,63 +139,59 @@ export async function ensureOpenClawModelsJson(
   config?: OpenClawConfig,
   agentDirOverride?: string,
 ): Promise<{ agentDir: string; wrote: boolean }> {
-  const cfg = config ?? loadConfig();
+  const cfg = resolveModelsConfigInput(config);
   const agentDir = agentDirOverride?.trim() ? agentDirOverride.trim() : resolveOpenClawAgentDir();
-
-  const explicitProviders = cfg.models?.providers ?? {};
-  const implicitProviders = await resolveImplicitProviders({ agentDir, explicitProviders });
-  const providers: Record<string, ProviderConfig> = mergeProviders({
-    implicit: implicitProviders,
-    explicit: explicitProviders,
-  });
-  const implicitBedrock = await resolveImplicitBedrockProvider({ agentDir, config: cfg });
-  if (implicitBedrock) {
-    const existing = providers["amazon-bedrock"];
-    providers["amazon-bedrock"] = existing
-      ? mergeProviderModels(implicitBedrock, existing)
-      : implicitBedrock;
-  }
-  const implicitCopilot = await resolveImplicitCopilotProvider({ agentDir });
-  if (implicitCopilot && !providers["github-copilot"]) {
-    providers["github-copilot"] = implicitCopilot;
-  }
-
-  if (Object.keys(providers).length === 0) {
-    return { agentDir, wrote: false };
-  }
-
-  const mode = cfg.models?.mode ?? DEFAULT_MODE;
   const targetPath = path.join(agentDir, "models.json");
 
-  let mergedProviders = providers;
-  let existingRaw = "";
-  if (mode === "merge") {
-    const existing = await readJson(targetPath);
-    if (isRecord(existing) && isRecord(existing.providers)) {
-      const existingProviders = existing.providers as Record<
-        string,
-        NonNullable<ModelsConfig["providers"]>[string]
-      >;
-      mergedProviders = { ...existingProviders, ...providers };
+  return await withModelsJsonWriteLock(targetPath, async () => {
+    // Ensure config env vars (e.g. AWS_PROFILE, AWS_ACCESS_KEY_ID) are
+    // are available to provider discovery without mutating process.env.
+    const env = createConfigRuntimeEnv(cfg);
+
+    const providers = await resolveProvidersForModelsJson({ cfg, agentDir, env });
+
+    if (Object.keys(providers).length === 0) {
+      return { agentDir, wrote: false };
     }
-  }
 
-  const normalizedProviders = normalizeProviders({
-    providers: mergedProviders,
-    agentDir,
+    const mode = cfg.models?.mode ?? DEFAULT_MODE;
+    const secretRefManagedProviders = new Set<string>();
+    const explicitBaseUrlProviders = new Set(
+      Object.entries(cfg.models?.providers ?? {})
+        .map(([key, provider]) => [key.trim(), provider] as const)
+        .filter(
+          ([key, provider]) =>
+            Boolean(key) && typeof provider?.baseUrl === "string" && provider.baseUrl.trim(),
+        )
+        .map(([key]) => key),
+    );
+
+    const normalizedProviders =
+      normalizeProviders({
+        providers,
+        agentDir,
+        env,
+        secretDefaults: cfg.secrets?.defaults,
+        secretRefManagedProviders,
+      }) ?? providers;
+    const existingModelsFile = await readExistingModelsFile(targetPath);
+    const mergedProviders = await resolveProvidersForMode({
+      mode,
+      existingParsed: existingModelsFile.parsed,
+      providers: normalizedProviders,
+      secretRefManagedProviders,
+      explicitBaseUrlProviders,
+    });
+    const next = `${JSON.stringify({ providers: mergedProviders }, null, 2)}\n`;
+
+    if (existingModelsFile.raw === next) {
+      await ensureModelsFileMode(targetPath);
+      return { agentDir, wrote: false };
+    }
+
+    await fs.mkdir(agentDir, { recursive: true, mode: 0o700 });
+    await writeModelsFileAtomic(targetPath, next);
+    await ensureModelsFileMode(targetPath);
+    return { agentDir, wrote: true };
   });
-  const next = `${JSON.stringify({ providers: normalizedProviders }, null, 2)}\n`;
-  try {
-    existingRaw = await fs.readFile(targetPath, "utf8");
-  } catch {
-    existingRaw = "";
-  }
-
-  if (existingRaw === next) {
-    return { agentDir, wrote: false };
-  }
-
-  await fs.mkdir(agentDir, { recursive: true, mode: 0o700 });
-  await fs.writeFile(targetPath, next, { mode: 0o600 });
-  return { agentDir, wrote: true };
 }

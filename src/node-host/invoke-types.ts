@@ -1,8 +1,9 @@
-import type { SkillBinTrustEntry } from "../infra/exec-approvals.js";
+import type { SkillBinTrustEntry, SystemRunApprovalPlan } from "../infra/exec-approvals.js";
 
 export type SystemRunParams = {
   command: string[];
   rawCommand?: string | null;
+  systemRunPlan?: SystemRunApprovalPlan | null;
   cwd?: string | null;
   env?: Record<string, string>;
   timeoutMs?: number | null;
@@ -34,6 +35,22 @@ export type ExecEventPayload = {
   success?: boolean;
   output?: string;
   reason?: string;
+};
+
+export type ExecFinishedResult = {
+  stdout?: string;
+  stderr?: string;
+  error?: string | null;
+  exitCode?: number | null;
+  timedOut?: boolean;
+  success?: boolean;
+};
+
+export type ExecFinishedEventParams = {
+  sessionKey: string;
+  runId: string;
+  cmdText: string;
+  result: ExecFinishedResult;
 };
 
 export type SkillBinsProvider = {

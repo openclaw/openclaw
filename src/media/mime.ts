@@ -38,6 +38,7 @@ const MIME_BY_EXT: Record<string, string> = {
   ...Object.fromEntries(Object.entries(EXT_BY_MIME).map(([mime, ext]) => [ext, mime])),
   // Additional extension aliases
   ".jpeg": "image/jpeg",
+  ".js": "text/javascript",
 };
 
 const AUDIO_FILE_EXTENSIONS = new Set([
@@ -186,6 +187,6 @@ export function imageMimeFromFormat(format?: string | null): string | undefined 
   }
 }
 
-export function kindFromMime(mime?: string | null): MediaKind {
-  return mediaKindFromMime(mime);
+export function kindFromMime(mime?: string | null): MediaKind | undefined {
+  return mediaKindFromMime(normalizeMimeType(mime));
 }

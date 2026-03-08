@@ -7,7 +7,7 @@ describe("resolveAwsSdkEnvVarName", () => {
     const env = {
       AWS_BEARER_TOKEN_BEDROCK: "bearer",
       AWS_ACCESS_KEY_ID: "access",
-      AWS_SECRET_ACCESS_KEY: "secret",
+      AWS_SECRET_ACCESS_KEY: "secret", // pragma: allowlist secret
       AWS_PROFILE: "default",
     } as NodeJS.ProcessEnv;
 
@@ -17,7 +17,7 @@ describe("resolveAwsSdkEnvVarName", () => {
   it("uses access keys when bearer token is missing", () => {
     const env = {
       AWS_ACCESS_KEY_ID: "access",
-      AWS_SECRET_ACCESS_KEY: "secret",
+      AWS_SECRET_ACCESS_KEY: "secret", // pragma: allowlist secret
       AWS_PROFILE: "default",
     } as NodeJS.ProcessEnv;
 
@@ -76,6 +76,18 @@ describe("resolveModelAuthMode", () => {
         { version: 1, profiles: {} },
       ),
     ).toBe("aws-sdk");
+  });
+
+  it("returns aws-sdk for bedrock alias without explicit auth override", () => {
+    expect(resolveModelAuthMode("bedrock", undefined, { version: 1, profiles: {} })).toBe(
+      "aws-sdk",
+    );
+  });
+
+  it("returns aws-sdk for aws-bedrock alias without explicit auth override", () => {
+    expect(resolveModelAuthMode("aws-bedrock", undefined, { version: 1, profiles: {} })).toBe(
+      "aws-sdk",
+    );
   });
 });
 

@@ -1,13 +1,13 @@
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { Type } from "@sinclair/typebox";
 import Ajv from "ajv";
+import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/llm-task";
 // NOTE: This extension is intended to be bundled with OpenClaw.
 // When running from source (tests/dev), OpenClaw internals live under src/.
 // When running from a built install, internals live under dist/ (no src/ tree).
 // So we resolve internal imports dynamically with src-first, dist-fallback.
-import type { OpenClawPluginApi } from "../../../src/plugins/types.js";
+import type { OpenClawPluginApi } from "openclaw/plugin-sdk/llm-task";
 
 type RunEmbeddedPiAgentFn = (params: Record<string, unknown>) => Promise<unknown>;
 
@@ -25,11 +25,15 @@ async function loadRunEmbeddedPiAgent(): Promise<RunEmbeddedPiAgentFn> {
   }
 
   // Bundled install (built)
-  const mod = await import("../../../src/agents/pi-embedded-runner.js");
-  if (typeof mod.runEmbeddedPiAgent !== "function") {
+  // NOTE: there is no src/ tree in a packaged install. Prefer a stable internal entrypoint.
+  const distExtensionApi = "../../../dist/extensionAPI.js";
+  const mod = (await import(distExtensionApi)) as { runEmbeddedPiAgent?: unknown };
+  // oxlint-disable-next-line typescript/no-explicit-any
+  const fn = (mod as any).runEmbeddedPiAgent;
+  if (typeof fn !== "function") {
     throw new Error("Internal error: runEmbeddedPiAgent not available");
   }
-  return mod.runEmbeddedPiAgent as RunEmbeddedPiAgentFn;
+  return fn as RunEmbeddedPiAgentFn;
 }
 
 function stripCodeFences(s: string): string {
@@ -180,7 +184,9 @@ export function createLlmTaskTool(api: OpenClawPluginApi) {
 
       let tmpDir: string | null = null;
       try {
-        tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-llm-task-"));
+        tmpDir = await fs.mkdtemp(
+          path.join(resolvePreferredOpenClawTmpDir(), "openclaw-llm-task-"),
+        );
         const sessionId = `llm-task-${Date.now()}`;
         const sessionFile = path.join(tmpDir, "session.json");
 

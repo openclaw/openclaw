@@ -541,8 +541,11 @@ function buildModelRows(params: {
  * Source-of-truth data for Discord picker views. This intentionally reuses the
  * same provider/model resolver used by text and Telegram model commands.
  */
-export async function loadDiscordModelPickerData(cfg: OpenClawConfig): Promise<ModelsProviderData> {
-  return buildModelsProviderData(cfg);
+export async function loadDiscordModelPickerData(
+  cfg: OpenClawConfig,
+  agentId?: string,
+): Promise<ModelsProviderData> {
+  return buildModelsProviderData(cfg, agentId);
 }
 
 export function buildDiscordModelPickerCustomId(params: {
@@ -577,11 +580,11 @@ export function buildDiscordModelPickerCustomId(params: {
       : undefined;
 
   const parts = [
-    `${DISCORD_MODEL_PICKER_CUSTOM_ID_KEY}:cmd=${encodeCustomIdValue(params.command)}`,
-    `act=${encodeCustomIdValue(params.action)}`,
-    `view=${encodeCustomIdValue(params.view)}`,
+    `${DISCORD_MODEL_PICKER_CUSTOM_ID_KEY}:c=${encodeCustomIdValue(params.command)}`,
+    `a=${encodeCustomIdValue(params.action)}`,
+    `v=${encodeCustomIdValue(params.view)}`,
     `u=${encodeCustomIdValue(userId)}`,
-    `pg=${String(page)}`,
+    `g=${String(page)}`,
   ];
   if (normalizedProvider) {
     parts.push(`p=${encodeCustomIdValue(normalizedProvider)}`);
@@ -635,12 +638,12 @@ export function parseDiscordModelPickerData(data: ComponentData): DiscordModelPi
     return null;
   }
 
-  const command = decodeCustomIdValue(coerceString(data.cmd));
-  const action = decodeCustomIdValue(coerceString(data.act));
-  const view = decodeCustomIdValue(coerceString(data.view));
+  const command = decodeCustomIdValue(coerceString(data.c ?? data.cmd));
+  const action = decodeCustomIdValue(coerceString(data.a ?? data.act));
+  const view = decodeCustomIdValue(coerceString(data.v ?? data.view));
   const userId = decodeCustomIdValue(coerceString(data.u));
   const providerRaw = decodeCustomIdValue(coerceString(data.p));
-  const page = parseRawPage(data.pg);
+  const page = parseRawPage(data.g ?? data.pg);
   const providerPage = parseRawPositiveInt(data.pp);
   const modelIndex = parseRawPositiveInt(data.mi);
   const recentSlot = parseRawPositiveInt(data.rs);

@@ -8,17 +8,44 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { resolveAgentWorkspaceDir } from "../../../agents/agent-scope.js";
+import {
+  resolveAgentIdByWorkspacePath,
+  resolveAgentWorkspaceDir,
+} from "../../../agents/agent-scope.js";
 import type { OpenClawConfig } from "../../../config/config.js";
 import { resolveStateDir } from "../../../config/paths.js";
+import { writeFileWithinRoot } from "../../../infra/fs-safe.js";
 import { createSubsystemLogger } from "../../../logging/subsystem.js";
-import { resolveAgentIdFromSessionKey } from "../../../routing/session-key.js";
+import {
+  parseAgentSessionKey,
+  resolveAgentIdFromSessionKey,
+  toAgentStoreSessionKey,
+} from "../../../routing/session-key.js";
 import { hasInterSessionUserProvenance } from "../../../sessions/input-provenance.js";
 import { resolveHookConfig } from "../../config.js";
 import type { HookHandler } from "../../hooks.js";
 import { generateSlugViaLLM } from "../../llm-slug-generator.js";
 
 const log = createSubsystemLogger("hooks/session-memory");
+
+function resolveDisplaySessionKey(params: {
+  cfg?: OpenClawConfig;
+  workspaceDir?: string;
+  sessionKey: string;
+}): string {
+  if (!params.cfg || !params.workspaceDir) {
+    return params.sessionKey;
+  }
+  const workspaceAgentId = resolveAgentIdByWorkspacePath(params.cfg, params.workspaceDir);
+  const parsed = parseAgentSessionKey(params.sessionKey);
+  if (!workspaceAgentId || !parsed || workspaceAgentId === parsed.agentId) {
+    return params.sessionKey;
+  }
+  return toAgentStoreSessionKey({
+    agentId: workspaceAgentId,
+    requestKey: parsed.rest,
+  });
+}
 
 /**
  * Read recent messages from session file for slug generation
@@ -181,10 +208,21 @@ const saveSessionToMemory: HookHandler = async (event) => {
 
     const context = event.context || {};
     const cfg = context.cfg as OpenClawConfig | undefined;
+    const contextWorkspaceDir =
+      typeof context.workspaceDir === "string" && context.workspaceDir.trim().length > 0
+        ? context.workspaceDir
+        : undefined;
     const agentId = resolveAgentIdFromSessionKey(event.sessionKey);
-    const workspaceDir = cfg
-      ? resolveAgentWorkspaceDir(cfg, agentId)
-      : path.join(resolveStateDir(process.env, os.homedir), "workspace");
+    const workspaceDir =
+      contextWorkspaceDir ||
+      (cfg
+        ? resolveAgentWorkspaceDir(cfg, agentId)
+        : path.join(resolveStateDir(process.env, os.homedir), "workspace"));
+    const displaySessionKey = resolveDisplaySessionKey({
+      cfg,
+      workspaceDir: contextWorkspaceDir,
+      sessionKey: event.sessionKey,
+    });
     const memoryDir = path.join(workspaceDir, "memory");
     await fs.mkdir(memoryDir, { recursive: true });
 
@@ -292,7 +330,7 @@ const saveSessionToMemory: HookHandler = async (event) => {
     const entryParts = [
       `# Session: ${dateStr} ${timeStr} UTC`,
       "",
-      `- **Session Key**: ${event.sessionKey}`,
+      `- **Session Key**: ${displaySessionKey}`,
       `- **Session ID**: ${sessionId}`,
       `- **Source**: ${source}`,
       "",
@@ -305,8 +343,13 @@ const saveSessionToMemory: HookHandler = async (event) => {
 
     const entry = entryParts.join("\n");
 
-    // Write to new memory file
-    await fs.writeFile(memoryFilePath, entry, "utf-8");
+    // Write under memory root with alias-safe file validation.
+    await writeFileWithinRoot({
+      rootDir: memoryDir,
+      relativePath: filename,
+      data: entry,
+      encoding: "utf-8",
+    });
     log.debug("Memory file written successfully");
 
     // Log completion (but don't send user-visible confirmation - it's internal housekeeping)

@@ -11,7 +11,7 @@ final class ExecApprovalsGatewayPrompter {
     private let logger = Logger(subsystem: "ai.openclaw", category: "exec-approvals.gateway")
     private var task: Task<Void, Never>?
 
-    struct GatewayApprovalRequest: Codable, Sendable {
+    struct GatewayApprovalRequest: Codable {
         var id: String
         var request: ExecApprovalPromptRequest
         var createdAtMs: Int
@@ -19,15 +19,13 @@ final class ExecApprovalsGatewayPrompter {
     }
 
     func start() {
-        guard self.task == nil else { return }
-        self.task = Task { [weak self] in
+        SimpleTaskSupport.start(task: &self.task) { [weak self] in
             await self?.run()
         }
     }
 
     func stop() {
-        self.task?.cancel()
-        self.task = nil
+        SimpleTaskSupport.stop(task: &self.task)
     }
 
     private func run() async {

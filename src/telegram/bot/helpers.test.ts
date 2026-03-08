@@ -4,7 +4,10 @@ import {
   buildTypingThreadParams,
   describeReplyTarget,
   expandTextLinks,
+  getTelegramTextParts,
+  hasBotMention,
   normalizeForwardedContext,
+  resolveTelegramDirectPeerId,
   resolveTelegramForumThreadId,
 } from "./helpers.js";
 
@@ -50,6 +53,20 @@ describe("buildTypingThreadParams", () => {
     { input: 1, expected: { message_thread_id: 1 } },
   ])("builds typing params", ({ input, expected }) => {
     expect(buildTypingThreadParams(input)).toEqual(expected);
+  });
+});
+
+describe("resolveTelegramDirectPeerId", () => {
+  it("prefers sender id when available", () => {
+    expect(resolveTelegramDirectPeerId({ chatId: 777777777, senderId: 123456789 })).toBe(
+      "123456789",
+    );
+  });
+
+  it("falls back to chat id when sender id is missing", () => {
+    expect(resolveTelegramDirectPeerId({ chatId: 777777777, senderId: undefined })).toBe(
+      "777777777",
+    );
   });
 });
 
@@ -328,6 +345,64 @@ describe("describeReplyTarget", () => {
     expect(result?.forwardedFrom?.fromType).toBe("user");
     expect(result?.forwardedFrom?.fromId).toBe("123");
     expect(result?.forwardedFrom?.date).toBe(700);
+  });
+});
+
+describe("hasBotMention", () => {
+  it("prefers caption text and caption entities when message text is absent", () => {
+    expect(
+      getTelegramTextParts({
+        caption: "@gaian hello",
+        caption_entities: [{ type: "mention", offset: 0, length: 6 }],
+        chat: { id: 1, type: "private" },
+        date: 1,
+        message_id: 1,
+        // oxlint-disable-next-line typescript/no-explicit-any
+      } as any),
+    ).toEqual({
+      text: "@gaian hello",
+      entities: [{ type: "mention", offset: 0, length: 6 }],
+    });
+  });
+
+  it("matches exact username mentions from plain text", () => {
+    expect(
+      hasBotMention(
+        {
+          text: "@gaian what is the group id?",
+          chat: { id: 1, type: "supergroup" },
+          // oxlint-disable-next-line typescript/no-explicit-any
+        } as any,
+        "gaian",
+      ),
+    ).toBe(true);
+  });
+
+  it("does not match mention prefixes from longer bot usernames", () => {
+    expect(
+      hasBotMention(
+        {
+          text: "@GaianChat_Bot what is the group id?",
+          chat: { id: 1, type: "supergroup" },
+          // oxlint-disable-next-line typescript/no-explicit-any
+        } as any,
+        "gaian",
+      ),
+    ).toBe(false);
+  });
+
+  it("still matches exact mention entities", () => {
+    expect(
+      hasBotMention(
+        {
+          text: "@GaianChat_Bot hi @gaian",
+          entities: [{ type: "mention", offset: 18, length: 6 }],
+          chat: { id: 1, type: "supergroup" },
+          // oxlint-disable-next-line typescript/no-explicit-any
+        } as any,
+        "gaian",
+      ),
+    ).toBe(true);
   });
 });
 

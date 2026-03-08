@@ -1,4 +1,9 @@
 import path from "node:path";
+import {
+  POSIX_INLINE_COMMAND_FLAGS,
+  POWERSHELL_INLINE_COMMAND_FLAGS,
+  resolveInlineCommandMatch,
+} from "./shell-inline-command.js";
 
 export const MAX_DISPATCH_WRAPPER_DEPTH = 4;
 
@@ -51,9 +56,6 @@ const SHELL_WRAPPER_CANONICAL = new Set<string>([
   ...POWERSHELL_WRAPPER_NAMES,
 ]);
 
-const POSIX_INLINE_COMMAND_FLAGS = new Set(["-lc", "-c", "--command"]);
-const POWERSHELL_INLINE_COMMAND_FLAGS = new Set(["-c", "-command", "--command"]);
-
 const ENV_OPTIONS_WITH_VALUE = new Set([
   "-u",
   "--unset",
@@ -100,6 +102,10 @@ export type ShellWrapperCommand = {
   isWrapper: boolean;
   command: string | null;
 };
+
+function isWithinDispatchClassificationDepth(depth: number): boolean {
+  return depth <= MAX_DISPATCH_WRAPPER_DEPTH;
+}
 
 export function basenameLower(token: string): string {
   const win = path.win32.basename(token);
@@ -448,6 +454,19 @@ function isSemanticDispatchWrapperUsage(wrapper: string, argv: string[]): boolea
   return !TRANSPARENT_DISPATCH_WRAPPERS.has(wrapper);
 }
 
+function blockedDispatchWrapperPlan(params: {
+  argv: string[];
+  wrappers: string[];
+  blockedWrapper: string;
+}): DispatchWrapperExecutionPlan {
+  return {
+    argv: params.argv,
+    wrappers: params.wrappers,
+    policyBlocked: true,
+    blockedWrapper: params.blockedWrapper,
+  };
+}
+
 export function resolveDispatchWrapperExecutionPlan(
   argv: string[],
   maxDepth = MAX_DISPATCH_WRAPPER_DEPTH,
@@ -457,26 +476,34 @@ export function resolveDispatchWrapperExecutionPlan(
   for (let depth = 0; depth < maxDepth; depth += 1) {
     const unwrap = unwrapKnownDispatchWrapperInvocation(current);
     if (unwrap.kind === "blocked") {
-      return {
+      return blockedDispatchWrapperPlan({
         argv: current,
         wrappers,
-        policyBlocked: true,
         blockedWrapper: unwrap.wrapper,
-      };
+      });
     }
     if (unwrap.kind !== "unwrapped" || unwrap.argv.length === 0) {
       break;
     }
     wrappers.push(unwrap.wrapper);
     if (isSemanticDispatchWrapperUsage(unwrap.wrapper, current)) {
-      return {
+      return blockedDispatchWrapperPlan({
         argv: current,
         wrappers,
-        policyBlocked: true,
         blockedWrapper: unwrap.wrapper,
-      };
+      });
     }
     current = unwrap.argv;
+  }
+  if (wrappers.length >= maxDepth) {
+    const overflow = unwrapKnownDispatchWrapperInvocation(current);
+    if (overflow.kind === "blocked" || overflow.kind === "unwrapped") {
+      return blockedDispatchWrapperPlan({
+        argv: current,
+        wrappers,
+        blockedWrapper: overflow.wrapper,
+      });
+    }
   }
   return { argv: current, wrappers, policyBlocked: false };
 }
@@ -486,7 +513,7 @@ function hasEnvManipulationBeforeShellWrapperInternal(
   depth: number,
   envManipulationSeen: boolean,
 ): boolean {
-  if (depth >= MAX_DISPATCH_WRAPPER_DEPTH) {
+  if (!isWithinDispatchClassificationDepth(depth)) {
     return false;
   }
 
@@ -565,30 +592,7 @@ function extractInlineCommandByFlags(
   flags: ReadonlySet<string>,
   options: { allowCombinedC?: boolean } = {},
 ): string | null {
-  for (let i = 1; i < argv.length; i += 1) {
-    const token = argv[i]?.trim();
-    if (!token) {
-      continue;
-    }
-    const lower = token.toLowerCase();
-    if (lower === "--") {
-      break;
-    }
-    if (flags.has(lower)) {
-      const cmd = argv[i + 1]?.trim();
-      return cmd ? cmd : null;
-    }
-    if (options.allowCombinedC && /^-[^-]*c[^-]*$/i.test(token)) {
-      const commandIndex = lower.indexOf("c");
-      const inline = token.slice(commandIndex + 1).trim();
-      if (inline) {
-        return inline;
-      }
-      const cmd = argv[i + 1]?.trim();
-      return cmd ? cmd : null;
-    }
-  }
-  return null;
+  return resolveInlineCommandMatch(argv, flags, options).command;
 }
 
 function extractShellWrapperPayload(argv: string[], spec: ShellWrapperSpec): string | null {
@@ -607,7 +611,7 @@ function extractShellWrapperCommandInternal(
   rawCommand: string | null,
   depth: number,
 ): ShellWrapperCommand {
-  if (depth >= MAX_DISPATCH_WRAPPER_DEPTH) {
+  if (!isWithinDispatchClassificationDepth(depth)) {
     return { isWrapper: false, command: null };
   }
 

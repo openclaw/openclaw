@@ -6,6 +6,7 @@ import type {
   MarkdownConfig,
   OutboundRetryConfig,
   ReplyToMode,
+  SessionThreadBindingsConfig,
 } from "./types.base.js";
 import type { ChannelHeartbeatVisibilityConfig } from "./types.channels.js";
 import type { DmConfig, ProviderCommandsConfig } from "./types.messages.js";
@@ -14,6 +15,8 @@ import type { GroupToolPolicyBySenderConfig, GroupToolPolicyConfig } from "./typ
 export type TelegramActionConfig = {
   reactions?: boolean;
   sendMessage?: boolean;
+  /** Enable poll creation. Requires sendMessage to also be enabled. */
+  poll?: boolean;
   deleteMessage?: boolean;
   editMessage?: boolean;
   /** Enable sticker actions (send and search). */
@@ -79,6 +82,8 @@ export type TelegramAccountConfig = {
   /** Control reply threading when reply tags are present (off|first|all). */
   replyToMode?: ReplyToMode;
   groups?: Record<string, TelegramGroupConfig>;
+  /** Per-DM configuration for Telegram DM topics (key is chat ID). */
+  direct?: Record<string, TelegramDirectConfig>;
   /** DM allowlist (numeric Telegram user IDs). Onboarding can resolve @username to IDs. */
   allowFrom?: Array<string | number>;
   /** Default delivery target for CLI `--deliver` when no explicit `--reply-to` is provided. */
@@ -135,8 +140,12 @@ export type TelegramAccountConfig = {
   webhookHost?: string;
   /** Local webhook listener bind port (default: 8787). */
   webhookPort?: number;
+  /** Path to the self-signed certificate (PEM) to upload to Telegram during webhook registration. */
+  webhookCertPath?: string;
   /** Per-action tool gating (default: true for all). */
   actions?: TelegramActionConfig;
+  /** Telegram thread/conversation binding overrides. */
+  threadBindings?: SessionThreadBindingsConfig;
   /**
    * Controls which user reactions trigger notifications:
    * - "off" (default): ignore all reactions
@@ -183,6 +192,10 @@ export type TelegramTopicConfig = {
   allowFrom?: Array<string | number>;
   /** Optional system prompt snippet for this topic. */
   systemPrompt?: string;
+  /** If true, skip automatic voice-note transcription for mention detection in this topic. */
+  disableAudioPreflight?: boolean;
+  /** Route this topic to a specific agent (overrides group-level and binding routing). */
+  agentId?: string;
 };
 
 export type TelegramGroupConfig = {
@@ -202,9 +215,33 @@ export type TelegramGroupConfig = {
   allowFrom?: Array<string | number>;
   /** Optional system prompt snippet for this group. */
   systemPrompt?: string;
+  /** If true, skip automatic voice-note transcription for mention detection in this group. */
+  disableAudioPreflight?: boolean;
+};
+
+export type TelegramDirectConfig = {
+  /** Per-DM override for DM message policy (open|disabled|allowlist). */
+  dmPolicy?: DmPolicy;
+  /** Optional tool policy overrides for this DM. */
+  tools?: GroupToolPolicyConfig;
+  toolsBySender?: GroupToolPolicyBySenderConfig;
+  /** If specified, only load these skills for this DM (when no topic). Omit = all skills; empty = no skills. */
+  skills?: string[];
+  /** Per-topic configuration for DM topics (key is message_thread_id as string) */
+  topics?: Record<string, TelegramTopicConfig>;
+  /** If false, disable the bot for this DM (and its topics). */
+  enabled?: boolean;
+  /** If true, require messages to be from a topic when topics are enabled. */
+  requireTopic?: boolean;
+  /** Optional allowlist for DM senders (numeric Telegram user IDs). */
+  allowFrom?: Array<string | number>;
+  /** Optional system prompt snippet for this DM. */
+  systemPrompt?: string;
 };
 
 export type TelegramConfig = {
   /** Optional per-account Telegram configuration (multi-account). */
   accounts?: Record<string, TelegramAccountConfig>;
+  /** Optional default account id when multiple accounts are configured. */
+  defaultAccount?: string;
 } & TelegramAccountConfig;

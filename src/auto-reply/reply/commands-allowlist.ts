@@ -23,6 +23,7 @@ import {
   normalizeAccountId,
   normalizeOptionalAccountId,
 } from "../../routing/session-key.js";
+import { normalizeStringEntries } from "../../shared/string-normalization.js";
 import { resolveSignalAccount } from "../../signal/accounts.js";
 import { resolveSlackAccount } from "../../slack/accounts.js";
 import { resolveSlackUserAllowlist } from "../../slack/resolve-users.js";
@@ -165,7 +166,7 @@ function normalizeAllowFrom(params: {
       allowFrom: params.values,
     });
   }
-  return params.values.map((entry) => String(entry).trim()).filter(Boolean);
+  return normalizeStringEntries(params.values);
 }
 
 function formatEntryList(entries: string[], resolved?: Map<string, string>): string {
@@ -194,6 +195,31 @@ function extractConfigAllowlist(account: {
     dmPolicy: account.config?.dmPolicy,
     groupPolicy: account.config?.groupPolicy,
   };
+}
+
+async function updatePairingStoreAllowlist(params: {
+  action: "add" | "remove";
+  channelId: ChannelId;
+  accountId?: string;
+  entry: string;
+}) {
+  const storeEntry = {
+    channel: params.channelId,
+    entry: params.entry,
+    accountId: params.accountId,
+  };
+  if (params.action === "add") {
+    await addChannelAllowFromStoreEntry(storeEntry);
+    return;
+  }
+
+  await removeChannelAllowFromStoreEntry(storeEntry);
+  if (params.accountId === DEFAULT_ACCOUNT_ID) {
+    await removeChannelAllowFromStoreEntry({
+      channel: params.channelId,
+      entry: params.entry,
+    });
+  }
 }
 
 function resolveAccountTarget(
@@ -327,7 +353,7 @@ async function resolveSlackNames(params: {
   entries: string[];
 }) {
   const account = resolveSlackAccount({ cfg: params.cfg, accountId: params.accountId });
-  const token = account.config.userToken?.trim() || account.botToken?.trim();
+  const token = account.userToken || account.botToken?.trim();
   if (!token) {
     return new Map<string, string>();
   }
@@ -390,7 +416,7 @@ export const handleAllowlistCommand: CommandHandler = async (params, allowTextCo
     const pairingChannels = listPairingChannels();
     const supportsStore = pairingChannels.includes(channelId);
     const storeAllowFrom = supportsStore
-      ? await readChannelAllowFromStore(channelId).catch(() => [])
+      ? await readChannelAllowFromStore(channelId, process.env, accountId).catch(() => [])
       : [];
 
     let dmAllowFrom: string[] = [];
@@ -695,11 +721,12 @@ export const handleAllowlistCommand: CommandHandler = async (params, allowTextCo
     }
 
     if (shouldTouchStore) {
-      if (parsed.action === "add") {
-        await addChannelAllowFromStoreEntry({ channel: channelId, entry: parsed.entry });
-      } else if (parsed.action === "remove") {
-        await removeChannelAllowFromStoreEntry({ channel: channelId, entry: parsed.entry });
-      }
+      await updatePairingStoreAllowlist({
+        action: parsed.action,
+        channelId,
+        accountId,
+        entry: parsed.entry,
+      });
     }
 
     const actionLabel = parsed.action === "add" ? "added" : "removed";
@@ -727,11 +754,12 @@ export const handleAllowlistCommand: CommandHandler = async (params, allowTextCo
     };
   }
 
-  if (parsed.action === "add") {
-    await addChannelAllowFromStoreEntry({ channel: channelId, entry: parsed.entry });
-  } else if (parsed.action === "remove") {
-    await removeChannelAllowFromStoreEntry({ channel: channelId, entry: parsed.entry });
-  }
+  await updatePairingStoreAllowlist({
+    action: parsed.action,
+    channelId,
+    accountId,
+    entry: parsed.entry,
+  });
 
   const actionLabel = parsed.action === "add" ? "added" : "removed";
   const scopeLabel = scope === "dm" ? "DM" : "group";
