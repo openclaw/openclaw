@@ -28,5 +28,6 @@ export default defineConfig({
     silent: !verboseE2E,
     include: ["test/**/*.e2e.test.ts", "src/**/*.e2e.test.ts"],
     exclude,
+    setupFiles: ["test/e2e-setup.ts"],
   },
 });
