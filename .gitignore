@@ -121,3 +121,6 @@ dist/protocol.schema.json
 
 # Synthing
 **/.stfolder/
+_iris-builtin-hooks.ts
+_iris-source/
+_pr-plan.md
