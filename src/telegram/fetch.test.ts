@@ -174,6 +174,12 @@ describe("resolveTelegramFetch", () => {
     resolveTelegramFetch(undefined, { network: { autoSelectFamily: true } });
 
     expect(setGlobalDispatcher).toHaveBeenCalledTimes(1);
+    expect(AgentCtor).toHaveBeenCalledWith({
+      connect: {
+        autoSelectFamily: true,
+        autoSelectFamilyAttemptTimeout: 5000,
+      },
+    });
     expectEnvProxyAgentConstructorCall({ nth: 1, autoSelectFamily: true });
   });
 
@@ -216,6 +222,16 @@ describe("resolveTelegramFetch", () => {
     resolveTelegramFetch(undefined, { network: { autoSelectFamily: false } });
 
     expect(setGlobalDispatcher).toHaveBeenCalledTimes(2);
+    expect(AgentCtor).toHaveBeenNthCalledWith(1, {
+      connect: {
+        autoSelectFamily: true,
+        autoSelectFamilyAttemptTimeout: 5000,
+      },
+    });
+    expect(AgentCtor).toHaveBeenNthCalledWith(2, {
+      connect: {
+        autoSelectFamily: false,
+        autoSelectFamilyAttemptTimeout: 5000,
     expectEnvProxyAgentConstructorCall({ nth: 1, autoSelectFamily: true });
     expectEnvProxyAgentConstructorCall({ nth: 2, autoSelectFamily: false });
   });

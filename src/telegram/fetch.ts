@@ -78,6 +78,19 @@ function applyTelegramNetworkWorkarounds(network?: TelegramNetworkConfig): void 
     autoSelectDecision.value !== null &&
     autoSelectDecision.value !== appliedGlobalDispatcherAutoSelectFamily
   ) {
+    try {
+      setGlobalDispatcher(
+        new Agent({
+          connect: {
+            autoSelectFamily: autoSelectDecision.value,
+            autoSelectFamilyAttemptTimeout: 5000,
+          },
+        }),
+      );
+      appliedGlobalDispatcherAutoSelectFamily = autoSelectDecision.value;
+      log.info(`global undici dispatcher autoSelectFamily=${autoSelectDecision.value}`);
+    } catch {
+      // ignore if setGlobalDispatcher is unavailable
     const existingGlobalDispatcher = getGlobalDispatcher();
     const shouldPreserveExistingProxy =
       isProxyLikeDispatcher(existingGlobalDispatcher) && !hasProxyEnvConfigured();
