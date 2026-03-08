@@ -10,6 +10,7 @@ const EXT_BY_MIME: Record<string, string> = {
   "image/png": ".png",
   "image/webp": ".webp",
   "image/gif": ".gif",
+  "audio/aac": ".aac",
   "audio/ogg": ".ogg",
   "audio/mpeg": ".mp3",
   "audio/wav": ".wav",
