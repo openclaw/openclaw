@@ -45,7 +45,7 @@ title: "Features"
 - Optional voice note transcription hook
 - WebChat and macOS menu bar app
 - iOS node with pairing, Canvas, camera, screen recording, location, and voice features
-- Android node with pairing, Connect tab, chat sessions, voice tab, Canvas/camera/screen, plus device, notifications, contacts/calendar, motion, photos, SMS, and app update commands
+- Android node with pairing, Connect tab, chat sessions, voice tab, Canvas/camera/screen, plus device, notifications, contacts/calendar, motion, photos, and SMS commands
 
 <Note>
 Legacy Claude, Codex, Gemini, and Opencode paths have been removed. Pi is the only

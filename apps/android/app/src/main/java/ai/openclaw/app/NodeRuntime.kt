@@ -77,11 +77,6 @@ class NodeRuntime(context: Context) {
     identityStore = identityStore,
   )
 
-  private val appUpdateHandler: AppUpdateHandler = AppUpdateHandler(
-    appContext = appContext,
-    connectedEndpoint = { connectedEndpoint },
-  )
-
   private val locationHandler: LocationHandler = LocationHandler(
     appContext = appContext,
     location = location,
@@ -163,7 +158,6 @@ class NodeRuntime(context: Context) {
     smsHandler = smsHandlerImpl,
     a2uiHandler = a2uiHandler,
     debugHandler = debugHandler,
-    appUpdateHandler = appUpdateHandler,
     isForeground = { _isForeground.value },
     cameraEnabled = { cameraEnabled.value },
     locationEnabled = { locationMode.value != LocationMode.Off },

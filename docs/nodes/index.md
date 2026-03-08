@@ -275,7 +275,6 @@ Available families:
 - `contacts.search`, `contacts.add`
 - `calendar.events`, `calendar.add`
 - `motion.activity`, `motion.pedometer`
-- `app.update`
 
 Example invokes:
 
@@ -288,7 +287,6 @@ openclaw nodes invoke --node <idOrNameOrIp> --command photos.latest --params '{"
 Notes:
 
 - Motion commands are capability-gated by available sensors.
-- `app.update` is permission + policy gated by the node runtime.
 
 ## System commands (node host / mac node)
 

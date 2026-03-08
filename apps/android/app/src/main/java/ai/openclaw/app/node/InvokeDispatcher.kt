@@ -29,7 +29,6 @@ class InvokeDispatcher(
   private val smsHandler: SmsHandler,
   private val a2uiHandler: A2UIHandler,
   private val debugHandler: DebugHandler,
-  private val appUpdateHandler: AppUpdateHandler,
   private val isForeground: () -> Boolean,
   private val cameraEnabled: () -> Boolean,
   private val locationEnabled: () -> Boolean,
@@ -170,10 +169,6 @@ class InvokeDispatcher(
       // Debug commands
       "debug.ed25519" -> debugHandler.handleEd25519()
       "debug.logs" -> debugHandler.handleLogs()
-
-      // App update
-      "app.update" -> appUpdateHandler.handleUpdate(paramsJson)
-
       else -> GatewaySession.InvokeResult.error(code = "INVALID_REQUEST", message = "INVALID_REQUEST: unknown command")
     }
   }
