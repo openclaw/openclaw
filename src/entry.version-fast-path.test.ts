@@ -58,16 +58,21 @@ vi.mock("./version.js", () => ({
 
 describe("entry root version fast path", () => {
   let originalArgv: string[];
+  let exitSpy: ReturnType<typeof vi.spyOn>;
 
   beforeEach(() => {
     vi.resetModules();
     vi.clearAllMocks();
     originalArgv = [...process.argv];
     process.argv = ["node", "openclaw", "--version"];
+    exitSpy = vi
+      .spyOn(process, "exit")
+      .mockImplementation(((_code?: number) => undefined) as typeof process.exit);
   });
 
   afterEach(() => {
     process.argv = originalArgv;
+    exitSpy.mockRestore();
   });
 
   it("prints commit-tagged version output when commit metadata is available", async () => {
@@ -77,6 +82,7 @@ describe("entry root version fast path", () => {
 
     await vi.waitFor(() => {
       expect(logSpy).toHaveBeenCalledWith("OpenClaw 9.9.9-test (abc1234)");
+      expect(exitSpy).toHaveBeenCalledWith(0);
     });
 
     logSpy.mockRestore();
@@ -90,6 +96,7 @@ describe("entry root version fast path", () => {
 
     await vi.waitFor(() => {
       expect(logSpy).toHaveBeenCalledWith("OpenClaw 9.9.9-test");
+      expect(exitSpy).toHaveBeenCalledWith(0);
     });
 
     logSpy.mockRestore();

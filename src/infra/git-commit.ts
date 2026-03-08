@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { resolveGitHeadPath } from "./git-root.js";
 
 const formatCommit = (value?: string | null) => {
@@ -20,6 +21,20 @@ const formatCommit = (value?: string | null) => {
 
 let cachedCommit: string | null | undefined;
 
+const resolveCommitSearchDir = (options: { cwd?: string; moduleUrl?: string }) => {
+  if (options.cwd) {
+    return options.cwd;
+  }
+  if (options.moduleUrl) {
+    try {
+      return path.dirname(fileURLToPath(options.moduleUrl));
+    } catch {
+      // Fall back to process.cwd() when the caller cannot provide a file URL.
+    }
+  }
+  return process.cwd();
+};
+
 const safeReadFilePrefix = (filePath: string, limit = 256) => {
   const fd = fs.openSync(filePath, "r");
   try {
@@ -29,6 +44,19 @@ const safeReadFilePrefix = (filePath: string, limit = 256) => {
   } finally {
     fs.closeSync(fd);
   }
+};
+
+const resolveGitRefsBase = (headPath: string) => {
+  const gitDir = path.dirname(headPath);
+  try {
+    const commonDir = safeReadFilePrefix(path.join(gitDir, "commondir")).trim();
+    if (commonDir) {
+      return path.resolve(gitDir, commonDir);
+    }
+  } catch {
+    // Plain repo git dirs do not have commondir.
+  }
+  return gitDir;
 };
 
 const resolveRefPath = (headPath: string, ref: string) => {
@@ -41,9 +69,9 @@ const resolveRefPath = (headPath: string, ref: string) => {
   if (ref.split(/[/]/).includes("..")) {
     return null;
   }
-  const gitDir = path.dirname(headPath);
-  const resolved = path.resolve(gitDir, ref);
-  const rel = path.relative(gitDir, resolved);
+  const refsBase = resolveGitRefsBase(headPath);
+  const resolved = path.resolve(refsBase, ref);
+  const rel = path.relative(refsBase, resolved);
   if (!rel || rel.startsWith("..") || path.isAbsolute(rel)) {
     return null;
   }
@@ -86,7 +114,13 @@ const readCommitFromBuildInfo = () => {
   }
 };
 
-export const resolveCommitHash = (options: { cwd?: string; env?: NodeJS.ProcessEnv } = {}) => {
+export const resolveCommitHash = (
+  options: {
+    cwd?: string;
+    env?: NodeJS.ProcessEnv;
+    moduleUrl?: string;
+  } = {},
+) => {
   if (cachedCommit !== undefined) {
     return cachedCommit;
   }
@@ -108,7 +142,7 @@ export const resolveCommitHash = (options: { cwd?: string; env?: NodeJS.ProcessE
     return cachedCommit;
   }
   try {
-    const headPath = resolveGitHeadPath(options.cwd ?? process.cwd());
+    const headPath = resolveGitHeadPath(resolveCommitSearchDir(options));
     if (!headPath) {
       cachedCommit = null;
       return cachedCommit;
