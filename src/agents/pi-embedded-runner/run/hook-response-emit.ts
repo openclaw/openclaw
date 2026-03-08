@@ -357,17 +357,18 @@ function rewriteSingleAssistantMessage(msg: AgentMessage, newContent: string): v
 }
 
 /**
- * Clear ALL content from assistant messages in session history.
- * Used when before_response_emit blocks delivery to prevent data leaks.
- * Clears both text parts AND tool_use blocks (which may contain sensitive
- * data in their input arguments) to prevent exfiltration via tool calls.
- */
-/**
- * Remove assistant messages from the array entirely.
+ * Remove assistant (and optionally toolResult) messages from the array entirely.
  *
  * When `scope` is provided, only messages present in `scope` are removed
- * (identity comparison via Set). When omitted, ALL assistant messages with
- * content are removed.
+ * (identity comparison via Set). Both `assistant` and `toolResult` messages
+ * in scope are removed — leaving orphaned `toolResult` entries after their
+ * corresponding `tool_use` assistant message is removed would produce a
+ * malformed conversation history that the Anthropic API rejects.
+ *
+ * When `scope` is omitted, ALL assistant messages with content are removed
+ * (toolResult messages are left untouched in the unscoped path since the
+ * caller is clearing the entire session and toolResults without a preceding
+ * tool_use are already invalid).
  *
  * Messages are removed rather than blanked to avoid ghost entries.
  * Empty-content assistant messages (content: "" or content: []) would persist
@@ -379,11 +380,21 @@ export function clearAllAssistantContent(messages: AgentMessage[], scope?: Agent
   // Iterate in reverse so splice indices stay valid.
   for (let i = messages.length - 1; i >= 0; i--) {
     const msg = messages[i];
-    if (msg.role !== "assistant" || !("content" in msg)) {
-      continue;
-    }
-    if (scopeSet && !scopeSet.has(msg)) {
-      continue;
+    if (scopeSet) {
+      // Scoped removal: remove both assistant and toolResult messages in scope.
+      // toolResult messages must be removed alongside their tool_use assistant
+      // messages to avoid orphaned tool results in session history.
+      if (!scopeSet.has(msg)) {
+        continue;
+      }
+      if (msg.role !== "assistant" && msg.role !== "toolResult") {
+        continue;
+      }
+    } else {
+      // Unscoped: remove all assistant messages with content.
+      if (msg.role !== "assistant" || !("content" in msg)) {
+        continue;
+      }
     }
     messages.splice(i, 1);
   }

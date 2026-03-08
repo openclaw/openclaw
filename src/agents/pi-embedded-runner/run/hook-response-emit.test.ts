@@ -261,6 +261,43 @@ describe("applyBeforeResponseEmitHook", () => {
     expect(activeSession.messages).toHaveLength(0);
   });
 
+  it("removes orphaned toolResult messages alongside assistant on block", async () => {
+    const hookRunner = makeMockHookRunner({ block: true, blockReason: "PII in tool args" });
+    const activeSession = {
+      messages: [
+        makeMsg("assistant", "prior history"),
+        makeMsg("user", "run a tool"),
+        // tool-call assistant + toolResult + final answer — all in current run
+        {
+          role: "assistant" as const,
+          content: [{ type: "tool_use", id: "t1", name: "search", input: { q: "SSN" } }],
+          timestamp: Date.now(),
+        } as unknown as AgentMessage,
+        {
+          role: "toolResult" as const,
+          content: "secret data",
+          timestamp: Date.now(),
+        } as unknown as AgentMessage,
+        makeMsg("assistant", "Here is the SSN: 123-45-6789"),
+      ],
+    };
+
+    await applyBeforeResponseEmitHook({
+      hookRunner,
+      agentCtx: dummyCtx,
+      assistantTexts: ["Here is the SSN: 123-45-6789"],
+      messagesSnapshot: activeSession.messages.slice(),
+      activeSession,
+    });
+
+    // Prior history + user message preserved; tool-call assistant, toolResult,
+    // and final assistant all removed. No orphaned toolResult entries.
+    expect(activeSession.messages).toHaveLength(2);
+    expect(activeSession.messages[0].role).toBe("assistant");
+    expect((activeSession.messages[0] as { content: unknown }).content).toBe("prior history");
+    expect(activeSession.messages[1].role).toBe("user");
+  });
+
   it("rewrites all text parts on modification (not just first)", async () => {
     const hookRunner = makeMockHookRunner({ content: "redacted" });
     const sessionMsg = makeMsg("assistant", [
