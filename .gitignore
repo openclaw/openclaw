@@ -88,6 +88,7 @@ USER.md
 
 # local tooling
 .serena/
+/.codex/original-user-prompt.txt
 
 # Agent credentials and memory (NEVER COMMIT)
 /memory/
