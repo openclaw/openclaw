@@ -104,6 +104,10 @@ function formatCompletionSourceLine(
   if (shell === "fish") {
     return `source "${cachePath}"`;
   }
+  // PowerShell uses dot-sourcing syntax; `source` is not a valid PS cmdlet.
+  if (shell === "powershell") {
+    return `. "${cachePath}"`;
+  }
   return `source "${cachePath}"`;
 }
 
@@ -336,6 +340,9 @@ export async function installCompletion(shell: string, yes: boolean, binName = "
   } else if (shell === "fish") {
     profilePath = path.join(home, ".config", "fish", "config.fish");
     sourceLine = formatCompletionSourceLine("fish", binName, cachePath);
+  } else if (shell === "powershell") {
+    profilePath = getShellProfilePath("powershell");
+    sourceLine = formatCompletionSourceLine("powershell", binName, cachePath);
   } else {
     console.error(`Automated installation not supported for ${shell} yet.`);
     return;

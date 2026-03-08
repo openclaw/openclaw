@@ -1,4 +1,5 @@
 import { execFileSync } from "node:child_process";
+import { resolvePowerShellPath } from "./shell-utils.js";
 
 export type TimeFormatPreference = "auto" | "12" | "24";
 export type ResolvedTimeFormat = "12" | "24";
@@ -114,9 +115,15 @@ function detectSystemTimeFormat(): boolean {
 
   if (process.platform === "win32") {
     try {
+      // Prefer PS7 (pwsh) when available; PS5.1 may lack the Culture API in some locales.
       const result = execFileSync(
-        "powershell",
-        ["-Command", "(Get-Culture).DateTimeFormat.ShortTimePattern"],
+        resolvePowerShellPath(),
+        [
+          "-NoProfile",
+          "-NonInteractive",
+          "-Command",
+          "(Get-Culture).DateTimeFormat.ShortTimePattern",
+        ],
         { encoding: "utf8", timeout: 1000 },
       ).trim();
       if (result.startsWith("H")) {
