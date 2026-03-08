@@ -9,6 +9,7 @@ import re
 import sys
 import urllib.error
 import urllib.request
+from collections.abc import Callable
 from html import escape as html_escape
 from pathlib import Path
 
@@ -73,6 +74,84 @@ def get_model_defaults(model: str) -> tuple[str, str]:
     else:
         # GPT image or future models
         return ("1024x1024", "high")
+
+
+def normalize_optional_flag(
+    *,
+    model: str,
+    raw_value: str,
+    flag_name: str,
+    supported: Callable[[str], bool],
+    allowed: set[str],
+    allowed_text: str,
+    unsupported_message: str,
+    aliases: dict[str, str] | None = None,
+) -> str:
+    """Normalize a string flag, warn when unsupported, and reject invalid values."""
+    value = raw_value.strip().lower()
+    if not value:
+        return ""
+
+    if not supported(model):
+        print(unsupported_message.format(model=model), file=sys.stderr)
+        return ""
+
+    if aliases:
+        value = aliases.get(value, value)
+
+    if value not in allowed:
+        raise ValueError(
+            f"Invalid --{flag_name} '{raw_value}'. Allowed values: {allowed_text}."
+        )
+    return value
+
+
+def normalize_background(model: str, background: str) -> str:
+    """Validate --background for GPT image models."""
+    return normalize_optional_flag(
+        model=model,
+        raw_value=background,
+        flag_name="background",
+        supported=lambda candidate: candidate.startswith("gpt-image"),
+        allowed={"transparent", "opaque", "auto"},
+        allowed_text="transparent, opaque, auto",
+        unsupported_message=(
+            "Warning: --background is only supported for gpt-image models; "
+            "ignoring for '{model}'."
+        ),
+    )
+
+
+def normalize_style(model: str, style: str) -> str:
+    """Validate --style for dall-e-3."""
+    return normalize_optional_flag(
+        model=model,
+        raw_value=style,
+        flag_name="style",
+        supported=lambda candidate: candidate == "dall-e-3",
+        allowed={"vivid", "natural"},
+        allowed_text="vivid, natural",
+        unsupported_message=(
+            "Warning: --style is only supported for dall-e-3; ignoring for '{model}'."
+        ),
+    )
+
+
+def normalize_output_format(model: str, output_format: str) -> str:
+    """Normalize output format for GPT image models and validate allowed values."""
+    return normalize_optional_flag(
+        model=model,
+        raw_value=output_format,
+        flag_name="output-format",
+        supported=lambda candidate: candidate.startswith("gpt-image"),
+        allowed={"png", "jpeg", "webp"},
+        allowed_text="png, jpeg, webp",
+        unsupported_message=(
+            "Warning: --output-format is only supported for gpt-image models; "
+            "ignoring for '{model}'."
+        ),
+        aliases={"jpg": "jpeg"},
+    )
 
 
 def request_images(
@@ -194,9 +273,17 @@ def main() -> int:
 
     prompts = [args.prompt] * count if args.prompt else pick_prompts(count)
 
+    try:
+        normalized_background = normalize_background(args.model, args.background)
+        normalized_style = normalize_style(args.model, args.style)
+        normalized_output_format = normalize_output_format(args.model, args.output_format)
+    except ValueError as e:
+        print(str(e), file=sys.stderr)
+        return 2
+
     # Determine file extension based on output format
-    if args.model.startswith("gpt-image") and args.output_format:
-        file_ext = args.output_format
+    if args.model.startswith("gpt-image") and normalized_output_format:
+        file_ext = normalized_output_format
     else:
         file_ext = "png"
 
@@ -209,9 +296,9 @@ def main() -> int:
             args.model,
             size,
             quality,
-            args.background,
-            args.output_format,
-            args.style,
+            normalized_background,
+            normalized_output_format,
+            normalized_style,
         )
         data = res.get("data", [{}])[0]
         image_b64 = data.get("b64_json")

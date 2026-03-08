@@ -2,7 +2,7 @@ import type { Message } from "@grammyjs/types";
 import type { Bot } from "grammy";
 import type { DmPolicy } from "../config/types.js";
 import { logVerbose } from "../globals.js";
-import { buildPairingReply } from "../pairing/pairing-messages.js";
+import { issuePairingChallenge } from "../pairing/pairing-challenge.js";
 import { upsertChannelPairingRequest } from "../pairing/pairing-store.js";
 import { withTelegramApiErrorLogging } from "./api-logging.js";
 import { resolveSenderAllowMatch, type NormalizedAllowFrom } from "./bot-access.js";
@@ -70,42 +70,46 @@ export async function enforceTelegramDmAccess(params: {
   if (dmPolicy === "pairing") {
     try {
       const telegramUserId = sender.userId ?? sender.candidateId;
-      const { code, created } = await upsertChannelPairingRequest({
+      await issuePairingChallenge({
         channel: "telegram",
-        id: telegramUserId,
-        accountId,
+        senderId: telegramUserId,
+        senderIdLine: `Your Telegram user id: ${telegramUserId}`,
         meta: {
           username: sender.username || undefined,
           firstName: sender.firstName,
           lastName: sender.lastName,
         },
+        upsertPairingRequest: async ({ id, meta }) =>
+          await upsertChannelPairingRequest({
+            channel: "telegram",
+            id,
+            accountId,
+            meta,
+          }),
+        onCreated: () => {
+          logger.info(
+            {
+              chatId: String(chatId),
+              senderUserId: sender.userId ?? undefined,
+              username: sender.username || undefined,
+              firstName: sender.firstName,
+              lastName: sender.lastName,
+              matchKey: allowMatch.matchKey ?? "none",
+              matchSource: allowMatch.matchSource ?? "none",
+            },
+            "telegram pairing request",
+          );
+        },
+        sendPairingReply: async (text) => {
+          await withTelegramApiErrorLogging({
+            operation: "sendMessage",
+            fn: () => bot.api.sendMessage(chatId, text),
+          });
+        },
+        onReplyError: (err) => {
+          logVerbose(`telegram pairing reply failed for chat ${chatId}: ${String(err)}`);
+        },
       });
-      if (created) {
-        logger.info(
-          {
-            chatId: String(chatId),
-            senderUserId: sender.userId ?? undefined,
-            username: sender.username || undefined,
-            firstName: sender.firstName,
-            lastName: sender.lastName,
-            matchKey: allowMatch.matchKey ?? "none",
-            matchSource: allowMatch.matchSource ?? "none",
-          },
-          "telegram pairing request",
-        );
-        await withTelegramApiErrorLogging({
-          operation: "sendMessage",
-          fn: () =>
-            bot.api.sendMessage(
-              chatId,
-              buildPairingReply({
-                channel: "telegram",
-                idLine: `Your Telegram user id: ${telegramUserId}`,
-                code,
-              }),
-            ),
-        });
-      }
     } catch (err) {
       logVerbose(`telegram pairing reply failed for chat ${chatId}: ${String(err)}`);
     }

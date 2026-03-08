@@ -6,7 +6,7 @@ type CredentialMatrixEntry = {
   path: string;
   refPath?: string;
   when?: { type: "api_key" | "token" };
-  secretShape: "secret_input" | "sibling_ref";
+  secretShape: "secret_input" | "sibling_ref"; // pragma: allowlist secret
   optIn: true;
   notes?: string;
 };
@@ -24,7 +24,6 @@ const EXCLUDED_MUTABLE_OR_RUNTIME_MANAGED = [
   "commands.ownerDisplaySecret",
   "channels.matrix.accessToken",
   "channels.matrix.accounts.*.accessToken",
-  "gateway.auth.token",
   "hooks.token",
   "hooks.gmail.pushToken",
   "hooks.mappings[].sessionKey",

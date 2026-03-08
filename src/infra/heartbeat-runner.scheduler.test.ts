@@ -158,9 +158,51 @@ describe("startHeartbeatRunner", () => {
     await vi.advanceTimersByTimeAsync(30 * 60_000 + 1_000);
     expect(runSpy).toHaveBeenCalledTimes(1);
 
-    // Timer should be rescheduled; next heartbeat should still fire
-    await vi.advanceTimersByTimeAsync(30 * 60_000 + 1_000);
+    // The wake layer retries after DEFAULT_RETRY_MS (1 s).  No scheduleNext()
+    // is called inside runOnce, so we must wait for the full cooldown.
+    await vi.advanceTimersByTimeAsync(1_000);
     expect(runSpy).toHaveBeenCalledTimes(2);
+
+    runner.stop();
+  });
+
+  it("does not push nextDueMs forward on repeated requests-in-flight skips", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(0));
+
+    // Simulate a long-running heartbeat: the first 5 calls return
+    // requests-in-flight (retries from the wake layer), then the 6th succeeds.
+    let callCount = 0;
+    const runSpy = vi.fn().mockImplementation(async () => {
+      callCount++;
+      if (callCount <= 5) {
+        return { status: "skipped", reason: "requests-in-flight" };
+      }
+      return { status: "ran", durationMs: 1 };
+    });
+
+    const runner = startHeartbeatRunner({
+      cfg: {
+        agents: { defaults: { heartbeat: { every: "30m" } } },
+      } as OpenClawConfig,
+      runOnce: runSpy,
+    });
+
+    // Trigger the first heartbeat at t=30m — returns requests-in-flight.
+    await vi.advanceTimersByTimeAsync(30 * 60_000 + 1_000);
+    expect(runSpy).toHaveBeenCalledTimes(1);
+
+    // Simulate 4 more retries at short intervals (wake layer retries).
+    for (let i = 0; i < 4; i++) {
+      requestHeartbeatNow({ reason: "retry", coalesceMs: 0 });
+      await vi.advanceTimersByTimeAsync(1_000);
+    }
+    expect(runSpy).toHaveBeenCalledTimes(5);
+
+    // The next interval tick at ~t=60m should still fire — the schedule
+    // must not have been pushed to t=30m * 6 = 180m by the 5 retries.
+    await vi.advanceTimersByTimeAsync(30 * 60_000);
+    expect(runSpy).toHaveBeenCalledTimes(6);
 
     runner.stop();
   });
@@ -199,6 +241,44 @@ describe("startHeartbeatRunner", () => {
         sessionKey: "agent:ops:discord:channel:alerts",
       }),
     );
+
+    runner.stop();
+  });
+
+  it("does not fan out to unrelated agents for session-scoped exec wakes", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(0));
+
+    const runSpy = vi.fn().mockResolvedValue({ status: "ran", durationMs: 1 });
+    const runner = startHeartbeatRunner({
+      cfg: {
+        agents: {
+          defaults: { heartbeat: { every: "30m" } },
+          list: [
+            { id: "main", heartbeat: { every: "30m" } },
+            { id: "finance", heartbeat: { every: "30m" } },
+          ],
+        },
+      } as OpenClawConfig,
+      runOnce: runSpy,
+    });
+
+    requestHeartbeatNow({
+      reason: "exec-event",
+      sessionKey: "agent:main:main",
+      coalesceMs: 0,
+    });
+    await vi.advanceTimersByTimeAsync(1);
+
+    expect(runSpy).toHaveBeenCalledTimes(1);
+    expect(runSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agentId: "main",
+        reason: "exec-event",
+        sessionKey: "agent:main:main",
+      }),
+    );
+    expect(runSpy.mock.calls.some((call) => call[0]?.agentId === "finance")).toBe(false);
 
     runner.stop();
   });

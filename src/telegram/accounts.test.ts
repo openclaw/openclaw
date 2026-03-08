@@ -1,8 +1,10 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { withEnv } from "../test-utils/env.js";
 import {
   listTelegramAccountIds,
+  resetMissingDefaultWarnFlag,
+  resolveTelegramPollActionGateState,
   resolveDefaultTelegramAccountId,
   resolveTelegramAccount,
 } from "./accounts.js";
@@ -10,6 +12,10 @@ import {
 const { warnMock } = vi.hoisted(() => ({
   warnMock: vi.fn(),
 }));
+
+function warningLines(): string[] {
+  return warnMock.mock.calls.map(([line]) => String(line));
+}
 
 vi.mock("../logging/subsystem.js", () => ({
   createSubsystemLogger: () => {
@@ -24,6 +30,7 @@ vi.mock("../logging/subsystem.js", () => ({
 describe("resolveTelegramAccount", () => {
   afterEach(() => {
     warnMock.mockClear();
+    resetMissingDefaultWarnFlag();
   });
 
   it("falls back to the first configured account when accountId is omitted", () => {
@@ -105,6 +112,94 @@ describe("resolveTelegramAccount", () => {
 });
 
 describe("resolveDefaultTelegramAccountId", () => {
+  beforeEach(() => {
+    resetMissingDefaultWarnFlag();
+  });
+
+  afterEach(() => {
+    warnMock.mockClear();
+    resetMissingDefaultWarnFlag();
+  });
+
+  it("warns when accounts.default is missing in multi-account setup (#32137)", () => {
+    const cfg: OpenClawConfig = {
+      channels: {
+        telegram: {
+          accounts: { work: { botToken: "tok-work" }, alerts: { botToken: "tok-alerts" } },
+        },
+      },
+    };
+
+    const result = resolveDefaultTelegramAccountId(cfg);
+    expect(result).toBe("alerts");
+    expect(warnMock).toHaveBeenCalledWith(expect.stringContaining("accounts.default is missing"));
+  });
+
+  it("does not warn when accounts.default exists", () => {
+    const cfg: OpenClawConfig = {
+      channels: {
+        telegram: {
+          accounts: { default: { botToken: "tok-default" }, work: { botToken: "tok-work" } },
+        },
+      },
+    };
+
+    resolveDefaultTelegramAccountId(cfg);
+    expect(warningLines().every((line) => !line.includes("accounts.default is missing"))).toBe(
+      true,
+    );
+  });
+
+  it("does not warn when defaultAccount is explicitly set", () => {
+    const cfg: OpenClawConfig = {
+      channels: {
+        telegram: {
+          defaultAccount: "work",
+          accounts: { work: { botToken: "tok-work" } },
+        },
+      },
+    };
+
+    resolveDefaultTelegramAccountId(cfg);
+    expect(warningLines().every((line) => !line.includes("accounts.default is missing"))).toBe(
+      true,
+    );
+  });
+
+  it("does not warn when only one non-default account is configured", () => {
+    const cfg: OpenClawConfig = {
+      channels: {
+        telegram: {
+          accounts: { work: { botToken: "tok-work" } },
+        },
+      },
+    };
+
+    resolveDefaultTelegramAccountId(cfg);
+    expect(warningLines().every((line) => !line.includes("accounts.default is missing"))).toBe(
+      true,
+    );
+  });
+
+  it("warns only once per process lifetime", () => {
+    const cfg: OpenClawConfig = {
+      channels: {
+        telegram: {
+          accounts: { work: { botToken: "tok-work" }, alerts: { botToken: "tok-alerts" } },
+        },
+      },
+    };
+
+    resolveDefaultTelegramAccountId(cfg);
+    resolveDefaultTelegramAccountId(cfg);
+    resolveDefaultTelegramAccountId(cfg);
+
+    const missingDefaultWarns = warningLines().filter((line) =>
+      line.includes("accounts.default is missing"),
+    );
+    expect(missingDefaultWarns).toHaveLength(1);
+  });
+
   it("prefers channels.telegram.defaultAccount when it matches a configured account", () => {
     const cfg: OpenClawConfig = {
       channels: {
@@ -211,6 +306,26 @@ describe("resolveTelegramAccount allowFrom precedence", () => {
 
     expect(resolved.config.allowFrom).toBeUndefined();
     expect(resolved.config.groupAllowFrom).toBeUndefined();
+  });
+});
+
+describe("resolveTelegramPollActionGateState", () => {
+  it("requires both sendMessage and poll actions", () => {
+    const state = resolveTelegramPollActionGateState((key) => key !== "poll");
+    expect(state).toEqual({
+      sendMessageEnabled: true,
+      pollEnabled: false,
+      enabled: false,
+    });
+  });
+
+  it("returns enabled only when both actions are enabled", () => {
+    const state = resolveTelegramPollActionGateState(() => true);
+    expect(state).toEqual({
+      sendMessageEnabled: true,
+      pollEnabled: true,
+      enabled: true,
+    });
   });
 });
 
