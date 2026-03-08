@@ -50,6 +50,7 @@ const MAX_RECENT_MINUTES = 24 * 60;
 const MAX_STEER_MESSAGE_CHARS = 4_000;
 const STEER_RATE_LIMIT_MS = 2_000;
 const STEER_ABORT_SETTLE_TIMEOUT_MS = 5_000;
+const STEER_RATE_LIMIT_MAX_ENTRIES = 256;
 
 const steerRateLimit = new Map<string, number>();
 
@@ -606,6 +607,15 @@ export function createSubagentsTool(opts?: { agentSessionKey?: string }): AnyAge
           });
         }
         steerRateLimit.set(rateKey, now);
+
+        // Evict expired entries to prevent unbounded growth
+        if (steerRateLimit.size > STEER_RATE_LIMIT_MAX_ENTRIES) {
+          for (const [k, ts] of steerRateLimit) {
+            if (now - ts >= STEER_RATE_LIMIT_MS) {
+              steerRateLimit.delete(k);
+            }
+          }
+        }
 
         // Suppress announce for the interrupted run before aborting so we don't
         // emit stale pre-steer findings if the run exits immediately.
