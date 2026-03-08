@@ -254,7 +254,7 @@ export const agentHandlers: GatewayRequestHandlers = {
       replyChannel?: string;
       accountId?: string;
       replyAccountId?: string;
-      threadId?: string;
+      threadId?: string | number | boolean;
       groupId?: string;
       groupChannel?: string;
       groupSpace?: string;
@@ -563,10 +563,28 @@ export const agentHandlers: GatewayRequestHandlers = {
         : typeof request.to === "string" && request.to.trim()
           ? request.to.trim()
           : undefined;
-    const explicitThreadId =
-      typeof request.threadId === "string" && request.threadId.trim()
-        ? request.threadId.trim()
-        : undefined;
+    const explicitThreadId = (() => {
+      const raw = request.threadId;
+      if (typeof raw === "boolean") {
+        // `thread=true` is a session-thread selector shorthand: keep existing session thread.
+        return undefined;
+      }
+      if (typeof raw === "number" && Number.isFinite(raw)) {
+        return String(Math.trunc(raw));
+      }
+      if (typeof raw !== "string") {
+        return undefined;
+      }
+      const trimmed = raw.trim();
+      if (!trimmed) {
+        return undefined;
+      }
+      if (trimmed.toLowerCase() === "true") {
+        // CLI/users sometimes pass --thread true to mean "use current session thread".
+        return undefined;
+      }
+      return trimmed;
+    })();
     const turnSourceChannel =
       typeof request.channel === "string" && request.channel.trim()
         ? request.channel.trim()
