@@ -2,6 +2,47 @@ import { EventEmitter } from "node:events";
 import fsSync from "node:fs";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+const { ProxyCtor, EnvProxyCtor, getLastHttpsProxyAgent, getLastEnvProxyAgent, resetProxyMocks } =
+  vi.hoisted(() => {
+    class MockHttpsProxyAgent {
+      static lastCreated: MockHttpsProxyAgent | undefined;
+      constructor(public readonly proxy: string) {
+        MockHttpsProxyAgent.lastCreated = this;
+      }
+    }
+
+    class MockEnvHttpProxyAgent {
+      static lastCreated: MockEnvHttpProxyAgent | undefined;
+      constructor() {
+        MockEnvHttpProxyAgent.lastCreated = this;
+      }
+    }
+
+    return {
+      ProxyCtor: MockHttpsProxyAgent,
+      EnvProxyCtor: MockEnvHttpProxyAgent,
+      getLastHttpsProxyAgent: () => MockHttpsProxyAgent.lastCreated,
+      getLastEnvProxyAgent: () => MockEnvHttpProxyAgent.lastCreated,
+      resetProxyMocks: () => {
+        MockHttpsProxyAgent.lastCreated = undefined;
+        MockEnvHttpProxyAgent.lastCreated = undefined;
+      },
+    };
+  });
+
+vi.mock("https-proxy-agent", () => ({
+  HttpsProxyAgent: ProxyCtor,
+}));
+
+vi.mock("undici", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("undici")>();
+  return {
+    ...actual,
+    EnvHttpProxyAgent: EnvProxyCtor,
+  };
+});
+
 import { resetLogger, setLoggerOverride } from "../logging.js";
 import { baileys, getLastSocket, resetBaileysMocks, resetLoadConfigMock } from "./test-helpers.js";
 
@@ -59,6 +100,13 @@ describe("web session", () => {
     vi.clearAllMocks();
     resetBaileysMocks();
     resetLoadConfigMock();
+    resetProxyMocks();
+    delete process.env.HTTPS_PROXY;
+    delete process.env.HTTP_PROXY;
+    delete process.env.ALL_PROXY;
+    delete process.env.https_proxy;
+    delete process.env.http_proxy;
+    delete process.env.all_proxy;
   });
 
   afterEach(() => {
@@ -83,6 +131,36 @@ describe("web session", () => {
     sock.ev.emit("creds.update", {});
     await flushCredsUpdate();
     expect(saveCreds).toHaveBeenCalled();
+  });
+
+  it("does not attach proxy agents when proxy env is unset", async () => {
+    await createWaSocket(false, false);
+
+    const passed = (baileys.makeWASocket as ReturnType<typeof vi.fn>).mock.calls[0]?.[0] as {
+      agent?: unknown;
+      fetchAgent?: unknown;
+    };
+
+    expect(passed.agent).toBeUndefined();
+    expect(passed.fetchAgent).toBeUndefined();
+    expect(getLastHttpsProxyAgent()).toBeUndefined();
+    expect(getLastEnvProxyAgent()).toBeUndefined();
+  });
+
+  it("attaches proxy agents when proxy env is configured", async () => {
+    process.env.HTTPS_PROXY = "http://127.0.0.1:7890";
+
+    await createWaSocket(false, false);
+
+    const passed = (baileys.makeWASocket as ReturnType<typeof vi.fn>).mock.calls[0]?.[0] as {
+      agent?: unknown;
+      fetchAgent?: unknown;
+    };
+
+    expect(getLastHttpsProxyAgent()).toBeDefined();
+    expect(getLastEnvProxyAgent()).toBeDefined();
+    expect(passed.agent).toBe(getLastHttpsProxyAgent());
+    expect(passed.fetchAgent).toBe(getLastEnvProxyAgent());
   });
 
   it("waits for connection open", async () => {

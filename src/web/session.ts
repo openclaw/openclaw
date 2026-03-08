@@ -7,9 +7,12 @@ import {
   makeWASocket,
   useMultiFileAuthState,
 } from "@whiskeysockets/baileys";
+import { HttpsProxyAgent } from "https-proxy-agent";
 import qrcode from "qrcode-terminal";
+import { EnvHttpProxyAgent } from "undici";
 import { formatCliCommand } from "../cli/command-format.js";
 import { danger, success } from "../globals.js";
+import { hasProxyEnvConfigured } from "../infra/net/proxy-env.js";
 import { getChildLogger, toPinoLikeLogger } from "../logging.js";
 import { ensureDir, resolveUserPath } from "../utils.js";
 import { VERSION } from "../version.js";
@@ -32,6 +35,75 @@ export {
 } from "./auth-store.js";
 
 let credsSaveQueue: Promise<void> = Promise.resolve();
+
+type WaProxyAgents = {
+  agent?: HttpsProxyAgent<string>;
+  fetchAgent?: EnvHttpProxyAgent;
+};
+
+let cachedProxyAgents: WaProxyAgents | null = null;
+let cachedProxyEnvKey: string | null = null;
+
+function resolveProxyUrlFromEnv(): string | undefined {
+  return (
+    process.env.HTTPS_PROXY ||
+    process.env.ALL_PROXY ||
+    process.env.HTTP_PROXY ||
+    process.env.https_proxy ||
+    process.env.all_proxy ||
+    process.env.http_proxy
+  )?.trim();
+}
+
+function resolveProxyEnvCacheKey(): string {
+  return JSON.stringify([
+    process.env.HTTPS_PROXY,
+    process.env.ALL_PROXY,
+    process.env.HTTP_PROXY,
+    process.env.https_proxy,
+    process.env.all_proxy,
+    process.env.http_proxy,
+    process.env.NO_PROXY,
+    process.env.no_proxy,
+  ]);
+}
+
+function resolveWaProxyAgents(): WaProxyAgents {
+  const envKey = resolveProxyEnvCacheKey();
+  if (cachedProxyAgents && cachedProxyEnvKey === envKey) {
+    return cachedProxyAgents;
+  }
+  if (!hasProxyEnvConfigured()) {
+    cachedProxyAgents = {};
+    cachedProxyEnvKey = envKey;
+    return cachedProxyAgents;
+  }
+
+  const proxyUrl = resolveProxyUrlFromEnv();
+  if (!proxyUrl) {
+    cachedProxyAgents = {};
+    cachedProxyEnvKey = envKey;
+    return cachedProxyAgents;
+  }
+
+  try {
+    cachedProxyAgents = {
+      agent: new HttpsProxyAgent(proxyUrl),
+      fetchAgent: new EnvHttpProxyAgent(),
+    };
+    cachedProxyEnvKey = envKey;
+  } catch (err) {
+    getChildLogger({ module: "web-session" }).warn(
+      { error: String(err) },
+      "failed creating WhatsApp proxy agents",
+    );
+    cachedProxyAgents = {};
+    cachedProxyEnvKey = envKey;
+  }
+
+  return cachedProxyAgents;
+}
+
 function enqueueSaveCreds(
   authDir: string,
   saveCreds: () => Promise<void> | void,
@@ -105,7 +177,9 @@ export async function createWaSocket(
   maybeRestoreCredsFromBackup(authDir);
   const { state, saveCreds } = await useMultiFileAuthState(authDir);
   const { version } = await fetchLatestBaileysVersion();
+  const proxyAgents = resolveWaProxyAgents();
   const sock = makeWASocket({
+    ...proxyAgents,
     auth: {
       creds: state.creds,
       keys: makeCacheableSignalKeyStore(state.keys, logger),
