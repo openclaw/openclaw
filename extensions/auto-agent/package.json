@@ -1,0 +1,11 @@
+{
+  "name": "auto-agent",
+  "version": "1.0.0",
+  "description": "Autonomous self-improvement and self-repair agent plugin",
+  "type": "module",
+  "openclaw": {
+    "extensions": [
+      "index.ts"
+    ]
+  }
+}

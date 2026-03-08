@@ -1,0 +1,17 @@
+{
+  "name": "@openclaw/local-voice",
+  "version": "0.1.0",
+  "description": "Local voice assistant with STT, TTS, and VRChat avatar control",
+  "main": "index.ts",
+  "types": "index.ts",
+  "dependencies": {
+    "naudiodon": "^2.3.6",
+    "ws": "^8.18.0"
+  },
+  "devDependencies": {
+    "openclaw": "workspace:*"
+  },
+  "peerDependencies": {
+    "openclaw": "workspace:*"
+  }
+}

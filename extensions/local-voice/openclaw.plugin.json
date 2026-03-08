@@ -1,0 +1,63 @@
+{
+  "id": "local-voice",
+  "name": "Local Voice",
+  "description": "Local voice assistant with STT, TTS, camera vision and VRChat avatar control",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "sttProvider": {
+        "type": "string",
+        "enum": ["openai-realtime", "whisper"],
+        "description": "Speech-to-text provider",
+        "default": "openai-realtime"
+      },
+      "ttsProvider": {
+        "type": "string",
+        "enum": ["style-bert-vits2", "elevenlabs", "openai", "voicevox"],
+        "description": "Text-to-speech provider",
+        "default": "voicevox"
+      },
+      "vvEndpoint": {
+        "type": "string",
+        "description": "VOICEVOX API endpoint",
+        "default": "http://localhost:50021"
+      },
+      "vvSpeakerId": {
+        "type": "number",
+        "description": "VOICEVOX speaker ID",
+        "default": 2
+      },
+      "sbv2Endpoint": {
+        "type": "string",
+        "description": "Style-Bert-VITS2 API endpoint",
+        "default": "http://localhost:5000"
+      },
+      "sbv2ModelId": {
+        "type": "string",
+        "description": "Style-Bert-VITS2 model ID",
+        "default": "Hakua"
+      },
+      "vrchatOscEnabled": {
+        "type": "boolean",
+        "description": "Enable VRChat OSC avatar control",
+        "default": true
+      },
+      "vrchatOscPort": {
+        "type": "number",
+        "description": "VRChat OSC port",
+        "default": 9000
+      },
+      "vadThreshold": {
+        "type": "number",
+        "description": "Voice activity detection threshold (0.0 - 1.0)",
+        "default": 0.5
+      },
+      "silenceDurationMs": {
+        "type": "number",
+        "description": "Silence duration in ms before considering speech ended",
+        "default": 800
+      }
+    }
+  }
+}
