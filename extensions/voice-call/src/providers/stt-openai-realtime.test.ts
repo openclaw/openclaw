@@ -8,7 +8,11 @@ type ProviderInternals = {
 };
 
 function readProviderInternals(config: RealtimeSTTConfig): ProviderInternals {
-  return new OpenAIRealtimeSTTProvider(config) as unknown as ProviderInternals;
+  const provider = new OpenAIRealtimeSTTProvider(config) as unknown as Record<string, unknown>;
+  return {
+    vadThreshold: provider["vadThreshold"] as number,
+    silenceDurationMs: provider["silenceDurationMs"] as number,
+  };
 }
 
 describe("OpenAIRealtimeSTTProvider constructor defaults", () => {
