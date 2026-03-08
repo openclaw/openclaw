@@ -507,6 +507,27 @@ describe("formatReasoningMessage", () => {
       "Reasoning:\n_Reasoning here_",
     );
   });
+
+  it("formats as code block when format is 'code'", () => {
+    expect(formatReasoningMessage("Line one\nLine two", "code")).toBe(
+      "Reasoning:\n```\nLine one\nLine two\n```",
+    );
+  });
+
+  it("formats as spoiler when format is 'spoiler'", () => {
+    expect(formatReasoningMessage("Line one\nLine two", "spoiler")).toBe(
+      "Reasoning:\n||Line one||\n||Line two||",
+    );
+  });
+
+  it("spoiler preserves empty lines", () => {
+    expect(formatReasoningMessage("A\n\nB", "spoiler")).toBe("Reasoning:\n||A||\n\n||B||");
+  });
+
+  it("defaults to italic when format is omitted", () => {
+    expect(formatReasoningMessage("test")).toBe("Reasoning:\n_test_");
+    expect(formatReasoningMessage("test", "italic")).toBe("Reasoning:\n_test_");
+  });
 });
 
 describe("stripDowngradedToolCallText", () => {

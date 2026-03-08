@@ -1,4 +1,4 @@
-import { formatReasoningMessage } from "../agents/pi-embedded-utils.js";
+import { formatReasoningMessage, type ReasoningFormat } from "../agents/pi-embedded-utils.js";
 import type { ReplyPayload } from "../auto-reply/types.js";
 import { findCodeRegions, isInsideCode } from "../shared/text/code-regions.js";
 import { stripReasoningTagsFromText } from "../shared/text/reasoning-tags.js";
@@ -59,7 +59,10 @@ export type TelegramReasoningSplit = {
   answerText?: string;
 };
 
-export function splitTelegramReasoningText(text?: string): TelegramReasoningSplit {
+export function splitTelegramReasoningText(
+  text?: string,
+  reasoningFormat?: ReasoningFormat,
+): TelegramReasoningSplit {
   if (typeof text !== "string") {
     return {};
   }
@@ -82,7 +85,9 @@ export function splitTelegramReasoningText(text?: string): TelegramReasoningSpli
     return { answerText: text };
   }
 
-  const reasoningText = taggedReasoning ? formatReasoningMessage(taggedReasoning) : undefined;
+  const reasoningText = taggedReasoning
+    ? formatReasoningMessage(taggedReasoning, reasoningFormat)
+    : undefined;
   const answerText = strippedAnswer || undefined;
   return { reasoningText, answerText };
 }

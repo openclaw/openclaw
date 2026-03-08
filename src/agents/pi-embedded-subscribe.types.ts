@@ -4,6 +4,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { HookRunner } from "../plugins/hooks.js";
 import type { BlockReplyChunking } from "./pi-embedded-block-chunker.js";
 import type { BlockReplyPayload } from "./pi-embedded-payloads.js";
+import type { ReasoningFormat } from "./pi-embedded-utils.js";
 
 export type ToolResultFormat = "markdown" | "plain";
 
@@ -13,6 +14,7 @@ export type SubscribeEmbeddedPiSessionParams = {
   hookRunner?: HookRunner;
   verboseLevel?: VerboseLevel;
   reasoningMode?: ReasoningLevel;
+  reasoningFormat?: ReasoningFormat;
   toolResultFormat?: ToolResultFormat;
   shouldEmitToolResult?: () => boolean;
   shouldEmitToolOutput?: () => boolean;
