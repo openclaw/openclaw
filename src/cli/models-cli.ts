@@ -19,6 +19,7 @@ import {
   modelsImageFallbacksClearCommand,
   modelsImageFallbacksListCommand,
   modelsImageFallbacksRemoveCommand,
+  modelsConfigureVllmCommand,
   modelsListCommand,
   modelsScanCommand,
   modelsSetCommand,
@@ -131,6 +132,33 @@ export function registerModelsCli(program: Command) {
     .action(async (model: string) => {
       await runModelsCommand(async () => {
         await modelsSetImageCommand(model, defaultRuntime);
+      });
+    });
+
+  const configure = models.command("configure").description("Configure model providers");
+  configure
+    .command("vllm")
+    .description("Configure a vLLM provider + model")
+    .option("--base-url <url>", "vLLM base URL (defaults to http://127.0.0.1:8000/v1)")
+    .option("--api-key <key>", "vLLM API key")
+    .option("--model-id <id>", "vLLM model id")
+    .option(
+      "--agent <id>",
+      "Agent id for auth profile storage (overrides OPENCLAW_AGENT_DIR/PI_CODING_AGENT_DIR)",
+    )
+    .action(async (opts, command) => {
+      const agent =
+        resolveOptionFromCommand<string>(command, "agent") ?? (opts.agent as string | undefined);
+      await runModelsCommand(async () => {
+        await modelsConfigureVllmCommand(
+          {
+            baseUrl: opts.baseUrl as string | undefined,
+            apiKey: opts.apiKey as string | undefined,
+            modelId: opts.modelId as string | undefined,
+            agent,
+          },
+          defaultRuntime,
+        );
       });
     });
 
