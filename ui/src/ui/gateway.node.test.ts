@@ -7,8 +7,8 @@ const loadOrCreateDeviceIdentityMock = vi.hoisted(() =>
   vi.fn(
     async (): Promise<DeviceIdentity> => ({
       deviceId: "device-1",
-      privateKey: "private-key",
-      publicKey: "public-key",
+      privateKey: "private-key", // pragma: allowlist secret
+      publicKey: "public-key", // pragma: allowlist secret
     }),
   ),
 );
@@ -75,30 +75,6 @@ vi.mock("./device-identity.ts", () => ({
 
 const { GatewayBrowserClient } = await import("./gateway.ts");
 
-function createStorageMock(): Storage {
-  const store = new Map<string, string>();
-  return {
-    get length() {
-      return store.size;
-    },
-    clear() {
-      store.clear();
-    },
-    getItem(key: string) {
-      return store.get(key) ?? null;
-    },
-    key(index: number) {
-      return Array.from(store.keys())[index] ?? null;
-    },
-    removeItem(key: string) {
-      store.delete(key);
-    },
-    setItem(key: string, value: string) {
-      store.set(key, String(value));
-    },
-  };
-}
-
 function getLatestWebSocket(): MockWebSocket {
   const ws = wsInstances.at(-1);
   if (!ws) {
@@ -114,27 +90,12 @@ describe("GatewayBrowserClient", () => {
     signDevicePayloadMock.mockClear();
     loadOrCreateDeviceIdentityMock.mockResolvedValue({
       deviceId: "device-1",
-      privateKey: "private-key",
-      publicKey: "public-key",
+      privateKey: "private-key", // pragma: allowlist secret
+      publicKey: "public-key", // pragma: allowlist secret
     });
 
-    const localStorage = createStorageMock();
+    window.localStorage.clear();
     vi.stubGlobal("WebSocket", MockWebSocket);
-    vi.stubGlobal("localStorage", localStorage);
-    vi.stubGlobal("crypto", {
-      randomUUID: vi.fn(() => "req-1"),
-      subtle: {},
-    });
-    vi.stubGlobal("navigator", {
-      language: "en-GB",
-      platform: "test-platform",
-      userAgent: "test-agent",
-    });
-    vi.stubGlobal("window", {
-      clearTimeout: vi.fn(),
-      localStorage,
-      setTimeout: vi.fn(() => 1),
-    });
 
     storeDeviceAuthToken({
       deviceId: "device-1",
@@ -148,7 +109,7 @@ describe("GatewayBrowserClient", () => {
     vi.unstubAllGlobals();
   });
 
-  it("keeps shared auth token separate from cached device token", async () => {
+  it("prefers explicit shared auth over cached device tokens", async () => {
     const client = new GatewayBrowserClient({
       url: "ws://127.0.0.1:18789",
       token: "shared-auth-token",
@@ -162,19 +123,47 @@ describe("GatewayBrowserClient", () => {
       event: "connect.challenge",
       payload: { nonce: "nonce-1" },
     });
-    await Promise.resolve();
+    await vi.waitFor(() => expect(ws.sent.length).toBeGreaterThan(0));
 
     const connectFrame = JSON.parse(ws.sent.at(-1) ?? "{}") as {
       id?: string;
       method?: string;
       params?: { auth?: { token?: string } };
     };
-    expect(connectFrame.id).toBe("req-1");
+    expect(typeof connectFrame.id).toBe("string");
     expect(connectFrame.method).toBe("connect");
     expect(connectFrame.params?.auth?.token).toBe("shared-auth-token");
     expect(signDevicePayloadMock).toHaveBeenCalledWith("private-key", expect.any(String));
     const signedPayload = signDevicePayloadMock.mock.calls[0]?.[1];
+    expect(signedPayload).toContain("|shared-auth-token|nonce-1");
+    expect(signedPayload).not.toContain("stored-device-token");
+  });
+
+  it("uses cached device tokens only when no explicit shared auth is provided", async () => {
+    const client = new GatewayBrowserClient({
+      url: "ws://127.0.0.1:18789",
+    });
+
+    client.start();
+    const ws = getLatestWebSocket();
+    ws.emitOpen();
+    ws.emitMessage({
+      type: "event",
+      event: "connect.challenge",
+      payload: { nonce: "nonce-1" },
+    });
+    await vi.waitFor(() => expect(ws.sent.length).toBeGreaterThan(0));
+
+    const connectFrame = JSON.parse(ws.sent.at(-1) ?? "{}") as {
+      id?: string;
+      method?: string;
+      params?: { auth?: { token?: string } };
+    };
+    expect(typeof connectFrame.id).toBe("string");
+    expect(connectFrame.method).toBe("connect");
+    expect(connectFrame.params?.auth?.token).toBe("stored-device-token");
+    expect(signDevicePayloadMock).toHaveBeenCalledWith("private-key", expect.any(String));
+    const signedPayload = signDevicePayloadMock.mock.calls[0]?.[1];
     expect(signedPayload).toContain("|stored-device-token|nonce-1");
-    expect(signedPayload).not.toContain("shared-auth-token");
   });
 });

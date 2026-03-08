@@ -20,6 +20,17 @@ function parseAllowedUserIds(raw: string | string[] | undefined): string[] {
     .filter(Boolean);
 }
 
+function parseRateLimitPerMinute(raw: string | undefined): number {
+  if (raw == null) {
+    return 30;
+  }
+  const trimmed = raw.trim();
+  if (!/^-?\d+$/.test(trimmed)) {
+    return 30;
+  }
+  return Number.parseInt(trimmed, 10);
+}
+
 /**
  * List all configured account IDs for this channel.
  * Returns ["default"] if there's a base config, plus any named accounts.
@@ -62,7 +73,7 @@ export function resolveAccount(cfg: any, accountId?: string | null): ResolvedSyn
   const envIncomingUrl = process.env.SYNOLOGY_CHAT_INCOMING_URL ?? "";
   const envNasHost = process.env.SYNOLOGY_NAS_HOST ?? "localhost";
   const envAllowedUserIds = process.env.SYNOLOGY_ALLOWED_USER_IDS ?? "";
-  const envRateLimit = process.env.SYNOLOGY_RATE_LIMIT;
+  const envRateLimitValue = parseRateLimitPerMinute(process.env.SYNOLOGY_RATE_LIMIT);
   const envBotName = process.env.OPENCLAW_BOT_NAME ?? "OpenClaw";
 
   // Merge: account override > base channel config > env var
@@ -78,9 +89,7 @@ export function resolveAccount(cfg: any, accountId?: string | null): ResolvedSyn
       accountOverride.allowedUserIds ?? channelCfg.allowedUserIds ?? envAllowedUserIds,
     ),
     rateLimitPerMinute:
-      accountOverride.rateLimitPerMinute ??
-      channelCfg.rateLimitPerMinute ??
-      (envRateLimit ? parseInt(envRateLimit, 10) || 30 : 30),
+      accountOverride.rateLimitPerMinute ?? channelCfg.rateLimitPerMinute ?? envRateLimitValue,
     botName: accountOverride.botName ?? channelCfg.botName ?? envBotName,
     allowInsecureSsl: accountOverride.allowInsecureSsl ?? channelCfg.allowInsecureSsl ?? false,
   };

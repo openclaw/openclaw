@@ -94,6 +94,102 @@ export type RunCronAgentTurnResult = {
 } & CronRunOutcome &
   CronRunTelemetry;
 
+type ResolvedAgentConfig = NonNullable<ReturnType<typeof resolveAgentConfig>>;
+
+function extractCronAgentDefaultsOverride(agentConfigOverride?: ResolvedAgentConfig) {
+  const {
+    model: overrideModel,
+    sandbox: _agentSandboxOverride,
+    ...agentOverrideRest
+  } = agentConfigOverride ?? {};
+  return {
+    overrideModel,
+    definedOverrides: Object.fromEntries(
+      Object.entries(agentOverrideRest).filter(([, value]) => value !== undefined),
+    ) as Partial<AgentDefaultsConfig>,
+  };
+}
+
+function mergeCronAgentModelOverride(params: {
+  defaults: AgentDefaultsConfig;
+  overrideModel: ResolvedAgentConfig["model"] | undefined;
+}) {
+  const nextDefaults: AgentDefaultsConfig = { ...params.defaults };
+  const existingModel =
+    nextDefaults.model && typeof nextDefaults.model === "object" ? nextDefaults.model : {};
+  if (typeof params.overrideModel === "string") {
+    nextDefaults.model = { ...existingModel, primary: params.overrideModel };
+  } else if (params.overrideModel) {
+    nextDefaults.model = { ...existingModel, ...params.overrideModel };
+  }
+  return nextDefaults;
+}
+
+function buildCronAgentDefaultsConfig(params: {
+  defaults?: AgentDefaultsConfig;
+  agentConfigOverride?: ResolvedAgentConfig;
+}) {
+  const { overrideModel, definedOverrides } = extractCronAgentDefaultsOverride(
+    params.agentConfigOverride,
+  );
+  // Keep sandbox overrides out of `agents.defaults` here. Sandbox resolution
+  // already merges global defaults with per-agent overrides using `agentId`;
+  // copying the agent sandbox into defaults clobbers global defaults and can
+  // double-apply nested agent overrides during isolated cron runs.
+  return mergeCronAgentModelOverride({
+    defaults: Object.assign({}, params.defaults, definedOverrides),
+    overrideModel,
+  });
+}
+
+type ResolvedCronDeliveryTarget = Awaited<ReturnType<typeof resolveDeliveryTarget>>;
+
+function resolveCronToolPolicy(params: {
+  deliveryRequested: boolean;
+  resolvedDelivery: ResolvedCronDeliveryTarget;
+}) {
+  return {
+    // Only enforce an explicit message target when the cron delivery target
+    // was successfully resolved. When resolution fails the agent should not
+    // be blocked by a target it cannot satisfy (#27898).
+    requireExplicitMessageTarget: params.deliveryRequested && params.resolvedDelivery.ok,
+    disableMessageTool: params.deliveryRequested,
+  };
+}
+
+async function resolveCronDeliveryContext(params: {
+  cfg: OpenClawConfig;
+  job: CronJob;
+  agentId: string;
+}) {
+  const deliveryPlan = resolveCronDeliveryPlan(params.job);
+  const resolvedDelivery = await resolveDeliveryTarget(params.cfg, params.agentId, {
+    channel: deliveryPlan.channel ?? "last",
+    to: deliveryPlan.to,
+    accountId: deliveryPlan.accountId,
+    sessionKey: params.job.sessionKey,
+  });
+  return {
+    deliveryPlan,
+    deliveryRequested: deliveryPlan.requested,
+    resolvedDelivery,
+    toolPolicy: resolveCronToolPolicy({
+      deliveryRequested: deliveryPlan.requested,
+      resolvedDelivery,
+    }),
+  };
+}
+
+function appendCronDeliveryInstruction(params: {
+  commandBody: string;
+  deliveryRequested: boolean;
+}) {
+  if (!params.deliveryRequested) {
+    return params.commandBody;
+  }
+  return `${params.commandBody}\n\nReturn your summary as plain text; it will be delivered automatically. If the task explicitly calls for messaging a specific external recipient, note who/where it should go instead of sending it yourself.`.trim();
+}
+
 export async function runCronIsolatedAgentTurn(params: {
   cfg: OpenClawConfig;
   deps: CliDeps;
@@ -125,36 +221,14 @@ export async function runCronIsolatedAgentTurn(params: {
   const agentConfigOverride = normalizedRequested
     ? resolveAgentConfig(params.cfg, normalizedRequested)
     : undefined;
-  const {
-    model: overrideModel,
-    sandbox: _agentSandboxOverride,
-    ...agentOverrideRest
-  } = agentConfigOverride ?? {};
   // Use the requested agentId even when there is no explicit agent config entry.
   // This ensures auth-profiles, workspace, and agentDir all resolve to the
   // correct per-agent paths (e.g. ~/.openclaw/agents/<agentId>/agent/).
   const agentId = normalizedRequested ?? defaultAgentId;
-  // Keep sandbox overrides out of `agents.defaults` here. Sandbox resolution
-  // already merges global defaults with per-agent overrides using `agentId`;
-  // copying the agent sandbox into defaults clobbers global defaults and can
-  // double-apply nested agent overrides during isolated cron runs.
-  const definedOverrides = Object.fromEntries(
-    Object.entries(agentOverrideRest).filter(([, value]) => value !== undefined),
-  );
-  const agentCfg: AgentDefaultsConfig = Object.assign(
-    {},
-    params.cfg.agents?.defaults,
-    definedOverrides as Partial<AgentDefaultsConfig>,
-  );
-  // Merge agent model override with defaults instead of replacing, so that
-  // `fallbacks` from `agents.defaults.model` are preserved when the agent
-  // (or its per-cron model pin) only specifies `primary`.
-  const existingModel = agentCfg.model && typeof agentCfg.model === "object" ? agentCfg.model : {};
-  if (typeof overrideModel === "string") {
-    agentCfg.model = { ...existingModel, primary: overrideModel };
-  } else if (overrideModel) {
-    agentCfg.model = { ...existingModel, ...overrideModel };
-  }
+  const agentCfg = buildCronAgentDefaultsConfig({
+    defaults: params.cfg.agents?.defaults,
+    agentConfigOverride,
+  });
   const cfgWithAgentDefaults: OpenClawConfig = {
     ...params.cfg,
     agents: Object.assign({}, params.cfg.agents, { defaults: agentCfg }),
@@ -347,14 +421,10 @@ export async function runCronIsolatedAgentTurn(params: {
   });
 
   const agentPayload = params.job.payload.kind === "agentTurn" ? params.job.payload : null;
-  const deliveryPlan = resolveCronDeliveryPlan(params.job);
-  const deliveryRequested = deliveryPlan.requested;
-
-  const resolvedDelivery = await resolveDeliveryTarget(cfgWithAgentDefaults, agentId, {
-    channel: deliveryPlan.channel ?? "last",
-    to: deliveryPlan.to,
-    accountId: deliveryPlan.accountId,
-    sessionKey: params.job.sessionKey,
+  const { deliveryRequested, resolvedDelivery, toolPolicy } = await resolveCronDeliveryContext({
+    cfg: cfgWithAgentDefaults,
+    job: params.job,
+    agentId,
   });
 
   const { formattedTime, timeLine } = resolveCronStyleNow(params.cfg, now);
@@ -396,10 +466,7 @@ export async function runCronIsolatedAgentTurn(params: {
     // Internal/trusted source - use original format
     commandBody = `${base}\n${timeLine}`.trim();
   }
-  if (deliveryRequested) {
-    commandBody =
-      `${commandBody}\n\nReturn your summary as plain text; it will be delivered automatically. If the task explicitly calls for messaging a specific external recipient, note who/where it should go instead of sending it yourself.`.trim();
-  }
+  commandBody = appendCronDeliveryInstruction({ commandBody, deliveryRequested });
 
   const existingSkillsSnapshot = cronSession.sessionEntry.skillsSnapshot;
   const skillsSnapshot = resolveCronSkillsSnapshot({
@@ -540,11 +607,8 @@ export async function runCronIsolatedAgentTurn(params: {
             bootstrapContextMode: agentPayload?.lightContext ? "lightweight" : undefined,
             bootstrapContextRunKind: "cron",
             runId: cronSession.sessionEntry.sessionId,
-            // Only enforce an explicit message target when the cron delivery target
-            // was successfully resolved. When resolution fails the agent should not
-            // be blocked by a target it cannot satisfy (#27898).
-            requireExplicitMessageTarget: deliveryRequested && resolvedDelivery.ok,
-            disableMessageTool: deliveryRequested,
+            requireExplicitMessageTarget: toolPolicy.requireExplicitMessageTarget,
+            disableMessageTool: toolPolicy.disableMessageTool,
             allowTransientCooldownProbe: runOptions?.allowTransientCooldownProbe,
             abortSignal,
             bootstrapPromptWarningSignaturesSeen,
