@@ -47,6 +47,45 @@ const registryCache = new Map<string, PluginRegistry>();
 
 const defaultLogger = () => createSubsystemLogger("plugins");
 
+type PluginSdkAliasCandidateKind = "dist" | "src";
+
+function resolvePluginSdkAliasCandidateOrder(params: {
+  modulePath: string;
+  isProduction: boolean;
+}): PluginSdkAliasCandidateKind[] {
+  const normalizedModulePath = params.modulePath.replace(/\\/g, "/");
+  const isDistRuntime = normalizedModulePath.includes("/dist/");
+  return isDistRuntime || params.isProduction ? ["dist", "src"] : ["src", "dist"];
+}
+
+function listPluginSdkAliasCandidates(params: {
+  srcFile: string;
+  distFile: string;
+  modulePath: string;
+}) {
+  const orderedKinds = resolvePluginSdkAliasCandidateOrder({
+    modulePath: params.modulePath,
+    isProduction: process.env.NODE_ENV === "production",
+  });
+  let cursor = path.dirname(params.modulePath);
+  const candidates: string[] = [];
+  for (let i = 0; i < 6; i += 1) {
+    const candidateMap = {
+      src: path.join(cursor, "src", "plugin-sdk", params.srcFile),
+      dist: path.join(cursor, "dist", "plugin-sdk", params.distFile),
+    } as const;
+    for (const kind of orderedKinds) {
+      candidates.push(candidateMap[kind]);
+    }
+    const parent = path.dirname(cursor);
+    if (parent === cursor) {
+      break;
+    }
+    cursor = parent;
+  }
+  return candidates;
+}
+
 const resolvePluginSdkAliasFile = (params: {
   srcFile: string;
   distFile: string;
@@ -54,27 +93,14 @@ const resolvePluginSdkAliasFile = (params: {
 }): string | null => {
   try {
     const modulePath = params.modulePath ?? fileURLToPath(import.meta.url);
-    const isProduction = process.env.NODE_ENV === "production";
-    const normalizedModulePath = modulePath.replace(/\\/g, "/");
-    const isDistRuntime = normalizedModulePath.includes("/dist/");
-    let cursor = path.dirname(modulePath);
-    for (let i = 0; i < 6; i += 1) {
-      const srcCandidate = path.join(cursor, "src", "plugin-sdk", params.srcFile);
-      const distCandidate = path.join(cursor, "dist", "plugin-sdk", params.distFile);
-      const orderedCandidates =
-        isDistRuntime || isProduction
-          ? [distCandidate, srcCandidate]
-          : [srcCandidate, distCandidate];
-      for (const candidate of orderedCandidates) {
-        if (fs.existsSync(candidate)) {
-          return candidate;
-        }
+    for (const candidate of listPluginSdkAliasCandidates({
+      srcFile: params.srcFile,
+      distFile: params.distFile,
+      modulePath,
+    })) {
+      if (fs.existsSync(candidate)) {
+        return candidate;
       }
-      const parent = path.dirname(cursor);
-      if (parent === cursor) {
-        break;
-      }
-      cursor = parent;
     }
   } catch {
     // ignore
@@ -190,6 +216,8 @@ const resolvePluginSdkScopedAliasMap = (): Record<string, string> => {
 };
 
 export const __testing = {
+  listPluginSdkAliasCandidates,
+  resolvePluginSdkAliasCandidateOrder,
   resolvePluginSdkAliasFile,
 };
 

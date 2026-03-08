@@ -1171,7 +1171,7 @@ describe("dispatchTelegramMessage draft streaming", () => {
     },
   );
 
-  it("uses message preview transport for DM reasoning lane when answer preview lane is active", async () => {
+  it("uses message preview transport for all DM lanes when streaming is active", async () => {
     setupDraftStreams({ answerMessageId: 999, reasoningMessageId: 111 });
     dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
       async ({ dispatcherOptions, replyOptions }) => {
@@ -1187,10 +1187,12 @@ describe("dispatchTelegramMessage draft streaming", () => {
     await dispatchWithContext({ context: createReasoningStreamContext(), streamMode: "partial" });
 
     expect(createTelegramDraftStream).toHaveBeenCalledTimes(2);
+    // Both answer (call[0]) and reasoning (call[1]) lanes should use message
+    // transport in DMs to prevent duplicate messages. (Fixes #33453)
     expect(createTelegramDraftStream.mock.calls[0]?.[0]).toEqual(
       expect.objectContaining({
         thread: { id: 777, scope: "dm" },
-        previewTransport: "auto",
+        previewTransport: "message",
       }),
     );
     expect(createTelegramDraftStream.mock.calls[1]?.[0]).toEqual(

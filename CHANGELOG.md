@@ -220,6 +220,7 @@ Docs: https://docs.openclaw.ai
 - Plugins/HTTP route migration diagnostics: rewrite legacy `api.registerHttpHandler(...)` loader failures into actionable migration guidance so doctor/plugin diagnostics point operators to `api.registerHttpRoute(...)` or `registerPluginHttpRoute(...)`. (#36794) Thanks @vincentkoc
 - Doctor/Heartbeat upgrade diagnostics: warn when heartbeat delivery is configured with an implicit `directPolicy` so upgrades pin direct/DM behavior explicitly instead of relying on the current default. (#36789) Thanks @vincentkoc.
 - Agents/current-time UTC anchor: append a machine-readable UTC suffix alongside local `Current time:` lines in shared cron-style prompt contexts so agents can compare UTC-stamped workspace timestamps without doing timezone math. (#32423) thanks @jriff.
+- Ollama/local model handling: preserve explicit lower `contextWindow` / `maxTokens` overrides during merge refresh, and keep native Ollama streamed replies from surfacing fallback `thinking` / `reasoning` text once real content starts streaming. (#39292) Thanks @vincentkoc.
 - TUI/webchat command-owner scope alignment: treat internal-channel gateway sessions with `operator.admin` as owner-authorized in command auth, restoring cron/gateway/connector tool access for affected TUI/webchat sessions while keeping external channels on identity-based owner checks. (from #35666, #35673, #35704) Thanks @Naylenv, @Octane0411, and @Sid-Qin.
 - Discord/inbound timeout isolation: separate inbound worker timeout tracking from listener timeout budgets so queued Discord replies are no longer dropped when listener watchdog windows expire mid-run. (#36602) Thanks @dutifulbob.
 - Memory/doctor SecretRef handling: treat SecretRef-backed memory-search API keys as configured, and fail embedding setup with explicit unresolved-secret errors instead of crashing. (#36835) Thanks @joshavant.
@@ -318,6 +319,9 @@ Docs: https://docs.openclaw.ai
 - Exec approvals/gateway-node policy: honor explicit `ask=off` from `exec-approvals.json` even when runtime defaults are stricter, so trusted full/off setups stop re-prompting on gateway and node exec paths. Landed from contributor PR #26789 by @pandego. Thanks @pandego.
 - Exec approvals/config fallback: inherit `ask` from `exec-approvals.json` when `tools.exec.ask` is unset, so local full/off defaults no longer fall back to `on-miss` for exec tool and `nodes run`. Landed from contributor PR #29187 by @Bartok9. Thanks @Bartok9.
 - Exec approvals/allow-always shell scripts: persist and match script paths for wrapper invocations like `bash scripts/foo.sh` while still blocking `-c`/`-s` wrapper bypasses. Landed from contributor PR #35137 by @yuweuii. Thanks @yuweuii.
+- Queue/followup dedupe across drain restarts: dedupe queued redelivery `message_id` values after queue recreation so busy-session followups no longer duplicate on replayed inbound events. Landed from contributor PR #33168 by @rylena. Thanks @rylena.
+- Telegram/preview-final edit idempotence: treat `message is not modified` errors during preview finalization as delivered so partial-stream final replies do not fall back to duplicate sends. Landed from contributor PR #34983 by @HOYALIM. Thanks @HOYALIM.
+- Telegram/DM streaming transport parity: use message preview transport for all DM streaming lanes so final delivery can edit the active preview instead of sending duplicate finals. Landed from contributor PR #38906 by @gambletan. Thanks @gambletan.
 
 ## 2026.3.2
 
