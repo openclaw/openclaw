@@ -131,6 +131,19 @@ const ReactionNotificationModeSchema = z.enum(["off", "own", "all"]).optional();
  */
 const ReplyInThreadSchema = z.enum(["disabled", "enabled"]).optional();
 
+/**
+ * Reply-to mode for controlling whether bot replies are attached to the
+ * triggering message or sent as standalone messages in the chat.
+ *
+ * - "off": Send replies as new top-level messages (not attached to any message)
+ * - "first": Reply to the first message in the conversation (default for groups)
+ * - "all": Reply to every triggering message
+ *
+ * In group chats, "off" prevents replies from being collapsed under the
+ * original message, keeping them visible in the main chat flow.
+ */
+const ReplyToModeSchema = z.enum(["off", "first", "all"]).optional();
+
 export const FeishuGroupSchema = z
   .object({
     requireMention: z.boolean().optional(),
@@ -171,6 +184,7 @@ const FeishuSharedConfigShape = {
   streaming: StreamingModeSchema,
   tools: FeishuToolsConfigSchema,
   replyInThread: ReplyInThreadSchema,
+  replyToMode: ReplyToModeSchema,
   reactionNotifications: ReactionNotificationModeSchema,
   typingIndicator: z.boolean().optional(),
   resolveSenderNames: z.boolean().optional(),
