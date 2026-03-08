@@ -294,6 +294,7 @@ export type AgentCompactionQualityGuardConfig = {
   /** Maximum regeneration retries after a failed quality audit. Default: 1 when enabled. */
   maxRetries?: number;
 };
+export type AgentCompactionOnFailure = "reset" | "continue" | "halt";
 
 export type AgentCompactionConfig = {
   /** Compaction summarization mode. */
@@ -322,6 +323,15 @@ export type AgentCompactionConfig = {
    * Set to [] to disable post-compaction context injection entirely.
    */
   postCompactionSections?: string[];
+  /**
+   * What to do when compaction fails or times out.
+   * - "reset" (default): reset the session and start fresh (current behavior).
+   * - "continue": skip reset, session continues accepting messages (may degrade).
+   * - "halt": halt the session so no further messages are processed until /new.
+   */
+  onFailure?: AgentCompactionOnFailure;
+  /** Custom message returned when session is halted due to compaction failure. Only used with onFailure: "halt". */
+  onFailureMessage?: string;
 };
 
 export type AgentCompactionMemoryFlushConfig = {

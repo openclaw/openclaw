@@ -164,6 +164,10 @@ export type SessionEntry = {
   skillsSnapshot?: SessionSkillSnapshot;
   systemPromptReport?: SessionSystemPromptReport;
   acp?: SessionAcpMeta;
+  /** Timestamp (ms) when the session was halted due to compaction failure. */
+  haltedAt?: number;
+  /** Human-readable reason why the session was halted. */
+  haltedReason?: string;
 };
 
 function normalizeRuntimeField(value: string | undefined): string | undefined {

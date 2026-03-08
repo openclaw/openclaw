@@ -1462,6 +1462,7 @@ export async function runEmbeddedPiAgent(
               agentMeta,
               aborted,
               systemPromptReport: attempt.systemPromptReport,
+              compactionTimedOut: timedOutDuringCompaction || undefined,
               // Handle client tool calls (OpenResponses hosted tools)
               // Propagate the LLM stop reason so callers (lifecycle events,
               // ACP bridge) can distinguish end_turn from max_tokens.
