@@ -821,3 +821,64 @@ export async function focusPageByTargetIdViaPlaywright(opts: {
     }
   }
 }
+
+/**
+ * Get a page by targetId with retry logic for extension relay scenarios.
+ * This function attempts to find a page by targetId, and if it fails with "tab not found",
+ * it will force disconnect the Playwright connection and retry once for extension relay URLs.
+ *
+ * @param opts - Options containing cdpUrl and targetId
+ * @returns Promise<Page> - The found page
+ * @throws Error - If page is not found after retry or for non-extension relay URLs
+ */
+export async function getPageForTargetIdWithRetry(opts: {
+  cdpUrl: string;
+  targetId?: string;
+}): Promise<Page> {
+  // First attempt - try to get the page normally
+  try {
+    return await getPageForTargetId(opts);
+  } catch (error) {
+    // If targetId is not provided or empty, re-throw immediately
+    if (!opts.targetId?.trim()) {
+      throw error;
+    }
+
+    // Only retry for extension relay URLs (localhost/127.0.0.1 with port 18791)
+    const isExtensionRelay =
+      opts.cdpUrl.includes("127.0.0.1:18791") || opts.cdpUrl.includes("localhost:18791");
+
+    if (!isExtensionRelay) {
+      throw error;
+    }
+
+    // Only retry if the error is "tab not found"
+    if (!(error instanceof Error) || !error.message.includes("tab not found")) {
+      throw error;
+    }
+
+    // Force disconnect the Playwright connection to recover from stale state
+    await forceDisconnectPlaywrightForTarget({
+      cdpUrl: opts.cdpUrl,
+      targetId: opts.targetId,
+      reason: "tab not found - retrying with fresh connection",
+    });
+
+    // Second attempt - try again after disconnecting
+    try {
+      return await getPageForTargetId(opts);
+    } catch (retryError) {
+      // If we still can't find the page, but there's only one page available,
+      // use it as a fallback (extension relays can block CDP attachment APIs)
+      const { browser } = await connectBrowser(opts.cdpUrl);
+      const pages = await getAllPages(browser);
+
+      if (pages.length === 1) {
+        return pages[0];
+      }
+
+      // Re-throw the original retry error
+      throw retryError;
+    }
+  }
+}
