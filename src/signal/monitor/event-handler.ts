@@ -260,6 +260,17 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
           accountId: deps.accountId,
         });
       },
+      stop: async () => {
+        if (!ctxPayload.To) {
+          return;
+        }
+        await sendTypingSignal(ctxPayload.To, {
+          baseUrl: deps.baseUrl,
+          account: deps.account,
+          accountId: deps.accountId,
+          stop: true,
+        });
+      },
       onStartError: (err) => {
         logTypingFailure({
           log: logVerbose,
@@ -291,18 +302,25 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       },
     });
 
-    const { queuedFinal } = await dispatchInboundMessage({
-      ctx: ctxPayload,
-      cfg: deps.cfg,
-      dispatcher,
-      replyOptions: {
-        ...replyOptions,
-        disableBlockStreaming:
-          typeof deps.blockStreaming === "boolean" ? !deps.blockStreaming : undefined,
-        onModelSelected,
-      },
-    });
-    markDispatchIdle();
+    let queuedFinal: boolean | undefined;
+    try {
+      ({ queuedFinal } = await dispatchInboundMessage({
+        ctx: ctxPayload,
+        cfg: deps.cfg,
+        dispatcher,
+        replyOptions: {
+          ...replyOptions,
+          disableBlockStreaming:
+            typeof deps.blockStreaming === "boolean" ? !deps.blockStreaming : undefined,
+          onModelSelected,
+        },
+      }));
+    } finally {
+      markDispatchIdle();
+      // Explicitly stop the typing indicator keepalive loop.
+      // Ensures "typing..." clears even on NO_REPLY, errors, or early returns.
+      typingCallbacks.onCleanup?.();
+    }
     if (!queuedFinal) {
       if (entry.isGroup && historyKey) {
         clearHistoryEntriesIfEnabled({
