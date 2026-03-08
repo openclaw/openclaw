@@ -615,11 +615,16 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       registerContextEngine: (id, factory) => registerContextEngine(id, factory),
       registerMemoryPromptSection: (builder) => {
         if (record.kind !== "memory") {
-          throw new Error(
-            `Only memory plugins can register a memory prompt section (plugin: ${record.id})`,
-          );
+          pushDiagnostic({
+            level: "error",
+            pluginId: record.id,
+            source: record.source,
+            message: `Only memory plugins can register a memory prompt section (plugin: ${record.id})`,
+          });
+          return;
         }
         registerMemoryPromptSection(builder);
+      },
       },
       resolvePath: (input: string) => resolveUserPath(input),
       on: (hookName, handler, opts) =>
