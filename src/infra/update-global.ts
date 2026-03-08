@@ -153,6 +153,64 @@ export function globalInstallFallbackArgs(
   return ["npm", "i", "-g", spec, ...NPM_GLOBAL_INSTALL_OMIT_OPTIONAL_FLAGS];
 }
 
+export type DirectoryOwnershipResult = {
+  ok: boolean;
+  unwritableFiles: string[];
+};
+
+const UNWRITABLE_DIRS_CAP = 10;
+const WRITABLE_DIR_MODE = fs.constants.W_OK | fs.constants.X_OK;
+
+export async function checkDirectoryOwnership(dirPath: string): Promise<DirectoryOwnershipResult> {
+  const unwritableFiles: string[] = [];
+
+  // npm mutates package trees by creating/renaming/removing directory entries,
+  // so write access on directories is what matters — individual file modes are
+  // irrelevant (read-only files and unwritable symlink targets are fine).
+
+  // Check the package root directory itself first.
+  try {
+    await fs.access(dirPath, WRITABLE_DIR_MODE);
+  } catch {
+    unwritableFiles.push(dirPath);
+    return { ok: false, unwritableFiles };
+  }
+
+  async function scan(dir: string): Promise<void> {
+    if (unwritableFiles.length >= UNWRITABLE_DIRS_CAP) {
+      return;
+    }
+    let entries: import("node:fs").Dirent[];
+    try {
+      entries = await fs.readdir(dir, { withFileTypes: true });
+    } catch {
+      // Can't read the directory — treat it as unwritable.
+      unwritableFiles.push(dir);
+      return;
+    }
+    for (const entry of entries) {
+      if (!entry.isDirectory()) {
+        continue;
+      }
+      if (unwritableFiles.length >= UNWRITABLE_DIRS_CAP) {
+        break;
+      }
+      const fullPath = path.join(dir, entry.name);
+      try {
+        await fs.access(fullPath, WRITABLE_DIR_MODE);
+      } catch {
+        unwritableFiles.push(fullPath);
+      }
+      if (unwritableFiles.length < UNWRITABLE_DIRS_CAP) {
+        await scan(fullPath);
+      }
+    }
+  }
+
+  await scan(dirPath);
+  return { ok: unwritableFiles.length === 0, unwritableFiles };
+}
+
 export async function cleanupGlobalRenameDirs(params: {
   globalRoot: string;
   packageName: string;
