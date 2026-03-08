@@ -1,3 +1,4 @@
+import { releaseAllHeldSessionLocks } from "../../agents/session-write-lock.js";
 import type { startGatewayServer } from "../../gateway/server.js";
 import { acquireGatewayLock } from "../../infra/gateway-lock.js";
 import { restartGatewayProcessWithFreshPid } from "../../infra/process-respawn.js";
@@ -183,6 +184,15 @@ export async function runGatewayLoop(params: {
       // coordinator level — rather than inside individual subsystem init
       // functions, to avoid surprising cross-cutting side effects.
       resetAllLanes();
+
+      // Release any session write locks held by the previous lifecycle.
+      // On in-process restart the PID stays the same, so stale-lock detection
+      // based on dead-PID alone would miss these.  Releasing them here ensures
+      // the new lifecycle's `cleanStaleLockFiles` pass starts with a clean map
+      // and any remaining orphaned lock files are removed from disk.
+      void releaseAllHeldSessionLocks().catch((err) => {
+        gatewayLog.warn(`failed to release session locks on restart: ${String(err)}`);
+      });
     });
 
     // Keep process alive; SIGUSR1 triggers an in-process restart (no supervisor required).

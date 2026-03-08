@@ -389,6 +389,10 @@ export async function cleanStaleLockFiles(params: {
   staleMs?: number;
   removeStale?: boolean;
   nowMs?: number;
+  /** When set, lock files owned by this PID that are not tracked in the
+   *  in-process held-locks map are treated as orphans from a previous
+   *  lifecycle (e.g. in-process restart) and marked stale. */
+  ownPid?: number;
   log?: {
     warn?: (message: string) => void;
     info?: (message: string) => void;
@@ -420,6 +424,27 @@ export async function cleanStaleLockFiles(params: {
     const lockPath = path.join(sessionsDir, entry.name);
     const payload = await readLockPayload(lockPath);
     const inspected = inspectLockPayload(payload, staleMs, nowMs);
+
+    // Detect orphaned own-PID locks: the lock file claims to be owned by the
+    // current process, but the in-process held-locks map has no record of it.
+    // This happens after an in-process restart (SIGUSR1) where the old
+    // lifecycle's lock files survive but the held-locks map was cleared.
+    if (!inspected.stale && typeof params.ownPid === "number" && inspected.pid === params.ownPid) {
+      // Derive the session file path from the lock path (strip trailing ".lock").
+      const sessionFile = lockPath.slice(0, -".lock".length);
+      let normalizedSessionFile = sessionFile;
+      try {
+        const dir = await fs.realpath(path.dirname(sessionFile));
+        normalizedSessionFile = path.join(dir, path.basename(sessionFile));
+      } catch {
+        // Fall back to unresolved path.
+      }
+      if (!HELD_LOCKS.has(normalizedSessionFile)) {
+        inspected.stale = true;
+        inspected.staleReasons.push("orphaned-own-pid");
+      }
+    }
+
     const lockInfo: SessionLockInspection = {
       lockPath,
       ...inspected,
@@ -552,9 +577,27 @@ export async function acquireSessionWriteLock(params: {
   throw new Error(`session file locked (timeout ${timeoutMs}ms): ${owner} ${lockPath}`);
 }
 
+/**
+ * Release all held session write locks and remove their lock files from disk.
+ * Call this before an in-process restart to ensure the new lifecycle starts
+ * with a clean slate. Unlike `releaseAllLocksSync`, this is async and fully
+ * cleans up file handles.
+ */
+export async function releaseAllHeldSessionLocks(): Promise<number> {
+  let released = 0;
+  for (const [sessionFile, held] of HELD_LOCKS.entries()) {
+    const didRelease = await releaseHeldLock(sessionFile, held, { force: true });
+    if (didRelease) {
+      released += 1;
+    }
+  }
+  return released;
+}
+
 export const __testing = {
   cleanupSignals: [...CLEANUP_SIGNALS],
   handleTerminationSignal,
   releaseAllLocksSync,
   runLockWatchdogCheck,
+  HELD_LOCKS,
 };

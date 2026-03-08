@@ -18,6 +18,7 @@ import {
   __testing,
   acquireSessionWriteLock,
   cleanStaleLockFiles,
+  releaseAllHeldSessionLocks,
   resolveSessionLockMaxHoldFromTimeout,
 } from "./session-write-lock.js";
 
@@ -396,5 +397,120 @@ describe("acquireSessionWriteLock", () => {
 
     expect(process.listeners("SIGINT")).toContain(keepAlive);
     process.off("SIGINT", keepAlive);
+  });
+});
+
+describe("cleanStaleLockFiles with ownPid", () => {
+  it("removes orphaned own-PID lock files not tracked in HELD_LOCKS", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-own-pid-"));
+    const sessionsDir = path.join(root, "sessions");
+    await fs.mkdir(sessionsDir, { recursive: true });
+
+    try {
+      const nowMs = Date.now();
+      // Create a lock file owned by current PID (simulates leftover from previous lifecycle)
+      const orphanLock = path.join(sessionsDir, "orphan.jsonl.lock");
+      await fs.writeFile(
+        orphanLock,
+        JSON.stringify({
+          pid: process.pid,
+          createdAt: new Date(nowMs - 5_000).toISOString(),
+        }),
+        "utf8",
+      );
+
+      const result = await cleanStaleLockFiles({
+        sessionsDir,
+        staleMs: 30_000,
+        nowMs,
+        removeStale: true,
+        ownPid: process.pid,
+      });
+
+      expect(result.cleaned).toHaveLength(1);
+      expect(result.cleaned[0].staleReasons).toContain("orphaned-own-pid");
+      await expect(fs.access(orphanLock)).rejects.toThrow();
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("preserves own-PID lock files that are tracked in HELD_LOCKS", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-own-pid-held-"));
+    const sessionsDir = path.join(root, "sessions");
+    await fs.mkdir(sessionsDir, { recursive: true });
+
+    try {
+      const sessionFile = path.join(sessionsDir, "held.jsonl");
+      const lock = await acquireSessionWriteLock({ sessionFile, timeoutMs: 500 });
+
+      const result = await cleanStaleLockFiles({
+        sessionsDir,
+        staleMs: 30_000,
+        removeStale: true,
+        ownPid: process.pid,
+      });
+
+      // The lock is tracked in HELD_LOCKS, so it should NOT be cleaned
+      expect(result.cleaned).toHaveLength(0);
+      expect(result.locks).toHaveLength(1);
+      expect(result.locks[0].stale).toBe(false);
+
+      await lock.release();
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("does not treat own-PID locks as orphaned when ownPid is not set", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-no-ownpid-"));
+    const sessionsDir = path.join(root, "sessions");
+    await fs.mkdir(sessionsDir, { recursive: true });
+
+    try {
+      const nowMs = Date.now();
+      const lockFile = path.join(sessionsDir, "alive.jsonl.lock");
+      await fs.writeFile(
+        lockFile,
+        JSON.stringify({
+          pid: process.pid,
+          createdAt: new Date(nowMs - 5_000).toISOString(),
+        }),
+        "utf8",
+      );
+
+      const result = await cleanStaleLockFiles({
+        sessionsDir,
+        staleMs: 30_000,
+        nowMs,
+        removeStale: true,
+        // ownPid not set — should NOT detect as orphaned
+      });
+
+      expect(result.cleaned).toHaveLength(0);
+      expect(result.locks[0].stale).toBe(false);
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("releaseAllHeldSessionLocks", () => {
+  it("releases all held locks and removes lock files", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-release-all-"));
+    try {
+      const file1 = path.join(root, "a.jsonl");
+      const file2 = path.join(root, "b.jsonl");
+      await acquireSessionWriteLock({ sessionFile: file1, timeoutMs: 500 });
+      await acquireSessionWriteLock({ sessionFile: file2, timeoutMs: 500 });
+
+      const released = await releaseAllHeldSessionLocks();
+      expect(released).toBe(2);
+
+      await expect(fs.access(`${file1}.lock`)).rejects.toThrow();
+      await expect(fs.access(`${file2}.lock`)).rejects.toThrow();
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
   });
 });

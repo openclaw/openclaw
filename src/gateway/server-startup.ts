@@ -54,6 +54,7 @@ export async function startGatewaySidecars(params: {
         sessionsDir,
         staleMs: SESSION_LOCK_STALE_MS,
         removeStale: true,
+        ownPid: process.pid,
         log: { warn: (message) => params.log.warn(message) },
       });
     }
