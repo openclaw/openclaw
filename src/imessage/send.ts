@@ -1,5 +1,6 @@
 import { loadConfig } from "../config/config.js";
 import { resolveMarkdownTableMode } from "../config/markdown-tables.js";
+import { stripMarkdown } from "../line/markdown-to-line.js";
 import { convertMarkdownTables } from "../markdown/tables.js";
 import { kindFromMime } from "../media/mime.js";
 import { resolveOutboundAttachmentFromUrl } from "../media/outbound-attachment.js";
@@ -146,6 +147,7 @@ export async function sendMessageIMessage(
       accountId: account.accountId,
     });
     message = convertMarkdownTables(message, tableMode);
+    message = stripMarkdown(message);
   }
   message = prependReplyTagIfNeeded(message, opts.replyToId);
 
