@@ -133,6 +133,7 @@ export function renderChatControls(state: AppViewState) {
     state.sessionsResult,
     mainSessionKey,
     hideCron,
+    (state as unknown as OpenClawApp).sessionsWithUnread,
   );
   const disableThinkingToggle = state.onboarding;
   const disableFocusToggle = state.onboarding;
@@ -180,6 +181,11 @@ export function renderChatControls(state: AppViewState) {
           ?disabled=${!state.connected}
           @change=${(e: Event) => {
             const next = (e.target as HTMLSelectElement).value;
+            // Clear unread status for the selected session
+            const app = state as unknown as OpenClawApp;
+            const newUnreadSet = new Set(app.sessionsWithUnread);
+            newUnreadSet.delete(next);
+            app.sessionsWithUnread = newUnreadSet;
             state.sessionKey = next;
             state.chatMessage = "";
             state.chatStream = null;
@@ -206,7 +212,7 @@ export function renderChatControls(state: AppViewState) {
             (entry) => entry.key,
             (entry) =>
               html`<option value=${entry.key} title=${entry.key}>
-                ${entry.displayName ?? entry.key}
+                ${entry.hasUnread ? "● " : ""}${entry.displayName ?? entry.key}
               </option>`,
           )}
         </select>
@@ -436,9 +442,10 @@ function resolveSessionOptions(
   sessions: SessionsListResult | null,
   mainSessionKey?: string | null,
   hideCron = false,
+  sessionsWithUnread?: Set<string>,
 ) {
   const seen = new Set<string>();
-  const options: Array<{ key: string; displayName?: string }> = [];
+  const options: Array<{ key: string; displayName?: string; hasUnread?: boolean }> = [];
 
   const resolvedMain = mainSessionKey && sessions?.sessions?.find((s) => s.key === mainSessionKey);
   const resolvedCurrent = sessions?.sessions?.find((s) => s.key === sessionKey);
@@ -449,6 +456,7 @@ function resolveSessionOptions(
     options.push({
       key: mainSessionKey,
       displayName: resolveSessionDisplayName(mainSessionKey, resolvedMain || undefined),
+      hasUnread: sessionsWithUnread?.has(mainSessionKey) ?? false,
     });
   }
 
@@ -459,6 +467,7 @@ function resolveSessionOptions(
     options.push({
       key: sessionKey,
       displayName: resolveSessionDisplayName(sessionKey, resolvedCurrent),
+      hasUnread: sessionsWithUnread?.has(sessionKey) ?? false,
     });
   }
 
@@ -470,6 +479,7 @@ function resolveSessionOptions(
         options.push({
           key: s.key,
           displayName: resolveSessionDisplayName(s.key, s),
+          hasUnread: sessionsWithUnread?.has(s.key) ?? false,
         });
       }
     }

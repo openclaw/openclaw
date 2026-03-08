@@ -313,6 +313,14 @@ function handleChatGatewayEvent(host: GatewayHost, payload: ChatEventPayload | u
       host as unknown as Parameters<typeof setLastActiveSessionKey>[0],
       payload.sessionKey,
     );
+    // Track unread messages for sessions that aren't currently active
+    const app = host as unknown as OpenClawApp;
+    if (payload.sessionKey !== app.sessionKey && payload.state === "final") {
+      // Add to unread set if it's a final message for a non-active session
+      const newSet = new Set(app.sessionsWithUnread);
+      newSet.add(payload.sessionKey);
+      app.sessionsWithUnread = newSet;
+    }
   }
   const state = handleChatEvent(host as unknown as OpenClawApp, payload);
   const historyReloaded = handleTerminalChatEvent(host, payload, state);

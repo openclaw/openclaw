@@ -250,6 +250,8 @@ export class OpenClawApp extends LitElement {
   @state() sessionsFilterLimit = "120";
   @state() sessionsIncludeGlobal = true;
   @state() sessionsIncludeUnknown = false;
+  // Track sessions with unread messages (key = sessionKey)
+  @state() sessionsWithUnread: Set<string> = new Set();
 
   @state() usageLoading = false;
   @state() usageResult: import("./types.js").SessionsUsageResult | null = null;

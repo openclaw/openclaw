@@ -360,6 +360,11 @@ export function renderApp(state: AppViewState) {
                 onSettingsChange: (next) => state.applySettings(next),
                 onPasswordChange: (next) => (state.password = next),
                 onSessionKeyChange: (next) => {
+                  // Clear unread status for the selected session
+                  const app = state as unknown as OpenClawApp;
+                  const newUnreadSet = new Set(app.sessionsWithUnread);
+                  newUnreadSet.delete(next);
+                  app.sessionsWithUnread = newUnreadSet;
                   state.sessionKey = next;
                   state.chatMessage = "";
                   state.resetToolStream();
@@ -956,6 +961,11 @@ export function renderApp(state: AppViewState) {
             ? renderChat({
                 sessionKey: state.sessionKey,
                 onSessionKeyChange: (next) => {
+                  // Clear unread status for the selected session
+                  const app = state as unknown as OpenClawApp;
+                  const newUnreadSet = new Set(app.sessionsWithUnread);
+                  newUnreadSet.delete(next);
+                  app.sessionsWithUnread = newUnreadSet;
                   state.sessionKey = next;
                   state.chatMessage = "";
                   state.chatAttachments = [];
