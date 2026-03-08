@@ -7,6 +7,46 @@ import { resolveAndPersistSessionFile } from "./session-file.js";
 import { loadSessionStore } from "./store.js";
 import type { SessionEntry } from "./types.js";
 
+/**
+ * Extract peer metadata from a session key.
+ * Session key format: agent:<agentId>:<channel>:<chatType>:<peerId>
+ * Examples:
+ *   - agent:main:feishu:direct:ou_cadc2c270c8e9803d8f069eb8ce19b75
+ *   - agent:main:telegram:group:-1001234567890
+ *   - agent:main:whatsapp:direct:+1234567890
+ */
+function extractPeerInfoFromSessionKey(sessionKey: string): {
+  id: string;
+  channel: string;
+  chatType: "direct" | "group";
+  accountId?: string;
+} | null {
+  const parts = sessionKey.split(":");
+  if (!parts[0] || parts[0] !== "agent") {
+    return null;
+  }
+  // Format: agent:<agentId>:<channel>:<chatType>:<peerId>
+  // or: agent:<agentId>:<channel>:<accountId>:<chatType>:<peerId>
+  if (parts.length < 5) {
+    return null;
+  }
+  const channel = parts[2] || "unknown";
+  // Check if this is the per-account format (6 parts)
+  if (parts.length === 6) {
+    const accountId = parts[3];
+    const chatType = parts[4] as "direct" | "group";
+    const peerId = parts[5];
+    return { id: peerId, channel, chatType, accountId };
+  }
+  // Standard format (5 parts)
+  const chatType = parts[3] as "direct" | "group";
+  const peerId = parts[4];
+  if (!chatType || !peerId) {
+    return null;
+  }
+  return { id: peerId, channel, chatType };
+}
+
 function stripQuery(value: string): string {
   const noHash = value.split("#")[0] ?? value;
   return noHash.split("?")[0] ?? noHash;
@@ -61,18 +101,35 @@ export function resolveMirroredTranscriptText(params: {
 async function ensureSessionHeader(params: {
   sessionFile: string;
   sessionId: string;
+  /** Optional peer metadata for chat extraction and session identification. */
+  peerInfo?: {
+    /** Peer identifier (e.g., user ID, phone number, address). */
+    id: string;
+    /** Display name if available (e.g., contact name, push name). */
+    name?: string;
+    /** Channel identifier (e.g., "telegram", "whatsapp", "feishu"). */
+    channel: string;
+    /** Chat type: "direct" or "group". */
+    chatType: "direct" | "group";
+    /** Account identifier for multi-account setups. */
+    accountId?: string;
+  };
 }): Promise<void> {
   if (fs.existsSync(params.sessionFile)) {
     return;
   }
   await fs.promises.mkdir(path.dirname(params.sessionFile), { recursive: true });
-  const header = {
+  const header: Record<string, unknown> = {
     type: "session",
     version: CURRENT_SESSION_VERSION,
     id: params.sessionId,
     timestamp: new Date().toISOString(),
     cwd: process.cwd(),
   };
+  // Include peer metadata if provided (useful for chat extraction and session management)
+  if (params.peerInfo) {
+    header.peer = params.peerInfo;
+  }
   await fs.promises.writeFile(params.sessionFile, `${JSON.stringify(header)}\n`, {
     encoding: "utf-8",
     mode: 0o600,
@@ -126,7 +183,13 @@ export async function appendAssistantMessageToSessionTranscript(params: {
     };
   }
 
-  await ensureSessionHeader({ sessionFile, sessionId: entry.sessionId });
+  // Extract peer metadata from session key for chat extraction
+  const peerInfo = extractPeerInfoFromSessionKey(sessionKey);
+  await ensureSessionHeader({
+    sessionFile,
+    sessionId: entry.sessionId,
+    peerInfo: peerInfo || undefined,
+  });
 
   const sessionManager = SessionManager.open(sessionFile);
   sessionManager.appendMessage({
