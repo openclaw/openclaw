@@ -17,6 +17,7 @@ import {
   stripHeartbeatToken,
 } from "../auto-reply/heartbeat.js";
 import { getReplyFromConfig } from "../auto-reply/reply.js";
+import { resolveQueueSettings } from "../auto-reply/reply/queue/settings.js";
 import { HEARTBEAT_TOKEN } from "../auto-reply/tokens.js";
 import type { ReplyPayload } from "../auto-reply/types.js";
 import { getChannelPlugin } from "../channels/plugins/index.js";
@@ -814,6 +815,49 @@ export async function runHeartbeatOnce(opts: {
       normalized.text = execFallbackText;
       normalized.shouldSkip = false;
     }
+    // When steer-mode injects a user message into a heartbeat run, the model
+    // replies with HEARTBEAT_OK followed by the real answer in a single payload.
+    // normalizeHeartbeatReply strips the token with mode "heartbeat" which marks
+    // shouldSkip=true when the remaining text is under maxAckChars.  This is
+    // correct for single-line acks ("HEARTBEAT_OK — all clear") but wrong when
+    // the reply contains a separate paragraph with a genuine user-facing answer.
+    //
+    // Detect steered replies: only attempt recovery when the effective queue
+    // mode (resolved via resolveQueueSettings, which checks global, per-channel,
+    // and session-level overrides) is "steer" or "steer-backlog" — otherwise no
+    // user message could have been injected.  If the raw text has a paragraph
+    // break (\n\n) after the HEARTBEAT_OK token, the content below it is a
+    // user-facing response.  Re-strip with mode "message" (no length threshold)
+    // and deliver.
+    let recoveredFromSteer = false;
+    const effectiveQueueMode = resolveQueueSettings({
+      cfg,
+      channel: delivery.channel !== "none" ? delivery.channel : undefined,
+      sessionEntry: entry,
+    }).mode;
+    const isSteerConfigured =
+      effectiveQueueMode === "steer" || effectiveQueueMode === "steer-backlog";
+    if (normalized.shouldSkip && isSteerConfigured) {
+      const rawText = typeof replyPayload.text === "string" ? replyPayload.text : "";
+      const prefixStripped = stripLeadingHeartbeatResponsePrefix(rawText, responsePrefix);
+      const tokenIdx = prefixStripped.toLowerCase().indexOf(HEARTBEAT_TOKEN.toLowerCase());
+      if (tokenIdx !== -1) {
+        const afterToken = prefixStripped.slice(tokenIdx + HEARTBEAT_TOKEN.length);
+        if (afterToken.includes("\n\n")) {
+          const messageStripped = stripHeartbeatToken(prefixStripped, { mode: "message" });
+          if (messageStripped.didStrip && messageStripped.text.trim()) {
+            const recoveredText = messageStripped.text.trim();
+            const alreadyPrefixed = responsePrefix && recoveredText.startsWith(responsePrefix);
+            normalized.text =
+              responsePrefix && !alreadyPrefixed
+                ? `${responsePrefix} ${recoveredText}`
+                : recoveredText;
+            normalized.shouldSkip = false;
+            recoveredFromSteer = true;
+          }
+        }
+      }
+    }
     const shouldSkipMain = normalized.shouldSkip && !normalized.hasMedia && !hasExecCompletion;
     if (shouldSkipMain && reasoningPayloads.length === 0) {
       await restoreHeartbeatUpdatedAt({
@@ -845,8 +889,12 @@ export async function runHeartbeatOnce(opts: {
       typeof entry?.lastHeartbeatText === "string" ? entry.lastHeartbeatText : "";
     const prevHeartbeatAt =
       typeof entry?.lastHeartbeatSentAt === "number" ? entry.lastHeartbeatSentAt : undefined;
+    // Recovered steered replies are user-facing answers, not heartbeat alerts —
+    // they must bypass the dedupe gate to avoid dropping legitimate responses
+    // that happen to match a recently sent heartbeat text.
     const isDuplicateMain =
       !shouldSkipMain &&
+      !recoveredFromSteer &&
       !mediaUrls.length &&
       Boolean(prevHeartbeatText.trim()) &&
       normalized.text.trim() === prevHeartbeatText.trim() &&
