@@ -1,0 +1,26 @@
+# Problem Solving Workflow Configuration
+name: "problem-solving"
+description: 'Apply systematic problem-solving methodologies to complex challenges. Use when the user says "guide me through structured problem solving" or "I want to crack this challenge with guided problem solving techniques"'
+
+# Critical variables load from config_source
+config_source: "{project-root}/_bmad/cis/config.yaml"
+output_folder: "{config_source}:output_folder"
+user_name: "{config_source}:user_name"
+communication_language: "{config_source}:communication_language"
+date: system-generated
+
+# Context can be provided via data attribute when invoking
+# Example: data="{path}/problem-brief.md" provides context
+
+# Module path and component files
+installed_path: "{project-root}/_bmad/cis/workflows/problem-solving"
+template: "{installed_path}/template.md"
+instructions: "{installed_path}/instructions.md"
+
+# Required Data Files
+solving_methods: "{installed_path}/solving-methods.csv"
+
+# Output configuration
+default_output_file: "{output_folder}/problem-solution-{{date}}.md"
+
+standalone: true

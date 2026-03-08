@@ -1,0 +1,95 @@
+---
+# TEA Academy Progress Tracking
+# This file tracks a learner's progress through the teaching workflow
+
+# User Information
+user: "{{user_name}}"
+role: "{{role}}" # qa | dev | lead | vp
+experience_level: "{{experience_level}}" # beginner | intermediate | experienced
+learning_goals: "{{learning_goals}}"
+pain_points: "{{pain_points}}" # optional
+
+# Session Tracking
+started_date: "{{current_date}}"
+last_session_date: "{{current_date}}"
+
+# Session Array - tracks completion status for all 7 sessions
+sessions:
+  - id: session-01-quickstart
+    name: "Quick Start"
+    duration: "30 min"
+    status: not-started # not-started | in-progress | completed
+    started_date: null
+    completed_date: null
+    score: null # 0-100
+    notes_artifact: null
+
+  - id: session-02-concepts
+    name: "Core Concepts"
+    duration: "45 min"
+    status: not-started
+    started_date: null
+    completed_date: null
+    score: null
+    notes_artifact: null
+
+  - id: session-03-architecture
+    name: "Architecture & Patterns"
+    duration: "60 min"
+    status: not-started
+    started_date: null
+    completed_date: null
+    score: null
+    notes_artifact: null
+
+  - id: session-04-test-design
+    name: "Test Design"
+    duration: "60 min"
+    status: not-started
+    started_date: null
+    completed_date: null
+    score: null
+    notes_artifact: null
+
+  - id: session-05-atdd-automate
+    name: "ATDD & Automate"
+    duration: "60 min"
+    status: not-started
+    started_date: null
+    completed_date: null
+    score: null
+    notes_artifact: null
+
+  - id: session-06-quality-trace
+    name: "Quality & Trace"
+    duration: "45 min"
+    status: not-started
+    started_date: null
+    completed_date: null
+    score: null
+    notes_artifact: null
+
+  - id: session-07-advanced
+    name: "Advanced Patterns"
+    duration: "ongoing"
+    status: not-started
+    started_date: null
+    completed_date: null
+    score: null
+    notes_artifact: null
+
+# Progress Metrics
+sessions_completed: 0
+total_sessions: 7
+completion_percentage: 0
+next_recommended: session-01-quickstart
+
+# Workflow Continuation Tracking (for continuable workflow)
+stepsCompleted: []
+lastStep: ""
+lastContinued: ""
+
+# Completion Certificate
+certificate_generated: false
+certificate_path: null
+completion_date: null

@@ -1,0 +1,16 @@
+description = 'Initialize test framework with Playwright or Cypress. Use when the user says "lets setup test framework" or "I want to initialize testing framework"'
+prompt = """
+Execute the BMAD 'testarch-framework' workflow.
+
+CRITICAL: This is a structured YAML workflow. Follow these steps precisely:
+
+1. LOAD the workflow definition from {project-root}/_bmad/tea/workflows/testarch/framework/workflow.yaml
+2. PARSE the YAML structure to understand:
+   - Workflow phases and steps
+   - Required inputs and outputs
+   - Dependencies between steps
+3. EXECUTE each step in order
+4. VALIDATE outputs before proceeding to next step
+
+WORKFLOW FILE: {project-root}/_bmad/tea/workflows/testarch/framework/workflow.yaml
+"""

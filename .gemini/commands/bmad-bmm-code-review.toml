@@ -1,0 +1,16 @@
+description = 'Perform adversarial code review finding specific issues. Use when the user says "run code review" or "review this code"'
+prompt = """
+Execute the BMAD 'code-review' workflow.
+
+CRITICAL: This is a structured YAML workflow. Follow these steps precisely:
+
+1. LOAD the workflow definition from {project-root}/_bmad/bmm/workflows/4-implementation/code-review/workflow.yaml
+2. PARSE the YAML structure to understand:
+   - Workflow phases and steps
+   - Required inputs and outputs
+   - Dependencies between steps
+3. EXECUTE each step in order
+4. VALIDATE outputs before proceeding to next step
+
+WORKFLOW FILE: {project-root}/_bmad/bmm/workflows/4-implementation/code-review/workflow.yaml
+"""

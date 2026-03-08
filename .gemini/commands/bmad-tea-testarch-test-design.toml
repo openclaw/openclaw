@@ -1,0 +1,16 @@
+description = 'Create system-level or epic-level test plans. Use when the user says "lets design test plan" or "I want to create test strategy"'
+prompt = """
+Execute the BMAD 'testarch-test-design' workflow.
+
+CRITICAL: This is a structured YAML workflow. Follow these steps precisely:
+
+1. LOAD the workflow definition from {project-root}/_bmad/tea/workflows/testarch/test-design/workflow.yaml
+2. PARSE the YAML structure to understand:
+   - Workflow phases and steps
+   - Required inputs and outputs
+   - Dependencies between steps
+3. EXECUTE each step in order
+4. VALIDATE outputs before proceeding to next step
+
+WORKFLOW FILE: {project-root}/_bmad/tea/workflows/testarch/test-design/workflow.yaml
+"""

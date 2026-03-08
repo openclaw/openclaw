@@ -1,0 +1,207 @@
+# Session Content Mapping
+# Maps each session to specific TEA documentation, knowledge fragments, and online resources
+
+base_paths:
+  tea_docs: "/docs"
+  tea_knowledge: "/src/testarch/knowledge"
+  online_base: "https://bmad-code-org.github.io/bmad-method-test-architecture-enterprise"
+  github_knowledge: "https://github.com/bmad-code-org/bmad-method-test-architecture-enterprise/tree/main/src/testarch/knowledge"
+
+sessions:
+  session-01-quickstart:
+    docs:
+      - path: "/docs/tutorials/tea-lite-quickstart.md"
+        title: "TEA Lite Quickstart"
+        url: "https://bmad-code-org.github.io/bmad-method-test-architecture-enterprise/tutorials/tea-lite-quickstart/"
+      - path: "/docs/explanation/tea-overview.md"
+        title: "TEA Overview"
+        url: "https://bmad-code-org.github.io/bmad-method-test-architecture-enterprise/explanation/tea-overview/"
+      - path: "/docs/how-to/workflows/run-automate.md"
+        title: "Run Automate Workflow"
+        url: "https://bmad-code-org.github.io/bmad-method-test-architecture-enterprise/how-to/workflows/run-automate/"
+    knowledge_fragments: []
+    online_references:
+      - "https://bmad-code-org.github.io/bmad-method-test-architecture-enterprise/"
+    workflows_referenced:
+      - automate
+    key_concepts:
+      - "What is TEA"
+      - "TEA Lite approach"
+      - "Engagement models"
+      - "9 workflows overview"
+
+  session-02-concepts:
+    docs:
+      - path: "/docs/explanation/testing-as-engineering.md"
+        title: "Testing as Engineering"
+        url: "https://bmad-code-org.github.io/bmad-method-test-architecture-enterprise/explanation/testing-as-engineering/"
+      - path: "/docs/explanation/risk-based-testing.md"
+        title: "Risk-Based Testing"
+        url: "https://bmad-code-org.github.io/bmad-method-test-architecture-enterprise/explanation/risk-based-testing/"
+      - path: "/docs/explanation/test-quality-standards.md"
+        title: "Test Quality Standards"
+        url: "https://bmad-code-org.github.io/bmad-method-test-architecture-enterprise/explanation/test-quality-standards/"
+    knowledge_fragments:
+      - path: "/src/testarch/knowledge/test-quality.md"
+        title: "Test Quality (DoD Execution Limits)"
+      - path: "/src/testarch/knowledge/probability-impact.md"
+        title: "Probability × Impact Scoring"
+    online_references:
+      - "https://bmad-code-org.github.io/bmad-method-test-architecture-enterprise/explanation/testing-as-engineering/"
+      - "https://bmad-code-org.github.io/bmad-method-test-architecture-enterprise/explanation/risk-based-testing/"
+    workflows_referenced: []
+    key_concepts:
+      - "Testing as engineering philosophy"
+      - "P0-P3 risk matrix"
+      - "Probability × Impact scoring"
+      - "Definition of Done (7 principles)"
+
+  session-03-architecture:
+    docs:
+      - path: "/docs/explanation/fixture-architecture.md"
+        title: "Fixture Architecture"
+        url: "https://bmad-code-org.github.io/bmad-method-test-architecture-enterprise/explanation/fixture-architecture/"
+      - path: "/docs/explanation/network-first-patterns.md"
+        title: "Network-First Patterns"
+        url: "https://bmad-code-org.github.io/bmad-method-test-architecture-enterprise/explanation/network-first-patterns/"
+      - path: "/docs/explanation/step-file-architecture.md"
+        title: "Step-File Architecture"
+        url: "https://bmad-code-org.github.io/bmad-method-test-architecture-enterprise/explanation/step-file-architecture/"
+    knowledge_fragments:
+      - path: "/src/testarch/knowledge/fixture-architecture.md"
+        title: "Fixture Architecture Patterns"
+      - path: "/src/testarch/knowledge/network-first.md"
+        title: "Network-First Implementation"
+      - path: "/src/testarch/knowledge/data-factories.md"
+        title: "Data Factories Pattern"
+    online_references:
+      - "https://bmad-code-org.github.io/bmad-method-test-architecture-enterprise/explanation/fixture-architecture/"
+    workflows_referenced:
+      - framework
+    key_concepts:
+      - "Fixture composition"
+      - "Network interception patterns"
+      - "Data factory pattern"
+      - "Step-file architecture"
+
+  session-04-test-design:
+    docs:
+      - path: "/docs/how-to/workflows/run-test-design.md"
+        title: "Run Test Design Workflow"
+        url: "https://bmad-code-org.github.io/bmad-method-test-architecture-enterprise/how-to/workflows/run-test-design/"
+    knowledge_fragments:
+      - path: "/src/testarch/knowledge/test-levels-framework.md"
+        title: "Test Levels Framework"
+      - path: "/src/testarch/knowledge/test-priorities-matrix.md"
+        title: "Test Priorities Matrix"
+    online_references:
+      - "https://bmad-code-org.github.io/bmad-method-test-architecture-enterprise/how-to/workflows/run-test-design/"
+    workflows_referenced:
+      - test-design
+    key_concepts:
+      - "Test Design workflow steps"
+      - "Risk/testability assessment"
+      - "Coverage planning"
+      - "Test levels (unit/integration/E2E)"
+
+  session-05-atdd-automate:
+    docs:
+      - path: "/docs/how-to/workflows/run-atdd.md"
+        title: "Run ATDD Workflow"
+        url: "https://bmad-code-org.github.io/bmad-method-test-architecture-enterprise/how-to/workflows/run-atdd/"
+      - path: "/docs/how-to/workflows/run-automate.md"
+        title: "Run Automate Workflow"
+        url: "https://bmad-code-org.github.io/bmad-method-test-architecture-enterprise/how-to/workflows/run-automate/"
+    knowledge_fragments:
+      - path: "/src/testarch/knowledge/component-tdd.md"
+        title: "Component TDD Red-Green Loop"
+      - path: "/src/testarch/knowledge/api-testing-patterns.md"
+        title: "API Testing Patterns"
+      - path: "/src/testarch/knowledge/api-request.md"
+        title: "API Request Utility"
+    online_references:
+      - "https://bmad-code-org.github.io/bmad-method-test-architecture-enterprise/how-to/workflows/run-atdd/"
+      - "https://bmad-code-org.github.io/bmad-method-test-architecture-enterprise/how-to/workflows/run-automate/"
+    workflows_referenced:
+      - atdd
+      - automate
+    key_concepts:
+      - "ATDD workflow (red phase)"
+      - "TDD red-green-refactor"
+      - "Automate workflow (coverage expansion)"
+      - "API testing without browser"
+
+  session-06-quality-trace:
+    docs:
+      - path: "/docs/how-to/workflows/run-test-review.md"
+        title: "Run Test Review Workflow"
+        url: "https://bmad-code-org.github.io/bmad-method-test-architecture-enterprise/how-to/workflows/run-test-review/"
+      - path: "/docs/how-to/workflows/run-trace.md"
+        title: "Run Trace Workflow"
+        url: "https://bmad-code-org.github.io/bmad-method-test-architecture-enterprise/how-to/workflows/run-trace/"
+    knowledge_fragments: []
+    online_references:
+      - "https://bmad-code-org.github.io/bmad-method-test-architecture-enterprise/how-to/workflows/run-test-review/"
+      - "https://bmad-code-org.github.io/bmad-method-test-architecture-enterprise/how-to/workflows/run-trace/"
+    workflows_referenced:
+      - test-review
+      - trace
+    key_concepts:
+      - "5 dimensions of test quality"
+      - "Quality scoring (0-100)"
+      - "Requirements traceability"
+      - "Release gate decisions"
+
+  session-07-advanced:
+    docs: []
+    knowledge_fragments:
+      categories:
+        testing_patterns:
+          - fixture-architecture.md
+          - network-first.md
+          - data-factories.md
+          - component-tdd.md
+          - api-testing-patterns.md
+          - test-healing-patterns.md
+          - selector-resilience.md
+          - timing-debugging.md
+
+        playwright_utils:
+          - api-request.md
+          - network-recorder.md
+          - intercept-network-call.md
+          - recurse.md
+          - log.md
+          - file-utils.md
+          - burn-in.md
+          - network-error-monitor.md
+          - contract-testing.md
+
+        browser_automation:
+          - playwright-cli.md
+
+        configuration_governance:
+          - playwright-config.md
+          - ci-burn-in.md
+          - selective-testing.md
+          - feature-flags.md
+          - risk-governance.md
+
+        quality_frameworks:
+          - test-quality.md
+          - test-levels-framework.md
+          - test-priorities-matrix.md
+          - nfr-criteria.md
+
+        auth_security:
+          - email-auth.md
+          - auth-session.md
+          - error-handling.md
+    online_references:
+      - "https://bmad-code-org.github.io/bmad-method-test-architecture-enterprise/reference/knowledge-base/"
+      - "https://github.com/bmad-code-org/bmad-method-test-architecture-enterprise/tree/main/src/testarch/knowledge"
+    workflows_referenced: []
+    key_concepts:
+      - "Menu-driven fragment exploration"
+      - "Just-in-time deep-dive learning"
+      - "35 knowledge fragments organized by category"

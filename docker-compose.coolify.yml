@@ -1,0 +1,80 @@
+## Coolify VPS Deployment
+##
+## This Compose file is designed for Coolify-managed VPS deployments.
+## Coolify handles the reverse proxy (Traefik/Caddy), TLS, and domain routing.
+##
+## Required environment variables (set in Coolify dashboard):
+##   OPENCLAW_GATEWAY_TOKEN   - auth token for the gateway API
+##
+## Optional:
+##   OPENCLAW_IMAGE           - custom image (default: build from source)
+##   OPENAI_API_KEY / ANTHROPIC_API_KEY / GEMINI_API_KEY - model provider keys
+##   TELEGRAM_BOT_TOKEN / DISCORD_BOT_TOKEN - channel tokens
+
+services:
+  openclaw-gateway:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: ${OPENCLAW_IMAGE:-openclaw:local}
+    environment:
+      HOME: /home/node
+      TERM: xterm-256color
+      NODE_ENV: production
+      # Gateway auth
+      OPENCLAW_GATEWAY_TOKEN: ${OPENCLAW_GATEWAY_TOKEN}
+      # Model provider keys
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
+      # Channel tokens
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
+      DISCORD_BOT_TOKEN: ${DISCORD_BOT_TOKEN:-}
+      SLACK_BOT_TOKEN: ${SLACK_BOT_TOKEN:-}
+      SLACK_APP_TOKEN: ${SLACK_APP_TOKEN:-}
+      # Tools
+      BRAVE_API_KEY: ${BRAVE_API_KEY:-}
+      ELEVENLABS_API_KEY: ${ELEVENLABS_API_KEY:-}
+    volumes:
+      - openclaw-config:/home/node/.openclaw
+      - openclaw-workspace:/home/node/.openclaw/workspace
+    ports:
+      - "18789:18789"
+    init: true
+    restart: unless-stopped
+    # Override CMD to bind to 0.0.0.0 (lan) so the Coolify reverse proxy
+    # can reach the gateway inside the Docker network.
+    command:
+      [
+        "node",
+        "openclaw.mjs",
+        "gateway",
+        "--bind",
+        "lan",
+        "--port",
+        "18789",
+        "--allow-unconfigured",
+      ]
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "fetch('http://127.0.0.1:18789/healthz').then((r)=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))",
+        ]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+        reservations:
+          memory: 512M
+
+volumes:
+  openclaw-config:
+  openclaw-workspace:

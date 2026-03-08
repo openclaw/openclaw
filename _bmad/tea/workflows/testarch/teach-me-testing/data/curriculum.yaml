@@ -1,0 +1,129 @@
+# TEA Academy Curriculum Structure
+# Defines the 7-session learning path with objectives and content mappings
+
+sessions:
+  - id: session-01-quickstart
+    name: "Quick Start"
+    duration: "30 min"
+    difficulty: beginner
+    objective: "Get immediate value by seeing TEA in action"
+    description: "TEA Lite intro, run automate workflow, understand engagement models"
+    recommended_for:
+      - beginner
+      - intermediate
+      - experienced
+    prerequisites: []
+
+  - id: session-02-concepts
+    name: "Core Concepts"
+    duration: "45 min"
+    difficulty: beginner
+    objective: "Understand WHY behind TEA principles"
+    description: "Risk-based testing, DoD, testing as engineering philosophy"
+    recommended_for:
+      - beginner
+      - intermediate
+    prerequisites: []
+
+  - id: session-03-architecture
+    name: "Architecture & Patterns"
+    duration: "60 min"
+    difficulty: intermediate
+    objective: "Understand TEA patterns and architecture"
+    description: "Fixtures, network-first patterns, data factories, step-file architecture"
+    recommended_for:
+      - intermediate
+      - experienced
+    prerequisites:
+      - session-02-concepts
+
+  - id: session-04-test-design
+    name: "Test Design"
+    duration: "60 min"
+    difficulty: intermediate
+    objective: "Learn risk assessment and coverage planning"
+    description: "Test Design workflow, risk/testability assessment, coverage planning"
+    recommended_for:
+      - intermediate
+      - experienced
+    prerequisites:
+      - session-02-concepts
+
+  - id: session-05-atdd-automate
+    name: "ATDD & Automate"
+    duration: "60 min"
+    difficulty: intermediate
+    objective: "Generate tests with TDD red-green approach"
+    description: "ATDD workflow (red phase), Automate workflow, component TDD, API testing"
+    recommended_for:
+      - intermediate
+      - experienced
+    prerequisites:
+      - session-02-concepts
+
+  - id: session-06-quality-trace
+    name: "Quality & Trace"
+    duration: "45 min"
+    difficulty: intermediate
+    objective: "Audit quality and ensure traceability"
+    description: "Test Review (5 dimensions), Trace workflow, quality metrics"
+    recommended_for:
+      - intermediate
+      - experienced
+    prerequisites:
+      - session-02-concepts
+
+  - id: session-07-advanced
+    name: "Advanced Patterns"
+    duration: "ongoing"
+    difficulty: advanced
+    objective: "Deep-dive into specific knowledge fragments"
+    description: "Menu-driven exploration of 35 knowledge fragments organized by category"
+    recommended_for:
+      - experienced
+    prerequisites: []
+
+# Learning Paths by Experience Level
+learning_paths:
+  beginner:
+    recommended_sequence:
+      - session-01-quickstart
+      - session-02-concepts
+      - session-03-architecture
+      - session-04-test-design
+      - session-05-atdd-automate
+      - session-06-quality-trace
+      - session-07-advanced
+    skip_optional: []
+
+  intermediate:
+    recommended_sequence:
+      - session-01-quickstart
+      - session-02-concepts
+      - session-03-architecture
+      - session-04-test-design
+      - session-05-atdd-automate
+      - session-06-quality-trace
+      - session-07-advanced
+    skip_optional:
+      - session-01-quickstart # Can skip if already familiar
+    certificate_eligible_if_skipped: false
+
+  experienced:
+    recommended_sequence:
+      - session-02-concepts
+      - session-03-architecture
+      - session-04-test-design
+      - session-05-atdd-automate
+      - session-06-quality-trace
+      - session-07-advanced
+    skip_optional:
+      - session-01-quickstart
+    certificate_eligible_if_skipped: false
+
+# Completion Requirements
+completion:
+  minimum_sessions: 7 # All sessions required for certificate
+  passing_score: 70 # Minimum quiz score to pass session
+  average_score_threshold: 70 # Minimum average for certificate
+  certificate_note: "Certificate eligibility requires completion.minimum_sessions. If intermediate.skip_optional or experienced.skip_optional sessions are skipped, certificate eligibility is forfeited."

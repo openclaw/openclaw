@@ -1,0 +1,136 @@
+# Role-Based Content Customization
+# Defines how teaching examples and focus areas adapt based on learner role
+
+roles:
+  qa:
+    display_name: "QA Engineer"
+    focus_areas:
+      - Practical testing workflow usage
+      - Test framework setup and maintenance
+      - Test quality and coverage metrics
+      - CI/CD integration
+    example_contexts:
+      - "Expanding test coverage for existing features"
+      - "Setting up test framework for new project"
+      - "Reducing flaky tests in CI pipeline"
+      - "Improving test execution speed"
+    recommended_sessions:
+      - session-01-quickstart
+      - session-02-concepts
+      - session-03-architecture
+      - session-05-atdd-automate
+      - session-06-quality-trace
+    teaching_adaptations:
+      session-01-quickstart: "Focus on Automate workflow - quickly expand coverage"
+      session-02-concepts: "Emphasize P0-P3 for defending coverage decisions"
+      session-03-architecture: "Fixture patterns for maintainable test suites"
+      session-04-test-design: "Test design for planning coverage expansion"
+      session-05-atdd-automate: "ATDD and Automate for test generation"
+      session-06-quality-trace: "Test Review for quality metrics reporting"
+      session-07-advanced: "Playwright Utils for advanced testing patterns"
+
+  dev:
+    display_name: "Software Developer"
+    focus_areas:
+      - Integration testing perspective
+      - TDD approach
+      - Test-driven development workflow
+      - Unit and integration tests
+    example_contexts:
+      - "Writing tests alongside feature development"
+      - "Using ATDD to drive implementation"
+      - "Integrating tests into development workflow"
+      - "Testing APIs and business logic"
+    recommended_sessions:
+      - session-01-quickstart
+      - session-02-concepts
+      - session-05-atdd-automate
+      - session-03-architecture
+      - session-04-test-design
+    teaching_adaptations:
+      session-01-quickstart: "Focus on ATDD - tests drive implementation"
+      session-02-concepts: "Connect DoD to code quality standards"
+      session-03-architecture: "Fixtures as code patterns, like dependency injection"
+      session-04-test-design: "Risk assessment before writing code"
+      session-05-atdd-automate: "Red-green-refactor TDD cycle"
+      session-06-quality-trace: "Test quality like code quality - refactoring applies"
+      session-07-advanced: "API testing patterns, component TDD"
+
+  lead:
+    display_name: "Tech Lead / Engineering Manager"
+    focus_areas:
+      - Test architecture decisions
+      - Team testing patterns
+      - Framework and tooling choices
+      - Quality standards enforcement
+    example_contexts:
+      - "Establishing team testing standards"
+      - "Choosing test architecture patterns"
+      - "Code review for test quality"
+      - "Scaling test automation across team"
+    recommended_sessions:
+      - session-01-quickstart
+      - session-03-architecture
+      - session-04-test-design
+      - session-06-quality-trace
+      - session-07-advanced
+    teaching_adaptations:
+      session-01-quickstart: "TEA as team standard - scalable patterns"
+      session-02-concepts: "DoD as code review checklist - enforce quality"
+      session-03-architecture: "Architecture patterns for team consistency"
+      session-04-test-design: "Test design as planning phase in development"
+      session-05-atdd-automate: "ATDD for team TDD adoption"
+      session-06-quality-trace: "Test Review for quality metrics and team standards"
+      session-07-advanced: "Step-file architecture, fixture patterns, CI governance"
+
+  vp:
+    display_name: "VP Engineering / Director"
+    focus_areas:
+      - Testing strategy and ROI
+      - Quality metrics that matter
+      - Team scalability
+      - Risk management through testing
+    example_contexts:
+      - "Justifying test automation investment"
+      - "Scaling testing across multiple teams"
+      - "Quality metrics for stakeholder reporting"
+      - "Risk mitigation through test coverage"
+    recommended_sessions:
+      - session-01-quickstart
+      - session-02-concepts
+      - session-04-test-design
+      - session-06-quality-trace
+    teaching_adaptations:
+      session-01-quickstart: "TEA scales testing without scaling headcount"
+      session-02-concepts: "Risk-based testing aligns engineering with business impact"
+      session-03-architecture: "Architecture patterns reduce maintenance costs"
+      session-04-test-design: "Test design makes risk visible to stakeholders"
+      session-05-atdd-automate: "ATDD reduces defect rates early"
+      session-06-quality-trace: "Quality metrics: P0/P1 coverage, not vanity metrics"
+      session-07-advanced: "Governance patterns, CI orchestration, NFR assessment"
+
+# Role-Based Example Types
+example_types:
+  qa:
+    - "Test suite maintenance scenarios"
+    - "Coverage expansion projects"
+    - "Flaky test debugging"
+    - "CI pipeline configuration"
+
+  dev:
+    - "Feature development with TDD"
+    - "API integration testing"
+    - "Unit test patterns"
+    - "Mocking and stubbing"
+
+  lead:
+    - "Team architecture decisions"
+    - "Code review scenarios"
+    - "Standard enforcement"
+    - "Tooling selection"
+
+  vp:
+    - "ROI calculations"
+    - "Quality dashboards"
+    - "Risk reporting"
+    - "Team scaling strategies"

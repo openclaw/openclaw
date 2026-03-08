@@ -1,0 +1,48 @@
+# Test Architect workflow: ci
+name: testarch-ci
+# prettier-ignore
+description: 'Scaffold CI/CD quality pipeline with test execution. Use when the user says "lets setup CI pipeline" or "I want to create quality gates"'
+
+# Critical variables from config
+config_source: "{project-root}/_bmad/tea/config.yaml"
+output_folder: "{config_source}:output_folder"
+test_artifacts: "{config_source}:test_artifacts"
+user_name: "{config_source}:user_name"
+communication_language: "{config_source}:communication_language"
+document_output_language: "{config_source}:document_output_language"
+date: system-generated
+
+# Workflow components
+installed_path: "{project-root}/_bmad/tea/workflows/testarch/ci"
+instructions: "{installed_path}/instructions.md"
+validation: "{installed_path}/checklist.md"
+
+# Variables and inputs
+variables:
+  ci_platform: "auto" # auto, github-actions, gitlab-ci, circle-ci, jenkins, azure-devops, harness - user can override
+  test_dir: "{project-root}/tests" # Root test directory
+  test_stack_type: "auto" # auto, frontend, backend, fullstack - detected or user override
+  test_framework: "auto" # auto, playwright, cypress, jest, vitest - detected or user override
+
+# Output configuration (resolved dynamically based on ci_platform detection)
+default_output_file: "{project-root}/.github/workflows/test.yml" # GitHub Actions default; overridden per platform
+
+# Required tools
+required_tools:
+  - read_file # Read .nvmrc, package.json, framework config
+  - write_file # Create CI config, scripts, documentation
+  - create_directory # Create .github/workflows/ or .gitlab-ci/ directories
+  - list_files # Detect existing CI configuration
+  - search_repo # Find test files for selective testing
+
+tags:
+  - qa
+  - ci-cd
+  - test-architect
+  - pipeline
+  - automation
+
+execution_hints:
+  interactive: false # Minimize prompts, auto-detect when possible
+  autonomous: true # Proceed without user input unless blocked
+  iterative: true

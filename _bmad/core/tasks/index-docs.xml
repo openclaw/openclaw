@@ -1,0 +1,65 @@
+<task id="_bmad/core/tasks/index-docs" name="Index Docs"
+  description="Generates or updates an index.md to reference all docs in the folder. Use if user requests to create or update an index of all files in a specific folder">
+  <llm critical="true">
+    <i>MANDATORY: Execute ALL steps in the flow section IN EXACT ORDER</i>
+    <i>DO NOT skip steps or change the sequence</i>
+    <i>HALT immediately when halt-conditions are met</i>
+    <i>Each action xml tag within step xml tag is a REQUIRED action to complete that step</i>
+    <i>Sections outside flow (validation, output, critical-context) provide essential context - review and apply throughout execution</i>
+  </llm>
+
+  <flow>
+    <step n="1" title="Scan Directory">
+      <i>List all files and subdirectories in the target location</i>
+    </step>
+
+    <step n="2" title="Group Content">
+      <i>Organize files by type, purpose, or subdirectory</i>
+    </step>
+
+    <step n="3" title="Generate Descriptions">
+      <i>Read each file to understand its actual purpose and create brief (3-10 word) descriptions based on the content, not just the
+        filename</i>
+    </step>
+
+    <step n="4" title="Create/Update Index">
+      <i>Write or update index.md with organized file listings</i>
+    </step>
+  </flow>
+
+  <output-format>
+    <example>
+      # Directory Index
+
+      ## Files
+
+      - **[filename.ext](./filename.ext)** - Brief description
+      - **[another-file.ext](./another-file.ext)** - Brief description
+
+      ## Subdirectories
+
+      ### subfolder/
+
+      - **[file1.ext](./subfolder/file1.ext)** - Brief description
+      - **[file2.ext](./subfolder/file2.ext)** - Brief description
+
+      ### another-folder/
+
+      - **[file3.ext](./another-folder/file3.ext)** - Brief description
+    </example>
+  </output-format>
+
+  <halt-conditions critical="true">
+    <i>HALT if target directory does not exist or is inaccessible</i>
+    <i>HALT if user does not have write permissions to create index.md</i>
+  </halt-conditions>
+
+  <validation>
+    <i>Use relative paths starting with ./</i>
+    <i>Group similar files together</i>
+    <i>Read file contents to generate accurate descriptions - don't guess from filenames</i>
+    <i>Keep descriptions concise but informative (3-10 words)</i>
+    <i>Sort alphabetically within groups</i>
+    <i>Skip hidden files (starting with .) unless specified</i>
+  </validation>
+</task>

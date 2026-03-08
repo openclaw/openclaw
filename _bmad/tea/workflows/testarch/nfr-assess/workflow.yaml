@@ -1,0 +1,48 @@
+# Test Architect workflow: nfr-assess
+name: testarch-nfr
+# prettier-ignore
+description: 'Assess NFRs like performance security and reliability. Use when the user says "lets assess NFRs" or "I want to evaluate non-functional requirements"'
+
+# Critical variables from config
+config_source: "{project-root}/_bmad/tea/config.yaml"
+output_folder: "{config_source}:output_folder"
+test_artifacts: "{config_source}:test_artifacts"
+user_name: "{config_source}:user_name"
+communication_language: "{config_source}:communication_language"
+document_output_language: "{config_source}:document_output_language"
+date: system-generated
+
+# Workflow components
+installed_path: "{project-root}/_bmad/tea/workflows/testarch/nfr-assess"
+instructions: "{installed_path}/instructions.md"
+validation: "{installed_path}/checklist.md"
+template: "{installed_path}/nfr-report-template.md"
+
+# Variables and inputs
+variables:
+  # NFR category assessment (defaults to all categories)
+  custom_nfr_categories: "" # Optional additional categories beyond standard (security, performance, reliability, maintainability)
+
+# Output configuration
+default_output_file: "{test_artifacts}/nfr-assessment.md"
+
+# Required tools
+required_tools:
+  - read_file # Read story, test results, metrics, logs, BMad artifacts
+  - write_file # Create NFR assessment, gate YAML, evidence checklist
+  - list_files # Discover test results, metrics, logs
+  - search_repo # Find NFR-related tests and evidence
+  - glob # Find result files matching patterns
+
+tags:
+  - qa
+  - nfr
+  - test-architect
+  - performance
+  - security
+  - reliability
+
+execution_hints:
+  interactive: false # Minimize prompts
+  autonomous: true # Proceed without user input unless blocked
+  iterative: true
