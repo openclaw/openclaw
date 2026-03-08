@@ -42,9 +42,7 @@ export function resolvePowerShellPath(): string {
 export function getShellConfig(configuredShell?: string): { shell: string; args: string[] } {
   if (configuredShell) {
     if (process.platform === "win32") {
-      const base = path
-        .basename(configuredShell, path.extname(configuredShell))
-        .toLowerCase();
+      const base = path.basename(configuredShell, path.extname(configuredShell)).toLowerCase();
       if (base === "pwsh" || base === "powershell") {
         return {
           shell: configuredShell,
