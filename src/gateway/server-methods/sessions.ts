@@ -511,7 +511,13 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       oldSessionFile = entry?.sessionFile;
       const now = Date.now();
       const preserveExplicitAuthProfileOverride =
-        entry?.authProfileOverrideSource !== "auto" ? entry?.authProfileOverride : undefined;
+        entry?.authProfileOverrideSource === "user"
+          ? entry.authProfileOverride
+          : entry?.authProfileOverride &&
+              entry.authProfileOverrideSource === undefined &&
+              entry.authProfileOverrideCompactionCount === undefined
+            ? entry.authProfileOverride
+            : undefined;
       const nextEntry: SessionEntry = {
         sessionId: randomUUID(),
         updatedAt: now,
@@ -525,10 +531,7 @@ export const sessionsHandlers: GatewayRequestHandlers = {
         providerOverride: entry?.providerOverride,
         // Preserve explicit user pins, but drop reset-time auth rotation metadata.
         authProfileOverride: preserveExplicitAuthProfileOverride,
-        authProfileOverrideSource:
-          preserveExplicitAuthProfileOverride && entry?.authProfileOverrideSource === "user"
-            ? "user"
-            : undefined,
+        authProfileOverrideSource: preserveExplicitAuthProfileOverride ? "user" : undefined,
         contextTokens: entry?.contextTokens,
         sendPolicy: entry?.sendPolicy,
         label: entry?.label,

@@ -59,6 +59,7 @@ import { buildUntrustedChannelMetadata } from "../../security/channel-metadata.j
 import { chunkItems } from "../../utils/chunk-items.js";
 import { withTimeout } from "../../utils/with-timeout.js";
 import { loadWebMedia } from "../../web/media.js";
+import { mergeDiscordAccountConfig } from "../accounts.js";
 import { chunkDiscordTextWithMode } from "../chunk.js";
 import {
   isDiscordGroupAllowedByPolicy,
@@ -418,11 +419,15 @@ function buildDiscordModelPickerNoticePayload(message: string): { components: Co
 function resolveActiveDiscordCommandConfig(params: {
   cfg: ReturnType<typeof loadConfig>;
   discordConfig: DiscordConfig;
+  accountId: string;
 }): { cfg: ReturnType<typeof loadConfig>; discordConfig: DiscordConfig } {
   const freshCfg = loadConfig();
   return {
     cfg: freshCfg,
-    discordConfig: freshCfg.channels?.discord ?? params.discordConfig,
+    discordConfig:
+      freshCfg.channels?.discord !== undefined
+        ? mergeDiscordAccountConfig(freshCfg, params.accountId)
+        : params.discordConfig,
   };
 }
 
@@ -534,6 +539,7 @@ async function replyWithDiscordModelPickerProviders(params: {
   const { cfg: activeCfg } = resolveActiveDiscordCommandConfig({
     cfg: params.cfg,
     discordConfig: params.discordConfig,
+    accountId: params.accountId,
   });
   const route = await resolveDiscordModelPickerRoute({
     interaction: params.interaction,
@@ -699,6 +705,7 @@ async function handleDiscordModelPickerInteraction(
   const { cfg: activeCfg, discordConfig: activeDiscordConfig } = resolveActiveDiscordCommandConfig({
     cfg: ctx.cfg,
     discordConfig: ctx.discordConfig,
+    accountId: ctx.accountId,
   });
   const route = await resolveDiscordModelPickerRoute({
     interaction,
@@ -1324,6 +1331,7 @@ async function dispatchDiscordCommandInteraction(params: {
   const { cfg: activeCfg, discordConfig: activeDiscordConfig } = resolveActiveDiscordCommandConfig({
     cfg,
     discordConfig,
+    accountId,
   });
   const respond = async (content: string, options?: { ephemeral?: boolean }) => {
     const payload = {
@@ -1370,7 +1378,7 @@ async function dispatchDiscordCommandInteraction(params: {
     allowNameMatching,
   });
   const commandsAllowFromAccess = resolveDiscordNativeCommandAllowlistAccess({
-    cfg,
+    cfg: activeCfg,
     accountId,
     sender: {
       id: sender.id,

@@ -1071,6 +1071,53 @@ describe("gateway server sessions", () => {
     ws.close();
   });
 
+  test("sessions.reset preserves legacy explicit auth profile overrides without rotation metadata", async () => {
+    const { storePath } = await createSessionStoreDir();
+
+    await writeSessionStore({
+      storePath,
+      entries: {
+        main: {
+          sessionId: "sess-main",
+          updatedAt: Date.now(),
+          authProfileOverride: "openai-codex:legacy-pin",
+        },
+      },
+    });
+
+    const { ws } = await openClient();
+    const reset = await rpcReq<{
+      ok: true;
+      entry: {
+        authProfileOverride?: string;
+        authProfileOverrideSource?: string;
+        authProfileOverrideCompactionCount?: number;
+      };
+    }>(ws, "sessions.reset", {
+      key: "main",
+    });
+
+    expect(reset.ok).toBe(true);
+    expect(reset.payload?.entry.authProfileOverride).toBe("openai-codex:legacy-pin");
+    expect(reset.payload?.entry.authProfileOverrideSource).toBe("user");
+    expect(reset.payload?.entry.authProfileOverrideCompactionCount).toBeUndefined();
+
+    const store = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<
+      string,
+      {
+        authProfileOverride?: string;
+        authProfileOverrideSource?: string;
+        authProfileOverrideCompactionCount?: number;
+      }
+    >;
+    const entry = store["agent:main:main"];
+    expect(entry?.authProfileOverride).toBe("openai-codex:legacy-pin");
+    expect(entry?.authProfileOverrideSource).toBe("user");
+    expect(entry?.authProfileOverrideCompactionCount).toBeUndefined();
+
+    ws.close();
+  });
+
   test("sessions.reset drops auto-rotated auth profile overrides", async () => {
     const { storePath } = await createSessionStoreDir();
 
@@ -1082,6 +1129,54 @@ describe("gateway server sessions", () => {
           updatedAt: Date.now(),
           authProfileOverride: "openai-codex:rotated",
           authProfileOverrideSource: "auto",
+          authProfileOverrideCompactionCount: 5,
+        },
+      },
+    });
+
+    const { ws } = await openClient();
+    const reset = await rpcReq<{
+      ok: true;
+      entry: {
+        authProfileOverride?: string;
+        authProfileOverrideSource?: string;
+        authProfileOverrideCompactionCount?: number;
+      };
+    }>(ws, "sessions.reset", {
+      key: "main",
+    });
+
+    expect(reset.ok).toBe(true);
+    expect(reset.payload?.entry.authProfileOverride).toBeUndefined();
+    expect(reset.payload?.entry.authProfileOverrideSource).toBeUndefined();
+    expect(reset.payload?.entry.authProfileOverrideCompactionCount).toBeUndefined();
+
+    const store = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<
+      string,
+      {
+        authProfileOverride?: string;
+        authProfileOverrideSource?: string;
+        authProfileOverrideCompactionCount?: number;
+      }
+    >;
+    const entry = store["agent:main:main"];
+    expect(entry?.authProfileOverride).toBeUndefined();
+    expect(entry?.authProfileOverrideSource).toBeUndefined();
+    expect(entry?.authProfileOverrideCompactionCount).toBeUndefined();
+
+    ws.close();
+  });
+
+  test("sessions.reset drops legacy compaction-only auth profile overrides", async () => {
+    const { storePath } = await createSessionStoreDir();
+
+    await writeSessionStore({
+      storePath,
+      entries: {
+        main: {
+          sessionId: "sess-main",
+          updatedAt: Date.now(),
+          authProfileOverride: "openai-codex:rotated",
           authProfileOverrideCompactionCount: 5,
         },
       },

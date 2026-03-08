@@ -77,7 +77,7 @@ function createConfig(): OpenClawConfig {
   } as OpenClawConfig;
 }
 
-function createStatusCommand(cfg: OpenClawConfig) {
+function createStatusCommand(cfg: OpenClawConfig, accountId = "default") {
   const commandSpec: NativeCommandSpec = {
     name: "status",
     description: "Status",
@@ -87,10 +87,10 @@ function createStatusCommand(cfg: OpenClawConfig) {
     command: commandSpec,
     cfg,
     discordConfig: cfg.channels?.discord ?? {},
-    accountId: "default",
+    accountId,
     sessionPrefix: "discord:slash",
     ephemeralDefault: true,
-    threadBindings: createNoopThreadBindingManager("default"),
+    threadBindings: createNoopThreadBindingManager(accountId),
   });
 }
 
@@ -291,6 +291,66 @@ describe("Discord native plugin command dispatch", () => {
     await (command as { run: (interaction: unknown) => Promise<void> }).run(interaction as unknown);
 
     expectBoundSessionDispatch(dispatchSpy, boundSessionKey);
+  });
+
+  it("keeps reloaded Discord config account-scoped for native command execution", async () => {
+    const accountId = "work";
+    const channelId = "dm-work";
+    const startupCfg = {
+      commands: {
+        useAccessGroups: false,
+      },
+      agents: {
+        list: [{ id: "main" }],
+      },
+      channels: {
+        discord: {
+          dm: { enabled: false, policy: "disabled" },
+        },
+      },
+    } as OpenClawConfig;
+    const freshCfg = {
+      commands: {
+        useAccessGroups: false,
+      },
+      agents: {
+        list: [{ id: "codex-orchestrator" }],
+      },
+      channels: {
+        discord: {
+          dm: { enabled: false, policy: "disabled" },
+          accounts: {
+            work: {
+              dm: { enabled: true, policy: "open" },
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+    configMocks.loadConfig.mockReturnValue(freshCfg);
+    const command = createStatusCommand(startupCfg, accountId);
+    const interaction = createInteraction({
+      channelType: ChannelType.DM,
+      channelId,
+    });
+
+    vi.spyOn(pluginCommandsModule, "matchPluginCommand").mockReturnValue(null);
+    const dispatchSpy = createDispatchSpy();
+
+    await (command as { run: (interaction: unknown) => Promise<void> }).run(interaction as unknown);
+
+    expect(dispatchSpy).toHaveBeenCalledTimes(1);
+    const dispatchCall = dispatchSpy.mock.calls[0]?.[0] as {
+      cfg?: OpenClawConfig;
+      ctx?: { CommandTargetSessionKey?: string; SessionKey?: string };
+    };
+    expect(configMocks.loadConfig).toHaveBeenCalled();
+    expect(dispatchCall.cfg).toBe(freshCfg);
+    expect(dispatchCall.ctx?.SessionKey).toBe("agent:codex-orchestrator:discord:slash:owner");
+    expect(dispatchCall.ctx?.CommandTargetSessionKey).toBeTruthy();
+    expect(interaction.reply).not.toHaveBeenCalledWith(
+      expect.objectContaining({ content: "Discord DMs are disabled." }),
+    );
   });
 
   it("routes native guild slash commands through bound agent sessions and preserves guild metadata", async () => {
