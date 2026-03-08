@@ -1593,9 +1593,13 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
       const storePath = core.channel.session.resolveStorePath(sessionCfg?.store, {
         agentId: route.agentId,
       });
+      const updateLastRouteSessionKey =
+        route.lastRoutePolicy === "main"
+          ? route.mainSessionKey
+          : (ctxPayload.SessionKey ?? route.sessionKey);
       await core.channel.session.updateLastRoute({
         storePath,
-        sessionKey: route.mainSessionKey,
+        sessionKey: updateLastRouteSessionKey,
         deliveryContext: {
           channel: "mattermost",
           to,

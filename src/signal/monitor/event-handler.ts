@@ -30,7 +30,10 @@ import { readSessionUpdatedAt, resolveStorePath } from "../../config/sessions.js
 import { danger, logVerbose, shouldLogVerbose } from "../../globals.js";
 import { enqueueSystemEvent } from "../../infra/system-events.js";
 import { kindFromMime } from "../../media/mime.js";
-import { resolveAgentRoute } from "../../routing/resolve-route.js";
+import {
+  resolveAgentRoute,
+  resolveInboundLastRouteSessionKey,
+} from "../../routing/resolve-route.js";
 import {
   DM_GROUP_ACCESS_REASON,
   resolvePinnedMainDmOwnerFromAllowlist,
@@ -200,6 +203,10 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       OriginatingChannel: "signal" as const,
       OriginatingTo: signalTo,
     });
+    const updateLastRouteSessionKey = resolveInboundLastRouteSessionKey({
+      route,
+      sessionKey: ctxPayload.SessionKey ?? route.sessionKey,
+    });
 
     await recordInboundSession({
       storePath,
@@ -207,7 +214,7 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       ctx: ctxPayload,
       updateLastRoute: !entry.isGroup
         ? {
-            sessionKey: route.mainSessionKey,
+            sessionKey: updateLastRouteSessionKey,
             channel: "signal",
             to: entry.senderRecipient,
             accountId: route.accountId,
@@ -218,6 +225,9 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
                 normalizeEntry: normalizeSignalAllowRecipient,
               });
               if (!pinnedOwner) {
+                return undefined;
+              }
+              if (updateLastRouteSessionKey !== route.mainSessionKey) {
                 return undefined;
               }
               return {

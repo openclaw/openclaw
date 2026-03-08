@@ -27,7 +27,10 @@ import { recordInboundSession } from "../../../channels/session.js";
 import { readSessionUpdatedAt, resolveStorePath } from "../../../config/sessions.js";
 import { logVerbose, shouldLogVerbose } from "../../../globals.js";
 import { enqueueSystemEvent } from "../../../infra/system-events.js";
-import { resolveAgentRoute } from "../../../routing/resolve-route.js";
+import {
+  resolveAgentRoute,
+  resolveInboundLastRouteSessionKey,
+} from "../../../routing/resolve-route.js";
 import { resolveThreadSessionKeys } from "../../../routing/session-key.js";
 import { resolvePinnedMainDmOwnerFromAllowlist } from "../../../security/dm-policy-shared.js";
 import { resolveSlackReplyToMode, type ResolvedSlackAccount } from "../../accounts.js";
@@ -736,6 +739,10 @@ export async function prepareSlackMessage(params: {
         normalizeEntry: normalizeSlackAllowOwnerEntry,
       })
     : null;
+  const updateLastRouteSessionKey = resolveInboundLastRouteSessionKey({
+    route,
+    sessionKey,
+  });
 
   await recordInboundSession({
     storePath,
@@ -743,13 +750,13 @@ export async function prepareSlackMessage(params: {
     ctx: ctxPayload,
     updateLastRoute: isDirectMessage
       ? {
-          sessionKey: route.mainSessionKey,
+          sessionKey: updateLastRouteSessionKey,
           channel: "slack",
           to: `user:${message.user}`,
           accountId: route.accountId,
           threadId: threadContext.messageThreadId,
           mainDmOwnerPin:
-            pinnedMainDmOwner && message.user
+            updateLastRouteSessionKey === route.mainSessionKey && pinnedMainDmOwner && message.user
               ? {
                   ownerRecipient: pinnedMainDmOwner,
                   senderRecipient: message.user.toLowerCase(),

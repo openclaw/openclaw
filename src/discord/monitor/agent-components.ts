@@ -37,7 +37,10 @@ import { logDebug, logError } from "../../logger.js";
 import { getAgentScopedMediaLocalRoots } from "../../media/local-roots.js";
 import { issuePairingChallenge } from "../../pairing/pairing-challenge.js";
 import { upsertChannelPairingRequest } from "../../pairing/pairing-store.js";
-import { resolveAgentRoute } from "../../routing/resolve-route.js";
+import {
+  resolveAgentRoute,
+  resolveInboundLastRouteSessionKey,
+} from "../../routing/resolve-route.js";
 import { createNonExitingRuntime, type RuntimeEnv } from "../../runtime.js";
 import {
   readStoreAllowFromForDmPolicy,
@@ -944,6 +947,10 @@ async function dispatchDiscordComponentEvent(params: {
     OriginatingChannel: "discord" as const,
     OriginatingTo: `channel:${interactionCtx.channelId}`,
   });
+  const updateLastRouteSessionKey = resolveInboundLastRouteSessionKey({
+    route,
+    sessionKey: ctxPayload.SessionKey ?? sessionKey,
+  });
 
   await recordInboundSession({
     storePath,
@@ -951,21 +958,22 @@ async function dispatchDiscordComponentEvent(params: {
     ctx: ctxPayload,
     updateLastRoute: interactionCtx.isDirectMessage
       ? {
-          sessionKey: route.mainSessionKey,
+          sessionKey: updateLastRouteSessionKey,
           channel: "discord",
           to: `user:${interactionCtx.userId}`,
           accountId,
-          mainDmOwnerPin: pinnedMainDmOwner
-            ? {
-                ownerRecipient: pinnedMainDmOwner,
-                senderRecipient: interactionCtx.userId,
-                onSkip: ({ ownerRecipient, senderRecipient }) => {
-                  logVerbose(
-                    `discord: skip main-session last route for ${senderRecipient} (pinned owner ${ownerRecipient})`,
-                  );
-                },
-              }
-            : undefined,
+          mainDmOwnerPin:
+            pinnedMainDmOwner && updateLastRouteSessionKey === route.mainSessionKey
+              ? {
+                  ownerRecipient: pinnedMainDmOwner,
+                  senderRecipient: interactionCtx.userId,
+                  onSkip: ({ ownerRecipient, senderRecipient }) => {
+                    logVerbose(
+                      `discord: skip main-session last route for ${senderRecipient} (pinned owner ${ownerRecipient})`,
+                    );
+                  },
+                }
+              : undefined,
         }
       : undefined,
     onRecordError: (err) => {

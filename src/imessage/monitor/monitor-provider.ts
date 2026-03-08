@@ -35,6 +35,7 @@ import {
   readChannelAllowFromStore,
   upsertChannelPairingRequest,
 } from "../../pairing/pairing-store.js";
+import { resolveInboundLastRouteSessionKey } from "../../routing/resolve-route.js";
 import { resolvePinnedMainDmOwnerFromAllowlist } from "../../security/dm-policy-shared.js";
 import { truncateUtf16Safe } from "../../utils.js";
 import { resolveIMessageAccount } from "../accounts.js";
@@ -350,6 +351,10 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
       allowFrom,
       normalizeEntry: normalizeIMessageHandle,
     });
+    const updateLastRouteSessionKey = resolveInboundLastRouteSessionKey({
+      route: decision.route,
+      sessionKey: ctxPayload.SessionKey ?? decision.route.sessionKey,
+    });
     await recordInboundSession({
       storePath,
       sessionKey: ctxPayload.SessionKey ?? decision.route.sessionKey,
@@ -357,12 +362,14 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
       updateLastRoute:
         !decision.isGroup && updateTarget
           ? {
-              sessionKey: decision.route.mainSessionKey,
+              sessionKey: updateLastRouteSessionKey,
               channel: "imessage",
               to: updateTarget,
               accountId: decision.route.accountId,
               mainDmOwnerPin:
-                pinnedMainDmOwner && decision.senderNormalized
+                updateLastRouteSessionKey === decision.route.mainSessionKey &&
+                pinnedMainDmOwner &&
+                decision.senderNormalized
                   ? {
                       ownerRecipient: pinnedMainDmOwner,
                       senderRecipient: decision.senderNormalized,
