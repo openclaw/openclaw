@@ -3,6 +3,7 @@ import {
   extractContentFromMessage,
   extractTextFromMessage,
   extractThinkingFromMessage,
+  formatTokens,
   isCommandMessage,
   sanitizeRenderableText,
 } from "./tui-formatters.js";
@@ -282,5 +283,34 @@ describe("sanitizeRenderableText", () => {
     const sanitized = sanitizeRenderableText(input);
 
     expect(sanitized).toBe(input);
+  });
+});
+
+describe("formatTokens", () => {
+  it("returns 'tokens 0' when both total and context are null", () => {
+    expect(formatTokens(null, null)).toBe("tokens 0");
+  });
+
+  it("returns 'tokens 0' when both total and context are undefined", () => {
+    expect(formatTokens(undefined, undefined)).toBe("tokens 0");
+  });
+
+  it("returns 'tokens 0' when called with no arguments", () => {
+    expect(formatTokens()).toBe("tokens 0");
+  });
+
+  it("shows total with 0 fallback when total is null but context is provided", () => {
+    const result = formatTokens(null, 200000);
+    expect(result).toBe("tokens 0/200k");
+  });
+
+  it("formats both total and context with percentage", () => {
+    const result = formatTokens(50000, 200000);
+    expect(result).toBe("tokens 50k/200k (25%)");
+  });
+
+  it("shows total without context when context is null", () => {
+    const result = formatTokens(50000, null);
+    expect(result).toBe("tokens 50k");
   });
 });
