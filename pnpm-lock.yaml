@@ -141,6 +141,9 @@ importers:
       markdown-it:
         specifier: ^14.1.1
         version: 14.1.1
+      minimatch:
+        specifier: 10.2.4
+        version: 10.2.4
       node-edge-tts:
         specifier: ^1.2.10
         version: 1.2.10
