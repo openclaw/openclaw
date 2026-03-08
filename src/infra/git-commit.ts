@@ -202,15 +202,15 @@ export const resolveCommitHash = (
   }
   const buildInfoCommit = readCommitFromBuildInfo();
   if (buildInfoCommit) {
-    return buildInfoCommit;
+    return cacheGitCommit(searchDir, buildInfoCommit);
   }
   const pkgCommit = readCommitFromPackageJson();
   if (pkgCommit) {
-    return pkgCommit;
+    return cacheGitCommit(searchDir, pkgCommit);
   }
   try {
     return cacheGitCommit(searchDir, readCommitFromGit(searchDir, packageRoot) ?? null);
   } catch {
-    return null;
+    return cacheGitCommit(searchDir, null);
   }
 };

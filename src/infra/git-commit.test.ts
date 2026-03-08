@@ -104,6 +104,65 @@ describe("git commit resolution", () => {
     vi.doUnmock("node:module");
   });
 
+  it("caches build-info fallback results per resolved search directory", async () => {
+    const temp = await makeTempDir("git-commit-build-info-cache");
+    const moduleRequire = vi.fn((specifier: string) => {
+      if (specifier === "../build-info.json" || specifier === "./build-info.json") {
+        return { commit: "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef" };
+      }
+      throw Object.assign(new Error(`Cannot find module ${specifier}`), {
+        code: "MODULE_NOT_FOUND",
+      });
+    });
+
+    vi.doMock("node:module", () => ({
+      createRequire: () => moduleRequire,
+    }));
+    vi.resetModules();
+
+    const { resolveCommitHash } = await import("./git-commit.js");
+
+    expect(resolveCommitHash({ cwd: temp, env: {} })).toBe("deadbee");
+    const firstCallRequires = moduleRequire.mock.calls.length;
+    expect(firstCallRequires).toBeGreaterThan(0);
+    expect(resolveCommitHash({ cwd: temp, env: {} })).toBe("deadbee");
+    expect(moduleRequire.mock.calls.length).toBe(firstCallRequires);
+
+    vi.doUnmock("node:module");
+  });
+
+  it("caches package.json fallback results per resolved search directory", async () => {
+    const temp = await makeTempDir("git-commit-package-json-cache");
+    const moduleRequire = vi.fn((specifier: string) => {
+      if (specifier === "../build-info.json" || specifier === "./build-info.json") {
+        throw Object.assign(new Error(`Cannot find module ${specifier}`), {
+          code: "MODULE_NOT_FOUND",
+        });
+      }
+      if (specifier === "../../package.json") {
+        return { gitHead: "badc0ffee0ddf00d" };
+      }
+      throw Object.assign(new Error(`Cannot find module ${specifier}`), {
+        code: "MODULE_NOT_FOUND",
+      });
+    });
+
+    vi.doMock("node:module", () => ({
+      createRequire: () => moduleRequire,
+    }));
+    vi.resetModules();
+
+    const { resolveCommitHash } = await import("./git-commit.js");
+
+    expect(resolveCommitHash({ cwd: temp, env: {} })).toBe("badc0ff");
+    const firstCallRequires = moduleRequire.mock.calls.length;
+    expect(firstCallRequires).toBeGreaterThan(0);
+    expect(resolveCommitHash({ cwd: temp, env: {} })).toBe("badc0ff");
+    expect(moduleRequire.mock.calls.length).toBe(firstCallRequires);
+
+    vi.doUnmock("node:module");
+  });
+
   it("treats invalid moduleUrl inputs as a fallback hint instead of throwing", async () => {
     const repoHead = execFileSync("git", ["rev-parse", "--short=7", "HEAD"], {
       cwd: originalCwd,
@@ -212,6 +271,57 @@ describe("git commit resolution", () => {
     expect(readFileSyncSpy.mock.calls.length).toBe(firstCallReads);
 
     vi.doUnmock("node:fs");
+  });
+
+  it("caches caught null fallback results per resolved search directory", async () => {
+    const temp = await makeTempDir("git-commit-caught-null-cache");
+    const repoRoot = path.join(temp, "repo");
+    await makeFakeGitRepo(repoRoot, {
+      head: "0123456789abcdef0123456789abcdef01234567\n",
+    });
+    const headPath = path.join(repoRoot, ".git", "HEAD");
+
+    const actualFs = await vi.importActual<typeof import("node:fs")>("node:fs");
+    const readFileSyncSpy = vi.fn((filePath: string, ...args: unknown[]) => {
+      if (path.resolve(filePath) === path.resolve(headPath)) {
+        const error = Object.assign(new Error(`EACCES: permission denied, open '${filePath}'`), {
+          code: "EACCES",
+        });
+        throw error;
+      }
+      return Reflect.apply(actualFs.readFileSync, actualFs, [filePath, ...args]);
+    });
+    vi.doMock("node:fs", () => ({
+      ...actualFs,
+      default: {
+        ...actualFs,
+        readFileSync: readFileSyncSpy,
+      },
+      readFileSync: readFileSyncSpy,
+    }));
+    vi.doMock("node:module", () => ({
+      createRequire: () => {
+        return (specifier: string) => {
+          throw Object.assign(new Error(`Cannot find module ${specifier}`), {
+            code: "MODULE_NOT_FOUND",
+          });
+        };
+      },
+    }));
+    vi.resetModules();
+
+    const { resolveCommitHash } = await import("./git-commit.js");
+
+    expect(resolveCommitHash({ cwd: repoRoot, env: {} })).toBeNull();
+    const headReadCount = () =>
+      readFileSyncSpy.mock.calls.filter(([filePath]) => path.resolve(filePath) === headPath).length;
+    const firstCallReads = headReadCount();
+    expect(firstCallReads).toBe(2);
+    expect(resolveCommitHash({ cwd: repoRoot, env: {} })).toBeNull();
+    expect(headReadCount()).toBe(firstCallReads);
+
+    vi.doUnmock("node:fs");
+    vi.doUnmock("node:module");
   });
 
   it("formats env-provided commit strings consistently", async () => {
