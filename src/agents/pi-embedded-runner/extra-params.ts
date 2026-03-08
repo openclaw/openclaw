@@ -590,21 +590,26 @@ type PayloadMessage = {
 };
 
 /**
- * Inject cache_control into the system message for OpenRouter Anthropic models.
- * OpenRouter passes through Anthropic's cache_control field — caching the system
- * prompt avoids re-processing it on every request.
+ * Inject cache_control: { type: "ephemeral" } into a message's content.
  */
-function createOpenRouterSystemCacheWrapper(baseStreamFn: StreamFn | undefined): StreamFn {
+function injectCacheControlOnMessage(msg: PayloadMessage, requireTextType: boolean) {
+  if (typeof msg.content === "string") {
+    msg.content = [{ type: "text", text: msg.content, cache_control: { type: "ephemeral" } }];
+  } else if (Array.isArray(msg.content) && msg.content.length > 0) {
+    const last = msg.content[msg.content.length - 1];
+    if (
+      last &&
+      typeof last === "object" &&
+      (!requireTextType || (last as Record<string, unknown>).type === "text")
+    ) {
+      (last as Record<string, unknown>).cache_control = { type: "ephemeral" };
+    }
+  }
+}
+
+function createSystemCacheControlWrapper(baseStreamFn: StreamFn | undefined): StreamFn {
   const underlying = baseStreamFn ?? streamSimple;
   return (model, context, options) => {
-    if (
-      typeof model.provider !== "string" ||
-      typeof model.id !== "string" ||
-      !isOpenRouterAnthropicModel(model.provider, model.id)
-    ) {
-      return underlying(model, context, options);
-    }
-
     const originalOnPayload = options?.onPayload;
     return underlying(model, context, {
       ...options,
@@ -612,19 +617,33 @@ function createOpenRouterSystemCacheWrapper(baseStreamFn: StreamFn | undefined):
         const messages = (payload as Record<string, unknown>)?.messages;
         if (Array.isArray(messages)) {
           for (const msg of messages as PayloadMessage[]) {
-            if (msg.role !== "system" && msg.role !== "developer") {
+            if (msg.role === "system" || msg.role === "developer") {
+              injectCacheControlOnMessage(msg, false);
+            }
+          }
+        }
+        originalOnPayload?.(payload);
+      },
+    });
+  };
+}
+
+function createConversationCacheControlWrapper(baseStreamFn: StreamFn | undefined): StreamFn {
+  const underlying = baseStreamFn ?? streamSimple;
+  return (model, context, options) => {
+    const originalOnPayload = options?.onPayload;
+    return underlying(model, context, {
+      ...options,
+      onPayload: (payload) => {
+        const messages = (payload as Record<string, unknown>)?.messages;
+        if (Array.isArray(messages)) {
+          for (let i = messages.length - 1; i >= 0; i--) {
+            const msg = messages[i] as PayloadMessage;
+            if (msg.role !== "user" && msg.role !== "assistant") {
               continue;
             }
-            if (typeof msg.content === "string") {
-              msg.content = [
-                { type: "text", text: msg.content, cache_control: { type: "ephemeral" } },
-              ];
-            } else if (Array.isArray(msg.content) && msg.content.length > 0) {
-              const last = msg.content[msg.content.length - 1];
-              if (last && typeof last === "object") {
-                (last as Record<string, unknown>).cache_control = { type: "ephemeral" };
-              }
-            }
+            injectCacheControlOnMessage(msg, true);
+            break;
           }
         }
         originalOnPayload?.(payload);
@@ -1254,7 +1273,17 @@ export function applyExtraParamsToAgent(
     const skipReasoningInjection = modelId === "auto" || isProxyReasoningUnsupported(modelId);
     const openRouterThinkingLevel = skipReasoningInjection ? undefined : thinkingLevel;
     agent.streamFn = createOpenRouterWrapper(agent.streamFn, openRouterThinkingLevel);
-    agent.streamFn = createOpenRouterSystemCacheWrapper(agent.streamFn);
+  }
+
+  if (
+    (isOpenRouterAnthropicModel(provider, modelId) && merged?.cacheStyle === undefined) ||
+    merged?.cacheStyle === "anthropic"
+  ) {
+    agent.streamFn = createSystemCacheControlWrapper(agent.streamFn);
+  }
+  // pi-ai injects conversation breakpoints for OpenRouter Anthropic; skip here to avoid duplication
+  if (!isOpenRouterAnthropicModel(provider, modelId) && merged?.cacheStyle === "anthropic") {
+    agent.streamFn = createConversationCacheControlWrapper(agent.streamFn);
   }
 
   if (provider === "kilocode") {
