@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { getAcpSessionManager } from "../../../acp/control-plane/manager.js";
+import { resolveAcpSessionResolutionError } from "../../../acp/control-plane/manager.utils.js";
 import {
   cleanupFailedAcpSpawn,
   type AcpSpawnRuntimeCloseHandle,
@@ -10,7 +11,6 @@ import {
   resolveAcpDispatchPolicyError,
   resolveAcpDispatchPolicyMessage,
 } from "../../../acp/policy.js";
-import { AcpRuntimeError } from "../../../acp/runtime/errors.js";
 import {
   resolveAcpSessionCwd,
   resolveAcpThreadSessionDetailLines,
@@ -390,24 +390,13 @@ function resolveAcpSessionForCommandOrStop(params: {
     cfg: params.cfg,
     sessionKey: params.sessionKey,
   });
-  if (resolved.kind === "none") {
+  const error = resolveAcpSessionResolutionError(resolved);
+  if (error) {
     return stopWithText(
       collectAcpErrorText({
-        error: new AcpRuntimeError(
-          "ACP_SESSION_INIT_FAILED",
-          `Session is not ACP-enabled: ${params.sessionKey}`,
-        ),
+        error,
         fallbackCode: "ACP_SESSION_INIT_FAILED",
-        fallbackMessage: "Session is not ACP-enabled.",
-      }),
-    );
-  }
-  if (resolved.kind === "stale") {
-    return stopWithText(
-      collectAcpErrorText({
-        error: resolved.error,
-        fallbackCode: "ACP_SESSION_INIT_FAILED",
-        fallbackMessage: resolved.error.message,
+        fallbackMessage: error.message,
       }),
     );
   }

@@ -2,6 +2,7 @@ import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionAcpMeta } from "../../config/sessions/types.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../../routing/session-key.js";
 import { ACP_ERROR_CODES, AcpRuntimeError } from "../runtime/errors.js";
+import type { AcpSessionResolution } from "./manager.types.js";
 
 export function resolveAcpAgentFromSessionKey(sessionKey: string, fallback = "main"): string {
   const parsed = parseAgentSessionKey(sessionKey);
@@ -13,6 +14,29 @@ export function resolveMissingMetaError(sessionKey: string): AcpRuntimeError {
     "ACP_SESSION_INIT_FAILED",
     `ACP metadata is missing for ${sessionKey}. Recreate this ACP session with /acp spawn and rebind the thread.`,
   );
+}
+
+export function resolveAcpSessionResolutionError(
+  resolution: AcpSessionResolution,
+): AcpRuntimeError | null {
+  if (resolution.kind === "ready") {
+    return null;
+  }
+  if (resolution.kind === "stale") {
+    return resolution.error;
+  }
+  return new AcpRuntimeError(
+    "ACP_SESSION_INIT_FAILED",
+    `Session is not ACP-enabled: ${resolution.sessionKey}`,
+  );
+}
+
+export function requireReadySessionMeta(resolution: AcpSessionResolution): SessionAcpMeta {
+  const error = resolveAcpSessionResolutionError(resolution);
+  if (error) {
+    throw error;
+  }
+  return resolution.meta;
 }
 
 export function normalizeSessionKey(sessionKey: string): string {
