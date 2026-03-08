@@ -213,20 +213,99 @@ export const nostrPlugin: ChannelPlugin<ResolvedNostrAccount> = {
             `[${account.accountId}] DM from ${senderPubkey}: ${text.slice(0, 50)}...`,
           );
 
-          // Forward to OpenClaw's message pipeline
-          await (
-            runtime.channel.reply as { handleInboundMessage?: (params: unknown) => Promise<void> }
-          ).handleInboundMessage?.({
+          const cfg = runtime.config.loadConfig();
+          const timestamp = Date.now();
+          const route = runtime.channel.routing.resolveAgentRoute({
+            cfg,
             channel: "nostr",
             accountId: account.accountId,
-            senderId: senderPubkey,
-            chatType: "direct",
-            chatId: senderPubkey, // For DMs, chatId is the sender's pubkey
-            text,
-            reply: async (responseText: string) => {
-              await reply(responseText);
+            peer: {
+              kind: "direct",
+              id: senderPubkey,
             },
           });
+
+          const ctxPayload = runtime.channel.reply.finalizeInboundContext({
+            Body: text,
+            BodyForAgent: text,
+            RawBody: text,
+            CommandBody: text,
+            From: `nostr:${senderPubkey}`,
+            To: `nostr:${account.accountId}`,
+            SessionKey: route.sessionKey,
+            AccountId: account.accountId,
+            ChatType: "direct" as const,
+            ConversationLabel: `Nostr DM`,
+            SenderName: senderPubkey,
+            SenderId: senderPubkey,
+            Provider: "nostr" as const,
+            Surface: "nostr" as const,
+            WasMentioned: true,
+            CommandAuthorized: true,
+            CommandSource: "text" as const,
+            MessageSid: `nostr-${timestamp}`,
+            Timestamp: timestamp,
+            OriginatingChannel: "nostr" as const,
+            OriginatingTo: `nostr:${account.accountId}`,
+          });
+
+          const storePath = runtime.channel.session.resolveStorePath(cfg.session?.store, {
+            agentId: route.agentId,
+          });
+
+          await runtime.channel.session.recordInboundSession({
+            storePath,
+            sessionKey: ctxPayload.SessionKey ?? route.sessionKey,
+            ctx: ctxPayload,
+            updateLastRoute: {
+              sessionKey: route.mainSessionKey,
+              channel: "nostr",
+              to: `nostr:${senderPubkey}`,
+              accountId: account.accountId,
+            },
+            onRecordError: (err) => {
+              ctx.log?.error?.(
+                `[${account.accountId}] Nostr session record failed: ${String(err)}`,
+              );
+            },
+          });
+
+          try {
+            const tableMode = runtime.channel.text.resolveMarkdownTableMode({
+              cfg,
+              channel: "nostr",
+              accountId: account.accountId,
+            });
+
+            const { queuedFinal } =
+              await runtime.channel.reply.dispatchReplyWithBufferedBlockDispatcher({
+                ctx: ctxPayload,
+                cfg,
+                dispatcherOptions: {
+                  humanDelay: runtime.channel.reply.resolveHumanDelayConfig(cfg, route.agentId),
+                  deliver: async (payload) => {
+                    const message = runtime.channel.text.convertMarkdownTables(
+                      payload.text ?? "",
+                      tableMode,
+                    );
+                    if (message) {
+                      await reply(message);
+                    }
+                  },
+                  onError: (err) => {
+                    ctx.log?.error?.(`[${account.accountId}] Nostr dispatch error: ${String(err)}`);
+                  },
+                },
+              });
+
+            if (!queuedFinal) {
+              ctx.log?.debug?.(`[${account.accountId}] No reply generated for ${senderPubkey}`);
+            }
+          } catch (err) {
+            ctx.log?.error?.(
+              `[${account.accountId}] Nostr message handling failed: ${String(err)}`,
+            );
+          }
         },
         onError: (error, context) => {
           ctx.log?.error?.(`[${account.accountId}] Nostr error (${context}): ${error.message}`);
