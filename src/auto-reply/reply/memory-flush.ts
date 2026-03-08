@@ -113,12 +113,14 @@ function ensureNoReplyHint(text: string): string {
   return `${text}\n\nIf no user-visible reply is needed, start with ${SILENT_REPLY_TOKEN}.`;
 }
 
-export function resolveMemoryFlushContextWindowTokens(params: {
+export async function resolveMemoryFlushContextWindowTokens(params: {
   modelId?: string;
   agentCfgContextTokens?: number;
-}): number {
+}): Promise<number> {
   return (
-    lookupContextTokens(params.modelId) ?? params.agentCfgContextTokens ?? DEFAULT_CONTEXT_TOKENS
+    (await lookupContextTokens(params.modelId)) ??
+    params.agentCfgContextTokens ??
+    DEFAULT_CONTEXT_TOKENS
   );
 }
 

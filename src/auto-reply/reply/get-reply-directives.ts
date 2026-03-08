@@ -405,7 +405,7 @@ export async function resolveReplyDirectives(params: {
     resolvedReasoningLevel = await modelState.resolveDefaultReasoningLevel();
   }
 
-  let contextTokens = resolveContextTokens({
+  let contextTokens = await resolveContextTokens({
     agentCfg,
     model,
   });

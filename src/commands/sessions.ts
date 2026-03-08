@@ -93,7 +93,7 @@ export async function sessionsCommand(
   const displayDefaults = resolveSessionDisplayDefaults(cfg);
   const configContextTokens =
     cfg.agents?.defaults?.contextTokens ??
-    lookupContextTokens(displayDefaults.model) ??
+    (await lookupContextTokens(displayDefaults.model)) ??
     DEFAULT_CONTEXT_TOKENS;
   const targets = resolveSessionStoreTargetsOrExit({
     cfg,
@@ -155,18 +155,23 @@ export async function sessionsCommand(
           allAgents: aggregateAgents ? true : undefined,
           count: rows.length,
           activeMinutes: activeMinutes ?? null,
-          sessions: rows.map((r) => {
-            const model = resolveSessionDisplayModel(cfg, r, displayDefaults);
-            return {
-              ...r,
-              totalTokens: resolveFreshSessionTotalTokens(r) ?? null,
-              totalTokensFresh:
-                typeof r.totalTokens === "number" ? r.totalTokensFresh !== false : false,
-              contextTokens:
-                r.contextTokens ?? lookupContextTokens(model) ?? configContextTokens ?? null,
-              model,
-            };
-          }),
+          sessions: await Promise.all(
+            rows.map(async (r) => {
+              const model = resolveSessionDisplayModel(cfg, r, displayDefaults);
+              return {
+                ...r,
+                totalTokens: resolveFreshSessionTotalTokens(r) ?? null,
+                totalTokensFresh:
+                  typeof r.totalTokens === "number" ? r.totalTokensFresh !== false : false,
+                contextTokens:
+                  r.contextTokens ??
+                  (await lookupContextTokens(model)) ??
+                  configContextTokens ??
+                  null,
+                model,
+              };
+            }),
+          ),
         },
         null,
         2,
@@ -207,7 +212,8 @@ export async function sessionsCommand(
 
   for (const row of rows) {
     const model = resolveSessionDisplayModel(cfg, row, displayDefaults);
-    const contextTokens = row.contextTokens ?? lookupContextTokens(model) ?? configContextTokens;
+    const contextTokens =
+      row.contextTokens ?? (await lookupContextTokens(model)) ?? configContextTokens;
     const total = resolveFreshSessionTotalTokens(row);
 
     const line = [

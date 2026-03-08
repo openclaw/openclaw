@@ -598,11 +598,13 @@ export function resolveModelDirectiveSelection(params: {
   };
 }
 
-export function resolveContextTokens(params: {
+export async function resolveContextTokens(params: {
   agentCfg: NonNullable<NonNullable<OpenClawConfig["agents"]>["defaults"]> | undefined;
   model: string;
-}): number {
+}): Promise<number> {
   return (
-    params.agentCfg?.contextTokens ?? lookupContextTokens(params.model) ?? DEFAULT_CONTEXT_TOKENS
+    params.agentCfg?.contextTokens ??
+    (await lookupContextTokens(params.model)) ??
+    DEFAULT_CONTEXT_TOKENS
   );
 }

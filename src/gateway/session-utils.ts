@@ -607,7 +607,7 @@ export function loadCombinedSessionStoreForGateway(cfg: OpenClawConfig): {
   return { storePath, store: combined };
 }
 
-export function getSessionDefaults(cfg: OpenClawConfig): GatewaySessionsDefaults {
+export async function getSessionDefaults(cfg: OpenClawConfig): Promise<GatewaySessionsDefaults> {
   const resolved = resolveConfiguredModelRef({
     cfg,
     defaultProvider: DEFAULT_PROVIDER,
@@ -615,7 +615,7 @@ export function getSessionDefaults(cfg: OpenClawConfig): GatewaySessionsDefaults
   });
   const contextTokens =
     cfg.agents?.defaults?.contextTokens ??
-    lookupContextTokens(resolved.model) ??
+    (await lookupContextTokens(resolved.model)) ??
     DEFAULT_CONTEXT_TOKENS;
   return {
     modelProvider: resolved.provider ?? null,
@@ -715,12 +715,12 @@ export function resolveSessionModelIdentityRef(
   return { provider: resolved.provider, model: resolved.model };
 }
 
-export function listSessionsFromStore(params: {
+export async function listSessionsFromStore(params: {
   cfg: OpenClawConfig;
   storePath: string;
   store: Record<string, SessionEntry>;
   opts: import("./protocol/index.js").SessionsListParams;
-}): SessionsListResult {
+}): Promise<SessionsListResult> {
   const { cfg, storePath, store, opts } = params;
   const now = Date.now();
 
@@ -892,7 +892,7 @@ export function listSessionsFromStore(params: {
     ts: now,
     path: storePath,
     count: finalSessions.length,
-    defaults: getSessionDefaults(cfg),
+    defaults: await getSessionDefaults(cfg),
     sessions: finalSessions,
   };
 }
