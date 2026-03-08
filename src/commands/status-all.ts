@@ -274,6 +274,20 @@ export async function statusAllCommand(
       (a) => a.lastActiveAgeMs != null && a.lastActiveAgeMs <= aliveThresholdMs,
     ).length;
 
+    const toolProfileValue = (() => {
+      const profile = cfg.tools?.profile;
+      if (!profile) {
+        return null;
+      }
+      if (profile === "messaging") {
+        return `${profile} · intentionally narrow by design; use \`tools.profile: \"full\"\` for broader command/control access`;
+      }
+      if (profile === "full") {
+        return `${profile} · broadest command/control surface`;
+      }
+      return profile;
+    })();
+
     const overviewRows = [
       { Item: "Version", Value: VERSION },
       { Item: "OS", Value: osSummary.label },
@@ -295,6 +309,7 @@ export async function statusAllCommand(
               : `${tailscaleMode} · ${tailscale.backendState ?? "unknown"} · magicdns unknown`,
       },
       { Item: "Channel", Value: channelLabel },
+      ...(toolProfileValue ? [{ Item: "Tools profile", Value: toolProfileValue }] : []),
       ...(gitLabel ? [{ Item: "Git", Value: gitLabel }] : []),
       { Item: "Update", Value: updateLine },
       {

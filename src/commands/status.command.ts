@@ -406,6 +406,20 @@ export async function statusCommand(
   const channelLabel = channelInfo.label;
   const gitLabel = formatGitInstallLabel(update);
 
+  const toolProfileValue = (() => {
+    const profile = cfg.tools?.profile;
+    if (!profile) {
+      return null;
+    }
+    if (profile === "messaging") {
+      return `${profile} · intentionally narrow by design; use \`tools.profile: \"full\"\` for broader command/control access`;
+    }
+    if (profile === "full") {
+      return `${profile} · broadest command/control surface`;
+    }
+    return profile;
+  })();
+
   const overviewRows = [
     { Item: "Dashboard", Value: dashboard },
     { Item: "OS", Value: `${osSummary.label} · node ${process.versions.node}` },
@@ -419,6 +433,7 @@ export async function statusCommand(
             : warn(`${tailscaleMode} · magicdns unknown`),
     },
     { Item: "Channel", Value: channelLabel },
+    ...(toolProfileValue ? [{ Item: "Tools profile", Value: toolProfileValue }] : []),
     ...(gitLabel ? [{ Item: "Git", Value: gitLabel }] : []),
     {
       Item: "Update",
