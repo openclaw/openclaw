@@ -273,6 +273,70 @@ describe("gateway server chat", () => {
     });
   });
 
+  test("chat.history preserves inline image data for control-ui rendering", async () => {
+    await withGatewayChatHarness(async ({ ws, createSessionDir }) => {
+      const historyMaxBytes = 2 * 1024 * 1024;
+      __setMaxChatHistoryMessagesBytesForTest(historyMaxBytes);
+      await connectOk(ws);
+
+      const sessionDir = await createSessionDir();
+      await writeMainSessionStore();
+
+      const imageData = "A".repeat(220_000);
+      const line = JSON.stringify({
+        message: {
+          role: "assistant",
+          timestamp: Date.now(),
+          content: [{ type: "image", mimeType: "image/png", data: imageData }],
+        },
+      });
+      await writeMainSessionTranscript(sessionDir, [line]);
+      const messages = await fetchHistoryMessages(ws);
+      expect(messages.length).toBe(1);
+
+      const first = messages[0] as {
+        content?: Array<{ type?: string; mimeType?: string; data?: string; omitted?: boolean }>;
+      };
+      expect(Array.isArray(first.content)).toBe(true);
+      expect(first.content?.[0]?.type).toBe("image");
+      expect(first.content?.[0]?.mimeType).toBe("image/png");
+      expect(first.content?.[0]?.data).toBe(imageData);
+      expect(first.content?.[0]?.omitted).toBeUndefined();
+
+      const serialized = JSON.stringify(messages);
+      const bytes = Buffer.byteLength(serialized, "utf8");
+      expect(bytes).toBeLessThanOrEqual(historyMaxBytes);
+      expect(serialized).not.toContain("[chat.history omitted: message too large]");
+    });
+  });
+
+  test("chat.history still replaces very large inline image payloads", async () => {
+    await withGatewayChatHarness(async ({ ws, createSessionDir }) => {
+      const historyMaxBytes = 4 * 1024 * 1024;
+      __setMaxChatHistoryMessagesBytesForTest(historyMaxBytes);
+      await connectOk(ws);
+
+      const sessionDir = await createSessionDir();
+      await writeMainSessionStore();
+
+      const imageData = "A".repeat(1_200_000);
+      const line = JSON.stringify({
+        message: {
+          role: "assistant",
+          timestamp: Date.now(),
+          content: [{ type: "image", mimeType: "image/png", data: imageData }],
+        },
+      });
+      await writeMainSessionTranscript(sessionDir, [line]);
+      const messages = await fetchHistoryMessages(ws);
+      expect(messages.length).toBe(1);
+
+      const serialized = JSON.stringify(messages);
+      expect(serialized).toContain("[chat.history omitted: message too large]");
+      expect(serialized.includes(imageData.slice(0, 128))).toBe(false);
+    });
+  });
+
   test("chat.history strips inline directives from displayed message text", async () => {
     await withGatewayChatHarness(async ({ ws, createSessionDir }) => {
       await connectOk(ws);

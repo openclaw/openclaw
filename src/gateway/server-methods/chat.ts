@@ -75,6 +75,7 @@ type AbortedPartialSnapshot = {
 
 const CHAT_HISTORY_TEXT_MAX_CHARS = 12_000;
 const CHAT_HISTORY_MAX_SINGLE_MESSAGE_BYTES = 128 * 1024;
+const CHAT_HISTORY_MAX_SINGLE_IMAGE_MESSAGE_BYTES = 1024 * 1024;
 const CHAT_HISTORY_OVERSIZED_PLACEHOLDER = "[chat.history omitted: message too large]";
 let chatHistoryPlaceholderEmitCount = 0;
 const CHANNEL_AGNOSTIC_SESSION_SCOPES = new Set([
@@ -266,14 +267,6 @@ function sanitizeChatHistoryContentBlock(block: unknown): { block: unknown; chan
     delete entry.thinkingSignature;
     changed = true;
   }
-  const type = typeof entry.type === "string" ? entry.type : "";
-  if (type === "image" && typeof entry.data === "string") {
-    const bytes = Buffer.byteLength(entry.data, "utf8");
-    delete entry.data;
-    entry.omitted = true;
-    entry.bytes = bytes;
-    changed = true;
-  }
   return { block: changed ? entry : block, changed };
 }
 
@@ -378,6 +371,33 @@ function sanitizeChatHistoryMessages(messages: unknown[]): unknown[] {
   return changed ? next : messages;
 }
 
+function messageHasInlineImageData(message: unknown): boolean {
+  if (!message || typeof message !== "object") {
+    return false;
+  }
+  const content = (message as { content?: unknown }).content;
+  if (!Array.isArray(content)) {
+    return false;
+  }
+  return content.some((block) => {
+    if (!block || typeof block !== "object") {
+      return false;
+    }
+    const entry = block as { type?: unknown; data?: unknown };
+    return entry.type === "image" && typeof entry.data === "string" && entry.data.length > 0;
+  });
+}
+
+function resolveMaxSingleHistoryMessageBytes(
+  message: unknown,
+  defaultMaxSingleMessageBytes: number,
+): number {
+  if (messageHasInlineImageData(message)) {
+    return Math.max(defaultMaxSingleMessageBytes, CHAT_HISTORY_MAX_SINGLE_IMAGE_MESSAGE_BYTES);
+  }
+  return defaultMaxSingleMessageBytes;
+}
+
 function buildOversizedHistoryPlaceholder(message?: unknown): Record<string, unknown> {
   const role =
     message &&
@@ -409,7 +429,8 @@ function replaceOversizedChatHistoryMessages(params: {
   }
   let replacedCount = 0;
   const next = messages.map((message) => {
-    if (jsonUtf8Bytes(message) <= maxSingleMessageBytes) {
+    const maxSingleForMessage = resolveMaxSingleHistoryMessageBytes(message, maxSingleMessageBytes);
+    if (jsonUtf8Bytes(message) <= maxSingleForMessage) {
       return message;
     }
     replacedCount += 1;
