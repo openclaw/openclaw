@@ -571,10 +571,10 @@ describe("createJob custom id", () => {
     payload: { kind: "systemEvent" as const, text: "tick" },
   });
 
-  it("uses provided id when valid (alphanumeric, colon, underscore, hyphen, 1–128 chars)", () => {
+  it("uses provided id when valid (alphanumeric, underscore, hyphen, 1–128 chars; no colon)", () => {
     const state = createMockState(now, { defaultAgentId: "main" });
-    const job = createJob(state, { ...baseInput(), id: "my-job:nightly_1" });
-    expect(job.id).toBe("my-job:nightly_1");
+    const job = createJob(state, { ...baseInput(), id: "my-job_nightly_1" });
+    expect(job.id).toBe("my-job_nightly_1");
   });
 
   it("trims id and uses it when valid", () => {
@@ -591,9 +591,9 @@ describe("createJob custom id", () => {
     );
   });
 
-  it("falls back to UUID when id is invalid (empty, bad chars, or too long)", () => {
+  it("falls back to UUID when id is invalid (empty, colon, bad chars, or too long)", () => {
     const state = createMockState(now, { defaultAgentId: "main" });
-    for (const badId of ["", "  ", "bad space", "bad.dots", "x".repeat(129)]) {
+    for (const badId of ["", "  ", "bad space", "bad.dots", "has:colon", "x".repeat(129)]) {
       const job = createJob(state, { ...baseInput(), id: badId });
       expect(job.id).toMatch(
         /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i,

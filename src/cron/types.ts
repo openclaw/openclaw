@@ -149,7 +149,7 @@ export type CronStoreFile = {
 };
 
 export type CronJobCreate = Omit<CronJob, "id" | "createdAtMs" | "updatedAtMs" | "state"> & {
-  /** Optional stable id (1–128 chars, [a-zA-Z0-9:_-]). If omitted or invalid, a UUID is used. */
+  /** Optional stable id (1–128 chars, [a-zA-Z0-9_-], no colon). If omitted or invalid, a UUID is used. */
   id?: string;
   state?: Partial<CronJobState>;
 };

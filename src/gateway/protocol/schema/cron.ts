@@ -276,8 +276,14 @@ export const CronListParamsSchema = Type.Object(
 
 export const CronStatusParamsSchema = Type.Object({}, { additionalProperties: false });
 
+/** Optional stable job id: 1–128 chars, [a-zA-Z0-9_-]. No colon (session keys use : as delimiter). */
+const CronJobIdSchema = Type.Optional(
+  Type.String({ minLength: 1, maxLength: 128, pattern: "^[a-zA-Z0-9_-]+$" }),
+);
+
 export const CronAddParamsSchema = Type.Object(
   {
+    id: CronJobIdSchema,
     name: NonEmptyString,
     ...CronCommonOptionalFields,
     schedule: CronScheduleSchema,
