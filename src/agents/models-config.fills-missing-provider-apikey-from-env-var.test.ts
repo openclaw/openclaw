@@ -246,6 +246,21 @@ describe("models-config", () => {
     });
   });
 
+  it("replaces stale merged baseUrl when the provider api changes", async () => {
+    await withTempHome(async () => {
+      const parsed = await runCustomProviderMergeTest({
+        seedProvider: {
+          baseUrl: "https://agent.example/v1",
+          apiKey: "AGENT_KEY", // pragma: allowlist secret
+          api: "openai-completions",
+          models: [{ id: "agent-model", name: "Agent model", input: ["text"] }],
+        },
+      });
+      expect(parsed.providers.custom?.apiKey).toBe("AGENT_KEY");
+      expect(parsed.providers.custom?.baseUrl).toBe("https://config.example/v1");
+    });
+  });
+
   it("replaces stale merged apiKey when provider is SecretRef-managed in current config", async () => {
     await withTempHome(async () => {
       await writeAgentModelsJson({
