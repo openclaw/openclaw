@@ -20,6 +20,25 @@ export function createSandboxFsBridgeFromResolver(
       const buffer = Buffer.isBuffer(data) ? data : Buffer.from(data);
       await fs.writeFile(target.hostPath, buffer);
     },
+    appendFile: async ({ filePath, cwd, data, mkdir = true }) => {
+      const target = resolvePath(filePath, cwd);
+      if (mkdir) {
+        await fs.mkdir(path.dirname(target.hostPath), { recursive: true });
+      }
+      const buffer = Buffer.isBuffer(data) ? data : Buffer.from(data);
+      try {
+        const existing = await fs.readFile(target.hostPath);
+        const combined = Buffer.concat([existing, buffer]);
+        await fs.writeFile(target.hostPath, combined);
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+          // File doesn't exist, create it
+          await fs.writeFile(target.hostPath, buffer);
+        } else {
+          throw error;
+        }
+      }
+    },
     mkdirp: async ({ filePath, cwd }) => {
       const target = resolvePath(filePath, cwd);
       await fs.mkdir(target.hostPath, { recursive: true });

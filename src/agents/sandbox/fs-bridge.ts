@@ -47,6 +47,14 @@ export type SandboxFsBridge = {
     mkdir?: boolean;
     signal?: AbortSignal;
   }): Promise<void>;
+  appendFile(params: {
+    filePath: string;
+    cwd?: string;
+    data: Buffer | string;
+    encoding?: BufferEncoding;
+    mkdir?: boolean;
+    signal?: AbortSignal;
+  }): Promise<void>;
   mkdirp(params: { filePath: string; cwd?: string; signal?: AbortSignal }): Promise<void>;
   remove(params: {
     filePath: string;
@@ -120,6 +128,57 @@ class SandboxFsBridgeImpl implements SandboxFsBridge {
       targetContainerPath: target.containerPath,
       mkdir: params.mkdir !== false,
       data: buffer,
+      signal: params.signal,
+    });
+
+    try {
+      await this.runCheckedCommand({
+        ...buildWriteCommitPlan(target, tempPath),
+        signal: params.signal,
+      });
+    } catch (error) {
+      await this.cleanupTempPath(tempPath, params.signal);
+      throw error;
+    }
+  }
+
+  async appendFile(params: {
+    filePath: string;
+    cwd?: string;
+    data: Buffer | string;
+    encoding?: BufferEncoding;
+    mkdir?: boolean;
+    signal?: AbortSignal;
+  }): Promise<void> {
+    const target = this.resolveResolvedPath(params);
+    this.ensureWriteAccess(target, "append to files");
+    await this.pathGuard.assertPathSafety(target, {
+      action: "append to files",
+      requireWritable: true,
+    });
+
+    // First try to read existing content, then append
+    let existingContent: Buffer = Buffer.alloc(0);
+    try {
+      const existing = await this.readFile({
+        filePath: params.filePath,
+        cwd: params.cwd,
+        signal: params.signal,
+      });
+      existingContent = Buffer.from(existing);
+    } catch {
+      // File doesn't exist, that's okay - we'll create it
+    }
+
+    const newData = Buffer.isBuffer(params.data)
+      ? params.data
+      : Buffer.from(params.data, params.encoding ?? "utf8");
+    const combinedData = Buffer.concat([existingContent, newData]);
+
+    const tempPath = await this.writeFileToTempPath({
+      targetContainerPath: target.containerPath,
+      mkdir: params.mkdir !== false,
+      data: combinedData,
       signal: params.signal,
     });
 

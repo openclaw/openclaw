@@ -3,6 +3,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
 import { createEditTool, createReadTool, createWriteTool } from "@mariozechner/pi-coding-agent";
+import { Type } from "@sinclair/typebox";
 import {
   SafeOpenError,
   openFileWithinRoot,
@@ -454,6 +455,209 @@ export function createSandboxedReadTool(params: SandboxToolParams) {
 export function createSandboxedWriteTool(params: SandboxToolParams) {
   const base = createWriteTool(params.root, {
     operations: createSandboxWriteOperations(params),
+  }) as unknown as AnyAgentTool;
+  return wrapToolParamNormalization(base, CLAUDE_PARAM_GROUPS.write);
+}
+
+// Append tool - appends content to file without overwriting
+const appendSchema = Type.Object({
+  path: Type.String({ description: "Path to the file to append to (relative or absolute)" }),
+  content: Type.String({ content: "Content to append to the file" }),
+});
+
+interface AppendOperations {
+  appendFile: (absolutePath: string, content: string) => Promise<void>;
+  mkdir: (dir: string) => Promise<void>;
+}
+
+function createAppendTool(cwd: string, options?: { operations?: AppendOperations }) {
+  const defaultOperations: AppendOperations = {
+    appendFile: async (filePath, content) => {
+      // Create file if it doesn't exist, then append
+      try {
+        await fs.appendFile(filePath, content, "utf-8");
+      } catch (error: unknown) {
+        if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+          // File doesn't exist, create it with the content
+          await fs.mkdir(path.dirname(filePath), { recursive: true });
+          await fs.writeFile(filePath, content, "utf-8");
+        } else {
+          throw error;
+        }
+      }
+    },
+    mkdir: async (dir) => {
+      await fs.mkdir(dir, { recursive: true });
+    },
+  };
+
+  const ops = options?.operations ?? defaultOperations;
+
+  return {
+    name: "append",
+    label: "append",
+    description:
+      "Append content to a file. Creates the file if it doesn't exist. Does not overwrite existing content.",
+    parameters: appendSchema,
+    execute: async (
+      _toolCallId: string,
+      args: { path: string; content: string },
+      signal?: AbortSignal,
+    ) => {
+      const absolutePath = path.resolve(cwd, args.path);
+      const dir = path.dirname(absolutePath);
+
+      return new Promise((resolve, reject) => {
+        if (signal?.aborted) {
+          reject(new Error("Operation aborted"));
+          return;
+        }
+
+        let aborted = false;
+        const onAbort = () => {
+          aborted = true;
+          reject(new Error("Operation aborted"));
+        };
+
+        if (signal) {
+          signal.addEventListener("abort", onAbort, { once: true });
+        }
+
+        void (async () => {
+          try {
+            await ops.mkdir(dir);
+            if (aborted) {
+              return;
+            }
+
+            await ops.appendFile(absolutePath, args.content);
+            if (aborted) {
+              return;
+            }
+
+            if (signal) {
+              signal.removeEventListener("abort", onAbort);
+            }
+
+            resolve({
+              content: [
+                {
+                  type: "text",
+                  text: `Successfully appended ${args.content.length} bytes to ${args.path}`,
+                },
+              ],
+              details: undefined,
+            });
+          } catch (error) {
+            if (signal) {
+              signal.removeEventListener("abort", onAbort);
+            }
+            if (!aborted) {
+              reject(error);
+            }
+          }
+        })();
+      });
+    },
+  };
+}
+
+function createSandboxAppendOperations(params: SandboxToolParams): AppendOperations {
+  return {
+    appendFile: async (absolutePath: string, content: string) => {
+      if (!params.bridge) {
+        throw new Error("Sandbox bridge not available");
+      }
+      // For sandbox, we need to handle the path relative to the sandbox root
+      const relativePath = path.relative(params.root, absolutePath);
+      await params.bridge.appendFile({
+        filePath: relativePath,
+        data: content,
+        mkdir: true,
+      });
+    },
+    mkdir: async (dir: string) => {
+      if (!params.bridge) {
+        throw new Error("Sandbox bridge not available");
+      }
+      const relativePath = path.relative(params.root, dir);
+      await params.bridge.mkdirp({ filePath: relativePath });
+    },
+  };
+}
+
+export function createSandboxedAppendTool(params: SandboxToolParams) {
+  const base = createAppendTool(params.root, {
+    operations: createSandboxAppendOperations(params),
+  }) as unknown as AnyAgentTool;
+  return wrapToolParamNormalization(base, CLAUDE_PARAM_GROUPS.write);
+}
+
+function createHostAppendOperations(
+  root: string,
+  options?: { workspaceOnly?: boolean },
+): AppendOperations {
+  const workspaceOnly = options?.workspaceOnly ?? false;
+
+  if (!workspaceOnly) {
+    return {
+      appendFile: async (absolutePath: string, content: string) => {
+        const resolved = path.resolve(absolutePath);
+        await fs.mkdir(path.dirname(resolved), { recursive: true });
+        try {
+          await fs.appendFile(resolved, content, "utf-8");
+        } catch (error: unknown) {
+          if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+            await fs.writeFile(resolved, content, "utf-8");
+          } else {
+            throw error;
+          }
+        }
+      },
+      mkdir: async (dir: string) => {
+        const resolved = path.resolve(dir);
+        await fs.mkdir(resolved, { recursive: true });
+      },
+    } as const;
+  }
+
+  // When workspaceOnly is true, enforce workspace boundary
+  return {
+    appendFile: async (absolutePath: string, content: string) => {
+      const relative = toRelativeWorkspacePath(root, absolutePath);
+      await assertSandboxPath({ filePath: absolutePath, cwd: root, root });
+      // Use writeFileWithinRoot for workspace-only mode
+      // First read existing content, then append
+      const resolved = path.resolve(root, relative);
+      try {
+        const existingContent = await fs.readFile(resolved, "utf-8");
+        await fs.writeFile(resolved, existingContent + content, "utf-8");
+      } catch (error: unknown) {
+        if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+          // File doesn't exist, create it
+          await writeFileWithinRoot({
+            rootDir: root,
+            relativePath: relative,
+            data: content,
+            mkdir: true,
+          });
+        } else {
+          throw error;
+        }
+      }
+    },
+    mkdir: async (dir: string) => {
+      const relative = toRelativeWorkspacePath(root, dir, { allowRoot: true });
+      const resolved = relative ? path.resolve(root, relative) : path.resolve(root);
+      await assertSandboxPath({ filePath: resolved, cwd: root, root });
+      await fs.mkdir(resolved, { recursive: true });
+    },
+  } as const;
+}
+
+export function createHostAppendTool(root: string, options?: { workspaceOnly?: boolean }) {
+  const base = createAppendTool(root, {
+    operations: createHostAppendOperations(root, options),
   }) as unknown as AnyAgentTool;
   return wrapToolParamNormalization(base, CLAUDE_PARAM_GROUPS.write);
 }
