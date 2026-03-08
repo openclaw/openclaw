@@ -1679,11 +1679,12 @@ async function runWebSearch(params: {
           : params.provider === "kimi"
             ? `${params.kimiBaseUrl ?? DEFAULT_KIMI_BASE_URL}:${params.kimiModel ?? DEFAULT_KIMI_MODEL}`
             : "";
-  const cacheKey = normalizeCacheKey(
-    params.provider === "brave" && effectiveBraveMode === "llm-context"
-      ? `${params.provider}:llm-context:${params.query}:${params.country || "default"}:${params.search_lang || params.language || "default"}:${params.freshness || "default"}:${params.goggles || "default"}`
-      : `${params.provider}:${effectiveBraveMode}:${params.query}:${params.count}:${params.country || "default"}:${params.search_lang || params.language || "default"}:${params.ui_lang || "default"}:${params.freshness || "default"}:${params.dateAfter || "default"}:${params.dateBefore || "default"}:${params.searchDomainFilter?.join(",") || "default"}:${params.maxTokens || "default"}:${params.maxTokensPerPage || "default"}:${providerSpecificKey}:${params.goggles || "default"}`,
-  );
+  const cacheKey =
+    normalizeCacheKey(
+      params.provider === "brave" && effectiveBraveMode === "llm-context"
+        ? `${params.provider}:llm-context:${params.query}:${params.country || "default"}:${params.search_lang || params.language || "default"}:${params.freshness || "default"}`
+        : `${params.provider}:${effectiveBraveMode}:${params.query}:${params.count}:${params.country || "default"}:${params.search_lang || params.language || "default"}:${params.ui_lang || "default"}:${params.freshness || "default"}:${params.dateAfter || "default"}:${params.dateBefore || "default"}:${params.searchDomainFilter?.join(",") || "default"}:${params.maxTokens || "default"}:${params.maxTokensPerPage || "default"}:${providerSpecificKey}`,
+    ) + `:${(params.goggles || "default").trim()}`;
   const cached = readCache(SEARCH_CACHE, cacheKey);
   if (cached) {
     return { ...cached.value, cached: true };
