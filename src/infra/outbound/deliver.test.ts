@@ -2,6 +2,7 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { markdownToSignalTextChunks } from "../../../extensions/signal/src/format.js";
 import { signalOutbound } from "../../channels/plugins/outbound/signal.js";
+import { slackOutbound } from "../../channels/plugins/outbound/slack.js";
 import { telegramOutbound } from "../../channels/plugins/outbound/telegram.js";
 import { whatsappOutbound } from "../../channels/plugins/outbound/whatsapp.js";
 import type { OpenClawConfig } from "../../config/config.js";
@@ -983,6 +984,45 @@ describe("deliverOutboundPayloads", () => {
       "group:test-group",
       "second",
       expect.objectContaining({ replyTo: "1700000000000", quoteAuthor: undefined }),
+    );
+  });
+
+  it("keeps inherited Slack thread context across all payloads", async () => {
+    const sendSlack = vi
+      .fn()
+      .mockResolvedValueOnce({ messageId: "sl1", channelId: "C123" })
+      .mockResolvedValueOnce({ messageId: "sl2", channelId: "C123" });
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "slack",
+          plugin: createOutboundTestPlugin({ id: "slack", outbound: slackOutbound }),
+          source: "test",
+        },
+      ]),
+    );
+
+    await deliverOutboundPayloads({
+      cfg: { channels: { slack: {} } },
+      channel: "slack",
+      to: "C123",
+      payloads: [{ text: "first" }, { text: "second" }],
+      replyToId: "thread-123",
+      deps: { sendSlack },
+    });
+
+    expect(sendSlack).toHaveBeenCalledTimes(2);
+    expect(sendSlack).toHaveBeenNthCalledWith(
+      1,
+      "C123",
+      "first",
+      expect.objectContaining({ threadTs: "thread-123" }),
+    );
+    expect(sendSlack).toHaveBeenNthCalledWith(
+      2,
+      "C123",
+      "second",
+      expect.objectContaining({ threadTs: "thread-123" }),
     );
   });
 

@@ -1,8 +1,31 @@
 import { describe, expect, it } from "vitest";
 import {
+  applyReplyThreading,
   filterMessagingToolMediaDuplicates,
   shouldSuppressMessagingToolReplies,
 } from "./reply-payloads.js";
+
+describe("applyReplyThreading", () => {
+  it("treats whitespace-only replyToId as unset so implicit replies still apply", () => {
+    const result = applyReplyThreading({
+      payloads: [{ text: "hello", replyToId: "  \n\t  " }],
+      replyToMode: "all",
+      currentMessageId: "123",
+    });
+
+    expect(result).toEqual([{ text: "hello", replyToId: "123" }]);
+  });
+
+  it("preserves explicit null replyToId as do-not-reply", () => {
+    const result = applyReplyThreading({
+      payloads: [{ text: "hello", replyToId: null }],
+      replyToMode: "all",
+      currentMessageId: "123",
+    });
+
+    expect(result).toEqual([{ text: "hello", replyToId: null }]);
+  });
+});
 
 describe("filterMessagingToolMediaDuplicates", () => {
   it("strips mediaUrl when it matches sentMediaUrls", () => {
