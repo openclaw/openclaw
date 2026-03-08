@@ -20,7 +20,6 @@ RUN set -eux; \
 
 COPY install-sh-common/cli-verify.sh /usr/local/install-sh-common/cli-verify.sh
 COPY install-sh-common/version-parse.sh /usr/local/install-sh-common/version-parse.sh
-COPY install-sh-smoke/run.sh /usr/local/bin/openclaw-install-smoke
-RUN chmod +x /usr/local/bin/openclaw-install-smoke
+COPY --chmod=755 install-sh-smoke/run.sh /usr/local/bin/openclaw-install-smoke
 
 ENTRYPOINT ["/usr/local/bin/openclaw-install-smoke"]
