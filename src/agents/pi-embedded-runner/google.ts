@@ -32,7 +32,7 @@ import {
   type UsageLike,
 } from "../usage.js";
 import { log } from "./logger.js";
-import { dropThinkingBlocks } from "./thinking.js";
+import { dropThinkingBlocks, stripThinkingFromNonLatestAssistant } from "./thinking.js";
 import { describeUnknownError } from "./utils.js";
 
 const GOOGLE_TURN_ORDERING_CUSTOM_TYPE = "google-turn-ordering-bootstrap";
@@ -549,9 +549,22 @@ export async function sanitizeSessionHistory(params: {
       ...resolveImageSanitizationLimits(params.config),
     },
   );
-  const droppedThinking = policy.dropThinkingBlocks
-    ? dropThinkingBlocks(sanitizedImages)
+  // For Anthropic models, strip thinking/redacted_thinking blocks from all
+  // non-latest assistant messages. Anthropic requires these blocks to be
+  // byte-identical to the original response in the latest assistant message,
+  // but allows omitting them from older messages. Compaction and session
+  // serialization can corrupt these blocks, causing API rejections.
+  const isAnthropicProvider =
+    params.modelApi === "anthropic-messages" ||
+    params.modelApi === "bedrock-converse-stream" ||
+    (params.provider ?? "").toLowerCase() === "anthropic" ||
+    (params.provider ?? "").toLowerCase() === "amazon-bedrock";
+  const strippedNonLatestThinking = isAnthropicProvider
+    ? stripThinkingFromNonLatestAssistant(sanitizedImages)
     : sanitizedImages;
+  const droppedThinking = policy.dropThinkingBlocks
+    ? dropThinkingBlocks(strippedNonLatestThinking)
+    : strippedNonLatestThinking;
   const sanitizedToolCalls = sanitizeToolCallInputs(droppedThinking, {
     allowedToolNames: params.allowedToolNames,
   });
