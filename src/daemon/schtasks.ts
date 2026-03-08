@@ -156,27 +156,47 @@ function normalizeTaskResultCode(value?: string): string | null {
 }
 
 const RUNNING_RESULT_CODES = new Set(["0x41301"]);
-const UNKNOWN_STATUS_DETAIL =
-  "Task status is locale-dependent and no numeric Last Run Result was available.";
+
+function normalizeTaskStatus(value?: string): string {
+  return String(value ?? "")
+    .trim()
+    .toLowerCase()
+    .normalize("NFKD")
+    .replace(/\p{M}+/gu, "")
+    .replace(/[^\p{L}\p{N}]+/gu, " ")
+    .trim();
+}
+
+function isRunningTaskStatus(value?: string): boolean {
+  const normalized = normalizeTaskStatus(value);
+  return normalized === "running" || normalized.startsWith("wird ausgef");
+}
 
 export function deriveScheduledTaskRuntimeStatus(parsed: ScheduledTaskInfo): {
   status: GatewayServiceRuntime["status"];
   detail?: string;
 } {
+  if (!parsed.status?.trim()) {
+    return { status: "unknown" };
+  }
+
   const normalizedResult = normalizeTaskResultCode(parsed.lastRunResult);
-  if (normalizedResult != null) {
-    if (RUNNING_RESULT_CODES.has(normalizedResult)) {
-      return { status: "running" };
-    }
+  if (normalizedResult && RUNNING_RESULT_CODES.has(normalizedResult)) {
+    return { status: "running" };
+  }
+
+  if (!isRunningTaskStatus(parsed.status)) {
+    return { status: "stopped" };
+  }
+
+  if (normalizedResult && !RUNNING_RESULT_CODES.has(normalizedResult)) {
     return {
       status: "stopped",
       detail: `Task Last Run Result=${parsed.lastRunResult}; treating as not running.`,
     };
   }
-  if (parsed.status?.trim()) {
-    return { status: "unknown", detail: UNKNOWN_STATUS_DETAIL };
-  }
-  return { status: "unknown" };
+
+  return { status: "running" };
 }
 
 function buildTaskScript({
