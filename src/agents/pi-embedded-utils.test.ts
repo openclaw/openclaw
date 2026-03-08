@@ -334,6 +334,30 @@ Arguments: { "command": "ls -la" }`,
     expect(result).toBe("");
   });
 
+  it("strips legacy xml-like tool call dumps from local models", () => {
+    const msg = makeAssistantMessage({
+      role: "assistant",
+      content: [
+        {
+          type: "text",
+          text: `Before
+<tool_call>
+<function=exec>
+<parameter=command>
+qmd update --reindex
+</parameter>
+</function>
+</tool_call>
+After`,
+        },
+      ],
+      timestamp: Date.now(),
+    });
+
+    const result = extractAssistantText(msg);
+    expect(result).toBe("Before\nAfter");
+  });
+
   it("strips tool results for downgraded calls", () => {
     const msg = makeAssistantMessage({
       role: "assistant",
@@ -536,6 +560,11 @@ describe("stripDowngradedToolCallText", () => {
         name: "mixed tool call and historical context",
         text: `Intro.\n[Tool Call: exec (ID: toolu_1)]\nArguments: { "command": "ls" }\n[Historical context: a different model called tool "read"]`,
         expected: "Intro.",
+      },
+      {
+        name: "multiple legacy tool_call XML blocks",
+        text: `Start\n<tool_call><function=read><parameter=path>/tmp/a</parameter></tool_call>\nMiddle\n<tool_call><function=exec><parameter=command>ls</parameter></tool_call>\nEnd`,
+        expected: "Start\nMiddle\nEnd",
       },
       {
         name: "no markers",

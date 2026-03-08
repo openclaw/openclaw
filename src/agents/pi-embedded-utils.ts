@@ -43,7 +43,11 @@ export function stripDowngradedToolCallText(text: string): string {
   if (!text) {
     return text;
   }
-  if (!/\[Tool (?:Call|Result)/i.test(text) && !/\[Historical context/i.test(text)) {
+  if (
+    !/\[Tool (?:Call|Result)/i.test(text) &&
+    !/\[Historical context/i.test(text) &&
+    !/<tool_call>/i.test(text)
+  ) {
     return text;
   }
 
@@ -188,6 +192,10 @@ export function stripDowngradedToolCallText(text: string): string {
 
   // Remove [Tool Call: name (ID: ...)] blocks and their Arguments.
   let cleaned = stripToolCalls(text);
+
+  // Remove legacy XML-like tool call dumps from local models, e.g.:
+  // <tool_call> <function=exec> <parameter=command>...</parameter> ... </tool_call>
+  cleaned = cleaned.replace(/<tool_call>[\s\S]*?<\/tool_call>\s*/gi, "");
 
   // Remove [Tool Result for ID ...] blocks and their content.
   cleaned = cleaned.replace(/\[Tool Result for ID[^\]]*\]\n?[\s\S]*?(?=\n*\[Tool |\n*$)/gi, "");
