@@ -154,18 +154,16 @@ function contentToOpenAIParts(content: unknown): ContentPart[] {
   return parts;
 }
 
-/** Convert pi-ai tool array to OpenAI FunctionToolDefinition[]. */
+/** Convert pi-ai tool array to OpenAI Responses API tool format (flat). */
 export function convertTools(tools: Context["tools"]): FunctionToolDefinition[] {
   if (!tools || tools.length === 0) {
     return [];
   }
   return tools.map((tool) => ({
     type: "function" as const,
-    function: {
-      name: tool.name,
-      description: typeof tool.description === "string" ? tool.description : undefined,
-      parameters: (tool.parameters ?? {}) as Record<string, unknown>,
-    },
+    name: tool.name,
+    description: typeof tool.description === "string" ? tool.description : undefined,
+    parameters: (tool.parameters ?? {}) as Record<string, unknown>,
   }));
 }
 
