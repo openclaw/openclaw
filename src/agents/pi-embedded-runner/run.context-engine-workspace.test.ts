@@ -89,7 +89,7 @@ vi.mock("../failover-error.js", () => ({
 vi.mock("../model-auth.js", () => ({
   ensureAuthProfileStore: vi.fn(() => ({})),
   getApiKeyForModel: vi.fn(async () => ({
-    apiKey: "test",
+    apiKey: "test", // pragma: allowlist secret
     profileId: "test-profile",
     source: "test",
   })),
