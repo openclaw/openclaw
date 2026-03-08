@@ -7,10 +7,14 @@
 # ]
 # ///
 """
-Generate images using Google's Nano Banana Pro (Gemini 3 Pro Image) API.
+Generate images using Google's Nano Banana (Gemini Image) API.
+
+Defaults to Nano Banana 2 (Gemini 3.1 Flash Image) for speed and cost.
+Use --model pro for Nano Banana Pro (Gemini 3 Pro Image) for max quality.
 
 Usage:
     uv run generate_image.py --prompt "your image description" --filename "output.png" [--resolution 1K|2K|4K] [--api-key KEY]
+    uv run generate_image.py --prompt "your image description" --filename "output.png" --model pro
 
 Multi-image editing (up to 14 images):
     uv run generate_image.py --prompt "combine these images" --filename "output.png" -i img1.png -i img2.png -i img3.png
@@ -20,6 +24,11 @@ import argparse
 import os
 import sys
 from pathlib import Path
+
+MODEL_MAP = {
+    "flash": "gemini-3.1-flash-image-preview",
+    "pro": "gemini-3-pro-image-preview",
+}
 
 SUPPORTED_ASPECT_RATIOS = [
     "1:1",
@@ -71,7 +80,7 @@ def choose_output_resolution(
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Generate images using Nano Banana Pro (Gemini 3 Pro Image)"
+        description="Generate images using Nano Banana (Gemini Image Generation)"
     )
     parser.add_argument(
         "--prompt", "-p",
@@ -101,6 +110,12 @@ def main():
         choices=SUPPORTED_ASPECT_RATIOS,
         default=None,
         help=f"Output aspect ratio (default: model decides). Options: {', '.join(SUPPORTED_ASPECT_RATIOS)}"
+    )
+    parser.add_argument(
+        "--model", "-m",
+        choices=list(MODEL_MAP.keys()),
+        default="flash",
+        help="Model variant: flash (default, Nano Banana 2 — fast & cheap) or pro (Nano Banana Pro — max quality)"
     )
     parser.add_argument(
         "--api-key", "-k",
@@ -178,8 +193,11 @@ def main():
         if args.aspect_ratio:
             image_cfg_kwargs["aspect_ratio"] = args.aspect_ratio
 
+        model_id = MODEL_MAP[args.model]
+        print(f"Using model: {model_id}")
+
         response = client.models.generate_content(
-            model="gemini-3-pro-image-preview",
+            model=model_id,
             contents=contents,
             config=types.GenerateContentConfig(
                 response_modalities=["TEXT", "IMAGE"],
