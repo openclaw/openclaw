@@ -338,6 +338,8 @@ describe("voice transcript events", () => {
         sourceTool: "gateway.voice.transcript",
       },
     });
+    expect(opts.thinking).toBeUndefined();
+    expect(opts.thinkingOnce).toBeUndefined();
   });
 
   it("does not block agent dispatch when session-store touch fails", async () => {
