@@ -260,6 +260,34 @@ describe("agentCommand ACP runtime routing", () => {
     });
   });
 
+  it("preserves exact ACP transcript text without trimming whitespace", async () => {
+    await withAcpSessionEnvInfo(async ({ storePath }) => {
+      const runTurn = createRunTurnFromTextDeltas(["  ACP_OK\n"]);
+
+      mockAcpManager({
+        runTurn: (params: unknown) => runTurn(params),
+      });
+
+      await agentCommand({ message: "  ping\n", sessionKey: "agent:codex:acp:test" }, runtime);
+
+      const persistedStore = JSON.parse(fs.readFileSync(storePath, "utf-8")) as Record<
+        string,
+        { sessionFile?: string }
+      >;
+      const sessionFile = persistedStore["agent:codex:acp:test"]?.sessionFile;
+      const messages = readSessionMessages("acp-session-1", storePath, sessionFile);
+      expect(messages).toHaveLength(2);
+      expect(messages[0]).toMatchObject({
+        role: "user",
+        content: "  ping\n",
+      });
+      expect(messages[1]).toMatchObject({
+        role: "assistant",
+        content: [{ type: "text", text: "  ACP_OK\n" }],
+      });
+    });
+  });
+
   it("suppresses ACP NO_REPLY lead fragments before emitting assistant text", async () => {
     await withAcpSessionEnv(async () => {
       const { assistantEvents, stop } = subscribeAssistantEvents();

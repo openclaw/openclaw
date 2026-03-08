@@ -23,14 +23,8 @@ import {
 } from "../channels/thread-bindings-policy.js";
 import { loadConfig } from "../config/config.js";
 import type { OpenClawConfig } from "../config/config.js";
-import {
-  loadSessionStore,
-  parseSessionThreadInfo,
-  resolveAndPersistSessionFile,
-  resolveSessionFilePathOptions,
-  resolveSessionTranscriptPath,
-  resolveStorePath,
-} from "../config/sessions.js";
+import { loadSessionStore, resolveStorePath, type SessionEntry } from "../config/sessions.js";
+import { resolveSessionTranscriptFile } from "../config/sessions/transcript.js";
 import { callGateway } from "../gateway/call.js";
 import { resolveConversationIdFromTargets } from "../infra/outbound/conversation-id.js";
 import {
@@ -38,6 +32,7 @@ import {
   isSessionBindingError,
   type SessionBindingRecord,
 } from "../infra/outbound/session-binding-service.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { normalizeDeliveryContext } from "../utils/delivery-context.js";
 import {
@@ -46,6 +41,9 @@ import {
   startAcpSpawnParentStreamRelay,
 } from "./acp-spawn-parent-stream.js";
 import { resolveSandboxRuntimeStatus } from "./sandbox/runtime-status.js";
+import { resolveInternalSessionKey, resolveMainSessionAlias } from "./tools/sessions-helpers.js";
+
+const log = createSubsystemLogger("agents/acp-spawn");
 
 export const ACP_SPAWN_MODES = ["run", "session"] as const;
 export type SpawnAcpMode = (typeof ACP_SPAWN_MODES)[number];
@@ -170,6 +168,50 @@ function summarizeError(err: unknown): string {
   return "error";
 }
 
+function resolveRequesterInternalSessionKey(params: {
+  cfg: OpenClawConfig;
+  requesterSessionKey?: string;
+}): string {
+  const { mainKey, alias } = resolveMainSessionAlias(params.cfg);
+  const requesterSessionKey = params.requesterSessionKey?.trim();
+  return requesterSessionKey
+    ? resolveInternalSessionKey({
+        key: requesterSessionKey,
+        alias,
+        mainKey,
+      })
+    : alias;
+}
+
+async function persistAcpSpawnSessionFileBestEffort(params: {
+  sessionId: string;
+  sessionKey: string;
+  sessionEntry: SessionEntry | undefined;
+  sessionStore: Record<string, SessionEntry>;
+  storePath: string;
+  agentId: string;
+  threadId?: string | number;
+  stage: "spawn" | "thread-bind";
+}): Promise<SessionEntry | undefined> {
+  try {
+    const resolvedSessionFile = await resolveSessionTranscriptFile({
+      sessionId: params.sessionId,
+      sessionKey: params.sessionKey,
+      sessionEntry: params.sessionEntry,
+      sessionStore: params.sessionStore,
+      storePath: params.storePath,
+      agentId: params.agentId,
+      threadId: params.threadId,
+    });
+    return resolvedSessionFile.sessionEntry;
+  } catch (error) {
+    log.warn(
+      `ACP session-file persistence failed during ${params.stage} for ${params.sessionKey}: ${summarizeError(error)}`,
+    );
+    return params.sessionEntry;
+  }
+}
+
 function resolveConversationIdForThreadBinding(params: {
   to?: string;
   threadId?: string | number;
@@ -265,6 +307,10 @@ export async function spawnAcpDirect(
   ctx: SpawnAcpContext,
 ): Promise<SpawnAcpResult> {
   const cfg = loadConfig();
+  const requesterInternalKey = resolveRequesterInternalSessionKey({
+    cfg,
+    requesterSessionKey: ctx.agentSessionKey,
+  });
   if (!isAcpEnabledByPolicy(cfg)) {
     return {
       status: "forbidden",
@@ -354,6 +400,7 @@ export async function spawnAcpDirect(
       method: "sessions.patch",
       params: {
         key: sessionKey,
+        spawnedBy: requesterInternalKey,
         ...(params.label ? { label: params.label } : {}),
       },
       timeoutMs: 10_000,
@@ -364,24 +411,15 @@ export async function spawnAcpDirect(
     let sessionEntry = sessionStore[sessionKey];
     const sessionId = sessionEntry?.sessionId;
     if (sessionId) {
-      const threadIdFromSessionKey = parseSessionThreadInfo(sessionKey).threadId;
-      const fallbackSessionFile = !sessionEntry?.sessionFile
-        ? resolveSessionTranscriptPath(sessionId, targetAgentId, threadIdFromSessionKey)
-        : undefined;
-      const resolvedSessionFile = await resolveAndPersistSessionFile({
+      sessionEntry = await persistAcpSpawnSessionFileBestEffort({
         sessionId,
         sessionKey,
         sessionStore,
         storePath,
         sessionEntry,
         agentId: targetAgentId,
-        sessionsDir: resolveSessionFilePathOptions({
-          agentId: targetAgentId,
-          storePath,
-        })?.sessionsDir,
-        fallbackSessionFile,
+        stage: "spawn",
       });
-      sessionEntry = resolvedSessionFile.sessionEntry;
     }
     const initialized = await acpManager.initializeSession({
       cfg,
@@ -443,24 +481,16 @@ export async function spawnAcpDirect(
       if (sessionId) {
         const boundThreadId = String(binding.conversation.conversationId).trim() || undefined;
         if (boundThreadId) {
-          const resolvedSessionFile = await resolveAndPersistSessionFile({
+          sessionEntry = await persistAcpSpawnSessionFileBestEffort({
             sessionId,
             sessionKey,
             sessionStore,
             storePath,
             sessionEntry,
             agentId: targetAgentId,
-            sessionsDir: resolveSessionFilePathOptions({
-              agentId: targetAgentId,
-              storePath,
-            })?.sessionsDir,
-            fallbackSessionFile: resolveSessionTranscriptPath(
-              sessionId,
-              targetAgentId,
-              boundThreadId,
-            ),
+            threadId: boundThreadId,
+            stage: "thread-bind",
           });
-          sessionEntry = resolvedSessionFile.sessionEntry;
         }
       }
     }

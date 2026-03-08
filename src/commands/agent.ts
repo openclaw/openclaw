@@ -3,6 +3,7 @@ import { SessionManager } from "@mariozechner/pi-coding-agent";
 import { getAcpSessionManager } from "../acp/control-plane/manager.js";
 import { resolveAcpAgentPolicyError, resolveAcpDispatchPolicyError } from "../acp/policy.js";
 import { toAcpRuntimeError } from "../acp/runtime/errors.js";
+import { resolveAcpSessionCwd } from "../acp/runtime/session-identifiers.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 
 const log = createSubsystemLogger("commands/agent");
@@ -68,15 +69,11 @@ import {
 } from "../config/config.js";
 import {
   mergeSessionEntry,
-  parseSessionThreadInfo,
-  resolveAndPersistSessionFile,
   resolveAgentIdFromSessionKey,
-  resolveSessionFilePath,
-  resolveSessionFilePathOptions,
-  resolveSessionTranscriptPath,
   type SessionEntry,
   updateSessionStore,
 } from "../config/sessions.js";
+import { resolveSessionTranscriptFile } from "../config/sessions/transcript.js";
 import {
   clearAgentRunContext,
   emitAgentEvent,
@@ -234,6 +231,9 @@ function createAcpVisibleTextAccumulator() {
     finalize(): string {
       return visibleText.trim();
     },
+    finalizeRaw(): string {
+      return visibleText;
+    },
   };
 }
 
@@ -252,51 +252,6 @@ const ACP_TRANSCRIPT_USAGE = {
   },
 } as const;
 
-async function resolveAcpTranscriptSessionFile(params: {
-  sessionId: string;
-  sessionKey: string;
-  sessionEntry: SessionEntry | undefined;
-  sessionStore?: Record<string, SessionEntry>;
-  storePath?: string;
-  sessionAgentId: string;
-  threadId?: string | number;
-}): Promise<{ sessionFile: string; sessionEntry: SessionEntry | undefined }> {
-  const sessionPathOpts = resolveSessionFilePathOptions({
-    agentId: params.sessionAgentId,
-    storePath: params.storePath,
-  });
-  let sessionFile = resolveSessionFilePath(params.sessionId, params.sessionEntry, sessionPathOpts);
-  let sessionEntry = params.sessionEntry;
-
-  if (params.sessionStore && params.storePath) {
-    const threadIdFromSessionKey = parseSessionThreadInfo(params.sessionKey).threadId;
-    const fallbackSessionFile = !sessionEntry?.sessionFile
-      ? resolveSessionTranscriptPath(
-          params.sessionId,
-          params.sessionAgentId,
-          params.threadId ?? threadIdFromSessionKey,
-        )
-      : undefined;
-    const resolvedSessionFile = await resolveAndPersistSessionFile({
-      sessionId: params.sessionId,
-      sessionKey: params.sessionKey,
-      sessionStore: params.sessionStore,
-      storePath: params.storePath,
-      sessionEntry,
-      agentId: sessionPathOpts?.agentId,
-      sessionsDir: sessionPathOpts?.sessionsDir,
-      fallbackSessionFile,
-    });
-    sessionFile = resolvedSessionFile.sessionFile;
-    sessionEntry = resolvedSessionFile.sessionEntry;
-  }
-
-  return {
-    sessionFile,
-    sessionEntry,
-  };
-}
-
 async function persistAcpTurnTranscript(params: {
   body: string;
   finalText: string;
@@ -307,21 +262,21 @@ async function persistAcpTurnTranscript(params: {
   storePath?: string;
   sessionAgentId: string;
   threadId?: string | number;
-  workspaceDir: string;
+  sessionCwd: string;
 }): Promise<SessionEntry | undefined> {
-  const promptText = params.body.trim();
-  const replyText = params.finalText.trim();
+  const promptText = params.body;
+  const replyText = params.finalText;
   if (!promptText && !replyText) {
     return params.sessionEntry;
   }
 
-  const { sessionFile, sessionEntry } = await resolveAcpTranscriptSessionFile({
+  const { sessionFile, sessionEntry } = await resolveSessionTranscriptFile({
     sessionId: params.sessionId,
     sessionKey: params.sessionKey,
     sessionEntry: params.sessionEntry,
     sessionStore: params.sessionStore,
     storePath: params.storePath,
-    sessionAgentId: params.sessionAgentId,
+    agentId: params.sessionAgentId,
     threadId: params.threadId,
   });
   const hadSessionFile = await fs
@@ -334,7 +289,7 @@ async function persistAcpTurnTranscript(params: {
     sessionFile,
     hadSessionFile,
     sessionId: params.sessionId,
-    cwd: params.workspaceDir,
+    cwd: params.sessionCwd,
   });
 
   if (promptText) {
@@ -550,8 +505,8 @@ async function prepareAgentCommandExecution(
   opts: AgentCommandOpts & { senderIsOwner: boolean },
   runtime: RuntimeEnv,
 ) {
-  const message = (opts.message ?? "").trim();
-  if (!message) {
+  const message = opts.message ?? "";
+  if (!message.trim()) {
     throw new Error("Message (--message) is required");
   }
   const body = prependInternalEventContext(message, opts.internalEvents);
@@ -861,11 +816,12 @@ async function agentCommandInternal(
         },
       });
 
+      const finalTextRaw = visibleTextAccumulator.finalizeRaw();
       const finalText = visibleTextAccumulator.finalize();
       try {
         sessionEntry = await persistAcpTurnTranscript({
           body,
-          finalText,
+          finalText: finalTextRaw,
           sessionId,
           sessionKey,
           sessionEntry,
@@ -873,7 +829,7 @@ async function agentCommandInternal(
           storePath,
           sessionAgentId,
           threadId: opts.threadId,
-          workspaceDir,
+          sessionCwd: resolveAcpSessionCwd(acpResolution.meta) ?? workspaceDir,
         });
       } catch (error) {
         log.warn(
