@@ -31,6 +31,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Button
@@ -54,11 +55,13 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
+import androidx.core.net.toUri
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
@@ -88,9 +91,6 @@ fun SettingsSheet(viewModel: MainViewModel) {
   val notificationForwardingMaxEventsPerMinute by viewModel.notificationForwardingMaxEventsPerMinute.collectAsState()
   val notificationForwardingSessionKey by viewModel.notificationForwardingSessionKey.collectAsState()
 
-  var notificationPackagesDraft by remember(notificationForwardingPackages) {
-    mutableStateOf(notificationForwardingPackages.sorted().joinToString(", "))
-  }
   var notificationQuietStartDraft by remember(notificationForwardingQuietStart) {
     mutableStateOf(notificationForwardingQuietStart)
   }
@@ -198,6 +198,14 @@ fun SettingsSheet(viewModel: MainViewModel) {
       mutableStateOf(isNotificationListenerEnabled(context))
     }
 
+  var notificationPickerExpanded by remember { mutableStateOf(false) }
+  var notificationAppSearch by remember { mutableStateOf("") }
+  var notificationShowSystemApps by remember { mutableStateOf(false) }
+  var installedNotificationApps by
+    remember(context) {
+      mutableStateOf(queryInstalledApps(context))
+    }
+
   var photosPermissionGranted by
     remember {
       mutableStateOf(
@@ -293,6 +301,7 @@ fun SettingsSheet(viewModel: MainViewModel) {
               PackageManager.PERMISSION_GRANTED
           notificationsPermissionGranted = hasNotificationsPermission(context)
           notificationListenerEnabled = isNotificationListenerEnabled(context)
+          installedNotificationApps = queryInstalledApps(context)
           photosPermissionGranted =
             ContextCompat.checkSelfPermission(context, photosPermission) ==
               PackageManager.PERMISSION_GRANTED
@@ -372,6 +381,20 @@ fun SettingsSheet(viewModel: MainViewModel) {
       locationPermissionLauncher.launch(arrayOf(Manifest.permission.ACCESS_FINE_LOCATION))
     }
   }
+
+  val normalizedAppSearch = notificationAppSearch.trim().lowercase()
+  val filteredNotificationApps =
+    remember(installedNotificationApps, normalizedAppSearch, notificationShowSystemApps) {
+      installedNotificationApps
+        .asSequence()
+        .filter { app -> notificationShowSystemApps || !app.isSystemApp }
+        .filter { app ->
+          normalizedAppSearch.isEmpty() ||
+            app.label.lowercase().contains(normalizedAppSearch) ||
+            app.packageName.lowercase().contains(normalizedAppSearch)
+        }
+        .toList()
+    }
 
   Box(
     modifier =
@@ -562,189 +585,263 @@ fun SettingsSheet(viewModel: MainViewModel) {
         }
       }
       item {
-        Column(modifier = Modifier.settingsRowModifier(), verticalArrangement = Arrangement.spacedBy(0.dp)) {
+        ListItem(
+          modifier = Modifier.settingsRowModifier(),
+          colors = listItemColors,
+          headlineContent = { Text("Forward Notification Events", style = mobileHeadline) },
+          supportingContent = {
+            Text(
+              "Allow notification listener events to be forwarded to gateway node events.",
+              style = mobileCallout,
+            )
+          },
+          trailingContent = {
+            Switch(
+              checked = notificationForwardingEnabled,
+              onCheckedChange = viewModel::setNotificationForwardingEnabled,
+            )
+          },
+        )
+      }
+      item {
+        Column(
+          modifier = Modifier.settingsRowModifier().alpha(if (notificationForwardingEnabled) 1f else 0.6f),
+          verticalArrangement = Arrangement.spacedBy(0.dp),
+        ) {
           ListItem(
             modifier = Modifier.fillMaxWidth(),
             colors = listItemColors,
-            headlineContent = { Text("Forward notification events", style = mobileHeadline) },
+            headlineContent = { Text("Package Filter: Allowlist", style = mobileHeadline) },
             supportingContent = {
-              Text(
-                "Forward posted/removed notification events to the gateway using a local policy.",
-                style = mobileCallout,
-              )
+              Text("Only listed package IDs are forwarded.", style = mobileCallout)
             },
             trailingContent = {
-              Switch(
-                checked = notificationForwardingEnabled,
-                onCheckedChange = viewModel::setNotificationForwardingEnabled,
-                enabled = notificationListenerEnabled,
-              )
-            },
-          )
-          HorizontalDivider(color = mobileBorder)
-          ListItem(
-            modifier = Modifier.fillMaxWidth(),
-            colors = listItemColors,
-            headlineContent = { Text("Filter mode", style = mobileHeadline) },
-            supportingContent = {
-              Text(
-                if (notificationForwardingMode == NotificationPackageFilterMode.Allowlist) {
-                  "Only packages listed below are forwarded."
-                } else {
-                  "Packages listed below are blocked from forwarding. OpenClaw is always blocked by default."
-                },
-                style = mobileCallout,
-              )
-            },
-          )
-          Row(
-            modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
-            horizontalArrangement = Arrangement.spacedBy(16.dp),
-          ) {
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-              RadioButton(
-                selected = notificationForwardingMode == NotificationPackageFilterMode.Blocklist,
-                onClick = { viewModel.setNotificationForwardingMode(NotificationPackageFilterMode.Blocklist) },
-                enabled = notificationForwardingEnabled,
-              )
-              Text("Blocklist", style = mobileCallout, color = mobileText)
-            }
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
               RadioButton(
                 selected = notificationForwardingMode == NotificationPackageFilterMode.Allowlist,
-                onClick = { viewModel.setNotificationForwardingMode(NotificationPackageFilterMode.Allowlist) },
-                enabled = notificationForwardingEnabled,
-              )
-              Text("Allowlist", style = mobileCallout, color = mobileText)
-            }
-          }
-          HorizontalDivider(color = mobileBorder)
-          Column(modifier = Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-            OutlinedTextField(
-              value = notificationPackagesDraft,
-              onValueChange = { notificationPackagesDraft = it },
-              label = { Text("Packages (comma separated)", style = mobileCaption1, color = mobileTextSecondary) },
-              modifier = Modifier.fillMaxWidth(),
-              enabled = notificationForwardingEnabled,
-              textStyle = mobileBody.copy(color = mobileText),
-              colors = settingsTextFieldColors(),
-            )
-            Button(
-              onClick = { viewModel.setNotificationForwardingPackagesCsv(notificationPackagesDraft) },
-              enabled = notificationForwardingEnabled,
-              colors = settingsPrimaryButtonColors(),
-              shape = RoundedCornerShape(14.dp),
-            ) {
-              Text("Save package filters", style = mobileCallout.copy(fontWeight = FontWeight.Bold))
-            }
-          }
-          HorizontalDivider(color = mobileBorder)
-          ListItem(
-            modifier = Modifier.fillMaxWidth(),
-            colors = listItemColors,
-            headlineContent = { Text("Quiet hours", style = mobileHeadline) },
-            supportingContent = {
-              Text(
-                "Suppress forwarding during a local time window.",
-                style = mobileCallout,
-              )
-            },
-            trailingContent = {
-              Switch(
-                checked = notificationForwardingQuietHoursEnabled,
-                onCheckedChange = {
-                  viewModel.setNotificationForwardingQuietHours(
-                    enabled = it,
-                    start = notificationQuietStartDraft,
-                    end = notificationQuietEndDraft,
-                  )
+                onClick = {
+                  viewModel.setNotificationForwardingMode(NotificationPackageFilterMode.Allowlist)
                 },
                 enabled = notificationForwardingEnabled,
               )
             },
           )
-          Column(modifier = Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-            OutlinedTextField(
-              value = notificationQuietStartDraft,
-              onValueChange = { notificationQuietStartDraft = it },
-              label = { Text("Quiet start (HH:MM)", style = mobileCaption1, color = mobileTextSecondary) },
-              modifier = Modifier.fillMaxWidth(),
-              enabled = notificationForwardingEnabled,
-              textStyle = mobileBody.copy(color = mobileText),
-              colors = settingsTextFieldColors(),
+          HorizontalDivider(color = mobileBorder)
+          ListItem(
+            modifier = Modifier.fillMaxWidth(),
+            colors = listItemColors,
+            headlineContent = { Text("Package Filter: Blocklist", style = mobileHeadline) },
+            supportingContent = {
+              Text("All packages except listed IDs are forwarded.", style = mobileCallout)
+            },
+            trailingContent = {
+              RadioButton(
+                selected = notificationForwardingMode == NotificationPackageFilterMode.Blocklist,
+                onClick = {
+                  viewModel.setNotificationForwardingMode(NotificationPackageFilterMode.Blocklist)
+                },
+                enabled = notificationForwardingEnabled,
+              )
+            },
+          )
+        }
+      }
+      item {
+        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+          Button(
+            onClick = { notificationPickerExpanded = !notificationPickerExpanded },
+            enabled = notificationForwardingEnabled,
+            colors = settingsPrimaryButtonColors(),
+            shape = RoundedCornerShape(14.dp),
+          ) {
+            Text(
+              if (notificationPickerExpanded) "Close App Picker" else "Open App Picker",
+              style = mobileCallout.copy(fontWeight = FontWeight.Bold),
             )
-            OutlinedTextField(
-              value = notificationQuietEndDraft,
-              onValueChange = { notificationQuietEndDraft = it },
-              label = { Text("Quiet end (HH:MM)", style = mobileCaption1, color = mobileTextSecondary) },
-              modifier = Modifier.fillMaxWidth(),
-              enabled = notificationForwardingEnabled,
-              textStyle = mobileBody.copy(color = mobileText),
-              colors = settingsTextFieldColors(),
-            )
-            Button(
-              onClick = {
+          }
+        }
+      }
+      item {
+        Text(
+          "Selected: ${notificationForwardingPackages.size} package(s)",
+          style = mobileCallout,
+          color = mobileTextSecondary,
+        )
+      }
+      if (notificationPickerExpanded) {
+        item {
+          OutlinedTextField(
+            value = notificationAppSearch,
+            onValueChange = { notificationAppSearch = it },
+            label = {
+              Text("Search apps", style = mobileCaption1, color = mobileTextSecondary)
+            },
+            modifier = Modifier.fillMaxWidth(),
+            textStyle = mobileBody.copy(color = mobileText),
+            colors = settingsTextFieldColors(),
+            enabled = notificationForwardingEnabled,
+          )
+        }
+        item {
+          ListItem(
+            modifier = Modifier.settingsRowModifier().alpha(if (notificationForwardingEnabled) 1f else 0.6f),
+            colors = listItemColors,
+            headlineContent = { Text("Show System Apps", style = mobileHeadline) },
+            supportingContent = {
+              Text("Include Android/system packages in results.", style = mobileCallout)
+            },
+            trailingContent = {
+              Switch(
+                checked = notificationShowSystemApps,
+                onCheckedChange = { notificationShowSystemApps = it },
+                enabled = notificationForwardingEnabled,
+              )
+            },
+          )
+        }
+        items(filteredNotificationApps, key = { it.packageName }) { app ->
+          ListItem(
+            modifier = Modifier.settingsRowModifier().alpha(if (notificationForwardingEnabled) 1f else 0.6f),
+            colors = listItemColors,
+            headlineContent = { Text(app.label, style = mobileHeadline) },
+            supportingContent = { Text(app.packageName, style = mobileCallout) },
+            trailingContent = {
+              Switch(
+                checked = notificationForwardingPackages.contains(app.packageName),
+                onCheckedChange = { checked ->
+                  val next = notificationForwardingPackages.toMutableSet()
+                  if (checked) {
+                    next.add(app.packageName)
+                  } else {
+                    next.remove(app.packageName)
+                  }
+                  viewModel.setNotificationForwardingPackagesCsv(next.sorted().joinToString(","))
+                },
+                enabled = notificationForwardingEnabled,
+              )
+            },
+          )
+        }
+      }
+      item {
+        ListItem(
+          modifier = Modifier.settingsRowModifier().alpha(if (notificationForwardingEnabled) 1f else 0.6f),
+          colors = listItemColors,
+          headlineContent = { Text("Quiet Hours", style = mobileHeadline) },
+          supportingContent = {
+            Text("Suppress forwarding during a local time window.", style = mobileCallout)
+          },
+          trailingContent = {
+            Switch(
+              checked = notificationForwardingQuietHoursEnabled,
+              onCheckedChange = {
                 viewModel.setNotificationForwardingQuietHours(
-                  enabled = notificationForwardingQuietHoursEnabled,
+                  enabled = it,
                   start = notificationQuietStartDraft,
                   end = notificationQuietEndDraft,
                 )
               },
               enabled = notificationForwardingEnabled,
-              colors = settingsPrimaryButtonColors(),
-              shape = RoundedCornerShape(14.dp),
-            ) {
-              Text("Save quiet hours", style = mobileCallout.copy(fontWeight = FontWeight.Bold))
-            }
-          }
-          HorizontalDivider(color = mobileBorder)
-          Column(modifier = Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-            OutlinedTextField(
-              value = notificationRateDraft,
-              onValueChange = { notificationRateDraft = it.filter { ch -> ch.isDigit() } },
-              label = { Text("Max events per minute", style = mobileCaption1, color = mobileTextSecondary) },
-              modifier = Modifier.fillMaxWidth(),
-              enabled = notificationForwardingEnabled,
-              textStyle = mobileBody.copy(color = mobileText),
-              colors = settingsTextFieldColors(),
             )
-            Button(
-              onClick = {
-                viewModel.setNotificationForwardingMaxEventsPerMinute(
-                  notificationRateDraft.toIntOrNull() ?: notificationForwardingMaxEventsPerMinute,
-                )
-              },
-              enabled = notificationForwardingEnabled,
-              colors = settingsPrimaryButtonColors(),
-              shape = RoundedCornerShape(14.dp),
-            ) {
-              Text("Save rate limit", style = mobileCallout.copy(fontWeight = FontWeight.Bold))
-            }
+          },
+        )
+      }
+      item {
+        OutlinedTextField(
+          value = notificationQuietStartDraft,
+          onValueChange = { notificationQuietStartDraft = it },
+          label = { Text("Quiet Start (HH:mm)", style = mobileCaption1, color = mobileTextSecondary) },
+          modifier = Modifier.fillMaxWidth(),
+          textStyle = mobileBody.copy(color = mobileText),
+          colors = settingsTextFieldColors(),
+          enabled = notificationForwardingEnabled,
+        )
+      }
+      item {
+        OutlinedTextField(
+          value = notificationQuietEndDraft,
+          onValueChange = { notificationQuietEndDraft = it },
+          label = { Text("Quiet End (HH:mm)", style = mobileCaption1, color = mobileTextSecondary) },
+          modifier = Modifier.fillMaxWidth(),
+          textStyle = mobileBody.copy(color = mobileText),
+          colors = settingsTextFieldColors(),
+          enabled = notificationForwardingEnabled,
+        )
+      }
+      item {
+        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+          Button(
+            onClick = {
+              viewModel.setNotificationForwardingQuietHours(
+                enabled = notificationForwardingQuietHoursEnabled,
+                start = notificationQuietStartDraft,
+                end = notificationQuietEndDraft,
+              )
+            },
+            enabled = notificationForwardingEnabled,
+            colors = settingsPrimaryButtonColors(),
+            shape = RoundedCornerShape(14.dp),
+          ) {
+            Text("Save Quiet Hours", style = mobileCallout.copy(fontWeight = FontWeight.Bold))
+          }
+        }
+      }
+      item {
+        OutlinedTextField(
+          value = notificationRateDraft,
+          onValueChange = { notificationRateDraft = it.filter { c -> c.isDigit() } },
+          label = { Text("Max Events / Minute", style = mobileCaption1, color = mobileTextSecondary) },
+          modifier = Modifier.fillMaxWidth(),
+          textStyle = mobileBody.copy(color = mobileText),
+          colors = settingsTextFieldColors(),
+          enabled = notificationForwardingEnabled,
+        )
+      }
+      item {
+        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+          Button(
+            onClick = {
+              val parsed = notificationRateDraft.toIntOrNull() ?: notificationForwardingMaxEventsPerMinute
+              viewModel.setNotificationForwardingMaxEventsPerMinute(parsed)
+            },
+            enabled = notificationForwardingEnabled,
+            colors = settingsPrimaryButtonColors(),
+            shape = RoundedCornerShape(14.dp),
+          ) {
+            Text("Save Rate", style = mobileCallout.copy(fontWeight = FontWeight.Bold))
+          }
+        }
+      }
+      item {
+        OutlinedTextField(
+          value = notificationSessionKeyDraft,
+          onValueChange = { notificationSessionKeyDraft = it },
+          label = {
             Text(
-              "Current: $notificationForwardingMaxEventsPerMinute events/minute",
-              style = mobileCallout,
+              "Route Session Key (optional, blank = default route)",
+              style = mobileCaption1,
               color = mobileTextSecondary,
             )
-          }
-          HorizontalDivider(color = mobileBorder)
-          Column(modifier = Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-            OutlinedTextField(
-              value = notificationSessionKeyDraft,
-              onValueChange = { notificationSessionKeyDraft = it },
-              label = { Text("Session key override (optional)", style = mobileCaption1, color = mobileTextSecondary) },
-              modifier = Modifier.fillMaxWidth(),
-              enabled = notificationForwardingEnabled,
-              textStyle = mobileBody.copy(color = mobileText),
-              colors = settingsTextFieldColors(),
-            )
-            Button(
-              onClick = { viewModel.setNotificationForwardingSessionKey(notificationSessionKeyDraft.ifBlank { null }) },
-              enabled = notificationForwardingEnabled,
-              colors = settingsPrimaryButtonColors(),
-              shape = RoundedCornerShape(14.dp),
-            ) {
-              Text("Save session route", style = mobileCallout.copy(fontWeight = FontWeight.Bold))
-            }
+          },
+          placeholder = {
+            Text("Leave empty for default node route", style = mobileCaption1, color = mobileTextSecondary)
+          },
+          modifier = Modifier.fillMaxWidth(),
+          textStyle = mobileBody.copy(color = mobileText),
+          colors = settingsTextFieldColors(),
+          enabled = notificationForwardingEnabled,
+        )
+      }
+      item {
+        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+          Button(
+            onClick = {
+              viewModel.setNotificationForwardingSessionKey(notificationSessionKeyDraft.trim().ifEmpty { null })
+            },
+            enabled = notificationForwardingEnabled,
+            colors = settingsPrimaryButtonColors(),
+            shape = RoundedCornerShape(14.dp),
+          ) {
+            Text("Save Session Route", style = mobileCallout.copy(fontWeight = FontWeight.Bold))
           }
         }
       }
@@ -983,6 +1080,53 @@ fun SettingsSheet(viewModel: MainViewModel) {
     }
   }
 }
+
+data class InstalledApp(
+  val label: String,
+  val packageName: String,
+  val isSystemApp: Boolean,
+)
+
+private fun queryInstalledApps(context: Context): List<InstalledApp> {
+  val packageManager = context.packageManager
+  val launcherIntent = Intent(Intent.ACTION_MAIN).apply { addCategory(Intent.CATEGORY_LAUNCHER) }
+
+  val launcherPackages =
+    packageManager
+      .queryIntentActivities(launcherIntent, PackageManager.MATCH_ALL)
+      .asSequence()
+      .mapNotNull { it.activityInfo?.packageName?.trim()?.takeIf(String::isNotEmpty) }
+      .toMutableSet()
+
+  val recentNotificationPackages =
+    DeviceNotificationListenerService
+      .snapshot(context)
+      .notifications
+      .asSequence()
+      .map { it.packageName.trim() }
+      .filter { it.isNotEmpty() }
+      .toSet()
+
+  val candidatePackages = (launcherPackages + recentNotificationPackages)
+    .filter { it != context.packageName }
+
+  return candidatePackages
+    .asSequence()
+    .mapNotNull { packageName ->
+      runCatching {
+        val appInfo = packageManager.getApplicationInfo(packageName, 0)
+        val label = packageManager.getApplicationLabel(appInfo)?.toString()?.trim().orEmpty()
+        InstalledApp(
+          label = if (label.isEmpty()) packageName else label,
+          packageName = packageName,
+          isSystemApp = (appInfo.flags and android.content.pm.ApplicationInfo.FLAG_SYSTEM) != 0,
+        )
+      }.getOrNull()
+    }
+    .sortedWith(compareBy<InstalledApp> { it.label.lowercase() }.thenBy { it.packageName })
+    .toList()
+}
+
 
 @Composable
 private fun settingsTextFieldColors() =
