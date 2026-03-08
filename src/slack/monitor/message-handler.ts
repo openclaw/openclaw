@@ -214,7 +214,8 @@ export function createSlackMessageHandler(params: {
       opts.source === "message" &&
       message.subtype &&
       message.subtype !== "file_share" &&
-      message.subtype !== "bot_message"
+      message.subtype !== "bot_message" &&
+      message.subtype !== "thread_broadcast"
     ) {
       return;
     }

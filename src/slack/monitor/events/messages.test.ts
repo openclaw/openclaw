@@ -205,6 +205,21 @@ describe("registerSlackMessageEvents", () => {
     expect(messageQueueMock).not.toHaveBeenCalled();
   });
 
+  it("routes authorized thread_broadcast messages to the message handler", async () => {
+    messageQueueMock.mockClear();
+    messageAllowMock.mockReset().mockResolvedValue([]);
+    const { handler, handleSlackMessage } = createMessageHandlers({ dmPolicy: "open" });
+    expect(handler).toBeTruthy();
+
+    await handler!({
+      event: makeThreadBroadcastEvent() as unknown as Record<string, unknown>,
+      body: {},
+    });
+
+    expect(handleSlackMessage).toHaveBeenCalledTimes(1);
+    expect(messageQueueMock).not.toHaveBeenCalled();
+  });
+
   it("applies subtype system-event handling for channel messages", async () => {
     messageQueueMock.mockClear();
     messageAllowMock.mockReset().mockResolvedValue([]);

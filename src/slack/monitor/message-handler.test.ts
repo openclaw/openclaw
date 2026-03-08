@@ -148,4 +148,43 @@ describe("createSlackMessageHandler", () => {
 
     expect(flushKeyMock).toHaveBeenCalledWith("slack:default:C111:1709000000.000100:U111");
   });
+
+  it("accepts thread_broadcast messages as processable content", async () => {
+    const { handler, trackEvent } = createHandlerWithTracker();
+
+    await handler(
+      {
+        type: "message",
+        subtype: "thread_broadcast",
+        channel: "C1",
+        user: "U1",
+        ts: "123.456",
+        thread_ts: "123.400",
+        text: "broadcast reply",
+      } as never,
+      { source: "message" },
+    );
+
+    expect(trackEvent).toHaveBeenCalledTimes(1);
+    expect(resolveThreadTsMock).toHaveBeenCalledTimes(1);
+    expect(enqueueMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("drops unknown subtypes from the message stream", async () => {
+    const { handler, trackEvent } = createHandlerWithTracker();
+
+    await handler(
+      {
+        type: "message",
+        subtype: "channel_join",
+        channel: "C1",
+        user: "U1",
+        ts: "123.456",
+      } as never,
+      { source: "message" },
+    );
+
+    expect(trackEvent).not.toHaveBeenCalled();
+    expect(enqueueMock).not.toHaveBeenCalled();
+  });
 });
