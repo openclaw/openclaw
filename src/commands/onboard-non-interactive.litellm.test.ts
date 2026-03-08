@@ -65,7 +65,7 @@ describe("onboard (non-interactive): LiteLLM", () => {
 
       expect(cfg.auth?.profiles?.["litellm:default"]?.provider).toBe("litellm");
       expect(cfg.auth?.profiles?.["litellm:default"]?.mode).toBe("api_key");
-      expect(cfg.agents?.defaults?.model?.primary).toBe("litellm/gpt-4");
+      expect(cfg.agents?.defaults?.model?.primary).toBe("litellm/claude-opus-4-6");
 
       const { ensureAuthProfileStore } = await import("../agents/auth-profiles.js");
       const store = ensureAuthProfileStore();

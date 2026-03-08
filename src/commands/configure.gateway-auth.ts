@@ -2,7 +2,7 @@ import { ensureAuthProfileStore } from "../agents/auth-profiles.js";
 import type { OpenClawConfig, GatewayAuthConfig } from "../config/config.js";
 import { isSecretRef, type SecretInput } from "../config/types.secrets.js";
 import type { RuntimeEnv } from "../runtime.js";
-import type { WizardPrompter } from "../wizard/prompts.js";
+import { WizardCancelledError, type WizardPrompter } from "../wizard/prompts.js";
 import { promptAuthChoiceGrouped } from "./auth-choice-prompt.js";
 import { applyAuthChoice, resolvePreferredProviderForAuthChoice } from "./auth-choice.js";
 import {
@@ -111,7 +111,7 @@ export async function promptAuthConfig(
         break; // Success - exit the loop
       } catch (error) {
         // If user cancelled to go back to auth selection, loop again
-        if (error instanceof Error && error.message === "AUTH_CHOICE_CANCELLED") {
+        if (error instanceof WizardCancelledError) {
           continue;
         }
         // Re-throw other errors
