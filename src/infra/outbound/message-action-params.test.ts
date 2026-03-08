@@ -2,10 +2,12 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import type { ChannelThreadingToolContext } from "../../channels/plugins/types.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import {
   hydrateAttachmentParamsForAction,
   normalizeSandboxMediaParams,
+  resolveMatrixAutoThreadId,
 } from "./message-action-params.js";
 
 const cfg = {} as OpenClawConfig;
@@ -53,5 +55,87 @@ describe("message action sandbox media hydration", () => {
       await fs.rm(sandboxRoot, { recursive: true, force: true });
       await fs.rm(outsideRoot, { recursive: true, force: true });
     }
+  });
+});
+
+describe("resolveMatrixAutoThreadId", () => {
+  const baseContext: ChannelThreadingToolContext = {
+    currentChannelId: "room:!abc123:matrix.org",
+    currentThreadTs: "$thread_event_id",
+  };
+
+  it("returns threadTs when target room matches currentChannelId", () => {
+    expect(
+      resolveMatrixAutoThreadId({
+        to: "room:!abc123:matrix.org",
+        toolContext: baseContext,
+      }),
+    ).toBe("$thread_event_id");
+  });
+
+  it("matches when target omits room: prefix", () => {
+    expect(
+      resolveMatrixAutoThreadId({
+        to: "!abc123:matrix.org",
+        toolContext: baseContext,
+      }),
+    ).toBe("$thread_event_id");
+  });
+
+  it("matches case-insensitively", () => {
+    expect(
+      resolveMatrixAutoThreadId({
+        to: "room:!ABC123:Matrix.Org",
+        toolContext: baseContext,
+      }),
+    ).toBe("$thread_event_id");
+  });
+
+  it("returns undefined when rooms differ", () => {
+    expect(
+      resolveMatrixAutoThreadId({
+        to: "room:!other_room:matrix.org",
+        toolContext: baseContext,
+      }),
+    ).toBeUndefined();
+  });
+
+  it("returns undefined when no currentThreadTs", () => {
+    expect(
+      resolveMatrixAutoThreadId({
+        to: "room:!abc123:matrix.org",
+        toolContext: { currentChannelId: "room:!abc123:matrix.org" },
+      }),
+    ).toBeUndefined();
+  });
+
+  it("returns undefined when no currentChannelId", () => {
+    expect(
+      resolveMatrixAutoThreadId({
+        to: "room:!abc123:matrix.org",
+        toolContext: { currentThreadTs: "$thread_event_id" },
+      }),
+    ).toBeUndefined();
+  });
+
+  it("returns undefined when no toolContext", () => {
+    expect(
+      resolveMatrixAutoThreadId({
+        to: "room:!abc123:matrix.org",
+        toolContext: undefined,
+      }),
+    ).toBeUndefined();
+  });
+
+  it("matches when currentChannelId omits room: prefix", () => {
+    expect(
+      resolveMatrixAutoThreadId({
+        to: "room:!abc123:matrix.org",
+        toolContext: {
+          currentChannelId: "!abc123:matrix.org",
+          currentThreadTs: "$thread_event_id",
+        },
+      }),
+    ).toBe("$thread_event_id");
   });
 });
