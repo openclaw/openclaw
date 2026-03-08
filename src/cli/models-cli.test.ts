@@ -92,6 +92,27 @@ describe("models cli", () => {
     );
   });
 
+  it("passes probe-all-models and repeated probe-model values", async () => {
+    await runModelsCommand([
+      "models",
+      "status",
+      "--probe",
+      "--probe-all-models",
+      "--probe-model",
+      "openai/gpt-5",
+      "--probe-model",
+      "anthropic/claude-sonnet-4-6",
+    ]);
+    expect(modelsStatusCommand).toHaveBeenCalledWith(
+      expect.objectContaining({
+        probe: true,
+        probeAllModels: true,
+        probeModel: ["openai/gpt-5", "anthropic/claude-sonnet-4-6"],
+      }),
+      expect.any(Object),
+    );
+  });
+
   it("shows help for models auth without error exit", async () => {
     const program = new Command();
     program.exitOverride();

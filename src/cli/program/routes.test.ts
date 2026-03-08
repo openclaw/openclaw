@@ -172,6 +172,13 @@ describe("program routes", () => {
     );
   });
 
+  it("returns false for models status route when --probe-model has no value", async () => {
+    await expectRunFalse(
+      ["models", "status"],
+      ["node", "openclaw", "models", "status", "--probe-model"],
+    );
+  });
+
   it("accepts negative-number probe profile values", async () => {
     const route = expectRoute(["models", "status"]);
     await expect(
@@ -202,6 +209,32 @@ describe("program routes", () => {
         probeMaxTokens: "64",
         probeProfile: "-1",
         agent: "default",
+      }),
+      expect.any(Object),
+    );
+  });
+
+  it("passes probe-all-models and repeated probe-model values", async () => {
+    const route = expectRoute(["models", "status"]);
+    await expect(
+      route?.run([
+        "node",
+        "openclaw",
+        "models",
+        "status",
+        "--probe",
+        "--probe-all-models",
+        "--probe-model",
+        "openai/gpt-5",
+        "--probe-model",
+        "anthropic/claude-sonnet-4-6",
+      ]),
+    ).resolves.toBe(true);
+    expect(modelsStatusCommandMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        probe: true,
+        probeAllModels: true,
+        probeModel: ["openai/gpt-5", "anthropic/claude-sonnet-4-6"],
       }),
       expect.any(Object),
     );

@@ -108,26 +108,90 @@ const fastExports = {
   resolveControlCommandGate,
 };
 
-const monolithic = tryLoadMonolithicSdk();
-const rootExports =
-  monolithic && typeof monolithic === "object"
-    ? {
-        ...monolithic,
-        ...fastExports,
+const rootProxy = new Proxy(fastExports, {
+  get(target, prop, receiver) {
+    if (prop === "__esModule") {
+      return true;
+    }
+    if (prop === "default") {
+      return rootProxy;
+    }
+    if (Reflect.has(target, prop)) {
+      return Reflect.get(target, prop, receiver);
+    }
+    return loadMonolithicSdk()[prop];
+  },
+  has(target, prop) {
+    if (prop === "__esModule" || prop === "default") {
+      return true;
+    }
+    if (Reflect.has(target, prop)) {
+      return true;
+    }
+    const monolithic = tryLoadMonolithicSdk();
+    return monolithic ? prop in monolithic : false;
+  },
+  ownKeys(target) {
+    const keys = new Set([...Reflect.ownKeys(target), "default", "__esModule"]);
+    if (monolithicSdk) {
+      for (const key of Reflect.ownKeys(monolithicSdk)) {
+        keys.add(key);
       }
-    : { ...fastExports };
-
-Object.defineProperty(rootExports, "__esModule", {
-  configurable: true,
-  enumerable: false,
-  writable: false,
-  value: true,
+    }
+    return [...keys];
+  },
+  getOwnPropertyDescriptor(target, prop) {
+    if (prop === "__esModule") {
+      return {
+        configurable: true,
+        enumerable: false,
+        writable: false,
+        value: true,
+      };
+    }
+    if (prop === "default") {
+      return {
+        configurable: true,
+        enumerable: false,
+        writable: false,
+        value: rootProxy,
+      };
+    }
+    const own = Object.getOwnPropertyDescriptor(target, prop);
+    if (own) {
+      return own;
+    }
+    const monolithic = tryLoadMonolithicSdk();
+    if (!monolithic) {
+      return undefined;
+    }
+    const descriptor = Object.getOwnPropertyDescriptor(monolithic, prop);
+    if (!descriptor) {
+      return undefined;
+    }
+    if (descriptor.get || descriptor.set) {
+      return {
+        configurable: true,
+        enumerable: descriptor.enumerable ?? true,
+        get: descriptor.get
+          ? function getLegacyValue() {
+              return descriptor.get.call(monolithic);
+            }
+          : undefined,
+        set: descriptor.set
+          ? function setLegacyValue(value) {
+              return descriptor.set.call(monolithic, value);
+            }
+          : undefined,
+      };
+    }
+    return {
+      configurable: true,
+      enumerable: descriptor.enumerable ?? true,
+      value: descriptor.value,
+      writable: descriptor.writable,
+    };
+  },
 });
-Object.defineProperty(rootExports, "default", {
-  configurable: true,
-  enumerable: false,
-  writable: false,
-  value: rootExports,
-});
 
-module.exports = rootExports;
+module.exports = rootProxy;

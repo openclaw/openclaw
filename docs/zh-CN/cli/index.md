@@ -780,6 +780,8 @@ openclaw models status
 - `--check`（退出码 1=过期/缺失，2=即将过期）
 - `--probe`（对已配置认证配置文件进行实时探测）
 - `--probe-provider <name>`
+- `--probe-all-models`
+- `--probe-model <provider/model>`（重复或逗号分隔）
 - `--probe-profile <id>`（重复或逗号分隔）
 - `--probe-timeout <ms>`
 - `--probe-concurrency <n>`
