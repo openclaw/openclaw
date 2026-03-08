@@ -214,6 +214,14 @@ function assertDeliverySupport(job: Pick<CronJob, "sessionTarget" | "delivery">)
   if (!isIsolatedLike) {
     throw new Error('cron channel delivery config is only supported for sessionTarget="isolated"');
   }
+  if (job.delivery.channel === "feishu" || job.delivery.channel === "lark") {
+    const hasTarget = typeof job.delivery.to === "string" && job.delivery.to.trim().length > 0;
+    if (!hasTarget) {
+      throw new Error(
+        "cron feishu announce delivery requires delivery.to (chatId|user:openId|chat:chatId)",
+      );
+    }
+  }
 }
 
 function assertFailureDestinationSupport(job: Pick<CronJob, "sessionTarget" | "delivery">) {
