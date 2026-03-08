@@ -1135,7 +1135,12 @@ export async function resolveImplicitProviders(params: {
 
   const moonshotKey = resolveProviderApiKey("moonshot").apiKey;
   if (moonshotKey) {
-    providers.moonshot = { ...buildMoonshotProvider(), apiKey: moonshotKey };
+    const configuredMoonshotBaseUrl = params.explicitProviders?.moonshot?.baseUrl;
+    providers.moonshot = {
+      ...buildMoonshotProvider(),
+      ...(configuredMoonshotBaseUrl ? { baseUrl: configuredMoonshotBaseUrl } : {}),
+      apiKey: moonshotKey,
+    };
   }
 
   const kimiCodingKey = resolveProviderApiKey("kimi-coding").apiKey;
