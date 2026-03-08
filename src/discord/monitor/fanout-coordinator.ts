@@ -342,15 +342,26 @@ async function executeRound(state: ChannelState, pending: PendingRound): Promise
 
   state.isProcessing = false;
 
-  // Round chaining: if any agent responded and we haven't hit the limit, trigger another round
-  if (anyResponded && state.currentRound < state.roundLimit) {
-    // Check if a new pending round arrived while we were processing
-    if (state.pendingRound) {
-      void executeRound(state, state.pendingRound);
+  // If a new message arrived while we were processing, always drain it.
+  // Otherwise a silent/no-response round can leave pendingRound orphaned forever.
+  if (state.pendingRound) {
+    if (!anyResponded || state.currentRound >= state.roundLimit) {
+      if (state.currentRound >= state.roundLimit) {
+        logVerbose(`fanout: round limit (${state.roundLimit}) reached in channel`);
+      }
+      // Treat queued inbound as a fresh external trigger, not a chained round continuation.
+      state.currentRound = 0;
+      state.previousRoundResponders.clear();
     }
-    // Otherwise, chained rounds are triggered by the bot messages arriving in Discord
-    // (each bot's response is a new Discord message that goes through preflight again)
-  } else {
+    const nextPending = state.pendingRound;
+    state.pendingRound = null;
+    void executeRound(state, nextPending);
+    return;
+  }
+
+  // Round chaining: if any agent responded and we haven't hit the limit, chained rounds
+  // are triggered by the bot messages arriving in Discord (each bot response is a new message).
+  if (!anyResponded || state.currentRound >= state.roundLimit) {
     if (state.currentRound >= state.roundLimit) {
       logVerbose(`fanout: round limit (${state.roundLimit}) reached in channel`);
     }
