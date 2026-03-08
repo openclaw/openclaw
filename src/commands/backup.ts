@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import * as tar from "tar";
 import type { RuntimeEnv } from "../runtime.js";
-import { resolveUserPath } from "../utils.js";
+import { resolveHomeDir, resolveUserPath } from "../utils.js";
 import { resolveRuntimeServiceVersion } from "../version.js";
 import {
   buildBackupArchiveBasename,
@@ -69,11 +69,21 @@ export type BackupCreateResult = {
   }>;
 };
 
-async function resolveOutputPath(params: { output?: string; nowMs: number }): Promise<string> {
+async function resolveOutputPath(params: {
+  output?: string;
+  nowMs: number;
+  includedAssets: BackupAsset[];
+  stateDir: string;
+}): Promise<string> {
   const basename = buildBackupArchiveBasename(params.nowMs);
   const rawOutput = params.output?.trim();
   if (!rawOutput) {
-    return path.resolve(process.cwd(), basename);
+    const cwd = path.resolve(process.cwd());
+    const cwdInsideSource = params.includedAssets.some((asset) =>
+      isPathWithin(cwd, asset.sourcePath),
+    );
+    const defaultDir = cwdInsideSource ? (resolveHomeDir() ?? path.dirname(params.stateDir)) : cwd;
+    return path.resolve(defaultDir, basename);
   }
 
   const resolved = resolveUserPath(rawOutput);
@@ -103,6 +113,23 @@ async function assertOutputPathReady(outputPath: string): Promise<void> {
       return;
     }
     throw err;
+  }
+}
+
+async function canonicalizePathForContainment(targetPath: string): Promise<string> {
+  const resolved = path.resolve(targetPath);
+  try {
+    return await fs.realpath(resolved);
+  } catch {
+    // Fall through to canonicalizing the nearest existing parent directory.
+  }
+
+  const parent = path.dirname(resolved);
+  try {
+    const realParent = await fs.realpath(parent);
+    return path.join(realParent, path.basename(resolved));
+  } catch {
+    return resolved;
   }
 }
 
@@ -189,16 +216,22 @@ export async function backupCreateCommand(
 ): Promise<BackupCreateResult> {
   const nowMs = opts.nowMs ?? Date.now();
   const archiveRoot = buildBackupArchiveRoot(nowMs);
-  const outputPath = await resolveOutputPath({ output: opts.output, nowMs });
   const includeWorkspace = opts.includeWorkspace ?? true;
   const plan = await resolveBackupPlanFromDisk({ includeWorkspace, nowMs });
+  const outputPath = await resolveOutputPath({
+    output: opts.output,
+    nowMs,
+    includedAssets: plan.included,
+    stateDir: plan.stateDir,
+  });
 
   if (plan.included.length === 0) {
     throw new Error("No local OpenClaw state was found to back up.");
   }
 
+  const canonicalOutputPath = await canonicalizePathForContainment(outputPath);
   const overlappingAsset = plan.included.find((asset) =>
-    isPathWithin(outputPath, asset.sourcePath),
+    isPathWithin(canonicalOutputPath, asset.sourcePath),
   );
   if (overlappingAsset) {
     throw new Error(
@@ -206,7 +239,9 @@ export async function backupCreateCommand(
     );
   }
 
-  await assertOutputPathReady(outputPath);
+  if (!opts.dryRun) {
+    await assertOutputPathReady(outputPath);
+  }
 
   const createdAt = new Date(nowMs).toISOString();
   const result: BackupCreateResult = {

@@ -13,12 +13,15 @@ import { backupCreateCommand } from "./backup.js";
 
 describe("backup commands", () => {
   let tempHome: TempHomeEnv;
+  let previousCwd: string;
 
   beforeEach(async () => {
     tempHome = await createTempHomeEnv("openclaw-backup-test-");
+    previousCwd = process.cwd();
   });
 
   afterEach(async () => {
+    process.chdir(previousCwd);
     await tempHome.restore();
   });
 
@@ -95,16 +98,21 @@ describe("backup commands", () => {
           ]),
         );
 
+        const stateAsset = result.assets.find((asset) => asset.kind === "state");
+        const workspaceAsset = result.assets.find((asset) => asset.kind === "workspace");
+        expect(stateAsset).toBeDefined();
+        expect(workspaceAsset).toBeDefined();
+
         const encodedStatePath = path.join(
           archiveRoot,
           "payload",
-          encodeAbsolutePathForBackupArchive(stateDir),
+          encodeAbsolutePathForBackupArchive(stateAsset!.sourcePath),
           "state.txt",
         );
         const encodedWorkspacePath = path.join(
           archiveRoot,
           "payload",
-          encodeAbsolutePathForBackupArchive(externalWorkspace),
+          encodeAbsolutePathForBackupArchive(workspaceAsset!.sourcePath),
           "SOUL.md",
         );
         expect(await fs.readFile(encodedStatePath, "utf8")).toBe("state\n");
@@ -134,5 +142,50 @@ describe("backup commands", () => {
         output: path.join(stateDir, "backups"),
       }),
     ).rejects.toThrow(/must not be written inside a source path/i);
+  });
+
+  it("falls back to the home directory when cwd is inside a backed-up source tree", async () => {
+    const stateDir = path.join(tempHome.home, ".openclaw");
+    const workspaceDir = path.join(stateDir, "workspace");
+    await fs.writeFile(path.join(stateDir, "openclaw.json"), JSON.stringify({}), "utf8");
+    await fs.mkdir(workspaceDir, { recursive: true });
+    await fs.writeFile(path.join(workspaceDir, "SOUL.md"), "# soul\n", "utf8");
+    process.chdir(workspaceDir);
+
+    const runtime = {
+      log: vi.fn(),
+      error: vi.fn(),
+      exit: vi.fn(),
+    };
+
+    const nowMs = Date.UTC(2026, 2, 9, 1, 2, 3);
+    const result = await backupCreateCommand(runtime, { nowMs });
+
+    expect(result.archivePath).toBe(
+      path.join(tempHome.home, `${buildBackupArchiveRoot(nowMs)}.tar.gz`),
+    );
+    await fs.rm(result.archivePath, { force: true });
+  });
+
+  it("allows dry-run preview even when the target archive already exists", async () => {
+    const stateDir = path.join(tempHome.home, ".openclaw");
+    const existingArchive = path.join(tempHome.home, "existing-backup.tar.gz");
+    await fs.writeFile(path.join(stateDir, "openclaw.json"), JSON.stringify({}), "utf8");
+    await fs.writeFile(existingArchive, "already here", "utf8");
+
+    const runtime = {
+      log: vi.fn(),
+      error: vi.fn(),
+      exit: vi.fn(),
+    };
+
+    const result = await backupCreateCommand(runtime, {
+      output: existingArchive,
+      dryRun: true,
+    });
+
+    expect(result.dryRun).toBe(true);
+    expect(result.archivePath).toBe(existingArchive);
+    expect(await fs.readFile(existingArchive, "utf8")).toBe("already here");
   });
 });

@@ -1,3 +1,4 @@
+import fs from "node:fs/promises";
 import path from "node:path";
 import {
   readBestEffortConfig,
@@ -92,6 +93,14 @@ function compareCandidates(left: BackupAssetCandidate, right: BackupAssetCandida
   return left.sourcePath.localeCompare(right.sourcePath);
 }
 
+async function canonicalizeExistingPath(targetPath: string): Promise<string> {
+  try {
+    return await fs.realpath(targetPath);
+  } catch {
+    return path.resolve(targetPath);
+  }
+}
+
 export async function resolveBackupPlanFromDisk(
   params: {
     includeWorkspace?: boolean;
@@ -139,14 +148,13 @@ export async function resolveBackupPlanFromDisk(
       continue;
     }
 
-    const coveredBy = included.find((asset) =>
-      isPathWithin(candidate.sourcePath, asset.sourcePath),
-    );
+    const canonicalPath = await canonicalizeExistingPath(candidate.sourcePath);
+    const coveredBy = included.find((asset) => isPathWithin(canonicalPath, asset.sourcePath));
     if (coveredBy) {
       skipped.push({
         kind: candidate.kind,
-        sourcePath: candidate.sourcePath,
-        displayPath: shortenHomePath(candidate.sourcePath),
+        sourcePath: canonicalPath,
+        displayPath: shortenHomePath(canonicalPath),
         reason: "covered",
         coveredBy: coveredBy.displayPath,
       });
@@ -155,9 +163,9 @@ export async function resolveBackupPlanFromDisk(
 
     included.push({
       kind: candidate.kind,
-      sourcePath: candidate.sourcePath,
-      displayPath: shortenHomePath(candidate.sourcePath),
-      archivePath: buildBackupArchivePath(archiveRoot, candidate.sourcePath),
+      sourcePath: canonicalPath,
+      displayPath: shortenHomePath(canonicalPath),
+      archivePath: buildBackupArchivePath(archiveRoot, canonicalPath),
     });
   }
 
