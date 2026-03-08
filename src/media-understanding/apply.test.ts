@@ -1155,4 +1155,195 @@ describe("applyMediaUnderstanding", () => {
     expect(ctx.Body).toContain("<file");
     expect(ctx.Body).toContain("vendor-json");
   });
+
+  it("skips .msg file with no MIME type via binary extension check", async () => {
+    const ole2Magic = Buffer.from([0xd0, 0xcf, 0x11, 0xe0, 0xa1, 0xb1, 0x1a, 0xe1]);
+    const filePath = await createTempMediaFile({
+      fileName: "message.msg",
+      content: ole2Magic,
+    });
+
+    const { ctx, result } = await applyWithDisabledMedia({
+      body: "<media:file>",
+      mediaPath: filePath,
+    });
+
+    expectFileNotApplied({ ctx, result, body: "<media:file>" });
+  });
+
+  it("skips file with ZIP magic bytes and unknown extension when MIME is absent", async () => {
+    const zipMagic = Buffer.from([0x50, 0x4b, 0x03, 0x04, 0x14, 0x00, 0x00, 0x00]);
+    const filePath = await createTempMediaFile({
+      fileName: "data.unknown",
+      content: zipMagic,
+    });
+
+    const { ctx, result } = await applyWithDisabledMedia({
+      body: "<media:file>",
+      mediaPath: filePath,
+    });
+
+    expectFileNotApplied({ ctx, result, body: "<media:file>" });
+  });
+
+  it("allows binary-extension file through when explicit textual MIME is provided", async () => {
+    const filePath = await createTempMediaFile({
+      fileName: "data.msg",
+      content: '{"ok":true}',
+    });
+
+    const { ctx, result } = await applyWithDisabledMedia({
+      body: "<media:file>",
+      mediaPath: filePath,
+      mediaType: "application/vnd.api+json",
+    });
+
+    expect(result.appliedFile).toBe(true);
+    expect(ctx.Body).toContain("<file");
+    expect(ctx.Body).toContain('"ok":true');
+  });
+
+  it("falls back to text heuristic for unknown extension with non-binary content and no MIME", async () => {
+    const filePath = await createTempMediaFile({
+      fileName: "data.xyz",
+      content: "hello world\nline two",
+    });
+
+    const { ctx, result } = await applyWithDisabledMedia({
+      body: "<media:file>",
+      mediaPath: filePath,
+    });
+
+    expect(result.appliedFile).toBe(true);
+    expect(ctx.Body).toContain("<file");
+    expect(ctx.Body).toContain("hello world");
+  });
+
+  it("skips ELF binary with generic application/octet-stream MIME", async () => {
+    const elfMagic = Buffer.from([0x7f, 0x45, 0x4c, 0x46, 0x02, 0x01, 0x01, 0x00]);
+    const filePath = await createTempMediaFile({
+      fileName: "program.out",
+      content: elfMagic,
+    });
+
+    const { ctx, result } = await applyWithDisabledMedia({
+      body: "<media:file>",
+      mediaPath: filePath,
+      mediaType: "application/octet-stream",
+    });
+
+    expectFileNotApplied({ ctx, result, body: "<media:file>" });
+  });
+
+  it("allows text file starting with 'SQLite' through when MIME is absent (no false positive)", async () => {
+    const filePath = await createTempMediaFile({
+      fileName: "notes.dat",
+      content: "SQLite discussion points for the Q3 planning meeting\nAction items below",
+    });
+
+    const { ctx, result } = await applyWithDisabledMedia({
+      body: "<media:file>",
+      mediaPath: filePath,
+    });
+
+    expect(result.appliedFile).toBe(true);
+    expect(ctx.Body).toContain("<file");
+    expect(ctx.Body).toContain("SQLite discussion points");
+  });
+
+  it("skips Windows PE executable with valid PE header via MZ+PE validation", async () => {
+    // Build a minimal PE-like buffer: MZ at start, PE offset at 0x3C pointing to PE\0\0
+    // Use explicit byte array to ensure exact structure
+    const peBytes = Array.from({ length: 128 }, () => 0);
+    peBytes[0] = 0x4d; // 'M'
+    peBytes[1] = 0x5a; // 'Z'
+    // PE offset at 0x3C (60): little-endian 0x50 (80)
+    peBytes[0x3c] = 0x50;
+    peBytes[0x3d] = 0x00;
+    peBytes[0x3e] = 0x00;
+    peBytes[0x3f] = 0x00;
+    // PE signature at offset 80
+    peBytes[0x50] = 0x50; // 'P'
+    peBytes[0x51] = 0x45; // 'E'
+    peBytes[0x52] = 0x00;
+    peBytes[0x53] = 0x00;
+    const pe = Buffer.from(peBytes);
+    const filePath = await createTempMediaFile({
+      fileName: "app.unknown",
+      content: pe,
+    });
+
+    const { ctx, result } = await applyWithDisabledMedia({
+      body: "<media:file>",
+      mediaPath: filePath,
+      mediaType: "application/octet-stream",
+    });
+
+    expectFileNotApplied({ ctx, result, body: "<media:file>" });
+  });
+
+  it("allows text file starting with MZ through when no valid PE header exists", async () => {
+    const filePath = await createTempMediaFile({
+      fileName: "notes.dat",
+      content: "MZelda is my favourite game character\nMore text here about gaming",
+    });
+
+    const { ctx, result } = await applyWithDisabledMedia({
+      body: "<media:file>",
+      mediaPath: filePath,
+    });
+
+    expect(result.appliedFile).toBe(true);
+    expect(ctx.Body).toContain("<file");
+    expect(ctx.Body).toContain("MZelda");
+  });
+
+  it("allows text file starting with 'Rar!' through when not a valid RAR archive", async () => {
+    const filePath = await createTempMediaFile({
+      fileName: "notes.dat",
+      content: "Rar! What a find this is!\nMore exciting discoveries below.",
+    });
+
+    const { ctx, result } = await applyWithDisabledMedia({
+      body: "<media:file>",
+      mediaPath: filePath,
+    });
+
+    expect(result.appliedFile).toBe(true);
+    expect(ctx.Body).toContain("<file");
+    expect(ctx.Body).toContain("Rar! What a find");
+  });
+
+  it("handles file shorter than magic header length gracefully", async () => {
+    const filePath = await createTempMediaFile({
+      fileName: "tiny.dat",
+      content: "Hi",
+    });
+
+    const { ctx, result } = await applyWithDisabledMedia({
+      body: "<media:file>",
+      mediaPath: filePath,
+    });
+
+    expect(result.appliedFile).toBe(true);
+    expect(ctx.Body).toContain("<file");
+  });
+
+  it("enforces that all binary signatures contain at least one non-printable byte", async () => {
+    // This test validates the INVARIANT documented in BINARY_SIGNATURES:
+    // every signature must contain at least one byte outside the printable ASCII
+    // range (< 0x20 or > 0x7E). This prevents false positives on text files.
+    const { BINARY_SIGNATURES } = await import("./apply.js");
+
+    for (const sig of BINARY_SIGNATURES) {
+      const hasNonPrintable = sig.bytes.some((byte: number) => byte < 0x20 || byte > 0x7e);
+      expect(hasNonPrintable).toBe(true);
+      if (!hasNonPrintable) {
+        throw new Error(
+          `${sig.name}: signature is all printable ASCII (0x20-0x7E). ` +
+            `Extend it to include non-printable bytes from the format header.`,
+        );
+      }
+    }
+  });
 });
