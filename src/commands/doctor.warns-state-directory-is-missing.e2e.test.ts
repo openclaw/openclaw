@@ -63,7 +63,7 @@ describe("doctor command", () => {
     expect(warned).toBe(true);
   });
 
-  it("warns when a legacy openai-codex provider override shadows Codex OAuth", async () => {
+  it("warns when a legacy openai-codex provider override shadows configured Codex OAuth", async () => {
     mockDoctorConfigSnapshot({
       config: {
         models: {
@@ -80,6 +80,36 @@ describe("doctor command", () => {
               provider: "openai-codex",
               mode: "oauth",
               email: "user@example.com",
+            },
+          },
+        },
+      },
+    });
+    ensureAuthProfileStore.mockReturnValue({
+      version: 1,
+      profiles: {},
+    });
+
+    await doctorCommand(createDoctorRuntime(), {
+      nonInteractive: true,
+      workspaceSuggestions: false,
+    });
+
+    const warned = note.mock.calls.some(
+      ([message, title]) =>
+        title === "Codex OAuth" && String(message).includes("models.providers.openai-codex"),
+    );
+    expect(warned).toBe(true);
+  });
+
+  it("warns when a legacy openai-codex provider override shadows stored Codex OAuth", async () => {
+    mockDoctorConfigSnapshot({
+      config: {
+        models: {
+          providers: {
+            "openai-codex": {
+              api: "openai-responses",
+              baseUrl: "https://api.openai.com/v1",
             },
           },
         },
