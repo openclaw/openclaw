@@ -195,6 +195,15 @@ export function createExecTool(
   const notifyOnExitEmptySuccess = defaults?.notifyOnExitEmptySuccess === true;
   const notifySessionKey = defaults?.sessionKey?.trim() || undefined;
   const approvalRunningNoticeMs = resolveApprovalRunningNoticeMs(defaults?.approvalRunningNoticeMs);
+  const startupWorkspaceDir = resolveWorkdir(defaults?.cwd?.trim() || process.cwd(), []);
+  const startupBaseEnv = coerceEnv(process.env);
+  const startupWorkspaceEnvPromise = loadWorkspaceDotEnvForExec({
+    workspaceDir: startupWorkspaceDir,
+    baseEnv: startupBaseEnv,
+  }).catch((error: unknown) => {
+    logInfo(`exec: failed to preload workspace .env (${String(error)}); continuing without it`);
+    return {};
+  });
   // Derive agentId only when sessionKey is an agent session key.
   const parsedAgentSession = parseAgentSessionKey(defaults?.sessionKey);
   const agentId =
@@ -362,10 +371,7 @@ export function createExecTool(
       }
 
       const inheritedBaseEnv = coerceEnv(process.env);
-      const workspaceEnv = await loadWorkspaceDotEnvForExec({
-        workspaceDir: workdir,
-        baseEnv: inheritedBaseEnv,
-      });
+      const workspaceEnv = await startupWorkspaceEnvPromise;
       const inheritedWithWorkspaceEnv = { ...inheritedBaseEnv, ...workspaceEnv };
       const baseEnv =
         host === "sandbox"
