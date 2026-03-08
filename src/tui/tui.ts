@@ -894,6 +894,24 @@ export async function runTui(opts: TuiOptions) {
       handleChatEvent(evt.payload);
     }
     if (evt.event === "agent") {
+      const payload = evt.payload as Record<string, unknown> | undefined;
+      if (payload?.stream === "usage") {
+        const data = (payload.data ?? {}) as Record<string, unknown>;
+        if (typeof data.totalTokens === "number") {
+          sessionInfo.totalTokens = data.totalTokens;
+        }
+        if (typeof data.contextTokens === "number") {
+          sessionInfo.contextTokens = data.contextTokens;
+        }
+        if (typeof data.inputTokens === "number") {
+          sessionInfo.inputTokens = data.inputTokens;
+        }
+        if (typeof data.outputTokens === "number") {
+          sessionInfo.outputTokens = data.outputTokens;
+        }
+        updateFooter();
+        tui.requestRender();
+      }
       handleAgentEvent(evt.payload);
     }
   };

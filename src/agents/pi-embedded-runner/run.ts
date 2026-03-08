@@ -5,6 +5,7 @@ import {
   ensureContextEnginesInitialized,
   resolveContextEngine,
 } from "../../context-engine/index.js";
+import { emitAgentEvent } from "../../infra/agent-events.js";
 import { computeBackoff, sleepWithAbort, type BackoffPolicy } from "../../infra/backoff.js";
 import { generateSecureToken } from "../../infra/secure-random.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
@@ -931,6 +932,27 @@ export async function runEmbeddedPiAgent(
           const lastAssistantUsage = normalizeUsage(lastAssistant?.usage as UsageLike);
           const attemptUsage = attempt.attemptUsage ?? lastAssistantUsage;
           mergeUsageIntoAccumulator(usageAccumulator, attemptUsage);
+
+          // Emit a live usage event so the TUI footer updates in real time.
+          const usageForEvent = lastAssistantUsage ?? attemptUsage;
+          const promptTokensForEvent = derivePromptTokens({
+            input: usageForEvent?.input,
+            cacheRead: usageForEvent?.cacheRead,
+            cacheWrite: usageForEvent?.cacheWrite,
+          });
+          if (typeof promptTokensForEvent === "number" && promptTokensForEvent > 0) {
+            emitAgentEvent({
+              runId: params.runId,
+              stream: "usage",
+              data: {
+                totalTokens: promptTokensForEvent,
+                contextTokens: ctxInfo.tokens,
+                inputTokens: usageAccumulator.input,
+                outputTokens: usageAccumulator.output,
+              },
+            });
+          }
+
           // Keep prompt size from the latest model call so session totalTokens
           // reflects current context usage, not accumulated tool-loop usage.
           lastRunPromptUsage = lastAssistantUsage ?? attemptUsage;
