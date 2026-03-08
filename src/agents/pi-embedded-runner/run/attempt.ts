@@ -130,6 +130,12 @@ import {
 } from "./compaction-timeout.js";
 import { pruneProcessedHistoryImages } from "./history-image-prune.js";
 import { detectAndLoadPromptImages } from "./images.js";
+import {
+  createInternalAgentHookEmitter,
+  createResponseLifecycleTracker,
+  emitThinkingEnd,
+  emitThinkingStart,
+} from "./lifecycle-hooks.js";
 import type { EmbeddedRunAttemptParams, EmbeddedRunAttemptResult } from "./types.js";
 
 type PromptBuildHookRunner = {
@@ -750,6 +756,9 @@ export async function runEmbeddedAttempt(
   const prevCwd = process.cwd();
   const runAbortController = new AbortController();
   ensureGlobalUndiciStreamTimeouts();
+  const emitInternalAgentHook = createInternalAgentHookEmitter(params, (message) =>
+    log.warn(message),
+  );
 
   log.debug(
     `embedded run start: runId=${params.runId} sessionId=${params.sessionId} provider=${params.provider} model=${params.modelId} thinking=${params.thinkLevel} messageChannel=${params.messageChannel ?? params.messageProvider ?? "unknown"}`,
@@ -1153,7 +1162,11 @@ export async function runEmbeddedAttempt(
       });
 
       // Add client tools (OpenResponses hosted tools) to customTools
-      let clientToolCallDetected: { name: string; params: Record<string, unknown> } | null = null;
+      let clientToolCallDetected: {
+        name: string;
+        params: Record<string, unknown>;
+        toolCallId: string;
+      } | null = null;
       const clientToolLoopDetection = resolveToolLoopDetectionConfig({
         cfg: params.config,
         agentId: sessionAgentId,
@@ -1161,8 +1174,8 @@ export async function runEmbeddedAttempt(
       const clientToolDefs = clientTools
         ? toClientToolDefinitions(
             clientTools,
-            (toolName, toolParams) => {
-              clientToolCallDetected = { name: toolName, params: toolParams };
+            (toolName, toolParams, toolCallId) => {
+              clientToolCallDetected = { name: toolName, params: toolParams, toolCallId };
             },
             {
               agentId: sessionAgentId,
@@ -1507,6 +1520,13 @@ export async function runEmbeddedAttempt(
         });
       };
 
+      const responseLifecycle = createResponseLifecycleTracker({
+        params,
+        emitInternalAgentHook,
+        onAssistantMessageStart: params.onAssistantMessageStart,
+        formatError: describeUnknownError,
+      });
+
       const subscription = subscribeEmbeddedPiSession({
         session: activeSession,
         runId: params.runId,
@@ -1524,7 +1544,7 @@ export async function runEmbeddedAttempt(
         blockReplyBreak: params.blockReplyBreak,
         blockReplyChunking: params.blockReplyChunking,
         onPartialReply: params.onPartialReply,
-        onAssistantMessageStart: params.onAssistantMessageStart,
+        onAssistantMessageStart: responseLifecycle.handleAssistantMessageStart,
         onAgentEvent: params.onAgentEvent,
         enforceFinalTag: params.enforceFinalTag,
         config: params.config,
@@ -1627,6 +1647,7 @@ export async function runEmbeddedAttempt(
       const prePromptMessageCount = activeSession.messages.length;
       try {
         const promptStartedAt = Date.now();
+        void emitThinkingStart(params, emitInternalAgentHook);
 
         // Run before_prompt_build hooks to allow plugins to inject prompt context.
         // Legacy compatibility: before_agent_start is also checked for context fields.
@@ -1788,6 +1809,13 @@ export async function runEmbeddedAttempt(
           log.debug(
             `embedded run prompt end: runId=${params.runId} sessionId=${params.sessionId} durationMs=${Date.now() - promptStartedAt}`,
           );
+          void emitThinkingEnd({
+            lifecycleParams: params,
+            emitInternalAgentHook,
+            promptStartedAt,
+            promptError,
+            formatError: describeUnknownError,
+          });
         }
 
         // Capture snapshot before compaction wait so we have complete messages if timeout occurs
@@ -1941,6 +1969,12 @@ export async function runEmbeddedAttempt(
               : undefined,
         });
         anthropicPayloadLogger?.recordUsage(messagesSnapshot, promptError);
+        const hasResponseOutput =
+          assistantTexts.length > 0 ||
+          didSendViaMessagingTool() ||
+          getMessagingToolSentTexts().length > 0;
+        await responseLifecycle.emitResponseStartIfNeeded(hasResponseOutput);
+        await responseLifecycle.emitResponseEnd(promptError);
 
         // Run agent_end hooks to allow plugins to analyze the conversation
         // This is fire-and-forget, so we don't await
