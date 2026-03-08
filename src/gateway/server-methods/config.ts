@@ -324,7 +324,7 @@ export const configHandlers: GatewayRequestHandlers = {
       true,
       {
         ok: true,
-        path: CONFIG_PATH,
+        path: createConfigIO().configPath,
         config: redactConfigObject(parsed.config, parsed.schema.uiHints),
       },
       undefined,
@@ -441,7 +441,7 @@ export const configHandlers: GatewayRequestHandlers = {
       true,
       {
         ok: true,
-        path: CONFIG_PATH,
+        path: createConfigIO().configPath,
         config: redactConfigObject(validated.config, schemaPatch.uiHints),
         restart,
         sentinel: {
@@ -501,7 +501,7 @@ export const configHandlers: GatewayRequestHandlers = {
       true,
       {
         ok: true,
-        path: CONFIG_PATH,
+        path: createConfigIO().configPath,
         config: redactConfigObject(parsed.config, parsed.schema.uiHints),
         restart,
         sentinel: {
