@@ -28,6 +28,7 @@ function buildMediaLocalRoots(
     path.join(resolvedStateDir, "media"),
     path.join(resolvedStateDir, "agents"),
     path.join(resolvedStateDir, "workspace"),
+    path.join(resolvedStateDir, "workspaces"),
     path.join(resolvedStateDir, "sandboxes"),
   ];
 }
