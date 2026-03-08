@@ -227,6 +227,10 @@ export const FIELD_LABELS: Record<string, string> = {
   "tools.web.search.kimi.apiKey": "Kimi Search API Key", // pragma: allowlist secret
   "tools.web.search.kimi.baseUrl": "Kimi Search Base URL",
   "tools.web.search.kimi.model": "Kimi Search Model",
+  "tools.web.search.exa.apiKey": "Exa Search API Key",
+  "tools.web.search.exa.numResults": "Exa Default Result Count",
+  "tools.web.search.exa.type": "Exa Search Type",
+  "tools.web.search.exa.contents": "Exa Include Contents",
   "tools.web.fetch.enabled": "Enable Web Fetch Tool",
   "tools.web.fetch.maxChars": "Web Fetch Max Chars",
   "tools.web.fetch.maxCharsCap": "Web Fetch Hard Max Chars",

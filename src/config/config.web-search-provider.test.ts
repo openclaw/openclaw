@@ -48,6 +48,46 @@ describe("web search provider config", () => {
 
     expect(res.ok).toBe(true);
   });
+
+  it("accepts exa provider and config", () => {
+    const res = validateConfigObject(
+      buildWebSearchProviderConfig({
+        enabled: true,
+        provider: "exa",
+        providerConfig: {
+          apiKey: "test-key",
+          numResults: 10,
+          type: "neural",
+          contents: true,
+        },
+      }),
+    );
+
+    expect(res.ok).toBe(true);
+  });
+
+  it("accepts exa provider with no extra config", () => {
+    const res = validateConfigObject(
+      buildWebSearchProviderConfig({
+        provider: "exa",
+      }),
+    );
+
+    expect(res.ok).toBe(true);
+  });
+
+  it("rejects exa config with invalid search type", () => {
+    const res = validateConfigObject(
+      buildWebSearchProviderConfig({
+        provider: "exa",
+        providerConfig: {
+          type: "nueral",
+        },
+      }),
+    );
+
+    expect(res.ok).toBe(false);
+  });
 });
 
 describe("web search provider auto-detection", () => {
@@ -61,6 +101,7 @@ describe("web search provider auto-detection", () => {
     delete process.env.PERPLEXITY_API_KEY;
     delete process.env.OPENROUTER_API_KEY;
     delete process.env.XAI_API_KEY;
+    delete process.env.EXA_API_KEY;
     delete process.env.KIMI_API_KEY;
     delete process.env.MOONSHOT_API_KEY;
   });
@@ -107,6 +148,11 @@ describe("web search provider auto-detection", () => {
   it("auto-detects kimi when only MOONSHOT_API_KEY is set", () => {
     process.env.MOONSHOT_API_KEY = "test-moonshot-key"; // pragma: allowlist secret
     expect(resolveSearchProvider({})).toBe("kimi");
+  });
+
+  it("auto-detects exa when only EXA_API_KEY is set", () => {
+    process.env.EXA_API_KEY = "test-exa-key"; // pragma: allowlist secret
+    expect(resolveSearchProvider({})).toBe("exa");
   });
 
   it("follows priority order — perplexity wins when multiple keys available", () => {

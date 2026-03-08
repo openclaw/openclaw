@@ -15,6 +15,9 @@ const {
   resolveKimiModel,
   resolveKimiBaseUrl,
   extractKimiCitations,
+  resolveExaApiKey,
+  resolveExaSearchType,
+  resolveExaContents,
 } = __testing;
 
 const kimiApiKeyEnv = ["KIMI_API", "KEY"].join("_");
@@ -274,5 +277,56 @@ describe("extractKimiCitations", () => {
         ],
       }).toSorted(),
     ).toEqual(["https://example.com/a", "https://example.com/b", "https://example.com/c"]);
+  });
+});
+
+describe("resolveExaApiKey", () => {
+  it("returns config apiKey when provided", () => {
+    expect(resolveExaApiKey({ apiKey: "exa-from-config" })).toBe("exa-from-config");
+  });
+
+  it("falls back to EXA_API_KEY env var", () => {
+    withEnv({ EXA_API_KEY: "exa-from-env" }, () => {
+      expect(resolveExaApiKey({})).toBe("exa-from-env");
+    });
+  });
+
+  it("returns undefined when no key is available", () => {
+    withEnv({ EXA_API_KEY: undefined }, () => {
+      expect(resolveExaApiKey({})).toBeUndefined();
+      expect(resolveExaApiKey(undefined)).toBeUndefined();
+    });
+  });
+
+  it("trims whitespace-only keys to undefined", () => {
+    expect(resolveExaApiKey({ apiKey: "   " })).toBeUndefined();
+  });
+});
+
+describe("resolveExaSearchType", () => {
+  it("defaults to auto when omitted", () => {
+    expect(resolveExaSearchType({})).toBe("auto");
+    expect(resolveExaSearchType(undefined)).toBe("auto");
+  });
+
+  it("accepts valid search types", () => {
+    expect(resolveExaSearchType({ type: "neural" })).toBe("neural");
+    expect(resolveExaSearchType({ type: "keyword" })).toBe("keyword");
+    expect(resolveExaSearchType({ type: "auto" })).toBe("auto");
+  });
+});
+
+describe("resolveExaContents", () => {
+  it("defaults to false when omitted", () => {
+    expect(resolveExaContents({})).toBe(false);
+    expect(resolveExaContents(undefined)).toBe(false);
+  });
+
+  it("returns true only when explicitly set", () => {
+    expect(resolveExaContents({ contents: true })).toBe(true);
+  });
+
+  it("returns false when explicitly set to false", () => {
+    expect(resolveExaContents({ contents: false })).toBe(false);
   });
 });
