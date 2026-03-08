@@ -67,6 +67,14 @@ const TRANSIENT_NETWORK_MESSAGE_SNIPPETS = [
   "write eproto",
 ];
 
+// SQLite error codes that indicate transient failures (shouldn't crash the gateway)
+const TRANSIENT_SQLITE_CODES = new Set([
+  "SQLITE_CANTOPEN",
+  "SQLITE_BUSY",
+  "SQLITE_LOCKED",
+  "SQLITE_IOERR",
+]);
+
 function isWrappedFetchFailedMessage(message: string): boolean {
   if (message === "fetch failed") {
     return true;
@@ -193,6 +201,47 @@ export function isTransientNetworkError(err: unknown): boolean {
   return false;
 }
 
+/**
+ * Checks if an error is a transient SQLite error that shouldn't crash the gateway.
+ * These are typically temporary database issues (lock, busy, permissions) that will resolve.
+ */
+function isTransientSqliteError(err: unknown): boolean {
+  if (!err) {
+    return false;
+  }
+  for (const candidate of collectErrorGraphCandidates(err, (current) => {
+    const nested: Array<unknown> = [
+      current.cause,
+      current.reason,
+      current.original,
+      current.error,
+      current.data,
+    ];
+    if (Array.isArray(current.errors)) {
+      nested.push(...current.errors);
+    }
+    return nested;
+  })) {
+    const code = extractErrorCodeOrErrno(candidate);
+    if (code && TRANSIENT_SQLITE_CODES.has(code)) {
+      return true;
+    }
+
+    // Also check error messages for SQLite error codes
+    if (!candidate || typeof candidate !== "object") {
+      continue;
+    }
+    const rawMessage = (candidate as { message?: unknown }).message;
+    const message = typeof rawMessage === "string" ? rawMessage : "";
+    if (message.includes("SQLITE_CANTOPEN") || message.includes("SQLITE_BUSY") ||
+        message.includes("SQLITE_LOCKED") || message.includes("SQLITE_IOERR")) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
 export function registerUnhandledRejectionHandler(handler: UnhandledRejectionHandler): () => void {
   handlers.add(handler);
   return () => {
@@ -244,6 +293,14 @@ export function installUnhandledRejectionHandler(): void {
     if (isTransientNetworkError(reason)) {
       console.warn(
         "[openclaw] Non-fatal unhandled rejection (continuing):",
+        formatUncaughtError(reason),
+      );
+      return;
+    }
+
+    if (isTransientSqliteError(reason)) {
+      console.warn(
+        "[openclaw] Non-fatal SQLite unhandled rejection (continuing):",
         formatUncaughtError(reason),
       );
       return;
