@@ -1,5 +1,30 @@
+import type { AssistantMessage } from "@mariozechner/pi-ai";
 import { describe, expect, it } from "vitest";
-import { buildPayloads, expectSingleToolErrorPayload } from "./payloads.test-helpers.js";
+import {
+  buildPayloads,
+  expectSinglePayloadText,
+  expectSingleToolErrorPayload,
+} from "./payloads.test-helpers.js";
+
+function makeAssistantMessage(text: string): AssistantMessage {
+  return {
+    role: "assistant",
+    api: "responses",
+    provider: "openai",
+    model: "gpt-5",
+    timestamp: Date.now(),
+    stopReason: "stop",
+    usage: {
+      input: 0,
+      output: 0,
+      cacheRead: 0,
+      cacheWrite: 0,
+      totalTokens: 0,
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+    },
+    content: [{ type: "text", text }],
+  } as AssistantMessage;
+}
 
 describe("buildEmbeddedRunPayloads tool-error warnings", () => {
   it("suppresses exec tool errors when verbose mode is off", () => {
@@ -81,5 +106,48 @@ describe("buildEmbeddedRunPayloads tool-error warnings", () => {
     });
 
     expect(payloads).toHaveLength(0);
+  });
+
+  it("surfaces downgraded text-form tool calls as an explicit error", () => {
+    const payloads = buildPayloads({
+      lastAssistant: makeAssistantMessage(
+        `[Tool Call: read (ID: toolu_1)]\nArguments: {"path":"notes.md"}`,
+      ),
+    });
+
+    expectSinglePayloadText(
+      payloads,
+      "⚠️ The model emitted a text-form tool call instead of executing a real tool. No tool action was actually run. Please retry, or switch to a provider/model with reliable tool calling.",
+      true,
+    );
+  });
+
+  it("surfaces short non-executing placeholder replies as an explicit error", () => {
+    const payloads = buildPayloads({
+      assistantTexts: ["Let me actually check that now instead of just saying I will. One sec."],
+      lastAssistant: makeAssistantMessage(
+        "Let me actually check that now instead of just saying I will. One sec.",
+      ),
+    });
+
+    expectSinglePayloadText(
+      payloads,
+      "⚠️ The agent returned a placeholder reply without starting any real tool work. Please retry, or switch to a provider/model with reliable tool execution.",
+      true,
+    );
+  });
+
+  it("keeps substantive plain-text answers that do not match placeholder heuristics", () => {
+    const payloads = buildPayloads({
+      assistantTexts: ["I checked the file and the config key is missing from the JSON payload."],
+      lastAssistant: makeAssistantMessage(
+        "I checked the file and the config key is missing from the JSON payload.",
+      ),
+    });
+
+    expectSinglePayloadText(
+      payloads,
+      "I checked the file and the config key is missing from the JSON payload.",
+    );
   });
 });

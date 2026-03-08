@@ -27,6 +27,14 @@ function isAssistantSilentReply(message: unknown): boolean {
   return typeof text === "string" && isSilentReplyStream(text);
 }
 
+function formatChatErrorMessage(errorMessage: string | undefined): string {
+  const trimmed = errorMessage?.trim() ?? "";
+  if (!trimmed) {
+    return "⚠️ chat error";
+  }
+  return /^⚠️\s*/.test(trimmed) ? trimmed : `⚠️ ${trimmed}`;
+}
+
 export type ChatState = {
   client: GatewayBrowserClient | null;
   connected: boolean;
@@ -327,6 +335,15 @@ export function handleChatEvent(state: ChatState, payload?: ChatEventPayload) {
     state.chatRunId = null;
     state.chatStreamStartedAt = null;
   } else if (payload.state === "error") {
+    const formattedError = formatChatErrorMessage(payload.errorMessage);
+    state.chatMessages = [
+      ...state.chatMessages,
+      {
+        role: "assistant",
+        content: [{ type: "text", text: formattedError }],
+        timestamp: Date.now(),
+      },
+    ];
     state.chatStream = null;
     state.chatRunId = null;
     state.chatStreamStartedAt = null;

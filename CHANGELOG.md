@@ -2,6 +2,8 @@
 
 Docs: https://docs.openclaw.ai
 
+- [2026-03-09 02:01] FIX: 修复假工具调用/占位回复被当成有效执行结果，并补充 WebChat 错误可见性与 legacy WS query-auth 拒绝 (Files: src/agents/pi-embedded-utils.ts, src/agents/pi-embedded-utils.test.ts, src/agents/pi-embedded-runner/run/payloads.ts, src/agents/pi-embedded-runner/run/payloads.test.ts, ui/src/ui/controllers/chat.ts, ui/src/ui/controllers/chat.test.ts, src/gateway/server/ws-connection.ts, src/gateway/server.auth.default-token.suite.ts, CHANGELOG.md)
+
 ## 2026.3.8
 
 ### Changes

@@ -93,6 +93,21 @@ export function registerDefaultAuthTokenSuite(): void {
       }
     });
 
+    test("rejects legacy query-auth websocket clients before handshake timeout", async () => {
+      const ws = new WebSocket(`ws://127.0.0.1:${port}/?agent=main&token=legacy-token`);
+      await new Promise<void>((resolve) => ws.once("open", resolve));
+
+      const closed = await new Promise<{ code: number; reason: string }>((resolve) => {
+        ws.once("close", (code, reason) => {
+          resolve({ code, reason: String(reason ?? "") });
+        });
+      });
+
+      expect(closed.code).toBe(1008);
+      expect(closed.reason).toContain("legacy websocket query auth is unsupported");
+      expect(await waitForWsClose(ws, 50)).toBe(true);
+    });
+
     test("connect (req) handshake returns hello-ok payload", async () => {
       const { STATE_DIR, createConfigIO } = await import("../config/config.js");
       const ws = await openWs(port);
