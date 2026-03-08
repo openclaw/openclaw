@@ -18,7 +18,7 @@ import { resolveCommandAuthorizedFromAuthorizers } from "../channels/command-gat
 import { resolveNativeCommandSessionTargets } from "../channels/native-command-session-targets.js";
 import { createReplyPrefixOptions } from "../channels/reply-prefix.js";
 import { recordInboundSessionMetaSafe } from "../channels/session-meta.js";
-import type { OpenClawConfig } from "../config/config.js";
+import { loadConfig, type OpenClawConfig } from "../config/config.js";
 import type { ChannelGroupPolicy } from "../config/group-policy.js";
 import { resolveMarkdownTableMode } from "../config/markdown-tables.js";
 import {
@@ -472,8 +472,10 @@ export const registerTelegramNativeCommands = ({
       isForum,
       messageThreadId,
     });
+    // Load fresh config so routing picks up current dmScope / session settings.
+    const freshCfg = loadConfig();
     let { route, configuredBinding } = resolveTelegramConversationRoute({
-      cfg,
+      cfg: freshCfg,
       accountId,
       chatId,
       isGroup,
@@ -484,7 +486,7 @@ export const registerTelegramNativeCommands = ({
     });
     if (configuredBinding) {
       const ensured = await ensureConfiguredAcpRouteReady({
-        cfg,
+        cfg: freshCfg,
         configuredBinding,
       });
       if (!ensured.ok) {

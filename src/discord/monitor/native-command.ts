@@ -43,7 +43,7 @@ import type { ReplyPayload } from "../../auto-reply/types.js";
 import { resolveCommandAuthorizedFromAuthorizers } from "../../channels/command-gating.js";
 import { resolveNativeCommandSessionTargets } from "../../channels/native-command-session-targets.js";
 import { createReplyPrefixOptions } from "../../channels/reply-prefix.js";
-import type { OpenClawConfig, loadConfig } from "../../config/config.js";
+import { loadConfig, type OpenClawConfig } from "../../config/config.js";
 import { isDangerousNameMatchingEnabled } from "../../config/dangerous-name-matching.js";
 import { resolveOpenProviderRuntimeGroupPolicy } from "../../config/runtime-group-policy.js";
 import { loadSessionStore, resolveStorePath } from "../../config/sessions.js";
@@ -1598,8 +1598,10 @@ async function dispatchDiscordCommandInteraction(params: {
   const isGuild = Boolean(interaction.guild);
   const channelId = rawChannelId || "unknown";
   const interactionId = interaction.rawData.id;
+  // Load fresh config so routing picks up current dmScope / session settings.
+  const freshCfg = loadConfig();
   const route = resolveDiscordBoundConversationRoute({
-    cfg,
+    cfg: freshCfg,
     accountId,
     guildId: interaction.guild?.id ?? undefined,
     memberRoleIds,
@@ -1615,7 +1617,7 @@ async function dispatchDiscordCommandInteraction(params: {
   const configuredRoute =
     threadBinding == null
       ? resolveConfiguredAcpRoute({
-          cfg,
+          cfg: freshCfg,
           route,
           channel: "discord",
           accountId,
@@ -1626,7 +1628,7 @@ async function dispatchDiscordCommandInteraction(params: {
   const configuredBinding = configuredRoute?.configuredBinding ?? null;
   if (configuredBinding) {
     const ensured = await ensureConfiguredAcpRouteReady({
-      cfg,
+      cfg: freshCfg,
       configuredBinding,
     });
     if (!ensured.ok) {
