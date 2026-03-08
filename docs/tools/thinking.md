@@ -61,6 +61,7 @@ title: "Thinking Levels"
 - `stream` (Telegram only): streams reasoning into the Telegram draft bubble while the reply is generating, then sends the final answer without reasoning.
 - Alias: `/reason`.
 - Send `/reasoning` (or `/reasoning:`) with no argument to see the current reasoning level.
+- Global default: `agents.defaults.reasoningDefault` in config (default: `off`).
 
 ## Related
 
