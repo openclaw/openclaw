@@ -50,6 +50,8 @@ import type {
   PluginHookToolResultPersistResult,
   PluginHookBeforeMessageWriteEvent,
   PluginHookBeforeMessageWriteResult,
+  PluginHookChatMemberBotEvent,
+  PluginHookChatMemberUserEvent,
 } from "./types.js";
 
 // Re-export types for consumers
@@ -705,6 +707,45 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
   }
 
   // =========================================================================
+  // Chat member hooks
+  // =========================================================================
+
+  async function runChatMemberBotAdded(
+    event: PluginHookChatMemberBotEvent,
+    ctx: PluginHookMessageContext,
+  ): Promise<void> {
+    return runVoidHook("chat_member_bot_added", event, ctx);
+  }
+
+  async function runChatMemberBotDeleted(
+    event: PluginHookChatMemberBotEvent,
+    ctx: PluginHookMessageContext,
+  ): Promise<void> {
+    return runVoidHook("chat_member_bot_deleted", event, ctx);
+  }
+
+  async function runChatMemberUserAdded(
+    event: PluginHookChatMemberUserEvent,
+    ctx: PluginHookMessageContext,
+  ): Promise<void> {
+    return runVoidHook("chat_member_user_added", event, ctx);
+  }
+
+  async function runChatMemberUserDeleted(
+    event: PluginHookChatMemberUserEvent,
+    ctx: PluginHookMessageContext,
+  ): Promise<void> {
+    return runVoidHook("chat_member_user_deleted", event, ctx);
+  }
+
+  async function runChatMemberUserWithdrawn(
+    event: PluginHookChatMemberUserEvent,
+    ctx: PluginHookMessageContext,
+  ): Promise<void> {
+    return runVoidHook("chat_member_user_withdrawn", event, ctx);
+  }
+
+  // =========================================================================
   // Utility
   // =========================================================================
 
@@ -753,6 +794,12 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
     // Gateway hooks
     runGatewayStart,
     runGatewayStop,
+    // Chat member hooks
+    runChatMemberBotAdded,
+    runChatMemberBotDeleted,
+    runChatMemberUserAdded,
+    runChatMemberUserDeleted,
+    runChatMemberUserWithdrawn,
     // Utility
     hasHooks,
     getHookCount,
