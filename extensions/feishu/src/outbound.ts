@@ -162,14 +162,8 @@ export const feishuOutbound: ChannelOutboundAdapter = {
       }
     }
 
-    // No media URL, just return text result
-    const result = await sendOutboundText({
-      cfg,
-      to,
-      text: text ?? "",
-      accountId: accountId ?? undefined,
-      replyToMessageId,
-    });
-    return { channel: "feishu", ...result };
+    // No media URL — text was already sent above (if any).
+    // Return a sentinel so callers know no media was delivered.
+    return { channel: "feishu", messageId: "", chatId: "" };
   },
 };

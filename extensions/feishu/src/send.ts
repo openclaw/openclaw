@@ -11,6 +11,16 @@ import type { FeishuSendResult } from "./types.js";
 
 const WITHDRAWN_REPLY_ERROR_CODES = new Set([230011, 231003]);
 
+/**
+ * Strip control characters (U+0000–U+001F) except newline, carriage return,
+ * and tab.  These invisible bytes can corrupt Feishu's JSON parser or its
+ * markdown rendering engine, causing raw JSON to leak into the conversation.
+ */
+export function sanitizeFeishuText(text: string): string {
+  // eslint-disable-next-line no-control-regex
+  return text.replace(/[\x00-\x08\x0B\x0C\x0E-\x1F]/g, "");
+}
+
 function shouldFallbackFromReplyTarget(response: { code?: number; msg?: string }): boolean {
   if (response.code !== undefined && WITHDRAWN_REPLY_ERROR_CODES.has(response.code)) {
     return true;
@@ -253,26 +263,34 @@ export type SendFeishuMessageParams = {
   accountId?: string;
 };
 
-function buildFeishuPostMessagePayload(params: { messageText: string }): {
+export function buildFeishuPostMessagePayload(params: { messageText: string }): {
   content: string;
   msgType: string;
 } {
-  const { messageText } = params;
-  return {
-    content: JSON.stringify({
-      zh_cn: {
-        content: [
-          [
-            {
-              tag: "md",
-              text: messageText,
-            },
-          ],
+  // Coalesce to empty string so the `text` key is never dropped by
+  // JSON.stringify (which strips `undefined` values), and sanitize control
+  // characters that can corrupt Feishu's JSON/markdown parser.
+  const safeText = sanitizeFeishuText(params.messageText ?? "");
+  const payload = {
+    zh_cn: {
+      content: [
+        [
+          {
+            tag: "md",
+            text: safeText,
+          },
         ],
-      },
-    }),
-    msgType: "post",
+      ],
+    },
   };
+
+  let content: string;
+  try {
+    content = JSON.stringify(payload);
+  } catch {
+    throw new Error("Feishu post payload produced invalid JSON (circular reference?)");
+  }
+  return { content, msgType: "post" };
 }
 
 export async function sendMessageFeishu(
@@ -290,7 +308,9 @@ export async function sendMessageFeishu(
   if (mentions && mentions.length > 0) {
     rawText = buildMentionedMessage(mentions, rawText);
   }
-  const messageText = getFeishuRuntime().channel.text.convertMarkdownTables(rawText, tableMode);
+  const messageText = String(
+    getFeishuRuntime().channel.text.convertMarkdownTables(rawText, tableMode) ?? "",
+  );
 
   const { content, msgType } = buildFeishuPostMessagePayload({ messageText });
 
@@ -336,7 +356,12 @@ export type SendFeishuCardParams = {
 export async function sendCardFeishu(params: SendFeishuCardParams): Promise<FeishuSendResult> {
   const { cfg, to, card, replyToMessageId, replyInThread, accountId } = params;
   const { client, receiveId, receiveIdType } = resolveFeishuSendTarget({ cfg, to, accountId });
-  const content = JSON.stringify(card);
+  let content: string;
+  try {
+    content = JSON.stringify(card);
+  } catch {
+    throw new Error("Feishu card payload produced invalid JSON (circular reference?)");
+  }
 
   const directParams = { receiveId, receiveIdType, content, msgType: "interactive" };
 
@@ -380,7 +405,12 @@ export async function updateCardFeishu(params: {
   }
 
   const client = createFeishuClient(account);
-  const content = JSON.stringify(card);
+  let content: string;
+  try {
+    content = JSON.stringify(card);
+  } catch {
+    throw new Error("Feishu card update payload produced invalid JSON (circular reference?)");
+  }
 
   const response = await client.im.message.patch({
     path: { message_id: messageId },
@@ -398,6 +428,9 @@ export async function updateCardFeishu(params: {
  * Uses schema 2.0 format for proper markdown rendering.
  */
 export function buildMarkdownCard(text: string): Record<string, unknown> {
+  // Coalesce + sanitize so the `content` key is never dropped (undefined)
+  // and control characters don't corrupt Feishu's card renderer.
+  const safeText = sanitizeFeishuText(text ?? "");
   return {
     schema: "2.0",
     config: {
@@ -407,7 +440,7 @@ export function buildMarkdownCard(text: string): Record<string, unknown> {
       elements: [
         {
           tag: "markdown",
-          content: text,
+          content: safeText,
         },
       ],
     },
@@ -459,7 +492,9 @@ export async function editMessageFeishu(params: {
     cfg,
     channel: "feishu",
   });
-  const messageText = getFeishuRuntime().channel.text.convertMarkdownTables(text ?? "", tableMode);
+  const messageText = String(
+    getFeishuRuntime().channel.text.convertMarkdownTables(text ?? "", tableMode) ?? "",
+  );
 
   const { content, msgType } = buildFeishuPostMessagePayload({ messageText });
 
