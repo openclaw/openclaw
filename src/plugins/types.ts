@@ -604,8 +604,6 @@ export type MessageSendingAgentContext = {
   agentId?: string;
   /** Session key for correlation. */
   sessionKey?: string;
-  /** Whether this message targets a group/channel (vs DM). */
-  isGroup?: boolean;
   /** Outbound channel type (telegram, discord, slack, etc). */
   channel?: string;
   /** Character count of the agent response text. */

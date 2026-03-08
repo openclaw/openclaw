@@ -262,16 +262,16 @@ function buildAgentContextFromMeta(
   const agentMeta = meta.agentMeta;
   const toolMetas = meta.toolMetas ?? [];
 
+  // Tool success is not tracked as a dedicated boolean in the current
+  // EmbeddedPiRunMeta. We mark all tool calls as success: true here;
+  // a future change could add an explicit `failed` flag to toolMeta
+  // entries at the point of invocation for more reliable detection.
   const toolCalls = toolMetas.map((t) => ({
     tool: t.toolName,
-    // toolMeta.meta contains a freeform string; absence of "error" is a
-    // reasonable heuristic for success. Hook authors who need more detail
-    // can inspect `content` for tool-error patterns.
-    success: !t.meta?.toLowerCase().includes("error"),
+    success: true,
   }));
 
   const usage = agentMeta?.usage;
-  const lastCallUsage = agentMeta?.lastCallUsage;
 
   // contextFillPercent and contextWindow are not available from the run result
   // metadata today — the model's contextWindow is known at run time but not
