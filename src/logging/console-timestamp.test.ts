@@ -29,14 +29,18 @@ describe("formatConsoleTimestamp", () => {
     return `${year}-${month}-${day}T${h}:${m}:${s}.${ms}${tzSign}${tzHours}:${tzMinutes}`;
   }
 
-  it("pretty style returns local HH:MM:SS", () => {
+  it("pretty style returns local HH:MM:SS with timezone offset", () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-01-17T18:01:02.345Z"));
 
     const result = formatConsoleTimestamp("pretty");
     const now = new Date();
+    const tzOffset = now.getTimezoneOffset();
+    const tzSign = tzOffset <= 0 ? "+" : "-";
+    const tzHours = pad2(Math.floor(Math.abs(tzOffset) / 60));
+    const tzMinutes = pad2(Math.abs(tzOffset) % 60);
     expect(result).toBe(
-      `${pad2(now.getHours())}:${pad2(now.getMinutes())}:${pad2(now.getSeconds())}`,
+      `${pad2(now.getHours())}:${pad2(now.getMinutes())}:${pad2(now.getSeconds())}${tzSign}${tzHours}:${tzMinutes}`,
     );
   });
 
