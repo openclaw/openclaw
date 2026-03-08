@@ -5,9 +5,12 @@ import type { ChatAttachment } from "../ui-types.ts";
 import { generateUUID } from "../uuid.ts";
 
 const SILENT_REPLY_PATTERN = /^\s*NO_REPLY\s*$/;
+// Partial prefixes that could grow into NO_REPLY. Suppressing them prevents the
+// token from briefly flashing as "NO" in the stream before the full chunk arrives (#39473).
+const SILENT_REPLY_PREFIX_PATTERN = /^\s*(?:N|NO|NO_|NO_R|NO_RE|NO_REP|NO_REPL)\s*$/;
 
 function isSilentReplyStream(text: string): boolean {
-  return SILENT_REPLY_PATTERN.test(text);
+  return SILENT_REPLY_PATTERN.test(text) || SILENT_REPLY_PREFIX_PATTERN.test(text);
 }
 /** Client-side defense-in-depth: detect assistant messages whose text is purely NO_REPLY. */
 function isAssistantSilentReply(message: unknown): boolean {

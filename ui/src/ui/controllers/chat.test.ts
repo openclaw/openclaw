@@ -70,6 +70,28 @@ describe("handleChatEvent", () => {
     expect(state.chatStream).toBe("Hello");
   });
 
+  it("ignores partial NO_REPLY prefix delta updates to prevent flash (#39473)", () => {
+    // When NO_REPLY arrives in multiple chunks (e.g. "NO" then "NO_REPLY"), the
+    // partial prefix "NO" must not briefly appear in the stream bubble.
+    for (const partial of ["N", "NO", "NO_", "NO_R", "NO_RE", "NO_REP", "NO_REPL"]) {
+      const state = createState({
+        sessionKey: "main",
+        chatRunId: "run-1",
+        chatStream: "",
+      });
+      const payload: ChatEventPayload = {
+        runId: "run-1",
+        sessionKey: "main",
+        state: "delta",
+        message: { role: "assistant", content: [{ type: "text", text: partial }] },
+      };
+      expect(handleChatEvent(state, payload), `partial "${partial}" should be suppressed`).toBe(
+        "delta",
+      );
+      expect(state.chatStream, `partial "${partial}" must not update chatStream`).toBe("");
+    }
+  });
+
   it("appends final payload from another run without clearing active stream", () => {
     const state = createState({
       sessionKey: "main",
