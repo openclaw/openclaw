@@ -123,6 +123,21 @@ describe("maybeInstallDaemon", () => {
     expect(serviceInstall).toHaveBeenCalledTimes(1);
   });
 
+  it("rethrows install probe failures that are not the known non-fatal Linux systemd cases", async () => {
+    serviceIsLoaded.mockRejectedValueOnce(
+      new Error("systemctl is-enabled unavailable: read-only file system"),
+    );
+
+    await expect(
+      maybeInstallDaemon({
+        runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+        port: 18789,
+      }),
+    ).rejects.toThrow("systemctl is-enabled unavailable: read-only file system");
+
+    expect(serviceInstall).not.toHaveBeenCalled();
+  });
+
   it("continues the WSL2 daemon install flow when service status probe reports systemd unavailability", async () => {
     serviceIsLoaded.mockRejectedValueOnce(
       new Error("systemctl --user unavailable: Failed to connect to bus: No medium found"),
