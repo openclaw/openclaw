@@ -1880,6 +1880,102 @@ describe("BlueBubbles webhook monitor", () => {
         expect.any(Object),
       );
     });
+
+    it("does not send typing indicator calls for tapback text messages", async () => {
+      const { sendBlueBubblesTyping } = await import("./chat.js");
+      vi.mocked(sendBlueBubblesTyping).mockClear();
+
+      const account = createMockAccount();
+      const config: OpenClawConfig = {};
+      const core = createMockRuntime();
+      setBlueBubblesRuntime(core);
+
+      unregister = registerBlueBubblesWebhookTarget({
+        account,
+        config,
+        runtime: { log: vi.fn(), error: vi.fn() },
+        core,
+        path: "/bluebubbles-webhook",
+      });
+
+      // Tapback message with standard iMessage reaction text pattern
+      const payload = {
+        type: "new-message",
+        data: {
+          text: 'Loved "hello world"',
+          handle: { address: "+15551234567" },
+          isGroup: false,
+          isFromMe: false,
+          guid: "msg-tapback-1",
+          chatGuid: "iMessage;-;+15551234567",
+          date: Date.now(),
+        },
+      };
+
+      mockDispatchReplyWithBufferedBlockDispatcher.mockImplementationOnce(async (params) => {
+        // Simulate what happens when onReplyStart is called for tapback messages
+        await params.dispatcherOptions.onReplyStart?.();
+        // Agent returns NO_REPLY for tapback messages, so no deliver() call
+        return EMPTY_DISPATCH_RESULT;
+      });
+
+      const req = createMockRequest("POST", "/bluebubbles-webhook", payload);
+      const res = createMockResponse();
+
+      await handleBlueBubblesWebhookRequest(req, res);
+      await flushAsync();
+
+      expect(mockDispatchReplyWithBufferedBlockDispatcher).toHaveBeenCalledTimes(1);
+      expect(sendBlueBubblesTyping).not.toHaveBeenCalled();
+    });
+
+    it("does not send typing indicator calls for metadata tapback messages", async () => {
+      const { sendBlueBubblesTyping } = await import("./chat.js");
+      vi.mocked(sendBlueBubblesTyping).mockClear();
+
+      const account = createMockAccount();
+      const config: OpenClawConfig = {};
+      const core = createMockRuntime();
+      setBlueBubblesRuntime(core);
+
+      unregister = registerBlueBubblesWebhookTarget({
+        account,
+        config,
+        runtime: { log: vi.fn(), error: vi.fn() },
+        core,
+        path: "/bluebubbles-webhook",
+      });
+
+      const payload = {
+        type: "new-message",
+        data: {
+          text: 'Loved "hello world"',
+          handle: { address: "+15551234567" },
+          isGroup: false,
+          isFromMe: false,
+          guid: "msg-tapback-2",
+          chatGuid: "iMessage;-;+15551234567",
+          // Keep the payload on the message path while still exercising
+          // associatedMessageType-based tapback detection.
+          associatedMessageType: 2000,
+          date: Date.now(),
+        },
+      };
+
+      mockDispatchReplyWithBufferedBlockDispatcher.mockImplementationOnce(async (params) => {
+        await params.dispatcherOptions.onReplyStart?.();
+        return EMPTY_DISPATCH_RESULT;
+      });
+
+      const req = createMockRequest("POST", "/bluebubbles-webhook", payload);
+      const res = createMockResponse();
+
+      await handleBlueBubblesWebhookRequest(req, res);
+      await flushAsync();
+
+      expect(mockDispatchReplyWithBufferedBlockDispatcher).toHaveBeenCalledTimes(1);
+      expect(sendBlueBubblesTyping).not.toHaveBeenCalled();
+    });
   });
 
   describe("outbound message ids", () => {
