@@ -45,6 +45,18 @@ export async function runDiscordGatewayLifecycle(params: {
   let lifecycleStopping = false;
   let forceStopHandler: ((err: unknown) => void) | undefined;
   let queuedForceStopError: unknown;
+  let initialPollId: ReturnType<typeof setInterval> | undefined;
+  let initialTimeoutId: ReturnType<typeof setTimeout> | undefined;
+  const clearInitialPoll = () => {
+    if (initialPollId) {
+      clearInterval(initialPollId);
+      initialPollId = undefined;
+    }
+    if (initialTimeoutId) {
+      clearTimeout(initialTimeoutId);
+      initialTimeoutId = undefined;
+    }
+  };
 
   const pushStatus = (patch: Parameters<DiscordMonitorStatusSink>[0]) => {
     params.statusSink?.(patch);
@@ -242,18 +254,36 @@ export async function runDiscordGatewayLifecycle(params: {
   };
   gatewayEmitter?.on("debug", onGatewayDebug);
 
-  // If the gateway is already connected when the lifecycle starts (the
-  // "WebSocket connection opened" debug event was emitted before we
-  // registered the listener above), push the initial connected status now.
-  // Guard against lifecycleStopping: if the abortSignal was already aborted,
-  // onAbort() ran synchronously above and pushed connected: false — don't
-  // contradict it with a spurious connected: true.
-  if (gateway?.isConnected && !lifecycleStopping) {
-    const at = Date.now();
-    pushStatus({
-      ...createConnectedChannelStatusPatch(at),
-      lastDisconnect: null,
-    });
+  // The gateway may already be mid-READY handshake when the lifecycle starts
+  // (the "WebSocket connection opened" debug event fired before we registered
+  // the listener above). A single point-in-time check on `isConnected` can
+  // miss this — Carbon flips the flag only after the full READY/RESUMED
+  // exchange. Poll briefly so we don't leave the channel marked "stuck".
+  if (!lifecycleStopping) {
+    if (gateway?.isConnected) {
+      const at = Date.now();
+      pushStatus({
+        ...createConnectedChannelStatusPatch(at),
+        lastDisconnect: null,
+      });
+    } else {
+      const INITIAL_POLL_MS = 250;
+      const INITIAL_POLL_TIMEOUT_MS = 10_000;
+      initialPollId = setInterval(() => {
+        if (!gateway?.isConnected) {
+          return;
+        }
+        const at = Date.now();
+        pushStatus({
+          ...createConnectedChannelStatusPatch(at),
+          lastDisconnect: null,
+        });
+        clearInitialPoll();
+      }, INITIAL_POLL_MS);
+      initialTimeoutId = setTimeout(() => {
+        clearInitialPoll();
+      }, INITIAL_POLL_TIMEOUT_MS);
+    }
   }
 
   let sawDisallowedIntents = false;
@@ -329,6 +359,7 @@ export async function runDiscordGatewayLifecycle(params: {
     stopGatewayLogging();
     reconnectStallWatchdog.stop();
     clearHelloWatch();
+    clearInitialPoll();
     gatewayEmitter?.removeListener("debug", onGatewayDebug);
     params.abortSignal?.removeEventListener("abort", onAbort);
     if (params.voiceManager) {
