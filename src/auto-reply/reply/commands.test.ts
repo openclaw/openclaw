@@ -358,6 +358,29 @@ describe("/approve command", () => {
       );
     }
   });
+
+  it("submits approval with named args (new format)", async () => {
+    const cfg = {
+      commands: { text: true },
+      channels: { whatsapp: { allowFrom: ["*"] } },
+    } as OpenClawConfig;
+    const params = buildParams("/approve", cfg, {
+      SenderId: "123",
+      CommandArgs: { values: { id: "xyz", decision: "deny" } },
+    });
+
+    callGatewayMock.mockResolvedValue({ ok: true });
+
+    const result = await handleCommands(params);
+    expect(result.shouldContinue).toBe(false);
+    expect(result.reply?.text).toContain("Exec approval deny submitted");
+    expect(callGatewayMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        method: "exec.approval.resolve",
+        params: { id: "xyz", decision: "deny" },
+      }),
+    );
+  });
 });
 
 describe("/compact command", () => {

@@ -57,6 +57,10 @@ function parseApproveCommand(raw: string): ParsedApproveCommand | null {
   return { ok: false, error: "Usage: /approve <id> allow-once|allow-always|deny" };
 }
 
+function isApproveCommand(raw: string): boolean {
+  return raw.trim().toLowerCase().startsWith(COMMAND);
+}
+
 function buildResolvedByLabel(params: Parameters<CommandHandler>[0]): string {
   const channel = params.command.channel;
   const sender = params.command.senderId ?? "unknown";
@@ -67,11 +71,15 @@ export const handleApproveCommand: CommandHandler = async (params, allowTextComm
   if (!allowTextCommands) {
     return null;
   }
+
   const normalized = params.command.commandBodyNormalized;
-  const parsed = parseApproveCommand(normalized);
-  if (!parsed) {
+
+  // First gate: check if this is actually an /approve command
+  if (!isApproveCommand(normalized)) {
     return null;
   }
+
+  // Now check authorization - only after confirming it's an approve command
   if (!params.command.isAuthorizedSender) {
     logVerbose(
       `Ignoring /approve from unauthorized sender: ${params.command.senderId || "<unknown>"}`,
@@ -79,8 +87,42 @@ export const handleApproveCommand: CommandHandler = async (params, allowTextComm
     return { shouldContinue: false };
   }
 
-  if (!parsed.ok) {
-    return { shouldContinue: false, reply: { text: parsed.error } };
+  // Try to parse from CommandArgs first (new format with named args)
+  const commandArgs = params.ctx.CommandArgs;
+  let id: string | undefined;
+  let decision: "allow-once" | "allow-always" | "deny" | undefined;
+
+  if (commandArgs?.values) {
+    // New format: /approve <id> <decision> with named args
+    id = commandArgs.values.id?.trim();
+    const rawDecision = commandArgs.values.decision?.trim().toLowerCase();
+    if (rawDecision) {
+      decision = DECISION_ALIASES[rawDecision];
+    }
+  }
+
+  // Fall back to legacy positional parsing only if needed
+  if (!id || !decision) {
+    const parsed = parseApproveCommand(normalized);
+    if (parsed) {
+      // Only use legacy values if they provide missing data
+      if (!id && parsed.ok) {
+        id = parsed.id;
+      }
+      if (!decision && parsed.ok) {
+        decision = parsed.decision;
+      }
+      if (!parsed.ok) {
+        return { shouldContinue: false, reply: { text: parsed.error } };
+      }
+    }
+  }
+
+  if (!id || !decision) {
+    return {
+      shouldContinue: false,
+      reply: { text: "Usage: /approve <id> allow-once|allow-always|deny" },
+    };
   }
 
   const missingScope = requireGatewayClientScopeForInternalChannel(params, {
@@ -96,7 +138,7 @@ export const handleApproveCommand: CommandHandler = async (params, allowTextComm
   try {
     await callGateway({
       method: "exec.approval.resolve",
-      params: { id: parsed.id, decision: parsed.decision },
+      params: { id, decision },
       clientName: GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT,
       clientDisplayName: `Chat approval (${resolvedBy})`,
       mode: GATEWAY_CLIENT_MODES.BACKEND,
@@ -112,6 +154,6 @@ export const handleApproveCommand: CommandHandler = async (params, allowTextComm
 
   return {
     shouldContinue: false,
-    reply: { text: `✅ Exec approval ${parsed.decision} submitted for ${parsed.id}.` },
+    reply: { text: `✅ Exec approval ${decision} submitted for ${id}.` },
   };
 };
