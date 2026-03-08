@@ -1,13 +1,13 @@
 ---
 name: session-memory
-description: "Save session context to memory when /new or /reset command is issued"
+description: "Save and recall session context around /new, /reset, and session start"
 homepage: https://docs.openclaw.ai/automation/hooks#session-memory
 metadata:
   {
     "openclaw":
       {
         "emoji": "💾",
-        "events": ["command:new", "command:reset"],
+        "events": ["command:new", "command:reset", "agent:bootstrap"],
         "requires": { "config": ["workspace.dir"] },
         "install": [{ "id": "bundled", "kind": "bundled", "label": "Bundled with OpenClaw" }],
       },
@@ -16,9 +16,11 @@ metadata:
 
 # Session Memory Hook
 
-Automatically saves session context to your workspace memory when you issue `/new` or `/reset`.
+Automatically saves session context to your workspace memory when you issue `/new` or `/reset`, and recalls previous session context when a new session starts.
 
 ## What It Does
+
+### Saving (on /new or /reset)
 
 When you run `/new` or `/reset` to start a fresh session:
 
@@ -27,6 +29,17 @@ When you run `/new` or `/reset` to start a fresh session:
 3. **Generates descriptive slug** - Uses LLM to create a meaningful filename slug based on conversation content
 4. **Saves to memory** - Creates a new file at `<workspace>/memory/YYYY-MM-DD-slug.md`
 5. **Sends confirmation** - Notifies you with the file path
+
+### Recalling (on session start)
+
+When a new session starts (agent bootstraps):
+
+1. **Scans memory** - Reads recent memory files from `<workspace>/memory/`
+2. **Filters by time** - Only considers memories within the recall window (default: all memories)
+3. **Limits results** - Returns up to N memories (default: 3 most recent)
+4. **Injects context** - Prepends a `[Previous Context]` block to the conversation with summaries
+
+This helps maintain continuity across sessions about the same topic.
 
 ## Output Format
 
@@ -59,9 +72,13 @@ The hook uses your configured LLM provider to generate slugs, so it works with a
 
 The hook supports optional configuration:
 
-| Option     | Type   | Default | Description                                                     |
-| ---------- | ------ | ------- | --------------------------------------------------------------- |
-| `messages` | number | 15      | Number of user/assistant messages to include in the memory file |
+| Option                | Type   | Default    | Description                                                                                |
+| --------------------- | ------ | ---------- | ------------------------------------------------------------------------------------------ |
+| `messages`            | number | 15         | Number of user/assistant messages to include in the memory file                            |
+| `memoryRecallMode`    | string | "relevant" | Recall mode: "always" (inject all), "relevant" (inject if topic matches), "off" (disabled) |
+| `maxMemoriesToRecall` | number | 3          | Maximum number of memory files to recall                                                   |
+| `memoryRecallWindow`  | string | (none)     | Time window for recall (e.g., "7d" for 7 days, "24h" for 24 hours)                         |
+| `memoryRecallTokens`  | number | 500        | Maximum tokens per recalled memory (approximate)                                           |
 
 Example configuration:
 
@@ -72,7 +89,11 @@ Example configuration:
       "entries": {
         "session-memory": {
           "enabled": true,
-          "messages": 25
+          "messages": 25,
+          "memoryRecallMode": "relevant",
+          "maxMemoriesToRecall": 5,
+          "memoryRecallWindow": "7d",
+          "memoryRecallTokens": 500
         }
       }
     }

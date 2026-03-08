@@ -527,3 +527,153 @@ describe("session-memory hook", () => {
     expect(memoryContent).toContain("assistant: Only message 2");
   });
 });
+
+describe("session-memory recall on agent:bootstrap", () => {
+  it("skips recall when recall mode is 'off'", async () => {
+    const tempDir = await createCaseWorkspace("workspace");
+    const memoryDir = path.join(tempDir, "memory");
+    await fs.mkdir(memoryDir, { recursive: true });
+    await fs.writeFile(path.join(memoryDir, "2026-01-15-test.md"), "# Test memory");
+
+    const event = createHookEvent("agent", "bootstrap", "agent:main:main", {
+      workspaceDir: tempDir,
+      cfg: {
+        hooks: {
+          internal: {
+            entries: {
+              "session-memory": { enabled: true, memoryRecallMode: "off" },
+            },
+          },
+        },
+      } satisfies OpenClawConfig,
+    });
+
+    await handler(event);
+
+    // prependContext should not be set
+    expect(event.context.prependContext).toBeUndefined();
+  });
+
+  it("skips recall when no workspaceDir is provided", async () => {
+    const event = createHookEvent("agent", "bootstrap", "agent:main:main", {
+      cfg: {} satisfies OpenClawConfig,
+    });
+
+    await handler(event);
+
+    // Should not throw, prependContext should not be set
+    expect(event.context.prependContext).toBeUndefined();
+  });
+
+  it("skips recall when memory directory does not exist", async () => {
+    const tempDir = await createCaseWorkspace("workspace");
+
+    const event = createHookEvent("agent", "bootstrap", "agent:main:main", {
+      workspaceDir: tempDir,
+    });
+
+    await handler(event);
+
+    // prependContext should not be set when no memory dir
+    expect(event.context.prependContext).toBeUndefined();
+  });
+
+  it("recalls memory files on agent:bootstrap", async () => {
+    const tempDir = await createCaseWorkspace("workspace");
+    const memoryDir = path.join(tempDir, "memory");
+    await fs.mkdir(memoryDir, { recursive: true });
+    await fs.writeFile(
+      path.join(memoryDir, "2026-01-15-project-setup.md"),
+      "# Session: 2026-01-15 10:00:00 UTC\n\n- **Session Key**: agent:main:main\n\n## Conversation Summary\n\nuser: Let's work on Project X\nassistant: Sure, let's get started",
+    );
+
+    const event = createHookEvent("agent", "bootstrap", "agent:main:main", {
+      workspaceDir: tempDir,
+    });
+
+    await handler(event);
+
+    // prependContext should be set with memory content
+    expect(event.context.prependContext).toContain("[Previous Context]");
+    expect(event.context.prependContext).toContain("2026-01-15-project-setup");
+    expect(event.context.prependContext).toContain("Project X");
+  });
+
+  it("limits recalled memories to maxMemoriesToRecall", async () => {
+    const tempDir = await createCaseWorkspace("workspace");
+    const memoryDir = path.join(tempDir, "memory");
+    await fs.mkdir(memoryDir, { recursive: true });
+    await fs.writeFile(path.join(memoryDir, "2026-01-10-old.md"), "# Old session");
+    await fs.writeFile(path.join(memoryDir, "2026-01-15-recent.md"), "# Recent session");
+
+    const event = createHookEvent("agent", "bootstrap", "agent:main:main", {
+      workspaceDir: tempDir,
+      cfg: {
+        hooks: {
+          internal: {
+            entries: {
+              "session-memory": { enabled: true, maxMemoriesToRecall: 1 },
+            },
+          },
+        },
+      } satisfies OpenClawConfig,
+    });
+
+    await handler(event);
+
+    // Should only recall 1 memory (most recent)
+    expect(event.context.prependContext).toContain("2026-01-15-recent");
+    expect(event.context.prependContext).not.toContain("2026-01-10-old");
+  });
+
+  it("filters memories by recall window", async () => {
+    const tempDir = await createCaseWorkspace("workspace");
+    const memoryDir = path.join(tempDir, "memory");
+    await fs.mkdir(memoryDir, { recursive: true });
+    // Create files with dates: one very old, one from today
+    const today = new Date().toISOString().split("T")[0]; // e.g., 2026-03-03
+    const yesterday = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString().split("T")[0];
+    await fs.writeFile(path.join(memoryDir, "2025-01-01-ancient.md"), "# Ancient session");
+    await fs.writeFile(
+      path.join(memoryDir, `${yesterday}-recent.md`),
+      "# Recent session from yesterday",
+    );
+
+    const event = createHookEvent("agent", "bootstrap", "agent:main:main", {
+      workspaceDir: tempDir,
+      cfg: {
+        hooks: {
+          internal: {
+            entries: {
+              "session-memory": { enabled: true, memoryRecallWindow: "7d" },
+            },
+          },
+        },
+      } satisfies OpenClawConfig,
+    });
+
+    await handler(event);
+
+    // Should only recall recent memories within 7 days
+    expect(event.context.prependContext).toContain(yesterday);
+    // The ancient memory from 2025 should be filtered out (more than 7 days old)
+    expect(event.context.prependContext).not.toContain("2025-01-01-ancient");
+  });
+
+  it("skips non-bootstrap events for recall", async () => {
+    const tempDir = await createCaseWorkspace("workspace");
+    const memoryDir = path.join(tempDir, "memory");
+    await fs.mkdir(memoryDir, { recursive: true });
+    await fs.writeFile(path.join(memoryDir, "2026-01-15-test.md"), "# Test memory");
+
+    // Test with message event - should skip recall
+    const event = createHookEvent("message", "received", "agent:main:main", {
+      workspaceDir: tempDir,
+    });
+
+    await handler(event);
+
+    // prependContext should not be set for non-bootstrap events
+    expect(event.context.prependContext).toBeUndefined();
+  });
+});

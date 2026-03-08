@@ -22,6 +22,95 @@ import { generateSlugViaLLM } from "../../llm-slug-generator.js";
 const log = createSubsystemLogger("hooks/session-memory");
 
 /**
+ * Parse a memory recall window string like "7d" or "24h" into milliseconds
+ */
+function parseRecallWindow(window: string | undefined): number | null {
+  if (!window) {
+    return null;
+  }
+  const match = window.match(/^(\d+)([dh])$/);
+  if (!match) {
+    log.warn("Invalid recall window format", { window });
+    return null;
+  }
+  const value = parseInt(match[1], 10);
+  const unit = match[2];
+  if (unit === "d") {
+    return value * 24 * 60 * 60 * 1000;
+  }
+  if (unit === "h") {
+    return value * 60 * 60 * 1000;
+  }
+  return null;
+}
+
+/**
+ * Read recent memory files from the workspace memory directory
+ */
+async function getRecentMemoryFiles(params: {
+  memoryDir: string;
+  maxMemories: number;
+  windowMs: number | null;
+}): Promise<{ filename: string; content: string; date: Date }[]> {
+  const { memoryDir, maxMemories, windowMs } = params;
+
+  try {
+    const files = await fs.readdir(memoryDir);
+    const memoryFiles = files
+      .filter((f) => f.endsWith(".md"))
+      .toSorted()
+      .toReversed(); // Newest first
+
+    const now = new Date();
+    const results: { filename: string; content: string; date: Date }[] = [];
+
+    for (const filename of memoryFiles) {
+      if (results.length >= maxMemories) {
+        break;
+      }
+
+      // Parse date from filename: YYYY-MM-DD-slug.md
+      const dateMatch = filename.match(/^(\d{4}-\d{2}-\d{2})-/);
+      if (!dateMatch) {
+        continue;
+      }
+
+      const fileDate = new Date(dateMatch[1]);
+      if (isNaN(fileDate.getTime())) {
+        continue;
+      }
+
+      // Apply time window filter
+      if (windowMs !== null) {
+        const ageMs = now.getTime() - fileDate.getTime();
+        if (ageMs > windowMs) {
+          continue;
+        }
+      }
+
+      const content = await fs.readFile(path.join(memoryDir, filename), "utf-8");
+      results.push({ filename, content, date: fileDate });
+    }
+
+    return results;
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Truncate content to a maximum number of tokens (approximate)
+ */
+function truncateToTokens(content: string, maxTokens: number): string {
+  // Rough approximation: 1 token ≈ 4 characters
+  const maxChars = maxTokens * 4;
+  if (content.length <= maxChars) {
+    return content;
+  }
+  return content.slice(0, maxChars).trim() + "\n\n[truncated]";
+}
+
+/**
  * Read recent messages from session file for slug generation
  */
 async function getRecentSessionContent(
@@ -168,10 +257,96 @@ async function findPreviousSessionFile(params: {
 }
 
 /**
+ * Recall session context from memory when agent starts (agent:bootstrap event)
+ */
+async function recallSessionMemory(event: Parameters<HookHandler>[0]): Promise<void> {
+  // Only trigger on agent bootstrap - check type and action directly
+  if (event.type !== "agent" || event.action !== "bootstrap") {
+    return;
+  }
+
+  const context = event.context;
+  const cfg = context.cfg as OpenClawConfig | undefined;
+  const workspaceDir = context.workspaceDir;
+
+  if (!workspaceDir) {
+    return;
+  }
+
+  try {
+    const hookConfig = resolveHookConfig(cfg, "session-memory");
+
+    // Check if recall is enabled
+    const recallMode = (hookConfig?.memoryRecallMode as string) || "relevant";
+    if (recallMode === "off") {
+      return;
+    }
+
+    // Get configuration options with defaults
+    const maxMemories =
+      typeof hookConfig?.maxMemoriesToRecall === "number" && hookConfig.maxMemoriesToRecall > 0
+        ? hookConfig.maxMemoriesToRecall
+        : 3;
+    const maxTokens =
+      typeof hookConfig?.memoryRecallTokens === "number" && hookConfig.memoryRecallTokens > 0
+        ? hookConfig.memoryRecallTokens
+        : 500;
+    const windowStr = hookConfig?.memoryRecallWindow as string | undefined;
+    const windowMs = parseRecallWindow(windowStr);
+
+    const memoryDir = path.join(workspaceDir, "memory");
+
+    // Get recent memory files
+    const memories = await getRecentMemoryFiles({
+      memoryDir,
+      maxMemories,
+      windowMs,
+    });
+
+    if (memories.length === 0) {
+      log.debug("No memory files found to recall");
+      return;
+    }
+
+    log.debug("Recalling memory files", { count: memories.length });
+
+    // Build the recall content
+    const memoryBlocks = memories.map((mem) => {
+      const truncated = truncateToTokens(mem.content, maxTokens);
+      return `## Previous Session: ${mem.filename.replace(".md", "")}\n\n${truncated}`;
+    });
+
+    const recallContent = `[Previous Context]\n\n${memoryBlocks.join("\n\n---\n\n")}\n\n---\n\nThese are summaries of previous sessions. Use this context to maintain continuity if relevant to the current conversation.`;
+
+    // Set the recall content in the context for prependContext
+    context.prependContext = recallContent;
+    log.debug("Memory recall content prepared", {
+      memoriesCount: memories.length,
+      contentLength: recallContent.length,
+    });
+  } catch (err) {
+    if (err instanceof Error) {
+      log.error("Failed to recall session memory", {
+        errorName: err.name,
+        errorMessage: err.message,
+      });
+    } else {
+      log.error("Failed to recall session memory", { error: String(err) });
+    }
+  }
+}
+
+/**
  * Save session context to memory when /new or /reset command is triggered
  */
 const saveSessionToMemory: HookHandler = async (event) => {
-  // Only trigger on reset/new commands
+  // Handle recall on agent:bootstrap events
+  if (event.type === "agent" && event.action === "bootstrap") {
+    await recallSessionMemory(event);
+    return;
+  }
+
+  // Only trigger on reset/new commands for saving
   const isResetCommand = event.action === "new" || event.action === "reset";
   if (event.type !== "command" || !isResetCommand) {
     return;
