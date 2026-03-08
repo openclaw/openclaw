@@ -1243,6 +1243,7 @@ describe("createTelegramBot", () => {
     expect(sendMessageSpy).toHaveBeenCalledWith(
       12345,
       "You are not authorized to use this command.",
+      {},
     );
   });
 
