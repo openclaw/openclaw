@@ -6,7 +6,7 @@ import {
   type OpenClawConfig,
   loadConfig,
 } from "../config/config.js";
-import { applyConfigEnvVars } from "../config/env-vars.js";
+import { createConfigRuntimeEnv } from "../config/env-vars.js";
 import { isRecord } from "../utils.js";
 import { resolveOpenClawAgentDir } from "./agent-paths.js";
 import {
@@ -46,12 +46,14 @@ async function readExistingModelsFile(pathname: string): Promise<{
 async function resolveProvidersForModelsJson(params: {
   cfg: OpenClawConfig;
   agentDir: string;
+  env: NodeJS.ProcessEnv;
 }): Promise<Record<string, ProviderConfig>> {
-  const { cfg, agentDir } = params;
+  const { cfg, agentDir, env } = params;
   const explicitProviders = cfg.models?.providers ?? {};
   const implicitProviders = await resolveImplicitProviders({
     agentDir,
     config: cfg,
+    env,
     explicitProviders,
   });
   const providers: Record<string, ProviderConfig> = mergeProviders({
@@ -143,12 +145,10 @@ export async function ensureOpenClawModelsJson(
 
   return await withModelsJsonWriteLock(targetPath, async () => {
     // Ensure config env vars (e.g. AWS_PROFILE, AWS_ACCESS_KEY_ID) are
-    // available in process.env before implicit provider discovery. Some
-    // callers (agent runner, tools) pass config objects that haven't gone
-    // through the full loadConfig() pipeline which applies these.
-    applyConfigEnvVars(cfg);
+    // are available to provider discovery without mutating process.env.
+    const env = createConfigRuntimeEnv(cfg);
 
-    const providers = await resolveProvidersForModelsJson({ cfg, agentDir });
+    const providers = await resolveProvidersForModelsJson({ cfg, agentDir, env });
 
     if (Object.keys(providers).length === 0) {
       return { agentDir, wrote: false };
@@ -170,6 +170,7 @@ export async function ensureOpenClawModelsJson(
       normalizeProviders({
         providers,
         agentDir,
+        env,
         secretDefaults: cfg.secrets?.defaults,
         secretRefManagedProviders,
       }) ?? providers;
