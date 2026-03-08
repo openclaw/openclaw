@@ -163,6 +163,11 @@ function summarizeError(err: unknown): string {
   return "error";
 }
 
+function resolveConfiguredAcpBackendId(cfg: OpenClawConfig): string | undefined {
+  const backend = cfg.acp?.backend?.trim().toLowerCase();
+  return backend || undefined;
+}
+
 function formatAcpBackendAvailabilityError(params: {
   error: unknown;
   cfg: OpenClawConfig;
@@ -177,11 +182,9 @@ function formatAcpBackendAvailabilityError(params: {
     return null;
   }
 
-  const configuredBackend = params.cfg.acp?.backend?.trim().toLowerCase() || "acpx";
+  const configuredBackend = resolveConfiguredAcpBackendId(params.cfg) || "acpx";
   const backendPluginEnabled = params.cfg.plugins?.entries?.[configuredBackend]?.enabled === true;
-  const backendHint = backendPluginEnabled
-    ? `backend "${configuredBackend}" is enabled in config, so this likely indicates runtime startup/health failure.`
-    : `backend "${configuredBackend}" is not enabled under plugins.entries.${configuredBackend}.enabled.`;
+  const backendHint = `plugins.entries.${configuredBackend}.enabled=${backendPluginEnabled ? "true" : "false-or-unset"} (effective plugin enablement can also come from auto-enable/defaults).`;
 
   return [
     params.error.message,
@@ -385,7 +388,7 @@ export async function spawnAcpDirect(
       agent: targetAgentId,
       mode: runtimeMode,
       cwd: params.cwd,
-      backendId: cfg.acp?.backend,
+      backendId: resolveConfiguredAcpBackendId(cfg),
     });
     initializedRuntime = {
       runtime: initialized.runtime,

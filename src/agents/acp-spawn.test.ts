@@ -458,7 +458,7 @@ describe("spawnAcpDirect", () => {
 
     expect(result.status).toBe("error");
     expect(result.error).toContain("configured backend=acpx");
-    expect(result.error).toContain("runtime startup/health failure");
+    expect(result.error).toContain("plugins.entries.acpx.enabled=true");
   });
 
   it("normalizes backend id for diagnostics when backend is unavailable", async () => {
@@ -495,8 +495,13 @@ describe("spawnAcpDirect", () => {
 
     expect(result.status).toBe("error");
     expect(result.error).toContain("configured backend=custom-backend");
-    expect(result.error).toContain("runtime startup/health failure");
+    expect(result.error).toContain("plugins.entries.custom-backend.enabled=true");
     expect(result.error).not.toContain("plugins.entries.  CuStOm-Backend  .enabled");
+    expect(hoisted.initializeSessionMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        backendId: "custom-backend",
+      }),
+    );
   });
 
   it("fails fast when Discord ACP thread spawn is disabled", async () => {
