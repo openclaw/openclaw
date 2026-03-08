@@ -201,4 +201,43 @@ describe("Feishu monitor startup preflight", () => {
       abortController.abort();
     }
   });
+
+  it("does not re-fetch bot info for accounts whose preflight probe succeeded", async () => {
+    // Regression guard for #33456: prefetched botOpenId must be reused in monitorSingleAccount
+    // and probeFeishu must be called exactly once per account (preflight only, not again in monitor).
+    const probeCallCounts: Record<string, number> = {};
+    let releaseProbes!: () => void;
+    const probesReleased = new Promise<void>((resolve) => {
+      releaseProbes = () => resolve();
+    });
+
+    probeFeishuMock.mockImplementation(async (account: { accountId: string }) => {
+      probeCallCounts[account.accountId] = (probeCallCounts[account.accountId] ?? 0) + 1;
+      await probesReleased;
+      return { ok: true, botOpenId: `bot_${account.accountId}` };
+    });
+
+    const abortController = new AbortController();
+    const monitorPromise = monitorFeishuProvider({
+      config: buildMultiAccountWebsocketConfig(["alpha", "beta"]),
+      abortSignal: abortController.signal,
+    });
+
+    try {
+      // Let both preflights complete
+      releaseProbes();
+      // Yield enough for the async preflight loop to process both accounts
+      for (let i = 0; i < 20; i += 1) {
+        await Promise.resolve();
+      }
+
+      // Each account's probe should have been called exactly once (during preflight only).
+      // If monitorSingleAccount re-fetches, the count would be 2.
+      expect(probeCallCounts["alpha"]).toBe(1);
+      expect(probeCallCounts["beta"]).toBe(1);
+    } finally {
+      abortController.abort();
+      await monitorPromise;
+    }
+  });
 });
