@@ -492,6 +492,70 @@ function registerEventHandlers(
         error(`feishu[${accountId}]: error handling message: ${String(err)}`);
       }
     },
+    "im.message.recalled_v1": async (data) => {
+      try {
+        const event = data as unknown as {
+          message_id: string;
+          chat_id: string;
+          chat_type?: string;
+          operator_id?: { open_id?: string; user_id?: string };
+        };
+        const recalledMessageId = event.message_id?.trim();
+        if (!recalledMessageId) return;
+        log(`feishu[${accountId}]: message recalled: ${recalledMessageId}`);
+
+        // Layer 1: Remove from debounce buffer (message not yet dispatched)
+        const removedCount = inboundDebouncer.removeFromBuffer(
+          (entry) => entry.message.message_id?.trim() === recalledMessageId,
+        );
+        if (removedCount > 0) {
+          log(`feishu[${accountId}]: removed recalled message from debounce buffer`);
+        }
+
+        // Record in dedup so future retries are permanently ignored
+        tryRecordMessage(`${accountId}:${recalledMessageId}`);
+        try {
+          await tryRecordMessagePersistent(recalledMessageId, accountId, log);
+        } catch (err) {
+          error(
+            `feishu[${accountId}]: failed to record recalled message dedup: ${String(err)}`,
+          );
+        }
+
+        // Layer 2+3: Synthesize a /stop command from the recaller to abort any
+        // in-flight processing. dispatchFeishuMessageDirect bypasses the queue
+        // and tryFastAbortFromMessage will detect "/stop" and call
+        // abortEmbeddedPiRun + clearSessionQueues.
+        const chatId = event.chat_id?.trim();
+        const operatorOpenId = event.operator_id?.open_id?.trim();
+        if (chatId && operatorOpenId) {
+          const syntheticStopEvent: FeishuMessageEvent = {
+            sender: {
+              sender_id: {
+                open_id: operatorOpenId,
+                user_id: event.operator_id?.user_id?.trim() ?? "",
+                union_id: "",
+              },
+              sender_type: "user",
+            },
+            message: {
+              message_id: `recall-stop-${recalledMessageId}`,
+              chat_id: chatId,
+              chat_type: (event.chat_type ?? "p2p") as "p2p" | "group",
+              message_type: "text",
+              content: JSON.stringify({ text: "/stop" }),
+              create_time: String(Date.now()),
+            },
+          };
+          log(
+            `feishu[${accountId}]: dispatching synthetic /stop for recalled message`,
+          );
+          await dispatchFeishuMessageDirect(syntheticStopEvent);
+        }
+      } catch (err) {
+        error(`feishu[${accountId}]: error handling recall event: ${String(err)}`);
+      }
+    },
     "im.message.message_read_v1": async () => {
       // Ignore read receipts
     },
