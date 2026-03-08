@@ -73,4 +73,11 @@ class TalkModeConfigParsingTest {
 
     assertEquals(700L, TalkModeManager.resolvedSilenceTimeoutMs(talk))
   }
+
+  @Test
+  fun defaultsSilenceTimeoutMsWhenString() {
+    val talk = buildJsonObject { put("silenceTimeoutMs", "1500") }
+
+    assertEquals(700L, TalkModeManager.resolvedSilenceTimeoutMs(talk))
+  }
 }
