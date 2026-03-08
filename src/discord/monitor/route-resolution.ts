@@ -41,6 +41,41 @@ export function resolveDiscordConversationRoute(params: {
   });
 }
 
+export function resolveDiscordBoundConversationRoute(params: {
+  cfg: OpenClawConfig;
+  accountId?: string | null;
+  guildId?: string | null;
+  memberRoleIds?: string[];
+  isDirectMessage: boolean;
+  isGroupDm: boolean;
+  directUserId?: string | null;
+  conversationId: string;
+  parentConversationId?: string | null;
+  boundSessionKey?: string | null;
+  configuredRoute?: { route: ResolvedAgentRoute } | null;
+  matchedBy?: ResolvedAgentRoute["matchedBy"];
+}): ResolvedAgentRoute {
+  const route = resolveDiscordConversationRoute({
+    cfg: params.cfg,
+    accountId: params.accountId,
+    guildId: params.guildId,
+    memberRoleIds: params.memberRoleIds,
+    peer: buildDiscordRoutePeer({
+      isDirectMessage: params.isDirectMessage,
+      isGroupDm: params.isGroupDm,
+      directUserId: params.directUserId,
+      conversationId: params.conversationId,
+    }),
+    parentConversationId: params.parentConversationId,
+  });
+  return resolveDiscordEffectiveRoute({
+    route,
+    boundSessionKey: params.boundSessionKey,
+    configuredRoute: params.configuredRoute,
+    matchedBy: params.matchedBy,
+  });
+}
+
 export function resolveDiscordEffectiveRoute(params: {
   route: ResolvedAgentRoute;
   boundSessionKey?: string | null;
