@@ -146,6 +146,10 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
   const deliveredFinalTexts = new Set<string>();
   let partialUpdateQueue: Promise<void> = Promise.resolve();
   let streamingStartPromise: Promise<void> | null = null;
+  let bufferedBlockText = "";
+  let bufferedBlockLast = "";
+  const bufferedBlockMedia: string[] = [];
+  let sawFinalPayload = false;
   type StreamTextUpdateMode = "snapshot" | "delta";
 
   const queueStreamingUpdate = (
@@ -224,6 +228,100 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
     lastPartial = "";
   };
 
+  const resetBufferedBlockFallback = () => {
+    bufferedBlockText = "";
+    bufferedBlockLast = "";
+    bufferedBlockMedia.length = 0;
+  };
+
+  const mergeBufferedBlockText = (nextText: string) => {
+    if (!nextText) {
+      return;
+    }
+    if (!bufferedBlockText) {
+      bufferedBlockText = nextText;
+      bufferedBlockLast = nextText;
+      return;
+    }
+    if (nextText === bufferedBlockLast) {
+      return;
+    }
+    if (nextText.startsWith(bufferedBlockText)) {
+      bufferedBlockText = nextText;
+      bufferedBlockLast = nextText;
+      return;
+    }
+    if (!bufferedBlockText.endsWith(nextText)) {
+      bufferedBlockText += nextText;
+    }
+    bufferedBlockLast = nextText;
+  };
+
+  const sendMediaReplies = async (mediaList: string[]) => {
+    for (const mediaUrl of mediaList) {
+      await sendMediaFeishu({
+        cfg,
+        to: chatId,
+        mediaUrl,
+        replyToMessageId: sendReplyToMessageId,
+        replyInThread: effectiveReplyInThread,
+        accountId,
+      });
+    }
+  };
+
+  const sendTextReply = async (text: string) => {
+    const useCard = renderMode === "card" || (renderMode === "auto" && shouldUseCard(text));
+    let first = true;
+    if (useCard) {
+      for (const chunk of core.channel.text.chunkTextWithMode(text, textChunkLimit, chunkMode)) {
+        await sendMarkdownCardFeishu({
+          cfg,
+          to: chatId,
+          text: chunk,
+          replyToMessageId: sendReplyToMessageId,
+          replyInThread: effectiveReplyInThread,
+          mentions: first ? mentionTargets : undefined,
+          accountId,
+        });
+        first = false;
+      }
+      return;
+    }
+
+    const converted = core.channel.text.convertMarkdownTables(text, tableMode);
+    for (const chunk of core.channel.text.chunkTextWithMode(converted, textChunkLimit, chunkMode)) {
+      await sendMessageFeishu({
+        cfg,
+        to: chatId,
+        text: chunk,
+        replyToMessageId: sendReplyToMessageId,
+        replyInThread: effectiveReplyInThread,
+        mentions: first ? mentionTargets : undefined,
+        accountId,
+      });
+      first = false;
+    }
+  };
+
+  const flushBufferedBlockFallback = async () => {
+    if (sawFinalPayload) {
+      resetBufferedBlockFallback();
+      return;
+    }
+
+    const text = bufferedBlockText;
+    const mediaList = [...bufferedBlockMedia];
+    resetBufferedBlockFallback();
+
+    if (text.trim()) {
+      await sendTextReply(text);
+    }
+    if (mediaList.length > 0) {
+      await sendMediaReplies(mediaList);
+    }
+  };
+
   const { dispatcher, replyOptions, markDispatchIdle } =
     core.channel.reply.createReplyDispatcherWithTyping({
       responsePrefix: prefixContext.responsePrefix,
@@ -231,6 +329,8 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
       humanDelay: core.channel.reply.resolveHumanDelayConfig(cfg, agentId),
       onReplyStart: () => {
         deliveredFinalTexts.clear();
+        sawFinalPayload = false;
+        resetBufferedBlockFallback();
         if (streamingEnabled && renderMode === "card") {
           startStreaming();
         }
@@ -254,6 +354,16 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
           return;
         }
 
+        if (info?.kind === "final") {
+          sawFinalPayload = true;
+          resetBufferedBlockFallback();
+        }
+
+        if (info?.kind === "block" && !shouldDeliverText && hasMedia) {
+          bufferedBlockMedia.push(...mediaList);
+          return;
+        }
+
         if (shouldDeliverText) {
           const useCard = renderMode === "card" || (renderMode === "auto" && shouldUseCard(text));
 
@@ -261,6 +371,10 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
             // Drop internal block chunks unless we can safely consume them as
             // streaming-card fallback content.
             if (!(streamingEnabled && useCard)) {
+              mergeBufferedBlockText(text);
+              if (hasMedia) {
+                bufferedBlockMedia.push(...mediaList);
+              }
               return;
             }
             startStreaming();
@@ -289,76 +403,19 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
             }
             // Send media even when streaming handled the text
             if (hasMedia) {
-              for (const mediaUrl of mediaList) {
-                await sendMediaFeishu({
-                  cfg,
-                  to: chatId,
-                  mediaUrl,
-                  replyToMessageId: sendReplyToMessageId,
-                  replyInThread: effectiveReplyInThread,
-                  accountId,
-                });
-              }
+              await sendMediaReplies(mediaList);
             }
             return;
           }
 
-          let first = true;
-          if (useCard) {
-            for (const chunk of core.channel.text.chunkTextWithMode(
-              text,
-              textChunkLimit,
-              chunkMode,
-            )) {
-              await sendMarkdownCardFeishu({
-                cfg,
-                to: chatId,
-                text: chunk,
-                replyToMessageId: sendReplyToMessageId,
-                replyInThread: effectiveReplyInThread,
-                mentions: first ? mentionTargets : undefined,
-                accountId,
-              });
-              first = false;
-            }
-            if (info?.kind === "final") {
-              deliveredFinalTexts.add(text);
-            }
-          } else {
-            const converted = core.channel.text.convertMarkdownTables(text, tableMode);
-            for (const chunk of core.channel.text.chunkTextWithMode(
-              converted,
-              textChunkLimit,
-              chunkMode,
-            )) {
-              await sendMessageFeishu({
-                cfg,
-                to: chatId,
-                text: chunk,
-                replyToMessageId: sendReplyToMessageId,
-                replyInThread: effectiveReplyInThread,
-                mentions: first ? mentionTargets : undefined,
-                accountId,
-              });
-              first = false;
-            }
-            if (info?.kind === "final") {
-              deliveredFinalTexts.add(text);
-            }
+          await sendTextReply(text);
+          if (info?.kind === "final") {
+            deliveredFinalTexts.add(text);
           }
         }
 
         if (hasMedia) {
-          for (const mediaUrl of mediaList) {
-            await sendMediaFeishu({
-              cfg,
-              to: chatId,
-              mediaUrl,
-              replyToMessageId: sendReplyToMessageId,
-              replyInThread: effectiveReplyInThread,
-              accountId,
-            });
-          }
+          await sendMediaReplies(mediaList);
         }
       },
       onError: async (error, info) => {
@@ -366,10 +423,14 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
           `feishu[${account.accountId}] ${info.kind} reply failed: ${String(error)}`,
         );
         await closeStreaming();
+        resetBufferedBlockFallback();
+        sawFinalPayload = false;
         typingCallbacks.onIdle?.();
       },
       onIdle: async () => {
         await closeStreaming();
+        await flushBufferedBlockFallback();
+        sawFinalPayload = false;
         typingCallbacks.onIdle?.();
       },
       onCleanup: () => {
