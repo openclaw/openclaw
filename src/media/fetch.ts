@@ -39,6 +39,70 @@ function stripQuotes(value: string): string {
   return value.replace(/^["']|["']$/g, "");
 }
 
+function isQuotedHeaderValue(value: string): boolean {
+  if (value.length < 2) {
+    return false;
+  }
+  const first = value[0];
+  const last = value[value.length - 1];
+  return (first === '"' || first === "'") && last === first;
+}
+
+function unescapeHttpQuotedPair(value: string): string {
+  let result = "";
+  let escaping = false;
+  for (const char of value) {
+    if (escaping) {
+      result += char;
+      escaping = false;
+      continue;
+    }
+    if (char === "\\") {
+      escaping = true;
+      continue;
+    }
+    result += char;
+  }
+  if (escaping) {
+    // Preserve a malformed trailing escape so callers do not lose data.
+    result += "\\";
+  }
+  return result;
+}
+
+function basenameWithWindowsSeparatorHeuristic(value: string): string {
+  let segment = "";
+  for (let i = 0; i < value.length; i += 1) {
+    const char = value[i];
+    if (char === "/") {
+      segment = "";
+      continue;
+    }
+    if (char === "\\") {
+      const next = value[i + 1];
+      // Preserve a literal backslash immediately before a quote so valid
+      // quoted-string filenames like foo\\"bar.txt are not truncated.
+      if (next !== '"' && next !== "'") {
+        segment = "";
+        continue;
+      }
+    }
+    segment += char;
+  }
+  return segment;
+}
+
+function sanitizeContentDispositionFileName(value: string): string {
+  // Strip control chars to avoid downstream header/log injection surprises.
+  const withoutControls = Array.from(value)
+    .filter((char) => {
+      const codePoint = char.codePointAt(0) ?? 0x7f;
+      return codePoint >= 0x20 && codePoint !== 0x7f;
+    })
+    .join("");
+  return basenameWithWindowsSeparatorHeuristic(withoutControls);
+}
+
 function parseContentDispositionFileName(header?: string | null): string | undefined {
   if (!header) {
     return undefined;
@@ -48,14 +112,19 @@ function parseContentDispositionFileName(header?: string | null): string | undef
     const cleaned = stripQuotes(starMatch[1].trim());
     const encoded = cleaned.split("''").slice(1).join("''") || cleaned;
     try {
-      return path.basename(decodeURIComponent(encoded));
+      return sanitizeContentDispositionFileName(decodeURIComponent(encoded));
     } catch {
-      return path.basename(encoded);
+      return sanitizeContentDispositionFileName(encoded);
     }
   }
   const match = /filename\s*=\s*([^;]+)/i.exec(header);
   if (match?.[1]) {
-    return path.basename(stripQuotes(match[1].trim()));
+    const rawValue = match[1].trim();
+    const unquoted = stripQuotes(rawValue);
+    const decodedValue = isQuotedHeaderValue(rawValue)
+      ? unescapeHttpQuotedPair(unquoted)
+      : unquoted;
+    return sanitizeContentDispositionFileName(decodedValue);
   }
   return undefined;
 }
