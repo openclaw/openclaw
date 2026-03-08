@@ -100,6 +100,7 @@ export {
 } from "./group-access.js";
 export { createScopedPairingAccess } from "./pairing-access.js";
 export { formatResolvedUnresolvedNote } from "./resolution-notes.js";
+export { enqueueKeyedTask, KeyedAsyncQueue } from "./keyed-async-queue.js";
 export { runPluginCommandWithTimeout } from "./run-command.js";
 export { dispatchReplyFromConfigWithSettledDispatcher } from "./inbound-reply-dispatch.js";
 export { createLoggerBackedRuntime, resolveRuntimeEnv } from "./runtime.js";

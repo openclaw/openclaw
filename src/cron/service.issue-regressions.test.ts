@@ -16,7 +16,7 @@ import {
 } from "./service.issue-regressions.test-helpers.js";
 import { CronService } from "./service.js";
 import { createDeferred, createRunningCronServiceState } from "./service.test-harness.js";
-import { computeJobNextRunAtMs } from "./service/jobs.js";
+import { applyJobPatch, computeJobNextRunAtMs } from "./service/jobs.js";
 import { run } from "./service/ops.js";
 import { createCronServiceState, type CronEvent } from "./service/state.js";
 import {
@@ -218,6 +218,31 @@ describe("Cron issue regressions", () => {
     expect(updated.state.nextRunAtMs).toBeGreaterThan(now);
 
     cron.stop();
+  });
+
+  it("applyJobPatch tolerates jobs with missing payload when patching payload", () => {
+    const brokenJob = {
+      id: "missing-payload-update",
+      name: "legacy missing payload for update",
+      enabled: true,
+      createdAtMs: Date.parse("2026-02-06T10:04:00.000Z"),
+      updatedAtMs: Date.parse("2026-02-06T10:04:00.000Z"),
+      schedule: { kind: "cron", expr: "0 */2 * * *", tz: "UTC" },
+      sessionTarget: "isolated",
+      wakeMode: "next-heartbeat",
+      state: {},
+    } as unknown as CronJob;
+
+    expect(() =>
+      applyJobPatch(brokenJob, {
+        payload: { kind: "agentTurn", message: "repair legacy payload" },
+      }),
+    ).not.toThrow();
+
+    expect(brokenJob.payload.kind).toBe("agentTurn");
+    if (brokenJob.payload.kind === "agentTurn") {
+      expect(brokenJob.payload.message).toBe("repair legacy payload");
+    }
   });
 
   it("treats persisted due jobs with missing enabled as runnable", async () => {

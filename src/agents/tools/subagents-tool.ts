@@ -671,6 +671,10 @@ export function createSubagentsTool(opts?: { agentSessionKey?: string }): AnyAge
           // Replacement launch failed; restore normal announce behavior for the
           // original run so completion is not silently suppressed.
           clearSubagentRunSteerRestart(resolved.entry.runId);
+          // Also roll back the steer rate-limit entry so callers can retry
+          // immediately after a dispatch failure instead of waiting for a
+          // successful-steer cooldown window.
+          steerRateLimit.delete(rateKey);
           const error = err instanceof Error ? err.message : String(err);
           return jsonResult({
             status: "error",
