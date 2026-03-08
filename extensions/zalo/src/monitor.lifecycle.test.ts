@@ -186,7 +186,7 @@ describe("monitorZaloProvider lifecycle", () => {
       abortSignal: abort.signal,
       useWebhook: true,
       webhookUrl: "https://example.com/hooks/zalo",
-      webhookSecret: "supersecret",
+      webhookSecret: "supersecret", // pragma: allowlist secret
     }).then(() => {
       settled = true;
     });
