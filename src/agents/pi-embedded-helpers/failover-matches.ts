@@ -12,6 +12,8 @@ const ERROR_PATTERNS = {
     "quota exceeded",
     "resource_exhausted",
     "usage limit",
+    "limit exhausted",
+    /weekly\/monthly limit/i,
     /\btpm\b/i,
     "tokens per minute",
   ],
