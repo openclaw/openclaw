@@ -8,6 +8,7 @@ import { getChildLogger } from "../../logging/logger.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { saveMediaBuffer } from "../../media/store.js";
 import { jidToE164, resolveJidToE164 } from "../../utils.js";
+import { clearGroupMetadataProvider, setGroupMetadataProvider } from "../group-metadata.js";
 import { createWaSocket, getStatusCode, waitForWaConnection } from "../session.js";
 import { checkInboundAccessControl } from "./access-control.js";
 import { isRecentInboundMessage } from "./dedupe.js";
@@ -41,6 +42,9 @@ export async function monitorWebInbox(options: {
     authDir: options.authDir,
   });
   await waitForWaConnection(sock);
+  setGroupMetadataProvider({
+    groupFetchAllParticipating: () => sock.groupFetchAllParticipating(),
+  });
   const connectedAtMs = Date.now();
 
   let onCloseResolve: ((reason: WebListenerCloseReason) => void) | null = null;
@@ -431,6 +435,7 @@ export async function monitorWebInbox(options: {
   ) => {
     try {
       if (update.connection === "close") {
+        clearGroupMetadataProvider();
         const status = getStatusCode(update.lastDisconnect?.error);
         resolveClose({
           status,
