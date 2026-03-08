@@ -35,6 +35,12 @@ const hoisted = vi.hoisted(() => {
   const initializeSessionMock = vi.fn();
   const startAcpSpawnParentStreamRelayMock = vi.fn();
   const resolveAcpSpawnStreamLogPathMock = vi.fn();
+  const loadSessionStoreMock = vi.fn();
+  const resolveAndPersistSessionFileMock = vi.fn();
+  const resolveStorePathMock = vi.fn();
+  const resolveSessionTranscriptPathMock = vi.fn();
+  const resolveSessionFilePathOptionsMock = vi.fn();
+  const parseSessionThreadInfoMock = vi.fn();
   const state = {
     cfg: createDefaultSpawnConfig(),
   };
@@ -49,6 +55,12 @@ const hoisted = vi.hoisted(() => {
     initializeSessionMock,
     startAcpSpawnParentStreamRelayMock,
     resolveAcpSpawnStreamLogPathMock,
+    loadSessionStoreMock,
+    resolveAndPersistSessionFileMock,
+    resolveStorePathMock,
+    resolveSessionTranscriptPathMock,
+    resolveSessionFilePathOptionsMock,
+    parseSessionThreadInfoMock,
     state,
   };
 });
@@ -85,6 +97,23 @@ vi.mock("../config/config.js", async (importOriginal) => {
 vi.mock("../gateway/call.js", () => ({
   callGateway: (opts: unknown) => hoisted.callGatewayMock(opts),
 }));
+
+vi.mock("../config/sessions.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../config/sessions.js")>();
+  return {
+    ...actual,
+    loadSessionStore: (storePath: string) => hoisted.loadSessionStoreMock(storePath),
+    resolveAndPersistSessionFile: (params: unknown) =>
+      hoisted.resolveAndPersistSessionFileMock(params),
+    resolveStorePath: (store: unknown, opts: unknown) => hoisted.resolveStorePathMock(store, opts),
+    resolveSessionTranscriptPath: (...args: unknown[]) =>
+      hoisted.resolveSessionTranscriptPathMock(...args),
+    resolveSessionFilePathOptions: (params: unknown) =>
+      hoisted.resolveSessionFilePathOptionsMock(params),
+    parseSessionThreadInfo: (sessionKey: string | undefined) =>
+      hoisted.parseSessionThreadInfoMock(sessionKey),
+  };
+});
 
 vi.mock("../acp/control-plane/manager.js", () => {
   return {
@@ -263,6 +292,46 @@ describe("spawnAcpDirect", () => {
     hoisted.resolveAcpSpawnStreamLogPathMock
       .mockReset()
       .mockReturnValue("/tmp/sess-main.acp-stream.jsonl");
+    hoisted.resolveStorePathMock.mockReset().mockReturnValue("/tmp/codex-sessions.json");
+    hoisted.loadSessionStoreMock.mockReset().mockImplementation(() => {
+      const store: Record<string, { sessionId: string; updatedAt: number }> = {};
+      return new Proxy(store, {
+        get(_target, prop) {
+          if (typeof prop === "string" && prop.startsWith("agent:codex:acp:")) {
+            return { sessionId: "sess-123", updatedAt: Date.now() };
+          }
+          return undefined;
+        },
+      });
+    });
+    hoisted.parseSessionThreadInfoMock
+      .mockReset()
+      .mockReturnValue({ baseSessionKey: "agent:codex:acp:test-session", threadId: undefined });
+    hoisted.resolveSessionTranscriptPathMock
+      .mockReset()
+      .mockImplementation((sessionId: string, _agentId: string, threadId?: string) =>
+        threadId
+          ? `/tmp/agents/codex/sessions/${sessionId}-topic-${threadId}.jsonl`
+          : `/tmp/agents/codex/sessions/${sessionId}.jsonl`,
+      );
+    hoisted.resolveSessionFilePathOptionsMock
+      .mockReset()
+      .mockReturnValue({ sessionsDir: "/tmp/agents/codex/sessions", agentId: "codex" });
+    hoisted.resolveAndPersistSessionFileMock
+      .mockReset()
+      .mockImplementation(async (params: unknown) => {
+        const typed = params as { fallbackSessionFile?: string };
+        const sessionFile =
+          typed.fallbackSessionFile ?? "/tmp/agents/codex/sessions/sess-123.jsonl";
+        return {
+          sessionFile,
+          sessionEntry: {
+            sessionId: "sess-123",
+            updatedAt: Date.now(),
+            sessionFile,
+          },
+        };
+      });
   });
 
   it("spawns ACP session, binds a new thread, and dispatches initial task", async () => {
@@ -308,9 +377,31 @@ describe("spawnAcpDirect", () => {
         mode: "persistent",
       }),
     );
+    const transcriptCalls = hoisted.resolveAndPersistSessionFileMock.mock.calls.map(
+      (call: unknown[]) => call[0] as { fallbackSessionFile?: string },
+    );
+    expect(transcriptCalls).toHaveLength(2);
+    expect(transcriptCalls[0]?.fallbackSessionFile).toBe(
+      "/tmp/agents/codex/sessions/sess-123.jsonl",
+    );
+    expect(transcriptCalls[1]?.fallbackSessionFile).toBe(
+      "/tmp/agents/codex/sessions/sess-123-topic-child-thread.jsonl",
+    );
   });
 
   it("does not inline delivery for fresh oneshot ACP runs", async () => {
+    hoisted.loadSessionStoreMock.mockImplementation(() => {
+      const store: Record<string, { sessionId: string; updatedAt: number }> = {};
+      return new Proxy(store, {
+        get(_target, prop) {
+          if (typeof prop === "string" && prop.startsWith("agent:codex:acp:")) {
+            return { sessionId: "sess-123", updatedAt: Date.now() };
+          }
+          return undefined;
+        },
+      });
+    });
+
     const result = await spawnAcpDirect(
       {
         task: "Investigate flaky tests",
@@ -328,6 +419,13 @@ describe("spawnAcpDirect", () => {
 
     expect(result.status).toBe("accepted");
     expect(result.mode).toBe("run");
+    expect(hoisted.resolveAndPersistSessionFileMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionId: "sess-123",
+        agentId: "codex",
+        storePath: "/tmp/codex-sessions.json",
+      }),
+    );
     const agentCall = hoisted.callGatewayMock.mock.calls
       .map((call: unknown[]) => call[0] as { method?: string; params?: Record<string, unknown> })
       .find((request) => request.method === "agent");
