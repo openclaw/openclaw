@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import type { Command } from "commander";
+import { readSecretFromFile } from "../../acp/secret-file.js";
 import type { GatewayAuthMode, GatewayTailscaleMode } from "../../config/config.js";
 import {
   CONFIG_PATH,
@@ -40,6 +41,7 @@ type GatewayRunOpts = {
   token?: unknown;
   auth?: unknown;
   password?: unknown;
+  passwordFile?: unknown;
   tailscale?: unknown;
   tailscaleResetOnExit?: boolean;
   allowUnconfigured?: boolean;
@@ -62,6 +64,7 @@ const GATEWAY_RUN_VALUE_KEYS = [
   "token",
   "auth",
   "password",
+  "passwordFile",
   "tailscale",
   "wsLog",
   "rawStreamPath",
@@ -86,6 +89,24 @@ const GATEWAY_AUTH_MODES: readonly GatewayAuthMode[] = [
   "trusted-proxy",
 ];
 const GATEWAY_TAILSCALE_MODES: readonly GatewayTailscaleMode[] = ["off", "serve", "funnel"];
+
+function warnInlinePasswordFlag() {
+  defaultRuntime.error(
+    "Warning: --password can be exposed via process listings. Prefer --password-file or OPENCLAW_GATEWAY_PASSWORD.",
+  );
+}
+
+function resolveGatewayPasswordOption(opts: GatewayRunOpts): string | undefined {
+  const direct = toOptionString(opts.password);
+  const file = toOptionString(opts.passwordFile);
+  if (direct && file) {
+    throw new Error("Use either --password or --password-file.");
+  }
+  if (file) {
+    return readSecretFromFile(file, "Gateway password");
+  }
+  return direct;
+}
 
 function parseEnumOption<T extends string>(
   raw: string | undefined,
@@ -277,7 +298,17 @@ async function runGatewayCommand(opts: GatewayRunOpts) {
     defaultRuntime.exit(1);
     return;
   }
-  const passwordRaw = toOptionString(opts.password);
+  let passwordRaw: string | undefined;
+  try {
+    passwordRaw = resolveGatewayPasswordOption(opts);
+  } catch (err) {
+    defaultRuntime.error(err instanceof Error ? err.message : String(err));
+    defaultRuntime.exit(1);
+    return;
+  }
+  if (toOptionString(opts.password)) {
+    warnInlinePasswordFlag();
+  }
   const tokenRaw = toOptionString(opts.token);
 
   const snapshot = await readConfigFileSnapshot().catch(() => null);
@@ -439,6 +470,7 @@ export function addGatewayRunCommand(cmd: Command): Command {
     )
     .option("--auth <mode>", `Gateway auth mode (${formatModeChoices(GATEWAY_AUTH_MODES)})`)
     .option("--password <password>", "Password for auth mode=password")
+    .option("--password-file <path>", "Read gateway password from file")
     .option(
       "--tailscale <mode>",
       `Tailscale exposure mode (${formatModeChoices(GATEWAY_TAILSCALE_MODES)})`,
