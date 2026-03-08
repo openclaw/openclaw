@@ -1357,6 +1357,9 @@ export async function handleFeishuMessage(params: {
     const replyTargetMessageId =
       isTopicSession || configReplyInThread ? (ctx.rootId ?? ctx.messageId) : ctx.messageId;
     const threadReply = isGroup ? (groupSession?.threadReply ?? false) : false;
+    const groupReplyMode = isGroup
+      ? (groupConfig?.groupReplyMode ?? feishuCfg?.groupReplyMode ?? "reply")
+      : "reply";
 
     if (broadcastAgents) {
       // Cross-account dedup: in multi-account setups, Feishu delivers the same
@@ -1414,6 +1417,7 @@ export async function handleFeishuMessage(params: {
             mentionTargets: ctx.mentionTargets,
             accountId: account.accountId,
             messageCreateTimeMs,
+            groupReplyMode,
           });
 
           log(
@@ -1512,6 +1516,7 @@ export async function handleFeishuMessage(params: {
         mentionTargets: ctx.mentionTargets,
         accountId: account.accountId,
         messageCreateTimeMs,
+        groupReplyMode,
       });
 
       log(`feishu[${account.accountId}]: dispatching to agent (session=${route.sessionKey})`);
