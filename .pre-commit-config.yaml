@@ -69,6 +69,24 @@ repos:
           - '"ap[i]Key": "xxxxx",'
           - --exclude-lines
           - 'ap[i]Key: "A[I]za\.\.\.",'
+          - --exclude-lines
+          - 'OPENROUTER_API_KEY: "sk-or-v1-test"'
+          - --exclude-lines
+          - 'PERPLEXITY_API_KEY: "pplx-test"'
+          - --exclude-lines
+          - 'apiKey: "enterprise-perplexity-test"'
+          - --exclude-lines
+          - 'apiKey: "pplx-test"'
+          - --exclude-lines
+          - 'PERPLEXITY_DIRECT_BASE_URL|DEFAULT_PERPLEXITY_BASE_URL'
+          - --exclude-files
+          - '^docs/perplexity\.md$'
+          - --exclude-files
+          - '^docs/tools/web\.md$'
+          - --exclude-files
+          - '^src/agents/models-config\.merge\.test\.ts$'
+          - --exclude-files
+          - '^test-fixtures/talk-config-contract\.json$'
   # Shell script linting
   - repo: https://github.com/koalaman/shellcheck-precommit
     rev: v0.11.0
