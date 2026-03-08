@@ -249,10 +249,8 @@ function resolveFeishuGroupSession(params: {
 
   const normalizedThreadId = threadId?.trim();
   const normalizedRootId = rootId?.trim();
-  const threadReply = Boolean(normalizedThreadId || normalizedRootId);
-  const replyInThread =
-    (groupConfig?.replyInThread ?? feishuCfg?.replyInThread ?? "disabled") === "enabled" ||
-    threadReply;
+  const configReplyInThread =
+    (groupConfig?.replyInThread ?? feishuCfg?.replyInThread ?? "disabled") === "enabled";
 
   const legacyTopicSessionMode =
     groupConfig?.topicSessionMode ?? feishuCfg?.topicSessionMode ?? "disabled";
@@ -260,6 +258,16 @@ function resolveFeishuGroupSession(params: {
     groupConfig?.groupSessionScope ??
     feishuCfg?.groupSessionScope ??
     (legacyTopicSessionMode === "enabled" ? "group_topic" : "group");
+
+  const isTopicScope =
+    groupSessionScope === "group_topic" || groupSessionScope === "group_topic_sender";
+  // Preserve thread context when config enables it OR when the group uses a
+  // topic-based session scope (topic sessions inherently need thread anchoring).
+  // When replyInThread is "disabled" in a non-topic group, incoming thread_id /
+  // root_id are ignored so quote-reply messages don't silently create threads.
+  const threadReply =
+    (configReplyInThread || isTopicScope) && Boolean(normalizedThreadId || normalizedRootId);
+  const replyInThread = configReplyInThread;
 
   // Keep topic session keys stable across the "first turn creates thread" flow:
   // first turn may only have message_id, while the next turn carries root_id/thread_id.
