@@ -24,7 +24,7 @@ export function resolveAnnounceTargetFromKey(sessionKey: string): AnnounceTarget
     return null;
   }
   const [channelRaw, kind, ...rest] = parts;
-  if (kind !== "group" && kind !== "channel") {
+  if (kind !== "group" && kind !== "channel" && kind !== "direct" && kind !== "dm") {
     return null;
   }
 
@@ -51,7 +51,17 @@ export function resolveAnnounceTargetFromKey(sessionKey: string): AnnounceTarget
   }
   const normalizedChannel = normalizeAnyChannelId(channelRaw) ?? normalizeChatChannelId(channelRaw);
   const channel = normalizedChannel ?? channelRaw.toLowerCase();
+  const isDmKind = kind === "direct" || kind === "dm";
   const kindTarget = (() => {
+    if (isDmKind) {
+      // DM session keys: kind is direct/dm and `id` should be channel-native.
+      // Note: normalizeTarget may still rewrite the final target.
+      if (normalizedChannel === "discord" && !id.includes(":")) {
+        // Discord DMs are addressed to users, not channels.
+        return `user:${id}`;
+      }
+      return id;
+    }
     if (!normalizedChannel) {
       return id;
     }
