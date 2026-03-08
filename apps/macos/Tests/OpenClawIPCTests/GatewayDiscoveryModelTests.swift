@@ -1,10 +1,9 @@
-@testable import OpenClawDiscovery
 import Testing
+@testable import OpenClawDiscovery
 
-@Suite
 @MainActor
 struct GatewayDiscoveryModelTests {
-    @Test func localGatewayMatchesLanHost() {
+    @Test func `local gateway matches lan host`() {
         let local = GatewayDiscoveryModel.LocalIdentity(
             hostTokens: ["studio"],
             displayTokens: [])
@@ -16,7 +15,7 @@ struct GatewayDiscoveryModelTests {
             local: local))
     }
 
-    @Test func localGatewayMatchesTailnetDns() {
+    @Test func `local gateway matches tailnet dns`() {
         let local = GatewayDiscoveryModel.LocalIdentity(
             hostTokens: ["studio"],
             displayTokens: [])
@@ -28,7 +27,7 @@ struct GatewayDiscoveryModelTests {
             local: local))
     }
 
-    @Test func localGatewayMatchesDisplayName() {
+    @Test func `local gateway matches display name`() {
         let local = GatewayDiscoveryModel.LocalIdentity(
             hostTokens: [],
             displayTokens: ["peter's mac studio"])
@@ -40,7 +39,7 @@ struct GatewayDiscoveryModelTests {
             local: local))
     }
 
-    @Test func remoteGatewayDoesNotMatch() {
+    @Test func `remote gateway does not match`() {
         let local = GatewayDiscoveryModel.LocalIdentity(
             hostTokens: ["studio"],
             displayTokens: ["peter's mac studio"])
@@ -52,7 +51,7 @@ struct GatewayDiscoveryModelTests {
             local: local))
     }
 
-    @Test func localGatewayMatchesServiceName() {
+    @Test func `local gateway matches service name`() {
         let local = GatewayDiscoveryModel.LocalIdentity(
             hostTokens: ["studio"],
             displayTokens: [])
@@ -64,7 +63,7 @@ struct GatewayDiscoveryModelTests {
             local: local))
     }
 
-    @Test func serviceNameDoesNotFalsePositiveOnSubstringHostToken() {
+    @Test func `service name does not false positive on substring host token`() {
         let local = GatewayDiscoveryModel.LocalIdentity(
             hostTokens: ["steipete"],
             displayTokens: [])
@@ -82,7 +81,7 @@ struct GatewayDiscoveryModelTests {
             local: local))
     }
 
-    @Test func parsesGatewayTXTFields() {
+    @Test func `parses gateway TXT fields`() {
         let parsed = GatewayDiscoveryModel.parseGatewayTXT([
             "lanHost": "  studio.local  ",
             "tailnetDns": "  peters-mac-studio-1.ts.net  ",
@@ -97,7 +96,7 @@ struct GatewayDiscoveryModelTests {
         #expect(parsed.cliPath == "/opt/openclaw")
     }
 
-    @Test func parsesGatewayTXTDefaults() {
+    @Test func `parses gateway TXT defaults`() {
         let parsed = GatewayDiscoveryModel.parseGatewayTXT([
             "lanHost": "  ",
             "tailnetDns": "\n",
@@ -111,7 +110,7 @@ struct GatewayDiscoveryModelTests {
         #expect(parsed.cliPath == nil)
     }
 
-    @Test func buildsSSHTarget() {
+    @Test func `builds SSH target`() {
         #expect(GatewayDiscoveryModel.buildSSHTarget(
             user: "peter",
             host: "studio.local",
@@ -122,7 +121,7 @@ struct GatewayDiscoveryModelTests {
             port: 2201) == "peter@studio.local:2201")
     }
 
-    @Test func dedupeKeyPrefersResolvedEndpointAcrossSources() {
+    @Test func `dedupe key prefers resolved endpoint across sources`() {
         let wideArea = GatewayDiscoveryModel.DiscoveredGateway(
             displayName: "Gateway",
             serviceHost: "gateway-host.tailnet-example.ts.net",
@@ -151,7 +150,7 @@ struct GatewayDiscoveryModelTests {
         #expect(GatewayDiscoveryModel.dedupeKey(for: wideArea) == GatewayDiscoveryModel.dedupeKey(for: serve))
     }
 
-    @Test func dedupeKeyFallsBackToStableIDWithoutEndpoint() {
+    @Test func `dedupe key falls back to stable ID without endpoint`() {
         let unresolved = GatewayDiscoveryModel.DiscoveredGateway(
             displayName: "Gateway",
             serviceHost: nil,
@@ -165,6 +164,7 @@ struct GatewayDiscoveryModelTests {
             debugID: "serve",
             isLocal: false)
 
-        #expect(GatewayDiscoveryModel.dedupeKey(for: unresolved) == "stable|tailscale-serve|gateway-host.tailnet-example.ts.net")
+        #expect(GatewayDiscoveryModel
+            .dedupeKey(for: unresolved) == "stable|tailscale-serve|gateway-host.tailnet-example.ts.net")
     }
 }

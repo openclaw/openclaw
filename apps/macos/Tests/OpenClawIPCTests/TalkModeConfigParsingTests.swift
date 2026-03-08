@@ -2,8 +2,8 @@ import OpenClawProtocol
 import Testing
 @testable import OpenClaw
 
-@Suite struct TalkModeConfigParsingTests {
-    @Test func prefersNormalizedTalkProviderPayload() {
+struct TalkModeConfigParsingTests {
+    @Test func `prefers normalized talk provider payload`() {
         let talk: [String: AnyCodable] = [
             "provider": AnyCodable("elevenlabs"),
             "providers": AnyCodable([
@@ -20,7 +20,7 @@ import Testing
         #expect(selection?.config["voiceId"]?.stringValue == "voice-normalized")
     }
 
-    @Test func fallsBackToLegacyTalkFieldsWhenNormalizedPayloadMissing() {
+    @Test func `falls back to legacy talk fields when normalized payload missing`() {
         let talk: [String: AnyCodable] = [
             "voiceId": AnyCodable("voice-legacy"),
             "apiKey": AnyCodable("legacy-key"),
