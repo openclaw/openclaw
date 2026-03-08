@@ -199,6 +199,7 @@ export async function updateNpmInstalledPlugins(params: {
   logger?: PluginUpdateLogger;
   pluginIds?: string[];
   skipIds?: Set<string>;
+  specOverrides?: Record<string, string>;
   dryRun?: boolean;
   onIntegrityDrift?: (params: PluginUpdateIntegrityDriftParams) => boolean | Promise<boolean>;
 }): Promise<PluginUpdateSummary> {
@@ -247,6 +248,9 @@ export async function updateNpmInstalledPlugins(params: {
       continue;
     }
 
+    const spec = params.specOverrides?.[pluginId] ?? record.spec;
+    const hasSpecOverride = spec !== record.spec;
+
     let installPath: string;
     try {
       installPath = record.installPath ?? resolvePluginInstallDir(pluginId);
@@ -264,11 +268,13 @@ export async function updateNpmInstalledPlugins(params: {
       let probe: Awaited<ReturnType<typeof installPluginFromNpmSpec>>;
       try {
         probe = await installPluginFromNpmSpec({
-          spec: record.spec,
+          spec,
           mode: "update",
           dryRun: true,
           expectedPluginId: pluginId,
-          expectedIntegrity: expectedIntegrityForUpdate(record.spec, record.integrity),
+          expectedIntegrity: hasSpecOverride
+            ? undefined
+            : expectedIntegrityForUpdate(record.spec, record.integrity),
           onIntegrityDrift: createPluginUpdateIntegrityDriftHandler({
             pluginId,
             dryRun: true,
@@ -291,7 +297,7 @@ export async function updateNpmInstalledPlugins(params: {
           status: "error",
           message: formatNpmInstallFailure({
             pluginId,
-            spec: record.spec,
+            spec,
             phase: "check",
             result: probe,
           }),
@@ -324,10 +330,12 @@ export async function updateNpmInstalledPlugins(params: {
     let result: Awaited<ReturnType<typeof installPluginFromNpmSpec>>;
     try {
       result = await installPluginFromNpmSpec({
-        spec: record.spec,
+        spec,
         mode: "update",
         expectedPluginId: pluginId,
-        expectedIntegrity: expectedIntegrityForUpdate(record.spec, record.integrity),
+        expectedIntegrity: hasSpecOverride
+          ? undefined
+          : expectedIntegrityForUpdate(record.spec, record.integrity),
         onIntegrityDrift: createPluginUpdateIntegrityDriftHandler({
           pluginId,
           dryRun: false,
@@ -350,7 +358,7 @@ export async function updateNpmInstalledPlugins(params: {
         status: "error",
         message: formatNpmInstallFailure({
           pluginId,
-          spec: record.spec,
+          spec,
           phase: "update",
           result: result,
         }),
@@ -365,7 +373,12 @@ export async function updateNpmInstalledPlugins(params: {
       spec: record.spec,
       installPath: result.targetDir,
       version: nextVersion,
-      ...buildNpmResolutionInstallFields(result.npmResolution),
+      // When using a one-time spec override, clear resolution/integrity metadata
+      // so it stays consistent with record.spec and avoids false version-drift
+      // audits (resolvedVersion would otherwise be stale).
+      ...(hasSpecOverride
+        ? buildNpmResolutionInstallFields(undefined)
+        : buildNpmResolutionInstallFields(result.npmResolution)),
     });
     changed = true;
 
