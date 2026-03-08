@@ -557,6 +557,75 @@ function appendAssistantTranscriptMessage(params: {
   });
 }
 
+function extractAssistantMessageText(message: Record<string, unknown>): string | null {
+  if (typeof message.text === "string" && message.text.trim()) {
+    return message.text;
+  }
+  if (typeof message.content === "string") {
+    return message.content;
+  }
+  if (!Array.isArray(message.content)) {
+    return null;
+  }
+
+  const textBlocks = message.content
+    .map((block) => {
+      if (!block || typeof block !== "object") {
+        return null;
+      }
+      const typed = block as { type?: unknown; text?: unknown };
+      return typed.type === "text" && typeof typed.text === "string" ? typed.text : null;
+    })
+    .filter((value): value is string => typeof value === "string");
+
+  if (textBlocks.length === 0) {
+    return null;
+  }
+  return textBlocks.join("\n");
+}
+
+function findRecentMatchingAssistantTranscriptMessage(params: {
+  sessionId: string;
+  storePath: string | undefined;
+  sessionFile?: string;
+  expectedText: string;
+  minTimestampMs: number;
+}): Record<string, unknown> | undefined {
+  const normalizedExpectedText = params.expectedText.trim();
+  if (!normalizedExpectedText) {
+    return undefined;
+  }
+
+  const messages = readSessionMessages(params.sessionId, params.storePath, params.sessionFile);
+  for (let idx = messages.length - 1; idx >= 0; idx -= 1) {
+    const current = messages[idx];
+    if (!current || typeof current !== "object") {
+      continue;
+    }
+    const message = current as Record<string, unknown>;
+    if (message.role !== "assistant") {
+      continue;
+    }
+
+    const timestampRaw = message.timestamp;
+    const timestamp =
+      typeof timestampRaw === "number" && Number.isFinite(timestampRaw) ? timestampRaw : undefined;
+    if (typeof timestamp === "number" && timestamp < params.minTimestampMs) {
+      return undefined;
+    }
+
+    const text = extractAssistantMessageText(message);
+    if (!text) {
+      return undefined;
+    }
+    if (text.trim() === normalizedExpectedText) {
+      return message;
+    }
+    return undefined;
+  }
+  return undefined;
+}
+
 function collectSessionAbortPartials(params: {
   chatAbortControllers: Map<string, ChatAbortControllerEntry>;
   chatRunBuffers: Map<string, string>;
@@ -1085,30 +1154,41 @@ export const chatHandlers: GatewayRequestHandlers = {
               const { storePath: latestStorePath, entry: latestEntry } =
                 loadSessionEntry(sessionKey);
               const sessionId = latestEntry?.sessionId ?? entry?.sessionId ?? clientRunId;
-              const appended = appendAssistantTranscriptMessage({
-                message: combinedReply,
+              const existingMessage = findRecentMatchingAssistantTranscriptMessage({
                 sessionId,
                 storePath: latestStorePath,
                 sessionFile: latestEntry?.sessionFile,
-                agentId,
-                createIfMissing: true,
+                expectedText: combinedReply,
+                minTimestampMs: now,
               });
-              if (appended.ok) {
-                message = appended.message;
+              if (existingMessage) {
+                message = existingMessage;
               } else {
-                context.logGateway.warn(
-                  `webchat transcript append failed: ${appended.error ?? "unknown error"}`,
-                );
-                const now = Date.now();
-                message = {
-                  role: "assistant",
-                  content: [{ type: "text", text: combinedReply }],
-                  timestamp: now,
-                  // Keep this compatible with Pi stopReason enums even though this message isn't
-                  // persisted to the transcript due to the append failure.
-                  stopReason: "stop",
-                  usage: { input: 0, output: 0, totalTokens: 0 },
-                };
+                const appended = appendAssistantTranscriptMessage({
+                  message: combinedReply,
+                  sessionId,
+                  storePath: latestStorePath,
+                  sessionFile: latestEntry?.sessionFile,
+                  agentId,
+                  createIfMissing: true,
+                });
+                if (appended.ok) {
+                  message = appended.message;
+                } else {
+                  context.logGateway.warn(
+                    `webchat transcript append failed: ${appended.error ?? "unknown error"}`,
+                  );
+                  const now = Date.now();
+                  message = {
+                    role: "assistant",
+                    content: [{ type: "text", text: combinedReply }],
+                    timestamp: now,
+                    // Keep this compatible with Pi stopReason enums even though this message isn't
+                    // persisted to the transcript due to the append failure.
+                    stopReason: "stop",
+                    usage: { input: 0, output: 0, totalTokens: 0 },
+                  };
+                }
               }
             }
             broadcastChatFinal({
