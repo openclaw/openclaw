@@ -440,7 +440,7 @@ describe("createPdfTool", () => {
           agentDir,
           sandbox,
           workspaceDir: sandboxRoot,
-          fsPolicy: { allowedPaths: ["docs/**/*.pdf"] },
+          fsPolicy: { workspaceOnly: false, allowedPaths: ["docs/**/*.pdf"] },
         }),
       );
 

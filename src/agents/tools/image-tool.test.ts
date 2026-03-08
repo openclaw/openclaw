@@ -644,7 +644,7 @@ describe("image tool implicit imageModel config", () => {
         agentDir,
         sandbox,
         workspaceDir: sandboxRoot,
-        fsPolicy: { denyPaths: ["secrets/**"] },
+        fsPolicy: { workspaceOnly: false, denyPaths: ["secrets/**"] },
       });
 
       await expect(
