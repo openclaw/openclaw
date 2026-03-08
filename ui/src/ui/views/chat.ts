@@ -169,39 +169,103 @@ function handlePaste(e: ClipboardEvent, props: ChatProps) {
     return;
   }
 
-  const imageItems: DataTransferItem[] = [];
+  const fileItems: DataTransferItem[] = [];
   for (let i = 0; i < items.length; i++) {
     const item = items[i];
-    if (item.type.startsWith("image/")) {
-      imageItems.push(item);
+    if (item.kind === "file") {
+      fileItems.push(item);
     }
   }
 
-  if (imageItems.length === 0) {
+  if (fileItems.length === 0) {
     return;
   }
 
   e.preventDefault();
 
-  for (const item of imageItems) {
+  let processed = 0;
+  const total = fileItems.length;
+  const newAttachments: ChatAttachment[] = [];
+  const current = props.attachments ?? [];
+
+  for (const item of fileItems) {
     const file = item.getAsFile();
     if (!file) {
+      processed++;
+      if (processed === total && newAttachments.length > 0) {
+        props.onAttachmentsChange?.([...current, ...newAttachments]);
+      }
       continue;
     }
 
     const reader = new FileReader();
     reader.addEventListener("load", () => {
-      const dataUrl = reader.result as string;
-      const newAttachment: ChatAttachment = {
+      newAttachments.push({
         id: generateAttachmentId(),
-        dataUrl,
-        mimeType: file.type,
-      };
-      const current = props.attachments ?? [];
-      props.onAttachmentsChange?.([...current, newAttachment]);
+        dataUrl: reader.result as string,
+        mimeType: file.type || "application/octet-stream",
+      });
+      processed++;
+      if (processed === total) {
+        props.onAttachmentsChange?.([...current, ...newAttachments]);
+      }
     });
     reader.readAsDataURL(file);
   }
+}
+
+function handleDrop(e: DragEvent, props: ChatProps) {
+  e.preventDefault();
+  const items = e.dataTransfer?.items;
+  if (!items || !props.onAttachmentsChange) {
+    return;
+  }
+
+  const fileItems: DataTransferItem[] = [];
+  for (let i = 0; i < items.length; i++) {
+    const item = items[i];
+    if (item.kind === "file") {
+      fileItems.push(item);
+    }
+  }
+
+  if (fileItems.length === 0) {
+    return;
+  }
+
+  let processed = 0;
+  const total = fileItems.length;
+  const newAttachments: ChatAttachment[] = [];
+  const current = props.attachments ?? [];
+
+  for (const item of fileItems) {
+    const file = item.getAsFile();
+    if (!file) {
+      processed++;
+      if (processed === total && newAttachments.length > 0) {
+        props.onAttachmentsChange?.([...current, ...newAttachments]);
+      }
+      continue;
+    }
+
+    const reader = new FileReader();
+    reader.addEventListener("load", () => {
+      newAttachments.push({
+        id: generateAttachmentId(),
+        dataUrl: reader.result as string,
+        mimeType: file.type || "application/octet-stream",
+      });
+      processed++;
+      if (processed === total) {
+        props.onAttachmentsChange?.([...current, ...newAttachments]);
+      }
+    });
+    reader.readAsDataURL(file);
+  }
+}
+
+function handleDragOver(e: DragEvent) {
+  e.preventDefault();
 }
 
 function renderAttachmentPreview(props: ChatProps) {
@@ -214,12 +278,16 @@ function renderAttachmentPreview(props: ChatProps) {
     <div class="chat-attachments">
       ${attachments.map(
         (att) => html`
-          <div class="chat-attachment">
-            <img
-              src=${att.dataUrl}
-              alt="Attachment preview"
-              class="chat-attachment__img"
-            />
+          <div class="chat-attachment" title="${att.mimeType}">
+            ${
+              att.mimeType.startsWith("image/")
+                ? html`<img
+                    src=${att.dataUrl}
+                    alt="Attachment preview"
+                    class="chat-attachment__img"
+                  />`
+                : html`<div class="chat-attachment__file">${icons.fileText}</div>`
+            }
             <button
               class="chat-attachment__remove"
               type="button"
@@ -316,7 +384,10 @@ export function renderChat(props: ChatProps) {
   `;
 
   return html`
-    <section class="card chat">
+    <section class="card chat"
+      @drop=${(e: DragEvent) => handleDrop(e, props)}
+      @dragover=${handleDragOver}
+    >
       ${props.disabledReason ? html`<div class="callout">${props.disabledReason}</div>` : nothing}
 
       ${props.error ? html`<div class="callout danger">${props.error}</div>` : nothing}
@@ -459,6 +530,56 @@ export function renderChat(props: ChatProps) {
             ></textarea>
           </label>
           <div class="chat-compose__actions">
+            <button
+              class="btn chat-compose__attach"
+              type="button"
+              aria-label="Attach file"
+              title="Attach file"
+              ?disabled=${!props.connected}
+              @click=${(e: Event) => {
+                const target = e.currentTarget as HTMLElement;
+                const input = target.nextElementSibling as HTMLInputElement;
+                input.click();
+              }}
+            >
+              ${icons.paperclip}
+            </button>
+            <input
+              type="file"
+              multiple
+              style="display: none"
+              @change=${(e: Event) => {
+                const input = e.target as HTMLInputElement;
+                if (!input.files || input.files.length === 0 || !props.onAttachmentsChange) {
+                  return;
+                }
+
+                let processed = 0;
+                const total = input.files.length;
+                const newAttachments: ChatAttachment[] = [];
+
+                const current = props.attachments ?? [];
+
+                for (let i = 0; i < input.files.length; i++) {
+                  const file = input.files[i];
+                  const reader = new FileReader();
+                  reader.addEventListener("load", () => {
+                    newAttachments.push({
+                      id: generateAttachmentId(),
+                      dataUrl: reader.result as string,
+                      mimeType: file.type || "application/octet-stream",
+                    });
+                    processed++;
+                    if (processed === total) {
+                      props.onAttachmentsChange?.([...current, ...newAttachments]);
+                    }
+                  });
+                  reader.readAsDataURL(file);
+                }
+                // Reset input so the same file can be selected again if removed
+                input.value = "";
+              }}
+            />
             <button
               class="btn"
               ?disabled=${!props.connected || (!canAbort && props.sending)}
