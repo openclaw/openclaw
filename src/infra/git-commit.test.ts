@@ -65,7 +65,9 @@ describe("git commit resolution", () => {
     const repoHead = execFileSync("git", ["rev-parse", "--short=7", "HEAD"], {
       cwd: repoRoot,
       encoding: "utf-8",
-    }).trim();
+    })
+      .trim()
+      .slice(0, 7);
 
     const temp = await makeTempDir("git-commit-cwd");
     const otherRepo = path.join(temp, "other");
@@ -81,7 +83,9 @@ describe("git commit resolution", () => {
     const otherHead = execFileSync("git", ["rev-parse", "--short=7", "HEAD"], {
       cwd: otherRepo,
       encoding: "utf-8",
-    }).trim();
+    })
+      .trim()
+      .slice(0, 7);
 
     process.chdir(otherRepo);
     const { resolveCommitHash } = await import("./git-commit.js");
@@ -95,7 +99,9 @@ describe("git commit resolution", () => {
     const repoHead = execFileSync("git", ["rev-parse", "--short=7", "HEAD"], {
       cwd: repoRoot,
       encoding: "utf-8",
-    }).trim();
+    })
+      .trim()
+      .slice(0, 7);
 
     const { resolveCommitHash } = await import("./git-commit.js");
     const entryModuleUrl = pathToFileURL(path.join(repoRoot, "src", "entry.ts")).href;
@@ -161,7 +167,9 @@ describe("git commit resolution", () => {
     const repoHead = execFileSync("git", ["rev-parse", "--short=7", "HEAD"], {
       cwd: repoRoot,
       encoding: "utf-8",
-    }).trim();
+    })
+      .trim()
+      .slice(0, 7);
 
     const { resolveCommitHash } = await import("./git-commit.js");
 
