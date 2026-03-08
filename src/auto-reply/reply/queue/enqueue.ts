@@ -14,13 +14,17 @@ function buildRecentMessageIdKey(run: FollowupRun, queueKey: string): string | u
   if (!messageId) {
     return undefined;
   }
-  const route = [
+  // Use JSON tuple serialization to avoid delimiter-collision edge cases when
+  // channel/to/account values contain "|" characters.
+  return JSON.stringify([
+    "queue",
+    queueKey,
     run.originatingChannel ?? "",
     run.originatingTo ?? "",
     run.originatingAccountId ?? "",
     run.originatingThreadId == null ? "" : String(run.originatingThreadId),
-  ].join("|");
-  return `${queueKey}|${route}|${messageId}`;
+    messageId,
+  ]);
 }
 
 function isRunAlreadyQueued(
