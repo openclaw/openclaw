@@ -280,17 +280,30 @@ export function createBrowserTool(opts?: {
   sandboxBridgeUrl?: string;
   allowHostControl?: boolean;
   agentSessionKey?: string;
+  config?: ReturnType<typeof loadConfig>;
 }): AnyAgentTool {
   const targetDefault = opts?.sandboxBridgeUrl ? "sandbox" : "host";
   const hostHint =
     opts?.allowHostControl === false ? "Host target blocked by policy." : "Host target allowed.";
+
+  // Resolve the configured default profile so the description can tell the model.
+  let defaultProfile = "openclaw";
+  try {
+    const cfg = opts?.config ?? loadConfig();
+    const resolved = resolveBrowserConfig(cfg?.browser);
+    defaultProfile = resolved.defaultProfile;
+  } catch {
+    // Fall back to "openclaw" if config can't be loaded.
+  }
+
   return {
     label: "Browser",
     name: "browser",
     description: [
       "Control the browser via OpenClaw's browser control server (status/start/stop/profiles/tabs/open/snapshot/screenshot/actions).",
-      'Profiles: use profile="chrome" for Chrome extension relay takeover (your existing Chrome tabs). Use profile="openclaw" for the isolated openclaw-managed browser.',
-      'If the user mentions the Chrome extension / Browser Relay / toolbar button / “attach tab”, ALWAYS use profile="chrome" (do not ask which profile).',
+      `Profiles: omit the profile parameter for the configured default profile ("${defaultProfile}"). Use profile="chrome" only for Chrome extension relay takeover (your existing Chrome tabs).`,
+      'If the user mentions the Chrome extension / Browser Relay / toolbar button / "attach tab", ALWAYS use profile="chrome" (do not ask which profile).',
+      "Only set profile explicitly when the user requests a specific profile by name. Otherwise, omit it to use the default.",
       'When a node-hosted browser proxy is available, the tool may auto-route to it. Pin a node with node=<id|name> or target="node".',
       "Chrome extension relay needs an attached tab: user must click the OpenClaw Browser Relay toolbar icon on the tab (badge ON). If no tab is connected, ask them to attach it.",
       "When using refs from snapshot (e.g. e12), keep the same tab: prefer passing targetId from the snapshot response into subsequent actions (act/click/type/etc).",
