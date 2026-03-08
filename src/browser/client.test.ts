@@ -8,7 +8,7 @@ import {
   browserPdfSave,
   browserScreenshotAction,
 } from "./client-actions.js";
-import { browserOpenTab, browserSnapshot, browserStatus, browserTabs } from "./client.js";
+import { browserOpenTab, browserSnapshot, browserStart, browserStatus, browserTabs } from "./client.js";
 
 describe("browser client", () => {
   function stubSnapshotFetch(calls: string[]) {
@@ -50,6 +50,14 @@ describe("browser client", () => {
   it("adds useful timeout messaging for abort-like failures", async () => {
     vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new Error("aborted")));
     await expect(browserStatus("http://127.0.0.1:18791")).rejects.toThrow(/timed out/i);
+  });
+
+  it("uses extended startup timeouts for start/open requests", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new Error("aborted")));
+    await expect(browserStart("http://127.0.0.1:18791")).rejects.toThrow(/timed out after 25000ms/i);
+    await expect(
+      browserOpenTab("http://127.0.0.1:18791", "https://example.com"),
+    ).rejects.toThrow(/timed out after 25000ms/i);
   });
 
   it("surfaces non-2xx responses with body text", async () => {
