@@ -41,7 +41,7 @@ describe("models-config provider auth provenance", () => {
       "utf8",
     );
     try {
-      const providers = await resolveImplicitProviders({ agentDir });
+      const providers = await resolveImplicitProviders({ agentDir, env: {} });
       expect(providers?.volcengine?.apiKey).toBe("VOLCANO_ENGINE_API_KEY");
       expect(providers?.["volcengine-plan"]?.apiKey).toBe("VOLCANO_ENGINE_API_KEY");
       expect(providers?.together?.apiKey).toBe("TOGETHER_API_KEY");
@@ -78,7 +78,7 @@ describe("models-config provider auth provenance", () => {
       "utf8",
     );
 
-    const providers = await resolveImplicitProviders({ agentDir });
+    const providers = await resolveImplicitProviders({ agentDir, env: {} });
     expect(providers?.byteplus?.apiKey).toBe(NON_ENV_SECRETREF_MARKER);
     expect(providers?.["byteplus-plan"]?.apiKey).toBe(NON_ENV_SECRETREF_MARKER);
     expect(providers?.together?.apiKey).toBe(NON_ENV_SECRETREF_MARKER);
@@ -114,7 +114,7 @@ describe("models-config provider auth provenance", () => {
       "utf8",
     );
 
-    const providers = await resolveImplicitProviders({ agentDir });
+    const providers = await resolveImplicitProviders({ agentDir, env: {} });
     expect(providers?.["minimax-portal"]?.apiKey).toBe(MINIMAX_OAUTH_MARKER);
     expect(providers?.["qwen-portal"]?.apiKey).toBe(QWEN_OAUTH_MARKER);
   });
