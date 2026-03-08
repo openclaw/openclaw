@@ -54,6 +54,7 @@ import {
   saveExecApprovals,
   updateExecApprovalsFormValue,
 } from "./controllers/exec-approvals.ts";
+import { submitGrowthFoundationReviewAction } from "./controllers/growth-foundation.ts";
 import { loadLogs } from "./controllers/logs.ts";
 import { loadNodes } from "./controllers/nodes.ts";
 import { loadPresence } from "./controllers/presence.ts";
@@ -357,6 +358,9 @@ export function renderApp(state: AppViewState) {
                 cronEnabled: state.cronStatus?.enabled ?? null,
                 cronNext,
                 lastChannelsRefresh: state.channelsLastSuccess,
+                growthFoundation: state.growthFoundation,
+                growthFoundationActionBusyKey: state.growthFoundationActionBusyKey,
+                growthFoundationActionError: state.growthFoundationActionError,
                 onSettingsChange: (next) => state.applySettings(next),
                 onPasswordChange: (next) => (state.password = next),
                 onSessionKeyChange: (next) => {
@@ -372,6 +376,8 @@ export function renderApp(state: AppViewState) {
                 },
                 onConnect: () => state.connect(),
                 onRefresh: () => state.loadOverview(),
+                onGrowthReviewAction: (action, itemKey) =>
+                  void submitGrowthFoundationReviewAction(state, { action, itemKey }),
               })
             : nothing
         }

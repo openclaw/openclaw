@@ -7,6 +7,8 @@ import type {
   SessionsPatchResultBase,
 } from "../../../src/shared/session-types.js";
 export type { ConfigUiHints } from "../../../src/shared/config-ui-hints-types.js";
+export type GrowthFoundationSummary =
+  import("../../../src/gateway/control-ui-contract.js").ControlUiGrowthFoundationSnapshot;
 
 export type ChannelsStatusSnapshot = {
   ts: number;

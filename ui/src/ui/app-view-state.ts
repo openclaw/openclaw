@@ -24,6 +24,7 @@ import type {
   PresenceEntry,
   SessionsUsageResult,
   CostUsageSummary,
+  GrowthFoundationSummary,
   SessionUsageTimeSeries,
   SessionsListResult,
   SkillStatusReport,
@@ -44,6 +45,9 @@ export type AppViewState = {
   theme: ThemeMode;
   themeResolved: "light" | "dark";
   hello: GatewayHelloOk | null;
+  growthFoundation: GrowthFoundationSummary | null;
+  growthFoundationActionBusyKey: string | null;
+  growthFoundationActionError: string | null;
   lastError: string | null;
   lastErrorCode: string | null;
   eventLog: EventLogEntry[];

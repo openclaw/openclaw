@@ -71,6 +71,7 @@ import type {
   CronJob,
   CronRunLogEntry,
   CronStatus,
+  GrowthFoundationSummary,
   HealthSnapshot,
   LogEntry,
   LogLevel,
@@ -126,6 +127,9 @@ export class OpenClawApp extends LitElement {
   @state() theme: ThemeMode = this.settings.theme ?? "system";
   @state() themeResolved: ResolvedTheme = "dark";
   @state() hello: GatewayHelloOk | null = null;
+  @state() growthFoundation: GrowthFoundationSummary | null = null;
+  @state() growthFoundationActionBusyKey: string | null = null;
+  @state() growthFoundationActionError: string | null = null;
   @state() lastError: string | null = null;
   @state() lastErrorCode: string | null = null;
   @state() eventLog: EventLogEntry[] = [];

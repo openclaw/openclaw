@@ -87,6 +87,9 @@ The Control UI can localize itself on first load based on your browser locale, a
 - Debug: status/health/models snapshots + event log + manual RPC calls (`status`, `health`, `models.list`)
 - Logs: live tail of gateway file logs with filter/export (`logs.tail`)
 - Update: run a package/git update + restart (`update.run`) with a restart report
+- Overview: growth foundation links can open surfaced workspace markdown, JSON, and diff artifacts directly from the browser
+- Overview: growth foundation review actions are serialized in the browser so overlapping item updates cannot race the snapshot state
+- Overview: growth foundation artifact relpaths are normalized to the active workspace project even when source markdown keeps a display-name alias
 
 Cron jobs panel notes:
 
