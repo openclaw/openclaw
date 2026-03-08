@@ -41,6 +41,7 @@ import { resolveStoredModelOverride } from "../../auto-reply/reply/model-selecti
 import { dispatchReplyWithDispatcher } from "../../auto-reply/reply/provider-dispatcher.js";
 import type { ReplyPayload } from "../../auto-reply/types.js";
 import { resolveCommandAuthorizedFromAuthorizers } from "../../channels/command-gating.js";
+import { resolveNativeCommandSessionTargets } from "../../channels/native-command-session-targets.js";
 import { createReplyPrefixOptions } from "../../channels/reply-prefix.js";
 import type { OpenClawConfig, loadConfig } from "../../config/config.js";
 import { isDangerousNameMatchingEnabled } from "../../config/dangerous-name-matching.js";
@@ -83,7 +84,6 @@ import {
   type DiscordModelPickerCommandContext,
 } from "./model-picker.js";
 import { buildDiscordNativeCommandContext } from "./native-command-context.js";
-import { resolveDiscordNativeCommandSessionTargets } from "./native-command-session-targets.js";
 import {
   resolveDiscordBoundConversationRoute,
   resolveDiscordEffectiveRoute,
@@ -1645,11 +1645,12 @@ async function dispatchDiscordCommandInteraction(params: {
     configuredRoute,
     matchedBy: configuredBinding ? "binding.channel" : undefined,
   });
-  const { sessionKey, commandTargetSessionKey } = resolveDiscordNativeCommandSessionTargets({
-    boundSessionKey,
-    effectiveRoute,
+  const { sessionKey, commandTargetSessionKey } = resolveNativeCommandSessionTargets({
+    agentId: effectiveRoute.agentId,
     sessionPrefix,
     userId: user.id,
+    targetSessionKey: effectiveRoute.sessionKey,
+    boundSessionKey,
   });
   const ctxPayload = buildDiscordNativeCommandContext({
     prompt,
