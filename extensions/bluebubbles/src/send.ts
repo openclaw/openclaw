@@ -288,8 +288,18 @@ export async function resolveChatGuidForTarget(params: {
       if (normalizedHandle) {
         const guid = extractChatGuid(chat);
         const directHandle = guid ? extractHandleFromChatGuid(guid) : null;
+        const targetService =
+          params.target.kind === "handle" ? (params.target.service ?? "auto") : "auto";
         if (directHandle && directHandle === normalizedHandle) {
-          return guid;
+          if (targetService === "auto") {
+            return guid;
+          }
+          const guidServiceLower = (guid?.split(";")[0] ?? "").toLowerCase();
+          const serviceMatches =
+            (targetService === "imessage" && guidServiceLower === "imessage") ||
+            (targetService === "sms" && guidServiceLower === "sms");
+          if (serviceMatches) return guid;
+          // service mismatch: continue to next chat
         }
         if (!participantMatch && guid) {
           // Only consider DM chats (`;-;` separator) as participant matches.
@@ -297,11 +307,18 @@ export async function resolveChatGuidForTarget(params: {
           // This prevents routing "send to +1234567890" to a group chat that contains that number.
           const isDmChat = guid.includes(";-;");
           if (isDmChat) {
-            const participants = extractParticipantAddresses(chat).map((entry) =>
-              normalizeBlueBubblesHandle(entry),
-            );
-            if (participants.includes(normalizedHandle)) {
-              participantMatch = guid;
+            const guidServiceLower = guid.split(";")[0]?.toLowerCase() ?? "";
+            const serviceOk =
+              targetService === "auto" ||
+              (targetService === "imessage" && guidServiceLower === "imessage") ||
+              (targetService === "sms" && guidServiceLower === "sms");
+            if (serviceOk) {
+              const participants = extractParticipantAddresses(chat).map((entry) =>
+                normalizeBlueBubblesHandle(entry),
+              );
+              if (participants.includes(normalizedHandle)) {
+                participantMatch = guid;
+              }
             }
           }
         }
