@@ -107,6 +107,77 @@ describe("runCliAgent with process supervisor", () => {
     expect(input.scopeKey).toContain("thread-123");
   });
 
+  it("resends system prompt on resumed claude sessions when configured", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-cli-runner-resume-always-"));
+    const skillDir = path.join(tempDir, "skills", "resume-skill-always");
+    await fs.mkdir(skillDir, { recursive: true });
+    await fs.writeFile(
+      path.join(skillDir, "SKILL.md"),
+      [
+        "---",
+        "name: resume-skill-always",
+        "description: Resume-skill description for always mode",
+        "---",
+        "",
+        "Use this skill after resume in always mode.",
+      ].join("\n"),
+      "utf-8",
+    );
+
+    supervisorSpawnMock.mockResolvedValueOnce(
+      createManagedRun({
+        reason: "exit",
+        exitCode: 0,
+        exitSignal: null,
+        durationMs: 50,
+        stdout: '{"content":[{"type":"text","text":"ok"}]}',
+        stderr: "",
+        timedOut: false,
+        noOutputTimedOut: false,
+      }),
+    );
+
+    const cfg = {
+      agents: {
+        defaults: {
+          cliBackends: {
+            "claude-cli": {
+              command: "claude",
+              systemPromptWhen: "always",
+            },
+          },
+        },
+      },
+    } satisfies OpenClawConfig;
+
+    try {
+      await runCliAgent({
+        sessionId: "s1",
+        sessionFile: "/tmp/session.jsonl",
+        workspaceDir: tempDir,
+        prompt: "hi",
+        provider: "claude-cli",
+        model: "sonnet",
+        timeoutMs: 1_000,
+        runId: "run-claude-resume-always",
+        cliSessionId: "existing-claude-session",
+        config: cfg,
+      });
+    } finally {
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+
+    const input = supervisorSpawnMock.mock.calls[0]?.[0] as { argv?: string[] };
+    expect(input.argv).toContain("--resume");
+    expect(input.argv).toContain("existing-claude-session");
+    expect(input.argv).toContain("--append-system-prompt");
+    const systemPromptIndex = input.argv?.indexOf("--append-system-prompt") ?? -1;
+    expect(systemPromptIndex).toBeGreaterThanOrEqual(0);
+    const systemPrompt = input.argv?.[systemPromptIndex + 1] ?? "";
+    expect(systemPrompt).toContain("<available_skills>");
+    expect(systemPrompt).toContain("resume-skill-always");
+  });
+
   it("fails with timeout when no-output watchdog trips", async () => {
     supervisorSpawnMock.mockResolvedValueOnce(
       createManagedRun({
