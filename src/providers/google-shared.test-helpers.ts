@@ -1,3 +1,4 @@
+// @ts-nocheck - Vendored code from pi-ai uses any; suppressing type checks
 import type { Model } from "@mariozechner/pi-ai";
 import { expect } from "vitest";
 import { makeZeroUsageSnapshot } from "../agents/usage.js";
