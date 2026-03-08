@@ -12,7 +12,9 @@ export const DEFAULT_TEMPORAL_DECAY_CONFIG: TemporalDecayConfig = {
 };
 
 const DAY_MS = 24 * 60 * 60 * 1000;
-const DATED_MEMORY_PATH_RE = /(?:^|\/)memory\/(\d{4})-(\d{2})-(\d{2})\.md$/;
+// Allow optional intermediate subdirectories so that
+// "memory/2026-02/2026-02-15.md" is recognized as a dated file.
+const DATED_MEMORY_PATH_RE = /(?:^|\/)memory\/(?:[\w-]+\/)*(\d{4})-(\d{2})-(\d{2})\.md$/;
 
 export function toDecayLambda(halfLifeDays: number): number {
   if (!Number.isFinite(halfLifeDays) || halfLifeDays <= 0) {
