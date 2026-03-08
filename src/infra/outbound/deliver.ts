@@ -703,10 +703,12 @@ async function deliverOutboundPayloadsCore(
     );
   }
   let replyConsumed = false;
-  // Slack and Mattermost use replyToId as persistent thread context (thread_ts
-  // and rootId respectively) that must survive across all payloads. Never
-  // consume inherited reply state for thread-based channels.
-  const isThreadBasedChannel = channel === "slack" || channel === "mattermost";
+  // Slack, Mattermost, and Google Chat use replyToId as persistent thread
+  // context (thread_ts, rootId, and threadName respectively) that must survive
+  // across all payloads. Never consume inherited reply state for thread-based
+  // channels.
+  const isThreadBasedChannel =
+    channel === "slack" || channel === "mattermost" || channel === "googlechat";
   const shouldConsumeReplyAfterSend = (replyTo: string | undefined) => {
     if (!replyTo) {
       return false;
