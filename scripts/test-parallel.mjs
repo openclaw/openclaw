@@ -31,6 +31,8 @@ const unitIsolatedFilesRaw = [
   "src/commands/doctor.runs-legacy-state-migrations-yes-mode-without.test.ts",
   // Setup-heavy CLI update flow suite; move off unit-fast critical path.
   "src/cli/update-cli.test.ts",
+  // Uses temp repos + module cache resets; keep it off vmForks to avoid ref-resolution flakes.
+  "src/infra/git-commit.test.ts",
   // Expensive schema build/bootstrap checks; keep coverage but run in isolated lane.
   "src/config/schema.test.ts",
   "src/config/schema.tags.test.ts",
