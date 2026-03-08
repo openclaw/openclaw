@@ -12,12 +12,14 @@ import {
   type BackupAsset,
   resolveBackupPlanFromDisk,
 } from "./backup-shared.js";
+import { backupVerifyCommand } from "./backup-verify.js";
 import { isPathWithin } from "./cleanup-utils.js";
 
 export type BackupCreateOptions = {
   output?: string;
   dryRun?: boolean;
   includeWorkspace?: boolean;
+  verify?: boolean;
   json?: boolean;
   nowMs?: number;
 };
@@ -59,6 +61,7 @@ export type BackupCreateResult = {
   archivePath: string;
   dryRun: boolean;
   includeWorkspace: boolean;
+  verified: boolean;
   assets: BackupAsset[];
   skipped: Array<{
     kind: string;
@@ -194,6 +197,9 @@ function formatTextSummary(result: BackupCreateResult): string[] {
     lines.push("Dry run only; archive was not written.");
   } else {
     lines.push(`Created ${result.archivePath}`);
+    if (result.verified) {
+      lines.push("Archive verification: passed");
+    }
   }
   return lines;
 }
@@ -250,6 +256,7 @@ export async function backupCreateCommand(
     archivePath: outputPath,
     dryRun: Boolean(opts.dryRun),
     includeWorkspace,
+    verified: false,
     assets: plan.included,
     skipped: plan.skipped,
   };
@@ -290,6 +297,17 @@ export async function backupCreateCommand(
       );
     } finally {
       await fs.rm(tempDir, { recursive: true, force: true }).catch(() => undefined);
+    }
+
+    if (opts.verify) {
+      await backupVerifyCommand(
+        {
+          ...runtime,
+          log: () => {},
+        },
+        { archive: outputPath, json: false },
+      );
+      result.verified = true;
     }
   }
 

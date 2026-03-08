@@ -106,6 +106,7 @@ openclaw [--dev] [--profile <name>] <command>
   dashboard
   backup
     create
+    verify
   security
     audit
   secrets

@@ -2,6 +2,7 @@ import { Command } from "commander";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const backupCreateCommand = vi.fn();
+const backupVerifyCommand = vi.fn();
 
 const runtime = {
   log: vi.fn(),
@@ -11,6 +12,10 @@ const runtime = {
 
 vi.mock("../../commands/backup.js", () => ({
   backupCreateCommand,
+}));
+
+vi.mock("../../commands/backup-verify.js", () => ({
+  backupVerifyCommand,
 }));
 
 vi.mock("../../runtime.js", () => ({
@@ -33,6 +38,7 @@ describe("registerBackupCommand", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     backupCreateCommand.mockResolvedValue(undefined);
+    backupVerifyCommand.mockResolvedValue(undefined);
   });
 
   it("runs backup create with forwarded options", async () => {
@@ -44,6 +50,7 @@ describe("registerBackupCommand", () => {
         output: "/tmp/backups",
         json: true,
         dryRun: true,
+        verify: false,
         includeWorkspace: true,
       }),
     );
@@ -56,6 +63,29 @@ describe("registerBackupCommand", () => {
       runtime,
       expect.objectContaining({
         includeWorkspace: false,
+      }),
+    );
+  });
+
+  it("forwards --verify to backup create", async () => {
+    await runCli(["backup", "create", "--verify"]);
+
+    expect(backupCreateCommand).toHaveBeenCalledWith(
+      runtime,
+      expect.objectContaining({
+        verify: true,
+      }),
+    );
+  });
+
+  it("runs backup verify with forwarded options", async () => {
+    await runCli(["backup", "verify", "/tmp/openclaw-backup.tar.gz", "--json"]);
+
+    expect(backupVerifyCommand).toHaveBeenCalledWith(
+      runtime,
+      expect.objectContaining({
+        archive: "/tmp/openclaw-backup.tar.gz",
+        json: true,
       }),
     );
   });

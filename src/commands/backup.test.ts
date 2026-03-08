@@ -11,6 +11,12 @@ import {
 } from "./backup-shared.js";
 import { backupCreateCommand } from "./backup.js";
 
+const backupVerifyCommandMock = vi.hoisted(() => vi.fn());
+
+vi.mock("./backup-verify.js", () => ({
+  backupVerifyCommand: backupVerifyCommandMock,
+}));
+
 describe("backup commands", () => {
   let tempHome: TempHomeEnv;
   let previousCwd: string;
@@ -18,6 +24,16 @@ describe("backup commands", () => {
   beforeEach(async () => {
     tempHome = await createTempHomeEnv("openclaw-backup-test-");
     previousCwd = process.cwd();
+    backupVerifyCommandMock.mockReset();
+    backupVerifyCommandMock.mockResolvedValue({
+      ok: true,
+      archivePath: "/tmp/fake.tar.gz",
+      archiveRoot: "fake",
+      createdAt: new Date().toISOString(),
+      runtimeVersion: "test",
+      assetCount: 1,
+      entryCount: 2,
+    });
   });
 
   afterEach(async () => {
@@ -127,6 +143,36 @@ describe("backup commands", () => {
     }
   });
 
+  it("optionally verifies the archive after writing it", async () => {
+    const stateDir = path.join(tempHome.home, ".openclaw");
+    const archiveDir = await fs.mkdtemp(
+      path.join(os.tmpdir(), "openclaw-backup-verify-on-create-"),
+    );
+    try {
+      await fs.writeFile(path.join(stateDir, "openclaw.json"), JSON.stringify({}), "utf8");
+      await fs.writeFile(path.join(stateDir, "state.txt"), "state\n", "utf8");
+
+      const runtime = {
+        log: vi.fn(),
+        error: vi.fn(),
+        exit: vi.fn(),
+      };
+
+      const result = await backupCreateCommand(runtime, {
+        output: archiveDir,
+        verify: true,
+      });
+
+      expect(result.verified).toBe(true);
+      expect(backupVerifyCommandMock).toHaveBeenCalledWith(
+        expect.objectContaining({ log: expect.any(Function) }),
+        expect.objectContaining({ archive: result.archivePath, json: false }),
+      );
+    } finally {
+      await fs.rm(archiveDir, { recursive: true, force: true });
+    }
+  });
+
   it("rejects output paths that would be created inside a backed-up directory", async () => {
     const stateDir = path.join(tempHome.home, ".openclaw");
     await fs.writeFile(path.join(stateDir, "openclaw.json"), JSON.stringify({}), "utf8");
@@ -185,6 +231,7 @@ describe("backup commands", () => {
     });
 
     expect(result.dryRun).toBe(true);
+    expect(result.verified).toBe(false);
     expect(result.archivePath).toBe(existingArchive);
     expect(await fs.readFile(existingArchive, "utf8")).toBe("already here");
   });
