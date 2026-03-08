@@ -1,3 +1,5 @@
+import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
@@ -461,6 +463,39 @@ describe("resolveAgentIdByWorkspacePath", () => {
     expect(
       resolveAgentIdByWorkspacePath(cfg, `/tmp/openclaw-agent-scope-${Date.now()}-unrelated`),
     ).toBeUndefined();
+  });
+
+  it("matches workspace paths through symlink aliases", () => {
+    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-agent-scope-"));
+    const realWorkspaceRoot = path.join(tempRoot, "real-root");
+    const realOpsWorkspace = path.join(realWorkspaceRoot, "projects", "ops");
+    const aliasWorkspaceRoot = path.join(tempRoot, "alias-root");
+    try {
+      fs.mkdirSync(path.join(realOpsWorkspace, "src"), { recursive: true });
+      fs.symlinkSync(
+        realWorkspaceRoot,
+        aliasWorkspaceRoot,
+        process.platform === "win32" ? "junction" : "dir",
+      );
+
+      const cfg: OpenClawConfig = {
+        agents: {
+          list: [
+            { id: "main", workspace: realWorkspaceRoot },
+            { id: "ops", workspace: realOpsWorkspace },
+          ],
+        },
+      };
+
+      expect(
+        resolveAgentIdByWorkspacePath(cfg, path.join(aliasWorkspaceRoot, "projects", "ops")),
+      ).toBe("ops");
+      expect(
+        resolveAgentIdByWorkspacePath(cfg, path.join(aliasWorkspaceRoot, "projects", "ops", "src")),
+      ).toBe("ops");
+    } finally {
+      fs.rmSync(tempRoot, { recursive: true, force: true });
+    }
   });
 });
 
