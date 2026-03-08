@@ -1,11 +1,7 @@
 import type { CommandArgs } from "../../auto-reply/commands-registry.js";
 import { finalizeInboundContext } from "../../auto-reply/reply/inbound-context.js";
-import { buildUntrustedChannelMetadata } from "../../security/channel-metadata.js";
-import {
-  resolveDiscordOwnerAllowFrom,
-  type DiscordChannelConfigResolved,
-  type DiscordGuildEntryResolved,
-} from "./allow-list.js";
+import { type DiscordChannelConfigResolved, type DiscordGuildEntryResolved } from "./allow-list.js";
+import { buildDiscordInboundAccessContext } from "./inbound-context.js";
 
 export type BuildDiscordNativeCommandContextParams = {
   prompt: string;
@@ -39,39 +35,17 @@ export type BuildDiscordNativeCommandContextParams = {
   timestampMs?: number;
 };
 
-function buildDiscordNativeCommandSystemPrompt(
-  channelConfig?: DiscordChannelConfigResolved | null,
-): string | undefined {
-  const systemPromptParts = [channelConfig?.systemPrompt?.trim() || null].filter(
-    (entry): entry is string => Boolean(entry),
-  );
-  return systemPromptParts.length > 0 ? systemPromptParts.join("\n\n") : undefined;
-}
-
-function buildDiscordNativeCommandUntrustedContext(params: {
-  isGuild: boolean;
-  channelTopic?: string;
-}): string[] | undefined {
-  if (!params.isGuild) {
-    return undefined;
-  }
-  const untrustedChannelMetadata = buildUntrustedChannelMetadata({
-    source: "discord",
-    label: "Discord channel topic",
-    entries: [params.channelTopic],
-  });
-  return untrustedChannelMetadata ? [untrustedChannelMetadata] : undefined;
-}
-
 export function buildDiscordNativeCommandContext(params: BuildDiscordNativeCommandContextParams) {
   const conversationLabel = params.isDirectMessage
     ? (params.user.globalName ?? params.user.username)
     : params.channelId;
-  const ownerAllowFrom = resolveDiscordOwnerAllowFrom({
+  const { groupSystemPrompt, ownerAllowFrom, untrustedContext } = buildDiscordInboundAccessContext({
     channelConfig: params.channelConfig,
     guildInfo: params.guildInfo,
     sender: params.sender,
     allowNameMatching: params.allowNameMatching,
+    isGuild: params.isGuild,
+    channelTopic: params.channelTopic,
   });
 
   return finalizeInboundContext({
@@ -92,13 +66,8 @@ export function buildDiscordNativeCommandContext(params: BuildDiscordNativeComma
     ChatType: params.isDirectMessage ? "direct" : params.isGroupDm ? "group" : "channel",
     ConversationLabel: conversationLabel,
     GroupSubject: params.isGuild ? params.guildName : undefined,
-    GroupSystemPrompt: params.isGuild
-      ? buildDiscordNativeCommandSystemPrompt(params.channelConfig)
-      : undefined,
-    UntrustedContext: buildDiscordNativeCommandUntrustedContext({
-      isGuild: params.isGuild,
-      channelTopic: params.channelTopic,
-    }),
+    GroupSystemPrompt: groupSystemPrompt,
+    UntrustedContext: untrustedContext,
     OwnerAllowFrom: ownerAllowFrom,
     SenderName: params.user.globalName ?? params.user.username,
     SenderId: params.user.id,
