@@ -19,6 +19,8 @@ OPENCLAW_USER="${OPENCLAW_PODMAN_USER:-openclaw}"
 REPO_PATH="${OPENCLAW_REPO_PATH:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)}"
 RUN_SCRIPT_SRC="$REPO_PATH/scripts/run-openclaw-podman.sh"
 QUADLET_TEMPLATE="$REPO_PATH/scripts/podman/openclaw.container.in"
+# Custom APT packages to install inside the container (passed to Docker build)
+OPENCLAW_DOCKER_APT_PACKAGES="${OPENCLAW_DOCKER_APT_PACKAGES:-}"
 
 require_cmd() {
   if ! command -v "$1" >/dev/null 2>&1; then
