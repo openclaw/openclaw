@@ -101,7 +101,7 @@ Note: The download can take a while depending on your connection.
 In the VNC window:
 
 1. Select language and region
-2. Skip Apple ID (or sign in if you want iMessage later)
+2. Skip Apple ID (or sign in later with a dedicated bot Apple ID if you want iMessage)
 3. Create a user account (remember the username and password)
 4. Skip all optional features
 
@@ -203,9 +203,11 @@ This is the killer feature of running on macOS. Use [BlueBubbles](https://bluebu
 Inside the VM:
 
 1. Download BlueBubbles from bluebubbles.app
-2. Sign in with your Apple ID
+2. Sign in with a dedicated Apple ID for the bot (recommended; avoid your personal Apple ID)
 3. Enable the Web API and set a password
 4. Point BlueBubbles webhooks at your gateway (example: `https://your-gateway-host:3000/bluebubbles-webhook?password=<password>`)
+
+Using your personal Apple ID for both sides of the conversation can create self-chat loops where prior bot outputs are re-ingested as new inbound messages.
 
 Add to your OpenClaw config:
 
