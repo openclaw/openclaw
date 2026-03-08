@@ -49,3 +49,8 @@ Use this format when adding entries:
   npm: `@icesword760/openclaw-wechat`
   repo: `https://github.com/icesword0760/openclaw-wechat`
   install: `openclaw plugins install @icesword760/openclaw-wechat`
+
+- **TGCC** — Bridge OpenClaw agents to Claude Code sessions via Telegram with streaming, multi-agent support, and supervisor protocol. Includes agent tools (tgcc_spawn, tgcc_send, tgcc_status, tgcc_kill) and a bundled skill.
+  npm: `@fonz/tgcc`
+  repo: `https://github.com/botverse/tgcc`
+  install: `openclaw plugins install @fonz/tgcc`
