@@ -114,7 +114,7 @@ describe("gateway auth", () => {
         } as NodeJS.ProcessEnv,
       }),
     ).toMatchObject({
-      mode: "token",
+      mode: "none",
       modeSource: "default",
       token: undefined,
       password: undefined,
