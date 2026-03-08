@@ -2,6 +2,7 @@ import crypto from "node:crypto";
 import { Type } from "@sinclair/typebox";
 import { loadConfig } from "../../config/config.js";
 import { callGateway } from "../../gateway/call.js";
+import { createTransport } from "../../transport/factory.js";
 import { normalizeAgentId, resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import { SESSION_LABEL_MAX_LENGTH } from "../../sessions/session-label.js";
 import {
@@ -111,10 +112,10 @@ export function createSessionsSendTool(opts?: {
         };
         let resolvedKey = "";
         try {
-          const resolved = await callGateway<{ key: string }>({
-            method: "sessions.resolve",
-            params: resolveParams,
-            timeoutMs: 10_000,
+          const transport = createTransport();
+          const resolved = await transport.resolveSession({
+            ...(resolveParams.label ? { label: resolveParams.label as string } : {}),
+            ...(resolveParams.sessionKey ? { sessionKey: resolveParams.sessionKey as string } : {}),
           });
           resolvedKey = typeof resolved?.key === "string" ? resolved.key.trim() : "";
         } catch (err) {
@@ -250,12 +251,15 @@ export function createSessionsSendTool(opts?: {
         });
       };
 
+      const transport = createTransport();
+
       if (timeoutSeconds === 0) {
         try {
-          const response = await callGateway<{ runId: string }>({
-            method: "agent",
-            params: sendParams,
-            timeoutMs: 10_000,
+          const response = await transport.send({
+            message,
+            sessionKey: resolvedKey,
+            runId: idempotencyKey,
+            metadata: sendParams,
           });
           if (typeof response?.runId === "string" && response.runId) {
             runId = response.runId;
@@ -280,10 +284,11 @@ export function createSessionsSendTool(opts?: {
       }
 
       try {
-        const response = await callGateway<{ runId: string }>({
-          method: "agent",
-          params: sendParams,
-          timeoutMs: 10_000,
+        const response = await transport.send({
+          message,
+          sessionKey: resolvedKey,
+          runId: idempotencyKey,
+          metadata: sendParams,
         });
         if (typeof response?.runId === "string" && response.runId) {
           runId = response.runId;
@@ -302,14 +307,7 @@ export function createSessionsSendTool(opts?: {
       let waitStatus: string | undefined;
       let waitError: string | undefined;
       try {
-        const wait = await callGateway<{ status?: string; error?: string }>({
-          method: "agent.wait",
-          params: {
-            runId,
-            timeoutMs,
-          },
-          timeoutMs: timeoutMs + 2000,
-        });
+        const wait = await transport.waitForRun(runId, timeoutMs);
         waitStatus = typeof wait?.status === "string" ? wait.status : undefined;
         waitError = typeof wait?.error === "string" ? wait.error : undefined;
       } catch (err) {
