@@ -8,11 +8,21 @@ import {
   stopFeishuMonitorState,
 } from "./monitor.state.js";
 
+export type FeishuStatusSink = (patch: {
+  connected?: boolean;
+  lastConnectedAt?: number | null;
+  lastEventAt?: number | null;
+  lastTransportActivityAt?: number | null;
+  mode?: string;
+  lastError?: string | null;
+}) => void;
+
 export type MonitorFeishuOpts = {
   config?: ClawdbotConfig;
   runtime?: RuntimeEnv;
   abortSignal?: AbortSignal;
   accountId?: string;
+  statusSink?: FeishuStatusSink;
 };
 
 let monitorAccountRuntimePromise: Promise<typeof import("./monitor.account.js")> | undefined;
@@ -50,6 +60,7 @@ export async function monitorFeishuProvider(opts: MonitorFeishuOpts = {}): Promi
       account,
       runtime: opts.runtime,
       abortSignal: opts.abortSignal,
+      statusSink: opts.statusSink,
     });
   }
 
@@ -88,6 +99,7 @@ export async function monitorFeishuProvider(opts: MonitorFeishuOpts = {}): Promi
         runtime: opts.runtime,
         abortSignal: opts.abortSignal,
         botOpenIdSource: { kind: "prefetched", botOpenId, botName },
+        statusSink: opts.statusSink,
       }),
     );
   }
