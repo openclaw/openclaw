@@ -351,6 +351,21 @@ describe("systemd runtime parsing", () => {
       execMainCode: "exited",
     });
   });
+
+  it("rejects pid and exit status values with junk suffixes", () => {
+    const output = [
+      "ActiveState=inactive",
+      "SubState=dead",
+      "MainPID=42abc",
+      "ExecMainStatus=2ms",
+      "ExecMainCode=exited",
+    ].join("\n");
+    expect(parseSystemdShow(output)).toEqual({
+      activeState: "inactive",
+      subState: "dead",
+      execMainCode: "exited",
+    });
+  });
 });
 
 describe("resolveSystemdUserUnitPath", () => {
