@@ -31,10 +31,19 @@ public enum TalkConfigParsing {
         let hasNormalizedPayload = rawProvider != nil || rawProviders != nil
         if hasNormalizedPayload {
             let normalizedProviders = self.normalizedTalkProviders(rawProviders)
-            let providerID =
-                self.normalizedTalkProviderID(rawProvider) ??
-                normalizedProviders.keys.min() ??
-                defaultProvider
+            let explicitProviderID = self.normalizedTalkProviderID(rawProvider)
+            if let explicitProviderID {
+                if !normalizedProviders.isEmpty, normalizedProviders[explicitProviderID] == nil {
+                    return nil
+                }
+                return TalkProviderConfigSelection(
+                    provider: explicitProviderID,
+                    config: normalizedProviders[explicitProviderID] ?? [:],
+                    normalizedPayload: true)
+            }
+            guard normalizedProviders.count == 1, let providerID = normalizedProviders.keys.first else {
+                return nil
+            }
             return TalkProviderConfigSelection(
                 provider: providerID,
                 config: normalizedProviders[providerID] ?? [:],

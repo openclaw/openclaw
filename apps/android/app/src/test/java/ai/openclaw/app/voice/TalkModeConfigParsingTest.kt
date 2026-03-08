@@ -69,6 +69,50 @@ class TalkModeConfigParsingTest {
   }
 
   @Test
+  fun rejectsNormalizedTalkProviderPayloadWhenProviderMissingFromProviders() {
+    val talk =
+      json.parseToJsonElement(
+          """
+          {
+            "provider": "acme",
+            "providers": {
+              "elevenlabs": {
+                "voiceId": "voice-normalized"
+              }
+            }
+          }
+          """.trimIndent(),
+        )
+        .jsonObject
+
+    val selection = TalkModeManager.selectTalkProviderConfig(talk)
+    assertEquals(null, selection)
+  }
+
+  @Test
+  fun rejectsNormalizedTalkProviderPayloadWhenProviderIsAmbiguous() {
+    val talk =
+      json.parseToJsonElement(
+          """
+          {
+            "providers": {
+              "acme": {
+                "voiceId": "voice-acme"
+              },
+              "elevenlabs": {
+                "voiceId": "voice-normalized"
+              }
+            }
+          }
+          """.trimIndent(),
+        )
+        .jsonObject
+
+    val selection = TalkModeManager.selectTalkProviderConfig(talk)
+    assertEquals(null, selection)
+  }
+
+  @Test
   fun fallsBackToLegacyTalkFieldsWhenNormalizedPayloadMissing() {
     val legacyApiKey = "legacy-key" // pragma: allowlist secret
     val talk =
