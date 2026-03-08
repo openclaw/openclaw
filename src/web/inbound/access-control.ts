@@ -74,6 +74,19 @@ export async function checkInboundAccessControl(params: {
     account.groupAllowFrom ?? (configuredAllowFrom.length > 0 ? configuredAllowFrom : undefined);
   const isSamePhone = params.from === params.selfE164;
   const isSelfChat = account.selfChatMode ?? isSelfChatMode(params.selfE164, configuredAllowFrom);
+
+  // Drop outbound messages sent by self (fromMe), matching iMessage is_from_me → drop behavior.
+  // Exception: self-chat DMs where remoteJid === selfJID are intentionally allowed (isSamePhone).
+  if (params.isFromMe && !isSamePhone) {
+    logVerbose("Skipping outbound message (fromMe, not self-chat).");
+    return {
+      allowed: false,
+      shouldMarkRead: false,
+      isSelfChat,
+      resolvedAccountId: account.accountId,
+    };
+  }
+
   const pairingGraceMs =
     typeof params.pairingGraceMs === "number" && params.pairingGraceMs > 0
       ? params.pairingGraceMs
@@ -148,15 +161,6 @@ export async function checkInboundAccessControl(params: {
 
   // DM access control (secure defaults): "pairing" (default) / "allowlist" / "open" / "disabled".
   if (!params.group) {
-    if (params.isFromMe && !isSamePhone) {
-      logVerbose("Skipping outbound DM (fromMe); no pairing reply needed.");
-      return {
-        allowed: false,
-        shouldMarkRead: false,
-        isSelfChat,
-        resolvedAccountId: account.accountId,
-      };
-    }
     if (access.decision === "block" && access.reason === "dmPolicy=disabled") {
       logVerbose("Blocked dm (dmPolicy: disabled)");
       return {
