@@ -34,11 +34,7 @@ pnpm test:live
 EOF
 
 echo "==> Build image: $IMAGE_NAME"
-docker build \
-  --build-arg OPENCLAW_INSTALL_RUNTIME_PNPM=1 \
-  -t "$IMAGE_NAME" \
-  -f "$ROOT_DIR/Dockerfile" \
-  "$ROOT_DIR"
+docker build -t "$IMAGE_NAME" -f "$ROOT_DIR/Dockerfile" "$ROOT_DIR"
 
 echo "==> Run live model tests (profile keys)"
 docker run --rm -t \

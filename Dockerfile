@@ -133,16 +133,14 @@ COPY --from=runtime-assets --chown=node:node /app/extensions ./extensions
 COPY --from=runtime-assets --chown=node:node /app/skills ./skills
 COPY --from=runtime-assets --chown=node:node /app/docs ./docs
 
-# Docker live-test runners can opt back into `pnpm` when they need it,
-# but the default runtime image keeps the package manager out of the hot path.
+# Keep pnpm available in the runtime image for container-local workflows.
+# Use a shared Corepack home so the non-root `node` user does not need a
+# first-run network fetch when invoking pnpm.
 ENV COREPACK_HOME=/usr/local/share/corepack
-ARG OPENCLAW_INSTALL_RUNTIME_PNPM=""
-RUN if [ -n "$OPENCLAW_INSTALL_RUNTIME_PNPM" ]; then \
-      install -d -m 0755 "$COREPACK_HOME" && \
-      corepack enable && \
-      corepack prepare "$(node -p "require('./package.json').packageManager")" --activate && \
-      chmod -R a+rX "$COREPACK_HOME"; \
-    fi
+RUN install -d -m 0755 "$COREPACK_HOME" && \
+    corepack enable && \
+    corepack prepare "$(node -p "require('./package.json').packageManager")" --activate && \
+    chmod -R a+rX "$COREPACK_HOME"
 
 # Install additional system packages needed by your skills or extensions.
 # Example: docker build --build-arg OPENCLAW_DOCKER_APT_PACKAGES="python3 wget" .

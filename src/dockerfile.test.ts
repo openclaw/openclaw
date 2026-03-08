@@ -59,9 +59,11 @@ describe("Dockerfile", () => {
     expect(dockerfile).not.toContain('\\"fpr\\"');
   });
 
-  it("keeps runtime pnpm opt-in", async () => {
+  it("keeps runtime pnpm available", async () => {
     const dockerfile = await readFile(dockerfilePath, "utf8");
-    expect(dockerfile).toContain('ARG OPENCLAW_INSTALL_RUNTIME_PNPM=""');
-    expect(dockerfile).toContain('if [ -n "$OPENCLAW_INSTALL_RUNTIME_PNPM" ]; then');
+    expect(dockerfile).toContain("ENV COREPACK_HOME=/usr/local/share/corepack");
+    expect(dockerfile).toContain(
+      'corepack prepare "$(node -p "require(\'./package.json\').packageManager")" --activate',
+    );
   });
 });
