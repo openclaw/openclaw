@@ -185,6 +185,21 @@ def latest_day_cost(entries: List[Dict[str, Any]], model: str) -> Tuple[Optional
     return None, None
 
 
+def model_seen(entries: Iterable[Dict[str, Any]], model: str) -> bool:
+    for entry in entries:
+        breakdowns = entry.get("modelBreakdowns")
+        if isinstance(breakdowns, list):
+            for item in breakdowns:
+                if isinstance(item, dict) and item.get("modelName") == model:
+                    return True
+
+        models_used = entry.get("modelsUsed")
+        if isinstance(models_used, list) and model in models_used:
+            return True
+
+    return False
+
+
 def latest_model_date(entries: List[Dict[str, Any]], model: str) -> Optional[str]:
     if not entries:
         return None
@@ -284,17 +299,22 @@ def main() -> int:
         eprint(str(exc))
         return 1
 
-    entries = parse_daily_entries(payload)
-    entries = filter_by_days(entries, args.days)
+    all_entries = parse_daily_entries(payload)
+    entries = filter_by_days(all_entries, args.days)
 
     if args.mode == "current":
         model = args.model
         latest_date = None
         if model:
-            latest_date = latest_model_date(entries, model)
-            if latest_date is None:
+            if not model_seen(all_entries, model):
                 eprint(f"Model '{model}' not found in codexbar cost payload.")
                 return 2
+            if args.days and not model_seen(entries, model):
+                eprint(
+                    f"Model '{model}' not found in last {args.days} day(s); try increasing --days."
+                )
+                return 2
+            latest_date = latest_model_date(entries, model)
         else:
             model, latest_date = pick_current_model(entries)
         if not model:
@@ -303,6 +323,9 @@ def main() -> int:
         totals = aggregate_costs(entries)
         total_cost = totals.get(model)
         latest_cost_date, latest_cost = latest_day_cost(entries, model)
+        if args.model and total_cost is None:
+            eprint(f"Model '{model}' has no model breakdown costs in selected rows.")
+            return 2
 
         if args.format == "json":
             payload_out = build_json_current(
