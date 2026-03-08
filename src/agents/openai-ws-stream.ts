@@ -109,6 +109,15 @@ function toNonEmptyString(value: unknown): string | null {
   return trimmed.length > 0 ? trimmed : null;
 }
 
+function isOutputTextPart(value: unknown): value is { type: "output_text"; text: string } {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    (value as { type?: unknown }).type === "output_text" &&
+    typeof (value as { text?: unknown }).text === "string"
+  );
+}
+
 /** Convert pi-ai content (string | ContentPart[]) to plain text. */
 function contentToText(content: unknown): string {
   if (typeof content === "string") {
@@ -293,7 +302,7 @@ export function buildAssistantMessageFromResponse(
   for (const item of response.output ?? []) {
     if (item.type === "message") {
       for (const part of item.content ?? []) {
-        if (part.type === "output_text" && part.text) {
+        if (isOutputTextPart(part) && part.text) {
           content.push({ type: "text", text: part.text });
         }
       }
