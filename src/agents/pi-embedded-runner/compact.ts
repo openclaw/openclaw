@@ -763,6 +763,17 @@ export async function compactEmbeddedPiSessionDirect(
         // Measure compactedCount from the original pre-limiting transcript so compaction
         // lifecycle metrics represent total reduction through the compaction pipeline.
         const messageCountCompactionInput = messageCountOriginal;
+        // Estimate full session tokens BEFORE compaction (including system prompt,
+        // bootstrap context, workspace files, and all history). This is needed for
+        // a correct sanity check — result.tokensBefore only covers the summarizable
+        // history subset, not the full session.
+        let fullSessionTokensBefore = 0;
+        try {
+          fullSessionTokensBefore = limited.reduce((sum, msg) => sum + estimateTokens(msg), 0);
+        } catch {
+          // If token estimation throws on a malformed message, fall back to 0
+          // so the sanity check below becomes a no-op rather than crashing compaction.
+        }
         const result = await compactWithSafetyTimeout(() =>
           session.compact(params.customInstructions),
         );
@@ -773,8 +784,12 @@ export async function compactEmbeddedPiSessionDirect(
           for (const message of session.messages) {
             tokensAfter += estimateTokens(message);
           }
-          // Sanity check: tokensAfter should be less than tokensBefore
-          if (tokensAfter > result.tokensBefore) {
+          // Sanity check: tokensAfter should be less than the full session before compaction.
+          // A 10% margin accounts for estimation jitter from the heuristic token counter.
+          // Previously this compared against result.tokensBefore (partial history subset),
+          // which was always smaller than the full session — causing the check to discard
+          // valid estimates for sessions with large system prompts or workspace files.
+          if (fullSessionTokensBefore > 0 && tokensAfter > fullSessionTokensBefore * 1.1) {
             tokensAfter = undefined; // Don't trust the estimate
           }
         } catch {
