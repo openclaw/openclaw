@@ -142,6 +142,7 @@ export async function searchKeyword(params: {
   snippetMaxChars: number;
   sourceFilter: { sql: string; params: SearchSource[] };
   buildFtsQuery: (raw: string) => string | null;
+  buildFtsFallbackQuery?: (raw: string) => string | null;
   bm25RankToScore: (rank: number) => number;
 }): Promise<Array<SearchRowResult & { textScore: number }>> {
   if (params.limit <= 0) {
