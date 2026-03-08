@@ -824,7 +824,7 @@ export class AcpSessionManager {
           metaCleared: false,
         };
       }
-      const meta = resolution.meta;
+      const meta = requireReadySessionMeta(resolution);
 
       let runtimeClosed = false;
       let runtimeNotice: string | undefined;
