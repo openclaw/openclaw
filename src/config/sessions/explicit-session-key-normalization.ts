@@ -2,34 +2,49 @@ import type { MsgContext } from "../../auto-reply/templating.js";
 import { normalizeExplicitDiscordSessionKey } from "../../discord/session-key-normalization.js";
 
 type ExplicitSessionKeyNormalizer = (sessionKey: string, ctx: MsgContext) => string;
-
-const EXPLICIT_SESSION_KEY_NORMALIZERS: Record<string, ExplicitSessionKeyNormalizer> = {
-  discord: normalizeExplicitDiscordSessionKey,
+type ExplicitSessionKeyNormalizerEntry = {
+  provider: string;
+  normalize: ExplicitSessionKeyNormalizer;
+  matches: (params: {
+    sessionKey: string;
+    provider?: string;
+    surface?: string;
+    from: string;
+  }) => boolean;
 };
 
-function resolveExplicitSessionKeyProvider(
+const EXPLICIT_SESSION_KEY_NORMALIZERS: ExplicitSessionKeyNormalizerEntry[] = [
+  {
+    provider: "discord",
+    normalize: normalizeExplicitDiscordSessionKey,
+    matches: ({ sessionKey, provider, surface, from }) =>
+      surface === "discord" ||
+      provider === "discord" ||
+      from.startsWith("discord:") ||
+      sessionKey.startsWith("discord:") ||
+      sessionKey.includes(":discord:"),
+  },
+];
+
+function resolveExplicitSessionKeyNormalizer(
   sessionKey: string,
   ctx: Pick<MsgContext, "From" | "Provider" | "Surface">,
-): string | undefined {
-  const explicitProvider = [ctx.Surface, ctx.Provider]
-    .map((entry) => entry?.trim().toLowerCase())
-    .find((entry) => entry && entry in EXPLICIT_SESSION_KEY_NORMALIZERS);
-  if (explicitProvider) {
-    return explicitProvider;
-  }
-
-  const from = (ctx.From ?? "").trim().toLowerCase();
-  if (from.startsWith("discord:")) {
-    return "discord";
-  }
-  if (sessionKey.startsWith("discord:") || sessionKey.includes(":discord:")) {
-    return "discord";
-  }
-  return undefined;
+): ExplicitSessionKeyNormalizer | undefined {
+  const normalizedProvider = ctx.Provider?.trim().toLowerCase();
+  const normalizedSurface = ctx.Surface?.trim().toLowerCase();
+  const normalizedFrom = (ctx.From ?? "").trim().toLowerCase();
+  return EXPLICIT_SESSION_KEY_NORMALIZERS.find((entry) =>
+    entry.matches({
+      sessionKey,
+      provider: normalizedProvider,
+      surface: normalizedSurface,
+      from: normalizedFrom,
+    }),
+  )?.normalize;
 }
 
 export function normalizeExplicitSessionKey(sessionKey: string, ctx: MsgContext): string {
   const normalized = sessionKey.trim().toLowerCase();
-  const provider = resolveExplicitSessionKeyProvider(normalized, ctx);
-  return provider ? EXPLICIT_SESSION_KEY_NORMALIZERS[provider](normalized, ctx) : normalized;
+  const normalize = resolveExplicitSessionKeyNormalizer(normalized, ctx);
+  return normalize ? normalize(normalized, ctx) : normalized;
 }
