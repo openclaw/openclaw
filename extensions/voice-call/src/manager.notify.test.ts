@@ -25,35 +25,59 @@ describe("CallManager notify and mapping", () => {
     expect(manager.getCallByProviderCallId("request-uuid")).toBeUndefined();
   });
 
-  it.each(["plivo", "twilio"] as const)(
-    "defers initial TTS until media stream connects for notify mode (%s)",
-    async (providerName) => {
-      const { manager, provider } = await createManagerHarness({}, new FakeProvider(providerName));
+  it("defers initial TTS until media stream connects when streaming is enabled", async () => {
+    const { manager, provider } = await createManagerHarness(
+      { streaming: { enabled: true, openaiApiKey: "sk-test" } },
+      new FakeProvider("twilio"),
+    );
 
-      const { callId, success } = await manager.initiateCall("+15550000002", undefined, {
-        message: "Hello there",
-        mode: "notify",
-      });
-      expect(success).toBe(true);
+    const { callId, success } = await manager.initiateCall("+15550000002", undefined, {
+      message: "Hello there",
+      mode: "notify",
+    });
+    expect(success).toBe(true);
 
-      manager.processEvent({
-        id: `evt-2-${providerName}`,
-        type: "call.answered",
-        callId,
-        providerCallId: "call-uuid",
-        timestamp: Date.now(),
-      });
+    manager.processEvent({
+      id: "evt-2-streaming",
+      type: "call.answered",
+      callId,
+      providerCallId: "call-uuid",
+      timestamp: Date.now(),
+    });
 
-      await new Promise((resolve) => setTimeout(resolve, 0));
+    await new Promise((resolve) => setTimeout(resolve, 0));
 
-      // TTS must NOT fire on call.answered - media stream isn't connected yet
-      expect(provider.playTtsCalls).toHaveLength(0);
+    // Streaming: TTS must NOT fire on call.answered - media stream isn't connected yet
+    expect(provider.playTtsCalls).toHaveLength(0);
 
-      // Simulate media stream connect calling speakInitialMessage
-      await manager.speakInitialMessage("call-uuid");
+    // Simulate media stream connect calling speakInitialMessage
+    await manager.speakInitialMessage("call-uuid");
 
-      expect(provider.playTtsCalls).toHaveLength(1);
-      expect(provider.playTtsCalls[0]?.text).toBe("Hello there");
-    },
-  );
+    expect(provider.playTtsCalls).toHaveLength(1);
+    expect(provider.playTtsCalls[0]?.text).toBe("Hello there");
+  });
+
+  it("speaks initial message on answered for non-streaming providers", async () => {
+    const { manager, provider } = await createManagerHarness({}, new FakeProvider("plivo"));
+
+    const { callId, success } = await manager.initiateCall("+15550000002", undefined, {
+      message: "Hello there",
+      mode: "notify",
+    });
+    expect(success).toBe(true);
+
+    manager.processEvent({
+      id: "evt-2-non-streaming",
+      type: "call.answered",
+      callId,
+      providerCallId: "call-uuid",
+      timestamp: Date.now(),
+    });
+
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    // Non-streaming: TTS fires immediately on call.answered
+    expect(provider.playTtsCalls).toHaveLength(1);
+    expect(provider.playTtsCalls[0]?.text).toBe("Hello there");
+  });
 });
