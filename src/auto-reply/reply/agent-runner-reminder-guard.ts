@@ -72,11 +72,13 @@ export function stripUnscheduledReminderNote(text: string): {
   }
 
   const escaped = UNSCHEDULED_REMINDER_NOTE.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-
-  const stripped = text.replace(new RegExp(`\\n\\n${escaped}$`), "").trimEnd();
+  const pattern = new RegExp(`\\n\\n${escaped}$`);
+  const replaced = text.replace(pattern, "");
+  const didStrip = replaced !== text;
+  const stripped = replaced.trimEnd();
 
   return {
     text: stripped,
-    didStrip: stripped !== text,
+    didStrip,
   };
 }
