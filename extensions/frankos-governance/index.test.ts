@@ -56,6 +56,46 @@ describe("frankos-governance plugin", () => {
     expect(api.on).toHaveBeenCalledWith("before_tool_call", expect.any(Function));
   });
 
+  it("off mode permits mutating actions without governance diagnostics", async () => {
+    const policyFile = createPolicyFileName();
+    cleanupFiles.push(policyFile);
+    await fs.writeFile(
+      policyFile,
+      JSON.stringify({
+        version: "1.0.0",
+        rules: [
+          {
+            id: "deny-write",
+            priority: 100,
+            match: { toolName: "write" },
+            decision: "prohibit",
+            reasonCode: "NO_DIRECT_WRITE",
+          },
+        ],
+      }),
+    );
+
+    const { api, hooks } = createApi({
+      pluginConfig: {
+        mode: "off",
+        policyFile,
+      },
+    });
+    plugin.register(api as never);
+
+    const result = await hooks.before_tool_call?.(
+      {
+        toolName: "write",
+        params: { path: "/tmp/off-mode.md", content: "hello" },
+        runId: "run-off",
+      },
+      { sessionId: "session-off", sessionKey: "main:off" },
+    );
+
+    expect(result).toBeUndefined();
+    expect(api.runtime.events.emitDiagnosticEvent).not.toHaveBeenCalled();
+  });
+
   it("shadow mode allows prohibited action and emits governance telemetry", async () => {
     const policyFile = createPolicyFileName();
     cleanupFiles.push(policyFile);
@@ -222,5 +262,141 @@ describe("frankos-governance plugin", () => {
         blockReason: expect.stringContaining("GOVERNANCE_POLICY_EVAL_FAILED"),
       }),
     );
+  });
+
+  it("rollback scenario enforce->shadow relaxes enforcement for same prohibited action", async () => {
+    const policyFile = createPolicyFileName();
+    cleanupFiles.push(policyFile);
+    await fs.writeFile(
+      policyFile,
+      JSON.stringify({
+        version: "1.0.0",
+        rules: [
+          {
+            id: "deny-write",
+            priority: 100,
+            match: { toolName: "write" },
+            decision: "prohibit",
+            reasonCode: "NO_DIRECT_WRITE",
+            reasonText: "Direct writes require approval",
+          },
+        ],
+      }),
+    );
+
+    const { api: enforceApi, hooks: enforceHooks } = createApi({
+      pluginConfig: {
+        mode: "enforce",
+        policyFile,
+      },
+    });
+    plugin.register(enforceApi as never);
+
+    const enforceResult = await enforceHooks.before_tool_call?.(
+      {
+        toolName: "write",
+        params: { path: "/tmp/rollback-enforce-shadow.md", content: "hello" },
+        runId: "run-rollback-enforce",
+      },
+      { sessionId: "session-rollback", sessionKey: "main:rollback" },
+    );
+    expect(enforceResult).toEqual(
+      expect.objectContaining({
+        block: true,
+        blockReason: expect.stringContaining("GOVERNANCE_PROHIBITED"),
+      }),
+    );
+
+    const { api: shadowApi, hooks: shadowHooks } = createApi({
+      pluginConfig: {
+        mode: "shadow",
+        policyFile,
+      },
+    });
+    plugin.register(shadowApi as never);
+
+    const shadowResult = await shadowHooks.before_tool_call?.(
+      {
+        toolName: "write",
+        params: { path: "/tmp/rollback-enforce-shadow.md", content: "hello" },
+        runId: "run-rollback-shadow",
+      },
+      { sessionId: "session-rollback", sessionKey: "main:rollback" },
+    );
+    expect(shadowResult).toBeUndefined();
+    expect(shadowApi.runtime.events.emitDiagnosticEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "governance.decision",
+        mode: "shadow",
+        decision: "prohibit",
+        reasonCode: "NO_DIRECT_WRITE",
+      }),
+    );
+  });
+
+  it("rollback scenario shadow->off restores passive baseline for same prohibited action", async () => {
+    const policyFile = createPolicyFileName();
+    cleanupFiles.push(policyFile);
+    await fs.writeFile(
+      policyFile,
+      JSON.stringify({
+        version: "1.0.0",
+        rules: [
+          {
+            id: "deny-write",
+            priority: 100,
+            match: { toolName: "write" },
+            decision: "prohibit",
+            reasonCode: "NO_DIRECT_WRITE",
+            reasonText: "Direct writes require approval",
+          },
+        ],
+      }),
+    );
+
+    const { api: shadowApi, hooks: shadowHooks } = createApi({
+      pluginConfig: {
+        mode: "shadow",
+        policyFile,
+      },
+    });
+    plugin.register(shadowApi as never);
+
+    const shadowResult = await shadowHooks.before_tool_call?.(
+      {
+        toolName: "write",
+        params: { path: "/tmp/rollback-shadow-off.md", content: "hello" },
+        runId: "run-rollback-shadow",
+      },
+      { sessionId: "session-rollback-shadow-off", sessionKey: "main:rollback-shadow-off" },
+    );
+    expect(shadowResult).toBeUndefined();
+    expect(shadowApi.runtime.events.emitDiagnosticEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "governance.decision",
+        mode: "shadow",
+        decision: "prohibit",
+        reasonCode: "NO_DIRECT_WRITE",
+      }),
+    );
+
+    const { api: offApi, hooks: offHooks } = createApi({
+      pluginConfig: {
+        mode: "off",
+        policyFile,
+      },
+    });
+    plugin.register(offApi as never);
+
+    const offResult = await offHooks.before_tool_call?.(
+      {
+        toolName: "write",
+        params: { path: "/tmp/rollback-shadow-off.md", content: "hello" },
+        runId: "run-rollback-off",
+      },
+      { sessionId: "session-rollback-shadow-off", sessionKey: "main:rollback-shadow-off" },
+    );
+    expect(offResult).toBeUndefined();
+    expect(offApi.runtime.events.emitDiagnosticEvent).not.toHaveBeenCalled();
   });
 });
