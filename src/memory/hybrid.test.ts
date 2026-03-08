@@ -10,6 +10,15 @@ describe("memory hybrid helpers", () => {
     expect(buildFtsQuery("   ")).toBeNull();
   });
 
+  it("buildFtsQuery handles combining marks and NFC normalization", () => {
+    // Thai with combining tone marks (would split without \p{M})
+    expect(buildFtsQuery("ฐานข้อมูล ข้อผิดพลาด")).toBe('"ฐานข้อมูล" AND "ข้อผิดพลาด"');
+    // NFD input (e + combining acute) normalizes to NFC (é)
+    expect(buildFtsQuery("cafe\u0301")).toBe('"caf\u00E9"');
+    // Finnish with diacritics
+    expect(buildFtsQuery("päätös äänestys")).toBe('"päätös" AND "äänestys"');
+  });
+
   it("bm25RankToScore is monotonic and clamped", () => {
     expect(bm25RankToScore(0)).toBeCloseTo(1);
     expect(bm25RankToScore(1)).toBeCloseTo(0.5);
