@@ -114,7 +114,7 @@ jobs:
 
       - name: Build and push amd64 slim image
         id: build-slim
-        uses: useblacksmith/build-push-action@v2
+        uses: docker/build-push-action@v6 # FORK-ONLY: swapped from blacksmith
         with:
           context: .
           platforms: linux/amd64
@@ -219,7 +219,7 @@ jobs:
 
       - name: Build and push arm64 slim image
         id: build-slim
-        uses: useblacksmith/build-push-action@v2
+        uses: docker/build-push-action@v6 # FORK-ONLY: swapped from blacksmith
         with:
           context: .
           platforms: linux/arm64
