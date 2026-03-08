@@ -33,6 +33,7 @@ const defaultImportPiSdk = () => import("./pi-model-discovery.js");
 let importPiSdk = defaultImportPiSdk;
 
 const CODEX_PROVIDER = "openai-codex";
+const GITHUB_COPILOT_PROVIDER = "github-copilot";
 const OPENAI_PROVIDER = "openai";
 const OPENAI_GPT54_MODEL_ID = "gpt-5.4";
 const OPENAI_GPT54_PRO_MODEL_ID = "gpt-5.4-pro";
@@ -62,6 +63,16 @@ const SYNTHETIC_CATALOG_FALLBACKS: readonly SyntheticCatalogFallback[] = [
     provider: CODEX_PROVIDER,
     id: OPENAI_CODEX_GPT54_MODEL_ID,
     templateIds: ["gpt-5.3-codex", "gpt-5.2-codex"],
+  },
+  {
+    provider: GITHUB_COPILOT_PROVIDER,
+    id: OPENAI_CODEX_GPT53_MODEL_ID,
+    templateIds: ["gpt-5.2-codex"],
+  },
+  {
+    provider: GITHUB_COPILOT_PROVIDER,
+    id: OPENAI_GPT54_MODEL_ID,
+    templateIds: ["gpt-5.2"],
   },
   {
     provider: CODEX_PROVIDER,

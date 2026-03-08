@@ -6,6 +6,7 @@ import { normalizeProviderId } from "./model-selection.js";
 
 const OPENAI_GPT_54_MODEL_ID = "gpt-5.4";
 const OPENAI_GPT_54_PRO_MODEL_ID = "gpt-5.4-pro";
+const GITHUB_COPILOT_PROVIDER = "github-copilot";
 const OPENAI_GPT_54_CONTEXT_TOKENS = 1_050_000;
 const OPENAI_GPT_54_MAX_TOKENS = 128_000;
 const OPENAI_GPT_54_TEMPLATE_MODEL_IDS = ["gpt-5.2"] as const;
@@ -77,6 +78,50 @@ function resolveOpenAIGpt54ForwardCompatModel(
       api: "openai-responses",
       provider: normalizedProvider,
       baseUrl: "https://api.openai.com/v1",
+      reasoning: true,
+      input: ["text", "image"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: OPENAI_GPT_54_CONTEXT_TOKENS,
+      maxTokens: OPENAI_GPT_54_MAX_TOKENS,
+    } as Model<Api>)
+  );
+}
+
+function resolveGitHubCopilotForwardCompatModel(
+  provider: string,
+  modelId: string,
+  modelRegistry: ModelRegistry,
+): Model<Api> | undefined {
+  const normalizedProvider = normalizeProviderId(provider);
+  if (normalizedProvider !== GITHUB_COPILOT_PROVIDER) {
+    return undefined;
+  }
+
+  const trimmedModelId = modelId.trim();
+  if (trimmedModelId.toLowerCase() !== OPENAI_GPT_54_MODEL_ID) {
+    return undefined;
+  }
+
+  return (
+    cloneFirstTemplateModel({
+      normalizedProvider,
+      trimmedModelId,
+      templateIds: [...OPENAI_GPT_54_TEMPLATE_MODEL_IDS],
+      modelRegistry,
+      patch: {
+        api: "openai-responses",
+        provider: normalizedProvider,
+        reasoning: true,
+        input: ["text", "image"],
+        contextWindow: OPENAI_GPT_54_CONTEXT_TOKENS,
+        maxTokens: OPENAI_GPT_54_MAX_TOKENS,
+      },
+    }) ??
+    normalizeModelCompat({
+      id: trimmedModelId,
+      name: trimmedModelId,
+      api: "openai-responses",
+      provider: normalizedProvider,
       reasoning: true,
       input: ["text", "image"],
       cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
@@ -322,6 +367,7 @@ export function resolveForwardCompatModel(
 ): Model<Api> | undefined {
   return (
     resolveOpenAIGpt54ForwardCompatModel(provider, modelId, modelRegistry) ??
+    resolveGitHubCopilotForwardCompatModel(provider, modelId, modelRegistry) ??
     resolveOpenAICodexForwardCompatModel(provider, modelId, modelRegistry) ??
     resolveAnthropicOpus46ForwardCompatModel(provider, modelId, modelRegistry) ??
     resolveAnthropicSonnet46ForwardCompatModel(provider, modelId, modelRegistry) ??

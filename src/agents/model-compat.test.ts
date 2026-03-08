@@ -72,6 +72,21 @@ function createOpenAICodexTemplateModel(id: string): Model<Api> {
   } as Model<Api>;
 }
 
+function createGitHubCopilotTemplateModel(id: string): Model<Api> {
+  return {
+    id,
+    name: id,
+    provider: "github-copilot",
+    api: "openai-responses",
+    baseUrl: "https://api.individual.githubcopilot.com",
+    input: ["text", "image"],
+    reasoning: true,
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    contextWindow: 128_000,
+    maxTokens: 8_192,
+  } as Model<Api>;
+}
+
 function createRegistry(models: Record<string, Model<Api>>): ModelRegistry {
   return {
     find(provider: string, modelId: string) {
@@ -364,6 +379,18 @@ describe("resolveForwardCompatModel", () => {
     expect(model?.api).toBe("openai-codex-responses");
     expect(model?.baseUrl).toBe("https://chatgpt.com/backend-api");
     expect(model?.contextWindow).toBe(272_000);
+    expect(model?.maxTokens).toBe(128_000);
+  });
+
+  it("resolves github-copilot gpt-5.4 via gpt-5.2 template fallback", () => {
+    const registry = createRegistry({
+      "github-copilot/gpt-5.2": createGitHubCopilotTemplateModel("gpt-5.2"),
+    });
+    const model = resolveForwardCompatModel("github-copilot", "gpt-5.4", registry);
+    expectResolvedForwardCompat(model, { provider: "github-copilot", id: "gpt-5.4" });
+    expect(model?.api).toBe("openai-responses");
+    expect(model?.baseUrl).toBe("https://api.individual.githubcopilot.com");
+    expect(model?.contextWindow).toBe(1_050_000);
     expect(model?.maxTokens).toBe(128_000);
   });
 
