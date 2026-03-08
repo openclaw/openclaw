@@ -175,6 +175,9 @@ async function resolveFeishuSenderName(params: {
 }
 
 export type FeishuMessageEvent = {
+  // event_id is injected by the Lark SDK: EventDispatcher.parse() flattens the
+  // event header (containing event_id, event_type, etc.) into the callback data.
+  event_id?: string;
   sender: {
     sender_id: {
       open_id?: string;
@@ -889,6 +892,18 @@ export async function handleFeishuMessage(params: {
   if (!(await tryRecordMessagePersistent(messageId, account.accountId, log))) {
     log(`feishu: skipping duplicate message ${messageId}`);
     return;
+  }
+
+  // Event-level dedup: Feishu's at-least-once delivery may re-push the same
+  // event with a DIFFERENT message_id on retries (15s, 5min, 1h, 6h).
+  // The Lark SDK's EventDispatcher.parse() flattens the header (including
+  // event_id) into the callback data, so we can use it for proper dedup.
+  if (event.event_id) {
+    const eventKey = `event:${account.accountId}:${event.event_id}`;
+    if (!tryRecordMessage(eventKey)) {
+      log(`feishu: skipping duplicate message ${messageId} (event_id dedup: ${event.event_id})`);
+      return;
+    }
   }
 
   let ctx = parseFeishuMessageEvent(event, botOpenId, botName);
