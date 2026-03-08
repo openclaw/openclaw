@@ -105,6 +105,12 @@ async function ensureModelsFileMode(pathname: string): Promise<void> {
   });
 }
 
+async function writeModelsFileAtomic(targetPath: string, contents: string): Promise<void> {
+  const tempPath = `${targetPath}.${process.pid}.${Date.now()}.tmp`;
+  await fs.writeFile(tempPath, contents, { mode: 0o600 });
+  await fs.rename(tempPath, targetPath);
+}
+
 function resolveModelsConfigInput(config?: OpenClawConfig): OpenClawConfig {
   const runtimeSource = getRuntimeConfigSourceSnapshot();
   if (!runtimeSource) {
@@ -195,7 +201,7 @@ export async function ensureOpenClawModelsJson(
     }
 
     await fs.mkdir(agentDir, { recursive: true, mode: 0o700 });
-    await fs.writeFile(targetPath, next, { mode: 0o600 });
+    await writeModelsFileAtomic(targetPath, next);
     await ensureModelsFileMode(targetPath);
     return { agentDir, wrote: true };
   });
