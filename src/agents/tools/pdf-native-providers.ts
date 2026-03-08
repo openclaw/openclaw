@@ -137,11 +137,20 @@ export async function geminiAnalyzePdf(params: {
   }
   parts.push({ text: params.prompt });
 
-  const baseUrl = (params.baseUrl ?? "https://generativelanguage.googleapis.com").replace(
-    /\/+$/,
-    "",
-  );
-  const url = `${baseUrl}/v1beta/models/${encodeURIComponent(params.modelId)}:generateContent?key=${encodeURIComponent(apiKey)}`;
+  // Normalize baseUrl: strip trailing slashes and any API version path suffix.
+  // Some callers may pass a baseUrl that already includes /v1beta or /v1, which would
+  // cause duplication when we construct the full URL below.
+  let baseUrl = (params.baseUrl ?? "https://generativelanguage.googleapis.com").replace(/\/+$/, "");
+  // Strip API version paths if present (e.g., /v1beta, /v1)
+  baseUrl = baseUrl.replace(/\/v\d+(?:beta)?$/, "");
+
+  // Strip provider prefix if present (e.g., "google/gemini-2.0-flash" -> "gemini-2.0-flash").
+  // We only strip "google/" specifically to avoid mangling nested model IDs like "tunedModels/my-model"
+  // which might be passed after the provider has already been stripped by the caller.
+  const actualModelId = params.modelId.startsWith("google/")
+    ? params.modelId.slice("google/".length)
+    : params.modelId;
+  const url = `${baseUrl}/v1beta/models/${encodeURIComponent(actualModelId)}:generateContent?key=${encodeURIComponent(apiKey)}`;
 
   const res = await fetch(url, {
     method: "POST",
