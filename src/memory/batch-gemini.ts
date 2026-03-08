@@ -20,12 +20,22 @@ export type GeminiBatchStatus = {
   state?: string;
   outputConfig?: { file?: string; fileId?: string };
   metadata?: {
+    state?: string;
     output?: {
       responsesFile?: string;
     };
   };
   error?: { message?: string };
 };
+
+/**
+ * Normalize Gemini batch state strings. The REST API returns prefixed enums
+ * like `BATCH_STATE_SUCCEEDED` or `JOB_STATE_FAILED`, but the code checks
+ * unprefixed values like `SUCCEEDED`. Strip known prefixes for comparison.
+ */
+export function normalizeGeminiBatchState(raw: string): string {
+  return raw.replace(/^(?:BATCH_STATE_|JOB_STATE_)/, "");
+}
 
 export type GeminiBatchOutputLine = {
   key?: string;
@@ -191,7 +201,7 @@ async function fetchGeminiFileContent(params: {
 }): Promise<string> {
   const baseUrl = normalizeBatchBaseUrl(params.gemini);
   const file = params.fileId.startsWith("files/") ? params.fileId : `files/${params.fileId}`;
-  const downloadUrl = `${baseUrl}/${file}:download`;
+  const downloadUrl = `${baseUrl}/${file}?alt=media`;
   debugEmbeddingsLog("memory embeddings: gemini batch download", { downloadUrl });
   return await withRemoteHttpResponse({
     url: downloadUrl,
@@ -238,7 +248,10 @@ async function waitForGeminiBatch(params: {
         gemini: params.gemini,
         batchName: params.batchName,
       }));
-    const state = status.state ?? "UNKNOWN";
+    // Gemini REST API nests state under metadata.state; fall back to top-level
+    // status.state for backward compatibility with older/mock responses.
+    const rawState = status.metadata?.state ?? status.state ?? "UNKNOWN";
+    const state = normalizeGeminiBatchState(rawState);
     if (["SUCCEEDED", "COMPLETED", "DONE"].includes(state)) {
       const outputFileId =
         status.outputConfig?.file ??
@@ -288,26 +301,25 @@ export async function runGeminiEmbeddingBatches(
         throw new Error("gemini batch create failed: missing batch name");
       }
 
+      const rawBatchState = batchInfo.metadata?.state ?? batchInfo.state;
+      const batchState = rawBatchState ? normalizeGeminiBatchState(rawBatchState) : undefined;
+
       params.debug?.("memory embeddings: gemini batch created", {
         batchName,
-        state: batchInfo.state,
+        state: batchState,
         group: groupIndex + 1,
         groups,
         requests: group.length,
       });
 
-      if (
-        !params.wait &&
-        batchInfo.state &&
-        !["SUCCEEDED", "COMPLETED", "DONE"].includes(batchInfo.state)
-      ) {
+      if (!params.wait && batchState && !["SUCCEEDED", "COMPLETED", "DONE"].includes(batchState)) {
         throw new Error(
           `gemini batch ${batchName} submitted; enable remote.batch.wait to await completion`,
         );
       }
 
       const completed =
-        batchInfo.state && ["SUCCEEDED", "COMPLETED", "DONE"].includes(batchInfo.state)
+        batchState && ["SUCCEEDED", "COMPLETED", "DONE"].includes(batchState)
           ? {
               outputFileId:
                 batchInfo.outputConfig?.file ??
