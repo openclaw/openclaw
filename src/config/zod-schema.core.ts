@@ -236,7 +236,12 @@ export const ModelProviderSchema = z
     injectNumCtxForOpenAICompat: z.boolean().optional(),
     headers: z.record(z.string(), SecretInputSchema.register(sensitive)).optional(),
     authHeader: z.boolean().optional(),
-    models: z.array(ModelDefinitionSchema),
+    // Provider entries used solely for credential or baseUrl configuration
+    // (e.g. a custom OpenAI-compatible embedding endpoint) need not enumerate
+    // their models.  Defaulting to an empty array lets users omit the field
+    // without triggering a validation error that would cause the gateway to
+    // keep running with the stale config and silently ignore the custom baseUrl.
+    models: z.array(ModelDefinitionSchema).default([]),
   })
   .strict();
 
