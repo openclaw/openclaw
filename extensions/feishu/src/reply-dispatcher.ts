@@ -163,7 +163,6 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
   let streamingStartPromise: Promise<void> | null = null;
   let blockOffset = 0; // cumulative char offset: text before this was delivered in previous blocks
 
-
   const startStreaming = () => {
     if (!streamingEnabled || streamingStartPromise || streaming) {
       return;

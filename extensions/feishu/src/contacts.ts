@@ -10,7 +10,7 @@ import { execSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import type { ClawdbotConfig } from "openclaw/plugin-sdk";
+import type { ClawdbotConfig } from "openclaw/plugin-sdk/feishu";
 import { resolveFeishuAccount } from "./accounts.js";
 import { createFeishuClient } from "./client.js";
 import { checkPermissionError } from "./permissions.js";
@@ -147,7 +147,11 @@ export async function syncContactsFromAPI(params: {
   const client = createFeishuClient(account);
 
   // --- Tier 1: Try users list API ---
-  let users = await collectUsersViaListAPI(client, { appId: account.appId!, domain: account.domain }, log);
+  let users = await collectUsersViaListAPI(
+    client,
+    { appId: account.appId!, domain: account.domain },
+    log,
+  );
 
   // --- Tier 2: Fallback to department traversal ---
   if (users.length === 0) {

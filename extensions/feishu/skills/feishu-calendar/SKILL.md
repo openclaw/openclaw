@@ -33,7 +33,7 @@ Tool `feishu_calendar` creates calendar events on the bot's calendar and invites
 
 ## Permissions
 
-| Scope | Description |
-|---|---|
-| `calendar:calendar` | Create/modify calendar events |
-| `calendar:calendar:readonly` | Read calendar info |
+| Scope                        | Description                   |
+| ---------------------------- | ----------------------------- |
+| `calendar:calendar`          | Create/modify calendar events |
+| `calendar:calendar:readonly` | Read calendar info            |

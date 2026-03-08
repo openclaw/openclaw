@@ -39,6 +39,7 @@ When user says "给某某发消息" / "send message to someone":
 ## Auto-Sync
 
 If a search returns no results, the tool automatically:
+
 1. Syncs all contacts from the Feishu API
 2. Retries the search
 3. Returns updated results

@@ -9,6 +9,7 @@ description: |
 Tool `feishu_send` sends messages to users or groups. Supports text, file upload, and @all mentions.
 
 **Important:** You must resolve the recipient's ID first:
+
 - **Person** → Use `feishu_contacts` to search by name and get `open_id`
 - **Group** → Use `feishu_groups` to search by name and get `chat_id`
 
@@ -74,7 +75,7 @@ Step 2: feishu_send → { "action": "text", "receive_id": "ou_abc123",
 
 ## Permissions
 
-| Scope | Description |
-|---|---|
-| `im:message:send_as_bot` | Send messages as bot |
-| `im:resource` | Upload/download message resources |
+| Scope                    | Description                       |
+| ------------------------ | --------------------------------- |
+| `im:message:send_as_bot` | Send messages as bot              |
+| `im:resource`            | Upload/download message resources |

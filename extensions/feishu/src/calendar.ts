@@ -5,7 +5,7 @@
  * Uses the two-step approach: create event → add attendees.
  */
 
-import type { ClawdbotConfig } from "openclaw/plugin-sdk";
+import type { ClawdbotConfig } from "openclaw/plugin-sdk/feishu";
 import { resolveFeishuAccount } from "./accounts.js";
 import { createFeishuClient } from "./client.js";
 import { checkPermissionError } from "./permissions.js";

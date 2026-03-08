@@ -214,14 +214,17 @@ function resolveFeishuDebounceMentions(params: {
     }
   }
   const merged = mergeFeishuDebounceMentions(entries);
-  if (merged && merged.length > 0) {
-    console.log(
-      `resolveFeishuDebounceMentions[${botOpenId}]: returning ${merged.length} merged mentions`,
-    );
-    return merged;
+  if (!merged) {
+    return undefined;
   }
-  console.log(`resolveFeishuDebounceMentions[${botOpenId}]: returning undefined mentions`);
-  return undefined;
+  const normalizedBotOpenId = botOpenId?.trim();
+  if (!normalizedBotOpenId) {
+    return undefined;
+  }
+  const botMentions = merged.filter(
+    (mention) => mention.id.open_id?.trim() === normalizedBotOpenId,
+  );
+  return botMentions.length > 0 ? botMentions : undefined;
 }
 
 /** Max age (ms) for a message to be considered fresh in a debounce batch.
@@ -244,11 +247,23 @@ function parseCreateTimeMs(event: FeishuMessageEvent): number | undefined {
  * Mirrors the ABORT_TRIGGERS set in auto-reply/reply/abort.ts so we can
  * detect them in the feishu extension without importing core internals. */
 const FEISHU_ABORT_TRIGGERS = new Set([
-  "stop", "/stop", "esc", "abort", "wait", "exit", "interrupt",
-  "\u505c\u6b62", "\u505c", "\u53d6\u6d88",
-  "\u3084\u3081\u3066", "\u6b62\u3081\u3066", "\u0441\u0442\u043e\u043f", "\u062a\u0648\u0642\u0641",
+  "stop",
+  "/stop",
+  "esc",
+  "abort",
+  "wait",
+  "exit",
+  "interrupt",
+  "\u505c\u6b62",
+  "\u505c",
+  "\u53d6\u6d88",
+  "\u3084\u3081\u3066",
+  "\u6b62\u3081\u3066",
+  "\u0441\u0442\u043e\u043f",
+  "\u062a\u0648\u0642\u0641",
 ]);
-const TRAILING_PUNCT_RE = /[.!?\u2026,\uff0c\u3002;\uff1b:\uff1a'"\u2018\u2019\u201c\u201d\uff09)\]\}]+$/u;
+const TRAILING_PUNCT_RE =
+  /[.!?\u2026,\uff0c\u3002;\uff1b:\uff1a'"\u2018\u2019\u201c\u201d\uff09)\]\}]+$/u;
 
 function isFeishuAbortTrigger(text: string | undefined): boolean {
   if (!text) return false;
@@ -291,9 +306,7 @@ function registerEventHandlers(
    *  dispatchReplyFromConfig -> tryFastAbortFromMessage will detect the abort
    *  text and call abortEmbeddedPiRun + clearSessionQueues. */
   const dispatchFeishuMessageDirect = async (event: FeishuMessageEvent) => {
-    log(
-      `feishu[${accountId}]: fast-abort bypass - dispatching stop command directly (skip queue)`,
-    );
+    log(`feishu[${accountId}]: fast-abort bypass - dispatching stop command directly (skip queue)`);
     try {
       await handleFeishuMessage({
         cfg,
@@ -407,9 +420,7 @@ function registerEventHandlers(
       // drop followed by reconnect), drop old messages and record their IDs
       // in dedup so future Feishu retries are permanently ignored.
       if (freshEntries.length > 1) {
-        const newestTime = Math.max(
-          ...freshEntries.map((e) => parseCreateTimeMs(e) ?? 0),
-        );
+        const newestTime = Math.max(...freshEntries.map((e) => parseCreateTimeMs(e) ?? 0));
         if (newestTime > 0) {
           const staleEntries = freshEntries.filter((e) => {
             const ct = parseCreateTimeMs(e);
@@ -421,7 +432,7 @@ function registerEventHandlers(
             );
             log(
               `feishu[${accountId}]: dropping ${staleEntries.length} stale message(s) ` +
-              `superseded by newer messages in debounce batch`,
+                `superseded by newer messages in debounce batch`,
             );
             // Record stale IDs in dedup so Feishu retries are permanently rejected
             await recordSuppressedMessageIds(staleEntries);
@@ -517,9 +528,7 @@ function registerEventHandlers(
         try {
           await tryRecordMessagePersistent(recalledMessageId, accountId, log);
         } catch (err) {
-          error(
-            `feishu[${accountId}]: failed to record recalled message dedup: ${String(err)}`,
-          );
+          error(`feishu[${accountId}]: failed to record recalled message dedup: ${String(err)}`);
         }
 
         // Layer 2+3: Synthesize a /stop command from the recaller to abort any
@@ -547,9 +556,7 @@ function registerEventHandlers(
               create_time: String(Date.now()),
             },
           };
-          log(
-            `feishu[${accountId}]: dispatching synthetic /stop for recalled message`,
-          );
+          log(`feishu[${accountId}]: dispatching synthetic /stop for recalled message`);
           await dispatchFeishuMessageDirect(syntheticStopEvent);
         }
       } catch (err) {

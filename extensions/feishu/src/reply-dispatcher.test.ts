@@ -241,7 +241,7 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     expect(sendMediaFeishuMock).not.toHaveBeenCalled();
   });
 
-  it("sets disableBlockStreaming in replyOptions to prevent silent reply drops", async () => {
+  it("exposes onPartialReply for streaming updates", async () => {
     const result = createFeishuReplyDispatcher({
       cfg: {} as never,
       agentId: "agent",
@@ -249,7 +249,8 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
       chatId: "oc_chat",
     });
 
-    expect(result.replyOptions).toHaveProperty("disableBlockStreaming", true);
+    expect(result.replyOptions).toHaveProperty("onPartialReply");
+    expect(typeof result.replyOptions.onPartialReply).toBe("function");
   });
 
   it("uses streaming session for auto mode markdown payloads", async () => {
@@ -398,7 +399,8 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
 
     expect(streamingInstances).toHaveLength(1);
     expect(streamingInstances[0].close).toHaveBeenCalledTimes(1);
-    expect(streamingInstances[0].close).toHaveBeenCalledWith("hellolo world");
+    // Block deliver sets streamText = text directly (the block's own content)
+    expect(streamingInstances[0].close).toHaveBeenCalledWith("lo world");
   });
 
   it("sends media-only payloads as attachments", async () => {
