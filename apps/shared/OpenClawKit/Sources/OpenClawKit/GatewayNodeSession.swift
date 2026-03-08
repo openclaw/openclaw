@@ -24,6 +24,37 @@ private func replaceCanvasCapabilityInScopedHostUrl(scopedUrl: String, capabilit
     return String(scopedUrl[..<capabilityStart]) + capability + String(scopedUrl[capabilityEnd...])
 }
 
+func canonicalizeCanvasHostUrl(raw: String?, activeURL: URL?) -> String? {
+    let trimmed = raw?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+    guard !trimmed.isEmpty else { return nil }
+    guard var parsed = URLComponents(string: trimmed) else { return trimmed }
+
+    let parsedHost = parsed.host?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+    let parsedIsLoopback = !parsedHost.isEmpty && LoopbackHost.isLoopback(parsedHost)
+
+    if !parsedHost.isEmpty, !parsedIsLoopback {
+        guard let activeURL else { return trimmed }
+        let isTLS = activeURL.scheme?.lowercased() == "wss"
+        guard isTLS else { return trimmed }
+        parsed.scheme = "https"
+        if parsed.port == nil {
+            let tlsPort = activeURL.port ?? 443
+            parsed.port = (tlsPort == 443) ? nil : tlsPort
+        }
+        return parsed.string ?? trimmed
+    }
+
+    guard let activeURL, let fallbackHost = activeURL.host, !LoopbackHost.isLoopback(fallbackHost) else {
+        return trimmed
+    }
+    let isTLS = activeURL.scheme?.lowercased() == "wss"
+    parsed.scheme = isTLS ? "https" : "http"
+    parsed.host = fallbackHost
+    let fallbackPort = activeURL.port ?? (isTLS ? 443 : 80)
+    parsed.port = ((isTLS && fallbackPort == 443) || (!isTLS && fallbackPort == 80)) ? nil : fallbackPort
+    return parsed.string ?? trimmed
+}
+
 
 public actor GatewayNodeSession {
     private let logger = Logger(subsystem: "ai.openclaw", category: "node.gateway")
@@ -396,32 +427,7 @@ public actor GatewayNodeSession {
     }
 
     private func normalizeCanvasHostUrl(_ raw: String?) -> String? {
-        let trimmed = raw?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        guard !trimmed.isEmpty else { return nil }
-        guard var parsed = URLComponents(string: trimmed) else { return trimmed }
-
-        let parsedHost = parsed.host?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        let parsedIsLoopback = !parsedHost.isEmpty && LoopbackHost.isLoopback(parsedHost)
-
-        if !parsedHost.isEmpty, !parsedIsLoopback {
-            guard let activeURL else { return trimmed }
-            let isTLS = activeURL.scheme?.lowercased() == "wss"
-            guard isTLS else { return trimmed }
-            parsed.scheme = "https"
-            let tlsPort = activeURL.port ?? 443
-            parsed.port = (tlsPort == 443) ? nil : tlsPort
-            return parsed.string ?? trimmed
-        }
-
-        guard let activeURL, let fallbackHost = activeURL.host, !LoopbackHost.isLoopback(fallbackHost) else {
-            return trimmed
-        }
-        let isTLS = activeURL.scheme?.lowercased() == "wss"
-        parsed.scheme = isTLS ? "https" : "http"
-        parsed.host = fallbackHost
-        let fallbackPort = activeURL.port ?? (isTLS ? 443 : 80)
-        parsed.port = ((isTLS && fallbackPort == 443) || (!isTLS && fallbackPort == 80)) ? nil : fallbackPort
-        return parsed.string ?? trimmed
+        canonicalizeCanvasHostUrl(raw: raw, activeURL: self.activeURL)
     }
 
     private func handleEvent(_ evt: EventFrame) async {
@@ -433,9 +439,7 @@ public actor GatewayNodeSession {
             let request = try self.decodeInvokeRequest(from: payload)
             let timeoutLabel = request.timeoutMs.map(String.init) ?? "none"
             self.logger.info(
-                "node invoke request decoded id=\(request.id, privacy: .public) "
-                    + "command=\(request.command, privacy: .public) "
-                    + "timeoutMs=\(timeoutLabel, privacy: .public)")
+                "node invoke request decoded id=\(request.id, privacy: .public) command=\(request.command, privacy: .public) timeoutMs=\(timeoutLabel, privacy: .public)")
             guard let onInvoke else { return }
             let req = BridgeInvokeRequest(
                 id: request.id,
@@ -489,8 +493,7 @@ public actor GatewayNodeSession {
             try await channel.send(method: "node.invoke.result", params: params)
         } catch {
             self.logger.error(
-                "node invoke result failed id=\(request.id, privacy: .public) "
-                    + "error=\(error.localizedDescription, privacy: .public)")
+                "node invoke result failed id=\(request.id, privacy: .public) error=\(error.localizedDescription, privacy: .public)")
         }
     }
 
