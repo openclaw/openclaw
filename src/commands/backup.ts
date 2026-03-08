@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -117,6 +118,10 @@ async function assertOutputPathReady(outputPath: string): Promise<void> {
     }
     throw err;
   }
+}
+
+function buildTempArchivePath(outputPath: string): string {
+  return `${outputPath}.${randomUUID()}.tmp`;
 }
 
 async function canonicalizePathForContainment(targetPath: string): Promise<string> {
@@ -265,6 +270,7 @@ export async function backupCreateCommand(
     await fs.mkdir(path.dirname(outputPath), { recursive: true });
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-backup-"));
     const manifestPath = path.join(tempDir, "manifest.json");
+    const tempArchivePath = buildTempArchivePath(outputPath);
     try {
       const manifest = buildManifest({
         createdAt,
@@ -281,7 +287,7 @@ export async function backupCreateCommand(
 
       await tar.c(
         {
-          file: outputPath,
+          file: tempArchivePath,
           gzip: true,
           portable: true,
           preservePaths: true,
@@ -295,7 +301,9 @@ export async function backupCreateCommand(
         },
         [manifestPath, ...result.assets.map((asset) => asset.sourcePath)],
       );
+      await fs.rename(tempArchivePath, outputPath);
     } finally {
+      await fs.rm(tempArchivePath, { force: true }).catch(() => undefined);
       await fs.rm(tempDir, { recursive: true, force: true }).catch(() => undefined);
     }
 
