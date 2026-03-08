@@ -44,9 +44,14 @@ export function renderDebug(props: DebugProps) {
             ${props.loading ? "Refreshing…" : "Refresh"}
           </button>
         </div>
-        <div class="stack" style="margin-top: 12px;">
-          <div>
-            <div class="muted">Status</div>
+          <div class="stack" style="margin-top: 12px;">
+            ${
+              props.loading
+                ? html`<div class="callout" style="margin-top: 8px;">Loading snapshot data...</div>`
+                : !props.status && !props.health && !props.heartbeat
+                  ? html`<div class="callout warn" style="margin-top: 8px;">Not connected to gateway. Refresh will be available when connected.</div>`
+                  : nothing
+            }
             ${
               securitySummary
                 ? html`<div class="callout ${securityTone}" style="margin-top: 8px;">
