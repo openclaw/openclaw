@@ -49,6 +49,23 @@ function isLegacyToolExecuteArgs(args: ToolExecuteArgsAny): args is ToolExecuteA
   return isAbortSignal(fifth);
 }
 
+/**
+ * GLM-5 (and potentially other OpenAI-compatible models) may return tool call
+ * arguments as a JSON-encoded string instead of a parsed object.  Detect that
+ * case and parse it so downstream consumers always receive an object.
+ */
+function ensureParsedToolArgs(args: unknown): unknown {
+  if (typeof args !== "string") {
+    return args;
+  }
+  try {
+    const parsed = JSON.parse(args);
+    return typeof parsed === "object" && parsed !== null ? parsed : args;
+  } catch {
+    return args;
+  }
+}
+
 function describeToolExecutionError(err: unknown): {
   message: string;
   stack?: string;
@@ -146,18 +163,18 @@ export function toToolDefinitions(tools: AnyAgentTool[]): ToolDefinition[] {
       parameters: tool.parameters,
       execute: async (...args: ToolExecuteArgs): Promise<AgentToolResult<unknown>> => {
         const { toolCallId, params, onUpdate, signal } = splitToolExecuteArgs(args);
-        let executeParams = params;
+        let executeParams = ensureParsedToolArgs(params);
         try {
           if (!beforeHookWrapped) {
             const hookOutcome = await runBeforeToolCallHook({
               toolName: name,
-              params,
+              params: executeParams,
               toolCallId,
             });
             if (hookOutcome.blocked) {
               throw new Error(hookOutcome.reason);
             }
-            executeParams = hookOutcome.params;
+            executeParams = ensureParsedToolArgs(hookOutcome.params);
           }
           const rawResult = await tool.execute(toolCallId, executeParams, signal, onUpdate);
           const result = normalizeToolExecutionResult({
@@ -211,7 +228,7 @@ export function toClientToolDefinitions(
         const { toolCallId, params } = splitToolExecuteArgs(args);
         const outcome = await runBeforeToolCallHook({
           toolName: func.name,
-          params,
+          params: ensureParsedToolArgs(params),
           toolCallId,
           ctx: hookContext,
         });
