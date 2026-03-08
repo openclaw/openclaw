@@ -39,6 +39,8 @@ type UnknownKeyIssue = {
   keys: string[];
 };
 
+const MAX_UNKNOWN_KEY_STRIP_PASSES = 3;
+
 function toIssueRecord(value: unknown): UnknownIssueRecord | null {
   if (!value || typeof value !== "object") {
     return null;
@@ -69,10 +71,7 @@ function toUnknownKeyIssue(issue: unknown): UnknownKeyIssue | null {
   if (!Array.isArray(record.keys)) {
     return null;
   }
-  const keys = record.keys
-    .filter((entry): entry is string => typeof entry === "string")
-    .map((entry) => entry.trim())
-    .filter((entry) => entry.length > 0);
+  const keys = record.keys.filter((entry): entry is string => typeof entry === "string");
   if (keys.length === 0) {
     return null;
   }
@@ -132,42 +131,110 @@ function stripUnknownKeysWithWarnings(raw: unknown): {
   sanitizedRaw: unknown;
   warnings: ConfigValidationIssue[];
 } {
-  const parsed = OpenClawSchema.safeParse(raw);
-  if (parsed.success) {
-    return { sanitizedRaw: raw, warnings: [] };
-  }
-
-  const unknownKeyIssues = collectUnknownKeyIssues(parsed.error.issues);
-  if (unknownKeyIssues.length === 0) {
-    return { sanitizedRaw: raw, warnings: [] };
-  }
-
-  const sanitizedRaw = structuredClone(raw);
+  let sanitizedRaw = raw;
+  let cloned = false;
   const warnings: ConfigValidationIssue[] = [];
-  for (const issue of unknownKeyIssues) {
-    const target = resolveIssuePathObject(sanitizedRaw, issue.pathSegments);
-    if (!target) {
-      continue;
+  const warningKeys = new Set<string>();
+
+  for (let pass = 0; pass < MAX_UNKNOWN_KEY_STRIP_PASSES; pass += 1) {
+    const parsed = OpenClawSchema.safeParse(sanitizedRaw);
+    if (parsed.success) {
+      if (!cloned) {
+        return { sanitizedRaw: raw, warnings: [] };
+      }
+      return { sanitizedRaw, warnings };
     }
-    let removed = false;
-    for (const key of issue.keys) {
-      if (!Object.prototype.hasOwnProperty.call(target, key)) {
+
+    const unknownKeyIssues = collectUnknownKeyIssues(parsed.error.issues);
+    if (unknownKeyIssues.length === 0) {
+      if (!cloned) {
+        return { sanitizedRaw: raw, warnings: [] };
+      }
+      return { sanitizedRaw, warnings };
+    }
+
+    if (!cloned) {
+      sanitizedRaw = structuredClone(raw);
+      cloned = true;
+    }
+
+    let removedInPass = false;
+    for (const issue of unknownKeyIssues) {
+      const target = resolveIssuePathObject(sanitizedRaw, issue.pathSegments);
+      if (!target) {
         continue;
       }
-      delete target[key];
-      removed = true;
+      let removedFromIssue = false;
+      for (const key of issue.keys) {
+        if (!Object.prototype.hasOwnProperty.call(target, key)) {
+          continue;
+        }
+        delete target[key];
+        removedFromIssue = true;
+      }
+      if (!removedFromIssue) {
+        continue;
+      }
+      removedInPass = true;
+      const warning = formatUnknownKeysWarning(issue);
+      const warningKey = `${warning.path}\u0000${warning.message}`;
+      if (warningKeys.has(warningKey)) {
+        continue;
+      }
+      warningKeys.add(warningKey);
+      warnings.push(warning);
     }
-    if (!removed) {
-      continue;
-    }
-    warnings.push(formatUnknownKeysWarning(issue));
-  }
 
-  if (warnings.length === 0) {
-    return { sanitizedRaw: raw, warnings: [] };
+    if (!removedInPass) {
+      // If no reported key could be removed, fail closed with the current payload.
+      break;
+    }
   }
 
   return { sanitizedRaw, warnings };
+}
+
+function setOwnConfigProperty(target: Record<string, unknown>, key: string, value: unknown): void {
+  Object.defineProperty(target, key, {
+    value,
+    enumerable: true,
+    writable: true,
+    configurable: true,
+  });
+}
+
+function mergeValidatedConfigWithUnknownRawKeys(validated: unknown, raw: unknown): unknown {
+  if (Array.isArray(validated)) {
+    if (!Array.isArray(raw)) {
+      return validated;
+    }
+    return validated.map((entry, index) =>
+      mergeValidatedConfigWithUnknownRawKeys(entry, raw[index]),
+    );
+  }
+
+  if (isRecord(validated)) {
+    if (!isRecord(raw)) {
+      return validated;
+    }
+    const merged: Record<string, unknown> = {};
+    for (const [key, rawValue] of Object.entries(raw)) {
+      if (Object.prototype.hasOwnProperty.call(validated, key)) {
+        continue;
+      }
+      setOwnConfigProperty(merged, key, rawValue);
+    }
+    for (const [key, validatedValue] of Object.entries(validated)) {
+      setOwnConfigProperty(
+        merged,
+        key,
+        mergeValidatedConfigWithUnknownRawKeys(validatedValue, raw[key]),
+      );
+    }
+    return merged;
+  }
+
+  return validated;
 }
 
 function collectAllowedValuesFromIssue(issue: unknown): AllowedValuesCollection {
@@ -421,16 +488,22 @@ type ValidateConfigWithPluginsResult =
     };
 
 export function validateConfigObjectWithPlugins(raw: unknown): ValidateConfigWithPluginsResult {
-  return validateConfigObjectWithPluginsBase(raw, { applyDefaults: true });
+  return validateConfigObjectWithPluginsBase(raw, {
+    applyDefaults: true,
+    preserveUnknownKeys: false,
+  });
 }
 
 export function validateConfigObjectRawWithPlugins(raw: unknown): ValidateConfigWithPluginsResult {
-  return validateConfigObjectWithPluginsBase(raw, { applyDefaults: false });
+  return validateConfigObjectWithPluginsBase(raw, {
+    applyDefaults: false,
+    preserveUnknownKeys: true,
+  });
 }
 
 function validateConfigObjectWithPluginsBase(
   raw: unknown,
-  opts: { applyDefaults: boolean },
+  opts: { applyDefaults: boolean; preserveUnknownKeys: boolean },
 ): ValidateConfigWithPluginsResult {
   const { sanitizedRaw, warnings: unknownKeyWarnings } = stripUnknownKeysWithWarnings(raw);
   const base = opts.applyDefaults
@@ -441,6 +514,9 @@ function validateConfigObjectWithPluginsBase(
   }
 
   const config = base.config;
+  const configForReturn = opts.preserveUnknownKeys
+    ? (mergeValidatedConfigWithUnknownRawKeys(config, raw) as OpenClawConfig)
+    : config;
   const issues: ConfigValidationIssue[] = [];
   const warnings: ConfigValidationIssue[] = [...unknownKeyWarnings];
   const hasExplicitPluginsConfig =
@@ -584,7 +660,7 @@ function validateConfigObjectWithPluginsBase(
     if (issues.length > 0) {
       return { ok: false, issues, warnings };
     }
-    return { ok: true, config, warnings };
+    return { ok: true, config: configForReturn, warnings };
   }
 
   const { registry } = ensureRegistry();
@@ -726,5 +802,5 @@ function validateConfigObjectWithPluginsBase(
     return { ok: false, issues, warnings };
   }
 
-  return { ok: true, config, warnings };
+  return { ok: true, config: configForReturn, warnings };
 }
