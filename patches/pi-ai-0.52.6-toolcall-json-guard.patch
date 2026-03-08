@@ -1,0 +1,279 @@
+--- a/dist/providers/openai-completions.js
++++ b/dist/providers/openai-completions.js
+@@ -42,6 +42,111 @@
+     }
+     return false;
+ }
++
++function extractRawToolArgs(toolCall) {
++    return (toolCall?.function?.arguments ??
++        toolCall?.function?.parsed_arguments ??
++        toolCall?.function?.args ??
++        toolCall?.arguments ??
++        toolCall?.parsed_arguments ??
++        toolCall?.args ??
++        toolCall?.input);
++}
++function recoverFirstJsonObject(raw) {
++    if (typeof raw !== "string")
++        return null;
++    const trimmed = raw.trim();
++    const start = trimmed.indexOf("{");
++    if (start < 0)
++        return null;
++    let depth = 0;
++    let inString = false;
++    let escape = false;
++    for (let i = start; i < trimmed.length; i++) {
++        const ch = trimmed[i];
++        if (inString) {
++            if (escape) {
++                escape = false;
++            }
++            else if (ch === "\\") {
++                escape = true;
++            }
++            else if (ch === '"') {
++                inString = false;
++            }
++            continue;
++        }
++        if (ch === '"') {
++            inString = true;
++            continue;
++        }
++        if (ch === "{") {
++            depth++;
++        }
++        else if (ch === "}") {
++            depth--;
++            if (depth === 0) {
++                try {
++                    return JSON.parse(trimmed.slice(start, i + 1));
++                }
++                catch {
++                    return null;
++                }
++            }
++        }
++    }
++    return null;
++}
++function parseToolArgsSafely(raw, fallbackArgs) {
++    const fallbackObj = fallbackArgs && typeof fallbackArgs === "object" ? fallbackArgs : {};
++    if (typeof raw !== "string")
++        return fallbackObj;
++    const trimmed = raw.trim();
++    if (!trimmed)
++        return Object.keys(fallbackObj).length > 0 ? fallbackObj : {};
++    try {
++        return JSON.parse(trimmed);
++    }
++    catch {
++        const recovered = recoverFirstJsonObject(trimmed);
++        return recovered ?? null;
++    }
++}
++function applyRawToolArgs(block, rawToolArgs) {
++    if (typeof rawToolArgs === "string" && rawToolArgs.length > 0) {
++        block.partialArgs += rawToolArgs;
++        block.arguments = parseStreamingJson(block.partialArgs);
++        return rawToolArgs;
++    }
++    if (rawToolArgs && typeof rawToolArgs === "object") {
++        block.arguments = rawToolArgs;
++        try {
++            const json = JSON.stringify(rawToolArgs);
++            if (json && json !== "{}") {
++                block.partialArgs = json;
++                return json;
++            }
++        }
++        catch {
++            // ignore serialization errors
++        }
++    }
++    return "";
++}
++function findToolCallBlock(blocks, callId) {
++    if (!callId)
++        return null;
++    for (let i = blocks.length - 1; i >= 0; i--) {
++        const block = blocks[i];
++        if (block?.type !== "toolCall")
++            continue;
++        if (block.id === callId || block.id.startsWith(`${callId}|`) || block.id.includes(`|${callId}`)) {
++            return block;
++        }
++    }
++    return null;
++}
++
+ export const streamOpenAICompletions = (model, context, options) => {
+     const stream = new AssistantMessageEventStream();
+     (async () => {
+@@ -91,7 +196,14 @@
+                         });
+                     }
+                     else if (block.type === "toolCall") {
+-                        block.arguments = JSON.parse(block.partialArgs || "{}");
++                        const parsedArgs = parseToolArgsSafely(block.partialArgs, block.arguments);
++                        if (parsedArgs === null || !block.name || !String(block.name).trim()) {
++                            const idx = blocks.lastIndexOf(block);
++                            if (idx >= 0)
++                                blocks.splice(idx, 1);
++                            return;
++                        }
++                        block.arguments = parsedArgs;
+                         delete block.partialArgs;
+                         stream.push({
+                             type: "toolcall_end",
+@@ -103,6 +215,30 @@
+                 }
+             };
+             for await (const chunk of openaiStream) {
++                const responseEventType = chunk?.type || chunk?.event;
++                if (responseEventType === "response.function_call_arguments.delta" ||
++                    responseEventType === "response.function_call_arguments.done") {
++                    const callId = chunk?.call_id || chunk?.item_id || chunk?.id || chunk?.item?.call_id || "";
++                    const target = (currentBlock?.type === "toolCall"
++                        ? currentBlock
++                        : (findToolCallBlock(output.content, callId) ?? null));
++                    const delta = responseEventType === "response.function_call_arguments.delta"
++                        ? chunk?.delta
++                        : chunk?.arguments;
++                    if (target && typeof delta === "string" && delta.length > 0) {
++                        target.partialArgs = responseEventType === "response.function_call_arguments.done"
++                            ? delta
++                            : `${target.partialArgs || ""}${delta}`;
++                        target.arguments = parseStreamingJson(target.partialArgs);
++                        stream.push({
++                            type: "toolcall_delta",
++                            contentIndex: blockIndex(),
++                            delta,
++                            partial: output,
++                        });
++                    }
++                    continue;
++                }
+                 if (chunk.usage) {
+                     const cachedTokens = chunk.usage.prompt_tokens_details?.cached_tokens || 0;
+                     const reasoningTokens = chunk.usage.completion_tokens_details?.reasoning_tokens || 0;
+@@ -193,14 +329,17 @@
+                     }
+                     if (choice?.delta?.tool_calls) {
+                         for (const toolCall of choice.delta.tool_calls) {
++                            const toolNameDelta = toolCall.function?.name || "";
+                             if (!currentBlock ||
+                                 currentBlock.type !== "toolCall" ||
+-                                (toolCall.id && currentBlock.id !== toolCall.id)) {
++                                (toolCall.id &&
++                                    currentBlock.id !== toolCall.id &&
++                                    Boolean(toolNameDelta))) {
+                                 finishCurrentBlock(currentBlock);
+                                 currentBlock = {
+                                     type: "toolCall",
+                                     id: toolCall.id || "",
+-                                    name: toolCall.function?.name || "",
++                                    name: toolNameDelta,
+                                     arguments: {},
+                                     partialArgs: "",
+                                 };
+@@ -208,16 +347,12 @@
+                                 stream.push({ type: "toolcall_start", contentIndex: blockIndex(), partial: output });
+                             }
+                             if (currentBlock.type === "toolCall") {
+-                                if (toolCall.id)
++                                if (toolCall.id && !currentBlock.id)
+                                     currentBlock.id = toolCall.id;
+-                                if (toolCall.function?.name)
+-                                    currentBlock.name = toolCall.function.name;
+-                                let delta = "";
+-                                if (toolCall.function?.arguments) {
+-                                    delta = toolCall.function.arguments;
+-                                    currentBlock.partialArgs += toolCall.function.arguments;
+-                                    currentBlock.arguments = parseStreamingJson(currentBlock.partialArgs);
+-                                }
++                                if (toolNameDelta)
++                                    currentBlock.name = toolNameDelta;
++                                const rawToolArgs = extractRawToolArgs(toolCall);
++                                const delta = applyRawToolArgs(currentBlock, rawToolArgs);
+                                 stream.push({
+                                     type: "toolcall_delta",
+                                     contentIndex: blockIndex(),
+@@ -227,6 +362,54 @@
+                             }
+                         }
+                     }
++                    if (choice?.delta?.function_call) {
++                        const functionCall = choice.delta.function_call;
++                        if (!currentBlock || currentBlock.type !== "toolCall") {
++                            finishCurrentBlock(currentBlock);
++                            currentBlock = {
++                                type: "toolCall",
++                                id: "",
++                                name: "",
++                                arguments: {},
++                                partialArgs: "",
++                            };
++                            output.content.push(currentBlock);
++                            stream.push({ type: "toolcall_start", contentIndex: blockIndex(), partial: output });
++                        }
++                        if (currentBlock.type === "toolCall") {
++                            if (functionCall?.name)
++                                currentBlock.name = functionCall.name;
++                            const delta = applyRawToolArgs(currentBlock, functionCall?.arguments);
++                            stream.push({
++                                type: "toolcall_delta",
++                                contentIndex: blockIndex(),
++                                delta,
++                                partial: output,
++                            });
++                        }
++                    }
++                    if (choice?.message?.tool_calls && Array.isArray(choice.message.tool_calls)) {
++                        for (const toolCall of choice.message.tool_calls) {
++                            const toolCallId = typeof toolCall?.id === "string" ? toolCall.id : "";
++                            const toolName = toolCall?.function?.name || "";
++                            const rawToolArgs = extractRawToolArgs(toolCall);
++                            let target = output.content.find((b) => b.type === "toolCall" &&
++                                ((toolCallId && b.id === toolCallId) ||
++                                    (!toolCallId && !b.partialArgs && (!toolName || b.name === toolName))));
++                            if (!target) {
++                                continue;
++                            }
++                            if (toolCallId) {
++                                target.id = toolCallId;
++                            }
++                            if (toolName) {
++                                target.name = toolName;
++                            }
++                            if (target.type === "toolCall") {
++                                applyRawToolArgs(target, rawToolArgs);
++                            }
++                        }
++                    }
+                     const reasoningDetails = choice.delta.reasoning_details;
+                     if (reasoningDetails && Array.isArray(reasoningDetails)) {
+                         for (const detail of reasoningDetails) {
+@@ -240,6 +423,13 @@
+                     }
+                 }
+             }
++            // Final safety net: strip malformed tool calls before sending `done`.
++            for (let i = output.content.length - 1; i >= 0; i--) {
++                const block = output.content[i];
++                if (block?.type === "toolCall" && (!block.name || !String(block.name).trim())) {
++                    output.content.splice(i, 1);
++                }
++            }
+             finishCurrentBlock(currentBlock);
+             if (options?.signal?.aborted) {
+                 throw new Error("Request was aborted");
+@@ -732,4 +922,4 @@
+         supportsStrictMode: model.compat.supportsStrictMode ?? detected.supportsStrictMode,
+     };
+ }
+-//# sourceMappingURL=openai-completions.js.map
+\ No newline at end of file
++//# sourceMappingURL=openai-completions.js.map
