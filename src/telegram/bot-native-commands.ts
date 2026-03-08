@@ -19,7 +19,7 @@ import { listSkillCommandsForAgents } from "../auto-reply/skill-commands.js";
 import { resolveCommandAuthorizedFromAuthorizers } from "../channels/command-gating.js";
 import { createReplyPrefixOptions } from "../channels/reply-prefix.js";
 import { recordInboundSessionMetaSafe } from "../channels/session-meta.js";
-import type { OpenClawConfig } from "../config/config.js";
+import { loadConfig, type OpenClawConfig } from "../config/config.js";
 import type { ChannelGroupPolicy } from "../config/group-policy.js";
 import { resolveMarkdownTableMode } from "../config/markdown-tables.js";
 import {
@@ -442,8 +442,10 @@ export const registerTelegramNativeCommands = ({
     });
     const parentPeer = buildTelegramParentPeer({ isGroup, resolvedThreadId, chatId });
     const peerId = isGroup ? buildTelegramGroupPeerId(chatId, resolvedThreadId) : String(chatId);
+    // Load fresh config so routing picks up current dmScope / session settings.
+    const freshCfg = loadConfig();
     let route = resolveAgentRoute({
-      cfg,
+      cfg: freshCfg,
       channel: "telegram",
       accountId,
       peer: {
@@ -453,7 +455,7 @@ export const registerTelegramNativeCommands = ({
       parentPeer,
     });
     const configuredRoute = resolveConfiguredAcpRoute({
-      cfg,
+      cfg: freshCfg,
       route,
       channel: "telegram",
       accountId,
@@ -464,7 +466,7 @@ export const registerTelegramNativeCommands = ({
     route = configuredRoute.route;
     if (configuredBinding) {
       const ensured = await ensureConfiguredAcpRouteReady({
-        cfg,
+        cfg: freshCfg,
         configuredBinding,
       });
       if (!ensured.ok) {
