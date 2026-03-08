@@ -696,6 +696,20 @@ export async function runReplyAgent(params: {
       finalPayloads = appendUsageLine(finalPayloads, responseUsageLine);
     }
 
+    if (isDiagnosticsEnabled(cfg) && finalPayloads.length > 0) {
+      const firstText = finalPayloads.find((payload) => typeof payload.text === "string")?.text?.trim();
+      emitDiagnosticEvent({
+        type: "outbound.sent",
+        sessionKey,
+        sessionId: followupRun.run.sessionId,
+        channel: replyToChannel,
+        runId,
+        payloadCount: finalPayloads.length,
+        hasMedia: finalPayloads.some((payload) => Boolean(payload.mediaUrl || payload.mediaUrls?.length)),
+        contentPreview: firstText ? firstText.slice(0, 240) : undefined,
+      });
+    }
+
     return finalizeWithFollowup(
       finalPayloads.length === 1 ? finalPayloads[0] : finalPayloads,
       queueKey,

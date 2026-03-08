@@ -5,11 +5,18 @@ const registerLogTransportMock = vi.hoisted(() => vi.fn());
 const telemetryState = vi.hoisted(() => {
   const counters = new Map<string, { add: ReturnType<typeof vi.fn> }>();
   const histograms = new Map<string, { record: ReturnType<typeof vi.fn> }>();
+  const startedSpans: Array<{
+    name: string;
+    opts?: unknown;
+    parentCtx?: unknown;
+    span: { end: ReturnType<typeof vi.fn>; setStatus: ReturnType<typeof vi.fn> };
+  }> = [];
   const tracer = {
-    startSpan: vi.fn((_name: string, _opts?: unknown) => ({
-      end: vi.fn(),
-      setStatus: vi.fn(),
-    })),
+    startSpan: vi.fn((name: string, opts?: unknown, parentCtx?: unknown) => {
+      const span = { end: vi.fn(), setStatus: vi.fn() };
+      startedSpans.push({ name, opts, parentCtx, span });
+      return span;
+    }),
   };
   const meter = {
     createCounter: vi.fn((name: string) => {
@@ -23,7 +30,7 @@ const telemetryState = vi.hoisted(() => {
       return histogram;
     }),
   };
-  return { counters, histograms, tracer, meter };
+  return { counters, histograms, tracer, meter, startedSpans };
 });
 
 const sdkStart = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
@@ -110,6 +117,7 @@ vi.mock("openclaw/plugin-sdk/diagnostics-otel", async () => {
 
 import type { OpenClawPluginServiceContext } from "openclaw/plugin-sdk/diagnostics-otel";
 import { emitDiagnosticEvent } from "openclaw/plugin-sdk/diagnostics-otel";
+import { emitAgentEvent, registerAgentRunContext } from "../../../src/infra/agent-events.js";
 import { createDiagnosticsOtelService } from "./service.js";
 
 const OTEL_TEST_STATE_DIR = "/tmp/openclaw-diagnostics-otel-test";
@@ -185,6 +193,7 @@ describe("diagnostics-otel service", () => {
   beforeEach(() => {
     telemetryState.counters.clear();
     telemetryState.histograms.clear();
+    telemetryState.startedSpans.length = 0;
     telemetryState.tracer.startSpan.mockClear();
     telemetryState.meter.createCounter.mockClear();
     telemetryState.meter.createHistogram.mockClear();
@@ -364,6 +373,69 @@ describe("diagnostics-otel service", () => {
     expect(String(attrs?.["openclaw.reason"])).not.toContain(
       "ghp_abcdefghijklmnopqrstuvwxyz123456", // pragma: allowlist secret
     );
+    await service.stop?.(ctx);
+  });
+
+  test("builds parent-child trace tree for turn -> tool -> outbound", async () => {
+    const service = createDiagnosticsOtelService();
+    const ctx = createOtelContext(OTEL_TEST_ENDPOINT, { traces: true });
+    ctx.config.diagnostics!.otel!.enrichment = { enabled: true, fullTraceTree: true };
+    await service.start(ctx);
+
+    registerAgentRunContext("run-tree", { sessionKey: "agent:main:telegram:group:1" });
+    emitAgentEvent({ runId: "run-tree", stream: "lifecycle", data: { phase: "start" } });
+    emitAgentEvent({
+      runId: "run-tree",
+      stream: "tool",
+      data: { phase: "start", toolCallId: "tool-1", name: "read" },
+    });
+    emitDiagnosticEvent({
+      type: "outbound.sent",
+      runId: "run-tree",
+      channel: "telegram",
+      payloadCount: 1,
+      contentPreview: "hello",
+    });
+    emitAgentEvent({
+      runId: "run-tree",
+      stream: "tool",
+      data: { phase: "result", toolCallId: "tool-1", name: "read", isError: false },
+    });
+    emitAgentEvent({ runId: "run-tree", stream: "lifecycle", data: { phase: "end" } });
+
+    const names = telemetryState.startedSpans.map((s) => s.name);
+    expect(names).toContain("openclaw.turn");
+    expect(names).toContain("openclaw.tool.call");
+    expect(names).toContain("openclaw.outbound.sent");
+
+    const toolSpan = telemetryState.startedSpans.find((s) => s.name === "openclaw.tool.call");
+    const outboundSpan = telemetryState.startedSpans.find((s) => s.name === "openclaw.outbound.sent");
+    expect(toolSpan?.parentCtx).toBeDefined();
+    expect(outboundSpan?.parentCtx).toBeDefined();
+
+    await service.stop?.(ctx);
+  });
+
+  test("keeps backward-compatible attrs and adds gen_ai + langfuse attrs", async () => {
+    const service = createDiagnosticsOtelService();
+    const ctx = createOtelContext(OTEL_TEST_ENDPOINT, { traces: true, metrics: true });
+    await service.start(ctx);
+
+    emitDiagnosticEvent({
+      type: "model.usage",
+      channel: "telegram",
+      provider: "openai",
+      model: "gpt-5",
+      sessionKey: "agent:main:telegram:direct:1",
+      usage: { input: 10, output: 5, total: 15 },
+    });
+
+    const modelSpan = telemetryState.startedSpans.find((s) => s.name === "openclaw.model.usage");
+    const attrs = (modelSpan?.opts as { attributes?: Record<string, unknown> } | undefined)?.attributes;
+    expect(attrs?.["openclaw.model"]).toBe("gpt-5");
+    expect(attrs?.["gen_ai.request.model"]).toBe("gpt-5");
+    expect(attrs?.["langfuse.session.id"]).toBe("agent:main:telegram:direct:1");
+
     await service.stop?.(ctx);
   });
 });

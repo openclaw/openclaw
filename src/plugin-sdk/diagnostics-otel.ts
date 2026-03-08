@@ -3,6 +3,8 @@
 
 export type { DiagnosticEventPayload } from "../infra/diagnostic-events.js";
 export { emitDiagnosticEvent, onDiagnosticEvent } from "../infra/diagnostic-events.js";
+export { getAgentRunContext, onAgentEvent } from "../infra/agent-events.js";
+export type { AgentEventPayload } from "../infra/agent-events.js";
 export { registerLogTransport } from "../logging/logger.js";
 export { redactSensitiveText } from "../logging/redact.js";
 export { emptyPluginConfigSchema } from "../plugins/config-schema.js";

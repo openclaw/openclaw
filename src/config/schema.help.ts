@@ -504,6 +504,14 @@ export const FIELD_HELP: Record<string, string> = {
     "Trace sampling rate (0-1) controlling how much trace traffic is exported to observability backends. Lower rates reduce overhead/cost, while higher rates improve debugging fidelity.",
   "diagnostics.otel.flushIntervalMs":
     "Interval in milliseconds for periodic telemetry flush from buffers to the collector. Increase to reduce export chatter, or lower for faster visibility during active incident response.",
+  "diagnostics.otel.enrichment":
+    "Controls trace enrichment behavior for Langfuse-style observability (tree spans + semantic gen_ai attributes).",
+  "diagnostics.otel.enrichment.enabled":
+    "Master kill-switch for enriched tracing. Disable for immediate rollback to baseline openclaw.* telemetry only.",
+  "diagnostics.otel.enrichment.fullTraceTree":
+    "When true, emits hierarchical trace spans for turn -> model -> tool -> outbound.",
+  "diagnostics.otel.enrichment.includeContent":
+    "When true, includes redacted outbound content previews in trace attributes.",
   "diagnostics.cacheTrace.enabled":
     "Log cache trace snapshots for embedded agent runs (default: false).",
   "diagnostics.cacheTrace.filePath":
