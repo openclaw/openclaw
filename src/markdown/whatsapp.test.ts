@@ -36,4 +36,13 @@ describe("markdownToWhatsApp", () => {
       "Before ```**bold** and ~~strike~~``` after *real bold*",
     );
   });
+
+  it("converts markdown headers to bold text", () => {
+    expect(markdownToWhatsApp("# Title")).toBe("*Title*");
+    expect(markdownToWhatsApp("## Subtitle")).toBe("*Subtitle*");
+    expect(markdownToWhatsApp("### Deep Header")).toBe("*Deep Header*");
+    expect(markdownToWhatsApp("Some text\n## Header\nMore text")).toBe(
+      "Some text\n*Header*\nMore text",
+    );
+  });
 });
