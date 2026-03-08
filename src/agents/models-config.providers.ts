@@ -837,6 +837,9 @@ export function buildKimiCodingProvider(): ProviderConfig {
         cost: KIMI_CODING_DEFAULT_COST,
         contextWindow: KIMI_CODING_DEFAULT_CONTEXT_WINDOW,
         maxTokens: KIMI_CODING_DEFAULT_MAX_TOKENS,
+        compat: {
+          requiresOpenAiAnthropicToolPayload: true,
+        },
       },
     ],
   };
