@@ -398,13 +398,20 @@ export function chunkMarkdown(
     if (line.length === 0) {
       segments.push("");
     } else {
-      // Use token count (not maxChars) as the split step so that CJK lines
-      // – where 1 char ≈ 1 token – are sliced into budget-sized segments.
-      // For Latin text the token count is ≥ maxChars/4, which still produces
-      // segments well within the char budget after weighting.
-      const splitStep = Math.max(1, chunking.tokens);
-      for (let start = 0; start < line.length; start += splitStep) {
-        segments.push(line.slice(start, start + splitStep));
+      // First pass: slice at maxChars (preserves original behaviour for Latin).
+      // Second pass: if a segment's *weighted* size still exceeds the budget
+      // (happens for CJK-heavy text where 1 char ≈ 1 token), re-split it at
+      // chunking.tokens so the chunk stays within the token budget.
+      for (let start = 0; start < line.length; start += maxChars) {
+        const coarse = line.slice(start, start + maxChars);
+        if (estimateStringChars(coarse) > maxChars) {
+          const fineStep = Math.max(1, chunking.tokens);
+          for (let j = 0; j < coarse.length; j += fineStep) {
+            segments.push(coarse.slice(j, j + fineStep));
+          }
+        } else {
+          segments.push(coarse);
+        }
       }
     }
     for (const segment of segments) {
