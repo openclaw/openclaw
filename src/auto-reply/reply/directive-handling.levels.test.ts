@@ -57,6 +57,40 @@ describe("resolveCurrentDirectiveLevels", () => {
     expect(result.currentReasoningLevel).toBe("on");
   });
 
+  it("uses global reasoningDefault when session and surface overrides are absent", async () => {
+    const resolveDefaultThinkingLevel = vi.fn().mockResolvedValue("low");
+
+    const result = await resolveCurrentDirectiveLevels({
+      sessionEntry: {},
+      agentCfg: {
+        reasoningDefault: "on",
+      },
+      resolveDefaultThinkingLevel,
+    });
+
+    expect(result.currentReasoningLevel).toBe("on");
+  });
+
+  it("keeps surface reasoningDefault above global reasoningDefault", async () => {
+    const resolveDefaultThinkingLevel = vi.fn().mockResolvedValue("low");
+
+    const result = await resolveCurrentDirectiveLevels({
+      sessionEntry: {},
+      agentCfg: {
+        reasoningDefault: "off",
+        surfaceDefaults: {
+          tui: {
+            reasoningDefault: "stream",
+          },
+        },
+      },
+      surface: "tui",
+      resolveDefaultThinkingLevel,
+    });
+
+    expect(result.currentReasoningLevel).toBe("stream");
+  });
+
   it("keeps session overrides above surface defaults", async () => {
     const resolveDefaultThinkingLevel = vi.fn().mockResolvedValue("low");
 
@@ -67,10 +101,11 @@ describe("resolveCurrentDirectiveLevels", () => {
       },
       agentCfg: {
         verboseDefault: "off",
+        reasoningDefault: "off",
         surfaceDefaults: {
           discord: {
             verboseDefault: "full",
-            reasoningDefault: "off",
+            reasoningDefault: "on",
           },
         },
       },

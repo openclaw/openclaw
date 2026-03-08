@@ -194,6 +194,8 @@ export type AgentDefaultsConfig = {
   thinkingDefault?: "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "adaptive";
   /** Default verbose level when no /verbose directive is present. */
   verboseDefault?: "off" | "on" | "full";
+  /** Default reasoning visibility when no /reasoning directive is present. */
+  reasoningDefault?: "off" | "on" | "stream";
   /** Optional per-surface UX defaults (for example tui vs discord). */
   surfaceDefaults?: Record<string, AgentSurfaceDefaultsEntryConfig>;
   /** Default elevated level when no /elevated directive is present. */

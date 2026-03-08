@@ -24,6 +24,25 @@ describe("AgentDefaultsSchema surfaceDefaults", () => {
     ).toThrow();
   });
 
+  it("accepts global reasoningDefault", () => {
+    expect(() =>
+      AgentDefaultsSchema.parse({
+        reasoningDefault: "off",
+        surfaceDefaults: {
+          tui: { reasoningDefault: "on" },
+        },
+      }),
+    ).not.toThrow();
+  });
+
+  it("rejects invalid global reasoningDefault", () => {
+    expect(() =>
+      AgentDefaultsSchema.parse({
+        reasoningDefault: "auto",
+      }),
+    ).toThrow();
+  });
+
   it("rejects invalid enum values", () => {
     expect(() =>
       AgentDefaultsSchema.parse({

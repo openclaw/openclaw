@@ -885,6 +885,7 @@ Time format in system prompt. Default: `auto` (OS preference).
       pdfMaxPages: 20,
       thinkingDefault: "low",
       verboseDefault: "off",
+      reasoningDefault: "off",
       surfaceDefaults: {
         tui: { verboseDefault: "full", reasoningDefault: "on" },
         discord: { verboseDefault: "off", reasoningDefault: "off" },
@@ -915,6 +916,9 @@ Time format in system prompt. Default: `auto` (OS preference).
 - `params` merge precedence (config): `agents.defaults.models["provider/model"].params` is the base, then `agents.list[].params` (matching agent id) overrides by key.
 - Config writers that mutate these fields (for example `/models set`, `/models set-image`, and fallback add/remove commands) save canonical object form and preserve existing fallback lists when possible.
 - `maxConcurrent`: max parallel agent runs across sessions (each session still serialized). Default: 1.
+- `reasoningDefault`: optional global reasoning visibility default (`off|on|stream`).
+  - When set, it becomes the global default after directive/session/surface checks.
+  - When unset, OpenClaw keeps legacy runtime reasoning fallback behavior.
 - `surfaceDefaults`: optional per-surface UX defaults for visibility controls.
   - Allowed keys inside each surface: `verboseDefault` (`off|on|full`) and `reasoningDefault` (`off|on|stream`).
   - Resolution order keeps explicit directives/session overrides first, then surface defaults, then global defaults/fallbacks.

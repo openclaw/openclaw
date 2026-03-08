@@ -251,6 +251,7 @@ Save to `~/.openclaw/openclaw.json` and you can DM the bot from that number.
       },
       thinkingDefault: "low",
       verboseDefault: "off",
+      reasoningDefault: "off",
       surfaceDefaults: {
         tui: { verboseDefault: "full", reasoningDefault: "on" },
         discord: { verboseDefault: "off", reasoningDefault: "off" },

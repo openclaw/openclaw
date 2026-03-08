@@ -60,7 +60,7 @@ title: "Thinking Levels"
 - When enabled, reasoning is sent as a **separate message** prefixed with `Reasoning:`.
 - `stream` (Telegram only): streams reasoning into the Telegram draft bubble while the reply is generating, then sends the final answer without reasoning.
 - Alias: `/reason`.
-- Default precedence when no inline `/reasoning` directive is present: session override → `agents.defaults.surfaceDefaults.<surface>.reasoningDefault` → runtime model-based fallback behavior.
+- Default precedence when no inline `/reasoning` directive is present: session override → `agents.defaults.surfaceDefaults.<surface>.reasoningDefault` → `agents.defaults.reasoningDefault` (if set) → runtime model-based fallback behavior.
 - Send `/reasoning` (or `/reasoning:`) with no argument to see the current reasoning level.
 
 ## Related
