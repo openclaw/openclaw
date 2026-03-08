@@ -6,6 +6,8 @@ import { parseFeishuConversationTarget } from "./conversation-id.js";
 import { sendMediaFeishu } from "./media.js";
 import { getFeishuRuntime } from "./runtime.js";
 import { sendMarkdownCardFeishu, sendMessageFeishu } from "./send.js";
+import { recordFeishuNativeThreadBinding } from "./thread-bindings.js";
+import type { FeishuSendResult } from "./types.js";
 
 function normalizePossibleLocalImagePath(text: string | undefined): string | null {
   const raw = text?.trim();
@@ -76,6 +78,42 @@ function resolveFeishuConversationTarget(params: {
   };
 }
 
+function resolveFeishuBoundThreadAliasTarget(params: {
+  to: string;
+  threadId?: string | number | null;
+}): { chatId: string; rootMessageId: string } | null {
+  const parsed = parseFeishuConversationTarget(params.to);
+  if (!parsed.chatId || !parsed.rootMessageId || params.threadId != null) {
+    return null;
+  }
+  return {
+    chatId: parsed.chatId,
+    rootMessageId: parsed.rootMessageId,
+  };
+}
+
+function maybeRecordFeishuBoundThreadAlias(params: {
+  cfg: Parameters<typeof sendMessageFeishu>[0]["cfg"];
+  accountId?: string;
+  aliasTarget: { chatId: string; rootMessageId: string } | null;
+  result: FeishuSendResult | null | undefined;
+}) {
+  const nativeThreadId = params.result?.nativeThreadId?.trim();
+  if (!params.aliasTarget || !nativeThreadId) {
+    return;
+  }
+  const account = resolveFeishuAccount({
+    cfg: params.cfg,
+    accountId: params.accountId,
+  });
+  recordFeishuNativeThreadBinding({
+    accountId: account.accountId,
+    chatId: params.aliasTarget.chatId,
+    rootMessageId: params.aliasTarget.rootMessageId,
+    nativeThreadId,
+  });
+}
+
 async function sendOutboundText(params: {
   cfg: Parameters<typeof sendMessageFeishu>[0]["cfg"];
   to: string;
@@ -101,6 +139,7 @@ export const feishuOutbound: ChannelOutboundAdapter = {
   chunkerMode: "markdown",
   textChunkLimit: 4000,
   sendText: async ({ cfg, to, text, accountId, replyToId, threadId, mediaLocalRoots }) => {
+    const aliasTarget = resolveFeishuBoundThreadAliasTarget({ to, threadId });
     const target = resolveFeishuConversationTarget({ to, threadId });
     const replyInThread = target.threadId != null && String(target.threadId).trim() !== "";
     const replyToMessageId = resolveReplyToMessageId({
@@ -122,6 +161,12 @@ export const feishuOutbound: ChannelOutboundAdapter = {
           replyInThread,
           mediaLocalRoots,
         });
+        maybeRecordFeishuBoundThreadAlias({
+          cfg,
+          accountId: accountId ?? undefined,
+          aliasTarget,
+          result,
+        });
         return { channel: "feishu", ...result };
       } catch (err) {
         console.error(`[feishu] local image path auto-send failed:`, err);
@@ -137,6 +182,12 @@ export const feishuOutbound: ChannelOutboundAdapter = {
       replyToMessageId,
       replyInThread,
     });
+    maybeRecordFeishuBoundThreadAlias({
+      cfg,
+      accountId: accountId ?? undefined,
+      aliasTarget,
+      result,
+    });
     return { channel: "feishu", ...result };
   },
   sendMedia: async ({
@@ -149,6 +200,7 @@ export const feishuOutbound: ChannelOutboundAdapter = {
     replyToId,
     threadId,
   }) => {
+    const aliasTarget = resolveFeishuBoundThreadAliasTarget({ to, threadId });
     const target = resolveFeishuConversationTarget({ to, threadId });
     const replyInThread = target.threadId != null && String(target.threadId).trim() !== "";
     const replyToMessageId = resolveReplyToMessageId({
@@ -157,13 +209,19 @@ export const feishuOutbound: ChannelOutboundAdapter = {
     });
     // Send text first if provided
     if (text?.trim()) {
-      await sendOutboundText({
+      const textResult = await sendOutboundText({
         cfg,
         to: target.to,
         text,
         accountId: accountId ?? undefined,
         replyToMessageId,
         replyInThread,
+      });
+      maybeRecordFeishuBoundThreadAlias({
+        cfg,
+        accountId: accountId ?? undefined,
+        aliasTarget,
+        result: textResult,
       });
     }
 
@@ -179,6 +237,12 @@ export const feishuOutbound: ChannelOutboundAdapter = {
           replyToMessageId,
           replyInThread,
         });
+        maybeRecordFeishuBoundThreadAlias({
+          cfg,
+          accountId: accountId ?? undefined,
+          aliasTarget,
+          result,
+        });
         return { channel: "feishu", ...result };
       } catch (err) {
         // Log the error for debugging
@@ -193,6 +257,12 @@ export const feishuOutbound: ChannelOutboundAdapter = {
           replyToMessageId,
           replyInThread,
         });
+        maybeRecordFeishuBoundThreadAlias({
+          cfg,
+          accountId: accountId ?? undefined,
+          aliasTarget,
+          result,
+        });
         return { channel: "feishu", ...result };
       }
     }
@@ -205,6 +275,12 @@ export const feishuOutbound: ChannelOutboundAdapter = {
       accountId: accountId ?? undefined,
       replyToMessageId,
       replyInThread,
+    });
+    maybeRecordFeishuBoundThreadAlias({
+      cfg,
+      accountId: accountId ?? undefined,
+      aliasTarget,
+      result,
     });
     return { channel: "feishu", ...result };
   },

@@ -6,6 +6,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const sendMediaFeishuMock = vi.hoisted(() => vi.fn());
 const sendMessageFeishuMock = vi.hoisted(() => vi.fn());
 const sendMarkdownCardFeishuMock = vi.hoisted(() => vi.fn());
+const recordFeishuNativeThreadBindingMock = vi.hoisted(() => vi.fn());
 
 vi.mock("./media.js", () => ({
   sendMediaFeishu: sendMediaFeishuMock,
@@ -14,6 +15,10 @@ vi.mock("./media.js", () => ({
 vi.mock("./send.js", () => ({
   sendMessageFeishu: sendMessageFeishuMock,
   sendMarkdownCardFeishu: sendMarkdownCardFeishuMock,
+}));
+
+vi.mock("./thread-bindings.js", () => ({
+  recordFeishuNativeThreadBinding: recordFeishuNativeThreadBindingMock,
 }));
 
 vi.mock("./runtime.js", () => ({
@@ -196,6 +201,27 @@ describe("feishuOutbound.sendText local-image auto-convert", () => {
         accountId: "main",
       }),
     );
+  });
+
+  it("records native thread aliases for routed Feishu thread targets", async () => {
+    sendMessageFeishuMock.mockResolvedValue({
+      messageId: "text_msg",
+      nativeThreadId: "omt_thread_3",
+    });
+
+    await sendText({
+      cfg: {} as any,
+      to: "channel:oc_thread_chat:thread:om_root_3",
+      text: "hello",
+      accountId: "main",
+    } as any);
+
+    expect(recordFeishuNativeThreadBindingMock).toHaveBeenCalledWith({
+      accountId: "main",
+      chatId: "oc_thread_chat",
+      rootMessageId: "om_root_3",
+      nativeThreadId: "omt_thread_3",
+    });
   });
 });
 
