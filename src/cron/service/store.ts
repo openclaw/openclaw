@@ -1,9 +1,5 @@
 import fs from "node:fs";
-import {
-  buildDeliveryFromLegacyPayload,
-  hasLegacyDeliveryHints,
-  stripLegacyDeliveryFields,
-} from "../legacy-delivery.js";
+import { normalizeLegacyDeliveryInput } from "../legacy-delivery.js";
 import { parseAbsoluteTimeMs } from "../parse.js";
 import { migrateLegacyCronPayload } from "../payload-migration.js";
 import { coerceFiniteScheduleNumber } from "../schedule.js";
@@ -13,69 +9,6 @@ import type { CronJob } from "../types.js";
 import { recomputeNextRuns } from "./jobs.js";
 import { inferLegacyName, normalizeOptionalText } from "./normalize.js";
 import type { CronServiceState } from "./state.js";
-
-function buildDeliveryPatchFromLegacyPayload(payload: Record<string, unknown>) {
-  const deliver = payload.deliver;
-  const channelRaw =
-    typeof payload.channel === "string" ? payload.channel.trim().toLowerCase() : "";
-  const toRaw = typeof payload.to === "string" ? payload.to.trim() : "";
-  const next: Record<string, unknown> = {};
-  let hasPatch = false;
-
-  if (deliver === false) {
-    next.mode = "none";
-    hasPatch = true;
-  } else if (deliver === true || toRaw) {
-    next.mode = "announce";
-    hasPatch = true;
-  }
-  if (channelRaw) {
-    next.channel = channelRaw;
-    hasPatch = true;
-  }
-  if (toRaw) {
-    next.to = toRaw;
-    hasPatch = true;
-  }
-  if (typeof payload.bestEffortDeliver === "boolean") {
-    next.bestEffort = payload.bestEffortDeliver;
-    hasPatch = true;
-  }
-
-  return hasPatch ? next : null;
-}
-
-function mergeLegacyDeliveryInto(
-  delivery: Record<string, unknown>,
-  payload: Record<string, unknown>,
-) {
-  const patch = buildDeliveryPatchFromLegacyPayload(payload);
-  if (!patch) {
-    return { delivery, mutated: false };
-  }
-
-  const next = { ...delivery };
-  let mutated = false;
-
-  if ("mode" in patch && patch.mode !== next.mode) {
-    next.mode = patch.mode;
-    mutated = true;
-  }
-  if ("channel" in patch && patch.channel !== next.channel) {
-    next.channel = patch.channel;
-    mutated = true;
-  }
-  if ("to" in patch && patch.to !== next.to) {
-    next.to = patch.to;
-    mutated = true;
-  }
-  if ("bestEffort" in patch && patch.bestEffort !== next.bestEffort) {
-    next.bestEffort = patch.bestEffort;
-    mutated = true;
-  }
-
-  return { delivery: next, mutated };
-}
 
 function normalizePayloadKind(payload: Record<string, unknown>) {
   const raw = typeof payload.kind === "string" ? payload.kind.trim().toLowerCase() : "";
@@ -512,30 +445,25 @@ export async function ensureLoaded(
     const isIsolatedAgentTurn =
       sessionTarget === "isolated" || (sessionTarget === "" && payloadKind === "agentTurn");
     const hasDelivery = delivery && typeof delivery === "object" && !Array.isArray(delivery);
-    const hasLegacyDelivery = payloadRecord ? hasLegacyDeliveryHints(payloadRecord) : false;
+    const normalizedLegacy = normalizeLegacyDeliveryInput({
+      delivery: hasDelivery ? (delivery as Record<string, unknown>) : null,
+      payload: payloadRecord,
+    });
 
     if (isIsolatedAgentTurn && payloadKind === "agentTurn") {
-      if (!hasDelivery) {
-        raw.delivery =
-          payloadRecord && hasLegacyDelivery
-            ? buildDeliveryFromLegacyPayload(payloadRecord)
-            : { mode: "announce" };
+      if (!hasDelivery && normalizedLegacy.delivery) {
+        raw.delivery = normalizedLegacy.delivery;
+        mutated = true;
+      } else if (!hasDelivery) {
+        raw.delivery = { mode: "announce" };
+        mutated = true;
+      } else if (normalizedLegacy.mutated && normalizedLegacy.delivery) {
+        raw.delivery = normalizedLegacy.delivery;
         mutated = true;
       }
-      if (payloadRecord && hasLegacyDelivery) {
-        if (hasDelivery) {
-          const merged = mergeLegacyDeliveryInto(
-            delivery as Record<string, unknown>,
-            payloadRecord,
-          );
-          if (merged.mutated) {
-            raw.delivery = merged.delivery;
-            mutated = true;
-          }
-        }
-        stripLegacyDeliveryFields(payloadRecord);
-        mutated = true;
-      }
+    } else if (normalizedLegacy.mutated && normalizedLegacy.delivery) {
+      raw.delivery = normalizedLegacy.delivery;
+      mutated = true;
     }
   }
   state.store = { version: 1, jobs: jobs as unknown as CronJob[] };
