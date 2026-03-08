@@ -579,4 +579,20 @@ describe("getRunScopedMessagesForBlock", () => {
     expect(result).toHaveLength(2); // tool-call + text assistant
     expect(result[0].role).toBe("assistant");
   });
+
+  it("stops at prior text-bearing assistant (no user boundary)", () => {
+    // Sub-agent or greeting session: no user message between turns.
+    // Prior assistant text should NOT be included in block scope.
+    const messages = [
+      makeMsg("assistant", "prior greeting"), // prior turn — should NOT be included
+      makeToolCallMsg(), // current run tool-call
+      makeToolResult(), // current run tool result
+      makeMsg("assistant", "current answer"), // current run text
+    ];
+    const result = getRunScopedMessagesForBlock(messages, 1);
+    // Should include tool-call + tool-result + text assistant (3), NOT prior greeting
+    expect(result).toHaveLength(3);
+    expect(result[0].role).toBe("assistant"); // tool-call-only
+    expect(result[2].role).toBe("assistant"); // text-bearing
+  });
 });
