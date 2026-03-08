@@ -115,7 +115,7 @@ describe("novita model discovery", () => {
       vi.stubGlobal("fetch", failedFetch);
       resetNovitaDiscoveryCacheForTest();
 
-      const fallback = await discoverNovitaModels({ apiKey: "test-key", useCache: false });
+      const fallback = await discoverNovitaModels({ apiKey: "test-key", useCache: false }); // pragma: allowlist secret
       expect(fallback).toHaveLength(NOVITA_MODEL_CATALOG.length);
       expect(fallback[0]?.id).toBe(NOVITA_MODEL_CATALOG[0]?.id);
     });
