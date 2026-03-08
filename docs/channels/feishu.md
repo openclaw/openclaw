@@ -235,6 +235,45 @@ If your tenant is on Lark (international), set the domain to `lark` (or a full d
 }
 ```
 
+### Read group messages without replying
+
+If you want OpenClaw to keep receiving Feishu group messages but never send replies back into groups,
+set `disableGroupReplies: true`.
+
+This is useful when you want the bot to:
+
+- read group history or live group traffic,
+- keep private chat replies enabled,
+- and enforce a program-level “groups are read-only” policy.
+
+Example:
+
+```json5
+{
+  channels: {
+    feishu: {
+      enabled: true,
+      groupPolicy: "allowlist",
+      groupAllowFrom: ["oc_group_a", "oc_group_b"],
+      requireMention: true,
+      disableGroupReplies: true,
+      accounts: {
+        main: {
+          appId: "cli_xxx",
+          appSecret: "xxx",
+        },
+      },
+    },
+  },
+}
+```
+
+Behavior with `disableGroupReplies: true`:
+
+- inbound Feishu group messages are still accepted,
+- DM replies continue to work,
+- explicit outbound Feishu group targets such as `chat:oc_xxx` / `group:oc_xxx` are blocked.
+
 ### Quota optimization flags
 
 You can reduce Feishu API usage with two optional flags:
