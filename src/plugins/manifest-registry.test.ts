@@ -236,6 +236,74 @@ describe("loadPluginManifestRegistry", () => {
     expect(registry.plugins[0]?.origin).toBe("config");
   });
 
+  it("suppresses duplicate warning when candidates have same packageName and packageVersion", () => {
+    const dirA = makeTempDir();
+    const dirB = makeTempDir();
+    const manifest = { id: "feishu", configSchema: { type: "object" } };
+    writeManifest(dirA, manifest);
+    writeManifest(dirB, manifest);
+
+    // Simulate the same npm package installed in two different locations
+    // (e.g. global npm prefix and user config dir).
+    const candidates: PluginCandidate[] = [
+      {
+        ...createPluginCandidate({
+          idHint: "feishu",
+          rootDir: dirA,
+          origin: "bundled",
+        }),
+        packageName: "@openclaw/feishu",
+        packageVersion: "2026.3.1",
+      },
+      {
+        ...createPluginCandidate({
+          idHint: "feishu",
+          rootDir: dirB,
+          origin: "config",
+        }),
+        packageName: "@openclaw/feishu",
+        packageVersion: "2026.3.1",
+      },
+    ];
+
+    const registry = loadRegistry(candidates);
+    expect(countDuplicateWarnings(registry)).toBe(0);
+    expect(registry.plugins.length).toBe(1);
+    // config has higher precedence than bundled
+    expect(registry.plugins[0]?.origin).toBe("config");
+  });
+
+  it("still warns when packageName matches but packageVersion differs", () => {
+    const dirA = makeTempDir();
+    const dirB = makeTempDir();
+    const manifest = { id: "feishu", configSchema: { type: "object" } };
+    writeManifest(dirA, manifest);
+    writeManifest(dirB, manifest);
+
+    const candidates: PluginCandidate[] = [
+      {
+        ...createPluginCandidate({
+          idHint: "feishu",
+          rootDir: dirA,
+          origin: "bundled",
+        }),
+        packageName: "@openclaw/feishu",
+        packageVersion: "2026.3.1",
+      },
+      {
+        ...createPluginCandidate({
+          idHint: "feishu",
+          rootDir: dirB,
+          origin: "config",
+        }),
+        packageName: "@openclaw/feishu",
+        packageVersion: "2026.2.0",
+      },
+    ];
+
+    expect(countDuplicateWarnings(loadRegistry(candidates))).toBe(1);
+  });
+
   it("rejects manifest paths that escape plugin root via symlink", () => {
     expectUnsafeWorkspaceManifestRejected({ id: "unsafe-symlink", mode: "symlink" });
   });

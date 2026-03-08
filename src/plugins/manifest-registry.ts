@@ -214,7 +214,21 @@ export function loadPluginManifestRegistry(params: {
         const candidateReal = safeRealpathSync(candidate.rootDir, realpathCache);
         return Boolean(existingReal && candidateReal && existingReal === candidateReal);
       })();
-      if (samePlugin) {
+      // When the same npm package (name + version) is installed in multiple
+      // directories (e.g. global npm prefix AND user config dir), the realpath
+      // check above won't match because they are genuinely separate copies.
+      // Treat them as identical so we don't emit a confusing duplicate warning.
+      const samePackageIdentity =
+        !samePlugin &&
+        Boolean(
+          candidate.packageName &&
+          candidate.packageVersion &&
+          existing.candidate.packageName &&
+          existing.candidate.packageVersion &&
+          candidate.packageName === existing.candidate.packageName &&
+          candidate.packageVersion === existing.candidate.packageVersion,
+        );
+      if (samePlugin || samePackageIdentity) {
         // Prefer higher-precedence origins even if candidates are passed in
         // an unexpected order (config > workspace > global > bundled).
         if (PLUGIN_ORIGIN_RANK[candidate.origin] < PLUGIN_ORIGIN_RANK[existing.candidate.origin]) {
