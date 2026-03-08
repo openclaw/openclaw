@@ -170,6 +170,66 @@ describe("web_fetch SSRF protection", () => {
     expect(fetchSpy).toHaveBeenCalledTimes(1);
   });
 
+  it("blocks cloud metadata endpoints even when allowPrivateNetwork is true", async () => {
+    const fetchSpy = vi.fn();
+    // @ts-expect-error mock fetch
+    global.fetch = fetchSpy;
+
+    const { createWebFetchTool } = await import("./web-tools.js");
+    const tool = createWebFetchTool({
+      config: {
+        tools: {
+          web: {
+            fetch: {
+              cacheTtlMinutes: 0,
+              allowPrivateNetwork: true,
+              firecrawl: { enabled: false },
+            },
+          },
+        },
+      },
+    });
+
+    await expect(
+      tool?.execute?.("call", { url: "http://169.254.169.254/latest/meta-data/" }),
+    ).rejects.toThrow(/blocked|metadata/i);
+
+    await expect(
+      tool?.execute?.("call", { url: "http://metadata.google.internal/computeMetadata/v1/" }),
+    ).rejects.toThrow(/blocked|metadata/i);
+
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  it("blocks DNS resolving to IMDS even when allowPrivateNetwork is true", async () => {
+    lookupMock.mockResolvedValue([{ address: "169.254.169.254", family: 4 }]);
+
+    const fetchSpy = vi.fn();
+    // @ts-expect-error mock fetch
+    global.fetch = fetchSpy;
+
+    const { createWebFetchTool } = await import("./web-tools.js");
+    const tool = createWebFetchTool({
+      config: {
+        tools: {
+          web: {
+            fetch: {
+              cacheTtlMinutes: 0,
+              allowPrivateNetwork: true,
+              firecrawl: { enabled: false },
+            },
+          },
+        },
+      },
+    });
+
+    await expect(
+      tool?.execute?.("call", { url: "https://sneaky-imds.test/steal-creds" }),
+    ).rejects.toThrow(/blocked|metadata/i);
+
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
   it("blocks private hosts when allowPrivateNetwork is false", async () => {
     const fetchSpy = vi.fn();
     // @ts-expect-error mock fetch

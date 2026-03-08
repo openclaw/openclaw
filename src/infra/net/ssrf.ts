@@ -20,6 +20,11 @@ type LookupFn = typeof dnsLookup;
 const PRIVATE_IPV6_PREFIXES = ["fe80:", "fec0:", "fc", "fd"];
 const BLOCKED_HOSTNAMES = new Set(["localhost", "metadata.google.internal"]);
 
+// Cloud instance metadata service (IMDS) endpoints that must remain blocked
+// even when allowPrivateNetwork is enabled to prevent credential harvesting.
+const IMDS_HOSTNAMES = new Set(["metadata.google.internal"]);
+const IMDS_IP_ADDRESSES = new Set(["169.254.169.254", "fd00:ec2::254"]);
+
 function normalizeHostname(hostname: string): string {
   const normalized = hostname.trim().toLowerCase().replace(/\.$/, "");
   if (normalized.startsWith("[") && normalized.endsWith("]")) {
@@ -182,6 +187,14 @@ export async function resolvePinnedHostname(
 
   const allowPrivate = options?.allowPrivateNetwork === true;
 
+  // Always block cloud IMDS endpoints regardless of allowPrivateNetwork.
+  if (IMDS_HOSTNAMES.has(normalized)) {
+    throw new SsrFBlockedError(`Blocked hostname: ${hostname}`);
+  }
+  if (IMDS_IP_ADDRESSES.has(normalized)) {
+    throw new SsrFBlockedError("Blocked: cloud metadata service IP address");
+  }
+
   if (!allowPrivate && isBlockedHostname(normalized)) {
     throw new SsrFBlockedError(`Blocked hostname: ${hostname}`);
   }
@@ -205,11 +218,13 @@ export async function resolvePinnedHostname(
     throw new Error(`Unable to resolve hostname: ${hostname}`);
   }
 
-  if (!allowPrivate) {
-    for (const entry of results) {
-      if (isPrivateIpAddress(entry.address)) {
-        throw new SsrFBlockedError("Blocked: resolves to private/internal IP address");
-      }
+  for (const entry of results) {
+    // Always block IMDS IPs even when allowPrivateNetwork is enabled.
+    if (IMDS_IP_ADDRESSES.has(entry.address.trim().toLowerCase())) {
+      throw new SsrFBlockedError("Blocked: resolves to cloud metadata service IP address");
+    }
+    if (!allowPrivate && isPrivateIpAddress(entry.address)) {
+      throw new SsrFBlockedError("Blocked: resolves to private/internal IP address");
     }
   }
 

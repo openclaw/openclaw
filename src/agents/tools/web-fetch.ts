@@ -359,7 +359,7 @@ async function runWebFetch(params: {
   firecrawlTimeoutSeconds: number;
 }): Promise<Record<string, unknown>> {
   const cacheKey = normalizeCacheKey(
-    `fetch:${params.url}:${params.extractMode}:${params.maxChars}`,
+    `fetch:${params.url}:${params.extractMode}:${params.maxChars}:priv=${params.allowPrivateNetwork ? 1 : 0}`,
   );
   const cached = readCache(FETCH_CACHE, cacheKey);
   if (cached) return { ...cached.value, cached: true };
