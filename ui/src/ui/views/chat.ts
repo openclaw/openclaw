@@ -98,6 +98,9 @@ function restoreHistoryCaret(target: HTMLTextAreaElement, direction: "up" | "dow
     if (document.activeElement !== target) {
       return;
     }
+    // History navigation updates the textarea value programmatically, so sync its
+    // height in the same post-render step as caret restoration.
+    adjustTextareaHeight(target);
     const caret = direction === "up" ? 0 : target.value.length;
     target.selectionStart = caret;
     target.selectionEnd = caret;

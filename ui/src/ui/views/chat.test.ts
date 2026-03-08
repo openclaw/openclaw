@@ -518,4 +518,54 @@ describe("chat view", () => {
     expect(textarea.selectionStart).toBe(0);
     expect(textarea.selectionEnd).toBe(0);
   });
+
+  it("shrinks textarea height after history navigation restores a shorter draft", async () => {
+    const container = document.createElement("div");
+    let draft = "very long history entry";
+    const renderCurrent = () => {
+      render(
+        renderChat(
+          createProps({
+            draft,
+            onHistoryKeydown,
+          }),
+        ),
+        container,
+      );
+    };
+    const onHistoryKeydown = vi.fn(() => {
+      draft = "short";
+      renderCurrent();
+      return createKeyResult({
+        handled: true,
+        preventDefault: true,
+        restoreCaret: "down",
+        decision: "handled:history-down",
+        historyNavigationActiveBefore: true,
+      });
+    });
+
+    renderCurrent();
+    const textarea = container.querySelector("textarea") as HTMLTextAreaElement;
+    Object.defineProperty(textarea, "scrollHeight", {
+      configurable: true,
+      get: () => 40,
+    });
+    textarea.style.height = "140px";
+    textarea.selectionStart = 0;
+    textarea.selectionEnd = 0;
+    textarea.dispatchEvent(
+      new KeyboardEvent("keydown", {
+        key: "ArrowDown",
+        bubbles: true,
+        cancelable: true,
+      }),
+    );
+    await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+
+    expect(onHistoryKeydown).toHaveBeenCalledTimes(1);
+    expect(textarea.style.height).toBe("40px");
+    expect(textarea.selectionStart).toBe(textarea.value.length);
+    expect(textarea.selectionEnd).toBe(textarea.value.length);
+  });
 });
