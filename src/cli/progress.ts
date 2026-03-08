@@ -50,15 +50,18 @@ export function createCliProgress(options: ProgressOptions): ProgressReporter {
 
   const stream = options.stream ?? process.stderr;
   const isTty = stream.isTTY;
-  const allowLog = !isTty && options.fallback === "log";
-  if (!isTty && !allowLog) {
+  const term = process.env.TERM?.trim().toLowerCase() ?? "";
+  const isDumbTerm = term === "dumb";
+  const allowLog = (!isTty || isDumbTerm) && options.fallback === "log";
+  if ((!isTty || isDumbTerm) && !allowLog) {
     return noopReporter;
   }
 
   const delayMs = typeof options.delayMs === "number" ? options.delayMs : DEFAULT_DELAY_MS;
-  const canOsc = isTty && supportsOscProgress(process.env, isTty);
-  const allowSpinner = isTty && (options.fallback === undefined || options.fallback === "spinner");
-  const allowLine = isTty && options.fallback === "line";
+  const canOsc = isTty && !isDumbTerm && supportsOscProgress(process.env, isTty);
+  const allowSpinner =
+    isTty && !isDumbTerm && (options.fallback === undefined || options.fallback === "spinner");
+  const allowLine = isTty && !isDumbTerm && options.fallback === "line";
 
   let started = false;
   let label = options.label;
