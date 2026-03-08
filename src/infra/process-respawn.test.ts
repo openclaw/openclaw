@@ -80,6 +80,22 @@ describe("restartGatewayProcessWithFreshPid", () => {
     expectLaunchdSupervisedWithoutKickstart({ launchJobLabel: "ai.openclaw.gateway" });
   });
 
+  it("launchd supervisor never returns failed regardless of triggerOpenClawRestart outcome", () => {
+    clearSupervisorHints();
+    setPlatform("darwin");
+    process.env.OPENCLAW_LAUNCHD_LABEL = "ai.openclaw.gateway";
+    // Even if triggerOpenClawRestart *would* fail, launchd path must not call it.
+    triggerOpenClawRestartMock.mockReturnValue({
+      ok: false,
+      method: "launchctl",
+      detail: "Bootstrap failed: 5: Input/output error",
+    });
+    const result = restartGatewayProcessWithFreshPid();
+    expect(result.mode).toBe("supervised");
+    expect(result.mode).not.toBe("failed");
+    expect(triggerOpenClawRestartMock).not.toHaveBeenCalled();
+  });
+
   it("does not schedule kickstart on non-darwin platforms", () => {
     setPlatform("linux");
     process.env.INVOCATION_ID = "abc123";
