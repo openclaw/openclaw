@@ -51,24 +51,39 @@ export function resolveSlackAutoThreadId(params: {
  * Unlike Slack, we do not gate on `replyToMode` here: Telegram forum topics
  * are persistent sub-channels (not ephemeral reply threads), so auto-injection
  * should always apply when the target chat matches.
+ *
+ * @param params.to - The target chat ID
+ * @param params.toolContext - Current threading context from the message
+ * @param params.fallbackThreadId - Fallback threadId from session deliveryContext
  */
 export function resolveTelegramAutoThreadId(params: {
   to: string;
   toolContext?: ChannelThreadingToolContext;
+  fallbackThreadId?: string;
 }): string | undefined {
   const context = params.toolContext;
-  if (!context?.currentThreadTs || !context.currentChannelId) {
-    return undefined;
+
+  // Primary: try to get threadId from toolContext (current message context)
+  if (context?.currentThreadTs && context.currentChannelId) {
+    const parsedTo = parseTelegramTarget(params.to);
+    const parsedChannel = parseTelegramTarget(context.currentChannelId);
+    // Only apply if the target chat matches the current channel
+    if (parsedTo.chatId.toLowerCase() === parsedChannel.chatId.toLowerCase()) {
+      return context.currentThreadTs;
+    }
   }
-  // Use parseTelegramTarget to extract canonical chatId from both sides,
-  // mirroring how Slack uses parseSlackTarget. This handles format variations
-  // like `telegram:group:123:topic:456` vs `telegram:123`.
-  const parsedTo = parseTelegramTarget(params.to);
-  const parsedChannel = parseTelegramTarget(context.currentChannelId);
-  if (parsedTo.chatId.toLowerCase() !== parsedChannel.chatId.toLowerCase()) {
-    return undefined;
+
+  // Fallback: use threadId from session deliveryContext
+  // Only apply if the target chat matches the session's origin chat
+  if (params.fallbackThreadId && context?.currentChannelId) {
+    const parsedTo = parseTelegramTarget(params.to);
+    const parsedChannel = parseTelegramTarget(context.currentChannelId);
+    if (parsedTo.chatId.toLowerCase() === parsedChannel.chatId.toLowerCase()) {
+      return params.fallbackThreadId;
+    }
   }
-  return context.currentThreadTs;
+
+  return undefined;
 }
 
 function resolveAttachmentMaxBytes(params: {
