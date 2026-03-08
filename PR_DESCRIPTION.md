@@ -12,8 +12,9 @@ The current `memory-lancedb` plugin uses pure vector similarity with OpenAI (pai
 2. Producing **higher quality recall** through 5-channel hybrid scoring
 3. **Understanding relationships** via a Knowledge Graph
 4. **Self-correcting** — contradictory facts are detected and resolved
-5. Generating **user profiles** from accumulated memories (Reflection)
-6. Maintaining full backward compatibility with existing LanceDB storage
+5. **Stability** — fixed `TypeError: 'set' on proxy` bug in multi-retrieval and optimized API key handling in logs
+6. **User profiles** — generates personas from accumulated memories (Reflection)
+7. Maintaining full backward compatibility with existing LanceDB storage
 
 ## What's New
 
