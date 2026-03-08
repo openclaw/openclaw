@@ -3,6 +3,10 @@ import fs from "node:fs/promises";
 
 let wslCached: boolean | null = null;
 
+export function resetWSLStateForTests(): void {
+  wslCached = null;
+}
+
 export function isWSLEnv(): boolean {
   if (process.env.WSL_INTEROP || process.env.WSL_DISTRO_NAME || process.env.WSLENV) {
     return true;
@@ -46,6 +50,10 @@ export function isWSL2Sync(): boolean {
 
 export async function isWSL(): Promise<boolean> {
   if (wslCached !== null) {
+    return wslCached;
+  }
+  if (process.platform !== "linux") {
+    wslCached = false;
     return wslCached;
   }
   if (isWSLEnv()) {

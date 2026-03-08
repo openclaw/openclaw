@@ -1,3 +1,7 @@
+import {
+  collectAllowlistProviderRestrictSendersWarnings,
+  formatAllowFromLowercase,
+} from "openclaw/plugin-sdk/compat";
 import type {
   ChannelMessageActionName,
   ChannelPlugin,
@@ -11,8 +15,6 @@ import {
   DEFAULT_ACCOUNT_ID,
   MSTeamsConfigSchema,
   PAIRING_APPROVED_MESSAGE,
-  resolveAllowlistProviderRuntimeGroupPolicy,
-  resolveDefaultGroupPolicy,
 } from "openclaw/plugin-sdk/msteams";
 import { listMSTeamsDirectoryGroupsLive, listMSTeamsDirectoryPeersLive } from "./directory-live.js";
 import { msteamsOnboardingAdapter } from "./onboarding.js";
@@ -125,27 +127,20 @@ export const msteamsPlugin: ChannelPlugin<ResolvedMSTeamsAccount> = {
       configured: account.configured,
     }),
     resolveAllowFrom: ({ cfg }) => cfg.channels?.msteams?.allowFrom ?? [],
-    formatAllowFrom: ({ allowFrom }) =>
-      allowFrom
-        .map((entry) => String(entry).trim())
-        .filter(Boolean)
-        .map((entry) => entry.toLowerCase()),
+    formatAllowFrom: ({ allowFrom }) => formatAllowFromLowercase({ allowFrom }),
     resolveDefaultTo: ({ cfg }) => cfg.channels?.msteams?.defaultTo?.trim() || undefined,
   },
   security: {
     collectWarnings: ({ cfg }) => {
-      const defaultGroupPolicy = resolveDefaultGroupPolicy(cfg);
-      const { groupPolicy } = resolveAllowlistProviderRuntimeGroupPolicy({
+      return collectAllowlistProviderRestrictSendersWarnings({
+        cfg,
         providerConfigPresent: cfg.channels?.msteams !== undefined,
-        groupPolicy: cfg.channels?.msteams?.groupPolicy,
-        defaultGroupPolicy,
+        configuredGroupPolicy: cfg.channels?.msteams?.groupPolicy,
+        surface: "MS Teams groups",
+        openScope: "any member",
+        groupPolicyPath: "channels.msteams.groupPolicy",
+        groupAllowFromPath: "channels.msteams.groupAllowFrom",
       });
-      if (groupPolicy !== "open") {
-        return [];
-      }
-      return [
-        `- MS Teams groups: groupPolicy="open" allows any member to trigger (mention-gated). Set channels.msteams.groupPolicy="allowlist" + channels.msteams.groupAllowFrom to restrict senders.`,
-      ];
     },
   },
   setup: {

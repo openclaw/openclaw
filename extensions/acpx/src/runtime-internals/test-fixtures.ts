@@ -52,7 +52,8 @@ const commandIndex = args.findIndex(
     arg === "sessions" ||
     arg === "set-mode" ||
     arg === "set" ||
-    arg === "status",
+    arg === "status" ||
+    arg === "config",
 );
 const command = commandIndex >= 0 ? args[commandIndex] : "";
 const agent = commandIndex > 0 ? args[commandIndex - 1] : "unknown";
@@ -104,6 +105,32 @@ if (command === "sessions" && args[commandIndex + 1] === "new") {
       created: true,
     });
   }
+  process.exit(0);
+}
+
+if (command === "config" && args[commandIndex + 1] === "show") {
+  const configuredAgents = process.env.MOCK_ACPX_CONFIG_SHOW_AGENTS
+    ? JSON.parse(process.env.MOCK_ACPX_CONFIG_SHOW_AGENTS)
+    : {};
+  emitJson({
+    defaultAgent: "codex",
+    defaultPermissions: "approve-reads",
+    nonInteractivePermissions: "deny",
+    authPolicy: "skip",
+    ttl: 300,
+    timeout: null,
+    format: "text",
+    agents: configuredAgents,
+    authMethods: [],
+    paths: {
+      global: "/tmp/mock-global.json",
+      project: "/tmp/mock-project.json",
+    },
+    loaded: {
+      global: false,
+      project: false,
+    },
+  });
   process.exit(0);
 }
 
@@ -285,6 +312,7 @@ process.exit(2);
 export async function createMockRuntimeFixture(params?: {
   permissionMode?: ResolvedAcpxPluginConfig["permissionMode"];
   queueOwnerTtlSeconds?: number;
+  mcpServers?: ResolvedAcpxPluginConfig["mcpServers"];
 }): Promise<{
   runtime: AcpxRuntime;
   logPath: string;
@@ -304,6 +332,7 @@ export async function createMockRuntimeFixture(params?: {
     nonInteractivePermissions: "fail",
     strictWindowsCmdWrapper: true,
     queueOwnerTtlSeconds: params?.queueOwnerTtlSeconds ?? 0.1,
+    mcpServers: params?.mcpServers ?? {},
   };
 
   return {

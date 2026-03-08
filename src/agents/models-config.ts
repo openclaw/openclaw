@@ -23,10 +23,22 @@ type ModelsConfig = NonNullable<OpenClawConfig["models"]>;
 const DEFAULT_MODE: NonNullable<ModelsConfig["mode"]> = "merge";
 const MODELS_JSON_WRITE_LOCKS = new Map<string, Promise<void>>();
 
-function resolvePreferredTokenLimit(explicitValue: number, implicitValue: number): number {
-  // Keep catalog refresh behavior for stale low values while preserving
-  // intentional larger user overrides (for example Ollama >128k contexts).
-  return explicitValue > implicitValue ? explicitValue : implicitValue;
+function isPositiveFiniteTokenLimit(value: unknown): value is number {
+  return typeof value === "number" && Number.isFinite(value) && value > 0;
+}
+
+function resolvePreferredTokenLimit(params: {
+  explicitPresent: boolean;
+  explicitValue: unknown;
+  implicitValue: unknown;
+}): number | undefined {
+  if (params.explicitPresent && isPositiveFiniteTokenLimit(params.explicitValue)) {
+    return params.explicitValue;
+  }
+  if (isPositiveFiniteTokenLimit(params.implicitValue)) {
+    return params.implicitValue;
+  }
+  return isPositiveFiniteTokenLimit(params.explicitValue) ? params.explicitValue : undefined;
 }
 
 function mergeProviderModels(implicit: ProviderConfig, explicit: ProviderConfig): ProviderConfig {
@@ -65,15 +77,23 @@ function mergeProviderModels(implicit: ProviderConfig, explicit: ProviderConfig)
     // it in their config (key present), honour that value; otherwise fall back
     // to the built-in catalog default so new reasoning models work out of the
     // box without requiring every user to configure it.
+    const contextWindow = resolvePreferredTokenLimit({
+      explicitPresent: "contextWindow" in explicitModel,
+      explicitValue: explicitModel.contextWindow,
+      implicitValue: implicitModel.contextWindow,
+    });
+    const maxTokens = resolvePreferredTokenLimit({
+      explicitPresent: "maxTokens" in explicitModel,
+      explicitValue: explicitModel.maxTokens,
+      implicitValue: implicitModel.maxTokens,
+    });
+
     return {
       ...explicitModel,
       input: implicitModel.input,
       reasoning: "reasoning" in explicitModel ? explicitModel.reasoning : implicitModel.reasoning,
-      contextWindow: resolvePreferredTokenLimit(
-        explicitModel.contextWindow,
-        implicitModel.contextWindow,
-      ),
-      maxTokens: resolvePreferredTokenLimit(explicitModel.maxTokens, implicitModel.maxTokens),
+      ...(contextWindow === undefined ? {} : { contextWindow }),
+      ...(maxTokens === undefined ? {} : { maxTokens }),
     };
   });
 
@@ -149,8 +169,10 @@ function mergeWithExistingProviderSecrets(params: {
   nextProviders: Record<string, ProviderConfig>;
   existingProviders: Record<string, NonNullable<ModelsConfig["providers"]>[string]>;
   secretRefManagedProviders: ReadonlySet<string>;
+  explicitBaseUrlProviders: ReadonlySet<string>;
 }): Record<string, ProviderConfig> {
-  const { nextProviders, existingProviders, secretRefManagedProviders } = params;
+  const { nextProviders, existingProviders, secretRefManagedProviders, explicitBaseUrlProviders } =
+    params;
   const mergedProviders: Record<string, ProviderConfig> = {};
   for (const [key, entry] of Object.entries(existingProviders)) {
     mergedProviders[key] = entry;
@@ -175,7 +197,11 @@ function mergeWithExistingProviderSecrets(params: {
     ) {
       preserved.apiKey = existing.apiKey;
     }
-    if (typeof existing.baseUrl === "string" && existing.baseUrl) {
+    if (
+      !explicitBaseUrlProviders.has(key) &&
+      typeof existing.baseUrl === "string" &&
+      existing.baseUrl
+    ) {
       preserved.baseUrl = existing.baseUrl;
     }
     mergedProviders[key] = { ...newEntry, ...preserved };
@@ -188,6 +214,7 @@ async function resolveProvidersForMode(params: {
   targetPath: string;
   providers: Record<string, ProviderConfig>;
   secretRefManagedProviders: ReadonlySet<string>;
+  explicitBaseUrlProviders: ReadonlySet<string>;
 }): Promise<Record<string, ProviderConfig>> {
   if (params.mode !== "merge") {
     return params.providers;
@@ -204,6 +231,7 @@ async function resolveProvidersForMode(params: {
     nextProviders: params.providers,
     existingProviders,
     secretRefManagedProviders: params.secretRefManagedProviders,
+    explicitBaseUrlProviders: params.explicitBaseUrlProviders,
   });
 }
 
@@ -278,6 +306,15 @@ export async function ensureOpenClawModelsJson(
 
     const mode = cfg.models?.mode ?? DEFAULT_MODE;
     const secretRefManagedProviders = new Set<string>();
+    const explicitBaseUrlProviders = new Set(
+      Object.entries(cfg.models?.providers ?? {})
+        .map(([key, provider]) => [key.trim(), provider] as const)
+        .filter(
+          ([key, provider]) =>
+            Boolean(key) && typeof provider?.baseUrl === "string" && provider.baseUrl.trim(),
+        )
+        .map(([key]) => key),
+    );
 
     const normalizedProviders =
       normalizeProviders({
@@ -291,6 +328,7 @@ export async function ensureOpenClawModelsJson(
       targetPath,
       providers: normalizedProviders,
       secretRefManagedProviders,
+      explicitBaseUrlProviders,
     });
     const next = `${JSON.stringify({ providers: mergedProviders }, null, 2)}\n`;
     const existingRaw = await readRawFile(targetPath);

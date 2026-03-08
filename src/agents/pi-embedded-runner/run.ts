@@ -375,6 +375,12 @@ export async function runEmbeddedPiAgent(
         modelContextWindow: model.contextWindow,
         defaultTokens: DEFAULT_CONTEXT_TOKENS,
       });
+      // Apply contextTokens cap to model so pi-coding-agent's auto-compaction
+      // threshold uses the effective limit, not the native context window.
+      const effectiveModel =
+        ctxInfo.tokens < (model.contextWindow ?? Infinity)
+          ? { ...model, contextWindow: ctxInfo.tokens }
+          : model;
       const ctxGuard = evaluateContextWindowGuard({
         info: ctxInfo,
         warnBelowTokens: CONTEXT_WINDOW_WARN_BELOW_TOKENS,
@@ -662,7 +668,9 @@ export async function runEmbeddedPiAgent(
         const allowTransientCooldownProbe =
           params.allowTransientCooldownProbe === true &&
           allAutoProfilesInCooldown &&
-          (unavailableReason === "rate_limit" || unavailableReason === "overloaded");
+          (unavailableReason === "rate_limit" ||
+            unavailableReason === "overloaded" ||
+            unavailableReason === "billing");
         let didTransientCooldownProbe = false;
 
         while (profileIndex < profileCandidates.length) {
@@ -866,7 +874,7 @@ export async function runEmbeddedPiAgent(
             disableTools: params.disableTools,
             provider,
             modelId,
-            model,
+            model: effectiveModel,
             authProfileId: lastProfileId,
             authProfileIdSource: lockedProfileId ? "user" : "auto",
             authStorage,
