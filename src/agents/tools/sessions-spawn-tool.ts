@@ -98,7 +98,8 @@ export function createSessionsSpawnTool(
       const cleanup =
         params.cleanup === "keep" || params.cleanup === "delete" ? params.cleanup : "keep";
       const sandbox = params.sandbox === "require" ? "require" : "inherit";
-      const streamTo = params.streamTo === "parent" ? "parent" : undefined;
+      const streamToRequested = params.streamTo === "parent" ? "parent" : undefined;
+      const streamTo = runtime === "acp" ? streamToRequested : undefined;
       // Back-compat: older callers used timeoutSeconds for this tool.
       const timeoutSecondsCandidate =
         typeof params.runTimeoutSeconds === "number"
@@ -119,13 +120,6 @@ export function createSessionsSpawnTool(
             mimeType?: string;
           }>)
         : undefined;
-
-      if (streamTo && runtime !== "acp") {
-        return jsonResult({
-          status: "error",
-          error: `streamTo is only supported for runtime=acp; got runtime=${runtime}`,
-        });
-      }
 
       if (runtime === "acp") {
         if (Array.isArray(attachments) && attachments.length > 0) {
