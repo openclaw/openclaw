@@ -150,6 +150,8 @@ struct GeneralSettings: View {
                 self.remoteDirectRow
             }
 
+            self.remoteAuthRows
+
             GatewayDiscoveryInlineList(
                 discovery: self.gatewayDiscovery,
                 currentTarget: self.state.remoteTarget,
@@ -285,6 +287,31 @@ struct GeneralSettings: View {
             }
             Text(
                 "Direct mode requires wss:// for remote hosts. ws:// is only allowed for localhost/127.0.0.1.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .padding(.leading, self.remoteLabelWidth + 10)
+        }
+    }
+
+    private var remoteAuthRows: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(alignment: .center, spacing: 10) {
+                Text("Auth token")
+                    .font(.callout.weight(.semibold))
+                    .frame(width: self.remoteLabelWidth, alignment: .leading)
+                SecureField("gateway.remote.token", text: self.$state.remoteToken)
+                    .textFieldStyle(.roundedBorder)
+                    .frame(maxWidth: .infinity)
+            }
+            HStack(alignment: .center, spacing: 10) {
+                Text("Password")
+                    .font(.callout.weight(.semibold))
+                    .frame(width: self.remoteLabelWidth, alignment: .leading)
+                SecureField("gateway.remote.password", text: self.$state.remotePassword)
+                    .textFieldStyle(.roundedBorder)
+                    .frame(maxWidth: .infinity)
+            }
+            Text("Set the one that matches the remote gateway auth mode.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .padding(.leading, self.remoteLabelWidth + 10)

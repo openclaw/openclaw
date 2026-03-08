@@ -61,6 +61,21 @@ struct GatewayEndpointStoreTests {
         #expect(token == nil)
     }
 
+    @Test func `resolve gateway token reads remote config in remote mode`() {
+        let token = GatewayEndpointStore._testResolveGatewayToken(
+            isRemote: true,
+            root: [
+                "gateway": [
+                    "remote": [
+                        "token": "remote-token",
+                    ],
+                ],
+            ],
+            env: [:],
+            launchdSnapshot: nil)
+        #expect(token == "remote-token")
+    }
+
     @Test func `resolve gateway password falls back to launchd`() {
         let snapshot = self.makeLaunchAgentSnapshot(
             env: ["OPENCLAW_GATEWAY_PASSWORD": "launchd-pass"],
@@ -73,6 +88,21 @@ struct GatewayEndpointStoreTests {
             env: [:],
             launchdSnapshot: snapshot)
         #expect(password == "launchd-pass")
+    }
+
+    @Test func `resolve gateway password reads remote config in remote mode`() {
+        let password = GatewayEndpointStore._testResolveGatewayPassword(
+            isRemote: true,
+            root: [
+                "gateway": [
+                    "remote": [
+                        "password": "remote-pass",
+                    ],
+                ],
+            ],
+            env: [:],
+            launchdSnapshot: nil)
+        #expect(password == "remote-pass")
     }
 
     @Test func `connection mode resolver prefers config mode over defaults`() {
