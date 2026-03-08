@@ -85,6 +85,47 @@ const RELAY_AUTH_HEADER = "x-openclaw-relay-token";
 const DEFAULT_EXTENSION_RECONNECT_GRACE_MS = 20_000;
 const DEFAULT_EXTENSION_COMMAND_RECONNECT_WAIT_MS = 3_000;
 
+/**
+ * Allowlist of CDP event method prefixes that the extension relay may forward.
+ * Events outside this set are silently dropped to prevent a compromised
+ * extension from injecting arbitrary CDP events into connected clients.
+ */
+const ALLOWED_CDP_EVENT_PREFIXES: readonly string[] = [
+  "Target.",
+  "Page.",
+  "Runtime.",
+  "Network.",
+  "DOM.",
+  "CSS.",
+  "Debugger.",
+  "Log.",
+  "Console.",
+  "Performance.",
+  "Security.",
+  "Overlay.",
+  "Emulation.",
+  "Input.",
+  "Fetch.",
+  "Accessibility.",
+  "Animation.",
+  "Audits.",
+  "BackgroundService.",
+  "DOMStorage.",
+  "HeadlessExperimental.",
+  "Inspector.",
+  "LayerTree.",
+  "Media.",
+  "ServiceWorker.",
+  "Storage.",
+  "Tethering.",
+  "Tracing.",
+  "WebAuthn.",
+];
+
+function isAllowedCdpEventMethod(method: string): boolean {
+  return ALLOWED_CDP_EVENT_PREFIXES.some((prefix) => method.startsWith(prefix));
+}
+
 function headerValue(value: string | string[] | undefined): string | undefined {
   if (!value) {
     return undefined;
@@ -582,6 +623,12 @@ export async function ensureChromeExtensionRelayServer(opts: {
       }
 
       if (path === "/extension/status") {
+        const token = getRelayAuthTokenFromRequest(req, url);
+        if (!token || !relayAuthTokens.has(token)) {
+          res.writeHead(401);
+          res.end("Unauthorized");
+          return;
+        }
         res.writeHead(200, { "Content-Type": "application/json" });
         res.end(JSON.stringify({ connected: extensionConnected() }));
         return;
@@ -790,6 +837,11 @@ export async function ensureChromeExtensionRelayServer(opts: {
           const params = evt.params?.params;
           const sessionId = evt.params?.sessionId;
           if (!method || typeof method !== "string") {
+            return;
+          }
+
+          // Drop events outside the allowlist to prevent event injection attacks.
+          if (!isAllowedCdpEventMethod(method)) {
             return;
           }
 
