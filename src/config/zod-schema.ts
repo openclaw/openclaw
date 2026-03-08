@@ -317,6 +317,7 @@ export const OpenClawSchema = z
                 cdpUrl: z.string().optional(),
                 driver: z.union([z.literal("clawd"), z.literal("extension")]).optional(),
                 attachOnly: z.boolean().optional(),
+                headless: z.boolean().optional(),
                 color: HexColorSchema,
               })
               .strict()
