@@ -11,7 +11,6 @@ import ai.openclaw.app.protocol.OpenClawLocationCommand
 import ai.openclaw.app.protocol.OpenClawMotionCommand
 import ai.openclaw.app.protocol.OpenClawNotificationsCommand
 import ai.openclaw.app.protocol.OpenClawPhotosCommand
-import ai.openclaw.app.protocol.OpenClawScreenCommand
 import ai.openclaw.app.protocol.OpenClawSmsCommand
 import ai.openclaw.app.protocol.OpenClawSystemCommand
 
@@ -59,7 +58,6 @@ object InvokeCommandRegistry {
   val capabilityManifest: List<NodeCapabilitySpec> =
     listOf(
       NodeCapabilitySpec(name = OpenClawCapability.Canvas.rawValue),
-      NodeCapabilitySpec(name = OpenClawCapability.Screen.rawValue),
       NodeCapabilitySpec(name = OpenClawCapability.Device.rawValue),
       NodeCapabilitySpec(name = OpenClawCapability.Notifications.rawValue),
       NodeCapabilitySpec(name = OpenClawCapability.System.rawValue),
@@ -120,10 +118,6 @@ object InvokeCommandRegistry {
       ),
       InvokeCommandSpec(
         name = OpenClawCanvasA2UICommand.Reset.rawValue,
-        requiresForeground = true,
-      ),
-      InvokeCommandSpec(
-        name = OpenClawScreenCommand.Record.rawValue,
         requiresForeground = true,
       ),
       InvokeCommandSpec(
