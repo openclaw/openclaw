@@ -69,7 +69,10 @@ import {
 } from "./allow-list.js";
 import { resolveDiscordDmCommandAccess } from "./dm-command-auth.js";
 import { handleDiscordDmCommandDecision } from "./dm-command-decision.js";
-import { resolveDiscordChannelInfo } from "./message-utils.js";
+import {
+  resolveDiscordChannelInfo,
+  resolveDiscordRouteText,
+} from "./message-utils.js";
 import {
   readDiscordModelPickerRecentModels,
   recordDiscordModelPickerRecentModel,
@@ -1539,7 +1542,7 @@ async function dispatchDiscordCommandInteraction(params: {
     accountId,
     guildId: interaction.guild?.id ?? undefined,
     memberRoleIds,
-    text: prompt,
+    text: resolveDiscordRouteText(prompt),
     peer: {
       kind: isDirectMessage ? "direct" : isGroupDm ? "group" : "channel",
       id: isDirectMessage ? user.id : channelId,

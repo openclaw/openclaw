@@ -13,6 +13,19 @@ const DISCORD_CDN_HOSTNAMES = [
   "*.discordapp.net",
 ];
 
+const DISCORD_NATIVE_MENTION_ENTITY_REGEX = /<@[!&]?\d+>/g;
+export const DISCORD_BROADCAST_MENTION_REGEX =
+  /(^|[\s([{"'.,;:!?<`])@(everyone|here)\b(?=$|[^a-zA-Z0-9_-])/gi;
+
+export function resolveDiscordRouteText(rawText?: string | null): string {
+  const trimmed = rawText?.trim() ?? "";
+  if (!trimmed) {
+    return "";
+  }
+  const withoutNative = trimmed.replace(DISCORD_NATIVE_MENTION_ENTITY_REGEX, " ");
+  return withoutNative.replace(DISCORD_BROADCAST_MENTION_REGEX, "$1").trim();
+}
+
 // Allow Discord CDN downloads when VPN/proxy DNS resolves to RFC2544 benchmark ranges.
 const DISCORD_MEDIA_SSRF_POLICY: SsrFPolicy = {
   hostnameAllowlist: DISCORD_CDN_HOSTNAMES,

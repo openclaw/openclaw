@@ -4,6 +4,7 @@ import type { NativeCommandSpec } from "../../auto-reply/commands-registry.js";
 import * as dispatcherModule from "../../auto-reply/reply/provider-dispatcher.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import * as pluginCommandsModule from "../../plugins/commands.js";
+import * as resolveRouteModule from "../../routing/resolve-route.js";
 import { createDiscordNativeCommand } from "./native-command.js";
 import { createNoopThreadBindingManager } from "./thread-bindings.js";
 
@@ -332,5 +333,73 @@ describe("Discord native plugin command dispatch", () => {
     expect(dispatchCall.ctx?.CommandTargetSessionKey).toBe(boundSessionKey);
     expect(persistentBindingMocks.resolveConfiguredAcpBindingRecord).toHaveBeenCalledTimes(1);
     expect(persistentBindingMocks.ensureConfiguredAcpBindingSession).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not route slash command @everyone as an agent alias", async () => {
+    const guildId = "1459246755253325866";
+    const channelId = "1478836151241412758";
+    const cfg = {
+      agents: {
+        list: [{ id: "main", default: true }, { id: "everyone" }],
+      },
+      commands: {
+        useAccessGroups: false,
+      },
+      channels: {
+        discord: {
+          dm: { enabled: true, policy: "open" },
+        },
+      },
+    } as OpenClawConfig;
+    const commandSpec: NativeCommandSpec = {
+      name: "echo",
+      description: "Echo input",
+      acceptsArgs: true,
+    };
+    const command = createDiscordNativeCommand({
+      command: commandSpec,
+      cfg,
+      discordConfig: cfg.channels?.discord ?? {},
+      accountId: "default",
+      sessionPrefix: "discord:slash",
+      ephemeralDefault: true,
+      threadBindings: createNoopThreadBindingManager("default"),
+    });
+    const interaction = createInteraction({
+      channelType: ChannelType.GuildText,
+      channelId,
+      guildId,
+      guildName: "Routing Lab",
+    });
+    interaction.options.getString.mockReturnValue("@everyone urgent build broken");
+
+    const routeSpy = vi
+      .spyOn(resolveRouteModule, "resolveAgentRoute")
+      .mockReturnValue({
+        agentId: "main",
+        channel: "discord",
+        accountId: "default",
+        sessionKey: "agent:main:discord:channel:1478836151241412758",
+        mainSessionKey: "agent:main:main",
+        matchedBy: "default",
+      });
+
+    vi.spyOn(pluginCommandsModule, "matchPluginCommand").mockReturnValue(null);
+    const dispatchSpy = vi
+      .spyOn(dispatcherModule, "dispatchReplyWithDispatcher")
+      .mockResolvedValue({
+        counts: {
+          final: 1,
+          block: 0,
+          tool: 0,
+        },
+      } as never);
+
+    await (command as { run: (interaction: unknown) => Promise<void> }).run(interaction as unknown);
+
+    expect(routeSpy).toHaveBeenCalledTimes(1);
+    const routeInput = routeSpy.mock.calls[0]?.[0];
+    expect(routeInput?.text).toBe("/echo  urgent build broken");
+    expect(dispatchSpy).toHaveBeenCalledTimes(1);
   });
 });
