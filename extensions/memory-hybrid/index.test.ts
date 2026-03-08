@@ -72,7 +72,7 @@ describe("config", () => {
     expect(cfg.embedding.provider).toBe("google");
     expect(cfg.embedding.model).toBe("gemini-embedding-001");
     expect(cfg.embedding.apiKey).toBe("test-key-123");
-    expect(cfg.chatModel).toBe("gemini-2.0-flash"); // auto-detected from chat.ts defaults
+    expect(cfg.chatModel).toBe("gemma-3-27b-it"); // auto-detected from chat.ts defaults
     expect(cfg.autoRecall).toBe(true); // default
     expect(cfg.autoCapture).toBe(false); // default
     expect(cfg.smartCapture).toBe(false); // default

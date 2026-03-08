@@ -41,7 +41,10 @@ describe("SOTA Architecture Upgrades", () => {
         }),
       );
 
-      const result = await extractGraphFromText("Vova loves Python 3", mockChatModel);
+      const result = await extractGraphFromText(
+        "Vova is a person who loves coding in Python 3 everyday.",
+        mockChatModel,
+      );
 
       // Verify node normalization
       expect(result.nodes).toHaveLength(2);
@@ -68,7 +71,10 @@ describe("SOTA Architecture Upgrades", () => {
         }),
       );
 
-      const result = await extractGraphFromText("Vova likes apples", mockChatModel);
+      const result = await extractGraphFromText(
+        "Vova likes eating fresh apples from the garden.",
+        mockChatModel,
+      );
       expect(result.edges[0].relation).toBe("LIKES");
     });
   });

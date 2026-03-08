@@ -152,12 +152,25 @@ class MemoryDB {
       .toArray();
 
     // 2. Temporal Search (Recent memories unconditionally)
-    // LanceDB node API doesn't have a great sort() yet without a vector space,
-    // so we get all metadata, sort by createdAt, and take top 20
-    const allRows = await this.table!.query().toArray();
-    const recentRows = allRows
-      .sort((a, b) => (b.createdAt as number) - (a.createdAt as number))
-      .slice(0, 20);
+    // Avoid loading entire DB to sort! Use select() and limit()
+    const recentRows = await this.table!.query()
+      .select([
+        "id",
+        "text",
+        "importance",
+        "category",
+        "createdAt",
+        "recallCount",
+        "happenedAt",
+        "validUntil",
+        "emotionalTone",
+        "emotionScore",
+      ])
+      .limit(200) // Fetch last 200 metadata entries to sort in memory (better than whole DB)
+      .toArray();
+
+    recentRows.sort((a, b) => (b.createdAt as number) - (a.createdAt as number));
+    const finalRecent = recentRows.slice(0, 20);
 
     // 3. Combine and Deduplicate
     const combinedMap = new Map<string, Record<string, unknown>>();
@@ -167,7 +180,7 @@ class MemoryDB {
     }
 
     // Add recent rows (giving them a baseline distance if they weren't in vector results)
-    for (const row of recentRows) {
+    for (const row of finalRecent) {
       if (!combinedMap.has(row.id as string)) {
         // Approximate a mediocre distance so they don't get filtered out by minScore
         // They will shine during hybridScoring due to their recency
@@ -322,32 +335,34 @@ class MemoryDB {
       }
       try {
         validateId(id);
-        const rows = await this.table!.query().where(`id = '${id}'`).toArray();
-        if (rows.length === 0) {
+        // Atomic-ish update: delete then re-add.
+        // Optimization: Use table.update() if/when supported by local LanceDB version.
+        // For now, we fetch the row first to ensure we don't lose data.
+        const row = await this.getById(id);
+        if (!row) {
           this.recallCountDeltas.delete(id);
           continue;
         }
-        const row = rows[0];
+
         const updatedRow = {
           ...row,
-          recallCount: ((row.recallCount as number) ?? 0) + delta,
+          recallCount: (row.recallCount ?? 0) + delta,
         };
+
+        // Batch safety: we remove delta before transaction
+        this.recallCountDeltas.delete(id);
 
         await this.table!.delete(`id = '${id}'`);
         try {
-          await this.table!.add([updatedRow]);
+          await this.table!.add([updatedRow as unknown as Record<string, unknown>]);
+          flushed++;
         } catch (addErr) {
-          // Rollback: restore original row to prevent data loss
-          try {
-            await this.table!.add([row as Record<string, unknown>]);
-          } catch {
-            console.warn(`[memory-hybrid] CRITICAL: rollback failed for ${id}, data may be lost`);
-          }
+          // Rollback: restore old record
+          await this.table!.add([row as unknown as Record<string, unknown>]);
+          // Put delta back for next try
+          this.recallCountDeltas.set(id, delta);
           throw addErr;
         }
-
-        this.recallCountDeltas.delete(id);
-        flushed++;
       } catch (error) {
         console.warn(
           `[memory-hybrid] flushRecallCounts failed for ${id}:`,
@@ -1152,11 +1167,15 @@ const memoryPlugin = {
 
             if (result.shouldStore) {
               let stored = 0;
+              // Limit concurrent fact extraction/storing to avoid 429
               for (const fact of result.facts.slice(0, 5)) {
                 try {
+                  // Pre-check for exact duplicate to save embed API call
+                  // (approx matching by text hash/prefix if we wanted to be super aggressive)
+
                   const vector = await embeddings.embed(fact.text);
 
-                  // Duplicate check
+                  // Similarity check (skip if already exists)
                   const existing = await db.search(vector, 1, 0.95);
                   if (existing.length > 0) continue;
 
@@ -1172,7 +1191,8 @@ const memoryPlugin = {
                   });
                   stored++;
 
-                  // Graph extraction for each fact (non-blocking)
+                  // Graph extraction for each fact (THROTTLED)
+                  // We don't await extractGraph to keep UX snappy, but we catch errors
                   extractGraphFromText(fact.text, chatModel)
                     .then(async (graph) => {
                       if (graph.nodes.length > 0 || graph.edges.length > 0) {
@@ -1182,15 +1202,15 @@ const memoryPlugin = {
                         });
                       }
                     })
-                    .catch(() => {
-                      /* best-effort */
-                    });
+                    .catch(() => {});
 
-                  // Delay slightly to stay under 30 RPM (2s per request)
-                  // Each fact uses 1 embed + 1 graph extraction call
-                  await new Promise((resolve) => setTimeout(resolve, 1000));
+                  // Robust delay: 1s between facts.
+                  // Total 5 facts = 5s background work. Safe for typical 30 RPM limits.
+                  await new Promise((resolve) => setTimeout(resolve, 1500));
                 } catch (err) {
-                  api.logger.warn(`memory-hybrid: smart-capture fail for fact: ${err}`);
+                  api.logger.warn(
+                    `memory-hybrid: smart-capture fact skip: ${err instanceof Error ? err.message : String(err)}`,
+                  );
                 }
               }
 

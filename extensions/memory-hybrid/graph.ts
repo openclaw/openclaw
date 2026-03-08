@@ -13,7 +13,7 @@
  * - recall(): enriches search results with graph connections
  */
 
-import { readFile, writeFile, appendFile, access } from "node:fs/promises";
+import { readFile, writeFile, appendFile, access, mkdir } from "node:fs/promises";
 import { join, dirname } from "node:path";
 import type { ChatModel } from "./chat.js";
 
@@ -190,6 +190,7 @@ export class GraphDB {
     }
 
     if (lines.length > 0) {
+      await mkdir(dirname(this.filePath), { recursive: true });
       await appendFile(this.filePath, lines.join("\n") + "\n", "utf-8");
     }
 
