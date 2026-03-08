@@ -1,0 +1,83 @@
+name: CodeQL
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: codeql-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  actions: read
+  contents: read
+  security-events: write
+
+jobs:
+  analyze:
+    name: Analyze (${{ matrix.language }})
+    runs-on: ${{ matrix.runs_on }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - language: javascript-typescript
+            runs_on: blacksmith-16vcpu-ubuntu-2404
+            needs_node: true
+            needs_python: false
+            needs_autobuild: false
+          - language: actions
+            runs_on: blacksmith-16vcpu-ubuntu-2404
+            needs_node: false
+            needs_python: false
+            needs_autobuild: false
+          - language: python
+            runs_on: blacksmith-16vcpu-ubuntu-2404
+            needs_node: false
+            needs_python: true
+            needs_autobuild: false
+          - language: java-kotlin
+            runs_on: blacksmith-16vcpu-ubuntu-2404
+            needs_node: false
+            needs_python: false
+            needs_autobuild: true
+          - language: swift
+            runs_on: macos-latest
+            needs_node: false
+            needs_python: false
+            needs_autobuild: true
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: false
+
+      - name: Setup Node environment
+        if: matrix.needs_node
+        uses: ./.github/actions/setup-node-env
+        with:
+          install-bun: "false"
+          use-sticky-disk: "true"
+
+      - name: Setup Python
+        if: matrix.needs_python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v4
+        with:
+          languages: ${{ matrix.language }}
+          queries: security-and-quality
+
+      - name: Autobuild
+        if: matrix.needs_autobuild
+        uses: github/codeql-action/autobuild@v4
+
+      - name: Analyze
+        uses: github/codeql-action/analyze@v4
+        with:
+          category: "/language:${{ matrix.language }}"
