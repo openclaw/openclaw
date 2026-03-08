@@ -42,7 +42,7 @@ Profiles:
 - `full`: no restriction (same as unset). Best when you want the richest command/control surface and prefer to trim with `tools.allow` / `tools.deny` instead of starting from a narrow base profile.
 
 <Note>
-If a Telegram/WhatsApp/Discord-style assistant feels unexpectedly limited, check `tools.profile` first. In particular, `profile: "messaging"` is intentionally narrow by design. Use `profile: "full"` when you want broader access to tools like file operations, runtime commands, browser automation, and other first-class OpenClaw tools.
+If a Telegram/WhatsApp/Discord-style assistant feels unexpectedly limited, check `tools.profile` first. In particular, `tools.profile: "messaging"` is intentionally narrow by design. Use `tools.profile: "full"` when you want broader access to tools like file operations, runtime commands, browser automation, and other first-class OpenClaw tools.
 </Note>
 
 Example (messaging-only by default, allow Slack + Discord tools too):
