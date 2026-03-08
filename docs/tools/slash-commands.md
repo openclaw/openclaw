@@ -104,6 +104,7 @@ Text + native (when enabled):
 - `/think <off|minimal|low|medium|high|xhigh>` (dynamic choices by model/provider; aliases: `/thinking`, `/t`)
 - `/verbose on|full|off` (alias: `/v`)
 - `/reasoning on|off|stream` (alias: `/reason`; when on, sends a separate message prefixed `Reasoning:`; `stream` = Telegram draft only)
+- Tip: defaults can be scoped per surface with `agents.defaults.surfaceDefaults` (for example `tui` vs `discord`) without changing per-session behavior.
 - `/elevated on|off|ask|full` (alias: `/elev`; `full` skips exec approvals)
 - `/exec host=<sandbox|gateway|node> security=<deny|allowlist|full> ask=<off|on-miss|always> node=<id>` (send `/exec` to show current)
 - `/model <name>` (alias: `/models`; or `/<alias>` from `agents.defaults.models.*.alias`)

@@ -19,6 +19,7 @@ import { CURRENT_MESSAGE_MARKER, stripMentions, stripStructuralPrefixes } from "
 import { createModelSelectionState, resolveContextTokens } from "./model-selection.js";
 import { formatElevatedUnavailableMessage, resolveElevatedPermissions } from "./reply-elevated.js";
 import { stripInlineStatus } from "./reply-inline.js";
+import { resolveSurfaceDirectiveDefaults } from "./surface-defaults.js";
 import type { TypingController } from "./typing.js";
 
 type AgentDefaults = NonNullable<OpenClawConfig["agents"]>["defaults"];
@@ -341,13 +342,21 @@ export async function resolveReplyDirectives(params: {
   const resolvedThinkLevel =
     directives.thinkLevel ?? (sessionEntry?.thinkingLevel as ThinkLevel | undefined);
 
+  const surfaceDirectiveDefaults = resolveSurfaceDirectiveDefaults({
+    agentCfg,
+    surface: sessionCtx.Surface ?? ctx.Surface,
+    provider: sessionCtx.Provider ?? ctx.Provider,
+  });
+
   const resolvedVerboseLevel =
     directives.verboseLevel ??
     (sessionEntry?.verboseLevel as VerboseLevel | undefined) ??
+    surfaceDirectiveDefaults.verboseDefault ??
     (agentCfg?.verboseDefault as VerboseLevel | undefined);
   let resolvedReasoningLevel: ReasoningLevel =
     directives.reasoningLevel ??
     (sessionEntry?.reasoningLevel as ReasoningLevel | undefined) ??
+    surfaceDirectiveDefaults.reasoningDefault ??
     "off";
   const resolvedElevatedLevel = elevatedAllowed
     ? (directives.elevatedLevel ??
@@ -399,7 +408,8 @@ export async function resolveReplyDirectives(params: {
   // be emitted as visible "Reasoning:" messages.
   const reasoningExplicitlySet =
     directives.reasoningLevel !== undefined ||
-    (sessionEntry?.reasoningLevel !== undefined && sessionEntry?.reasoningLevel !== null);
+    (sessionEntry?.reasoningLevel !== undefined && sessionEntry?.reasoningLevel !== null) ||
+    surfaceDirectiveDefaults.reasoningDefault !== undefined;
   const thinkingActive = resolvedThinkLevelWithDefault !== "off";
   if (!reasoningExplicitlySet && resolvedReasoningLevel === "off" && !thinkingActive) {
     resolvedReasoningLevel = await modelState.resolveDefaultReasoningLevel();

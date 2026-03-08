@@ -99,6 +99,8 @@ Session controls:
 - `/activation <mention|always>`
 - `/deliver <on|off>`
 
+Default visibility for TUI can be set in config with `agents.defaults.surfaceDefaults.tui` (for example `verboseDefault: "full"`, `reasoningDefault: "on"`) without changing Discord/webchat defaults.
+
 Session lifecycle:
 
 - `/new` or `/reset` (reset the session)

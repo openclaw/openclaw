@@ -241,7 +241,11 @@ WhatsApp runs through the gateway's web channel (Baileys Web). It starts automat
       replyToMode: "off", // off | first | all
       dmPolicy: "pairing",
       allowFrom: ["1234567890", "123456789012345678"],
-      dm: { enabled: true, groupEnabled: false, groupChannels: ["openclaw-dm"] },
+      dm: {
+        enabled: true,
+        groupEnabled: false,
+        groupChannels: ["openclaw-dm"],
+      },
       guilds: {
         "123456789012345678": {
           slug: "friends-of-openclaw",
@@ -881,6 +885,10 @@ Time format in system prompt. Default: `auto` (OS preference).
       pdfMaxPages: 20,
       thinkingDefault: "low",
       verboseDefault: "off",
+      surfaceDefaults: {
+        tui: { verboseDefault: "full", reasoningDefault: "on" },
+        discord: { verboseDefault: "off", reasoningDefault: "off" },
+      },
       elevatedDefault: "on",
       timeoutSeconds: 600,
       mediaMaxMb: 5,
@@ -907,6 +915,10 @@ Time format in system prompt. Default: `auto` (OS preference).
 - `params` merge precedence (config): `agents.defaults.models["provider/model"].params` is the base, then `agents.list[].params` (matching agent id) overrides by key.
 - Config writers that mutate these fields (for example `/models set`, `/models set-image`, and fallback add/remove commands) save canonical object form and preserve existing fallback lists when possible.
 - `maxConcurrent`: max parallel agent runs across sessions (each session still serialized). Default: 1.
+- `surfaceDefaults`: optional per-surface UX defaults for visibility controls.
+  - Allowed keys inside each surface: `verboseDefault` (`off|on|full`) and `reasoningDefault` (`off|on|stream`).
+  - Resolution order keeps explicit directives/session overrides first, then surface defaults, then global defaults/fallbacks.
+  - Example surface names: `tui`, `webchat`, `discord`, `telegram`, `slack`, `whatsapp`, `signal`, `imessage`.
 
 **Built-in alias shorthands** (only apply when the model is in `agents.defaults.models`):
 
@@ -1038,7 +1050,10 @@ Prunes **old tool results** from in-memory context before sending to the LLM. Do
         hardClearRatio: 0.5,
         minPrunableToolChars: 50000,
         softTrim: { maxChars: 4000, headChars: 1500, tailChars: 1500 },
-        hardClear: { enabled: true, placeholder: "[Old tool result content cleared]" },
+        hardClear: {
+          enabled: true,
+          placeholder: "[Old tool result content cleared]",
+        },
         tools: { deny: ["browser", "canvas"] },
       },
     },
@@ -1845,7 +1860,11 @@ Configures inbound media understanding (image/audio/video):
         },
         models: [
           { provider: "openai", model: "gpt-4o-mini-transcribe" },
-          { type: "cli", command: "whisper", args: ["--model", "base", "{{MediaPath}}"] },
+          {
+            type: "cli",
+            command: "whisper",
+            args: ["--model", "base", "{{MediaPath}}"],
+          },
         ],
       },
       video: {
@@ -2175,7 +2194,9 @@ Anthropic-compatible, built-in provider. Shortcut: `openclaw onboard --auth-choi
   agents: {
     defaults: {
       model: { primary: "synthetic/hf:MiniMaxAI/MiniMax-M2.5" },
-      models: { "synthetic/hf:MiniMaxAI/MiniMax-M2.5": { alias: "MiniMax M2.5" } },
+      models: {
+        "synthetic/hf:MiniMaxAI/MiniMax-M2.5": { alias: "MiniMax M2.5" },
+      },
     },
   },
   models: {
@@ -2758,7 +2779,11 @@ Notes:
 {
   auth: {
     profiles: {
-      "anthropic:me@example.com": { provider: "anthropic", mode: "oauth", email: "me@example.com" },
+      "anthropic:me@example.com": {
+        provider: "anthropic",
+        mode: "oauth",
+        email: "me@example.com",
+      },
       "anthropic:work": { provider: "anthropic", mode: "api_key" },
     },
     order: {

@@ -33,4 +33,52 @@ describe("resolveCurrentDirectiveLevels", () => {
     expect(result.currentThinkLevel).toBe("minimal");
     expect(resolveDefaultThinkingLevel).not.toHaveBeenCalled();
   });
+
+  it("applies surface verbose and reasoning defaults when session overrides are absent", async () => {
+    const resolveDefaultThinkingLevel = vi.fn().mockResolvedValue("low");
+
+    const result = await resolveCurrentDirectiveLevels({
+      sessionEntry: {},
+      agentCfg: {
+        verboseDefault: "off",
+        surfaceDefaults: {
+          tui: {
+            verboseDefault: "full",
+            reasoningDefault: "on",
+          },
+        },
+      },
+      surface: "tui",
+      provider: "webchat",
+      resolveDefaultThinkingLevel,
+    });
+
+    expect(result.currentVerboseLevel).toBe("full");
+    expect(result.currentReasoningLevel).toBe("on");
+  });
+
+  it("keeps session overrides above surface defaults", async () => {
+    const resolveDefaultThinkingLevel = vi.fn().mockResolvedValue("low");
+
+    const result = await resolveCurrentDirectiveLevels({
+      sessionEntry: {
+        verboseLevel: "on",
+        reasoningLevel: "stream",
+      },
+      agentCfg: {
+        verboseDefault: "off",
+        surfaceDefaults: {
+          discord: {
+            verboseDefault: "full",
+            reasoningDefault: "off",
+          },
+        },
+      },
+      surface: "discord",
+      resolveDefaultThinkingLevel,
+    });
+
+    expect(result.currentVerboseLevel).toBe("on");
+    expect(result.currentReasoningLevel).toBe("stream");
+  });
 });

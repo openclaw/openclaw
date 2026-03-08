@@ -52,6 +52,8 @@ export async function applyInlineDirectivesFastLane(
     await resolveCurrentDirectiveLevels({
       sessionEntry,
       agentCfg,
+      surface: ctx.Surface,
+      provider: ctx.Provider,
       resolveDefaultThinkingLevel: () => modelState.resolveDefaultThinkingLevel(),
     });
 

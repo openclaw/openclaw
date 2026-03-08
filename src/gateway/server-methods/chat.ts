@@ -6,6 +6,7 @@ import { resolveThinkingDefault } from "../../agents/model-selection.js";
 import { resolveAgentTimeoutMs } from "../../agents/timeout.js";
 import { dispatchInboundMessage } from "../../auto-reply/dispatch.js";
 import { createReplyDispatcher } from "../../auto-reply/reply/reply-dispatcher.js";
+import { resolveSurfaceDirectiveDefaults } from "../../auto-reply/reply/surface-defaults.js";
 import type { MsgContext } from "../../auto-reply/templating.js";
 import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.js";
 import { createReplyPrefixOptions } from "../../channels/reply-prefix.js";
@@ -114,7 +115,11 @@ type ChatSendOriginatingRoute = {
 };
 
 function resolveChatSendOriginatingRoute(params: {
-  client?: { mode?: string | null; id?: string | null } | null;
+  client?: {
+    mode?: string | null;
+    id?: string | null;
+    displayName?: string | null;
+  } | null;
   deliver?: boolean;
   entry?: ChatSendDeliveryEntry;
   hasConnectedClient?: boolean;
@@ -204,6 +209,28 @@ function resolveChatSendOriginatingRoute(params: {
   };
 }
 
+function resolveInternalChatSurface(
+  client?: {
+    mode?: string | null;
+    id?: string | null;
+    displayName?: string | null;
+  } | null,
+): string {
+  const id = client?.id?.trim().toLowerCase();
+  const displayName = client?.displayName?.trim().toLowerCase();
+  const mode = client?.mode?.trim().toLowerCase();
+
+  if (id === "openclaw-tui" || displayName === "openclaw-tui") {
+    return "tui";
+  }
+
+  if (mode === "ui" && id === "gateway-client" && displayName?.includes("tui")) {
+    return "tui";
+  }
+
+  return INTERNAL_MESSAGE_CHANNEL;
+}
+
 function stripDisallowedChatControlChars(message: string): string {
   let output = "";
   for (const char of message) {
@@ -225,7 +252,10 @@ export function sanitizeChatSendMessageInput(
   return { ok: true, message: stripDisallowedChatControlChars(normalized) };
 }
 
-function truncateChatHistoryText(text: string): { text: string; truncated: boolean } {
+function truncateChatHistoryText(text: string): {
+  text: string;
+  truncated: boolean;
+} {
   if (text.length <= CHAT_HISTORY_TEXT_MAX_CHARS) {
     return { text, truncated: false };
   }
@@ -235,7 +265,10 @@ function truncateChatHistoryText(text: string): { text: string; truncated: boole
   };
 }
 
-function sanitizeChatHistoryContentBlock(block: unknown): { block: unknown; changed: boolean } {
+function sanitizeChatHistoryContentBlock(block: unknown): {
+  block: unknown;
+  changed: boolean;
+} {
   if (!block || typeof block !== "object") {
     return { block, changed: false };
   }
@@ -277,7 +310,10 @@ function sanitizeChatHistoryContentBlock(block: unknown): { block: unknown; chan
   return { block: changed ? entry : block, changed };
 }
 
-function sanitizeChatHistoryMessage(message: unknown): { message: unknown; changed: boolean } {
+function sanitizeChatHistoryMessage(message: unknown): {
+  message: unknown;
+  changed: boolean;
+} {
   if (!message || typeof message !== "object") {
     return { message, changed: false };
   }
@@ -484,7 +520,10 @@ function ensureTranscriptFile(params: { transcriptPath: string; sessionId: strin
     });
     return { ok: true };
   } catch (err) {
-    return { ok: false, error: err instanceof Error ? err.message : String(err) };
+    return {
+      ok: false,
+      error: err instanceof Error ? err.message : String(err),
+    };
   }
 }
 
@@ -495,7 +534,9 @@ function transcriptHasIdempotencyKey(transcriptPath: string, idempotencyKey: str
       if (!line.trim()) {
         continue;
       }
-      const parsed = JSON.parse(line) as { message?: { idempotencyKey?: unknown } };
+      const parsed = JSON.parse(line) as {
+        message?: { idempotencyKey?: unknown };
+      };
       if (parsed?.message?.idempotencyKey === idempotencyKey) {
         return true;
       }
@@ -540,7 +581,10 @@ function appendAssistantTranscriptMessage(params: {
       sessionId: params.sessionId,
     });
     if (!ensured.ok) {
-      return { ok: false, error: ensured.error ?? "failed to create transcript file" };
+      return {
+        ok: false,
+        error: ensured.error ?? "failed to create transcript file",
+      };
     }
   }
 
@@ -702,7 +746,7 @@ function broadcastChatError(params: {
 }
 
 export const chatHandlers: GatewayRequestHandlers = {
-  "chat.history": async ({ params, respond, context }) => {
+  "chat.history": async ({ params, respond, context, client }) => {
     if (!validateChatHistoryParams(params)) {
       respond(
         false,
@@ -736,7 +780,10 @@ export const chatHandlers: GatewayRequestHandlers = {
       maxSingleMessageBytes: perMessageHardCap,
     });
     const capped = capArrayByJsonBytes(replaced.messages, maxHistoryBytes).items;
-    const bounded = enforceChatHistoryFinalBudget({ messages: capped, maxBytes: maxHistoryBytes });
+    const bounded = enforceChatHistoryFinalBudget({
+      messages: capped,
+      maxBytes: maxHistoryBytes,
+    });
     const placeholderCount = replaced.replacedCount + bounded.placeholderCount;
     if (placeholderCount > 0) {
       chatHistoryPlaceholderEmitCount += placeholderCount;
@@ -756,7 +803,16 @@ export const chatHandlers: GatewayRequestHandlers = {
         catalog,
       });
     }
-    const verboseLevel = entry?.verboseLevel ?? cfg.agents?.defaults?.verboseDefault;
+    const historySurface = resolveInternalChatSurface(client?.connect?.client);
+    const historySurfaceDefaults = resolveSurfaceDirectiveDefaults({
+      agentCfg: cfg.agents?.defaults,
+      surface: historySurface,
+      provider: INTERNAL_MESSAGE_CHANNEL,
+    });
+    const verboseLevel =
+      entry?.verboseLevel ??
+      historySurfaceDefaults.verboseDefault ??
+      cfg.agents?.defaults?.verboseDefault;
     respond(true, {
       sessionKey,
       sessionId,
@@ -973,6 +1029,7 @@ export const chatHandlers: GatewayRequestHandlers = {
       );
       const commandBody = injectThinking ? `/think ${p.thinking} ${parsedMessage}` : parsedMessage;
       const clientInfo = client?.connect?.client;
+      const resolvedSurface = resolveInternalChatSurface(clientInfo);
       const {
         originatingChannel,
         originatingTo,
@@ -1000,7 +1057,7 @@ export const chatHandlers: GatewayRequestHandlers = {
         CommandBody: commandBody,
         SessionKey: sessionKey,
         Provider: INTERNAL_MESSAGE_CHANNEL,
-        Surface: INTERNAL_MESSAGE_CHANNEL,
+        Surface: resolvedSurface,
         OriginatingChannel: originatingChannel,
         OriginatingTo: originatingTo,
         ExplicitDeliverRoute: explicitDeliverRoute,
@@ -1210,7 +1267,10 @@ export const chatHandlers: GatewayRequestHandlers = {
       sessionId,
       storePath,
       sessionFile: entry?.sessionFile,
-      agentId: resolveSessionAgentId({ sessionKey: rawSessionKey, config: cfg }),
+      agentId: resolveSessionAgentId({
+        sessionKey: rawSessionKey,
+        config: cfg,
+      }),
       createIfMissing: false,
     });
     if (!appended.ok || !appended.messageId || !appended.message) {

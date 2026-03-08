@@ -117,6 +117,13 @@ export type CliBackendConfig = {
   };
 };
 
+export type AgentSurfaceDefaultsEntryConfig = {
+  /** Default verbose level for this surface when no /verbose directive or session override is set. */
+  verboseDefault?: "off" | "on" | "full";
+  /** Default reasoning visibility for this surface when no /reasoning directive or session override is set. */
+  reasoningDefault?: "off" | "on" | "stream";
+};
+
 export type AgentDefaultsConfig = {
   /** Primary model and fallbacks (provider/model). Accepts string or {primary,fallbacks}. */
   model?: AgentModelConfig;
@@ -187,6 +194,8 @@ export type AgentDefaultsConfig = {
   thinkingDefault?: "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "adaptive";
   /** Default verbose level when no /verbose directive is present. */
   verboseDefault?: "off" | "on" | "full";
+  /** Optional per-surface UX defaults (for example tui vs discord). */
+  surfaceDefaults?: Record<string, AgentSurfaceDefaultsEntryConfig>;
   /** Default elevated level when no /elevated directive is present. */
   elevatedDefault?: "off" | "on" | "ask" | "full";
   /** Default block streaming level when no override is present. */
