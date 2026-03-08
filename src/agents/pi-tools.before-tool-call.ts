@@ -99,7 +99,10 @@ export async function runBeforeToolCallHook(args: {
   // or filtered this specific tool call, block before we even run other checks.
   // The gate is a Promise that resolves when the hook completes. First tool
   // call waits for resolution; subsequent calls get the cached result instantly.
-  if (args.ctx?.sessionId) {
+  // Guard with hasHooks to avoid unnecessary await + Map lookup on every tool
+  // call when no after_llm_call hooks are registered (the gate can only be set
+  // via fireAfterLlmCallGate which is gated on the same condition).
+  if (args.ctx?.sessionId && getGlobalHookRunner()?.hasHooks("after_llm_call")) {
     const { checkAfterLlmCallGate } =
       await import("./pi-embedded-runner/run/after-llm-call-gate.js");
     const gateResult = await checkAfterLlmCallGate(args.ctx.sessionId, args.toolCallId);
