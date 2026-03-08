@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
+import { listFinishedSessions, listRunningSessions } from "../agents/bash-process-registry.js";
 import { lookupContextTokens } from "../agents/context.js";
 import { DEFAULT_CONTEXT_TOKENS, DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
 import {
@@ -888,11 +889,43 @@ export function listSessionsFromStore(params: {
     return { ...rest, derivedTitle, lastMessagePreview } satisfies GatewaySessionRow;
   });
 
+  // Append background exec processes (codex, claude, etc.) as virtual session rows
+  const processRows: GatewaySessionRow[] = [];
+  const includeProcesses = opts.includeProcesses !== false;
+  if (includeProcesses) {
+    const running = listRunningSessions();
+    const finished = listFinishedSessions();
+    for (const proc of running) {
+      processRows.push({
+        key: `exec:${proc.id}`,
+        kind: "process",
+        displayName: proc.command.length > 80 ? `${proc.command.slice(0, 77)}…` : proc.command,
+        label: proc.id,
+        updatedAt: proc.startedAt,
+        sessionId: proc.id,
+      });
+    }
+    for (const proc of finished) {
+      processRows.push({
+        key: `exec:${proc.id}`,
+        kind: "process",
+        displayName: proc.command.length > 80 ? `${proc.command.slice(0, 77)}…` : proc.command,
+        label: proc.id,
+        updatedAt: proc.endedAt ?? proc.startedAt,
+        sessionId: proc.id,
+      });
+    }
+  }
+
+  const allSessions = [...finalSessions, ...processRows].toSorted(
+    (a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0),
+  );
+
   return {
     ts: now,
     path: storePath,
-    count: finalSessions.length,
+    count: allSessions.length,
     defaults: getSessionDefaults(cfg),
-    sessions: finalSessions,
+    sessions: allSessions,
   };
 }

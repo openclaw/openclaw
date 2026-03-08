@@ -15,7 +15,7 @@ export type GatewaySessionsDefaults = {
 
 export type GatewaySessionRow = {
   key: string;
-  kind: "direct" | "group" | "global" | "unknown";
+  kind: "direct" | "group" | "global" | "unknown" | "process";
   label?: string;
   displayName?: string;
   derivedTitle?: string;

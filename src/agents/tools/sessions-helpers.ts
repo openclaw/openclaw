@@ -82,6 +82,9 @@ export function classifySessionKind(params: {
   if (key === params.alias || key === params.mainKey) {
     return "main";
   }
+  if (key.startsWith("exec:")) {
+    return "other";
+  }
   if (key.startsWith("cron:")) {
     return "cron";
   }

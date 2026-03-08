@@ -21,6 +21,8 @@ export const SessionsListParamsSchema = Type.Object(
     spawnedBy: Type.Optional(NonEmptyString),
     agentId: Type.Optional(NonEmptyString),
     search: Type.Optional(Type.String()),
+    /** Include background exec processes (codex, claude, etc.) as virtual session rows. Defaults to true. */
+    includeProcesses: Type.Optional(Type.Boolean()),
   },
   { additionalProperties: false },
 );
