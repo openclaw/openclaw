@@ -430,10 +430,19 @@ export function rewriteAllAssistantContent(
           if (prev.role === "assistant" && keptAssistants.has(prev)) {
             break;
           }
-          if (
-            prev.role === "toolResult" ||
-            (prev.role === "assistant" && extractAssistantText(prev).length === 0)
-          ) {
+          if (prev.role === "toolResult") {
+            // Before removing a toolResult, check whether the element
+            // immediately preceding it is a kept assistant.  If so, this
+            // toolResult belongs to that kept assistant's tool_use blocks —
+            // removing it would leave an orphaned tool_use and cause
+            // Anthropic API rejection on the next turn.
+            const prevPrev = idx - 2 >= 0 ? sourceMessages[idx - 2] : undefined;
+            if (prevPrev && prevPrev.role === "assistant" && keptAssistants.has(prevPrev)) {
+              break;
+            }
+            sourceMessages.splice(idx - 1, 1);
+            idx--;
+          } else if (prev.role === "assistant" && extractAssistantText(prev).length === 0) {
             sourceMessages.splice(idx - 1, 1);
             idx--;
           } else {

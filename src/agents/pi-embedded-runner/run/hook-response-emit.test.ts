@@ -537,6 +537,46 @@ describe("rewriteAllAssistantContent", () => {
     expect(allContent).not.toContain("PII turn 2");
   });
 
+  it("preserves toolResult belonging to kept text+tool_use assistant on allContent shrink", () => {
+    // Scenario: kept assistant has mixed text + tool_use content, followed by
+    // its toolResult, then an extra text-only assistant to be removed.
+    // The backward scan must NOT remove the toolResult that belongs to the
+    // kept assistant — doing so orphans the tool_use and causes Anthropic API
+    // rejection on subsequent turns.
+    const keptAssistant = {
+      role: "assistant" as const,
+      content: [
+        { type: "text", text: "thinking out loud" },
+        { type: "tool_use", id: "tu_1", name: "search", input: {} },
+      ],
+      timestamp: Date.now(),
+    } as unknown as AgentMessage;
+    const toolResult = {
+      role: "toolResult" as const,
+      content: "search results",
+      timestamp: Date.now(),
+    } as unknown as AgentMessage;
+    const extraAssistant = makeMsg("assistant", "extra turn to remove");
+
+    const messages = [makeMsg("user", "question"), keptAssistant, toolResult, extraAssistant];
+
+    // Plugin returns allContent with only 1 entry (shrinks from 2)
+    rewriteAllAssistantContent(messages, messages, ["[REDACTED]"]);
+
+    // keptAssistant should be rewritten
+    const parts = (keptAssistant as { content: unknown[] }).content as Array<{
+      type: string;
+      text?: string;
+    }>;
+    expect(parts.find((p) => p.type === "text")?.text).toBe("[REDACTED]");
+
+    // toolResult must survive — it belongs to the kept assistant
+    expect(messages).toContain(toolResult);
+
+    // extraAssistant must be removed
+    expect(messages).not.toContain(extraAssistant);
+  });
+
   it("handles content-part arrays", () => {
     const messages = [
       makeMsg("assistant", [
