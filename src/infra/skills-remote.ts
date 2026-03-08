@@ -200,7 +200,10 @@ function buildBinProbeScript(bins: string[]): string {
   return `for b in ${escaped}; do if command -v "$b" >/dev/null 2>&1; then echo "$b"; fi; done`;
 }
 
-function parseBinProbePayload(payloadJSON: string | null | undefined, payload?: unknown): string[] {
+export function parseBinProbePayload(
+  payloadJSON: string | null | undefined,
+  payload?: unknown,
+): string[] {
   if (!payloadJSON && !payload) {
     return [];
   }
@@ -210,6 +213,12 @@ function parseBinProbePayload(payloadJSON: string | null | undefined, payload?: 
       : (payload as { stdout?: unknown; bins?: unknown });
     if (Array.isArray(parsed.bins)) {
       return parsed.bins.map((bin) => String(bin).trim()).filter(Boolean);
+    }
+    // system.which returns bins as Record<string, string> (bin name → resolved path)
+    if (parsed.bins && typeof parsed.bins === "object" && !Array.isArray(parsed.bins)) {
+      return Object.keys(parsed.bins as Record<string, unknown>)
+        .map((bin) => bin.trim())
+        .filter(Boolean);
     }
     if (typeof parsed.stdout === "string") {
       return parsed.stdout
