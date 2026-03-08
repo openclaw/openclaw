@@ -276,6 +276,7 @@ export async function launchOpenClawChrome(
 
     return spawn(exe.path, args, {
       stdio: "pipe",
+      shell: process.platform === "win32",
       env: {
         ...process.env,
         // Reduce accidental sharing with the user's env.
