@@ -42,37 +42,43 @@ function coerceArgs(value: unknown): unknown {
 }
 
 function extractToolText(item: Record<string, unknown>): string | undefined {
-  // Direct text field as string
   if (typeof item.text === "string") {
     return item.text;
   }
-  // text as array: [{ text: "..." }]
   if (Array.isArray(item.text)) {
-    for (const textItem of item.text) {
-      if (typeof textItem === "object" && textItem !== null) {
-        const ti = textItem as Record<string, unknown>;
-        if (typeof ti.text === "string") {
-          return ti.text;
-        }
-      }
+    const parts = collectTextParts(item.text);
+    if (parts.length > 0) {
+      return parts.join("\n");
     }
   }
-  // content as string
   if (typeof item.content === "string") {
     return item.content;
   }
-  // content as array: [{ text: "..." }]
   if (Array.isArray(item.content)) {
-    for (const contentItem of item.content) {
-      if (typeof contentItem === "object" && contentItem !== null) {
-        const ci = contentItem as Record<string, unknown>;
-        if (typeof ci.text === "string") {
-          return ci.text;
-        }
-      }
+    const parts = collectTextParts(item.content);
+    if (parts.length > 0) {
+      return parts.join("\n");
     }
   }
   return undefined;
+}
+
+function collectTextParts(items: unknown[]): string[] {
+  const parts: string[] = [];
+  for (const entry of items) {
+    if (typeof entry === "string") {
+      parts.push(entry);
+      continue;
+    }
+    if (typeof entry !== "object" || entry === null) {
+      continue;
+    }
+    const text = (entry as Record<string, unknown>).text;
+    if (typeof text === "string") {
+      parts.push(text);
+    }
+  }
+  return parts;
 }
 
 export function extractToolPreview(

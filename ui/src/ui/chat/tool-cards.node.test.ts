@@ -136,6 +136,37 @@ describe("tool-card extraction", () => {
     });
   });
 
+  it("joins string fragments from array-shaped tool result text and content", () => {
+    const cards = extractToolCards(
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "tool_result",
+            name: "browser.open",
+            text: ["Opened A", { text: "Loaded title" }, { text: 42 }, null],
+          },
+          {
+            type: "tool_result",
+            name: "browser.read",
+            content: [undefined, { text: "First paragraph" }, "Second paragraph", { text: null }],
+          },
+        ],
+      },
+      "msg:array-results",
+    );
+
+    expect(cards).toHaveLength(2);
+    expect(cards[0]).toMatchObject({
+      name: "browser.open",
+      outputText: "Opened A\nLoaded title",
+    });
+    expect(cards[1]).toMatchObject({
+      name: "browser.read",
+      outputText: "First paragraph\nSecond paragraph",
+    });
+  });
+
   it("builds sidebar content with input and empty output status", () => {
     const [card] = extractToolCards(
       {
