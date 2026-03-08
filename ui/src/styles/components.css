@@ -2434,6 +2434,19 @@
   border-radius: var(--radius-lg);
   padding: 16px;
   background: var(--card);
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.agent-files-editor .field {
+  flex: 1;
+  min-height: 0;
+}
+
+.agent-files-editor .field textarea {
+  height: 100%;
+  min-height: 320px;
 }
 
 .agent-file-header {
