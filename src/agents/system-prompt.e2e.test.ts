@@ -512,9 +512,12 @@ describe("buildAgentSystemPrompt", () => {
     });
 
     const projectContextPos = prompt.indexOf("# Project Context");
-    const messagingPos = prompt.indexOf("## Messaging");
-    const groupChatPos = prompt.indexOf("## Group Chat Context");
-    const reactionsPos = prompt.indexOf("## Reactions");
+    // Use lastIndexOf for dynamic sections: they are appended last, so lastIndexOf
+    // finds the real section header even if injected file content happens to contain
+    // a matching string (e.g. a context file named "Messaging" or content with "## Messaging").
+    const messagingPos = prompt.lastIndexOf("## Messaging");
+    const groupChatPos = prompt.lastIndexOf("## Group Chat Context");
+    const reactionsPos = prompt.lastIndexOf("## Reactions");
 
     expect(projectContextPos).toBeGreaterThan(-1);
     expect(messagingPos).toBeGreaterThan(-1);
