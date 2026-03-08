@@ -12,18 +12,14 @@ title: 飞书
 
 ---
 
-## 需要插件
+## 内置插件
 
-安装 Feishu 插件：
+当前版本的 OpenClaw 已内置 Feishu 插件，因此通常不需要单独安装。
+
+如果你使用的是较旧版本，或是没有内置 Feishu 的自定义安装，可手动安装：
 
 ```bash
 openclaw plugins install @openclaw/feishu
-```
-
-本地 checkout（在 git 仓库内运行）：
-
-```bash
-openclaw plugins install ./extensions/feishu
 ```
 
 ---
