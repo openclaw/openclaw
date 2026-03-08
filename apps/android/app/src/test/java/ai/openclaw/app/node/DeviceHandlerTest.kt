@@ -87,7 +87,6 @@ class DeviceHandlerTest {
         "camera",
         "microphone",
         "location",
-        "backgroundLocation",
         "sms",
         "notificationListener",
         "notifications",
