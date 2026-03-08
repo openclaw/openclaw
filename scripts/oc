@@ -1,0 +1,18 @@
+#!/usr/bin/env bash
+# OpenClaw Gateway CLI — host-side shortcut
+# Usage:
+#   oc                          # interactive mode
+#   oc --once                   # auth check
+#   oc sessions.list            # list sessions
+#   oc chat.send "hello"        # send message
+#   oc channels.status          # channel status
+#   oc chat.history 10          # last 10 messages
+
+SCRIPT_DIR="$(cd "$(dirname "$(readlink -f "$0" 2>/dev/null || realpath "$0" 2>/dev/null || echo "$0")")" && pwd)"
+PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
+
+export OPENCLAW_IDENTITY_FILE="${PROJECT_DIR}/config/identity/cli-device.json"
+export OPENCLAW_CONFIG="${PROJECT_DIR}/config/openclaw.json"
+export OPENCLAW_GATEWAY_URL="${OPENCLAW_GATEWAY_URL:-ws://127.0.0.1:18789}"
+
+exec node "${SCRIPT_DIR}/ws-gateway-client.mjs" "$@"
