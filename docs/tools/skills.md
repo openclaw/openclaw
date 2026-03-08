@@ -66,6 +66,18 @@ By default, `clawhub` installs into `./skills` under your current working
 directory (or falls back to the configured OpenClaw workspace). OpenClaw picks
 that up as `<workspace>/skills` on the next session.
 
+## Troubleshooting skill installs
+
+If a skill is missing files or fails to load, check the install path and authentication first.
+
+- OpenClaw does not use the legacy `npx skills add <owner/repo>` flow. Install via ClawHub or clone the repo into a skill directory that OpenClaw scans.
+- GitHub install options:
+  - Shared: `~/.openclaw/skills/<skill-name>`
+  - Per agent: `<workspace>/skills/<skill-name>`
+  - Private repos require GitHub auth. Run `gh auth login` (or configure git credentials) before cloning.
+- If a skill folder only contains `SKILL.md` and `_meta.json`, the clone likely failed or the download was incomplete. Remove the folder and reinstall.
+- For MCP backed skills, ensure the MCP server is configured and authenticated (for example with `mcporter config add <name> --url <server-url> --auth-type oauth`). If the provider rejects an app slug or API key, confirm the supported app name and permissions with the provider.
+
 ## Security notes
 
 - Treat third-party skills as **untrusted code**. Read them before enabling.
