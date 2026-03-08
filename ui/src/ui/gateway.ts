@@ -225,6 +225,7 @@ export class GatewayBrowserClient {
       authToken || this.opts.password
         ? {
             token: authToken,
+            deviceToken,
             password: this.opts.password,
           }
         : undefined;
