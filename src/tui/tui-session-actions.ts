@@ -276,7 +276,30 @@ export function createSessionActions(context: SessionActionContext) {
     applySessionInfo({ entry, force: true });
   };
 
-  const loadHistory = async () => {
+  // Serialize loadHistory calls: if one is already in-flight, the next call
+  // queues itself and runs once the current one completes. This prevents
+  // concurrent clearAll() + rebuild cycles from racing and dropping messages.
+  let historyLoadInFlight = false;
+  let historyLoadQueued = false;
+
+  const loadHistory = async (): Promise<void> => {
+    if (historyLoadInFlight) {
+      historyLoadQueued = true;
+      return;
+    }
+    historyLoadInFlight = true;
+    try {
+      await loadHistoryOnce();
+    } finally {
+      historyLoadInFlight = false;
+      if (historyLoadQueued) {
+        historyLoadQueued = false;
+        void loadHistory();
+      }
+    }
+  };
+
+  const loadHistoryOnce = async () => {
     try {
       const history = await client.loadHistory({
         sessionKey: state.currentSessionKey,
@@ -349,7 +372,7 @@ export function createSessionActions(context: SessionActionContext) {
     }
     await refreshSessionInfo();
     tui.requestRender();
-  };
+  }; // end loadHistoryOnce
 
   const setSession = async (rawKey: string) => {
     const nextKey = resolveSessionKey(rawKey);
