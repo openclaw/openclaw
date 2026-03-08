@@ -112,5 +112,5 @@ Notes
 - For scripting, prefer `--json` plus `--no-input`.
 - Sheets values can be passed via `--values-json` (recommended) or as inline rows.
 - Docs supports export/cat/copy. In-place edits require a Docs API client (not in gog).
-- Confirm before sending mail or creating events.
+- For scripting/automation, use `--no-input` to skip interactive confirmations.
 - `gog gmail search` returns one row per thread; use `gog gmail messages search` when you need every individual email returned separately.
