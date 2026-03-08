@@ -105,6 +105,7 @@ import {
   getPresenceVersion,
   incrementPresenceVersion,
   refreshGatewayHealthSnapshot,
+  setRuntimeSnapshotProvider,
 } from "./server/health-state.js";
 import { createReadinessChecker } from "./server/readiness.js";
 import { loadGatewayTlsRuntime } from "./server/tls.js";
@@ -644,6 +645,7 @@ export async function startGatewayServer(
 
   const { getRuntimeSnapshot, startChannels, startChannel, stopChannel, markChannelLoggedOut } =
     channelManager;
+  setRuntimeSnapshotProvider(getRuntimeSnapshot);
 
   if (!minimalTestGateway) {
     const machineDisplayName = await getMachineDisplayName();
