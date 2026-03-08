@@ -212,8 +212,9 @@ export const telegramPlugin: ChannelPlugin<ResolvedTelegramAccount, TelegramProb
       if (groupPolicy !== "open") {
         return [];
       }
-      const groupAllowlistConfigured =
-        account.config.groups && Object.keys(account.config.groups).length > 0;
+      const groupAllowlistConfigured = Boolean(
+        account.config.groups && Object.keys(account.config.groups).length > 0,
+      );
       if (groupAllowlistConfigured) {
         return [
           `- Telegram groups: groupPolicy="open" allows any member in allowed groups to trigger (mention-gated). Set channels.telegram.groupPolicy="allowlist" + channels.telegram.groupAllowFrom to restrict senders.`,

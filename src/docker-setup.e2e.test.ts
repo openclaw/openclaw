@@ -258,13 +258,13 @@ describe("docker-setup.sh", () => {
       OPENCLAW_SANDBOX: "0",
     });
 
-    expect(result.status).toBe(0);
+    expect(result.status).toBe(0); // pragma: allowlist secret
     const envFile = await readFile(join(activeSandbox.rootDir, ".env"), "utf8");
     expect(envFile).toContain("OPENCLAW_SANDBOX=");
 
-    const log = await readFile(activeSandbox.logPath, "utf8");
-    expect(log).toContain("--build-arg OPENCLAW_INSTALL_DOCKER_CLI=");
-    expect(log).not.toContain("--build-arg OPENCLAW_INSTALL_DOCKER_CLI=1");
+    const log = await readFile(activeSandbox.logPath, "utf8"); // pragma: allowlist secret
+    expect(log).toContain("--build-arg OPENCLAW_INSTALL_DOCKER_CLI="); // pragma: allowlist secret
+    expect(log).not.toContain("--build-arg OPENCLAW_INSTALL_DOCKER_CLI=1"); // pragma: allowlist secret
     expect(log).toContain("config set agents.defaults.sandbox.mode off");
   });
 
@@ -278,10 +278,10 @@ describe("docker-setup.sh", () => {
 
     const result = runDockerSetup(activeSandbox, {
       OPENCLAW_SANDBOX: "1",
-      DOCKER_STUB_FAIL_MATCH: "--entrypoint docker openclaw-gateway --version",
+      DOCKER_STUB_FAIL_MATCH: "--entrypoint docker openclaw-gateway --version", // pragma: allowlist secret
     });
 
-    expect(result.status).toBe(0);
+    expect(result.status).toBe(0); // pragma: allowlist secret
     expect(result.stderr).toContain("Sandbox requires Docker CLI");
     const log = await readFile(activeSandbox.logPath, "utf8");
     expect(log).toContain("config set agents.defaults.sandbox.mode off");

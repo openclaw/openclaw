@@ -46,7 +46,7 @@ export async function listFeishuDirectoryPeers(params: {
     .map((raw) => normalizeFeishuTarget(raw) ?? raw)
     .filter((id) => (q ? id.toLowerCase().includes(q) : true))
     .slice(0, params.limit && params.limit > 0 ? params.limit : undefined)
-    .map((id) => ({ kind: "user" as const, id }));
+    .map((id): FeishuDirectoryPeer => ({ kind: "user", id }));
 }
 
 export async function listFeishuDirectoryGroups(params: {
@@ -79,7 +79,7 @@ export async function listFeishuDirectoryGroups(params: {
     .filter(Boolean)
     .filter((id) => (q ? id.toLowerCase().includes(q) : true))
     .slice(0, params.limit && params.limit > 0 ? params.limit : undefined)
-    .map((id) => ({ kind: "group" as const, id }));
+    .map((id): FeishuDirectoryGroup => ({ kind: "group", id }));
 }
 
 export async function listFeishuDirectoryPeersLive(params: {

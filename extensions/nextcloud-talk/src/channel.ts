@@ -144,8 +144,9 @@ export const nextcloudTalkPlugin: ChannelPlugin<ResolvedNextcloudTalkAccount> = 
       if (groupPolicy !== "open") {
         return [];
       }
-      const roomAllowlistConfigured =
-        account.config.rooms && Object.keys(account.config.rooms).length > 0;
+      const roomAllowlistConfigured = Boolean(
+        account.config.rooms && Object.keys(account.config.rooms).length > 0,
+      );
       if (roomAllowlistConfigured) {
         return [
           `- Nextcloud Talk rooms: groupPolicy="open" allows any member in allowed rooms to trigger (mention-gated). Set channels.nextcloud-talk.groupPolicy="allowlist" + channels.nextcloud-talk.groupAllowFrom to restrict senders.`,
