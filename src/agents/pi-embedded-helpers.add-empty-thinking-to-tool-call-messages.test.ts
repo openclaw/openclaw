@@ -5,7 +5,9 @@ import {
   hasHistoryToolCallWithoutThinking,
 } from "./pi-embedded-helpers.js";
 
-function assistantMessage(content: AgentMessage["content"]): AgentMessage {
+function assistantMessage(
+  content: Extract<AgentMessage, { role: "assistant" }>["content"],
+): AgentMessage {
   return {
     role: "assistant",
     content,
@@ -18,7 +20,9 @@ describe("hasHistoryToolCallWithoutThinking", () => {
   });
 
   it("returns true when assistant toolCall has no thinking", () => {
-    const input = [assistantMessage([{ type: "toolCall", id: "tc1", name: "test", arguments: {} }])];
+    const input = [
+      assistantMessage([{ type: "toolCall", id: "tc1", name: "test", arguments: {} }]),
+    ];
     expect(hasHistoryToolCallWithoutThinking(input)).toBe(true);
   });
 
@@ -49,7 +53,9 @@ describe("addEmptyThinkingToToolCallMessages", () => {
   });
 
   it("prepends empty thinking to assistant toolCall without thinking", () => {
-    const input = [assistantMessage([{ type: "toolCall", id: "tc1", name: "test", arguments: {} }])];
+    const input = [
+      assistantMessage([{ type: "toolCall", id: "tc1", name: "test", arguments: {} }]),
+    ];
 
     expect(addEmptyThinkingToToolCallMessages(input)).toEqual([
       assistantMessage([

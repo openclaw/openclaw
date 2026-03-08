@@ -579,7 +579,6 @@ export async function sanitizeSessionHistory(params: {
         modelId: params.modelId,
       })
     : false;
-<<<<<<< HEAD
   let sanitizedOpenAI = isOpenAIResponsesApi
     ? downgradeOpenAIFunctionCallReasoningPairs(
         downgradeOpenAIReasoningBlocks(sanitizedCompactionUsage),
