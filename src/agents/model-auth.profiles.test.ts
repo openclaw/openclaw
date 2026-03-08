@@ -263,7 +263,7 @@ describe("getApiKeyForModel", () => {
             providers: {
               custom: {
                 apiKey: "secretref-managed", // pragma: allowlist secret
-                api: "openai-compatible",
+                api: "openai-completions",
                 baseUrl: "https://provider.example/v1",
                 models: [],
               },
