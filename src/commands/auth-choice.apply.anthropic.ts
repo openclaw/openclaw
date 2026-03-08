@@ -1,4 +1,5 @@
 import { upsertAuthProfile } from "../agents/auth-profiles.js";
+import { loginAnthropicOAuth } from "./anthropic-oauth.js";
 import { normalizeApiKeyInput, validateApiKeyInput } from "./auth-choice.api-key.js";
 import {
   normalizeSecretInputModeInput,
@@ -8,8 +9,14 @@ import {
 } from "./auth-choice.apply-helpers.js";
 import type { ApplyAuthChoiceParams, ApplyAuthChoiceResult } from "./auth-choice.apply.js";
 import { buildTokenProfileId, validateAnthropicSetupToken } from "./auth-token.js";
+import { isRemoteEnvironment } from "./oauth-env.js";
 import { applyAgentDefaultModelPrimary } from "./onboard-auth.config-shared.js";
-import { applyAuthProfileConfig, setAnthropicApiKey } from "./onboard-auth.js";
+import {
+  applyAuthProfileConfig,
+  setAnthropicApiKey,
+  writeOAuthCredentials,
+} from "./onboard-auth.js";
+import { openUrl } from "./onboard-helpers.js";
 
 const DEFAULT_ANTHROPIC_MODEL = "anthropic/claude-sonnet-4-6";
 
@@ -17,11 +24,46 @@ export async function applyAuthChoiceAnthropic(
   params: ApplyAuthChoiceParams,
 ): Promise<ApplyAuthChoiceResult | null> {
   const requestedSecretInputMode = normalizeSecretInputModeInput(params.opts?.secretInputMode);
-  if (
-    params.authChoice === "setup-token" ||
-    params.authChoice === "oauth" ||
-    params.authChoice === "token"
-  ) {
+
+  if (params.authChoice === "oauth") {
+    const isRemote = isRemoteEnvironment();
+    let nextConfig = params.config;
+
+    let creds;
+    try {
+      creds = await loginAnthropicOAuth({
+        prompter: params.prompter,
+        runtime: params.runtime,
+        isRemote,
+        openUrl: async (url) => {
+          await openUrl(url);
+        },
+      });
+    } catch {
+      // The helper already surfaces the error to the user.
+      // Keep onboarding flow alive and return unchanged config.
+      return { config: nextConfig };
+    }
+
+    if (!creds) {
+      return { config: nextConfig };
+    }
+
+    const profileId = await writeOAuthCredentials("anthropic", creds, params.agentDir);
+
+    nextConfig = applyAuthProfileConfig(nextConfig, {
+      profileId,
+      provider: "anthropic",
+      mode: "oauth",
+    });
+
+    if (params.setDefaultModel) {
+      nextConfig = applyAgentDefaultModelPrimary(nextConfig, DEFAULT_ANTHROPIC_MODEL);
+    }
+    return { config: nextConfig };
+  }
+
+  if (params.authChoice === "setup-token" || params.authChoice === "token") {
     let nextConfig = params.config;
     await params.prompter.note(
       ["Run `claude setup-token` in your terminal.", "Then paste the generated token below."].join(
