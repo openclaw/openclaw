@@ -306,19 +306,30 @@ jobs:
             exit 0
           fi
 
-          BASE_REF="origin/${{ github.base_ref }}"
+          DIFF_RANGE=""
           changed_files=()
-          if ! git rev-parse --verify "$BASE_REF^{commit}" >/dev/null 2>&1; then
-            # Fork PR checkouts are often shallow and may not include the
-            # current base-branch tip object yet.
-            git fetch --no-tags --depth=1 origin "${{ github.base_ref }}" || true
+
+          # PR jobs run on GitHub's synthetic merge commit. Diffing that merge
+          # commit against its first parent gives the exact PR file set without
+          # requiring extra history/merge-base resolution in shallow checkouts.
+          if git rev-parse --verify "HEAD^1^{commit}" >/dev/null 2>&1; then
+            DIFF_RANGE="HEAD^1..HEAD"
+          else
+            BASE_REF="origin/${{ github.base_ref }}"
+            if ! git rev-parse --verify "$BASE_REF^{commit}" >/dev/null 2>&1; then
+              git fetch --no-tags --depth=1 origin "${{ github.base_ref }}" || true
+            fi
+            if git rev-parse --verify "$BASE_REF^{commit}" >/dev/null 2>&1; then
+              DIFF_RANGE="$BASE_REF..HEAD"
+            fi
           fi
-          if git rev-parse --verify "$BASE_REF^{commit}" >/dev/null 2>&1; then
+
+          if [ -n "$DIFF_RANGE" ]; then
             while IFS= read -r path; do
               [ -n "$path" ] || continue
               [ -f "$path" ] || continue
               changed_files+=("$path")
-            done < <(git diff --name-only --diff-filter=ACMR "$BASE_REF"...HEAD)
+            done < <(git diff --name-only --diff-filter=ACMR "$DIFF_RANGE")
           fi
 
           if [ "${#changed_files[@]}" -gt 0 ]; then
