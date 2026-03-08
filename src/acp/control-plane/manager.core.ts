@@ -4,6 +4,7 @@ import { normalizeAgentId } from "../../routing/session-key.js";
 import { isAcpSessionKey } from "../../sessions/session-key-utils.js";
 import {
   AcpRuntimeError,
+  isAcpRuntimeError,
   toAcpRuntimeError,
   withAcpRuntimeErrorBoundary,
 } from "../runtime/errors.js";
@@ -147,6 +148,8 @@ export class AcpSessionManager {
     let checked = 0;
     let resolved = 0;
     let failed = 0;
+    let reaped = 0;
+    const reapedSessionKeys: string[] = [];
 
     let acpSessions: Awaited<ReturnType<AcpSessionManagerDeps["listAcpSessions"]>>;
     try {
@@ -155,7 +158,13 @@ export class AcpSessionManager {
       });
     } catch (error) {
       logVerbose(`acp-manager: startup identity scan failed: ${String(error)}`);
-      return { checked, resolved, failed: failed + 1 };
+      return {
+        checked,
+        resolved,
+        failed: failed + 1,
+        reaped,
+        reapedSessionKeys,
+      };
     }
 
     for (const session of acpSessions) {
@@ -169,41 +178,92 @@ export class AcpSessionManager {
 
       checked += 1;
       try {
-        const becameResolved = await this.withSessionActor(session.sessionKey, async () => {
-          const resolution = this.resolveSession({
-            cfg: params.cfg,
-            sessionKey: session.sessionKey,
-          });
-          if (resolution.kind !== "ready") {
-            return false;
+        const failureReason = await this.withSessionActor(session.sessionKey, async () => {
+          try {
+            const resolution = this.resolveSession({
+              cfg: params.cfg,
+              sessionKey: session.sessionKey,
+            });
+            if (resolution.kind !== "ready") {
+              return await this.reapSessionAfterStartupIdentityReconcileFailure({
+                cfg: params.cfg,
+                sessionKey: session.sessionKey,
+                failureReason:
+                  resolution.kind === "stale"
+                    ? resolution.error.message
+                    : "session is no longer ACP-enabled",
+              });
+            }
+            const { runtime, handle, meta } = await this.ensureRuntimeHandle({
+              cfg: params.cfg,
+              sessionKey: session.sessionKey,
+              meta: resolution.meta,
+            });
+            const reconciled = await this.reconcileRuntimeSessionIdentifiers({
+              cfg: params.cfg,
+              sessionKey: session.sessionKey,
+              runtime,
+              handle,
+              meta,
+              failOnStatusError: false,
+            });
+            if (!isSessionIdentityPending(resolveSessionIdentityFromMeta(reconciled.meta))) {
+              return null;
+            }
+            return await this.reapSessionAfterStartupIdentityReconcileFailure({
+              cfg: params.cfg,
+              sessionKey: session.sessionKey,
+              failureReason: "session identity remained pending after runtime status refresh",
+            });
+          } catch (error) {
+            // Do not reap sessions that fail due to capacity limits — these are
+            // retryable on the next reconcile pass, not stale/corrupt.
+            if (
+              isAcpRuntimeError(error) &&
+              error.code === "ACP_SESSION_INIT_FAILED" &&
+              /concurrent.*session.*limit/i.test(error.message)
+            ) {
+              return null;
+            }
+            return await this.reapSessionAfterStartupIdentityReconcileFailure({
+              cfg: params.cfg,
+              sessionKey: session.sessionKey,
+              failureReason: String(error),
+            });
           }
-          const { runtime, handle, meta } = await this.ensureRuntimeHandle({
-            cfg: params.cfg,
-            sessionKey: session.sessionKey,
-            meta: resolution.meta,
-          });
-          const reconciled = await this.reconcileRuntimeSessionIdentifiers({
-            cfg: params.cfg,
-            sessionKey: session.sessionKey,
-            runtime,
-            handle,
-            meta,
-            failOnStatusError: false,
-          });
-          return !isSessionIdentityPending(resolveSessionIdentityFromMeta(reconciled.meta));
         });
-        if (becameResolved) {
+        if (!failureReason) {
           resolved += 1;
+          continue;
         }
+        failed += 1;
+        reaped += 1;
+        reapedSessionKeys.push(session.sessionKey);
+        logVerbose(
+          `acp-manager: startup identity reconcile reaped ${session.sessionKey}: ${failureReason}`,
+        );
       } catch (error) {
         failed += 1;
+        // Best-effort: clear the runtime cache even without the actor lock,
+        // so this session no longer counts against maxConcurrentSessions.
+        // We skip setSessionState (requires actor) but the cache clear is
+        // an in-memory operation that is safe without the lock.
+        this.clearCachedRuntimeState(session.sessionKey);
+        reaped += 1;
+        reapedSessionKeys.push(session.sessionKey);
         logVerbose(
-          `acp-manager: startup identity reconcile failed for ${session.sessionKey}: ${String(error)}`,
+          `acp-manager: startup identity reconcile reaped (actor-lock failure) ${session.sessionKey}: ${String(error)}`,
         );
       }
     }
 
-    return { checked, resolved, failed };
+    return {
+      checked,
+      resolved,
+      failed,
+      reaped,
+      reapedSessionKeys,
+    };
   }
 
   async initializeSession(input: AcpInitializeSessionInput): Promise<{
@@ -1257,6 +1317,22 @@ export class AcpSessionManager {
         return next;
       },
     });
+  }
+
+  private async reapSessionAfterStartupIdentityReconcileFailure(params: {
+    cfg: OpenClawConfig;
+    sessionKey: string;
+    failureReason: string;
+  }): Promise<string> {
+    this.clearCachedRuntimeState(params.sessionKey);
+    const normalizedReason = params.failureReason.trim() || "startup identity reconcile failed";
+    await this.setSessionState({
+      cfg: params.cfg,
+      sessionKey: params.sessionKey,
+      state: "error",
+      lastError: `ACP startup identity reconcile failed: ${normalizedReason}`,
+    });
+    return normalizedReason;
   }
 
   private async reconcileRuntimeSessionIdentifiers(params: {
