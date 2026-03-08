@@ -368,6 +368,14 @@ export async function runEmbeddedPiAgent(
         });
       }
 
+      // Moonshot: prefer config baseUrl so .cn key is used with api.moonshot.cn (not .ai).
+      if (normalizeProviderId(provider) === "moonshot") {
+        const moonshotBaseUrl = params.config?.models?.providers?.moonshot?.baseUrl;
+        if (typeof moonshotBaseUrl === "string" && moonshotBaseUrl.trim()) {
+          (model as { baseUrl?: string }).baseUrl = moonshotBaseUrl.trim();
+        }
+      }
+
       const ctxInfo = resolveContextWindowInfo({
         cfg: params.config,
         provider,
