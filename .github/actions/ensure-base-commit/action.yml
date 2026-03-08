@@ -44,4 +44,5 @@ runs:
           exit 0
         fi
 
-        echo "Base commit still unavailable after fetch attempts: $BASE_SHA"
+        echo "::error::Base commit still unavailable after fetch attempts: $BASE_SHA"
+        exit 1

@@ -454,27 +454,53 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install pre-commit
 
-      - name: Detect committed private keys
-        run: pre-commit run --all-files detect-private-key
+      - name: Detect secrets and private keys
+        run: |
+          set -euo pipefail
+
+          detect_secrets_exit=0
+          detect_private_key_exit=0
+
+          if [ "${{ github.event_name }}" = "push" ]; then
+            echo "Running full detect-secrets scan on push."
+            pre-commit run --all-files detect-secrets || detect_secrets_exit=$?
+            pre-commit run --all-files detect-private-key || detect_private_key_exit=$?
+            test "$detect_secrets_exit" -eq 0 -a "$detect_private_key_exit" -eq 0
+            exit 0
+          fi
+
+          BASE="${{ github.event.pull_request.base.sha }}"
+          if ! git rev-parse --verify "$BASE^{commit}" >/dev/null 2>&1; then
+            echo "::error::PR base commit is unavailable after fetch attempts: $BASE"
+            echo "Refusing to fall back to a full-repo secrets scan for pull requests."
+            exit 1
+          fi
+
+          changed_files=()
+          while IFS= read -r path; do
+            [ -n "$path" ] || continue
+            [ -f "$path" ] || continue
+            changed_files+=("$path")
+          done < <(git diff --name-only --diff-filter=ACMR "$BASE" HEAD)
+
+          if [ "${#changed_files[@]}" -gt 0 ]; then
+            echo "Running secret scans on ${#changed_files[@]} changed file(s)."
+            pre-commit run detect-secrets --files "${changed_files[@]}" || detect_secrets_exit=$?
+            pre-commit run detect-private-key --files "${changed_files[@]}" || detect_private_key_exit=$?
+            test "$detect_secrets_exit" -eq 0 -a "$detect_private_key_exit" -eq 0
+          else
+            echo "No added/copied/modified/renamed files to scan in this pull request."
+          fi
 
       - name: Audit changed GitHub workflows with zizmor
         run: |
           set -euo pipefail
 
-          BASE="$(
-            python - <<'PY'
-            import json
-            import os
-
-            with open(os.environ["GITHUB_EVENT_PATH"], "r", encoding="utf-8") as fh:
-                event = json.load(fh)
-
-            if os.environ["GITHUB_EVENT_NAME"] == "push":
-                print(event["before"])
-            else:
-                print(event["pull_request"]["base"]["sha"])
-            PY
-          )"
+          if [ "${{ github.event_name }}" = "push" ]; then
+            BASE="${{ github.event.before }}"
+          else
+            BASE="${{ github.event.pull_request.base.sha }}"
+          fi
 
           mapfile -t workflow_files < <(git diff --name-only "$BASE" HEAD -- '.github/workflows/*.yml' '.github/workflows/*.yaml')
           if [ "${#workflow_files[@]}" -eq 0 ]; then
