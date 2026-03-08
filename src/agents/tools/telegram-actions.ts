@@ -154,6 +154,7 @@ export async function handleTelegramAction(
     let reactionResult: Awaited<ReturnType<typeof reactMessageTelegram>>;
     try {
       reactionResult = await reactMessageTelegram(chatId ?? "", messageId ?? 0, emoji ?? "", {
+        cfg,
         token,
         remove,
         accountId: accountId ?? undefined,
@@ -294,6 +295,7 @@ export async function handleTelegramAction(
         durationHours: durationHours ?? undefined,
       },
       {
+        cfg,
         token,
         accountId: accountId ?? undefined,
         replyToMessageId: replyToMessageId ?? undefined,

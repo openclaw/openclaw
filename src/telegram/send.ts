@@ -86,6 +86,8 @@ type TelegramReactionOpts = {
   remove?: boolean;
   verbose?: boolean;
   retry?: RetryConfig;
+  /** Optional config injection to avoid global loadConfig() (improves testability). */
+  cfg?: ReturnType<typeof loadConfig>;
 };
 
 function resolveTelegramMessageIdOrThrow(
