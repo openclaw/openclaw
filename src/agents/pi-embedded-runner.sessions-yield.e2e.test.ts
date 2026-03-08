@@ -149,6 +149,19 @@ const makeConfig = (modelIds: string[]) =>
 
 const immediateEnqueue = async <T>(task: () => Promise<T>) => task();
 
+const readSessionMessages = async (sessionFile: string) => {
+  const raw = await fs.readFile(sessionFile, "utf-8");
+  return raw
+    .split(/\r?\n/)
+    .filter(Boolean)
+    .map(
+      (line) =>
+        JSON.parse(line) as { type?: string; message?: { role?: string; content?: unknown } },
+    )
+    .filter((entry) => entry.type === "message")
+    .map((entry) => entry.message) as Array<{ role?: string; content?: unknown }>;
+};
+
 describe("sessions_yield e2e", () => {
   it(
     "parent session is idle after yield — full path through attempt",
@@ -190,6 +203,24 @@ describe("sessions_yield e2e", () => {
 
       // 5. The mock LLM was called twice (tool_use + stop)
       expect(streamCallCount).toBe(2);
+
+      // 6. Session transcript contains the yield tool call and result
+      const messages = await readSessionMessages(sessionFile);
+      const roles = messages.map((m) => m?.role);
+      // Expect: user → assistant (tool_use) → [tool_result] → assistant (stop)
+      // The session file records user + assistant messages; tool results may be
+      // embedded as a separate role.
+      expect(roles).toContain("user");
+      expect(roles.filter((r) => r === "assistant").length).toBeGreaterThanOrEqual(2);
+
+      // The first assistant message should contain the sessions_yield tool call
+      const firstAssistant = messages.find((m) => m?.role === "assistant");
+      const content = firstAssistant?.content;
+      expect(Array.isArray(content)).toBe(true);
+      const toolCall = (content as Array<{ type?: string; name?: string }>).find(
+        (c) => c.type === "toolCall" && c.name === "sessions_yield",
+      );
+      expect(toolCall).toBeDefined();
     },
   );
 });
