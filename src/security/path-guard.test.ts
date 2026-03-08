@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { checkPathGuardStrict, PathGuardError } from "./path-guard.js";
+import { checkPathGuardStrict } from "./path-guard.js";
 
 describe("PathGuard Exhaustive Tests", () => {
   const workspaceRoot = "/workspace";
