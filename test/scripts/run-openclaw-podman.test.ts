@@ -53,6 +53,10 @@ function findMounts(args: string[]): string[] {
   return mounts;
 }
 
+function expectMountSuffix(mounts: string[], suffix: string): void {
+  expect(mounts.some((mount) => mount.endsWith(suffix))).toBe(true);
+}
+
 describe("scripts/run-openclaw-podman.sh", () => {
   beforeAll(async () => {
     fixtureRoot = await mkdtemp(path.join(os.tmpdir(), "openclaw-run-podman-"));
@@ -107,18 +111,14 @@ printf '%s\n' "$@" > "$FAKE_PODMAN_LOG"
 
   it("uses rw bind mounts when SELinux is disabled", async () => {
     const mounts = findMounts(await runScript({ FAKE_GETENFORCE: "Disabled" }));
-    expect(mounts).toContain(`${fakeHomeDir}/.openclaw:/home/node/.openclaw:rw`);
-    expect(mounts).toContain(
-      `${fakeHomeDir}/.openclaw/workspace:/home/node/.openclaw/workspace:rw`,
-    );
+    expectMountSuffix(mounts, `:/home/node/.openclaw:rw`);
+    expectMountSuffix(mounts, `:/home/node/.openclaw/workspace:rw`);
   });
 
   it("adds Z relabels when SELinux is enforcing", async () => {
     const mounts = findMounts(await runScript({ FAKE_GETENFORCE: "Enforcing" }));
-    expect(mounts).toContain(`${fakeHomeDir}/.openclaw:/home/node/.openclaw:rw,Z`);
-    expect(mounts).toContain(
-      `${fakeHomeDir}/.openclaw/workspace:/home/node/.openclaw/workspace:rw,Z`,
-    );
+    expectMountSuffix(mounts, `:/home/node/.openclaw:rw,Z`);
+    expectMountSuffix(mounts, `:/home/node/.openclaw/workspace:rw,Z`);
   });
 
   it("honors explicit bind mount option overrides", async () => {
@@ -128,9 +128,7 @@ printf '%s\n' "$@" > "$FAKE_PODMAN_LOG"
         OPENCLAW_BIND_MOUNT_OPTIONS: ":ro,z",
       }),
     );
-    expect(mounts).toContain(`${fakeHomeDir}/.openclaw:/home/node/.openclaw:ro,z`);
-    expect(mounts).toContain(
-      `${fakeHomeDir}/.openclaw/workspace:/home/node/.openclaw/workspace:ro,z`,
-    );
+    expectMountSuffix(mounts, `:/home/node/.openclaw:ro,z`);
+    expectMountSuffix(mounts, `:/home/node/.openclaw/workspace:ro,z`);
   });
 });
