@@ -370,6 +370,7 @@
     "linkedom": "^0.18.12",
     "long": "^5.3.2",
     "markdown-it": "^14.1.1",
+    "minimatch": "10.2.4",
     "node-edge-tts": "^1.2.10",
     "opusscript": "^0.1.1",
     "osc-progress": "^0.3.0",

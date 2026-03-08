@@ -299,7 +299,7 @@ export function createImageTool(options?: {
     : "Analyze one or more images with the configured image model (agents.defaults.imageModel). Use image for a single path/URL, or images for multiple (up to 20). Provide a prompt describing what to analyze.";
 
   const localRoots = resolveMediaToolLocalRoots(options?.workspaceDir, {
-    workspaceOnly: options?.fsPolicy?.workspaceOnly === true,
+    fsPolicy: options?.fsPolicy,
   });
 
   return {
@@ -375,10 +375,10 @@ export function createImageTool(options?: {
       const sandboxConfig: SandboxedBridgeMediaPathConfig | null =
         options?.sandbox && options?.sandbox.root.trim()
           ? {
-              root: options.sandbox.root.trim(),
-              bridge: options.sandbox.bridge,
-              workspaceOnly: options.fsPolicy?.workspaceOnly === true,
-            }
+            root: options.sandbox.root.trim(),
+            bridge: options.sandbox.bridge,
+            workspaceOnly: options.fsPolicy?.workspaceOnly === true,
+          }
           : null;
 
       // MARK: - Load and resolve each image
@@ -438,29 +438,29 @@ export function createImageTool(options?: {
           ? { resolved: "" }
           : sandboxConfig
             ? await resolveSandboxedBridgeMediaPath({
-                sandbox: sandboxConfig,
-                mediaPath: resolvedImage,
-                inboundFallbackDir: "media/inbound",
-              })
+              sandbox: sandboxConfig,
+              mediaPath: resolvedImage,
+              inboundFallbackDir: "media/inbound",
+            })
             : {
-                resolved: resolvedImage.startsWith("file://")
-                  ? resolvedImage.slice("file://".length)
-                  : resolvedImage,
-              };
+              resolved: resolvedImage.startsWith("file://")
+                ? resolvedImage.slice("file://".length)
+                : resolvedImage,
+            };
         const resolvedPath = isDataUrl ? null : resolvedPathInfo.resolved;
 
         const media = isDataUrl
           ? decodeDataUrl(resolvedImage)
           : sandboxConfig
             ? await loadWebMedia(resolvedPath ?? resolvedImage, {
-                maxBytes,
-                sandboxValidated: true,
-                readFile: createSandboxBridgeReadFile({ sandbox: sandboxConfig }),
-              })
+              maxBytes,
+              sandboxValidated: true,
+              readFile: createSandboxBridgeReadFile({ sandbox: sandboxConfig }),
+            })
             : await loadWebMedia(resolvedPath ?? resolvedImage, {
-                maxBytes,
-                localRoots,
-              });
+              maxBytes,
+              localRoots,
+            });
         if (media.kind !== "image") {
           throw new Error(`Unsupported media type: ${media.kind}`);
         }
@@ -493,17 +493,17 @@ export function createImageTool(options?: {
       const imageDetails =
         loadedImages.length === 1
           ? {
-              image: loadedImages[0].resolvedImage,
-              ...(loadedImages[0].rewrittenFrom
-                ? { rewrittenFrom: loadedImages[0].rewrittenFrom }
-                : {}),
-            }
+            image: loadedImages[0].resolvedImage,
+            ...(loadedImages[0].rewrittenFrom
+              ? { rewrittenFrom: loadedImages[0].rewrittenFrom }
+              : {}),
+          }
           : {
-              images: loadedImages.map((img) => ({
-                image: img.resolvedImage,
-                ...(img.rewrittenFrom ? { rewrittenFrom: img.rewrittenFrom } : {}),
-              })),
-            };
+            images: loadedImages.map((img) => ({
+              image: img.resolvedImage,
+              ...(img.rewrittenFrom ? { rewrittenFrom: img.rewrittenFrom } : {}),
+            })),
+          };
 
       return buildTextToolResult(result, imageDetails);
     },

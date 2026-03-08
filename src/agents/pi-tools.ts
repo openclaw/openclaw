@@ -326,8 +326,6 @@ export function createOpenClawCodingTools(options?: {
     allowedPaths: fsConfig.allowedPaths,
     denyPaths: fsConfig.denyPaths,
   });
-  const hasExplicitFsPolicy = (fsPolicy.allowedPaths?.length ?? 0) > 0 || (fsPolicy.denyPaths?.length ?? 0) > 0;
-  const shouldWrapFsTools = fsPolicy.workspaceOnly || hasExplicitFsPolicy;
   const sandboxRoot = sandbox?.workspaceDir;
   const sandboxFsBridge = sandbox?.fsBridge;
   const allowWorkspaceWrites = sandbox?.workspaceAccess !== "ro";
@@ -345,6 +343,11 @@ export function createOpenClawCodingTools(options?: {
       modelId: options?.modelId,
       allowModels: applyPatchConfig?.allowModels,
     });
+  const shouldWrapFsTools =
+    workspaceOnly ||
+    (fsConfig.allowedPaths?.length ?? 0) > 0 ||
+    (fsConfig.denyPaths?.length ?? 0) > 0;
+
 
   if (sandboxRoot && !sandboxFsBridge) {
     throw new Error("Sandbox filesystem bridge is unavailable.");
@@ -451,21 +454,23 @@ export function createOpenClawCodingTools(options?: {
     ...(sandboxRoot
       ? allowWorkspaceWrites
         ? [
-          workspaceOnly
+          shouldWrapFsTools
             ? wrapToolWorkspaceRootGuardWithOptions(
               createSandboxedEditTool({ root: sandboxRoot, bridge: sandboxFsBridge! }),
               sandboxRoot,
               {
                 containerWorkdir: sandbox.containerWorkdir,
+                policy: fsPolicy,
               },
             )
             : createSandboxedEditTool({ root: sandboxRoot, bridge: sandboxFsBridge! }),
-          workspaceOnly
+          shouldWrapFsTools
             ? wrapToolWorkspaceRootGuardWithOptions(
               createSandboxedWriteTool({ root: sandboxRoot, bridge: sandboxFsBridge! }),
               sandboxRoot,
               {
                 containerWorkdir: sandbox.containerWorkdir,
+                policy: fsPolicy,
               },
             )
             : createSandboxedWriteTool({ root: sandboxRoot, bridge: sandboxFsBridge! }),

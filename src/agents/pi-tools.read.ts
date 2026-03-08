@@ -25,6 +25,7 @@ import type { AnyAgentTool } from "./pi-tools.types.js";
 import { assertSandboxPath } from "./sandbox-paths.js";
 import type { SandboxFsBridge } from "./sandbox/fs-bridge.js";
 import { sanitizeToolResultImages } from "./tool-images.js";
+import { checkPathGuardStrict, type ToolFsPolicy } from "../security/path-guard.js";
 
 export {
   CLAUDE_PARAM_GROUPS,
@@ -405,9 +406,6 @@ function mapContainerPathToWorkspaceRoot(params: {
   }
   return path.resolve(params.root, ...relative.split("/").filter(Boolean));
 }
-
-import type { ToolFsPolicy } from "./tool-fs-policy.js";
-import { checkPathGuardStrict, PathGuardError } from "../security/path-guard.js";
 
 export function wrapToolWorkspaceRootGuardWithOptions(
   tool: AnyAgentTool,

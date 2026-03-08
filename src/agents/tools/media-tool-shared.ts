@@ -36,19 +36,44 @@ export function applyImageModelConfigDefaults(
   };
 }
 
+import { checkPathGuardStrict, type ToolFsPolicy } from "../tool-fs-policy.js";
+
+// ... existing types ...
+
 export function resolveMediaToolLocalRoots(
   workspaceDirRaw: string | undefined,
-  options?: { workspaceOnly?: boolean },
+  options?: { fsPolicy?: ToolFsPolicy },
 ): string[] {
   const workspaceDir = normalizeWorkspaceDir(workspaceDirRaw);
-  if (options?.workspaceOnly) {
+  const policy = options?.fsPolicy;
+
+  if (policy?.workspaceOnly) {
     return workspaceDir ? [workspaceDir] : [];
   }
-  const roots = getDefaultLocalRoots();
-  if (!workspaceDir) {
-    return [...roots];
+
+  const defaultRoots = getDefaultLocalRoots();
+  const allCandidates = workspaceDir ? [...defaultRoots, workspaceDir] : defaultRoots;
+
+  // If we have a complex policy (allowed/deny paths), we need to filter the roots.
+  // Note: checkPathGuardStrict throws if invalid, but here we just want to filter.
+  // Actually, for media tools, we usually just want to know which roots are "plausible".
+  // The actual tool execution will still be guarded if we wrap it, but media tools
+  // often do their own path resolution.
+
+  if (!policy || (!policy.allowedPaths?.length && !policy.denyPaths?.length)) {
+    return Array.from(new Set(allCandidates));
   }
-  return Array.from(new Set([...roots, workspaceDir]));
+
+  return allCandidates.filter((root) => {
+    try {
+      // We check if the root itself is "accessible" under the policy.
+      // We use a dummy filename to check directory access.
+      checkPathGuardStrict(root, { ...policy, workspaceOnly: false }, "");
+      return true;
+    } catch {
+      return false;
+    }
+  });
 }
 
 export function resolvePromptAndModelOverride(
