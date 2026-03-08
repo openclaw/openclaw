@@ -89,6 +89,19 @@ describe("pi embedded model e2e smoke", () => {
     });
   });
 
+  it("builds a google-gemini-cli forward-compat fallback for gemini-3.1-flash-lite-preview", () => {
+    mockGoogleGeminiCliFlashTemplateModel();
+
+    const result = resolveModel("google-gemini-cli", "gemini-3.1-flash-lite-preview", "/tmp/agent");
+    expect(result.error).toBeUndefined();
+    expect(result.model).toMatchObject({
+      ...GOOGLE_GEMINI_CLI_FLASH_TEMPLATE_MODEL,
+      id: "gemini-3.1-flash-lite-preview",
+      name: "gemini-3.1-flash-lite-preview",
+      reasoning: true,
+    });
+  });
+
   it("keeps unknown-model errors for unrecognized google-gemini-cli model IDs", () => {
     const result = resolveModel("google-gemini-cli", "gemini-4-unknown", "/tmp/agent");
     expect(result.model).toBeUndefined();
