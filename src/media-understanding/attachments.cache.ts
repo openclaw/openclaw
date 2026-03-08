@@ -9,7 +9,7 @@ import {
   mergeInboundPathRoots,
 } from "../media/inbound-path-policy.js";
 import { getDefaultMediaLocalRoots } from "../media/local-roots.js";
-import { detectMime } from "../media/mime.js";
+import { detectMime, extensionForMime } from "../media/mime.js";
 import { buildRandomTempFilePath } from "../plugin-sdk/temp-path.js";
 import { normalizeAttachmentPath } from "./attachments.normalize.js";
 import { MediaUnderstandingSkipError } from "./errors.js";
@@ -205,7 +205,10 @@ export class MediaAttachmentCache {
       maxBytes,
       timeoutMs: params.timeoutMs,
     });
-    const extension = path.extname(bufferResult.fileName || "") || "";
+    // Derive extension from filename; fall back to MIME type when the filename
+    // lacks one (e.g. Signal voice notes saved without an extension).
+    const extension =
+      path.extname(bufferResult.fileName || "") || extensionForMime(bufferResult.mime) || "";
     const tmpPath = buildRandomTempFilePath({
       prefix: "openclaw-media",
       extension,
