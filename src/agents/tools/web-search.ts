@@ -667,7 +667,7 @@ function inferPerplexityBaseUrlFromApiKey(apiKey?: string): PerplexityBaseUrlHin
 
 function resolvePerplexityBaseUrl(
   perplexity?: PerplexityConfig,
-  authSource: PerplexityApiKeySource = "none",
+  authSource: PerplexityApiKeySource = "none", // pragma: allowlist secret
   configuredKey?: string,
 ): string {
   const fromConfig =
