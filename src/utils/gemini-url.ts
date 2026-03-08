@@ -23,9 +23,17 @@ export function buildGeminiUrl(params: {
   const defaultBaseUrl = "https://generativelanguage.googleapis.com";
   const rawBaseUrl = (params.baseUrl ?? defaultBaseUrl).replace(/\/+$/, "");
 
-  // Check if baseUrl already includes /v1beta (at end or with trailing slash)
-  const hasV1Beta = /\/v1beta(\/|$)/.test(rawBaseUrl);
-  const baseUrlWithVersion = hasV1Beta ? rawBaseUrl : `${rawBaseUrl}/v1beta`;
+  // Only append /v1beta for the default official base URL
+  // For custom base URLs, use them as-is (preserve caller-specified API version)
+  let baseUrlWithVersion: string;
+  if (!params.baseUrl) {
+    // No custom baseUrl provided - use default with /v1beta
+    baseUrlWithVersion = `${rawBaseUrl}/v1beta`;
+  } else {
+    // Custom baseUrl provided - use it as-is, no modification
+    // This preserves any custom API version path the caller may have specified
+    baseUrlWithVersion = rawBaseUrl;
+  }
 
   const modelPart = params.modelHasPrefix
     ? `models/${encodeURIComponent(params.modelId.replace(/^models\//, ""))}`

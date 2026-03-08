@@ -12,20 +12,41 @@ describe("buildGeminiUrl", () => {
     expect(url).not.toContain("/v1beta/v1beta");
   });
 
-  it("should add /v1beta when baseUrl does not include it", () => {
+  it("should NOT add /v1beta for custom baseUrl even when it does not include it", () => {
     const url = buildGeminiUrl({
       baseUrl: "https://example.com",
       modelId: "gemini-3-pro",
       endpoint: ":generateContent",
     });
-    expect(url).toBe("https://example.com/v1beta/models/gemini-3-pro:generateContent");
+    expect(url).toBe("https://example.com/models/gemini-3-pro:generateContent");
+    expect(url).not.toContain("/v1beta");
+  });
+
+  it("should preserve custom API version in baseUrl", () => {
+    const url = buildGeminiUrl({
+      baseUrl: "https://proxy.example/v1",
+      modelId: "gemini-3-pro",
+      endpoint: ":generateContent",
+    });
+    expect(url).toBe("https://proxy.example/v1/models/gemini-3-pro:generateContent");
+    expect(url).not.toContain("/v1/v1beta");
+  });
+
+  it("should preserve custom path in baseUrl", () => {
+    const url = buildGeminiUrl({
+      baseUrl: "https://proxy.example/gemini",
+      modelId: "gemini-3-pro",
+      endpoint: ":generateContent",
+    });
+    expect(url).toBe("https://proxy.example/gemini/models/gemini-3-pro:generateContent");
+    expect(url).not.toContain("/gemini/v1beta");
   });
 
   it("should work with default baseUrl", () => {
     const url = buildGeminiUrl({
       modelId: "gemini-3-pro",
       endpoint: ":generateContent",
-      apiKey: "test-key",
+      apiKey: "test-key", // pragma: allowlist secret
     });
     expect(url).toBe(
       "https://generativelanguage.googleapis.com/v1beta/models/gemini-3-pro:generateContent?key=test-key",
@@ -42,7 +63,7 @@ describe("buildGeminiUrl", () => {
     expect(url).not.toContain("/v1beta/v1beta");
   });
 
-  it("should handle baseUrl without trailing slash but with /v1beta", () => {
+  it("should preserve /v1beta in custom baseUrl when present", () => {
     const url = buildGeminiUrl({
       baseUrl: "https://example.com/v1beta",
       modelId: "gemini-3-pro",
@@ -64,7 +85,7 @@ describe("buildGeminiUrl", () => {
     const url = buildGeminiUrl({
       modelId: "gemini-3-pro",
       endpoint: ":generateContent",
-      apiKey: "test key with spaces",
+      apiKey: "test key with spaces", // pragma: allowlist secret
     });
     expect(url).toContain("?key=test%20key%20with%20spaces");
   });
