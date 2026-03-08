@@ -112,17 +112,28 @@ export function createStreamingDirectiveAccumulator() {
     // Wait for the next chunk to decide: if it completes to "NO_REPLY" → swallow;
     // if it doesn't (e.g. "NOT really") → flush as normal text.
     const silentToken = options.silentToken ?? SILENT_REPLY_TOKEN;
+    // isPrefixOnly: chunk like "NO" was recognised as isSilent=true but is not
+    // a complete silent token yet — buffer it so the next chunk can complete it.
+    const isPrefixOnly = parsed.isSilent && !isSilentReplyText(combined, silentToken);
+    const isLikelySplitToken =
+      (!parsed.isSilent && parsed.text && couldBeSilentTokenStart(parsed.text, silentToken)) ||
+      isPrefixOnly;
     if (
       !options.final &&
-      !parsed.isSilent &&
-      parsed.text &&
-      couldBeSilentTokenStart(parsed.text, silentToken) &&
+      isLikelySplitToken &&
       !parsed.mediaUrl &&
       (parsed.mediaUrls?.length ?? 0) === 0 &&
       !parsed.audioAsVoice
     ) {
       pendingSilent = combined;
       return null;
+    }
+
+    // On a final flush with isPrefixOnly, restore the raw text so it renders
+    // rather than being silently dropped (the stream ended before completion).
+    if (isPrefixOnly && options.final) {
+      parsed.text = combined;
+      parsed.isSilent = false;
     }
 
     const hasTag = activeReply.hasTag || pendingReply.hasTag || parsed.replyToTag;

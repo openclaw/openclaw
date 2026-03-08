@@ -517,6 +517,20 @@ export async function runAgentTurnWithFallback(params: {
         }
       }
 
+      // Flush any buffered silent-prefix remaining at end-of-stream.
+      // This handles the edge case where the stream ends mid-token
+      // (e.g. "NO" arrived but "_REPLY" never followed).
+      if (silentPrefixBuf) {
+        const isFull = isSilentReplyText(silentPrefixBuf, SILENT_REPLY_TOKEN);
+        if (!isFull) {
+          await params.typingSignals.signalTextDelta(silentPrefixBuf);
+          if (params.opts?.onPartialReply) {
+            await params.opts.onPartialReply({ text: silentPrefixBuf });
+          }
+        }
+        silentPrefixBuf = "";
+      }
+
       break;
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
