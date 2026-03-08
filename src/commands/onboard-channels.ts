@@ -193,8 +193,8 @@ async function noteChannelPrimer(
   );
   await prompter.note(
     [
-      "DM security: default is pairing; unknown DMs get a pairing code.",
-      `Approve with: ${formatCliCommand("openclaw pairing approve <channel> <code>")}`,
+      "DM security: default is allowlist; only pre-approved numbers can message.",
+      `To add senders: ${formatCliCommand("openclaw configure --section whatsapp")}`,
       'Public DMs require dmPolicy="open" + allowFrom=["*"].',
       "Multi-user DMs: run: " +
         formatCliCommand('openclaw config set session.dmScope "per-channel-peer"') +
@@ -237,7 +237,7 @@ async function maybeConfigureDmPolicies(params: {
   }
 
   const wants = await prompter.confirm({
-    message: "Configure DM access policies now? (default: pairing)",
+    message: "Configure DM access policies now? (default: allowlist)",
     initialValue: false,
   });
   if (!wants) {
@@ -248,8 +248,8 @@ async function maybeConfigureDmPolicies(params: {
   const selectPolicy = async (policy: ChannelOnboardingDmPolicy) => {
     await prompter.note(
       [
-        "Default: pairing (unknown DMs get a pairing code).",
-        `Approve: ${formatCliCommand(`openclaw pairing approve ${policy.channel} <code>`)}`,
+        "Default: allowlist (only pre-approved senders can message).",
+        `Pairing: unknown DMs get a pairing code; approve with: ${formatCliCommand(`openclaw pairing approve ${policy.channel} <code>`)}`,
         `Allowlist DMs: ${policy.policyKey}="allowlist" + ${policy.allowFromKey} entries.`,
         `Public DMs: ${policy.policyKey}="open" + ${policy.allowFromKey} includes "*".`,
         "Multi-user DMs: run: " +
@@ -262,8 +262,8 @@ async function maybeConfigureDmPolicies(params: {
     return (await prompter.select({
       message: `${policy.label} DM policy`,
       options: [
-        { value: "pairing", label: "Pairing (recommended)" },
-        { value: "allowlist", label: "Allowlist (specific users only)" },
+        { value: "allowlist", label: "Allowlist (recommended — specific users only)" },
+        { value: "pairing", label: "Pairing (unknown DMs get a pairing code)" },
         { value: "open", label: "Open (public inbound DMs)" },
         { value: "disabled", label: "Disabled (ignore DMs)" },
       ],

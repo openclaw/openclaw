@@ -13,6 +13,7 @@ import {
   resolveDefaultWhatsAppAccountId,
   resolveWhatsAppAuthDir,
 } from "../../../web/accounts.js";
+import { readWebSelfId } from "../../../web/auth-store.js";
 import type { WizardPrompter } from "../../../wizard/prompts.js";
 import type { ChannelOnboardingAdapter } from "../onboarding-types.js";
 import {
@@ -127,7 +128,7 @@ async function promptWhatsAppAllowFrom(
   prompter: WizardPrompter,
   options?: { forceAllowlist?: boolean },
 ): Promise<OpenClawConfig> {
-  const existingPolicy = cfg.channels?.whatsapp?.dmPolicy ?? "pairing";
+  const existingPolicy = cfg.channels?.whatsapp?.dmPolicy ?? "allowlist";
   const existingAllowFrom = cfg.channels?.whatsapp?.allowFrom ?? [];
   const existingLabel = existingAllowFrom.length > 0 ? existingAllowFrom.join(", ") : "unset";
 
@@ -144,8 +145,8 @@ async function promptWhatsAppAllowFrom(
   await prompter.note(
     [
       "WhatsApp direct chats are gated by `channels.whatsapp.dmPolicy` + `channels.whatsapp.allowFrom`.",
-      "- pairing (default): unknown senders get a pairing code; owner approves",
-      "- allowlist: unknown senders are blocked",
+      "- allowlist (default): only pre-approved numbers can message",
+      "- pairing: unknown senders get a pairing code; owner approves",
       '- open: public inbound DMs (requires allowFrom to include "*")',
       "- disabled: ignore WhatsApp DMs",
       "",
@@ -179,8 +180,8 @@ async function promptWhatsAppAllowFrom(
   const policy = (await prompter.select({
     message: "WhatsApp DM policy",
     options: [
-      { value: "pairing", label: "Pairing (recommended)" },
-      { value: "allowlist", label: "Allowlist only (block unknown senders)" },
+      { value: "allowlist", label: "Allowlist (recommended — block unknown senders)" },
+      { value: "pairing", label: "Pairing (unknown DMs get a pairing code)" },
       { value: "open", label: "Open (public inbound DMs)" },
       { value: "disabled", label: "Disabled (ignore WhatsApp DMs)" },
     ],
@@ -340,6 +341,38 @@ export const whatsappOnboardingAdapter: ChannelOnboardingAdapter = {
         `Run \`${formatCliCommand("openclaw channels login")}\` later to link WhatsApp.`,
         "WhatsApp",
       );
+    }
+
+    // Auto-detect the owner's phone number from linked credentials and
+    // default to allowlist mode with the owner pre-added.  This ensures
+    // new installs are secure-by-default without requiring manual config.
+    const selfId = readWebSelfId(authDir);
+    if (selfId.e164) {
+      const existingAllowFrom = next.channels?.whatsapp?.allowFrom ?? [];
+      const existingPolicy = next.channels?.whatsapp?.dmPolicy;
+      // Only auto-apply when no explicit policy/allowFrom has been set yet
+      if (!existingPolicy && existingAllowFrom.length === 0) {
+        const allowFrom = normalizeAllowFromEntries(
+          [selfId.e164, ...existingAllowFrom.filter((item) => item !== "*")],
+          normalizeE164,
+        );
+        next = setWhatsAppDmPolicy(next, "allowlist");
+        next = setWhatsAppAllowFrom(next, allowFrom);
+        next = setWhatsAppSelfChatMode(next, true);
+        await prompter.note(
+          [
+            "Auto-configured secure defaults:",
+            `- dmPolicy set to "allowlist"`,
+            `- allowFrom includes ${selfId.e164}`,
+            "- selfChatMode enabled",
+            "",
+            "You can adjust this later with: " +
+              formatCliCommand("openclaw configure --section whatsapp"),
+          ].join("\n"),
+          "WhatsApp security",
+        );
+        return { cfg: next, accountId };
+      }
     }
 
     next = await promptWhatsAppAllowFrom(next, runtime, prompter, {
