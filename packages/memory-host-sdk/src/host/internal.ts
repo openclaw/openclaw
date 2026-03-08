@@ -3,6 +3,7 @@ import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { detectMime } from "../../../../src/media/mime.js";
+import { CHARS_PER_TOKEN_ESTIMATE, estimateStringChars } from "../../../../src/utils/cjk-chars.js";
 import { runTasksWithConcurrency } from "../../../../src/utils/run-with-concurrency.js";
 import { estimateStructuredEmbeddingInputBytes } from "./embedding-input-limits.js";
 import { buildTextEmbeddingInput, type EmbeddingInput } from "./embedding-inputs.js";
@@ -339,8 +340,8 @@ export function chunkMarkdown(
   if (lines.length === 0) {
     return [];
   }
-  const maxChars = Math.max(32, chunking.tokens * 4);
-  const overlapChars = Math.max(0, chunking.overlap * 4);
+  const maxChars = Math.max(32, chunking.tokens * CHARS_PER_TOKEN_ESTIMATE);
+  const overlapChars = Math.max(0, chunking.overlap * CHARS_PER_TOKEN_ESTIMATE);
   const chunks: MemoryChunk[] = [];
 
   let current: Array<{ line: string; lineNo: number }> = [];
@@ -380,14 +381,14 @@ export function chunkMarkdown(
       if (!entry) {
         continue;
       }
-      acc += entry.line.length + 1;
+      acc += estimateStringChars(entry.line) + 1;
       kept.unshift(entry);
       if (acc >= overlapChars) {
         break;
       }
     }
     current = kept;
-    currentChars = kept.reduce((sum, entry) => sum + entry.line.length + 1, 0);
+    currentChars = kept.reduce((sum, entry) => sum + estimateStringChars(entry.line) + 1, 0);
   };
 
   for (let i = 0; i < lines.length; i += 1) {
@@ -402,7 +403,7 @@ export function chunkMarkdown(
       }
     }
     for (const segment of segments) {
-      const lineSize = segment.length + 1;
+      const lineSize = estimateStringChars(segment) + 1;
       if (currentChars + lineSize > maxChars && current.length > 0) {
         flush();
         carryOverlap();
