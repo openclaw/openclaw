@@ -95,6 +95,113 @@ async function noteSetup(prompter: WizardPrompter) {
   );
 }
 
+async function promptNapCatInboundTransportConfig(params: {
+  current: ReturnType<typeof resolveNapCatAccount>;
+  prompter: WizardPrompter;
+}): Promise<{
+  enableHttp: boolean;
+  httpHost: string;
+  httpPort: number;
+  httpPath: string;
+  enableWs: boolean;
+  wsUrl: string;
+  wsReconnectMs: number;
+}> {
+  while (true) {
+    const enableHttp = await params.prompter.confirm({
+      message: "Enable HTTP inbound webhook?",
+      initialValue: params.current.transport.http.enabled,
+    });
+
+    let httpHost = params.current.transport.http.host;
+    let httpPort = params.current.transport.http.port;
+    let httpPath = params.current.transport.http.path;
+    if (enableHttp) {
+      httpHost = String(
+        await params.prompter.text({
+          message: "HTTP webhook host",
+          initialValue: params.current.transport.http.host || DEFAULT_NAPCAT_HTTP_HOST,
+          validate: (value) => (String(value ?? "").trim() ? undefined : "Required"),
+        }),
+      ).trim();
+
+      const portInput = String(
+        await params.prompter.text({
+          message: "HTTP webhook port",
+          initialValue: String(params.current.transport.http.port || DEFAULT_NAPCAT_HTTP_PORT),
+          validate: (value) => {
+            const n = Number.parseInt(String(value ?? ""), 10);
+            if (!Number.isInteger(n) || n < 1 || n > 65535) {
+              return "Enter a valid port (1-65535)";
+            }
+            return undefined;
+          },
+        }),
+      ).trim();
+      httpPort = Number.parseInt(portInput, 10);
+
+      httpPath = String(
+        await params.prompter.text({
+          message: "HTTP webhook path",
+          initialValue: params.current.transport.http.path || DEFAULT_NAPCAT_HTTP_PATH,
+          validate: (value) => (String(value ?? "").trim() ? undefined : "Required"),
+        }),
+      ).trim();
+    }
+
+    const enableWs = await params.prompter.confirm({
+      message: "Enable WebSocket inbound client?",
+      initialValue: params.current.transport.ws.enabled,
+    });
+
+    let wsUrl = params.current.transport.ws.url;
+    let wsReconnectMs = params.current.transport.ws.reconnectMs;
+    if (enableWs) {
+      wsUrl = String(
+        await params.prompter.text({
+          message: "NapCat WebSocket URL",
+          initialValue: params.current.transport.ws.url || DEFAULT_NAPCAT_WS_URL,
+          validate: (value) => (String(value ?? "").trim() ? undefined : "Required"),
+        }),
+      ).trim();
+      const reconnectInput = String(
+        await params.prompter.text({
+          message: "WebSocket reconnect interval (ms)",
+          initialValue: String(
+            params.current.transport.ws.reconnectMs || DEFAULT_NAPCAT_WS_RECONNECT_MS,
+          ),
+          validate: (value) => {
+            const n = Number.parseInt(String(value ?? ""), 10);
+            if (!Number.isInteger(n) || n <= 0) {
+              return "Enter a positive integer";
+            }
+            return undefined;
+          },
+        }),
+      ).trim();
+      wsReconnectMs = Number.parseInt(reconnectInput, 10);
+    }
+
+    if (enableHttp || enableWs) {
+      return {
+        enableHttp,
+        httpHost,
+        httpPort,
+        httpPath,
+        enableWs,
+        wsUrl,
+        wsReconnectMs,
+      };
+    }
+
+    // Keep the wizard on a valid path instead of writing a config that startup rejects.
+    await params.prompter.note(
+      "Enable at least one inbound transport (HTTP webhook or WebSocket client) before saving.",
+      "NapCat transport",
+    );
+  }
+}
+
 export const napcatOnboardingAdapter: ChannelOnboardingAdapter = {
   channel,
   dmPolicy,
@@ -142,77 +249,15 @@ export const napcatOnboardingAdapter: ChannelOnboardingAdapter = {
       }),
     ).trim();
 
-    const enableHttp = await prompter.confirm({
-      message: "Enable HTTP inbound webhook?",
-      initialValue: current.transport.http.enabled,
-    });
-
-    let httpHost = current.transport.http.host;
-    let httpPort = current.transport.http.port;
-    let httpPath = current.transport.http.path;
-    if (enableHttp) {
-      httpHost = String(
-        await prompter.text({
-          message: "HTTP webhook host",
-          initialValue: current.transport.http.host || DEFAULT_NAPCAT_HTTP_HOST,
-          validate: (value) => (String(value ?? "").trim() ? undefined : "Required"),
-        }),
-      ).trim();
-
-      const portInput = String(
-        await prompter.text({
-          message: "HTTP webhook port",
-          initialValue: String(current.transport.http.port || DEFAULT_NAPCAT_HTTP_PORT),
-          validate: (value) => {
-            const n = Number.parseInt(String(value ?? ""), 10);
-            if (!Number.isInteger(n) || n < 1 || n > 65535) {
-              return "Enter a valid port (1-65535)";
-            }
-            return undefined;
-          },
-        }),
-      ).trim();
-      httpPort = Number.parseInt(portInput, 10);
-
-      httpPath = String(
-        await prompter.text({
-          message: "HTTP webhook path",
-          initialValue: current.transport.http.path || DEFAULT_NAPCAT_HTTP_PATH,
-          validate: (value) => (String(value ?? "").trim() ? undefined : "Required"),
-        }),
-      ).trim();
-    }
-
-    const enableWs = await prompter.confirm({
-      message: "Enable WebSocket inbound client?",
-      initialValue: current.transport.ws.enabled,
-    });
-
-    let wsUrl = current.transport.ws.url;
-    let wsReconnectMs = current.transport.ws.reconnectMs;
-    if (enableWs) {
-      wsUrl = String(
-        await prompter.text({
-          message: "NapCat WebSocket URL",
-          initialValue: current.transport.ws.url || DEFAULT_NAPCAT_WS_URL,
-          validate: (value) => (String(value ?? "").trim() ? undefined : "Required"),
-        }),
-      ).trim();
-      const reconnectInput = String(
-        await prompter.text({
-          message: "WebSocket reconnect interval (ms)",
-          initialValue: String(current.transport.ws.reconnectMs || DEFAULT_NAPCAT_WS_RECONNECT_MS),
-          validate: (value) => {
-            const n = Number.parseInt(String(value ?? ""), 10);
-            if (!Number.isInteger(n) || n <= 0) {
-              return "Enter a positive integer";
-            }
-            return undefined;
-          },
-        }),
-      ).trim();
-      wsReconnectMs = Number.parseInt(reconnectInput, 10);
-    }
+    const {
+      enableHttp,
+      httpHost,
+      httpPort,
+      httpPath,
+      enableWs,
+      wsUrl,
+      wsReconnectMs,
+    } = await promptNapCatInboundTransportConfig({ current, prompter });
 
     next = {
       ...next,

@@ -9,6 +9,8 @@ import {
 import { processNapCatEvent } from "./inbound.js";
 import type { OneBotMessageEvent, ResolvedNapCatAccount } from "./types.js";
 
+export const NAPCAT_HTTP_LIVENESS_INTERVAL_MS = 5 * 60_000;
+
 function resolvePathname(req: IncomingMessage): string {
   try {
     const base = `http://${req.headers.host || "localhost"}`;
@@ -128,21 +130,34 @@ export async function startNapCatHttpMonitor(
     server.once("error", onError);
     server.listen(port, host, onListen);
   });
+  const emitLiveness = () => {
+    // HTTP webhook delivery is passive, so synthesize a liveness tick while the
+    // listener is idle to avoid false stale-socket restarts.
+    options.statusSink?.({ lastEventAt: Date.now() });
+  };
+  const livenessTimer = setInterval(emitLiveness, NAPCAT_HTTP_LIVENESS_INTERVAL_MS);
+  livenessTimer.unref?.();
+  const stopLivenessTimer = () => clearInterval(livenessTimer);
+  const connectedAt = Date.now();
   options.statusSink?.({
     connected: true,
-    lastConnectedAt: Date.now(),
+    lastConnectedAt: connectedAt,
+    lastEventAt: connectedAt,
     lastError: null,
   });
 
   server.on("error", (err) => {
+    stopLivenessTimer();
     options.statusSink?.({
       connected: false,
       lastError: String(err),
     });
   });
+  server.on("close", stopLivenessTimer);
 
   return {
     stop: async () => {
+      stopLivenessTimer();
       await closeServer(server);
       options.statusSink?.({ connected: false });
     },

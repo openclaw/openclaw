@@ -1,7 +1,10 @@
 import type { ChannelAccountSnapshot, OpenClawConfig } from "openclaw/plugin-sdk";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { createRuntimeEnv } from "../../test-utils/runtime-env.js";
-import { startNapCatHttpMonitor } from "./monitor-http.js";
+import {
+  NAPCAT_HTTP_LIVENESS_INTERVAL_MS,
+  startNapCatHttpMonitor,
+} from "./monitor-http.js";
 import type { ResolvedNapCatAccount } from "./types.js";
 
 function buildAccount(overrides: Partial<ResolvedNapCatAccount> = {}): ResolvedNapCatAccount {
@@ -33,6 +36,10 @@ function buildAccount(overrides: Partial<ResolvedNapCatAccount> = {}): ResolvedN
 }
 
 describe("startNapCatHttpMonitor", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   it("marks connected after listen and clears it on stop", async () => {
     const patches: Array<Partial<ChannelAccountSnapshot>> = [];
     const handle = await startNapCatHttpMonitor({
@@ -47,5 +54,28 @@ describe("startNapCatHttpMonitor", () => {
     await handle.stop();
 
     expect(patches.some((entry) => entry.connected === false)).toBe(true);
+  });
+
+  it("emits liveness updates while idle", async () => {
+    vi.useFakeTimers();
+
+    const patches: Array<Partial<ChannelAccountSnapshot>> = [];
+    const handle = await startNapCatHttpMonitor({
+      account: buildAccount(),
+      config: {} as OpenClawConfig,
+      runtime: createRuntimeEnv(),
+      statusSink: (patch) => patches.push(patch),
+    });
+
+    const lastEventAtCount = () =>
+      patches.filter((entry) => typeof entry.lastEventAt === "number").length;
+
+    const before = lastEventAtCount();
+    await vi.advanceTimersByTimeAsync(NAPCAT_HTTP_LIVENESS_INTERVAL_MS);
+    const after = lastEventAtCount();
+
+    expect(after).toBeGreaterThan(before);
+
+    await handle.stop();
   });
 });
