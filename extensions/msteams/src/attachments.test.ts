@@ -1,4 +1,4 @@
-import type { PluginRuntime, SsrFPolicy } from "openclaw/plugin-sdk/msteams";
+import type { PluginRuntime, SsrFPolicy } from "openclaw/plugin-sdk";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createPluginRuntimeMock } from "../../test-utils/plugin-runtime-mock.js";
 import {
@@ -727,7 +727,7 @@ describe("msteams attachments", () => {
             redirect: "manual",
             dispatcher: {},
           } as RequestInit);
-          if (REDIRECT_STATUS_CODES.includes(res.status)) {
+          if (REDIRECT_STATUS_CODES.has(res.status)) {
             const location = res.headers.get("location");
             if (!location) {
               throw new Error("redirect missing location");
