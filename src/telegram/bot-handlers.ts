@@ -1,4 +1,4 @@
-import type { Message, ReactionTypeEmoji } from "@grammyjs/types";
+import type { Message, ReactionTypeEmoji, UserFromGetMe } from "@grammyjs/types";
 import { resolveAgentDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import {
   createInboundDebouncer,
@@ -61,6 +61,7 @@ import {
   evaluateTelegramGroupBaseAccess,
   evaluateTelegramGroupPolicyAccess,
 } from "./group-access.js";
+import { attachTelegramRelayMeta, registerTelegramGroupRelayEndpoint } from "./group-bot-relay.js";
 import { migrateTelegramGroupConfig } from "./group-migration.js";
 import { resolveTelegramInlineButtonsScope } from "./inline-buttons.js";
 import {
@@ -1488,6 +1489,103 @@ export const registerTelegramHandlers = ({
     }
   };
 
+  let cachedRelayBotMe: UserFromGetMe | null | undefined;
+  const resolveRelayBotMe = async (): Promise<UserFromGetMe | undefined> => {
+    if (cachedRelayBotMe !== undefined) {
+      return cachedRelayBotMe ?? undefined;
+    }
+    try {
+      cachedRelayBotMe = await bot.api.getMe();
+      return cachedRelayBotMe;
+    } catch {
+      cachedRelayBotMe = null;
+      return undefined;
+    }
+  };
+  const unregisterGroupRelay = registerTelegramGroupRelayEndpoint({
+    accountId,
+    resolveIdentity: async () => {
+      const me = await resolveRelayBotMe();
+      if (!me) {
+        return null;
+      }
+      return {
+        botUserId: me.id,
+        botUsername: me.username,
+        botDisplayName: me.first_name || me.username || `bot:${accountId}`,
+      };
+    },
+    handleRelay: async (relay) => {
+      if (!relay.text.trim()) {
+        return;
+      }
+      const relayChatId =
+        typeof relay.chatId === "number" ? relay.chatId : Number.parseInt(String(relay.chatId), 10);
+      if (!Number.isFinite(relayChatId)) {
+        return;
+      }
+      const relayBotMe = await resolveRelayBotMe();
+      const relayFromId = relay.source.botUserId ?? relay.messageId;
+      const replyToMessage =
+        relay.replyTargetsRecipient &&
+        relay.replyToMessageId != null &&
+        typeof relay.target.botUserId === "number"
+          ? {
+              message_id: relay.replyToMessageId,
+              date: Math.floor(relay.sentAtMs / 1000),
+              chat: { id: relayChatId, type: "supergroup" as const },
+              from: {
+                id: relay.target.botUserId,
+                is_bot: true as const,
+                first_name: relay.target.botDisplayName || relay.target.botUsername || "Bot",
+                ...(relay.target.botUsername ? { username: relay.target.botUsername } : {}),
+              },
+              text: relay.text,
+            }
+          : undefined;
+      const syntheticMessage = attachTelegramRelayMeta(
+        {
+          message_id: relay.messageId,
+          date: Math.floor(relay.sentAtMs / 1000),
+          chat: { id: relayChatId, type: "supergroup" as const },
+          from: {
+            id: relayFromId,
+            is_bot: true as const,
+            first_name: relay.source.botDisplayName || relay.source.botUsername || "Bot",
+            ...(relay.source.botUsername ? { username: relay.source.botUsername } : {}),
+          },
+          text: relay.text,
+          ...(relay.messageThreadId != null
+            ? { message_thread_id: Math.trunc(relay.messageThreadId) }
+            : {}),
+          ...(replyToMessage ? { reply_to_message: replyToMessage } : {}),
+        } as Message,
+        relay.relayMeta,
+      );
+      const syntheticDedupeContext = {
+        update: {
+          update_id: relay.messageId,
+          message: syntheticMessage,
+        },
+      } as TelegramUpdateKeyContext;
+      await handleInboundMessageLike({
+        ctxForDedupe: syntheticDedupeContext,
+        ctx: buildSyntheticContext({ me: relayBotMe }, syntheticMessage),
+        msg: syntheticMessage,
+        chatId: relayChatId,
+        isGroup: true,
+        isForum: relay.messageThreadId != null,
+        messageThreadId: relay.messageThreadId,
+        senderId: String(relayFromId),
+        senderUsername: relay.source.botUsername ?? "",
+        requireConfiguredGroup: false,
+        sendOversizeWarning: false,
+        oversizeLogMessage: "relayed bot media exceeds size limit",
+        errorMessage: "group relay handler failed",
+      });
+    },
+  });
+
   bot.on("message", async (ctx) => {
     const msg = ctx.message;
     if (!msg) {
@@ -1562,4 +1660,6 @@ export const registerTelegramHandlers = ({
       errorMessage: "channel_post handler failed",
     });
   });
+
+  return unregisterGroupRelay;
 };

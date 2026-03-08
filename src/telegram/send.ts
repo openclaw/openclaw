@@ -27,6 +27,7 @@ import type { TelegramInlineButtons } from "./button-types.js";
 import { splitTelegramCaption } from "./caption.js";
 import { resolveTelegramFetch } from "./fetch.js";
 import { renderTelegramHtmlText } from "./format.js";
+import { trackTelegramRelayMessageOwner } from "./group-bot-relay.js";
 import { isRecoverableTelegramNetworkError, isSafeToRetrySendError } from "./network-errors.js";
 import { makeProxyFetch } from "./proxy.js";
 import { recordSentMessage } from "./sent-message-cache.js";
@@ -727,6 +728,11 @@ export async function sendMessageTelegram(
     const mediaMessageId = resolveTelegramMessageIdOrThrow(result, "media send");
     const resolvedChatId = String(result?.chat?.id ?? chatId);
     recordSentMessage(chatId, mediaMessageId);
+    trackTelegramRelayMessageOwner({
+      chatId,
+      messageId: mediaMessageId,
+      accountId: account.accountId,
+    });
     recordChannelActivity({
       channel: "telegram",
       accountId: account.accountId,
@@ -747,6 +753,11 @@ export async function sendMessageTelegram(
       // Return the text message ID as the "main" message (it's the actual content).
       const textMessageId = resolveTelegramMessageIdOrThrow(textRes, "text follow-up send");
       recordSentMessage(chatId, textMessageId);
+      trackTelegramRelayMessageOwner({
+        chatId,
+        messageId: textMessageId,
+        accountId: account.accountId,
+      });
       return {
         messageId: String(textMessageId),
         chatId: resolvedChatId,
@@ -769,6 +780,11 @@ export async function sendMessageTelegram(
   const res = await sendTelegramText(text, textParams, opts.plainText);
   const messageId = resolveTelegramMessageIdOrThrow(res, "text send");
   recordSentMessage(chatId, messageId);
+  trackTelegramRelayMessageOwner({
+    chatId,
+    messageId,
+    accountId: account.accountId,
+  });
   recordChannelActivity({
     channel: "telegram",
     accountId: account.accountId,
@@ -1053,6 +1069,11 @@ export async function sendStickerTelegram(
   const messageId = resolveTelegramMessageIdOrThrow(result, "sticker send");
   const resolvedChatId = String(result?.chat?.id ?? chatId);
   recordSentMessage(chatId, messageId);
+  trackTelegramRelayMessageOwner({
+    chatId,
+    messageId,
+    accountId: account.accountId,
+  });
   recordChannelActivity({
     channel: "telegram",
     accountId: account.accountId,
@@ -1160,6 +1181,11 @@ export async function sendPollTelegram(
   const resolvedChatId = String(result?.chat?.id ?? chatId);
   const pollId = result?.poll?.id;
   recordSentMessage(chatId, messageId);
+  trackTelegramRelayMessageOwner({
+    chatId,
+    messageId,
+    accountId: account.accountId,
+  });
 
   recordChannelActivity({
     channel: "telegram",

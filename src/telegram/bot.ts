@@ -389,7 +389,7 @@ export function createTelegramBot(opts: TelegramBotOptions) {
     opts,
   });
 
-  registerTelegramHandlers({
+  const unregisterGroupRelay = registerTelegramHandlers({
     cfg,
     accountId: account.accountId,
     bot,
@@ -408,6 +408,7 @@ export function createTelegramBot(opts: TelegramBotOptions) {
 
   const originalStop = bot.stop.bind(bot);
   bot.stop = ((...args: Parameters<typeof originalStop>) => {
+    unregisterGroupRelay?.();
     threadBindingManager?.stop();
     return originalStop(...args);
   }) as typeof bot.stop;
