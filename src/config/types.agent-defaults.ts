@@ -281,6 +281,10 @@ export type AgentDefaultsConfig = {
     runTimeoutSeconds?: number;
     /** Gateway timeout in ms for sub-agent announce delivery calls (default: 60000). */
     announceTimeoutMs?: number;
+    /** Seconds of inactivity (no tool calls) before injecting a nudge message. 0 = disabled (default: 90). */
+    stallNudgeAfterSeconds?: number;
+    /** Seconds after nudge with continued inactivity before auto-killing. 0 = disabled (default: 180). */
+    stallKillAfterSeconds?: number;
   };
   /** Optional sandbox settings for non-main sessions. */
   sandbox?: AgentSandboxConfig;

@@ -17,6 +17,7 @@ import { createSubsystemLogger } from "../logging/subsystem.js";
 import { defaultRuntime } from "../runtime.js";
 import { type DeliveryContext, normalizeDeliveryContext } from "../utils/delivery-context.js";
 import { ensureRuntimePluginsLoaded } from "./runtime-plugins.js";
+import { abortEmbeddedPiRun, queueEmbeddedPiMessage } from "./pi-embedded.js";
 import { resetAnnounceQueuesForTests } from "./subagent-announce-queue.js";
 import {
   captureSubagentCompletionReply,
@@ -148,6 +149,21 @@ function findSessionEntryByKey(store: Record<string, SessionEntry>, sessionKey: 
     }
   }
   return undefined;
+}
+
+function resolveChildSessionId(childSessionKey: string): string | undefined {
+  try {
+    const cfg = loadConfig();
+    const agentId = resolveAgentIdFromSessionKey(childSessionKey);
+    const storePath = resolveStorePath(cfg.session?.store, { agentId });
+    const store = loadSessionStore(storePath);
+    const entry = findSessionEntryByKey(store, childSessionKey);
+    return typeof entry?.sessionId === "string" && entry.sessionId.trim()
+      ? entry.sessionId.trim()
+      : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 function resolveSubagentRunOrphanReason(params: {
@@ -711,7 +727,104 @@ function stopSweeper() {
   sweeper = null;
 }
 
+/**
+ * Check all active subagent runs for stall conditions and take escalating action:
+ * 1. Nudge: inject a system message after stallNudgeAfterSeconds of no tool calls
+ * 2. Kill: auto-terminate after stallKillAfterSeconds following the nudge
+ */
+async function checkStallRecovery() {
+  const now = Date.now();
+  for (const [runId, entry] of subagentRuns.entries()) {
+    // Only check active runs (no endedAt).
+    if (typeof entry.endedAt === "number") {
+      continue;
+    }
+
+    const nudgeSeconds = entry.stallNudgeAfterSeconds ?? 0;
+    const killSeconds = entry.stallKillAfterSeconds ?? 0;
+
+    // Both disabled — skip.
+    if (nudgeSeconds <= 0 && killSeconds <= 0) {
+      continue;
+    }
+
+    const lastActivity = entry.lastToolCallAt ?? entry.createdAt;
+    const idleMs = now - lastActivity;
+
+    // Check kill condition first (nudge was already sent).
+    if (entry.stallNudgedAt && killSeconds > 0) {
+      const timeSinceNudgeMs = now - entry.stallNudgedAt;
+      if (timeSinceNudgeMs >= killSeconds * 1000) {
+        const idleSec = Math.round(idleMs / 1000);
+        log.info(
+          `Stall kill: runId=${runId} child=${entry.childSessionKey} idle=${idleSec}s nudgedAgo=${Math.round(timeSinceNudgeMs / 1000)}s`,
+        );
+        // Use completeSubagentRun with stall-specific outcome for proper announce flow.
+        await completeSubagentRun({
+          runId,
+          endedAt: now,
+          outcome: { status: "error", error: `stalled (no tool activity for ${idleSec}s)` },
+          reason: SUBAGENT_ENDED_REASON_KILLED,
+          sendFarewell: true,
+          accountId: entry.requesterOrigin?.accountId,
+          triggerCleanup: true,
+        });
+        // Also abort the embedded run if it's still active.
+        try {
+          const childSessionId = resolveChildSessionId(entry.childSessionKey);
+          if (childSessionId) {
+            abortEmbeddedPiRun(childSessionId);
+          }
+        } catch {
+          /* best effort */
+        }
+        continue;
+      }
+    }
+
+    // Check nudge condition.
+    if (!entry.stallNudgedAt && nudgeSeconds > 0 && idleMs >= nudgeSeconds * 1000) {
+      const idleSec = Math.round(idleMs / 1000);
+      log.info(`Stall nudge: runId=${runId} child=${entry.childSessionKey} idle=${idleSec}s`);
+
+      const nudgeMessage = "You appear stalled — resume your task or report what's blocking you.";
+      let nudged = false;
+
+      try {
+        const childSessionId = resolveChildSessionId(entry.childSessionKey);
+        if (childSessionId) {
+          nudged = queueEmbeddedPiMessage(childSessionId, nudgeMessage);
+        }
+      } catch {
+        /* best effort */
+      }
+
+      if (!nudged) {
+        // Fallback: send via gateway as a follow-up message.
+        try {
+          await callGateway({
+            method: "agent",
+            params: {
+              sessionKey: entry.childSessionKey,
+              message: nudgeMessage,
+            },
+            timeoutMs: 10_000,
+          });
+        } catch {
+          log.warn(`Stall nudge delivery failed: runId=${runId}`);
+        }
+      }
+
+      entry.stallNudgedAt = now;
+      persistSubagentRuns();
+    }
+  }
+}
+
 async function sweepSubagentRuns() {
+  // Stall recovery check runs every sweep cycle.
+  await checkStallRecovery();
+
   const now = Date.now();
   let mutated = false;
   for (const [runId, entry] of subagentRuns.entries()) {
@@ -757,7 +870,28 @@ function ensureListener() {
   listenerStarted = true;
   listenerStop = onAgentEvent((evt) => {
     void (async () => {
-      if (!evt || evt.stream !== "lifecycle") {
+      if (!evt) {
+        return;
+      }
+
+      // Track tool activity for stall detection.
+      if (evt.stream === "tool") {
+        const entry = subagentRuns.get(evt.runId);
+        if (entry && typeof entry.endedAt !== "number") {
+          const phase = evt.data?.phase;
+          if (phase === "start" || phase === "end") {
+            entry.lastToolCallAt = evt.ts || Date.now();
+            // Clear nudge state — activity detected after nudge means agent recovered.
+            if (entry.stallNudgedAt) {
+              entry.stallNudgedAt = undefined;
+            }
+            persistSubagentRuns();
+          }
+        }
+        return;
+      }
+
+      if (evt.stream !== "lifecycle") {
         return;
       }
       const phase = evt.data?.phase;
@@ -1132,12 +1266,15 @@ export function replaceSubagentRunAfterSteer(params: {
     spawnMode,
     archiveAtMs,
     runTimeoutSeconds,
+    // Reset stall recovery state for the new run (config is preserved via ...source).
+    lastToolCallAt: now,
+    stallNudgedAt: undefined,
   };
 
   subagentRuns.set(nextRunId, next);
   ensureListener();
   persistSubagentRuns();
-  if (archiveAtMs) {
+  if (archiveAtMs || next.stallNudgeAfterSeconds || next.stallKillAfterSeconds) {
     startSweeper();
   }
   void waitForSubagentCompletion(nextRunId, waitTimeoutMs);
@@ -1162,6 +1299,9 @@ export function registerSubagentRun(params: {
   attachmentsDir?: string;
   attachmentsRootDir?: string;
   retainAttachmentsOnKeep?: boolean;
+  stallNudgeAfterSeconds?: number;
+  stallKillAfterSeconds?: number;
+  lastToolCallAt?: number;
 }) {
   const now = Date.now();
   const cfg = loadConfig();
@@ -1195,10 +1335,13 @@ export function registerSubagentRun(params: {
     attachmentsDir: params.attachmentsDir,
     attachmentsRootDir: params.attachmentsRootDir,
     retainAttachmentsOnKeep: params.retainAttachmentsOnKeep,
+    stallNudgeAfterSeconds: params.stallNudgeAfterSeconds,
+    stallKillAfterSeconds: params.stallKillAfterSeconds,
+    lastToolCallAt: params.lastToolCallAt ?? now,
   });
   ensureListener();
   persistSubagentRuns();
-  if (archiveAtMs) {
+  if (archiveAtMs || params.stallNudgeAfterSeconds || params.stallKillAfterSeconds) {
     startSweeper();
   }
   // Wait for subagent completion via gateway RPC (cross-process).

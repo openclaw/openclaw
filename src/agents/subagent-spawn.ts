@@ -51,6 +51,8 @@ export type SpawnSubagentParams = {
   model?: string;
   thinking?: string;
   runTimeoutSeconds?: number;
+  stallNudgeAfterSeconds?: number;
+  stallKillAfterSeconds?: number;
   thread?: boolean;
   mode?: SpawnSubagentMode;
   cleanup?: "delete" | "keep";
@@ -295,6 +297,30 @@ export async function spawnSubagentDirect(
     typeof params.runTimeoutSeconds === "number" && Number.isFinite(params.runTimeoutSeconds)
       ? Math.max(0, Math.floor(params.runTimeoutSeconds))
       : cfgSubagentTimeout;
+
+  // Resolve stall recovery thresholds (config → param override → defaults).
+  const cfgStallNudge =
+    typeof cfg?.agents?.defaults?.subagents?.stallNudgeAfterSeconds === "number" &&
+    Number.isFinite(cfg.agents.defaults.subagents.stallNudgeAfterSeconds)
+      ? Math.max(0, Math.floor(cfg.agents.defaults.subagents.stallNudgeAfterSeconds))
+      : 90; // default
+  const stallNudgeAfterSeconds =
+    typeof params.stallNudgeAfterSeconds === "number" &&
+    Number.isFinite(params.stallNudgeAfterSeconds)
+      ? Math.max(0, Math.floor(params.stallNudgeAfterSeconds))
+      : cfgStallNudge;
+
+  const cfgStallKill =
+    typeof cfg?.agents?.defaults?.subagents?.stallKillAfterSeconds === "number" &&
+    Number.isFinite(cfg.agents.defaults.subagents.stallKillAfterSeconds)
+      ? Math.max(0, Math.floor(cfg.agents.defaults.subagents.stallKillAfterSeconds))
+      : 180; // default
+  const stallKillAfterSeconds =
+    typeof params.stallKillAfterSeconds === "number" &&
+    Number.isFinite(params.stallKillAfterSeconds)
+      ? Math.max(0, Math.floor(params.stallKillAfterSeconds))
+      : cfgStallKill;
+
   let modelApplied = false;
   let threadBindingReady = false;
   const { mainKey, alias } = resolveMainSessionAlias(cfg);
@@ -667,6 +693,9 @@ export async function spawnSubagentDirect(
       attachmentsDir: attachmentAbsDir,
       attachmentsRootDir: attachmentRootDir,
       retainAttachmentsOnKeep: retainOnSessionKeep,
+      stallNudgeAfterSeconds,
+      stallKillAfterSeconds,
+      lastToolCallAt: Date.now(),
     });
   } catch (err) {
     if (attachmentAbsDir) {

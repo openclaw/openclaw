@@ -37,6 +37,8 @@ const SessionsSpawnToolSchema = Type.Object({
   runTimeoutSeconds: Type.Optional(Type.Number({ minimum: 0 })),
   // Back-compat: older callers used timeoutSeconds for this tool.
   timeoutSeconds: Type.Optional(Type.Number({ minimum: 0 })),
+  stallNudgeAfterSeconds: Type.Optional(Type.Number({ minimum: 0 })),
+  stallKillAfterSeconds: Type.Optional(Type.Number({ minimum: 0 })),
   thread: Type.Optional(Type.Boolean()),
   mode: optionalStringEnum(SUBAGENT_SPAWN_MODES),
   cleanup: optionalStringEnum(["delete", "keep"] as const),
@@ -117,6 +119,22 @@ export function createSessionsSpawnTool(
         typeof timeoutSecondsCandidate === "number" && Number.isFinite(timeoutSecondsCandidate)
           ? Math.max(0, Math.floor(timeoutSecondsCandidate))
           : undefined;
+      const stallNudgeAfterSecondsCandidate =
+        typeof params.stallNudgeAfterSeconds === "number"
+          ? params.stallNudgeAfterSeconds
+          : undefined;
+      const stallNudgeAfterSeconds =
+        typeof stallNudgeAfterSecondsCandidate === "number" &&
+        Number.isFinite(stallNudgeAfterSecondsCandidate)
+          ? Math.max(0, Math.floor(stallNudgeAfterSecondsCandidate))
+          : undefined;
+      const stallKillAfterSecondsCandidate =
+        typeof params.stallKillAfterSeconds === "number" ? params.stallKillAfterSeconds : undefined;
+      const stallKillAfterSeconds =
+        typeof stallKillAfterSecondsCandidate === "number" &&
+        Number.isFinite(stallKillAfterSecondsCandidate)
+          ? Math.max(0, Math.floor(stallKillAfterSecondsCandidate))
+          : undefined;
       const thread = params.thread === true;
       const attachments = Array.isArray(params.attachments)
         ? (params.attachments as Array<{
@@ -181,6 +199,8 @@ export function createSessionsSpawnTool(
           model: modelOverride,
           thinking: thinkingOverrideRaw,
           runTimeoutSeconds,
+          stallNudgeAfterSeconds,
+          stallKillAfterSeconds,
           thread,
           mode,
           cleanup,

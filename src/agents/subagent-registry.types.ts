@@ -55,4 +55,12 @@ export type SubagentRunRecord = {
   attachmentsDir?: string;
   attachmentsRootDir?: string;
   retainAttachmentsOnKeep?: boolean;
+  /** Timestamp of the last tool call activity (start or end). Initialized to createdAt. */
+  lastToolCallAt?: number;
+  /** Timestamp when a stall nudge was delivered. Kill timer starts from this. */
+  stallNudgedAt?: number;
+  /** Resolved stall nudge threshold in seconds (0 = disabled). */
+  stallNudgeAfterSeconds?: number;
+  /** Resolved stall kill threshold in seconds (0 = disabled). */
+  stallKillAfterSeconds?: number;
 };
