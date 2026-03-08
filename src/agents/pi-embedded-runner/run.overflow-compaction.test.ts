@@ -132,6 +132,140 @@ describe("runEmbeddedPiAgent overflow compaction trigger routing", () => {
     expect(result.meta.error?.kind).toBe("context_overflow");
   });
 
+  it("returns compaction notice when post-compaction retry produces empty payloads", async () => {
+    const overflowError = makeOverflowError();
+    // First attempt: overflow
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+      makeAttemptResult({ promptError: overflowError }),
+    );
+    // Compaction succeeds
+    mockedCompactDirect.mockResolvedValueOnce(
+      makeCompactionSuccess({
+        summary: "Compacted",
+        firstKeptEntryId: "entry-1",
+        tokensBefore: 150000,
+      }),
+    );
+    // Retry after compaction: no assistant text (empty payloads)
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+      makeAttemptResult({ promptError: null, assistantTexts: [] }),
+    );
+
+    const result = await runEmbeddedPiAgent(overflowBaseRunParams);
+
+    expect(result.payloads).toHaveLength(1);
+    expect(result.payloads?.[0]?.isError).toBe(true);
+    expect(result.payloads?.[0]?.text).toContain("compacted");
+  });
+
+  it("skips compaction notice when messaging tool already delivered a response", async () => {
+    const overflowError = makeOverflowError();
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+      makeAttemptResult({ promptError: overflowError }),
+    );
+    mockedCompactDirect.mockResolvedValueOnce(
+      makeCompactionSuccess({
+        summary: "Compacted",
+        firstKeptEntryId: "entry-1",
+        tokensBefore: 150000,
+      }),
+    );
+    // Retry: no assistant text but messaging tool sent a response
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+      makeAttemptResult({
+        promptError: null,
+        assistantTexts: [],
+        didSendViaMessagingTool: true,
+      }),
+    );
+
+    const result = await runEmbeddedPiAgent(overflowBaseRunParams);
+
+    // Should NOT return compaction notice since messaging tool already handled it
+    expect(result.payloads).toBeUndefined();
+  });
+
+  it("skips compaction notice when run was aborted", async () => {
+    const overflowError = makeOverflowError();
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+      makeAttemptResult({ promptError: overflowError }),
+    );
+    mockedCompactDirect.mockResolvedValueOnce(
+      makeCompactionSuccess({
+        summary: "Compacted",
+        firstKeptEntryId: "entry-1",
+        tokensBefore: 150000,
+      }),
+    );
+    // Retry: aborted with no assistant text
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+      makeAttemptResult({
+        promptError: null,
+        assistantTexts: [],
+        aborted: true,
+      }),
+    );
+
+    const result = await runEmbeddedPiAgent(overflowBaseRunParams);
+
+    // Should NOT return compaction notice since run was cancelled
+    expect(result.payloads).toBeUndefined();
+  });
+
+  it("skips compaction notice when messaging tool delivered media only", async () => {
+    const overflowError = makeOverflowError();
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+      makeAttemptResult({ promptError: overflowError }),
+    );
+    mockedCompactDirect.mockResolvedValueOnce(
+      makeCompactionSuccess({
+        summary: "Compacted",
+        firstKeptEntryId: "entry-1",
+        tokensBefore: 150000,
+      }),
+    );
+    // Retry: no assistant text, didSendViaMessagingTool=false, but media was sent
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+      makeAttemptResult({
+        promptError: null,
+        assistantTexts: [],
+        didSendViaMessagingTool: false,
+        messagingToolSentMediaUrls: ["https://example.com/image.png"],
+      }),
+    );
+
+    const result = await runEmbeddedPiAgent(overflowBaseRunParams);
+
+    // Should NOT return compaction notice since media was already delivered
+    expect(result.payloads).toBeUndefined();
+  });
+
+  it("skips compaction notice when assistant intentionally replied NO_REPLY", async () => {
+    const overflowError = makeOverflowError();
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+      makeAttemptResult({ promptError: overflowError }),
+    );
+    mockedCompactDirect.mockResolvedValueOnce(
+      makeCompactionSuccess({
+        summary: "Compacted",
+        firstKeptEntryId: "entry-1",
+        tokensBefore: 150000,
+      }),
+    );
+    // Retry: assistant intentionally said NO_REPLY (heartbeat/selective-reply)
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+      makeAttemptResult({
+        promptError: null,
+        assistantTexts: ["NO_REPLY"],
+      }),
+    );
+
+    const result = await runEmbeddedPiAgent(overflowBaseRunParams);
+
+    // Should NOT return compaction notice — assistant intentionally stayed silent
+    expect(result.payloads).toBeUndefined();
+  });
+
   it("returns retry_limit when repeated retries never converge", async () => {
     mockedRunEmbeddedAttempt.mockClear();
     mockedCompactDirect.mockClear();
