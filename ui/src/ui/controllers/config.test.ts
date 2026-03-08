@@ -2,6 +2,8 @@ import { describe, expect, it, vi } from "vitest";
 import {
   applyConfigSnapshot,
   applyConfig,
+  ensureAgentConfigEntry,
+  findAgentConfigEntryIndex,
   runUpdate,
   saveConfig,
   updateConfigFormValue,
@@ -143,6 +145,68 @@ describe("updateConfigFormValue", () => {
     expect(state.configRaw).toBe(
       '{\n  "gateway": {\n    "mode": "local",\n    "port": 18789\n  }\n}\n',
     );
+  });
+});
+
+describe("agent config helpers", () => {
+  it("finds explicit agent entries", () => {
+    expect(
+      findAgentConfigEntryIndex(
+        {
+          agents: {
+            list: [{ id: "main" }, { id: "assistant" }],
+          },
+        },
+        "assistant",
+      ),
+    ).toBe(1);
+  });
+
+  it("creates an agent override entry when editing an inherited agent", () => {
+    const state = createState();
+    state.configSnapshot = {
+      config: {
+        agents: {
+          defaults: { model: "openai/gpt-5" },
+        },
+        tools: { profile: "messaging" },
+      },
+      valid: true,
+      issues: [],
+      raw: "{\n}\n",
+    };
+
+    const index = ensureAgentConfigEntry(state, "main");
+
+    expect(index).toBe(0);
+    expect(state.configFormDirty).toBe(true);
+    expect(state.configForm).toEqual({
+      agents: {
+        defaults: { model: "openai/gpt-5" },
+        list: [{ id: "main" }],
+      },
+      tools: { profile: "messaging" },
+    });
+  });
+
+  it("reuses the existing agent entry instead of duplicating it", () => {
+    const state = createState();
+    state.configSnapshot = {
+      config: {
+        agents: {
+          list: [{ id: "main", model: "openai/gpt-5" }],
+        },
+      },
+      valid: true,
+      issues: [],
+      raw: "{\n}\n",
+    };
+
+    const index = ensureAgentConfigEntry(state, "main");
+
+    expect(index).toBe(0);
+    expect(state.configFormDirty).toBe(false);
+    expect(state.configForm).toBeNull();
   });
 });
 
