@@ -1810,20 +1810,20 @@ export async function runEmbeddedAttempt(
             await params.onBlockReplyFlush();
           }
 
-          await waitForCompactionRetryWithAggregateTimeout({
+          const compactionRetryWait = await waitForCompactionRetryWithAggregateTimeout({
             waitForCompactionRetry,
             abortable,
             aggregateTimeoutMs: COMPACTION_RETRY_AGGREGATE_TIMEOUT_MS,
-            onTimeout: () => {
-              timedOutDuringCompaction = true;
-              if (!isProbeSession) {
-                log.warn(
-                  `compaction retry aggregate timeout (${COMPACTION_RETRY_AGGREGATE_TIMEOUT_MS}ms): ` +
-                    `proceeding with pre-compaction state runId=${params.runId} sessionId=${params.sessionId}`,
-                );
-              }
-            },
           });
+          if (compactionRetryWait.timedOut) {
+            timedOutDuringCompaction = true;
+            if (!isProbeSession) {
+              log.warn(
+                `compaction retry aggregate timeout (${COMPACTION_RETRY_AGGREGATE_TIMEOUT_MS}ms): ` +
+                  `proceeding with pre-compaction state runId=${params.runId} sessionId=${params.sessionId}`,
+              );
+            }
+          }
         } catch (err) {
           if (isRunnerAbortError(err)) {
             if (!promptError) {
