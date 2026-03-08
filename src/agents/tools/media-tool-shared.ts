@@ -1,6 +1,8 @@
+import path from "node:path";
 import { type Api, type Model } from "@mariozechner/pi-ai";
 import type { OpenClawConfig } from "../../config/config.js";
 import { getDefaultLocalRoots } from "../../web/media.js";
+import type { ToolFsPolicy } from "../tool-fs-policy.js";
 import type { ImageModelConfig } from "./image-tool.helpers.js";
 import { getApiKeyForModel, normalizeWorkspaceDir, requireApiKey } from "./tool-runtime.helpers.js";
 
@@ -36,7 +38,60 @@ export function applyImageModelConfigDefaults(
   };
 }
 
-import type { ToolFsPolicy } from "../tool-fs-policy.js";
+function uniqueNormalized(paths: string[]): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const candidate of paths) {
+    const normalized = path.resolve(candidate);
+    if (!seen.has(normalized)) {
+      seen.add(normalized);
+      out.push(normalized);
+    }
+  }
+  return out;
+}
+
+function globStaticPrefix(pattern: string): string {
+  const normalized = pattern.replace(/\\/g, "/");
+  const segments = normalized.split("/");
+  const out: string[] = [];
+  for (const segment of segments) {
+    if (!segment || segment.includes("*") || segment.includes("?") || segment.includes("[")) {
+      break;
+    }
+    out.push(segment);
+  }
+  return out.join("/");
+}
+
+function resolvePolicyRoots(
+  entries: string[] | undefined,
+  workspaceDir: string | undefined,
+): string[] {
+  if (!entries || entries.length === 0) {
+    return [];
+  }
+
+  const roots: string[] = [];
+  for (const entry of entries) {
+    if (!entry || !entry.trim()) {
+      continue;
+    }
+
+    const trimmed = entry.trim();
+    const base = globStaticPrefix(trimmed);
+    if (path.isAbsolute(trimmed)) {
+      roots.push(base ? base : trimmed);
+      continue;
+    }
+
+    if (workspaceDir) {
+      roots.push(path.join(workspaceDir, base || "."));
+    }
+  }
+
+  return uniqueNormalized(roots);
+}
 
 export function resolveMediaToolLocalRoots(
   workspaceDirRaw: string | undefined,
@@ -50,15 +105,34 @@ export function resolveMediaToolLocalRoots(
   }
 
   const defaultRoots = getDefaultLocalRoots();
-  const allCandidates = workspaceDir ? [...defaultRoots, workspaceDir] : defaultRoots;
+  const allCandidates = uniqueNormalized(
+    workspaceDir ? [...defaultRoots, workspaceDir] : defaultRoots,
+  );
 
-  // `allowedPaths`/`denyPaths` enforcement is async and happens in guarded file access paths.
-  // Keep local-root resolution deterministic/synchronous and avoid false security checks.
-  if (policy?.allowedPaths?.length || policy?.denyPaths?.length) {
-    return Array.from(new Set(allCandidates));
+  // Enforce policy consistently for media loaders by narrowing local roots.
+  if (policy?.allowedPaths?.length) {
+    const allowedRoots = resolvePolicyRoots(policy.allowedPaths, workspaceDir);
+    if (allowedRoots.length > 0) {
+      return allowedRoots;
+    }
+    return workspaceDir ? [workspaceDir] : [];
   }
 
-  return Array.from(new Set(allCandidates));
+  if (policy?.denyPaths?.length) {
+    const deniedRoots = resolvePolicyRoots(policy.denyPaths, workspaceDir);
+    if (deniedRoots.length === 0) {
+      return allCandidates;
+    }
+
+    return allCandidates.filter(
+      (candidate) =>
+        !deniedRoots.some(
+          (deny) => candidate === deny || candidate.startsWith(`${deny}${path.sep}`),
+        ),
+    );
+  }
+
+  return allCandidates;
 }
 
 export function resolvePromptAndModelOverride(

@@ -71,9 +71,10 @@ export async function checkPathGuardStrict(
   // Helper to check if a path matches a policy entry (literal path or glob).
   const normalizedRealPath = toPosixPath(realPath);
 
-  const matchesEntry = (entry: string): boolean => {
+  const matchesEntry = async (entry: string): Promise<boolean> => {
     if (path.isAbsolute(entry)) {
-      const normalizedEntry = toPosixPath(path.resolve(entry));
+      const canonicalEntry = await resolveRealPathStrict(entry);
+      const normalizedEntry = toPosixPath(canonicalEntry);
       return (
         normalizedRealPath === normalizedEntry || isPathInside(normalizedEntry, normalizedRealPath)
       );
@@ -97,7 +98,7 @@ export async function checkPathGuardStrict(
   // 2) Deny list (takes precedence)
   if (policy.denyPaths && policy.denyPaths.length > 0) {
     for (const denyEntry of policy.denyPaths) {
-      if (matchesEntry(denyEntry)) {
+      if (await matchesEntry(denyEntry)) {
         throw new PathGuardError(
           `PathGuard security violation: Access to path "${requestedPath}" is explicitly denied by pattern "${denyEntry}".`,
         );
@@ -109,7 +110,7 @@ export async function checkPathGuardStrict(
   if (policy.allowedPaths && policy.allowedPaths.length > 0) {
     let allowed = false;
     for (const allowEntry of policy.allowedPaths) {
-      if (matchesEntry(allowEntry)) {
+      if (await matchesEntry(allowEntry)) {
         allowed = true;
         break;
       }
