@@ -2919,27 +2919,27 @@ Most commands must be sent as a **standalone** message that starts with `/`, but
 OpenClaw blocks **cross-provider** messaging by default. If a tool call is bound
 to Telegram, it won't send to Discord unless you explicitly allow it.
 
-Enable cross-provider messaging for the agent:
+Enable cross-provider messaging in the global tools config:
 
 ```json5
 {
-  agents: {
-    defaults: {
-      tools: {
-        message: {
-          crossContext: {
-            allowAcrossProviders: true,
-            marker: { enabled: true, prefix: "[from {channel}] " },
-          },
-        },
+  tools: {
+    message: {
+      crossContext: {
+        allowAcrossProviders: true,
+        marker: { enabled: true, prefix: "[from {channel}] " },
       },
     },
   },
 }
 ```
 
-Restart the gateway after editing config. If you only want this for a single
-agent, set it under `agents.list[].tools.message` instead.
+Restart the gateway after editing config.
+
+`crossContext` is configured under `tools.message`.
+Agent-scoped paths like `agents.defaults.tools.message` and
+`agents.list[].tools.message` are not valid config keys, so they will be
+rejected or ignored.
 
 ### Why does it feel like the bot ignores rapidfire messages
 
