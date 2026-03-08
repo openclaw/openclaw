@@ -423,7 +423,7 @@ export async function runReplyAgent(params: {
     // stopped, so the enqueue does not set didStream() = true and cause
     // buildReplyPayloads to discard the real assistant reply.  We still apply a
     // timeout so the notice cannot stall the run indefinitely.
-    if (autoCompactionCompleted && opts?.onBlockReply) {
+    if (autoCompactionCompleted && blockStreamingEnabled && opts?.onBlockReply) {
       const verboseEnabled = resolvedVerboseLevel !== "off";
       const completionText = verboseEnabled
         ? `🧹 Auto-compaction complete.`
