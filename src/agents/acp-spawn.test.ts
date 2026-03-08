@@ -310,6 +310,33 @@ describe("spawnAcpDirect", () => {
     );
   });
 
+  it("does not inline delivery for fresh oneshot ACP runs", async () => {
+    const result = await spawnAcpDirect(
+      {
+        task: "Investigate flaky tests",
+        agentId: "codex",
+        mode: "run",
+      },
+      {
+        agentSessionKey: "agent:main:telegram:direct:6098642967",
+        agentChannel: "telegram",
+        agentAccountId: "default",
+        agentTo: "telegram:6098642967",
+        agentThreadId: "1",
+      },
+    );
+
+    expect(result.status).toBe("accepted");
+    expect(result.mode).toBe("run");
+    const agentCall = hoisted.callGatewayMock.mock.calls
+      .map((call: unknown[]) => call[0] as { method?: string; params?: Record<string, unknown> })
+      .find((request) => request.method === "agent");
+    expect(agentCall?.params?.deliver).toBe(false);
+    expect(agentCall?.params?.channel).toBeUndefined();
+    expect(agentCall?.params?.to).toBeUndefined();
+    expect(agentCall?.params?.threadId).toBeUndefined();
+  });
+
   it("includes cwd in ACP thread intro banner when provided at spawn time", async () => {
     const result = await spawnAcpDirect(
       {
@@ -538,6 +565,32 @@ describe("spawnAcpDirect", () => {
     expect(typeof agentCallOrder).toBe("number");
     expect(typeof notifyOrder[0]).toBe("number");
     expect(notifyOrder[0] > agentCallOrder).toBe(true);
+  });
+
+  it("keeps inline delivery for thread-bound ACP session mode", async () => {
+    const result = await spawnAcpDirect(
+      {
+        task: "Investigate flaky tests",
+        agentId: "codex",
+        mode: "session",
+        thread: true,
+      },
+      {
+        agentSessionKey: "agent:main:telegram:group:-1003342490704:topic:2",
+        agentChannel: "telegram",
+        agentAccountId: "default",
+        agentTo: "telegram:-1003342490704",
+        agentThreadId: "2",
+      },
+    );
+
+    expect(result.status).toBe("accepted");
+    expect(result.mode).toBe("session");
+    const agentCall = hoisted.callGatewayMock.mock.calls
+      .map((call: unknown[]) => call[0] as { method?: string; params?: Record<string, unknown> })
+      .find((request) => request.method === "agent");
+    expect(agentCall?.params?.deliver).toBe(true);
+    expect(agentCall?.params?.channel).toBe("telegram");
   });
 
   it("disposes pre-registered parent relay when initial ACP dispatch fails", async () => {
