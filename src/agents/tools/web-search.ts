@@ -430,13 +430,21 @@ function resolveSearchEnabled(params: { search?: WebSearchConfig; sandboxed?: bo
 }
 
 function resolveSearchApiKey(search?: WebSearchConfig): string | undefined {
-  const fromConfigRaw =
-    search && "apiKey" in search
-      ? normalizeResolvedSecretInputString({
-          value: search.apiKey,
-          path: "tools.web.search.apiKey",
-        })
-      : undefined;
+  let fromConfigRaw: string | undefined;
+  if (search && "apiKey" in search) {
+    try {
+      fromConfigRaw = normalizeResolvedSecretInputString({
+        value: search.apiKey,
+        path: "tools.web.search.apiKey",
+      });
+    } catch {
+      // If secret input cannot be resolved (e.g., missing refValue/defaults in runtime),
+      // fall back to environment variable instead of failing.
+      // This handles cases where config was saved with secret input format but
+      // the gateway runtime cannot resolve it (e.g., different env context).
+      fromConfigRaw = undefined;
+    }
+  }
   const fromConfig = normalizeSecretInput(fromConfigRaw);
   const fromEnv = normalizeSecretInput(process.env.BRAVE_API_KEY);
   return fromConfig || fromEnv || undefined;
