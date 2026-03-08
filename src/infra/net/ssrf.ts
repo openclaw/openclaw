@@ -12,6 +12,7 @@ import {
   parseCanonicalIpAddress,
   parseLooseIpAddress,
 } from "../../shared/net/ip.js";
+import { DnsBlocklistError, isDomainBlocked } from "./domain-filter.js";
 import { normalizeHostname } from "./hostname.js";
 
 type LookupCallback = (
@@ -280,6 +281,11 @@ export async function resolvePinnedHostnameWithPolicy(
   const normalized = normalizeHostname(hostname);
   if (!normalized) {
     throw new Error("Invalid hostname");
+  }
+
+  // DNS blocklist check (security floor — fires before all other guards)
+  if (isDomainBlocked(normalized)) {
+    throw new DnsBlocklistError(normalized);
   }
 
   const allowPrivateNetwork = isPrivateNetworkAllowedByPolicy(params.policy);
