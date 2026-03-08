@@ -241,6 +241,21 @@ describe("failover-error", () => {
     ).toBe("rate_limit");
   });
 
+  it("keeps plan-upgrade 402 wrappers aligned with status-split billing payloads", () => {
+    const message = "Your usage limit has been reached. Please upgrade your plan.";
+    expect(
+      resolveFailoverReasonFromError({
+        message: `HTTP 402 Payment Required: ${message}`,
+      }),
+    ).toBe("billing");
+    expect(
+      resolveFailoverReasonFromError({
+        status: 402,
+        message,
+      }),
+    ).toBe("billing");
+  });
+
   it("infers format errors from error messages", () => {
     expect(
       resolveFailoverReasonFromError({

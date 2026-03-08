@@ -219,6 +219,12 @@ const BILLING_402_HINTS = [
   "add more credits",
   "top up",
 ] as const;
+const BILLING_402_PLAN_HINTS = [
+  "upgrade your plan",
+  "upgrade plan",
+  "current plan",
+  "subscription",
+] as const;
 
 const PERIODIC_402_HINTS = ["daily", "weekly", "monthly"] as const;
 const RETRYABLE_402_RETRY_HINTS = ["try again", "retry", "temporary", "cooldown"] as const;
@@ -242,6 +248,7 @@ function includesAnyHint(text: string, hints: readonly string[]): boolean {
 function hasExplicit402BillingSignal(text: string): boolean {
   return (
     includesAnyHint(text, BILLING_402_HINTS) ||
+    (includesAnyHint(text, BILLING_402_PLAN_HINTS) && text.includes("limit")) ||
     text.includes("billing hard limit") ||
     text.includes("hard limit reached") ||
     (text.includes("maximum allowed") && text.includes("limit"))
