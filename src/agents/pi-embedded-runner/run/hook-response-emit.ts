@@ -108,14 +108,9 @@ export async function applyBeforeResponseEmitHook(
 ): Promise<ApplyBeforeResponseEmitResult | undefined> {
   const { hookRunner, agentCtx, assistantTexts, messagesSnapshot, activeSession, channel } = params;
 
-  // Use assistantTexts (the streamed text accumulator) as the source of truth
-  // so content === allContent[allContent.length - 1] always holds.
-  // Extracting from the session message can diverge when the final assistant
-  // message is tool-call-only (extractAssistantText returns "").
   if (assistantTexts.length === 0) {
     return undefined;
   }
-  const content = assistantTexts[assistantTexts.length - 1];
 
   // Determine how many text-bearing assistant turns to scope.
   //
@@ -143,6 +138,15 @@ export async function applyBeforeResponseEmitHook(
   const sessionAllContent = runMessages
     .filter((m) => m.role === "assistant" && extractAssistantText(m).length > 0)
     .map((m) => extractAssistantText(m));
+
+  // Source content from consolidated session text (not raw assistantTexts).
+  // In block-reply mode, assistantTexts[last] is just the final chunk, but
+  // plugins need the full final-turn text for PII scanning. This maintains
+  // the invariant: content === allContent[allContent.length - 1].
+  const content =
+    sessionAllContent.length > 0
+      ? sessionAllContent[sessionAllContent.length - 1]
+      : assistantTexts[assistantTexts.length - 1]; // fallback for empty runMessages
 
   const emitResult = await hookRunner.runBeforeResponseEmit(
     {
