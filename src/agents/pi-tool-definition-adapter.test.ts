@@ -1,7 +1,7 @@
 import type { AgentTool } from "@mariozechner/pi-agent-core";
 import { Type } from "@sinclair/typebox";
 import { describe, expect, it } from "vitest";
-import { toToolDefinitions } from "./pi-tool-definition-adapter.js";
+import { toClientToolDefinitions, toToolDefinitions } from "./pi-tool-definition-adapter.js";
 
 type ToolExecute = ReturnType<typeof toToolDefinitions>[number]["execute"];
 const extensionContext = {} as Parameters<ToolExecute>[4];
@@ -96,5 +96,49 @@ describe("pi tool definition adapter", () => {
     });
     expect(result.content[0]).toMatchObject({ type: "text" });
     expect((result.content[0] as { text?: string }).text).toContain('"count"');
+  });
+
+  it("parses stringified tool args from glm-5 (internal tools)", async () => {
+    let receivedParams: unknown;
+    const tool = {
+      name: "test_tool",
+      label: "Test Tool",
+      description: "captures params",
+      parameters: Type.Object({ key: Type.String() }),
+      execute: async (_callId: string, params: unknown) => {
+        receivedParams = params;
+        return { content: [{ type: "text" as const, text: "ok" }], details: {} };
+      },
+    } satisfies AgentTool;
+
+    const defs = toToolDefinitions([tool]);
+    const def = defs[0];
+    // Simulate GLM-5: the SDK passes args as a JSON string instead of an object
+    const stringifiedArgs = JSON.stringify({ key: "value" });
+    await def.execute("call_glm5", stringifiedArgs, undefined, undefined, extensionContext);
+    expect(receivedParams).toEqual({ key: "value" });
+  });
+
+  it("parses stringified tool args from glm-5 (client tools)", async () => {
+    let capturedParams: Record<string, unknown> | undefined;
+    const clientTools = [
+      {
+        type: "function" as const,
+        function: {
+          name: "get_weather",
+          description: "gets weather",
+          parameters: { type: "object", properties: { city: { type: "string" } } },
+        },
+      },
+    ];
+
+    const defs = toClientToolDefinitions(clientTools, (name, params) => {
+      capturedParams = params;
+    });
+    const def = defs[0];
+    // Simulate GLM-5: args arrive as a JSON string
+    const stringifiedArgs = JSON.stringify({ city: "Seattle" });
+    await def.execute("call_glm5_client", stringifiedArgs, undefined, undefined, extensionContext);
+    expect(capturedParams).toEqual({ city: "Seattle" });
   });
 });
