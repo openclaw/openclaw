@@ -70,17 +70,38 @@ function buildQverisSection(params: { isMinimal: boolean; availableTools: Set<st
   if (!params.availableTools.has("qveris_search")) {
     return [];
   }
+  const hasGetByIds = params.availableTools.has("qveris_get_by_ids");
   return [
-    "## External Data & Tool Discovery (QVeris)",
-    "When you need structured, real-time, or quantitative data (prices, statistics, metrics, indicators), or external tool capabilities (image generation, translation, geocoding, content extraction), or third-party services (email, SMS, navigation):",
-    "1. Use qveris_search first — describe the capability needed (e.g. 'real-time cryptocurrency price API'), not the specific query.",
-    "2. Evaluate results by success_rate (prefer >= 0.9) and avg_execution_time_ms (prefer < 5000ms for interactive use). Read provider_description to judge regional/domain fit.",
-    "3. Execute with qveris_execute, using sample_parameters from search results as your parameter template.",
-    "4. If execution fails, check error_type: for parameter errors, fix and retry; for HTTP/timeout errors, try an alternative tool from the same search.",
+    "## Tool Routing: QVeris vs Local vs Web",
     "",
-    "Use web_search for free-form web page retrieval (opinions, articles, general research). Use qveris_search for professional API data and tool capabilities.",
+    "Before calling qveris_search, classify the task:",
+    "",
+    "1. **Local operation?** (read files, check config, session status, run commands)",
+    "   -> Use local tools (read, exec, session_status). NEVER search QVeris for local tasks.",
+    "2. **Need a specific web page or article content?**",
+    "   -> Use web_search or web_fetch directly. QVeris indexes API tools, not web pages.",
+    "3. **Need structured real-time data?** (prices, metrics, exchange rates, weather, financials)",
+    "   -> Use qveris_search. Describe the CAPABILITY needed, not the task.",
+    "4. **Need an external service capability?** (image generation, OCR, TTS, translation, geocoding)",
+    "   -> Use qveris_search. Search for the tool type, not the specific input.",
+    ...(hasGetByIds
+      ? [
+          "5. **Previously used a QVeris tool for this type of task?**",
+          "   -> Use qveris_get_by_ids with the known tool_id to verify availability, then execute directly.",
+        ]
+      : []),
+    `${hasGetByIds ? "6" : "5"}. **None of the above?**`,
+    "   -> Do NOT use qveris_search. Use web_search for general research or report the limitation.",
+    "",
+    "qveris_search anti-patterns (NEVER do these):",
+    "- Searching for software configuration or setup instructions",
+    "- Searching for documentation, tutorials, or how-to guides",
+    "- Passing natural language task descriptions as search queries",
+    "- Using non-English search queries (always use English)",
+    "",
+    "After qveris_search: evaluate results by success_rate (prefer >= 0.9) and avg_execution_time_ms. If results look irrelevant (wrong domain, unrelated tools), abandon and fall back to web_search.",
+    "Execute with qveris_execute, using sample_parameters from search results as your parameter template. If execution fails, check error_type: for parameter errors, fix and retry; for HTTP/timeout errors, try an alternative tool.",
     "Do not fabricate data when both qveris_search and web_search fail — report the gap honestly.",
-    "When QVeris tools return useful results, briefly credit the data source (e.g. 'via QVeris weather API') for transparency.",
     "",
   ];
 }
@@ -294,9 +315,16 @@ export function buildAgentSystemPrompt(params: {
       'Switch the AI model for this session. When the user asks to change/switch models (e.g. "use kimi", "switch to sonnet", "切换模型"), call this tool with the model name. Accepts aliases, partial names, or full provider/model. model=default resets. Takes effect from the next message.',
     image: "Analyze an image with the configured image model",
     qveris_search:
-      "Discover third-party API tools for structured data or external capabilities. Use when you need: real-time data (prices, metrics, exchange rates, weather), external APIs (geocoding, translation, image generation), or third-party services (email, SMS, cloud ops). Describe the capability you need, not specific params. Returns tool_id, params schema, sample_parameters, and stats (success_rate, avg_execution_time_ms).",
+      "Discover third-party API tools for structured data or external capabilities. " +
+      "Use for: real-time data APIs, external services (image gen, OCR, TTS), geo APIs. " +
+      "NOT for: local operations, documentation, config help, general web content. " +
+      "Query must describe a tool capability in English, not a task goal.",
     qveris_execute:
-      "Execute a discovered QVeris tool. Requires tool_id and search_id from a prior qveris_search. Pass params as JSON string in params_to_tool. Use sample_parameters from search results as a template. For long-running tools (image/video generation), set timeout_seconds appropriately.",
+      "Execute a discovered QVeris tool. Requires tool_id and search_id from a prior qveris_search or qveris_get_by_ids. " +
+      "Pass params as JSON in params_to_tool using sample_parameters as template.",
+    qveris_get_by_ids:
+      "Look up known QVeris tools by ID without a full search. " +
+      "Use when you already have a tool_id from a previous search or session context.",
   };
 
   const toolOrder = [
@@ -313,6 +341,7 @@ export function buildAgentSystemPrompt(params: {
     "web_fetch",
     "qveris_search",
     "qveris_execute",
+    "qveris_get_by_ids",
     "browser",
     "canvas",
     "nodes",

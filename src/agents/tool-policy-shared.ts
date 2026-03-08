@@ -14,7 +14,7 @@ const TOOL_NAME_ALIASES: Record<string, string> = {
   "apply-patch": "apply_patch",
 };
 
-const QVERIS_TOOLS = ["qveris_search", "qveris_execute"] as const;
+const QVERIS_TOOLS = ["qveris_search", "qveris_execute", "qveris_get_by_ids"] as const;
 
 export const TOOL_GROUPS: Record<string, string[]> = {
   ...CORE_TOOL_GROUPS,

@@ -257,6 +257,14 @@ const CORE_TOOL_DEFINITIONS: CoreToolDefinition[] = [
     profiles: ["coding", "messaging"],
     includeInOpenClawGroup: true,
   },
+  {
+    id: "qveris_get_by_ids",
+    label: "qveris_get_by_ids",
+    description: "Look up known third-party tools by ID",
+    sectionId: "web",
+    profiles: ["coding", "messaging"],
+    includeInOpenClawGroup: true,
+  },
 ];
 
 const CORE_TOOL_BY_ID = new Map<string, CoreToolDefinition>(

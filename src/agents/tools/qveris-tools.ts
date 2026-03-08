@@ -307,6 +307,123 @@ async function qverisExecute(params: {
   }
 }
 
+/** QVeris get-by-ids API response */
+interface QverisGetByIdsResponse {
+  tools: QverisSearchResultTool[];
+}
+
+async function qverisGetByIds(params: {
+  toolIds: string[];
+  sessionId: string;
+  apiKey: string;
+  baseUrl: string;
+  timeoutSeconds: number;
+}): Promise<QverisGetByIdsResponse> {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), params.timeoutSeconds * 1000);
+
+  try {
+    const res = await fetch(`${params.baseUrl}/tools/get-by-ids`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${params.apiKey}`,
+      },
+      body: JSON.stringify({
+        tool_ids: params.toolIds,
+        session_id: params.sessionId,
+      }),
+      signal: controller.signal,
+    });
+
+    if (!res.ok) {
+      const detail = await res.text().catch(() => "");
+      throw new Error(`QVeris get-by-ids failed (${res.status}): ${detail || res.statusText}`);
+    }
+
+    return (await res.json()) as QverisGetByIdsResponse;
+  } finally {
+    clearTimeout(timeoutId);
+  }
+}
+
+// ============================================================================
+// Session Tool Rolodex — remembers successfully executed tools for the session
+// ============================================================================
+
+interface RolodexEntry {
+  toolId: string;
+  name: string;
+  description: string;
+  successCount: number;
+  lastUsedAt: number;
+  discoveryQuery: string;
+}
+
+function makeToolRolodex() {
+  const store = new Map<string, RolodexEntry>();
+
+  function record(
+    toolId: string,
+    meta: { name: string; description: string; discoveryQuery: string },
+  ) {
+    const existing = store.get(toolId);
+    if (existing) {
+      existing.successCount += 1;
+      existing.lastUsedAt = Date.now();
+    } else {
+      store.set(toolId, {
+        toolId,
+        name: meta.name,
+        description: meta.description,
+        successCount: 1,
+        lastUsedAt: Date.now(),
+        discoveryQuery: meta.discoveryQuery,
+      });
+    }
+  }
+
+  function lookup(toolId: string): RolodexEntry | undefined {
+    return store.get(toolId);
+  }
+
+  function getSummary(): Array<{ tool_id: string; name: string; uses: number }> {
+    return Array.from(store.values()).map((e) => ({
+      tool_id: e.toolId,
+      name: e.name,
+      uses: e.successCount,
+    }));
+  }
+
+  return { record, lookup, getSummary };
+}
+
+// Track which search returned which tool_id so we can populate rolodex on execute
+interface SearchResultMeta {
+  name: string;
+  description: string;
+  query: string;
+}
+
+function makeSearchResultTracker() {
+  const store = new Map<string, SearchResultMeta>();
+
+  function trackResults(
+    query: string,
+    tools: Array<{ tool_id: string; name: string; description: string }>,
+  ) {
+    for (const tool of tools) {
+      store.set(tool.tool_id, { name: tool.name, description: tool.description, query });
+    }
+  }
+
+  function getMeta(toolId: string): SearchResultMeta | undefined {
+    return store.get(toolId);
+  }
+
+  return { trackResults, getMeta };
+}
+
 // ============================================================================
 // Tool Schemas
 // ============================================================================
@@ -314,7 +431,10 @@ async function qverisExecute(params: {
 const QverisSearchSchema = Type.Object({
   query: Type.String({
     description:
-      "Search query describing the capability of the tool you need. Describe what you want to accomplish, not specific params to pass. Example: 'weather forecast API', 'send email', 'stock prices'.",
+      "Capability-oriented search query in English. " +
+      "GOOD: 'weather forecast API', 'web page content extraction', 'stock price real-time data'. " +
+      "BAD: 'check OpenClaw config', 'how to set up OpenRouter', 'ACP protocol documentation'. " +
+      "Describe the type of API tool you need, not your end task.",
   }),
   limit: Type.Optional(
     Type.Number({
@@ -353,6 +473,14 @@ const QverisExecuteSchema = Type.Object({
   ),
 });
 
+const QverisGetByIdsSchema = Type.Object({
+  tool_ids: Type.String({
+    description:
+      "Comma-separated list of QVeris tool IDs to look up (e.g. 'jina_ai.reader.execute.v1.b2ef8fda,openweathermap.weather.execute.v1'). " +
+      "Use tool IDs from a previous qveris_search or from session context to verify availability and get current parameter schemas.",
+  }),
+});
+
 // ============================================================================
 // Tool Creation
 // ============================================================================
@@ -370,7 +498,6 @@ export function createQverisTools(options?: {
 
   const apiKey = resolveQverisApiKey(config);
   if (!apiKey) {
-    // Return empty array if no API key - tools won't be available
     return [];
   }
 
@@ -380,17 +507,42 @@ export function createQverisTools(options?: {
   const maxResponseSize = resolveMaxResponseSize(config);
   const searchLimit = resolveSearchLimit(config);
 
-  // Session-scoped search cache — avoids redundant API calls within a conversation
   const searchCache = makeSearchCache();
+  const rolodex = makeToolRolodex();
+  const searchTracker = makeSearchResultTracker();
 
-  // Generate a session ID tied to clawdbot session key
   const sessionId = options?.agentSessionKey ?? `clawdbot-${Date.now()}-${randomUUID()}`;
+
+  // Helper: format a QVeris tool for model consumption
+  function formatToolForModel(tool: QverisSearchResultTool) {
+    const entry = rolodex.lookup(tool.tool_id);
+    return {
+      tool_id: tool.tool_id,
+      name: tool.name,
+      description: tool.description,
+      provider_description: tool.provider_description,
+      params: tool.params?.map((p) => ({
+        name: p.name,
+        type: p.type,
+        required: p.required,
+        description: p.description?.en ?? Object.values(p.description ?? {})[0],
+      })),
+      examples: tool.examples?.sample_parameters
+        ? { sample_parameters: tool.examples.sample_parameters }
+        : undefined,
+      stats: tool.stats,
+      ...(entry ? { previously_used: true, session_uses: entry.successCount } : {}),
+    };
+  }
 
   const searchTool: AnyAgentTool = {
     label: "QVeris Search",
     name: "qveris_search",
     description:
-      "Search for available third-party tools using natural language. Returns relevant tools that can help accomplish tasks. Use this to discover tools before executing them with qveris_execute.",
+      "Search for third-party API tools by capability type. " +
+      "Returns tools for: real-time data APIs (prices, weather, metrics), external services (image gen, OCR, TTS, translation), and geo/location APIs. " +
+      "NOT for: local operations, documentation/tutorials, software configuration, or general web content. " +
+      "Describe the TOOL CAPABILITY you need in English (e.g. 'weather forecast API'), not your task goal.",
     parameters: QverisSearchSchema,
     execute: async (_toolCallId, args) => {
       const params = args as Record<string, unknown>;
@@ -398,7 +550,6 @@ export function createQverisTools(options?: {
       const limit = readNumberParam(params, "limit", { integer: true }) ?? searchLimit;
       const normalizedLimit = Math.min(Math.max(1, limit), 100);
 
-      // Check cache first
       const cacheKey = `${query}:${normalizedLimit}`;
       const cached = searchCache.read(cacheKey);
       if (cached) {
@@ -419,28 +570,24 @@ export function createQverisTools(options?: {
         return jsonResult(classifyQverisError(err));
       }
 
-      // Return simplified result for the model
+      // Track search results so the rolodex can be populated on execute
+      searchTracker.trackResults(
+        query,
+        result.results.map((t) => ({
+          tool_id: t.tool_id,
+          name: t.name,
+          description: t.description,
+        })),
+      );
+
+      const knownTools = rolodex.getSummary();
       const payload = jsonResult({
         query: result.query,
         total: result.total,
         search_id: result.search_id,
         elapsed_time_ms: result.elapsed_time_ms,
-        results: result.results.map((tool) => ({
-          tool_id: tool.tool_id,
-          name: tool.name,
-          description: tool.description,
-          provider_description: tool.provider_description,
-          params: tool.params?.map((p) => ({
-            name: p.name,
-            type: p.type,
-            required: p.required,
-            description: p.description?.en ?? Object.values(p.description ?? {})[0],
-          })),
-          examples: tool.examples?.sample_parameters
-            ? { sample_parameters: tool.examples.sample_parameters }
-            : undefined,
-          stats: tool.stats,
-        })),
+        results: result.results.map(formatToolForModel),
+        ...(knownTools.length > 0 ? { session_known_tools: knownTools } : {}),
       });
 
       searchCache.write(cacheKey, payload, DEFAULT_SEARCH_CACHE_TTL_MS);
@@ -452,7 +599,7 @@ export function createQverisTools(options?: {
     label: "QVeris Execute",
     name: "qveris_execute",
     description:
-      "Execute a specific third-party tool with provided parameters. The tool_id and search_id must come from a previous qveris_search call. Pass parameters to the tool through params_to_tool as a JSON string.",
+      "Execute a specific third-party tool with provided parameters. The tool_id and search_id must come from a previous qveris_search or qveris_get_by_ids call. Pass parameters to the tool through params_to_tool as a JSON string.",
     parameters: QverisExecuteSchema,
     execute: async (_toolCallId, args) => {
       const params = args as Record<string, unknown>;
@@ -463,7 +610,6 @@ export function createQverisTools(options?: {
         readNumberParam(params, "max_response_size", { integer: true }) ?? maxResponseSize;
       const timeoutOverride = readNumberParam(params, "timeout_seconds");
 
-      // Parse params_to_tool JSON; return structured error instead of throwing
       let toolParams: Record<string, unknown>;
       try {
         toolParams = JSON.parse(paramsToToolRaw) as Record<string, unknown>;
@@ -493,6 +639,18 @@ export function createQverisTools(options?: {
         return jsonResult(classifyQverisError(err));
       }
 
+      // Record successful executions in the session rolodex
+      if (result.success) {
+        const meta = searchTracker.getMeta(toolId);
+        if (meta) {
+          rolodex.record(toolId, {
+            name: meta.name,
+            description: meta.description,
+            discoveryQuery: meta.query,
+          });
+        }
+      }
+
       return jsonResult({
         execution_id: result.execution_id,
         success: result.success,
@@ -504,7 +662,63 @@ export function createQverisTools(options?: {
     },
   };
 
-  return [searchTool, executeTool];
+  const getByIdsTool: AnyAgentTool = {
+    label: "QVeris Get By IDs",
+    name: "qveris_get_by_ids",
+    description:
+      "Look up known QVeris tools by their IDs without a full search. " +
+      "Use when you already have a tool_id from a previous qveris_search or session context and want to verify availability and get current parameter schemas. " +
+      "Returns tool details including params, sample_parameters, and stats.",
+    parameters: QverisGetByIdsSchema,
+    execute: async (_toolCallId, args) => {
+      const params = args as Record<string, unknown>;
+      const toolIdsRaw = readStringParam(params, "tool_ids", { required: true });
+      const toolIds = toolIdsRaw
+        .split(",")
+        .map((id) => id.trim())
+        .filter(Boolean);
+
+      if (toolIds.length === 0) {
+        return jsonResult({
+          success: false,
+          error_type: "json_parse_error" as const,
+          detail: "No valid tool IDs provided. Pass comma-separated tool IDs.",
+          retry_hint: "Example: 'jina_ai.reader.execute.v1.b2ef8fda'",
+        } satisfies QverisErrorResult);
+      }
+
+      let result: QverisGetByIdsResponse;
+      try {
+        result = await qverisGetByIds({
+          toolIds,
+          sessionId,
+          apiKey,
+          baseUrl,
+          timeoutSeconds: searchTimeoutSeconds,
+        });
+      } catch (err) {
+        return jsonResult(classifyQverisError(err));
+      }
+
+      // Track returned tools so they can be recorded in rolodex on execute
+      searchTracker.trackResults(
+        "(get-by-ids)",
+        result.tools.map((t) => ({
+          tool_id: t.tool_id,
+          name: t.name,
+          description: t.description,
+        })),
+      );
+
+      return jsonResult({
+        tool_ids_requested: toolIds,
+        tools_found: result.tools.length,
+        tools: result.tools.map(formatToolForModel),
+      });
+    },
+  };
+
+  return [searchTool, executeTool, getByIdsTool];
 }
 
 /**
