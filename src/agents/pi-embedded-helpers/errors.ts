@@ -181,6 +181,8 @@ export function isCompactionFailureError(errorMessage?: string): boolean {
 const ERROR_PAYLOAD_PREFIX_RE =
   /^(?:error|api\s*error|apierror|openai\s*error|anthropic\s*error|gateway\s*error)[:\s-]+/i;
 const FINAL_TAG_RE = /<\s*\/?\s*final\s*>/gi;
+const INTERNAL_TOOL_PIPE_TAG_RE = /<\|\s*tool_[a-z0-9_:-]+\s*\|>/gi;
+const FUNCTION_CALLS_TAG_RE = /<\s*\/?\s*function_calls\s*>/gi;
 const ERROR_PREFIX_RE =
   /^(?:error|api\s*error|openai\s*error|anthropic\s*error|gateway\s*error|request failed|failed|exception)[:\s-]+/i;
 const CONTEXT_OVERFLOW_ERROR_HEAD_RE =
@@ -397,6 +399,28 @@ function stripFinalTagsFromText(text: string): string {
     return text;
   }
   return text.replace(FINAL_TAG_RE, "");
+}
+
+function stripInternalToolMarkersFromText(text: string): string {
+  if (!text) {
+    return text;
+  }
+  let removedAny = false;
+  const keptLines = text.split("\n").filter((line) => {
+    const strippedLine = line
+      .replace(INTERNAL_TOOL_PIPE_TAG_RE, "")
+      .replace(FUNCTION_CALLS_TAG_RE, "");
+    const isMarkerOnlyLine = strippedLine.trim().length === 0 && strippedLine !== line;
+    if (isMarkerOnlyLine) {
+      removedAny = true;
+      return false;
+    }
+    return true;
+  });
+  if (!removedAny) {
+    return text;
+  }
+  return keptLines.join("\n").replace(/(?:\r?\n[ \t]*)+$/, "");
 }
 
 function collapseConsecutiveDuplicateBlocks(text: string): string {
@@ -716,7 +740,7 @@ export function sanitizeUserFacingText(text: string, opts?: { errorContext?: boo
     return text;
   }
   const errorContext = opts?.errorContext ?? false;
-  const stripped = stripFinalTagsFromText(text);
+  const stripped = stripInternalToolMarkersFromText(stripFinalTagsFromText(text));
   const trimmed = stripped.trim();
   if (!trimmed) {
     return "";

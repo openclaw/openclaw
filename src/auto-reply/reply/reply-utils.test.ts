@@ -150,6 +150,14 @@ describe("normalizeReplyPayload", () => {
     expect(result!.text).toBe("");
     expect(result!.mediaUrl).toBe("https://example.com/img.png");
   });
+
+  it("suppresses payloads that only contain leaked internal tool markers", () => {
+    const result = normalizeReplyPayload({
+      text: "<|tool_call_result_begin|>\n<function_calls>\n</function_calls>\n<|tool_list_end|>",
+    });
+
+    expect(result).toBeNull();
+  });
 });
 
 describe("typing controller", () => {
