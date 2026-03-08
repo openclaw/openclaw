@@ -566,6 +566,7 @@ export function renderApp(state: AppViewState) {
                 channelsSnapshot: state.channelsSnapshot,
                 channelsLastSuccess: state.channelsLastSuccess,
                 cronLoading: state.cronLoading,
+                agentFileWordWrap: state.agentFileWordWrap,
                 cronStatus: state.cronStatus,
                 cronJobs: state.cronJobs,
                 cronError: state.cronError,
@@ -674,6 +675,9 @@ export function renderApp(state: AppViewState) {
                   const content =
                     state.agentFileDrafts[name] ?? state.agentFileContents[name] ?? "";
                   void saveAgentFile(state, resolvedAgentId, name, content);
+                },
+                onToggleWordWrap: () => {
+                  state.agentFileWordWrap = !state.agentFileWordWrap;
                 },
                 onToolsProfileChange: (agentId, profile, clearAllow) => {
                   const index =
