@@ -61,11 +61,14 @@ final class NotifyOverlayController {
         self.ensureWindow()
         self.hostingView?.rootView = NotifyOverlayView(controller: self)
         let target = self.targetFrame()
-        OverlayPanelFactory.present(
-            window: self.window,
-            isVisible: &self.model.isVisible,
-            target: target)
-        { window in
+        guard let window = self.window else { return }
+        // Avoid passing &model.isVisible as inout — the exclusive modify access
+        // on `model` would overlap with SwiftUI reads triggered by
+        // orderFrontRegardless(), causing a fatal access conflict.
+        if !self.model.isVisible {
+            self.model.isVisible = true
+            OverlayPanelFactory.animatePresent(window: window, from: target.offsetBy(dx: 0, dy: -6), to: target)
+        } else {
             self.updateWindowFrame(animate: true)
             window.orderFrontRegardless()
         }

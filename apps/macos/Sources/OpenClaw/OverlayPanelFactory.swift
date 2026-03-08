@@ -62,26 +62,6 @@ enum OverlayPanelFactory {
     }
 
     @MainActor
-    static func present(
-        window: NSWindow?,
-        isVisible: inout Bool,
-        target: NSRect,
-        startOffsetY: CGFloat = -6,
-        onFirstPresent: (() -> Void)? = nil,
-        onAlreadyVisible: (NSWindow) -> Void)
-    {
-        guard let window else { return }
-        if !isVisible {
-            isVisible = true
-            onFirstPresent?()
-            let start = target.offsetBy(dx: 0, dy: startOffsetY)
-            self.animatePresent(window: window, from: start, to: target)
-        } else {
-            onAlreadyVisible(window)
-        }
-    }
-
-    @MainActor
     static func animateDismiss(
         window: NSWindow,
         offsetX: CGFloat = 6,
