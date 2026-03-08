@@ -405,7 +405,7 @@ export function handleAgentEvent(host: ToolStreamHost, payload?: AgentEventPaylo
     return;
   }
 
-  if (payload.stream !== "tool") {
+  if (payload.stream !== "tool" && payload.stream !== "chat" && payload.stream !== "message") {
     return;
   }
 
@@ -469,4 +469,8 @@ export function handleAgentEvent(host: ToolStreamHost, payload?: AgentEventPaylo
   entry.message = buildToolStreamMessage(entry);
   trimToolStream(host);
   scheduleToolStreamSync(host, phase === "result");
+
+  if (typeof (host as any).refreshChat === 'function') {
+    void (host as any).refreshChat(host);
+  }
 }
