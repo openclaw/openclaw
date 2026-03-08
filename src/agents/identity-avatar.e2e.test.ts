@@ -140,9 +140,7 @@ describe("resolveAgentAvatar", () => {
     if (resolved.kind === "local") {
       const workspaceReal = await fs.realpath(workspaceGaia);
       const resolvedReal = await fs.realpath(resolved.filePath);
-      expect(path.relative(workspaceReal, resolvedReal)).toBe(
-        path.join("avatars", "gaia.png"),
-      );
+      expect(path.relative(workspaceReal, resolvedReal)).toBe(path.join("avatars", "gaia.png"));
     }
   });
 
