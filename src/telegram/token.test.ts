@@ -58,6 +58,42 @@ describe("resolveTelegramToken", () => {
     expect(res.source).toBe("config");
   });
 
+  it("resolves legacy $ENV references in top-level botToken", () => {
+    vi.stubEnv("TELEGRAM_BOT_TOKEN", "resolved-env-token");
+    const cfg = {
+      channels: { telegram: { botToken: "$TELEGRAM_BOT_TOKEN" } },
+    } as OpenClawConfig;
+    const res = resolveTelegramToken(cfg);
+    expect(res.token).toBe("resolved-env-token");
+    expect(res.source).toBe("config");
+  });
+
+  it("resolves legacy $ENV references in per-account botToken", () => {
+    vi.stubEnv("WORK_TG_TOKEN", "resolved-work-token");
+    const cfg = {
+      channels: {
+        telegram: {
+          accounts: {
+            work: { botToken: "$WORK_TG_TOKEN" },
+          },
+        },
+      },
+    } as OpenClawConfig;
+    const res = resolveTelegramToken(cfg, { accountId: "work" });
+    expect(res.token).toBe("resolved-work-token");
+    expect(res.source).toBe("config");
+  });
+
+  it("throws when legacy $ENV token reference is missing", () => {
+    vi.stubEnv("MISSING_TG_TOKEN", "");
+    const cfg = {
+      channels: { telegram: { botToken: "$MISSING_TG_TOKEN" } },
+    } as OpenClawConfig;
+    expect(() => resolveTelegramToken(cfg)).toThrow(
+      /channels\.telegram\.botToken: unresolved \$MISSING_TG_TOKEN token reference/i,
+    );
+  });
+
   it("does not fall back to config when tokenFile is missing", () => {
     vi.stubEnv("TELEGRAM_BOT_TOKEN", "");
     const dir = withTempDir();
