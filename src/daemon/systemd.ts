@@ -550,7 +550,7 @@ async function runSystemdServiceAction(params: {
   const unitName = `${serviceName}.service`;
   const res = await execSystemctlUser(env, [params.action, unitName]);
   if (res.code !== 0) {
-    throw new Error(`systemctl ${params.action} failed: ${res.stderr || res.stdout}`.trim());
+    throw new Error(`systemctl ${params.action} failed: ${res.stderr} ${res.stdout}`.trim());
   }
   params.stdout.write(`${formatLine(params.label, unitName)}\n`);
 }
@@ -624,7 +624,7 @@ export async function readSystemdServiceRuntime(
     "ActiveState,SubState,MainPID,ExecMainStatus,ExecMainCode",
   ]);
   if (res.code !== 0) {
-    const detail = (res.stderr || res.stdout).trim();
+    const detail = `${res.stderr} ${res.stdout}`.trim();
     const missing = detail.toLowerCase().includes("not found");
     return {
       status: missing ? "stopped" : "unknown",
