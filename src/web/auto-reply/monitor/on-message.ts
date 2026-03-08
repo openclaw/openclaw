@@ -8,6 +8,7 @@ import { normalizeE164 } from "../../../utils.js";
 import type { MentionConfig } from "../mentions.js";
 import type { WebInboundMsg } from "../types.js";
 import { maybeBroadcastMessage } from "./broadcast.js";
+import { buildWhatsAppAccountConfig } from "./config.js";
 import type { EchoTracker } from "./echo.js";
 import type { GroupHistoryEntry } from "./group-gating.js";
 import { applyGroupGating } from "./group-gating.js";
@@ -30,42 +31,49 @@ export function createWebOnMessageHandler(params: {
   baseMentionConfig: MentionConfig;
   account: { authDir?: string; accountId?: string };
 }) {
-  const processForRoute = async (
-    msg: WebInboundMsg,
-    route: ReturnType<typeof resolveAgentRoute>,
-    groupHistoryKey: string,
-    opts?: {
-      groupHistory?: GroupHistoryEntry[];
-      suppressGroupHistoryClear?: boolean;
-    },
-  ) =>
-    processMessage({
-      cfg: params.cfg,
-      msg,
-      route,
-      groupHistoryKey,
-      groupHistories: params.groupHistories,
-      groupMemberNames: params.groupMemberNames,
-      connectionId: params.connectionId,
-      verbose: params.verbose,
-      maxMediaBytes: params.maxMediaBytes,
-      replyResolver: params.replyResolver,
-      replyLogger: params.replyLogger,
-      backgroundTasks: params.backgroundTasks,
-      rememberSentText: params.echoTracker.rememberText,
-      echoHas: params.echoTracker.has,
-      echoForget: params.echoTracker.forget,
-      buildCombinedEchoKey: params.echoTracker.buildCombinedKey,
-      groupHistory: opts?.groupHistory,
-      suppressGroupHistoryClear: opts?.suppressGroupHistoryClear,
-    });
-
   return async (msg: WebInboundMsg) => {
     const conversationId = msg.conversationId ?? msg.from;
     const peerId = resolvePeerId(msg);
-    // Fresh config for bindings lookup; other routing inputs are payload-derived.
-    const route = resolveAgentRoute({
+    // Fresh config per-message so runtime changes are picked up without restart.
+    // Merge account-specific overrides (groupPolicy, groupAllowFrom, etc.) so
+    // multi-account setups keep their per-account gating rules.
+    const cfg = buildWhatsAppAccountConfig({
       cfg: loadConfig(),
+      accountId: params.account.accountId,
+    });
+
+    const processForRoute = async (
+      inMsg: WebInboundMsg,
+      route: ReturnType<typeof resolveAgentRoute>,
+      ghKey: string,
+      opts?: {
+        groupHistory?: GroupHistoryEntry[];
+        suppressGroupHistoryClear?: boolean;
+      },
+    ) =>
+      processMessage({
+        cfg,
+        msg: inMsg,
+        route,
+        groupHistoryKey: ghKey,
+        groupHistories: params.groupHistories,
+        groupMemberNames: params.groupMemberNames,
+        connectionId: params.connectionId,
+        verbose: params.verbose,
+        maxMediaBytes: params.maxMediaBytes,
+        replyResolver: params.replyResolver,
+        replyLogger: params.replyLogger,
+        backgroundTasks: params.backgroundTasks,
+        rememberSentText: params.echoTracker.rememberText,
+        echoHas: params.echoTracker.has,
+        echoForget: params.echoTracker.forget,
+        buildCombinedEchoKey: params.echoTracker.buildCombinedKey,
+        groupHistory: opts?.groupHistory,
+        suppressGroupHistoryClear: opts?.suppressGroupHistoryClear,
+      });
+
+    const route = resolveAgentRoute({
+      cfg,
       channel: "whatsapp",
       accountId: msg.accountId,
       peer: {
@@ -113,7 +121,7 @@ export function createWebOnMessageHandler(params: {
         OriginatingTo: conversationId,
       } satisfies MsgContext;
       updateLastRouteInBackground({
-        cfg: params.cfg,
+        cfg,
         backgroundTasks: params.backgroundTasks,
         storeAgentId: route.agentId,
         sessionKey: route.sessionKey,
@@ -125,7 +133,7 @@ export function createWebOnMessageHandler(params: {
       });
 
       const gating = applyGroupGating({
-        cfg: params.cfg,
+        cfg,
         msg,
         conversationId,
         groupHistoryKey,
@@ -153,7 +161,7 @@ export function createWebOnMessageHandler(params: {
     // Does not bypass group mention/activation gating above.
     if (
       await maybeBroadcastMessage({
-        cfg: params.cfg,
+        cfg,
         msg,
         peerId,
         route,
