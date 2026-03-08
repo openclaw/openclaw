@@ -212,7 +212,7 @@ export const cronHandlers: GatewayRequestHandlers = {
       );
       return;
     }
-    const result = await context.cron.run(jobId, p.mode ?? "force");
+    const result = await context.cron.enqueueRun(jobId, p.mode ?? "force");
     respond(true, result, undefined);
   },
   "cron.runs": async ({ params, respond, context }) => {
