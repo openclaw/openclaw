@@ -37,7 +37,7 @@ OpenClaw addresses all four. The language runtime is not relevant to any of them
 - **Skill sandboxing** — skills run as Node modules against the OpenClaw API, not as arbitrary shell access
 - **`openclaw security audit`** — built-in audit tooling that flags overly-permissive configs before exploitation
 
-WASM vs Node is a different implementation of the same containment principle — not a fundamentally superior one for the personal agent threat model.
+To be precise: WASM provides hardware-enforced capability isolation at the instruction level — this is a genuine architectural advantage over Node module sandboxing, which is process-level. The claim here is not that they are equivalent, but that the *practical* threat reduction for personal agent use is similar: in both cases, a malicious skill cannot reach credentials, cannot make unauthorised network calls, and cannot execute arbitrary OS commands without explicit capability grants. The attack surface that matters for the personal agent threat model is covered by both approaches. WASM's additional guarantees matter more in hostile multi-tenant environments, which OpenClaw explicitly does not target.
 
 ---
 
