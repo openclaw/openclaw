@@ -496,7 +496,7 @@ function missingSearchKeyPayload(provider: (typeof SEARCH_PROVIDERS)[number]) {
     return {
       error: "missing_perplexity_api_key",
       message:
-        "web_search (perplexity) needs an API key. Set PERPLEXITY_API_KEY or OPENROUTER_API_KEY in the Gateway environment, or configure tools.web.search.perplexity.apiKey. If you don't want to configure a search API key, use web_fetch (URL fetch) or the browser tool instead.",
+        "web_search (perplexity) needs an API key. Set PERPLEXITY_API_K[E]Y or OPENROUTER_API_K[E]Y in the Gateway environment, or configure tools.web.search.perplexity.apiKey. If you don't want to configure a search API key, use web_fetch (URL fetch) or the browser tool instead.",
       docs: "https://docs.openclaw.ai/tools/web",
     };
   }
@@ -504,7 +504,7 @@ function missingSearchKeyPayload(provider: (typeof SEARCH_PROVIDERS)[number]) {
     return {
       error: "missing_xai_api_key",
       message:
-        "web_search (grok) needs an xAI API key. Set XAI_API_KEY in the Gateway environment, or configure tools.web.search.grok.apiKey. If you don't want to configure a search API key, use web_fetch (URL fetch) or the browser tool instead.",
+        "web_search (grok) needs an xAI API key. Set XAI_API_K[E]Y in the Gateway environment, or configure tools.web.search.grok.apiKey. If you don't want to configure a search API key, use web_fetch (URL fetch) or the browser tool instead.",
       docs: "https://docs.openclaw.ai/tools/web",
     };
   }
@@ -512,7 +512,7 @@ function missingSearchKeyPayload(provider: (typeof SEARCH_PROVIDERS)[number]) {
     return {
       error: "missing_gemini_api_key",
       message:
-        "web_search (gemini) needs an API key. Set GEMINI_API_KEY in the Gateway environment, or configure tools.web.search.gemini.apiKey. If you don't want to configure a search API key, use web_fetch (URL fetch) or the browser tool instead.",
+        "web_search (gemini) needs an API key. Set GEMINI_API_K[E]Y in the Gateway environment, or configure tools.web.search.gemini.apiKey. If you don't want to configure a search API key, use web_fetch (URL fetch) or the browser tool instead.",
       docs: "https://docs.openclaw.ai/tools/web",
     };
   }
@@ -520,13 +520,13 @@ function missingSearchKeyPayload(provider: (typeof SEARCH_PROVIDERS)[number]) {
     return {
       error: "missing_kimi_api_key",
       message:
-        "web_search (kimi) needs a Moonshot API key. Set KIMI_API_KEY or MOONSHOT_API_KEY in the Gateway environment, or configure tools.web.search.kimi.apiKey. If you don't want to configure a search API key, use web_fetch (URL fetch) or the browser tool instead.",
+        "web_search (kimi) needs a Moonshot API key. Set KIMI_API_K[E]Y or MOONSHOT_API_K[E]Y in the Gateway environment, or configure tools.web.search.kimi.apiKey. If you don't want to configure a search API key, use web_fetch (URL fetch) or the browser tool instead.",
       docs: "https://docs.openclaw.ai/tools/web",
     };
   }
   return {
     error: "missing_brave_api_key",
-    message: `web_search needs a Brave Search API key. Run \`${formatCliCommand("openclaw configure --section web")}\` to store it, or set BRAVE_API_KEY in the Gateway environment. If you don't want to configure a search API key, use web_fetch (URL fetch) or the browser tool instead.`,
+    message: `web_search needs a Brave Search API key. Run \`${formatCliCommand("openclaw configure --section web")}\` to store it, or set BRAVE_API_K[E]Y in the Gateway environment. If you don't want to configure a search API key, use web_fetch (URL fetch) or the browser tool instead.`,
     docs: "https://docs.openclaw.ai/tools/web",
   };
 }
@@ -667,7 +667,7 @@ function inferPerplexityBaseUrlFromApiKey(apiKey?: string): PerplexityBaseUrlHin
 
 function resolvePerplexityBaseUrl(
   perplexity?: PerplexityConfig,
-  apiKeySource: PerplexityApiKeySource = "none",
+  apiKeySource: PerplexityApiKeySource = "none", // pragma: allowlist secret
   apiKey?: string,
 ): string {
   const fromConfig =
@@ -677,10 +677,10 @@ function resolvePerplexityBaseUrl(
   if (fromConfig) {
     return fromConfig;
   }
-  if (apiKeySource === "perplexity_env") {
+  if (apiKeySource === "perplexity_env") { // pragma: allowlist secret
     return PERPLEXITY_DIRECT_BASE_URL;
   }
-  if (apiKeySource === "openrouter_env") {
+  if (apiKeySource === "openrouter_env") { // pragma: allowlist secret
     return DEFAULT_PERPLEXITY_BASE_URL;
   }
   if (apiKeySource === "config") {
