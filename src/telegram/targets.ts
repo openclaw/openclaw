@@ -9,6 +9,16 @@ const TELEGRAM_USERNAME_REGEX = /^[A-Za-z0-9_]{5,}$/i;
 
 export function stripTelegramInternalPrefixes(to: string): string {
   let trimmed = to.trim();
+
+  // Guard against file system paths being treated as Telegram targets.
+  // This helps catch cases where an agent incorrectly uses a messaging tool
+  // to attempt local file operations during bootstrap or workspace setup.
+  if (trimmed.startsWith("/") || trimmed.startsWith("./") || trimmed.startsWith("../")) {
+    throw new Error(
+      `Invalid Telegram target: "${trimmed}". It looks like a local file system path. Messaging tools cannot be used for file operations.`,
+    );
+  }
+
   let strippedTelegramPrefix = false;
   while (true) {
     const next = (() => {
