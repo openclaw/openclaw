@@ -1,0 +1,77 @@
+{
+    "name": "@openclaw/wecom",
+    "version": "1.5.0",
+    "description": "OpenClaw WeCom (Enterprise WeChat) channel plugin — 3 modes, 4-layer delivery fallback, dynamic agent routing (community contributed)",
+    "type": "module",
+    "main": "index.js",
+    "files": [
+        "index.js",
+        "wecom",
+        "crypto.js",
+        "dynamic-agent.js",
+        "image-processor.js",
+        "logger.js",
+        "README.md",
+        "LICENSE",
+        "CONTRIBUTING.md",
+        "stream-manager.js",
+        "utils.js",
+        "webhook.js",
+        "openclaw.plugin.json"
+    ],
+    "peerDependencies": {
+        "openclaw": "*"
+    },
+    "scripts": {
+        "test": "npm run test:unit",
+        "test:unit": "node --test tests/*.test.js",
+        "test:e2e": "node --test tests/e2e/*.e2e.test.js",
+        "test:e2e:ali-ai": "bash tests/e2e/run-ali-ai.sh"
+    },
+    "openclaw": {
+        "extensions": [
+            "./index.js"
+        ],
+        "channel": {
+            "id": "wecom",
+            "label": "WeCom",
+            "selectionLabel": "WeCom / 企业微信 (Enterprise WeChat)",
+            "docsPath": "/channels/wecom",
+            "docsLabel": "wecom",
+            "blurb": "Enterprise WeChat (WeCom) with AI Bot, Agent App & Webhook modes, 4-layer delivery fallback, and dynamic agent routing.",
+            "order": 36,
+            "aliases": [
+                "wecom",
+                "wework",
+                "enterprise-wechat"
+            ],
+            "quickstartAllowFrom": true
+        },
+        "install": {
+            "npmSpec": "@openclaw/wecom",
+            "localPath": "extensions/wecom",
+            "defaultChoice": "npm"
+        }
+    },
+    "keywords": [
+        "openclaw",
+        "openclaw-plugin",
+        "openclaw-channel",
+        "wecom",
+        "enterprise-wechat",
+        "wework",
+        "chat",
+        "ai-bot"
+    ],
+    "repository": {
+        "type": "git",
+        "url": "git+https://github.com/openclaw/openclaw.git",
+        "directory": "extensions/wecom"
+    },
+    "homepage": "https://docs.openclaw.ai/channels/wecom",
+    "bugs": {
+        "url": "https://github.com/openclaw/openclaw/issues"
+    },
+    "author": "Russell",
+    "license": "MIT"
+}
