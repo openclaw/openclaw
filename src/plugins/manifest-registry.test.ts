@@ -155,14 +155,15 @@ describe("loadPluginManifestRegistry", () => {
     expect(countDuplicateWarnings(loadRegistry(candidates))).toBe(1);
   });
 
-  it("suppresses duplicate warning when higher-precedence plugin shadows bundled plugin", () => {
+  it("emits actionable warning when bundled plugin shadows user-installed global plugin", () => {
     const dirA = makeTempDir();
     const dirB = makeTempDir();
     const manifest = { id: "feishu", configSchema: { type: "object" } };
     writeManifest(dirA, manifest);
     writeManifest(dirB, manifest);
 
-    // global (rank 2) overriding bundled (rank 3) — expected from `openclaw configure` installs.
+    // The loader's first-seen-wins order means bundled always takes priority over
+    // global. The warning should explain this and tell the user how to override it.
     const candidates: PluginCandidate[] = [
       createPluginCandidate({
         idHint: "feishu",
@@ -176,7 +177,11 @@ describe("loadPluginManifestRegistry", () => {
       }),
     ];
 
-    expect(countDuplicateWarnings(loadRegistry(candidates))).toBe(0);
+    const registry = loadRegistry(candidates);
+    const warnings = registry.diagnostics.filter((d) => d.level === "warn");
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]?.message).toContain("bundled copy takes priority");
+    expect(warnings[0]?.message).toContain("plugins.load.paths");
   });
 
   it("suppresses duplicate warning when candidates share the same physical directory via symlink", () => {

@@ -229,13 +229,23 @@ export function loadPluginManifestRegistry(params: {
         }
         continue;
       }
-      // Only warn when both candidates share the same precedence tier.
-      // When origins differ (e.g. a global plugin shadowing a bundled one),
-      // the higher-precedence copy is intentionally overriding the lower-
-      // precedence one — this is expected from `openclaw configure` installs.
-      const sameTier =
-        PLUGIN_ORIGIN_RANK[candidate.origin] === PLUGIN_ORIGIN_RANK[existing.candidate.origin];
-      if (sameTier) {
+      // For a bundled-vs-global conflict the loader's first-seen-wins order means
+      // the bundled copy always takes priority over a user-installed global plugin.
+      // Emit a targeted, actionable message so the user knows their installed copy
+      // is inactive and how to fix it — rather than the generic "may be overridden" text.
+      const isBundledGlobalConflict =
+        (candidate.origin === "global" && existing.candidate.origin === "bundled") ||
+        (candidate.origin === "bundled" && existing.candidate.origin === "global");
+      if (isBundledGlobalConflict) {
+        const globalSource =
+          candidate.origin === "global" ? candidate.source : existing.candidate.source;
+        diagnostics.push({
+          level: "warn",
+          pluginId: manifest.id,
+          source: globalSource,
+          message: `plugin '${manifest.id}' is installed in the extensions directory but the bundled copy takes priority; add it to plugins.load.paths in your config to use your installed version (${globalSource})`,
+        });
+      } else {
         diagnostics.push({
           level: "warn",
           pluginId: manifest.id,
