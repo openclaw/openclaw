@@ -39,7 +39,7 @@ Notes:
 
 - Requires the voice-call plugin to be enabled.
 - Plugin config lives under `plugins.entries.voice-call.config`.
-- Twilio config: `provider: "twilio"` + `twilio.accountSid/authToken` + `fromNumber`.
+- Twilio config: `provider: "twilio"` + `twilio.accountSid/authToken` + `fromNumber`. Optional `twilio.region` (ie1, au1) and `twilio.edge` (dublin, sydney) for non-US regions.
 - Telnyx config: `provider: "telnyx"` + `telnyx.apiKey/connectionId` + `fromNumber`.
 - Plivo config: `provider: "plivo"` + `plivo.authId/authToken` + `fromNumber`.
 - Dev fallback: `provider: "mock"` (no network).
