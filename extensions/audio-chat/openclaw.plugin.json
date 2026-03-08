@@ -1,0 +1,31 @@
+{
+  "id": "audio-chat",
+  "name": "Audio Chat",
+  "description": "Auto-send Telegram voice bubble replies from assistant text with configurable access and limits.",
+  "version": "0.2.0",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "enabledByDefault": { "type": "boolean" },
+      "channels": {
+        "type": "array",
+        "items": { "type": "string" }
+      },
+      "defaultMaxChars": { "type": "integer", "minimum": 10, "maximum": 5000 },
+      "tooLongTip": { "type": "string" },
+      "voice": { "type": "string" },
+      "access": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "directOnly": { "type": "boolean" },
+          "allowUserIds": {
+            "type": "array",
+            "items": { "type": "string" }
+          }
+        }
+      }
+    }
+  }
+}
