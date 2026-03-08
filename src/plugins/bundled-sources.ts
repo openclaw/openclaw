@@ -30,9 +30,14 @@ export function resolveBundledPluginSources(params: {
       continue;
     }
 
+    // Private packages are not published to npm, so only use an explicit
+    // install.npmSpec when present. Falling back to packageName for private
+    // packages would cause the updater to try to npm-install a package that
+    // does not exist (e.g. @openclaw/memory-lancedb).
+    const explicitNpmSpec = candidate.packageManifest?.install?.npmSpec?.trim();
     const npmSpec =
-      candidate.packageManifest?.install?.npmSpec?.trim() ||
-      candidate.packageName?.trim() ||
+      explicitNpmSpec ||
+      (candidate.packagePrivate ? undefined : candidate.packageName?.trim()) ||
       undefined;
 
     bundled.set(pluginId, {
