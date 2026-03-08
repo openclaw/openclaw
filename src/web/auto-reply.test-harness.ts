@@ -27,7 +27,9 @@ type MockWebListener = {
   sendComposingTo: () => Promise<void>;
 };
 
-export const TEST_NET_IP = "203.0.113.10";
+// Use a genuinely public IP (example.com) so resolvePinnedHostnameWithPolicy
+// does not block it as a special-use address (TEST-NET-3 203.0.113.x is reserved).
+export const TEST_NET_IP = "93.184.216.34";
 
 vi.mock("../agents/pi-embedded.js", () => ({
   abortEmbeddedPiRun: vi.fn().mockReturnValue(false),
@@ -124,25 +126,41 @@ export async function makeSessionStore(
   };
 }
 
+// Store the original before any mocking.
+const _originalResolvePinnedHostnameWithPolicy = ssrf.resolvePinnedHostnameWithPolicy;
+
 export function installWebAutoReplyUnitTestHooks(opts?: { pinDns?: boolean }) {
   let resolvePinnedHostnameSpy: { mockRestore: () => unknown } | undefined;
+  let resolvePinnedHostnameWithPolicySpy: { mockRestore: () => unknown } | undefined;
 
   beforeEach(() => {
     vi.clearAllMocks();
     _resetBaileysMocks();
     _resetLoadConfigMock();
     if (opts?.pinDns) {
+      const addresses = [TEST_NET_IP];
+      const fakeLookup = (async () => ({
+        address: addresses[0] ?? "93.184.216.34",
+        family: (addresses[0] ?? "").includes(":") ? 6 : 4,
+      })) as unknown as ssrf.LookupFn;
       resolvePinnedHostnameSpy = vi
         .spyOn(ssrf, "resolvePinnedHostname")
         .mockImplementation(async (hostname) => {
           // SSRF guard pins DNS; stub resolution to avoid live lookups in unit tests.
           const normalized = hostname.trim().toLowerCase().replace(/\.$/, "");
-          const addresses = [TEST_NET_IP];
           return {
             hostname: normalized,
             addresses,
             lookup: ssrf.createPinnedLookup({ hostname: normalized, addresses }),
           };
+        });
+      resolvePinnedHostnameWithPolicySpy = vi
+        .spyOn(ssrf, "resolvePinnedHostnameWithPolicy")
+        .mockImplementation(async (hostname, params = {}) => {
+          return await _originalResolvePinnedHostnameWithPolicy(hostname, {
+            ...params,
+            lookupFn: fakeLookup,
+          });
         });
     }
   });
@@ -150,6 +168,8 @@ export function installWebAutoReplyUnitTestHooks(opts?: { pinDns?: boolean }) {
   afterEach(() => {
     resolvePinnedHostnameSpy?.mockRestore();
     resolvePinnedHostnameSpy = undefined;
+    resolvePinnedHostnameWithPolicySpy?.mockRestore();
+    resolvePinnedHostnameWithPolicySpy = undefined;
     resetLogger();
     setLoggerOverride(null);
     vi.useRealTimers();
