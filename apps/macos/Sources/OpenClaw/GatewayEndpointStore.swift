@@ -188,13 +188,7 @@ actor GatewayEndpointStore {
 
     private static func resolveConfigToken(isRemote: Bool, root: [String: Any]) -> String? {
         if isRemote {
-            if let gateway = root["gateway"] as? [String: Any],
-               let remote = gateway["remote"] as? [String: Any],
-               let token = remote["token"] as? String
-            {
-                return token.trimmingCharacters(in: .whitespacesAndNewlines)
-            }
-            return nil
+            return GatewayRemoteConfig.resolveTokenString(root: root)
         }
 
         if let gateway = root["gateway"] as? [String: Any],
