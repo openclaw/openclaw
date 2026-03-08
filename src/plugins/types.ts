@@ -1928,7 +1928,10 @@ export type PluginHookBeforeResponseEmitEvent = {
   content: string;
   /** All assistant response texts from the current run (multi-turn).
    *  Enables full PII redaction across tool-loop iterations.
-   *  Bounded to the original assistantTexts.length — plugins cannot inject messages. */
+   *  Bounded to the number of text-bearing assistant turns in the current run —
+   *  plugins cannot inject messages.  (In block-reply mode, `assistantTexts`
+   *  accumulates multiple per-chunk entries per turn; the actual bound is the
+   *  consolidated session turn count, not `assistantTexts.length`.) */
   allContent: string[];
   /** Channel identifier (e.g. "telegram", "discord"). */
   channel?: string;
