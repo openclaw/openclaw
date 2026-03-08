@@ -41,9 +41,11 @@ The hooks system allows you to:
 
 ### Bundled Hooks
 
-OpenClaw ships with four bundled hooks that are automatically discovered:
+OpenClaw ships with six bundled hooks that are automatically discovered:
 
 - **💾 session-memory**: Saves session context to your agent workspace (default `~/.openclaw/workspace/memory/`) when you issue `/new`
+- **📋 context-digest**: Maintains a rolling cross-session summary at `memory/context-digest.md` and injects open items into the system prompt
+- **🏷️ session-importance**: Classifies conversations by importance and archives significant ones under `memory/important/`
 - **📎 bootstrap-extra-files**: Injects additional workspace bootstrap files from configured glob/path patterns during `agent:bootstrap`
 - **📝 command-logger**: Logs all command events to `~/.openclaw/logs/commands.log`
 - **🚀 boot-md**: Runs `BOOT.md` when the gateway starts (requires internal hooks enabled)
@@ -371,12 +373,15 @@ Compaction lifecycle hooks exposed through the plugin hook runner:
 - **`before_compaction`**: Runs before compaction with count/token metadata
 - **`after_compaction`**: Runs after compaction with compaction summary metadata
 
+### Session Lifecycle Events
+
+- **`session:end`**: Fires when a session ends due to idle timeout or daily reset. Used by `context-digest` and `session-importance` hooks as a safety net to process the session even if `/new` was not explicitly issued.
+
 ### Future Events
 
 Planned event types:
 
 - **`session:start`**: When a new session begins
-- **`session:end`**: When a session ends
 - **`agent:error`**: When an agent encounters an error
 
 ## Creating Custom Hooks
@@ -712,6 +717,112 @@ Internal hooks must be enabled for this to run.
 openclaw hooks enable boot-md
 ```
 
+### context-digest
+
+Maintains a rolling cross-session digest at `memory/context-digest.md`. The "Open Items / Action Items" section is automatically injected into the agent's system prompt so the model has subconscious awareness of pending tasks without consuming significant token budget.
+
+**Events**: `command:new`, `command:reset`, `session:end`
+
+**Requirements**: `workspace.dir` must be configured
+
+**What it does**:
+
+1. Scans `sessions.json` for sessions updated within the configured window (default: 7 days)
+2. Reads transcripts (capped per session to control token use)
+3. Calls the LLM to generate a structured digest with four sections: Topics, Key Decisions, Open Items, and Important Context (falls back to a no-LLM summary if LLM is unavailable)
+4. Writes `memory/context-digest.md` (capped at 8 KB)
+5. On the next session start, the "Open Items" section is prepended to the system prompt as a read-only context hint
+
+**Output path**: `<workspace>/memory/context-digest.md`
+
+**Config**:
+
+| Option               | Type    | Default | Description                             |
+| -------------------- | ------- | ------- | --------------------------------------- |
+| `days`               | number  | 7       | Number of days to include in the digest |
+| `maxSessionMessages` | number  | 20      | Messages to read per session            |
+| `llmDigest`          | boolean | true    | Set to `false` for no-LLM fallback mode |
+
+```json
+{
+  "hooks": {
+    "internal": {
+      "entries": {
+        "context-digest": {
+          "enabled": true,
+          "days": 14,
+          "llmDigest": true
+        }
+      }
+    }
+  }
+}
+```
+
+**Enable**:
+
+```bash
+openclaw hooks enable context-digest
+```
+
+### session-importance
+
+Automatically identifies important conversations and archives them to `memory/important/` for permanent reference. Uses a two-stage pipeline: a fast multi-dimensional pre-filter (zero LLM cost for routine conversations) followed by LLM-based structured classification for sessions that pass the filter.
+
+**Events**: `command:new`, `command:reset`, `session:end`
+
+**Requirements**: `workspace.dir` must be configured
+
+**What it does**:
+
+1. Reads the previous session transcript
+2. **Stage 1 — Heuristic evaluation**: Scores the session across multiple signals — explicit intent keywords (`remember`, `记住`), code-block density, message depth, structured assistant replies, conversation turns, and domain keywords. Routine sessions are skipped at zero LLM cost.
+3. **Stage 2 — LLM classification**: For sessions that pass Stage 1, calls the LLM to extract category, slug, summary, key points, and action items. Falls back to keyword-only classification if LLM is unavailable.
+4. **Slug-based deduplication**: If a file with the same slug already exists, new content is appended with a timestamp divider instead of creating a duplicate.
+
+**Output path**: `<workspace>/memory/important/YYYY-MM-DD-<category>-<slug>.md`
+
+**Categories**:
+
+| Category    | When it applies                                     |
+| ----------- | --------------------------------------------------- |
+| `reference` | User explicitly asked to remember or save something |
+| `research`  | Experiments, datasets, methodology, literature      |
+| `project`   | Milestones, progress, deployments, releases         |
+| `decision`  | Architecture choices, trade-offs, comparisons       |
+| `routine`   | Everything else — silently skipped                  |
+
+**Config**:
+
+| Option           | Type     | Default | Description                                |
+| ---------------- | -------- | ------- | ------------------------------------------ |
+| `messages`       | number   | 30      | Messages to analyze per session            |
+| `llmClassify`    | boolean  | true    | Set to `false` for heuristic-only mode     |
+| `customKeywords` | string[] | `[]`    | Extra keywords that boost importance score |
+
+```json
+{
+  "hooks": {
+    "internal": {
+      "entries": {
+        "session-importance": {
+          "enabled": true,
+          "messages": 40,
+          "llmClassify": true,
+          "customKeywords": ["sprint", "OKR", "customer"]
+        }
+      }
+    }
+  }
+}
+```
+
+**Enable**:
+
+```bash
+openclaw hooks enable session-importance
+```
+
 ## Best Practices
 
 ### Keep Handlers Fast
@@ -783,6 +894,8 @@ The gateway logs hook loading at startup:
 
 ```
 Registered hook: session-memory -> command:new
+Registered hook: context-digest -> command:new, command:reset, session:end
+Registered hook: session-importance -> command:new, command:reset, session:end
 Registered hook: bootstrap-extra-files -> agent:bootstrap
 Registered hook: command-logger -> command
 Registered hook: boot-md -> gateway:startup

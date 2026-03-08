@@ -89,6 +89,49 @@ Details:
 For the full compaction lifecycle, see
 [Session management + compaction](/reference/session-management-compaction).
 
+## Proactive memory hooks
+
+Two optional bundled hooks extend memory management beyond the session boundary:
+
+### context-digest
+
+Triggers on `/new`, `/reset`, and session end. Scans recent session transcripts (default: last 7 days), generates a structured digest via LLM, and writes it to `memory/context-digest.md`. The **Open Items / Action Items** section is automatically injected into the system prompt on each session start, giving the model subconscious awareness of pending tasks without consuming significant token budget.
+
+```
+memory/
+└── context-digest.md   ← rolling cross-session summary (auto-generated, 8 KB cap)
+```
+
+Enable:
+
+```bash
+openclaw hooks enable context-digest
+```
+
+### session-importance
+
+Triggers on `/new`, `/reset`, and session end. Evaluates each completed session using a two-stage pipeline:
+
+1. **Heuristic pre-filter** — scores signals like explicit-intent keywords (`remember`, `记住`), code-block density, message depth, structured replies, and domain keywords. Routine sessions are dropped at zero LLM cost.
+2. **LLM classification** — for sessions that pass Stage 1, extracts category, summary, key points, and action items. Falls back to heuristic-only mode if LLM is unavailable.
+
+Important conversations are written to `memory/important/` with slug-based deduplication (repeated discussions on the same topic are appended rather than duplicated).
+
+```
+memory/
+└── important/
+    └── 2026-03-04-project-api-v3-migration.md
+    └── 2026-03-05-decision-model-selection.md
+```
+
+Enable:
+
+```bash
+openclaw hooks enable session-importance
+```
+
+For full configuration options, see [Hooks — context-digest](/automation/hooks#context-digest) and [Hooks — session-importance](/automation/hooks#session-importance).
+
 ## Vector memory search
 
 OpenClaw can build a small vector index over `MEMORY.md` and `memory/*.md` so

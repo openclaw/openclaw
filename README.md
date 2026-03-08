@@ -33,16 +33,18 @@ It answers you on the channels you already use (WhatsApp, Telegram, Slack, Disco
 - **QVeris-first tool experience**: integrate with 500+ providers and 10,000+ APIs via a single tool-search + tool-execute workflow.
 - **China-friendly channel strategy**: stronger Feishu and regional ecosystem readiness without sacrificing global channel coverage.
 - **Faster first-run onboarding**: CLI/macOS/web wizard now includes QVeris API setup and X channel credentials in guided flow.
+- **Enhanced long-term memory**: two new bundled hooks — `context-digest` (rolling cross-session summary injected into system prompt) and `session-importance` (auto-archives important conversations to `memory/important/`) — extend memory beyond the single session.
 
 ### OpenClaw vs QVerisBot (quick comparison)
 
-| Area                 | OpenClaw (base platform)                          | QVerisBot (this repo)                                                                                             |
-| :------------------- | :------------------------------------------------ | :---------------------------------------------------------------------------------------------------------------- |
-| Positioning          | Local-first agent gateway + multi-channel runtime | OpenClaw-based distribution focused on professional tool use and faster production onboarding                     |
-| Tool ecosystem       | Built-in tools + extension mechanism              | QVeris Universal Toolbox integration (search + execute), plus QVeris-first defaults                               |
-| Web search default   | Commonly configured with Brave/other providers    | During onboarding, defaults `web_search` to QVeris Smart Search when QVeris is enabled                            |
-| Channel focus        | Broad global channels and plugin model            | Adds stronger China-facing defaults/integration (especially Feishu), while keeping full OpenClaw channel coverage |
-| First-run onboarding | Wizard-driven baseline setup                      | Enhanced wizard flow: QVeris API key setup + X channel credential setup integrated into onboarding                |
+| Area                 | OpenClaw (base platform)                          | QVerisBot (this repo)                                                                                                         |
+| :------------------- | :------------------------------------------------ | :---------------------------------------------------------------------------------------------------------------------------- |
+| Positioning          | Local-first agent gateway + multi-channel runtime | OpenClaw-based distribution focused on professional tool use and faster production onboarding                                 |
+| Tool ecosystem       | Built-in tools + extension mechanism              | QVeris Universal Toolbox integration (search + execute), plus QVeris-first defaults                                           |
+| Web search default   | Commonly configured with Brave/other providers    | During onboarding, defaults `web_search` to QVeris Smart Search when QVeris is enabled                                        |
+| Channel focus        | Broad global channels and plugin model            | Adds stronger China-facing defaults/integration (especially Feishu), while keeping full OpenClaw channel coverage             |
+| First-run onboarding | Wizard-driven baseline setup                      | Enhanced wizard flow: QVeris API key setup + X channel credential setup integrated into onboarding                            |
+| Long-term memory     | Session-scoped memory + manual memory files       | Adds `context-digest` (cross-session summary → system prompt) and `session-importance` (auto-archive important conversations) |
 
 ## Quick Start (5 minutes)
 
@@ -155,10 +157,11 @@ New install? Start here: [Getting started](https://docs.openclaw.ai/start/gettin
 
 Model note: while many providers/models are supported, for the best experience and lower prompt-injection risk use the strongest latest-generation model available to you. See [Onboarding](https://docs.openclaw.ai/start/onboarding).
 
-## Models (selection + auth)
+## Models (selection + switching)
 
 - Models config + CLI: [Models](https://docs.openclaw.ai/concepts/models)
 - Auth profile rotation (OAuth vs API keys) + fallbacks: [Model failover](https://docs.openclaw.ai/concepts/model-failover)
+- **Natural language model switching**: ask the agent to switch models in conversation (e.g. "use kimi", "switch to sonnet") — the `switch_model` tool handles alias resolution, fuzzy matching, and confirmation when ambiguous. The `/model <name>` command also works.
 
 ## Install (recommended)
 
@@ -494,6 +497,7 @@ WhatsApp / Telegram / Slack / Discord / Google Chat / Signal / iMessage / BlueBu
 - **[Nodes](https://docs.openclaw.ai/nodes)** — Canvas, camera snap/clip, screen record, `location.get`, notifications, plus macOS‑only `system.run`/`system.notify`.
 
 - `/status` — compact session status (model + tokens, cost when available)
+- `/model <name>` — switch model (alias, partial, or full provider/model; or ask in natural language)
 - `/new` or `/reset` — reset the session
 - `/compact` — compact session context (summary)
 - `/think <level>` — off|minimal|low|medium|high|xhigh
@@ -521,6 +525,7 @@ ClawHub is a minimal skill registry. With ClawHub enabled, the agent can search 
 Send these in WhatsApp/Telegram/Slack/Google Chat/Microsoft Teams/WebChat (group commands are owner-only):
 
 - `/status` — compact session status (model + tokens, cost when available)
+- `/model <name>` — switch model (alias, partial, or full provider/model; or ask in natural language)
 - `/new` or `/reset` — reset the session
 - `/compact` — compact session context (summary)
 - `/think <level>` — off|minimal|low|medium|high|xhigh (GPT-5.2 + Codex models only)

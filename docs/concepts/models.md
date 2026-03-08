@@ -89,7 +89,9 @@ Example allowlist config:
 }
 ```
 
-## Switching models in chat (`/model`)
+## Switching models in chat
+
+### Slash command (`/model`)
 
 You can switch models for the current session without restarting:
 
@@ -112,6 +114,26 @@ Notes:
 - If you omit the provider, OpenClaw treats the input as an alias or a model for the **default provider** (only works when there is no `/` in the model ID).
 
 Full command behavior/config: [Slash commands](/tools/slash-commands).
+
+### Natural language switching (`switch_model` tool)
+
+You can also ask the agent to switch models in natural language:
+
+- "use kimi" / "switch to sonnet" / "change model to gpt-4o"
+- "reset to default model"
+
+The agent calls the `switch_model` tool, which:
+
+1. Resolves aliases, partial names, and full `provider/model` refs using the same fuzzy matching as `/model`.
+2. When the query is ambiguous (multiple close matches), returns a candidate list so the agent can ask you to confirm before switching.
+3. Applies the override to the current session; takes effect from the next message.
+4. Supports `model="default"` (or `"reset"`) to revert to the configured default.
+
+The `session_status` tool remains read-only for checking current model/session info.
+
+### Silent model reset notifications
+
+If a model override becomes invalid (e.g. removed from the allowlist), the session silently resets to the default model. When this happens, a system event is emitted so the agent can inform you of the change.
 
 ## CLI commands
 
