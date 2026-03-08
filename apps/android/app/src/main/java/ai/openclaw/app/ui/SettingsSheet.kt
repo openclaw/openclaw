@@ -402,9 +402,9 @@ fun SettingsSheet(viewModel: MainViewModel) {
           supportingContent = {
             Text(
               if (micPermissionGranted) {
-                "Granted. Use the Voice tab mic button to capture transcript."
+                "Granted. Use the Voice tab mic button to capture transcript while the app is open."
               } else {
-                "Required for Voice tab transcription."
+                "Required for foreground Voice tab transcription."
               },
               style = mobileCallout,
             )
@@ -431,7 +431,7 @@ fun SettingsSheet(viewModel: MainViewModel) {
       }
       item {
         Text(
-          "Voice wake and talk modes were removed. Voice now uses one mic on/off flow in the Voice tab.",
+          "Voice wake and talk modes were removed. Voice now uses one mic on/off flow in the Voice tab while the app is open.",
           style = mobileCallout,
           color = mobileTextSecondary,
         )
