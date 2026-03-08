@@ -3,6 +3,8 @@ import path from "node:path";
 import type { OAuthCredentials } from "@mariozechner/pi-ai";
 import { resolveOpenClawAgentDir } from "../agents/agent-paths.js";
 import { upsertAuthProfile } from "../agents/auth-profiles.js";
+import { deriveOpenAICodexCanonicalProfileId } from "../agents/auth-profiles/openai-codex-profile-id.js";
+import { normalizeProviderId } from "../agents/model-selection.js";
 import { resolveStateDir } from "../config/paths.js";
 import {
   coerceSecretRef,
@@ -151,16 +153,37 @@ function resolveSiblingAgentDirs(primaryAgentDir: string): string[] {
   return result;
 }
 
+function resolveWriteOAuthProfileId(params: { provider: string; creds: OAuthCredentials }): string {
+  const providerKey = normalizeProviderId(params.provider);
+  if (providerKey === "openai-codex") {
+    const canonicalProfileId = deriveOpenAICodexCanonicalProfileId({
+      provider: params.provider,
+      access: params.creds.access,
+      accountId: params.creds.accountId,
+    });
+    if (canonicalProfileId) {
+      return canonicalProfileId;
+    }
+  }
+
+  const email =
+    typeof params.creds.email === "string" && params.creds.email.trim()
+      ? params.creds.email.trim()
+      : "default";
+  return `${params.provider}:${email}`;
+}
+
 export async function writeOAuthCredentials(
   provider: string,
   creds: OAuthCredentials,
   agentDir?: string,
   options?: WriteOAuthCredentialsOptions,
 ): Promise<string> {
-  const email =
-    typeof creds.email === "string" && creds.email.trim() ? creds.email.trim() : "default";
-  const profileId = `${provider}:${email}`;
   const resolvedAgentDir = path.resolve(resolveAuthAgentDir(agentDir));
+  const profileId = resolveWriteOAuthProfileId({
+    provider,
+    creds,
+  });
   const targetAgentDirs = options?.syncSiblingAgents
     ? resolveSiblingAgentDirs(resolvedAgentDir)
     : [resolvedAgentDir];
