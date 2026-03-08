@@ -18,6 +18,8 @@ const state = vi.hoisted(() => ({
   listOutput: "",
   printOutput: "",
   bootstrapError: "",
+  kickstartError: "",
+  kickstartErrorOnce: false,
   dirs: new Set<string>(),
   files: new Map<string, string>(),
 }));
@@ -46,6 +48,13 @@ vi.mock("./exec-file.js", () => ({
     }
     if (call[0] === "bootstrap" && state.bootstrapError) {
       return { stdout: "", stderr: state.bootstrapError, code: 1 };
+    }
+    if (call[0] === "kickstart" && state.kickstartError) {
+      const stderr = state.kickstartError;
+      if (state.kickstartErrorOnce) {
+        state.kickstartError = "";
+      }
+      return { stdout: "", stderr, code: 1 };
     }
     return { stdout: "", stderr: "", code: 0 };
   }),
@@ -82,6 +91,8 @@ beforeEach(() => {
   state.listOutput = "";
   state.printOutput = "";
   state.bootstrapError = "";
+  state.kickstartError = "";
+  state.kickstartErrorOnce = false;
   state.dirs.clear();
   state.files.clear();
   vi.clearAllMocks();
@@ -302,6 +313,37 @@ describe("launchd install", () => {
       vi.useRealTimers();
       killSpy.mockRestore();
     }
+  });
+
+  it("repairs missing service when kickstart reports it is not loaded", async () => {
+    const env = createDefaultLaunchdEnv();
+    state.kickstartError =
+      'Could not find service "ai.openclaw.gateway" in domain for user gui: 501';
+    state.kickstartErrorOnce = true;
+
+    await restartLaunchAgent({ env, stdout: new PassThrough() });
+
+    const domain = typeof process.getuid === "function" ? `gui/${process.getuid()}` : "gui/501";
+    const label = "ai.openclaw.gateway";
+    const plistPath = resolveLaunchAgentPlistPath(env);
+    const firstKickstartIndex = state.launchctlCalls.findIndex(
+      (c) => c[0] === "kickstart" && c[1] === "-k" && c[2] === `${domain}/${label}`,
+    );
+    const repairBootstrapIndex = state.launchctlCalls.findIndex(
+      (c, idx) =>
+        idx > firstKickstartIndex && c[0] === "bootstrap" && c[1] === domain && c[2] === plistPath,
+    );
+    const repairKickstartIndex = state.launchctlCalls.findIndex(
+      (c, idx) =>
+        idx > firstKickstartIndex &&
+        c[0] === "kickstart" &&
+        c[1] === "-k" &&
+        c[2] === `${domain}/${label}`,
+    );
+
+    expect(firstKickstartIndex).toBeGreaterThanOrEqual(0);
+    expect(repairBootstrapIndex).toBeGreaterThan(firstKickstartIndex);
+    expect(repairKickstartIndex).toBeGreaterThan(repairBootstrapIndex);
   });
 
   it("shows actionable guidance when launchctl gui domain does not support bootstrap", async () => {

@@ -485,7 +485,17 @@ export async function restartLaunchAgent({
 
   const start = await execLaunchctl(["kickstart", "-k", `${domain}/${label}`]);
   if (start.code !== 0) {
-    throw new Error(`launchctl kickstart failed: ${start.stderr || start.stdout}`.trim());
+    if (isLaunchctlNotLoaded(start)) {
+      const repaired = await repairLaunchAgentBootstrap({ env: serviceEnv });
+      if (!repaired.ok) {
+        const detail = repaired.detail ? `; repair failed: ${repaired.detail}` : "";
+        throw new Error(
+          `launchctl kickstart failed: ${start.stderr || start.stdout}${detail}`.trim(),
+        );
+      }
+    } else {
+      throw new Error(`launchctl kickstart failed: ${start.stderr || start.stdout}`.trim());
+    }
   }
   try {
     stdout.write(`${formatLine("Restarted LaunchAgent", `${domain}/${label}`)}\n`);
