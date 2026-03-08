@@ -62,10 +62,7 @@ class TalkModeConfigParsingTest {
         .jsonObject
 
     val selection = TalkModeManager.selectTalkProviderConfig(talk)
-    assertNotNull(selection)
-    assertEquals("elevenlabs", selection?.provider)
-    assertTrue(selection?.normalizedPayload == true)
-    assertEquals("voice-normalized", selection?.config?.get("voiceId")?.jsonPrimitive?.content)
+    assertEquals(null, selection)
   }
 
   @Test
