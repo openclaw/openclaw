@@ -15,7 +15,11 @@ function installMockFetch(payload: unknown) {
   return mockFetch;
 }
 
-function createPerplexitySearchTool(perplexityConfig?: { apiKey?: string }) {
+function createPerplexitySearchTool(perplexityConfig?: {
+  apiKey?: string;
+  baseUrl?: string;
+  model?: string;
+}) {
   return createWebSearchTool({
     config: {
       tools: {
@@ -106,6 +110,13 @@ function installPerplexitySearchApiFetch(results?: Array<Record<string, unknown>
         date: "2024-01-01",
       },
     ],
+  });
+}
+
+function installPerplexityChatFetch() {
+  return installMockFetch({
+    choices: [{ message: { content: "ok" } }],
+    citations: ["https://example.com"],
   });
 }
 
@@ -411,6 +422,103 @@ describe("web_search perplexity Search API", () => {
     expect(body.search_recency_filter).toBe("month");
     expect(body.search_domain_filter).toEqual(["nature.com", ".gov"]);
     expect(body.search_language_filter).toEqual(["en"]);
+  });
+});
+
+describe("web_search perplexity OpenRouter compatibility", () => {
+  const priorFetch = global.fetch;
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    global.fetch = priorFetch;
+    webSearchTesting.SEARCH_CACHE.clear();
+  });
+
+  it("routes OPENROUTER_API_KEY through chat completions", async () => {
+    vi.stubEnv("PERPLEXITY_API_KEY", "");
+    vi.stubEnv("OPENROUTER_API_KEY", "sk-or-v1-test"); // pragma: allowlist secret
+    const mockFetch = installPerplexityChatFetch();
+    const tool = createPerplexitySearchTool();
+    const result = await tool?.execute?.("call-1", { query: "test" });
+
+    expect(mockFetch).toHaveBeenCalled();
+    expect(mockFetch.mock.calls[0]?.[0]).toBe("https://openrouter.ai/api/v1/chat/completions");
+    const body = parseFirstRequestBody(mockFetch);
+    expect(body.model).toBe("perplexity/sonar-pro");
+    expect(result?.details).toMatchObject({
+      provider: "perplexity",
+      citations: ["https://example.com"],
+      content: expect.stringContaining("ok"),
+    });
+  });
+
+  it("routes configured sk-or key through chat completions", async () => {
+    const mockFetch = installPerplexityChatFetch();
+    const tool = createPerplexitySearchTool({ apiKey: "sk-or-v1-test" }); // pragma: allowlist secret
+    await tool?.execute?.("call-1", { query: "test" });
+
+    expect(mockFetch).toHaveBeenCalled();
+    expect(mockFetch.mock.calls[0]?.[0]).toBe("https://openrouter.ai/api/v1/chat/completions");
+    const headers = (mockFetch.mock.calls[0]?.[1] as RequestInit | undefined)?.headers as
+      | Record<string, string>
+      | undefined;
+    expect(headers?.Authorization).toBe("Bearer sk-or-v1-test");
+  });
+
+  it("keeps freshness support on the compatibility path", async () => {
+    vi.stubEnv("OPENROUTER_API_KEY", "sk-or-v1-test"); // pragma: allowlist secret
+    const mockFetch = installPerplexityChatFetch();
+    const tool = createPerplexitySearchTool();
+    await tool?.execute?.("call-1", { query: "test", freshness: "week" });
+
+    expect(mockFetch).toHaveBeenCalled();
+    const body = parseFirstRequestBody(mockFetch);
+    expect(body.search_recency_filter).toBe("week");
+  });
+
+  it("fails loud for Search API-only filters on the compatibility path", async () => {
+    vi.stubEnv("OPENROUTER_API_KEY", "sk-or-v1-test"); // pragma: allowlist secret
+    const mockFetch = installPerplexityChatFetch();
+    const tool = createPerplexitySearchTool();
+    const result = await tool?.execute?.("call-1", {
+      query: "test",
+      domain_filter: ["nature.com"],
+    });
+
+    expect(mockFetch).not.toHaveBeenCalled();
+    expect(result?.details).toMatchObject({ error: "unsupported_domain_filter" });
+  });
+
+  it("hides Search API-only schema params on the compatibility path", () => {
+    vi.stubEnv("OPENROUTER_API_KEY", "sk-or-v1-test"); // pragma: allowlist secret
+    const tool = createPerplexitySearchTool();
+    const properties = (tool?.parameters as { properties?: Record<string, unknown> } | undefined)
+      ?.properties;
+
+    expect(properties?.freshness).toBeDefined();
+    expect(properties?.country).toBeUndefined();
+    expect(properties?.language).toBeUndefined();
+    expect(properties?.date_after).toBeUndefined();
+    expect(properties?.date_before).toBeUndefined();
+    expect(properties?.domain_filter).toBeUndefined();
+    expect(properties?.max_tokens).toBeUndefined();
+    expect(properties?.max_tokens_per_page).toBeUndefined();
+  });
+
+  it("keeps structured schema params on the native Search API path", () => {
+    vi.stubEnv("PERPLEXITY_API_KEY", "pplx-test");
+    const tool = createPerplexitySearchTool();
+    const properties = (tool?.parameters as { properties?: Record<string, unknown> } | undefined)
+      ?.properties;
+
+    expect(properties?.country).toBeDefined();
+    expect(properties?.language).toBeDefined();
+    expect(properties?.freshness).toBeDefined();
+    expect(properties?.date_after).toBeDefined();
+    expect(properties?.date_before).toBeDefined();
+    expect(properties?.domain_filter).toBeDefined();
+    expect(properties?.max_tokens).toBeDefined();
+    expect(properties?.max_tokens_per_page).toBeDefined();
   });
 });
 
