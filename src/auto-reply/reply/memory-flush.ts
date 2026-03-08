@@ -95,6 +95,10 @@ export function resolveMemoryFlushSettings(cfg?: OpenClawConfig): MemoryFlushSet
   const reserveTokensFloor =
     normalizeNonNegativeInt(cfg?.agents?.defaults?.compaction?.reserveTokensFloor) ??
     DEFAULT_PI_COMPACTION_RESERVE_TOKENS_FLOOR;
+  const configuredReserveTokens =
+    normalizeNonNegativeInt(cfg?.agents?.defaults?.compaction?.reserveTokens) ?? 0;
+  // Use the effective value: max(reserveTokens, reserveTokensFloor), matching pi-settings.ts
+  const effectiveReserveTokens = Math.max(configuredReserveTokens, reserveTokensFloor);
 
   return {
     enabled,
@@ -102,7 +106,7 @@ export function resolveMemoryFlushSettings(cfg?: OpenClawConfig): MemoryFlushSet
     forceFlushTranscriptBytes,
     prompt: ensureNoReplyHint(prompt),
     systemPrompt: ensureNoReplyHint(systemPrompt),
-    reserveTokensFloor,
+    reserveTokensFloor: effectiveReserveTokens,
   };
 }
 
