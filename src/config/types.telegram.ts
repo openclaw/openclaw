@@ -190,6 +190,8 @@ export type TelegramTopicConfig = {
   enabled?: boolean;
   /** Optional allowlist for topic senders (numeric Telegram user IDs). */
   allowFrom?: Array<string | number>;
+  /** Allow bot-authored messages in this topic. */
+  allowBots?: boolean;
   /** Optional system prompt snippet for this topic. */
   systemPrompt?: string;
   /** If true, skip automatic voice-note transcription for mention detection in this topic. */
@@ -213,6 +215,8 @@ export type TelegramGroupConfig = {
   enabled?: boolean;
   /** Optional allowlist for group senders (numeric Telegram user IDs). */
   allowFrom?: Array<string | number>;
+  /** Allow bot-authored messages in this group. */
+  allowBots?: boolean;
   /** Optional system prompt snippet for this group. */
   systemPrompt?: string;
   /** If true, skip automatic voice-note transcription for mention detection in this group. */

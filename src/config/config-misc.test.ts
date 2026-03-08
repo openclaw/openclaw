@@ -360,6 +360,23 @@ describe("config strict validation", () => {
     expect(res.ok).toBe(false);
   });
 
+  it("accepts telegram group allowBots", () => {
+    const res = validateConfigObject({
+      channels: {
+        telegram: {
+          botToken: "123456:ABCDEF",
+          groups: {
+            "-100123": {
+              requireMention: true,
+              allowBots: false,
+            },
+          },
+        },
+      },
+    });
+    expect(res.ok).toBe(true);
+  });
+
   it("flags legacy config entries without auto-migrating", async () => {
     await withTempHome(async (home) => {
       await writeOpenClawConfig(home, {
