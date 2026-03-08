@@ -175,6 +175,77 @@ function listChildDirectories(dir: string): string[] {
   }
 }
 
+const IGNORED_SCAN_DIRS = new Set([
+  "node_modules",
+  ".git",
+  ".svn",
+  ".hg",
+  "__pycache__",
+  ".pytest_cache",
+  "dist",
+  "build",
+  "out",
+  "target",
+  "vendor",
+]);
+
+function isSkillRoot(dir: string): boolean {
+  const skillMd = path.join(dir, "SKILL.md");
+  return fs.existsSync(skillMd);
+}
+
+function discoverSkillDirsRecursive(
+  rootDir: string,
+  limits: ResolvedSkillsLimits,
+  discovered: string[] = [],
+  depth = 0,
+): string[] {
+  if (discovered.length >= limits.maxSkillsLoadedPerSource) {
+    return discovered;
+  }
+  if (depth > 10) {
+    return discovered;
+  }
+
+  try {
+    const entries = fs.readdirSync(rootDir, { withFileTypes: true });
+    for (const entry of entries) {
+      if (discovered.length >= limits.maxSkillsLoadedPerSource) {
+        break;
+      }
+      if (!entry.isDirectory() && !entry.isSymbolicLink()) {
+        continue;
+      }
+      if (entry.name.startsWith(".") || IGNORED_SCAN_DIRS.has(entry.name)) {
+        continue;
+      }
+
+      const fullPath = path.join(rootDir, entry.name);
+      let isDir = entry.isDirectory();
+
+      if (entry.isSymbolicLink()) {
+        try {
+          isDir = fs.statSync(fullPath).isDirectory();
+        } catch {
+          continue;
+        }
+      }
+
+      if (!isDir) {
+        continue;
+      }
+
+      if (isSkillRoot(fullPath)) {
+        discovered.push(fullPath);
+      } else {
+        discoverSkillDirsRecursive(fullPath, limits, discovered, depth + 1);
+      }
+    }
+  } catch {}
+
+  return discovered;
+}
+
 function resolveNestedSkillsRoot(
   dir: string,
   opts?: {
@@ -259,9 +330,6 @@ function loadSkillEntries(
     const childDirs = listChildDirectories(baseDir);
     const suspicious = childDirs.length > limits.maxCandidatesPerRoot;
 
-    const maxCandidates = Math.max(0, limits.maxSkillsLoadedPerSource);
-    const limitedChildren = childDirs.slice().sort().slice(0, maxCandidates);
-
     if (suspicious) {
       skillsLogger.warn("Skills root looks suspiciously large, truncating discovery.", {
         dir: params.dir,
@@ -270,20 +338,13 @@ function loadSkillEntries(
         maxCandidatesPerRoot: limits.maxCandidatesPerRoot,
         maxSkillsLoadedPerSource: limits.maxSkillsLoadedPerSource,
       });
-    } else if (childDirs.length > maxCandidates) {
-      skillsLogger.warn("Skills root has many entries, truncating discovery.", {
-        dir: params.dir,
-        baseDir,
-        childDirCount: childDirs.length,
-        maxSkillsLoadedPerSource: limits.maxSkillsLoadedPerSource,
-      });
     }
 
     const loadedSkills: Skill[] = [];
 
-    // Only consider immediate subfolders that look like skills (have SKILL.md) and are under size cap.
-    for (const name of limitedChildren) {
-      const skillDir = path.join(baseDir, name);
+    const skillDirs = discoverSkillDirsRecursive(baseDir, limits);
+
+    for (const skillDir of skillDirs) {
       const skillMd = path.join(skillDir, "SKILL.md");
       if (!fs.existsSync(skillMd)) {
         continue;
@@ -292,7 +353,7 @@ function loadSkillEntries(
         const size = fs.statSync(skillMd).size;
         if (size > limits.maxSkillFileBytes) {
           skillsLogger.warn("Skipping skill due to oversized SKILL.md.", {
-            skill: name,
+            skill: path.basename(skillDir),
             filePath: skillMd,
             size,
             maxSkillFileBytes: limits.maxSkillFileBytes,
