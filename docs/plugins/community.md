@@ -49,3 +49,8 @@ Use this format when adding entries:
   npm: `@icesword760/openclaw-wechat`
   repo: `https://github.com/icesword0760/openclaw-wechat`
   install: `openclaw plugins install @icesword760/openclaw-wechat`
+
+- **Zulip** — Concurrent message processing, reaction indicators, file uploads, and full actions API for Zulip streams and topics.
+  npm: `openclaw-channel-zulip`
+  repo: `https://github.com/FtlC-ian/openclaw-channel-zulip`
+  install: `openclaw plugins install openclaw-channel-zulip`
