@@ -2,9 +2,11 @@ import { describe, expect, it, vi } from "vitest";
 import type { GatewayBonjourBeacon } from "../../infra/bonjour-discovery.js";
 import { pickBeaconHost, pickGatewayPort } from "./discover.js";
 
-const acquireGatewayLock = vi.fn(async (_opts?: { port?: number }) => ({
-  release: vi.fn(async () => {}),
-}));
+const acquireGatewayLock = vi.fn(
+  async (_opts?: { port?: number; onTelemetry?: (event: unknown) => void }) => ({
+    release: vi.fn(async () => {}),
+  }),
+);
 const consumeGatewaySigusr1RestartAuthorization = vi.fn(() => true);
 const isGatewaySigusr1RestartExternallyAllowed = vi.fn(() => false);
 const markGatewaySigusr1RestartHandled = vi.fn();
@@ -23,7 +25,8 @@ const gatewayLog = {
 };
 
 vi.mock("../../infra/gateway-lock.js", () => ({
-  acquireGatewayLock: (opts?: { port?: number }) => acquireGatewayLock(opts),
+  acquireGatewayLock: (opts?: { port?: number; onTelemetry?: (event: unknown) => void }) =>
+    acquireGatewayLock(opts),
 }));
 
 vi.mock("../../infra/restart.js", () => ({
@@ -295,9 +298,80 @@ describe("runGatewayLoop", () => {
       process.emit("SIGUSR1");
 
       await expect(loopPromise).rejects.toThrow("stop-loop");
-      expect(acquireGatewayLock).toHaveBeenNthCalledWith(1, { port: 18789 });
-      expect(acquireGatewayLock).toHaveBeenNthCalledWith(2, { port: 18789 });
-      expect(acquireGatewayLock).toHaveBeenNthCalledWith(3, { port: 18789 });
+      expect(acquireGatewayLock).toHaveBeenNthCalledWith(
+        1,
+        expect.objectContaining({ port: 18789 }),
+      );
+      expect(acquireGatewayLock).toHaveBeenNthCalledWith(
+        2,
+        expect.objectContaining({ port: 18789 }),
+      );
+      expect(acquireGatewayLock).toHaveBeenNthCalledWith(
+        3,
+        expect.objectContaining({ port: 18789 }),
+      );
+    });
+  });
+
+  it("logs explicit singleton-lock startup telemetry", async () => {
+    vi.clearAllMocks();
+
+    acquireGatewayLock.mockImplementationOnce(async (opts) => {
+      opts?.onTelemetry?.({
+        event: "acquire-start",
+        lockPath: "/tmp/openclaw/gateway.test.lock",
+        configPath: "/tmp/openclaw/openclaw.json",
+        timeoutMs: 5000,
+        pollIntervalMs: 100,
+        staleMs: 30_000,
+        platform: "darwin",
+        port: 18789,
+      });
+      opts?.onTelemetry?.({
+        event: "acquire-contention",
+        lockPath: "/tmp/openclaw/gateway.test.lock",
+        ownerPid: 99,
+        ownerStatus: "unknown",
+        waitedMs: 150,
+        attempt: 2,
+      });
+      opts?.onTelemetry?.({
+        event: "stale-lock-recovered",
+        lockPath: "/tmp/openclaw/gateway.test.lock",
+        ownerPid: 99,
+        ownerStatus: "unknown",
+        reason: "stale-unknown-owner",
+        waitedMs: 155,
+        attempt: 2,
+      });
+      opts?.onTelemetry?.({
+        event: "acquire-success",
+        lockPath: "/tmp/openclaw/gateway.test.lock",
+        configPath: "/tmp/openclaw/openclaw.json",
+        waitedMs: 160,
+        attempts: 3,
+        staleRecoveries: 1,
+      });
+      return { release: vi.fn(async () => {}) };
+    });
+
+    await withIsolatedSignals(async () => {
+      const { exited } = await createSignaledLoopHarness();
+      process.emit("SIGTERM");
+
+      await expect(exited).resolves.toBe(0);
+      expect(gatewayLog.info).toHaveBeenCalledWith(
+        expect.stringContaining("singleton lock: acquiring"),
+      );
+      expect(gatewayLog.warn).toHaveBeenCalledWith(
+        expect.stringContaining("singleton lock: waiting"),
+      );
+      expect(gatewayLog.warn).toHaveBeenCalledWith(
+        expect.stringContaining("singleton lock: removed stale lock"),
+      );
+      expect(gatewayLog.info).toHaveBeenCalledWith(
+        expect.stringContaining("singleton lock: acquired"),
+      );
     });
   });
 

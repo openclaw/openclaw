@@ -7,7 +7,12 @@ import os from "node:os";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveConfigPath, resolveGatewayLockDir, resolveStateDir } from "../config/paths.js";
-import { acquireGatewayLock, GatewayLockError, type GatewayLockOptions } from "./gateway-lock.js";
+import {
+  acquireGatewayLock,
+  GatewayLockError,
+  type GatewayLockOptions,
+  type GatewayLockTelemetryEvent,
+} from "./gateway-lock.js";
 
 let fixtureRoot = "";
 let fixtureCount = 0;
@@ -135,6 +140,10 @@ async function writeRecentLockFile(env: NodeJS.ProcessEnv, startTime = 111) {
     startTime,
     createdAt: new Date().toISOString(),
   });
+}
+
+async function sleep(ms: number) {
+  await new Promise<void>((resolve) => setTimeout(resolve, ms));
 }
 
 describe("gateway lock", () => {
@@ -268,6 +277,151 @@ describe("gateway lock", () => {
     } finally {
       connectSpy.mockRestore();
     }
+  });
+
+  it("emits stale recovery telemetry for macOS-style lock checks", async () => {
+    vi.useRealTimers();
+    const env = await makeEnv();
+    await writeRecentLockFile(env);
+    const connectSpy = createPortProbeConnectionSpy("refused");
+    const events: GatewayLockTelemetryEvent[] = [];
+    try {
+      const lock = await acquireForTest(env, {
+        timeoutMs: 80,
+        pollIntervalMs: 5,
+        staleMs: 10_000,
+        platform: "darwin",
+        port: 18789,
+        onTelemetry: (event) => events.push(event),
+      });
+      expect(lock).not.toBeNull();
+      await lock?.release();
+    } finally {
+      connectSpy.mockRestore();
+    }
+
+    expect(events.some((event) => event.event === "acquire-start")).toBe(true);
+    expect(
+      events.some(
+        (event) =>
+          event.event === "stale-lock-recovered" &&
+          event.reason === "owner-dead" &&
+          event.ownerStatus === "dead",
+      ),
+    ).toBe(true);
+    const success = events.find((event) => event.event === "acquire-success");
+    expect(success).toBeDefined();
+    if (success && success.event === "acquire-success") {
+      expect(success.staleRecoveries).toBeGreaterThan(0);
+    }
+  });
+
+  it("emits stale recovery telemetry for linux pid reuse checks", async () => {
+    vi.useRealTimers();
+    const env = await makeEnv();
+    const { lockPath, configPath } = resolveLockPath(env);
+    await fs.writeFile(
+      lockPath,
+      JSON.stringify(createLockPayload({ configPath, startTime: 111 })),
+      "utf8",
+    );
+    const spy = mockProcStatRead({
+      onProcRead: () => makeProcStat(process.pid, 222),
+    });
+    const events: GatewayLockTelemetryEvent[] = [];
+    try {
+      const lock = await acquireForTest(env, {
+        timeoutMs: 80,
+        pollIntervalMs: 5,
+        platform: "linux",
+        onTelemetry: (event) => events.push(event),
+      });
+      expect(lock).not.toBeNull();
+      await lock?.release();
+    } finally {
+      spy.mockRestore();
+    }
+
+    expect(
+      events.some(
+        (event) =>
+          event.event === "stale-lock-recovered" &&
+          event.reason === "owner-dead" &&
+          event.ownerStatus === "dead",
+      ),
+    ).toBe(true);
+  });
+
+  it("serializes parallel startup storms without leaking lock files", async () => {
+    vi.useRealTimers();
+    const env = await makeEnv();
+    const contenders = 20;
+    const results = await Promise.allSettled(
+      Array.from({ length: contenders }, async (_value, idx) => {
+        const lock = await acquireForTest(env, {
+          timeoutMs: 6_000,
+          pollIntervalMs: 1,
+          staleMs: 10_000,
+          platform: idx % 2 === 0 ? "darwin" : "linux",
+        });
+        expect(lock).not.toBeNull();
+        await sleep(2);
+        await lock?.release();
+      }),
+    );
+
+    const rejected = results.filter((result) => result.status === "rejected");
+    expect(rejected).toHaveLength(0);
+    const { lockPath } = resolveLockPath(env);
+    await expect(fs.access(lockPath)).rejects.toThrow();
+  });
+
+  it("propagates stale lock removal errors during owner-dead recovery", async () => {
+    vi.useRealTimers();
+    const env = await makeEnv();
+    await writeLockFile(env, { startTime: 111 });
+    const procSpy = mockProcStatRead({
+      onProcRead: () => makeProcStat(process.pid, 222),
+    });
+    const rmSpy = vi
+      .spyOn(fs, "rm")
+      .mockRejectedValueOnce(Object.assign(new Error("EPERM"), { code: "EPERM" }));
+
+    await expect(
+      acquireForTest(env, {
+        timeoutMs: 80,
+        pollIntervalMs: 5,
+        platform: "linux",
+      }),
+    ).rejects.toMatchObject({
+      name: "GatewayLockError",
+      message: expect.stringContaining("stale-owner recovery"),
+    });
+
+    rmSpy.mockRestore();
+    procSpy.mockRestore();
+  });
+
+  it("surfaces lock-file removal failures during release", async () => {
+    vi.useRealTimers();
+    const env = await makeEnv();
+    const lock = await acquireForTest(env, { timeoutMs: 80 });
+    expect(lock).not.toBeNull();
+    if (!lock) {
+      throw new Error("expected lock handle");
+    }
+
+    const rmSpy = vi
+      .spyOn(fs, "rm")
+      .mockRejectedValueOnce(Object.assign(new Error("EROFS"), { code: "EROFS" }));
+    await expect(lock.release()).rejects.toMatchObject({
+      name: "GatewayLockError",
+      message: expect.stringContaining("release"),
+    });
+    rmSpy.mockRestore();
+
+    const { lockPath } = resolveLockPath(env);
+    await fs.rm(lockPath, { force: true });
   });
 
   it("returns null when multi-gateway override is enabled", async () => {

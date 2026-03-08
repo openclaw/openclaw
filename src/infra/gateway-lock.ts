@@ -32,6 +32,7 @@ export type GatewayLockOptions = {
   allowInTests?: boolean;
   platform?: NodeJS.Platform;
   port?: number;
+  onTelemetry?: (event: GatewayLockTelemetryEvent) => void;
 };
 
 export class GatewayLockError extends Error {
@@ -45,6 +46,55 @@ export class GatewayLockError extends Error {
 }
 
 type LockOwnerStatus = "alive" | "dead" | "unknown";
+
+export type GatewayLockTelemetryEvent =
+  | {
+      event: "acquire-skipped";
+      reason: "multi-gateway-override" | "test-env";
+    }
+  | {
+      event: "acquire-start";
+      lockPath: string;
+      configPath: string;
+      timeoutMs: number;
+      pollIntervalMs: number;
+      staleMs: number;
+      platform: NodeJS.Platform;
+      port?: number;
+    }
+  | {
+      event: "acquire-contention";
+      lockPath: string;
+      ownerPid?: number;
+      ownerStatus: LockOwnerStatus;
+      waitedMs: number;
+      attempt: number;
+    }
+  | {
+      event: "stale-lock-recovered";
+      lockPath: string;
+      ownerPid?: number;
+      ownerStatus: LockOwnerStatus;
+      reason: "owner-dead" | "stale-unknown-owner";
+      waitedMs: number;
+      attempt: number;
+    }
+  | {
+      event: "acquire-success";
+      lockPath: string;
+      configPath: string;
+      waitedMs: number;
+      attempts: number;
+      staleRecoveries: number;
+    }
+  | {
+      event: "acquire-timeout";
+      lockPath: string;
+      ownerPid?: number;
+      waitedMs: number;
+      timeoutMs: number;
+      attempts: number;
+    };
 
 function normalizeProcArg(arg: string): string {
   return arg.replaceAll("\\", "/").toLowerCase();
@@ -201,15 +251,62 @@ function resolveGatewayLockPath(env: NodeJS.ProcessEnv) {
   return { lockPath, configPath };
 }
 
+function isLockPayloadStale(payload: LockPayload | null, staleMs: number, nowMs: number): boolean {
+  const createdAt = payload?.createdAt;
+  if (!createdAt) {
+    return false;
+  }
+  const createdAtMs = Date.parse(createdAt);
+  if (!Number.isFinite(createdAtMs)) {
+    return false;
+  }
+  return nowMs - createdAtMs > staleMs;
+}
+
+async function isLockMtimeStale(
+  lockPath: string,
+  staleMs: number,
+  nowMs: number,
+): Promise<boolean> {
+  try {
+    const st = await fs.stat(lockPath);
+    return nowMs - st.mtimeMs > staleMs;
+  } catch {
+    // On Windows or locked filesystems we may be unable to stat the lock file
+    // even when another gateway owns it. Prefer waiting over force-removal.
+    return false;
+  }
+}
+
+async function removeLockFile(lockPath: string, reason: string): Promise<void> {
+  try {
+    await fs.rm(lockPath, { force: true });
+  } catch (err) {
+    throw new GatewayLockError(
+      `failed to remove gateway lock file (${reason}) at ${lockPath}`,
+      err,
+    );
+  }
+}
+
 export async function acquireGatewayLock(
   opts: GatewayLockOptions = {},
 ): Promise<GatewayLockHandle | null> {
+  const emitTelemetry = (event: GatewayLockTelemetryEvent) => {
+    try {
+      opts.onTelemetry?.(event);
+    } catch {
+      // Best-effort telemetry only; lock behavior must remain unaffected.
+    }
+  };
   const env = opts.env ?? process.env;
   const allowInTests = opts.allowInTests === true;
-  if (
-    env.OPENCLAW_ALLOW_MULTI_GATEWAY === "1" ||
-    (!allowInTests && (env.VITEST || env.NODE_ENV === "test"))
-  ) {
+  if (env.OPENCLAW_ALLOW_MULTI_GATEWAY === "1") {
+    emitTelemetry({ event: "acquire-skipped", reason: "multi-gateway-override" });
+    return null;
+  }
+  if (!allowInTests && (env.VITEST || env.NODE_ENV === "test")) {
+    emitTelemetry({ event: "acquire-skipped", reason: "test-env" });
     return null;
   }
 
@@ -220,11 +317,25 @@ export async function acquireGatewayLock(
   const port = opts.port;
   const { lockPath, configPath } = resolveGatewayLockPath(env);
   await fs.mkdir(path.dirname(lockPath), { recursive: true });
+  emitTelemetry({
+    event: "acquire-start",
+    lockPath,
+    configPath,
+    timeoutMs,
+    pollIntervalMs,
+    staleMs,
+    platform,
+    port,
+  });
 
   const startedAt = Date.now();
   let lastPayload: LockPayload | null = null;
+  let attempts = 0;
+  let staleRecoveries = 0;
+  let contentionReported = false;
 
   while (Date.now() - startedAt < timeoutMs) {
+    attempts += 1;
     try {
       const handle = await fs.open(lockPath, "wx");
       const startTime = platform === "linux" ? readLinuxStartTime(process.pid) : null;
@@ -236,50 +347,89 @@ export async function acquireGatewayLock(
       if (typeof startTime === "number" && Number.isFinite(startTime)) {
         payload.startTime = startTime;
       }
-      await handle.writeFile(JSON.stringify(payload), "utf8");
+      try {
+        await handle.writeFile(JSON.stringify(payload), "utf8");
+      } catch (writeErr) {
+        await handle.close().catch(() => undefined);
+        await removeLockFile(lockPath, "cleanup after write failure").catch(() => undefined);
+        throw new GatewayLockError(`failed to write gateway lock payload at ${lockPath}`, writeErr);
+      }
+      emitTelemetry({
+        event: "acquire-success",
+        lockPath,
+        configPath,
+        waitedMs: Date.now() - startedAt,
+        attempts,
+        staleRecoveries,
+      });
       return {
         lockPath,
         configPath,
         release: async () => {
           await handle.close().catch(() => undefined);
-          await fs.rm(lockPath, { force: true });
+          await removeLockFile(lockPath, "release");
         },
       };
     } catch (err) {
+      if (err instanceof GatewayLockError) {
+        throw err;
+      }
       const code = (err as { code?: unknown }).code;
       if (code !== "EEXIST") {
         throw new GatewayLockError(`failed to acquire gateway lock at ${lockPath}`, err);
       }
 
       lastPayload = await readLockPayload(lockPath);
-      const ownerPid = lastPayload?.pid;
+      const ownerPid = typeof lastPayload?.pid === "number" ? lastPayload.pid : undefined;
       const ownerStatus = ownerPid
         ? await resolveGatewayOwnerStatus(ownerPid, lastPayload, platform, port)
         : "unknown";
+      const waitedMs = Date.now() - startedAt;
+      if (!contentionReported) {
+        emitTelemetry({
+          event: "acquire-contention",
+          lockPath,
+          ownerPid,
+          ownerStatus,
+          waitedMs,
+          attempt: attempts,
+        });
+        contentionReported = true;
+      }
       if (ownerStatus === "dead" && ownerPid) {
-        await fs.rm(lockPath, { force: true });
+        await removeLockFile(lockPath, "stale-owner recovery");
+        staleRecoveries += 1;
+        emitTelemetry({
+          event: "stale-lock-recovered",
+          lockPath,
+          ownerPid,
+          ownerStatus,
+          reason: "owner-dead",
+          waitedMs,
+          attempt: attempts,
+        });
+        contentionReported = false;
         continue;
       }
       if (ownerStatus !== "alive") {
-        let stale = false;
-        if (lastPayload?.createdAt) {
-          const createdAt = Date.parse(lastPayload.createdAt);
-          stale = Number.isFinite(createdAt) ? Date.now() - createdAt > staleMs : false;
-        }
+        const nowMs = Date.now();
+        let stale = isLockPayloadStale(lastPayload, staleMs, nowMs);
         if (!stale) {
-          try {
-            const st = await fs.stat(lockPath);
-            stale = Date.now() - st.mtimeMs > staleMs;
-          } catch {
-            // On Windows or locked filesystems we may be unable to stat the
-            // lock file even though the existing gateway is still healthy.
-            // Treat the lock as non-stale so we keep waiting instead of
-            // forcefully removing another gateway's lock.
-            stale = false;
-          }
+          stale = await isLockMtimeStale(lockPath, staleMs, nowMs);
         }
         if (stale) {
-          await fs.rm(lockPath, { force: true });
+          await removeLockFile(lockPath, "stale-timestamp recovery");
+          staleRecoveries += 1;
+          emitTelemetry({
+            event: "stale-lock-recovered",
+            lockPath,
+            ownerPid,
+            ownerStatus,
+            reason: "stale-unknown-owner",
+            waitedMs,
+            attempt: attempts,
+          });
+          contentionReported = false;
           continue;
         }
       }
@@ -288,6 +438,14 @@ export async function acquireGatewayLock(
     }
   }
 
-  const owner = lastPayload?.pid ? ` (pid ${lastPayload.pid})` : "";
+  emitTelemetry({
+    event: "acquire-timeout",
+    lockPath,
+    ownerPid: typeof lastPayload?.pid === "number" ? lastPayload.pid : undefined,
+    waitedMs: Date.now() - startedAt,
+    timeoutMs,
+    attempts,
+  });
+  const owner = typeof lastPayload?.pid === "number" ? ` (pid ${lastPayload.pid})` : "";
   throw new GatewayLockError(`gateway already running${owner}; lock timeout after ${timeoutMs}ms`);
 }
