@@ -10,6 +10,7 @@ export function normalizeExplicitDiscordSessionKey(
     return normalized;
   }
 
+  normalized = normalized.replace(/^(discord:)dm:/, "$1direct:");
   normalized = normalized.replace(/^(agent:[^:]+:discord:)dm:/, "$1direct:");
   const match = normalized.match(/^((?:agent:[^:]+:)?)discord:channel:([^:]+)$/);
   if (!match) {
