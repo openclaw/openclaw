@@ -122,6 +122,32 @@ describe("talk normalization", () => {
     });
   });
 
+  it("preserves baseUrl in provider config", () => {
+    const normalized = normalizeTalkSection({
+      provider: "elevenlabs",
+      providers: {
+        elevenlabs: {
+          voiceId: "voice-123",
+          baseUrl: "https://custom.tts.example.com",
+        },
+      },
+    });
+
+    expect(normalized?.providers?.elevenlabs?.baseUrl).toBe("https://custom.tts.example.com");
+  });
+
+  it("trims and normalizes baseUrl as a string field", () => {
+    const normalized = normalizeTalkSection({
+      providers: {
+        elevenlabs: {
+          baseUrl: "  http://localhost:8880  ",
+        },
+      },
+    });
+
+    expect(normalized?.providers?.elevenlabs?.baseUrl).toBe("http://localhost:8880");
+  });
+
   it("does not apply ELEVENLABS_API_KEY when active provider is not elevenlabs", async () => {
     const elevenLabsApiKey = "env-eleven-key"; // pragma: allowlist secret
     await withEnvAsync({ [elevenLabsApiKeyEnv]: elevenLabsApiKey }, async () => {
@@ -174,5 +200,83 @@ describe("talk normalization", () => {
         },
       );
     });
+  });
+
+  it("merges talk.elevenlabs shortcut into providers.elevenlabs", () => {
+    const normalized = normalizeTalkSection({
+      elevenlabs: {
+        baseUrl: "http://local:8880",
+        voiceId: "rick",
+        seed: 42,
+      },
+    });
+
+    expect(normalized?.provider).toBe("elevenlabs");
+    expect(normalized?.providers?.elevenlabs?.baseUrl).toBe("http://local:8880");
+    expect(normalized?.providers?.elevenlabs?.voiceId).toBe("rick");
+    expect(normalized?.providers?.elevenlabs?.seed).toBe(42);
+  });
+
+  it("merges talk.openai shortcut into providers.openai", () => {
+    const normalized = normalizeTalkSection({
+      provider: "openai",
+      openai: {
+        voice: "nova",
+        model: "gpt-4o-mini-tts",
+      },
+    });
+
+    expect(normalized?.provider).toBe("openai");
+    expect(normalized?.providers?.openai?.voice).toBe("nova");
+    expect(normalized?.providers?.openai?.model).toBe("gpt-4o-mini-tts");
+  });
+
+  it("infers provider from lone talk.openai shortcut", () => {
+    const normalized = normalizeTalkSection({
+      openai: {
+        voice: "nova",
+      },
+    });
+
+    expect(normalized?.provider).toBe("openai");
+    expect(normalized?.providers?.openai?.voice).toBe("nova");
+  });
+
+  it("typed shortcut overrides existing providers entry", () => {
+    const normalized = normalizeTalkSection({
+      providers: {
+        elevenlabs: {
+          voiceId: "old-voice",
+          modelId: "eleven_v2",
+        },
+      },
+      elevenlabs: {
+        voiceId: "new-voice",
+        baseUrl: "http://custom:8880",
+      },
+    });
+
+    expect(normalized?.providers?.elevenlabs?.voiceId).toBe("new-voice");
+    expect(normalized?.providers?.elevenlabs?.baseUrl).toBe("http://custom:8880");
+    // modelId from existing providers entry is preserved
+    expect(normalized?.providers?.elevenlabs?.modelId).toBe("eleven_v2");
+  });
+
+  it("passes voiceSettings through normalization", () => {
+    const normalized = normalizeTalkSection({
+      elevenlabs: {
+        voiceSettings: {
+          stability: 0.5,
+          similarityBoost: 0.75,
+          speed: 1.2,
+        },
+      },
+    });
+
+    const settings = normalized?.providers?.elevenlabs?.voiceSettings;
+    expect(settings).toBeDefined();
+    expect((settings as Record<string, unknown>)?.stability).toBe(0.5);
+    expect((settings as Record<string, unknown>)?.similarityBoost).toBe(0.75);
+    expect((settings as Record<string, unknown>)?.speed).toBe(1.2);
   });
 });

@@ -151,6 +151,19 @@ export const FIELD_HELP: Record<string, string> = {
   "talk.providers.*.modelId": "Provider default model ID for Talk mode.",
   "talk.providers.*.outputFormat": "Provider default output format for Talk mode.",
   "talk.providers.*.apiKey": "Provider API key for Talk mode.", // pragma: allowlist secret
+  "talk.providers.*.baseUrl":
+    "Custom TTS API base URL for the provider (e.g. a self-hosted ElevenLabs-compatible server).",
+  "talk.providers.*.seed": "Seed for reproducible TTS output (ElevenLabs).",
+  "talk.providers.*.voiceSettings":
+    "ElevenLabs voice settings (stability, similarityBoost, style, useSpeakerBoost, speed).",
+  "talk.providers.*.applyTextNormalization":
+    'Text normalization mode for ElevenLabs ("auto", "on", or "off").',
+  "talk.providers.*.languageCode": 'ISO 639-1 language code for ElevenLabs (e.g. "en").',
+  "talk.providers.*.model": "Model name for Talk mode (OpenAI provider).",
+  "talk.providers.*.voice": "Voice name for Talk mode (OpenAI provider).",
+  "talk.elevenlabs":
+    "Typed ElevenLabs config shortcut for Talk mode. Merged into talk.providers.elevenlabs.",
+  "talk.openai": "Typed OpenAI config shortcut for Talk mode. Merged into talk.providers.openai.",
   "talk.voiceId":
     "Legacy ElevenLabs default voice ID for Talk mode. Prefer talk.providers.elevenlabs.voiceId.",
   "talk.voiceAliases":

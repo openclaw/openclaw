@@ -59,8 +59,38 @@ export type TalkProviderConfig = {
   outputFormat?: string;
   /** Provider API key (optional; provider-specific env fallback may apply). */
   apiKey?: SecretInput;
+  /** Custom base URL for the provider's TTS API (e.g. a self-hosted server). */
+  baseUrl?: string;
   /** Provider-specific extensions. */
   [key: string]: unknown;
+};
+
+/** Typed ElevenLabs config for Talk mode (mirrors messages.tts.elevenlabs). */
+export type TalkElevenLabsConfig = {
+  apiKey?: SecretInput;
+  baseUrl?: string;
+  voiceId?: string;
+  voiceAliases?: Record<string, string>;
+  modelId?: string;
+  outputFormat?: string;
+  seed?: number;
+  applyTextNormalization?: "auto" | "on" | "off";
+  languageCode?: string;
+  voiceSettings?: {
+    stability?: number;
+    similarityBoost?: number;
+    style?: number;
+    useSpeakerBoost?: boolean;
+    speed?: number;
+  };
+};
+
+/** Typed OpenAI config for Talk mode (extends messages.tts.openai with baseUrl). */
+export type TalkOpenAIConfig = {
+  apiKey?: SecretInput;
+  baseUrl?: string;
+  model?: string;
+  voice?: string;
 };
 
 export type TalkConfig = {
@@ -68,6 +98,10 @@ export type TalkConfig = {
   provider?: string;
   /** Provider-specific Talk config keyed by provider id. */
   providers?: Record<string, TalkProviderConfig>;
+  /** Typed ElevenLabs shortcut (merged into providers.elevenlabs). */
+  elevenlabs?: TalkElevenLabsConfig;
+  /** Typed OpenAI shortcut (merged into providers.openai). */
+  openai?: TalkOpenAIConfig;
   /** Stop speaking when user starts talking (default: true). */
   interruptOnSpeech?: boolean;
 

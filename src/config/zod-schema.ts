@@ -583,9 +583,58 @@ export const OpenClawSchema = z
                 modelId: z.string().optional(),
                 outputFormat: z.string().optional(),
                 apiKey: SecretInputSchema.optional().register(sensitive),
+                baseUrl: z.string().optional(),
+                seed: z.number().int().min(0).optional(),
+                applyTextNormalization: z.enum(["auto", "on", "off"]).optional(),
+                languageCode: z.string().optional(),
+                voiceSettings: z
+                  .object({
+                    stability: z.number().min(0).max(1).optional(),
+                    similarityBoost: z.number().min(0).max(1).optional(),
+                    style: z.number().min(0).max(1).optional(),
+                    useSpeakerBoost: z.boolean().optional(),
+                    speed: z.number().min(0.5).max(2).optional(),
+                  })
+                  .strict()
+                  .optional(),
+                model: z.string().optional(),
+                voice: z.string().optional(),
               })
               .catchall(z.unknown()),
           )
+          .optional(),
+        elevenlabs: z
+          .object({
+            apiKey: SecretInputSchema.optional().register(sensitive),
+            baseUrl: z.string().optional(),
+            voiceId: z.string().optional(),
+            voiceAliases: z.record(z.string(), z.string()).optional(),
+            modelId: z.string().optional(),
+            outputFormat: z.string().optional(),
+            seed: z.number().int().min(0).optional(),
+            applyTextNormalization: z.enum(["auto", "on", "off"]).optional(),
+            languageCode: z.string().optional(),
+            voiceSettings: z
+              .object({
+                stability: z.number().min(0).max(1).optional(),
+                similarityBoost: z.number().min(0).max(1).optional(),
+                style: z.number().min(0).max(1).optional(),
+                useSpeakerBoost: z.boolean().optional(),
+                speed: z.number().min(0.5).max(2).optional(),
+              })
+              .strict()
+              .optional(),
+          })
+          .strict()
+          .optional(),
+        openai: z
+          .object({
+            apiKey: SecretInputSchema.optional().register(sensitive),
+            baseUrl: z.string().optional(),
+            model: z.string().optional(),
+            voice: z.string().optional(),
+          })
+          .strict()
           .optional(),
         voiceId: z.string().optional(),
         voiceAliases: z.record(z.string(), z.string()).optional(),

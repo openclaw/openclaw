@@ -12,6 +12,7 @@ actor TalkModeRuntime {
     private let ttsLogger = Logger(subsystem: "ai.openclaw", category: "talk.tts")
     private static let defaultModelIdFallback = "eleven_v3"
     private static let defaultTalkProvider = "elevenlabs"
+    private static let openaiTalkProvider = "openai"
 
     private final class RMSMeter: @unchecked Sendable {
         private let lock = NSLock()
@@ -62,8 +63,14 @@ actor TalkModeRuntime {
     private var lastInterruptedAtSeconds: Double?
     private var voiceAliases: [String: String] = [:]
     private var lastSpokenText: String?
+    private var activeProvider: String = "elevenlabs"
     private var apiKey: String?
     private var fallbackVoiceId: String?
+    private var ttsBaseUrl: URL?
+    private var openaiApiKey: String?
+    private var openaiBaseUrl: URL?
+    private var openaiModel: String?
+    private var openaiVoice: String?
     private var lastPlaybackWasPCM: Bool = false
 
     private let silenceWindow: TimeInterval = 0.7
@@ -446,9 +453,16 @@ actor TalkModeRuntime {
     private func playAssistant(text: String) async {
         guard let input = await self.preparePlaybackInput(text: text) else { return }
         do {
-            if let apiKey = input.apiKey, !apiKey.isEmpty, let voiceId = input.voiceId {
-                try await self.playElevenLabs(input: input, apiKey: apiKey, voiceId: voiceId)
-            } else {
+            switch input.provider {
+            case Self.openaiTalkProvider:
+                try await self.playOpenAI(input: input)
+            case Self.defaultTalkProvider:
+                if let apiKey = input.apiKey, !apiKey.isEmpty, let voiceId = input.voiceId {
+                    try await self.playElevenLabs(input: input, apiKey: apiKey, voiceId: voiceId)
+                } else {
+                    try await self.playSystemVoice(input: input)
+                }
+            default:
                 try await self.playSystemVoice(input: input)
             }
         } catch {
@@ -471,6 +485,7 @@ actor TalkModeRuntime {
 
     private struct TalkPlaybackInput {
         let generation: Int
+        let provider: String
         let cleanedText: String
         let directive: TalkDirective?
         let apiKey: String?
@@ -518,6 +533,7 @@ actor TalkModeRuntime {
             }
         }
 
+        let provider = self.activeProvider
         let apiKey = self.apiKey?.trimmingCharacters(in: .whitespacesAndNewlines)
         let preferredVoice =
             resolvedVoice ??
@@ -526,20 +542,28 @@ actor TalkModeRuntime {
 
         let language = ElevenLabsTTSClient.validatedLanguage(directive?.language)
 
-        let voiceId: String? = if let apiKey, !apiKey.isEmpty {
-            await self.resolveVoiceId(preferred: preferredVoice, apiKey: apiKey)
+        // Voice resolution is ElevenLabs-specific; OpenAI uses its own voice config.
+        let voiceId: String?
+        if provider == Self.openaiTalkProvider {
+            voiceId = nil
+        } else if let apiKey, !apiKey.isEmpty {
+            voiceId = await self.resolveVoiceId(preferred: preferredVoice, apiKey: apiKey)
         } else {
-            nil
+            voiceId = nil
         }
 
-        if apiKey?.isEmpty != false {
-            self.ttsLogger.warning("talk missing ELEVENLABS_API_KEY; falling back to system voice")
-        } else if voiceId == nil {
-            self.ttsLogger.warning("talk missing voiceId; falling back to system voice")
-        } else if let voiceId {
+        if provider == Self.defaultTalkProvider {
+            if apiKey?.isEmpty != false {
+                self.ttsLogger.warning("talk missing ELEVENLABS_API_KEY; falling back to system voice")
+            } else if voiceId == nil {
+                self.ttsLogger.warning("talk missing voiceId; falling back to system voice")
+            }
+        }
+        if let voiceId {
             self.ttsLogger
                 .info(
-                    "talk TTS request voiceId=\(voiceId, privacy: .public) " +
+                    "talk TTS request provider=\(provider, privacy: .public) " +
+                        "voiceId=\(voiceId, privacy: .public) " +
                         "chars=\(cleaned.count, privacy: .public)")
         }
         self.lastSpokenText = cleaned
@@ -550,6 +574,7 @@ actor TalkModeRuntime {
 
         return TalkPlaybackInput(
             generation: gen,
+            provider: provider,
             cleanedText: cleaned,
             directive: directive,
             apiKey: apiKey,
@@ -557,6 +582,129 @@ actor TalkModeRuntime {
             language: language,
             synthTimeoutSeconds: synthTimeoutSeconds)
     }
+
+    /// Create an ElevenLabsTTSClient, forwarding any custom base URL configured
+    /// via `talk.providers.elevenlabs.baseUrl` (config) or the
+    /// `ELEVENLABS_BASE_URL` env var.
+    private func makeElevenLabsClient(apiKey: String) -> ElevenLabsTTSClient {
+        if let baseUrl = self.ttsBaseUrl {
+            return ElevenLabsTTSClient(apiKey: apiKey, baseUrl: baseUrl)
+        }
+        return ElevenLabsTTSClient(apiKey: apiKey)
+    }
+
+    // MARK: - OpenAI TTS
+
+    private static let defaultOpenAIModel = "gpt-4o-mini-tts"
+    private static let defaultOpenAIVoice = "alloy"
+    private static let defaultOpenAIBaseUrl = URL(string: "https://api.openai.com/v1")!
+
+    private func playOpenAI(input: TalkPlaybackInput) async throws {
+        let apiKey = self.openaiApiKey ?? ""
+        guard !apiKey.isEmpty else {
+            self.ttsLogger.warning("talk openai: missing API key; falling back to system voice")
+            try await self.playSystemVoice(input: input)
+            return
+        }
+
+        let baseUrl = self.openaiBaseUrl ?? Self.defaultOpenAIBaseUrl
+        let model = input.directive?.modelId ?? self.openaiModel ?? Self.defaultOpenAIModel
+        let voice = self.openaiVoice ?? Self.defaultOpenAIVoice
+
+        guard let url = URL(string: "\(baseUrl.absoluteString)/audio/speech") else {
+            throw NSError(
+                domain: "OpenAITTS", code: 0,
+                userInfo: [NSLocalizedDescriptionKey: "Invalid OpenAI TTS URL"])
+        }
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        // Custom/self-hosted servers may need more time to generate audio;
+        // use a generous minimum (60s) since the server may not stream chunks.
+        request.timeoutInterval = max(60.0, input.synthTimeoutSeconds)
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
+
+        let body: [String: Any] = [
+            "model": model,
+            "input": input.cleanedText,
+            "voice": voice,
+            "response_format": "mp3",
+        ]
+        request.httpBody = try JSONSerialization.data(withJSONObject: body)
+
+        self.ttsLogger.info(
+            "talk openai synth model=\(model, privacy: .public) " +
+                "voice=\(voice, privacy: .public) " +
+                "timeout=\(input.synthTimeoutSeconds, privacy: .public)s")
+
+        if self.interruptOnSpeech {
+            guard await self.prepareForPlayback(generation: input.generation) else { return }
+        }
+
+        await MainActor.run { TalkModeController.shared.updatePhase(.speaking) }
+        self.phase = .speaking
+
+        guard self.isCurrent(input.generation) else { return }
+        let (bytes, response) = try await URLSession.shared.bytes(for: request)
+
+        // Re-check after await: user may have interrupted during the network call.
+        guard self.isCurrent(input.generation) else { return }
+
+        guard let http = response as? HTTPURLResponse else {
+            throw NSError(
+                domain: "OpenAITTS", code: 0,
+                userInfo: [NSLocalizedDescriptionKey: "Invalid response"])
+        }
+        guard http.statusCode < 400 else {
+            var errorBody = ""
+            for try await byte in bytes {
+                errorBody.append(String(UnicodeScalar(byte)))
+                if errorBody.count > 500 { break }
+            }
+            self.ttsLogger.error("talk openai HTTP \(http.statusCode, privacy: .public): \(errorBody, privacy: .public)")
+            throw NSError(
+                domain: "OpenAITTS", code: http.statusCode,
+                userInfo: [NSLocalizedDescriptionKey: "OpenAI TTS HTTP \(http.statusCode)"])
+        }
+
+        let stream = AsyncThrowingStream<Data, Error> { continuation in
+            Task {
+                var buffer = Data()
+                buffer.reserveCapacity(2048)
+                do {
+                    for try await byte in bytes {
+                        buffer.append(byte)
+                        if buffer.count >= 2048 {
+                            continuation.yield(buffer)
+                            buffer.removeAll(keepingCapacity: true)
+                        }
+                    }
+                    if !buffer.isEmpty {
+                        continuation.yield(buffer)
+                    }
+                    continuation.finish()
+                } catch {
+                    continuation.finish(throwing: error)
+                }
+            }
+        }
+
+        self.lastPlaybackWasPCM = false
+        let result = await self.playMP3(stream: stream)
+
+        if !result.finished, result.interruptedAt == nil {
+            throw NSError(
+                domain: "OpenAITTS", code: 1,
+                userInfo: [NSLocalizedDescriptionKey: "OpenAI TTS audio playback failed"])
+        }
+        if !result.finished, let interruptedAt = result.interruptedAt, self.phase == .speaking {
+            if self.interruptOnSpeech {
+                self.lastInterruptedAtSeconds = interruptedAt
+            }
+        }
+    }
+
+    // MARK: - ElevenLabs TTS
 
     private func playElevenLabs(input: TalkPlaybackInput, apiKey: String, voiceId: String) async throws {
         let desiredOutputFormat = input.directive?.outputFormat ?? self.defaultOutputFormat ?? "pcm_44100"
@@ -591,7 +739,7 @@ actor TalkModeRuntime {
 
         let request = makeRequest(outputFormat: outputFormat)
         self.ttsLogger.info("talk TTS synth timeout=\(input.synthTimeoutSeconds, privacy: .public)s")
-        let client = ElevenLabsTTSClient(apiKey: apiKey)
+        let client = self.makeElevenLabsClient(apiKey: apiKey)
         let stream = client.streamSynthesize(voiceId: voiceId, request: request)
         guard self.isCurrent(input.generation) else { return }
 
@@ -673,14 +821,20 @@ actor TalkModeRuntime {
         let trimmed = preferred?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         if !trimmed.isEmpty {
             if let resolved = self.resolveVoiceAlias(trimmed) { return resolved }
+            // Custom TTS servers may use short voice IDs (e.g. "alloy", "nova");
+            // skip ElevenLabs-specific voice ID format validation.
+            if self.ttsBaseUrl != nil {
+                self.ttsLogger.info("talk custom server: using voiceId=\(trimmed, privacy: .public) directly")
+                return trimmed
+            }
             self.ttsLogger.warning("talk unknown voice alias \(trimmed, privacy: .public)")
         }
         if let fallbackVoiceId { return fallbackVoiceId }
 
         do {
-            let voices = try await ElevenLabsTTSClient(apiKey: apiKey).listVoices()
+            let voices = try await self.makeElevenLabsClient(apiKey: apiKey).listVoices()
             guard let first = voices.first else {
-                self.ttsLogger.error("elevenlabs voices list empty")
+                self.ttsLogger.error("TTS voices list empty")
                 return nil
             }
             self.fallbackVoiceId = first.voiceId
@@ -695,7 +849,10 @@ actor TalkModeRuntime {
                 .info("talk default voice selected \(name, privacy: .public) (\(first.voiceId, privacy: .public))")
             return first.voiceId
         } catch {
-            self.ttsLogger.error("elevenlabs list voices failed: \(error.localizedDescription, privacy: .public)")
+            self.ttsLogger.error("list voices failed: \(error.localizedDescription, privacy: .public)")
+            if self.ttsBaseUrl != nil {
+                self.ttsLogger.warning("talk custom server may not support /v1/voices; configure talk.voiceId")
+            }
             return nil
         }
     }
@@ -778,25 +935,42 @@ extension TalkModeRuntime {
         }
         self.defaultOutputFormat = cfg.outputFormat
         self.interruptOnSpeech = cfg.interruptOnSpeech
+        self.activeProvider = cfg.provider
         self.apiKey = cfg.apiKey
+        self.ttsBaseUrl = cfg.baseUrl
+        self.openaiApiKey = cfg.openaiApiKey
+        self.openaiBaseUrl = cfg.openaiBaseUrl
+        self.openaiModel = cfg.openaiModel
+        self.openaiVoice = cfg.openaiVoice
         let hasApiKey = (cfg.apiKey?.isEmpty == false)
         let voiceLabel = (cfg.voiceId?.isEmpty == false) ? cfg.voiceId! : "none"
         let modelLabel = (cfg.modelId?.isEmpty == false) ? cfg.modelId! : "none"
+        if let customBase = cfg.baseUrl {
+            self.logger.info("talk config custom TTS baseUrl=\(customBase.absoluteString, privacy: .public)")
+        }
         self.logger
             .info(
-                "talk config voiceId=\(voiceLabel, privacy: .public) " +
+                "talk config provider=\(cfg.provider, privacy: .public) " +
+                    "voiceId=\(voiceLabel, privacy: .public) " +
                     "modelId=\(modelLabel, privacy: .public) " +
                     "apiKey=\(hasApiKey, privacy: .public) " +
                     "interrupt=\(cfg.interruptOnSpeech, privacy: .public)")
     }
 
     private struct TalkRuntimeConfig {
+        let provider: String
         let voiceId: String?
         let voiceAliases: [String: String]
         let modelId: String?
         let outputFormat: String?
         let interruptOnSpeech: Bool
         let apiKey: String?
+        let baseUrl: URL?
+        // OpenAI-specific fields
+        let openaiApiKey: String?
+        let openaiBaseUrl: URL?
+        let openaiModel: String?
+        let openaiVoice: String?
     }
 
     struct TalkProviderConfigSelection {
@@ -875,6 +1049,39 @@ extension TalkModeRuntime {
             normalizedPayload: false)
     }
 
+    private static let supportedTalkProviders: Set<String> = [defaultTalkProvider, openaiTalkProvider]
+
+    private static func parseBaseUrl(_ raw: String?) -> URL? {
+        guard let trimmed = raw?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !trimmed.isEmpty
+        else { return nil }
+        return URL(string: trimmed.replacingOccurrences(of: "/+$", with: "", options: .regularExpression))
+    }
+
+    /// Read OpenAI-specific config from the active provider config or the
+    /// dedicated `talk.providers.openai` entry when the active provider differs.
+    private static func resolveOpenAIConfig(
+        activeProvider: String,
+        activeConfig: [String: AnyCodable]?,
+        allProviders: [String: [String: AnyCodable]],
+        env: [String: String]
+    ) -> (apiKey: String?, baseUrl: URL?, model: String?, voice: String?) {
+        let oaiConfig = (activeProvider == openaiTalkProvider) ? activeConfig : allProviders[openaiTalkProvider]
+        let configApiKey = oaiConfig?["apiKey"]?.stringValue?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let envApiKey = env["OPENAI_API_KEY"]?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let apiKey = (configApiKey?.isEmpty == false ? configApiKey : nil)
+            ?? (envApiKey?.isEmpty == false ? envApiKey : nil)
+        let configBase = oaiConfig?["baseUrl"]?.stringValue
+        let envBase = env["OPENAI_TTS_BASE_URL"]
+        let baseUrl = Self.parseBaseUrl(configBase) ?? Self.parseBaseUrl(envBase)
+        let model = oaiConfig?["model"]?.stringValue?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let voice = oaiConfig?["voice"]?.stringValue?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        return (apiKey, baseUrl, model?.isEmpty == false ? model : nil, voice?.isEmpty == false ? voice : nil)
+    }
+
     private func fetchTalkConfig() async -> TalkRuntimeConfig {
         let env = ProcessInfo.processInfo.environment
         let envVoice = env["ELEVENLABS_VOICE_ID"]?.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -890,6 +1097,7 @@ extension TalkModeRuntime {
             let selection = Self.selectTalkProviderConfig(talk)
             let activeProvider = selection?.provider ?? Self.defaultTalkProvider
             let activeConfig = selection?.config
+            let allProviders = Self.normalizedTalkProviders(talk?["providers"])
             let ui = snap.config?["ui"]?.dictionaryValue
             let rawSeam = ui?["seamColor"]?.stringValue?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
             await MainActor.run {
@@ -922,31 +1130,68 @@ extension TalkModeRuntime {
             } else {
                 nil
             }
-            if activeProvider != Self.defaultTalkProvider {
+            let configBaseUrl = activeConfig?["baseUrl"]?.stringValue?
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            let envBaseUrl = (activeProvider == Self.defaultTalkProvider)
+                ? env["ELEVENLABS_BASE_URL"]?.trimmingCharacters(in: .whitespacesAndNewlines)
+                : nil
+            // baseUrl: config takes priority over env var (intentionally opposite of
+            // apiKey, where env wins) because an explicit config entry is a stronger signal
+            // than a blanket env var when pointing at a non-default TTS server.
+            let baseUrlString = (configBaseUrl?.isEmpty == false ? configBaseUrl : nil)
+                ?? (envBaseUrl?.isEmpty == false ? envBaseUrl : nil)
+            let baseUrl = Self.parseBaseUrl(baseUrlString)
+
+            // Resolve OpenAI config (even if not the active provider, for quick switching)
+            let oai = Self.resolveOpenAIConfig(
+                activeProvider: activeProvider,
+                activeConfig: activeConfig,
+                allProviders: allProviders,
+                env: env)
+
+            if !Self.supportedTalkProviders.contains(activeProvider) {
                 self.ttsLogger
-                    .info("talk provider \(activeProvider, privacy: .public) unsupported; using system voice")
+                    .info(
+                        "talk provider \(activeProvider, privacy: .public) not yet supported; " +
+                            "using system voice")
             } else if selection?.normalizedPayload == true {
-                self.ttsLogger.info("talk config provider elevenlabs")
+                self.ttsLogger.info("talk config provider \(activeProvider, privacy: .public)")
             }
             return TalkRuntimeConfig(
+                provider: activeProvider,
                 voiceId: resolvedVoice,
                 voiceAliases: resolvedAliases,
                 modelId: resolvedModel,
                 outputFormat: outputFormat,
                 interruptOnSpeech: interrupt ?? true,
-                apiKey: resolvedApiKey)
+                apiKey: resolvedApiKey,
+                baseUrl: baseUrl,
+                openaiApiKey: oai.apiKey,
+                openaiBaseUrl: oai.baseUrl,
+                openaiModel: oai.model,
+                openaiVoice: oai.voice)
         } catch {
             let resolvedVoice =
                 (envVoice?.isEmpty == false ? envVoice : nil) ??
                 (sagVoice?.isEmpty == false ? sagVoice : nil)
             let resolvedApiKey = envApiKey?.isEmpty == false ? envApiKey : nil
+            let fallbackBaseUrlStr = env["ELEVENLABS_BASE_URL"]?.trimmingCharacters(in: .whitespacesAndNewlines)
+            let baseUrl = Self.parseBaseUrl(fallbackBaseUrlStr)
+            let envOpenAIKey = env["OPENAI_API_KEY"]?.trimmingCharacters(in: .whitespacesAndNewlines)
+            let openaiBaseUrl = Self.parseBaseUrl(env["OPENAI_TTS_BASE_URL"])
             return TalkRuntimeConfig(
+                provider: Self.defaultTalkProvider,
                 voiceId: resolvedVoice,
                 voiceAliases: [:],
                 modelId: Self.defaultModelIdFallback,
                 outputFormat: nil,
                 interruptOnSpeech: true,
-                apiKey: resolvedApiKey)
+                apiKey: resolvedApiKey,
+                baseUrl: baseUrl,
+                openaiApiKey: envOpenAIKey?.isEmpty == false ? envOpenAIKey : nil,
+                openaiBaseUrl: openaiBaseUrl,
+                openaiModel: nil,
+                openaiVoice: nil)
         }
     }
 
