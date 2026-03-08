@@ -4,11 +4,10 @@
  * 负责通过 WSClient 发送回复消息，包含超时保护
  */
 
-import type { WSClient, WsFrame } from "@wecom/aibot-node-sdk";
+import { type WSClient, type WsFrame, generateReqId } from "@wecom/aibot-node-sdk";
 import type { RuntimeEnv } from "openclaw/plugin-sdk";
 import { REPLY_SEND_TIMEOUT_MS } from "./const.ts";
 import { withTimeout } from "./timeout.ts";
-import { generateReqId } from "./utils.ts";
 
 // ============================================================================
 // 消息发送

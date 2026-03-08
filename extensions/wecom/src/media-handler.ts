@@ -54,7 +54,7 @@ export async function downloadAndSaveImages(params: {
   runtime: RuntimeEnv;
   wsClient: WSClient;
 }): Promise<Array<{ path: string; contentType?: string }>> {
-  const { imageUrls, account, config, runtime, wsClient } = params;
+  const { imageUrls, config, runtime, wsClient } = params;
   const core = getWeComRuntime();
   const mediaList: Array<{ path: string; contentType?: string }> = [];
 
@@ -133,7 +133,7 @@ export async function downloadAndSaveFiles(params: {
   runtime: RuntimeEnv;
   wsClient: WSClient;
 }): Promise<Array<{ path: string; contentType?: string }>> {
-  const { fileUrls, account, config, runtime, wsClient } = params;
+  const { fileUrls, config, runtime, wsClient } = params;
   const core = getWeComRuntime();
   const mediaList: Array<{ path: string; contentType?: string }> = [];
 
