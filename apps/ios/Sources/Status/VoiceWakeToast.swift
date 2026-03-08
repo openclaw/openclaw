@@ -1,6 +1,8 @@
 import SwiftUI
 
 struct VoiceWakeToast: View {
+    @Environment(\.colorSchemeContrast) private var contrast
+
     var command: String
     var brighten: Bool = false
 

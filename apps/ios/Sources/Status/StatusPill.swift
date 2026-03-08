@@ -90,19 +90,21 @@ struct StatusPill: View {
         .buttonStyle(.plain)
         .accessibilityLabel("Connection Status")
         .accessibilityValue(self.accessibilityValue)
-        .accessibilityHint("Double tap to open settings")
-        .onAppear { self.updatePulse(for: self.gateway, scenePhase: self.scenePhase, reduceMotion: self.reduceMotion) }
+        .accessibilityHint("Double tap for connection options")
         .onDisappear { self.pulse = false }
-        .onChange(of: self.gateway) { _, newValue in
-            self.updatePulse(for: newValue, scenePhase: self.scenePhase, reduceMotion: self.reduceMotion)
+        .task(id: self.shouldPulse) {
+            if self.shouldPulse {
+                guard !self.pulse else { return }
+                withAnimation(.easeInOut(duration: 0.9).repeatForever(autoreverses: true)) {
+                    self.pulse = true
+                }
+            } else {
+                withAnimation(self.reduceMotion ? .none : .easeOut(duration: 0.2)) {
+                    self.pulse = false
+                }
+            }
         }
-        .onChange(of: self.scenePhase) { _, newValue in
-            self.updatePulse(for: self.gateway, scenePhase: newValue, reduceMotion: self.reduceMotion)
-        }
-        .onChange(of: self.reduceMotion) { _, newValue in
-            self.updatePulse(for: self.gateway, scenePhase: self.scenePhase, reduceMotion: newValue)
-        }
-        .animation(.easeInOut(duration: 0.18), value: self.activity?.title)
+        .animation(self.reduceMotion ? nil : .easeInOut(duration: 0.18), value: self.activity?.title)
     }
 
     private var accessibilityValue: String {
@@ -112,15 +114,7 @@ struct StatusPill: View {
         return "\(self.gateway.title), Voice Wake \(self.voiceWakeEnabled ? "enabled" : "disabled")"
     }
 
-    private func updatePulse(for gateway: GatewayState, scenePhase: ScenePhase, reduceMotion: Bool) {
-        guard gateway == .connecting, scenePhase == .active, !reduceMotion else {
-            withAnimation(reduceMotion ? .none : .easeOut(duration: 0.2)) { self.pulse = false }
-            return
-        }
-
-        guard !self.pulse else { return }
-        withAnimation(.easeInOut(duration: 0.9).repeatForever(autoreverses: true)) {
-            self.pulse = true
-        }
+    private var shouldPulse: Bool {
+        self.gateway == .connecting && self.scenePhase == .active && !self.reduceMotion
     }
 }
