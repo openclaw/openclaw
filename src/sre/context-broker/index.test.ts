@@ -49,12 +49,33 @@ describe("runContextBroker", () => {
     const result = await runContextBroker({
       config: { sre: { contextBroker: { enabled: true } } },
       prompt: "What did we do last time on this rollout?",
-      agentId: "main",
-      sessionKey: "agent:main:slack:user:u1",
+      agentId: "sre-verifier",
+      sessionKey: "agent:sre-verifier:slack:user:u1",
     });
 
     expect(result.prependContext).toContain("Context broker:");
     expect(result.prependContext).toContain("[memory]");
+  });
+
+  it("returns empty result for ordinary sessions even when enabled", async () => {
+    const result = await runContextBroker({
+      config: {
+        sre: {
+          contextBroker: { enabled: true },
+          incidentDossier: { enabled: true },
+          relationshipIndex: { enabled: true },
+          repoOwnership: { enabled: true },
+        },
+      },
+      prompt: "Which repo owns the runtime deployment fix from the incident?",
+      agentId: "main",
+      sessionKey: "agent:main:slack:user:u1",
+    });
+
+    expect(result.prependContext).toBeUndefined();
+    expect(result.evidence).toEqual([]);
+    expect(result.intents).toEqual([]);
+    expect(result.reasons).toEqual([]);
   });
 
   it("injects repo ownership evidence for ownership prompts", async () => {
@@ -92,14 +113,61 @@ describe("runContextBroker", () => {
       config: {
         sre: {
           contextBroker: { enabled: true },
+          relationshipIndex: { enabled: true },
           repoOwnership: { enabled: true, filePath: ownershipPath },
         },
       },
       prompt: "Which repo owns the runtime deployment fix?",
-      agentId: "main",
+      agentId: "sre-repo-runtime",
     });
 
     expect(result.prependContext).toContain("[repo-ownership]");
     expect(result.prependContext).toContain("openclaw-sre");
+  });
+
+  it("requires the repo ownership flag before loading ownership evidence", async () => {
+    const root = await createStateRoot();
+    const ownershipPath = path.join(root, "state", "sre-index", "repo-ownership.json");
+    await fs.mkdir(path.dirname(ownershipPath), { recursive: true });
+    await fs.mkdir(path.join(root, "openclaw-sre"), { recursive: true });
+    await fs.writeFile(
+      ownershipPath,
+      JSON.stringify(
+        {
+          version: "sre.repo-ownership-map.v1",
+          generatedAt: "2026-03-07T00:00:00.000Z",
+          repos: [
+            {
+              repoId: "openclaw-sre",
+              githubRepo: "morpho-org/openclaw-sre",
+              localPath: path.join(root, "openclaw-sre"),
+              ownedGlobs: ["src/**"],
+              sourceOfTruthDomains: ["runtime"],
+              dependentRepos: [],
+              ciChecks: [],
+              validationCommands: [],
+              rollbackHints: [],
+            },
+          ],
+        },
+        null,
+        2,
+      ),
+      "utf8",
+    );
+
+    const result = await runContextBroker({
+      config: {
+        sre: {
+          contextBroker: { enabled: true },
+          repoOwnership: { enabled: false, filePath: ownershipPath },
+        },
+      },
+      prompt: "Which repo owns the runtime deployment fix?",
+      agentId: "sre-repo-runtime",
+    });
+
+    expect(result.prependContext).toBeUndefined();
+    expect(result.evidence).toEqual([]);
   });
 });

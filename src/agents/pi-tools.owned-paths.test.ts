@@ -71,7 +71,10 @@ async function createConfig(
         exec: { applyPatch: { enabled: true } },
       },
       agents: {
-        list: [{ id: "sre-repo-runtime", workspace: runtimeRepo }],
+        list: [
+          { id: "sre-repo-runtime", workspace: runtimeRepo },
+          { id: "sre-verifier", workspace: runtimeRepo },
+        ],
       },
     },
     runtimeRepo,
@@ -101,9 +104,27 @@ describe("pi tools owned path enforcement", () => {
     ).rejects.toThrow(/Owned-path policy blocked/);
   });
 
-  it("blocks fixer exec when workdir is outside owned repo", async () => {
+  it("exposes generic exec to read-only SRE agents", async () => {
     const root = await createCaseRoot();
-    const { cfg, runtimeRepo, helmRepo } = await createConfig(root);
+    const { cfg, runtimeRepo } = await createConfig(root);
+    const tools = createOpenClawCodingTools({
+      config: cfg,
+      sessionKey: "agent:sre-verifier:main",
+      workspaceDir: runtimeRepo,
+      agentDir: path.join(root, "agent"),
+      exec: { host: "gateway", ask: "off", security: "full" },
+    });
+    const execTool = tools.find((tool) => tool.name === "exec");
+    if (!execTool?.execute) {
+      throw new Error("missing exec tool");
+    }
+
+    expect(execTool.name).toBe("exec");
+  });
+
+  it("exposes generic exec to fixer SRE agents too", async () => {
+    const root = await createCaseRoot();
+    const { cfg, runtimeRepo } = await createConfig(root);
     const tools = createOpenClawCodingTools({
       config: cfg,
       sessionKey: "agent:sre-repo-runtime:main",
@@ -115,8 +136,7 @@ describe("pi tools owned path enforcement", () => {
     if (!execTool?.execute) {
       throw new Error("missing exec tool");
     }
-    await expect(
-      execTool.execute("call-2", { command: "echo ok", workdir: helmRepo }),
-    ).rejects.toThrow(/Owned-path policy blocked exec outside owned repo/);
+
+    expect(execTool.name).toBe("exec");
   });
 });

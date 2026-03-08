@@ -64,23 +64,6 @@ const SRE_FIXER_REPO_ALLOWLIST: Record<string, string[]> = {
   "sre-repo-runtime": ["openclaw-sre"],
   "sre-repo-helm": ["morpho-infra-helm"],
 };
-
-function isMutatingExecCommand(command: string): boolean {
-  const normalized = command.trim().toLowerCase();
-  if (!normalized) {
-    return false;
-  }
-  return (
-    /(^|[|&;]\s*)(cp|mv|rm|mkdir|touch|tee|patch)\b/.test(normalized) ||
-    /\bsed\s+-i\b/.test(normalized) ||
-    /\bperl\s+-i\b/.test(normalized) ||
-    /\bgit\s+(apply|checkout|switch|cherry-pick|commit|add|rm|mv|rebase|merge|reset)\b/.test(
-      normalized,
-    ) ||
-    />{1,2}/.test(normalized)
-  );
-}
-
 function extractMutatingToolPaths(toolName: string, params: Record<string, unknown>): string[] {
   const normalizedTool = normalizeToolName(toolName);
   if (normalizedTool === "write" || normalizedTool === "edit") {
@@ -160,30 +143,6 @@ async function assertOwnedMutationTargets(params: {
   }
 }
 
-async function assertFixerExecScope(params: {
-  agentId: string;
-  config?: OpenClawConfig;
-  workspaceRoot: string;
-  toolParams: Record<string, unknown>;
-}) {
-  const ownership = await loadRepoOwnershipForRuntime({ config: params.config });
-  const allowedRepos = new Set(resolveAllowedFixerRepos(params.agentId));
-  const workdirRaw =
-    typeof params.toolParams.workdir === "string" && params.toolParams.workdir.trim()
-      ? params.toolParams.workdir
-      : params.workspaceRoot;
-  const workdir = resolvePathFromInput(workdirRaw, params.workspaceRoot);
-  const match = matchRepoOwnershipPath(workdir, ownership);
-  if (!match || !allowedRepos.has(match.repo.repoId)) {
-    logSreMetric("owned_path_rejection", {
-      agentId: params.agentId,
-      toolName: "exec",
-      workdir: workdirRaw,
-    });
-    throw new Error(`Owned-path policy blocked exec outside owned repo: ${workdirRaw}`);
-  }
-}
-
 export function wrapToolWithOwnedPathPolicy(params: {
   tool: AnyAgentTool;
   agentId?: string;
@@ -200,21 +159,6 @@ export function wrapToolWithOwnedPathPolicy(params: {
     execute: async (toolCallId, rawParams, signal, onUpdate) => {
       const toolParams =
         rawParams && typeof rawParams === "object" ? (rawParams as Record<string, unknown>) : {};
-
-      if (toolName === "exec") {
-        const command = typeof toolParams.command === "string" ? toolParams.command : "";
-        if (role !== "fixer" && isMutatingExecCommand(command)) {
-          throw new Error(`Read-only agent cannot run mutating exec command: ${command}`);
-        }
-        if (role === "fixer") {
-          await assertFixerExecScope({
-            agentId: normalizeAgentId(params.agentId ?? ""),
-            config: params.config,
-            workspaceRoot: params.workspaceRoot,
-            toolParams,
-          });
-        }
-      }
 
       if (toolName === "write" || toolName === "edit" || toolName === "apply_patch") {
         if (role !== "fixer") {

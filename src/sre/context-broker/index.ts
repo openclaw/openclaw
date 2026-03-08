@@ -3,6 +3,7 @@ import path from "node:path";
 import type { OpenClawConfig } from "../../config/config.js";
 import { getMemorySearchManager } from "../../memory/index.js";
 import { readRelationshipIndexLatestSnapshot } from "../../plugins/bundled/relationship-index/store.js";
+import { normalizeAgentId, parseAgentSessionKey } from "../../routing/session-key.js";
 import { loadRepoOwnershipMap } from "../repo-ownership/load.js";
 import { resolveSreStatePaths } from "../state/paths.js";
 import { classifyContextBrokerIntent, type ContextBrokerClassification } from "./classifier.js";
@@ -52,13 +53,30 @@ function resolveBrokerPaths(config: OpenClawConfig | undefined): {
   return { dossiersDir, repoOwnershipPath };
 }
 
+function resolveContextBrokerAgentId(input: ContextBrokerInput): string {
+  const explicit = input.agentId?.trim();
+  if (explicit) {
+    return normalizeAgentId(explicit);
+  }
+  const parsed = parseAgentSessionKey(input.sessionKey);
+  return normalizeAgentId(parsed?.agentId);
+}
+
+function canUseSreContextBroker(input: ContextBrokerInput): boolean {
+  if (input.config?.sre?.contextBroker?.enabled !== true) {
+    return false;
+  }
+  return resolveContextBrokerAgentId(input).startsWith("sre");
+}
+
 async function retrieveMemoryEvidence(input: ContextBrokerInput): Promise<ContextBrokerEvidence[]> {
-  if (!input.config || !input.agentId) {
+  if (!input.config) {
     return [];
   }
+  const agentId = resolveContextBrokerAgentId(input);
   const { manager } = await getMemorySearchManager({
     cfg: input.config,
-    agentId: input.agentId,
+    agentId,
   });
   if (!manager) {
     return [];
@@ -172,7 +190,7 @@ async function retrieveRepoOwnershipEvidence(
 }
 
 export async function runContextBroker(input: ContextBrokerInput): Promise<ContextBrokerResult> {
-  if (input.config?.sre?.contextBroker?.enabled !== true) {
+  if (!canUseSreContextBroker(input)) {
     return { intents: [], reasons: [], evidence: [] };
   }
 
@@ -186,7 +204,8 @@ export async function runContextBroker(input: ContextBrokerInput): Promise<Conte
     ...(classification.intents.includes("prior-work")
       ? await retrieveMemoryEvidence(input).catch(() => [])
       : []),
-    ...(classification.intents.includes("incident-follow-up")
+    ...(classification.intents.includes("incident-follow-up") &&
+    input.config?.sre?.incidentDossier?.enabled === true
       ? await retrieveDossierEvidence(input, dossiersDir).catch(() => [])
       : []),
     ...(classification.intents.some(
@@ -194,12 +213,12 @@ export async function runContextBroker(input: ContextBrokerInput): Promise<Conte
         intent === "incident-follow-up" ||
         intent === "repo-deploy-ownership" ||
         intent === "multi-repo-fix-planning",
-    )
+    ) && input.config?.sre?.relationshipIndex?.enabled === true
       ? await retrieveRelationshipEvidence(input).catch(() => [])
       : []),
     ...(classification.intents.some(
       (intent) => intent === "repo-deploy-ownership" || intent === "multi-repo-fix-planning",
-    )
+    ) && input.config?.sre?.repoOwnership?.enabled === true
       ? await retrieveRepoOwnershipEvidence(input, repoOwnershipPath).catch(() => [])
       : []),
   ]

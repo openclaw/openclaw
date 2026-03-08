@@ -15,6 +15,7 @@ import { logSreMetric } from "../observability/log.js";
 import { resolveSreStatePaths } from "../state/paths.js";
 
 const RUNTIME_DISTILLATION_VERSION = "sre.runtime-distillation.v1";
+const distillationWriteQueues = new Map<string, Promise<void>>();
 
 export type DistilledSummarySections = {
   decisions: string[];
@@ -56,6 +57,42 @@ function stableHash(parts: readonly string[]): string {
     hash.update("\u001f");
   }
   return hash.digest("hex").slice(0, 12);
+}
+
+function runSerializedByKey<T>(
+  queues: Map<string, Promise<void>>,
+  key: string,
+  task: () => Promise<T>,
+): Promise<T> {
+  const previous = queues.get(key) ?? Promise.resolve();
+  const run = previous.catch(() => undefined).then(task);
+  const tracked = run.then(
+    () => undefined,
+    () => undefined,
+  );
+  queues.set(key, tracked);
+  void tracked.finally(() => {
+    if (queues.get(key) === tracked) {
+      queues.delete(key);
+    }
+  });
+  return run;
+}
+
+function formatArtifactStamp(isoTimestamp: string): string {
+  return isoTimestamp.replaceAll("-", "").replaceAll(":", "").replaceAll(".", "");
+}
+
+function createArtifactId(parts: readonly string[]): { fileId: string; updatedAt: string } {
+  const updatedAt = new Date().toISOString();
+  return {
+    updatedAt,
+    fileId: `${formatArtifactStamp(updatedAt)}-${stableHash([...parts, updatedAt, crypto.randomUUID()])}`,
+  };
+}
+
+async function writeTextFile(filePath: string, content: string): Promise<void> {
+  await fs.writeFile(filePath, content, "utf8");
 }
 
 function trimLine(value: string): string {
@@ -202,48 +239,58 @@ async function writeRuntimeDossierArtifact(params: {
   summary: string;
   sections: DistilledSummarySections;
 }): Promise<string> {
-  const paths = resolveSreStatePaths(process.env);
-  const dossierDir = path.join(paths.dossiersDir, params.incidentId);
-  await fs.mkdir(dossierDir, { recursive: true });
-  const updatedAt = new Date().toISOString();
-  const artifactPath = path.join(dossierDir, "runtime-distillation.json");
-  const artifact = {
-    version: RUNTIME_DISTILLATION_VERSION,
-    updatedAt,
-    incidentId: params.incidentId,
-    sessionKey: params.sessionEntry?.sessionFile ?? undefined,
-    sections: params.sections,
-    summary: params.summary,
-  };
-  await fs.writeFile(artifactPath, `${JSON.stringify(artifact, null, 2)}\n`, "utf8");
+  return runSerializedByKey(distillationWriteQueues, params.incidentId, async () => {
+    const paths = resolveSreStatePaths(process.env);
+    const dossierDir = path.join(paths.dossiersDir, params.incidentId);
+    await fs.mkdir(dossierDir, { recursive: true });
+    const artifactId = createArtifactId([
+      "runtime-distillation",
+      params.incidentId,
+      params.summary,
+      ...params.sections.decisions,
+      ...params.sections.openTodos,
+      ...params.sections.pendingAsks,
+      ...params.sections.identifiers,
+    ]);
+    const artifactPath = path.join(dossierDir, `runtime-distillation-${artifactId.fileId}.json`);
+    const artifact = {
+      version: RUNTIME_DISTILLATION_VERSION,
+      updatedAt: artifactId.updatedAt,
+      incidentId: params.incidentId,
+      sessionKey: params.sessionEntry?.sessionFile ?? undefined,
+      sections: params.sections,
+      summary: params.summary,
+    };
+    await writeTextFile(artifactPath, `${JSON.stringify(artifact, null, 2)}\n`);
 
-  const indexPath = path.join(dossierDir, "index.json");
-  const existingIndex = await readDossierIndex(indexPath);
-  const timeline = [
-    buildDossierTimelineEntry({
-      at: updatedAt,
-      refId: `runtime-distillation:${stableHash([params.incidentId, updatedAt])}`,
-      summary:
-        params.sections.decisions[0] ?? params.sections.pendingAsks[0] ?? "runtime distillation",
-    }),
-  ];
-  const index = createIncidentDossierIndex({
-    incidentId: params.incidentId,
-    title: existingIndex?.title ?? params.incidentId,
-    status: existingIndex?.status ?? "open",
-    updatedAt,
-    provenance: existingIndex?.provenance ?? [],
-    entityIds: [...(existingIndex?.entityIds ?? []), ...(params.sessionEntry?.entityRefs ?? [])],
-    bundleIds: existingIndex?.bundleIds ?? [],
-    planIds: existingIndex?.planIds ?? [],
-    timeline: [...(existingIndex?.timeline ?? []), ...timeline],
+    const indexPath = path.join(dossierDir, "index.json");
+    const existingIndex = await readDossierIndex(indexPath);
+    const timeline = [
+      buildDossierTimelineEntry({
+        at: artifactId.updatedAt,
+        refId: `runtime-distillation:${artifactId.fileId}`,
+        summary:
+          params.sections.decisions[0] ?? params.sections.pendingAsks[0] ?? "runtime distillation",
+      }),
+    ];
+    const index = createIncidentDossierIndex({
+      incidentId: params.incidentId,
+      title: existingIndex?.title ?? params.incidentId,
+      status: existingIndex?.status ?? "open",
+      updatedAt: artifactId.updatedAt,
+      provenance: existingIndex?.provenance ?? [],
+      entityIds: [...(existingIndex?.entityIds ?? []), ...(params.sessionEntry?.entityRefs ?? [])],
+      bundleIds: existingIndex?.bundleIds ?? [],
+      planIds: existingIndex?.planIds ?? [],
+      timeline: [...(existingIndex?.timeline ?? []), ...timeline],
+    });
+    await writeTextFile(indexPath, `${JSON.stringify(index, null, 2)}\n`);
+    logSreMetric("distillation_dossier_write", {
+      incidentId: params.incidentId,
+      path: artifactPath,
+    });
+    return artifactPath;
   });
-  await fs.writeFile(indexPath, `${JSON.stringify(index, null, 2)}\n`, "utf8");
-  logSreMetric("distillation_dossier_write", {
-    incidentId: params.incidentId,
-    path: artifactPath,
-  });
-  return artifactPath;
 }
 
 async function writeMemoryNote(params: {
@@ -258,22 +305,24 @@ async function writeMemoryNote(params: {
   }
   const memoryDir = path.join(workspaceDir, "memory");
   await fs.mkdir(memoryDir, { recursive: true });
-  const date = new Date().toISOString().slice(0, 10);
-  const slug = stableHash([
+  const artifactId = createArtifactId([
+    "runtime-distill-note",
     params.title,
     params.incidentId ?? "no-incident",
     ...params.sections.decisions,
     ...params.sections.openTodos,
+    ...params.sections.pendingAsks,
+    ...params.sections.identifiers,
   ]);
-  const filePath = path.join(memoryDir, `${date}-runtime-distill-${slug}.md`);
-  await fs.writeFile(
+  const date = artifactId.updatedAt.slice(0, 10);
+  const filePath = path.join(memoryDir, `${date}-runtime-distill-${artifactId.fileId}.md`);
+  await writeTextFile(
     filePath,
     buildMemoryNote({
       title: params.title,
       incidentId: params.incidentId,
       sections: params.sections,
     }),
-    "utf8",
   );
   logSreMetric("distillation_memory_note_write", {
     incidentId: params.incidentId,

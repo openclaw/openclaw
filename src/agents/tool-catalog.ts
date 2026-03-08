@@ -22,6 +22,7 @@ type CoreToolDefinition = {
   sectionId: string;
   profiles: ToolProfileId[];
   includeInOpenClawGroup?: boolean;
+  sreOnly?: boolean;
 };
 
 const CORE_TOOL_SECTION_ORDER: Array<{ id: string; label: string }> = [
@@ -118,24 +119,24 @@ const CORE_TOOL_DEFINITIONS: CoreToolDefinition[] = [
     label: "relationship_lookup",
     description: "Lookup relationship-index entity",
     sectionId: "memory",
-    profiles: ["coding"],
-    includeInOpenClawGroup: true,
+    profiles: [],
+    sreOnly: true,
   },
   {
     id: "relationship_neighbors",
     label: "relationship_neighbors",
     description: "List relationship neighbors",
     sectionId: "memory",
-    profiles: ["coding"],
-    includeInOpenClawGroup: true,
+    profiles: [],
+    sreOnly: true,
   },
   {
     id: "relationship_explain",
     label: "relationship_explain",
     description: "Explain relationship edges",
     sectionId: "memory",
-    profiles: ["coding"],
-    includeInOpenClawGroup: true,
+    profiles: [],
+    sreOnly: true,
   },
   {
     id: "sessions_list",
@@ -284,15 +285,15 @@ const CORE_TOOL_PROFILES: Record<ToolProfileId, ToolProfilePolicy> = {
 
 function buildCoreToolGroupMap() {
   const sectionToolMap = new Map<string, string[]>();
-  for (const tool of CORE_TOOL_DEFINITIONS) {
+  for (const tool of CORE_TOOL_DEFINITIONS.filter((entry) => entry.sreOnly !== true)) {
     const groupId = `group:${tool.sectionId}`;
     const list = sectionToolMap.get(groupId) ?? [];
     list.push(tool.id);
     sectionToolMap.set(groupId, list);
   }
-  const openclawTools = CORE_TOOL_DEFINITIONS.filter((tool) => tool.includeInOpenClawGroup).map(
-    (tool) => tool.id,
-  );
+  const openclawTools = CORE_TOOL_DEFINITIONS.filter(
+    (tool) => tool.includeInOpenClawGroup && tool.sreOnly !== true,
+  ).map((tool) => tool.id);
   return {
     "group:openclaw": openclawTools,
     ...Object.fromEntries(sectionToolMap.entries()),
@@ -329,7 +330,9 @@ export function listCoreToolSections(): CoreToolSection[] {
   return CORE_TOOL_SECTION_ORDER.map((section) => ({
     id: section.id,
     label: section.label,
-    tools: CORE_TOOL_DEFINITIONS.filter((tool) => tool.sectionId === section.id).map((tool) => ({
+    tools: CORE_TOOL_DEFINITIONS.filter(
+      (tool) => tool.sectionId === section.id && tool.sreOnly !== true,
+    ).map((tool) => ({
       id: tool.id,
       label: tool.label,
       description: tool.description,

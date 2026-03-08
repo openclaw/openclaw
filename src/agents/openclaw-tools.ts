@@ -1,5 +1,6 @@
 import type { OpenClawConfig } from "../config/config.js";
 import { resolvePluginTools } from "../plugins/tools.js";
+import { normalizeAgentId } from "../routing/session-key.js";
 import type { GatewayMessageChannel } from "../utils/message-channel.js";
 import { resolveSessionAgentId } from "./agent-scope.js";
 import type { SandboxFsBridge } from "./sandbox/fs-bridge.js";
@@ -26,6 +27,32 @@ import { createSubagentsTool } from "./tools/subagents-tool.js";
 import { createTtsTool } from "./tools/tts-tool.js";
 import { createWebFetchTool, createWebSearchTool } from "./tools/web-tools.js";
 import { resolveWorkspaceRoot } from "./workspace-dir.js";
+
+function resolveRequesterAgentId(options?: {
+  agentSessionKey?: string;
+  requesterAgentIdOverride?: string;
+  config?: OpenClawConfig;
+}): string {
+  const override = options?.requesterAgentIdOverride?.trim();
+  if (override) {
+    return normalizeAgentId(override);
+  }
+  return resolveSessionAgentId({
+    sessionKey: options?.agentSessionKey,
+    config: options?.config,
+  });
+}
+
+function shouldExposeRelationshipTools(options?: {
+  agentSessionKey?: string;
+  requesterAgentIdOverride?: string;
+  config?: OpenClawConfig;
+}): boolean {
+  if (options?.config?.sre?.relationshipIndex?.enabled !== true) {
+    return false;
+  }
+  return resolveRequesterAgentId(options).startsWith("sre");
+}
 
 export function createOpenClawTools(options?: {
   sandboxBrowserBridgeUrl?: string;
@@ -128,6 +155,13 @@ export function createOpenClawTools(options?: {
         requireExplicitTarget: options?.requireExplicitMessageTarget,
         requesterSenderId: options?.requesterSenderId ?? undefined,
       });
+  const relationshipTools = shouldExposeRelationshipTools(options)
+    ? [
+        createRelationshipLookupTool(),
+        createRelationshipNeighborsTool(),
+        createRelationshipExplainTool(),
+      ]
+    : [];
   const tools: AnyAgentTool[] = [
     createBrowserTool({
       sandboxBridgeUrl: options?.sandboxBrowserBridgeUrl,
@@ -193,9 +227,7 @@ export function createOpenClawTools(options?: {
       agentSessionKey: options?.agentSessionKey,
       config: options?.config,
     }),
-    createRelationshipLookupTool(),
-    createRelationshipNeighborsTool(),
-    createRelationshipExplainTool(),
+    ...relationshipTools,
     ...(webSearchTool ? [webSearchTool] : []),
     ...(webFetchTool ? [webFetchTool] : []),
     ...(imageTool ? [imageTool] : []),

@@ -94,7 +94,7 @@ describe("owned path tool policy", () => {
     );
   });
 
-  it("blocks mutating exec for read-only agents", async () => {
+  it("allows generic exec for read-only agents", async () => {
     const root = await createCaseRoot();
     const runtimeRepo = path.join(root, "openclaw-sre");
     const config = await createOwnershipConfig(root);
@@ -112,8 +112,83 @@ describe("owned path tool policy", () => {
       workspaceRoot: runtimeRepo,
     });
 
-    await expect(tool.execute("call-3", { command: "touch /tmp/pwned" })).rejects.toThrow(
-      /Read-only agent cannot run mutating exec/,
-    );
+    await expect(tool.execute("call-3", { command: "touch /tmp/pwned" })).resolves.toBeDefined();
+  });
+
+  it("allows shell and interpreter inline exec for read-only agents", async () => {
+    const root = await createCaseRoot();
+    const runtimeRepo = path.join(root, "openclaw-sre");
+    const config = await createOwnershipConfig(root);
+    const execTool: AnyAgentTool = {
+      name: "exec",
+      label: "exec",
+      description: "exec",
+      parameters: {} as never,
+      execute: vi.fn(async () => ({ content: [], details: {} })),
+    };
+    const tool = wrapToolWithOwnedPathPolicy({
+      tool: execTool,
+      agentId: "sre-verifier",
+      config,
+      workspaceRoot: runtimeRepo,
+    });
+
+    await expect(
+      tool.execute("call-4", { command: "sh -c 'touch ./pwned.txt'" }),
+    ).resolves.toBeDefined();
+    await expect(
+      tool.execute("call-5", {
+        command: `python -c "from pathlib import Path; Path('pwned.txt').write_text('x')"`,
+      }),
+    ).resolves.toBeDefined();
+  });
+
+  it("allows generic fixer exec without owned-path filtering", async () => {
+    const root = await createCaseRoot();
+    const runtimeRepo = path.join(root, "openclaw-sre");
+    const config = await createOwnershipConfig(root);
+    const execTool: AnyAgentTool = {
+      name: "exec",
+      label: "exec",
+      description: "exec",
+      parameters: {} as never,
+      execute: vi.fn(async () => ({ content: [], details: {} })),
+    };
+    const tool = wrapToolWithOwnedPathPolicy({
+      tool: execTool,
+      agentId: "sre-repo-runtime",
+      config,
+      workspaceRoot: runtimeRepo,
+    });
+
+    await expect(
+      tool.execute("call-6", { command: "cd ../morpho-infra-helm && git status" }),
+    ).resolves.toBeDefined();
+    await expect(
+      tool.execute("call-7", { command: "git -C ../morpho-infra-helm status" }),
+    ).resolves.toBeDefined();
+  });
+
+  it("allows fixer exec commands inside the owned repo too", async () => {
+    const root = await createCaseRoot();
+    const runtimeRepo = path.join(root, "openclaw-sre");
+    const config = await createOwnershipConfig(root);
+    const execTool: AnyAgentTool = {
+      name: "exec",
+      label: "exec",
+      description: "exec",
+      parameters: {} as never,
+      execute: vi.fn(async () => ({ content: [], details: {} })),
+    };
+    const tool = wrapToolWithOwnedPathPolicy({
+      tool: execTool,
+      agentId: "sre-repo-runtime",
+      config,
+      workspaceRoot: runtimeRepo,
+    });
+
+    await expect(
+      tool.execute("call-9", { command: "kubectl get pods -n monitoring" }),
+    ).resolves.toBeDefined();
   });
 });

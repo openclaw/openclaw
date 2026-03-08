@@ -39,6 +39,7 @@ type RelationshipIndexStoreOptions = {
 };
 
 const DEFAULT_COMPACT_AFTER_BYTES = 256 * 1024;
+const relationshipIndexWriteQueues = new Map<string, Promise<void>>();
 
 function toNdjson(records: unknown[]): string {
   return records.map((record) => JSON.stringify(record)).join("\n") + "\n";
@@ -46,6 +47,26 @@ function toNdjson(records: unknown[]): string {
 
 async function ensureStoreDir(rootDir: string): Promise<void> {
   await fs.mkdir(rootDir, { recursive: true });
+}
+
+function runSerializedByKey<T>(
+  queues: Map<string, Promise<void>>,
+  key: string,
+  task: () => Promise<T>,
+): Promise<T> {
+  const previous = queues.get(key) ?? Promise.resolve();
+  const run = previous.catch(() => undefined).then(task);
+  const tracked = run.then(
+    () => undefined,
+    () => undefined,
+  );
+  queues.set(key, tracked);
+  void tracked.finally(() => {
+    if (queues.get(key) === tracked) {
+      queues.delete(key);
+    }
+  });
+  return run;
 }
 
 async function readLatestSnapshot(
@@ -132,37 +153,39 @@ export async function appendRelationshipIndexUpdate(
   }
 
   const paths = resolveRelationshipIndexStorePaths(options?.env ?? process.env);
-  await ensureStoreDir(paths.rootDir);
-  const existingLatest = await readLatestSnapshot(paths.latestByEntityPath);
+  await runSerializedByKey(relationshipIndexWriteQueues, paths.rootDir, async () => {
+    await ensureStoreDir(paths.rootDir);
+    const existingLatest = await readLatestSnapshot(paths.latestByEntityPath);
 
-  const writes: Promise<void>[] = [];
-  if (update.nodes.length > 0) {
-    writes.push(fs.appendFile(paths.nodesPath, toNdjson(update.nodes), "utf8"));
-  }
-  if (update.edges.length > 0) {
-    writes.push(fs.appendFile(paths.edgesPath, toNdjson(update.edges), "utf8"));
-  }
+    const writes: Promise<void>[] = [];
+    if (update.nodes.length > 0) {
+      writes.push(fs.appendFile(paths.nodesPath, toNdjson(update.nodes), "utf8"));
+    }
+    if (update.edges.length > 0) {
+      writes.push(fs.appendFile(paths.edgesPath, toNdjson(update.edges), "utf8"));
+    }
 
-  const latest: RelationshipIndexLatestSnapshot = {
-    version: RELATIONSHIP_INDEX_LATEST_VERSION,
-    updatedAt: new Date().toISOString(),
-    nodes: {
-      ...existingLatest?.nodes,
-      ...Object.fromEntries(update.nodes.map((node) => [node.entityId, node])),
-    },
-  };
-  writes.push(fs.writeFile(paths.latestByEntityPath, JSON.stringify(latest, null, 2), "utf8"));
-  await Promise.all(writes);
-  logSreMetric("relationship_index_write", {
-    nodes: update.nodes.length,
-    edges: update.edges.length,
-    latestNodes: Object.keys(latest.nodes).length,
+    const latest: RelationshipIndexLatestSnapshot = {
+      version: RELATIONSHIP_INDEX_LATEST_VERSION,
+      updatedAt: new Date().toISOString(),
+      nodes: {
+        ...existingLatest?.nodes,
+        ...Object.fromEntries(update.nodes.map((node) => [node.entityId, node])),
+      },
+    };
+    writes.push(fs.writeFile(paths.latestByEntityPath, JSON.stringify(latest, null, 2), "utf8"));
+    await Promise.all(writes);
+    logSreMetric("relationship_index_write", {
+      nodes: update.nodes.length,
+      edges: update.edges.length,
+      latestNodes: Object.keys(latest.nodes).length,
+    });
+
+    await maybeCompactRelationshipIndex(
+      paths,
+      options?.compactAfterBytes ?? DEFAULT_COMPACT_AFTER_BYTES,
+    );
   });
-
-  await maybeCompactRelationshipIndex(
-    paths,
-    options?.compactAfterBytes ?? DEFAULT_COMPACT_AFTER_BYTES,
-  );
 }
 
 export async function readRelationshipIndexLatestSnapshot(
