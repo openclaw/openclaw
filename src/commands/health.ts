@@ -4,7 +4,7 @@ import { getChannelPlugin, listChannelPlugins } from "../channels/plugins/index.
 import type { ChannelAccountSnapshot } from "../channels/plugins/types.js";
 import { withProgress } from "../cli/progress.js";
 import type { OpenClawConfig } from "../config/config.js";
-import { loadConfig } from "../config/config.js";
+import { loadConfig, readBestEffortConfig } from "../config/config.js";
 import { loadSessionStore, resolveStorePath } from "../config/sessions.js";
 import { buildGatewayConnectionDetails, callGateway } from "../gateway/call.js";
 import { info } from "../globals.js";
@@ -526,7 +526,7 @@ export async function healthCommand(
   opts: { json?: boolean; timeoutMs?: number; verbose?: boolean; config?: OpenClawConfig },
   runtime: RuntimeEnv,
 ) {
-  const cfg = opts.config ?? loadConfig();
+  const cfg = opts.config ?? (await readBestEffortConfig());
   // Always query the running gateway; do not open a direct Baileys socket here.
   const summary = await withProgress(
     {
