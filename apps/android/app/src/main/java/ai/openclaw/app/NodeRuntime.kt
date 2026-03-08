@@ -534,6 +534,17 @@ class NodeRuntime(
   fun setOnboardingCompleted(value: Boolean) = prefs.setOnboardingCompleted(value)
   val lastDiscoveredStableId: StateFlow<String> = prefs.lastDiscoveredStableId
   val canvasDebugStatusEnabled: StateFlow<Boolean> = prefs.canvasDebugStatusEnabled
+  val notificationForwardingEnabled: StateFlow<Boolean> = prefs.notificationForwardingEnabled
+  val notificationForwardingMode: StateFlow<NotificationPackageFilterMode> =
+    prefs.notificationForwardingMode
+  val notificationForwardingPackages: StateFlow<Set<String>> = prefs.notificationForwardingPackages
+  val notificationForwardingQuietHoursEnabled: StateFlow<Boolean> =
+    prefs.notificationForwardingQuietHoursEnabled
+  val notificationForwardingQuietStart: StateFlow<String> = prefs.notificationForwardingQuietStart
+  val notificationForwardingQuietEnd: StateFlow<String> = prefs.notificationForwardingQuietEnd
+  val notificationForwardingMaxEventsPerMinute: StateFlow<Int> =
+    prefs.notificationForwardingMaxEventsPerMinute
+  val notificationForwardingSessionKey: StateFlow<String?> = prefs.notificationForwardingSessionKey
 
   private var didAutoConnect = false
 
@@ -684,6 +695,34 @@ class NodeRuntime(
 
   fun setCanvasDebugStatusEnabled(value: Boolean) {
     prefs.setCanvasDebugStatusEnabled(value)
+  }
+
+  fun setNotificationForwardingEnabled(value: Boolean) {
+    prefs.setNotificationForwardingEnabled(value)
+  }
+
+  fun setNotificationForwardingMode(mode: NotificationPackageFilterMode) {
+    prefs.setNotificationForwardingMode(mode)
+  }
+
+  fun setNotificationForwardingPackages(packages: List<String>) {
+    prefs.setNotificationForwardingPackages(packages)
+  }
+
+  fun setNotificationForwardingQuietHours(
+    enabled: Boolean,
+    start: String,
+    end: String,
+  ) {
+    prefs.setNotificationForwardingQuietHours(enabled = enabled, start = start, end = end)
+  }
+
+  fun setNotificationForwardingMaxEventsPerMinute(value: Int) {
+    prefs.setNotificationForwardingMaxEventsPerMinute(value)
+  }
+
+  fun setNotificationForwardingSessionKey(value: String?) {
+    prefs.setNotificationForwardingSessionKey(value)
   }
 
   fun setVoiceScreenActive(active: Boolean) {
