@@ -67,6 +67,28 @@ export function appendCdpPath(cdpUrl: string, path: string): string {
   return url.toString();
 }
 
+export function normalizeCdpHttpBaseForJsonEndpoints(cdpUrl: string): string {
+  try {
+    const url = new URL(cdpUrl);
+    if (url.protocol === "ws:") {
+      url.protocol = "http:";
+    } else if (url.protocol === "wss:") {
+      url.protocol = "https:";
+    }
+    url.pathname = url.pathname.replace(/\/devtools\/browser\/.*$/, "");
+    url.pathname = url.pathname.replace(/\/cdp$/, "");
+    return url.toString().replace(/\/$/, "");
+  } catch {
+    // Best-effort fallback for non-URL-ish inputs.
+    return cdpUrl
+      .replace(/^ws:/, "http:")
+      .replace(/^wss:/, "https:")
+      .replace(/\/devtools\/browser\/.*$/, "")
+      .replace(/\/cdp$/, "")
+      .replace(/\/$/, "");
+  }
+}
+
 function createCdpSender(ws: WebSocket) {
   let nextId = 1;
   const pending = new Map<number, Pending>();

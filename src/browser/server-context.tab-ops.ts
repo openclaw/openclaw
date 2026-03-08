@@ -1,5 +1,5 @@
 import { CDP_JSON_NEW_TIMEOUT_MS } from "./cdp-timeouts.js";
-import { fetchJson, fetchOk } from "./cdp.helpers.js";
+import { fetchJson, fetchOk, normalizeCdpHttpBaseForJsonEndpoints } from "./cdp.helpers.js";
 import { appendCdpPath, createTargetViaCdp, normalizeCdpWsUrl } from "./cdp.js";
 import type { ResolvedBrowserProfile } from "./config.js";
 import {
@@ -58,6 +58,8 @@ export function createProfileTabOps({
   state,
   getProfileState,
 }: TabOpsDeps): ProfileTabOps {
+  const cdpHttpBase = normalizeCdpHttpBaseForJsonEndpoints(profile.cdpUrl);
+
   const listTabs = async (): Promise<BrowserTab[]> => {
     // For remote profiles, use Playwright's persistent connection to avoid ephemeral sessions
     if (!profile.cdpIsLoopback) {
@@ -82,7 +84,7 @@ export function createProfileTabOps({
         webSocketDebuggerUrl?: string;
         type?: string;
       }>
-    >(appendCdpPath(profile.cdpUrl, "/json/list"));
+    >(appendCdpPath(cdpHttpBase, "/json/list"));
     return raw
       .map((t) => ({
         targetId: t.id ?? "",
@@ -115,7 +117,7 @@ export function createProfileTabOps({
     const candidates = pageTabs.filter((tab) => tab.targetId !== keepTargetId);
     const excessCount = pageTabs.length - MANAGED_BROWSER_PAGE_TAB_LIMIT;
     for (const tab of candidates.slice(0, excessCount)) {
-      void fetchOk(appendCdpPath(profile.cdpUrl, `/json/close/${tab.targetId}`)).catch(() => {
+      void fetchOk(appendCdpPath(cdpHttpBase, `/json/close/${tab.targetId}`)).catch(() => {
         // best-effort cleanup only
       });
     }
@@ -180,7 +182,7 @@ export function createProfileTabOps({
     }
 
     const encoded = encodeURIComponent(url);
-    const endpointUrl = new URL(appendCdpPath(profile.cdpUrl, "/json/new"));
+    const endpointUrl = new URL(appendCdpPath(cdpHttpBase, "/json/new"));
     await assertBrowserNavigationAllowed({ url, ...ssrfPolicyOpts });
     const endpoint = endpointUrl.search
       ? (() => {
