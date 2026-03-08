@@ -19,6 +19,7 @@ import {
 import type { OpenClawConfig } from "../config/config.js";
 import type { SessionEntry } from "../config/sessions.js";
 import {
+  isAcpSessionKey,
   isSubagentSessionKey,
   normalizeAgentId,
   parseAgentSessionKey,
@@ -97,8 +98,8 @@ export async function applySessionsPatchToStore(params: {
       if (!trimmed) {
         return invalid("invalid spawnedBy: empty");
       }
-      if (!isSubagentSessionKey(storeKey)) {
-        return invalid("spawnedBy is only supported for subagent:* sessions");
+      if (!isSubagentSessionKey(storeKey) && !isAcpSessionKey(storeKey)) {
+        return invalid("spawnedBy is only supported for subagent:* and acp:* sessions");
       }
       if (existing?.spawnedBy && existing.spawnedBy !== trimmed) {
         return invalid("spawnedBy cannot be changed once set");
@@ -114,8 +115,8 @@ export async function applySessionsPatchToStore(params: {
         return invalid("spawnDepth cannot be cleared once set");
       }
     } else if (raw !== undefined) {
-      if (!isSubagentSessionKey(storeKey)) {
-        return invalid("spawnDepth is only supported for subagent:* sessions");
+      if (!isSubagentSessionKey(storeKey) && !isAcpSessionKey(storeKey)) {
+        return invalid("spawnDepth is only supported for subagent:* and acp:* sessions");
       }
       const numeric = Number(raw);
       if (!Number.isInteger(numeric) || numeric < 0) {
