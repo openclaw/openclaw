@@ -30,15 +30,14 @@ async function withGlobalControlUiHardlinkFixture<T>(run: (rootPath: string) => 
 }
 
 describe("gateway.controlUi.root", () => {
-  test("serves GET / when configured root points at global OpenClaw package control-ui", async () => {
+  test("rejects hardlinked index.html when configured root points at global OpenClaw package control-ui", async () => {
     await withGlobalControlUiHardlinkFixture(async (rootPath) => {
       testState.gatewayControlUi = { root: rootPath };
       await withGatewayServer(
         async ({ port }) => {
           const res = await fetch(`http://127.0.0.1:${port}/`);
-          expect(res.status).toBe(200);
-          const body = await res.text();
-          expect(body).toContain("pnpm-hardlink-ui");
+          expect(res.status).toBe(404);
+          expect(await res.text()).toBe("Not Found");
         },
         { serverOptions: { controlUiEnabled: true } },
       );

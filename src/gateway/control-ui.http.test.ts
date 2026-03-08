@@ -45,6 +45,7 @@ describe("handleControlUiHttpRequest", () => {
     method: "GET" | "HEAD" | "POST";
     rootPath: string;
     basePath?: string;
+    rootKind?: "resolved" | "bundled";
   }) {
     const { res, end } = makeMockHttpResponse();
     const handled = handleControlUiHttpRequest(
@@ -52,7 +53,7 @@ describe("handleControlUiHttpRequest", () => {
       res,
       {
         ...(params.basePath ? { basePath: params.basePath } : {}),
-        root: { kind: "resolved", path: params.rootPath },
+        root: { kind: params.rootKind ?? "resolved", path: params.rootPath },
       },
     );
     return { res, end, handled };
@@ -96,36 +97,6 @@ describe("handleControlUiHttpRequest", () => {
       await fs.mkdir(sibling, { recursive: true });
       await fs.writeFile(path.join(root, "index.html"), "<html>ok</html>\n");
       return await params.fn({ root, sibling });
-    } finally {
-      await fs.rm(tmp, { recursive: true, force: true });
-    }
-  }
-
-  async function withOpenClawPackageControlUiRoot<T>(params: {
-    hardlinkIndex?: boolean;
-    fn: (rootPath: string) => Promise<T>;
-  }) {
-    const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-ui-package-root-"));
-    try {
-      const packageRoot = path.join(tmp, "node_modules", "openclaw");
-      const uiRoot = path.join(packageRoot, "dist", "control-ui");
-      await fs.mkdir(uiRoot, { recursive: true });
-      await fs.writeFile(
-        path.join(packageRoot, "package.json"),
-        JSON.stringify({ name: "openclaw" }),
-      );
-
-      if (params.hardlinkIndex) {
-        const storeDir = path.join(tmp, "store");
-        await fs.mkdir(storeDir, { recursive: true });
-        const storeIndex = path.join(storeDir, "index.html");
-        await fs.writeFile(storeIndex, "<html>hardlinked-package-ui</html>\n");
-        await fs.link(storeIndex, path.join(uiRoot, "index.html"));
-      } else {
-        await fs.writeFile(path.join(uiRoot, "index.html"), "<html>package-ui</html>\n");
-      }
-
-      return await params.fn(uiRoot);
     } finally {
       await fs.rm(tmp, { recursive: true, force: true });
     }
@@ -379,18 +350,45 @@ describe("handleControlUiHttpRequest", () => {
     });
   });
 
-  it("allows hardlinked index.html for OpenClaw package control-ui roots", async () => {
-    await withOpenClawPackageControlUiRoot({
-      hardlinkIndex: true,
-      fn: async (rootPath) => {
+  it("rejects hardlinked asset files for custom/resolved roots (security boundary)", async () => {
+    await withControlUiRoot({
+      fn: async (tmp) => {
+        const assetsDir = path.join(tmp, "assets");
+        await fs.mkdir(assetsDir, { recursive: true });
+        await fs.writeFile(path.join(assetsDir, "app.js"), "console.log('hi');");
+        await fs.link(path.join(assetsDir, "app.js"), path.join(assetsDir, "app.hl.js"));
+
         const { res, end, handled } = runControlUiRequest({
-          url: "/",
+          url: "/assets/app.hl.js",
           method: "GET",
-          rootPath,
+          rootPath: tmp,
         });
+
+        expect(handled).toBe(true);
+        expect(res.statusCode).toBe(404);
+        expect(end).toHaveBeenCalledWith("Not Found");
+      },
+    });
+  });
+
+  it("serves hardlinked asset files for bundled roots (pnpm global install)", async () => {
+    await withControlUiRoot({
+      fn: async (tmp) => {
+        const assetsDir = path.join(tmp, "assets");
+        await fs.mkdir(assetsDir, { recursive: true });
+        await fs.writeFile(path.join(assetsDir, "app.js"), "console.log('hi');");
+        await fs.link(path.join(assetsDir, "app.js"), path.join(assetsDir, "app.hl.js"));
+
+        const { res, end, handled } = runControlUiRequest({
+          url: "/assets/app.hl.js",
+          method: "GET",
+          rootPath: tmp,
+          rootKind: "bundled",
+        });
+
         expect(handled).toBe(true);
         expect(res.statusCode).toBe(200);
-        expect(String(end.mock.calls[0]?.[0] ?? "")).toContain("hardlinked-package-ui");
+        expect(String(end.mock.calls[0]?.[0] ?? "")).toBe("console.log('hi');");
       },
     });
   });
