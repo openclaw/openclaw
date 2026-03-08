@@ -88,5 +88,24 @@ export function stripReasoningTagsFromText(
     result += cleaned.slice(lastIndex);
   }
 
+  // Handle bare "thought\n" duplication (Gemini 3.0 Flash, no XML tags)
+  if (mode === "strict" && /\bthought\b/i.test(result)) {
+    const lowerResult = result.toLowerCase();
+    const thoughtMatch = lowerResult.match(/\bthought\b\s*\n/i);
+    if (thoughtMatch) {
+      const thoughtIdx = thoughtMatch.index!;
+      const prefix = result.slice(0, thoughtIdx).trimEnd();
+      const thoughtLen = thoughtMatch[0].length;
+      const suffixStart = thoughtIdx + thoughtLen;
+      const suffix = result.slice(suffixStart).trimStart();
+      // Normalize: strip trailing non-alphanum/ws from prefix, leading ws from suffix
+      const normPrefix = prefix.replace(/[\\s\\W]*$/g, '');
+      const normSuffix = suffix.replace(/^\\s+/, '');
+      if (normPrefix === normSuffix && prefix.trim()) {
+        result = prefix;
+      }
+    }
+  }
+
   return applyTrim(result, trimMode);
 }

@@ -172,6 +172,33 @@ describe("stripReasoningTagsFromText", () => {
       }
     });
 
+    it("handles bare 'thought\\n' duplication (Gemini 3.0 Flash #32721)", () => {
+      const cases = [
+        {
+          input: "Answer 42. thought\\nAnswer 42",
+          expected: "Answer 42. "
+        },
+        {
+          input: "Resp ✨thought\\nResp",
+          expected: "Resp ✨"
+        },
+        {
+          input: "No dup thought\\nextra",
+          expected: "No dup thought\\nextra" // no match
+        },
+        {
+          input: "thought\\nsuffix",
+          expected: "thought\\nsuffix" // no prefix
+        },
+        {
+          input: "Thought:\nrepeat",
+          expected: "Thought:\nrepeat" // casing
+        },
+      ] as const;
+      for (const { input, expected } of cases) {
+        expect(stripReasoningTagsFromText(input, { mode: "strict" })).toBe(expected);
+      }
+    });
     it("handles long content and pathological backtick patterns efficiently", () => {
       const longContent = "x".repeat(10000);
       expect(stripReasoningTagsFromText(`<think>${longContent}</think>visible`)).toBe("visible");
