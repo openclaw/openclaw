@@ -22,6 +22,20 @@ export const TELEGRAM_RETRY_DEFAULTS = {
 const TELEGRAM_RETRY_RE = /429|timeout|connect|reset|closed|unavailable|temporarily/i;
 const log = createSubsystemLogger("retry-policy");
 
+function resolveTelegramShouldRetry(params: {
+  shouldRetry?: (err: unknown) => boolean;
+  strictShouldRetry?: boolean;
+}) {
+  if (!params.shouldRetry) {
+    return (err: unknown) => TELEGRAM_RETRY_RE.test(formatErrorMessage(err));
+  }
+  if (params.strictShouldRetry) {
+    return params.shouldRetry;
+  }
+  return (err: unknown) =>
+    params.shouldRetry?.(err) || TELEGRAM_RETRY_RE.test(formatErrorMessage(err));
+}
+
 function getTelegramRetryAfterMs(err: unknown): number | undefined {
   if (!err || typeof err !== "object") {
     return undefined;
@@ -88,12 +102,7 @@ export function createTelegramRetryRunner(params: {
     ...params.configRetry,
     ...params.retry,
   });
-  const shouldRetry = params.shouldRetry
-    ? params.strictShouldRetry
-      ? params.shouldRetry
-      : (err: unknown) =>
-          params.shouldRetry?.(err) || TELEGRAM_RETRY_RE.test(formatErrorMessage(err))
-    : (err: unknown) => TELEGRAM_RETRY_RE.test(formatErrorMessage(err));
+  const shouldRetry = resolveTelegramShouldRetry(params);
 
   return <T>(fn: () => Promise<T>, label?: string) =>
     retryAsync(fn, {
