@@ -42,16 +42,24 @@ export function resolvePowerShellPath(): string {
 export function getShellConfig(configuredShell?: string): { shell: string; args: string[] } {
   if (configuredShell) {
     if (process.platform === "win32") {
-      const ext = path.extname(configuredShell).toLowerCase();
-      if (ext === ".ps1" || ext === "" || ext === ".exe") {
+      const base = path
+        .basename(configuredShell, path.extname(configuredShell))
+        .toLowerCase();
+      if (base === "pwsh" || base === "powershell") {
         return {
           shell: configuredShell,
           args: ["-NoProfile", "-NonInteractive", "-Command"],
         };
       }
+      if (base === "cmd") {
+        return {
+          shell: configuredShell,
+          args: ["/d", "/s", "/c"],
+        };
+      }
       return {
         shell: configuredShell,
-        args: ["/d", "/s", "/c"],
+        args: ["-c"],
       };
     }
     return {
