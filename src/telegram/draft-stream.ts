@@ -119,6 +119,7 @@ export function createTelegramDraftStream(params: {
     ? resolveSendMessageDraftApi(params.api)
     : undefined;
   const usesDraftTransport = Boolean(prefersDraftTransport && resolvedDraftApi);
+  const isRTL = (text: string) => /[\u0590-\u08FF]/.test(text); // Hebrew, Arabic ranges
   if (prefersDraftTransport && !usesDraftTransport) {
     params.warn?.(
       "telegram stream preview: sendMessageDraft unavailable; falling back to sendMessage/editMessageText",
@@ -247,7 +248,7 @@ export function createTelegramDraftStream(params: {
       return false;
     }
     const rendered = params.renderText?.(trimmed) ?? { text: trimmed };
-    const renderedText = rendered.text.trimEnd();
+    const renderedText = isRTL(rendered.text.trimEnd()) ? "\u200F" + rendered.text.trimEnd() : rendered.text.trimEnd();
     const renderedParseMode = rendered.parseMode;
     if (!renderedText) {
       return false;
