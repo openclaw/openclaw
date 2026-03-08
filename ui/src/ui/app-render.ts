@@ -721,7 +721,18 @@ export function renderApp(state: AppViewState) {
                   }
                 },
                 onConfigReload: () => loadConfig(state),
-                onConfigSave: () => saveConfig(state),
+                onConfigSave: async () => {
+                  const selectedBefore = state.agentsSelectedId;
+                  await saveConfig(state);
+                  await loadAgents(state);
+                  // Restore selection if the agent still exists after reload.
+                  if (
+                    selectedBefore &&
+                    state.agentsList?.agents.some((a) => a.id === selectedBefore)
+                  ) {
+                    state.agentsSelectedId = selectedBefore;
+                  }
+                },
                 onChannelsRefresh: () => loadChannels(state, false),
                 onCronRefresh: () => state.loadCron(),
                 onSkillsFilterChange: (next) => (state.skillsFilter = next),

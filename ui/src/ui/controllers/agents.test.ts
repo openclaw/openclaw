@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { loadToolsCatalog } from "./agents.ts";
+import { loadAgents, loadToolsCatalog } from "./agents.ts";
 import type { AgentsState } from "./agents.ts";
 
 function createState(): { state: AgentsState; request: ReturnType<typeof vi.fn> } {
@@ -19,6 +19,62 @@ function createState(): { state: AgentsState; request: ReturnType<typeof vi.fn> 
   };
   return { state, request };
 }
+
+describe("loadAgents", () => {
+  it("preserves selected agent when it still exists in the list", async () => {
+    const { state, request } = createState();
+    state.agentsSelectedId = "kimi";
+    request.mockResolvedValue({
+      defaultId: "main",
+      mainKey: "main",
+      scope: "per-sender",
+      agents: [
+        { id: "main", name: "main" },
+        { id: "kimi", name: "kimi" },
+      ],
+    });
+
+    await loadAgents(state);
+
+    expect(state.agentsSelectedId).toBe("kimi");
+  });
+
+  it("resets to default when selected agent is removed", async () => {
+    const { state, request } = createState();
+    state.agentsSelectedId = "removed-agent";
+    request.mockResolvedValue({
+      defaultId: "main",
+      mainKey: "main",
+      scope: "per-sender",
+      agents: [
+        { id: "main", name: "main" },
+        { id: "kimi", name: "kimi" },
+      ],
+    });
+
+    await loadAgents(state);
+
+    expect(state.agentsSelectedId).toBe("main");
+  });
+
+  it("sets default when no agent is selected", async () => {
+    const { state, request } = createState();
+    state.agentsSelectedId = null;
+    request.mockResolvedValue({
+      defaultId: "main",
+      mainKey: "main",
+      scope: "per-sender",
+      agents: [
+        { id: "main", name: "main" },
+        { id: "kimi", name: "kimi" },
+      ],
+    });
+
+    await loadAgents(state);
+
+    expect(state.agentsSelectedId).toBe("main");
+  });
+});
 
 describe("loadToolsCatalog", () => {
   it("loads catalog and stores result", async () => {
