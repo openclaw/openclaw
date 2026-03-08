@@ -1,4 +1,7 @@
-import { buildAccountScopedDmSecurityPolicy, mapAllowFromEntries } from "openclaw/plugin-sdk";
+import {
+  buildAccountScopedDmSecurityPolicy,
+  mapAllowFromEntries,
+} from "openclaw/plugin-sdk/compat";
 import type {
   ChannelAccountSnapshot,
   ChannelDirectoryEntry,
