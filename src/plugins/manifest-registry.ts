@@ -252,6 +252,9 @@ export function loadPluginManifestRegistry(params: {
         });
       }
       // else: candidate has lower precedence than existing — intentional override, no warning.
+      // Always update seenIds so subsequent candidates compare against the most recent
+      // entry, not the stale first-seen one (avoids broken diagnostics in 3-way conflicts).
+      seenIds.set(manifest.id, { candidate, recordIndex: records.length });
     } else {
       seenIds.set(manifest.id, { candidate, recordIndex: records.length });
     }
