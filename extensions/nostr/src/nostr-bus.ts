@@ -36,6 +36,14 @@ const MAX_PERSISTED_EVENT_IDS = 5000;
 const STATE_PERSIST_DEBOUNCE_MS = 5000; // Debounce state writes
 /** @internal Exported for testing. */
 export const MAX_PLAINTEXT_LENGTH = 65536; // 64 KiB cap on decrypted messages
+/**
+ * NIP-04 ciphertext is AES-CBC (padded to 16-byte blocks) then base64-encoded.
+ * Worst-case expansion: ceil(plaintext/16)*16 bytes, then *4/3 for base64,
+ * plus the IV suffix ("?iv=…"). 90 000 chars gives ~3 % headroom over the
+ * theoretical max of ~87 382.
+ * @internal Exported for testing.
+ */
+export const MAX_CIPHERTEXT_LENGTH = 90_000;
 
 // Circuit breaker configuration
 const CIRCUIT_BREAKER_THRESHOLD = 5; // failures before opening
@@ -444,8 +452,14 @@ export async function startNostrBus(options: NostrBusOptions): Promise<NostrBusH
         return;
       }
 
-      // Guard against oversized ciphertext before spending CPU on decrypt
-      if (event.content.length > MAX_PLAINTEXT_LENGTH * 2) {
+      // Mark seen AFTER verify (don't cache invalid IDs)
+      seen.add(event.id);
+      metrics.emit("memory.seen_tracker_size", seen.size());
+
+      // Guard against oversized ciphertext before spending CPU on decrypt.
+      // Runs AFTER seen.add so rejected events are not re-processed on every
+      // relay delivery.
+      if (event.content.length > MAX_CIPHERTEXT_LENGTH) {
         metrics.emit("event.rejected.oversized_ciphertext");
         onError?.(
           new Error(`Ciphertext too long (${event.content.length} chars)`),
@@ -453,10 +467,6 @@ export async function startNostrBus(options: NostrBusOptions): Promise<NostrBusH
         );
         return;
       }
-
-      // Mark seen AFTER verify (don't cache invalid IDs)
-      seen.add(event.id);
-      metrics.emit("memory.seen_tracker_size", seen.size());
 
       // Decrypt the message
       let plaintext: string;
