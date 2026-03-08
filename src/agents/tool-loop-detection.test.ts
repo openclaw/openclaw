@@ -591,4 +591,27 @@ describe("tool-loop-detection", () => {
       expect(stats.mostFrequent?.count).toBe(7);
     });
   });
+
+  describe("stale history clearing", () => {
+    it("clears history when last call is older than 2 minutes", () => {
+      const state = createState();
+      recordToolCall(state, "read", { path: "/a.txt" }, "call-1");
+      expect(state.toolCallHistory).toHaveLength(1);
+
+      // Simulate time passing (>2 minutes)
+      state.toolCallHistory![0].timestamp = Date.now() - 130_000;
+
+      recordToolCall(state, "read", { path: "/b.txt" }, "call-2");
+      // History should have been cleared before adding new call
+      expect(state.toolCallHistory).toHaveLength(1);
+      expect(state.toolCallHistory![0].toolCallId).toBe("call-2");
+    });
+
+    it("preserves history when last call is recent", () => {
+      const state = createState();
+      recordToolCall(state, "read", { path: "/a.txt" }, "call-1");
+      recordToolCall(state, "read", { path: "/b.txt" }, "call-2");
+      expect(state.toolCallHistory).toHaveLength(2);
+    });
+  });
 });

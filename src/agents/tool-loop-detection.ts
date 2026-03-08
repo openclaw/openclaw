@@ -495,8 +495,17 @@ export function detectToolCallLoop(
 }
 
 /**
+ * If the most recent recorded tool call is older than this threshold,
+ * the history is considered stale (e.g. from a previous heartbeat cycle)
+ * and is cleared to prevent false-positive loop detection.
+ */
+const STALE_HISTORY_THRESHOLD_MS = 120_000; // 2 minutes
+
+/**
  * Record a tool call in the session's history for loop detection.
  * Maintains sliding window of last N calls.
+ * Clears stale history when there is a significant time gap between calls
+ * (e.g. across separate heartbeat cycles).
  */
 export function recordToolCall(
   state: SessionState,
@@ -507,6 +516,12 @@ export function recordToolCall(
 ): void {
   const resolvedConfig = resolveLoopDetectionConfig(config);
   if (!state.toolCallHistory) {
+    state.toolCallHistory = [];
+  }
+
+  // Clear stale history from previous heartbeat/session cycles
+  const lastCall = state.toolCallHistory.at(-1);
+  if (lastCall?.timestamp && Date.now() - lastCall.timestamp > STALE_HISTORY_THRESHOLD_MS) {
     state.toolCallHistory = [];
   }
 
