@@ -635,20 +635,24 @@ export const dispatchTelegramMessage = async ({
                   await ingestDraftLaneSegments(payload.text);
                 })
             : undefined,
-        onReasoningStream: reasoningLane.stream
-          ? (payload) =>
-              enqueueDraftLaneEvent(async () => {
-                // Split between reasoning blocks only when the next reasoning
-                // stream starts. Splitting at reasoning-end can orphan the active
-                // preview and cause duplicate reasoning sends on reasoning final.
-                if (splitReasoningOnNextStream) {
-                  reasoningLane.stream?.forceNewMessage();
-                  resetDraftLaneState(reasoningLane);
-                  splitReasoningOnNextStream = false;
-                }
-                await ingestDraftLaneSegments(payload.text);
-              })
-          : undefined,
+        // When reasoning display is off, skip onReasoningStream to prevent
+        // native reasoning content (no tags) from routing to the answer lane,
+        // which would create a duplicate visible message alongside the answer.
+        onReasoningStream:
+          reasoningLane.stream && resolvedReasoningLevel !== "off"
+            ? (payload) =>
+                enqueueDraftLaneEvent(async () => {
+                  // Split between reasoning blocks only when the next reasoning
+                  // stream starts. Splitting at reasoning-end can orphan the active
+                  // preview and cause duplicate reasoning sends on reasoning final.
+                  if (splitReasoningOnNextStream) {
+                    reasoningLane.stream?.forceNewMessage();
+                    resetDraftLaneState(reasoningLane);
+                    splitReasoningOnNextStream = false;
+                  }
+                  await ingestDraftLaneSegments(payload.text);
+                })
+            : undefined,
         onAssistantMessageStart: answerLane.stream
           ? () =>
               enqueueDraftLaneEvent(async () => {
@@ -666,13 +670,14 @@ export const dispatchTelegramMessage = async ({
                 finalizedPreviewByLane.answer = false;
               })
           : undefined,
-        onReasoningEnd: reasoningLane.stream
-          ? () =>
-              enqueueDraftLaneEvent(async () => {
-                // Split when/if a later reasoning block begins.
-                splitReasoningOnNextStream = reasoningLane.hasStreamedMessage;
-              })
-          : undefined,
+        onReasoningEnd:
+          reasoningLane.stream && resolvedReasoningLevel !== "off"
+            ? () =>
+                enqueueDraftLaneEvent(async () => {
+                  // Split when/if a later reasoning block begins.
+                  splitReasoningOnNextStream = reasoningLane.hasStreamedMessage;
+                })
+            : undefined,
         onToolStart: statusReactionController
           ? async (payload) => {
               await statusReactionController.setTool(payload.name);
