@@ -2,6 +2,7 @@ import { loadConfig } from "../config/config.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { resolveBrowserConfig } from "./config.js";
 import { ensureBrowserControlAuth } from "./control-auth.js";
+import { ensureExtensionUpToDate } from "./extension-update.js";
 import { type BrowserServerState, createBrowserRouteContext } from "./server-context.js";
 import { ensureExtensionRelayForProfiles, stopKnownBrowserProfiles } from "./server-lifecycle.js";
 
@@ -45,6 +46,17 @@ export async function startBrowserControlServiceFromConfig(): Promise<BrowserSer
     resolved,
     profiles: new Map(),
   };
+
+  try {
+    const updated = await ensureExtensionUpToDate();
+    if (updated) {
+      logService.info(
+        "Chrome extension auto-updated (stale bundle detected). Reload in chrome://extensions.",
+      );
+    }
+  } catch {
+    // Best-effort; never block service startup.
+  }
 
   await ensureExtensionRelayForProfiles({
     resolved,
