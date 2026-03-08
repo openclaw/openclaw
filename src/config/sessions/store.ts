@@ -816,7 +816,6 @@ export async function updateLastRoute(params: {
     const store = loadSessionStore(storePath);
     const resolved = resolveSessionStoreEntry({ store, sessionKey });
     const existing = resolved.existing;
-    const now = Date.now();
     const explicitContext = normalizeDeliveryContext(params.deliveryContext);
     const inlineContext = normalizeDeliveryContext({
       channel,
@@ -862,17 +861,18 @@ export async function updateLastRoute(params: {
         })
       : null;
     const basePatch: Partial<SessionEntry> = {
-      updatedAt: Math.max(existing?.updatedAt ?? 0, now),
       deliveryContext: normalized.deliveryContext,
       lastChannel: normalized.lastChannel,
       lastTo: normalized.lastTo,
       lastAccountId: normalized.lastAccountId,
       lastThreadId: normalized.lastThreadId,
     };
-    const next = mergeSessionEntry(
-      existing,
-      metaPatch ? { ...basePatch, ...metaPatch } : basePatch,
-    );
+    const fullPatch = metaPatch ? { ...basePatch, ...metaPatch } : basePatch;
+    // Route metadata updates must not refresh activity timestamps;
+    // idle reset evaluation relies on updatedAt from actual session turns.
+    const next = existing
+      ? mergeSessionEntryPreserveActivity(existing, fullPatch)
+      : mergeSessionEntry(existing, fullPatch);
     return await persistResolvedSessionEntry({
       storePath,
       store,
