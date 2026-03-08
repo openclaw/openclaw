@@ -23,7 +23,6 @@ class InvokeCommandRegistryTest {
       OpenClawCapability.Device.rawValue,
       OpenClawCapability.Notifications.rawValue,
       OpenClawCapability.System.rawValue,
-      OpenClawCapability.AppUpdate.rawValue,
       OpenClawCapability.Photos.rawValue,
       OpenClawCapability.Contacts.rawValue,
       OpenClawCapability.Calendar.rawValue,
@@ -52,7 +51,6 @@ class InvokeCommandRegistryTest {
       OpenClawContactsCommand.Add.rawValue,
       OpenClawCalendarCommand.Events.rawValue,
       OpenClawCalendarCommand.Add.rawValue,
-      "app.update",
     )
 
   private val optionalCommands =
