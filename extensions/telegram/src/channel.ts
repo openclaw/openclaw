@@ -504,6 +504,7 @@ export const telegramPlugin: ChannelPlugin<ResolvedTelegramAccount, TelegramProb
         webhookUrl: account.config.webhookUrl,
         webhookSecret: account.config.webhookSecret,
         webhookPath: account.config.webhookPath,
+        webhookCertPath: account.config.webhookCertPath,
         webhookHost: account.config.webhookHost,
         webhookPort: account.config.webhookPort,
       });

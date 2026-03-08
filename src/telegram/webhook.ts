@@ -1,5 +1,6 @@
+import { readFile } from "node:fs/promises";
 import { createServer } from "node:http";
-import { webhookCallback } from "grammy";
+import { InputFile, webhookCallback } from "grammy";
 import type { OpenClawConfig } from "../config/config.js";
 import { isDiagnosticsEnabled } from "../infra/diagnostic-events.js";
 import { formatErrorMessage } from "../infra/errors.js";
@@ -82,6 +83,7 @@ export async function startTelegramWebhook(opts: {
   port?: number;
   host?: string;
   secret?: string;
+  certPath?: string;
   runtime?: RuntimeEnv;
   fetch?: typeof fetch;
   abortSignal?: AbortSignal;
@@ -233,6 +235,14 @@ export async function startTelegramWebhook(opts: {
     port,
   });
 
+  const certPath = typeof opts.certPath === "string" ? opts.certPath.trim() : "";
+  const certificate = certPath
+    ? new InputFile(
+        await readFile(certPath),
+        certPath.split(/[\\/]/).pop() || "telegram-webhook-cert.pem",
+      )
+    : undefined;
+
   try {
     await withTelegramApiErrorLogging({
       operation: "setWebhook",
@@ -241,6 +251,7 @@ export async function startTelegramWebhook(opts: {
         bot.api.setWebhook(publicUrl, {
           secret_token: secret,
           allowed_updates: resolveTelegramAllowedUpdates(),
+          ...(certificate ? { certificate } : {}),
         }),
     });
   } catch (err) {

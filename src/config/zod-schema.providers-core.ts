@@ -207,6 +207,12 @@ export const TelegramAccountSchemaBase = z
       .describe(
         "Local webhook route path served by the gateway listener. Defaults to /telegram-webhook.",
       ),
+    webhookCertPath: z
+      .string()
+      .optional()
+      .describe(
+        "Optional PEM certificate file path uploaded during setWebhook registration (use for self-signed webhook certificates).",
+      ),
     webhookHost: z
       .string()
       .optional()

@@ -1,6 +1,9 @@
 import { createHash } from "node:crypto";
 import { once } from "node:events";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { request, type IncomingMessage } from "node:http";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { describe, expect, it, vi } from "vitest";
 import { startTelegramWebhook } from "./webhook.js";
@@ -414,6 +417,39 @@ describe("startTelegramWebhook", () => {
         );
       },
     );
+  });
+
+  it("uploads configured webhook certificate during setWebhook", async () => {
+    setWebhookSpy.mockClear();
+    const certDir = await mkdtemp(join(tmpdir(), "openclaw-telegram-cert-"));
+    const certPath = join(certDir, "telegram-cert.pem");
+    await writeFile(
+      certPath,
+      "-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----\n",
+      "utf8",
+    );
+
+    try {
+      await withStartedWebhook(
+        {
+          secret: TELEGRAM_SECRET,
+          path: TELEGRAM_WEBHOOK_PATH,
+          certPath,
+        },
+        async () => {
+          expect(setWebhookSpy).toHaveBeenCalledTimes(1);
+          expect(setWebhookSpy).toHaveBeenCalledWith(
+            expect.any(String),
+            expect.objectContaining({
+              secret_token: TELEGRAM_SECRET,
+              certificate: expect.any(Object),
+            }),
+          );
+        },
+      );
+    } finally {
+      await rm(certDir, { recursive: true, force: true });
+    }
   });
 
   it("keeps webhook payload readable when callback delays body read", async () => {
