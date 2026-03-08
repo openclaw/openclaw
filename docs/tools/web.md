@@ -29,13 +29,13 @@ See [Brave Search setup](/brave-search) and [Perplexity Search setup](/perplexit
 
 ## Choosing a search provider
 
-| Provider                  | Result shape                       | Provider-specific filters                    | Notes                                                                          | API key                                     |
-| ------------------------- | ---------------------------------- | -------------------------------------------- | ------------------------------------------------------------------------------ | ------------------------------------------- |
-| **Brave Search API**      | Structured results with snippets   | `country`, `language`, `ui_lang`, time       | Supports Brave `llm-context` mode                                              | `BRAVE_API_KEY`                             |
-| **Gemini**                | AI-synthesized answers + citations | —                                            | Uses Google Search grounding                                                   | `GEMINI_API_KEY`                            |
-| **Grok**                  | AI-synthesized answers + citations | —                                            | Uses xAI web-grounded responses                                                | `XAI_API_KEY`                               |
-| **Kimi**                  | AI-synthesized answers + citations | —                                            | Uses Moonshot web search                                                       | `KIMI_API_KEY` / `MOONSHOT_API_KEY`         |
-| **Perplexity Search API** | Structured results with snippets   | `country`, `language`, time, `domain_filter` | Supports content extraction controls; OpenRouter uses Sonar compatibility path | `PERPLEXITY_API_KEY` / `OPENROUTER_API_KEY` |
+| Provider                  | Result shape                       | Provider-specific filters                    | Notes                                                                                  | API key                                     |
+| ------------------------- | ---------------------------------- | -------------------------------------------- | -------------------------------------------------------------------------------------- | ------------------------------------------- |
+| **Brave Search API**      | Structured results with snippets   | `country`, `language`, `ui_lang`, time       | Supports Brave `llm-context` mode and [Goggles](https://search.brave.com/help/goggles) | `BRAVE_API_KEY`                             |
+| **Gemini**                | AI-synthesized answers + citations | —                                            | Uses Google Search grounding                                                           | `GEMINI_API_KEY`                            |
+| **Grok**                  | AI-synthesized answers + citations | —                                            | Uses xAI web-grounded responses                                                        | `XAI_API_KEY`                               |
+| **Kimi**                  | AI-synthesized answers + citations | —                                            | Uses Moonshot web search                                                               | `KIMI_API_KEY` / `MOONSHOT_API_KEY`         |
+| **Perplexity Search API** | Structured results with snippets   | `country`, `language`, time, `domain_filter` | Supports content extraction controls; OpenRouter uses Sonar compatibility path         | `PERPLEXITY_API_KEY` / `OPENROUTER_API_KEY` |
 
 ### Auto-detection
 
@@ -265,19 +265,20 @@ All parameters work for Brave and for native Perplexity Search API unless noted.
 Perplexity's OpenRouter / Sonar compatibility path supports only `query` and `freshness`.
 If you set `tools.web.search.perplexity.baseUrl` / `model`, use `OPENROUTER_API_KEY`, or configure an `sk-or-...` key, Search API-only filters return explicit errors.
 
-| Parameter             | Description                                           |
-| --------------------- | ----------------------------------------------------- |
-| `query`               | Search query (required)                               |
-| `count`               | Results to return (1-10, default: 5)                  |
-| `country`             | 2-letter ISO country code (e.g., "US", "DE")          |
-| `language`            | ISO 639-1 language code (e.g., "en", "de")            |
-| `freshness`           | Time filter: `day`, `week`, `month`, or `year`        |
-| `date_after`          | Results after this date (YYYY-MM-DD)                  |
-| `date_before`         | Results before this date (YYYY-MM-DD)                 |
-| `ui_lang`             | UI language code (Brave only)                         |
-| `domain_filter`       | Domain allowlist/denylist array (Perplexity only)     |
-| `max_tokens`          | Total content budget, default 25000 (Perplexity only) |
-| `max_tokens_per_page` | Per-page token limit, default 2048 (Perplexity only)  |
+| Parameter             | Description                                                              |
+| --------------------- | ------------------------------------------------------------------------ |
+| `query`               | Search query (required)                                                  |
+| `count`               | Results to return (1-10, default: 5)                                     |
+| `country`             | 2-letter ISO country code (e.g., "US", "DE")                             |
+| `language`            | ISO 639-1 language code (e.g., "en", "de")                               |
+| `freshness`           | Time filter: `day`, `week`, `month`, or `year`                           |
+| `date_after`          | Results after this date (YYYY-MM-DD)                                     |
+| `date_before`         | Results before this date (YYYY-MM-DD)                                    |
+| `ui_lang`             | UI language code (Brave only)                                            |
+| `goggles`             | Goggle URL or inline rules for custom filtering and ranking (Brave only) |
+| `domain_filter`       | Domain allowlist/denylist array (Perplexity only)                        |
+| `max_tokens`          | Total content budget, default 25000 (Perplexity only)                    |
+| `max_tokens_per_page` | Per-page token limit, default 2048 (Perplexity only)                     |
 
 **Examples:**
 
@@ -302,16 +303,40 @@ await web_search({
   date_before: "2024-06-30",
 });
 
-// Domain filtering (Perplexity only)
+// Boost docs over blog posts (Brave Goggles)
 await web_search({
-  query: "climate research",
-  domain_filter: ["nature.com", "science.org", ".edu"],
+  query: "react server components",
+  goggles: "/docs/*$boost=5\n/blog/*$downrank=5",
 });
 
-// Exclude domains (Perplexity only)
+// Boost GitHub source code (Brave Goggles)
 await web_search({
-  query: "product reviews",
-  domain_filter: ["-reddit.com", "-pinterest.com"],
+  query: "openai streaming api",
+  goggles: "$boost=5,site=github.com,inurl=/blob/",
+});
+
+// Domain allowlist — Brave Goggles
+await web_search({
+  query: "transformer architecture",
+  goggles: "$discard\n$site=arxiv.org\n$site=*.edu\n$site=huggingface.co",
+});
+
+// Domain allowlist — Perplexity domain_filter
+await web_search({
+  query: "transformer architecture",
+  domain_filter: ["arxiv.org", ".edu", "huggingface.co"],
+});
+
+// Domain denylist — Brave Goggles
+await web_search({
+  query: "LLM fine-tuning guide",
+  goggles: "$discard,site=reddit.com\n$discard,site=medium.com",
+});
+
+// Domain denylist — Perplexity domain_filter
+await web_search({
+  query: "LLM fine-tuning guide",
+  domain_filter: ["-reddit.com", "-medium.com"],
 });
 
 // More content extraction (Perplexity only)
@@ -323,7 +348,7 @@ await web_search({
 ```
 
 When Brave `llm-context` mode is enabled, `ui_lang`, `freshness`, `date_after`, and
-`date_before` are not supported. Use Brave `web` mode for those filters.
+`date_before` are not supported; use Brave `web` mode for those filters. `goggles`, `country`, and `language` work in both modes.
 
 ## web_fetch
 
