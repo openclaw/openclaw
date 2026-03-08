@@ -1,0 +1,26 @@
+# rumdl configuration
+# https://github.com/rvben/rumdl
+
+[global]
+# Rules with existing violations disabled initially - enable gradually and fix issues
+disable = [
+  "MD001",
+  "MD009",
+  "MD013",
+  "MD022",
+  "MD024",
+  "MD025",
+  "MD026",
+  "MD028",
+  "MD030",
+  "MD031",
+  "MD032",
+  "MD033",
+  "MD034",
+  "MD036",
+  "MD040",
+  "MD041",
+  "MD051",
+  "MD056",
+  "MD058",
+]
