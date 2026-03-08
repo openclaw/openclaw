@@ -766,6 +766,22 @@ export async function startGatewayServer(
         log: logRecovery,
         cfg: cfgAtStart,
       });
+
+      // Best-effort delayed recovery pass.
+      //
+      // Some channels (notably WhatsApp Web) may take a few seconds to establish
+      // a listener after process start. A delayed second pass helps recover
+      // queued outbound deliveries without burning through retry budgets during
+      // the startup readiness window.
+      setTimeout(() => {
+        void recoverPendingDeliveries({
+          deliver: deliverOutboundPayloads,
+          log: log.child("delivery-recovery-delayed"),
+          cfg: cfgAtStart,
+        }).catch((err) => {
+          log.error(`Delivery recovery (delayed) failed: ${String(err)}`);
+        });
+      }, 10_000);
     })().catch((err) => log.error(`Delivery recovery failed: ${String(err)}`));
   }
 
