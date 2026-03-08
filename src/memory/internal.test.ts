@@ -235,6 +235,22 @@ describe("chunkMarkdown", () => {
     expect(reconstructed).toContain("Line 0");
     expect(reconstructed).toContain("Line 29");
   });
+
+  it("splits very long CJK lines into budget-sized segments", () => {
+    // A single line of 2000 CJK characters (no newlines).
+    // With tokens=200, each CJK char ≈ 1 token.
+    // The line should be split into multiple segments, each ≤ 200 chars.
+    const longCjkLine = "中".repeat(2000);
+    const chunks = chunkMarkdown(longCjkLine, { tokens: 200, overlap: 0 });
+    // 2000 CJK chars / 200 token budget → should produce ~10 chunks
+    expect(chunks.length).toBeGreaterThanOrEqual(8);
+    for (const chunk of chunks) {
+      // Each chunk's CJK content should not massively exceed the token budget.
+      // Allow up to 2× as tolerance for boundary effects, but never 4× (the old bug).
+      const cjkCount = (chunk.text.match(/[\u4E00-\u9FFF]/g) ?? []).length;
+      expect(cjkCount).toBeLessThanOrEqual(200 * 2);
+    }
+  });
 });
 
 describe("remapChunkLines", () => {

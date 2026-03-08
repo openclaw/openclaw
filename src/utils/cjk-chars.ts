@@ -37,8 +37,33 @@ export function estimateStringChars(text: string): number {
     return 0;
   }
   const nonLatinCount = (text.match(NON_LATIN_RE) ?? []).length;
-  // Non-Latin chars already contribute 1 to text.length, so add the extra weight.
-  return text.length + nonLatinCount * (CHARS_PER_TOKEN_ESTIMATE - 1);
+  // Use code-point length instead of UTF-16 length so that surrogate pairs
+  // (CJK Extension B+, U+20000–U+2FA1F) are counted as 1 character, not 2.
+  const codePointLength = countCodePoints(text, nonLatinCount);
+  // Non-Latin chars already contribute 1 to codePointLength, so add the extra weight.
+  return codePointLength + nonLatinCount * (CHARS_PER_TOKEN_ESTIMATE - 1);
+}
+
+/**
+ * Return the number of Unicode code points in the string.
+ * Falls back to `text.length` when there are no surrogate pairs (the common case).
+ */
+function countCodePoints(text: string, nonLatinCount: number): number {
+  // Fast path: if no non-Latin chars matched, there are no surrogates.
+  if (nonLatinCount === 0) {
+    return text.length;
+  }
+  // Count surrogate pairs (high surrogate 0xD800–0xDBFF followed by low surrogate)
+  // and subtract from UTF-16 length to get code-point count.
+  let surrogates = 0;
+  for (let i = 0; i < text.length - 1; i += 1) {
+    const code = text.charCodeAt(i);
+    if (code >= 0xd800 && code <= 0xdbff) {
+      surrogates += 1;
+      i += 1; // skip the low surrogate
+    }
+  }
+  return text.length - surrogates;
 }
 
 /**

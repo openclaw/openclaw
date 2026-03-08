@@ -60,6 +60,20 @@ describe("estimateStringChars", () => {
     expect(estimateStringChars(text)).toBe(text.length);
   });
 
+  it("handles surrogate-pair CJK characters (Extension B) correctly", () => {
+    // "𠀀" (U+20000) is a CJK Extension B character — 2 UTF-16 code units, 1 code point
+    // With code-point counting: codePointLength = 1, nonLatinCount = 1
+    // Result = 1 + 1 * 3 = 4 (exactly CHARS_PER_TOKEN_ESTIMATE)
+    expect(estimateStringChars("𠀀")).toBe(CHARS_PER_TOKEN_ESTIMATE);
+  });
+
+  it("handles mixed BMP and surrogate-pair CJK correctly", () => {
+    // "你𠀀好" = 3 CJK chars (1 BMP + 1 surrogate pair + 1 BMP)
+    // codePointLength = 3, nonLatinCount = 3
+    // Result = 3 + 3 * 3 = 12
+    expect(estimateStringChars("你𠀀好")).toBe(12);
+  });
+
   it("yields ~1 token per CJK char when divided by CHARS_PER_TOKEN_ESTIMATE", () => {
     // 10 CJK chars should estimate as ~10 tokens
     const cjk = "这是一个测试用的句子呢";
