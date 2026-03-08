@@ -81,7 +81,7 @@ describe("extractNapCatInboundMessage", () => {
     expect(result?.mediaUrls).toEqual(["https://example.com/from-raw.png"]);
   });
 
-  it("normalizes commandBody by stripping CQ at-mentions from string payloads", () => {
+  it("normalizes commandBody by stripping structural CQ segments from string payloads", () => {
     const result = extractNapCatInboundMessage({
       post_type: "message",
       message_type: "private",
@@ -89,11 +89,11 @@ describe("extractNapCatInboundMessage", () => {
       user_id: 123,
       self_id: 789,
       time: 1_700_000_003,
-      message: "[CQ:at,qq=789]/status",
+      message: "[CQ:reply,id=42][CQ:at,qq=789]/status",
     });
 
     expect(result).toBeTruthy();
-    expect(result?.rawBody).toBe("[CQ:at,qq=789]/status");
+    expect(result?.rawBody).toBe("[CQ:reply,id=42][CQ:at,qq=789]/status");
     expect(result?.commandBody).toBe("/status");
   });
 });
@@ -388,7 +388,7 @@ describe("processNapCatEvent", () => {
         user_id: "123",
         self_id: "789",
         time: 1_700_000_004,
-        message: "[CQ:at,qq=789]/status",
+        message: "[CQ:reply,id=42][CQ:at,qq=789]/status",
       },
       account: {
         ...baseAccount,
@@ -403,5 +403,56 @@ describe("processNapCatEvent", () => {
     });
 
     expect(shouldComputeCommandAuthorized).toHaveBeenCalledWith("/status", {});
+  });
+
+  it("does not apply group-specific allowlists to DM command auth", async () => {
+    const resolveCommandAuthorizedFromAuthorizers = vi.fn(() => false);
+    setNapCatRuntime({
+      channel: {
+        pairing: {
+          readAllowFromStore: vi.fn(async () => []),
+          upsertPairingRequest: vi.fn(async () => {}),
+        },
+        commands: {
+          shouldComputeCommandAuthorized: vi.fn(() => true),
+          resolveCommandAuthorizedFromAuthorizers,
+        },
+      },
+    } as unknown as Parameters<typeof setNapCatRuntime>[0]);
+
+    await processNapCatEvent({
+      event: {
+        post_type: "message",
+        message_type: "private",
+        message_id: "dm-command-auth",
+        user_id: "123",
+        self_id: "789",
+        time: 1_700_000_005,
+        message: "/status",
+      },
+      account: {
+        ...baseAccount,
+        config: {
+          dm: {
+            policy: "disabled",
+          },
+          groups: {
+            "123": {
+              allowFrom: ["999"],
+            },
+          },
+        },
+      },
+      config: {} as OpenClawConfig,
+      runtime: {} as RuntimeEnv,
+    });
+
+    expect(resolveCommandAuthorizedFromAuthorizers).toHaveBeenCalledWith({
+      useAccessGroups: true,
+      authorizers: [
+        { configured: false, allowed: false },
+        { configured: false, allowed: false },
+      ],
+    });
   });
 });

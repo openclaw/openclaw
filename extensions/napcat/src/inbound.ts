@@ -127,9 +127,11 @@ function extractCqImageUrls(value: string): string[] {
   return mediaUrls;
 }
 
-function stripCqMentionsForCommandBody(value: string): string {
+function stripCqSegmentsForCommandBody(value: string): string {
   return value
-    .replace(/\[CQ:at,[^\]]*\]/gi, " ")
+    // CQ-string payloads inline non-text segments; strip them so command parsing
+    // matches structured segment payloads that only expose text content here.
+    .replace(/\[CQ:[^\]]*\]/gi, " ")
     .replace(/\s+/g, " ")
     .trim();
 }
@@ -178,7 +180,7 @@ function extractTextAndMedia(params: {
 
   return {
     rawBody,
-    commandBody: stripCqMentionsForCommandBody(rawBody),
+    commandBody: stripCqSegmentsForCommandBody(rawBody),
     mediaUrls: Array.from(new Set(mediaUrls)),
   };
 }
@@ -419,10 +421,12 @@ export async function processNapCatEvent(params: {
     readStore: pairing.readStoreForDmPolicy,
   });
 
-  const groupConfig = resolveNapCatGroupConfig({
-    groups: params.account.config.groups,
-    groupId: inbound.targetId,
-  });
+  const groupConfig = inbound.isGroup
+    ? resolveNapCatGroupConfig({
+        groups: params.account.config.groups,
+        groupId: inbound.targetId,
+      })
+    : { matched: false as const };
   const configuredAllowFrom = normalizeNapCatAllowFrom(params.account.config.dm?.allowFrom);
   const configuredGroupAllowFrom = normalizeNapCatAllowFrom(
     groupConfig.allowFrom ?? params.account.config.groupAllowFrom ?? params.account.config.dm?.allowFrom,
