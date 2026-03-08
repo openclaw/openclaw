@@ -84,6 +84,17 @@ vi.mock("../../infra/outbound/session-binding-service.js", () => ({
   }),
 }));
 
+vi.mock("../../media-understanding/apply.js", () => ({
+  applyMediaUnderstanding: vi.fn(async () => ({
+    outputs: [],
+    decisions: [],
+    appliedImage: false,
+    appliedAudio: false,
+    appliedVideo: false,
+    appliedFile: false,
+  })),
+}));
+
 const { tryDispatchAcpReply } = await import("./dispatch-acp.js");
 const sessionKey = "agent:codex-acp:session-1";
 
