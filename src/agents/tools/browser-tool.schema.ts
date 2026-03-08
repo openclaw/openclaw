@@ -105,6 +105,7 @@ export const BrowserToolSchema = Type.Object({
   frame: Type.Optional(Type.String()),
   labels: Type.Optional(Type.Boolean()),
   fullPage: Type.Optional(Type.Boolean()),
+  embed: Type.Optional(Type.Boolean()),
   ref: Type.Optional(Type.String()),
   element: Type.Optional(Type.String()),
   type: optionalStringEnum(BROWSER_IMAGE_TYPES),
