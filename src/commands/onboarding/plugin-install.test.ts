@@ -3,11 +3,13 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("node:fs", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:fs")>();
+  const existsSync = vi.fn();
   return {
     ...actual,
+    existsSync,
     default: {
-      ...actual.default,
-      existsSync: vi.fn(),
+      ...actual,
+      existsSync,
     },
   };
 });
