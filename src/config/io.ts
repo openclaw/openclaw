@@ -975,8 +975,9 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
           raw,
           parsed: parsedRes.parsed,
           // Use resolvedConfigRaw (after $include and ${ENV} substitution but BEFORE runtime defaults)
-          // for config set/unset operations (issue #6070)
-          resolved: coerceConfig(resolvedConfigRaw),
+          // for config set/unset operations (issue #6070). Normalize Discord ID lists to strings
+          // so merge/write does not persist numbers (64-bit IDs truncate in JS; #22437).
+          resolved: coerceConfig(normalizeDiscordIdListsInResolved(resolvedConfigRaw)),
           valid: true,
           config: snapshotConfig,
           hash,
