@@ -178,6 +178,33 @@ function resolveProviderApi(entry: { api?: unknown } | undefined): string | unde
   return api || undefined;
 }
 
+function resolveModelApiSurface(entry: { models?: unknown } | undefined): string | undefined {
+  if (!Array.isArray(entry?.models)) {
+    return undefined;
+  }
+
+  const apis = entry.models
+    .flatMap((model) => {
+      if (!model || typeof model !== "object") {
+        return [];
+      }
+      const api = (model as { api?: unknown }).api;
+      return typeof api === "string" && api.trim() ? [api.trim()] : [];
+    })
+    .toSorted();
+
+  if (apis.length === 0) {
+    return undefined;
+  }
+  return JSON.stringify(apis);
+}
+
+function resolveProviderApiSurface(
+  entry: ({ api?: unknown; models?: unknown } & Record<string, unknown>) | undefined,
+): string | undefined {
+  return resolveProviderApi(entry) ?? resolveModelApiSurface(entry);
+}
+
 function shouldPreserveExistingApiKey(params: {
   providerKey: string;
   existing: ExistingProviderConfig;
@@ -207,8 +234,8 @@ function shouldPreserveExistingBaseUrl(params: {
     return false;
   }
 
-  const existingApi = resolveProviderApi(existing);
-  const nextApi = resolveProviderApi(nextEntry);
+  const existingApi = resolveProviderApiSurface(existing);
+  const nextApi = resolveProviderApiSurface(nextEntry);
   return !existingApi || !nextApi || existingApi === nextApi;
 }
 
