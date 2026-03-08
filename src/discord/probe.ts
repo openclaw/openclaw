@@ -147,8 +147,8 @@ export async function probeDiscord(
       timeoutMs,
       getResolvedFetch(fetcher),
     );
+    result.status = res.status;
     if (!res.ok) {
-      result.status = res.status;
       result.error = `getMe failed (${res.status})`;
       return { ...result, elapsedMs: Date.now() - started };
     }
@@ -166,7 +166,6 @@ export async function probeDiscord(
   } catch (err) {
     return {
       ...result,
-      status: err instanceof Response ? err.status : result.status,
       error: err instanceof Error ? err.message : String(err),
       elapsedMs: Date.now() - started,
     };
