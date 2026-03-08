@@ -23,6 +23,49 @@ const DEFAULT_MAX_CHARS = 2000;
 const DEFAULT_MAX_LINES = 17;
 const FENCE_RE = /^( {0,3})(`{3,}|~{3,})(.*)$/;
 
+/**
+ * Regex matching CJK terminal/closing punctuation marks that serve as
+ * natural sentence or clause boundaries.  Splitting *after* these positions
+ * keeps CJK text readable because they are equivalent to periods, commas,
+ * exclamation marks, closing brackets, etc.
+ *
+ * Only terminal and closing characters are included — opening delimiters
+ * (〈《「『【〔〖) are intentionally excluded because splitting after an
+ * opening bracket would strand it at the end of a chunk.
+ * U+3000 (IDEOGRAPHIC SPACE) is also excluded since ECMAScript's \s already
+ * matches it in the whitespace check that runs first.
+ *
+ * Included characters:
+ *   U+3001-U+3002  Ideographic comma/period (、。)
+ *   U+3009,U+300B,U+300D,U+300F,U+3011  Closing brackets (〉》」』】)
+ *   U+3015,U+3017,U+3019,U+301B  Closing brackets (〕〗〙〛)
+ *   U+301E-U+301F  Closing quotation marks
+ *   U+FF01,U+FF0C,U+FF0E  Fullwidth ! , . (！，．)
+ *   U+FF1A,U+FF1B,U+FF1F  Fullwidth : ; ? (：；？)
+ *   U+FF3D  Fullwidth ] (］)
+ *   U+FF5D  Fullwidth } (｝)
+ *   U+FF60-U+FF61  Fullwidth/halfwidth closing paren and period
+ *   U+FF63-U+FF65  Halfwidth closing bracket and Katakana punctuation
+ */
+const CJK_PUNCTUATION_RE =
+  /[\u3001\u3002\u3009\u300B\u300D\u300F\u3011\u3015\u3017\u3019\u301B\u301E\u301F\uFF01\uFF0C\uFF0E\uFF1A\uFF1B\uFF1F\uFF3D\uFF5D\uFF60\uFF61\uFF63\uFF64\uFF65]/;
+
+/**
+ * Regex matching CJK ideograph characters.  CJK text has no word-separating
+ * spaces, so any boundary between two CJK characters is a valid (though less
+ * ideal) split point when no punctuation is available.
+ *
+ * Included ranges:
+ *   U+4E00-U+9FFF   CJK Unified Ideographs
+ *   U+3400-U+4DBF   CJK Unified Ideographs Extension A
+ *   U+F900-U+FAFF   CJK Compatibility Ideographs
+ *   U+3040-U+309F   Hiragana
+ *   U+30A0-U+30FF   Katakana
+ *   U+AC00-U+D7AF   Hangul Syllables
+ */
+const CJK_CHAR_RE =
+  /[\u4E00-\u9FFF\u3400-\u4DBF\uF900-\uFAFF\u3040-\u309F\u30A0-\u30FF\uAC00-\uD7AF]/;
+
 function countLines(text: string) {
   if (!text) {
     return 0;
@@ -63,6 +106,67 @@ function closeFenceIfNeeded(text: string, openFence: OpenFence | null) {
   return `${text}${closeLine}`;
 }
 
+/**
+ * Find the best break index within `window` for CJK-aware text splitting.
+ *
+ * Priority order:
+ *   1. Whitespace (original behaviour — works for Latin/mixed text)
+ *   2. CJK punctuation (。！？，、；：etc.) — natural clause boundaries
+ *   3. Any CJK character boundary — still readable because each character
+ *      is an independent ideograph / syllable
+ *
+ * Returns -1 when no suitable break point is found.
+ */
+function findBreakIndex(window: string): number {
+  let whitespaceIdx = -1;
+  let cjkPunctuationIdx = -1;
+  let cjkCharIdx = -1;
+
+  for (let i = window.length - 1; i >= 0; i--) {
+    const ch = window[i];
+    if (whitespaceIdx < 0 && /\s/.test(ch)) {
+      whitespaceIdx = i;
+      // Whitespace is the best break point — return immediately.
+      break;
+    }
+    if (cjkPunctuationIdx < 0 && CJK_PUNCTUATION_RE.test(ch)) {
+      // Apply the same minimum-progress guard as the CJK character fallback
+      // to avoid producing tiny chunks (e.g., "链接：" before a long URL).
+      if (i + 1 > window.length * 0.2) {
+        cjkPunctuationIdx = i;
+      }
+    }
+    if (cjkCharIdx < 0 && CJK_CHAR_RE.test(ch)) {
+      // Split *after* the CJK character so it stays with the current chunk.
+      // Only accept it if it provides reasonable progress (e.g., > 20% of window)
+      // to avoid splitting right before a long ASCII token (like a URL).
+      if (i + 1 > window.length * 0.2) {
+        cjkCharIdx = i + 1;
+      }
+    }
+    // Once both CJK candidates are found, no need to continue scanning —
+    // remaining iterations would only re-check already-set indices.
+    if (cjkPunctuationIdx >= 0 && cjkCharIdx >= 0) {
+      break;
+    }
+  }
+
+  // Prefer whitespace > CJK punctuation > CJK character boundary.
+  if (whitespaceIdx > 0) {
+    return whitespaceIdx;
+  }
+  // Split after the punctuation mark so it stays with the preceding clause.
+  // Use <= so that punctuation at the very end of the window is still accepted
+  // (consuming the entire window is valid — it just means no leftover).
+  if (cjkPunctuationIdx > 0 && cjkPunctuationIdx + 1 <= window.length) {
+    return cjkPunctuationIdx + 1;
+  }
+  if (cjkCharIdx > 0 && cjkCharIdx <= window.length) {
+    return cjkCharIdx;
+  }
+  return -1;
+}
+
 function splitLongLine(
   line: string,
   maxChars: number,
@@ -81,19 +185,15 @@ function splitLongLine(
       continue;
     }
     const window = remaining.slice(0, limit);
-    let breakIdx = -1;
-    for (let i = window.length - 1; i >= 0; i--) {
-      if (/\s/.test(window[i])) {
-        breakIdx = i;
-        break;
-      }
-    }
+    const breakIdx = findBreakIndex(window);
     if (breakIdx <= 0) {
-      breakIdx = limit;
+      // No suitable break point found — hard split at the limit.
+      out.push(remaining.slice(0, limit));
+      remaining = remaining.slice(limit);
+    } else {
+      out.push(remaining.slice(0, breakIdx));
+      remaining = remaining.slice(breakIdx);
     }
-    out.push(remaining.slice(0, breakIdx));
-    // Keep the separator for the next segment so words don't get glued together.
-    remaining = remaining.slice(breakIdx);
   }
   if (remaining.length) {
     out.push(remaining);
