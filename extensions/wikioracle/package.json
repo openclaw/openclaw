@@ -1,0 +1,11 @@
+{
+  "name": "@openclaw/wikioracle",
+  "version": "0.1.0",
+  "description": "WikiOracle provider — routes messages through bin/wo CLI for full pipeline (truth table RAG, DegreeOfTruth, online training)",
+  "type": "module",
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ]
+  }
+}

@@ -1,0 +1,33 @@
+{
+  "id": "wikioracle",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "woPath": {
+        "type": "string",
+        "description": "Absolute or relative path to WikiOracle's bin/wo CLI"
+      },
+      "serverUrl": {
+        "type": "string",
+        "description": "WikiOracle server URL (e.g. https://127.0.0.1:8888)"
+      },
+      "insecure": {
+        "type": "boolean",
+        "description": "Skip TLS certificate verification (-k flag)"
+      },
+      "stateful": {
+        "type": "boolean",
+        "description": "Use stateful mode (server owns session state)"
+      },
+      "stateFile": {
+        "type": "string",
+        "description": "Local state file path for stateless mode"
+      },
+      "token": {
+        "type": "string",
+        "description": "Bearer token for WikiOracle API auth (optional)"
+      }
+    }
+  }
+}
