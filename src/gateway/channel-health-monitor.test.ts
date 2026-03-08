@@ -267,6 +267,26 @@ describe("channel-health-monitor", () => {
     await expectRestartedChannel(manager, "discord");
   });
 
+  it("does not restart connected busy channels that still receive fresh events", async () => {
+    const now = Date.now();
+    const manager = createSnapshotManager({
+      discord: {
+        default: {
+          running: true,
+          connected: true,
+          enabled: true,
+          configured: true,
+          lastStartAt: now - 27 * 60_000,
+          activeRuns: 1,
+          busy: true,
+          lastRunActivityAt: now - 26 * 60_000,
+          lastEventAt: now - 5_000,
+        },
+      },
+    });
+    await expectNoRestart(manager);
+  });
+
   it("restarts disconnected channels when busy flags are inherited from a prior lifecycle", async () => {
     const now = Date.now();
     const manager = createSnapshotManager({
