@@ -260,14 +260,18 @@ public actor GatewayNodeSession {
                 self.logger.warning("node.canvas.capability.refresh missing local canvasHostUrl")
                 return false
             }
-            guard let refreshed = replaceCanvasCapabilityInScopedHostUrl(scopedUrl: scopedUrl, capability: capability) else {
+            guard let refreshed = replaceCanvasCapabilityInScopedHostUrl(
+                scopedUrl: scopedUrl,
+                capability: capability)
+            else {
                 self.logger.warning("node.canvas.capability.refresh could not rewrite scoped canvas URL")
                 return false
             }
             self.canvasHostUrl = refreshed
             return true
         } catch {
-            self.logger.warning("node.canvas.capability.refresh failed: \(error.localizedDescription, privacy: .public)")
+            self.logger.warning(
+                "node.canvas.capability.refresh failed: \(error.localizedDescription, privacy: .public)")
             return false
         }
     }
@@ -428,16 +432,23 @@ public actor GatewayNodeSession {
         do {
             let request = try self.decodeInvokeRequest(from: payload)
             let timeoutLabel = request.timeoutMs.map(String.init) ?? "none"
-            self.logger.info("node invoke request decoded id=\(request.id, privacy: .public) command=\(request.command, privacy: .public) timeoutMs=\(timeoutLabel, privacy: .public)")
+            self.logger.info(
+                "node invoke request decoded id=\(request.id, privacy: .public) "
+                    + "command=\(request.command, privacy: .public) "
+                    + "timeoutMs=\(timeoutLabel, privacy: .public)")
             guard let onInvoke else { return }
-            let req = BridgeInvokeRequest(id: request.id, command: request.command, paramsJSON: request.paramsJSON)
+            let req = BridgeInvokeRequest(
+                id: request.id,
+                command: request.command,
+                paramsJSON: request.paramsJSON)
             self.logger.info("node invoke executing id=\(request.id, privacy: .public)")
             let response = await Self.invokeWithTimeout(
                 request: req,
                 timeoutMs: request.timeoutMs,
                 onInvoke: onInvoke
             )
-            self.logger.info("node invoke completed id=\(request.id, privacy: .public) ok=\(response.ok, privacy: .public)")
+            self.logger.info(
+                "node invoke completed id=\(request.id, privacy: .public) ok=\(response.ok, privacy: .public)")
             await self.sendInvokeResult(request: request, response: response)
         } catch {
             self.logger.error("node invoke decode failed: \(error.localizedDescription, privacy: .public)")
@@ -458,7 +469,8 @@ public actor GatewayNodeSession {
 
     private func sendInvokeResult(request: NodeInvokeRequestPayload, response: BridgeInvokeResponse) async {
         guard let channel = self.channel else { return }
-        self.logger.info("node invoke result sending id=\(request.id, privacy: .public) ok=\(response.ok, privacy: .public)")
+        self.logger.info(
+            "node invoke result sending id=\(request.id, privacy: .public) ok=\(response.ok, privacy: .public)")
         var params: [String: AnyCodable] = [
             "id": AnyCodable(request.id),
             "nodeId": AnyCodable(request.nodeId),
@@ -476,7 +488,9 @@ public actor GatewayNodeSession {
         do {
             try await channel.send(method: "node.invoke.result", params: params)
         } catch {
-            self.logger.error("node invoke result failed id=\(request.id, privacy: .public) error=\(error.localizedDescription, privacy: .public)")
+            self.logger.error(
+                "node invoke result failed id=\(request.id, privacy: .public) "
+                    + "error=\(error.localizedDescription, privacy: .public)")
         }
     }
 
