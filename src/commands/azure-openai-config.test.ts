@@ -36,6 +36,12 @@ describe("azure-openai-config", () => {
     );
   });
 
+  it("rejects non-HTTPS base URLs", () => {
+    expect(() => normalizeAzureOpenAIBaseUrl("http://example.openai.azure.com/openai/v1")).toThrow(
+      /Azure OpenAI base URL must use HTTPS/i,
+    );
+  });
+
   it("rejects empty model IDs", () => {
     expect(() => normalizeAzureOpenAIModelId("   ")).toThrow(/deployment\/model ID is required/i);
   });
