@@ -21,6 +21,7 @@ import { createInternalHookEvent, triggerInternalHook } from "../../hooks/intern
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import {
   isSubagentSessionKey,
+  resolveAgentIdFromSessionKey,
   normalizeAgentId,
   parseAgentSessionKey,
 } from "../../routing/session-key.js";
@@ -29,6 +30,8 @@ import {
   ErrorCodes,
   errorShape,
   validateSessionsCompactParams,
+  validateSessionsActivityGetParams,
+  validateSessionsActivityListParams,
   validateSessionsDeleteParams,
   validateSessionsListParams,
   validateSessionsPatchParams,
@@ -56,6 +59,20 @@ import { applySessionsPatchToStore } from "../sessions-patch.js";
 import { resolveSessionKeyFromResolveParams } from "../sessions-resolve.js";
 import type { GatewayClient, GatewayRequestHandlers, RespondFn } from "./types.js";
 import { assertValidParams } from "./validation.js";
+
+function isSessionActivityActive(entry: {
+  runtimeActivity?: { busy?: boolean };
+  attention?: { state?: string };
+  children?: { active?: number };
+}): boolean {
+  if (entry.runtimeActivity?.busy === true) {
+    return true;
+  }
+  if (entry.attention?.state && entry.attention.state !== "none") {
+    return true;
+  }
+  return (entry.children?.active ?? 0) > 0;
+}
 
 function requireSessionKey(key: unknown, respond: RespondFn): string | null {
   const raw =
@@ -329,6 +346,95 @@ async function cleanupSessionBeforeMutation(params: {
 }
 
 export const sessionsHandlers: GatewayRequestHandlers = {
+  "sessions.activity.get": ({ params, respond, context }) => {
+    if (
+      !assertValidParams(
+        params,
+        validateSessionsActivityGetParams,
+        "sessions.activity.get",
+        respond,
+      )
+    ) {
+      return;
+    }
+    const requestedSessionKey = String(params.sessionKey ?? "").trim();
+    if (!requestedSessionKey) {
+      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "sessionKey required"));
+      return;
+    }
+    if (!context.sessionActivity) {
+      respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, "session activity unavailable"));
+      return;
+    }
+    const sessionActivity = context.sessionActivity;
+
+    sessionActivity.sweep();
+    const sessionKey =
+      resolveGatewaySessionTargetFromKey(requestedSessionKey).target.canonicalKey ??
+      requestedSessionKey;
+    const activity = sessionActivity.getSessionActivity(sessionKey);
+    respond(true, activity, undefined);
+  },
+  "sessions.activity.list": ({ params, respond, context }) => {
+    if (
+      !assertValidParams(
+        params,
+        validateSessionsActivityListParams,
+        "sessions.activity.list",
+        respond,
+      )
+    ) {
+      return;
+    }
+    const activeOnly = params.activeOnly === true;
+    const limitRaw = typeof params.limit === "number" ? Math.floor(params.limit) : 200;
+    const limit = Math.max(1, Math.min(limitRaw, 1000));
+    const agentIdFilter =
+      typeof params.agentId === "string" && params.agentId.trim()
+        ? normalizeAgentId(params.agentId)
+        : undefined;
+    if (!context.sessionActivity) {
+      respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, "session activity unavailable"));
+      return;
+    }
+    const sessionActivity = context.sessionActivity;
+
+    sessionActivity.sweep();
+    const cfg = loadConfig();
+    const { store } = loadCombinedSessionStoreForGateway(cfg);
+    const keySet = new Set<string>(Object.keys(store));
+    for (const trackedKey of sessionActivity.getKnownSessionKeys()) {
+      keySet.add(trackedKey);
+    }
+
+    const sessions = Array.from(keySet)
+      .filter((sessionKey) => {
+        if (!agentIdFilter) {
+          return true;
+        }
+        return normalizeAgentId(resolveAgentIdFromSessionKey(sessionKey)) === agentIdFilter;
+      })
+      .map((sessionKey) => sessionActivity.getSessionActivity(sessionKey))
+      .filter((entry) => (activeOnly ? isSessionActivityActive(entry) : true))
+      .toSorted((a, b) => {
+        const aActivity = a.runtimeActivity.lastRunActivityAt ?? 0;
+        const bActivity = b.runtimeActivity.lastRunActivityAt ?? 0;
+        if (aActivity !== bActivity) {
+          return bActivity - aActivity;
+        }
+        return a.sessionKey.localeCompare(b.sessionKey);
+      })
+      .slice(0, limit);
+
+    respond(
+      true,
+      {
+        ts: Date.now(),
+        sessions,
+      },
+      undefined,
+    );
+  },
   "sessions.list": ({ params, respond }) => {
     if (!assertValidParams(params, validateSessionsListParams, "sessions.list", respond)) {
       return;

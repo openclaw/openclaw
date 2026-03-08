@@ -178,6 +178,12 @@ export function createExecApprovalHandlers(
         },
         { dropIfSlow: true },
       );
+      context.sessionActivity?.noteApprovalRequested({
+        id: record.id,
+        sessionKey: record.request.sessionKey,
+        createdAtMs: record.createdAtMs,
+        expiresAtMs: record.expiresAtMs,
+      });
       let forwardedToTargets = false;
       if (opts?.forwarder) {
         try {
@@ -194,6 +200,7 @@ export function createExecApprovalHandlers(
 
       if (!hasApprovalClients(context) && !forwardedToTargets) {
         manager.expire(record.id, "auto-expire:no-approver-clients");
+        context.sessionActivity?.noteApprovalResolved(record.id);
       }
 
       // Only send immediate "accepted" response when twoPhase is requested.
@@ -287,6 +294,7 @@ export function createExecApprovalHandlers(
         { id: p.id, decision, resolvedBy, ts: Date.now(), request: snapshot?.request },
         { dropIfSlow: true },
       );
+      context.sessionActivity?.noteApprovalResolved(p.id);
       void opts?.forwarder
         ?.handleResolved({
           id: p.id,

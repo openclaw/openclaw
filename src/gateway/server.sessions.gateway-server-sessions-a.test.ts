@@ -4,6 +4,11 @@ import path from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, expect, test, vi } from "vitest";
 import { WebSocket } from "ws";
 import { DEFAULT_PROVIDER } from "../agents/defaults.js";
+import {
+  addSubagentRunForTests,
+  resetSubagentRegistryForTests,
+} from "../agents/subagent-registry.js";
+import { emitAgentEvent, registerAgentRunContext } from "../infra/agent-events.js";
 import { GATEWAY_CLIENT_IDS, GATEWAY_CLIENT_MODES } from "./protocol/client-info.js";
 import { startGatewayServerHarness, type GatewayServerHarness } from "./server.e2e-ws-harness.js";
 import { createToolSummaryPreviewTranscriptLines } from "./session-preview.test-helpers.js";
@@ -11,6 +16,7 @@ import {
   connectOk,
   embeddedRunMock,
   installGatewayTestHooks,
+  onceMessage,
   piSdkMock,
   rpcReq,
   testState,
@@ -233,6 +239,248 @@ describe("gateway server sessions", () => {
     browserSessionTabMocks.closeTrackedBrowserTabsForSessions.mockResolvedValue(0);
   });
 
+  test("sessions.activity.get/list tracks runtime state and emits statechange", async () => {
+    await createSessionStoreDir();
+    await writeSessionStore({
+      entries: {
+        main: {
+          sessionId: "sess-main",
+          updatedAt: Date.now(),
+        },
+      },
+    });
+
+    const { ws } = await openClient();
+    const runId = "run-activity-1";
+    registerAgentRunContext(runId, { sessionKey: "agent:main:main" });
+
+    const startedEventPromise = onceMessage<{
+      type: "event";
+      event: string;
+      payload?: { sessionKey?: string; version?: number };
+    }>(ws, (msg) => msg.type === "event" && msg.event === "sessions.activity.statechange", 10_000);
+
+    emitAgentEvent({
+      runId,
+      stream: "lifecycle",
+      data: { phase: "start", startedAt: 1_234 },
+    });
+
+    const startedEvent = await startedEventPromise;
+    expect(startedEvent.payload?.sessionKey).toBe("agent:main:main");
+    const startedVersion = startedEvent.payload?.version ?? 0;
+    expect(startedVersion).toBeGreaterThan(0);
+
+    const busy = await rpcReq<{
+      sessionKey: string;
+      runtimeActivity: {
+        busy: boolean;
+        activeRuns: number;
+        busySince: number | null;
+      };
+    }>(ws, "sessions.activity.get", { sessionKey: "main" });
+    expect(busy.ok).toBe(true);
+    expect(busy.payload?.sessionKey).toBe("agent:main:main");
+    expect(busy.payload?.runtimeActivity.busy).toBe(true);
+    expect(busy.payload?.runtimeActivity.activeRuns).toBe(1);
+    expect(busy.payload?.runtimeActivity.busySince).toBe(1234);
+
+    const activeList = await rpcReq<{
+      sessions: Array<{ sessionKey: string }>;
+    }>(ws, "sessions.activity.list", { activeOnly: true });
+    expect(activeList.ok).toBe(true);
+    expect(activeList.payload?.sessions.map((entry) => entry.sessionKey)).toContain(
+      "agent:main:main",
+    );
+
+    const endedEventPromise = onceMessage<{
+      type: "event";
+      event: string;
+      payload?: { sessionKey?: string; version?: number };
+    }>(
+      ws,
+      (msg) =>
+        msg.type === "event" &&
+        msg.event === "sessions.activity.statechange" &&
+        msg.payload?.sessionKey === "agent:main:main" &&
+        typeof msg.payload?.version === "number" &&
+        msg.payload.version > startedVersion,
+      10_000,
+    );
+
+    emitAgentEvent({
+      runId,
+      stream: "lifecycle",
+      data: { phase: "end", endedAt: 2_345 },
+    });
+    await endedEventPromise;
+
+    const idle = await rpcReq<{
+      runtimeActivity: {
+        busy: boolean;
+        activeRuns: number;
+        busySince: number | null;
+      };
+    }>(ws, "sessions.activity.get", { sessionKey: "agent:main:main" });
+    expect(idle.ok).toBe(true);
+    expect(idle.payload?.runtimeActivity.busy).toBe(false);
+    expect(idle.payload?.runtimeActivity.activeRuns).toBe(0);
+    expect(idle.payload?.runtimeActivity.busySince).toBeNull();
+
+    ws.close();
+  });
+
+  test("sessions.activity marks awaiting_user from explicit tool events", async () => {
+    await createSessionStoreDir();
+    await writeSessionStore({
+      entries: {
+        main: {
+          sessionId: "sess-main",
+          updatedAt: Date.now(),
+        },
+      },
+    });
+    const { ws } = await openClient();
+    const runId = "run-awaiting-user";
+    registerAgentRunContext(runId, { sessionKey: "agent:main:main" });
+
+    emitAgentEvent({
+      runId,
+      stream: "lifecycle",
+      data: { phase: "start", startedAt: 1_000 },
+    });
+    emitAgentEvent({
+      runId,
+      stream: "tool",
+      data: {
+        phase: "start",
+        name: "request_user_input",
+        toolCallId: "tool-await-user-1",
+      },
+    });
+
+    const waiting = await rpcReq<{
+      attention: { state: string; since: number | null };
+    }>(ws, "sessions.activity.get", { sessionKey: "main" });
+    expect(waiting.ok).toBe(true);
+    expect(waiting.payload?.attention.state).toBe("awaiting_user");
+    expect(waiting.payload?.attention.since).not.toBeNull();
+
+    emitAgentEvent({
+      runId,
+      stream: "tool",
+      data: {
+        phase: "result",
+        name: "request_user_input",
+        toolCallId: "tool-await-user-1",
+      },
+    });
+
+    const cleared = await rpcReq<{
+      attention: { state: string };
+    }>(ws, "sessions.activity.get", { sessionKey: "main" });
+    expect(cleared.ok).toBe(true);
+    expect(cleared.payload?.attention.state).toBe("none");
+
+    emitAgentEvent({
+      runId,
+      stream: "lifecycle",
+      data: { phase: "end", endedAt: 2_000 },
+    });
+    ws.close();
+  });
+
+  test("sessions.activity marks awaiting_approval from exec approvals", async () => {
+    await createSessionStoreDir();
+    await writeSessionStore({
+      entries: {
+        main: {
+          sessionId: "sess-main",
+          updatedAt: Date.now(),
+        },
+      },
+    });
+    const { ws } = await openClient();
+
+    const requested = await rpcReq<{
+      status?: string;
+      id?: string;
+    }>(ws, "exec.approval.request", {
+      command: "echo hello",
+      sessionKey: "agent:main:main",
+      twoPhase: true,
+    });
+    expect(requested.ok).toBe(true);
+    expect(requested.payload?.status).toBe("accepted");
+    const approvalId = requested.payload?.id;
+    expect(typeof approvalId).toBe("string");
+
+    const waiting = await rpcReq<{
+      attention: { state: string; blockedOn?: Array<{ kind: string }> };
+    }>(ws, "sessions.activity.get", { sessionKey: "agent:main:main" });
+    expect(waiting.ok).toBe(true);
+    expect(waiting.payload?.attention.state).toBe("awaiting_approval");
+    expect(waiting.payload?.attention.blockedOn?.[0]?.kind).toBe("approval");
+
+    const resolved = await rpcReq<{ ok: boolean }>(ws, "exec.approval.resolve", {
+      id: approvalId,
+      decision: "deny",
+    });
+    expect(resolved.ok).toBe(true);
+    expect(resolved.payload?.ok).toBe(true);
+
+    const cleared = await rpcReq<{
+      attention: { state: string };
+    }>(ws, "sessions.activity.get", { sessionKey: "agent:main:main" });
+    expect(cleared.ok).toBe(true);
+    expect(cleared.payload?.attention.state).toBe("none");
+
+    ws.close();
+  });
+
+  test("sessions.activity surfaces child rollups and awaiting_subagent attention", async () => {
+    resetSubagentRegistryForTests();
+    await createSessionStoreDir();
+    await writeSessionStore({
+      entries: {
+        main: {
+          sessionId: "sess-main",
+          updatedAt: Date.now(),
+        },
+      },
+    });
+    addSubagentRunForTests({
+      runId: "child-run-1",
+      childSessionKey: "agent:ops:subagent:child-one",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "investigate",
+      cleanup: "keep",
+      label: "child-one",
+      createdAt: 500,
+      startedAt: 600,
+    });
+
+    const { ws } = await openClient();
+    const activity = await rpcReq<{
+      attention: { state: string; blockedOn?: Array<{ kind?: string; childSessionKey?: string }> };
+      children: { total: number; active: number; recent: Array<{ childSessionKey: string }> };
+    }>(ws, "sessions.activity.get", { sessionKey: "main" });
+    expect(activity.ok).toBe(true);
+    expect(activity.payload?.children.total).toBe(1);
+    expect(activity.payload?.children.active).toBe(1);
+    expect(activity.payload?.children.recent[0]?.childSessionKey).toBe(
+      "agent:ops:subagent:child-one",
+    );
+    expect(activity.payload?.attention.state).toBe("awaiting_subagent");
+    expect(activity.payload?.attention.blockedOn?.[0]?.kind).toBe("subagent");
+    expect(activity.payload?.attention.blockedOn?.[0]?.childSessionKey).toBe(
+      "agent:ops:subagent:child-one",
+    );
+
+    ws.close();
+  });
+
   test("lists and patches session store via sessions.* RPC", async () => {
     const { dir, storePath } = await createSessionStoreDir();
     const now = Date.now();
@@ -288,6 +536,8 @@ describe("gateway server sessions", () => {
     expect((hello as { features?: { methods?: string[] } }).features?.methods).toEqual(
       expect.arrayContaining([
         "sessions.list",
+        "sessions.activity.get",
+        "sessions.activity.list",
         "sessions.preview",
         "sessions.patch",
         "sessions.reset",

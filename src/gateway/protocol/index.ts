@@ -178,6 +178,10 @@ import {
   SecretsResolveResultSchema,
   type SessionsCompactParams,
   SessionsCompactParamsSchema,
+  type SessionsActivityGetParams,
+  SessionsActivityGetParamsSchema,
+  type SessionsActivityListParams,
+  SessionsActivityListParamsSchema,
   type SessionsDeleteParams,
   SessionsDeleteParamsSchema,
   type SessionsListParams,
@@ -299,6 +303,12 @@ export const validateSecretsResolveResult = ajv.compile<SecretsResolveResult>(
   SecretsResolveResultSchema,
 );
 export const validateSessionsListParams = ajv.compile<SessionsListParams>(SessionsListParamsSchema);
+export const validateSessionsActivityGetParams = ajv.compile<SessionsActivityGetParams>(
+  SessionsActivityGetParamsSchema,
+);
+export const validateSessionsActivityListParams = ajv.compile<SessionsActivityListParams>(
+  SessionsActivityListParamsSchema,
+);
 export const validateSessionsPreviewParams = ajv.compile<SessionsPreviewParams>(
   SessionsPreviewParamsSchema,
 );

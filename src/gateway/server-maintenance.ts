@@ -38,6 +38,7 @@ export function startGatewayMaintenanceTimers(params: {
   ) => ChatRunEntry | undefined;
   agentRunSeq: Map<string, number>;
   nodeSendToSession: (sessionKey: string, event: string, payload: unknown) => void;
+  onCleanupTick?: () => void;
   mediaCleanupTtlMs?: number;
 }): {
   tickInterval: ReturnType<typeof setInterval>;
@@ -130,6 +131,7 @@ export function startGatewayMaintenanceTimers(params: {
       params.chatRunBuffers.delete(runId);
       params.chatDeltaSentAt.delete(runId);
     }
+    params.onCleanupTick?.();
   }, 60_000);
 
   if (typeof params.mediaCleanupTtlMs !== "number") {
