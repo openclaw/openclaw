@@ -26,6 +26,27 @@ const writeStore = (store: Record<string, unknown>) => {
 
 beforeEach(() => {
   writeStore({});
+  mockGatewayClientCtor.mockClear();
+  mockResolveGatewayConnectionAuth.mockReset().mockImplementation(
+    async (params: {
+      config?: {
+        gateway?: {
+          auth?: {
+            token?: string;
+            password?: string;
+          };
+        };
+      };
+      env: NodeJS.ProcessEnv;
+    }) => {
+      const configToken = params.config?.gateway?.auth?.token;
+      const configPassword = params.config?.gateway?.auth?.password;
+      const envToken = params.env.OPENCLAW_GATEWAY_TOKEN ?? params.env.CLAWDBOT_GATEWAY_TOKEN;
+      const envPassword =
+        params.env.OPENCLAW_GATEWAY_PASSWORD ?? params.env.CLAWDBOT_GATEWAY_PASSWORD;
+      return { token: envToken ?? configToken, password: envPassword ?? configPassword };
+    },
+  );
 });
 
 // ─── Mocks ────────────────────────────────────────────────────────────────────
@@ -37,6 +58,8 @@ const gatewayClientStarts = vi.hoisted(() => vi.fn());
 const gatewayClientStops = vi.hoisted(() => vi.fn());
 const gatewayClientRequests = vi.hoisted(() => vi.fn(async () => ({ ok: true })));
 const gatewayClientParams = vi.hoisted(() => [] as Array<Record<string, unknown>>);
+const mockGatewayClientCtor = vi.hoisted(() => vi.fn());
+const mockResolveGatewayConnectionAuth = vi.hoisted(() => vi.fn());
 
 vi.mock("../send.shared.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../send.shared.js")>();
@@ -59,6 +82,7 @@ vi.mock("../../gateway/client.js", () => ({
     constructor(params: Record<string, unknown>) {
       this.params = params;
       gatewayClientParams.push(params);
+      mockGatewayClientCtor(params);
     }
     start() {
       gatewayClientStarts();
@@ -70,6 +94,10 @@ vi.mock("../../gateway/client.js", () => ({
       return gatewayClientRequests();
     }
   },
+}));
+
+vi.mock("../../gateway/connection-auth.js", () => ({
+  resolveGatewayConnectionAuth: mockResolveGatewayConnectionAuth,
 }));
 
 vi.mock("../../logger.js", () => ({
@@ -774,5 +802,76 @@ describe("DiscordExecApprovalHandler delivery routing", () => {
     );
 
     clearPendingTimeouts(handler);
+  });
+});
+
+describe("DiscordExecApprovalHandler gateway auth resolution", () => {
+  it("passes CLI URL overrides to shared gateway auth resolver", async () => {
+    mockResolveGatewayConnectionAuth.mockResolvedValue({
+      token: "resolved-token",
+      password: "resolved-password", // pragma: allowlist secret
+    });
+    const handler = new DiscordExecApprovalHandler({
+      token: "test-token",
+      accountId: "default",
+      gatewayUrl: "wss://override.example/ws",
+      config: { enabled: true, approvers: ["123"] },
+      cfg: { session: { store: STORE_PATH } },
+    });
+
+    await handler.start();
+
+    expect(mockResolveGatewayConnectionAuth).toHaveBeenCalledWith(
+      expect.objectContaining({
+        env: process.env,
+        urlOverride: "wss://override.example/ws",
+        urlOverrideSource: "cli",
+      }),
+    );
+    expect(mockGatewayClientCtor).toHaveBeenCalledWith(
+      expect.objectContaining({
+        url: "wss://override.example/ws",
+        token: "resolved-token",
+        password: "resolved-password", // pragma: allowlist secret
+      }),
+    );
+
+    await handler.stop();
+  });
+
+  it("passes env URL overrides to shared gateway auth resolver", async () => {
+    const previousGatewayUrl = process.env.OPENCLAW_GATEWAY_URL;
+    try {
+      process.env.OPENCLAW_GATEWAY_URL = "wss://gateway-from-env.example/ws";
+      const handler = new DiscordExecApprovalHandler({
+        token: "test-token",
+        accountId: "default",
+        config: { enabled: true, approvers: ["123"] },
+        cfg: { session: { store: STORE_PATH } },
+      });
+
+      await handler.start();
+
+      expect(mockResolveGatewayConnectionAuth).toHaveBeenCalledWith(
+        expect.objectContaining({
+          env: process.env,
+          urlOverride: "wss://gateway-from-env.example/ws",
+          urlOverrideSource: "env",
+        }),
+      );
+      expect(mockGatewayClientCtor).toHaveBeenCalledWith(
+        expect.objectContaining({
+          url: "wss://gateway-from-env.example/ws",
+        }),
+      );
+
+      await handler.stop();
+    } finally {
+      if (typeof previousGatewayUrl === "string") {
+        process.env.OPENCLAW_GATEWAY_URL = previousGatewayUrl;
+      } else {
+        delete process.env.OPENCLAW_GATEWAY_URL;
+      }
+    }
   });
 });

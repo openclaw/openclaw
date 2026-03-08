@@ -61,6 +61,7 @@ vi.mock("../../commands/health.js", () => ({
 
 vi.mock("../../config/config.js", () => ({
   loadConfig: () => ({}),
+  readBestEffortConfig: async () => ({}),
 }));
 
 vi.mock("../../infra/bonjour-discovery.js", () => ({
