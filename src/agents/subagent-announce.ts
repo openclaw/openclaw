@@ -68,6 +68,8 @@ const DIRECT_ANNOUNCE_TRANSIENT_RETRY_DELAYS_MS = FAST_TEST_MODE
 type ToolResultMessage = {
   role?: unknown;
   content?: unknown;
+  is_error?: unknown;
+  isError?: unknown;
 };
 
 function resolveSubagentAnnounceTimeoutMs(cfg: ReturnType<typeof loadConfig>): number {
@@ -181,6 +183,10 @@ async function runAnnounceDeliveryWithRetry<T>(params: {
   }
 }
 
+function isToolResultError(message: ToolResultMessage): boolean {
+  return message.is_error === true || message.isError === true;
+}
+
 function extractToolResultText(content: unknown): string {
   if (typeof content === "string") {
     return sanitizeTextContent(content);
@@ -257,7 +263,14 @@ function extractSubagentOutputText(message: unknown): string {
     return "";
   }
   if (role === "toolResult" || role === "tool") {
-    return extractToolResultText((message as ToolResultMessage).content);
+    const toolMsg = message as ToolResultMessage;
+    // Skip error tool results - their content is internal debugging info
+    // (e.g. "session key is not a valid chat ID") that should not leak
+    // to the parent session as subagent output.
+    if (isToolResultError(toolMsg)) {
+      return "";
+    }
+    return extractToolResultText(toolMsg.content);
   }
   if (role == null) {
     if (typeof content === "string") {
