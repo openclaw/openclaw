@@ -61,11 +61,11 @@ Plans:
 1. A catalog exists listing all outbound HTTP paths in the gateway (tools, channels, providers, media, plugins)
 2. Each path is annotated with whether it flows through the SSRF chokepoint (protected) or not (gap)
 3. At least one path is confirmed protected by the blocklist via the SSRF integration from Phase 2
-   **Plans**: TBD
+   **Plans**: 1 plan
 
 Plans:
 
-- [ ] 03-01: Catalog outbound HTTP surfaces and document coverage
+- [ ] 03-01-PLAN.md -- Catalog outbound HTTP surfaces and spot-check test for blocklist coverage
 
 ## Progress
 
