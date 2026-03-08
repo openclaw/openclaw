@@ -1,0 +1,38 @@
+/**
+ * Wait for compaction retry completion with an aggregate timeout to avoid
+ * holding a session lane indefinitely when retry resolution is lost.
+ */
+export async function waitForCompactionRetryWithAggregateTimeout(params: {
+  waitForCompactionRetry: () => Promise<void>;
+  abortable: <T>(promise: Promise<T>) => Promise<T>;
+  aggregateTimeoutMs: number;
+  onTimeout?: () => void;
+}): Promise<{ timedOut: boolean }> {
+  const timeoutMsRaw = params.aggregateTimeoutMs;
+  const timeoutMs = Number.isFinite(timeoutMsRaw) ? Math.max(1, Math.floor(timeoutMsRaw)) : 1;
+
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  let timedOut = false;
+
+  try {
+    const result = await params.abortable(
+      Promise.race([
+        params.waitForCompactionRetry().then(() => "done" as const),
+        new Promise<"timeout">((resolve) => {
+          timer = setTimeout(() => resolve("timeout"), timeoutMs);
+        }),
+      ]),
+    );
+
+    if (result === "timeout") {
+      timedOut = true;
+      params.onTimeout?.();
+    }
+  } finally {
+    if (timer !== undefined) {
+      clearTimeout(timer);
+    }
+  }
+
+  return { timedOut };
+}
