@@ -92,7 +92,7 @@ export function maybeMigrateLegacyStorage(params: {
     return;
   }
 
-  fs.mkdirSync(params.storagePaths.rootDir, { recursive: true });
+  fs.mkdirSync(params.storagePaths.rootDir, { recursive: true, mode: 0o700 });
   if (hasLegacyStorage) {
     try {
       fs.renameSync(legacy.storagePath, params.storagePaths.storagePath);
@@ -123,8 +123,11 @@ export function writeStorageMeta(params: {
       accessTokenHash: params.storagePaths.tokenHash,
       createdAt: new Date().toISOString(),
     };
-    fs.mkdirSync(params.storagePaths.rootDir, { recursive: true });
-    fs.writeFileSync(params.storagePaths.metaPath, JSON.stringify(payload, null, 2), "utf-8");
+    fs.mkdirSync(params.storagePaths.rootDir, { recursive: true, mode: 0o700 });
+    fs.writeFileSync(params.storagePaths.metaPath, JSON.stringify(payload, null, 2), {
+      encoding: "utf-8",
+      mode: 0o600,
+    });
   } catch {
     // ignore meta write failures
   }

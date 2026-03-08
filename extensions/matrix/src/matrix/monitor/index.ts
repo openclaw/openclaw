@@ -268,6 +268,11 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
       ...cfg.channels,
       matrix: {
         ...cfg.channels?.matrix,
+        // Merge per-account autoJoin settings so registerMatrixAutoJoin reads the right value
+        ...(accountConfig.autoJoin != null ? { autoJoin: accountConfig.autoJoin } : {}),
+        ...(accountConfig.autoJoinAllowlist != null
+          ? { autoJoinAllowlist: accountConfig.autoJoinAllowlist }
+          : {}),
         dm: {
           ...cfg.channels?.matrix?.dm,
           allowFrom,
@@ -295,7 +300,37 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
   });
   setActiveMatrixClient(client, opts.accountId);
 
-  const mentionRegexes = core.channel.mentions.buildMentionRegexes(cfg);
+  // Collect ALL agent IDs bound to this account's rooms so their mentionPatterns
+  // (agents.list[].groupChat.mentionPatterns) all compile into the regex set.
+  // This ensures mention detection works for every room on this account, not just
+  // the first binding (fixes the case where one account serves multiple rooms
+  // with different agents).
+  const accountRoomIds = Object.keys(accountConfig.groups ?? {});
+  const boundAgentIds = new Set<string>();
+  const bindings = Array.isArray(cfg.bindings) ? cfg.bindings : [];
+  for (const binding of bindings) {
+    const match = binding.match;
+    if (
+      match?.channel === "matrix" &&
+      (!(match as Record<string, unknown>).accountId ||
+        (match as Record<string, unknown>).accountId === "*" ||
+        (match as Record<string, unknown>).accountId === account.accountId) &&
+      accountRoomIds.includes(match?.peer?.id ?? "")
+    ) {
+      if (binding.agentId) {
+        boundAgentIds.add(binding.agentId);
+      }
+    }
+  }
+  // Merge mention regexes from all bound agents (deduplicated by regex source).
+  // Fall back to global patterns (no agentId) when no bindings resolve, so configs
+  // that rely on open routing or rooms not listed in groups still get mention detection.
+  const mentionRegexes =
+    boundAgentIds.size > 0
+      ? [...boundAgentIds]
+          .flatMap((id) => core.channel.mentions.buildMentionRegexes(cfg, id))
+          .filter((r, i, arr) => arr.findIndex((x) => x.source === r.source) === i)
+      : core.channel.mentions.buildMentionRegexes(cfg);
   const defaultGroupPolicy = resolveDefaultGroupPolicy(cfg);
   const { groupPolicy: groupPolicyRaw, providerMissingFallbackApplied } =
     resolveAllowlistProviderRuntimeGroupPolicy({

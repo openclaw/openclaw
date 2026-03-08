@@ -241,13 +241,21 @@ export async function reactMatrixMessage(
   roomId: string,
   messageId: string,
   emoji: string,
-  client?: MatrixClient,
+  clientOrOpts?: MatrixClient | { client?: MatrixClient; accountId?: string },
 ): Promise<void> {
   if (!emoji.trim()) {
     throw new Error("Matrix reaction requires an emoji");
   }
+  const isClient = clientOrOpts && "doRequest" in (clientOrOpts as Record<string, unknown>);
+  const client = isClient
+    ? (clientOrOpts as MatrixClient)
+    : (clientOrOpts as { client?: MatrixClient; accountId?: string } | undefined)?.client;
+  const accountId = isClient
+    ? undefined
+    : (clientOrOpts as { client?: MatrixClient; accountId?: string } | undefined)?.accountId;
   const { client: resolved, stopOnDone } = await resolveMatrixClient({
     client,
+    accountId,
   });
   try {
     const resolvedRoom = await resolveMatrixRoomId(resolved, roomId);

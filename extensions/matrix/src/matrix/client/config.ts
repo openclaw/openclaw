@@ -203,8 +203,14 @@ export async function resolveMatrixAuth(params?: {
   const login = await (async () => {
     try {
       if (!loginResponse.ok) {
-        const errorText = await loginResponse.text();
-        throw new Error(`Matrix login failed: ${errorText}`);
+        const statusCode = loginResponse.status;
+        const sanitized =
+          statusCode === 403
+            ? "invalid credentials"
+            : statusCode === 429
+              ? "rate limited"
+              : `HTTP ${statusCode}`;
+        throw new Error(`Matrix login failed: ${sanitized}`);
       }
       return (await loginResponse.json()) as {
         access_token?: string;
