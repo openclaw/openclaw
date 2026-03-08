@@ -34,6 +34,20 @@ export function isSharpAvailable(): boolean {
 }
 
 /**
+ * Returns true only when no image processing backend is available at all.
+ * On Bun/macOS, /usr/bin/sips is always available as the system image backend,
+ * so this returns false even if sharp has not been loaded.
+ * On other platforms, sharp must have been successfully loaded.
+ */
+export function isImageBackendUnavailable(): boolean {
+  // When sips is preferred (Bun/macOS), the backend is always available via /usr/bin/sips.
+  if (prefersSips()) {
+    return false;
+  }
+  return !isSharpAvailable();
+}
+
+/**
  * Triggers the sharp load attempt (if not already done) and returns the result.
  * Prefer this over a raw `import('sharp')` to share the module-level cache.
  */
