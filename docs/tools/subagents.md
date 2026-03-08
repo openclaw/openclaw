@@ -66,6 +66,29 @@ Cost note: each sub-agent has its **own** context and token usage. For heavy or 
 tasks, set a cheaper model for sub-agents and keep your main agent on a higher-quality model.
 You can configure this via `agents.defaults.subagents.model` or per-agent overrides.
 
+### Model catalog pattern for task-based selection
+
+Instead of a single `agents.defaults.subagents.model`, you can let agents choose the model per task by reading a catalog file in the workspace. Use the `read` tool to load `knowledge/models.md` (or similar) before calling `sessions_spawn` with the `model` param.
+
+1. Create `knowledge/models.md` in your workspace with descriptions (strengths, cost, best use cases).
+2. In AGENTS.md, instruct: "When spawning subagents, read `knowledge/models.md` and choose the model that best fits the task. Pass it via `sessions_spawn` with `model` param."
+3. Example catalog format:
+
+```markdown
+## Claude Haiku 4.5 — anthropic/claude-haiku-4.5
+
+- Strengths: Structured parsing, classification, fast turnaround
+- Cost: $
+- Best when: Task is structured/mechanical, output format is predictable
+
+## Gemini 2.5 Flash — google/gemini-2.5-flash
+
+- Strengths: Near-free classification, triage, simple yes/no decisions
+- Best when: High-volume simple tasks, binary classification
+```
+
+This keeps model selection out of hardcoded config and lets agents choose cheap models for mechanical subtasks and expensive ones for complex reasoning.
+
 ## Tool
 
 Use `sessions_spawn`:

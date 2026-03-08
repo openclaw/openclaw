@@ -1970,6 +1970,8 @@ Notes:
 - `runTimeoutSeconds`: default timeout (seconds) for `sessions_spawn` when the tool call omits `runTimeoutSeconds`. `0` means no timeout.
 - Per-subagent tool policy: `tools.subagents.tools.allow` / `tools.subagents.tools.deny`.
 
+**Model catalog pattern:** Instead of a single `model`, agents can read a workspace file (e.g. `knowledge/models.md`) at runtime and pass the chosen model via `sessions_spawn.model` per task. See [Sub-agents — Model catalog pattern](/tools/subagents#model-catalog-pattern-for-task-based-selection).
+
 ---
 
 ## Custom providers and base URLs
