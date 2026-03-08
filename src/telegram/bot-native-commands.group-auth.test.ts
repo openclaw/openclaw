@@ -123,4 +123,31 @@ describe("native command auth in groups", () => {
     );
     expect(notAuthCalls.length).toBeGreaterThan(0);
   });
+
+  it("replies in the originating forum topic when auth is rejected", async () => {
+    const { handlers, sendMessage } = setup({
+      allowFrom: ["99999"],
+      groupAllowFrom: ["99999"],
+      useAccessGroups: true,
+    });
+
+    const ctx = {
+      message: {
+        chat: { id: -100999, type: "supergroup", is_forum: true },
+        from: { id: 12345, username: "intruder" },
+        message_thread_id: 42,
+        message_id: 1,
+        date: 1700000000,
+      },
+      match: "",
+    };
+
+    await handlers.status?.(ctx);
+
+    expect(sendMessage).toHaveBeenCalledWith(
+      -100999,
+      "You are not authorized to use this command.",
+      expect.objectContaining({ message_thread_id: 42 }),
+    );
+  });
 });
