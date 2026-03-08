@@ -473,7 +473,7 @@ describe("local media root guard", () => {
     );
   });
 
-  it("rejects default OpenClaw state per-agent workspace-* roots without explicit local roots", async () => {
+  it("allows default OpenClaw state per-agent workspace-* roots", async () => {
     const stateDir = resolveStateDir();
     const readFile = vi.fn(async () => Buffer.from("generated-media"));
 
@@ -482,7 +482,11 @@ describe("local media root guard", () => {
         maxBytes: 1024 * 1024,
         readFile,
       }),
-    ).rejects.toMatchObject({ code: "path-not-allowed" });
+    ).resolves.toEqual(
+      expect.objectContaining({
+        kind: "unknown",
+      }),
+    );
   });
 
   it("allows per-agent workspace-* paths with explicit local roots", async () => {
@@ -501,5 +505,17 @@ describe("local media root guard", () => {
         kind: undefined,
       }),
     );
+  });
+
+  it("rejects workspace-* paths outside the OpenClaw state dir by default", async () => {
+    const readFile = vi.fn(async () => Buffer.from("generated-media"));
+    const outsideDir = await fs.mkdtemp(path.join(os.tmpdir(), "workspace-outside-"));
+
+    await expect(
+      loadWebMedia(path.join(outsideDir, "tmp", "render.bin"), {
+        maxBytes: 1024 * 1024,
+        readFile,
+      }),
+    ).rejects.toMatchObject({ code: "path-not-allowed" });
   });
 });
