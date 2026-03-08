@@ -155,6 +155,7 @@ class SandboxFsBridgeImpl implements SandboxFsBridge {
   async mkdirp(params: { filePath: string; cwd?: string; signal?: AbortSignal }): Promise<void> {
     const target = this.resolveResolvedPath(params);
     this.ensureWriteAccess(target, "create directories");
+    const anchoredTarget = await this.resolveAnchoredSandboxEntry(target);
     await this.runCheckedCommand({
       checks: [
         {
@@ -166,8 +167,8 @@ class SandboxFsBridgeImpl implements SandboxFsBridge {
           },
         },
       ],
-      script: 'set -eu; mkdir -p -- "$1"',
-      args: [target.containerPath],
+      script: 'set -eu\ncd -- "$1"\nmkdir -p -- "$2"',
+      args: [anchoredTarget.canonicalParentPath, anchoredTarget.basename],
       signal: params.signal,
     });
   }
