@@ -7,14 +7,16 @@ import type {
   MSTeamsConfig,
   MSTeamsReplyStyle,
   MSTeamsTeamConfig,
-} from "openclaw/plugin-sdk";
+} from "openclaw/plugin-sdk/msteams";
 import {
   buildChannelKeyCandidates,
+  evaluateSenderGroupAccessForPolicy,
   normalizeChannelSlug,
+  resolveAllowlistMatchSimple,
   resolveToolsBySender,
   resolveChannelEntryMatchWithFallback,
   resolveNestedAllowlistDecision,
-} from "openclaw/plugin-sdk";
+} from "openclaw/plugin-sdk/msteams";
 
 export type MSTeamsResolvedRouteConfig = {
   teamConfig?: MSTeamsTeamConfig;
@@ -208,25 +210,9 @@ export function resolveMSTeamsAllowlistMatch(params: {
   allowFrom: Array<string | number>;
   senderId: string;
   senderName?: string | null;
+  allowNameMatching?: boolean;
 }): MSTeamsAllowlistMatch {
-  const allowFrom = params.allowFrom
-    .map((entry) => String(entry).trim().toLowerCase())
-    .filter(Boolean);
-  if (allowFrom.length === 0) {
-    return { allowed: false };
-  }
-  if (allowFrom.includes("*")) {
-    return { allowed: true, matchKey: "*", matchSource: "wildcard" };
-  }
-  const senderId = params.senderId.toLowerCase();
-  if (allowFrom.includes(senderId)) {
-    return { allowed: true, matchKey: senderId, matchSource: "id" };
-  }
-  const senderName = params.senderName?.toLowerCase();
-  if (senderName && allowFrom.includes(senderName)) {
-    return { allowed: true, matchKey: senderName, matchSource: "name" };
-  }
-  return { allowed: false };
+  return resolveAllowlistMatchSimple(params);
 }
 
 export function resolveMSTeamsReplyPolicy(params: {
@@ -261,13 +247,12 @@ export function isMSTeamsGroupAllowed(params: {
   allowFrom: Array<string | number>;
   senderId: string;
   senderName?: string | null;
+  allowNameMatching?: boolean;
 }): boolean {
-  const { groupPolicy } = params;
-  if (groupPolicy === "disabled") {
-    return false;
-  }
-  if (groupPolicy === "open") {
-    return true;
-  }
-  return resolveMSTeamsAllowlistMatch(params).allowed;
+  return evaluateSenderGroupAccessForPolicy({
+    groupPolicy: params.groupPolicy,
+    groupAllowFrom: params.allowFrom.map((entry) => String(entry)),
+    senderId: params.senderId,
+    isSenderAllowed: () => resolveMSTeamsAllowlistMatch(params).allowed,
+  }).allowed;
 }

@@ -1,7 +1,15 @@
-app_identifier("bot.molt.ios")
+app_identifier("ai.openclaw.client")
 
 # Auth is expected via App Store Connect API key.
 # Provide either:
 # - APP_STORE_CONNECT_API_KEY_PATH=/path/to/AuthKey_XXXXXX.p8.json (recommended)
 # or:
+# - ASC_KEY_PATH=/path/to/AuthKey_XXXXXX.p8 with ASC_KEY_ID and ASC_ISSUER_ID
 # - ASC_KEY_ID, ASC_ISSUER_ID, and ASC_KEY_CONTENT (base64 or raw p8 content)
+# - ASC_KEY_ID and ASC_ISSUER_ID plus Keychain fallback:
+#   ASC_KEYCHAIN_SERVICE (default: openclaw-asc-key)
+#   ASC_KEYCHAIN_ACCOUNT (default: USER/LOGNAME)
+#
+# Optional deliver app lookup overrides:
+# - ASC_APP_IDENTIFIER (bundle ID)
+# - ASC_APP_ID (numeric App Store Connect app ID)

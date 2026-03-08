@@ -1,4 +1,5 @@
 import Foundation
+import OpenClawKit
 
 enum GatewayRemoteConfig {
     static func resolveTransport(root: [String: Any]) -> AppState.RemoteTransport {
@@ -39,6 +40,9 @@ enum GatewayRemoteConfig {
         guard scheme == "ws" || scheme == "wss" else { return nil }
         let host = url.host?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         guard !host.isEmpty else { return nil }
+        if scheme == "ws", !LoopbackHost.isLoopbackHost(host) {
+            return nil
+        }
         if scheme == "ws", url.port == nil {
             guard var components = URLComponents(url: url, resolvingAgainstBaseURL: false) else {
                 return url

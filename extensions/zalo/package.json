@@ -1,13 +1,11 @@
 {
   "name": "@openclaw/zalo",
-  "version": "2026.2.13",
+  "version": "2026.3.8",
   "description": "OpenClaw Zalo channel plugin",
   "type": "module",
   "dependencies": {
-    "undici": "7.21.0"
-  },
-  "devDependencies": {
-    "openclaw": "workspace:*"
+    "undici": "7.22.0",
+    "zod": "^4.3.6"
   },
   "openclaw": {
     "extensions": [

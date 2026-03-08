@@ -23,22 +23,29 @@ jobs:
     permissions:
       contents: read
       pull-requests: write
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-16vcpu-ubuntu-2404
     steps:
       - uses: actions/create-github-app-token@d72941d797fd3113feb6b93fd0dec494b13a2547 # v1
         id: app-token
+        continue-on-error: true
         with:
           app-id: "2729701"
           private-key: ${{ secrets.GH_APP_PRIVATE_KEY }}
+      - uses: actions/create-github-app-token@d72941d797fd3113feb6b93fd0dec494b13a2547 # v1
+        id: app-token-fallback
+        if: steps.app-token.outcome == 'failure'
+        with:
+          app-id: "2971289"
+          private-key: ${{ secrets.GH_APP_PRIVATE_KEY_FALLBACK }}
       - uses: actions/labeler@8558fd74291d67161a8a78ce36a881fa63b766a9 # v5
         with:
           configuration-path: .github/labeler.yml
-          repo-token: ${{ steps.app-token.outputs.token }}
+          repo-token: ${{ steps.app-token.outputs.token || steps.app-token-fallback.outputs.token }}
           sync-labels: true
       - name: Apply PR size label
         uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7
         with:
-          github-token: ${{ steps.app-token.outputs.token }}
+          github-token: ${{ steps.app-token.outputs.token || steps.app-token-fallback.outputs.token }}
           script: |
             const pullRequest = context.payload.pull_request;
             if (!pullRequest) {
@@ -127,7 +134,7 @@ jobs:
       - name: Apply maintainer or trusted-contributor label
         uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7
         with:
-          github-token: ${{ steps.app-token.outputs.token }}
+          github-token: ${{ steps.app-token.outputs.token || steps.app-token-fallback.outputs.token }}
           script: |
             const login = context.payload.pull_request?.user?.login;
             if (!login) {
@@ -135,10 +142,10 @@ jobs:
             }
 
             const repo = `${context.repo.owner}/${context.repo.repo}`;
-            const trustedLabel = "trusted-contributor";
-            const experiencedLabel = "experienced-contributor";
-            const trustedThreshold = 4;
-            const experiencedThreshold = 10;
+            // const trustedLabel = "trusted-contributor";
+            // const experiencedLabel = "experienced-contributor";
+            // const trustedThreshold = 4;
+            // const experiencedThreshold = 10;
 
             let isMaintainer = false;
             try {
@@ -163,36 +170,182 @@ jobs:
               return;
             }
 
-            const mergedQuery = `repo:${repo} is:pr is:merged author:${login}`;
-            let mergedCount = 0;
+            // trusted-contributor and experienced-contributor labels disabled.
+            // const mergedQuery = `repo:${repo} is:pr is:merged author:${login}`;
+            // let mergedCount = 0;
+            // try {
+            //   const merged = await github.rest.search.issuesAndPullRequests({
+            //     q: mergedQuery,
+            //     per_page: 1,
+            //   });
+            //   mergedCount = merged?.data?.total_count ?? 0;
+            // } catch (error) {
+            //   if (error?.status !== 422) {
+            //     throw error;
+            //   }
+            //   core.warning(`Skipping merged search for ${login}; treating as 0.`);
+            // }
+            //
+            // if (mergedCount >= experiencedThreshold) {
+            //   await github.rest.issues.addLabels({
+            //     ...context.repo,
+            //     issue_number: context.payload.pull_request.number,
+            //     labels: [experiencedLabel],
+            //   });
+            //   return;
+            // }
+            //
+            // if (mergedCount >= trustedThreshold) {
+            //   await github.rest.issues.addLabels({
+            //     ...context.repo,
+            //     issue_number: context.payload.pull_request.number,
+            //     labels: [trustedLabel],
+            //   });
+            // }
+      - name: Apply too-many-prs label
+        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7
+        with:
+          github-token: ${{ steps.app-token.outputs.token || steps.app-token-fallback.outputs.token }}
+          script: |
+            const pullRequest = context.payload.pull_request;
+            if (!pullRequest) {
+              return;
+            }
+
+            const activePrLimitLabel = "r: too-many-prs";
+            const activePrLimit = 10;
+            const labelColor = "B60205";
+            const labelDescription = `Author has more than ${activePrLimit} active PRs in this repo`;
+            const authorLogin = pullRequest.user?.login;
+            if (!authorLogin) {
+              return;
+            }
+
+            const labelNames = new Set(
+              (pullRequest.labels ?? [])
+                .map((label) => (typeof label === "string" ? label : label?.name))
+                .filter((name) => typeof name === "string"),
+            );
+
+            const ensureLabelExists = async () => {
+              try {
+                await github.rest.issues.getLabel({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  name: activePrLimitLabel,
+                });
+              } catch (error) {
+                if (error?.status !== 404) {
+                  throw error;
+                }
+                await github.rest.issues.createLabel({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  name: activePrLimitLabel,
+                  color: labelColor,
+                  description: labelDescription,
+                });
+              }
+            };
+
+            const isPrivilegedAuthor = async () => {
+              if (pullRequest.author_association === "OWNER") {
+                return true;
+              }
+
+              let isMaintainer = false;
+              try {
+                const membership = await github.rest.teams.getMembershipForUserInOrg({
+                  org: context.repo.owner,
+                  team_slug: "maintainer",
+                  username: authorLogin,
+                });
+                isMaintainer = membership?.data?.state === "active";
+              } catch (error) {
+                if (error?.status !== 404) {
+                  throw error;
+                }
+              }
+
+              if (isMaintainer) {
+                return true;
+              }
+
+              try {
+                const permission = await github.rest.repos.getCollaboratorPermissionLevel({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  username: authorLogin,
+                });
+                const roleName = (permission?.data?.role_name ?? "").toLowerCase();
+                return roleName === "admin" || roleName === "maintain";
+              } catch (error) {
+                if (error?.status !== 404) {
+                  throw error;
+                }
+              }
+
+              return false;
+            };
+
+            if (await isPrivilegedAuthor()) {
+              if (labelNames.has(activePrLimitLabel)) {
+                try {
+                  await github.rest.issues.removeLabel({
+                    owner: context.repo.owner,
+                    repo: context.repo.repo,
+                    issue_number: pullRequest.number,
+                    name: activePrLimitLabel,
+                  });
+                } catch (error) {
+                  if (error?.status !== 404) {
+                    throw error;
+                  }
+                }
+              }
+              return;
+            }
+
+            let openPrCount = 0;
             try {
-              const merged = await github.rest.search.issuesAndPullRequests({
-                q: mergedQuery,
+              const result = await github.rest.search.issuesAndPullRequests({
+                q: `repo:${context.repo.owner}/${context.repo.repo} is:pr is:open author:${authorLogin}`,
                 per_page: 1,
               });
-              mergedCount = merged?.data?.total_count ?? 0;
+              openPrCount = result?.data?.total_count ?? 0;
             } catch (error) {
               if (error?.status !== 422) {
                 throw error;
               }
-              core.warning(`Skipping merged search for ${login}; treating as 0.`);
+              core.warning(`Skipping open PR count for ${authorLogin}; treating as 0.`);
             }
 
-            if (mergedCount >= experiencedThreshold) {
-              await github.rest.issues.addLabels({
-                ...context.repo,
-                issue_number: context.payload.pull_request.number,
-                labels: [experiencedLabel],
-              });
+            if (openPrCount > activePrLimit) {
+              await ensureLabelExists();
+              if (!labelNames.has(activePrLimitLabel)) {
+                await github.rest.issues.addLabels({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: pullRequest.number,
+                  labels: [activePrLimitLabel],
+                });
+              }
               return;
             }
 
-            if (mergedCount >= trustedThreshold) {
-              await github.rest.issues.addLabels({
-                ...context.repo,
-                issue_number: context.payload.pull_request.number,
-                labels: [trustedLabel],
-              });
+            if (labelNames.has(activePrLimitLabel)) {
+              try {
+                await github.rest.issues.removeLabel({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: pullRequest.number,
+                  name: activePrLimitLabel,
+                });
+              } catch (error) {
+                if (error?.status !== 404) {
+                  throw error;
+                }
+              }
             }
 
   backfill-pr-labels:
@@ -200,17 +353,24 @@ jobs:
     permissions:
       contents: read
       pull-requests: write
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-16vcpu-ubuntu-2404
     steps:
       - uses: actions/create-github-app-token@d72941d797fd3113feb6b93fd0dec494b13a2547 # v1
         id: app-token
+        continue-on-error: true
         with:
           app-id: "2729701"
           private-key: ${{ secrets.GH_APP_PRIVATE_KEY }}
+      - uses: actions/create-github-app-token@d72941d797fd3113feb6b93fd0dec494b13a2547 # v1
+        id: app-token-fallback
+        if: steps.app-token.outcome == 'failure'
+        with:
+          app-id: "2971289"
+          private-key: ${{ secrets.GH_APP_PRIVATE_KEY_FALLBACK }}
       - name: Backfill PR labels
         uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7
         with:
-          github-token: ${{ steps.app-token.outputs.token }}
+          github-token: ${{ steps.app-token.outputs.token || steps.app-token-fallback.outputs.token }}
           script: |
             const owner = context.repo.owner;
             const repo = context.repo.repo;
@@ -227,10 +387,10 @@ jobs:
 
             const sizeLabels = ["size: XS", "size: S", "size: M", "size: L", "size: XL"];
             const labelColor = "b76e79";
-            const trustedLabel = "trusted-contributor";
-            const experiencedLabel = "experienced-contributor";
-            const trustedThreshold = 4;
-            const experiencedThreshold = 10;
+            // const trustedLabel = "trusted-contributor";
+            // const experiencedLabel = "experienced-contributor";
+            // const trustedThreshold = 4;
+            // const experiencedThreshold = 10;
 
             const contributorCache = new Map();
 
@@ -280,27 +440,28 @@ jobs:
                 return "maintainer";
               }
 
-              const mergedQuery = `repo:${repoFull} is:pr is:merged author:${login}`;
-              let mergedCount = 0;
-              try {
-                const merged = await github.rest.search.issuesAndPullRequests({
-                  q: mergedQuery,
-                  per_page: 1,
-                });
-                mergedCount = merged?.data?.total_count ?? 0;
-              } catch (error) {
-                if (error?.status !== 422) {
-                  throw error;
-                }
-                core.warning(`Skipping merged search for ${login}; treating as 0.`);
-              }
+              // trusted-contributor and experienced-contributor labels disabled.
+              // const mergedQuery = `repo:${repoFull} is:pr is:merged author:${login}`;
+              // let mergedCount = 0;
+              // try {
+              //   const merged = await github.rest.search.issuesAndPullRequests({
+              //     q: mergedQuery,
+              //     per_page: 1,
+              //   });
+              //   mergedCount = merged?.data?.total_count ?? 0;
+              // } catch (error) {
+              //   if (error?.status !== 422) {
+              //     throw error;
+              //   }
+              //   core.warning(`Skipping merged search for ${login}; treating as 0.`);
+              // }
 
-              let label = null;
-              if (mergedCount >= experiencedThreshold) {
-                label = experiencedLabel;
-              } else if (mergedCount >= trustedThreshold) {
-                label = trustedLabel;
-              }
+              const label = null;
+              // if (mergedCount >= experiencedThreshold) {
+              //   label = experiencedLabel;
+              // } else if (mergedCount >= trustedThreshold) {
+              //   label = trustedLabel;
+              // }
 
               contributorCache.set(login, label);
               return label;
@@ -440,17 +601,24 @@ jobs:
   label-issues:
     permissions:
       issues: write
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-16vcpu-ubuntu-2404
     steps:
       - uses: actions/create-github-app-token@d72941d797fd3113feb6b93fd0dec494b13a2547 # v1
         id: app-token
+        continue-on-error: true
         with:
           app-id: "2729701"
           private-key: ${{ secrets.GH_APP_PRIVATE_KEY }}
+      - uses: actions/create-github-app-token@d72941d797fd3113feb6b93fd0dec494b13a2547 # v1
+        id: app-token-fallback
+        if: steps.app-token.outcome == 'failure'
+        with:
+          app-id: "2971289"
+          private-key: ${{ secrets.GH_APP_PRIVATE_KEY_FALLBACK }}
       - name: Apply maintainer or trusted-contributor label
         uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7
         with:
-          github-token: ${{ steps.app-token.outputs.token }}
+          github-token: ${{ steps.app-token.outputs.token || steps.app-token-fallback.outputs.token }}
           script: |
             const login = context.payload.issue?.user?.login;
             if (!login) {
@@ -458,10 +626,10 @@ jobs:
             }
 
             const repo = `${context.repo.owner}/${context.repo.repo}`;
-            const trustedLabel = "trusted-contributor";
-            const experiencedLabel = "experienced-contributor";
-            const trustedThreshold = 4;
-            const experiencedThreshold = 10;
+            // const trustedLabel = "trusted-contributor";
+            // const experiencedLabel = "experienced-contributor";
+            // const trustedThreshold = 4;
+            // const experiencedThreshold = 10;
 
             let isMaintainer = false;
             try {
@@ -486,34 +654,35 @@ jobs:
               return;
             }
 
-            const mergedQuery = `repo:${repo} is:pr is:merged author:${login}`;
-            let mergedCount = 0;
-            try {
-              const merged = await github.rest.search.issuesAndPullRequests({
-                q: mergedQuery,
-                per_page: 1,
-              });
-              mergedCount = merged?.data?.total_count ?? 0;
-            } catch (error) {
-              if (error?.status !== 422) {
-                throw error;
-              }
-              core.warning(`Skipping merged search for ${login}; treating as 0.`);
-            }
-
-            if (mergedCount >= experiencedThreshold) {
-              await github.rest.issues.addLabels({
-                ...context.repo,
-                issue_number: context.payload.issue.number,
-                labels: [experiencedLabel],
-              });
-              return;
-            }
-
-            if (mergedCount >= trustedThreshold) {
-              await github.rest.issues.addLabels({
-                ...context.repo,
-                issue_number: context.payload.issue.number,
-                labels: [trustedLabel],
-              });
-            }
+            // trusted-contributor and experienced-contributor labels disabled.
+            // const mergedQuery = `repo:${repo} is:pr is:merged author:${login}`;
+            // let mergedCount = 0;
+            // try {
+            //   const merged = await github.rest.search.issuesAndPullRequests({
+            //     q: mergedQuery,
+            //     per_page: 1,
+            //   });
+            //   mergedCount = merged?.data?.total_count ?? 0;
+            // } catch (error) {
+            //   if (error?.status !== 422) {
+            //     throw error;
+            //   }
+            //   core.warning(`Skipping merged search for ${login}; treating as 0.`);
+            // }
+            //
+            // if (mergedCount >= experiencedThreshold) {
+            //   await github.rest.issues.addLabels({
+            //     ...context.repo,
+            //     issue_number: context.payload.issue.number,
+            //     labels: [experiencedLabel],
+            //   });
+            //   return;
+            // }
+            //
+            // if (mergedCount >= trustedThreshold) {
+            //   await github.rest.issues.addLabels({
+            //     ...context.repo,
+            //     issue_number: context.payload.issue.number,
+            //     labels: [trustedLabel],
+            //   });
+            // }

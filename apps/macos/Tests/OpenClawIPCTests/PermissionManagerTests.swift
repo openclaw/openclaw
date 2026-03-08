@@ -1,5 +1,5 @@
-import OpenClawIPC
 import CoreLocation
+import OpenClawIPC
 import Testing
 @testable import OpenClaw
 

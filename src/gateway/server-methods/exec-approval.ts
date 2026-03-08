@@ -1,7 +1,11 @@
 import type { ExecApprovalForwarder } from "../../infra/exec-approval-forwarder.js";
-import type { ExecApprovalDecision } from "../../infra/exec-approvals.js";
+import {
+  DEFAULT_EXEC_APPROVAL_TIMEOUT_MS,
+  type ExecApprovalDecision,
+} from "../../infra/exec-approvals.js";
+import { buildSystemRunApprovalBinding } from "../../infra/system-run-approval-binding.js";
+import { resolveSystemRunApprovalRequestContext } from "../../infra/system-run-approval-context.js";
 import type { ExecApprovalManager } from "../exec-approval-manager.js";
-import type { GatewayRequestHandlers } from "./types.js";
 import {
   ErrorCodes,
   errorShape,
@@ -9,13 +13,22 @@ import {
   validateExecApprovalRequestParams,
   validateExecApprovalResolveParams,
 } from "../protocol/index.js";
+import type { GatewayRequestHandlers } from "./types.js";
 
 export function createExecApprovalHandlers(
   manager: ExecApprovalManager,
   opts?: { forwarder?: ExecApprovalForwarder },
 ): GatewayRequestHandlers {
+  const hasApprovalClients = (context: { hasExecApprovalClients?: () => boolean }) => {
+    if (typeof context.hasExecApprovalClients === "function") {
+      return context.hasExecApprovalClients();
+    }
+    // Fail closed when no operator-scope probe is available.
+    return false;
+  };
+
   return {
-    "exec.approval.request": async ({ params, respond, context }) => {
+    "exec.approval.request": async ({ params, respond, context, client }) => {
       if (!validateExecApprovalRequestParams(params)) {
         respond(
           false,
@@ -32,19 +45,81 @@ export function createExecApprovalHandlers(
       const p = params as {
         id?: string;
         command: string;
+        commandArgv?: string[];
+        env?: Record<string, string>;
         cwd?: string;
+        systemRunPlan?: unknown;
+        nodeId?: string;
         host?: string;
         security?: string;
         ask?: string;
         agentId?: string;
         resolvedPath?: string;
         sessionKey?: string;
+        turnSourceChannel?: string;
+        turnSourceTo?: string;
+        turnSourceAccountId?: string;
+        turnSourceThreadId?: string | number;
         timeoutMs?: number;
         twoPhase?: boolean;
       };
       const twoPhase = p.twoPhase === true;
-      const timeoutMs = typeof p.timeoutMs === "number" ? p.timeoutMs : 120_000;
+      const timeoutMs =
+        typeof p.timeoutMs === "number" ? p.timeoutMs : DEFAULT_EXEC_APPROVAL_TIMEOUT_MS;
       const explicitId = typeof p.id === "string" && p.id.trim().length > 0 ? p.id.trim() : null;
+      const host = typeof p.host === "string" ? p.host.trim() : "";
+      const nodeId = typeof p.nodeId === "string" ? p.nodeId.trim() : "";
+      const approvalContext = resolveSystemRunApprovalRequestContext({
+        host,
+        command: p.command,
+        commandArgv: p.commandArgv,
+        systemRunPlan: p.systemRunPlan,
+        cwd: p.cwd,
+        agentId: p.agentId,
+        sessionKey: p.sessionKey,
+      });
+      const effectiveCommandArgv = approvalContext.commandArgv;
+      const effectiveCwd = approvalContext.cwd;
+      const effectiveAgentId = approvalContext.agentId;
+      const effectiveSessionKey = approvalContext.sessionKey;
+      const effectiveCommandText = approvalContext.commandText;
+      if (host === "node" && !nodeId) {
+        respond(
+          false,
+          undefined,
+          errorShape(ErrorCodes.INVALID_REQUEST, "nodeId is required for host=node"),
+        );
+        return;
+      }
+      if (host === "node" && !approvalContext.plan) {
+        respond(
+          false,
+          undefined,
+          errorShape(ErrorCodes.INVALID_REQUEST, "systemRunPlan is required for host=node"),
+        );
+        return;
+      }
+      if (
+        host === "node" &&
+        (!Array.isArray(effectiveCommandArgv) || effectiveCommandArgv.length === 0)
+      ) {
+        respond(
+          false,
+          undefined,
+          errorShape(ErrorCodes.INVALID_REQUEST, "commandArgv is required for host=node"),
+        );
+        return;
+      }
+      const systemRunBinding =
+        host === "node"
+          ? buildSystemRunApprovalBinding({
+              argv: effectiveCommandArgv,
+              cwd: effectiveCwd,
+              agentId: effectiveAgentId,
+              sessionKey: effectiveSessionKey,
+              env: p.env,
+            })
+          : null;
       if (explicitId && manager.getSnapshot(explicitId)) {
         respond(
           false,
@@ -54,16 +129,30 @@ export function createExecApprovalHandlers(
         return;
       }
       const request = {
-        command: p.command,
-        cwd: p.cwd ?? null,
-        host: p.host ?? null,
+        command: effectiveCommandText,
+        commandArgv: effectiveCommandArgv,
+        envKeys: systemRunBinding?.envKeys?.length ? systemRunBinding.envKeys : undefined,
+        systemRunBinding: systemRunBinding?.binding ?? null,
+        systemRunPlan: approvalContext.plan,
+        cwd: effectiveCwd ?? null,
+        nodeId: host === "node" ? nodeId : null,
+        host: host || null,
         security: p.security ?? null,
         ask: p.ask ?? null,
-        agentId: p.agentId ?? null,
+        agentId: effectiveAgentId ?? null,
         resolvedPath: p.resolvedPath ?? null,
-        sessionKey: p.sessionKey ?? null,
+        sessionKey: effectiveSessionKey ?? null,
+        turnSourceChannel:
+          typeof p.turnSourceChannel === "string" ? p.turnSourceChannel.trim() || null : null,
+        turnSourceTo: typeof p.turnSourceTo === "string" ? p.turnSourceTo.trim() || null : null,
+        turnSourceAccountId:
+          typeof p.turnSourceAccountId === "string" ? p.turnSourceAccountId.trim() || null : null,
+        turnSourceThreadId: p.turnSourceThreadId ?? null,
       };
       const record = manager.create(request, timeoutMs, explicitId);
+      record.requestedByConnId = client?.connId ?? null;
+      record.requestedByDeviceId = client?.connect?.device?.id ?? null;
+      record.requestedByClientId = client?.connect?.client?.id ?? null;
       // Use register() to synchronously add to pending map before sending any response.
       // This ensures the approval ID is valid immediately after the "accepted" response.
       let decisionPromise: Promise<
@@ -89,16 +178,23 @@ export function createExecApprovalHandlers(
         },
         { dropIfSlow: true },
       );
-      void opts?.forwarder
-        ?.handleRequested({
-          id: record.id,
-          request: record.request,
-          createdAtMs: record.createdAtMs,
-          expiresAtMs: record.expiresAtMs,
-        })
-        .catch((err) => {
+      let forwardedToTargets = false;
+      if (opts?.forwarder) {
+        try {
+          forwardedToTargets = await opts.forwarder.handleRequested({
+            id: record.id,
+            request: record.request,
+            createdAtMs: record.createdAtMs,
+            expiresAtMs: record.expiresAtMs,
+          });
+        } catch (err) {
           context.logGateway?.error?.(`exec approvals: forward request failed: ${String(err)}`);
-        });
+        }
+      }
+
+      if (!hasApprovalClients(context) && !forwardedToTargets) {
+        manager.expire(record.id, "auto-expire:no-approver-clients");
+      }
 
       // Only send immediate "accepted" response when twoPhase is requested.
       // This preserves single-response semantics for existing callers.
@@ -179,6 +275,7 @@ export function createExecApprovalHandlers(
         respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "invalid decision"));
         return;
       }
+      const snapshot = manager.getSnapshot(p.id);
       const resolvedBy = client?.connect?.client?.displayName ?? client?.connect?.client?.id;
       const ok = manager.resolve(p.id, decision, resolvedBy ?? null);
       if (!ok) {
@@ -187,11 +284,17 @@ export function createExecApprovalHandlers(
       }
       context.broadcast(
         "exec.approval.resolved",
-        { id: p.id, decision, resolvedBy, ts: Date.now() },
+        { id: p.id, decision, resolvedBy, ts: Date.now(), request: snapshot?.request },
         { dropIfSlow: true },
       );
       void opts?.forwarder
-        ?.handleResolved({ id: p.id, decision, resolvedBy, ts: Date.now() })
+        ?.handleResolved({
+          id: p.id,
+          decision,
+          resolvedBy,
+          ts: Date.now(),
+          request: snapshot?.request,
+        })
         .catch((err) => {
           context.logGateway?.error?.(`exec approvals: forward resolve failed: ${String(err)}`);
         });

@@ -4,6 +4,9 @@ Sources/Gateway/GatewayDiscoveryModel.swift
 Sources/Gateway/GatewaySettingsStore.swift
 Sources/Gateway/KeychainStore.swift
 Sources/Camera/CameraController.swift
+Sources/Device/DeviceInfoHelper.swift
+Sources/Device/DeviceStatusService.swift
+Sources/Device/NetworkStatusService.swift
 Sources/Chat/ChatSheet.swift
 Sources/Chat/IOSGatewayChatTransport.swift
 Sources/OpenClawApp.swift
@@ -59,3 +62,7 @@ Sources/Voice/VoiceWakePreferences.swift
 ../../Swabble/Sources/SwabbleKit/WakeWordGate.swift
 Sources/Voice/TalkModeManager.swift
 Sources/Voice/TalkOrbOverlay.swift
+Sources/LiveActivity/OpenClawActivityAttributes.swift
+Sources/LiveActivity/LiveActivityManager.swift
+ActivityWidget/OpenClawActivityWidgetBundle.swift
+ActivityWidget/OpenClawLiveActivity.swift

@@ -1,4 +1,3 @@
-import type { GatewayServiceRuntime } from "./service-runtime.js";
 import {
   installLaunchAgent,
   isLaunchAgentLoaded,
@@ -17,6 +16,15 @@ import {
   stopScheduledTask,
   uninstallScheduledTask,
 } from "./schtasks.js";
+import type { GatewayServiceRuntime } from "./service-runtime.js";
+import type {
+  GatewayServiceCommandConfig,
+  GatewayServiceControlArgs,
+  GatewayServiceEnv,
+  GatewayServiceEnvArgs,
+  GatewayServiceInstallArgs,
+  GatewayServiceManageArgs,
+} from "./service-types.js";
 import {
   installSystemdService,
   isSystemdServiceEnabled,
@@ -26,130 +34,86 @@ import {
   stopSystemdService,
   uninstallSystemdService,
 } from "./systemd.js";
+export type {
+  GatewayServiceCommandConfig,
+  GatewayServiceControlArgs,
+  GatewayServiceEnv,
+  GatewayServiceEnvArgs,
+  GatewayServiceInstallArgs,
+  GatewayServiceManageArgs,
+} from "./service-types.js";
 
-export type GatewayServiceInstallArgs = {
-  env: Record<string, string | undefined>;
-  stdout: NodeJS.WritableStream;
-  programArguments: string[];
-  workingDirectory?: string;
-  environment?: Record<string, string | undefined>;
-  description?: string;
-};
+function ignoreInstallResult(
+  install: (args: GatewayServiceInstallArgs) => Promise<unknown>,
+): (args: GatewayServiceInstallArgs) => Promise<void> {
+  return async (args) => {
+    await install(args);
+  };
+}
 
 export type GatewayService = {
   label: string;
   loadedText: string;
   notLoadedText: string;
   install: (args: GatewayServiceInstallArgs) => Promise<void>;
-  uninstall: (args: {
-    env: Record<string, string | undefined>;
-    stdout: NodeJS.WritableStream;
-  }) => Promise<void>;
-  stop: (args: {
-    env?: Record<string, string | undefined>;
-    stdout: NodeJS.WritableStream;
-  }) => Promise<void>;
-  restart: (args: {
-    env?: Record<string, string | undefined>;
-    stdout: NodeJS.WritableStream;
-  }) => Promise<void>;
-  isLoaded: (args: { env?: Record<string, string | undefined> }) => Promise<boolean>;
-  readCommand: (env: Record<string, string | undefined>) => Promise<{
-    programArguments: string[];
-    workingDirectory?: string;
-    environment?: Record<string, string>;
-    sourcePath?: string;
-  } | null>;
-  readRuntime: (env: Record<string, string | undefined>) => Promise<GatewayServiceRuntime>;
+  uninstall: (args: GatewayServiceManageArgs) => Promise<void>;
+  stop: (args: GatewayServiceControlArgs) => Promise<void>;
+  restart: (args: GatewayServiceControlArgs) => Promise<void>;
+  isLoaded: (args: GatewayServiceEnvArgs) => Promise<boolean>;
+  readCommand: (env: GatewayServiceEnv) => Promise<GatewayServiceCommandConfig | null>;
+  readRuntime: (env: GatewayServiceEnv) => Promise<GatewayServiceRuntime>;
 };
 
+type SupportedGatewayServicePlatform = "darwin" | "linux" | "win32";
+
+const GATEWAY_SERVICE_REGISTRY: Record<SupportedGatewayServicePlatform, GatewayService> = {
+  darwin: {
+    label: "LaunchAgent",
+    loadedText: "loaded",
+    notLoadedText: "not loaded",
+    install: ignoreInstallResult(installLaunchAgent),
+    uninstall: uninstallLaunchAgent,
+    stop: stopLaunchAgent,
+    restart: restartLaunchAgent,
+    isLoaded: isLaunchAgentLoaded,
+    readCommand: readLaunchAgentProgramArguments,
+    readRuntime: readLaunchAgentRuntime,
+  },
+  linux: {
+    label: "systemd",
+    loadedText: "enabled",
+    notLoadedText: "disabled",
+    install: ignoreInstallResult(installSystemdService),
+    uninstall: uninstallSystemdService,
+    stop: stopSystemdService,
+    restart: restartSystemdService,
+    isLoaded: isSystemdServiceEnabled,
+    readCommand: readSystemdServiceExecStart,
+    readRuntime: readSystemdServiceRuntime,
+  },
+  win32: {
+    label: "Scheduled Task",
+    loadedText: "registered",
+    notLoadedText: "missing",
+    install: ignoreInstallResult(installScheduledTask),
+    uninstall: uninstallScheduledTask,
+    stop: stopScheduledTask,
+    restart: restartScheduledTask,
+    isLoaded: isScheduledTaskInstalled,
+    readCommand: readScheduledTaskCommand,
+    readRuntime: readScheduledTaskRuntime,
+  },
+};
+
+function isSupportedGatewayServicePlatform(
+  platform: NodeJS.Platform,
+): platform is SupportedGatewayServicePlatform {
+  return Object.hasOwn(GATEWAY_SERVICE_REGISTRY, platform);
+}
+
 export function resolveGatewayService(): GatewayService {
-  if (process.platform === "darwin") {
-    return {
-      label: "LaunchAgent",
-      loadedText: "loaded",
-      notLoadedText: "not loaded",
-      install: async (args) => {
-        await installLaunchAgent(args);
-      },
-      uninstall: async (args) => {
-        await uninstallLaunchAgent(args);
-      },
-      stop: async (args) => {
-        await stopLaunchAgent({
-          stdout: args.stdout,
-          env: args.env,
-        });
-      },
-      restart: async (args) => {
-        await restartLaunchAgent({
-          stdout: args.stdout,
-          env: args.env,
-        });
-      },
-      isLoaded: async (args) => isLaunchAgentLoaded(args),
-      readCommand: readLaunchAgentProgramArguments,
-      readRuntime: readLaunchAgentRuntime,
-    };
+  if (isSupportedGatewayServicePlatform(process.platform)) {
+    return GATEWAY_SERVICE_REGISTRY[process.platform];
   }
-
-  if (process.platform === "linux") {
-    return {
-      label: "systemd",
-      loadedText: "enabled",
-      notLoadedText: "disabled",
-      install: async (args) => {
-        await installSystemdService(args);
-      },
-      uninstall: async (args) => {
-        await uninstallSystemdService(args);
-      },
-      stop: async (args) => {
-        await stopSystemdService({
-          stdout: args.stdout,
-          env: args.env,
-        });
-      },
-      restart: async (args) => {
-        await restartSystemdService({
-          stdout: args.stdout,
-          env: args.env,
-        });
-      },
-      isLoaded: async (args) => isSystemdServiceEnabled(args),
-      readCommand: readSystemdServiceExecStart,
-      readRuntime: async (env) => await readSystemdServiceRuntime(env),
-    };
-  }
-
-  if (process.platform === "win32") {
-    return {
-      label: "Scheduled Task",
-      loadedText: "registered",
-      notLoadedText: "missing",
-      install: async (args) => {
-        await installScheduledTask(args);
-      },
-      uninstall: async (args) => {
-        await uninstallScheduledTask(args);
-      },
-      stop: async (args) => {
-        await stopScheduledTask({
-          stdout: args.stdout,
-          env: args.env,
-        });
-      },
-      restart: async (args) => {
-        await restartScheduledTask({
-          stdout: args.stdout,
-          env: args.env,
-        });
-      },
-      isLoaded: async (args) => isScheduledTaskInstalled(args),
-      readCommand: readScheduledTaskCommand,
-      readRuntime: async (env) => await readScheduledTaskRuntime(env),
-    };
-  }
-
   throw new Error(`Gateway service install not supported on ${process.platform}`);
 }

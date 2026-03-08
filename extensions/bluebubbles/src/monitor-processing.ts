@@ -1,19 +1,25 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/bluebubbles";
 import {
+  DM_GROUP_ACCESS_REASON,
+  createScopedPairingAccess,
   createReplyPrefixOptions,
+  evictOldHistoryKeys,
+  issuePairingChallenge,
   logAckFailure,
   logInboundDrop,
   logTypingFailure,
+  mapAllowFromEntries,
+  readStoreAllowFromForDmPolicy,
+  recordPendingHistoryEntryIfEnabled,
   resolveAckReaction,
+  resolveDmGroupAccessWithLists,
   resolveControlCommandGate,
-} from "openclaw/plugin-sdk";
-import type {
-  BlueBubblesCoreRuntime,
-  BlueBubblesRuntimeEnv,
-  WebhookTarget,
-} from "./monitor-shared.js";
+  stripMarkdown,
+  type HistoryEntry,
+} from "openclaw/plugin-sdk/bluebubbles";
 import { downloadBlueBubblesAttachment } from "./attachments.js";
 import { markBlueBubblesChatRead, sendBlueBubblesTyping } from "./chat.js";
+import { fetchBlueBubblesHistory } from "./history.js";
 import { sendBlueBubblesMedia } from "./media-send.js";
 import {
   buildMessagePlaceholder,
@@ -32,14 +38,149 @@ import {
   resolveBlueBubblesMessageId,
   resolveReplyContextFromCache,
 } from "./monitor-reply-cache.js";
-import { getCachedBlueBubblesPrivateApiStatus } from "./probe.js";
+import type {
+  BlueBubblesCoreRuntime,
+  BlueBubblesRuntimeEnv,
+  WebhookTarget,
+} from "./monitor-shared.js";
+import { isBlueBubblesPrivateApiEnabled } from "./probe.js";
 import { normalizeBlueBubblesReactionInput, sendBlueBubblesReaction } from "./reactions.js";
+import { normalizeSecretInputString } from "./secret-input.js";
 import { resolveChatGuidForTarget, sendMessageBlueBubbles } from "./send.js";
 import { formatBlueBubblesChatTarget, isAllowedBlueBubblesSender } from "./targets.js";
 
 const DEFAULT_TEXT_LIMIT = 4000;
 const invalidAckReactions = new Set<string>();
 const REPLY_DIRECTIVE_TAG_RE = /\[\[\s*(?:reply_to_current|reply_to\s*:\s*[^\]\n]+)\s*\]\]/gi;
+const PENDING_OUTBOUND_MESSAGE_ID_TTL_MS = 2 * 60 * 1000;
+
+type PendingOutboundMessageId = {
+  id: number;
+  accountId: string;
+  sessionKey: string;
+  outboundTarget: string;
+  chatGuid?: string;
+  chatIdentifier?: string;
+  chatId?: number;
+  snippetRaw: string;
+  snippetNorm: string;
+  isMediaSnippet: boolean;
+  createdAt: number;
+};
+
+const pendingOutboundMessageIds: PendingOutboundMessageId[] = [];
+let pendingOutboundMessageIdCounter = 0;
+
+function trimOrUndefined(value?: string | null): string | undefined {
+  const trimmed = value?.trim();
+  return trimmed ? trimmed : undefined;
+}
+
+function normalizeSnippet(value: string): string {
+  return stripMarkdown(value).replace(/\s+/g, " ").trim().toLowerCase();
+}
+
+function prunePendingOutboundMessageIds(now = Date.now()): void {
+  const cutoff = now - PENDING_OUTBOUND_MESSAGE_ID_TTL_MS;
+  for (let i = pendingOutboundMessageIds.length - 1; i >= 0; i--) {
+    if (pendingOutboundMessageIds[i].createdAt < cutoff) {
+      pendingOutboundMessageIds.splice(i, 1);
+    }
+  }
+}
+
+function rememberPendingOutboundMessageId(entry: {
+  accountId: string;
+  sessionKey: string;
+  outboundTarget: string;
+  chatGuid?: string;
+  chatIdentifier?: string;
+  chatId?: number;
+  snippet: string;
+}): number {
+  prunePendingOutboundMessageIds();
+  pendingOutboundMessageIdCounter += 1;
+  const snippetRaw = entry.snippet.trim();
+  const snippetNorm = normalizeSnippet(snippetRaw);
+  pendingOutboundMessageIds.push({
+    id: pendingOutboundMessageIdCounter,
+    accountId: entry.accountId,
+    sessionKey: entry.sessionKey,
+    outboundTarget: entry.outboundTarget,
+    chatGuid: trimOrUndefined(entry.chatGuid),
+    chatIdentifier: trimOrUndefined(entry.chatIdentifier),
+    chatId: typeof entry.chatId === "number" ? entry.chatId : undefined,
+    snippetRaw,
+    snippetNorm,
+    isMediaSnippet: snippetRaw.toLowerCase().startsWith("<media:"),
+    createdAt: Date.now(),
+  });
+  return pendingOutboundMessageIdCounter;
+}
+
+function forgetPendingOutboundMessageId(id: number): void {
+  const index = pendingOutboundMessageIds.findIndex((entry) => entry.id === id);
+  if (index >= 0) {
+    pendingOutboundMessageIds.splice(index, 1);
+  }
+}
+
+function chatsMatch(
+  left: Pick<PendingOutboundMessageId, "chatGuid" | "chatIdentifier" | "chatId">,
+  right: { chatGuid?: string; chatIdentifier?: string; chatId?: number },
+): boolean {
+  const leftGuid = trimOrUndefined(left.chatGuid);
+  const rightGuid = trimOrUndefined(right.chatGuid);
+  if (leftGuid && rightGuid) {
+    return leftGuid === rightGuid;
+  }
+
+  const leftIdentifier = trimOrUndefined(left.chatIdentifier);
+  const rightIdentifier = trimOrUndefined(right.chatIdentifier);
+  if (leftIdentifier && rightIdentifier) {
+    return leftIdentifier === rightIdentifier;
+  }
+
+  const leftChatId = typeof left.chatId === "number" ? left.chatId : undefined;
+  const rightChatId = typeof right.chatId === "number" ? right.chatId : undefined;
+  if (leftChatId !== undefined && rightChatId !== undefined) {
+    return leftChatId === rightChatId;
+  }
+
+  return false;
+}
+
+function consumePendingOutboundMessageId(params: {
+  accountId: string;
+  chatGuid?: string;
+  chatIdentifier?: string;
+  chatId?: number;
+  body: string;
+}): PendingOutboundMessageId | null {
+  prunePendingOutboundMessageIds();
+  const bodyNorm = normalizeSnippet(params.body);
+  const isMediaBody = params.body.trim().toLowerCase().startsWith("<media:");
+
+  for (let i = 0; i < pendingOutboundMessageIds.length; i++) {
+    const entry = pendingOutboundMessageIds[i];
+    if (entry.accountId !== params.accountId) {
+      continue;
+    }
+    if (!chatsMatch(entry, params)) {
+      continue;
+    }
+    if (entry.snippetNorm && entry.snippetNorm === bodyNorm) {
+      pendingOutboundMessageIds.splice(i, 1);
+      return entry;
+    }
+    if (entry.isMediaSnippet && isMediaBody) {
+      pendingOutboundMessageIds.splice(i, 1);
+      return entry;
+    }
+  }
+
+  return null;
+}
 
 export function logVerbose(
   core: BlueBubblesCoreRuntime,
@@ -107,12 +248,189 @@ function resolveBlueBubblesAckReaction(params: {
   }
 }
 
+/**
+ * In-memory rolling history map keyed by account + chat identifier.
+ * Populated from incoming messages during the session.
+ * API backfill is attempted until one fetch resolves (or retries are exhausted).
+ */
+const chatHistories = new Map<string, HistoryEntry[]>();
+type HistoryBackfillState = {
+  attempts: number;
+  firstAttemptAt: number;
+  nextAttemptAt: number;
+  resolved: boolean;
+};
+
+const historyBackfills = new Map<string, HistoryBackfillState>();
+const HISTORY_BACKFILL_BASE_DELAY_MS = 5_000;
+const HISTORY_BACKFILL_MAX_DELAY_MS = 2 * 60 * 1000;
+const HISTORY_BACKFILL_MAX_ATTEMPTS = 6;
+const HISTORY_BACKFILL_RETRY_WINDOW_MS = 30 * 60 * 1000;
+const MAX_STORED_HISTORY_ENTRY_CHARS = 2_000;
+const MAX_INBOUND_HISTORY_ENTRY_CHARS = 1_200;
+const MAX_INBOUND_HISTORY_TOTAL_CHARS = 12_000;
+
+function buildAccountScopedHistoryKey(accountId: string, historyIdentifier: string): string {
+  return `${accountId}\u0000${historyIdentifier}`;
+}
+
+function historyDedupKey(entry: HistoryEntry): string {
+  const messageId = entry.messageId?.trim();
+  if (messageId) {
+    return `id:${messageId}`;
+  }
+  return `fallback:${entry.sender}\u0000${entry.body}\u0000${entry.timestamp ?? ""}`;
+}
+
+function truncateHistoryBody(body: string, maxChars: number): string {
+  const trimmed = body.trim();
+  if (!trimmed) {
+    return "";
+  }
+  if (trimmed.length <= maxChars) {
+    return trimmed;
+  }
+  return `${trimmed.slice(0, maxChars).trimEnd()}...`;
+}
+
+function mergeHistoryEntries(params: {
+  apiEntries: HistoryEntry[];
+  currentEntries: HistoryEntry[];
+  limit: number;
+}): HistoryEntry[] {
+  if (params.limit <= 0) {
+    return [];
+  }
+
+  const merged: HistoryEntry[] = [];
+  const seen = new Set<string>();
+  const appendUnique = (entry: HistoryEntry) => {
+    const key = historyDedupKey(entry);
+    if (seen.has(key)) {
+      return;
+    }
+    seen.add(key);
+    merged.push(entry);
+  };
+
+  for (const entry of params.apiEntries) {
+    appendUnique(entry);
+  }
+  for (const entry of params.currentEntries) {
+    appendUnique(entry);
+  }
+
+  if (merged.length <= params.limit) {
+    return merged;
+  }
+  return merged.slice(merged.length - params.limit);
+}
+
+function pruneHistoryBackfillState(): void {
+  for (const key of historyBackfills.keys()) {
+    if (!chatHistories.has(key)) {
+      historyBackfills.delete(key);
+    }
+  }
+}
+
+function markHistoryBackfillResolved(historyKey: string): void {
+  const state = historyBackfills.get(historyKey);
+  if (state) {
+    state.resolved = true;
+    historyBackfills.set(historyKey, state);
+    return;
+  }
+  historyBackfills.set(historyKey, {
+    attempts: 0,
+    firstAttemptAt: Date.now(),
+    nextAttemptAt: Number.POSITIVE_INFINITY,
+    resolved: true,
+  });
+}
+
+function planHistoryBackfillAttempt(historyKey: string, now: number): HistoryBackfillState | null {
+  const existing = historyBackfills.get(historyKey);
+  if (existing?.resolved) {
+    return null;
+  }
+  if (existing && now - existing.firstAttemptAt > HISTORY_BACKFILL_RETRY_WINDOW_MS) {
+    markHistoryBackfillResolved(historyKey);
+    return null;
+  }
+  if (existing && existing.attempts >= HISTORY_BACKFILL_MAX_ATTEMPTS) {
+    markHistoryBackfillResolved(historyKey);
+    return null;
+  }
+  if (existing && now < existing.nextAttemptAt) {
+    return null;
+  }
+
+  const attempts = (existing?.attempts ?? 0) + 1;
+  const firstAttemptAt = existing?.firstAttemptAt ?? now;
+  const backoffDelay = Math.min(
+    HISTORY_BACKFILL_BASE_DELAY_MS * 2 ** (attempts - 1),
+    HISTORY_BACKFILL_MAX_DELAY_MS,
+  );
+  const state: HistoryBackfillState = {
+    attempts,
+    firstAttemptAt,
+    nextAttemptAt: now + backoffDelay,
+    resolved: false,
+  };
+  historyBackfills.set(historyKey, state);
+  return state;
+}
+
+function buildInboundHistorySnapshot(params: {
+  entries: HistoryEntry[];
+  limit: number;
+}): Array<{ sender: string; body: string; timestamp?: number }> | undefined {
+  if (params.limit <= 0 || params.entries.length === 0) {
+    return undefined;
+  }
+  const recent = params.entries.slice(-params.limit);
+  const selected: Array<{ sender: string; body: string; timestamp?: number }> = [];
+  let remainingChars = MAX_INBOUND_HISTORY_TOTAL_CHARS;
+
+  for (let i = recent.length - 1; i >= 0; i--) {
+    const entry = recent[i];
+    const body = truncateHistoryBody(entry.body, MAX_INBOUND_HISTORY_ENTRY_CHARS);
+    if (!body) {
+      continue;
+    }
+    if (selected.length > 0 && body.length > remainingChars) {
+      break;
+    }
+    selected.push({
+      sender: entry.sender,
+      body,
+      timestamp: entry.timestamp,
+    });
+    remainingChars -= body.length;
+    if (remainingChars <= 0) {
+      break;
+    }
+  }
+
+  if (selected.length === 0) {
+    return undefined;
+  }
+  selected.reverse();
+  return selected;
+}
+
 export async function processMessage(
   message: NormalizedWebhookMessage,
   target: WebhookTarget,
 ): Promise<void> {
   const { account, config, runtime, core, statusSink } = target;
-  const privateApiEnabled = getCachedBlueBubblesPrivateApiStatus(account.accountId) !== false;
+  const pairing = createScopedPairingAccess({
+    core,
+    channel: "bluebubbles",
+    accountId: account.accountId,
+  });
+  const privateApiEnabled = isBlueBubblesPrivateApiEnabled(account.accountId);
 
   const groupFlag = resolveGroupFlagFromChatGuid(message.chatGuid);
   const isGroup = typeof groupFlag === "boolean" ? groupFlag : message.isGroup;
@@ -158,6 +476,26 @@ export async function processMessage(
   if (message.fromMe) {
     // Cache from-me messages so reply context can resolve sender/body.
     cacheInboundMessage();
+    if (cacheMessageId) {
+      const pending = consumePendingOutboundMessageId({
+        accountId: account.accountId,
+        chatGuid: message.chatGuid,
+        chatIdentifier: message.chatIdentifier,
+        chatId: message.chatId,
+        body: rawBody,
+      });
+      if (pending) {
+        const displayId = getShortIdForUuid(cacheMessageId) || cacheMessageId;
+        const previewSource = pending.snippetRaw || rawBody;
+        const preview = previewSource
+          ? ` "${previewSource.slice(0, 12)}${previewSource.length > 12 ? "…" : ""}"`
+          : "";
+        core.system.enqueueSystemEvent(`Assistant sent${preview} [message_id:${displayId}]`, {
+          sessionKey: pending.sessionKey,
+          contextKey: `bluebubbles:outbound:${pending.outboundTarget}:${cacheMessageId}`,
+        });
+      }
+    }
     return;
   }
 
@@ -173,20 +511,31 @@ export async function processMessage(
 
   const dmPolicy = account.config.dmPolicy ?? "pairing";
   const groupPolicy = account.config.groupPolicy ?? "allowlist";
-  const configAllowFrom = (account.config.allowFrom ?? []).map((entry) => String(entry));
-  const configGroupAllowFrom = (account.config.groupAllowFrom ?? []).map((entry) => String(entry));
-  const storeAllowFrom = await core.channel.pairing
-    .readAllowFromStore("bluebubbles")
-    .catch(() => []);
-  const effectiveAllowFrom = [...configAllowFrom, ...storeAllowFrom]
-    .map((entry) => String(entry).trim())
-    .filter(Boolean);
-  const effectiveGroupAllowFrom = [
-    ...(configGroupAllowFrom.length > 0 ? configGroupAllowFrom : configAllowFrom),
-    ...storeAllowFrom,
-  ]
-    .map((entry) => String(entry).trim())
-    .filter(Boolean);
+  const configuredAllowFrom = mapAllowFromEntries(account.config.allowFrom);
+  const storeAllowFrom = await readStoreAllowFromForDmPolicy({
+    provider: "bluebubbles",
+    accountId: account.accountId,
+    dmPolicy,
+    readStore: pairing.readStoreForDmPolicy,
+  });
+  const accessDecision = resolveDmGroupAccessWithLists({
+    isGroup,
+    dmPolicy,
+    groupPolicy,
+    allowFrom: configuredAllowFrom,
+    groupAllowFrom: account.config.groupAllowFrom,
+    storeAllowFrom,
+    isSenderAllowed: (allowFrom) =>
+      isAllowedBlueBubblesSender({
+        allowFrom,
+        sender: message.senderId,
+        chatId: message.chatId ?? undefined,
+        chatGuid: message.chatGuid ?? undefined,
+        chatIdentifier: message.chatIdentifier ?? undefined,
+      }),
+  });
+  const effectiveAllowFrom = accessDecision.effectiveAllowFrom;
+  const effectiveGroupAllowFrom = accessDecision.effectiveGroupAllowFrom;
   const groupAllowEntry = formatGroupAllowlistEntry({
     chatGuid: message.chatGuid,
     chatId: message.chatId ?? undefined,
@@ -194,20 +543,20 @@ export async function processMessage(
   });
   const groupName = message.chatName?.trim() || undefined;
 
-  if (isGroup) {
-    if (groupPolicy === "disabled") {
-      logVerbose(core, runtime, "Blocked BlueBubbles group message (groupPolicy=disabled)");
-      logGroupAllowlistHint({
-        runtime,
-        reason: "groupPolicy=disabled",
-        entry: groupAllowEntry,
-        chatName: groupName,
-        accountId: account.accountId,
-      });
-      return;
-    }
-    if (groupPolicy === "allowlist") {
-      if (effectiveGroupAllowFrom.length === 0) {
+  if (accessDecision.decision !== "allow") {
+    if (isGroup) {
+      if (accessDecision.reasonCode === DM_GROUP_ACCESS_REASON.GROUP_POLICY_DISABLED) {
+        logVerbose(core, runtime, "Blocked BlueBubbles group message (groupPolicy=disabled)");
+        logGroupAllowlistHint({
+          runtime,
+          reason: "groupPolicy=disabled",
+          entry: groupAllowEntry,
+          chatName: groupName,
+          accountId: account.accountId,
+        });
+        return;
+      }
+      if (accessDecision.reasonCode === DM_GROUP_ACCESS_REASON.GROUP_POLICY_EMPTY_ALLOWLIST) {
         logVerbose(core, runtime, "Blocked BlueBubbles group message (no allowlist)");
         logGroupAllowlistHint({
           runtime,
@@ -218,14 +567,7 @@ export async function processMessage(
         });
         return;
       }
-      const allowed = isAllowedBlueBubblesSender({
-        allowFrom: effectiveGroupAllowFrom,
-        sender: message.senderId,
-        chatId: message.chatId ?? undefined,
-        chatGuid: message.chatGuid ?? undefined,
-        chatIdentifier: message.chatIdentifier ?? undefined,
-      });
-      if (!allowed) {
+      if (accessDecision.reasonCode === DM_GROUP_ACCESS_REASON.GROUP_POLICY_NOT_ALLOWLISTED) {
         logVerbose(
           core,
           runtime,
@@ -245,70 +587,58 @@ export async function processMessage(
         });
         return;
       }
+      return;
     }
-  } else {
-    if (dmPolicy === "disabled") {
+
+    if (accessDecision.reasonCode === DM_GROUP_ACCESS_REASON.DM_POLICY_DISABLED) {
       logVerbose(core, runtime, `Blocked BlueBubbles DM from ${message.senderId}`);
       logVerbose(core, runtime, `drop: dmPolicy disabled sender=${message.senderId}`);
       return;
     }
-    if (dmPolicy !== "open") {
-      const allowed = isAllowedBlueBubblesSender({
-        allowFrom: effectiveAllowFrom,
-        sender: message.senderId,
-        chatId: message.chatId ?? undefined,
-        chatGuid: message.chatGuid ?? undefined,
-        chatIdentifier: message.chatIdentifier ?? undefined,
-      });
-      if (!allowed) {
-        if (dmPolicy === "pairing") {
-          const { code, created } = await core.channel.pairing.upsertPairingRequest({
-            channel: "bluebubbles",
-            id: message.senderId,
-            meta: { name: message.senderName },
+
+    if (accessDecision.decision === "pairing") {
+      await issuePairingChallenge({
+        channel: "bluebubbles",
+        senderId: message.senderId,
+        senderIdLine: `Your BlueBubbles sender id: ${message.senderId}`,
+        meta: { name: message.senderName },
+        upsertPairingRequest: pairing.upsertPairingRequest,
+        onCreated: () => {
+          runtime.log?.(`[bluebubbles] pairing request sender=${message.senderId} created=true`);
+          logVerbose(core, runtime, `bluebubbles pairing request sender=${message.senderId}`);
+        },
+        sendPairingReply: async (text) => {
+          await sendMessageBlueBubbles(message.senderId, text, {
+            cfg: config,
+            accountId: account.accountId,
           });
-          runtime.log?.(
-            `[bluebubbles] pairing request sender=${message.senderId} created=${created}`,
-          );
-          if (created) {
-            logVerbose(core, runtime, `bluebubbles pairing request sender=${message.senderId}`);
-            try {
-              await sendMessageBlueBubbles(
-                message.senderId,
-                core.channel.pairing.buildPairingReply({
-                  channel: "bluebubbles",
-                  idLine: `Your BlueBubbles sender id: ${message.senderId}`,
-                  code,
-                }),
-                { cfg: config, accountId: account.accountId },
-              );
-              statusSink?.({ lastOutboundAt: Date.now() });
-            } catch (err) {
-              logVerbose(
-                core,
-                runtime,
-                `bluebubbles pairing reply failed for ${message.senderId}: ${String(err)}`,
-              );
-              runtime.error?.(
-                `[bluebubbles] pairing reply failed sender=${message.senderId}: ${String(err)}`,
-              );
-            }
-          }
-        } else {
+          statusSink?.({ lastOutboundAt: Date.now() });
+        },
+        onReplyError: (err) => {
           logVerbose(
             core,
             runtime,
-            `Blocked unauthorized BlueBubbles sender ${message.senderId} (dmPolicy=${dmPolicy})`,
+            `bluebubbles pairing reply failed for ${message.senderId}: ${String(err)}`,
           );
-          logVerbose(
-            core,
-            runtime,
-            `drop: dm sender not allowed sender=${message.senderId} allowFrom=${effectiveAllowFrom.join(",")}`,
+          runtime.error?.(
+            `[bluebubbles] pairing reply failed sender=${message.senderId}: ${String(err)}`,
           );
-        }
-        return;
-      }
+        },
+      });
+      return;
     }
+
+    logVerbose(
+      core,
+      runtime,
+      `Blocked unauthorized BlueBubbles sender ${message.senderId} (dmPolicy=${dmPolicy})`,
+    );
+    logVerbose(
+      core,
+      runtime,
+      `drop: dm sender not allowed sender=${message.senderId} allowFrom=${effectiveAllowFrom.join(",")}`,
+    );
+    return;
   }
 
   const chatId = message.chatId ?? undefined;
@@ -345,10 +675,11 @@ export async function processMessage(
   // Command gating (parity with iMessage/WhatsApp)
   const useAccessGroups = config.commands?.useAccessGroups !== false;
   const hasControlCmd = core.channel.text.hasControlCommand(messageText, config);
+  const commandDmAllowFrom = isGroup ? configuredAllowFrom : effectiveAllowFrom;
   const ownerAllowedForCommands =
-    effectiveAllowFrom.length > 0
+    commandDmAllowFrom.length > 0
       ? isAllowedBlueBubblesSender({
-          allowFrom: effectiveAllowFrom,
+          allowFrom: commandDmAllowFrom,
           sender: message.senderId,
           chatId: message.chatId ?? undefined,
           chatGuid: message.chatGuid ?? undefined,
@@ -365,17 +696,16 @@ export async function processMessage(
           chatIdentifier: message.chatIdentifier ?? undefined,
         })
       : false;
-  const dmAuthorized = dmPolicy === "open" || ownerAllowedForCommands;
   const commandGate = resolveControlCommandGate({
     useAccessGroups,
     authorizers: [
-      { configured: effectiveAllowFrom.length > 0, allowed: ownerAllowedForCommands },
+      { configured: commandDmAllowFrom.length > 0, allowed: ownerAllowedForCommands },
       { configured: effectiveGroupAllowFrom.length > 0, allowed: groupAllowedForCommands },
     ],
     allowTextCommands: true,
     hasControlCommand: hasControlCmd,
   });
-  const commandAuthorized = isGroup ? commandGate.commandAuthorized : dmAuthorized;
+  const commandAuthorized = commandGate.commandAuthorized;
 
   // Block control commands from unauthorized senders in groups
   if (isGroup && commandGate.shouldBlock) {
@@ -403,8 +733,8 @@ export async function processMessage(
   // surfacing dropped content (allowlist/mention/command gating).
   cacheInboundMessage();
 
-  const baseUrl = account.config.serverUrl?.trim();
-  const password = account.config.password?.trim();
+  const baseUrl = normalizeSecretInputString(account.config.serverUrl);
+  const password = normalizeSecretInputString(account.config.password);
   const maxBytes =
     account.config.mediaMaxMb && account.config.mediaMaxMb > 0
       ? account.config.mediaMaxMb * 1024 * 1024
@@ -506,7 +836,15 @@ export async function processMessage(
       ? `${rawBody} ${replyTag}`
       : `${replyTag} ${rawBody}`
     : rawBody;
-  const fromLabel = isGroup ? undefined : message.senderName || `user:${message.senderId}`;
+  // Build fromLabel the same way as iMessage/Signal (formatInboundFromLabel):
+  // group label + id for groups, sender for DMs.
+  // The sender identity is included in the envelope body via formatInboundEnvelope.
+  const senderLabel = message.senderName || `user:${message.senderId}`;
+  const fromLabel = isGroup
+    ? `${message.chatName?.trim() || "Group"} id:${peerId}`
+    : senderLabel !== message.senderId
+      ? `${senderLabel} id:${message.senderId}`
+      : senderLabel;
   const groupSubject = isGroup ? message.chatName?.trim() || undefined : undefined;
   const groupMembers = isGroup
     ? formatGroupMembers({
@@ -522,13 +860,15 @@ export async function processMessage(
     storePath,
     sessionKey: route.sessionKey,
   });
-  const body = core.channel.reply.formatAgentEnvelope({
+  const body = core.channel.reply.formatInboundEnvelope({
     channel: "BlueBubbles",
     from: fromLabel,
     timestamp: message.timestamp,
     previousTimestamp,
     envelope: envelopeOptions,
     body: baseBody,
+    chatType: isGroup ? "group" : "direct",
+    sender: { name: message.senderName || undefined, id: message.senderId },
   });
   let chatGuidForActions = chatGuid;
   if (!chatGuidForActions && baseUrl && password) {
@@ -619,10 +959,10 @@ export async function processMessage(
       ? formatBlueBubblesChatTarget({ chatGuid: chatGuidForActions })
       : message.senderId;
 
-  const maybeEnqueueOutboundMessageId = (messageId?: string, snippet?: string) => {
+  const maybeEnqueueOutboundMessageId = (messageId?: string, snippet?: string): boolean => {
     const trimmed = messageId?.trim();
     if (!trimmed || trimmed === "ok" || trimmed === "unknown") {
-      return;
+      return false;
     }
     // Cache outbound message to get short ID
     const cacheEntry = rememberBlueBubblesReplyCache({
@@ -641,6 +981,7 @@ export async function processMessage(
       sessionKey: route.sessionKey,
       contextKey: `bluebubbles:outbound:${outboundTarget}:${trimmed}`,
     });
+    return true;
   };
   const sanitizeReplyDirectiveText = (value: string): string => {
     if (privateApiEnabled) {
@@ -652,12 +993,122 @@ export async function processMessage(
       .trim();
   };
 
-  const ctxPayload = {
+  // History: in-memory rolling map with bounded API backfill retries
+  const historyLimit = isGroup
+    ? (account.config.historyLimit ?? 0)
+    : (account.config.dmHistoryLimit ?? 0);
+
+  const historyIdentifier =
+    chatGuid ||
+    chatIdentifier ||
+    (chatId ? String(chatId) : null) ||
+    (isGroup ? null : message.senderId) ||
+    "";
+  const historyKey = historyIdentifier
+    ? buildAccountScopedHistoryKey(account.accountId, historyIdentifier)
+    : "";
+
+  // Record the current message into rolling history
+  if (historyKey && historyLimit > 0) {
+    const nowMs = Date.now();
+    const senderLabel = message.fromMe ? "me" : message.senderName || message.senderId;
+    const normalizedHistoryBody = truncateHistoryBody(text, MAX_STORED_HISTORY_ENTRY_CHARS);
+    const currentEntries = recordPendingHistoryEntryIfEnabled({
+      historyMap: chatHistories,
+      limit: historyLimit,
+      historyKey,
+      entry: normalizedHistoryBody
+        ? {
+            sender: senderLabel,
+            body: normalizedHistoryBody,
+            timestamp: message.timestamp ?? nowMs,
+            messageId: message.messageId ?? undefined,
+          }
+        : null,
+    });
+    pruneHistoryBackfillState();
+
+    const backfillAttempt = planHistoryBackfillAttempt(historyKey, nowMs);
+    if (backfillAttempt) {
+      try {
+        const backfillResult = await fetchBlueBubblesHistory(historyIdentifier, historyLimit, {
+          cfg: config,
+          accountId: account.accountId,
+        });
+        if (backfillResult.resolved) {
+          markHistoryBackfillResolved(historyKey);
+        }
+        if (backfillResult.entries.length > 0) {
+          const apiEntries: HistoryEntry[] = [];
+          for (const entry of backfillResult.entries) {
+            const body = truncateHistoryBody(entry.body, MAX_STORED_HISTORY_ENTRY_CHARS);
+            if (!body) {
+              continue;
+            }
+            apiEntries.push({
+              sender: entry.sender,
+              body,
+              timestamp: entry.timestamp,
+              messageId: entry.messageId,
+            });
+          }
+          const merged = mergeHistoryEntries({
+            apiEntries,
+            currentEntries:
+              currentEntries.length > 0 ? currentEntries : (chatHistories.get(historyKey) ?? []),
+            limit: historyLimit,
+          });
+          if (chatHistories.has(historyKey)) {
+            chatHistories.delete(historyKey);
+          }
+          chatHistories.set(historyKey, merged);
+          evictOldHistoryKeys(chatHistories);
+          logVerbose(
+            core,
+            runtime,
+            `backfilled ${backfillResult.entries.length} history messages for ${isGroup ? "group" : "DM"}: ${historyIdentifier}`,
+          );
+        } else if (!backfillResult.resolved) {
+          const remainingAttempts = HISTORY_BACKFILL_MAX_ATTEMPTS - backfillAttempt.attempts;
+          const nextBackoffMs = Math.max(backfillAttempt.nextAttemptAt - nowMs, 0);
+          logVerbose(
+            core,
+            runtime,
+            `history backfill unresolved for ${historyIdentifier}; retries left=${Math.max(remainingAttempts, 0)} next_in_ms=${nextBackoffMs}`,
+          );
+        }
+      } catch (err) {
+        const remainingAttempts = HISTORY_BACKFILL_MAX_ATTEMPTS - backfillAttempt.attempts;
+        const nextBackoffMs = Math.max(backfillAttempt.nextAttemptAt - nowMs, 0);
+        logVerbose(
+          core,
+          runtime,
+          `history backfill failed for ${historyIdentifier}: ${String(err)} (retries left=${Math.max(remainingAttempts, 0)} next_in_ms=${nextBackoffMs})`,
+        );
+      }
+    }
+  }
+
+  // Build inbound history from the in-memory map
+  let inboundHistory: Array<{ sender: string; body: string; timestamp?: number }> | undefined;
+  if (historyKey && historyLimit > 0) {
+    const entries = chatHistories.get(historyKey);
+    if (entries && entries.length > 0) {
+      inboundHistory = buildInboundHistorySnapshot({
+        entries,
+        limit: historyLimit,
+      });
+    }
+  }
+  const commandBody = messageText.trim();
+
+  const ctxPayload = core.channel.reply.finalizeInboundContext({
     Body: body,
-    BodyForAgent: body,
+    BodyForAgent: rawBody,
+    InboundHistory: inboundHistory,
     RawBody: rawBody,
-    CommandBody: rawBody,
-    BodyForCommands: rawBody,
+    CommandBody: commandBody,
+    BodyForCommands: commandBody,
     MediaUrl: mediaUrls[0],
     MediaUrls: mediaUrls.length > 0 ? mediaUrls : undefined,
     MediaPath: mediaPaths[0],
@@ -689,7 +1140,7 @@ export async function processMessage(
     OriginatingTo: `bluebubbles:${outboundTarget}`,
     WasMentioned: effectiveWasMentioned,
     CommandAuthorized: commandAuthorized,
-  };
+  });
 
   let sentMessage = false;
   let streamingActive = false;
@@ -758,16 +1209,33 @@ export async function processMessage(
             for (const mediaUrl of mediaList) {
               const caption = first ? text : undefined;
               first = false;
-              const result = await sendBlueBubblesMedia({
-                cfg: config,
-                to: outboundTarget,
-                mediaUrl,
-                caption: caption ?? undefined,
-                replyToId: replyToMessageGuid || null,
-                accountId: account.accountId,
-              });
               const cachedBody = (caption ?? "").trim() || "<media:attachment>";
-              maybeEnqueueOutboundMessageId(result.messageId, cachedBody);
+              const pendingId = rememberPendingOutboundMessageId({
+                accountId: account.accountId,
+                sessionKey: route.sessionKey,
+                outboundTarget,
+                chatGuid: chatGuidForActions ?? chatGuid,
+                chatIdentifier,
+                chatId,
+                snippet: cachedBody,
+              });
+              let result: Awaited<ReturnType<typeof sendBlueBubblesMedia>>;
+              try {
+                result = await sendBlueBubblesMedia({
+                  cfg: config,
+                  to: outboundTarget,
+                  mediaUrl,
+                  caption: caption ?? undefined,
+                  replyToId: replyToMessageGuid || null,
+                  accountId: account.accountId,
+                });
+              } catch (err) {
+                forgetPendingOutboundMessageId(pendingId);
+                throw err;
+              }
+              if (maybeEnqueueOutboundMessageId(result.messageId, cachedBody)) {
+                forgetPendingOutboundMessageId(pendingId);
+              }
               sentMessage = true;
               statusSink?.({ lastOutboundAt: Date.now() });
               if (info.kind === "block") {
@@ -801,12 +1269,29 @@ export async function processMessage(
             return;
           }
           for (const chunk of chunks) {
-            const result = await sendMessageBlueBubbles(outboundTarget, chunk, {
-              cfg: config,
+            const pendingId = rememberPendingOutboundMessageId({
               accountId: account.accountId,
-              replyToMessageGuid: replyToMessageGuid || undefined,
+              sessionKey: route.sessionKey,
+              outboundTarget,
+              chatGuid: chatGuidForActions ?? chatGuid,
+              chatIdentifier,
+              chatId,
+              snippet: chunk,
             });
-            maybeEnqueueOutboundMessageId(result.messageId, chunk);
+            let result: Awaited<ReturnType<typeof sendMessageBlueBubbles>>;
+            try {
+              result = await sendMessageBlueBubbles(outboundTarget, chunk, {
+                cfg: config,
+                accountId: account.accountId,
+                replyToMessageGuid: replyToMessageGuid || undefined,
+              });
+            } catch (err) {
+              forgetPendingOutboundMessageId(pendingId);
+              throw err;
+            }
+            if (maybeEnqueueOutboundMessageId(result.messageId, chunk)) {
+              forgetPendingOutboundMessageId(pendingId);
+            }
             sentMessage = true;
             statusSink?.({ lastOutboundAt: Date.now() });
             if (info.kind === "block") {
@@ -905,62 +1390,41 @@ export async function processReaction(
   target: WebhookTarget,
 ): Promise<void> {
   const { account, config, runtime, core } = target;
+  const pairing = createScopedPairingAccess({
+    core,
+    channel: "bluebubbles",
+    accountId: account.accountId,
+  });
   if (reaction.fromMe) {
     return;
   }
 
   const dmPolicy = account.config.dmPolicy ?? "pairing";
   const groupPolicy = account.config.groupPolicy ?? "allowlist";
-  const configAllowFrom = (account.config.allowFrom ?? []).map((entry) => String(entry));
-  const configGroupAllowFrom = (account.config.groupAllowFrom ?? []).map((entry) => String(entry));
-  const storeAllowFrom = await core.channel.pairing
-    .readAllowFromStore("bluebubbles")
-    .catch(() => []);
-  const effectiveAllowFrom = [...configAllowFrom, ...storeAllowFrom]
-    .map((entry) => String(entry).trim())
-    .filter(Boolean);
-  const effectiveGroupAllowFrom = [
-    ...(configGroupAllowFrom.length > 0 ? configGroupAllowFrom : configAllowFrom),
-    ...storeAllowFrom,
-  ]
-    .map((entry) => String(entry).trim())
-    .filter(Boolean);
-
-  if (reaction.isGroup) {
-    if (groupPolicy === "disabled") {
-      return;
-    }
-    if (groupPolicy === "allowlist") {
-      if (effectiveGroupAllowFrom.length === 0) {
-        return;
-      }
-      const allowed = isAllowedBlueBubblesSender({
-        allowFrom: effectiveGroupAllowFrom,
+  const storeAllowFrom = await readStoreAllowFromForDmPolicy({
+    provider: "bluebubbles",
+    accountId: account.accountId,
+    dmPolicy,
+    readStore: pairing.readStoreForDmPolicy,
+  });
+  const accessDecision = resolveDmGroupAccessWithLists({
+    isGroup: reaction.isGroup,
+    dmPolicy,
+    groupPolicy,
+    allowFrom: account.config.allowFrom,
+    groupAllowFrom: account.config.groupAllowFrom,
+    storeAllowFrom,
+    isSenderAllowed: (allowFrom) =>
+      isAllowedBlueBubblesSender({
+        allowFrom,
         sender: reaction.senderId,
         chatId: reaction.chatId ?? undefined,
         chatGuid: reaction.chatGuid ?? undefined,
         chatIdentifier: reaction.chatIdentifier ?? undefined,
-      });
-      if (!allowed) {
-        return;
-      }
-    }
-  } else {
-    if (dmPolicy === "disabled") {
-      return;
-    }
-    if (dmPolicy !== "open") {
-      const allowed = isAllowedBlueBubblesSender({
-        allowFrom: effectiveAllowFrom,
-        sender: reaction.senderId,
-        chatId: reaction.chatId ?? undefined,
-        chatGuid: reaction.chatGuid ?? undefined,
-        chatIdentifier: reaction.chatIdentifier ?? undefined,
-      });
-      if (!allowed) {
-        return;
-      }
-    }
+      }),
+  });
+  if (accessDecision.decision !== "allow") {
+    return;
   }
 
   const chatId = reaction.chatId ?? undefined;

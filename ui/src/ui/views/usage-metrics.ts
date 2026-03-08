@@ -1,4 +1,9 @@
 import { html } from "lit";
+import {
+  buildUsageAggregateTail,
+  mergeUsageDailyLatency,
+  mergeUsageLatency,
+} from "../../../../src/shared/usage-aggregates.js";
 import { UsageSessionEntry, UsageTotals, UsageAggregates } from "./usageTypes.ts";
 
 const CHARS_PER_TOKEN = 4;
@@ -412,16 +417,7 @@ const buildAggregatesFromSessions = (
       }
     }
 
-    if (usage.latency) {
-      const { count, avgMs, minMs, maxMs, p95Ms } = usage.latency;
-      if (count > 0) {
-        latencyTotals.count += count;
-        latencyTotals.sum += avgMs * count;
-        latencyTotals.min = Math.min(latencyTotals.min, minMs);
-        latencyTotals.max = Math.max(latencyTotals.max, maxMs);
-        latencyTotals.p95Max = Math.max(latencyTotals.p95Max, p95Ms);
-      }
-    }
+    mergeUsageLatency(latencyTotals, usage.latency);
 
     if (session.agentId) {
       const totals = agentMap.get(session.agentId) ?? emptyUsageTotals();
@@ -461,22 +457,7 @@ const buildAggregatesFromSessions = (
       daily.errors += day.errors;
       dailyMap.set(day.date, daily);
     }
-    for (const day of usage.dailyLatency ?? []) {
-      const existing = dailyLatencyMap.get(day.date) ?? {
-        date: day.date,
-        count: 0,
-        sum: 0,
-        min: Number.POSITIVE_INFINITY,
-        max: 0,
-        p95Max: 0,
-      };
-      existing.count += day.count;
-      existing.sum += day.avgMs * day.count;
-      existing.min = Math.min(existing.min, day.minMs);
-      existing.max = Math.max(existing.max, day.maxMs);
-      existing.p95Max = Math.max(existing.p95Max, day.p95Ms);
-      dailyLatencyMap.set(day.date, existing);
-    }
+    mergeUsageDailyLatency(dailyLatencyMap, usage.dailyLatency);
     for (const day of usage.dailyModelUsage ?? []) {
       const key = `${day.date}::${day.provider ?? "unknown"}::${day.model ?? "unknown"}`;
       const existing = modelDailyMap.get(key) ?? {
@@ -493,6 +474,14 @@ const buildAggregatesFromSessions = (
       modelDailyMap.set(key, existing);
     }
   }
+
+  const tail = buildUsageAggregateTail({
+    byChannelMap: channelMap,
+    latencyTotals,
+    dailyLatencyMap,
+    modelDailyMap,
+    dailyMap,
+  });
 
   return {
     messages,
@@ -512,33 +501,7 @@ const buildAggregatesFromSessions = (
     byAgent: Array.from(agentMap.entries())
       .map(([agentId, totals]) => ({ agentId, totals }))
       .toSorted((a, b) => b.totals.totalCost - a.totals.totalCost),
-    byChannel: Array.from(channelMap.entries())
-      .map(([channel, totals]) => ({ channel, totals }))
-      .toSorted((a, b) => b.totals.totalCost - a.totals.totalCost),
-    latency:
-      latencyTotals.count > 0
-        ? {
-            count: latencyTotals.count,
-            avgMs: latencyTotals.sum / latencyTotals.count,
-            minMs: latencyTotals.min === Number.POSITIVE_INFINITY ? 0 : latencyTotals.min,
-            maxMs: latencyTotals.max,
-            p95Ms: latencyTotals.p95Max,
-          }
-        : undefined,
-    dailyLatency: Array.from(dailyLatencyMap.values())
-      .map((entry) => ({
-        date: entry.date,
-        count: entry.count,
-        avgMs: entry.count ? entry.sum / entry.count : 0,
-        minMs: entry.min === Number.POSITIVE_INFINITY ? 0 : entry.min,
-        maxMs: entry.max,
-        p95Ms: entry.p95Max,
-      }))
-      .toSorted((a, b) => a.date.localeCompare(b.date)),
-    modelDaily: Array.from(modelDailyMap.values()).toSorted(
-      (a, b) => a.date.localeCompare(b.date) || b.cost - a.cost,
-    ),
-    daily: Array.from(dailyMap.values()).toSorted((a, b) => a.date.localeCompare(b.date)),
+    ...tail,
   };
 };
 

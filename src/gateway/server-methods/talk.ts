@@ -1,6 +1,6 @@
-import type { GatewayRequestHandlers } from "./types.js";
 import { readConfigFileSnapshot } from "../../config/config.js";
 import { redactConfigObject } from "../../config/redact-snapshot.js";
+import { buildTalkConfigResponse } from "../../config/talk.js";
 import {
   ErrorCodes,
   errorShape,
@@ -8,6 +8,7 @@ import {
   validateTalkConfigParams,
   validateTalkModeParams,
 } from "../protocol/index.js";
+import type { GatewayRequestHandlers } from "./types.js";
 
 const ADMIN_SCOPE = "operator.admin";
 const TALK_SECRETS_SCOPE = "operator.talk.secrets";
@@ -15,46 +16,6 @@ const TALK_SECRETS_SCOPE = "operator.talk.secrets";
 function canReadTalkSecrets(client: { connect?: { scopes?: string[] } } | null): boolean {
   const scopes = Array.isArray(client?.connect?.scopes) ? client.connect.scopes : [];
   return scopes.includes(ADMIN_SCOPE) || scopes.includes(TALK_SECRETS_SCOPE);
-}
-
-function normalizeTalkConfigSection(value: unknown): Record<string, unknown> | undefined {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    return undefined;
-  }
-  const source = value as Record<string, unknown>;
-  const talk: Record<string, unknown> = {};
-  if (typeof source.voiceId === "string") {
-    talk.voiceId = source.voiceId;
-  }
-  if (
-    source.voiceAliases &&
-    typeof source.voiceAliases === "object" &&
-    !Array.isArray(source.voiceAliases)
-  ) {
-    const aliases: Record<string, string> = {};
-    for (const [alias, id] of Object.entries(source.voiceAliases as Record<string, unknown>)) {
-      if (typeof id !== "string") {
-        continue;
-      }
-      aliases[alias] = id;
-    }
-    if (Object.keys(aliases).length > 0) {
-      talk.voiceAliases = aliases;
-    }
-  }
-  if (typeof source.modelId === "string") {
-    talk.modelId = source.modelId;
-  }
-  if (typeof source.outputFormat === "string") {
-    talk.outputFormat = source.outputFormat;
-  }
-  if (typeof source.apiKey === "string") {
-    talk.apiKey = source.apiKey;
-  }
-  if (typeof source.interruptOnSpeech === "boolean") {
-    talk.interruptOnSpeech = source.interruptOnSpeech;
-  }
-  return Object.keys(talk).length > 0 ? talk : undefined;
 }
 
 export const talkHandlers: GatewayRequestHandlers = {
@@ -87,7 +48,7 @@ export const talkHandlers: GatewayRequestHandlers = {
     const talkSource = includeSecrets
       ? snapshot.config.talk
       : redactConfigObject(snapshot.config.talk);
-    const talk = normalizeTalkConfigSection(talkSource);
+    const talk = buildTalkConfigResponse(talkSource);
     if (talk) {
       configPayload.talk = talk;
     }

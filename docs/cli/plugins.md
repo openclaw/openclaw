@@ -40,9 +40,23 @@ the plugin from loading and fail config validation.
 
 ```bash
 openclaw plugins install <path-or-spec>
+openclaw plugins install <npm-spec> --pin
 ```
 
 Security note: treat plugin installs like running code. Prefer pinned versions.
+
+Npm specs are **registry-only** (package name + optional **exact version** or
+**dist-tag**). Git/URL/file specs and semver ranges are rejected. Dependency
+installs run with `--ignore-scripts` for safety.
+
+Bare specs and `@latest` stay on the stable track. If npm resolves either of
+those to a prerelease, OpenClaw stops and asks you to opt in explicitly with a
+prerelease tag such as `@beta`/`@rc` or an exact prerelease version such as
+`@1.2.3-beta.4`.
+
+If a bare install spec matches a bundled plugin id (for example `diffs`), OpenClaw
+installs the bundled plugin directly. To install an npm package with the same
+name, use an explicit scoped spec (for example `@scope/diffs`).
 
 Supported archives: `.zip`, `.tgz`, `.tar.gz`, `.tar`.
 
@@ -51,6 +65,9 @@ Use `--link` to avoid copying a local directory (adds to `plugins.load.paths`):
 ```bash
 openclaw plugins install -l ./my-plugin
 ```
+
+Use `--pin` on npm installs to save the resolved exact spec (`name@version`) in
+`plugins.installs` while keeping the default behavior unpinned.
 
 ### Uninstall
 
@@ -79,3 +96,7 @@ openclaw plugins update <id> --dry-run
 ```
 
 Updates only apply to plugins installed from npm (tracked in `plugins.installs`).
+
+When a stored integrity hash exists and the fetched artifact hash changes,
+OpenClaw prints a warning and asks for confirmation before proceeding. Use
+global `--yes` to bypass prompts in CI/non-interactive runs.

@@ -21,6 +21,7 @@ struct GatewayOnboardingView: View {
             }
             .navigationTitle("Connect Gateway")
         }
+        .gatewayTrustPromptAlert()
     }
 }
 
@@ -40,15 +41,17 @@ private struct AutoDetectStep: View {
                     .foregroundStyle(.secondary)
             }
 
-            Section("Connection status") {
-                ConnectionStatusBox(
-                    statusLines: self.connectionStatusLines(),
-                    secondaryLine: self.connectStatusText)
-            }
+            gatewayConnectionStatusSection(
+                appModel: self.appModel,
+                gatewayController: self.gatewayController,
+                secondaryLine: self.connectStatusText)
 
             Section {
                 Button("Retry") {
-                    self.resetConnectionState()
+                    resetGatewayConnectionState(
+                        appModel: self.appModel,
+                        connectStatusText: &self.connectStatusText,
+                        connectingGatewayID: &self.connectingGatewayID)
                     self.triggerAutoConnect()
                 }
                 .disabled(self.connectingGatewayID != nil)
@@ -93,15 +96,6 @@ private struct AutoDetectStep: View {
         return nil
     }
 
-    private func connectionStatusLines() -> [String] {
-        ConnectionStatusBox.defaultLines(appModel: self.appModel, gatewayController: self.gatewayController)
-    }
-
-    private func resetConnectionState() {
-        self.appModel.disconnectGateway()
-        self.connectStatusText = nil
-        self.connectingGatewayID = nil
-    }
 }
 
 private struct ManualEntryStep: View {
@@ -161,11 +155,10 @@ private struct ManualEntryStep: View {
                     .autocorrectionDisabled()
             }
 
-            Section("Connection status") {
-                ConnectionStatusBox(
-                    statusLines: self.connectionStatusLines(),
-                    secondaryLine: self.connectStatusText)
-            }
+            gatewayConnectionStatusSection(
+                appModel: self.appModel,
+                gatewayController: self.gatewayController,
+                secondaryLine: self.connectStatusText)
 
             Section {
                 Button {
@@ -184,7 +177,10 @@ private struct ManualEntryStep: View {
                 .disabled(self.connectingGatewayID != nil)
 
                 Button("Retry") {
-                    self.resetConnectionState()
+                    resetGatewayConnectionState(
+                        appModel: self.appModel,
+                        connectStatusText: &self.connectStatusText,
+                        connectingGatewayID: &self.connectingGatewayID)
                     self.resetManualForm()
                 }
                 .disabled(self.connectingGatewayID != nil)
@@ -236,16 +232,6 @@ private struct ManualEntryStep: View {
         return Int(trimmed.filter { $0.isNumber })
     }
 
-    private func connectionStatusLines() -> [String] {
-        ConnectionStatusBox.defaultLines(appModel: self.appModel, gatewayController: self.gatewayController)
-    }
-
-    private func resetConnectionState() {
-        self.appModel.disconnectGateway()
-        self.connectStatusText = nil
-        self.connectingGatewayID = nil
-    }
-
     private func resetManualForm() {
         self.setupCode = ""
         self.setupStatusText = nil
@@ -256,15 +242,6 @@ private struct ManualEntryStep: View {
         self.manualPassword = ""
     }
 
-    private struct SetupPayload: Codable {
-        var url: String?
-        var host: String?
-        var port: Int?
-        var tls: Bool?
-        var token: String?
-        var password: String?
-    }
-
     private func applySetupCode() {
         let raw = self.setupCode.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !raw.isEmpty else {
@@ -272,7 +249,7 @@ private struct ManualEntryStep: View {
             return
         }
 
-        guard let payload = self.decodeSetupPayload(raw: raw) else {
+        guard let payload = GatewaySetupCode.decode(raw: raw) else {
             self.setupStatusText = "Setup code not recognized."
             return
         }
@@ -322,33 +299,41 @@ private struct ManualEntryStep: View {
         }
     }
 
-    private func decodeSetupPayload(raw: String) -> SetupPayload? {
-        if let payload = decodeSetupPayloadFromJSON(raw) {
-            return payload
-        }
-        if let decoded = decodeBase64Payload(raw),
-           let payload = decodeSetupPayloadFromJSON(decoded)
-        {
-            return payload
-        }
-        return nil
-    }
+    // (GatewaySetupCode) decode raw setup codes.
+}
 
-    private func decodeSetupPayloadFromJSON(_ json: String) -> SetupPayload? {
-        guard let data = json.data(using: .utf8) else { return nil }
-        return try? JSONDecoder().decode(SetupPayload.self, from: data)
-    }
+@MainActor
+private func gatewayConnectionStatusLines(
+    appModel: NodeAppModel,
+    gatewayController: GatewayConnectionController) -> [String]
+{
+    ConnectionStatusBox.defaultLines(appModel: appModel, gatewayController: gatewayController)
+}
 
-    private func decodeBase64Payload(_ raw: String) -> String? {
-        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return nil }
-        let normalized = trimmed
-            .replacingOccurrences(of: "-", with: "+")
-            .replacingOccurrences(of: "_", with: "/")
-        let padding = normalized.count % 4
-        let padded = padding == 0 ? normalized : normalized + String(repeating: "=", count: 4 - padding)
-        guard let data = Data(base64Encoded: padded) else { return nil }
-        return String(data: data, encoding: .utf8)
+@MainActor
+private func resetGatewayConnectionState(
+    appModel: NodeAppModel,
+    connectStatusText: inout String?,
+    connectingGatewayID: inout String?)
+{
+    appModel.disconnectGateway()
+    connectStatusText = nil
+    connectingGatewayID = nil
+}
+
+@MainActor
+@ViewBuilder
+private func gatewayConnectionStatusSection(
+    appModel: NodeAppModel,
+    gatewayController: GatewayConnectionController,
+    secondaryLine: String?) -> some View
+{
+    Section("Connection status") {
+        ConnectionStatusBox(
+            statusLines: gatewayConnectionStatusLines(
+                appModel: appModel,
+                gatewayController: gatewayController),
+            secondaryLine: secondaryLine)
     }
 }
 

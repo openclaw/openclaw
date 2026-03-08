@@ -1,11 +1,16 @@
 export {
   clearConfigCache,
+  clearRuntimeConfigSnapshot,
   createConfigIO,
+  getRuntimeConfigSnapshot,
+  getRuntimeConfigSourceSnapshot,
   loadConfig,
+  readBestEffortConfig,
   parseConfigJson5,
   readConfigFileSnapshot,
   readConfigFileSnapshotForWrite,
   resolveConfigSnapshotHash,
+  setRuntimeConfigSnapshot,
   writeConfigFile,
 } from "./io.js";
 export { migrateLegacyConfig } from "./legacy-migrate.js";
@@ -18,4 +23,3 @@ export {
   validateConfigObjectRawWithPlugins,
   validateConfigObjectWithPlugins,
 } from "./validation.js";
-export { OpenClawSchema } from "./zod-schema.js";

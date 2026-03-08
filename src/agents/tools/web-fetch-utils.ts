@@ -1,4 +1,9 @@
+import { sanitizeHtml, stripInvisibleUnicode } from "./web-fetch-visibility.js";
+
 export type ExtractMode = "markdown" | "text";
+
+const READABILITY_MAX_HTML_CHARS = 1_000_000;
+const READABILITY_MAX_ESTIMATED_NESTING_DEPTH = 3_000;
 
 let readabilityDepsPromise:
   | Promise<{
@@ -107,22 +112,125 @@ export function truncateText(
   return { text: value.slice(0, maxChars), truncated: true };
 }
 
+function exceedsEstimatedHtmlNestingDepth(html: string, maxDepth: number): boolean {
+  // Cheap heuristic to skip Readability+DOM parsing on pathological HTML (deep nesting => stack/memory blowups).
+  // Not an HTML parser; tuned to catch attacker-controlled "<div><div>..." cases.
+  const voidTags = new Set([
+    "area",
+    "base",
+    "br",
+    "col",
+    "embed",
+    "hr",
+    "img",
+    "input",
+    "link",
+    "meta",
+    "param",
+    "source",
+    "track",
+    "wbr",
+  ]);
+
+  let depth = 0;
+  const len = html.length;
+  for (let i = 0; i < len; i++) {
+    if (html.charCodeAt(i) !== 60) {
+      continue; // '<'
+    }
+    const next = html.charCodeAt(i + 1);
+    if (next === 33 || next === 63) {
+      continue; // <! ...> or <? ...>
+    }
+
+    let j = i + 1;
+    let closing = false;
+    if (html.charCodeAt(j) === 47) {
+      closing = true;
+      j += 1;
+    }
+
+    while (j < len && html.charCodeAt(j) <= 32) {
+      j += 1;
+    }
+
+    const nameStart = j;
+    while (j < len) {
+      const c = html.charCodeAt(j);
+      const isNameChar =
+        (c >= 65 && c <= 90) || // A-Z
+        (c >= 97 && c <= 122) || // a-z
+        (c >= 48 && c <= 57) || // 0-9
+        c === 58 || // :
+        c === 45; // -
+      if (!isNameChar) {
+        break;
+      }
+      j += 1;
+    }
+
+    const tagName = html.slice(nameStart, j).toLowerCase();
+    if (!tagName) {
+      continue;
+    }
+
+    if (closing) {
+      depth = Math.max(0, depth - 1);
+      continue;
+    }
+
+    if (voidTags.has(tagName)) {
+      continue;
+    }
+
+    // Best-effort self-closing detection: scan a short window for "/>".
+    let selfClosing = false;
+    for (let k = j; k < len && k < j + 200; k++) {
+      const c = html.charCodeAt(k);
+      if (c === 62) {
+        if (html.charCodeAt(k - 1) === 47) {
+          selfClosing = true;
+        }
+        break;
+      }
+    }
+    if (selfClosing) {
+      continue;
+    }
+
+    depth += 1;
+    if (depth > maxDepth) {
+      return true;
+    }
+  }
+  return false;
+}
+
 export async function extractReadableContent(params: {
   html: string;
   url: string;
   extractMode: ExtractMode;
 }): Promise<{ text: string; title?: string } | null> {
+  const cleanHtml = await sanitizeHtml(params.html);
   const fallback = (): { text: string; title?: string } => {
-    const rendered = htmlToMarkdown(params.html);
+    const rendered = htmlToMarkdown(cleanHtml);
     if (params.extractMode === "text") {
-      const text = markdownToText(rendered.text) || normalizeWhitespace(stripTags(params.html));
+      const text =
+        stripInvisibleUnicode(markdownToText(rendered.text)) ||
+        stripInvisibleUnicode(normalizeWhitespace(stripTags(cleanHtml)));
       return { text, title: rendered.title };
     }
-    return rendered;
+    return { text: stripInvisibleUnicode(rendered.text), title: rendered.title };
   };
+  if (
+    cleanHtml.length > READABILITY_MAX_HTML_CHARS ||
+    exceedsEstimatedHtmlNestingDepth(cleanHtml, READABILITY_MAX_ESTIMATED_NESTING_DEPTH)
+  ) {
+    return fallback();
+  }
   try {
     const { Readability, parseHTML } = await loadReadabilityDeps();
-    const { document } = parseHTML(params.html);
+    const { document } = parseHTML(cleanHtml);
     try {
       (document as { baseURI?: string }).baseURI = params.url;
     } catch {
@@ -135,11 +243,11 @@ export async function extractReadableContent(params: {
     }
     const title = parsed.title || undefined;
     if (params.extractMode === "text") {
-      const text = normalizeWhitespace(parsed.textContent ?? "");
+      const text = stripInvisibleUnicode(normalizeWhitespace(parsed.textContent ?? ""));
       return text ? { text, title } : fallback();
     }
     const rendered = htmlToMarkdown(parsed.content);
-    return { text: rendered.text, title: title ?? rendered.title };
+    return { text: stripInvisibleUnicode(rendered.text), title: title ?? rendered.title };
   } catch {
     return fallback();
   }

@@ -1,16 +1,14 @@
 import type { Api, Model } from "@mariozechner/pi-ai";
-import type { ModelRegistry } from "../../agents/pi-model-discovery.js";
-import type { RuntimeEnv } from "../../runtime.js";
-import type { ModelRow } from "./list.types.js";
-import { ensureAuthProfileStore } from "../../agents/auth-profiles.js";
-import { resolveForwardCompatModel } from "../../agents/model-forward-compat.js";
+import type { ModelRegistry } from "@mariozechner/pi-coding-agent";
 import { parseModelRef } from "../../agents/model-selection.js";
-import { resolveModel } from "../../agents/pi-embedded-runner/model.js";
-import { loadConfig } from "../../config/config.js";
+import { resolveModelWithRegistry } from "../../agents/pi-embedded-runner/model.js";
+import type { RuntimeEnv } from "../../runtime.js";
 import { resolveConfiguredEntries } from "./list.configured.js";
 import { formatErrorWithStack } from "./list.errors.js";
 import { loadModelRegistry, toModelRow } from "./list.registry.js";
 import { printModelTable } from "./list.table.js";
+import type { ModelRow } from "./list.types.js";
+import { loadModelsConfigWithSource } from "./load-config.js";
 import { DEFAULT_PROVIDER, ensureFlagCompatibility, isLocalBaseUrl, modelKey } from "./shared.js";
 
 export async function modelsListCommand(
@@ -24,7 +22,11 @@ export async function modelsListCommand(
   runtime: RuntimeEnv,
 ) {
   ensureFlagCompatibility(opts);
-  const cfg = loadConfig();
+  const { ensureAuthProfileStore } = await import("../../agents/auth-profiles.js");
+  const { sourceConfig, resolvedConfig: cfg } = await loadModelsConfigWithSource({
+    commandName: "models list",
+    runtime,
+  });
   const authStore = ensureAuthProfileStore();
   const providerFilter = (() => {
     const raw = opts.provider?.trim();
@@ -40,7 +42,7 @@ export async function modelsListCommand(
   let availableKeys: Set<string> | undefined;
   let availabilityErrorMessage: string | undefined;
   try {
-    const loaded = await loadModelRegistry(cfg);
+    const loaded = await loadModelRegistry(cfg, { sourceConfig });
     modelRegistry = loaded.registry;
     models = loaded.models;
     availableKeys = loaded.availableKeys;
@@ -55,8 +57,7 @@ export async function modelsListCommand(
       `Model availability lookup failed; falling back to auth heuristics for discovered models: ${availabilityErrorMessage}`,
     );
   }
-
-  const modelByKey = new Map(models.map((model) => [modelKey(model.provider, model.id), model]));
+  const discoveredKeys = new Set(models.map((model) => modelKey(model.provider, model.id)));
 
   const { entries } = resolveConfiguredEntries(cfg);
   const configuredByKey = new Map(entries.map((entry) => [entry.key, entry]));
@@ -94,25 +95,22 @@ export async function modelsListCommand(
       );
     }
   } else {
+    const registry = modelRegistry;
+    if (!registry) {
+      runtime.error("Model registry unavailable.");
+      process.exitCode = 1;
+      return;
+    }
     for (const entry of entries) {
       if (providerFilter && entry.ref.provider.toLowerCase() !== providerFilter) {
         continue;
       }
-      let model = modelByKey.get(entry.key);
-      if (!model && modelRegistry) {
-        const forwardCompat = resolveForwardCompatModel(
-          entry.ref.provider,
-          entry.ref.model,
-          modelRegistry,
-        );
-        if (forwardCompat) {
-          model = forwardCompat;
-          modelByKey.set(entry.key, forwardCompat);
-        }
-      }
-      if (!model) {
-        model = resolveModel(entry.ref.provider, entry.ref.model, undefined, cfg).model;
-      }
+      const model = resolveModelWithRegistry({
+        provider: entry.ref.provider,
+        modelId: entry.ref.model,
+        modelRegistry: registry,
+        cfg,
+      });
       if (opts.local && model && !isLocalBaseUrl(model.baseUrl)) {
         continue;
       }
@@ -128,6 +126,9 @@ export async function modelsListCommand(
           availableKeys,
           cfg,
           authStore,
+          allowProviderAvailabilityFallback: model
+            ? !discoveredKeys.has(modelKey(model.provider, model.id))
+            : false,
         }),
       );
     }

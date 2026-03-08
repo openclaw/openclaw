@@ -79,10 +79,15 @@ export type ReadRequestBodyOptions = {
   encoding?: BufferEncoding;
 };
 
-export async function readRequestBodyWithLimit(
-  req: IncomingMessage,
-  options: ReadRequestBodyOptions,
-): Promise<string> {
+type RequestBodyLimitValues = {
+  maxBytes: number;
+  timeoutMs: number;
+};
+
+function resolveRequestBodyLimitValues(options: {
+  maxBytes: number;
+  timeoutMs?: number;
+}): RequestBodyLimitValues {
   const maxBytes = Number.isFinite(options.maxBytes)
     ? Math.max(1, Math.floor(options.maxBytes))
     : 1;
@@ -90,13 +95,23 @@ export async function readRequestBodyWithLimit(
     typeof options.timeoutMs === "number" && Number.isFinite(options.timeoutMs)
       ? Math.max(1, Math.floor(options.timeoutMs))
       : DEFAULT_WEBHOOK_BODY_TIMEOUT_MS;
+  return { maxBytes, timeoutMs };
+}
+
+export async function readRequestBodyWithLimit(
+  req: IncomingMessage,
+  options: ReadRequestBodyOptions,
+): Promise<string> {
+  const { maxBytes, timeoutMs } = resolveRequestBodyLimitValues(options);
   const encoding = options.encoding ?? "utf-8";
 
   const declaredLength = parseContentLengthHeader(req);
   if (declaredLength !== null && declaredLength > maxBytes) {
     const error = new RequestBodyLimitError({ code: "PAYLOAD_TOO_LARGE" });
     if (!req.destroyed) {
-      req.destroy(error);
+      // Limit violations are expected user input; destroying with an Error causes
+      // an async 'error' event which can crash the process if no listener remains.
+      req.destroy();
     }
     throw error;
   }
@@ -131,7 +146,7 @@ export async function readRequestBodyWithLimit(
     const timer = setTimeout(() => {
       const error = new RequestBodyLimitError({ code: "REQUEST_BODY_TIMEOUT" });
       if (!req.destroyed) {
-        req.destroy(error);
+        req.destroy();
       }
       fail(error);
     }, timeoutMs);
@@ -145,7 +160,7 @@ export async function readRequestBodyWithLimit(
       if (totalBytes > maxBytes) {
         const error = new RequestBodyLimitError({ code: "PAYLOAD_TOO_LARGE" });
         if (!req.destroyed) {
-          req.destroy(error);
+          req.destroy();
         }
         fail(error);
         return;
@@ -239,13 +254,7 @@ export function installRequestBodyLimitGuard(
   res: ServerResponse,
   options: RequestBodyLimitGuardOptions,
 ): RequestBodyLimitGuard {
-  const maxBytes = Number.isFinite(options.maxBytes)
-    ? Math.max(1, Math.floor(options.maxBytes))
-    : 1;
-  const timeoutMs =
-    typeof options.timeoutMs === "number" && Number.isFinite(options.timeoutMs)
-      ? Math.max(1, Math.floor(options.timeoutMs))
-      : DEFAULT_WEBHOOK_BODY_TIMEOUT_MS;
+  const { maxBytes, timeoutMs } = resolveRequestBodyLimitValues(options);
   const responseFormat = options.responseFormat ?? "json";
   const customText = options.responseText ?? {};
 
@@ -294,7 +303,9 @@ export function installRequestBodyLimitGuard(
     finish();
     respond(error);
     if (!req.destroyed) {
-      req.destroy(error);
+      // Limit violations are expected user input; destroying with an Error causes
+      // an async 'error' event which can crash the process if no listener remains.
+      req.destroy();
     }
   };
 

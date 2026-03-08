@@ -1,14 +1,14 @@
-import type { ApplyAuthChoiceParams, ApplyAuthChoiceResult } from "./auth-choice.apply.js";
 import {
   discoverHuggingfaceModels,
   isHuggingfacePolicyLocked,
 } from "../agents/huggingface-models.js";
-import { resolveEnvApiKey } from "../agents/model-auth.js";
+import { normalizeApiKeyInput, validateApiKeyInput } from "./auth-choice.api-key.js";
 import {
-  formatApiKeyPreview,
-  normalizeApiKeyInput,
-  validateApiKeyInput,
-} from "./auth-choice.api-key.js";
+  createAuthChoiceAgentModelNoter,
+  ensureApiKeyFromOptionEnvOrPrompt,
+  normalizeSecretInputModeInput,
+} from "./auth-choice.apply-helpers.js";
+import type { ApplyAuthChoiceParams, ApplyAuthChoiceResult } from "./auth-choice.apply.js";
 import { applyDefaultModelChoice } from "./auth-choice.default-model.js";
 import { ensureModelAllowlistEntry } from "./model-allowlist.js";
 import {
@@ -27,57 +27,29 @@ export async function applyAuthChoiceHuggingface(
 
   let nextConfig = params.config;
   let agentModelOverride: string | undefined;
-  const noteAgentModel = async (model: string) => {
-    if (!params.agentId) {
-      return;
-    }
-    await params.prompter.note(
-      `Default model set to ${model} for agent "${params.agentId}".`,
-      "Model configured",
-    );
-  };
+  const noteAgentModel = createAuthChoiceAgentModelNoter(params);
+  const requestedSecretInputMode = normalizeSecretInputModeInput(params.opts?.secretInputMode);
 
-  let hasCredential = false;
-  let hfKey = "";
-
-  if (!hasCredential && params.opts?.token && params.opts.tokenProvider === "huggingface") {
-    hfKey = normalizeApiKeyInput(params.opts.token);
-    await setHuggingfaceApiKey(hfKey, params.agentDir);
-    hasCredential = true;
-  }
-
-  if (!hasCredential) {
-    await params.prompter.note(
-      [
-        "Hugging Face Inference Providers offer OpenAI-compatible chat completions.",
-        "Create a token at: https://huggingface.co/settings/tokens (fine-grained, 'Make calls to Inference Providers').",
-      ].join("\n"),
-      "Hugging Face",
-    );
-  }
-
-  if (!hasCredential) {
-    const envKey = resolveEnvApiKey("huggingface");
-    if (envKey) {
-      const useExisting = await params.prompter.confirm({
-        message: `Use existing Hugging Face token (${envKey.source}, ${formatApiKeyPreview(envKey.apiKey)})?`,
-        initialValue: true,
-      });
-      if (useExisting) {
-        hfKey = envKey.apiKey;
-        await setHuggingfaceApiKey(hfKey, params.agentDir);
-        hasCredential = true;
-      }
-    }
-  }
-  if (!hasCredential) {
-    const key = await params.prompter.text({
-      message: "Enter Hugging Face API key (HF token)",
-      validate: validateApiKeyInput,
-    });
-    hfKey = normalizeApiKeyInput(String(key ?? ""));
-    await setHuggingfaceApiKey(hfKey, params.agentDir);
-  }
+  const hfKey = await ensureApiKeyFromOptionEnvOrPrompt({
+    token: params.opts?.token,
+    tokenProvider: params.opts?.tokenProvider,
+    secretInputMode: requestedSecretInputMode,
+    config: nextConfig,
+    expectedProviders: ["huggingface"],
+    provider: "huggingface",
+    envLabel: "Hugging Face token",
+    promptMessage: "Enter Hugging Face API key (HF token)",
+    normalize: normalizeApiKeyInput,
+    validate: validateApiKeyInput,
+    prompter: params.prompter,
+    setCredential: async (apiKey, mode) =>
+      setHuggingfaceApiKey(apiKey, params.agentDir, { secretInputMode: mode }),
+    noteMessage: [
+      "Hugging Face Inference Providers offer OpenAI-compatible chat completions.",
+      "Create a token at: https://huggingface.co/settings/tokens (fine-grained, 'Make calls to Inference Providers').",
+    ].join("\n"),
+    noteTitle: "Hugging Face",
+  });
   nextConfig = applyAuthProfileConfig(nextConfig, {
     profileId: "huggingface:default",
     provider: "huggingface",

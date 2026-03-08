@@ -2,41 +2,43 @@ import { describe, expect, it } from "vitest";
 import { resolveDiscordPresenceUpdate } from "./presence.js";
 
 describe("resolveDiscordPresenceUpdate", () => {
-  it("returns null when no presence config provided", () => {
-    expect(resolveDiscordPresenceUpdate({})).toBeNull();
+  it("returns online presence when no config is provided", () => {
+    const result = resolveDiscordPresenceUpdate({});
+    expect(result).not.toBeNull();
+    expect(result!.status).toBe("online");
+    expect(result!.activities).toEqual([]);
   });
 
-  it("returns status-only presence when activity is omitted", () => {
-    const presence = resolveDiscordPresenceUpdate({ status: "dnd" });
-    expect(presence).not.toBeNull();
-    expect(presence?.status).toBe("dnd");
-    expect(presence?.activities).toEqual([]);
+  it("uses configured status", () => {
+    const result = resolveDiscordPresenceUpdate({ status: "dnd" });
+    expect(result!.status).toBe("dnd");
   });
 
-  it("defaults to custom activity type when activity is set without type", () => {
-    const presence = resolveDiscordPresenceUpdate({ activity: "Focus time" });
-    expect(presence).not.toBeNull();
-    expect(presence?.status).toBe("online");
-    expect(presence?.activities).toHaveLength(1);
-    expect(presence?.activities[0]).toMatchObject({
-      type: 4,
-      name: "Custom Status",
-      state: "Focus time",
-    });
+  it("includes activity when configured", () => {
+    const result = resolveDiscordPresenceUpdate({ activity: "Helping humans" });
+    expect(result!.status).toBe("online");
+    expect(result!.activities).toHaveLength(1);
+    expect(result!.activities[0].state).toBe("Helping humans");
   });
 
-  it("includes streaming url when activityType is streaming", () => {
-    const presence = resolveDiscordPresenceUpdate({
+  it("uses custom activity type by default", () => {
+    const result = resolveDiscordPresenceUpdate({ activity: "test" });
+    expect(result!.activities[0].type).toBe(4);
+    expect(result!.activities[0].name).toBe("Custom Status");
+  });
+
+  it("respects explicit activityType", () => {
+    const result = resolveDiscordPresenceUpdate({ activity: "test", activityType: 3 });
+    expect(result!.activities[0].type).toBe(3);
+    expect(result!.activities[0].name).toBe("test");
+  });
+
+  it("sets streaming URL for type 1", () => {
+    const result = resolveDiscordPresenceUpdate({
       activity: "Live",
       activityType: 1,
-      activityUrl: "https://twitch.tv/openclaw",
+      activityUrl: "https://twitch.tv/test",
     });
-    expect(presence).not.toBeNull();
-    expect(presence?.activities).toHaveLength(1);
-    expect(presence?.activities[0]).toMatchObject({
-      type: 1,
-      name: "Live",
-      url: "https://twitch.tv/openclaw",
-    });
+    expect(result!.activities[0].url).toBe("https://twitch.tv/test");
   });
 });

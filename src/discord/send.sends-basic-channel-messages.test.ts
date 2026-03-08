@@ -1,5 +1,10 @@
 import { ChannelType, PermissionFlagsBits, Routes } from "discord-api-types/v10";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { loadWebMedia } from "../web/media.js";
+import {
+  __resetDiscordDirectoryCacheForTest,
+  rememberDiscordDirectoryUser,
+} from "./directory-cache.js";
 import {
   deleteMessageDiscord,
   editMessageDiscord,
@@ -14,51 +19,59 @@ import {
   sendMessageDiscord,
   unpinMessageDiscord,
 } from "./send.js";
+import { makeDiscordRest } from "./send.test-harness.js";
 
-vi.mock("../web/media.js", () => ({
-  loadWebMedia: vi.fn().mockResolvedValue({
-    buffer: Buffer.from("img"),
-    fileName: "photo.jpg",
-    contentType: "image/jpeg",
-    kind: "image",
-  }),
-  loadWebMediaRaw: vi.fn().mockResolvedValue({
-    buffer: Buffer.from("img"),
-    fileName: "asset.png",
-    contentType: "image/png",
-    kind: "image",
-  }),
-}));
-
-const makeRest = () => {
-  const postMock = vi.fn();
-  const putMock = vi.fn();
-  const getMock = vi.fn();
-  const patchMock = vi.fn();
-  const deleteMock = vi.fn();
-  return {
-    rest: {
-      post: postMock,
-      put: putMock,
-      get: getMock,
-      patch: patchMock,
-      delete: deleteMock,
-    } as unknown as import("@buape/carbon").RequestClient,
-    postMock,
-    putMock,
-    getMock,
-    patchMock,
-    deleteMock,
-  };
-};
+vi.mock("../web/media.js", async () => {
+  const { discordWebMediaMockFactory } = await import("./send.test-harness.js");
+  return discordWebMediaMockFactory();
+});
 
 describe("sendMessageDiscord", () => {
+  function expectReplyReference(
+    body: { message_reference?: unknown } | undefined,
+    messageId: string,
+  ) {
+    expect(body?.message_reference).toEqual({
+      message_id: messageId,
+      fail_if_not_exists: false,
+    });
+  }
+
+  async function sendChunkedReplyAndCollectBodies(params: { text: string; mediaUrl?: string }) {
+    const { rest, postMock } = makeDiscordRest();
+    postMock.mockResolvedValue({ id: "msg1", channel_id: "789" });
+    await sendMessageDiscord("channel:789", params.text, {
+      rest,
+      token: "t",
+      replyTo: "orig-123",
+      ...(params.mediaUrl ? { mediaUrl: params.mediaUrl } : {}),
+    });
+    expect(postMock).toHaveBeenCalledTimes(2);
+    return {
+      firstBody: postMock.mock.calls[0]?.[1]?.body as { message_reference?: unknown } | undefined,
+      secondBody: postMock.mock.calls[1]?.[1]?.body as { message_reference?: unknown } | undefined,
+    };
+  }
+
+  function setupForumSend(secondResponse: { id: string; channel_id: string }) {
+    const { rest, postMock, getMock } = makeDiscordRest();
+    getMock.mockResolvedValueOnce({ type: ChannelType.GuildForum });
+    postMock
+      .mockResolvedValueOnce({
+        id: "thread1",
+        message: { id: "starter1", channel_id: "thread1" },
+      })
+      .mockResolvedValueOnce(secondResponse);
+    return { rest, postMock };
+  }
+
   beforeEach(() => {
     vi.clearAllMocks();
+    __resetDiscordDirectoryCacheForTest();
   });
 
   it("sends basic channel messages", async () => {
-    const { rest, postMock, getMock } = makeRest();
+    const { rest, postMock, getMock } = makeDiscordRest();
     // Channel type lookup returns a normal text channel (not a forum).
     getMock.mockResolvedValueOnce({ type: ChannelType.GuildText });
     postMock.mockResolvedValue({
@@ -76,8 +89,31 @@ describe("sendMessageDiscord", () => {
     );
   });
 
+  it("rewrites cached @username mentions to id-based mentions", async () => {
+    rememberDiscordDirectoryUser({
+      accountId: "default",
+      userId: "123456789012345678",
+      handles: ["Alice"],
+    });
+    const { rest, postMock, getMock } = makeDiscordRest();
+    getMock.mockResolvedValueOnce({ type: ChannelType.GuildText });
+    postMock.mockResolvedValue({
+      id: "msg1",
+      channel_id: "789",
+    });
+    await sendMessageDiscord("channel:789", "ping @Alice", {
+      rest,
+      token: "t",
+      accountId: "default",
+    });
+    expect(postMock).toHaveBeenCalledWith(
+      Routes.channelMessages("789"),
+      expect.objectContaining({ body: { content: "ping <@123456789012345678>" } }),
+    );
+  });
+
   it("auto-creates a forum thread when target is a Forum channel", async () => {
-    const { rest, postMock, getMock } = makeRest();
+    const { rest, postMock, getMock } = makeDiscordRest();
     // Channel type lookup returns a Forum channel.
     getMock.mockResolvedValueOnce({ type: ChannelType.GuildForum });
     postMock.mockResolvedValue({
@@ -102,14 +138,7 @@ describe("sendMessageDiscord", () => {
   });
 
   it("posts media as a follow-up message in forum channels", async () => {
-    const { rest, postMock, getMock } = makeRest();
-    getMock.mockResolvedValueOnce({ type: ChannelType.GuildForum });
-    postMock
-      .mockResolvedValueOnce({
-        id: "thread1",
-        message: { id: "starter1", channel_id: "thread1" },
-      })
-      .mockResolvedValueOnce({ id: "media1", channel_id: "thread1" });
+    const { rest, postMock } = setupForumSend({ id: "media1", channel_id: "thread1" });
     const res = await sendMessageDiscord("channel:forum1", "Topic", {
       rest,
       token: "t",
@@ -138,14 +167,7 @@ describe("sendMessageDiscord", () => {
   });
 
   it("chunks long forum posts into follow-up messages", async () => {
-    const { rest, postMock, getMock } = makeRest();
-    getMock.mockResolvedValueOnce({ type: ChannelType.GuildForum });
-    postMock
-      .mockResolvedValueOnce({
-        id: "thread1",
-        message: { id: "starter1", channel_id: "thread1" },
-      })
-      .mockResolvedValueOnce({ id: "msg2", channel_id: "thread1" });
+    const { rest, postMock } = setupForumSend({ id: "msg2", channel_id: "thread1" });
     const longText = "a".repeat(2001);
     await sendMessageDiscord("channel:forum1", longText, {
       rest,
@@ -160,7 +182,7 @@ describe("sendMessageDiscord", () => {
   });
 
   it("starts DM when recipient is a user", async () => {
-    const { rest, postMock } = makeRest();
+    const { rest, postMock } = makeDiscordRest();
     postMock
       .mockResolvedValueOnce({ id: "chan1" })
       .mockResolvedValueOnce({ id: "msg1", channel_id: "chan1" });
@@ -182,7 +204,7 @@ describe("sendMessageDiscord", () => {
   });
 
   it("rejects bare numeric IDs as ambiguous", async () => {
-    const { rest } = makeRest();
+    const { rest } = makeDiscordRest();
     await expect(
       sendMessageDiscord("273512430271856640", "hello", { rest, token: "t" }),
     ).rejects.toThrow(/Ambiguous Discord recipient/);
@@ -195,7 +217,7 @@ describe("sendMessageDiscord", () => {
   });
 
   it("adds missing permission hints on 50013", async () => {
-    const { rest, postMock, getMock } = makeRest();
+    const { rest, postMock, getMock } = makeDiscordRest();
     const perms = PermissionFlagsBits.ViewChannel;
     const apiError = Object.assign(new Error("Missing Permissions"), {
       code: 50013,
@@ -228,7 +250,7 @@ describe("sendMessageDiscord", () => {
   });
 
   it("uploads media attachments", async () => {
-    const { rest, postMock } = makeRest();
+    const { rest, postMock } = makeDiscordRest();
     postMock.mockResolvedValue({ id: "msg", channel_id: "789" });
     const res = await sendMessageDiscord("channel:789", "photo", {
       rest,
@@ -244,10 +266,37 @@ describe("sendMessageDiscord", () => {
         }),
       }),
     );
+    expect(loadWebMedia).toHaveBeenCalledWith(
+      "file:///tmp/photo.jpg",
+      expect.objectContaining({ maxBytes: 8 * 1024 * 1024 }),
+    );
+  });
+
+  it("uses configured discord mediaMaxMb for uploads", async () => {
+    const { rest, postMock } = makeDiscordRest();
+    postMock.mockResolvedValue({ id: "msg", channel_id: "789" });
+
+    await sendMessageDiscord("channel:789", "photo", {
+      rest,
+      token: "t",
+      mediaUrl: "file:///tmp/photo.jpg",
+      cfg: {
+        channels: {
+          discord: {
+            mediaMaxMb: 32,
+          },
+        },
+      },
+    });
+
+    expect(loadWebMedia).toHaveBeenCalledWith(
+      "file:///tmp/photo.jpg",
+      expect.objectContaining({ maxBytes: 32 * 1024 * 1024 }),
+    );
   });
 
   it("sends media with empty text without content field", async () => {
-    const { rest, postMock } = makeRest();
+    const { rest, postMock } = makeDiscordRest();
     postMock.mockResolvedValue({ id: "msg", channel_id: "789" });
     const res = await sendMessageDiscord("channel:789", "", {
       rest,
@@ -261,7 +310,7 @@ describe("sendMessageDiscord", () => {
   });
 
   it("preserves whitespace in media captions", async () => {
-    const { rest, postMock } = makeRest();
+    const { rest, postMock } = makeDiscordRest();
     postMock.mockResolvedValue({ id: "msg", channel_id: "789" });
     await sendMessageDiscord("channel:789", "  spaced  ", {
       rest,
@@ -273,7 +322,7 @@ describe("sendMessageDiscord", () => {
   });
 
   it("includes message_reference when replying", async () => {
-    const { rest, postMock } = makeRest();
+    const { rest, postMock } = makeDiscordRest();
     postMock.mockResolvedValue({ id: "msg1", channel_id: "789" });
     await sendMessageDiscord("channel:789", "hello", {
       rest,
@@ -287,22 +336,21 @@ describe("sendMessageDiscord", () => {
     });
   });
 
-  it("replies only on the first chunk", async () => {
-    const { rest, postMock } = makeRest();
-    postMock.mockResolvedValue({ id: "msg1", channel_id: "789" });
-    await sendMessageDiscord("channel:789", "a".repeat(2001), {
-      rest,
-      token: "t",
-      replyTo: "orig-123",
+  it("preserves reply reference across all text chunks", async () => {
+    const { firstBody, secondBody } = await sendChunkedReplyAndCollectBodies({
+      text: "a".repeat(2001),
     });
-    expect(postMock).toHaveBeenCalledTimes(2);
-    const firstBody = postMock.mock.calls[0]?.[1]?.body;
-    const secondBody = postMock.mock.calls[1]?.[1]?.body;
-    expect(firstBody?.message_reference).toEqual({
-      message_id: "orig-123",
-      fail_if_not_exists: false,
+    expectReplyReference(firstBody, "orig-123");
+    expectReplyReference(secondBody, "orig-123");
+  });
+
+  it("preserves reply reference for follow-up text chunks after media caption split", async () => {
+    const { firstBody, secondBody } = await sendChunkedReplyAndCollectBodies({
+      text: "a".repeat(2500),
+      mediaUrl: "file:///tmp/photo.jpg",
     });
-    expect(secondBody?.message_reference).toBeUndefined();
+    expectReplyReference(firstBody, "orig-123");
+    expectReplyReference(secondBody, "orig-123");
   });
 });
 
@@ -312,7 +360,7 @@ describe("reactMessageDiscord", () => {
   });
 
   it("reacts with unicode emoji", async () => {
-    const { rest, putMock } = makeRest();
+    const { rest, putMock } = makeDiscordRest();
     await reactMessageDiscord("chan1", "msg1", "✅", { rest, token: "t" });
     expect(putMock).toHaveBeenCalledWith(
       Routes.channelMessageOwnReaction("chan1", "msg1", "%E2%9C%85"),
@@ -320,7 +368,7 @@ describe("reactMessageDiscord", () => {
   });
 
   it("normalizes variation selectors in unicode emoji", async () => {
-    const { rest, putMock } = makeRest();
+    const { rest, putMock } = makeDiscordRest();
     await reactMessageDiscord("chan1", "msg1", "⭐️", { rest, token: "t" });
     expect(putMock).toHaveBeenCalledWith(
       Routes.channelMessageOwnReaction("chan1", "msg1", "%E2%AD%90"),
@@ -328,7 +376,7 @@ describe("reactMessageDiscord", () => {
   });
 
   it("reacts with custom emoji syntax", async () => {
-    const { rest, putMock } = makeRest();
+    const { rest, putMock } = makeDiscordRest();
     await reactMessageDiscord("chan1", "msg1", "<:party_blob:123>", {
       rest,
       token: "t",
@@ -345,7 +393,7 @@ describe("removeReactionDiscord", () => {
   });
 
   it("removes a unicode emoji reaction", async () => {
-    const { rest, deleteMock } = makeRest();
+    const { rest, deleteMock } = makeDiscordRest();
     await removeReactionDiscord("chan1", "msg1", "✅", { rest, token: "t" });
     expect(deleteMock).toHaveBeenCalledWith(
       Routes.channelMessageOwnReaction("chan1", "msg1", "%E2%9C%85"),
@@ -359,7 +407,7 @@ describe("removeOwnReactionsDiscord", () => {
   });
 
   it("removes all own reactions on a message", async () => {
-    const { rest, getMock, deleteMock } = makeRest();
+    const { rest, getMock, deleteMock } = makeDiscordRest();
     getMock.mockResolvedValue({
       reactions: [
         { emoji: { name: "✅", id: null } },
@@ -386,7 +434,7 @@ describe("fetchReactionsDiscord", () => {
   });
 
   it("returns reactions with users", async () => {
-    const { rest, getMock } = makeRest();
+    const { rest, getMock } = makeDiscordRest();
     getMock
       .mockResolvedValueOnce({
         reactions: [
@@ -421,7 +469,7 @@ describe("fetchChannelPermissionsDiscord", () => {
   });
 
   it("calculates permissions from guild roles", async () => {
-    const { rest, getMock } = makeRest();
+    const { rest, getMock } = makeDiscordRest();
     const perms = PermissionFlagsBits.ViewChannel | PermissionFlagsBits.SendMessages;
     getMock
       .mockResolvedValueOnce({
@@ -449,7 +497,7 @@ describe("fetchChannelPermissionsDiscord", () => {
   });
 
   it("treats Administrator as all permissions despite overwrites", async () => {
-    const { rest, getMock } = makeRest();
+    const { rest, getMock } = makeDiscordRest();
     getMock
       .mockResolvedValueOnce({
         id: "chan1",
@@ -483,7 +531,7 @@ describe("readMessagesDiscord", () => {
   });
 
   it("passes query params as an object", async () => {
-    const { rest, getMock } = makeRest();
+    const { rest, getMock } = makeDiscordRest();
     getMock.mockResolvedValue([]);
     await readMessagesDiscord("chan1", { limit: 5, before: "10" }, { rest, token: "t" });
     const call = getMock.mock.calls[0];
@@ -498,7 +546,7 @@ describe("edit/delete message helpers", () => {
   });
 
   it("edits message content", async () => {
-    const { rest, patchMock } = makeRest();
+    const { rest, patchMock } = makeDiscordRest();
     patchMock.mockResolvedValue({ id: "m1" });
     await editMessageDiscord("chan1", "m1", { content: "hello" }, { rest, token: "t" });
     expect(patchMock).toHaveBeenCalledWith(
@@ -508,7 +556,7 @@ describe("edit/delete message helpers", () => {
   });
 
   it("deletes message", async () => {
-    const { rest, deleteMock } = makeRest();
+    const { rest, deleteMock } = makeDiscordRest();
     deleteMock.mockResolvedValue({});
     await deleteMessageDiscord("chan1", "m1", { rest, token: "t" });
     expect(deleteMock).toHaveBeenCalledWith(Routes.channelMessage("chan1", "m1"));
@@ -521,7 +569,7 @@ describe("pin helpers", () => {
   });
 
   it("pins and unpins messages", async () => {
-    const { rest, putMock, deleteMock } = makeRest();
+    const { rest, putMock, deleteMock } = makeDiscordRest();
     putMock.mockResolvedValue({});
     deleteMock.mockResolvedValue({});
     await pinMessageDiscord("chan1", "m1", { rest, token: "t" });
@@ -537,7 +585,7 @@ describe("searchMessagesDiscord", () => {
   });
 
   it("uses URLSearchParams for search", async () => {
-    const { rest, getMock } = makeRest();
+    const { rest, getMock } = makeDiscordRest();
     getMock.mockResolvedValue({ total_results: 0, messages: [] });
     await searchMessagesDiscord(
       { guildId: "g1", content: "hello", limit: 5 },
@@ -548,7 +596,7 @@ describe("searchMessagesDiscord", () => {
   });
 
   it("supports channel/author arrays and clamps limit", async () => {
-    const { rest, getMock } = makeRest();
+    const { rest, getMock } = makeDiscordRest();
     getMock.mockResolvedValue({ total_results: 0, messages: [] });
     await searchMessagesDiscord(
       {

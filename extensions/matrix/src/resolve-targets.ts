@@ -1,10 +1,27 @@
+import { mapAllowlistResolutionInputs } from "openclaw/plugin-sdk/compat";
 import type {
   ChannelDirectoryEntry,
   ChannelResolveKind,
   ChannelResolveResult,
   RuntimeEnv,
-} from "openclaw/plugin-sdk";
+} from "openclaw/plugin-sdk/matrix";
 import { listMatrixDirectoryGroupsLive, listMatrixDirectoryPeersLive } from "./directory-live.js";
+
+function findExactDirectoryMatches(
+  matches: ChannelDirectoryEntry[],
+  query: string,
+): ChannelDirectoryEntry[] {
+  const normalized = query.trim().toLowerCase();
+  if (!normalized) {
+    return [];
+  }
+  return matches.filter((match) => {
+    const id = match.id.trim().toLowerCase();
+    const name = match.name?.trim().toLowerCase();
+    const handle = match.handle?.trim().toLowerCase();
+    return normalized === id || normalized === name || normalized === handle;
+  });
+}
 
 function pickBestGroupMatch(
   matches: ChannelDirectoryEntry[],
@@ -13,19 +30,8 @@ function pickBestGroupMatch(
   if (matches.length === 0) {
     return undefined;
   }
-  const normalized = query.trim().toLowerCase();
-  if (normalized) {
-    const exact = matches.find((match) => {
-      const name = match.name?.trim().toLowerCase();
-      const handle = match.handle?.trim().toLowerCase();
-      const id = match.id.trim().toLowerCase();
-      return name === normalized || handle === normalized || id === normalized;
-    });
-    if (exact) {
-      return exact;
-    }
-  }
-  return matches[0];
+  const [exact] = findExactDirectoryMatches(matches, query);
+  return exact ?? matches[0];
 }
 
 function pickBestUserMatch(
@@ -35,16 +41,7 @@ function pickBestUserMatch(
   if (matches.length === 0) {
     return undefined;
   }
-  const normalized = query.trim().toLowerCase();
-  if (!normalized) {
-    return undefined;
-  }
-  const exact = matches.filter((match) => {
-    const id = match.id.trim().toLowerCase();
-    const name = match.name?.trim().toLowerCase();
-    const handle = match.handle?.trim().toLowerCase();
-    return normalized === id || normalized === name || normalized === handle;
-  });
+  const exact = findExactDirectoryMatches(matches, query);
   if (exact.length === 1) {
     return exact[0];
   }
@@ -59,12 +56,7 @@ function describeUserMatchFailure(matches: ChannelDirectoryEntry[], query: strin
   if (!normalized) {
     return "empty input";
   }
-  const exact = matches.filter((match) => {
-    const id = match.id.trim().toLowerCase();
-    const name = match.name?.trim().toLowerCase();
-    const handle = match.handle?.trim().toLowerCase();
-    return normalized === id || normalized === name || normalized === handle;
-  });
+  const exact = findExactDirectoryMatches(matches, normalized);
   if (exact.length === 0) {
     return "no exact match; use full Matrix ID";
   }
@@ -80,56 +72,54 @@ export async function resolveMatrixTargets(params: {
   kind: ChannelResolveKind;
   runtime?: RuntimeEnv;
 }): Promise<ChannelResolveResult[]> {
-  const results: ChannelResolveResult[] = [];
-  for (const input of params.inputs) {
-    const trimmed = input.trim();
-    if (!trimmed) {
-      results.push({ input, resolved: false, note: "empty input" });
-      continue;
-    }
-    if (params.kind === "user") {
-      if (trimmed.startsWith("@") && trimmed.includes(":")) {
-        results.push({ input, resolved: true, id: trimmed });
-        continue;
+  return await mapAllowlistResolutionInputs({
+    inputs: params.inputs,
+    mapInput: async (input): Promise<ChannelResolveResult> => {
+      const trimmed = input.trim();
+      if (!trimmed) {
+        return { input, resolved: false, note: "empty input" };
+      }
+      if (params.kind === "user") {
+        if (trimmed.startsWith("@") && trimmed.includes(":")) {
+          return { input, resolved: true, id: trimmed };
+        }
+        try {
+          const matches = await listMatrixDirectoryPeersLive({
+            cfg: params.cfg,
+            query: trimmed,
+            limit: 5,
+          });
+          const best = pickBestUserMatch(matches, trimmed);
+          return {
+            input,
+            resolved: Boolean(best?.id),
+            id: best?.id,
+            name: best?.name,
+            note: best ? undefined : describeUserMatchFailure(matches, trimmed),
+          };
+        } catch (err) {
+          params.runtime?.error?.(`matrix resolve failed: ${String(err)}`);
+          return { input, resolved: false, note: "lookup failed" };
+        }
       }
       try {
-        const matches = await listMatrixDirectoryPeersLive({
+        const matches = await listMatrixDirectoryGroupsLive({
           cfg: params.cfg,
           query: trimmed,
           limit: 5,
         });
-        const best = pickBestUserMatch(matches, trimmed);
-        results.push({
+        const best = pickBestGroupMatch(matches, trimmed);
+        return {
           input,
           resolved: Boolean(best?.id),
           id: best?.id,
           name: best?.name,
-          note: best ? undefined : describeUserMatchFailure(matches, trimmed),
-        });
+          note: matches.length > 1 ? "multiple matches; chose first" : undefined,
+        };
       } catch (err) {
         params.runtime?.error?.(`matrix resolve failed: ${String(err)}`);
-        results.push({ input, resolved: false, note: "lookup failed" });
+        return { input, resolved: false, note: "lookup failed" };
       }
-      continue;
-    }
-    try {
-      const matches = await listMatrixDirectoryGroupsLive({
-        cfg: params.cfg,
-        query: trimmed,
-        limit: 5,
-      });
-      const best = pickBestGroupMatch(matches, trimmed);
-      results.push({
-        input,
-        resolved: Boolean(best?.id),
-        id: best?.id,
-        name: best?.name,
-        note: matches.length > 1 ? "multiple matches; chose first" : undefined,
-      });
-    } catch (err) {
-      params.runtime?.error?.(`matrix resolve failed: ${String(err)}`);
-      results.push({ input, resolved: false, note: "lookup failed" });
-    }
-  }
-  return results;
+    },
+  });
 }

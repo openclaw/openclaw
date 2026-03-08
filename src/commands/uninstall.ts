@@ -1,17 +1,12 @@
-import { cancel, confirm, isCancel, multiselect } from "@clack/prompts";
 import path from "node:path";
-import type { RuntimeEnv } from "../runtime.js";
-import {
-  isNixMode,
-  loadConfig,
-  resolveConfigPath,
-  resolveOAuthDir,
-  resolveStateDir,
-} from "../config/config.js";
+import { cancel, confirm, isCancel, multiselect } from "@clack/prompts";
+import { isNixMode } from "../config/config.js";
 import { resolveGatewayService } from "../daemon/service.js";
+import type { RuntimeEnv } from "../runtime.js";
 import { stylePromptHint, stylePromptMessage, stylePromptTitle } from "../terminal/prompt-style.js";
 import { resolveHomeDir } from "../utils.js";
-import { collectWorkspaceDirs, isPathWithin, removePath } from "./cleanup-utils.js";
+import { resolveCleanupPlanFromDisk } from "./cleanup-plan.js";
+import { removePath, removeStateAndLinkedPaths, removeWorkspaceDirs } from "./cleanup-utils.js";
 
 type UninstallScope = "service" | "state" | "workspace" | "app";
 
@@ -157,13 +152,8 @@ export async function uninstallCommand(runtime: RuntimeEnv, opts: UninstallOptio
   }
 
   const dryRun = Boolean(opts.dryRun);
-  const cfg = loadConfig();
-  const stateDir = resolveStateDir();
-  const configPath = resolveConfigPath();
-  const oauthDir = resolveOAuthDir();
-  const configInsideState = isPathWithin(configPath, stateDir);
-  const oauthInsideState = isPathWithin(oauthDir, stateDir);
-  const workspaceDirs = collectWorkspaceDirs(cfg);
+  const { stateDir, configPath, oauthDir, configInsideState, oauthInsideState, workspaceDirs } =
+    resolveCleanupPlanFromDisk();
 
   if (scopes.has("service")) {
     if (dryRun) {
@@ -174,19 +164,15 @@ export async function uninstallCommand(runtime: RuntimeEnv, opts: UninstallOptio
   }
 
   if (scopes.has("state")) {
-    await removePath(stateDir, runtime, { dryRun, label: stateDir });
-    if (!configInsideState) {
-      await removePath(configPath, runtime, { dryRun, label: configPath });
-    }
-    if (!oauthInsideState) {
-      await removePath(oauthDir, runtime, { dryRun, label: oauthDir });
-    }
+    await removeStateAndLinkedPaths(
+      { stateDir, configPath, oauthDir, configInsideState, oauthInsideState },
+      runtime,
+      { dryRun },
+    );
   }
 
   if (scopes.has("workspace")) {
-    for (const workspace of workspaceDirs) {
-      await removePath(workspace, runtime, { dryRun, label: workspace });
-    }
+    await removeWorkspaceDirs(workspaceDirs, runtime, { dryRun });
   }
 
   if (scopes.has("app")) {

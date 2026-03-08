@@ -1,11 +1,8 @@
 {
   "name": "@openclaw/discord",
-  "version": "2026.2.13",
+  "version": "2026.3.8",
   "description": "OpenClaw Discord channel plugin",
   "type": "module",
-  "devDependencies": {
-    "openclaw": "workspace:*"
-  },
   "openclaw": {
     "extensions": [
       "./index.ts"

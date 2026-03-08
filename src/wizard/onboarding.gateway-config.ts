@@ -1,32 +1,37 @@
-import type { GatewayAuthChoice } from "../commands/onboard-types.js";
+import {
+  promptSecretRefForOnboarding,
+  resolveSecretInputModeForEnvSelection,
+} from "../commands/auth-choice.apply-helpers.js";
+import {
+  normalizeGatewayTokenInput,
+  randomToken,
+  validateGatewayPasswordInput,
+} from "../commands/onboard-helpers.js";
+import type { GatewayAuthChoice, SecretInputMode } from "../commands/onboard-types.js";
 import type { GatewayBindMode, GatewayTailscaleMode, OpenClawConfig } from "../config/config.js";
+import { ensureControlUiAllowedOriginsForNonLoopbackBind } from "../config/gateway-control-ui-origins.js";
+import {
+  normalizeSecretInputString,
+  resolveSecretInputRef,
+  type SecretInput,
+} from "../config/types.secrets.js";
+import {
+  maybeAddTailnetOriginToControlUiAllowedOrigins,
+  TAILSCALE_DOCS_LINES,
+  TAILSCALE_EXPOSURE_OPTIONS,
+  TAILSCALE_MISSING_BIN_NOTE_LINES,
+} from "../gateway/gateway-config-prompts.shared.js";
+import { DEFAULT_DANGEROUS_NODE_COMMANDS } from "../gateway/node-command-policy.js";
+import { findTailscaleBinary } from "../infra/tailscale.js";
 import type { RuntimeEnv } from "../runtime.js";
+import { validateIPv4AddressInput } from "../shared/net/ipv4.js";
+import { resolveOnboardingSecretInputString } from "./onboarding.secret-input.js";
 import type {
   GatewayWizardSettings,
   QuickstartGatewayDefaults,
   WizardFlow,
 } from "./onboarding.types.js";
 import type { WizardPrompter } from "./prompts.js";
-import {
-  normalizeGatewayTokenInput,
-  randomToken,
-  validateGatewayPasswordInput,
-} from "../commands/onboard-helpers.js";
-import { findTailscaleBinary } from "../infra/tailscale.js";
-
-// These commands are "high risk" (privacy writes/recording) and should be
-// explicitly armed by the user when they want to use them.
-//
-// This only affects what the gateway will accept via node.invoke; the iOS app
-// still prompts for OS permissions (camera/photos/contacts/etc) on first use.
-const DEFAULT_DANGEROUS_NODE_DENY_COMMANDS = [
-  "camera.snap",
-  "camera.clip",
-  "screen.record",
-  "calendar.add",
-  "contacts.add",
-  "reminders.add",
-];
 
 type ConfigureGatewayOptions = {
   flow: WizardFlow;
@@ -34,6 +39,7 @@ type ConfigureGatewayOptions = {
   nextConfig: OpenClawConfig;
   localPort: number;
   quickstartGateway: QuickstartGatewayDefaults;
+  secretInputMode?: SecretInputMode;
   prompter: WizardPrompter;
   runtime: RuntimeEnv;
 };
@@ -85,25 +91,7 @@ export async function configureGatewayForOnboarding(
         message: "Custom IP address",
         placeholder: "192.168.1.100",
         initialValue: customBindHost ?? "",
-        validate: (value) => {
-          if (!value) {
-            return "IP address is required for custom bind mode";
-          }
-          const trimmed = value.trim();
-          const parts = trimmed.split(".");
-          if (parts.length !== 4) {
-            return "Invalid IPv4 address (e.g., 192.168.1.100)";
-          }
-          if (
-            parts.every((part) => {
-              const n = parseInt(part, 10);
-              return !Number.isNaN(n) && n >= 0 && n <= 255 && part === String(n);
-            })
-          ) {
-            return undefined;
-          }
-          return "Invalid IPv4 address (each octet must be 0-255)";
-        },
+        validate: validateIPv4AddressInput,
       });
       customBindHost = typeof input === "string" ? input.trim() : undefined;
     }
@@ -130,46 +118,22 @@ export async function configureGatewayForOnboarding(
       ? quickstartGateway.tailscaleMode
       : await prompter.select<GatewayWizardSettings["tailscaleMode"]>({
           message: "Tailscale exposure",
-          options: [
-            { value: "off", label: "Off", hint: "No Tailscale exposure" },
-            {
-              value: "serve",
-              label: "Serve",
-              hint: "Private HTTPS for your tailnet (devices on Tailscale)",
-            },
-            {
-              value: "funnel",
-              label: "Funnel",
-              hint: "Public HTTPS via Tailscale Funnel (internet)",
-            },
-          ],
+          options: [...TAILSCALE_EXPOSURE_OPTIONS],
         });
 
   // Detect Tailscale binary before proceeding with serve/funnel setup.
+  // Persist the path so getTailnetHostname can reuse it for origin injection.
+  let tailscaleBin: string | null = null;
   if (tailscaleMode !== "off") {
-    const tailscaleBin = await findTailscaleBinary();
+    tailscaleBin = await findTailscaleBinary();
     if (!tailscaleBin) {
-      await prompter.note(
-        [
-          "Tailscale binary not found in PATH or /Applications.",
-          "Ensure Tailscale is installed from:",
-          "  https://tailscale.com/download/mac",
-          "",
-          "You can continue setup, but serve/funnel will fail at runtime.",
-        ].join("\n"),
-        "Tailscale Warning",
-      );
+      await prompter.note(TAILSCALE_MISSING_BIN_NOTE_LINES.join("\n"), "Tailscale Warning");
     }
   }
 
   let tailscaleResetOnExit = flow === "quickstart" ? quickstartGateway.tailscaleResetOnExit : false;
   if (tailscaleMode !== "off" && flow !== "quickstart") {
-    await prompter.note(
-      ["Docs:", "https://docs.openclaw.ai/gateway/tailscale", "https://docs.openclaw.ai/web"].join(
-        "\n",
-      ),
-      "Tailscale",
-    );
+    await prompter.note(TAILSCALE_DOCS_LINES.join("\n"), "Tailscale");
     tailscaleResetOnExit = Boolean(
       await prompter.confirm({
         message: "Reset Tailscale serve/funnel on exit?",
@@ -193,27 +157,105 @@ export async function configureGatewayForOnboarding(
   }
 
   let gatewayToken: string | undefined;
+  let gatewayTokenInput: SecretInput | undefined;
   if (authMode === "token") {
-    if (flow === "quickstart") {
-      gatewayToken = quickstartGateway.token ?? randomToken();
+    const quickstartTokenString = normalizeSecretInputString(quickstartGateway.token);
+    const quickstartTokenRef = resolveSecretInputRef({
+      value: quickstartGateway.token,
+      defaults: nextConfig.secrets?.defaults,
+    }).ref;
+    const tokenMode =
+      flow === "quickstart" && opts.secretInputMode !== "ref" // pragma: allowlist secret
+        ? quickstartTokenRef
+          ? "ref"
+          : "plaintext"
+        : await resolveSecretInputModeForEnvSelection({
+            prompter,
+            explicitMode: opts.secretInputMode,
+            copy: {
+              modeMessage: "How do you want to provide the gateway token?",
+              plaintextLabel: "Generate/store plaintext token",
+              plaintextHint: "Default",
+              refLabel: "Use SecretRef",
+              refHint: "Store a reference instead of plaintext",
+            },
+          });
+    if (tokenMode === "ref") {
+      if (flow === "quickstart" && quickstartTokenRef) {
+        gatewayTokenInput = quickstartTokenRef;
+        gatewayToken = await resolveOnboardingSecretInputString({
+          config: nextConfig,
+          value: quickstartTokenRef,
+          path: "gateway.auth.token",
+          env: process.env,
+        });
+      } else {
+        const resolved = await promptSecretRefForOnboarding({
+          provider: "gateway-auth-token",
+          config: nextConfig,
+          prompter,
+          preferredEnvVar: "OPENCLAW_GATEWAY_TOKEN",
+          copy: {
+            sourceMessage: "Where is this gateway token stored?",
+            envVarPlaceholder: "OPENCLAW_GATEWAY_TOKEN",
+          },
+        });
+        gatewayTokenInput = resolved.ref;
+        gatewayToken = resolved.resolvedValue;
+      }
+    } else if (flow === "quickstart") {
+      gatewayToken =
+        (quickstartTokenString ?? normalizeGatewayTokenInput(process.env.OPENCLAW_GATEWAY_TOKEN)) ||
+        randomToken();
+      gatewayTokenInput = gatewayToken;
     } else {
       const tokenInput = await prompter.text({
         message: "Gateway token (blank to generate)",
         placeholder: "Needed for multi-machine or non-loopback access",
-        initialValue: quickstartGateway.token ?? "",
+        initialValue:
+          quickstartTokenString ??
+          normalizeGatewayTokenInput(process.env.OPENCLAW_GATEWAY_TOKEN) ??
+          "",
       });
       gatewayToken = normalizeGatewayTokenInput(tokenInput) || randomToken();
+      gatewayTokenInput = gatewayToken;
     }
   }
 
   if (authMode === "password") {
-    const password =
-      flow === "quickstart" && quickstartGateway.password
-        ? quickstartGateway.password
-        : await prompter.text({
+    let password: SecretInput | undefined =
+      flow === "quickstart" && quickstartGateway.password ? quickstartGateway.password : undefined;
+    if (!password) {
+      const selectedMode = await resolveSecretInputModeForEnvSelection({
+        prompter,
+        explicitMode: opts.secretInputMode,
+        copy: {
+          modeMessage: "How do you want to provide the gateway password?",
+          plaintextLabel: "Enter password now",
+          plaintextHint: "Stores the password directly in OpenClaw config",
+        },
+      });
+      if (selectedMode === "ref") {
+        const resolved = await promptSecretRefForOnboarding({
+          provider: "gateway-auth-password",
+          config: nextConfig,
+          prompter,
+          preferredEnvVar: "OPENCLAW_GATEWAY_PASSWORD",
+          copy: {
+            sourceMessage: "Where is this gateway password stored?",
+            envVarPlaceholder: "OPENCLAW_GATEWAY_PASSWORD",
+          },
+        });
+        password = resolved.ref;
+      } else {
+        password = String(
+          (await prompter.text({
             message: "Gateway password",
             validate: validateGatewayPasswordInput,
-          });
+          })) ?? "",
+        ).trim();
+      }
+    }
     nextConfig = {
       ...nextConfig,
       gateway: {
@@ -221,7 +263,7 @@ export async function configureGatewayForOnboarding(
         auth: {
           ...nextConfig.gateway?.auth,
           mode: "password",
-          password: String(password ?? "").trim(),
+          password,
         },
       },
     };
@@ -233,7 +275,7 @@ export async function configureGatewayForOnboarding(
         auth: {
           ...nextConfig.gateway?.auth,
           mode: "token",
-          token: gatewayToken,
+          token: gatewayTokenInput,
         },
       },
     };
@@ -254,6 +296,15 @@ export async function configureGatewayForOnboarding(
     },
   };
 
+  nextConfig = ensureControlUiAllowedOriginsForNonLoopbackBind(nextConfig, {
+    requireControlUiEnabled: true,
+  }).config;
+  nextConfig = await maybeAddTailnetOriginToControlUiAllowedOrigins({
+    config: nextConfig,
+    tailscaleMode,
+    tailscaleBin,
+  });
+
   // If this is a new gateway setup (no existing gateway settings), start with a
   // denylist for high-risk node commands. Users can arm these temporarily via
   // /phone arm ... (phone-control plugin).
@@ -269,7 +320,7 @@ export async function configureGatewayForOnboarding(
         ...nextConfig.gateway,
         nodes: {
           ...nextConfig.gateway?.nodes,
-          denyCommands: [...DEFAULT_DANGEROUS_NODE_DENY_COMMANDS],
+          denyCommands: [...DEFAULT_DANGEROUS_NODE_COMMANDS],
         },
       },
     };

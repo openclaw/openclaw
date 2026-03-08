@@ -1,5 +1,5 @@
-import type { IrcInboundMessage } from "./types.js";
 import { hasIrcControlChars } from "./control-chars.js";
+import type { IrcInboundMessage } from "./types.js";
 
 const IRC_TARGET_PATTERN = /^[^\s:]+$/u;
 
@@ -77,12 +77,15 @@ export function formatIrcSenderId(message: IrcInboundMessage): string {
   return base;
 }
 
-export function buildIrcAllowlistCandidates(message: IrcInboundMessage): string[] {
+export function buildIrcAllowlistCandidates(
+  message: IrcInboundMessage,
+  params?: { allowNameMatching?: boolean },
+): string[] {
   const nick = message.senderNick.trim().toLowerCase();
   const user = message.senderUser?.trim().toLowerCase();
   const host = message.senderHost?.trim().toLowerCase();
   const candidates = new Set<string>();
-  if (nick) {
+  if (nick && params?.allowNameMatching === true) {
     candidates.add(nick);
   }
   if (nick && user) {
@@ -100,6 +103,7 @@ export function buildIrcAllowlistCandidates(message: IrcInboundMessage): string[
 export function resolveIrcAllowlistMatch(params: {
   allowFrom: string[];
   message: IrcInboundMessage;
+  allowNameMatching?: boolean;
 }): { allowed: boolean; source?: string } {
   const allowFrom = new Set(
     params.allowFrom.map((entry) => entry.trim().toLowerCase()).filter(Boolean),
@@ -107,7 +111,9 @@ export function resolveIrcAllowlistMatch(params: {
   if (allowFrom.has("*")) {
     return { allowed: true, source: "wildcard" };
   }
-  const candidates = buildIrcAllowlistCandidates(params.message);
+  const candidates = buildIrcAllowlistCandidates(params.message, {
+    allowNameMatching: params.allowNameMatching,
+  });
   for (const candidate of candidates) {
     if (allowFrom.has(candidate)) {
       return { allowed: true, source: candidate };

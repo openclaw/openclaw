@@ -1,7 +1,7 @@
+import Foundation
 import OpenClawChatUI
 import OpenClawKit
 import OpenClawProtocol
-import Foundation
 import OSLog
 
 private let gatewayConnectionLogger = Logger(subsystem: "ai.openclaw", category: "gateway.connection")
@@ -24,9 +24,13 @@ enum GatewayAgentChannel: String, Codable, CaseIterable, Sendable {
         self = GatewayAgentChannel(rawValue: normalized) ?? .last
     }
 
-    var isDeliverable: Bool { self != .webchat }
+    var isDeliverable: Bool {
+        self != .webchat
+    }
 
-    func shouldDeliver(_ deliver: Bool) -> Bool { deliver && self.isDeliverable }
+    func shouldDeliver(_ deliver: Bool) -> Bool {
+        deliver && self.isDeliverable
+    }
 }
 
 struct GatewayAgentInvocation: Sendable {
@@ -105,6 +109,44 @@ actor GatewayConnection {
 
     private var subscribers: [UUID: AsyncStream<GatewayPush>.Continuation] = [:]
     private var lastSnapshot: HelloOk?
+
+    private struct LossyDecodable<Value: Decodable>: Decodable {
+        let value: Value?
+
+        init(from decoder: Decoder) throws {
+            do {
+                self.value = try Value(from: decoder)
+            } catch {
+                self.value = nil
+            }
+        }
+    }
+
+    private struct LossyCronListResponse: Decodable {
+        let jobs: [LossyDecodable<CronJob>]
+
+        enum CodingKeys: String, CodingKey {
+            case jobs
+        }
+
+        init(from decoder: Decoder) throws {
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            self.jobs = try container.decodeIfPresent([LossyDecodable<CronJob>].self, forKey: .jobs) ?? []
+        }
+    }
+
+    private struct LossyCronRunsResponse: Decodable {
+        let entries: [LossyDecodable<CronRunLogEntry>]
+
+        enum CodingKeys: String, CodingKey {
+            case entries
+        }
+
+        init(from decoder: Decoder) throws {
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            self.entries = try container.decodeIfPresent([LossyDecodable<CronRunLogEntry>].self, forKey: .entries) ?? []
+        }
+    }
 
     init(
         configProvider: @escaping @Sendable () async throws -> Config = GatewayConnection.defaultConfigProvider,
@@ -699,17 +741,17 @@ extension GatewayConnection {
     }
 
     func cronList(includeDisabled: Bool = true) async throws -> [CronJob] {
-        let res: CronListResponse = try await self.requestDecoded(
+        let data = try await self.requestRaw(
             method: .cronList,
             params: ["includeDisabled": AnyCodable(includeDisabled)])
-        return res.jobs
+        return try Self.decodeCronListResponse(data)
     }
 
     func cronRuns(jobId: String, limit: Int = 200) async throws -> [CronRunLogEntry] {
-        let res: CronRunsResponse = try await self.requestDecoded(
+        let data = try await self.requestRaw(
             method: .cronRuns,
             params: ["id": AnyCodable(jobId), "limit": AnyCodable(limit)])
-        return res.entries
+        return try Self.decodeCronRunsResponse(data)
     }
 
     func cronRun(jobId: String, force: Bool = true) async throws {
@@ -734,5 +776,25 @@ extension GatewayConnection {
 
     func cronAdd(payload: [String: AnyCodable]) async throws {
         try await self.requestVoid(method: .cronAdd, params: payload)
+    }
+
+    nonisolated static func decodeCronListResponse(_ data: Data) throws -> [CronJob] {
+        let decoded = try JSONDecoder().decode(LossyCronListResponse.self, from: data)
+        let jobs = decoded.jobs.compactMap(\.value)
+        let skipped = decoded.jobs.count - jobs.count
+        if skipped > 0 {
+            gatewayConnectionLogger.warning("cron.list skipped \(skipped, privacy: .public) malformed jobs")
+        }
+        return jobs
+    }
+
+    nonisolated static func decodeCronRunsResponse(_ data: Data) throws -> [CronRunLogEntry] {
+        let decoded = try JSONDecoder().decode(LossyCronRunsResponse.self, from: data)
+        let entries = decoded.entries.compactMap(\.value)
+        let skipped = decoded.entries.count - entries.count
+        if skipped > 0 {
+            gatewayConnectionLogger.warning("cron.runs skipped \(skipped, privacy: .public) malformed entries")
+        }
+        return entries
     }
 }

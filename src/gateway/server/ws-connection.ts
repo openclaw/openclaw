@@ -1,20 +1,25 @@
-import type { WebSocket, WebSocketServer } from "ws";
 import { randomUUID } from "node:crypto";
-import type { createSubsystemLogger } from "../../logging/subsystem.js";
-import type { AuthRateLimiter } from "../auth-rate-limit.js";
-import type { ResolvedGatewayAuth } from "../auth.js";
-import type { GatewayRequestContext, GatewayRequestHandlers } from "../server-methods/types.js";
-import type { GatewayWsClient } from "./ws-types.js";
+import type { WebSocket, WebSocketServer } from "ws";
 import { resolveCanvasHostUrl } from "../../infra/canvas-host-url.js";
-import { listSystemPresence, upsertPresence } from "../../infra/system-presence.js";
+import { removeRemoteNodeInfo } from "../../infra/skills-remote.js";
+import { upsertPresence } from "../../infra/system-presence.js";
+import type { createSubsystemLogger } from "../../logging/subsystem.js";
 import { truncateUtf16Safe } from "../../utils.js";
 import { isWebchatClient } from "../../utils/message-channel.js";
+import type { AuthRateLimiter } from "../auth-rate-limit.js";
+import type { ResolvedGatewayAuth } from "../auth.js";
 import { isLoopbackAddress } from "../net.js";
 import { getHandshakeTimeoutMs } from "../server-constants.js";
+import type { GatewayRequestContext, GatewayRequestHandlers } from "../server-methods/types.js";
 import { formatError } from "../server-utils.js";
 import { logWs } from "../ws-log.js";
-import { getHealthVersion, getPresenceVersion, incrementPresenceVersion } from "./health-state.js";
-import { attachGatewayWsMessageHandler } from "./ws-connection/message-handler.js";
+import { getHealthVersion, incrementPresenceVersion } from "./health-state.js";
+import { broadcastPresenceSnapshot } from "./presence-events.js";
+import {
+  attachGatewayWsMessageHandler,
+  type WsOriginCheckMetrics,
+} from "./ws-connection/message-handler.js";
+import type { GatewayWsClient } from "./ws-types.js";
 
 type SubsystemLogger = ReturnType<typeof createSubsystemLogger>;
 
@@ -53,7 +58,7 @@ const sanitizeLogValue = (value: string | undefined): string | undefined => {
   return truncateUtf16Safe(cleaned, LOG_HEADER_MAX_LEN);
 };
 
-export function attachGatewayWsConnectionHandler(params: {
+export type GatewayWsSharedHandlerParams = {
   wss: WebSocketServer;
   clients: Set<GatewayWsClient>;
   port: number;
@@ -63,8 +68,13 @@ export function attachGatewayWsConnectionHandler(params: {
   resolvedAuth: ResolvedGatewayAuth;
   /** Optional rate limiter for auth brute-force protection. */
   rateLimiter?: AuthRateLimiter;
+  /** Browser-origin fallback limiter (loopback is never exempt). */
+  browserRateLimiter?: AuthRateLimiter;
   gatewayMethods: string[];
   events: string[];
+};
+
+export type AttachGatewayWsConnectionHandlerParams = GatewayWsSharedHandlerParams & {
   logGateway: SubsystemLogger;
   logHealth: SubsystemLogger;
   logWsControl: SubsystemLogger;
@@ -78,7 +88,9 @@ export function attachGatewayWsConnectionHandler(params: {
     },
   ) => void;
   buildRequestContext: () => GatewayRequestContext;
-}) {
+};
+
+export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnectionHandlerParams) {
   const {
     wss,
     clients,
@@ -88,6 +100,7 @@ export function attachGatewayWsConnectionHandler(params: {
     canvasHostServerPort,
     resolvedAuth,
     rateLimiter,
+    browserRateLimiter,
     gatewayMethods,
     events,
     logGateway,
@@ -97,6 +110,7 @@ export function attachGatewayWsConnectionHandler(params: {
     broadcast,
     buildRequestContext,
   } = params;
+  const originCheckMetrics: WsOriginCheckMetrics = { hostHeaderFallbackAccepted: 0 };
 
   wss.on("connection", (socket, upgradeReq) => {
     let client: GatewayWsClient | null = null;
@@ -226,23 +240,13 @@ export function attachGatewayWsConnectionHandler(params: {
       }
       if (client?.presenceKey) {
         upsertPresence(client.presenceKey, { reason: "disconnect" });
-        incrementPresenceVersion();
-        broadcast(
-          "presence",
-          { presence: listSystemPresence() },
-          {
-            dropIfSlow: true,
-            stateVersion: {
-              presence: getPresenceVersion(),
-              health: getHealthVersion(),
-            },
-          },
-        );
+        broadcastPresenceSnapshot({ broadcast, incrementPresenceVersion, getHealthVersion });
       }
       if (client?.connect?.role === "node") {
         const context = buildRequestContext();
         const nodeId = context.nodeRegistry.unregister(connId);
         if (nodeId) {
+          removeRemoteNodeInfo(nodeId);
           context.nodeUnsubscribeAll(nodeId);
         }
       }
@@ -286,6 +290,7 @@ export function attachGatewayWsConnectionHandler(params: {
       connectNonce,
       resolvedAuth,
       rateLimiter,
+      browserRateLimiter,
       gatewayMethods,
       events,
       extraHandlers,
@@ -304,6 +309,7 @@ export function attachGatewayWsConnectionHandler(params: {
       },
       setCloseCause,
       setLastFrameMeta,
+      originCheckMetrics,
       logGateway,
       logHealth,
       logWsControl,

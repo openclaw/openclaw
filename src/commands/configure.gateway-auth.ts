@@ -1,7 +1,8 @@
+import { ensureAuthProfileStore } from "../agents/auth-profiles.js";
 import type { OpenClawConfig, GatewayAuthConfig } from "../config/config.js";
+import { isSecretRef, type SecretInput } from "../config/types.secrets.js";
 import type { RuntimeEnv } from "../runtime.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
-import { ensureAuthProfileStore } from "../agents/auth-profiles.js";
 import { promptAuthChoiceGrouped } from "./auth-choice-prompt.js";
 import { applyAuthChoice, resolvePreferredProviderForAuthChoice } from "./auth-choice.js";
 import {
@@ -17,7 +18,7 @@ import { randomToken } from "./onboard-helpers.js";
 type GatewayAuthChoice = "token" | "password" | "trusted-proxy";
 
 /** Reject undefined, empty, and common JS string-coercion artifacts for token auth. */
-function sanitizeTokenValue(value: string | undefined): string | undefined {
+function sanitizeTokenValue(value: unknown): string | undefined {
   if (typeof value !== "string") {
     return undefined;
   }
@@ -29,6 +30,7 @@ function sanitizeTokenValue(value: string | undefined): string | undefined {
 }
 
 const ANTHROPIC_OAUTH_MODEL_KEYS = [
+  "anthropic/claude-sonnet-4-6",
   "anthropic/claude-opus-4-6",
   "anthropic/claude-opus-4-5",
   "anthropic/claude-sonnet-4-5",
@@ -38,7 +40,7 @@ const ANTHROPIC_OAUTH_MODEL_KEYS = [
 export function buildGatewayAuthConfig(params: {
   existing?: GatewayAuthConfig;
   mode: GatewayAuthChoice;
-  token?: string;
+  token?: SecretInput;
   password?: string;
   trustedProxy?: {
     userHeader: string;
@@ -53,6 +55,9 @@ export function buildGatewayAuthConfig(params: {
   }
 
   if (params.mode === "token") {
+    if (isSecretRef(params.token)) {
+      return { ...base, mode: "token", token: params.token };
+    }
     // Keep token mode always valid: treat empty/undefined/"undefined"/"null" as missing and generate a token.
     const token = sanitizeTokenValue(params.token) ?? randomToken();
     return { ...base, mode: "token", token };
@@ -120,7 +125,7 @@ export async function promptAuthConfig(
       config: next,
       prompter,
       allowedKeys: anthropicOAuth ? ANTHROPIC_OAUTH_MODEL_KEYS : undefined,
-      initialSelections: anthropicOAuth ? ["anthropic/claude-opus-4-6"] : undefined,
+      initialSelections: anthropicOAuth ? ["anthropic/claude-sonnet-4-6"] : undefined,
       message: anthropicOAuth ? "Anthropic OAuth models" : undefined,
     });
     if (allowlistSelection.models) {
