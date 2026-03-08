@@ -283,6 +283,38 @@ describe("gatherDaemonStatus", () => {
     );
   });
 
+  it("keeps remote probe auth strict when remote token is missing", async () => {
+    daemonLoadedConfig = {
+      gateway: {
+        mode: "remote",
+        remote: {
+          url: "wss://gateway.example",
+          password: "remote-password", // pragma: allowlist secret
+        },
+        auth: {
+          mode: "token",
+          token: "local-token",
+          password: "local-password", // pragma: allowlist secret
+        },
+      },
+    };
+    process.env.OPENCLAW_GATEWAY_TOKEN = "env-token";
+    process.env.OPENCLAW_GATEWAY_PASSWORD = "env-password"; // pragma: allowlist secret
+
+    await gatherDaemonStatus({
+      rpc: {},
+      probe: true,
+      deep: false,
+    });
+
+    expect(callGatewayStatusProbe).toHaveBeenCalledWith(
+      expect.objectContaining({
+        token: undefined,
+        password: "env-password", // pragma: allowlist secret
+      }),
+    );
+  });
+
   it("skips TLS runtime loading when probe is disabled", async () => {
     const status = await gatherDaemonStatus({
       rpc: {},

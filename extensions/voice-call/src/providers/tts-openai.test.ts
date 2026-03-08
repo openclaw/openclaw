@@ -3,6 +3,8 @@ import type { OpenAITTSConfig } from "./tts-openai.js";
 import { OpenAITTSProvider } from "./tts-openai.js";
 
 type ProviderInternals = {
+  model: string;
+  voice: string;
   speed: number;
 };
 
@@ -26,5 +28,16 @@ describe("OpenAITTSProvider constructor defaults", () => {
     });
 
     expect(provider.speed).toBe(1.0);
+  });
+
+  it("treats blank model and voice overrides as unset", () => {
+    const provider = readProviderInternals({
+      apiKey: "sk-test", // pragma: allowlist secret
+      model: "   ",
+      voice: "",
+    });
+
+    expect(provider.model).toBe("gpt-4o-mini-tts");
+    expect(provider.voice).toBe("coral");
   });
 });
