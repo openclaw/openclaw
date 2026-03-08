@@ -38,11 +38,15 @@ export function checkBrowserOrigin(params: {
     return { ok: false, reason: "origin missing or invalid" };
   }
 
-  const allowlist = new Set(
-    (params.allowedOrigins ?? []).map((value) => value.trim().toLowerCase()).filter(Boolean),
-  );
-  if (allowlist.has("*") || allowlist.has(parsedOrigin.origin)) {
-    return { ok: true, matchedBy: "allowlist" };
+  const allowlist = (params.allowedOrigins ?? [])
+    .map((value) => value.trim().toLowerCase())
+    .filter(Boolean);
+  // Support "*" wildcard to allow all origins
+  if (allowlist.includes("*")) {
+    return { ok: true };
+  }
+  if (allowlist.includes(parsedOrigin.origin)) {
+    return { ok: true };
   }
 
   const requestHost = normalizeHostHeader(params.requestHost);
