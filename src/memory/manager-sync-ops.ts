@@ -669,6 +669,9 @@ export abstract class MemoryManagerSyncOps {
       });
     }
 
+    const failedPaths: string[] = [];
+    let lastError: Error | undefined;
+    let attemptedCount = 0;
     const tasks = fileEntries.map((entry) => async () => {
       const record = this.db
         .prepare(`SELECT hash FROM files WHERE path = ? AND source = ?`)
@@ -683,7 +686,18 @@ export abstract class MemoryManagerSyncOps {
         }
         return;
       }
-      await this.indexFile(entry, { source: "memory" });
+      attemptedCount += 1;
+      try {
+        await this.indexFile(entry, { source: "memory" });
+      } catch (err) {
+        const reason = err instanceof Error ? err.message : String(err);
+        log.warn(`memory sync: failed to index file, skipping`, {
+          path: entry.path,
+          error: reason,
+        });
+        failedPaths.push(entry.path);
+        lastError = err instanceof Error ? err : new Error(reason);
+      }
       if (params.progress) {
         params.progress.completed += 1;
         params.progress.report({
@@ -693,6 +707,16 @@ export abstract class MemoryManagerSyncOps {
       }
     });
     await runWithConcurrency(tasks, this.getIndexConcurrency());
+    if (failedPaths.length > 0) {
+      log.warn(`memory sync: ${failedPaths.length} file(s) failed to index`, {
+        paths: failedPaths,
+      });
+      // If every attempted file failed, propagate the error so callers
+      // (e.g. atomic reindex) can roll back properly.
+      if (attemptedCount > 0 && failedPaths.length >= attemptedCount && lastError) {
+        throw lastError;
+      }
+    }
 
     const staleRows = this.db
       .prepare(`SELECT path FROM files WHERE source = ?`)
@@ -749,6 +773,9 @@ export abstract class MemoryManagerSyncOps {
       });
     }
 
+    const sessionFailedPaths: string[] = [];
+    let sessionLastError: Error | undefined;
+    let sessionAttemptedCount = 0;
     const tasks = files.map((absPath) => async () => {
       if (!indexAll && !this.sessionsDirtyFiles.has(absPath)) {
         if (params.progress) {
@@ -785,8 +812,21 @@ export abstract class MemoryManagerSyncOps {
         this.resetSessionDelta(absPath, entry.size);
         return;
       }
-      await this.indexFile(entry, { source: "sessions", content: entry.content });
-      this.resetSessionDelta(absPath, entry.size);
+      sessionAttemptedCount += 1;
+      try {
+        await this.indexFile(entry, { source: "sessions", content: entry.content });
+        // Only reset the dirty-file marker on success so failed files are
+        // retried on the next sync cycle.
+        this.resetSessionDelta(absPath, entry.size);
+      } catch (err) {
+        const reason = err instanceof Error ? err.message : String(err);
+        log.warn(`memory sync: failed to index session file, skipping`, {
+          path: entry.path,
+          error: reason,
+        });
+        sessionFailedPaths.push(entry.path);
+        sessionLastError = err instanceof Error ? err : new Error(reason);
+      }
       if (params.progress) {
         params.progress.completed += 1;
         params.progress.report({
@@ -796,6 +836,20 @@ export abstract class MemoryManagerSyncOps {
       }
     });
     await runWithConcurrency(tasks, this.getIndexConcurrency());
+    if (sessionFailedPaths.length > 0) {
+      log.warn(`memory sync: ${sessionFailedPaths.length} session file(s) failed to index`, {
+        paths: sessionFailedPaths,
+      });
+      // If every attempted session file failed, propagate the error so callers
+      // (e.g. atomic reindex) can roll back properly.
+      if (
+        sessionAttemptedCount > 0 &&
+        sessionFailedPaths.length >= sessionAttemptedCount &&
+        sessionLastError
+      ) {
+        throw sessionLastError;
+      }
+    }
 
     const staleRows = this.db
       .prepare(`SELECT path FROM files WHERE source = ?`)
