@@ -14,6 +14,7 @@ const serviceRestart = vi.fn().mockResolvedValue(undefined);
 const serviceIsLoaded = vi.fn().mockResolvedValue(false);
 const serviceReadCommand = vi.fn().mockResolvedValue(null);
 const serviceReadRuntime = vi.fn().mockResolvedValue({ status: "running" });
+const resolveGatewayProbeAuthWithSecretInputs = vi.fn(async (_opts?: unknown) => ({}));
 const findExtraGatewayServices = vi.fn(async (_env: unknown, _opts?: unknown) => []);
 const inspectPortUsage = vi.fn(async (port: number) => ({
   port,
@@ -36,6 +37,11 @@ const { runtimeLogs, defaultRuntime, resetRuntimeCapture } = createCliRuntimeCap
 
 vi.mock("../gateway/call.js", () => ({
   callGateway: (opts: unknown) => callGateway(opts),
+}));
+
+vi.mock("../gateway/probe-auth.js", () => ({
+  resolveGatewayProbeAuthWithSecretInputs: (opts: unknown) =>
+    resolveGatewayProbeAuthWithSecretInputs(opts),
 }));
 
 vi.mock("../daemon/program-args.js", () => ({
@@ -123,6 +129,7 @@ describe("daemon-cli coverage", () => {
     delete process.env.OPENCLAW_GATEWAY_PORT;
     delete process.env.OPENCLAW_PROFILE;
     serviceReadCommand.mockResolvedValue(null);
+    resolveGatewayProbeAuthWithSecretInputs.mockClear();
     buildGatewayInstallPlan.mockClear();
   });
 
