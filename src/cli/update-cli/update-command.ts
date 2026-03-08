@@ -294,9 +294,16 @@ async function runPackageInstallUpdate(params: {
   const steps = [updateStep];
   let afterVersion = beforeVersion;
 
-  if (pkgRoot) {
-    afterVersion = await readPackageVersion(pkgRoot);
-    const entryPath = path.join(pkgRoot, "dist", "entry.js");
+  // Re-resolve pkgRoot after update: pnpm/npm may install to a new
+  // version-specific directory, making the pre-update pkgRoot stale.
+  // Without this, the systemd service file keeps pointing at the old
+  // entry.js path, causing "device signature invalid" on restart.
+  const updatedPkgRoot = await resolveGlobalPackageRoot(manager, runCommand, params.timeoutMs);
+  const effectivePkgRoot = updatedPkgRoot ?? pkgRoot;
+
+  if (effectivePkgRoot) {
+    afterVersion = await readPackageVersion(effectivePkgRoot);
+    const entryPath = path.join(effectivePkgRoot, "dist", "entry.js");
     if (await pathExists(entryPath)) {
       const doctorStep = await runUpdateStep({
         name: `${CLI_NAME} doctor`,
@@ -312,7 +319,7 @@ async function runPackageInstallUpdate(params: {
   return {
     status: failedStep ? "error" : "ok",
     mode: manager,
-    root: pkgRoot ?? params.root,
+    root: effectivePkgRoot ?? params.root,
     reason: failedStep ? failedStep.name : undefined,
     before: { version: beforeVersion },
     after: { version: afterVersion },
