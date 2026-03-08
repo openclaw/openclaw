@@ -543,18 +543,6 @@ export async function applyNonInteractiveAuthChoice(params: {
     if (!resolved) {
       return null;
     }
-    if (
-      !(await maybeSetResolvedApiKey(resolved, (value) =>
-        setAzureOpenaiApiKey(value, undefined, apiKeyStorageOptions),
-      ))
-    ) {
-      return null;
-    }
-    nextConfig = applyAuthProfileConfig(nextConfig, {
-      profileId: "azure-openai-responses:default",
-      provider: "azure-openai-responses",
-      mode: "api_key",
-    });
 
     const rawBaseUrl = opts.azureOpenaiBaseUrl?.trim();
     const rawModelId = opts.azureOpenaiModelId?.trim();
@@ -581,6 +569,19 @@ export async function applyNonInteractiveAuthChoice(params: {
       runtime.exit(1);
       return null;
     }
+
+    if (
+      !(await maybeSetResolvedApiKey(resolved, (value) =>
+        setAzureOpenaiApiKey(value, undefined, apiKeyStorageOptions),
+      ))
+    ) {
+      return null;
+    }
+    nextConfig = applyAuthProfileConfig(nextConfig, {
+      profileId: "azure-openai-responses:default",
+      provider: "azure-openai-responses",
+      mode: "api_key",
+    });
 
     return applyAzureOpenAIConfig(nextConfig, { baseUrl, modelId, apiVersion });
   }
