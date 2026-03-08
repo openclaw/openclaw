@@ -450,7 +450,7 @@ describe("isSecureWebSocketUrl", () => {
     }
   });
 
-  it("allows private ws:// only when opt-in is enabled", () => {
+  it("allows private ws:// IP literals only when opt-in is enabled", () => {
     const allowedWhenOptedIn = [
       "ws://10.0.0.5:18789",
       "http://10.0.0.5:18789",
@@ -460,11 +460,23 @@ describe("isSecureWebSocketUrl", () => {
       "ws://169.254.10.20:18789",
       "ws://[fc00::1]:18789",
       "ws://[fe80::1]:18789",
-      "ws://gateway.private.example:18789",
     ];
 
     for (const input of allowedWhenOptedIn) {
       expect(isSecureWebSocketUrl(input, { allowPrivateWs: true }), input).toBe(true);
+    }
+  });
+
+  it("rejects ws:// hostnames even when allowPrivateWs is enabled (#37177)", () => {
+    const hostnameWsUrls = [
+      "ws://gateway.private.example:18789",
+      "ws://openclaw-gateway.ai:18789",
+      "ws://my-server.local:18789",
+      "ws://internal.corp.net:18789",
+    ];
+
+    for (const input of hostnameWsUrls) {
+      expect(isSecureWebSocketUrl(input, { allowPrivateWs: true }), input).toBe(false);
     }
   });
 
