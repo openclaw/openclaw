@@ -167,7 +167,7 @@ export function renderApp(state: AppViewState) {
     state.agentsList?.agents?.[0]?.id ??
     null;
 
-  const ensureAgentConfigIndex = (agentId: string): number | null => {
+  const findAgentConfigIndex = (agentId: string): number | null => {
     const current =
       state.configForm ?? (state.configSnapshot?.config as Record<string, unknown> | null) ?? {};
     const agents =
@@ -182,9 +182,21 @@ export function renderApp(state: AppViewState) {
         "id" in entry &&
         (entry as { id?: string }).id === agentId,
     );
-    if (existingIndex >= 0) {
+    return existingIndex >= 0 ? existingIndex : null;
+  };
+
+  const ensureAgentConfigIndex = (agentId: string): number => {
+    const existingIndex = findAgentConfigIndex(agentId);
+    if (existingIndex != null) {
       return existingIndex;
     }
+    const current =
+      state.configForm ?? (state.configSnapshot?.config as Record<string, unknown> | null) ?? {};
+    const agents =
+      current && typeof current === "object" && !Array.isArray(current)
+        ? ((current as { agents?: unknown }).agents as { list?: unknown[] } | undefined)
+        : undefined;
+    const list = Array.isArray(agents?.list) ? agents.list : [];
     updateConfigFormValue(state, ["agents", "list"], [...list, { id: agentId }]);
     return list.length;
   };
@@ -685,10 +697,14 @@ export function renderApp(state: AppViewState) {
                   void saveAgentFile(state, resolvedAgentId, name, content);
                 },
                 onToolsProfileChange: (agentId, profile, clearAllow) => {
-                  const index = ensureAgentConfigIndex(agentId);
-                  if (index == null) {
+                  if (!profile && !clearAllow) {
                     return;
                   }
+                  const existingIndex = findAgentConfigIndex(agentId);
+                  if (!profile && existingIndex == null) {
+                    return;
+                  }
+                  const index = existingIndex ?? ensureAgentConfigIndex(agentId);
                   const basePath = ["agents", "list", index, "tools"];
                   if (profile) {
                     updateConfigFormValue(state, [...basePath, "profile"], profile);
@@ -774,10 +790,11 @@ export function renderApp(state: AppViewState) {
                   updateConfigFormValue(state, ["agents", "list", index, "skills"], []);
                 },
                 onModelChange: (agentId, modelId) => {
-                  const index = ensureAgentConfigIndex(agentId);
-                  if (index == null) {
+                  const existingIndex = findAgentConfigIndex(agentId);
+                  if (!modelId && existingIndex == null) {
                     return;
                   }
+                  const index = existingIndex ?? ensureAgentConfigIndex(agentId);
                   const basePath = ["agents", "list", index, "model"];
                   if (!modelId) {
                     removeConfigFormValue(state, basePath);
@@ -805,10 +822,12 @@ export function renderApp(state: AppViewState) {
                   }
                 },
                 onModelFallbacksChange: (agentId, fallbacks) => {
-                  const index = ensureAgentConfigIndex(agentId);
-                  if (index == null) {
+                  const normalized = fallbacks.map((name) => name.trim()).filter(Boolean);
+                  const existingIndex = findAgentConfigIndex(agentId);
+                  if (normalized.length === 0 && existingIndex == null) {
                     return;
                   }
+                  const index = existingIndex ?? ensureAgentConfigIndex(agentId);
                   const currentConfig =
                     state.configForm ??
                     (state.configSnapshot?.config as Record<string, unknown> | null) ??
@@ -819,7 +838,6 @@ export function renderApp(state: AppViewState) {
                       ? (list[index] as { model?: unknown })
                       : {};
                   const basePath = ["agents", "list", index, "model"];
-                  const normalized = fallbacks.map((name) => name.trim()).filter(Boolean);
                   const existing = entry.model;
                   const resolvePrimary = () => {
                     if (typeof existing === "string") {
