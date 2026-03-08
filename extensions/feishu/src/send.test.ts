@@ -64,7 +64,8 @@ describe("getMessageFeishu", () => {
         messageId: "om_1",
         chatId: "oc_1",
         contentType: "interactive",
-        content: "hello markdown\nhello div",
+        content: "hello markdown
+hello div",
       }),
     );
   });
@@ -166,3 +167,39 @@ describe("getMessageFeishu", () => {
     );
   });
 });
+
+// Image message tests
+describe('sendImageFeishu', () => {
+  const mockImageClient = {
+    im: {
+      image: { create: vi.fn() },
+      message: { create: vi.fn(), reply: vi.fn() },
+    },
+  };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockCreateFeishuClient.mockReturnValue(mockImageClient);
+  });
+
+  it('should upload and send image', async () => {
+    const { sendImageFeishu } = await import('./send.js');
+    
+    mockImageClient.im.image.create.mockResolvedValueOnce({
+      code: 0, data: { image_key: 'img_test123' },
+    });
+    mockImageClient.im.message.create.mockResolvedValueOnce({
+      code: 0, data: { message_id: 'om_img_123', create_time: '1234567890' },
+    });
+
+    const result = await sendImageFeishu({
+      cfg: { feishu: { appId: 'test', appSecret: 'secret' } } as any,
+      to: 'chat:test-id',
+      imagePath: '/test/image.jpg',
+    });
+
+    expect(result.messageId).toBe('om_img_123');
+    expect(mockImageClient.im.image.create).toHaveBeenCalled();
+  });
+});
+
