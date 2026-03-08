@@ -1,0 +1,11 @@
+{
+  "id": "usage-tracker",
+  "name": "Usage Tracker",
+  "description": "Tracks tool calls and skill usage in real-time with historical backfill, query API, and web dashboard.",
+  "entry": "./index.ts",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

@@ -1,0 +1,418 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Usage Tracker — OpenClaw</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4/dist/chart.umd.min.js"></script>
+    <style>
+      :root {
+        --bg: #0d1117;
+        --fg: #c9d1d9;
+        --card: #161b22;
+        --border: #30363d;
+        --accent: #58a6ff;
+        --green: #3fb950;
+        --red: #f85149;
+        --purple: #d2a8ff;
+        --orange: #f0883e;
+      }
+      * {
+        box-sizing: border-box;
+        margin: 0;
+        padding: 0;
+      }
+      body {
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, monospace;
+        background: var(--bg);
+        color: var(--fg);
+        padding: 24px;
+      }
+      h1 {
+        font-size: 1.4rem;
+        margin-bottom: 16px;
+      }
+      .controls {
+        display: flex;
+        gap: 12px;
+        align-items: center;
+        margin-bottom: 20px;
+        flex-wrap: wrap;
+      }
+      .controls label {
+        font-size: 0.85rem;
+        color: #8b949e;
+      }
+      .controls input[type="date"] {
+        background: var(--card);
+        border: 1px solid var(--border);
+        color: var(--fg);
+        padding: 4px 8px;
+        border-radius: 4px;
+      }
+      button {
+        background: var(--accent);
+        color: #000;
+        border: none;
+        padding: 6px 14px;
+        border-radius: 4px;
+        cursor: pointer;
+        font-weight: 600;
+        font-size: 0.85rem;
+      }
+      button:hover {
+        opacity: 0.9;
+      }
+      button.secondary {
+        background: var(--border);
+        color: var(--fg);
+      }
+      .grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(340px, 1fr));
+        gap: 16px;
+        margin-bottom: 24px;
+      }
+      .card {
+        background: var(--card);
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        padding: 16px;
+      }
+      .card.full {
+        grid-column: 1 / -1;
+      }
+      .card h2 {
+        font-size: 1rem;
+        margin-bottom: 12px;
+        color: var(--accent);
+      }
+      .card h2 .badge {
+        font-size: 0.7rem;
+        background: var(--accent);
+        color: #000;
+        padding: 2px 6px;
+        border-radius: 3px;
+        margin-left: 8px;
+        vertical-align: middle;
+      }
+      .stat-row {
+        display: flex;
+        justify-content: space-between;
+        padding: 4px 0;
+        font-size: 0.85rem;
+        border-bottom: 1px solid var(--border);
+      }
+      .stat-row:last-child {
+        border-bottom: none;
+      }
+      .stat-value {
+        font-weight: 600;
+      }
+      .chart-container {
+        position: relative;
+        height: 260px;
+      }
+      .status-msg {
+        font-size: 0.85rem;
+        color: #8b949e;
+        padding: 8px 0;
+      }
+      table {
+        width: 100%;
+        border-collapse: collapse;
+        font-size: 0.85rem;
+      }
+      th,
+      td {
+        text-align: left;
+        padding: 6px 8px;
+        border-bottom: 1px solid var(--border);
+      }
+      th {
+        color: var(--accent);
+        font-weight: 600;
+      }
+      .err {
+        color: var(--red);
+      }
+      .dur {
+        color: var(--orange);
+      }
+      .sub {
+        color: var(--purple);
+      }
+      .small {
+        font-size: 0.75rem;
+        color: #8b949e;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>Usage Tracker</h1>
+
+    <div class="controls">
+      <label>From <input type="date" id="startDay" /></label>
+      <label>To <input type="date" id="endDay" /></label>
+      <button onclick="loadData()">Refresh</button>
+      <button class="secondary" onclick="recalculate()">Recalculate</button>
+      <span id="statusMsg" class="status-msg"></span>
+    </div>
+
+    <div class="grid">
+      <div class="card">
+        <h2>Overview</h2>
+        <div id="overview">Loading...</div>
+      </div>
+      <div class="card">
+        <h2>Tool Calls by Day</h2>
+        <div class="chart-container"><canvas id="dailyChart"></canvas></div>
+      </div>
+    </div>
+
+    <div class="grid">
+      <div class="card">
+        <h2>Top Tools</h2>
+        <div id="toolsTable"></div>
+      </div>
+      <div class="card">
+        <h2>Skill Reads</h2>
+        <div id="skillsTable"></div>
+      </div>
+    </div>
+
+    <div class="grid">
+      <div class="card full">
+        <h2>Skill Lifecycle <span class="badge">Sessions</span></h2>
+        <p class="small" style="margin-bottom: 12px">
+          Full lifecycle from SKILL.md read → final response. Shows real usage cost per skill.
+        </p>
+        <div id="skillSessionsTable"></div>
+      </div>
+    </div>
+
+    <div class="grid">
+      <div class="card full">
+        <h2>Tools Distribution</h2>
+        <div class="chart-container"><canvas id="toolsPie"></canvas></div>
+      </div>
+    </div>
+
+    <script>
+      const BASE = window.location.pathname.replace(/\/$/, "");
+      let dailyChartInstance = null;
+      let pieChartInstance = null;
+
+      function defaultDates() {
+        const end = new Date();
+        const start = new Date();
+        start.setDate(start.getDate() - 30);
+        document.getElementById("startDay").value = fmt(start);
+        document.getElementById("endDay").value = fmt(end);
+      }
+
+      function fmt(d) {
+        return d.toISOString().slice(0, 10);
+      }
+
+      function fmtDur(sec) {
+        if (sec < 60) return sec.toFixed(1) + "s";
+        if (sec < 3600) return (sec / 60).toFixed(1) + "m";
+        return (sec / 3600).toFixed(1) + "h";
+      }
+
+      async function apiFetch(action, extra) {
+        const startDay = document.getElementById("startDay").value;
+        const endDay = document.getElementById("endDay").value;
+        const params = new URLSearchParams({ action, startDay, endDay, ...extra });
+        const res = await fetch(BASE + "/api?" + params.toString());
+        return res.json();
+      }
+
+      async function loadData() {
+        document.getElementById("statusMsg").textContent = "Loading...";
+        try {
+          const [status, byTool, byDay, skills, skillSessions] = await Promise.all([
+            apiFetch("status"),
+            apiFetch("query", { groupBy: "tool" }),
+            apiFetch("query", { groupBy: "day" }),
+            apiFetch("skill_health"),
+            apiFetch("skill_sessions"),
+          ]);
+          renderOverview(status);
+          renderDailyChart(byDay);
+          renderToolsTable(byTool);
+          renderToolsPie(byTool);
+          renderSkillsTable(skills);
+          renderSkillSessions(skillSessions);
+          document.getElementById("statusMsg").textContent =
+            "Updated " + new Date().toLocaleTimeString();
+        } catch (err) {
+          document.getElementById("statusMsg").textContent = "Error: " + err.message;
+        }
+      }
+
+      function renderOverview(data) {
+        const el = document.getElementById("overview");
+        if (!data || data.totalRecords === 0) {
+          el.innerHTML =
+            '<p class="status-msg">No data yet. Click Recalculate to backfill historical data.</p>';
+          return;
+        }
+        el.innerHTML = `
+    <div class="stat-row"><span>Total Records</span><span class="stat-value">${data.totalRecords.toLocaleString()}</span></div>
+    <div class="stat-row"><span>Days Tracked</span><span class="stat-value">${data.daysTracked}</span></div>
+    <div class="stat-row"><span>Date Range</span><span class="stat-value">${data.dateRange ? data.dateRange.start + " → " + data.dateRange.end : "N/A"}</span></div>
+    <div class="stat-row"><span>Top Tool</span><span class="stat-value">${data.topTools?.[0]?.tool ?? "N/A"} (${data.topTools?.[0]?.count ?? 0})</span></div>
+    <div class="stat-row"><span>Top Skill</span><span class="stat-value">${data.topSkills?.[0]?.skill ?? "N/A"} (${data.topSkills?.[0]?.count ?? 0})</span></div>`;
+      }
+
+      function renderDailyChart(data) {
+        const ctx = document.getElementById("dailyChart");
+        if (dailyChartInstance) dailyChartInstance.destroy();
+        if (!data?.buckets?.length) return;
+        const sorted = data.buckets.sort((a, b) => a.key.localeCompare(b.key));
+        dailyChartInstance = new Chart(ctx, {
+          type: "bar",
+          data: {
+            labels: sorted.map((b) => b.key),
+            datasets: [
+              {
+                label: "Tool Calls",
+                data: sorted.map((b) => b.count),
+                backgroundColor: "#58a6ff88",
+                borderColor: "#58a6ff",
+                borderWidth: 1,
+              },
+              {
+                label: "Errors",
+                data: sorted.map((b) => b.errors),
+                backgroundColor: "#f8514988",
+                borderColor: "#f85149",
+                borderWidth: 1,
+              },
+            ],
+          },
+          options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            scales: {
+              x: { ticks: { color: "#8b949e", maxRotation: 45 }, grid: { color: "#30363d" } },
+              y: { ticks: { color: "#8b949e" }, grid: { color: "#30363d" }, beginAtZero: true },
+            },
+            plugins: { legend: { labels: { color: "#c9d1d9" } } },
+          },
+        });
+      }
+
+      function renderToolsTable(data) {
+        const el = document.getElementById("toolsTable");
+        if (!data?.buckets?.length) {
+          el.innerHTML = '<p class="status-msg">No data</p>';
+          return;
+        }
+        const rows = data.buckets
+          .slice(0, 15)
+          .map(
+            (b) =>
+              `<tr><td>${b.key}</td><td>${b.count}</td><td class="err">${b.errors}</td><td class="dur">${b.avgDurMs}ms</td></tr>`,
+          )
+          .join("");
+        el.innerHTML = `<table><tr><th>Tool</th><th>Calls</th><th>Errors</th><th>Avg Dur</th></tr>${rows}</table>`;
+      }
+
+      function renderToolsPie(data) {
+        const ctx = document.getElementById("toolsPie");
+        if (pieChartInstance) pieChartInstance.destroy();
+        if (!data?.buckets?.length) return;
+        const top = data.buckets.slice(0, 10);
+        const colors = [
+          "#58a6ff",
+          "#3fb950",
+          "#d2a8ff",
+          "#f0883e",
+          "#f85149",
+          "#79c0ff",
+          "#56d364",
+          "#e3b341",
+          "#bc8cff",
+          "#db6d28",
+        ];
+        pieChartInstance = new Chart(ctx, {
+          type: "doughnut",
+          data: {
+            labels: top.map((b) => b.key),
+            datasets: [{ data: top.map((b) => b.count), backgroundColor: colors }],
+          },
+          options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            plugins: { legend: { position: "right", labels: { color: "#c9d1d9", boxWidth: 12 } } },
+          },
+        });
+      }
+
+      function renderSkillsTable(data) {
+        const el = document.getElementById("skillsTable");
+        if (!data?.length) {
+          el.innerHTML = '<p class="status-msg">No skill data</p>';
+          return;
+        }
+        const rows = data
+          .slice(0, 15)
+          .map(
+            (s) =>
+              `<tr><td>${s.skill}</td><td>${s.totalCalls}</td><td>${s.entryReads}</td><td class="sub">${s.subReads}</td><td class="err">${s.errors}</td><td class="dur">${s.avgDurMs}ms</td></tr>`,
+          )
+          .join("");
+        el.innerHTML = `<table><tr><th>Skill</th><th>Total</th><th>Entry</th><th>Sub</th><th>Errors</th><th>Avg Dur</th></tr>${rows}</table>`;
+      }
+
+      function renderSkillSessions(data) {
+        const el = document.getElementById("skillSessionsTable");
+        if (!data?.length) {
+          el.innerHTML =
+            '<p class="status-msg">No skill session data. Click Recalculate first.</p>';
+          return;
+        }
+        const rows = data
+          .map((s) => {
+            const topTools = (s.topTools || [])
+              .slice(0, 3)
+              .map((t) => `${t.tool}(${t.count})`)
+              .join(", ");
+            return `<tr>
+      <td>${s.skill}</td>
+      <td>${s.sessionCount}</td>
+      <td class="dur">${fmtDur(s.avgDurationSec)}</td>
+      <td class="dur">${fmtDur(s.maxDurationSec)}</td>
+      <td>${s.avgToolCalls}</td>
+      <td class="sub">${s.avgSubReads}</td>
+      <td class="small">${topTools}</td>
+    </tr>`;
+          })
+          .join("");
+        el.innerHTML = `<table>
+    <tr><th>Skill</th><th>Sessions</th><th>Avg Dur</th><th>Max Dur</th><th>Avg Tools</th><th>Avg Sub</th><th>Top Tools</th></tr>
+    ${rows}
+  </table>`;
+      }
+
+      async function recalculate() {
+        document.getElementById("statusMsg").textContent = "Recalculating...";
+        try {
+          const res = await fetch(BASE + "/api?action=backfill", { method: "POST" });
+          const result = await res.json();
+          document.getElementById("statusMsg").textContent =
+            `Done: ${result.sessionsScanned} sessions, ${result.recordsGenerated} records, ${result.skillSessionsFound ?? 0} skill sessions`;
+          await loadData();
+        } catch (err) {
+          document.getElementById("statusMsg").textContent = "Error: " + err.message;
+        }
+      }
+
+      defaultDates();
+      loadData();
+    </script>
+  </body>
+</html>
