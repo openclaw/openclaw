@@ -433,17 +433,22 @@ describe("ContinuityService", () => {
 
   it("orders managed markdown entries and recall lines by most recent record when scores tie", async () => {
     const service = createContinuityService(makeConfig());
+    const nowSpy = vi.spyOn(Date, "now").mockReturnValue(1_700_000_000_000);
 
-    await service.captureTurn({
-      sessionId: "session-order-1",
-      sessionKey: "main",
-      messages: [makeMessage("Remember this: my timezone is America/Chicago.")],
-    });
-    await service.captureTurn({
-      sessionId: "session-order-2",
-      sessionKey: "main",
-      messages: [makeMessage("Remember this: deadline is Friday.")],
-    });
+    try {
+      await service.captureTurn({
+        sessionId: "session-order-1",
+        sessionKey: "main",
+        messages: [makeMessage("Remember this: my timezone is America/Chicago.")],
+      });
+      await service.captureTurn({
+        sessionId: "session-order-2",
+        sessionKey: "main",
+        messages: [makeMessage("Remember this: deadline is Friday.")],
+      });
+    } finally {
+      nowSpy.mockRestore();
+    }
 
     const factsPath = path.join(workspaceDir, "memory", "continuity", "facts.md");
     const markdown = await fs.readFile(factsPath, "utf8");

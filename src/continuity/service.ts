@@ -145,6 +145,25 @@ function rankRecords(
     });
 }
 
+function nextTimestamp(records: ContinuityRecord[], now = Date.now()): number {
+  let maxTimestamp = 0;
+  for (const record of records) {
+    if (record.createdAt > maxTimestamp) {
+      maxTimestamp = record.createdAt;
+    }
+    if (record.updatedAt > maxTimestamp) {
+      maxTimestamp = record.updatedAt;
+    }
+    if (record.reviewState === "approved" && record.approvedAt > maxTimestamp) {
+      maxTimestamp = record.approvedAt;
+    }
+    if (record.reviewState === "rejected" && record.rejectedAt > maxTimestamp) {
+      maxTimestamp = record.rejectedAt;
+    }
+  }
+  return now <= maxTimestamp ? maxTimestamp + 1 : now;
+}
+
 function renderManagedSection(kind: ContinuityKind, records: ContinuityRecord[]): string {
   const approved = records.filter(
     (record): record is Extract<ContinuityRecord, { reviewState: "approved" }> =>
@@ -346,14 +365,14 @@ export class ContinuityService {
           (record) => record.kind === entry.kind && record.normalizedText === normalizedText,
         );
         if (existing) {
-          existing.updatedAt = Date.now();
+          existing.updatedAt = nextTimestamp(store.records);
           existing.confidence = Math.max(existing.confidence, entry.confidence);
           if (existing.reviewState === "approved") {
             created.push(existing);
           }
           continue;
         }
-        const now = Date.now();
+        const now = nextTimestamp(store.records);
         const shouldApprove =
           mode === "auto" && (sourceClass !== "main_direct" || this.config.review.autoApproveMain);
         const base = {
@@ -457,12 +476,13 @@ export class ContinuityService {
       if (!record) {
         return { ok: false };
       }
+      const timestamp = nextTimestamp(store.records);
       if (params.action === "approve") {
-        const approved = toApprovedRecord(record, Date.now());
+        const approved = toApprovedRecord(record, timestamp);
         store.records[index] = approved;
         return { ok: true, record: approved };
       }
-      const rejected = toRejectedRecord(record, Date.now());
+      const rejected = toRejectedRecord(record, timestamp);
       store.records[index] = rejected;
       return { ok: true, record: rejected };
     });
