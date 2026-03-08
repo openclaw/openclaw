@@ -66,6 +66,7 @@ cat ~/.openclaw/openclaw.json
 - Talk config migration from legacy flat `talk.*` fields into `talk.provider` + `talk.providers.<provider>`.
 - Browser migration checks for legacy Chrome extension configs and Chrome MCP readiness.
 - OpenCode provider override warnings (`models.providers.opencode` / `models.providers.opencode-go`).
+- Codex OAuth shadowing warnings (`models.providers.openai-codex`).
 - OAuth TLS prerequisites check for OpenAI Codex OAuth profiles.
 - Legacy on-disk state migration (sessions/agent dir/WhatsApp auth).
 - Legacy plugin manifest contract key migration (`speechProviders`, `realtimeTranscriptionProviders`, `realtimeVoiceProviders`, `mediaUnderstandingProviders`, `imageGenerationProviders`, `videoGenerationProviders`, `webFetchProviders`, `webSearchProviders` → `contracts`).
@@ -211,6 +212,14 @@ example `UNABLE_TO_GET_ISSUER_CERT_LOCALLY`, expired cert, or self-signed cert),
 doctor prints platform-specific fix guidance. On macOS with a Homebrew Node, the
 fix is usually `brew postinstall ca-certificates`. With `--deep`, the probe runs
 even if the gateway is healthy.
+
+### 2c) Codex OAuth provider overrides
+
+If you previously added `models.providers.openai-codex` manually, that legacy
+override can shadow the built-in Codex OAuth provider path that newer releases
+use automatically. Doctor warns when it sees that override alongside Codex OAuth
+so you can remove the stale config and get the built-in routing/fallback behavior
+back.
 
 ### 3) Legacy state migrations (disk layout)
 
