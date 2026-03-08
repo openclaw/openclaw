@@ -68,6 +68,7 @@ import androidx.lifecycle.compose.LocalLifecycleOwner
 import ai.openclaw.app.BuildConfig
 import ai.openclaw.app.LocationMode
 import ai.openclaw.app.MainViewModel
+import ai.openclaw.app.normalizeLocalHourMinute
 import ai.openclaw.app.NotificationPackageFilterMode
 import ai.openclaw.app.node.DeviceNotificationListenerService
 
@@ -103,6 +104,18 @@ fun SettingsSheet(viewModel: MainViewModel) {
   var notificationSessionKeyDraft by remember(notificationForwardingSessionKey) {
     mutableStateOf(notificationForwardingSessionKey.orEmpty())
   }
+  val normalizedQuietStartDraft = remember(notificationQuietStartDraft) {
+    normalizeLocalHourMinute(notificationQuietStartDraft)
+  }
+  val normalizedQuietEndDraft = remember(notificationQuietEndDraft) {
+    normalizeLocalHourMinute(notificationQuietEndDraft)
+  }
+  val quietHoursDraftValid = normalizedQuietStartDraft != null && normalizedQuietEndDraft != null
+  val quietHoursCanEnable = notificationForwardingEnabled && quietHoursDraftValid
+  val quietHoursDraftDirty =
+    notificationForwardingQuietStart != (normalizedQuietStartDraft ?: notificationQuietStartDraft.trim()) ||
+      notificationForwardingQuietEnd != (normalizedQuietEndDraft ?: notificationQuietEndDraft.trim())
+  val quietHoursSaveEnabled = notificationForwardingEnabled && quietHoursDraftValid && quietHoursDraftDirty
 
   val listState = rememberLazyListState()
   val deviceModel =
@@ -734,13 +747,14 @@ fun SettingsSheet(viewModel: MainViewModel) {
             Switch(
               checked = notificationForwardingQuietHoursEnabled,
               onCheckedChange = {
+                if (!quietHoursCanEnable && it) return@Switch
                 viewModel.setNotificationForwardingQuietHours(
                   enabled = it,
                   start = notificationQuietStartDraft,
                   end = notificationQuietEndDraft,
                 )
               },
-              enabled = notificationForwardingEnabled,
+              enabled = if (notificationForwardingQuietHoursEnabled) notificationForwardingEnabled else quietHoursCanEnable,
             )
           },
         )
@@ -754,6 +768,12 @@ fun SettingsSheet(viewModel: MainViewModel) {
           textStyle = mobileBody.copy(color = mobileText),
           colors = settingsTextFieldColors(),
           enabled = notificationForwardingEnabled,
+          isError = notificationForwardingEnabled && normalizedQuietStartDraft == null,
+          supportingText = {
+            if (notificationForwardingEnabled && normalizedQuietStartDraft == null) {
+              Text("Use 24-hour HH:mm format, for example 22:00.", style = mobileCaption1, color = mobileDanger)
+            }
+          },
         )
       }
       item {
@@ -765,6 +785,12 @@ fun SettingsSheet(viewModel: MainViewModel) {
           textStyle = mobileBody.copy(color = mobileText),
           colors = settingsTextFieldColors(),
           enabled = notificationForwardingEnabled,
+          isError = notificationForwardingEnabled && normalizedQuietEndDraft == null,
+          supportingText = {
+            if (notificationForwardingEnabled && normalizedQuietEndDraft == null) {
+              Text("Use 24-hour HH:mm format, for example 07:00.", style = mobileCaption1, color = mobileDanger)
+            }
+          },
         )
       }
       item {
@@ -777,7 +803,7 @@ fun SettingsSheet(viewModel: MainViewModel) {
                 end = notificationQuietEndDraft,
               )
             },
-            enabled = notificationForwardingEnabled,
+            enabled = quietHoursSaveEnabled,
             colors = settingsPrimaryButtonColors(),
             shape = RoundedCornerShape(14.dp),
           ) {

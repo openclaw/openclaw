@@ -121,16 +121,25 @@ class SecurePrefs(
   private val _notificationForwardingPackages = MutableStateFlow(loadNotificationForwardingPackages())
   val notificationForwardingPackages: StateFlow<Set<String>> = _notificationForwardingPackages
 
+  private val storedQuietStart =
+    normalizeLocalHourMinute(plainPrefs.getString(notificationsForwardingQuietStartKey, "22:00").orEmpty())
+      ?: "22:00"
+  private val storedQuietEnd =
+    normalizeLocalHourMinute(plainPrefs.getString(notificationsForwardingQuietEndKey, "07:00").orEmpty())
+      ?: "07:00"
+  private val storedQuietHoursEnabled =
+    plainPrefs.getBoolean(notificationsForwardingQuietHoursEnabledKey, false) &&
+      normalizeLocalHourMinute(plainPrefs.getString(notificationsForwardingQuietStartKey, "22:00").orEmpty()) != null &&
+      normalizeLocalHourMinute(plainPrefs.getString(notificationsForwardingQuietEndKey, "07:00").orEmpty()) != null
+
   private val _notificationForwardingQuietHoursEnabled =
-    MutableStateFlow(plainPrefs.getBoolean(notificationsForwardingQuietHoursEnabledKey, false))
+    MutableStateFlow(storedQuietHoursEnabled)
   val notificationForwardingQuietHoursEnabled: StateFlow<Boolean> = _notificationForwardingQuietHoursEnabled
 
-  private val _notificationForwardingQuietStart =
-    MutableStateFlow(plainPrefs.getString(notificationsForwardingQuietStartKey, "22:00")?.trim().orEmpty())
+  private val _notificationForwardingQuietStart = MutableStateFlow(storedQuietStart)
   val notificationForwardingQuietStart: StateFlow<String> = _notificationForwardingQuietStart
 
-  private val _notificationForwardingQuietEnd =
-    MutableStateFlow(plainPrefs.getString(notificationsForwardingQuietEndKey, "07:00")?.trim().orEmpty())
+  private val _notificationForwardingQuietEnd = MutableStateFlow(storedQuietEnd)
   val notificationForwardingQuietEnd: StateFlow<String> = _notificationForwardingQuietEnd
 
   private val _notificationForwardingMaxEventsPerMinute =
@@ -257,16 +266,20 @@ class SecurePrefs(
         ?.trim()
         ?.takeIf { it.isNotEmpty() }
 
+    val quietStart = storedQuietStart
+    val quietEnd = storedQuietEnd
+    val quietHoursEnabled =
+      plainPrefs.getBoolean(notificationsForwardingQuietHoursEnabledKey, false) &&
+        normalizeLocalHourMinute(plainPrefs.getString(notificationsForwardingQuietStartKey, "22:00").orEmpty()) != null &&
+        normalizeLocalHourMinute(plainPrefs.getString(notificationsForwardingQuietEndKey, "07:00").orEmpty()) != null
+
     return NotificationForwardingPolicy(
       enabled = plainPrefs.getBoolean(notificationsForwardingEnabledKey, true),
       mode = mode,
       packages = packages,
-      quietHoursEnabled =
-        plainPrefs.getBoolean(notificationsForwardingQuietHoursEnabledKey, false),
-      quietStart =
-        plainPrefs.getString(notificationsForwardingQuietStartKey, "22:00")?.trim().orEmpty(),
-      quietEnd =
-        plainPrefs.getString(notificationsForwardingQuietEndKey, "07:00")?.trim().orEmpty(),
+      quietHoursEnabled = quietHoursEnabled,
+      quietStart = quietStart,
+      quietEnd = quietEnd,
       maxEventsPerMinute = maxEvents.coerceAtLeast(1),
       sessionKey = sessionKey,
     )
@@ -300,9 +313,9 @@ class SecurePrefs(
     enabled: Boolean,
     start: String,
     end: String,
-  ) {
-    val normalizedStart = start.trim()
-    val normalizedEnd = end.trim()
+  ): Boolean {
+    val normalizedStart = normalizeLocalHourMinute(start) ?: return false
+    val normalizedEnd = normalizeLocalHourMinute(end) ?: return false
     plainPrefs.edit {
       putBoolean(notificationsForwardingQuietHoursEnabledKey, enabled)
       putString(notificationsForwardingQuietStartKey, normalizedStart)
@@ -311,6 +324,7 @@ class SecurePrefs(
     _notificationForwardingQuietHoursEnabled.value = enabled
     _notificationForwardingQuietStart.value = normalizedStart
     _notificationForwardingQuietEnd.value = normalizedEnd
+    return true
   }
 
   internal fun setNotificationForwardingMaxEventsPerMinute(value: Int) {

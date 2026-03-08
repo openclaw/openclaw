@@ -713,8 +713,8 @@ class NodeRuntime(
     enabled: Boolean,
     start: String,
     end: String,
-  ) {
-    prefs.setNotificationForwardingQuietHours(enabled = enabled, start = start, end = end)
+  ): Boolean {
+    return prefs.setNotificationForwardingQuietHours(enabled = enabled, start = start, end = end)
   }
 
   fun setNotificationForwardingMaxEventsPerMinute(value: Int) {
