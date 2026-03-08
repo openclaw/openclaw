@@ -183,9 +183,12 @@ function resolveChatSendOriginatingRoute(params: {
   // Preserve the old configured-main contract: any connected non-webchat client
   // may inherit the last external route even when client metadata is absent.
   // Exception: a main session with an explicit inbound delivery context (e.g. set
-  // by a Slack DM handler) may be inherited even by webchat clients when
-  // deliver=true is requested, so embedded agent replies reach the originating
-  // channel. Requires deliveryContext (not just stale lastChannel) to stay safe.
+  // by a Slack DM handler) may be inherited by ANY client (webchat or non-webchat)
+  // when deliver=true is requested, so embedded agent replies reach the originating
+  // channel. This intentionally bypasses the !isFromWebchatClient and
+  // hasConnectedClient guards because deliveryContext is a stronger trust signal
+  // than stale lastChannel/lastTo fields. Requires deliveryContext (not just stale
+  // lastChannel) to stay safe.
   const canInheritDeliverableRoute = Boolean(
     sessionChannelHint &&
     sessionChannelHint !== INTERNAL_MESSAGE_CHANNEL &&
