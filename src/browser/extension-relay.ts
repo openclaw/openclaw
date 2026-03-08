@@ -82,6 +82,7 @@ type ConnectedTarget = {
 };
 
 const RELAY_AUTH_HEADER = "x-openclaw-relay-token";
+const RELAY_AUTH_PROTOCOL_PREFIX = "openclaw-relay-token.";
 const DEFAULT_EXTENSION_RECONNECT_GRACE_MS = 20_000;
 const DEFAULT_EXTENSION_COMMAND_RECONNECT_WAIT_MS = 3_000;
 
@@ -99,14 +100,39 @@ function getHeader(req: IncomingMessage, name: string): string | undefined {
   return headerValue(req.headers[name.toLowerCase()]);
 }
 
-function getRelayAuthTokenFromRequest(req: IncomingMessage, url?: URL): string | undefined {
+function decodeRelayAuthProtocolToken(value: string): string | undefined {
+  const encoded = value.trim();
+  if (!encoded) {
+    return undefined;
+  }
+  try {
+    const normalized = encoded.replace(/-/g, "+").replace(/_/g, "/");
+    const padded = normalized.padEnd(Math.ceil(normalized.length / 4) * 4, "=");
+    const decoded = Buffer.from(padded, "base64").toString("utf8").trim();
+    return decoded || undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function getRelayAuthTokenFromRequest(req: IncomingMessage): string | undefined {
   const headerToken = getHeader(req, RELAY_AUTH_HEADER)?.trim();
   if (headerToken) {
     return headerToken;
   }
-  const queryToken = url?.searchParams.get("token")?.trim();
-  if (queryToken) {
-    return queryToken;
+  const protocols = getHeader(req, "sec-websocket-protocol");
+  if (!protocols) {
+    return undefined;
+  }
+  for (const rawProtocol of protocols.split(",")) {
+    const protocol = rawProtocol.trim();
+    if (!protocol.startsWith(RELAY_AUTH_PROTOCOL_PREFIX)) {
+      continue;
+    }
+    const decoded = decodeRelayAuthProtocolToken(protocol.slice(RELAY_AUTH_PROTOCOL_PREFIX.length));
+    if (decoded) {
+      return decoded;
+    }
   }
   return undefined;
 }
@@ -561,7 +587,7 @@ export async function ensureChromeExtensionRelayServer(opts: {
       }
 
       if (path.startsWith("/json")) {
-        const token = getRelayAuthTokenFromRequest(req, url);
+        const token = getRelayAuthTokenFromRequest(req);
         if (!token || !relayAuthTokens.has(token)) {
           res.writeHead(401);
           res.end("Unauthorized");
@@ -694,7 +720,7 @@ export async function ensureChromeExtensionRelayServer(opts: {
       }
 
       if (pathname === "/extension") {
-        const token = getRelayAuthTokenFromRequest(req, url);
+        const token = getRelayAuthTokenFromRequest(req);
         if (!token || !relayAuthTokens.has(token)) {
           rejectUpgrade(socket, 401, "Unauthorized");
           return;
@@ -719,7 +745,7 @@ export async function ensureChromeExtensionRelayServer(opts: {
       }
 
       if (pathname === "/cdp") {
-        const token = getRelayAuthTokenFromRequest(req, url);
+        const token = getRelayAuthTokenFromRequest(req);
         if (!token || !relayAuthTokens.has(token)) {
           rejectUpgrade(socket, 401, "Unauthorized");
           return;
