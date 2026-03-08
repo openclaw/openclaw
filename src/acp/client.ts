@@ -331,6 +331,13 @@ export type AcpClientHandle = {
   sessionId: string;
 };
 
+export function formatAcpClientStopReason(stopReason: string | undefined): string | null {
+  if (!stopReason || stopReason === "end_turn") {
+    return null;
+  }
+  return `\n[${stopReason}]\n`;
+}
+
 function toArgs(value: string[] | string | undefined): string[] {
   if (!value) {
     return [];
@@ -554,7 +561,10 @@ export async function runAcpClientInteractive(opts: AcpClientOptions = {}): Prom
           sessionId,
           prompt: [{ type: "text", text }],
         });
-        console.log(`\n[${response.stopReason}]\n`);
+        const stopReasonMessage = formatAcpClientStopReason(response.stopReason);
+        if (stopReasonMessage) {
+          process.stdout.write(stopReasonMessage);
+        }
       } catch (err) {
         console.error(`\n[error] ${String(err)}\n`);
       }
