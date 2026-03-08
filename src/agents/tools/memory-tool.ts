@@ -56,12 +56,15 @@ export function createMemorySearchTool(options: {
       const query = readStringParam(params, "query", { required: true });
       const maxResults = readNumberParam(params, "maxResults");
       const minScore = readNumberParam(params, "minScore");
+      // Check if QMD is explicitly configured for better error messaging
+      const resolvedBackend = resolveMemoryBackendConfig({ cfg, agentId });
+      const isQmdConfigured = resolvedBackend.backend === "qmd";
       const { manager, error } = await getMemorySearchManager({
         cfg,
         agentId,
       });
       if (!manager) {
-        return jsonResult(buildMemorySearchUnavailableResult(error));
+        return jsonResult(buildMemorySearchUnavailableResult(error, isQmdConfigured));
       }
       try {
         const citationsMode = resolveMemoryCitationsMode(cfg);
@@ -92,7 +95,7 @@ export function createMemorySearchTool(options: {
         });
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
-        return jsonResult(buildMemorySearchUnavailableResult(message));
+        return jsonResult(buildMemorySearchUnavailableResult(message, isQmdConfigured));
       }
     },
   };
@@ -192,8 +195,30 @@ function clampResultsByInjectedChars(
   return clamped;
 }
 
-function buildMemorySearchUnavailableResult(error: string | undefined) {
+function buildMemorySearchUnavailableResult(error: string | undefined, isQmdConfigured: boolean) {
   const reason = (error ?? "memory search unavailable").trim() || "memory search unavailable";
+  
+  // When QMD is configured, provide QMD-specific error messages
+  if (isQmdConfigured) {
+    const isQmdError = /qmd|collection|index/.test(reason.toLowerCase());
+    const warning = isQmdError
+      ? "Memory search is unavailable because QMD (local memory backend) encountered an error."
+      : "Memory search is unavailable. The local QMD backend may have fallen back to cloud embeddings which failed.";
+    const action = isQmdError
+      ? "Check QMD status with 'qmd status' and ensure collections are indexed. See docs: https://docs.openclaw.ai/concepts/memory"
+      : "Check QMD status with 'qmd status'. If using QMD, no cloud API keys should be needed. If fallback occurred, check embedding provider config or use 'qmd query' directly as workaround.";
+    return {
+      results: [],
+      disabled: true,
+      unavailable: true,
+      error: reason,
+      warning,
+      action,
+      backend: "qmd",
+    };
+  }
+  
+  // Original behavior for builtin backend
   const isQuotaError = /insufficient_quota|quota|429/.test(reason.toLowerCase());
   const warning = isQuotaError
     ? "Memory search is unavailable because the embedding provider quota is exhausted."
