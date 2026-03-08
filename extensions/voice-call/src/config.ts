@@ -368,6 +368,55 @@ function cloneDefaultVoiceCallConfig(): VoiceCallConfig {
   return structuredClone(DEFAULT_VOICE_CALL_CONFIG);
 }
 
+function normalizeVoiceCallTtsConfig(
+  defaults: VoiceCallTtsConfig,
+  overrides: DeepPartial<NonNullable<VoiceCallTtsConfig>> | undefined,
+): VoiceCallTtsConfig {
+  if (!defaults && !overrides) {
+    return undefined;
+  }
+
+  return TtsConfigSchema.parse({
+    ...(defaults ?? {}),
+    ...(overrides ?? {}),
+    modelOverrides:
+      defaults?.modelOverrides || overrides?.modelOverrides
+        ? {
+            ...(defaults?.modelOverrides ?? {}),
+            ...(overrides?.modelOverrides ?? {}),
+          }
+        : undefined,
+    elevenlabs:
+      defaults?.elevenlabs || overrides?.elevenlabs
+        ? {
+            ...(defaults?.elevenlabs ?? {}),
+            ...(overrides?.elevenlabs ?? {}),
+            voiceSettings:
+              defaults?.elevenlabs?.voiceSettings || overrides?.elevenlabs?.voiceSettings
+                ? {
+                    ...(defaults?.elevenlabs?.voiceSettings ?? {}),
+                    ...(overrides?.elevenlabs?.voiceSettings ?? {}),
+                  }
+                : undefined,
+          }
+        : undefined,
+    openai:
+      defaults?.openai || overrides?.openai
+        ? {
+            ...(defaults?.openai ?? {}),
+            ...(overrides?.openai ?? {}),
+          }
+        : undefined,
+    edge:
+      defaults?.edge || overrides?.edge
+        ? {
+            ...(defaults?.edge ?? {}),
+            ...(overrides?.edge ?? {}),
+          }
+        : undefined,
+  });
+}
+
 export function normalizeVoiceCallConfig(config: VoiceCallConfigInput): VoiceCallConfig {
   const defaults = cloneDefaultVoiceCallConfig();
   return {
@@ -387,7 +436,7 @@ export function normalizeVoiceCallConfig(config: VoiceCallConfigInput): VoiceCal
     },
     streaming: { ...defaults.streaming, ...config.streaming },
     stt: { ...defaults.stt, ...config.stt },
-    tts: config.tts ?? defaults.tts,
+    tts: normalizeVoiceCallTtsConfig(defaults.tts, config.tts),
   };
 }
 

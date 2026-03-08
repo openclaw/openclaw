@@ -64,7 +64,9 @@ export type GatewayService = {
   readRuntime: (env: GatewayServiceEnv) => Promise<GatewayServiceRuntime>;
 };
 
-const GATEWAY_SERVICE_REGISTRY = {
+type SupportedGatewayServicePlatform = "darwin" | "linux" | "win32";
+
+const GATEWAY_SERVICE_REGISTRY: Record<SupportedGatewayServicePlatform, GatewayService> = {
   darwin: {
     label: "LaunchAgent",
     loadedText: "loaded",
@@ -101,12 +103,17 @@ const GATEWAY_SERVICE_REGISTRY = {
     readCommand: readScheduledTaskCommand,
     readRuntime: readScheduledTaskRuntime,
   },
-} satisfies Partial<Record<NodeJS.Platform, GatewayService>>;
+};
+
+function isSupportedGatewayServicePlatform(
+  platform: NodeJS.Platform,
+): platform is SupportedGatewayServicePlatform {
+  return Object.hasOwn(GATEWAY_SERVICE_REGISTRY, platform);
+}
 
 export function resolveGatewayService(): GatewayService {
-  const service = GATEWAY_SERVICE_REGISTRY[process.platform];
-  if (service) {
-    return service;
+  if (isSupportedGatewayServicePlatform(process.platform)) {
+    return GATEWAY_SERVICE_REGISTRY[process.platform];
   }
   throw new Error(`Gateway service install not supported on ${process.platform}`);
 }
