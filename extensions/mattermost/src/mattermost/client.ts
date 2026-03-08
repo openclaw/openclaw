@@ -175,6 +175,28 @@ export async function createMattermostDirectChannel(
   });
 }
 
+export type MattermostAttachmentAction = {
+  id?: string;
+  name: string;
+  type?: "button" | "select";
+  style?: "default" | "primary" | "success" | "danger";
+  integration?: {
+    url: string;
+    context?: Record<string, unknown>;
+  };
+  options?: Array<{ text: string; value: string }>;
+};
+
+export type MattermostAttachment = {
+  fallback?: string;
+  color?: string;
+  pretext?: string;
+  text?: string;
+  title?: string;
+  actions?: MattermostAttachmentAction[];
+  fields?: Array<{ short?: boolean; title: string; value: string }>;
+};
+
 export async function createMattermostPost(
   client: MattermostClient,
   params: {
@@ -275,4 +297,18 @@ export async function uploadMattermostFile(
     throw new Error("Mattermost file upload failed");
   }
   return info;
+}
+
+/**
+ * Delete a Mattermost post.
+ * Requires `delete_post` (own) or `delete_others_posts` permission.
+ * @see https://api.mattermost.com/#tag/posts/operation/DeletePost
+ */
+export async function deleteMattermostPost(
+  client: MattermostClient,
+  postId: string,
+): Promise<void> {
+  await client.request<unknown>(`/posts/${postId}`, {
+    method: "DELETE",
+  });
 }

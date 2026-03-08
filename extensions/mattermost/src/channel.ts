@@ -26,7 +26,12 @@ import {
   resolveMattermostAccount,
   type ResolvedMattermostAccount,
 } from "./mattermost/accounts.js";
-import { normalizeMattermostBaseUrl } from "./mattermost/client.js";
+import {
+  createMattermostClient,
+  deleteMattermostPost,
+  normalizeMattermostBaseUrl,
+  updateMattermostPost,
+} from "./mattermost/client.js";
 import {
   listMattermostDirectoryGroups,
   listMattermostDirectoryPeers,
@@ -64,10 +69,15 @@ const mattermostMessageActions: ChannelMessageActionAdapter = {
       actions.push("react");
     }
 
+    // Edit and delete are available whenever there's at least one enabled account
+    if (enabledAccounts.length > 0) {
+      actions.push("edit", "delete");
+    }
+
     return actions;
   },
   supportsAction: ({ action }) => {
-    return action === "send" || action === "react";
+    return action === "send" || action === "react" || action === "edit" || action === "delete";
   },
   supportsButtons: ({ cfg }) => {
     const accounts = listMattermostAccountIds(cfg)
@@ -76,11 +86,76 @@ const mattermostMessageActions: ChannelMessageActionAdapter = {
     return accounts.length > 0;
   },
   handleAction: async ({ action, params, cfg, accountId }) => {
+    const resolvedAccountId = accountId ?? resolveDefaultMattermostAccountId(cfg);
+
+    if (action === "edit") {
+      const messageId =
+        typeof (params as any)?.messageId === "string"
+          ? (params as any).messageId.trim()
+          : typeof (params as any)?.postId === "string"
+            ? (params as any).postId.trim()
+            : "";
+      if (!messageId) {
+        throw new Error("Mattermost edit requires messageId (post id)");
+      }
+
+      const message =
+        typeof (params as any)?.message === "string"
+          ? (params as any).message
+          : typeof (params as any)?.text === "string"
+            ? (params as any).text
+            : "";
+      if (!message) {
+        throw new Error("Mattermost edit requires message text");
+      }
+
+      const resolved = resolveMattermostAccount({ cfg, accountId: resolvedAccountId });
+      const baseUrl = normalizeMattermostBaseUrl(resolved.baseUrl);
+      const botToken = resolved.botToken?.trim();
+      if (!baseUrl || !botToken) {
+        throw new Error(`Mattermost botToken/baseUrl missing for account "${resolvedAccountId}"`);
+      }
+
+      const client = createMattermostClient({ baseUrl, botToken });
+      const updated = await updateMattermostPost(client, messageId, { message });
+
+      return {
+        content: [{ type: "text" as const, text: `Edited post ${messageId}` }],
+        details: { postId: updated.id },
+      };
+    }
+
+    if (action === "delete") {
+      const messageId =
+        typeof (params as any)?.messageId === "string"
+          ? (params as any).messageId.trim()
+          : typeof (params as any)?.postId === "string"
+            ? (params as any).postId.trim()
+            : "";
+      if (!messageId) {
+        throw new Error("Mattermost delete requires messageId (post id)");
+      }
+
+      const resolved = resolveMattermostAccount({ cfg, accountId: resolvedAccountId });
+      const baseUrl = normalizeMattermostBaseUrl(resolved.baseUrl);
+      const botToken = resolved.botToken?.trim();
+      if (!baseUrl || !botToken) {
+        throw new Error(`Mattermost botToken/baseUrl missing for account "${resolvedAccountId}"`);
+      }
+
+      const client = createMattermostClient({ baseUrl, botToken });
+      await deleteMattermostPost(client, messageId);
+
+      return {
+        content: [{ type: "text" as const, text: `Deleted post ${messageId}` }],
+        details: {},
+      };
+    }
+
     if (action === "react") {
       // Check reactions gate: per-account config takes precedence over base config
       const mmBase = cfg?.channels?.mattermost as Record<string, unknown> | undefined;
       const accounts = mmBase?.accounts as Record<string, Record<string, unknown>> | undefined;
-      const resolvedAccountId = accountId ?? resolveDefaultMattermostAccountId(cfg);
       const acctConfig = accounts?.[resolvedAccountId];
       const acctActions = acctConfig?.actions as { reactions?: boolean } | undefined;
       const baseActions = mmBase?.actions as { reactions?: boolean } | undefined;
@@ -158,13 +233,13 @@ const mattermostMessageActions: ChannelMessageActionAdapter = {
 
     const message = typeof params.message === "string" ? params.message : "";
     const replyToId = typeof params.replyToId === "string" ? params.replyToId : undefined;
-    const resolvedAccountId = accountId || undefined;
+    const sendAccountId = accountId || undefined;
 
     const mediaUrl =
       typeof params.media === "string" ? params.media.trim() || undefined : undefined;
 
     const result = await sendMessageMattermost(to, message, {
-      accountId: resolvedAccountId,
+      accountId: sendAccountId,
       replyToId,
       buttons: Array.isArray(params.buttons) ? params.buttons : undefined,
       attachmentText: typeof params.attachmentText === "string" ? params.attachmentText : undefined,
@@ -250,10 +325,9 @@ export const mattermostPlugin: ChannelPlugin<ResolvedMattermostAccount> = {
     threads: true,
     media: true,
     nativeCommands: true,
+    blockStreaming: true,
   },
-  streaming: {
-    blockStreamingCoalesceDefaults: { minChars: 1500, idleMs: 1000 },
-  },
+
   reload: { configPrefixes: ["channels.mattermost"] },
   configSchema: buildChannelConfigSchema(MattermostConfigSchema),
   config: {

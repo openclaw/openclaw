@@ -4,6 +4,11 @@
   "configSchema": {
     "type": "object",
     "additionalProperties": false,
-    "properties": {}
+    "properties": {
+      "blockStreaming": {
+        "type": "boolean",
+        "description": "Enable edit-in-place streaming for Mattermost responses (default: true)"
+      }
+    }
   }
 }

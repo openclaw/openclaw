@@ -39,6 +39,7 @@ import {
   fetchMattermostMe,
   fetchMattermostUser,
   fetchMattermostUserTeams,
+  deleteMattermostPost,
   normalizeMattermostBaseUrl,
   sendMattermostTyping,
   updateMattermostPost,
@@ -661,7 +662,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
           replyOptions: {
             ...replyOptions,
             disableBlockStreaming:
-              typeof account.blockStreaming === "boolean" ? !account.blockStreaming : undefined,
+              typeof account.blockStreaming === "boolean" ? !account.blockStreaming : false,
             onModelSelected,
           },
         });
@@ -1630,14 +1631,202 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
         });
       },
     });
+    // Partial-reply streaming state: track the message id for edit-in-place.
+    // We use onPartialReply (full text each time) rather than block streaming deltas
+    // to avoid whitespace/markdown reconstruction issues at chunk boundaries.
+    let streamMessageId: string | null = null;
+    let pendingPatchText = "";
+    let lastSentText = "";
+    let patchInterval: ReturnType<typeof setInterval> | null = null;
+    let patchSending = false; // prevents concurrent network calls
+    const STREAM_PATCH_INTERVAL_MS = 200;
+
+    // Use the already-resolved baseUrl/botToken from the outer scope
+    // (opts.baseUrl ?? account.baseUrl). account.baseUrl is often empty when
+    // baseUrl is configured at the top level of the mattermost channel config.
+    const streamingEnabled = account.blockStreaming !== false;
+    const blockStreamingClient =
+      streamingEnabled && baseUrl && botToken
+        ? createMattermostClient({ baseUrl, botToken })
+        : null;
+
+    // Stop the patch interval.
+    const stopPatchInterval = () => {
+      if (patchInterval) {
+        clearInterval(patchInterval);
+        patchInterval = null;
+      }
+    };
+
+    // Flush: stop interval and send latest pending text if not yet sent.
+    const flushPendingPatch = async () => {
+      stopPatchInterval();
+      if (!blockStreamingClient) return;
+      // Wait for any in-flight interval tick to complete before issuing the flush's own
+      // network call, so concurrent PUTs don't race for the same post on the server.
+      const flushDeadline = Date.now() + 2000;
+      while (patchSending && Date.now() < flushDeadline) {
+        await new Promise<void>((r) => setTimeout(r, 20));
+      }
+      const text = pendingPatchText;
+      if (!text || text === lastSentText) return;
+      lastSentText = text;
+      if (!streamMessageId) {
+        try {
+          const result = await sendMessageMattermost(to, text, {
+            accountId: account.accountId,
+            replyToId: threadRootId,
+          });
+          streamMessageId = result.messageId;
+          runtime.log?.(`stream-patch started ${streamMessageId}`);
+        } catch (err) {
+          logVerboseMessage(`mattermost stream-patch flush send failed: ${String(err)}`);
+        }
+      } else {
+        try {
+          await updateMattermostPost(blockStreamingClient, streamMessageId, { message: text });
+          runtime.log?.(`stream-patch flushed ${streamMessageId}`);
+        } catch (err) {
+          logVerboseMessage(`mattermost stream-patch flush failed: ${String(err)}`);
+        }
+      }
+    };
+
+    // Schedule progressive patches via setInterval.
+    // Each tick sends/edits only when new text is available (lastSentText guard).
+    // patchSending prevents concurrent network calls within the same message.
+    const schedulePatch = (fullText: string) => {
+      if (!blockStreamingClient) return;
+      pendingPatchText = fullText;
+      if (patchInterval) return; // interval already running, tick will pick up new text
+      let idleTicks = 0;
+      patchInterval = setInterval(() => {
+        const text = pendingPatchText;
+        if (!text || text === lastSentText || patchSending) {
+          // Auto-terminate after ~5 s of no new text (handles abort/error cases).
+          if (++idleTicks > 25) stopPatchInterval();
+          return;
+        }
+        idleTicks = 0;
+        lastSentText = text;
+        patchSending = true;
+        void (async () => {
+          try {
+            if (!streamMessageId) {
+              try {
+                const result = await sendMessageMattermost(to, text, {
+                  accountId: account.accountId,
+                  replyToId: threadRootId,
+                });
+                streamMessageId = result.messageId;
+                runtime.log?.(`stream-patch started ${streamMessageId}`);
+              } catch (err) {
+                logVerboseMessage(`mattermost stream-patch send failed: ${String(err)}`);
+              }
+            } else {
+              try {
+                await updateMattermostPost(blockStreamingClient, streamMessageId, {
+                  message: text,
+                });
+                runtime.log?.(`stream-patch edited ${streamMessageId}`);
+              } catch (err) {
+                logVerboseMessage(`mattermost stream-patch edit failed: ${String(err)}`);
+              }
+            }
+          } finally {
+            patchSending = false;
+          }
+        })();
+      }, STREAM_PATCH_INTERVAL_MS);
+    };
+
     const { dispatcher, replyOptions, markDispatchIdle } =
       core.channel.reply.createReplyDispatcherWithTyping({
         ...prefixOptions,
         humanDelay: core.channel.reply.resolveHumanDelayConfig(cfg, route.agentId),
         typingCallbacks,
-        deliver: async (payload: ReplyPayload) => {
+        deliver: async (payload: ReplyPayload, info) => {
           const mediaUrls = payload.mediaUrls ?? (payload.mediaUrl ? [payload.mediaUrl] : []);
           const text = core.channel.text.convertMarkdownTables(payload.text ?? "", tableMode);
+          const isFinal = info.kind === "final";
+
+          // Flush any pending partial-reply patch before final delivery.
+          if (isFinal && blockStreamingClient) {
+            await flushPendingPatch();
+            // Wait for any in-flight interval patch to complete before issuing the
+            // final patch, so Mattermost doesn't process a partial patch after the final.
+            // Cap at 2 s so a stalled network call can't block deliver() indefinitely.
+            const patchWaitDeadline = Date.now() + 2000;
+            while (patchSending && Date.now() < patchWaitDeadline) {
+              await new Promise<void>((r) => setTimeout(r, 20));
+            }
+          }
+
+          // Final: patch the streamed message with the authoritative complete text,
+          // or fall back to a new message (with orphan cleanup) if patching fails.
+          // Media attachments are sent as a follow-up message after the text patch.
+          // TODO: chunk text before final edit if text.length > textLimit to avoid exceeding
+          // Mattermost post size limits on very long responses (tracked in GH issue).
+          if (isFinal && streamMessageId && text) {
+            try {
+              await updateMattermostPost(blockStreamingClient!, streamMessageId, { message: text });
+              runtime.log?.(`stream-patch final edit ${streamMessageId}`);
+            } catch (err) {
+              logVerboseMessage(
+                `mattermost stream-patch final edit failed: ${String(err)}, sending new message`,
+              );
+              // Best-effort: delete the orphaned partial message before sending the complete one.
+              const orphanId = streamMessageId;
+              streamMessageId = null;
+              try {
+                await deleteMattermostPost(blockStreamingClient!, orphanId);
+              } catch {
+                // Ignore delete failure — delivering the complete message takes priority
+              }
+              await sendMessageMattermost(to, text, {
+                accountId: account.accountId,
+                replyToId: threadRootId,
+                mediaUrl: mediaUrls[0],
+              });
+              for (const mediaUrl of mediaUrls.slice(1)) {
+                await sendMessageMattermost(to, "", {
+                  accountId: account.accountId,
+                  replyToId: threadRootId,
+                  mediaUrl,
+                });
+              }
+              return;
+            }
+            streamMessageId = null;
+            // Deliver any media attachments as follow-up messages after the text patch.
+            for (const mediaUrl of mediaUrls) {
+              await sendMessageMattermost(to, "", {
+                accountId: account.accountId,
+                replyToId: threadRootId,
+                mediaUrl,
+              });
+            }
+            return;
+          }
+
+          if (isFinal) {
+            stopPatchInterval();
+            // Best-effort cleanup: delete the orphaned streaming message if we have one
+            // but no final text to patch it with (e.g. media-only response).
+            if (streamMessageId && blockStreamingClient) {
+              const orphanId = streamMessageId;
+              streamMessageId = null;
+              deleteMattermostPost(blockStreamingClient, orphanId).catch(() => {
+                // Ignore — delivering media takes priority
+              });
+            } else {
+              streamMessageId = null;
+            }
+            pendingPatchText = "";
+            lastSentText = "";
+            patchSending = false;
+          }
+
           if (mediaUrls.length === 0) {
             const chunkMode = core.channel.text.resolveChunkMode(
               cfg,
@@ -1685,8 +1874,25 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
           dispatcher,
           replyOptions: {
             ...replyOptions,
-            disableBlockStreaming:
-              typeof account.blockStreaming === "boolean" ? !account.blockStreaming : undefined,
+            // Use onPartialReply (full cumulative text) for edit-in-place streaming.
+            // Block streaming delivers deltas which lose whitespace at chunk boundaries,
+            // corrupting markdown. onPartialReply provides the complete text each time,
+            // so heading/paragraph formatting is always correct.
+            onPartialReply: blockStreamingClient
+              ? (payload: ReplyPayload) => {
+                  const rawText = payload.text ?? "";
+                  const fullText = core.channel.text.convertMarkdownTables(rawText, tableMode);
+                  if (fullText) {
+                    schedulePatch(fullText);
+                  }
+                }
+              : undefined,
+            // Disable core block streaming since we handle streaming via onPartialReply.
+            disableBlockStreaming: blockStreamingClient
+              ? true
+              : typeof account.blockStreaming === "boolean"
+                ? !account.blockStreaming
+                : false,
             onModelSelected,
           },
         }),

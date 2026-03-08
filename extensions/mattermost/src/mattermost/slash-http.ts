@@ -539,7 +539,7 @@ async function handleSlashCommandAsync(params: {
         replyOptions: {
           ...replyOptions,
           disableBlockStreaming:
-            typeof account.blockStreaming === "boolean" ? !account.blockStreaming : undefined,
+            typeof account.blockStreaming === "boolean" ? !account.blockStreaming : false,
           onModelSelected,
         },
       }),
