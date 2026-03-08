@@ -257,7 +257,9 @@ function buildAgentContextFromMeta(
   payloads: Array<{ text?: string }>,
 ): MessageSendingAgentContext | undefined {
   const meta = result.meta;
-  if (!meta) return undefined;
+  if (!meta) {
+    return undefined;
+  }
 
   const agentMeta = meta.agentMeta;
   const toolMetas = meta.toolMetas ?? [];
