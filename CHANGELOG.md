@@ -2,7 +2,7 @@
 
 Docs: https://docs.openclaw.ai
 
-## Unreleeased
+## Unreleased
 
 ### Changes
 
