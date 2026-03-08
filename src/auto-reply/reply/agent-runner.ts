@@ -19,6 +19,7 @@ import { emitAgentEvent } from "../../infra/agent-events.js";
 import { emitDiagnosticEvent, isDiagnosticsEnabled } from "../../infra/diagnostic-events.js";
 import { generateSecureUuid } from "../../infra/secure-random.js";
 import { enqueueSystemEvent } from "../../infra/system-events.js";
+import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { defaultRuntime } from "../../runtime.js";
 import { estimateUsageCost, resolveModelCostConfig } from "../../utils/usage-format.js";
 import {
@@ -526,10 +527,19 @@ export async function runReplyAgent(params: {
             sessionKey,
           })
         : false;
+    // Apply plugin outbound transforms to LLM-generated reply payloads only,
+    // before verbose notices and usage lines are prepended.
+    const hookRunner = getGlobalHookRunner();
+    const transformedPayloads = hookRunner
+      ? replyPayloads.map((p) =>
+          typeof p.text === "string" ? { ...p, text: hookRunner.runOutboundTransforms(p.text) } : p,
+        )
+      : replyPayloads;
+
     const guardedReplyPayloads =
       hasReminderCommitment && successfulCronAdds === 0 && !coveredByExistingCron
-        ? appendUnscheduledReminderNote(replyPayloads)
-        : replyPayloads;
+        ? appendUnscheduledReminderNote(transformedPayloads)
+        : transformedPayloads;
 
     await signalTypingIfNeeded(guardedReplyPayloads, typingSignals);
 

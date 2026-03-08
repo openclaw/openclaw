@@ -40,6 +40,7 @@ function createApi(params: {
     registerService() {},
     registerProvider() {},
     registerContextEngine() {},
+    registerOutboundTransform() {},
     registerCommand: params.registerCommand,
     resolvePath(input: string) {
       return input;

@@ -415,6 +415,7 @@ function createApi(): OpenClawPluginApi {
     registerProvider() {},
     registerCommand() {},
     registerContextEngine() {},
+    registerOutboundTransform() {},
     resolvePath(input: string) {
       return input;
     },

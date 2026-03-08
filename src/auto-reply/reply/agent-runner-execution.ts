@@ -21,6 +21,7 @@ import {
 } from "../../config/sessions.js";
 import { logVerbose } from "../../globals.js";
 import { emitAgentEvent, registerAgentRunContext } from "../../infra/agent-events.js";
+import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { defaultRuntime } from "../../runtime.js";
 import {
   isMarkdownCapableMessageChannel,
@@ -353,8 +354,13 @@ export async function runAgentTurnWithFallback(params: {
                 if (!params.opts?.onPartialReply || textForTyping === undefined) {
                   return;
                 }
+                // Apply plugin outbound transforms.
+                const hookRunner = getGlobalHookRunner();
+                const transformedText = hookRunner
+                  ? hookRunner.runOutboundTransforms(textForTyping)
+                  : textForTyping;
                 await params.opts.onPartialReply({
-                  text: textForTyping,
+                  text: transformedText,
                   mediaUrls: payload.mediaUrls,
                 });
               },

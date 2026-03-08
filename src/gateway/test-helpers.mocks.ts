@@ -151,6 +151,7 @@ const createStubPluginRegistry = (): PluginRegistry => ({
   services: [],
   commands: [],
   diagnostics: [],
+  outboundTransforms: [],
 });
 
 const hoisted = vi.hoisted(() => ({

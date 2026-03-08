@@ -709,6 +709,31 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
   // =========================================================================
 
   /**
+   * Run all registered outbound text transforms (synchronous).
+   * Used by streaming and non-streaming delivery paths.
+   */
+  function runOutboundTransforms(text: string): string {
+    const transforms = registry.outboundTransforms;
+    if (transforms.length === 0) {
+      return text;
+    }
+    let result = text;
+    for (const entry of transforms) {
+      try {
+        result = entry.transform(result);
+      } catch (err) {
+        const msg = `[hooks] outbound transform from ${entry.pluginId} failed: ${String(err)}`;
+        if (catchErrors) {
+          logger?.error(msg);
+        } else {
+          throw new Error(msg, { cause: err });
+        }
+      }
+    }
+    return result;
+  }
+
+  /**
    * Check if any hooks are registered for a given hook name.
    */
   function hasHooks(hookName: PluginHookName): boolean {
@@ -753,6 +778,8 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
     // Gateway hooks
     runGatewayStart,
     runGatewayStop,
+    // Outbound transforms
+    runOutboundTransforms,
     // Utility
     hasHooks,
     getHookCount,
