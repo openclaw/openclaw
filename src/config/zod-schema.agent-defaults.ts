@@ -186,6 +186,12 @@ export const AgentDefaultsSchema = z
         thinking: z.string().optional(),
         runTimeoutSeconds: z.number().int().min(0).optional(),
         announceTimeoutMs: z.number().int().positive().optional(),
+        outputDir: z
+          .string()
+          .optional()
+          .describe(
+            "Directory for saving long sub-agent output files. Supports ~ expansion. Defaults to ~/.openclaw/workspace/tmp/agent-output.",
+          ),
       })
       .strict()
       .optional(),

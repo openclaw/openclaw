@@ -281,6 +281,8 @@ export type AgentDefaultsConfig = {
     runTimeoutSeconds?: number;
     /** Gateway timeout in ms for sub-agent announce delivery calls (default: 60000). */
     announceTimeoutMs?: number;
+    /** Directory for saving long sub-agent output files. Supports ~ expansion. Defaults to ~/.openclaw/workspace/tmp/agent-output. */
+    outputDir?: string;
   };
   /** Optional sandbox settings for non-main sessions. */
   sandbox?: AgentSandboxConfig;
