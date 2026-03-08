@@ -47,4 +47,33 @@ describe("sessions_spawn gateway timeout", () => {
     expect(spawnRequests.length).toBeGreaterThan(0);
     expect(spawnRequests.every((request) => request.timeoutMs === 30_000)).toBe(true);
   });
+
+  it("uses a 30s gateway timeout for cleanup deletes after attachment setup fails", async () => {
+    const requests: Array<{ method?: string; timeoutMs?: number }> = [];
+    callGatewayMock.mockImplementation(async (opts: unknown) => {
+      const request = opts as { method?: string; timeoutMs?: number };
+      requests.push(request);
+      return { ok: true };
+    });
+
+    const tool = await getSessionsSpawnTool({
+      agentSessionKey: "agent:main:main",
+      agentChannel: "discord",
+    });
+
+    const result = await tool.execute("call-timeout-cleanup", {
+      task: "do thing",
+      attachments: [{ name: "input.txt", content: "hello" }],
+    });
+
+    expect(result.details).toMatchObject({
+      status: "forbidden",
+      error:
+        "attachments are disabled for sessions_spawn (enable tools.sessions_spawn.attachments.enabled)",
+    });
+
+    const deleteRequests = requests.filter((request) => request.method === "sessions.delete");
+    expect(deleteRequests.length).toBeGreaterThan(0);
+    expect(deleteRequests.every((request) => request.timeoutMs === 30_000)).toBe(true);
+  });
 });
