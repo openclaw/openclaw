@@ -343,4 +343,77 @@ describe("resolveGatewayConnectionAuth", () => {
       password: "config-first-password", // pragma: allowlist secret
     });
   });
+
+  it("throws when config-first token SecretRef cannot resolve even if env token exists", async () => {
+    const config = cfg({
+      gateway: {
+        mode: "local",
+        auth: {
+          token: { source: "env", provider: "default", id: "MISSING_CONFIG_FIRST_TOKEN" },
+        },
+      },
+      secrets: {
+        providers: {
+          default: { source: "env" },
+        },
+      },
+    });
+    const env = {
+      OPENCLAW_GATEWAY_TOKEN: "env-token",
+    } as NodeJS.ProcessEnv;
+
+    await expect(
+      resolveGatewayConnectionAuth({
+        config,
+        env,
+        includeLegacyEnv: false,
+        localTokenPrecedence: "config-first",
+      }),
+    ).rejects.toThrow("gateway.auth.token");
+    expect(() =>
+      resolveGatewayConnectionAuthFromConfig({
+        cfg: config,
+        env,
+        includeLegacyEnv: false,
+        localTokenPrecedence: "config-first",
+      }),
+    ).toThrow("gateway.auth.token");
+  });
+
+  it("throws when config-first password SecretRef cannot resolve even if env password exists", async () => {
+    const config = cfg({
+      gateway: {
+        mode: "local",
+        auth: {
+          mode: "password",
+          password: { source: "env", provider: "default", id: "MISSING_CONFIG_FIRST_PASSWORD" },
+        },
+      },
+      secrets: {
+        providers: {
+          default: { source: "env" },
+        },
+      },
+    });
+    const env = {
+      OPENCLAW_GATEWAY_PASSWORD: "env-password", // pragma: allowlist secret
+    } as NodeJS.ProcessEnv;
+
+    await expect(
+      resolveGatewayConnectionAuth({
+        config,
+        env,
+        includeLegacyEnv: false,
+        localPasswordPrecedence: "config-first",
+      }),
+    ).rejects.toThrow("gateway.auth.password");
+    expect(() =>
+      resolveGatewayConnectionAuthFromConfig({
+        cfg: config,
+        env,
+        includeLegacyEnv: false,
+        localPasswordPrecedence: "config-first",
+      }),
+    ).toThrow("gateway.auth.password");
+  });
 });
