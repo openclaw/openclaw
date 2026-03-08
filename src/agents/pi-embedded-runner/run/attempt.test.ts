@@ -135,9 +135,15 @@ describe("resolvePromptModeForSession", () => {
     expect(resolvePromptModeForSession("agent:main:subagent:child")).toBe("minimal");
   });
 
-  it("uses full mode for cron sessions", () => {
-    expect(resolvePromptModeForSession("agent:main:cron:job-1")).toBe("full");
-    expect(resolvePromptModeForSession("agent:main:cron:job-1:run:run-abc")).toBe("full");
+  it("uses minimal mode for cron sessions", () => {
+    expect(resolvePromptModeForSession("agent:main:cron:job-1")).toBe("minimal");
+    expect(resolvePromptModeForSession("agent:main:cron:job-1:run:run-abc")).toBe("minimal");
+  });
+
+  it("uses full mode for regular and undefined sessions", () => {
+    expect(resolvePromptModeForSession(undefined)).toBe("full");
+    expect(resolvePromptModeForSession("agent:main")).toBe("full");
+    expect(resolvePromptModeForSession("agent:main:thread:abc")).toBe("full");
   });
 });
 
