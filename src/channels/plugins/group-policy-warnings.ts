@@ -1,3 +1,13 @@
+import type { OpenClawConfig } from "../../config/config.js";
+import {
+  resolveAllowlistProviderRuntimeGroupPolicy,
+  resolveDefaultGroupPolicy,
+  resolveOpenProviderRuntimeGroupPolicy,
+} from "../../config/runtime-group-policy.js";
+import type { GroupPolicy } from "../../config/types.base.js";
+
+type GroupPolicyWarningCollector = (groupPolicy: GroupPolicy) => string[];
+
 export function buildOpenGroupPolicyWarning(params: {
   surface: string;
   openBehavior: string;
@@ -61,6 +71,59 @@ export function collectOpenGroupPolicyRestrictSendersWarnings(
     return [];
   }
   return [buildOpenGroupPolicyRestrictSendersWarning(params)];
+}
+
+export function collectAllowlistProviderRestrictSendersWarnings(
+  params: {
+    cfg: OpenClawConfig;
+    providerConfigPresent: boolean;
+    configuredGroupPolicy?: GroupPolicy | null;
+  } & Omit<Parameters<typeof collectOpenGroupPolicyRestrictSendersWarnings>[0], "groupPolicy">,
+): string[] {
+  return collectAllowlistProviderGroupPolicyWarnings({
+    cfg: params.cfg,
+    providerConfigPresent: params.providerConfigPresent,
+    configuredGroupPolicy: params.configuredGroupPolicy,
+    collect: (groupPolicy) =>
+      collectOpenGroupPolicyRestrictSendersWarnings({
+        groupPolicy,
+        surface: params.surface,
+        openScope: params.openScope,
+        groupPolicyPath: params.groupPolicyPath,
+        groupAllowFromPath: params.groupAllowFromPath,
+        mentionGated: params.mentionGated,
+      }),
+  });
+}
+
+export function collectAllowlistProviderGroupPolicyWarnings(params: {
+  cfg: OpenClawConfig;
+  providerConfigPresent: boolean;
+  configuredGroupPolicy?: GroupPolicy | null;
+  collect: GroupPolicyWarningCollector;
+}): string[] {
+  const defaultGroupPolicy = resolveDefaultGroupPolicy(params.cfg);
+  const { groupPolicy } = resolveAllowlistProviderRuntimeGroupPolicy({
+    providerConfigPresent: params.providerConfigPresent,
+    groupPolicy: params.configuredGroupPolicy ?? undefined,
+    defaultGroupPolicy,
+  });
+  return params.collect(groupPolicy);
+}
+
+export function collectOpenProviderGroupPolicyWarnings(params: {
+  cfg: OpenClawConfig;
+  providerConfigPresent: boolean;
+  configuredGroupPolicy?: GroupPolicy | null;
+  collect: GroupPolicyWarningCollector;
+}): string[] {
+  const defaultGroupPolicy = resolveDefaultGroupPolicy(params.cfg);
+  const { groupPolicy } = resolveOpenProviderRuntimeGroupPolicy({
+    providerConfigPresent: params.providerConfigPresent,
+    groupPolicy: params.configuredGroupPolicy ?? undefined,
+    defaultGroupPolicy,
+  });
+  return params.collect(groupPolicy);
 }
 
 export function collectOpenGroupPolicyRouteAllowlistWarnings(params: {

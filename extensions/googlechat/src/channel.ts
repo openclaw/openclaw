@@ -1,10 +1,10 @@
 import {
   buildAccountScopedDmSecurityPolicy,
   buildOpenGroupPolicyConfigureRouteAllowlistWarning,
+  collectAllowlistProviderGroupPolicyWarnings,
+  createScopedAccountConfigAccessors,
   formatNormalizedAllowFromEntries,
-  mapAllowFromEntries,
-  resolveOptionalConfigString,
-} from "openclaw/plugin-sdk";
+} from "openclaw/plugin-sdk/compat";
 import {
   applyAccountNameToChannelSection,
   applySetupAccountConfigPatch,
@@ -21,8 +21,6 @@ import {
   PAIRING_APPROVED_MESSAGE,
   resolveChannelMediaMaxBytes,
   resolveGoogleChatGroupRequireMention,
-  resolveAllowlistProviderRuntimeGroupPolicy,
-  resolveDefaultGroupPolicy,
   setAccountEnabledInConfigSection,
   type ChannelDock,
   type ChannelMessageActionAdapter,
@@ -59,6 +57,17 @@ const formatAllowFromEntry = (entry: string) =>
     .replace(/^users\//i, "")
     .toLowerCase();
 
+const googleChatConfigAccessors = createScopedAccountConfigAccessors({
+  resolveAccount: ({ cfg, accountId }) => resolveGoogleChatAccount({ cfg, accountId }),
+  resolveAllowFrom: (account: ResolvedGoogleChatAccount) => account.config.dm?.allowFrom,
+  formatAllowFrom: (allowFrom) =>
+    formatNormalizedAllowFromEntries({
+      allowFrom,
+      normalizeEntry: formatAllowFromEntry,
+    }),
+  resolveDefaultTo: (account: ResolvedGoogleChatAccount) => account.config.defaultTo,
+});
+
 export const googlechatDock: ChannelDock = {
   id: "googlechat",
   capabilities: {
@@ -69,15 +78,7 @@ export const googlechatDock: ChannelDock = {
     blockStreaming: true,
   },
   outbound: { textChunkLimit: 4000 },
-  config: {
-    resolveAllowFrom: ({ cfg, accountId }) =>
-      mapAllowFromEntries(resolveGoogleChatAccount({ cfg: cfg, accountId }).config.dm?.allowFrom),
-    formatAllowFrom: ({ allowFrom }) =>
-      formatNormalizedAllowFromEntries({
-        allowFrom,
-        normalizeEntry: formatAllowFromEntry,
-      }),
-  },
+  config: googleChatConfigAccessors,
   groups: {
     resolveRequireMention: resolveGoogleChatGroupRequireMention,
   },
@@ -176,20 +177,7 @@ export const googlechatPlugin: ChannelPlugin<ResolvedGoogleChatAccount> = {
       configured: account.credentialSource !== "none",
       credentialSource: account.credentialSource,
     }),
-    resolveAllowFrom: ({ cfg, accountId }) =>
-      mapAllowFromEntries(
-        resolveGoogleChatAccount({
-          cfg: cfg,
-          accountId,
-        }).config.dm?.allowFrom,
-      ),
-    formatAllowFrom: ({ allowFrom }) =>
-      formatNormalizedAllowFromEntries({
-        allowFrom,
-        normalizeEntry: formatAllowFromEntry,
-      }),
-    resolveDefaultTo: ({ cfg, accountId }) =>
-      resolveOptionalConfigString(resolveGoogleChatAccount({ cfg, accountId }).config.defaultTo),
+    ...googleChatConfigAccessors,
   },
   security: {
     resolveDmPolicy: ({ cfg, accountId, account }) => {
@@ -205,23 +193,22 @@ export const googlechatPlugin: ChannelPlugin<ResolvedGoogleChatAccount> = {
       });
     },
     collectWarnings: ({ account, cfg }) => {
-      const warnings: string[] = [];
-      const defaultGroupPolicy = resolveDefaultGroupPolicy(cfg);
-      const { groupPolicy } = resolveAllowlistProviderRuntimeGroupPolicy({
+      const warnings = collectAllowlistProviderGroupPolicyWarnings({
+        cfg,
         providerConfigPresent: cfg.channels?.googlechat !== undefined,
-        groupPolicy: account.config.groupPolicy,
-        defaultGroupPolicy,
+        configuredGroupPolicy: account.config.groupPolicy,
+        collect: (groupPolicy) =>
+          groupPolicy === "open"
+            ? [
+                buildOpenGroupPolicyConfigureRouteAllowlistWarning({
+                  surface: "Google Chat spaces",
+                  openScope: "any space",
+                  groupPolicyPath: "channels.googlechat.groupPolicy",
+                  routeAllowlistPath: "channels.googlechat.groups",
+                }),
+              ]
+            : [],
       });
-      if (groupPolicy === "open") {
-        warnings.push(
-          buildOpenGroupPolicyConfigureRouteAllowlistWarning({
-            surface: "Google Chat spaces",
-            openScope: "any space",
-            groupPolicyPath: "channels.googlechat.groupPolicy",
-            routeAllowlistPath: "channels.googlechat.groups",
-          }),
-        );
-      }
       if (account.config.dm?.policy === "open") {
         warnings.push(
           `- Google Chat DMs are open to anyone. Set channels.googlechat.dm.policy="pairing" or "allowlist".`,

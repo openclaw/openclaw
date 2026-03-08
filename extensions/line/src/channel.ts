@@ -1,8 +1,8 @@
 import {
   buildAccountScopedDmSecurityPolicy,
-  collectOpenGroupPolicyRestrictSendersWarnings,
-  mapAllowFromEntries,
-} from "openclaw/plugin-sdk";
+  createScopedAccountConfigAccessors,
+  collectAllowlistProviderRestrictSendersWarnings,
+} from "openclaw/plugin-sdk/compat";
 import {
   buildChannelConfigSchema,
   buildComputedAccountStatusSnapshot,
@@ -11,8 +11,6 @@ import {
   DEFAULT_ACCOUNT_ID,
   LineConfigSchema,
   processLineMessage,
-  resolveAllowlistProviderRuntimeGroupPolicy,
-  resolveDefaultGroupPolicy,
   type ChannelPlugin,
   type ChannelStatusIssue,
   type OpenClawConfig,
@@ -33,6 +31,17 @@ const meta = {
   blurb: "LINE Messaging API bot for Japan/Taiwan/Thailand markets.",
   systemImage: "message.fill",
 };
+
+const lineConfigAccessors = createScopedAccountConfigAccessors({
+  resolveAccount: ({ cfg, accountId }) =>
+    getLineRuntime().channel.line.resolveLineAccount({ cfg, accountId: accountId ?? undefined }),
+  resolveAllowFrom: (account: ResolvedLineAccount) => account.config.allowFrom,
+  formatAllowFrom: (allowFrom) =>
+    allowFrom
+      .map((entry) => String(entry).trim())
+      .filter(Boolean)
+      .map((entry) => entry.replace(/^line:(?:user:)?/i, "")),
+});
 
 function patchLineAccountConfig(
   cfg: OpenClawConfig,
@@ -147,19 +156,7 @@ export const linePlugin: ChannelPlugin<ResolvedLineAccount> = {
       configured: Boolean(account.channelAccessToken?.trim() && account.channelSecret?.trim()),
       tokenSource: account.tokenSource ?? undefined,
     }),
-    resolveAllowFrom: ({ cfg, accountId }) =>
-      mapAllowFromEntries(
-        getLineRuntime().channel.line.resolveLineAccount({ cfg, accountId: accountId ?? undefined })
-          .config.allowFrom,
-      ),
-    formatAllowFrom: ({ allowFrom }) =>
-      allowFrom
-        .map((entry) => String(entry).trim())
-        .filter(Boolean)
-        .map((entry) => {
-          // LINE sender IDs are case-sensitive; keep original casing.
-          return entry.replace(/^line:(?:user:)?/i, "");
-        }),
+    ...lineConfigAccessors,
   },
   security: {
     resolveDmPolicy: ({ cfg, accountId, account }) => {
@@ -176,14 +173,10 @@ export const linePlugin: ChannelPlugin<ResolvedLineAccount> = {
       });
     },
     collectWarnings: ({ account, cfg }) => {
-      const defaultGroupPolicy = resolveDefaultGroupPolicy(cfg);
-      const { groupPolicy } = resolveAllowlistProviderRuntimeGroupPolicy({
+      return collectAllowlistProviderRestrictSendersWarnings({
+        cfg,
         providerConfigPresent: cfg.channels?.line !== undefined,
-        groupPolicy: account.config.groupPolicy,
-        defaultGroupPolicy,
-      });
-      return collectOpenGroupPolicyRestrictSendersWarnings({
-        groupPolicy,
+        configuredGroupPolicy: account.config.groupPolicy,
         surface: "LINE groups",
         openScope: "any member in groups",
         groupPolicyPath: "channels.line.groupPolicy",

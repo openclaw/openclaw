@@ -4,7 +4,10 @@ import { secretRefKey } from "../secrets/ref-contract.js";
 import { resolveSecretRefValues } from "../secrets/resolve.js";
 
 export type SecretInputUnresolvedReasonStyle = "generic" | "detailed"; // pragma: allowlist secret
-export type ConfiguredSecretInputSource = "config" | "secretRef" | "fallback";
+export type ConfiguredSecretInputSource =
+  | "config"
+  | "secretRef" // pragma: allowlist secret
+  | "fallback";
 
 function trimToUndefined(value: unknown): string | undefined {
   if (typeof value !== "string") {

@@ -1,9 +1,9 @@
 import {
   buildAccountScopedDmSecurityPolicy,
-  collectOpenGroupPolicyRestrictSendersWarnings,
+  collectAllowlistProviderRestrictSendersWarnings,
+  createScopedAccountConfigAccessors,
   formatNormalizedAllowFromEntries,
-  mapAllowFromEntries,
-} from "openclaw/plugin-sdk";
+} from "openclaw/plugin-sdk/compat";
 import {
   applyAccountNameToChannelSection,
   applySetupAccountConfigPatch,
@@ -13,8 +13,6 @@ import {
   deleteAccountFromConfigSection,
   migrateBaseNameToDefaultAccount,
   normalizeAccountId,
-  resolveAllowlistProviderRuntimeGroupPolicy,
-  resolveDefaultGroupPolicy,
   setAccountEnabledInConfigSection,
   type ChannelMessageActionAdapter,
   type ChannelMessageActionName,
@@ -223,6 +221,16 @@ function formatAllowEntry(entry: string): string {
   return trimmed.replace(/^(mattermost|user):/i, "").toLowerCase();
 }
 
+const mattermostConfigAccessors = createScopedAccountConfigAccessors({
+  resolveAccount: ({ cfg, accountId }) => resolveMattermostAccount({ cfg, accountId }),
+  resolveAllowFrom: (account: ResolvedMattermostAccount) => account.config.allowFrom,
+  formatAllowFrom: (allowFrom) =>
+    formatNormalizedAllowFromEntries({
+      allowFrom,
+      normalizeEntry: formatAllowEntry,
+    }),
+});
+
 export const mattermostPlugin: ChannelPlugin<ResolvedMattermostAccount> = {
   id: "mattermost",
   meta: {
@@ -276,13 +284,7 @@ export const mattermostPlugin: ChannelPlugin<ResolvedMattermostAccount> = {
       botTokenSource: account.botTokenSource,
       baseUrl: account.baseUrl,
     }),
-    resolveAllowFrom: ({ cfg, accountId }) =>
-      mapAllowFromEntries(resolveMattermostAccount({ cfg, accountId }).config.allowFrom),
-    formatAllowFrom: ({ allowFrom }) =>
-      formatNormalizedAllowFromEntries({
-        allowFrom,
-        normalizeEntry: formatAllowEntry,
-      }),
+    ...mattermostConfigAccessors,
   },
   security: {
     resolveDmPolicy: ({ cfg, accountId, account }) => {
@@ -298,14 +300,10 @@ export const mattermostPlugin: ChannelPlugin<ResolvedMattermostAccount> = {
       });
     },
     collectWarnings: ({ account, cfg }) => {
-      const defaultGroupPolicy = resolveDefaultGroupPolicy(cfg);
-      const { groupPolicy } = resolveAllowlistProviderRuntimeGroupPolicy({
+      return collectAllowlistProviderRestrictSendersWarnings({
+        cfg,
         providerConfigPresent: cfg.channels?.mattermost !== undefined,
-        groupPolicy: account.config.groupPolicy,
-        defaultGroupPolicy,
-      });
-      return collectOpenGroupPolicyRestrictSendersWarnings({
-        groupPolicy,
+        configuredGroupPolicy: account.config.groupPolicy,
         surface: "Mattermost channels",
         openScope: "any member",
         groupPolicyPath: "channels.mattermost.groupPolicy",

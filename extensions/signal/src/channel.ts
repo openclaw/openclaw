@@ -1,9 +1,8 @@
 import {
   buildAccountScopedDmSecurityPolicy,
-  collectOpenGroupPolicyRestrictSendersWarnings,
-  mapAllowFromEntries,
-  resolveOptionalConfigString,
-} from "openclaw/plugin-sdk";
+  createScopedAccountConfigAccessors,
+  collectAllowlistProviderRestrictSendersWarnings,
+} from "openclaw/plugin-sdk/compat";
 import {
   applyAccountNameToChannelSection,
   buildBaseAccountStatusSnapshot,
@@ -23,8 +22,6 @@ import {
   PAIRING_APPROVED_MESSAGE,
   resolveChannelMediaMaxBytes,
   resolveDefaultSignalAccountId,
-  resolveAllowlistProviderRuntimeGroupPolicy,
-  resolveDefaultGroupPolicy,
   resolveSignalAccount,
   setAccountEnabledInConfigSection,
   signalOnboardingAdapter,
@@ -49,6 +46,18 @@ const signalMessageActions: ChannelMessageActionAdapter = {
 };
 
 const meta = getChatChannelMeta("signal");
+
+const signalConfigAccessors = createScopedAccountConfigAccessors({
+  resolveAccount: ({ cfg, accountId }) => resolveSignalAccount({ cfg, accountId }),
+  resolveAllowFrom: (account: ResolvedSignalAccount) => account.config.allowFrom,
+  formatAllowFrom: (allowFrom) =>
+    allowFrom
+      .map((entry) => String(entry).trim())
+      .filter(Boolean)
+      .map((entry) => (entry === "*" ? "*" : normalizeE164(entry.replace(/^signal:/i, ""))))
+      .filter(Boolean),
+  resolveDefaultTo: (account: ResolvedSignalAccount) => account.config.defaultTo,
+});
 
 function buildSignalSetupPatch(input: {
   signalNumber?: string;
@@ -144,16 +153,7 @@ export const signalPlugin: ChannelPlugin<ResolvedSignalAccount> = {
       configured: account.configured,
       baseUrl: account.baseUrl,
     }),
-    resolveAllowFrom: ({ cfg, accountId }) =>
-      mapAllowFromEntries(resolveSignalAccount({ cfg, accountId }).config.allowFrom),
-    formatAllowFrom: ({ allowFrom }) =>
-      allowFrom
-        .map((entry) => String(entry).trim())
-        .filter(Boolean)
-        .map((entry) => (entry === "*" ? "*" : normalizeE164(entry.replace(/^signal:/i, ""))))
-        .filter(Boolean),
-    resolveDefaultTo: ({ cfg, accountId }) =>
-      resolveOptionalConfigString(resolveSignalAccount({ cfg, accountId }).config.defaultTo),
+    ...signalConfigAccessors,
   },
   security: {
     resolveDmPolicy: ({ cfg, accountId, account }) => {
@@ -169,14 +169,10 @@ export const signalPlugin: ChannelPlugin<ResolvedSignalAccount> = {
       });
     },
     collectWarnings: ({ account, cfg }) => {
-      const defaultGroupPolicy = resolveDefaultGroupPolicy(cfg);
-      const { groupPolicy } = resolveAllowlistProviderRuntimeGroupPolicy({
+      return collectAllowlistProviderRestrictSendersWarnings({
+        cfg,
         providerConfigPresent: cfg.channels?.signal !== undefined,
-        groupPolicy: account.config.groupPolicy,
-        defaultGroupPolicy,
-      });
-      return collectOpenGroupPolicyRestrictSendersWarnings({
-        groupPolicy,
+        configuredGroupPolicy: account.config.groupPolicy,
         surface: "Signal groups",
         openScope: "any member",
         groupPolicyPath: "channels.signal.groupPolicy",

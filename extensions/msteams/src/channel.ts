@@ -1,7 +1,7 @@
 import {
-  collectOpenGroupPolicyRestrictSendersWarnings,
+  collectAllowlistProviderRestrictSendersWarnings,
   formatAllowFromLowercase,
-} from "openclaw/plugin-sdk";
+} from "openclaw/plugin-sdk/compat";
 import type {
   ChannelMessageActionName,
   ChannelPlugin,
@@ -15,8 +15,6 @@ import {
   DEFAULT_ACCOUNT_ID,
   MSTeamsConfigSchema,
   PAIRING_APPROVED_MESSAGE,
-  resolveAllowlistProviderRuntimeGroupPolicy,
-  resolveDefaultGroupPolicy,
 } from "openclaw/plugin-sdk/msteams";
 import { listMSTeamsDirectoryGroupsLive, listMSTeamsDirectoryPeersLive } from "./directory-live.js";
 import { msteamsOnboardingAdapter } from "./onboarding.js";
@@ -134,14 +132,10 @@ export const msteamsPlugin: ChannelPlugin<ResolvedMSTeamsAccount> = {
   },
   security: {
     collectWarnings: ({ cfg }) => {
-      const defaultGroupPolicy = resolveDefaultGroupPolicy(cfg);
-      const { groupPolicy } = resolveAllowlistProviderRuntimeGroupPolicy({
+      return collectAllowlistProviderRestrictSendersWarnings({
+        cfg,
         providerConfigPresent: cfg.channels?.msteams !== undefined,
-        groupPolicy: cfg.channels?.msteams?.groupPolicy,
-        defaultGroupPolicy,
-      });
-      return collectOpenGroupPolicyRestrictSendersWarnings({
-        groupPolicy,
+        configuredGroupPolicy: cfg.channels?.msteams?.groupPolicy,
         surface: "MS Teams groups",
         openScope: "any member",
         groupPolicyPath: "channels.msteams.groupPolicy",

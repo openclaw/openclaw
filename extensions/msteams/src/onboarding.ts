@@ -14,6 +14,7 @@ import {
   setTopLevelChannelAllowFrom,
   setTopLevelChannelDmPolicyWithAllowFrom,
   setTopLevelChannelGroupPolicy,
+  splitOnboardingEntries,
 } from "openclaw/plugin-sdk/msteams";
 import {
   parseMSTeamsTeamEntry,
@@ -39,13 +40,6 @@ function setMSTeamsAllowFrom(cfg: OpenClawConfig, allowFrom: string[]): OpenClaw
     channel: "msteams",
     allowFrom,
   });
-}
-
-function parseAllowFromInput(raw: string): string[] {
-  return raw
-    .split(/[\n,;]+/g)
-    .map((entry) => entry.trim())
-    .filter(Boolean);
 }
 
 function looksLikeGuid(value: string): boolean {
@@ -102,7 +96,7 @@ async function promptMSTeamsAllowFrom(params: {
       initialValue: existing[0] ? String(existing[0]) : undefined,
       validate: (value) => (String(value ?? "").trim() ? undefined : "Required"),
     });
-    const parts = parseAllowFromInput(String(entry));
+    const parts = splitOnboardingEntries(String(entry));
     if (parts.length === 0) {
       await params.prompter.note("Enter at least one user.", "MS Teams allowlist");
       continue;

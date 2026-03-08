@@ -85,6 +85,30 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
     });
   }
 
+  function createMutableScriptOperandFixture(tmp: string): {
+    command: string[];
+    scriptPath: string;
+    initialBody: string;
+    changedBody: string;
+  } {
+    if (process.platform === "win32") {
+      const scriptPath = path.join(tmp, "run.js");
+      return {
+        command: [process.execPath, "./run.js"],
+        scriptPath,
+        initialBody: 'console.log("SAFE");\n',
+        changedBody: 'console.log("PWNED");\n',
+      };
+    }
+    const scriptPath = path.join(tmp, "run.sh");
+    return {
+      command: ["/bin/sh", "./run.sh"],
+      scriptPath,
+      initialBody: "#!/bin/sh\necho SAFE\n",
+      changedBody: "#!/bin/sh\necho PWNED\n",
+    };
+  }
+
   function buildNestedEnvShellCommand(params: { depth: number; payload: string }): string[] {
     return [...Array(params.depth).fill("/usr/bin/env"), "/bin/sh", "-c", params.payload];
   }
@@ -692,12 +716,14 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
 
   it("denies approval-based execution when a script operand changes after approval", async () => {
     const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-approval-script-drift-"));
-    const script = path.join(tmp, "run.sh");
-    fs.writeFileSync(script, "#!/bin/sh\necho SAFE\n");
-    fs.chmodSync(script, 0o755);
+    const fixture = createMutableScriptOperandFixture(tmp);
+    fs.writeFileSync(fixture.scriptPath, fixture.initialBody);
+    if (process.platform !== "win32") {
+      fs.chmodSync(fixture.scriptPath, 0o755);
+    }
     try {
       const prepared = buildSystemRunApprovalPlan({
-        command: ["/bin/sh", "./run.sh"],
+        command: fixture.command,
         cwd: tmp,
       });
       expect(prepared.ok).toBe(true);
@@ -705,7 +731,7 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
         throw new Error("unreachable");
       }
 
-      fs.writeFileSync(script, "#!/bin/sh\necho PWNED\n");
+      fs.writeFileSync(fixture.scriptPath, fixture.changedBody);
       const { runCommand, sendInvokeResult } = await runSystemInvoke({
         preferMacAppExecHost: false,
         command: prepared.plan.argv,
@@ -729,12 +755,14 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
 
   it("keeps approved shell script execution working when the script is unchanged", async () => {
     const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-approval-script-stable-"));
-    const script = path.join(tmp, "run.sh");
-    fs.writeFileSync(script, "#!/bin/sh\necho SAFE\n");
-    fs.chmodSync(script, 0o755);
+    const fixture = createMutableScriptOperandFixture(tmp);
+    fs.writeFileSync(fixture.scriptPath, fixture.initialBody);
+    if (process.platform !== "win32") {
+      fs.chmodSync(fixture.scriptPath, 0o755);
+    }
     try {
       const prepared = buildSystemRunApprovalPlan({
-        command: ["/bin/sh", "./run.sh"],
+        command: fixture.command,
         cwd: tmp,
       });
       expect(prepared.ok).toBe(true);
@@ -858,13 +886,14 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
     expectApprovalRequiredDenied({ sendNodeEvent, sendInvokeResult });
   });
 
-  it("denies env-wrapped shell payloads at the dispatch depth boundary", async () => {
-    if (process.platform === "win32") {
-      return;
-    }
+  async function expectNestedEnvShellDenied(params: {
+    depth: number;
+    markerName: string;
+    errorLabel: string;
+  }) {
     const { runCommand, sendInvokeResult, sendNodeEvent } = createInvokeSpies({
       runCommand: vi.fn(async () => {
-        throw new Error("runCommand should not be called for depth-boundary shell wrappers");
+        throw new Error(params.errorLabel);
       }),
     });
 
@@ -877,11 +906,11 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
         },
       }),
       run: async ({ tempHome }) => {
-        const marker = path.join(tempHome, "depth4-pwned.txt");
+        const marker = path.join(tempHome, params.markerName);
         await runSystemInvoke({
           preferMacAppExecHost: false,
           command: buildNestedEnvShellCommand({
-            depth: 4,
+            depth: params.depth,
             payload: `echo PWNED > ${marker}`,
           }),
           security: "allowlist",
@@ -896,45 +925,27 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
 
     expect(runCommand).not.toHaveBeenCalled();
     expectApprovalRequiredDenied({ sendNodeEvent, sendInvokeResult });
+  }
+
+  it("denies env-wrapped shell payloads at the dispatch depth boundary", async () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    await expectNestedEnvShellDenied({
+      depth: 4,
+      markerName: "depth4-pwned.txt",
+      errorLabel: "runCommand should not be called for depth-boundary shell wrappers",
+    });
   });
 
   it("denies nested env shell payloads when wrapper depth is exceeded", async () => {
     if (process.platform === "win32") {
       return;
     }
-    const { runCommand, sendInvokeResult, sendNodeEvent } = createInvokeSpies({
-      runCommand: vi.fn(async () => {
-        throw new Error("runCommand should not be called for nested env depth overflow");
-      }),
+    await expectNestedEnvShellDenied({
+      depth: 5,
+      markerName: "pwned.txt",
+      errorLabel: "runCommand should not be called for nested env depth overflow",
     });
-
-    await withTempApprovalsHome({
-      approvals: createAllowlistOnMissApprovals({
-        agents: {
-          main: {
-            allowlist: [{ pattern: "/usr/bin/env" }],
-          },
-        },
-      }),
-      run: async ({ tempHome }) => {
-        const marker = path.join(tempHome, "pwned.txt");
-        await runSystemInvoke({
-          preferMacAppExecHost: false,
-          command: buildNestedEnvShellCommand({
-            depth: 5,
-            payload: `echo PWNED > ${marker}`,
-          }),
-          security: "allowlist",
-          ask: "on-miss",
-          runCommand,
-          sendInvokeResult,
-          sendNodeEvent,
-        });
-        expect(fs.existsSync(marker)).toBe(false);
-      },
-    });
-
-    expect(runCommand).not.toHaveBeenCalled();
-    expectApprovalRequiredDenied({ sendNodeEvent, sendInvokeResult });
   });
 });

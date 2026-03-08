@@ -1,8 +1,9 @@
 import {
   buildAccountScopedDmSecurityPolicy,
   buildOpenGroupPolicyWarning,
-  mapAllowFromEntries,
-} from "openclaw/plugin-sdk";
+  collectAllowlistProviderGroupPolicyWarnings,
+  createScopedAccountConfigAccessors,
+} from "openclaw/plugin-sdk/compat";
 import {
   applyAccountNameToChannelSection,
   buildChannelConfigSchema,
@@ -12,8 +13,6 @@ import {
   deleteAccountFromConfigSection,
   normalizeAccountId,
   PAIRING_APPROVED_MESSAGE,
-  resolveAllowlistProviderRuntimeGroupPolicy,
-  resolveDefaultGroupPolicy,
   setAccountEnabledInConfigSection,
   type ChannelPlugin,
 } from "openclaw/plugin-sdk/matrix";
@@ -100,6 +99,13 @@ function buildMatrixConfigUpdate(
   };
 }
 
+const matrixConfigAccessors = createScopedAccountConfigAccessors({
+  resolveAccount: ({ cfg, accountId }) =>
+    resolveMatrixAccountConfig({ cfg: cfg as CoreConfig, accountId }),
+  resolveAllowFrom: (account) => account.dm?.allowFrom,
+  formatAllowFrom: (allowFrom) => normalizeMatrixAllowList(allowFrom),
+});
+
 export const matrixPlugin: ChannelPlugin<ResolvedMatrixAccount> = {
   id: "matrix",
   meta,
@@ -155,11 +161,7 @@ export const matrixPlugin: ChannelPlugin<ResolvedMatrixAccount> = {
       configured: account.configured,
       baseUrl: account.homeserver,
     }),
-    resolveAllowFrom: ({ cfg, accountId }) => {
-      const matrixConfig = resolveMatrixAccountConfig({ cfg: cfg as CoreConfig, accountId });
-      return mapAllowFromEntries(matrixConfig.dm?.allowFrom);
-    },
-    formatAllowFrom: ({ allowFrom }) => normalizeMatrixAllowList(allowFrom),
+    ...matrixConfigAccessors,
   },
   security: {
     resolveDmPolicy: ({ cfg, accountId, account }) => {
@@ -175,23 +177,22 @@ export const matrixPlugin: ChannelPlugin<ResolvedMatrixAccount> = {
       });
     },
     collectWarnings: ({ account, cfg }) => {
-      const defaultGroupPolicy = resolveDefaultGroupPolicy(cfg as CoreConfig);
-      const { groupPolicy } = resolveAllowlistProviderRuntimeGroupPolicy({
+      return collectAllowlistProviderGroupPolicyWarnings({
+        cfg: cfg as CoreConfig,
         providerConfigPresent: (cfg as CoreConfig).channels?.matrix !== undefined,
-        groupPolicy: account.config.groupPolicy,
-        defaultGroupPolicy,
+        configuredGroupPolicy: account.config.groupPolicy,
+        collect: (groupPolicy) =>
+          groupPolicy === "open"
+            ? [
+                buildOpenGroupPolicyWarning({
+                  surface: "Matrix rooms",
+                  openBehavior: "allows any room to trigger (mention-gated)",
+                  remediation:
+                    'Set channels.matrix.groupPolicy="allowlist" + channels.matrix.groups (and optionally channels.matrix.groupAllowFrom) to restrict rooms',
+                }),
+              ]
+            : [],
       });
-      if (groupPolicy !== "open") {
-        return [];
-      }
-      return [
-        buildOpenGroupPolicyWarning({
-          surface: "Matrix rooms",
-          openBehavior: "allows any room to trigger (mention-gated)",
-          remediation:
-            'Set channels.matrix.groupPolicy="allowlist" + channels.matrix.groups (and optionally channels.matrix.groupAllowFrom) to restrict rooms',
-        }),
-      ];
     },
   },
   groups: {

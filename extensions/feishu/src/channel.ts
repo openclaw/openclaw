@@ -1,8 +1,8 @@
 import {
-  collectOpenGroupPolicyRestrictSendersWarnings,
+  collectAllowlistProviderRestrictSendersWarnings,
   formatAllowFromLowercase,
   mapAllowFromEntries,
-} from "openclaw/plugin-sdk";
+} from "openclaw/plugin-sdk/compat";
 import type { ChannelMeta, ChannelPlugin, ClawdbotConfig } from "openclaw/plugin-sdk/feishu";
 import {
   buildProbeChannelStatusSummary,
@@ -10,8 +10,6 @@ import {
   createDefaultChannelRuntimeState,
   DEFAULT_ACCOUNT_ID,
   PAIRING_APPROVED_MESSAGE,
-  resolveAllowlistProviderRuntimeGroupPolicy,
-  resolveDefaultGroupPolicy,
 } from "openclaw/plugin-sdk/feishu";
 import {
   resolveFeishuAccount,
@@ -261,14 +259,10 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount> = {
     collectWarnings: ({ cfg, accountId }) => {
       const account = resolveFeishuAccount({ cfg, accountId });
       const feishuCfg = account.config;
-      const defaultGroupPolicy = resolveDefaultGroupPolicy(cfg);
-      const { groupPolicy } = resolveAllowlistProviderRuntimeGroupPolicy({
+      return collectAllowlistProviderRestrictSendersWarnings({
+        cfg,
         providerConfigPresent: cfg.channels?.feishu !== undefined,
-        groupPolicy: feishuCfg?.groupPolicy,
-        defaultGroupPolicy,
-      });
-      return collectOpenGroupPolicyRestrictSendersWarnings({
-        groupPolicy,
+        configuredGroupPolicy: feishuCfg?.groupPolicy,
         surface: `Feishu[${account.accountId}] groups`,
         openScope: "any member",
         groupPolicyPath: "channels.feishu.groupPolicy",

@@ -1,11 +1,13 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterAll, afterEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import { withEnv } from "../test-utils/env.js";
 import { getGlobalHookRunner, resetGlobalHookRunner } from "./hook-runner-global.js";
 import { createHookRunner } from "./hooks.js";
-import { __testing, loadOpenClawPlugins } from "./loader.js";
+
+vi.unmock("jiti");
+const { __testing, loadOpenClawPlugins } = await import("./loader.js");
 
 type TempPlugin = { dir: string; file: string; id: string };
 
@@ -1335,7 +1337,7 @@ describe("loadOpenClawPlugins", () => {
     });
 
     const record = registry.plugins.find((entry) => entry.id === "legacy-root-import");
-    expect(record?.status).toBe("loaded");
+    expect({ status: record?.status, error: record?.error }).toMatchObject({ status: "loaded" });
   });
 
   it("prefers dist plugin-sdk alias when loader runs from dist", () => {
@@ -1353,6 +1355,20 @@ describe("loadOpenClawPlugins", () => {
     const { root, srcFile } = createPluginSdkAliasFixture();
 
     const resolved = withEnv({ NODE_ENV: undefined }, () =>
+      __testing.resolvePluginSdkAliasFile({
+        srcFile: "index.ts",
+        distFile: "index.js",
+        modulePath: path.join(root, "src", "plugins", "loader.ts"),
+      }),
+    );
+    expect(resolved).toBe(srcFile);
+  });
+
+  it("falls back to src plugin-sdk alias when dist is missing in production", () => {
+    const { root, srcFile, distFile } = createPluginSdkAliasFixture();
+    fs.rmSync(distFile);
+
+    const resolved = withEnv({ NODE_ENV: "production", VITEST: undefined }, () =>
       __testing.resolvePluginSdkAliasFile({
         srcFile: "index.ts",
         distFile: "index.js",
