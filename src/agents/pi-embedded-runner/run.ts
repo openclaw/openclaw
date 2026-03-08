@@ -8,6 +8,7 @@ import {
 import { computeBackoff, sleepWithAbort, type BackoffPolicy } from "../../infra/backoff.js";
 import { generateSecureToken } from "../../infra/secure-random.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
+import { loadOpenClawPlugins } from "../../plugins/loader.js";
 import type { PluginHookBeforeAgentStartResult } from "../../plugins/types.js";
 import { enqueueCommandInLane } from "../../process/command-queue.js";
 import { isMarkdownCapableMessageChannel } from "../../utils/message-channel.js";
@@ -789,6 +790,11 @@ export async function runEmbeddedPiAgent(
           throw err;
         }
       };
+      // Ensure plugin-provided context engines are registered before resolution.
+      loadOpenClawPlugins({
+        config: params.config,
+        workspaceDir: params.agentDir,
+      });
       // Resolve the context engine once and reuse across retries to avoid
       // repeated initialization/connection overhead per attempt.
       ensureContextEnginesInitialized();

@@ -14,6 +14,7 @@ import type { SubagentEndReason } from "../context-engine/types.js";
 import { callGateway } from "../gateway/call.js";
 import { onAgentEvent } from "../infra/agent-events.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { loadOpenClawPlugins } from "../plugins/loader.js";
 import { defaultRuntime } from "../runtime.js";
 import { type DeliveryContext, normalizeDeliveryContext } from "../utils/delivery-context.js";
 import { resetAnnounceQueuesForTests } from "./subagent-announce-queue.js";
@@ -315,8 +316,10 @@ async function notifyContextEngineSubagentEnded(params: {
   reason: SubagentEndReason;
 }) {
   try {
+    const cfg = loadConfig();
+    loadOpenClawPlugins({ config: cfg });
     ensureContextEnginesInitialized();
-    const engine = await resolveContextEngine(loadConfig());
+    const engine = await resolveContextEngine(cfg);
     if (!engine.onSubagentEnded) {
       return;
     }
