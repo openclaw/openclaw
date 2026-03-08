@@ -570,6 +570,44 @@ describe("slack prepareSlackMessage inbound contract", () => {
     // MessageThreadId should be set for the reply
     expect(prepared!.ctxPayload.MessageThreadId).toBe("500.000");
   });
+
+  it("stamps OriginatingChannel: slack and OriginatingTo on DM inbound context", async () => {
+    const message = createSlackMessage({ channel: "D123", user: "U42", ts: "2.000" });
+    const prepared = await prepareWithDefaultCtx(message);
+
+    expect(prepared).toBeTruthy();
+    expect(prepared!.ctxPayload.OriginatingChannel).toBe("slack");
+    expect(prepared!.ctxPayload.OriginatingTo).toBe("user:U42");
+  });
+
+  it("persists Slack DM delivery route to main session so later replies default to Slack", async () => {
+    const { storePath } = makeTmpStorePath();
+    const slackCtx = createInboundSlackCtx({
+      cfg: {
+        session: { store: storePath },
+        channels: { slack: { enabled: true } },
+      } as OpenClawConfig,
+    });
+    // oxlint-disable-next-line typescript/no-explicit-any
+    slackCtx.resolveUserName = async () => ({ name: "Alice" }) as any;
+
+    const prepared = await prepareMessageWith(
+      slackCtx,
+      createSlackAccount(),
+      createSlackMessage({ channel: "D123", user: "U42", ts: "1.000" }),
+    );
+    expect(prepared).toBeTruthy();
+
+    // updateLastRoute is awaited inside prepareSlackMessage, so the store is
+    // written by the time the function returns.
+    const store = JSON.parse(fs.readFileSync(storePath, "utf8")) as Record<
+      string,
+      Record<string, unknown>
+    >;
+    const mainEntry = store["agent:main:main"];
+    expect(mainEntry?.lastChannel).toBe("slack");
+    expect(mainEntry?.lastTo).toBe("user:U42");
+  });
 });
 
 describe("prepareSlackMessage sender prefix", () => {

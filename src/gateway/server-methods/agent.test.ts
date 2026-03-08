@@ -593,6 +593,44 @@ describe("gateway agent handler", () => {
     resetTimeConfig();
   });
 
+  it("routes reply to Slack when main session has Slack DM last route", async () => {
+    mockMainSessionEntry({
+      lastChannel: "slack",
+      lastTo: "user:U42",
+      lastAccountId: "default",
+    });
+    mocks.updateSessionStore.mockImplementation(async (_path, updater) => {
+      const store: Record<string, unknown> = {
+        "agent:main:main": buildExistingMainStoreEntry({
+          lastChannel: "slack",
+          lastTo: "user:U42",
+          lastAccountId: "default",
+        }),
+      };
+      return await updater(store);
+    });
+    mocks.agentCommand.mockResolvedValue({
+      payloads: [{ text: "ok" }],
+      meta: { durationMs: 100 },
+    });
+
+    await invokeAgent(
+      {
+        message: "follow-up from main session",
+        agentId: "main",
+        sessionKey: "agent:main:main",
+        idempotencyKey: "test-slack-dm-route",
+      },
+      { reqId: "slack-dm-route-1" },
+    );
+
+    await vi.waitFor(() => expect(mocks.agentCommand).toHaveBeenCalled());
+    const callArgs = mocks.agentCommand.mock.calls.at(-1)?.[0] as {
+      channel?: string;
+    };
+    expect(callArgs.channel).toBe("slack");
+  });
+
   it("rejects malformed agent session keys early in agent handler", async () => {
     mocks.agentCommand.mockClear();
     const respond = await invokeAgent(
