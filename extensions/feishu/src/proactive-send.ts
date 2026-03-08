@@ -50,11 +50,12 @@ export async function sendTextMessage(params: {
       },
     })) as { code?: number; msg?: string; data?: { message_id?: string } };
 
-    if (response.code !== 0) {
+    if (response.code !== undefined && response.code !== 0) {
       return handleSendError(response, account.appId, account.domain);
     }
 
-    const messageId = response.data?.message_id ?? "";
+    const respAny = response as any;
+    const messageId = respAny.message_id ?? respAny.data?.message_id ?? "";
     log?.(`feishu: sent text message ${messageId} to ${receiveId}`);
     return { messageId };
   } catch (err) {
@@ -101,7 +102,7 @@ export async function sendFileMessage(params: {
       },
     })) as { code?: number; msg?: string; data?: { file_key?: string } };
 
-    if (uploadResponse.code !== 0) {
+    if (uploadResponse.code !== undefined && uploadResponse.code !== 0) {
       const permErr = checkPermissionError(
         uploadResponse,
         account.appId,
@@ -114,7 +115,10 @@ export async function sendFileMessage(params: {
       };
     }
 
-    const fileKey = uploadResponse.data?.file_key;
+    // SDK v1.30+ returns data directly without code wrapper on success
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any -- SDK response type
+    const uploadAny = uploadResponse as any;
+    const fileKey = uploadAny.file_key ?? uploadAny.data?.file_key;
     if (!fileKey) {
       return { error: "File uploaded but no file_key returned" };
     }
@@ -131,11 +135,12 @@ export async function sendFileMessage(params: {
       },
     })) as { code?: number; msg?: string; data?: { message_id?: string } };
 
-    if (sendResponse.code !== 0) {
+    if (sendResponse.code !== undefined && sendResponse.code !== 0) {
       return handleSendError(sendResponse, account.appId, account.domain);
     }
 
-    const messageId = sendResponse.data?.message_id ?? "";
+    const sendAny = sendResponse as any;
+    const messageId = sendAny.message_id ?? sendAny.data?.message_id ?? "";
     log?.(`feishu: sent file message ${messageId} to ${receiveId}`);
     return { messageId };
   } catch (err) {
@@ -184,11 +189,12 @@ export async function sendMentionAll(params: {
       },
     })) as { code?: number; msg?: string; data?: { message_id?: string } };
 
-    if (response.code !== 0) {
+    if (response.code !== undefined && response.code !== 0) {
       return handleSendError(response, account.appId, account.domain);
     }
 
-    const messageId = response.data?.message_id ?? "";
+    const respAny = response as any;
+    const messageId = respAny.message_id ?? respAny.data?.message_id ?? "";
     log?.(`feishu: sent @all message ${messageId} to group ${chatId}`);
     return { messageId };
   } catch (err) {
