@@ -310,6 +310,7 @@ export async function runAgentTurnWithFallback(params: {
             sessionCtx: params.sessionCtx,
             hasRepliedRef: params.opts?.hasRepliedRef,
             provider,
+            sessionEntry: params.getActiveSessionEntry(),
           });
           const runBaseParams = buildEmbeddedRunBaseParams({
             run: params.followupRun.run,
