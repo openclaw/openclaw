@@ -523,4 +523,19 @@ describe("resolveGatewayCredentialsFromValues", () => {
     });
     expect(resolved).toEqual({ token: "real-token-value", password: "real-password" }); // pragma: allowlist secret
   });
+
+  it("normalizes non-Latin1 gateway credentials before precedence checks", () => {
+    const resolved = resolveGatewayCredentialsFromValues({
+      configToken: "  \u2502config-token\n",
+      configPassword: "\u2502config-password", // pragma: allowlist secret
+      env: {
+        OPENCLAW_GATEWAY_TOKEN: "\u2502env-token",
+        OPENCLAW_GATEWAY_PASSWORD: "\u2502env-password", // pragma: allowlist secret
+      } as NodeJS.ProcessEnv,
+    });
+    expect(resolved).toEqual({
+      token: "env-token",
+      password: "env-password", // pragma: allowlist secret
+    });
+  });
 });
