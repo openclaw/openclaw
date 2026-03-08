@@ -421,11 +421,17 @@ export function isSecureWebSocketUrl(
     return false;
   }
 
-  if (parsed.protocol === "wss:") {
+  // Node's ws client accepts http(s) URLs and normalizes them to ws(s).
+  // Treat those aliases the same way here so loopback cron announce delivery
+  // and TLS-backed https endpoints follow the same security policy.
+  const protocol =
+    parsed.protocol === "https:" ? "wss:" : parsed.protocol === "http:" ? "ws:" : parsed.protocol;
+
+  if (protocol === "wss:") {
     return true;
   }
 
-  if (parsed.protocol !== "ws:") {
+  if (protocol !== "ws:") {
     return false;
   }
 
@@ -435,7 +441,16 @@ export function isSecureWebSocketUrl(
   }
   // Optional break-glass for trusted private-network overlays.
   if (opts?.allowPrivateWs) {
-    return isPrivateOrLoopbackHost(parsed.hostname);
+    if (isPrivateOrLoopbackHost(parsed.hostname)) {
+      return true;
+    }
+    // Hostnames may resolve to private networks (for example in VPN/Tailnet DNS),
+    // but resolution is not available in this synchronous validator.
+    const hostForIpCheck =
+      parsed.hostname.startsWith("[") && parsed.hostname.endsWith("]")
+        ? parsed.hostname.slice(1, -1)
+        : parsed.hostname;
+    return net.isIP(hostForIpCheck) === 0;
   }
   return false;
 }

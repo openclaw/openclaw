@@ -614,6 +614,44 @@ actor GatewayEndpointStore {
 }
 
 extension GatewayEndpointStore {
+    static func localConfig() -> GatewayConnection.Config {
+        self.localConfig(
+            root: OpenClawConfigFile.loadDict(),
+            env: ProcessInfo.processInfo.environment,
+            launchdSnapshot: GatewayLaunchAgentManager.launchdConfigSnapshot(),
+            tailscaleIP: TailscaleService.fallbackTailnetIPv4())
+    }
+
+    static func localConfig(
+        root: [String: Any],
+        env: [String: String],
+        launchdSnapshot: LaunchAgentPlistSnapshot?,
+        tailscaleIP: String?) -> GatewayConnection.Config
+    {
+        let port = GatewayEnvironment.gatewayPort()
+        let bind = self.resolveGatewayBindMode(root: root, env: env)
+        let customBindHost = self.resolveGatewayCustomBindHost(root: root)
+        let scheme = self.resolveGatewayScheme(root: root, env: env)
+        let host = self.resolveLocalGatewayHost(
+            bindMode: bind,
+            customBindHost: customBindHost,
+            tailscaleIP: tailscaleIP)
+        let token = self.resolveGatewayToken(
+            isRemote: false,
+            root: root,
+            env: env,
+            launchdSnapshot: launchdSnapshot)
+        let password = self.resolveGatewayPassword(
+            isRemote: false,
+            root: root,
+            env: env,
+            launchdSnapshot: launchdSnapshot)
+        return (
+            url: URL(string: "\(scheme)://\(host):\(port)")!,
+            token: token,
+            password: password)
+    }
+
     private static func normalizeDashboardPath(_ rawPath: String?) -> String {
         let trimmed = (rawPath ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return "/" }
@@ -661,18 +699,20 @@ extension GatewayEndpointStore {
             components.path = "/"
         }
 
-        var queryItems: [URLQueryItem] = []
+        var fragmentItems: [URLQueryItem] = []
         if let token = config.token?.trimmingCharacters(in: .whitespacesAndNewlines),
            !token.isEmpty
         {
-            queryItems.append(URLQueryItem(name: "token", value: token))
+            fragmentItems.append(URLQueryItem(name: "token", value: token))
         }
-        if let password = config.password?.trimmingCharacters(in: .whitespacesAndNewlines),
-           !password.isEmpty
-        {
-            queryItems.append(URLQueryItem(name: "password", value: password))
+        components.queryItems = nil
+        if fragmentItems.isEmpty {
+            components.fragment = nil
+        } else {
+            var fragment = URLComponents()
+            fragment.queryItems = fragmentItems
+            components.fragment = fragment.percentEncodedQuery
         }
-        components.queryItems = queryItems.isEmpty ? nil : queryItems
         guard let url = components.url else {
             throw NSError(domain: "Dashboard", code: 2, userInfo: [
                 NSLocalizedDescriptionKey: "Failed to build dashboard URL",
@@ -717,6 +757,19 @@ extension GatewayEndpointStore {
         self.resolveLocalGatewayHost(
             bindMode: bindMode,
             customBindHost: customBindHost,
+            tailscaleIP: tailscaleIP)
+    }
+
+    static func _testLocalConfig(
+        root: [String: Any],
+        env: [String: String],
+        launchdSnapshot: LaunchAgentPlistSnapshot? = nil,
+        tailscaleIP: String? = nil) -> GatewayConnection.Config
+    {
+        self.localConfig(
+            root: root,
+            env: env,
+            launchdSnapshot: launchdSnapshot,
             tailscaleIP: tailscaleIP)
     }
 }

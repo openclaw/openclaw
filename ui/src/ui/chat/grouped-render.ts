@@ -116,9 +116,10 @@ export function renderMessageGroup(
 ) {
   const normalizedRole = normalizeRoleForGrouping(group.role);
   const assistantName = opts.assistantName ?? "Assistant";
+  const userLabel = group.senderLabel?.trim();
   const who =
     normalizedRole === "user"
-      ? "You"
+      ? (userLabel ?? "You")
       : normalizedRole === "assistant"
         ? assistantName
         : normalizedRole;

@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import JSZip from "jszip";
 import sharp from "sharp";
-import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { isPathWithinBase } from "../../test/helpers/paths.js";
 import { createTempHomeEnv, type TempHomeEnv } from "../test-utils/temp-home.js";
 
@@ -23,6 +23,10 @@ describe("media store", () => {
     } catch {
       // ignore cleanup failures in tests
     }
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
   });
 
   async function withTempStore<T>(
@@ -64,6 +68,33 @@ describe("media store", () => {
     });
   });
 
+  it("retries buffer writes when cleanup prunes the target directory", async () => {
+    await withTempStore(async (store) => {
+      const originalWriteFile = fs.writeFile.bind(fs);
+      let injectedEnoent = false;
+      vi.spyOn(fs, "writeFile").mockImplementation(async (...args) => {
+        const [filePath] = args;
+        if (
+          !injectedEnoent &&
+          typeof filePath === "string" &&
+          filePath.includes(`${path.sep}race-buffer${path.sep}`)
+        ) {
+          injectedEnoent = true;
+          await fs.rm(path.dirname(filePath), { recursive: true, force: true });
+          const err = new Error("missing dir") as NodeJS.ErrnoException;
+          err.code = "ENOENT";
+          throw err;
+        }
+        return await originalWriteFile(...args);
+      });
+
+      const saved = await store.saveMediaBuffer(Buffer.from("hello"), "text/plain", "race-buffer");
+      const savedStat = await fs.stat(saved.path);
+      expect(injectedEnoent).toBe(true);
+      expect(savedStat.isFile()).toBe(true);
+    });
+  });
+
   it("copies local files and cleans old media", async () => {
     await withTempStore(async (store, home) => {
       const srcFile = path.join(home, "tmp-src.txt");
@@ -80,6 +111,36 @@ describe("media store", () => {
       await fs.utimes(saved.path, past / 1000, past / 1000);
       await store.cleanOldMedia(1);
       await expect(fs.stat(saved.path)).rejects.toThrow();
+    });
+  });
+
+  it("retries local-source writes when cleanup prunes the target directory", async () => {
+    await withTempStore(async (store, home) => {
+      const srcFile = path.join(home, "tmp-src-race.txt");
+      await fs.writeFile(srcFile, "local file");
+
+      const originalWriteFile = fs.writeFile.bind(fs);
+      let injectedEnoent = false;
+      vi.spyOn(fs, "writeFile").mockImplementation(async (...args) => {
+        const [filePath] = args;
+        if (
+          !injectedEnoent &&
+          typeof filePath === "string" &&
+          filePath.includes(`${path.sep}race-source${path.sep}`)
+        ) {
+          injectedEnoent = true;
+          await fs.rm(path.dirname(filePath), { recursive: true, force: true });
+          const err = new Error("missing dir") as NodeJS.ErrnoException;
+          err.code = "ENOENT";
+          throw err;
+        }
+        return await originalWriteFile(...args);
+      });
+
+      const saved = await store.saveMediaSource(srcFile, undefined, "race-source");
+      const savedStat = await fs.stat(saved.path);
+      expect(injectedEnoent).toBe(true);
+      expect(savedStat.isFile()).toBe(true);
     });
   });
 
@@ -115,6 +176,97 @@ describe("media store", () => {
       expect(inboundStat.isDirectory()).toBe(true);
     });
   });
+
+  it("cleans old media files in nested subdirectories and preserves fresh siblings", async () => {
+    await withTempStore(async (store) => {
+      const oldNested = await store.saveMediaBuffer(
+        Buffer.from("old nested"),
+        "text/plain",
+        path.join("remote-cache", "session-1", "images"),
+      );
+      const freshNested = await store.saveMediaBuffer(
+        Buffer.from("fresh nested"),
+        "text/plain",
+        path.join("remote-cache", "session-1", "docs"),
+      );
+      const oldFlat = await store.saveMediaBuffer(Buffer.from("old flat"), "text/plain", "inbound");
+      const past = Date.now() - 10_000;
+      await fs.utimes(oldNested.path, past / 1000, past / 1000);
+      await fs.utimes(oldFlat.path, past / 1000, past / 1000);
+
+      await store.cleanOldMedia(1_000, { recursive: true, pruneEmptyDirs: true });
+
+      await expect(fs.stat(oldNested.path)).rejects.toThrow();
+      await expect(fs.stat(oldFlat.path)).rejects.toThrow();
+      const freshStat = await fs.stat(freshNested.path);
+      expect(freshStat.isFile()).toBe(true);
+      await expect(fs.stat(path.dirname(oldNested.path))).rejects.toThrow();
+    });
+  });
+
+  it("keeps nested remote-cache files during shallow cleanup", async () => {
+    await withTempStore(async (store) => {
+      const nested = await store.saveMediaBuffer(
+        Buffer.from("old nested"),
+        "text/plain",
+        path.join("remote-cache", "session-1", "images"),
+      );
+      const past = Date.now() - 10_000;
+      await fs.utimes(nested.path, past / 1000, past / 1000);
+
+      await store.cleanOldMedia(1_000);
+
+      const stat = await fs.stat(nested.path);
+      expect(stat.isFile()).toBe(true);
+    });
+  });
+
+  it("prunes empty directory chains after recursive cleanup", async () => {
+    await withTempStore(async (store) => {
+      const nested = await store.saveMediaBuffer(
+        Buffer.from("old nested"),
+        "text/plain",
+        path.join("remote-cache", "session-prune", "images"),
+      );
+      const mediaDir = await store.ensureMediaDir();
+      const sessionDir = path.dirname(path.dirname(nested.path));
+      const remoteCacheDir = path.dirname(sessionDir);
+      const past = Date.now() - 10_000;
+      await fs.utimes(nested.path, past / 1000, past / 1000);
+
+      await store.cleanOldMedia(1_000, { recursive: true, pruneEmptyDirs: true });
+
+      await expect(fs.stat(sessionDir)).rejects.toThrow();
+      const remoteCacheStat = await fs.stat(remoteCacheDir);
+      const mediaStat = await fs.stat(mediaDir);
+      expect(remoteCacheStat.isDirectory()).toBe(true);
+      expect(mediaStat.isDirectory()).toBe(true);
+    });
+  });
+
+  it.runIf(process.platform !== "win32")(
+    "does not follow symlinked top-level directories during recursive cleanup",
+    async () => {
+      await withTempStore(async (store, home) => {
+        const mediaDir = await store.ensureMediaDir();
+        const outsideDir = path.join(home, "outside-media");
+        const outsideFile = path.join(outsideDir, "old.txt");
+        const symlinkPath = path.join(mediaDir, "linked-dir");
+        await fs.mkdir(outsideDir, { recursive: true });
+        await fs.writeFile(outsideFile, "outside");
+        const past = Date.now() - 10_000;
+        await fs.utimes(outsideFile, past / 1000, past / 1000);
+        await fs.symlink(outsideDir, symlinkPath);
+
+        await store.cleanOldMedia(1_000, { recursive: true, pruneEmptyDirs: true });
+
+        const outsideStat = await fs.stat(outsideFile);
+        const symlinkStat = await fs.lstat(symlinkPath);
+        expect(outsideStat.isFile()).toBe(true);
+        expect(symlinkStat.isSymbolicLink()).toBe(true);
+      });
+    },
+  );
 
   it("sets correct mime for xlsx by extension", async () => {
     await withTempStore(async (store, home) => {

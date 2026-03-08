@@ -12,7 +12,7 @@ describe("looksLikeUuid", () => {
   });
 
   it("accepts compact UUIDs", () => {
-    expect(looksLikeUuid("123e4567e89b12d3a456426614174000")).toBe(true);
+    expect(looksLikeUuid("123e4567e89b12d3a456426614174000")).toBe(true); // pragma: allowlist secret
   });
 
   it("accepts uuid-like hex values with letters", () => {

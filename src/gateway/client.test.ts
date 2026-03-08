@@ -123,7 +123,7 @@ function createClientWithIdentity(
 ) {
   const identity: DeviceIdentity = {
     deviceId,
-    privateKeyPem: "private-key",
+    privateKeyPem: "private-key", // pragma: allowlist secret
     publicKeyPem: "public-key",
   };
   return new GatewayClient({
@@ -228,6 +228,21 @@ describe("GatewayClient security checks", () => {
     expect(wsInstances.length).toBe(1);
     client.stop();
   });
+
+  it("allows ws:// hostnames with OPENCLAW_ALLOW_INSECURE_PRIVATE_WS=1", () => {
+    process.env.OPENCLAW_ALLOW_INSECURE_PRIVATE_WS = "1";
+    const onConnectError = vi.fn();
+    const client = new GatewayClient({
+      url: "ws://openclaw-gateway.ai:18789",
+      onConnectError,
+    });
+
+    client.start();
+
+    expect(onConnectError).not.toHaveBeenCalled();
+    expect(wsInstances.length).toBe(1);
+    client.stop();
+  });
 });
 
 describe("GatewayClient close handling", () => {
@@ -314,7 +329,7 @@ describe("GatewayClient close handling", () => {
     const onClose = vi.fn();
     const identity: DeviceIdentity = {
       deviceId: "dev-5",
-      privateKeyPem: "private-key",
+      privateKeyPem: "private-key", // pragma: allowlist secret
       publicKeyPem: "public-key",
     };
     const client = new GatewayClient({
@@ -383,6 +398,26 @@ describe("GatewayClient connect auth payload", () => {
     expect(connectFrameFrom(ws)).toMatchObject({
       token: "shared-token",
     });
+    expect(connectFrameFrom(ws).deviceToken).toBeUndefined();
+    client.stop();
+  });
+
+  it("uses explicit shared password and does not inject stored device token", () => {
+    loadDeviceAuthTokenMock.mockReturnValue({ token: "stored-device-token" });
+    const client = new GatewayClient({
+      url: "ws://127.0.0.1:18789",
+      password: "shared-password", // pragma: allowlist secret
+    });
+
+    client.start();
+    const ws = getLatestWs();
+    ws.emitOpen();
+    emitConnectChallenge(ws);
+
+    expect(connectFrameFrom(ws)).toMatchObject({
+      password: "shared-password", // pragma: allowlist secret
+    });
+    expect(connectFrameFrom(ws).token).toBeUndefined();
     expect(connectFrameFrom(ws).deviceToken).toBeUndefined();
     client.stop();
   });

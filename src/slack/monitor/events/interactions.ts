@@ -37,26 +37,7 @@ type SelectOption = {
   text?: { text?: string };
 };
 
-type InteractionSelectionFields = {
-  actionType?: string;
-  blockId?: string;
-  inputKind?: "text" | "number" | "email" | "url" | "rich_text";
-  value?: string;
-  selectedValues?: string[];
-  selectedUsers?: string[];
-  selectedChannels?: string[];
-  selectedConversations?: string[];
-  selectedLabels?: string[];
-  selectedDate?: string;
-  selectedTime?: string;
-  selectedDateTime?: number;
-  inputValue?: string;
-  inputNumber?: number;
-  inputEmail?: string;
-  inputUrl?: string;
-  richTextValue?: unknown;
-  richTextPreview?: string;
-};
+type InteractionSelectionFields = Partial<ModalInputSummary>;
 
 type InteractionSummary = InteractionSelectionFields & {
   interactionType?: "block_action" | "view_submission" | "view_closed";
@@ -571,6 +552,7 @@ export function registerSlackInteractionEvents(params: { ctx: SlackMonitorContex
       const sessionKey = ctx.resolveSlackSystemEventSessionKey({
         channelId: channelId,
         channelType: auth.channelType,
+        senderId: userId,
       });
 
       // Build context key - only include defined values to avoid "unknown" noise

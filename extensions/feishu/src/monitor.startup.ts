@@ -1,4 +1,4 @@
-import type { RuntimeEnv } from "openclaw/plugin-sdk";
+import type { RuntimeEnv } from "openclaw/plugin-sdk/feishu";
 import { probeFeishu } from "./probe.js";
 import type { ResolvedFeishuAccount } from "./types.js";
 
@@ -8,6 +8,11 @@ type FetchBotOpenIdOptions = {
   runtime?: RuntimeEnv;
   abortSignal?: AbortSignal;
   timeoutMs?: number;
+};
+
+export type FeishuMonitorBotIdentity = {
+  botOpenId?: string;
+  botName?: string;
 };
 
 function isTimeoutErrorMessage(message: string | undefined): boolean {
@@ -20,12 +25,12 @@ function isAbortErrorMessage(message: string | undefined): boolean {
   return message?.toLowerCase().includes("aborted") ?? false;
 }
 
-export async function fetchBotOpenIdForMonitor(
+export async function fetchBotIdentityForMonitor(
   account: ResolvedFeishuAccount,
   options: FetchBotOpenIdOptions = {},
-): Promise<string | undefined> {
+): Promise<FeishuMonitorBotIdentity> {
   if (options.abortSignal?.aborted) {
-    return undefined;
+    return {};
   }
 
   const timeoutMs = options.timeoutMs ?? FEISHU_STARTUP_BOT_INFO_TIMEOUT_MS;
@@ -34,11 +39,11 @@ export async function fetchBotOpenIdForMonitor(
     abortSignal: options.abortSignal,
   });
   if (result.ok) {
-    return result.botOpenId;
+    return { botOpenId: result.botOpenId, botName: result.botName };
   }
 
   if (options.abortSignal?.aborted || isAbortErrorMessage(result.error)) {
-    return undefined;
+    return {};
   }
 
   if (isTimeoutErrorMessage(result.error)) {
@@ -47,5 +52,13 @@ export async function fetchBotOpenIdForMonitor(
       `feishu[${account.accountId}]: bot info probe timed out after ${timeoutMs}ms; continuing startup`,
     );
   }
-  return undefined;
+  return {};
+}
+
+export async function fetchBotOpenIdForMonitor(
+  account: ResolvedFeishuAccount,
+  options: FetchBotOpenIdOptions = {},
+): Promise<string | undefined> {
+  const identity = await fetchBotIdentityForMonitor(account, options);
+  return identity.botOpenId;
 }
