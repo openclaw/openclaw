@@ -1,0 +1,47 @@
+diff --git a/dist/providers/openai-completions.js b/dist/providers/openai-completions.js
+index a41870fb5e57330db135d11f3fbbdde78abc2c99..71cd7b4c63b25327b8364d5efaf3bfb2fbf66eed 100644
+--- a/dist/providers/openai-completions.js
++++ b/dist/providers/openai-completions.js
+@@ -302,7 +302,7 @@ function createClient(model, context, apiKey, optionsHeaders) {
+     }
+     return new OpenAI({
+         apiKey,
+-        baseURL: model.baseUrl,
++        baseURL: model.baseUrl ? (model.baseUrl.endsWith("/") ? model.baseUrl : `${model.baseUrl}/`) : undefined,
+         dangerouslyAllowBrowser: true,
+         defaultHeaders: headers,
+     });
+@@ -525,13 +525,13 @@ export function convertMessages(model, context, compat) {
+                 const reasoningDetails = toolCalls
+                     .filter((tc) => tc.thoughtSignature)
+                     .map((tc) => {
+-                    try {
+-                        return JSON.parse(tc.thoughtSignature);
+-                    }
+-                    catch {
+-                        return null;
+-                    }
+-                })
++                        try {
++                            return JSON.parse(tc.thoughtSignature);
++                        }
++                        catch {
++                            return null;
++                        }
++                    })
+                     .filter(Boolean);
+                 if (reasoningDetails.length > 0) {
+                     assistantMsg.reasoning_details = reasoningDetails;
+diff --git a/dist/providers/openai-responses.js b/dist/providers/openai-responses.js
+index ebb642dc7677906866c7125de98c6c3dd3d43d81..4a7bed58f6e54e5e892c85e9d037cc034b80441e 100644
+--- a/dist/providers/openai-responses.js
++++ b/dist/providers/openai-responses.js
+@@ -122,7 +122,7 @@ function createClient(model, context, apiKey, optionsHeaders) {
+     }
+     return new OpenAI({
+         apiKey,
+-        baseURL: model.baseUrl,
++        baseURL: model.baseUrl ? (model.baseUrl.endsWith("/") ? model.baseUrl : `${model.baseUrl}/`) : undefined,
+         dangerouslyAllowBrowser: true,
+         defaultHeaders: headers,
+     });
