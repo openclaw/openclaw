@@ -1,5 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { validateProviderConfig, resolveVoiceCallConfig, type VoiceCallConfig } from "./config.js";
+import {
+  validateProviderConfig,
+  normalizeVoiceCallConfig,
+  resolveVoiceCallConfig,
+  type VoiceCallConfig,
+} from "./config.js";
 import { createVoiceCallBaseConfig } from "./test-fixtures.js";
 
 function createBaseConfig(provider: "telnyx" | "twilio" | "plivo" | "mock"): VoiceCallConfig {
@@ -164,5 +169,24 @@ describe("validateProviderConfig", () => {
       expect(result.valid).toBe(true);
       expect(result.errors).toEqual([]);
     });
+  });
+});
+
+describe("normalizeVoiceCallConfig", () => {
+  it("fills nested runtime defaults from a partial config boundary", () => {
+    const normalized = normalizeVoiceCallConfig({
+      enabled: true,
+      provider: "mock",
+      streaming: {
+        enabled: true,
+        streamPath: "/custom-stream",
+      },
+    });
+
+    expect(normalized.serve.path).toBe("/voice/webhook");
+    expect(normalized.streaming.streamPath).toBe("/custom-stream");
+    expect(normalized.streaming.sttModel).toBe("gpt-4o-transcribe");
+    expect(normalized.tunnel.provider).toBe("none");
+    expect(normalized.webhookSecurity.allowedHosts).toEqual([]);
   });
 });
