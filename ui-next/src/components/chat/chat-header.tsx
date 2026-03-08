@@ -7,7 +7,8 @@ import {
   Zap,
   Minimize2,
   Archive,
-  Maximize2,
+  Pencil,
+  FolderOpen,
 } from "lucide-react";
 import { useRef, useState, useMemo, useCallback, useEffect } from "react";
 import { createPortal } from "react-dom";
@@ -170,6 +171,29 @@ export function useActiveAgentName(agentMap: Map<string, AgentRow>) {
   }, [agentMap, sessions, activeSessionKey]);
 }
 
+export function useActiveAgentMeta(agentMap: Map<string, AgentRow>) {
+  const sessions = useChatStore((s) => s.sessions);
+  const activeSessionKey = useChatStore((s) => s.activeSessionKey);
+
+  return useMemo(() => {
+    if (agentMap.size === 0) {
+      return { role: undefined, department: undefined };
+    }
+    const session = sessions.find((s) => s.key === activeSessionKey);
+    const id =
+      session?.agentId ??
+      (activeSessionKey?.startsWith("agent:") ? activeSessionKey.split(":")[1] : undefined);
+    if (!id) {
+      return { role: undefined, department: undefined };
+    }
+    const agent = agentMap.get(id);
+    return {
+      role: agent?.role,
+      department: agent?.department,
+    };
+  }, [agentMap, sessions, activeSessionKey]);
+}
+
 // ─── ChatHeader ───
 
 export type ChatHeaderProps = {
@@ -179,8 +203,9 @@ export type ChatHeaderProps = {
   switchSession: (key: string) => void;
   agentEmoji?: string;
   agentName?: string;
-  focusMode?: boolean;
-  onToggleFocusMode?: () => void;
+  agentRole?: string;
+  agentDepartment?: string;
+  onRenameSession?: (key: string, newLabel: string) => void;
 };
 
 export function ChatHeader({
@@ -190,17 +215,25 @@ export function ChatHeader({
   switchSession,
   agentEmoji,
   agentName,
-  focusMode = false,
-  onToggleFocusMode,
+  agentRole,
+  agentDepartment,
+  onRenameSession,
 }: ChatHeaderProps) {
   const { sendRpc } = useGateway();
   const { toast } = useToast();
+  const isConnected = useGatewayStore((s) => s.connectionStatus === "connected");
   const sessions = useChatStore((s) => s.sessions);
   const activeSessionKey = useChatStore((s) => s.activeSessionKey);
 
   const [modelSelectorOpen, setModelSelectorOpen] = useState(false);
   const modelSelectorRef = useRef<HTMLButtonElement>(null);
   const modelDropdownRef = useRef<HTMLDivElement>(null);
+
+  // Project selector
+  const [projectSelectorOpen, setProjectSelectorOpen] = useState(false);
+  const projectSelectorRef = useRef<HTMLButtonElement>(null);
+  const projectDropdownRef = useRef<HTMLDivElement>(null);
+  const [projectList, setProjectList] = useState<Array<{ id: string; name?: string; path?: string; status?: string; type?: string }>>([]);
 
   const activeSession = useMemo(
     () => sessions.find((s) => s.key === activeSessionKey),
@@ -220,22 +253,94 @@ export function ChatHeader({
     [models, activeProvider],
   );
 
-  // Context window usage
-  const inputTokens =
-    (activeSession?.inputTokens as number | undefined) ??
-    activeSession?.tokenCounts?.totalInput ??
-    0;
-  const outputTokens =
-    (activeSession?.outputTokens as number | undefined) ??
-    activeSession?.tokenCounts?.totalOutput ??
-    0;
-  const tokenUsed = inputTokens + outputTokens;
+  // Context window usage — prefer totalTokens (prompt tokens from last API call = actual context usage)
+  const tokenUsed = (activeSession?.totalTokens as number | undefined) ??
+    ((activeSession?.inputTokens as number | undefined) ?? activeSession?.tokenCounts?.totalInput ?? 0) +
+    ((activeSession?.outputTokens as number | undefined) ?? activeSession?.tokenCounts?.totalOutput ?? 0);
   const contextTotal =
     (activeSession?.contextTokens as number | undefined) ?? displayModel?.contextWindow ?? 0;
 
   const sessionTitle = activeSession ? formatSessionTitle(activeSession) : "New Chat";
   const sessionKind = (activeSession?.kind as string | undefined) ?? null;
   const sessionChannel = (activeSession?.channel as string | undefined) ?? null;
+
+  // Project context for active session
+  const [projectName, setProjectName] = useState<string | null>(null);
+  useEffect(() => {
+    if (!isConnected || !activeSessionKey) {
+      setProjectName(null);
+      return;
+    }
+    sendRpc<{ id?: string; name?: string } | null>("projects.getContext", {
+      sessionKey: activeSessionKey,
+    })
+      .then((result) => setProjectName(result?.name ?? null))
+      .catch(() => setProjectName(null));
+  }, [isConnected, activeSessionKey, sendRpc]);
+
+  // Fetch project list when selector opens
+  useEffect(() => {
+    if (!projectSelectorOpen || !isConnected) return;
+    sendRpc<{ projects?: Array<{ id: string; name?: string; path?: string; status?: string }> }>("projects.list", {})
+      .then((res) => setProjectList(res?.projects ?? []))
+      .catch(() => setProjectList([]));
+  }, [projectSelectorOpen, isConnected, sendRpc]);
+
+  // Bind session to project
+  const handleBindProject = useCallback(
+    async (projectId: string) => {
+      setProjectSelectorOpen(false);
+      const project = projectList.find((p) => p.id === projectId);
+      const displayName = project?.name ?? projectId;
+      try {
+        await sendRpc("projects.bindSession", { sessionKey: activeSessionKey, projectId });
+        setProjectName(displayName);
+        useChatStore.getState().appendMessage({
+          role: "system",
+          content: `Project bound: ${displayName}`,
+          timestamp: Date.now(),
+          seq: 0,
+        });
+        toast(`Bound to project: ${displayName}`, "success");
+      } catch (err) {
+        toast(`Failed to bind project: ${err instanceof Error ? err.message : String(err)}`, "error");
+      }
+    },
+    [sendRpc, activeSessionKey, toast, projectList],
+  );
+
+  // Unbind project
+  const handleUnbindProject = useCallback(async () => {
+    setProjectSelectorOpen(false);
+    try {
+      await sendRpc("projects.unbindSession", { sessionKey: activeSessionKey });
+      setProjectName(null);
+      useChatStore.getState().appendMessage({
+        role: "system",
+        content: "Project unbound",
+        timestamp: Date.now(),
+        seq: 0,
+      });
+      toast("Project unbound", "success");
+    } catch {
+      toast("Failed to unbind project", "error");
+    }
+  }, [sendRpc, activeSessionKey, toast]);
+
+  // Close project selector on escape/outside click
+  useEffect(() => {
+    if (!projectSelectorOpen) return;
+    const handleKey = (e: KeyboardEvent) => { if (e.key === "Escape") setProjectSelectorOpen(false); };
+    const handleClick = (e: MouseEvent) => {
+      const target = e.target as Node;
+      if (!projectSelectorRef.current?.contains(target) && !projectDropdownRef.current?.contains(target)) {
+        setProjectSelectorOpen(false);
+      }
+    };
+    window.addEventListener("keydown", handleKey);
+    const id = setTimeout(() => window.addEventListener("mousedown", handleClick), 0);
+    return () => { clearTimeout(id); window.removeEventListener("keydown", handleKey); window.removeEventListener("mousedown", handleClick); };
+  }, [projectSelectorOpen]);
 
   // Switch model
   const handleModelSwitch = useCallback(
@@ -357,52 +462,95 @@ export function ChatHeader({
     }
   }, [activeSessionKey, isArchiving, sendRpc, loadSessions, switchSession, toast]);
 
-  // Shell header portal target
+  // Shell header portal targets
   const headerPortal =
     typeof document !== "undefined" ? document.getElementById("shell-header-extra") : null;
+  const titlePortal =
+    typeof document !== "undefined" ? document.getElementById("shell-page-title") : null;
+
+  // Hide default page title when we're portalling our own
+  useEffect(() => {
+    const defaultTitle = document.getElementById("shell-page-title-default");
+    if (defaultTitle) {
+      defaultTitle.style.display = "none";
+    }
+    return () => {
+      if (defaultTitle) {
+        defaultTitle.style.display = "";
+      }
+    };
+  }, []);
+
+  // Inline title rename
+  const [isRenamingTitle, setIsRenamingTitle] = useState(false);
+  const [renameValue, setRenameValue] = useState("");
+  const renameInputRef = useRef<HTMLInputElement>(null);
+
+  const startRename = useCallback(() => {
+    setRenameValue(sessionTitle);
+    setIsRenamingTitle(true);
+    setTimeout(() => renameInputRef.current?.select(), 0);
+  }, [sessionTitle]);
+
+  const commitRename = useCallback(() => {
+    const trimmed = renameValue.trim();
+    if (trimmed && trimmed !== sessionTitle && onRenameSession && activeSessionKey) {
+      onRenameSession(activeSessionKey, trimmed);
+    }
+    setIsRenamingTitle(false);
+  }, [renameValue, sessionTitle, onRenameSession, activeSessionKey]);
 
   return (
     <>
+      {/* Session title replacing "Chat" in shell breadcrumb */}
+      {titlePortal &&
+        createPortal(
+          isRenamingTitle ? (
+            <span className="flex items-center gap-1.5">
+              <input
+                ref={renameInputRef}
+                autoFocus
+                value={renameValue}
+                onChange={(e) => setRenameValue(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") commitRename();
+                  if (e.key === "Escape") setIsRenamingTitle(false);
+                }}
+                onBlur={commitRename}
+                className="bg-transparent border-b border-primary/50 outline-none text-sm md:text-base font-medium text-foreground w-[200px] sm:w-[300px] py-0"
+                placeholder="Session name..."
+              />
+              <button
+                onMouseDown={(e) => { e.preventDefault(); commitRename(); }}
+                className="text-primary hover:text-primary/80 transition-colors"
+              >
+                <Check className="h-3.5 w-3.5" />
+              </button>
+            </span>
+          ) : (
+            <span className="flex items-center gap-1.5 group/title">
+              <span className="truncate max-w-[180px] sm:max-w-[300px]" title={sessionTitle}>
+                {sessionTitle}
+              </span>
+              {onRenameSession && (
+                <button
+                  onClick={startRename}
+                  className="opacity-0 group-hover/title:opacity-60 hover:!opacity-100 text-muted-foreground hover:text-foreground transition-opacity"
+                  aria-label="Rename session"
+                >
+                  <Pencil className="h-3 w-3" />
+                </button>
+              )}
+            </span>
+          ),
+          titlePortal,
+        )}
+
       {/* Session details injected into Shell header via portal */}
       {headerPortal &&
         createPortal(
           <div className="flex items-center gap-2 text-xs font-mono text-muted-foreground min-w-0">
-            {/* Session title — always visible */}
-            <span
-              className="truncate max-w-[180px] sm:max-w-[260px] text-foreground/80 font-medium"
-              title={sessionTitle}
-            >
-              {sessionTitle}
-            </span>
-
-            {/* Focus mode toggle */}
-            {onToggleFocusMode && (
-              <>
-                <Separator orientation="vertical" className="h-3.5" />
-                <button
-                  onClick={onToggleFocusMode}
-                  className={cn(
-                    "flex items-center gap-1 px-1.5 py-0.5 rounded transition-colors shrink-0 cursor-pointer",
-                    focusMode
-                      ? "bg-primary/15 text-primary"
-                      : "hover:bg-primary/15 hover:text-primary",
-                  )}
-                  title={focusMode ? "Exit focus mode (Cmd+Shift+F)" : "Focus mode (Cmd+Shift+F)"}
-                  aria-label={focusMode ? "Exit focus mode" : "Enter focus mode"}
-                >
-                  <Maximize2 className="h-3 w-3" />
-                  <span className="hidden sm:inline">{focusMode ? "Focused" : "Focus"}</span>
-                </button>
-              </>
-            )}
-
-            {/* Elements hidden in focus mode */}
-            <div
-              className={cn(
-                "flex items-center gap-2 transition-all duration-200",
-                focusMode ? "opacity-0 w-0 overflow-hidden pointer-events-none" : "opacity-100",
-              )}
-            >
+            <div className="flex items-center gap-2">
               {/* Agent identity chip */}
               {agentEmoji && agentName && (
                 <>
@@ -412,6 +560,18 @@ export function ChatHeader({
                     <span className="font-medium">{agentName}</span>
                   </span>
                 </>
+              )}
+
+              {/* Agent department / role chips */}
+              {agentDepartment && (
+                <span className="hidden md:flex items-center shrink-0 text-[10px] px-1.5 py-0.5 rounded-md bg-muted/50 border border-border/40 text-muted-foreground/70">
+                  {agentDepartment}
+                </span>
+              )}
+              {agentRole && (
+                <span className="hidden md:flex items-center shrink-0 text-[10px] px-1.5 py-0.5 rounded-md bg-muted/50 border border-border/40 text-muted-foreground/70">
+                  {agentRole}
+                </span>
               )}
 
               {/* Session kind / channel chip */}
@@ -430,6 +590,28 @@ export function ChatHeader({
                   </span>
                 </>
               )}
+
+              {/* Project chip (clickable to assign/change) */}
+              <Separator orientation="vertical" className="h-3.5" />
+              <button
+                ref={projectSelectorRef}
+                onClick={() => setProjectSelectorOpen((prev) => !prev)}
+                className={cn(
+                  "hidden sm:flex items-center gap-1 shrink-0 text-[10px] px-1.5 py-0.5 rounded-md transition-colors cursor-pointer",
+                  projectName
+                    ? "bg-chart-2/10 border border-chart-2/20 text-chart-2/80 hover:bg-chart-2/20"
+                    : "bg-muted/50 border border-border/40 text-muted-foreground/50 hover:text-muted-foreground hover:bg-muted",
+                )}
+              >
+                <FolderOpen className="h-2.5 w-2.5" />
+                <span className="truncate max-w-[120px]">{projectName ?? "Project"}</span>
+                <ChevronDown
+                  className={cn(
+                    "h-2 w-2 shrink-0 opacity-50 transition-transform",
+                    projectSelectorOpen && "rotate-180",
+                  )}
+                />
+              </button>
 
               {/* Model chip */}
               {activeSession?.model && (
@@ -451,41 +633,6 @@ export function ChatHeader({
                       )}
                     />
                   </button>
-                </>
-              )}
-
-              {/* Token usage */}
-              {(inputTokens > 0 || outputTokens > 0) && (
-                <>
-                  <Separator orientation="vertical" className="h-3.5" />
-                  <span
-                    className="shrink-0 tabular-nums"
-                    title={`Input: ${inputTokens.toLocaleString()} / Output: ${outputTokens.toLocaleString()}`}
-                  >
-                    {formatTokenCount(inputTokens + outputTokens)}
-                    {contextTotal > 0 && (
-                      <span className="text-muted-foreground/50">
-                        {" / "}
-                        {formatContextWindow(contextTotal)}
-                      </span>
-                    )}
-                  </span>
-                  {/* Mini context bar */}
-                  {contextTotal > 0 && tokenUsed > 0 && (
-                    <div className="hidden sm:block w-16 h-1.5 rounded-full bg-secondary/60 overflow-hidden shrink-0">
-                      <div
-                        className={cn(
-                          "h-full rounded-full transition-all",
-                          tokenUsed / contextTotal > 0.95
-                            ? "bg-destructive"
-                            : tokenUsed / contextTotal > 0.8
-                              ? "bg-chart-5"
-                              : "bg-primary/60",
-                        )}
-                        style={{ width: `${Math.min((tokenUsed / contextTotal) * 100, 100)}%` }}
-                      />
-                    </div>
-                  )}
                 </>
               )}
 
@@ -533,6 +680,106 @@ export function ChatHeader({
             </div>
           </div>,
           headerPortal,
+        )}
+
+      {/* Project selector dropdown — portalled to body */}
+      {projectSelectorOpen &&
+        createPortal(
+          <div
+            ref={projectDropdownRef}
+            className="fixed z-[9999]"
+            style={(() => {
+              const rect = projectSelectorRef.current?.getBoundingClientRect();
+              if (!rect) {
+                return { top: 0, left: 0 };
+              }
+              return { top: rect.bottom + 4, left: rect.left };
+            })()}
+          >
+            <div className="w-72 sm:w-80 rounded-xl border border-border bg-popover shadow-xl overflow-hidden animate-in fade-in zoom-in-95 duration-100 origin-top">
+              <div className="max-h-80 overflow-y-auto">
+                {/* Unbind option when a project is bound */}
+                {projectName && (
+                  <button
+                    onClick={handleUnbindProject}
+                    className="flex items-center gap-2 w-full px-3 py-2 text-left hover:bg-destructive/10 text-destructive/70 hover:text-destructive transition-colors border-b border-border/50"
+                  >
+                    <FolderOpen className="h-3.5 w-3.5 shrink-0" />
+                    <span className="text-sm">Unbind project</span>
+                  </button>
+                )}
+                {projectList.length === 0 ? (
+                  <div className="px-3 py-4 text-center text-xs text-muted-foreground">
+                    No projects found
+                  </div>
+                ) : (
+                  (() => {
+                    const registered = projectList.filter((p) => p.type !== "internal");
+                    const internal = projectList.filter((p) => p.type === "internal");
+                    const renderItem = (project: typeof projectList[0]) => {
+                      const isBound = projectName === project.id || projectName === project.name;
+                      return (
+                        <button
+                          key={project.id}
+                          onClick={() => handleBindProject(project.id)}
+                          className={cn(
+                            "flex items-center gap-2 w-full px-3 py-2 text-left hover:bg-secondary/40 transition-colors",
+                            isBound && "bg-chart-2/5",
+                          )}
+                        >
+                          <FolderOpen className={cn("h-3.5 w-3.5 shrink-0", isBound ? "text-chart-2" : "text-muted-foreground")} />
+                          <div className="flex-1 min-w-0">
+                            <div className="text-sm font-mono truncate">{project.name ?? project.id}</div>
+                            {project.path && (
+                              <div className="text-[10px] font-mono text-muted-foreground truncate mt-0.5">
+                                {project.path}
+                              </div>
+                            )}
+                          </div>
+                          {project.status && project.type !== "internal" && (
+                            <span className={cn(
+                              "text-[10px] px-1.5 py-0.5 rounded-full shrink-0",
+                              project.status === "active" ? "bg-chart-2/10 text-chart-2/80" : "bg-muted text-muted-foreground",
+                            )}>
+                              {project.status}
+                            </span>
+                          )}
+                          {isBound && (
+                            <Check className="h-3.5 w-3.5 text-chart-2 shrink-0" />
+                          )}
+                        </button>
+                      );
+                    };
+                    return (
+                      <>
+                        {registered.length > 0 && (
+                          <div>
+                            <div className="sticky top-0 bg-popover px-3 py-1.5 border-b border-border/50">
+                              <span className="text-[10px] font-mono uppercase tracking-wider text-muted-foreground">
+                                Projects
+                              </span>
+                            </div>
+                            {registered.map(renderItem)}
+                          </div>
+                        )}
+                        {internal.length > 0 && (
+                          <div>
+                            <div className="sticky top-0 bg-popover px-3 py-1.5 border-b border-border/50">
+                              <span className="text-[10px] font-mono uppercase tracking-wider text-muted-foreground">
+                                Internal
+                              </span>
+                            </div>
+                            {internal.map(renderItem)}
+                          </div>
+                        )}
+                      </>
+                    );
+                  })()
+                )}
+              </div>
+            </div>
+          </div>,
+          document.body,
         )}
 
       {/* Model selector dropdown — portalled to body */}

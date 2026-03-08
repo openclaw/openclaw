@@ -560,6 +560,9 @@ export function ChatMessageBubble({
   const { thinking, content: displayContent } = extractThinking(msg);
   const hasText = displayContent.trim().length > 0;
   const hasError = Boolean(msg.errorMessage && msg.stopReason === "error");
+  const isNetworkError =
+    /network.?error|econnreset|etimedout|socket hang up|fetch failed/i.test(text) ||
+    /network.?error/i.test(msg.errorMessage ?? "");
   const toolsHidden = toolDisplayMode === "hidden";
   if (toolsHidden && hasToolCards && !hasText && !hasError && !thinking) {
     return null;
@@ -595,6 +598,18 @@ export function ChatMessageBubble({
           )}
           {hasError && !hasText && (
             <p className="text-sm text-destructive/80 font-mono">{msg.errorMessage}</p>
+          )}
+          {isNetworkError && isLastAssistant && (
+            <div className="flex items-center gap-2 mt-3 pt-3 border-t border-border/30">
+              <span className="text-xs text-muted-foreground">Connection lost</span>
+              <button
+                onClick={onRegenerate}
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-primary/10 text-primary text-xs font-medium hover:bg-primary/20 transition-colors"
+              >
+                <RefreshCw className="h-3 w-3" />
+                Retry
+              </button>
+            </div>
           )}
           <MessageImages msg={msg} />
         </div>

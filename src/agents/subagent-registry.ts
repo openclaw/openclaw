@@ -1,5 +1,9 @@
 import { promises as fs } from "node:fs";
 import path from "node:path";
+import {
+  resolveSubagentMaxRetries,
+  resolveSubagentRetryOnNetworkError,
+} from "../config/agent-limits.js";
 import { loadConfig } from "../config/config.js";
 import {
   loadSessionStore,
@@ -280,6 +284,7 @@ const pendingLifecycleErrorByRunId = new Map<
     timer: NodeJS.Timeout;
     endedAt: number;
     error?: string;
+    outcomeStatus?: string;
   }
 >();
 
@@ -299,7 +304,12 @@ function clearAllPendingLifecycleErrors() {
   pendingLifecycleErrorByRunId.clear();
 }
 
-function schedulePendingLifecycleError(params: { runId: string; endedAt: number; error?: string }) {
+function schedulePendingLifecycleError(params: {
+  runId: string;
+  endedAt: number;
+  error?: string;
+  outcomeStatus?: string;
+}) {
   clearPendingLifecycleError(params.runId);
   const timer = setTimeout(() => {
     const pending = pendingLifecycleErrorByRunId.get(params.runId);
@@ -314,11 +324,56 @@ function schedulePendingLifecycleError(params: { runId: string; endedAt: number;
     if (entry.endedReason === SUBAGENT_ENDED_REASON_COMPLETE || entry.outcome?.status === "ok") {
       return;
     }
+    // Use classified outcome status if available (e.g. "interrupted" for network errors)
+    const resolvedStatus =
+      pending.outcomeStatus === "interrupted" || pending.outcomeStatus === "aborted"
+        ? pending.outcomeStatus
+        : "error";
+
+    // Auto-retry on transient network interruptions
+    if (resolvedStatus === "interrupted") {
+      const cfg = loadConfig();
+      const retryEnabled = resolveSubagentRetryOnNetworkError(cfg);
+      const maxRetries = resolveSubagentMaxRetries(cfg);
+      const currentRetries = entry.spawnRetryCount ?? 0;
+      if (retryEnabled && currentRetries < maxRetries && entry.agentId) {
+        entry.spawnRetryCount = currentRetries + 1;
+        persistSubagentRuns();
+        defaultRuntime.log(
+          `[subagent] retrying ${entry.label || entry.agentId} after network interruption ` +
+            `(attempt ${currentRetries + 2}/${maxRetries + 1}): ${pending.error ?? "unknown"}`,
+        );
+        // Reset run state for retry — will be re-triggered via the resume mechanism
+        entry.endedAt = undefined;
+        entry.endedReason = undefined;
+        entry.outcome = undefined;
+        entry.cleanupHandled = false;
+        entry.cleanupCompletedAt = undefined;
+        persistSubagentRuns();
+        // Re-trigger the sub-agent by sending a retry message into the child session
+        void retryInterruptedSubagent(entry).catch((err) => {
+          defaultRuntime.log(
+            `[subagent] retry failed for ${entry.label || entry.agentId}: ${err instanceof Error ? err.message : String(err)}`,
+          );
+          void completeSubagentRun({
+            runId: params.runId,
+            endedAt: Date.now(),
+            outcome: { status: "interrupted", error: pending.error },
+            reason: SUBAGENT_ENDED_REASON_ERROR,
+            sendFarewell: true,
+            accountId: entry.requesterOrigin?.accountId,
+            triggerCleanup: true,
+          });
+        });
+        return;
+      }
+    }
+
     void completeSubagentRun({
       runId: params.runId,
       endedAt: pending.endedAt,
       outcome: {
-        status: "error",
+        status: resolvedStatus,
         error: pending.error,
       },
       reason: SUBAGENT_ENDED_REASON_ERROR,
@@ -332,6 +387,27 @@ function schedulePendingLifecycleError(params: { runId: string; endedAt: number;
     timer,
     endedAt: params.endedAt,
     error: params.error,
+    outcomeStatus: params.outcomeStatus,
+  });
+}
+
+const SUBAGENT_RETRY_DELAY_MS = 5_000;
+
+/**
+ * Re-triggers an interrupted sub-agent by sending a retry message into the
+ * child session. Uses a delay before retry to let transient issues clear.
+ */
+async function retryInterruptedSubagent(entry: SubagentRunRecord): Promise<void> {
+  // Delay before retry to let transient network issues clear
+  await new Promise<void>((resolve) => setTimeout(resolve, SUBAGENT_RETRY_DELAY_MS));
+
+  // Send a retry prompt into the existing child session
+  await callGateway({
+    method: "chat.send",
+    params: {
+      sessionKey: entry.childSessionKey,
+      message: `[System] Previous run was interrupted by a network error. Please retry the original task: ${entry.task}`,
+    },
   });
 }
 
@@ -689,10 +765,13 @@ function ensureListener() {
       const endedAt = typeof evt.data?.endedAt === "number" ? evt.data.endedAt : Date.now();
       const error = typeof evt.data?.error === "string" ? evt.data.error : undefined;
       if (phase === "error") {
+        const outcomeStatus =
+          typeof evt.data?.outcomeStatus === "string" ? evt.data.outcomeStatus : undefined;
         schedulePendingLifecycleError({
           runId: evt.runId,
           endedAt,
           error,
+          outcomeStatus,
         });
         return;
       }
@@ -1039,6 +1118,7 @@ export function registerSubagentRun(params: {
   attachmentsDir?: string;
   attachmentsRootDir?: string;
   retainAttachmentsOnKeep?: boolean;
+  agentId?: string;
 }) {
   const now = Date.now();
   const cfg = loadConfig();
@@ -1070,6 +1150,7 @@ export function registerSubagentRun(params: {
     attachmentsDir: params.attachmentsDir,
     attachmentsRootDir: params.attachmentsRootDir,
     retainAttachmentsOnKeep: params.retainAttachmentsOnKeep,
+    agentId: params.agentId,
   });
   ensureListener();
   persistSubagentRuns();

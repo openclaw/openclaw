@@ -1287,6 +1287,71 @@ export async function runEmbeddedPiAgent(
               agentDir: params.agentDir,
             });
           }
+
+          // ─── Proactive threshold compaction ───
+          // After a successful run, check if context usage exceeds the configured
+          // threshold and fire compaction in the background so the next turn has room.
+          if (autoCompactionCount === 0 && !aborted && !timedOut) {
+            const autoThreshold =
+              params.config?.agents?.defaults?.compaction?.autoThreshold ?? 0.85;
+            if (autoThreshold > 0) {
+              const contextWindowTokens = ctxInfo.tokens;
+              const thresholdPromptTokens = derivePromptTokens(lastRunPromptUsage) ?? 0;
+              if (
+                contextWindowTokens > 0 &&
+                thresholdPromptTokens > 0 &&
+                thresholdPromptTokens / contextWindowTokens >= autoThreshold
+              ) {
+                log.info(
+                  `[threshold-compaction] context at ${Math.round((thresholdPromptTokens / contextWindowTokens) * 100)}% ` +
+                    `(${thresholdPromptTokens}/${contextWindowTokens}), threshold=${Math.round(autoThreshold * 100)}%; ` +
+                    `scheduling proactive compaction for ${provider}/${modelId}`,
+                );
+                // Fire-and-forget: don't block the response to the user
+                void compactEmbeddedPiSessionDirect({
+                  sessionId: params.sessionId,
+                  sessionKey: params.sessionKey,
+                  messageChannel: params.messageChannel,
+                  messageProvider: params.messageProvider,
+                  agentAccountId: params.agentAccountId,
+                  authProfileId: lastProfileId,
+                  sessionFile: params.sessionFile,
+                  workspaceDir: resolvedWorkspace,
+                  agentDir,
+                  config: params.config,
+                  skillsSnapshot: params.skillsSnapshot,
+                  senderIsOwner: params.senderIsOwner,
+                  provider,
+                  model: modelId,
+                  runId: params.runId,
+                  thinkLevel,
+                  reasoningLevel: params.reasoningLevel,
+                  bashElevated: params.bashElevated,
+                  extraSystemPrompt: params.extraSystemPrompt,
+                  ownerNumbers: params.ownerNumbers,
+                  trigger: "threshold",
+                }).then(
+                  (result) => {
+                    if (result.compacted) {
+                      log.info(
+                        `[threshold-compaction] proactive compaction succeeded for ${provider}/${modelId}`,
+                      );
+                    } else {
+                      log.debug(
+                        `[threshold-compaction] proactive compaction skipped: ${result.reason ?? "nothing to compact"}`,
+                      );
+                    }
+                  },
+                  (err) => {
+                    log.warn(
+                      `[threshold-compaction] proactive compaction failed: ${describeUnknownError(err)}`,
+                    );
+                  },
+                );
+              }
+            }
+          }
+
           return {
             payloads: payloads.length ? payloads : undefined,
             meta: {

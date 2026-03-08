@@ -170,6 +170,8 @@ export type SessionEntry = {
   acp?: SessionAcpMeta;
   /** Team run ID this session belongs to (persisted for gateway restart resilience). */
   teamRunId?: string;
+  /** Bound project ID from PROJECTS.md registry. */
+  projectId?: string;
 };
 
 function normalizeRuntimeField(value: string | undefined): string | undefined {

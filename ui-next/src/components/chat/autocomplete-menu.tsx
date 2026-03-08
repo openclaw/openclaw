@@ -88,12 +88,14 @@ export function useAutocomplete(
 
         if (mode === "/") {
           const result = await sendRpc<SkillsListResult>("skills.list", {});
-          items = (result?.skills ?? []).map((s) => ({
-            label: s.command ?? s.name,
-            insertText: `/${s.command ?? s.name} `,
-            description: s.description,
-            emoji: undefined,
-          }));
+          items = (result?.skills ?? [])
+            .filter((s) => s.installed !== false)
+            .map((s) => ({
+              label: s.command ?? s.name,
+              insertText: `/${s.command ?? s.name} `,
+              description: s.description,
+              emoji: undefined,
+            }));
         } else if (mode === "@") {
           const result = await sendRpc<AgentListResult>("agents.list");
           items = (result?.agents ?? []).map((a) => ({

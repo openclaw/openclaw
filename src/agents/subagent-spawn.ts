@@ -809,6 +809,7 @@ export async function spawnSubagentDirect(
       attachmentsDir: attachmentAbsDir,
       attachmentsRootDir: attachmentRootDir,
       retainAttachmentsOnKeep: retainOnSessionKeep,
+      agentId: targetAgentId,
     });
   } catch (err) {
     if (attachmentAbsDir) {

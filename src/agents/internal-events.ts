@@ -7,7 +7,7 @@ export type AgentTaskCompletionInternalEvent = {
   childSessionId?: string;
   announceType: string;
   taskLabel: string;
-  status: "ok" | "timeout" | "error" | "unknown";
+  status: "ok" | "timeout" | "error" | "interrupted" | "aborted" | "unknown";
   statusLabel: string;
   result: string;
   statsLine?: string;

@@ -8,6 +8,7 @@ import {
   X,
   EyeOff,
   Wrench,
+  Slash,
   Reply,
   Volume2,
   VolumeOff,
@@ -15,7 +16,7 @@ import {
   Play,
   ListPlus,
 } from "lucide-react";
-import { useRef, useState, useCallback, useEffect } from "react";
+import { useRef, useState, useMemo, useCallback, useEffect } from "react";
 import { AutocompleteMenu, useAutocomplete } from "@/components/chat/autocomplete-menu";
 import { AnimatedPlaceholder } from "@/components/chat/chat-messages";
 import { type ToolDisplayMode } from "@/components/chat/tool-call-card";
@@ -79,8 +80,7 @@ export type ChatInputProps = {
   setToolDisplayMode: (
     mode: ToolDisplayMode | ((prev: ToolDisplayMode) => ToolDisplayMode),
   ) => void;
-  /** Focus mode hides non-essential controls for distraction-free chat */
-  focusMode?: boolean;
+  models?: Array<{ id: string; contextWindow?: number }>;
 };
 
 export function ChatInput({
@@ -95,7 +95,7 @@ export function ChatInput({
   stopQueue,
   toolDisplayMode,
   setToolDisplayMode,
-  focusMode = false,
+  models,
 }: ChatInputProps) {
   const { sendRpc } = useGateway();
   const { toast } = useToast();
@@ -104,6 +104,32 @@ export function ChatInput({
   const messages = useChatStore((s) => s.messages);
   const messageQueue = useChatStore((s) => s.messageQueue);
   const isQueueRunning = useChatStore((s) => s.isQueueRunning);
+
+  // Context usage for inline status bar
+  const sessions = useChatStore((s) => s.sessions);
+  const activeSession = useMemo(
+    () => sessions.find((s) => s.key === activeSessionKey),
+    [sessions, activeSessionKey],
+  );
+  const ctxTokenUsed = useMemo(() => {
+    // totalTokens = prompt/context tokens from the last API call (accurate context window usage)
+    const total = activeSession?.totalTokens as number | undefined;
+    if (total && total > 0) return total;
+    // Fallback to summing input+output (less accurate)
+    const inp = (activeSession?.inputTokens as number | undefined) ?? activeSession?.tokenCounts?.totalInput ?? 0;
+    const out = (activeSession?.outputTokens as number | undefined) ?? activeSession?.tokenCounts?.totalOutput ?? 0;
+    return inp + out;
+  }, [activeSession]);
+  const ctxTotal = useMemo(() => {
+    const fromSession = activeSession?.contextTokens as number | undefined;
+    if (fromSession) return fromSession;
+    if (!models?.length || !activeSession?.model) return 0;
+    const match = models.find((m) => m.id === activeSession.model);
+    return match?.contextWindow ?? 0;
+  }, [activeSession, models]);
+  const ctxRatio = ctxTotal > 0 ? Math.min(ctxTokenUsed / ctxTotal, 1) : 0;
+  const fmtCtx = (n: number) =>
+    n >= 1_000_000 ? `${(n / 1_000_000).toFixed(1)}M` : n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n);
 
   // TTS auto mode
   const [ttsMode, setTtsMode] = useState<TtsAutoMode>("off");
@@ -570,14 +596,37 @@ export function ChatInput({
     <div className="shrink-0 p-4 pt-2 pb-6 z-20 bg-gradient-to-t from-background via-background to-transparent">
       <div className="mx-auto max-w-4xl relative">
         {/* Session status bar */}
-        <div className="absolute -top-7 left-1/2 -translate-x-1/2 flex items-center gap-2 text-[10px] font-mono text-muted-foreground/60 hover:text-muted-foreground transition-colors duration-300">
-          <span
-            className={cn(
-              "h-1.5 w-1.5 rounded-full",
-              isConnected ? "bg-primary animate-glow-pulse" : "bg-destructive",
-            )}
-          />
-          <span>{isConnected ? "Connected" : "Disconnected"}</span>
+        <div className="absolute -top-7 left-1/2 -translate-x-1/2 flex items-center gap-3 text-[10px] font-mono text-muted-foreground/60 hover:text-muted-foreground transition-colors duration-300">
+          <span className="flex items-center gap-1.5">
+            <span
+              className={cn(
+                "h-1.5 w-1.5 rounded-full",
+                isConnected ? "bg-primary animate-glow-pulse" : "bg-destructive",
+              )}
+            />
+            <span>{isConnected ? "Connected" : "Disconnected"}</span>
+          </span>
+          {ctxTokenUsed > 0 && ctxTotal > 0 && (
+            <>
+              <span className="text-muted-foreground/20">·</span>
+              <span className="flex items-center gap-1.5 tabular-nums">
+                <span>{fmtCtx(ctxTokenUsed)} / {fmtCtx(ctxTotal)}</span>
+                <span className="w-12 h-1 rounded-full bg-secondary/40 overflow-hidden">
+                  <span
+                    className={cn(
+                      "block h-full rounded-full transition-all duration-300",
+                      ctxRatio > 0.95
+                        ? "bg-destructive"
+                        : ctxRatio > 0.8
+                          ? "bg-chart-5"
+                          : "bg-primary/50",
+                    )}
+                    style={{ width: `${Math.round(ctxRatio * 100)}%` }}
+                  />
+                </span>
+              </span>
+            </>
+          )}
         </div>
 
         {/* Hidden file input for Paperclip button */}
@@ -783,13 +832,7 @@ export function ChatInput({
               >
                 <Paperclip className="h-4 w-4" />
               </Button>
-              {/* Tool display mode toggle — hidden in focus mode */}
-              <div
-                className={cn(
-                  "transition-all duration-200",
-                  focusMode ? "opacity-0 w-0 overflow-hidden pointer-events-none" : "opacity-100",
-                )}
-              >
+              <div>
                 <button
                   onClick={() =>
                     setToolDisplayMode((prev) =>
@@ -822,16 +865,24 @@ export function ChatInput({
                   </span>
                 </button>
               </div>
+              <button
+                onClick={() => {
+                  setInputValue((prev) => {
+                    if (prev.startsWith("/")) return prev;
+                    return "/";
+                  });
+                  autocomplete.handleInputChange("/");
+                }}
+                className="flex items-center gap-1 px-2 h-8 text-xs font-mono rounded-lg text-muted-foreground hover:text-foreground hover:bg-muted/50 transition-colors cursor-pointer"
+                title="Skills (/)"
+              >
+                <Slash className="h-3.5 w-3.5" />
+                <span className="hidden sm:inline">Skills</span>
+              </button>
             </div>
 
             <div className="flex items-center gap-2">
-              {/* STT / TTS / Queue — hidden in focus mode */}
-              <div
-                className={cn(
-                  "flex items-center gap-2 transition-all duration-200",
-                  focusMode ? "opacity-0 w-0 overflow-hidden pointer-events-none" : "opacity-100",
-                )}
-              >
+              <div className="flex items-center gap-2">
                 <Button
                   variant="ghost"
                   size="icon-xs"
@@ -887,39 +938,36 @@ export function ChatInput({
               </div>
               <PromptInputActions>
                 <div className="flex items-center gap-1">
-                  {/* Queue button — hidden in focus mode */}
-                  {!focusMode && (
-                    <button
-                      onClick={() => {
-                        const content = inputValue.trim();
-                        if (!content) {
-                          return;
-                        }
-                        useChatStore.getState().enqueueMessage(content);
-                        setInputValue("");
-                      }}
-                      disabled={!inputValue.trim() && attachments.length === 0}
-                      aria-label={
-                        messageQueue.length > 0 ? `Queue (${messageQueue.length})` : "Add to queue"
+                  <button
+                    onClick={() => {
+                      const content = inputValue.trim();
+                      if (!content) {
+                        return;
                       }
-                      title={
-                        messageQueue.length > 0 ? `${messageQueue.length} in queue` : "Add to queue"
-                      }
-                      className={cn(
-                        "relative h-8 w-8 rounded-full flex items-center justify-center shadow-md transition-all duration-200",
-                        inputValue.trim()
-                          ? "bg-sky-600 text-white transform hover:scale-105 hover:bg-sky-500"
-                          : "bg-sky-600/15 text-sky-400/30 border border-sky-600/20",
-                      )}
-                    >
-                      <ListPlus className="h-4 w-4" />
-                      {messageQueue.length > 0 && (
-                        <span className="absolute -top-1 -right-1 h-4 min-w-4 px-0.5 rounded-full bg-primary text-primary-foreground text-[9px] font-bold flex items-center justify-center shadow-sm">
-                          {messageQueue.length}
-                        </span>
-                      )}
-                    </button>
-                  )}
+                      useChatStore.getState().enqueueMessage(content);
+                      setInputValue("");
+                    }}
+                    disabled={!inputValue.trim() && attachments.length === 0}
+                    aria-label={
+                      messageQueue.length > 0 ? `Queue (${messageQueue.length})` : "Add to queue"
+                    }
+                    title={
+                      messageQueue.length > 0 ? `${messageQueue.length} in queue` : "Add to queue"
+                    }
+                    className={cn(
+                      "relative h-8 w-8 rounded-full flex items-center justify-center shadow-md transition-all duration-200",
+                      inputValue.trim()
+                        ? "bg-sky-600 text-white transform hover:scale-105 hover:bg-sky-500"
+                        : "bg-sky-600/15 text-sky-400/30 border border-sky-600/20",
+                    )}
+                  >
+                    <ListPlus className="h-4 w-4" />
+                    {messageQueue.length > 0 && (
+                      <span className="absolute -top-1 -right-1 h-4 min-w-4 px-0.5 rounded-full bg-primary text-primary-foreground text-[9px] font-bold flex items-center justify-center shadow-sm">
+                        {messageQueue.length}
+                      </span>
+                    )}
+                  </button>
 
                   {/* Streaming controls: pause/resume + stop */}
                   {isStreaming && (

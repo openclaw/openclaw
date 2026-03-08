@@ -389,6 +389,19 @@ export async function applySessionsPatchToStore(params: {
     }
   }
 
+  if ("projectId" in patch) {
+    const raw = patch.projectId;
+    if (raw === null) {
+      delete next.projectId;
+    } else if (raw !== undefined) {
+      const trimmed = String(raw).trim();
+      if (!trimmed) {
+        return invalid("invalid projectId: empty");
+      }
+      next.projectId = trimmed;
+    }
+  }
+
   store[storeKey] = next;
   return { ok: true, entry: next };
 }

@@ -274,6 +274,10 @@ export type AgentDefaultsConfig = {
     runTimeoutSeconds?: number;
     /** Gateway timeout in ms for sub-agent announce delivery calls (default: 60000). */
     announceTimeoutMs?: number;
+    /** Auto-retry sub-agent runs that fail due to transient network errors (default: true). */
+    retryOnNetworkError?: boolean;
+    /** Maximum number of automatic retries for network-interrupted sub-agent runs (default: 1). */
+    maxRetries?: number;
   };
   /** Optional sandbox settings for non-main sessions. */
   sandbox?: AgentSandboxConfig;
@@ -297,6 +301,8 @@ export type AgentCompactionConfig = {
   identifierPolicy?: AgentCompactionIdentifierPolicy;
   /** Custom identifier-preservation instructions used when identifierPolicy is "custom". */
   identifierInstructions?: string;
+  /** Proactive compaction threshold (0–1). When context usage exceeds this ratio after a run, compact automatically. 0 disables. Default: 0.85. */
+  autoThreshold?: number;
   /** Pre-compaction memory flush (agentic turn). Default: enabled. */
   memoryFlush?: AgentCompactionMemoryFlushConfig;
 };

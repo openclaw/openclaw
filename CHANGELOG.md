@@ -4,6 +4,32 @@ Docs: https://docs.openclaw.ai
 
 ---
 
+## [Operator1] 2026.3.7
+
+> Fork-specific changes. Upstream sync base: `v2026.3.2`.
+
+### Changes
+
+- **feat(projects)**: persistent project-session bindings — `projectId` stored on session records, survives gateway restarts.
+- **feat(projects)**: agent context injection — bound project's SOUL.md, AGENTS.md, and TOOLS.md injected into system prompt automatically.
+- **feat(projects)**: Telegram topic auto-binding — PROJECTS.md `Telegram:` metadata parsed (group + topic ID), sessions auto-bind when topic matches.
+- **feat(projects)**: project assignment dropdown in chat header — browse and bind sessions to registered or internal projects.
+- **feat(ui)**: context usage bar (tokens / context window) inline with connection status in chat input area.
+- **feat(ui)**: agent department and role chips displayed in chat header.
+- **feat(ui)**: project chip in chat header shows bound project with click-to-change dropdown.
+- **feat(ui)**: system messages in chat for project bind/unbind events.
+- **feat(ui)**: internal projects auto-discovered from default project's `Projects/` directory.
+- **feat(config)**: proactive threshold-based auto-compaction (`autoThreshold` setting, default 85%).
+
+### Fixes
+
+- **fix(ui)**: regenerate no longer creates duplicate messages — truncates previous exchange before re-sending.
+- **fix(ui)**: context panel wraps raw exec output in code fences for readability.
+- **fix(ui)**: collapsed sidebar progress bars now show correct token usage (prefer `totalTokens` field).
+- **fix(ui)**: context usage bar shows actual context window usage instead of per-call token counts.
+
+---
+
 ## [Operator1] 2026.3.6
 
 > Fork-specific changes. Upstream sync base: `v2026.3.2`.

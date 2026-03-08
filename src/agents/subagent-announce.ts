@@ -89,10 +89,18 @@ function buildCompletionDeliveryMessage(params: {
         ? `❌ Subagent ${params.subagentName} failed this task (session remains active)`
         : `❌ Subagent ${params.subagentName} failed`;
     }
+    if (params.outcome?.status === "interrupted") {
+      return params.spawnMode === "session"
+        ? `⚡ Subagent ${params.subagentName} interrupted (network/infra issue, session remains active)`
+        : `⚡ Subagent ${params.subagentName} interrupted (network/infra issue)`;
+    }
     if (params.outcome?.status === "timeout") {
       return params.spawnMode === "session"
         ? `⏱️ Subagent ${params.subagentName} timed out on this task (session remains active)`
         : `⏱️ Subagent ${params.subagentName} timed out`;
+    }
+    if (params.outcome?.status === "aborted") {
+      return `🚫 Subagent ${params.subagentName} was aborted`;
     }
     return params.spawnMode === "session"
       ? `✅ Subagent ${params.subagentName} completed this task (session remains active)`
@@ -1145,7 +1153,7 @@ export function buildSubagentSystemPrompt(params: {
 }
 
 export type SubagentRunOutcome = {
-  status: "ok" | "error" | "timeout" | "unknown";
+  status: "ok" | "error" | "timeout" | "interrupted" | "aborted" | "unknown";
   error?: string;
 };
 

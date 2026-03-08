@@ -7,6 +7,7 @@ import {
   type ContextPanelContent,
 } from "@/components/chat/context-panel";
 import { Button } from "@/components/ui/button";
+import type { ModelEntry } from "@/components/ui/custom/status/model-selector";
 import { Sheet, SheetContent, SheetTrigger } from "@/components/ui/sheet";
 import { useIsMobile } from "@/hooks/use-mobile";
 import { loadSettings, saveSettings } from "@/lib/storage";
@@ -26,8 +27,8 @@ export type ChatLayoutProps = {
   /** Context panel state */
   contextPanel: { open: boolean; content: ContextPanelContent | null };
   onCloseContextPanel: () => void;
-  /** Focus mode hides non-essential UI for distraction-free chat */
-  focusMode?: boolean;
+  /** Available models for context window lookup */
+  models?: ModelEntry[];
 };
 
 export function ChatLayout({
@@ -41,7 +42,7 @@ export function ChatLayout({
   children,
   contextPanel,
   onCloseContextPanel,
-  focusMode = false,
+  models,
 }: ChatLayoutProps) {
   const [chatSidebarCollapsed, setChatSidebarCollapsedRaw] = useState(
     () => loadSettings().chatSidebarCollapsed,
@@ -61,7 +62,7 @@ export function ChatLayout({
       <div
         className={cn(
           "hidden md:block border-r border-border h-full shrink-0 transition-all duration-200 ease-in-out overflow-hidden",
-          focusMode ? "w-0 border-r-0 opacity-0" : chatSidebarCollapsed ? "w-[52px]" : "w-80",
+          chatSidebarCollapsed ? "w-[52px]" : "w-80",
         )}
       >
         <SessionSidebarContent
@@ -74,6 +75,7 @@ export function ChatLayout({
           onArchive={handleArchiveSidebar}
           collapsed={chatSidebarCollapsed}
           onCollapse={setChatSidebarCollapsed}
+          models={models}
         />
       </div>
 

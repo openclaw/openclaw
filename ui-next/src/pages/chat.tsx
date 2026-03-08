@@ -1,4 +1,4 @@
-import { ArrowDown } from "lucide-react";
+import { ArrowDown, ArrowUp } from "lucide-react";
 import { useRef, useState, useMemo, useCallback, useEffect } from "react";
 import {
   ChatHeader,
@@ -6,6 +6,7 @@ import {
   useActiveAgentEmoji,
   useActiveAgentLabel,
   useActiveAgentName,
+  useActiveAgentMeta,
 } from "@/components/chat/chat-header";
 import { ChatInput } from "@/components/chat/chat-input";
 import { ChatLayout } from "@/components/chat/chat-layout";
@@ -21,11 +22,12 @@ import { extractToolCards, type ToolDisplayMode } from "@/components/chat/tool-c
 import { ChatContainer } from "@/components/ui/custom/prompt/chat-container";
 import { TextShimmerLoader } from "@/components/ui/custom/prompt/loader";
 import { PromptScrollButton } from "@/components/ui/custom/prompt/scroll-button";
+import { Button } from "@/components/ui/button";
+import { cn } from "@/lib/utils";
 import { type ModelEntry } from "@/components/ui/custom/status/model-selector";
 import { useToast } from "@/components/ui/custom/toast";
 import { useChat } from "@/hooks/use-chat";
 import { useDynamicPlaceholder } from "@/hooks/use-dynamic-placeholder";
-import { useFocusMode } from "@/hooks/use-focus-mode";
 import { useGateway, onAgentPushEvent } from "@/hooks/use-gateway";
 import { useChatStore, getMessageText, type ChatMessage } from "@/store/chat-store";
 import { useGatewayStore } from "@/store/gateway-store";
@@ -59,10 +61,8 @@ export function ChatPage() {
   const activeAgentEmoji = useActiveAgentEmoji(agentMap);
   const activeAgentLabel = useActiveAgentLabel(agentMap);
   const activeAgentName = useActiveAgentName(agentMap);
+  const { role: activeAgentRole, department: activeAgentDepartment } = useActiveAgentMeta(agentMap);
   const placeholder = useDynamicPlaceholder(activeAgentLabel);
-
-  // Focus mode
-  const { focusMode, toggleFocusMode } = useFocusMode();
 
   // Draft state from store
   const inputValue = useChatStore((s) => s.drafts[s.activeSessionKey]?.inputValue ?? "");
@@ -88,19 +88,14 @@ export function ChatPage() {
   // Suppressed in focus mode to reduce distractions
   useEffect(() => {
     return onAgentPushEvent((payload) => {
-      if (focusMode) {
-        return;
-      }
       const evt = parseAgentSystemEvent(payload as AgentEventPayload);
       if (evt) {
         toast(evt.message, evt.variant);
       }
     });
-  }, [toast, focusMode]);
+  }, [toast]);
 
-  // Tool display mode — overridden to "hidden" in focus mode
   const [toolDisplayMode, setToolDisplayMode] = useState<ToolDisplayMode>("collapsed");
-  const effectiveToolDisplayMode: ToolDisplayMode = focusMode ? "hidden" : toolDisplayMode;
 
   // Context panel (tool output viewer, future: agent info, memory, skills)
   const [contextPanel, setContextPanel] = useState<{
@@ -215,15 +210,25 @@ export function ChatPage() {
     if (isStreaming) {
       return;
     }
+    // Find the last user message
+    let lastUserIndex = -1;
     for (let i = messages.length - 1; i >= 0; i--) {
       if (messages[i].role === "user") {
-        const lastUserText = getMessageText(messages[i]);
-        if (lastUserText.trim()) {
-          void sendMessage(lastUserText);
-          return;
-        }
+        lastUserIndex = i;
+        break;
       }
     }
+    if (lastUserIndex === -1) {
+      return;
+    }
+    const lastUserText = getMessageText(messages[lastUserIndex]);
+    if (!lastUserText.trim()) {
+      return;
+    }
+    // Remove the last user message and everything after it (assistant response, tool results)
+    useChatStore.getState().truncateMessagesFrom(lastUserIndex);
+    // Re-send — sendMessage will optimistically append a fresh user message + get new response
+    void sendMessage(lastUserText);
   }, [messages, isStreaming, sendMessage]);
 
   // Session actions
@@ -282,6 +287,7 @@ export function ChatPage() {
   const hasMessages = messages.length > 0 || showTypingIndicator;
 
   const [hasNewBelow, setHasNewBelow] = useState(false);
+  const [showScrollTop, setShowScrollTop] = useState(false);
   const isNearBottomRef = useRef(true);
   const prevMessageCountRef = useRef(messages.length);
 
@@ -297,6 +303,7 @@ export function ChatPage() {
       if (nearBottom) {
         setHasNewBelow(false);
       }
+      setShowScrollTop(scrollTop > 300);
     };
     container.addEventListener("scroll", handleScroll, { passive: true });
     return () => container.removeEventListener("scroll", handleScroll);
@@ -311,6 +318,7 @@ export function ChatPage() {
 
   useEffect(() => {
     setHasNewBelow(false);
+    setShowScrollTop(false);
     isNearBottomRef.current = true;
   }, [activeSessionKey]);
 
@@ -323,6 +331,14 @@ export function ChatPage() {
     setHasNewBelow(false);
   }, []);
 
+  const scrollToTop = useCallback(() => {
+    const container = chatContainerRef.current;
+    if (!container) {
+      return;
+    }
+    container.scrollTo({ top: 0, behavior: "smooth" });
+  }, []);
+
   return (
     <>
       <ChatHeader
@@ -332,8 +348,9 @@ export function ChatPage() {
         switchSession={switchSession}
         agentEmoji={activeAgentEmoji}
         agentName={activeAgentName}
-        focusMode={focusMode}
-        onToggleFocusMode={toggleFocusMode}
+        agentRole={activeAgentRole}
+        agentDepartment={activeAgentDepartment}
+        onRenameSession={handleRenameSession}
       />
 
       <ChatLayout
@@ -346,7 +363,7 @@ export function ChatPage() {
         handleArchiveSidebar={handleArchiveSidebar}
         contextPanel={contextPanel}
         onCloseContextPanel={handleCloseContextPanel}
-        focusMode={focusMode}
+        models={models}
       >
         {/* Content area */}
         <div className="flex flex-1 flex-col min-h-0 pt-14 md:pt-0">
@@ -377,7 +394,7 @@ export function ChatPage() {
                       rating={ratings[i] ?? null}
                       isLastAssistant={i === lastAssistantIndex}
                       isGroupFirst={isFirstInGroup(messages, i)}
-                      toolDisplayMode={effectiveToolDisplayMode}
+                      toolDisplayMode={toolDisplayMode}
                       mergedToolResults={mergedResults.get(i)}
                       agentEmoji={activeAgentEmoji}
                       agentName={activeAgentName}
@@ -408,9 +425,9 @@ export function ChatPage() {
             </ChatContainer>
           )}
 
-          {/* Scroll-to-bottom FAB + New messages indicator */}
+          {/* Scroll FABs + New messages indicator */}
           {hasMessages && (
-            <div className="absolute bottom-24 right-6 md:right-10 z-20 flex flex-col items-center gap-2">
+            <div className="absolute bottom-24 right-6 md:right-10 z-30 flex flex-col items-center gap-2">
               {hasNewBelow && (
                 <button
                   onClick={scrollToBottom}
@@ -420,11 +437,27 @@ export function ChatPage() {
                   <ArrowDown className="h-3 w-3" />
                 </button>
               )}
-              <PromptScrollButton
-                scrollRef={scrollToRef}
-                containerRef={chatContainerRef}
-                threshold={200}
-              />
+              <div className="flex items-center gap-1.5">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className={cn(
+                    "h-8 w-8 rounded-full transition-all duration-150 ease-out",
+                    showScrollTop
+                      ? "translate-y-0 scale-100 opacity-100"
+                      : "pointer-events-none translate-y-4 scale-95 opacity-0",
+                  )}
+                  onClick={scrollToTop}
+                  aria-label="Scroll to top"
+                >
+                  <ArrowUp className="h-4 w-4" />
+                </Button>
+                <PromptScrollButton
+                  scrollRef={scrollToRef}
+                  containerRef={chatContainerRef}
+                  threshold={200}
+                />
+              </div>
             </div>
           )}
         </div>
@@ -440,11 +473,12 @@ export function ChatPage() {
           abortRun={abortRun}
           startQueue={startQueue}
           stopQueue={stopQueue}
-          toolDisplayMode={effectiveToolDisplayMode}
+          toolDisplayMode={toolDisplayMode}
           setToolDisplayMode={setToolDisplayMode}
-          focusMode={focusMode}
+          models={models}
         />
       </ChatLayout>
     </>
   );
 }
+

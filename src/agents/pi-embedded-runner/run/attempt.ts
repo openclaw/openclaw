@@ -8,6 +8,8 @@ import {
   SessionManager,
 } from "@mariozechner/pi-coding-agent";
 import { resolveHeartbeatPrompt } from "../../../auto-reply/heartbeat.js";
+import { getProjectContextForSession } from "../../../gateway/server-methods/projects.js";
+import type { ProjectDetails } from "../../../gateway/server-methods/projects.types.js";
 import { resolveChannelCapabilities } from "../../../config/channel-capabilities.js";
 import type { OpenClawConfig } from "../../../config/config.js";
 import { getMachineDisplayName } from "../../../infra/machine-name.js";
@@ -461,6 +463,42 @@ export async function resolvePromptBuildHookResult(params: {
   };
 }
 
+/**
+ * Build a project context block from ProjectDetails for injection into the system prompt.
+ * Returns undefined if the project has no meaningful context to inject.
+ */
+function buildProjectContextBlock(project: ProjectDetails): string | undefined {
+  const lines: string[] = [];
+  lines.push("## Active Project Context");
+  lines.push("");
+  lines.push(`**Project:** ${project.name}`);
+  lines.push(`**Path:** ${project.path}`);
+  if (project.type) {
+    lines.push(`**Type:** ${project.type}`);
+  }
+  if (project.tech) {
+    lines.push(`**Tech:** ${project.tech}`);
+  }
+
+  if (project.soul) {
+    lines.push("");
+    lines.push("### Project Soul");
+    lines.push(project.soul.trim());
+  }
+  if (project.agents) {
+    lines.push("");
+    lines.push("### Project Agents");
+    lines.push(project.agents.trim());
+  }
+  if (project.tools) {
+    lines.push("");
+    lines.push("### Project Tools");
+    lines.push(project.tools.trim());
+  }
+
+  return lines.join("\n");
+}
+
 export function resolvePromptModeForSession(sessionKey?: string): "minimal" | "full" {
   if (!sessionKey) {
     return "full";
@@ -769,11 +807,29 @@ export async function runEmbeddedAttempt(
     const ttsHint = params.config ? buildTtsSystemPromptHint(params.config) : undefined;
     const ownerDisplay = resolveOwnerDisplaySetting(params.config);
 
+    // Inject project context into extraSystemPrompt when session is bound to a project
+    let effectiveExtraSystemPrompt = params.extraSystemPrompt;
+    if (params.sessionKey) {
+      try {
+        const projectDetails = await getProjectContextForSession(params.sessionKey);
+        if (projectDetails) {
+          const projectContextBlock = buildProjectContextBlock(projectDetails);
+          if (projectContextBlock) {
+            effectiveExtraSystemPrompt = effectiveExtraSystemPrompt
+              ? `${effectiveExtraSystemPrompt}\n\n${projectContextBlock}`
+              : projectContextBlock;
+          }
+        }
+      } catch {
+        // Non-fatal: skip project context if lookup fails
+      }
+    }
+
     const appendPrompt = buildEmbeddedSystemPrompt({
       workspaceDir: effectiveWorkspace,
       defaultThinkLevel: params.thinkLevel,
       reasoningLevel: params.reasoningLevel ?? "off",
-      extraSystemPrompt: params.extraSystemPrompt,
+      extraSystemPrompt: effectiveExtraSystemPrompt,
       ownerNumbers: params.ownerNumbers,
       ownerDisplay: ownerDisplay.ownerDisplay,
       ownerDisplaySecret: ownerDisplay.ownerDisplaySecret,

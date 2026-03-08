@@ -108,6 +108,8 @@ export type ChatState = {
   setMessages: (messages: Array<Omit<ChatMessage, "id"> & { id?: string }>) => void;
   setMessagesLoading: (loading: boolean) => void;
   appendMessage: (message: Omit<ChatMessage, "id"> & { id?: string }) => void;
+  /** Remove messages from index onwards (used by regenerate to drop the last exchange) */
+  truncateMessagesFrom: (index: number) => void;
 
   // Send-pending actions
   setSendPending: (pending: boolean) => void;
@@ -220,6 +222,11 @@ export const useChatStore = create<ChatState>((set, get) => ({
   appendMessage: (message) =>
     set((state) => ({
       messages: [...state.messages, ensureId({ ...message, seq: state.messages.length + 1 })],
+    })),
+
+  truncateMessagesFrom: (index) =>
+    set((state) => ({
+      messages: state.messages.slice(0, index),
     })),
 
   setSendPending: (pending) => set({ isSendPending: pending }),

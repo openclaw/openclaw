@@ -92,6 +92,8 @@ export const AgentDefaultsSchema = z
           .union([z.literal("strict"), z.literal("off"), z.literal("custom")])
           .optional(),
         identifierInstructions: z.string().optional(),
+        /** Proactive compaction threshold (0–1). When context usage exceeds this ratio, compact automatically after the run. 0 disables. Default 0.85. */
+        autoThreshold: z.number().min(0).max(1).optional(),
         memoryFlush: z
           .object({
             enabled: z.boolean().optional(),
@@ -173,6 +175,8 @@ export const AgentDefaultsSchema = z
         thinking: z.string().optional(),
         runTimeoutSeconds: z.number().int().min(0).optional(),
         announceTimeoutMs: z.number().int().positive().optional(),
+        retryOnNetworkError: z.boolean().optional(),
+        maxRetries: z.number().int().min(0).optional(),
       })
       .strict()
       .optional(),

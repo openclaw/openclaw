@@ -37,4 +37,8 @@ export type SubagentRunRecord = {
   attachmentsDir?: string;
   attachmentsRootDir?: string;
   retainAttachmentsOnKeep?: boolean;
+  /** Agent ID used for the sub-agent (for retry re-spawn). */
+  agentId?: string;
+  /** Number of automatic retries attempted for network-interrupted runs. */
+  spawnRetryCount?: number;
 };

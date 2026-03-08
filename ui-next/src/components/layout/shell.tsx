@@ -49,7 +49,10 @@ export function Shell() {
             <Breadcrumb>
               <BreadcrumbList>
                 <BreadcrumbItem>
-                  <BreadcrumbPage className="text-sm md:text-base">{pageTitle}</BreadcrumbPage>
+                  <BreadcrumbPage className="text-sm md:text-base">
+                    <span id="shell-page-title" />
+                    <span id="shell-page-title-default">{pageTitle}</span>
+                  </BreadcrumbPage>
                 </BreadcrumbItem>
               </BreadcrumbList>
             </Breadcrumb>

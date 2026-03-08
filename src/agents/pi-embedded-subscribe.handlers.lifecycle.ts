@@ -1,5 +1,6 @@
 import { emitAgentEvent } from "../infra/agent-events.js";
 import { createInlineCodeState } from "../markdown/code-spans.js";
+import { classifySubagentOutcome } from "./pi-embedded-helpers/errors.js";
 import { formatAssistantErrorText } from "./pi-embedded-helpers.js";
 import type { EmbeddedPiSubscribeContext } from "./pi-embedded-subscribe.handlers.types.js";
 import { isAssistantMessage } from "./pi-embedded-utils.js";
@@ -37,8 +38,12 @@ export function handleAgentEnd(ctx: EmbeddedPiSubscribeContext) {
       model: lastAssistant.model,
     });
     const errorText = (friendlyError || lastAssistant.errorMessage || "LLM request failed.").trim();
+    const outcomeStatus = classifySubagentOutcome(
+      lastAssistant.stopReason,
+      lastAssistant.errorMessage,
+    );
     ctx.log.warn(
-      `embedded run agent end: runId=${ctx.params.runId} isError=true error=${errorText}`,
+      `embedded run agent end: runId=${ctx.params.runId} isError=true outcome=${outcomeStatus} error=${errorText}`,
     );
     emitAgentEvent({
       runId: ctx.params.runId,
@@ -46,6 +51,7 @@ export function handleAgentEnd(ctx: EmbeddedPiSubscribeContext) {
       data: {
         phase: "error",
         error: errorText,
+        outcomeStatus,
         endedAt: Date.now(),
       },
     });
@@ -54,6 +60,7 @@ export function handleAgentEnd(ctx: EmbeddedPiSubscribeContext) {
       data: {
         phase: "error",
         error: errorText,
+        outcomeStatus,
       },
     });
   } else {

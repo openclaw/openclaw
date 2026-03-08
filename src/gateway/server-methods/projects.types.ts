@@ -27,6 +27,8 @@ export type ProjectEntry = {
   isDefault: boolean;
   /** Additional matching terms for project detection */
   keywords: string[];
+  /** Telegram channel binding (group name + topic ID) */
+  telegram?: { group?: string; topicId?: number };
 };
 
 export type ProjectDetails = ProjectEntry & {

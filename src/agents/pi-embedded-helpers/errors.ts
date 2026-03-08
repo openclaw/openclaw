@@ -827,6 +827,77 @@ export function isFailoverErrorMessage(raw: string): boolean {
   return classifyFailoverReason(raw) !== null;
 }
 
+/**
+ * Classifies an error string into a sub-agent outcome status.
+ * Used to distinguish transient network interruptions (retryable) from
+ * permanent task failures, auth/billing errors, and timeouts.
+ */
+export type SubagentOutcomeStatus = "completed" | "failed" | "interrupted" | "timeout" | "aborted";
+
+const NETWORK_ERROR_RE =
+  /\b(network.?error|econnreset|econnrefused|etimedout|enotfound|ehostunreach|socket hang up|websocket closed|connection reset|fetch failed)\b/i;
+
+export function classifySubagentOutcome(
+  stopReason: string | undefined,
+  errorMessage: string | undefined,
+): SubagentOutcomeStatus {
+  // Normal completion
+  if (stopReason === "stop" || stopReason === "end_turn" || stopReason === "tool_use") {
+    return "completed";
+  }
+
+  // User/parent cancelled
+  if (stopReason === "abort" || stopReason === "cancelled") {
+    return "aborted";
+  }
+
+  if (!errorMessage) {
+    // No error message but non-standard stop reason — treat as completed
+    if (stopReason !== "error") {
+      return "completed";
+    }
+    return "failed";
+  }
+
+  // Check for transient network/infra errors first
+  if (NETWORK_ERROR_RE.test(errorMessage)) {
+    return "interrupted";
+  }
+  if (isTransientHttpError(errorMessage)) {
+    return "interrupted";
+  }
+  if (isCloudflareOrHtmlErrorPage(errorMessage)) {
+    return "interrupted";
+  }
+
+  // Use existing failover classification for known error categories
+  const failoverReason = classifyFailoverReason(errorMessage);
+  switch (failoverReason) {
+    case "timeout":
+      return "timeout";
+    case "rate_limit":
+      // Rate limits are transient — the task didn't actually fail
+      return "interrupted";
+    case "billing":
+    case "auth":
+    case "auth_permanent":
+    case "model_not_found":
+    case "session_expired":
+    case "format":
+      return "failed";
+    default:
+      break;
+  }
+
+  // Context overflow — real failure
+  if (isContextOverflowError(errorMessage)) {
+    return "failed";
+  }
+
+  // Default: treat unknown errors as failures
+  return "failed";
+}
+
 export function isFailoverAssistantError(msg: AssistantMessage | undefined): boolean {
   if (!msg || msg.stopReason !== "error") {
     return false;

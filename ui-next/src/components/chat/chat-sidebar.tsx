@@ -332,6 +332,7 @@ export function SessionSidebarContent({
   onArchive,
   collapsed = false,
   onCollapse,
+  models,
 }: {
   onSelect: (key: string) => void;
   activeKey: string;
@@ -342,6 +343,7 @@ export function SessionSidebarContent({
   onArchive?: (key: string, archive: boolean) => Promise<void>;
   collapsed?: boolean;
   onCollapse?: (collapsed: boolean) => void;
+  models?: Array<{ id: string; contextWindow?: number }>;
 }) {
   const sessions = useChatStore((s) => s.sessions);
   const loading = useChatStore((s) => s.sessionsLoading);
@@ -496,6 +498,117 @@ export function SessionSidebarContent({
   // Show filter row only when there are multiple filter options
   const showFilters = !collapsed && availableFilters.length > 1;
 
+  /** Look up context window from models list by session model id. */
+  const getContextWindow = (session: SessionEntry): number => {
+    const sessionContextTokens = session.contextTokens as number | undefined;
+    if (sessionContextTokens) return sessionContextTokens;
+    if (!models?.length || !session.model) return 0;
+    // session.model may be "provider/modelId" or just "modelId"
+    const modelId = session.model.includes("/") ? session.model.split("/").pop()! : session.model;
+    const match = models.find((m) => m.id === modelId || m.id === session.model);
+    return match?.contextWindow ?? 0;
+  };
+
+  /** Render a collapsed sidebar icon for a session. */
+  const renderCollapsedIcon = (session: SessionEntry, isPinned: boolean) => {
+    const channel = getSessionChannel(session);
+    const style = getChannelStyle(channel, session.kind);
+    const Icon = style.icon;
+    const isActive = activeKey === session.key;
+    const agentId = getSessionAgentId(session);
+    const agent = agentId ? agentMap.get(agentId) : undefined;
+    const agentEmoji = agent?.identity?.emoji;
+    const agentName = agent?.identity?.name ?? agent?.name;
+    const totalTokens = (session.totalTokens as number | undefined) ??
+      (((session.inputTokens as number | undefined) ?? session.tokenCounts?.totalInput ?? 0) +
+      ((session.outputTokens as number | undefined) ?? session.tokenCounts?.totalOutput ?? 0));
+    const contextTotal = getContextWindow(session);
+    const contextRatio = contextTotal > 0 ? Math.min(totalTokens / contextTotal, 1) : 0;
+    const relTime = formatRelativeTime(session.lastActiveMs ?? 0);
+    const title = formatSessionTitle(session);
+
+    return (
+      <div key={session.key} className="relative group" role="listitem">
+        <button
+          onClick={() => onSelect(session.key)}
+          aria-label={title}
+          className={cn(
+            "flex w-full items-center justify-center rounded-md py-1.5 transition-colors",
+            isActive ? "bg-primary/10" : "hover:bg-muted",
+          )}
+        >
+          <span className="relative flex flex-col items-center gap-0.5">
+            <span className="relative flex items-center justify-center h-6 w-6">
+              <Icon
+                className={cn(
+                  "h-4 w-4 shrink-0 transition-colors",
+                  isActive ? style.activeColor : style.color,
+                )}
+              />
+              {isPinned && (
+                <span className="absolute -top-1 -left-1">
+                  <Pin className="h-2 w-2 text-primary/50" />
+                </span>
+              )}
+              {agentEmoji ? (
+                <span className="absolute -bottom-1 -right-1 text-[9px] leading-none">
+                  {agentEmoji}
+                </span>
+              ) : (
+                channel && (
+                  <span
+                    className={cn(
+                      "absolute -bottom-0.5 -right-0.5 h-2 w-2 rounded-full ring-1 ring-background",
+                      isActive ? style.activeColor.replace("text-", "bg-") : style.color.replace("text-", "bg-"),
+                    )}
+                  />
+                )
+              )}
+            </span>
+            {/* Context length progress bar */}
+            <span className="w-5 h-[3px] rounded-full bg-secondary/60 overflow-hidden">
+              {contextRatio > 0 && (
+                <span
+                  className={cn(
+                    "block h-full rounded-full",
+                    contextRatio > 0.95
+                      ? "bg-destructive"
+                      : contextRatio > 0.8
+                        ? "bg-chart-5"
+                        : "bg-primary/60",
+                  )}
+                  style={{ width: `${contextRatio * 100}%` }}
+                />
+              )}
+            </span>
+          </span>
+        </button>
+        {/* Enhanced tooltip */}
+        <div className="absolute left-full top-1/2 -translate-y-1/2 ml-2 z-50 hidden group-hover:block">
+          <div className="rounded-lg border bg-popover px-3 py-2 shadow-md whitespace-nowrap min-w-[140px] max-w-[260px]">
+            <div className="text-sm font-medium truncate">
+              {isPinned && <Pin className="inline h-3 w-3 mr-1 -mt-0.5 text-primary/50" />}
+              {title}
+            </div>
+            <div className="flex flex-col gap-0.5 mt-1 text-[10px] text-muted-foreground">
+              {channel && <span>{style.label}</span>}
+              {agentName && (
+                <span>{agentEmoji ? `${agentEmoji} ` : ""}{agentName}</span>
+              )}
+              {totalTokens > 0 && (
+                <span>
+                  {formatTokens(totalTokens)} tokens
+                  {contextTotal > 0 && ` / ${formatTokens(contextTotal)} ctx`}
+                </span>
+              )}
+              {relTime && <span>{relTime}</span>}
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  };
+
   /** Render a single session row with metadata. */
   const renderSessionRow = (session: SessionEntry, isPinned?: boolean) => {
     const agentId = getSessionAgentId(session);
@@ -505,8 +618,9 @@ export function SessionSidebarContent({
     const style = getChannelStyle(channel, session.kind);
     const ChannelIcon = style.icon;
     const isActive = activeKey === session.key;
-    const totalTokens =
-      (session.tokenCounts?.totalInput ?? 0) + (session.tokenCounts?.totalOutput ?? 0);
+    const totalTokens = (session.totalTokens as number | undefined) ??
+      (((session.inputTokens as number | undefined) ?? session.tokenCounts?.totalInput ?? 0) +
+      ((session.outputTokens as number | undefined) ?? session.tokenCounts?.totalOutput ?? 0));
     const relTime = formatRelativeTime(session.lastActiveMs ?? 0);
 
     return (
@@ -849,63 +963,21 @@ export function SessionSidebarContent({
             {!collapsed && (searchQuery ? "No matching chats" : "No sessions yet")}
           </div>
         ) : collapsed ? (
-          /* Collapsed: icon-only session list with channel-colored icons */
-          <div className="space-y-0.5 py-1">
-            {filteredSessions.map((session) => {
-              const channel = getSessionChannel(session);
-              const style = getChannelStyle(channel, session.kind);
-              const Icon = style.icon;
-              const isActive = activeKey === session.key;
-              const agentId = getSessionAgentId(session);
-              const agent = agentId ? agentMap.get(agentId) : undefined;
-              const agentEmoji = agent?.identity?.emoji;
-              const tooltipLabel = [style.label, formatSessionTitle(session)]
-                .filter(Boolean)
-                .join(" \u00b7 ");
-
-              return (
-                <div key={session.key} className="relative group" role="listitem">
-                  <button
-                    onClick={() => onSelect(session.key)}
-                    aria-label={tooltipLabel}
-                    className={cn(
-                      "flex w-full items-center justify-center rounded-md py-2 transition-colors",
-                      isActive
-                        ? "bg-primary/10"
-                        : "hover:bg-muted",
-                    )}
-                  >
-                    <span className="relative flex items-center justify-center h-6 w-6">
-                      <Icon
-                        className={cn(
-                          "h-4 w-4 shrink-0 transition-colors",
-                          isActive ? style.activeColor : style.color,
-                        )}
-                      />
-                      {agentEmoji ? (
-                        <span className="absolute -bottom-1 -right-1 text-[9px] leading-none">
-                          {agentEmoji}
-                        </span>
-                      ) : (
-                        channel && (
-                          <span
-                            className={cn(
-                              "absolute -bottom-0.5 -right-0.5 h-2 w-2 rounded-full ring-1 ring-background",
-                              isActive ? style.activeColor.replace("text-", "bg-") : style.color.replace("text-", "bg-"),
-                            )}
-                          />
-                        )
-                      )}
-                    </span>
-                  </button>
-                  <div className="absolute left-full top-1/2 -translate-y-1/2 ml-2 z-50 hidden group-hover:block">
-                    <div className="rounded-md border bg-popover px-3 py-1.5 text-sm shadow-md whitespace-nowrap max-w-[220px] truncate">
-                      {tooltipLabel}
-                    </div>
-                  </div>
+          /* Collapsed: icon-only session list with context bar + pinned separation */
+          <div className="py-1">
+            {/* Pinned sessions (collapsed) */}
+            {pinnedSessions.length > 0 && (
+              <>
+                <div className="space-y-px">
+                  {pinnedSessions.map((session) => renderCollapsedIcon(session, true))}
                 </div>
-              );
-            })}
+                <div className="mx-2 my-1.5 border-t border-border/30" />
+              </>
+            )}
+            {/* Unpinned sessions (collapsed) */}
+            <div className="space-y-px">
+              {unpinnedSessions.map((session) => renderCollapsedIcon(session, false))}
+            </div>
           </div>
         ) : (
           /* Expanded: full session list with pinned + groups + archived */

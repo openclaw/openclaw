@@ -50,13 +50,30 @@ function savePanelWidth(width: number) {
   }
 }
 
+/**
+ * Heuristic: if content has no markdown formatting (headings, lists, links,
+ * code fences, bold/italic), treat it as raw terminal output and wrap it in
+ * a fenced code block so it renders monospaced with preserved whitespace.
+ */
+function formatToolContent(content: string): string {
+  // Already has markdown structure — pass through
+  if (/^#{1,6}\s|^\s*[-*]\s|^\s*\d+\.\s|```|^\|.*\|$/m.test(content)) {
+    return content;
+  }
+  // Looks like raw output (multi-line plain text) — wrap in code fence
+  if (content.includes("\n")) {
+    return "```\n" + content + "\n```";
+  }
+  return content;
+}
+
 /** Shared content renderer used by both desktop panel and mobile sheet. */
 function PanelBody({ panelContent }: { panelContent: ContextPanelContent }) {
   return (
     <div className="flex-1 overflow-y-auto p-4">
       {panelContent.mode === "tool-output" && (
         <div className="text-sm">
-          <Markdown>{panelContent.content}</Markdown>
+          <Markdown>{formatToolContent(panelContent.content)}</Markdown>
         </div>
       )}
     </div>
