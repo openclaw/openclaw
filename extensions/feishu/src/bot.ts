@@ -249,10 +249,12 @@ function resolveFeishuGroupSession(params: {
 
   const normalizedThreadId = threadId?.trim();
   const normalizedRootId = rootId?.trim();
-  const threadReply = Boolean(normalizedThreadId || normalizedRootId);
-  const replyInThread =
-    (groupConfig?.replyInThread ?? feishuCfg?.replyInThread ?? "disabled") === "enabled" ||
-    threadReply;
+  const configReplyInThread =
+    (groupConfig?.replyInThread ?? feishuCfg?.replyInThread ?? "disabled") === "enabled";
+  // Only treat incoming thread context as a thread reply when the config enables it;
+  // otherwise "disabled" would still follow threads on quote-reply messages.
+  const threadReply = configReplyInThread && Boolean(normalizedThreadId || normalizedRootId);
+  const replyInThread = configReplyInThread;
 
   const legacyTopicSessionMode =
     groupConfig?.topicSessionMode ?? feishuCfg?.topicSessionMode ?? "disabled";
