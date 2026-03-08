@@ -67,8 +67,6 @@ const USED_KEYS = [
   "usedPrompt",
   "prompts_used",
   "promptsUsed",
-  "current_interval_usage_count",
-  "currentIntervalUsageCount",
   "consumed",
 ] as const;
 
@@ -133,6 +131,8 @@ const REMAINING_KEYS = [
   "prompts_left",
   "promptsLeft",
   "left",
+  "current_interval_usage_count",
+  "currentIntervalUsageCount",
 ] as const;
 
 const PLAN_KEYS = ["plan", "plan_name", "planName", "product", "tier"] as const;

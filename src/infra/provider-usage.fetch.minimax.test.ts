@@ -91,6 +91,30 @@ describe("fetchMinimaxUsage", () => {
     ]);
   });
 
+  it("treats current_interval_usage_count as remaining (#29561)", async () => {
+    const mockFetch = createProviderUsageFetch(async () =>
+      makeResponse(200, {
+        model_remains: [
+          {
+            current_interval_total_count: 1500,
+            current_interval_usage_count: 1425,
+            remains_time: 11820000,
+            model_name: "MiniMax-M2.5",
+          },
+        ],
+      }),
+    );
+
+    const result = await fetchMinimaxUsage("key", 5000, mockFetch);
+    expect(result.windows).toEqual([
+      {
+        label: "5h",
+        usedPercent: 5,
+        resetAt: undefined,
+      },
+    ]);
+  });
+
   it("derives used from total and remaining counts", async () => {
     const mockFetch = createProviderUsageFetch(async () =>
       makeResponse(200, {

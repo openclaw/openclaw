@@ -229,7 +229,7 @@ describe("provider usage loading", () => {
           },
         ],
       },
-      25,
+      75,
     );
   });
 
