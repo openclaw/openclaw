@@ -48,10 +48,11 @@ function combineDebounceEntries(entries: BlueBubblesDebounceEntry[]): Normalized
   const textParts: string[] = [];
 
   for (const entry of entries) {
-    const text = entry.message.text.trim();
+    const text = entry.message.text?.trim();
     if (!text) {
       continue;
     }
+    // Skip duplicate text (URL might be in both text message and balloon)
     // Skip duplicate text (URL might be in both text message and balloon)
     const normalizedText = text.toLowerCase();
     if (seenTexts.has(normalizedText)) {
