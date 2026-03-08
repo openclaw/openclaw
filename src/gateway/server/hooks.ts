@@ -1,7 +1,12 @@
 import { randomUUID } from "node:crypto";
+import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import type { CliDeps } from "../../cli/deps.js";
 import { loadConfig } from "../../config/config.js";
-import { resolveMainSessionKeyFromConfig } from "../../config/sessions.js";
+import {
+  resolveAgentMainSessionKey,
+  resolveMainSessionKey,
+  resolveMainSessionKeyFromConfig,
+} from "../../config/sessions.js";
 import { runCronIsolatedAgentTurn } from "../../cron/isolated-agent.js";
 import type { CronJob } from "../../cron/types.js";
 import { requestHeartbeatNow } from "../../infra/heartbeat-wake.js";
@@ -38,7 +43,6 @@ export function createGatewayHooksRequestHandler(params: {
       sessionKey: value.sessionKey,
       targetAgentId: value.agentId,
     });
-    const mainSessionKey = resolveMainSessionKeyFromConfig();
     const jobId = randomUUID();
     const now = Date.now();
     const job: CronJob = {
@@ -69,6 +73,11 @@ export function createGatewayHooksRequestHandler(params: {
     void (async () => {
       try {
         const cfg = loadConfig();
+        const targetAgentId = value.agentId ?? resolveSessionAgentId({ sessionKey, config: cfg });
+        const systemEventSessionKey =
+          cfg.session?.scope === "global"
+            ? resolveMainSessionKey(cfg)
+            : resolveAgentMainSessionKey({ cfg, agentId: targetAgentId });
         const result = await runCronIsolatedAgentTurn({
           cfg,
           deps,
@@ -82,7 +91,7 @@ export function createGatewayHooksRequestHandler(params: {
           result.status === "ok" ? `Hook ${value.name}` : `Hook ${value.name} (${result.status})`;
         if (!result.delivered) {
           enqueueSystemEvent(`${prefix}: ${summary}`.trim(), {
-            sessionKey: mainSessionKey,
+            sessionKey: systemEventSessionKey,
           });
           if (value.wakeMode === "now") {
             requestHeartbeatNow({ reason: `hook:${jobId}` });
@@ -90,8 +99,14 @@ export function createGatewayHooksRequestHandler(params: {
         }
       } catch (err) {
         logHooks.warn(`hook agent failed: ${String(err)}`);
+        const cfg = loadConfig();
+        const targetAgentId = value.agentId ?? resolveSessionAgentId({ sessionKey, config: cfg });
+        const systemEventSessionKey =
+          cfg.session?.scope === "global"
+            ? resolveMainSessionKey(cfg)
+            : resolveAgentMainSessionKey({ cfg, agentId: targetAgentId });
         enqueueSystemEvent(`Hook ${value.name} (error): ${String(err)}`, {
-          sessionKey: mainSessionKey,
+          sessionKey: systemEventSessionKey,
         });
         if (value.wakeMode === "now") {
           requestHeartbeatNow({ reason: `hook:${jobId}:error` });
