@@ -32,4 +32,24 @@ struct TalkModeConfigParsingTests {
         #expect(selection?.config["voiceId"]?.stringValue == "voice-legacy")
         #expect(selection?.config["apiKey"]?.stringValue == "legacy-key")
     }
+
+    @Test func readsConfiguredSilenceTimeoutMs() {
+        let talk: [String: AnyCodable] = [
+            "silenceTimeoutMs": AnyCodable(1500),
+        ]
+
+        #expect(TalkModeRuntime.resolvedSilenceTimeoutMs(talk) == 1500)
+    }
+
+    @Test func defaultsSilenceTimeoutMsWhenMissing() {
+        #expect(TalkModeRuntime.resolvedSilenceTimeoutMs(nil) == 700)
+    }
+
+    @Test func defaultsSilenceTimeoutMsWhenInvalid() {
+        let talk: [String: AnyCodable] = [
+            "silenceTimeoutMs": AnyCodable(0),
+        ]
+
+        #expect(TalkModeRuntime.resolvedSilenceTimeoutMs(talk) == 700)
+    }
 }
