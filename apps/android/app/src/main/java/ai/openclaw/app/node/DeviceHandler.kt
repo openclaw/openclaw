@@ -219,14 +219,6 @@ class DeviceHandler(
               promptableWhenDenied = true,
             ),
           )
-          // Screen capture on Android is interactive per-capture consent, not a sticky app permission.
-          put(
-            "screenCapture",
-            permissionStateJson(
-              granted = false,
-              promptableWhenDenied = true,
-            ),
-          )
         },
       )
     }.toString()

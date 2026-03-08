@@ -19,7 +19,6 @@ class InvokeCommandRegistryTest {
   private val coreCapabilities =
     setOf(
       OpenClawCapability.Canvas.rawValue,
-      OpenClawCapability.Screen.rawValue,
       OpenClawCapability.Device.rawValue,
       OpenClawCapability.Notifications.rawValue,
       OpenClawCapability.System.rawValue,
