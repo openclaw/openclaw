@@ -745,7 +745,7 @@ Include your own number in `allowFrom` to enable self-chat mode (ignores native 
 - Override per channel: `channels.discord.commands.native` (bool or `"auto"`). `false` clears previously registered commands.
 - `channels.telegram.customCommands` adds extra Telegram bot menu entries.
 - `bash: true` enables `! <cmd>` for host shell. Requires `tools.elevated.enabled` and sender in `tools.elevated.allowFrom.<channel>`.
-- `config: true` enables `/config` (reads/writes `openclaw.json`).
+- `config: true` enables `/config` (reads/writes `openclaw.json`). For gateway `chat.send` clients, persistent `/config set|unset` writes also require `operator.admin`; read-only `/config show` stays available to normal write-scoped operator clients.
 - `channels.<provider>.configWrites` gates config mutations per channel (default: true).
 - `allowFrom` is per-provider. When set, it is the **only** authorization source (channel allowlists/pairing and `useAccessGroups` are ignored).
 - `useAccessGroups: false` allows commands to bypass access-group policies when `allowFrom` is not set.
@@ -916,7 +916,7 @@ Time format in system prompt. Default: `auto` (OS preference).
 | `sonnet`       | `anthropic/claude-sonnet-4-5`   |
 | `gpt`          | `openai/gpt-5.2`                |
 | `gpt-mini`     | `openai/gpt-5-mini`             |
-| `gemini`       | `google/gemini-3-pro-preview`   |
+| `gemini`       | `google/gemini-3.1-pro-preview` |
 | `gemini-flash` | `google/gemini-3-flash-preview` |
 
 Your configured aliases always win over defaults.

@@ -255,6 +255,34 @@ describe("sanitizeSessionHistory", () => {
     );
   });
 
+  it("prepends a bootstrap user turn for strict OpenAI-compatible assistant-first history", async () => {
+    setNonGoogleModelApi();
+    const sessionEntries: Array<{ type: string; customType: string; data: unknown }> = [];
+    const sessionManager = makeInMemorySessionManager(sessionEntries);
+    const messages = castAgentMessages([
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "hello from previous turn" }],
+      },
+    ]);
+
+    const result = await sanitizeSessionHistory({
+      messages,
+      modelApi: "openai-completions",
+      provider: "vllm",
+      modelId: "gemma-3-27b",
+      sessionManager,
+      sessionId: TEST_SESSION_ID,
+    });
+
+    expect(result[0]?.role).toBe("user");
+    expect((result[0] as { content?: unknown } | undefined)?.content).toBe("(session bootstrap)");
+    expect(result[1]?.role).toBe("assistant");
+    expect(
+      sessionEntries.some((entry) => entry.customType === "google-turn-ordering-bootstrap"),
+    ).toBe(false);
+  });
+
   it("annotates inter-session user messages before context sanitization", async () => {
     setNonGoogleModelApi();
 

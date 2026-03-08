@@ -507,6 +507,7 @@ export const dispatchTelegramMessage = async ({
     },
   });
 
+  let dispatchError: unknown;
   try {
     ({ queuedFinal } = await dispatchReplyWithBufferedBlockDispatcher({
       ctx: ctxPayload,
@@ -680,6 +681,9 @@ export const dispatchTelegramMessage = async ({
         onModelSelected,
       },
     }));
+  } catch (err) {
+    dispatchError = err;
+    runtime.error?.(danger(`telegram dispatch failed: ${String(err)}`));
   } finally {
     // Upstream assistant callbacks are fire-and-forget; drain queued lane work
     // before stream cleanup so boundary rotations/materialization complete first.
@@ -747,11 +751,15 @@ export const dispatchTelegramMessage = async ({
   let sentFallback = false;
   const deliverySummary = deliveryState.snapshot();
   if (
-    !deliverySummary.delivered &&
-    (deliverySummary.skippedNonSilent > 0 || deliverySummary.failedNonSilent > 0)
+    dispatchError ||
+    (!deliverySummary.delivered &&
+      (deliverySummary.skippedNonSilent > 0 || deliverySummary.failedNonSilent > 0))
   ) {
+    const fallbackText = dispatchError
+      ? "Something went wrong while processing your request. Please try again."
+      : EMPTY_RESPONSE_FALLBACK;
     const result = await deliverReplies({
-      replies: [{ text: EMPTY_RESPONSE_FALLBACK }],
+      replies: [{ text: fallbackText }],
       ...deliveryBaseOptions,
     });
     sentFallback = result.delivered;

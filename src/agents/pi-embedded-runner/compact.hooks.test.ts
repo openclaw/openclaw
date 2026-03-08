@@ -1,11 +1,29 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const { hookRunner, triggerInternalHook, sanitizeSessionHistoryMock } = vi.hoisted(() => ({
+const {
+  hookRunner,
+  resolveModelMock,
+  sessionCompactImpl,
+  triggerInternalHook,
+  sanitizeSessionHistoryMock,
+} = vi.hoisted(() => ({
   hookRunner: {
     hasHooks: vi.fn(),
     runBeforeCompaction: vi.fn(),
     runAfterCompaction: vi.fn(),
   },
+  resolveModelMock: vi.fn(() => ({
+    model: { provider: "openai", api: "responses", id: "fake", input: [] },
+    error: null,
+    authStorage: { setRuntimeApiKey: vi.fn() },
+    modelRegistry: {},
+  })),
+  sessionCompactImpl: vi.fn(async () => ({
+    summary: "summary",
+    firstKeptEntryId: "entry-1",
+    tokensBefore: 120,
+    details: { ok: true },
+  })),
   triggerInternalHook: vi.fn(),
   sanitizeSessionHistoryMock: vi.fn(async (params: { messages: unknown[] }) => params.messages),
 }));
@@ -50,12 +68,7 @@ vi.mock("@mariozechner/pi-coding-agent", () => {
         compact: vi.fn(async () => {
           // simulate compaction trimming to a single message
           session.messages.splice(1);
-          return {
-            summary: "summary",
-            firstKeptEntryId: "entry-1",
-            tokensBefore: 120,
-            details: { ok: true },
-          };
+          return await sessionCompactImpl();
         }),
         dispose: vi.fn(),
       };
@@ -210,12 +223,7 @@ vi.mock("./sandbox-info.js", () => ({
 
 vi.mock("./model.js", () => ({
   buildModelAliasLines: vi.fn(() => []),
-  resolveModel: vi.fn(() => ({
-    model: { provider: "openai", api: "responses", id: "fake", input: [] },
-    error: null,
-    authStorage: { setRuntimeApiKey: vi.fn() },
-    modelRegistry: {},
-  })),
+  resolveModel: resolveModelMock,
 }));
 
 vi.mock("./session-manager-cache.js", () => ({
@@ -235,6 +243,8 @@ vi.mock("./utils.js", () => ({
   resolveExecToolDefaults: vi.fn(() => undefined),
 }));
 
+import { getApiProvider, unregisterApiProviders } from "@mariozechner/pi-ai";
+import { getCustomApiRegistrySourceId } from "../custom-api-registry.js";
 import { compactEmbeddedPiSessionDirect } from "./compact.js";
 
 const sessionHook = (action: string) =>
@@ -248,10 +258,25 @@ describe("compactEmbeddedPiSessionDirect hooks", () => {
     hookRunner.hasHooks.mockReset();
     hookRunner.runBeforeCompaction.mockReset();
     hookRunner.runAfterCompaction.mockReset();
+    resolveModelMock.mockReset();
+    resolveModelMock.mockReturnValue({
+      model: { provider: "openai", api: "responses", id: "fake", input: [] },
+      error: null,
+      authStorage: { setRuntimeApiKey: vi.fn() },
+      modelRegistry: {},
+    });
+    sessionCompactImpl.mockReset();
+    sessionCompactImpl.mockResolvedValue({
+      summary: "summary",
+      firstKeptEntryId: "entry-1",
+      tokensBefore: 120,
+      details: { ok: true },
+    });
     sanitizeSessionHistoryMock.mockReset();
     sanitizeSessionHistoryMock.mockImplementation(async (params: { messages: unknown[] }) => {
       return params.messages;
     });
+    unregisterApiProviders(getCustomApiRegistrySourceId("ollama"));
   });
 
   it("emits internal + plugin compaction hooks with counts", async () => {
@@ -354,5 +379,40 @@ describe("compactEmbeddedPiSessionDirect hooks", () => {
       messageCount: 0,
       tokenCount: 0,
     });
+  });
+
+  it("registers the Ollama api provider before compaction", async () => {
+    resolveModelMock.mockReturnValue({
+      model: {
+        provider: "ollama",
+        api: "ollama",
+        id: "qwen3:8b",
+        input: ["text"],
+        baseUrl: "http://127.0.0.1:11434",
+        headers: { Authorization: "Bearer ollama-cloud" },
+      },
+      error: null,
+      authStorage: { setRuntimeApiKey: vi.fn() },
+      modelRegistry: {},
+    } as never);
+    sessionCompactImpl.mockImplementation(async () => {
+      expect(getApiProvider("ollama" as Parameters<typeof getApiProvider>[0])).toBeDefined();
+      return {
+        summary: "summary",
+        firstKeptEntryId: "entry-1",
+        tokensBefore: 120,
+        details: { ok: true },
+      };
+    });
+
+    const result = await compactEmbeddedPiSessionDirect({
+      sessionId: "session-1",
+      sessionKey: "agent:main:session-1",
+      sessionFile: "/tmp/session.jsonl",
+      workspaceDir: "/tmp",
+      customInstructions: "focus on decisions",
+    });
+
+    expect(result.ok).toBe(true);
   });
 });
