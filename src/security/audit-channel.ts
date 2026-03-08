@@ -293,8 +293,9 @@ export async function collectChannelSecurityFindings(params: {
           severity: "warn",
           title: `${plugin.meta.label ?? plugin.id} account config could not be resolved${accountNote}`,
           detail,
-          remediation:
-            "Resolve unresolved SecretRef values (or run this command against an active gateway runtime snapshot) and retry.",
+          remediation: detail.includes("SecretRef")
+            ? "Resolve unresolved SecretRef values (or run this command against an active gateway runtime snapshot) and retry."
+            : "Check channel configuration and retry. If using SecretRefs, ensure they are resolved before running the audit.",
         });
         continue;
       }
