@@ -36,10 +36,14 @@ Per-agent override: `agents.list[].tools.profile`.
 
 Profiles:
 
-- `minimal`: `session_status` only
-- `coding`: `group:fs`, `group:runtime`, `group:sessions`, `group:memory`, `image`
-- `messaging`: `group:messaging`, `sessions_list`, `sessions_history`, `sessions_send`, `session_status`
-- `full`: no restriction (same as unset)
+- `minimal`: `session_status` only. Good for tightly constrained or status-only agents.
+- `coding`: `group:fs`, `group:runtime`, `group:sessions`, `group:memory`, `image`. Good for repo/file/runtime-heavy workflows.
+- `messaging`: `group:messaging`, `sessions_list`, `sessions_history`, `sessions_send`, `session_status`. Good for messaging-focused agents, but intentionally restricts broader tools such as filesystem, runtime, browser, canvas, nodes, cron, and gateway control.
+- `full`: no restriction (same as unset). Best when you want the richest command/control surface and prefer to trim with `tools.allow` / `tools.deny` instead of starting from a narrow base profile.
+
+<Note>
+If a Telegram/WhatsApp/Discord-style assistant feels unexpectedly limited, check `tools.profile` first. In particular, `profile: "messaging"` is intentionally narrow by design. Use `profile: "full"` when you want broader access to tools like file operations, runtime commands, browser automation, and other first-class OpenClaw tools.
+</Note>
 
 Example (messaging-only by default, allow Slack + Discord tools too):
 
@@ -59,6 +63,16 @@ Example (coding profile, but deny exec/process everywhere):
   tools: {
     profile: "coding",
     deny: ["group:runtime"],
+  },
+}
+```
+
+Example (broadest tool surface by default):
+
+```json5
+{
+  tools: {
+    profile: "full",
   },
 }
 ```
