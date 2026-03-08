@@ -76,7 +76,10 @@ function isWrappedFetchFailedMessage(message: string): boolean {
   // matches like "Web fetch failed (404): ..." that are not transport failures.
   return /:\s*fetch failed$/.test(message);
 }
-
+const PLAYWRIGHT_DIALOG_RACE_MESSAGE_SNIPPETS = [
+  "page.handlejavascriptdialog",
+  "no dialog is showing",
+];
 function getErrorCause(err: unknown): unknown {
   if (!err || typeof err !== "object") {
     return undefined;
@@ -193,6 +196,38 @@ export function isTransientNetworkError(err: unknown): boolean {
   return false;
 }
 
+export function isPlaywrightDialogRaceError(err: unknown): boolean {
+  if (!err) {
+    return false;
+  }
+  for (const candidate of collectErrorGraphCandidates(err, (current) => {
+    const nested: Array<unknown> = [
+      current.cause,
+      current.reason,
+      current.original,
+      current.error,
+      current.data,
+    ];
+    if (Array.isArray(current.errors)) {
+      nested.push(...current.errors);
+    }
+    return nested;
+  })) {
+    if (!candidate || typeof candidate !== "object") {
+      continue;
+    }
+    const rawMessage = (candidate as { message?: unknown }).message;
+    const message = typeof rawMessage === "string" ? rawMessage.toLowerCase() : "";
+    if (!message) {
+      continue;
+    }
+    if (PLAYWRIGHT_DIALOG_RACE_MESSAGE_SNIPPETS.every((snippet) => message.includes(snippet))) {
+      return true;
+    }
+  }
+  return false;
+}
+
 export function registerUnhandledRejectionHandler(handler: UnhandledRejectionHandler): () => void {
   handlers.add(handler);
   return () => {
@@ -242,6 +277,14 @@ export function installUnhandledRejectionHandler(): void {
     }
 
     if (isTransientNetworkError(reason)) {
+      console.warn(
+        "[openclaw] Non-fatal unhandled rejection (continuing):",
+        formatUncaughtError(reason),
+      );
+      return;
+    }
+
+    if (isPlaywrightDialogRaceError(reason)) {
       console.warn(
         "[openclaw] Non-fatal unhandled rejection (continuing):",
         formatUncaughtError(reason),

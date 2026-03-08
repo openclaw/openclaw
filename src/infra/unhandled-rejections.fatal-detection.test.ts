@@ -126,6 +126,18 @@ describe("installUnhandledRejectionHandler - fatal detection", () => {
       );
     });
 
+    it("does not exit on Playwright dialog race errors", () => {
+      const raceErr = new Error(
+        "Protocol error (Page.handleJavaScriptDialog): No dialog is showing",
+      );
+
+      expectExitCodeFromUnhandled(raceErr, []);
+      expect(consoleWarnSpy).toHaveBeenCalledWith(
+        "[openclaw] Non-fatal unhandled rejection (continuing):",
+        expect.stringContaining("No dialog is showing"),
+      );
+    });
+
     it("exits on generic errors without code", () => {
       const genericErr = new Error("Something went wrong");
 
