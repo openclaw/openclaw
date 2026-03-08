@@ -402,6 +402,147 @@ describe("context-pruning", () => {
     expect(text).toContain("[Tool result trimmed:");
   });
 
+  it("strips thinking blocks from old assistant messages outside the protected tail", () => {
+    const thinkingAssistant: AgentMessage = {
+      role: "assistant",
+      content: [
+        { type: "thinking", thinking: "x".repeat(10_000) },
+        { type: "text", text: "answer" },
+      ],
+      api: "openai-responses",
+      provider: "openai",
+      model: "fake",
+      usage: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0, total: 2 },
+      stopReason: "stop",
+      timestamp: Date.now(),
+    } as unknown as AgentMessage;
+
+    const recentAssistant = makeAssistant("recent");
+
+    const messages: AgentMessage[] = [
+      makeUser("u1"),
+      thinkingAssistant,
+      makeUser("u2"),
+      recentAssistant,
+    ];
+
+    const settings = {
+      ...DEFAULT_CONTEXT_PRUNING_SETTINGS,
+      keepLastAssistants: 1,
+      softTrimRatio: 0.0,
+      stripThinking: true,
+    };
+
+    const ctx = {
+      model: { contextWindow: 1000 },
+    } as unknown as ExtensionContext;
+    const next = pruneContextMessages({ messages, settings, ctx });
+
+    // The old assistant message should have thinking stripped
+    const oldAssistant = next[1];
+    if (!oldAssistant || oldAssistant.role !== "assistant") {
+      throw new Error("expected assistant");
+    }
+    const blocks = oldAssistant.content as Array<{ type: string }>;
+    expect(blocks.some((b) => b.type === "thinking")).toBe(false);
+    expect(blocks.some((b) => b.type === "text")).toBe(true);
+
+    // The recent assistant (in protected tail) should be untouched
+    expect(next[3]).toBe(recentAssistant);
+  });
+
+  it("removes all content from assistant messages that contain only thinking blocks", () => {
+    const thinkingOnlyAssistant: AgentMessage = {
+      role: "assistant",
+      content: [
+        { type: "thinking", thinking: "x".repeat(10_000) },
+        { type: "thinking", thinking: "y".repeat(5_000) },
+      ],
+      api: "openai-responses",
+      provider: "openai",
+      model: "fake",
+      usage: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0, total: 2 },
+      stopReason: "stop",
+      timestamp: Date.now(),
+    } as unknown as AgentMessage;
+
+    const recentAssistant = makeAssistant("recent");
+
+    const messages: AgentMessage[] = [
+      makeUser("u1"),
+      thinkingOnlyAssistant,
+      makeUser("u2"),
+      recentAssistant,
+    ];
+
+    const settings = {
+      ...DEFAULT_CONTEXT_PRUNING_SETTINGS,
+      keepLastAssistants: 1,
+      softTrimRatio: 0.0,
+      stripThinking: true,
+    };
+
+    const ctx = {
+      model: { contextWindow: 1000 },
+    } as unknown as ExtensionContext;
+    const next = pruneContextMessages({ messages, settings, ctx });
+
+    // The all-thinking assistant message should have its content emptied
+    const strippedAssistant = next[1];
+    if (!strippedAssistant || strippedAssistant.role !== "assistant") {
+      throw new Error("expected assistant");
+    }
+    const blocks = strippedAssistant.content as Array<{ type: string }>;
+    expect(blocks.some((b) => b.type === "thinking")).toBe(false);
+    expect(blocks.length).toBe(0);
+
+    // The recent assistant (in protected tail) should be untouched
+    expect(next[3]).toBe(recentAssistant);
+  });
+
+  it("does not strip thinking blocks when stripThinking is false", () => {
+    const thinkingAssistant: AgentMessage = {
+      role: "assistant",
+      content: [
+        { type: "thinking", thinking: "x".repeat(10_000) },
+        { type: "text", text: "answer" },
+      ],
+      api: "openai-responses",
+      provider: "openai",
+      model: "fake",
+      usage: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0, total: 2 },
+      stopReason: "stop",
+      timestamp: Date.now(),
+    } as unknown as AgentMessage;
+
+    const messages: AgentMessage[] = [
+      makeUser("u1"),
+      thinkingAssistant,
+      makeUser("u2"),
+      makeAssistant("a2"),
+    ];
+
+    const settings = {
+      ...DEFAULT_CONTEXT_PRUNING_SETTINGS,
+      keepLastAssistants: 1,
+      softTrimRatio: 0.0,
+      stripThinking: false,
+    };
+
+    const ctx = {
+      model: { contextWindow: 1000 },
+    } as unknown as ExtensionContext;
+    const next = pruneContextMessages({ messages, settings, ctx });
+
+    // With stripThinking=false, the thinking block should remain
+    const oldAssistant = next[1];
+    if (!oldAssistant || oldAssistant.role !== "assistant") {
+      throw new Error("expected assistant");
+    }
+    const blocks = oldAssistant.content as Array<{ type: string }>;
+    expect(blocks.some((b) => b.type === "thinking")).toBe(true);
+  });
+
   it("soft-trims oversized tool results and preserves head/tail with a note", () => {
     const messages: AgentMessage[] = [
       makeUser("u1"),

@@ -263,8 +263,42 @@ export function pruneContextMessages(params: {
     return messages;
   }
 
-  const prunableToolIndexes: number[] = [];
+  // --- Strip thinking blocks from assistant messages outside the protected tail ---
   let next: AgentMessage[] | null = null;
+
+  if (settings.stripThinking) {
+    for (let i = pruneStartIndex; i < cutoffIndex; i++) {
+      const msg = messages[i];
+      if (!msg || msg.role !== "assistant") {
+        continue;
+      }
+      const content = msg.content;
+      if (!Array.isArray(content)) {
+        continue;
+      }
+      const hasThinking = content.some((b: { type: string }) => b.type === "thinking");
+      if (!hasThinking) {
+        continue;
+      }
+      const filtered = content.filter((b: { type: string }) => b.type !== "thinking");
+      // Strip thinking blocks; if all content was thinking, the message gets
+      // empty content (filtered.length === 0) and its full char cost is reclaimed.
+      // We do NOT skip the all-thinking case — leaving it unmodified would mean
+      // the thinking blocks remain in context and totalChars is not reduced.
+      if (!next) {
+        next = messages.slice();
+      }
+      const strippedMsg = { ...msg, content: filtered } as AgentMessage;
+      next[i] = strippedMsg;
+      totalChars -= estimateMessageChars(msg) - estimateMessageChars(strippedMsg);
+    }
+    ratio = totalChars / charWindow;
+    if (ratio < settings.softTrimRatio) {
+      return next ?? messages;
+    }
+  }
+
+  const prunableToolIndexes: number[] = [];
 
   for (let i = pruneStartIndex; i < cutoffIndex; i++) {
     const msg = messages[i];

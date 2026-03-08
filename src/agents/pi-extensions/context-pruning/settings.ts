@@ -24,6 +24,8 @@ export type ContextPruningConfig = {
     enabled?: boolean;
     placeholder?: string;
   };
+  /** Strip thinking blocks from assistant messages outside the protected tail. Default: true. */
+  stripThinking?: boolean;
 };
 
 export type EffectiveContextPruningSettings = {
@@ -43,6 +45,8 @@ export type EffectiveContextPruningSettings = {
     enabled: boolean;
     placeholder: string;
   };
+  /** Strip thinking blocks from assistant messages outside the protected tail. */
+  stripThinking: boolean;
 };
 
 export const DEFAULT_CONTEXT_PRUNING_SETTINGS: EffectiveContextPruningSettings = {
@@ -62,6 +66,7 @@ export const DEFAULT_CONTEXT_PRUNING_SETTINGS: EffectiveContextPruningSettings =
     enabled: true,
     placeholder: "[Old tool result content cleared]",
   },
+  stripThinking: true,
 };
 
 export function computeEffectiveSettings(raw: unknown): EffectiveContextPruningSettings | null {
@@ -117,6 +122,10 @@ export function computeEffectiveSettings(raw: unknown): EffectiveContextPruningS
     if (typeof cfg.hardClear.placeholder === "string" && cfg.hardClear.placeholder.trim()) {
       s.hardClear.placeholder = cfg.hardClear.placeholder.trim();
     }
+  }
+
+  if (typeof cfg.stripThinking === "boolean") {
+    s.stripThinking = cfg.stripThinking;
   }
 
   return s;
