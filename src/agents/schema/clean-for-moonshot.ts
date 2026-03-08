@@ -68,14 +68,21 @@ export function isMoonshotProvider(modelProvider?: string, modelId?: string): bo
   if (provider.includes("moonshot")) {
     return true;
   }
-  // OpenRouter and other proxies may use moonshotai/ prefix
   const lowerModelId = modelId?.toLowerCase() ?? "";
-  if (provider === "openrouter" && lowerModelId.includes("moonshot")) {
+
+  // Known proxy providers may expose Moonshot models under either
+  // `moonshot...` or bare `kimi...` model IDs.
+  const isMoonshotLikeModelId =
+    lowerModelId.includes("moonshot") ||
+    lowerModelId.includes("moonshotai") ||
+    lowerModelId.includes("kimi-") ||
+    lowerModelId === "kimi";
+
+  const proxyProviders = new Set(["openrouter", "deepinfra", "nvidia", "nvidia-nim", "together"]);
+
+  if (proxyProviders.has(provider) && isMoonshotLikeModelId) {
     return true;
   }
-  // DeepInfra proxies Moonshot models
-  if (provider === "deepinfra" && lowerModelId.includes("moonshot")) {
-    return true;
-  }
+
   return false;
 }

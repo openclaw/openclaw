@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import "./test-helpers/fast-coding-tools.js";
 import { createOpenClawCodingTools } from "./pi-tools.js";
+import { normalizeToolParameters } from "./pi-tools.schema.js";
+import type { AnyAgentTool } from "./pi-tools.types.js";
 
 const defaultTools = createOpenClawCodingTools({ senderIsOwner: true });
 
@@ -126,5 +128,77 @@ describe("createOpenClawCodingTools", () => {
       .filter((entry) => entry.type !== "object");
 
     expect(offenders).toEqual([]);
+  });
+
+  it("cleans Moonshot tool schemas for direct and proxy providers", () => {
+    const tool: AnyAgentTool = {
+      name: "sample",
+      label: "sample",
+      description: "sample",
+      parameters: {
+        type: "object",
+        properties: {
+          email: { type: "string", format: "email", minLength: 3, maxLength: 255 },
+          score: { type: "number", minimum: 0, maximum: 100 },
+        },
+        required: ["email"],
+      },
+      execute: async () => ({ content: [{ type: "text", text: "ok" }] }),
+    };
+
+    const assertCleaned = (provider: string, modelId: string) => {
+      const normalized = normalizeToolParameters(tool, {
+        modelProvider: provider,
+        modelId,
+      });
+      const params = normalized.parameters as {
+        properties?: Record<string, Record<string, unknown>>;
+      };
+      const email = params.properties?.email ?? {};
+      const score = params.properties?.score ?? {};
+
+      expect(email.format).toBeUndefined();
+      expect(email.minLength).toBeUndefined();
+      expect(email.maxLength).toBeUndefined();
+      expect(score.minimum).toBeUndefined();
+      expect(score.maximum).toBeUndefined();
+    };
+
+    assertCleaned("moonshot", "kimi-k2.5");
+    assertCleaned("openrouter", "moonshotai/kimi-k2.5");
+    assertCleaned("openrouter", "kimi-k2.5");
+  });
+
+  it("does not apply Moonshot keyword stripping to non-Moonshot providers", () => {
+    const tool: AnyAgentTool = {
+      name: "sample",
+      label: "sample",
+      description: "sample",
+      parameters: {
+        type: "object",
+        properties: {
+          email: { type: "string", format: "email", minLength: 3, maxLength: 255 },
+          score: { type: "number", minimum: 0, maximum: 100 },
+        },
+        required: ["email"],
+      },
+      execute: async () => ({ content: [{ type: "text", text: "ok" }] }),
+    };
+
+    const normalized = normalizeToolParameters(tool, {
+      modelProvider: "openai",
+      modelId: "gpt-4.1-mini",
+    });
+    const params = normalized.parameters as {
+      properties?: Record<string, Record<string, unknown>>;
+    };
+    const email = params.properties?.email ?? {};
+    const score = params.properties?.score ?? {};
+
+    expect(email.format).toBe("email");
+    expect(email.minLength).toBe(3);
+    expect(email.maxLength).toBe(255);
+    expect(score.minimum).toBe(0);
+    expect(score.maximum).toBe(100);
   });
 });

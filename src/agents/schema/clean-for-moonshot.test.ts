@@ -186,6 +186,11 @@ describe("isMoonshotProvider", () => {
     expect(isMoonshotProvider("OpenRouter", "MOONSHOTAI/KIMI")).toBe(true);
   });
 
+  it("returns true for openrouter with bare kimi model ids", () => {
+    expect(isMoonshotProvider("openrouter", "kimi-k2.5")).toBe(true);
+    expect(isMoonshotProvider("openrouter", "kimi-k2-thinking")).toBe(true);
+  });
+
   it("returns false for openrouter with non-moonshot model", () => {
     expect(isMoonshotProvider("openrouter", "anthropic/claude-3")).toBe(false);
     expect(isMoonshotProvider("openrouter", "openai/gpt-4")).toBe(false);
@@ -194,6 +199,13 @@ describe("isMoonshotProvider", () => {
   it("returns true for deepinfra with moonshot model", () => {
     expect(isMoonshotProvider("deepinfra", "moonshotai/kimi-k2.5")).toBe(true);
     expect(isMoonshotProvider("DeepInfra", "MOONSHOT/test")).toBe(true);
+  });
+
+  it("returns true for known proxy providers with bare kimi model ids", () => {
+    expect(isMoonshotProvider("deepinfra", "kimi-k2.5")).toBe(true);
+    expect(isMoonshotProvider("nvidia", "moonshotai/kimi-k2.5")).toBe(true);
+    expect(isMoonshotProvider("nvidia-nim", "moonshotai/kimi-k2.5")).toBe(true);
+    expect(isMoonshotProvider("together", "moonshotai/Kimi-K2.5")).toBe(true);
   });
 
   it("returns false for deepinfra with non-moonshot model", () => {
