@@ -126,6 +126,30 @@ describe("auditGatewayServiceConfig", () => {
       audit.issues.some((issue) => issue.code === SERVICE_AUDIT_CODES.gatewayTokenMismatch),
     ).toBe(false);
   });
+
+  it("does not treat EnvironmentFile-backed tokens as embedded", async () => {
+    const audit = await auditGatewayServiceConfig({
+      env: { HOME: "/tmp" },
+      platform: "linux",
+      expectedGatewayToken: "new-token",
+      command: {
+        programArguments: ["/usr/bin/node", "gateway"],
+        environment: {
+          PATH: "/usr/local/bin:/usr/bin:/bin",
+          OPENCLAW_GATEWAY_TOKEN: "old-token",
+        },
+        environmentValueSources: {
+          OPENCLAW_GATEWAY_TOKEN: "file",
+        },
+      },
+    });
+    expect(
+      audit.issues.some((issue) => issue.code === SERVICE_AUDIT_CODES.gatewayTokenEmbedded),
+    ).toBe(false);
+    expect(
+      audit.issues.some((issue) => issue.code === SERVICE_AUDIT_CODES.gatewayTokenMismatch),
+    ).toBe(false);
+  });
 });
 
 describe("checkTokenDrift", () => {

@@ -39,6 +39,15 @@ vi.mock("../daemon/runtime-paths.js", () => ({
 vi.mock("../daemon/service-audit.js", () => ({
   auditGatewayServiceConfig: mocks.auditGatewayServiceConfig,
   needsNodeRuntimeMigration: vi.fn(() => false),
+  readEmbeddedGatewayToken: (
+    command: {
+      environment?: Record<string, string>;
+      environmentValueSources?: Record<string, "inline" | "file">;
+    } | null,
+  ) =>
+    command?.environmentValueSources?.OPENCLAW_GATEWAY_TOKEN === "file"
+      ? undefined
+      : command?.environment?.OPENCLAW_GATEWAY_TOKEN?.trim() || undefined,
   SERVICE_AUDIT_CODES: {
     gatewayEntrypointMismatch: "gateway-entrypoint-mismatch",
   },
@@ -296,6 +305,49 @@ describe("maybeRepairGatewayServiceConfig", () => {
           }),
         );
         expect(mocks.install).toHaveBeenCalledTimes(1);
+      },
+    );
+  });
+
+  it("does not persist EnvironmentFile-backed service tokens into config", async () => {
+    await withEnvAsync(
+      {
+        OPENCLAW_GATEWAY_TOKEN: undefined,
+        CLAWDBOT_GATEWAY_TOKEN: undefined,
+      },
+      async () => {
+        mocks.readCommand.mockResolvedValue({
+          programArguments: gatewayProgramArguments,
+          environment: {
+            OPENCLAW_GATEWAY_TOKEN: "env-file-token",
+          },
+          environmentValueSources: {
+            OPENCLAW_GATEWAY_TOKEN: "file",
+          },
+        });
+        mocks.auditGatewayServiceConfig.mockResolvedValue({
+          ok: false,
+          issues: [],
+        });
+        mocks.buildGatewayInstallPlan.mockResolvedValue({
+          programArguments: gatewayProgramArguments,
+          workingDirectory: "/tmp",
+          environment: {},
+        });
+        mocks.install.mockResolvedValue(undefined);
+
+        const cfg: OpenClawConfig = {
+          gateway: {},
+        };
+
+        await runRepair(cfg);
+
+        expect(mocks.writeConfigFile).not.toHaveBeenCalled();
+        expect(mocks.buildGatewayInstallPlan).toHaveBeenCalledWith(
+          expect.objectContaining({
+            config: cfg,
+          }),
+        );
       },
     );
   });

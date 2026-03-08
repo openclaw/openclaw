@@ -114,6 +114,19 @@ describe("delivery-queue", () => {
       await expect(ackDelivery("nonexistent-id", tmpDir)).resolves.toBeUndefined();
     });
 
+    it("ack cleans up leftover .delivered marker when .json is already gone", async () => {
+      const id = await enqueueDelivery(
+        { channel: "whatsapp", to: "+1", payloads: [{ text: "stale-marker" }] },
+        tmpDir,
+      );
+      const queueDir = path.join(tmpDir, "delivery-queue");
+
+      fs.renameSync(path.join(queueDir, `${id}.json`), path.join(queueDir, `${id}.delivered`));
+      await expect(ackDelivery(id, tmpDir)).resolves.toBeUndefined();
+
+      expect(fs.existsSync(path.join(queueDir, `${id}.delivered`))).toBe(false);
+    });
+
     it("ack removes .delivered marker so recovery does not replay", async () => {
       const id = await enqueueDelivery(
         { channel: "whatsapp", to: "+1", payloads: [{ text: "ack-test" }] },
@@ -1106,6 +1119,38 @@ describe("resolveOutboundSessionRoute", () => {
         expect(route?.chatType, testCase.name).toBe(testCase.expected.chatType);
       }
     }
+  });
+
+  it("uses resolved Discord user targets to route bare numeric ids as DMs", async () => {
+    const route = await resolveOutboundSessionRoute({
+      cfg: { session: { dmScope: "per-channel-peer" } } as OpenClawConfig,
+      channel: "discord",
+      agentId: "main",
+      target: "123",
+      resolvedTarget: {
+        to: "user:123",
+        kind: "user",
+        source: "directory",
+      },
+    });
+
+    expect(route).toMatchObject({
+      sessionKey: "agent:main:discord:direct:123",
+      from: "discord:123",
+      to: "user:123",
+      chatType: "direct",
+    });
+  });
+
+  it("rejects bare numeric Discord targets when the caller has no kind hint", async () => {
+    await expect(
+      resolveOutboundSessionRoute({
+        cfg: { session: { dmScope: "per-channel-peer" } } as OpenClawConfig,
+        channel: "discord",
+        agentId: "main",
+        target: "123",
+      }),
+    ).rejects.toThrow(/Ambiguous Discord recipient/);
   });
 });
 

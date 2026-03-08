@@ -67,6 +67,34 @@ function resolveFailedDir(stateDir?: string): string {
   return path.join(resolveQueueDir(stateDir), FAILED_DIRNAME);
 }
 
+function resolveQueueEntryPaths(
+  id: string,
+  stateDir?: string,
+): {
+  jsonPath: string;
+  deliveredPath: string;
+} {
+  const queueDir = resolveQueueDir(stateDir);
+  return {
+    jsonPath: path.join(queueDir, `${id}.json`),
+    deliveredPath: path.join(queueDir, `${id}.delivered`),
+  };
+}
+
+function getErrnoCode(err: unknown): string | null {
+  return err && typeof err === "object" && "code" in err
+    ? String((err as { code?: unknown }).code)
+    : null;
+}
+
+async function unlinkBestEffort(filePath: string): Promise<void> {
+  try {
+    await fs.promises.unlink(filePath);
+  } catch {
+    // Best-effort cleanup.
+  }
+}
+
 /** Ensure the queue directory (and failed/ subdirectory) exist. */
 export async function ensureQueueDir(stateDir?: string): Promise<string> {
   const queueDir = resolveQueueDir(stateDir);
@@ -117,35 +145,22 @@ export async function enqueueDelivery(
  * by {@link loadPendingDeliveries} on the next startup without re-sending.
  */
 export async function ackDelivery(id: string, stateDir?: string): Promise<void> {
-  const queueDir = resolveQueueDir(stateDir);
-  const jsonPath = path.join(queueDir, `${id}.json`);
-  const deliveredPath = path.join(queueDir, `${id}.delivered`);
+  const { jsonPath, deliveredPath } = resolveQueueEntryPaths(id, stateDir);
   try {
     // Phase 1: atomic rename marks the delivery as complete.
     await fs.promises.rename(jsonPath, deliveredPath);
   } catch (err) {
-    const code =
-      err && typeof err === "object" && "code" in err
-        ? String((err as { code?: unknown }).code)
-        : null;
+    const code = getErrnoCode(err);
     if (code === "ENOENT") {
       // .json already gone — may have been renamed by a previous ack attempt.
       // Try to clean up a leftover .delivered marker if present.
-      try {
-        await fs.promises.unlink(deliveredPath);
-      } catch {
-        // marker already gone — no-op.
-      }
+      await unlinkBestEffort(deliveredPath);
       return;
     }
     throw err;
   }
   // Phase 2: remove the marker file.
-  try {
-    await fs.promises.unlink(deliveredPath);
-  } catch {
-    // Best-effort; loadPendingDeliveries will clean it up on next startup.
-  }
+  await unlinkBestEffort(deliveredPath);
 }
 
 /** Update a queue entry after a failed delivery attempt. */
@@ -171,10 +186,7 @@ export async function loadPendingDeliveries(stateDir?: string): Promise<QueuedDe
   try {
     files = await fs.promises.readdir(queueDir);
   } catch (err) {
-    const code =
-      err && typeof err === "object" && "code" in err
-        ? String((err as { code?: unknown }).code)
-        : null;
+    const code = getErrnoCode(err);
     if (code === "ENOENT") {
       return [];
     }
@@ -186,11 +198,7 @@ export async function loadPendingDeliveries(stateDir?: string): Promise<QueuedDe
     if (!file.endsWith(".delivered")) {
       continue;
     }
-    try {
-      await fs.promises.unlink(path.join(queueDir, file));
-    } catch {
-      // Best-effort cleanup.
-    }
+    await unlinkBestEffort(path.join(queueDir, file));
   }
 
   const entries: QueuedDelivery[] = [];

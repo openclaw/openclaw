@@ -14,6 +14,7 @@ export type GatewayServiceCommand = {
   programArguments: string[];
   workingDirectory?: string;
   environment?: Record<string, string>;
+  environmentValueSources?: Record<string, "inline" | "file">;
   sourcePath?: string;
 } | null;
 
@@ -209,7 +210,7 @@ function auditGatewayToken(
   issues: ServiceConfigIssue[],
   expectedGatewayToken?: string,
 ) {
-  const serviceToken = command?.environment?.OPENCLAW_GATEWAY_TOKEN?.trim();
+  const serviceToken = readEmbeddedGatewayToken(command);
   if (!serviceToken) {
     return;
   }
@@ -230,6 +231,16 @@ function auditGatewayToken(
     detail: "service token is stale",
     level: "recommended",
   });
+}
+
+export function readEmbeddedGatewayToken(command: GatewayServiceCommand): string | undefined {
+  if (!command) {
+    return undefined;
+  }
+  if (command.environmentValueSources?.OPENCLAW_GATEWAY_TOKEN === "file") {
+    return undefined;
+  }
+  return command.environment?.OPENCLAW_GATEWAY_TOKEN?.trim() || undefined;
 }
 
 function getPathModule(platform: NodeJS.Platform) {

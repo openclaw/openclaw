@@ -33,9 +33,11 @@ export type {
 } from "../channels/plugins/onboarding-types.js";
 export { promptChannelAccessConfig } from "../channels/plugins/onboarding/channel-access.js";
 export {
+  buildSingleChannelSecretPromptState,
   addWildcardAllowFrom,
   mergeAllowFromEntries,
   promptSingleChannelSecretInput,
+  setTopLevelChannelGroupPolicy,
 } from "../channels/plugins/onboarding/helpers.js";
 export { PAIRING_APPROVED_MESSAGE } from "../channels/plugins/pairing-message.js";
 export { applyAccountNameToChannelSection } from "../channels/plugins/setup-helpers.js";
@@ -90,7 +92,12 @@ export {
   resolveDmGroupAccessWithLists,
 } from "../security/dm-policy-shared.js";
 export { formatDocsLink } from "../terminal/links.js";
+export { normalizeStringEntries } from "../shared/string-normalization.js";
 export type { WizardPrompter } from "../wizard/prompts.js";
+export {
+  evaluateGroupRouteAccessForPolicy,
+  resolveSenderScopedGroupPolicy,
+} from "./group-access.js";
 export { createScopedPairingAccess } from "./pairing-access.js";
 export { formatResolvedUnresolvedNote } from "./resolution-notes.js";
 export { runPluginCommandWithTimeout } from "./run-command.js";

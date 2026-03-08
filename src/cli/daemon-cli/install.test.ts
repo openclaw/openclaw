@@ -52,6 +52,7 @@ const service = vi.hoisted(() => ({
 
 vi.mock("../../config/config.js", () => ({
   loadConfig: loadConfigMock,
+  readBestEffortConfig: loadConfigMock,
   readConfigFileSnapshot: readConfigFileSnapshotMock,
   resolveGatewayPort: resolveGatewayPortMock,
   writeConfigFile: writeConfigFileMock,
@@ -117,6 +118,13 @@ vi.mock("../../runtime.js", () => ({
     exit: vi.fn(),
   },
 }));
+
+function expectFirstInstallPlanCallOmitsToken() {
+  const [firstArg] =
+    (buildGatewayInstallPlanMock.mock.calls.at(0) as [Record<string, unknown>] | undefined) ?? [];
+  expect(firstArg).toBeDefined();
+  expect(firstArg && "token" in firstArg).toBe(false);
+}
 
 const { runDaemonInstall } = await import("./install.js");
 const envSnapshot = captureFullEnv();
@@ -198,7 +206,7 @@ describe("runDaemonInstall", () => {
 
     expect(actionState.failed).toEqual([]);
     expect(buildGatewayInstallPlanMock).toHaveBeenCalledTimes(1);
-    expect("token" in buildGatewayInstallPlanMock.mock.calls[0][0]).toBe(false);
+    expectFirstInstallPlanCallOmitsToken();
     expect(writeConfigFileMock).not.toHaveBeenCalled();
     expect(
       actionState.warnings.some((warning) =>
@@ -223,7 +231,7 @@ describe("runDaemonInstall", () => {
     expect(actionState.failed).toEqual([]);
     expect(resolveSecretRefValuesMock).toHaveBeenCalledTimes(1);
     expect(buildGatewayInstallPlanMock).toHaveBeenCalledTimes(1);
-    expect("token" in buildGatewayInstallPlanMock.mock.calls[0][0]).toBe(false);
+    expectFirstInstallPlanCallOmitsToken();
   });
 
   it("auto-mints and persists token when no source exists", async () => {
@@ -245,8 +253,31 @@ describe("runDaemonInstall", () => {
     expect(buildGatewayInstallPlanMock).toHaveBeenCalledWith(
       expect.objectContaining({ port: 18789 }),
     );
-    expect("token" in buildGatewayInstallPlanMock.mock.calls[0][0]).toBe(false);
+    expectFirstInstallPlanCallOmitsToken();
     expect(installDaemonServiceAndEmitMock).toHaveBeenCalledTimes(1);
     expect(actionState.warnings.some((warning) => warning.includes("Auto-generated"))).toBe(true);
+  });
+
+  it("continues Linux install when service probe hits a non-fatal systemd bus failure", async () => {
+    service.isLoaded.mockRejectedValueOnce(
+      new Error("systemctl is-enabled unavailable: Failed to connect to bus"),
+    );
+
+    await runDaemonInstall({ json: true });
+
+    expect(actionState.failed).toEqual([]);
+    expect(installDaemonServiceAndEmitMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("fails install when service probe reports an unrelated error", async () => {
+    service.isLoaded.mockRejectedValueOnce(
+      new Error("systemctl is-enabled unavailable: read-only file system"),
+    );
+
+    await runDaemonInstall({ json: true });
+
+    expect(actionState.failed[0]?.message).toContain("Gateway service check failed");
+    expect(actionState.failed[0]?.message).toContain("read-only file system");
+    expect(installDaemonServiceAndEmitMock).not.toHaveBeenCalled();
   });
 });

@@ -16,11 +16,13 @@ export type {
   ChannelOnboardingDmPolicy,
 } from "../channels/plugins/onboarding-types.js";
 export {
+  buildSingleChannelSecretPromptState,
   addWildcardAllowFrom,
   mergeAllowFromEntries,
   promptAccountId,
   promptSingleChannelSecretInput,
   resolveAccountIdForConfigure,
+  setTopLevelChannelDmPolicyWithAllowFrom,
 } from "../channels/plugins/onboarding/helpers.js";
 export { PAIRING_APPROVED_MESSAGE } from "../channels/plugins/pairing-message.js";
 export {
@@ -39,6 +41,8 @@ export type {
 } from "../channels/plugins/types.js";
 export type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
 export { createReplyPrefixOptions } from "../channels/reply-prefix.js";
+export { logTypingFailure } from "../channels/logging.js";
+export { createTypingCallbacks } from "../channels/typing.js";
 export type { OpenClawConfig } from "../config/config.js";
 export {
   resolveDefaultGroupPolicy,
@@ -54,6 +58,7 @@ export {
 } from "../config/types.secrets.js";
 export { buildSecretInputSchema } from "./secret-input-schema.js";
 export { MarkdownConfigSchema } from "../config/zod-schema.core.js";
+export { waitForAbortSignal } from "../infra/abort-signal.js";
 export { createDedupeCache } from "../infra/dedupe.js";
 export { emptyPluginConfigSchema } from "../plugins/config-schema.js";
 export type { PluginRuntime } from "../plugins/runtime/types.js";
@@ -104,6 +109,8 @@ export type {
 export {
   registerWebhookTarget,
   registerWebhookTargetWithPluginRoute,
+  resolveWebhookTargetWithAuthOrRejectSync,
   resolveSingleWebhookTarget,
   resolveWebhookTargets,
+  withResolvedWebhookRequestPipeline,
 } from "./webhook-targets.js";

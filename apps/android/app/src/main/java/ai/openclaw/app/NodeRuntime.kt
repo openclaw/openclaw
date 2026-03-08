@@ -50,7 +50,6 @@ class NodeRuntime(context: Context) {
   val canvas = CanvasController()
   val camera = CameraCaptureManager(appContext)
   val location = LocationCaptureManager(appContext)
-  val screenRecorder = ScreenRecordManager(appContext)
   val sms = SmsManager(appContext)
   private val json = Json { ignoreUnknownKeys = true }
 
@@ -77,17 +76,11 @@ class NodeRuntime(context: Context) {
     identityStore = identityStore,
   )
 
-  private val appUpdateHandler: AppUpdateHandler = AppUpdateHandler(
-    appContext = appContext,
-    connectedEndpoint = { connectedEndpoint },
-  )
-
   private val locationHandler: LocationHandler = LocationHandler(
     appContext = appContext,
     location = location,
     json = json,
     isForeground = { _isForeground.value },
-    locationMode = { locationMode.value },
     locationPreciseEnabled = { locationPreciseEnabled.value },
   )
 
@@ -117,12 +110,6 @@ class NodeRuntime(context: Context) {
 
   private val motionHandler: MotionHandler = MotionHandler(
     appContext = appContext,
-  )
-
-  private val screenHandler: ScreenHandler = ScreenHandler(
-    screenRecorder = screenRecorder,
-    setScreenRecordActive = { _screenRecordActive.value = it },
-    invokeErrorFromThrowable = { invokeErrorFromThrowable(it) },
   )
 
   private val smsHandlerImpl: SmsHandler = SmsHandler(
@@ -159,11 +146,9 @@ class NodeRuntime(context: Context) {
     contactsHandler = contactsHandler,
     calendarHandler = calendarHandler,
     motionHandler = motionHandler,
-    screenHandler = screenHandler,
     smsHandler = smsHandlerImpl,
     a2uiHandler = a2uiHandler,
     debugHandler = debugHandler,
-    appUpdateHandler = appUpdateHandler,
     isForeground = { _isForeground.value },
     cameraEnabled = { cameraEnabled.value },
     locationEnabled = { locationMode.value != LocationMode.Off },
@@ -205,9 +190,6 @@ class NodeRuntime(context: Context) {
 
   private val _cameraFlashToken = MutableStateFlow(0L)
   val cameraFlashToken: StateFlow<Long> = _cameraFlashToken.asStateFlow()
-
-  private val _screenRecordActive = MutableStateFlow(false)
-  val screenRecordActive: StateFlow<Boolean> = _screenRecordActive.asStateFlow()
 
   private val _canvasA2uiHydrated = MutableStateFlow(false)
   val canvasA2uiHydrated: StateFlow<Boolean> = _canvasA2uiHydrated.asStateFlow()
@@ -623,6 +605,9 @@ class NodeRuntime(context: Context) {
 
   fun setForeground(value: Boolean) {
     _isForeground.value = value
+    if (!value) {
+      stopActiveVoiceSession()
+    }
   }
 
   fun setDisplayName(value: String) {
@@ -667,11 +652,7 @@ class NodeRuntime(context: Context) {
 
   fun setVoiceScreenActive(active: Boolean) {
     if (!active) {
-      // User left voice screen — stop mic and TTS
-      talkMode.ttsOnAllResponses = false
-      talkMode.stopTts()
-      micCapture.setMicEnabled(false)
-      prefs.setTalkEnabled(false)
+      stopActiveVoiceSession()
     }
     // Don't re-enable on active=true; mic toggle drives that
   }
@@ -698,6 +679,14 @@ class NodeRuntime(context: Context) {
     }
     // Keep TalkMode in sync so speaker mute works when ttsOnAllResponses is active.
     talkMode.setPlaybackEnabled(value)
+  }
+
+  private fun stopActiveVoiceSession() {
+    talkMode.ttsOnAllResponses = false
+    talkMode.stopTts()
+    micCapture.setMicEnabled(false)
+    prefs.setTalkEnabled(false)
+    externalAudioCaptureActive.value = false
   }
 
   fun refreshGatewayConnection() {

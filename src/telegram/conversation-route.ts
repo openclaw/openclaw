@@ -4,6 +4,7 @@ import { logVerbose } from "../globals.js";
 import { getSessionBindingService } from "../infra/outbound/session-binding-service.js";
 import {
   buildAgentSessionKey,
+  deriveLastRoutePolicy,
   pickFirstExistingAgentId,
   resolveAgentRoute,
 } from "../routing/resolve-route.js";
@@ -67,6 +68,19 @@ export function resolveTelegramConversationRoute(params: {
       mainSessionKey: buildAgentMainSessionKey({
         agentId: topicAgentId,
       }).toLowerCase(),
+      lastRoutePolicy: deriveLastRoutePolicy({
+        sessionKey: buildAgentSessionKey({
+          agentId: topicAgentId,
+          channel: "telegram",
+          accountId: params.accountId,
+          peer: { kind: params.isGroup ? "group" : "direct", id: peerId },
+          dmScope: params.cfg.session?.dmScope,
+          identityLinks: params.cfg.session?.identityLinks,
+        }).toLowerCase(),
+        mainSessionKey: buildAgentMainSessionKey({
+          agentId: topicAgentId,
+        }).toLowerCase(),
+      }),
     };
     logVerbose(
       `telegram: topic route override: topic=${params.resolvedThreadId ?? params.replyThreadId} agent=${topicAgentId} sessionKey=${route.sessionKey}`,
@@ -103,6 +117,10 @@ export function resolveTelegramConversationRoute(params: {
         ...route,
         sessionKey: boundSessionKey,
         agentId: resolveAgentIdFromSessionKey(boundSessionKey),
+        lastRoutePolicy: deriveLastRoutePolicy({
+          sessionKey: boundSessionKey,
+          mainSessionKey: route.mainSessionKey,
+        }),
         matchedBy: "binding.channel",
       };
       configuredBinding = null;

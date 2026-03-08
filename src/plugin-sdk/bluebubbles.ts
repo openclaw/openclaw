@@ -40,6 +40,7 @@ export {
   mergeAllowFromEntries,
   promptAccountId,
   resolveAccountIdForConfigure,
+  setTopLevelChannelDmPolicyWithAllowFrom,
 } from "../channels/plugins/onboarding/helpers.js";
 export { PAIRING_APPROVED_MESSAGE } from "../channels/plugins/pairing-message.js";
 export {
@@ -87,6 +88,7 @@ export { formatDocsLink } from "../terminal/links.js";
 export type { WizardPrompter } from "../wizard/prompts.js";
 export { isAllowedParsedChatSender } from "./allow-from.js";
 export { readBooleanParam } from "./boolean-param.js";
+export { mapAllowFromEntries } from "./channel-config-helpers.js";
 export { createScopedPairingAccess } from "./pairing-access.js";
 export { issuePairingChallenge } from "../pairing/pairing-challenge.js";
 export { resolveRequestUrl } from "./request-url.js";
@@ -105,4 +107,5 @@ export {
   registerWebhookTargetWithPluginRoute,
   resolveWebhookTargets,
   resolveWebhookTargetWithAuthOrRejectSync,
+  withResolvedWebhookRequestPipeline,
 } from "./webhook-targets.js";

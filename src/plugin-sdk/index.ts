@@ -133,6 +133,7 @@ export { isDangerousNameMatchingEnabled } from "../config/dangerous-name-matchin
 export type { FileLockHandle, FileLockOptions } from "./file-lock.js";
 export { acquireFileLock, withFileLock } from "./file-lock.js";
 export {
+  mapAllowlistResolutionInputs,
   mapBasicAllowlistResolutionEntries,
   type BasicAllowlistResolutionEntry,
 } from "./allowlist-resolution.js";
@@ -154,6 +155,7 @@ export {
   resolveSingleWebhookTarget,
   resolveSingleWebhookTargetAsync,
   resolveWebhookTargets,
+  withResolvedWebhookRequestPipeline,
 } from "./webhook-targets.js";
 export type {
   RegisterWebhookPluginRouteOptions,
@@ -272,11 +274,20 @@ export {
 } from "../routing/session-key.js";
 export {
   formatAllowFromLowercase,
+  formatNormalizedAllowFromEntries,
   isAllowedParsedChatSender,
   isNormalizedSenderAllowed,
 } from "./allow-from.js";
 export {
+  evaluateGroupRouteAccessForPolicy,
+  evaluateMatchedGroupAccessForPolicy,
   evaluateSenderGroupAccess,
+  evaluateSenderGroupAccessForPolicy,
+  resolveSenderScopedGroupPolicy,
+  type GroupRouteAccessDecision,
+  type GroupRouteAccessReason,
+  type MatchedGroupAccessDecision,
+  type MatchedGroupAccessReason,
   type SenderGroupAccessDecision,
   type SenderGroupAccessReason,
 } from "./group-access.js";
@@ -369,7 +380,10 @@ export type { ChunkMode } from "../auto-reply/chunk.js";
 export { SILENT_REPLY_TOKEN, isSilentReplyText } from "../auto-reply/tokens.js";
 export { formatInboundFromLabel } from "../auto-reply/envelope.js";
 export {
+  createScopedAccountConfigAccessors,
   formatTrimmedAllowFromEntries,
+  mapAllowFromEntries,
+  resolveOptionalConfigString,
   formatWhatsAppConfigAllowFromEntries,
   resolveIMessageConfigAllowFrom,
   resolveIMessageConfigDefaultTo,
@@ -514,6 +528,12 @@ export type { PollInput } from "../polls.js";
 
 export { buildChannelConfigSchema } from "../channels/plugins/config-schema.js";
 export {
+  listDirectoryGroupEntriesFromMapKeys,
+  listDirectoryGroupEntriesFromMapKeysAndAllowFrom,
+  listDirectoryUserEntriesFromAllowFrom,
+  listDirectoryUserEntriesFromAllowFromAndMapKeys,
+} from "../channels/plugins/directory-config-helpers.js";
+export {
   clearAccountEntryFields,
   deleteAccountFromConfigSection,
   setAccountEnabledInConfigSection,
@@ -522,7 +542,22 @@ export {
   applyAccountNameToChannelSection,
   migrateBaseNameToDefaultAccount,
 } from "../channels/plugins/setup-helpers.js";
-export { formatPairingApproveHint } from "../channels/plugins/helpers.js";
+export {
+  buildOpenGroupPolicyConfigureRouteAllowlistWarning,
+  buildOpenGroupPolicyNoRouteAllowlistWarning,
+  buildOpenGroupPolicyRestrictSendersWarning,
+  buildOpenGroupPolicyWarning,
+  collectAllowlistProviderGroupPolicyWarnings,
+  collectAllowlistProviderRestrictSendersWarnings,
+  collectOpenProviderGroupPolicyWarnings,
+  collectOpenGroupPolicyConfiguredRouteWarnings,
+  collectOpenGroupPolicyRestrictSendersWarnings,
+  collectOpenGroupPolicyRouteAllowlistWarnings,
+} from "../channels/plugins/group-policy-warnings.js";
+export {
+  buildAccountScopedDmSecurityPolicy,
+  formatPairingApproveHint,
+} from "../channels/plugins/helpers.js";
 export { PAIRING_APPROVED_MESSAGE } from "../channels/plugins/pairing-message.js";
 
 export type {
@@ -533,6 +568,10 @@ export {
   addWildcardAllowFrom,
   mergeAllowFromEntries,
   promptAccountId,
+  resolveAccountIdForConfigure,
+  setTopLevelChannelAllowFrom,
+  setTopLevelChannelDmPolicyWithAllowFrom,
+  setTopLevelChannelGroupPolicy,
 } from "../channels/plugins/onboarding/helpers.js";
 export { promptChannelAccessConfig } from "../channels/plugins/onboarding/channel-access.js";
 

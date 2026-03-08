@@ -43,6 +43,8 @@ export const logWarnMock = createMock();
 export const countActiveDescendantRunsMock = createMock();
 export const listDescendantRunsForRequesterMock = createMock();
 export const pickLastNonEmptyTextFromPayloadsMock = createMock();
+export const resolveCronDeliveryPlanMock = createMock();
+export const resolveDeliveryTargetMock = createMock();
 
 vi.mock("../../agents/agent-scope.js", () => ({
   resolveAgentConfig: resolveAgentConfigMock,
@@ -177,16 +179,11 @@ vi.mock("../../security/external-content.js", () => ({
 }));
 
 vi.mock("../delivery.js", () => ({
-  resolveCronDeliveryPlan: vi.fn().mockReturnValue({ requested: false }),
+  resolveCronDeliveryPlan: resolveCronDeliveryPlanMock,
 }));
 
 vi.mock("./delivery-target.js", () => ({
-  resolveDeliveryTarget: vi.fn().mockResolvedValue({
-    channel: "discord",
-    to: undefined,
-    accountId: undefined,
-    error: undefined,
-  }),
+  resolveDeliveryTarget: resolveDeliveryTargetMock,
 }));
 
 vi.mock("./helpers.js", () => ({
@@ -286,6 +283,15 @@ export function resetRunCronIsolatedAgentTurnHarness(): void {
   listDescendantRunsForRequesterMock.mockReturnValue([]);
   pickLastNonEmptyTextFromPayloadsMock.mockReset();
   pickLastNonEmptyTextFromPayloadsMock.mockReturnValue("test output");
+  resolveCronDeliveryPlanMock.mockReset();
+  resolveCronDeliveryPlanMock.mockReturnValue({ requested: false, mode: "none" });
+  resolveDeliveryTargetMock.mockReset();
+  resolveDeliveryTargetMock.mockResolvedValue({
+    channel: "discord",
+    to: undefined,
+    accountId: undefined,
+    error: undefined,
+  });
 
   logWarnMock.mockReset();
 }

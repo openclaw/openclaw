@@ -668,7 +668,9 @@ export async function runEmbeddedPiAgent(
         const allowTransientCooldownProbe =
           params.allowTransientCooldownProbe === true &&
           allAutoProfilesInCooldown &&
-          (unavailableReason === "rate_limit" || unavailableReason === "overloaded");
+          (unavailableReason === "rate_limit" ||
+            unavailableReason === "overloaded" ||
+            unavailableReason === "billing");
         let didTransientCooldownProbe = false;
 
         while (profileIndex < profileCandidates.length) {
@@ -1023,7 +1025,7 @@ export async function runEmbeddedPiAgent(
                 tokenBudget: ctxInfo.tokens,
                 force: true,
                 compactionTarget: "budget",
-                legacyParams: {
+                runtimeContext: {
                   sessionKey: params.sessionKey,
                   messageChannel: params.messageChannel,
                   messageProvider: params.messageProvider,

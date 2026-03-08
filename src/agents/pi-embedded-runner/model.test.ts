@@ -638,6 +638,32 @@ describe("resolveModel", () => {
     });
   });
 
+  it("uses codex fallback when inline model omits api (#39682)", () => {
+    mockOpenAICodexTemplateModel();
+
+    const cfg: OpenClawConfig = {
+      models: {
+        providers: {
+          "openai-codex": {
+            baseUrl: "https://custom.example.com",
+            headers: { "X-Custom-Auth": "token-123" },
+            models: [{ id: "gpt-5.4" }],
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    const result = resolveModel("openai-codex", "gpt-5.4", "/tmp/agent", cfg);
+    expect(result.error).toBeUndefined();
+    expect(result.model).toMatchObject({
+      api: "openai-codex-responses",
+      baseUrl: "https://custom.example.com",
+      headers: { "X-Custom-Auth": "token-123" },
+      id: "gpt-5.4",
+      provider: "openai-codex",
+    });
+  });
+
   it("includes auth hint for unknown ollama models (#17328)", () => {
     // resetMockDiscoverModels() in beforeEach already sets find → null
     const result = resolveModel("ollama", "gemma3:4b", "/tmp/agent");
