@@ -255,6 +255,38 @@ export async function listSlackEmojis(opts: SlackActionClientOpts = {}) {
   return await client.emoji.list();
 }
 
+export async function listSlackThreads(
+  channelId: string,
+  opts: SlackActionClientOpts & {
+    limit?: number;
+    before?: string;
+    after?: string;
+  } = {},
+): Promise<{ threads: SlackMessageSummary[]; hasMore: boolean }> {
+  const client = await getClient(opts);
+
+  // Note: limit applies to the underlying message fetch, not the filtered thread count.
+  // The actual number of threads returned may be less than limit since we filter
+  // client-side for messages with replies.
+  const result = await client.conversations.history({
+    channel: channelId,
+    limit: opts.limit,
+    latest: opts.before,
+    oldest: opts.after,
+  });
+
+  // Filter messages that have replies (thread_ts exists and reply_count > 0)
+  const threads = (result.messages ?? []).filter((msg) => {
+    const message = msg as SlackMessageSummary;
+    return message.thread_ts && (message.reply_count ?? 0) > 0;
+  }) as SlackMessageSummary[];
+
+  return {
+    threads,
+    hasMore: Boolean(result.has_more),
+  };
+}
+
 export async function pinSlackMessage(
   channelId: string,
   messageId: string,
