@@ -141,7 +141,11 @@ export async function geminiAnalyzePdf(params: {
     /\/+$/,
     "",
   );
-  const url = `${baseUrl}/v1beta/models/${encodeURIComponent(params.modelId)}:generateContent?key=${encodeURIComponent(apiKey)}`;
+  // Strip provider prefix if present (e.g., "google/gemini-2.0-flash" -> "gemini-2.0-flash")
+  // This matches parseModelRef behavior which keeps the full model ID after the first slash.
+  const slashIndex = params.modelId.indexOf("/");
+  const actualModelId = slashIndex !== -1 ? params.modelId.slice(slashIndex + 1) : params.modelId;
+  const url = `${baseUrl}/v1beta/models/${encodeURIComponent(actualModelId)}:generateContent?key=${encodeURIComponent(apiKey)}`;
 
   const res = await fetch(url, {
     method: "POST",
