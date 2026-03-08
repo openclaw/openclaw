@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { describe, expect, test, vi } from "vitest";
 import type { GetReplyOptions } from "../auto-reply/types.js";
+import { extractTextFromChatContent } from "../shared/chat-content.js";
 import { __setMaxChatHistoryMessagesBytesForTest } from "./server-constants.js";
 import {
   connectOk,
@@ -175,6 +176,83 @@ describe("gateway server chat", () => {
         testState.agentConfig = undefined;
       }
     });
+  });
+
+  test("chat.history preserves multiline newlines from transcript entries", async () => {
+    await withGatewayChatHarness(async ({ ws, createSessionDir }) => {
+      await connectOk(ws);
+
+      const sessionDir = await createSessionDir();
+      await writeMainSessionStore();
+
+      const multiline = "line 1\nline 2";
+      await writeMainSessionTranscript(sessionDir, [
+        JSON.stringify({
+          message: {
+            role: "user",
+            content: [{ type: "text", text: multiline }],
+            timestamp: Date.now(),
+          },
+        }),
+      ]);
+
+      await vi.waitFor(async () => {
+        const messages = await fetchHistoryMessages(ws);
+        const historyUserMessage = messages.find(
+          (entry) =>
+            entry && typeof entry === "object" && (entry as { role?: unknown }).role === "user",
+        ) as { content?: Array<{ text?: string }> } | undefined;
+        expect(historyUserMessage?.content?.[0]?.text).toBe(multiline);
+      }, FAST_WAIT_OPTS);
+    });
+  });
+
+  test("chat.send forwards leading and trailing multiline newlines without backend trimming", async () => {
+    await withGatewayChatHarness(async ({ ws, createSessionDir }) => {
+      await connectOk(ws);
+
+      await createSessionDir();
+      await writeMainSessionStore();
+
+      const spy = getReplyFromConfig;
+      spy.mockClear();
+      let capturedCtx:
+        | {
+            Body?: string;
+            RawBody?: string;
+            BodyForCommands?: string;
+          }
+        | undefined;
+      spy.mockImplementationOnce(async (ctx: unknown) => {
+        capturedCtx = ctx as {
+          Body?: string;
+          RawBody?: string;
+          BodyForCommands?: string;
+        };
+        return undefined;
+      });
+
+      const multilineWithEdges = "\nline 1\nline 2\n";
+      const sendRes = await rpcReq(ws, "chat.send", {
+        sessionKey: "main",
+        message: multilineWithEdges,
+        idempotencyKey: "idem-multiline-history-edges",
+      });
+      expect(sendRes.ok).toBe(true);
+
+      await vi.waitFor(() => {
+        expect(spy.mock.calls.length).toBeGreaterThan(0);
+      }, FAST_WAIT_OPTS);
+
+      expect(capturedCtx?.Body).toBe(multilineWithEdges);
+      expect(capturedCtx?.RawBody).toBe(multilineWithEdges);
+      expect(capturedCtx?.BodyForCommands).toBe(multilineWithEdges);
+    });
+  });
+
+  test("extractTextFromChatContent default normalization collapses multiline text", () => {
+    const content = [{ type: "text", text: "\nline 1\nline 2\n" }];
+    expect(extractTextFromChatContent(content)).toBe("line 1 line 2");
   });
 
   test("chat.history hard-caps single oversized nested payloads", async () => {
