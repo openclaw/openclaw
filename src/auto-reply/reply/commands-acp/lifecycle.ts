@@ -53,6 +53,10 @@ import {
 } from "./shared.js";
 import { resolveAcpTargetSessionKey } from "./targets.js";
 
+function isThreadScopedConversationId(conversationId: string): boolean {
+  return conversationId.includes(":thread:") || conversationId.includes(":topic:");
+}
+
 async function bindSpawnedAcpSessionToThread(params: {
   commandParams: HandleCommandsParams;
   sessionKey: string;
@@ -126,10 +130,11 @@ async function bindSpawnedAcpSessionToThread(params: {
 
   const currentThreadId = bindingContext.threadId ?? "";
   const currentConversationId = bindingContext.conversationId?.trim() || "";
+  const hasThreadScopedConversation = isThreadScopedConversationId(currentConversationId);
   const requiresThreadIdForHere = channel !== "telegram";
   if (
     threadMode === "here" &&
-    ((requiresThreadIdForHere && !currentThreadId) ||
+    ((requiresThreadIdForHere && !currentThreadId && !hasThreadScopedConversation) ||
       (!requiresThreadIdForHere && !currentConversationId))
   ) {
     return {
@@ -139,7 +144,10 @@ async function bindSpawnedAcpSessionToThread(params: {
   }
 
   const placement: "current" | "child" =
-    threadMode === "here" || currentThreadId || !capabilities.placements.includes("child")
+    threadMode === "here" ||
+    currentThreadId ||
+    hasThreadScopedConversation ||
+    !capabilities.placements.includes("child")
       ? "current"
       : "child";
   if (!capabilities.placements.includes(placement)) {

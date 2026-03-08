@@ -55,6 +55,34 @@ function resolveNativeConversationId(params: HandleCommandsParams): string | und
   return nativeConversationId || undefined;
 }
 
+function isThreadScopedConversationId(conversationId: string | undefined): boolean {
+  return (
+    typeof conversationId === "string" &&
+    (conversationId.includes(":thread:") || conversationId.includes(":topic:"))
+  );
+}
+
+function resolveFeishuCurrentThreadConversationId(
+  params: HandleCommandsParams,
+): string | undefined {
+  if (resolveAcpCommandChannel(params) !== "feishu") {
+    return undefined;
+  }
+  const nativeConversationId = resolveNativeConversationId(params);
+  if (isThreadScopedConversationId(nativeConversationId)) {
+    return nativeConversationId;
+  }
+  const threadParentId = normalizeString(params.ctx.ThreadParentId);
+  const currentMessageId = resolveAcpCommandCurrentMessageId(params);
+  if (!threadParentId || !currentMessageId) {
+    return undefined;
+  }
+  // Feishu follow-up events can omit root_id while still remaining inside the
+  // current topic. In that case, anchor the thread binding to the current
+  // message until the plugin records the native thread alias.
+  return `${threadParentId}:thread:${currentMessageId}`;
+}
+
 export function resolveAcpCommandConversationId(params: HandleCommandsParams): string | undefined {
   const channel = resolveAcpCommandChannel(params);
   if (channel === "telegram") {
@@ -81,6 +109,10 @@ export function resolveAcpCommandConversationId(params: HandleCommandsParams): s
         }) ?? threadId
       );
     }
+  }
+  const feishuCurrentThreadConversationId = resolveFeishuCurrentThreadConversationId(params);
+  if (feishuCurrentThreadConversationId) {
+    return feishuCurrentThreadConversationId;
   }
   const nativeConversationId = resolveNativeConversationId(params);
   if (nativeConversationId) {

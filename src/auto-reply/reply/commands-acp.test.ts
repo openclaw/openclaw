@@ -368,6 +368,21 @@ function createFeishuThreadParams(commandBody: string, cfg: OpenClawConfig = bas
   return params;
 }
 
+function createFeishuRootlessThreadParams(commandBody: string, cfg: OpenClawConfig = baseCfg) {
+  const params = buildCommandTestParams(commandBody, cfg, {
+    Provider: "feishu",
+    Surface: "feishu",
+    OriginatingChannel: "feishu",
+    OriginatingTo: "chat:oc_thread_chat",
+    AccountId: "default",
+    NativeChannelId: "oc_thread_chat",
+    ThreadParentId: "oc_thread_chat",
+    MessageSid: "om_followup_99",
+  });
+  params.command.senderId = "user-1";
+  return params;
+}
+
 function createFeishuDmParams(commandBody: string, cfg: OpenClawConfig = baseCfg) {
   const params = buildCommandTestParams(commandBody, cfg, {
     Provider: "feishu",
@@ -400,6 +415,10 @@ async function runTelegramDmAcpCommand(commandBody: string, cfg: OpenClawConfig 
 
 async function runFeishuAcpCommand(commandBody: string, cfg: OpenClawConfig = baseCfg) {
   return handleAcpCommand(createFeishuThreadParams(commandBody, cfg), true);
+}
+
+async function runFeishuRootlessAcpCommand(commandBody: string, cfg: OpenClawConfig = baseCfg) {
+  return handleAcpCommand(createFeishuRootlessThreadParams(commandBody, cfg), true);
 }
 
 async function runFeishuDmAcpCommand(commandBody: string, cfg: OpenClawConfig = baseCfg) {
@@ -631,6 +650,23 @@ describe("/acp command", () => {
           channel: "feishu",
           accountId: "default",
           conversationId: "oc_thread_chat:thread:om_root_498",
+        }),
+      }),
+    );
+  });
+
+  it("binds Feishu rootless thread ACP spawns to the current topic conversation", async () => {
+    const result = await runFeishuRootlessAcpCommand("/acp spawn codex --thread here");
+
+    expect(result?.reply?.text).toContain("Spawned ACP session agent:codex:acp:");
+    expect(result?.reply?.text).toContain("Bound this thread to");
+    expect(hoisted.sessionBindingBindMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        placement: "current",
+        conversation: expect.objectContaining({
+          channel: "feishu",
+          accountId: "default",
+          conversationId: "oc_thread_chat:thread:om_followup_99",
         }),
       }),
     );

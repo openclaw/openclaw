@@ -1920,7 +1920,7 @@ describe("handleFeishuMessage command authorization", () => {
         SessionKey: "agent:codex:acp:test-bound-session",
         MessageThreadId: undefined,
         RootMessageId: undefined,
-        NativeChannelId: "oc-dm-thread",
+        NativeChannelId: "oc-dm-thread:thread:om_dm_topic_root",
       }),
     );
   });

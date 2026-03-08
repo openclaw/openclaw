@@ -170,4 +170,27 @@ describe("commands-acp context", () => {
     });
     expect(resolveAcpCommandConversationId(params)).toBe("oc_dm_chat");
   });
+
+  it("synthesizes a Feishu thread conversation when root_id is absent", () => {
+    const params = buildCommandTestParams("/acp spawn codex --thread here", baseCfg, {
+      Provider: "feishu",
+      Surface: "feishu",
+      OriginatingChannel: "feishu",
+      OriginatingTo: "chat:oc_thread_chat",
+      AccountId: "work",
+      NativeChannelId: "oc_thread_chat",
+      ThreadParentId: "oc_thread_chat",
+      MessageSid: "om_followup_99",
+    });
+
+    expect(resolveAcpCommandBindingContext(params)).toEqual({
+      channel: "feishu",
+      accountId: "work",
+      threadId: undefined,
+      conversationId: "oc_thread_chat:thread:om_followup_99",
+      parentConversationId: undefined,
+      currentMessageId: "om_followup_99",
+    });
+    expect(resolveAcpCommandConversationId(params)).toBe("oc_thread_chat:thread:om_followup_99");
+  });
 });

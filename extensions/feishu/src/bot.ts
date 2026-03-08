@@ -82,6 +82,23 @@ function resolveFeishuThreadRootMessageId(ctx: FeishuMessageContext): string | u
   return undefined;
 }
 
+function resolveFeishuNativeConversationId(params: {
+  chatId: string;
+  threadRootMessageId?: string;
+  threadBindingConversationId?: string;
+}): string {
+  const boundConversationId = params.threadBindingConversationId?.trim();
+  if (boundConversationId) {
+    return boundConversationId;
+  }
+  return (
+    buildFeishuThreadConversationId({
+      chatId: params.chatId,
+      rootMessageId: params.threadRootMessageId,
+    }) ?? params.chatId
+  );
+}
+
 function correctFeishuScopeInUrl(url: string): string {
   let corrected = url;
   for (const [wrong, right] of Object.entries(FEISHU_SCOPE_CORRECTIONS)) {
@@ -1216,6 +1233,9 @@ export async function handleFeishuMessage(params: {
       chatId: ctx.chatId,
       rootMessageId: threadRootMessageId,
     });
+    let threadBinding = null as ReturnType<
+      ReturnType<typeof getSessionBindingService>["resolveByConversation"]
+    >;
     if (threadConversationId || ctx.threadId?.trim()) {
       const resolveThreadBinding = () =>
         (threadConversationId
@@ -1232,7 +1252,7 @@ export async function handleFeishuMessage(params: {
               nativeThreadId: ctx.threadId,
             })
           : null);
-      let threadBinding = resolveThreadBinding();
+      threadBinding = resolveThreadBinding();
       if (!threadBinding && shouldRehydrateFeishuThreadBindings(account.accountId)) {
         // ACP thread binding can be created by a different module instance than the
         // Feishu monitor. Rehydrate the local manager from disk once before giving up.
@@ -1405,11 +1425,11 @@ export async function handleFeishuMessage(params: {
       agentAccountId: string,
       wasMentioned: boolean,
     ) => {
-      const nativeConversationId =
-        buildFeishuThreadConversationId({
-          chatId: ctx.chatId,
-          rootMessageId: threadRootMessageId,
-        }) ?? ctx.chatId;
+      const nativeConversationId = resolveFeishuNativeConversationId({
+        chatId: ctx.chatId,
+        threadRootMessageId,
+        threadBindingConversationId: threadBinding?.conversation.conversationId,
+      });
       return core.channel.reply.finalizeInboundContext({
         Body: combinedBody,
         BodyForAgent: messageBody,
