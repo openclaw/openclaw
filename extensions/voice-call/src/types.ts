@@ -227,6 +227,11 @@ export type HangupCallInput = {
   reason: EndReason;
 };
 
+export type AnswerCallInput = {
+  callId: CallId;
+  providerCallId: ProviderCallId;
+};
+
 export type PlayTtsInput = {
   callId: CallId;
   providerCallId: ProviderCallId;
@@ -302,3 +307,4 @@ export type EndCallToolResult = {
   success: boolean;
   error?: string;
 };
+
