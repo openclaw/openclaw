@@ -200,6 +200,60 @@ function isAnthropicBedrockModel(modelId: string): boolean {
   return normalized.includes("anthropic.claude") || normalized.includes("anthropic/claude");
 }
 
+/**
+ * Detect `[1m]` suffix in model ID, indicating 1M context window request.
+ * Supports both explicit suffix and `context1m: true` config for Bedrock.
+ */
+function hasBedrockContext1mSuffix(modelId: string): boolean {
+  return /\[1m\]$/i.test(modelId);
+}
+
+/**
+ * Strip the `[1m]` suffix from a model ID for Bedrock API calls.
+ * Bedrock doesn't recognize the suffix; it's an OpenClaw convention.
+ */
+function stripContext1mSuffix(modelId: string): string {
+  return modelId.replace(/\[1m\]$/i, "");
+}
+
+/**
+ * Create a streamFn wrapper for Amazon Bedrock that:
+ * 1. Strips `[1m]` suffix from model ID before sending to Bedrock API
+ * 2. Injects `anthropic_beta: ["context-1m-2025-08-07"]` via additionalModelRequestFields
+ *
+ * This enables Anthropic's 1M context window beta on Bedrock's Converse API,
+ * consistent with how `context1m` works for the direct Anthropic provider.
+ */
+function createBedrockContext1mWrapper(baseStreamFn: StreamFn | undefined): StreamFn {
+  const underlying = baseStreamFn ?? streamSimple;
+  return (model, context, options) => {
+    // Strip [1m] from model ID so Bedrock receives a valid model identifier
+    const cleanModel = {
+      ...model,
+      id: stripContext1mSuffix(model.id),
+    } as typeof model;
+
+    const originalOnPayload = options?.onPayload;
+    return underlying(cleanModel, context, {
+      ...options,
+      onPayload: (payload) => {
+        if (payload && typeof payload === "object") {
+          const payloadObj = payload as Record<string, unknown>;
+          const existing = payloadObj.additionalModelRequestFields as
+            | Record<string, unknown>
+            | undefined;
+          const existingBetas = (existing?.anthropic_beta ?? []) as string[];
+          payloadObj.additionalModelRequestFields = {
+            ...existing,
+            anthropic_beta: [...new Set([...existingBetas, ANTHROPIC_CONTEXT_1M_BETA])],
+          };
+        }
+        originalOnPayload?.(payload);
+      },
+    });
+  };
+}
+
 function createBedrockNoCacheWrapper(baseStreamFn: StreamFn | undefined): StreamFn {
   const underlying = baseStreamFn ?? streamSimple;
   return (model, context, options) =>
@@ -1270,6 +1324,19 @@ export function applyExtraParamsToAgent(
   if (provider === "amazon-bedrock" && !isAnthropicBedrockModel(modelId)) {
     log.debug(`disabling prompt caching for non-Anthropic Bedrock model ${provider}/${modelId}`);
     agent.streamFn = createBedrockNoCacheWrapper(agent.streamFn);
+  }
+
+  // Support 1M context window for Anthropic models on Bedrock.
+  // Activated by `[1m]` suffix in model ID (e.g. "global.anthropic.claude-opus-4-6-v1[1m]")
+  // or `context1m: true` in model params. Strips the suffix and injects
+  // anthropic_beta via additionalModelRequestFields in the Converse API payload.
+  if (
+    provider === "amazon-bedrock" &&
+    isAnthropicBedrockModel(modelId) &&
+    (hasBedrockContext1mSuffix(modelId) || merged?.context1m === true)
+  ) {
+    log.debug(`enabling 1M context window for Bedrock model ${provider}/${modelId}`);
+    agent.streamFn = createBedrockContext1mWrapper(agent.streamFn);
   }
 
   // Enable Z.AI tool_stream for real-time tool call streaming.
