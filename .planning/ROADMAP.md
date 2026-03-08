@@ -12,7 +12,7 @@ Build a DNS blocklist filter that blocks outbound requests to known-malicious do
 - Decimal phases (2.1, 2.2): Urgent insertions (marked with INSERTED)
 
 - [x] **Phase 1: Domain Blocklist Module** - Standalone `isDomainBlocked()` with matching logic, data structure, error message, and unit tests
-- [ ] **Phase 2: SSRF Pipeline Integration** - Wire blocklist into `resolvePinnedHostnameWithPolicy()` Phase 1 and prove end-to-end blocking
+- [x] **Phase 2: SSRF Pipeline Integration** - Wire blocklist into `resolvePinnedHostnameWithPolicy()` Phase 1 and prove end-to-end blocking
 - [ ] **Phase 3: Outbound Surface Catalog** - Map all gateway outbound HTTP paths, verify chokepoint coverage, document gaps
 
 ## Phase Details
@@ -49,7 +49,7 @@ Plans:
 
 Plans:
 
-- [ ] 02-01-PLAN.md -- Wire blocklist guard into resolvePinnedHostnameWithPolicy and add integration tests
+- [x] 02-01-PLAN.md -- Wire blocklist guard into resolvePinnedHostnameWithPolicy and add integration tests
 
 ### Phase 3: Outbound Surface Catalog
 
@@ -72,5 +72,5 @@ Plans:
 | Phase                        | Plans Complete | Status      | Completed  |
 | ---------------------------- | -------------- | ----------- | ---------- |
 | 1. Domain Blocklist Module   | 1/1            | Complete    | 2026-03-08 |
-| 2. SSRF Pipeline Integration | 0/1            | Not started | -          |
+| 2. SSRF Pipeline Integration | 1/1            | Complete    | 2026-03-08 |
 | 3. Outbound Surface Catalog  | 0/1            | Not started | -          |

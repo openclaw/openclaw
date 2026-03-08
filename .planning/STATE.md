@@ -2,16 +2,16 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-status: completed
-stopped_at: Phase 2 context gathered
-last_updated: "2026-03-08T15:45:30.921Z"
-last_activity: 2026-03-08 -- Phase 1 Plan 1 complete (domain-filter module)
+status: in-progress
+stopped_at: Phase 2 Plan 1 complete
+last_updated: "2026-03-08T16:08:59Z"
+last_activity: 2026-03-08 -- Phase 2 Plan 1 complete (SSRF pipeline integration)
 progress:
   total_phases: 3
-  completed_phases: 1
-  total_plans: 1
-  completed_plans: 1
-  percent: 33
+  completed_phases: 2
+  total_plans: 2
+  completed_plans: 2
+  percent: 67
 ---
 
 # Project State
@@ -21,35 +21,36 @@ progress:
 See: .planning/PROJECT.md (updated 2026-03-08)
 
 **Core value:** Outbound HTTP requests from the gateway must be checked against DNS blocklists before any network call, preventing AI agents from contacting known-malicious domains.
-**Current focus:** Phase 1: Domain Blocklist Module
+**Current focus:** Phase 3: Outbound Surface Catalog
 
 ## Current Position
 
-Phase: 1 of 3 (Domain Blocklist Module)
+Phase: 2 of 3 (SSRF Pipeline Integration) -- complete
 Plan: 1 of 1 in current phase (complete)
-Status: Phase 1 complete
-Last activity: 2026-03-08 -- Phase 1 Plan 1 complete (domain-filter module)
+Status: Phase 2 complete
+Last activity: 2026-03-08 -- Phase 2 Plan 1 complete (SSRF pipeline integration)
 
-Progress: [███░░░░░░░] 33%
+Progress: [██████░░░░] 67%
 
 ## Performance Metrics
 
 **Velocity:**
 
-- Total plans completed: 1
+- Total plans completed: 2
 - Average duration: 4min
-- Total execution time: 4min
+- Total execution time: 8min
 
 **By Phase:**
 
-| Phase                      | Plans | Total | Avg/Plan |
-| -------------------------- | ----- | ----- | -------- |
-| 01-domain-blocklist-module | 1     | 4min  | 4min     |
+| Phase                        | Plans | Total | Avg/Plan |
+| ---------------------------- | ----- | ----- | -------- |
+| 01-domain-blocklist-module   | 1     | 4min  | 4min     |
+| 02-ssrf-pipeline-integration | 1     | 4min  | 4min     |
 
 **Recent Trend:**
 
-- Last 5 plans: 01-01 (4min)
-- Trend: baseline
+- Last 5 plans: 01-01 (4min), 02-01 (4min)
+- Trend: stable
 
 _Updated after each plan completion_
 
@@ -66,6 +67,8 @@ Recent decisions affecting current work:
 - Suffix-walk via indexOf('.') loop for subdomain matching -- simple, no regex
 - DnsBlocklistError constructor takes domain string, formats message internally
 - All mutators (set/add/remove) normalize input via normalizeHostname
+- Extracted SsrFBlockedError into ssrf-error.ts to break circular dependency between ssrf.ts and domain-filter.ts
+- Blocklist guard uses normalized hostname (not raw parameter) for consistency
 
 ### Pending Todos
 
@@ -77,6 +80,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-03-08T15:45:30.919Z
-Stopped at: Phase 2 context gathered
-Resume file: .planning/phases/02-ssrf-pipeline-integration/02-CONTEXT.md
+Last session: 2026-03-08T16:08:59Z
+Stopped at: Completed 02-01-PLAN.md
+Resume file: .planning/phases/02-ssrf-pipeline-integration/02-01-SUMMARY.md

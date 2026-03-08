@@ -13,7 +13,7 @@
 
 ### SSRF Integration
 
-- [ ] **SSRF-01**: Blocklist check wired into `resolvePinnedHostnameWithPolicy()` Phase 1 (pre-DNS)
+- [x] **SSRF-01**: Blocklist check wired into `resolvePinnedHostnameWithPolicy()` Phase 1 (pre-DNS)
 
 ### Blocklist Management
 
@@ -27,7 +27,7 @@
 ### Testing
 
 - [x] **TEST-01**: Unit tests for `isDomainBlocked()` — exact match, subdomain, non-blocked, edge cases
-- [ ] **TEST-02**: Integration test proving blocked hostname causes error through SSRF pipeline
+- [x] **TEST-02**: Integration test proving blocked hostname causes error through SSRF pipeline
 - [ ] **TEST-03**: Catalog of all outbound HTTP paths documented (hook one, note others)
 
 ## v2 Requirements
@@ -71,12 +71,12 @@
 | MATCH-01    | Phase 1 | Complete |
 | MATCH-02    | Phase 1 | Complete |
 | MATCH-03    | Phase 1 | Complete |
-| SSRF-01     | Phase 2 | Pending  |
+| SSRF-01     | Phase 2 | Complete |
 | LIST-01     | Phase 1 | Complete |
 | LIST-02     | Phase 1 | Complete |
 | OBS-01      | Phase 1 | Complete |
 | TEST-01     | Phase 1 | Complete |
-| TEST-02     | Phase 2 | Pending  |
+| TEST-02     | Phase 2 | Complete |
 | TEST-03     | Phase 3 | Pending  |
 
 **Coverage:**
