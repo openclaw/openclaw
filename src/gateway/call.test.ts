@@ -215,6 +215,22 @@ describe("callGateway url resolution", () => {
     expect(lastClientOptions?.password).toBeUndefined();
   });
 
+  it("normalizes non-Latin1 gateway env tokens before connecting", async () => {
+    loadConfig.mockReturnValue({
+      gateway: { mode: "remote", bind: "loopback", remote: {} },
+    });
+    resolveGatewayPort.mockReturnValue(18789);
+    pickPrimaryTailnetIPv4.mockReturnValue(undefined);
+    process.env.OPENCLAW_GATEWAY_URL = "wss://gateway-in-container.internal:9443/ws";
+    process.env.OPENCLAW_GATEWAY_TOKEN = "│env-token";
+
+    await callGateway({
+      method: "health",
+    });
+
+    expect(lastClientOptions?.token).toBe("env-token");
+  });
+
   it("uses env URL override credentials without resolving local password SecretRefs", async () => {
     loadConfig.mockReturnValue({
       gateway: {
