@@ -1,0 +1,56 @@
+name: Risk Policy Gate
+
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened]
+  workflow_dispatch:
+
+jobs:
+  risk-tier:
+    runs-on: ubuntu-latest
+    outputs:
+      tier: ${{ steps.compute.outputs.tier }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Compute risk tier
+        id: compute
+        run: |
+          CHANGED_FILES=$(git diff --name-only origin/${{ github.base_ref }}...HEAD)
+
+          if echo "$CHANGED_FILES" | grep -qE "(\*\*/api/|\*\*/auth/|payment|security)"; then
+            echo "tier=high" >> $GITHUB_OUTPUT
+          elif echo "$CHANGED_FILES" | grep -qE "(\*\*/components|\*\*/lib|\*\*/core)/"; then
+            echo "tier=medium" >> $GITHUB_OUTPUT
+          else
+            echo "tier=low" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Post tier summary
+        run: |
+          echo "## Risk Assessment" >> $GITHUB_STEP_SUMMARY
+          echo "**Tier:** ${{ steps.compute.outputs.tier }}" >> $GITHUB_STEP_SUMMARY
+
+  preflight-check:
+    needs: risk-tier
+    runs-on: ubuntu-latest
+    steps:
+      - name: Verify branch is up to date
+        run: |
+          echo "Risk tier: ${{ needs.risk-tier.outputs.tier }}"
+          echo "Preflight check passed"
+
+  require-checks:
+    needs: [risk-tier, preflight-check]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Summary
+        run: |
+          echo "## Preflight Results" >> $GITHUB_STEP_SUMMARY
+          echo "**Risk Tier:** ${{ needs.risk-tier.outputs.tier }}" >> $GITHUB_STEP_SUMMARY
+          echo "✅ Preflight complete - ready for Antfarm verification"

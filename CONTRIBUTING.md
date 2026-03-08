@@ -1,16 +1,22 @@
-# Contributing to OpenClaw
+# Contributing to Money-maker-bot
 
-Welcome to the lobster tank! 🦞
+Thanks for your interest in contributing! Here's how to get started.
 
-## Quick Links
+## Getting Started
 
-- **GitHub:** https://github.com/openclaw/openclaw
-- **Vision:** [`VISION.md`](VISION.md)
-- **Discord:** https://discord.gg/qkhbAGHRBT
-- **X/Twitter:** [@steipete](https://x.com/steipete) / [@openclaw](https://x.com/openclaw)
+1. **Fork** this repo and create your branch from `main`
+2. Branch naming: `feat/your-feature`, `fix/your-bug`, or `docs/your-docs`
+3. Make your changes with clear, descriptive commits
+4. **Test** your changes locally before opening a PR
+5. Open a Pull Request — fill out the template and describe your changes
 
-## Maintainers
+## Development Setup
 
+````bash
+git clone https://github.com/ianalloway/Money-maker-bot
+cd Money-maker-bot
+npm install      # or: pip install -r requirements.txt
+npm run dev      # or: python main.py
 - **Peter Steinberger** - Benevolent Dictator
   - GitHub: [@steipete](https://github.com/steipete) · X: [@steipete](https://x.com/steipete)
 
@@ -85,78 +91,43 @@ legacy style:
 ```ts
 @state() foo = "bar";
 @property({ type: Number }) count = 0;
-```
+````
 
-The root `tsconfig.json` is configured for legacy decorators (`experimentalDecorators: true`)
-with `useDefineForClassFields: false`. Avoid flipping these unless you are also updating the UI
-build tooling to support standard decorators.
+## Code Style
 
-## AI/Vibe-Coded PRs Welcome! 🤖
+- **TypeScript/JS**: ESLint + Prettier (config in repo). Run `npm run lint` before committing.
+- **Python**: Black + isort. Run `black . && isort .` before committing.
+- Keep functions small and focused — one job per function.
+- Write self-documenting code; add comments only where logic is non-obvious.
 
-Built with Codex, Claude, or other AI tools? **Awesome - just mark it!**
+## Pull Request Guidelines
 
-Please include in your PR:
+- Keep PRs focused — one feature or bug fix per PR
+- Include a clear description of **what** and **why**
+- Reference related issues with `Closes #123`
+- All CI checks must pass before merging
+- Be responsive to review feedback
 
-- [ ] Mark as AI-assisted in the PR title or description
-- [ ] Note the degree of testing (untested / lightly tested / fully tested)
-- [ ] Include prompts or session logs if possible (super helpful!)
-- [ ] Confirm you understand what the code does
+## Reporting Bugs
 
-AI PRs are first-class citizens here. We just want transparency so reviewers know what to look for.
+Use the [Bug Report template](.github/ISSUE_TEMPLATE/bug_report.md). Include:
 
-## Current Focus & Roadmap 🗺
+- Steps to reproduce
+- Expected vs actual behavior
+- Environment info (OS, Node/Python version)
 
-We are currently prioritizing:
+## Suggesting Features
 
-- **Stability**: Fixing edge cases in channel connections (WhatsApp/Telegram).
-- **UX**: Improving the onboarding wizard and error messages.
-- **Skills**: For skill contributions, head to [ClawHub](https://clawhub.ai/) — the community hub for OpenClaw skills.
-- **Performance**: Optimizing token usage and compaction logic.
+Use the [Feature Request template](.github/ISSUE_TEMPLATE/feature_request.md). Explain the problem it solves.
 
-Check the [GitHub Issues](https://github.com/openclaw/openclaw/issues) for "good first issue" labels!
+## Code of Conduct
 
-## Maintainers
+Be respectful and constructive. Everyone is welcome here.
 
-We're selectively expanding the maintainer team.
-If you're an experienced contributor who wants to help shape OpenClaw's direction — whether through code, docs, or community — we'd like to hear from you.
+## License
 
-Being a maintainer is a responsibility, not an honorary title. We expect active, consistent involvement — triaging issues, reviewing PRs, and helping move the project forward.
+By contributing, you agree that your contributions will be licensed under the [MIT License](LICENSE).
 
-Still interested? Email contributing@openclaw.ai with:
+---
 
-- Links to your PRs on OpenClaw (if you don't have any, start there first)
-- Links to open source projects you maintain or actively contribute to
-- Your GitHub, Discord, and X/Twitter handles
-- A brief intro: background, experience, and areas of interest
-- Languages you speak and where you're based
-- How much time you can realistically commit
-
-We welcome people across all skill sets — engineering, documentation, community management, and more.
-We review every human-only-written application carefully and add maintainers slowly and deliberately.
-Please allow a few weeks for a response.
-
-## Report a Vulnerability
-
-We take security reports seriously. Report vulnerabilities directly to the repository where the issue lives:
-
-- **Core CLI and gateway** — [openclaw/openclaw](https://github.com/openclaw/openclaw)
-- **macOS desktop app** — [openclaw/openclaw](https://github.com/openclaw/openclaw) (apps/macos)
-- **iOS app** — [openclaw/openclaw](https://github.com/openclaw/openclaw) (apps/ios)
-- **Android app** — [openclaw/openclaw](https://github.com/openclaw/openclaw) (apps/android)
-- **ClawHub** — [openclaw/clawhub](https://github.com/openclaw/clawhub)
-- **Trust and threat model** — [openclaw/trust](https://github.com/openclaw/trust)
-
-For issues that don't fit a specific repo, or if you're unsure, email **security@openclaw.ai** and we'll route it.
-
-### Required in Reports
-
-1. **Title**
-2. **Severity Assessment**
-3. **Impact**
-4. **Affected Component**
-5. **Technical Reproduction**
-6. **Demonstrated Impact**
-7. **Environment**
-8. **Remediation Advice**
-
-Reports without reproduction steps, demonstrated impact, and remediation advice will be deprioritized. Given the volume of AI-generated scanner findings, we must ensure we're receiving vetted reports from researchers who understand the issues.
+Questions? Open an issue or reach out: **ian@allowayllc.com**
