@@ -10,9 +10,11 @@ import {
   buildOpenAICodexForwardCompatExpectation,
   GOOGLE_GEMINI_CLI_FLASH_TEMPLATE_MODEL,
   GOOGLE_GEMINI_CLI_PRO_TEMPLATE_MODEL,
+  GOOGLE_VERTEX_PRO_TEMPLATE_MODEL,
   makeModel,
   mockGoogleGeminiCliFlashTemplateModel,
   mockGoogleGeminiCliProTemplateModel,
+  mockGoogleVertexProTemplateModel,
   mockOpenAICodexTemplateModel,
   resetMockDiscoverModels,
 } from "./model.test-harness.js";
@@ -85,6 +87,19 @@ describe("pi embedded model e2e smoke", () => {
       ...GOOGLE_GEMINI_CLI_FLASH_TEMPLATE_MODEL,
       id: "gemini-3.1-flash-preview",
       name: "gemini-3.1-flash-preview",
+      reasoning: true,
+    });
+  });
+
+  it("builds a google-vertex forward-compat fallback for gemini-3.1-pro-preview", () => {
+    mockGoogleVertexProTemplateModel();
+
+    const result = resolveModel("google-vertex", "gemini-3.1-pro-preview", "/tmp/agent");
+    expect(result.error).toBeUndefined();
+    expect(result.model).toMatchObject({
+      ...GOOGLE_VERTEX_PRO_TEMPLATE_MODEL,
+      id: "gemini-3.1-pro-preview",
+      name: "gemini-3.1-pro-preview",
       reasoning: true,
     });
   });

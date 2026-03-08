@@ -89,6 +89,27 @@ export function mockGoogleGeminiCliFlashTemplateModel(): void {
   });
 }
 
+export const GOOGLE_VERTEX_PRO_TEMPLATE_MODEL = {
+  id: "gemini-3-pro-preview",
+  name: "Gemini 3 Pro Preview (Vertex AI)",
+  provider: "google-vertex",
+  api: "google-genai",
+  baseUrl: "https://generativelanguage.googleapis.com/v1beta",
+  reasoning: true,
+  input: ["text", "image"] as const,
+  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+  contextWindow: 200000,
+  maxTokens: 64000,
+};
+
+export function mockGoogleVertexProTemplateModel(): void {
+  mockDiscoveredModel({
+    provider: "google-vertex",
+    modelId: "gemini-3-pro-preview",
+    templateModel: GOOGLE_VERTEX_PRO_TEMPLATE_MODEL,
+  });
+}
+
 export function resetMockDiscoverModels(): void {
   vi.mocked(discoverModels).mockReturnValue({
     find: vi.fn(() => null),
