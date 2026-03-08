@@ -502,4 +502,30 @@ describe("local media root guard", () => {
       }),
     );
   });
+
+  it("allows wildcard-style local roots for iMessage attachment paths", async () => {
+    const attachmentRoot = path.join(os.tmpdir(), "openclaw-imessage-root");
+    const attachmentFile = path.join(
+      attachmentRoot,
+      "alice",
+      "Library",
+      "Messages",
+      "Attachments",
+      "x.bin",
+    );
+    const readFile = vi.fn(async () => Buffer.from("generated-media"));
+    const wildcardRoot = path.join(attachmentRoot, "*", "Library", "Messages", "Attachments");
+
+    await expect(
+      loadWebMedia(attachmentFile, {
+        maxBytes: 1024 * 1024,
+        localRoots: [wildcardRoot],
+        readFile,
+      }),
+    ).resolves.toEqual(
+      expect.objectContaining({
+        kind: "unknown",
+      }),
+    );
+  });
 });
