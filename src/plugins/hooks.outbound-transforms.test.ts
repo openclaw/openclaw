@@ -75,7 +75,9 @@ describe("runOutboundTransforms", () => {
     ]);
     const runner = createHookRunner(registry, { catchErrors: false });
 
-    expect(() => runner.runOutboundTransforms("hello")).toThrow("outbound transform from bad failed");
+    expect(() => runner.runOutboundTransforms("hello")).toThrow(
+      "outbound transform from bad failed",
+    );
   });
 
   it("passes through text that does not match any transform patterns", () => {
