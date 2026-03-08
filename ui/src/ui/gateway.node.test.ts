@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { storeDeviceAuthToken } from "./device-auth.ts";
+import { clearDeviceAuthToken, storeDeviceAuthToken } from "./device-auth.ts";
 import type { DeviceIdentity } from "./device-identity.ts";
 
 const wsInstances = vi.hoisted((): MockWebSocket[] => []);
@@ -107,6 +107,27 @@ function getLatestWebSocket(): MockWebSocket {
   return ws;
 }
 
+type ConnectFrame = {
+  type?: string;
+  id?: string;
+  method?: string;
+  params?: { auth?: { token?: string } };
+};
+
+async function waitForConnectFrame(ws: MockWebSocket): Promise<ConnectFrame> {
+  let connectFrame: ConnectFrame | undefined;
+  await vi.waitFor(
+    () => {
+      connectFrame = ws.sent
+        .map((frame) => JSON.parse(frame) as ConnectFrame)
+        .find((frame) => frame.type === "req" && frame.method === "connect");
+      expect(connectFrame).toBeDefined();
+    },
+    { interval: 1, timeout: 250 },
+  );
+  return connectFrame!;
+}
+
 describe("GatewayBrowserClient", () => {
   beforeEach(() => {
     wsInstances.length = 0;
@@ -148,7 +169,7 @@ describe("GatewayBrowserClient", () => {
     vi.unstubAllGlobals();
   });
 
-  it("keeps shared auth token separate from cached device token", async () => {
+  it("prefers cached device token over shared token when pairing is available", async () => {
     const client = new GatewayBrowserClient({
       url: "ws://127.0.0.1:18789",
       token: "shared-auth-token",
@@ -162,19 +183,35 @@ describe("GatewayBrowserClient", () => {
       event: "connect.challenge",
       payload: { nonce: "nonce-1" },
     });
-    await Promise.resolve();
-
-    const connectFrame = JSON.parse(ws.sent.at(-1) ?? "{}") as {
-      id?: string;
-      method?: string;
-      params?: { auth?: { token?: string } };
-    };
+    const connectFrame = await waitForConnectFrame(ws);
     expect(connectFrame.id).toBe("req-1");
     expect(connectFrame.method).toBe("connect");
-    expect(connectFrame.params?.auth?.token).toBe("shared-auth-token");
+    expect(connectFrame.params?.auth?.token).toBe("stored-device-token");
     expect(signDevicePayloadMock).toHaveBeenCalledWith("private-key", expect.any(String));
     const signedPayload = signDevicePayloadMock.mock.calls[0]?.[1];
     expect(signedPayload).toContain("|stored-device-token|nonce-1");
     expect(signedPayload).not.toContain("shared-auth-token");
+  });
+
+  it("uses the shared token for signing when no cached device token exists", async () => {
+    clearDeviceAuthToken({ deviceId: "device-1", role: "operator" });
+
+    const client = new GatewayBrowserClient({
+      url: "ws://127.0.0.1:18789",
+      token: "shared-auth-token",
+    });
+
+    client.start();
+    const ws = getLatestWebSocket();
+    ws.emitOpen();
+    ws.emitMessage({
+      type: "event",
+      event: "connect.challenge",
+      payload: { nonce: "nonce-1" },
+    });
+    const connectFrame = await waitForConnectFrame(ws);
+    expect(connectFrame.params?.auth?.token).toBe("shared-auth-token");
+    const signedPayload = signDevicePayloadMock.mock.calls[0]?.[1];
+    expect(signedPayload).toContain("|shared-auth-token|nonce-1");
   });
 });

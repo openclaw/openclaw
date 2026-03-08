@@ -214,6 +214,9 @@ export class GatewayBrowserClient {
         deviceId: deviceIdentity.deviceId,
         role,
       })?.token;
+      if (deviceToken) {
+        authToken = deviceToken;
+      }
       canFallbackToShared = Boolean(deviceToken && this.opts.token);
     }
     const auth =
@@ -244,7 +247,7 @@ export class GatewayBrowserClient {
         role,
         scopes,
         signedAtMs,
-        token: deviceToken ?? null,
+        token: authToken ?? null,
         nonce,
       });
       const signature = await signDevicePayload(deviceIdentity.privateKey, payload);
