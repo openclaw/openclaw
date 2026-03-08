@@ -7,9 +7,9 @@
 
 ### Domain Matching
 
-- [ ] **MATCH-01**: Exact domain matching — `malware.test` blocks `malware.test`
-- [ ] **MATCH-02**: Subdomain matching — `sub.malware.test` blocked by `malware.test` entry
-- [ ] **MATCH-03**: Hostname normalization — trailing dots, case insensitivity, whitespace trimming via existing `normalizeHostname()`
+- [x] **MATCH-01**: Exact domain matching — `malware.test` blocks `malware.test`
+- [x] **MATCH-02**: Subdomain matching — `sub.malware.test` blocked by `malware.test` entry
+- [x] **MATCH-03**: Hostname normalization — trailing dots, case insensitivity, whitespace trimming via existing `normalizeHostname()`
 
 ### SSRF Integration
 
@@ -17,16 +17,16 @@
 
 ### Blocklist Management
 
-- [ ] **LIST-01**: Hard-coded starter blocklist with test domains (`malware.test`, `example.bad`)
-- [ ] **LIST-02**: Atomic `Set<string>` data structure for thread-safe lookups
+- [x] **LIST-01**: Hard-coded starter blocklist with test domains (`malware.test`, `example.bad`)
+- [x] **LIST-02**: Atomic `Set<string>` data structure for thread-safe lookups
 
 ### Observability
 
-- [ ] **OBS-01**: Clear error message identifying the blocked domain name
+- [x] **OBS-01**: Clear error message identifying the blocked domain name
 
 ### Testing
 
-- [ ] **TEST-01**: Unit tests for `isDomainBlocked()` — exact match, subdomain, non-blocked, edge cases
+- [x] **TEST-01**: Unit tests for `isDomainBlocked()` — exact match, subdomain, non-blocked, edge cases
 - [ ] **TEST-02**: Integration test proving blocked hostname causes error through SSRF pipeline
 - [ ] **TEST-03**: Catalog of all outbound HTTP paths documented (hook one, note others)
 
@@ -56,34 +56,36 @@
 
 ## Out of Scope
 
-| Feature | Reason |
-|---------|--------|
-| DNS sinkhole / DNS server | Wrong abstraction level — this is application-layer filtering, not network-level |
-| Regex-based domain matching | Unnecessary complexity; suffix matching covers all standard blocklist use cases |
-| IP address blocklists | Already handled by existing SSRF infrastructure (`isPrivateIpAddress`) |
-| Standalone library extraction | Possible future project, not in scope for this PR |
-| IDN/punycode normalization | Deferred; document as known gap |
+| Feature                       | Reason                                                                           |
+| ----------------------------- | -------------------------------------------------------------------------------- |
+| DNS sinkhole / DNS server     | Wrong abstraction level — this is application-layer filtering, not network-level |
+| Regex-based domain matching   | Unnecessary complexity; suffix matching covers all standard blocklist use cases  |
+| IP address blocklists         | Already handled by existing SSRF infrastructure (`isPrivateIpAddress`)           |
+| Standalone library extraction | Possible future project, not in scope for this PR                                |
+| IDN/punycode normalization    | Deferred; document as known gap                                                  |
 
 ## Traceability
 
-| Requirement | Phase | Status |
-|-------------|-------|--------|
-| MATCH-01 | Phase 1 | Pending |
-| MATCH-02 | Phase 1 | Pending |
-| MATCH-03 | Phase 1 | Pending |
-| SSRF-01 | Phase 2 | Pending |
-| LIST-01 | Phase 1 | Pending |
-| LIST-02 | Phase 1 | Pending |
-| OBS-01 | Phase 1 | Pending |
-| TEST-01 | Phase 1 | Pending |
-| TEST-02 | Phase 2 | Pending |
-| TEST-03 | Phase 3 | Pending |
+| Requirement | Phase   | Status   |
+| ----------- | ------- | -------- |
+| MATCH-01    | Phase 1 | Complete |
+| MATCH-02    | Phase 1 | Complete |
+| MATCH-03    | Phase 1 | Complete |
+| SSRF-01     | Phase 2 | Pending  |
+| LIST-01     | Phase 1 | Complete |
+| LIST-02     | Phase 1 | Complete |
+| OBS-01      | Phase 1 | Complete |
+| TEST-01     | Phase 1 | Complete |
+| TEST-02     | Phase 2 | Pending  |
+| TEST-03     | Phase 3 | Pending  |
 
 **Coverage:**
+
 - v1 requirements: 10 total
 - Mapped to phases: 10
 - Unmapped: 0
 
 ---
-*Requirements defined: 2026-03-08*
-*Last updated: 2026-03-08 after roadmap creation*
+
+_Requirements defined: 2026-03-08_
+_Last updated: 2026-03-08 after Phase 1 Plan 1 completion_
