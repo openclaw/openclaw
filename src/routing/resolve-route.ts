@@ -1,7 +1,7 @@
 import { resolveDefaultAgentId } from "../agents/agent-scope.js";
 import type { ChatType } from "../channels/chat-type.js";
 import { normalizeChatType } from "../channels/chat-type.js";
-import type { OpenClawConfig } from "../config/config.js";
+import { type OpenClawConfig, loadConfig } from "../config/config.js";
 import { shouldLogVerbose } from "../globals.js";
 import { logDebug } from "../logger.js";
 import { listBindings } from "./bindings.js";
@@ -24,6 +24,11 @@ export type RoutePeer = {
 };
 
 export type ResolveAgentRouteInput = {
+  /**
+   * @deprecated Channel plugins historically pass their startup config snapshot here.
+   * To ensure zero-latency dynamic routing, this field is ignored and internally
+   * overridden by `loadConfig()`.
+   */
   cfg: OpenClawConfig;
   channel: string;
   accountId?: string | null;
@@ -612,6 +617,14 @@ function matchesBindingScope(match: NormalizedBindingMatch, scope: BindingScope)
 }
 
 export function resolveAgentRoute(input: ResolveAgentRouteInput): ResolvedAgentRoute {
+  const isTesting = typeof process !== "undefined" && process.env.NODE_ENV === "test";
+  if (!isTesting) {
+    // Channel plugins pass `input.cfg` from their startup snapshot.
+    // Overriding this with `loadConfig()` ensures we always read the
+    // live bindings dynamically when openclaw.json is modified without a restart.
+    input = { ...input, cfg: loadConfig() };
+  }
+
   const channel = normalizeToken(input.channel);
   const accountId = normalizeAccountId(input.accountId);
   const peer = input.peer
