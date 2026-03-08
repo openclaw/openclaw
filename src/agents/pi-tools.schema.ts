@@ -1,5 +1,9 @@
 import type { AnyAgentTool } from "./pi-tools.types.js";
 import { cleanSchemaForGemini } from "./schema/clean-for-gemini.js";
+import {
+  isMoonshotProvider,
+  stripMoonshotUnsupportedKeywords,
+} from "./schema/clean-for-moonshot.js";
 import { isXaiProvider, stripXaiUnsupportedKeywords } from "./schema/clean-for-xai.js";
 
 function extractEnumValues(schema: unknown): unknown[] | undefined {
@@ -81,6 +85,7 @@ export function normalizeToolParameters(
   //   (TypeBox root unions compile to `{ anyOf: [...] }` without `type`).
   // - Anthropic expects full JSON Schema draft 2020-12 compliance.
   // - xAI rejects validation-constraint keywords (minLength, maxLength, etc.) outright.
+  // - Moonshot rejects similar validation keywords to xAI/Gemini.
   //
   // Normalize once here so callers can always pass `tools` through unchanged.
 
@@ -89,6 +94,7 @@ export function normalizeToolParameters(
     options?.modelProvider?.toLowerCase().includes("gemini");
   const isAnthropicProvider = options?.modelProvider?.toLowerCase().includes("anthropic");
   const isXai = isXaiProvider(options?.modelProvider, options?.modelId);
+  const isMoonshot = isMoonshotProvider(options?.modelProvider, options?.modelId);
 
   function applyProviderCleaning(s: unknown): unknown {
     if (isGeminiProvider && !isAnthropicProvider) {
@@ -97,11 +103,14 @@ export function normalizeToolParameters(
     if (isXai) {
       return stripXaiUnsupportedKeywords(s);
     }
+    if (isMoonshot) {
+      return stripMoonshotUnsupportedKeywords(s);
+    }
     return s;
   }
 
   // If schema already has type + properties (no top-level anyOf to merge),
-  // clean it for Gemini/xAI compatibility as appropriate.
+  // clean it for Gemini/xAI/Moonshot compatibility as appropriate.
   if ("type" in schema && "properties" in schema && !Array.isArray(schema.anyOf)) {
     return {
       ...tool,
