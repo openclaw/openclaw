@@ -5,6 +5,7 @@ export type LogsState = {
   client: GatewayBrowserClient | null;
   connected: boolean;
   logsLoading: boolean;
+  logsInFlight: boolean;
   logsError: string | null;
   logsCursor: number | null;
   logsFile: string | null;
@@ -100,9 +101,13 @@ export async function loadLogs(state: LogsState, opts?: { reset?: boolean; quiet
   if (!state.client || !state.connected) {
     return;
   }
+  if (state.logsInFlight) {
+    return;
+  }
   if (state.logsLoading && !opts?.quiet) {
     return;
   }
+  state.logsInFlight = true;
   if (!opts?.quiet) {
     state.logsLoading = true;
   }
@@ -140,6 +145,7 @@ export async function loadLogs(state: LogsState, opts?: { reset?: boolean; quiet
   } catch (err) {
     state.logsError = String(err);
   } finally {
+    state.logsInFlight = false;
     if (!opts?.quiet) {
       state.logsLoading = false;
     }
