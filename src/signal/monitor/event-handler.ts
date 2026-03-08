@@ -50,6 +50,7 @@ import {
 import { sendMessageSignal, sendReadReceiptSignal, sendTypingSignal } from "../send.js";
 import { handleSignalDirectMessageAccess, resolveSignalAccessState } from "./access-policy.js";
 import type {
+  SignalDataMessage,
   SignalEnvelope,
   SignalEventHandlerDeps,
   SignalReactionMessage,
@@ -383,7 +384,7 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
     if (params.hasBodyContent) {
       return false;
     }
-    if (params.reaction.isRemove) {
+    if (params.reaction.isRemove === true || params.reaction.remove === true) {
       return true; // Ignore reaction removals
     }
     const emojiLabel = params.reaction.emoji?.trim() || "emoji";
@@ -446,6 +447,164 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       .join(":");
     enqueueSystemEvent(text, { sessionKey: route.sessionKey, contextKey });
     return true;
+  }
+
+  function resolveSignalEventTimestamp(value: number | string | null | undefined): number | null {
+    if (typeof value === "number" && Number.isFinite(value) && value > 0) {
+      return value;
+    }
+    if (typeof value === "string") {
+      const trimmed = value.trim();
+      if (!trimmed) {
+        return null;
+      }
+      const parsed = Number(trimmed);
+      if (Number.isFinite(parsed) && parsed > 0) {
+        return parsed;
+      }
+    }
+    return null;
+  }
+
+  function buildSignalControlSystemEventText(params: {
+    actionLabel: "edited" | "deleted" | "pinned" | "unpinned";
+    actorLabel: string;
+    messageId: string;
+    groupLabel?: string;
+    previewText?: string;
+  }): string {
+    const base = `Signal message ${params.actionLabel}: by ${params.actorLabel} msg ${params.messageId}`;
+    const withGroup = params.groupLabel ? `${base} in ${params.groupLabel}` : base;
+    return params.previewText ? `${withGroup} text="${params.previewText}"` : withGroup;
+  }
+
+  function handleSignalControlOnlyInbound(params: {
+    envelope: SignalEnvelope;
+    sender: SignalSender;
+    senderDisplay: string;
+    senderPeerId: string;
+    dataMessage?: SignalDataMessage | null;
+    messageText: string;
+    quoteText: string;
+    isGroup: boolean;
+    groupId?: string;
+    groupName?: string;
+  }): boolean {
+    const remoteDeleteTimestamp = resolveSignalEventTimestamp(
+      params.dataMessage?.remoteDelete?.timestamp ??
+        params.dataMessage?.remoteDelete?.targetSentTimestamp,
+    );
+    const pinTimestamp = resolveSignalEventTimestamp(
+      params.dataMessage?.pinMessage?.targetSentTimestamp,
+    );
+    const unpinTimestamp = resolveSignalEventTimestamp(
+      params.dataMessage?.unpinMessage?.targetSentTimestamp,
+    );
+    const editTimestamp = resolveSignalEventTimestamp(
+      params.envelope.editMessage?.targetSentTimestamp,
+    );
+    const hasEditEnvelope = Boolean(params.envelope.editMessage);
+
+    if (!hasEditEnvelope && !remoteDeleteTimestamp && !pinTimestamp && !unpinTimestamp) {
+      return false;
+    }
+
+    const senderName = params.envelope.sourceName ?? params.senderDisplay;
+    const route = resolveAgentRoute({
+      cfg: deps.cfg,
+      channel: "signal",
+      accountId: deps.accountId,
+      peer: {
+        kind: params.isGroup ? "group" : "direct",
+        id: params.isGroup ? (params.groupId ?? "unknown") : params.senderPeerId,
+      },
+    });
+    const groupLabel = params.isGroup
+      ? `${params.groupName ?? "Signal Group"} id:${params.groupId}`
+      : undefined;
+    const senderId = formatSignalSenderId(params.sender);
+
+    const emitSystemEvent = (
+      kind: "edited" | "deleted" | "pinned" | "unpinned",
+      messageId: string,
+      text: string,
+    ) => {
+      const contextKey = ["signal", "message", kind, messageId, senderId, params.groupId ?? ""]
+        .filter(Boolean)
+        .join(":");
+      enqueueSystemEvent(text, { sessionKey: route.sessionKey, contextKey });
+    };
+
+    if (remoteDeleteTimestamp) {
+      const messageId = String(remoteDeleteTimestamp);
+      emitSystemEvent(
+        "deleted",
+        messageId,
+        buildSignalControlSystemEventText({
+          actionLabel: "deleted",
+          actorLabel: senderName,
+          messageId,
+          groupLabel,
+        }),
+      );
+      return true;
+    }
+
+    if (pinTimestamp) {
+      const messageId = String(pinTimestamp);
+      emitSystemEvent(
+        "pinned",
+        messageId,
+        buildSignalControlSystemEventText({
+          actionLabel: "pinned",
+          actorLabel: senderName,
+          messageId,
+          groupLabel,
+        }),
+      );
+      return true;
+    }
+
+    if (unpinTimestamp) {
+      const messageId = String(unpinTimestamp);
+      emitSystemEvent(
+        "unpinned",
+        messageId,
+        buildSignalControlSystemEventText({
+          actionLabel: "unpinned",
+          actorLabel: senderName,
+          messageId,
+          groupLabel,
+        }),
+      );
+      return true;
+    }
+
+    if (hasEditEnvelope) {
+      const fallbackTimestamp =
+        resolveSignalEventTimestamp(params.dataMessage?.timestamp) ??
+        resolveSignalEventTimestamp(params.envelope.timestamp);
+      const messageId = String(editTimestamp ?? fallbackTimestamp ?? "unknown");
+      const previewSource = (params.messageText || params.quoteText || "")
+        .replace(/\s+/g, " ")
+        .trim();
+      const previewText =
+        previewSource.length > 140 ? `${previewSource.slice(0, 137)}...` : previewSource;
+      emitSystemEvent(
+        "edited",
+        messageId,
+        buildSignalControlSystemEventText({
+          actionLabel: "edited",
+          actorLabel: senderName,
+          messageId,
+          groupLabel,
+          previewText,
+        }),
+      );
+      return true;
+    }
+
+    return false;
   }
 
   return async (event: { event?: string; data?: string }) => {
@@ -583,6 +742,23 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
         }
         return;
       }
+    }
+
+    if (
+      handleSignalControlOnlyInbound({
+        envelope,
+        sender,
+        senderDisplay,
+        senderPeerId,
+        dataMessage,
+        messageText,
+        quoteText,
+        isGroup,
+        groupId,
+        groupName,
+      })
+    ) {
+      return;
     }
 
     const useAccessGroups = deps.cfg.commands?.useAccessGroups !== false;

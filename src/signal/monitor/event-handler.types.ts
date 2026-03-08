@@ -11,7 +11,10 @@ export type SignalEnvelope = {
   sourceName?: string | null;
   timestamp?: number | null;
   dataMessage?: SignalDataMessage | null;
-  editMessage?: { dataMessage?: SignalDataMessage | null } | null;
+  editMessage?: {
+    targetSentTimestamp?: number | string | null;
+    dataMessage?: SignalDataMessage | null;
+  } | null;
   syncMessage?: unknown;
   reactionMessage?: SignalReactionMessage | null;
 };
@@ -22,6 +25,26 @@ export type SignalMention = {
   uuid?: string | null;
   start?: number | null;
   length?: number | null;
+};
+
+export type SignalTargetAuthorObject = {
+  number?: string | null;
+  e164?: string | null;
+  uuid?: string | null;
+  aci?: string | null;
+  serviceId?: string | null;
+};
+
+export type SignalTargetMessageRef = {
+  targetAuthor?: string | SignalTargetAuthorObject | null;
+  targetAuthorNumber?: string | null;
+  targetAuthorE164?: string | null;
+  targetAuthorPhone?: string | null;
+  targetAuthorUuid?: string | null;
+  targetAuthorAci?: string | null;
+  targetAuthorServiceId?: string | null;
+  targetAuthorId?: string | null;
+  targetSentTimestamp?: number | string | null;
 };
 
 export type SignalDataMessage = {
@@ -35,14 +58,18 @@ export type SignalDataMessage = {
   } | null;
   quote?: { text?: string | null } | null;
   reaction?: SignalReactionMessage | null;
+  remoteDelete?: {
+    timestamp?: number | string | null;
+    targetSentTimestamp?: number | string | null;
+  } | null;
+  pinMessage?: (SignalTargetMessageRef & { pinDurationSeconds?: number | null }) | null;
+  unpinMessage?: SignalTargetMessageRef | null;
 };
 
-export type SignalReactionMessage = {
+export type SignalReactionMessage = SignalTargetMessageRef & {
   emoji?: string | null;
-  targetAuthor?: string | null;
-  targetAuthorUuid?: string | null;
-  targetSentTimestamp?: number | null;
   isRemove?: boolean | null;
+  remove?: boolean | null;
   groupInfo?: {
     groupId?: string | null;
     groupName?: string | null;
