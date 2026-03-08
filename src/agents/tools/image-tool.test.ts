@@ -545,7 +545,7 @@ describe("image tool implicit imageModel config", () => {
         try {
           await expect(
             tool.execute("t2", { prompt: "Describe.", image: outsideImage }),
-          ).rejects.toThrow(/not under an allowed directory/i);
+          ).rejects.toThrow(/(not under an allowed directory|outside the workspace root)/i);
         } finally {
           await fs.rm(outsideDir, { recursive: true, force: true });
         }
@@ -616,15 +616,96 @@ describe("image tool implicit imageModel config", () => {
       const imageTool = requireImageTool(tools.find((candidate) => candidate.name === "image"));
 
       await expect(readTool.execute("t1", { path: "/agent/secret.png" })).rejects.toThrow(
-        /Path escapes sandbox root/i,
+        /(Path escapes sandbox root|outside the workspace root)/i,
       );
       await expect(
         imageTool.execute("t2", {
           prompt: "Describe the image.",
           image: "/agent/secret.png",
         }),
-      ).rejects.toThrow(/Path escapes sandbox root/i);
+      ).rejects.toThrow(/(Path escapes sandbox root|outside the workspace root)/i);
       expect(fetch).not.toHaveBeenCalled();
+    });
+  });
+
+  it("enforces sandbox denyPaths for image tool", async () => {
+    await withTempSandboxState(async ({ agentDir, sandboxRoot }) => {
+      await fs.mkdir(path.join(sandboxRoot, "secrets"), { recursive: true });
+      await fs.writeFile(
+        path.join(sandboxRoot, "secrets", "hidden.png"),
+        Buffer.from(ONE_PIXEL_PNG_B64, "base64"),
+      );
+
+      const fetch = stubMinimaxOkFetch();
+      const cfg: OpenClawConfig = createMinimaxImageConfig();
+      const sandbox = { root: sandboxRoot, bridge: createHostSandboxFsBridge(sandboxRoot) };
+      const tool = createRequiredImageTool({
+        config: cfg,
+        agentDir,
+        sandbox,
+        workspaceDir: sandboxRoot,
+        fsPolicy: { denyPaths: ["secrets/**"] },
+      });
+
+      await expect(
+        tool.execute("t-deny", {
+          prompt: "Describe.",
+          image: path.join(sandboxRoot, "secrets", "hidden.png"),
+        }),
+      ).rejects.toThrow(/explicitly denied/i);
+      expect(fetch).not.toHaveBeenCalled();
+    });
+  });
+
+  it("applies deny-overrides-allow for sandbox image tool", async () => {
+    await withTempSandboxState(async ({ agentDir, sandboxRoot }) => {
+      const agentRoot = path.join(path.dirname(sandboxRoot), "agent-mounted");
+      await fs.mkdir(path.join(agentRoot, "safe"), { recursive: true });
+      await fs.mkdir(path.join(agentRoot, "secrets"), { recursive: true });
+      await fs.writeFile(
+        path.join(agentRoot, "safe", "ok.png"),
+        Buffer.from(ONE_PIXEL_PNG_B64, "base64"),
+      );
+      await fs.writeFile(
+        path.join(agentRoot, "secrets", "deny.png"),
+        Buffer.from(ONE_PIXEL_PNG_B64, "base64"),
+      );
+
+      const sandbox = createUnsafeMountedSandbox({ sandboxRoot, agentRoot });
+      const fetch = stubMinimaxOkFetch();
+      const cfg: OpenClawConfig = {
+        ...createMinimaxImageConfig(),
+        tools: {
+          fs: {
+            allowedPaths: [agentRoot],
+            denyPaths: [path.join(agentRoot, "secrets")],
+          },
+        },
+      };
+
+      const tools = createOpenClawCodingTools({
+        config: cfg,
+        agentDir,
+        sandbox,
+        workspaceDir: sandboxRoot,
+      });
+      const imageTool = requireImageTool(tools.find((candidate) => candidate.name === "image"));
+
+      await expect(
+        imageTool.execute("t-allow", {
+          prompt: "Describe.",
+          image: "/agent/safe/ok.png",
+        }),
+      ).resolves.toMatchObject({ content: [{ type: "text", text: "ok" }] });
+
+      await expect(
+        imageTool.execute("t-deny", {
+          prompt: "Describe.",
+          image: "/agent/secrets/deny.png",
+        }),
+      ).rejects.toThrow(/explicitly denied/i);
+
+      expect(fetch).toHaveBeenCalledTimes(1);
     });
   });
 
