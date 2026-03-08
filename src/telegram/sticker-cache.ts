@@ -17,6 +17,7 @@ import { resolveAutoImageModel } from "../media-understanding/runner.js";
 
 const CACHE_FILE = path.join(STATE_DIR, "telegram", "sticker-cache.json");
 const CACHE_VERSION = 1;
+const SAVE_DEBOUNCE_MS = 2_000;
 
 export interface CachedSticker {
   fileId: string;
@@ -33,45 +34,55 @@ interface StickerCache {
   stickers: Record<string, CachedSticker>;
 }
 
-function loadCache(): StickerCache {
+// In-memory cache: lazily loaded from disk on first access, written back with debounce.
+let memCache: StickerCache | null = null;
+let saveTimer: ReturnType<typeof setTimeout> | null = null;
+
+function getCache(): StickerCache {
+  if (memCache) {
+    return memCache;
+  }
   const data = loadJsonFile(CACHE_FILE);
-  if (!data || typeof data !== "object") {
-    return { version: CACHE_VERSION, stickers: {} };
+  if (data && typeof data === "object" && (data as StickerCache).version === CACHE_VERSION) {
+    memCache = data as StickerCache;
+  } else {
+    memCache = { version: CACHE_VERSION, stickers: {} };
   }
-  const cache = data as StickerCache;
-  if (cache.version !== CACHE_VERSION) {
-    // Future: handle migration if needed
-    return { version: CACHE_VERSION, stickers: {} };
-  }
-  return cache;
+  return memCache;
 }
 
-function saveCache(cache: StickerCache): void {
-  saveJsonFile(CACHE_FILE, cache);
+function scheduleSave(): void {
+  if (saveTimer) {
+    return;
+  }
+  saveTimer = setTimeout(() => {
+    saveTimer = null;
+    if (memCache) {
+      saveJsonFile(CACHE_FILE, memCache);
+    }
+  }, SAVE_DEBOUNCE_MS);
 }
 
 /**
  * Get a cached sticker by its unique ID.
  */
 export function getCachedSticker(fileUniqueId: string): CachedSticker | null {
-  const cache = loadCache();
-  return cache.stickers[fileUniqueId] ?? null;
+  return getCache().stickers[fileUniqueId] ?? null;
 }
 
 /**
  * Add or update a sticker in the cache.
  */
 export function cacheSticker(sticker: CachedSticker): void {
-  const cache = loadCache();
-  cache.stickers[sticker.fileUniqueId] = sticker;
-  saveCache(cache);
+  getCache().stickers[sticker.fileUniqueId] = sticker;
+  scheduleSave();
 }
 
 /**
  * Search cached stickers by text query (fuzzy match on description + emoji + setName).
  */
 export function searchStickers(query: string, limit = 10): CachedSticker[] {
-  const cache = loadCache();
+  const cache = getCache();
   const queryLower = query.toLowerCase();
   const results: Array<{ sticker: CachedSticker; score: number }> = [];
 
@@ -118,15 +129,14 @@ export function searchStickers(query: string, limit = 10): CachedSticker[] {
  * Get all cached stickers (for debugging/listing).
  */
 export function getAllCachedStickers(): CachedSticker[] {
-  const cache = loadCache();
-  return Object.values(cache.stickers);
+  return Object.values(getCache().stickers);
 }
 
 /**
  * Get cache statistics.
  */
 export function getCacheStats(): { count: number; oldestAt?: string; newestAt?: string } {
-  const cache = loadCache();
+  const cache = getCache();
   const stickers = Object.values(cache.stickers);
   if (stickers.length === 0) {
     return { count: 0 };
