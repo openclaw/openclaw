@@ -4,11 +4,35 @@ import {
 } from "./subagent-registry.store.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
+// Coalescing write queue: only the most recent snapshot is persisted.
+// If a write is already in progress, the next call schedules a follow-up
+// that will capture the latest state, preventing lost updates and reducing
+// redundant disk I/O from the 20+ fire-and-forget persist call sites.
+let persistPending = false;
+let persistScheduled = false;
+let lastPersistedRuns: Map<string, SubagentRunRecord> | null = null;
+
 export function persistSubagentRunsToDisk(runs: Map<string, SubagentRunRecord>) {
+  lastPersistedRuns = runs;
+  if (persistPending) {
+    // A write is in-flight; mark that another is needed after it completes.
+    persistScheduled = true;
+    return;
+  }
+  persistPending = true;
   try {
     saveSubagentRegistryToDisk(runs);
   } catch {
     // ignore persistence failures
+  } finally {
+    persistPending = false;
+    if (persistScheduled) {
+      persistScheduled = false;
+      // Drain: persist the latest snapshot that accumulated during the write.
+      if (lastPersistedRuns) {
+        persistSubagentRunsToDisk(lastPersistedRuns);
+      }
+    }
   }
 }
 
