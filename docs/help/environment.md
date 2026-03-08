@@ -68,6 +68,12 @@ OpenClaw also injects context markers into spawned child processes:
 These are runtime markers (not required user config). They can be used in shell/profile logic
 to apply context-specific rules.
 
+## UI env vars
+
+- `OPENCLAW_THEME=light`: force the light TUI palette when your terminal has a light background.
+- `OPENCLAW_THEME=dark`: force the dark TUI palette.
+- `COLORFGBG`: if your terminal exports it, OpenClaw uses the background color hint to auto-pick the TUI palette.
+
 ## Env var substitution in config
 
 You can reference env vars directly in config string values using `${VAR_NAME}` syntax:
