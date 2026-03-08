@@ -1315,9 +1315,16 @@ export async function resolveImplicitProviders(params: {
 
   const { apiKey: novitaKey, discoveryApiKey: novitaDiscoveryApiKey } =
     resolveProviderApiKey("novita");
-  if (novitaKey) {
+  if (novitaKey && novitaDiscoveryApiKey) {
     providers.novita = {
-      ...(await buildNovitaProvider(novitaDiscoveryApiKey ?? novitaKey)),
+      ...(await buildNovitaProvider(novitaDiscoveryApiKey)),
+      apiKey: novitaKey,
+    };
+  } else if (novitaKey) {
+    providers.novita = {
+      baseUrl: NOVITA_BASE_URL,
+      api: "openai-completions",
+      models: NOVITA_MODEL_CATALOG.map(buildNovitaModelDefinition),
       apiKey: novitaKey,
     };
   }

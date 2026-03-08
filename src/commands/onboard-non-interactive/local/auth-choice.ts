@@ -926,7 +926,7 @@ export async function applyNonInteractiveAuthChoice(params: {
   }
 
   if (authChoice === "novita-api-key") {
-    const resolved = await resolveNonInteractiveApiKey({
+    const resolved = await resolveApiKey({
       provider: "novita",
       cfg: baseConfig,
       flagValue: opts.novitaApiKey,
@@ -937,8 +937,12 @@ export async function applyNonInteractiveAuthChoice(params: {
     if (!resolved) {
       return null;
     }
-    if (resolved.source !== "profile") {
-      await setNovitaApiKey(resolved.key);
+    if (
+      !(await maybeSetResolvedApiKey(resolved, (value) =>
+        setNovitaApiKey(value, undefined, apiKeyStorageOptions),
+      ))
+    ) {
+      return null;
     }
     nextConfig = applyAuthProfileConfig(nextConfig, {
       profileId: "novita:default",
