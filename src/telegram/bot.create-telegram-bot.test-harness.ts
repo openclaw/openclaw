@@ -92,7 +92,7 @@ vi.mock("../infra/system-events.js", () => ({
 }));
 
 const sentMessageCacheHoisted = vi.hoisted(() => ({
-  wasSentByBot: vi.fn(() => false),
+  wasSentByBot: vi.fn<() => boolean | null>(() => false),
 }));
 export const wasSentByBot = sentMessageCacheHoisted.wasSentByBot;
 
