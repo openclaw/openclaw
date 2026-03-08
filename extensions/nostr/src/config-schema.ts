@@ -4,6 +4,25 @@ import { z } from "zod";
 const allowFromEntry = z.union([z.string(), z.number()]);
 
 /**
+ * Validates Nostr relay WebSocket URLs (wss:// or ws://).
+ * Rejects http(s), javascript, data, file, and other non-WebSocket protocols.
+ */
+const safeRelayUrlSchema = z
+  .string()
+  .url()
+  .refine(
+    (url) => {
+      try {
+        const parsed = new URL(url);
+        return parsed.protocol === "wss:" || parsed.protocol === "ws:";
+      } catch {
+        return false;
+      }
+    },
+    { message: "Relay URL must use wss:// or ws:// protocol" },
+  );
+
+/**
  * Validates https:// URLs only (no javascript:, data:, file:, etc.)
  */
 const safeUrlSchema = z
@@ -73,7 +92,7 @@ export const NostrConfigSchema = z.object({
   privateKey: z.string().optional(),
 
   /** WebSocket relay URLs to connect to */
-  relays: z.array(z.string()).optional(),
+  relays: z.array(safeRelayUrlSchema).optional(),
 
   /** DM access policy: pairing, allowlist, open, or disabled */
   dmPolicy: z.enum(["pairing", "allowlist", "open", "disabled"]).optional(),
