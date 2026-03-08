@@ -15,7 +15,7 @@ import {
 } from "openclaw/plugin-sdk/feishu";
 import { resolveFeishuAccount } from "./accounts.js";
 import { createFeishuClient } from "./client.js";
-import { tryRecordMessage, tryRecordMessagePersistent } from "./dedup.js";
+import { checkAndRecordCreateTime, tryRecordMessage, tryRecordMessagePersistent } from "./dedup.js";
 import { maybeCreateDynamicAgent } from "./dynamic-agent.js";
 import { normalizeFeishuExternalKey } from "./external-keys.js";
 import { downloadMessageResourceFeishu } from "./media.js";
@@ -905,6 +905,29 @@ export async function handleFeishuMessage(params: {
       log(`feishu: skipping duplicate message ${messageId} (event_id dedup: ${event.event_id})`);
       return;
     }
+  }
+
+  // Time-based dedup: Feishu retries re-deliver with new message_id/event_id
+  // but preserve the original create_time. Reject messages whose create_time
+  // is older than or equal to the last processed message for this chat+sender.
+  const createTimeRaw = event.message.create_time;
+  const createTimeParsed = createTimeRaw ? parseInt(createTimeRaw, 10) : undefined;
+  const normalizedCreateTime =
+    createTimeParsed && createTimeParsed > 0
+      ? createTimeParsed < 1_000_000_000_000
+        ? createTimeParsed * 1000
+        : createTimeParsed
+      : undefined;
+  const senderForTimeDedup =
+    event.sender.sender_id.open_id?.trim() || event.sender.sender_id.user_id?.trim() || "";
+  const chatSenderTimeKey = `${account.accountId}:${event.message.chat_id}:${senderForTimeDedup}`;
+
+  if (!checkAndRecordCreateTime(chatSenderTimeKey, normalizedCreateTime)) {
+    log(
+      `feishu: skipping stale message ${messageId} ` +
+        `(create_time ${createTimeRaw} ≤ last processed for ${event.message.chat_id})`,
+    );
+    return;
   }
 
   let ctx = parseFeishuMessageEvent(event, botOpenId, botName, log);
