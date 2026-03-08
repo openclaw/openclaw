@@ -56,3 +56,15 @@ When operating in FrankOS mode, use runtime governance controls in addition to d
   - `enforce`: block `prohibit` and `escalate` outcomes
 
 For tool-level guardrails, use the `frankos-governance` plugin and emit `governance.decision` diagnostics for auditability.
+
+### Memory Integrity Runtime (Phase 3)
+
+- Load memory policy artifact: `10_Constitution/MEMORY_RUNTIME_POLICY.json`
+- Validate policy shape against: `14_Schemas/memory-runtime-policy.schema.json`
+- Use `frankos-memory-governance` plugin for memory write guardrails:
+  - `shadow`: evaluate and emit memory governance telemetry, allow writes
+  - `enforce`: block `prohibit` and `escalate` outcomes (fail closed on policy load/eval errors)
+- Memory telemetry events:
+  - `memory.governance.decision`
+  - `memory.provenance.validation_failure`
+  - `memory.correction.supersession`

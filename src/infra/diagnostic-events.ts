@@ -162,6 +162,45 @@ export type DiagnosticGovernanceDecisionEvent = DiagnosticBaseEvent & {
   durationMs?: number;
 };
 
+export type DiagnosticMemoryGovernanceDecisionEvent = DiagnosticBaseEvent & {
+  type: "memory.governance.decision";
+  sessionKey?: string;
+  sessionId?: string;
+  runId?: string;
+  toolName: string;
+  decision: "permit" | "prohibit" | "escalate";
+  mode: "off" | "shadow" | "enforce";
+  reasonCode: string;
+  reasonText?: string;
+  policyVersion?: string;
+  ruleId?: string;
+  classification?: "observed" | "inferred" | "unknown";
+  confidence?: number;
+  durationMs?: number;
+};
+
+export type DiagnosticMemoryCorrectionSupersessionEvent = DiagnosticBaseEvent & {
+  type: "memory.correction.supersession";
+  sessionKey?: string;
+  sessionId?: string;
+  runId?: string;
+  toolName?: string;
+  action: "linked";
+  supersedes: string[];
+};
+
+export type DiagnosticMemoryProvenanceValidationFailureEvent = DiagnosticBaseEvent & {
+  type: "memory.provenance.validation_failure";
+  sessionKey?: string;
+  sessionId?: string;
+  runId?: string;
+  toolName: string;
+  reasonCode: string;
+  missingPaths?: string[];
+  invalidPaths?: string[];
+  mode?: "off" | "shadow" | "enforce";
+};
+
 export type DiagnosticEventPayload =
   | DiagnosticUsageEvent
   | DiagnosticWebhookReceivedEvent
@@ -176,7 +215,10 @@ export type DiagnosticEventPayload =
   | DiagnosticRunAttemptEvent
   | DiagnosticHeartbeatEvent
   | DiagnosticToolLoopEvent
-  | DiagnosticGovernanceDecisionEvent;
+  | DiagnosticGovernanceDecisionEvent
+  | DiagnosticMemoryGovernanceDecisionEvent
+  | DiagnosticMemoryCorrectionSupersessionEvent
+  | DiagnosticMemoryProvenanceValidationFailureEvent;
 
 export type DiagnosticEventInput = DiagnosticEventPayload extends infer Event
   ? Event extends DiagnosticEventPayload

@@ -250,6 +250,30 @@ describe("diagnostics-otel service", () => {
       reasonCode: "NO_DIRECT_WRITE",
       durationMs: 7,
     });
+    emitDiagnosticEvent({
+      type: "memory.governance.decision",
+      toolName: "memory_store",
+      decision: "escalate",
+      mode: "enforce",
+      reasonCode: "MEMORY_INFERENCE_BASIS_REQUIRED",
+      classification: "inferred",
+      confidence: 0.7,
+      durationMs: 9,
+    });
+    emitDiagnosticEvent({
+      type: "memory.provenance.validation_failure",
+      toolName: "memory_store",
+      reasonCode: "MEMORY_MISSING_PROVENANCE",
+      mode: "enforce",
+      missingPaths: ["metadata.provenance.sourceId"],
+      invalidPaths: [],
+    });
+    emitDiagnosticEvent({
+      type: "memory.correction.supersession",
+      toolName: "memory_store",
+      action: "linked",
+      supersedes: ["mem-old-1"],
+    });
 
     expect(telemetryState.counters.get("openclaw.webhook.received")?.add).toHaveBeenCalled();
     expect(
@@ -270,12 +294,55 @@ describe("diagnostics-otel service", () => {
     expect(
       telemetryState.histograms.get("openclaw.governance.decision.duration_ms")?.record,
     ).toHaveBeenCalled();
+    expect(
+      telemetryState.counters.get("openclaw.memory.governance.decision")?.add,
+    ).toHaveBeenCalled();
+    expect(
+      telemetryState.histograms.get("openclaw.memory.governance.decision.duration_ms")?.record,
+    ).toHaveBeenCalled();
+    expect(
+      telemetryState.counters.get("openclaw.memory.provenance.validation_failure")?.add,
+    ).toHaveBeenCalled();
+    expect(
+      telemetryState.counters.get("openclaw.memory.correction.supersession")?.add,
+    ).toHaveBeenCalled();
+
+    const memoryDecisionCounter = telemetryState.counters.get("openclaw.memory.governance.decision");
+    const memoryDecisionAttrs = memoryDecisionCounter?.add.mock.calls[0]?.[1] as
+      | Record<string, unknown>
+      | undefined;
+    expect(memoryDecisionAttrs?.["openclaw.classification"]).toBe("inferred");
+
+    const provenanceFailureCounter = telemetryState.counters.get(
+      "openclaw.memory.provenance.validation_failure",
+    );
+    const provenanceAttrs = provenanceFailureCounter?.add.mock.calls[0]?.[1] as
+      | Record<string, unknown>
+      | undefined;
+    expect(provenanceAttrs?.["openclaw.reason"]).toBe("MEMORY_MISSING_PROVENANCE");
 
     const spanNames = telemetryState.tracer.startSpan.mock.calls.map((call) => call[0]);
     expect(spanNames).toContain("openclaw.webhook.processed");
     expect(spanNames).toContain("openclaw.message.processed");
     expect(spanNames).toContain("openclaw.session.stuck");
     expect(spanNames).toContain("openclaw.governance.decision");
+    expect(spanNames).toContain("openclaw.memory.governance.decision");
+    expect(spanNames).toContain("openclaw.memory.provenance.validation_failure");
+    expect(spanNames).toContain("openclaw.memory.correction.supersession");
+
+    const memoryDecisionSpanCall = telemetryState.tracer.startSpan.mock.calls.find(
+      (call) => call[0] === "openclaw.memory.governance.decision",
+    );
+    const memoryDecisionSpanAttrs = (memoryDecisionSpanCall?.[1] as { attributes?: Record<string, unknown> })
+      ?.attributes;
+    expect(memoryDecisionSpanAttrs?.["openclaw.confidence"]).toBe(0.7);
+
+    const provenanceSpanCall = telemetryState.tracer.startSpan.mock.calls.find(
+      (call) => call[0] === "openclaw.memory.provenance.validation_failure",
+    );
+    const provenanceSpanAttrs = (provenanceSpanCall?.[1] as { attributes?: Record<string, unknown> })
+      ?.attributes;
+    expect(provenanceSpanAttrs?.["openclaw.missingPathCount"]).toBe(1);
 
     expect(registerLogTransportMock).toHaveBeenCalledTimes(1);
     expect(registeredTransports).toHaveLength(1);

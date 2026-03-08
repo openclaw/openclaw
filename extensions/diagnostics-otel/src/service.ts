@@ -250,6 +250,34 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
           description: "Governance decision evaluation duration",
         },
       );
+      const memoryGovernanceDecisionCounter = meter.createCounter(
+        "openclaw.memory.governance.decision",
+        {
+          unit: "1",
+          description: "Memory governance decision outcomes by reason/mode/classification",
+        },
+      );
+      const memoryGovernanceDecisionDurationHistogram = meter.createHistogram(
+        "openclaw.memory.governance.decision.duration_ms",
+        {
+          unit: "ms",
+          description: "Memory governance decision evaluation duration",
+        },
+      );
+      const memoryProvenanceValidationFailureCounter = meter.createCounter(
+        "openclaw.memory.provenance.validation_failure",
+        {
+          unit: "1",
+          description: "Memory provenance validation failures by reason",
+        },
+      );
+      const memoryCorrectionSupersessionCounter = meter.createCounter(
+        "openclaw.memory.correction.supersession",
+        {
+          unit: "1",
+          description: "Memory correction supersession linkage events",
+        },
+      );
 
       if (logsEnabled) {
         const logExporter = new OTLPLogExporter({
@@ -671,6 +699,108 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
         span.end();
       };
 
+      const recordMemoryGovernanceDecision = (
+        evt: Extract<DiagnosticEventPayload, { type: "memory.governance.decision" }>,
+      ) => {
+        const attrs = {
+          "openclaw.tool": evt.toolName ?? "unknown",
+          "openclaw.decision": evt.decision ?? "unknown",
+          "openclaw.mode": evt.mode ?? "unknown",
+          "openclaw.reason": evt.reasonCode ?? "unknown",
+          "openclaw.classification": evt.classification ?? "unknown",
+        };
+        memoryGovernanceDecisionCounter.add(1, attrs);
+        if (typeof evt.durationMs === "number") {
+          memoryGovernanceDecisionDurationHistogram.record(evt.durationMs, attrs);
+        }
+        if (!tracesEnabled || evt.decision === "permit") {
+          return;
+        }
+        const spanAttrs: Record<string, string | number> = { ...attrs };
+        addSessionIdentityAttrs(spanAttrs, evt);
+        if (evt.runId) {
+          spanAttrs["openclaw.runId"] = evt.runId;
+        }
+        if (evt.policyVersion) {
+          spanAttrs["openclaw.policyVersion"] = evt.policyVersion;
+        }
+        if (evt.ruleId) {
+          spanAttrs["openclaw.ruleId"] = evt.ruleId;
+        }
+        if (typeof evt.confidence === "number") {
+          spanAttrs["openclaw.confidence"] = evt.confidence;
+        }
+        if (evt.reasonText) {
+          spanAttrs["openclaw.reasonText"] = redactSensitiveText(evt.reasonText);
+        }
+        const span = spanWithDuration(
+          "openclaw.memory.governance.decision",
+          spanAttrs,
+          evt.durationMs,
+        );
+        span.setStatus({
+          code: SpanStatusCode.ERROR,
+          message: evt.reasonCode,
+        });
+        span.end();
+      };
+
+      const recordMemoryProvenanceValidationFailure = (
+        evt: Extract<DiagnosticEventPayload, { type: "memory.provenance.validation_failure" }>,
+      ) => {
+        const attrs = {
+          "openclaw.tool": evt.toolName ?? "unknown",
+          "openclaw.reason": evt.reasonCode ?? "unknown",
+          "openclaw.mode": evt.mode ?? "unknown",
+        };
+        memoryProvenanceValidationFailureCounter.add(1, attrs);
+        if (!tracesEnabled) {
+          return;
+        }
+        const spanAttrs: Record<string, string | number> = {
+          ...attrs,
+          "openclaw.missingPathCount": evt.missingPaths?.length ?? 0,
+          "openclaw.invalidPathCount": evt.invalidPaths?.length ?? 0,
+        };
+        addSessionIdentityAttrs(spanAttrs, evt);
+        if (evt.runId) {
+          spanAttrs["openclaw.runId"] = evt.runId;
+        }
+        const span = tracer.startSpan("openclaw.memory.provenance.validation_failure", {
+          attributes: spanAttrs,
+        });
+        span.setStatus({
+          code: SpanStatusCode.ERROR,
+          message: evt.reasonCode,
+        });
+        span.end();
+      };
+
+      const recordMemoryCorrectionSupersession = (
+        evt: Extract<DiagnosticEventPayload, { type: "memory.correction.supersession" }>,
+      ) => {
+        const attrs = {
+          "openclaw.tool": evt.toolName ?? "unknown",
+          "openclaw.action": evt.action ?? "unknown",
+        };
+        memoryCorrectionSupersessionCounter.add(1, attrs);
+        if (!tracesEnabled) {
+          return;
+        }
+        const spanAttrs: Record<string, string | number> = {
+          ...attrs,
+          "openclaw.supersedesCount": evt.supersedes.length,
+        };
+        addSessionIdentityAttrs(spanAttrs, evt);
+        if (evt.runId) {
+          spanAttrs["openclaw.runId"] = evt.runId;
+        }
+        const span = tracer.startSpan("openclaw.memory.correction.supersession", {
+          attributes: spanAttrs,
+        });
+        span.end();
+      };
+
       unsubscribe = onDiagnosticEvent((evt: DiagnosticEventPayload) => {
         try {
           switch (evt.type) {
@@ -712,6 +842,15 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
               return;
             case "governance.decision":
               recordGovernanceDecision(evt);
+              return;
+            case "memory.governance.decision":
+              recordMemoryGovernanceDecision(evt);
+              return;
+            case "memory.provenance.validation_failure":
+              recordMemoryProvenanceValidationFailure(evt);
+              return;
+            case "memory.correction.supersession":
+              recordMemoryCorrectionSupersession(evt);
               return;
           }
         } catch (err) {

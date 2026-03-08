@@ -1,0 +1,43 @@
+{
+  "id": "frankos-memory-governance",
+  "name": "FrankOS Memory Governance",
+  "description": "Runtime memory integrity guardrails for provenance, classification, confidence, and supersession.",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "mode": {
+        "type": "string",
+        "enum": ["off", "shadow", "enforce"]
+      },
+      "policyFile": {
+        "type": "string"
+      },
+      "emitDecisionLog": {
+        "type": "boolean"
+      },
+      "memoryMutatingTools": {
+        "type": "array",
+        "items": { "type": "string" }
+      }
+    }
+  },
+  "uiHints": {
+    "mode": {
+      "label": "Enforcement Mode",
+      "help": "off = disabled, shadow = evaluate+log only, enforce = block prohibited/escalate outcomes"
+    },
+    "policyFile": {
+      "label": "Policy File",
+      "help": "Absolute path to MEMORY_RUNTIME_POLICY.json"
+    },
+    "emitDecisionLog": {
+      "label": "Emit Decision Events",
+      "help": "Emit memory governance diagnostic events for evaluated memory mutations"
+    },
+    "memoryMutatingTools": {
+      "label": "Memory Mutating Tools",
+      "help": "Optional override list of memory tools treated as mutating"
+    }
+  }
+}
