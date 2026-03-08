@@ -956,6 +956,7 @@ export const SignalAccountSchemaBase = z
     enabled: z.boolean().optional(),
     configWrites: z.boolean().optional(),
     account: z.string().optional(),
+    accountUuid: z.string().optional(),
     httpUrl: z.string().optional(),
     httpHost: z.string().optional(),
     httpPort: z.number().int().positive().optional(),
