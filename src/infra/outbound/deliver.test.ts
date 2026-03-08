@@ -19,6 +19,7 @@ const mocks = vi.hoisted(() => ({
 const hookMocks = vi.hoisted(() => ({
   runner: {
     hasHooks: vi.fn(() => false),
+    runMessageSending: vi.fn(async () => undefined),
     runMessageSent: vi.fn(async () => {}),
   },
 }));
@@ -191,6 +192,8 @@ describe("deliverOutboundPayloads", () => {
     setActivePluginRegistry(defaultRegistry);
     hookMocks.runner.hasHooks.mockClear();
     hookMocks.runner.hasHooks.mockReturnValue(false);
+    hookMocks.runner.runMessageSending.mockClear();
+    hookMocks.runner.runMessageSending.mockResolvedValue(undefined);
     hookMocks.runner.runMessageSent.mockClear();
     hookMocks.runner.runMessageSent.mockResolvedValue(undefined);
     internalHookMocks.createInternalHookEvent.mockClear();
@@ -823,6 +826,67 @@ describe("deliverOutboundPayloads", () => {
     expect(hookMocks.runner.runMessageSent).toHaveBeenCalledWith(
       expect.objectContaining({ to: "+1555", content: "hello", success: true }),
       expect.objectContaining({ channelId: "whatsapp" }),
+    );
+  });
+
+  it("uses the same resolved sessionKey in message_sending and message_sent", async () => {
+    hookMocks.runner.hasHooks.mockImplementation(
+      (name: string) => name === "message_sending" || name === "message_sent",
+    );
+    const sendWhatsApp = vi.fn().mockResolvedValue({ messageId: "w1", toJid: "jid" });
+
+    await deliverOutboundPayloads({
+      cfg: {},
+      channel: "whatsapp",
+      to: "+1555",
+      payloads: [{ text: "hello" }],
+      deps: { sendWhatsApp },
+      session: { key: "agent:sender:session", agentId: "sender-agent" },
+      mirror: { sessionKey: "agent:mirror:session", agentId: "mirror-agent" },
+    });
+
+    expect(hookMocks.runner.runMessageSending).toHaveBeenCalledWith(
+      expect.objectContaining({
+        metadata: expect.objectContaining({
+          sessionKey: "agent:mirror:session",
+          agentId: "mirror-agent",
+        }),
+      }),
+      expect.anything(),
+    );
+    expect(hookMocks.runner.runMessageSent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        metadata: expect.objectContaining({
+          sessionKey: "agent:mirror:session",
+          agentId: "mirror-agent",
+        }),
+      }),
+      expect.anything(),
+    );
+  });
+
+  it("falls back to mirror metadata for message_sending when session is absent", async () => {
+    hookMocks.runner.hasHooks.mockImplementation((name: string) => name === "message_sending");
+    const sendWhatsApp = vi.fn().mockResolvedValue({ messageId: "w1", toJid: "jid" });
+
+    await deliverOutboundPayloads({
+      cfg: {},
+      channel: "whatsapp",
+      to: "+1555",
+      payloads: [{ text: "hello" }],
+      deps: { sendWhatsApp },
+      mirror: { sessionKey: "agent:mirror:session", agentId: "mirror-agent" },
+      skipQueue: true,
+    });
+
+    expect(hookMocks.runner.runMessageSending).toHaveBeenCalledWith(
+      expect.objectContaining({
+        metadata: expect.objectContaining({
+          sessionKey: "agent:mirror:session",
+          agentId: "mirror-agent",
+        }),
+      }),
+      expect.anything(),
     );
   });
 
