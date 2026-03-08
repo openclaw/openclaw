@@ -1,6 +1,7 @@
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import type { SessionManager } from "@mariozechner/pi-coding-agent";
 import type {
+  PluginHookAfterMessageWriteEvent,
   PluginHookBeforeMessageWriteEvent,
   PluginHookBeforeMessageWriteResult,
 } from "../plugins/types.js";
@@ -101,6 +102,10 @@ export function installSessionToolResultGuard(
     beforeMessageWriteHook?: (
       event: PluginHookBeforeMessageWriteEvent,
     ) => PluginHookBeforeMessageWriteResult | undefined;
+    /**
+     * Fire-and-forget hook invoked after a message is successfully appended.
+     */
+    afterMessageWriteHook?: (event: PluginHookAfterMessageWriteEvent) => void;
   },
 ): {
   flushPendingToolResults: () => void;
@@ -124,6 +129,9 @@ export function installSessionToolResultGuard(
 
   const allowSyntheticToolResults = opts?.allowSyntheticToolResults ?? true;
   const beforeWrite = opts?.beforeMessageWriteHook;
+  const afterWrite = opts?.afterMessageWriteHook;
+  const getSessionFile = () =>
+    (sessionManager as { getSessionFile?: () => string | null }).getSessionFile?.() ?? undefined;
 
   /**
    * Run the before_message_write hook. Returns the (possibly modified) message,
@@ -159,6 +167,17 @@ export function installSessionToolResultGuard(
         );
         if (flushed) {
           originalAppend(flushed as never);
+          try {
+            afterWrite?.({
+              message: flushed,
+              sessionFile: getSessionFile(),
+              toolCallId: id,
+              toolName: name,
+              isSynthetic: true,
+            });
+          } catch {
+            // Keep append path resilient even if callback wiring is broken.
+          }
         }
       }
     }
@@ -206,7 +225,19 @@ export function installSessionToolResultGuard(
       if (!persisted) {
         return undefined;
       }
-      return originalAppend(persisted as never);
+      const result = originalAppend(persisted as never);
+      try {
+        afterWrite?.({
+          message: persisted,
+          sessionFile: getSessionFile(),
+          toolCallId: id ?? undefined,
+          toolName,
+          isSynthetic: false,
+        });
+      } catch {
+        // Keep append path resilient even if callback wiring is broken.
+      }
+      return result;
     }
 
     // Skip tool call extraction for aborted/errored assistant messages.
@@ -240,10 +271,17 @@ export function installSessionToolResultGuard(
       return undefined;
     }
     const result = originalAppend(finalMessage as never);
+    try {
+      afterWrite?.({
+        message: finalMessage,
+        sessionFile: getSessionFile(),
+        isSynthetic: false,
+      });
+    } catch {
+      // Keep append path resilient even if callback wiring is broken.
+    }
 
-    const sessionFile = (
-      sessionManager as { getSessionFile?: () => string | null }
-    ).getSessionFile?.();
+    const sessionFile = getSessionFile();
     if (sessionFile) {
       emitSessionTranscriptUpdate(sessionFile);
     }

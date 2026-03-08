@@ -72,3 +72,33 @@ describe("message_sent hook runner", () => {
     );
   });
 });
+
+describe("after_message_write hook runner", () => {
+  it("runAfterMessageWrite invokes registered hooks", async () => {
+    const handler = vi.fn();
+    const registry = createMockPluginRegistry([{ hookName: "after_message_write", handler }]);
+    const runner = createHookRunner(registry);
+
+    await runner.runAfterMessageWrite(
+      {
+        message: { role: "assistant", content: [{ type: "text", text: "persisted" }] } as never,
+        sessionFile: "/tmp/session.jsonl",
+      },
+      {
+        sessionKey: "session_1",
+        agentId: "default",
+      },
+    );
+
+    expect(handler).toHaveBeenCalledWith(
+      {
+        message: { role: "assistant", content: [{ type: "text", text: "persisted" }] },
+        sessionFile: "/tmp/session.jsonl",
+      },
+      {
+        sessionKey: "session_1",
+        agentId: "default",
+      },
+    );
+  });
+});

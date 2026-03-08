@@ -1,4 +1,6 @@
 import { SessionManager } from "@mariozechner/pi-coding-agent";
+import { fireAndForgetHook } from "../../hooks/fire-and-forget.js";
+import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 
 type AppendMessageArg = Parameters<SessionManager["appendMessage"]>[0];
 
@@ -21,6 +23,8 @@ export function appendInjectedAssistantMessageToTranscript(params: {
   label?: string;
   idempotencyKey?: string;
   abortMeta?: GatewayInjectedAbortMeta;
+  sessionKey?: string;
+  agentId?: string;
   now?: number;
 }): GatewayInjectedTranscriptAppendResult {
   const now = params.now ?? Date.now();
@@ -68,6 +72,22 @@ export function appendInjectedAssistantMessageToTranscript(params: {
     // Raw jsonl appends break the parent chain and can hide compaction summaries from context.
     const sessionManager = SessionManager.open(params.transcriptPath);
     const messageId = sessionManager.appendMessage(messageBody);
+    const hookRunner = getGlobalHookRunner();
+    if (hookRunner?.hasHooks("after_message_write")) {
+      fireAndForgetHook(
+        hookRunner.runAfterMessageWrite(
+          {
+            message: messageBody as import("@mariozechner/pi-agent-core").AgentMessage,
+            sessionFile: params.transcriptPath,
+          },
+          {
+            sessionKey: params.sessionKey,
+            agentId: params.agentId,
+          },
+        ),
+        "appendInjectedAssistantMessageToTranscript: after_message_write hook failed",
+      );
+    }
     return { ok: true, messageId, message: messageBody };
   } catch (err) {
     return { ok: false, error: err instanceof Error ? err.message : String(err) };

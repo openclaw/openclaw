@@ -1,4 +1,5 @@
 import type { SessionManager } from "@mariozechner/pi-coding-agent";
+import { fireAndForgetHook } from "../hooks/fire-and-forget.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import {
   applyInputProvenanceToUserMessage,
@@ -41,6 +42,18 @@ export function guardSessionManager(
       }
     : undefined;
 
+  const afterMessageWrite = hookRunner?.hasHooks("after_message_write")
+    ? (event: import("../plugins/types.js").PluginHookAfterMessageWriteEvent) => {
+        fireAndForgetHook(
+          hookRunner.runAfterMessageWrite(event, {
+            agentId: opts?.agentId,
+            sessionKey: opts?.sessionKey,
+          }),
+          "session-tool-result-guard: after_message_write hook failed",
+        );
+      }
+    : undefined;
+
   const transform = hookRunner?.hasHooks("tool_result_persist")
     ? // oxlint-disable-next-line typescript/no-explicit-any
       (message: any, meta: { toolCallId?: string; toolName?: string; isSynthetic?: boolean }) => {
@@ -69,6 +82,7 @@ export function guardSessionManager(
     allowSyntheticToolResults: opts?.allowSyntheticToolResults,
     allowedToolNames: opts?.allowedToolNames,
     beforeMessageWriteHook: beforeMessageWrite,
+    afterMessageWriteHook: afterMessageWrite,
   });
   (sessionManager as GuardedSessionManager).flushPendingToolResults = guard.flushPendingToolResults;
   (sessionManager as GuardedSessionManager).clearPendingToolResults = guard.clearPendingToolResults;
