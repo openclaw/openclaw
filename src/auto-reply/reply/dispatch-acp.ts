@@ -189,15 +189,7 @@ export async function tryDispatchAcpReply(params: {
     onReplyStart: params.onReplyStart,
   });
 
-  // Apply media understanding (audio transcription, image description, etc.)
-  // before resolving the prompt text. Without this, ACP agents receive raw
-  // <media:document> tags instead of transcribed/described content.
-  await applyMediaUnderstanding({
-    ctx: params.ctx,
-    cfg: params.cfg,
-  });
-
-  const promptText = resolveAcpPromptText(params.ctx);
+  let promptText = resolveAcpPromptText(params.ctx);
   if (!promptText) {
     const counts = params.dispatcher.getQueuedCounts();
     delivery.applyRoutedCounts(counts);
@@ -246,6 +238,28 @@ export async function tryDispatchAcpReply(params: {
     const agentPolicyError = resolveAcpAgentPolicyError(params.cfg, resolvedAcpAgent);
     if (agentPolicyError) {
       throw agentPolicyError;
+    }
+
+    // Apply media understanding (audio transcription, image description, etc.)
+    // before resolving the prompt text. Without this, ACP agents receive raw
+    // <media:document> tags instead of transcribed/described content.
+    // Guarded against double processing for AcpDispatchTailAfterReset paths.
+    if (!params.ctx.MediaUnderstanding?.length) {
+      try {
+        await applyMediaUnderstanding({
+          ctx: params.ctx,
+          cfg: params.cfg,
+        });
+      } catch (err) {
+        logVerbose(
+          `dispatch-acp: media understanding failed, proceeding with raw content: ${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
+    }
+
+    const mediaPromptText = resolveAcpPromptText(params.ctx);
+    if (mediaPromptText) {
+      promptText = mediaPromptText;
     }
 
     try {
