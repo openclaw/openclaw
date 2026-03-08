@@ -243,6 +243,31 @@ describe("agent event handler", () => {
     nowSpy?.mockRestore();
   });
 
+  it("suppresses partial NO_REPLY lead fragment in final when full token never arrives", () => {
+    const { broadcast, nodeSendToSession, chatRunState, handler, nowSpy } = createHarness({
+      now: 2_150,
+    });
+    chatRunState.registry.add("run-partial", {
+      sessionKey: "session-partial",
+      clientRunId: "client-partial",
+    });
+
+    // Only partial token arrives before lifecycle end — buffer stays at "NO".
+    handler({
+      runId: "run-partial",
+      seq: 1,
+      stream: "assistant",
+      ts: Date.now(),
+      data: { text: "NO" },
+    });
+    emitLifecycleEnd(handler, "run-partial");
+
+    const payload = expectSingleFinalChatPayload(broadcast) as { message?: unknown };
+    expect(payload.message).toBeUndefined();
+    expect(sessionChatCalls(nodeSendToSession)).toHaveLength(1);
+    nowSpy?.mockRestore();
+  });
+
   it("keeps final short replies like 'No' even when lead-fragment deltas are suppressed", () => {
     const { broadcast, nodeSendToSession, chatRunState, handler, nowSpy } = createHarness({
       now: 2_200,
