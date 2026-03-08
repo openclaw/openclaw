@@ -65,15 +65,35 @@ function safeChannelKey(channel: PairingChannel): string {
   if (!raw) {
     throw new Error("invalid pairing channel");
   }
-  const safe = raw.replace(/[\\/:*?"<>|]/g, "_").replace(/\.\./g, "_");
-  if (!safe || safe === "_") {
+  // Strip path separators, traversal sequences, and null bytes for path safety
+  const safe = raw
+    .split("")
+    .filter((ch) => ch.charCodeAt(0) !== 0)
+    .join("")
+    .replace(/[\\/:*?"<>|]/g, "_")
+    .replace(/\.\./g, "_");
+  if (!safe || safe === "_" || safe.startsWith(".")) {
     throw new Error("invalid pairing channel");
   }
   return safe;
 }
 
+function assertWithinRoot(resolved: string, root: string): void {
+  const normalizedResolved = path.resolve(resolved);
+  const normalizedRoot = path.resolve(root);
+  if (
+    !normalizedResolved.startsWith(normalizedRoot + path.sep) &&
+    normalizedResolved !== normalizedRoot
+  ) {
+    throw new Error("invalid pairing path: escapes credentials directory");
+  }
+}
+
 function resolvePairingPath(channel: PairingChannel, env: NodeJS.ProcessEnv = process.env): string {
-  return path.join(resolveCredentialsDir(env), `${safeChannelKey(channel)}-pairing.json`);
+  const root = resolveCredentialsDir(env);
+  const resolved = path.join(root, `${safeChannelKey(channel)}-pairing.json`);
+  assertWithinRoot(resolved, root);
+  return resolved;
 }
 
 function safeAccountKey(accountId: string): string {
@@ -81,8 +101,14 @@ function safeAccountKey(accountId: string): string {
   if (!raw) {
     throw new Error("invalid pairing account id");
   }
-  const safe = raw.replace(/[\\/:*?"<>|]/g, "_").replace(/\.\./g, "_");
-  if (!safe || safe === "_") {
+  // Strip path separators, traversal sequences, and null bytes for path safety
+  const safe = raw
+    .split("")
+    .filter((ch) => ch.charCodeAt(0) !== 0)
+    .join("")
+    .replace(/[\\/:*?"<>|]/g, "_")
+    .replace(/\.\./g, "_");
+  if (!safe || safe === "_" || safe.startsWith(".")) {
     throw new Error("invalid pairing account id");
   }
   return safe;
@@ -93,15 +119,17 @@ function resolveAllowFromPath(
   env: NodeJS.ProcessEnv = process.env,
   accountId?: string,
 ): string {
+  const root = resolveCredentialsDir(env);
   const base = safeChannelKey(channel);
   const normalizedAccountId = typeof accountId === "string" ? accountId.trim() : "";
   if (!normalizedAccountId) {
-    return path.join(resolveCredentialsDir(env), `${base}-allowFrom.json`);
+    const resolved = path.join(root, `${base}-allowFrom.json`);
+    assertWithinRoot(resolved, root);
+    return resolved;
   }
-  return path.join(
-    resolveCredentialsDir(env),
-    `${base}-${safeAccountKey(normalizedAccountId)}-allowFrom.json`,
-  );
+  const resolved = path.join(root, `${base}-${safeAccountKey(normalizedAccountId)}-allowFrom.json`);
+  assertWithinRoot(resolved, root);
+  return resolved;
 }
 
 export function resolveChannelAllowFromPath(

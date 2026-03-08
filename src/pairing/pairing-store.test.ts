@@ -494,3 +494,79 @@ describe("pairing store", () => {
     });
   });
 });
+
+describe("path traversal prevention", () => {
+  it("sanitizes channel IDs with traversal sequences to safe filenames", async () => {
+    await withTempStateDir(async () => {
+      // ../etc gets sanitized to __etc (safe) - traversal chars replaced with _
+      const result = await listChannelPairingRequests("../etc" as "telegram");
+      expect(result).toEqual([]);
+    });
+  });
+
+  it("rejects pure-dot channel IDs", async () => {
+    await withTempStateDir(async () => {
+      await expect(listChannelPairingRequests(".." as "telegram")).rejects.toThrow(
+        "invalid pairing channel",
+      );
+    });
+  });
+
+  it("rejects channel IDs that are empty or only separators", async () => {
+    await withTempStateDir(async () => {
+      await expect(listChannelPairingRequests("" as "telegram")).rejects.toThrow(
+        "invalid pairing channel",
+      );
+      await expect(listChannelPairingRequests("/" as "telegram")).rejects.toThrow(
+        "invalid pairing channel",
+      );
+    });
+  });
+
+  it("rejects channel IDs starting with a dot", async () => {
+    await withTempStateDir(async () => {
+      await expect(listChannelPairingRequests(".hidden" as "telegram")).rejects.toThrow(
+        "invalid pairing channel",
+      );
+    });
+  });
+
+  it("sanitizes traversal sequences in account IDs to safe filenames", async () => {
+    await withTempStateDir(async () => {
+      // ../../../etc/passwd gets sanitized to ______etc_passwd (safe filename)
+      const result = await addChannelAllowFromStoreEntry({
+        channel: "telegram",
+        entry: "12345",
+        accountId: "../../../etc/passwd",
+      });
+      expect(result.changed).toBe(true);
+    });
+  });
+
+  it("rejects account IDs starting with a dot", async () => {
+    await withTempStateDir(async () => {
+      await expect(
+        addChannelAllowFromStoreEntry({
+          channel: "telegram",
+          entry: "12345",
+          accountId: ".secret",
+        }),
+      ).rejects.toThrow("invalid pairing account id");
+    });
+  });
+
+  it("sanitizes null bytes from channel IDs", async () => {
+    await withTempStateDir(async () => {
+      // Null bytes are stripped; "tele\0gram" becomes "telegram" which is valid
+      const result = await listChannelPairingRequests("tele\0gram" as "telegram");
+      expect(result).toEqual([]);
+    });
+  });
+
+  it("allows valid channel and account IDs", async () => {
+    await withTempStateDir(async () => {
+      const result = await listChannelPairingRequests("telegram");
+      expect(result).toEqual([]);
+    });
+  });
+});
