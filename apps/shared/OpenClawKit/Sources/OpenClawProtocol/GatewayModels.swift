@@ -836,6 +836,20 @@ public struct NodeRenameParams: Codable, Sendable {
 
 public struct NodeListParams: Codable, Sendable {}
 
+public struct NodePendingAckParams: Codable, Sendable {
+    public let ids: [String]
+
+    public init(
+        ids: [String])
+    {
+        self.ids = ids
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case ids
+    }
+}
+
 public struct NodeDescribeParams: Codable, Sendable {
     public let nodeid: String
 
