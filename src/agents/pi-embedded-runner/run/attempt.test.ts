@@ -6,7 +6,9 @@ import {
   composeSystemPromptWithHookContext,
   isOllamaCompatProvider,
   prependSystemPromptAddition,
+  resolveRunCustomTools,
   resolveAttemptFsWorkspaceOnly,
+  shouldWrapMcpToolsForRun,
   resolveOllamaCompatNumCtxEnabled,
   resolvePromptBuildHookResult,
   resolvePromptModeForSession,
@@ -182,6 +184,60 @@ describe("resolveAttemptFsWorkspaceOnly", () => {
     ).toBe(false);
   });
 });
+
+describe("shouldWrapMcpToolsForRun", () => {
+  it("skips MCP wrapping for memory helper runs", () => {
+    expect(
+      shouldWrapMcpToolsForRun({
+        mcpSanitizationEnabled: true,
+        config: {},
+        sessionId: "session-1",
+        trigger: "memory",
+      }),
+    ).toBe(false);
+  });
+
+  it("wraps MCP tools for non-memory runs when config and session are present", () => {
+    expect(
+      shouldWrapMcpToolsForRun({
+        mcpSanitizationEnabled: true,
+        config: {},
+        sessionId: "session-1",
+        trigger: "user",
+      }),
+    ).toBe(true);
+  });
+});
+
+describe("resolveRunCustomTools", () => {
+  it("wraps only base custom tools and appends hosted client tools untouched", () => {
+    const wrapMcpTools = vi.fn((defs: string[]) => defs.map((d) => `wrapped:${d}`));
+    const result = resolveRunCustomTools({
+      customTools: ["read"],
+      clientToolDefs: ["web_search"],
+      shouldWrapMcp: true,
+      wrapMcpTools,
+    });
+
+    expect(wrapMcpTools).toHaveBeenCalledTimes(1);
+    expect(wrapMcpTools).toHaveBeenCalledWith(["read"]);
+    expect(result).toEqual(["wrapped:read", "web_search"]);
+  });
+
+  it("skips wrapping when shouldWrapMcp is false", () => {
+    const wrapMcpTools = vi.fn((defs: string[]) => defs.map((d) => `wrapped:${d}`));
+    const result = resolveRunCustomTools({
+      customTools: ["read"],
+      clientToolDefs: ["web_search"],
+      shouldWrapMcp: false,
+      wrapMcpTools,
+    });
+
+    expect(wrapMcpTools).not.toHaveBeenCalled();
+    expect(result).toEqual(["read", "web_search"]);
+  });
+});
+
 describe("wrapStreamFnTrimToolCallNames", () => {
   function createFakeStream(params: { events: unknown[]; resultMessage: unknown }): {
     result: () => Promise<unknown>;

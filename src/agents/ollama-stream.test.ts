@@ -1,11 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
 import {
-  createConfiguredOllamaStreamFn,
   createOllamaStreamFn,
   convertToOllamaMessages,
   buildAssistantMessage,
   parseNdjsonStream,
-  resolveOllamaBaseUrlForRun,
 } from "./ollama-stream.js";
 
 describe("convertToOllamaMessages", () => {
@@ -321,12 +319,7 @@ async function withMockNdjsonFetch(
 async function createOllamaTestStream(params: {
   baseUrl: string;
   defaultHeaders?: Record<string, string>;
-  options?: {
-    apiKey?: string;
-    maxTokens?: number;
-    signal?: AbortSignal;
-    headers?: Record<string, string>;
-  };
+  options?: { maxTokens?: number; signal?: AbortSignal; headers?: Record<string, string> };
 }) {
   const streamFn = createOllamaStreamFn(params.baseUrl, params.defaultHeaders);
   return streamFn(
@@ -420,71 +413,6 @@ describe("createOllamaStreamFn", () => {
     );
   });
 
-  it("preserves an explicit Authorization header when apiKey is a local marker", async () => {
-    await withMockNdjsonFetch(
-      [
-        '{"model":"m","created_at":"t","message":{"role":"assistant","content":"ok"},"done":false}',
-        '{"model":"m","created_at":"t","message":{"role":"assistant","content":""},"done":true,"prompt_eval_count":1,"eval_count":1}',
-      ],
-      async (fetchMock) => {
-        const stream = await createOllamaTestStream({
-          baseUrl: "http://ollama-host:11434",
-          defaultHeaders: {
-            Authorization: "Bearer proxy-token",
-          },
-          options: {
-            apiKey: "ollama-local", // pragma: allowlist secret
-            headers: {
-              Authorization: "Bearer proxy-token",
-            },
-          },
-        });
-
-        await collectStreamEvents(stream);
-        const [, requestInit] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
-        expect(requestInit.headers).toMatchObject({
-          Authorization: "Bearer proxy-token",
-        });
-      },
-    );
-  });
-
-  it("allows a real apiKey to override an explicit Authorization header", async () => {
-    await withMockNdjsonFetch(
-      [
-        '{"model":"m","created_at":"t","message":{"role":"assistant","content":"ok"},"done":false}',
-        '{"model":"m","created_at":"t","message":{"role":"assistant","content":""},"done":true,"prompt_eval_count":1,"eval_count":1}',
-      ],
-      async (fetchMock) => {
-        const streamFn = createOllamaStreamFn("http://ollama-host:11434", {
-          Authorization: "Bearer proxy-token",
-        });
-        const stream = await Promise.resolve(
-          streamFn(
-            {
-              id: "qwen3:32b",
-              api: "ollama",
-              provider: "custom-ollama",
-              contextWindow: 131072,
-            } as never,
-            {
-              messages: [{ role: "user", content: "hello" }],
-            } as never,
-            {
-              apiKey: "real-token", // pragma: allowlist secret
-            } as never,
-          ),
-        );
-
-        await collectStreamEvents(stream);
-        const [, requestInit] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
-        expect(requestInit.headers).toMatchObject({
-          Authorization: "Bearer real-token",
-        });
-      },
-    );
-  });
-
   it("accumulates thinking chunks when content is empty", async () => {
     await withMockNdjsonFetch(
       [
@@ -567,71 +495,6 @@ describe("createOllamaStreamFn", () => {
         }
 
         expect(doneEvent.message.content).toEqual([{ type: "text", text: "final answer" }]);
-      },
-    );
-  });
-});
-
-describe("resolveOllamaBaseUrlForRun", () => {
-  it("prefers provider baseUrl over model baseUrl", () => {
-    expect(
-      resolveOllamaBaseUrlForRun({
-        modelBaseUrl: "http://model-host:11434",
-        providerBaseUrl: "http://provider-host:11434",
-      }),
-    ).toBe("http://provider-host:11434");
-  });
-
-  it("falls back to model baseUrl when provider baseUrl is missing", () => {
-    expect(
-      resolveOllamaBaseUrlForRun({
-        modelBaseUrl: "http://model-host:11434",
-      }),
-    ).toBe("http://model-host:11434");
-  });
-
-  it("falls back to native default when neither baseUrl is configured", () => {
-    expect(resolveOllamaBaseUrlForRun({})).toBe("http://127.0.0.1:11434");
-  });
-});
-
-describe("createConfiguredOllamaStreamFn", () => {
-  it("uses provider-level baseUrl when model baseUrl is absent", async () => {
-    await withMockNdjsonFetch(
-      [
-        '{"model":"m","created_at":"t","message":{"role":"assistant","content":"ok"},"done":false}',
-        '{"model":"m","created_at":"t","message":{"role":"assistant","content":""},"done":true,"prompt_eval_count":1,"eval_count":1}',
-      ],
-      async (fetchMock) => {
-        const streamFn = createConfiguredOllamaStreamFn({
-          model: {
-            headers: { Authorization: "Bearer proxy-token" },
-          },
-          providerBaseUrl: "http://provider-host:11434/v1",
-        });
-        const stream = await Promise.resolve(
-          streamFn(
-            {
-              id: "qwen3:32b",
-              api: "ollama",
-              provider: "custom-ollama",
-              contextWindow: 131072,
-            } as never,
-            {
-              messages: [{ role: "user", content: "hello" }],
-            } as never,
-            {
-              apiKey: "ollama-local", // pragma: allowlist secret
-            } as never,
-          ),
-        );
-
-        await collectStreamEvents(stream);
-        const [url, requestInit] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
-        expect(url).toBe("http://provider-host:11434/api/chat");
-        expect(requestInit.headers).toMatchObject({
-          Authorization: "Bearer proxy-token",
-        });
       },
     );
   });

@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { parseByteSize } from "../cli/parse-bytes.js";
 import { parseDurationMs } from "../cli/parse-duration.js";
+import { AgentModelSchema } from "./zod-schema.agent-model.js";
 import { ToolsSchema } from "./zod-schema.agent-runtime.js";
 import { AgentsSchema, AudioSchema, BindingsSchema, BroadcastSchema } from "./zod-schema.agents.js";
 import { ApprovalsSchema } from "./zod-schema.approvals.js";
@@ -87,6 +88,178 @@ const MemoryQmdMcporterSchema = z
   })
   .strict();
 
+const McpServerEntrySchema = z
+  .object({
+    tools: z.array(z.string()),
+  })
+  .strict();
+
+export const McpServersSchema = z.record(z.string(), McpServerEntrySchema).optional();
+
+const AlertingWebhookSchema = z
+  .object({
+    url: z.string().nullable().optional(),
+    secret: z.string().nullable().optional(),
+    retries: z.number().optional(),
+    retryDelayMs: z.number().optional(),
+    timeoutMs: z.number().optional(),
+  })
+  .strict();
+
+const AlertingRuleSyntacticFailBurstSchema = z
+  .object({
+    count: z.number().optional(),
+    windowMinutes: z.number().optional(),
+  })
+  .strict();
+
+const AlertingRuleTrustedToolSchemaFailSchema = z
+  .object({
+    enabled: z.boolean().optional(),
+  })
+  .strict();
+
+const AlertingRuleFrequencyEscalationTierSchema = z
+  .object({
+    enabled: z.boolean().optional(),
+  })
+  .strict();
+
+const AlertingRuleFrequencyEscalationSchema = z
+  .object({
+    tier2: AlertingRuleFrequencyEscalationTierSchema.optional(),
+    tier3: AlertingRuleFrequencyEscalationTierSchema.optional(),
+  })
+  .strict();
+
+const AlertingRuleSemanticCatchSchema = z
+  .object({
+    enabled: z.boolean().optional(),
+    escalateAfter: z.number().optional(),
+  })
+  .strict();
+
+const AlertingRuleWriteFailSpikeSchema = z
+  .object({
+    count: z.number().optional(),
+    windowMinutes: z.number().optional(),
+  })
+  .strict();
+
+const AlertingRulesSchema = z
+  .object({
+    syntacticFailBurst: AlertingRuleSyntacticFailBurstSchema.optional(),
+    trustedToolSchemaFail: AlertingRuleTrustedToolSchemaFailSchema.optional(),
+    frequencyEscalation: AlertingRuleFrequencyEscalationSchema.optional(),
+    semanticCatchNoSyntacticFlag: AlertingRuleSemanticCatchSchema.optional(),
+    writeFailSpike: AlertingRuleWriteFailSpikeSchema.optional(),
+  })
+  .strict();
+
+const AlertingSchema = z
+  .object({
+    enabled: z.boolean().optional(),
+    channels: z.object({ webhook: AlertingWebhookSchema.optional() }).strict().optional(),
+    suppression: z.object({ windowMinutes: z.number().optional() }).strict().optional(),
+    rateLimit: z
+      .object({
+        maxPerMinute: z.number().optional(),
+        maxPerHour: z.number().optional(),
+      })
+      .strict()
+      .optional(),
+    retention: z.object({ days: z.number().optional() }).strict().optional(),
+    payload: z.object({ recentContextMax: z.number().optional() }).strict().optional(),
+    index: z.object({ ttlMinutes: z.number().optional() }).strict().optional(),
+    rules: AlertingRulesSchema.optional(),
+  })
+  .strict()
+  .optional();
+
+const MemorySessionSanitizationMcpSchema = z
+  .object({
+    enabled: z.boolean().optional(),
+    trustedServers: z.array(z.string()).optional(),
+    blockOnSandboxUnavailable: z.boolean().optional(),
+  })
+  .strict();
+
+const MemorySessionSanitizationSyntacticSchema = z
+  .object({
+    enabled: z.boolean().optional(),
+    maxPayloadBytes: z.number().optional(),
+    maxJsonDepth: z.number().optional(),
+  })
+  .strict();
+
+const MemorySessionSanitizationSchemaValidationSchema = z
+  .object({
+    enabled: z.boolean().optional(),
+  })
+  .strict();
+
+const MemorySessionSanitizationTwoPassSchema = z
+  .object({
+    enabled: z.boolean().optional(),
+    hardBlockRules: z.array(z.string()).optional(),
+  })
+  .strict();
+
+const MemorySessionSanitizationFrequencyThresholdsSchema = z
+  .object({
+    tier1: z.number().optional(),
+    tier2: z.number().optional(),
+    tier3: z.number().optional(),
+  })
+  .strict();
+
+const MemorySessionSanitizationFrequencySchema = z
+  .object({
+    enabled: z.boolean().optional(),
+    halfLifeMs: z.number().optional(),
+    weights: z.record(z.string(), z.number()).optional(),
+    thresholds: MemorySessionSanitizationFrequencyThresholdsSchema.optional(),
+  })
+  .strict();
+
+const MemorySessionSanitizationAuditSchema = z
+  .object({
+    enabled: z.boolean().optional(),
+    verbosity: z.enum(["minimal", "standard", "high", "maximum"]).optional(),
+    retentionDays: z.number().int().nonnegative().optional(),
+    rawRetentionDays: z.number().int().nonnegative().optional(),
+  })
+  .strict();
+
+const MemorySessionSanitizationContextSchema = z
+  .object({
+    profile: z.string().optional(),
+    customProfilePath: z.string().optional(),
+  })
+  .strict();
+
+const MemorySessionSanitizationSchema = z
+  .object({
+    enabled: z.boolean().optional(),
+    model: AgentModelSchema.optional(),
+    thinking: z.string().optional(),
+    rawMaxAge: z.string().optional(),
+    mcp: MemorySessionSanitizationMcpSchema.optional(),
+    syntactic: MemorySessionSanitizationSyntacticSchema.optional(),
+    schema: MemorySessionSanitizationSchemaValidationSchema.optional(),
+    twoPass: MemorySessionSanitizationTwoPassSchema.optional(),
+    frequency: MemorySessionSanitizationFrequencySchema.optional(),
+    audit: MemorySessionSanitizationAuditSchema.optional(),
+    context: MemorySessionSanitizationContextSchema.optional(),
+  })
+  .strict();
+
+const MemorySessionsSchema = z
+  .object({
+    sanitization: MemorySessionSanitizationSchema.optional(),
+  })
+  .strict();
+
 const LoggingLevelSchema = z.union([
   z.literal("silent"),
   z.literal("fatal"),
@@ -115,6 +288,7 @@ const MemorySchema = z
   .object({
     backend: z.union([z.literal("builtin"), z.literal("qmd")]).optional(),
     citations: z.union([z.literal("auto"), z.literal("on"), z.literal("off")]).optional(),
+    sessions: MemorySessionsSchema.optional(),
     qmd: MemoryQmdSchema.optional(),
   })
   .strict()
@@ -787,6 +961,8 @@ export const OpenClawSchema = z
       .strict()
       .optional(),
     memory: MemorySchema,
+    mcpServers: McpServersSchema,
+    alerting: AlertingSchema,
     skills: z
       .object({
         allowBundled: z.array(z.string()).optional(),

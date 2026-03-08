@@ -1086,6 +1086,31 @@ function createGoogleThinkingPayloadWrapper(
   };
 }
 
+function createQwenStopTokenWrapper(baseStreamFn: StreamFn | undefined): StreamFn {
+  const underlying = baseStreamFn ?? streamSimple;
+  return (model, context, options) => {
+    const onPayload = options?.onPayload;
+    return underlying(model, context, {
+      ...options,
+      onPayload: (payload) => {
+        const qwenThinkingFormat =
+          model.api === "openai-completions"
+            ? (model.compat as { thinkingFormat?: "openai" | "zai" | "qwen" } | undefined)
+                ?.thinkingFormat
+            : undefined;
+        if (qwenThinkingFormat === "qwen" && payload && typeof payload === "object") {
+          const payloadObj = payload as Record<string, unknown>;
+          if (payloadObj.stop === undefined) {
+            // Qwen chat templates expect <|im_end|> as the turn terminator.
+            payloadObj.stop = ["<|im_end|>"];
+          }
+        }
+        onPayload?.(payload);
+      },
+    });
+  };
+}
+
 /**
  * Create a streamFn wrapper that injects tool_stream=true for Z.AI providers.
  *
@@ -1285,6 +1310,10 @@ export function applyExtraParamsToAgent(
   // Guard Google payloads against invalid negative thinking budgets emitted by
   // upstream model-ID heuristics for Gemini 3.1 variants.
   agent.streamFn = createGoogleThinkingPayloadWrapper(agent.streamFn, thinkingLevel);
+
+  // Qwen chat-completions models may require the explicit end-of-turn stop token.
+  // Gate on the model's compat flag so non-Qwen OpenAI-compatible backends are untouched.
+  agent.streamFn = createQwenStopTokenWrapper(agent.streamFn);
 
   const openAIServiceTier = resolveOpenAIServiceTier(merged);
   if (openAIServiceTier) {

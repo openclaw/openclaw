@@ -20,6 +20,8 @@ Scope intent:
 
 ### `openclaw.json` targets (`secrets configure` + `secrets apply` + `secrets audit`)
 
+<!-- markdownlint-disable-next-line MD042 -->
+
 [//]: # "secretref-supported-list-start"
 
 - `models.providers.*.apiKey`
@@ -91,8 +93,8 @@ Scope intent:
 
 - `profiles.*.keyRef` (`type: "api_key"`)
 - `profiles.*.tokenRef` (`type: "token"`)
-
-[//]: # "secretref-supported-list-end"
+  <!-- markdownlint-disable-next-line MD042 -->
+  [//]: # "secretref-supported-list-end"
 
 Notes:
 
@@ -108,6 +110,8 @@ Notes:
 
 Out-of-scope credentials include:
 
+<!-- markdownlint-disable-next-line MD042 -->
+
 [//]: # "secretref-unsupported-list-start"
 
 - `commands.ownerDisplaySecret`
@@ -119,8 +123,8 @@ Out-of-scope credentials include:
 - `auth-profiles.oauth.*`
 - `discord.threadBindings.*.webhookToken`
 - `whatsapp.creds.json`
-
-[//]: # "secretref-unsupported-list-end"
+  <!-- markdownlint-disable-next-line MD042 -->
+  [//]: # "secretref-unsupported-list-end"
 
 Rationale:
 

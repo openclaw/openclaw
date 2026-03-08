@@ -35,6 +35,17 @@ function buildSkillsSection(params: { skillsPrompt?: string; readToolName: strin
   ];
 }
 
+function buildMcpSanitizationSection(params: { enabled: boolean; isMinimal: boolean }) {
+  if (!params.enabled || params.isMinimal) {
+    return [];
+  }
+  return [
+    "## MCP Tool Sanitization",
+    "MCP tool results from undeclared or untrusted servers are automatically filtered before reaching you. Results blocked by the sanitization layer will appear as structured error responses. If you see an MCP error referencing 'sanitization', the raw result was flagged as potentially adversarial.",
+    "",
+  ];
+}
+
 function buildMemorySection(params: {
   isMinimal: boolean;
   availableTools: Set<string>;
@@ -43,21 +54,52 @@ function buildMemorySection(params: {
   if (params.isMinimal) {
     return [];
   }
-  if (!params.availableTools.has("memory_search") && !params.availableTools.has("memory_get")) {
+  const hasWorkspaceMemory =
+    params.availableTools.has("memory_search") || params.availableTools.has("memory_get");
+  const hasSessionTranscriptMemory =
+    params.availableTools.has("session_memory_recall") ||
+    params.availableTools.has("session_memory_signal");
+  if (!hasWorkspaceMemory && !hasSessionTranscriptMemory) {
     return [];
   }
+  const hasMemoryWriteTools =
+    params.availableTools.has("write") || params.availableTools.has("edit");
   const lines = [
     "## Memory Recall",
-    "Before answering anything about prior work, decisions, dates, people, preferences, or todos: run memory_search on MEMORY.md + memory/*.md; then use memory_get to pull only the needed lines. If low confidence after search, say you checked.",
+    ...(hasWorkspaceMemory
+      ? [
+          "Before answering anything about prior work, decisions, dates, people, preferences, or todos in workspace memory: run memory_search on MEMORY.md + memory/*.md; then use memory_get to pull only the needed lines. If low confidence after search, say you checked.",
+          "memory_search and memory_get are recall-only tools; they never write or append memory.",
+          "Do not invent per-file memory tool names such as memory_2026_03_03_md.",
+          hasMemoryWriteTools
+            ? "To write memory in normal OpenClaw sessions, use write/edit on MEMORY.md or memory/YYYY-MM-DD.md."
+            : "Memory writing is unavailable in this session; do not invent a write-capable memory tool, and say memory writing is unavailable if asked to store something.",
+          "memory/imports/YYYY-MM-DD.md is shared-memory writeback output, not a dedicated agent tool.",
+        ]
+      : []),
+    ...(hasSessionTranscriptMemory
+      ? [
+          "For transcript-derived current-session recall, prefer session_memory_recall.",
+          "session_memory_recall is current-session only. It returns source + confidence; when confidence is medium or low, explicitly qualify the answer.",
+          params.availableTools.has("session_memory_signal")
+            ? "Use session_memory_signal when the current session transcript is noisy and you need a compact relevance pass. It is not a raw transcript inspection tool."
+            : "",
+          params.availableTools.has("sessions_history")
+            ? "sessions_history is for raw transcript inspection/debugging, not normal transcript-memory recall."
+            : "",
+        ].filter(Boolean)
+      : []),
   ];
-  if (params.citationsMode === "off") {
-    lines.push(
-      "Citations are disabled: do not mention file paths or line numbers in replies unless the user explicitly asks.",
-    );
-  } else {
-    lines.push(
-      "Citations: include Source: <path#line> when it helps the user verify memory snippets.",
-    );
+  if (hasWorkspaceMemory) {
+    if (params.citationsMode === "off") {
+      lines.push(
+        "Citations are disabled: do not mention file paths or line numbers in replies unless the user explicitly asks.",
+      );
+    } else {
+      lines.push(
+        "Citations: include Source: <path#line> when it helps the user verify memory snippets.",
+      );
+    }
   }
   lines.push("");
   return lines;
@@ -233,6 +275,8 @@ export function buildAgentSystemPrompt(params: {
     channel: string;
   };
   memoryCitationsMode?: MemoryCitationsMode;
+  /** When true, injects a brief MCP sanitization note for the manager agent. */
+  mcpSanitizationEnabled?: boolean;
 }) {
   const acpEnabled = params.acpEnabled !== false;
   const sandboxedRuntime = params.sandboxInfo?.enabled === true;
@@ -259,6 +303,9 @@ export function buildAgentSystemPrompt(params: {
     agents_list: acpSpawnRuntimeEnabled
       ? 'List OpenClaw agent ids allowed for sessions_spawn when runtime="subagent" (not ACP harness ids)'
       : "List OpenClaw agent ids allowed for sessions_spawn",
+    session_memory_recall:
+      "Recall transcript-derived current-session memory with source + confidence",
+    session_memory_signal: "Extract compact relevant transcript-memory signals",
     sessions_list: "List other sessions (incl. sub-agents) with filters/last",
     sessions_history: "Fetch history for another session/sub-agent",
     sessions_send: "Send a message to another session/sub-agent",
@@ -290,6 +337,8 @@ export function buildAgentSystemPrompt(params: {
     "message",
     "gateway",
     "agents_list",
+    "session_memory_recall",
+    "session_memory_signal",
     "sessions_list",
     "sessions_history",
     "sessions_send",
@@ -407,6 +456,10 @@ export function buildAgentSystemPrompt(params: {
     availableTools,
     citationsMode: params.memoryCitationsMode,
   });
+  const mcpSanitizationSection = buildMcpSanitizationSection({
+    enabled: params.mcpSanitizationEnabled === true,
+    isMinimal,
+  });
   const docsSection = buildDocsSection({
     docsPath: params.docsPath,
     isMinimal,
@@ -477,6 +530,7 @@ export function buildAgentSystemPrompt(params: {
     "",
     ...skillsSection,
     ...memorySection,
+    ...mcpSanitizationSection,
     // Skip self-update for subagent/none modes
     hasGateway && !isMinimal ? "## OpenClaw Self-Update" : "",
     hasGateway && !isMinimal

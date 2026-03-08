@@ -7,6 +7,7 @@ import { createSubsystemLogger } from "../logging/subsystem.js";
 import { resolveUserPath } from "../utils.js";
 import { parseBooleanValue } from "../utils/boolean.js";
 import { safeJsonStringify } from "../utils/safe-json.js";
+import { sanitizePayloadForLogging } from "./payload-log-redaction.js";
 import { redactImageDataForDiagnostics } from "./payload-redaction.js";
 import { getQueuedFileWriter, type QueuedFileWriter } from "./queued-file-writer.js";
 
@@ -104,7 +105,6 @@ export function createAnthropicPayloadLogger(params: {
   modelId?: string;
   modelApi?: string | null;
   workspaceDir?: string;
-  writer?: PayloadLogWriter;
 }): AnthropicPayloadLogger | null {
   const env = params.env ?? process.env;
   const cfg = resolvePayloadLogConfig(env);
@@ -112,7 +112,7 @@ export function createAnthropicPayloadLogger(params: {
     return null;
   }
 
-  const writer = params.writer ?? getWriter(cfg.filePath);
+  const writer = getWriter(cfg.filePath);
   const base: Omit<PayloadLogEvent, "ts" | "stage"> = {
     runId: params.runId,
     sessionId: params.sessionId,
@@ -137,7 +137,12 @@ export function createAnthropicPayloadLogger(params: {
         return streamFn(model, context, options);
       }
       const nextOnPayload = (payload: unknown) => {
-        const redactedPayload = redactImageDataForDiagnostics(payload);
+        // Redact structured secrets then strip base64 image blobs before writing
+        // debug payloads. Transcript-bearing content can still appear semantically
+        // here; docs warn against enabling this logger in environments where raw
+        // prompts are sensitive.
+        const sanitizedPayload = sanitizePayloadForLogging(payload);
+        const redactedPayload = redactImageDataForDiagnostics(sanitizedPayload);
         record({
           ...base,
           ts: new Date().toISOString(),

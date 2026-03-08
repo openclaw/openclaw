@@ -276,6 +276,8 @@ Triggered when messages are received or sent:
 - **`message:preprocessed`**: Fires for every message after all media + link understanding completes, giving hooks access to the fully enriched body (transcripts, image descriptions, link summaries) before the agent sees it.
 - **`message:sent`**: When an outbound message is successfully sent
 
+`message:transcribed` and `message:preprocessed` are trusted-local payloads. They can carry sensitive transcript and media metadata; hook authors should avoid logging, forwarding, or persisting those fields unless they are explicitly required.
+
 #### Message Event Context
 
 Message events include rich context about the message:
@@ -319,25 +321,42 @@ Message events include rich context about the message:
 // message:transcribed context
 {
   body?: string,          // Raw inbound body before enrichment
-  bodyForAgent?: string,  // Enriched body visible to the agent
-  transcript: string,     // Audio transcript text
+  bodyForAgent?: string,  // Enriched body visible to the agent (sensitive)
+  transcript: string,     // Audio transcript text (sensitive)
   channelId: string,      // Channel (e.g., "telegram", "whatsapp")
   conversationId?: string,
   messageId?: string,
+  mediaPath?: string,     // Local media path when available (sensitive)
+  mediaType?: string,     // MIME type for the transcribed media (sensitive)
 }
 
 // message:preprocessed context
 {
   body?: string,          // Raw inbound body
-  bodyForAgent?: string,  // Final enriched body after media/link understanding
-  transcript?: string,    // Transcript when audio was present
+  bodyForAgent?: string,  // Final enriched body after media/link understanding (sensitive)
+  transcript?: string,    // Transcript when audio was present (sensitive)
   channelId: string,      // Channel (e.g., "telegram", "whatsapp")
   conversationId?: string,
   messageId?: string,
+  mediaPath?: string,     // Local media path when available (sensitive)
+  mediaType?: string,     // MIME type for the media (sensitive)
   isGroup?: boolean,
   groupId?: string,
 }
 ```
+
+#### Sensitive field audit status
+
+The current payload shape is kept for compatibility. These fields are available today, but should be treated as sensitive and are being reviewed for future narrowing rather than encouraged for general-purpose hook logic.
+
+| Field          | Present in                                    | Current bundled-hook usage in this repo | Sensitivity | Current guidance                                                 | Long-term review                                   |
+| -------------- | --------------------------------------------- | --------------------------------------- | ----------- | ---------------------------------------------------------------- | -------------------------------------------------- |
+| `transcript`   | `message:transcribed`, `message:preprocessed` | No direct bundled-hook consumers        | High        | Use only when your hook needs the spoken content                 | Candidate for opt-in or narrower exposure          |
+| `bodyForAgent` | `message:transcribed`, `message:preprocessed` | No direct bundled-hook consumers        | High        | Prefer `body` unless the enriched agent-visible text is required | Candidate for deprecation in general-purpose hooks |
+| `mediaPath`    | `message:transcribed`, `message:preprocessed` | No direct bundled-hook consumers        | High        | Avoid unless your hook must reopen the local media file          | Candidate for privileged/internal-only exposure    |
+| `mediaType`    | `message:transcribed`, `message:preprocessed` | No direct bundled-hook consumers        | Medium      | Safe for routing/classification, but still media metadata        | Under review; likely keepable if narrowing happens |
+
+Existing tests and docs still assume these fields are part of the public payload shape, so they are not removed in the current release.
 
 #### Example: Message Logger Hook
 

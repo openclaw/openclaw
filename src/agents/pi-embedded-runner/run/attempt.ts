@@ -13,6 +13,7 @@ import type { OpenClawConfig } from "../../../config/config.js";
 import { getMachineDisplayName } from "../../../infra/machine-name.js";
 import { ensureGlobalUndiciStreamTimeouts } from "../../../infra/net/undici-global-dispatcher.js";
 import { MAX_IMAGE_BYTES } from "../../../media/constants.js";
+import { resolveSessionSanitizationMcpConfig } from "../../../memory/session-sanitization/config.js";
 import { getGlobalHookRunner } from "../../../plugins/hook-runner-global.js";
 import type {
   PluginHookAgentContext,
@@ -66,7 +67,10 @@ import {
 import { subscribeEmbeddedPiSession } from "../../pi-embedded-subscribe.js";
 import { createPreparedEmbeddedPiSettingsManager } from "../../pi-project-settings.js";
 import { applyPiAutoCompactionGuard } from "../../pi-settings.js";
-import { toClientToolDefinitions } from "../../pi-tool-definition-adapter.js";
+import {
+  toClientToolDefinitions,
+  wrapMcpToolDefinitions,
+} from "../../pi-tool-definition-adapter.js";
 import { createOpenClawCodingTools, resolveToolLoopDetectionConfig } from "../../pi-tools.js";
 import { resolveSandboxContext } from "../../sandbox.js";
 import { resolveSandboxRuntimeStatus } from "../../sandbox/runtime-status.js";
@@ -680,6 +684,33 @@ export function buildAfterTurnLegacyCompactionParams(params: {
   };
 }
 
+export function shouldWrapMcpToolsForRun(params: {
+  mcpSanitizationEnabled: boolean;
+  config?: OpenClawConfig;
+  sessionId?: string;
+  trigger?: string;
+}): boolean {
+  return (
+    params.mcpSanitizationEnabled &&
+    !!params.config &&
+    !!params.sessionId &&
+    params.trigger !== "memory"
+  );
+}
+
+export function resolveRunCustomTools<T>(params: {
+  customTools: T[];
+  clientToolDefs: T[];
+  shouldWrapMcp: boolean;
+  wrapMcpTools?: (defs: T[]) => T[];
+}): T[] {
+  const wrappedCustomTools =
+    params.shouldWrapMcp && params.wrapMcpTools
+      ? params.wrapMcpTools(params.customTools)
+      : params.customTools;
+  return [...wrappedCustomTools, ...params.clientToolDefs];
+}
+
 function summarizeMessagePayload(msg: AgentMessage): { textChars: number; imageBlocks: number } {
   const content = (msg as { content?: unknown }).content;
   if (typeof content === "string") {
@@ -884,6 +915,7 @@ export async function runEmbeddedAttempt(
           requireExplicitMessageTarget:
             params.requireExplicitMessageTarget ?? isSubagentSessionKey(params.sessionKey),
           disableMessageTool: params.disableMessageTool,
+          toolPolicyOverride: params.toolPolicyOverride,
         });
     const toolsEnabled = supportsModelTools(params.model);
     const tools = sanitizeToolsForGoogle({
@@ -995,7 +1027,7 @@ export async function runEmbeddedAttempt(
     const ttsHint = params.config ? buildTtsSystemPromptHint(params.config) : undefined;
     const ownerDisplay = resolveOwnerDisplaySetting(params.config);
 
-    const appendPrompt = buildEmbeddedSystemPrompt({
+    const generatedPrompt = buildEmbeddedSystemPrompt({
       workspaceDir: effectiveWorkspace,
       defaultThinkLevel: params.thinkLevel,
       reasoningLevel: params.reasoningLevel ?? "off",
@@ -1026,6 +1058,10 @@ export async function runEmbeddedAttempt(
       bootstrapTruncationWarningLines: bootstrapPromptWarning.lines,
       memoryCitationsMode: params.config?.memory?.citations,
     });
+    const appendPrompt =
+      typeof params.systemPromptOverride === "string" && params.systemPromptOverride.trim()
+        ? params.systemPromptOverride.trim()
+        : generatedPrompt;
     const systemPromptReport = buildSystemPromptReport({
       source: "run",
       generatedAt: Date.now(),
@@ -1174,7 +1210,26 @@ export async function runEmbeddedAttempt(
           )
         : [];
 
-      const allCustomTools = [...customTools, ...clientToolDefs];
+      const mcpSanitizationCfg = resolveSessionSanitizationMcpConfig(params.config);
+      const allCustomTools = resolveRunCustomTools({
+        customTools,
+        clientToolDefs,
+        shouldWrapMcp: shouldWrapMcpToolsForRun({
+          mcpSanitizationEnabled: mcpSanitizationCfg.enabled,
+          config: params.config,
+          sessionId: params.sessionId,
+          trigger: params.trigger,
+        }),
+        // Client-hosted tools (OpenResponses) are not MCP server outputs and
+        // must bypass MCP result sanitization wrapping.
+        wrapMcpTools: (defs) =>
+          wrapMcpToolDefinitions(defs, {
+            cfg: params.config!,
+            agentId: sessionAgentId,
+            sessionId: params.sessionId,
+            lane: "background:session-memory-mcp",
+          }),
+      });
 
       ({ session } = await createAgentSession({
         cwd: resolvedWorkspace,

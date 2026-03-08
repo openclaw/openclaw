@@ -1,5 +1,5 @@
 import type { Writable } from "node:stream";
-import { readBestEffortConfig } from "../../config/config.js";
+import { loadConfig } from "../../config/config.js";
 import { resolveIsNixMode } from "../../config/paths.js";
 import { checkTokenDrift } from "../../daemon/service-audit.js";
 import type { GatewayService } from "../../daemon/service.js";
@@ -326,7 +326,7 @@ export async function runServiceRestart(params: {
     try {
       const command = await params.service.readCommand(process.env);
       const serviceToken = command?.environment?.OPENCLAW_GATEWAY_TOKEN;
-      const cfg = await readBestEffortConfig();
+      const cfg = loadConfig();
       const configToken = resolveGatewayTokenForDriftCheck({ cfg, env: process.env });
       const driftIssue = checkTokenDrift({ serviceToken, configToken });
       if (driftIssue) {

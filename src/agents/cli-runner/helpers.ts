@@ -7,6 +7,7 @@ import type { ImageContent } from "@mariozechner/pi-ai";
 import type { ThinkLevel } from "../../auto-reply/thinking.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { CliBackendConfig } from "../../config/types.js";
+import { resolveSessionSanitizationMcpConfig } from "../../memory/session-sanitization/config.js";
 import { KeyedAsyncQueue } from "../../plugin-sdk/keyed-async-queue.js";
 import { buildTtsSystemPromptHint } from "../../tts/tts.js";
 import { isRecord } from "../../utils.js";
@@ -95,6 +96,9 @@ export function buildSystemPrompt(params: {
     bootstrapTruncationWarningLines: params.bootstrapTruncationWarningLines,
     ttsHint,
     memoryCitationsMode: params.config?.memory?.citations,
+    mcpSanitizationEnabled: params.config
+      ? resolveSessionSanitizationMcpConfig(params.config).enabled
+      : false,
   });
 }
 

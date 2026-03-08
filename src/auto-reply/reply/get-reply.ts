@@ -9,8 +9,14 @@ import { resolveAgentTimeoutMs } from "../../agents/timeout.js";
 import { DEFAULT_AGENT_WORKSPACE_DIR, ensureAgentWorkspace } from "../../agents/workspace.js";
 import { resolveChannelModelOverride } from "../../channels/model-overrides.js";
 import { type OpenClawConfig, loadConfig } from "../../config/config.js";
+import { deriveInboundMessageHookContext } from "../../hooks/message-hook-mappers.js";
 import { applyLinkUnderstanding } from "../../link-understanding/apply.js";
+import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { applyMediaUnderstanding } from "../../media-understanding/apply.js";
+import {
+  buildAutomaticSessionMemoryPrompt,
+  queueSessionSanitizationWrite,
+} from "../../memory/session-sanitization/service.js";
 import { defaultRuntime } from "../../runtime.js";
 import { normalizeStringEntries } from "../../shared/string-normalization.js";
 import { resolveCommandAuthorization } from "../command-auth.js";
@@ -28,6 +34,10 @@ import { applyResetModelOverride } from "./session-reset-model.js";
 import { initSessionState } from "./session.js";
 import { stageSandboxMedia } from "./stage-sandbox-media.js";
 import { createTypingController } from "./typing.js";
+
+const log = createSubsystemLogger("auto-reply/get-reply");
+
+const SESSION_SANITIZATION_WRITE_LANE = "background:session-sanitization-write";
 
 function mergeSkillFilters(channelFilter?: string[], agentFilter?: string[]): string[] | undefined {
   const normalize = (list?: string[]) => {
@@ -172,6 +182,23 @@ export async function getReplyFromConfig(
     triggerBodyNormalized,
     bodyStripped,
   } = sessionState;
+
+  const canonicalInbound = deriveInboundMessageHookContext(finalized);
+  const hasSanitizationText = [
+    canonicalInbound.transcript,
+    canonicalInbound.content,
+    canonicalInbound.bodyForAgent,
+    canonicalInbound.body,
+  ].some((value) => typeof value === "string" && value.trim().length > 0);
+  if (hasSanitizationText) {
+    queueSessionSanitizationWrite({
+      cfg,
+      agentId,
+      sessionId,
+      canonical: canonicalInbound,
+      helperDeps: { lane: SESSION_SANITIZATION_WRITE_LANE },
+    });
+  }
 
   await applyResetModelOverride({
     cfg,
@@ -355,6 +382,23 @@ export async function getReplyFromConfig(
     workspaceDir,
   });
 
+  let transcriptMemorySystemPrompt = "";
+  try {
+    transcriptMemorySystemPrompt =
+      (await buildAutomaticSessionMemoryPrompt({
+        cfg,
+        agentId,
+        sessionId,
+        query: cleanedBody,
+        helperDeps: { lane: "background:session-memory-auto-recall" },
+      })) ?? "";
+  } catch (err) {
+    // transcript recall is optional — degrade gracefully
+    log.warn("session memory prompt failed, continuing without it", {
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
+
   return runPreparedReply({
     ctx,
     sessionCtx,
@@ -399,5 +443,6 @@ export async function getReplyFromConfig(
     storePath,
     workspaceDir,
     abortedLastRun,
+    transcriptMemorySystemPrompt,
   });
 }

@@ -58,7 +58,7 @@ Notes:
 - `--claude-cli-logs`: only show claude-cli logs in the console (and enable its stdout/stderr).
 - `--ws-log <auto|full|compact>`: websocket log style (default `auto`).
 - `--compact`: alias for `--ws-log compact`.
-- `--raw-stream`: log raw model stream events to jsonl.
+- `--raw-stream`: log raw model stream events to jsonl. Structured secrets are redacted before write, but transcript-bearing content can still remain visible in the log.
 - `--raw-stream-path <path>`: raw stream jsonl path.
 
 ## Query a running Gateway

@@ -32,7 +32,6 @@ const service = {
 
 vi.mock("../../config/config.js", () => ({
   loadConfig: () => loadConfig(),
-  readBestEffortConfig: async () => loadConfig(),
 }));
 
 vi.mock("../../runtime.js", () => ({
@@ -89,7 +88,7 @@ describe("runServiceRestart token drift", () => {
     );
   });
 
-  it("compares restart drift against config token even when caller env is set", async () => {
+  it("uses gateway.auth.token when checking drift", async () => {
     loadConfig.mockReturnValue({
       gateway: {
         auth: {

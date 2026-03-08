@@ -63,6 +63,11 @@ export function guardSessionManager(
     : undefined;
 
   const guard = installSessionToolResultGuard(sessionManager, {
+    // Inbound transcript-bearing user turns already pass through the generic
+    // message transform and before_message_write hook below. We are deferring
+    // any dedicated transcript-specific guard until a stronger need appears,
+    // because persisted user input is a single prompt string rather than
+    // serialized Body/BodyForAgent/RawBody variants.
     transformMessageForPersistence: (message) =>
       applyInputProvenanceToUserMessage(message, opts?.inputProvenance),
     transformToolResultForPersistence: transform,

@@ -938,6 +938,76 @@ describe("applyExtraParamsToAgent", () => {
       },
     });
   });
+
+  it("injects Qwen stop token only for models marked with qwen compat", () => {
+    const payload = runResponsesPayloadMutationCase({
+      applyProvider: "lmstudio",
+      applyModelId: "qwen3-32b",
+      model: {
+        api: "openai-completions",
+        provider: "lmstudio",
+        id: "qwen3-32b",
+        name: "Qwen3 32B",
+        baseUrl: "http://127.0.0.1:1234/v1",
+        reasoning: true,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 32_768,
+        maxTokens: 8_192,
+        compat: { thinkingFormat: "qwen" },
+      } as Model<"openai-completions">,
+      payload: {},
+    });
+
+    expect(payload.stop).toEqual(["<|im_end|>"]);
+  });
+
+  it("does not inject Qwen stop token for non-Qwen openai-completions models", () => {
+    const payload = runResponsesPayloadMutationCase({
+      applyProvider: "lmstudio",
+      applyModelId: "minimax-m2.5-gs32",
+      model: {
+        api: "openai-completions",
+        provider: "lmstudio",
+        id: "minimax-m2.5-gs32",
+        name: "MiniMax M2.5 GS32",
+        baseUrl: "http://127.0.0.1:1234/v1",
+        reasoning: false,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 196_608,
+        maxTokens: 8_192,
+        compat: { supportsDeveloperRole: false },
+      } as Model<"openai-completions">,
+      payload: {},
+    });
+
+    expect(payload).not.toHaveProperty("stop");
+  });
+
+  it("preserves explicit stop values for Qwen-compatible models", () => {
+    const payload = runResponsesPayloadMutationCase({
+      applyProvider: "lmstudio",
+      applyModelId: "qwen3-32b",
+      model: {
+        api: "openai-completions",
+        provider: "lmstudio",
+        id: "qwen3-32b",
+        name: "Qwen3 32B",
+        baseUrl: "http://127.0.0.1:1234/v1",
+        reasoning: true,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 32_768,
+        maxTokens: 8_192,
+        compat: { thinkingFormat: "qwen" },
+      } as Model<"openai-completions">,
+      payload: { stop: ["</s>"] },
+    });
+
+    expect(payload.stop).toEqual(["</s>"]);
+  });
+
   it("adds OpenRouter attribution headers to stream options", () => {
     const { calls, agent } = createOptionsCaptureAgent();
 
