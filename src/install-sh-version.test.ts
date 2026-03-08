@@ -41,6 +41,25 @@ resolve_openclaw_version`,
   return output.trim();
 }
 
+function resolveVersionFromInstallerViaStdin(cliPath: string, cwd: string): string {
+  const installerPath = path.join(process.cwd(), "scripts", "install.sh");
+  const installerSource = fs.readFileSync(installerPath, "utf-8");
+  const output = execFileSync("bash", [], {
+    cwd,
+    encoding: "utf-8",
+    input: `${installerSource}
+OPENCLAW_BIN="$FAKE_OPENCLAW_BIN"
+resolve_openclaw_version
+`,
+    env: {
+      ...process.env,
+      FAKE_OPENCLAW_BIN: cliPath,
+      OPENCLAW_INSTALL_SH_NO_RUN: "1",
+    },
+  });
+  return output.trim();
+}
+
 describe("install.sh version resolution", () => {
   const tempRoots: string[] = [];
 
@@ -67,6 +86,35 @@ describe("install.sh version resolution", () => {
       tempRoots.push(fixture.root);
 
       expect(resolveVersionFromInstaller(fixture.cliPath)).toBe("OpenClaw dev build");
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "does not source version helpers from cwd when installer runs via stdin",
+    () => {
+      const fixture = withFakeCli("OpenClaw 2026.3.8 (abcdef0)");
+      tempRoots.push(fixture.root);
+
+      const hostileCwd = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-install-stdin-"));
+      tempRoots.push(hostileCwd);
+      const hostileHelper = path.join(
+        hostileCwd,
+        "docker",
+        "install-sh-common",
+        "version-parse.sh",
+      );
+      fs.mkdirSync(path.dirname(hostileHelper), { recursive: true });
+      fs.writeFileSync(
+        hostileHelper,
+        `#!/usr/bin/env bash
+extract_openclaw_semver() {
+  printf '%s' 'poisoned'
+}
+`,
+        "utf-8",
+      );
+
+      expect(resolveVersionFromInstallerViaStdin(fixture.cliPath, hostileCwd)).toBe("2026.3.8");
     },
   );
 });

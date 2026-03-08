@@ -2086,9 +2086,13 @@ run_bootstrap_onboarding_if_needed() {
 }
 
 load_install_version_helpers() {
+    local source_path="${BASH_SOURCE[0]-}"
     local script_dir=""
     local helper_path=""
-    script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd 2>/dev/null || true)"
+    if [[ -z "$source_path" || ! -f "$source_path" ]]; then
+        return 0
+    fi
+    script_dir="$(cd "$(dirname "$source_path")" && pwd 2>/dev/null || true)"
     helper_path="${script_dir}/docker/install-sh-common/version-parse.sh"
     if [[ -n "$script_dir" && -r "$helper_path" ]]; then
         # shellcheck source=docker/install-sh-common/version-parse.sh
