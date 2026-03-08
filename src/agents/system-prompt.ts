@@ -57,8 +57,14 @@ function buildMemorySection(params: {
     );
   }
   if (canWrite) {
+    const writeGuidance = [
+      params.availableTools.has("memory_write") ? "memory_write (append)" : null,
+      params.availableTools.has("memory_upsert") ? "memory_upsert (keyed update)" : null,
+    ].filter(Boolean);
+    const writeTools =
+      writeGuidance.length === 2 ? `${writeGuidance[0]} or ${writeGuidance[1]}` : writeGuidance[0];
     lines.push(
-      "When the user explicitly asks to remember/update something, use memory_write (append) or memory_upsert (keyed update) so durable memory is saved to disk.",
+      `When the user explicitly asks to remember/update something, use ${writeTools} so durable memory is saved to disk.`,
     );
   }
   if (canRecall) {
