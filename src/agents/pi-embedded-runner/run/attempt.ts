@@ -2271,6 +2271,7 @@ export async function runEmbeddedAttempt(
       );
 
       let messagesSnapshot: AgentMessage[] = [];
+      let responseEmitBlocked = false;
       let sessionIdUsed = activeSession.sessionId;
       const onAbort = () => {
         const reason = params.abortSignal ? getAbortReason(params.abortSignal) : undefined;
@@ -2620,6 +2621,7 @@ export async function runEmbeddedAttempt(
                 // Blocked — suppress the entire accumulated response, not just
                 // the last chunk. Earlier tool-loop iterations may have added
                 // text that would otherwise escape the hook.
+                responseEmitBlocked = true;
                 assistantTexts.splice(0, assistantTexts.length);
               } else if (emitResult.allContent !== undefined) {
                 // Full multi-turn modification — replace all assistant texts.
@@ -2642,6 +2644,7 @@ export async function runEmbeddedAttempt(
             // internal bug, plugin escaping per-handler catchErrors), suppress
             // the response rather than delivering potentially unredacted PII.
             // Plugin authors writing output-policy hooks expect crash = blocked.
+            responseEmitBlocked = true;
             log.error(
               `before_response_emit hook error — FAIL CLOSED, clearing response: runId=${params.runId} ${String(err)}`,
             );
@@ -2800,10 +2803,14 @@ export async function runEmbeddedAttempt(
         params.abortSignal?.removeEventListener?.("abort", onAbort);
       }
 
-      const lastAssistant = messagesSnapshot
-        .slice()
-        .toReversed()
-        .find((m) => m.role === "assistant");
+      // When before_response_emit blocked the response, suppress lastAssistant
+      // so payloads.ts doesn't fall back to a prior turn's assistant text.
+      const lastAssistant = responseEmitBlocked
+        ? undefined
+        : messagesSnapshot
+            .slice()
+            .toReversed()
+            .find((m) => m.role === "assistant");
 
       const toolMetasNormalized = toolMetas
         .filter(

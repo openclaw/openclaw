@@ -202,14 +202,20 @@ describe("applyBeforeResponseEmitHook", () => {
     expect(result).toBeUndefined();
   });
 
-  it("removes current-run assistant messages on block (multi-turn)", async () => {
+  it("removes current-run assistant messages on block (tool-loop multi-turn)", async () => {
     const hookRunner = makeMockHookRunner({ block: true, blockReason: "PII detected" });
+    // Realistic tool-loop: user asks → assistant calls tool → toolResult → assistant answers
+    // No user messages between assistant turns within a single prompt attempt.
     const activeSession = {
       messages: [
         makeMsg("assistant", "prior history - safe"),
         makeMsg("user", "new question"),
         makeMsg("assistant", "turn 1 with SSN 123-45-6789"),
-        makeMsg("user", "continue"),
+        {
+          role: "toolResult" as const,
+          content: "tool output",
+          timestamp: Date.now(),
+        } as unknown as AgentMessage,
         makeMsg("assistant", "turn 2 with SSN 123-45-6789"),
       ],
     };
@@ -222,16 +228,12 @@ describe("applyBeforeResponseEmitHook", () => {
       activeSession,
     });
 
-    // Prior history must be preserved
-    expect((activeSession.messages[0] as { content: unknown }).content).toBe(
-      "prior history - safe",
-    );
-    // Current-run assistant messages are removed entirely (not blanked).
-    // Empty-content ghost messages would break LLM API calls (Anthropic rejects
-    // { role: "assistant", content: [] }) so we splice them out.
+    // Prior history + user prompt preserved. Current-run assistant + toolResult removed.
     const assistantMsgs = activeSession.messages.filter((m) => m.role === "assistant");
     expect(assistantMsgs).toHaveLength(1); // only prior history remains
     expect((assistantMsgs[0] as { content: unknown }).content).toBe("prior history - safe");
+    // toolResult also removed (would be orphaned)
+    expect(activeSession.messages.filter((m) => m.role === "toolResult")).toHaveLength(0);
   });
 
   it("removes multi-part assistant messages on block", async () => {
@@ -381,12 +383,17 @@ describe("applyBeforeResponseEmitHook", () => {
     const hookRunner = makeMockHookRunner({
       allContent: ["[REDACTED turn 1]", "[REDACTED turn 2]"],
     });
+    // Tool-loop: user → assistant (tool call + text) → toolResult → assistant (final)
     const activeSession = {
       messages: [
         makeMsg("assistant", "old safe history"),
         makeMsg("user", "new question"),
         makeMsg("assistant", "PII in turn 1"),
-        makeMsg("user", "continue"),
+        {
+          role: "toolResult" as const,
+          content: "tool output",
+          timestamp: Date.now(),
+        } as unknown as AgentMessage,
         makeMsg("assistant", "PII in turn 2"),
       ],
     };
@@ -477,10 +484,16 @@ describe("rewriteAllAssistantContent", () => {
 
   it("removes extras from source array, not just slice (splice-on-slice fix)", async () => {
     const hookRunner = makeMockHookRunner({ allContent: ["[REDACTED]"] });
+    // Tool-loop: two assistant turns in one run (no user message between)
     const activeSession = {
       messages: [
+        makeMsg("user", "question"),
         makeMsg("assistant", "PII turn 1"),
-        makeMsg("user", "continue"),
+        {
+          role: "toolResult" as const,
+          content: "tool output",
+          timestamp: Date.now(),
+        } as unknown as AgentMessage,
         makeMsg("assistant", "PII turn 2"),
       ],
     };

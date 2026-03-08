@@ -65,6 +65,25 @@ export function extractAssistantText(msg: AgentMessage): string {
 }
 
 /**
+ * Count text-bearing assistant turns from the tail of the session.
+ * Stops at the first user message (run boundary), so it only counts
+ * messages from the current run. Compaction-safe because it only
+ * inspects messages currently in the array.
+ */
+export function countCurrentRunAssistantTurns(messages: AgentMessage[]): number {
+  let count = 0;
+  for (let i = messages.length - 1; i >= 0; i--) {
+    if (messages[i].role === "user") {
+      break;
+    }
+    if (messages[i].role === "assistant" && extractAssistantText(messages[i]).length > 0) {
+      count++;
+    }
+  }
+  return count;
+}
+
+/**
  * Run the before_response_emit hook and apply modifications.
  *
  * Returns a result describing the hook outcome:
@@ -94,18 +113,13 @@ export async function applyBeforeResponseEmitHook(
 
   // Determine how many text-bearing assistant turns to scope.
   //
-  // We use assistantTexts.length as the baseline scope count. While this can
-  // over-count with block-reply chunking (multiple chunks per turn), that
-  // over-count is safe — getRunScopedMessages scans from the tail and stops
-  // when it finds enough text-bearing assistant messages, so extra scope just
-  // means the scan terminates earlier than the array boundary.
-  //
-  // The preRunMessageCount-based approach was removed because compaction can
-  // shift message indices in ways that are undetectable without tracking
-  // individual message identity (partial compaction: pre-run messages removed
-  // but total length stays ≥ runStart). Using assistantTexts.length avoids
-  // all compaction edge cases and is always at least as wide as needed.
-  const scopeCount = assistantTexts.length;
+  // Count text-bearing assistant turns from the tail of the session, stopping
+  // at the first user message (run boundary). This gives the actual run turn
+  // count without relying on assistantTexts.length (which over-counts with
+  // block-reply chunking — multiple chunks per turn) or preRunMessageCount
+  // (fragile under compaction — indices shift). The tail-scan is compaction-
+  // safe because it only looks at messages that are currently in the session.
+  const scopeCount = countCurrentRunAssistantTurns(activeSession.messages);
 
   const emitResult = await hookRunner.runBeforeResponseEmit(
     {
