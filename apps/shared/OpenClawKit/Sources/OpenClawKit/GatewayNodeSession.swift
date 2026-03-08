@@ -11,6 +11,19 @@ private struct NodeInvokeRequestPayload: Codable, Sendable {
     var idempotencyKey: String?
 }
 
+private func replaceCanvasCapabilityInScopedHostUrl(scopedUrl: String, capability: String) -> String? {
+    let marker = "/__openclaw__/cap/"
+    guard let markerRange = scopedUrl.range(of: marker) else { return nil }
+    let capabilityStart = markerRange.upperBound
+    let suffix = scopedUrl[capabilityStart...]
+    let nextSlash = suffix.firstIndex(of: "/")
+    let nextQuery = suffix.firstIndex(of: "?")
+    let nextFragment = suffix.firstIndex(of: "#")
+    let capabilityEnd = [nextSlash, nextQuery, nextFragment].compactMap { $0 }.min() ?? scopedUrl.endIndex
+    guard capabilityStart < capabilityEnd else { return nil }
+    return String(scopedUrl[..<capabilityStart]) + capability + String(scopedUrl[capabilityEnd...])
+}
+
 
 public actor GatewayNodeSession {
     private let logger = Logger(subsystem: "ai.openclaw", category: "node.gateway")
@@ -223,6 +236,42 @@ public actor GatewayNodeSession {
         self.canvasHostUrl
     }
 
+    public func refreshNodeCanvasCapability(timeoutMs: Int = 8_000) async -> Bool {
+        guard let channel = self.channel else { return false }
+        do {
+            let data = try await channel.request(
+                method: "node.canvas.capability.refresh",
+                params: [:],
+                timeoutMs: Double(max(timeoutMs, 1)))
+            guard
+                let payload = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+                let rawCapability = payload["canvasCapability"] as? String
+            else {
+                self.logger.warning("node.canvas.capability.refresh missing canvasCapability")
+                return false
+            }
+            let capability = rawCapability.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !capability.isEmpty else {
+                self.logger.warning("node.canvas.capability.refresh returned empty capability")
+                return false
+            }
+            let scopedUrl = self.canvasHostUrl?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            guard !scopedUrl.isEmpty else {
+                self.logger.warning("node.canvas.capability.refresh missing local canvasHostUrl")
+                return false
+            }
+            guard let refreshed = replaceCanvasCapabilityInScopedHostUrl(scopedUrl: scopedUrl, capability: capability) else {
+                self.logger.warning("node.canvas.capability.refresh could not rewrite scoped canvas URL")
+                return false
+            }
+            self.canvasHostUrl = refreshed
+            return true
+        } catch {
+            self.logger.warning("node.canvas.capability.refresh failed: \(error.localizedDescription, privacy: .public)")
+            return false
+        }
+    }
+
     public func currentRemoteAddress() -> String? {
         guard let url = self.activeURL else { return nil }
         guard let host = url.host else { return url.absoluteString }
@@ -275,7 +324,7 @@ public actor GatewayNodeSession {
         switch push {
         case let .snapshot(ok):
             let raw = ok.canvashosturl?.trimmingCharacters(in: .whitespacesAndNewlines)
-            self.canvasHostUrl = (raw?.isEmpty == false) ? raw : nil
+            self.canvasHostUrl = self.normalizeCanvasHostUrl(raw)
             if self.hasEverConnected {
                 self.broadcastServerEvent(
                     EventFrame(type: "event", event: "seqGap", payload: nil, seq: nil, stateversion: nil))
@@ -340,6 +389,35 @@ public actor GatewayNodeSession {
         guard !self.hasNotifiedConnected else { return }
         self.hasNotifiedConnected = true
         await self.onConnected?()
+    }
+
+    private func normalizeCanvasHostUrl(_ raw: String?) -> String? {
+        let trimmed = raw?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        guard !trimmed.isEmpty else { return nil }
+        guard var parsed = URLComponents(string: trimmed) else { return trimmed }
+
+        let parsedHost = parsed.host?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let parsedIsLoopback = !parsedHost.isEmpty && LoopbackHost.isLoopback(parsedHost)
+
+        if !parsedHost.isEmpty, !parsedIsLoopback {
+            guard let activeURL else { return trimmed }
+            let isTLS = activeURL.scheme?.lowercased() == "wss"
+            guard isTLS else { return trimmed }
+            parsed.scheme = "https"
+            let tlsPort = activeURL.port ?? 443
+            parsed.port = (tlsPort == 443) ? nil : tlsPort
+            return parsed.string ?? trimmed
+        }
+
+        guard let activeURL, let fallbackHost = activeURL.host, !LoopbackHost.isLoopback(fallbackHost) else {
+            return trimmed
+        }
+        let isTLS = activeURL.scheme?.lowercased() == "wss"
+        parsed.scheme = isTLS ? "https" : "http"
+        parsed.host = fallbackHost
+        let fallbackPort = activeURL.port ?? (isTLS ? 443 : 80)
+        parsed.port = ((isTLS && fallbackPort == 443) || (!isTLS && fallbackPort == 80)) ? nil : fallbackPort
+        return parsed.string ?? trimmed
     }
 
     private func handleEvent(_ evt: EventFrame) async {

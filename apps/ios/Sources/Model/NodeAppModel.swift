@@ -877,16 +877,7 @@ final class NodeAppModel {
         let command = req.command
         switch command {
         case OpenClawCanvasA2UICommand.reset.rawValue:
-            guard let a2uiUrl = await self.resolveA2UIHostURL() else {
-                return BridgeInvokeResponse(
-                    id: req.id,
-                    ok: false,
-                    error: OpenClawNodeError(
-                        code: .unavailable,
-                        message: "A2UI_HOST_NOT_CONFIGURED: gateway did not advertise canvas host"))
-            }
-            self.screen.navigate(to: a2uiUrl)
-            if await !self.screen.waitForA2UIReady(timeoutMs: 5000) {
+            guard await self.ensureA2UIReadyWithCapabilityRefresh(timeoutMs: 5000) != nil else {
                 return BridgeInvokeResponse(
                     id: req.id,
                     ok: false,
@@ -919,16 +910,7 @@ final class NodeAppModel {
                 }
             }
 
-            guard let a2uiUrl = await self.resolveA2UIHostURL() else {
-                return BridgeInvokeResponse(
-                    id: req.id,
-                    ok: false,
-                    error: OpenClawNodeError(
-                        code: .unavailable,
-                        message: "A2UI_HOST_NOT_CONFIGURED: gateway did not advertise canvas host"))
-            }
-            self.screen.navigate(to: a2uiUrl)
-            if await !self.screen.waitForA2UIReady(timeoutMs: 5000) {
+            guard await self.ensureA2UIReadyWithCapabilityRefresh(timeoutMs: 5000) != nil else {
                 return BridgeInvokeResponse(
                     id: req.id,
                     ok: false,

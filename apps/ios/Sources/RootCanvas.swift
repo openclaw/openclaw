@@ -85,19 +85,7 @@ struct RootCanvas: View {
 
     var body: some View {
         ZStack {
-            CanvasContent(
-                systemColorScheme: self.systemColorScheme,
-                gatewayStatus: self.gatewayStatus,
-                voiceWakeEnabled: self.voiceWakeEnabled,
-                voiceWakeToastText: self.voiceWakeToastText,
-                cameraHUDText: self.appModel.cameraHUDText,
-                cameraHUDKind: self.appModel.cameraHUDKind,
-                openChat: {
-                    self.presentedSheet = .chat
-                },
-                openSettings: {
-                    self.presentedSheet = .settings
-                })
+            RootTabs()
                 .preferredColorScheme(.dark)
 
             if self.appModel.cameraFlashNonce != 0 {
