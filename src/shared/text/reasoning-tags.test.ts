@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { stripReasoningTagsFromText } from "./reasoning-tags.js";
+import { isReasoningOnlyMessage, stripReasoningTagsFromText } from "./reasoning-tags.js";
 
 describe("stripReasoningTagsFromText", () => {
   describe("basic functionality", () => {
@@ -220,5 +220,28 @@ describe("stripReasoningTagsFromText", () => {
         expect(stripReasoningTagsFromText(testCase.input, testCase.opts)).toBe(testCase.expected);
       }
     });
+  });
+});
+
+describe("isReasoningOnlyMessage", () => {
+  it("detects Reasoning: prefix", () => {
+    expect(isReasoningOnlyMessage("Reasoning:\nThe user asked about X")).toBe(true);
+  });
+
+  it("detects thinking tag messages", () => {
+    expect(isReasoningOnlyMessage("<thinking>Let me consider this</thinking>")).toBe(true);
+    expect(isReasoningOnlyMessage("<think>internal reasoning</think>")).toBe(true);
+    expect(isReasoningOnlyMessage("  <thought>hmm</thought>")).toBe(true);
+    expect(isReasoningOnlyMessage("<antthinking>analysis</antthinking>")).toBe(true);
+  });
+
+  it("returns false for normal messages", () => {
+    expect(isReasoningOnlyMessage("Hello, how can I help?")).toBe(false);
+    expect(isReasoningOnlyMessage("The answer is 42")).toBe(false);
+    expect(isReasoningOnlyMessage("")).toBe(false);
+  });
+
+  it("returns false for mixed content that starts with user-facing text", () => {
+    expect(isReasoningOnlyMessage("Answer: 42\n<thinking>reasoning</thinking>")).toBe(false);
   });
 });
