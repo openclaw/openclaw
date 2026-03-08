@@ -115,7 +115,13 @@ function estimateTextAndImageChars(content: ReadonlyArray<TextContent | ImageCon
   let chars = 0;
   for (const block of content) {
     if (block.type === "text") {
-      chars += block.text.length;
+      // Count CJK characters (Chinese, Japanese, Korean) separately
+      // CJK characters are roughly 1 token each, not 0.25 like English
+      const cjkRegex = /[\u4e00-\u9fa5\u3040-\u30ff\uac00-\ud7af]/g;
+      const cjkCount = (block.text.match(cjkRegex) || []).length;
+      const latinCount = block.text.length - cjkCount;
+      // CJK characters count as 4 chars (1 char ≈ 1 token, but we divide by CHARS_PER_TOKEN_ESTIMATE later)
+      chars += latinCount + cjkCount * 4;
     }
     if (block.type === "image") {
       chars += IMAGE_CHAR_ESTIMATE;
@@ -128,7 +134,11 @@ function estimateMessageChars(message: AgentMessage): number {
   if (message.role === "user") {
     const content = message.content;
     if (typeof content === "string") {
-      return content.length;
+      // Count CJK characters separately for string content
+      const cjkRegex = /[\u4e00-\u9fa5\u3040-\u30ff\uac00-\ud7af]/g;
+      const cjkCount = (content.match(cjkRegex) || []).length;
+      const latinCount = content.length - cjkCount;
+      return latinCount + cjkCount * 4;
     }
     return estimateTextAndImageChars(content);
   }
@@ -140,10 +150,18 @@ function estimateMessageChars(message: AgentMessage): number {
         continue;
       }
       if (b.type === "text" && typeof b.text === "string") {
-        chars += b.text.length;
+        // Count CJK characters separately
+        const cjkRegex = /[\u4e00-\u9fa5\u3040-\u30ff\uac00-\ud7af]/g;
+        const cjkCount = (b.text.match(cjkRegex) || []).length;
+        const latinCount = b.text.length - cjkCount;
+        chars += latinCount + cjkCount * 4;
       }
       if (b.type === "thinking" && typeof b.thinking === "string") {
-        chars += b.thinking.length;
+        // Count CJK characters separately
+        const cjkRegex = /[\u4e00-\u9fa5\u3040-\u30ff\uac00-\ud7af]/g;
+        const cjkCount = (b.thinking.match(cjkRegex) || []).length;
+        const latinCount = b.thinking.length - cjkCount;
+        chars += latinCount + cjkCount * 4;
       }
       if (b.type === "toolCall") {
         try {
