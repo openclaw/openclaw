@@ -269,6 +269,10 @@ export async function monitorWebChannel(
 
     if (keepAlive) {
       heartbeat = setInterval(() => {
+        // Refresh staleness tracker — a running heartbeat proves the socket is alive.
+        status.lastEventAt = Date.now();
+        emitStatus();
+
         const authAgeMs = getWebAuthAgeMs(account.authDir);
         const minutesSinceLastMessage = lastMessageAt
           ? Math.floor((Date.now() - lastMessageAt) / 60000)
