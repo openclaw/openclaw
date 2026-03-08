@@ -99,10 +99,18 @@ class TalkModeManager(
             val providerConfig = value.asObjectOrNull() ?: return@mapNotNull null
             providerId to providerConfig
           }?.toMap().orEmpty()
-        val providerId =
-          normalizeTalkProviderId(rawProvider)
-            ?: providers.keys.sorted().firstOrNull()
-            ?: defaultTalkProvider
+        val explicitProviderId = normalizeTalkProviderId(rawProvider)
+        if (explicitProviderId != null) {
+          if (providers.isNotEmpty() && providers[explicitProviderId] == null) {
+            return null
+          }
+          return TalkProviderConfigSelection(
+            provider = explicitProviderId,
+            config = providers[explicitProviderId] ?: buildJsonObject {},
+            normalizedPayload = true,
+          )
+        }
+        val providerId = providers.keys.singleOrNull() ?: return null
         return TalkProviderConfigSelection(
           provider = providerId,
           config = providers[providerId] ?: buildJsonObject {},
