@@ -152,6 +152,60 @@ OpenClaw preserves the auth when calling `/json/*` endpoints and when connecting
 to the CDP WebSocket. Prefer environment variables or secrets managers for
 tokens instead of committing them to config files.
 
+## Existing Chrome via remote debugging port
+
+If you want OpenClaw to attach directly to an already running Chrome instance
+instead of using the extension relay, point the `chrome` profile at a CDP
+endpoint and force attach-only mode.
+
+This is useful when you cannot click the extension on each tab, or when the
+Gateway is running as a background service on the same machine as Chrome.
+
+1. Launch Chrome with a loopback-only debugging endpoint:
+
+```bash
+/Applications/Google\ Chrome.app/Contents/MacOS/Google\ Chrome \
+  --remote-debugging-port=9222 \
+  --remote-debugging-address=127.0.0.1 \
+  --user-data-dir=/path/to/profile
+```
+
+2. Override the built-in `chrome` profile in `~/.openclaw/openclaw.json`:
+
+```json5
+{
+  browser: {
+    cdpUrl: "http://127.0.0.1:9222",
+    attachOnly: true,
+    profiles: {
+      chrome: {
+        cdpUrl: "http://127.0.0.1:9222",
+        attachOnly: true,
+        color: "#4285F4",
+      },
+    },
+  },
+}
+```
+
+3. Restart the Gateway, then verify the profile:
+
+```bash
+openclaw browser --browser-profile chrome tabs
+```
+
+Why this works:
+
+- `browser.attachOnly: true` prevents OpenClaw from launching its own managed browser.
+- Overriding `browser.profiles.chrome` replaces the built-in `chrome` profile that normally points at the extension relay.
+- The top-level `browser.cdpUrl` is a legacy single-profile alias. The profile-level `browser.profiles.chrome.cdpUrl` is preferred, but setting both keeps single-profile and named-profile callers pointed at the same endpoint.
+
+Notes:
+
+- Keep the debugging endpoint on loopback (`127.0.0.1`) unless you have a private encrypted tunnel in front of it.
+- If you attach OpenClaw to a logged-in Chrome profile, the agent can act as that browser session. Review the browser trust guidance in [Security](/gateway/security).
+- If your installed version still requires `color` on manually defined profiles, keep it set as shown above.
+
 ## Node browser proxy (zero-config default)
 
 If you run a **node host** on the machine that has your browser, OpenClaw can

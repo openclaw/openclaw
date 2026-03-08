@@ -38,7 +38,7 @@ openclaw browser --browser-profile openclaw snapshot
 Profiles are named browser routing configs. In practice:
 
 - `openclaw`: launches/attaches to a dedicated OpenClaw-managed Chrome instance (isolated user data dir).
-- `chrome`: controls your existing Chrome tab(s) via the Chrome extension relay.
+- `chrome`: controls your existing Chrome tab(s) via the Chrome extension relay by default, or a direct CDP endpoint if you override that profile in config.
 
 ```bash
 openclaw browser profiles
@@ -51,6 +51,9 @@ Use a specific profile:
 ```bash
 openclaw browser --browser-profile work tabs
 ```
+
+To point `chrome` at an existing Chrome instance started with `--remote-debugging-port`,
+see [Browser tool](/tools/browser#existing-chrome-via-remote-debugging-port).
 
 ## Tabs
 
