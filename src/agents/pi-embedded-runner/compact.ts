@@ -114,6 +114,7 @@ export type CompactEmbeddedPiSessionParams = {
   /** Whether the sender is an owner (required for owner-only tools). */
   senderIsOwner?: boolean;
   sessionFile: string;
+  currentTokenCount?: number;
   workspaceDir: string;
   agentDir?: string;
   config?: OpenClawConfig;
@@ -227,6 +228,9 @@ function classifyCompactionReason(reason?: string): string {
   }
   if (text.includes("already compacted")) {
     return "already_compacted_recently";
+  }
+  if (text.includes("still exceeds target")) {
+    return "live_context_still_exceeds_target";
   }
   if (text.includes("guard")) {
     return "guard_blocked";

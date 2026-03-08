@@ -85,6 +85,7 @@ export class LegacyContextEngine implements ContextEngine {
       sessionId: params.sessionId,
       sessionFile: params.sessionFile,
       tokenBudget: params.tokenBudget,
+      currentTokenCount: params.currentTokenCount,
       force: params.force,
       customInstructions: params.customInstructions,
       workspaceDir: (runtimeContext.workspaceDir as string) ?? process.cwd(),
