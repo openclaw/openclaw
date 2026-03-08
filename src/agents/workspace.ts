@@ -479,6 +479,7 @@ async function resolveMemoryBootstrapEntries(
     return entries;
   }
 
+  // First pass: de-dupe symlinks/hardlinks (same realpath).
   const seen = new Set<string>();
   const deduped: Array<{ name: WorkspaceBootstrapFileName; filePath: string }> = [];
   for (const entry of entries) {
@@ -492,7 +493,49 @@ async function resolveMemoryBootstrapEntries(
     seen.add(key);
     deduped.push(entry);
   }
-  return deduped;
+
+  if (deduped.length <= 1) {
+    return deduped;
+  }
+
+  // Second pass: on case-sensitive filesystems it is possible for both MEMORY.md and memory.md
+  // to exist as distinct files. Injecting both doubles the workspace bootstrap content.
+  // Prefer a single "best" memory file to inject.
+  const scored = await Promise.all(
+    deduped.map(async (entry, index) => {
+      try {
+        const stat = await fs.stat(entry.filePath);
+        return {
+          entry,
+          index,
+          size: stat.size,
+          mtimeMs: stat.mtimeMs,
+        };
+      } catch {
+        return {
+          entry,
+          index,
+          size: -1,
+          mtimeMs: -1,
+        };
+      }
+    }),
+  );
+
+  scored.sort((a, b) => {
+    // Larger file wins.
+    if (a.size !== b.size) {
+      return b.size - a.size;
+    }
+    // Newer file wins.
+    if (a.mtimeMs !== b.mtimeMs) {
+      return b.mtimeMs - a.mtimeMs;
+    }
+    // Stable tie-breaker: prefer DEFAULT_MEMORY_FILENAME order.
+    return a.index - b.index;
+  });
+
+  return [scored[0].entry];
 }
 
 export async function loadWorkspaceBootstrapFiles(dir: string): Promise<WorkspaceBootstrapFile[]> {
