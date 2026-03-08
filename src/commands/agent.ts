@@ -74,6 +74,7 @@ import {
   type SessionEntry,
   updateSessionStore,
 } from "../config/sessions.js";
+import { appendAssistantMessageToSessionTranscript } from "../config/sessions/transcript.js";
 import {
   clearAgentRunContext,
   emitAgentEvent,
@@ -643,8 +644,9 @@ async function agentCommandInternal(
 
     if (acpResolution?.kind === "ready" && sessionKey) {
       const startedAt = Date.now();
+      const acpSessionKey = acpResolution.sessionKey || sessionKey;
       registerAgentRunContext(runId, {
-        sessionKey,
+        sessionKey: acpSessionKey,
       });
       emitAgentEvent({
         runId,
@@ -663,16 +665,40 @@ async function agentCommandInternal(
           throw dispatchPolicyError;
         }
         const acpAgent = normalizeAgentId(
-          acpResolution.meta.agent || resolveAgentIdFromSessionKey(sessionKey),
+          acpResolution.meta.agent || resolveAgentIdFromSessionKey(acpSessionKey),
         );
         const agentPolicyError = resolveAcpAgentPolicyError(cfg, acpAgent);
         if (agentPolicyError) {
           throw agentPolicyError;
         }
+        if (sessionStore) {
+          const threadIdFromSessionKey = parseSessionThreadInfo(acpSessionKey).threadId;
+          const fallbackSessionFile = !sessionEntry?.sessionFile
+            ? resolveSessionTranscriptPath(
+                sessionId,
+                sessionAgentId,
+                opts.threadId ?? threadIdFromSessionKey,
+              )
+            : undefined;
+          const resolvedSessionFile = await resolveAndPersistSessionFile({
+            sessionId,
+            sessionKey: acpSessionKey,
+            sessionStore,
+            storePath,
+            sessionEntry,
+            agentId: sessionAgentId,
+            sessionsDir: resolveSessionFilePathOptions({
+              agentId: sessionAgentId,
+              storePath,
+            })?.sessionsDir,
+            fallbackSessionFile,
+          });
+          sessionEntry = resolvedSessionFile.sessionEntry;
+        }
 
         await acpManager.runTurn({
           cfg,
-          sessionKey,
+          sessionKey: acpSessionKey,
           text: body,
           mode: "prompt",
           requestId: runId,
@@ -723,6 +749,20 @@ async function agentCommandInternal(
         throw acpError;
       }
 
+      const finalVisibleText = visibleTextAccumulator.finalize();
+      const normalizedFinalPayload = normalizeReplyPayload({
+        text: finalVisibleText,
+      });
+      const finalTranscriptText = normalizedFinalPayload?.text?.trim() ?? "";
+      if (finalTranscriptText) {
+        await appendAssistantMessageToSessionTranscript({
+          agentId: sessionAgentId,
+          sessionKey: acpSessionKey,
+          text: finalTranscriptText,
+          storePath,
+        });
+      }
+
       emitAgentEvent({
         runId,
         stream: "lifecycle",
@@ -732,9 +772,6 @@ async function agentCommandInternal(
         },
       });
 
-      const normalizedFinalPayload = normalizeReplyPayload({
-        text: visibleTextAccumulator.finalize(),
-      });
       const payloads = normalizedFinalPayload ? [normalizedFinalPayload] : [];
       const result = {
         payloads,

@@ -23,6 +23,14 @@ import {
 } from "../channels/thread-bindings-policy.js";
 import { loadConfig } from "../config/config.js";
 import type { OpenClawConfig } from "../config/config.js";
+import {
+  loadSessionStore,
+  parseSessionThreadInfo,
+  resolveAndPersistSessionFile,
+  resolveSessionFilePathOptions,
+  resolveSessionTranscriptPath,
+  resolveStorePath,
+} from "../config/sessions.js";
 import { callGateway } from "../gateway/call.js";
 import { resolveConversationIdFromTargets } from "../infra/outbound/conversation-id.js";
 import {
@@ -351,6 +359,32 @@ export async function spawnAcpDirect(
       timeoutMs: 10_000,
     });
     sessionCreated = true;
+
+    const storePath = resolveStorePath(cfg.session?.store, { agentId: targetAgentId });
+    const sessionStore = loadSessionStore(storePath);
+    let sessionEntry = sessionStore[sessionKey];
+    const sessionId = sessionEntry?.sessionId;
+    if (sessionId) {
+      const threadIdFromSessionKey = parseSessionThreadInfo(sessionKey).threadId;
+      const fallbackSessionFile = !sessionEntry?.sessionFile
+        ? resolveSessionTranscriptPath(sessionId, targetAgentId, threadIdFromSessionKey)
+        : undefined;
+      const resolvedSessionFile = await resolveAndPersistSessionFile({
+        sessionId,
+        sessionKey,
+        sessionStore,
+        storePath,
+        sessionEntry,
+        agentId: targetAgentId,
+        sessionsDir: resolveSessionFilePathOptions({
+          agentId: targetAgentId,
+          storePath,
+        })?.sessionsDir,
+        fallbackSessionFile,
+      });
+      sessionEntry = resolvedSessionFile.sessionEntry;
+    }
+
     const initialized = await acpManager.initializeSession({
       cfg,
       sessionKey,
@@ -407,6 +441,29 @@ export async function spawnAcpDirect(
         throw new Error(
           `Failed to create and bind a ${preparedBinding.channel} thread for this ACP session.`,
         );
+      }
+      if (sessionId) {
+        const boundThreadId = String(binding.conversation.conversationId).trim() || undefined;
+        if (boundThreadId) {
+          const resolvedSessionFile = await resolveAndPersistSessionFile({
+            sessionId,
+            sessionKey,
+            sessionStore,
+            storePath,
+            sessionEntry,
+            agentId: targetAgentId,
+            sessionsDir: resolveSessionFilePathOptions({
+              agentId: targetAgentId,
+              storePath,
+            })?.sessionsDir,
+            fallbackSessionFile: resolveSessionTranscriptPath(
+              sessionId,
+              targetAgentId,
+              boundThreadId,
+            ),
+          });
+          sessionEntry = resolvedSessionFile.sessionEntry;
+        }
       }
     }
   } catch (err) {
