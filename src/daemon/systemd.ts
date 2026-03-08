@@ -292,6 +292,19 @@ function isSystemctlBusUnavailable(detail: string): boolean {
   );
 }
 
+function isSystemdUserScopeUnavailable(detail: string): boolean {
+  if (!detail) {
+    return false;
+  }
+  const normalized = detail.toLowerCase();
+  return (
+    isSystemctlMissing(normalized) ||
+    isSystemctlBusUnavailable(normalized) ||
+    normalized.includes("not been booted") ||
+    normalized.includes("not supported")
+  );
+}
+
 function isGenericSystemctlIsEnabledFailure(detail: string): boolean {
   if (!detail) {
     return false;
@@ -395,26 +408,11 @@ export async function isSystemdUserServiceAvailable(
   if (res.code === 0) {
     return true;
   }
-  const detail = `${res.stderr} ${res.stdout}`.toLowerCase();
+  const detail = `${res.stderr} ${res.stdout}`.trim();
   if (!detail) {
     return false;
   }
-  if (detail.includes("not found")) {
-    return false;
-  }
-  if (detail.includes("failed to connect")) {
-    return false;
-  }
-  if (detail.includes("not been booted")) {
-    return false;
-  }
-  if (detail.includes("no such file or directory")) {
-    return false;
-  }
-  if (detail.includes("not supported")) {
-    return false;
-  }
-  return false;
+  return !isSystemdUserScopeUnavailable(detail);
 }
 
 async function assertSystemdAvailable(env: GatewayServiceEnv = process.env as GatewayServiceEnv) {
@@ -425,6 +423,12 @@ async function assertSystemdAvailable(env: GatewayServiceEnv = process.env as Ga
   const detail = readSystemctlDetail(res);
   if (isSystemctlMissing(detail)) {
     throw new Error("systemctl not available; systemd user services are required on Linux.");
+  }
+  if (!detail) {
+    throw new Error("systemctl --user unavailable: unknown error");
+  }
+  if (!isSystemdUserScopeUnavailable(detail)) {
+    return;
   }
   throw new Error(`systemctl --user unavailable: ${detail || "unknown error"}`.trim());
 }

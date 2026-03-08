@@ -90,6 +90,14 @@ describe("systemd availability", () => {
     await expect(isSystemdUserServiceAvailable()).resolves.toBe(false);
   });
 
+  it("returns true when systemd is degraded but still reachable", async () => {
+    execFileMock.mockImplementation((_cmd, _args, _opts, cb) => {
+      cb(createExecFileError("degraded", { stderr: "degraded\nsome-unit.service failed" }), "", "");
+    });
+
+    await expect(isSystemdUserServiceAvailable()).resolves.toBe(true);
+  });
+
   it("falls back to machine user scope when --user bus is unavailable", async () => {
     execFileMock
       .mockImplementationOnce((_cmd, args, _opts, cb) => {
@@ -626,6 +634,26 @@ describe("systemd service control", () => {
     expect(String(write.mock.calls[0]?.[0])).toContain("Stopped systemd service");
   });
 
+  it("allows stop when systemd status is degraded but available", async () => {
+    execFileMock
+      .mockImplementationOnce((_cmd, _args, _opts, cb) =>
+        cb(
+          createExecFileError("degraded", { stderr: "degraded\nsome-unit.service failed" }),
+          "",
+          "",
+        ),
+      )
+      .mockImplementationOnce((_cmd, args, _opts, cb) => {
+        expect(args).toEqual(["--user", "stop", "openclaw-gateway.service"]);
+        cb(null, "", "");
+      });
+
+    await stopSystemdService({
+      stdout: { write: vi.fn() } as unknown as NodeJS.WritableStream,
+      env: {},
+    });
+  });
+
   it("restarts a profile-specific user unit", async () => {
     execFileMock
       .mockImplementationOnce((_cmd, _args, _opts, cb) => cb(null, "", ""))
@@ -651,6 +679,26 @@ describe("systemd service control", () => {
         env: {},
       }),
     ).rejects.toThrow("systemctl stop failed: permission denied");
+  });
+
+  it("throws the user-bus error before stop when systemd is unavailable", async () => {
+    vi.spyOn(os, "userInfo").mockImplementationOnce(() => {
+      throw new Error("no user info");
+    });
+    execFileMock.mockImplementationOnce((_cmd, _args, _opts, cb) => {
+      cb(
+        createExecFileError("Failed to connect to bus", { stderr: "Failed to connect to bus" }),
+        "",
+        "",
+      );
+    });
+
+    await expect(
+      stopSystemdService({
+        stdout: { write: vi.fn() } as unknown as NodeJS.WritableStream,
+        env: { USER: "", LOGNAME: "" },
+      }),
+    ).rejects.toThrow("systemctl --user unavailable: Failed to connect to bus");
   });
 
   it("targets the sudo caller's user scope when SUDO_USER is set", async () => {
