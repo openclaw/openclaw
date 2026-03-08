@@ -88,4 +88,58 @@ describe("retryAsync", () => {
     const delays = await runRetryAfterCase({ minDelayMs: 250, maxDelayMs: 1000, retryAfterMs: 50 });
     expect(delays[0]).toBe(250);
   });
+
+  it("throws AbortError when signal is already aborted", async () => {
+    const controller = new AbortController();
+    controller.abort("canceled");
+    const fn = vi.fn().mockResolvedValue("ok");
+    await expect(retryAsync(fn, { attempts: 3, signal: controller.signal })).rejects.toThrow(
+      "canceled",
+    );
+    expect(fn).not.toHaveBeenCalled();
+  });
+
+  it("throws AbortError when signal aborts during retry loop", async () => {
+    const controller = new AbortController();
+    let fnCallCount = 0;
+
+    // First call fails, second would succeed but abort should prevent it
+    const fn = vi.fn().mockImplementation(() => {
+      fnCallCount++;
+      if (fnCallCount === 1) {
+        const promise = Promise.reject(new Error("fail1"));
+        // Prevent unhandled rejection warning
+        promise.catch(() => {});
+        return promise;
+      }
+      return Promise.resolve("should not be called");
+    });
+
+    const promise = retryAsync(fn, {
+      attempts: 5,
+      minDelayMs: 0,
+      maxDelayMs: 1000,
+      signal: controller.signal,
+    });
+
+    // Use setTimeout to schedule abort immediately after current call stack
+    const abortTimer = setTimeout(() => controller.abort(new Error("user cancelled")), 0);
+
+    await expect(promise).rejects.toThrow("user cancelled");
+    clearTimeout(abortTimer);
+    // Only first attempt, abort detected before second
+    expect(fnCallCount).toBe(1);
+  });
+
+  it("works normally when signal is provided but not aborted", async () => {
+    const controller = new AbortController();
+    const fn = vi.fn().mockRejectedValueOnce(new Error("fail")).mockResolvedValueOnce("ok");
+    const result = await retryAsync(fn, {
+      attempts: 3,
+      minDelayMs: 0,
+      signal: controller.signal,
+    });
+    expect(result).toBe("ok");
+    expect(fn).toHaveBeenCalledTimes(2);
+  });
 });

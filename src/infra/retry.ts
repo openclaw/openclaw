@@ -20,6 +20,7 @@ export type RetryOptions = RetryConfig & {
   shouldRetry?: (err: unknown, attempt: number) => boolean;
   retryAfterMs?: (err: unknown) => number | undefined;
   onRetry?: (info: RetryInfo) => void;
+  signal?: AbortSignal | null;
 };
 
 const DEFAULT_RETRY_CONFIG = {
@@ -104,6 +105,11 @@ export async function retryAsync<T>(
   let lastErr: unknown;
 
   for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    if (options.signal?.aborted) {
+      const err = new Error(options.signal.reason?.toString() ?? "Retry aborted");
+      err.name = "AbortError";
+      throw err;
+    }
     try {
       return await fn();
     } catch (err) {
@@ -129,6 +135,13 @@ export async function retryAsync<T>(
         label: options.label,
       });
       await sleep(delay);
+
+      // Check abort after sleep, before next attempt
+      if (options.signal?.aborted) {
+        const abortErr = new Error(options.signal.reason?.toString() ?? "Retry aborted");
+        abortErr.name = "AbortError";
+        throw abortErr;
+      }
     }
   }
 
