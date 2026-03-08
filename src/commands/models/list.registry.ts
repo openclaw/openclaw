@@ -134,18 +134,8 @@ export function toModelRow(params: {
   availableKeys?: Set<string>;
   cfg?: OpenClawConfig;
   authStore?: AuthProfileStore;
-  allowProviderAvailabilityFallback?: boolean;
 }): ModelRow {
-  const {
-    model,
-    key,
-    tags,
-    aliases = [],
-    availableKeys,
-    cfg,
-    authStore,
-    allowProviderAvailabilityFallback = false,
-  } = params;
+  const { model, key, tags, aliases = [], availableKeys, cfg, authStore } = params;
   if (!model) {
     return {
       key,
@@ -161,15 +151,14 @@ export function toModelRow(params: {
 
   const input = model.input.join("+") || "text";
   const local = isLocalBaseUrl(model.baseUrl);
-  const modelIsAvailable = availableKeys?.has(modelKey(model.provider, model.id)) ?? false;
   // Prefer model-level registry availability when present.
-  // Fall back to provider-level auth heuristics only if registry availability isn't available,
-  // or if the caller marks this as a synthetic/forward-compat model that won't appear in getAvailable().
+  // Fall back to provider-level auth heuristics only if registry availability isn't available.
   const available =
-    availableKeys !== undefined && !allowProviderAvailabilityFallback
-      ? modelIsAvailable
-      : modelIsAvailable ||
-        (cfg && authStore ? hasAuthForProvider(model.provider, cfg, authStore) : false);
+    availableKeys !== undefined
+      ? availableKeys.has(modelKey(model.provider, model.id))
+      : cfg && authStore
+        ? hasAuthForProvider(model.provider, cfg, authStore)
+        : false;
   const aliasTags = aliases.length > 0 ? [`alias:${aliases.join(",")}`] : [];
   const mergedTags = new Set(tags);
   if (aliasTags.length > 0) {

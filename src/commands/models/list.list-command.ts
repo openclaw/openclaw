@@ -1,7 +1,7 @@
 import type { Api, Model } from "@mariozechner/pi-ai";
 import type { ModelRegistry } from "@mariozechner/pi-coding-agent";
+import { resolveForwardCompatModel } from "../../agents/model-forward-compat.js";
 import { parseModelRef } from "../../agents/model-selection.js";
-import { resolveModelWithRegistry } from "../../agents/pi-embedded-runner/model.js";
 import type { RuntimeEnv } from "../../runtime.js";
 import { resolveConfiguredEntries } from "./list.configured.js";
 import { formatErrorWithStack } from "./list.errors.js";
@@ -57,7 +57,8 @@ export async function modelsListCommand(
       `Model availability lookup failed; falling back to auth heuristics for discovered models: ${availabilityErrorMessage}`,
     );
   }
-  const discoveredKeys = new Set(models.map((model) => modelKey(model.provider, model.id)));
+
+  const modelByKey = new Map(models.map((model) => [modelKey(model.provider, model.id), model]));
 
   const { entries } = resolveConfiguredEntries(cfg);
   const configuredByKey = new Map(entries.map((entry) => [entry.key, entry]));
@@ -95,22 +96,26 @@ export async function modelsListCommand(
       );
     }
   } else {
-    const registry = modelRegistry;
-    if (!registry) {
-      runtime.error("Model registry unavailable.");
-      process.exitCode = 1;
-      return;
-    }
     for (const entry of entries) {
       if (providerFilter && entry.ref.provider.toLowerCase() !== providerFilter) {
         continue;
       }
-      const model = resolveModelWithRegistry({
-        provider: entry.ref.provider,
-        modelId: entry.ref.model,
-        modelRegistry: registry,
-        cfg,
-      });
+      let model = modelByKey.get(entry.key);
+      if (!model && modelRegistry) {
+        const forwardCompat = resolveForwardCompatModel(
+          entry.ref.provider,
+          entry.ref.model,
+          modelRegistry,
+        );
+        if (forwardCompat) {
+          model = forwardCompat;
+          modelByKey.set(entry.key, forwardCompat);
+        }
+      }
+      if (!model) {
+        const { resolveModel } = await import("../../agents/pi-embedded-runner/model.js");
+        model = resolveModel(entry.ref.provider, entry.ref.model, undefined, cfg).model;
+      }
       if (opts.local && model && !isLocalBaseUrl(model.baseUrl)) {
         continue;
       }
@@ -126,9 +131,6 @@ export async function modelsListCommand(
           availableKeys,
           cfg,
           authStore,
-          allowProviderAvailabilityFallback: model
-            ? !discoveredKeys.has(modelKey(model.provider, model.id))
-            : false,
         }),
       );
     }
