@@ -252,7 +252,7 @@ describe("before_tool_call hook integration for client tools", () => {
     hookRunner = installMockHookRunner();
   });
 
-  it("passes modified params to client tool callbacks", async () => {
+  it("passes modified params and toolCallId to client tool callbacks", async () => {
     hookRunner.hasHooks.mockReturnValue(true);
     hookRunner.runBeforeToolCall.mockResolvedValue({ params: { extra: true } });
     const onClientToolCall = vi.fn();
@@ -273,9 +273,42 @@ describe("before_tool_call hook integration for client tools", () => {
     const extensionContext = {} as Parameters<typeof tool.execute>[4];
     await tool.execute("client-call-1", { value: "ok" }, undefined, undefined, extensionContext);
 
-    expect(onClientToolCall).toHaveBeenCalledWith("client_tool", {
-      value: "ok",
-      extra: true,
+    expect(onClientToolCall).toHaveBeenCalledWith(
+      "client_tool",
+      {
+        value: "ok",
+        extra: true,
+      },
+      "client-call-1",
+    );
+  });
+
+  it("generates a fallback toolCallId for blank client tool ids", async () => {
+    const onClientToolCall = vi.fn();
+    const [tool] = toClientToolDefinitions(
+      [
+        {
+          type: "function",
+          function: {
+            name: "client_tool",
+            description: "Client tool",
+            parameters: { type: "object", properties: {} },
+          },
+        },
+      ],
+      onClientToolCall,
+      { agentId: "main", sessionKey: "main" },
+    );
+    const extensionContext = {} as Parameters<typeof tool.execute>[4];
+    const result = await tool.execute("   ", {}, undefined, undefined, extensionContext);
+
+    expect(onClientToolCall).toHaveBeenCalledTimes(1);
+    const toolCallId = onClientToolCall.mock.calls[0]?.[2];
+    expect(toolCallId).toMatch(/^hook-/);
+    expect(result.details).toMatchObject({
+      status: "pending",
+      tool: "client_tool",
+      toolCallId,
     });
   });
 });
