@@ -46,6 +46,22 @@ export function handleMessageStart(
   ctx.resetAssistantMessageState(ctx.state.assistantTexts.length);
   // Use assistant message_start as the earliest "writing" signal for typing.
   void ctx.params.onAssistantMessageStart?.();
+
+  // World Model Observation
+  void ctx.worldModelManager.observe(
+    {
+      sessionId: (ctx.params.session as { id?: string }).id,
+      runId: ctx.params.runId,
+      messages: ctx.state.assistantTexts.slice(-10),
+    },
+    {
+      type: "message_start",
+      role: msg.role,
+      content: Array.isArray(msg.content)
+        ? msg.content
+        : [{ type: "text", text: String(msg.content) }],
+    },
+  );
 }
 
 export function handleMessageUpdate(
@@ -369,4 +385,19 @@ export function handleMessageEnd(
   ctx.state.blockState.inlineCode = createInlineCodeState();
   ctx.state.lastStreamedAssistant = undefined;
   ctx.state.lastStreamedAssistantCleaned = undefined;
+
+  // World Model Observation
+  void ctx.worldModelManager.observe(
+    {
+      sessionId: (ctx.params.session as { id?: string }).id,
+      runId: ctx.params.runId,
+      messages: ctx.state.assistantTexts.slice(-10),
+    },
+    {
+      type: "message_end",
+      role: msg.role,
+      content: [{ type: "text", text: rawText }],
+      usage: (assistantMessage as { usage?: unknown }).usage,
+    },
+  );
 }

@@ -549,6 +549,46 @@ export const OpenClawSchema = z
       .strict()
       .optional(),
     memory: MemorySchema,
+    worldModel: z
+      .object({
+        enabled: z.boolean().optional(),
+        provider: z
+          .union([
+            z.literal("logging"),
+            z.literal("noop"),
+            z.literal("http-endpoint"),
+            z.literal("llm"),
+            z.literal("lstm"),
+          ])
+          .optional(),
+        endpoint: z.string().optional(),
+        model: z.string().optional(),
+        minConfidence: z.number().min(0).max(1).optional(),
+        dataDir: z.string().optional(),
+        lstm: z
+          .object({
+            latentDim: z.number().int().positive().optional(),
+            hiddenDim: z.number().int().positive().optional(),
+            actionVocabSize: z.number().int().positive().optional(),
+            weightsPath: z.string().optional(),
+          })
+          .strict()
+          .optional(),
+        dreamTraining: z
+          .object({
+            enabled: z.boolean().optional(),
+            epochs: z.number().int().positive().optional(),
+            learningRate: z.number().positive().optional(),
+            maxSeqLength: z.number().int().positive().optional(),
+            dreamSteps: z.number().int().positive().optional(),
+            lookbackDays: z.number().int().positive().optional(),
+            schedule: z.string().optional(),
+          })
+          .strict()
+          .optional(),
+      })
+      .strict()
+      .optional(),
     skills: z
       .object({
         allowBundled: z.array(z.string()).optional(),

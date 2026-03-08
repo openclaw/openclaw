@@ -97,6 +97,45 @@ export type OpenClawConfig = {
   talk?: TalkConfig;
   gateway?: GatewayConfig;
   memory?: MemoryConfig;
+  worldModel?: {
+    enabled?: boolean;
+    provider?: "logging" | "noop" | "http-endpoint" | "llm" | "lstm";
+    endpoint?: string;
+    /** Model ID to use for the LLM provider (e.g. "google/gemini-1.5-pro") */
+    model?: string;
+    /** Minimum confidence (0.0-1.0) required to act on a prediction */
+    minConfidence?: number;
+    /** Directory for training data (JSONL observation files) */
+    dataDir?: string;
+    /** LSTM-specific configuration */
+    lstm?: {
+      /** Latent vector dimension (default: 128) */
+      latentDim?: number;
+      /** LSTM hidden state dimension (default: 256) */
+      hiddenDim?: number;
+      /** Token hash vocabulary size (default: 4096) */
+      actionVocabSize?: number;
+      /** Path to load/save LSTM checkpoint weights */
+      weightsPath?: string;
+    };
+    /** Dream training configuration (sleep phase) */
+    dreamTraining?: {
+      /** Enable automatic nightly dream training (default: false) */
+      enabled?: boolean;
+      /** Number of epochs per training cycle (default: 10) */
+      epochs?: number;
+      /** Learning rate (default: 0.001) */
+      learningRate?: number;
+      /** Max BPTT sequence length (default: 50) */
+      maxSeqLength?: number;
+      /** Number of dream simulation steps (default: 20) */
+      dreamSteps?: number;
+      /** Days of observation data to train on (default: 7) */
+      lookbackDays?: number;
+      /** Cron expression for training schedule (default: "0 2 * * *" = 2 AM) */
+      schedule?: string;
+    };
+  };
 };
 
 export type ConfigValidationIssue = {

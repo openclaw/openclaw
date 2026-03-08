@@ -1,5 +1,6 @@
 import type { AgentEvent } from "@mariozechner/pi-agent-core";
 import type { PluginHookAfterToolCallEvent } from "../plugins/types.js";
+import type { WorldModelAction } from "../world-model/types.js";
 import type { EmbeddedPiSubscribeContext } from "./pi-embedded-subscribe.handlers.types.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
@@ -100,6 +101,39 @@ export async function handleToolExecutionStart(
     ctx.state.toolSummaryById.add(toolCallId);
     ctx.emitToolSummary(toolName, meta);
   }
+
+  // World Model Prediction (before tool execution)
+  void ctx.worldModelManager
+    .predict({
+      sessionId: (ctx.params.session as { id?: string }).id,
+      runId: ctx.params.runId,
+      messages: ctx.state.assistantTexts.slice(-10),
+    })
+    .then((predictions: WorldModelAction[]) => {
+      if (predictions.length > 0) {
+        ctx.log.debug(
+          `world model predicted ${predictions.length} action(s) before tool=${toolName}: ${predictions.map((p: WorldModelAction) => p.type).join(", ")}`,
+        );
+      }
+    })
+    .catch((err: unknown) => {
+      ctx.log.debug(`world model prediction failed: ${String(err)}`);
+    });
+
+  // World Model Observation
+  void ctx.worldModelManager.observe(
+    {
+      sessionId: (ctx.params.session as { id?: string }).id,
+      runId: ctx.params.runId,
+      messages: ctx.state.assistantTexts.slice(-10),
+    },
+    {
+      type: "tool_call",
+      toolName,
+      toolCallId,
+      toolArgs: args as Record<string, unknown>,
+    },
+  );
 
   // Track messaging tool sends (pending until confirmed in tool_execution_end).
   if (isMessagingTool(toolName)) {
@@ -233,6 +267,24 @@ export async function handleToolExecutionEnd(
       ctx.emitToolOutput(toolName, meta, outputText);
     }
   }
+
+  // World Model Observation
+  const wmArgs = toolStartData.get(toolCallId)?.args;
+  void ctx.worldModelManager.observe(
+    {
+      sessionId: (ctx.params.session as { id?: string }).id,
+      runId: ctx.params.runId,
+      messages: ctx.state.assistantTexts.slice(-10),
+    },
+    {
+      type: "tool_execution_end",
+      toolName,
+      toolCallId,
+      toolArgs: wmArgs as Record<string, unknown>,
+      toolResult: sanitizedResult,
+      isError: isToolError,
+    },
+  );
 
   // Run after_tool_call plugin hook (fire-and-forget)
   const hookRunnerAfter = ctx.hookRunner ?? getGlobalHookRunner();

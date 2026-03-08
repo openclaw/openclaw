@@ -10,6 +10,7 @@ import type {
   SubscribeEmbeddedPiSessionParams,
 } from "./pi-embedded-subscribe.types.js";
 import type { NormalizedUsage } from "./usage.js";
+import { WorldModelManager } from "../world-model/manager.js";
 
 export type EmbeddedSubscribeLogger = {
   debug: (message: string) => void;
@@ -107,6 +108,7 @@ export type EmbeddedPiSubscribeContext = {
   incrementCompactionCount: () => void;
   getUsageTotals: () => NormalizedUsage | undefined;
   getCompactionCount: () => number;
+  worldModelManager: WorldModelManager;
 };
 
 export type EmbeddedPiSubscribeEvent =
