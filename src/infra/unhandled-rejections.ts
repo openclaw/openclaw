@@ -249,6 +249,20 @@ export function installUnhandledRejectionHandler(): void {
       return;
     }
 
+    // Rejections with undefined/null/empty reasons are unclassifiable — they typically
+    // originate from third-party libraries (e.g. @slack/socket-mode) calling reject()
+    // without an error argument. Crashing on these is disproportionate since we can't
+    // determine severity. Log and continue; the originating subsystem's own retry logic
+    // (e.g. Slack socket reconnect) will handle recovery.
+    // See: https://github.com/openclaw/openclaw/issues/21082
+    if (reason === undefined || reason === null) {
+      console.warn(
+        "[openclaw] Non-fatal unhandled rejection (undefined reason, continuing):",
+        formatUncaughtError(reason),
+      );
+      return;
+    }
+
     console.error("[openclaw] Unhandled promise rejection:", formatUncaughtError(reason));
     process.exit(1);
   });

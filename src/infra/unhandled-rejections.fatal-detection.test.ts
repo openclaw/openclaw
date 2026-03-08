@@ -157,5 +157,21 @@ describe("installUnhandledRejectionHandler - fatal detection", () => {
         expect.stringContaining("This operation was aborted"),
       );
     });
+
+    it("does not exit on undefined rejection reason", () => {
+      expectExitCodeFromUnhandled(undefined, []);
+      expect(consoleWarnSpy).toHaveBeenCalledWith(
+        "[openclaw] Non-fatal unhandled rejection (undefined reason, continuing):",
+        undefined,
+      );
+    });
+
+    it("does not exit on null rejection reason", () => {
+      expectExitCodeFromUnhandled(null, []);
+      expect(consoleWarnSpy).toHaveBeenCalledWith(
+        "[openclaw] Non-fatal unhandled rejection (undefined reason, continuing):",
+        "null",
+      );
+    });
   });
 });
