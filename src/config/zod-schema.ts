@@ -326,6 +326,7 @@ export const OpenClawSchema = z
           )
           .optional(),
         extraArgs: z.array(z.string()).optional(),
+        relayBindHost: z.string().optional(),
       })
       .strict()
       .optional(),
