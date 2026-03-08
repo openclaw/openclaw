@@ -2,6 +2,7 @@ import { Type } from "@sinclair/typebox";
 import type { GatewayMessageChannel } from "../../utils/message-channel.js";
 import { ACP_SPAWN_MODES, ACP_SPAWN_STREAM_TARGETS, spawnAcpDirect } from "../acp-spawn.js";
 import { optionalStringEnum } from "../schema/typebox.js";
+import type { SpawnedToolContext } from "../spawned-context.js";
 import { SUBAGENT_SPAWN_MODES, spawnSubagentDirect } from "../subagent-spawn.js";
 import type { AnyAgentTool } from "./common.js";
 import { jsonResult, readStringParam, ToolInputError } from "./common.js";
@@ -58,24 +59,23 @@ const SessionsSpawnToolSchema = Type.Object({
   ),
 });
 
-export function createSessionsSpawnTool(opts?: {
-  agentSessionKey?: string;
-  agentChannel?: GatewayMessageChannel;
-  agentAccountId?: string;
-  agentTo?: string;
-  agentThreadId?: string | number;
-  agentGroupId?: string | null;
-  agentGroupChannel?: string | null;
-  agentGroupSpace?: string | null;
-  sandboxed?: boolean;
-  /** Explicit agent ID override for cron/hook sessions where session key parsing may not work. */
-  requesterAgentIdOverride?: string;
-}): AnyAgentTool {
+export function createSessionsSpawnTool(
+  opts?: {
+    agentSessionKey?: string;
+    agentChannel?: GatewayMessageChannel;
+    agentAccountId?: string;
+    agentTo?: string;
+    agentThreadId?: string | number;
+    sandboxed?: boolean;
+    /** Explicit agent ID override for cron/hook sessions where session key parsing may not work. */
+    requesterAgentIdOverride?: string;
+  } & SpawnedToolContext,
+): AnyAgentTool {
   return {
     label: "Sessions",
     name: "sessions_spawn",
     description:
-      'Spawn an isolated session (runtime="subagent" or runtime="acp"). mode="run" is one-shot and mode="session" is persistent/thread-bound.',
+      'Spawn an isolated session (runtime="subagent" or runtime="acp"). mode="run" is one-shot and mode="session" is persistent/thread-bound. Subagents inherit the parent workspace directory automatically.',
     parameters: SessionsSpawnToolSchema,
     execute: async (_toolCallId, args) => {
       const params = args as Record<string, unknown>;
@@ -187,6 +187,7 @@ export function createSessionsSpawnTool(opts?: {
           agentGroupChannel: opts?.agentGroupChannel,
           agentGroupSpace: opts?.agentGroupSpace,
           requesterAgentIdOverride: opts?.requesterAgentIdOverride,
+          workspaceDir: opts?.workspaceDir,
         },
       );
 

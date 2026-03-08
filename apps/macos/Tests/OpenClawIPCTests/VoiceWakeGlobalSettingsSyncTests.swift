@@ -21,9 +21,12 @@ import Testing
         return previous
     }
 
-    @Test func appliesVoiceWakeChangedEventToAppState() async {
+    @Test func `applies voice wake changed event to app state`() async {
         let previous = await applyTriggersAndCapturePrevious(["before"])
-        let evt = voiceWakeChangedEvent(payload: OpenClawProtocol.AnyCodable(["triggers": ["openclaw", "computer"]]))
+        let evt = self.voiceWakeChangedEvent(payload: OpenClawProtocol.AnyCodable(["triggers": [
+            "openclaw",
+            "computer",
+        ]]))
 
         await VoiceWakeGlobalSettingsSync.shared.handle(push: .event(evt))
 
@@ -35,9 +38,9 @@ import Testing
         }
     }
 
-    @Test func ignoresVoiceWakeChangedEventWithInvalidPayload() async {
+    @Test func `ignores voice wake changed event with invalid payload`() async {
         let previous = await applyTriggersAndCapturePrevious(["before"])
-        let evt = voiceWakeChangedEvent(payload: OpenClawProtocol.AnyCodable(["unexpected": 123]))
+        let evt = self.voiceWakeChangedEvent(payload: OpenClawProtocol.AnyCodable(["unexpected": 123]))
 
         await VoiceWakeGlobalSettingsSync.shared.handle(push: .event(evt))
 

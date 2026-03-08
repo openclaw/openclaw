@@ -102,13 +102,13 @@ async function ensureMinimaxApiKeyWithEnvRefPrompter(params: {
   return await ensureMinimaxApiKeyInternal({
     config: params.config,
     prompter: createPrompter({ select: params.select, text: params.text, note: params.note }),
-    secretInputMode: "ref",
+    secretInputMode: "ref", // pragma: allowlist secret
     setCredential: params.setCredential,
   });
 }
 
 async function runEnsureMinimaxApiKeyFlow(params: { confirmResult: boolean; textResult: string }) {
-  process.env.MINIMAX_API_KEY = "env-key";
+  process.env.MINIMAX_API_KEY = "env-key"; // pragma: allowlist secret
   delete process.env.MINIMAX_OAUTH_TOKEN;
 
   const { confirm, text } = createPromptSpies({
@@ -245,7 +245,7 @@ describe("ensureApiKeyFromEnvOrPrompt", () => {
   });
 
   it("uses explicit inline env ref when secret-input-mode=ref selects existing env key", async () => {
-    process.env.MINIMAX_API_KEY = "env-key";
+    process.env.MINIMAX_API_KEY = "env-key"; // pragma: allowlist secret
     delete process.env.MINIMAX_OAUTH_TOKEN;
 
     const { confirm, text, setCredential } = createPromptAndCredentialSpies({
@@ -256,7 +256,7 @@ describe("ensureApiKeyFromEnvOrPrompt", () => {
     const result = await ensureMinimaxApiKey({
       confirm,
       text,
-      secretInputMode: "ref",
+      secretInputMode: "ref", // pragma: allowlist secret
       setCredential,
     });
 
@@ -278,7 +278,7 @@ describe("ensureApiKeyFromEnvOrPrompt", () => {
       ensureMinimaxApiKey({
         confirm,
         text,
-        secretInputMode: "ref",
+        secretInputMode: "ref", // pragma: allowlist secret
         setCredential,
       }),
     ).rejects.toThrow(
@@ -288,7 +288,7 @@ describe("ensureApiKeyFromEnvOrPrompt", () => {
   });
 
   it("re-prompts after provider ref validation failure and succeeds with env ref", async () => {
-    process.env.MINIMAX_API_KEY = "env-key";
+    process.env.MINIMAX_API_KEY = "env-key"; // pragma: allowlist secret
     delete process.env.MINIMAX_OAUTH_TOKEN;
 
     const selectValues: Array<"provider" | "env" | "filemain"> = ["provider", "filemain", "env"];
@@ -327,7 +327,7 @@ describe("ensureApiKeyFromEnvOrPrompt", () => {
   });
 
   it("never includes resolved env secret values in reference validation notes", async () => {
-    process.env.MINIMAX_API_KEY = "sk-minimax-redacted-value";
+    process.env.MINIMAX_API_KEY = "sk-minimax-redacted-value"; // pragma: allowlist secret
     delete process.env.MINIMAX_OAUTH_TOKEN;
 
     const select = vi.fn(async () => "env") as WizardPrompter["select"];
@@ -380,7 +380,7 @@ describe("ensureApiKeyFromOptionEnvOrPrompt", () => {
 
   it("falls back to env flow and shows note when opts provider does not match", async () => {
     delete process.env.MINIMAX_OAUTH_TOKEN;
-    process.env.MINIMAX_API_KEY = "env-key";
+    process.env.MINIMAX_API_KEY = "env-key"; // pragma: allowlist secret
 
     const { confirm, note, text, setCredential } = createPromptAndCredentialSpies({
       confirmResult: true,

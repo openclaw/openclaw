@@ -224,6 +224,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "tools.web.search.gemini.model": "Gemini Search Model",
   "tools.web.search.grok.apiKey": "Grok Search API Key", // pragma: allowlist secret
   "tools.web.search.grok.model": "Grok Search Model",
+  "tools.web.search.brave.mode": "Brave Search Mode",
   "tools.web.search.kimi.apiKey": "Kimi Search API Key", // pragma: allowlist secret
   "tools.web.search.kimi.baseUrl": "Kimi Search Base URL",
   "tools.web.search.kimi.model": "Kimi Search Model",
@@ -452,6 +453,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "agents.defaults.compaction.maxHistoryShare": "Compaction Max History Share",
   "agents.defaults.compaction.identifierPolicy": "Compaction Identifier Policy",
   "agents.defaults.compaction.identifierInstructions": "Compaction Identifier Instructions",
+  "agents.defaults.compaction.recentTurnsPreserve": "Compaction Preserve Recent Turns",
   "agents.defaults.compaction.qualityGuard": "Compaction Quality Guard",
   "agents.defaults.compaction.qualityGuard.enabled": "Compaction Quality Guard Enabled",
   "agents.defaults.compaction.qualityGuard.maxRetries": "Compaction Quality Guard Max Retries",
@@ -649,6 +651,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "talk.modelId": "Talk Model ID",
   "talk.outputFormat": "Talk Output Format",
   "talk.interruptOnSpeech": "Talk Interrupt on Speech",
+  "talk.silenceTimeoutMs": "Talk Silence Timeout (ms)",
   messages: "Messages",
   "messages.messagePrefix": "Inbound Message Prefix",
   "messages.responsePrefix": "Outbound Response Prefix",

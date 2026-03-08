@@ -15,7 +15,11 @@ function installMockFetch(payload: unknown) {
   return mockFetch;
 }
 
-function createPerplexitySearchTool(perplexityConfig?: { apiKey?: string }) {
+function createPerplexitySearchTool(perplexityConfig?: {
+  apiKey?: string;
+  baseUrl?: string;
+  model?: string;
+}) {
   return createWebSearchTool({
     config: {
       tools: {
@@ -23,6 +27,23 @@ function createPerplexitySearchTool(perplexityConfig?: { apiKey?: string }) {
           search: {
             provider: "perplexity",
             ...(perplexityConfig ? { perplexity: perplexityConfig } : {}),
+          },
+        },
+      },
+    },
+    sandboxed: true,
+  });
+}
+
+function createBraveSearchTool(braveConfig?: { mode?: "web" | "llm-context" }) {
+  return createWebSearchTool({
+    config: {
+      tools: {
+        web: {
+          search: {
+            provider: "brave",
+            apiKey: "brave-config-test", // pragma: allowlist secret
+            ...(braveConfig ? { brave: braveConfig } : {}),
           },
         },
       },
@@ -50,14 +71,14 @@ function createKimiSearchTool(kimiConfig?: { apiKey?: string; baseUrl?: string; 
 function createProviderSearchTool(provider: "brave" | "perplexity" | "grok" | "gemini" | "kimi") {
   const searchConfig =
     provider === "perplexity"
-      ? { provider, perplexity: { apiKey: "pplx-config-test" } }
+      ? { provider, perplexity: { apiKey: "pplx-config-test" } } // pragma: allowlist secret
       : provider === "grok"
-        ? { provider, grok: { apiKey: "xai-config-test" } }
+        ? { provider, grok: { apiKey: "xai-config-test" } } // pragma: allowlist secret
         : provider === "gemini"
-          ? { provider, gemini: { apiKey: "gemini-config-test" } }
+          ? { provider, gemini: { apiKey: "gemini-config-test" } } // pragma: allowlist secret
           : provider === "kimi"
-            ? { provider, kimi: { apiKey: "moonshot-config-test" } }
-            : { provider, apiKey: "brave-config-test" };
+            ? { provider, kimi: { apiKey: "moonshot-config-test" } } // pragma: allowlist secret
+            : { provider, apiKey: "brave-config-test" }; // pragma: allowlist secret
   return createWebSearchTool({
     config: {
       tools: {
@@ -89,6 +110,13 @@ function installPerplexitySearchApiFetch(results?: Array<Record<string, unknown>
         date: "2024-01-01",
       },
     ],
+  });
+}
+
+function installPerplexityChatFetch() {
+  return installMockFetch({
+    choices: [{ message: { content: "ok" } }],
+    citations: ["https://example.com"],
   });
 }
 
@@ -162,7 +190,7 @@ describe("web_search country and language parameters", () => {
     }>,
   ) {
     const mockFetch = installMockFetch({ web: { results: [] } });
-    const tool = createWebSearchTool({ config: undefined, sandboxed: true });
+    const tool = createBraveSearchTool();
     expect(tool).not.toBeNull();
     await tool?.execute?.("call-1", { query: "test", ...params });
     expect(mockFetch).toHaveBeenCalled();
@@ -180,7 +208,7 @@ describe("web_search country and language parameters", () => {
 
   it("should pass language parameter to Brave API as search_lang", async () => {
     const mockFetch = installMockFetch({ web: { results: [] } });
-    const tool = createWebSearchTool({ config: undefined, sandboxed: true });
+    const tool = createBraveSearchTool();
     await tool?.execute?.("call-1", { query: "test", language: "de" });
 
     const url = new URL(mockFetch.mock.calls[0][0] as string);
@@ -204,7 +232,7 @@ describe("web_search country and language parameters", () => {
 
   it("rejects unsupported Brave search_lang values before upstream request", async () => {
     const mockFetch = installMockFetch({ web: { results: [] } });
-    const tool = createWebSearchTool({ config: undefined, sandboxed: true });
+    const tool = createBraveSearchTool();
     const result = await tool?.execute?.("call-1", { query: "test", search_lang: "xx" });
 
     expect(mockFetch).not.toHaveBeenCalled();
@@ -397,6 +425,103 @@ describe("web_search perplexity Search API", () => {
   });
 });
 
+describe("web_search perplexity OpenRouter compatibility", () => {
+  const priorFetch = global.fetch;
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    global.fetch = priorFetch;
+    webSearchTesting.SEARCH_CACHE.clear();
+  });
+
+  it("routes OPENROUTER_API_KEY through chat completions", async () => {
+    vi.stubEnv("PERPLEXITY_API_KEY", "");
+    vi.stubEnv("OPENROUTER_API_KEY", "sk-or-v1-test"); // pragma: allowlist secret
+    const mockFetch = installPerplexityChatFetch();
+    const tool = createPerplexitySearchTool();
+    const result = await tool?.execute?.("call-1", { query: "test" });
+
+    expect(mockFetch).toHaveBeenCalled();
+    expect(mockFetch.mock.calls[0]?.[0]).toBe("https://openrouter.ai/api/v1/chat/completions");
+    const body = parseFirstRequestBody(mockFetch);
+    expect(body.model).toBe("perplexity/sonar-pro");
+    expect(result?.details).toMatchObject({
+      provider: "perplexity",
+      citations: ["https://example.com"],
+      content: expect.stringContaining("ok"),
+    });
+  });
+
+  it("routes configured sk-or key through chat completions", async () => {
+    const mockFetch = installPerplexityChatFetch();
+    const tool = createPerplexitySearchTool({ apiKey: "sk-or-v1-test" }); // pragma: allowlist secret
+    await tool?.execute?.("call-1", { query: "test" });
+
+    expect(mockFetch).toHaveBeenCalled();
+    expect(mockFetch.mock.calls[0]?.[0]).toBe("https://openrouter.ai/api/v1/chat/completions");
+    const headers = (mockFetch.mock.calls[0]?.[1] as RequestInit | undefined)?.headers as
+      | Record<string, string>
+      | undefined;
+    expect(headers?.Authorization).toBe("Bearer sk-or-v1-test");
+  });
+
+  it("keeps freshness support on the compatibility path", async () => {
+    vi.stubEnv("OPENROUTER_API_KEY", "sk-or-v1-test"); // pragma: allowlist secret
+    const mockFetch = installPerplexityChatFetch();
+    const tool = createPerplexitySearchTool();
+    await tool?.execute?.("call-1", { query: "test", freshness: "week" });
+
+    expect(mockFetch).toHaveBeenCalled();
+    const body = parseFirstRequestBody(mockFetch);
+    expect(body.search_recency_filter).toBe("week");
+  });
+
+  it("fails loud for Search API-only filters on the compatibility path", async () => {
+    vi.stubEnv("OPENROUTER_API_KEY", "sk-or-v1-test"); // pragma: allowlist secret
+    const mockFetch = installPerplexityChatFetch();
+    const tool = createPerplexitySearchTool();
+    const result = await tool?.execute?.("call-1", {
+      query: "test",
+      domain_filter: ["nature.com"],
+    });
+
+    expect(mockFetch).not.toHaveBeenCalled();
+    expect(result?.details).toMatchObject({ error: "unsupported_domain_filter" });
+  });
+
+  it("hides Search API-only schema params on the compatibility path", () => {
+    vi.stubEnv("OPENROUTER_API_KEY", "sk-or-v1-test"); // pragma: allowlist secret
+    const tool = createPerplexitySearchTool();
+    const properties = (tool?.parameters as { properties?: Record<string, unknown> } | undefined)
+      ?.properties;
+
+    expect(properties?.freshness).toBeDefined();
+    expect(properties?.country).toBeUndefined();
+    expect(properties?.language).toBeUndefined();
+    expect(properties?.date_after).toBeUndefined();
+    expect(properties?.date_before).toBeUndefined();
+    expect(properties?.domain_filter).toBeUndefined();
+    expect(properties?.max_tokens).toBeUndefined();
+    expect(properties?.max_tokens_per_page).toBeUndefined();
+  });
+
+  it("keeps structured schema params on the native Search API path", () => {
+    vi.stubEnv("PERPLEXITY_API_KEY", "pplx-test");
+    const tool = createPerplexitySearchTool();
+    const properties = (tool?.parameters as { properties?: Record<string, unknown> } | undefined)
+      ?.properties;
+
+    expect(properties?.country).toBeDefined();
+    expect(properties?.language).toBeDefined();
+    expect(properties?.freshness).toBeDefined();
+    expect(properties?.date_after).toBeDefined();
+    expect(properties?.date_before).toBeDefined();
+    expect(properties?.domain_filter).toBeDefined();
+    expect(properties?.max_tokens).toBeDefined();
+    expect(properties?.max_tokens_per_page).toBeDefined();
+  });
+});
+
 describe("web_search kimi provider", () => {
   const priorFetch = global.fetch;
 
@@ -458,7 +583,7 @@ describe("web_search kimi provider", () => {
     global.fetch = withFetchPreconnect(mockFetch);
 
     const tool = createKimiSearchTool({
-      apiKey: "kimi-config-key",
+      apiKey: "kimi-config-key", // pragma: allowlist secret
       baseUrl: "https://api.moonshot.ai/v1",
       model: "moonshot-v1-128k",
     });
@@ -511,8 +636,27 @@ describe("web_search external content wrapping", () => {
     return mock;
   }
 
+  function installBraveLlmContextFetch(
+    result: Record<string, unknown>,
+    mock = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) =>
+      Promise.resolve({
+        ok: true,
+        json: () =>
+          Promise.resolve({
+            grounding: {
+              generic: [result],
+            },
+            sources: [{ url: "https://example.com/ctx", hostname: "example.com" }],
+          }),
+      } as Response),
+    ),
+  ) {
+    global.fetch = withFetchPreconnect(mock);
+    return mock;
+  }
+
   async function executeBraveSearch(query: string) {
-    const tool = createWebSearchTool({ config: undefined, sandboxed: true });
+    const tool = createBraveSearchTool();
     return tool?.execute?.("call-1", { query });
   }
 
@@ -543,6 +687,154 @@ describe("web_search external content wrapping", () => {
       source: "web_search",
       wrapped: true,
     });
+  });
+
+  it("uses Brave llm-context endpoint when mode is configured", async () => {
+    vi.stubEnv("BRAVE_API_KEY", "test-key");
+    const mockFetch = installBraveLlmContextFetch({
+      title: "Context title",
+      url: "https://example.com/ctx",
+      snippets: [{ text: "Context chunk one" }, { text: "Context chunk two" }],
+    });
+
+    const tool = createWebSearchTool({
+      config: {
+        tools: {
+          web: {
+            search: {
+              provider: "brave",
+              brave: {
+                mode: "llm-context",
+              },
+            },
+          },
+        },
+      },
+      sandboxed: true,
+    });
+    const result = await tool?.execute?.("call-1", {
+      query: "llm-context test",
+      country: "DE",
+      search_lang: "de",
+    });
+
+    const requestUrl = new URL(mockFetch.mock.calls[0]?.[0] as string);
+    expect(requestUrl.pathname).toBe("/res/v1/llm/context");
+    expect(requestUrl.searchParams.get("q")).toBe("llm-context test");
+    expect(requestUrl.searchParams.get("country")).toBe("DE");
+    expect(requestUrl.searchParams.get("search_lang")).toBe("de");
+
+    const details = result?.details as {
+      mode?: string;
+      results?: Array<{
+        title?: string;
+        url?: string;
+        snippets?: string[];
+        siteName?: string;
+      }>;
+      sources?: Array<{ hostname?: string }>;
+    };
+    expect(details.mode).toBe("llm-context");
+    expect(details.results?.[0]?.url).toBe("https://example.com/ctx");
+    expect(details.results?.[0]?.title).toContain("<<<EXTERNAL_UNTRUSTED_CONTENT");
+    expect(details.results?.[0]?.snippets?.[0]).toContain("<<<EXTERNAL_UNTRUSTED_CONTENT");
+    expect(details.results?.[0]?.snippets?.[0]).toContain("Context chunk one");
+    expect(details.results?.[0]?.siteName).toBe("example.com");
+    expect(details.sources?.[0]?.hostname).toBe("example.com");
+  });
+
+  it("rejects freshness in Brave llm-context mode", async () => {
+    vi.stubEnv("BRAVE_API_KEY", "test-key");
+    const mockFetch = installBraveLlmContextFetch({
+      title: "unused",
+      url: "https://example.com",
+      snippets: ["unused"],
+    });
+
+    const tool = createWebSearchTool({
+      config: {
+        tools: {
+          web: {
+            search: {
+              provider: "brave",
+              brave: {
+                mode: "llm-context",
+              },
+            },
+          },
+        },
+      },
+      sandboxed: true,
+    });
+    const result = await tool?.execute?.("call-1", { query: "test", freshness: "week" });
+
+    expect(result?.details).toMatchObject({ error: "unsupported_freshness" });
+    expect(mockFetch).not.toHaveBeenCalled();
+  });
+
+  it("rejects date_after/date_before in Brave llm-context mode", async () => {
+    vi.stubEnv("BRAVE_API_KEY", "test-key");
+    const mockFetch = installBraveLlmContextFetch({
+      title: "unused",
+      url: "https://example.com",
+      snippets: ["unused"],
+    });
+
+    const tool = createWebSearchTool({
+      config: {
+        tools: {
+          web: {
+            search: {
+              provider: "brave",
+              brave: {
+                mode: "llm-context",
+              },
+            },
+          },
+        },
+      },
+      sandboxed: true,
+    });
+    const result = await tool?.execute?.("call-1", {
+      query: "test",
+      date_after: "2025-01-01",
+      date_before: "2025-01-31",
+    });
+
+    expect(result?.details).toMatchObject({ error: "unsupported_date_filter" });
+    expect(mockFetch).not.toHaveBeenCalled();
+  });
+
+  it("rejects ui_lang in Brave llm-context mode", async () => {
+    vi.stubEnv("BRAVE_API_KEY", "test-key");
+    const mockFetch = installBraveLlmContextFetch({
+      title: "unused",
+      url: "https://example.com",
+      snippets: ["unused"],
+    });
+
+    const tool = createWebSearchTool({
+      config: {
+        tools: {
+          web: {
+            search: {
+              provider: "brave",
+              brave: {
+                mode: "llm-context",
+              },
+            },
+          },
+        },
+      },
+      sandboxed: true,
+    });
+    const result = await tool?.execute?.("call-1", {
+      query: "test",
+      ui_lang: "de-DE",
+    });
+
+    expect(result?.details).toMatchObject({ error: "unsupported_ui_lang" });
+    expect(mockFetch).not.toHaveBeenCalled();
   });
 
   it("does not wrap Brave result urls (raw for tool chaining)", async () => {

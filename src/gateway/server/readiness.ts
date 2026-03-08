@@ -50,11 +50,6 @@ export function createReadinessChecker(deps: {
 
     const snapshot = channelManager.getRuntimeSnapshot();
     const failing: string[] = [];
-    const policy: ChannelHealthPolicy = {
-      now,
-      staleEventThresholdMs: DEFAULT_CHANNEL_STALE_EVENT_THRESHOLD_MS,
-      channelConnectGraceMs: DEFAULT_CHANNEL_CONNECT_GRACE_MS,
-    };
 
     for (const [channelId, accounts] of Object.entries(snapshot.channelAccounts)) {
       if (!accounts) {
@@ -64,6 +59,12 @@ export function createReadinessChecker(deps: {
         if (!accountSnapshot) {
           continue;
         }
+        const policy: ChannelHealthPolicy = {
+          now,
+          staleEventThresholdMs: DEFAULT_CHANNEL_STALE_EVENT_THRESHOLD_MS,
+          channelConnectGraceMs: DEFAULT_CHANNEL_CONNECT_GRACE_MS,
+          channelId,
+        };
         const health = evaluateChannelHealth(accountSnapshot, policy);
         if (!health.healthy && !shouldIgnoreReadinessFailure(accountSnapshot, health)) {
           failing.push(channelId);

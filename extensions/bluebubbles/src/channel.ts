@@ -6,11 +6,11 @@ import type {
 import {
   applyAccountNameToChannelSection,
   buildChannelConfigSchema,
+  buildComputedAccountStatusSnapshot,
   buildProbeChannelStatusSummary,
   collectBlueBubblesStatusIssues,
   DEFAULT_ACCOUNT_ID,
   deleteAccountFromConfigSection,
-  formatPairingApproveHint,
   migrateBaseNameToDefaultAccount,
   normalizeAccountId,
   PAIRING_APPROVED_MESSAGE,
@@ -19,12 +19,19 @@ import {
   setAccountEnabledInConfigSection,
 } from "openclaw/plugin-sdk/bluebubbles";
 import {
+  buildAccountScopedDmSecurityPolicy,
+  collectOpenGroupPolicyRestrictSendersWarnings,
+  formatNormalizedAllowFromEntries,
+  mapAllowFromEntries,
+} from "openclaw/plugin-sdk/compat";
+import {
   listBlueBubblesAccountIds,
   type ResolvedBlueBubblesAccount,
   resolveBlueBubblesAccount,
   resolveDefaultBlueBubblesAccountId,
 } from "./accounts.js";
 import { bluebubblesMessageActions } from "./actions.js";
+import { applyBlueBubblesConnectionConfig } from "./config-apply.js";
 import { BlueBubblesConfigSchema } from "./config-schema.js";
 import { sendBlueBubblesMedia } from "./media-send.js";
 import { resolveBlueBubblesMessageId } from "./monitor.js";
@@ -109,41 +116,37 @@ export const bluebubblesPlugin: ChannelPlugin<ResolvedBlueBubblesAccount> = {
       baseUrl: account.baseUrl,
     }),
     resolveAllowFrom: ({ cfg, accountId }) =>
-      (resolveBlueBubblesAccount({ cfg: cfg, accountId }).config.allowFrom ?? []).map((entry) =>
-        String(entry),
-      ),
+      mapAllowFromEntries(resolveBlueBubblesAccount({ cfg: cfg, accountId }).config.allowFrom),
     formatAllowFrom: ({ allowFrom }) =>
-      allowFrom
-        .map((entry) => String(entry).trim())
-        .filter(Boolean)
-        .map((entry) => entry.replace(/^bluebubbles:/i, ""))
-        .map((entry) => normalizeBlueBubblesHandle(entry)),
+      formatNormalizedAllowFromEntries({
+        allowFrom,
+        normalizeEntry: (entry) => normalizeBlueBubblesHandle(entry.replace(/^bluebubbles:/i, "")),
+      }),
   },
   actions: bluebubblesMessageActions,
   security: {
     resolveDmPolicy: ({ cfg, accountId, account }) => {
-      const resolvedAccountId = accountId ?? account.accountId ?? DEFAULT_ACCOUNT_ID;
-      const useAccountPath = Boolean(cfg.channels?.bluebubbles?.accounts?.[resolvedAccountId]);
-      const basePath = useAccountPath
-        ? `channels.bluebubbles.accounts.${resolvedAccountId}.`
-        : "channels.bluebubbles.";
-      return {
-        policy: account.config.dmPolicy ?? "pairing",
+      return buildAccountScopedDmSecurityPolicy({
+        cfg,
+        channelKey: "bluebubbles",
+        accountId,
+        fallbackAccountId: account.accountId ?? DEFAULT_ACCOUNT_ID,
+        policy: account.config.dmPolicy,
         allowFrom: account.config.allowFrom ?? [],
-        policyPath: `${basePath}dmPolicy`,
-        allowFromPath: basePath,
-        approveHint: formatPairingApproveHint("bluebubbles"),
+        policyPathSuffix: "dmPolicy",
         normalizeEntry: (raw) => normalizeBlueBubblesHandle(raw.replace(/^bluebubbles:/i, "")),
-      };
+      });
     },
     collectWarnings: ({ account }) => {
       const groupPolicy = account.config.groupPolicy ?? "allowlist";
-      if (groupPolicy !== "open") {
-        return [];
-      }
-      return [
-        `- BlueBubbles groups: groupPolicy="open" allows any member to trigger the bot. Set channels.bluebubbles.groupPolicy="allowlist" + channels.bluebubbles.groupAllowFrom to restrict senders.`,
-      ];
+      return collectOpenGroupPolicyRestrictSendersWarnings({
+        groupPolicy,
+        surface: "BlueBubbles groups",
+        openScope: "any member",
+        groupPolicyPath: "channels.bluebubbles.groupPolicy",
+        groupAllowFromPath: "channels.bluebubbles.groupAllowFrom",
+        mentionGated: false,
+      });
     },
   },
   messaging: {
@@ -254,41 +257,16 @@ export const bluebubblesPlugin: ChannelPlugin<ResolvedBlueBubblesAccount> = {
               channelKey: "bluebubbles",
             })
           : namedConfig;
-      if (accountId === DEFAULT_ACCOUNT_ID) {
-        return {
-          ...next,
-          channels: {
-            ...next.channels,
-            bluebubbles: {
-              ...next.channels?.bluebubbles,
-              enabled: true,
-              ...(input.httpUrl ? { serverUrl: input.httpUrl } : {}),
-              ...(input.password ? { password: input.password } : {}),
-              ...(input.webhookPath ? { webhookPath: input.webhookPath } : {}),
-            },
-          },
-        } as OpenClawConfig;
-      }
-      return {
-        ...next,
-        channels: {
-          ...next.channels,
-          bluebubbles: {
-            ...next.channels?.bluebubbles,
-            enabled: true,
-            accounts: {
-              ...next.channels?.bluebubbles?.accounts,
-              [accountId]: {
-                ...next.channels?.bluebubbles?.accounts?.[accountId],
-                enabled: true,
-                ...(input.httpUrl ? { serverUrl: input.httpUrl } : {}),
-                ...(input.password ? { password: input.password } : {}),
-                ...(input.webhookPath ? { webhookPath: input.webhookPath } : {}),
-              },
-            },
-          },
+      return applyBlueBubblesConnectionConfig({
+        cfg: next,
+        accountId,
+        patch: {
+          serverUrl: input.httpUrl,
+          password: input.password,
+          webhookPath: input.webhookPath,
         },
-      } as OpenClawConfig;
+        onlyDefinedFields: true,
+      });
     },
   },
   pairing: {
@@ -372,20 +350,18 @@ export const bluebubblesPlugin: ChannelPlugin<ResolvedBlueBubblesAccount> = {
     buildAccountSnapshot: ({ account, runtime, probe }) => {
       const running = runtime?.running ?? false;
       const probeOk = (probe as BlueBubblesProbe | undefined)?.ok;
-      return {
+      const base = buildComputedAccountStatusSnapshot({
         accountId: account.accountId,
         name: account.name,
         enabled: account.enabled,
         configured: account.configured,
-        baseUrl: account.baseUrl,
-        running,
-        connected: probeOk ?? running,
-        lastStartAt: runtime?.lastStartAt ?? null,
-        lastStopAt: runtime?.lastStopAt ?? null,
-        lastError: runtime?.lastError ?? null,
+        runtime,
         probe,
-        lastInboundAt: runtime?.lastInboundAt ?? null,
-        lastOutboundAt: runtime?.lastOutboundAt ?? null,
+      });
+      return {
+        ...base,
+        baseUrl: account.baseUrl,
+        connected: probeOk ?? running,
       };
     },
   },
