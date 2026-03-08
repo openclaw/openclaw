@@ -65,6 +65,19 @@ const RECOVERABLE_MESSAGE_SNIPPETS = [
   "timed out", // grammY getUpdates returns "timed out after X seconds" (not matched by "timeout")
 ];
 
+function collectTelegramErrorCandidates(err: unknown) {
+  return collectErrorGraphCandidates(err, (current) => {
+    const nested: Array<unknown> = [current.cause, current.reason];
+    if (Array.isArray(current.errors)) {
+      nested.push(...current.errors);
+    }
+    if (readErrorName(current) === "HttpError") {
+      nested.push(current.error);
+    }
+    return nested;
+  });
+}
+
 function normalizeCode(code?: string): string {
   return code?.trim().toUpperCase() ?? "";
 }
@@ -101,16 +114,7 @@ export function isSafeToRetrySendError(err: unknown): boolean {
   if (!err) {
     return false;
   }
-  for (const candidate of collectErrorGraphCandidates(err, (current) => {
-    const nested: Array<unknown> = [current.cause, current.reason];
-    if (Array.isArray(current.errors)) {
-      nested.push(...current.errors);
-    }
-    if (readErrorName(current) === "HttpError") {
-      nested.push(current.error);
-    }
-    return nested;
-  })) {
+  for (const candidate of collectTelegramErrorCandidates(err)) {
     const code = normalizeCode(getErrorCode(candidate));
     if (code && PRE_CONNECT_ERROR_CODES.has(code)) {
       return true;
@@ -131,17 +135,7 @@ export function isRecoverableTelegramNetworkError(
       ? options.allowMessageMatch
       : options.context !== "send";
 
-  for (const candidate of collectErrorGraphCandidates(err, (current) => {
-    const nested: Array<unknown> = [current.cause, current.reason];
-    if (Array.isArray(current.errors)) {
-      nested.push(...current.errors);
-    }
-    // Grammy's HttpError wraps the underlying error in .error (not .cause).
-    if (readErrorName(current) === "HttpError") {
-      nested.push(current.error);
-    }
-    return nested;
-  })) {
+  for (const candidate of collectTelegramErrorCandidates(err)) {
     const code = normalizeCode(getErrorCode(candidate));
     if (code && RECOVERABLE_ERROR_CODES.has(code)) {
       return true;
