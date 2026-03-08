@@ -182,10 +182,15 @@ async function readJsonBody(
   throw new Error(result.code === "INVALID_JSON" ? "Invalid JSON" : result.error);
 }
 
-function parseAccountIdFromPath(pathname: string): string | null {
+/** @internal Exported for testing. */
+export function parseAccountIdFromPath(pathname: string): string | null {
   // Match: /api/channels/nostr/:accountId/profile
   const match = pathname.match(/^\/api\/channels\/nostr\/([^/]+)\/profile/);
-  return match?.[1] ?? null;
+  const accountId = match?.[1] ?? null;
+  if (accountId && !/^[a-zA-Z0-9_-]+$/.test(accountId)) {
+    return null;
+  }
+  return accountId;
 }
 
 function isLoopbackRemoteAddress(remoteAddress: string | undefined): boolean {
