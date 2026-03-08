@@ -11,7 +11,7 @@ export const tr: TranslationMap = {
     enabled: "Etkin",
     disabled: "Devre dışı",
     na: "yok",
-    docs: "Belgeler",
+    docs: "Dokümantasyon",
     resources: "Kaynaklar",
   },
   nav: {
