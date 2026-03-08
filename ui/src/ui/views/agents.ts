@@ -1,4 +1,5 @@
 import { html, nothing } from "lit";
+import { t } from "../../i18n/index.ts";
 import type {
   AgentIdentityResult,
   AgentsFilesListResult,
@@ -112,11 +113,11 @@ export function renderAgents(props: AgentsProps) {
       <section class="card agents-sidebar">
         <div class="row" style="justify-content: space-between;">
           <div>
-            <div class="card-title">Agents</div>
-            <div class="card-sub">${agents.length} configured.</div>
+            <div class="card-title">${t("agentsView.title")}</div>
+            <div class="card-sub">${t("agentsView.configuredCount", { count: String(agents.length) })}</div>
           </div>
           <button class="btn btn--sm" ?disabled=${props.loading} @click=${props.onRefresh}>
-            ${props.loading ? "Loading…" : "Refresh"}
+            ${props.loading ? t("common.loading") : t("common.refresh")}
           </button>
         </div>
         ${
@@ -128,7 +129,7 @@ export function renderAgents(props: AgentsProps) {
           ${
             agents.length === 0
               ? html`
-                  <div class="muted">No agents found.</div>
+                  <div class="muted">${t("agentsView.noAgents")}</div>
                 `
               : agents.map((agent) => {
                   const badge = agentBadgeText(agent.id, defaultId);
@@ -156,8 +157,8 @@ export function renderAgents(props: AgentsProps) {
           !selectedAgent
             ? html`
                 <div class="card">
-                  <div class="card-title">Select an agent</div>
-                  <div class="card-sub">Pick an agent to inspect its workspace and tools.</div>
+                  <div class="card-title">${t("agentsView.selectAgent")}</div>
+                  <div class="card-sub">${t("agentsView.selectAgentSubtitle")}</div>
                 </div>
               `
             : html`
@@ -299,7 +300,7 @@ function renderAgentHeader(
 ) {
   const badge = agentBadgeText(agent.id, defaultId);
   const displayName = normalizeAgentLabel(agent);
-  const subtitle = agent.identity?.theme?.trim() || "Agent workspace and routing.";
+  const subtitle = agent.identity?.theme?.trim() || t("agentsView.headerSubtitle");
   const emoji = resolveAgentEmoji(agent, agentIdentity);
   return html`
     <section class="card agent-header">
@@ -320,12 +321,12 @@ function renderAgentHeader(
 
 function renderAgentTabs(active: AgentsPanel, onSelect: (panel: AgentsPanel) => void) {
   const tabs: Array<{ id: AgentsPanel; label: string }> = [
-    { id: "overview", label: "Overview" },
-    { id: "files", label: "Files" },
-    { id: "tools", label: "Tools" },
-    { id: "skills", label: "Skills" },
-    { id: "channels", label: "Channels" },
-    { id: "cron", label: "Cron Jobs" },
+    { id: "overview", label: t("agentsView.tabs.overview") },
+    { id: "files", label: t("agentsView.tabs.files") },
+    { id: "tools", label: t("agentsView.tabs.tools") },
+    { id: "skills", label: t("agentsView.tabs.skills") },
+    { id: "channels", label: t("agentsView.tabs.channels") },
+    { id: "cron", label: t("agentsView.tabs.cron") },
   ];
   return html`
     <div class="agent-tabs">
@@ -406,7 +407,7 @@ function renderAgentOverview(params: {
   const skillFilter = Array.isArray(config.entry?.skills) ? config.entry?.skills : null;
   const skillCount = skillFilter?.length ?? null;
   const identityStatus = agentIdentityLoading
-    ? "Loading…"
+    ? t("common.loading")
     : agentIdentityError
       ? "Unavailable"
       : "";
