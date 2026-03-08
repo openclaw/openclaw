@@ -84,6 +84,10 @@ export function shouldIncludeSkill(params: {
   if (!isBundledSkillAllowed(entry, allowBundled)) {
     return false;
   }
+  // Force-enable when explicitly set; symmetric with enabled: false (fixes #32752).
+  if (skillConfig?.enabled === true) {
+    return true;
+  }
   return evaluateRuntimeEligibility({
     os: entry.metadata?.os,
     remotePlatforms: eligibility?.remote?.platforms,
