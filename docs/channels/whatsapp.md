@@ -144,6 +144,16 @@ OpenClaw recommends running WhatsApp on a separate number when possible. (The ch
 
     `allowFrom` accepts E.164-style numbers (normalized internally).
 
+    Outbound direct sends use `allowFrom` by default. To allow outbound delivery to any valid E.164 (without `allowFrom` membership checks), set:
+
+    - `channels.whatsapp.allowOutboundToAnyE164: true`
+    - optional per-account override: `channels.whatsapp.accounts.<id>.allowOutboundToAnyE164`
+
+    Risk warning:
+
+    - only enable this in trusted self-hosted setups
+    - any script/app that can run `openclaw message send --channel whatsapp` can send to arbitrary numbers from that WhatsApp account
+
     Multi-account override: `channels.whatsapp.accounts.<id>.dmPolicy` (and `allowFrom`) take precedence over channel-level defaults for that account.
 
     Runtime behavior details:
@@ -431,7 +441,7 @@ Primary reference:
 
 High-signal WhatsApp fields:
 
-- access: `dmPolicy`, `allowFrom`, `groupPolicy`, `groupAllowFrom`, `groups`
+- access: `dmPolicy`, `allowFrom`, `allowOutboundToAnyE164`, `groupPolicy`, `groupAllowFrom`, `groups`
 - delivery: `textChunkLimit`, `chunkMode`, `mediaMaxMb`, `sendReadReceipts`, `ackReaction`
 - multi-account: `accounts.<id>.enabled`, `accounts.<id>.authDir`, account-level overrides
 - operations: `configWrites`, `debounceMs`, `web.enabled`, `web.heartbeatSeconds`, `web.reconnect.*`

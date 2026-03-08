@@ -99,6 +99,7 @@ WhatsApp runs through the gateway's web channel (Baileys Web). It starts automat
     whatsapp: {
       dmPolicy: "pairing", // pairing | allowlist | open | disabled
       allowFrom: ["+15555550123", "+447700900123"],
+      allowOutboundToAnyE164: false,
       textChunkLimit: 4000,
       chunkMode: "length", // length | newline
       mediaMaxMb: 50,
@@ -145,7 +146,8 @@ WhatsApp runs through the gateway's web channel (Baileys Web). It starts automat
 - Outbound commands default to account `default` if present; otherwise the first configured account id (sorted).
 - Optional `channels.whatsapp.defaultAccount` overrides that fallback default account selection when it matches a configured account id.
 - Legacy single-account Baileys auth dir is migrated by `openclaw doctor` into `whatsapp/default`.
-- Per-account overrides: `channels.whatsapp.accounts.<id>.sendReadReceipts`, `channels.whatsapp.accounts.<id>.dmPolicy`, `channels.whatsapp.accounts.<id>.allowFrom`.
+- Per-account overrides: `channels.whatsapp.accounts.<id>.sendReadReceipts`, `channels.whatsapp.accounts.<id>.dmPolicy`, `channels.whatsapp.accounts.<id>.allowFrom`, `channels.whatsapp.accounts.<id>.allowOutboundToAnyE164`.
+- Outbound direct-target safety: by default, direct outbound targets must match `allowFrom` (or `*`/empty allowlist behavior). Set `allowOutboundToAnyE164: true` only for trusted self-hosted deployments where broad outbound sending risk is acceptable.
 
 </Accordion>
 

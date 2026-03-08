@@ -181,6 +181,75 @@ describe("whatsappOutbound.resolveTarget", () => {
       to: "120363401234567890@g.us",
     });
   });
+
+  it("allows direct target outside allowFrom when channel enables allowOutboundToAnyE164", () => {
+    const result = whatsappOutbound.resolveTarget?.({
+      to: "+15550000000",
+      allowFrom: ["+15551234567"],
+      mode: "explicit",
+      cfg: {
+        channels: {
+          whatsapp: {
+            allowOutboundToAnyE164: true,
+          },
+        },
+      } as OpenClawConfig,
+    });
+
+    expect(result).toEqual({
+      ok: true,
+      to: "+15550000000",
+    });
+  });
+
+  it("honors per-account allowOutboundToAnyE164 override", () => {
+    const result = whatsappOutbound.resolveTarget?.({
+      to: "+15550000000",
+      allowFrom: ["+15551234567"],
+      mode: "explicit",
+      accountId: "work",
+      cfg: {
+        channels: {
+          whatsapp: {
+            allowOutboundToAnyE164: false,
+            accounts: {
+              work: {
+                allowOutboundToAnyE164: true,
+              },
+            },
+          },
+        },
+      } as OpenClawConfig,
+    });
+
+    expect(result).toEqual({
+      ok: true,
+      to: "+15550000000",
+    });
+  });
+
+  it("honors explicit per-account false override when channel flag is true", () => {
+    const result = whatsappOutbound.resolveTarget?.({
+      to: "+15550000000",
+      allowFrom: ["+15551234567"],
+      mode: "explicit",
+      accountId: "work",
+      cfg: {
+        channels: {
+          whatsapp: {
+            allowOutboundToAnyE164: true,
+            accounts: {
+              work: {
+                allowOutboundToAnyE164: false,
+              },
+            },
+          },
+        },
+      } as OpenClawConfig,
+    });
+
+    expectWhatsAppTargetResolutionError(result);
+  });
 });
 
 describe("normalizeSignalAccountInput", () => {

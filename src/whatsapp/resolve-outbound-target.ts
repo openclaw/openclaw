@@ -8,6 +8,7 @@ export type WhatsAppOutboundTargetResolution =
 export function resolveWhatsAppOutboundTarget(params: {
   to: string | null | undefined;
   allowFrom: Array<string | number> | null | undefined;
+  allowOutboundToAnyE164?: boolean;
   mode: string | null | undefined;
 }): WhatsAppOutboundTargetResolution {
   const trimmed = params.to?.trim() ?? "";
@@ -29,6 +30,9 @@ export function resolveWhatsAppOutboundTarget(params: {
       };
     }
     if (isWhatsAppGroupJid(normalizedTo)) {
+      return { ok: true, to: normalizedTo };
+    }
+    if (params.allowOutboundToAnyE164 === true) {
       return { ok: true, to: normalizedTo };
     }
     // Enforce allowFrom for all direct-message send modes (including explicit).

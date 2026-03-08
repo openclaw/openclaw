@@ -198,6 +198,29 @@ describe("resolveWhatsAppOutboundTarget", () => {
       mockNormalizedDirectMessage(PRIMARY_TARGET, PRIMARY_TARGET);
       expectAllowedForTarget({ allowFrom: [PRIMARY_TARGET], mode: "broadcast" });
     });
+
+    it("allows outbound direct targets outside allowList when allowOutboundToAnyE164=true", () => {
+      mockNormalizedDirectMessage(SECONDARY_TARGET, PRIMARY_TARGET);
+      expectResolutionOk(
+        {
+          to: PRIMARY_TARGET,
+          allowFrom: [SECONDARY_TARGET],
+          allowOutboundToAnyE164: true,
+          mode: "broadcast",
+        },
+        PRIMARY_TARGET,
+      );
+    });
+
+    it("continues enforcing allowList when allowOutboundToAnyE164 is false", () => {
+      mockNormalizedDirectMessage(SECONDARY_TARGET, PRIMARY_TARGET);
+      expectResolutionError({
+        to: PRIMARY_TARGET,
+        allowFrom: [SECONDARY_TARGET],
+        allowOutboundToAnyE164: false,
+        mode: "broadcast",
+      });
+    });
   });
 
   describe("whitespace handling", () => {
