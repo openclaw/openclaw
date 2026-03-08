@@ -60,6 +60,10 @@ describe("ports helpers", () => {
 
     const messages = runtime.error.mock.calls.map((call) => stripAnsi(String(call[0] ?? "")));
     expect(messages.join("\n")).toContain("another OpenClaw instance is already running");
+    // When another OpenClaw owns the port, exit cleanly so supervised
+    // environments (launchd, systemd) do NOT trigger a restart loop.
+    expect(runtime.exit).toHaveBeenCalledTimes(1);
+    expect(runtime.exit).toHaveBeenLastCalledWith(0);
   });
 
   it("classifies ssh and gateway listeners", () => {
