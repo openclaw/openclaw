@@ -19,6 +19,9 @@ Use this page for day-1 startup and day-2 operations of the Gateway service.
   <Card title="Secrets management" icon="key-round" href="/gateway/secrets">
     SecretRef contract, runtime snapshot behavior, and migrate/reload operations.
   </Card>
+  <Card title="HWVault integration" icon="key-square" href="/gateway/hwvault-integration">
+    Use hardware-backed `hwvault` with OpenClaw SecretRef exec providers.
+  </Card>
   <Card title="Secrets plan contract" icon="shield-check" href="/gateway/secrets-plan-contract">
     Exact `secrets apply` target/path rules and ref-only auth-profile behavior.
   </Card>

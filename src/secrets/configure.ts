@@ -50,6 +50,72 @@ function parseCsv(value: string): string[] {
     .filter((entry) => entry.length > 0);
 }
 
+const HWVAULT_REQUIRED_PASS_ENV = [
+  "OPENCLAW_AGENT_ID",
+  "OPENCLAW_SESSION_KEY",
+  "OPENCLAW_DELEGATION_AUDIENCE",
+  "HWVAULT_BIN",
+] as const;
+
+export function applyHwvaultPresetToExecProvider(options: {
+  passEnv: string[];
+  env: Record<string, string>;
+  trustRoots: string;
+  policyPath: string;
+}): { passEnv: string[]; env: Record<string, string> } {
+  const passEnv = [...options.passEnv];
+  const env = { ...options.env };
+
+  env.HWVAULT_POLICY_PATH = options.policyPath.trim();
+  env.HWVAULT_TRUST_ROOTS = options.trustRoots;
+
+  for (const key of HWVAULT_REQUIRED_PASS_ENV) {
+    if (!passEnv.includes(key)) {
+      passEnv.push(key);
+    }
+  }
+
+  return { passEnv, env };
+}
+
+export function getHwvaultDefaultCommandForPlatform(platform: NodeJS.Platform): string {
+  // Avoid forcing a Unix path on Windows. On Windows we intentionally leave
+  // this blank so users provide an explicit absolute path.
+  if (platform === "win32") {
+    return "";
+  }
+  return "/usr/local/bin/openclaw-hwvault-resolver";
+}
+
+function getHwvaultDefaultCommand(): string {
+  return getHwvaultDefaultCommandForPlatform(process.platform);
+}
+
+function isLikelyHwvaultExecProvider(
+  base?: Extract<SecretProviderConfig, { source: "exec" }>,
+): boolean {
+  if (!base) {
+    return true;
+  }
+  if (base.command.toLowerCase().includes("hwvault")) {
+    return true;
+  }
+  if (isRecord(base.env)) {
+    return Boolean(base.env.HWVAULT_POLICY_PATH || base.env.HWVAULT_TRUST_ROOTS);
+  }
+  return false;
+}
+
+function pickInitialHwvaultTrustRoots(
+  base?: Extract<SecretProviderConfig, { source: "exec" }>,
+): "tpm" | "yubikey" | "tpm,yubikey" {
+  const current = isRecord(base?.env) ? base.env.HWVAULT_TRUST_ROOTS : undefined;
+  if (current === "tpm" || current === "yubikey" || current === "tpm,yubikey") {
+    return current;
+  }
+  return "tpm,yubikey";
+}
+
 function parseOptionalPositiveInt(value: string, max: number): number | undefined {
   const trimmed = value.trim();
   if (!trimmed) {
@@ -490,10 +556,21 @@ async function parseArgsInput(rawValue: string): Promise<string[] | undefined> {
 async function promptExecProvider(
   base?: Extract<SecretProviderConfig, { source: "exec" }>,
 ): Promise<Extract<SecretProviderConfig, { source: "exec" }>> {
+  const showHwvaultPresetPrompt = isLikelyHwvaultExecProvider(base);
+  const useHwvaultPreset = showHwvaultPresetPrompt
+    ? assertNoCancel(
+        await confirm({
+          message: "Use HWVault resolver preset?",
+          initialValue: !base,
+        }),
+        "Secrets configure cancelled.",
+      )
+    : false;
+
   const command = assertNoCancel(
     await text({
       message: "Command path (absolute)",
-      initialValue: base?.command ?? "",
+      initialValue: base?.command ?? (useHwvaultPreset ? getHwvaultDefaultCommand() : ""),
       validate: (value) => {
         const trimmed = String(value ?? "").trim();
         if (!trimmed) {
@@ -600,6 +677,47 @@ async function promptExecProvider(
   const args = await parseArgsInput(String(argsRaw ?? ""));
   const trustedDirs = parseCsv(String(trustedDirsRaw ?? ""));
 
+  const nextEnv = isRecord(base?.env) ? { ...base.env } : ({} as Record<string, string>);
+
+  if (useHwvaultPreset) {
+    const trustRoots = assertNoCancel(
+      await select({
+        message: "HW trust-root mode",
+        options: [
+          { value: "tpm", label: "TPM only" },
+          { value: "yubikey", label: "YubiKey only" },
+          { value: "tpm,yubikey", label: "TPM or YubiKey (recommended)" },
+        ],
+        initialValue: pickInitialHwvaultTrustRoots(base),
+      }),
+      "Secrets configure cancelled.",
+    );
+
+    const policyPath = assertNoCancel(
+      await text({
+        message: "HWVault policy file path",
+        initialValue: nextEnv.HWVAULT_POLICY_PATH ?? "~/.config/hwvault/openclaw-policy.json",
+        validate: (value) => {
+          const trimmed = String(value ?? "").trim();
+          if (!trimmed) {
+            return "Required";
+          }
+          return undefined;
+        },
+      }),
+      "Secrets configure cancelled.",
+    );
+
+    const preset = applyHwvaultPresetToExecProvider({
+      passEnv,
+      env: nextEnv,
+      trustRoots: String(trustRoots),
+      policyPath: String(policyPath),
+    });
+    passEnv.splice(0, passEnv.length, ...preset.passEnv);
+    Object.assign(nextEnv, preset.env);
+  }
+
   return {
     source: "exec",
     command: String(command).trim(),
@@ -612,7 +730,7 @@ async function promptExecProvider(
     ...(trustedDirs.length > 0 ? { trustedDirs } : {}),
     ...(allowInsecurePath ? { allowInsecurePath: true } : {}),
     ...(allowSymlinkCommand ? { allowSymlinkCommand: true } : {}),
-    ...(isRecord(base?.env) ? { env: base.env } : {}),
+    ...(Object.keys(nextEnv).length > 0 ? { env: nextEnv } : {}),
   };
 }
 

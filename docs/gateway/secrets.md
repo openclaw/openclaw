@@ -282,7 +282,13 @@ Optional per-id errors:
 }
 ```
 
-## Supported credential surface
+### `hwvault`
+
+Use `hwvault` through an exec resolver adapter (protocol stdin/stdout). See:
+
+- [HWVault Integration](/gateway/hwvault-integration)
+
+## In-scope fields (v1)
 
 Canonical supported and unsupported credentials are listed in:
 

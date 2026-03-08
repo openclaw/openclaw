@@ -134,6 +134,7 @@ Exec provider safety note:
 - Homebrew installs often expose symlinked binaries under `/opt/homebrew/bin/*`.
 - Set `allowSymlinkCommand: true` only when needed for trusted package-manager paths, and pair it with `trustedDirs` (for example `["/opt/homebrew"]`).
 - On Windows, if ACL verification is unavailable for a provider path, OpenClaw fails closed. For trusted paths only, set `allowInsecurePath: true` on that provider to bypass path security checks.
+- `secrets configure` includes an optional **HWVault resolver preset** for exec providers. It can prefill a hardware trust-root mode (TPM, YubiKey, or TPM/YubiKey) and include identity pass-through env keys for delegation workflows.
 
 ## Apply a saved plan
 
