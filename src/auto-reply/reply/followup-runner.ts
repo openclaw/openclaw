@@ -261,6 +261,7 @@ export function createFollowupRunner(params: {
           contextTokensUsed,
           systemPromptReport: runResult.meta?.systemPromptReport,
           logLabel: "followup",
+          isHeartbeat: opts?.isHeartbeat === true,
         });
       }
 
