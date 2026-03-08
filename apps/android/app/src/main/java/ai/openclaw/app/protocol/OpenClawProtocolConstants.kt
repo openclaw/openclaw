@@ -10,7 +10,6 @@ enum class OpenClawCapability(val rawValue: String) {
   Device("device"),
   Notifications("notifications"),
   System("system"),
-  AppUpdate("appUpdate"),
   Photos("photos"),
   Contacts("contacts"),
   Calendar("calendar"),

@@ -166,4 +166,3 @@ Screen commands:
   - `contacts.search`, `contacts.add`
   - `calendar.events`, `calendar.add`
   - `motion.activity`, `motion.pedometer`
-  - `app.update`

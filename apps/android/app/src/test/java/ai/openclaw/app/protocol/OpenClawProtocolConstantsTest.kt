@@ -31,7 +31,6 @@ class OpenClawProtocolConstantsTest {
     assertEquals("device", OpenClawCapability.Device.rawValue)
     assertEquals("notifications", OpenClawCapability.Notifications.rawValue)
     assertEquals("system", OpenClawCapability.System.rawValue)
-    assertEquals("appUpdate", OpenClawCapability.AppUpdate.rawValue)
     assertEquals("photos", OpenClawCapability.Photos.rawValue)
     assertEquals("contacts", OpenClawCapability.Contacts.rawValue)
     assertEquals("calendar", OpenClawCapability.Calendar.rawValue)
