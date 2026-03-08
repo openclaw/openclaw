@@ -68,10 +68,31 @@ function normalizeWakeTarget(value?: string): string | undefined {
   return trimmed || undefined;
 }
 
-function getWakeTargetKey(params: { agentId?: string; sessionKey?: string }) {
+function heartbeatOverrideKey(heartbeat?: {
+  target?: string;
+  to?: string;
+  accountId?: string;
+}): string {
+  if (heartbeat == null) {
+    return "";
+  }
+  const o = {
+    accountId: heartbeat.accountId ?? "",
+    target: heartbeat.target ?? "",
+    to: heartbeat.to ?? "",
+  };
+  return JSON.stringify(o);
+}
+
+function getWakeTargetKey(params: {
+  agentId?: string;
+  sessionKey?: string;
+  heartbeat?: { target?: string; to?: string; accountId?: string };
+}) {
   const agentId = normalizeWakeTarget(params.agentId);
   const sessionKey = normalizeWakeTarget(params.sessionKey);
-  return `${agentId ?? ""}::${sessionKey ?? ""}`;
+  const heartbeatSuffix = heartbeatOverrideKey(params.heartbeat);
+  return `${agentId ?? ""}::${sessionKey ?? ""}::${heartbeatSuffix}`;
 }
 
 function queuePendingWakeReason(params?: {
@@ -88,6 +109,7 @@ function queuePendingWakeReason(params?: {
   const wakeTargetKey = getWakeTargetKey({
     agentId: normalizedAgentId,
     sessionKey: normalizedSessionKey,
+    heartbeat: params?.heartbeat,
   });
   const next: PendingWakeReason = {
     reason: normalizedReason,

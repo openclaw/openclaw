@@ -990,13 +990,14 @@ export async function executeJobCore(
         }
         // When job has announce delivery (e.g. feishu/telegram), deliver main-session
         // output there; otherwise use "last" so cron main responses reach the last channel.
+        // Include explicit to when mode is announce even without channel (e.g. --to only).
         const delivery = job.delivery as
           | { mode?: string; channel?: string; to?: string; accountId?: string }
           | undefined;
         const heartbeatOverride =
-          delivery?.mode === "announce" && delivery?.channel
+          delivery?.mode === "announce" && (delivery?.channel || delivery?.to)
             ? {
-                target: delivery.channel,
+                target: delivery.channel?.trim() || "last",
                 to: delivery.to,
                 accountId: delivery.accountId,
               }
@@ -1046,9 +1047,9 @@ export async function executeJobCore(
         | { mode?: string; channel?: string; to?: string; accountId?: string }
         | undefined;
       const heartbeatOverride =
-        delivery?.mode === "announce" && delivery?.channel
+        delivery?.mode === "announce" && (delivery?.channel || delivery?.to)
           ? {
-              target: delivery.channel,
+              target: delivery.channel?.trim() || "last",
               to: delivery.to,
               accountId: delivery.accountId,
             }

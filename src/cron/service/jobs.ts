@@ -629,10 +629,11 @@ export function applyJobPatch(
   if (
     job.sessionTarget === "main" &&
     job.delivery?.mode !== "webhook" &&
+    job.delivery?.mode !== "announce" &&
     job.delivery?.failureDestination
   ) {
     throw new Error(
-      'cron delivery.failureDestination is only supported for sessionTarget="isolated" unless delivery.mode="webhook"',
+      'cron delivery.failureDestination is only supported for sessionTarget="isolated" unless delivery.mode="webhook" or "announce"',
     );
   }
   // Main session supports webhook (body post) and announce (deliver run result to channel).
