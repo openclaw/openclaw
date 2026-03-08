@@ -195,6 +195,10 @@ export { formatResolvedUnresolvedNote } from "./resolution-notes.js";
 export { buildChannelSendResult } from "./channel-send-result.js";
 export type { ChannelSendRawResult } from "./channel-send-result.js";
 export { createPluginRuntimeStore } from "./runtime-store.js";
+export {
+  AllowFromEntrySchema,
+  buildCatchallMultiAccountChannelSchema,
+} from "../channels/plugins/config-schema.js";
 export type { ChannelDock } from "../channels/dock.js";
 export { getChatChannelMeta } from "../channels/registry.js";
 export { resolveAllowlistMatchByCandidates } from "../channels/allowlist-match.js";
