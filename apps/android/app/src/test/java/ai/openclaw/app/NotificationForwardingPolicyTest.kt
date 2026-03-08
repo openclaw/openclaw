@@ -109,6 +109,47 @@ class NotificationForwardingPolicyTest {
   }
 
   @Test
+  fun blocksEventsWhenDisabledOrQuietHoursOrRateLimited() {
+    val disabled =
+      NotificationForwardingPolicy(
+        enabled = false,
+        mode = NotificationPackageFilterMode.Blocklist,
+        packages = emptySet(),
+        quietHoursEnabled = false,
+        quietStart = "22:00",
+        quietEnd = "07:00",
+        maxEventsPerMinute = 20,
+        sessionKey = null,
+      )
+    assertFalse(disabled.enabled && disabled.allowsPackage("com.allowed.app"))
+
+    val quiet =
+      NotificationForwardingPolicy(
+        enabled = true,
+        mode = NotificationPackageFilterMode.Blocklist,
+        packages = emptySet(),
+        quietHoursEnabled = true,
+        quietStart = "22:00",
+        quietEnd = "07:00",
+        maxEventsPerMinute = 20,
+        sessionKey = null,
+      )
+    val zone = ZoneId.of("UTC")
+    val at2330 =
+      LocalDateTime
+        .of(2024, 1, 6, 23, 30)
+        .atZone(zone)
+        .toInstant()
+        .toEpochMilli()
+    assertTrue(quiet.isWithinQuietHours(nowEpochMs = at2330, zoneId = zone))
+
+    val limiter = NotificationBurstLimiter()
+    val minute = 1_704_098_400_000L
+    assertTrue(limiter.allow(nowEpochMs = minute, maxEventsPerMinute = 1))
+    assertFalse(limiter.allow(nowEpochMs = minute + 500L, maxEventsPerMinute = 1))
+  }
+
+  @Test
   fun burstLimiter_blocksEventsAboveLimitInSameMinute() {
     val limiter = NotificationBurstLimiter()
     val minute = 1_704_098_400_000L
