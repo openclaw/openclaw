@@ -1,5 +1,6 @@
 import type { Api, Model } from "@mariozechner/pi-ai";
 import type { ModelRegistry } from "@mariozechner/pi-coding-agent";
+import { loadModelCatalog } from "../../agents/model-catalog.js";
 import { parseModelRef } from "../../agents/model-selection.js";
 import { resolveModelWithRegistry } from "../../agents/pi-embedded-runner/model.js";
 import type { RuntimeEnv } from "../../runtime.js";
@@ -62,6 +63,30 @@ export async function modelsListCommand(
     );
   }
   const discoveredKeys = new Set(models.map((model) => modelKey(model.provider, model.id)));
+
+  if (opts.all && modelRegistry) {
+    const catalog = await loadModelCatalog({ config: cfg });
+    const mergedByKey = new Map(models.map((model) => [modelKey(model.provider, model.id), model]));
+
+    for (const entry of catalog) {
+      const key = modelKey(entry.provider, entry.id);
+      if (mergedByKey.has(key)) {
+        continue;
+      }
+      const model = resolveModelWithRegistry({
+        provider: entry.provider,
+        modelId: entry.id,
+        modelRegistry,
+        cfg,
+      });
+      if (!model) {
+        continue;
+      }
+      mergedByKey.set(key, model);
+    }
+
+    models = [...mergedByKey.values()];
+  }
 
   const { entries } = resolveConfiguredEntries(cfg);
   const configuredByKey = new Map(entries.map((entry) => [entry.key, entry]));

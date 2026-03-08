@@ -35,6 +35,7 @@ const mocks = vi.hoisted(() => {
       diagnostics: [],
     }),
     ensureAuthProfileStore: vi.fn().mockReturnValue({ version: 1, profiles: {}, order: {} }),
+    loadModelCatalog: vi.fn().mockResolvedValue([]),
     loadModelRegistry: vi
       .fn()
       .mockResolvedValue({ models: [], availableKeys: new Set(), registry: {} }),
@@ -77,6 +78,14 @@ vi.mock("../../agents/auth-profiles.js", async (importOriginal) => {
   };
 });
 
+vi.mock("../../agents/model-catalog.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../agents/model-catalog.js")>();
+  return {
+    ...actual,
+    loadModelCatalog: mocks.loadModelCatalog,
+  };
+});
+
 vi.mock("./list.registry.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./list.registry.js")>();
   return {
@@ -108,6 +117,30 @@ vi.mock("../../agents/pi-embedded-runner/model.js", async (importOriginal) => {
 import { modelsListCommand } from "./list.list-command.js";
 
 describe("modelsListCommand forward-compat", () => {
+  it("includes synthetic codex gpt-5.4 rows in --all output", async () => {
+    mocks.loadModelCatalog.mockResolvedValueOnce([
+      {
+        provider: "openai-codex",
+        id: "gpt-5.4",
+        name: "GPT-5.4",
+        input: ["text"],
+        contextWindow: 272000,
+      },
+    ]);
+    const runtime = { log: vi.fn(), error: vi.fn() };
+
+    await modelsListCommand({ all: true, json: true }, runtime as never);
+
+    expect(mocks.printModelTable).toHaveBeenCalled();
+    const rows = mocks.printModelTable.mock.calls.at(-1)?.[0] as Array<{ key: string }>;
+
+    expect(rows).toContainEqual(
+      expect.objectContaining({
+        key: "openai-codex/gpt-5.4",
+      }),
+    );
+  });
+
   it("does not mark configured codex model as missing when forward-compat can build a fallback", async () => {
     const runtime = { log: vi.fn(), error: vi.fn() };
 
