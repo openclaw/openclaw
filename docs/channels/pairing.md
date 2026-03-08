@@ -54,6 +54,18 @@ Account scoping behavior:
 
 Treat these as sensitive (they gate access to your assistant).
 
+### Granting tool-level owner access
+
+DM pairing controls **who can message the bot**, but it does not automatically grant "owner" status for restricted tools like `cron` and `gateway`. To enable these tools, add the sender's ID to `commands.ownerAllowFrom` in your config:
+
+```json
+"commands": {
+    "ownerAllowFrom": ["<sender_chat_id>"]
+}
+```
+
+Without this, owner-only tools are silently removed from the agent's tool list. See [Tools → Owner-only tools](/tools#owner-only-tools) for details.
+
 ## 2) Node device pairing (iOS/Android/macOS/headless nodes)
 
 Nodes connect to the Gateway as **devices** with `role: node`. The Gateway
