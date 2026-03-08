@@ -32,6 +32,7 @@ Docs: https://docs.openclaw.ai
 - iOS/App Store Connect release prep: align iOS bundle identifiers under `ai.openclaw.client`, refresh Watch app icons, add Fastlane metadata/screenshot automation, and support Keychain-backed ASC auth for uploads. (#38936) Thanks @ngutman.
 - Mattermost/model picker: add Telegram-style interactive provider/model browsing for `/oc_model` and `/oc_models`, fix picker callback updates, and emit a normal confirmation reply when a model is selected. (#38767) thanks @mukhtharcm.
 - Docker/multi-stage build: restructure Dockerfile as a multi-stage build to produce a minimal runtime image without build tools, source code, or Bun; add `OPENCLAW_VARIANT=slim` build arg for a bookworm-slim variant. (#38479) Thanks @sallyom.
+- Google/Gemini 3.1 Flash-Lite: add first-class `google/gemini-3.1-flash-lite-preview` support across model-id normalization, default aliases, media-understanding image lookups, Google Gemini CLI forward-compat fallback, and docs.
 
 ### Breaking
 
