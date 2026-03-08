@@ -70,6 +70,7 @@ import { icons } from "./icons.ts";
 import { normalizeBasePath, TAB_GROUPS, subtitleForTab, titleForTab } from "./navigation.ts";
 import {
   resolveAgentConfig,
+  resolveAgentModelConfigPath,
   resolveConfiguredCronModelSuggestions,
   resolveEffectiveModelFallbacks,
   resolveModelPrimary,
@@ -765,21 +766,33 @@ export function renderApp(state: AppViewState) {
                   updateConfigFormValue(state, ["agents", "list", index, "skills"], []);
                 },
                 onModelChange: (agentId, modelId) => {
-                  const index = modelId ? ensureAgentIndex(agentId) : findAgentIndex(agentId);
-                  if (index < 0) {
+                  const isDefaultAgent = agentId === (state.agentsList?.defaultId ?? null);
+                  const index = modelId
+                    ? isDefaultAgent
+                      ? 0
+                      : ensureAgentIndex(agentId)
+                    : findAgentIndex(agentId);
+                  if (!isDefaultAgent && index < 0) {
                     return;
                   }
-                  const list = (getCurrentConfigValue() as { agents?: { list?: unknown[] } } | null)
-                    ?.agents?.list;
-                  const basePath = ["agents", "list", index, "model"];
+                  const currentConfig = getCurrentConfigValue();
+                  const list = (currentConfig as { agents?: { list?: unknown[] } } | null)?.agents
+                    ?.list;
+                  const resolvedConfig = resolveAgentConfig(currentConfig, agentId);
+                  const basePath = resolveAgentModelConfigPath(
+                    agentId,
+                    state.agentsList?.defaultId ?? null,
+                    index,
+                  );
                   if (!modelId) {
                     removeConfigFormValue(state, basePath);
                     return;
                   }
-                  const entry = Array.isArray(list)
-                    ? (list[index] as { model?: unknown })
-                    : undefined;
-                  const existing = entry?.model;
+                  const existing = isDefaultAgent
+                    ? resolvedConfig.defaults?.model
+                    : Array.isArray(list)
+                      ? (list[index] as { model?: unknown } | undefined)?.model
+                      : undefined;
                   if (existing && typeof existing === "object" && !Array.isArray(existing)) {
                     const fallbacks = (existing as { fallbacks?: unknown }).fallbacks;
                     const next = {
@@ -795,6 +808,7 @@ export function renderApp(state: AppViewState) {
                   const normalized = fallbacks.map((name) => name.trim()).filter(Boolean);
                   const currentConfig = getCurrentConfigValue();
                   const resolvedConfig = resolveAgentConfig(currentConfig, agentId);
+                  const isDefaultAgent = agentId === (state.agentsList?.defaultId ?? null);
                   const effectivePrimary =
                     resolveModelPrimary(resolvedConfig.entry?.model) ??
                     resolveModelPrimary(resolvedConfig.defaults?.model);
@@ -805,21 +819,30 @@ export function renderApp(state: AppViewState) {
                   const index =
                     normalized.length > 0
                       ? effectivePrimary
-                        ? ensureAgentIndex(agentId)
+                        ? isDefaultAgent
+                          ? 0
+                          : ensureAgentIndex(agentId)
                         : -1
                       : (effectiveFallbacks?.length ?? 0) > 0 || findAgentIndex(agentId) >= 0
-                        ? ensureAgentIndex(agentId)
+                        ? isDefaultAgent
+                          ? 0
+                          : ensureAgentIndex(agentId)
                         : -1;
-                  if (index < 0) {
+                  if (!isDefaultAgent && index < 0) {
                     return;
                   }
-                  const list = (getCurrentConfigValue() as { agents?: { list?: unknown[] } } | null)
-                    ?.agents?.list;
-                  const basePath = ["agents", "list", index, "model"];
-                  const entry = Array.isArray(list)
-                    ? (list[index] as { model?: unknown })
-                    : undefined;
-                  const existing = entry?.model;
+                  const list = (currentConfig as { agents?: { list?: unknown[] } } | null)?.agents
+                    ?.list;
+                  const basePath = resolveAgentModelConfigPath(
+                    agentId,
+                    state.agentsList?.defaultId ?? null,
+                    index,
+                  );
+                  const existing = isDefaultAgent
+                    ? resolvedConfig.defaults?.model
+                    : Array.isArray(list)
+                      ? (list[index] as { model?: unknown } | undefined)?.model
+                      : undefined;
                   const resolvePrimary = () => {
                     if (typeof existing === "string") {
                       return existing.trim() || null;

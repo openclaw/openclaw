@@ -244,6 +244,16 @@ export function resolveModelFallbacks(model?: unknown): string[] | null {
   return null;
 }
 
+export function resolveAgentModelConfigPath(
+  agentId: string,
+  defaultId: string | null,
+  index: number,
+): Array<string | number> {
+  return agentId === defaultId
+    ? ["agents", "defaults", "model"]
+    : ["agents", "list", index, "model"];
+}
+
 export function resolveEffectiveModelFallbacks(
   entryModel?: unknown,
   defaultModel?: unknown,
