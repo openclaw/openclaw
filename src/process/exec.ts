@@ -94,13 +94,19 @@ export function shouldSpawnWithShell(params: {
   resolvedCommand: string;
   platform: NodeJS.Platform;
 }): boolean {
-  // SECURITY: never enable `shell` for argv-based execution.
+  // SECURITY: never enable `shell` for arbitrary commands.
   // `shell` routes through cmd.exe on Windows, which turns untrusted argv values
   // (like chat prompts passed as CLI args) into command-injection primitives.
-  // If you need a shell, use an explicit shell-wrapper argv (e.g. `cmd.exe /c ...`)
-  // and validate/escape at the call site.
-  void params;
-  return false;
+  //
+  // However, on Windows, .cmd files (npm.cmd, pnpm.cmd, etc.) cannot be spawned
+  // without `shell: true` — Node.js throws EINVAL. We allow `shell` only for
+  // known package-manager .cmd wrappers that OpenClaw invokes internally.
+  if (params.platform !== "win32") {
+    return false;
+  }
+  const basename = path.basename(params.resolvedCommand).toLowerCase();
+  const safeCmdWrappers = ["npm.cmd", "pnpm.cmd", "yarn.cmd", "npx.cmd"];
+  return safeCmdWrappers.includes(basename);
 }
 
 // Simple promise-wrapped execFile with optional verbosity logging.
