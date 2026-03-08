@@ -493,6 +493,39 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).toContain("## Reactions");
     expect(prompt).toContain("Reactions are enabled for Telegram in MINIMAL mode.");
   });
+
+  it("places static Project Context before dynamic Messaging section for prefix cache stability", () => {
+    // Dynamic sections (Messaging, Group Chat Context, Reactions) must appear AFTER
+    // the static Project Context block. This ensures LLM prefix caching can reuse the
+    // large static prefix on every request, regardless of which channel or conversation
+    // the request comes from. See: https://github.com/openclaw/openclaw/issues/40256
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      toolNames: ["message"],
+      runtimeInfo: {
+        channel: "telegram",
+        capabilities: ["inlineButtons"],
+      },
+      contextFiles: [{ path: "AGENTS.md", content: "Project rules" }],
+      extraSystemPrompt: "Group chat context here",
+      reactionGuidance: { level: "minimal", channel: "Telegram" },
+    });
+
+    const projectContextPos = prompt.indexOf("# Project Context");
+    const messagingPos = prompt.indexOf("## Messaging");
+    const groupChatPos = prompt.indexOf("## Group Chat Context");
+    const reactionsPos = prompt.indexOf("## Reactions");
+
+    expect(projectContextPos).toBeGreaterThan(-1);
+    expect(messagingPos).toBeGreaterThan(-1);
+    expect(groupChatPos).toBeGreaterThan(-1);
+    expect(reactionsPos).toBeGreaterThan(-1);
+
+    // All dynamic sections must come after static Project Context
+    expect(messagingPos).toBeGreaterThan(projectContextPos);
+    expect(groupChatPos).toBeGreaterThan(projectContextPos);
+    expect(reactionsPos).toBeGreaterThan(projectContextPos);
+  });
 });
 
 describe("buildSubagentSystemPrompt", () => {
