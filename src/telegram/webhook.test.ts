@@ -353,6 +353,27 @@ describe("startTelegramWebhook", () => {
     );
   });
 
+  it("registers webhook with certificate when webhookCertPath is provided", async () => {
+    setWebhookSpy.mockClear();
+    await withStartedWebhook(
+      {
+        secret: TELEGRAM_SECRET,
+        path: TELEGRAM_WEBHOOK_PATH,
+        webhookCertPath: "/path/to/cert.pem",
+      },
+      async () => {
+        expect(setWebhookSpy).toHaveBeenCalledWith(
+          expect.any(String),
+          expect.objectContaining({
+            certificate: expect.objectContaining({
+              fileData: "/path/to/cert.pem",
+            }),
+          }),
+        );
+      },
+    );
+  });
+
   it("invokes webhook handler on matching path", async () => {
     handlerSpy.mockClear();
     createTelegramBotSpy.mockClear();
