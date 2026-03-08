@@ -5,13 +5,10 @@ import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.Service
 import android.app.PendingIntent
-import android.Manifest
 import android.content.Context
 import android.content.Intent
-import android.content.pm.PackageManager
 import android.content.pm.ServiceInfo
 import androidx.core.app.NotificationCompat
-import androidx.core.content.ContextCompat
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -23,14 +20,13 @@ import kotlinx.coroutines.launch
 class NodeForegroundService : Service() {
   private val scope: CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
   private var notificationJob: Job? = null
-  private var lastRequiresMic = false
   private var didStartForeground = false
 
   override fun onCreate() {
     super.onCreate()
     ensureChannel()
     val initial = buildNotification(title = "OpenClaw Node", text = "Starting…")
-    startForegroundWithTypes(notification = initial, requiresMic = false)
+    startForegroundWithTypes(notification = initial)
 
     val runtime = (application as NodeApp).runtime
     notificationJob =
@@ -53,11 +49,8 @@ class NodeForegroundService : Service() {
             }
           val text = (server?.let { "$status · $it" } ?: status) + micSuffix
 
-          val requiresMic =
-            micEnabled && hasRecordAudioPermission()
           startForegroundWithTypes(
             notification = buildNotification(title = title, text = text),
-            requiresMic = requiresMic,
           )
         }
       }
@@ -135,28 +128,13 @@ class NodeForegroundService : Service() {
     mgr.notify(NOTIFICATION_ID, notification)
   }
 
-  private fun startForegroundWithTypes(notification: Notification, requiresMic: Boolean) {
-    if (didStartForeground && requiresMic == lastRequiresMic) {
+  private fun startForegroundWithTypes(notification: Notification) {
+    if (didStartForeground) {
       updateNotification(notification)
       return
     }
-
-    lastRequiresMic = requiresMic
-    val types =
-      if (requiresMic) {
-        ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC or ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE
-      } else {
-        ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC
-      }
-    startForeground(NOTIFICATION_ID, notification, types)
+    startForeground(NOTIFICATION_ID, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC)
     didStartForeground = true
-  }
-
-  private fun hasRecordAudioPermission(): Boolean {
-    return (
-      ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) ==
-        PackageManager.PERMISSION_GRANTED
-      )
   }
 
   companion object {

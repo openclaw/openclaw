@@ -490,6 +490,11 @@ export type ToolsConfig = {
         /** Model to use (defaults to "moonshot-v1-128k"). */
         model?: string;
       };
+      /** Brave-specific configuration (used when provider="brave"). */
+      brave?: {
+        /** Brave Search mode: "web" (standard results) or "llm-context" (pre-extracted page content). Default: "web". */
+        mode?: "web" | "llm-context";
+      };
     };
     fetch?: {
       /** Enable web fetch tool (default: true). */

@@ -19,6 +19,11 @@ import {
 } from "./models-config.providers.js";
 
 type ModelsConfig = NonNullable<OpenClawConfig["models"]>;
+type ExistingProviderConfig = NonNullable<ModelsConfig["providers"]>[string] & {
+  apiKey?: string;
+  baseUrl?: string;
+  api?: string;
+};
 
 const DEFAULT_MODE: NonNullable<ModelsConfig["mode"]> = "merge";
 const MODELS_JSON_WRITE_LOCKS = new Map<string, Promise<void>>();
@@ -165,9 +170,51 @@ async function resolveProvidersForModelsJson(params: {
   return providers;
 }
 
+function resolveProviderApi(entry: { api?: unknown } | undefined): string | undefined {
+  if (typeof entry?.api !== "string") {
+    return undefined;
+  }
+  const api = entry.api.trim();
+  return api || undefined;
+}
+
+function shouldPreserveExistingApiKey(params: {
+  providerKey: string;
+  existing: ExistingProviderConfig;
+  secretRefManagedProviders: ReadonlySet<string>;
+}): boolean {
+  const { providerKey, existing, secretRefManagedProviders } = params;
+  return (
+    !secretRefManagedProviders.has(providerKey) &&
+    typeof existing.apiKey === "string" &&
+    existing.apiKey.length > 0 &&
+    !isNonSecretApiKeyMarker(existing.apiKey, { includeEnvVarName: false })
+  );
+}
+
+function shouldPreserveExistingBaseUrl(params: {
+  providerKey: string;
+  existing: ExistingProviderConfig;
+  nextEntry: ProviderConfig;
+  explicitBaseUrlProviders: ReadonlySet<string>;
+}): boolean {
+  const { providerKey, existing, nextEntry, explicitBaseUrlProviders } = params;
+  if (
+    explicitBaseUrlProviders.has(providerKey) ||
+    typeof existing.baseUrl !== "string" ||
+    existing.baseUrl.length === 0
+  ) {
+    return false;
+  }
+
+  const existingApi = resolveProviderApi(existing);
+  const nextApi = resolveProviderApi(nextEntry);
+  return !existingApi || !nextApi || existingApi === nextApi;
+}
+
 function mergeWithExistingProviderSecrets(params: {
   nextProviders: Record<string, ProviderConfig>;
-  existingProviders: Record<string, NonNullable<ModelsConfig["providers"]>[string]>;
+  existingProviders: Record<string, ExistingProviderConfig>;
   secretRefManagedProviders: ReadonlySet<string>;
   explicitBaseUrlProviders: ReadonlySet<string>;
 }): Record<string, ProviderConfig> {
@@ -178,29 +225,22 @@ function mergeWithExistingProviderSecrets(params: {
     mergedProviders[key] = entry;
   }
   for (const [key, newEntry] of Object.entries(nextProviders)) {
-    const existing = existingProviders[key] as
-      | (NonNullable<ModelsConfig["providers"]>[string] & {
-          apiKey?: string;
-          baseUrl?: string;
-        })
-      | undefined;
+    const existing = existingProviders[key];
     if (!existing) {
       mergedProviders[key] = newEntry;
       continue;
     }
     const preserved: Record<string, unknown> = {};
-    if (
-      !secretRefManagedProviders.has(key) &&
-      typeof existing.apiKey === "string" &&
-      existing.apiKey &&
-      !isNonSecretApiKeyMarker(existing.apiKey, { includeEnvVarName: false })
-    ) {
+    if (shouldPreserveExistingApiKey({ providerKey: key, existing, secretRefManagedProviders })) {
       preserved.apiKey = existing.apiKey;
     }
     if (
-      !explicitBaseUrlProviders.has(key) &&
-      typeof existing.baseUrl === "string" &&
-      existing.baseUrl
+      shouldPreserveExistingBaseUrl({
+        providerKey: key,
+        existing,
+        nextEntry: newEntry,
+        explicitBaseUrlProviders,
+      })
     ) {
       preserved.baseUrl = existing.baseUrl;
     }
@@ -229,7 +269,7 @@ async function resolveProvidersForMode(params: {
   >;
   return mergeWithExistingProviderSecrets({
     nextProviders: params.providers,
-    existingProviders,
+    existingProviders: existingProviders as Record<string, ExistingProviderConfig>,
     secretRefManagedProviders: params.secretRefManagedProviders,
     explicitBaseUrlProviders: params.explicitBaseUrlProviders,
   });
