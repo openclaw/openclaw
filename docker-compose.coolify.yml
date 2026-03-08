@@ -45,11 +45,10 @@ services:
     restart: unless-stopped
     # Override CMD to bind to 0.0.0.0 (lan) so the Coolify reverse proxy
     # can reach the gateway inside the Docker network.
-    # Uses dist/index.js (same as docker-compose.yml) — NOT openclaw.mjs.
     command:
       [
         "node",
-        "dist/index.js",
+        "openclaw.mjs",
         "gateway",
         "--bind",
         "lan",
