@@ -584,10 +584,50 @@ function isOpenRouterAnthropicModel(provider: string, modelId: string): boolean 
   return provider.toLowerCase() === "openrouter" && modelId.toLowerCase().startsWith("anthropic/");
 }
 
+/**
+ * Returns true when a LiteLLM model ID refers to an Anthropic Claude model.
+ * LiteLLM natively passes through Anthropic's cache_control field, so
+ * payload-level injection (same as OpenRouter) restores prompt caching.
+ * Recognized patterns: "claude-*", "anthropic/claude-*", "anthropic.claude-*".
+ */
+function isLiteLLMAnthropicModel(modelId: string): boolean {
+  const normalized = modelId.toLowerCase();
+  return (
+    normalized.startsWith("claude-") ||
+    normalized.startsWith("anthropic/claude") ||
+    normalized.startsWith("anthropic.claude")
+  );
+}
+
 type PayloadMessage = {
   role?: string;
   content?: unknown;
 };
+
+/**
+ * Inject cache_control: { type: "ephemeral" } into the last content block of
+ * every system/developer message in the payload.  Used by both the OpenRouter
+ * and LiteLLM Anthropic cache wrappers.
+ */
+function injectSystemPromptCacheControl(payload: unknown): void {
+  const messages = (payload as Record<string, unknown>)?.messages;
+  if (!Array.isArray(messages)) {
+    return;
+  }
+  for (const msg of messages as PayloadMessage[]) {
+    if (msg.role !== "system" && msg.role !== "developer") {
+      continue;
+    }
+    if (typeof msg.content === "string") {
+      msg.content = [{ type: "text", text: msg.content, cache_control: { type: "ephemeral" } }];
+    } else if (Array.isArray(msg.content) && msg.content.length > 0) {
+      const last = msg.content[msg.content.length - 1];
+      if (last && typeof last === "object") {
+        (last as Record<string, unknown>).cache_control = { type: "ephemeral" };
+      }
+    }
+  }
+}
 
 /**
  * Inject cache_control into the system message for OpenRouter Anthropic models.
@@ -609,24 +649,36 @@ function createOpenRouterSystemCacheWrapper(baseStreamFn: StreamFn | undefined):
     return underlying(model, context, {
       ...options,
       onPayload: (payload) => {
-        const messages = (payload as Record<string, unknown>)?.messages;
-        if (Array.isArray(messages)) {
-          for (const msg of messages as PayloadMessage[]) {
-            if (msg.role !== "system" && msg.role !== "developer") {
-              continue;
-            }
-            if (typeof msg.content === "string") {
-              msg.content = [
-                { type: "text", text: msg.content, cache_control: { type: "ephemeral" } },
-              ];
-            } else if (Array.isArray(msg.content) && msg.content.length > 0) {
-              const last = msg.content[msg.content.length - 1];
-              if (last && typeof last === "object") {
-                (last as Record<string, unknown>).cache_control = { type: "ephemeral" };
-              }
-            }
-          }
-        }
+        injectSystemPromptCacheControl(payload);
+        originalOnPayload?.(payload);
+      },
+    });
+  };
+}
+
+/**
+ * Inject cache_control into the system message for LiteLLM-proxied Anthropic models.
+ * LiteLLM natively passes through Anthropic's cache_control field — caching the
+ * system prompt avoids re-processing it on every request.  Applied only when the
+ * caller has explicitly configured cacheRetention for the model.  Fixes #37966.
+ */
+function createLiteLLMAnthropicCacheWrapper(baseStreamFn: StreamFn | undefined): StreamFn {
+  const underlying = baseStreamFn ?? streamSimple;
+  return (model, context, options) => {
+    if (
+      typeof model.provider !== "string" ||
+      typeof model.id !== "string" ||
+      model.provider !== "litellm" ||
+      !isLiteLLMAnthropicModel(model.id)
+    ) {
+      return underlying(model, context, options);
+    }
+
+    const originalOnPayload = options?.onPayload;
+    return underlying(model, context, {
+      ...options,
+      onPayload: (payload) => {
+        injectSystemPromptCacheControl(payload);
         originalOnPayload?.(payload);
       },
     });
@@ -1270,6 +1322,25 @@ export function applyExtraParamsToAgent(
   if (provider === "amazon-bedrock" && !isAnthropicBedrockModel(modelId)) {
     log.debug(`disabling prompt caching for non-Anthropic Bedrock model ${provider}/${modelId}`);
     agent.streamFn = createBedrockNoCacheWrapper(agent.streamFn);
+  }
+
+  // LiteLLM passes through Anthropic's cache_control field to the upstream
+  // provider.  When the user explicitly configures cacheRetention for a
+  // LiteLLM Anthropic model, apply payload-level cache_control injection
+  // (same approach as OpenRouter) so prompt caching is actually activated.
+  // resolveCacheRetention() intentionally returns undefined for "litellm"
+  // because the openai-completions adapter ignores the cacheRetention stream
+  // param — payload injection is the correct mechanism here.  Fixes #37966.
+  if (provider === "litellm" && isLiteLLMAnthropicModel(modelId)) {
+    const hasExplicitCacheRetention =
+      (extraParams?.cacheRetention !== undefined && extraParams.cacheRetention !== "none") ||
+      extraParams?.cacheControlTtl !== undefined;
+    if (hasExplicitCacheRetention) {
+      log.debug(
+        `applying system-prompt cache_control for LiteLLM Anthropic model ${provider}/${modelId} (refs #37966)`,
+      );
+      agent.streamFn = createLiteLLMAnthropicCacheWrapper(agent.streamFn);
+    }
   }
 
   // Enable Z.AI tool_stream for real-time tool call streaming.
