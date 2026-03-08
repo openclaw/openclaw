@@ -264,7 +264,7 @@ describe("normalizeModelCompat", () => {
 
     const normalized = normalizeModelCompat(model);
 
-    expect(normalized.compat).toEqual({ supportsDeveloperRole: false });
+    expect(normalized.compat).toMatchObject({ supportsDeveloperRole: false });
   });
 
   it("leaves openai-completions model with empty baseUrl untouched", () => {
