@@ -2087,7 +2087,10 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
     pendingChanges = true;
     if (shouldRepair) {
       cfg = unknown.config;
-      note(lines, "Doctor changes");
+      note(
+        `The following unrecognised config keys were removed from openclaw.json.\nA backup was saved to openclaw.json.bak before any changes were made.\n\n${lines}`,
+        "Doctor: removed unknown keys",
+      );
     } else {
       note(lines, "Unknown config keys");
       fixHints.push('Run "openclaw doctor --fix" to remove these keys.');
