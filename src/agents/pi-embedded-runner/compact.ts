@@ -546,6 +546,10 @@ export async function compactEmbeddedPiSessionDirect(
       userTimeFormat,
       contextFiles,
       memoryCitationsMode: params.config?.memory?.citations,
+      mcpClientsHubPolicy: {
+        preferClientsHub: params.config?.mcp?.clientsHub?.preferClientsHub,
+        path: params.config?.mcp?.clientsHub?.path,
+      },
     });
     const systemPromptOverride = createSystemPromptOverride(appendPrompt);
 

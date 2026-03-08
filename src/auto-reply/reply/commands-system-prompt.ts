@@ -130,6 +130,10 @@ export async function resolveCommandsSystemPromptBundle(
     runtimeInfo,
     sandboxInfo,
     memoryCitationsMode: params.cfg?.memory?.citations,
+    mcpClientsHubPolicy: {
+      preferClientsHub: params.cfg?.mcp?.clientsHub?.preferClientsHub,
+      path: params.cfg?.mcp?.clientsHub?.path,
+    },
   });
 
   return { systemPrompt, tools, skillsPrompt, bootstrapFiles, injectedFiles, sandboxRuntime };

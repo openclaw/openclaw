@@ -1025,6 +1025,10 @@ export async function runEmbeddedAttempt(
       contextFiles,
       bootstrapTruncationWarningLines: bootstrapPromptWarning.lines,
       memoryCitationsMode: params.config?.memory?.citations,
+      mcpClientsHubPolicy: {
+        preferClientsHub: params.config?.mcp?.clientsHub?.preferClientsHub,
+        path: params.config?.mcp?.clientsHub?.path,
+      },
     });
     const systemPromptReport = buildSystemPromptReport({
       source: "run",

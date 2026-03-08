@@ -685,6 +685,13 @@ export const FIELD_HELP: Record<string, string> = {
   "tools.web.fetch.firecrawl.maxAgeMs":
     "Firecrawl maxAge (ms) for cached results when supported by the API.",
   "tools.web.fetch.firecrawl.timeoutSeconds": "Timeout in seconds for Firecrawl requests.",
+  mcp: "MCP policy configuration for operator-level routing behavior. Use this to standardize how MCP-capable tasks are routed in your environment.",
+  "mcp.clientsHub":
+    "Settings for preferring a local MCP Clients Hub as the primary MCP entrypoint when available.",
+  "mcp.clientsHub.preferClientsHub":
+    "When true, instructs agents to prefer local MCP Clients Hub routing first for MCP-eligible tasks before other MCP paths.",
+  "mcp.clientsHub.path":
+    "Filesystem path to the local MCP Clients Hub workspace/entrypoint used by your operator workflow.",
   models:
     "Model catalog root for provider definitions, merge/replace behavior, and optional Bedrock discovery integration. Keep provider definitions explicit and validated before relying on production failover paths.",
   "models.mode":
