@@ -158,13 +158,11 @@ describe("loadModelCatalog", () => {
         name: "gpt-5.4-pro",
       }),
     );
-    expect(result).toContainEqual(
-      expect.objectContaining({
-        provider: "openai-codex",
-        id: "gpt-5.4",
-        name: "gpt-5.4",
-      }),
+    const codexGpt54 = result.find(
+      (entry) => entry.provider === "openai-codex" && entry.id === "gpt-5.4",
     );
+    expect(codexGpt54).toBeDefined();
+    expect(codexGpt54?.contextWindow).toBe(1_050_000);
   });
 
   it("merges configured models for opted-in non-pi-native providers", async () => {
