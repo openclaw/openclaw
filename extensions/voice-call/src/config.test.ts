@@ -216,3 +216,16 @@ describe("normalizeVoiceCallConfig", () => {
     expect(normalized.tts?.elevenlabs?.voiceSettings).toEqual({ speed: 1.1 });
   });
 });
+
+describe("voice-call plugin config schema", () => {
+  it("includes staleCallReaperSeconds default and description", async () => {
+    const plugin = (await import("../openclaw.plugin.json")).default as {
+      configSchema?: { properties?: Record<string, unknown> };
+    };
+    const props = plugin.configSchema?.properties as Record<string, any> | undefined;
+    const stale = props?.staleCallReaperSeconds as Record<string, unknown> | undefined;
+    expect(stale).toBeTruthy();
+    expect(stale?.default).toBe(0);
+    expect(String(stale?.description || "")).toContain("terminal webhooks");
+  });
+});
