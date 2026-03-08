@@ -190,9 +190,33 @@ function releaseAllLocksSync(): void {
   }
 }
 
+/**
+ * Validates that a timestamp is a valid finite number.
+ * Returns true if the value is a safe integer that could represent a timestamp.
+ */
+function isValidTimestamp(value: unknown): value is number {
+  return (
+    typeof value === "number" && Number.isFinite(value) && Number.isSafeInteger(value) && value > 0
+  );
+}
+
 async function runLockWatchdogCheck(nowMs = Date.now()): Promise<number> {
   let released = 0;
   for (const [sessionFile, held] of HELD_LOCKS.entries()) {
+    // Null timestamp guard: if acquiredAt is invalid, release the lock immediately
+    // to prevent permanent locks caused by undefined/null/NaN timestamps.
+    if (!isValidTimestamp(held.acquiredAt)) {
+      // eslint-disable-next-line no-console
+      console.warn(
+        `[session-write-lock] releasing lock with invalid acquiredAt timestamp: ${held.lockPath}`,
+      );
+      const didRelease = await releaseHeldLock(sessionFile, held, { force: true });
+      if (didRelease) {
+        released += 1;
+      }
+      continue;
+    }
+
     const heldForMs = nowMs - held.acquiredAt;
     if (heldForMs <= held.maxHoldMs) {
       continue;
@@ -483,6 +507,8 @@ export async function acquireSessionWriteLock(params: {
     attempt += 1;
     let handle: fs.FileHandle | null = null;
     try {
+      // Atomic lock acquisition using exclusive create (wx flag)
+      // This is atomic on POSIX systems - fails if file exists
       handle = await fs.open(lockPath, "wx");
       const createdAt = new Date().toISOString();
       const starttime = getProcessStartTime(process.pid);
@@ -491,6 +517,27 @@ export async function acquireSessionWriteLock(params: {
         lockPayload.starttime = starttime;
       }
       await handle.writeFile(JSON.stringify(lockPayload, null, 2), "utf8");
+
+      // Compare-and-swap verification: read back and verify we own the lock
+      // This guards against edge cases where the file was created but
+      // corrupted or replaced by another process
+      const verifyPayload = await readLockPayload(lockPath);
+      if (verifyPayload?.pid !== process.pid) {
+        // Verification failed - another process may have interfered
+        // Clean up and retry
+        try {
+          await handle.close();
+        } catch {
+          // Ignore cleanup errors
+        }
+        try {
+          await fs.rm(lockPath, { force: true });
+        } catch {
+          // Ignore cleanup errors
+        }
+        throw Object.assign(new Error("Lock verification failed"), { code: "EEXIST" });
+      }
+
       const createdHeld: HeldLock = {
         count: 1,
         handle,
