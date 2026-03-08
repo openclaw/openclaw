@@ -43,26 +43,34 @@ function buildMemorySection(params: {
   if (params.isMinimal) {
     return [];
   }
-  if (!params.availableTools.has("memory_search") && !params.availableTools.has("memory_get")) {
+  const canRecall =
+    params.availableTools.has("memory_search") || params.availableTools.has("memory_get");
+  const canWrite =
+    params.availableTools.has("memory_write") || params.availableTools.has("memory_upsert");
+  if (!canRecall && !canWrite) {
     return [];
   }
-  const lines = [
-    "## Memory Recall",
-    "Before answering anything about prior work, decisions, dates, people, preferences, or todos: run memory_search on MEMORY.md + memory/*.md; then use memory_get to pull only the needed lines. If low confidence after search, say you checked.",
-  ];
-  if (params.availableTools.has("memory_write") || params.availableTools.has("memory_upsert")) {
+  const lines = ["## Memory Recall"];
+  if (canRecall) {
+    lines.push(
+      "Before answering anything about prior work, decisions, dates, people, preferences, or todos: run memory_search on MEMORY.md + memory/*.md; then use memory_get to pull only the needed lines. If low confidence after search, say you checked.",
+    );
+  }
+  if (canWrite) {
     lines.push(
       "When the user explicitly asks to remember/update something, use memory_write (append) or memory_upsert (keyed update) so durable memory is saved to disk.",
     );
   }
-  if (params.citationsMode === "off") {
-    lines.push(
-      "Citations are disabled: do not mention file paths or line numbers in replies unless the user explicitly asks.",
-    );
-  } else {
-    lines.push(
-      "Citations: include Source: <path#line> when it helps the user verify memory snippets.",
-    );
+  if (canRecall) {
+    if (params.citationsMode === "off") {
+      lines.push(
+        "Citations are disabled: do not mention file paths or line numbers in replies unless the user explicitly asks.",
+      );
+    } else {
+      lines.push(
+        "Citations: include Source: <path#line> when it helps the user verify memory snippets.",
+      );
+    }
   }
   lines.push("");
   return lines;

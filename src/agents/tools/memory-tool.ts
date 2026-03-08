@@ -237,7 +237,8 @@ export function createMemoryWriteTool(options: {
       });
       await withMemoryFileLock(absPath, async () => {
         await ensureMemoryFile(absPath);
-        await fs.appendFile(absPath, `${entry}\n`, "utf-8");
+        const separator = await resolveMemoryAppendSeparator(absPath);
+        await fs.appendFile(absPath, `${separator}${entry}\n`, "utf-8");
       });
       return jsonResult({
         ok: true,
@@ -302,14 +303,21 @@ export function createMemoryUpsertTool(options: {
           lines.pop();
         }
         const prefix = `- [key:${key}] `;
-        const existingIndex = lines.findIndex((line) => line.startsWith(prefix));
-        const alreadyExists = existingIndex >= 0;
+        const existingIndexes = lines.flatMap((line, index) =>
+          line.startsWith(prefix) ? [index] : [],
+        );
+        const alreadyExists = existingIndexes.length > 0;
+        const nextLines = lines.filter((line) => !line.startsWith(prefix));
         if (alreadyExists) {
-          lines[existingIndex] = entry;
+          nextLines.splice(
+            Math.min(existingIndexes[0] ?? nextLines.length, nextLines.length),
+            0,
+            entry,
+          );
         } else {
-          lines.push(entry);
+          nextLines.push(entry);
         }
-        await fs.writeFile(absPath, `${lines.join("\n")}\n`, "utf-8");
+        await fs.writeFile(absPath, `${nextLines.join("\n")}\n`, "utf-8");
         return alreadyExists;
       });
       return jsonResult({
@@ -352,10 +360,14 @@ function normalizeMemoryDate(raw?: string): string {
 }
 
 function normalizeMemoryText(raw: string): string {
-  return raw
+  const normalized = raw
     .replace(/\s*\n+\s*/g, " ")
     .replace(/\s+/g, " ")
     .trim();
+  if (!normalized) {
+    return "";
+  }
+  return /^\[key:/i.test(normalized) ? `\\${normalized}` : normalized;
 }
 
 function normalizeMemoryKey(raw: string): string {
@@ -366,6 +378,18 @@ function normalizeMemoryKey(raw: string): string {
     .toLowerCase();
 }
 
+function normalizeMemoryMetaValue(raw?: string): string | undefined {
+  if (!raw) {
+    return undefined;
+  }
+  const normalized = raw
+    .replace(/\s*\n+\s*/g, " ")
+    .replace(/[()[\],]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  return normalized || undefined;
+}
+
 function formatMemoryEntry(params: {
   text: string;
   kind?: string;
@@ -373,11 +397,11 @@ function formatMemoryEntry(params: {
   confidence?: number;
 }): string {
   const meta: string[] = [];
-  const kind = params.kind?.trim();
+  const kind = normalizeMemoryMetaValue(params.kind);
   if (kind) {
     meta.push(`kind:${kind}`);
   }
-  const source = params.source?.trim();
+  const source = normalizeMemoryMetaValue(params.source);
   if (source) {
     meta.push(`source:${source}`);
   }
@@ -407,6 +431,11 @@ async function ensureMemoryFile(absPath: string) {
   } catch {
     await fs.writeFile(absPath, "", "utf-8");
   }
+}
+
+async function resolveMemoryAppendSeparator(absPath: string): Promise<string> {
+  const current = await fs.readFile(absPath, "utf-8");
+  return current.length > 0 && !current.endsWith("\n") ? "\n" : "";
 }
 
 function asWorkspaceRelativePath(absPath: string, workspaceDir: string): string {
