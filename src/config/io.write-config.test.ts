@@ -142,6 +142,38 @@ describe("config io write", () => {
     });
   });
 
+  it("preserves unknown future keys when writing config updates", async () => {
+    await withSuiteHome(async (home) => {
+      const { configPath, io, snapshot } = await writeConfigAndCreateIo({
+        home,
+        initialConfig: {
+          gateway: { port: 18789 },
+          futureFeature: {
+            enabled: true,
+            nested: { level: 2 },
+          },
+        },
+      });
+
+      const next = structuredClone(snapshot.config);
+      next.gateway = {
+        ...next.gateway,
+        auth: { mode: "token" },
+      };
+      await io.writeConfigFile(next);
+
+      const persisted = JSON.parse(await fs.readFile(configPath, "utf-8")) as {
+        gateway?: { auth?: { mode?: string } };
+        futureFeature?: unknown;
+      };
+      expect(persisted.gateway?.auth?.mode).toBe("token");
+      expect(persisted.futureFeature).toEqual({
+        enabled: true,
+        nested: { level: 2 },
+      });
+    });
+  });
+
   it('shows actionable guidance for dmPolicy="open" without wildcard allowFrom', async () => {
     await withSuiteHome(async (home) => {
       const io = createConfigIO({

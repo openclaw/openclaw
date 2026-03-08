@@ -32,6 +32,23 @@ describe("config validation fail-closed behavior", () => {
     );
   });
 
+  it("ignores unknown keys that include surrounding whitespace in the key name", async () => {
+    await withTempHomeConfig(
+      {
+        agents: { list: [{ id: "main" }] },
+        " nope ": true,
+      },
+      async () => {
+        const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+        const cfg = loadConfig();
+        expect(cfg.agents?.list?.[0]?.id).toBe("main");
+        expect(warnSpy).toHaveBeenCalled();
+        const warnedText = warnSpy.mock.calls.map((call) => String(call[0] ?? "")).join("\n");
+        expect(warnedText).toContain('" nope "');
+      },
+    );
+  });
+
   it("still throws INVALID_CONFIG for invalid known fields", async () => {
     await withTempHomeConfig(
       {
