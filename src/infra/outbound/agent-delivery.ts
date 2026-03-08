@@ -13,6 +13,7 @@ import type { OutboundTargetResolution } from "./targets.js";
 import {
   resolveOutboundTarget,
   resolveSessionDeliveryTarget,
+  HEARTBEAT_SENDER_PLACEHOLDER,
   type SessionDeliveryTarget,
 } from "./targets.js";
 
@@ -130,7 +131,7 @@ export function resolveAgentDeliveryPlan(params: {
     // @see https://github.com/openclaw/openclaw/issues/35300
     // @see https://github.com/openclaw/openclaw/issues/39756
     const lastTo = baseDelivery.lastTo;
-    if (lastTo && lastTo.toLowerCase() !== "heartbeat") {
+    if (lastTo && lastTo.toLowerCase() !== HEARTBEAT_SENDER_PLACEHOLDER) {
       resolvedTo = lastTo;
     }
   }

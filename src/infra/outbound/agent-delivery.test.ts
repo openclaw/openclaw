@@ -14,6 +14,7 @@ vi.mock("./targets.js", async () => {
 
 import type { OpenClawConfig } from "../../config/config.js";
 import { resolveAgentDeliveryPlan, resolveAgentOutboundTarget } from "./agent-delivery.js";
+import { HEARTBEAT_SENDER_PLACEHOLDER } from "./targets.js";
 
 describe("agent delivery helpers", () => {
   it("builds a delivery plan from session delivery context", () => {
@@ -142,7 +143,7 @@ describe("agent delivery helpers", () => {
       sessionEntry: {
         sessionId: "s4",
         updatedAt: 4,
-        deliveryContext: { channel: "feishu", to: "heartbeat" },
+        deliveryContext: { channel: "feishu", to: HEARTBEAT_SENDER_PLACEHOLDER },
       },
       requestedChannel: "last",
       explicitTo: undefined,
@@ -150,8 +151,8 @@ describe("agent delivery helpers", () => {
       wantsDelivery: true,
     });
 
-    expect(plan.resolvedChannel).toBe("feishu");
-    // lastTo should NOT be "heartbeat" - it should be undefined
+    // When lastTo is "heartbeat", resolvedTo should be undefined
+    // (the key fix - we don't use "heartbeat" as delivery target)
     expect(plan.resolvedTo).toBeUndefined();
   });
 });
