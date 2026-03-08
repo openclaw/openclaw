@@ -222,7 +222,7 @@ export class GatewayBrowserClient {
     }
     authToken = explicitGatewayToken ?? deviceToken;
     const auth =
-      authToken || this.opts.password || deviceToken
+      authToken || this.opts.password
         ? {
             token: authToken,
             deviceToken: deviceToken,
