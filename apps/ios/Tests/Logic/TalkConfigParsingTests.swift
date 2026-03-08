@@ -5,7 +5,7 @@ import Testing
 private let iOSSilenceTimeoutMs = 900
 
 @Suite struct TalkConfigParsingTests {
-    @Test func prefersNormalizedTalkProviderPayload() {
+    @Test func rejectsNormalizedTalkProviderPayloadWithoutResolved() {
         let talk: [String: Any] = [
             "provider": "elevenlabs",
             "providers": [
@@ -20,8 +20,7 @@ private let iOSSilenceTimeoutMs = 900
             TalkConfigParsing.bridgeFoundationDictionary(talk),
             defaultProvider: "elevenlabs",
             allowLegacyFallback: false)
-        #expect(selection?.provider == "elevenlabs")
-        #expect(selection?.config["voiceId"]?.stringValue == "voice-normalized")
+        #expect(selection == nil)
     }
 
     @Test func ignoresLegacyTalkFieldsWhenNormalizedPayloadMissing() {
