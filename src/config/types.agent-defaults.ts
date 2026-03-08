@@ -7,6 +7,7 @@ import type {
   TypingMode,
 } from "./types.base.js";
 import type { MemorySearchConfig } from "./types.tools.js";
+import type { SlidingWindowConfig } from "../agents/pi-extensions/sliding-window.js";
 
 export type AgentModelEntryConfig = {
   alias?: string;
@@ -169,6 +170,8 @@ export type AgentDefaultsConfig = {
   cliBackends?: Record<string, CliBackendConfig>;
   /** Opt-in: prune old tool results from the LLM context to reduce token usage. */
   contextPruning?: AgentContextPruningConfig;
+  /** Sliding window: cap conversation history to the most recent N user exchanges. */
+  slidingWindow?: SlidingWindowConfig;
   /** Compaction tuning and pre-compaction memory flush behavior. */
   compaction?: AgentCompactionConfig;
   /** Embedded Pi runner hardening and compatibility controls. */

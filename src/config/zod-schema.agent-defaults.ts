@@ -84,6 +84,12 @@ export const AgentDefaultsSchema = z
       })
       .strict()
       .optional(),
+    slidingWindow: z
+      .object({
+        maxExchanges: z.number().int().nonnegative().optional(),
+      })
+      .strict()
+      .optional(),
     compaction: z
       .object({
         mode: z.union([z.literal("default"), z.literal("safeguard")]).optional(),
