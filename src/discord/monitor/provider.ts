@@ -38,6 +38,7 @@ import {
 } from "../../config/runtime-group-policy.js";
 import { createConnectedChannelStatusPatch } from "../../gateway/channel-status-patches.js";
 import { danger, logVerbose, shouldLogVerbose, warn } from "../../globals.js";
+import { computeBackoff, sleepWithAbort } from "../../infra/backoff.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { createDiscordRetryRunner } from "../../infra/retry-policy.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
@@ -478,10 +479,23 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
       );
     }
   }
+  // Outer retry loop — when Carbon exhausts its inner reconnect attempts,
+  // we wait with exponential backoff and recreate a fresh Client + gateway.
+  // After OUTER_MAX_RETRIES failures, throw so the channel manager marks the channel as dead.
+  const OUTER_MAX_RETRIES = 5;
+  const outerBackoff = { initialMs: 10_000, maxMs: 120_000, factor: 1.8, jitter: 0.2 };
+  const abortSignal = opts.abortSignal;
+
+  for (let outerAttempt = 0; outerAttempt <= OUTER_MAX_RETRIES; outerAttempt++) {
+    if (abortSignal?.aborted) {
+      return;
+    }
+
   let lifecycleStarted = false;
   let releaseEarlyGatewayErrorGuard = () => {};
   let deactivateMessageHandler: (() => void) | undefined;
   let autoPresenceController: ReturnType<typeof createDiscordAutoPresenceController> | null = null;
+  let shouldRetry = false;
   try {
     const commands: BaseCommand[] = commandSpecs.map((spec) =>
       createDiscordNativeCommand({
@@ -757,20 +771,29 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
     }
 
     lifecycleStarted = true;
-    await runDiscordGatewayLifecycle({
-      accountId: account.accountId,
-      client,
-      runtime,
-      abortSignal: opts.abortSignal,
-      statusSink: opts.setStatus,
-      isDisallowedIntentsError: isDiscordDisallowedIntentsError,
-      voiceManager,
-      voiceManagerRef,
-      execApprovalsHandler,
-      threadBindings,
-      pendingGatewayErrors: earlyGatewayErrorGuard.pendingErrors,
-      releaseEarlyGatewayErrorGuard,
-    });
+    try {
+      await runDiscordGatewayLifecycle({
+        accountId: account.accountId,
+        client,
+        runtime,
+        abortSignal,
+        statusSink: opts.setStatus,
+        isDisallowedIntentsError: isDiscordDisallowedIntentsError,
+        voiceManager,
+        voiceManagerRef,
+        execApprovalsHandler,
+        threadBindings,
+        pendingGatewayErrors: earlyGatewayErrorGuard.pendingErrors,
+        releaseEarlyGatewayErrorGuard,
+      });
+    } catch (err) {
+      const message = formatErrorMessage(err);
+      if (message.includes("Max reconnect attempts") && outerAttempt < OUTER_MAX_RETRIES) {
+        shouldRetry = true;
+      } else {
+        throw err;
+      }
+    }
   } finally {
     deactivateMessageHandler?.();
     autoPresenceController?.stop();
@@ -780,6 +803,34 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
       threadBindings.stop();
     }
   }
+
+    if (!shouldRetry) {
+      return;
+    }
+
+    // Outer retry: wait with exponential backoff before recreating the client + gateway
+    const delayMs = computeBackoff(outerBackoff, outerAttempt + 1);
+    runtime.log?.(
+      danger(
+        `discord: gateway exhausted reconnect attempts, outer retry ${outerAttempt + 1}/${OUTER_MAX_RETRIES} in ${Math.round(delayMs / 1000)}s`,
+      ),
+    );
+    try {
+      await sleepWithAbort(delayMs, abortSignal);
+    } catch (err) {
+      // sleepWithAbort throws Error("aborted") when the abort signal fires during
+      // the backoff sleep. Return cleanly so the provider exits gracefully instead
+      // of propagating an unhandled abort exception to the caller.
+      if (abortSignal?.aborted) {
+        return;
+      }
+      throw err;
+    }
+  }
+
+  throw new Error(
+    `discord: gateway failed after ${OUTER_MAX_RETRIES} outer retries — marking channel as dead`,
+  );
 }
 
 async function clearDiscordNativeCommands(params: {
