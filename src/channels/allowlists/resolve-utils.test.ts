@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import type { RuntimeEnv } from "../../runtime.js";
 import {
   addAllowlistUserEntriesFromConfigEntry,
   buildAllowlistResolutionSummary,
@@ -98,7 +99,11 @@ describe("patchAllowlistUsersInConfigEntries", () => {
 
 describe("summarizeMapping", () => {
   it("logs sampled resolved and unresolved entries", () => {
-    const runtime = { log: vi.fn() };
+    const runtime: RuntimeEnv = {
+      log: vi.fn(),
+      error: vi.fn(),
+      exit: vi.fn(),
+    };
 
     summarizeMapping("discord allowlist", ["a", "b", "c", "d", "e", "f", "g"], ["x", "y"], runtime);
 
@@ -108,7 +113,11 @@ describe("summarizeMapping", () => {
   });
 
   it("skips logging when both lists are empty", () => {
-    const runtime = { log: vi.fn() };
+    const runtime: RuntimeEnv = {
+      log: vi.fn(),
+      error: vi.fn(),
+      exit: vi.fn(),
+    };
 
     summarizeMapping("discord allowlist", [], [], runtime);
 
