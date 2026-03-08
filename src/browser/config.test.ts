@@ -301,4 +301,30 @@ describe("browser config", () => {
       expect(resolved.defaultProfile).toBe("custom");
     });
   });
+
+  it("resolveProfile passes executablePath:undefined when profile has no executablePath", () => {
+    const resolved = resolveBrowserConfig({
+      profiles: { work: { cdpPort: 19200, color: "#FF4500" } },
+    });
+    const profile = resolveProfile(resolved, "work");
+    expect(profile?.executablePath).toBeUndefined();
+  });
+
+  it("resolveProfile passes executablePath from profile config", () => {
+    const resolved = resolveBrowserConfig({
+      profiles: {
+        custom: { cdpPort: 19201, color: "#FF4500", executablePath: "/opt/chromium/chromium" },
+      },
+    });
+    const profile = resolveProfile(resolved, "custom");
+    expect(profile?.executablePath).toBe("/opt/chromium/chromium");
+  });
+
+  it("resolveProfile trims and normalizes empty executablePath to undefined", () => {
+    const resolved = resolveBrowserConfig({
+      profiles: { work: { cdpPort: 19202, color: "#FF4500", executablePath: "  " } },
+    });
+    const profile = resolveProfile(resolved, "work");
+    expect(profile?.executablePath).toBeUndefined();
+  });
 });
