@@ -30,6 +30,17 @@ type CreateTokenType =
   | "mindnote"
   | "minutes"
   | "slides";
+type TransferTokenType =
+  | "doc"
+  | "sheet"
+  | "file"
+  | "wiki"
+  | "bitable"
+  | "docx"
+  | "mindnote"
+  | "minutes"
+  | "slides"
+  | "folder";
 type MemberType =
   | "email"
   | "openid"
@@ -39,6 +50,7 @@ type MemberType =
   | "userid"
   | "groupid"
   | "wikispaceid";
+type TransferMemberType = "email" | "openid" | "userid";
 type PermType = "view" | "edit" | "full_access";
 
 // ============ Actions ============
@@ -110,6 +122,44 @@ async function removeMember(
   };
 }
 
+async function transferOwner(
+  client: Lark.Client,
+  token: string,
+  type: string,
+  memberType: string,
+  memberId: string,
+  options: {
+    need_notification?: boolean;
+    remove_old_owner?: boolean;
+    stay_put?: boolean;
+    old_owner_perm?: string;
+  },
+) {
+  const res = await client.drive.permissionMember.transferOwner({
+    path: { token },
+    params: {
+      type: type as TransferTokenType,
+      need_notification: options.need_notification ?? false,
+      ...(typeof options.remove_old_owner === "boolean"
+        ? { remove_old_owner: options.remove_old_owner }
+        : {}),
+      ...(typeof options.stay_put === "boolean" ? { stay_put: options.stay_put } : {}),
+      ...(options.old_owner_perm ? { old_owner_perm: options.old_owner_perm } : {}),
+    },
+    data: {
+      member_type: memberType as TransferMemberType,
+      member_id: memberId,
+    },
+  });
+  if (res.code !== 0) {
+    throw new Error(res.msg);
+  }
+
+  return {
+    success: true,
+  };
+}
+
 // ============ Tool Registration ============
 
 export function registerFeishuPermTools(api: OpenClawPluginApi) {
@@ -138,7 +188,7 @@ export function registerFeishuPermTools(api: OpenClawPluginApi) {
       return {
         name: "feishu_perm",
         label: "Feishu Perm",
-        description: "Feishu permission management. Actions: list, add, remove",
+        description: "Feishu permission management. Actions: list, add, remove, transfer",
         parameters: FeishuPermSchema,
         async execute(_toolCallId, params) {
           const p = params as FeishuPermExecuteParams;
@@ -158,6 +208,15 @@ export function registerFeishuPermTools(api: OpenClawPluginApi) {
               case "remove":
                 return jsonToolResult(
                   await removeMember(client, p.token, p.type, p.member_type, p.member_id),
+                );
+              case "transfer":
+                return jsonToolResult(
+                  await transferOwner(client, p.token, p.type, p.member_type, p.member_id, {
+                    need_notification: p.need_notification,
+                    remove_old_owner: p.remove_old_owner,
+                    stay_put: p.stay_put,
+                    old_owner_perm: p.old_owner_perm,
+                  }),
                 );
               default:
                 // eslint-disable-next-line @typescript-eslint/no-explicit-any -- exhaustive check fallback
