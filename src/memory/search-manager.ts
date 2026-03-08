@@ -2,6 +2,7 @@ import type { OpenClawConfig } from "../config/config.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import type { ResolvedQmdConfig } from "./backend-config.js";
 import { resolveMemoryBackendConfig } from "./backend-config.js";
+import { closeAllMemoryIndexManagers } from "./manager.js";
 import type {
   MemoryEmbeddingProbeResult,
   MemorySearchManager,
@@ -83,6 +84,19 @@ export async function getMemorySearchManager(params: {
     const message = err instanceof Error ? err.message : String(err);
     return { manager: null, error: message };
   }
+}
+
+export async function closeAllMemorySearchManagers(): Promise<void> {
+  const managers = Array.from(QMD_MANAGER_CACHE.values());
+  QMD_MANAGER_CACHE.clear();
+  for (const manager of managers) {
+    try {
+      await manager.close?.();
+    } catch (err) {
+      log.warn(`failed to close qmd memory manager: ${String(err)}`);
+    }
+  }
+  await closeAllMemoryIndexManagers();
 }
 
 class FallbackMemoryManager implements MemorySearchManager {
