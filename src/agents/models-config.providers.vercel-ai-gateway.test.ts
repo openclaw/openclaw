@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { captureEnv } from "../test-utils/env.js";
 import { NON_ENV_SECRETREF_MARKER } from "./model-auth-markers.js";
-import { resolveImplicitProviders } from "./models-config.providers.js";
+import { resolveImplicitProvidersForTest } from "./models-config.e2e-harness.js";
 import { VERCEL_AI_GATEWAY_BASE_URL } from "./vercel-ai-gateway.js";
 
 describe("vercel-ai-gateway provider resolution", () => {
@@ -14,7 +14,7 @@ describe("vercel-ai-gateway provider resolution", () => {
     process.env.AI_GATEWAY_API_KEY = "vercel-gateway-test-key"; // pragma: allowlist secret
     try {
       const agentDir = mkdtempSync(join(tmpdir(), "openclaw-test-"));
-      const providers = await resolveImplicitProviders({ agentDir });
+      const providers = await resolveImplicitProvidersForTest({ agentDir });
       const provider = providers?.["vercel-ai-gateway"];
       expect(provider?.apiKey).toBe("AI_GATEWAY_API_KEY");
       expect(provider?.api).toBe("anthropic-messages");
@@ -52,7 +52,7 @@ describe("vercel-ai-gateway provider resolution", () => {
     );
 
     try {
-      const providers = await resolveImplicitProviders({ agentDir });
+      const providers = await resolveImplicitProvidersForTest({ agentDir });
       expect(providers?.["vercel-ai-gateway"]?.apiKey).toBe("AI_GATEWAY_API_KEY");
     } finally {
       envSnapshot.restore();
@@ -81,7 +81,7 @@ describe("vercel-ai-gateway provider resolution", () => {
       "utf8",
     );
 
-    const providers = await resolveImplicitProviders({ agentDir });
+    const providers = await resolveImplicitProvidersForTest({ agentDir });
     expect(providers?.["vercel-ai-gateway"]?.apiKey).toBe(NON_ENV_SECRETREF_MARKER);
   });
 });
