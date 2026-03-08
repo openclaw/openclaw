@@ -1,5 +1,8 @@
 import path from "node:path";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
+import { DEFAULT_PROVIDER } from "../agents/defaults.js";
+import type { ModelCatalogEntry } from "../agents/model-catalog.js";
+import { modelKey, resolveModelRefFromString } from "../agents/model-selection.js";
 import { CHANNEL_IDS, normalizeChatChannelId } from "../channels/registry.js";
 import {
   normalizePluginsConfig,
@@ -21,6 +24,7 @@ import { findDuplicateAgentDirs, formatDuplicateAgentDirError } from "./agent-di
 import { appendAllowedValuesHint, summarizeAllowedValues } from "./allowed-values.js";
 import { applyAgentDefaults, applyModelDefaults, applySessionDefaults } from "./defaults.js";
 import { findLegacyConfigIssues } from "./legacy.js";
+import { resolveAgentModelPrimaryValue } from "./model-input.js";
 import type { OpenClawConfig, ConfigValidationIssue } from "./types.js";
 import { OpenClawSchema } from "./zod-schema.js";
 
@@ -608,4 +612,53 @@ function validateConfigObjectWithPluginsBase(
   }
 
   return { ok: true, config, warnings };
+}
+
+/**
+ * Collect warnings for model references that aren't in the current catalog.
+ * Returns warnings (not errors) because forward-compat models are intentional.
+ */
+export function collectModelConfigWarnings(
+  config: OpenClawConfig,
+  catalog: ModelCatalogEntry[],
+): ConfigValidationIssue[] {
+  const warnings: ConfigValidationIssue[] = [];
+  const defaultProvider = DEFAULT_PROVIDER;
+
+  const checkModelRef = (raw: string, configPath: string) => {
+    const resolved = resolveModelRefFromString({ raw, defaultProvider });
+    if (!resolved) {
+      return;
+    }
+    const key = modelKey(resolved.ref.provider, resolved.ref.model);
+    const inCatalog = catalog.some((entry) => modelKey(entry.provider, entry.id) === key);
+    if (!inCatalog) {
+      warnings.push({
+        path: configPath,
+        message: `model "${key}" not found in model catalog (may fail at runtime)`,
+      });
+    }
+  };
+
+  // Check agents.defaults.model.primary
+  const defaultsPrimary = resolveAgentModelPrimaryValue(config.agents?.defaults?.model);
+  if (defaultsPrimary) {
+    checkModelRef(defaultsPrimary, "agents.defaults.model.primary");
+  }
+
+  // Check each agent in agents.list[].model
+  const agents = config.agents?.list;
+  if (Array.isArray(agents)) {
+    for (const [index, entry] of agents.entries()) {
+      if (!entry) {
+        continue;
+      }
+      const agentPrimary = resolveAgentModelPrimaryValue(entry.model);
+      if (agentPrimary) {
+        checkModelRef(agentPrimary, `agents.list.${index}.model.primary`);
+      }
+    }
+  }
+
+  return warnings;
 }
