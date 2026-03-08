@@ -39,6 +39,10 @@ Run `openclaw cron --help` for the full command surface. See [Cron jobs](/automa
 Isolated `cron add` jobs default to `--announce` delivery. Use `--no-deliver` to keep output internal. `--deliver` remains as a deprecated alias for `--announce`.
 </Note>
 
+<Note>
+Feishu/Lark announce delivery requires an explicit target (`--to`), for example `--channel feishu --to "chat:oc_group_chat"` or `--channel feishu --to "user:ou_xxx"`.
+</Note>
+
 ### Delivery ownership
 
 Isolated cron chat delivery is shared between the agent and the runner:
