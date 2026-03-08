@@ -318,7 +318,9 @@ Common signatures:
 
 ```bash
 openclaw config get gateway.bind
-openclaw config get gateway.auth.token
+# use --no-redact if you need to see the actual token instead of
+# the default redacted sentinel
+openclaw config get gateway.auth.token [--no-redact]
 openclaw gateway status
 openclaw logs --follow
 ```

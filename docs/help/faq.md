@@ -349,7 +349,8 @@ The wizard opens your browser with a clean (non-tokenized) dashboard URL right a
 
 - Open `http://127.0.0.1:18789/`.
 - If it asks for auth, paste the token from `gateway.auth.token` (or `OPENCLAW_GATEWAY_TOKEN`) into Control UI settings.
-- Retrieve it from the gateway host: `openclaw config get gateway.auth.token` (or generate one: `openclaw doctor --generate-gateway-token`).
+- Retrieve it from the gateway host:
+  `openclaw config get gateway.auth.token --no-redact` (or generate one: `openclaw doctor --generate-gateway-token`).
 
 **Not on localhost:**
 
