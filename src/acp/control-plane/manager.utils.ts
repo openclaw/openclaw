@@ -32,11 +32,10 @@ export function resolveAcpSessionResolutionError(
 }
 
 export function requireReadySessionMeta(resolution: AcpSessionResolution): SessionAcpMeta {
-  const error = resolveAcpSessionResolutionError(resolution);
-  if (error) {
-    throw error;
+  if (resolution.kind === "ready") {
+    return resolution.meta;
   }
-  return resolution.meta;
+  throw resolveAcpSessionResolutionError(resolution);
 }
 
 export function normalizeSessionKey(sessionKey: string): string {
