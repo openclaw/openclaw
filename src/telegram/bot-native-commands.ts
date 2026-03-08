@@ -252,7 +252,7 @@ async function resolveTelegramCommandAuth(params: {
     effectiveGroupAllow,
     senderId,
     senderUsername,
-    enforceAllowOverride: requireAuth && !commandsAllowFromConfigured,
+    enforceAllowOverride: requireAuth,
     requireSenderForAllowOverride: true,
   });
   if (!baseAccess.allowed) {
@@ -276,12 +276,12 @@ async function resolveTelegramCommandAuth(params: {
     senderId,
     senderUsername,
     resolveGroupPolicy,
-    enforcePolicy: useAccessGroups && !commandsAllowFromConfigured,
+    enforcePolicy: useAccessGroups,
     useTopicAndGroupOverrides: false,
     enforceAllowlistAuthorization: requireAuth && !commandsAllowFromConfigured,
     allowEmptyAllowlistEntries: true,
     requireSenderForAllowlistAuthorization: true,
-    checkChatAllowlist: useAccessGroups && !commandsAllowFromConfigured,
+    checkChatAllowlist: useAccessGroups,
   });
   if (!policyAccess.allowed) {
     if (policyAccess.reason === "group-policy-disabled") {
