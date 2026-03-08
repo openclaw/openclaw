@@ -30,6 +30,7 @@ import {
   listSkillCommandsForAgents,
   type HistoryEntry,
 } from "openclaw/plugin-sdk/mattermost";
+import { parseStrictPositiveInteger } from "../../../../src/infra/parse-finite-number.js";
 import { getMattermostRuntime } from "../runtime.js";
 import { resolveMattermostAccount } from "./accounts.js";
 import {
@@ -348,9 +349,8 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
       // The gateway sets OPENCLAW_GATEWAY_PORT when it boots, but the config file may still contain
       // a different port.
       const envPortRaw = process.env.OPENCLAW_GATEWAY_PORT?.trim();
-      const envPort = envPortRaw ? Number.parseInt(envPortRaw, 10) : NaN;
-      const slashGatewayPort =
-        Number.isFinite(envPort) && envPort > 0 ? envPort : (cfg.gateway?.port ?? 18789);
+      const envPort = parseStrictPositiveInteger(envPortRaw);
+      const slashGatewayPort = envPort ?? cfg.gateway?.port ?? 18789;
 
       const slashCallbackUrl = resolveCallbackUrl({
         config: slashConfig,
