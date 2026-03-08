@@ -1,4 +1,5 @@
 import fsSync from "node:fs";
+import { BedrockRuntimeClient } from "@aws-sdk/client-bedrock-runtime";
 import { resolveAgentDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { resolveMemorySearchConfig } from "../agents/memory-search.js";
 import { resolveApiKeyForProvider } from "../agents/model-auth.js";
@@ -114,7 +115,9 @@ export async function noteMemorySearchHealth(
     return;
   }
 
-  // provider === "auto": check all providers in resolution order
+  // provider === "auto": check all providers in resolution order.
+  // Bedrock is excluded because its auth check (AWS default credential chain)
+  // can return a false positive without real credentials being configured.
   if (hasLocalEmbeddings(resolved.local)) {
     return;
   }
@@ -187,14 +190,30 @@ function hasLocalEmbeddings(local: { modelPath?: string }, useDefaultFallback = 
 }
 
 async function hasApiKeyForProvider(
-  provider: "openai" | "gemini" | "voyage" | "mistral" | "ollama",
+  provider: "openai" | "gemini" | "voyage" | "mistral" | "ollama" | "bedrock",
   cfg: OpenClawConfig,
   agentDir: string,
 ): Promise<boolean> {
   // Map embedding provider names to model-auth provider names
-  const authProvider = provider === "gemini" ? "google" : provider;
+  const authProvider =
+    provider === "gemini" ? "google" : provider === "bedrock" ? "amazon-bedrock" : provider;
   try {
-    await resolveApiKeyForProvider({ provider: authProvider, cfg, agentDir });
+    const auth = await resolveApiKeyForProvider({ provider: authProvider, cfg, agentDir });
+    // Bedrock's default credential chain reports aws-sdk mode even without real credentials
+    // configured, which would cause a false-positive healthy status. Do an eager credential
+    // check (mirroring what createBedrockEmbeddingProvider does at runtime) to verify real
+    // AWS creds are present.
+    if (provider === "bedrock" && auth.mode === "aws-sdk") {
+      try {
+        const client = new BedrockRuntimeClient({});
+        const creds = await client.config.credentials();
+        if (!creds?.accessKeyId) {
+          return false;
+        }
+      } catch {
+        return false;
+      }
+    }
     return true;
   } catch {
     return false;

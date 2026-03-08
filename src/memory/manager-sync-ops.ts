@@ -11,6 +11,7 @@ import { resolveSessionTranscriptsDirForAgent } from "../config/sessions/paths.j
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { onSessionTranscriptUpdate } from "../sessions/transcript-events.js";
 import { resolveUserPath } from "../utils.js";
+import { DEFAULT_BEDROCK_EMBEDDING_MODEL } from "./embeddings-bedrock.js";
 import { DEFAULT_GEMINI_EMBEDDING_MODEL } from "./embeddings-gemini.js";
 import { DEFAULT_MISTRAL_EMBEDDING_MODEL } from "./embeddings-mistral.js";
 import { DEFAULT_OLLAMA_EMBEDDING_MODEL } from "./embeddings-ollama.js";
@@ -93,7 +94,14 @@ export abstract class MemoryManagerSyncOps {
   protected abstract readonly workspaceDir: string;
   protected abstract readonly settings: ResolvedMemorySearchConfig;
   protected provider: EmbeddingProvider | null = null;
-  protected fallbackFrom?: "openai" | "local" | "gemini" | "voyage" | "mistral" | "ollama";
+  protected fallbackFrom?:
+    | "openai"
+    | "local"
+    | "gemini"
+    | "voyage"
+    | "mistral"
+    | "ollama"
+    | "bedrock";
   protected openAi?: OpenAiEmbeddingClient;
   protected gemini?: GeminiEmbeddingClient;
   protected voyage?: VoyageEmbeddingClient;
@@ -988,7 +996,9 @@ export abstract class MemoryManagerSyncOps {
               ? DEFAULT_MISTRAL_EMBEDDING_MODEL
               : fallback === "ollama"
                 ? DEFAULT_OLLAMA_EMBEDDING_MODEL
-                : this.settings.model;
+                : fallback === "bedrock"
+                  ? DEFAULT_BEDROCK_EMBEDDING_MODEL
+                  : this.settings.model;
 
     const fallbackResult = await createEmbeddingProvider({
       config: this.cfg,

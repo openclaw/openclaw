@@ -4,6 +4,10 @@ import type { OpenClawConfig } from "../config/config.js";
 import type { SecretInput } from "../config/types.secrets.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { resolveUserPath } from "../utils.js";
+import {
+  createBedrockEmbeddingProvider,
+  type BedrockEmbeddingClient,
+} from "./embeddings-bedrock.js";
 import { createGeminiEmbeddingProvider, type GeminiEmbeddingClient } from "./embeddings-gemini.js";
 import {
   createMistralEmbeddingProvider,
@@ -23,6 +27,7 @@ function sanitizeAndNormalizeEmbedding(vec: number[]): number[] {
   return sanitized.map((value) => value / magnitude);
 }
 
+export type { BedrockEmbeddingClient } from "./embeddings-bedrock.js";
 export type { GeminiEmbeddingClient } from "./embeddings-gemini.js";
 export type { MistralEmbeddingClient } from "./embeddings-mistral.js";
 export type { OpenAiEmbeddingClient } from "./embeddings-openai.js";
@@ -37,14 +42,24 @@ export type EmbeddingProvider = {
   embedBatch: (texts: string[]) => Promise<number[][]>;
 };
 
-export type EmbeddingProviderId = "openai" | "local" | "gemini" | "voyage" | "mistral" | "ollama";
+export type EmbeddingProviderId =
+  | "openai"
+  | "local"
+  | "gemini"
+  | "voyage"
+  | "mistral"
+  | "ollama"
+  | "bedrock";
 export type EmbeddingProviderRequest = EmbeddingProviderId | "auto";
 export type EmbeddingProviderFallback = EmbeddingProviderId | "none";
 
 // Remote providers considered for auto-selection when provider === "auto".
 // Ollama is intentionally excluded here so that "auto" mode does not
 // implicitly assume a local Ollama instance is available.
-const REMOTE_EMBEDDING_PROVIDER_IDS = ["openai", "gemini", "voyage", "mistral"] as const;
+// Bedrock is last because its auth check (AWS default credential chain)
+// cannot prove credentials exist without a real API call, unlike
+// key-based providers that fail fast on missing env vars.
+const REMOTE_EMBEDDING_PROVIDER_IDS = ["openai", "gemini", "voyage", "mistral", "bedrock"] as const;
 
 export type EmbeddingProviderResult = {
   provider: EmbeddingProvider | null;
@@ -54,6 +69,7 @@ export type EmbeddingProviderResult = {
   providerUnavailableReason?: string;
   openAi?: OpenAiEmbeddingClient;
   gemini?: GeminiEmbeddingClient;
+  bedrock?: BedrockEmbeddingClient;
   voyage?: VoyageEmbeddingClient;
   mistral?: MistralEmbeddingClient;
   ollama?: OllamaEmbeddingClient;
@@ -189,6 +205,10 @@ export async function createEmbeddingProvider(
     if (id === "mistral") {
       const { provider, client } = await createMistralEmbeddingProvider(options);
       return { provider, mistral: client };
+    }
+    if (id === "bedrock") {
+      const { provider, client } = await createBedrockEmbeddingProvider(options);
+      return { provider, bedrock: client };
     }
     const { provider, client } = await createOpenAiEmbeddingProvider(options);
     return { provider, openAi: client };
