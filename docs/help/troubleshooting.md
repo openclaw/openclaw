@@ -59,7 +59,7 @@ Typical symptoms of a narrow profile:
 
 - The assistant can reply, but cannot use filesystem or runtime tools.
 - Messaging/session/status tools are available, but browser, gateway, cron, canvas, or node tools are missing.
-- A messaging-first setup works, but feels "crippled" compared with local or richer sessions.
+- A messaging-first setup works, but feels more limited than local or richer sessions.
 
 Fastest fix path:
 
