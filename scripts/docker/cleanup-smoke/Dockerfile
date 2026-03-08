@@ -13,7 +13,6 @@ RUN corepack enable \
   && pnpm install --frozen-lockfile
 
 COPY . .
-COPY scripts/docker/cleanup-smoke/run.sh /usr/local/bin/openclaw-cleanup-smoke
-RUN chmod +x /usr/local/bin/openclaw-cleanup-smoke
+COPY --chmod=755 scripts/docker/cleanup-smoke/run.sh /usr/local/bin/openclaw-cleanup-smoke
 
 ENTRYPOINT ["/usr/local/bin/openclaw-cleanup-smoke"]
