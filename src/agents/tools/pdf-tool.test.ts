@@ -432,6 +432,67 @@ describe("createPdfTool", () => {
     });
   });
 
+  it("passes computed maxBytes from maxBytesMb to media loading", async () => {
+    await withTempAgentDir(async (agentDir) => {
+      const maxBytesMb = 1.5;
+      const expectedMaxBytes = Math.floor(maxBytesMb * 1024 * 1024);
+      const { loadSpy } = await stubPdfToolInfra(agentDir, { modelFound: false });
+      const cfg = withPdfModel(ANTHROPIC_PDF_MODEL);
+      const tool = requirePdfTool(createPdfTool({ config: cfg, agentDir }));
+
+      await expect(
+        tool.execute("t1", {
+          prompt: "test",
+          pdf: "/tmp/doc.pdf",
+          maxBytesMb,
+        }),
+      ).rejects.toThrow("Unknown model");
+
+      expect(loadSpy).toHaveBeenCalledTimes(1);
+      expect(loadSpy).toHaveBeenCalledWith(
+        "/tmp/doc.pdf",
+        expect.objectContaining({ maxBytes: expectedMaxBytes }),
+      );
+    });
+  });
+
+  it("fails on oversized PDF before extraction or provider calls", async () => {
+    await withTempAgentDir(async (agentDir) => {
+      const maxBytesMb = 1;
+      const expectedMaxBytes = Math.floor(maxBytesMb * 1024 * 1024);
+      const cfg = withPdfModel(ANTHROPIC_PDF_MODEL);
+      const { loadSpy } = await stubPdfToolInfra(agentDir, {
+        provider: "anthropic",
+        input: ["text", "document"],
+      });
+      loadSpy.mockRejectedValue(new Error("Media exceeds 1MB limit (got 2.00MB)"));
+
+      const extractModule = await import("../../media/pdf-extract.js");
+      const extractSpy = vi.spyOn(extractModule, "extractPdfContent");
+
+      const nativeProviders = await import("./pdf-native-providers.js");
+      const anthropicSpy = vi.spyOn(nativeProviders, "anthropicAnalyzePdf");
+
+      const tool = requirePdfTool(createPdfTool({ config: cfg, agentDir }));
+
+      await expect(
+        tool.execute("t1", {
+          prompt: "summarize",
+          pdf: "/tmp/doc.pdf",
+          maxBytesMb,
+        }),
+      ).rejects.toThrow("Media exceeds 1MB limit");
+
+      expect(loadSpy).toHaveBeenCalledTimes(1);
+      expect(loadSpy).toHaveBeenCalledWith(
+        "/tmp/doc.pdf",
+        expect.objectContaining({ maxBytes: expectedMaxBytes }),
+      );
+      expect(extractSpy).not.toHaveBeenCalled();
+      expect(anthropicSpy).not.toHaveBeenCalled();
+    });
+  });
+
   it("uses native PDF path without eager extraction", async () => {
     await withTempAgentDir(async (agentDir) => {
       await stubPdfToolInfra(agentDir, { provider: "anthropic", input: ["text", "document"] });
