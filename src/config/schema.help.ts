@@ -206,6 +206,10 @@ export const FIELD_HELP: Record<string, string> = {
     "Agent runtime configuration root covering defaults and explicit agent entries used for routing and execution context. Keep this section explicit so model/tool behavior stays predictable across multi-agent workflows.",
   "agents.defaults":
     "Shared default settings inherited by agents unless overridden per entry in agents.list. Use defaults to enforce consistent baseline behavior and reduce duplicated per-agent configuration.",
+  "agents.defaults.contextDedup":
+    "Context dedup compacts repeated long messages/tool outputs into short references before model calls, reducing token usage and preserving more useful recent context.",
+  "agents.defaults.contextDedup.mode":
+    "Master switch for context deduplication (on/off). Important: reference-style compaction can confuse smaller models in some tasks (for example counting or strict row-by-row reasoning), so disable this if response quality drops.",
   "agents.list":
     "Explicit list of configured agents with IDs and optional overrides for model, tools, identity, and workspace. Keep IDs stable over time so bindings, approvals, and session routing remain deterministic.",
   "agents.list[].runtime":

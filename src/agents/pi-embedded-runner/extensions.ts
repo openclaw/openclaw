@@ -5,6 +5,12 @@ import { resolveContextWindowInfo } from "../context-window-guard.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../defaults.js";
 import { setCompactionSafeguardRuntime } from "../pi-extensions/compaction-safeguard-runtime.js";
 import compactionSafeguardExtension from "../pi-extensions/compaction-safeguard.js";
+import contextDedupExtension from "../pi-extensions/context-dedup/extension.js";
+import { setContextDedupRuntime } from "../pi-extensions/context-dedup/runtime.js";
+import {
+  resolveDedupConfig,
+  resolveEffectiveDedupSettings,
+} from "../pi-extensions/context-dedup/settings.js";
 import contextPruningExtension from "../pi-extensions/context-pruning.js";
 import { setContextPruningRuntime } from "../pi-extensions/context-pruning/runtime.js";
 import { computeEffectiveSettings } from "../pi-extensions/context-pruning/settings.js";
@@ -57,6 +63,24 @@ function buildContextPruningFactory(params: {
   return contextPruningExtension;
 }
 
+function buildContextDedupFactory(params: {
+  cfg: OpenClawConfig | undefined;
+  sessionManager: SessionManager;
+}): ExtensionFactory | undefined {
+  const raw = params.cfg?.agents?.defaults?.contextDedup;
+  const dedupConfig = resolveDedupConfig(raw);
+  if (!dedupConfig || dedupConfig.mode === "off") {
+    return undefined;
+  }
+
+  const settings = resolveEffectiveDedupSettings(raw);
+  setContextDedupRuntime(params.sessionManager, {
+    settings,
+  });
+
+  return contextDedupExtension;
+}
+
 function resolveCompactionMode(cfg?: OpenClawConfig): "default" | "safeguard" {
   return cfg?.agents?.defaults?.compaction?.mode === "safeguard" ? "safeguard" : "default";
 }
@@ -94,6 +118,10 @@ export function buildEmbeddedExtensionFactories(params: {
   const pruningFactory = buildContextPruningFactory(params);
   if (pruningFactory) {
     factories.push(pruningFactory);
+  }
+  const dedupFactory = buildContextDedupFactory(params);
+  if (dedupFactory) {
+    factories.push(dedupFactory);
   }
   return factories;
 }
