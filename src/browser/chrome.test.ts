@@ -206,14 +206,19 @@ describe("browser chrome profile decoration", () => {
 
 describe("browser chrome helpers", () => {
   function makeBootstrapChromeProc(
-    onKill?: (signal: NodeJS.Signals, proc: BootstrapChromeTarget) => void,
+    onKill?: (signal: NodeJS.Signals, markExited: (signal: NodeJS.Signals) => void) => void,
   ): BootstrapChromeTarget {
+    let signalCode: NodeJS.Signals | null = null;
     const proc: BootstrapChromeTarget = {
       exitCode: null,
-      signalCode: null,
+      get signalCode() {
+        return signalCode;
+      },
       kill: vi.fn((signal?: number | NodeJS.Signals) => {
         if (typeof signal === "string") {
-          onKill?.(signal, proc);
+          onKill?.(signal, (nextSignal) => {
+            signalCode = nextSignal;
+          });
         }
         return true;
       }),
@@ -321,10 +326,10 @@ describe("browser chrome helpers", () => {
 
   it("cleans singleton artifacts again after bootstrap exits via SIGTERM", async () => {
     const steps: string[] = [];
-    const proc = makeBootstrapChromeProc((signal, currentProc) => {
+    const proc = makeBootstrapChromeProc((signal, markExited) => {
       steps.push(signal);
       if (signal === "SIGTERM") {
-        currentProc.signalCode = "SIGTERM";
+        markExited("SIGTERM");
       }
     });
     const cleanup = vi.fn((userDataDir: string) => {
@@ -349,10 +354,10 @@ describe("browser chrome helpers", () => {
 
   it("force-kills bootstrap before second singleton cleanup when SIGTERM times out", async () => {
     const steps: string[] = [];
-    const proc = makeBootstrapChromeProc((signal, currentProc) => {
+    const proc = makeBootstrapChromeProc((signal, markExited) => {
       steps.push(signal);
       if (signal === "SIGKILL") {
-        currentProc.signalCode = "SIGKILL";
+        markExited("SIGKILL");
       }
     });
     const cleanup = vi.fn((_userDataDir: string) => {
