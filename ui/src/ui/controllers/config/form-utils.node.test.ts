@@ -452,4 +452,64 @@ describe("coerceFormValues", () => {
     const coerced = coerceFormValues(form, schema) as Record<string, unknown>;
     expect(coerced.flag).toBe(true);
   });
+
+  it("prefers matching anyOf object variant before coercing nested fields", () => {
+    const schema: JsonSchema = {
+      type: "object",
+      properties: {
+        settings: {
+          anyOf: [
+            {
+              type: "object",
+              properties: {
+                kind: { type: "string", const: "numeric" },
+                retries: { type: "number" },
+              },
+            },
+            {
+              type: "object",
+              properties: {
+                kind: { type: "string", const: "named" },
+                retries: { type: "string" },
+              },
+            },
+          ],
+        },
+      },
+    };
+    const form = { settings: { kind: "named", retries: "03" } };
+    const coerced = coerceFormValues(form, schema) as Record<string, unknown>;
+    const settings = coerced.settings as Record<string, unknown>;
+    expect(settings.retries).toBe("03");
+  });
+
+  it("prefers matching oneOf object variant before coercing nested fields", () => {
+    const schema: JsonSchema = {
+      type: "object",
+      properties: {
+        settings: {
+          oneOf: [
+            {
+              type: "object",
+              properties: {
+                mode: { type: "string", const: "numeric" },
+                retries: { type: "number" },
+              },
+            },
+            {
+              type: "object",
+              properties: {
+                mode: { type: "string", const: "named" },
+                retries: { type: "string" },
+              },
+            },
+          ],
+        },
+      },
+    };
+    const form = { settings: { mode: "named", retries: "03" } };
+    const coerced = coerceFormValues(form, schema) as Record<string, unknown>;
+    const settings = coerced.settings as Record<string, unknown>;
+    expect(settings.retries).toBe("03");
+  });
 });

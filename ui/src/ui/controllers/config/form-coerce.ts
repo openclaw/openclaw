@@ -26,6 +26,37 @@ function coerceBooleanString(value: string): boolean | string {
   return value;
 }
 
+function matchesConstConstraints(value: unknown, schema: JsonSchema): boolean {
+  if (schema.const !== undefined) {
+    return value === schema.const;
+  }
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    return true;
+  }
+  const record = value as Record<string, unknown>;
+  for (const [key, propSchema] of Object.entries(schema.properties ?? {})) {
+    if (propSchema.const === undefined) {
+      continue;
+    }
+    if (record[key] !== propSchema.const) {
+      return false;
+    }
+  }
+  return true;
+}
+
+function pickMatchingObjectVariant(value: unknown, variants: JsonSchema[]): JsonSchema | null {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    return null;
+  }
+  const objectVariants = variants.filter((variant) => schemaType(variant) === "object");
+  if (objectVariants.length === 0) {
+    return null;
+  }
+  const constMatched = objectVariants.filter((variant) => matchesConstConstraints(value, variant));
+  return constMatched[0] ?? objectVariants[0] ?? null;
+}
+
 /**
  * Walk a form value tree alongside its JSON Schema and coerce string values
  * to their schema-defined types (number, boolean).
@@ -81,12 +112,14 @@ export function coerceFormValues(value: unknown, schema: JsonSchema): unknown {
       }
     }
 
-    // For non-string values (objects, arrays), try to recurse into matching variant
+    const matchedObjectVariant = pickMatchingObjectVariant(value, variants);
+    if (matchedObjectVariant) {
+      return coerceFormValues(value, matchedObjectVariant);
+    }
+
+    // For non-string values (arrays), try to recurse into matching variant
     for (const variant of variants) {
       const variantType = schemaType(variant);
-      if (variantType === "object" && typeof value === "object" && !Array.isArray(value)) {
-        return coerceFormValues(value, variant);
-      }
       if (variantType === "array" && Array.isArray(value)) {
         return coerceFormValues(value, variant);
       }
