@@ -229,18 +229,21 @@ export function loadPluginManifestRegistry(params: {
         }
         continue;
       }
-      // For a bundled-vs-global conflict, use first-seen (existing) to determine
-      // the actual winner. Only warn when bundled won — the user's global install
-      // is inactive and needs an actionable hint. When global won, the user's
-      // install is already active so no warning is needed.
-      if (existing.candidate.origin === "bundled" && candidate.origin === "global") {
+      const existingRank = PLUGIN_ORIGIN_RANK[existing.candidate.origin];
+      const candidateRank = PLUGIN_ORIGIN_RANK[candidate.origin];
+      const isBundledGlobalConflict =
+        existing.candidate.origin === "bundled" && candidate.origin === "global";
+      if (isBundledGlobalConflict) {
+        // Bundled won (first-seen): user's global install is inactive.
+        // Emit a targeted message with a remediation hint.
         diagnostics.push({
           level: "warn",
           pluginId: manifest.id,
           source: candidate.source,
           message: `plugin '${manifest.id}' is installed in the extensions directory but the bundled copy takes priority; add it to plugins.load.paths in your config to use your installed version (${candidate.source})`,
         });
-      } else if (existing.candidate.origin !== "global" || candidate.origin !== "bundled") {
+      } else if (candidateRank <= existingRank) {
+        // Candidate has equal or higher precedence — genuine conflict worth surfacing.
         diagnostics.push({
           level: "warn",
           pluginId: manifest.id,
@@ -248,6 +251,7 @@ export function loadPluginManifestRegistry(params: {
           message: `duplicate plugin id detected; later plugin may be overridden (${candidate.source})`,
         });
       }
+      // else: candidate has lower precedence than existing — intentional override, no warning.
     } else {
       seenIds.set(manifest.id, { candidate, recordIndex: records.length });
     }
