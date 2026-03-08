@@ -256,6 +256,7 @@ function resolveSafeAvatarFile(filePath: string): { path: string; fd: number } |
 function resolveSafeControlUiFile(
   rootReal: string,
   filePath: string,
+  opts?: { allowHardlinks?: boolean },
 ): { path: string; fd: number } | null {
   const opened = openBoundaryFileSync({
     absolutePath: filePath,
@@ -263,6 +264,7 @@ function resolveSafeControlUiFile(
     rootRealPath: rootReal,
     boundaryLabel: "control ui root",
     skipLexicalRootCheck: true,
+    rejectHardlinks: opts?.allowHardlinks ? false : undefined,
   });
   if (!opened.ok) {
     if (opened.reason === "io") {
@@ -288,6 +290,28 @@ function isSafeRelativePath(relPath: string) {
     return false;
   }
   return true;
+}
+
+function readPackageNameFromDir(dir: string): string | null {
+  try {
+    const raw = fs.readFileSync(path.join(dir, "package.json"), "utf8");
+    const parsed = JSON.parse(raw) as { name?: unknown };
+    return typeof parsed.name === "string" ? parsed.name : null;
+  } catch {
+    return null;
+  }
+}
+
+function shouldAllowControlUiHardlinks(rootReal: string): boolean {
+  const normalizedRoot = path.resolve(rootReal);
+  const controlUiDirName = path.basename(normalizedRoot);
+  const distDir = path.dirname(normalizedRoot);
+  const distDirName = path.basename(distDir);
+  if (controlUiDirName !== "control-ui" || distDirName !== "dist") {
+    return false;
+  }
+  const packageRoot = path.dirname(distDir);
+  return readPackageNameFromDir(packageRoot) === "openclaw";
 }
 
 export function handleControlUiHttpRequest(
@@ -393,6 +417,7 @@ export function handleControlUiHttpRequest(
     respondControlUiAssetsUnavailable(res);
     return true;
   }
+  const allowHardlinks = shouldAllowControlUiHardlinks(rootReal);
 
   const uiPath =
     basePath && pathname.startsWith(`${basePath}/`) ? pathname.slice(basePath.length) : pathname;
@@ -419,7 +444,7 @@ export function handleControlUiHttpRequest(
     return true;
   }
 
-  const safeFile = resolveSafeControlUiFile(rootReal, filePath);
+  const safeFile = resolveSafeControlUiFile(rootReal, filePath, { allowHardlinks });
   if (safeFile) {
     try {
       if (respondHeadForFile(req, res, safeFile.path)) {
@@ -448,7 +473,7 @@ export function handleControlUiHttpRequest(
 
   // SPA fallback (client-side router): serve index.html for unknown paths.
   const indexPath = path.join(root, "index.html");
-  const safeIndex = resolveSafeControlUiFile(rootReal, indexPath);
+  const safeIndex = resolveSafeControlUiFile(rootReal, indexPath, { allowHardlinks });
   if (safeIndex) {
     try {
       if (respondHeadForFile(req, res, safeIndex.path)) {

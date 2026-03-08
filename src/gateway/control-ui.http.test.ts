@@ -101,6 +101,36 @@ describe("handleControlUiHttpRequest", () => {
     }
   }
 
+  async function withOpenClawPackageControlUiRoot<T>(params: {
+    hardlinkIndex?: boolean;
+    fn: (rootPath: string) => Promise<T>;
+  }) {
+    const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-ui-package-root-"));
+    try {
+      const packageRoot = path.join(tmp, "node_modules", "openclaw");
+      const uiRoot = path.join(packageRoot, "dist", "control-ui");
+      await fs.mkdir(uiRoot, { recursive: true });
+      await fs.writeFile(
+        path.join(packageRoot, "package.json"),
+        JSON.stringify({ name: "openclaw" }),
+      );
+
+      if (params.hardlinkIndex) {
+        const storeDir = path.join(tmp, "store");
+        await fs.mkdir(storeDir, { recursive: true });
+        const storeIndex = path.join(storeDir, "index.html");
+        await fs.writeFile(storeIndex, "<html>hardlinked-package-ui</html>\n");
+        await fs.link(storeIndex, path.join(uiRoot, "index.html"));
+      } else {
+        await fs.writeFile(path.join(uiRoot, "index.html"), "<html>package-ui</html>\n");
+      }
+
+      return await params.fn(uiRoot);
+    } finally {
+      await fs.rm(tmp, { recursive: true, force: true });
+    }
+  }
+
   it("sets security headers for Control UI responses", async () => {
     await withControlUiRoot({
       fn: async (tmp) => {
@@ -322,6 +352,45 @@ describe("handleControlUiHttpRequest", () => {
         } finally {
           await fs.rm(outsideDir, { recursive: true, force: true });
         }
+      },
+    });
+  });
+
+  it("rejects hardlinked index.html for non-package control-ui roots", async () => {
+    await withControlUiRoot({
+      fn: async (tmp) => {
+        const outsideDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-ui-index-hardlink-"));
+        try {
+          const outsideIndex = path.join(outsideDir, "index.html");
+          await fs.writeFile(outsideIndex, "<html>outside-hardlink</html>\n");
+          await fs.rm(path.join(tmp, "index.html"));
+          await fs.link(outsideIndex, path.join(tmp, "index.html"));
+
+          const { res, end, handled } = runControlUiRequest({
+            url: "/",
+            method: "GET",
+            rootPath: tmp,
+          });
+          expectNotFoundResponse({ handled, res, end });
+        } finally {
+          await fs.rm(outsideDir, { recursive: true, force: true });
+        }
+      },
+    });
+  });
+
+  it("allows hardlinked index.html for OpenClaw package control-ui roots", async () => {
+    await withOpenClawPackageControlUiRoot({
+      hardlinkIndex: true,
+      fn: async (rootPath) => {
+        const { res, end, handled } = runControlUiRequest({
+          url: "/",
+          method: "GET",
+          rootPath,
+        });
+        expect(handled).toBe(true);
+        expect(res.statusCode).toBe(200);
+        expect(String(end.mock.calls[0]?.[0] ?? "")).toContain("hardlinked-package-ui");
       },
     });
   });
