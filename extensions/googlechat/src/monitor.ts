@@ -337,6 +337,15 @@ async function processMessageWithPipeline(params: {
     },
     replyOptions: {
       onModelSelected,
+      onTypingCleanup: () => {
+        if (typingMessageName) {
+          const name = typingMessageName;
+          typingMessageName = undefined;
+          deleteGoogleChatMessage({ account, messageName: name }).catch((err) => {
+            runtime.error?.(`Google Chat typing cleanup on NO_REPLY failed: ${String(err)}`);
+          });
+        }
+      },
     },
   });
 }
