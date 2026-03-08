@@ -1568,6 +1568,45 @@ describe("deliverOutboundPayloads", () => {
     );
   });
 
+  it("keeps inherited Slack thread context across all payloads", async () => {
+    const sendSlack = vi
+      .fn()
+      .mockResolvedValueOnce({ messageId: "sl1", channelId: "C123" })
+      .mockResolvedValueOnce({ messageId: "sl2", channelId: "C123" });
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "slack",
+          plugin: createOutboundTestPlugin({ id: "slack", outbound: slackOutbound }),
+          source: "test",
+        },
+      ]),
+    );
+
+    await deliverOutboundPayloads({
+      cfg: { channels: { slack: {} } },
+      channel: "slack",
+      to: "C123",
+      payloads: [{ text: "first" }, { text: "second" }],
+      replyToId: "thread-123",
+      deps: { sendSlack },
+    });
+
+    expect(sendSlack).toHaveBeenCalledTimes(2);
+    expect(sendSlack).toHaveBeenNthCalledWith(
+      1,
+      "C123",
+      "first",
+      expect.objectContaining({ threadTs: "thread-123" }),
+    );
+    expect(sendSlack).toHaveBeenNthCalledWith(
+      2,
+      "C123",
+      "second",
+      expect.objectContaining({ threadTs: "thread-123" }),
+    );
+  });
+
   it("passes normalized payload to onError", async () => {
     const sendMatrix = vi.fn().mockRejectedValue(new Error("boom"));
     const onError = vi.fn();
