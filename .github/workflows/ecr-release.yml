@@ -92,6 +92,8 @@ jobs:
           set -euo pipefail
           mkdir -p .build-context
           cp .github/docker/Dockerfile.ecr-runtime .build-context/Dockerfile
+          mkdir -p .build-context/openclaw-sre
+          git archive --format=tar HEAD | tar -x -C .build-context/openclaw-sre
 
           pack_output="$(npm pack --silent --pack-destination .build-context)"
           pack_file="$(printf '%s\n' "$pack_output" | tail -n1)"
