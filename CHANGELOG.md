@@ -333,6 +333,7 @@ Docs: https://docs.openclaw.ai
 - Discord/native slash session fallback: treat empty configured bound-session keys as missing so `/status` and other native commands fall back to the routed slash session and routed channel session instead of blanking Discord session keys in normal channel bindings.
 - Agents/tool-call dispatch normalization: normalize provider-prefixed tool names before dispatch across `toolCall`, `toolUse`, and `functionCall` blocks, while preserving multi-segment tool suffixes when stripping provider wrappers so malformed-but-recoverable tool names no longer fail with `Tool not found`. (#39328) Thanks @vincentkoc.
 - Config/invalid-load fail-closed: stop converting `INVALID_CONFIG` into an empty runtime config, keep valid settings available only through explicit best-effort diagnostic reads, and route read-only CLI diagnostics through that path so unknown keys no longer silently drop security-sensitive config. (#28140) Thanks @bobsahur-robot and @vincentkoc.
+- ACP/dispatch timeout aborts: pass the configured timeout through to ACP `runTurn()` via an abort signal so stalled ACP turns stop blocking the session queue indefinitely when upstream streams hang. (#36860) Thanks @amittell.
 
 ## 2026.3.2
 
