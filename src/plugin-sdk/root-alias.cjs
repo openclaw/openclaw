@@ -5,6 +5,7 @@ const fs = require("node:fs");
 
 let monolithicSdk = null;
 let jitiLoader = null;
+let didTryLoadMonolithicSdk = false;
 
 function emptyPluginConfigSchema() {
   function error(message) {
@@ -96,11 +97,16 @@ function loadMonolithicSdk() {
 }
 
 function tryLoadMonolithicSdk() {
-  try {
-    return loadMonolithicSdk();
-  } catch {
-    return null;
+  if (didTryLoadMonolithicSdk) {
+    return monolithicSdk;
   }
+  didTryLoadMonolithicSdk = true;
+  try {
+    monolithicSdk = loadMonolithicSdk();
+  } catch {
+    monolithicSdk = null;
+  }
+  return monolithicSdk;
 }
 
 const fastExports = {
@@ -172,9 +178,7 @@ rootExports = new Proxy(target, {
     const monolithic = getMonolithicSdk();
     if (monolithic) {
       for (const key of Reflect.ownKeys(monolithic)) {
-        if (!keys.has(key)) {
-          keys.add(key);
-        }
+        keys.add(key);
       }
     }
     return [...keys];
