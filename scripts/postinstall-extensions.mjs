@@ -56,13 +56,8 @@ for (const entry of extensions) {
     continue;
   }
 
-  // Already installed? Check that every declared dependency directory exists.
-  const depNames = Object.keys(deps);
-  const allPresent = depNames.every((dep) => fs.existsSync(path.join(extDir, "node_modules", dep)));
-  if (allPresent) {
-    continue;
-  }
-
+  // Always run npm install; it is idempotent and fast when deps are satisfied,
+  // and ensures stale deps from a previous install are updated on upgrade.
   console.log(`[postinstall] Installing dependencies for extension "${entry.name}"…`);
   try {
     // Use npm.cmd on Windows; strip inherited npm config so the child install
