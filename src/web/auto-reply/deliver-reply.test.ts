@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { logVerbose } from "../../globals.js";
 import { sleep } from "../../utils.js";
 import { loadWebMedia } from "../media.js";
@@ -84,6 +84,10 @@ async function expectReplySuppressed(replyResult: { text: string; isReasoning?: 
 }
 
 describe("deliverWebReply", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
   it("suppresses payloads flagged as reasoning", async () => {
     await expectReplySuppressed({ text: "Reasoning:\n_hidden_", isReasoning: true });
   });
@@ -148,6 +152,66 @@ describe("deliverWebReply", () => {
       expect(sleep).toHaveBeenCalledWith(500);
     },
   );
+
+  it("escalates to extended retries for reconnect-gap errors", async () => {
+    const msg = makeMsg();
+    (msg.reply as unknown as { mockRejectedValueOnce: (v: unknown) => void }).mockRejectedValueOnce(
+      new Error("no active socket - reconnection in progress"),
+    );
+    (msg.reply as unknown as { mockRejectedValueOnce: (v: unknown) => void }).mockRejectedValueOnce(
+      new Error("socket closed"),
+    );
+    (msg.reply as unknown as { mockRejectedValueOnce: (v: unknown) => void }).mockRejectedValueOnce(
+      new Error("socket closed"),
+    );
+    (msg.reply as unknown as { mockRejectedValueOnce: (v: unknown) => void }).mockRejectedValueOnce(
+      new Error("socket closed"),
+    );
+    (msg.reply as unknown as { mockResolvedValueOnce: (v: unknown) => void }).mockResolvedValueOnce(
+      undefined,
+    );
+
+    await deliverWebReply({
+      replyResult: { text: "hi" },
+      msg,
+      maxMediaBytes: 1024 * 1024,
+      textLimit: 200,
+      replyLogger,
+      skipLog: true,
+    });
+
+    expect(msg.reply).toHaveBeenCalledTimes(5);
+    expect(sleep).toHaveBeenNthCalledWith(1, 500);
+    expect(sleep).toHaveBeenNthCalledWith(2, 2000);
+    expect(sleep).toHaveBeenNthCalledWith(3, 4000);
+    expect(sleep).toHaveBeenNthCalledWith(4, 8000);
+  });
+
+  it("caps retries after extended disconnect budget", async () => {
+    const msg = makeMsg();
+    (msg.reply as unknown as { mockRejectedValue: (v: unknown) => void }).mockRejectedValue(
+      new Error("socket disconnected"),
+    );
+
+    await expect(
+      deliverWebReply({
+        replyResult: { text: "hi" },
+        msg,
+        maxMediaBytes: 1024 * 1024,
+        textLimit: 200,
+        replyLogger,
+        skipLog: true,
+      }),
+    ).rejects.toThrow("socket disconnected");
+
+    expect(msg.reply).toHaveBeenCalledTimes(6);
+    expect(sleep).toHaveBeenCalledTimes(5);
+    expect(sleep).toHaveBeenNthCalledWith(1, 500);
+    expect(sleep).toHaveBeenNthCalledWith(2, 2000);
+    expect(sleep).toHaveBeenNthCalledWith(3, 4000);
+    expect(sleep).toHaveBeenNthCalledWith(4, 8000);
+    expect(sleep).toHaveBeenNthCalledWith(5, 16000);
+  });
 
   it("sends image media with caption and then remaining text", async () => {
     const msg = makeMsg();

@@ -34,6 +34,11 @@ export async function monitorWebInbox(options: {
   debounceMs?: number;
   /** Optional debounce gating predicate. */
   shouldDebounce?: (msg: WebInboundMessage) => boolean;
+  /**
+   * Optional shared socket reference. When set, reply/send closures resolve
+   * the latest socket at call time so reconnect can swap sockets safely.
+   */
+  socketRef?: { current: import("@whiskeysockets/baileys").WASocket | null };
 }) {
   const inboundLogger = getChildLogger({ module: "web-inbound" });
   const inboundConsoleLog = createSubsystemLogger("gateway/channels/whatsapp").child("inbound");
@@ -42,6 +47,10 @@ export async function monitorWebInbox(options: {
   });
   await waitForWaConnection(sock);
   const connectedAtMs = Date.now();
+  if (options.socketRef) {
+    options.socketRef.current = sock;
+  }
+  const getCurrentSock = () => (options.socketRef ? options.socketRef.current : sock);
 
   let onCloseResolve: ((reason: WebListenerCloseReason) => void) | null = null;
   const onClose = new Promise<WebListenerCloseReason>((resolve) => {
@@ -322,16 +331,29 @@ export async function monitorWebInbox(options: {
     const chatJid = inbound.remoteJid;
     const sendComposing = async () => {
       try {
-        await sock.sendPresenceUpdate("composing", chatJid);
+        const currentSock = getCurrentSock();
+        if (!currentSock) {
+          logVerbose("Presence update skipped: no active socket");
+          return;
+        }
+        await currentSock.sendPresenceUpdate("composing", chatJid);
       } catch (err) {
         logVerbose(`Presence update failed: ${String(err)}`);
       }
     };
     const reply = async (text: string) => {
-      await sock.sendMessage(chatJid, { text });
+      const currentSock = getCurrentSock();
+      if (!currentSock) {
+        throw new Error("no active socket - reconnection in progress");
+      }
+      await currentSock.sendMessage(chatJid, { text });
     };
     const sendMedia = async (payload: AnyMessageContent) => {
-      await sock.sendMessage(chatJid, payload);
+      const currentSock = getCurrentSock();
+      if (!currentSock) {
+        throw new Error("no active socket - reconnection in progress");
+      }
+      await currentSock.sendMessage(chatJid, payload);
     };
     const timestamp = inbound.messageTimestampMs;
     const mentionedJids = extractMentionedJids(msg.message as proto.IMessage | undefined);

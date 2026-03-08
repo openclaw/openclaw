@@ -18,12 +18,16 @@ describe("web monitor inbox", () => {
     await new Promise((resolve) => setImmediate(resolve));
   }
 
-  async function startInboxMonitor(onMessage: InboxOnMessage) {
+  async function startInboxMonitor(
+    onMessage: InboxOnMessage,
+    extraOptions: Partial<Parameters<typeof monitorWebInbox>[0]> = {},
+  ) {
     const listener = await monitorWebInbox({
       verbose: false,
       onMessage,
       accountId: DEFAULT_ACCOUNT_ID,
       authDir: getAuthDir(),
+      ...extraOptions,
     });
     return { listener, sock: getSock() };
   }
@@ -133,6 +137,107 @@ describe("web monitor inbox", () => {
     expect(sock.sendMessage).toHaveBeenCalledWith("999@s.whatsapp.net", {
       text: "pong",
     });
+
+    await listener.close();
+  });
+
+  it("uses shared socketRef for replies after reconnect swap", async () => {
+    const onMessage = vi.fn(async () => undefined);
+    const socketRef: {
+      current: {
+        sendMessage: (...args: unknown[]) => Promise<void>;
+        sendPresenceUpdate: (...args: unknown[]) => Promise<void>;
+      } | null;
+    } = {
+      current: null,
+    };
+
+    const { listener, sock } = await startInboxMonitor(onMessage, {
+      socketRef: socketRef as Parameters<typeof monitorWebInbox>[0]["socketRef"],
+    });
+
+    const upsert = buildMessageUpsert({
+      id: "abc-reconnect",
+      remoteJid: "999@s.whatsapp.net",
+      text: "ping",
+      timestamp: 1_700_000_000,
+      pushName: "Tester",
+    });
+    sock.ev.emit("messages.upsert", upsert);
+    await tick();
+
+    const inbound = (onMessage.mock.calls.at(0)?.at(0) ?? null) as {
+      reply: (text: string) => Promise<void>;
+      sendMedia: (payload: Record<string, unknown>) => Promise<void>;
+      sendComposing: () => Promise<void>;
+    } | null;
+    expect(inbound).not.toBeNull();
+
+    const replacementSock = {
+      sendMessage: vi.fn(async () => undefined),
+      sendPresenceUpdate: vi.fn(async () => undefined),
+    };
+    socketRef.current = replacementSock;
+
+    await inbound?.reply("pong");
+    await inbound?.sendMedia({ text: "after-reconnect" });
+    await inbound?.sendComposing();
+
+    expect(replacementSock.sendMessage).toHaveBeenNthCalledWith(1, "999@s.whatsapp.net", {
+      text: "pong",
+    });
+    expect(replacementSock.sendMessage).toHaveBeenNthCalledWith(2, "999@s.whatsapp.net", {
+      text: "after-reconnect",
+    });
+    expect(replacementSock.sendPresenceUpdate).toHaveBeenCalledWith(
+      "composing",
+      "999@s.whatsapp.net",
+    );
+    expect(sock.sendMessage).not.toHaveBeenCalled();
+
+    await listener.close();
+  });
+
+  it("reports no active socket during reconnect gap", async () => {
+    const onMessage = vi.fn(async () => undefined);
+    const socketRef: {
+      current: {
+        sendMessage: (...args: unknown[]) => Promise<void>;
+        sendPresenceUpdate: (...args: unknown[]) => Promise<void>;
+      } | null;
+    } = {
+      current: null,
+    };
+
+    const { listener, sock } = await startInboxMonitor(onMessage, {
+      socketRef: socketRef as Parameters<typeof monitorWebInbox>[0]["socketRef"],
+    });
+
+    const upsert = buildMessageUpsert({
+      id: "abc-gap",
+      remoteJid: "999@s.whatsapp.net",
+      text: "ping",
+      timestamp: 1_700_000_000,
+      pushName: "Tester",
+    });
+    sock.ev.emit("messages.upsert", upsert);
+    await tick();
+
+    const inbound = (onMessage.mock.calls.at(0)?.at(0) ?? null) as {
+      reply: (text: string) => Promise<void>;
+      sendMedia: (payload: Record<string, unknown>) => Promise<void>;
+      sendComposing: () => Promise<void>;
+    } | null;
+    expect(inbound).not.toBeNull();
+
+    socketRef.current = null;
+    await expect(inbound?.reply("pong")).rejects.toThrow(
+      "no active socket - reconnection in progress",
+    );
+    await expect(inbound?.sendMedia({ text: "after-reconnect" })).rejects.toThrow(
+      "no active socket - reconnection in progress",
+    );
+    await expect(inbound?.sendComposing()).resolves.toBeUndefined();
 
     await listener.close();
   });
