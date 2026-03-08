@@ -28,6 +28,9 @@ x-i18n:
 
 说明：一次性（`--at`）任务成功后默认删除。使用 `--keep-after-run` 保留。
 
+说明：Feishu/Lark 的 announce 投递必须显式提供目标（`--to`），例如：
+`--channel feishu --to "chat:oc_group_chat"` 或 `--channel feishu --to "user:ou_xxx"`。
+
 ## 常见编辑
 
 更新投递设置而不更改消息：

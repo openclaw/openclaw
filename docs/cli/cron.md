@@ -21,6 +21,9 @@ output internal. `--deliver` remains as a deprecated alias for `--announce`.
 
 Note: one-shot (`--at`) jobs delete after success by default. Use `--keep-after-run` to keep them.
 
+Note: Feishu/Lark announce delivery requires an explicit target (`--to`), for example:
+`--channel feishu --to "chat:oc_group_chat"` or `--channel feishu --to "user:ou_xxx"`.
+
 Note: recurring jobs now use exponential retry backoff after consecutive errors (30s → 1m → 5m → 15m → 60m), then return to normal schedule after the next successful run.
 
 Note: retention/pruning is controlled in config:
