@@ -83,8 +83,8 @@ function installRuntime(params: {
     };
   });
   const readAllowFromStore = vi.fn(async () => []);
-  const readSessionUpdatedAt = vi.fn(
-    (_params?: { storePath: string; sessionKey: string }): number | undefined => undefined,
+  const readSessionUpdatedAt = vi.fn<(input: { sessionKey: string }) => number | undefined>(
+    () => undefined,
   );
   const buildAgentSessionKey = vi.fn(
     (input: {
