@@ -150,9 +150,14 @@ export function buildBootstrapInjectionStats(params: {
       injectedByBaseName.get(file.name);
     const injectedChars = injected ? injected.length : 0;
     const truncated = !file.missing && injectedChars < rawChars;
+    // For virtual files pushed via hooks, `file.name` may be undefined because
+    // the hook API only requires `path`. Fall back to the path basename so the
+    // display is useful rather than showing "undefined".
+    const nameFromPath = pathValue ? path.posix.basename(pathValue) || pathValue : undefined;
+    const resolvedName: string = file.name ?? nameFromPath ?? "unknown";
     return {
-      name: file.name,
-      path: pathValue || file.name,
+      name: resolvedName,
+      path: pathValue || file.name || resolvedName,
       missing: file.missing,
       rawChars,
       injectedChars,

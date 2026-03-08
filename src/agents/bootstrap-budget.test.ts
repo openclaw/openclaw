@@ -48,6 +48,40 @@ describe("buildBootstrapInjectionStats", () => {
       truncated: true,
     });
   });
+
+  it("falls back to path basename when file.name is undefined (virtual hook-injected files)", () => {
+    // Hooks can push files with only `path` and no `name` (e.g. virtual bootstrap files).
+    // buildBootstrapInjectionStats must not emit `undefined` as the name.
+    const bootstrapFiles = [
+      {
+        // name is intentionally omitted to simulate a virtual file from a hook
+        path: "/workspace/SELF_IMPROVEMENT_REMINDER.md",
+        content: "reminder content",
+        missing: false,
+      } as unknown as import("./workspace.js").WorkspaceBootstrapFile,
+    ];
+    const injectedFiles = [
+      { path: "/workspace/SELF_IMPROVEMENT_REMINDER.md", content: "reminder content" },
+    ];
+    const stats = buildBootstrapInjectionStats({ bootstrapFiles, injectedFiles });
+    expect(stats).toHaveLength(1);
+    expect(stats[0].name).toBe("SELF_IMPROVEMENT_REMINDER.md");
+    expect(typeof stats[0].name).toBe("string");
+    expect(stats[0].path).toBe("/workspace/SELF_IMPROVEMENT_REMINDER.md");
+    expect(stats[0].injectedChars).toBe("reminder content".length);
+  });
+
+  it("uses 'unknown' as final fallback when both name and path are absent", () => {
+    const bootstrapFiles = [
+      {
+        content: "some content",
+        missing: false,
+      } as unknown as import("./workspace.js").WorkspaceBootstrapFile,
+    ];
+    const stats = buildBootstrapInjectionStats({ bootstrapFiles, injectedFiles: [] });
+    expect(typeof stats[0].name).toBe("string");
+    expect(stats[0].name).toBe("unknown");
+  });
 });
 
 describe("analyzeBootstrapBudget", () => {
