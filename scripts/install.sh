@@ -2103,6 +2103,7 @@ load_install_version_helpers() {
 load_install_version_helpers
 
 if ! declare -F extract_openclaw_semver >/dev/null 2>&1; then
+# Inline fallback when version-parse.sh could not be sourced (for example, stdin install).
 extract_openclaw_semver() {
     local raw="${1:-}"
     local parsed=""

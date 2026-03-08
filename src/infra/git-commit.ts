@@ -19,22 +19,31 @@ const formatCommit = (value?: string | null) => {
   return match[0].slice(0, 7).toLowerCase();
 };
 
-let cachedCommit: string | null | undefined;
+const cachedGitCommitBySearchDir = new Map<string, string>();
+
+function isMissingPathError(error: unknown): boolean {
+  if (!(error instanceof Error)) {
+    return false;
+  }
+  const code = (error as NodeJS.ErrnoException).code;
+  return code === "ENOENT" || code === "ENOTDIR";
+}
 
 const resolveCommitSearchDir = (options: { cwd?: string; moduleUrl?: string }) => {
   if (options.cwd) {
-    return options.cwd;
+    return path.resolve(options.cwd);
   }
   if (options.moduleUrl) {
     try {
       return path.dirname(fileURLToPath(options.moduleUrl));
     } catch {
-      // Fall back to process.cwd() when the caller cannot provide a file URL.
+      // moduleUrl is not a valid file:// URL; fall back to process.cwd().
     }
   }
   return process.cwd();
 };
 
+/** Read at most `limit` bytes from a file to avoid unbounded reads. */
 const safeReadFilePrefix = (filePath: string, limit = 256) => {
   const fd = fs.openSync(filePath, "r");
   try {
@@ -53,12 +62,16 @@ const resolveGitRefsBase = (headPath: string) => {
     if (commonDir) {
       return path.resolve(gitDir, commonDir);
     }
-  } catch {
+  } catch (error) {
+    if (!isMissingPathError(error)) {
+      throw error;
+    }
     // Plain repo git dirs do not have commondir.
   }
   return gitDir;
 };
 
+/** Safely resolve a git ref path, rejecting traversal attacks from a crafted HEAD file. */
 const resolveRefPath = (headPath: string, ref: string) => {
   if (!ref.startsWith("refs/")) {
     return null;
@@ -121,52 +134,54 @@ export const resolveCommitHash = (
     moduleUrl?: string;
   } = {},
 ) => {
-  if (cachedCommit !== undefined) {
-    return cachedCommit;
-  }
   const env = options.env ?? process.env;
   const envCommit = env.GIT_COMMIT?.trim() || env.GIT_SHA?.trim();
   const normalized = formatCommit(envCommit);
   if (normalized) {
-    cachedCommit = normalized;
-    return cachedCommit;
+    return normalized;
   }
   const buildInfoCommit = readCommitFromBuildInfo();
   if (buildInfoCommit) {
-    cachedCommit = buildInfoCommit;
-    return cachedCommit;
+    return buildInfoCommit;
   }
   const pkgCommit = readCommitFromPackageJson();
   if (pkgCommit) {
-    cachedCommit = pkgCommit;
+    return pkgCommit;
+  }
+
+  const searchDir = resolveCommitSearchDir(options);
+  const cachedCommit = cachedGitCommitBySearchDir.get(searchDir);
+  if (cachedCommit) {
     return cachedCommit;
   }
   try {
-    const headPath = resolveGitHeadPath(resolveCommitSearchDir(options));
+    const headPath = resolveGitHeadPath(searchDir);
     if (!headPath) {
-      cachedCommit = null;
-      return cachedCommit;
+      return null;
     }
     const head = safeReadFilePrefix(headPath).trim();
     if (!head) {
-      cachedCommit = null;
-      return cachedCommit;
+      return null;
     }
     if (head.startsWith("ref:")) {
       const ref = head.replace(/^ref:\s*/i, "").trim();
       const refPath = resolveRefPath(headPath, ref);
       if (!refPath) {
-        cachedCommit = null;
-        return cachedCommit;
+        return null;
       }
       const refHash = safeReadFilePrefix(refPath).trim();
-      cachedCommit = formatCommit(refHash);
-      return cachedCommit;
+      const commit = formatCommit(refHash);
+      if (commit) {
+        cachedGitCommitBySearchDir.set(searchDir, commit);
+      }
+      return commit;
     }
-    cachedCommit = formatCommit(head);
-    return cachedCommit;
+    const commit = formatCommit(head);
+    if (commit) {
+      cachedGitCommitBySearchDir.set(searchDir, commit);
+    }
+    return commit;
   } catch {
-    cachedCommit = null;
-    return cachedCommit;
+    return null;
   }
 };

@@ -7,10 +7,11 @@ import { afterEach, describe, expect, it } from "vitest";
 function withFakeCli(versionOutput: string): { root: string; cliPath: string } {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-install-sh-"));
   const cliPath = path.join(root, "openclaw");
+  const escapedOutput = versionOutput.replace(/'/g, "'\\''");
   fs.writeFileSync(
     cliPath,
     `#!/usr/bin/env bash
-printf '%s\n' '${versionOutput}'
+printf '%s\n' '${escapedOutput}'
 `,
     "utf-8",
   );
@@ -82,10 +83,10 @@ describe("install.sh version resolution", () => {
   it.runIf(process.platform !== "win32")(
     "falls back to raw output when no semantic version is present",
     () => {
-      const fixture = withFakeCli("OpenClaw dev build");
+      const fixture = withFakeCli("OpenClaw dev's build");
       tempRoots.push(fixture.root);
 
-      expect(resolveVersionFromInstaller(fixture.cliPath)).toBe("OpenClaw dev build");
+      expect(resolveVersionFromInstaller(fixture.cliPath)).toBe("OpenClaw dev's build");
     },
   );
 
