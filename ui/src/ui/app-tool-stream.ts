@@ -1,4 +1,5 @@
 import { truncateText } from "./format.ts";
+import { refreshChat } from "./app-chat";
 
 const TOOL_STREAM_LIMIT = 50;
 const TOOL_STREAM_THROTTLE_MS = 80;
@@ -405,7 +406,12 @@ export function handleAgentEvent(host: ToolStreamHost, payload?: AgentEventPaylo
     return;
   }
 
-  if (payload.stream !== "tool" && payload.stream !== "chat" && payload.stream !== "message") {
+  if (payload.stream === "chat" || payload.stream === "message") {
+   void refreshChat(host as any);
+   return;
+  }
+
+  if (payload.stream !== "tool") {
     return;
   }
 
@@ -470,7 +476,7 @@ export function handleAgentEvent(host: ToolStreamHost, payload?: AgentEventPaylo
   trimToolStream(host);
   scheduleToolStreamSync(host, phase === "result");
 
-  if (typeof (host as any).refreshChat === 'function') {
-    void (host as any).refreshChat(host);
+  if (phase === "result") {
+    void refreshChat(host as any);
   }
 }
