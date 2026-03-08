@@ -224,6 +224,40 @@ describe("exec approvals", () => {
     expect(calls).not.toContain("exec.approval.waitDecision");
   });
 
+  it("inherits ask=off from exec-approvals defaults when tool ask is unset", async () => {
+    const approvalsPath = path.join(process.env.HOME ?? "", ".openclaw", "exec-approvals.json");
+    await fs.mkdir(path.dirname(approvalsPath), { recursive: true });
+    await fs.writeFile(
+      approvalsPath,
+      JSON.stringify(
+        {
+          version: 1,
+          defaults: { security: "full", ask: "off", askFallback: "full" },
+          agents: {},
+        },
+        null,
+        2,
+      ),
+    );
+
+    const calls: string[] = [];
+    vi.mocked(callGatewayTool).mockImplementation(async (method) => {
+      calls.push(method);
+      return { ok: true };
+    });
+
+    const tool = createExecTool({
+      host: "gateway",
+      security: "full",
+      approvalRunningNoticeMs: 0,
+    });
+
+    const result = await tool.execute("call3c", { command: "echo ok" });
+    expect(result.details.status).toBe("completed");
+    expect(calls).not.toContain("exec.approval.request");
+    expect(calls).not.toContain("exec.approval.waitDecision");
+  });
+
   it("requires approval for elevated ask when allowlist misses", async () => {
     const calls: string[] = [];
     let resolveApproval: (() => void) | undefined;
