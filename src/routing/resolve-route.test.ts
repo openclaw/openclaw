@@ -392,6 +392,44 @@ describe("resolveAgentRoute", () => {
     expect(route.accountId).toBe("biz");
   });
 
+  test("discord accountId auto-matches agentId when no binding exists", () => {
+    const cfg: OpenClawConfig = {
+      agents: {
+        list: [
+          { id: "main", default: true, workspace: "~/main" },
+          { id: "agenta", workspace: "~/agenta" },
+        ],
+      },
+    };
+    const route = resolveAgentRoute({
+      cfg,
+      channel: "discord",
+      accountId: "agentA",
+      peer: { kind: "direct", id: "u-1" },
+    });
+    expect(route.agentId).toBe("agenta");
+    expect(route.matchedBy).toBe("binding.account");
+  });
+
+  test("discord auto-match does not override default account", () => {
+    const cfg: OpenClawConfig = {
+      agents: {
+        list: [
+          { id: "main", default: true, workspace: "~/main" },
+          { id: "default", workspace: "~/default-agent" },
+        ],
+      },
+    };
+    const route = resolveAgentRoute({
+      cfg,
+      channel: "discord",
+      accountId: "default",
+      peer: { kind: "direct", id: "u-1" },
+    });
+    expect(route.agentId).toBe("main");
+    expect(route.matchedBy).toBe("default");
+  });
+
   test("defaultAgentId is used when no binding matches", () => {
     const cfg: OpenClawConfig = {
       agents: {
