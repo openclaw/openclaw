@@ -304,6 +304,7 @@ export function createSessionStatusTool(opts?: {
             timeoutMs: 3500,
             providers: [usageProvider],
             agentDir,
+            profileId: resolved.entry.authProfileOverride,
           });
           const snapshot = usageSummary.providers.find((entry) => entry.provider === usageProvider);
           if (snapshot) {
@@ -313,11 +314,17 @@ export function createSessionStatusTool(opts?: {
               includeResets: true,
             });
             if (formatted && !formatted.startsWith("error:")) {
-              usageLine = `📊 Usage: ${formatted}`;
+              const sourceProfile = resolved.entry.authProfileOverride?.trim();
+              usageLine = sourceProfile
+                ? `📊 Usage (profile ${sourceProfile}): ${formatted}`
+                : `📊 Usage: ${formatted}`;
             }
           }
         } catch {
-          // ignore
+          const sourceProfile = resolved.entry.authProfileOverride?.trim();
+          usageLine = sourceProfile
+            ? `📊 Usage unavailable for active profile (${sourceProfile})`
+            : "📊 Usage unavailable for active profile";
         }
       }
 

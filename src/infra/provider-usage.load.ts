@@ -27,6 +27,7 @@ type UsageSummaryOptions = {
   providers?: UsageProviderId[];
   auth?: ProviderAuth[];
   agentDir?: string;
+  profileId?: string;
   fetch?: typeof fetch;
 };
 
@@ -44,6 +45,7 @@ export async function loadProviderUsageSummary(
     providers: opts.providers ?? usageProviders,
     auth: opts.auth,
     agentDir: opts.agentDir,
+    profileId: opts.profileId,
   });
   if (auths.length === 0) {
     return { updatedAt: now, providers: [] };

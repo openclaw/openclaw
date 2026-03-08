@@ -86,7 +86,13 @@ export async function updateAuthProfileStoreWithLock(params: {
 
   try {
     return await withFileLock(authPath, AUTH_STORE_LOCK_OPTIONS, async () => {
-      const store = ensureAuthProfileStore(params.agentDir);
+      // Always re-load from disk for write operations so external updates
+      // (for example, CLI commands in another process) are not overwritten by
+      // stale in-memory runtime snapshots.
+      const store = loadAuthProfileStoreForRuntime(params.agentDir, {
+        readOnly: true,
+        allowKeychainPrompt: false,
+      });
       const shouldSave = params.updater(store);
       if (shouldSave) {
         saveAuthProfileStore(store, params.agentDir);
@@ -456,7 +462,43 @@ export function loadAuthProfileStoreForRuntime(
 }
 
 export function loadAuthProfileStoreForSecretsRuntime(agentDir?: string): AuthProfileStore {
-  return loadAuthProfileStoreForRuntime(agentDir, { readOnly: true, allowKeychainPrompt: false });
+  // Secrets runtime snapshots should store the raw per-agent auth file content.
+  // Merging main+agent happens in resolveRuntimeAuthProfileStore(), and storing
+  // pre-merged snapshots can cause stale main data to override fresher updates.
+  return loadAuthProfileStoreForAgent(agentDir, { readOnly: true, allowKeychainPrompt: false });
+}
+
+function hydrateResolvedSecretsFromRuntime(params: {
+  target: AuthProfileStore;
+  runtime: AuthProfileStore;
+}): void {
+  for (const [profileId, runtimeCred] of Object.entries(params.runtime.profiles)) {
+    const targetCred = params.target.profiles[profileId];
+    if (!targetCred) {
+      continue;
+    }
+
+    if (targetCred.type === "api_key" && runtimeCred.type === "api_key") {
+      if (
+        targetCred.keyRef &&
+        typeof runtimeCred.key === "string" &&
+        runtimeCred.key.trim().length > 0
+      ) {
+        params.target.profiles[profileId] = { ...targetCred, key: runtimeCred.key };
+      }
+      continue;
+    }
+
+    if (targetCred.type === "token" && runtimeCred.type === "token") {
+      if (
+        targetCred.tokenRef &&
+        typeof runtimeCred.token === "string" &&
+        runtimeCred.token.trim().length > 0
+      ) {
+        params.target.profiles[profileId] = { ...targetCred, token: runtimeCred.token };
+      }
+    }
+  }
 }
 
 export function ensureAuthProfileStore(
@@ -465,7 +507,17 @@ export function ensureAuthProfileStore(
 ): AuthProfileStore {
   const runtimeStore = resolveRuntimeAuthProfileStore(agentDir);
   if (runtimeStore) {
-    return runtimeStore;
+    // Runtime snapshots hold resolved secret values but can become stale when
+    // another process mutates auth-profiles.json. Re-read disk and let disk
+    // metadata (order/usageStats/new profiles) win, then hydrate resolved
+    // secrets from the runtime snapshot.
+    const diskStore = loadAuthProfileStoreForRuntime(agentDir, {
+      readOnly: true,
+      allowKeychainPrompt: options?.allowKeychainPrompt ?? false,
+    });
+    const merged = mergeAuthProfileStores(runtimeStore, diskStore);
+    hydrateResolvedSecretsFromRuntime({ target: merged, runtime: runtimeStore });
+    return merged;
   }
 
   const store = loadAuthProfileStoreForAgent(agentDir, options);
@@ -506,4 +558,11 @@ export function saveAuthProfileStore(store: AuthProfileStore, agentDir?: string)
     usageStats: store.usageStats ?? undefined,
   } satisfies AuthProfileStore;
   saveJsonFile(authPath, payload);
+
+  // Keep active runtime snapshots coherent with disk writes so subsequent
+  // ensureAuthProfileStore() calls do not rehydrate stale state that can
+  // clobber freshly-written fields (e.g. auth order overrides).
+  if (runtimeAuthStoreSnapshots.size > 0) {
+    runtimeAuthStoreSnapshots.set(resolveRuntimeStoreKey(agentDir), cloneAuthProfileStore(store));
+  }
 }
