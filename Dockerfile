@@ -58,6 +58,15 @@ RUN NODE_OPTIONS=--max-old-space-size=2048 pnpm install --frozen-lockfile
 
 COPY . .
 
+# Normalize extension paths now so runtime COPY preserves safe modes
+# without adding a second full extensions layer.
+RUN for dir in /app/extensions /app/.agent /app/.agents; do \
+      if [ -d "$dir" ]; then \
+        find "$dir" -type d -exec chmod 755 {} +; \
+        find "$dir" -type f -exec chmod 644 {} +; \
+      fi; \
+    done
+
 # A2UI bundle may fail under QEMU cross-compilation (e.g. building amd64
 # on Apple Silicon). CI builds natively per-arch so this is a no-op there.
 # Stub it so local cross-arch builds still succeed.
@@ -67,10 +76,16 @@ RUN pnpm canvas:a2ui:bundle || \
      echo "/* A2UI bundle unavailable in this build */" > src/canvas-host/a2ui/a2ui.bundle.js && \
      echo "stub" > src/canvas-host/a2ui/.bundle.hash && \
      rm -rf vendor/a2ui apps/shared/OpenClawKit/Tools/CanvasA2UI)
-RUN pnpm build
+RUN pnpm build:docker
 # Force pnpm for UI build (Bun may fail on ARM/Synology architectures)
 ENV OPENCLAW_PREFER_PNPM=1
 RUN pnpm ui:build
+
+# Prune dev dependencies and strip build-only metadata before copying
+# runtime assets into the final image.
+FROM build AS runtime-assets
+RUN CI=true pnpm prune --prod && \
+    find dist -type f \( -name '*.d.ts' -o -name '*.d.mts' -o -name '*.d.cts' -o -name '*.map' \) -delete
 
 # ── Runtime base images ─────────────────────────────────────────
 FROM ${OPENCLAW_NODE_BOOKWORM_IMAGE} AS base-default
@@ -110,19 +125,22 @@ RUN apt-get update && \
 
 RUN chown node:node /app
 
-COPY --from=build --chown=node:node /app/dist ./dist
-COPY --from=build --chown=node:node /app/node_modules ./node_modules
-COPY --from=build --chown=node:node /app/package.json .
-COPY --from=build --chown=node:node /app/openclaw.mjs .
-COPY --from=build --chown=node:node /app/extensions ./extensions
-COPY --from=build --chown=node:node /app/skills ./skills
-COPY --from=build --chown=node:node /app/docs ./docs
+COPY --from=runtime-assets --chown=node:node /app/dist ./dist
+COPY --from=runtime-assets --chown=node:node /app/node_modules ./node_modules
+COPY --from=runtime-assets --chown=node:node /app/package.json .
+COPY --from=runtime-assets --chown=node:node /app/openclaw.mjs .
+COPY --from=runtime-assets --chown=node:node /app/extensions ./extensions
+COPY --from=runtime-assets --chown=node:node /app/skills ./skills
+COPY --from=runtime-assets --chown=node:node /app/docs ./docs
 
-# Docker live-test runners invoke `pnpm` inside the runtime image.
-# Activate the exact pinned package manager now so the container does not
-# rely on a first-run network fetch or missing shims under the non-root user.
-RUN corepack enable && \
-    corepack prepare "$(node -p "require('./package.json').packageManager")" --activate
+# Keep pnpm available in the runtime image for container-local workflows.
+# Use a shared Corepack home so the non-root `node` user does not need a
+# first-run network fetch when invoking pnpm.
+ENV COREPACK_HOME=/usr/local/share/corepack
+RUN install -d -m 0755 "$COREPACK_HOME" && \
+    corepack enable && \
+    corepack prepare "$(node -p "require('./package.json').packageManager")" --activate && \
+    chmod -R a+rX "$COREPACK_HOME"
 
 # Install additional system packages needed by your skills or extensions.
 # Example: docker build --build-arg OPENCLAW_DOCKER_APT_PACKAGES="python3 wget" .
@@ -181,15 +199,6 @@ RUN if [ -n "$OPENCLAW_INSTALL_DOCKER_CLI" ]; then \
       apt-get clean && \
       rm -rf /var/lib/apt/lists/* /var/cache/apt/archives/*; \
     fi
-
-# Normalize extension paths so plugin safety checks do not reject
-# world-writable directories inherited from source file modes.
-RUN for dir in /app/extensions /app/.agent /app/.agents; do \
-      if [ -d "$dir" ]; then \
-        find "$dir" -type d -exec chmod 755 {} +; \
-        find "$dir" -type f -exec chmod 644 {} +; \
-      fi; \
-    done
 
 # Expose the CLI binary without requiring npm global writes as non-root.
 RUN ln -sf /app/openclaw.mjs /usr/local/bin/openclaw \
