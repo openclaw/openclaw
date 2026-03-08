@@ -276,7 +276,7 @@ export async function browserTabAction(
 export async function browserSnapshot(
   baseUrl: string | undefined,
   opts: {
-    format: "aria" | "ai";
+    format?: "aria" | "ai";
     targetId?: string;
     limit?: number;
     maxChars?: number;
@@ -292,7 +292,9 @@ export async function browserSnapshot(
   },
 ): Promise<SnapshotResult> {
   const q = new URLSearchParams();
-  q.set("format", opts.format);
+  if (opts.format) {
+    q.set("format", opts.format);
+  }
   if (opts.targetId) {
     q.set("targetId", opts.targetId);
   }

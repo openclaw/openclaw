@@ -127,7 +127,7 @@ function registerBrowserToolAfterEachReset() {
 }
 
 async function runSnapshotToolCall(params: {
-  snapshotFormat: "ai" | "aria";
+  snapshotFormat?: "ai" | "aria";
   refs?: "aria" | "dom";
   maxChars?: number;
   profile?: string;
@@ -243,6 +243,23 @@ describe("browser tool snapshot maxChars", () => {
     );
   });
 
+  it("lets the server choose snapshot format when the user does not request one", async () => {
+    const tool = createBrowserTool();
+    await tool.execute?.("call-1", { action: "snapshot", profile: "chrome" });
+
+    expect(browserClientMocks.browserSnapshot).toHaveBeenCalledWith(
+      undefined,
+      expect.objectContaining({
+        profile: "chrome",
+      }),
+    );
+    const opts = browserClientMocks.browserSnapshot.mock.calls.at(-1)?.[1] as
+      | { format?: string; maxChars?: number }
+      | undefined;
+    expect(opts?.format).toBeUndefined();
+    expect(Object.hasOwn(opts ?? {}, "maxChars")).toBe(false);
+  });
+
   it("routes to node proxy when target=node", async () => {
     mockSingleBrowserProxyNode();
     const tool = createBrowserTool();
@@ -250,13 +267,42 @@ describe("browser tool snapshot maxChars", () => {
 
     expect(gatewayMocks.callGatewayTool).toHaveBeenCalledWith(
       "node.invoke",
-      { timeoutMs: 20000 },
+      { timeoutMs: 25000 },
       expect.objectContaining({
         nodeId: "node-1",
         command: "browser.proxy",
+        params: expect.objectContaining({
+          timeoutMs: 20000,
+        }),
       }),
     );
     expect(browserClientMocks.browserStatus).not.toHaveBeenCalled();
+  });
+
+  it("gives node.invoke extra slack beyond the default proxy timeout", async () => {
+    mockSingleBrowserProxyNode();
+    gatewayMocks.callGatewayTool.mockResolvedValueOnce({
+      ok: true,
+      payload: {
+        result: { ok: true, running: true },
+      },
+    });
+    const tool = createBrowserTool();
+    await tool.execute?.("call-1", {
+      action: "dialog",
+      target: "node",
+      accept: true,
+    });
+
+    expect(gatewayMocks.callGatewayTool).toHaveBeenCalledWith(
+      "node.invoke",
+      { timeoutMs: 25000 },
+      expect.objectContaining({
+        params: expect.objectContaining({
+          timeoutMs: 20000,
+        }),
+      }),
+    );
   });
 
   it("keeps sandbox bridge url when node proxy is available", async () => {
