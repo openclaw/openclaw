@@ -3,13 +3,8 @@ export type ModelRef = {
   id?: string | null;
 };
 
-const ANTHROPIC_PREFIXES = [
-  "claude-opus-4-6",
-  "claude-sonnet-4-6",
-  "claude-opus-4-5",
-  "claude-sonnet-4-5",
-  "claude-haiku-4-5",
-];
+/** Matches modern Claude model IDs: claude-{family}-{major}-{minor}[-suffix] */
+const ANTHROPIC_MODERN_RE = /^claude-(opus|sonnet|haiku)-\d+-\d+/;
 const OPENAI_MODELS = ["gpt-5.4", "gpt-5.2", "gpt-5.0"];
 const CODEX_MODELS = [
   "gpt-5.4",
@@ -42,7 +37,7 @@ export function isModernModelRef(ref: ModelRef): boolean {
   }
 
   if (provider === "anthropic") {
-    return matchesPrefix(id, ANTHROPIC_PREFIXES);
+    return ANTHROPIC_MODERN_RE.test(id);
   }
 
   if (provider === "openai") {
