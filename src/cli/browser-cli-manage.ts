@@ -10,7 +10,11 @@ import type {
 import { danger, info } from "../globals.js";
 import { defaultRuntime } from "../runtime.js";
 import { shortenHomePath } from "../utils.js";
-import { callBrowserRequest, type BrowserParentOpts } from "./browser-cli-shared.js";
+import {
+  callBrowserRequest,
+  resolveBrowserRequestTimeoutMs,
+  type BrowserParentOpts,
+} from "./browser-cli-shared.js";
 import { runCommandWithRuntime } from "./cli-utils.js";
 
 function resolveProfileQuery(profile?: string) {
@@ -38,7 +42,11 @@ async function callTabAction(
       query: resolveProfileQuery(profile),
       body,
     },
-    { timeoutMs: 10_000 },
+    {
+      timeoutMs: resolveBrowserRequestTimeoutMs(parent, {
+        fallbackMs: 10_000,
+      }),
+    },
   );
 }
 
@@ -54,7 +62,9 @@ async function fetchBrowserStatus(
       query: resolveProfileQuery(profile),
     },
     {
-      timeoutMs: 1500,
+      timeoutMs: resolveBrowserRequestTimeoutMs(parent, {
+        fallbackMs: 1500,
+      }),
     },
   );
 }
@@ -168,7 +178,11 @@ export function registerBrowserManageCommands(
             path: "/reset-profile",
             query: resolveProfileQuery(profile),
           },
-          { timeoutMs: 20000 },
+          {
+            timeoutMs: resolveBrowserRequestTimeoutMs(parent, {
+              fallbackMs: 20_000,
+            }),
+          },
         );
         if (printJsonResult(parent, result)) {
           return;
@@ -196,7 +210,11 @@ export function registerBrowserManageCommands(
             path: "/tabs",
             query: resolveProfileQuery(profile),
           },
-          { timeoutMs: 3000 },
+          {
+            timeoutMs: resolveBrowserRequestTimeoutMs(parent, {
+              fallbackMs: 3000,
+            }),
+          },
         );
         const tabs = result.tabs ?? [];
         logBrowserTabs(tabs, parent?.json);
@@ -220,7 +238,11 @@ export function registerBrowserManageCommands(
               action: "list",
             },
           },
-          { timeoutMs: 10_000 },
+          {
+            timeoutMs: resolveBrowserRequestTimeoutMs(parent, {
+              fallbackMs: 10_000,
+            }),
+          },
         );
         const tabs = result.tabs ?? [];
         logBrowserTabs(tabs, parent?.json);
@@ -305,7 +327,11 @@ export function registerBrowserManageCommands(
             query: resolveProfileQuery(profile),
             body: { url },
           },
-          { timeoutMs: 15000 },
+          {
+            timeoutMs: resolveBrowserRequestTimeoutMs(parent, {
+              fallbackMs: 15_000,
+            }),
+          },
         );
         if (printJsonResult(parent, tab)) {
           return;
@@ -330,7 +356,11 @@ export function registerBrowserManageCommands(
             query: resolveProfileQuery(profile),
             body: { targetId },
           },
-          { timeoutMs: 5000 },
+          {
+            timeoutMs: resolveBrowserRequestTimeoutMs(parent, {
+              fallbackMs: 5000,
+            }),
+          },
         );
         if (printJsonResult(parent, { ok: true })) {
           return;
@@ -355,7 +385,11 @@ export function registerBrowserManageCommands(
               path: `/tabs/${encodeURIComponent(targetId.trim())}`,
               query: resolveProfileQuery(profile),
             },
-            { timeoutMs: 5000 },
+            {
+              timeoutMs: resolveBrowserRequestTimeoutMs(parent, {
+                fallbackMs: 5000,
+              }),
+            },
           );
         } else {
           await callBrowserRequest(
@@ -366,7 +400,11 @@ export function registerBrowserManageCommands(
               query: resolveProfileQuery(profile),
               body: { kind: "close" },
             },
-            { timeoutMs: 20000 },
+            {
+              timeoutMs: resolveBrowserRequestTimeoutMs(parent, {
+                fallbackMs: 20_000,
+              }),
+            },
           );
         }
         if (printJsonResult(parent, { ok: true })) {
@@ -389,7 +427,11 @@ export function registerBrowserManageCommands(
             method: "GET",
             path: "/profiles",
           },
-          { timeoutMs: 3000 },
+          {
+            timeoutMs: resolveBrowserRequestTimeoutMs(parent, {
+              fallbackMs: 3000,
+            }),
+          },
         );
         const profiles = result.profiles ?? [];
         if (printJsonResult(parent, { profiles })) {
@@ -437,7 +479,11 @@ export function registerBrowserManageCommands(
                 driver: opts.driver === "extension" ? "extension" : undefined,
               },
             },
-            { timeoutMs: 10_000 },
+            {
+              timeoutMs: resolveBrowserRequestTimeoutMs(parent, {
+                fallbackMs: 10_000,
+              }),
+            },
           );
           if (printJsonResult(parent, result)) {
             return;
@@ -467,7 +513,11 @@ export function registerBrowserManageCommands(
             method: "DELETE",
             path: `/profiles/${encodeURIComponent(opts.name)}`,
           },
-          { timeoutMs: 20_000 },
+          {
+            timeoutMs: resolveBrowserRequestTimeoutMs(parent, {
+              fallbackMs: 20_000,
+            }),
+          },
         );
         if (printJsonResult(parent, result)) {
           return;

@@ -14,6 +14,17 @@ export function createBrowserProgram(params?: { withGatewayUrl?: boolean }): {
   if (params?.withGatewayUrl) {
     browser.option("--url <url>", "Gateway WebSocket URL");
   }
-  const parentOpts = (cmd: Command) => cmd.parent?.opts?.() as BrowserParentOpts;
+  const parentOpts = (cmd: Command) => {
+    const parent = cmd.parent;
+    const opts = parent?.opts?.() ?? {};
+    const timeoutSource =
+      typeof parent?.getOptionValueSource === "function"
+        ? parent.getOptionValueSource("timeout")
+        : undefined;
+    return {
+      ...opts,
+      ...(timeoutSource ? { timeoutSource } : {}),
+    };
+  };
   return { program, browser, parentOpts };
 }

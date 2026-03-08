@@ -6,7 +6,11 @@ import {
 } from "../../browser/form-fields.js";
 import { danger } from "../../globals.js";
 import { defaultRuntime } from "../../runtime.js";
-import { callBrowserRequest, type BrowserParentOpts } from "../browser-cli-shared.js";
+import {
+  callBrowserRequest,
+  resolveBrowserRequestTimeoutMs,
+  type BrowserParentOpts,
+} from "../browser-cli-shared.js";
 
 export type BrowserActionContext = {
   parent: BrowserParentOpts;
@@ -36,7 +40,12 @@ export async function callBrowserAct<T = unknown>(params: {
       query: params.profile ? { profile: params.profile } : undefined,
       body: params.body,
     },
-    { timeoutMs: params.timeoutMs ?? 20000 },
+    {
+      timeoutMs: resolveBrowserRequestTimeoutMs(params.parent, {
+        explicitMs: params.timeoutMs,
+        fallbackMs: 20_000,
+      }),
+    },
   );
 }
 

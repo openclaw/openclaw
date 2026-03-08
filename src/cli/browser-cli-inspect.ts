@@ -4,7 +4,11 @@ import { loadConfig } from "../config/config.js";
 import { danger } from "../globals.js";
 import { defaultRuntime } from "../runtime.js";
 import { shortenHomePath } from "../utils.js";
-import { callBrowserRequest, type BrowserParentOpts } from "./browser-cli-shared.js";
+import {
+  callBrowserRequest,
+  resolveBrowserRequestTimeoutMs,
+  type BrowserParentOpts,
+} from "./browser-cli-shared.js";
 
 export function registerBrowserInspectCommands(
   browser: Command,
@@ -36,7 +40,11 @@ export function registerBrowserInspectCommands(
               type: opts.type === "jpeg" ? "jpeg" : "png",
             },
           },
-          { timeoutMs: 20000 },
+          {
+            timeoutMs: resolveBrowserRequestTimeoutMs(parent, {
+              fallbackMs: 20_000,
+            }),
+          },
         );
         if (parent?.json) {
           defaultRuntime.log(JSON.stringify(result, null, 2));
@@ -94,7 +102,11 @@ export function registerBrowserInspectCommands(
             path: "/snapshot",
             query,
           },
-          { timeoutMs: 20000 },
+          {
+            timeoutMs: resolveBrowserRequestTimeoutMs(parent, {
+              fallbackMs: 20_000,
+            }),
+          },
         );
 
         if (opts.out) {

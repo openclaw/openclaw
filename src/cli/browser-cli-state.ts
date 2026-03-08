@@ -3,7 +3,11 @@ import { danger } from "../globals.js";
 import { defaultRuntime } from "../runtime.js";
 import { parseBooleanValue } from "../utils/boolean.js";
 import { runBrowserResizeWithOutput } from "./browser-cli-resize.js";
-import { callBrowserRequest, type BrowserParentOpts } from "./browser-cli-shared.js";
+import {
+  callBrowserRequest,
+  resolveBrowserRequestTimeoutMs,
+  type BrowserParentOpts,
+} from "./browser-cli-shared.js";
 import { registerBrowserCookiesAndStorageCommands } from "./browser-cli-state.cookies-storage.js";
 import { runCommandWithRuntime } from "./cli-utils.js";
 
@@ -35,7 +39,11 @@ async function runBrowserSetRequest(params: {
         query: profile ? { profile } : undefined,
         body: params.body,
       },
-      { timeoutMs: 20000 },
+      {
+        timeoutMs: resolveBrowserRequestTimeoutMs(params.parent, {
+          fallbackMs: 20_000,
+        }),
+      },
     );
     if (params.parent?.json) {
       defaultRuntime.log(JSON.stringify(result, null, 2));
@@ -69,7 +77,9 @@ export function registerBrowserStateCommands(
           width,
           height,
           targetId: opts.targetId,
-          timeoutMs: 20000,
+          timeoutMs: resolveBrowserRequestTimeoutMs(parent, {
+            fallbackMs: 20_000,
+          }),
           successMessage: `viewport set: ${width}x${height}`,
         });
       });
@@ -136,7 +146,11 @@ export function registerBrowserStateCommands(
               targetId: opts.targetId?.trim() || undefined,
             },
           },
-          { timeoutMs: 20000 },
+          {
+            timeoutMs: resolveBrowserRequestTimeoutMs(parent, {
+              fallbackMs: 20_000,
+            }),
+          },
         );
         if (parent?.json) {
           defaultRuntime.log(JSON.stringify(result, null, 2));

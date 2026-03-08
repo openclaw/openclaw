@@ -43,9 +43,13 @@ const sharedMocks = vi.hoisted(() => ({
     },
   ),
 }));
-vi.mock("./browser-cli-shared.js", () => ({
-  callBrowserRequest: sharedMocks.callBrowserRequest,
-}));
+vi.mock("./browser-cli-shared.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./browser-cli-shared.js")>();
+  return {
+    ...actual,
+    callBrowserRequest: sharedMocks.callBrowserRequest,
+  };
+});
 
 const runtime = {
   log: vi.fn(),

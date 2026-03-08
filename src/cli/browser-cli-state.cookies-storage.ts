@@ -1,7 +1,11 @@
 import type { Command } from "commander";
 import { danger } from "../globals.js";
 import { defaultRuntime } from "../runtime.js";
-import { callBrowserRequest, type BrowserParentOpts } from "./browser-cli-shared.js";
+import {
+  callBrowserRequest,
+  resolveBrowserRequestTimeoutMs,
+  type BrowserParentOpts,
+} from "./browser-cli-shared.js";
 import { inheritOptionFromParent } from "./command-options.js";
 
 function resolveUrl(opts: { url?: string }, command: Command): string | undefined {
@@ -34,7 +38,11 @@ async function runMutationRequest(params: {
   successMessage: string;
 }) {
   try {
-    const result = await callBrowserRequest(params.parent, params.request, { timeoutMs: 20000 });
+    const result = await callBrowserRequest(params.parent, params.request, {
+      timeoutMs: resolveBrowserRequestTimeoutMs(params.parent, {
+        fallbackMs: 20_000,
+      }),
+    });
     if (params.parent?.json) {
       defaultRuntime.log(JSON.stringify(result, null, 2));
       return;
@@ -69,7 +77,11 @@ export function registerBrowserCookiesAndStorageCommands(
               profile,
             },
           },
-          { timeoutMs: 20000 },
+          {
+            timeoutMs: resolveBrowserRequestTimeoutMs(parent, {
+              fallbackMs: 20_000,
+            }),
+          },
         );
         if (parent?.json) {
           defaultRuntime.log(JSON.stringify(result, null, 2));
@@ -162,7 +174,11 @@ export function registerBrowserCookiesAndStorageCommands(
                 profile,
               },
             },
-            { timeoutMs: 20000 },
+            {
+              timeoutMs: resolveBrowserRequestTimeoutMs(parent, {
+                fallbackMs: 20_000,
+              }),
+            },
           );
           if (parent?.json) {
             defaultRuntime.log(JSON.stringify(result, null, 2));

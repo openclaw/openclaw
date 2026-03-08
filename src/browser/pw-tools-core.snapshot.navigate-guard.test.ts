@@ -75,4 +75,36 @@ describe("pw-tools-core.snapshot navigate guard", () => {
     expect(goto).toHaveBeenCalledTimes(2);
     expect(result.url).toBe("https://example.com/recovered");
   });
+
+  it("does not retry navigation after the request aborts", async () => {
+    const ctrl = new AbortController();
+    const goto = vi.fn(async () => {
+      ctrl.abort(new Error("navigate aborted"));
+      throw new Error("Target page, context or browser has been closed");
+    });
+    setPwToolsCoreCurrentPage({
+      goto,
+      url: vi.fn(() => "https://example.com/aborted"),
+    });
+
+    await expect(
+      mod.navigateViaPlaywright({
+        cdpUrl: "http://127.0.0.1:18792",
+        targetId: "tab-1",
+        url: "https://example.com/aborted",
+        ssrfPolicy: { allowPrivateNetwork: true },
+        signal: ctrl.signal,
+      }),
+    ).rejects.toThrow("navigate aborted");
+
+    expect(goto).toHaveBeenCalledTimes(1);
+    expect(getPwToolsCoreSessionMocks().getPageForTargetId).toHaveBeenCalledTimes(1);
+    expect(
+      getPwToolsCoreSessionMocks().forceDisconnectPlaywrightForTarget,
+    ).not.toHaveBeenCalledWith({
+      cdpUrl: "http://127.0.0.1:18792",
+      targetId: "tab-1",
+      reason: "retry navigate after detached frame",
+    });
+  });
 });
