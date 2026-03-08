@@ -172,6 +172,22 @@ describe("PathGuard Exhaustive Tests", () => {
     await expect(checkPathGuardStrict(requested, policy, workspaceRoot)).resolves.toBeDefined();
   });
 
+  it("does not allow outside paths via workspace-relative allow glob", async () => {
+    const requested = path.resolve(workspaceRoot, "..", "outside.ts");
+    const policy = { allowedPaths: ["**/*.ts"] };
+
+    await expect(checkPathGuardStrict(requested, policy, workspaceRoot)).rejects.toThrow(
+      /not in the allowedPaths list/,
+    );
+  });
+
+  it("does not apply workspace-relative deny glob to outside paths", async () => {
+    const requested = path.resolve(workspaceRoot, "..", "outside.ts");
+    const policy = { denyPaths: ["**/*.ts"] };
+
+    await expect(checkPathGuardStrict(requested, policy, workspaceRoot)).resolves.toBeDefined();
+  });
+
   it("resolves paths correctly even if they contain redundant separators or dots", async () => {
     const requested = path.join(workspaceRoot, "src/../src/./index.ts");
     const resolved = path.join(realWorkspaceRoot, "src/index.ts");

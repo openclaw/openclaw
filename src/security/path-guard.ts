@@ -84,6 +84,14 @@ export async function checkPathGuardStrict(
 
     if (entry.includes("*") || entry.includes("?") || entry.includes("[")) {
       const relativeToWorkspace = toPosixPath(path.relative(realWorkspaceRoot, realPath));
+      // Relative policy entries are workspace-anchored and must never match
+      // targets outside workspace.
+      if (relativeToWorkspace.startsWith("../") || relativeToWorkspace === "..") {
+        return false;
+      }
+      if (path.isAbsolute(relativeToWorkspace)) {
+        return false;
+      }
       const normalizedPattern = toPosixPath(entry);
       return minimatch(relativeToWorkspace, normalizedPattern, { dot: true });
     }
