@@ -1996,7 +1996,7 @@ extension TalkModeManager {
             let selection = Self.selectTalkProviderConfig(talk)
             if talk != nil, selection == nil {
                 GatewayDiagnostics.log(
-                    "talk config ignored: legacy payload unsupported on iOS beta; expected talk.provider/providers")
+                    "talk config ignored: normalized payload missing talk.resolved")
             }
             let activeProvider = selection?.provider ?? Self.defaultTalkProvider
             let activeConfig = selection?.config
