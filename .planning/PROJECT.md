@@ -2,7 +2,7 @@
 
 ## What This Is
 
-A DNS blocklist filter for OpenClaw's outbound HTTP path that blocks requests to known-malicious domains before any network call is made. It extends the existing SSRF protection infrastructure (`src/infra/net/ssrf.ts`) with configurable domain blocklists, starting as a hard-coded spike and evolving into a PR-ready feature with config integration and remote list fetching.
+A DNS blocklist filter for OpenClaw's outbound HTTP path that blocks requests to known-malicious domains before any network call is made. It extends the existing SSRF protection infrastructure with a standalone domain-filter module, SSRF pipeline integration, and a documented catalog of all outbound HTTP surfaces.
 
 ## Core Value
 
@@ -12,17 +12,17 @@ Outbound HTTP requests from the gateway must be checked against DNS blocklists b
 
 ### Validated
 
-(None yet — ship to validate)
+- ✓ `isDomainBlocked(hostname)` function with suffix-based matching — v1.0
+- ✓ Integration into SSRF pipeline (pre-DNS security floor) — v1.0
+- ✓ Clean module boundaries (`domain-filter.ts` sibling to `ssrf.ts`) — v1.0
+- ✓ Unit tests for domain matching (30 tests, exact/subdomain/normalization) — v1.0
+- ✓ Integration test proving blocked domains produce deterministic errors — v1.0
+- ✓ Catalog of all outbound HTTP paths (30+ surfaces, 6 categories) — v1.0
+- ✓ PR-ready code quality with `DnsBlocklistError` extending `SsrFBlockedError` — v1.0
 
 ### Active
 
-- [ ] `isDomainBlocked(hostname)` function that checks domains against blocklists
-- [ ] Integration into OpenClaw's existing SSRF/outbound HTTP infrastructure
-- [ ] Clean module boundaries that support future config-driven and URL-fetched blocklists
-- [ ] Unit tests for domain matching (exact, subdomain, normalization edge cases)
-- [ ] Integration test proving blocked domains produce deterministic errors
-- [ ] Catalog of all outbound HTTP paths in the gateway (hook one, document others)
-- [ ] PR-ready code quality with proper error types extending `SsrFBlockedError`
+(None — next milestone will define)
 
 ### Out of Scope
 
@@ -30,31 +30,33 @@ Outbound HTTP requests from the gateway must be checked against DNS blocklists b
 - Fetching real DNS blocklists from URLs (Hagezi, etc.) — future PR polish
 - Per-agent or per-tool blocklist policies — future work
 - Standalone "agent DNS firewall" library extraction — possible future project
+- IDN/punycode normalization — documented as known gap
 
 ## Context
 
-- OpenClaw already has robust SSRF protection at `src/infra/net/ssrf.ts` with `SsrFBlockedError`, hostname normalization, DNS pinning, and allowlist/blocklist patterns
-- `src/plugin-sdk/ssrf-policy.ts` provides suffix-based hostname allowlisting for plugins
-- `src/infra/net/hostname.ts` has `normalizeHostname()` used throughout the SSRF module
-- The SSRF module uses a two-phase check: pre-DNS (literal hostname/IP) and post-DNS (resolved addresses) — the blocklist check fits naturally into phase 1
-- Outbound HTTP surfaces include: SSRF-guarded fetch in tools, channel-specific API calls (Telegram, Discord, Slack, etc.), provider API calls, media fetching
-- Existing test patterns: `src/infra/net/ssrf.test.ts`, `src/infra/net/ssrf.dispatcher.test.ts`, `src/infra/net/ssrf.pinning.test.ts`
+Shipped v1.0 with 2,358 lines added across 24 files.
+Tech stack: TypeScript ESM, Vitest, existing SSRF infrastructure.
+Key files: `src/infra/net/domain-filter.ts`, `src/infra/net/ssrf-error.ts`, `docs/reference/outbound-surfaces.md`.
 
 ## Constraints
 
-- **Integration point**: Must extend existing SSRF infrastructure, not create a parallel system
-- **Error types**: Must use or extend `SsrFBlockedError` for consistency
+- **Integration point**: Extends existing SSRF infrastructure, not a parallel system
+- **Error types**: `DnsBlocklistError` extends `SsrFBlockedError` via extracted `ssrf-error.ts`
 - **Code style**: TypeScript ESM, strict typing, Oxlint/Oxfmt, no `any`
 - **Testing**: Vitest, colocated `*.test.ts`, V8 coverage thresholds
 - **Module boundaries**: No mixing static and dynamic imports for the same module
 
 ## Key Decisions
 
-| Decision | Rationale | Outcome |
-|----------|-----------|---------|
-| Extend `src/infra/net/ssrf.ts` rather than new module | Existing SSRF infra already has hostname normalization, error types, and integration points | — Pending |
-| PR-ready structure from spike | Avoids throwaway code; clean interfaces accommodate config/URL lists later | — Pending |
-| Hook one HTTP path, document others | Spike-appropriate scope while mapping full surface for future coverage | — Pending |
+| Decision                                       | Rationale                                                       | Outcome |
+| ---------------------------------------------- | --------------------------------------------------------------- | ------- |
+| New `domain-filter.ts` sibling to `ssrf.ts`    | Clean module boundary; avoids bloating ssrf.ts                  | ✓ Good  |
+| PR-ready structure from spike                  | Clean interfaces accommodate config/URL lists later             | ✓ Good  |
+| Hook one HTTP path, document others            | Spike-appropriate scope while mapping full surface              | ✓ Good  |
+| Suffix-walk via indexOf('.') loop              | Simple, no regex, handles all standard blocklist cases          | ✓ Good  |
+| Extract SsrFBlockedError to ssrf-error.ts      | Breaks circular dependency between ssrf.ts and domain-filter.ts | ✓ Good  |
+| Binary Yes/No catalog with guard type in Notes | Clear audit artifact without editorial judgment                 | ✓ Good  |
 
 ---
-*Last updated: 2026-03-08 after initialization*
+
+_Last updated: 2026-03-08 after v1.0 milestone_
