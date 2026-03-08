@@ -148,6 +148,10 @@
       "types": "./dist/plugin-sdk/minimax-portal-auth.d.ts",
       "default": "./dist/plugin-sdk/minimax-portal-auth.js"
     },
+    "./plugin-sdk/moonpay": {
+      "types": "./dist/plugin-sdk/moonpay.d.ts",
+      "default": "./dist/plugin-sdk/moonpay.js"
+    },
     "./plugin-sdk/nextcloud-talk": {
       "types": "./dist/plugin-sdk/nextcloud-talk.d.ts",
       "default": "./dist/plugin-sdk/nextcloud-talk.js"

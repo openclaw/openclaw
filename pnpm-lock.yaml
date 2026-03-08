@@ -414,6 +414,12 @@ importers:
 
   extensions/minimax-portal-auth: {}
 
+  extensions/moonpay:
+    dependencies:
+      openclaw:
+        specifier: '>=2026.3.1'
+        version: 2026.3.2(@napi-rs/canvas@0.1.95)(@types/express@5.0.6)(audio-decode@2.2.3)(hono@4.11.10)(node-llama-cpp@3.16.2(typescript@5.9.3))
+
   extensions/msteams:
     dependencies:
       '@microsoft/agents-hosting':

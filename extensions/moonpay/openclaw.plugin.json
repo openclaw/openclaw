@@ -1,0 +1,11 @@
+{
+  "id": "moonpay",
+  "name": "MoonPay",
+  "description": "Crypto wallet, swaps, bridges, and fiat on/off-ramps via MoonPay CLI.",
+  "skills": ["./skills"],
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}
