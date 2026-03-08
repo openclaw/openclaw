@@ -612,17 +612,37 @@ function createOpenRouterSystemCacheWrapper(baseStreamFn: StreamFn | undefined):
         const messages = (payload as Record<string, unknown>)?.messages;
         if (Array.isArray(messages)) {
           for (const msg of messages as PayloadMessage[]) {
-            if (msg.role !== "system" && msg.role !== "developer") {
-              continue;
+            // Handle system/developer messages
+            if (msg.role === "system" || msg.role === "developer") {
+              if (typeof msg.content === "string") {
+                msg.content = [
+                  { type: "text", text: msg.content, cache_control: { type: "ephemeral" } },
+                ];
+              } else if (Array.isArray(msg.content) && msg.content.length > 0) {
+                const last = msg.content[msg.content.length - 1];
+                if (last && typeof last === "object") {
+                  const lastBlock = last as Record<string, unknown>;
+                  // Skip thinking/redacted_thinking blocks - Anthropic requires these
+                  // to remain unmodified
+                  if (lastBlock.type !== "thinking" && lastBlock.type !== "redacted_thinking") {
+                    lastBlock.cache_control = { type: "ephemeral" };
+                  }
+                }
+              }
             }
-            if (typeof msg.content === "string") {
-              msg.content = [
-                { type: "text", text: msg.content, cache_control: { type: "ephemeral" } },
-              ];
-            } else if (Array.isArray(msg.content) && msg.content.length > 0) {
-              const last = msg.content[msg.content.length - 1];
-              if (last && typeof last === "object") {
-                (last as Record<string, unknown>).cache_control = { type: "ephemeral" };
+            // Handle assistant messages - skip thinking/redacted_thinking blocks
+            else if (msg.role === "assistant" && Array.isArray(msg.content)) {
+              for (const block of msg.content) {
+                if (block && typeof block === "object") {
+                  const contentBlock = block as Record<string, unknown>;
+                  // Remove cache_control from thinking/redacted_thinking blocks if present
+                  if (
+                    contentBlock.type === "thinking" ||
+                    contentBlock.type === "redacted_thinking"
+                  ) {
+                    delete contentBlock.cache_control;
+                  }
+                }
               }
             }
           }

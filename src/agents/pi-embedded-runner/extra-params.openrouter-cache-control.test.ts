@@ -90,4 +90,96 @@ describe("extra-params: OpenRouter Anthropic cache_control", () => {
 
     expect(payload.messages[0].content).toBe("Hello");
   });
+
+  it("skips cache_control injection for thinking blocks in system messages", () => {
+    const payload = {
+      messages: [
+        {
+          role: "system",
+          content: [
+            { type: "text", text: "System prompt" },
+            { type: "thinking", thinking: "Internal reasoning" },
+          ],
+        },
+      ],
+    };
+
+    runOpenRouterPayload(payload, "anthropic/claude-opus-4-6");
+
+    const content = payload.messages[0].content as Array<Record<string, unknown>>;
+    expect(content[0]).toEqual({ type: "text", text: "System prompt" });
+    // thinking block should not have cache_control added
+    expect(content[1]).toEqual({ type: "thinking", thinking: "Internal reasoning" });
+    expect(content[1].cache_control).toBeUndefined();
+  });
+
+  it("removes cache_control from thinking blocks in assistant messages", () => {
+    const payload = {
+      messages: [
+        {
+          role: "assistant",
+          content: [
+            { type: "thinking", thinking: "Let me think", cache_control: { type: "ephemeral" } },
+            { type: "text", text: "Here is my response" },
+          ],
+        },
+      ],
+    };
+
+    runOpenRouterPayload(payload, "anthropic/claude-opus-4-6");
+
+    const content = payload.messages[0].content as Array<Record<string, unknown>>;
+    // cache_control should be removed from thinking block
+    expect(content[0]).toEqual({ type: "thinking", thinking: "Let me think" });
+    expect(content[0].cache_control).toBeUndefined();
+    // text block should remain unchanged
+    expect(content[1]).toEqual({ type: "text", text: "Here is my response" });
+  });
+
+  it("removes cache_control from redacted_thinking blocks in assistant messages", () => {
+    const payload = {
+      messages: [
+        {
+          role: "assistant",
+          content: [
+            {
+              type: "redacted_thinking",
+              redacted_thinking: "...",
+              cache_control: { type: "ephemeral" },
+            },
+            { type: "text", text: "Response" },
+          ],
+        },
+      ],
+    };
+
+    runOpenRouterPayload(payload, "anthropic/claude-opus-4-6");
+
+    const content = payload.messages[0].content as Array<Record<string, unknown>>;
+    expect(content[0]).toEqual({ type: "redacted_thinking", redacted_thinking: "..." });
+    expect(content[0].cache_control).toBeUndefined();
+  });
+
+  it("handles mixed content with thinking blocks correctly", () => {
+    const payload = {
+      messages: [
+        {
+          role: "assistant",
+          content: [
+            { type: "text", text: "Before thinking" },
+            { type: "thinking", thinking: "Reasoning", cache_control: { type: "ephemeral" } },
+            { type: "text", text: "After thinking" },
+          ],
+        },
+      ],
+    };
+
+    runOpenRouterPayload(payload, "anthropic/claude-opus-4-6");
+
+    const content = payload.messages[0].content as Array<Record<string, unknown>>;
+    expect(content[0]).toEqual({ type: "text", text: "Before thinking" });
+    expect(content[1]).toEqual({ type: "thinking", thinking: "Reasoning" });
+    expect(content[1].cache_control).toBeUndefined();
+    expect(content[2]).toEqual({ type: "text", text: "After thinking" });
+  });
 });
