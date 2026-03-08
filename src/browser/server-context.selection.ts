@@ -34,8 +34,12 @@ export function createProfileSelectionOps({
     if (tabs1.length === 0) {
       if (profile.driver === "extension") {
         throw new Error(
-          `tab not found (no attached Chrome tabs for profile "${profile.name}"). ` +
-            "Click the OpenClaw Browser Relay toolbar icon on the tab you want to control (badge ON).",
+          `tab not found (no attached Chrome tabs for profile "${profile.name}").\n\n` +
+            "Possible causes:\n" +
+            "1. No tab attached - Click the OpenClaw Browser Relay toolbar icon on the tab you want to control (badge should show ON)\n" +
+            "2. Relay service not started - Run: openclaw browser status\n" +
+            "3. Wrong port configured - Extension should use port 18792 (WebSocket), not 18789 (HTTP Gateway)\n\n" +
+            "For help, see: https://github.com/openclaw/openclaw/issues/32532",
         );
       }
       await openTab("about:blank");
