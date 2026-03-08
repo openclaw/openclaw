@@ -573,6 +573,29 @@ export async function compactEmbeddedPiSessionDirect(
         allowedToolNames,
       });
       trackSessionManagerAccess(params.sessionFile);
+
+      // Early bail-out: skip compaction when the session contains no real
+      // conversation messages (user/assistant/toolResult).  This avoids the
+      // entire extension-factory + createAgentSession + session.compact()
+      // pipeline — including potential LLM API calls — for idle or
+      // system-only sessions (e.g. isolated cron sessions with no interactions).
+      const hasRealMessages = sessionManager.messages?.some(
+        (m: { role?: unknown }) =>
+          m.role === "user" || m.role === "assistant" || m.role === "toolResult",
+      );
+      if (!hasRealMessages) {
+        log.debug(
+          `[compaction-diag] end runId=${runId} sessionKey=${params.sessionKey ?? params.sessionId} ` +
+            `diagId=${diagId} trigger=${trigger} outcome=skipped reason=no_real_messages ` +
+            `durationMs=${Date.now() - startedAt}`,
+        );
+        return {
+          ok: false,
+          compacted: false,
+          reason: "no real conversation messages to compact",
+        };
+      }
+
       const settingsManager = createPreparedEmbeddedPiSettingsManager({
         cwd: effectiveWorkspace,
         agentDir,
