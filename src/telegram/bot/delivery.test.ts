@@ -631,6 +631,35 @@ describe("deliverReplies", () => {
     expect(pinChatMessage).toHaveBeenCalledTimes(1);
   });
 
+  it("first chunk empty with replyToMode=first — reply threading applies to first sent chunk, not chunk index 0", async () => {
+    const runtime = createRuntime();
+    const sendMessage = vi.fn().mockResolvedValue({
+      message_id: 55,
+      chat: { id: "123" },
+    });
+    const bot = createBot({ sendMessage });
+
+    // Two chunks: chunk 0 is whitespace-only (will be skipped), chunk 1 has real content.
+    // Use a small textLimit to force chunking at the double newline boundary.
+    const result = await deliverReplies({
+      replies: [{ text: "   \n\nreal content here", replyToId: "999" }],
+      chatId: "123",
+      token: "tok",
+      runtime,
+      bot,
+      replyToMode: "first",
+      textLimit: 20,
+    });
+
+    // Only the real-content chunk should be sent (chunk 0 is empty → skipped)
+    expect(sendMessage).toHaveBeenCalledTimes(1);
+    // The reply threading should be applied to the chunk that was actually sent
+    expect(sendMessage.mock.calls[0][2]).toEqual(
+      expect.objectContaining({ reply_to_message_id: 999 }),
+    );
+    expect(result.delivered).toBe(true);
+  });
+
   it("rethrows VOICE_MESSAGES_FORBIDDEN when no text fallback is available", async () => {
     const { runtime, sendVoice, sendMessage, bot } = createVoiceFailureHarness({
       voiceError: createVoiceMessagesForbiddenError(),
