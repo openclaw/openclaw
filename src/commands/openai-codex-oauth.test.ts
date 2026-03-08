@@ -24,6 +24,16 @@ vi.mock("./oauth-tls-preflight.js", () => ({
 
 import { loginOpenAICodexOAuth } from "./openai-codex-oauth.js";
 
+function buildAccessTokenWithEmail(email: string) {
+  const header = Buffer.from(JSON.stringify({ alg: "none", typ: "JWT" })).toString("base64url");
+  const payload = Buffer.from(
+    JSON.stringify({
+      "https://api.openai.com/profile": { email },
+    }),
+  ).toString("base64url");
+  return `${header}.${payload}.signature`;
+}
+
 function createPrompter() {
   const spin = { update: vi.fn(), stop: vi.fn() };
   const prompter: Pick<WizardPrompter, "note" | "progress"> = {
@@ -113,6 +123,30 @@ describe("loginOpenAICodexOAuth", () => {
     expect(event.url).toBe(
       "https://auth.openai.com/oauth/authorize?scope=openid+profile+email+offline_access&state=abc",
     );
+  });
+
+  it("backfills email from the access token when pi-ai omits it", async () => {
+    const access = buildAccessTokenWithEmail("decoded@example.com");
+    mocks.createVpsAwareOAuthHandlers.mockReturnValue({
+      onAuth: vi.fn(),
+      onPrompt: vi.fn(),
+    });
+    mocks.loginOpenAICodex.mockResolvedValue({
+      provider: "openai-codex" as const,
+      access,
+      refresh: "refresh-token",
+      expires: Date.now() + 60_000,
+      accountId: "acct-123",
+    });
+
+    const { result } = await runCodexOAuth({ isRemote: false });
+
+    expect(result).toMatchObject({
+      access,
+      refresh: "refresh-token",
+      accountId: "acct-123",
+      email: "decoded@example.com",
+    });
   });
 
   it("reports oauth errors and rethrows", async () => {
