@@ -142,7 +142,7 @@ export const nextcloudTalkPlugin: ChannelPlugin<ResolvedNextcloudTalkAccount> = 
         collect: (groupPolicy) =>
           collectOpenGroupPolicyRouteAllowlistWarnings({
             groupPolicy,
-            routeAllowlistConfigured: roomAllowlistConfigured,
+            routeAllowlistConfigured: Boolean(roomAllowlistConfigured),
             restrictSenders: {
               surface: "Nextcloud Talk rooms",
               openScope: "any member in allowed rooms",
