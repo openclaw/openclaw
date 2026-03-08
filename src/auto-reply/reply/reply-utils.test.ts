@@ -150,6 +150,35 @@ describe("normalizeReplyPayload", () => {
     expect(result!.text).toBe("");
     expect(result!.mediaUrl).toBe("https://example.com/img.png");
   });
+
+  it("suppresses JSON action-only NO_REPLY payload", () => {
+    const reasons: string[] = [];
+    const result = normalizeReplyPayload(
+      { text: '{"action":"NO_REPLY"}' },
+      { onSkip: (reason) => reasons.push(reason) },
+    );
+    expect(result).toBeNull();
+    expect(reasons).toEqual(["silent"]);
+  });
+
+  it("suppresses channelData action-only NO_REPLY payload", () => {
+    const reasons: string[] = [];
+    const result = normalizeReplyPayload(
+      { text: "", channelData: { action: "NO_REPLY" } },
+      { onSkip: (reason) => reasons.push(reason) },
+    );
+    expect(result).toBeNull();
+    expect(reasons).toEqual(["silent"]);
+  });
+
+  it("keeps JSON action payload when media exists", () => {
+    const result = normalizeReplyPayload({
+      text: '{"action":"NO_REPLY"}',
+      mediaUrl: "https://example.com/img.png",
+    });
+    expect(result).not.toBeNull();
+    expect(result!.mediaUrl).toBe("https://example.com/img.png");
+  });
 });
 
 describe("typing controller", () => {
