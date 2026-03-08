@@ -428,8 +428,10 @@ export async function collectChannelSecurityFindings(params: {
           });
           const dmAllowFromRaw = (discordCfg.dm as { allowFrom?: unknown } | undefined)?.allowFrom;
           const dmAllowFrom = Array.isArray(dmAllowFromRaw) ? dmAllowFromRaw : [];
+          const topLevelAllowFromRaw = discordCfg.allowFrom as unknown[] | undefined;
+          const topLevelAllowFrom = Array.isArray(topLevelAllowFromRaw) ? topLevelAllowFromRaw : [];
           const ownerAllowFromConfigured =
-            normalizeAllowFromList([...dmAllowFrom, ...storeAllowFrom]).length > 0;
+            normalizeAllowFromList([...dmAllowFrom, ...topLevelAllowFrom, ...storeAllowFrom]).length > 0;
 
           const useAccessGroups = params.cfg.commands?.useAccessGroups !== false;
           if (

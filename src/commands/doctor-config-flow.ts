@@ -363,6 +363,51 @@ export function collectMissingExplicitDefaultAccountWarnings(cfg: OpenClawConfig
   return warnings;
 }
 
+export function collectPeerBindingWithoutAccountIdWarnings(cfg: OpenClawConfig): string[] {
+  const warnings: string[] = [];
+  const bindings = listRouteBindings(cfg);
+
+  for (const binding of bindings) {
+    const bindingRecord = asObjectRecord(binding);
+    if (!bindingRecord) {
+      continue;
+    }
+    const match = asObjectRecord(bindingRecord.match);
+    if (!match) {
+      continue;
+    }
+
+    const channel = typeof match.channel === "string" ? match.channel.trim() : "";
+    if (!channel) {
+      continue;
+    }
+
+    const rawAccountId = typeof match.accountId === "string" ? match.accountId.trim() : "";
+    if (rawAccountId) {
+      continue;
+    }
+
+    const peer = asObjectRecord(match.peer);
+    if (!peer) {
+      continue;
+    }
+
+    const peerKind = typeof peer.kind === "string" ? peer.kind.trim() : "";
+    const peerId = peer.id !== undefined && peer.id !== null ? String(peer.id).trim() : "";
+    if (!peerKind || !peerId) {
+      continue;
+    }
+
+    const agentId = bindingRecord.agentId ?? "unknown";
+    warnings.push(
+      `- bindings[].match: agent "${agentId}" has peer binding (channel="${channel}", peer.kind="${peerKind}", peer.id="${peerId}") without explicit accountId. ` +
+      `Omitted accountId matches only "default" account, not wildcard. If this binding should match all accounts, add "accountId": "*" to the binding.`,
+    );
+  }
+
+  return warnings;
+}
+
 function collectTelegramAccountScopes(
   cfg: OpenClawConfig,
 ): Array<{ prefix: string; account: Record<string, unknown> }> {
@@ -1886,6 +1931,10 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
   const missingExplicitDefaultWarnings = collectMissingExplicitDefaultAccountWarnings(candidate);
   if (missingExplicitDefaultWarnings.length > 0) {
     note(missingExplicitDefaultWarnings.join("\n"), "Doctor warnings");
+  }
+  const peerBindingWithoutAccountIdWarnings = collectPeerBindingWithoutAccountIdWarnings(candidate);
+  if (peerBindingWithoutAccountIdWarnings.length > 0) {
+    note(peerBindingWithoutAccountIdWarnings.join("\n"), "Doctor warnings");
   }
 
   if (shouldRepair) {
