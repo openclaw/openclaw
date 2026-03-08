@@ -481,7 +481,7 @@ function checkBotMentioned(event: FeishuMessageEvent, botOpenId?: string): boole
       const text = typeof parsed.text === "string" ? parsed.text : "";
       const knownKeys = new Set(mentions.map((m) => m.key));
       const keysInText = text.match(/@_[a-z]+_\d+/g) ?? [];
-      if (keysInText.some((key) => !knownKeys.has(key))) return true;
+      if (keysInText.some((key: string) => !knownKeys.has(key))) return true;
     } catch {
       // malformed content — ignore
     }
