@@ -230,9 +230,11 @@ export const __testing = {
 function buildCacheKey(params: {
   workspaceDir?: string;
   plugins: NormalizedPluginsConfig;
+  additionalNativeModules?: string[];
 }): string {
   const workspaceKey = params.workspaceDir ? resolveUserPath(params.workspaceDir) : "";
-  return `${workspaceKey}::${JSON.stringify(params.plugins)}`;
+  const nativeModulesKey = JSON.stringify([...(params.additionalNativeModules ?? [])].sort());
+  return `${workspaceKey}::${JSON.stringify(params.plugins)}::${nativeModulesKey}`;
 }
 
 function validatePluginConfig(params: {
@@ -517,6 +519,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
   const cacheKey = buildCacheKey({
     workspaceDir: options.workspaceDir,
     plugins: normalized,
+    additionalNativeModules: options.additionalNativeModules,
   });
   const cacheEnabled = options.cache !== false;
   if (cacheEnabled) {
