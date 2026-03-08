@@ -197,16 +197,18 @@ function clampResultsByInjectedChars(
 
 function buildMemorySearchUnavailableResult(error: string | undefined, isQmdConfigured: boolean) {
   const reason = (error ?? "memory search unavailable").trim() || "memory search unavailable";
-  
+
   // When QMD is configured, provide QMD-specific error messages
   if (isQmdConfigured) {
-    const isQmdError = /qmd|collection|index/.test(reason.toLowerCase());
-    const warning = isQmdError
-      ? "Memory search is unavailable because QMD (local memory backend) encountered an error."
-      : "Memory search is unavailable. The local QMD backend may have fallen back to cloud embeddings which failed.";
-    const action = isQmdError
-      ? "Check QMD status with 'qmd status' and ensure collections are indexed. See docs: https://docs.openclaw.ai/concepts/memory"
-      : "Check QMD status with 'qmd status'. If using QMD, no cloud API keys should be needed. If fallback occurred, check embedding provider config or use 'qmd query' directly as workaround.";
+    // Check if this is a cloud embedding error (OpenAI, Google, quota, etc.)
+    // Common cloud errors: insufficient_quota, quota, 429, openai, google, embedding
+    const isCloudEmbeddingError = /insufficient_quota|quota|429|openai|google|embedding|anthropic/.test(reason.toLowerCase());
+    const warning = isCloudEmbeddingError
+      ? "Memory search is unavailable. The local QMD backend may have fallen back to cloud embeddings which failed."
+      : "Memory search is unavailable because QMD (local memory backend) encountered an error.";
+    const action = isCloudEmbeddingError
+      ? "Check QMD status with 'qmd status'. If using QMD, no cloud API keys should be needed. If fallback occurred, check embedding provider config or use 'qmd query' directly as workaround."
+      : "Check QMD status with 'qmd status' and ensure collections are indexed. See docs: https://docs.openclaw.ai/concepts/memory";
     return {
       results: [],
       disabled: true,
