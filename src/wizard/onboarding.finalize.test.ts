@@ -12,6 +12,7 @@ const buildGatewayInstallPlan = vi.hoisted(() =>
     environment: {},
   })),
 );
+const gatewayInstallErrorHint = vi.hoisted(() => vi.fn(() => "hint"));
 const gatewayServiceInstall = vi.hoisted(() => vi.fn(async () => {}));
 const resolveGatewayInstallToken = vi.hoisted(() =>
   vi.fn(async () => ({
@@ -21,6 +22,9 @@ const resolveGatewayInstallToken = vi.hoisted(() =>
   })),
 );
 const isSystemdUserServiceAvailable = vi.hoisted(() => vi.fn(async () => true));
+const readSystemdUserLingerStatus = vi.hoisted(() =>
+  vi.fn(async () => ({ user: "runner", linger: "yes" })),
+);
 
 vi.mock("../commands/onboard-helpers.js", () => ({
   detectBrowserOpenSupport: vi.fn(async () => ({ ok: false })),
@@ -36,7 +40,7 @@ vi.mock("../commands/onboard-helpers.js", () => ({
 
 vi.mock("../commands/daemon-install-helpers.js", () => ({
   buildGatewayInstallPlan,
-  gatewayInstallErrorHint: vi.fn(() => "hint"),
+  gatewayInstallErrorHint,
 }));
 
 vi.mock("../commands/gateway-install-token.js", () => ({
@@ -70,6 +74,7 @@ vi.mock("../daemon/systemd.js", async (importOriginal) => {
   return {
     ...actual,
     isSystemdUserServiceAvailable,
+    readSystemdUserLingerStatus,
   };
 });
 
@@ -111,11 +116,20 @@ describe("finalizeOnboardingWizard", () => {
     runTui.mockClear();
     probeGatewayReachable.mockClear();
     setupOnboardingShellCompletion.mockClear();
-    buildGatewayInstallPlan.mockClear();
+    buildGatewayInstallPlan.mockReset();
+    gatewayInstallErrorHint.mockReset();
     gatewayServiceInstall.mockClear();
     resolveGatewayInstallToken.mockClear();
     isSystemdUserServiceAvailable.mockReset();
+    readSystemdUserLingerStatus.mockReset();
+    buildGatewayInstallPlan.mockResolvedValue({
+      programArguments: [],
+      workingDirectory: "/tmp",
+      environment: {},
+    });
+    gatewayInstallErrorHint.mockReturnValue("hint");
     isSystemdUserServiceAvailable.mockResolvedValue(true);
+    readSystemdUserLingerStatus.mockResolvedValue({ user: "runner", linger: "yes" });
   });
 
   it("resolves gateway password SecretRef for probe and TUI", async () => {
@@ -243,5 +257,48 @@ describe("finalizeOnboardingWizard", () => {
     expect(buildGatewayInstallPlan).toHaveBeenCalledTimes(1);
     expectFirstOnboardingInstallPlanCallOmitsToken();
     expect(gatewayServiceInstall).toHaveBeenCalledTimes(1);
+  });
+
+  it("shows missing-node guidance when gateway service install cannot find node", async () => {
+    buildGatewayInstallPlan.mockRejectedValueOnce(new Error("Node not found in PATH."));
+    const note = vi.fn(async () => {});
+    const prompter = buildWizardPrompter({
+      note: note as never,
+      confirm: vi.fn(async () => false),
+    });
+    const runtime = createRuntime();
+
+    await finalizeOnboardingWizard({
+      flow: "quickstart",
+      opts: {
+        acceptRisk: true,
+        authChoice: "skip",
+        installDaemon: true,
+        skipHealth: true,
+        skipUi: true,
+      },
+      baseConfig: {},
+      nextConfig: {},
+      workspaceDir: "/tmp",
+      settings: {
+        port: 18789,
+        bind: "loopback",
+        authMode: "token",
+        gatewayToken: "gateway-token",
+        tailscaleMode: "off",
+        tailscaleResetOnExit: false,
+      },
+      prompter,
+      runtime,
+    });
+
+    const notes = note.mock.calls
+      .map((call) => {
+        const first = (call as unknown[])[0];
+        return typeof first === "string" ? first : "";
+      })
+      .join("\n");
+    expect(notes).toContain("Node runtime was not found while installing the Gateway service.");
+    expect(notes).toContain("Install Node 22+ and rerun");
   });
 });

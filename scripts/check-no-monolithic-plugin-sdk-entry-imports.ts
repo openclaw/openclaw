@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { discoverOpenClawPlugins } from "../src/plugins/discovery.js";
@@ -59,7 +60,32 @@ function collectPluginSourceFiles(rootDir: string): string[] {
   return files;
 }
 
+function loadTrackedFiles(rootDir: string): Set<string> {
+  try {
+    const output = execFileSync("git", ["ls-files", "-z"], {
+      cwd: rootDir,
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"],
+    });
+    const tracked = new Set<string>();
+    for (const file of output.split("\0")) {
+      if (file) {
+        tracked.add(file);
+      }
+    }
+    return tracked;
+  } catch {
+    return new Set<string>();
+  }
+}
+
+function toGitRelativePath(rootDir: string, filePath: string): string {
+  return path.relative(rootDir, filePath).split(path.sep).join("/");
+}
+
 function main() {
+  const cwd = process.cwd();
+  const trackedFiles = loadTrackedFiles(cwd);
   const discovery = discoverOpenClawPlugins({});
   const bundledCandidates = discovery.candidates.filter((c) => c.origin === "bundled");
   const filesToCheck = new Set<string>();
@@ -72,6 +98,11 @@ function main() {
 
   const offenders: string[] = [];
   for (const entryFile of filesToCheck) {
+    const relative = toGitRelativePath(cwd, entryFile);
+    // Ignore stale untracked files (e.g. from runner caches/workspace reuse).
+    if (trackedFiles.size > 0 && !trackedFiles.has(relative)) {
+      continue;
+    }
     let content = "";
     try {
       content = fs.readFileSync(entryFile, "utf8");

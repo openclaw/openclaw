@@ -98,9 +98,42 @@ function addCommonEnvConfiguredBinDirs(
   addNonEmptyDir(dirs, appendSubdir(env?.ASDF_DATA_DIR, "shims"));
 }
 
-function resolveSystemPathDirs(platform: NodeJS.Platform): string[] {
+function uniquePreserveOrder(items: string[]): string[] {
+  const seen = new Set<string>();
+  const unique: string[] = [];
+  for (const item of items) {
+    if (!item || seen.has(item)) {
+      continue;
+    }
+    seen.add(item);
+    unique.push(item);
+  }
+  return unique;
+}
+
+function resolveHomebrewPrefixes(env?: Record<string, string | undefined>): string[] {
+  const candidates = [env?.HOMEBREW_PREFIX?.trim(), "/opt/homebrew", "/usr/local"];
+  return uniquePreserveOrder(candidates.filter((value): value is string => Boolean(value)));
+}
+
+function resolveDarwinSystemPathDirs(env?: Record<string, string | undefined>): string[] {
+  const dirs: string[] = [];
+  for (const prefix of resolveHomebrewPrefixes(env)) {
+    dirs.push(path.posix.join(prefix, "opt", "node@24", "bin"));
+    dirs.push(path.posix.join(prefix, "opt", "node@22", "bin"));
+    dirs.push(path.posix.join(prefix, "opt", "node", "bin"));
+    dirs.push(path.posix.join(prefix, "bin"));
+  }
+  dirs.push("/usr/bin", "/bin");
+  return uniquePreserveOrder(dirs);
+}
+
+function resolveSystemPathDirs(
+  platform: NodeJS.Platform,
+  env?: Record<string, string | undefined>,
+): string[] {
   if (platform === "darwin") {
-    return ["/opt/homebrew/bin", "/usr/local/bin", "/usr/bin", "/bin"];
+    return resolveDarwinSystemPathDirs(env);
   }
   if (platform === "linux") {
     return ["/usr/local/bin", "/usr/bin", "/bin"];
@@ -190,7 +223,7 @@ export function getMinimalServicePathParts(options: MinimalServicePathOptions = 
 
   const parts: string[] = [];
   const extraDirs = options.extraDirs ?? [];
-  const systemDirs = resolveSystemPathDirs(platform);
+  const systemDirs = resolveSystemPathDirs(platform, options.env);
 
   // Add user bin directories for version managers (npm global, nvm, fnm, volta, etc.)
   const userDirs =
