@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import fsSync from "node:fs";
+import type { Agent as HttpsAgent } from "node:https";
 import {
   DisconnectReason,
   fetchLatestBaileysVersion,
@@ -38,7 +39,7 @@ let credsSaveQueue: Promise<void> = Promise.resolve();
 
 type WaProxyAgents = {
   agent?: HttpsProxyAgent<string>;
-  fetchAgent?: EnvHttpProxyAgent;
+  fetchAgent?: HttpsAgent;
 };
 
 let cachedProxyAgents: WaProxyAgents | null = null;
@@ -89,7 +90,7 @@ function resolveWaProxyAgents(): WaProxyAgents {
   try {
     cachedProxyAgents = {
       agent: new HttpsProxyAgent(proxyUrl),
-      fetchAgent: new EnvHttpProxyAgent(),
+      fetchAgent: coerceBaileysFetchAgent(new EnvHttpProxyAgent()),
     };
     cachedProxyEnvKey = envKey;
   } catch (err) {
@@ -102,6 +103,10 @@ function resolveWaProxyAgents(): WaProxyAgents {
   }
 
   return cachedProxyAgents;
+}
+
+function coerceBaileysFetchAgent(fetchAgent: EnvHttpProxyAgent): HttpsAgent {
+  return fetchAgent as unknown as HttpsAgent;
 }
 
 function enqueueSaveCreds(
