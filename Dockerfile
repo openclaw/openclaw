@@ -118,6 +118,12 @@ COPY --from=build --chown=node:node /app/extensions ./extensions
 COPY --from=build --chown=node:node /app/skills ./skills
 COPY --from=build --chown=node:node /app/docs ./docs
 
+# Docker live-test runners invoke `pnpm` inside the runtime image.
+# Activate the exact pinned package manager now so the container does not
+# rely on a first-run network fetch or missing shims under the non-root user.
+RUN corepack enable && \
+    corepack prepare "$(node -p "require('./package.json').packageManager")" --activate
+
 # Install additional system packages needed by your skills or extensions.
 # Example: docker build --build-arg OPENCLAW_DOCKER_APT_PACKAGES="python3 wget" .
 ARG OPENCLAW_DOCKER_APT_PACKAGES=""
