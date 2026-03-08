@@ -91,6 +91,10 @@ describe("gateway talk.config", () => {
             providers?: {
               elevenlabs?: { voiceId?: string; apiKey?: string };
             };
+            resolved?: {
+              provider?: string;
+              config?: { voiceId?: string; apiKey?: string };
+            };
             apiKey?: string;
             voiceId?: string;
             silenceTimeoutMs?: number;
@@ -103,6 +107,9 @@ describe("gateway talk.config", () => {
       expect(res.payload?.config?.talk?.providers?.elevenlabs?.apiKey).toBe(
         "__OPENCLAW_REDACTED__",
       );
+      expect(res.payload?.config?.talk?.resolved?.provider).toBe("elevenlabs");
+      expect(res.payload?.config?.talk?.resolved?.config?.voiceId).toBe("voice-123");
+      expect(res.payload?.config?.talk?.resolved?.config?.apiKey).toBe("__OPENCLAW_REDACTED__");
       expect(res.payload?.config?.talk?.voiceId).toBe("voice-123");
       expect(res.payload?.config?.talk?.apiKey).toBe("__OPENCLAW_REDACTED__");
       expect(res.payload?.config?.talk?.silenceTimeoutMs).toBe(1500);
@@ -156,6 +163,10 @@ describe("gateway talk.config", () => {
             providers?: {
               elevenlabs?: { voiceId?: string };
             };
+            resolved?: {
+              provider?: string;
+              config?: { voiceId?: string };
+            };
             voiceId?: string;
           };
         };
@@ -163,6 +174,8 @@ describe("gateway talk.config", () => {
       expect(res.ok).toBe(true);
       expect(res.payload?.config?.talk?.provider).toBe("elevenlabs");
       expect(res.payload?.config?.talk?.providers?.elevenlabs?.voiceId).toBe("voice-normalized");
+      expect(res.payload?.config?.talk?.resolved?.provider).toBe("elevenlabs");
+      expect(res.payload?.config?.talk?.resolved?.config?.voiceId).toBe("voice-normalized");
       expect(res.payload?.config?.talk?.voiceId).toBe("voice-normalized");
     });
   });
