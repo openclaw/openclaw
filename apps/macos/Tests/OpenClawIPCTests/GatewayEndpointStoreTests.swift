@@ -216,6 +216,20 @@ import Testing
         #expect(url.absoluteString == "https://gateway.example:443/remote-ui/")
     }
 
+    @Test func dashboardURLUsesFragmentTokenAndOmitsPassword() throws {
+        let config: GatewayConnection.Config = try (
+            url: #require(URL(string: "ws://127.0.0.1:18789")),
+            token: "abc123",
+            password: "sekret") // pragma: allowlist secret
+
+        let url = try GatewayEndpointStore.dashboardURL(
+            for: config,
+            mode: .local,
+            localBasePath: "/control")
+        #expect(url.absoluteString == "http://127.0.0.1:18789/control/#token=abc123")
+        #expect(url.query == nil)
+    }
+
     @Test func normalizeGatewayUrlAddsDefaultPortForLoopbackWs() {
         let url = GatewayRemoteConfig.normalizeGatewayUrl("ws://127.0.0.1")
         #expect(url?.port == 18789)
