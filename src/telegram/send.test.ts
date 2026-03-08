@@ -1451,6 +1451,27 @@ describe("shared send behaviors", () => {
     }
   });
 
+  it("omits reply_to_message_id when replyToMessageId is non-numeric", async () => {
+    const chatId = "123";
+    const sendMessage = vi.fn().mockResolvedValue({
+      message_id: 56,
+      chat: { id: chatId },
+    });
+    const api = { sendMessage } as unknown as {
+      sendMessage: typeof sendMessage;
+    };
+
+    await sendMessageTelegram(chatId, "reply text", {
+      token: "tok",
+      api,
+      replyToMessageId: Number.NaN,
+    });
+
+    expect(sendMessage).toHaveBeenCalledWith(chatId, "reply text", {
+      parse_mode: "HTML",
+    });
+  });
+
   it("wraps chat-not-found with actionable context", async () => {
     const cases = [
       {
