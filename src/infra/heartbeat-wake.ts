@@ -43,6 +43,13 @@ let timer: NodeJS.Timeout | null = null;
 let timerDueAt: number | null = null;
 let timerKind: WakeTimerKind | null = null;
 
+// Circuit breaker: track consecutive failures to prevent retry storms.
+// After MAX_CONSECUTIVE_FAILURES, stop retrying until a successful run or
+// a new handler registration resets the counter.
+let consecutiveFailures = 0;
+const MAX_CONSECUTIVE_FAILURES = 5;
+const MAX_RETRY_BACKOFF_MS = 60_000;
+
 const DEFAULT_COALESCE_MS = 250;
 const DEFAULT_RETRY_MS = 1_000;
 const REASON_PRIORITY = {
@@ -64,6 +71,12 @@ function resolveReasonPriority(reason: string): number {
     return REASON_PRIORITY.ACTION;
   }
   return REASON_PRIORITY.DEFAULT;
+}
+
+/** Exponential backoff capped at MAX_RETRY_BACKOFF_MS. */
+function computeRetryBackoffMs(failures: number): number {
+  // 1s, 2s, 4s, 8s, 16s, 32s, 60s, 60s, ...
+  return Math.min(DEFAULT_RETRY_MS * Math.pow(2, Math.max(0, failures - 1)), MAX_RETRY_BACKOFF_MS);
 }
 
 function normalizeWakeReason(reason?: string): string {
@@ -152,6 +165,14 @@ function schedule(coalesceMs: number, kind: WakeTimerKind = "normal") {
       return;
     }
 
+    // Circuit breaker: if too many consecutive failures, drop pending wakes
+    // instead of hammering the handler. The breaker resets on the next
+    // successful run or when a new handler is registered (lifecycle restart).
+    if (consecutiveFailures >= MAX_CONSECUTIVE_FAILURES) {
+      pendingWakes.clear();
+      return;
+    }
+
     const pendingBatch = Array.from(pendingWakes.values());
     pendingWakes.clear();
     running = true;
@@ -163,7 +184,20 @@ function schedule(coalesceMs: number, kind: WakeTimerKind = "normal") {
           ...(pendingWake.sessionKey ? { sessionKey: pendingWake.sessionKey } : {}),
         };
         const res = await active(wakeOpts);
-        if (res.status === "skipped" && res.reason === "requests-in-flight") {
+        if (res.status === "failed") {
+          consecutiveFailures += 1;
+          if (consecutiveFailures >= MAX_CONSECUTIVE_FAILURES) {
+            // Trip the breaker — stop retrying this batch.
+            break;
+          }
+          const backoffMs = computeRetryBackoffMs(consecutiveFailures);
+          queuePendingWakeReason({
+            reason: pendingWake.reason ?? "retry",
+            agentId: pendingWake.agentId,
+            sessionKey: pendingWake.sessionKey,
+          });
+          schedule(backoffMs, "retry");
+        } else if (res.status === "skipped" && res.reason === "requests-in-flight") {
           // The main lane is busy; retry this wake target soon.
           queuePendingWakeReason({
             reason: pendingWake.reason ?? "retry",
@@ -171,18 +205,25 @@ function schedule(coalesceMs: number, kind: WakeTimerKind = "normal") {
             sessionKey: pendingWake.sessionKey,
           });
           schedule(DEFAULT_RETRY_MS, "retry");
+        } else {
+          // Success or benign skip — reset the failure streak.
+          consecutiveFailures = 0;
         }
       }
     } catch {
-      // Error is already logged by the heartbeat runner; schedule a retry.
-      for (const pendingWake of pendingBatch) {
-        queuePendingWakeReason({
-          reason: pendingWake.reason ?? "retry",
-          agentId: pendingWake.agentId,
-          sessionKey: pendingWake.sessionKey,
-        });
+      // Error is already logged by the heartbeat runner; apply backoff.
+      consecutiveFailures += 1;
+      if (consecutiveFailures < MAX_CONSECUTIVE_FAILURES) {
+        const backoffMs = computeRetryBackoffMs(consecutiveFailures);
+        for (const pendingWake of pendingBatch) {
+          queuePendingWakeReason({
+            reason: pendingWake.reason ?? "retry",
+            agentId: pendingWake.agentId,
+            sessionKey: pendingWake.sessionKey,
+          });
+        }
+        schedule(backoffMs, "retry");
       }
-      schedule(DEFAULT_RETRY_MS, "retry");
     } finally {
       running = false;
       if (pendingWakes.size > 0 || scheduled) {
@@ -219,6 +260,8 @@ export function setHeartbeatWakeHandler(next: HeartbeatWakeHandler | null): () =
     // `scheduled === true` can cause spurious immediate re-runs.
     running = false;
     scheduled = false;
+    // Reset the circuit breaker so a fresh lifecycle starts clean.
+    consecutiveFailures = 0;
   }
   if (handler && pendingWakes.size > 0) {
     schedule(DEFAULT_COALESCE_MS, "normal");
@@ -267,6 +310,7 @@ export function resetHeartbeatWakeStateForTests() {
   pendingWakes.clear();
   scheduled = false;
   running = false;
+  consecutiveFailures = 0;
   handlerGeneration += 1;
   handler = null;
 }

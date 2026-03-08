@@ -1093,6 +1093,7 @@ export function startHeartbeatRunner(opts: {
     // Track requests-in-flight so we can skip re-arm in finally — the wake
     // layer handles retry for this case (DEFAULT_RETRY_MS = 1 s).
     let requestsInFlight = false;
+    let lastFailedReason: string | undefined;
 
     try {
       if (requestedSessionKey || requestedAgentId) {
@@ -1142,7 +1143,11 @@ export function startHeartbeatRunner(opts: {
           const errMsg = formatErrorMessage(err);
           log.error(`heartbeat runner: runOnce threw unexpectedly: ${errMsg}`, { error: errMsg });
           advanceAgentSchedule(agent, now);
+          lastFailedReason = errMsg;
           continue;
+        }
+        if (res.status === "failed") {
+          lastFailedReason = res.reason;
         }
         if (res.status === "skipped" && res.reason === "requests-in-flight") {
           // Do not advance the schedule — the main lane is busy and the wake
@@ -1160,6 +1165,13 @@ export function startHeartbeatRunner(opts: {
         }
       }
 
+      // Propagate failure status so the wake layer's circuit breaker can track
+      // complete outages. If any agent succeeded (ran=true), we return "ran"
+      // even if others failed; the circuit breaker is designed to trip only on
+      // total failure, not partial degradation.
+      if (lastFailedReason && !ran) {
+        return { status: "failed", reason: lastFailedReason };
+      }
       if (ran) {
         return { status: "ran", durationMs: Date.now() - startedAt };
       }
