@@ -1122,6 +1122,46 @@ describe("applyMediaUnderstanding", () => {
     expect(ctx.Body).toContain("中文内容");
   });
 
+  it("caps extracted file blocks even when OpenResponses file maxChars is raised", async () => {
+    const tailMarker = "TAIL_MARKER_SHOULD_NOT_APPEAR";
+    const content = `${"A".repeat(210_000)}\n${tailMarker}`;
+    const filePath = await createTempMediaFile({
+      fileName: "huge.txt",
+      content,
+    });
+
+    const cfg: OpenClawConfig = {
+      ...createMediaDisabledConfig(),
+      gateway: {
+        http: {
+          endpoints: {
+            responses: {
+              files: {
+                // Simulate operators raising the OpenResponses input-file cap for API usage.
+                // Inbound attachment extraction must stay bounded to avoid bricking sessions (#14231).
+                maxChars: 500_000,
+              },
+            },
+          },
+        },
+      },
+    };
+
+    const ctx: MsgContext = {
+      Body: "<media:file>",
+      MediaPath: filePath,
+      MediaType: "text/plain",
+    };
+
+    const result = await applyMediaUnderstanding({ ctx, cfg });
+    expect(result.appliedFile).toBe(true);
+    expect(ctx.Body).toContain("<file");
+    expect(ctx.Body).not.toContain(tailMarker);
+
+    const match = ctx.Body?.match(/<file[^>]*>\n([\s\S]*?)\n<\/file>/);
+    expect(match?.[1]?.length).toBe(200_000);
+  });
+
   it("skips binary application/vnd office attachments even when bytes look printable", async () => {
     // ZIP-based Office docs can have printable-leading bytes.
     const pseudoZip = Buffer.from("PK\u0003\u0004[Content_Types].xml xl/workbook.xml", "utf8");

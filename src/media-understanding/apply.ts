@@ -4,6 +4,7 @@ import type { MsgContext } from "../auto-reply/templating.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { logVerbose, shouldLogVerbose } from "../globals.js";
 import {
+  DEFAULT_INPUT_FILE_MAX_CHARS,
   extractFileContentFromSource,
   normalizeMimeType,
   resolveInputFileLimits,
@@ -102,8 +103,14 @@ function sanitizeMimeType(value?: string): string | undefined {
 function resolveFileLimits(cfg: OpenClawConfig) {
   const files = cfg.gateway?.http?.endpoints?.responses?.files;
   const allowedMimesConfigured = Boolean(files?.allowedMimes?.length);
+  const base = resolveInputFileLimits(files);
   return {
-    ...resolveInputFileLimits(files),
+    ...base,
+    // Inbound attachment extraction shares the OpenResponses input-file config for
+    // MIME allowlists/timeouts, but should stay fail-safe even when operators raise
+    // OpenResponses `maxChars` for API use. Without a conservative cap, a single
+    // extracted attachment can exceed model context and brick a session (#14231).
+    maxChars: Math.min(base.maxChars, DEFAULT_INPUT_FILE_MAX_CHARS),
     allowedMimesConfigured,
   };
 }
