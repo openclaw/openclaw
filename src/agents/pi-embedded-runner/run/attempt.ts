@@ -3010,6 +3010,12 @@ export async function runEmbeddedAttempt(
                 // Truncate to original length to prevent plugins from expanding
                 // the response beyond what was actually produced in this run.
                 const bounded = emitResult.allContent.slice(0, assistantTexts.length);
+                if (bounded.length === 0) {
+                  // Empty allContent = plugin removed all content. Treat as
+                  // blocked to prevent lastAssistant fallback from delivering
+                  // a stale prior-turn reply.
+                  responseEmitBlocked = true;
+                }
                 assistantTexts.splice(0, assistantTexts.length, ...bounded);
               } else if (emitResult.content !== undefined) {
                 // Single last-message modification (backward-compatible).
