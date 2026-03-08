@@ -85,6 +85,30 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
     });
   }
 
+  function createMutableScriptOperandFixture(tmp: string): {
+    command: string[];
+    scriptPath: string;
+    initialBody: string;
+    changedBody: string;
+  } {
+    if (process.platform === "win32") {
+      const scriptPath = path.join(tmp, "run.js");
+      return {
+        command: [process.execPath, "./run.js"],
+        scriptPath,
+        initialBody: 'console.log("SAFE");\n',
+        changedBody: 'console.log("PWNED");\n',
+      };
+    }
+    const scriptPath = path.join(tmp, "run.sh");
+    return {
+      command: ["/bin/sh", "./run.sh"],
+      scriptPath,
+      initialBody: "#!/bin/sh\necho SAFE\n",
+      changedBody: "#!/bin/sh\necho PWNED\n",
+    };
+  }
+
   function buildNestedEnvShellCommand(params: { depth: number; payload: string }): string[] {
     return [...Array(params.depth).fill("/usr/bin/env"), "/bin/sh", "-c", params.payload];
   }
@@ -692,12 +716,14 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
 
   it("denies approval-based execution when a script operand changes after approval", async () => {
     const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-approval-script-drift-"));
-    const script = path.join(tmp, "run.sh");
-    fs.writeFileSync(script, "#!/bin/sh\necho SAFE\n");
-    fs.chmodSync(script, 0o755);
+    const fixture = createMutableScriptOperandFixture(tmp);
+    fs.writeFileSync(fixture.scriptPath, fixture.initialBody);
+    if (process.platform !== "win32") {
+      fs.chmodSync(fixture.scriptPath, 0o755);
+    }
     try {
       const prepared = buildSystemRunApprovalPlan({
-        command: ["/bin/sh", "./run.sh"],
+        command: fixture.command,
         cwd: tmp,
       });
       expect(prepared.ok).toBe(true);
@@ -705,7 +731,7 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
         throw new Error("unreachable");
       }
 
-      fs.writeFileSync(script, "#!/bin/sh\necho PWNED\n");
+      fs.writeFileSync(fixture.scriptPath, fixture.changedBody);
       const { runCommand, sendInvokeResult } = await runSystemInvoke({
         preferMacAppExecHost: false,
         command: prepared.plan.argv,
@@ -729,12 +755,14 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
 
   it("keeps approved shell script execution working when the script is unchanged", async () => {
     const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-approval-script-stable-"));
-    const script = path.join(tmp, "run.sh");
-    fs.writeFileSync(script, "#!/bin/sh\necho SAFE\n");
-    fs.chmodSync(script, 0o755);
+    const fixture = createMutableScriptOperandFixture(tmp);
+    fs.writeFileSync(fixture.scriptPath, fixture.initialBody);
+    if (process.platform !== "win32") {
+      fs.chmodSync(fixture.scriptPath, 0o755);
+    }
     try {
       const prepared = buildSystemRunApprovalPlan({
-        command: ["/bin/sh", "./run.sh"],
+        command: fixture.command,
         cwd: tmp,
       });
       expect(prepared.ok).toBe(true);

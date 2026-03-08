@@ -109,6 +109,7 @@ Notes:
 
 - `gateway status` resolves configured auth SecretRefs for probe auth when possible.
 - If a required auth SecretRef is unresolved in this command path, probe auth can fail; pass `--token`/`--password` explicitly or resolve the secret source first.
+- On Linux systemd installs, service auth drift checks read both `Environment=` and `EnvironmentFile=` values from the unit (including `%h`, quoted paths, multiple files, and optional `-` files).
 
 ### `gateway probe`
 

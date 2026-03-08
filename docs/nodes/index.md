@@ -81,8 +81,10 @@ openclaw node run --host 127.0.0.1 --port 18790 --display-name "Build Node"
 
 Notes:
 
-- The token is `gateway.auth.token` from the gateway config (`~/.openclaw/openclaw.json` on the gateway host).
-- `openclaw node run` reads `OPENCLAW_GATEWAY_TOKEN` for auth.
+- `openclaw node run` supports token or password auth.
+- Env vars are preferred: `OPENCLAW_GATEWAY_TOKEN` / `OPENCLAW_GATEWAY_PASSWORD`.
+- Config fallback is `gateway.auth.token` / `gateway.auth.password`; in remote mode, `gateway.remote.token` / `gateway.remote.password` are also eligible.
+- Legacy `CLAWDBOT_GATEWAY_*` env vars are intentionally ignored by node-host auth resolution.
 
 ### Start a node host (service)
 

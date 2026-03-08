@@ -41,6 +41,7 @@ openclaw daemon uninstall
 Notes:
 
 - `status` resolves configured auth SecretRefs for probe auth when possible.
+- On Linux systemd installs, `status` token-drift checks include both `Environment=` and `EnvironmentFile=` unit sources.
 - When token auth requires a token and `gateway.auth.token` is SecretRef-managed, `install` validates that the SecretRef is resolvable but does not persist the resolved token into service environment metadata.
 - If token auth requires a token and the configured token SecretRef is unresolved, install fails closed.
 - If both `gateway.auth.token` and `gateway.auth.password` are configured and `gateway.auth.mode` is unset, install is blocked until mode is set explicitly.
