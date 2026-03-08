@@ -141,19 +141,16 @@ the scanner keeps getting better
 
 **Tool:** twclaw (search, like, reply, retweet) | **Log:** `data/daily/YYYY-MM-DD/engagement_actions.md`
 
-### Search Queries (rotate daily)
+### Search Query
 
-- `"ERC-8004"` — direct mentions of the standard
-- `"AI agent" onchain` — builders talking about onchain agents
-- `"agent registry"` — people discussing agent registries
-- `"autonomous agent" ethereum OR base OR polygon` — chain-specific agent talk
-- `from:@VittoStack OR from:@DavideCrapis OR from:@ethereumfndn` — key accounts
+Always use: `"ERC-8004"` — only engage with tweets about the ERC-8004 standard.
+No engagement on weekends (save API quota).
 
 ### Flow
 
-1. Search tweets: `twclaw search "query" --popular -n 10 --json`
-2. Filter results: pick tweets that are relevant to ERC-8004, onchain agents, or trust/verification
-3. Propose up to 5 interactions to Gilberts via Telegram, with format:
+1. Run ONE search: `twclaw search "ERC-8004" --popular -n 10 --json`
+2. Filter: pick tweets relevant to ERC-8004, onchain agents, or trust/verification
+3. Propose up to 3 interactions to Gilberts via Telegram, with format:
    - Tweet URL + author + 1-line summary
    - Proposed action: **like**, **reply** (include draft text), or **retweet**
 4. **Wait for Gilberts approval** — do NOT execute any interaction without approval
@@ -178,9 +175,17 @@ the scanner keeps getting better
 Monitor these accounts for engagement opportunities:
 @VittoStack, @marco_derossi, @DavideCrapis, @ethereumfndn, @virtuals_io, @autonolas, @PhalaNetwork, @ETHPanda_Org, @austingriffith, @marvey_crypton
 
-### Rules
+### API Budget Rules
 
-- MAX 5 interactions per day (likes + replies + retweets combined) to avoid looking spammy
+- **1 search call per day** (never more). Use `-n 5` to limit results
+- **MAX 3 interactions per day** (likes + replies + retweets combined)
+- **No engagement on weekends** (Saturday/Sunday) — save API quota
+- **Never call `twclaw mentions`** or `twclaw home` automatically — only when Gilberts asks
+- **Never call `twclaw user-tweets`** automatically — only when Gilberts asks
+- Total daily Twitter API calls budget: 1 search + up to 3 actions = **max 4 calls/day**
+
+### General Rules
+
 - ALL interactions require Gilberts approval first — no exceptions
 - Do NOT engage with spam, scams, or controversial content
 - Do NOT engage with competitor scanner accounts
