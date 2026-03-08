@@ -13,6 +13,7 @@ export type EmbeddedPiAgentMeta = {
     cacheRead?: number;
     cacheWrite?: number;
     total?: number;
+    callCount?: number;
   };
   /**
    * Usage from the last individual API call (not accumulated across tool-use

@@ -32,6 +32,8 @@ export type NormalizedUsage = {
   cacheRead?: number;
   cacheWrite?: number;
   total?: number;
+  /** Number of LLM API calls made during the turn. */
+  callCount?: number;
 };
 
 export type AssistantUsageSnapshot = {

@@ -14,6 +14,7 @@ vi.mock("../../agents/agent-scope.js", () => ({
 const {
   buildEmbeddedRunBaseParams,
   buildEmbeddedRunContexts,
+  formatResponseUsageLine,
   resolveModelFallbackOptions,
   resolveProviderScopedAuthProfile,
 } = await import("./agent-runner-utils.js");
@@ -153,6 +154,46 @@ describe("agent-runner-utils", () => {
       senderName: undefined,
       senderUsername: undefined,
       senderE164: undefined,
+    });
+  });
+
+  describe("formatResponseUsageLine", () => {
+    it("returns null when usage is undefined", () => {
+      expect(formatResponseUsageLine({ showCost: false })).toBeNull();
+    });
+
+    it("formats basic usage without call count for single call", () => {
+      const result = formatResponseUsageLine({
+        usage: { input: 1000, output: 200, callCount: 1 },
+        showCost: false,
+      });
+      expect(result).toBe("Usage: 1.0k in / 200 out");
+    });
+
+    it("includes call count when multiple calls are made", () => {
+      const result = formatResponseUsageLine({
+        usage: { input: 60000, output: 150, callCount: 3 },
+        showCost: false,
+      });
+      expect(result).toBe("Usage: 60k in / 150 out (3 calls)");
+    });
+
+    it("omits call count when callCount is undefined", () => {
+      const result = formatResponseUsageLine({
+        usage: { input: 5000, output: 100 },
+        showCost: false,
+      });
+      expect(result).toBe("Usage: 5.0k in / 100 out");
+    });
+
+    it("includes call count before cost suffix", () => {
+      const result = formatResponseUsageLine({
+        usage: { input: 10000, output: 500, callCount: 2 },
+        showCost: true,
+        costConfig: { input: 3, output: 15, cacheRead: 0, cacheWrite: 0 },
+      });
+      expect(result).toContain("(2 calls)");
+      expect(result).toContain("est $");
     });
   });
 

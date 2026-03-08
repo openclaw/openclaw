@@ -85,6 +85,7 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     cacheRead: 0,
     cacheWrite: 0,
     total: 0,
+    callCount: 0,
   };
   let compactionCount = 0;
 
@@ -281,6 +282,7 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
       usage.total ??
       (usage.input ?? 0) + (usage.output ?? 0) + (usage.cacheRead ?? 0) + (usage.cacheWrite ?? 0);
     usageTotals.total += usageTotal;
+    usageTotals.callCount += 1;
   };
   const getUsageTotals = () => {
     const hasUsage =
@@ -300,6 +302,7 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
       cacheRead: usageTotals.cacheRead || undefined,
       cacheWrite: usageTotals.cacheWrite || undefined,
       total: usageTotals.total || derivedTotal || undefined,
+      callCount: usageTotals.callCount > 0 ? usageTotals.callCount : undefined,
     };
   };
   const incrementCompactionCount = () => {
