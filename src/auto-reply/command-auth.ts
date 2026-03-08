@@ -3,6 +3,7 @@ import { getChannelDock, listChannelDocks } from "../channels/dock.js";
 import type { ChannelId } from "../channels/plugins/types.js";
 import { normalizeAnyChannelId } from "../channels/registry.js";
 import type { OpenClawConfig } from "../config/config.js";
+import { normalizeStringEntries } from "../shared/string-normalization.js";
 import {
   INTERNAL_MESSAGE_CHANNEL,
   isInternalMessageChannel,
@@ -85,7 +86,7 @@ function formatAllowFromList(params: {
   if (dock?.config?.formatAllowFrom) {
     return dock.config.formatAllowFrom({ cfg, accountId, allowFrom });
   }
-  return allowFrom.map((entry) => String(entry).trim()).filter(Boolean);
+  return normalizeStringEntries(allowFrom);
 }
 
 function normalizeAllowFromEntry(params: {

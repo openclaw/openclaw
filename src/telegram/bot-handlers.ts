@@ -48,6 +48,7 @@ import {
 } from "./bot-updates.js";
 import { resolveMedia } from "./bot/delivery.js";
 import {
+  getTelegramTextParts,
   buildTelegramGroupPeerId,
   buildTelegramParentPeer,
   resolveTelegramForumThreadId,
@@ -262,8 +263,21 @@ export const registerTelegramHandlers = ({
         replyMedia,
       );
     },
-    onError: (err) => {
+    onError: (err, items) => {
       runtime.error?.(danger(`telegram debounce flush failed: ${String(err)}`));
+      const chatId = items[0]?.msg.chat.id;
+      if (chatId != null) {
+        const threadId = items[0]?.msg.message_thread_id;
+        void bot.api
+          .sendMessage(
+            chatId,
+            "Something went wrong while processing your message. Please try again.",
+            threadId != null ? { message_thread_id: threadId } : undefined,
+          )
+          .catch((sendErr) => {
+            logVerbose(`telegram: error fallback send failed: ${String(sendErr)}`);
+          });
+      }
     },
   });
 
@@ -995,7 +1009,7 @@ export const registerTelegramHandlers = ({
 
     // Skip sticker-only messages where the sticker was skipped (animated/video)
     // These have no media and no text content to process.
-    const hasText = Boolean((msg.text ?? msg.caption ?? "").trim());
+    const hasText = Boolean(getTelegramTextParts(msg).text.trim());
     if (msg.sticker && !media && !hasText) {
       logVerbose("telegram: skipping sticker-only message (unsupported sticker type)");
       return;
@@ -1179,7 +1193,15 @@ export const registerTelegramHandlers = ({
       // Model selection callback handler (mdl_prov, mdl_list_*, mdl_sel_*, mdl_back)
       const modelCallback = parseModelCallbackData(data);
       if (modelCallback) {
-        const modelData = await buildModelsProviderData(cfg);
+        const sessionState = resolveTelegramSessionState({
+          chatId,
+          isGroup,
+          isForum,
+          messageThreadId,
+          resolvedThreadId,
+          senderId,
+        });
+        const modelData = await buildModelsProviderData(cfg, sessionState.agentId);
         const { byProvider, providers } = modelData;
 
         const editMessageWithButtons = async (
@@ -1238,14 +1260,15 @@ export const registerTelegramHandlers = ({
           const safePage = Math.max(1, Math.min(page, totalPages));
 
           // Resolve current model from session (prefer overrides)
-          const sessionState = resolveTelegramSessionState({
+          const currentSessionState = resolveTelegramSessionState({
             chatId,
             isGroup,
             isForum,
             messageThreadId,
             resolvedThreadId,
+            senderId,
           });
-          const currentModel = sessionState.model;
+          const currentModel = currentSessionState.model;
 
           const buttons = buildModelsKeyboard({
             provider,
@@ -1259,8 +1282,8 @@ export const registerTelegramHandlers = ({
             provider,
             total: models.length,
             cfg,
-            agentDir: resolveAgentDir(cfg, sessionState.agentId),
-            sessionEntry: sessionState.sessionEntry,
+            agentDir: resolveAgentDir(cfg, currentSessionState.agentId),
+            sessionEntry: currentSessionState.sessionEntry,
           });
           await editMessageWithButtons(text, buttons);
           return;
