@@ -4,10 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { type Api, completeSimple, type Model } from "@mariozechner/pi-ai";
 import { describe, expect, it } from "vitest";
-import {
-  ANTHROPIC_SETUP_TOKEN_PREFIX,
-  validateAnthropicSetupToken,
-} from "../commands/auth-token.js";
+import { validateAnthropicSetupToken } from "../commands/auth-token.js";
 import { loadConfig } from "../config/config.js";
 import { isTruthyEnvValue } from "../infra/env.js";
 import { resolveOpenClawAgentDir } from "./agent-paths.js";
@@ -37,7 +34,7 @@ type TokenSource = {
 };
 
 function isSetupToken(value: string): boolean {
-  return value.startsWith(ANTHROPIC_SETUP_TOKEN_PREFIX);
+  return validateAnthropicSetupToken(value) === undefined;
 }
 
 function listSetupTokenProfiles(store: {
