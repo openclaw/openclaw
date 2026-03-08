@@ -54,6 +54,7 @@ export type EmbeddedRunAttemptResult = {
     actionFingerprint?: string;
   };
   didSendViaMessagingTool: boolean;
+  didSendViaTtsTool?: boolean;
   messagingToolSentTexts: string[];
   messagingToolSentMediaUrls: string[];
   messagingToolSentTargets: MessagingToolSend[];

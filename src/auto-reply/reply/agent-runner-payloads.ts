@@ -107,6 +107,7 @@ export async function buildReplyPayloads(params: {
   messagingToolSentTargets?: Parameters<
     typeof shouldSuppressMessagingToolReplies
   >[0]["messagingToolSentTargets"];
+  didSendViaTtsTool?: boolean;
   originatingChannel?: OriginatingChannelType;
   originatingTo?: string;
   accountId?: string;
@@ -216,7 +217,10 @@ export async function buildReplyPayloads(params: {
             (payload) => !params.directlySentBlockKeys!.has(createBlockReplyPayloadKey(payload)),
           )
         : mediaFilteredPayloads;
-  const replyPayloads = suppressMessagingToolReplies ? [] : filteredPayloads;
+  // The tts tool already delivers audio directly via tool-result media.
+  // Suppress follow-up assistant payloads to avoid duplicate "audio + narration" turns.
+  const replyPayloads =
+    suppressMessagingToolReplies || params.didSendViaTtsTool === true ? [] : filteredPayloads;
 
   return {
     replyPayloads,

@@ -372,6 +372,13 @@ export async function handleToolExecutionEnd(
   }
   const pendingMediaUrls = ctx.state.pendingMessagingMediaUrls.get(toolCallId) ?? [];
   ctx.state.pendingMessagingMediaUrls.delete(toolCallId);
+  if (
+    !isToolError &&
+    toolName === "tts" &&
+    filterToolResultMediaUrls(toolName, extractToolResultMediaPaths(result)).length > 0
+  ) {
+    ctx.state.didSendViaTtsTool = true;
+  }
   const startArgs =
     startData?.args && typeof startData.args === "object"
       ? (startData.args as Record<string, unknown>)

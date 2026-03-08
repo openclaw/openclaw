@@ -207,6 +207,23 @@ describe("handleToolExecutionEnd media emission", () => {
     expect(onToolResult).not.toHaveBeenCalled();
   });
 
+  it("marks successful tts tool media sends for reply suppression", async () => {
+    const onToolResult = vi.fn();
+    const ctx = createMockContext({ shouldEmitToolOutput: false, onToolResult });
+
+    await handleToolExecutionEnd(ctx, {
+      type: "tool_execution_end",
+      toolName: "tts",
+      toolCallId: "tc-1",
+      isError: false,
+      result: {
+        content: [{ type: "text", text: "[[audio_as_voice]]\nMEDIA:/tmp/voice.opus" }],
+      },
+    });
+
+    expect(ctx.state.didSendViaTtsTool).toBe(true);
+  });
+
   it("does NOT emit media for malformed MEDIA:-prefixed prose", async () => {
     const onToolResult = vi.fn();
     const ctx = createMockContext({ shouldEmitToolOutput: false, onToolResult });

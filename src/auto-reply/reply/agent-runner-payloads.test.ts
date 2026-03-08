@@ -191,4 +191,14 @@ describe("buildReplyPayloads media filter integration", () => {
     expect(replyPayloads).toHaveLength(1);
     expect(replyPayloads[0]?.text).toBe("hello world!");
   });
+
+  it("suppresses final replies when tts tool already delivered audio", async () => {
+    const { replyPayloads } = await buildReplyPayloads({
+      ...baseParams,
+      payloads: [{ text: "Here is your voice message." }],
+      didSendViaTtsTool: true,
+    });
+
+    expect(replyPayloads).toHaveLength(0);
+  });
 });
