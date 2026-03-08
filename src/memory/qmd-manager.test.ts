@@ -2125,7 +2125,7 @@ describe("QmdMemoryManager", () => {
     const textPath = path.join(workspaceDir, "secret.txt");
     await fs.writeFile(textPath, "nope", "utf-8");
     await expect(manager.readFile({ relPath: "qmd/workspace-main/secret.txt" })).rejects.toThrow(
-      "path required",
+      "only .md files are supported",
     );
 
     const target = path.join(workspaceDir, "target.md");
@@ -2133,7 +2133,7 @@ describe("QmdMemoryManager", () => {
     const link = path.join(workspaceDir, "link.md");
     await fs.symlink(target, link);
     await expect(manager.readFile({ relPath: "qmd/workspace-main/link.md" })).rejects.toThrow(
-      "path required",
+      "path must be a regular file",
     );
 
     await manager.close();
