@@ -26,6 +26,26 @@ const NODE_ROLE_METHODS = new Set([
   "skills.bins",
 ]);
 
+// Methods that mobile/desktop node apps (iOS/Android/macOS) need for their
+// built-in chat UI. Allowed for both node and operator roles.
+const NODE_ALSO_ALLOWED = new Set([
+  "health",
+  "config.get",
+  "config.schema",
+  "chat.send",
+  "chat.history",
+  "chat.abort",
+  "voicewake.get",
+  "talk.mode",
+  "talk.config",
+  "sessions.list",
+  "sessions.preview",
+  "status",
+  "node.list",
+  "tts.status",
+  "tts.providers",
+]);
+
 const METHOD_SCOPE_GROUPS: Record<OperatorScope, readonly string[]> = {
   [APPROVALS_SCOPE]: [
     "exec.approval.request",
@@ -165,6 +185,10 @@ export function isWriteMethod(method: string): boolean {
 
 export function isNodeRoleMethod(method: string): boolean {
   return NODE_ROLE_METHODS.has(method);
+}
+
+export function isNodeAlsoAllowedMethod(method: string): boolean {
+  return NODE_ALSO_ALLOWED.has(method);
 }
 
 export function isAdminOnlyMethod(method: string): boolean {
