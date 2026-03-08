@@ -16,6 +16,11 @@ import {
 } from "./constants.js";
 import { CDP_PORT_RANGE_START, getUsedPorts } from "./profiles.js";
 
+export type ProxyCredentials = {
+  username: string;
+  password: string;
+};
+
 export type ResolvedBrowserConfig = {
   enabled: boolean;
   evaluateEnabled: boolean;
@@ -36,6 +41,8 @@ export type ResolvedBrowserConfig = {
   profiles: Record<string, BrowserProfileConfig>;
   ssrfPolicy?: SsrFPolicy;
   extraArgs: string[];
+  proxy?: string;
+  proxyCredentials?: ProxyCredentials;
 };
 
 export type ResolvedBrowserProfile = {
@@ -47,6 +54,8 @@ export type ResolvedBrowserProfile = {
   color: string;
   driver: "openclaw" | "extension";
   attachOnly: boolean;
+  proxy?: string;
+  proxyCredentials?: ProxyCredentials;
 };
 
 function normalizeHexColor(raw: string | undefined) {
@@ -149,6 +158,48 @@ export function parseHttpUrl(raw: string, label: string) {
     port,
     normalized: parsed.toString().replace(/\/$/, ""),
   };
+}
+
+const PROXY_SCHEME_RE = /^(https?|socks5):\/\//i;
+
+export type ParsedProxyUrl = {
+  /** URL without credentials, suitable for --proxy-server. */
+  server: string;
+  /** Credentials extracted from the URL, if present. */
+  credentials?: ProxyCredentials;
+};
+
+export function parseProxyUrl(raw: string): ParsedProxyUrl {
+  const trimmed = raw.trim();
+  if (!PROXY_SCHEME_RE.test(trimmed)) {
+    throw new Error(
+      `Proxy URL must start with http://, https://, or socks5:// — got: ${trimmed.split("://")[0] || "(empty)"}`,
+    );
+  }
+  // Validate it parses as a URL (handles host:port validation)
+  const parsed = new URL(trimmed);
+  const port = parsed.port ? Number.parseInt(parsed.port, 10) : undefined;
+  if (port !== undefined && (Number.isNaN(port) || port <= 0 || port > 65535)) {
+    throw new Error(`Proxy URL has invalid port: ${parsed.port}`);
+  }
+
+  const hasPath = parsed.pathname !== "" && parsed.pathname !== "/";
+  if (hasPath || parsed.search || parsed.hash) {
+    throw new Error("Proxy URL must not include path, query, or hash");
+  }
+
+  // Extract credentials before stripping them from the URL.
+  // Chrome's --proxy-server does not support inline credentials.
+  const username = decodeURIComponent(parsed.username);
+  const password = decodeURIComponent(parsed.password);
+  const credentials = username || password ? { username, password } : undefined;
+
+  // Build a clean URL without credentials for --proxy-server.
+  parsed.username = "";
+  parsed.password = "";
+  const server = parsed.toString().replace(/\/$/, "");
+
+  return { server, credentials };
 }
 
 /**
@@ -277,6 +328,8 @@ export function resolveBrowserConfig(
     : [];
   const ssrfPolicy = resolveBrowserSsrFPolicy(cfg);
 
+  const parsedProxy = cfg?.proxy?.trim() ? parseProxyUrl(cfg.proxy) : undefined;
+
   return {
     enabled,
     evaluateEnabled,
@@ -297,6 +350,8 @@ export function resolveBrowserConfig(
     profiles,
     ssrfPolicy,
     extraArgs,
+    proxy: parsedProxy?.server,
+    proxyCredentials: parsedProxy?.credentials,
   };
 }
 
@@ -330,6 +385,14 @@ export function resolveProfile(
     throw new Error(`Profile "${profileName}" must define cdpPort or cdpUrl.`);
   }
 
+  const parsedProfileProxy = profile.proxy?.trim() ? parseProxyUrl(profile.proxy) : undefined;
+  const proxy = parsedProfileProxy?.server ?? resolved.proxy;
+  // Only inherit global credentials when the profile doesn't specify its own proxy.
+  // A profile proxy without credentials means no auth — don't leak global credentials.
+  const proxyCredentials = parsedProfileProxy
+    ? parsedProfileProxy.credentials
+    : resolved.proxyCredentials;
+
   return {
     name: profileName,
     cdpPort,
@@ -339,6 +402,8 @@ export function resolveProfile(
     color: profile.color,
     driver,
     attachOnly: profile.attachOnly ?? resolved.attachOnly,
+    proxy,
+    proxyCredentials,
   };
 }
 
