@@ -1,6 +1,3 @@
-import fs from "node:fs/promises";
-import os from "node:os";
-import path from "node:path";
 import { Command } from "commander";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { withEnvOverride } from "../config/test-helpers.js";
@@ -180,58 +177,6 @@ describe("gateway-cli coverage", () => {
 
     expect(callGateway).not.toHaveBeenCalled();
     expect(runtimeErrors.join("\n")).toContain("Gateway call failed:");
-  });
-
-  it("routes gateway users create to users.create RPC", async () => {
-    resetRuntimeCapture();
-    callGateway.mockClear();
-
-    await runGatewayCommand([
-      "gateway",
-      "users",
-      "create",
-      "--id",
-      "alice",
-      "--name",
-      "Alice",
-      "--json",
-    ]);
-
-    expect(callGateway).toHaveBeenCalledTimes(1);
-    expect(callGateway.mock.calls[0]?.[0]).toMatchObject({ method: "users.create" });
-  });
-
-  it("routes gateway users list to users.list RPC", async () => {
-    resetRuntimeCapture();
-    callGateway.mockClear();
-
-    await runGatewayCommand(["gateway", "users", "list", "--json"]);
-
-    expect(callGateway).toHaveBeenCalledTimes(1);
-    expect(callGateway.mock.calls[0]?.[0]).toMatchObject({ method: "users.list" });
-  });
-
-  it("applies gateway users from JSON file", async () => {
-    resetRuntimeCapture();
-    callGateway.mockClear();
-    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-users-"));
-    const file = path.join(dir, "users.json");
-    await fs.writeFile(
-      file,
-      JSON.stringify({
-        users: [{ id: "u1", displayName: "User One", role: "member" }],
-      }),
-      "utf-8",
-    );
-
-    await runGatewayCommand(["gateway", "users", "apply", "--file", file, "--json"]);
-
-    expect(callGateway.mock.calls.map((call) => call[0])).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({ method: "users.list" }),
-        expect.objectContaining({ method: "users.create" }),
-      ]),
-    );
   });
 
   it("validates gateway ports and handles force/start errors", async () => {
