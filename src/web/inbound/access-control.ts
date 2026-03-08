@@ -149,13 +149,11 @@ export async function checkInboundAccessControl(params: {
   // DM access control (secure defaults): "pairing" (default) / "allowlist" / "open" / "disabled".
   if (!params.group) {
     if (params.isFromMe && !isSamePhone) {
-      logVerbose("Skipping outbound DM (fromMe); no pairing reply needed.");
-      return {
-        allowed: false,
-        shouldMarkRead: false,
-        isSelfChat,
-        resolvedAccountId: account.accountId,
-      };
+      // Allow outbound DMs to reach the agent so it can see both sides of the
+      // conversation.  The allowlist / pairing checks below still control which
+      // contacts are monitored — this only removes the blanket block on the
+      // owner's own messages.
+      logVerbose("Including outbound DM (fromMe); passthrough to agent.");
     }
     if (access.decision === "block" && access.reason === "dmPolicy=disabled") {
       logVerbose("Blocked dm (dmPolicy: disabled)");
@@ -166,7 +164,7 @@ export async function checkInboundAccessControl(params: {
         resolvedAccountId: account.accountId,
       };
     }
-    if (access.decision === "pairing" && !isSamePhone) {
+    if (access.decision === "pairing" && !isSamePhone && !params.isFromMe) {
       const candidate = params.from;
       if (suppressPairingReply) {
         logVerbose(`Skipping pairing reply for historical DM from ${candidate}.`);
@@ -203,7 +201,7 @@ export async function checkInboundAccessControl(params: {
         resolvedAccountId: account.accountId,
       };
     }
-    if (access.decision !== "allow") {
+    if (access.decision !== "allow" && !params.isFromMe) {
       logVerbose(`Blocked unauthorized sender ${params.from} (dmPolicy=${dmPolicy})`);
       return {
         allowed: false,
