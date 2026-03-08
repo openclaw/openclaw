@@ -104,6 +104,22 @@ describe("git commit resolution", () => {
     vi.doUnmock("node:module");
   });
 
+  it("treats invalid moduleUrl inputs as a fallback hint instead of throwing", async () => {
+    const repoHead = execFileSync("git", ["rev-parse", "--short=7", "HEAD"], {
+      cwd: originalCwd,
+      encoding: "utf-8",
+    }).trim();
+
+    const { resolveCommitHash } = await import("./git-commit.js");
+
+    expect(() =>
+      resolveCommitHash({ moduleUrl: "not-a-file-url", cwd: originalCwd, env: {} }),
+    ).not.toThrow();
+    expect(resolveCommitHash({ moduleUrl: "not-a-file-url", cwd: originalCwd, env: {} })).toBe(
+      repoHead,
+    );
+  });
+
   it("does not walk out of the openclaw package into a host repo", async () => {
     const temp = await makeTempDir("git-commit-package-boundary");
     const hostRepo = path.join(temp, "host");
