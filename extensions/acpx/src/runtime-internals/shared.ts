@@ -1,10 +1,16 @@
 import type { ResolvedAcpxPluginConfig } from "../config.js";
 
+export type AcpxCodexBootstrapState = {
+  model?: string;
+  reasoningEffort?: string;
+};
+
 export type AcpxHandleState = {
   name: string;
   agent: string;
   cwd: string;
   mode: "persistent" | "oneshot";
+  codexBootstrap?: AcpxCodexBootstrapState;
   acpxRecordId?: string;
   backendSessionId?: string;
   agentSessionId?: string;

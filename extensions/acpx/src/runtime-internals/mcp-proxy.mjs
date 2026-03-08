@@ -2,62 +2,7 @@
 
 import { spawn } from "node:child_process";
 import { createInterface } from "node:readline";
-
-function splitCommandLine(value) {
-  const parts = [];
-  let current = "";
-  let quote = null;
-  let escaping = false;
-
-  for (const ch of value) {
-    if (escaping) {
-      current += ch;
-      escaping = false;
-      continue;
-    }
-    if (ch === "\\" && quote !== "'") {
-      escaping = true;
-      continue;
-    }
-    if (quote) {
-      if (ch === quote) {
-        quote = null;
-      } else {
-        current += ch;
-      }
-      continue;
-    }
-    if (ch === "'" || ch === '"') {
-      quote = ch;
-      continue;
-    }
-    if (/\s/.test(ch)) {
-      if (current.length > 0) {
-        parts.push(current);
-        current = "";
-      }
-      continue;
-    }
-    current += ch;
-  }
-
-  if (escaping) {
-    current += "\\";
-  }
-  if (quote) {
-    throw new Error("Invalid agent command: unterminated quote");
-  }
-  if (current.length > 0) {
-    parts.push(current);
-  }
-  if (parts.length === 0) {
-    throw new Error("Invalid agent command: empty command");
-  }
-  return {
-    command: parts[0],
-    args: parts.slice(1),
-  };
-}
+import { splitCommandLine } from "./split-command-line.mjs";
 
 function decodePayload(argv) {
   const payloadIndex = argv.indexOf("--payload");

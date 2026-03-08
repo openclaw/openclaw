@@ -487,6 +487,7 @@ Notes:
 - `sessions_send` waits for final completion when `timeoutSeconds > 0`.
 - Delivery/announce happens after completion and is best-effort; `status: "ok"` confirms the agent run finished, not that the announce was delivered.
 - `sessions_spawn` supports `runtime: "subagent" | "acp"` (`subagent` default). For ACP runtime behavior, see [ACP Agents](/tools/acp-agents).
+- For ACP runtime, `model` and `thinking` overrides currently apply only to `agentId: "codex"` on the `acpx` backend. Supported `thinking` values are `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, plus `none`; `adaptive` is rejected. Other ACP harnesses ignore those two fields and continue with a note.
 - For ACP runtime, `streamTo: "parent"` routes initial-run progress summaries back to the requester session as system events instead of direct child delivery.
 - `sessions_spawn` starts a sub-agent run and posts an announce reply back to the requester chat.
   - Supports one-shot mode (`mode: "run"`) and persistent thread-bound mode (`mode: "session"` with `thread: true`).
