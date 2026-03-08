@@ -6,6 +6,7 @@ import {
 import { applyBrowserProxyPaths, persistBrowserProxyFiles } from "../../browser/proxy-files.js";
 import { createBrowserRouteDispatcher } from "../../browser/routes/dispatcher.js";
 import { loadConfig } from "../../config/config.js";
+import { withTimeout } from "../../node-host/with-timeout.js";
 import { isNodeCommandAllowed, resolveNodeCommandAllowlist } from "../node-command-policy.js";
 import type { NodeSession } from "../node-registry.js";
 import { ErrorCodes, errorShape } from "../protocol/index.js";
@@ -275,12 +276,24 @@ export const browserHandlers: GatewayRequestHandlers = {
       return;
     }
 
-    const result = await dispatcher.dispatch({
-      method: methodRaw,
-      path,
-      query,
-      body,
-    });
+    let result;
+    try {
+      result = await withTimeout(
+        async (signal) =>
+          await dispatcher.dispatch({
+            method: methodRaw,
+            path,
+            query,
+            body,
+            signal,
+          }),
+        timeoutMs,
+        "browser request",
+      );
+    } catch (err) {
+      respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, String(err)));
+      return;
+    }
 
     if (result.status >= 400) {
       const message =
