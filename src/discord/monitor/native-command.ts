@@ -374,6 +374,17 @@ function buildDiscordModelPickerNoticePayload(message: string): { components: Co
   };
 }
 
+function resolveActiveDiscordCommandConfig(params: {
+  cfg: ReturnType<typeof loadConfig>;
+  discordConfig: DiscordConfig;
+}): { cfg: ReturnType<typeof loadConfig>; discordConfig: DiscordConfig } {
+  const freshCfg = loadConfig();
+  return {
+    cfg: freshCfg,
+    discordConfig: freshCfg.channels?.discord ?? params.discordConfig,
+  };
+}
+
 async function resolveDiscordModelPickerRoute(params: {
   interaction: CommandInteraction | ButtonInteraction | StringSelectMenuInteraction;
   cfg: ReturnType<typeof loadConfig>;
@@ -409,9 +420,8 @@ async function resolveDiscordModelPickerRoute(params: {
     threadParentId = parentInfo.id;
   }
 
-  const freshCfg = loadConfig();
   const route = resolveAgentRoute({
-    cfg: freshCfg,
+    cfg: params.cfg,
     channel: "discord",
     accountId,
     guildId: interaction.guild?.id ?? undefined,
@@ -473,21 +483,26 @@ function resolveDiscordModelPickerCurrentModel(params: {
 async function replyWithDiscordModelPickerProviders(params: {
   interaction: CommandInteraction | ButtonInteraction | StringSelectMenuInteraction;
   cfg: ReturnType<typeof loadConfig>;
+  discordConfig: DiscordConfig;
   command: DiscordModelPickerCommandContext;
   userId: string;
   accountId: string;
   threadBindings: ThreadBindingManager;
   preferFollowUp: boolean;
 }) {
-  const data = await loadDiscordModelPickerData(params.cfg);
+  const { cfg: activeCfg } = resolveActiveDiscordCommandConfig({
+    cfg: params.cfg,
+    discordConfig: params.discordConfig,
+  });
+  const data = await loadDiscordModelPickerData(activeCfg);
   const route = await resolveDiscordModelPickerRoute({
     interaction: params.interaction,
-    cfg: params.cfg,
+    cfg: activeCfg,
     accountId: params.accountId,
     threadBindings: params.threadBindings,
   });
   const currentModel = resolveDiscordModelPickerCurrentModel({
-    cfg: params.cfg,
+    cfg: activeCfg,
     route,
     data,
   });
@@ -640,15 +655,19 @@ async function handleDiscordModelPickerInteraction(
     return;
   }
 
-  const pickerData = await loadDiscordModelPickerData(ctx.cfg);
+  const { cfg: activeCfg, discordConfig: activeDiscordConfig } = resolveActiveDiscordCommandConfig({
+    cfg: ctx.cfg,
+    discordConfig: ctx.discordConfig,
+  });
+  const pickerData = await loadDiscordModelPickerData(activeCfg);
   const route = await resolveDiscordModelPickerRoute({
     interaction,
-    cfg: ctx.cfg,
+    cfg: activeCfg,
     accountId: ctx.accountId,
     threadBindings: ctx.threadBindings,
   });
   const currentModelRef = resolveDiscordModelPickerCurrentModel({
-    cfg: ctx.cfg,
+    cfg: activeCfg,
     route,
     data: pickerData,
   });
@@ -865,8 +884,8 @@ async function handleDiscordModelPickerInteraction(
           prompt: selectionCommand.prompt,
           command: selectionCommand.command,
           commandArgs: selectionCommand.args,
-          cfg: ctx.cfg,
-          discordConfig: ctx.discordConfig,
+          cfg: activeCfg,
+          discordConfig: activeDiscordConfig,
           accountId: ctx.accountId,
           sessionPrefix: ctx.sessionPrefix,
           preferFollowUp: true,
@@ -900,7 +919,7 @@ async function handleDiscordModelPickerInteraction(
     }
 
     const effectiveModelRef = resolveDiscordModelPickerCurrentModel({
-      cfg: ctx.cfg,
+      cfg: activeCfg,
       route,
       data: pickerData,
     });
@@ -1256,6 +1275,10 @@ async function dispatchDiscordCommandInteraction(params: {
     threadBindings,
     suppressReplies,
   } = params;
+  const { cfg: activeCfg, discordConfig: activeDiscordConfig } = resolveActiveDiscordCommandConfig({
+    cfg,
+    discordConfig,
+  });
   const respond = async (content: string, options?: { ephemeral?: boolean }) => {
     const payload = {
       content,
@@ -1270,7 +1293,7 @@ async function dispatchDiscordCommandInteraction(params: {
     });
   };
 
-  const useAccessGroups = cfg.commands?.useAccessGroups !== false;
+  const useAccessGroups = activeCfg.commands?.useAccessGroups !== false;
   const user = interaction.user;
   if (!user) {
     return;
@@ -1290,9 +1313,9 @@ async function dispatchDiscordCommandInteraction(params: {
   const memberRoleIds = Array.isArray(interaction.rawData.member?.roles)
     ? interaction.rawData.member.roles.map((roleId: string) => String(roleId))
     : [];
-  const allowNameMatching = isDangerousNameMatchingEnabled(discordConfig);
+  const allowNameMatching = isDangerousNameMatchingEnabled(activeDiscordConfig);
   const { ownerAllowList, ownerAllowed: ownerOk } = resolveDiscordOwnerAccess({
-    allowFrom: discordConfig?.allowFrom ?? discordConfig?.dm?.allowFrom ?? [],
+    allowFrom: activeDiscordConfig?.allowFrom ?? activeDiscordConfig?.dm?.allowFrom ?? [],
     sender: {
       id: sender.id,
       name: sender.name,
@@ -1302,7 +1325,7 @@ async function dispatchDiscordCommandInteraction(params: {
   });
   const guildInfo = resolveDiscordGuildEntry({
     guild: interaction.guild ?? undefined,
-    guildEntries: discordConfig?.guilds,
+    guildEntries: activeDiscordConfig?.guilds,
   });
   let threadParentId: string | undefined;
   let threadParentName: string | undefined;
@@ -1349,9 +1372,9 @@ async function dispatchDiscordCommandInteraction(params: {
       Boolean(guildInfo?.channels) && Object.keys(guildInfo?.channels ?? {}).length > 0;
     const channelAllowed = channelConfig?.allowed !== false;
     const { groupPolicy } = resolveOpenProviderRuntimeGroupPolicy({
-      providerConfigPresent: cfg.channels?.discord !== undefined,
-      groupPolicy: discordConfig?.groupPolicy,
-      defaultGroupPolicy: cfg.channels?.defaults?.groupPolicy,
+      providerConfigPresent: activeCfg.channels?.discord !== undefined,
+      groupPolicy: activeDiscordConfig?.groupPolicy,
+      defaultGroupPolicy: activeCfg.channels?.defaults?.groupPolicy,
     });
     const allowByPolicy = isDiscordGroupAllowedByPolicy({
       groupPolicy,
@@ -1364,8 +1387,8 @@ async function dispatchDiscordCommandInteraction(params: {
       return;
     }
   }
-  const dmEnabled = discordConfig?.dm?.enabled ?? true;
-  const dmPolicy = discordConfig?.dmPolicy ?? discordConfig?.dm?.policy ?? "pairing";
+  const dmEnabled = activeDiscordConfig?.dm?.enabled ?? true;
+  const dmPolicy = activeDiscordConfig?.dmPolicy ?? activeDiscordConfig?.dm?.policy ?? "pairing";
   let commandAuthorized = true;
   if (isDirectMessage) {
     if (!dmEnabled || dmPolicy === "disabled") {
@@ -1375,7 +1398,8 @@ async function dispatchDiscordCommandInteraction(params: {
     const dmAccess = await resolveDiscordDmCommandAccess({
       accountId,
       dmPolicy,
-      configuredAllowFrom: discordConfig?.allowFrom ?? discordConfig?.dm?.allowFrom ?? [],
+      configuredAllowFrom:
+        activeDiscordConfig?.allowFrom ?? activeDiscordConfig?.dm?.allowFrom ?? [],
       sender: {
         id: sender.id,
         name: sender.name,
@@ -1435,7 +1459,7 @@ async function dispatchDiscordCommandInteraction(params: {
       return;
     }
   }
-  if (isGroupDm && discordConfig?.dm?.groupEnabled === false) {
+  if (isGroupDm && activeDiscordConfig?.dm?.groupEnabled === false) {
     await respond("Discord group DMs are disabled.");
     return;
   }
@@ -1443,15 +1467,15 @@ async function dispatchDiscordCommandInteraction(params: {
   const menu = resolveCommandArgMenu({
     command,
     args: commandArgs,
-    cfg,
+    cfg: activeCfg,
   });
   if (menu) {
     const menuPayload = buildDiscordCommandArgMenu({
       command,
       menu,
       interaction: interaction as CommandInteraction,
-      cfg,
-      discordConfig,
+      cfg: activeCfg,
+      discordConfig: activeDiscordConfig,
       accountId,
       sessionPrefix,
       threadBindings,
@@ -1490,7 +1514,7 @@ async function dispatchDiscordCommandInteraction(params: {
       channelId,
       isAuthorizedSender: commandAuthorized,
       commandBody: prompt,
-      config: cfg,
+      config: activeCfg,
       from: isDirectMessage
         ? `discord:${user.id}`
         : isGroupDm
@@ -1506,12 +1530,12 @@ async function dispatchDiscordCommandInteraction(params: {
     await deliverDiscordInteractionReply({
       interaction,
       payload: pluginReply,
-      textLimit: resolveTextChunkLimit(cfg, "discord", accountId, {
+      textLimit: resolveTextChunkLimit(activeCfg, "discord", accountId, {
         fallbackLimit: 2000,
       }),
-      maxLinesPerMessage: discordConfig?.maxLinesPerMessage,
+      maxLinesPerMessage: activeDiscordConfig?.maxLinesPerMessage,
       preferFollowUp,
-      chunkMode: resolveChunkMode(cfg, "discord", accountId),
+      chunkMode: resolveChunkMode(activeCfg, "discord", accountId),
     });
     return;
   }
@@ -1523,7 +1547,8 @@ async function dispatchDiscordCommandInteraction(params: {
   if (pickerCommandContext) {
     await replyWithDiscordModelPickerProviders({
       interaction,
-      cfg,
+      cfg: activeCfg,
+      discordConfig: activeDiscordConfig,
       command: pickerCommandContext,
       userId: user.id,
       accountId,
@@ -1536,9 +1561,8 @@ async function dispatchDiscordCommandInteraction(params: {
   const isGuild = Boolean(interaction.guild);
   const channelId = rawChannelId || "unknown";
   const interactionId = interaction.rawData.id;
-  const freshCfg = loadConfig();
   const route = resolveAgentRoute({
-    cfg: freshCfg,
+    cfg: activeCfg,
     channel: "discord",
     accountId,
     guildId: interaction.guild?.id ?? undefined,
@@ -1553,7 +1577,7 @@ async function dispatchDiscordCommandInteraction(params: {
   const configuredRoute =
     threadBinding == null
       ? resolveConfiguredAcpRoute({
-          cfg: freshCfg,
+          cfg: activeCfg,
           route,
           channel: "discord",
           accountId,
@@ -1564,7 +1588,7 @@ async function dispatchDiscordCommandInteraction(params: {
   const configuredBinding = configuredRoute?.configuredBinding ?? null;
   if (configuredBinding) {
     const ensured = await ensureConfiguredAcpRouteReady({
-      cfg: freshCfg,
+      cfg: activeCfg,
       configuredBinding,
     });
     if (!ensured.ok) {
@@ -1665,20 +1689,20 @@ async function dispatchDiscordCommandInteraction(params: {
   });
 
   const { onModelSelected, ...prefixOptions } = createReplyPrefixOptions({
-    cfg,
+    cfg: activeCfg,
     agentId: effectiveRoute.agentId,
     channel: "discord",
     accountId: effectiveRoute.accountId,
   });
-  const mediaLocalRoots = getAgentScopedMediaLocalRoots(cfg, effectiveRoute.agentId);
+  const mediaLocalRoots = getAgentScopedMediaLocalRoots(activeCfg, effectiveRoute.agentId);
 
   let didReply = false;
   const dispatchResult = await dispatchReplyWithDispatcher({
     ctx: ctxPayload,
-    cfg,
+    cfg: activeCfg,
     dispatcherOptions: {
       ...prefixOptions,
-      humanDelay: resolveHumanDelayConfig(cfg, effectiveRoute.agentId),
+      humanDelay: resolveHumanDelayConfig(activeCfg, effectiveRoute.agentId),
       deliver: async (payload) => {
         if (suppressReplies) {
           return;
@@ -1688,12 +1712,12 @@ async function dispatchDiscordCommandInteraction(params: {
             interaction,
             payload,
             mediaLocalRoots,
-            textLimit: resolveTextChunkLimit(cfg, "discord", accountId, {
+            textLimit: resolveTextChunkLimit(activeCfg, "discord", accountId, {
               fallbackLimit: 2000,
             }),
-            maxLinesPerMessage: discordConfig?.maxLinesPerMessage,
+            maxLinesPerMessage: activeDiscordConfig?.maxLinesPerMessage,
             preferFollowUp: preferFollowUp || didReply,
-            chunkMode: resolveChunkMode(cfg, "discord", accountId),
+            chunkMode: resolveChunkMode(activeCfg, "discord", accountId),
           });
         } catch (error) {
           if (isDiscordUnknownInteraction(error)) {
@@ -1712,8 +1736,8 @@ async function dispatchDiscordCommandInteraction(params: {
     replyOptions: {
       skillFilter: channelConfig?.skills,
       disableBlockStreaming:
-        typeof discordConfig?.blockStreaming === "boolean"
-          ? !discordConfig.blockStreaming
+        typeof activeDiscordConfig?.blockStreaming === "boolean"
+          ? !activeDiscordConfig.blockStreaming
           : undefined,
       onModelSelected,
     },
