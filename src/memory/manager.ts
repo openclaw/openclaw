@@ -16,6 +16,7 @@ import {
   type OllamaEmbeddingClient,
   type OpenAiEmbeddingClient,
   type VoyageEmbeddingClient,
+  type JinaEmbeddingClient,
 } from "./embeddings.js";
 import { isFileMissingError, statRegularFile } from "./fs-utils.js";
 import { bm25RankToScore, buildFtsQuery, mergeHybridResults } from "./hybrid.js";
@@ -55,15 +56,17 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
     | "gemini"
     | "voyage"
     | "mistral"
+    | "jina"
     | "ollama"
     | "auto";
-  protected fallbackFrom?: "openai" | "local" | "gemini" | "voyage" | "mistral" | "ollama";
+  protected fallbackFrom?: "openai" | "local" | "gemini" | "voyage" | "mistral" | "jina" | "ollama";
   protected fallbackReason?: string;
   private readonly providerUnavailableReason?: string;
   protected openAi?: OpenAiEmbeddingClient;
   protected gemini?: GeminiEmbeddingClient;
   protected voyage?: VoyageEmbeddingClient;
   protected mistral?: MistralEmbeddingClient;
+  protected jina?: JinaEmbeddingClient;
   protected ollama?: OllamaEmbeddingClient;
   protected batch: {
     enabled: boolean;
@@ -194,6 +197,7 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
     this.gemini = params.providerResult.gemini;
     this.voyage = params.providerResult.voyage;
     this.mistral = params.providerResult.mistral;
+    this.jina = params.providerResult.jina;
     this.ollama = params.providerResult.ollama;
     this.sources = new Set(params.settings.sources);
     this.db = this.openDatabase();

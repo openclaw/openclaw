@@ -228,7 +228,7 @@ describe("noteMemorySearchHealth", () => {
     expect(message).toContain("reports memory embeddings are ready");
   });
 
-  it("uses model configure hint when gateway probe is unavailable and API key is missing", async () => {
+  it("uses configure hint when gateway probe is unavailable and API key is missing", async () => {
     resolveMemorySearchConfig.mockReturnValue({
       provider: "gemini",
       local: {},
@@ -288,7 +288,7 @@ describe("noteMemorySearchHealth", () => {
     expect(note).toHaveBeenCalledTimes(1);
     const providerCalls = resolveApiKeyForProvider.mock.calls as Array<[{ provider: string }]>;
     const providersChecked = providerCalls.map(([arg]) => arg.provider);
-    expect(providersChecked).toEqual(["openai", "google", "voyage", "mistral"]);
+    expect(providersChecked).toEqual(["openai", "google", "voyage", "mistral", "jina"]);
   });
 });
 
