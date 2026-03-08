@@ -1,7 +1,12 @@
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "openclaw/plugin-sdk/account-id";
 import { createAccountListHelpers, type OpenClawConfig } from "openclaw/plugin-sdk/mattermost";
 import { normalizeResolvedSecretInputString, normalizeSecretInputString } from "../secret-input.js";
-import type { MattermostAccountConfig, MattermostChatMode } from "../types.js";
+import type {
+  MattermostAccountConfig,
+  MattermostChatMode,
+  MattermostChatTypeKey,
+  MattermostReplyToMode,
+} from "../types.js";
 import { normalizeMattermostBaseUrl } from "./client.js";
 
 export type MattermostTokenSource = "env" | "config" | "none";
@@ -128,6 +133,26 @@ export function resolveMattermostAccount(params: {
     blockStreaming: merged.blockStreaming,
     blockStreamingCoalesce: merged.blockStreamingCoalesce,
   };
+}
+
+/**
+ * Resolve the effective replyToMode for a given chat type.
+ * Checks replyToModeByChatType overrides first, then dm.replyToMode for DMs,
+ * then falls back to the global replyToMode (defaulting to "off" for DMs).
+ */
+export function resolveMattermostReplyToMode(
+  account: ResolvedMattermostAccount,
+  kind: MattermostChatTypeKey,
+): MattermostReplyToMode {
+  if (account.config.replyToModeByChatType?.[kind] !== undefined) {
+    return account.config.replyToModeByChatType[kind] ?? "off";
+  }
+  if (kind === "direct" && account.config.dm?.replyToMode !== undefined) {
+    return account.config.dm.replyToMode ?? "off";
+  }
+  // DMs default to "off" unless explicitly configured
+  if (kind === "direct") return "off";
+  return account.config.replyToMode ?? "off";
 }
 
 export function listEnabledMattermostAccounts(cfg: OpenClawConfig): ResolvedMattermostAccount[] {
