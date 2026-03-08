@@ -683,13 +683,16 @@ export abstract class MemoryManagerSyncOps {
         }
         return;
       }
-      await this.indexFile(entry, { source: "memory" });
-      if (params.progress) {
-        params.progress.completed += 1;
-        params.progress.report({
-          completed: params.progress.completed,
-          total: params.progress.total,
-        });
+      try {
+        await this.indexFile(entry, { source: "memory" });
+      } finally {
+        if (params.progress) {
+          params.progress.completed += 1;
+          params.progress.report({
+            completed: params.progress.completed,
+            total: params.progress.total,
+          });
+        }
       }
     });
     await runWithConcurrency(tasks, this.getIndexConcurrency());
@@ -785,14 +788,17 @@ export abstract class MemoryManagerSyncOps {
         this.resetSessionDelta(absPath, entry.size);
         return;
       }
-      await this.indexFile(entry, { source: "sessions", content: entry.content });
-      this.resetSessionDelta(absPath, entry.size);
-      if (params.progress) {
-        params.progress.completed += 1;
-        params.progress.report({
-          completed: params.progress.completed,
-          total: params.progress.total,
-        });
+      try {
+        await this.indexFile(entry, { source: "sessions", content: entry.content });
+        this.resetSessionDelta(absPath, entry.size);
+      } finally {
+        if (params.progress) {
+          params.progress.completed += 1;
+          params.progress.report({
+            completed: params.progress.completed,
+            total: params.progress.total,
+          });
+        }
       }
     });
     await runWithConcurrency(tasks, this.getIndexConcurrency());

@@ -319,13 +319,18 @@ export async function runWithConcurrency<T>(
   tasks: Array<() => Promise<T>>,
   limit: number,
 ): Promise<T[]> {
-  const { results, firstError, hasError } = await runTasksWithConcurrency({
+  // Continue on error instead of stopping.
+  // With errorMode "stop", ONE embedding failure kills the entire index run —
+  // all concurrent workers stop immediately. With large workspaces (22K+ files),
+  // only a fraction ever get indexed. Related: #8561
+  const { results } = await runTasksWithConcurrency({
     tasks,
     limit,
-    errorMode: "stop",
+    errorMode: "continue",
+    onTaskError: (error, index) => {
+      // eslint-disable-next-line no-console
+      console.warn(`[memory] task ${index} failed, skipping: ${String(error)}`);
+    },
   });
-  if (hasError) {
-    throw firstError;
-  }
   return results;
 }
