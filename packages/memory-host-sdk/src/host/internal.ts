@@ -398,8 +398,13 @@ export function chunkMarkdown(
     if (line.length === 0) {
       segments.push("");
     } else {
-      for (let start = 0; start < line.length; start += maxChars) {
-        segments.push(line.slice(start, start + maxChars));
+      // Use token count (not maxChars) as the split step so that CJK lines
+      // – where 1 char ≈ 1 token – are sliced into budget-sized segments.
+      // For Latin text the token count is ≥ maxChars/4, which still produces
+      // segments well within the char budget after weighting.
+      const splitStep = Math.max(1, chunking.tokens);
+      for (let start = 0; start < line.length; start += splitStep) {
+        segments.push(line.slice(start, start + splitStep));
       }
     }
     for (const segment of segments) {
