@@ -30,7 +30,7 @@ x-i18n:
 
 ## 模型存放位置
 
-模型维护在一个单独的仓库中：[vignesh07/openclaw-formal-models](https://github.com/vignesh07/openclaw-formal-models)。
+模型维护在一个单独的仓库中（尚未公开 — 参见 [#20871](https://github.com/openclaw/openclaw/issues/20871)）。
 
 ## 重要注意事项
 
@@ -48,7 +48,8 @@ x-i18n:
 开始使用：
 
 ```bash
-git clone https://github.com/vignesh07/openclaw-formal-models
+# 模型仓库公开后：
+# git clone https://github.com/openclaw/openclaw-formal-models
 cd openclaw-formal-models
 
 # 需要 Java 11+（TLC 在 JVM 上运行）。
