@@ -2,6 +2,7 @@ import type { Model } from "@mariozechner/pi-ai";
 import { expect } from "vitest";
 import { makeZeroUsageSnapshot } from "../agents/usage.js";
 
+/* eslint-disable @typescript-eslint/no-explicit-any */
 // ----------------------------------------------------------------------------
 // 🚨 VENDORING NOTICE
 // ----------------------------------------------------------------------------
@@ -113,10 +114,10 @@ function sanitizeSurrogates(text: string): string {
 
 // transform-messages.js
 function transformMessages(
-  messages: unknown[],
-  model: unknown,
-  normalizeToolCallId: (id: string, model: unknown, msg: unknown) => string,
-): unknown[] {
+  messages: any[],
+  model: any,
+  normalizeToolCallId: (id: string, model: any, msg: any) => string,
+): any[] {
   // Build a map of original tool call IDs to normalized IDs
   const toolCallIdMap = new Map();
   // First pass: transform messages (thinking blocks, tool call ID normalization)
@@ -307,8 +308,8 @@ export function requiresToolCallId(modelId: string): boolean {
   return modelId.startsWith("claude-") || modelId.startsWith("gpt-oss-");
 }
 
-export function convertMessages(model: unknown, context: unknown): unknown[] {
-  const contents: unknown[] = [];
+export function convertMessages(model: any, context: any): any[] {
+  const contents: any[] = [];
   const normalizeToolCallId = (id: string) => {
     if (!requiresToolCallId(model.id)) {
       return id;
@@ -348,7 +349,7 @@ export function convertMessages(model: unknown, context: unknown): unknown[] {
         });
       }
     } else if (msg.role === "assistant") {
-      const parts: unknown[] = [];
+      const parts: any[] = [];
       const isSameProviderAndModel = msg.provider === model.provider && msg.model === model.id;
       for (const block of msg.content) {
         if (block.type === "text") {
@@ -457,21 +458,18 @@ export function convertMessages(model: unknown, context: unknown): unknown[] {
   return contents;
 }
 
-export function convertTools(
-  tools: unknown[],
-  useParameters: boolean = false,
-): unknown[] | undefined {
+export function convertTools(tools: any[], useParameters: boolean = false): any[] | undefined {
   if (tools.length === 0) {
     return undefined;
   }
   return [
     {
       functionDeclarations: tools.map((tool) => ({
-        name: (tool as Record<string, unknown>).name,
-        description: (tool as Record<string, unknown>).description,
+        name: tool.name,
+        description: tool.description,
         ...(useParameters
-          ? { parameters: (tool as Record<string, unknown>).parameters }
-          : { parametersJsonSchema: (tool as Record<string, unknown>).parameters }),
+          ? { parameters: tool.parameters }
+          : { parametersJsonSchema: tool.parameters }),
       })),
     },
   ];

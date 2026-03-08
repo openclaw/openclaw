@@ -954,42 +954,7 @@ function createOpenRouterWrapper(
         ...options?.headers,
       },
       onPayload: (payload, model) => {
-        if (thinkingLevel && payload && typeof payload === "object") {
-          const payloadObj = payload as Record<string, unknown>;
-
-          // pi-ai may inject a top-level reasoning_effort (OpenAI flat format).
-          // OpenRouter expects the nested reasoning.effort format instead, and
-          // rejects payloads containing both fields. Remove the flat field so
-          // only the nested one is sent.
-          delete payloadObj.reasoning_effort;
-
-          // When thinking is "off", do not inject reasoning at all.
-          // Some models (e.g. deepseek/deepseek-r1) require reasoning and reject
-          // { effort: "none" } with "Reasoning is mandatory for this endpoint and
-          // cannot be disabled." Omitting the field lets each model use its own
-          // default reasoning behavior.
-          if (thinkingLevel !== "off") {
-            const existingReasoning = payloadObj.reasoning;
-
-            // OpenRouter treats reasoning.effort and reasoning.max_tokens as
-            // alternative controls. If max_tokens is already present, do not
-            // inject effort and do not overwrite caller-supplied reasoning.
-            if (
-              existingReasoning &&
-              typeof existingReasoning === "object" &&
-              !Array.isArray(existingReasoning)
-            ) {
-              const reasoningObj = existingReasoning as Record<string, unknown>;
-              if (!("max_tokens" in reasoningObj) && !("effort" in reasoningObj)) {
-                reasoningObj.effort = mapThinkingLevelToOpenRouterReasoningEffort(thinkingLevel);
-              }
-            } else if (!existingReasoning) {
-              payloadObj.reasoning = {
-                effort: mapThinkingLevelToOpenRouterReasoningEffort(thinkingLevel),
-              };
-            }
-          }
-        }
+        normalizeProxyReasoningPayload(payload, thinkingLevel);
         onPayload?.(payload, model);
       },
     });
