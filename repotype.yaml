@@ -10,11 +10,15 @@ defaults:
 
 # File rules
 files:
-  # Every skill must have SKILL.md
+  # Every skill must have SKILL.md with proper frontmatter
+  # Per AgentSkills spec: https://agentskills.io/specification
   - id: skill-readme
     glob: "skills/*/SKILL.md"
-    # requiredSections:
-    #   - Description  # Enable once all skills have description
+    schema:
+      kind: frontmatter
+      schema: schemas/skill.frontmatter.schema.json
+    requiredSections:
+      - "#"  # Must have at least one heading
 
   # Package files
   - id: package-json
@@ -166,3 +170,7 @@ files:
   # Pyproject
   - id: pyproject
     glob: "pyproject.toml"
+
+  # Repotype schemas
+  - id: schemas
+    glob: "schemas/**/*.json"
