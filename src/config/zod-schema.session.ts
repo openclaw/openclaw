@@ -1,7 +1,6 @@
 import { z } from "zod";
 import { parseByteSize } from "../cli/parse-bytes.js";
 import { parseDurationMs } from "../cli/parse-duration.js";
-import { ElevatedAllowFromSchema } from "./zod-schema.agent-runtime.js";
 import { createAllowDenyChannelRulesSchema } from "./zod-schema.allowdeny.js";
 import {
   GroupChatSchema,
@@ -191,6 +190,13 @@ export const MessagesSchema = z
   .strict()
   .optional();
 
+const CommandsAllowFromSchema = z
+  .preprocess(
+    (value) => (Array.isArray(value) ? { "*": value } : value),
+    z.record(z.string(), z.array(z.union([z.string(), z.number()]))),
+  )
+  .optional();
+
 export const CommandsSchema = z
   .object({
     native: NativeCommandsSettingSchema.optional().default("auto"),
@@ -205,7 +211,8 @@ export const CommandsSchema = z
     ownerAllowFrom: z.array(z.union([z.string(), z.number()])).optional(),
     ownerDisplay: z.enum(["raw", "hash"]).optional().default("raw"),
     ownerDisplaySecret: z.string().optional().register(sensitive),
-    allowFrom: ElevatedAllowFromSchema.optional(),
+    // Back-compat: accept legacy array form and treat it as the global ("*") allowlist.
+    allowFrom: CommandsAllowFromSchema,
   })
   .strict()
   .optional()
