@@ -213,8 +213,14 @@ export async function applyBeforeResponseEmitHook(
     rewriteAllAssistantContent(runMessages, activeSession.messages, emitResult.allContent);
     // Rebuild per-turn texts from activeSession.messages (NOT runMessages,
     // which is a stale slice that still contains spliced-out objects).
-    // Re-scope to get a fresh view of the current run after splicing.
-    const freshRunMessages = getRunScopedMessages(activeSession.messages, scopeCount);
+    // Re-scope with the post-rewrite turn count — surplus turns were removed,
+    // so using the pre-rewrite scopeCount would find too few messages and
+    // return [], causing attempt.ts to treat partial shrinks as blocks.
+    const postRewriteTurnCount = countCurrentRunAssistantTurns(activeSession.messages);
+    const freshRunMessages = getRunScopedMessages(
+      activeSession.messages,
+      postRewriteTurnCount || 1,
+    );
     const postRewriteTexts = freshRunMessages
       .filter((m) => m.role === "assistant" && extractAssistantText(m).length > 0)
       .map((m) => extractAssistantText(m));
