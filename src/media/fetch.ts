@@ -31,6 +31,9 @@ type FetchMediaOptions = {
   filePathHint?: string;
   maxBytes?: number;
   maxRedirects?: number;
+  /** Abort the download if it takes longer than this (ms). Covers both the
+   *  initial connection and streaming the response body. */
+  timeoutMs?: number;
   ssrfPolicy?: SsrFPolicy;
   lookupFn?: LookupFn;
 };
@@ -87,6 +90,7 @@ export async function fetchRemoteMedia(options: FetchMediaOptions): Promise<Fetc
     filePathHint,
     maxBytes,
     maxRedirects,
+    timeoutMs,
     ssrfPolicy,
     lookupFn,
   } = options;
@@ -101,6 +105,7 @@ export async function fetchRemoteMedia(options: FetchMediaOptions): Promise<Fetc
         fetchImpl,
         init: requestInit,
         maxRedirects,
+        timeoutMs,
         policy: ssrfPolicy,
         lookupFn,
       }),
