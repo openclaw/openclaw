@@ -312,7 +312,7 @@ jobs:
           # PR jobs run on GitHub's synthetic merge commit. Diffing that merge
           # commit against its first parent gives the exact PR file set without
           # requiring extra history/merge-base resolution in shallow checkouts.
-          if git rev-parse --verify "HEAD^1^{commit}" >/dev/null 2>&1; then
+          if git rev-parse --verify "HEAD^2^{commit}" >/dev/null 2>&1; then
             DIFF_RANGE="HEAD^1..HEAD"
           else
             BASE_REF="origin/${{ github.base_ref }}"
