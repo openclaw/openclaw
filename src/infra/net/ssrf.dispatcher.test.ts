@@ -13,7 +13,7 @@ vi.mock("undici", () => ({
 import { createPinnedDispatcher, type PinnedHostname } from "./ssrf.js";
 
 describe("createPinnedDispatcher", () => {
-  it("uses pinned lookup without overriding global family policy", () => {
+  it("uses pinned lookup with autoSelectFamily enabled", () => {
     const lookup = vi.fn() as unknown as PinnedHostname["lookup"];
     const pinned: PinnedHostname = {
       hostname: "api.telegram.org",
@@ -27,11 +27,9 @@ describe("createPinnedDispatcher", () => {
     expect(agentCtor).toHaveBeenCalledWith({
       connect: {
         lookup,
+        autoSelectFamily: true,
+        autoSelectFamilyAttemptTimeout: 300,
       },
     });
-    const firstCallArg = agentCtor.mock.calls[0]?.[0] as
-      | { connect?: Record<string, unknown> }
-      | undefined;
-    expect(firstCallArg?.connect?.autoSelectFamily).toBeUndefined();
   });
 });

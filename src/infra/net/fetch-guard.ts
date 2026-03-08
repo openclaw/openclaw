@@ -31,6 +31,8 @@ export type GuardedFetchOptions = {
   lookupFn?: LookupFn;
   mode?: GuardedFetchMode;
   pinDns?: boolean;
+  /** Override Happy Eyeballs (RFC 8305) for the pinned dispatcher. Defaults to true. */
+  autoSelectFamily?: boolean;
   /** @deprecated use `mode: "trusted_env_proxy"` for trusted/operator-controlled URLs. */
   proxy?: "env";
   /**
@@ -196,7 +198,9 @@ export async function fetchWithSsrFGuard(params: GuardedFetchOptions): Promise<G
       if (canUseTrustedEnvProxy) {
         dispatcher = new EnvHttpProxyAgent();
       } else if (params.pinDns !== false) {
-        dispatcher = createPinnedDispatcher(pinned);
+        dispatcher = createPinnedDispatcher(pinned, {
+          autoSelectFamily: params.autoSelectFamily,
+        });
       }
 
       const init: RequestInit & { dispatcher?: Dispatcher } = {
