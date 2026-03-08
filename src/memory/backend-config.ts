@@ -6,6 +6,8 @@ import type { SessionSendPolicyConfig } from "../config/types.base.js";
 import type {
   MemoryBackend,
   MemoryCitationsMode,
+  MemoryCortexConfig,
+  MemoryCortexSearchScope,
   MemoryQmdConfig,
   MemoryQmdIndexPath,
   MemoryQmdMcporterConfig,
@@ -18,6 +20,7 @@ export type ResolvedMemoryBackendConfig = {
   backend: MemoryBackend;
   citations: MemoryCitationsMode;
   qmd?: ResolvedQmdConfig;
+  cortex?: ResolvedCortexConfig;
 };
 
 export type ResolvedQmdCollection = {
@@ -69,13 +72,35 @@ export type ResolvedQmdConfig = {
   scope?: SessionSendPolicyConfig;
 };
 
+/**
+ * Resolved Cortex Memory backend configuration.
+ */
+export type ResolvedCortexConfig = {
+  /** URL of the Cortex Memory service */
+  serviceUrl: string;
+  /** Tenant identifier for memory isolation */
+  tenant: string;
+  /** API key for authentication (optional) */
+  apiKey?: string;
+  /** Request timeout in milliseconds */
+  timeoutMs: number;
+  /** Maximum number of search results */
+  maxResults: number;
+  /** Minimum relevance score threshold */
+  minScore: number;
+  /** Search scope */
+  scope: MemoryCortexSearchScope;
+  /** Auto-create sessions when adding messages */
+  autoCreateSession: boolean;
+  /** Auto-extract memories when sessions close */
+  autoExtract: boolean;
+};
+
 const DEFAULT_BACKEND: MemoryBackend = "builtin";
 const DEFAULT_CITATIONS: MemoryCitationsMode = "auto";
 const DEFAULT_QMD_INTERVAL = "5m";
 const DEFAULT_QMD_DEBOUNCE_MS = 15_000;
 const DEFAULT_QMD_TIMEOUT_MS = 4_000;
-// Defaulting to `query` can be extremely slow on CPU-only systems (query expansion + rerank).
-// Prefer a faster mode for interactive use; users can opt into `query` for best recall.
 const DEFAULT_QMD_SEARCH_MODE: MemoryQmdSearchMode = "search";
 const DEFAULT_QMD_EMBED_INTERVAL = "60m";
 const DEFAULT_QMD_COMMAND_TIMEOUT_MS = 30_000;
@@ -102,6 +127,14 @@ const DEFAULT_QMD_SCOPE: SessionSendPolicyConfig = {
     },
   ],
 };
+
+// Cortex Memory defaults
+const DEFAULT_CORTEX_SERVICE_URL = "http://localhost:8085";
+const DEFAULT_CORTEX_TENANT = "default";
+const DEFAULT_CORTEX_TIMEOUT_MS = 30_000;
+const DEFAULT_CORTEX_MAX_RESULTS = 10;
+const DEFAULT_CORTEX_MIN_SCORE = 0.4;
+const DEFAULT_CORTEX_SCOPE: MemoryCortexSearchScope = "session";
 
 function sanitizeName(input: string): string {
   const lower = input.toLowerCase().replace(/[^a-z0-9-]+/g, "-");
@@ -265,7 +298,6 @@ function resolveMcporterConfig(raw?: MemoryQmdMcporterConfig): ResolvedQmdMcport
   if (raw.startDaemon !== undefined) {
     parsed.startDaemon = raw.startDaemon;
   }
-  // When enabled, default startDaemon to true.
   if (parsed.enabled && raw.startDaemon === undefined) {
     parsed.startDaemon = true;
   }
@@ -294,12 +326,54 @@ function resolveDefaultCollections(
   }));
 }
 
+/**
+ * Resolve Cortex Memory backend configuration.
+ */
+function resolveCortexConfig(raw?: MemoryCortexConfig, agentId?: string): ResolvedCortexConfig {
+  const serviceUrl = raw?.serviceUrl?.trim() || DEFAULT_CORTEX_SERVICE_URL;
+  const tenant = raw?.tenant?.trim() || agentId || DEFAULT_CORTEX_TENANT;
+  const apiKey = raw?.apiKey?.trim() || undefined;
+  const timeoutMs = resolveTimeoutMs(raw?.timeoutMs, DEFAULT_CORTEX_TIMEOUT_MS);
+  const maxResults =
+    raw?.maxResults && raw.maxResults > 0 ? Math.floor(raw.maxResults) : DEFAULT_CORTEX_MAX_RESULTS;
+  const minScore =
+    typeof raw?.minScore === "number" && raw.minScore >= 0 && raw.minScore <= 1
+      ? raw.minScore
+      : DEFAULT_CORTEX_MIN_SCORE;
+  const scope = raw?.scope || DEFAULT_CORTEX_SCOPE;
+  const autoCreateSession = raw?.autoCreateSession !== false;
+  const autoExtract = raw?.autoExtract !== false;
+
+  return {
+    serviceUrl,
+    tenant,
+    apiKey,
+    timeoutMs,
+    maxResults,
+    minScore,
+    scope,
+    autoCreateSession,
+    autoExtract,
+  };
+}
+
 export function resolveMemoryBackendConfig(params: {
   cfg: OpenClawConfig;
   agentId: string;
 }): ResolvedMemoryBackendConfig {
   const backend = params.cfg.memory?.backend ?? DEFAULT_BACKEND;
   const citations = params.cfg.memory?.citations ?? DEFAULT_CITATIONS;
+
+  // Handle cortex backend
+  if (backend === "cortex") {
+    return {
+      backend: "cortex",
+      citations,
+      cortex: resolveCortexConfig(params.cfg.memory?.cortex, params.agentId),
+    };
+  }
+
+  // Handle qmd backend
   if (backend !== "qmd") {
     return { backend: "builtin", citations };
   }
