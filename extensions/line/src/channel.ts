@@ -565,24 +565,18 @@ export const linePlugin: ChannelPlugin<ResolvedLineAccount> = {
       lastStopAt: null,
       lastError: null,
     },
-    collectStatusIssues: (accounts) => {
+    collectStatusIssues: (snapshots) => {
       const issues: ChannelStatusIssue[] = [];
-      for (const account of accounts) {
-        const accountId = account.accountId ?? DEFAULT_ACCOUNT_ID;
-        if (!account.channelAccessToken?.trim()) {
+      for (const snapshot of snapshots) {
+        const accountId = snapshot.accountId ?? DEFAULT_ACCOUNT_ID;
+        // Snapshots do not include channelAccessToken/channelSecret; use configured flag.
+        if (snapshot.configured !== true) {
           issues.push({
             channel: "line",
             accountId,
             kind: "config",
-            message: "LINE channel access token not configured",
-          });
-        }
-        if (!account.channelSecret?.trim()) {
-          issues.push({
-            channel: "line",
-            accountId,
-            kind: "config",
-            message: "LINE channel secret not configured",
+            message:
+              "LINE channel not configured (set channelAccessToken and channelSecret in channels.line, or LINE_CHANNEL_ACCESS_TOKEN and LINE_CHANNEL_SECRET)",
           });
         }
       }
