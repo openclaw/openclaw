@@ -255,6 +255,7 @@ export const OpenClawSchema = z
       .optional(),
     cli: z
       .object({
+        locale: z.union([z.literal("en"), z.literal("zh-CN")]).optional(),
         banner: z
           .object({
             taglineMode: z
