@@ -1,3 +1,5 @@
+import { spawnSync } from "node:child_process";
+import fsSync from "node:fs";
 import { readBestEffortConfig, resolveGatewayPort } from "../../config/config.js";
 import { resolveGatewayService } from "../../daemon/service.js";
 import { findGatewayPidsOnPortSync } from "../../infra/restart.js";
@@ -37,37 +39,118 @@ async function resolveGatewayLifecyclePort(service = resolveGatewayService()) {
   return portFromArgs ?? resolveGatewayPort(await readBestEffortConfig(), mergedEnv);
 }
 
+function normalizeProcArg(arg: string): string {
+  return arg.replaceAll("\\", "/").toLowerCase();
+}
+
+function parseProcCmdline(raw: string): string[] {
+  return raw
+    .split("\0")
+    .map((entry) => entry.trim())
+    .filter(Boolean);
+}
+
+function isGatewayArgv(args: string[]): boolean {
+  const normalized = args.map(normalizeProcArg);
+  if (!normalized.includes("gateway")) {
+    return false;
+  }
+
+  const entryCandidates = [
+    "dist/index.js",
+    "dist/entry.js",
+    "openclaw.mjs",
+    "scripts/run-node.mjs",
+    "src/index.ts",
+  ];
+  if (normalized.some((arg) => entryCandidates.some((entry) => arg.endsWith(entry)))) {
+    return true;
+  }
+
+  const exe = normalized[0] ?? "";
+  return exe.endsWith("/openclaw") || exe === "openclaw" || exe.endsWith("/openclaw-gateway");
+}
+
+function readGatewayProcessArgsSync(pid: number): string[] | null {
+  if (process.platform === "linux") {
+    try {
+      return parseProcCmdline(fsSync.readFileSync(`/proc/${pid}/cmdline`, "utf8"));
+    } catch {
+      return null;
+    }
+  }
+  if (process.platform === "darwin") {
+    const ps = spawnSync("ps", ["-o", "command=", "-p", String(pid)], {
+      encoding: "utf8",
+      timeout: 1000,
+    });
+    if (ps.error || ps.status !== 0) {
+      return null;
+    }
+    const command = ps.stdout.trim();
+    return command ? command.split(/\s+/) : null;
+  }
+  return null;
+}
+
 function resolveGatewayListenerPids(port: number): number[] {
-  return Array.from(new Set(findGatewayPidsOnPortSync(port))).filter(
+  return Array.from(new Set(findGatewayPidsOnPortSync(port)))
+    .filter((pid): pid is number => Number.isFinite(pid) && pid > 0)
+    .filter((pid) => {
+      const args = readGatewayProcessArgsSync(pid);
+      return args != null && isGatewayArgv(args);
+    });
+}
+
+function resolveGatewayPortFallback(): Promise<number> {
+  return readBestEffortConfig()
+    .then((cfg) => resolveGatewayPort(cfg, process.env))
+    .catch(() => resolveGatewayPort(undefined, process.env));
+}
+
+function signalGatewayPid(pid: number, signal: "SIGTERM" | "SIGUSR1") {
+  const args = readGatewayProcessArgsSync(pid);
+  if (!args || !isGatewayArgv(args)) {
+    throw new Error(`refusing to signal non-gateway process pid ${pid}`);
+  }
+  process.kill(pid, signal);
+}
+
+function formatGatewayPidList(pids: number[]): string {
+  return pids.join(", ");
+}
+
+function resolveVerifiedGatewayListenerPids(port: number): number[] {
+  return resolveGatewayListenerPids(port).filter(
     (pid): pid is number => Number.isFinite(pid) && pid > 0,
   );
 }
 
 async function stopGatewayWithoutServiceManager(port: number) {
-  const pids = resolveGatewayListenerPids(port);
+  const pids = resolveVerifiedGatewayListenerPids(port);
   if (pids.length === 0) {
     return null;
   }
   for (const pid of pids) {
-    process.kill(pid, "SIGTERM");
+    signalGatewayPid(pid, "SIGTERM");
   }
   return {
     result: "stopped" as const,
-    message: `Gateway stop signal sent to unmanaged process${pids.length === 1 ? "" : "es"} on port ${port}: ${pids.join(", ")}.`,
+    message: `Gateway stop signal sent to unmanaged process${pids.length === 1 ? "" : "es"} on port ${port}: ${formatGatewayPidList(pids)}.`,
   };
 }
 
 async function restartGatewayWithoutServiceManager(port: number) {
-  const pids = resolveGatewayListenerPids(port);
+  const pids = resolveVerifiedGatewayListenerPids(port);
   if (pids.length === 0) {
     return null;
   }
   if (pids.length > 1) {
     throw new Error(
-      `multiple gateway processes are listening on port ${port}: ${pids.join(", ")}; use "openclaw gateway status --deep" before retrying restart`,
+      `multiple gateway processes are listening on port ${port}: ${formatGatewayPidList(pids)}; use "openclaw gateway status --deep" before retrying restart`,
     );
   }
-  process.kill(pids[0], "SIGUSR1");
+  signalGatewayPid(pids[0], "SIGUSR1");
   return {
     result: "restarted" as const,
     message: `Gateway restart signal sent to unmanaged process on port ${port}: ${pids[0]}.`,
@@ -96,7 +179,7 @@ export async function runDaemonStart(opts: DaemonLifecycleOptions = {}) {
 export async function runDaemonStop(opts: DaemonLifecycleOptions = {}) {
   const service = resolveGatewayService();
   const gatewayPort = await resolveGatewayLifecyclePort(service).catch(() =>
-    resolveGatewayPort(loadConfig(), process.env),
+    resolveGatewayPortFallback(),
   );
   return await runServiceStop({
     serviceNoun: "Gateway",
@@ -116,7 +199,7 @@ export async function runDaemonRestart(opts: DaemonLifecycleOptions = {}): Promi
   const service = resolveGatewayService();
   let restartedWithoutServiceManager = false;
   const restartPort = await resolveGatewayLifecyclePort(service).catch(() =>
-    resolveGatewayPort(loadConfig(), process.env),
+    resolveGatewayPortFallback(),
   );
   const restartWaitMs = POST_RESTART_HEALTH_ATTEMPTS * POST_RESTART_HEALTH_DELAY_MS;
   const restartWaitSeconds = Math.round(restartWaitMs / 1000);

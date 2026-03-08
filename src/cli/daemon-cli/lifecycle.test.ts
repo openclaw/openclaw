@@ -1,4 +1,7 @@
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+
+const mockReadFileSync = vi.hoisted(() => vi.fn());
+const mockSpawnSync = vi.hoisted(() => vi.fn());
 
 type RestartHealthSnapshot = {
   healthy: boolean;
@@ -34,6 +37,16 @@ const renderRestartDiagnostics = vi.fn(() => ["diag: unhealthy runtime"]);
 const resolveGatewayPort = vi.fn(() => 18789);
 const findGatewayPidsOnPortSync = vi.fn<(port: number) => number[]>(() => []);
 const loadConfig = vi.fn(() => ({}));
+
+vi.mock("node:fs", () => ({
+  default: {
+    readFileSync: (...args: unknown[]) => mockReadFileSync(...args),
+  },
+}));
+
+vi.mock("node:child_process", () => ({
+  spawnSync: (...args: unknown[]) => mockSpawnSync(...args),
+}));
 
 vi.mock("../../config/config.js", () => ({
   loadConfig: () => loadConfig(),
@@ -75,18 +88,20 @@ describe("runDaemonRestart health checks", () => {
   });
 
   beforeEach(() => {
-    service.readCommand.mockClear();
-    service.restart.mockClear();
-    runServiceRestart.mockClear();
-    runServiceStop.mockClear();
-    waitForGatewayHealthyListener.mockClear();
-    waitForGatewayHealthyRestart.mockClear();
-    terminateStaleGatewayPids.mockClear();
-    renderGatewayPortHealthDiagnostics.mockClear();
-    renderRestartDiagnostics.mockClear();
-    resolveGatewayPort.mockClear();
-    findGatewayPidsOnPortSync.mockClear();
-    loadConfig.mockClear();
+    service.readCommand.mockReset();
+    service.restart.mockReset();
+    runServiceRestart.mockReset();
+    runServiceStop.mockReset();
+    waitForGatewayHealthyListener.mockReset();
+    waitForGatewayHealthyRestart.mockReset();
+    terminateStaleGatewayPids.mockReset();
+    renderGatewayPortHealthDiagnostics.mockReset();
+    renderRestartDiagnostics.mockReset();
+    resolveGatewayPort.mockReset();
+    findGatewayPidsOnPortSync.mockReset();
+    loadConfig.mockReset();
+    mockReadFileSync.mockReset();
+    mockSpawnSync.mockReset();
 
     service.readCommand.mockResolvedValue({
       programArguments: ["openclaw", "gateway", "--port", "18789"],
@@ -112,6 +127,27 @@ describe("runDaemonRestart health checks", () => {
       healthy: true,
       portUsage: { port: 18789, status: "busy", listeners: [], hints: [] },
     });
+    mockReadFileSync.mockImplementation((path: string) => {
+      const match = path.match(/\/proc\/(\d+)\/cmdline$/);
+      if (!match) {
+        throw new Error(`unexpected path ${path}`);
+      }
+      const pid = Number.parseInt(match[1] ?? "", 10);
+      if ([4200, 4300].includes(pid)) {
+        return ["openclaw", "gateway", "--port", "18789", ""].join("\0");
+      }
+      throw new Error(`unknown pid ${pid}`);
+    });
+    mockSpawnSync.mockReturnValue({
+      error: null,
+      status: 0,
+      stdout: "openclaw gateway --port 18789",
+      stderr: "",
+    });
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
   });
 
   it("kills stale gateway pids and retries restart", async () => {
@@ -209,5 +245,24 @@ describe("runDaemonRestart health checks", () => {
     await expect(runDaemonRestart({ json: true })).rejects.toThrow(
       "multiple gateway processes are listening on port 18789",
     );
+  });
+
+  it("skips unmanaged signaling for pids that are not live gateway processes", async () => {
+    const killSpy = vi.spyOn(process, "kill").mockImplementation(() => true);
+    findGatewayPidsOnPortSync.mockReturnValue([4200]);
+    mockReadFileSync.mockReturnValue(["python", "-m", "http.server", ""].join("\0"));
+    mockSpawnSync.mockReturnValue({
+      error: null,
+      status: 0,
+      stdout: "python -m http.server",
+      stderr: "",
+    });
+    runServiceStop.mockImplementation(async (params: { onNotLoaded?: () => Promise<unknown> }) => {
+      await params.onNotLoaded?.();
+    });
+
+    await runDaemonStop({ json: true });
+
+    expect(killSpy).not.toHaveBeenCalled();
   });
 });
