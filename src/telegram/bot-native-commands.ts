@@ -504,7 +504,7 @@ export const registerTelegramNativeCommands = ({
         return null;
       }
     }
-    const mediaLocalRoots = getAgentScopedMediaLocalRoots(cfg, route.agentId);
+    const mediaLocalRoots = getAgentScopedMediaLocalRoots(cfg, route.agentId, "telegram", route.accountId);
     const tableMode = resolveMarkdownTableMode({
       cfg,
       channel: "telegram",

@@ -990,7 +990,7 @@ async function dispatchDiscordComponentEvent(params: {
     fallbackLimit: 2000,
   });
   const token = ctx.token ?? "";
-  const mediaLocalRoots = getAgentScopedMediaLocalRoots(ctx.cfg, agentId);
+  const mediaLocalRoots = getAgentScopedMediaLocalRoots(ctx.cfg, agentId, "discord", accountId);
   const replyToMode =
     ctx.discordConfig?.replyToMode ?? ctx.cfg.channels?.discord?.replyToMode ?? "off";
   const replyReference = createReplyReferencePlanner({

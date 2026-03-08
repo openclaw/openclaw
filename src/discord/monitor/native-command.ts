@@ -1685,7 +1685,7 @@ async function dispatchDiscordCommandInteraction(params: {
     channel: "discord",
     accountId: effectiveRoute.accountId,
   });
-  const mediaLocalRoots = getAgentScopedMediaLocalRoots(cfg, effectiveRoute.agentId);
+  const mediaLocalRoots = getAgentScopedMediaLocalRoots(cfg, effectiveRoute.agentId, "discord", effectiveRoute.accountId);
 
   let didReply = false;
   const dispatchResult = await dispatchReplyWithDispatcher({

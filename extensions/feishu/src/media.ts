@@ -427,8 +427,8 @@ export async function sendMediaFeishu(params: {
   replyToMessageId?: string;
   replyInThread?: boolean;
   accountId?: string;
-  /** Allowed roots for local path reads; required for local filePath to work. */
-  mediaLocalRoots?: readonly string[];
+  /** Allowed roots for local path reads; "any" allows all paths (use with caution). */
+  mediaLocalRoots?: readonly string[] | "any";
 }): Promise<SendMediaResult> {
   const {
     cfg,
@@ -457,7 +457,7 @@ export async function sendMediaFeishu(params: {
     const loaded = await getFeishuRuntime().media.loadWebMedia(mediaUrl, {
       maxBytes: mediaMaxBytes,
       optimizeImages: false,
-      localRoots: mediaLocalRoots?.length ? mediaLocalRoots : undefined,
+      localRoots: mediaLocalRoots === "any" ? "any" : mediaLocalRoots?.length ? mediaLocalRoots : undefined,
     });
     buffer = loaded.buffer;
     name = fileName ?? loaded.fileName ?? "file";

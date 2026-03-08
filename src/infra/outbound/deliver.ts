@@ -533,6 +533,8 @@ async function deliverOutboundPayloadsCore(
   const mediaLocalRoots = getAgentScopedMediaLocalRoots(
     cfg,
     params.session?.agentId ?? params.mirror?.agentId,
+    channel,
+    accountId,
   );
   const results: OutboundDeliveryResult[] = [];
   const handler = await createChannelHandler({

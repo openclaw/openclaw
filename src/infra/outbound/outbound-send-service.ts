@@ -58,6 +58,8 @@ async function tryHandleWithPluginAction(params: {
   const mediaLocalRoots = getAgentScopedMediaLocalRoots(
     params.ctx.cfg,
     params.ctx.agentId ?? params.ctx.mirror?.agentId,
+    params.ctx.channel,
+    params.ctx.accountId,
   );
   const handled = await dispatchChannelMessageAction({
     channel: params.ctx.channel,
