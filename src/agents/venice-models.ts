@@ -1,5 +1,5 @@
 import type { ModelDefinitionConfig } from "../config/types.js";
-import { retryAsync } from "../infra/retry.js";
+import { isHttpRetryable, retryHttpAsync } from "../infra/retry-http.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 
 const log = createSubsystemLogger("venice-models");
@@ -21,22 +21,6 @@ const VENICE_DEFAULT_CONTEXT_WINDOW = 128_000;
 const VENICE_DEFAULT_MAX_TOKENS = 4096;
 const VENICE_DISCOVERY_HARD_MAX_TOKENS = 131_072;
 const VENICE_DISCOVERY_TIMEOUT_MS = 10_000;
-const VENICE_DISCOVERY_RETRYABLE_HTTP_STATUS = new Set([408, 425, 429, 500, 502, 503, 504]);
-const VENICE_DISCOVERY_RETRYABLE_NETWORK_CODES = new Set([
-  "ECONNABORTED",
-  "ECONNREFUSED",
-  "ECONNRESET",
-  "EAI_AGAIN",
-  "ENETDOWN",
-  "ENETUNREACH",
-  "ENOTFOUND",
-  "ETIMEDOUT",
-  "UND_ERR_BODY_TIMEOUT",
-  "UND_ERR_CONNECT_TIMEOUT",
-  "UND_ERR_CONNECT_ERROR",
-  "UND_ERR_HEADERS_TIMEOUT",
-  "UND_ERR_SOCKET",
-]);
 
 /**
  * Complete catalog of Venice AI models.
@@ -515,53 +499,6 @@ function staticVeniceModelDefinitions(): ModelDefinitionConfig[] {
   return VENICE_MODEL_CATALOG.map(buildVeniceModelDefinition);
 }
 
-function hasRetryableNetworkCode(err: unknown): boolean {
-  const queue: unknown[] = [err];
-  const seen = new Set<unknown>();
-  while (queue.length > 0) {
-    const current = queue.shift();
-    if (!current || typeof current !== "object" || seen.has(current)) {
-      continue;
-    }
-    seen.add(current);
-    const candidate = current as {
-      cause?: unknown;
-      errors?: unknown;
-      code?: unknown;
-      errno?: unknown;
-    };
-    const code =
-      typeof candidate.code === "string"
-        ? candidate.code
-        : typeof candidate.errno === "string"
-          ? candidate.errno
-          : undefined;
-    if (code && VENICE_DISCOVERY_RETRYABLE_NETWORK_CODES.has(code)) {
-      return true;
-    }
-    if (candidate.cause) {
-      queue.push(candidate.cause);
-    }
-    if (Array.isArray(candidate.errors)) {
-      queue.push(...candidate.errors);
-    }
-  }
-  return false;
-}
-
-function isRetryableVeniceDiscoveryError(err: unknown): boolean {
-  if (err instanceof VeniceDiscoveryHttpError) {
-    return true;
-  }
-  if (err instanceof Error && err.name === "AbortError") {
-    return true;
-  }
-  if (err instanceof TypeError && err.message.toLowerCase() === "fetch failed") {
-    return true;
-  }
-  return hasRetryableNetworkCode(err);
-}
-
 function normalizePositiveInt(value: unknown): number | undefined {
   if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) {
     return undefined;
@@ -592,6 +529,44 @@ function resolveApiSupportsTools(apiModel: VeniceModel): boolean | undefined {
   return typeof supportsFunctionCalling === "boolean" ? supportsFunctionCalling : undefined;
 }
 
+// Traverse error chain to find Venice-specific retryable codes
+function hasVeniceRetryableCodeInChain(err: unknown): boolean {
+  const veniceCodes = new Set(["ENOTFOUND", "ENETDOWN"]);
+  const queue: unknown[] = [err];
+  const seen = new Set<unknown>();
+  while (queue.length > 0) {
+    const current = queue.shift();
+    if (!current || typeof current !== "object" || seen.has(current)) {
+      continue;
+    }
+    seen.add(current);
+    const candidate = current as {
+      cause?: unknown;
+      errors?: unknown;
+      code?: unknown;
+      errno?: unknown;
+    };
+    let code: string | undefined;
+    if (typeof candidate.code === "string") {
+      code = candidate.code;
+    } else if (typeof candidate.errno === "string") {
+      code = candidate.errno;
+    }
+    if (code) {
+      if (veniceCodes.has(code) || code.startsWith("UND_ERR_")) {
+        return true;
+      }
+    }
+    if (candidate.cause) {
+      queue.push(candidate.cause);
+    }
+    if (Array.isArray(candidate.errors)) {
+      queue.push(...candidate.errors);
+    }
+  }
+  return false;
+}
+
 /**
  * Discover models from Venice API with fallback to static catalog.
  * The /models endpoint is public and doesn't require authentication.
@@ -603,29 +578,44 @@ export async function discoverVeniceModels(): Promise<ModelDefinitionConfig[]> {
   }
 
   try {
-    const response = await retryAsync(
-      async () => {
-        const currentResponse = await fetch(`${VENICE_BASE_URL}/models`, {
+    const response: Response = await retryHttpAsync(
+      () =>
+        fetch(`${VENICE_BASE_URL}/models`, {
           signal: AbortSignal.timeout(VENICE_DISCOVERY_TIMEOUT_MS),
           headers: {
             Accept: "application/json",
           },
-        });
-        if (
-          !currentResponse.ok &&
-          VENICE_DISCOVERY_RETRYABLE_HTTP_STATUS.has(currentResponse.status)
-        ) {
-          throw new VeniceDiscoveryHttpError(currentResponse.status);
-        }
-        return currentResponse;
-      },
+        }),
       {
         attempts: 3,
         minDelayMs: 300,
         maxDelayMs: 2000,
         jitter: 0.2,
         label: "venice-model-discovery",
-        shouldRetry: isRetryableVeniceDiscoveryError,
+        onResponse: async (res) => {
+          // Retryable HTTP status codes for Venice discovery
+          const retryableStatuses = [408, 425, 429, 500, 502, 503, 504];
+          if (!res.ok && retryableStatuses.includes(res.status)) {
+            throw new VeniceDiscoveryHttpError(res.status);
+          }
+          return res;
+        },
+        shouldRetry: (err) => {
+          if (err instanceof VeniceDiscoveryHttpError) {
+            return true;
+          }
+          if (err instanceof Error && err.name === "AbortError") {
+            return true;
+          }
+          if (err instanceof TypeError && err.message.toLowerCase() === "fetch failed") {
+            return true;
+          }
+          // Check for Venice-specific network errors in the error chain
+          if (hasVeniceRetryableCodeInChain(err)) {
+            return true;
+          }
+          return isHttpRetryable(err);
+        },
       },
     );
 
