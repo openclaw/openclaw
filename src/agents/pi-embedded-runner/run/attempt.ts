@@ -590,8 +590,8 @@ export async function resolvePromptBuildHookResult(params: {
       promptBuildResult?.appendSystemContext,
       legacyResult?.appendSystemContext,
     ]),
-    // Both results are already namespaced by pluginId from hooks.ts, so shallow merge is safe
-    messageMeta: { ...promptBuildResult?.messageMeta, ...legacyResult?.messageMeta },
+    // prompt-build takes precedence over legacy on key collisions (consistent with systemPrompt ordering)
+    messageMeta: { ...legacyResult?.messageMeta, ...promptBuildResult?.messageMeta },
   };
 }
 

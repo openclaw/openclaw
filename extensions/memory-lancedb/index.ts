@@ -21,7 +21,7 @@ import {
 
 // Memory tag name - used for both prependContext and UI stripRegex
 const MEMORY_TAG_NAME = "relevant-memories";
-const MEMORY_TAG_REGEX = `^<${MEMORY_TAG_NAME}[^>]*>[\\s\\S]*?</${MEMORY_TAG_NAME}>\\s*`;
+const MEMORY_TAG_REGEX = `<${MEMORY_TAG_NAME}[^>]*>[\\s\\S]*?</${MEMORY_TAG_NAME}>\\s*`;
 
 // ============================================================================
 // Types
