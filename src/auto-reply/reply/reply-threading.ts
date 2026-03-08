@@ -33,7 +33,12 @@ export function createReplyToModeFilter(
     }
     if (mode === "off") {
       const isExplicit = Boolean(payload.replyToTag) || Boolean(payload.replyToCurrent);
-      if (opts.allowExplicitReplyTagsWhenOff && isExplicit) {
+      // Compaction notices must never be threaded when replyToMode=off — even
+      // if they carry explicit reply tags (replyToCurrent).  Honouring the
+      // explicit tag here would make status notices appear in-thread while
+      // normal assistant replies stay off-thread, contradicting the off-mode
+      // expectation.  Strip replyToId unconditionally for compaction payloads.
+      if (opts.allowExplicitReplyTagsWhenOff && isExplicit && !payload.isCompactionNotice) {
         return payload;
       }
       return { ...payload, replyToId: undefined };
