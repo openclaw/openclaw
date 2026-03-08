@@ -24,6 +24,7 @@ vi.mock("../pairing/pairing-store.js", () => ({
 
 describe("native command auth in groups", () => {
   function setup(params: {
+    cfg?: OpenClawConfig;
     allowFrom?: string[];
     groupAllowFrom?: string[];
     useAccessGroups?: boolean;
@@ -43,7 +44,7 @@ describe("native command auth in groups", () => {
 
     registerTelegramNativeCommands({
       bot: bot as unknown as Parameters<typeof registerTelegramNativeCommands>[0]["bot"],
-      cfg: {} as OpenClawConfig,
+      cfg: params.cfg ?? ({} as OpenClawConfig),
       runtime: {} as unknown as RuntimeEnv,
       accountId: "default",
       telegramCfg: {} as TelegramAccountConfig,
@@ -96,6 +97,72 @@ describe("native command auth in groups", () => {
       (call) => typeof call[1] === "string" && call[1].includes("not authorized"),
     );
     expect(notAuthCalls).toHaveLength(0);
+  });
+
+  it("authorizes native commands in groups from commands.allowFrom.telegram", async () => {
+    const { handlers, sendMessage } = setup({
+      cfg: {
+        commands: {
+          allowFrom: {
+            telegram: ["12345"],
+          },
+        },
+      } as OpenClawConfig,
+      allowFrom: ["99999"],
+      groupAllowFrom: ["99999"],
+      useAccessGroups: true,
+    });
+
+    const ctx = {
+      message: {
+        chat: { id: -100999, type: "supergroup", is_forum: true },
+        from: { id: 12345, username: "testuser" },
+        message_thread_id: 42,
+        message_id: 1,
+        date: 1700000000,
+      },
+      match: "",
+    };
+
+    await handlers.status?.(ctx);
+
+    const notAuthCalls = sendMessage.mock.calls.filter(
+      (call) => typeof call[1] === "string" && call[1].includes("not authorized"),
+    );
+    expect(notAuthCalls).toHaveLength(0);
+  });
+
+  it("uses commands.allowFrom.telegram as the sole auth source when configured", async () => {
+    const { handlers, sendMessage } = setup({
+      cfg: {
+        commands: {
+          allowFrom: {
+            telegram: ["99999"],
+          },
+        },
+      } as OpenClawConfig,
+      groupAllowFrom: ["12345"],
+      useAccessGroups: true,
+    });
+
+    const ctx = {
+      message: {
+        chat: { id: -100999, type: "supergroup", is_forum: true },
+        from: { id: 12345, username: "testuser" },
+        message_thread_id: 42,
+        message_id: 1,
+        date: 1700000000,
+      },
+      match: "",
+    };
+
+    await handlers.status?.(ctx);
+
+    expect(sendMessage).toHaveBeenCalledWith(
+      -100999,
+      "You are not authorized to use this command.",
+      expect.objectContaining({ message_thread_id: 42 }),
+    );
   });
 
   it("rejects native commands in groups when sender is in neither allowlist", async () => {
