@@ -442,6 +442,12 @@ importers:
 
   extensions/open-prose: {}
 
+  extensions/openai-codex-auth:
+    devDependencies:
+      openclaw:
+        specifier: workspace:*
+        version: link:../..
+
   extensions/signal: {}
 
   extensions/slack: {}

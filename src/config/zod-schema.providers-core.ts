@@ -27,6 +27,7 @@ import {
   ProviderCommandsSchema,
   ReplyToModeSchema,
   RetryConfigSchema,
+  SecretInputSchema,
   TtsConfigSchema,
   requireOpenAllowFrom,
 } from "./zod-schema.core.js";

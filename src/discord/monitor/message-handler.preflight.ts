@@ -26,6 +26,10 @@ import { enqueueSystemEvent } from "../../infra/system-events.js";
 import { logDebug } from "../../logger.js";
 import { getChildLogger } from "../../logging.js";
 import { buildPairingReply } from "../../pairing/pairing-messages.js";
+import {
+  readChannelAllowFromStore,
+  upsertChannelPairingRequest,
+} from "../../pairing/pairing-store.js";
 import { DEFAULT_ACCOUNT_ID } from "../../routing/session-key.js";
 import { fetchPluralKitMessageInfo } from "../pluralkit.js";
 import { sendMessageDiscord } from "../send.js";
@@ -73,6 +77,27 @@ export type {
   DiscordMessagePreflightContext,
   DiscordMessagePreflightParams,
 } from "./message-handler.preflight.types.js";
+
+const DISCORD_BOUND_THREAD_SYSTEM_PREFIXES = ["⚙️", "🤖", "🧰"];
+
+function isPreflightAborted(abortSignal?: AbortSignal): boolean {
+  return Boolean(abortSignal?.aborted);
+}
+
+function isBoundThreadBotSystemMessage(params: {
+  isBoundThreadSession: boolean;
+  isBotAuthor: boolean;
+  text?: string;
+}): boolean {
+  if (!params.isBoundThreadSession || !params.isBotAuthor) {
+    return false;
+  }
+  const text = params.text?.trim();
+  if (!text) {
+    return false;
+  }
+  return DISCORD_BOUND_THREAD_SYSTEM_PREFIXES.some((prefix) => text.startsWith(prefix));
+}
 
 export function resolvePreflightMentionRequirement(params: {
   shouldRequireMention: boolean;
