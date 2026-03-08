@@ -417,7 +417,21 @@ export async function runAgentTurnWithFallback(params: {
                     // Route through blockReplyHandler so replyToId threading
                     // (replyToMode=all|first) is applied consistently with
                     // normal replies and the completion notice in agent-runner.ts.
-                    await blockReplyHandler?.({ text: "🧹 Compacting context..." });
+                    if (params.blockStreamingEnabled) {
+                      await blockReplyHandler?.({ text: "🧹 Compacting context..." });
+                    } else if (params.opts?.onBlockReply) {
+                      // blockReplyHandler is a no-op when streaming is disabled.
+                      // Fall back to direct delivery so non-streaming runs also
+                      // receive the compaction start notice.
+                      const currentMessageId =
+                        params.sessionCtx.MessageSidFull ?? params.sessionCtx.MessageSid;
+                      const noticePayload = params.applyReplyToMode({
+                        text: "🧹 Compacting context...",
+                        replyToId: currentMessageId,
+                        replyToCurrent: true,
+                      });
+                      await params.opts.onBlockReply(noticePayload);
+                    }
                   } else if (phase === "end") {
                     autoCompactionCompleted = true;
                   }
