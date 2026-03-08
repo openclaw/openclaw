@@ -404,7 +404,14 @@ describe("spawnAcpDirect", () => {
     expect(result.error).toContain("set `acp.defaultAgent`");
   });
 
-  it("adds actionable diagnostics when ACP backend is missing", async () => {
+  it("adds generic diagnostics when ACP backend is missing and backend config is unset", async () => {
+    hoisted.state.cfg = {
+      ...hoisted.state.cfg,
+      acp: {
+        ...hoisted.state.cfg.acp,
+        backend: undefined,
+      },
+    };
     hoisted.initializeSessionMock.mockRejectedValueOnce(
       new AcpRuntimeError(
         "ACP_BACKEND_MISSING",
@@ -423,9 +430,11 @@ describe("spawnAcpDirect", () => {
     );
 
     expect(result.status).toBe("error");
-    expect(result.error).toContain("ACP diagnostics:");
+    expect(result.error).toContain("configured backend=(unset)");
+    expect(result.error).toContain("backend selection is automatic");
     expect(result.error).toContain("openclaw plugins list");
     expect(result.error).toContain("/acp doctor");
+    expect(result.error).not.toContain("plugins.entries.acpx.enabled");
   });
 
   it("adds backend-enabled hint when ACP backend is unavailable", async () => {

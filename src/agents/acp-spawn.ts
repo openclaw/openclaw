@@ -182,14 +182,22 @@ function formatAcpBackendAvailabilityError(params: {
     return null;
   }
 
-  const configuredBackend = resolveConfiguredAcpBackendId(params.cfg) || "acpx";
-  const backendPluginEnabled = params.cfg.plugins?.entries?.[configuredBackend]?.enabled === true;
-  const backendHint = `plugins.entries.${configuredBackend}.enabled=${backendPluginEnabled ? "true" : "false-or-unset"} (effective plugin enablement can also come from auto-enable/defaults).`;
+  const configuredBackend = resolveConfiguredAcpBackendId(params.cfg);
+  if (configuredBackend) {
+    const backendPluginEnabled = params.cfg.plugins?.entries?.[configuredBackend]?.enabled === true;
+    const backendHint = `plugins.entries.${configuredBackend}.enabled=${backendPluginEnabled ? "true" : "false-or-unset"} (effective plugin enablement can also come from auto-enable/defaults).`;
+
+    return [
+      params.error.message,
+      `ACP diagnostics: configured backend=${configuredBackend}; ${backendHint}`,
+      "Try: 1) ensure acp.enabled=true and acp.backend matches a loaded runtime plugin, 2) run `openclaw plugins list`, 3) run `/acp doctor`.",
+    ].join(" ");
+  }
 
   return [
     params.error.message,
-    `ACP diagnostics: configured backend=${configuredBackend}; ${backendHint}`,
-    "Try: 1) ensure acp.enabled=true and acp.backend matches a loaded runtime plugin, 2) run `openclaw plugins list`, 3) run `/acp doctor`.",
+    "ACP diagnostics: configured backend=(unset); backend selection is automatic.",
+    "Try: 1) ensure acp.enabled=true, 2) ensure at least one ACP runtime plugin is installed/enabled, 3) run `openclaw plugins list`, 4) run `/acp doctor`.",
   ].join(" ");
 }
 
