@@ -319,7 +319,9 @@ export const ToolsWebSearchSchema = z
       .object({
         url: z.string().optional(),
         engines: z.array(z.string()).optional(),
-        categories: z.enum(["general", "images", "news", "videos", "files", "social media"]).optional(),
+        categories: z
+          .enum(["general", "images", "news", "videos", "files", "social media"])
+          .optional(),
         language: z.string().optional(),
         safeSearch: z.union([z.literal(0), z.literal(1), z.literal(2)]).optional(),
       })

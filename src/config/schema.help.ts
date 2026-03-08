@@ -659,7 +659,8 @@ export const FIELD_HELP: Record<string, string> = {
   "tools.message.crossContext.marker.suffix":
     'Text suffix for cross-context markers (supports "{channel}").',
   "tools.message.broadcast.enabled": "Enable broadcast action (default: true).",
-  "tools.web.search.enabled": "Enable the web_search tool (requires a provider API key, or use SearXNG for key-free search).",
+  "tools.web.search.enabled":
+    "Enable the web_search tool (requires a provider API key, or use SearXNG for key-free search).",
   "tools.web.search.provider":
     'Search provider ("brave", "gemini", "grok", "kimi", "perplexity", or "searxng"). Auto-detected from available API keys if omitted. Use "searxng" for self-hosted, API-key-free search.',
   "tools.web.search.apiKey": "Brave Search API key (fallback: BRAVE_API_KEY env var).",
