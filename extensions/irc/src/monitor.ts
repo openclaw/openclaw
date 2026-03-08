@@ -58,11 +58,18 @@ export async function monitorIrcProvider(opts: IrcMonitorOptions): Promise<{ sto
   });
 
   let client: IrcClient | null = null;
+  let resolveConnectionClosed: (() => void) | null = null;
+  const connectionClosed = new Promise<void>((resolve) => {
+    resolveConnectionClosed = resolve;
+  });
 
   client = await connectIrcClient(
     buildIrcConnectOptions(account, {
       channels: account.config.channels,
       abortSignal: opts.abortSignal,
+      onClose: () => {
+        if (resolveConnectionClosed) resolveConnectionClosed();
+      },
       onLine: (line) => {
         if (core.logging.shouldLogVerbose()) {
           logger.debug?.(`[${account.accountId}] << ${line}`);
@@ -136,6 +143,11 @@ export async function monitorIrcProvider(opts: IrcMonitorOptions): Promise<{ sto
   logger.info(
     `[${account.accountId}] connected to ${account.host}:${account.port}${account.tls ? " (tls)" : ""} as ${client.nick}`,
   );
+
+  // Keep the promise pending until the IRC connection actually closes.
+  // Without this, the gateway framework treats the resolved startAccount
+  // promise as a "channel exited" signal and triggers an auto-restart loop.
+  await connectionClosed;
 
   return {
     stop: () => {
