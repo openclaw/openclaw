@@ -34,10 +34,14 @@ export function registerSlackMessageEvents(params: {
         if (!ingressContext) {
           return;
         }
-        enqueueSystemEvent(subtypeHandler.describe(ingressContext.channelLabel), {
-          sessionKey: ingressContext.sessionKey,
-          contextKey: subtypeHandler.contextKey(message),
-        });
+        if (subtypeHandler.processAsMessage) {
+          await handleSlackMessage(message, { source: "message" });
+        } else {
+          enqueueSystemEvent(subtypeHandler.describe(ingressContext.channelLabel), {
+            sessionKey: ingressContext.sessionKey,
+            contextKey: subtypeHandler.contextKey(message),
+          });
+        }
         return;
       }
 
