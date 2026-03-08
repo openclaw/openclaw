@@ -4,6 +4,7 @@ import { render } from "lit";
 import { describe, expect, it, vi } from "vitest";
 import { renderChatSessionSelect } from "../app-render.helpers.ts";
 import type { AppViewState } from "../app-view-state.ts";
+import type { ChatInputHistoryKeyResult } from "../chat/input-history.ts";
 import type { GatewayBrowserClient } from "../gateway.ts";
 import type { ModelCatalogEntry } from "../types.ts";
 import type { SessionsListResult } from "../types.ts";
@@ -153,6 +154,23 @@ function createProps(overrides: Partial<ChatProps> = {}): ChatProps {
     agentsList: null,
     currentAgentId: "",
     onAgentChange: () => undefined,
+    ...overrides,
+  };
+}
+
+function createKeyResult(
+  overrides: Partial<ChatInputHistoryKeyResult> = {},
+): ChatInputHistoryKeyResult {
+  return {
+    handled: false,
+    preventDefault: false,
+    restoreCaret: null,
+    decision: "blocked:arrowup-not-at-start",
+    historyNavigationActiveBefore: false,
+    historyNavigationActiveAfter: false,
+    selectionStart: 0,
+    selectionEnd: 0,
+    valueLength: 0,
     ...overrides,
   };
 }
@@ -549,17 +567,15 @@ describe("chat view", () => {
 
   it("navigates history up when cursor is at start of draft", () => {
     const container = document.createElement("div");
-    const onHistoryKeydown = vi.fn(() => ({
-      handled: true,
-      preventDefault: true,
-      restoreCaret: "up" as const,
-      decision: "handled:enter-history-up" as const,
-      historyNavigationActiveBefore: false,
-      historyNavigationActiveAfter: true,
-      selectionStart: 0,
-      selectionEnd: 0,
-      valueLength: 5,
-    }));
+    const onHistoryKeydown = vi.fn(() =>
+      createKeyResult({
+        handled: true,
+        preventDefault: true,
+        restoreCaret: "up",
+        decision: "handled:enter-history-up",
+        historyNavigationActiveAfter: true,
+      }),
+    );
     render(
       renderChat(
         createProps({
@@ -582,17 +598,7 @@ describe("chat view", () => {
 
   it("does not navigate history up when cursor is not at start", () => {
     const container = document.createElement("div");
-    const onHistoryKeydown = vi.fn(() => ({
-      handled: false,
-      preventDefault: false,
-      restoreCaret: null,
-      decision: "blocked:arrowup-not-at-start" as const,
-      historyNavigationActiveBefore: false,
-      historyNavigationActiveAfter: false,
-      selectionStart: 2,
-      selectionEnd: 2,
-      valueLength: 5,
-    }));
+    const onHistoryKeydown = vi.fn(() => createKeyResult());
     render(
       renderChat(
         createProps({
@@ -834,19 +840,18 @@ describe("chat view", () => {
     expect(labels).not.toContain("Subagent: cron-config-check");
   });
 
-  it("passes ArrowDown to history key handler", () => {
+  it("passes handled ArrowDown results through", () => {
     const container = document.createElement("div");
-    const onHistoryKeydown = vi.fn(() => ({
-      handled: true,
-      preventDefault: true,
-      restoreCaret: "down" as const,
-      decision: "handled:history-down" as const,
-      historyNavigationActiveBefore: true,
-      historyNavigationActiveAfter: true,
-      selectionStart: 5,
-      selectionEnd: 5,
-      valueLength: 5,
-    }));
+    const onHistoryKeydown = vi.fn(() =>
+      createKeyResult({
+        handled: true,
+        preventDefault: true,
+        restoreCaret: "down",
+        decision: "handled:history-down",
+        historyNavigationActiveBefore: true,
+        historyNavigationActiveAfter: true,
+      }),
+    );
     render(
       renderChat(
         createProps({
@@ -873,17 +878,11 @@ describe("chat view", () => {
 
   it("passes blocked ArrowDown results through without preventing default", () => {
     const container = document.createElement("div");
-    const onHistoryKeydown = vi.fn(() => ({
-      handled: false,
-      preventDefault: false,
-      restoreCaret: null,
-      decision: "blocked:arrowdown-editing-mode" as const,
-      historyNavigationActiveBefore: false,
-      historyNavigationActiveAfter: false,
-      selectionStart: 2,
-      selectionEnd: 2,
-      valueLength: 5,
-    }));
+    const onHistoryKeydown = vi.fn(() =>
+      createKeyResult({
+        decision: "blocked:arrowdown-editing-mode",
+      }),
+    );
     render(
       renderChat(
         createProps({
@@ -910,17 +909,16 @@ describe("chat view", () => {
 
   it("passes handled ArrowDown results through even if caret is at start", () => {
     const container = document.createElement("div");
-    const onHistoryKeydown = vi.fn(() => ({
-      handled: true,
-      preventDefault: true,
-      restoreCaret: "down" as const,
-      decision: "handled:history-down" as const,
-      historyNavigationActiveBefore: true,
-      historyNavigationActiveAfter: true,
-      selectionStart: 0,
-      selectionEnd: 0,
-      valueLength: 5,
-    }));
+    const onHistoryKeydown = vi.fn(() =>
+      createKeyResult({
+        handled: true,
+        preventDefault: true,
+        restoreCaret: "down",
+        decision: "handled:history-down",
+        historyNavigationActiveBefore: true,
+        historyNavigationActiveAfter: true,
+      }),
+    );
     render(
       renderChat(
         createProps({
@@ -947,17 +945,16 @@ describe("chat view", () => {
 
   it("passes handled ArrowUp results through even if caret is at end", () => {
     const container = document.createElement("div");
-    const onHistoryKeydown = vi.fn(() => ({
-      handled: true,
-      preventDefault: true,
-      restoreCaret: "up" as const,
-      decision: "handled:history-up" as const,
-      historyNavigationActiveBefore: true,
-      historyNavigationActiveAfter: true,
-      selectionStart: 5,
-      selectionEnd: 5,
-      valueLength: 5,
-    }));
+    const onHistoryKeydown = vi.fn(() =>
+      createKeyResult({
+        handled: true,
+        preventDefault: true,
+        restoreCaret: "up",
+        decision: "handled:history-up",
+        historyNavigationActiveBefore: true,
+        historyNavigationActiveAfter: true,
+      }),
+    );
     render(
       renderChat(
         createProps({
@@ -982,6 +979,55 @@ describe("chat view", () => {
     expect(event.defaultPrevented).toBe(true);
   });
 
+  it("forwards raw key context to history handler", () => {
+    const container = document.createElement("div");
+    const onHistoryKeydown = vi.fn(() =>
+      createKeyResult({
+        handled: true,
+        preventDefault: true,
+        restoreCaret: "up",
+        decision: "handled:history-up",
+        historyNavigationActiveBefore: true,
+        historyNavigationActiveAfter: true,
+      }),
+    );
+    render(
+      renderChat(
+        createProps({
+          draft: "hello",
+          onHistoryKeydown,
+        }),
+      ),
+      container,
+    );
+
+    const textarea = container.querySelector("textarea") as HTMLTextAreaElement;
+    textarea.selectionStart = textarea.value.length;
+    textarea.selectionEnd = textarea.value.length;
+    const event = new KeyboardEvent("keydown", {
+      key: "ArrowUp",
+      bubbles: true,
+      cancelable: true,
+    });
+    textarea.dispatchEvent(event);
+
+    expect(onHistoryKeydown).toHaveBeenCalledTimes(1);
+    expect(onHistoryKeydown).toHaveBeenCalledWith(
+      expect.objectContaining({
+        key: "ArrowUp",
+        selectionStart: textarea.value.length,
+        selectionEnd: textarea.value.length,
+        valueLength: textarea.value.length,
+        altKey: false,
+        ctrlKey: false,
+        metaKey: false,
+        shiftKey: false,
+        isComposing: false,
+      }),
+    );
+    expect(event.defaultPrevented).toBe(true);
+  });
+
   it("keeps caret at start after ArrowUp history navigation updates draft", async () => {
     const container = document.createElement("div");
     let draft = "newest";
@@ -999,17 +1045,13 @@ describe("chat view", () => {
     const onHistoryKeydown = vi.fn(() => {
       draft = "older-entry";
       renderCurrent();
-      return {
+      return createKeyResult({
         handled: true,
         preventDefault: true,
-        restoreCaret: "up" as const,
-        decision: "handled:history-up" as const,
-        historyNavigationActiveBefore: true,
+        restoreCaret: "up",
+        decision: "handled:enter-history-up",
         historyNavigationActiveAfter: true,
-        selectionStart: 0,
-        selectionEnd: 0,
-        valueLength: 6,
-      };
+      });
     });
 
     renderCurrent();
