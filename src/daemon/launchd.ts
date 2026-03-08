@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { parseStrictInteger, parseStrictPositiveInteger } from "../infra/parse-finite-number.js";
 import {
   GATEWAY_LAUNCH_AGENT_LABEL,
   resolveGatewayServiceDescription,
@@ -127,15 +128,15 @@ export function parseLaunchctlPrint(output: string): LaunchctlPrintInfo {
   }
   const pidValue = entries.pid;
   if (pidValue) {
-    const pid = Number.parseInt(pidValue, 10);
-    if (Number.isFinite(pid) && pid > 0) {
+    const pid = parseStrictPositiveInteger(pidValue);
+    if (pid !== undefined) {
       info.pid = pid;
     }
   }
   const exitStatusValue = entries["last exit status"];
   if (exitStatusValue) {
-    const status = Number.parseInt(exitStatusValue, 10);
-    if (Number.isFinite(status)) {
+    const status = parseStrictInteger(exitStatusValue);
+    if (status !== undefined) {
       info.lastExitStatus = status;
     }
   }
