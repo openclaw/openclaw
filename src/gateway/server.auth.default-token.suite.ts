@@ -94,7 +94,7 @@ export function registerDefaultAuthTokenSuite(): void {
     });
 
     test("connect (req) handshake returns hello-ok payload", async () => {
-      const { CONFIG_PATH, STATE_DIR } = await import("../config/config.js");
+      const { STATE_DIR, createConfigIO } = await import("../config/config.js");
       const ws = await openWs(port);
 
       const res = await connectReq(ws);
@@ -106,7 +106,7 @@ export function registerDefaultAuthTokenSuite(): void {
           }
         | undefined;
       expect(payload?.type).toBe("hello-ok");
-      expect(payload?.snapshot?.configPath).toBe(CONFIG_PATH);
+      expect(payload?.snapshot?.configPath).toBe(createConfigIO().configPath);
       expect(payload?.snapshot?.stateDir).toBe(STATE_DIR);
 
       ws.close();

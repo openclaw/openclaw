@@ -63,6 +63,7 @@ import {
   buildTogetherModelDefinition,
 } from "./together-models.js";
 import { discoverVeniceModels, VENICE_BASE_URL } from "./venice-models.js";
+import { discoverVercelAiGatewayModels, VERCEL_AI_GATEWAY_BASE_URL } from "./vercel-ai-gateway.js";
 
 type ModelsConfig = NonNullable<OpenClawConfig["models"]>;
 export type ProviderConfig = NonNullable<ModelsConfig["providers"]>[string];
@@ -205,6 +206,8 @@ const NVIDIA_DEFAULT_COST = {
   cacheRead: 0,
   cacheWrite: 0,
 };
+
+const OPENAI_CODEX_BASE_URL = "https://chatgpt.com/backend-api";
 
 const log = createSubsystemLogger("agents/model-providers");
 
@@ -547,6 +550,9 @@ export function normalizeGoogleModelId(id: string): string {
   if (id === "gemini-3.1-pro") {
     return "gemini-3.1-pro-preview";
   }
+  if (id === "gemini-3.1-flash-lite") {
+    return "gemini-3.1-flash-lite-preview";
+  }
   // Preserve compatibility with earlier OpenClaw docs/config that pointed at a
   // non-existent Gemini Flash preview ID. Google's current Flash text model is
   // `gemini-3-flash-preview`.
@@ -765,11 +771,6 @@ function buildMinimaxProvider(): ProviderConfig {
         name: "MiniMax M2.5 Highspeed",
         reasoning: true,
       }),
-      buildMinimaxTextModel({
-        id: "MiniMax-M2.5-Lightning",
-        name: "MiniMax M2.5 Lightning",
-        reasoning: true,
-      }),
     ],
   };
 }
@@ -794,11 +795,6 @@ function buildMinimaxPortalProvider(): ProviderConfig {
       buildMinimaxTextModel({
         id: "MiniMax-M2.5-highspeed",
         name: "MiniMax M2.5 Highspeed",
-        reasoning: true,
-      }),
-      buildMinimaxTextModel({
-        id: "MiniMax-M2.5-Lightning",
-        name: "MiniMax M2.5 Lightning",
         reasoning: true,
       }),
     ],
@@ -960,6 +956,14 @@ async function buildHuggingfaceProvider(discoveryApiKey?: string): Promise<Provi
   };
 }
 
+async function buildVercelAiGatewayProvider(): Promise<ProviderConfig> {
+  return {
+    baseUrl: VERCEL_AI_GATEWAY_BASE_URL,
+    api: "anthropic-messages",
+    models: await discoverVercelAiGatewayModels(),
+  };
+}
+
 function buildTogetherProvider(): ProviderConfig {
   return {
     baseUrl: TOGETHER_BASE_URL,
@@ -989,6 +993,16 @@ function buildOpenrouterProvider(): ProviderConfig {
         maxTokens: OPENROUTER_DEFAULT_MAX_TOKENS,
       },
     ],
+  };
+}
+
+function buildOpenAICodexProvider(): ProviderConfig {
+  return {
+    baseUrl: OPENAI_CODEX_BASE_URL,
+    api: "openai-codex-responses",
+    // Like Copilot, Codex resolves OAuth credentials from auth-profiles at
+    // runtime, so the snapshot only needs the canonical API surface.
+    models: [],
   };
 }
 
@@ -1221,6 +1235,14 @@ export async function resolveImplicitProviders(params: {
     break;
   }
 
+  const vercelAiGatewayKey = resolveProviderApiKey("vercel-ai-gateway").apiKey;
+  if (vercelAiGatewayKey) {
+    providers["vercel-ai-gateway"] = {
+      ...(await buildVercelAiGatewayProvider()),
+      apiKey: vercelAiGatewayKey,
+    };
+  }
+
   // Ollama provider - auto-discover if running locally, or add if explicitly configured.
   // Use the user's configured baseUrl (from explicit providers) for model
   // discovery so that remote / non-default Ollama instances are reachable.
@@ -1290,6 +1312,11 @@ export async function resolveImplicitProviders(params: {
   const openrouterKey = resolveProviderApiKey("openrouter").apiKey;
   if (openrouterKey) {
     providers.openrouter = { ...buildOpenrouterProvider(), apiKey: openrouterKey };
+  }
+
+  const openaiCodexProfiles = listProfilesForProvider(authStore, "openai-codex");
+  if (openaiCodexProfiles.length > 0) {
+    providers["openai-codex"] = buildOpenAICodexProvider();
   }
 
   const nvidiaKey = resolveProviderApiKey("nvidia").apiKey;

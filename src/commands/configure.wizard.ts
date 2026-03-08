@@ -188,7 +188,7 @@ async function promptWebToolsConfig(
     if (stored && SEARCH_PROVIDER_OPTIONS.some((e) => e.value === stored)) {
       return stored;
     }
-    return SEARCH_PROVIDER_OPTIONS.find((e) => hasKeyForProvider(e.value))?.value ?? "perplexity";
+    return SEARCH_PROVIDER_OPTIONS.find((e) => hasKeyForProvider(e.value))?.value ?? "brave";
   })();
 
   note(

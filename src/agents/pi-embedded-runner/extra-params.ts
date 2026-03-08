@@ -3,6 +3,10 @@ import type { SimpleStreamOptions } from "@mariozechner/pi-ai";
 import { streamSimple } from "@mariozechner/pi-ai";
 import type { ThinkLevel } from "../../auto-reply/thinking.js";
 import type { OpenClawConfig } from "../../config/config.js";
+import {
+  usesOpenAiFunctionAnthropicToolSchema,
+  usesOpenAiStringModeAnthropicToolChoice,
+} from "../provider-capabilities.js";
 import { log } from "./logger.js";
 
 const OPENROUTER_APP_HEADERS: Record<string, string> = {
@@ -786,7 +790,7 @@ function createMoonshotThinkingWrapper(
   };
 }
 
-function isKimiCodingAnthropicEndpoint(model: {
+function requiresAnthropicToolPayloadCompatibility(model: {
   api?: unknown;
   provider?: unknown;
   baseUrl?: unknown;
@@ -795,7 +799,7 @@ function isKimiCodingAnthropicEndpoint(model: {
     return false;
   }
 
-  if (typeof model.provider === "string" && model.provider.trim().toLowerCase() === "kimi-coding") {
+  if (typeof model.provider === "string" && usesOpenAiFunctionAnthropicToolSchema(model.provider)) {
     return true;
   }
 
@@ -814,7 +818,9 @@ function isKimiCodingAnthropicEndpoint(model: {
   }
 }
 
-function normalizeKimiCodingToolDefinition(tool: unknown): Record<string, unknown> | undefined {
+function normalizeOpenAiFunctionAnthropicToolDefinition(
+  tool: unknown,
+): Record<string, unknown> | undefined {
   if (!tool || typeof tool !== "object" || Array.isArray(tool)) {
     return undefined;
   }
@@ -852,12 +858,21 @@ function normalizeKimiCodingToolDefinition(tool: unknown): Record<string, unknow
   };
 }
 
-function normalizeKimiCodingToolChoice(toolChoice: unknown): unknown {
+function normalizeOpenAiStringModeAnthropicToolChoice(toolChoice: unknown): unknown {
   if (!toolChoice || typeof toolChoice !== "object" || Array.isArray(toolChoice)) {
     return toolChoice;
   }
 
   const choice = toolChoice as Record<string, unknown>;
+  if (choice.type === "auto") {
+    return "auto";
+  }
+  if (choice.type === "none") {
+    return "none";
+  }
+  if (choice.type === "required") {
+    return "required";
+  }
   if (choice.type === "any") {
     return "required";
   }
@@ -872,24 +887,43 @@ function normalizeKimiCodingToolChoice(toolChoice: unknown): unknown {
 }
 
 /**
- * Kimi Coding's anthropic-messages endpoint expects OpenAI-style tool payloads
- * (`tools[].function`) even when messages use Anthropic request framing.
+ * Some anthropic-messages providers accept Anthropic framing but still expect
+ * OpenAI-style tool payloads (`tools[].function`, string tool_choice modes).
  */
-function createKimiCodingAnthropicToolSchemaWrapper(baseStreamFn: StreamFn | undefined): StreamFn {
+function createAnthropicToolPayloadCompatibilityWrapper(
+  baseStreamFn: StreamFn | undefined,
+): StreamFn {
   const underlying = baseStreamFn ?? streamSimple;
   return (model, context, options) => {
     const originalOnPayload = options?.onPayload;
     return underlying(model, context, {
       ...options,
       onPayload: (payload) => {
-        if (payload && typeof payload === "object" && isKimiCodingAnthropicEndpoint(model)) {
+        if (
+          payload &&
+          typeof payload === "object" &&
+          requiresAnthropicToolPayloadCompatibility(model)
+        ) {
           const payloadObj = payload as Record<string, unknown>;
-          if (Array.isArray(payloadObj.tools)) {
+          if (
+            Array.isArray(payloadObj.tools) &&
+            usesOpenAiFunctionAnthropicToolSchema(
+              typeof model.provider === "string" ? model.provider : undefined,
+            )
+          ) {
             payloadObj.tools = payloadObj.tools
-              .map((tool) => normalizeKimiCodingToolDefinition(tool))
+              .map((tool) => normalizeOpenAiFunctionAnthropicToolDefinition(tool))
               .filter((tool): tool is Record<string, unknown> => !!tool);
           }
-          payloadObj.tool_choice = normalizeKimiCodingToolChoice(payloadObj.tool_choice);
+          if (
+            usesOpenAiStringModeAnthropicToolChoice(
+              typeof model.provider === "string" ? model.provider : undefined,
+            )
+          ) {
+            payloadObj.tool_choice = normalizeOpenAiStringModeAnthropicToolChoice(
+              payloadObj.tool_choice,
+            );
+          }
         }
         originalOnPayload?.(payload);
       },
@@ -1236,7 +1270,7 @@ export function applyExtraParamsToAgent(
     agent.streamFn = createMoonshotThinkingWrapper(agent.streamFn, moonshotThinkingType);
   }
 
-  agent.streamFn = createKimiCodingAnthropicToolSchemaWrapper(agent.streamFn);
+  agent.streamFn = createAnthropicToolPayloadCompatibilityWrapper(agent.streamFn);
 
   if (provider === "openrouter") {
     log.debug(`applying OpenRouter app attribution headers for ${provider}/${modelId}`);
