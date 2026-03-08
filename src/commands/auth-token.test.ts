@@ -12,8 +12,22 @@ describe("validateAnthropicSetupToken", () => {
     expect(validateAnthropicSetupToken(token)).toBeUndefined();
   });
 
+  it("accepts bb-prefixed setup tokens", () => {
+    const token = `bb${"x".repeat(80)}`;
+    expect(validateAnthropicSetupToken(token)).toBeUndefined();
+  });
+
+  it("rejects too-short setup tokens", () => {
+    const token = "sk-ant-oat01-short";
+    expect(validateAnthropicSetupToken(token)).toBe(
+      "Token looks too short; paste the full setup-token",
+    );
+  });
+
   it("rejects non-anthropic tokens", () => {
     const token = `sk-proj-${"x".repeat(120)}`;
-    expect(validateAnthropicSetupToken(token)).toBe("Expected token starting with sk-ant-");
+    expect(validateAnthropicSetupToken(token)).toBe(
+      "Expected token starting with one of: sk-ant-, bb",
+    );
   });
 });
