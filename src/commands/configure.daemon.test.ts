@@ -122,4 +122,19 @@ describe("maybeInstallDaemon", () => {
 
     expect(serviceInstall).toHaveBeenCalledTimes(1);
   });
+
+  it("continues the WSL2 daemon install flow when service status probe reports systemd unavailability", async () => {
+    serviceIsLoaded.mockRejectedValueOnce(
+      new Error("systemctl --user unavailable: Failed to connect to bus: No medium found"),
+    );
+
+    await expect(
+      maybeInstallDaemon({
+        runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+        port: 18789,
+      }),
+    ).resolves.toBeUndefined();
+
+    expect(serviceInstall).toHaveBeenCalledTimes(1);
+  });
 });
