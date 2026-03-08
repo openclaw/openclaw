@@ -526,15 +526,14 @@ export const agentHandlers: GatewayRequestHandlers = {
         });
         sessionEntry = persisted;
       }
-      if (canonicalSessionKey === mainSessionKey || canonicalSessionKey === "global") {
-        context.addChatRun(idem, {
-          sessionKey: canonicalSessionKey,
-          clientRunId: idem,
-        });
-        if (requestedBestEffortDeliver === undefined) {
-          bestEffortDeliver = true;
-        }
+      // Preserve previous delivery default: treat main/global as best-effort deliver unless explicitly set.
+      if (
+        (canonicalSessionKey === mainSessionKey || canonicalSessionKey === "global") &&
+        requestedBestEffortDeliver === undefined
+      ) {
+        bestEffortDeliver = true;
       }
+
       registerAgentRunContext(idem, { sessionKey: canonicalSessionKey });
     }
 
@@ -668,6 +667,17 @@ export const agentHandlers: GatewayRequestHandlers = {
       },
     });
     respond(true, accepted, undefined, { runId });
+
+    // Ensure chat UI clients receive real-time updates for this run.
+    // Map agent bus events (keyed by sessionId/runId) to chat events (keyed by clientRunId).
+    // Register only after all validations and once we are about to start the agent run,
+    // to avoid orphaned chat-run entries on early exits.
+    if (resolvedSessionKey) {
+      context.addChatRun(runId, {
+        sessionKey: resolvedSessionKey,
+        clientRunId: runId,
+      });
+    }
 
     const resolvedThreadId = explicitThreadId ?? deliveryPlan.resolvedThreadId;
 
