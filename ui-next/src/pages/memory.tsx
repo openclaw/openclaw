@@ -1163,16 +1163,16 @@ function SearchTab() {
 // --- Activity Log Tab ---
 
 function ActivityLogTab() {
-  const { activityLog, activityLoading, activityFilter, activityHasMore, activitySessionsScanned } =
-    useMemoryStore();
+  const { activityLog, activityLoading, activityFilter } = useMemoryStore();
   const { loadActivityLog } = useMemory();
   const loadedRef = useRef(false);
+  const [displayLimit, setDisplayLimit] = useState(20);
 
-  // Initial load only — Load More calls loadActivityLog directly with append=true
+  // Load all activity once on mount
   useEffect(() => {
     if (!loadedRef.current) {
       loadedRef.current = true;
-      void loadActivityLog(5);
+      void loadActivityLog();
     }
   }, [loadActivityLog]);
 
@@ -1189,10 +1189,11 @@ function ActivityLogTab() {
     return true;
   });
 
+  const visibleLog = filteredLog.slice(0, displayLimit);
+  const hasMore = displayLimit < filteredLog.length;
+
   const handleLoadMore = () => {
-    // Use the store's tracked count (accounts for auto-advancement past empty batches)
-    const newLimit = activitySessionsScanned + 10;
-    void loadActivityLog(newLimit, true);
+    setDisplayLimit((prev) => prev + 20);
   };
 
   return (
@@ -1214,7 +1215,7 @@ function ActivityLogTab() {
           variant="ghost"
           size="sm"
           onClick={() => {
-            void loadActivityLog(sessionLimit);
+            void loadActivityLog();
           }}
           disabled={activityLoading}
           className="ml-auto"
@@ -1224,13 +1225,13 @@ function ActivityLogTab() {
       </div>
 
       {/* Log entries */}
-      {activityLoading && filteredLog.length === 0 ? (
+      {activityLoading && visibleLog.length === 0 ? (
         <div className="flex items-center justify-center py-12">
           <Loader2 className="size-5 animate-spin text-muted-foreground" />
         </div>
-      ) : filteredLog.length > 0 ? (
+      ) : visibleLog.length > 0 ? (
         <div className="space-y-1">
-          {filteredLog.map((entry) => (
+          {visibleLog.map((entry) => (
             <div
               key={entry.id}
               className="flex items-start gap-3 rounded-lg border border-border/50 bg-card/50 px-3 py-2 text-xs"
@@ -1268,19 +1269,17 @@ function ActivityLogTab() {
           ))}
 
           {/* Load more */}
-          {activityHasMore && (
+          {hasMore && (
             <div className="flex justify-center pt-2">
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={handleLoadMore}
-                disabled={activityLoading}
-                className="text-xs"
-              >
-                {activityLoading ? <Loader2 className="size-3.5 animate-spin mr-1.5" /> : null}
-                Load more sessions
+              <Button variant="outline" size="sm" onClick={handleLoadMore} className="text-xs">
+                Show more ({filteredLog.length - displayLimit} remaining)
               </Button>
             </div>
+          )}
+          {!hasMore && filteredLog.length > 0 && (
+            <p className="text-center text-[10px] text-muted-foreground pt-2">
+              {filteredLog.length} total entries
+            </p>
           )}
         </div>
       ) : (
