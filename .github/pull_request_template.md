@@ -92,7 +92,7 @@ What you personally verified (not just CI), and how:
 - [ ] I replied to or resolved every bot review conversation I addressed in this PR.
 - [ ] I left unresolved only the conversations that still need reviewer or maintainer judgment.
 
-If a bot comment is fixed by this PR, resolve that conversation yourself. Do not leave bot conversation cleanup for maintainers.
+If a bot review conversation is addressed by this PR, resolve that conversation yourself. Do not leave bot review conversation cleanup for maintainers.
 
 ## Compatibility / Migration
 
