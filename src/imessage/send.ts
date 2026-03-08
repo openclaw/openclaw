@@ -35,7 +35,17 @@ export type IMessageSendResult = {
 };
 
 const LEADING_REPLY_TAG_RE = /^\s*\[\[\s*reply_to\s*:\s*([^\]\n]+)\s*\]\]\s*/i;
+const REPLY_TAG_RE = /\[\[\s*reply_to(_current)?\s*:\s*[^\]\n]+\s*\]\]/gi;
 const MAX_REPLY_TO_ID_LENGTH = 256;
+
+/**
+ * Strip all reply tags from message text for channels that don't support them.
+ * iMessage doesn't support native reply/quote threading, so these tags would
+ * appear as literal text if not removed.
+ */
+function stripReplyTags(message: string): string {
+  return message.replace(REPLY_TAG_RE, "").trim();
+}
 
 function stripUnsafeReplyTagChars(value: string): string {
   let next = "";
@@ -147,6 +157,8 @@ export async function sendMessageIMessage(
     });
     message = convertMarkdownTables(message, tableMode);
   }
+  // iMessage doesn't support native reply threading, so strip all reply tags
+  message = stripReplyTags(message);
   message = prependReplyTagIfNeeded(message, opts.replyToId);
 
   const params: Record<string, unknown> = {
