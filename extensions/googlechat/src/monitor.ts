@@ -339,6 +339,15 @@ async function processMessageWithPipeline(params: {
       onModelSelected,
     },
   });
+
+  // Clean up typing message if deliver was never called (e.g. NO_REPLY after emoji reaction)
+  if (typingMessageName) {
+    try {
+      await deleteGoogleChatMessage({ account, messageName: typingMessageName });
+    } catch (err) {
+      runtime.error?.(`Google Chat typing cleanup on NO_REPLY failed: ${String(err)}`);
+    }
+  }
 }
 
 async function downloadAttachment(
