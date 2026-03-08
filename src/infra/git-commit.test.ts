@@ -361,10 +361,10 @@ describe("git commit resolution", () => {
     await makeFakeGitRepo(validRepo, {
       head: "ref: refs/heads/main\n",
       refs: {
-        "refs/heads/main": "fedcba9876543210fedcba9876543210fedcba98",
+        "refs/heads/main": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
       },
     });
-    expect(resolveCommitHash({ cwd: validRepo, env: {} })).toBe("fedcba9");
+    expect(resolveCommitHash({ cwd: validRepo, env: {} })).toBe("aaaaaaa");
   });
 
   it("resolves refs from the git commondir in worktree layouts", async () => {
@@ -375,7 +375,7 @@ describe("git commit resolution", () => {
     await fs.mkdir(commonGitDir, { recursive: true });
     const refPath = path.join(commonGitDir, "refs", "heads", "main");
     await fs.mkdir(path.dirname(refPath), { recursive: true });
-    await fs.writeFile(refPath, "76543210fedcba9876543210fedcba9876543210\n", "utf-8");
+    await fs.writeFile(refPath, "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\n", "utf-8");
     await makeFakeGitRepo(repoRoot, {
       gitdir: worktreeGitDir,
       head: "ref: refs/heads/main\n",
@@ -384,7 +384,7 @@ describe("git commit resolution", () => {
 
     const { resolveCommitHash } = await import("./git-commit.js");
 
-    expect(resolveCommitHash({ cwd: repoRoot, env: {} })).toBe("7654321");
+    expect(resolveCommitHash({ cwd: repoRoot, env: {} })).toBe("bbbbbbb");
   });
 
   it("reads full HEAD refs before parsing long branch names", async () => {
@@ -394,12 +394,12 @@ describe("git commit resolution", () => {
     await makeFakeGitRepo(repoRoot, {
       head: `ref: ${longRefName}\n`,
       refs: {
-        [longRefName]: "0123456789abcdef0123456789abcdef01234567",
+        [longRefName]: "cccccccccccccccccccccccccccccccccccccccc",
       },
     });
 
     const { resolveCommitHash } = await import("./git-commit.js");
 
-    expect(resolveCommitHash({ cwd: repoRoot, env: {} })).toBe("0123456");
+    expect(resolveCommitHash({ cwd: repoRoot, env: {} })).toBe("ccccccc");
   });
 });
