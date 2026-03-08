@@ -191,6 +191,29 @@ describe("loadWorkspaceBootstrapFiles", () => {
     expect(getMemoryEntries(files)).toHaveLength(0);
   });
 
+  it("loads symlinked bootstrap files that point outside the workspace", async () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    const rootDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-workspace-symlink-"));
+    try {
+      const workspaceDir = path.join(rootDir, "workspace");
+      const outsideDir = path.join(rootDir, "outside");
+      await fs.mkdir(workspaceDir, { recursive: true });
+      await fs.mkdir(outsideDir, { recursive: true });
+      const outsideFile = path.join(outsideDir, DEFAULT_AGENTS_FILENAME);
+      await fs.writeFile(outsideFile, "symlinked content", "utf-8");
+      await fs.symlink(outsideFile, path.join(workspaceDir, DEFAULT_AGENTS_FILENAME));
+
+      const files = await loadWorkspaceBootstrapFiles(workspaceDir);
+      const agents = files.find((file) => file.name === DEFAULT_AGENTS_FILENAME);
+      expect(agents?.missing).toBe(false);
+      expect(agents?.content).toBe("symlinked content");
+    } finally {
+      await fs.rm(rootDir, { recursive: true, force: true });
+    }
+  });
+
   it("treats hardlinked bootstrap aliases as missing", async () => {
     if (process.platform === "win32") {
       return;

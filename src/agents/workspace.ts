@@ -53,6 +53,42 @@ function workspaceFileIdentity(stat: syncFs.Stats, canonicalPath: string): strin
   return `${canonicalPath}|${stat.dev}:${stat.ino}:${stat.size}:${stat.mtimeMs}`;
 }
 
+/**
+ * Fallback reader for workspace bootstrap files that are symlinks pointing
+ * outside the workspace boundary.  Resolves the real path, enforces the same
+ * size cap, and caches by inode identity just like the primary reader.
+ */
+async function readSymlinkedWorkspaceFile(filePath: string): Promise<WorkspaceGuardedReadResult> {
+  try {
+    const realPath = await fs.realpath(filePath);
+    const stat = await fs.stat(realPath);
+    if (!stat.isFile()) {
+      return { ok: false, reason: "validation" };
+    }
+    if (stat.size > MAX_WORKSPACE_BOOTSTRAP_FILE_BYTES) {
+      return { ok: false, reason: "validation" };
+    }
+
+    const identity = workspaceFileIdentity(stat, realPath);
+    const cached = workspaceFileCache.get(filePath);
+    if (cached && cached.identity === identity) {
+      return { ok: true, content: cached.content };
+    }
+
+    const content = await fs.readFile(realPath, "utf-8");
+    workspaceFileCache.set(filePath, { content, identity });
+    return { ok: true, content };
+  } catch (error) {
+    workspaceFileCache.delete(filePath);
+    const code =
+      typeof error === "object" && error !== null && "code" in error ? String(error.code) : "";
+    if (code === "ENOENT" || code === "ENOTDIR" || code === "ELOOP") {
+      return { ok: false, reason: "path", error };
+    }
+    return { ok: false, reason: "io", error };
+  }
+}
+
 async function readWorkspaceFileWithGuards(params: {
   filePath: string;
   workspaceDir: string;
@@ -64,6 +100,22 @@ async function readWorkspaceFileWithGuards(params: {
     maxBytes: MAX_WORKSPACE_BOOTSTRAP_FILE_BYTES,
   });
   if (!opened.ok) {
+    // If the boundary check rejected the file (e.g. symlink pointing outside
+    // the workspace), fall back to reading via realpath + readFile which
+    // naturally follow symlinks.  This is safe for workspace bootstrap files
+    // because the filenames are hardcoded constants placed by the user.
+    // Only attempt the fallback when the path is actually a symlink so that
+    // hardlink rejections and other validation failures are preserved.
+    if (opened.reason === "validation") {
+      try {
+        const lstat = await fs.lstat(params.filePath);
+        if (lstat.isSymbolicLink()) {
+          return readSymlinkedWorkspaceFile(params.filePath);
+        }
+      } catch {
+        // lstat failed — fall through to the original failure
+      }
+    }
     workspaceFileCache.delete(params.filePath);
     return opened;
   }
