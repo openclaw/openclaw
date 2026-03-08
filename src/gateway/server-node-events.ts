@@ -95,9 +95,6 @@ function shouldDropDuplicateVoiceTranscript(params: {
       if (value.ts < cutoff) {
         recentVoiceTranscripts.delete(key);
       }
-      if (recentVoiceTranscripts.size <= MAX_RECENT_VOICE_TRANSCRIPTS) {
-        break;
-      }
     }
     while (recentVoiceTranscripts.size > MAX_RECENT_VOICE_TRANSCRIPTS) {
       const oldestKey = recentVoiceTranscripts.keys().next().value;
