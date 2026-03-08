@@ -3,6 +3,31 @@ import type { OpenClawConfig } from "../config/config.js";
 import { resolveCliBackendConfig } from "./cli-backends.js";
 
 describe("resolveCliBackendConfig reliability merge", () => {
+  it("defaults codex-cli to workspace-write for fresh and resume runs", () => {
+    const resolved = resolveCliBackendConfig("codex-cli");
+
+    expect(resolved).not.toBeNull();
+    expect(resolved?.config.args).toEqual([
+      "exec",
+      "--json",
+      "--color",
+      "never",
+      "--sandbox",
+      "workspace-write",
+      "--skip-git-repo-check",
+    ]);
+    expect(resolved?.config.resumeArgs).toEqual([
+      "exec",
+      "resume",
+      "{sessionId}",
+      "--color",
+      "never",
+      "--sandbox",
+      "workspace-write",
+      "--skip-git-repo-check",
+    ]);
+  });
+
   it("deep-merges reliability watchdog overrides for codex", () => {
     const cfg = {
       agents: {

@@ -5,6 +5,7 @@ const loadConfig = vi.hoisted(() => vi.fn());
 const resolveGatewayInstallToken = vi.hoisted(() => vi.fn());
 const buildGatewayInstallPlan = vi.hoisted(() => vi.fn());
 const note = vi.hoisted(() => vi.fn());
+const serviceIsLoaded = vi.hoisted(() => vi.fn(async () => false));
 const serviceInstall = vi.hoisted(() => vi.fn(async () => {}));
 const ensureSystemdUserLingerInteractive = vi.hoisted(() => vi.fn(async () => {}));
 
@@ -41,7 +42,7 @@ vi.mock("./daemon-runtime.js", () => ({
 
 vi.mock("../daemon/service.js", () => ({
   resolveGatewayService: vi.fn(() => ({
-    isLoaded: vi.fn(async () => false),
+    isLoaded: serviceIsLoaded,
     install: serviceInstall,
   })),
 }));
@@ -59,6 +60,8 @@ const { maybeInstallDaemon } = await import("./configure.daemon.js");
 describe("maybeInstallDaemon", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    serviceIsLoaded.mockResolvedValue(false);
+    serviceInstall.mockResolvedValue(undefined);
     loadConfig.mockReturnValue({});
     resolveGatewayInstallToken.mockResolvedValue({
       token: undefined,
@@ -79,11 +82,8 @@ describe("maybeInstallDaemon", () => {
     });
 
     expect(resolveGatewayInstallToken).toHaveBeenCalledTimes(1);
-    expect(buildGatewayInstallPlan).toHaveBeenCalledWith(
-      expect.objectContaining({
-        token: undefined,
-      }),
-    );
+    expect(buildGatewayInstallPlan).toHaveBeenCalledTimes(1);
+    expect("token" in buildGatewayInstallPlan.mock.calls[0][0]).toBe(false);
     expect(serviceInstall).toHaveBeenCalledTimes(1);
   });
 
@@ -106,5 +106,50 @@ describe("maybeInstallDaemon", () => {
     );
     expect(buildGatewayInstallPlan).not.toHaveBeenCalled();
     expect(serviceInstall).not.toHaveBeenCalled();
+  });
+
+  it("continues daemon install flow when service status probe throws", async () => {
+    serviceIsLoaded.mockRejectedValueOnce(
+      new Error("systemctl is-enabled unavailable: Failed to connect to bus"),
+    );
+
+    await expect(
+      maybeInstallDaemon({
+        runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+        port: 18789,
+      }),
+    ).resolves.toBeUndefined();
+
+    expect(serviceInstall).toHaveBeenCalledTimes(1);
+  });
+
+  it("rethrows install probe failures that are not the known non-fatal Linux systemd cases", async () => {
+    serviceIsLoaded.mockRejectedValueOnce(
+      new Error("systemctl is-enabled unavailable: read-only file system"),
+    );
+
+    await expect(
+      maybeInstallDaemon({
+        runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+        port: 18789,
+      }),
+    ).rejects.toThrow("systemctl is-enabled unavailable: read-only file system");
+
+    expect(serviceInstall).not.toHaveBeenCalled();
+  });
+
+  it("continues the WSL2 daemon install flow when service status probe reports systemd unavailability", async () => {
+    serviceIsLoaded.mockRejectedValueOnce(
+      new Error("systemctl --user unavailable: Failed to connect to bus: No medium found"),
+    );
+
+    await expect(
+      maybeInstallDaemon({
+        runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+        port: 18789,
+      }),
+    ).resolves.toBeUndefined();
+
+    expect(serviceInstall).toHaveBeenCalledTimes(1);
   });
 });

@@ -274,6 +274,32 @@ describe("VoiceCallWebhookServer replay handling", () => {
   });
 });
 
+describe("VoiceCallWebhookServer response normalization", () => {
+  it("preserves explicit empty provider response bodies", async () => {
+    const responseProvider: VoiceCallProvider = {
+      ...provider,
+      parseWebhookEvent: () => ({
+        events: [],
+        statusCode: 204,
+        providerResponseBody: "",
+      }),
+    };
+    const { manager } = createManager([]);
+    const config = createConfig({ serve: { port: 0, bind: "127.0.0.1", path: "/voice/webhook" } });
+    const server = new VoiceCallWebhookServer(config, manager, responseProvider);
+
+    try {
+      const baseUrl = await server.start();
+      const response = await postWebhookForm(server, baseUrl, "CallSid=CA123&SpeechResult=hello");
+
+      expect(response.status).toBe(204);
+      expect(await response.text()).toBe("");
+    } finally {
+      await server.stop();
+    }
+  });
+});
+
 describe("VoiceCallWebhookServer start idempotency", () => {
   it("returns existing URL when start() is called twice without stop()", async () => {
     const { manager } = createManager([]);

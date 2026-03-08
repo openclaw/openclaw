@@ -61,4 +61,26 @@ describe("agent-events sequencing", () => {
 
     expect(phases).toEqual(["start", "end"]);
   });
+
+  test("omits sessionKey for runs hidden from Control UI", async () => {
+    resetAgentRunContextForTest();
+    registerAgentRunContext("run-hidden", {
+      sessionKey: "session-imessage",
+      isControlUiVisible: false,
+    });
+
+    let receivedSessionKey: string | undefined;
+    const stop = onAgentEvent((evt) => {
+      receivedSessionKey = evt.sessionKey;
+    });
+    emitAgentEvent({
+      runId: "run-hidden",
+      stream: "assistant",
+      data: { text: "hi" },
+      sessionKey: "session-imessage",
+    });
+    stop();
+
+    expect(receivedSessionKey).toBeUndefined();
+  });
 });
