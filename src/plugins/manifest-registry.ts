@@ -212,7 +212,16 @@ export function loadPluginManifestRegistry(params: {
         }
         const existingReal = safeRealpathSync(existing.candidate.rootDir, realpathCache);
         const candidateReal = safeRealpathSync(candidate.rootDir, realpathCache);
-        return Boolean(existingReal && candidateReal && existingReal === candidateReal);
+        // Only treat as same plugin if both realpath calls succeeded AND returned the same path.
+        // If either realpath fails (returns null), we can't determine equality - be conservative
+        // and treat as different to avoid silently dropping plugins (which could cause
+        // real duplicates to go undetected).
+        if (existingReal && candidateReal) {
+          return existingReal === candidateReal;
+        }
+        // Realpath failed for one or both paths - treat as different to surface the issue
+        // rather than silently skipping a potentially valid plugin.
+        return false;
       })();
       if (samePlugin) {
         // Prefer higher-precedence origins even if candidates are passed in
@@ -225,16 +234,23 @@ export function loadPluginManifestRegistry(params: {
             schemaCacheKey,
             configSchema,
           });
-          seenIds.set(manifest.id, { candidate, recordIndex: existing.recordIndex });
         }
+        // Always update seenIds to track the latest candidate for proper duplicate detection.
+        // This ensures subsequent duplicates compare against the current candidate, not an older one.
+        seenIds.set(manifest.id, { candidate, recordIndex: existing.recordIndex });
         continue;
       }
-      diagnostics.push({
-        level: "warn",
-        pluginId: manifest.id,
-        source: candidate.source,
-        message: `duplicate plugin id detected; later plugin may be overridden (${candidate.source})`,
-      });
+      // Only warn about duplicates when origins are the same (e.g., two global plugins).
+      // Different origins (e.g., bundled vs global) indicate intentional override
+      // where higher-precedence plugin is expected to replace lower-precedence one.
+      if (existing.candidate.origin === candidate.origin) {
+        diagnostics.push({
+          level: "warn",
+          pluginId: manifest.id,
+          source: candidate.source,
+          message: `duplicate plugin id detected; later plugin may be overridden (${candidate.source})`,
+        });
+      }
     } else {
       seenIds.set(manifest.id, { candidate, recordIndex: records.length });
     }
