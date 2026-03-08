@@ -126,19 +126,27 @@ export async function applyBeforeResponseEmitHook(
   const rawTurnCount = countCurrentRunAssistantTurns(activeSession.messages);
   const scopeCount = Math.min(rawTurnCount, assistantTexts.length) || assistantTexts.length;
 
+  // Scope to only current-run messages so we never corrupt prior history.
+  // Uses tail-based scan (last N assistant messages) which is compaction-safe.
+  const runMessages = getRunScopedMessages(activeSession.messages, scopeCount);
+
+  // Build allContent from session messages rather than raw assistantTexts.
+  // In block-reply mode, assistantTexts contains per-chunk entries (multiple
+  // per turn), but plugins expect per-turn content for allContent. Session
+  // messages have the consolidated full-turn text.
+  const sessionAllContent = runMessages
+    .filter((m) => m.role === "assistant" && extractAssistantText(m).length > 0)
+    .map((m) => extractAssistantText(m));
+
   const emitResult = await hookRunner.runBeforeResponseEmit(
     {
       content,
-      allContent: [...assistantTexts],
+      allContent: sessionAllContent,
       channel,
       messageCount: messagesSnapshot.length,
     },
     agentCtx,
   );
-
-  // Scope to only current-run messages so we never corrupt prior history.
-  // Uses tail-based scan (last N assistant messages) which is compaction-safe.
-  const runMessages = getRunScopedMessages(activeSession.messages, scopeCount);
 
   if (emitResult?.block) {
     log.warn(`response blocked: ${emitResult.blockReason ?? "no reason"}`);
@@ -183,8 +191,8 @@ export async function applyBeforeResponseEmitHook(
     // No-op optimization: if the plugin returned allContent unchanged, skip
     // session rewrites to avoid unnecessary work and observer confusion.
     const allContentChanged =
-      emitResult.allContent.length !== assistantTexts.length ||
-      emitResult.allContent.some((t, i) => t !== assistantTexts[i]);
+      emitResult.allContent.length !== sessionAllContent.length ||
+      emitResult.allContent.some((t, i) => t !== sessionAllContent[i]);
     if (!allContentChanged) {
       log.debug("allContent unchanged, skipping rewrite");
       return undefined;

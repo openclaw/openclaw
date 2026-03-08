@@ -363,18 +363,40 @@ describe("applyBeforeResponseEmitHook", () => {
     ).rejects.toThrow("hook crashed");
   });
 
-  it("passes allContent to hook event", async () => {
+  it("passes allContent from session messages (per-turn, not per-chunk)", async () => {
     const hookRunner = makeMockHookRunner({ content: "modified" });
+    // Tool-loop: 3 assistant turns in session
+    const activeSession = {
+      messages: [
+        makeMsg("user", "question"),
+        makeMsg("assistant", "turn 1"),
+        {
+          role: "toolResult" as const,
+          content: "tool out",
+          timestamp: Date.now(),
+        } as unknown as AgentMessage,
+        makeMsg("assistant", "turn 2"),
+        {
+          role: "toolResult" as const,
+          content: "tool out",
+          timestamp: Date.now(),
+        } as unknown as AgentMessage,
+        makeMsg("assistant", "turn 3"),
+      ],
+    };
 
     await applyBeforeResponseEmitHook({
       hookRunner,
       agentCtx: dummyCtx,
       assistantTexts: ["turn 1", "turn 2", "turn 3"],
-      messagesSnapshot: [makeMsg("assistant", "turn 3")],
-      activeSession: { messages: [makeMsg("assistant", "turn 3")] },
+      messagesSnapshot: activeSession.messages.slice(),
+      activeSession,
     });
 
     const callArgs = (hookRunner.runBeforeResponseEmit as ReturnType<typeof vi.fn>).mock.calls[0];
+    // allContent is built from session messages, not raw assistantTexts.
+    // This ensures per-turn content even in block-reply mode where
+    // assistantTexts may have multiple chunks per turn.
     expect(callArgs[0].allContent).toEqual(["turn 1", "turn 2", "turn 3"]);
     expect(callArgs[0].content).toBe("turn 3");
   });
