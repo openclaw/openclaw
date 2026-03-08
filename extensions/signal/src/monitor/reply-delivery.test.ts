@@ -105,4 +105,24 @@ describe("resolveSignalReplyDelivery", () => {
     expect(state.consumed).toBe(false);
     expect(next.effectiveReplyTo).toBe("1700000000000");
   });
+
+  it("does not consume inherited group reply state when quoteAuthor is unavailable", () => {
+    const state: SignalReplyDeliveryState = { consumed: false };
+
+    const first = resolveSignalReplyDelivery({
+      payload: { text: "first" },
+      inheritedReplyToId: "1700000000000",
+      state,
+    });
+    markSignalReplyConsumed(state, first.effectiveReplyTo, { isGroup: true });
+
+    const next = resolveSignalReplyDelivery({
+      payload: { text: "second" },
+      inheritedReplyToId: "1700000000000",
+      state,
+    });
+
+    expect(state.consumed).toBe(false);
+    expect(next.effectiveReplyTo).toBe("1700000000000");
+  });
 });

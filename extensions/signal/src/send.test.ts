@@ -44,6 +44,17 @@ describe("sendMessageSignal", () => {
     expect(params["quote-author"]).toBe("uuid:sender-1");
   });
 
+  it("sends quote-timestamp for direct replies without quoteAuthor", async () => {
+    await sendMessageSignal("+15551230000", "hello", {
+      textMode: "plain",
+      replyTo: "1700000000000",
+    });
+
+    const params = rpcMock.mock.calls[0]?.[1] as Record<string, unknown>;
+    expect(params["quote-timestamp"]).toBe(1700000000000);
+    expect(params["quote-author"]).toBeUndefined();
+  });
+
   it("ignores replyTo values with trailing non-numeric characters", async () => {
     await sendMessageSignal("+15551230000", "hello", {
       textMode: "plain",

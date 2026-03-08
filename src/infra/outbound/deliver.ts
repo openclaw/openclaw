@@ -33,6 +33,7 @@ import {
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { getAgentScopedMediaLocalRoots } from "../../media/local-roots.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
+import { isSignalGroupTarget, resolveSignalQuoteMetadata } from "../../../extensions/signal/src/reply-quote.js";
 import { throwIfAborted } from "./abort.js";
 import { ackDelivery, enqueueDelivery, failDelivery } from "./delivery-queue.js";
 import type { OutboundIdentity } from "./identity.js";
@@ -542,6 +543,7 @@ async function deliverOutboundPayloadsCore(
       : configuredTextLimit;
   const chunkMode = handler.chunker ? resolveChunkMode(cfg, channel, accountId) : "length";
   const isSignalChannel = channel === "signal";
+  const signalIsGroupTarget = isSignalChannel && isSignalGroupTarget(to);
   const signalTableMode = isSignalChannel
     ? resolveMarkdownTableMode({ cfg, channel: "signal", accountId })
     : "code";
@@ -701,11 +703,29 @@ async function deliverOutboundPayloadsCore(
     );
   }
   let replyConsumed = false;
+  const shouldConsumeReplyAfterSend = (replyTo: string | undefined) => {
+    if (!replyTo) {
+      return false;
+    }
+    if (!isSignalChannel) {
+      return true;
+    }
+    // Signal silently drops malformed quote timestamps and group quotes without a
+    // quote-author, so only consume inherited reply state when the send can carry
+    // quote metadata on the wire.
+    return (
+      resolveSignalQuoteMetadata({
+        replyToId: replyTo,
+        quoteAuthor: params.quoteAuthor,
+        isGroup: signalIsGroupTarget,
+      }).quoteTimestamp !== undefined
+    );
+  };
   const markReplyConsumedIfSendSucceeded = (
     replyTo: string | undefined,
     resultCountBeforeSend: number,
   ) => {
-    if (replyTo && results.length > resultCountBeforeSend) {
+    if (shouldConsumeReplyAfterSend(replyTo) && results.length > resultCountBeforeSend) {
       replyConsumed = true;
     }
   };
@@ -717,7 +737,10 @@ async function deliverOutboundPayloadsCore(
     const resultCountBeforeSend = results.length;
     try {
       const value = await send();
-      if (replyTo && (sent?.(value) ?? results.length > resultCountBeforeSend)) {
+      if (
+        shouldConsumeReplyAfterSend(replyTo) &&
+        (sent?.(value) ?? results.length > resultCountBeforeSend)
+      ) {
         replyConsumed = true;
       }
       return value;

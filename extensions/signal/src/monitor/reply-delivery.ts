@@ -1,4 +1,5 @@
 import type { ReplyPayload } from "../../../../src/auto-reply/types.js";
+import { resolveSignalQuoteMetadata } from "../reply-quote.js";
 
 export type SignalReplyDeliveryState = {
   consumed: boolean;
@@ -50,17 +51,25 @@ export function resolveSignalReplyDelivery(params: {
 }
 
 /**
- * Only consume the inherited reply state when the reply id is a valid Signal
- * timestamp (pure decimal string, > 0).  Malformed ids (e.g. a raw
- * `[[reply_to:...]]` tag that wasn't resolved) would be silently dropped by
+ * Only consume the inherited reply state when Signal can actually send quote
+ * metadata for the payload. Malformed ids (e.g. a raw `[[reply_to:...]]` tag)
+ * and group replies without a resolved quote-author are silently dropped by
  * `sendMessageSignal`, so consuming state for them would lose the inherited
  * quote for subsequent payloads in the same turn.
  */
 export function markSignalReplyConsumed(
   state: SignalReplyDeliveryState | undefined,
   replyToId?: string,
+  options: { isGroup?: boolean; quoteAuthor?: string | null } = {},
 ) {
-  if (state && replyToId && /^\d+$/.test(replyToId) && parseInt(replyToId, 10) > 0) {
+  if (
+    state &&
+    resolveSignalQuoteMetadata({
+      replyToId,
+      quoteAuthor: options.quoteAuthor,
+      isGroup: options.isGroup,
+    }).quoteTimestamp !== undefined
+  ) {
     state.consumed = true;
   }
 }

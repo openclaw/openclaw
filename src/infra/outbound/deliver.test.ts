@@ -892,7 +892,7 @@ describe("deliverOutboundPayloads", () => {
       channel: "signal",
       to: "+1555",
       payloads: [{ text: "abcd" }, { text: "ef" }],
-      replyToId: "orig-msg-id",
+      replyToId: "1700000000000",
       quoteAuthor: "Tester",
       deps: { sendSignal },
       bestEffort: true,
@@ -904,7 +904,7 @@ describe("deliverOutboundPayloads", () => {
       1,
       "+1555",
       expect.any(String),
-      expect.objectContaining({ replyTo: "orig-msg-id", quoteAuthor: "Tester" }),
+      expect.objectContaining({ replyTo: "1700000000000", quoteAuthor: "Tester" }),
     );
     expect(sendSignal).toHaveBeenNthCalledWith(
       2,
@@ -923,6 +923,67 @@ describe("deliverOutboundPayloads", () => {
       { channel: "signal", messageId: "s1", timestamp: 1 },
       { channel: "signal", messageId: "s3", timestamp: 3 },
     ]);
+  });
+
+  it("preserves inherited Signal reply metadata after an explicit malformed replyToId is skipped", async () => {
+    const sendSignal = vi
+      .fn()
+      .mockResolvedValueOnce({ messageId: "s1", timestamp: 1 })
+      .mockResolvedValueOnce({ messageId: "s2", timestamp: 2 });
+
+    await deliverOutboundPayloads({
+      cfg: { channels: { signal: {} } },
+      channel: "signal",
+      to: "+1555",
+      payloads: [{ text: "first", replyToId: "not-a-timestamp" }, { text: "second" }],
+      replyToId: "1700000000000",
+      quoteAuthor: "uuid:sender-1",
+      deps: { sendSignal },
+    });
+
+    expect(sendSignal).toHaveBeenCalledTimes(2);
+    expect(sendSignal).toHaveBeenNthCalledWith(
+      1,
+      "+1555",
+      "first",
+      expect.objectContaining({ replyTo: "not-a-timestamp", quoteAuthor: "uuid:sender-1" }),
+    );
+    expect(sendSignal).toHaveBeenNthCalledWith(
+      2,
+      "+1555",
+      "second",
+      expect.objectContaining({ replyTo: "1700000000000", quoteAuthor: "uuid:sender-1" }),
+    );
+  });
+
+  it("preserves inherited Signal group reply metadata when quoteAuthor is unavailable", async () => {
+    const sendSignal = vi
+      .fn()
+      .mockResolvedValueOnce({ messageId: "s1", timestamp: 1 })
+      .mockResolvedValueOnce({ messageId: "s2", timestamp: 2 });
+
+    await deliverOutboundPayloads({
+      cfg: { channels: { signal: {} } },
+      channel: "signal",
+      to: "group:test-group",
+      payloads: [{ text: "first" }, { text: "second" }],
+      replyToId: "1700000000000",
+      deps: { sendSignal },
+    });
+
+    expect(sendSignal).toHaveBeenCalledTimes(2);
+    expect(sendSignal).toHaveBeenNthCalledWith(
+      1,
+      "group:test-group",
+      "first",
+      expect.objectContaining({ replyTo: "1700000000000", quoteAuthor: undefined }),
+    );
+    expect(sendSignal).toHaveBeenNthCalledWith(
+      2,
+      "group:test-group",
+      "second",
+      expect.objectContaining({ replyTo: "1700000000000", quoteAuthor: undefined }),
+    );
   });
 
   it("passes normalized payload to onError", async () => {
