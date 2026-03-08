@@ -21,7 +21,7 @@ import {
   writeCache,
 } from "./web-shared.js";
 
-const SEARCH_PROVIDERS = ["brave", "perplexity", "grok", "gemini", "kimi"] as const;
+const SEARCH_PROVIDERS = ["brave", "serper", "perplexity", "grok", "gemini", "kimi"] as const;
 const DEFAULT_SEARCH_COUNT = 5;
 const MAX_SEARCH_COUNT = 10;
 
@@ -29,6 +29,7 @@ const BRAVE_SEARCH_ENDPOINT = "https://api.search.brave.com/res/v1/web/search";
 const BRAVE_LLM_CONTEXT_ENDPOINT = "https://api.search.brave.com/res/v1/llm/context";
 const DEFAULT_PERPLEXITY_BASE_URL = "https://openrouter.ai/api/v1";
 const PERPLEXITY_DIRECT_BASE_URL = "https://api.perplexity.ai";
+const SERPER_SEARCH_ENDPOINT = "https://google.serper.dev/search";
 const PERPLEXITY_SEARCH_ENDPOINT = "https://api.perplexity.ai/search";
 const DEFAULT_PERPLEXITY_MODEL = "perplexity/sonar-pro";
 const PERPLEXITY_KEY_PREFIXES = ["pplx-"];
@@ -212,6 +213,13 @@ function createWebSearchSchema(params: {
     });
   }
 
+  if (params.provider === "serper") {
+    return Type.Object({
+      ...querySchema,
+      ...filterSchema,
+    });
+  }
+
   if (params.provider === "perplexity") {
     if (params.perplexityTransport === "chat_completions") {
       return Type.Object({
@@ -277,6 +285,17 @@ type BraveLlmContextResult = { url: string; title: string; snippets: BraveLlmCon
 type BraveLlmContextResponse = {
   grounding: { generic?: BraveLlmContextResult[] };
   sources?: { url?: string; hostname?: string; date?: string }[];
+};
+
+type SerperSearchResult = {
+  title?: string;
+  link?: string;
+  snippet?: string;
+  date?: string;
+};
+
+type SerperSearchResponse = {
+  organic?: SerperSearchResult[];
 };
 
 type BraveConfig = {
@@ -491,7 +510,33 @@ function resolveSearchApiKey(search?: WebSearchConfig): string | undefined {
   return fromConfig || fromEnv || undefined;
 }
 
+function resolveSerperApiKey(search?: WebSearchConfig): string | undefined {
+  const serper =
+    search && typeof search === "object" && "serper" in search
+      ? (search as Record<string, unknown>).serper
+      : undefined;
+  const fromConfigRaw =
+    serper && typeof serper === "object" && "apiKey" in serper
+      ? normalizeResolvedSecretInputString({
+          value: (serper as { apiKey?: unknown }).apiKey,
+          path: "tools.web.search.serper.apiKey",
+        })
+      : undefined;
+  const fromConfig = normalizeSecretInput(fromConfigRaw);
+  const fromEnv = normalizeSecretInput(process.env.SERPER_API_KEY);
+  return fromConfig || fromEnv || undefined;
+}
+
 function missingSearchKeyPayload(provider: (typeof SEARCH_PROVIDERS)[number]) {
+  if (provider === "serper") {
+    return {
+      error: "missing_serper_api_key",
+      message:
+        "web_search (serper) needs an API key. Set SERPER_API_KEY in the Gateway environment, or configure tools.web.search.serper.apiKey.",
+      docs: "https://docs.openclaw.ai/tools/web",
+    };
+  }
+
   if (provider === "perplexity") {
     return {
       error: "missing_perplexity_api_key",
@@ -536,6 +581,9 @@ function resolveSearchProvider(search?: WebSearchConfig): (typeof SEARCH_PROVIDE
     search && "provider" in search && typeof search.provider === "string"
       ? search.provider.trim().toLowerCase()
       : "";
+  if (raw === "serper") {
+    return "serper";
+  }
   if (raw === "perplexity") {
     return "perplexity";
   }
@@ -554,30 +602,7 @@ function resolveSearchProvider(search?: WebSearchConfig): (typeof SEARCH_PROVIDE
 
   // Auto-detect provider from available API keys (priority order)
   if (raw === "") {
-    // 1. Brave
-    if (resolveSearchApiKey(search)) {
-      logVerbose(
-        'web_search: no provider configured, auto-detected "brave" from available API keys',
-      );
-      return "brave";
-    }
-    // 2. Gemini
-    const geminiConfig = resolveGeminiConfig(search);
-    if (resolveGeminiApiKey(geminiConfig)) {
-      logVerbose(
-        'web_search: no provider configured, auto-detected "gemini" from available API keys',
-      );
-      return "gemini";
-    }
-    // 3. Kimi
-    const kimiConfig = resolveKimiConfig(search);
-    if (resolveKimiApiKey(kimiConfig)) {
-      logVerbose(
-        'web_search: no provider configured, auto-detected "kimi" from available API keys',
-      );
-      return "kimi";
-    }
-    // 4. Perplexity
+    // 1. Perplexity
     const perplexityConfig = resolvePerplexityConfig(search);
     const { apiKey: perplexityKey } = resolvePerplexityApiKey(perplexityConfig);
     if (perplexityKey) {
@@ -586,6 +611,28 @@ function resolveSearchProvider(search?: WebSearchConfig): (typeof SEARCH_PROVIDE
       );
       return "perplexity";
     }
+    // 2. Serper
+    if (resolveSerperApiKey(search)) {
+      logVerbose(
+        'web_search: no provider configured, auto-detected "serper" from available API keys',
+      );
+      return "serper";
+    }
+    // 3. Brave
+    if (resolveSearchApiKey(search)) {
+      logVerbose(
+        'web_search: no provider configured, auto-detected "brave" from available API keys',
+      );
+      return "brave";
+    }
+    // 4. Gemini
+    const geminiConfig = resolveGeminiConfig(search);
+    if (resolveGeminiApiKey(geminiConfig)) {
+      logVerbose(
+        'web_search: no provider configured, auto-detected "gemini" from available API keys',
+      );
+      return "gemini";
+    }
     // 5. Grok
     const grokConfig = resolveGrokConfig(search);
     if (resolveGrokApiKey(grokConfig)) {
@@ -593,6 +640,14 @@ function resolveSearchProvider(search?: WebSearchConfig): (typeof SEARCH_PROVIDE
         'web_search: no provider configured, auto-detected "grok" from available API keys',
       );
       return "grok";
+    }
+    // 6. Kimi
+    const kimiConfig = resolveKimiConfig(search);
+    if (resolveKimiApiKey(kimiConfig)) {
+      logVerbose(
+        'web_search: no provider configured, auto-detected "kimi" from available API keys',
+      );
+      return "kimi";
     }
   }
 
@@ -667,8 +722,8 @@ function inferPerplexityBaseUrlFromApiKey(apiKey?: string): PerplexityBaseUrlHin
 
 function resolvePerplexityBaseUrl(
   perplexity?: PerplexityConfig,
-  apiKeySource: PerplexityApiKeySource = "none",
-  apiKey?: string,
+  apiKeySource: PerplexityApiKeySource = "none", // pragma: allowlist secret
+  apiKey?: string, // pragma: allowlist secret
 ): string {
   const fromConfig =
     perplexity && "baseUrl" in perplexity && typeof perplexity.baseUrl === "string"
@@ -678,9 +733,11 @@ function resolvePerplexityBaseUrl(
     return fromConfig;
   }
   if (apiKeySource === "perplexity_env") {
+    // pragma: allowlist secret
     return PERPLEXITY_DIRECT_BASE_URL;
   }
   if (apiKeySource === "openrouter_env") {
+    // pragma: allowlist secret
     return DEFAULT_PERPLEXITY_BASE_URL;
   }
   if (apiKeySource === "config") {
@@ -1009,7 +1066,8 @@ function normalizeBraveLanguageParams(params: { search_lang?: string; ui_lang?: 
 
 /**
  * Normalizes freshness shortcut to the provider's expected format.
- * Accepts both Brave format (pd/pw/pm/py) and Perplexity format (day/week/month/year).
+ * Accepts both Brave format (pd/pw/pm/py) and natural format (day/week/month/year).
+ * Perplexity and Serper keep natural values; Brave uses shortcuts.
  * For Brave, also accepts date ranges (YYYY-MM-DDtoYYYY-MM-DD).
  */
 function normalizeFreshness(
@@ -1031,7 +1089,7 @@ function normalizeFreshness(
   }
 
   if (PERPLEXITY_RECENCY_VALUES.has(lower)) {
-    return provider === "perplexity" ? lower : RECENCY_TO_FRESHNESS[lower];
+    return provider === "perplexity" || provider === "serper" ? lower : RECENCY_TO_FRESHNESS[lower];
   }
 
   // Brave date range support
@@ -1540,6 +1598,80 @@ async function runWebSearch(params: {
 
   const start = Date.now();
 
+  if (params.provider === "serper") {
+    const mapped = await withTrustedWebSearchEndpoint(
+      {
+        url: SERPER_SEARCH_ENDPOINT,
+        timeoutSeconds: params.timeoutSeconds,
+        init: {
+          method: "POST",
+          headers: {
+            Accept: "application/json",
+            "Content-Type": "application/json",
+            "X-API-KEY": params.apiKey,
+          },
+          body: JSON.stringify({
+            q: params.query,
+            num: params.count,
+            ...(params.country ? { gl: params.country.toLowerCase() } : {}),
+            ...(params.language ? { hl: params.language.toLowerCase() } : {}),
+            ...(params.freshness
+              ? {
+                  tbs:
+                    params.freshness === "day"
+                      ? "qdr:d"
+                      : params.freshness === "week"
+                        ? "qdr:w"
+                        : params.freshness === "month"
+                          ? "qdr:m"
+                          : "qdr:y",
+                }
+              : {}),
+          }),
+        },
+      },
+      async (res) => {
+        if (!res.ok) {
+          const detailResult = await readResponseText(res, { maxBytes: 64_000 });
+          const detail = detailResult.text;
+          throw new Error(`Serper API error (${res.status}): ${detail || res.statusText}`);
+        }
+
+        const data = (await res.json()) as SerperSearchResponse;
+        const results = Array.isArray(data.organic) ? data.organic : [];
+        return results.map((entry) => {
+          const description = entry.snippet ?? "";
+          const title = entry.title ?? "";
+          const url = entry.link ?? "";
+          const rawSiteName = resolveSiteName(url);
+          return {
+            title: title ? wrapWebContent(title, "web_search") : "",
+            url,
+            description: description ? wrapWebContent(description, "web_search") : "",
+            published: entry.date || undefined,
+            siteName: rawSiteName || undefined,
+          };
+        });
+      },
+    );
+
+    const payload = {
+      query: params.query,
+      provider: params.provider,
+      count: mapped.length,
+      tookMs: Date.now() - start,
+      externalContent: {
+        untrusted: true,
+        source: "web_search",
+        provider: params.provider,
+        wrapped: true,
+      },
+      results: mapped,
+    };
+    writeCache(SEARCH_CACHE, cacheKey, payload, params.cacheTtlMs);
+    return payload;
+  }
+
   if (params.provider === "perplexity") {
     if (params.perplexityTransport === "chat_completions") {
       const { content, citations } = await runPerplexitySearch({
@@ -1824,15 +1956,17 @@ export function createWebSearchTool(options?: {
       ? perplexityTransport.transport === "chat_completions"
         ? "Search the web using Perplexity Sonar via Perplexity/OpenRouter chat completions. Returns AI-synthesized answers with citations from web-grounded search."
         : "Search the web using the Perplexity Search API. Returns structured results (title, URL, snippet) for fast research. Supports domain, region, language, and freshness filtering."
-      : provider === "grok"
-        ? "Search the web using xAI Grok. Returns AI-synthesized answers with citations from real-time web search."
-        : provider === "kimi"
-          ? "Search the web using Kimi by Moonshot. Returns AI-synthesized answers with citations from native $web_search."
-          : provider === "gemini"
-            ? "Search the web using Gemini with Google Search grounding. Returns AI-synthesized answers with citations from Google Search."
-            : braveMode === "llm-context"
-              ? "Search the web using Brave Search LLM Context API. Returns pre-extracted page content (text chunks, tables, code blocks) optimized for LLM grounding."
-              : "Search the web using Brave Search API. Supports region-specific and localized search via country and language parameters. Returns titles, URLs, and snippets for fast research.";
+      : provider === "serper"
+        ? "Search the web using the Serper Google Search API. Returns titles, URLs, and snippets for fast research. Supports country and language hints, plus freshness shortcuts."
+        : provider === "grok"
+          ? "Search the web using xAI Grok. Returns AI-synthesized answers with citations from real-time web search."
+          : provider === "kimi"
+            ? "Search the web using Kimi by Moonshot. Returns AI-synthesized answers with citations from native $web_search."
+            : provider === "gemini"
+              ? "Search the web using Gemini with Google Search grounding. Returns AI-synthesized answers with citations from Google Search."
+              : braveMode === "llm-context"
+                ? "Search the web using Brave Search LLM Context API. Returns pre-extracted page content (text chunks, tables, code blocks) optimized for LLM grounding."
+                : "Search the web using Brave Search API. Supports region-specific and localized search via country and language parameters. Returns titles, URLs, and snippets for fast research.";
 
   return {
     label: "Web Search",
@@ -1847,13 +1981,15 @@ export function createWebSearchTool(options?: {
       const apiKey =
         provider === "perplexity"
           ? perplexityRuntime?.apiKey
-          : provider === "grok"
-            ? resolveGrokApiKey(grokConfig)
-            : provider === "kimi"
-              ? resolveKimiApiKey(kimiConfig)
-              : provider === "gemini"
-                ? resolveGeminiApiKey(geminiConfig)
-                : resolveSearchApiKey(search);
+          : provider === "serper"
+            ? resolveSerperApiKey(search)
+            : provider === "grok"
+              ? resolveGrokApiKey(grokConfig)
+              : provider === "kimi"
+                ? resolveKimiApiKey(kimiConfig)
+                : provider === "gemini"
+                  ? resolveGeminiApiKey(geminiConfig)
+                  : resolveSearchApiKey(search);
 
       if (!apiKey) {
         return jsonResult(missingSearchKeyPayload(provider));
@@ -1869,6 +2005,7 @@ export function createWebSearchTool(options?: {
       if (
         country &&
         provider !== "brave" &&
+        provider !== "serper" &&
         !(provider === "perplexity" && supportsStructuredPerplexityFilters)
       ) {
         return jsonResult({
@@ -1876,7 +2013,7 @@ export function createWebSearchTool(options?: {
           message:
             provider === "perplexity"
               ? "country filtering is only supported by the native Perplexity Search API path. Remove Perplexity baseUrl/model overrides or use a direct PERPLEXITY_API_KEY to enable it."
-              : `country filtering is not supported by the ${provider} provider. Only Brave and Perplexity support country filtering.`,
+              : `country filtering is not supported by the ${provider} provider. Only Brave, Serper, and Perplexity support country filtering.`,
           docs: "https://docs.openclaw.ai/tools/web",
         });
       }
@@ -1884,6 +2021,7 @@ export function createWebSearchTool(options?: {
       if (
         language &&
         provider !== "brave" &&
+        provider !== "serper" &&
         !(provider === "perplexity" && supportsStructuredPerplexityFilters)
       ) {
         return jsonResult({
@@ -1891,7 +2029,7 @@ export function createWebSearchTool(options?: {
           message:
             provider === "perplexity"
               ? "language filtering is only supported by the native Perplexity Search API path. Remove Perplexity baseUrl/model overrides or use a direct PERPLEXITY_API_KEY to enable it."
-              : `language filtering is not supported by the ${provider} provider. Only Brave and Perplexity support language filtering.`,
+              : `language filtering is not supported by the ${provider} provider. Only Brave, Serper, and Perplexity support language filtering.`,
           docs: "https://docs.openclaw.ai/tools/web",
         });
       }
@@ -1935,10 +2073,15 @@ export function createWebSearchTool(options?: {
         });
       }
       const rawFreshness = readStringParam(params, "freshness");
-      if (rawFreshness && provider !== "brave" && provider !== "perplexity") {
+      if (
+        rawFreshness &&
+        provider !== "brave" &&
+        provider !== "perplexity" &&
+        provider !== "serper"
+      ) {
         return jsonResult({
           error: "unsupported_freshness",
-          message: `freshness filtering is not supported by the ${provider} provider. Only Brave and Perplexity support freshness.`,
+          message: `freshness filtering is not supported by the ${provider} provider. Only Brave, Serper, and Perplexity support freshness.`,
           docs: "https://docs.openclaw.ai/tools/web",
         });
       }

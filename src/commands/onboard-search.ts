@@ -10,7 +10,7 @@ import type { RuntimeEnv } from "../runtime.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
 import type { SecretInputMode } from "./onboard-types.js";
 
-export type SearchProvider = "perplexity" | "brave" | "gemini" | "grok" | "kimi";
+export type SearchProvider = "perplexity" | "brave" | "serper" | "gemini" | "grok" | "kimi";
 
 type SearchProviderEntry = {
   value: SearchProvider;
@@ -29,6 +29,14 @@ export const SEARCH_PROVIDER_OPTIONS: readonly SearchProviderEntry[] = [
     envKeys: ["BRAVE_API_KEY"],
     placeholder: "BSA...",
     signupUrl: "https://brave.com/search/api/",
+  },
+  {
+    value: "serper",
+    label: "Serper (Google Search)",
+    hint: "Structured Google results via Serper",
+    envKeys: ["SERPER_API_KEY"],
+    placeholder: "serper_...",
+    signupUrl: "https://serper.dev/",
   },
   {
     value: "gemini",
@@ -75,6 +83,8 @@ function rawKeyValue(config: OpenClawConfig, provider: SearchProvider): unknown 
       return search?.apiKey;
     case "perplexity":
       return search?.perplexity?.apiKey;
+    case "serper":
+      return search?.serper?.apiKey;
     case "gemini":
       return search?.gemini?.apiKey;
     case "grok":
@@ -134,6 +144,9 @@ export function applySearchKey(
       break;
     case "perplexity":
       search.perplexity = { ...search.perplexity, apiKey: key };
+      break;
+    case "serper":
+      search.serper = { ...search.serper, apiKey: key };
       break;
     case "gemini":
       search.gemini = { ...search.gemini, apiKey: key };
