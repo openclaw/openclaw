@@ -145,6 +145,13 @@ Per-agent override: `agents.list[].tools.profile`.
 | `messaging` | `group:messaging`, `sessions_list`, `sessions_history`, `sessions_send`, `session_status`                                                         |
 | `minimal`   | `session_status` only                                                                                                                             |
 
+<Note>
+`messaging` is intentionally narrow for channel-focused agents. It leaves out
+broader command/control tools such as filesystem, runtime, browser, canvas,
+nodes, cron, and gateway control. Use `full` when you want the unrestricted
+baseline and prefer to trim access with `tools.allow` / `tools.deny`.
+</Note>
+
 `coding` includes lightweight web tools (`web_search`, `web_fetch`, `x_search`)
 but not the full browser-control tool. Browser automation can drive real
 sessions and logged-in profiles, so add it explicitly with
@@ -155,6 +162,16 @@ The `coding` and `messaging` profiles also allow configured bundle MCP tools
 under the plugin key `bundle-mcp`. Add `tools.deny: ["bundle-mcp"]` when you
 want a profile to keep its normal built-ins but hide all configured MCP tools.
 The `minimal` profile does not include bundle MCP tools.
+
+Example (broadest tool surface by default):
+
+```json5
+{
+  tools: {
+    profile: "full",
+  },
+}
+```
 
 ### Tool groups
 
