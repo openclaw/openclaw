@@ -848,6 +848,17 @@ async function executeGatewayRequestWithScopes<T>(params: {
         client.stop();
         stop(new Error(formatGatewayCloseError(code, reason, params.connectionDetails)));
       },
+      onConnectError: (err) => {
+        if (settled || ignoreClose) {
+          return;
+        }
+        ignoreClose = true;
+        client.stop();
+        stop(
+          new Error(`gateway connection failed: ${err.message}
+${connectionDetails.message}`),
+        );
+      },
     });
 
     const timer = setTimeout(() => {
