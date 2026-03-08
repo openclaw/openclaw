@@ -107,6 +107,14 @@ export async function resolveModelRuntimeApiKey(params: {
     cfg: params.cfg,
     agentDir: params.agentDir,
   });
+  // Amazon Bedrock (and other AWS-SDK-based providers) resolve credentials via the
+  // AWS SDK credential chain rather than an explicit API key.  Skip requireApiKey
+  // and setRuntimeApiKey — the underlying pi-ai `complete` call handles auth
+  // internally through the SDK.  This mirrors the behaviour of the main agent
+  // model execution path (see agents/agent-step.ts).
+  if (apiKeyInfo.mode === "aws-sdk") {
+    return "";
+  }
   const apiKey = requireApiKey(apiKeyInfo, params.model.provider);
   params.authStorage.setRuntimeApiKey(params.model.provider, apiKey);
   return apiKey;
