@@ -200,6 +200,39 @@ allowed-tools:
         self.assertFalse(valid)
         self.assertEqual(message, "'allowed-tools' entry #2 cannot be empty")
 
+    def test_rejects_allowed_tools_explicit_null(self):
+        skill_dir = self.temp_dir / "null-allowed-tools"
+        skill_dir.mkdir(parents=True, exist_ok=True)
+        content = """---
+name: null-allowed-tools
+description: invalid null allowed tools
+allowed-tools: null
+---
+# Skill
+"""
+        (skill_dir / "SKILL.md").write_text(content, encoding="utf-8")
+
+        class _YamlStub:
+            YAMLError = Exception
+
+            @staticmethod
+            def safe_load(_text):
+                return {
+                    "name": "null-allowed-tools",
+                    "description": "invalid null allowed tools",
+                    "allowed-tools": None,
+                }
+
+        previous_yaml = quick_validate.yaml
+        quick_validate.yaml = _YamlStub
+        try:
+            valid, message = quick_validate.validate_skill(skill_dir)
+        finally:
+            quick_validate.yaml = previous_yaml
+
+        self.assertFalse(valid)
+        self.assertEqual(message, "'allowed-tools' must be a list of tool names")
+
 
 if __name__ == "__main__":
     main()

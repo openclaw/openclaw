@@ -99,7 +99,7 @@ def _coerce_allowed_tools(value):
 
 def _validate_allowed_tools(value, *, allow_fallback_string_coercion=False):
     if value is None:
-        return True, None
+        return False, "'allowed-tools' must be a list of tool names"
 
     normalized = (
         _coerce_allowed_tools(value) if allow_fallback_string_coercion else value
@@ -164,12 +164,13 @@ def validate_skill(skill_path):
     if "description" not in frontmatter:
         return False, "Missing 'description' in frontmatter"
 
-    allowed_tools_valid, allowed_tools_error = _validate_allowed_tools(
-        frontmatter.get("allowed-tools"),
-        allow_fallback_string_coercion=using_fallback_parser,
-    )
-    if not allowed_tools_valid:
-        return False, allowed_tools_error
+    if "allowed-tools" in frontmatter:
+        allowed_tools_valid, allowed_tools_error = _validate_allowed_tools(
+            frontmatter.get("allowed-tools"),
+            allow_fallback_string_coercion=using_fallback_parser,
+        )
+        if not allowed_tools_valid:
+            return False, allowed_tools_error
 
     name = frontmatter.get("name", "")
     if not isinstance(name, str):
