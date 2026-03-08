@@ -5,6 +5,7 @@
 import type { Client } from "@larksuiteoapi/node-sdk";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import { getFeishuUserAgent } from "./client.js";
+import { stripFeishuReactionSuffix } from "./message-id.js";
 import { resolveFeishuCardTemplate, type CardHeaderConfig } from "./send.js";
 import type { FeishuDomain } from "./types.js";
 
@@ -270,8 +271,9 @@ export class FeishuStreamingSession {
     const sendOptions = options ?? {};
     const sendMode = resolveStreamingCardSendMode(sendOptions);
     if (sendMode === "reply") {
+      const normalizedReplyToMessageId = stripFeishuReactionSuffix(sendOptions.replyToMessageId!);
       sendRes = await this.client.im.message.reply({
-        path: { message_id: sendOptions.replyToMessageId! },
+        path: { message_id: normalizedReplyToMessageId },
         data: {
           msg_type: "interactive",
           content: cardContent,
@@ -279,12 +281,13 @@ export class FeishuStreamingSession {
         },
       });
     } else if (sendMode === "root_create") {
+      const normalizedRootId = stripFeishuReactionSuffix(sendOptions.rootId!);
       // root_id is undeclared in the SDK types but accepted at runtime
       sendRes = await this.client.im.message.create({
         params: { receive_id_type: receiveIdType },
         data: Object.assign(
           { receive_id: receiveId, msg_type: "interactive", content: cardContent },
-          { root_id: sendOptions.rootId },
+          { root_id: normalizedRootId },
         ),
       });
     } else {

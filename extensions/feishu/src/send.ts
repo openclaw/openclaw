@@ -9,6 +9,7 @@ import { resolveFeishuRuntimeAccount } from "./accounts.js";
 import { createFeishuClient } from "./client.js";
 import type { MentionTarget } from "./mention-target.types.js";
 import { buildMentionedCardContent, buildMentionedMessage } from "./mention.js";
+import { stripFeishuReactionSuffix } from "./message-id.js";
 import { parsePostContent } from "./post.js";
 import { assertFeishuMessageApiSuccess, toFeishuSendResult } from "./send-result.js";
 import { resolveFeishuSendTarget } from "./send-target.js";
@@ -149,6 +150,7 @@ async function sendReplyOrFallbackDirect(
   if (!params.replyToMessageId) {
     return sendFallbackDirect(client, params.directParams, params.directErrorPrefix);
   }
+  const normalizedReplyToMessageId = stripFeishuReactionSuffix(params.replyToMessageId);
 
   const threadReplyFallbackError = params.replyInThread
     ? new Error(
@@ -159,7 +161,7 @@ async function sendReplyOrFallbackDirect(
   let response: { code?: number; msg?: string; data?: { message_id?: string } };
   try {
     response = await client.im.message.reply({
-      path: { message_id: params.replyToMessageId },
+      path: { message_id: normalizedReplyToMessageId },
       data: {
         content: params.content,
         msg_type: params.msgType,
@@ -380,6 +382,7 @@ export async function getMessageFeishu(params: {
   accountId?: string;
 }): Promise<FeishuMessageInfo | null> {
   const { cfg, messageId, accountId } = params;
+  const normalizedMessageId = stripFeishuReactionSuffix(messageId);
   const account = resolveFeishuRuntimeAccount({ cfg, accountId });
   if (!account.configured) {
     throw new Error(`Feishu account "${account.accountId}" not configured`);
@@ -389,7 +392,7 @@ export async function getMessageFeishu(params: {
 
   try {
     const response = (await client.im.message.get({
-      path: { message_id: messageId },
+      path: { message_id: normalizedMessageId },
     })) as FeishuGetMessageResponse;
 
     if (response.code !== 0) {
@@ -407,7 +410,7 @@ export async function getMessageFeishu(params: {
       return null;
     }
 
-    return parseFeishuMessageItem(item, messageId);
+    return parseFeishuMessageItem(item, normalizedMessageId);
   } catch {
     return null;
   }
@@ -606,6 +609,7 @@ export async function editMessageFeishu(params: {
   accountId?: string;
 }): Promise<{ messageId: string; contentType: "post" | "interactive" }> {
   const { cfg, messageId, text, card, accountId } = params;
+  const normalizedMessageId = stripFeishuReactionSuffix(messageId);
   const account = resolveFeishuRuntimeAccount({ cfg, accountId });
   if (!account.configured) {
     throw new Error(`Feishu account "${account.accountId}" not configured`);
@@ -622,7 +626,7 @@ export async function editMessageFeishu(params: {
   if (card) {
     const content = JSON.stringify(card);
     const response = await client.im.message.patch({
-      path: { message_id: messageId },
+      path: { message_id: normalizedMessageId },
       data: { content },
     });
 
@@ -640,7 +644,7 @@ export async function editMessageFeishu(params: {
   const messageText = convertMarkdownTables(text!, tableMode);
   const payload = buildFeishuPostMessagePayload({ messageText });
   const response = await client.im.message.patch({
-    path: { message_id: messageId },
+    path: { message_id: normalizedMessageId },
     data: { content: payload.content },
   });
 
@@ -658,6 +662,7 @@ export async function updateCardFeishu(params: {
   accountId?: string;
 }): Promise<void> {
   const { cfg, messageId, card, accountId } = params;
+  const normalizedMessageId = stripFeishuReactionSuffix(messageId);
   const account = resolveFeishuRuntimeAccount({ cfg, accountId });
   if (!account.configured) {
     throw new Error(`Feishu account "${account.accountId}" not configured`);
@@ -667,7 +672,7 @@ export async function updateCardFeishu(params: {
   const content = JSON.stringify(card);
 
   const response = await client.im.message.patch({
-    path: { message_id: messageId },
+    path: { message_id: normalizedMessageId },
     data: { content },
   });
 

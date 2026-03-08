@@ -13,6 +13,7 @@ import type { ClawdbotConfig } from "../runtime-api.js";
 import { resolveFeishuRuntimeAccount } from "./accounts.js";
 import { createFeishuClient } from "./client.js";
 import { normalizeFeishuExternalKey } from "./external-keys.js";
+import { stripFeishuReactionSuffix } from "./message-id.js";
 import { getFeishuRuntime } from "./runtime.js";
 import { assertFeishuMessageApiSuccess, toFeishuSendResult } from "./send-result.js";
 import { resolveFeishuSendTarget } from "./send-target.js";
@@ -316,6 +317,7 @@ export async function downloadMessageResourceFeishu(params: {
   accountId?: string;
 }): Promise<DownloadMessageResourceResult> {
   const { cfg, messageId, fileKey, type, accountId } = params;
+  const normalizedMessageId = stripFeishuReactionSuffix(messageId);
   const normalizedFileKey = normalizeFeishuExternalKey(fileKey);
   if (!normalizedFileKey) {
     throw new Error("Feishu message resource download failed: invalid file_key");
@@ -323,7 +325,7 @@ export async function downloadMessageResourceFeishu(params: {
   const { client } = createConfiguredFeishuMediaClient({ cfg, accountId });
 
   const response = await client.im.messageResource.get({
-    path: { message_id: messageId, file_key: normalizedFileKey },
+    path: { message_id: normalizedMessageId, file_key: normalizedFileKey },
     params: { type },
   });
 
@@ -446,6 +448,9 @@ export async function sendImageFeishu(params: {
   accountId?: string;
 }): Promise<SendMediaResult> {
   const { cfg, to, imageKey, replyToMessageId, replyInThread, accountId } = params;
+  const normalizedReplyToMessageId = replyToMessageId
+    ? stripFeishuReactionSuffix(replyToMessageId)
+    : undefined;
   const { client, receiveId, receiveIdType } = resolveFeishuSendTarget({
     cfg,
     to,
@@ -453,9 +458,9 @@ export async function sendImageFeishu(params: {
   });
   const content = JSON.stringify({ image_key: imageKey });
 
-  if (replyToMessageId) {
+  if (normalizedReplyToMessageId) {
     const response = await client.im.message.reply({
-      path: { message_id: replyToMessageId },
+      path: { message_id: normalizedReplyToMessageId },
       data: {
         content,
         msg_type: "image",
@@ -492,6 +497,9 @@ export async function sendFileFeishu(params: {
   accountId?: string;
 }): Promise<SendMediaResult> {
   const { cfg, to, fileKey, replyToMessageId, replyInThread, accountId } = params;
+  const normalizedReplyToMessageId = replyToMessageId
+    ? stripFeishuReactionSuffix(replyToMessageId)
+    : undefined;
   const msgType = params.msgType ?? "file";
   const { client, receiveId, receiveIdType } = resolveFeishuSendTarget({
     cfg,
@@ -500,9 +508,9 @@ export async function sendFileFeishu(params: {
   });
   const content = JSON.stringify({ file_key: fileKey });
 
-  if (replyToMessageId) {
+  if (normalizedReplyToMessageId) {
     const response = await client.im.message.reply({
-      path: { message_id: replyToMessageId },
+      path: { message_id: normalizedReplyToMessageId },
       data: {
         content,
         msg_type: msgType,
