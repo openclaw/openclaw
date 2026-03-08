@@ -132,6 +132,59 @@ describe("runEmbeddedPiAgent overflow compaction trigger routing", () => {
     expect(result.meta.error?.kind).toBe("context_overflow");
   });
 
+  it("returns compaction notice when post-compaction retry produces empty payloads", async () => {
+    const overflowError = makeOverflowError();
+    // First attempt: overflow
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+      makeAttemptResult({ promptError: overflowError }),
+    );
+    // Compaction succeeds
+    mockedCompactDirect.mockResolvedValueOnce(
+      makeCompactionSuccess({
+        summary: "Compacted",
+        firstKeptEntryId: "entry-1",
+        tokensBefore: 150000,
+      }),
+    );
+    // Retry after compaction: no assistant text (empty payloads)
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+      makeAttemptResult({ promptError: null, assistantTexts: [] }),
+    );
+
+    const result = await runEmbeddedPiAgent(overflowBaseRunParams);
+
+    expect(result.payloads).toHaveLength(1);
+    expect(result.payloads?.[0]?.isError).toBe(true);
+    expect(result.payloads?.[0]?.text).toContain("compacted");
+  });
+
+  it("skips compaction notice when messaging tool already delivered a response", async () => {
+    const overflowError = makeOverflowError();
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+      makeAttemptResult({ promptError: overflowError }),
+    );
+    mockedCompactDirect.mockResolvedValueOnce(
+      makeCompactionSuccess({
+        summary: "Compacted",
+        firstKeptEntryId: "entry-1",
+        tokensBefore: 150000,
+      }),
+    );
+    // Retry: no assistant text but messaging tool sent a response
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+      makeAttemptResult({
+        promptError: null,
+        assistantTexts: [],
+        didSendViaMessagingTool: true,
+      }),
+    );
+
+    const result = await runEmbeddedPiAgent(overflowBaseRunParams);
+
+    // Should NOT return compaction notice since messaging tool already handled it
+    expect(result.payloads).toBeUndefined();
+  });
+
   it("returns retry_limit when repeated retries never converge", async () => {
     mockedRunEmbeddedAttempt.mockClear();
     mockedCompactDirect.mockClear();

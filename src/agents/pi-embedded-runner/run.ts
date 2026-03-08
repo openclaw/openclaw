@@ -1441,8 +1441,16 @@ export async function runEmbeddedPiAgent(
 
           // Context compaction can leave the retry without any assistant payloads.
           // Emit an explicit notice so the user knows compaction occurred instead
-          // of seeing complete silence.
-          if (autoCompactionCount > 0 && payloads.length === 0) {
+          // of seeing complete silence. Skip when messaging tools already delivered
+          // a response, when a client tool call is pending, or during timeouts
+          // (handled by the timeout guard above).
+          if (
+            autoCompactionCount > 0 &&
+            payloads.length === 0 &&
+            !timedOut &&
+            !attempt.didSendViaMessagingTool &&
+            !attempt.clientToolCall
+          ) {
             return {
               payloads: [
                 {
@@ -1450,6 +1458,7 @@ export async function runEmbeddedPiAgent(
                     "Context was compacted to free up space. " +
                     "Some earlier conversation details may have been summarized. " +
                     "Please resend your last message or rephrase your request.",
+                  isError: true,
                 },
               ],
               meta: {
