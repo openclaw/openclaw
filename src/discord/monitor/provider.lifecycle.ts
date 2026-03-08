@@ -244,20 +244,64 @@ export async function runDiscordGatewayLifecycle(params: {
   };
   gatewayEmitter?.on("debug", onGatewayDebug);
 
+  // Carbon's ConnectionMonitor emits "metrics" every ~60s (driven by
+  // heartbeat ACKs), but does not emit "debug" for heartbeats. Without
+  // this listener the health-monitor's staleEventThreshold trips on idle
+  // connections that are actually healthy.
+  const onGatewayMetrics = () => {
+    if (!lifecycleStopping) {
+      pushStatus({ lastEventAt: Date.now() });
+    }
+  };
+  gatewayEmitter?.on("metrics", onGatewayMetrics);
+
   // If the gateway is already connected when the lifecycle starts (the
   // "WebSocket connection opened" debug event was emitted before we
   // registered the listener above), push the initial connected status now.
   // Guard against lifecycleStopping: if the abortSignal was already aborted,
   // onAbort() ran synchronously above and pushed connected: false — don't
   // contradict it with a spurious connected: true.
-  if (gateway?.isConnected && !lifecycleStopping) {
-    const at = Date.now();
-    pushStatus({
-      connected: true,
-      lastEventAt: at,
-      lastConnectedAt: at,
-      lastDisconnect: null,
-    });
+  // Use short polling because isConnected may still be false if the READY
+  // handshake is in-flight when the lifecycle starts (race with Carbon).
+  if (gateway && !lifecycleStopping) {
+    if (gateway.isConnected) {
+      const at = Date.now();
+      pushStatus({
+        connected: true,
+        lastEventAt: at,
+        lastConnectedAt: at,
+        lastDisconnect: null,
+      });
+    } else {
+      const INITIAL_CONNECTED_POLL_MS = 250;
+      const INITIAL_CONNECTED_TIMEOUT_MS = 10_000;
+      let initialPollId: ReturnType<typeof setInterval> | undefined;
+      let initialTimeoutId: ReturnType<typeof setTimeout> | undefined;
+      const clearInitialPoll = () => {
+        if (initialPollId) {
+          clearInterval(initialPollId);
+          initialPollId = undefined;
+        }
+        if (initialTimeoutId) {
+          clearTimeout(initialTimeoutId);
+          initialTimeoutId = undefined;
+        }
+      };
+      initialPollId = setInterval(() => {
+        if (lifecycleStopping || !gateway.isConnected) {
+          return;
+        }
+        const connectedAt = Date.now();
+        pushStatus({
+          connected: true,
+          lastEventAt: connectedAt,
+          lastConnectedAt: connectedAt,
+          lastDisconnect: null,
+        });
+        clearInitialPoll();
+      }, INITIAL_CONNECTED_POLL_MS);
+      initialTimeoutId = setTimeout(clearInitialPoll, INITIAL_CONNECTED_TIMEOUT_MS);
+    }
   }
 
   let sawDisallowedIntents = false;
@@ -334,6 +378,7 @@ export async function runDiscordGatewayLifecycle(params: {
     reconnectStallWatchdog.stop();
     clearHelloWatch();
     gatewayEmitter?.removeListener("debug", onGatewayDebug);
+    gatewayEmitter?.removeListener("metrics", onGatewayMetrics);
     params.abortSignal?.removeEventListener("abort", onAbort);
     if (params.voiceManager) {
       await params.voiceManager.destroy();
