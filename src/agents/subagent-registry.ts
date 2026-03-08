@@ -581,7 +581,17 @@ function resumeSubagentRun(runId: string) {
     return;
   }
   if (entry.cleanupCompletedAt) {
-    return;
+    // If wakeOnDescendantSettle is true, we need to send the announce
+    // even though cleanupCompletedAt is already set. This handles the case
+    // where descendant runs completed after this run was deferred.
+    if (entry.wakeOnDescendantSettle) {
+      entry.wakeOnDescendantSettle = undefined;
+      entry.cleanupCompletedAt = undefined;
+      persistSubagentRuns();
+      // Continue to announce flow below
+    } else {
+      return;
+    }
   }
   // Skip entries that have exhausted their retry budget or expired (#18264).
   if ((entry.announceRetryCount ?? 0) >= MAX_ANNOUNCE_RETRY_COUNT) {
