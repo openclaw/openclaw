@@ -430,6 +430,7 @@ export async function runAgentTurnWithFallback(params: {
                         text: "🧹 Compacting context...",
                         replyToId: currentMessageId,
                         replyToCurrent: true,
+                        isCompactionNotice: true,
                       });
                       await params.opts.onBlockReply(noticePayload);
                     }
