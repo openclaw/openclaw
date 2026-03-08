@@ -169,7 +169,6 @@ describe("scheduled task runtime derivation", () => {
       detail: "Task status is locale-dependent and no numeric Last Run Result was available.",
     });
   });
-
 });
 
 describe("resolveTaskScriptPath", () => {
