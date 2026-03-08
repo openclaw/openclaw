@@ -163,14 +163,24 @@ WhatsApp runs through the gateway's web channel (Baileys Web). It starts automat
         "*": { requireMention: true },
         "-1001234567890": {
           allowFrom: ["@admin"],
+          replyToMode: "all",
+          streaming: "block",
           systemPrompt: "Keep answers brief.",
           topics: {
             "99": {
               requireMention: false,
+              replyToMode: "off",
+              streaming: "off",
               skills: ["search"],
               systemPrompt: "Stay on topic.",
             },
           },
+        },
+      },
+      direct: {
+        "123456789": {
+          replyToMode: "off",
+          streaming: "partial",
         },
       },
       customCommands: [
@@ -209,6 +219,7 @@ WhatsApp runs through the gateway's web channel (Baileys Web). It starts automat
 - `configWrites: false` blocks Telegram-initiated config writes (supergroup ID migrations, `/config set|unset`).
 - Top-level `bindings[]` entries with `type: "acp"` configure persistent ACP bindings for forum topics (use canonical `chatId:topic:topicId` in `match.peer.id`). Field semantics are shared in [ACP Agents](/tools/acp-agents#channel-specific-settings).
 - Telegram stream previews use `sendMessage` + `editMessageText` (works in direct and group chats).
+- `channels.telegram.direct.<id>`, `channels.telegram.groups.<id>`, and `*.topics.<threadId>` can override `replyToMode` and `streaming` per conversation.
 - Retry policy: see [Retry policy](/concepts/retry).
 
 ### Discord

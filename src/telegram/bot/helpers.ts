@@ -2,6 +2,8 @@ import type { Chat, Message, MessageOrigin, User } from "@grammyjs/types";
 import { formatLocationText, type NormalizedLocation } from "../../channels/location.js";
 import { resolveTelegramPreviewStreamMode } from "../../config/discord-preview-streaming.js";
 import type {
+  ReplyToMode,
+  TelegramAccountConfig,
   TelegramDirectConfig,
   TelegramGroupConfig,
   TelegramTopicConfig,
@@ -169,6 +171,34 @@ export function resolveTelegramStreamMode(telegramCfg?: {
   streamMode?: unknown;
 }): TelegramStreamMode {
   return resolveTelegramPreviewStreamMode(telegramCfg);
+}
+
+type TelegramReplyStreamConfig =
+  | Pick<TelegramAccountConfig, "replyToMode" | "streaming" | "streamMode">
+  | Pick<TelegramGroupConfig, "replyToMode" | "streaming" | "streamMode">
+  | Pick<TelegramDirectConfig, "replyToMode" | "streaming" | "streamMode">
+  | Pick<TelegramTopicConfig, "replyToMode" | "streaming" | "streamMode">;
+
+export function resolveTelegramEffectiveReplyToMode(
+  ...configs: Array<TelegramReplyStreamConfig | undefined>
+): ReplyToMode {
+  for (const cfg of configs) {
+    if (cfg?.replyToMode) {
+      return cfg.replyToMode;
+    }
+  }
+  return "off";
+}
+
+export function resolveTelegramEffectiveStreamMode(
+  ...configs: Array<TelegramReplyStreamConfig | undefined>
+): TelegramStreamMode {
+  for (const cfg of configs) {
+    if (typeof cfg?.streaming !== "undefined" || typeof cfg?.streamMode !== "undefined") {
+      return resolveTelegramStreamMode(cfg);
+    }
+  }
+  return "partial";
 }
 
 export function buildTelegramGroupPeerId(chatId: number | string, messageThreadId?: number) {

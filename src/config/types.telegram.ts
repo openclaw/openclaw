@@ -184,6 +184,8 @@ export type TelegramTopicConfig = {
   requireMention?: boolean;
   /** Per-topic override for group message policy (open|disabled|allowlist). */
   groupPolicy?: GroupPolicy;
+  /** Per-topic reply threading override (off|first|all). */
+  replyToMode?: ReplyToMode;
   /** If specified, only load these skills for this topic. Omit = all skills; empty = no skills. */
   skills?: string[];
   /** If false, disable the bot for this topic. */
@@ -194,6 +196,10 @@ export type TelegramTopicConfig = {
   systemPrompt?: string;
   /** If true, skip automatic voice-note transcription for mention detection in this topic. */
   disableAudioPreflight?: boolean;
+  /** Per-topic preview streaming override. */
+  streaming?: TelegramStreamingMode | boolean;
+  /** @deprecated Legacy preview mode key; migrated automatically to `streaming`. */
+  streamMode?: "off" | "partial" | "block";
   /** Route this topic to a specific agent (overrides group-level and binding routing). */
   agentId?: string;
 };
@@ -202,6 +208,8 @@ export type TelegramGroupConfig = {
   requireMention?: boolean;
   /** Per-group override for group message policy (open|disabled|allowlist). */
   groupPolicy?: GroupPolicy;
+  /** Per-group reply threading override (off|first|all). */
+  replyToMode?: ReplyToMode;
   /** Optional tool policy overrides for this group. */
   tools?: GroupToolPolicyConfig;
   toolsBySender?: GroupToolPolicyBySenderConfig;
@@ -217,11 +225,17 @@ export type TelegramGroupConfig = {
   systemPrompt?: string;
   /** If true, skip automatic voice-note transcription for mention detection in this group. */
   disableAudioPreflight?: boolean;
+  /** Per-group preview streaming override. */
+  streaming?: TelegramStreamingMode | boolean;
+  /** @deprecated Legacy preview mode key; migrated automatically to `streaming`. */
+  streamMode?: "off" | "partial" | "block";
 };
 
 export type TelegramDirectConfig = {
   /** Per-DM override for DM message policy (open|disabled|allowlist). */
   dmPolicy?: DmPolicy;
+  /** Per-DM reply threading override (off|first|all). */
+  replyToMode?: ReplyToMode;
   /** Optional tool policy overrides for this DM. */
   tools?: GroupToolPolicyConfig;
   toolsBySender?: GroupToolPolicyBySenderConfig;
@@ -237,6 +251,10 @@ export type TelegramDirectConfig = {
   allowFrom?: Array<string | number>;
   /** Optional system prompt snippet for this DM. */
   systemPrompt?: string;
+  /** Per-DM preview streaming override. */
+  streaming?: TelegramStreamingMode | boolean;
+  /** @deprecated Legacy preview mode key; migrated automatically to `streaming`. */
+  streamMode?: "off" | "partial" | "block";
 };
 
 export type TelegramConfig = {

@@ -9,6 +9,11 @@ import {
 } from "./bot-message-context.js";
 import { dispatchTelegramMessage } from "./bot-message-dispatch.js";
 import type { TelegramBotOptions } from "./bot.js";
+import {
+  resolveTelegramEffectiveReplyToMode,
+  resolveTelegramEffectiveStreamMode,
+  resolveTelegramThreadSpec,
+} from "./bot/helpers.js";
 import type { TelegramContext, TelegramStreamMode } from "./bot/types.js";
 
 /** Dependencies injected once when creating the message processor. */
@@ -55,6 +60,24 @@ export const createTelegramMessageProcessor = (deps: TelegramMessageProcessorDep
     options?: { messageIdOverride?: string; forceWasMentioned?: boolean },
     replyMedia?: TelegramMediaRef[],
   ) => {
+    const msg = primaryCtx.message;
+    const isGroup = msg.chat.type === "group" || msg.chat.type === "supergroup";
+    const messageThreadId = (msg as { message_thread_id?: number }).message_thread_id;
+    const isForum = (msg.chat as { is_forum?: boolean }).is_forum === true;
+    const threadSpec = resolveTelegramThreadSpec({
+      isGroup,
+      isForum,
+      messageThreadId,
+    });
+    const configThreadId =
+      threadSpec.scope === "forum" || threadSpec.scope === "dm" ? threadSpec.id : undefined;
+    const { groupConfig, topicConfig } = resolveTelegramGroupConfig(msg.chat.id, configThreadId);
+    const effectiveReplyToMode = resolveTelegramEffectiveReplyToMode(topicConfig, groupConfig, {
+      replyToMode,
+    });
+    const effectiveStreamMode = resolveTelegramEffectiveStreamMode(topicConfig, groupConfig, {
+      streaming: streamMode,
+    });
     const context = await buildTelegramMessageContext({
       primaryCtx,
       allMedia,
@@ -85,8 +108,8 @@ export const createTelegramMessageProcessor = (deps: TelegramMessageProcessorDep
         bot,
         cfg,
         runtime,
-        replyToMode,
-        streamMode,
+        replyToMode: effectiveReplyToMode,
+        streamMode: effectiveStreamMode,
         textLimit,
         telegramCfg,
         opts,

@@ -237,10 +237,15 @@ curl "https://api.telegram.org/bot<bot_token>/getUpdates"
 
     - direct chats: preview message + `editMessageText`
     - groups/topics: preview message + `editMessageText`
+    - conversation overrides: `direct.<id>`, `groups.<id>`, and `topics.<threadId>` can each
+      choose their own `streaming` mode
 
     Requirement:
 
     - `channels.telegram.streaming` is `off | partial | block | progress` (default: `partial`)
+    - `channels.telegram.direct.<id>.streaming`, `channels.telegram.groups.<id>.streaming`, and
+      `channels.telegram.groups.<id>.topics.<threadId>.streaming` override the account default for
+      that specific conversation
     - `progress` maps to `partial` on Telegram (compat with cross-channel naming)
     - legacy `channels.telegram.streamMode` and boolean `streaming` values are auto-mapped
 
@@ -854,6 +859,8 @@ Primary reference:
 - `channels.telegram.groups`: per-group defaults + allowlist (use `"*"` for global defaults).
   - `channels.telegram.groups.<id>.groupPolicy`: per-group override for groupPolicy (`open | allowlist | disabled`).
   - `channels.telegram.groups.<id>.requireMention`: mention gating default.
+  - `channels.telegram.groups.<id>.replyToMode`: per-group reply threading override (`off | first | all`).
+  - `channels.telegram.groups.<id>.streaming`: per-group preview streaming override (`off | partial | block | progress`).
   - `channels.telegram.groups.<id>.skills`: skill filter (omit = all skills, empty = none).
   - `channels.telegram.groups.<id>.allowFrom`: per-group sender allowlist override.
   - `channels.telegram.groups.<id>.systemPrompt`: extra system prompt for the group.
@@ -862,16 +869,24 @@ Primary reference:
   - `channels.telegram.groups.<id>.topics.<threadId>.agentId`: route this topic to a specific agent (overrides group-level and binding routing).
   - `channels.telegram.groups.<id>.topics.<threadId>.groupPolicy`: per-topic override for groupPolicy (`open | allowlist | disabled`).
   - `channels.telegram.groups.<id>.topics.<threadId>.requireMention`: per-topic mention gating override.
+  - `channels.telegram.groups.<id>.topics.<threadId>.replyToMode`: per-topic reply threading override.
+  - `channels.telegram.groups.<id>.topics.<threadId>.streaming`: per-topic preview streaming override.
   - top-level `bindings[]` with `type: "acp"` and canonical topic id `chatId:topic:topicId` in `match.peer.id`: persistent ACP topic binding fields (see [ACP Agents](/tools/acp-agents#channel-specific-settings)).
+  - `channels.telegram.direct.<id>.replyToMode`: per-DM reply threading override (`off | first | all`).
+  - `channels.telegram.direct.<id>.streaming`: per-DM preview streaming override (`off | partial | block | progress`).
   - `channels.telegram.direct.<id>.topics.<threadId>.agentId`: route DM topics to a specific agent (same behavior as forum topics).
+  - `channels.telegram.direct.<id>.topics.<threadId>.replyToMode`: per-DM-topic reply threading override.
+  - `channels.telegram.direct.<id>.topics.<threadId>.streaming`: per-DM-topic preview streaming override.
 - `channels.telegram.capabilities.inlineButtons`: `off | dm | group | all | allowlist` (default: allowlist).
 - `channels.telegram.accounts.<account>.capabilities.inlineButtons`: per-account override.
 - `channels.telegram.commands.nativeSkills`: enable/disable Telegram native skills commands.
 - `channels.telegram.replyToMode`: `off | first | all` (default: `off`).
+- `channels.telegram.direct.<id>.replyToMode`, `channels.telegram.groups.<id>.replyToMode`, `channels.telegram.groups.<id>.topics.<threadId>.replyToMode`: conversation-scoped reply threading overrides.
 - `channels.telegram.textChunkLimit`: outbound chunk size (chars).
 - `channels.telegram.chunkMode`: `length` (default) or `newline` to split on blank lines (paragraph boundaries) before length chunking.
 - `channels.telegram.linkPreview`: toggle link previews for outbound messages (default: true).
 - `channels.telegram.streaming`: `off | partial | block | progress` (live stream preview; default: `partial`; `progress` maps to `partial`; `block` is legacy preview mode compatibility). Telegram preview streaming uses a single preview message that is edited in place; quoted DM replies preserve `reply_to_message_id` by keeping the preview attached to the quoted message.
+- `channels.telegram.direct.<id>.streaming`, `channels.telegram.groups.<id>.streaming`, `channels.telegram.groups.<id>.topics.<threadId>.streaming`: conversation-scoped preview streaming overrides.
 - `channels.telegram.mediaMaxMb`: inbound/outbound Telegram media cap (MB, default: 100).
 - `channels.telegram.retry`: retry policy for Telegram send helpers (CLI/tools/actions) on recoverable outbound API errors (attempts, minDelayMs, maxDelayMs, jitter).
 - `channels.telegram.network.autoSelectFamily`: override Node autoSelectFamily (true=enable, false=disable). Defaults to enabled on Node 22+, with WSL2 defaulting to disabled.
