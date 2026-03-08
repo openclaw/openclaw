@@ -32,9 +32,13 @@ import {
   edgeTTS,
   elevenLabsTTS,
   inferEdgeExtension,
+  isValidMinimaxModel,
   isValidOpenAIModel,
   isValidOpenAIVoice,
   isValidVoiceId,
+  MINIMAX_TTS_MODELS,
+  MINIMAX_TTS_VOICES,
+  minimaxTTS,
   OPENAI_TTS_MODELS,
   OPENAI_TTS_VOICES,
   openaiTTS,
@@ -42,7 +46,13 @@ import {
   scheduleCleanup,
   summarizeText,
 } from "./tts-core.js";
-export { OPENAI_TTS_MODELS, OPENAI_TTS_VOICES } from "./tts-core.js";
+export {
+  minimaxTTS,
+  MINIMAX_TTS_MODELS,
+  MINIMAX_TTS_VOICES,
+  OPENAI_TTS_MODELS,
+  OPENAI_TTS_VOICES,
+} from "./tts-core.js";
 
 const DEFAULT_TIMEOUT_MS = 30_000;
 const DEFAULT_TTS_MAX_LENGTH = 1500;
@@ -54,6 +64,13 @@ const DEFAULT_ELEVENLABS_VOICE_ID = "pMsXgVXv3BLzUgSXRplE";
 const DEFAULT_ELEVENLABS_MODEL_ID = "eleven_multilingual_v2";
 const DEFAULT_OPENAI_MODEL = "gpt-4o-mini-tts";
 const DEFAULT_OPENAI_VOICE = "alloy";
+const DEFAULT_MINIMAX_BASE_URL = "https://api.minimax.io";
+const DEFAULT_MINIMAX_MODEL = "speech-2.8-hd";
+const DEFAULT_MINIMAX_VOICE_ID = "English_expressive_narrator";
+const DEFAULT_MINIMAX_SPEED = 1.0;
+const DEFAULT_MINIMAX_VOL = 1.0;
+const DEFAULT_MINIMAX_PITCH = 0;
+
 const DEFAULT_EDGE_VOICE = "en-US-MichelleNeural";
 const DEFAULT_EDGE_LANG = "en-US";
 const DEFAULT_EDGE_OUTPUT_FORMAT = "audio-24khz-48kbitrate-mono-mp3";
@@ -85,6 +102,7 @@ const DEFAULT_OUTPUT = {
 const TELEPHONY_OUTPUT = {
   openai: { format: "pcm" as const, sampleRate: 24000 },
   elevenlabs: { format: "pcm_22050", sampleRate: 22050 },
+  minimax: { format: "pcm" as const, sampleRate: 24000 },
 };
 
 const TTS_AUTO_MODES = new Set<TtsAutoMode>(["off", "always", "inbound", "tagged"]);
@@ -117,6 +135,17 @@ export type ResolvedTtsConfig = {
     baseUrl: string;
     model: string;
     voice: string;
+  };
+  minimax: {
+    apiKey?: string;
+    baseUrl: string;
+    model: string;
+    voiceId: string;
+    speed: number;
+    vol: number;
+    pitch: number;
+    emotion?: string;
+    languageBoost?: string;
   };
   edge: {
     enabled: boolean;
@@ -171,6 +200,15 @@ export type TtsDirectiveOverrides = {
     applyTextNormalization?: "auto" | "on" | "off";
     languageCode?: string;
     voiceSettings?: Partial<ResolvedTtsConfig["elevenlabs"]["voiceSettings"]>;
+  };
+  minimax?: {
+    voiceId?: string;
+    model?: string;
+    speed?: number;
+    vol?: number;
+    pitch?: number;
+    emotion?: string;
+    languageBoost?: string;
   };
 };
 
@@ -304,6 +342,20 @@ export function resolveTtsConfig(cfg: OpenClawConfig): ResolvedTtsConfig {
       ).replace(/\/+$/, ""),
       model: raw.openai?.model ?? DEFAULT_OPENAI_MODEL,
       voice: raw.openai?.voice ?? DEFAULT_OPENAI_VOICE,
+    },
+    minimax: {
+      apiKey: normalizeResolvedSecretInputString({
+        value: raw.minimax?.apiKey,
+        path: "messages.tts.minimax.apiKey",
+      }),
+      baseUrl: raw.minimax?.baseUrl?.trim() || DEFAULT_MINIMAX_BASE_URL,
+      model: raw.minimax?.model ?? DEFAULT_MINIMAX_MODEL,
+      voiceId: raw.minimax?.voiceId ?? DEFAULT_MINIMAX_VOICE_ID,
+      speed: raw.minimax?.speed ?? DEFAULT_MINIMAX_SPEED,
+      vol: raw.minimax?.vol ?? DEFAULT_MINIMAX_VOL,
+      pitch: raw.minimax?.pitch ?? DEFAULT_MINIMAX_PITCH,
+      emotion: raw.minimax?.emotion,
+      languageBoost: raw.minimax?.languageBoost,
     },
     edge: {
       enabled: raw.edge?.enabled ?? true,
@@ -456,6 +508,9 @@ export function getTtsProvider(config: ResolvedTtsConfig, prefsPath: string): Tt
   if (resolveTtsApiKey(config, "elevenlabs")) {
     return "elevenlabs";
   }
+  if (resolveTtsApiKey(config, "minimax")) {
+    return "minimax";
+  }
   return "edge";
 }
 
@@ -523,10 +578,13 @@ export function resolveTtsApiKey(
   if (provider === "openai") {
     return config.openai.apiKey || process.env.OPENAI_API_KEY;
   }
+  if (provider === "minimax") {
+    return config.minimax.apiKey || process.env.MINIMAX_API_KEY;
+  }
   return undefined;
 }
 
-export const TTS_PROVIDERS = ["openai", "elevenlabs", "edge"] as const;
+export const TTS_PROVIDERS = ["openai", "elevenlabs", "minimax", "edge"] as const;
 
 export function resolveTtsProviderOrder(primary: TtsProvider): TtsProvider[] {
   return [primary, ...TTS_PROVIDERS.filter((provider) => provider !== primary)];
@@ -683,6 +741,23 @@ export async function textToSpeech(params: {
           voiceSettings,
           timeoutMs: config.timeoutMs,
         });
+      } else if (provider === "minimax") {
+        const minimaxOverrides = params.overrides?.minimax;
+        audioBuffer = await minimaxTTS({
+          text: params.text,
+          apiKey,
+          baseUrl: config.minimax.baseUrl,
+          model: minimaxOverrides?.model ?? config.minimax.model,
+          voiceId: minimaxOverrides?.voiceId ?? config.minimax.voiceId,
+          audioFormat: "mp3",
+          sampleRate: 32000,
+          speed: minimaxOverrides?.speed ?? config.minimax.speed,
+          vol: minimaxOverrides?.vol ?? config.minimax.vol,
+          pitch: minimaxOverrides?.pitch ?? config.minimax.pitch,
+          emotion: minimaxOverrides?.emotion ?? config.minimax.emotion,
+          languageBoost: minimaxOverrides?.languageBoost ?? config.minimax.languageBoost,
+          timeoutMs: config.timeoutMs,
+        });
       } else {
         const openaiModelOverride = params.overrides?.openai?.model;
         const openaiVoiceOverride = params.overrides?.openai?.voice;
@@ -699,10 +774,14 @@ export async function textToSpeech(params: {
 
       const latencyMs = Date.now() - providerStart;
 
+      // MiniMax always produces MP3 regardless of channel, so use .mp3
+      // to avoid extension/codec mismatch (e.g. MP3 bytes in a .opus file).
+      const fileExtension = provider === "minimax" ? ".mp3" : output.extension;
+
       const tempRoot = resolvePreferredOpenClawTmpDir();
       mkdirSync(tempRoot, { recursive: true, mode: 0o700 });
       const tempDir = mkdtempSync(path.join(tempRoot, "tts-"));
-      const audioPath = path.join(tempDir, `voice-${Date.now()}${output.extension}`);
+      const audioPath = path.join(tempDir, `voice-${Date.now()}${fileExtension}`);
       writeFileSync(audioPath, audioBuffer);
       scheduleCleanup(tempDir);
 
@@ -711,7 +790,12 @@ export async function textToSpeech(params: {
         audioPath,
         latencyMs,
         provider,
-        outputFormat: provider === "openai" ? output.openai : output.elevenlabs,
+        outputFormat:
+          provider === "openai"
+            ? output.openai
+            : provider === "minimax"
+              ? "mp3"
+              : output.elevenlabs,
         voiceCompatible: output.voiceCompatible,
       };
     } catch (err) {
@@ -769,6 +853,34 @@ export async function textToSpeechTelephony(params: {
           applyTextNormalization: config.elevenlabs.applyTextNormalization,
           languageCode: config.elevenlabs.languageCode,
           voiceSettings: config.elevenlabs.voiceSettings,
+          timeoutMs: config.timeoutMs,
+        });
+
+        return {
+          success: true,
+          audioBuffer,
+          latencyMs: Date.now() - providerStart,
+          provider,
+          outputFormat: output.format,
+          sampleRate: output.sampleRate,
+        };
+      }
+
+      if (provider === "minimax") {
+        const output = TELEPHONY_OUTPUT.minimax;
+        const audioBuffer = await minimaxTTS({
+          text: params.text,
+          apiKey,
+          baseUrl: config.minimax.baseUrl,
+          model: config.minimax.model,
+          voiceId: config.minimax.voiceId,
+          audioFormat: output.format,
+          sampleRate: output.sampleRate,
+          speed: config.minimax.speed,
+          vol: config.minimax.vol,
+          pitch: config.minimax.pitch,
+          emotion: config.minimax.emotion,
+          languageBoost: config.minimax.languageBoost,
           timeoutMs: config.timeoutMs,
         });
 
@@ -959,8 +1071,11 @@ export const _test = {
   isValidVoiceId,
   isValidOpenAIVoice,
   isValidOpenAIModel,
+  isValidMinimaxModel,
   OPENAI_TTS_MODELS,
   OPENAI_TTS_VOICES,
+  MINIMAX_TTS_MODELS,
+  MINIMAX_TTS_VOICES,
   parseTtsDirectives,
   resolveModelOverridePolicy,
   summarizeText,

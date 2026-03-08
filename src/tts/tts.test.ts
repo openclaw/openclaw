@@ -51,8 +51,11 @@ const {
   isValidVoiceId,
   isValidOpenAIVoice,
   isValidOpenAIModel,
+  isValidMinimaxModel,
   OPENAI_TTS_MODELS,
   OPENAI_TTS_VOICES,
+  MINIMAX_TTS_MODELS,
+  MINIMAX_TTS_VOICES,
   parseTtsDirectives,
   resolveModelOverridePolicy,
   summarizeText,
@@ -166,6 +169,38 @@ describe("tts", () => {
     });
   });
 
+  describe("isValidMinimaxModel", () => {
+    it("matches the supported MiniMax model set and rejects unsupported values", () => {
+      expect(MINIMAX_TTS_MODELS).toContain("speech-2.8-hd");
+      expect(MINIMAX_TTS_MODELS).toContain("speech-2.8-turbo");
+      expect(MINIMAX_TTS_MODELS).toContain("speech-2.6-hd");
+      expect(MINIMAX_TTS_MODELS).toContain("speech-2.6-turbo");
+      expect(MINIMAX_TTS_MODELS).toContain("speech-02-hd");
+      expect(MINIMAX_TTS_MODELS).toContain("speech-02-turbo");
+      expect(MINIMAX_TTS_MODELS.length).toBeGreaterThan(0);
+
+      const cases = [
+        { model: "speech-2.8-hd", expected: true },
+        { model: "speech-2.8-turbo", expected: true },
+        { model: "speech-2.6-hd", expected: true },
+        { model: "speech-02-hd", expected: true },
+        { model: "invalid", expected: false },
+        { model: "", expected: false },
+        { model: "gpt-4o-mini-tts", expected: false },
+      ] as const;
+      for (const testCase of cases) {
+        expect(isValidMinimaxModel(testCase.model), testCase.model).toBe(testCase.expected);
+      }
+    });
+  });
+
+  describe("MINIMAX_TTS_VOICES", () => {
+    it("contains representative system voices", () => {
+      expect(MINIMAX_TTS_VOICES.length).toBeGreaterThan(0);
+      expect(MINIMAX_TTS_VOICES).toContain("English_expressive_narrator");
+    });
+  });
+
   describe("resolveOutputFormat", () => {
     it("selects opus for voice-bubble channels (telegram/feishu/whatsapp) and mp3 for others", () => {
       const cases = [
@@ -273,6 +308,109 @@ describe("tts", () => {
       expect(result.overrides.provider).toBe("edge");
     });
 
+    it("accepts minimax as provider override and parses minimax directives", () => {
+      const policy = resolveModelOverridePolicy({ enabled: true, allowProvider: true });
+      const input =
+        "Hello [[tts:provider=minimax minimax_voice=English_radiant_girl emotion=happy speed=1.5 vol=7 pitch=-3 language_boost=en]] world";
+      const result = parseTtsDirectives(input, policy);
+
+      expect(result.overrides.provider).toBe("minimax");
+      expect(result.overrides.minimax?.voiceId).toBe("English_radiant_girl");
+      expect(result.overrides.minimax?.emotion).toBe("happy");
+      expect(result.overrides.minimax?.speed).toBe(1.5);
+      expect(result.overrides.minimax?.vol).toBe(7);
+      expect(result.overrides.minimax?.pitch).toBe(-3);
+      expect(result.overrides.minimax?.languageBoost).toBe("en");
+    });
+
+    it("rejects out-of-range minimax vol and pitch directives", () => {
+      const policy = resolveModelOverridePolicy({ enabled: true });
+      const input = "Hello [[tts:vol=15 pitch=20]] world";
+      const result = parseTtsDirectives(input, policy);
+
+      expect(result.overrides.minimax?.vol).toBeUndefined();
+      expect(result.overrides.minimax?.pitch).toBeUndefined();
+      expect(result.warnings.length).toBeGreaterThan(0);
+    });
+
+    it("rejects invalid minimax emotion and warns", () => {
+      const policy = resolveModelOverridePolicy({ enabled: true });
+      const input = "Hello [[tts:emotion=joyful]] world";
+      const result = parseTtsDirectives(input, policy);
+
+      expect(result.overrides.minimax?.emotion).toBeUndefined();
+      expect(result.warnings).toContain('invalid MiniMax emotion "joyful"');
+    });
+
+    it("parses minimax model via generic model directive", () => {
+      const policy = resolveModelOverridePolicy({ enabled: true });
+      const input = "Hello [[tts:model=speech-2.8-hd]] world";
+      const result = parseTtsDirectives(input, policy);
+
+      expect(result.overrides.minimax?.model).toBe("speech-2.8-hd");
+      expect(result.overrides.openai?.model).toBeUndefined();
+    });
+
+    it("routes generic model to openai when provider=openai is set", () => {
+      const policy = resolveModelOverridePolicy({ enabled: true, allowProvider: true });
+      const input = "Hello [[tts:provider=openai model=tts-1-hd]] world";
+      const result = parseTtsDirectives(input, policy);
+
+      expect(result.overrides.provider).toBe("openai");
+      expect(result.overrides.openai?.model).toBe("tts-1-hd");
+      expect(result.overrides.minimax?.model).toBeUndefined();
+    });
+
+    it("routes generic model to openai even when provider appears after model", () => {
+      const policy = resolveModelOverridePolicy({ enabled: true, allowProvider: true });
+      const input = "Hello [[tts:model=tts-1-hd provider=openai]] world";
+      const result = parseTtsDirectives(input, policy);
+
+      expect(result.overrides.provider).toBe("openai");
+      expect(result.overrides.openai?.model).toBe("tts-1-hd");
+      expect(result.overrides.minimax?.model).toBeUndefined();
+    });
+
+    it("rejects invalid model for openai provider with warning", () => {
+      const policy = resolveModelOverridePolicy({ enabled: true, allowProvider: true });
+      const input = "Hello [[tts:provider=openai model=speech-2.8-hd]] world";
+      const result = parseTtsDirectives(input, policy);
+
+      expect(result.overrides.provider).toBe("openai");
+      expect(result.overrides.openai?.model).toBeUndefined();
+      expect(result.warnings).toContain('invalid OpenAI model "speech-2.8-hd"');
+    });
+
+    it("provider-specific model key takes precedence over generic model", () => {
+      const policy = resolveModelOverridePolicy({ enabled: true, allowProvider: true });
+      const input = "Hello [[tts:model=speech-2.8-hd openai_model=tts-1 provider=openai]] world";
+      const result = parseTtsDirectives(input, policy);
+
+      expect(result.overrides.provider).toBe("openai");
+      expect(result.overrides.openai?.model).toBe("tts-1");
+      expect(result.overrides.minimax?.model).toBeUndefined();
+    });
+
+    it("last generic model wins and invalid value produces warning", () => {
+      const policy = resolveModelOverridePolicy({ enabled: true, allowProvider: true });
+      const input = "Hello [[tts:provider=openai model=tts-1 model=bad]] world";
+      const result = parseTtsDirectives(input, policy);
+
+      expect(result.overrides.provider).toBe("openai");
+      expect(result.overrides.openai?.model).toBeUndefined();
+      expect(result.warnings).toContain('invalid OpenAI model "bad"');
+    });
+
+    it("later elevenlabs model overwrites earlier deferred value", () => {
+      const policy = resolveModelOverridePolicy({ enabled: true, allowProvider: true });
+      const input = "Hello [[tts:model=tts-1 model=eleven_turbo_v2_5 provider=elevenlabs]] world";
+      const result = parseTtsDirectives(input, policy);
+
+      expect(result.overrides.provider).toBe("elevenlabs");
+      expect(result.overrides.elevenlabs?.modelId).toBe("eleven_turbo_v2_5");
+      expect(result.overrides.openai?.model).toBeUndefined();
+    });
+
     it("rejects provider override by default while keeping voice overrides enabled", () => {
       const policy = resolveModelOverridePolicy({ enabled: true });
       const input = "Hello [[tts:provider=edge voice=alloy]] world";
@@ -312,6 +450,98 @@ describe("tts", () => {
 
       expect(result.overrides.openai?.voice).toBeUndefined();
       expect(result.warnings).toContain('invalid OpenAI voice "kokoro-chinese"');
+    });
+  });
+
+  describe("resolveTtsConfig minimax", () => {
+    it("resolves minimax defaults when no config is provided", () => {
+      const cfg: OpenClawConfig = {
+        agents: { defaults: { model: { primary: "openai/gpt-4o-mini" } } },
+        messages: { tts: {} },
+      };
+      const config = resolveTtsConfig(cfg);
+      expect(config.minimax.model).toBe("speech-2.8-hd");
+      expect(config.minimax.voiceId).toBe("English_expressive_narrator");
+      expect(config.minimax.speed).toBe(1.0);
+      expect(config.minimax.vol).toBe(1.0);
+      expect(config.minimax.pitch).toBe(0);
+      expect(config.minimax.baseUrl).toBe("https://api.minimax.io");
+    });
+
+    it("respects explicit minimax config overrides", () => {
+      const cfg: OpenClawConfig = {
+        agents: { defaults: { model: { primary: "openai/gpt-4o-mini" } } },
+        messages: {
+          tts: {
+            provider: "minimax",
+            minimax: {
+              model: "speech-2.8-turbo",
+              voiceId: "English_CalmWoman",
+              speed: 1.5,
+              vol: 3,
+              pitch: 2,
+              emotion: "happy",
+              languageBoost: "English",
+            },
+          },
+        },
+      };
+      const config = resolveTtsConfig(cfg);
+      expect(config.provider).toBe("minimax");
+      expect(config.minimax.model).toBe("speech-2.8-turbo");
+      expect(config.minimax.voiceId).toBe("English_CalmWoman");
+      expect(config.minimax.speed).toBe(1.5);
+      expect(config.minimax.vol).toBe(3);
+      expect(config.minimax.pitch).toBe(2);
+      expect(config.minimax.emotion).toBe("happy");
+      expect(config.minimax.languageBoost).toBe("English");
+    });
+  });
+
+  describe("minimaxTTS hex validation", () => {
+    const baseParams = {
+      text: "hello",
+      apiKey: "test-key",
+      baseUrl: "https://api.minimax.io",
+      model: "speech-2.8-hd",
+      voiceId: "English_expressive_narrator",
+      audioFormat: "mp3" as const,
+      speed: 1,
+      vol: 1,
+      pitch: 0,
+      timeoutMs: 5000,
+    };
+
+    it("rejects odd-length hex audio", async () => {
+      const mockResponse = {
+        ok: true,
+        json: async () => ({ base_resp: { status_code: 0 }, data: { audio: "abc" } }),
+      };
+      vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(mockResponse as Response);
+
+      await expect(tts.minimaxTTS(baseParams)).rejects.toThrow("malformed hex audio");
+    });
+
+    it("rejects non-hex characters in audio payload", async () => {
+      const mockResponse = {
+        ok: true,
+        json: async () => ({ base_resp: { status_code: 0 }, data: { audio: "zzzz" } }),
+      };
+      vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(mockResponse as Response);
+
+      await expect(tts.minimaxTTS(baseParams)).rejects.toThrow("malformed hex audio");
+    });
+
+    it("accepts valid hex audio", async () => {
+      const mockResponse = {
+        ok: true,
+        json: async () => ({ base_resp: { status_code: 0 }, data: { audio: "48454c4c4f" } }),
+      };
+      vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(mockResponse as Response);
+
+      const result = await tts.minimaxTTS(baseParams);
+      expect(result).toBeInstanceOf(Buffer);
+      expect(result.toString()).toBe("HELLO");
     });
   });
 
@@ -468,6 +698,7 @@ describe("tts", () => {
             OPENAI_API_KEY: "test-openai-key",
             ELEVENLABS_API_KEY: undefined,
             XI_API_KEY: undefined,
+            MINIMAX_API_KEY: undefined,
           },
           prefsPath: "/tmp/tts-prefs-openai.json",
           expected: "openai",
@@ -477,6 +708,7 @@ describe("tts", () => {
             OPENAI_API_KEY: undefined,
             ELEVENLABS_API_KEY: "test-elevenlabs-key",
             XI_API_KEY: undefined,
+            MINIMAX_API_KEY: undefined,
           },
           prefsPath: "/tmp/tts-prefs-elevenlabs.json",
           expected: "elevenlabs",
@@ -486,6 +718,17 @@ describe("tts", () => {
             OPENAI_API_KEY: undefined,
             ELEVENLABS_API_KEY: undefined,
             XI_API_KEY: undefined,
+            MINIMAX_API_KEY: "test-minimax-key",
+          },
+          prefsPath: "/tmp/tts-prefs-minimax.json",
+          expected: "minimax",
+        },
+        {
+          env: {
+            OPENAI_API_KEY: undefined,
+            ELEVENLABS_API_KEY: undefined,
+            XI_API_KEY: undefined,
+            MINIMAX_API_KEY: undefined,
           },
           prefsPath: "/tmp/tts-prefs-edge.json",
           expected: "edge",

@@ -1,6 +1,6 @@
 import type { SecretInput } from "./types.secrets.js";
 
-export type TtsProvider = "elevenlabs" | "openai" | "edge";
+export type TtsProvider = "elevenlabs" | "openai" | "edge" | "minimax";
 
 export type TtsMode = "final" | "all";
 
@@ -61,6 +61,26 @@ export type TtsConfig = {
     baseUrl?: string;
     model?: string;
     voice?: string;
+  };
+  /** MiniMax T2A configuration. */
+  minimax?: {
+    apiKey?: SecretInput;
+    /** Base URL for MiniMax T2A API. */
+    baseUrl?: string;
+    /** Speech model to use (e.g. speech-2.8-hd, speech-2.8-turbo). */
+    model?: string;
+    /** Voice ID for synthesis (system, cloned, or AI-generated). */
+    voiceId?: string;
+    /** Speech speed (0.5–2). */
+    speed?: number;
+    /** Speech volume (0–10). */
+    vol?: number;
+    /** Pitch adjustment (-12 to 12). */
+    pitch?: number;
+    /** Emotion control. */
+    emotion?: string;
+    /** Language boost (e.g. "English", "Chinese", "auto"). */
+    languageBoost?: string;
   };
   /** Microsoft Edge (node-edge-tts) configuration. */
   edge?: {
