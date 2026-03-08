@@ -30,6 +30,11 @@ import { deliverReplies } from "./bot/delivery.js";
 import type { TelegramStreamMode } from "./bot/types.js";
 import type { TelegramInlineButtons } from "./button-types.js";
 import { createTelegramDraftStream } from "./draft-stream.js";
+import {
+  isSilentErrorPolicy,
+  resolveTelegramErrorPolicy,
+  shouldSuppressTelegramError,
+} from "./error-policy.js";
 import { renderTelegramHtmlText } from "./format.js";
 import {
   type ArchivedPreview,
@@ -621,6 +626,25 @@ export const dispatchTelegramMessage = async ({
           }
         },
         onError: (err, info) => {
+          const errorPolicy = resolveTelegramErrorPolicy({
+            cfg,
+            channel: "telegram",
+            accountId: route.accountId,
+            chatId: chatId,
+            isGroup,
+          });
+          if (isSilentErrorPolicy(errorPolicy.policy)) {
+            return;
+          }
+          if (
+            shouldSuppressTelegramError({
+              chatId,
+              cooldownMs: errorPolicy.cooldownMs,
+              errorMessage: String(err),
+            })
+          ) {
+            return;
+          }
           deliveryState.markNonSilentFailure();
           runtime.error?.(danger(`telegram ${info.kind} reply failed: ${String(err)}`));
         },
