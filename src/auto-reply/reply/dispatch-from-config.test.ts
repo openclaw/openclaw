@@ -1626,6 +1626,40 @@ describe("dispatchReplyFromConfig", () => {
     expect(internalHookMocks.triggerInternalHook).toHaveBeenCalledTimes(1);
   });
 
+  it("routes internal message:received hook messages back to the user", async () => {
+    setNoAbort();
+    const cfg = emptyConfig;
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({
+      Provider: "feishu",
+      Surface: "feishu",
+      OriginatingChannel: "feishu",
+      OriginatingTo: "feishu:ou_123",
+      AccountId: "acc-1",
+      SessionKey: "agent:main:main",
+      CommandBody: "/help",
+    });
+    internalHookMocks.triggerInternalHook.mockImplementationOnce(
+      async (event: { messages: string[] }) => {
+        event.messages.push("Hook echo");
+      },
+    );
+
+    const replyResolver = async () => ({ text: "hi" }) satisfies ReplyPayload;
+    await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
+
+    expect(mocks.routeReply).toHaveBeenCalledWith(
+      expect.objectContaining({
+        payload: { text: "Hook echo" },
+        channel: "feishu",
+        to: "feishu:ou_123",
+        accountId: "acc-1",
+        mirror: false,
+        skipMessageHooks: true,
+      }),
+    );
+  });
+
   it("skips internal message:received hook when session key is unavailable", async () => {
     setNoAbort();
     const cfg = emptyConfig;

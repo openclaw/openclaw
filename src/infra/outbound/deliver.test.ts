@@ -709,6 +709,38 @@ describe("deliverOutboundPayloads", () => {
     expect(internalHookMocks.triggerInternalHook).toHaveBeenCalledTimes(1);
   });
 
+  it("delivers internal message:sent hook messages without re-emitting hooks", async () => {
+    const sendWhatsApp = vi
+      .fn()
+      .mockResolvedValueOnce({ messageId: "w1", toJid: "jid" })
+      .mockResolvedValueOnce({ messageId: "w2", toJid: "jid" });
+    internalHookMocks.triggerInternalHook.mockImplementationOnce(
+      async (event: { messages: string[] }) => {
+        event.messages.push("Hook echo");
+      },
+    );
+
+    await deliverOutboundPayloads({
+      cfg: whatsappChunkConfig,
+      channel: "whatsapp",
+      to: "+1555",
+      payloads: [{ text: "hello" }],
+      deps: { sendWhatsApp },
+      session: { key: "agent:main:main" },
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(sendWhatsApp).toHaveBeenCalledTimes(2);
+    expect(sendWhatsApp).toHaveBeenNthCalledWith(
+      2,
+      "+1555",
+      "Hook echo",
+      expect.objectContaining({ verbose: false }),
+    );
+    expect(internalHookMocks.createInternalHookEvent).toHaveBeenCalledTimes(1);
+    expect(internalHookMocks.triggerInternalHook).toHaveBeenCalledTimes(1);
+  });
+
   it("warns when session.agentId is set without a session key", async () => {
     const sendWhatsApp = vi.fn().mockResolvedValue({ messageId: "w1", toJid: "jid" });
     hookMocks.runner.hasHooks.mockReturnValue(true);

@@ -196,13 +196,37 @@ export async function dispatchReplyFromConfig(params: {
 
   // Bridge to internal hooks (HOOK.md discovery system) - refs #8807
   if (sessionKey) {
+    const hookEvent = createInternalHookEvent("message", "received", sessionKey, {
+      ...toInternalMessageReceivedContext(hookContext),
+      timestamp,
+    });
     fireAndForgetHook(
-      triggerInternalHook(
-        createInternalHookEvent("message", "received", sessionKey, {
-          ...toInternalMessageReceivedContext(hookContext),
-          timestamp,
-        }),
-      ),
+      (async () => {
+        await triggerInternalHook(hookEvent);
+        const hookReplyText = hookEvent.messages.join("\n\n").trim();
+        const hookReplyChannel = normalizeMessageChannel(
+          ctx.OriginatingChannel ?? ctx.Surface ?? ctx.Provider,
+        );
+        const hookReplyTo = ctx.OriginatingTo ?? ctx.From ?? ctx.To;
+        if (
+          !hookReplyText ||
+          !hookReplyChannel ||
+          !hookReplyTo ||
+          !isRoutableChannel(hookReplyChannel as never)
+        ) {
+          return;
+        }
+        await routeReply({
+          payload: { text: hookReplyText },
+          channel: hookReplyChannel,
+          to: hookReplyTo,
+          accountId: ctx.AccountId,
+          threadId: ctx.MessageThreadId,
+          cfg,
+          mirror: false,
+          skipMessageHooks: true,
+        });
+      })(),
       "dispatch-from-config: message_received internal hook failed",
     );
   }
