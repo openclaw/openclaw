@@ -485,10 +485,6 @@ run_prepare_push_retry_gates() {
   fi
 }
 
-PUSH_PREP_HEAD_SHA=""
-PUSHED_FROM_SHA=""
-PR_HEAD_SHA_AFTER_PUSH=""
-
 push_prep_head_to_pr_branch() {
   local pr="$1"
   local pr_head="$2"
@@ -496,6 +492,7 @@ push_prep_head_to_pr_branch() {
   local lease_sha="$4"
   local rerun_gates_on_lease_retry="${5:-false}"
   local docs_only="${6:-false}"
+  local result_env_path="${7:-.local/push-result.env}"
 
   setup_prhead_remote
 
@@ -574,10 +571,11 @@ push_prep_head_to_pr_branch() {
     exit 1
   }
   git branch -D "pr-$pr-verify" 2>/dev/null || true
-
-  PUSH_PREP_HEAD_SHA="$prep_head_sha"
-  PUSHED_FROM_SHA="$pushed_from_sha"
-  PR_HEAD_SHA_AFTER_PUSH="$pr_head_sha_after"
+  cat > "$result_env_path" <<EOF_ENV
+PUSH_PREP_HEAD_SHA=$prep_head_sha
+PUSHED_FROM_SHA=$pushed_from_sha
+PR_HEAD_SHA_AFTER_PUSH=$pr_head_sha_after
+EOF_ENV
 }
 
 set_review_mode() {
@@ -1458,9 +1456,12 @@ prepare_push() {
 
   local lease_sha
   lease_sha=$(gh pr view "$pr" --json headRefOid --jq .headRefOid)
+  local push_result_env=".local/prepare-push-result.env"
 
   verify_pr_head_branch_matches_expected "$pr" "$PR_HEAD"
-  push_prep_head_to_pr_branch "$pr" "$PR_HEAD" "$prep_head_sha" "$lease_sha" true "${DOCS_ONLY:-false}"
+  push_prep_head_to_pr_branch "$pr" "$PR_HEAD" "$prep_head_sha" "$lease_sha" true "${DOCS_ONLY:-false}" "$push_result_env"
+  # shellcheck disable=SC1090
+  source "$push_result_env"
   prep_head_sha="$PUSH_PREP_HEAD_SHA"
   local pushed_from_sha="$PUSHED_FROM_SHA"
   local pr_head_sha_after="$PR_HEAD_SHA_AFTER_PUSH"
@@ -1516,9 +1517,12 @@ prepare_sync_head() {
 
   local lease_sha
   lease_sha=$(gh pr view "$pr" --json headRefOid --jq .headRefOid)
+  local push_result_env=".local/prepare-sync-result.env"
 
   verify_pr_head_branch_matches_expected "$pr" "$PR_HEAD"
-  push_prep_head_to_pr_branch "$pr" "$PR_HEAD" "$prep_head_sha" "$lease_sha"
+  push_prep_head_to_pr_branch "$pr" "$PR_HEAD" "$prep_head_sha" "$lease_sha" false false "$push_result_env"
+  # shellcheck disable=SC1090
+  source "$push_result_env"
   prep_head_sha="$PUSH_PREP_HEAD_SHA"
   local pushed_from_sha="$PUSHED_FROM_SHA"
   local pr_head_sha_after="$PR_HEAD_SHA_AFTER_PUSH"
