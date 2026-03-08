@@ -49,3 +49,8 @@ Use this format when adding entries:
   npm: `@icesword760/openclaw-wechat`
   repo: `https://github.com/icesword0760/openclaw-wechat`
   install: `openclaw plugins install @icesword760/openclaw-wechat`
+
+- **VibeClaw** — Zero-config skill discovery and installation via Vibe Index (93,600+ skills, plugins, and MCP servers). AI automatically searches, security-checks, and installs the right skill when it encounters a task it cannot handle.
+  npm: `vibeclaw`
+  repo: `https://github.com/taehojo/vibeclaw`
+  install: `openclaw plugins install vibeclaw`
