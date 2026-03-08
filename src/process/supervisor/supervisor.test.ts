@@ -106,4 +106,22 @@ describe("process supervisor", () => {
     expect(streamed).toBe("streamed");
     expect(exit.stdout).toBe("");
   });
+
+  it("tracks active runs and terminates them on demand", async () => {
+    const supervisor = createProcessSupervisor();
+    const run = await spawnChild(supervisor, {
+      sessionId: "s-active",
+      argv: [process.execPath, "-e", "setTimeout(() => {}, 10_000)"],
+      timeoutMs: 20_000,
+      stdinMode: "pipe-closed",
+    });
+
+    expect(supervisor.getActiveCount()).toBe(1);
+
+    await supervisor.terminateAll({ timeoutMs: 4_000 });
+    const exit = await run.wait();
+
+    expect(supervisor.getActiveCount()).toBe(0);
+    expect(exit.reason).toBe("manual-cancel");
+  });
 });

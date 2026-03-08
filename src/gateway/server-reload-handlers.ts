@@ -16,6 +16,7 @@ import {
 } from "../infra/restart.js";
 import { setCommandLaneConcurrency, getTotalQueueSize } from "../process/command-queue.js";
 import { CommandLane } from "../process/lanes.js";
+import { getProcessSupervisor } from "../process/supervisor/index.js";
 import type { ChannelHealthMonitor } from "./channel-health-monitor.js";
 import type { ChannelKind } from "./config-reload-plan.js";
 import type { GatewayReloadPlan } from "./config-reload.js";
@@ -164,11 +165,13 @@ export function createGatewayReloadHandlers(params: {
       const queueSize = getTotalQueueSize();
       const pendingReplies = getTotalPendingReplies();
       const embeddedRuns = getActiveEmbeddedRunCount();
+      const supervisorRuns = getProcessSupervisor().getActiveCount();
       return {
         queueSize,
         pendingReplies,
         embeddedRuns,
-        totalActive: queueSize + pendingReplies + embeddedRuns,
+        supervisorRuns,
+        totalActive: queueSize + pendingReplies + embeddedRuns + supervisorRuns,
       };
     };
     const formatActiveDetails = (counts: ReturnType<typeof getActiveCounts>) => {
@@ -181,6 +184,9 @@ export function createGatewayReloadHandlers(params: {
       }
       if (counts.embeddedRuns > 0) {
         details.push(`${counts.embeddedRuns} embedded run(s)`);
+      }
+      if (counts.supervisorRuns > 0) {
+        details.push(`${counts.supervisorRuns} child run(s)`);
       }
       return details;
     };

@@ -5,6 +5,7 @@ import { type ChannelId, listChannelPlugins } from "../channels/plugins/index.js
 import { stopGmailWatcher } from "../hooks/gmail-watcher.js";
 import type { HeartbeatRunner } from "../infra/heartbeat-runner.js";
 import type { PluginServicesHandle } from "../plugins/services.js";
+import type { ProcessSupervisor } from "../process/supervisor/index.js";
 
 export function createGatewayCloseHandler(params: {
   bonjourStop: (() => Promise<void>) | null;
@@ -28,6 +29,7 @@ export function createGatewayCloseHandler(params: {
   clients: Set<{ socket: { close: (code: number, reason: string) => void } }>;
   configReloader: { stop: () => Promise<void> };
   browserControl: { stop: () => Promise<void> } | null;
+  processSupervisor: Pick<ProcessSupervisor, "terminateAll">;
   wss: WebSocketServer;
   httpServer: HttpServer;
   httpServers?: HttpServer[];
@@ -106,6 +108,12 @@ export function createGatewayCloseHandler(params: {
       }
     }
     params.chatRunState.clear();
+    await params.processSupervisor
+      .terminateAll({
+        reason: "manual-cancel",
+        timeoutMs: 5_000,
+      })
+      .catch(() => {});
     for (const c of params.clients) {
       try {
         c.socket.close(1012, "service restart");
