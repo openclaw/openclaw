@@ -1,3 +1,14 @@
+export type SandboxDockerVolumeSetting = {
+  /** Host path (bind), volume name (named), or omitted for ephemeral strategy. */
+  source?: string;
+  /** Container mount target path. */
+  target: string;
+  /** Mount strategy. */
+  strategy: "ephemeral" | "named" | "bind";
+  /** Mount read-only inside container. */
+  readOnly?: boolean;
+};
+
 export type SandboxDockerSettings = {
   /** Docker image to use for sandbox containers. */
   image?: string;
@@ -42,6 +53,8 @@ export type SandboxDockerSettings = {
   extraHosts?: string[];
   /** Additional bind mounts (host:container:mode format, e.g. ["/host/path:/container/path:rw"]). */
   binds?: string[];
+  /** Declarative volume mounts with strategy (ephemeral|named|bind). */
+  volumes?: SandboxDockerVolumeSetting[];
   /**
    * Dangerous override: allow bind mounts that target reserved container paths
    * like /workspace or /agent.

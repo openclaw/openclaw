@@ -177,6 +177,60 @@ describe("sandbox docker config", () => {
     });
     expect(res.ok).toBe(false);
   });
+
+  it("accepts sandbox.docker.volumes with mixed strategies", () => {
+    const res = validateConfigObject({
+      agents: {
+        defaults: {
+          sandbox: {
+            docker: {
+              volumes: [
+                { strategy: "ephemeral", target: "/tmp/cache" },
+                { strategy: "named", source: "openclaw-cache", target: "/cache" },
+                {
+                  strategy: "bind",
+                  source: "/home/user/shared",
+                  target: "/shared",
+                  readOnly: true,
+                },
+              ],
+            },
+          },
+        },
+      },
+    });
+    expect(res.ok).toBe(true);
+  });
+
+  it("rejects bind volume strategy without absolute source", () => {
+    const res = validateConfigObject({
+      agents: {
+        defaults: {
+          sandbox: {
+            docker: {
+              volumes: [{ strategy: "bind", source: "relative/path", target: "/shared" }],
+            },
+          },
+        },
+      },
+    });
+    expect(res.ok).toBe(false);
+  });
+
+  it("rejects ephemeral volume strategy when source is provided", () => {
+    const res = validateConfigObject({
+      agents: {
+        defaults: {
+          sandbox: {
+            docker: {
+              volumes: [{ strategy: "ephemeral", source: "not-allowed", target: "/tmp" }],
+            },
+          },
+        },
+      },
+    });
+    expect(res.ok).toBe(false);
+  });
 });
 
 describe("sandbox browser binds config", () => {

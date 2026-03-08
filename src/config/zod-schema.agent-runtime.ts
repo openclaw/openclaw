@@ -131,6 +131,18 @@ export const SandboxDockerSchema = z
     dns: z.array(z.string()).optional(),
     extraHosts: z.array(z.string()).optional(),
     binds: z.array(z.string()).optional(),
+    volumes: z
+      .array(
+        z
+          .object({
+            source: z.string().optional(),
+            target: z.string(),
+            strategy: z.union([z.literal("ephemeral"), z.literal("named"), z.literal("bind")]),
+            readOnly: z.boolean().optional(),
+          })
+          .strict(),
+      )
+      .optional(),
     dangerouslyAllowReservedContainerTargets: z.boolean().optional(),
     dangerouslyAllowExternalBindSources: z.boolean().optional(),
     dangerouslyAllowContainerNamespaceJoin: z.boolean().optional(),
@@ -157,6 +169,44 @@ export const SandboxDockerSchema = z
             message:
               `Sandbox security: bind mount "${bind}" uses a non-absolute source path "${source}". ` +
               "Only absolute POSIX paths are supported for sandbox binds.",
+          });
+        }
+      }
+    }
+    if (data.volumes) {
+      for (let i = 0; i < data.volumes.length; i += 1) {
+        const vol = data.volumes[i];
+        const target = vol?.target?.trim() ?? "";
+        if (!target || !target.startsWith("/")) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: ["volumes", i, "target"],
+            message: "Sandbox security: volume target must be an absolute POSIX path.",
+          });
+        }
+        const source = vol?.source?.trim();
+        if (vol.strategy === "bind") {
+          if (!source || !source.startsWith("/")) {
+            ctx.addIssue({
+              code: z.ZodIssueCode.custom,
+              path: ["volumes", i, "source"],
+              message:
+                "Sandbox security: bind volume strategy requires an absolute POSIX source path.",
+            });
+          }
+        } else if (vol.strategy === "named") {
+          if (!source) {
+            ctx.addIssue({
+              code: z.ZodIssueCode.custom,
+              path: ["volumes", i, "source"],
+              message: "Sandbox config: named volume strategy requires source (volume name).",
+            });
+          }
+        } else if (source) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: ["volumes", i, "source"],
+            message: "Sandbox config: ephemeral strategy must not set source.",
           });
         }
       }
