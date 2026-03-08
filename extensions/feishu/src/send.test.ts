@@ -1,6 +1,6 @@
 import type { ClawdbotConfig } from "openclaw/plugin-sdk/feishu";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { getMessageFeishu } from "./send.js";
+import { getMessageFeishu, parseInteractiveCardContent } from "./send.js";
 
 const { mockClientGet, mockCreateFeishuClient, mockResolveFeishuAccount } = vi.hoisted(() => ({
   mockClientGet: vi.fn(),
@@ -164,5 +164,62 @@ describe("getMessageFeishu", () => {
         content: "single payload",
       }),
     );
+  });
+});
+
+describe("parseInteractiveCardContent", () => {
+  it("extracts content from streaming card that has header and elements", () => {
+    // A streaming card reference that also carries inline content should extract it
+    const card = {
+      type: "card",
+      data: { card_id: "card_streaming_123" },
+      header: { title: { content: "Stream Title" } },
+      elements: [{ tag: "markdown", content: "streamed content" }],
+    };
+    expect(parseInteractiveCardContent(card)).toBe("Stream Title\nstreamed content");
+  });
+
+  it("returns [Streaming Card] for card_id reference with no inline content", () => {
+    const card = { type: "card", data: { card_id: "card_streaming_456" } };
+    expect(parseInteractiveCardContent(card)).toBe("[Streaming Card]");
+  });
+
+  it("falls back to non-empty locale when zh_cn is empty array", () => {
+    const card = {
+      i18n_elements: {
+        zh_cn: [],
+        en_us: [{ tag: "markdown", content: "english content" }],
+      },
+    };
+    expect(parseInteractiveCardContent(card)).toBe("english content");
+  });
+
+  it("prefers zh_cn when it is a non-empty array", () => {
+    const card = {
+      i18n_elements: {
+        zh_cn: [{ tag: "markdown", content: "中文内容" }],
+        en_us: [{ tag: "markdown", content: "english content" }],
+      },
+    };
+    expect(parseInteractiveCardContent(card)).toBe("中文内容");
+  });
+
+  it("extracts template variable values", () => {
+    const card = {
+      type: "template",
+      data: {
+        template_variable: {
+          title: "Template Title",
+          content: "Template Body",
+          num: 42,
+        },
+      },
+    };
+    expect(parseInteractiveCardContent(card)).toBe("Template Title\nTemplate Body");
+  });
+
+  it("returns [Interactive Card] for null/undefined input", () => {
+    expect(parseInteractiveCardContent(null)).toBe("[Interactive Card]");
+    expect(parseInteractiveCardContent(undefined)).toBe("[Interactive Card]");
   });
 });

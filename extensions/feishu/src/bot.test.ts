@@ -46,10 +46,14 @@ vi.mock("./reply-dispatcher.js", () => ({
   createFeishuReplyDispatcher: mockCreateFeishuReplyDispatcher,
 }));
 
-vi.mock("./send.js", () => ({
-  sendMessageFeishu: mockSendMessageFeishu,
-  getMessageFeishu: mockGetMessageFeishu,
-}));
+vi.mock("./send.js", async (importOriginal) => {
+  const original = (await importOriginal()) as Record<string, unknown>;
+  return {
+    ...original,
+    sendMessageFeishu: mockSendMessageFeishu,
+    getMessageFeishu: mockGetMessageFeishu,
+  };
+});
 
 vi.mock("./media.js", () => ({
   downloadMessageResourceFeishu: mockDownloadMessageResourceFeishu,
@@ -941,6 +945,45 @@ describe("handleFeishuMessage command authorization", () => {
     expect(mockFinalizeInboundContext).toHaveBeenCalledWith(
       expect.objectContaining({
         BodyForAgent: "[message_id: msg-message-id-line]\nou-msgid: hello",
+      }),
+    );
+  });
+
+  it("parses interactive card content when received as direct message", async () => {
+    mockShouldComputeCommandAuthorized.mockReturnValue(false);
+
+    const cfg: ClawdbotConfig = {
+      channels: {
+        feishu: {
+          dmPolicy: "open",
+        },
+      },
+    } as ClawdbotConfig;
+
+    const event: FeishuMessageEvent = {
+      sender: {
+        sender_id: {
+          open_id: "ou-card-sender",
+        },
+      },
+      message: {
+        message_id: "msg-interactive-direct",
+        chat_id: "oc-dm",
+        chat_type: "p2p",
+        message_type: "interactive",
+        content: JSON.stringify({
+          header: { title: { content: "Card Title" } },
+          elements: [{ tag: "markdown", content: "card body text" }],
+        }),
+      },
+    };
+
+    await dispatchMessage({ cfg, event });
+
+    expect(mockFinalizeInboundContext).toHaveBeenCalledWith(
+      expect.objectContaining({
+        BodyForAgent:
+          "[message_id: msg-interactive-direct]\nou-card-sender: Card Title\ncard body text",
       }),
     );
   });
