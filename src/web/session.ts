@@ -32,6 +32,13 @@ export {
 } from "./auth-store.js";
 
 let credsSaveQueue: Promise<void> = Promise.resolve();
+let credsSaveQueueResolve: (() => void) | null = null;
+
+export function waitForCredsSaveQueue(): Promise<void> {
+  return new Promise((resolve) => {
+    credsSaveQueueResolve = resolve;
+  });
+}
 function enqueueSaveCreds(
   authDir: string,
   saveCreds: () => Promise<void> | void,
@@ -39,6 +46,13 @@ function enqueueSaveCreds(
 ): void {
   credsSaveQueue = credsSaveQueue
     .then(() => safeSaveCreds(authDir, saveCreds, logger))
+    .then(() => {
+      // Notify any waiting callers that creds have been saved
+      if (credsSaveQueueResolve) {
+        credsSaveQueueResolve();
+        credsSaveQueueResolve = null;
+      }
+    })
     .catch((err) => {
       logger.warn({ error: String(err) }, "WhatsApp creds save queue error");
     });
@@ -184,9 +198,12 @@ export async function waitForWaConnection(sock: ReturnType<typeof makeWASocket>)
 }
 
 export function getStatusCode(err: unknown) {
+  // Handle the wrapper object { error: BoomError, date } from lastDisconnect
+  const wrapper = err as { error?: unknown };
+  const unwrappedErr = wrapper?.error ?? err;
   return (
-    (err as { output?: { statusCode?: number } })?.output?.statusCode ??
-    (err as { status?: number })?.status
+    (unwrappedErr as { output?: { statusCode?: number } })?.output?.statusCode ??
+    (unwrappedErr as { status?: number })?.status
   );
 }
 

@@ -1237,7 +1237,12 @@ export async function resolveImplicitProviders(params: {
     const ollamaProvider = await buildOllamaProvider(ollamaBaseUrl, {
       quiet: !ollamaKey && !hasExplicitOllamaConfig,
     });
-    if (ollamaProvider.models.length > 0 || ollamaKey || explicitOllama?.apiKey) {
+    if (
+      ollamaProvider.models.length > 0 ||
+      ollamaKey ||
+      explicitOllama?.apiKey ||
+      hasExplicitOllamaConfig
+    ) {
       providers.ollama = {
         ...ollamaProvider,
         apiKey: ollamaKey ?? explicitOllama?.apiKey ?? OLLAMA_LOCAL_AUTH_MARKER,

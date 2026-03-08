@@ -278,4 +278,25 @@ describe("Ollama provider", () => {
 
     expect(providers?.ollama?.apiKey).toBe("config-ollama-key");
   });
+  it("should add ollama when explicit config exists with empty models and no apiKey", async () => {
+    const agentDir = mkdtempSync(join(tmpdir(), "openclaw-test-"));
+
+    // User configures ollama with baseUrl but empty models array and no apiKey
+    // This is a valid use case - user wants to configure baseUrl for future use
+    const providers = await resolveImplicitProviders({
+      agentDir,
+      explicitProviders: {
+        ollama: {
+          baseUrl: "http://127.0.0.1:11434",
+          api: "ollama",
+          models: [],
+        },
+      },
+    });
+
+    // Provider should still be added because user explicitly configured it
+    expect(providers?.ollama).toBeDefined();
+    expect(providers?.ollama?.baseUrl).toBe("http://127.0.0.1:11434");
+    expect(providers?.ollama?.api).toBe("ollama");
+  });
 });
