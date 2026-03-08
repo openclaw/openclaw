@@ -221,6 +221,24 @@ export function registerCronAddCommand(cron: Command) {
             throw new Error("--account requires an isolated agentTurn job with delivery.");
           }
 
+          const deliveryChannel =
+            typeof opts.channel === "string" && opts.channel.trim()
+              ? opts.channel.trim().toLowerCase()
+              : undefined;
+          const deliveryTo =
+            typeof opts.to === "string" && opts.to.trim() ? opts.to.trim() : undefined;
+          if (
+            sessionTarget === "isolated" &&
+            payload.kind === "agentTurn" &&
+            (hasAnnounce || !hasNoDeliver) &&
+            (deliveryChannel === "feishu" || deliveryChannel === "lark") &&
+            !deliveryTo
+          ) {
+            throw new Error(
+              "--to is required for Feishu/Lark announce delivery (for example user:<open_id> or chat:<chat_id>)",
+            );
+          }
+
           const deliveryMode =
             sessionTarget === "isolated" && payload.kind === "agentTurn"
               ? hasAnnounce
@@ -260,11 +278,8 @@ export function registerCronAddCommand(cron: Command) {
             delivery: deliveryMode
               ? {
                   mode: deliveryMode,
-                  channel:
-                    typeof opts.channel === "string" && opts.channel.trim()
-                      ? opts.channel.trim()
-                      : undefined,
-                  to: typeof opts.to === "string" && opts.to.trim() ? opts.to.trim() : undefined,
+                  channel: deliveryChannel,
+                  to: deliveryTo,
                   accountId,
                   bestEffort: opts.bestEffortDeliver ? true : undefined,
                 }

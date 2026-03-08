@@ -192,6 +192,14 @@ function assertDeliverySupport(job: Pick<CronJob, "sessionTarget" | "delivery">)
   if (job.sessionTarget !== "isolated") {
     throw new Error('cron channel delivery config is only supported for sessionTarget="isolated"');
   }
+  const deliveryChannel =
+    typeof job.delivery.channel === "string" ? job.delivery.channel.trim().toLowerCase() : "";
+  const deliveryTo = typeof job.delivery.to === "string" ? job.delivery.to.trim() : "";
+  if ((deliveryChannel === "feishu" || deliveryChannel === "lark") && !deliveryTo) {
+    throw new Error(
+      "cron Feishu/Lark announce delivery requires delivery.to (for example user:<open_id> or chat:<chat_id>)",
+    );
+  }
   if (job.delivery.channel === "telegram") {
     const telegramError = validateTelegramDeliveryTarget(job.delivery.to);
     if (telegramError) {
