@@ -302,7 +302,7 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
     // If FTS isn't available, hybrid mode cannot use keyword search; degrade to vector-only.
     const keywordResults =
       hybrid.enabled && this.fts.enabled && this.fts.available
-        ? await this.searchKeyword(cleaned, candidates).catch(() => [])
+        ? await this.searchKeywordsMulti(cleaned, candidates)
         : [];
 
     const queryVec = await this.embedQueryWithTimeout(cleaned);
@@ -395,6 +395,31 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
       bm25RankToScore,
     });
     return results.map((entry) => entry as MemorySearchResult & { id: string; textScore: number });
+  }
+
+  private async searchKeywordsMulti(
+    query: string,
+    limit: number,
+  ): Promise<Array<MemorySearchResult & { id: string; textScore: number }>> {
+    const keywords = extractKeywords(query);
+    const searchTerms = keywords.length > 0 ? keywords : [query];
+
+    const resultSets = await Promise.all(
+      searchTerms.map((term) => this.searchKeyword(term, limit).catch(() => [])),
+    );
+
+    // Keep the highest textScore per chunk id to prevent duplicates
+    const mapByID = new Map<string, MemorySearchResult & { id: string; textScore: number }>();
+    for (const results of resultSets) {
+      for (const result of results) {
+        const existing = mapByID.get(result.id);
+        if (!existing || result.textScore > existing.textScore) {
+          mapByID.set(result.id, result);
+        }
+      }
+    }
+
+    return [...mapByID.values()].toSorted((a, b) => b.textScore - a.textScore).slice(0, limit);
   }
 
   private mergeHybridResults(params: {
