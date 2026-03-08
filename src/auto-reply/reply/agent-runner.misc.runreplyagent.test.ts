@@ -1167,7 +1167,7 @@ describe("runReplyAgent reminder commitment guard", () => {
     });
   }
 
-  it("appends guard note when reminder commitment is not backed by cron.add", async () => {
+  it("keeps reminder commitment user-visible text clean when cron.add is not used", async () => {
     runEmbeddedPiAgentMock.mockResolvedValueOnce({
       payloads: [{ text: "I'll remind you tomorrow morning." }],
       meta: {},
@@ -1176,7 +1176,7 @@ describe("runReplyAgent reminder commitment guard", () => {
 
     const result = await createRun();
     expect(result).toMatchObject({
-      text: "I'll remind you tomorrow morning.\n\nNote: I did not schedule a reminder in this turn, so this will not trigger automatically.",
+      text: "I'll remind you tomorrow morning.",
     });
   });
 
@@ -1220,7 +1220,7 @@ describe("runReplyAgent reminder commitment guard", () => {
     });
   });
 
-  it("still appends guard note when cron jobs exist but not for the current session", async () => {
+  it("keeps reminder commitment text clean when unrelated cron jobs exist", async () => {
     loadCronStoreMock.mockResolvedValueOnce({
       version: 1,
       jobs: [
@@ -1243,11 +1243,11 @@ describe("runReplyAgent reminder commitment guard", () => {
 
     const result = await createRun();
     expect(result).toMatchObject({
-      text: "I'll remind you tomorrow morning.\n\nNote: I did not schedule a reminder in this turn, so this will not trigger automatically.",
+      text: "I'll remind you tomorrow morning.",
     });
   });
 
-  it("still appends guard note when cron jobs for session exist but are disabled", async () => {
+  it("keeps reminder commitment text clean when session cron jobs are disabled", async () => {
     loadCronStoreMock.mockResolvedValueOnce({
       version: 1,
       jobs: [
@@ -1270,11 +1270,11 @@ describe("runReplyAgent reminder commitment guard", () => {
 
     const result = await createRun();
     expect(result).toMatchObject({
-      text: "I'll check back in an hour.\n\nNote: I did not schedule a reminder in this turn, so this will not trigger automatically.",
+      text: "I'll check back in an hour.",
     });
   });
 
-  it("still appends guard note when sessionKey is missing", async () => {
+  it("keeps reminder commitment text clean when sessionKey is missing", async () => {
     loadCronStoreMock.mockResolvedValueOnce({
       version: 1,
       jobs: [
@@ -1297,11 +1297,11 @@ describe("runReplyAgent reminder commitment guard", () => {
 
     const result = await createRun({ omitSessionKey: true });
     expect(result).toMatchObject({
-      text: "I'll ping you later.\n\nNote: I did not schedule a reminder in this turn, so this will not trigger automatically.",
+      text: "I'll ping you later.",
     });
   });
 
-  it("still appends guard note when cron store read fails", async () => {
+  it("keeps reminder commitment text clean when cron store read fails", async () => {
     loadCronStoreMock.mockRejectedValueOnce(new Error("store read failed"));
 
     runEmbeddedPiAgentMock.mockResolvedValueOnce({
@@ -1312,7 +1312,7 @@ describe("runReplyAgent reminder commitment guard", () => {
 
     const result = await createRun({ sessionKey: "main" });
     expect(result).toMatchObject({
-      text: "I'll remind you after lunch.\n\nNote: I did not schedule a reminder in this turn, so this will not trigger automatically.",
+      text: "I'll remind you after lunch.",
     });
   });
 });

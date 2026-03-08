@@ -43,6 +43,7 @@ import {
   appendUnscheduledReminderNote,
   hasSessionRelatedCronJobs,
   hasUnbackedReminderCommitment,
+  stripUnscheduledReminderNote,
 } from "./agent-runner-reminder-guard.js";
 import { appendUsageLine, formatResponseUsageLine } from "./agent-runner-utils.js";
 import { createAudioAsVoiceBuffer, createBlockReplyPipeline } from "./block-reply-pipeline.js";
@@ -531,7 +532,16 @@ export async function runReplyAgent(params: {
         ? appendUnscheduledReminderNote(replyPayloads)
         : replyPayloads;
 
-    await signalTypingIfNeeded(guardedReplyPayloads, typingSignals);
+    const sanitizedReplyPayloads = guardedReplyPayloads.map((payload) => {
+      if (payload.isError || typeof payload.text !== "string") {
+        return payload;
+      }
+
+      const cleaned = stripUnscheduledReminderNote(payload.text);
+      return cleaned.didStrip ? { ...payload, text: cleaned.text } : payload;
+    });
+
+    await signalTypingIfNeeded(sanitizedReplyPayloads, typingSignals);
 
     if (isDiagnosticsEnabled(cfg) && hasNonzeroUsage(usage)) {
       const input = usage.input ?? 0;
@@ -599,7 +609,7 @@ export async function runReplyAgent(params: {
     }
 
     // If verbose is enabled, prepend operational run notices.
-    let finalPayloads = guardedReplyPayloads;
+    let finalPayloads = sanitizedReplyPayloads;
     const verboseNotices: ReplyPayload[] = [];
 
     if (verboseEnabled && activeIsNewSession) {
