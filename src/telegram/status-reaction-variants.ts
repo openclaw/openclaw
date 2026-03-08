@@ -90,6 +90,7 @@ export const TELEGRAM_STATUS_REACTION_VARIANTS: Record<StatusReactionEmojiKey, s
   error: ["😱", "😨", "🤯"],
   stallSoft: ["🥱", "😴", "🤔"],
   stallHard: ["😨", "😱", "⚡"],
+  compacting: ["✍", "🤔", "🤯"],
 };
 
 const STATUS_REACTION_EMOJI_KEYS: StatusReactionEmojiKey[] = [
@@ -102,6 +103,7 @@ const STATUS_REACTION_EMOJI_KEYS: StatusReactionEmojiKey[] = [
   "error",
   "stallSoft",
   "stallHard",
+  "compacting",
 ];
 
 function normalizeEmoji(value: string | undefined): string | undefined {
@@ -129,6 +131,7 @@ export function resolveTelegramStatusReactionEmojis(params: {
     error: normalizeEmoji(overrides?.error) ?? DEFAULT_EMOJIS.error,
     stallSoft: normalizeEmoji(overrides?.stallSoft) ?? DEFAULT_EMOJIS.stallSoft,
     stallHard: normalizeEmoji(overrides?.stallHard) ?? DEFAULT_EMOJIS.stallHard,
+    compacting: normalizeEmoji(overrides?.compacting) ?? DEFAULT_EMOJIS.compacting,
   };
 }
 
