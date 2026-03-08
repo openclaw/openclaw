@@ -457,11 +457,7 @@ export function createExecTool(
       }
 
       const explicitTimeoutSec = typeof params.timeout === "number" ? params.timeout : null;
-      const backgroundTimeoutBypass =
-        allowBackground && explicitTimeoutSec === null && (backgroundRequested || yieldRequested);
-      const effectiveTimeout = backgroundTimeoutBypass
-        ? null
-        : (explicitTimeoutSec ?? defaultTimeoutSec);
+      const effectiveTimeout = explicitTimeoutSec ?? defaultTimeoutSec;
       const getWarningText = () => (warnings.length ? `${warnings.join("\n")}\n\n` : "");
       const usePty = params.pty === true && !sandbox;
 
