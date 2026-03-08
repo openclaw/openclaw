@@ -215,8 +215,12 @@ export async function setWebhook(
 export async function deleteWebhook(
   token: string,
   fetcher?: ZaloFetch,
+  timeoutMs?: number,
 ): Promise<ZaloApiResponse<ZaloWebhookInfo>> {
-  return callZaloApi<ZaloWebhookInfo>("deleteWebhook", token, undefined, { fetch: fetcher });
+  return callZaloApi<ZaloWebhookInfo>("deleteWebhook", token, undefined, {
+    timeoutMs,
+    fetch: fetcher,
+  });
 }
 
 /**

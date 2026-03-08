@@ -71,6 +71,7 @@ export type ZaloMonitorOptions = {
 
 const ZALO_TEXT_LIMIT = 2000;
 const DEFAULT_MEDIA_MAX_MB = 5;
+const WEBHOOK_CLEANUP_TIMEOUT_MS = 5_000;
 
 type ZaloCoreRuntime = ReturnType<typeof getZaloRuntime>;
 
@@ -707,12 +708,14 @@ export async function monitorZaloProvider(options: ZaloMonitorOptions): Promise<
           webhookCleanupPromise = (async () => {
             runtime.log?.(`[${account.accountId}] Zalo stopping; deleting webhook`);
             try {
-              await deleteWebhook(token, fetcher);
+              await deleteWebhook(token, fetcher, WEBHOOK_CLEANUP_TIMEOUT_MS);
               runtime.log?.(`[${account.accountId}] Zalo webhook deleted`);
             } catch (err) {
-              runtime.error?.(
-                `[${account.accountId}] Zalo webhook delete failed: ${formatZaloError(err)}`,
-              );
+              const detail =
+                err instanceof Error && err.name === "AbortError"
+                  ? `timed out after ${String(WEBHOOK_CLEANUP_TIMEOUT_MS)}ms`
+                  : formatZaloError(err);
+              runtime.error?.(`[${account.accountId}] Zalo webhook delete failed: ${detail}`);
             }
           })();
         }
