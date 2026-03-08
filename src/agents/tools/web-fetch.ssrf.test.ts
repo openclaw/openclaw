@@ -33,8 +33,8 @@ describe("web_fetch SSRF protection", () => {
   const priorFetch = global.fetch;
 
   beforeEach(() => {
-    vi.spyOn(ssrf, "resolvePinnedHostname").mockImplementation((hostname) =>
-      resolvePinnedHostname(hostname, lookupMock),
+    vi.spyOn(ssrf, "resolvePinnedHostname").mockImplementation((hostname, _lookup, options) =>
+      resolvePinnedHostname(hostname, lookupMock, options),
     );
   });
 
@@ -140,6 +140,60 @@ describe("web_fetch SSRF protection", () => {
       /private|internal|blocked/i,
     );
     expect(fetchSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it("allows private hosts when allowPrivateNetwork is true", async () => {
+    const fetchSpy = vi.fn().mockResolvedValue(textResponse("internal data"));
+    // @ts-expect-error mock fetch
+    global.fetch = fetchSpy;
+
+    const { createWebFetchTool } = await import("./web-tools.js");
+    const tool = createWebFetchTool({
+      config: {
+        tools: {
+          web: {
+            fetch: {
+              cacheTtlMinutes: 0,
+              allowPrivateNetwork: true,
+              firecrawl: { enabled: false },
+            },
+          },
+        },
+      },
+    });
+
+    const result = await tool?.execute?.("call", { url: "http://127.0.0.1:9090/api/test" });
+    expect(result?.details).toMatchObject({
+      status: 200,
+      extractor: "raw",
+    });
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it("blocks private hosts when allowPrivateNetwork is false", async () => {
+    const fetchSpy = vi.fn();
+    // @ts-expect-error mock fetch
+    global.fetch = fetchSpy;
+
+    const { createWebFetchTool } = await import("./web-tools.js");
+    const tool = createWebFetchTool({
+      config: {
+        tools: {
+          web: {
+            fetch: {
+              cacheTtlMinutes: 0,
+              allowPrivateNetwork: false,
+              firecrawl: { enabled: false },
+            },
+          },
+        },
+      },
+    });
+
+    await expect(tool?.execute?.("call", { url: "http://127.0.0.1/test" })).rejects.toThrow(
+      /private|internal|blocked/i,
+    );
+    expect(fetchSpy).not.toHaveBeenCalled();
   });
 
   it("allows public hosts", async () => {

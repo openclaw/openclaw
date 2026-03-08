@@ -359,6 +359,8 @@ export type ToolsConfig = {
     fetch?: {
       /** Enable web fetch tool (default: true). */
       enabled?: boolean;
+      /** Allow fetching private/internal network addresses (default: false). */
+      allowPrivateNetwork?: boolean;
       /** Max characters to return from fetched content. */
       maxChars?: number;
       /** Timeout in seconds for fetch requests. */

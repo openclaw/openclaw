@@ -94,6 +94,13 @@ function resolveFetchReadabilityEnabled(fetch?: WebFetchConfig): boolean {
   return true;
 }
 
+function resolveFetchAllowPrivateNetwork(fetch?: WebFetchConfig): boolean {
+  if (fetch && typeof fetch === "object" && "allowPrivateNetwork" in fetch) {
+    return fetch.allowPrivateNetwork === true;
+  }
+  return false;
+}
+
 function resolveFirecrawlConfig(fetch?: WebFetchConfig): FirecrawlFetchConfig {
   if (!fetch || typeof fetch !== "object") return undefined;
   const firecrawl = "firecrawl" in fetch ? fetch.firecrawl : undefined;
@@ -173,6 +180,7 @@ async function fetchWithRedirects(params: {
   maxRedirects: number;
   timeoutSeconds: number;
   userAgent: string;
+  allowPrivateNetwork?: boolean;
 }): Promise<{ response: Response; finalUrl: string; dispatcher: Dispatcher }> {
   const signal = withTimeout(undefined, params.timeoutSeconds * 1000);
   const visited = new Set<string>();
@@ -190,7 +198,9 @@ async function fetchWithRedirects(params: {
       throw new Error("Invalid URL: must be http or https");
     }
 
-    const pinned = await resolvePinnedHostname(parsedUrl.hostname);
+    const pinned = await resolvePinnedHostname(parsedUrl.hostname, undefined, {
+      allowPrivateNetwork: params.allowPrivateNetwork,
+    });
     const dispatcher = createPinnedDispatcher(pinned);
     let res: Response;
     try {
@@ -337,6 +347,7 @@ async function runWebFetch(params: {
   timeoutSeconds: number;
   cacheTtlMs: number;
   userAgent: string;
+  allowPrivateNetwork?: boolean;
   readabilityEnabled: boolean;
   firecrawlEnabled: boolean;
   firecrawlApiKey?: string;
@@ -373,6 +384,7 @@ async function runWebFetch(params: {
       maxRedirects: params.maxRedirects,
       timeoutSeconds: params.timeoutSeconds,
       userAgent: params.userAgent,
+      allowPrivateNetwork: params.allowPrivateNetwork,
     });
     res = result.response;
     finalUrl = result.finalUrl;
@@ -576,6 +588,7 @@ export function createWebFetchTool(options?: {
   const fetch = resolveFetchConfig(options?.config);
   if (!resolveFetchEnabled({ fetch, sandboxed: options?.sandboxed })) return null;
   const readabilityEnabled = resolveFetchReadabilityEnabled(fetch);
+  const allowPrivateNetwork = resolveFetchAllowPrivateNetwork(fetch);
   const firecrawl = resolveFirecrawlConfig(fetch);
   const firecrawlApiKey = resolveFirecrawlApiKey(firecrawl);
   const firecrawlEnabled = resolveFirecrawlEnabled({ firecrawl, apiKey: firecrawlApiKey });
@@ -608,6 +621,7 @@ export function createWebFetchTool(options?: {
         timeoutSeconds: resolveTimeoutSeconds(fetch?.timeoutSeconds, DEFAULT_TIMEOUT_SECONDS),
         cacheTtlMs: resolveCacheTtlMs(fetch?.cacheTtlMinutes, DEFAULT_CACHE_TTL_MINUTES),
         userAgent,
+        allowPrivateNetwork,
         readabilityEnabled,
         firecrawlEnabled,
         firecrawlApiKey,

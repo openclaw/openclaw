@@ -173,18 +173,31 @@ export type PinnedHostname = {
 export async function resolvePinnedHostname(
   hostname: string,
   lookupFn: LookupFn = dnsLookup,
+  options?: { allowPrivateNetwork?: boolean },
 ): Promise<PinnedHostname> {
   const normalized = normalizeHostname(hostname);
   if (!normalized) {
     throw new Error("Invalid hostname");
   }
 
-  if (isBlockedHostname(normalized)) {
+  const allowPrivate = options?.allowPrivateNetwork === true;
+
+  if (!allowPrivate && isBlockedHostname(normalized)) {
     throw new SsrFBlockedError(`Blocked hostname: ${hostname}`);
   }
 
-  if (isPrivateIpAddress(normalized)) {
+  if (!allowPrivate && isPrivateIpAddress(normalized)) {
     throw new SsrFBlockedError("Blocked: private/internal IP address");
+  }
+
+  // When the hostname is a private IP literal and allowed, skip DNS lookup
+  // and pin directly to the literal address.
+  if (allowPrivate && isPrivateIpAddress(normalized)) {
+    return {
+      hostname: normalized,
+      addresses: [normalized],
+      lookup: createPinnedLookup({ hostname: normalized, addresses: [normalized] }),
+    };
   }
 
   const results = await lookupFn(normalized, { all: true });
@@ -192,9 +205,11 @@ export async function resolvePinnedHostname(
     throw new Error(`Unable to resolve hostname: ${hostname}`);
   }
 
-  for (const entry of results) {
-    if (isPrivateIpAddress(entry.address)) {
-      throw new SsrFBlockedError("Blocked: resolves to private/internal IP address");
+  if (!allowPrivate) {
+    for (const entry of results) {
+      if (isPrivateIpAddress(entry.address)) {
+        throw new SsrFBlockedError("Blocked: resolves to private/internal IP address");
+      }
     }
   }
 
