@@ -1,5 +1,5 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk";
-import { loadOutboundMediaFromUrl } from "openclaw/plugin-sdk";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/msteams";
+import { loadOutboundMediaFromUrl } from "openclaw/plugin-sdk/msteams";
 import { createMSTeamsConversationStoreFs } from "./conversation-store-fs.js";
 import {
   classifyMSTeamsSendError,
@@ -157,24 +157,13 @@ export async function sendMessageMSTeams(
 
       log.debug?.("sending file consent card", { uploadId, fileName, size: media.buffer.length });
 
-      const baseRef = buildConversationReference(ref);
-      const proactiveRef = { ...baseRef, activityId: undefined };
-
-      let messageId = "unknown";
-      try {
-        await adapter.continueConversation(appId, proactiveRef, async (turnCtx) => {
-          const response = await turnCtx.sendActivity(activity);
-          messageId = extractMessageId(response) ?? "unknown";
-        });
-      } catch (err) {
-        const classification = classifyMSTeamsSendError(err);
-        const hint = formatMSTeamsSendErrorHint(classification);
-        const status = classification.statusCode ? ` (HTTP ${classification.statusCode})` : "";
-        throw new Error(
-          `msteams consent card send failed${status}: ${formatUnknownError(err)}${hint ? ` (${hint})` : ""}`,
-          { cause: err },
-        );
-      }
+      const messageId = await sendProactiveActivity({
+        adapter,
+        appId,
+        ref,
+        activity,
+        errorPrefix: "msteams consent card send",
+      });
 
       log.info("sent file consent card", { conversationId, messageId, uploadId });
 
@@ -245,14 +234,11 @@ export async function sendMessageMSTeams(
           text: messageText || undefined,
           attachments: [fileCardAttachment],
         };
-
-        const baseRef = buildConversationReference(ref);
-        const proactiveRef = { ...baseRef, activityId: undefined };
-
-        let messageId = "unknown";
-        await adapter.continueConversation(appId, proactiveRef, async (turnCtx) => {
-          const response = await turnCtx.sendActivity(activity);
-          messageId = extractMessageId(response) ?? "unknown";
+        const messageId = await sendProactiveActivityRaw({
+          adapter,
+          appId,
+          ref,
+          activity,
         });
 
         log.info("sent native file card", {
@@ -288,14 +274,11 @@ export async function sendMessageMSTeams(
         type: "message",
         text: messageText ? `${messageText}\n\n${fileLink}` : fileLink,
       };
-
-      const baseRef = buildConversationReference(ref);
-      const proactiveRef = { ...baseRef, activityId: undefined };
-
-      let messageId = "unknown";
-      await adapter.continueConversation(appId, proactiveRef, async (turnCtx) => {
-        const response = await turnCtx.sendActivity(activity);
-        messageId = extractMessageId(response) ?? "unknown";
+      const messageId = await sendProactiveActivityRaw({
+        adapter,
+        appId,
+        ref,
+        activity,
       });
 
       log.info("sent message with OneDrive file link", {
@@ -382,13 +365,14 @@ type ProactiveActivityParams = {
   errorPrefix: string;
 };
 
-async function sendProactiveActivity({
+type ProactiveActivityRawParams = Omit<ProactiveActivityParams, "errorPrefix">;
+
+async function sendProactiveActivityRaw({
   adapter,
   appId,
   ref,
   activity,
-  errorPrefix,
-}: ProactiveActivityParams): Promise<string> {
+}: ProactiveActivityRawParams): Promise<string> {
   const baseRef = buildConversationReference(ref);
   const proactiveRef = {
     ...baseRef,
@@ -396,12 +380,27 @@ async function sendProactiveActivity({
   };
 
   let messageId = "unknown";
+  await adapter.continueConversation(appId, proactiveRef, async (ctx) => {
+    const response = await ctx.sendActivity(activity);
+    messageId = extractMessageId(response) ?? "unknown";
+  });
+  return messageId;
+}
+
+async function sendProactiveActivity({
+  adapter,
+  appId,
+  ref,
+  activity,
+  errorPrefix,
+}: ProactiveActivityParams): Promise<string> {
   try {
-    await adapter.continueConversation(appId, proactiveRef, async (ctx) => {
-      const response = await ctx.sendActivity(activity);
-      messageId = extractMessageId(response) ?? "unknown";
+    return await sendProactiveActivityRaw({
+      adapter,
+      appId,
+      ref,
+      activity,
     });
-    return messageId;
   } catch (err) {
     const classification = classifyMSTeamsSendError(err);
     const hint = formatMSTeamsSendErrorHint(classification);

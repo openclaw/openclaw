@@ -1,6 +1,6 @@
 import { EventEmitter } from "node:events";
 import type { IncomingMessage, ServerResponse } from "node:http";
-import type { OpenClawConfig, PluginRuntime } from "openclaw/plugin-sdk";
+import type { OpenClawConfig, PluginRuntime } from "openclaw/plugin-sdk/bluebubbles";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createPluginRuntimeMock } from "../../test-utils/plugin-runtime-mock.js";
 import type { ResolvedBlueBubblesAccount } from "./accounts.js";
@@ -2391,11 +2391,11 @@ describe("BlueBubbles webhook monitor", () => {
       });
 
       const accountA: ResolvedBlueBubblesAccount = {
-        ...createMockAccount({ dmHistoryLimit: 3, password: "password-a" }),
+        ...createMockAccount({ dmHistoryLimit: 3, password: "password-a" }), // pragma: allowlist secret
         accountId: "acc-a",
       };
       const accountB: ResolvedBlueBubblesAccount = {
-        ...createMockAccount({ dmHistoryLimit: 3, password: "password-b" }),
+        ...createMockAccount({ dmHistoryLimit: 3, password: "password-b" }), // pragma: allowlist secret
         accountId: "acc-b",
       };
       const config: OpenClawConfig = {};

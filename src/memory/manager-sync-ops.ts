@@ -258,7 +258,12 @@ export abstract class MemoryManagerSyncOps {
     const dir = path.dirname(dbPath);
     ensureDir(dir);
     const { DatabaseSync } = requireNodeSqlite();
-    return new DatabaseSync(dbPath, { allowExtension: this.settings.store.vector.enabled });
+    const db = new DatabaseSync(dbPath, { allowExtension: this.settings.store.vector.enabled });
+    // busy_timeout is per-connection and resets to 0 on restart.
+    // Set it on every open so concurrent processes retry instead of
+    // failing immediately with SQLITE_BUSY.
+    db.exec("PRAGMA busy_timeout = 5000");
+    return db;
   }
 
   private seedEmbeddingCache(sourceDb: DatabaseSync): void {

@@ -55,6 +55,42 @@ describe("registerPluginCommand", () => {
       {
         name: "demo_cmd",
         description: "Demo command",
+        acceptsArgs: false,
+      },
+    ]);
+  });
+
+  it("supports provider-specific native command aliases", () => {
+    const result = registerPluginCommand("demo-plugin", {
+      name: "voice",
+      nativeNames: {
+        default: "talkvoice",
+        discord: "discordvoice",
+      },
+      description: "Demo command",
+      handler: async () => ({ text: "ok" }),
+    });
+
+    expect(result).toEqual({ ok: true });
+    expect(getPluginCommandSpecs()).toEqual([
+      {
+        name: "talkvoice",
+        description: "Demo command",
+        acceptsArgs: false,
+      },
+    ]);
+    expect(getPluginCommandSpecs("discord")).toEqual([
+      {
+        name: "discordvoice",
+        description: "Demo command",
+        acceptsArgs: false,
+      },
+    ]);
+    expect(getPluginCommandSpecs("telegram")).toEqual([
+      {
+        name: "talkvoice",
+        description: "Demo command",
+        acceptsArgs: false,
       },
     ]);
   });
