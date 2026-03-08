@@ -99,4 +99,21 @@ describe("validateTalkConfigResult", () => {
       }),
     ).toBe(true);
   });
+
+  it("rejects normalized talk payloads without talk.resolved", () => {
+    expect(
+      validateTalkConfigResult({
+        config: {
+          talk: {
+            provider: "elevenlabs",
+            providers: {
+              elevenlabs: {
+                voiceId: "voice-normalized",
+              },
+            },
+          },
+        },
+      }),
+    ).toBe(false);
+  });
 });
