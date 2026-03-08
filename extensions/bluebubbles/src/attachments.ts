@@ -175,7 +175,8 @@ export type SendBlueBubblesAttachmentResult = {
 /**
  * Send an attachment via BlueBubbles API.
  * Supports sending media files (images, videos, audio, documents) to a chat.
- * When asVoice is true, expects MP3/CAF audio and marks it as an iMessage voice memo.
+ * When asVoice is true, it tries to convert audio to CAF for an iMessage voice memo
+ * and falls back to a normal attachment if conversion is unavailable.
  */
 export async function sendBlueBubblesAttachment(params: {
   to: string;

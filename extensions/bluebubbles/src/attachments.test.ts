@@ -1,3 +1,4 @@
+import fs from "node:fs/promises";
 import type { PluginRuntime } from "openclaw/plugin-sdk/bluebubbles";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import "./test-mocks.js";
@@ -13,6 +14,7 @@ import {
 import type { BlueBubblesAttachment } from "./types.js";
 
 const mockFetch = vi.fn();
+const mockExecFile = vi.hoisted(() => vi.fn());
 const fetchRemoteMediaMock = vi.fn(
   async (params: {
     url: string;
@@ -47,6 +49,10 @@ installBlueBubblesFetchTestHooks({
   mockFetch,
   privateApiStatusMock: vi.mocked(getCachedBlueBubblesPrivateApiStatus),
 });
+
+vi.mock("node:child_process", () => ({
+  execFile: (...args: unknown[]) => mockExecFile(...args),
+}));
 
 const runtimeStub = {
   channel: {
@@ -335,6 +341,7 @@ describe("sendBlueBubblesAttachment", () => {
   beforeEach(() => {
     vi.stubGlobal("fetch", mockFetch);
     mockFetch.mockReset();
+    mockExecFile.mockReset();
     fetchRemoteMediaMock.mockClear();
     setBlueBubblesRuntime(runtimeStub);
     vi.mocked(getCachedBlueBubblesPrivateApiStatus).mockReset();
@@ -352,7 +359,27 @@ describe("sendBlueBubblesAttachment", () => {
     return Buffer.from(body).toString("utf8");
   }
 
-  it("marks voice memos when asVoice is true and mp3 is provided", async () => {
+  function mockSuccessfulVoiceConversion(output = new Uint8Array([9, 8, 7])) {
+    vi.spyOn(fs, "writeFile").mockResolvedValue(undefined);
+    vi.spyOn(fs, "readFile").mockResolvedValue(Buffer.from(output));
+    vi.spyOn(fs, "unlink").mockResolvedValue(undefined);
+    mockExecFile.mockImplementation((_file, _args, _opts, callback) => {
+      queueMicrotask(() => callback?.(null, "", ""));
+      return {};
+    });
+  }
+
+  function mockFailedVoiceConversion() {
+    vi.spyOn(fs, "writeFile").mockResolvedValue(undefined);
+    vi.spyOn(fs, "unlink").mockResolvedValue(undefined);
+    mockExecFile.mockImplementation((_file, _args, _opts, callback) => {
+      queueMicrotask(() => callback?.(new Error("ffmpeg unavailable"), "", ""));
+      return {};
+    });
+  }
+
+  it("marks voice memos when asVoice conversion succeeds", async () => {
+    mockSuccessfulVoiceConversion();
     mockFetch.mockResolvedValueOnce({
       ok: true,
       text: () => Promise.resolve(JSON.stringify({ messageId: "msg-1" })),
@@ -371,10 +398,12 @@ describe("sendBlueBubblesAttachment", () => {
     const bodyText = decodeBody(body);
     expect(bodyText).toContain('name="isAudioMessage"');
     expect(bodyText).toContain("true");
-    expect(bodyText).toContain('filename="voice.mp3"');
+    expect(bodyText).toContain('filename="voice.caf"');
+    expect(bodyText).toContain("Content-Type: audio/x-caf");
   });
 
-  it("normalizes mp3 filenames for voice memos", async () => {
+  it("normalizes extensionless audio filenames to caf for voice memos", async () => {
+    mockSuccessfulVoiceConversion();
     mockFetch.mockResolvedValueOnce({
       ok: true,
       text: () => Promise.resolve(JSON.stringify({ messageId: "msg-2" })),
@@ -391,8 +420,8 @@ describe("sendBlueBubblesAttachment", () => {
 
     const body = mockFetch.mock.calls[0][1]?.body as Uint8Array;
     const bodyText = decodeBody(body);
-    expect(bodyText).toContain('filename="voice.mp3"');
-    expect(bodyText).toContain('name="voice.mp3"');
+    expect(bodyText).toContain('filename="voice.caf"');
+    expect(bodyText).toContain('name="voice.caf"');
   });
 
   it("throws when asVoice is true but media is not audio", async () => {
@@ -409,18 +438,26 @@ describe("sendBlueBubblesAttachment", () => {
     expect(mockFetch).not.toHaveBeenCalled();
   });
 
-  it("throws when asVoice is true but audio is not mp3 or caf", async () => {
-    await expect(
-      sendBlueBubblesAttachment({
-        to: "chat_guid:iMessage;-;+15551234567",
-        buffer: new Uint8Array([1, 2, 3]),
-        filename: "voice.wav",
-        contentType: "audio/wav",
-        asVoice: true,
-        opts: { serverUrl: "http://localhost:1234", password: "test" },
-      }),
-    ).rejects.toThrow("require mp3 or caf");
-    expect(mockFetch).not.toHaveBeenCalled();
+  it("falls back to a normal attachment when voice conversion fails", async () => {
+    mockFailedVoiceConversion();
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      text: () => Promise.resolve(JSON.stringify({ messageId: "msg-fallback" })),
+    });
+
+    await sendBlueBubblesAttachment({
+      to: "chat_guid:iMessage;-;+15551234567",
+      buffer: new Uint8Array([1, 2, 3]),
+      filename: "voice.wav",
+      contentType: "audio/wav",
+      asVoice: true,
+      opts: { serverUrl: "http://localhost:1234", password: "test" },
+    });
+
+    const body = mockFetch.mock.calls[0][1]?.body as Uint8Array;
+    const bodyText = decodeBody(body);
+    expect(bodyText).not.toContain('name="isAudioMessage"');
+    expect(bodyText).toContain('filename="voice.wav"');
   });
 
   it("sanitizes filenames before sending", async () => {

@@ -49,6 +49,7 @@ const probeGateway =
   >();
 const isRestartEnabled = vi.fn<(config?: { commands?: unknown }) => boolean>(() => true);
 const loadConfig = vi.fn(() => ({}));
+const originalPlatform = process.platform;
 
 vi.mock("node:fs", () => ({
   default: {
@@ -178,6 +179,7 @@ describe("runDaemonRestart health checks", () => {
   });
 
   afterEach(() => {
+    Object.defineProperty(process, "platform", { value: originalPlatform, configurable: true });
     vi.restoreAllMocks();
   });
 
@@ -223,6 +225,7 @@ describe("runDaemonRestart health checks", () => {
   });
 
   it("signals an unmanaged gateway process on stop", async () => {
+    Object.defineProperty(process, "platform", { value: "linux", configurable: true });
     const killSpy = vi.spyOn(process, "kill").mockImplementation(() => true);
     findGatewayPidsOnPortSync.mockReturnValue([4200, 4200, 4300]);
     runServiceStop.mockImplementation(async (params: { onNotLoaded?: () => Promise<unknown> }) => {
@@ -237,6 +240,7 @@ describe("runDaemonRestart health checks", () => {
   });
 
   it("signals a single unmanaged gateway process on restart", async () => {
+    Object.defineProperty(process, "platform", { value: "linux", configurable: true });
     const killSpy = vi.spyOn(process, "kill").mockImplementation(() => true);
     findGatewayPidsOnPortSync.mockReturnValue([4200]);
     runServiceRestart.mockImplementation(
@@ -266,6 +270,7 @@ describe("runDaemonRestart health checks", () => {
   });
 
   it("fails unmanaged restart when multiple gateway listeners are present", async () => {
+    Object.defineProperty(process, "platform", { value: "linux", configurable: true });
     findGatewayPidsOnPortSync.mockReturnValue([4200, 4300]);
     runServiceRestart.mockImplementation(
       async (params: RestartParams & { onNotLoaded?: () => Promise<unknown> }) => {
