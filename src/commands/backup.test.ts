@@ -278,6 +278,40 @@ describe("backup commands", () => {
     await fs.rm(result.archivePath, { force: true });
   });
 
+  it("falls back to the home directory when cwd is a symlink into a backed-up source tree", async () => {
+    if (process.platform === "win32") {
+      return;
+    }
+
+    const stateDir = path.join(tempHome.home, ".openclaw");
+    const workspaceDir = path.join(stateDir, "workspace");
+    const linkParent = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-backup-cwd-link-"));
+    const workspaceLink = path.join(linkParent, "workspace-link");
+    try {
+      await fs.writeFile(path.join(stateDir, "openclaw.json"), JSON.stringify({}), "utf8");
+      await fs.mkdir(workspaceDir, { recursive: true });
+      await fs.writeFile(path.join(workspaceDir, "SOUL.md"), "# soul\n", "utf8");
+      await fs.symlink(workspaceDir, workspaceLink);
+      process.chdir(workspaceLink);
+
+      const runtime = {
+        log: vi.fn(),
+        error: vi.fn(),
+        exit: vi.fn(),
+      };
+
+      const nowMs = Date.UTC(2026, 2, 9, 1, 3, 4);
+      const result = await backupCreateCommand(runtime, { nowMs });
+
+      expect(result.archivePath).toBe(
+        path.join(tempHome.home, `${buildBackupArchiveRoot(nowMs)}.tar.gz`),
+      );
+      await fs.rm(result.archivePath, { force: true });
+    } finally {
+      await fs.rm(linkParent, { recursive: true, force: true });
+    }
+  });
+
   it("allows dry-run preview even when the target archive already exists", async () => {
     const stateDir = path.join(tempHome.home, ".openclaw");
     const existingArchive = path.join(tempHome.home, "existing-backup.tar.gz");

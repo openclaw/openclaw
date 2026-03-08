@@ -87,8 +87,9 @@ async function resolveOutputPath(params: {
   const rawOutput = params.output?.trim();
   if (!rawOutput) {
     const cwd = path.resolve(process.cwd());
+    const canonicalCwd = await fs.realpath(cwd).catch(() => cwd);
     const cwdInsideSource = params.includedAssets.some((asset) =>
-      isPathWithin(cwd, asset.sourcePath),
+      isPathWithin(canonicalCwd, asset.sourcePath),
     );
     const defaultDir = cwdInsideSource ? (resolveHomeDir() ?? path.dirname(params.stateDir)) : cwd;
     return path.resolve(defaultDir, basename);
