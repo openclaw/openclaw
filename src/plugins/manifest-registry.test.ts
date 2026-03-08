@@ -130,7 +130,35 @@ afterEach(() => {
 });
 
 describe("loadPluginManifestRegistry", () => {
-  it("emits duplicate warning for truly distinct plugins with same id", () => {
+  it("suppresses duplicate warning when higher-precedence origin (global) overrides lower-precedence (bundled) (#38437)", () => {
+    // A user-installed plugin in .openclaw/extensions/ (global) intentionally
+    // shadows the npm-bundled copy of the same plugin id.  No warning should
+    // be emitted — this is the expected customization flow.
+    const dirBundled = makeTempDir();
+    const dirGlobal = makeTempDir();
+    const manifest = { id: "feishu", configSchema: { type: "object" } };
+    writeManifest(dirBundled, manifest);
+    writeManifest(dirGlobal, manifest);
+
+    const candidates: PluginCandidate[] = [
+      createPluginCandidate({
+        idHint: "feishu",
+        rootDir: dirBundled,
+        origin: "bundled",
+      }),
+      createPluginCandidate({
+        idHint: "feishu",
+        rootDir: dirGlobal,
+        origin: "global",
+      }),
+    ];
+
+    expect(countDuplicateWarnings(loadRegistry(candidates))).toBe(0);
+  });
+
+  it("emits duplicate warning for truly distinct plugins with same id (both same-or-higher precedence)", () => {
+    // Two config-level (or two global-level) sources each independently
+    // declare the same plugin id — that is a genuine conflict and should warn.
     const dirA = makeTempDir();
     const dirB = makeTempDir();
     const manifest = { id: "test-plugin", configSchema: { type: "object" } };
@@ -141,7 +169,7 @@ describe("loadPluginManifestRegistry", () => {
       createPluginCandidate({
         idHint: "test-plugin",
         rootDir: dirA,
-        origin: "bundled",
+        origin: "global",
       }),
       createPluginCandidate({
         idHint: "test-plugin",
@@ -151,6 +179,31 @@ describe("loadPluginManifestRegistry", () => {
     ];
 
     expect(countDuplicateWarnings(loadRegistry(candidates))).toBe(1);
+  });
+
+  it("suppresses duplicate warning when bundled plugin is discovered after user global copy (#38437 reverse-order)", () => {
+    // Discovery order can vary; even if the bundled copy is encountered after
+    // the global copy, no warning should be emitted.
+    const dirBundled = makeTempDir();
+    const dirGlobal = makeTempDir();
+    const manifest = { id: "feishu", configSchema: { type: "object" } };
+    writeManifest(dirBundled, manifest);
+    writeManifest(dirGlobal, manifest);
+
+    const candidates: PluginCandidate[] = [
+      createPluginCandidate({
+        idHint: "feishu",
+        rootDir: dirGlobal,
+        origin: "global",
+      }),
+      createPluginCandidate({
+        idHint: "feishu",
+        rootDir: dirBundled,
+        origin: "bundled",
+      }),
+    ];
+
+    expect(countDuplicateWarnings(loadRegistry(candidates))).toBe(0);
   });
 
   it("suppresses duplicate warning when candidates share the same physical directory via symlink", () => {
