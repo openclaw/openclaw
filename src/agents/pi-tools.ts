@@ -28,6 +28,7 @@ import {
 } from "./pi-tools.policy.js";
 import {
   assertRequiredParams,
+  createHostWorkspaceAppendTool,
   createHostWorkspaceEditTool,
   createHostWorkspaceWriteTool,
   createOpenClawReadTool,
@@ -379,6 +380,13 @@ export function createOpenClawCodingTools(options?: {
         return [];
       }
       const wrapped = createHostWorkspaceWriteTool(workspaceRoot, { workspaceOnly });
+      return [workspaceOnly ? wrapToolWorkspaceRootGuard(wrapped, workspaceRoot) : wrapped];
+    }
+    if (tool.name === "append") {
+      if (sandboxRoot) {
+        return [];
+      }
+      const wrapped = createHostWorkspaceAppendTool(workspaceRoot, { workspaceOnly });
       return [workspaceOnly ? wrapToolWorkspaceRootGuard(wrapped, workspaceRoot) : wrapped];
     }
     if (tool.name === "edit") {

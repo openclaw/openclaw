@@ -18,6 +18,10 @@ export const CLAUDE_PARAM_GROUPS = {
     { keys: ["path", "file_path"], label: "path (path or file_path)" },
     { keys: ["content"], label: "content" },
   ],
+  append: [
+    { keys: ["path", "file_path"], label: "path (path or file_path)" },
+    { keys: ["content"], label: "content" },
+  ],
   edit: [
     { keys: ["path", "file_path"], label: "path (path or file_path)" },
     {

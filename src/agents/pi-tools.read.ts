@@ -3,6 +3,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
 import { createEditTool, createReadTool, createWriteTool } from "@mariozechner/pi-coding-agent";
+import { Type } from "@sinclair/typebox";
 import {
   SafeOpenError,
   openFileWithinRoot,
@@ -472,6 +473,66 @@ export function createHostWorkspaceWriteTool(root: string, options?: { workspace
   return wrapToolParamNormalization(base, CLAUDE_PARAM_GROUPS.write);
 }
 
+export function createHostWorkspaceAppendTool(root: string, options?: { workspaceOnly?: boolean }) {
+  const ops = createHostAppendOperations(root, options);
+  const appendTool: AnyAgentTool = {
+    name: "append",
+    label: "append",
+    description:
+      "Append content to a file. Creates the file if it doesn't exist, appends to existing content if it does. Automatically creates parent directories.",
+    parameters: appendSchema,
+    execute: async (_toolCallId, { path: relativePath, content }, signal) => {
+      const resolved = path.resolve(root, relativePath);
+      const dir = path.dirname(resolved);
+
+      // Check if aborted
+      if (signal?.aborted) {
+        return {
+          content: [{ type: "text", text: "Operation aborted" }],
+          details: undefined,
+        };
+      }
+
+      try {
+        // Create parent directories if needed
+        await ops.mkdir(dir);
+
+        // Check if aborted before writing
+        if (signal?.aborted) {
+          return {
+            content: [{ type: "text", text: "Operation aborted" }],
+            details: undefined,
+          };
+        }
+
+        // Append to the file
+        await ops.appendFile(resolved, content);
+
+        return {
+          content: [
+            {
+              type: "text",
+              text: `Successfully appended ${content.length} bytes to ${relativePath}`,
+            },
+          ],
+          details: undefined,
+        };
+      } catch (error) {
+        return {
+          content: [
+            {
+              type: "text",
+              text: `Error appending to file: ${error instanceof Error ? error.message : String(error)}`,
+            },
+          ],
+          details: undefined,
+        };
+      }
+    },
+  };
+  return wrapToolParamNormalization(appendTool, CLAUDE_PARAM_GROUPS.append);
+}
+
 export function createHostWorkspaceEditTool(root: string, options?: { workspaceOnly?: boolean }) {
   const base = createEditTool(root, {
     operations: createHostEditOperations(root, options),
@@ -562,6 +623,27 @@ async function writeHostFile(absolutePath: string, content: string) {
   await fs.writeFile(resolved, content, "utf-8");
 }
 
+async function appendHostFile(absolutePath: string, content: string) {
+  const resolved = path.resolve(absolutePath);
+  await fs.mkdir(path.dirname(resolved), { recursive: true });
+  // Append content - create file if it doesn't exist
+  const fileExists = await fs
+    .access(resolved)
+    .then(() => true)
+    .catch(() => false);
+  if (fileExists) {
+    await fs.appendFile(resolved, content, "utf-8");
+  } else {
+    await fs.writeFile(resolved, content, "utf-8");
+  }
+}
+
+// Append tool schema
+const appendSchema = Type.Object({
+  path: Type.String({ description: "Path to the file to append to (relative or absolute)" }),
+  content: Type.String({ description: "Content to append to the file" }),
+});
+
 function createHostWriteOperations(root: string, options?: { workspaceOnly?: boolean }) {
   const workspaceOnly = options?.workspaceOnly ?? false;
 
@@ -592,6 +674,46 @@ function createHostWriteOperations(root: string, options?: { workspaceOnly?: boo
         data: content,
         mkdir: true,
       });
+    },
+  } as const;
+}
+
+function createHostAppendOperations(root: string, options?: { workspaceOnly?: boolean }) {
+  const workspaceOnly = options?.workspaceOnly ?? false;
+
+  if (!workspaceOnly) {
+    // When workspaceOnly is false, allow append anywhere on the host
+    return {
+      mkdir: async (dir: string) => {
+        const resolved = path.resolve(dir);
+        await fs.mkdir(resolved, { recursive: true });
+      },
+      appendFile: appendHostFile,
+    } as const;
+  }
+
+  // When workspaceOnly is true, enforce workspace boundary
+  return {
+    mkdir: async (dir: string) => {
+      const relative = toRelativeWorkspacePath(root, dir, { allowRoot: true });
+      const resolved = relative ? path.resolve(root, relative) : path.resolve(root);
+      await assertSandboxPath({ filePath: resolved, cwd: root, root });
+      await fs.mkdir(resolved, { recursive: true });
+    },
+    appendFile: async (absolutePath: string, content: string) => {
+      const relative = toRelativeWorkspacePath(root, absolutePath);
+      const resolved = relative ? path.resolve(root, relative) : path.resolve(root);
+      await assertSandboxPath({ filePath: resolved, cwd: root, root });
+      // Check if file exists
+      const fileExists = await fs
+        .access(resolved)
+        .then(() => true)
+        .catch(() => false);
+      if (fileExists) {
+        await fs.appendFile(resolved, content, "utf-8");
+      } else {
+        await fs.writeFile(resolved, content, "utf-8");
+      }
     },
   } as const;
 }
