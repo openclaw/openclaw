@@ -99,7 +99,11 @@ function renderCompactionIndicator(status: CompactionIndicatorStatus | null | un
   // Show "compacting..." while active
   if (status.active) {
     return html`
-      <div class="compaction-indicator compaction-indicator--active" role="status" aria-live="polite">
+      <div
+        class="compaction-indicator compaction-indicator--active"
+        role="status"
+        aria-live="polite"
+      >
         ${icons.loader} Compacting context...
       </div>
     `;
@@ -110,7 +114,11 @@ function renderCompactionIndicator(status: CompactionIndicatorStatus | null | un
     const elapsed = Date.now() - status.completedAt;
     if (elapsed < COMPACTION_TOAST_DURATION_MS) {
       return html`
-        <div class="compaction-indicator compaction-indicator--complete" role="status" aria-live="polite">
+        <div
+          class="compaction-indicator compaction-indicator--complete"
+          role="status"
+          aria-live="polite"
+        >
           ${icons.check} Context compacted
         </div>
       `;
@@ -148,12 +156,7 @@ function renderFallbackIndicator(status: FallbackIndicatorStatus | null | undefi
       : "compaction-indicator compaction-indicator--fallback";
   const icon = phase === "cleared" ? icons.check : icons.brain;
   return html`
-    <div
-      class=${className}
-      role="status"
-      aria-live="polite"
-      title=${details}
-    >
+    <div class=${className} role="status" aria-live="polite" title=${details}>
       ${icon} ${message}
     </div>
   `;
@@ -279,7 +282,11 @@ export function renderChat(props: ChatProps) {
         (item) => {
           if (item.kind === "divider") {
             return html`
-              <div class="chat-divider" role="separator" data-ts=${String(item.timestamp)}>
+              <div
+                class="chat-divider"
+                role="separator"
+                data-ts=${item.timestamp != null ? `${item.timestamp}` : ""}
+              >
                 <span class="chat-divider__line"></span>
                 <span class="chat-divider__label">${item.label}</span>
                 <span class="chat-divider__line"></span>
@@ -318,9 +325,7 @@ export function renderChat(props: ChatProps) {
   return html`
     <section class="card chat">
       ${props.disabledReason ? html`<div class="callout">${props.disabledReason}</div>` : nothing}
-
       ${props.error ? html`<div class="callout danger">${props.error}</div>` : nothing}
-
       ${
         props.focusMode
           ? html`
@@ -376,7 +381,9 @@ export function renderChat(props: ChatProps) {
         props.queue.length
           ? html`
             <div class="chat-queue" role="status" aria-live="polite">
-              <div class="chat-queue__title">Queued (${props.queue.length})</div>
+              <div class="chat-queue__title">
+                Queued (${props.queue.length})
+              </div>
               <div class="chat-queue__list">
                 ${props.queue.map(
                   (item) => html`
@@ -403,10 +410,8 @@ export function renderChat(props: ChatProps) {
           `
           : nothing
       }
-
       ${renderFallbackIndicator(props.fallbackStatus)}
       ${renderCompactionIndicator(props.compactionStatus)}
-
       ${
         props.showNewMessages
           ? html`
@@ -531,6 +536,14 @@ function groupMessages(items: ChatItem[]): Array<ChatItem | MessageGroup> {
 
 function buildChatItems(props: ChatProps): Array<ChatItem | MessageGroup> {
   const items: ChatItem[] = [];
+
+  const keyCounts = new Map<string, number>();
+  const dedupeKey = (base: string): string => {
+    const next = (keyCounts.get(base) ?? 0) + 1;
+    keyCounts.set(base, next);
+    return next === 1 ? base : `${base}#${next}`;
+  };
+
   const history = Array.isArray(props.messages) ? props.messages : [];
   const tools = Array.isArray(props.toolMessages) ? props.toolMessages : [];
   const historyStart = Math.max(0, history.length - CHAT_HISTORY_RENDER_LIMIT);
@@ -569,7 +582,7 @@ function buildChatItems(props: ChatProps): Array<ChatItem | MessageGroup> {
 
     items.push({
       kind: "message",
-      key: messageKey(msg, i),
+      key: dedupeKey(messageKey(msg)),
       message: msg,
     });
   }
@@ -590,7 +603,7 @@ function buildChatItems(props: ChatProps): Array<ChatItem | MessageGroup> {
     if (i < tools.length) {
       items.push({
         kind: "message",
-        key: messageKey(tools[i], i + history.length),
+        key: dedupeKey(messageKey(tools[i])),
         message: tools[i],
       });
     }
@@ -613,24 +626,63 @@ function buildChatItems(props: ChatProps): Array<ChatItem | MessageGroup> {
   return groupMessages(items);
 }
 
-function messageKey(message: unknown, index: number): string {
+function contentSignature(content: unknown): string {
+  if (typeof content === "string") {
+    return content.slice(0, 160);
+  }
+
+  if (Array.isArray(content)) {
+    const first = content[0];
+    if (first && typeof first === "object") {
+      const b = first as Record<string, unknown>;
+      const type = typeof b.type === "string" ? b.type : "unknown";
+      const text = typeof b.text === "string" ? b.text.slice(0, 80) : "";
+      const imageType =
+        b.type === "image" &&
+        typeof (b.source as Record<string, unknown> | undefined)?.media_type === "string"
+          ? ((b.source as Record<string, unknown>).media_type as string)
+          : "";
+      return `arr:${content.length}:${type}:${imageType}:${text}`;
+    }
+    return `arr:${content.length}:${typeof first}`;
+  }
+
+  if (content && typeof content === "object") {
+    const c = content as Record<string, unknown>;
+    const keys = Object.keys(c).slice(0, 6).join(",");
+    return `obj:${keys}`;
+  }
+
+  if (typeof content === "number" || typeof content === "boolean" || typeof content === "bigint") {
+    return String(content).slice(0, 160);
+  }
+  if (typeof content === "symbol") {
+    return content.description ? `symbol:${content.description}`.slice(0, 160) : "symbol";
+  }
+  return "";
+}
+
+function messageKey(message: unknown): string {
   const m = message as Record<string, unknown>;
+
   const toolCallId = typeof m.toolCallId === "string" ? m.toolCallId : "";
   if (toolCallId) {
     return `tool:${toolCallId}`;
   }
+
   const id = typeof m.id === "string" ? m.id : "";
   if (id) {
     return `msg:${id}`;
   }
+
   const messageId = typeof m.messageId === "string" ? m.messageId : "";
   if (messageId) {
     return `msg:${messageId}`;
   }
-  const timestamp = typeof m.timestamp === "number" ? m.timestamp : null;
+
   const role = typeof m.role === "string" ? m.role : "unknown";
-  if (timestamp != null) {
-    return `msg:${role}:${timestamp}:${index}`;
-  }
-  return `msg:${role}:${index}`;
+  const timestamp = typeof m.timestamp === "number" ? m.timestamp : 0;
+  const sig = contentSignature(m.content);
+
+  return `msg:${role}:${timestamp}:${sig}`;
 }
