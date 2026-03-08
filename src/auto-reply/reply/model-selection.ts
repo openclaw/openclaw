@@ -1,5 +1,5 @@
 import { clearSessionAuthProfileOverride } from "../../agents/auth-profiles/session-override.js";
-import { lookupContextTokens } from "../../agents/context.js";
+import { lookupContextTokens, resolveContextTokensForModel } from "../../agents/context.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../agents/defaults.js";
 import { loadModelCatalog } from "../../agents/model-catalog.js";
 import {
@@ -598,11 +598,50 @@ export function resolveModelDirectiveSelection(params: {
   };
 }
 
+/**
+ * Resolve context tokens for a model. Returns `undefined` when the model is
+ * not catalogued and no explicit config exists — callers that persist the value
+ * should treat `undefined` as "keep whatever is already stored". Use
+ * {@link resolveContextTokensWithDefault} when a concrete number is required
+ * (e.g. display / directive boundaries).
+ */
 export function resolveContextTokens(params: {
   agentCfg: NonNullable<NonNullable<OpenClawConfig["agents"]>["defaults"]> | undefined;
+  cfg?: OpenClawConfig;
+  provider?: string;
+  model: string;
+}): number | undefined {
+  if (typeof params.agentCfg?.contextTokens === "number" && params.agentCfg.contextTokens > 0) {
+    return params.agentCfg.contextTokens;
+  }
+
+  // Check for context1m in configured model params (e.g. agents.defaults.models)
+  if (params.cfg && params.provider) {
+    const resolved = resolveContextTokensForModel({
+      cfg: params.cfg,
+      provider: params.provider,
+      model: params.model,
+      fallbackContextTokens: undefined,
+    });
+    if (typeof resolved === "number" && resolved > 0) {
+      return resolved;
+    }
+  }
+
+  return lookupContextTokens(params.model);
+}
+
+/**
+ * Like {@link resolveContextTokens} but always returns a concrete number,
+ * falling back to {@link DEFAULT_CONTEXT_TOKENS} for unknown models. Use this
+ * at display-only boundaries (e.g. `/status`, directives) where a number is
+ * always needed and will NOT be persisted back into session storage.
+ */
+export function resolveContextTokensWithDefault(params: {
+  agentCfg: NonNullable<NonNullable<OpenClawConfig["agents"]>["defaults"]> | undefined;
+  cfg?: OpenClawConfig;
+  provider?: string;
   model: string;
 }): number {
-  return (
-    params.agentCfg?.contextTokens ?? lookupContextTokens(params.model) ?? DEFAULT_CONTEXT_TOKENS
-  );
+  return resolveContextTokens(params) ?? DEFAULT_CONTEXT_TOKENS;
 }

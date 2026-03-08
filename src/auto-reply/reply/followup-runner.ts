@@ -1,8 +1,6 @@
 import crypto from "node:crypto";
 import { resolveRunModelFallbacksOverride } from "../../agents/agent-scope.js";
 import { resolveBootstrapWarningSignaturesSeen } from "../../agents/bootstrap-budget.js";
-import { lookupContextTokens } from "../../agents/context.js";
-import { DEFAULT_CONTEXT_TOKENS } from "../../agents/defaults.js";
 import { runWithModelFallback } from "../../agents/model-fallback.js";
 import { runEmbeddedPiAgent } from "../../agents/pi-embedded.js";
 import type { SessionEntry } from "../../config/sessions.js";
@@ -16,6 +14,7 @@ import type { OriginatingChannelType } from "../templating.js";
 import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../tokens.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
 import { resolveRunAuthProfile } from "./agent-runner-utils.js";
+import { resolveContextTokens } from "./model-selection.js";
 import {
   resolveOriginAccountId,
   resolveOriginMessageProvider,
@@ -54,7 +53,6 @@ export function createFollowupRunner(params: {
     sessionKey,
     storePath,
     defaultModel,
-    agentCfgContextTokens,
   } = params;
   const typingSignals = createTypingSignaler({
     typing,
@@ -243,11 +241,14 @@ export function createFollowupRunner(params: {
       const usage = runResult.meta?.agentMeta?.usage;
       const promptTokens = runResult.meta?.agentMeta?.promptTokens;
       const modelUsed = runResult.meta?.agentMeta?.model ?? fallbackModel ?? defaultModel;
-      const contextTokensUsed =
-        agentCfgContextTokens ??
-        lookupContextTokens(modelUsed) ??
-        sessionEntry?.contextTokens ??
-        DEFAULT_CONTEXT_TOKENS;
+      const providerUsed =
+        runResult.meta?.agentMeta?.provider ?? fallbackProvider ?? queued.run.provider;
+      const contextTokensUsed = resolveContextTokens({
+        agentCfg: queued.run.config?.agents?.defaults,
+        cfg: queued.run.config,
+        provider: providerUsed,
+        model: modelUsed,
+      });
 
       if (storePath && sessionKey) {
         await persistRunSessionUsage({

@@ -88,6 +88,10 @@ vi.mock("../../agents/model-fallback.js", () => ({
   runWithModelFallback: runWithModelFallbackMock,
 }));
 
+vi.mock("../../auto-reply/reply/model-selection.js", () => ({
+  resolveContextTokensWithDefault: () => 200_000,
+}));
+
 vi.mock("../../agents/pi-embedded.js", () => ({
   runEmbeddedPiAgent: runEmbeddedPiAgentMock,
 }));
