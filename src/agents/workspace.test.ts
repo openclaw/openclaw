@@ -221,6 +221,87 @@ describe("loadWorkspaceBootstrapFiles", () => {
       await fs.rm(rootDir, { recursive: true, force: true });
     }
   });
+
+  it("rejects symlinked bootstrap files pointing outside workspace without allowedExternalPaths", async () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    const rootDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-workspace-symlink-reject-"));
+    try {
+      const workspaceDir = path.join(rootDir, "workspace");
+      const outsideDir = path.join(rootDir, "outside");
+      await fs.mkdir(workspaceDir, { recursive: true });
+      await fs.mkdir(outsideDir, { recursive: true });
+      await fs.writeFile(
+        path.join(outsideDir, DEFAULT_AGENTS_FILENAME),
+        "external agents",
+        "utf-8",
+      );
+      await fs.symlink(
+        path.join(outsideDir, DEFAULT_AGENTS_FILENAME),
+        path.join(workspaceDir, DEFAULT_AGENTS_FILENAME),
+      );
+
+      const files = await loadWorkspaceBootstrapFiles(workspaceDir);
+      const agents = files.find((file) => file.name === DEFAULT_AGENTS_FILENAME);
+      expect(agents?.missing).toBe(true);
+      expect(agents?.content).toBeUndefined();
+    } finally {
+      await fs.rm(rootDir, { recursive: true, force: true });
+    }
+  });
+
+  it("reads symlinked bootstrap files when target is within allowedExternalPaths", async () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    const rootDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-workspace-symlink-allow-"));
+    try {
+      const workspaceDir = path.join(rootDir, "workspace");
+      const outsideDir = path.join(rootDir, "shared");
+      await fs.mkdir(workspaceDir, { recursive: true });
+      await fs.mkdir(outsideDir, { recursive: true });
+      await fs.writeFile(path.join(outsideDir, DEFAULT_AGENTS_FILENAME), "shared agents", "utf-8");
+      await fs.symlink(
+        path.join(outsideDir, DEFAULT_AGENTS_FILENAME),
+        path.join(workspaceDir, DEFAULT_AGENTS_FILENAME),
+      );
+
+      const files = await loadWorkspaceBootstrapFiles(workspaceDir, [outsideDir]);
+      const agents = files.find((file) => file.name === DEFAULT_AGENTS_FILENAME);
+      expect(agents?.missing).toBe(false);
+      expect(agents?.content).toBe("shared agents");
+    } finally {
+      await fs.rm(rootDir, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects symlinked bootstrap files when target is outside allowedExternalPaths", async () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    const rootDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-workspace-symlink-wrong-"));
+    try {
+      const workspaceDir = path.join(rootDir, "workspace");
+      const outsideDir = path.join(rootDir, "untrusted");
+      const allowedDir = path.join(rootDir, "trusted");
+      await fs.mkdir(workspaceDir, { recursive: true });
+      await fs.mkdir(outsideDir, { recursive: true });
+      await fs.mkdir(allowedDir, { recursive: true });
+      await fs.writeFile(path.join(outsideDir, DEFAULT_AGENTS_FILENAME), "untrusted", "utf-8");
+      await fs.symlink(
+        path.join(outsideDir, DEFAULT_AGENTS_FILENAME),
+        path.join(workspaceDir, DEFAULT_AGENTS_FILENAME),
+      );
+
+      const files = await loadWorkspaceBootstrapFiles(workspaceDir, [allowedDir]);
+      const agents = files.find((file) => file.name === DEFAULT_AGENTS_FILENAME);
+      expect(agents?.missing).toBe(true);
+      expect(agents?.content).toBeUndefined();
+    } finally {
+      await fs.rm(rootDir, { recursive: true, force: true });
+    }
+  });
 });
 
 describe("filterBootstrapFilesForSession", () => {

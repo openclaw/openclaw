@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { openBoundaryFile } from "../infra/boundary-file-read.js";
 import { resolveRequiredHomeDir } from "../infra/home-dir.js";
+import { openVerifiedFileSync } from "../infra/safe-open-sync.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 import { isCronSessionKey, isSubagentSessionKey } from "../routing/session-key.js";
 import { resolveUserPath } from "../utils.js";
@@ -53,16 +54,62 @@ function workspaceFileIdentity(stat: syncFs.Stats, canonicalPath: string): strin
   return `${canonicalPath}|${stat.dev}:${stat.ino}:${stat.size}:${stat.mtimeMs}`;
 }
 
+/** Return true if realPath is within at least one of the allowed prefix directories. */
+function isWithinAllowedExternalPath(realPath: string, prefixes: string[]): boolean {
+  return prefixes.some((prefix) => {
+    const rel = path.relative(prefix, realPath);
+    return rel === "" || (!rel.startsWith("..") && !path.isAbsolute(rel));
+  });
+}
+
 async function readWorkspaceFileWithGuards(params: {
   filePath: string;
   workspaceDir: string;
+  allowedExternalPaths?: string[];
 }): Promise<WorkspaceGuardedReadResult> {
-  const opened = await openBoundaryFile({
+  let opened = await openBoundaryFile({
     absolutePath: params.filePath,
     rootPath: params.workspaceDir,
     boundaryLabel: "workspace root",
     maxBytes: MAX_WORKSPACE_BOOTSTRAP_FILE_BYTES,
   });
+
+  // Fallback: if boundary check rejected the file (symlink escaping workspace),
+  // check whether the symlink target is within operator-approved external paths.
+  if (
+    !opened.ok &&
+    opened.reason === "validation" &&
+    params.allowedExternalPaths &&
+    params.allowedExternalPaths.length > 0
+  ) {
+    try {
+      const lstat = await fs.lstat(params.filePath);
+      if (lstat.isSymbolicLink()) {
+        const realPath = await fs.realpath(params.filePath);
+        if (isWithinAllowedExternalPath(realPath, params.allowedExternalPaths)) {
+          // Target is operator-approved; open the resolved file directly with safety checks.
+          const fallback = openVerifiedFileSync({
+            filePath: realPath,
+            resolvedPath: realPath,
+            rejectHardlinks: true,
+            maxBytes: MAX_WORKSPACE_BOOTSTRAP_FILE_BYTES,
+          });
+          if (fallback.ok) {
+            opened = {
+              ok: true,
+              path: fallback.path,
+              fd: fallback.fd,
+              stat: fallback.stat,
+              rootRealPath: params.workspaceDir,
+            };
+          }
+        }
+      }
+    } catch {
+      // Fall through to the original failure.
+    }
+  }
+
   if (!opened.ok) {
     workspaceFileCache.delete(params.filePath);
     return opened;
@@ -495,7 +542,10 @@ async function resolveMemoryBootstrapEntries(
   return deduped;
 }
 
-export async function loadWorkspaceBootstrapFiles(dir: string): Promise<WorkspaceBootstrapFile[]> {
+export async function loadWorkspaceBootstrapFiles(
+  dir: string,
+  allowedExternalPaths?: string[],
+): Promise<WorkspaceBootstrapFile[]> {
   const resolvedDir = resolveUserPath(dir);
 
   const entries: Array<{
@@ -539,6 +589,7 @@ export async function loadWorkspaceBootstrapFiles(dir: string): Promise<Workspac
     const loaded = await readWorkspaceFileWithGuards({
       filePath: entry.filePath,
       workspaceDir: resolvedDir,
+      allowedExternalPaths,
     });
     if (loaded.ok) {
       result.push({
@@ -575,14 +626,20 @@ export function filterBootstrapFilesForSession(
 export async function loadExtraBootstrapFiles(
   dir: string,
   extraPatterns: string[],
+  allowedExternalPaths?: string[],
 ): Promise<WorkspaceBootstrapFile[]> {
-  const loaded = await loadExtraBootstrapFilesWithDiagnostics(dir, extraPatterns);
+  const loaded = await loadExtraBootstrapFilesWithDiagnostics(
+    dir,
+    extraPatterns,
+    allowedExternalPaths,
+  );
   return loaded.files;
 }
 
 export async function loadExtraBootstrapFilesWithDiagnostics(
   dir: string,
   extraPatterns: string[],
+  allowedExternalPaths?: string[],
 ): Promise<{
   files: WorkspaceBootstrapFile[];
   diagnostics: ExtraBootstrapLoadDiagnostic[];
@@ -627,6 +684,7 @@ export async function loadExtraBootstrapFilesWithDiagnostics(
     const loaded = await readWorkspaceFileWithGuards({
       filePath,
       workspaceDir: resolvedDir,
+      allowedExternalPaths,
     });
     if (loaded.ok) {
       files.push({

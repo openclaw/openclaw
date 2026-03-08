@@ -31,6 +31,7 @@ export async function resolveCommandsSystemPromptBundle(
   const { bootstrapFiles, contextFiles: injectedFiles } = await resolveBootstrapContextForRun({
     workspaceDir,
     config: params.cfg,
+    agentId: params.agentId,
     sessionKey: params.sessionKey,
     sessionId: params.sessionEntry?.sessionId,
   });

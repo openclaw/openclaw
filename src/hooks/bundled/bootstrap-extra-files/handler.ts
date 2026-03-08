@@ -1,8 +1,10 @@
+import { listAgentEntries } from "../../../agents/agent-scope.js";
 import {
   filterBootstrapFilesForSession,
   loadExtraBootstrapFilesWithDiagnostics,
 } from "../../../agents/workspace.js";
 import { createSubsystemLogger } from "../../../logging/subsystem.js";
+import { normalizeAgentId } from "../../../routing/session-key.js";
 import { resolveHookConfig } from "../../config.js";
 import { isAgentBootstrapEvent, type HookHandler } from "../../hooks.js";
 
@@ -45,9 +47,20 @@ const bootstrapExtraFilesHook: HookHandler = async (event) => {
   }
 
   try {
+    // Resolve operator-approved external paths for symlink reads.
+    const defaults = context.cfg?.agents?.defaults?.workspaceConfig?.allowedExternalPaths ?? [];
+    const agentEntry = context.agentId
+      ? listAgentEntries(context.cfg ?? {}).find(
+          (e) => normalizeAgentId(e.id) === normalizeAgentId(context.agentId),
+        )
+      : undefined;
+    const perAgent = agentEntry?.workspaceConfig?.allowedExternalPaths ?? [];
+    const allowedExternalPaths = [...new Set([...defaults, ...perAgent])];
+
     const { files: extras, diagnostics } = await loadExtraBootstrapFilesWithDiagnostics(
       context.workspaceDir,
       patterns,
+      allowedExternalPaths,
     );
     if (diagnostics.length > 0) {
       log.debug("skipped extra bootstrap candidates", {

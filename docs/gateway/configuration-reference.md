@@ -776,6 +776,45 @@ Optional repository root shown in the system prompt's Runtime line. If unset, Op
 }
 ```
 
+### `agents.defaults.workspaceConfig.allowedExternalPaths`
+
+Allowlist of absolute directory paths. Symlinked workspace context files (e.g. `AGENTS.md`, `USER.md`) whose `realpath()` resolves within one of these prefixes are permitted for both reads and writes. By default all symlinks pointing outside the workspace are rejected.
+
+**Requirements:**
+
+- Entries must be **absolute paths**. Relative paths are silently ignored because the check is performed against the fully-resolved `realpath()` of the symlink target.
+- Trailing slash is optional (`/home/clawd/shared` and `/home/clawd/shared/` are treated identically).
+
+**Security model:**
+
+- Opt-in: omitting this field preserves the existing behaviour (all external symlinks rejected).
+- The full symlink chain is resolved via `realpath()` before checking, so intermediate symlinks cannot bypass the allowlist.
+- In-workspace symlinks that point to a _different_ file within the workspace are always read-only (writes are rejected to prevent aliasing attacks).
+
+Per-agent `workspaceConfig.allowedExternalPaths` entries are **merged** (unioned) with the defaults — they do not replace them.
+
+```json5
+{
+  agents: {
+    defaults: {
+      workspaceConfig: {
+        // Allow all agents to read and write files symlinked into /home/clawd/shared/
+        allowedExternalPaths: ["/home/clawd/shared/"],
+      },
+    },
+    list: [
+      {
+        id: "myagent",
+        workspaceConfig: {
+          // This agent additionally allows its own private shared dir
+          allowedExternalPaths: ["/home/clawd/myagent-shared/"],
+        },
+      },
+    ],
+  },
+}
+```
+
 ### `agents.defaults.skipBootstrap`
 
 Disables automatic creation of workspace bootstrap files (`AGENTS.md`, `SOUL.md`, `TOOLS.md`, `IDENTITY.md`, `USER.md`, `HEARTBEAT.md`, `BOOTSTRAP.md`).
