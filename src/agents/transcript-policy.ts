@@ -39,6 +39,8 @@ const OPENAI_MODEL_APIS = new Set([
 ]);
 const OPENAI_PROVIDERS = new Set(["openai", "openai-codex"]);
 const OPENAI_COMPAT_TURN_MERGE_EXCLUDED_PROVIDERS = new Set(["openrouter", "opencode"]);
+// Providers that use anthropic-messages API but cannot handle re-sent thinkingSignature blobs (#39798)
+const ANTHROPIC_API_SIGNATURE_EXCLUDED_PROVIDERS = new Set(["kimi-coding"]);
 
 function isOpenAiApi(modelApi?: string | null): boolean {
   if (!modelApi) {
@@ -123,7 +125,7 @@ export function resolveTranscriptPolicy(params: {
       (!isOpenAi && sanitizeToolCallIds) || requiresOpenAiCompatibleToolIdSanitization,
     toolCallIdMode,
     repairToolUseResultPairing,
-    preserveSignatures: isAnthropic,
+    preserveSignatures: isAnthropic && !ANTHROPIC_API_SIGNATURE_EXCLUDED_PROVIDERS.has(provider),
     sanitizeThoughtSignatures: isOpenAi ? undefined : sanitizeThoughtSignatures,
     sanitizeThinkingSignatures: false,
     dropThinkingBlocks,

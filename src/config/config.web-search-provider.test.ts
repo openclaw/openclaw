@@ -48,6 +48,32 @@ describe("web search provider config", () => {
 
     expect(res.ok).toBe(true);
   });
+
+  it("accepts brave llm-context mode config", () => {
+    const res = validateConfigObject(
+      buildWebSearchProviderConfig({
+        provider: "brave",
+        providerConfig: {
+          mode: "llm-context",
+        },
+      }),
+    );
+
+    expect(res.ok).toBe(true);
+  });
+
+  it("rejects invalid brave mode config values", () => {
+    const res = validateConfigObject(
+      buildWebSearchProviderConfig({
+        provider: "brave",
+        providerConfig: {
+          mode: "invalid-mode",
+        },
+      }),
+    );
+
+    expect(res.ok).toBe(false);
+  });
 });
 
 describe("web search provider auto-detection", () => {

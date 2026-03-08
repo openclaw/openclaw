@@ -22,6 +22,7 @@ type ModelsConfig = NonNullable<OpenClawConfig["models"]>;
 
 const DEFAULT_MODE: NonNullable<ModelsConfig["mode"]> = "merge";
 const MODELS_JSON_WRITE_LOCKS = new Map<string, Promise<void>>();
+const AUTHORITATIVE_IMPLICIT_BASEURL_PROVIDERS = new Set(["openai-codex"]);
 
 function isPositiveFiniteTokenLimit(value: unknown): value is number {
   return typeof value === "number" && Number.isFinite(value) && value > 0;
@@ -141,10 +142,18 @@ async function readJson(pathname: string): Promise<unknown> {
 async function resolveProvidersForModelsJson(params: {
   cfg: OpenClawConfig;
   agentDir: string;
-}): Promise<Record<string, ProviderConfig>> {
+}): Promise<{
+  providers: Record<string, ProviderConfig>;
+  authoritativeImplicitBaseUrlProviders: ReadonlySet<string>;
+}> {
   const { cfg, agentDir } = params;
   const explicitProviders = cfg.models?.providers ?? {};
   const implicitProviders = await resolveImplicitProviders({ agentDir, explicitProviders });
+  const authoritativeImplicitBaseUrlProviders = new Set<string>(
+    [...AUTHORITATIVE_IMPLICIT_BASEURL_PROVIDERS].filter((key) =>
+      Boolean(implicitProviders?.[key]),
+    ),
+  );
   const providers: Record<string, ProviderConfig> = mergeProviders({
     implicit: implicitProviders,
     explicit: explicitProviders,
@@ -162,7 +171,7 @@ async function resolveProvidersForModelsJson(params: {
   if (implicitCopilot && !providers["github-copilot"]) {
     providers["github-copilot"] = implicitCopilot;
   }
-  return providers;
+  return { providers, authoritativeImplicitBaseUrlProviders };
 }
 
 function mergeWithExistingProviderSecrets(params: {
@@ -170,9 +179,15 @@ function mergeWithExistingProviderSecrets(params: {
   existingProviders: Record<string, NonNullable<ModelsConfig["providers"]>[string]>;
   secretRefManagedProviders: ReadonlySet<string>;
   explicitBaseUrlProviders: ReadonlySet<string>;
+  authoritativeImplicitBaseUrlProviders: ReadonlySet<string>;
 }): Record<string, ProviderConfig> {
-  const { nextProviders, existingProviders, secretRefManagedProviders, explicitBaseUrlProviders } =
-    params;
+  const {
+    nextProviders,
+    existingProviders,
+    secretRefManagedProviders,
+    explicitBaseUrlProviders,
+    authoritativeImplicitBaseUrlProviders,
+  } = params;
   const mergedProviders: Record<string, ProviderConfig> = {};
   for (const [key, entry] of Object.entries(existingProviders)) {
     mergedProviders[key] = entry;
@@ -198,6 +213,7 @@ function mergeWithExistingProviderSecrets(params: {
       preserved.apiKey = existing.apiKey;
     }
     if (
+      !authoritativeImplicitBaseUrlProviders.has(key) &&
       !explicitBaseUrlProviders.has(key) &&
       typeof existing.baseUrl === "string" &&
       existing.baseUrl
@@ -215,6 +231,7 @@ async function resolveProvidersForMode(params: {
   providers: Record<string, ProviderConfig>;
   secretRefManagedProviders: ReadonlySet<string>;
   explicitBaseUrlProviders: ReadonlySet<string>;
+  authoritativeImplicitBaseUrlProviders: ReadonlySet<string>;
 }): Promise<Record<string, ProviderConfig>> {
   if (params.mode !== "merge") {
     return params.providers;
@@ -232,6 +249,7 @@ async function resolveProvidersForMode(params: {
     existingProviders,
     secretRefManagedProviders: params.secretRefManagedProviders,
     explicitBaseUrlProviders: params.explicitBaseUrlProviders,
+    authoritativeImplicitBaseUrlProviders: params.authoritativeImplicitBaseUrlProviders,
   });
 }
 
@@ -298,7 +316,8 @@ export async function ensureOpenClawModelsJson(
     // through the full loadConfig() pipeline which applies these.
     applyConfigEnvVars(cfg);
 
-    const providers = await resolveProvidersForModelsJson({ cfg, agentDir });
+    const { providers, authoritativeImplicitBaseUrlProviders } =
+      await resolveProvidersForModelsJson({ cfg, agentDir });
 
     if (Object.keys(providers).length === 0) {
       return { agentDir, wrote: false };
@@ -329,6 +348,7 @@ export async function ensureOpenClawModelsJson(
       providers: normalizedProviders,
       secretRefManagedProviders,
       explicitBaseUrlProviders,
+      authoritativeImplicitBaseUrlProviders,
     });
     const next = `${JSON.stringify({ providers: mergedProviders }, null, 2)}\n`;
     const existingRaw = await readRawFile(targetPath);

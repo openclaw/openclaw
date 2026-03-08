@@ -70,6 +70,11 @@ actor TalkModeRuntime {
     private let minSpeechRMS: Double = 1e-3
     private let speechBoostFactor: Double = 6.0
 
+    static func configureRecognitionRequest(_ request: SFSpeechAudioBufferRecognitionRequest) {
+        request.shouldReportPartialResults = true
+        request.taskHint = .dictation
+    }
+
     // MARK: - Lifecycle
 
     func setEnabled(_ enabled: Bool) async {
@@ -176,9 +181,9 @@ actor TalkModeRuntime {
             return
         }
 
-        self.recognitionRequest = SFSpeechAudioBufferRecognitionRequest()
-        self.recognitionRequest?.shouldReportPartialResults = true
-        guard let request = self.recognitionRequest else { return }
+        let request = SFSpeechAudioBufferRecognitionRequest()
+        Self.configureRecognitionRequest(request)
+        self.recognitionRequest = request
 
         if self.audioEngine == nil {
             self.audioEngine = AVAudioEngine()
