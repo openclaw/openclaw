@@ -90,6 +90,25 @@ async function fetchChatCerts(): Promise<Record<string, string>> {
 
 export type GoogleChatAudienceType = "app-url" | "project-number";
 
+/**
+ * Extract the issuer email from a JWT without verifying it.
+ * Used to determine whether to accept Add-on issuers before signature verification.
+ */
+function extractJwtIssuer(token: string): string | null {
+  try {
+    const parts = token.split(".");
+    if (parts.length < 2) {
+      return null;
+    }
+    const payload = JSON.parse(Buffer.from(parts[1], "base64url").toString("utf-8")) as {
+      iss?: string;
+    };
+    return payload.iss ?? null;
+  } catch {
+    return null;
+  }
+}
+
 export async function verifyGoogleChatRequest(params: {
   bearer?: string | null;
   audienceType?: GoogleChatAudienceType | null;
@@ -123,6 +142,26 @@ export async function verifyGoogleChatRequest(params: {
 
   if (audienceType === "project-number") {
     try {
+      const issuer = extractJwtIssuer(bearer);
+      const isAddonIssuer = typeof issuer === "string" && ADDON_ISSUER_PATTERN.test(issuer);
+
+      if (isAddonIssuer) {
+        // Google Workspace Add-on JWTs are signed by Add-on service accounts,
+        // not by chat@system.gserviceaccount.com. Use verifyIdToken which
+        // fetches the correct signing keys via OIDC discovery.
+        const ticket = await verifyClient.verifyIdToken({
+          idToken: bearer,
+          audience,
+        });
+        const payload = ticket.getPayload();
+        const email = payload?.email ?? "";
+        if (payload?.email_verified && ADDON_ISSUER_PATTERN.test(email)) {
+          return { ok: true };
+        }
+        return { ok: false, reason: `invalid addon issuer: ${email}` };
+      }
+
+      // Standard Chat API tokens — verify against Chat service account certs
       const certs = await fetchChatCerts();
       await verifyClient.verifySignedJwtWithCertsAsync(bearer, certs, audience, [CHAT_ISSUER]);
       return { ok: true };
