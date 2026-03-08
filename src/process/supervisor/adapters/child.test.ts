@@ -1,7 +1,7 @@
 import type { ChildProcess } from "node:child_process";
 import { EventEmitter } from "node:events";
 import { PassThrough } from "node:stream";
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const { spawnWithFallbackMock, killProcessTreeMock } = vi.hoisted(() => ({
   spawnWithFallbackMock: vi.fn(),
@@ -58,6 +58,10 @@ describe("createChildAdapter", () => {
   beforeEach(() => {
     spawnWithFallbackMock.mockClear();
     killProcessTreeMock.mockClear();
+    delete process.env.OPENCLAW_SERVICE_MARKER;
+  });
+
+  afterAll(() => {
     if (originalServiceMarker === undefined) {
       delete process.env.OPENCLAW_SERVICE_MARKER;
     } else {

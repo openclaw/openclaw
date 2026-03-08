@@ -23,6 +23,7 @@ Docs: https://docs.openclaw.ai
 - macOS release packaging: default `scripts/package-mac-app.sh` to universal binaries for `BUILD_CONFIG=release`, and clarify that `scripts/package-mac-dist.sh` already produces the release zip + DMG. (#33891) Thanks @cgdusek.
 - Tools/web search: restore Perplexity OpenRouter/Sonar compatibility for legacy `OPENROUTER_API_KEY`, `sk-or-...`, and explicit `perplexity.baseUrl` / `model` setups while keeping direct Perplexity keys on the native Search API path. (#39937) Thanks @obviyus.
 - Hooks/session-memory: keep `/new` and `/reset` memory artifacts in the bound agent workspace and align saved reset session keys with that workspace when stale main-agent keys leak into the hook path. (#39875) thanks @rbutera.
+- Sessions/model switch: clear stale cached `contextTokens` when a session changes models so status and runtime paths recompute against the active model window. (#38044) thanks @yuweuii.
 
 ## 2026.3.7
 
