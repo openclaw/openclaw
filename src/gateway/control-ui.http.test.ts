@@ -1248,6 +1248,88 @@ describe("handleControlUiHttpRequest", () => {
     });
   });
 
+  it("serves overview growth file links under a configured basePath", async () => {
+    await withControlUiRoot({
+      fn: async (tmp) => {
+        const home = await fs.mkdtemp(
+          path.join(os.tmpdir(), "openclaw-growth-file-basepath-home-"),
+        );
+        const workspace = path.join(home, ".openclaw", "workspace");
+        const workspaceProjectId = "2026-03-06_growth-foundation";
+        const weeklyRelPath =
+          "memory/projects/2026-03-06_growth-foundation/weekly/2026-03-06-weekly-review.md";
+        const weeklyPath = path.join(workspace, weeklyRelPath);
+        try {
+          await fs.mkdir(path.dirname(weeklyPath), { recursive: true });
+          await fs.mkdir(
+            path.join(workspace, "memory", "projects", workspaceProjectId, "actions"),
+            { recursive: true },
+          );
+          await fs.mkdir(path.join(workspace, "memory", "projects", workspaceProjectId, "alerts"), {
+            recursive: true,
+          });
+          await fs.writeFile(weeklyPath, "# Weekly Review\n\n- ok\n");
+          await fs.writeFile(
+            path.join(workspace, "memory", "projects", workspaceProjectId, "actions", "current.md"),
+            [
+              "# Growth Action Items",
+              "",
+              "- project: `growth-foundation`",
+              "- status: `clear`",
+              "- updated_at: `2026-03-06T13:54:16+09:00`",
+              `- latest-weekly: \`${weeklyRelPath}\``,
+              "",
+              "## Priority Now",
+              "",
+              "- none",
+              "",
+              "## This Week",
+              "",
+              "- none",
+              "",
+              "## Watch",
+              "",
+              "- none",
+              "",
+            ].join("\n"),
+          );
+          await fs.writeFile(
+            path.join(workspace, "memory", "projects", workspaceProjectId, "alerts", "current.md"),
+            [
+              "# Growth Alert State",
+              "",
+              "- project: `growth-foundation`",
+              "- status: `clear`",
+              "- transition: `steady-clear`",
+              "- updated_at: `2026-03-06T13:54:36+09:00`",
+              `- weekly-review: \`${weeklyRelPath}\``,
+              "",
+            ].join("\n"),
+          );
+
+          const relativeHref = `./__openclaw/growth-foundation/file?path=${encodeURIComponent(weeklyRelPath)}`;
+          const resolved = new URL(relativeHref, "http://localhost/openclaw/overview");
+          const { res, end } = makeMockHttpResponse();
+          const handled = handleControlUiHttpRequest(
+            { url: `${resolved.pathname}${resolved.search}`, method: "GET" } as IncomingMessage,
+            res,
+            {
+              basePath: "/openclaw",
+              root: { kind: "resolved", path: tmp },
+              config: { agents: { defaults: { workspace } } },
+            },
+          );
+
+          expect(handled).toBe(true);
+          expect(res.statusCode).toBe(200);
+          expect(end).toHaveBeenCalledWith("# Weekly Review\n\n- ok\n");
+        } finally {
+          await fs.rm(home, { recursive: true, force: true });
+        }
+      },
+    });
+  });
+
   it("serves growth write-back proposal JSON from the configured workspace", async () => {
     await withControlUiRoot({
       fn: async (tmp) => {

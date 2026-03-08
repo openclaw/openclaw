@@ -90,6 +90,7 @@ The Control UI can localize itself on first load based on your browser locale, a
 - Overview: growth foundation links can open surfaced workspace markdown, JSON, and diff artifacts directly from the browser
 - Overview: growth foundation review actions are serialized in the browser so overlapping item updates cannot race the snapshot state
 - Overview: growth foundation artifact relpaths are normalized to the active workspace project even when source markdown keeps a display-name alias
+- Overview: growth foundation file links stay on the current Control UI basePath, so `/openclaw/overview` resolves them to `/openclaw/__openclaw/...`
 
 Cron jobs panel notes:
 
