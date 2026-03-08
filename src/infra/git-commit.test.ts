@@ -104,6 +104,52 @@ describe("git commit resolution", () => {
     vi.doUnmock("node:module");
   });
 
+  it("does not walk out of the openclaw package into a host repo", async () => {
+    const temp = await makeTempDir("git-commit-package-boundary");
+    const hostRepo = path.join(temp, "host");
+    await fs.mkdir(hostRepo, { recursive: true });
+    execFileSync("git", ["init", "-q"], { cwd: hostRepo });
+    await fs.writeFile(path.join(hostRepo, "host.txt"), "x\n", "utf-8");
+    execFileSync("git", ["add", "host.txt"], { cwd: hostRepo });
+    execFileSync(
+      "git",
+      ["-c", "user.name=test", "-c", "user.email=test@example.com", "commit", "-q", "-m", "init"],
+      { cwd: hostRepo },
+    );
+
+    const packageRoot = path.join(hostRepo, "node_modules", "openclaw");
+    await fs.mkdir(path.join(packageRoot, "dist"), { recursive: true });
+    await fs.writeFile(
+      path.join(packageRoot, "package.json"),
+      JSON.stringify({ name: "openclaw", version: "2026.3.8" }),
+      "utf-8",
+    );
+    const moduleUrl = pathToFileURL(path.join(packageRoot, "dist", "entry.js")).href;
+
+    vi.doMock("node:module", () => ({
+      createRequire: () => {
+        return (specifier: string) => {
+          if (specifier === "../build-info.json" || specifier === "./build-info.json") {
+            return { commit: "feedfacefeedfacefeedfacefeedfacefeedface" };
+          }
+          if (specifier === "../../package.json") {
+            return { name: "openclaw", version: "2026.3.8", gitHead: "badc0ffee0ddf00d" };
+          }
+          throw Object.assign(new Error(`Cannot find module ${specifier}`), {
+            code: "MODULE_NOT_FOUND",
+          });
+        };
+      },
+    }));
+    vi.resetModules();
+
+    const { resolveCommitHash } = await import("./git-commit.js");
+
+    expect(resolveCommitHash({ moduleUrl, cwd: packageRoot, env: {} })).toBe("feedfac");
+
+    vi.doUnmock("node:module");
+  });
+
   it("caches git lookups per resolved search directory", async () => {
     const temp = await makeTempDir("git-commit-cache");
     const repoA = path.join(temp, "repo-a");

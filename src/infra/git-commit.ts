@@ -3,6 +3,7 @@ import { createRequire } from "node:module";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { resolveGitHeadPath } from "./git-root.js";
+import { resolveOpenClawPackageRootSync } from "./openclaw-root.js";
 
 const formatCommit = (value?: string | null) => {
   if (!value) {
@@ -60,8 +61,25 @@ const cacheGitCommit = (searchDir: string, commit: string | null) => {
   return commit;
 };
 
-const readCommitFromGit = (searchDir: string): string | null | undefined => {
-  const headPath = resolveGitHeadPath(searchDir);
+const resolveGitLookupDepth = (searchDir: string, packageRoot: string | null) => {
+  if (!packageRoot) {
+    return undefined;
+  }
+  const relative = path.relative(packageRoot, searchDir);
+  if (relative.startsWith("..") || path.isAbsolute(relative)) {
+    return undefined;
+  }
+  const depth = relative ? relative.split(path.sep).filter(Boolean).length : 0;
+  return depth + 1;
+};
+
+const readCommitFromGit = (
+  searchDir: string,
+  packageRoot: string | null,
+): string | null | undefined => {
+  const headPath = resolveGitHeadPath(searchDir, {
+    maxDepth: resolveGitLookupDepth(searchDir, packageRoot),
+  });
   if (!headPath) {
     return undefined;
   }
@@ -170,8 +188,12 @@ export const resolveCommitHash = (
   if (cachedGitCommitBySearchDir.has(searchDir)) {
     return cachedGitCommitBySearchDir.get(searchDir) ?? null;
   }
+  const packageRoot = resolveOpenClawPackageRootSync({
+    cwd: options.cwd,
+    moduleUrl: options.moduleUrl,
+  });
   try {
-    const gitCommit = readCommitFromGit(searchDir);
+    const gitCommit = readCommitFromGit(searchDir, packageRoot);
     if (gitCommit !== undefined) {
       return cacheGitCommit(searchDir, gitCommit);
     }
@@ -187,7 +209,7 @@ export const resolveCommitHash = (
     return pkgCommit;
   }
   try {
-    return cacheGitCommit(searchDir, readCommitFromGit(searchDir) ?? null);
+    return cacheGitCommit(searchDir, readCommitFromGit(searchDir, packageRoot) ?? null);
   } catch {
     return null;
   }
