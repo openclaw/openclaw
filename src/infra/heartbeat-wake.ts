@@ -175,9 +175,14 @@ function schedule(coalesceMs: number, kind: WakeTimerKind = "normal") {
       schedule(DEFAULT_RETRY_MS, "retry");
     } finally {
       running = false;
-      if (pendingWakes.size > 0 || scheduled) {
+      // Only reschedule if new wake reasons arrived during execution.
+      // Previously, `scheduled` alone could trigger an empty re-run,
+      // causing double-fire when requestHeartbeatNow() was called
+      // during an active run (see #24972).
+      if (pendingWakes.size > 0) {
         schedule(delay, "normal");
       }
+      scheduled = false;
     }
   }, delay);
   timer.unref?.();
