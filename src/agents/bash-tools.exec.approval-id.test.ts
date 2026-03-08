@@ -24,9 +24,18 @@ vi.mock("../infra/exec-obfuscation-detect.js", () => ({
   })),
 }));
 
+vi.mock("../infra/system-events.js", () => ({
+  enqueueSystemEvent: vi.fn(),
+}));
+
+vi.mock("../infra/heartbeat-wake.js", () => ({
+  requestHeartbeatNow: vi.fn(),
+}));
+
 let callGatewayTool: typeof import("./tools/gateway.js").callGatewayTool;
 let createExecTool: typeof import("./bash-tools.exec.js").createExecTool;
 let detectCommandObfuscation: typeof import("../infra/exec-obfuscation-detect.js").detectCommandObfuscation;
+let enqueueSystemEvent: typeof import("../infra/system-events.js").enqueueSystemEvent;
 
 function buildPreparedSystemRunPayload(rawInvokeParams: unknown) {
   const invoke = (rawInvokeParams ?? {}) as {
@@ -50,6 +59,7 @@ describe("exec approvals", () => {
     ({ callGatewayTool } = await import("./tools/gateway.js"));
     ({ createExecTool } = await import("./bash-tools.exec.js"));
     ({ detectCommandObfuscation } = await import("../infra/exec-obfuscation-detect.js"));
+    ({ enqueueSystemEvent } = await import("../infra/system-events.js"));
   });
 
   beforeEach(async () => {
@@ -287,9 +297,48 @@ describe("exec approvals", () => {
 
     const result = await tool.execute("call4", { command: "echo ok", elevated: true });
     expect(result.details.status).toBe("approval-pending");
+    expect((result.content[0] as { text: string }).text).toContain("openclaw sandbox explain");
     await approvalSeen;
     expect(calls).toContain("exec.approval.request");
     expect(calls).toContain("exec.approval.waitDecision");
+  });
+
+  it("adds sandbox diagnostic hint when gateway approval times out", async () => {
+    vi.mocked(callGatewayTool).mockImplementation(async (method, _opts, params) => {
+      if (method === "exec.approval.request") {
+        return { status: "accepted", id: (params as { id?: string })?.id };
+      }
+      if (method === "exec.approval.waitDecision") {
+        return {};
+      }
+      return { ok: true };
+    });
+
+    const tool = createExecTool({
+      host: "gateway",
+      ask: "on-miss",
+      security: "allowlist",
+      approvalRunningNoticeMs: 0,
+      sessionKey: "agent:main:main",
+    });
+
+    const result = await tool.execute("call-timeout-hint", { command: "echo timeout" });
+    expect(result.details.status).toBe("approval-pending");
+    expect((result.content[0] as { text: string }).text).toContain("openclaw sandbox explain");
+
+    await expect
+      .poll(() =>
+        vi
+          .mocked(enqueueSystemEvent)
+          .mock.calls.map((call) => (typeof call[0] === "string" ? call[0] : "")),
+      )
+      .toContainEqual(expect.stringContaining("approval-timeout"));
+
+    const deniedMessage = vi
+      .mocked(enqueueSystemEvent)
+      .mock.calls.map((call) => (typeof call[0] === "string" ? call[0] : ""))
+      .find((text) => text.includes("approval-timeout"));
+    expect(deniedMessage).toContain("openclaw sandbox explain");
   });
 
   it("waits for approval registration before returning approval-pending", async () => {
