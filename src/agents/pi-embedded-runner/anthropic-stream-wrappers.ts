@@ -298,7 +298,7 @@ export function createAnthropicToolPayloadCompatibilityWrapper(
             );
           }
         }
-        originalOnPayload?.(payload);
+        originalOnPayload?.(payload, model);
       },
     });
   };
