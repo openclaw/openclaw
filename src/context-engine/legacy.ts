@@ -69,9 +69,9 @@ export class LegacyContextEngine implements ContextEngine {
     customInstructions?: string;
     legacyParams?: Record<string, unknown>;
   }): Promise<CompactResult> {
-    // Import dynamically to avoid circular dependencies
+    // Import through a dedicated runtime boundary so the lazy edge remains effective.
     const { compactEmbeddedPiSessionDirect } =
-      await import("../agents/pi-embedded-runner/compact.js");
+      await import("../agents/pi-embedded-runner/compact.runtime.js");
 
     // legacyParams carries the full CompactEmbeddedPiSessionParams fields
     // set by the caller in run.ts. We spread them and override the fields

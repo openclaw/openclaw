@@ -3,12 +3,12 @@ import {
   addWildcardAllowFrom,
   formatDocsLink,
   mergeAllowFromEntries,
-  promptAccountId,
+  resolveAccountIdForConfigure,
+  splitOnboardingEntries,
   type ChannelOnboardingAdapter,
   type ChannelOnboardingDmPolicy,
   type WizardPrompter,
   DEFAULT_ACCOUNT_ID,
-  normalizeAccountId,
   migrateBaseNameToDefaultAccount,
 } from "openclaw/plugin-sdk/googlechat";
 import {
@@ -43,13 +43,6 @@ function setGoogleChatDmPolicy(cfg: OpenClawConfig, policy: DmPolicy) {
   };
 }
 
-function parseAllowFromInput(raw: string): string[] {
-  return raw
-    .split(/[\n,;]+/g)
-    .map((entry) => entry.trim())
-    .filter(Boolean);
-}
-
 async function promptAllowFrom(params: {
   cfg: OpenClawConfig;
   prompter: WizardPrompter;
@@ -61,7 +54,7 @@ async function promptAllowFrom(params: {
     initialValue: current[0] ? String(current[0]) : undefined,
     validate: (value) => (String(value ?? "").trim() ? undefined : "Required"),
   });
-  const parts = parseAllowFromInput(String(entry));
+  const parts = splitOnboardingEntries(String(entry));
   const unique = mergeAllowFromEntries(undefined, parts);
   return {
     ...params.cfg,
@@ -241,19 +234,16 @@ export const googlechatOnboardingAdapter: ChannelOnboardingAdapter = {
     };
   },
   configure: async ({ cfg, prompter, accountOverrides, shouldPromptAccountIds }) => {
-    const override = accountOverrides["googlechat"]?.trim();
     const defaultAccountId = resolveDefaultGoogleChatAccountId(cfg);
-    let accountId = override ? normalizeAccountId(override) : defaultAccountId;
-    if (shouldPromptAccountIds && !override) {
-      accountId = await promptAccountId({
-        cfg,
-        prompter,
-        label: "Google Chat",
-        currentId: accountId,
-        listAccountIds: listGoogleChatAccountIds,
-        defaultAccountId,
-      });
-    }
+    const accountId = await resolveAccountIdForConfigure({
+      cfg,
+      prompter,
+      label: "Google Chat",
+      accountOverride: accountOverrides["googlechat"],
+      shouldPromptAccountIds,
+      listAccountIds: listGoogleChatAccountIds,
+      defaultAccountId,
+    });
 
     let next = cfg;
     await noteGoogleChatSetup(prompter);
