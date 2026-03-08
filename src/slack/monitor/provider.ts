@@ -1,4 +1,5 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
+import { parse as parseQueryString } from "node:querystring";
 import SlackBolt from "@slack/bolt";
 import { resolveTextChunkLimit } from "../../auto-reply/chunk.js";
 import { DEFAULT_GROUP_HISTORY_LIMIT } from "../../auto-reply/reply/history.js";
@@ -21,7 +22,8 @@ import { normalizeResolvedSecretInputString } from "../../config/types.secrets.j
 import { createConnectedChannelStatusPatch } from "../../gateway/channel-status-patches.js";
 import { warn } from "../../globals.js";
 import { computeBackoff, sleepWithAbort } from "../../infra/backoff.js";
-import { installRequestBodyLimitGuard } from "../../infra/http-body.js";
+import { installRequestBodyLimitGuard, readRequestBodyWithLimit } from "../../infra/http-body.js";
+import { extractSlackSignatureHeaders, verifySlackSignature } from "./slack-signature.js";
 import { normalizeMainKey } from "../../routing/session-key.js";
 import { createNonExitingRuntime, type RuntimeEnv } from "../../runtime.js";
 import { normalizeStringEntries } from "../../shared/string-normalization.js";
@@ -190,6 +192,7 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
       ? new HTTPReceiver({
           signingSecret: signingSecret ?? "",
           endpoints: slackWebhookPath,
+          signatureVerification: false,
         })
       : null;
   const clientOptions = resolveSlackWebClientOptions();
@@ -219,6 +222,60 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
             return;
           }
           try {
+            // Read and cache the request body
+            const rawBody = await readRequestBodyWithLimit(req, {
+              maxBytes: SLACK_WEBHOOK_MAX_BODY_BYTES,
+              timeoutMs: SLACK_WEBHOOK_BODY_TIMEOUT_MS,
+            });
+            
+            // Parse body to check for url_verification
+            const contentType = req.headers["content-type"] || "";
+            let body: { [key: string]: unknown } | unknown;
+            if (contentType.includes("application/x-www-form-urlencoded")) {
+              body = parseQueryString(rawBody);
+            } else {
+              try {
+                body = JSON.parse(rawBody);
+              } catch {
+                body = {};
+              }
+            }
+            
+            // Handle url_verification challenge (no signature required)
+            if (body && typeof body === "object" && "type" in body && body.type === "url_verification") {
+              res.writeHead(200, { "content-type": "application/json" });
+              res.end(JSON.stringify({ challenge: (body as { challenge: string }).challenge }));
+              return;
+            }
+            
+            // For other requests, verify signature manually (HTTPReceiver expects unsigned body)
+            // url_verification is already handled above; all other requests MUST have valid signatures
+            const { signature, timestamp } = extractSlackSignatureHeaders(req);
+            
+            // Reject requests without signature headers (except url_verification which was handled above)
+            if (!signature || timestamp === undefined) {
+              res.writeHead(401);
+              res.end("Missing signature");
+              return;
+            }
+            
+            // Verify signature
+            const isValid = verifySlackSignature({
+              signingSecret,
+              body: rawBody,
+              signature,
+              timestamp,
+            });
+            if (!isValid) {
+              res.writeHead(401);
+              res.end("Invalid signature");
+              return;
+            }
+            
+            // Manually create buffered request with cached body for HTTPReceiver
+            (req as { rawBody: Buffer }).rawBody = Buffer.from(rawBody);
+            
+            // Delegate to HTTPReceiver (signature verification is disabled)
             await Promise.resolve(receiver.requestListener(req, res));
           } catch (err) {
             if (!guard.isTripped()) {
