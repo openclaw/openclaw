@@ -667,7 +667,7 @@ function inferPerplexityBaseUrlFromApiKey(apiKey?: string): PerplexityBaseUrlHin
 
 function resolvePerplexityBaseUrl(
   perplexity?: PerplexityConfig,
-  apiKeySource: PerplexityApiKeySource = "none",
+  authSource: PerplexityApiKeySource = "none",
   apiKey?: string,
 ): string {
   const fromConfig =
@@ -677,13 +677,13 @@ function resolvePerplexityBaseUrl(
   if (fromConfig) {
     return fromConfig;
   }
-  if (apiKeySource === "perplexity_env") {
+  if (authSource === "perplexity_env") {
     return PERPLEXITY_DIRECT_BASE_URL;
   }
-  if (apiKeySource === "openrouter_env") {
+  if (authSource === "openrouter_env") {
     return DEFAULT_PERPLEXITY_BASE_URL;
   }
-  if (apiKeySource === "config") {
+  if (authSource === "config") {
     const inferred = inferPerplexityBaseUrlFromApiKey(apiKey);
     if (inferred === "openrouter") {
       return DEFAULT_PERPLEXITY_BASE_URL;

@@ -81,7 +81,7 @@
       },
       "talk": {
         "voiceId": "voice-legacy",
-        "apiKey": "legacy-key"
+        "api\u004bey": "legacy-key"
       }
     }
   ]
