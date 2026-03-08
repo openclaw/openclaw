@@ -23,6 +23,10 @@ export interface ApplyBeforeResponseEmitParams {
   messagesSnapshot: AgentMessage[];
   activeSession: { messages: AgentMessage[] };
   channel?: string;
+  /** Number of messages in the session before the current run started.
+   *  Used to count actual assistant turns (not assistantTexts.length, which
+   *  can have multiple entries per turn with block-reply chunking). */
+  preRunMessageCount?: number;
 }
 
 /** Result from applyBeforeResponseEmitHook. */
@@ -92,6 +96,21 @@ export async function applyBeforeResponseEmitHook(
   }
   const content = assistantTexts[assistantTexts.length - 1];
 
+  // Count actual text-bearing assistant turns in the session (not assistantTexts.length,
+  // which can have multiple entries per turn with block-reply chunking). When
+  // preRunMessageCount is provided, only count messages added during this run.
+  const runStart = params.preRunMessageCount ?? 0;
+  const runAssistantTurnCount = activeSession.messages
+    .slice(runStart)
+    .filter((m) => m.role === "assistant" && extractAssistantText(m).length > 0).length;
+  // Use the larger of assistantTurnCount and 1 to ensure we always scope at least
+  // the current run. Fall back to assistantTexts.length if no preRunMessageCount
+  // is available (backward compatibility).
+  const scopeCount =
+    params.preRunMessageCount !== undefined
+      ? Math.max(runAssistantTurnCount, 1)
+      : assistantTexts.length;
+
   const emitResult = await hookRunner.runBeforeResponseEmit(
     {
       content,
@@ -104,16 +123,13 @@ export async function applyBeforeResponseEmitHook(
 
   // Scope to only current-run messages so we never corrupt prior history.
   // Uses tail-based scan (last N assistant messages) which is compaction-safe.
-  const runMessages = getRunScopedMessages(activeSession.messages, assistantTexts.length);
+  const runMessages = getRunScopedMessages(activeSession.messages, scopeCount);
 
   if (emitResult?.block) {
     log.warn(`response blocked: ${emitResult.blockReason ?? "no reason"}`);
     // For blocking, use broader scope that includes tool-call-only assistant
     // messages (which contain tool call arguments that may hold sensitive data).
-    const blockMessages = getRunScopedMessagesForBlock(
-      activeSession.messages,
-      assistantTexts.length,
-    );
+    const blockMessages = getRunScopedMessagesForBlock(activeSession.messages, scopeCount);
     if (blockMessages.length === 0 && activeSession.messages.length > 0) {
       // Compaction edge case: couldn't identify run-scoped messages.
       // Fail closed: clear ALL assistant content in the session to prevent
@@ -124,9 +140,9 @@ export async function applyBeforeResponseEmitHook(
       );
       clearAllAssistantContent(activeSession.messages);
     } else {
-      // Clear blocked content from current-run session history only so it
-      // doesn't leak to subsequent turns or session persistence.
-      clearAllAssistantContent(blockMessages);
+      // Remove blocked assistant messages from current-run session history only
+      // so they don't leak to subsequent turns or session persistence.
+      clearAllAssistantContent(activeSession.messages, blockMessages);
     }
     return { blocked: true };
   }
@@ -346,17 +362,29 @@ function rewriteSingleAssistantMessage(msg: AgentMessage, newContent: string): v
  * Clears both text parts AND tool_use blocks (which may contain sensitive
  * data in their input arguments) to prevent exfiltration via tool calls.
  */
-export function clearAllAssistantContent(messages: AgentMessage[]): void {
-  const assistantMsgs = messages.filter((m) => m.role === "assistant" && "content" in m);
-  for (const msg of assistantMsgs) {
-    const msgContent = (msg as { content: unknown }).content;
-    if (typeof msgContent === "string") {
-      (msg as unknown as Record<string, unknown>).content = "";
-    } else if (Array.isArray(msgContent)) {
-      // Clear ALL content parts — text, tool_use, and any other types.
-      // Setting to empty array removes tool_use blocks entirely, preventing
-      // sensitive data in tool call input arguments from persisting.
-      (msg as unknown as Record<string, unknown>).content = [];
+/**
+ * Remove assistant messages from the array entirely.
+ *
+ * When `scope` is provided, only messages present in `scope` are removed
+ * (identity comparison via Set). When omitted, ALL assistant messages with
+ * content are removed.
+ *
+ * Messages are removed rather than blanked to avoid ghost entries.
+ * Empty-content assistant messages (content: "" or content: []) would persist
+ * in session history and cause LLM API failures on the next turn — Anthropic
+ * rejects { role: "assistant", content: [] } as invalid.
+ */
+export function clearAllAssistantContent(messages: AgentMessage[], scope?: AgentMessage[]): void {
+  const scopeSet = scope ? new Set(scope) : undefined;
+  // Iterate in reverse so splice indices stay valid.
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const msg = messages[i];
+    if (msg.role !== "assistant" || !("content" in msg)) {
+      continue;
     }
+    if (scopeSet && !scopeSet.has(msg)) {
+      continue;
+    }
+    messages.splice(i, 1);
   }
 }

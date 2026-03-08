@@ -204,7 +204,7 @@ describe("applyBeforeResponseEmitHook", () => {
     expect(result).toBeUndefined();
   });
 
-  it("clears current-run assistant content on block (multi-turn)", async () => {
+  it("removes current-run assistant messages on block (multi-turn)", async () => {
     const hookRunner = makeMockHookRunner({ block: true, blockReason: "PII detected" });
     const activeSession = {
       messages: [
@@ -228,12 +228,15 @@ describe("applyBeforeResponseEmitHook", () => {
     expect((activeSession.messages[0] as { content: unknown }).content).toBe(
       "prior history - safe",
     );
-    // Current-run assistant messages must be cleared
-    expect((activeSession.messages[2] as { content: unknown }).content).toBe("");
-    expect((activeSession.messages[4] as { content: unknown }).content).toBe("");
+    // Current-run assistant messages are removed entirely (not blanked).
+    // Empty-content ghost messages would break LLM API calls (Anthropic rejects
+    // { role: "assistant", content: [] }) so we splice them out.
+    const assistantMsgs = activeSession.messages.filter((m) => m.role === "assistant");
+    expect(assistantMsgs).toHaveLength(1); // only prior history remains
+    expect((assistantMsgs[0] as { content: unknown }).content).toBe("prior history - safe");
   });
 
-  it("clears all text parts in multi-part messages on block", async () => {
+  it("removes multi-part assistant messages on block", async () => {
     const hookRunner = makeMockHookRunner({ block: true });
     const sessionMsg = makeMsg("assistant", [
       { type: "text", text: "part 1 with PII" },
@@ -254,9 +257,8 @@ describe("applyBeforeResponseEmitHook", () => {
       activeSession,
     });
 
-    // Block clears ALL content (including tool_use blocks) — content set to empty array
-    const content = (sessionMsg as { content: unknown }).content as unknown[];
-    expect(content).toEqual([]);
+    // Block removes assistant messages entirely — no ghost entries left
+    expect(activeSession.messages).toHaveLength(0);
   });
 
   it("rewrites all text parts on modification (not just first)", async () => {
