@@ -60,6 +60,10 @@ function parseApproveCommand(raw: string): ParsedApproveCommand | null {
   return { ok: false, error: "Usage: /approve <id> allow-once|allow-always|deny" };
 }
 
+function isApproveCommand(raw: string): boolean {
+  return raw.trim().toLowerCase().startsWith(COMMAND);
+}
+
 function buildResolvedByLabel(params: Parameters<CommandHandler>[0]): string {
   const channel = params.command.channel;
   const sender = params.command.senderId ?? "unknown";
@@ -71,6 +75,14 @@ export const handleApproveCommand: CommandHandler = async (params, allowTextComm
     return null;
   }
 
+  const normalized = params.command.commandBodyNormalized;
+
+  // First gate: check if this is actually an /approve command
+  if (!isApproveCommand(normalized)) {
+    return null;
+  }
+
+  // Now check authorization - only after confirming it's an approve command
   if (!params.command.isAuthorizedSender) {
     logVerbose(
       `Ignoring /approve from unauthorized sender: ${params.command.senderId || "<unknown>"}`,
@@ -92,18 +104,21 @@ export const handleApproveCommand: CommandHandler = async (params, allowTextComm
     }
   }
 
-  // Fall back to legacy positional parsing if needed
+  // Fall back to legacy positional parsing only if needed
   if (!id || !decision) {
-    const normalized = params.command.commandBodyNormalized;
     const parsed = parseApproveCommand(normalized);
-    if (!parsed) {
-      return null;
+    if (parsed) {
+      // Only use legacy values if they provide missing data
+      if (!id && parsed.ok) {
+        id = parsed.id;
+      }
+      if (!decision && parsed.ok) {
+        decision = parsed.decision;
+      }
+      if (!parsed.ok) {
+        return { shouldContinue: false, reply: { text: parsed.error } };
+      }
     }
-    if (!parsed.ok) {
-      return { shouldContinue: false, reply: { text: parsed.error } };
-    }
-    id = parsed.id;
-    decision = parsed.decision;
   }
 
   if (!id || !decision) {
