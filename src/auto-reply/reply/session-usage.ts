@@ -100,9 +100,20 @@ export async function persistSessionUsageUpdate(params: {
             patch.cacheWrite = cacheUsage?.cacheWrite ?? 0;
           }
           // Missing a last-call snapshot (and promptTokens fallback) means
-          // context utilization is stale/unknown.
-          patch.totalTokens = totalTokens;
-          patch.totalTokensFresh = typeof totalTokens === "number";
+          // context utilization is stale/unknown. However, preserve existing
+          // totalTokens if we have a valid value to avoid showing "unknown"
+          // when usage data is temporarily unavailable (e.g., model failover).
+          if (typeof totalTokens === "number") {
+            patch.totalTokens = totalTokens;
+            patch.totalTokensFresh = true;
+          } else if (typeof entry.totalTokens === "number" && entry.totalTokensFresh === true) {
+            // Preserve existing totalTokens and freshness when no new usage data
+            patch.totalTokens = entry.totalTokens;
+            patch.totalTokensFresh = true;
+          } else {
+            patch.totalTokens = totalTokens;
+            patch.totalTokensFresh = false;
+          }
           return applyCliSessionIdToSessionPatch(params, entry, patch);
         },
       });
