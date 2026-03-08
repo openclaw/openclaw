@@ -1,0 +1,30 @@
+{
+  "name": "@openclaw/wecom",
+  "version": "2026.3.7",
+  "description": "OpenClaw WeCom (企业微信) channel plugin",
+  "type": "module",
+  "dependencies": {
+    "@wecom/aibot-node-sdk": "^1.0.0",
+    "file-type": "^21.3.0"
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ],
+    "channel": {
+      "id": "wecom",
+      "label": "企业微信",
+      "selectionLabel": "企业微信 (WeCom)",
+      "docsPath": "/channels/wecom",
+      "docsLabel": "wecom",
+      "blurb": "企业微信机器人接入插件",
+      "order": 80,
+      "quickstartAllowFrom": true
+    },
+    "install": {
+      "npmSpec": "@openclaw/wecom",
+      "localPath": "extensions/wecom",
+      "defaultChoice": "npm"
+    }
+  }
+}
