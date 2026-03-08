@@ -90,6 +90,12 @@ export async function updateAuthProfileStoreWithLock(params: {
       const shouldSave = params.updater(store);
       if (shouldSave) {
         saveAuthProfileStore(store, params.agentDir);
+        // Keep runtime snapshot in sync so subsequent in-memory reads
+        // (e.g. orderProfilesByMode round-robin) see updated usageStats.
+        const snapshotKey = resolveRuntimeStoreKey(params.agentDir);
+        if (runtimeAuthStoreSnapshots.has(snapshotKey)) {
+          runtimeAuthStoreSnapshots.set(snapshotKey, cloneAuthProfileStore(store));
+        }
       }
       return store;
     });
