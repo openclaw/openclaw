@@ -54,6 +54,34 @@ const invalidAckReactions = new Set<string>();
 const REPLY_DIRECTIVE_TAG_RE = /\[\[\s*(?:reply_to_current|reply_to\s*:\s*[^\]\n]+)\s*\]\]/gi;
 const PENDING_OUTBOUND_MESSAGE_ID_TTL_MS = 2 * 60 * 1000;
 
+// ── Staleness gate & GUID dedup (#19176, #12053) ──
+// BlueBubbles MessagePoller uses a 1-week lookback window and can re-fire
+// old messages as webhook events after restarts or reconnections.
+const STALE_MESSAGE_MAX_AGE_MS = 5 * 60 * 1000; // 5 minutes
+const DEDUP_GUID_CACHE_MAX = 5000;
+const DEDUP_GUID_TTL_MS = 30 * 60 * 1000; // 30 minutes
+const _dedupGuidCache = new Map<string, number>();
+
+function _isStaleMessage(timestamp: number | undefined): boolean {
+  if (typeof timestamp !== "number" || timestamp <= 0) return false;
+  const age = Date.now() - timestamp;
+  return age > STALE_MESSAGE_MAX_AGE_MS;
+}
+
+function _isDuplicateGuid(guid: string | undefined): boolean {
+  if (!guid) return false;
+  const now = Date.now();
+  if (_dedupGuidCache.size > DEDUP_GUID_CACHE_MAX) {
+    for (const [k, v] of _dedupGuidCache) {
+      if (now - v > DEDUP_GUID_TTL_MS) _dedupGuidCache.delete(k);
+    }
+  }
+  if (_dedupGuidCache.has(guid)) return true;
+  _dedupGuidCache.set(guid, now);
+  return false;
+}
+// ── End staleness gate & GUID dedup ──
+
 type PendingOutboundMessageId = {
   id: number;
   accountId: string;
@@ -425,6 +453,18 @@ export async function processMessage(
   target: WebhookTarget,
 ): Promise<void> {
   const { account, config, runtime, core, statusSink } = target;
+
+  // ── Staleness gate: drop messages older than 5 minutes (#19176) ──
+  if (_isStaleMessage(message.timestamp)) {
+    logVerbose(core, runtime, `drop: stale message age=${Math.round((Date.now() - (message.timestamp ?? 0)) / 1000)}s sender=${message.senderId} guid=${message.messageId ?? "?"}`);
+    return;
+  }
+  // ── GUID dedup: drop already-seen message GUIDs (#12053) ──
+  if (_isDuplicateGuid(message.messageId)) {
+    logVerbose(core, runtime, `drop: duplicate guid=${message.messageId} sender=${message.senderId}`);
+    return;
+  }
+
   const pairing = createScopedPairingAccess({
     core,
     channel: "bluebubbles",
