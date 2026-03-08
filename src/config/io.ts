@@ -1425,6 +1425,7 @@ export async function writeConfigFile(
 ): Promise<void> {
   const io = createConfigIO();
   let nextCfg = cfg;
+  const hadRuntimeSnapshot = Boolean(runtimeConfigSnapshot);
   const hadBothSnapshots = Boolean(runtimeConfigSnapshot && runtimeConfigSourceSnapshot);
   if (hadBothSnapshots) {
     const runtimePatch = createMergePatch(runtimeConfigSnapshot!, cfg);
@@ -1436,9 +1437,8 @@ export async function writeConfigFile(
     envSnapshotForRestore: sameConfigPath ? options.envSnapshotForRestore : undefined,
     unsetPaths: options.unsetPaths,
   });
-  // Keep follow-up loadConfig() in sync with the just-persisted config (fixes race where a
-  // second connection's agents.update fails with "agent not found" after agents.create).
-  clearRuntimeConfigSnapshot();
+  // Keep the last-known-good runtime snapshot active until the specialized refresh path
+  // succeeds, so concurrent readers do not observe unresolved SecretRefs mid-refresh.
   const refreshHandler = runtimeConfigSnapshotRefreshHandler;
   if (refreshHandler) {
     try {
@@ -1460,11 +1460,15 @@ export async function writeConfigFile(
     }
   }
   if (hadBothSnapshots) {
-    // Refresh both snapshots from disk so follow-up reads get normalized config and
+    // Refresh both snapshots from disk atomically so follow-up reads get normalized config and
     // subsequent writes still get secret-preservation merge-patch (hadBothSnapshots stays true).
-    const fresh = loadConfig();
+    const fresh = io.loadConfig();
     setRuntimeConfigSnapshot(fresh, nextCfg);
+    return;
   }
-  // When we had no snapshot (or only one), do not set a new one: leave callers reading from
-  // disk/cache so external/manual edits to openclaw.json remain visible (no stale snapshot).
+  if (hadRuntimeSnapshot) {
+    clearRuntimeConfigSnapshot();
+  }
+  // When we had no runtime snapshot, keep callers reading from disk/cache so external/manual
+  // edits to openclaw.json remain visible (no stale snapshot).
 }
