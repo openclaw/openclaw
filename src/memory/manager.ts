@@ -114,6 +114,18 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
   private readonlyRecoveryFailures = 0;
   private readonlyRecoveryLastError?: string;
 
+  /**
+   * Close all cached managers and clear the cache.
+   * Should be called during gateway shutdown to release SQLite connections,
+   * file watchers, and timers held by cached instances.
+   */
+  static async closeAll(): Promise<void> {
+    const managers = [...INDEX_CACHE.values()];
+    INDEX_CACHE.clear();
+    INDEX_CACHE_PENDING.clear();
+    await Promise.allSettled(managers.map((m) => m.close()));
+  }
+
   static async get(params: {
     cfg: OpenClawConfig;
     agentId: string;
