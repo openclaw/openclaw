@@ -486,10 +486,14 @@ async function resolveMemoryBootstrapEntries(
     try {
       key = await fs.realpath(entry.filePath);
     } catch {}
-    if (seen.has(key)) {
+    // Also deduplicate by lowercase basename so that MEMORY.md and memory.md
+    // on case-sensitive file systems are not both injected into the prompt.
+    const basenameKey = path.join(path.dirname(key), path.basename(key).toLowerCase());
+    if (seen.has(key) || seen.has(basenameKey)) {
       continue;
     }
     seen.add(key);
+    seen.add(basenameKey);
     deduped.push(entry);
   }
   return deduped;
