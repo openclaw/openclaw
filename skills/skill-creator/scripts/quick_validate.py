@@ -65,12 +65,56 @@ def _parse_simple_frontmatter(frontmatter_text: str) -> Optional[dict[str, str]]
     return parsed
 
 
+def _parse_fallback_flow_list(value: str):
+    """Best-effort parser for YAML/JSON flow lists in no-PyYAML mode."""
+    stripped = value.strip()
+    if not (stripped.startswith("[") and stripped.endswith("]")):
+        return None
+
+    inner = stripped[1:-1].strip()
+    if not inner:
+        return []
+
+    items = []
+    current: list[str] = []
+    quote: Optional[str] = None
+    escape = False
+
+    for char in inner:
+        if quote is not None:
+            if escape:
+                current.append(char)
+                escape = False
+            elif quote == '"' and char == "\\":
+                escape = True
+            elif char == quote:
+                quote = None
+            else:
+                current.append(char)
+            continue
+
+        if char in {'"', "'"}:
+            quote = char
+            continue
+        if char == ",":
+            items.append("".join(current).strip())
+            current = []
+            continue
+        current.append(char)
+
+    if quote is not None or escape:
+        return None
+
+    items.append("".join(current).strip())
+    return items
+
+
 def _coerce_allowed_tools(value):
     """
     Normalize allowed-tools into a list when possible.
 
     The fallback parser (used without PyYAML) returns multiline values as strings,
-    so we accept simple "- tool" lines and JSON-style arrays.
+    so we accept simple "- tool" lines and flow-style arrays.
     """
     if isinstance(value, str):
         stripped = value.strip()
@@ -79,7 +123,9 @@ def _coerce_allowed_tools(value):
                 parsed = json.loads(stripped)
                 return parsed
             except json.JSONDecodeError:
-                pass
+                parsed = _parse_fallback_flow_list(stripped)
+                if parsed is not None:
+                    return parsed
 
         lines = [line.strip() for line in value.splitlines() if line.strip()]
         if lines:

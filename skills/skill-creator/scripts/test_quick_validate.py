@@ -233,6 +233,27 @@ allowed-tools: null
         self.assertFalse(valid)
         self.assertEqual(message, "'allowed-tools' must be a list of tool names")
 
+    def test_fallback_accepts_yaml_flow_style_allowed_tools(self):
+        skill_dir = self.temp_dir / "fallback-flow-allowed-tools"
+        skill_dir.mkdir(parents=True, exist_ok=True)
+        content = """---
+name: fallback-flow-allowed-tools
+description: flow list without pyyaml
+allowed-tools: [gh, 'git status', "npm test"]
+---
+# Skill
+"""
+        (skill_dir / "SKILL.md").write_text(content, encoding="utf-8")
+
+        previous_yaml = quick_validate.yaml
+        quick_validate.yaml = None
+        try:
+            valid, message = quick_validate.validate_skill(skill_dir)
+        finally:
+            quick_validate.yaml = previous_yaml
+
+        self.assertTrue(valid, message)
+
 
 if __name__ == "__main__":
     main()
