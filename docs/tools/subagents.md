@@ -100,10 +100,8 @@ When thread bindings are enabled for a channel, a sub-agent can stay bound to a 
 ### Thread supporting channels
 
 - `sessions_spawn` with `thread: true`: currently supported on Discord only.
-- Manual thread/conversation controls:
-  - Discord: `/focus`, `/unfocus`, `/agents`, `/session idle`, `/session max-age`
-  - Matrix-js: `/focus`, `/unfocus`, `/agents`, `/session idle`, `/session max-age`
-  - Telegram: `/focus`, `/unfocus`, `/agents`, `/session idle`, `/session max-age`
+- Manual thread/conversation controls are supported on Discord, Matrix-js, and Telegram.
+- Available controls: `/focus`, `/unfocus`, `/agents`, `/session idle`, `/session max-age`
 
 Quick flow:
 
