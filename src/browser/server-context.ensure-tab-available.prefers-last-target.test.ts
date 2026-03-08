@@ -122,4 +122,58 @@ describe("browser server-context ensureTabAvailable", () => {
     const chrome = ctx.forProfile("chrome");
     await expect(chrome.ensureTabAvailable()).rejects.toThrow(/no attached Chrome tabs/i);
   });
+
+  it("waits briefly for extension tabs to reappear when a previous target exists", async () => {
+    vi.useFakeTimers();
+    try {
+      const responses = [
+        // First call: select tab A and store lastTargetId.
+        [{ id: "A", type: "page", url: "https://a.example", webSocketDebuggerUrl: "ws://x/a" }],
+        [{ id: "A", type: "page", url: "https://a.example", webSocketDebuggerUrl: "ws://x/a" }],
+        // Second call: transient drop, then the extension re-announces attached tab A.
+        [],
+        [{ id: "A", type: "page", url: "https://a.example", webSocketDebuggerUrl: "ws://x/a" }],
+        [{ id: "A", type: "page", url: "https://a.example", webSocketDebuggerUrl: "ws://x/a" }],
+      ];
+      stubChromeJsonList(responses);
+      const state = makeBrowserState();
+
+      const ctx = createBrowserRouteContext({ getState: () => state });
+      const chrome = ctx.forProfile("chrome");
+      const first = await chrome.ensureTabAvailable();
+      expect(first.targetId).toBe("A");
+
+      const secondPromise = chrome.ensureTabAvailable();
+      await vi.advanceTimersByTimeAsync(250);
+      const second = await secondPromise;
+      expect(second.targetId).toBe("A");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("still fails after the extension-tab grace window expires", async () => {
+    vi.useFakeTimers();
+    try {
+      const responses = [
+        [{ id: "A", type: "page", url: "https://a.example", webSocketDebuggerUrl: "ws://x/a" }],
+        [{ id: "A", type: "page", url: "https://a.example", webSocketDebuggerUrl: "ws://x/a" }],
+        ...Array.from({ length: 20 }, () => []),
+      ];
+      stubChromeJsonList(responses);
+      const state = makeBrowserState();
+
+      const ctx = createBrowserRouteContext({ getState: () => state });
+      const chrome = ctx.forProfile("chrome");
+      await chrome.ensureTabAvailable();
+
+      const pending = expect(chrome.ensureTabAvailable()).rejects.toThrow(
+        /no attached Chrome tabs/i,
+      );
+      await vi.advanceTimersByTimeAsync(3_500);
+      await pending;
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });

@@ -4,6 +4,7 @@ import Testing
 
 private struct TalkConfigContractFixture: Decodable {
     let selectionCases: [SelectionCase]
+    let timeoutCases: [TimeoutCase]
 
     struct SelectionCase: Decodable {
         let id: String
@@ -17,6 +18,14 @@ private struct TalkConfigContractFixture: Decodable {
         let provider: String
         let normalizedPayload: Bool
         let voiceId: String?
+        let apiKey: String?
+    }
+
+    struct TimeoutCase: Decodable {
+        let id: String
+        let fallback: Int
+        let expectedTimeoutMs: Int
+        let talk: [String: AnyCodable]
     }
 }
 
@@ -51,10 +60,21 @@ struct TalkConfigContractTests {
                 #expect(selection?.provider == expected.provider)
                 #expect(selection?.normalizedPayload == expected.normalizedPayload)
                 #expect(selection?.config["voiceId"]?.stringValue == expected.voiceId)
+                #expect(selection?.config["apiKey"]?.stringValue == expected.apiKey)
             } else {
                 #expect(selection == nil)
             }
             #expect(fixture.payloadValid == (selection != nil))
+        }
+    }
+
+    @Test func timeoutFixtures() throws {
+        for fixture in try TalkConfigContractFixtureLoader.load().timeoutCases {
+            #expect(
+                TalkConfigParsing.resolvedSilenceTimeoutMs(
+                    fixture.talk,
+                    fallback: fixture.fallback) == fixture.expectedTimeoutMs,
+                "\(fixture.id)")
         }
     }
 }
