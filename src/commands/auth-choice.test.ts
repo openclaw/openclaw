@@ -75,6 +75,7 @@ describe("applyAuthChoice", () => {
     "VENICE_API_KEY",
     "OPENCODE_API_KEY",
     "TOGETHER_API_KEY",
+    "NOVITA_API_KEY",
     "QIANFAN_API_KEY",
     "SYNTHETIC_API_KEY",
     "SSH_TTY",
@@ -195,7 +196,8 @@ describe("applyAuthChoice", () => {
         | "minimax-api"
         | "minimax-api-key-cn"
         | "synthetic-api-key"
-        | "huggingface-api-key";
+        | "huggingface-api-key"
+        | "novita-api-key";
       promptContains: string;
       profileId: string;
       provider: string;
@@ -232,6 +234,14 @@ describe("applyAuthChoice", () => {
         provider: "huggingface",
         token: "hf-test-token",
         expectedModelPrefix: "huggingface/",
+      },
+      {
+        authChoice: "novita-api-key" as const,
+        promptContains: "Enter Novita API key",
+        profileId: "novita:default",
+        provider: "novita",
+        token: "sk-novita-test",
+        expectedModelPrefix: "novita/",
       },
     ];
     for (const scenario of scenarios) {
@@ -411,6 +421,13 @@ describe("applyAuthChoice", () => {
         profileId: "litellm:default",
         provider: "litellm",
         expectedModelPrefix: "litellm/",
+      },
+      {
+        tokenProvider: " NOVITA  ",
+        token: "sk-novita-token-provider-test",
+        profileId: "novita:default",
+        provider: "novita",
+        expectedModelPrefix: "novita/",
       },
     ];
     for (const scenario of scenarios) {
@@ -624,8 +641,12 @@ describe("applyAuthChoice", () => {
 
   it("uses existing env API keys for selected providers", async () => {
     const scenarios: Array<{
-      authChoice: "synthetic-api-key" | "openrouter-api-key" | "ai-gateway-api-key";
-      envKey: "SYNTHETIC_API_KEY" | "OPENROUTER_API_KEY" | "AI_GATEWAY_API_KEY";
+      authChoice:
+        | "synthetic-api-key"
+        | "openrouter-api-key"
+        | "ai-gateway-api-key"
+        | "novita-api-key";
+      envKey: "SYNTHETIC_API_KEY" | "OPENROUTER_API_KEY" | "AI_GATEWAY_API_KEY" | "NOVITA_API_KEY";
       envValue: string;
       profileId: string;
       provider: string;
@@ -682,12 +703,24 @@ describe("applyAuthChoice", () => {
         expectedKeyRef: { source: "env", provider: "default", id: "AI_GATEWAY_API_KEY" },
         expectedModel: "vercel-ai-gateway/anthropic/claude-opus-4.6",
       },
+      {
+        authChoice: "novita-api-key",
+        envKey: "NOVITA_API_KEY",
+        envValue: "sk-novita-env",
+        profileId: "novita:default",
+        provider: "novita",
+        expectEnvPrompt: true,
+        expectedTextCalls: 0,
+        expectedKey: "sk-novita-env",
+        expectedModelPrefix: "novita/",
+      },
     ];
     for (const scenario of scenarios) {
       await setupTempState();
       delete process.env.SYNTHETIC_API_KEY;
       delete process.env.OPENROUTER_API_KEY;
       delete process.env.AI_GATEWAY_API_KEY;
+      delete process.env.NOVITA_API_KEY;
       process.env[scenario.envKey] = scenario.envValue;
 
       const text = vi.fn();
@@ -1320,6 +1353,7 @@ describe("resolvePreferredProviderForAuthChoice", () => {
       { authChoice: "github-copilot" as const, expectedProvider: "github-copilot" },
       { authChoice: "qwen-portal" as const, expectedProvider: "qwen-portal" },
       { authChoice: "mistral-api-key" as const, expectedProvider: "mistral" },
+      { authChoice: "novita-api-key" as const, expectedProvider: "novita" },
       { authChoice: "unknown" as AuthChoice, expectedProvider: undefined },
     ] as const;
     for (const scenario of scenarios) {

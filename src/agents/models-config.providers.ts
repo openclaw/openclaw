@@ -51,6 +51,12 @@ import {
   resolveEnvSecretRefHeaderValueMarker,
 } from "./model-auth-markers.js";
 import { resolveAwsSdkEnvVarName, resolveEnvApiKey } from "./model-auth.js";
+import {
+  buildNovitaModelDefinition,
+  discoverNovitaModels,
+  NOVITA_BASE_URL,
+  NOVITA_MODEL_CATALOG,
+} from "./novita-models.js";
 import { OLLAMA_NATIVE_BASE_URL } from "./ollama-stream.js";
 import {
   buildSyntheticModelDefinition,
@@ -1019,6 +1025,14 @@ async function buildVllmProvider(params?: {
   };
 }
 
+async function buildNovitaProvider(apiKey: string): Promise<ProviderConfig> {
+  const models = await discoverNovitaModels({ apiKey });
+  return {
+    baseUrl: NOVITA_BASE_URL,
+    api: "openai-completions",
+    models,
+  };
+}
 export function buildQianfanProvider(): ProviderConfig {
   return {
     baseUrl: QIANFAN_BASE_URL,
@@ -1301,6 +1315,22 @@ export async function resolveImplicitProviders(params: {
     providers.huggingface = {
       ...hfProvider,
       apiKey: huggingfaceKey,
+    };
+  }
+
+  const { apiKey: novitaKey, discoveryApiKey: novitaDiscoveryApiKey } =
+    resolveProviderApiKey("novita");
+  if (novitaKey && novitaDiscoveryApiKey) {
+    providers.novita = {
+      ...(await buildNovitaProvider(novitaDiscoveryApiKey)),
+      apiKey: novitaKey,
+    };
+  } else if (novitaKey) {
+    providers.novita = {
+      baseUrl: NOVITA_BASE_URL,
+      api: "openai-completions",
+      models: NOVITA_MODEL_CATALOG.map(buildNovitaModelDefinition),
+      apiKey: novitaKey,
     };
   }
 

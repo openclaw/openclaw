@@ -1113,6 +1113,7 @@
                   "providers/openai",
                   "providers/opencode",
                   "providers/openrouter",
+                  "providers/novita",
                   "providers/qianfan",
                   "providers/qwen",
                   "providers/synthetic",
