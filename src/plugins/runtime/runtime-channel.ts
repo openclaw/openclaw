@@ -92,7 +92,7 @@ import {
   readChannelAllowFromStore,
   upsertChannelPairingRequest,
 } from "../../pairing/pairing-store.js";
-import { resolveAgentRoute } from "../../routing/resolve-route.js";
+import { buildAgentSessionKey, resolveAgentRoute } from "../../routing/resolve-route.js";
 import { monitorSignalProvider } from "../../signal/index.js";
 import { probeSignal } from "../../signal/probe.js";
 import { sendMessageSignal } from "../../signal/send.js";
@@ -144,6 +144,7 @@ export function createRuntimeChannel(): PluginRuntime["channel"] {
       resolveEnvelopeFormatOptions,
     },
     routing: {
+      buildAgentSessionKey,
       resolveAgentRoute,
     },
     pairing: {
