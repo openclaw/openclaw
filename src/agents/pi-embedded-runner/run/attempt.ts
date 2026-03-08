@@ -1707,6 +1707,16 @@ export async function runEmbeddedAttempt(
             activeSession.agent.replaceMessages(activeSession.messages);
           }
 
+          // Re-run tool_use/tool_result pairing repair after all late message mutations
+          // (orphan removal, image pruning) to prevent corrupted transcripts from
+          // reaching the LLM API.
+          if (transcriptPolicy.repairToolUseResultPairing) {
+            const repaired = sanitizeToolUseResultPairing(activeSession.messages);
+            if (repaired !== activeSession.messages) {
+              activeSession.agent.replaceMessages(repaired);
+            }
+          }
+
           // Detect and load images referenced in the prompt for vision-capable models.
           // Images are prompt-local only (pi-like behavior).
           const imageResult = await detectAndLoadPromptImages({
