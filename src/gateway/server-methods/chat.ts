@@ -3,8 +3,11 @@ import path from "node:path";
 import { CURRENT_SESSION_VERSION } from "@mariozechner/pi-coding-agent";
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { resolveThinkingDefault } from "../../agents/model-selection.js";
+import { abortEmbeddedPiRun } from "../../agents/pi-embedded.js";
 import { resolveAgentTimeoutMs } from "../../agents/timeout.js";
 import { dispatchInboundMessage } from "../../auto-reply/dispatch.js";
+import { stopSubagentsForRequester } from "../../auto-reply/reply/abort.js";
+import { clearSessionQueues } from "../../auto-reply/reply/queue.js";
 import { createReplyDispatcher } from "../../auto-reply/reply/reply-dispatcher.js";
 import type { MsgContext } from "../../auto-reply/templating.js";
 import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.js";
@@ -792,6 +795,17 @@ export const chatHandlers: GatewayRequestHandlers = {
         abortOrigin: "rpc",
         stopReason: "rpc",
       });
+      // Also abort the Pi coding agent, clear follow-up queues, and stop
+      // sub-agents, matching what the /stop text command does via
+      // tryFastAbortFromMessage. Without this, clicking the UI Stop button
+      // left spawned sub-agents and embedded Pi runs still running.
+      const { cfg, entry } = loadSessionEntry(rawSessionKey);
+      const sessionId = entry?.sessionId;
+      if (sessionId) {
+        abortEmbeddedPiRun(sessionId);
+      }
+      clearSessionQueues([rawSessionKey, sessionId]);
+      stopSubagentsForRequester({ cfg, requesterSessionKey: rawSessionKey });
       respond(true, { ok: true, aborted: res.aborted, runIds: res.runIds });
       return;
     }
@@ -829,6 +843,17 @@ export const chatHandlers: GatewayRequestHandlers = {
           },
         ],
       });
+    }
+    // Also abort the Pi coding agent, clear follow-up queues, and stop
+    // sub-agents, matching what the /stop text command does via
+    // tryFastAbortFromMessage. Without this, clicking the UI Stop button
+    // left spawned sub-agents and embedded Pi runs still running.
+    if (res.aborted) {
+      const { cfg, entry } = loadSessionEntry(rawSessionKey);
+      const sessionId = entry?.sessionId ?? active.sessionId;
+      abortEmbeddedPiRun(sessionId);
+      clearSessionQueues([rawSessionKey, sessionId]);
+      stopSubagentsForRequester({ cfg, requesterSessionKey: rawSessionKey });
     }
     respond(true, {
       ok: true,
