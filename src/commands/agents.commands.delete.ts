@@ -1,4 +1,7 @@
-import { resolveAgentDir, resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
+import fs from "node:fs";
+import path from "node:path";
+import { listAgentIds, resolveAgentDir, resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
+import type { OpenClawConfig } from "../config/config.js";
 import { writeConfigFile } from "../config/config.js";
 import { logConfigUpdated } from "../config/logging.js";
 import { resolveSessionTranscriptsDirForAgent } from "../config/sessions.js";
@@ -15,6 +18,31 @@ type AgentsDeleteOptions = {
   force?: boolean;
   json?: boolean;
 };
+
+function normalizePathForComparison(input: string): string {
+  const resolved = path.resolve(input);
+  let normalized = resolved;
+  try {
+    normalized = fs.realpathSync.native(resolved);
+  } catch {
+    // Keep lexical path when the directory no longer exists.
+  }
+  return process.platform === "win32" ? normalized.toLowerCase() : normalized;
+}
+
+function resolveWorkspaceOwners(cfg: OpenClawConfig, workspaceDir: string): string[] {
+  const targetWorkspace = normalizePathForComparison(workspaceDir);
+  const owners: string[] = [];
+
+  for (const id of listAgentIds(cfg)) {
+    const candidateWorkspace = resolveAgentWorkspaceDir(cfg, id);
+    if (normalizePathForComparison(candidateWorkspace) === targetWorkspace) {
+      owners.push(id);
+    }
+  }
+
+  return owners;
+}
 
 export async function agentsDeleteCommand(
   opts: AgentsDeleteOptions,
@@ -70,13 +98,22 @@ export async function agentsDeleteCommand(
   const sessionsDir = resolveSessionTranscriptsDirForAgent(agentId);
 
   const result = pruneAgentConfig(cfg, agentId);
+  const workspaceOwners = resolveWorkspaceOwners(result.config, workspaceDir);
+  const shouldDeleteWorkspace = workspaceOwners.length === 0;
+
   await writeConfigFile(result.config);
   if (!opts.json) {
     logConfigUpdated(runtime);
   }
 
   const quietRuntime = opts.json ? createQuietRuntime(runtime) : runtime;
-  await moveToTrash(workspaceDir, quietRuntime);
+  if (shouldDeleteWorkspace) {
+    await moveToTrash(workspaceDir, quietRuntime);
+  } else if (!opts.json) {
+    runtime.log(
+      `Skipped workspace cleanup for "${agentId}"; still used by agent(s): ${workspaceOwners.join(", ")}`,
+    );
+  }
   await moveToTrash(agentDir, quietRuntime);
   await moveToTrash(sessionsDir, quietRuntime);
 
