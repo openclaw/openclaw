@@ -662,5 +662,110 @@ describe("tts", () => {
         expect(fetchMock).toHaveBeenCalledTimes(1);
       });
     });
+
+    it("surfaces error to user when TTS fails with existing text", async () => {
+      const prevPrefs = process.env.OPENCLAW_TTS_PREFS;
+      process.env.OPENCLAW_TTS_PREFS = `/tmp/tts-test-${Date.now()}.json`;
+      const originalFetch = globalThis.fetch;
+      const fetchMock = vi.fn(async () => ({
+        ok: false,
+        status: 500,
+      }));
+      globalThis.fetch = fetchMock as unknown as typeof fetch;
+      const alwaysCfg: OpenClawConfig = {
+        ...baseCfg,
+        messages: {
+          tts: {
+            ...baseCfg.messages!.tts,
+            auto: "always",
+            edge: { enabled: false },
+            openai: { apiKey: "fake-key" },
+          },
+        },
+      };
+      try {
+        const result = await maybeApplyTtsToPayload({
+          payload: { text: "Hello world" },
+          cfg: alwaysCfg,
+          channel: "telegram",
+          kind: "final",
+        });
+
+        expect(result.text).toContain("Hello world");
+        expect(result.text).toContain("🔇 TTS failed");
+      } finally {
+        globalThis.fetch = originalFetch;
+        process.env.OPENCLAW_TTS_PREFS = prevPrefs;
+      }
+    });
+
+    it("surfaces error to user when TTS fails with short text", async () => {
+      const prevPrefs = process.env.OPENCLAW_TTS_PREFS;
+      process.env.OPENCLAW_TTS_PREFS = `/tmp/tts-test-${Date.now()}.json`;
+      const originalFetch = globalThis.fetch;
+      const fetchMock = vi.fn(async () => ({
+        ok: false,
+        status: 500,
+      }));
+      globalThis.fetch = fetchMock as unknown as typeof fetch;
+      const alwaysCfg: OpenClawConfig = {
+        ...baseCfg,
+        messages: {
+          tts: {
+            ...baseCfg.messages!.tts,
+            auto: "always",
+            edge: { enabled: false },
+            openai: { apiKey: "fake-key" },
+          },
+        },
+      };
+      try {
+        const result = await maybeApplyTtsToPayload({
+          payload: { text: "Hi" },
+          cfg: alwaysCfg,
+          kind: "final",
+        });
+
+        expect(result.text).toBe("Hi");
+        expect(result.isError).toBeUndefined();
+      } finally {
+        globalThis.fetch = originalFetch;
+        process.env.OPENCLAW_TTS_PREFS = prevPrefs;
+      }
+    });
+
+    it("includes error details in failure message", async () => {
+      const prevPrefs = process.env.OPENCLAW_TTS_PREFS;
+      process.env.OPENCLAW_TTS_PREFS = `/tmp/tts-test-${Date.now()}.json`;
+      const originalFetch = globalThis.fetch;
+      const fetchMock = vi.fn(async () => ({
+        ok: false,
+        status: 500,
+      }));
+      globalThis.fetch = fetchMock as unknown as typeof fetch;
+      const alwaysCfg: OpenClawConfig = {
+        ...baseCfg,
+        messages: {
+          tts: {
+            ...baseCfg.messages!.tts,
+            auto: "always",
+            edge: { enabled: false },
+            openai: { apiKey: "fake-key" },
+          },
+        },
+      };
+      try {
+        const result = await maybeApplyTtsToPayload({
+          payload: { text: "Hello world test" },
+          cfg: alwaysCfg,
+          kind: "final",
+        });
+
+        expect(result.text).toContain("🔇 TTS failed");
+      } finally {
+        globalThis.fetch = originalFetch;
+        process.env.OPENCLAW_TTS_PREFS = prevPrefs;
+      }
+    });
   });
 });
