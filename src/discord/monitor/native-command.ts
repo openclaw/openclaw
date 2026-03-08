@@ -1660,7 +1660,7 @@ async function dispatchDiscordCommandInteraction(params: {
   });
   const ctxPayload = buildDiscordNativeCommandContext({
     prompt,
-    commandArgs,
+    commandArgs: commandArgs ?? {},
     sessionKey,
     commandTargetSessionKey,
     accountId: effectiveRoute.accountId,
