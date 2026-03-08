@@ -422,7 +422,9 @@ export async function statusCommand(
             : warn(`${tailscaleMode} · magicdns unknown`),
     },
     { Item: "Channel", Value: channelLabel },
-    ...(toolProfileValue ? [{ Item: "Global tools profile", Value: toolProfileValue }] : []),
+    ...(toolProfileValue
+      ? [{ Item: "Global tools profile", Value: toolProfileValue }]
+      : []),
     ...(gitLabel ? [{ Item: "Git", Value: gitLabel }] : []),
     {
       Item: "Update",
