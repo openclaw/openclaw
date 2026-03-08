@@ -10,6 +10,7 @@ import {
 import { resolveHeartbeatPrompt } from "../../../auto-reply/heartbeat.js";
 import { resolveChannelCapabilities } from "../../../config/channel-capabilities.js";
 import type { OpenClawConfig } from "../../../config/config.js";
+import { parseWorkspaceDotEnv } from "../../../infra/dotenv.js";
 import { getMachineDisplayName } from "../../../infra/machine-name.js";
 import { ensureGlobalUndiciStreamTimeouts } from "../../../infra/net/undici-global-dispatcher.js";
 import { MAX_IMAGE_BYTES } from "../../../media/constants.js";
@@ -747,6 +748,7 @@ export async function runEmbeddedAttempt(
   params: EmbeddedRunAttemptParams,
 ): Promise<EmbeddedRunAttemptResult> {
   const resolvedWorkspace = resolveUserPath(params.workspaceDir);
+  const workspaceEnv = parseWorkspaceDotEnv(resolvedWorkspace);
   const prevCwd = process.cwd();
   const runAbortController = new AbortController();
   ensureGlobalUndiciStreamTimeouts();
@@ -869,6 +871,7 @@ export async function runEmbeddedAttempt(
           runId: params.runId,
           agentDir,
           workspaceDir: effectiveWorkspace,
+          workspaceEnv,
           config: params.config,
           abortSignal: runAbortController.signal,
           modelProvider: params.model.provider,
