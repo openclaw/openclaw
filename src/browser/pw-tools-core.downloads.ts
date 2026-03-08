@@ -91,6 +91,11 @@ async function saveDownloadPayload(download: DownloadPayload, outPath: string) {
   if (!requestedPath) {
     await download.saveAs?.(resolvedOutPath);
   } else {
+    // Path validation (traversal, symlinks, hardlinks) is enforced at the API
+    // boundary by `resolveWritableOutputPathOrRespond` before this function is
+    // called. We pass `rootDir = dirname(resolvedOutPath)` so the sanity guard
+    // inside `writeViaSiblingTempPath` is trivially satisfied; the dirname also
+    // determines where the sibling temp file is placed.
     await writeViaSiblingTempPath({
       rootDir: path.dirname(resolvedOutPath),
       targetPath: resolvedOutPath,
