@@ -71,13 +71,15 @@ function escapeForJsonString(value: string): string {
 }
 
 /**
- * Substitute placeholders in the body template with actual values.
+ * Substitute placeholders in the body template with actual values in a single
+ * pass so that content injected by one replacement cannot be matched by a
+ * subsequent placeholder pattern (e.g. a user message containing "{{model}}").
  *
  * String placeholders ({{prompt}}, {{system}}, {{model}}) are escaped so
  * newlines, quotes and other special characters don't break the JSON.
  *
- * Raw placeholders ("{{messages}}" and {{max_tokens}}) replace the whole
- * value including surrounding quotes so the result is valid JSON.
+ * Raw placeholders ({{messages}} and {{max_tokens}}) replace the whole value
+ * including any surrounding quotes so the result is valid JSON.
  */
 function substituteTemplate(
   template: string,
@@ -89,14 +91,25 @@ function substituteTemplate(
     maxTokens: number;
   },
 ): string {
-  return template
-    .replace(/\{\{prompt\}\}/g, escapeForJsonString(params.prompt))
-    .replace(/"\{\{messages\}\}"/g, params.messages)
-    .replace(/\{\{messages\}\}/g, params.messages)
-    .replace(/\{\{system\}\}/g, escapeForJsonString(params.system))
-    .replace(/\{\{model\}\}/g, escapeForJsonString(params.model))
-    .replace(/"\{\{max_tokens\}\}"/g, String(params.maxTokens))
-    .replace(/\{\{max_tokens\}\}/g, String(params.maxTokens));
+  return template.replace(
+    /"?\{\{(prompt|messages|system|model|max_tokens)\}\}"?/g,
+    (match, key) => {
+      switch (key) {
+        case "prompt":
+          return escapeForJsonString(params.prompt);
+        case "messages":
+          return params.messages;
+        case "system":
+          return escapeForJsonString(params.system);
+        case "model":
+          return escapeForJsonString(params.model);
+        case "max_tokens":
+          return String(params.maxTokens);
+        default:
+          return match;
+      }
+    },
+  );
 }
 
 /**
