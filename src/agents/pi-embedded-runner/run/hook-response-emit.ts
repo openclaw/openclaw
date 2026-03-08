@@ -96,29 +96,20 @@ export async function applyBeforeResponseEmitHook(
   }
   const content = assistantTexts[assistantTexts.length - 1];
 
-  // Count actual text-bearing assistant turns in the session (not assistantTexts.length,
-  // which can have multiple entries per turn with block-reply chunking). When
-  // preRunMessageCount is provided, only count messages added during this run.
-  // If compaction has shrunk the transcript below preRunMessageCount, the index
-  // is stale — fall back to assistantTexts.length to avoid under-scoping.
-  const runStart = params.preRunMessageCount ?? 0;
-  const compactionShiftedIndices = runStart > activeSession.messages.length;
-  let scopeCount: number;
-  if (params.preRunMessageCount !== undefined && !compactionShiftedIndices) {
-    const runAssistantTurnCount = activeSession.messages
-      .slice(runStart)
-      .filter((m) => m.role === "assistant" && extractAssistantText(m).length > 0).length;
-    // When runAssistantTurnCount is 0 (run ended with tool-call-only turn),
-    // fall back to assistantTexts.length instead of clamping to 1. Clamping
-    // to 1 would make getRunScopedMessages scan the entire session and
-    // potentially return a prior-history message, violating run-scoped isolation.
-    // The assistantTexts.length fallback lets the fail-closed guard catch the
-    // mismatch if no run-scoped messages are found.
-    scopeCount = runAssistantTurnCount > 0 ? runAssistantTurnCount : assistantTexts.length;
-  } else {
-    // No preRunMessageCount or compaction invalidated it — use assistantTexts.length.
-    scopeCount = assistantTexts.length;
-  }
+  // Determine how many text-bearing assistant turns to scope.
+  //
+  // We use assistantTexts.length as the baseline scope count. While this can
+  // over-count with block-reply chunking (multiple chunks per turn), that
+  // over-count is safe — getRunScopedMessages scans from the tail and stops
+  // when it finds enough text-bearing assistant messages, so extra scope just
+  // means the scan terminates earlier than the array boundary.
+  //
+  // The preRunMessageCount-based approach was removed because compaction can
+  // shift message indices in ways that are undetectable without tracking
+  // individual message identity (partial compaction: pre-run messages removed
+  // but total length stays ≥ runStart). Using assistantTexts.length avoids
+  // all compaction edge cases and is always at least as wide as needed.
+  const scopeCount = assistantTexts.length;
 
   const emitResult = await hookRunner.runBeforeResponseEmit(
     {
@@ -360,6 +351,11 @@ export function rewriteAllAssistantContent(
       const idx = sourceMessages.indexOf(assistantMsgs[i]);
       if (idx >= 0) {
         sourceMessages.splice(idx, 1);
+        // Also remove any immediately-following toolResult messages to avoid
+        // orphans. Anthropic API rejects toolResult without preceding tool_use.
+        while (idx < sourceMessages.length && sourceMessages[idx].role === "toolResult") {
+          sourceMessages.splice(idx, 1);
+        }
       }
     }
   }
