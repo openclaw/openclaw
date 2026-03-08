@@ -58,7 +58,7 @@ function backupAssetPriority(kind: BackupAssetKind): number {
 }
 
 export function buildBackupArchiveRoot(nowMs = Date.now()): string {
-  return `openclaw-backup-${formatSessionArchiveTimestamp(nowMs)}`;
+  return `${formatSessionArchiveTimestamp(nowMs)}-openclaw-backup`;
 }
 
 export function buildBackupArchiveBasename(nowMs = Date.now()): string {

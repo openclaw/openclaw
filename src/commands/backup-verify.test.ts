@@ -71,7 +71,7 @@ describe("backupVerifyCommand", () => {
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-backup-missing-asset-"));
     const archivePath = path.join(tempDir, "broken.tar.gz");
     try {
-      const rootName = "openclaw-backup-2026-03-09T00-00-00.000Z";
+      const rootName = "2026-03-09T00-00-00.000Z-openclaw-backup";
       const root = path.join(tempDir, rootName);
       await fs.mkdir(root, { recursive: true });
       const manifest = {
@@ -115,7 +115,7 @@ describe("backupVerifyCommand", () => {
     const manifestPath = path.join(tempDir, "manifest.json");
     const payloadPath = path.join(tempDir, "payload.txt");
     try {
-      const rootName = "openclaw-backup-2026-03-09T00-00-00.000Z";
+      const rootName = "2026-03-09T00-00-00.000Z-openclaw-backup";
       const traversalPath = `${rootName}/payload/../escaped.txt`;
       const manifest = {
         schemaVersion: 1,
@@ -221,7 +221,7 @@ describe("backupVerifyCommand", () => {
     const manifestPath = path.join(tempDir, "manifest.json");
     const payloadPath = path.join(tempDir, "payload.txt");
     try {
-      const rootName = "openclaw-backup-2026-03-09T00-00-00.000Z";
+      const rootName = "2026-03-09T00-00-00.000Z-openclaw-backup";
       const manifest = {
         schemaVersion: 1,
         createdAt: "2026-03-09T00:00:00.000Z",

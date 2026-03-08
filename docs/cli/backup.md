@@ -16,7 +16,7 @@ openclaw backup create --output ~/Backups
 openclaw backup create --dry-run --json
 openclaw backup create --verify
 openclaw backup create --no-include-workspace
-openclaw backup verify ./openclaw-backup-2026-03-09T00-00-00.000Z.tar.gz
+openclaw backup verify ./2026-03-09T00-00-00.000Z-openclaw-backup.tar.gz
 ```
 
 ## Notes
