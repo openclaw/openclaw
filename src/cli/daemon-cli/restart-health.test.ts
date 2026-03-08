@@ -198,4 +198,26 @@ describe("inspectGatewayRestart", () => {
 
     expect(snapshot.healthy).toBe(true);
   });
+
+  it("treats busy ports with unavailable listener details as healthy when runtime is running", async () => {
+    const service = {
+      readRuntime: vi.fn(async () => ({ status: "running", pid: 8000 })),
+    } as unknown as GatewayService;
+
+    inspectPortUsage.mockResolvedValue({
+      port: 18789,
+      status: "busy",
+      listeners: [],
+      hints: [
+        "Port is in use but process details are unavailable (install lsof or run as an admin user).",
+      ],
+      errors: ["Error: spawn lsof ENOENT"],
+    });
+
+    const { inspectGatewayRestart } = await import("./restart-health.js");
+    const snapshot = await inspectGatewayRestart({ service, port: 18789 });
+
+    expect(snapshot.healthy).toBe(true);
+    expect(probeGateway).not.toHaveBeenCalled();
+  });
 });
