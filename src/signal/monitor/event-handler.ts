@@ -821,13 +821,13 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       const kind = mediaType ? kindFromMime(mediaType) : undefined;
       if (kind) {
         placeholder = `<media:${kind}>`;
-      } else if (mediaPath || (deps.ignoreAttachments && attachments.length)) {
-        // A path was resolved (real attachment, unrecognised MIME) or we are
-        // intentionally skipping fetching — preserve the attachment placeholder
-        // so the message is not silently lost.
+      } else if (mediaPath || attachments.length) {
+        // A path was resolved (real attachment, unrecognised MIME), fetch
+        // returned null, or we are intentionally skipping fetching — preserve
+        // the attachment placeholder so the message is not silently lost.
         placeholder = "<media:attachment>";
       }
-      // No path resolved and ignoreAttachments is false: blank reaction envelope.
+      // No attachments at all (blank reaction envelope):
       // Leave placeholder empty; the !bodyText guard below will drop it silently.
     }
 
