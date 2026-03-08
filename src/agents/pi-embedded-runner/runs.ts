@@ -12,11 +12,20 @@ type EmbeddedPiQueueHandle = {
 };
 
 const ACTIVE_EMBEDDED_RUNS = new Map<string, EmbeddedPiQueueHandle>();
+const ACTIVE_EMBEDDED_RUN_HOLDS = new Map<string, number>();
 type EmbeddedRunWaiter = {
   resolve: (ended: boolean) => void;
   timer: NodeJS.Timeout;
 };
 const EMBEDDED_RUN_WAITERS = new Map<string, Set<EmbeddedRunWaiter>>();
+
+function getEmbeddedRunHoldCount(sessionId: string): number {
+  return ACTIVE_EMBEDDED_RUN_HOLDS.get(sessionId) ?? 0;
+}
+
+function hasEmbeddedPiRunActivity(sessionId: string): boolean {
+  return ACTIVE_EMBEDDED_RUNS.has(sessionId) || getEmbeddedRunHoldCount(sessionId) > 0;
+}
 
 export function queueEmbeddedPiMessage(sessionId: string, text: string): boolean {
   const handle = ACTIVE_EMBEDDED_RUNS.get(sessionId);
@@ -49,7 +58,7 @@ export function abortEmbeddedPiRun(sessionId: string): boolean {
 }
 
 export function isEmbeddedPiRunActive(sessionId: string): boolean {
-  const active = ACTIVE_EMBEDDED_RUNS.has(sessionId);
+  const active = hasEmbeddedPiRunActivity(sessionId);
   if (active) {
     diag.debug(`run active check: sessionId=${sessionId} active=true`);
   }
@@ -65,11 +74,17 @@ export function isEmbeddedPiRunStreaming(sessionId: string): boolean {
 }
 
 export function getActiveEmbeddedRunCount(): number {
-  return ACTIVE_EMBEDDED_RUNS.size;
+  const sessionIds = new Set<string>(ACTIVE_EMBEDDED_RUNS.keys());
+  for (const [sessionId, holdCount] of ACTIVE_EMBEDDED_RUN_HOLDS) {
+    if (holdCount > 0) {
+      sessionIds.add(sessionId);
+    }
+  }
+  return sessionIds.size;
 }
 
 export function waitForEmbeddedPiRunEnd(sessionId: string, timeoutMs = 15_000): Promise<boolean> {
-  if (!sessionId || !ACTIVE_EMBEDDED_RUNS.has(sessionId)) {
+  if (!sessionId || !hasEmbeddedPiRunActivity(sessionId)) {
     return Promise.resolve(true);
   }
   diag.debug(`waiting for run end: sessionId=${sessionId} timeoutMs=${timeoutMs}`);
@@ -91,7 +106,7 @@ export function waitForEmbeddedPiRunEnd(sessionId: string, timeoutMs = 15_000): 
     };
     waiters.add(waiter);
     EMBEDDED_RUN_WAITERS.set(sessionId, waiters);
-    if (!ACTIVE_EMBEDDED_RUNS.has(sessionId)) {
+    if (!hasEmbeddedPiRunActivity(sessionId)) {
       waiters.delete(waiter);
       if (waiters.size === 0) {
         EMBEDDED_RUN_WAITERS.delete(sessionId);
@@ -144,10 +159,36 @@ export function clearActiveEmbeddedRun(
     if (!sessionId.startsWith("probe-")) {
       diag.debug(`run cleared: sessionId=${sessionId} totalActive=${ACTIVE_EMBEDDED_RUNS.size}`);
     }
-    notifyEmbeddedRunEnded(sessionId);
+    if (!hasEmbeddedPiRunActivity(sessionId)) {
+      notifyEmbeddedRunEnded(sessionId);
+    }
   } else {
     diag.debug(`run clear skipped: sessionId=${sessionId} reason=handle_mismatch`);
   }
+}
+
+export function retainEmbeddedPiRunActivity(sessionId: string): () => void {
+  const cleaned = sessionId.trim();
+  if (!cleaned) {
+    return () => {};
+  }
+  ACTIVE_EMBEDDED_RUN_HOLDS.set(cleaned, getEmbeddedRunHoldCount(cleaned) + 1);
+  let released = false;
+  return () => {
+    if (released) {
+      return;
+    }
+    released = true;
+    const current = getEmbeddedRunHoldCount(cleaned);
+    if (current <= 1) {
+      ACTIVE_EMBEDDED_RUN_HOLDS.delete(cleaned);
+    } else {
+      ACTIVE_EMBEDDED_RUN_HOLDS.set(cleaned, current - 1);
+    }
+    if (!hasEmbeddedPiRunActivity(cleaned)) {
+      notifyEmbeddedRunEnded(cleaned);
+    }
+  };
 }
 
 export type { EmbeddedPiQueueHandle };

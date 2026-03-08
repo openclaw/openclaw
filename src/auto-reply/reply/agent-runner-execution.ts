@@ -12,7 +12,7 @@ import {
   isTransientHttpError,
   sanitizeUserFacingText,
 } from "../../agents/pi-embedded-helpers.js";
-import { runEmbeddedPiAgent } from "../../agents/pi-embedded.js";
+import { retainEmbeddedPiRunActivity, runEmbeddedPiAgent } from "../../agents/pi-embedded.js";
 import {
   resolveGroupSessionKey,
   resolveSessionTranscriptPath,
@@ -436,7 +436,10 @@ export async function runAgentTurnWithFallback(params: {
                     // See: https://github.com/openclaw/openclaw/issues/11044
                     let toolResultChain: Promise<void> = Promise.resolve();
                     return (payload: ReplyPayload) => {
-                      toolResultChain = toolResultChain
+                      const releaseActivity = retainEmbeddedPiRunActivity(
+                        params.followupRun.run.sessionId,
+                      );
+                      const nextTask = toolResultChain
                         .then(async () => {
                           const { text, skip } = normalizeStreamingText(payload);
                           if (skip) {
@@ -452,9 +455,11 @@ export async function runAgentTurnWithFallback(params: {
                           // Keep chain healthy after an error so later tool results still deliver.
                           logVerbose(`tool result delivery failed: ${String(err)}`);
                         });
-                      const task = toolResultChain.finally(() => {
+                      const task = nextTask.finally(() => {
+                        releaseActivity();
                         params.pendingToolTasks.delete(task);
                       });
+                      toolResultChain = task;
                       params.pendingToolTasks.add(task);
                     };
                   })()

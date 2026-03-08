@@ -316,6 +316,107 @@ describe("runReplyAgent authProfileId fallback scoping", () => {
   });
 });
 
+describe("runReplyAgent post-run tool deliveries", () => {
+  function createRun(params?: {
+    opts?: {
+      onToolResult?: (payload: { text?: string; mediaUrls?: string[] }) => Promise<void> | void;
+    };
+  }) {
+    const typing = createMockTypingController();
+    const sessionCtx = {
+      Provider: "telegram",
+      OriginatingChannel: "telegram",
+      OriginatingTo: "telegram:123",
+      AccountId: "primary",
+      MessageSid: "msg",
+    } as unknown as TemplateContext;
+    const resolvedQueue = { mode: "interrupt" } as unknown as QueueSettings;
+    const followupRun = {
+      prompt: "hello",
+      summaryLine: "hello",
+      enqueuedAt: Date.now(),
+      run: {
+        sessionId: "session-tool",
+        sessionKey: "agent:main:telegram:direct:123",
+        messageProvider: "telegram",
+        sessionFile: "/tmp/session.jsonl",
+        workspaceDir: "/tmp",
+        config: {},
+        skillsSnapshot: {},
+        provider: "anthropic",
+        model: "claude",
+        thinkLevel: "low",
+        verboseLevel: "off",
+        elevatedLevel: "off",
+        bashElevated: {
+          enabled: false,
+          allowed: false,
+          defaultLevel: "off",
+        },
+        timeoutMs: 1_000,
+        blockReplyBreak: "message_end",
+      },
+    } as unknown as FollowupRun;
+
+    return runReplyAgent({
+      commandBody: "hello",
+      followupRun,
+      queueKey: "main",
+      resolvedQueue,
+      shouldSteer: false,
+      shouldFollowup: false,
+      isActive: false,
+      isStreaming: false,
+      opts: params?.opts,
+      typing,
+      sessionCtx,
+      defaultModel: "anthropic/claude",
+      resolvedVerboseLevel: "off",
+      isNewSession: false,
+      blockStreamingEnabled: false,
+      resolvedBlockStreamingBreak: "message_end",
+      shouldInjectGroupIntro: false,
+      typingMode: "instant",
+    });
+  }
+
+  it("retains embedded-run activity until async tool-result delivery settles", async () => {
+    const { isEmbeddedPiRunActive } = await import("../../agents/pi-embedded.js");
+    let resolveDelivery: (() => void) | null = null;
+    const deliveryDone = new Promise<void>((resolve) => {
+      resolveDelivery = resolve;
+    });
+
+    runEmbeddedPiAgentMock.mockImplementationOnce(
+      async (params: {
+        onToolResult?: (payload: { text?: string; mediaUrls?: string[] }) => void | Promise<void>;
+      }) => {
+        await params.onToolResult?.({ mediaUrls: ["/tmp/result.png"] });
+        return { payloads: [], meta: {} };
+      },
+    );
+
+    const runPromise = createRun({
+      opts: {
+        onToolResult: async () => {
+          await deliveryDone;
+        },
+      },
+    });
+
+    for (let attempt = 0; attempt < 5 && !isEmbeddedPiRunActive("session-tool"); attempt += 1) {
+      await new Promise<void>((resolve) => setImmediate(resolve));
+    }
+
+    expect(isEmbeddedPiRunActive("session-tool")).toBe(true);
+
+    resolveDelivery?.();
+    await runPromise;
+
+    expect(isEmbeddedPiRunActive("session-tool")).toBe(false);
+  });
+});
+
 describe("runReplyAgent auto-compaction token update", () => {
   type EmbeddedRunParams = {
     prompt?: string;
