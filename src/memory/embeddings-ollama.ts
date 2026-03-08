@@ -89,28 +89,31 @@ export async function createOllamaEmbeddingProvider(
   options: EmbeddingProviderOptions,
 ): Promise<{ provider: EmbeddingProvider; client: OllamaEmbeddingClient }> {
   const client = resolveOllamaEmbeddingClient(options);
-  const embedUrl = `${client.baseUrl.replace(/\/$/, "")}/api/embeddings`;
+  const embedUrl = `${client.baseUrl.replace(/\/$/, "")}/api/embed`;
 
   const embedOne = async (text: string): Promise<number[]> => {
-    const json = await withRemoteHttpResponse({
+    const embedding = await withRemoteHttpResponse({
       url: embedUrl,
       ssrfPolicy: client.ssrfPolicy,
       init: {
         method: "POST",
         headers: client.headers,
-        body: JSON.stringify({ model: client.model, prompt: text }),
+        body: JSON.stringify({ model: client.model, input: text }),
       },
       onResponse: async (res) => {
         if (!res.ok) {
           throw new Error(`Ollama embeddings HTTP ${res.status}: ${await res.text()}`);
         }
-        return (await res.json()) as { embedding?: number[] };
+        const json = (await res.json()) as { embeddings?: number[][]; embedding?: number[] };
+        // New /api/embed returns { embeddings: [[...]] }, old /api/embeddings returned { embedding: [...] }
+        const emb = json.embeddings?.[0] ?? json.embedding;
+        if (!Array.isArray(emb)) {
+          throw new Error(`Ollama embeddings response missing embedding[]`);
+        }
+        return emb;
       },
     });
-    if (!Array.isArray(json.embedding)) {
-      throw new Error(`Ollama embeddings response missing embedding[]`);
-    }
-    return sanitizeAndNormalizeEmbedding(json.embedding);
+    return sanitizeAndNormalizeEmbedding(embedding);
   };
 
   const provider: EmbeddingProvider = {
@@ -118,7 +121,7 @@ export async function createOllamaEmbeddingProvider(
     model: client.model,
     embedQuery: embedOne,
     embedBatch: async (texts: string[]) => {
-      // Ollama /api/embeddings accepts one prompt per request.
+      // Ollama /api/embed accepts one input per request.
       return await Promise.all(texts.map(embedOne));
     },
   };

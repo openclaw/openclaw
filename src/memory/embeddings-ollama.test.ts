@@ -3,10 +3,10 @@ import type { OpenClawConfig } from "../config/config.js";
 import { createOllamaEmbeddingProvider } from "./embeddings-ollama.js";
 
 describe("embeddings-ollama", () => {
-  it("calls /api/embeddings and returns normalized vectors", async () => {
+  it("calls /api/embed and returns normalized vectors", async () => {
     const fetchMock = vi.fn(
       async () =>
-        new Response(JSON.stringify({ embedding: [3, 4] }), {
+        new Response(JSON.stringify({ embeddings: [[3, 4]] }), {
           status: 200,
           headers: { "content-type": "application/json" },
         }),
@@ -31,7 +31,7 @@ describe("embeddings-ollama", () => {
   it("resolves baseUrl/apiKey/headers from models.providers.ollama and strips /v1", async () => {
     const fetchMock = vi.fn(
       async () =>
-        new Response(JSON.stringify({ embedding: [1, 0] }), {
+        new Response(JSON.stringify({ embeddings: [[1, 0]] }), {
           status: 200,
           headers: { "content-type": "application/json" },
         }),
@@ -60,7 +60,7 @@ describe("embeddings-ollama", () => {
     await provider.embedQuery("hello");
 
     expect(fetchMock).toHaveBeenCalledWith(
-      "http://127.0.0.1:11434/api/embeddings",
+      "http://127.0.0.1:11434/api/embed",
       expect.objectContaining({
         method: "POST",
         headers: expect.objectContaining({
@@ -90,7 +90,7 @@ describe("embeddings-ollama", () => {
   it("falls back to env key when models.providers.ollama.apiKey is an unresolved SecretRef", async () => {
     const fetchMock = vi.fn(
       async () =>
-        new Response(JSON.stringify({ embedding: [1, 0] }), {
+        new Response(JSON.stringify({ embeddings: [[1, 0]] }), {
           status: 200,
           headers: { "content-type": "application/json" },
         }),
@@ -118,7 +118,7 @@ describe("embeddings-ollama", () => {
     await provider.embedQuery("hello");
 
     expect(fetchMock).toHaveBeenCalledWith(
-      "http://127.0.0.1:11434/api/embeddings",
+      "http://127.0.0.1:11434/api/embed",
       expect.objectContaining({
         headers: expect.objectContaining({
           Authorization: "Bearer ollama-env",
