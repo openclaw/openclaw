@@ -11,6 +11,7 @@ import { resolveSessionTranscriptsDirForAgent } from "../config/sessions/paths.j
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { onSessionTranscriptUpdate } from "../sessions/transcript-events.js";
 import { resolveUserPath } from "../utils.js";
+import { detectSuspiciousPatterns } from "../security/external-content.js";
 import { DEFAULT_GEMINI_EMBEDDING_MODEL } from "./embeddings-gemini.js";
 import { DEFAULT_MISTRAL_EMBEDDING_MODEL } from "./embeddings-mistral.js";
 import { DEFAULT_OLLAMA_EMBEDDING_MODEL } from "./embeddings-ollama.js";
@@ -682,6 +683,16 @@ export abstract class MemoryManagerSyncOps {
           });
         }
         return;
+      }
+      // Scan memory file content for injection patterns before indexing
+      if (entry.content) {
+        const suspicious = detectSuspiciousPatterns(entry.content);
+        if (suspicious.length > 0) {
+          log.warn("suspicious patterns detected in memory file", {
+            path: entry.path,
+            patternCount: suspicious.length,
+          });
+        }
       }
       await this.indexFile(entry, { source: "memory" });
       if (params.progress) {
