@@ -54,70 +54,85 @@ vi.mock("../../auto-reply/commands-registry.js", () => {
             : "";
       return selected ? `/${name} ${selected}` : `/${name}`;
     },
-    findCommandByNativeName: (name: string) => {
+    findCommandByNativeName: (
+      name: string,
+      _provider?: string,
+      params?: { nativeNames?: Record<string, string> },
+    ) => {
       const normalized = name.trim().toLowerCase();
-      if (normalized === "usage") {
+      const reverseNativeNames = new Map<string, string>();
+      for (const [key, mapped] of Object.entries(params?.nativeNames ?? {})) {
+        const trimmed = mapped.trim().toLowerCase();
+        if (trimmed) {
+          reverseNativeNames.set(trimmed, key);
+        }
+      }
+      const resolved = reverseNativeNames.get(normalized) ?? normalized;
+      if (resolved === "usage") {
         return usageCommand;
       }
-      if (normalized === "report") {
+      if (resolved === "report") {
         return reportCommand;
       }
-      if (normalized === "reportcompact") {
+      if (resolved === "reportcompact") {
         return reportCompactCommand;
       }
-      if (normalized === "reportexternal") {
+      if (resolved === "reportexternal") {
         return reportExternalCommand;
       }
-      if (normalized === "reportlong") {
+      if (resolved === "reportlong") {
         return reportLongCommand;
       }
-      if (normalized === "unsafeconfirm") {
+      if (resolved === "unsafeconfirm") {
         return unsafeConfirmCommand;
       }
-      if (normalized === "agentstatus") {
+      if (resolved === "agentstatus" || resolved === "status") {
         return statusAliasCommand;
       }
       return undefined;
     },
-    listNativeCommandSpecsForConfig: () => [
+    listNativeCommandSpecsForConfig: (
+      _cfg?: unknown,
+      params?: { nativeNames?: Record<string, string> },
+    ) => [
       {
-        name: "usage",
+        name: params?.nativeNames?.usage ?? "usage",
         description: "Usage",
         acceptsArgs: true,
         args: [],
       },
       {
-        name: "report",
+        name: params?.nativeNames?.report ?? "report",
         description: "Report",
         acceptsArgs: true,
         args: [],
       },
       {
-        name: "reportcompact",
+        name: params?.nativeNames?.reportcompact ?? "reportcompact",
         description: "ReportCompact",
         acceptsArgs: true,
         args: [],
       },
       {
-        name: "reportexternal",
+        name: params?.nativeNames?.reportexternal ?? "reportexternal",
         description: "ReportExternal",
         acceptsArgs: true,
         args: [],
       },
       {
-        name: "reportlong",
+        name: params?.nativeNames?.reportlong ?? "reportlong",
         description: "ReportLong",
         acceptsArgs: true,
         args: [],
       },
       {
-        name: "unsafeconfirm",
+        name: params?.nativeNames?.unsafeconfirm ?? "unsafeconfirm",
         description: "UnsafeConfirm",
         acceptsArgs: true,
         args: [],
       },
       {
-        name: "agentstatus",
+        name: params?.nativeNames?.status ?? "agentstatus",
         description: "Status",
         acceptsArgs: false,
         args: [],
@@ -222,7 +237,10 @@ function createDeferred<T>() {
   return { promise, resolve };
 }
 
-function createArgMenusHarness() {
+function createArgMenusHarness(overrides?: {
+  nativeNames?: Record<string, string>;
+  accountNativeNames?: Record<string, string>;
+}) {
   const commands = new Map<string, (args: unknown) => Promise<void>>();
   const actions = new Map<string, (args: unknown) => Promise<void>>();
   const options = new Map<string, (args: unknown) => Promise<void>>();
@@ -263,6 +281,7 @@ function createArgMenusHarness() {
       name: "openclaw",
       ephemeral: true,
       sessionPrefix: "slack:slash",
+      nativeNames: overrides?.nativeNames,
     },
     textLimit: 4000,
     app,
@@ -273,7 +292,15 @@ function createArgMenusHarness() {
 
   const account = {
     accountId: "acct",
-    config: { commands: { native: true, nativeSkills: false } },
+    config: {
+      commands: { native: true, nativeSkills: false },
+      slashCommand:
+        overrides?.accountNativeNames === undefined
+          ? undefined
+          : {
+              nativeNames: overrides.accountNativeNames,
+            },
+    },
   } as unknown;
 
   return {
@@ -690,6 +717,69 @@ describe("Slack native command argument menus", () => {
         text: "Sorry, that button is no longer valid.",
       }),
     );
+  });
+});
+
+describe("Slack native command name mapping wiring", () => {
+  it("registers custom native slash command names from account nativeNames", async () => {
+    const harness = createArgMenusHarness({
+      accountNativeNames: {
+        usage: "oz-usage",
+        status: "ozstatus",
+      },
+    });
+    await registerCommands(harness.ctx, harness.account);
+
+    expect(harness.commands.has("/oz-usage")).toBe(true);
+    expect(harness.commands.has("/ozstatus")).toBe(true);
+    expect(harness.commands.has("/usage")).toBe(false);
+    expect(harness.commands.has("/agentstatus")).toBe(false);
+  });
+
+  it("dispatches custom native slash command names to canonical internal commands", async () => {
+    const harness = createArgMenusHarness({
+      accountNativeNames: { status: "ozstatus" },
+    });
+    await registerCommands(harness.ctx, harness.account);
+
+    const statusHandler = requireHandler(harness.commands, "/ozstatus", "/ozstatus");
+    await runCommandHandler(statusHandler);
+    expectSingleDispatchedSlashBody("/status");
+  });
+
+  it("supports partial nativeNames mapping (mapped and default names together)", async () => {
+    const harness = createArgMenusHarness({
+      accountNativeNames: { usage: "ozusage" },
+    });
+    await registerCommands(harness.ctx, harness.account);
+
+    expect(harness.commands.has("/ozusage")).toBe(true);
+    expect(harness.commands.has("/agentstatus")).toBe(true);
+
+    const mappedUsageHandler = requireHandler(harness.commands, "/ozusage", "/ozusage");
+    const argMenuHandler = requireHandler(harness.actions, "openclaw_cmdarg", "arg-menu action");
+    const { payload } = await runCommandAndResolveActionsBlock(mappedUsageHandler);
+    const actionValue = (
+      findFirstActionsBlock(payload as { blocks?: Array<{ type: string }> })?.elements?.[0] as
+        | { value?: string }
+        | undefined
+    )?.value;
+    expect(actionValue).toBeTruthy();
+
+    await runArgMenuAction(argMenuHandler, {
+      action: {
+        value: actionValue,
+      },
+    });
+    expectSingleDispatchedSlashBody("/usage tokens");
+  });
+
+  it("keeps default native slash behavior unchanged when nativeNames is not configured", async () => {
+    const harness = createArgMenusHarness();
+    await registerCommands(harness.ctx, harness.account);
+
+    expect(harness.commands.has("/usage")).toBe(true);
+    expect(harness.commands.has("/agentstatus")).toBe(true);
   });
 });
 

@@ -439,6 +439,7 @@ export type PluginHookBeforePromptBuildResult = {
    * Use for static plugin guidance instead of prependContext to avoid per-turn token cost.
    */
   appendSystemContext?: string;
+  truncateBefore?: number;
 };
 
 export const PLUGIN_PROMPT_MUTATION_RESULT_FIELDS = [
@@ -446,6 +447,7 @@ export const PLUGIN_PROMPT_MUTATION_RESULT_FIELDS = [
   "prependContext",
   "prependSystemContext",
   "appendSystemContext",
+  "truncateBefore",
 ] as const satisfies readonly (keyof PluginHookBeforePromptBuildResult)[];
 
 type MissingPluginPromptMutationResultFields = Exclude<

@@ -802,6 +802,31 @@ const SlackReplyToModeByChatTypeSchema = z
   })
   .strict();
 
+const SlackNativeCommandNamePattern = /^[a-z0-9-]+$/;
+
+const SlackSlashCommandNativeNamesSchema = z
+  .record(
+    z.string(),
+    z
+      .string()
+      .regex(SlackNativeCommandNamePattern, "Native slash command names must match /^[a-z0-9-]+$/"),
+  )
+  .superRefine((nativeNames, ctx) => {
+    const seenValues = new Map<string, string>();
+    for (const [commandKey, nativeName] of Object.entries(nativeNames)) {
+      const firstCommandKey = seenValues.get(nativeName);
+      if (firstCommandKey) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: [commandKey],
+          message: `Duplicate native slash command name "${nativeName}" already used by "${firstCommandKey}"`,
+        });
+        continue;
+      }
+      seenValues.set(nativeName, commandKey);
+    }
+  });
+
 export const SlackAccountSchema = z
   .object({
     name: z.string().optional(),
@@ -854,6 +879,7 @@ export const SlackAccountSchema = z
       .object({
         enabled: z.boolean().optional(),
         name: z.string().optional(),
+        nativeNames: SlackSlashCommandNativeNamesSchema.optional(),
         sessionPrefix: z.string().optional(),
         ephemeral: z.boolean().optional(),
       })

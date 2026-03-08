@@ -93,4 +93,130 @@ describe("Slack HTTP mode config", () => {
       expect(res.issues[0]?.path).toBe("channels.slack.accounts.ops.signingSecret");
     }
   });
+
+  it("accepts top-level slack slashCommand nativeNames", () => {
+    const res = validateConfigObject({
+      channels: {
+        slack: {
+          slashCommand: {
+            nativeNames: {
+              reset: "oz-reset",
+              status: "ozstatus",
+            },
+          },
+        },
+      },
+    });
+    expect(res.ok).toBe(true);
+  });
+
+  it("accepts account-level slack slashCommand nativeNames", () => {
+    const res = validateConfigObject({
+      channels: {
+        slack: {
+          accounts: {
+            ops: {
+              slashCommand: {
+                nativeNames: {
+                  compact: "oz-compact",
+                  stop: "oz-stop",
+                },
+              },
+            },
+          },
+        },
+      },
+    });
+    expect(res.ok).toBe(true);
+  });
+
+  it("rejects top-level slack slashCommand nativeNames with invalid format", () => {
+    const res = validateConfigObject({
+      channels: {
+        slack: {
+          slashCommand: {
+            nativeNames: {
+              status: "oz_status",
+            },
+          },
+        },
+      },
+    });
+    expect(res.ok).toBe(false);
+    if (!res.ok) {
+      expect(res.issues.map((issue) => issue.path)).toContain(
+        "channels.slack.slashCommand.nativeNames.status",
+      );
+    }
+  });
+
+  it("rejects top-level slack slashCommand nativeNames with duplicate values", () => {
+    const res = validateConfigObject({
+      channels: {
+        slack: {
+          slashCommand: {
+            nativeNames: {
+              status: "ozstatus",
+              stop: "ozstatus",
+            },
+          },
+        },
+      },
+    });
+    expect(res.ok).toBe(false);
+    if (!res.ok) {
+      expect(res.issues.map((issue) => issue.path)).toContain(
+        "channels.slack.slashCommand.nativeNames.stop",
+      );
+    }
+  });
+
+  it("rejects account-level slack slashCommand nativeNames with invalid format", () => {
+    const res = validateConfigObject({
+      channels: {
+        slack: {
+          accounts: {
+            ops: {
+              slashCommand: {
+                nativeNames: {
+                  stop: "oz stop",
+                },
+              },
+            },
+          },
+        },
+      },
+    });
+    expect(res.ok).toBe(false);
+    if (!res.ok) {
+      expect(res.issues.map((issue) => issue.path)).toContain(
+        "channels.slack.accounts.ops.slashCommand.nativeNames.stop",
+      );
+    }
+  });
+
+  it("rejects account-level slack slashCommand nativeNames with duplicate values", () => {
+    const res = validateConfigObject({
+      channels: {
+        slack: {
+          accounts: {
+            ops: {
+              slashCommand: {
+                nativeNames: {
+                  compact: "oz-compact",
+                  stop: "oz-compact",
+                },
+              },
+            },
+          },
+        },
+      },
+    });
+    expect(res.ok).toBe(false);
+    if (!res.ok) {
+      expect(res.issues.map((issue) => issue.path)).toContain(
+        "channels.slack.accounts.ops.slashCommand.nativeNames.stop",
+      );
+    }
+  });
 });
