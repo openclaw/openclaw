@@ -69,7 +69,7 @@ Use **fin_market** for A-share market-wide monitoring and anomaly detection via 
 
 | endpoint           | Description          | Key Params | Example                                                                             |
 | ------------------ | -------------------- | ---------- | ----------------------------------------------------------------------------------- |
-| `market_snapshots` | 全市场快照 (polygon) | —          | `fin_market(endpoint="market_snapshots")` — 返回 12000+ 记录，含所有标的最新价/成交 |
+| `market_snapshots` | 全市场快照 (massive) | —          | `fin_market(endpoint="market_snapshots")` — 返回 12000+ 记录，含所有标的最新价/成交 |
 
 ### 市场发现 (5)
 

@@ -1,6 +1,6 @@
 ---
 name: fin-us-equity
-description: "US equity analysis — GAAP financials (us/income), earnings beat/miss with revision cycle, options strategy selection (IV/Greeks via options/chains), Fed rate sensitivity, sector rotation. Data via polygon/massive + yfinance. Use when: user mentions US tickers (AAPL/NVDA/TSLA/MSFT), asks about US earnings, options strategies, or Fed impact on equities. NOT for: A-shares (use fin-a-share), HK stocks (use fin-hk-stock), crypto (use fin-crypto), US macro rates only (use fin-macro), US index options (use fin-derivatives)."
+description: "US equity analysis — GAAP financials (us/income), earnings beat/miss with revision cycle, options strategy selection (IV/Greeks via options/chains), Fed rate sensitivity, sector rotation. Data via massive + yfinance. Use when: user mentions US tickers (AAPL/NVDA/TSLA/MSFT), asks about US earnings, options strategies, or Fed impact on equities. NOT for: A-shares (use fin-a-share), HK stocks (use fin-hk-stock), crypto (use fin-crypto), US macro rates only (use fin-macro), US index options (use fin-derivatives)."
 metadata: { "openclaw": { "emoji": "🇺🇸", "requires": { "extensions": ["findoo-datahub-plugin"] } } }
 ---
 
@@ -43,7 +43,7 @@ US tickers: `AAPL`, `NVDA`, `TSLA`, `MSFT` (no suffix, no exchange code)
 | ----------------- | ------------------------------------- | -------------------------------- |
 | `fin_macro`       | `treasury_us`                         | 10Y yield for DCF risk-free rate |
 | `fin_macro`       | `libor`                               | USD rate reference               |
-| `fin_currency`    | `news/company`                        | company news for US tickers      |
+| `fin_macro`       | `news/company`                        | company news for US tickers      |
 | `fin_ta`          | `sma`, `ema`, `rsi`, `macd`, `bbands` | technical overlay                |
 | `fin_data_ohlcv`  | `symbol=AAPL, market=equity`          | OHLCV time series                |
 | `fin_data_regime` | `symbol=AAPL, market=equity`          | bull/bear/sideways regime        |
@@ -54,14 +54,13 @@ US tickers: `AAPL`, `NVDA`, `TSLA`, `MSFT` (no suffix, no exchange code)
 
 | Provider | Coverage                       | Notes              |
 | -------- | ------------------------------ | ------------------ |
-| polygon  | OHLCV + fundamentals           | needs API key      |
-| massive  | supplementary                  | —                  |
+| massive  | OHLCV + fundamentals           | needs API key      |
 | yfinance | price + fundamentals + options | free, ~15min delay |
 
 > **⚠️ US 股票 Provider 注意事项:**
 >
 > - `price/historical` 默认 tushare provider，对 US 股票返回 500；**必须添加 `provider="yfinance"`**
-> - `fundamental/ratios` 仅 tushare provider 可用，对 US 股票返回 204；改用 `fundamental/metrics` (polygon) 或 `us/income` 手动计算
+> - `fundamental/ratios` 仅 tushare provider 可用，对 US 股票返回 204；改用 `fundamental/metrics` (massive) 或 `us/income` 手动计算
 > - `fundamental/balance` 路径正确（非 `us/balance`），需确认 provider 支持
 
 ## Analysis Patterns

@@ -20,7 +20,7 @@
    |-- Basic Auth: admin:<key>
    +-- 171 endpoints -> 7 providers
         |-- tushare  (119 eps) -- A股/港股/期货/宏观/指数
-        |-- polygon  (33 eps)  -- 美股/加密/FX/期权
+        |-- massive  (33 eps)  -- 美股/加密/FX/期权
         |-- yfinance (29 eps)  -- 美股/ETF/加密
         |-- defillama(10 eps)  -- DeFi TVL/Yields/Stablecoins
         |-- ccxt     (7 eps)   -- CEX 实时行情/深度/Funding
@@ -34,15 +34,15 @@
 
 | 类别            | 端点数 | 主要 Provider                          | 代表性 API                                                               |
 | --------------- | ------ | -------------------------------------- | ------------------------------------------------------------------------ |
-| **equity**      | **86** | tushare(56), polygon(17), yfinance(18) | price/historical, fundamental/income, moneyflow, flow/hsgt, hk/\*, us/\* |
+| **equity**      | **86** | tushare(56), massive(17), yfinance(18) | price/historical, fundamental/income, moneyflow, flow/hsgt, hk/\*, us/\* |
 | **crypto**      | **23** | ccxt(7), coingecko(6), defillama(10)   | market/ticker, defi/protocols, coin/market                               |
-| **economy**     | **21** | tushare(16), worldbank(5), polygon(2)  | gdp/real, cpi, shibor, treasury_cn/us                                    |
-| **derivatives** | **12** | tushare(10), polygon(1), yfinance(2)   | futures/holding, options/chains, convertible                             |
-| **index**       | **12** | tushare(8), polygon(3), yfinance(2)    | constituents, thematic/ths\_\*, daily_basic                              |
+| **economy**     | **21** | tushare(16), worldbank(5), massive(2)  | gdp/real, cpi, shibor, treasury_cn/us                                    |
+| **derivatives** | **12** | tushare(10), massive(1), yfinance(2)   | futures/holding, options/chains, convertible                             |
+| **index**       | **12** | tushare(8), massive(3), yfinance(2)    | constituents, thematic/ths\_\*, daily_basic                              |
 | **etf**         | **9**  | tushare(8), yfinance(2)                | fund/portfolio, fund/manager, nav                                        |
 | **fixedincome** | **4**  | tushare(4)                             | rate/shibor, rate/libor, rate/hibor                                      |
-| **currency**    | **3**  | polygon(2), yfinance(1), tushare(1)    | price/historical, snapshots                                              |
-| **news**        | **1**  | polygon + yfinance + tushare           | company news                                                             |
+| **currency**    | **3**  | massive(2), yfinance(1), tushare(1)    | price/historical, snapshots                                              |
+| **news**        | **1**  | massive + yfinance + tushare           | company news                                                             |
 
 Tushare 贡献 119/209 (57%) 的 provider-endpoint 映射，是中国市场数据的绝对主力。
 
@@ -53,16 +53,16 @@ Tushare 贡献 119/209 (57%) 的 provider-endpoint 映射，是中国市场数�
 
 | Endpoint                                 | Provider(s)                |
 | ---------------------------------------- | -------------------------- |
-| /equity/calendar/earnings                | polygon                    |
-| /equity/calendar/ipo                     | polygon                    |
-| /equity/compare/peers                    | polygon                    |
+| /equity/calendar/earnings                | massive                    |
+| /equity/calendar/ipo                     | massive                    |
+| /equity/compare/peers                    | massive                    |
 | /equity/concept/concept_detail           | tushare                    |
 | /equity/concept/concept_list             | tushare                    |
-| /equity/discovery/active                 | polygon, yfinance          |
+| /equity/discovery/active                 | massive, yfinance          |
 | /equity/discovery/aggressive_small_caps  | yfinance                   |
-| /equity/discovery/gainers                | polygon, yfinance          |
+| /equity/discovery/gainers                | massive, yfinance          |
 | /equity/discovery/growth_tech            | yfinance                   |
-| /equity/discovery/losers                 | polygon, yfinance          |
+| /equity/discovery/losers                 | massive, yfinance          |
 | /equity/discovery/name_change            | tushare                    |
 | /equity/discovery/new_share              | tushare                    |
 | /equity/discovery/undervalued_growth     | yfinance                   |
@@ -76,21 +76,21 @@ Tushare 贡献 119/209 (57%) 的 provider-endpoint 映射，是中国市场数�
 | /equity/flow/hsgt_top10                  | tushare                    |
 | /equity/fundamental/adj_factor           | tushare                    |
 | /equity/fundamental/backup_daily         | tushare                    |
-| /equity/fundamental/balance              | polygon, yfinance, tushare |
+| /equity/fundamental/balance              | massive, yfinance, tushare |
 | /equity/fundamental/balance_vip          | tushare                    |
-| /equity/fundamental/cash                 | polygon, yfinance, tushare |
+| /equity/fundamental/cash                 | massive, yfinance, tushare |
 | /equity/fundamental/cashflow_vip         | tushare                    |
 | /equity/fundamental/dividend_detail      | tushare                    |
-| /equity/fundamental/dividends            | polygon, yfinance, tushare |
+| /equity/fundamental/dividends            | massive, yfinance, tushare |
 | /equity/fundamental/earnings_forecast    | tushare                    |
 | /equity/fundamental/financial_audit      | tushare                    |
 | /equity/fundamental/financial_express    | tushare                    |
 | /equity/fundamental/forecast_vip         | tushare                    |
-| /equity/fundamental/historical_splits    | polygon                    |
-| /equity/fundamental/income               | polygon, yfinance, tushare |
+| /equity/fundamental/historical_splits    | massive                    |
+| /equity/fundamental/income               | massive, yfinance, tushare |
 | /equity/fundamental/income_vip           | tushare                    |
 | /equity/fundamental/management           | yfinance                   |
-| /equity/fundamental/metrics              | polygon, yfinance          |
+| /equity/fundamental/metrics              | massive, yfinance          |
 | /equity/fundamental/ratios               | tushare                    |
 | /equity/fundamental/revenue_per_segment  | tushare                    |
 | /equity/fundamental/revenue_segment_vip  | tushare                    |
@@ -111,8 +111,8 @@ Tushare 贡献 119/209 (57%) 的 provider-endpoint 映射，是中国市场数�
 | /equity/market/suspend                   | tushare                    |
 | /equity/market/top_inst                  | tushare                    |
 | /equity/market/top_list                  | tushare                    |
-| /equity/market/trade_calendar            | polygon, tushare           |
-| /equity/market_snapshots                 | polygon                    |
+| /equity/market/trade_calendar            | massive, tushare           |
+| /equity/market_snapshots                 | massive                    |
 | /equity/moneyflow/block_trade            | tushare                    |
 | /equity/moneyflow/individual             | tushare                    |
 | /equity/moneyflow/industry               | tushare                    |
@@ -120,18 +120,18 @@ Tushare 贡献 119/209 (57%) 的 provider-endpoint 映射，是中国市场数�
 | /equity/ownership/major_holders          | tushare                    |
 | /equity/ownership/repurchase             | tushare                    |
 | /equity/ownership/share_float            | tushare                    |
-| /equity/ownership/share_statistics       | polygon, yfinance          |
+| /equity/ownership/share_statistics       | massive, yfinance          |
 | /equity/ownership/shareholder_trade      | tushare                    |
 | /equity/ownership/top10_float_holders    | tushare                    |
 | /equity/ownership/top10_holders          | tushare                    |
 | /equity/pledge/detail                    | tushare                    |
 | /equity/pledge/stat                      | tushare                    |
-| /equity/price/historical                 | polygon, yfinance, tushare |
-| /equity/price/quote                      | polygon, yfinance, tushare |
-| /equity/profile                          | polygon, yfinance, tushare |
+| /equity/price/historical                 | massive, yfinance, tushare |
+| /equity/price/quote                      | massive, yfinance, tushare |
+| /equity/profile                          | massive, yfinance, tushare |
 | /equity/screener                         | yfinance                   |
-| /equity/search                           | polygon, tushare           |
-| /equity/shorts/short_volume              | polygon                    |
+| /equity/search                           | massive, tushare           |
+| /equity/shorts/short_volume              | massive                    |
 | /equity/us/adj_factor                    | tushare                    |
 | /equity/us/balancesheet                  | tushare                    |
 | /equity/us/basic                         | tushare                    |
@@ -168,8 +168,8 @@ Tushare 贡献 119/209 (57%) 的 provider-endpoint 映射，是中国市场数�
 | /crypto/market/ticker       | ccxt                    |
 | /crypto/market/tickers      | ccxt                    |
 | /crypto/market/trades       | ccxt                    |
-| /crypto/price/historical    | ccxt, polygon, yfinance |
-| /crypto/search              | ccxt, polygon           |
+| /crypto/price/historical    | ccxt, massive, yfinance |
+| /crypto/search              | ccxt, massive           |
 
 </details>
 
@@ -179,7 +179,7 @@ Tushare 贡献 119/209 (57%) 的 provider-endpoint 映射，是中国市场数�
 | Endpoint                      | Provider(s)      |
 | ----------------------------- | ---------------- |
 | /economy/calendar             | tushare          |
-| /economy/cpi                  | polygon, tushare |
+| /economy/cpi                  | massive, tushare |
 | /economy/gdp/real             | tushare          |
 | /economy/hibor                | tushare          |
 | /economy/index_global         | tushare          |
@@ -192,7 +192,7 @@ Tushare 贡献 119/209 (57%) 的 provider-endpoint 映射，是中国市场数�
 | /economy/shibor_quote         | tushare          |
 | /economy/social_financing     | tushare          |
 | /economy/treasury_cn          | tushare          |
-| /economy/treasury_us          | polygon, tushare |
+| /economy/treasury_us          | massive, tushare |
 | /economy/worldbank/country    | worldbank        |
 | /economy/worldbank/gdp        | worldbank        |
 | /economy/worldbank/indicator  | worldbank        |
@@ -211,7 +211,7 @@ Tushare 贡献 119/209 (57%) 的 provider-endpoint 映射，是中国市场数�
 | ------------------------------- | ----------------- |
 | /derivatives/convertible/basic  | tushare           |
 | /derivatives/convertible/daily  | tushare           |
-| /derivatives/futures/curve      | polygon, yfinance |
+| /derivatives/futures/curve      | massive, yfinance |
 | /derivatives/futures/historical | yfinance, tushare |
 | /derivatives/futures/holding    | tushare           |
 | /derivatives/futures/info       | tushare           |
@@ -219,22 +219,22 @@ Tushare 贡献 119/209 (57%) 的 provider-endpoint 映射，是中国市场数�
 | /derivatives/futures/settle     | tushare           |
 | /derivatives/futures/warehouse  | tushare           |
 | /derivatives/options/basic      | tushare           |
-| /derivatives/options/chains     | polygon, yfinance |
+| /derivatives/options/chains     | massive, yfinance |
 | /derivatives/options/daily      | tushare           |
 
 **index (12)**
 
 | Endpoint                   | Provider(s)                |
 | -------------------------- | -------------------------- |
-| /index/available           | polygon, yfinance          |
+| /index/available           | massive, yfinance          |
 | /index/classify            | tushare                    |
 | /index/constituents        | tushare                    |
 | /index/daily_basic         | tushare                    |
 | /index/global_index        | tushare                    |
 | /index/info                | tushare                    |
 | /index/members             | tushare                    |
-| /index/price/historical    | polygon, yfinance, tushare |
-| /index/snapshots           | polygon                    |
+| /index/price/historical    | massive, yfinance, tushare |
+| /index/snapshots           | massive                    |
 | /index/thematic/ths_daily  | tushare                    |
 | /index/thematic/ths_index  | tushare                    |
 | /index/thematic/ths_member | tushare                    |
@@ -266,15 +266,15 @@ Tushare 贡献 119/209 (57%) 的 provider-endpoint 映射，是中国市场数�
 
 | Endpoint                   | Provider(s)                |
 | -------------------------- | -------------------------- |
-| /currency/price/historical | polygon, yfinance, tushare |
-| /currency/search           | polygon                    |
-| /currency/snapshots        | polygon                    |
+| /currency/price/historical | massive, yfinance, tushare |
+| /currency/search           | massive                    |
+| /currency/snapshots        | massive                    |
 
 **news (1)**
 
 | Endpoint      | Provider(s)                |
 | ------------- | -------------------------- |
-| /news/company | polygon, yfinance, tushare |
+| /news/company | massive, yfinance, tushare |
 
 </details>
 
@@ -301,7 +301,7 @@ findoo-datahub-plugin/           # ~700 LOC 核心代码
 |   |   |-- ta(indicator, params)        -- 技术分析
 |   |   |-- getOHLCV(params)             -- 标准化 K 线
 |   |   |-- getTicker(symbol, market)    -- 标准化 Ticker
-|   |   +-- detectEquityProvider(sym)    -- A/HK->tushare, US->polygon
+|   |   +-- detectEquityProvider(sym)    -- A/HK->tushare, US->massive
 |   |-- ohlcv-cache.ts          # 119 LOC -- SQLite 本地缓存
 |   |   |-- upsertBatch()       -- INSERT OR REPLACE 批量写入
 |   |   |-- query(sym, mkt, tf, since?)  -- 范围查询

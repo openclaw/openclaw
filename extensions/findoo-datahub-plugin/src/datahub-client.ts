@@ -208,5 +208,5 @@ function detectEquityProvider(symbol: string): string {
   ) {
     return "tushare";
   }
-  return "polygon";
+  return "massive";
 }

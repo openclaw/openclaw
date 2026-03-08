@@ -127,14 +127,14 @@ Auxiliary signals:
 
 ### CN-US Spread Trade
 
-`treasury_cn`(limit=60) + `treasury_us`(limit=60) + `currency/price/historical`(symbol="USDCNH", limit=60, provider="polygon")
+`treasury_cn`(limit=60) + `treasury_us`(limit=60) + `currency/price/historical`(symbol="USDCNH", limit=60, provider="massive")
 
 > **字段名注意:**
 >
 > - `treasury_cn` 返回: `yield_value` (收益率) + `curve_term` (期限: 1Y/2Y/5Y/10Y/30Y)
 > - `treasury_us` 返回: `y5`/`y7`/`y10`/`y20`/`y30` (各期限收益率，非通用 `yield` 字段)
 > - ⚠️ `treasury_us` 数据源待验证 — 部分返回值与中国国债收益率相似 (10Y≈1.80%)，跨境利差计算前请人工校验
-> - `currency/price/historical` 需添加 `provider="polygon"` 以获取 FX 数据
+> - `currency/price/historical` 需添加 `provider="massive"` 以获取 FX 数据
 
 | 10Y Spread (CN-US) | FX impact        | Positioning                                      |
 | ------------------ | ---------------- | ------------------------------------------------ |
