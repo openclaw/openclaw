@@ -1,7 +1,9 @@
 import { spawnSync } from "node:child_process";
 import fsSync from "node:fs";
+import { isRestartEnabled } from "../../config/commands.js";
 import { readBestEffortConfig, resolveGatewayPort } from "../../config/config.js";
 import { resolveGatewayService } from "../../daemon/service.js";
+import { probeGateway } from "../../gateway/probe.js";
 import { findGatewayPidsOnPortSync } from "../../infra/restart.js";
 import { defaultRuntime } from "../../runtime.js";
 import { theme } from "../../terminal/theme.js";
@@ -120,6 +122,26 @@ function formatGatewayPidList(pids: number[]): string {
   return pids.join(", ");
 }
 
+async function assertUnmanagedGatewayRestartEnabled(port: number): Promise<void> {
+  const probe = await probeGateway({
+    url: `ws://127.0.0.1:${port}`,
+    auth: {
+      token: process.env.OPENCLAW_GATEWAY_TOKEN?.trim() || undefined,
+      password: process.env.OPENCLAW_GATEWAY_PASSWORD?.trim() || undefined,
+    },
+    timeoutMs: 1_000,
+  }).catch(() => null);
+
+  if (!probe?.ok) {
+    return;
+  }
+  if (!isRestartEnabled(probe.configSnapshot as { commands?: unknown } | undefined)) {
+    throw new Error(
+      "Gateway restart is disabled in the running gateway config (commands.restart=false); unmanaged SIGUSR1 restart would be ignored",
+    );
+  }
+}
+
 function resolveVerifiedGatewayListenerPids(port: number): number[] {
   return resolveGatewayListenerPids(port).filter(
     (pid): pid is number => Number.isFinite(pid) && pid > 0,
@@ -141,6 +163,7 @@ async function stopGatewayWithoutServiceManager(port: number) {
 }
 
 async function restartGatewayWithoutServiceManager(port: number) {
+  await assertUnmanagedGatewayRestartEnabled(port);
   const pids = resolveVerifiedGatewayListenerPids(port);
   if (pids.length === 0) {
     return null;

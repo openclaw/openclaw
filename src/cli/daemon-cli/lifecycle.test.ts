@@ -36,6 +36,17 @@ const renderGatewayPortHealthDiagnostics = vi.fn(() => ["diag: unhealthy port"])
 const renderRestartDiagnostics = vi.fn(() => ["diag: unhealthy runtime"]);
 const resolveGatewayPort = vi.fn(() => 18789);
 const findGatewayPidsOnPortSync = vi.fn<(port: number) => number[]>(() => []);
+const probeGateway = vi.fn<
+  (opts: {
+    url: string;
+    auth?: { token?: string; password?: string };
+    timeoutMs: number;
+  }) => Promise<{
+    ok: boolean;
+    configSnapshot: unknown;
+  }>
+>();
+const isRestartEnabled = vi.fn<(config?: { commands?: unknown }) => boolean>(() => true);
 const loadConfig = vi.fn(() => ({}));
 
 vi.mock("node:fs", () => ({
@@ -56,6 +67,18 @@ vi.mock("../../config/config.js", () => ({
 
 vi.mock("../../infra/restart.js", () => ({
   findGatewayPidsOnPortSync: (port: number) => findGatewayPidsOnPortSync(port),
+}));
+
+vi.mock("../../gateway/probe.js", () => ({
+  probeGateway: (opts: {
+    url: string;
+    auth?: { token?: string; password?: string };
+    timeoutMs: number;
+  }) => probeGateway(opts),
+}));
+
+vi.mock("../../config/commands.js", () => ({
+  isRestartEnabled: (config?: { commands?: unknown }) => isRestartEnabled(config),
 }));
 
 vi.mock("../../daemon/service.js", () => ({
@@ -99,6 +122,8 @@ describe("runDaemonRestart health checks", () => {
     renderRestartDiagnostics.mockReset();
     resolveGatewayPort.mockReset();
     findGatewayPidsOnPortSync.mockReset();
+    probeGateway.mockReset();
+    isRestartEnabled.mockReset();
     loadConfig.mockReset();
     mockReadFileSync.mockReset();
     mockSpawnSync.mockReset();
@@ -127,6 +152,11 @@ describe("runDaemonRestart health checks", () => {
       healthy: true,
       portUsage: { port: 18789, status: "busy", listeners: [], hints: [] },
     });
+    probeGateway.mockResolvedValue({
+      ok: true,
+      configSnapshot: { commands: { restart: true } },
+    });
+    isRestartEnabled.mockReturnValue(true);
     mockReadFileSync.mockImplementation((path: string) => {
       const match = path.match(/\/proc\/(\d+)\/cmdline$/);
       if (!match) {
@@ -227,6 +257,7 @@ describe("runDaemonRestart health checks", () => {
 
     expect(findGatewayPidsOnPortSync).toHaveBeenCalledWith(18789);
     expect(killSpy).toHaveBeenCalledWith(4200, "SIGUSR1");
+    expect(probeGateway).toHaveBeenCalledTimes(1);
     expect(waitForGatewayHealthyListener).toHaveBeenCalledTimes(1);
     expect(waitForGatewayHealthyRestart).not.toHaveBeenCalled();
     expect(terminateStaleGatewayPids).not.toHaveBeenCalled();
@@ -244,6 +275,25 @@ describe("runDaemonRestart health checks", () => {
 
     await expect(runDaemonRestart({ json: true })).rejects.toThrow(
       "multiple gateway processes are listening on port 18789",
+    );
+  });
+
+  it("fails unmanaged restart when the running gateway has commands.restart disabled", async () => {
+    findGatewayPidsOnPortSync.mockReturnValue([4200]);
+    probeGateway.mockResolvedValue({
+      ok: true,
+      configSnapshot: { commands: { restart: false } },
+    });
+    isRestartEnabled.mockReturnValue(false);
+    runServiceRestart.mockImplementation(
+      async (params: RestartParams & { onNotLoaded?: () => Promise<unknown> }) => {
+        await params.onNotLoaded?.();
+        return true;
+      },
+    );
+
+    await expect(runDaemonRestart({ json: true })).rejects.toThrow(
+      "Gateway restart is disabled in the running gateway config",
     );
   });
 
