@@ -38,6 +38,20 @@ export function buildGroupDisplayName(params: {
       : groupChannel || subject || space || "") || "";
   const fallbackId = params.id?.trim() || params.key;
   const rawLabel = detail || fallbackId;
+
+  if (providerKey === "feishu") {
+    if (!rawLabel) {
+      return providerKey;
+    }
+    if (!fallbackId || rawLabel === fallbackId || rawLabel.includes(fallbackId)) {
+      return `${providerKey}:${rawLabel}`;
+    }
+    if (rawLabel.toLowerCase().includes(" id:")) {
+      return `${providerKey}:${rawLabel}`;
+    }
+    return `${providerKey}:${rawLabel} (${fallbackId})`;
+  }
+
   let token = normalizeGroupLabel(rawLabel);
   if (!token) {
     token = normalizeGroupLabel(shortenGroupId(rawLabel));
