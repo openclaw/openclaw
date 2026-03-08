@@ -40,11 +40,14 @@ pnpm gateway:watch
 This maps to:
 
 ```bash
-node --watch-path src --watch-path tsconfig.json --watch-path package.json --watch-preserve-output scripts/run-node.mjs gateway --force
+node scripts/gateway-watch.mjs
 ```
 
 Add any gateway CLI flags after `gateway:watch` and they will be passed through
 on each restart.
+
+On native Windows, `gateway:watch` uses a compatible fallback (`gateway run ... --allow-unconfigured`)
+and runs `openclaw gateway stop` best-effort first to avoid port conflicts with an installed daemon.
 
 ## Dev profile + dev gateway (--dev)
 
