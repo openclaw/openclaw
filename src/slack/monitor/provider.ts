@@ -1,4 +1,5 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
+import { parse as parseQueryString } from "node:querystring";
 import SlackBolt from "@slack/bolt";
 import { resolveTextChunkLimit } from "../../auto-reply/chunk.js";
 import { DEFAULT_GROUP_HISTORY_LIMIT } from "../../auto-reply/reply/history.js";
@@ -21,7 +22,7 @@ import { normalizeResolvedSecretInputString } from "../../config/types.secrets.j
 import { createConnectedChannelStatusPatch } from "../../gateway/channel-status-patches.js";
 import { warn } from "../../globals.js";
 import { computeBackoff, sleepWithAbort } from "../../infra/backoff.js";
-import { installRequestBodyLimitGuard } from "../../infra/http-body.js";
+import { installRequestBodyLimitGuard, readRequestBodyWithLimit } from "../../infra/http-body.js";
 import { normalizeMainKey } from "../../routing/session-key.js";
 import { createNonExitingRuntime, type RuntimeEnv } from "../../runtime.js";
 import { normalizeStringEntries } from "../../shared/string-normalization.js";
@@ -219,6 +220,33 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
             return;
           }
           try {
+            // Slack url_verification challenge requests don't include signatures
+            // We need to handle them before the HTTPReceiver's signature verification
+            const rawBody = await readRequestBodyWithLimit(req, {
+              maxBytes: SLACK_WEBHOOK_MAX_BODY_BYTES,
+              timeoutMs: SLACK_WEBHOOK_BODY_TIMEOUT_MS,
+            });
+            const contentType = req.headers["content-type"] || "";
+            
+            let body: { [key: string]: unknown } | unknown;
+            if (contentType.includes("application/x-www-form-urlencoded")) {
+              body = parseQueryString(rawBody);
+            } else {
+              try {
+                body = JSON.parse(rawBody);
+              } catch {
+                body = {};
+              }
+            }
+            
+            // Handle url_verification challenge (no signature)
+            if (body?.type === "url_verification") {
+              res.writeHead(200, { "content-type": "application/json" });
+              res.end(JSON.stringify({ challenge: body.challenge }));
+              return;
+            }
+            
+            // Delegate to HTTPReceiver for all other requests
             await Promise.resolve(receiver.requestListener(req, res));
           } catch (err) {
             if (!guard.isTripped()) {
