@@ -1,0 +1,89 @@
+<!-- 【外层容器】控制全局字体、行高、对齐方式 -->
+<div style="font-family: -apple-system, BlinkMacSystemFont, 'Helvetica Neue', 'PingFang SC', 'Microsoft YaHei', sans-serif; line-height: 1.8; color: #333; padding: 15px; max-width: 100%; box-sizing: border-box; background-color: #ffffff; text-indent: 0;">
+
+    <!-- ⚠️ 标题请在微信公众号编辑器中单独填写，不要在 HTML 中包含 -->
+
+    <!-- 【1. 导语/摘要块】用于文章开篇的背景介绍 - 使用TABLE结构确保微信兼容性 -->
+    <table style="width: 100%; border-collapse: collapse; margin-bottom: 30px;">
+        <tr>
+            <td style="background-color: #f0f7ff; border-left: 5px solid #007acc; padding: 20px; text-align: left;">
+                <p style="margin: 0; font-size: 15px; color: #444; text-indent: 0; text-align: left;">
+                    这里填写导语内容。例如：如果你最近打开某某网站，会发现一个显眼的标语...
+                </p>
+            </td>
+        </tr>
+    </table>
+
+    <!-- 【2. 章节标题模块】序号+文字（已解决对齐与间距问题） -->
+    <h2 style="margin: 40px 0 20px; text-align: left; line-height: 32px;">
+        <span style="display: inline-block; background-color: #007acc; color: #fff; width: 28px; height: 28px; border-radius: 50%; text-align: center; line-height: 28px; font-size: 14px; vertical-align: middle;">01</span>
+        <span style="display: inline-block; font-size: 20px; color: #007acc; font-weight: bold; vertical-align: middle; margin-left: 8px;">
+            这里填写章节大标题
+        </span>
+    </h2>
+
+    <!-- 【3. 标准正文】 -->
+    <p style="margin-bottom: 15px; text-indent: 0; text-align: left;">
+        这里填写正常的正文段落。可以使用 <strong style="color: #007acc;">蓝色加粗</strong> 来强调核心词汇。
+    </p>
+
+    <!-- 【4. 重点/比喻对比块】用于重点强调或打比方 - 使用TABLE结构 -->
+    <table style="width: 100%; border-collapse: collapse; margin: 20px 0;">
+        <tr>
+            <td style="background-color: #fffaf0; border-left: 5px solid #ff9800; padding: 15px; font-size: 15px; color: #666; text-indent: 0;">
+                <p style="margin-bottom: 8px; text-indent: 0;">🏗️ <strong>维度 A：</strong> 描述旧的方式或基础内容。</p>
+                <p style="margin: 0; text-indent: 0;">✨ <strong>维度 B：</strong> 描述新的方式或核心亮点。</p>
+            </td>
+        </tr>
+    </table>
+
+    <!-- 【5. 核心功能/要点卡片】适合列出3-4个关键功能点 - 使用TABLE结构 -->
+    <table style="width: 100%; border-collapse: collapse; margin: 15px 0;">
+        <tr>
+            <td style="background-color: #f0f7ff; border-left: 5px solid #007acc; padding: 15px;">
+                <strong style="color: #007acc; display: block; margin-bottom: 5px;">📍 功能/要点名称</strong>
+                <p style="margin: 0; font-size: 14px; color: #555; text-indent: 0;">这里详细描述该要点的内容。</p>
+            </td>
+        </tr>
+    </table>
+    <!-- 如有更多卡片，复制上方 table 即可 -->
+
+    <table style="width: 100%; border-collapse: collapse; margin: 15px 0;">
+        <tr>
+            <td style="background-color: #f0fff4; border-left: 5px solid #10b981; padding: 15px;">
+                <strong style="color: #10b981; display: block; margin-bottom: 5px;">📍 功能/要点名称2</strong>
+                <p style="margin: 0; font-size: 14px; color: #555; text-indent: 0;">这里详细描述该要点的内容。</p>
+            </td>
+        </tr>
+    </table>
+
+    <!-- 【6. 列表操作指南】适合步骤说明 -->
+    <p style="margin-bottom: 10px; text-indent: 0; text-align: left; font-weight: bold;">具体操作步骤：</p>
+    <ul style="padding-left: 20px; color: #444; text-indent: 0;">
+        <li style="margin-bottom: 10px;">第一步：内容描述。</li>
+        <li style="margin-bottom: 10px;">第二步：内容描述。</li>
+    </ul>
+
+    <!-- 【7. 总结/文末语】 -->
+    <h2 style="margin: 40px 0 20px; text-align: left; line-height: 32px;">
+        <span style="display: inline-block; background-color: #007acc; color: #fff; width: 28px; height: 28px; border-radius: 50%; text-align: center; line-height: 28px; font-size: 14px; vertical-align: middle;">✓</span>
+        <span style="display: inline-block; font-size: 20px; color: #007acc; font-weight: bold; vertical-align: middle; margin-left: 8px;">总结</span>
+    </h2>
+
+    <!-- 【8. 总结内容块】 - 使用TABLE结构 -->
+    <table style="width: 100%; border-collapse: collapse; margin: 20px 0;">
+        <tr>
+            <td style="background-color: #fff5f0; border-left: 5px solid #ff6b35; padding: 20px;">
+                <p style="margin: 0; font-size: 15px; color: #333;">这里填写总结内容。可以总结全文要点，给出行动建议。</p>
+            </td>
+        </tr>
+    </table>
+
+    <!-- 9. 资源链接（干净的页脚） -->
+    <section style="border-top: 1px dashed #ccc; padding-top: 20px; font-size: 14px; color: #888; text-indent: 0;">
+        <p style="margin-bottom: 10px; font-weight: bold; text-indent: 0;">🔗 相关资源：</p>
+        <p style="margin: 5px 0; text-indent: 0;">资源 A：<span style="color: #1a2a6c;">domain-a.com</span></p>
+        <p style="margin: 5px 0; text-indent: 0;">资源 B：<span style="color: #1a2a6c;">domain-b.com</span></p>
+    </section>
+
+</div>

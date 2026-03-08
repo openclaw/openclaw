@@ -1,0 +1,18 @@
+# Python dependencies for wechat-article-formatter skill
+# 微信公众号文章格式化工具的Python依赖
+
+# Markdown解析
+markdown>=3.4.0
+beautifulsoup4>=4.12.0
+
+# CSS处理
+cssutils>=2.9.0
+
+# HTML解析
+lxml>=4.9.0
+
+# 文件监听（用于实时预览）
+watchdog>=3.0.0
+
+# 代码高亮（可选，如果需要更好的语法高亮）
+Pygments>=2.15.0

@@ -1,0 +1,146 @@
+<!-- 【1. 模拟文档属性区】用于展示文章元数据 (作者/分类/时间) -->
+<!-- 使用表格结构，带有轻微的底部边框 -->
+<table style="width: 100%; border-collapse: collapse; margin-bottom: 30px; border-bottom: 1px solid #e0e0e0;">
+    <tr>
+        <td style="padding-bottom: 15px;">
+            <p style="margin: 0 0 5px 0; font-size: 12px; color: #999; text-transform: uppercase; letter-spacing: 1px;">Product Weekly</p>
+            <h1 style="margin: 0; font-size: 22px; font-weight: bold; color: #333; line-height: 1.4;">
+                这里填写文章主标题
+            </h1>
+            <div style="margin-top: 10px; font-size: 14px; color: #666;">
+                <span style="background: #f0f0f0; padding: 2px 6px; border-radius: 4px; font-size: 12px; margin-right: 8px;">PM 笔记</span>
+                <span style="background: #e3f2fd; color: #0277bd; padding: 2px 6px; border-radius: 4px; font-size: 12px;">深度复盘</span>
+            </div>
+        </td>
+    </tr>
+</table>
+
+<!-- 【2. 核心观点/摘要块（Callout）】 -->
+<!-- 经典的文档“提示块”风格，用于写摘要或核心结论 -->
+<table style="width: 100%; border-collapse: collapse; margin-bottom: 30px;">
+    <tr>
+        <td style="background-color: #f7f9fa; border-radius: 6px; padding: 16px; border: 1px solid #ebeced;">
+            <p style="margin: 0; font-size: 16px; margin-bottom: 5px;">💡 <strong>核心观点</strong></p>
+            <p style="margin: 0; font-size: 15px; color: #555;">
+                这里填写文章的 TL;DR（太长不看版）。例如：本文分析了 X 功能的迭代逻辑，结论是留存率提升的关键在于优化首屏加载体验。
+            </p>
+        </td>
+    </tr>
+</table>
+
+<!-- 【3. 章节标题】带有左侧色条的文档标题风格 -->
+<h2 style="margin: 40px 0 20px; text-align: left; line-height: 1.5;">
+    <span style="display: inline-block; border-left: 4px solid #3370ff; padding-left: 12px; font-size: 18px; color: #333; font-weight: bold;">
+        01. 需求背景与洞察
+    </span>
+</h2>
+
+<!-- 【4. 标准正文】 -->
+<p style="margin-bottom: 15px; font-size: 15px; color: #37352f;">
+    这里是正文部分。作为产品经理，我们经常需要拆解复杂的问题。可以使用 <span style="background-color: #fff5cc; padding: 0 4px; border-radius: 2px; color: #333;">高亮底色</span> 来标记关键指标或结论，这种风格类似于在文档中做标记。
+</p>
+
+<!-- 【5. 用户故事/场景卡片（User Story）】 -->
+<!-- 适合描述用户痛点或场景 -->
+<table style="width: 100%; border-collapse: collapse; margin: 25px 0;">
+    <tr>
+        <!-- 左侧头像模拟列 -->
+        <td style="width: 50px; vertical-align: top; padding-right: 10px;">
+            <div style="width: 40px; height: 40px; background-color: #f0f0f0; border-radius: 50%; text-align: center; line-height: 40px; font-size: 20px;">👤</div>
+        </td>
+        <!-- 右侧对话气泡 -->
+        <td style="background-color: #f5f7ff; border-radius: 0 12px 12px 12px; padding: 15px; position: relative;">
+            <p style="margin: 0; font-size: 12px; color: #3370ff; font-weight: bold; margin-bottom: 5px;">User Story @典型用户</p>
+            <p style="margin: 0; font-size: 14px; color: #444; font-style: italic;">
+                "作为一个高频用户，我每次打开 App 都要点击 4 次才能找到我的订单，这让我感到非常沮丧，尤其是在赶时间的时候。"
+            </p>
+        </td>
+    </tr>
+</table>
+
+<!-- 【6. 逻辑分析/框架图替代方案】 -->
+<!-- 用列表展示 SWOT、5W1H 或 迭代计划 -->
+<div style="border: 1px solid #e0e0e0; border-radius: 6px; padding: 15px; margin: 20px 0;">
+    <p style="margin: 0 0 10px 0; font-weight: bold; font-size: 14px; color: #666; border-bottom: 1px solid #eee; padding-bottom: 8px;">📌 迭代计划 (Roadmap)</p>
+    
+    <p style="margin: 8px 0; font-size: 14px; display: flex; align-items: center;">
+        <span style="display: inline-block; width: 14px; height: 14px; background: #e0e0e0; border-radius: 3px; margin-right: 8px; flex-shrink: 0;"></span>
+        <span style="text-decoration: line-through; color: #999;">P0: 基础功能上线 (Done)</span>
+    </p>
+    <p style="margin: 8px 0; font-size: 14px; display: flex; align-items: center;">
+        <span style="display: inline-block; width: 14px; height: 14px; border: 1px solid #3370ff; background: #3370ff; border-radius: 3px; margin-right: 8px; position: relative; flex-shrink: 0;">
+             <span style="color:white; font-size: 10px; position: absolute; top: -2px; left: 2px;">✓</span>
+        </span>
+        <span>P1: 核心体验优化 (Doing)</span>
+    </p>
+    <p style="margin: 8px 0; font-size: 14px; display: flex; align-items: center;">
+        <span style="display: inline-block; width: 14px; height: 14px; border: 1px solid #ccc; border-radius: 3px; margin-right: 8px; flex-shrink: 0;"></span>
+        <span>P2: 数据后台搭建 (Todo)</span>
+    </p>
+</div>
+
+<!-- 【7. 数据对比/AB Test 结果块】 -->
+<!-- 适合展示数据变化，使用左右两列结构 -->
+<table style="width: 100%; border-collapse: separate; border-spacing: 5px 0; margin: 20px 0;">
+    <tr>
+        <td style="background-color: #fff1f0; padding: 15px; border-radius: 4px; text-align: center; width: 50%;">
+            <p style="margin: 0; font-size: 12px; color: #888;">旧方案转化率</p>
+            <p style="margin: 5px 0 0; font-size: 24px; font-weight: bold; color: #cf1322;">12.5%</p>
+        </td>
+        <td style="background-color: #f6ffed; padding: 15px; border-radius: 4px; text-align: center; width: 50%;">
+            <p style="margin: 0; font-size: 12px; color: #888;">新方案转化率</p>
+            <p style="margin: 5px 0 0; font-size: 24px; font-weight: bold; color: #389e0d;">18.2%</p>
+            <p style="margin: 0; font-size: 10px; color: #389e0d;">⬆️ 提升显著</p>
+        </td>
+    </tr>
+</table>
+
+<!-- 章节 2 -->
+<h2 style="margin: 40px 0 20px; text-align: left; line-height: 1.5;">
+    <span style="display: inline-block; border-left: 4px solid #3370ff; padding-left: 12px; font-size: 18px; color: #333; font-weight: bold;">
+        02. 解决方案拆解
+    </span>
+</h2>
+
+<p style="margin-bottom: 15px; font-size: 15px; color: #37352f;">
+    基于上述数据，我们制定了新的产品策略。以下是具体的实施细节：
+</p>
+
+<!-- 【8. 引用块】用于强调方法论或名言 -->
+<table style="width: 100%; border-collapse: collapse; margin: 20px 0;">
+    <tr>
+        <td style="border-left: 3px solid #333; padding-left: 15px; font-style: italic; color: #666;">
+            <p style="margin: 0;">"Don't make me think. (不要让用户思考)"</p>
+            <p style="margin: 5px 0 0; font-size: 12px; color: #999;">—— Steve Krug</p>
+        </td>
+    </tr>
+</table>
+
+<!-- 【9. 总结/行动建议】 -->
+<h2 style="margin: 40px 0 20px; text-align: left; line-height: 1.5;">
+    <span style="display: inline-block; background-color: #3370ff; color: #fff; padding: 2px 8px; border-radius: 4px; font-size: 14px; vertical-align: middle; margin-right: 8px;">SOP</span>
+    <span style="display: inline-block; font-size: 18px; color: #333; font-weight: bold; vertical-align: middle;">
+        后续行动建议
+    </span>
+</h2>
+
+<table style="width: 100%; border-collapse: collapse; margin: 20px 0;">
+    <tr>
+        <td style="background-color: #f7f7f5; padding: 20px; border-radius: 6px;">
+            <ul style="margin: 0; padding-left: 20px; color: #37352f; font-size: 15px;">
+                <li style="margin-bottom: 8px;"><strong>短期：</strong>完成 A/B 测试全量上线。</li>
+                <li style="margin-bottom: 8px;"><strong>中期：</strong>监控漏斗数据，关注流失率。</li>
+                <li><strong>长期：</strong>探索 AI 辅助决策的可能性。</li>
+            </ul>
+        </td>
+    </tr>
+</table>
+
+<!-- 【10. 底部元数据】 -->
+<section style="border-top: 1px solid #eee; margin-top: 40px; padding-top: 20px; font-size: 13px; color: #999; text-align: center;">
+    <p style="margin-bottom: 5px;">Created with Product Thinking</p>
+    <p style="margin: 0;">
+        <span style="margin: 0 5px;">🔗 需求文档</span> | 
+        <span style="margin: 0 5px;">📊 数据看板</span>
+    </p>
+</section>

@@ -21,6 +21,40 @@ node openclaw.mjs gateway --force
 建议你在编译后运行以下命令来更新你的配置文件路径（将配置从 ~/.moltbot 迁移到 ~/.openclaw）：
 node openclaw.mjs doctor --fix
 
-
 telegram 配对
 node openclaw.mjs pairing approve telegram 2F2HJ4BD
+
+持久化运行 (不受网络/下线影响)
+----------------------------
+
+### 方案 A: 使用 PM2 + Tmux (最推荐：持久运行 + 实时监控)
+将 PM2 进程管理器运行在 Tmux 会话中，既能保证后台持续运行，又能随时查看实时面板。
+
+1. 启动服务并开启监控面板:
+   tmux new -s moltbot 'pm2 start "pnpm start" --name moltbot && pm2 monit'
+
+2. 退出监控面板 (不影响后台运行):
+   按下 Ctrl+B 然后按 D (Detach)
+
+3. 以后随时回来查看实时面板:
+   tmux attach -t moltbot
+
+---
+
+### 方案 B: 仅使用 PM2 (纯后台运行)
+1. 启动服务:
+   pm2 start "pnpm start" --name moltbot
+2. 查看状态:
+   pm2 status
+3. 停止服务:
+   pm2 stop moltbot
+
+---
+
+### 方案 C: 仅使用 Tmux (简单后台运行)
+1. 进入会话运行:
+   tmux new -s moltbot 'pnpm start'
+2. 分离会话:
+   按下 Ctrl+B 然后按 D
+3. 重新连入:
+   tmux attach -t moltbot

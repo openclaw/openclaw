@@ -1,0 +1,116 @@
+<!-- 全局容器：移除强制白色背景，改为透明，字体设为深灰 -->
+<div style="font-family: 'Consolas', 'Monaco', 'PingFang SC', monospace; line-height: 1.8; color: #333; padding: 15px; text-align: justify;">
+
+    <!-- 1. 顶部导语区：模拟终端窗口 (使用table确保微信兼容性) -->
+    <!-- 使用 table 而非 section，确保边框在微信中完整显示 -->
+    <table style="width: 100%; border: 2px solid #1e2229; border-radius: 4px; margin-bottom: 30px; border-collapse: separate; border-spacing: 0; background-color: #282c34;">
+        <tbody>
+            <!-- 模拟 Mac 窗口红绿灯 -->
+            <tr>
+                <td style="background: #21252b; padding: 8px 12px; border: none; border-bottom: 1px solid #181a1f;">
+                    <span style="display: inline-block; width: 10px; height: 10px; background: #ff5f56; border-radius: 50%; margin-right: 6px;"></span>
+                    <span style="display: inline-block; width: 10px; height: 10px; background: #ffbd2e; border-radius: 50%; margin-right: 6px;"></span>
+                    <span style="display: inline-block; width: 10px; height: 10px; background: #27c93f; border-radius: 50%;"></span>
+                </td>
+            </tr>
+            <!-- 内容区：文字颜色改为更亮的颜色，确保高对比度 -->
+            <tr>
+                <td style="padding: 20px; background-color: #282c34; border: none;">
+                    <p style="margin: 0; color: #dcdfe4; font-size: 14px; line-height: 1.6;">
+                        <span style="color: #c678dd;">import</span> { <span style="color: #e06c75;">Future</span> } <span style="color: #c678dd;">from</span> <span style="color: #98c379;">'Programming'</span>;
+                    </p>
+                    <p style="margin: 10px 0 0 0; color: #7f848e; font-style: italic;">// 这里填写导语内容</p>
+                    <p style="margin: 5px 0 0 0; color: #d19a66;">
+                        "AI正在重塑开发的边界，我们不仅在写代码，也在编织氛围。"
+                    </p>
+                </td>
+            </tr>
+        </tbody>
+    </table>
+
+    <!-- 2. 章节标题 -->
+    <section style="margin: 40px 0 20px;">
+        <h2 style="margin: 0; border-bottom: 2px solid #61afef; display: inline-block; padding-bottom: 5px;">
+            <span style="color: #007acc; font-weight: bold; font-size: 20px;">&gt; Step_01.</span>
+            <span style="font-size: 20px; color: #333; font-weight: bold; margin-left: 5px;">章节名称内容</span>
+        </h2>
+    </section>
+
+    <p style="margin-bottom: 15px; color: #333;">
+        正文内容放在这里。删除了 `text-indent`，因为代码风通常不缩进。
+        <span style="background-color: rgba(0,0,0,0.05); color: #e05260; padding: 2px 6px; border-radius: 4px; border: 1px solid #e0e0e0; font-family: monospace; font-size: 14px;">Highlight Code</span>
+        使用了半透明背景，这样在深色模式下会自动变深，不会刺眼。
+    </p>
+
+    <!-- 代码块：深色背景 + 语法高亮 -->
+    <!-- ⚠️ 重要：微信不支持 <pre> 标签，必须使用 <div> + <br> + &nbsp; 格式 -->
+    <!-- ⚠️ 空格必须用 &nbsp;，换行必须用 <br>，否则微信会删除所有空格 -->
+    <p style="margin-bottom: 10px; color: #333;">示例代码：</p>
+    <section style="background-color: #282c34; border-radius: 4px; border: 1px solid #1e2229; padding: 15px; margin: 15px 0; overflow-x: auto;">
+        <div style="margin: 0; color: #dcdfe4; font-size: 13px; line-height: 1.6; font-family: 'Consolas', 'Monaco', monospace;"><span style="color: #c678dd;">import</span>&nbsp;asyncio<br>
+<br>
+<span style="color: #c678dd;">async</span>&nbsp;<span style="color: #c678dd;">def</span>&nbsp;<span style="color: #61dafb;">main</span>():<br>
+&nbsp;&nbsp;&nbsp;&nbsp;<span style="color: #c678dd;">for</span>&nbsp;i&nbsp;<span style="color: #c678dd;">in</span>&nbsp;<span style="color: #61dafb;">range</span>(<span style="color: #d19a66;">10</span>):<br>
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span style="color: #61dafb;">print</span>(<span style="color: #98c379;">f"Hello&nbsp;</span><span style="color: #98c379;">{</span>i<span style="color: #98c379;">}</span><span style="color: #98c379;">"</span>)<br>
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span style="color: #c678dd;">await</span>&nbsp;asyncio.<span style="color: #61dafb;">sleep</span>(<span style="color: #d19a66;">1</span>)</div>
+    </section>
+
+    <!-- 3. 数据展示：列表式布局（替代表格，避免微信圆角问题）-->
+    <!-- ⚠️ 重要：微信对 table 标签强制添加圆角，无法覆盖 -->
+    <!-- 使用列表式布局：左侧竖线 + 分隔线，完全直角 -->
+    <div style="border-left: 3px solid #282c34; margin: 20px 0; padding-left: 0;">
+        <div style="padding: 12px 15px; border-bottom: 1px solid #e0e0e0;">
+            <strong style="color: #282c34;">数据项1：</strong><span style="color: #666; margin-left: 8px;">具体内容描述</span>
+        </div>
+        <div style="padding: 12px 15px; border-bottom: 1px solid #e0e0e0;">
+            <strong style="color: #282c34;">数据项2：</strong><span style="color: #666; margin-left: 8px;">具体内容描述</span>
+        </div>
+        <div style="padding: 12px 15px;">
+            <strong style="color: #282c34;">数据项3：</strong><span style="color: #666; margin-left: 8px;">具体内容描述</span>
+        </div>
+    </div>
+
+    <!-- ⚠️ 对比式列表（3列对比改为分组列表）-->
+    <!-- 用于展示产品对比、功能对比等场景 -->
+    <div style="border-left: 3px solid #282c34; margin: 20px 0; padding-left: 0;">
+        <div style="padding: 12px 15px; border-bottom: 1px solid #e0e0e0;">
+            <strong style="color: #282c34;">对比维度1：</strong><br>
+            <span style="color: #666; margin-left: 8px; display: inline-block; margin-top: 5px;">• 产品A：特性描述</span><br>
+            <span style="color: #666; margin-left: 8px; display: inline-block;">• 产品B：特性描述</span>
+        </div>
+        <div style="padding: 12px 15px; border-bottom: 1px solid #e0e0e0;">
+            <strong style="color: #282c34;">对比维度2：</strong><br>
+            <span style="color: #666; margin-left: 8px; display: inline-block; margin-top: 5px;">• 产品A：特性描述</span><br>
+            <span style="color: #666; margin-left: 8px; display: inline-block;">• 产品B：特性描述</span>
+        </div>
+        <div style="padding: 12px 15px;">
+            <strong style="color: #282c34;">对比维度3：</strong><br>
+            <span style="color: #666; margin-left: 8px; display: inline-block; margin-top: 5px;">• 产品A：特性描述</span><br>
+            <span style="color: #666; margin-left: 8px; display: inline-block;">• 产品B：特性描述</span>
+        </div>
+    </div>
+
+    <!-- 4. 提示/卡片块：改为线框风格（Wireframe）-->
+    <!-- 纯色块风险大，改为边框+浅底，兼容性最强 -->
+    <section style="margin: 25px 0; border: 2px solid #333; padding: 0; background-color: rgba(255,255,255,0.5);">
+        <div style="background: #333; color: #fff; padding: 4px 10px; font-size: 12px; font-weight: bold; display: inline-block;">
+            PRO TIP:
+        </div>
+        <div style="padding: 15px;">
+            <p style="margin: 0; color: #444; font-size: 15px; font-weight: bold;">
+                这里是核心结论。
+            </p>
+            <p style="margin: 5px 0 0 0; color: #666; font-size: 14px; line-height: 1.6;">
+                我们将背景改为了线框风格。这种设计在Light Mode下很干净，在Dark Mode下边框会自动反白，内容极其清晰。
+            </p>
+        </div>
+    </section>
+
+    <!-- 4. 资源链接 -->
+    <section style="border-top: 1px dashed #bbb; margin-top: 40px; padding-top: 20px; font-size: 14px; color: #666;">
+        <p style="margin-bottom: 10px; font-weight: bold; color: #333;">🔗 相关资源：</p>
+        <p style="margin: 5px 0;">资源 A：<span style="color: #0969da; text-decoration: underline;">domain-a.com</span></p>
+        <p style="margin: 5px 0;">资源 B：<span style="color: #0969da; text-decoration: underline;">domain-b.com</span></p>
+    </section>
+
+</div>
