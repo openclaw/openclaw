@@ -1156,11 +1156,11 @@ function createParallelToolCallsWrapper(
     const originalOnPayload = options?.onPayload;
     return underlying(model, context, {
       ...options,
-      onPayload: (payload) => {
+      onPayload: (payload, model) => {
         if (payload && typeof payload === "object") {
           (payload as Record<string, unknown>).parallel_tool_calls = enabled;
         }
-        originalOnPayload?.(payload);
+        originalOnPayload?.(payload, model);
       },
     });
   };
