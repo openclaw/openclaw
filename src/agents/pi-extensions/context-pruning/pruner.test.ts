@@ -1,7 +1,7 @@
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import type { ExtensionContext } from "@mariozechner/pi-coding-agent";
 import { describe, expect, it } from "vitest";
-import { pruneContextMessages } from "./pruner.js";
+import { estimateStringChars, pruneContextMessages } from "./pruner.js";
 import { DEFAULT_CONTEXT_PRUNING_SETTINGS } from "./settings.js";
 
 type AssistantMessage = Extract<AgentMessage, { role: "assistant" }>;
@@ -108,5 +108,38 @@ describe("pruneContextMessages", () => {
       ctx: CONTEXT_WINDOW_1M,
     });
     expect(result).toHaveLength(2);
+  });
+});
+
+describe("estimateStringChars", () => {
+  it("returns plain string length for ASCII text", () => {
+    expect(estimateStringChars("hello")).toBe(5);
+  });
+
+  it("counts CJK characters with extra weight", () => {
+    // Each CJK char should count as 4 chars (CHARS_PER_TOKEN_ESTIMATE) so that
+    // the downstream chars/4 token estimate yields ~1 token per CJK char.
+    // 3 CJK chars: .length=3, adjusted = 3 + 3*(4-1) = 12
+    expect(estimateStringChars("你好世")).toBe(12);
+  });
+
+  it("handles mixed ASCII and CJK text", () => {
+    // "hi你好" has 2 ASCII + 2 CJK chars
+    // .length=4, adjusted = 4 + 2*(4-1) = 10
+    expect(estimateStringChars("hi你好")).toBe(10);
+  });
+
+  it("handles Japanese hiragana and katakana", () => {
+    // "こんにちは" = 5 hiragana chars, adjusted = 5 + 5*3 = 20
+    expect(estimateStringChars("こんにちは")).toBe(20);
+  });
+
+  it("handles Korean hangul", () => {
+    // "안녕" = 2 hangul chars, adjusted = 2 + 2*3 = 8
+    expect(estimateStringChars("안녕")).toBe(8);
+  });
+
+  it("returns 0 for empty string", () => {
+    expect(estimateStringChars("")).toBe(0);
   });
 });

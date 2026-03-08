@@ -9,6 +9,23 @@ const CHARS_PER_TOKEN_ESTIMATE = 4;
 // we start trimming prunable tool results earlier when image-heavy context is consuming the window.
 const IMAGE_CHAR_ESTIMATE = 8_000;
 
+// Matches CJK Unified Ideographs, CJK Extension A/B, CJK Compatibility Ideographs,
+// Hangul Syllables, Hiragana, Katakana, and other non-Latin scripts that typically
+// use ~1 token per character. Since we estimate tokens as chars/4, each such character
+// should be counted as CHARS_PER_TOKEN_ESTIMATE chars to avoid underestimation.
+const NON_LATIN_RE = /[\u2E80-\u9FFF\uA000-\uA4FF\uAC00-\uD7AF\uF900-\uFAFF\u{20000}-\u{2FA1F}]/gu;
+
+/**
+ * Returns an adjusted character length that accounts for non-Latin (CJK, etc.) characters.
+ * Each non-Latin character is counted as CHARS_PER_TOKEN_ESTIMATE chars so that the
+ * downstream `chars / CHARS_PER_TOKEN_ESTIMATE` token estimate remains accurate.
+ */
+export function estimateStringChars(text: string): number {
+  const nonLatinCount = (text.match(NON_LATIN_RE) ?? []).length;
+  // Non-Latin chars already contribute 1 to text.length, so add the extra weight.
+  return text.length + nonLatinCount * (CHARS_PER_TOKEN_ESTIMATE - 1);
+}
+
 function asText(text: string): TextContent {
   return { type: "text", text };
 }
@@ -100,7 +117,7 @@ function estimateTextAndImageChars(content: ReadonlyArray<TextContent | ImageCon
   let chars = 0;
   for (const block of content) {
     if (block.type === "text") {
-      chars += block.text.length;
+      chars += estimateStringChars(block.text);
     }
     if (block.type === "image") {
       chars += IMAGE_CHAR_ESTIMATE;
@@ -113,7 +130,7 @@ function estimateMessageChars(message: AgentMessage): number {
   if (message.role === "user") {
     const content = message.content;
     if (typeof content === "string") {
-      return content.length;
+      return estimateStringChars(content);
     }
     return estimateTextAndImageChars(content);
   }
@@ -125,14 +142,14 @@ function estimateMessageChars(message: AgentMessage): number {
         continue;
       }
       if (b.type === "text" && typeof b.text === "string") {
-        chars += b.text.length;
+        chars += estimateStringChars(b.text);
       }
       if (b.type === "thinking" && typeof b.thinking === "string") {
-        chars += b.thinking.length;
+        chars += estimateStringChars(b.thinking);
       }
       if (b.type === "toolCall") {
         try {
-          chars += JSON.stringify(b.arguments ?? {}).length;
+          chars += estimateStringChars(JSON.stringify(b.arguments ?? {}));
         } catch {
           chars += 128;
         }
