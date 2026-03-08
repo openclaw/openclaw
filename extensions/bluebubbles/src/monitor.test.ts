@@ -43,6 +43,10 @@ vi.mock("./history.js", () => ({
   fetchBlueBubblesHistory: vi.fn().mockResolvedValue({ entries: [], resolved: true }),
 }));
 
+vi.mock("./probe.js", () => ({
+  isBlueBubblesPrivateApiEnabled: vi.fn().mockReturnValue(true),
+}));
+
 // Mock runtime
 const mockEnqueueSystemEvent = vi.fn();
 const mockBuildPairingReply = vi.fn(() => "Pairing code: TESTCODE");
