@@ -139,8 +139,8 @@ launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.claude-max-api.plist
 ## 链接
 
 - **npm:** https://www.npmjs.com/package/claude-max-api-proxy
-- **GitHub:** https://github.com/atalovesyou/claude-max-api-proxy
-- **Issues:** https://github.com/atalovesyou/claude-max-api-proxy/issues
+- **GitHub:** https://github.com/wende/claude-max-api-proxy
+- **Issues:** https://github.com/wende/claude-max-api-proxy/issues
 
 ## 注意事项
 
