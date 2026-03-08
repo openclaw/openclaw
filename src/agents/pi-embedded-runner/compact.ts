@@ -53,7 +53,10 @@ import { createOpenClawCodingTools } from "../pi-tools.js";
 import { resolveSandboxContext } from "../sandbox.js";
 import { repairSessionFileIfNeeded } from "../session-file-repair.js";
 import { guardSessionManager } from "../session-tool-result-guard-wrapper.js";
-import { sanitizeToolUseResultPairing } from "../session-transcript-repair.js";
+import {
+  repairToolUseResultPairing,
+  sanitizeToolUseResultPairing,
+} from "../session-transcript-repair.js";
 import {
   acquireSessionWriteLock,
   resolveSessionLockMaxHoldFromTimeout,
@@ -766,6 +769,23 @@ export async function compactEmbeddedPiSessionDirect(
         const result = await compactWithSafetyTimeout(() =>
           session.compact(params.customInstructions),
         );
+
+        // Post-compaction repair: The SDK's compact() method can generate new messages
+        // (summary + kept tail) that may contain orphaned tool_results or broken tool
+        // call/result pairings. Re-run repair to ensure transcript validity.
+        if (transcriptPolicy.repairToolUseResultPairing) {
+          const postCompactRepair = repairToolUseResultPairing(session.messages);
+          if (postCompactRepair.moved) {
+            session.agent.replaceMessages(postCompactRepair.messages);
+            log.info(
+              `[compaction] post-compact repair applied: ` +
+                `added=${postCompactRepair.added.length} ` +
+                `droppedDuplicates=${postCompactRepair.droppedDuplicateCount} ` +
+                `droppedOrphans=${postCompactRepair.droppedOrphanCount}`,
+            );
+          }
+        }
+
         // Estimate tokens after compaction by summing token estimates for remaining messages
         let tokensAfter: number | undefined;
         try {
