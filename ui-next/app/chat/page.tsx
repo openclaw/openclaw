@@ -13,7 +13,7 @@ import { useGateway, useGatewayEvents } from "@/lib/use-gateway";
 type ChatMessage = {
   idempotencyKey?: string; // Optional key to prevent duplicate messages
   role: "user" | "assistant" | "system";
-  content: string | { type: string; text: string }[];
+  content: string | { type: string; text: string; thinking?: string }[];
   timestamp?: number;
 };
 
@@ -236,6 +236,24 @@ function Message({ message }: { message: ChatMessage }) {
       contentToRender = message.content.map((part, idx) => {
         if (part.type === "text") {
           return <span key={idx}>{part.text}</span>;
+        }
+        if (part.type === "thinking") {
+          return (
+            <div key={idx}>
+              <span style={{ color: "var(--muted)", fontStyle: "italic" }}>thinking…</span>
+              <div
+                style={{
+                  marginTop: 4,
+                  backgroundColor: "var(--muted)",
+                  width: "100%",
+                  padding: "4px 8px",
+                  borderRadius: "var(--radius-md)",
+                }}
+              >
+                <p style={{ color: "var(--text)", fontSize: 12 }}>{part.thinking}</p>
+              </div>
+            </div>
+          );
         }
         return null;
       });
@@ -545,7 +563,10 @@ export default function ChatPage() {
       </div>
 
       <div
-        style={{ ...styles.layout, gridTemplateColumns: isSidebarVisible ? "240px 1fr" : "1fr" }}
+        style={{
+          ...styles.layout,
+          gridTemplateColumns: isSidebarVisible ? "240px 1fr" : "1fr",
+        }}
       >
         {/* Sessions Sidebar */}
         {isSidebarVisible && (
@@ -638,7 +659,14 @@ export default function ChatPage() {
               >
                 {isSidebarVisible ? "◧ Hide" : "◨ Show Sidebar"}
               </button>
-              <h2 style={{ fontSize: 15, fontWeight: 600, margin: 0, color: "var(--text-strong)" }}>
+              <h2
+                style={{
+                  fontSize: 15,
+                  fontWeight: 600,
+                  margin: 0,
+                  color: "var(--text-strong)",
+                }}
+              >
                 {selectedSessionKey
                   ? sessions.find((s) => s.key === selectedSessionKey)?.label ||
                     sessions.find((s) => s.key === selectedSessionKey)?.displayName ||
