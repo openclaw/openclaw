@@ -126,7 +126,7 @@ function resolveHandshakeBrowserSecurityContext(params: {
   };
 }
 
-function shouldAllowSilentLocalPairing(params: {
+export function shouldAllowSilentLocalPairing(params: {
   isLocalClient: boolean;
   hasBrowserOriginHeader: boolean;
   isControlUi: boolean;
