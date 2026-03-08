@@ -253,6 +253,27 @@ describe("getApiKeyForModel", () => {
     });
   });
 
+  it("rejects non-secret SecretRef markers as runtime api keys", async () => {
+    await expect(
+      resolveApiKeyForProvider({
+        provider: "custom",
+        store: { version: 1, profiles: {} },
+        cfg: {
+          models: {
+            providers: {
+              custom: {
+                apiKey: "secretref-managed", // pragma: allowlist secret
+                api: "openai-compatible",
+                baseUrl: "https://provider.example/v1",
+                models: [],
+              },
+            },
+          },
+        },
+      }),
+    ).rejects.toThrow('No API key found for provider "custom".');
+  });
+
   it("prefers explicit OLLAMA_API_KEY over synthetic local key", async () => {
     await withEnvAsync({ [envVar("OLLAMA", "API", "KEY")]: "env-ollama-key" }, async () => {
       // pragma: allowlist secret

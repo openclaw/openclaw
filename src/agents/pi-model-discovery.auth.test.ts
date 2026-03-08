@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { saveAuthProfileStore } from "./auth-profiles.js";
-import { discoverAuthStorage } from "./pi-model-discovery.js";
+import { discoverAuthStorage, discoverModels } from "./pi-model-discovery.js";
 
 async function createAgentDir(): Promise<string> {
   return await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-pi-auth-storage-"));
@@ -147,6 +147,44 @@ describe("discoverAuthStorage", () => {
           process.env.OPENCLAW_AUTH_STORE_READONLY = previous;
         }
       }
+    });
+  });
+});
+
+describe("discoverModels", () => {
+  it("drops non-env auth markers from registry fallbacks and injected headers", async () => {
+    await withAgentDir(async (agentDir) => {
+      await fs.writeFile(
+        path.join(agentDir, "models.json"),
+        `${JSON.stringify(
+          {
+            providers: {
+              custom: {
+                baseUrl: "https://example.com/v1",
+                api: "openai-responses",
+                apiKey: "secretref-managed",
+                authHeader: true,
+                headers: {
+                  "X-Managed": "secretref-managed",
+                  "X-Static": "tenant-a",
+                },
+                models: [{ id: "custom-model" }],
+              },
+            },
+          },
+          null,
+          2,
+        )}\n`,
+        "utf8",
+      );
+
+      const authStorage = discoverAuthStorage(agentDir);
+      const modelRegistry = discoverModels(authStorage, agentDir);
+
+      await expect(authStorage.getApiKey("custom")).resolves.toBeUndefined();
+      expect(modelRegistry.find("custom", "custom-model")?.headers).toEqual({
+        "X-Static": "tenant-a",
+      });
     });
   });
 });

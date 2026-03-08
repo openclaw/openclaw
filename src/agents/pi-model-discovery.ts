@@ -6,6 +6,7 @@ import type {
   ModelRegistry as PiModelRegistry,
 } from "@mariozechner/pi-coding-agent";
 import { ensureAuthProfileStore } from "./auth-profiles.js";
+import { isNonSecretApiKeyMarker, isSecretRefHeaderValueMarker } from "./model-auth-markers.js";
 import { resolvePiCredentialMapFromStore, type PiCredentialMap } from "./pi-auth-credentials.js";
 
 const PiAuthStorageClass = PiCodingAgent.AuthStorage;
@@ -139,6 +140,60 @@ function resolvePiCredentials(agentDir: string): PiCredentialMap {
   return resolvePiCredentialMapFromStore(store);
 }
 
+function isPlaceholderBearerAuthorizationHeader(value: string): boolean {
+  const match = /^\s*bearer\s+(.+)$/i.exec(value);
+  const token = match?.[1]?.trim();
+  return Boolean(token && isNonSecretApiKeyMarker(token, { includeEnvVarName: false }));
+}
+
+function sanitizeDiscoveredHeaders(headers: unknown): Record<string, string> | undefined {
+  if (!isRecord(headers)) {
+    return undefined;
+  }
+
+  const sanitized: Record<string, string> = {};
+  for (const [headerName, headerValue] of Object.entries(headers)) {
+    if (typeof headerValue !== "string") {
+      continue;
+    }
+    if (isSecretRefHeaderValueMarker(headerValue)) {
+      continue;
+    }
+    if (
+      headerName.toLowerCase() === "authorization" &&
+      isPlaceholderBearerAuthorizationHeader(headerValue)
+    ) {
+      continue;
+    }
+    sanitized[headerName] = headerValue;
+  }
+  return Object.keys(sanitized).length > 0 ? sanitized : undefined;
+}
+
+function scrubDiscoveredRegistryPlaceholders(registry: PiModelRegistry): void {
+  const withInternalState = registry as PiModelRegistry & {
+    customProviderApiKeys?: Map<string, string>;
+    models?: Array<{ headers?: unknown }>;
+  };
+
+  if (withInternalState.customProviderApiKeys instanceof Map) {
+    for (const [provider, keyConfig] of withInternalState.customProviderApiKeys.entries()) {
+      if (!isNonSecretApiKeyMarker(keyConfig, { includeEnvVarName: false })) {
+        continue;
+      }
+      // Keep models.json persistence markers from becoming runtime fallback credentials.
+      withInternalState.customProviderApiKeys.delete(provider);
+    }
+  }
+
+  if (!Array.isArray(withInternalState.models)) {
+    return;
+  }
+  for (const model of withInternalState.models) {
+    model.headers = sanitizeDiscoveredHeaders(model.headers);
+  }
+}
+
 // Compatibility helpers for pi-coding-agent 0.50+ (discover* helpers removed).
 export function discoverAuthStorage(agentDir: string): PiAuthStorage {
   const credentials = resolvePiCredentials(agentDir);
@@ -148,5 +203,7 @@ export function discoverAuthStorage(agentDir: string): PiAuthStorage {
 }
 
 export function discoverModels(authStorage: PiAuthStorage, agentDir: string): PiModelRegistry {
-  return new PiModelRegistryClass(authStorage, path.join(agentDir, "models.json"));
+  const registry = new PiModelRegistryClass(authStorage, path.join(agentDir, "models.json"));
+  scrubDiscoveredRegistryPlaceholders(registry);
+  return registry;
 }

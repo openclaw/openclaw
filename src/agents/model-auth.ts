@@ -17,7 +17,7 @@ import {
   resolveAuthStorePathForDisplay,
 } from "./auth-profiles.js";
 import { PROVIDER_ENV_API_KEY_CANDIDATES } from "./model-auth-env-vars.js";
-import { OLLAMA_LOCAL_AUTH_MARKER } from "./model-auth-markers.js";
+import { isNonSecretApiKeyMarker, OLLAMA_LOCAL_AUTH_MARKER } from "./model-auth-markers.js";
 import { normalizeProviderId } from "./model-selection.js";
 
 export { ensureAuthProfileStore, resolveAuthProfileOrder } from "./auth-profiles.js";
@@ -234,7 +234,7 @@ export async function resolveApiKeyForProvider(params: {
   }
 
   const customKey = getCustomProviderApiKey(cfg, provider);
-  if (customKey) {
+  if (customKey && !isNonSecretApiKeyMarker(customKey)) {
     return { apiKey: customKey, source: "models.json", mode: "api-key" };
   }
 
