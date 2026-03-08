@@ -33,6 +33,8 @@ Docs: https://docs.openclaw.ai
 - Mattermost/model picker: add Telegram-style interactive provider/model browsing for `/oc_model` and `/oc_models`, fix picker callback updates, and emit a normal confirmation reply when a model is selected. (#38767) thanks @mukhtharcm.
 - Docker/multi-stage build: restructure Dockerfile as a multi-stage build to produce a minimal runtime image without build tools, source code, or Bun; add `OPENCLAW_VARIANT=slim` build arg for a bookworm-slim variant. (#38479) Thanks @sallyom.
 
+- Web Search/SearXNG: add `searxng` as a first-class `web_search` provider. Point OpenClaw at any self-hosted SearXNG instance for no-API-key, multi-engine aggregated search with support for category filtering (`general`, `images`, `news`, `videos`, `files`, `social media`), engine selection, language, and safe-search controls. Configure via `tools.web.search.provider: "searxng"` and `tools.web.search.searxng.url`.
+
 ### Breaking
 
 - **BREAKING:** Gateway auth now requires explicit `gateway.auth.mode` when both `gateway.auth.token` and `gateway.auth.password` are configured (including SecretRefs). Set `gateway.auth.mode` to `token` or `password` before upgrade to avoid startup/pairing/TUI failures. (#35094) Thanks @joshavant.
