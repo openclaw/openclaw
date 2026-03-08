@@ -306,19 +306,19 @@ jobs:
             exit 0
           fi
 
-          BASE="${{ github.event.pull_request.base.sha }}"
+          BASE_REF="origin/${{ github.base_ref }}"
           changed_files=()
-          if ! git rev-parse --verify "$BASE^{commit}" >/dev/null 2>&1; then
-            # Fork PR checkouts are often shallow and may not include the base
-            # commit object yet. Fetch it so we can diff only changed files.
-            git fetch --no-tags --depth=1 origin "$BASE" || true
+          if ! git rev-parse --verify "$BASE_REF^{commit}" >/dev/null 2>&1; then
+            # Fork PR checkouts are often shallow and may not include the
+            # current base-branch tip object yet.
+            git fetch --no-tags --depth=1 origin "${{ github.base_ref }}" || true
           fi
-          if git rev-parse --verify "$BASE^{commit}" >/dev/null 2>&1; then
+          if git rev-parse --verify "$BASE_REF^{commit}" >/dev/null 2>&1; then
             while IFS= read -r path; do
               [ -n "$path" ] || continue
               [ -f "$path" ] || continue
               changed_files+=("$path")
-            done < <(git diff --name-only --diff-filter=ACMR "$BASE" HEAD)
+            done < <(git diff --name-only --diff-filter=ACMR "$BASE_REF"...HEAD)
           fi
 
           if [ "${#changed_files[@]}" -gt 0 ]; then
