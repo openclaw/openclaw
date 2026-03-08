@@ -27,6 +27,7 @@ import {
   maybeRemoveDeprecatedCliAuthProfiles,
   maybeRepairAnthropicOAuthProfileId,
   noteAuthProfileHealth,
+  noteLegacyCodexProviderOverride,
 } from "./doctor-auth.js";
 import { noteBootstrapFileSize } from "./doctor-bootstrap-size.js";
 import { doctorShellCompletion } from "./doctor-completion.js";
@@ -138,6 +139,7 @@ export async function doctorCommand(
     prompter,
     allowKeychainPrompt: options.nonInteractive !== true && Boolean(process.stdin.isTTY),
   });
+  noteLegacyCodexProviderOverride(cfg);
   const gatewayDetails = buildGatewayConnectionDetails({ config: cfg });
   if (gatewayDetails.remoteFallbackNote) {
     note(gatewayDetails.remoteFallbackNote, "Gateway");

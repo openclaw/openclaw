@@ -2,7 +2,12 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { beforeAll, describe, expect, it, vi } from "vitest";
-import { createDoctorRuntime, mockDoctorConfigSnapshot, note } from "./doctor.e2e-harness.js";
+import {
+  createDoctorRuntime,
+  ensureAuthProfileStore,
+  mockDoctorConfigSnapshot,
+  note,
+} from "./doctor.e2e-harness.js";
 import "./doctor.fast-path-mocks.js";
 
 vi.doUnmock("./doctor-state-integrity.js");
@@ -56,6 +61,81 @@ describe("doctor command", () => {
         title === "OpenCode Zen" && String(message).includes("models.providers.opencode"),
     );
     expect(warned).toBe(true);
+  });
+
+  it("warns when a legacy openai-codex provider override shadows Codex OAuth", async () => {
+    mockDoctorConfigSnapshot({
+      config: {
+        models: {
+          providers: {
+            "openai-codex": {
+              api: "openai-responses",
+              baseUrl: "https://api.openai.com/v1",
+            },
+          },
+        },
+        auth: {
+          profiles: {
+            "openai-codex:user@example.com": {
+              provider: "openai-codex",
+              mode: "oauth",
+              email: "user@example.com",
+            },
+          },
+        },
+      },
+    });
+    ensureAuthProfileStore.mockReturnValue({
+      version: 1,
+      profiles: {
+        "openai-codex:user@example.com": {
+          type: "oauth",
+          provider: "openai-codex",
+          access: "access-token",
+          refresh: "refresh-token",
+          expires: Date.now() + 60_000,
+          email: "user@example.com",
+        },
+      },
+    });
+
+    await doctorCommand(createDoctorRuntime(), {
+      nonInteractive: true,
+      workspaceSuggestions: false,
+    });
+
+    const warned = note.mock.calls.some(
+      ([message, title]) =>
+        title === "Codex OAuth" && String(message).includes("models.providers.openai-codex"),
+    );
+    expect(warned).toBe(true);
+  });
+
+  it("does not warn about an openai-codex provider override without Codex OAuth", async () => {
+    mockDoctorConfigSnapshot({
+      config: {
+        models: {
+          providers: {
+            "openai-codex": {
+              api: "openai-responses",
+              baseUrl: "https://api.openai.com/v1",
+            },
+          },
+        },
+      },
+    });
+    ensureAuthProfileStore.mockReturnValue({
+      version: 1,
+      profiles: {},
+    });
+
+    await doctorCommand(createDoctorRuntime(), {
+      nonInteractive: true,
+      workspaceSuggestions: false,
+    });
+
+    const warned = note.mock.calls.some(([, title]) => title === "Codex OAuth");
+    expect(warned).toBe(false);
   });
 
   it("skips gateway auth warning when OPENCLAW_GATEWAY_TOKEN is set", async () => {

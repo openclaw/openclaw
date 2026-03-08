@@ -18,6 +18,9 @@ import type { OpenClawConfig } from "../config/config.js";
 import { note } from "../terminal/note.js";
 import type { DoctorPrompter } from "./doctor-prompter.js";
 
+const CODEX_PROVIDER_ID = "openai-codex";
+const CODEX_OAUTH_WARNING_TITLE = "Codex OAuth";
+
 export async function maybeRepairAnthropicOAuthProfileId(
   cfg: OpenClawConfig,
   prompter: DoctorPrompter,
@@ -198,6 +201,55 @@ export async function maybeRemoveDeprecatedCliAuthProfiles(
     );
   }
   return pruned.next;
+}
+
+function hasConfiguredCodexOAuthProfile(cfg: OpenClawConfig): boolean {
+  return Object.values(cfg.auth?.profiles ?? {}).some(
+    (profile) => profile.provider === CODEX_PROVIDER_ID && profile.mode === "oauth",
+  );
+}
+
+function hasStoredCodexOAuthProfile(): boolean {
+  const store = ensureAuthProfileStore(undefined, { allowKeychainPrompt: false });
+  return Object.values(store.profiles).some(
+    (profile) => profile.provider === CODEX_PROVIDER_ID && profile.type === "oauth",
+  );
+}
+
+function buildCodexProviderOverrideWarning(providerOverride: unknown): string {
+  const lines = [
+    `- models.providers.${CODEX_PROVIDER_ID} is set while Codex OAuth is configured.`,
+    "- This legacy manual override can shadow the built-in Codex OAuth provider.",
+  ];
+  if (
+    providerOverride &&
+    typeof providerOverride === "object" &&
+    !Array.isArray(providerOverride)
+  ) {
+    const record = providerOverride as Record<string, unknown>;
+    if (typeof record.api === "string") {
+      lines.push(`- models.providers.${CODEX_PROVIDER_ID}.api=${record.api}`);
+    }
+    if (typeof record.baseUrl === "string") {
+      lines.push(`- models.providers.${CODEX_PROVIDER_ID}.baseUrl=${record.baseUrl}`);
+    }
+  }
+  lines.push(
+    `- Remove models.providers.${CODEX_PROVIDER_ID} to restore the built-in Codex OAuth provider path after recent fixes.`,
+  );
+  lines.push("- If this override is intentional, you can ignore this warning.");
+  return lines.join("\n");
+}
+
+export function noteLegacyCodexProviderOverride(cfg: OpenClawConfig): void {
+  const providerOverride = cfg.models?.providers?.[CODEX_PROVIDER_ID];
+  if (!providerOverride) {
+    return;
+  }
+  if (!hasConfiguredCodexOAuthProfile(cfg) && !hasStoredCodexOAuthProfile()) {
+    return;
+  }
+  note(buildCodexProviderOverrideWarning(providerOverride), CODEX_OAUTH_WARNING_TITLE);
 }
 
 type AuthIssue = {

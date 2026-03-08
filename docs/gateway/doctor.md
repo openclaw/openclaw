@@ -64,6 +64,7 @@ cat ~/.openclaw/openclaw.json
 - Skills status summary (eligible/missing/blocked).
 - Config normalization for legacy values.
 - OpenCode Zen provider override warnings (`models.providers.opencode`).
+- Codex OAuth shadowing warnings (`models.providers.openai-codex`).
 - Legacy on-disk state migration (sessions/agent dir/WhatsApp auth).
 - State integrity and permissions checks (sessions, transcripts, state dir).
 - Config file permission checks (chmod 600) when running locally.
@@ -139,6 +140,14 @@ If you’ve added `models.providers.opencode` (or `opencode-zen`) manually, it
 overrides the built-in OpenCode Zen catalog from `@mariozechner/pi-ai`. That can
 force every model onto a single API or zero out costs. Doctor warns so you can
 remove the override and restore per-model API routing + costs.
+
+### 2c) Codex OAuth provider overrides
+
+If you previously added `models.providers.openai-codex` manually, that legacy
+override can shadow the built-in Codex OAuth provider path that newer releases
+use automatically. Doctor warns when it sees that override alongside Codex OAuth
+so you can remove the stale config and get the built-in routing/fallback behavior
+back.
 
 ### 3) Legacy state migrations (disk layout)
 
