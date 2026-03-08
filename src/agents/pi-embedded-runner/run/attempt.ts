@@ -483,7 +483,21 @@ function decodeXaiToolCallArgumentsInMessage(message: unknown): void {
     if (typedBlock.type !== "toolCall" || !typedBlock.arguments) {
       continue;
     }
-    if (typeof typedBlock.arguments === "object") {
+
+    // Some OpenAI-compatible providers (e.g. opencode-go/glm-5) emit tool-call
+    // arguments as a JSON *string*.
+    if (typeof typedBlock.arguments === "string") {
+      const raw = typedBlock.arguments.trim();
+      if (raw.startsWith("{") || raw.startsWith("[")) {
+        try {
+          typedBlock.arguments = JSON.parse(raw) as unknown;
+        } catch {
+          // fall through to potential HTML decoding
+        }
+      }
+    }
+
+    if (typeof typedBlock.arguments === "object" && typedBlock.arguments) {
       typedBlock.arguments = decodeHtmlEntitiesInObject(typedBlock.arguments);
     }
   }
@@ -524,7 +538,7 @@ function wrapStreamDecodeXaiToolCallArguments(
   return stream;
 }
 
-function wrapStreamFnDecodeXaiToolCallArguments(baseFn: StreamFn): StreamFn {
+export function wrapStreamFnDecodeXaiToolCallArguments(baseFn: StreamFn): StreamFn {
   return (model, context, options) => {
     const maybeStream = baseFn(model, context, options);
     if (maybeStream && typeof maybeStream === "object" && "then" in maybeStream) {

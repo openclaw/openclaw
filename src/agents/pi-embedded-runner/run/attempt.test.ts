@@ -13,6 +13,7 @@ import {
   shouldInjectOllamaCompatNumCtx,
   decodeHtmlEntitiesInObject,
   wrapOllamaCompatNumCtx,
+  wrapStreamFnDecodeXaiToolCallArguments,
   wrapStreamFnTrimToolCallNames,
 } from "./attempt.js";
 
@@ -593,6 +594,39 @@ describe("decodeHtmlEntitiesInObject", () => {
       "source .env &amp;&amp; psql &quot;$DB&quot; -c &lt;query&gt;",
     );
     expect(result).toBe('source .env && psql "$DB" -c <query>');
+  });
+
+  it("parses toolCall arguments that are JSON strings", async () => {
+    const baseFn = () =>
+      ({
+        async result() {
+          return {
+            role: "assistant",
+            content: [
+              {
+                type: "toolCall",
+                id: "call_1",
+                name: "read",
+                arguments: '{"path":"/tmp/x"}',
+              },
+            ],
+          };
+        },
+        async *[Symbol.asyncIterator]() {
+          // no partial events needed
+        },
+      }) as unknown as ReturnType<typeof streamSimple>;
+
+    const wrapped = wrapStreamFnDecodeXaiToolCallArguments(baseFn as unknown as StreamFn);
+    const stream = wrapped(
+      { provider: "xai", api: "openai-responses", id: "grok" },
+      { prompt: "", messages: [] },
+      {},
+    ) as ReturnType<typeof streamSimple>;
+
+    const message = await stream.result();
+    const call = (message as unknown as { content: Array<{ arguments?: unknown }> }).content[0];
+    expect(call?.arguments).toEqual({ path: "/tmp/x" });
   });
 
   it("recursively decodes nested objects", () => {
