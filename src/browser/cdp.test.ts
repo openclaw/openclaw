@@ -336,6 +336,26 @@ describe("cdp", () => {
     expect(normalized).toBe("ws://192.168.1.202:18850/devtools/browser/ABC");
   });
 
+  it("keeps existing websocket query params when appending remote CDP query params", () => {
+    const normalized = normalizeCdpWsUrl(
+      "ws://127.0.0.1:9222/devtools/browser/ABC?session=1&token=ws-token",
+      "http://127.0.0.1:9222?token=cdp-token&apiKey=abc",
+    );
+    expect(normalized).toBe(
+      "ws://127.0.0.1:9222/devtools/browser/ABC?session=1&token=ws-token&apiKey=abc",
+    );
+  });
+
+  it("rewrites wildcard bind addresses to secure remote CDP hosts without clobbering websocket params", () => {
+    const normalized = normalizeCdpWsUrl(
+      "ws://0.0.0.0:3000/devtools/browser/ABC?session=1&token=ws-token",
+      "https://user:pass@example.com:9443?token=cdp-token&apiKey=abc",
+    );
+    expect(normalized).toBe(
+      "wss://user:pass@example.com:9443/devtools/browser/ABC?session=1&token=ws-token&apiKey=abc",
+    );
+  });
+
   it("upgrades ws to wss when CDP uses https", () => {
     const normalized = normalizeCdpWsUrl(
       "ws://production-sfo.browserless.io",

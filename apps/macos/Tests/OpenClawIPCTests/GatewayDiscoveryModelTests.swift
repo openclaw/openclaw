@@ -121,6 +121,56 @@ struct GatewayDiscoveryModelTests {
             port: 2201) == "peter@studio.local:2201")
     }
 
+    @Test func `tailscale serve discovery continues when DNS-SD already found a remote gateway`() {
+        let dnsSdGateway = GatewayDiscoveryModel.DiscoveredGateway(
+            displayName: "Nearby Gateway",
+            serviceHost: "nearby-gateway.local",
+            servicePort: 18789,
+            lanHost: "nearby-gateway.local",
+            tailnetDns: nil,
+            sshPort: 22,
+            gatewayPort: 18789,
+            cliPath: nil,
+            stableID: "bonjour|nearby-gateway",
+            debugID: "bonjour",
+            isLocal: false)
+
+        #expect(GatewayDiscoveryModel.shouldContinueTailscaleServeDiscovery(
+            currentGateways: [dnsSdGateway],
+            tailscaleServeGateways: []))
+    }
+
+    @Test func `tailscale serve discovery stops after serve result is found`() {
+        let dnsSdGateway = GatewayDiscoveryModel.DiscoveredGateway(
+            displayName: "Nearby Gateway",
+            serviceHost: "nearby-gateway.local",
+            servicePort: 18789,
+            lanHost: "nearby-gateway.local",
+            tailnetDns: nil,
+            sshPort: 22,
+            gatewayPort: 18789,
+            cliPath: nil,
+            stableID: "bonjour|nearby-gateway",
+            debugID: "bonjour",
+            isLocal: false)
+        let serveGateway = GatewayDiscoveryModel.DiscoveredGateway(
+            displayName: "Tailscale Gateway",
+            serviceHost: "gateway-host.tailnet-example.ts.net",
+            servicePort: 443,
+            lanHost: nil,
+            tailnetDns: "gateway-host.tailnet-example.ts.net",
+            sshPort: 22,
+            gatewayPort: 443,
+            cliPath: nil,
+            stableID: "tailscale-serve|gateway-host.tailnet-example.ts.net",
+            debugID: "serve",
+            isLocal: false)
+
+        #expect(!GatewayDiscoveryModel.shouldContinueTailscaleServeDiscovery(
+            currentGateways: [dnsSdGateway],
+            tailscaleServeGateways: [serveGateway]))
+    }
+
     @Test func `dedupe key prefers resolved endpoint across sources`() {
         let wideArea = GatewayDiscoveryModel.DiscoveredGateway(
             displayName: "Gateway",

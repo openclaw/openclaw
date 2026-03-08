@@ -166,9 +166,21 @@ describe("cdp.helpers", () => {
     expect(url).toBe("https://connect.example.com/?token=abc");
   });
 
+  it("preserves auth and query params when normalizing secure loopback WebSocket CDP URLs", () => {
+    const url = normalizeCdpHttpBaseForJsonEndpoints(
+      "wss://user:pass@127.0.0.1:9222/devtools/browser/ABC?token=abc",
+    );
+    expect(url).toBe("https://user:pass@127.0.0.1:9222/?token=abc");
+  });
+
   it("strips a trailing /cdp suffix when normalizing HTTP bases", () => {
     const url = normalizeCdpHttpBaseForJsonEndpoints("ws://127.0.0.1:9222/cdp?token=abc");
     expect(url).toBe("http://127.0.0.1:9222/?token=abc");
+  });
+
+  it("preserves base prefixes when stripping a trailing /cdp suffix", () => {
+    const url = normalizeCdpHttpBaseForJsonEndpoints("ws://127.0.0.1:9222/browser/cdp?token=abc");
+    expect(url).toBe("http://127.0.0.1:9222/browser?token=abc");
   });
 
   it("adds basic auth headers when credentials are present", () => {
