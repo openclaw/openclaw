@@ -250,6 +250,7 @@ export function registerBrowserAgentSnapshotRoutes(
           cdpUrl,
           targetId: tab.targetId,
           url,
+          signal: req.signal,
           ...withBrowserNavigationPolicy(ctx.state().resolved.ssrfPolicy),
         });
         const currentTargetId = await resolveTargetIdAfterNavigate({
@@ -286,6 +287,7 @@ export function registerBrowserAgentSnapshotRoutes(
         const pdf = await pw.pdfViaPlaywright({
           cdpUrl,
           targetId: tab.targetId,
+          signal: req.signal,
         });
         await saveBrowserMediaResponse({
           res,
@@ -362,6 +364,7 @@ export function registerBrowserAgentSnapshotRoutes(
             element,
             fullPage,
             type,
+            signal: req.signal,
           });
           buffer = snap.buffer;
         } else {
@@ -495,6 +498,7 @@ export function registerBrowserAgentSnapshotRoutes(
         const roleSnapshotArgs = {
           cdpUrl: profileCtx.profile.cdpUrl,
           targetId: tab.targetId,
+          signal: req.signal,
           selector: plan.selectorValue,
           frameSelector: plan.frameSelectorValue,
           refsMode: plan.refsMode,
@@ -511,6 +515,7 @@ export function registerBrowserAgentSnapshotRoutes(
               .snapshotAiViaPlaywright({
                 cdpUrl: profileCtx.profile.cdpUrl,
                 targetId: tab.targetId,
+                signal: req.signal,
                 ...(typeof plan.resolvedMaxChars === "number"
                   ? { maxChars: plan.resolvedMaxChars }
                   : {}),
@@ -528,6 +533,7 @@ export function registerBrowserAgentSnapshotRoutes(
             targetId: tab.targetId,
             refs: "refs" in snap ? snap.refs : {},
             type: "png",
+            signal: req.signal,
           });
           const normalized = await normalizeBrowserScreenshot(labeled.buffer, {
             maxSide: DEFAULT_BROWSER_SCREENSHOT_MAX_SIDE,
@@ -579,6 +585,7 @@ export function registerBrowserAgentSnapshotRoutes(
                 cdpUrl: profileCtx.profile.cdpUrl,
                 targetId: tab.targetId,
                 limit: plan.limit,
+                signal: req.signal,
               });
             });
           })()
