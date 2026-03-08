@@ -30,6 +30,7 @@ type EventHandlerContext = {
   isLocalRunId?: (runId: string) => boolean;
   forgetLocalRunId?: (runId: string) => void;
   clearLocalRunIds?: () => void;
+  onUsageUpdate?: (data: Record<string, unknown>) => void;
 };
 
 export function createEventHandlers(context: EventHandlerContext) {
@@ -43,6 +44,7 @@ export function createEventHandlers(context: EventHandlerContext) {
     isLocalRunId,
     forgetLocalRunId,
     clearLocalRunIds,
+    onUsageUpdate,
   } = context;
   const finalizedRuns = new Map<string, number>();
   const sessionRuns = new Map<string, number>();
@@ -315,6 +317,13 @@ export function createEventHandlers(context: EventHandlerContext) {
         }
       }
       tui.requestRender();
+      return;
+    }
+    if (evt.stream === "usage") {
+      if (onUsageUpdate) {
+        onUsageUpdate(evt.data ?? {});
+        tui.requestRender();
+      }
       return;
     }
     if (evt.stream === "lifecycle") {

@@ -943,14 +943,14 @@ export async function runEmbeddedPiAgent(
           const attemptUsage = attempt.attemptUsage ?? lastAssistantUsage;
           mergeUsageIntoAccumulator(usageAccumulator, attemptUsage);
 
-          // Emit a live usage event so the TUI footer updates in real time.
-          const usageForEvent = lastAssistantUsage ?? attemptUsage;
+          // Emit a live usage event so the TUI footer updates after each LLM attempt.
+          const usageForEvent = lastAssistantUsage ?? attempt.attemptUsage;
           const promptTokensForEvent = derivePromptTokens({
             input: usageForEvent?.input,
             cacheRead: usageForEvent?.cacheRead,
             cacheWrite: usageForEvent?.cacheWrite,
           });
-          if (typeof promptTokensForEvent === "number" && promptTokensForEvent > 0) {
+          if (typeof promptTokensForEvent === "number") {
             emitAgentEvent({
               runId: params.runId,
               stream: "usage",
