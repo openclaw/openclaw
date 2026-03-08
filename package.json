@@ -443,6 +443,13 @@
       "node-llama-cpp",
       "protobufjs",
       "sharp"
-    ]
+    ],
+    "packageExtensions": {
+      "@mariozechner/pi-coding-agent": {
+        "dependencies": {
+          "strip-ansi": "^7.2.0"
+        }
+      }
+    }
   }
 }
