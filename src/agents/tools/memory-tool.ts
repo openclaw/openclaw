@@ -11,7 +11,7 @@ import { resolveAgentWorkspaceDir, resolveSessionAgentId } from "../agent-scope.
 import { resolveMemorySearchConfig } from "../memory-search.js";
 import { optionalStringEnum } from "../schema/typebox.js";
 import type { AnyAgentTool } from "./common.js";
-import { jsonResult, readNumberParam, readStringParam } from "./common.js";
+import { ToolInputError, jsonResult, readNumberParam, readStringParam } from "./common.js";
 
 const MemorySearchSchema = Type.Object({
   query: Type.String(),
@@ -223,7 +223,7 @@ export function createMemoryWriteTool(options: {
       }
       const target = readMemoryTarget(params, "target", "daily");
       const requestedDate = readStringParam(params, "date");
-      const date = normalizeMemoryDate(requestedDate);
+      const date = resolveMemoryWriteDate(target, requestedDate);
       const entry = formatMemoryEntry({
         text,
         kind: readStringParam(params, "kind"),
@@ -269,7 +269,7 @@ export function createMemoryUpsertTool(options: {
       const keyRaw = readStringParam(params, "key", { required: true });
       const key = normalizeMemoryKey(keyRaw);
       if (!key) {
-        throw new Error("key is required");
+        throw new ToolInputError("key is required");
       }
       const text = normalizeMemoryText(readStringParam(params, "text", { required: true }));
       if (!text) {
@@ -277,7 +277,7 @@ export function createMemoryUpsertTool(options: {
       }
       const target = readMemoryTarget(params, "target", "longterm");
       const requestedDate = readStringParam(params, "date");
-      const date = normalizeMemoryDate(requestedDate);
+      const date = resolveMemoryWriteDate(target, requestedDate);
       const body = formatMemoryEntry({
         text,
         kind: readStringParam(params, "kind"),
@@ -345,7 +345,7 @@ function readMemoryTarget(
   if (raw === "daily" || raw === "longterm") {
     return raw;
   }
-  throw new Error(`${field} must be "daily" or "longterm"`);
+  throw new ToolInputError(`${field} must be "daily" or "longterm"`);
 }
 
 function normalizeMemoryDate(raw?: string): string {
@@ -354,9 +354,16 @@ function normalizeMemoryDate(raw?: string): string {
   }
   const trimmed = raw.trim();
   if (!/^\d{4}-\d{2}-\d{2}$/.test(trimmed)) {
-    throw new Error(`date must be YYYY-MM-DD`);
+    throw new ToolInputError(`date must be YYYY-MM-DD`);
   }
   return trimmed;
+}
+
+function resolveMemoryWriteDate(target: "daily" | "longterm", raw?: string): string | undefined {
+  if (target !== "daily") {
+    return undefined;
+  }
+  return normalizeMemoryDate(raw);
 }
 
 function normalizeMemoryText(raw: string): string {
@@ -416,10 +423,13 @@ function formatMemoryEntry(params: {
 function resolveMemoryWritePath(params: {
   workspaceDir: string;
   target: "daily" | "longterm";
-  date: string;
+  date?: string;
 }): string {
   if (params.target === "longterm") {
     return path.join(params.workspaceDir, "MEMORY.md");
+  }
+  if (!params.date) {
+    throw new ToolInputError("date must be YYYY-MM-DD");
   }
   return path.join(params.workspaceDir, "memory", `${params.date}.md`);
 }

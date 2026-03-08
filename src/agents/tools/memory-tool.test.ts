@@ -8,6 +8,7 @@ import {
   setMemorySearchImpl,
 } from "../../../test/helpers/memory-tool-manager-mock.js";
 import type { OpenClawConfig } from "../../config/config.js";
+import { ToolInputError } from "./common.js";
 import {
   createMemoryGetTool,
   createMemorySearchTool,
@@ -302,5 +303,90 @@ describe("memory write tools", () => {
 
     const content = await fs.readFile(path.join(workspace, "MEMORY.md"), "utf-8");
     expect(content).toBe("- \\[key:favorite-food] do not treat this as an upsert entry\n");
+  });
+
+  it("memory_write surfaces invalid target/date as ToolInputError", async () => {
+    const workspace = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-memory-write-invalid-"));
+    const cfg = configWithWorkspace(workspace);
+    const tool = createMemoryWriteTool({ config: cfg });
+    expect(tool).not.toBeNull();
+    if (!tool) {
+      throw new Error("tool missing");
+    }
+
+    await expect(
+      tool.execute("call_write_invalid_target", {
+        text: "remember this",
+        target: "weekly",
+      }),
+    ).rejects.toMatchObject({
+      name: "ToolInputError",
+      message: 'target must be "daily" or "longterm"',
+    } satisfies Partial<ToolInputError>);
+
+    await expect(
+      tool.execute("call_write_invalid_date", {
+        text: "remember this",
+        target: "daily",
+        date: "03-08-2026",
+      }),
+    ).rejects.toMatchObject({
+      name: "ToolInputError",
+      message: "date must be YYYY-MM-DD",
+    } satisfies Partial<ToolInputError>);
+  });
+
+  it("memory_upsert surfaces invalid normalized keys as ToolInputError", async () => {
+    const workspace = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-memory-upsert-invalid-"));
+    const cfg = configWithWorkspace(workspace);
+    const tool = createMemoryUpsertTool({ config: cfg });
+    expect(tool).not.toBeNull();
+    if (!tool) {
+      throw new Error("tool missing");
+    }
+
+    await expect(
+      tool.execute("call_upsert_invalid_key", {
+        key: "!!!",
+        text: "remember this",
+      }),
+    ).rejects.toMatchObject({
+      name: "ToolInputError",
+      message: "key is required",
+    } satisfies Partial<ToolInputError>);
+  });
+
+  it("ignores incidental date values for longterm memory writes and upserts", async () => {
+    const workspace = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-memory-longterm-date-"));
+    const cfg = configWithWorkspace(workspace);
+    const writeTool = createMemoryWriteTool({ config: cfg });
+    const upsertTool = createMemoryUpsertTool({ config: cfg });
+    expect(writeTool).not.toBeNull();
+    expect(upsertTool).not.toBeNull();
+    if (!writeTool || !upsertTool) {
+      throw new Error("tool missing");
+    }
+
+    await expect(
+      writeTool.execute("call_write_longterm_date", {
+        text: "remember this",
+        target: "longterm",
+        date: "next week",
+      }),
+    ).resolves.toBeDefined();
+
+    await expect(
+      upsertTool.execute("call_upsert_longterm_date", {
+        key: "favorite-food",
+        text: "sushi",
+        target: "longterm",
+        date: "next week",
+      }),
+    ).resolves.toBeDefined();
+
+    const content = await fs.readFile(path.join(workspace, "MEMORY.md"), "utf-8");
+    expect(content).toContain("remember this");
+    expect(content).toContain("[key:favorite-food]");
+    expect(content).toContain("sushi");
   });
 });
