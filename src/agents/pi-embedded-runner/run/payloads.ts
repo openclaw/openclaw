@@ -48,6 +48,29 @@ function isRecoverableToolError(error: string | undefined): boolean {
   return RECOVERABLE_TOOL_ERROR_KEYWORDS.some((keyword) => errorLower.includes(keyword));
 }
 
+/**
+ * Broader check for mutating tool errors that the agent can self-correct
+ * within the same turn (e.g. edit with wrong oldText, write to a missing
+ * directory). Includes all recoverable keywords plus patterns specific to
+ * tool retry scenarios.
+ */
+const SELF_CORRECTABLE_TOOL_ERROR_KEYWORDS = [
+  ...RECOVERABLE_TOOL_ERROR_KEYWORDS,
+  "not found",
+  "could not find",
+  "mismatch",
+  "does not match",
+  "no match",
+  "already exists",
+  "not unique",
+  "retry",
+] as const;
+
+function isSelfCorrectableToolError(error: string | undefined): boolean {
+  const errorLower = (error ?? "").toLowerCase();
+  return SELF_CORRECTABLE_TOOL_ERROR_KEYWORDS.some((keyword) => errorLower.includes(keyword));
+}
+
 function isVerboseToolDetailEnabled(level?: VerboseLevel): boolean {
   return level === "on" || level === "full";
 }
@@ -76,6 +99,13 @@ function resolveToolErrorWarningPolicy(params: {
   const isMutatingToolError =
     params.lastToolError.mutatingAction ?? isLikelyMutatingToolName(params.lastToolError.toolName);
   if (isMutatingToolError) {
+    // Suppress mutating tool failure warnings when the agent recovered and
+    // produced a user-facing reply, AND the error looks recoverable (e.g.
+    // "not found", "must match"). This avoids surfacing intermediate edit/write
+    // failures that the agent self-corrected within the same turn. (#39916)
+    if (params.hasUserFacingReply && isSelfCorrectableToolError(params.lastToolError.error)) {
+      return { showWarning: false, includeDetails };
+    }
     return { showWarning: true, includeDetails };
   }
   if (params.suppressToolErrors) {
