@@ -1541,6 +1541,8 @@ export async function handleFeishuMessage(params: {
             replyInThread,
             rootId: ctx.rootId,
             threadReply,
+            threadConversationId:
+              threadBinding?.conversation.conversationId ?? threadConversationId,
             mentionTargets: ctx.mentionTargets,
             accountId: account.accountId,
             messageCreateTimeMs,
@@ -1639,6 +1641,7 @@ export async function handleFeishuMessage(params: {
         replyInThread,
         rootId: ctx.rootId,
         threadReply,
+        threadConversationId: threadBinding?.conversation.conversationId ?? threadConversationId,
         mentionTargets: ctx.mentionTargets,
         accountId: account.accountId,
         messageCreateTimeMs,

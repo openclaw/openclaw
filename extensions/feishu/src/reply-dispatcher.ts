@@ -8,6 +8,7 @@ import {
 } from "openclaw/plugin-sdk/feishu";
 import { resolveFeishuAccount } from "./accounts.js";
 import { createFeishuClient } from "./client.js";
+import { parseFeishuConversationTarget } from "./conversation-id.js";
 import { sendMediaFeishu } from "./media.js";
 import type { MentionTarget } from "./mention.js";
 import { buildMentionedCardContent } from "./mention.js";
@@ -57,6 +58,7 @@ export type CreateFeishuReplyDispatcherParams = {
   /** True when inbound message is already inside a thread/topic context */
   threadReply?: boolean;
   rootId?: string;
+  threadConversationId?: string;
   mentionTargets?: MentionTarget[];
   accountId?: string;
   /** Epoch ms when the inbound message was created. Used to suppress typing
@@ -81,6 +83,10 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
   const sendReplyToMessageId = skipReplyToInMessages ? undefined : replyToMessageId;
   const threadReplyMode = threadReply === true;
   const effectiveReplyInThread = threadReplyMode ? true : replyInThread;
+  const canonicalThreadRootMessageId =
+    parseFeishuConversationTarget(params.threadConversationId ?? "").rootMessageId?.trim() ||
+    rootId?.trim() ||
+    sendReplyToMessageId?.trim();
   const account = resolveFeishuAccount({ cfg, accountId });
   const prefixContext = createReplyPrefixContext({ cfg, agentId });
 
@@ -156,15 +162,18 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
   let streamingStartPromise: Promise<void> | null = null;
   type StreamTextUpdateMode = "snapshot" | "delta";
 
-  const maybeRecordNativeThreadBinding = (sendResult: FeishuSendResult | null | undefined) => {
-    if (!effectiveReplyInThread || !sendReplyToMessageId || !sendResult?.nativeThreadId) {
+  const maybeRecordNativeThreadBinding = (
+    sendResult: Pick<FeishuSendResult, "nativeThreadId"> | null | undefined,
+  ) => {
+    const nativeThreadId = sendResult?.nativeThreadId?.trim();
+    if (!effectiveReplyInThread || !canonicalThreadRootMessageId || !nativeThreadId) {
       return;
     }
     recordFeishuNativeThreadBinding({
       accountId,
       chatId,
-      rootMessageId: sendReplyToMessageId,
-      nativeThreadId: sendResult.nativeThreadId,
+      rootMessageId: canonicalThreadRootMessageId,
+      nativeThreadId,
     });
   };
 
@@ -233,6 +242,9 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
           replyToMessageId,
           replyInThread: effectiveReplyInThread,
           rootId,
+        });
+        maybeRecordNativeThreadBinding({
+          nativeThreadId: streaming.getNativeThreadId(),
         });
       } catch (error) {
         params.runtime.error?.(`feishu: streaming start failed: ${String(error)}`);

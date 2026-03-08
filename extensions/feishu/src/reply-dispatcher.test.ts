@@ -49,6 +49,7 @@ vi.mock("./streaming-card.js", () => ({
   },
   FeishuStreamingSession: class {
     active = false;
+    nativeThreadId = "omt_streaming_1";
     start = vi.fn(async () => {
       this.active = true;
     });
@@ -57,6 +58,7 @@ vi.mock("./streaming-card.js", () => ({
       this.active = false;
     });
     isActive = vi.fn(() => this.active);
+    getNativeThreadId = vi.fn(() => this.nativeThreadId);
 
     constructor() {
       streamingInstances.push(this);
@@ -507,6 +509,35 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     });
   });
 
+  it("records thread aliases against the canonical thread root", async () => {
+    sendMessageFeishuMock.mockResolvedValue({
+      messageId: "om_reply_2",
+      chatId: "oc_chat",
+      nativeThreadId: "omt_thread_bound",
+    });
+
+    createFeishuReplyDispatcher({
+      cfg: {} as never,
+      agentId: "agent",
+      runtime: {} as never,
+      chatId: "oc_chat",
+      replyToMessageId: "om_child_msg",
+      replyInThread: false,
+      threadReply: true,
+      threadConversationId: "oc_chat:thread:om_root_topic",
+    });
+
+    const options = createReplyDispatcherWithTypingMock.mock.calls[0]?.[0];
+    await options.deliver({ text: "plain text" }, { kind: "final" });
+
+    expect(recordFeishuNativeThreadBindingMock).toHaveBeenCalledWith({
+      accountId: undefined,
+      chatId: "oc_chat",
+      rootMessageId: "om_root_topic",
+      nativeThreadId: "omt_thread_bound",
+    });
+  });
+
   it("passes replyInThread to sendMarkdownCardFeishu for card text", async () => {
     resolveFeishuAccountMock.mockReturnValue({
       accountId: "main",
@@ -582,6 +613,29 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     });
     expect(sendMarkdownCardFeishuMock).not.toHaveBeenCalled();
     expect(sendMessageFeishuMock).not.toHaveBeenCalled();
+  });
+
+  it("records native thread ids for streaming thread replies", async () => {
+    createFeishuReplyDispatcher({
+      cfg: {} as never,
+      agentId: "agent",
+      runtime: { log: vi.fn(), error: vi.fn() } as never,
+      chatId: "oc_chat",
+      replyToMessageId: "om_child_msg",
+      replyInThread: false,
+      threadReply: true,
+      threadConversationId: "oc_chat:thread:om_root_topic",
+    });
+
+    const options = createReplyDispatcherWithTypingMock.mock.calls[0]?.[0];
+    await options.deliver({ text: "```ts\nconst x = 1\n```" }, { kind: "final" });
+
+    expect(recordFeishuNativeThreadBindingMock).toHaveBeenCalledWith({
+      accountId: undefined,
+      chatId: "oc_chat",
+      rootMessageId: "om_root_topic",
+      nativeThreadId: "omt_streaming_1",
+    });
   });
 
   it("buffers thread plain-text block replies until idle", async () => {

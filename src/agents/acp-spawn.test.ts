@@ -637,6 +637,12 @@ describe("spawnAcpDirect", () => {
         }),
       }),
     );
+
+    const agentCall = hoisted.callGatewayMock.mock.calls
+      .map((call: unknown[]) => call[0] as { method?: string; params?: Record<string, unknown> })
+      .find((request) => request.method === "agent");
+    expect(agentCall?.params?.to).toBe("channel:oc_dm_chat:thread:om_seed_77");
+    expect(agentCall?.params?.threadId).toBeUndefined();
   });
 
   it("rejects thread-bound Feishu ACP spawn when spawnAcpSessions is disabled", async () => {

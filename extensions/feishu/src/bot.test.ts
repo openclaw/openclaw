@@ -1806,6 +1806,7 @@ describe("handleFeishuMessage command authorization", () => {
     expect(mockCreateFeishuReplyDispatcher).toHaveBeenCalledWith(
       expect.objectContaining({
         agentId: "codex",
+        threadConversationId: "oc-dm-thread:thread:om_dm_topic_root",
       }),
     );
   });
@@ -1864,6 +1865,7 @@ describe("handleFeishuMessage command authorization", () => {
     expect(mockCreateFeishuReplyDispatcher).toHaveBeenCalledWith(
       expect.objectContaining({
         agentId: "codex",
+        threadConversationId: "oc-dm-thread:thread:om_dm_topic_root",
       }),
     );
   });

@@ -545,16 +545,21 @@ export async function spawnAcpDirect(
     to: ctx.agentTo,
     threadId: ctx.agentThreadId,
   });
-  // Child placement creates a new conversation target. Current placement should
-  // keep bootstrap delivery on the caller's existing thread.
-  const boundConversationIdRaw =
-    preparedBinding?.placement === "child" ? binding?.conversation.conversationId : undefined;
-  const boundConversationId = boundConversationIdRaw
-    ? String(boundConversationIdRaw).trim() || undefined
-    : undefined;
   const fallbackThreadIdRaw = requesterOrigin?.threadId;
   const fallbackThreadId =
     fallbackThreadIdRaw != null ? String(fallbackThreadIdRaw).trim() || undefined : undefined;
+  // Child placement creates a new conversation target. Current placement should
+  // keep bootstrap delivery on the caller's existing thread. When callers only
+  // provide a canonical conversation id (for example Feishu rootless topic
+  // recovery) there may be no standalone threadId, so preserve the bound
+  // conversation target for bootstrap delivery as well.
+  const boundConversationIdRaw =
+    preparedBinding?.placement === "child" || !fallbackThreadId
+      ? binding?.conversation.conversationId
+      : undefined;
+  const boundConversationId = boundConversationIdRaw
+    ? String(boundConversationIdRaw).trim() || undefined
+    : undefined;
   const deliveryThreadId = boundConversationId ? undefined : fallbackThreadId;
   const inferredDeliveryTo = boundConversationId
     ? `channel:${boundConversationId}`
