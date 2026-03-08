@@ -408,7 +408,7 @@ export async function spawnAcpDirect(
     sessionCreated = true;
     const storePath = resolveStorePath(cfg.session?.store, { agentId: targetAgentId });
     const sessionStore = loadSessionStore(storePath);
-    let sessionEntry = sessionStore[sessionKey];
+    let sessionEntry: SessionEntry | undefined = sessionStore[sessionKey];
     const sessionId = sessionEntry?.sessionId;
     if (sessionId) {
       sessionEntry = await persistAcpSpawnSessionFileBestEffort({

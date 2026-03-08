@@ -1049,29 +1049,27 @@ async function agentCommandInternal(
         });
       }
     }
-    const sessionPathOpts = resolveSessionFilePathOptions({
-      agentId: sessionAgentId,
-      storePath,
-    });
-    let sessionFile = resolveSessionFilePath(sessionId, sessionEntry, sessionPathOpts);
+    let sessionFile: string | undefined;
     if (sessionStore && sessionKey) {
-      const threadIdFromSessionKey = parseSessionThreadInfo(sessionKey).threadId;
-      const fallbackSessionFile = !sessionEntry?.sessionFile
-        ? resolveSessionTranscriptPath(
-            sessionId,
-            sessionAgentId,
-            opts.threadId ?? threadIdFromSessionKey,
-          )
-        : undefined;
-      const resolvedSessionFile = await resolveAndPersistSessionFile({
+      const resolvedSessionFile = await resolveSessionTranscriptFile({
         sessionId,
         sessionKey,
         sessionStore,
         storePath,
         sessionEntry,
-        agentId: sessionPathOpts?.agentId,
-        sessionsDir: sessionPathOpts?.sessionsDir,
-        fallbackSessionFile,
+        agentId: sessionAgentId,
+        threadId: opts.threadId,
+      });
+      sessionFile = resolvedSessionFile.sessionFile;
+      sessionEntry = resolvedSessionFile.sessionEntry;
+    }
+    if (!sessionFile) {
+      const resolvedSessionFile = await resolveSessionTranscriptFile({
+        sessionId,
+        sessionKey: sessionKey ?? sessionId,
+        sessionEntry,
+        agentId: sessionAgentId,
+        threadId: opts.threadId,
       });
       sessionFile = resolvedSessionFile.sessionFile;
       sessionEntry = resolvedSessionFile.sessionEntry;
