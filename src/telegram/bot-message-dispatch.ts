@@ -47,6 +47,12 @@ import { cacheSticker, describeStickerImage } from "./sticker-cache.js";
 
 const EMPTY_RESPONSE_FALLBACK = "No response generated. Please try again.";
 
+const TOOL_ERROR_WARNING_REGEX = /^⚠️.*\bfailed\b/i;
+
+function isToolErrorWarning(payload: ReplyPayload): boolean {
+  return typeof payload.text === "string" && TOOL_ERROR_WARNING_REGEX.test(payload.text.trim());
+}
+
 /** Minimum chars before sending first streaming message (improves push notification UX) */
 const DRAFT_MIN_INITIAL_CHARS = 30;
 
@@ -516,6 +522,10 @@ export const dispatchTelegramMessage = async ({
         ...prefixOptions,
         typingCallbacks,
         deliver: async (payload, info) => {
+          if (info.kind === "final" && payload.isError === true && isToolErrorWarning(payload)) {
+            logVerbose("telegram: suppressing redundant tool error summary to match the TUI");
+            return;
+          }
           if (info.kind === "final") {
             // Assistant callbacks are fire-and-forget; ensure queued boundary
             // rotations/partials are applied before final delivery mapping.
