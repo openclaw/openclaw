@@ -45,6 +45,27 @@ describe("sanitizeUserFacingText", () => {
     expect(sanitizeUserFacingText(text)).toBe(text);
   });
 
+  it("preserves standalone function call wrapper lines when tool tags appear in another block", () => {
+    const input = [
+      "These wrappers are literal:",
+      "<function_calls>",
+      "</function_calls>",
+      "",
+      "Visible reply",
+      "<|tool_list_end|>",
+    ].join("\n");
+
+    expect(sanitizeUserFacingText(input)).toBe(
+      [
+        "These wrappers are literal:",
+        "<function_calls>",
+        "</function_calls>",
+        "",
+        "Visible reply",
+      ].join("\n"),
+    );
+  });
+
   it("preserves trailing newlines after removing marker-only lines", () => {
     const input = ["Hello", "<|tool_list_end|>", "", "World", ""].join("\n");
     expect(sanitizeUserFacingText(input)).toBe("Hello\n\nWorld\n");

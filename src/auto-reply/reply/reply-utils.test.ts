@@ -166,6 +166,28 @@ describe("normalizeReplyPayload", () => {
     expect(result).toEqual({ text });
   });
 
+  it("keeps standalone function call wrapper lines when tool tags are in another block", () => {
+    const input = [
+      "These wrappers are literal:",
+      "<function_calls>",
+      "</function_calls>",
+      "",
+      "Visible reply",
+      "<|tool_list_end|>",
+    ].join("\n");
+    const result = normalizeReplyPayload({ text: input });
+
+    expect(result).toEqual({
+      text: [
+        "These wrappers are literal:",
+        "<function_calls>",
+        "</function_calls>",
+        "",
+        "Visible reply",
+      ].join("\n"),
+    });
+  });
+
   it("preserves trailing newlines after removing leaked internal tool markers", () => {
     const result = normalizeReplyPayload({
       text: "Hello\n<|tool_list_end|>\n\nWorld\n",

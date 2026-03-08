@@ -401,19 +401,55 @@ function stripFinalTagsFromText(text: string): string {
   return text.replace(FINAL_TAG_RE, "");
 }
 
+type ToolMarkerLineType = "pipe" | "wrapper" | null;
+
+function getToolMarkerLineType(line: string): ToolMarkerLineType {
+  const withoutPipeTags = line.replace(INTERNAL_TOOL_PIPE_TAG_RE, "");
+  if (withoutPipeTags.trim().length === 0 && withoutPipeTags !== line) {
+    return "pipe";
+  }
+  const withoutWrappers = line.replace(FUNCTION_CALLS_TAG_RE, "");
+  return withoutWrappers.trim().length === 0 && withoutWrappers !== line ? "wrapper" : null;
+}
+
+function getWrapperLinesInPipeMarkerBlocks(lineTypes: ToolMarkerLineType[]): Set<number> {
+  const wrapperLines = new Set<number>();
+  for (let index = 0; index < lineTypes.length; ) {
+    if (lineTypes[index] === null) {
+      index++;
+      continue;
+    }
+    let hasPipe = false;
+    let blockEnd = index;
+    while (blockEnd < lineTypes.length && lineTypes[blockEnd] !== null) {
+      hasPipe ||= lineTypes[blockEnd] === "pipe";
+      blockEnd++;
+    }
+    if (hasPipe) {
+      for (let blockIndex = index; blockIndex < blockEnd; blockIndex++) {
+        if (lineTypes[blockIndex] === "wrapper") {
+          wrapperLines.add(blockIndex);
+        }
+      }
+    }
+    index = blockEnd;
+  }
+  return wrapperLines;
+}
+
 function stripInternalToolMarkersFromText(text: string): string {
   if (!text) {
     return text;
   }
-  const shouldStripFunctionCallWrappers = text.search(INTERNAL_TOOL_PIPE_TAG_RE) !== -1;
+  const lines = text.split("\n");
+  const lineTypes = lines.map(getToolMarkerLineType);
+  const wrapperLinesInPipeBlocks = getWrapperLinesInPipeMarkerBlocks(lineTypes);
   let removedAny = false;
-  const keptLines = text.split("\n").filter((line) => {
-    const withoutPipeTags = line.replace(INTERNAL_TOOL_PIPE_TAG_RE, "");
-    const strippedLine = shouldStripFunctionCallWrappers
-      ? withoutPipeTags.replace(FUNCTION_CALLS_TAG_RE, "")
-      : withoutPipeTags;
-    const isMarkerOnlyLine = strippedLine.trim().length === 0 && strippedLine !== line;
-    if (isMarkerOnlyLine) {
+  const keptLines = lines.filter((line, index) => {
+    const lineType = lineTypes[index];
+    const shouldDrop =
+      lineType === "pipe" || (lineType === "wrapper" && wrapperLinesInPipeBlocks.has(index));
+    if (shouldDrop) {
       removedAny = true;
       return false;
     }
