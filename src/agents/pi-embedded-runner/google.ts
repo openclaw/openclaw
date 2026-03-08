@@ -517,6 +517,59 @@ export function applyGoogleTurnOrderingFix(params: {
   return { messages: sanitized, didPrepend };
 }
 
+/**
+ * Remove consecutive assistant error messages from the session transcript,
+ * keeping only the last error entry in each consecutive run.
+ *
+ * During LLM outages or transient failures, each retry within a single
+ * request can persist a new assistant message with `stopReason: "error"`
+ * to the session JSONL.  When three or more accumulate in a row, the
+ * resulting conversation violates role-alternation rules expected by most
+ * model APIs.  Even providers that tolerate consecutive same-role turns
+ * can choke on the sheer number of error entries or misinterpret them as
+ * part of the useful context.
+ *
+ * The function scans the message array and collapses any run of ≥2
+ * consecutive assistant-error entries into a single entry (the last one
+ * in the run, which carries the most recent error detail).  Non-error
+ * assistant messages and messages with other roles are never touched.
+ *
+ * Complexity: O(n) single pass.
+ */
+export function stripConsecutiveAssistantErrors(messages: AgentMessage[]): AgentMessage[] {
+  if (messages.length < 2) {
+    return messages;
+  }
+  const out: AgentMessage[] = [];
+  let i = 0;
+  while (i < messages.length) {
+    const msg = messages[i] as { role?: string; stopReason?: string };
+    if (msg.role !== "assistant" || msg.stopReason !== "error") {
+      out.push(messages[i]);
+      i += 1;
+      continue;
+    }
+    // Found an assistant error entry — scan for consecutive ones.
+    let runEnd = i + 1;
+    while (runEnd < messages.length) {
+      const next = messages[runEnd] as { role?: string; stopReason?: string };
+      if (next.role !== "assistant" || next.stopReason !== "error") {
+        break;
+      }
+      runEnd += 1;
+    }
+    // Keep only the last entry of the run (most recent error detail).
+    out.push(messages[runEnd - 1]);
+    if (runEnd - i > 1) {
+      log.warn(
+        `stripped ${runEnd - i - 1} consecutive assistant error entries from session history`,
+      );
+    }
+    i = runEnd;
+  }
+  return out;
+}
+
 export async function sanitizeSessionHistory(params: {
   messages: AgentMessage[];
   modelApi?: string | null;
@@ -559,8 +612,18 @@ export async function sanitizeSessionHistory(params: {
     ? sanitizeToolUseResultPairing(sanitizedToolCalls)
     : sanitizedToolCalls;
   const sanitizedToolResults = stripToolResultDetails(repairedTools);
+  // Strip consecutive assistant error entries to prevent session poisoning.
+  // During LLM outages, retry loops can accumulate multiple assistant messages
+  // with stopReason: "error" in the session JSONL. These consecutive error
+  // entries violate role alternation rules and cause the API to reject all
+  // subsequent requests with 400 errors, creating a death spiral where the
+  // session becomes permanently stuck even after connectivity recovers.
+  // Keep at most one trailing error entry per consecutive run so that
+  // context about the failure is preserved without poisoning the session.
+  // See: https://github.com/openclaw/openclaw/issues/11475
+  const withoutConsecutiveErrors = stripConsecutiveAssistantErrors(sanitizedToolResults);
   const sanitizedCompactionUsage = ensureAssistantUsageSnapshots(
-    stripStaleAssistantUsageBeforeLatestCompaction(sanitizedToolResults),
+    stripStaleAssistantUsageBeforeLatestCompaction(withoutConsecutiveErrors),
   );
 
   const isOpenAIResponsesApi =
