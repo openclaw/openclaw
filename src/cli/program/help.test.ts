@@ -10,6 +10,12 @@ vi.mock("../../terminal/links.js", () => ({
   formatDocsLink: formatDocsLinkMock,
 }));
 
+const resolveCommitHashMock = vi.fn(() => null as string | null);
+
+vi.mock("../../infra/git-commit.js", () => ({
+  resolveCommitHash: () => resolveCommitHashMock(),
+}));
+
 vi.mock("../../terminal/theme.js", () => ({
   isRich: () => false,
   theme: {
@@ -117,6 +123,23 @@ describe("configureProgramHelp", () => {
     const program = makeProgramWithCommands();
     expect(() => configureProgramHelp(program, testProgramContext)).toThrow("exit:0");
     expect(logSpy).toHaveBeenCalledWith("9.9.9-test");
+    expect(exitSpy).toHaveBeenCalledWith(0);
+
+    logSpy.mockRestore();
+    exitSpy.mockRestore();
+  });
+
+  it("appends commit SHA to version output when resolveCommitHash returns a hash", () => {
+    resolveCommitHashMock.mockReturnValueOnce("abc1234");
+    process.argv = ["node", "openclaw", "--version"];
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+    const exitSpy = vi.spyOn(process, "exit").mockImplementation(((code?: number) => {
+      throw new Error(`exit:${code ?? ""}`);
+    }) as typeof process.exit);
+
+    const program = makeProgramWithCommands();
+    expect(() => configureProgramHelp(program, testProgramContext)).toThrow("exit:0");
+    expect(logSpy).toHaveBeenCalledWith("9.9.9-test (abc1234)");
     expect(exitSpy).toHaveBeenCalledWith(0);
 
     logSpy.mockRestore();

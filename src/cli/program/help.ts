@@ -1,6 +1,7 @@
 import type { Command } from "commander";
 import { formatDocsLink } from "../../terminal/links.js";
 import { isRich, theme } from "../../terminal/theme.js";
+import { resolveCommitHash } from "../../infra/git-commit.js";
 import { escapeRegExp } from "../../utils.js";
 import { hasFlag, hasRootVersionAlias } from "../argv.js";
 import { formatCliBannerLine, hasEmittedCliBanner } from "../banner.js";
@@ -44,10 +45,12 @@ const EXAMPLES = [
 ] as const;
 
 export function configureProgramHelp(program: Command, ctx: ProgramContext) {
+  const commit = resolveCommitHash();
+  const versionWithCommit = commit ? `${ctx.programVersion} (${commit})` : ctx.programVersion;
   program
     .name(CLI_NAME)
     .description("")
-    .version(ctx.programVersion)
+    .version(versionWithCommit)
     .option(
       "--dev",
       "Dev profile: isolate state under ~/.openclaw-dev, default gateway port 19001, and shift derived ports (browser/canvas)",
@@ -109,7 +112,7 @@ export function configureProgramHelp(program: Command, ctx: ProgramContext) {
     hasFlag(process.argv, "--version") ||
     hasRootVersionAlias(process.argv)
   ) {
-    console.log(ctx.programVersion);
+    console.log(versionWithCommit);
     process.exit(0);
   }
 
