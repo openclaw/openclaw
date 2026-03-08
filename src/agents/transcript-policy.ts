@@ -123,7 +123,8 @@ export function resolveTranscriptPolicy(params: {
       (!isOpenAi && sanitizeToolCallIds) || requiresOpenAiCompatibleToolIdSanitization,
     toolCallIdMode,
     repairToolUseResultPairing,
-    preserveSignatures: isAnthropic,
+    // kimi-coding uses anthropic-messages API but cannot handle re-sent thinkingSignature blobs (#39798)
+    preserveSignatures: isAnthropic && provider !== "kimi-coding",
     sanitizeThoughtSignatures: isOpenAi ? undefined : sanitizeThoughtSignatures,
     sanitizeThinkingSignatures: false,
     dropThinkingBlocks,
