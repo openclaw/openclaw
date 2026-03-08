@@ -56,24 +56,28 @@ function chunkToken(token: string, maxChars: number): string[] {
 }
 
 function isCopySensitiveToken(token: string): boolean {
-  if (URL_PREFIX_RE.test(token)) {
+  const stripped = token.replace(/^[<([`*_"']+|[>)\]`*_"']+$/g, "");
+  if (URL_PREFIX_RE.test(stripped)) {
     return true;
   }
   if (
-    token.startsWith("/") ||
-    token.startsWith("~/") ||
-    token.startsWith("./") ||
-    token.startsWith("../")
+    stripped.startsWith("/") ||
+    stripped.startsWith("~/") ||
+    stripped.startsWith("./") ||
+    stripped.startsWith("../")
   ) {
     return true;
   }
-  if (WINDOWS_DRIVE_RE.test(token) || token.startsWith("\\\\")) {
+  if (WINDOWS_DRIVE_RE.test(stripped) || stripped.startsWith("\\\\")) {
     return true;
   }
-  if (token.includes("/") || token.includes("\\")) {
+  if (stripped.includes("/") || stripped.includes("\\")) {
     return true;
   }
-  return token.includes("_") && FILE_LIKE_RE.test(token);
+  return (
+    (stripped.includes("_") || stripped.includes(".") || stripped.includes("-")) &&
+    FILE_LIKE_RE.test(stripped)
+  );
 }
 
 function normalizeLongTokenForDisplay(token: string): string {

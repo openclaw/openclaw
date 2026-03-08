@@ -249,6 +249,34 @@ describe("sanitizeRenderableText", () => {
     expect(sanitized).toBe(input);
   });
 
+  it("preserves dotted entity IDs wrapped in markdown backticks", () => {
+    const input = "`binary_sensor.sense_energy_monitor_power_is_really_long`";
+    const sanitized = sanitizeRenderableText(input);
+
+    expect(sanitized).toBe(input);
+  });
+
+  it("does not split bare dotted entity IDs", () => {
+    const input = "binary_sensor.sense_energy_monitor_power_is_really_long";
+    const sanitized = sanitizeRenderableText(input);
+
+    expect(sanitized).toBe(input);
+  });
+
+  it("preserves bare dotted IDs without underscores", () => {
+    const input = "sensor.someEntityIdentifierThatIsExtremelyLong";
+    const sanitized = sanitizeRenderableText(input);
+
+    expect(sanitized).toBe(input);
+  });
+
+  it("preserves UUIDs ignoring surrounding quotes", () => {
+    const input = '"123e4567-e89b-12d3-a456-426614174000"';
+    const sanitized = sanitizeRenderableText(input);
+
+    expect(sanitized).toBe(input);
+  });
+
   it("wraps rtl lines with directional isolation marks", () => {
     const input = "مرحبا بالعالم";
     const sanitized = sanitizeRenderableText(input);
