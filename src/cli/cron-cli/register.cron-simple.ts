@@ -99,8 +99,8 @@ export function registerCronSimpleCommands(cron: Command) {
             mode: opts.due ? "due" : "force",
           });
           printCronJson(res);
-          const result = res as { ok?: boolean; ran?: boolean } | undefined;
-          defaultRuntime.exit(result?.ok && result?.ran ? 0 : 1);
+          const result = res as { ok?: boolean; ran?: boolean; enqueued?: boolean } | undefined;
+          defaultRuntime.exit(result?.ok && (result?.ran || result?.enqueued) ? 0 : 1);
         } catch (err) {
           handleCronCliError(err);
         }
