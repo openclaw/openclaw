@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { RuntimeEnv } from "../../runtime.js";
 import { deliverDiscordReply } from "./reply-delivery.js";
 import {
@@ -20,6 +20,11 @@ vi.mock("../send.js", () => ({
 vi.mock("../send.shared.js", () => ({
   sendDiscordText: (...args: unknown[]) => sendDiscordTextMock(...args),
 }));
+
+vi.mock("../../utils.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../utils.js")>();
+  return { ...actual, sleep: vi.fn().mockResolvedValue(undefined) };
+});
 
 describe("deliverDiscordReply", () => {
   const runtime = {} as RuntimeEnv;
@@ -453,5 +458,140 @@ describe("deliverDiscordReply", () => {
       "Parent channel delivery",
       expect.objectContaining({ token: "token", accountId: "default" }),
     );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Retry coverage for webhook, text+media, and voice send paths
+// ---------------------------------------------------------------------------
+
+describe("retry coverage for additional send paths", () => {
+  const runtime = {} as RuntimeEnv;
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.clearAllMocks();
+    sendMessageDiscordMock.mockResolvedValue({ messageId: "m1", channelId: "ch1" });
+    sendWebhookMessageDiscordMock.mockResolvedValue({ messageId: "m1", channelId: "ch1" });
+    sendVoiceMessageDiscordMock.mockResolvedValue({ messageId: "m1", channelId: "ch1" });
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("retries webhook send on 429 embedded in error message", async () => {
+    const webhookErr = new Error("Discord webhook send failed (429: rate limited)");
+    sendWebhookMessageDiscordMock
+      .mockRejectedValueOnce(webhookErr)
+      .mockResolvedValueOnce({ messageId: "m1", channelId: "ch1" });
+
+    const threadBindings = createThreadBindingManager({
+      accountId: "default",
+      persist: false,
+      enableSweeper: false,
+    });
+    await threadBindings.bindTarget({
+      threadId: "thread-1",
+      channelId: "parent-1",
+      targetKind: "subagent",
+      targetSessionKey: "agent:main:subagent:child",
+      agentId: "main",
+      webhookId: "wh_1",
+      webhookToken: "tok_1",
+      introText: "",
+    });
+    const promise = deliverDiscordReply({
+      replies: [{ text: "hello" }],
+      target: "channel:thread-1",
+      token: "token",
+      runtime,
+      textLimit: 2000,
+      sessionKey: "agent:main:subagent:child",
+      threadBindings,
+    });
+    await vi.advanceTimersByTimeAsync(35_000);
+    await promise;
+
+    expect(sendWebhookMessageDiscordMock).toHaveBeenCalledTimes(2);
+    // Should NOT fall through to bot sender
+    expect(sendMessageDiscordMock).not.toHaveBeenCalled();
+  });
+
+  it("retries text+media send on 429", async () => {
+    const rateLimitErr = Object.assign(new Error("rate limited"), { status: 429 });
+    sendMessageDiscordMock
+      .mockRejectedValueOnce(rateLimitErr)
+      .mockResolvedValueOnce({ messageId: "m1", channelId: "ch1" });
+
+    const promise = deliverDiscordReply({
+      replies: [{ text: "hello", mediaUrl: "https://example.com/image.png" }],
+      target: "channel:123",
+      token: "token",
+      runtime,
+      textLimit: 2000,
+    });
+    await vi.advanceTimersByTimeAsync(35_000);
+    await promise;
+
+    expect(sendMessageDiscordMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("retries voice send on 500 server error", async () => {
+    const serverErr = Object.assign(new Error("internal"), { status: 500 });
+    sendVoiceMessageDiscordMock
+      .mockRejectedValueOnce(serverErr)
+      .mockResolvedValueOnce({ messageId: "m1", channelId: "ch1" });
+
+    const promise = deliverDiscordReply({
+      replies: [{ text: "", mediaUrl: "https://example.com/voice.ogg", audioAsVoice: true }],
+      target: "channel:123",
+      token: "token",
+      runtime,
+      textLimit: 2000,
+    });
+    await vi.advanceTimersByTimeAsync(35_000);
+    await promise;
+
+    expect(sendVoiceMessageDiscordMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("webhook falls through to bot sender on non-retryable 403", async () => {
+    const forbiddenErr = Object.assign(
+      new Error("Discord webhook send failed (403: forbidden)"),
+      {},
+    );
+    sendWebhookMessageDiscordMock.mockRejectedValueOnce(forbiddenErr);
+
+    const threadBindings = createThreadBindingManager({
+      accountId: "default",
+      persist: false,
+      enableSweeper: false,
+    });
+    await threadBindings.bindTarget({
+      threadId: "thread-1",
+      channelId: "parent-1",
+      targetKind: "subagent",
+      targetSessionKey: "agent:main:subagent:child",
+      agentId: "main",
+      webhookId: "wh_1",
+      webhookToken: "tok_1",
+      introText: "",
+    });
+    const promise = deliverDiscordReply({
+      replies: [{ text: "hello" }],
+      target: "channel:thread-1",
+      token: "token",
+      runtime,
+      textLimit: 2000,
+      sessionKey: "agent:main:subagent:child",
+      threadBindings,
+    });
+    await vi.advanceTimersByTimeAsync(35_000);
+    await promise;
+
+    // Webhook failed with 403 (non-retryable) → falls through to bot sender
+    expect(sendWebhookMessageDiscordMock).toHaveBeenCalledTimes(1);
+    expect(sendMessageDiscordMock).toHaveBeenCalledTimes(1);
   });
 });
