@@ -88,6 +88,7 @@ and logged; a message that is only `HEARTBEAT_OK` is dropped.
     defaults: {
       heartbeat: {
         every: "30m", // default: 30m (0m disables)
+        jitter: "10m", // optional: stagger first trigger per agent on startup
         model: "anthropic/claude-opus-4-6",
         includeReasoning: false, // default: false (deliver separate Reasoning: message when available)
         lightContext: false, // default: false; true keeps only HEARTBEAT.md from workspace bootstrap files
@@ -209,6 +210,7 @@ Use `accountId` to target a specific account on multi-account channels like Tele
 ### Field notes
 
 - `every`: heartbeat interval (duration string; default unit = minutes).
+- `jitter`: random offset in `[0, jitter)` added to the first trigger per agent on startup. Staggers heartbeats across agents to avoid simultaneous firing after gateway restart (e.g. 7 agents with `every: "120m"` all firing at once). Duration string (default unit: minutes). Example: `jitter: "10m"` for up to 10 minutes delay.
 - `model`: optional model override for heartbeat runs (`provider/model`).
 - `includeReasoning`: when enabled, also deliver the separate `Reasoning:` message when available (same shape as `/reasoning on`).
 - `lightContext`: when true, heartbeat runs use lightweight bootstrap context and keep only `HEARTBEAT.md` from workspace bootstrap files.

@@ -221,6 +221,12 @@ export type AgentDefaultsConfig = {
   heartbeat?: {
     /** Heartbeat interval (duration string, default unit: minutes; default: 30m). */
     every?: string;
+    /**
+     * Random offset in [0, jitter) added to the first trigger per agent on startup.
+     * Staggers heartbeats across agents to avoid simultaneous firing after gateway restart.
+     * Duration string (default unit: minutes). Example: "10m" for up to 10 minutes delay.
+     */
+    jitter?: string;
     /** Optional active-hours window (local time); heartbeats run only inside this window. */
     activeHours?: {
       /** Start time (24h, HH:MM). Inclusive. */

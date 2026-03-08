@@ -237,6 +237,24 @@ export function resolveHeartbeatIntervalMs(
   return ms;
 }
 
+/** Resolve jitter in ms; returns 0 if not configured or invalid. */
+function resolveHeartbeatJitterMs(cfg: OpenClawConfig, heartbeat?: HeartbeatConfig): number {
+  const raw = heartbeat?.jitter ?? cfg.agents?.defaults?.heartbeat?.jitter;
+  if (!raw) {
+    return 0;
+  }
+  const trimmed = String(raw).trim();
+  if (!trimmed) {
+    return 0;
+  }
+  try {
+    const ms = parseDurationMs(trimmed, { defaultUnit: "m" });
+    return Math.max(0, ms);
+  } catch {
+    return 0;
+  }
+}
+
 export function resolveHeartbeatPrompt(cfg: OpenClawConfig, heartbeat?: HeartbeatConfig) {
   return resolveHeartbeatPromptText(heartbeat?.prompt ?? cfg.agents?.defaults?.heartbeat?.prompt);
 }
@@ -1016,14 +1034,23 @@ export function startHeartbeatRunner(opts: {
   };
   let initialized = false;
 
-  const resolveNextDue = (now: number, intervalMs: number, prevState?: HeartbeatAgentState) => {
+  const resolveNextDue = (
+    now: number,
+    intervalMs: number,
+    prevState: HeartbeatAgentState | undefined,
+    jitterMs: number,
+  ) => {
     if (typeof prevState?.lastRunMs === "number") {
       return prevState.lastRunMs + intervalMs;
     }
     if (prevState && prevState.intervalMs === intervalMs && prevState.nextDueMs > now) {
       return prevState.nextDueMs;
     }
-    return now + intervalMs;
+    const base = now + intervalMs;
+    if (jitterMs <= 0) {
+      return base;
+    }
+    return base + Math.floor(Math.random() * jitterMs);
   };
 
   const advanceAgentSchedule = (agent: HeartbeatAgentState, now: number) => {
@@ -1076,7 +1103,8 @@ export function startHeartbeatRunner(opts: {
       }
       intervals.push(intervalMs);
       const prevState = prevAgents.get(agent.agentId);
-      const nextDueMs = resolveNextDue(now, intervalMs, prevState);
+      const jitterMs = resolveHeartbeatJitterMs(cfg, agent.heartbeat);
+      const nextDueMs = resolveNextDue(now, intervalMs, prevState, jitterMs);
       nextAgents.set(agent.agentId, {
         agentId: agent.agentId,
         heartbeat: agent.heartbeat,

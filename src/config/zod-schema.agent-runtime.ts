@@ -15,6 +15,8 @@ import { sensitive } from "./zod-schema.sensitive.js";
 export const HeartbeatSchema = z
   .object({
     every: z.string().optional(),
+    /** Random offset [0, jitter) for first trigger on startup; duration string. */
+    jitter: z.string().optional(),
     activeHours: z
       .object({
         start: z.string().optional(),
@@ -48,6 +50,25 @@ export const HeartbeatSchema = z
         path: ["every"],
         message: "invalid duration (use ms, s, m, h)",
       });
+    }
+
+    if (val.jitter) {
+      try {
+        const jitterMs = parseDurationMs(val.jitter, { defaultUnit: "m" });
+        if (jitterMs < 0) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: ["jitter"],
+            message: "jitter must be non-negative",
+          });
+        }
+      } catch {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["jitter"],
+          message: "invalid duration (use ms, s, m, h)",
+        });
+      }
     }
 
     const active = val.activeHours;
