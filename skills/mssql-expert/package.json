@@ -1,0 +1,10 @@
+{
+  "name": "skill-mssql-expert",
+  "version": "1.0.0",
+  "description": "Advanced MSSQL Diagnostics",
+  "main": "index.js",
+  "dependencies": {
+    "mssql": "^10.0.1",
+    "yargs": "^17.7.2"
+  }
+}

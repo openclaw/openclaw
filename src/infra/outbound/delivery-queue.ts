@@ -432,8 +432,32 @@ const PERMANENT_ERROR_PATTERNS: readonly RegExp[] = [
   /recipient is not a valid/i,
   /outbound not configured for channel/i,
   /ambiguous discord recipient/i,
+  // HTTP 400 class errors (message formatting, length limits, invalid payloads)
+  /message is too long/i,
+  /bad request/i,
+  /character limit exceeded/i,
+  /invalid form body/i,
+  /request entity too large/i,
+  /content is required/i,
 ];
 
+/**
+ * Matches HTTP status codes embedded in error strings, e.g.
+ * "status 400", "HTTP 403", "Status code: 413", "status code 400".
+ */
+const HTTP_STATUS_PATTERN = /(?:status(?:\s+code)?:?\s*|HTTP\/?\s*)(\d{3})/i;
+
 export function isPermanentDeliveryError(error: string): boolean {
-  return PERMANENT_ERROR_PATTERNS.some((re) => re.test(error));
+  if (PERMANENT_ERROR_PATTERNS.some((re) => re.test(error))) {
+    return true;
+  }
+  // Detect HTTP 4xx client errors (permanent), except 429 (rate limit).
+  const statusMatch = HTTP_STATUS_PATTERN.exec(error);
+  if (statusMatch) {
+    const status = parseInt(statusMatch[1], 10);
+    if (status >= 400 && status < 500 && status !== 429) {
+      return true;
+    }
+  }
+  return false;
 }
