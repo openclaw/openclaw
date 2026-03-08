@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as ssrf from "../../infra/net/ssrf.js";
 import { type FetchMock, withFetchPreconnect } from "../../test-utils/fetch-mock.js";
+import * as webGuardedFetch from "./web-guarded-fetch.js";
 
 const lookupMock = vi.fn();
 const resolvePinnedHostname = ssrf.resolvePinnedHostname;
@@ -39,6 +40,7 @@ function setMockFetch(
 
 async function createWebFetchToolForTest(params?: {
   firecrawl?: { enabled?: boolean; apiKey?: string };
+  allowPrivateNetwork?: boolean;
 }) {
   const { createWebFetchTool } = await import("./web-tools.js");
   return createWebFetchTool({
@@ -47,6 +49,7 @@ async function createWebFetchToolForTest(params?: {
         web: {
           fetch: {
             cacheTtlMinutes: 0,
+            allowPrivateNetwork: params?.allowPrivateNetwork,
             firecrawl: params?.firecrawl ?? { enabled: false },
           },
         },
@@ -141,5 +144,41 @@ describe("web_fetch SSRF protection", () => {
       status: 200,
       extractor: "raw",
     });
+  });
+
+  it("passes policy allowPrivateNetwork: true to fetchWithWebToolsNetworkGuard when configured", async () => {
+    lookupMock.mockResolvedValue([{ address: "93.184.216.34", family: 4 }]);
+    setMockFetch().mockResolvedValue(textResponse("ok"));
+
+    const guardSpy = vi.spyOn(webGuardedFetch, "fetchWithWebToolsNetworkGuard");
+    const tool = await createWebFetchToolForTest({ allowPrivateNetwork: true });
+
+    await tool?.execute?.("call", { url: "https://example.com" });
+
+    expect(guardSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        policy: { allowPrivateNetwork: true },
+      }),
+    );
+  });
+
+  it("allows private IP literals and localhost when allowPrivateNetwork: true", async () => {
+    const fetchSpy = setMockFetch().mockResolvedValue(textResponse("ok"));
+    const tool = await createWebFetchToolForTest({ allowPrivateNetwork: true });
+
+    const privateUrls = [
+      "http://127.0.0.1/test",
+      "http://10.0.0.1/test",
+      "http://localhost/test",
+    ] as const;
+
+    for (const url of privateUrls) {
+      const result = await tool?.execute?.("call", { url });
+      expect(result?.details).toMatchObject({
+        status: 200,
+        extractor: "raw",
+      });
+    }
+    expect(fetchSpy).toHaveBeenCalledTimes(privateUrls.length);
   });
 });
