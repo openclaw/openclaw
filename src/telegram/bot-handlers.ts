@@ -1493,6 +1493,64 @@ export const registerTelegramHandlers = ({
     if (!msg) {
       return;
     }
+
+    // Surface forum topic lifecycle events as system events (closes #23849).
+    // These service messages have no user text/media, so they'd be silently
+    // discarded by the normal message pipeline. Instead we intercept early
+    // and emit a lightweight system event the agent can act on.
+    if (msg.forum_topic_created || msg.forum_topic_edited) {
+      try {
+        const chatId = msg.chat.id;
+        const isGroup = msg.chat.type === "group" || msg.chat.type === "supergroup";
+        const isForum = msg.chat.is_forum === true;
+        const messageThreadId = msg.message_thread_id;
+        const resolvedThreadId = isForum
+          ? resolveTelegramForumThreadId({ isForum, messageThreadId })
+          : undefined;
+        const peerId = isGroup
+          ? buildTelegramGroupPeerId(chatId, resolvedThreadId)
+          : String(chatId);
+        const parentPeer = buildTelegramParentPeer({ isGroup, resolvedThreadId, chatId });
+        const route = resolveAgentRoute({
+          cfg: loadConfig(),
+          channel: "telegram",
+          accountId,
+          peer: { kind: isGroup ? "group" : "direct", id: peerId },
+          parentPeer,
+        });
+        const sessionKey = route.sessionKey;
+
+        if (msg.forum_topic_created) {
+          const topic = msg.forum_topic_created;
+          const text = `Telegram forum topic created: "${topic.name}" (thread ${messageThreadId}) in chat ${chatId}`;
+          enqueueSystemEvent(text, {
+            sessionKey,
+            contextKey: `telegram:forum_topic_created:${chatId}:${messageThreadId}`,
+          });
+          logVerbose(`telegram: forum topic event enqueued: ${text}`);
+        } else if (msg.forum_topic_edited) {
+          const topic = msg.forum_topic_edited;
+          const parts: string[] = [];
+          if (topic.name) {
+            parts.push(`name="${topic.name}"`);
+          }
+          if (topic.icon_custom_emoji_id) {
+            parts.push(`icon=${topic.icon_custom_emoji_id}`);
+          }
+          const detail = parts.length > 0 ? parts.join(", ") : "icon/color changed";
+          const text = `Telegram forum topic edited: ${detail} (thread ${messageThreadId}) in chat ${chatId}`;
+          enqueueSystemEvent(text, {
+            sessionKey,
+            contextKey: `telegram:forum_topic_edited:${chatId}:${messageThreadId}`,
+          });
+          logVerbose(`telegram: forum topic event enqueued: ${text}`);
+        }
+      } catch (err) {
+        runtime.error?.(danger(`telegram forum topic event handler failed: ${String(err)}`));
+      }
+      return;
+    }
+
     await handleInboundMessageLike({
       ctxForDedupe: ctx,
       ctx: buildSyntheticContext(ctx, msg),

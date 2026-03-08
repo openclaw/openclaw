@@ -1755,4 +1755,120 @@ describe("createTelegramBot", () => {
     const sessionKey = eventOptions.sessionKey ?? "";
     expect(sessionKey).not.toContain(":topic:");
   });
+
+  // --- Forum topic lifecycle events (#23849) ---
+
+  it("enqueues system event for forum_topic_created", async () => {
+    onSpy.mockReset();
+    enqueueSystemEventSpy.mockReset();
+    replySpy.mockReset();
+
+    loadConfig.mockReturnValue({
+      channels: {
+        telegram: { dmPolicy: "open" },
+      },
+    });
+
+    createTelegramBot({ token: "tok" });
+    const handler = getOnHandler("message") as (ctx: Record<string, unknown>) => Promise<void>;
+
+    await handler({
+      message: {
+        chat: { id: 5555, type: "supergroup", is_forum: true, title: "My Forum" },
+        message_thread_id: 101,
+        date: 1736380800,
+        message_id: 300,
+        from: { id: 99, first_name: "Ada" },
+        forum_topic_created: {
+          name: "Bug Reports",
+          icon_color: 0x6fb9f0,
+        },
+      },
+      me: { username: "openclaw_bot" },
+      update: { update_id: 600 },
+      getFile: async () => ({ download: async () => new Uint8Array() }),
+    });
+
+    expect(enqueueSystemEventSpy).toHaveBeenCalledTimes(1);
+    expect(enqueueSystemEventSpy).toHaveBeenCalledWith(
+      expect.stringContaining('forum topic created: "Bug Reports"'),
+      expect.objectContaining({
+        contextKey: "telegram:forum_topic_created:5555:101",
+      }),
+    );
+    // Should NOT reach the normal message pipeline
+    expect(replySpy).not.toHaveBeenCalled();
+  });
+
+  it("enqueues system event for forum_topic_edited", async () => {
+    onSpy.mockReset();
+    enqueueSystemEventSpy.mockReset();
+    replySpy.mockReset();
+
+    loadConfig.mockReturnValue({
+      channels: {
+        telegram: { dmPolicy: "open" },
+      },
+    });
+
+    createTelegramBot({ token: "tok" });
+    const handler = getOnHandler("message") as (ctx: Record<string, unknown>) => Promise<void>;
+
+    await handler({
+      message: {
+        chat: { id: 5555, type: "supergroup", is_forum: true, title: "My Forum" },
+        message_thread_id: 101,
+        date: 1736380800,
+        message_id: 301,
+        from: { id: 99, first_name: "Ada" },
+        forum_topic_edited: {
+          name: "Feature Requests",
+        },
+      },
+      me: { username: "openclaw_bot" },
+      update: { update_id: 601 },
+      getFile: async () => ({ download: async () => new Uint8Array() }),
+    });
+
+    expect(enqueueSystemEventSpy).toHaveBeenCalledTimes(1);
+    expect(enqueueSystemEventSpy).toHaveBeenCalledWith(
+      expect.stringContaining('forum topic edited: name="Feature Requests"'),
+      expect.objectContaining({
+        contextKey: "telegram:forum_topic_edited:5555:101",
+      }),
+    );
+    expect(replySpy).not.toHaveBeenCalled();
+  });
+
+  it("does not intercept normal messages as forum topic events", async () => {
+    onSpy.mockReset();
+    enqueueSystemEventSpy.mockReset();
+    replySpy.mockReset();
+
+    loadConfig.mockReturnValue({
+      channels: {
+        telegram: { dmPolicy: "open" },
+      },
+    });
+
+    createTelegramBot({ token: "tok" });
+    const handler = getOnHandler("message") as (ctx: Record<string, unknown>) => Promise<void>;
+
+    await handler({
+      message: {
+        chat: { id: 5555, type: "supergroup", is_forum: true, title: "My Forum" },
+        message_thread_id: 101,
+        text: "Hello everyone",
+        date: 1736380800,
+        message_id: 302,
+        from: { id: 99, first_name: "Ada", username: "ada" },
+      },
+      me: { username: "openclaw_bot" },
+      update: { update_id: 602 },
+      getFile: async () => ({ download: async () => new Uint8Array() }),
+    });
+
+    // Normal message should NOT trigger forum topic system events
+    expect(enqueueSystemEventSpy).not.toHaveBeenCalled();
+  });
 });
