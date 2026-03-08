@@ -162,6 +162,14 @@ const CORE_TOOL_DEFINITIONS: CoreToolDefinition[] = [
     includeInOpenClawGroup: true,
   },
   {
+    id: "switch_model",
+    label: "switch_model",
+    description: "Switch AI model",
+    sectionId: "sessions",
+    profiles: ["minimal", "coding", "messaging"],
+    includeInOpenClawGroup: true,
+  },
+  {
     id: "browser",
     label: "browser",
     description: "Control web browser",

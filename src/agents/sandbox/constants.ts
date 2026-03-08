@@ -24,6 +24,7 @@ export const DEFAULT_TOOL_ALLOW = [
   "sessions_spawn",
   "subagents",
   "session_status",
+  "switch_model",
 ] as const;
 
 // Provider docking: keep sandbox policy aligned with provider tool names.

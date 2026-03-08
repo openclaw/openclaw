@@ -289,7 +289,9 @@ export function buildAgentSystemPrompt(params: {
       : "Spawn an isolated sub-agent session",
     subagents: "List, steer, or kill sub-agent runs for this requester session",
     session_status:
-      "Show a /status-equivalent status card (usage + time + Reasoning/Verbose/Elevated); use for model-use questions (📊 session_status); optional per-session model override",
+      "Show a /status-equivalent status card (usage + time + Reasoning/Verbose/Elevated); use for model-use questions (📊 session_status). Read-only.",
+    switch_model:
+      'Switch the AI model for this session. When the user asks to change/switch models (e.g. "use kimi", "switch to sonnet", "切换模型"), call this tool with the model name. Accepts aliases, partial names, or full provider/model. model=default resets. Takes effect from the next message.',
     image: "Analyze an image with the configured image model",
     qveris_search:
       "Discover third-party API tools for structured data or external capabilities. Use when you need: real-time data (prices, metrics, exchange rates, weather), external APIs (geocoding, translation, image generation), or third-party services (email, SMS, cloud ops). Describe the capability you need, not specific params. Returns tool_id, params schema, sample_parameters, and stats (success_rate, avg_execution_time_ms).",
@@ -323,6 +325,7 @@ export function buildAgentSystemPrompt(params: {
     "sessions_send",
     "subagents",
     "session_status",
+    "switch_model",
     "image",
   ];
 
@@ -473,6 +476,7 @@ export function buildAgentSystemPrompt(params: {
           "- sessions_send: send to another session",
           "- subagents: list/steer/kill sub-agent runs",
           '- session_status: show usage/time/model state and answer "what model are we using?"',
+          "- switch_model: switch the AI model for this session (aliases, partial names, or full provider/model)",
         ].join("\n"),
     "TOOLS.md does not control tool availability; it is user guidance for how to use external tools.",
     `For long waits, avoid rapid poll loops: use ${execToolName} with enough yieldMs or ${processToolName}(action=poll, timeout=<ms>).`,
@@ -532,7 +536,7 @@ export function buildAgentSystemPrompt(params: {
       ? "## Model Aliases"
       : "",
     params.modelAliasLines && params.modelAliasLines.length > 0 && !isMinimal
-      ? "Prefer aliases when specifying model overrides; full provider/model is also accepted."
+      ? "Prefer aliases when specifying model overrides; full provider/model is also accepted. To switch models, call switch_model with the alias or model name."
       : "",
     params.modelAliasLines && params.modelAliasLines.length > 0 && !isMinimal
       ? params.modelAliasLines.join("\n")

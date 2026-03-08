@@ -180,7 +180,7 @@ export function createSessionStatusTool(opts?: {
     label: "Session Status",
     name: "session_status",
     description:
-      "Show a /status-equivalent session status card (usage + time + cost when available). Use for model-use questions (📊 session_status). Optional: set per-session model override (model=default resets overrides).",
+      "Show a /status-equivalent session status card (usage + time + cost when available). Use for model-use questions (📊 session_status). Read-only; use switch_model to change models.",
     parameters: SessionStatusToolSchema,
     execute: async (_toolCallId, args) => {
       const params = args as Record<string, unknown>;
@@ -261,6 +261,8 @@ export function createSessionStatusTool(opts?: {
       const configured = resolveDefaultModelForAgent({ cfg, agentId });
       const modelRaw = readStringParam(params, "model");
       let changedModel = false;
+      // Deprecated: model switching via session_status is kept for backward
+      // compatibility. Prefer switch_model tool instead.
       if (typeof modelRaw === "string") {
         const selection = await resolveModelOverride({
           cfg,
@@ -384,8 +386,12 @@ export function createSessionStatusTool(opts?: {
         includeTranscriptUsage: true,
       });
 
+      const deprecationHint = changedModel
+        ? "\n\n⚠️ Model switching via session_status is deprecated. Use the switch_model tool instead."
+        : "";
+
       return {
-        content: [{ type: "text", text: statusText }],
+        content: [{ type: "text", text: statusText + deprecationHint }],
         details: {
           ok: true,
           sessionKey: resolved.key,

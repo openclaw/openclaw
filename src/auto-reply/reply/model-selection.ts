@@ -13,6 +13,7 @@ import {
 } from "../../agents/model-selection.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { type SessionEntry, updateSessionStore } from "../../config/sessions.js";
+import { enqueueSystemEvent } from "../../infra/system-events.js";
 import { applyModelOverrideToSessionEntry } from "../../sessions/model-overrides.js";
 import { resolveThreadParentSessionKey } from "../../sessions/session-key-utils.js";
 import type { ThinkLevel } from "./directives.js";
@@ -337,6 +338,10 @@ export async function createModelSelectionState(params: {
               store[sessionKey] = sessionEntry;
             });
           }
+          enqueueSystemEvent(
+            `Model override ${overrideProvider}/${overrideModel} is no longer in the allowed list and was reset to default (${defaultProvider}/${defaultModel}).`,
+            { sessionKey },
+          );
         }
         resetModelOverride = updated;
       }
@@ -425,14 +430,28 @@ export async function createModelSelectionState(params: {
   };
 }
 
+export type AmbiguousCandidate = {
+  provider: string;
+  model: string;
+  alias?: string;
+  score: number;
+};
+
 export function resolveModelDirectiveSelection(params: {
   raw: string;
   defaultProvider: string;
   defaultModel: string;
   aliasIndex: ModelAliasIndex;
   allowedModelKeys: Set<string>;
-}): { selection?: ModelDirectiveSelection; error?: string } {
-  const { raw, defaultProvider, defaultModel, aliasIndex, allowedModelKeys } = params;
+  /** When true, returns ambiguousCandidates instead of auto-picking when top scores are close. */
+  detectAmbiguity?: boolean;
+}): {
+  selection?: ModelDirectiveSelection;
+  error?: string;
+  ambiguousCandidates?: AmbiguousCandidate[];
+} {
+  const { raw, defaultProvider, defaultModel, aliasIndex, allowedModelKeys, detectAmbiguity } =
+    params;
 
   const rawTrimmed = raw.trim();
   const rawLower = rawTrimmed.toLowerCase();
@@ -453,7 +472,11 @@ export function resolveModelDirectiveSelection(params: {
   const resolveFuzzy = (params: {
     provider?: string;
     fragment: string;
-  }): { selection?: ModelDirectiveSelection; error?: string } => {
+  }): {
+    selection?: ModelDirectiveSelection;
+    error?: string;
+    ambiguousCandidates?: AmbiguousCandidate[];
+  } => {
     const fragment = params.fragment.trim().toLowerCase();
     if (!fragment) {
       return {};
@@ -544,6 +567,28 @@ export function resolveModelDirectiveSelection(params: {
       return {};
     }
 
+    // Ambiguity detection: when top-2 scores are close, surface candidates
+    // instead of auto-picking. Only active when caller opts in.
+    const AMBIGUITY_GAP = 30;
+    const secondScored = scored[1];
+    if (
+      detectAmbiguity &&
+      secondScored &&
+      secondScored.score >= minScore &&
+      bestScored.score - secondScored.score < AMBIGUITY_GAP
+    ) {
+      const topCandidates = scored
+        .filter((s) => s.score >= minScore && bestScored.score - s.score < AMBIGUITY_GAP)
+        .slice(0, 5)
+        .map((s) => ({
+          provider: s.candidate.provider,
+          model: s.candidate.model,
+          alias: pickAliasForKey(s.candidate.provider, s.candidate.model),
+          score: s.score,
+        }));
+      return { ambiguousCandidates: topCandidates };
+    }
+
     return { selection: buildSelection(best.provider, best.model) };
   };
 
@@ -555,7 +600,7 @@ export function resolveModelDirectiveSelection(params: {
 
   if (!resolved) {
     const fuzzy = resolveFuzzy({ fragment: rawTrimmed });
-    if (fuzzy.selection || fuzzy.error) {
+    if (fuzzy.selection || fuzzy.error || fuzzy.ambiguousCandidates) {
       return fuzzy;
     }
     return {
@@ -582,14 +627,14 @@ export function resolveModelDirectiveSelection(params: {
     const provider = normalizeProviderId(rawTrimmed.slice(0, slash).trim());
     const fragment = rawTrimmed.slice(slash + 1).trim();
     const fuzzy = resolveFuzzy({ provider, fragment });
-    if (fuzzy.selection || fuzzy.error) {
+    if (fuzzy.selection || fuzzy.error || fuzzy.ambiguousCandidates) {
       return fuzzy;
     }
   }
 
   // Otherwise, try fuzzy matching across allowlisted models.
   const fuzzy = resolveFuzzy({ fragment: rawTrimmed });
-  if (fuzzy.selection || fuzzy.error) {
+  if (fuzzy.selection || fuzzy.error || fuzzy.ambiguousCandidates) {
     return fuzzy;
   }
 
