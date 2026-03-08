@@ -1,5 +1,6 @@
 import {
   expandToolGroups,
+  isKnownCoreToolId,
   normalizeToolList,
   normalizeToolName,
   resolveToolProfilePolicy,
@@ -64,6 +65,7 @@ export type PluginToolGroups = {
 export type AllowlistResolution = {
   policy: ToolPolicyLike | undefined;
   unknownAllowlist: string[];
+  unavailableCoreAllowlist: string[];
   strippedAllowlist: boolean;
 };
 
@@ -154,15 +156,16 @@ export function stripPluginOnlyAllowlist(
   coreTools: Set<string>,
 ): AllowlistResolution {
   if (!policy?.allow || policy.allow.length === 0) {
-    return { policy, unknownAllowlist: [], strippedAllowlist: false };
+    return { policy, unknownAllowlist: [], unavailableCoreAllowlist: [], strippedAllowlist: false };
   }
   const normalized = normalizeToolList(policy.allow);
   if (normalized.length === 0) {
-    return { policy, unknownAllowlist: [], strippedAllowlist: false };
+    return { policy, unknownAllowlist: [], unavailableCoreAllowlist: [], strippedAllowlist: false };
   }
   const pluginIds = new Set(groups.byPlugin.keys());
   const pluginTools = new Set(groups.all);
   const unknownAllowlist: string[] = [];
+  const unavailableCoreAllowlist: string[] = [];
   let hasCoreEntry = false;
   for (const entry of normalized) {
     if (entry === "*") {
@@ -173,8 +176,13 @@ export function stripPluginOnlyAllowlist(
       entry === "group:plugins" || pluginIds.has(entry) || pluginTools.has(entry);
     const expanded = expandToolGroups([entry]);
     const isCoreEntry = expanded.some((tool) => coreTools.has(tool));
+    const isKnownCoreEntry = expanded.some((tool) => isKnownCoreToolId(tool));
     if (isCoreEntry) {
       hasCoreEntry = true;
+    }
+    if (!isCoreEntry && isKnownCoreEntry) {
+      unavailableCoreAllowlist.push(entry);
+      continue;
     }
     if (!isCoreEntry && !isPluginEntry) {
       unknownAllowlist.push(entry);
@@ -190,6 +198,7 @@ export function stripPluginOnlyAllowlist(
   return {
     policy: strippedAllowlist ? { ...policy, allow: undefined } : policy,
     unknownAllowlist: Array.from(new Set(unknownAllowlist)),
+    unavailableCoreAllowlist: Array.from(new Set(unavailableCoreAllowlist)),
     strippedAllowlist,
   };
 }
