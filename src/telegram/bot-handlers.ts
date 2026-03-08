@@ -572,24 +572,26 @@ export const registerTelegramHandlers = ({
     });
     if (!policyAccess.allowed) {
       if (policyAccess.reason === "group-policy-disabled") {
-        logVerbose("Blocked telegram group message (groupPolicy: disabled)");
+        logger.info({ chatId, title: chatTitle, reason: policyAccess.reason, groupPolicy: policyAccess.groupPolicy }, "Blocked telegram group message (groupPolicy: disabled)");
         return true;
       }
       if (policyAccess.reason === "group-policy-allowlist-no-sender") {
-        logVerbose("Blocked telegram group message (no sender ID, groupPolicy: allowlist)");
+        logger.info({ chatId, title: chatTitle, reason: policyAccess.reason, groupPolicy: policyAccess.groupPolicy }, "Blocked telegram group message (no sender ID, groupPolicy: allowlist)");
         return true;
       }
       if (policyAccess.reason === "group-policy-allowlist-empty") {
-        logVerbose(
-          "Blocked telegram group message (groupPolicy: allowlist, no group allowlist entries)",
-        );
+        logger.info({ chatId, title: chatTitle, reason: policyAccess.reason, groupPolicy: policyAccess.groupPolicy, hasEntries: effectiveGroupAllow.hasEntries }, "Blocked telegram group message (groupPolicy: allowlist, no group allowlist entries)");
         return true;
       }
       if (policyAccess.reason === "group-policy-allowlist-unauthorized") {
-        logVerbose(`Blocked telegram group message from ${senderId} (groupPolicy: allowlist)`);
+        logger.info({ chatId, title: chatTitle, reason: policyAccess.reason, groupPolicy: policyAccess.groupPolicy, senderId }, "Blocked telegram group message from sender (groupPolicy: allowlist)");
         return true;
       }
-      logger.info({ chatId, title: chatTitle, reason: "not-allowed" }, "skipping group message");
+      if (policyAccess.reason === "group-chat-not-allowed") {
+        logger.info({ chatId, title: chatTitle, reason: policyAccess.reason, groupPolicy: policyAccess.groupPolicy }, "Blocked telegram group message (chat not in allowlist)");
+        return true;
+      }
+      logger.info({ chatId, title: chatTitle, reason: policyAccess.reason, groupPolicy: policyAccess.groupPolicy }, "Blocked telegram group message (unknown reason)");
       return true;
     }
     return false;
