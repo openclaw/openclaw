@@ -48,13 +48,10 @@ type SettingsHost = {
   sessionKey: string;
   tab: Tab;
   connected: boolean;
-  chatHasAutoScrolled: boolean;
-  logsAtBottom: boolean;
-  eventLog: unknown[];
-  eventLogBuffer: unknown[];
-  basePath: string;
   agentsList?: AgentsListResult | null;
   agentsSelectedId?: string | null;
+  chatSelectedAgentId?: string | null;
+  agentsPanel?: "overview" | "files" | "tools" | "skills" | "channels" | "cron";
   agentsPanel?: "overview" | "files" | "tools" | "skills" | "channels" | "cron";
   themeMedia: MediaQueryList | null;
   themeMediaHandler: ((event: MediaQueryListEvent) => void) | null;
@@ -73,6 +70,10 @@ export function applySettings(host: SettingsHost, next: UiSettings) {
     applyResolvedTheme(host, resolveTheme(next.theme));
   }
   host.applySessionKey = host.settings.lastActiveSessionKey;
+  // Apply chatSelectedAgentId if present
+  if (next.chatSelectedAgentId !== undefined) {
+    host.chatSelectedAgentId = next.chatSelectedAgentId;
+  }
 }
 
 export function setLastActiveSessionKey(host: SettingsHost, next: string) {
