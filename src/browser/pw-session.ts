@@ -388,30 +388,44 @@ async function pageTargetId(page: Page): Promise<string | null> {
   }
 }
 
+type FindPageByTargetIdResult = {
+  page: Page | null;
+  cdpAttachBlocked: boolean;
+};
+
+function isCdpAttachBlockedError(err: unknown): boolean {
+  const message = formatErrorMessage(err).toLowerCase();
+  return message.includes("target.attachtobrowsertarget") && message.includes("not allowed");
+}
+
 async function findPageByTargetId(
   browser: Browser,
   targetId: string,
   cdpUrl?: string,
-): Promise<Page | null> {
+): Promise<FindPageByTargetIdResult> {
   const pages = await getAllPages(browser);
   let resolvedViaCdp = false;
+  let cdpAttachBlocked = false;
   // First, try the standard CDP session approach
   for (const page of pages) {
     let tid: string | null = null;
     try {
       tid = await pageTargetId(page);
       resolvedViaCdp = true;
-    } catch {
+    } catch (err) {
+      if (isCdpAttachBlockedError(err)) {
+        cdpAttachBlocked = true;
+      }
       tid = null;
     }
     if (tid && tid === targetId) {
-      return page;
+      return { page, cdpAttachBlocked };
     }
   }
   // Extension relays can block CDP attachment APIs entirely. If that happens and
   // Playwright only exposes one page, return it as the best available mapping.
   if (!resolvedViaCdp && pages.length === 1) {
-    return pages[0];
+    return { page: pages[0], cdpAttachBlocked };
   }
   // If CDP sessions fail (e.g., extension relay blocks Target.attachToBrowserTarget),
   // fall back to URL-based matching using the /json/list endpoint
@@ -434,7 +448,7 @@ async function findPageByTargetId(
           // Try to find a page with matching URL
           const urlMatch = pages.filter((p) => p.url() === target.url);
           if (urlMatch.length === 1) {
-            return urlMatch[0];
+            return { page: urlMatch[0], cdpAttachBlocked };
           }
           // If multiple URL matches, use index-based matching as fallback
           // This works when Playwright and the relay enumerate tabs in the same order
@@ -443,7 +457,7 @@ async function findPageByTargetId(
             if (sameUrlTargets.length === urlMatch.length) {
               const idx = sameUrlTargets.findIndex((t) => t.id === targetId);
               if (idx >= 0 && idx < urlMatch.length) {
-                return urlMatch[idx];
+                return { page: urlMatch[idx], cdpAttachBlocked };
               }
             }
           }
@@ -453,7 +467,7 @@ async function findPageByTargetId(
       // Ignore fetch errors and fall through to return null
     }
   }
-  return null;
+  return { page: null, cdpAttachBlocked };
 }
 
 async function resolvePageByTargetIdOrThrow(opts: {
@@ -461,7 +475,7 @@ async function resolvePageByTargetIdOrThrow(opts: {
   targetId: string;
 }): Promise<Page> {
   const { browser } = await connectBrowser(opts.cdpUrl);
-  const page = await findPageByTargetId(browser, opts.targetId, opts.cdpUrl);
+  const { page } = await findPageByTargetId(browser, opts.targetId, opts.cdpUrl);
   if (!page) {
     throw new Error("tab not found");
   }
@@ -481,13 +495,23 @@ export async function getPageForTargetId(opts: {
   if (!opts.targetId) {
     return first;
   }
-  const found = await findPageByTargetId(browser, opts.targetId, opts.cdpUrl);
+  const { page: found, cdpAttachBlocked } = await findPageByTargetId(
+    browser,
+    opts.targetId,
+    opts.cdpUrl,
+  );
   if (!found) {
     // Extension relays can block CDP attachment APIs (e.g. Target.attachToBrowserTarget),
     // which prevents us from resolving a page's targetId via newCDPSession(). If Playwright
     // only exposes a single Page, use it as a best-effort fallback.
     if (pages.length === 1) {
       return first;
+    }
+    if (cdpAttachBlocked) {
+      throw new Error(
+        `tab not found: target "${opts.targetId}" is not attached in extension relay. ` +
+          "Open the tab in Chrome and click the OpenClaw Browser Relay toolbar icon so badge is ON, then retry.",
+      );
     }
     throw new Error("tab not found");
   }
