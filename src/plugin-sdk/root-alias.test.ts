@@ -90,10 +90,20 @@ describe("plugin-sdk root alias", () => {
     hooks.__unsafeResetMonolithicForTest?.();
   });
 
-  it("preserves reflection semantics for lazily resolved exports", { timeout: 240_000 }, () => {
-    expect("resolveControlCommandGate" in rootSdk).toBe(true);
+  it("enumerates monolithic exports on first key scan", () => {
+    const hooks = rootSdk as RootAliasTestHooks;
+    hooks.__unsafeResetMonolithicForTest?.();
+    hooks.__unsafeSetJitiOverrideForTest?.(() => ({ registerPluginHttpRoute: () => undefined }));
+
     const keys = Object.keys(rootSdk);
     expect(keys).toContain("resolveControlCommandGate");
+    expect(keys).toContain("registerPluginHttpRoute");
+
+    hooks.__unsafeResetMonolithicForTest?.();
+  });
+
+  it("preserves reflection semantics for fast exports", () => {
+    expect("resolveControlCommandGate" in rootSdk).toBe(true);
     const descriptor = Object.getOwnPropertyDescriptor(rootSdk, "resolveControlCommandGate");
     expect(descriptor).toBeDefined();
   });

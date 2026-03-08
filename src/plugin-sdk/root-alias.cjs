@@ -152,8 +152,9 @@ const rootProxy = new Proxy(fastExports, {
   },
   ownKeys(target) {
     const keys = new Set([...Reflect.ownKeys(target), "default", "__esModule"]);
-    if (monolithicSdk) {
-      for (const key of Reflect.ownKeys(monolithicSdk)) {
+    const monolithic = monolithicSdk ?? tryLoadMonolithicSdk();
+    if (monolithic) {
+      for (const key of Reflect.ownKeys(monolithic)) {
         keys.add(key);
       }
     }
