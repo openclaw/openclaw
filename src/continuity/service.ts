@@ -154,10 +154,18 @@ function nextTimestamp(records: ContinuityRecord[], now = Date.now()): number {
     if (record.updatedAt > maxTimestamp) {
       maxTimestamp = record.updatedAt;
     }
-    if (record.reviewState === "approved" && record.approvedAt > maxTimestamp) {
+    if (
+      record.reviewState === "approved" &&
+      typeof record.approvedAt === "number" &&
+      record.approvedAt > maxTimestamp
+    ) {
       maxTimestamp = record.approvedAt;
     }
-    if (record.reviewState === "rejected" && record.rejectedAt > maxTimestamp) {
+    if (
+      record.reviewState === "rejected" &&
+      typeof record.rejectedAt === "number" &&
+      record.rejectedAt > maxTimestamp
+    ) {
       maxTimestamp = record.rejectedAt;
     }
   }
