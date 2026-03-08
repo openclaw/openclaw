@@ -297,6 +297,42 @@ function shouldEnableOpenAIResponsesServerCompaction(
   return model.provider === "openai";
 }
 
+function shouldStripResponsesStore(
+  model: { api?: unknown; compat?: { supportsStore?: boolean } },
+  forceStore: boolean,
+): boolean {
+  if (forceStore) {
+    return false;
+  }
+  if (typeof model.api !== "string") {
+    return false;
+  }
+  return OPENAI_RESPONSES_APIS.has(model.api) && model.compat?.supportsStore === false;
+}
+
+function applyOpenAIResponsesPayloadOverrides(params: {
+  payloadObj: Record<string, unknown>;
+  forceStore: boolean;
+  stripStore: boolean;
+  useServerCompaction: boolean;
+  compactThreshold: number;
+}): void {
+  if (params.forceStore) {
+    params.payloadObj.store = true;
+  }
+  if (params.stripStore) {
+    delete params.payloadObj.store;
+  }
+  if (params.useServerCompaction && params.payloadObj.context_management === undefined) {
+    params.payloadObj.context_management = [
+      {
+        type: "compaction",
+        compact_threshold: params.compactThreshold,
+      },
+    ];
+  }
+}
+
 function createOpenAIResponsesContextManagementWrapper(
   baseStreamFn: StreamFn | undefined,
   extraParams: Record<string, unknown> | undefined,
@@ -305,7 +341,11 @@ function createOpenAIResponsesContextManagementWrapper(
   return (model, context, options) => {
     const forceStore = shouldForceResponsesStore(model);
     const useServerCompaction = shouldEnableOpenAIResponsesServerCompaction(model, extraParams);
-    if (!forceStore && !useServerCompaction) {
+    // Strip `store` from the payload when the model declares supportsStore=false.
+    // pi-ai upstream hardcodes `store: false` for Responses API; strict
+    // OpenAI-compatible endpoints (e.g. Gemini via Cloudflare) reject it.
+    const stripStore = shouldStripResponsesStore(model, forceStore);
+    if (!forceStore && !useServerCompaction && !stripStore) {
       return underlying(model, context, options);
     }
 
@@ -317,18 +357,13 @@ function createOpenAIResponsesContextManagementWrapper(
       ...options,
       onPayload: (payload) => {
         if (payload && typeof payload === "object") {
-          const payloadObj = payload as Record<string, unknown>;
-          if (forceStore) {
-            payloadObj.store = true;
-          }
-          if (useServerCompaction && payloadObj.context_management === undefined) {
-            payloadObj.context_management = [
-              {
-                type: "compaction",
-                compact_threshold: compactThreshold,
-              },
-            ];
-          }
+          applyOpenAIResponsesPayloadOverrides({
+            payloadObj: payload as Record<string, unknown>,
+            forceStore,
+            stripStore,
+            useServerCompaction,
+            compactThreshold,
+          });
         }
         originalOnPayload?.(payload);
       },

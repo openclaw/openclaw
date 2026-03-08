@@ -1193,61 +1193,6 @@ validate_changelog_merge_hygiene() {
   echo "changelog merge hygiene validated: no dropped PR references"
 }
 
-changed_changelog_fragment_files() {
-  git diff --name-only origin/main...HEAD -- changelog/fragments | rg '^changelog/fragments/.*\.md$' || true
-}
-
-validate_changelog_fragments_for_pr() {
-  local pr="$1"
-  local contrib="$2"
-  shift 2
-
-  if [ "$#" -lt 1 ]; then
-    echo "No changelog fragments provided for validation."
-    exit 1
-  fi
-
-  local pr_pattern
-  pr_pattern="(#$pr|openclaw#$pr)"
-
-  local added_lines
-  local file
-  local all_added_lines=""
-  for file in "$@"; do
-    added_lines=$(git diff --unified=0 origin/main...HEAD -- "$file" | awk '
-      /^\+\+\+/ { next }
-      /^\+/ { print substr($0, 2) }
-    ')
-
-    if [ -z "$added_lines" ]; then
-      echo "$file is in diff but no added lines were detected."
-      exit 1
-    fi
-
-    all_added_lines=$(printf '%s\n%s\n' "$all_added_lines" "$added_lines")
-  done
-
-  local with_pr
-  with_pr=$(printf '%s\n' "$all_added_lines" | rg -in "$pr_pattern" || true)
-  if [ -z "$with_pr" ]; then
-    echo "Changelog fragment update must reference PR #$pr (for example, (#$pr))."
-    exit 1
-  fi
-
-  if [ -n "$contrib" ] && [ "$contrib" != "null" ]; then
-    local with_pr_and_thanks
-    with_pr_and_thanks=$(printf '%s\n' "$all_added_lines" | rg -in "$pr_pattern" | rg -i "thanks @$contrib" || true)
-    if [ -z "$with_pr_and_thanks" ]; then
-      echo "Changelog fragment update must include both PR #$pr and thanks @$contrib on the entry line."
-      exit 1
-    fi
-    echo "changelog fragments validated: found PR #$pr + thanks @$contrib"
-    return 0
-  fi
-
-  echo "changelog fragments validated: found PR #$pr (contributor handle unavailable, skipping thanks check)"
-}
-
 prepare_gates() {
   local pr="$1"
   enter_worktree "$pr" false
@@ -1272,27 +1217,14 @@ prepare_gates() {
   if printf '%s\n' "$changed_files" | rg -q '^CHANGELOG\.md$'; then
     has_changelog_update=true
   fi
-  local fragment_files
-  fragment_files=$(changed_changelog_fragment_files)
-  local has_fragment_update=false
-  if [ -n "$fragment_files" ]; then
-    has_fragment_update=true
-  fi
-  # Enforce workflow policy: every prepared PR must include either CHANGELOG.md
-  # or one or more changelog fragments.
-  if [ "$has_changelog_update" = "false" ] && [ "$has_fragment_update" = "false" ]; then
-    echo "Missing changelog update. Add CHANGELOG.md changes or changelog/fragments/*.md entry."
+  # Enforce workflow policy: every prepared PR must include CHANGELOG.md.
+  if [ "$has_changelog_update" = "false" ]; then
+    echo "Missing changelog update. Add CHANGELOG.md changes."
     exit 1
   fi
   local contrib="${PR_AUTHOR:-}"
-  if [ "$has_changelog_update" = "true" ]; then
-    validate_changelog_merge_hygiene
-    validate_changelog_entry_for_pr "$pr" "$contrib"
-  fi
-  if [ "$has_fragment_update" = "true" ]; then
-    mapfile -t fragment_file_list <<<"$fragment_files"
-    validate_changelog_fragments_for_pr "$pr" "$contrib" "${fragment_file_list[@]}"
-  fi
+  validate_changelog_merge_hygiene
+  validate_changelog_entry_for_pr "$pr" "$contrib"
 
   run_quiet_logged "pnpm build" ".local/gates-build.log" pnpm build
   run_quiet_logged "pnpm check" ".local/gates-check.log" pnpm check
@@ -1934,6 +1866,31 @@ EOF_BODY
     echo "Merge commit SHA missing."
     exit 1
   fi
+  local repo_nwo
+  repo_nwo=$(gh repo view --json nameWithOwner --jq .nameWithOwner)
+
+  local merge_sha_url=""
+  if gh api repos/:owner/:repo/commits/"$merge_sha" >/dev/null 2>&1; then
+    merge_sha_url="https://github.com/$repo_nwo/commit/$merge_sha"
+  else
+    echo "Merge commit is not resolvable via repository commit endpoint: $merge_sha"
+    exit 1
+  fi
+
+  local prep_sha_url=""
+  if gh api repos/:owner/:repo/commits/"$PREP_HEAD_SHA" >/dev/null 2>&1; then
+    prep_sha_url="https://github.com/$repo_nwo/commit/$PREP_HEAD_SHA"
+  else
+    local pr_commit_count
+    pr_commit_count=$(gh pr view "$pr" --json commits --jq "[.commits[].oid | select(. == \"$PREP_HEAD_SHA\")] | length")
+    if [ "${pr_commit_count:-0}" -gt 0 ]; then
+      prep_sha_url="https://github.com/$repo_nwo/pull/$pr/commits/$PREP_HEAD_SHA"
+    fi
+  fi
+  if [ -z "$prep_sha_url" ]; then
+    echo "Prepared head SHA is not resolvable in repo commits or PR commit list: $PREP_HEAD_SHA"
+    exit 1
+  fi
 
   local commit_body
   commit_body=$(gh api repos/:owner/:repo/commits/"$merge_sha" --jq .commit.message)
@@ -1947,8 +1904,8 @@ EOF_BODY
     if comment_output=$(gh pr comment "$pr" -F - 2>&1 <<EOF_COMMENT
 Merged via squash.
 
-- Prepared head SHA: $PREP_HEAD_SHA
-- Merge commit: $merge_sha
+- Prepared head SHA: [$PREP_HEAD_SHA]($prep_sha_url)
+- Merge commit: [$merge_sha]($merge_sha_url)
 
 Thanks @$contrib!
 EOF_COMMENT

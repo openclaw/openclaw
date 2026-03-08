@@ -35,12 +35,12 @@ function createConfig(params: {
         accounts: {
           a: {
             appId: "app-a",
-            appSecret: "sec-a",
+            appSecret: "sec-a", // pragma: allowlist secret
             tools: params.toolsA,
           },
           b: {
             appId: "app-b",
-            appSecret: "sec-b",
+            appSecret: "sec-b", // pragma: allowlist secret
             tools: params.toolsB,
           },
         },

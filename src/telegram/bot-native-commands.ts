@@ -285,9 +285,17 @@ async function resolveTelegramCommandAuth(params: {
     senderId,
     senderUsername,
   });
+  const groupSenderAllowed = isGroup
+    ? isSenderAllowed({ allow: effectiveGroupAllow, senderId, senderUsername })
+    : false;
   const commandAuthorized = resolveCommandAuthorizedFromAuthorizers({
     useAccessGroups,
-    authorizers: [{ configured: dmAllow.hasEntries, allowed: senderAllowed }],
+    authorizers: [
+      { configured: dmAllow.hasEntries, allowed: senderAllowed },
+      ...(isGroup
+        ? [{ configured: effectiveGroupAllow.hasEntries, allowed: groupSenderAllowed }]
+        : []),
+    ],
     modeWhenAccessGroupsOff: "configured",
   });
   if (requireAuth && !commandAuthorized) {
@@ -359,7 +367,7 @@ export const registerTelegramNativeCommands = ({
     runtime.error?.(danger(issue.message));
   }
   const customCommands = customResolution.commands;
-  const pluginCommandSpecs = getPluginCommandSpecs();
+  const pluginCommandSpecs = getPluginCommandSpecs("telegram");
   const existingCommands = new Set(
     [
       ...nativeCommands.map((command) => normalizeTelegramCommandName(command.name)),

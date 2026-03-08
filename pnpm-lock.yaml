@@ -133,6 +133,9 @@ importers:
       linkedom:
         specifier: ^0.18.12
         version: 0.18.12
+      long:
+        specifier: ^5.3.2
+        version: 5.3.2
       markdown-it:
         specifier: ^14.1.1
         version: 14.1.1
@@ -163,6 +166,9 @@ importers:
       sqlite-vec:
         specifier: 0.1.7-alpha.2
         version: 0.1.7-alpha.2
+      strip-ansi:
+        specifier: ^7.2.0
+        version: 7.2.0
       tar:
         specifier: 7.5.10
         version: 7.5.10

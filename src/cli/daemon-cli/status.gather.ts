@@ -12,7 +12,6 @@ import type {
 import {
   hasConfiguredSecretInput,
   normalizeSecretInputString,
-  resolveSecretInputRef,
 } from "../../config/types.secrets.js";
 import { readLastGatewayErrorLine } from "../../daemon/diagnostics.js";
 import type { FindExtraGatewayServicesOptions } from "../../daemon/inspect.js";
@@ -21,7 +20,13 @@ import type { ServiceConfigAudit } from "../../daemon/service-audit.js";
 import { auditGatewayServiceConfig } from "../../daemon/service-audit.js";
 import type { GatewayServiceRuntime } from "../../daemon/service-runtime.js";
 import { resolveGatewayService } from "../../daemon/service.js";
+import {
+  readGatewayPasswordEnv,
+  readGatewayTokenEnv,
+  trimToUndefined,
+} from "../../gateway/credentials.js";
 import { resolveGatewayBindHost } from "../../gateway/net.js";
+import { resolveRequiredConfiguredSecretRefInputString } from "../../gateway/resolve-configured-secret-input-string.js";
 import {
   formatPortDiagnostics,
   inspectPortUsage,
@@ -30,8 +35,6 @@ import {
 } from "../../infra/ports.js";
 import { pickPrimaryTailnetIPv4 } from "../../infra/tailnet.js";
 import { loadGatewayTlsRuntime } from "../../infra/tls/gateway.js";
-import { secretRefKey } from "../../secrets/ref-contract.js";
-import { resolveSecretRefValues } from "../../secrets/resolve.js";
 import { probeGatewayStatus } from "./probe.js";
 import { normalizeListenerAddress, parsePortFromArgs, pickProbeHostForBind } from "./shared.js";
 import type { GatewayRpcOpts } from "./types.js";
@@ -106,24 +109,6 @@ function shouldReportPortUsage(status: PortUsageStatus | undefined, rpcOk?: bool
   return true;
 }
 
-function trimToUndefined(value: unknown): string | undefined {
-  if (typeof value !== "string") {
-    return undefined;
-  }
-  const trimmed = value.trim();
-  return trimmed.length > 0 ? trimmed : undefined;
-}
-
-function readGatewayTokenEnv(env: Record<string, string | undefined>): string | undefined {
-  return trimToUndefined(env.OPENCLAW_GATEWAY_TOKEN) ?? trimToUndefined(env.CLAWDBOT_GATEWAY_TOKEN);
-}
-
-function readGatewayPasswordEnv(env: Record<string, string | undefined>): string | undefined {
-  return (
-    trimToUndefined(env.OPENCLAW_GATEWAY_PASSWORD) ?? trimToUndefined(env.CLAWDBOT_GATEWAY_PASSWORD)
-  );
-}
-
 async function resolveDaemonProbeToken(params: {
   daemonCfg: OpenClawConfig;
   mergedDaemonEnv: Record<string, string | undefined>;
@@ -134,19 +119,12 @@ async function resolveDaemonProbeToken(params: {
   if (explicitToken) {
     return explicitToken;
   }
-  const envToken = readGatewayTokenEnv(params.mergedDaemonEnv);
+  const envToken = readGatewayTokenEnv(params.mergedDaemonEnv as NodeJS.ProcessEnv);
   if (envToken) {
     return envToken;
   }
   const defaults = params.daemonCfg.secrets?.defaults;
   const configured = params.daemonCfg.gateway?.auth?.token;
-  const { ref } = resolveSecretInputRef({
-    value: configured,
-    defaults,
-  });
-  if (!ref) {
-    return normalizeSecretInputString(configured);
-  }
   const authMode = params.daemonCfg.gateway?.auth?.mode;
   if (authMode === "password" || authMode === "none" || authMode === "trusted-proxy") {
     return undefined;
@@ -154,7 +132,7 @@ async function resolveDaemonProbeToken(params: {
   if (authMode !== "token") {
     const passwordCandidate =
       trimToUndefined(params.explicitPassword) ||
-      readGatewayPasswordEnv(params.mergedDaemonEnv) ||
+      readGatewayPasswordEnv(params.mergedDaemonEnv as NodeJS.ProcessEnv) ||
       (hasConfiguredSecretInput(params.daemonCfg.gateway?.auth?.password, defaults)
         ? "__configured__"
         : undefined);
@@ -162,15 +140,16 @@ async function resolveDaemonProbeToken(params: {
       return undefined;
     }
   }
-  const resolved = await resolveSecretRefValues([ref], {
+  const resolvedToken = await resolveRequiredConfiguredSecretRefInputString({
     config: params.daemonCfg,
     env: params.mergedDaemonEnv as NodeJS.ProcessEnv,
+    value: configured,
+    path: "gateway.auth.token",
   });
-  const token = trimToUndefined(resolved.get(secretRefKey(ref)));
-  if (!token) {
-    throw new Error("gateway.auth.token resolved to an empty or non-string value.");
+  if (resolvedToken) {
+    return resolvedToken;
   }
-  return token;
+  return normalizeSecretInputString(configured);
 }
 
 async function resolveDaemonProbePassword(params: {
@@ -183,19 +162,12 @@ async function resolveDaemonProbePassword(params: {
   if (explicitPassword) {
     return explicitPassword;
   }
-  const envPassword = readGatewayPasswordEnv(params.mergedDaemonEnv);
+  const envPassword = readGatewayPasswordEnv(params.mergedDaemonEnv as NodeJS.ProcessEnv);
   if (envPassword) {
     return envPassword;
   }
   const defaults = params.daemonCfg.secrets?.defaults;
   const configured = params.daemonCfg.gateway?.auth?.password;
-  const { ref } = resolveSecretInputRef({
-    value: configured,
-    defaults,
-  });
-  if (!ref) {
-    return normalizeSecretInputString(configured);
-  }
   const authMode = params.daemonCfg.gateway?.auth?.mode;
   if (authMode === "token" || authMode === "none" || authMode === "trusted-proxy") {
     return undefined;
@@ -203,7 +175,7 @@ async function resolveDaemonProbePassword(params: {
   if (authMode !== "password") {
     const tokenCandidate =
       trimToUndefined(params.explicitToken) ||
-      readGatewayTokenEnv(params.mergedDaemonEnv) ||
+      readGatewayTokenEnv(params.mergedDaemonEnv as NodeJS.ProcessEnv) ||
       (hasConfiguredSecretInput(params.daemonCfg.gateway?.auth?.token, defaults)
         ? "__configured__"
         : undefined);
@@ -211,15 +183,16 @@ async function resolveDaemonProbePassword(params: {
       return undefined;
     }
   }
-  const resolved = await resolveSecretRefValues([ref], {
+  const resolvedPassword = await resolveRequiredConfiguredSecretRefInputString({
     config: params.daemonCfg,
     env: params.mergedDaemonEnv as NodeJS.ProcessEnv,
+    value: configured,
+    path: "gateway.auth.password",
   });
-  const password = trimToUndefined(resolved.get(secretRefKey(ref)));
-  if (!password) {
-    throw new Error("gateway.auth.password resolved to an empty or non-string value.");
+  if (resolvedPassword) {
+    return resolvedPassword;
   }
-  return password;
+  return normalizeSecretInputString(configured);
 }
 
 export async function gatherDaemonStatus(
