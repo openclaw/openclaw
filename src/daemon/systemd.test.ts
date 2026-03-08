@@ -405,10 +405,10 @@ describe("readSystemdServiceExecStart", () => {
         ].join("\n");
       }
       if (pathValue === "/home/test/.openclaw/first.env") {
-        return "OPENCLAW_GATEWAY_TOKEN=first-token\n";
+        return "OPENCLAW_GATEWAY_TOKEN=first-token\n"; // pragma: allowlist secret
       }
       if (pathValue === "/home/test/.openclaw/second env.env") {
-        return 'OPENCLAW_GATEWAY_PASSWORD="second password"\n';
+        return 'OPENCLAW_GATEWAY_PASSWORD="second password"\n'; // pragma: allowlist secret
       }
       throw new Error(`unexpected readFile path: ${pathValue}`);
     });
@@ -433,11 +433,11 @@ describe("readSystemdServiceExecStart", () => {
       if (pathValue.endsWith("/.config/systemd/user/gateway.env")) {
         return [
           "OPENCLAW_GATEWAY_TOKEN=relative-token",
-          "OPENCLAW_GATEWAY_PASSWORD=relative-password",
-        ].join("\n");
+          "OPENCLAW_GATEWAY_PASSWORD=relative-password", // pragma: allowlist secret
+        ].join("\n"); // pragma: allowlist secret
       }
       if (pathValue.endsWith("/.config/systemd/user/override.env")) {
-        return "OPENCLAW_GATEWAY_TOKEN=override-token\n";
+        return "OPENCLAW_GATEWAY_TOKEN=override-token\n"; // pragma: allowlist secret
       }
       throw new Error(`unexpected readFile path: ${pathValue}`);
     });
@@ -464,8 +464,8 @@ describe("readSystemdServiceExecStart", () => {
           "# comment",
           "; another comment",
           'OPENCLAW_GATEWAY_TOKEN="quoted token"',
-          "OPENCLAW_GATEWAY_PASSWORD=quoted-password",
-        ].join("\n");
+          "OPENCLAW_GATEWAY_PASSWORD=quoted-password", // pragma: allowlist secret
+        ].join("\n"); // pragma: allowlist secret
       }
       throw new Error(`unexpected readFile path: ${pathValue}`);
     });
