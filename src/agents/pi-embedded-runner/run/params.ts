@@ -110,6 +110,8 @@ export type RunEmbeddedPiAgentParams = {
   enqueue?: typeof enqueueCommand;
   extraSystemPrompt?: string;
   inputProvenance?: InputProvenance;
+  /** Extra fields from the original user message to merge onto the user entry at persistence time. */
+  userMessageExtras?: Record<string, unknown>;
   streamParams?: AgentStreamParams;
   ownerNumbers?: string[];
   enforceFinalTag?: boolean;
