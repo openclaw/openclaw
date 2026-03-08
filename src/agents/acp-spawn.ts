@@ -5,6 +5,7 @@ import {
   type AcpSpawnRuntimeCloseHandle,
 } from "../acp/control-plane/spawn.js";
 import { isAcpEnabledByPolicy, resolveAcpAgentPolicyError } from "../acp/policy.js";
+import { isAcpRuntimeError } from "../acp/runtime/errors.js";
 import {
   resolveAcpSessionCwd,
   resolveAcpThreadSessionDetailLines,
@@ -160,6 +161,44 @@ function summarizeError(err: unknown): string {
     return err;
   }
   return "error";
+}
+
+function resolveConfiguredAcpBackendId(cfg: OpenClawConfig): string | undefined {
+  const backend = cfg.acp?.backend?.trim().toLowerCase();
+  return backend || undefined;
+}
+
+function formatAcpBackendAvailabilityError(params: {
+  error: unknown;
+  cfg: OpenClawConfig;
+}): string | null {
+  if (!isAcpRuntimeError(params.error)) {
+    return null;
+  }
+  if (
+    params.error.code !== "ACP_BACKEND_MISSING" &&
+    params.error.code !== "ACP_BACKEND_UNAVAILABLE"
+  ) {
+    return null;
+  }
+
+  const configuredBackend = resolveConfiguredAcpBackendId(params.cfg);
+  if (configuredBackend) {
+    const backendPluginEnabled = params.cfg.plugins?.entries?.[configuredBackend]?.enabled === true;
+    const backendHint = `plugins.entries.${configuredBackend}.enabled=${backendPluginEnabled ? "true" : "false-or-unset"} (effective plugin enablement can also come from auto-enable/defaults).`;
+
+    return [
+      params.error.message,
+      `ACP diagnostics: configured backend=${configuredBackend}; ${backendHint}`,
+      "Try: 1) ensure acp.enabled=true and acp.backend matches a loaded runtime plugin, 2) run `openclaw plugins list`, 3) run `/acp doctor`.",
+    ].join(" ");
+  }
+
+  return [
+    params.error.message,
+    "ACP diagnostics: configured backend=(unset); backend selection is automatic.",
+    "Try: 1) ensure acp.enabled=true, 2) ensure at least one ACP runtime plugin is installed/enabled, 3) run `openclaw plugins list`, 4) run `/acp doctor`.",
+  ].join(" ");
 }
 
 function resolveConversationIdForThreadBinding(params: {
@@ -357,7 +396,7 @@ export async function spawnAcpDirect(
       agent: targetAgentId,
       mode: runtimeMode,
       cwd: params.cwd,
-      backendId: cfg.acp?.backend,
+      backendId: resolveConfiguredAcpBackendId(cfg),
     });
     initializedRuntime = {
       runtime: initialized.runtime,
@@ -417,9 +456,15 @@ export async function spawnAcpDirect(
       deleteTranscript: true,
       runtimeCloseHandle: initializedRuntime,
     });
+    const backendAvailabilityError = formatAcpBackendAvailabilityError({
+      error: err,
+      cfg,
+    });
     return {
       status: "error",
-      error: isSessionBindingError(err) ? err.message : summarizeError(err),
+      error: isSessionBindingError(err)
+        ? err.message
+        : backendAvailabilityError || summarizeError(err),
     };
   }
 
