@@ -157,5 +157,5 @@ export function resolveTranscriptToolCallIdMode(
   if (modelIncludesAnyHint(modelId, capabilities.transcriptToolCallIdModelHints)) {
     return "strict9";
   }
-  return mode === "strict9" ? mode : undefined;
+  return undefined;
 }

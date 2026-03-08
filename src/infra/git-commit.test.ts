@@ -3,8 +3,8 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import process from "node:process";
-import { pathToFileURL } from "node:url";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { fileURLToPath, pathToFileURL } from "node:url";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 async function makeTempDir(label: string): Promise<string> {
   return fs.mkdtemp(path.join(os.tmpdir(), `openclaw-${label}-`));
@@ -39,10 +39,20 @@ async function makeFakeGitRepo(
 }
 
 describe("git commit resolution", () => {
-  const originalCwd = process.cwd();
+  const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
+
+  beforeEach(async () => {
+    process.chdir(repoRoot);
+    vi.restoreAllMocks();
+    vi.doUnmock("node:fs");
+    vi.doUnmock("node:module");
+    vi.resetModules();
+    const { __testing } = await import("./git-commit.js");
+    __testing.clearCachedGitCommits();
+  });
 
   afterEach(async () => {
-    process.chdir(originalCwd);
+    process.chdir(repoRoot);
     vi.restoreAllMocks();
     vi.doUnmock("node:fs");
     vi.doUnmock("node:module");
@@ -53,7 +63,7 @@ describe("git commit resolution", () => {
 
   it("resolves commit metadata from the caller module root instead of the caller cwd", async () => {
     const repoHead = execFileSync("git", ["rev-parse", "--short=7", "HEAD"], {
-      cwd: originalCwd,
+      cwd: repoRoot,
       encoding: "utf-8",
     }).trim();
 
@@ -75,7 +85,7 @@ describe("git commit resolution", () => {
 
     process.chdir(otherRepo);
     const { resolveCommitHash } = await import("./git-commit.js");
-    const entryModuleUrl = pathToFileURL(path.join(originalCwd, "src", "entry.ts")).href;
+    const entryModuleUrl = pathToFileURL(path.join(repoRoot, "src", "entry.ts")).href;
 
     expect(resolveCommitHash({ moduleUrl: entryModuleUrl })).toBe(repoHead);
     expect(resolveCommitHash({ moduleUrl: entryModuleUrl })).not.toBe(otherHead);
@@ -83,12 +93,12 @@ describe("git commit resolution", () => {
 
   it("prefers live git metadata over stale build info in a real checkout", async () => {
     const repoHead = execFileSync("git", ["rev-parse", "--short=7", "HEAD"], {
-      cwd: originalCwd,
+      cwd: repoRoot,
       encoding: "utf-8",
     }).trim();
 
     const { resolveCommitHash } = await import("./git-commit.js");
-    const entryModuleUrl = pathToFileURL(path.join(originalCwd, "src", "entry.ts")).href;
+    const entryModuleUrl = pathToFileURL(path.join(repoRoot, "src", "entry.ts")).href;
 
     expect(
       resolveCommitHash({
@@ -149,16 +159,16 @@ describe("git commit resolution", () => {
 
   it("treats invalid moduleUrl inputs as a fallback hint instead of throwing", async () => {
     const repoHead = execFileSync("git", ["rev-parse", "--short=7", "HEAD"], {
-      cwd: originalCwd,
+      cwd: repoRoot,
       encoding: "utf-8",
     }).trim();
 
     const { resolveCommitHash } = await import("./git-commit.js");
 
     expect(() =>
-      resolveCommitHash({ moduleUrl: "not-a-file-url", cwd: originalCwd, env: {} }),
+      resolveCommitHash({ moduleUrl: "not-a-file-url", cwd: repoRoot, env: {} }),
     ).not.toThrow();
-    expect(resolveCommitHash({ moduleUrl: "not-a-file-url", cwd: originalCwd, env: {} })).toBe(
+    expect(resolveCommitHash({ moduleUrl: "not-a-file-url", cwd: repoRoot, env: {} })).toBe(
       repoHead,
     );
   });
