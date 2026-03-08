@@ -5,7 +5,7 @@ import type { ProgramContext } from "./context.js";
 const hasEmittedCliBannerMock = vi.fn(() => false);
 const formatCliBannerLineMock = vi.fn(() => "BANNER-LINE");
 const formatDocsLinkMock = vi.fn((_path: string, full: string) => `https://${full}`);
-const resolveCommitHashMock = vi.fn(() => "abc1234");
+const resolveCommitHashMock = vi.fn<() => string | null>(() => "abc1234");
 
 vi.mock("../../terminal/links.js", () => ({
   formatDocsLink: formatDocsLinkMock,
