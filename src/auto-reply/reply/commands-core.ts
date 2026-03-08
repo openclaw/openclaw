@@ -235,7 +235,7 @@ export async function handleCommands(params: HandleCommandsParams): Promise<Comm
     }
 
     // Trigger learning before reset/new commands (after ACP target resolution)
-    // Run in background - don't await, so reset happens immediately
+    // Run in background with dedicated lane to avoid blocking user interactions
     if (targetSessionEntry?.sessionId && targetSessionEntry.sessionFile) {
       const thinkLevel = params.resolvedThinkLevel ?? (await params.resolveDefaultThinkingLevel());
       runLearnForSession({
@@ -258,6 +258,7 @@ export async function handleCommands(params: HandleCommandsParams): Promise<Comm
           "What insights and lessons should be remembered before starting a new session?",
         senderIsOwner: params.command.senderIsOwner,
         ownerNumbers: params.command.ownerList.length > 0 ? params.command.ownerList : undefined,
+        lane: "learn",
       }).then((learnResult) => {
         if (learnResult.ok) {
           logVerbose(`Background pre-reset learning completed for session ${targetSessionKey}`);

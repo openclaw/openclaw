@@ -79,6 +79,7 @@ export async function runLearnForSession(params: {
   customFocus?: string;
   senderIsOwner: boolean;
   ownerNumbers?: string[];
+  lane?: string;
 }): Promise<{ ok: boolean; message?: string }> {
   const prompt = params.customFocus
     ? `Focus area: ${params.customFocus}. ${LEARN_DEFAULT_PROMPT}`
@@ -114,6 +115,7 @@ export async function runLearnForSession(params: {
       extraSystemPrompt: LEARN_SYSTEM_PROMPT,
       trigger: "memory",
       timeoutMs: 5 * 60 * 1000, // 5 minutes
+      lane: params.lane,
       senderIsOwner: params.senderIsOwner,
       ownerNumbers: params.ownerNumbers,
     });
