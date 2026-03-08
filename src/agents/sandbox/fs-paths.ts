@@ -10,7 +10,7 @@ export type SandboxFsMount = {
   hostRoot: string;
   containerRoot: string;
   writable: boolean;
-  source: "workspace" | "agent" | "bind";
+  source: "workspace" | "agent" | "skills" | "bind";
 };
 
 export type SandboxResolvedFsPath = {
@@ -66,6 +66,15 @@ export function buildSandboxFsMounts(sandbox: SandboxContext): SandboxFsMount[] 
       source: "workspace",
     },
   ];
+
+  if (sandbox.skillsDir && sandbox.skillsMount) {
+    mounts.push({
+      hostRoot: path.resolve(sandbox.skillsDir),
+      containerRoot: normalizeContainerPath(sandbox.skillsMount),
+      writable: false,
+      source: "skills",
+    });
+  }
 
   if (
     sandbox.workspaceAccess !== "none" &&

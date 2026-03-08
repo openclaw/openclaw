@@ -53,6 +53,34 @@ function compactSkillPaths(skills: Skill[]): Skill[] {
   }));
 }
 
+/**
+ * Rewrite skill file paths to point to the container's skills mount.
+ * Skills are synced to a dedicated host directory and mounted read-only
+ * at `containerSkillsMount` (e.g. `/skills`) inside the container.
+ *
+ * Uses the skill's baseDir name to construct the container path,
+ * independent of the host filesystem layout.
+ *
+ * Example: `/home/user/.openclaw/sandboxes/abc/skills/gog/SKILL.md`
+ *       → `/skills/gog/SKILL.md`
+ */
+export function rewriteSkillPathsForContainer(
+  skills: Skill[],
+  containerSkillsMount: string,
+): Skill[] {
+  const mount = containerSkillsMount.endsWith("/")
+    ? containerSkillsMount.slice(0, -1)
+    : containerSkillsMount;
+  return skills.map((s) => {
+    const dirName = path.basename(s.baseDir);
+    const relativePath = path.relative(s.baseDir, s.filePath);
+    return {
+      ...s,
+      filePath: `${mount}/${dirName}/${relativePath}`,
+    };
+  });
+}
+
 function debugSkillCommandOnce(
   messageKey: string,
   message: string,
@@ -598,6 +626,8 @@ type WorkspaceSkillBuildOptions = {
   /** If provided, only include skills with these names */
   skillFilter?: string[];
   eligibility?: SkillEligibilityContext;
+  /** When set, rewrite skill file paths for a sandbox container mount. */
+  containerSkillsMount?: string;
 };
 
 function resolveWorkspaceSkillPromptState(
@@ -630,7 +660,11 @@ function resolveWorkspaceSkillPromptState(
   const prompt = [
     remoteNote,
     truncationNote,
-    formatSkillsForPrompt(compactSkillPaths(skillsForPrompt)),
+    formatSkillsForPrompt(
+      opts?.containerSkillsMount
+        ? rewriteSkillPathsForContainer(skillsForPrompt, opts.containerSkillsMount)
+        : compactSkillPaths(skillsForPrompt),
+    ),
   ]
     .filter(Boolean)
     .join("\n");
@@ -642,7 +676,18 @@ export function resolveSkillsPromptForRun(params: {
   entries?: SkillEntry[];
   config?: OpenClawConfig;
   workspaceDir: string;
+  containerSkillsMount?: string;
 }): string {
+  // When running inside a sandbox container, rewrite snapshot skill paths
+  // to the container mount point instead of returning the cached host-path prompt.
+  if (params.containerSkillsMount && params.skillsSnapshot?.resolvedSkills?.length) {
+    const rewritten = rewriteSkillPathsForContainer(
+      params.skillsSnapshot.resolvedSkills,
+      params.containerSkillsMount,
+    );
+    return formatSkillsForPrompt(rewritten);
+  }
+
   const snapshotPrompt = params.skillsSnapshot?.prompt?.trim();
   if (snapshotPrompt) {
     return snapshotPrompt;
@@ -651,6 +696,7 @@ export function resolveSkillsPromptForRun(params: {
     const prompt = buildWorkspaceSkillsPrompt(params.workspaceDir, {
       entries: params.entries,
       config: params.config,
+      containerSkillsMount: params.containerSkillsMount,
     });
     return prompt.trim() ? prompt : "";
   }
@@ -713,6 +759,8 @@ export async function syncSkillsToWorkspace(params: {
   config?: OpenClawConfig;
   managedSkillsDir?: string;
   bundledSkillsDir?: string;
+  /** Place skills directly under targetWorkspaceDir instead of a "skills" subdirectory. */
+  flat?: boolean;
 }) {
   const sourceDir = resolveUserPath(params.sourceWorkspaceDir);
   const targetDir = resolveUserPath(params.targetWorkspaceDir);
@@ -721,7 +769,7 @@ export async function syncSkillsToWorkspace(params: {
   }
 
   await serializeByKey(`syncSkills:${targetDir}`, async () => {
-    const targetSkillsDir = path.join(targetDir, "skills");
+    const targetSkillsDir = params.flat ? targetDir : path.join(targetDir, "skills");
 
     const entries = loadSkillEntries(sourceDir, {
       config: params.config,
@@ -729,8 +777,20 @@ export async function syncSkillsToWorkspace(params: {
       bundledSkillsDir: params.bundledSkillsDir,
     });
 
-    await fsp.rm(targetSkillsDir, { recursive: true, force: true });
-    await fsp.mkdir(targetSkillsDir, { recursive: true });
+    // Clear contents without removing the directory itself to preserve
+    // its inode — Docker bind mounts reference the inode, so rm + mkdir
+    // would silently break the mount inside the container.
+    try {
+      const existing = await fsp.readdir(targetSkillsDir);
+      await Promise.all(
+        existing.map((entry) =>
+          fsp.rm(path.join(targetSkillsDir, entry), { recursive: true, force: true }),
+        ),
+      );
+    } catch {
+      // Directory doesn't exist yet — create it.
+      await fsp.mkdir(targetSkillsDir, { recursive: true });
+    }
 
     const usedDirNames = new Set<string>();
     for (const entry of entries) {

@@ -24,6 +24,8 @@ export function createPiToolsSandboxContext(params: PiToolsSandboxContextParams)
     workspaceAccess: params.workspaceAccess ?? "rw",
     containerName: params.containerName ?? "openclaw-sbx-test",
     containerWorkdir: params.containerWorkdir ?? "/workspace",
+    skillsDir: `${workspaceDir}/.sandbox-skills`,
+    skillsMount: "/skills",
     fsBridge: params.fsBridge,
     docker: {
       image: "openclaw-sandbox:bookworm-slim",
