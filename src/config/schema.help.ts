@@ -540,13 +540,13 @@ export const FIELD_HELP: Record<string, string> = {
   "tools.exec.safeBinProfiles":
     "Optional per-binary safe-bin profiles (positional limits + allowed/denied flags).",
   "tools.profile":
-    "Global tool profile name used to select a predefined tool policy baseline before applying allow/deny overrides. Use this for consistent environment posture across agents and keep profile names stable.",
+    "Global tool profile name used to select a predefined tool policy baseline before applying allow/deny overrides. Use this to control the default tool surface for your agents. In particular, `messaging` is intentionally narrow for messaging-focused setups, while `full` gives the broadest command/control surface. If an assistant feels unexpectedly limited, check this setting first and keep profile names stable.",
   "tools.alsoAllow":
     "Extra tool allowlist entries merged on top of the selected tool profile and default policy. Keep this list small and explicit so audits can quickly identify intentional policy exceptions.",
   "tools.byProvider":
     "Per-provider tool allow/deny overrides keyed by channel/provider ID to tailor capabilities by surface. Use this when one provider needs stricter controls than global tool policy.",
   "agents.list[].tools.profile":
-    "Per-agent override for tool profile selection when one agent needs a different capability baseline. Use this sparingly so policy differences across agents stay intentional and reviewable.",
+    "Per-agent override for tool profile selection when one agent needs a different capability baseline. This is useful when, for example, one agent should stay messaging-focused (`messaging`) while another needs broader access (`full` or `coding`). Use this sparingly so policy differences across agents stay intentional and reviewable.",
   "agents.list[].tools.alsoAllow":
     "Per-agent additive allowlist for tools on top of global and profile policy. Keep narrow to avoid accidental privilege expansion on specialized agents.",
   "agents.list[].tools.byProvider":
