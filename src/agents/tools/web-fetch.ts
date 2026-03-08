@@ -1,6 +1,6 @@
 import { Type } from "@sinclair/typebox";
 import type { OpenClawConfig } from "../../config/config.js";
-import { SsrFBlockedError } from "../../infra/net/ssrf.js";
+import { SsrFBlockedError, type SsrFPolicy } from "../../infra/net/ssrf.js";
 import { logDebug } from "../../logger.js";
 import { wrapExternalContent, wrapWebContent } from "../../security/external-content.js";
 import { normalizeSecretInput } from "../../utils/normalize-secret-input.js";
@@ -187,6 +187,25 @@ function resolveFirecrawlMaxAgeMsOrDefault(firecrawl?: FirecrawlFetchConfig): nu
     return resolved;
   }
   return DEFAULT_FIRECRAWL_MAX_AGE_MS;
+}
+
+function resolveSsrfPolicy(fetch?: WebFetchConfig): SsrFPolicy | undefined {
+  if (!fetch || typeof fetch !== "object") {
+    return undefined;
+  }
+  const raw = "ssrfPolicy" in fetch ? fetch.ssrfPolicy : undefined;
+  if (!raw || typeof raw !== "object") {
+    return undefined;
+  }
+  const policy = raw as { allowPrivateNetwork?: boolean; allowCidrs?: string[] };
+  const allowCidrs = Array.isArray(policy.allowCidrs) ? policy.allowCidrs : undefined;
+  if (!policy.allowPrivateNetwork && (!allowCidrs || allowCidrs.length === 0)) {
+    return undefined;
+  }
+  return {
+    ...(policy.allowPrivateNetwork ? { allowPrivateNetwork: true } : {}),
+    ...(allowCidrs && allowCidrs.length > 0 ? { allowCidrs } : {}),
+  };
 }
 
 function resolveMaxChars(value: unknown, fallback: number, cap: number): number {
@@ -446,6 +465,7 @@ type WebFetchRuntimeParams = FirecrawlRuntimeParams & {
   cacheTtlMs: number;
   userAgent: string;
   readabilityEnabled: boolean;
+  ssrfPolicy?: SsrFPolicy;
 };
 
 function toFirecrawlContentParams(
@@ -527,6 +547,7 @@ async function runWebFetch(params: WebFetchRuntimeParams): Promise<Record<string
       url: params.url,
       maxRedirects: params.maxRedirects,
       timeoutSeconds: params.timeoutSeconds,
+      policy: params.ssrfPolicy,
       init: {
         headers: {
           Accept: "text/markdown, text/html;q=0.9, */*;q=0.1",
@@ -732,6 +753,7 @@ export function createWebFetchTool(options?: {
     (fetch && "userAgent" in fetch && typeof fetch.userAgent === "string" && fetch.userAgent) ||
     DEFAULT_FETCH_USER_AGENT;
   const maxResponseBytes = resolveFetchMaxResponseBytes(fetch);
+  const ssrfPolicy = resolveSsrfPolicy(fetch);
   return {
     label: "Web Fetch",
     name: "web_fetch",
@@ -766,6 +788,7 @@ export function createWebFetchTool(options?: {
         firecrawlProxy: "auto",
         firecrawlStoreInCache: true,
         firecrawlTimeoutSeconds,
+        ssrfPolicy,
       });
       return jsonResult(result);
     },

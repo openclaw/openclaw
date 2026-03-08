@@ -1,5 +1,6 @@
 import { lookup as dnsLookupCb, type LookupAddress } from "node:dns";
 import { lookup as dnsLookup } from "node:dns/promises";
+import ipaddr from "ipaddr.js";
 import { Agent, type Dispatcher } from "undici";
 import {
   extractEmbeddedIpv4FromIpv6,
@@ -33,6 +34,7 @@ export type SsrFPolicy = {
   allowPrivateNetwork?: boolean;
   dangerouslyAllowPrivateNetwork?: boolean;
   allowRfc2544BenchmarkRange?: boolean;
+  allowCidrs?: string[];
   allowedHostnames?: string[];
   hostnameAllowlist?: string[];
 };
@@ -42,6 +44,23 @@ const BLOCKED_HOSTNAMES = new Set([
   "localhost.localdomain",
   "metadata.google.internal",
 ]);
+
+type ParsedCidr = [ipaddr.IPv4 | ipaddr.IPv6, number];
+
+function parseCidrStrings(cidrs?: string[]): ParsedCidr[] {
+  if (!cidrs || cidrs.length === 0) {
+    return [];
+  }
+  const parsed: ParsedCidr[] = [];
+  for (const raw of cidrs) {
+    try {
+      parsed.push(ipaddr.parseCIDR(raw));
+    } catch {
+      console.warn(`[ssrf] invalid CIDR in allowCidrs, skipping: ${raw}`);
+    }
+  }
+  return parsed;
+}
 
 function normalizeHostnameSet(values?: string[]): Set<string> {
   if (!values || values.length === 0) {
@@ -114,18 +133,22 @@ export function isPrivateIpAddress(address: string, policy?: SsrFPolicy): boolea
     return false;
   }
   const blockOptions = resolveIpv4SpecialUseBlockOptions(policy);
-
+  const parsedCidrs = parseCidrStrings(policy?.allowCidrs);
+  const combinedOpts = {
+    ...blockOptions,
+    ...(parsedCidrs.length > 0 ? { allowCidrs: parsedCidrs } : {}),
+  };
   const strictIp = parseCanonicalIpAddress(normalized);
   if (strictIp) {
     if (isIpv4Address(strictIp)) {
-      return isBlockedSpecialUseIpv4Address(strictIp, blockOptions);
+      return isBlockedSpecialUseIpv4Address(strictIp, combinedOpts);
     }
     if (isBlockedSpecialUseIpv6Address(strictIp)) {
       return true;
     }
     const embeddedIpv4 = extractEmbeddedIpv4FromIpv6(strictIp);
     if (embeddedIpv4) {
-      return isBlockedSpecialUseIpv4Address(embeddedIpv4, blockOptions);
+      return isBlockedSpecialUseIpv4Address(embeddedIpv4, combinedOpts);
     }
     return false;
   }

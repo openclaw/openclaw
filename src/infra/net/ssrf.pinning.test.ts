@@ -69,7 +69,7 @@ describe("ssrf pinning", () => {
 
     const pinned = await resolvePinnedHostnameWithPolicy("api.telegram.org", {
       lookupFn: lookup,
-      policy: { allowRfc2544BenchmarkRange: true },
+      policy: { allowCidrs: ["198.18.0.0/15"] },
     });
     expect(pinned.addresses).toContain("198.18.0.153");
   });

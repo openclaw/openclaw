@@ -126,8 +126,8 @@ describe("isBlockedHostnameOrIp", () => {
     expect(isBlockedHostnameOrIp("198.20.0.1")).toBe(false);
   });
 
-  it("supports opt-in policy to allow RFC2544 benchmark range", () => {
-    const policy = { allowRfc2544BenchmarkRange: true };
+  it("supports opt-in policy to allow RFC2544 benchmark range via allowCidrs", () => {
+    const policy = { allowCidrs: ["198.18.0.0/15"] };
     expect(isBlockedHostnameOrIp("198.18.0.1")).toBe(true);
     expect(isBlockedHostnameOrIp("198.18.0.1", policy)).toBe(false);
     expect(isBlockedHostnameOrIp("::ffff:198.18.0.1", policy)).toBe(false);
