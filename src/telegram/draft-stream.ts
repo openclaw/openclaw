@@ -3,7 +3,7 @@ import { createFinalizableDraftLifecycle } from "../channels/draft-stream-contro
 import { buildTelegramThreadParams, type TelegramThreadSpec } from "./bot/helpers.js";
 
 const TELEGRAM_STREAM_MAX_CHARS = 4096;
-const DEFAULT_THROTTLE_MS = 1000;
+const DEFAULT_THROTTLE_MS = 250;
 const TELEGRAM_DRAFT_ID_MAX = 2_147_483_647;
 const THREAD_NOT_FOUND_RE = /400:\s*Bad Request:\s*message thread not found/i;
 const DRAFT_METHOD_UNAVAILABLE_RE =
@@ -100,7 +100,7 @@ export function createTelegramDraftStream(params: {
     params.maxChars ?? TELEGRAM_STREAM_MAX_CHARS,
     TELEGRAM_STREAM_MAX_CHARS,
   );
-  const throttleMs = Math.max(250, params.throttleMs ?? DEFAULT_THROTTLE_MS);
+  const throttleMs = Math.max(100, params.throttleMs ?? DEFAULT_THROTTLE_MS);
   const minInitialChars = params.minInitialChars;
   const chatId = params.chatId;
   const requestedPreviewTransport = params.previewTransport ?? "auto";
