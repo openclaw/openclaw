@@ -342,10 +342,101 @@ function parseMessageContent(content: string, messageType: string): string {
       // Return placeholder; actual content fetched asynchronously in handleFeishuMessage
       return "[Merged and Forwarded Message - loading...]";
     }
+    if (messageType === "card") {
+      // Extract document links from card message
+      const docLinks = extractDocLinksFromCard(parsed);
+      if (docLinks.length > 0) {
+        return `[Card message with document links: ${docLinks.join(", ")}]`;
+      }
+      // Try to extract text content from card
+      const cardText = extractTextFromCard(parsed);
+      if (cardText) {
+        return `[Card message] ${cardText}`;
+      }
+      return "[Card message - unable to parse content]";
+    }
     return content;
   } catch {
     return content;
   }
+}
+
+/**
+ * Extract document links from card message content
+ * Supports docx, wiki, and bitable links
+ */
+function extractDocLinksFromCard(card: unknown): string[] {
+  const links: string[] = [];
+  if (!card || typeof card !== "object") return links;
+
+  const cardObj = card as Record<string, unknown>;
+
+  // Check for document link in card header or content
+  const searchForLinks = (obj: unknown, depth = 0): void => {
+    if (depth > 10 || !obj || typeof obj !== "object") return;
+
+    const objRecord = obj as Record<string, unknown>;
+
+    // Check common document link patterns
+    for (const [key, value] of Object.entries(objRecord)) {
+      if (typeof value === "string") {
+        // Match docx links
+        if (value.includes("/docx/") || value.includes("open.feishu.cn/docx")) {
+          const match = value.match(/(https?:\/\/[^\s"]+)/);
+          if (match && !links.includes(match[1])) {
+            links.push(match[1]);
+          }
+        }
+        // Match wiki links
+        if (value.includes("/wiki/") || value.includes("open.feishu.cn/wiki")) {
+          const match = value.match(/(https?:\/\/[^\s"]+)/);
+          if (match && !links.includes(match[1])) {
+            links.push(match[1]);
+          }
+        }
+        // Match bitable links
+        if (value.includes("/base/") || value.includes("open.feishu.cn/base")) {
+          const match = value.match(/(https?:\/\/[^\s"]+)/);
+          if (match && !links.includes(match[1])) {
+            links.push(match[1]);
+          }
+        }
+      } else if (typeof value === "object" && value !== null) {
+        searchForLinks(value, depth + 1);
+      }
+    }
+  };
+
+  searchForLinks(cardObj);
+  return links;
+}
+
+/**
+ * Extract text content from card message
+ */
+function extractTextFromCard(card: unknown): string | null {
+  if (!card || typeof card !== "object") return null;
+
+  const cardObj = card as Record<string, unknown>;
+  const texts: string[] = [];
+
+  // Recursively search for text fields
+  const searchForText = (obj: unknown, depth = 0): void => {
+    if (depth > 10 || !obj || typeof obj !== "object") return;
+
+    const objRecord = obj as Record<string, unknown>;
+
+    for (const [key, value] of Object.entries(objRecord)) {
+      if (key === "text" && typeof value === "string" && value.trim()) {
+        texts.push(value.trim());
+      } else if (typeof value === "object" && value !== null) {
+        searchForText(value, depth + 1);
+      }
+    }
+  };
+
+  searchForText(cardObj);
+  return texts.length > 0 ? texts.join(" ") : null;
 }
 
 /**
@@ -476,8 +567,8 @@ function normalizeMentions(
 ): string {
   if (!mentions || mentions.length === 0) return text;
 
-  const escaped = (value: string) => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  const escapeName = (value: string) => value.replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  const escaped = (value: string) => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$\u0026");
+  const escapeName = (value: string) => value.replace(/</g, "\u0026lt;").replace(/>/g, "\u0026gt;");
   let result = text;
 
   for (const mention of mentions) {
@@ -486,7 +577,7 @@ function normalizeMentions(
       botStripId && mentionId === botStripId
         ? ""
         : mentionId
-          ? `<at user_id="${mentionId}">${escapeName(mention.name)}</at>`
+          ? `\u003cat user_id="${mentionId}"\u003e${escapeName(mention.name)}\u003c/at\u003e`
           : `@${mention.name}`;
 
     result = result.replace(new RegExp(escaped(mention.key), "g"), () => replacement).trim();
@@ -556,18 +647,18 @@ export function toMessageResourceType(messageType: string): "image" | "file" {
 function inferPlaceholder(messageType: string): string {
   switch (messageType) {
     case "image":
-      return "<media:image>";
+      return "\u003cmedia:image\u003e";
     case "file":
-      return "<media:document>";
+      return "\u003cmedia:document\u003e";
     case "audio":
-      return "<media:audio>";
+      return "\u003cmedia:audio\u003e";
     case "video":
     case "media":
-      return "<media:video>";
+      return "\u003cmedia:video\u003e";
     case "sticker":
-      return "<media:sticker>";
+      return "\u003cmedia:sticker\u003e";
     default:
-      return "<media:document>";
+      return "\u003cmedia:document\u003e";
   }
 }
 
@@ -635,7 +726,7 @@ async function resolveFeishuMediaList(params: {
         out.push({
           path: saved.path,
           contentType: saved.contentType,
-          placeholder: "<media:image>",
+          placeholder: "\u003cmedia:image\u003e",
         });
 
         log?.(`feishu: downloaded embedded image ${imageKey}, saved to ${saved.path}`);
@@ -669,7 +760,7 @@ async function resolveFeishuMediaList(params: {
         out.push({
           path: saved.path,
           contentType: saved.contentType,
-          placeholder: "<media:video>",
+          placeholder: "\u003cmedia:video\u003e",
         });
 
         log?.(`feishu: downloaded embedded media ${media.fileKey}, saved to ${saved.path}`);
@@ -836,7 +927,7 @@ export function buildFeishuAgentBody(params: {
   if (ctx.hasAnyMention) {
     const botIdHint = botOpenId?.trim();
     messageBody +=
-      `\n\n[System: The content may include mention tags in the form <at user_id="...">name</at>. ` +
+      `\n\n[System: The content may include mention tags in the form \u003cat user_id="..."\u003ename\u003c/at\u003e. ` +
       `Treat these as real mentions of Feishu entities (users or bots).]`;
     if (botIdHint) {
       messageBody += `\n[System: If user_id is "${botIdHint}", that mention refers to you.]`;
@@ -1059,7 +1150,7 @@ export async function handleFeishuMessage(params: {
       if (!broadcastAgents && chatHistories && groupHistoryKey) {
         recordPendingHistoryEntryIfEnabled({
           historyMap: chatHistories,
-          historyKey: groupHistoryKey,
+          historyKey,
           limit: historyLimit,
           entry: {
             sender: ctx.senderOpenId,
@@ -1461,87 +1552,49 @@ export async function handleFeishuMessage(params: {
 
       if (strategy === "sequential") {
         for (const agentId of broadcastAgents) {
-          try {
-            await dispatchForAgent(agentId);
-          } catch (err) {
-            log(
-              `feishu[${account.accountId}]: broadcast dispatch failed for agent=${agentId}: ${String(err)}`,
-            );
-          }
+          await dispatchForAgent(agentId);
         }
       } else {
-        const results = await Promise.allSettled(broadcastAgents.map(dispatchForAgent));
-        for (let i = 0; i < results.length; i++) {
-          if (results[i].status === "rejected") {
-            log(
-              `feishu[${account.accountId}]: broadcast dispatch failed for agent=${broadcastAgents[i]}: ${String((results[i] as PromiseRejectedResult).reason)}`,
-            );
-          }
-        }
+        await Promise.all(broadcastAgents.map(dispatchForAgent));
       }
-
-      if (isGroup && historyKey && chatHistories) {
-        clearHistoryEntriesIfEnabled({
-          historyMap: chatHistories,
-          historyKey,
-          limit: historyLimit,
-        });
-      }
-
-      log(
-        `feishu[${account.accountId}]: broadcast dispatch complete for ${broadcastAgents.length} agents`,
-      );
-    } else {
-      // --- Single-agent dispatch (existing behavior) ---
-      const ctxPayload = buildCtxPayloadForAgent(
-        route.sessionKey,
-        route.accountId,
-        ctx.mentionedBot,
-      );
-
-      const { dispatcher, replyOptions, markDispatchIdle } = createFeishuReplyDispatcher({
-        cfg,
-        agentId: route.agentId,
-        runtime: runtime as RuntimeEnv,
-        chatId: ctx.chatId,
-        replyToMessageId: replyTargetMessageId,
-        skipReplyToInMessages: !isGroup,
-        replyInThread,
-        rootId: ctx.rootId,
-        threadReply,
-        mentionTargets: ctx.mentionTargets,
-        accountId: account.accountId,
-        messageCreateTimeMs,
-      });
-
-      log(`feishu[${account.accountId}]: dispatching to agent (session=${route.sessionKey})`);
-      const { queuedFinal, counts } = await core.channel.reply.withReplyDispatcher({
-        dispatcher,
-        onSettled: () => {
-          markDispatchIdle();
-        },
-        run: () =>
-          core.channel.reply.dispatchReplyFromConfig({
-            ctx: ctxPayload,
-            cfg,
-            dispatcher,
-            replyOptions,
-          }),
-      });
-
-      if (isGroup && historyKey && chatHistories) {
-        clearHistoryEntriesIfEnabled({
-          historyMap: chatHistories,
-          historyKey,
-          limit: historyLimit,
-        });
-      }
-
-      log(
-        `feishu[${account.accountId}]: dispatch complete (queuedFinal=${queuedFinal}, replies=${counts.final})`,
-      );
+      return;
     }
+
+    // --- Standard dispatch (non-broadcast) ---
+    const { dispatcher, replyOptions, markDispatchIdle } = createFeishuReplyDispatcher({
+      cfg,
+      agentId: route.agentId,
+      runtime: runtime as RuntimeEnv,
+      chatId: ctx.chatId,
+      replyToMessageId: replyTargetMessageId,
+      skipReplyToInMessages: !isGroup,
+      replyInThread,
+      rootId: ctx.rootId,
+      threadReply,
+      mentionTargets: ctx.mentionTargets,
+      accountId: account.accountId,
+      messageCreateTimeMs,
+    });
+
+    log(`feishu[${account.accountId}]: dispatching to agent (session=${route.sessionKey})`);
+
+    await core.channel.reply.withReplyDispatcher({
+      dispatcher,
+      onSettled: () => markDispatchIdle(),
+      run: () =>
+        core.channel.reply.dispatchReplyFromConfig({
+          ctx: buildCtxPayloadForAgent(
+            route.sessionKey,
+            route.accountId,
+            ctx.mentionedBot || !requireMention,
+          ),
+          cfg: effectiveCfg,
+          dispatcher,
+          replyOptions,
+        }),
+    });
   } catch (err) {
-    error(`feishu[${account.accountId}]: failed to dispatch message: ${String(err)}`);
+    error(`feishu[${account.accountId}]: message handling failed: ${String(err)}`);
+    throw err;
   }
 }
