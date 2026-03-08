@@ -15,7 +15,11 @@ import { logAckFailure, logTypingFailure } from "../channels/logging.js";
 import { createReplyPrefixOptions } from "../channels/reply-prefix.js";
 import { createTypingCallbacks } from "../channels/typing.js";
 import { resolveMarkdownTableMode } from "../config/markdown-tables.js";
-import { loadSessionStore, resolveStorePath } from "../config/sessions.js";
+import {
+  loadSessionStore,
+  resolveSessionStoreEntry,
+  resolveStorePath,
+} from "../config/sessions.js";
 import type { OpenClawConfig, ReplyToMode, TelegramAccountConfig } from "../config/types.js";
 import { danger, logVerbose } from "../globals.js";
 import { getAgentScopedMediaLocalRoots } from "../media/local-roots.js";
@@ -117,7 +121,7 @@ function resolveTelegramReasoningLevel(params: {
   try {
     const storePath = resolveStorePath(cfg.session?.store, { agentId });
     const store = loadSessionStore(storePath, { skipCache: true });
-    const entry = store[sessionKey.toLowerCase()] ?? store[sessionKey];
+    const entry = resolveSessionStoreEntry({ store, sessionKey }).existing;
     const level = entry?.reasoningLevel;
     if (level === "on" || level === "stream") {
       return level;
@@ -186,19 +190,22 @@ export const dispatchTelegramMessage = async ({
   const draftReplyToMessageId =
     replyToMode !== "off" && typeof msg.message_id === "number" ? msg.message_id : undefined;
   const draftMinInitialChars = DRAFT_MIN_INITIAL_CHARS;
+  // Use message transport (sendMessage + editMessageText) for all lanes in
+  // DMs so that streamMessageId is tracked. Draft transport doesn't track a
+  // messageId, causing resolvePreviewTarget() to miss the preview on final
+  // delivery — which sends a duplicate message. (Fixes #33453)
+  const useMessagePreviewTransportForDm = threadSpec?.scope === "dm" && canStreamAnswerDraft;
   const mediaLocalRoots = getAgentScopedMediaLocalRoots(cfg, route.agentId);
   const archivedAnswerPreviews: ArchivedPreview[] = [];
   const archivedReasoningPreviewIds: number[] = [];
   const createDraftLane = (laneName: LaneName, enabled: boolean): DraftLaneState => {
-    const useMessagePreviewTransportForDmReasoning =
-      laneName === "reasoning" && threadSpec?.scope === "dm" && canStreamAnswerDraft;
     const stream = enabled
       ? createTelegramDraftStream({
           api: bot.api,
           chatId,
           maxChars: draftMaxChars,
           thread: threadSpec,
-          previewTransport: useMessagePreviewTransportForDmReasoning ? "message" : "auto",
+          previewTransport: useMessagePreviewTransportForDm ? "message" : "auto",
           replyToMessageId: draftReplyToMessageId,
           minInitialChars: draftMinInitialChars,
           renderText: renderDraftPreview,
@@ -503,6 +510,7 @@ export const dispatchTelegramMessage = async ({
     },
   });
 
+  let dispatchError: unknown;
   try {
     ({ queuedFinal } = await dispatchReplyWithBufferedBlockDispatcher({
       ctx: ctxPayload,
@@ -676,6 +684,9 @@ export const dispatchTelegramMessage = async ({
         onModelSelected,
       },
     }));
+  } catch (err) {
+    dispatchError = err;
+    runtime.error?.(danger(`telegram dispatch failed: ${String(err)}`));
   } finally {
     // Upstream assistant callbacks are fire-and-forget; drain queued lane work
     // before stream cleanup so boundary rotations/materialization complete first.
@@ -743,11 +754,15 @@ export const dispatchTelegramMessage = async ({
   let sentFallback = false;
   const deliverySummary = deliveryState.snapshot();
   if (
-    !deliverySummary.delivered &&
-    (deliverySummary.skippedNonSilent > 0 || deliverySummary.failedNonSilent > 0)
+    dispatchError ||
+    (!deliverySummary.delivered &&
+      (deliverySummary.skippedNonSilent > 0 || deliverySummary.failedNonSilent > 0))
   ) {
+    const fallbackText = dispatchError
+      ? "Something went wrong while processing your request. Please try again."
+      : EMPTY_RESPONSE_FALLBACK;
     const result = await deliverReplies({
-      replies: [{ text: EMPTY_RESPONSE_FALLBACK }],
+      replies: [{ text: fallbackText }],
       ...deliveryBaseOptions,
     });
     sentFallback = result.delivered;

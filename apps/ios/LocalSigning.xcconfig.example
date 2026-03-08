@@ -2,12 +2,13 @@
 // This file is only an example and should stay committed.
 
 OPENCLAW_CODE_SIGN_STYLE = Automatic
-OPENCLAW_DEVELOPMENT_TEAM = P5Z8X89DJL
+OPENCLAW_DEVELOPMENT_TEAM = YOUR_TEAM_ID
 
-OPENCLAW_APP_BUNDLE_ID = ai.openclaw.ios.test.mariano
-OPENCLAW_SHARE_BUNDLE_ID = ai.openclaw.ios.test.mariano.share
-OPENCLAW_WATCH_APP_BUNDLE_ID = ai.openclaw.ios.test.mariano.watchkitapp
-OPENCLAW_WATCH_EXTENSION_BUNDLE_ID = ai.openclaw.ios.test.mariano.watchkitapp.extension
+OPENCLAW_APP_BUNDLE_ID = ai.openclaw.client
+OPENCLAW_SHARE_BUNDLE_ID = ai.openclaw.client.share
+OPENCLAW_ACTIVITY_WIDGET_BUNDLE_ID = ai.openclaw.client.activitywidget
+OPENCLAW_WATCH_APP_BUNDLE_ID = ai.openclaw.client.watchkitapp
+OPENCLAW_WATCH_EXTENSION_BUNDLE_ID = ai.openclaw.client.watchkitapp.extension
 
 // Leave empty with automatic signing.
 OPENCLAW_APP_PROFILE =

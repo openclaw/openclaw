@@ -55,7 +55,6 @@ export async function installGatewayDaemonNonInteractive(params: {
   const { programArguments, workingDirectory, environment } = await buildGatewayInstallPlan({
     env: process.env,
     port,
-    token: tokenResolution.token,
     runtime: daemonRuntimeRaw,
     warn: (message) => runtime.log(message),
     config: params.nextConfig,

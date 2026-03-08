@@ -12,6 +12,7 @@ import {
   resolveAuthProfileOrder,
 } from "../../agents/auth-profiles.js";
 import { describeFailoverError } from "../../agents/failover-error.js";
+import { isNonSecretApiKeyMarker } from "../../agents/model-auth-markers.js";
 import { getCustomProviderApiKey, resolveEnvApiKey } from "../../agents/model-auth.js";
 import { loadModelCatalog } from "../../agents/model-catalog.js";
 import {
@@ -373,7 +374,8 @@ export async function buildProbeTargets(params: {
 
     const envKey = resolveEnvApiKey(providerKey);
     const customKey = getCustomProviderApiKey(cfg, providerKey);
-    if (!envKey && !customKey) {
+    const hasUsableModelsJsonKey = Boolean(customKey && !isNonSecretApiKeyMarker(customKey));
+    if (!envKey && !hasUsableModelsJsonKey) {
       continue;
     }
 
