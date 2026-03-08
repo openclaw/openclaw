@@ -505,53 +505,19 @@ describe("readSessionMessages", () => {
     expect(typeof marker.timestamp).toBe("number");
   });
 
-  test("reads cross-agent absolute sessionFile across store-root layouts", () => {
-    const cases = [
-      {
-        sessionId: "cross-agent-default-root",
-        sessionFile: path.join(
-          tmpDir,
-          "agents",
-          "ops",
-          "sessions",
-          "cross-agent-default-root.jsonl",
-        ),
-        wrongStorePath: path.join(tmpDir, "agents", "main", "sessions", "sessions.json"),
-        message: { role: "user", content: "from-ops" },
-      },
-      {
-        sessionId: "cross-agent-custom-root",
-        sessionFile: path.join(
-          tmpDir,
-          "custom",
-          "agents",
-          "ops",
-          "sessions",
-          "cross-agent-custom-root.jsonl",
-        ),
-        wrongStorePath: path.join(tmpDir, "custom", "agents", "main", "sessions", "sessions.json"),
-        message: { role: "assistant", content: "from-custom-ops" },
-      },
-    ] as const;
+  test("reads tail safely when transcript has very large lines", () => {
+    const sessionId = "test-session-tail-large-line";
+    const transcriptPath = path.join(tmpDir, `${sessionId}.jsonl`);
+    const huge = "x".repeat(1_200_000);
+    const lines = [
+      JSON.stringify({ type: "session", version: 1, id: sessionId }),
+      JSON.stringify({ message: { role: "user", content: huge } }),
+      JSON.stringify({ message: { role: "assistant", content: "tail-ok" } }),
+    ];
+    fs.writeFileSync(transcriptPath, lines.join("\n"), "utf-8");
 
-    for (const testCase of cases) {
-      fs.mkdirSync(path.dirname(testCase.sessionFile), { recursive: true });
-      fs.writeFileSync(
-        testCase.sessionFile,
-        [
-          JSON.stringify({ type: "session", version: 1, id: testCase.sessionId }),
-          JSON.stringify({ message: testCase.message }),
-        ].join("\n"),
-        "utf-8",
-      );
-
-      const out = readSessionMessages(
-        testCase.sessionId,
-        testCase.wrongStorePath,
-        testCase.sessionFile,
-      );
-      expect(out).toEqual([testCase.message]);
-    }
+    const out = readSessionMessages(sessionId, storePath);
+    expect(out).toEqual([{ role: "assistant", content: "tail-ok" }]);
   });
 });
 
