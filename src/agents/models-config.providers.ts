@@ -63,6 +63,7 @@ import {
   buildTogetherModelDefinition,
 } from "./together-models.js";
 import { discoverVeniceModels, VENICE_BASE_URL } from "./venice-models.js";
+import { discoverVercelAiGatewayModels, VERCEL_AI_GATEWAY_BASE_URL } from "./vercel-ai-gateway.js";
 
 type ModelsConfig = NonNullable<OpenClawConfig["models"]>;
 export type ProviderConfig = NonNullable<ModelsConfig["providers"]>[string];
@@ -953,6 +954,14 @@ async function buildHuggingfaceProvider(discoveryApiKey?: string): Promise<Provi
   };
 }
 
+async function buildVercelAiGatewayProvider(): Promise<ProviderConfig> {
+  return {
+    baseUrl: VERCEL_AI_GATEWAY_BASE_URL,
+    api: "anthropic-messages",
+    models: await discoverVercelAiGatewayModels(),
+  };
+}
+
 function buildTogetherProvider(): ProviderConfig {
   return {
     baseUrl: TOGETHER_BASE_URL,
@@ -1212,6 +1221,14 @@ export async function resolveImplicitProviders(params: {
       models: [buildCloudflareAiGatewayModelDefinition()],
     };
     break;
+  }
+
+  const vercelAiGatewayKey = resolveProviderApiKey("vercel-ai-gateway").apiKey;
+  if (vercelAiGatewayKey) {
+    providers["vercel-ai-gateway"] = {
+      ...(await buildVercelAiGatewayProvider()),
+      apiKey: vercelAiGatewayKey,
+    };
   }
 
   // Ollama provider - auto-discover if running locally, or add if explicitly configured.
