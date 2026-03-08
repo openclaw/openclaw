@@ -747,6 +747,23 @@ export async function compactEmbeddedPiSessionDirect(
             `[compaction-diag] contributors diagId=${diagId} top=${JSON.stringify(preMetrics.contributors)}`,
           );
         }
+        // Skip compaction if there are no real conversation messages to summarize.
+        // This prevents unnecessary LLM API calls (and associated costs) for sessions
+        // that only contain system messages or are completely empty.
+        const hasRealConversationMessages = preCompactionMessages.some(
+          (msg): msg is AgentMessage & { role: "user" | "assistant" | "toolResult" } =>
+            msg?.role === "user" || msg?.role === "assistant" || msg?.role === "toolResult",
+        );
+        if (!hasRealConversationMessages) {
+          log.info(
+            `[compaction] Skipping compaction for session ${params.sessionKey ?? params.sessionId}: no real conversation messages to summarize.`,
+          );
+          return {
+            ok: true,
+            compacted: false,
+            reason: "no_real_messages",
+          };
+        }
 
         if (!session.messages.some(hasRealConversationContent)) {
           log.info(

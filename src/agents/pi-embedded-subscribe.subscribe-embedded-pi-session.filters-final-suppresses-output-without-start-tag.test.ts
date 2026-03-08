@@ -35,9 +35,12 @@ describe("subscribeEmbeddedPiSession", () => {
     emit({ type: "message_start", message: { role: "assistant" } });
     emitAssistantTextDelta({ emit, delta: "</final>Oops no start" });
 
-    expect(onPartialReply).not.toHaveBeenCalled();
+    // With the fix, text without <final> tag is now displayed (tags stripped)
+    expect(onPartialReply).toHaveBeenCalled();
+    const payload = onPartialReply.mock.calls[0][0];
+    expect(payload.text).toBe("Oops no start");
   });
-  it("suppresses agent events on message_end without <final> tags when enforced", () => {
+  it("emits agent events on message_end without <final> tags when enforced (fix for TUI not displaying)", () => {
     const { session, emit } = createStubSessionHarness();
 
     const onAgentEvent = vi.fn();
@@ -49,10 +52,10 @@ describe("subscribeEmbeddedPiSession", () => {
       onAgentEvent,
     });
     emitMessageStartAndEndForAssistantText({ emit, text: "Hello world" });
-    // With enforceFinalTag, text without <final> tags is treated as leaked
-    // reasoning and should NOT be recovered by the message_end fallback.
+    // With the fix, text without <final> tags is now displayed in TUI
+    // (the fix ensures output is not suppressed even without <final> tags)
     const payloads = extractAgentEventPayloads(onAgentEvent.mock.calls);
-    expect(payloads).toHaveLength(0);
+    expect(payloads).toHaveLength(1);
   });
   it("emits via streaming when <final> tags are present and enforcement is on", () => {
     const { session, emit } = createStubSessionHarness();

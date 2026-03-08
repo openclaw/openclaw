@@ -440,11 +440,14 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     }
     state.final = inFinal;
 
-    // Strict Mode: If enforcing final tags, we MUST NOT return content unless
-    // we have seen a <final> tag. Otherwise, we leak "thinking out loud" text
-    // (e.g. "**Locating Manulife**...") that the model emitted without <think> tags.
+    // Relaxed Mode: If no <final> tag was found, return the processed text anyway
+    // (stripped of any remaining <final> tags) to avoid suppressing output entirely.
+    // This ensures TUI displays responses even when model doesn't output <final> tags.
     if (!everInFinal) {
-      return "";
+      // Strip any remaining <final> tags to prevent hallucinations from leaking
+      const resultCodeSpans = buildCodeSpanIndex(processed, inlineStateStart);
+      state.inlineCode = resultCodeSpans.inlineState;
+      return stripTagsOutsideCodeSpans(processed, FINAL_TAG_SCAN_RE, resultCodeSpans.isInside);
     }
 
     // Hardened Cleanup: Remove any remaining <final> tags that might have been
