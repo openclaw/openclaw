@@ -22,12 +22,13 @@ export function buildGeminiUrl(params: {
 }): string {
   const defaultBaseUrl = "https://generativelanguage.googleapis.com";
   const rawBaseUrl = (params.baseUrl ?? defaultBaseUrl).replace(/\/+$/, "");
+  const isDefaultBaseUrl = !params.baseUrl || rawBaseUrl === defaultBaseUrl;
 
   // Only append /v1beta for the default official base URL
   // For custom base URLs, use them as-is (preserve caller-specified API version)
   let baseUrlWithVersion: string;
-  if (!params.baseUrl) {
-    // No custom baseUrl provided - use default with /v1beta
+  if (isDefaultBaseUrl) {
+    // Using default official baseUrl - append /v1beta
     baseUrlWithVersion = `${rawBaseUrl}/v1beta`;
   } else {
     // Custom baseUrl provided - use it as-is, no modification

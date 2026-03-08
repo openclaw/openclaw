@@ -22,6 +22,17 @@ describe("buildGeminiUrl", () => {
     expect(url).not.toContain("/v1beta");
   });
 
+  it("should add /v1beta when baseUrl is the official default host", () => {
+    const url = buildGeminiUrl({
+      baseUrl: "https://generativelanguage.googleapis.com",
+      modelId: "gemini-3-pro",
+      endpoint: ":generateContent",
+    });
+    expect(url).toBe(
+      "https://generativelanguage.googleapis.com/v1beta/models/gemini-3-pro:generateContent",
+    );
+  });
+
   it("should preserve custom API version in baseUrl", () => {
     const url = buildGeminiUrl({
       baseUrl: "https://proxy.example/v1",
