@@ -40,6 +40,12 @@ export interface ApplyBeforeResponseEmitResult {
    * across all tool-loop iterations, not just the final message.
    */
   allContent?: string[];
+  /**
+   * Per-turn content extracted from the (now-modified) session messages.
+   * Use this to replace assistantTexts in attempt.ts — it's aligned with
+   * session messages regardless of block-reply chunking mode.
+   */
+  consolidatedTexts?: string[];
 }
 
 /**
@@ -201,7 +207,15 @@ export async function applyBeforeResponseEmitHook(
       `applying allContent modification (${emitResult.allContent.length} entries, original ${assistantTexts.length})`,
     );
     rewriteAllAssistantContent(runMessages, activeSession.messages, emitResult.allContent);
-    return { blocked: false, allContent: emitResult.allContent };
+    // Rebuild per-turn texts from the now-modified session messages.
+    const postRewriteTexts = runMessages
+      .filter((m) => m.role === "assistant" && extractAssistantText(m).length > 0)
+      .map((m) => extractAssistantText(m));
+    return {
+      blocked: false,
+      allContent: emitResult.allContent,
+      consolidatedTexts: postRewriteTexts,
+    };
   }
 
   if (emitResult?.content === undefined || emitResult.content === content) {
@@ -216,7 +230,15 @@ export async function applyBeforeResponseEmitHook(
   // shared with the session persistence layer. Scoped to run messages only.
   rewriteLastAssistantContent(runMessages, emitResult.content);
 
-  return { blocked: false, content: emitResult.content };
+  // Rebuild per-turn texts from the now-modified session messages so
+  // attempt.ts can replace assistantTexts consistently. In block-reply mode,
+  // assistantTexts has multiple chunks per turn — without consolidation,
+  // only the last chunk would be replaced and earlier chunks would leak
+  // unredacted content through payloads.ts.
+  const postRewriteTexts = runMessages
+    .filter((m) => m.role === "assistant" && extractAssistantText(m).length > 0)
+    .map((m) => extractAssistantText(m));
+  return { blocked: false, content: emitResult.content, consolidatedTexts: postRewriteTexts };
 }
 
 /**
@@ -371,13 +393,27 @@ export function rewriteAllAssistantContent(
     } else {
       // Extra messages beyond allContent length — remove from the SOURCE array
       // (not the runMessages slice). splice on a slice only affects the copy.
-      const idx = sourceMessages.indexOf(assistantMsgs[i]);
+      let idx = sourceMessages.indexOf(assistantMsgs[i]);
       if (idx >= 0) {
         sourceMessages.splice(idx, 1);
-        // Also remove any immediately-following toolResult messages to avoid
+        // Remove any immediately-following toolResult messages to avoid
         // orphans. Anthropic API rejects toolResult without preceding tool_use.
         while (idx < sourceMessages.length && sourceMessages[idx].role === "toolResult") {
           sourceMessages.splice(idx, 1);
+        }
+        // Also remove preceding toolResult + tool-call-only assistant messages
+        // from the same tool-call cycle (common ordering: assistant[tool_use] →
+        // toolResult → assistant[text]). Without this, sensitive tool arguments
+        // and results from the removed turn survive in session history.
+        while (
+          idx > 0 &&
+          idx - 1 < sourceMessages.length &&
+          (sourceMessages[idx - 1].role === "toolResult" ||
+            (sourceMessages[idx - 1].role === "assistant" &&
+              extractAssistantText(sourceMessages[idx - 1]).length === 0))
+        ) {
+          sourceMessages.splice(idx - 1, 1);
+          idx--;
         }
       }
     }

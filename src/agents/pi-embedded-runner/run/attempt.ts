@@ -2623,23 +2623,18 @@ export async function runEmbeddedAttempt(
                 // text that would otherwise escape the hook.
                 responseEmitBlocked = true;
                 assistantTexts.splice(0, assistantTexts.length);
-              } else if (emitResult.allContent !== undefined) {
-                // Full multi-turn modification — replace all assistant texts.
-                // Truncate to original length to prevent plugins from expanding
-                // the response beyond what was actually produced in this run.
-                const bounded = emitResult.allContent.slice(0, assistantTexts.length);
-                if (bounded.length === 0) {
-                  // Empty allContent = plugin removed all content. Treat as
-                  // blocked to prevent lastAssistant fallback from delivering
-                  // a stale prior-turn reply.
+              } else if (emitResult.consolidatedTexts !== undefined) {
+                // Replace assistantTexts with per-turn content from the
+                // (now-modified) session messages. This handles both content
+                // and allContent paths, and correctly consolidates block-reply
+                // chunks into per-turn entries so earlier chunks can't leak
+                // unredacted content through payloads.ts.
+                if (emitResult.consolidatedTexts.length === 0) {
+                  // All content removed. Treat as blocked to prevent
+                  // lastAssistant fallback from delivering stale text.
                   responseEmitBlocked = true;
                 }
-                assistantTexts.splice(0, assistantTexts.length, ...bounded);
-              } else if (emitResult.content !== undefined) {
-                // Single last-message modification (backward-compatible).
-                if (assistantTexts.length > 0) {
-                  assistantTexts[assistantTexts.length - 1] = emitResult.content;
-                }
+                assistantTexts.splice(0, assistantTexts.length, ...emitResult.consolidatedTexts);
               }
               // Refresh messagesSnapshot so downstream consumers (agent_end,
               // llm_output, cache trace) see the post-redaction content.

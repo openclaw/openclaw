@@ -119,7 +119,7 @@ describe("applyBeforeResponseEmitHook", () => {
       channel: "discord",
     });
 
-    expect(result).toEqual({ blocked: false, content: "modified!" });
+    expect(result).toMatchObject({ blocked: false, content: "modified!" });
     // Session message should also be updated
     expect((activeSession.messages[0] as { content: unknown }).content).toBe("modified!");
   });
@@ -138,7 +138,7 @@ describe("applyBeforeResponseEmitHook", () => {
       channel: "discord",
     });
 
-    expect(result).toEqual({ blocked: false, content: "modified!" });
+    expect(result).toMatchObject({ blocked: false, content: "modified!" });
     expect(
       ((sessionMsg as { content: unknown }).content as Array<{ type: string; text: string }>)[0]
         .text,
@@ -342,7 +342,7 @@ describe("applyBeforeResponseEmitHook", () => {
       activeSession,
     });
 
-    expect(result).toEqual({ blocked: false, content: "modified" });
+    expect(result).toMatchObject({ blocked: false, content: "modified" });
     expect((assistantMsg as { content: unknown }).content).toBe("modified");
   });
 
@@ -428,7 +428,7 @@ describe("applyBeforeResponseEmitHook", () => {
       activeSession,
     });
 
-    expect(result).toEqual({
+    expect(result).toMatchObject({
       blocked: false,
       allContent: ["[REDACTED turn 1]", "[REDACTED turn 2]"],
     });
