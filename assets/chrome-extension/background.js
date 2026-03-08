@@ -56,16 +56,33 @@ function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms))
 }
 
+function isMissingTabError(err) {
+  const message = (err instanceof Error ? err.message : String(err || '')).toLowerCase()
+  return (
+    message.includes('no tab with id') ||
+    message.includes('no tab with given id') ||
+    message.includes('tab not found')
+  )
+}
+
 async function validateAttachedTab(tabId) {
+  try {
+    await chrome.tabs.get(tabId)
+  } catch {
+    return false
+  }
+
   for (let attempt = 0; attempt < TAB_VALIDATION_ATTEMPTS; attempt++) {
     try {
-      await chrome.tabs.get(tabId)
       await chrome.debugger.sendCommand({ tabId }, 'Runtime.evaluate', {
         expression: '1',
         returnByValue: true,
       })
       return true
-    } catch {
+    } catch (err) {
+      if (isMissingTabError(err)) {
+        return false
+      }
       if (attempt < TAB_VALIDATION_ATTEMPTS - 1) {
         await sleep(TAB_VALIDATION_RETRY_DELAY_MS)
       }
