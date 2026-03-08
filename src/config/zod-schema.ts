@@ -853,6 +853,37 @@ export const OpenClawSchema = z
       })
       .strict()
       .optional(),
+    // Legacy/compatibility keys for config UI - these are accepted but deprecated
+    // "profiles" is an alias for auth.profiles (model provider auth profiles)
+    // "main" is an alias for agents.defaults (main agent configuration)
+    profiles: z
+      .record(
+        z.string(),
+        z
+          .object({
+            provider: z.string(),
+            mode: z.union([z.literal("api_key"), z.literal("oauth"), z.literal("token")]),
+            email: z.string().optional(),
+          })
+          .strict(),
+      )
+      .optional(),
+    main: z
+      .object({
+        model: z
+          .union([
+            z.string(),
+            z
+              .object({
+                primary: z.string().optional(),
+                fallbacks: z.array(z.string()).optional(),
+              })
+              .strict(),
+          ])
+          .optional(),
+      })
+      .strict()
+      .optional(),
   })
   .strict()
   .superRefine((cfg, ctx) => {
