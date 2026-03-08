@@ -1,0 +1,100 @@
+# ClawForge OpenClaw - 多租户 AI Agent 核心
+# 支持无状态运行、水平扩展
+
+FROM node:20-alpine AS base
+
+# 安装必要的系统依赖
+RUN apk add --no-cache \
+    git \
+    python3 \
+    make \
+    g++ \
+    libc6-compat
+
+# 设置工作目录
+WORKDIR /app
+
+# 复制 package 文件
+COPY package*.json pnpm-lock.yaml pnpm-workspace.yaml ./
+
+# 复制源码
+COPY . .
+
+# 构建阶段
+FROM base AS builder
+
+RUN corepack enable pnpm
+
+# 安装依赖
+RUN pnpm install --frozen-lockfile
+
+# 构建（如果需要）
+RUN pnpm run build 2>/dev/null || echo "No build script found"
+
+# 生产阶段
+FROM base AS production
+
+# 创建非 root 用户
+RUN addgroup -g 1001 -S openclaw && \
+    adduser -S openclaw -u 1001
+
+# 从 builder 复制构建产物
+COPY --from=builder /app/node_modules ./node_modules
+COPY --from=builder /app/dist ./dist
+COPY --from=builder /app/skills ./skills
+COPY --from=builder /app/extensions ./extensions
+COPY --from=builder /app/package.json ./
+
+# 复制启动脚本
+COPY --chmod=755 <<'EOF' /app/docker-entrypoint.sh
+#!/bin/sh
+set -e
+
+echo "=== ClawForge OpenClaw 启动 ==="
+echo "运行模式：${OPENCLAW_MODE:-standalone}"
+echo "组织 ID: ${ORG_ID:-未设置}"
+echo "用户 ID: ${USER_ID:-未设置}"
+echo "工作目录：${WORKSPACE:-未设置}"
+
+# 验证必需的环境变量
+if [ -n "$ORG_ID" ] && [ -n "$USER_ID" ]; then
+    if [ -z "$WORKSPACE" ]; then
+        echo "错误：提供了 ORG_ID/USER_ID 但未提供 WORKSPACE"
+        exit 1
+    fi
+    
+    # 创建工作目录（如果不存在）
+    mkdir -p "$WORKSPACE"
+    echo "工作目录已准备：$WORKSPACE"
+fi
+
+# 创建状态目录
+mkdir -p "${OPENCLAW_STATE_DIR:-/app/state}"
+
+# 启动 OpenClaw
+exec node dist/index.js "$@"
+EOF
+
+# 设置权限
+RUN chown -R openclaw:openclaw /app
+
+# 切换到非 root 用户
+USER openclaw
+
+# 暴露端口
+EXPOSE 3000
+
+# 健康检查
+HEALTHCHECK --interval=30s --timeout=3s --start-period=10s --retries=3 \
+    CMD wget --no-verbose --tries=1 --spider http://localhost:3000/health || exit 1
+
+# 设置入口点
+ENTRYPOINT ["/app/docker-entrypoint.sh"]
+
+# 默认命令
+CMD ["node", "dist/index.js"]
+
+# 元数据
+LABEL org.opencontainers.image.title="ClawForge OpenClaw"
+LABEL org.opencontainers.image.description="Multi-tenant AI Agent Core with stateless support"
+LABEL org.opencontainers.image.vendor="ClawForge"

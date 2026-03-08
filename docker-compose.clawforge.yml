@@ -1,0 +1,167 @@
+# ClawForge OpenClaw - Docker Compose 配置
+# 支持多租户、多实例部署
+
+version: '3.8'
+
+services:
+  # Qdrant 向量数据库（记忆存储）
+  qdrant:
+    image: qdrant/qdrant:latest
+    container_name: clawforge-qdrant
+    ports:
+      - "6333:6333"
+      - "6334:6334"
+    volumes:
+      - ./data/qdrant_storage:/qdrant/storage:z
+    environment:
+      - QDRANT__SERVICE__GRPC_PORT=6334
+    restart: unless-stopped
+    networks:
+      - clawforge-net
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:6333/"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # PostgreSQL（元数据存储）
+  postgres:
+    image: postgres:15-alpine
+    container_name: clawforge-postgres
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_USER: clawforge
+      POSTGRES_PASSWORD: clawforge_password_change_me
+      POSTGRES_DB: clawforge
+    volumes:
+      - ./data/postgres_data:/var/lib/postgresql/data:z
+    restart: unless-stopped
+    networks:
+      - clawforge-net
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U clawforge"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # OpenClaw Worker 实例 1
+  openclaw-worker-1:
+    build:
+      context: .
+      dockerfile: Dockerfile.clawforge
+    container_name: clawforge-worker-1
+    environment:
+      # 运行模式
+      - OPENCLAW_MODE=worker
+      
+      # 租户配置（示例：组织 A，用户 1）
+      - ORG_ID=org_alpha
+      - USER_ID=user_001
+      
+      # 工作目录
+      - WORKSPACE=/data/org_alpha/user_001
+      
+      # Qdrant 配置
+      - QDRANT_HOST=qdrant
+      - QDRANT_PORT=6333
+      - QDRANT_API_KEY=${QDRANT_API_KEY:-}
+      
+      # API 密钥（从环境变量注入）
+      - EMBEDDING_API_KEY=${EMBEDDING_API_KEY}
+      - LLM_API_KEY=${LLM_API_KEY}
+      - RERANK_API_KEY=${RERANK_API_KEY:-}
+      
+      # Gateway 配置
+      - OPENCLAW_GATEWAY_TOKEN=${GATEWAY_TOKEN}
+    volumes:
+      # 挂载共享存储
+      - ./data/storage:/data:z
+    depends_on:
+      qdrant:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - clawforge-net
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:3000/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+  # OpenClaw Worker 实例 2（示例：组织 A，用户 2）
+  openclaw-worker-2:
+    build:
+      context: .
+      dockerfile: Dockerfile.clawforge
+    container_name: clawforge-worker-2
+    environment:
+      - OPENCLAW_MODE=worker
+      - ORG_ID=org_alpha
+      - USER_ID=user_002
+      - WORKSPACE=/data/org_alpha/user_002
+      - QDRANT_HOST=qdrant
+      - QDRANT_PORT=6333
+      - EMBEDDING_API_KEY=${EMBEDDING_API_KEY}
+      - LLM_API_KEY=${LLM_API_KEY}
+      - OPENCLAW_GATEWAY_TOKEN=${GATEWAY_TOKEN}
+    volumes:
+      - ./data/storage:/data:z
+    depends_on:
+      - qdrant
+      - postgres
+    restart: unless-stopped
+    networks:
+      - clawforge-net
+
+  # OpenClaw Worker 实例 3（示例：组织 B，用户 1）
+  openclaw-worker-3:
+    build:
+      context: .
+      dockerfile: Dockerfile.clawforge
+    container_name: clawforge-worker-3
+    environment:
+      - OPENCLAW_MODE=worker
+      - ORG_ID=org_beta
+      - USER_ID=user_003
+      - WORKSPACE=/data/org_beta/user_003
+      - QDRANT_HOST=qdrant
+      - QDRANT_PORT=6333
+      - EMBEDDING_API_KEY=${EMBEDDING_API_KEY}
+      - LLM_API_KEY=${LLM_API_KEY}
+      - OPENCLAW_GATEWAY_TOKEN=${GATEWAY_TOKEN}
+    volumes:
+      - ./data/storage:/data:z
+    depends_on:
+      - qdrant
+      - postgres
+    restart: unless-stopped
+    networks:
+      - clawforge-net
+
+  # Nginx 负载均衡器
+  nginx:
+    image: nginx:alpine
+    container_name: clawforge-nginx
+    ports:
+      - "80:80"
+    volumes:
+      - ./deploy/nginx.conf:/etc/nginx/nginx.conf:ro
+    depends_on:
+      - openclaw-worker-1
+      - openclaw-worker-2
+      - openclaw-worker-3
+    restart: unless-stopped
+    networks:
+      - clawforge-net
+
+networks:
+  clawforge-net:
+    driver: bridge
+
+volumes:
+  qdrant_storage:
+  postgres_data:
+  storage:
