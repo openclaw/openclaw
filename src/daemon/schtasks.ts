@@ -1,12 +1,5 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { parseCmdScriptCommandLine, quoteCmdScriptArg } from "./cmd-argv.js";
-import { assertNoCmdLineBreak, parseCmdSetAssignment, renderCmdSetAssignment } from "./cmd-set.js";
-import { resolveGatewayServiceDescription, resolveGatewayWindowsTaskName } from "./constants.js";
-import { formatLine, writeFormattedLines } from "./output.js";
-import { resolveGatewayStateDir } from "./paths.js";
-import { parseKeyValueOutput } from "./runtime-parse.js";
-import { execSchtasks } from "./schtasks-exec.js";
 import type { GatewayServiceRuntime } from "./service-runtime.js";
 import type {
   GatewayServiceCommandConfig,
@@ -17,6 +10,13 @@ import type {
   GatewayServiceManageArgs,
   GatewayServiceRenderArgs,
 } from "./service-types.js";
+import { parseCmdScriptCommandLine, quoteCmdScriptArg } from "./cmd-argv.js";
+import { assertNoCmdLineBreak, parseCmdSetAssignment, renderCmdSetAssignment } from "./cmd-set.js";
+import { resolveGatewayServiceDescription, resolveGatewayWindowsTaskName } from "./constants.js";
+import { formatLine, writeFormattedLines } from "./output.js";
+import { resolveGatewayStateDir } from "./paths.js";
+import { parseKeyValueOutput } from "./runtime-parse.js";
+import { execSchtasks } from "./schtasks-exec.js";
 
 function resolveTaskName(env: GatewayServiceEnv): string {
   const override = env.OPENCLAW_WINDOWS_TASK_NAME?.trim();
@@ -155,20 +155,39 @@ function normalizeTaskResultCode(value?: string): string | null {
   return raw;
 }
 
+function normalizeTaskStatus(value?: string): string {
+  return String(value ?? "")
+    .trim()
+    .toLowerCase()
+    .normalize("NFKD")
+    .replace(/\p{M}+/gu, "")
+    .replace(/[^\p{L}\p{N}]+/gu, " ")
+    .trim();
+}
+
+function isRunningTaskStatus(value?: string): boolean {
+  const normalized = normalizeTaskStatus(value);
+  return normalized === "running" || normalized.startsWith("wird ausgef");
+}
+
 export function deriveScheduledTaskRuntimeStatus(parsed: ScheduledTaskInfo): {
   status: GatewayServiceRuntime["status"];
   detail?: string;
 } {
-  const statusRaw = parsed.status?.trim().toLowerCase();
-  if (!statusRaw) {
+  if (!parsed.status?.trim()) {
     return { status: "unknown" };
-  }
-  if (statusRaw !== "running") {
-    return { status: "stopped" };
   }
 
   const normalizedResult = normalizeTaskResultCode(parsed.lastRunResult);
   const runningCodes = new Set(["0x41301"]);
+  if (normalizedResult && runningCodes.has(normalizedResult)) {
+    return { status: "running" };
+  }
+
+  if (!isRunningTaskStatus(parsed.status)) {
+    return { status: "stopped" };
+  }
+
   if (normalizedResult && !runningCodes.has(normalizedResult)) {
     return {
       status: "stopped",

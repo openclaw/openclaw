@@ -52,6 +52,22 @@ describe("scheduled task runtime derivation", () => {
     ).toEqual({ status: "running" });
   });
 
+  it("treats German localized running status as running", () => {
+    expect(
+      deriveScheduledTaskRuntimeStatus({
+        status: "Wird ausgeführt",
+      }),
+    ).toEqual({ status: "running" });
+  });
+
+  it("treats mojibake running status as running", () => {
+    expect(
+      deriveScheduledTaskRuntimeStatus({
+        status: "Wird ausgef�hrt",
+      }),
+    ).toEqual({ status: "running" });
+  });
+
   it("downgrades stale Running status when last result is not a running code", () => {
     expect(
       deriveScheduledTaskRuntimeStatus({
