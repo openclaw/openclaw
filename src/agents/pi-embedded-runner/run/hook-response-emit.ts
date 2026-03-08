@@ -400,6 +400,11 @@ export function rewriteAllAssistantContent(
         `assistant message count (${assistantMsgs.length}); extras will be removed`,
     );
   }
+  // Set of kept (rewritten) assistant messages — used by backward scan to avoid
+  // removing toolResults that belong to a kept text+tool_use message.
+  const keptAssistants = new Set(
+    assistantMsgs.slice(0, Math.min(newContents.length, assistantMsgs.length)),
+  );
   for (let i = 0; i < assistantMsgs.length; i++) {
     if (i < newContents.length) {
       rewriteSingleAssistantMessage(assistantMsgs[i], newContents[i]);
@@ -418,15 +423,22 @@ export function rewriteAllAssistantContent(
         // from the same tool-call cycle (common ordering: assistant[tool_use] →
         // toolResult → assistant[text]). Without this, sensitive tool arguments
         // and results from the removed turn survive in session history.
-        while (
-          idx > 0 &&
-          idx - 1 < sourceMessages.length &&
-          (sourceMessages[idx - 1].role === "toolResult" ||
-            (sourceMessages[idx - 1].role === "assistant" &&
-              extractAssistantText(sourceMessages[idx - 1]).length === 0))
-        ) {
-          sourceMessages.splice(idx - 1, 1);
-          idx--;
+        while (idx > 0 && idx - 1 < sourceMessages.length) {
+          const prev = sourceMessages[idx - 1];
+          // Stop if we hit a kept text-bearing assistant — its toolResults
+          // belong to it, not to the removed turn.
+          if (prev.role === "assistant" && keptAssistants.has(prev)) {
+            break;
+          }
+          if (
+            prev.role === "toolResult" ||
+            (prev.role === "assistant" && extractAssistantText(prev).length === 0)
+          ) {
+            sourceMessages.splice(idx - 1, 1);
+            idx--;
+          } else {
+            break;
+          }
         }
       }
     }
