@@ -636,8 +636,8 @@ export function prependSystemPromptAddition(params: {
   return `${params.systemPromptAddition}\n\n${params.systemPrompt}`;
 }
 
-/** Build legacy compaction params passed into context-engine afterTurn hooks. */
-export function buildAfterTurnLegacyCompactionParams(params: {
+/** Build runtime context passed into context-engine afterTurn hooks. */
+export function buildAfterTurnRuntimeContext(params: {
   attempt: Pick<
     EmbeddedRunAttemptParams,
     | "sessionKey"
@@ -1884,7 +1884,7 @@ export async function runEmbeddedAttempt(
 
         // Let the active context engine run its post-turn lifecycle.
         if (params.contextEngine) {
-          const afterTurnLegacyCompactionParams = buildAfterTurnLegacyCompactionParams({
+          const afterTurnRuntimeContext = buildAfterTurnRuntimeContext({
             attempt: params,
             workspaceDir: effectiveWorkspace,
             agentDir,
@@ -1898,7 +1898,7 @@ export async function runEmbeddedAttempt(
                 messages: messagesSnapshot,
                 prePromptMessageCount,
                 tokenBudget: params.contextTokenBudget,
-                legacyCompactionParams: afterTurnLegacyCompactionParams,
+                runtimeContext: afterTurnRuntimeContext,
               });
             } catch (afterTurnErr) {
               log.warn(`context engine afterTurn failed: ${String(afterTurnErr)}`);

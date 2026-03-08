@@ -1025,7 +1025,7 @@ export async function runEmbeddedPiAgent(
                 tokenBudget: ctxInfo.tokens,
                 force: true,
                 compactionTarget: "budget",
-                legacyParams: {
+                runtimeContext: {
                   sessionKey: params.sessionKey,
                   messageChannel: params.messageChannel,
                   messageProvider: params.messageProvider,

@@ -67,7 +67,7 @@ class MockContextEngine implements ContextEngine {
     tokenBudget?: number;
     compactionTarget?: "budget" | "threshold";
     customInstructions?: string;
-    legacyParams?: Record<string, unknown>;
+    runtimeContext?: Record<string, unknown>;
   }): Promise<CompactResult> {
     return {
       ok: true,
