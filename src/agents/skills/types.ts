@@ -35,6 +35,10 @@ export type OpenClawSkillMetadata = {
 export type SkillInvocationPolicy = {
   userInvocable: boolean;
   disableModelInvocation: boolean;
+  /** Execution context: "inline" (default) or "fork" (spawn subagent) */
+  context?: "inline" | "fork";
+  /** Agent type for fork context (e.g., "codex", "claude-code") */
+  agentType?: string;
 };
 
 export type SkillCommandDispatchSpec = {
@@ -54,6 +58,10 @@ export type SkillCommandSpec = {
   description: string;
   /** Optional deterministic dispatch behavior for this command. */
   dispatch?: SkillCommandDispatchSpec;
+  /** Execution context from skill frontmatter */
+  context?: "inline" | "fork";
+  /** Agent type for fork context */
+  agentType?: string;
 };
 
 export type SkillsInstallPreferences = {
