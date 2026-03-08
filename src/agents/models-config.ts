@@ -23,10 +23,22 @@ type ModelsConfig = NonNullable<OpenClawConfig["models"]>;
 const DEFAULT_MODE: NonNullable<ModelsConfig["mode"]> = "merge";
 const MODELS_JSON_WRITE_LOCKS = new Map<string, Promise<void>>();
 
-function resolvePreferredTokenLimit(explicitValue: number, implicitValue: number): number {
-  // Keep catalog refresh behavior for stale low values while preserving
-  // intentional larger user overrides (for example Ollama >128k contexts).
-  return explicitValue > implicitValue ? explicitValue : implicitValue;
+function isPositiveFiniteTokenLimit(value: unknown): value is number {
+  return typeof value === "number" && Number.isFinite(value) && value > 0;
+}
+
+function resolvePreferredTokenLimit(params: {
+  explicitPresent: boolean;
+  explicitValue: unknown;
+  implicitValue: unknown;
+}): number | undefined {
+  if (params.explicitPresent && isPositiveFiniteTokenLimit(params.explicitValue)) {
+    return params.explicitValue;
+  }
+  if (isPositiveFiniteTokenLimit(params.implicitValue)) {
+    return params.implicitValue;
+  }
+  return isPositiveFiniteTokenLimit(params.explicitValue) ? params.explicitValue : undefined;
 }
 
 function mergeProviderModels(implicit: ProviderConfig, explicit: ProviderConfig): ProviderConfig {
@@ -65,15 +77,23 @@ function mergeProviderModels(implicit: ProviderConfig, explicit: ProviderConfig)
     // it in their config (key present), honour that value; otherwise fall back
     // to the built-in catalog default so new reasoning models work out of the
     // box without requiring every user to configure it.
+    const contextWindow = resolvePreferredTokenLimit({
+      explicitPresent: "contextWindow" in explicitModel,
+      explicitValue: explicitModel.contextWindow,
+      implicitValue: implicitModel.contextWindow,
+    });
+    const maxTokens = resolvePreferredTokenLimit({
+      explicitPresent: "maxTokens" in explicitModel,
+      explicitValue: explicitModel.maxTokens,
+      implicitValue: implicitModel.maxTokens,
+    });
+
     return {
       ...explicitModel,
       input: implicitModel.input,
       reasoning: "reasoning" in explicitModel ? explicitModel.reasoning : implicitModel.reasoning,
-      contextWindow: resolvePreferredTokenLimit(
-        explicitModel.contextWindow,
-        implicitModel.contextWindow,
-      ),
-      maxTokens: resolvePreferredTokenLimit(explicitModel.maxTokens, implicitModel.maxTokens),
+      ...(contextWindow === undefined ? {} : { contextWindow }),
+      ...(maxTokens === undefined ? {} : { maxTokens }),
     };
   });
 
