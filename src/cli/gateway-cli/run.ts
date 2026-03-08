@@ -289,16 +289,12 @@ async function runGatewayCommand(opts: GatewayRunOpts) {
     defaultRuntime.exit(1);
     return;
   }
-  let passwordRaw: string | undefined;
   try {
     passwordRaw = resolveGatewayPasswordOption(opts);
   } catch (err) {
-    defaultRuntime.error(String(err));
+    defaultRuntime.error(err instanceof Error ? err.message : String(err));
     defaultRuntime.exit(1);
     return;
-  }
-  if (toOptionString(opts.password)) {
-    warnInlinePasswordFlag();
   }
   const tokenRaw = toOptionString(opts.token);
 
