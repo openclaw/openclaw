@@ -236,6 +236,38 @@ describe("tool-loop-detection", () => {
       expect(timestamp).toBeLessThanOrEqual(after);
     });
 
+    it("clears stale history when last entry is older than 60 seconds", () => {
+      const state = createState();
+
+      // Record some calls with timestamps in the past (>60s ago)
+      recordToolCall(state, "read", { path: "/file.txt" }, "old-1");
+      recordToolCall(state, "read", { path: "/file.txt" }, "old-2");
+      recordToolCall(state, "read", { path: "/file.txt" }, "old-3");
+      expect(state.toolCallHistory).toHaveLength(3);
+
+      // Manually backdate all entries to 2 minutes ago
+      for (const call of state.toolCallHistory!) {
+        call.timestamp = Date.now() - 120_000;
+      }
+
+      // Next recordToolCall should detect stale history and clear it
+      recordToolCall(state, "read", { path: "/file.txt" }, "new-1");
+      expect(state.toolCallHistory).toHaveLength(1);
+      expect(state.toolCallHistory?.[0]?.toolCallId).toBe("new-1");
+    });
+
+    it("does not clear history when last entry is recent", () => {
+      const state = createState();
+
+      recordToolCall(state, "read", { path: "/file.txt" }, "recent-1");
+      recordToolCall(state, "read", { path: "/file.txt" }, "recent-2");
+      expect(state.toolCallHistory).toHaveLength(2);
+
+      // Record another call immediately — history should be preserved
+      recordToolCall(state, "read", { path: "/file.txt" }, "recent-3");
+      expect(state.toolCallHistory).toHaveLength(3);
+    });
+
     it("respects configured historySize", () => {
       const state = createState();
 

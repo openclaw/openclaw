@@ -510,6 +510,14 @@ export function recordToolCall(
     state.toolCallHistory = [];
   }
 
+  // Clear stale history to prevent false positives across heartbeat cycles.
+  // If the most recent entry is older than 60 seconds, the previous burst of
+  // tool calls belongs to a different heartbeat cycle and should not count.
+  const lastCall = state.toolCallHistory.at(-1);
+  if (lastCall && Date.now() - lastCall.timestamp > 60_000) {
+    state.toolCallHistory = [];
+  }
+
   state.toolCallHistory.push({
     toolName,
     argsHash: hashToolCall(toolName, params),
