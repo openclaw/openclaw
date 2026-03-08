@@ -96,6 +96,17 @@ describe("startBrowserBridgeServer auth", () => {
     expect(bridge.advertisedBaseUrl).toMatch(/^http:\/\/host\.docker\.internal:\d+$/);
   });
 
+  it("requires advertisedHost when non-loopback bind is enabled", async () => {
+    await expect(
+      startBrowserBridgeServer({
+        resolved: buildResolvedConfig(),
+        host: "0.0.0.0",
+        allowNonLoopbackHost: true,
+        authToken: "secret-token",
+      }),
+    ).rejects.toThrow(/advertisedHost is required/i);
+  });
+
   it("serves noVNC bootstrap html without leaking password in Location header", async () => {
     const bridge = await startBrowserBridgeServer({
       resolved: buildResolvedConfig(),

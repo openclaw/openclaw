@@ -69,12 +69,15 @@ export async function startBrowserBridgeServer(params: {
   resolveSandboxNoVncToken?: (token: string) => ResolvedNoVncObserver | null;
 }): Promise<BrowserBridge> {
   const host = params.host ?? "127.0.0.1";
-  if (!params.allowNonLoopbackHost && !isLoopbackHost(host)) {
+  const isLoopback = isLoopbackHost(host);
+  if (!params.allowNonLoopbackHost && !isLoopback) {
     throw new Error(`bridge server must bind to loopback host (got ${host})`);
   }
   const port = params.port ?? 0;
-  const advertisedHost =
-    params.advertisedHost?.trim() || (isLoopbackHost(host) ? host : "127.0.0.1");
+  const advertisedHost = params.advertisedHost?.trim() || (isLoopback ? host : undefined);
+  if (!advertisedHost) {
+    throw new Error("advertisedHost is required when binding to a non-loopback host");
+  }
 
   const app = express();
   installBrowserCommonMiddleware(app);
@@ -132,7 +135,7 @@ export async function startBrowserBridgeServer(params: {
 
   setBridgeAuthForPort(resolvedPort, { token: authToken, password: authPassword });
 
-  const baseUrl = `http://${isLoopbackHost(host) ? host : "127.0.0.1"}:${resolvedPort}`;
+  const baseUrl = `http://${isLoopback ? host : "127.0.0.1"}:${resolvedPort}`;
   const advertisedBaseUrl = `http://${advertisedHost}:${resolvedPort}`;
   return { server, port: resolvedPort, baseUrl, advertisedBaseUrl, state };
 }
