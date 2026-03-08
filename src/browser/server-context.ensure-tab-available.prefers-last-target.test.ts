@@ -151,4 +151,29 @@ describe("browser server-context ensureTabAvailable", () => {
       vi.useRealTimers();
     }
   });
+
+  it("still fails after the extension-tab grace window expires", async () => {
+    vi.useFakeTimers();
+    try {
+      const responses = [
+        [{ id: "A", type: "page", url: "https://a.example", webSocketDebuggerUrl: "ws://x/a" }],
+        [{ id: "A", type: "page", url: "https://a.example", webSocketDebuggerUrl: "ws://x/a" }],
+        ...Array.from({ length: 20 }, () => []),
+      ];
+      stubChromeJsonList(responses);
+      const state = makeBrowserState();
+
+      const ctx = createBrowserRouteContext({ getState: () => state });
+      const chrome = ctx.forProfile("chrome");
+      await chrome.ensureTabAvailable();
+
+      const pending = expect(chrome.ensureTabAvailable()).rejects.toThrow(
+        /no attached Chrome tabs/i,
+      );
+      await vi.advanceTimersByTimeAsync(3_500);
+      await pending;
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });
