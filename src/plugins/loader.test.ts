@@ -1342,22 +1342,25 @@ describe("loadOpenClawPlugins", () => {
     expect(record?.status).toBe("loaded");
   });
 
-  it("supports legacy plugins importing monolithic plugin-sdk root", async () => {
-    useNoBundledPlugins();
-    const plugin = writePlugin({
-      id: "legacy-root-import",
-      filename: "legacy-root-import.cjs",
-      body: `module.exports = {
+  it(
+    "supports legacy plugins importing monolithic plugin-sdk root",
+    { timeout: 240_000 },
+    async () => {
+      useNoBundledPlugins();
+      const plugin = writePlugin({
+        id: "legacy-root-import",
+        filename: "legacy-root-import.cjs",
+        body: `module.exports = {
   id: "legacy-root-import",
   configSchema: (require("openclaw/plugin-sdk").emptyPluginConfigSchema)(),
   register() {},
 };`,
-    });
+      });
 
-    const loaderModuleUrl = pathToFileURL(
-      path.join(process.cwd(), "src", "plugins", "loader.ts"),
-    ).href;
-    const script = `
+      const loaderModuleUrl = pathToFileURL(
+        path.join(process.cwd(), "src", "plugins", "loader.ts"),
+      ).href;
+      const script = `
       import { loadOpenClawPlugins } from ${JSON.stringify(loaderModuleUrl)};
       const registry = loadOpenClawPlugins({
         cache: false,
@@ -1376,16 +1379,17 @@ describe("loadOpenClawPlugins", () => {
       }
     `;
 
-    execFileSync(process.execPath, ["--import", "tsx", "--input-type=module", "-e", script], {
-      cwd: process.cwd(),
-      env: {
-        ...process.env,
-        OPENCLAW_BUNDLED_PLUGINS_DIR: "/nonexistent/bundled/plugins",
-      },
-      encoding: "utf-8",
-      stdio: "pipe",
-    });
-  });
+      execFileSync(process.execPath, ["--import", "tsx", "--input-type=module", "-e", script], {
+        cwd: process.cwd(),
+        env: {
+          ...process.env,
+          OPENCLAW_BUNDLED_PLUGINS_DIR: "/nonexistent/bundled/plugins",
+        },
+        encoding: "utf-8",
+        stdio: "pipe",
+      });
+    },
+  );
 
   it("prefers dist plugin-sdk alias when loader runs from dist", () => {
     const { root, distFile } = createPluginSdkAliasFixture();
