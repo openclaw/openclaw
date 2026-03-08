@@ -1,0 +1,250 @@
+{
+  "agent:main:main": {
+    "sessionId": "8555a0a4-0b79-459d-939c-e17cdbbf4fe2",
+    "updatedAt": 1772972134844,
+    "systemSent": true,
+    "abortedLastRun": false,
+    "chatType": "direct",
+    "deliveryContext": {
+      "channel": "webchat"
+    },
+    "lastChannel": "webchat",
+    "origin": {
+      "label": "openclaw-tui",
+      "provider": "webchat",
+      "surface": "webchat",
+      "chatType": "direct"
+    },
+    "sessionFile": "C:\\Users\\downl\\Desktop\\clawdbot-main3\\clawdbot-main\\.openclaw-desktop\\agents\\main\\sessions\\8555a0a4-0b79-459d-939c-e17cdbbf4fe2.jsonl",
+    "compactionCount": 0,
+    "skillsSnapshot": {
+      "prompt": "\n\nThe following skills provide specialized instructions for specific tasks.\nUse the read tool to load a skill's file when the task matches its description.\nWhen a skill file references a relative path, resolve it against the skill directory (parent of SKILL.md / dirname of the path) and use that absolute path in tool commands.\n\n<available_skills>\n  <skill>\n    <name>coding-agent</name>\n    <description>Delegate coding tasks to Codex, Claude Code, or Pi agents via background process. Use when: (1) building/creating new features or apps, (2) reviewing PRs (spawn in temp dir), (3) refactoring large codebases, (4) iterative coding that needs file exploration. NOT for: simple one-liner fixes (just edit), reading code (use read tool), thread-bound ACP harness requests in chat (for example spawn/run Codex or Claude Code in a Discord thread; use sessions_spawn with runtime:&quot;acp&quot;), or any work in ~/clawd workspace (never spawn agents here). Claude Code: use --print --permission-mode bypassPermissions (no PTY). Codex/Pi/OpenCode: pty:true required.</description>\n    <location>~/Desktop\\clawdbot-main3\\clawdbot-main\\skills\\coding-agent\\SKILL.md</location>\n  </skill>\n  <skill>\n    <name>gh-issues</name>\n    <description>Fetch GitHub issues, spawn sub-agents to implement fixes and open PRs, then monitor and address PR review comments. Usage: /gh-issues [owner/repo] [--label bug] [--limit 5] [--milestone v1.0] [--assignee @me] [--fork user/repo] [--watch] [--interval 5] [--reviews-only] [--cron] [--dry-run] [--model glm-5] [--notify-channel -1002381931352]</description>\n    <location>~/Desktop\\clawdbot-main3\\clawdbot-main\\skills\\gh-issues\\SKILL.md</location>\n  </skill>\n  <skill>\n    <name>github</name>\n    <description>GitHub operations via `gh` CLI: issues, PRs, CI runs, code review, API queries. Use when: (1) checking PR status or CI, (2) creating/commenting on issues, (3) listing/filtering PRs or issues, (4) viewing run logs. NOT for: complex web UI interactions requiring manual browser flows (use browser tooling when available), bulk operations across many repos (script with gh api), or when gh auth is not configured.</description>\n    <location>~/Desktop\\clawdbot-main3\\clawdbot-main\\skills\\github\\SKILL.md</location>\n  </skill>\n  <skill>\n    <name>healthcheck</name>\n    <description>Host security hardening and risk-tolerance configuration for OpenClaw deployments. Use when a user asks for security audits, firewall/SSH/update hardening, risk posture, exposure review, OpenClaw cron scheduling for periodic checks, or version status checks on a machine running OpenClaw (laptop, workstation, Pi, VPS).</description>\n    <location>~/Desktop\\clawdbot-main3\\clawdbot-main\\skills\\healthcheck\\SKILL.md</location>\n  </skill>\n  <skill>\n    <name>nano-banana-pro</name>\n    <description>Generate or edit images via Gemini 3 Pro Image (Nano Banana Pro).</description>\n    <location>~/Desktop\\clawdbot-main3\\clawdbot-main\\skills\\nano-banana-pro\\SKILL.md</location>\n  </skill>\n  <skill>\n    <name>openai-image-gen</name>\n    <description>Batch-generate images via OpenAI Images API. Random prompt sampler + `index.html` gallery.</description>\n    <location>~/Desktop\\clawdbot-main3\\clawdbot-main\\skills\\openai-image-gen\\SKILL.md</location>\n  </skill>\n  <skill>\n    <name>openai-whisper-api</name>\n    <description>Transcribe audio via OpenAI Audio Transcriptions API (Whisper).</description>\n    <location>~/Desktop\\clawdbot-main3\\clawdbot-main\\skills\\openai-whisper-api\\SKILL.md</location>\n  </skill>\n  <skill>\n    <name>skill-creator</name>\n    <description>Create, edit, improve, or audit AgentSkills. Use when creating a new skill from scratch or when asked to improve, review, audit, tidy up, or clean up an existing skill or SKILL.md file. Also use when editing or restructuring a skill directory (moving files to references/ or scripts/, removing stale content, validating against the AgentSkills spec). Triggers on phrases like &quot;create a skill&quot;, &quot;author a skill&quot;, &quot;tidy up a skill&quot;, &quot;improve this skill&quot;, &quot;review the skill&quot;, &quot;clean up the skill&quot;, &quot;audit the skill&quot;.</description>\n    <location>~/Desktop\\clawdbot-main3\\clawdbot-main\\skills\\skill-creator\\SKILL.md</location>\n  </skill>\n  <skill>\n    <name>slack</name>\n    <description>Use when you need to control Slack from OpenClaw via the slack tool, including reacting to messages or pinning/unpinning items in Slack channels or DMs.</description>\n    <location>~/Desktop\\clawdbot-main3\\clawdbot-main\\skills\\slack\\SKILL.md</location>\n  </skill>\n  <skill>\n    <name>weather</name>\n    <description>Get current weather and forecasts via wttr.in or Open-Meteo. Use when: user asks about weather, temperature, or forecasts for any location. NOT for: historical weather data, severe weather alerts, or detailed meteorological analysis. No API key needed.</description>\n    <location>~/Desktop\\clawdbot-main3\\clawdbot-main\\skills\\weather\\SKILL.md</location>\n  </skill>\n  <skill>\n    <name>find-skills</name>\n    <description>Helps users discover and install agent skills when they ask questions like &quot;how do I do X&quot;, &quot;find a skill for X&quot;, &quot;is there a skill that can...&quot;, or express interest in extending capabilities. This skill should be used when the user is looking for functionality that might exist as an installable skill.</description>\n    <location>~/.agents\\skills\\find-skills\\SKILL.md</location>\n  </skill>\n  <skill>\n    <name>Perplexity DeepResearch</name>\n    <description>脚注や参照情報の裏取り（ファクトチェック）を深掘りして行い、情報の正確性、最新性、信頼性を検証するスキル。</description>\n    <location>~/.agents\\skills\\perplexity-deep-research\\SKILL.md</location>\n  </skill>\n  <skill>\n    <name>remotion-best-practices</name>\n    <description>Best practices for Remotion - Video creation in React</description>\n    <location>~/.agents\\skills\\remotion-best-practices\\SKILL.md</location>\n  </skill>\n  <skill>\n    <name>specstory-guard</name>\n    <description>Install a pre-commit hook that scans .specstory/history for secrets before commits. Run when user says &quot;set up secret scanning&quot;, &quot;install specstory guard&quot;, &quot;protect my history&quot;, or &quot;check for secrets&quot;.</description>\n    <location>~/.agents\\skills\\specstory-guard\\SKILL.md</location>\n  </skill>\n  <skill>\n    <name>specstory-link-trail</name>\n    <description>Track all URLs fetched during SpecStory AI coding sessions. Run when user says &quot;show my link trail&quot;, &quot;what URLs did I visit&quot;, &quot;list fetched links&quot;, or &quot;show web fetches&quot;.</description>\n    <location>~/.agents\\skills\\specstory-link-trail\\SKILL.md</location>\n  </skill>\n  <skill>\n    <name>specstory-organize</name>\n    <description>Organize SpecStory AI coding sessions in .specstory/history into year/month folders. Run when user says &quot;organize my history&quot;, &quot;clean up specstory&quot;, &quot;sort my sessions&quot;, or &quot;organize specstory files&quot;.</description>\n    <location>~/.agents\\skills\\specstory-organize\\SKILL.md</location>\n  </skill>\n  <skill>\n    <name>specstory-project-stats</name>\n    <description>Fetch project statistics from SpecStory Cloud. Run when user says &quot;get project stats&quot;, &quot;show SpecStory stats&quot;, &quot;project statistics&quot;, &quot;how many sessions&quot;, or &quot;SpecStory metrics&quot;.</description>\n    <location>~/.agents\\skills\\specstory-project-stats\\SKILL.md</location>\n  </skill>\n  <skill>\n    <name>specstory-session-summary</name>\n    <description>Summarize recent SpecStory AI coding sessions in standup format. Use when the user wants to review sessions from .specstory/history, prepare for standups, track work progress, or understand what was accomplished.</description>\n    <location>~/.agents\\skills\\specstory-session-summary\\SKILL.md</location>\n  </skill>\n  <skill>\n    <name>specstory-yak</name>\n    <description>Analyze your SpecStory AI coding sessions in .specstory/history for yak shaving - when your initial goal got derailed into rabbit holes. Run when user says &quot;analyze my yak shaving&quot;, &quot;check for rabbit holes&quot;, &quot;how distracted was I&quot;, or &quot;yak shave score&quot;.</description>\n    <location>~/.agents\\skills\\specstory-yak\\SKILL.md</location>\n  </skill>\n</available_skills>",
+      "skills": [
+        {
+          "name": "coding-agent",
+          "requiredEnv": []
+        },
+        {
+          "name": "gh-issues",
+          "primaryEnv": "GH_TOKEN",
+          "requiredEnv": []
+        },
+        {
+          "name": "github",
+          "requiredEnv": []
+        },
+        {
+          "name": "healthcheck"
+        },
+        {
+          "name": "nano-banana-pro",
+          "primaryEnv": "GEMINI_API_KEY",
+          "requiredEnv": ["GEMINI_API_KEY"]
+        },
+        {
+          "name": "openai-image-gen",
+          "primaryEnv": "OPENAI_API_KEY",
+          "requiredEnv": ["OPENAI_API_KEY"]
+        },
+        {
+          "name": "openai-whisper-api",
+          "primaryEnv": "OPENAI_API_KEY",
+          "requiredEnv": ["OPENAI_API_KEY"]
+        },
+        {
+          "name": "skill-creator"
+        },
+        {
+          "name": "slack",
+          "requiredEnv": []
+        },
+        {
+          "name": "weather",
+          "requiredEnv": []
+        },
+        {
+          "name": "find-skills"
+        },
+        {
+          "name": "Perplexity DeepResearch"
+        },
+        {
+          "name": "remotion-best-practices"
+        },
+        {
+          "name": "specstory-guard"
+        },
+        {
+          "name": "specstory-link-trail"
+        },
+        {
+          "name": "specstory-organize"
+        },
+        {
+          "name": "specstory-project-stats"
+        },
+        {
+          "name": "specstory-session-summary"
+        },
+        {
+          "name": "specstory-yak"
+        }
+      ],
+      "resolvedSkills": [
+        {
+          "name": "coding-agent",
+          "description": "Delegate coding tasks to Codex, Claude Code, or Pi agents via background process. Use when: (1) building/creating new features or apps, (2) reviewing PRs (spawn in temp dir), (3) refactoring large codebases, (4) iterative coding that needs file exploration. NOT for: simple one-liner fixes (just edit), reading code (use read tool), thread-bound ACP harness requests in chat (for example spawn/run Codex or Claude Code in a Discord thread; use sessions_spawn with runtime:\"acp\"), or any work in ~/clawd workspace (never spawn agents here). Claude Code: use --print --permission-mode bypassPermissions (no PTY). Codex/Pi/OpenCode: pty:true required.",
+          "filePath": "C:\\Users\\downl\\Desktop\\clawdbot-main3\\clawdbot-main\\skills\\coding-agent\\SKILL.md",
+          "baseDir": "C:\\Users\\downl\\Desktop\\clawdbot-main3\\clawdbot-main\\skills\\coding-agent",
+          "source": "openclaw-bundled",
+          "disableModelInvocation": false
+        },
+        {
+          "name": "gh-issues",
+          "description": "Fetch GitHub issues, spawn sub-agents to implement fixes and open PRs, then monitor and address PR review comments. Usage: /gh-issues [owner/repo] [--label bug] [--limit 5] [--milestone v1.0] [--assignee @me] [--fork user/repo] [--watch] [--interval 5] [--reviews-only] [--cron] [--dry-run] [--model glm-5] [--notify-channel -1002381931352]",
+          "filePath": "C:\\Users\\downl\\Desktop\\clawdbot-main3\\clawdbot-main\\skills\\gh-issues\\SKILL.md",
+          "baseDir": "C:\\Users\\downl\\Desktop\\clawdbot-main3\\clawdbot-main\\skills\\gh-issues",
+          "source": "openclaw-bundled",
+          "disableModelInvocation": false
+        },
+        {
+          "name": "github",
+          "description": "GitHub operations via `gh` CLI: issues, PRs, CI runs, code review, API queries. Use when: (1) checking PR status or CI, (2) creating/commenting on issues, (3) listing/filtering PRs or issues, (4) viewing run logs. NOT for: complex web UI interactions requiring manual browser flows (use browser tooling when available), bulk operations across many repos (script with gh api), or when gh auth is not configured.",
+          "filePath": "C:\\Users\\downl\\Desktop\\clawdbot-main3\\clawdbot-main\\skills\\github\\SKILL.md",
+          "baseDir": "C:\\Users\\downl\\Desktop\\clawdbot-main3\\clawdbot-main\\skills\\github",
+          "source": "openclaw-bundled",
+          "disableModelInvocation": false
+        },
+        {
+          "name": "healthcheck",
+          "description": "Host security hardening and risk-tolerance configuration for OpenClaw deployments. Use when a user asks for security audits, firewall/SSH/update hardening, risk posture, exposure review, OpenClaw cron scheduling for periodic checks, or version status checks on a machine running OpenClaw (laptop, workstation, Pi, VPS).",
+          "filePath": "C:\\Users\\downl\\Desktop\\clawdbot-main3\\clawdbot-main\\skills\\healthcheck\\SKILL.md",
+          "baseDir": "C:\\Users\\downl\\Desktop\\clawdbot-main3\\clawdbot-main\\skills\\healthcheck",
+          "source": "openclaw-bundled",
+          "disableModelInvocation": false
+        },
+        {
+          "name": "nano-banana-pro",
+          "description": "Generate or edit images via Gemini 3 Pro Image (Nano Banana Pro).",
+          "filePath": "C:\\Users\\downl\\Desktop\\clawdbot-main3\\clawdbot-main\\skills\\nano-banana-pro\\SKILL.md",
+          "baseDir": "C:\\Users\\downl\\Desktop\\clawdbot-main3\\clawdbot-main\\skills\\nano-banana-pro",
+          "source": "openclaw-bundled",
+          "disableModelInvocation": false
+        },
+        {
+          "name": "openai-image-gen",
+          "description": "Batch-generate images via OpenAI Images API. Random prompt sampler + `index.html` gallery.",
+          "filePath": "C:\\Users\\downl\\Desktop\\clawdbot-main3\\clawdbot-main\\skills\\openai-image-gen\\SKILL.md",
+          "baseDir": "C:\\Users\\downl\\Desktop\\clawdbot-main3\\clawdbot-main\\skills\\openai-image-gen",
+          "source": "openclaw-bundled",
+          "disableModelInvocation": false
+        },
+        {
+          "name": "openai-whisper-api",
+          "description": "Transcribe audio via OpenAI Audio Transcriptions API (Whisper).",
+          "filePath": "C:\\Users\\downl\\Desktop\\clawdbot-main3\\clawdbot-main\\skills\\openai-whisper-api\\SKILL.md",
+          "baseDir": "C:\\Users\\downl\\Desktop\\clawdbot-main3\\clawdbot-main\\skills\\openai-whisper-api",
+          "source": "openclaw-bundled",
+          "disableModelInvocation": false
+        },
+        {
+          "name": "skill-creator",
+          "description": "Create, edit, improve, or audit AgentSkills. Use when creating a new skill from scratch or when asked to improve, review, audit, tidy up, or clean up an existing skill or SKILL.md file. Also use when editing or restructuring a skill directory (moving files to references/ or scripts/, removing stale content, validating against the AgentSkills spec). Triggers on phrases like \"create a skill\", \"author a skill\", \"tidy up a skill\", \"improve this skill\", \"review the skill\", \"clean up the skill\", \"audit the skill\".",
+          "filePath": "C:\\Users\\downl\\Desktop\\clawdbot-main3\\clawdbot-main\\skills\\skill-creator\\SKILL.md",
+          "baseDir": "C:\\Users\\downl\\Desktop\\clawdbot-main3\\clawdbot-main\\skills\\skill-creator",
+          "source": "openclaw-bundled",
+          "disableModelInvocation": false
+        },
+        {
+          "name": "slack",
+          "description": "Use when you need to control Slack from OpenClaw via the slack tool, including reacting to messages or pinning/unpinning items in Slack channels or DMs.",
+          "filePath": "C:\\Users\\downl\\Desktop\\clawdbot-main3\\clawdbot-main\\skills\\slack\\SKILL.md",
+          "baseDir": "C:\\Users\\downl\\Desktop\\clawdbot-main3\\clawdbot-main\\skills\\slack",
+          "source": "openclaw-bundled",
+          "disableModelInvocation": false
+        },
+        {
+          "name": "weather",
+          "description": "Get current weather and forecasts via wttr.in or Open-Meteo. Use when: user asks about weather, temperature, or forecasts for any location. NOT for: historical weather data, severe weather alerts, or detailed meteorological analysis. No API key needed.",
+          "filePath": "C:\\Users\\downl\\Desktop\\clawdbot-main3\\clawdbot-main\\skills\\weather\\SKILL.md",
+          "baseDir": "C:\\Users\\downl\\Desktop\\clawdbot-main3\\clawdbot-main\\skills\\weather",
+          "source": "openclaw-bundled",
+          "disableModelInvocation": false
+        },
+        {
+          "name": "find-skills",
+          "description": "Helps users discover and install agent skills when they ask questions like \"how do I do X\", \"find a skill for X\", \"is there a skill that can...\", or express interest in extending capabilities. This skill should be used when the user is looking for functionality that might exist as an installable skill.",
+          "filePath": "C:\\Users\\downl\\.agents\\skills\\find-skills\\SKILL.md",
+          "baseDir": "C:\\Users\\downl\\.agents\\skills\\find-skills",
+          "source": "agents-skills-personal",
+          "disableModelInvocation": false
+        },
+        {
+          "name": "Perplexity DeepResearch",
+          "description": "脚注や参照情報の裏取り（ファクトチェック）を深掘りして行い、情報の正確性、最新性、信頼性を検証するスキル。",
+          "filePath": "C:\\Users\\downl\\.agents\\skills\\perplexity-deep-research\\SKILL.md",
+          "baseDir": "C:\\Users\\downl\\.agents\\skills\\perplexity-deep-research",
+          "source": "agents-skills-personal",
+          "disableModelInvocation": false
+        },
+        {
+          "name": "remotion-best-practices",
+          "description": "Best practices for Remotion - Video creation in React",
+          "filePath": "C:\\Users\\downl\\.agents\\skills\\remotion-best-practices\\SKILL.md",
+          "baseDir": "C:\\Users\\downl\\.agents\\skills\\remotion-best-practices",
+          "source": "agents-skills-personal",
+          "disableModelInvocation": false
+        },
+        {
+          "name": "specstory-guard",
+          "description": "Install a pre-commit hook that scans .specstory/history for secrets before commits. Run when user says \"set up secret scanning\", \"install specstory guard\", \"protect my history\", or \"check for secrets\".",
+          "filePath": "C:\\Users\\downl\\.agents\\skills\\specstory-guard\\SKILL.md",
+          "baseDir": "C:\\Users\\downl\\.agents\\skills\\specstory-guard",
+          "source": "agents-skills-personal",
+          "disableModelInvocation": false
+        },
+        {
+          "name": "specstory-link-trail",
+          "description": "Track all URLs fetched during SpecStory AI coding sessions. Run when user says \"show my link trail\", \"what URLs did I visit\", \"list fetched links\", or \"show web fetches\".",
+          "filePath": "C:\\Users\\downl\\.agents\\skills\\specstory-link-trail\\SKILL.md",
+          "baseDir": "C:\\Users\\downl\\.agents\\skills\\specstory-link-trail",
+          "source": "agents-skills-personal",
+          "disableModelInvocation": false
+        },
+        {
+          "name": "specstory-organize",
+          "description": "Organize SpecStory AI coding sessions in .specstory/history into year/month folders. Run when user says \"organize my history\", \"clean up specstory\", \"sort my sessions\", or \"organize specstory files\".",
+          "filePath": "C:\\Users\\downl\\.agents\\skills\\specstory-organize\\SKILL.md",
+          "baseDir": "C:\\Users\\downl\\.agents\\skills\\specstory-organize",
+          "source": "agents-skills-personal",
+          "disableModelInvocation": false
+        },
+        {
+          "name": "specstory-project-stats",
+          "description": "Fetch project statistics from SpecStory Cloud. Run when user says \"get project stats\", \"show SpecStory stats\", \"project statistics\", \"how many sessions\", or \"SpecStory metrics\".",
+          "filePath": "C:\\Users\\downl\\.agents\\skills\\specstory-project-stats\\SKILL.md",
+          "baseDir": "C:\\Users\\downl\\.agents\\skills\\specstory-project-stats",
+          "source": "agents-skills-personal",
+          "disableModelInvocation": false
+        },
+        {
+          "name": "specstory-session-summary",
+          "description": "Summarize recent SpecStory AI coding sessions in standup format. Use when the user wants to review sessions from .specstory/history, prepare for standups, track work progress, or understand what was accomplished.",
+          "filePath": "C:\\Users\\downl\\.agents\\skills\\specstory-session-summary\\SKILL.md",
+          "baseDir": "C:\\Users\\downl\\.agents\\skills\\specstory-session-summary",
+          "source": "agents-skills-personal",
+          "disableModelInvocation": false
+        },
+        {
+          "name": "specstory-yak",
+          "description": "Analyze your SpecStory AI coding sessions in .specstory/history for yak shaving - when your initial goal got derailed into rabbit holes. Run when user says \"analyze my yak shaving\", \"check for rabbit holes\", \"how distracted was I\", or \"yak shave score\".",
+          "filePath": "C:\\Users\\downl\\.agents\\skills\\specstory-yak\\SKILL.md",
+          "baseDir": "C:\\Users\\downl\\.agents\\skills\\specstory-yak",
+          "source": "agents-skills-personal",
+          "disableModelInvocation": false
+        }
+      ],
+      "version": 0
+    }
+  }
+}
