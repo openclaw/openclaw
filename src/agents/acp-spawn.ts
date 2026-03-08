@@ -81,6 +81,27 @@ export const ACP_SPAWN_ACCEPTED_NOTE =
 export const ACP_SPAWN_SESSION_ACCEPTED_NOTE =
   "thread-bound ACP session stays active after this task; continue in-thread for follow-ups.";
 
+export function resolveAcpSpawnRuntimePolicyError(params: {
+  cfg: OpenClawConfig;
+  requesterSessionKey?: string;
+  requesterSandboxed?: boolean;
+  sandbox?: SpawnAcpSandboxMode;
+}): string | undefined {
+  const sandboxMode = params.sandbox === "require" ? "require" : "inherit";
+  const requesterRuntime = resolveSandboxRuntimeStatus({
+    cfg: params.cfg,
+    sessionKey: params.requesterSessionKey,
+  });
+  const requesterSandboxed = params.requesterSandboxed === true || requesterRuntime.sandboxed;
+  if (requesterSandboxed) {
+    return 'Sandboxed sessions cannot spawn ACP sessions because runtime="acp" runs on the host. Use runtime="subagent" from sandboxed sessions.';
+  }
+  if (sandboxMode === "require") {
+    return 'sessions_spawn sandbox="require" is unsupported for runtime="acp" because ACP sessions run outside the sandbox. Use runtime="subagent" or sandbox="inherit".';
+  }
+  return undefined;
+}
+
 type PreparedAcpThreadBinding = {
   channel: string;
   accountId: string;
@@ -242,7 +263,6 @@ export async function spawnAcpDirect(
       error: "ACP is disabled by policy (`acp.enabled=false`).",
     };
   }
-  const sandboxMode = params.sandbox === "require" ? "require" : "inherit";
   const streamToParentRequested = params.streamTo === "parent";
   const parentSessionKey = ctx.agentSessionKey?.trim();
   if (streamToParentRequested && !parentSessionKey) {
@@ -251,23 +271,16 @@ export async function spawnAcpDirect(
       error: 'sessions_spawn streamTo="parent" requires an active requester session context.',
     };
   }
-  const requesterRuntime = resolveSandboxRuntimeStatus({
+  const runtimePolicyError = resolveAcpSpawnRuntimePolicyError({
     cfg,
-    sessionKey: ctx.agentSessionKey,
+    requesterSessionKey: ctx.agentSessionKey,
+    requesterSandboxed: ctx.sandboxed,
+    sandbox: params.sandbox,
   });
-  const requesterSandboxed = ctx.sandboxed === true || requesterRuntime.sandboxed;
-  if (requesterSandboxed) {
+  if (runtimePolicyError) {
     return {
       status: "forbidden",
-      error:
-        'Sandboxed sessions cannot spawn ACP sessions because runtime="acp" runs on the host. Use runtime="subagent" from sandboxed sessions.',
-    };
-  }
-  if (sandboxMode === "require") {
-    return {
-      status: "forbidden",
-      error:
-        'sessions_spawn sandbox="require" is unsupported for runtime="acp" because ACP sessions run outside the sandbox. Use runtime="subagent" or sandbox="inherit".',
+      error: runtimePolicyError,
     };
   }
 
