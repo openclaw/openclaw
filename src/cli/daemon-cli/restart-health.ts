@@ -19,6 +19,7 @@ export const DEFAULT_RESTART_HEALTH_ATTEMPTS = Math.ceil(
 export type GatewayRestartSnapshot = {
   runtime: GatewayServiceRuntime;
   portUsage: PortUsage;
+  serviceLoaded: boolean | null;
   healthy: boolean;
   staleGatewayPids: number[];
 };
@@ -63,6 +64,12 @@ export async function inspectGatewayRestart(params: {
 }): Promise<GatewayRestartSnapshot> {
   const env = params.env ?? process.env;
   let runtime: GatewayServiceRuntime = { status: "unknown" };
+  let serviceLoaded: boolean | null = null;
+  try {
+    serviceLoaded = await params.service.isLoaded(env);
+  } catch {
+    serviceLoaded = null;
+  }
   try {
     runtime = await params.service.readRuntime(env);
   } catch (err) {
@@ -105,8 +112,8 @@ export async function inspectGatewayRestart(params: {
       ? portUsage.listeners.some((listener) => listenerOwnedByRuntimePid({ listener, runtimePid }))
       : gatewayListeners.length > 0 ||
         (portUsage.status === "busy" && portUsage.listeners.length === 0);
-  let healthy = running && ownsPort;
-  if (!healthy && running && portUsage.status === "busy") {
+  let healthy = running && ownsPort && serviceLoaded !== false;
+  if (!healthy && serviceLoaded !== false && running && portUsage.status === "busy") {
     try {
       healthy = await confirmGatewayReachable(params.port);
     } catch {
@@ -136,6 +143,7 @@ export async function inspectGatewayRestart(params: {
   return {
     runtime,
     portUsage,
+    serviceLoaded,
     healthy,
     staleGatewayPids,
   };
@@ -161,6 +169,9 @@ export async function waitForGatewayHealthyRestart(params: {
 
   for (let attempt = 0; attempt < attempts; attempt += 1) {
     if (snapshot.healthy) {
+      return snapshot;
+    }
+    if (snapshot.serviceLoaded === false) {
       return snapshot;
     }
     if (snapshot.staleGatewayPids.length > 0 && snapshot.runtime.status !== "running") {
@@ -191,6 +202,11 @@ export function renderRestartDiagnostics(snapshot: GatewayRestartSnapshot): stri
 
   if (runtimeSummary) {
     lines.push(`Service runtime: ${runtimeSummary}`);
+  }
+  if (snapshot.serviceLoaded === false) {
+    lines.push("Service registration: not loaded.");
+  } else if (snapshot.serviceLoaded === true) {
+    lines.push("Service registration: loaded.");
   }
 
   if (snapshot.portUsage.status === "busy") {

@@ -97,9 +97,9 @@ describe("restart-helper", () => {
       });
       expect(scriptPath.endsWith(".sh")).toBe(true);
       expect(content).toContain("#!/bin/sh");
-      expect(content).toContain("launchctl kickstart -k 'gui/501/ai.openclaw.gateway'");
-      // Should fall back to bootstrap when kickstart fails (service deregistered after bootout)
+      expect(content).toContain("launchctl bootout 'gui/501/ai.openclaw.gateway'");
       expect(content).toContain("launchctl bootstrap 'gui/501'");
+      expect(content).toContain("launchctl kickstart -k 'gui/501/ai.openclaw.gateway'");
       expect(content).toContain('rm -f "$0"');
       await cleanupScript(scriptPath);
     });

@@ -553,6 +553,20 @@ describe("update-cli", () => {
     await runRestartFallbackScenario({ daemonInstall: "ok" });
   });
 
+  it("re-registers the gateway when detached restart leaves the service unloaded", async () => {
+    vi.mocked(runGatewayUpdate).mockResolvedValue(makeOkUpdateResult());
+    serviceLoaded
+      .mockResolvedValueOnce(true)
+      .mockResolvedValueOnce(false)
+      .mockResolvedValueOnce(true);
+
+    await updateCommand({});
+
+    expect(runRestartScript).toHaveBeenCalled();
+    expect(runDaemonInstall).toHaveBeenCalledTimes(2);
+    expect(runDaemonRestart).toHaveBeenCalledTimes(1);
+  });
+
   it("updateCommand does not refresh service env when --no-restart is set", async () => {
     vi.mocked(runGatewayUpdate).mockResolvedValue(makeOkUpdateResult());
     serviceLoaded.mockResolvedValue(true);

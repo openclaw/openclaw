@@ -93,12 +93,10 @@ rm -f "$0"
 # Standalone restart script — survives parent process termination.
 # Wait briefly to ensure file locks are released after update.
 sleep 1
-# Try kickstart first (works when the service is still registered).
-# If it fails (e.g. after bootout), re-register via bootstrap then kickstart.
-if ! launchctl kickstart -k 'gui/${uid}/${escaped}' 2>/dev/null; then
-  launchctl bootstrap 'gui/${uid}' '${escapedPlistPath}' 2>/dev/null
-  launchctl kickstart -k 'gui/${uid}/${escaped}' 2>/dev/null || true
-fi
+# Hard-reset launchd state to avoid stale runtime / unloaded-label drift.
+launchctl bootout 'gui/${uid}/${escaped}' 2>/dev/null || true
+launchctl bootstrap 'gui/${uid}' '${escapedPlistPath}' 2>/dev/null || true
+launchctl kickstart -k 'gui/${uid}/${escaped}' 2>/dev/null || true
 # Self-cleanup
 rm -f "$0"
 `;

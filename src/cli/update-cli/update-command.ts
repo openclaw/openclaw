@@ -565,6 +565,22 @@ async function maybeRestartService(params: {
           service,
           port: params.gatewayPort,
         });
+        if (!health.healthy && health.serviceLoaded === false) {
+          if (!params.opts.json) {
+            defaultRuntime.log(
+              theme.warn("Gateway service was left unloaded after restart. Re-registering..."),
+            );
+          }
+          await runDaemonInstall({
+            force: true,
+            json: params.opts.json || undefined,
+          });
+          await runDaemonRestart();
+          health = await waitForGatewayHealthyRestart({
+            service,
+            port: params.gatewayPort,
+          });
+        }
         if (!health.healthy && health.staleGatewayPids.length > 0) {
           if (!params.opts.json) {
             defaultRuntime.log(
