@@ -141,7 +141,10 @@ export async function geminiAnalyzePdf(params: {
     /\/+$/,
     "",
   );
-  const url = `${baseUrl}/v1beta/models/${encodeURIComponent(params.modelId)}:generateContent?key=${encodeURIComponent(apiKey)}`;
+  const actualModelId = params.modelId.includes("/")
+    ? params.modelId.split("/")[1]
+    : params.modelId;
+  const url = `${baseUrl}/v1beta/models/${encodeURIComponent(actualModelId)}:generateContent?key=${encodeURIComponent(apiKey)}`;
 
   const res = await fetch(url, {
     method: "POST",
