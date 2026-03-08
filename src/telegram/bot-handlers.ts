@@ -1493,6 +1493,14 @@ export const registerTelegramHandlers = ({
     if (!msg) {
       return;
     }
+    // Skip auto-forwarded channel posts in linked groups. When a channel is linked
+    // to a group, Telegram re-delivers every channel post as a group message with
+    // is_automatic_forward=true. Processing these duplicates wastes tokens and can
+    // cause echo responses. The original channel_post handler already covers
+    // channel-originated content.
+    if (msg.is_automatic_forward) {
+      return;
+    }
     await handleInboundMessageLike({
       ctxForDedupe: ctx,
       ctx: buildSyntheticContext(ctx, msg),

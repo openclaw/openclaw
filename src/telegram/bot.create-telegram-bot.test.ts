@@ -494,6 +494,26 @@ describe("createTelegramBot", () => {
     expect(replySpy).toHaveBeenCalledTimes(1);
   });
 
+  it("drops auto-forwarded channel posts in linked groups", async () => {
+    createTelegramBot({ token: "tok" });
+    const handler = getOnHandler("message") as (ctx: Record<string, unknown>) => Promise<void>;
+
+    await handler({
+      message: {
+        chat: { id: -1001234567890, type: "supergroup" },
+        from: { id: 136817688, username: "Channel_Bot" },
+        text: "forwarded from linked channel",
+        date: 1736380800,
+        is_automatic_forward: true,
+        sender_chat: { id: -1001999888777, type: "channel", title: "My Channel" },
+      },
+      me: { username: "openclaw_bot" },
+      getFile: async () => ({ download: async () => new Uint8Array() }),
+    });
+
+    expect(replySpy).not.toHaveBeenCalled();
+  });
+
   it("does not persist update offset past pending updates", async () => {
     // For this test we need sequentialize(...) to behave like a normal middleware and call next().
     sequentializeSpy.mockImplementationOnce(
