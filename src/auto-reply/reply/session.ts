@@ -388,8 +388,11 @@ export async function initSessionState(params: {
       persistedVerbose = entry.verboseLevel;
       persistedReasoning = entry.reasoningLevel;
       persistedTtsAuto = entry.ttsAuto;
-      persistedModelOverride = entry.modelOverride;
-      persistedProviderOverride = entry.providerOverride;
+      // Do not carry over model/provider overrides on reset.
+      // /new should restore the agent's configured default model,
+      // not persist a prior /model switch into the new session.
+      persistedModelOverride = undefined;
+      persistedProviderOverride = undefined;
       persistedLabel = entry.label;
     }
   }
