@@ -1,6 +1,7 @@
 import { runPluginCommandWithTimeout } from "openclaw/plugin-sdk";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk";
 import { createDebounceManager, type DebounceManager } from "./src/debounce.js";
+import { createFileLogger, composeLoggers } from "./src/file-logger.js";
 import { AgentRepositoryImpl } from "./src/repository/agent-repository.js";
 import {
   MessageRepositoryImpl,
@@ -9,7 +10,7 @@ import {
 import { OllamaRepositoryImpl } from "./src/repository/ollama-repository.js";
 import { SqliteRepositoryImpl } from "./src/repository/sqlite-repository.js";
 import { setupDetectors } from "./src/setup-detectors.js";
-import { type PluginConfig } from "./src/types.js";
+import { type Logger, type PluginConfig } from "./src/types.js";
 
 // Default configuration values
 const DEFAULT_CONFIG: PluginConfig = {
@@ -27,6 +28,19 @@ export default function register(api: OpenClawPluginApi) {
     ...(api.pluginConfig as Partial<PluginConfig>),
   };
 
+  // Adapt PluginLogger (optional debug?) to our Logger type
+  const adaptPluginLogger = (pl: typeof api.logger): Logger => ({
+    info: (msg) => pl.info(msg),
+    warn: (msg) => pl.warn(msg),
+    error: (msg) => pl.error(msg),
+  });
+
+  // Compose console + file logger — all activity goes to both
+  const logger = composeLoggers(
+    adaptPluginLogger(api.logger),
+    createFileLogger("/tmp/openclaw/whatsapp-passive-monitor.log"),
+  );
+
   // Resolve DB path relative to openclaw workspace
   const resolvedDbPath = api.resolvePath(`~/.openclaw/workspace/${config.dbPath}`);
 
@@ -35,7 +49,7 @@ export default function register(api: OpenClawPluginApi) {
     const sqliteRepo = new SqliteRepositoryImpl(resolvedDbPath);
     messageRepo = new MessageRepositoryImpl(sqliteRepo);
   } catch (err) {
-    api.logger.error?.(`whatsapp-passive-monitor: failed to open SQLite: ${String(err)}`);
+    logger.error(`whatsapp-passive-monitor: failed to open SQLite: ${String(err)}`);
     return;
   }
 
@@ -48,16 +62,14 @@ export default function register(api: OpenClawPluginApi) {
     messageRepo,
     ollama,
     agentRepo,
-    logger: api.logger,
+    logger,
   });
 
   // Debounce fires → run all detectors sequentially
   const onDebouncefire = (conversationId: string) => {
     registry
       .runAll({ conversationId })
-      .catch((err) =>
-        api.logger.error?.(`whatsapp-passive-monitor: registry error: ${String(err)}`),
-      );
+      .catch((err) => logger.error(`whatsapp-passive-monitor: registry error: ${String(err)}`));
   };
 
   const debounce: DebounceManager = createDebounceManager(config.debounceMs, onDebouncefire);
