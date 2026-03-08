@@ -2,6 +2,8 @@ import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
 import { resolveConfiguredModelRef } from "../agents/model-selection.js";
 import type { SkillCommandSpec } from "../agents/skills.js";
 import { isCommandFlagEnabled } from "../config/commands.js";
+import { resolveStorePath } from "../config/sessions/paths.js";
+import { loadSessionStore } from "../config/sessions/store.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { escapeRegExp } from "../utils.js";
 import { getChatCommands, getNativeCommandSurfaces } from "./commands-registry.data.js";
@@ -17,6 +19,7 @@ import type {
   NativeCommandSpec,
   ShouldHandleTextCommandsParams,
 } from "./commands-registry.types.js";
+import { resolveStoredModelOverride } from "./reply/model-selection.js";
 
 export type {
   ChatCommandDefinition,
@@ -305,6 +308,38 @@ function resolveDefaultCommandContext(cfg?: OpenClawConfig): {
   };
 }
 
+/**
+ * Resolve the active provider and model for a session route.
+ * Falls back to the configured default when no session override exists.
+ */
+export function resolveActiveModelForRoute(params: {
+  cfg?: OpenClawConfig;
+  route?: { agentId?: string; sessionKey?: string };
+}): { provider: string; model: string } {
+  const defaults = resolveDefaultCommandContext(params.cfg);
+  if (!params.route?.sessionKey) {
+    return defaults;
+  }
+  try {
+    const storePath = resolveStorePath(params.cfg?.session?.store, {
+      agentId: params.route.agentId,
+    });
+    const sessionStore = loadSessionStore(storePath);
+    const sessionEntry = sessionStore[params.route.sessionKey];
+    const override = resolveStoredModelOverride({
+      sessionEntry,
+      sessionStore,
+      sessionKey: params.route.sessionKey,
+    });
+    return {
+      provider: override?.provider?.trim() || defaults.provider,
+      model: override?.model?.trim() || defaults.model,
+    };
+  } catch {
+    return defaults;
+  }
+}
+
 export type ResolvedCommandArgChoice = { value: string; label: string };
 
 export function resolveCommandArgChoices(params: {
@@ -341,8 +376,10 @@ export function resolveCommandArgMenu(params: {
   command: ChatCommandDefinition;
   args?: CommandArgs;
   cfg?: OpenClawConfig;
+  provider?: string;
+  model?: string;
 }): { arg: CommandArgDefinition; choices: ResolvedCommandArgChoice[]; title?: string } | null {
-  const { command, args, cfg } = params;
+  const { command, args, cfg, provider, model } = params;
   if (!command.args || !command.argsMenu) {
     return null;
   }
@@ -352,7 +389,9 @@ export function resolveCommandArgMenu(params: {
   const argSpec = command.argsMenu;
   const argName =
     argSpec === "auto"
-      ? command.args.find((arg) => resolveCommandArgChoices({ command, arg, cfg }).length > 0)?.name
+      ? command.args.find(
+          (arg) => resolveCommandArgChoices({ command, arg, cfg, provider, model }).length > 0,
+        )?.name
       : argSpec.arg;
   if (!argName) {
     return null;
@@ -367,7 +406,7 @@ export function resolveCommandArgMenu(params: {
   if (!arg) {
     return null;
   }
-  const choices = resolveCommandArgChoices({ command, arg, cfg });
+  const choices = resolveCommandArgChoices({ command, arg, cfg, provider, model });
   if (choices.length === 0) {
     return null;
   }

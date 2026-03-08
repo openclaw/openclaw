@@ -25,6 +25,8 @@ export const XHIGH_MODEL_REFS = [
   "openai/gpt-5.4",
   "openai/gpt-5.4-pro",
   "openai/gpt-5.2",
+  "anthropic/claude-opus-4-6",
+  "anthropic-vertex/claude-opus-4-6",
   "openai-codex/gpt-5.4",
   "openai-codex/gpt-5.3-codex",
   "openai-codex/gpt-5.3-codex-spark",
@@ -51,7 +53,9 @@ export function normalizeThinkLevel(raw?: string | null): ThinkLevel | undefined
   if (collapsed === "adaptive" || collapsed === "auto") {
     return "adaptive";
   }
-  if (collapsed === "xhigh" || collapsed === "extrahigh") {
+  // "max" is the Anthropic-native label for the highest thinking level;
+  // it maps to the canonical internal ThinkLevel "xhigh".
+  if (collapsed === "xhigh" || collapsed === "extrahigh" || collapsed === "max") {
     return "xhigh";
   }
   if (["off"].includes(key)) {
@@ -69,9 +73,7 @@ export function normalizeThinkLevel(raw?: string | null): ThinkLevel | undefined
   if (["mid", "med", "medium", "thinkharder", "think-harder", "harder"].includes(key)) {
     return "medium";
   }
-  if (
-    ["high", "ultra", "ultrathink", "think-hard", "thinkhardest", "highest", "max"].includes(key)
-  ) {
+  if (["high", "ultra", "ultrathink", "thinkhardest", "highest"].includes(key)) {
     return "high";
   }
   if (["think"].includes(key)) {
@@ -101,11 +103,46 @@ export function listThinkingLevels(provider?: string | null, model?: string | nu
   return levels;
 }
 
+export type ThinkLevelChoice = { value: ThinkLevel; label: string };
+
+function isAnthropicProvider(provider?: string | null): boolean {
+  const key = normalizeProviderId(provider);
+  return key === "anthropic" || key === "anthropic-vertex";
+}
+
+/**
+ * Return thinking level choices with provider-specific display labels.
+ *
+ * The internal canonical ThinkLevel value is always "xhigh" regardless of
+ * provider.  The label shown to the user varies to match each provider's
+ * native API vocabulary:
+ *   - Anthropic (`output_config.effort`): label = "max"
+ *   - OpenAI / Codex (`reasoning_effort`): label = "xhigh"
+ */
+export function listThinkingLevelChoices(
+  provider?: string | null,
+  model?: string | null,
+): ThinkLevelChoice[] {
+  const choices: ThinkLevelChoice[] = [
+    { value: "off", label: "off" },
+    { value: "minimal", label: "minimal" },
+    { value: "low", label: "low" },
+    { value: "medium", label: "medium" },
+    { value: "high", label: "high" },
+  ];
+  if (supportsXHighThinking(provider, model)) {
+    const label = isAnthropicProvider(provider) ? "max" : "xhigh";
+    choices.push({ value: "xhigh", label });
+  }
+  choices.push({ value: "adaptive", label: "adaptive" });
+  return choices;
+}
+
 export function listThinkingLevelLabels(provider?: string | null, model?: string | null): string[] {
   if (isBinaryThinkingProvider(provider)) {
     return ["off", "on"];
   }
-  return listThinkingLevels(provider, model);
+  return listThinkingLevelChoices(provider, model).map((choice) => choice.label);
 }
 
 export function formatThinkingLevels(

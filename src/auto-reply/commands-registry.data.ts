@@ -6,7 +6,7 @@ import type {
   CommandCategory,
   CommandScope,
 } from "./commands-registry.types.js";
-import { listThinkingLevels } from "./thinking.js";
+import { listThinkingLevelChoices } from "./thinking.js";
 
 type DefineChatCommandInput = {
   key: string;
@@ -574,9 +574,9 @@ function buildChatCommands(): ChatCommandDefinition[] {
       args: [
         {
           name: "level",
-          description: "off, minimal, low, medium, high, xhigh",
+          description: "off, minimal, low, medium, high, xhigh (max for Anthropic)",
           type: "string",
-          choices: ({ provider, model }) => listThinkingLevels(provider, model),
+          choices: ({ provider, model }) => listThinkingLevelChoices(provider, model),
         },
       ],
       argsMenu: "auto",
