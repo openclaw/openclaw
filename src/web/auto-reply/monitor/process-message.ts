@@ -28,6 +28,7 @@ import {
   resolvePinnedMainDmOwnerFromAllowlist,
   resolveDmGroupAccessWithCommandGate,
 } from "../../../security/dm-policy-shared.js";
+import { resolveSendPolicy } from "../../../sessions/send-policy.js";
 import { jidToE164, normalizeE164 } from "../../../utils.js";
 import { resolveWhatsAppAccount } from "../../accounts.js";
 import { newConnectionId } from "../../reconnect.js";
@@ -151,6 +152,18 @@ export async function processMessage(params: {
   groupHistory?: GroupHistoryEntry[];
   suppressGroupHistoryClear?: boolean;
 }) {
+  // Gate first — skip all work if send policy denies.
+  const sendPolicy = resolveSendPolicy({
+    cfg: params.cfg,
+    sessionKey: params.route.sessionKey,
+    channel: "whatsapp",
+    chatType: params.msg.chatType,
+  });
+  if (sendPolicy === "deny") {
+    logVerbose(`Skipping auto-reply: send policy denied for ${params.route.sessionKey}`);
+    return false;
+  }
+
   const conversationId = params.msg.conversationId ?? params.msg.from;
   const { storePath, envelopeOptions, previousTimestamp } = resolveInboundSessionEnvelopeContext({
     cfg: params.cfg,
