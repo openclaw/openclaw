@@ -1410,7 +1410,23 @@ function detectEmptyAllowlistPolicy(cfg: OpenClawConfig): string[] {
       const effectiveGroupAllowFrom =
         groupAllowFrom ?? (fallbackToAllowFrom ? effectiveAllowFrom : undefined);
 
-      if (!hasAllowFromEntries(effectiveGroupAllowFrom)) {
+      // Check if per-group allowFrom configs exist — if every configured group
+      // has its own allowFrom, the top-level groupAllowFrom is not required.
+      const perGroupAllowFromConfigured = (() => {
+        const groups = account.groups;
+        if (!groups || typeof groups !== "object" || Array.isArray(groups)) {
+          return false;
+        }
+        const groupEntries = Object.values(groups as Record<string, unknown>).filter(
+          (g) => g && typeof g === "object" && !Array.isArray(g),
+        ) as Array<Record<string, unknown>>;
+        return (
+          groupEntries.length > 0 &&
+          groupEntries.every((g) => hasAllowFromEntries(g.allowFrom as Array<string | number> | undefined))
+        );
+      })();
+
+      if (!hasAllowFromEntries(effectiveGroupAllowFrom) && !perGroupAllowFromConfigured) {
         if (fallbackToAllowFrom) {
           warnings.push(
             `- ${prefix}.groupPolicy is "allowlist" but groupAllowFrom (and allowFrom) is empty — all group messages will be silently dropped. Add sender IDs to ${prefix}.groupAllowFrom or ${prefix}.allowFrom, or set groupPolicy to "open".`,
