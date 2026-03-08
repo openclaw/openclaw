@@ -398,6 +398,15 @@ Multi-lingual audio transcription via OpenRouter (Gemini, etc). Available on Cla
   Full astronomy gear marketplace. Built with/around the OpenClaw ecosystem.
 </Card>
 
+<Card title="OCM (OpenClaw Manager)" icon="layout-dashboard" href="https://github.com/dtzp555-max/ocm">
+  **@dtzp555** • `dashboard` `devtools` `telegram`
+  
+  Zero-dependency, single-file local web dashboard for managing OpenClaw agents, Telegram sub-agents, models/auth, stats, cron, and a built-in CLI terminal.
+  
+  <img src="https://raw.githubusercontent.com/dtzp555-max/ocm/main/docs/annotated-screenshots/dashboard.jpg" alt="OCM Dashboard" />
+</Card>
+
+
 </CardGroup>
 
 ---
