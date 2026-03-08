@@ -101,6 +101,8 @@ describe("normalizeTelegramChatId", () => {
 describe("normalizeTelegramLookupTarget", () => {
   it("normalizes legacy t.me and username targets", () => {
     expect(normalizeTelegramLookupTarget("telegram:https://t.me/MyChannel")).toBe("@MyChannel");
+    expect(normalizeTelegramLookupTarget("https://telegram.me/MyChannel")).toBe("@MyChannel");
+    expect(normalizeTelegramLookupTarget("telegram.me/mychannel/")).toBe("@mychannel");
     expect(normalizeTelegramLookupTarget("tg:t.me/mychannel")).toBe("@mychannel");
     expect(normalizeTelegramLookupTarget("@MyChannel")).toBe("@MyChannel");
     expect(normalizeTelegramLookupTarget("MyChannel")).toBe("@MyChannel");
