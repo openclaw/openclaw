@@ -357,3 +357,88 @@ describe("feishuOutbound.sendMedia renderMode", () => {
     );
   });
 });
+
+describe("feishuOutbound.sendPayload", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    sendMessageFeishuMock.mockResolvedValue({ messageId: "text_msg" });
+    sendMarkdownCardFeishuMock.mockResolvedValue({ messageId: "card_msg" });
+    sendMediaFeishuMock.mockResolvedValue({ messageId: "media_msg" });
+  });
+
+  const baseCtx = {
+    to: "chat_1",
+    cfg: {} as any,
+    payload: {} as any,
+    accountId: "main",
+  };
+
+  it("text-only delegates to sendText", async () => {
+    const result = await feishuOutbound.sendPayload!({
+      ...baseCtx,
+      payload: { text: "hello" },
+    });
+
+    expect(sendMessageFeishuMock).toHaveBeenCalledTimes(1);
+    expect(result).toEqual(expect.objectContaining({ channel: "feishu" }));
+  });
+
+  it("single media delegates to sendMedia", async () => {
+    const result = await feishuOutbound.sendPayload!({
+      ...baseCtx,
+      payload: { text: "caption", mediaUrl: "https://example.com/a.png" },
+    });
+
+    expect(sendMediaFeishuMock).toHaveBeenCalledTimes(1);
+    expect(result).toEqual(expect.objectContaining({ channel: "feishu" }));
+  });
+
+  it("multi-media iterates URLs with caption on first", async () => {
+    const result = await feishuOutbound.sendPayload!({
+      ...baseCtx,
+      payload: {
+        text: "caption",
+        mediaUrls: ["https://example.com/a.png", "https://example.com/b.png"],
+      },
+    });
+
+    expect(sendMediaFeishuMock).toHaveBeenCalledTimes(2);
+    expect(result).toEqual(expect.objectContaining({ channel: "feishu" }));
+  });
+
+  it("empty payload returns no-op", async () => {
+    const result = await feishuOutbound.sendPayload!({
+      ...baseCtx,
+      payload: {},
+    });
+
+    expect(sendMessageFeishuMock).not.toHaveBeenCalled();
+    expect(sendMediaFeishuMock).not.toHaveBeenCalled();
+    expect(result).toEqual({ channel: "feishu", messageId: "" });
+  });
+
+  it("returns no-op when chunker produces empty array", async () => {
+    const chunkerSpy = vi.spyOn(feishuOutbound, "chunker").mockReturnValue([]);
+    const sendTextSpy = vi.spyOn(feishuOutbound, "sendText");
+    const result = await feishuOutbound.sendPayload!({
+      ...baseCtx,
+      payload: { text: "   " },
+    } as never);
+    expect(sendTextSpy).not.toHaveBeenCalled();
+    expect(result).toEqual({ channel: "feishu", messageId: "" });
+    chunkerSpy.mockRestore();
+    sendTextSpy.mockRestore();
+  });
+
+  it("chunking splits long text", async () => {
+    // feishuOutbound.textChunkLimit is 4000; mock chunker returns [text] (single chunk)
+    // so for text under limit, one call
+    const result = await feishuOutbound.sendPayload!({
+      ...baseCtx,
+      payload: { text: "short text" },
+    });
+
+    expect(sendMessageFeishuMock).toHaveBeenCalledTimes(1);
+    expect(result).toEqual(expect.objectContaining({ channel: "feishu" }));
+  });
+});

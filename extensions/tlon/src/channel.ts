@@ -169,6 +169,40 @@ const tlonOutbound: ChannelOutboundAdapter = {
     }
     return { ok: true, to: parsed.nest };
   },
+  sendPayload: async (ctx) => {
+    const text = ctx.payload.text ?? "";
+    const urls = ctx.payload.mediaUrls?.length
+      ? ctx.payload.mediaUrls
+      : ctx.payload.mediaUrl
+        ? [ctx.payload.mediaUrl]
+        : [];
+    if (!text && urls.length === 0) {
+      return { channel: "tlon", messageId: "" };
+    }
+    if (urls.length > 0) {
+      let lastResult = await tlonOutbound.sendMedia!({
+        ...ctx,
+        text,
+        mediaUrl: urls[0],
+      });
+      for (let i = 1; i < urls.length; i++) {
+        lastResult = await tlonOutbound.sendMedia!({
+          ...ctx,
+          text: "",
+          mediaUrl: urls[i],
+        });
+      }
+      return lastResult;
+    }
+    const limit = tlonOutbound.textChunkLimit;
+    const chunks = limit && tlonOutbound.chunker ? tlonOutbound.chunker(text, limit) : [text];
+    if (!chunks.length) return { channel: "tlon", messageId: "" };
+    let lastResult: Awaited<ReturnType<NonNullable<typeof tlonOutbound.sendText>>>;
+    for (const chunk of chunks) {
+      lastResult = await tlonOutbound.sendText!({ ...ctx, text: chunk });
+    }
+    return lastResult!;
+  },
   sendText: async ({ cfg, to, text, accountId, replyToId, threadId }) => {
     const account = resolveTlonAccount(cfg, accountId ?? undefined);
     if (!account.configured || !account.ship || !account.url || !account.code) {

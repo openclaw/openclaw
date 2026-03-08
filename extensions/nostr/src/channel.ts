@@ -134,6 +134,35 @@ export const nostrPlugin: ChannelPlugin<ResolvedNostrAccount> = {
   outbound: {
     deliveryMode: "direct",
     textChunkLimit: 4000,
+    sendPayload: async (ctx) => {
+      const text = ctx.payload.text ?? "";
+      const urls = ctx.payload.mediaUrls?.length
+        ? ctx.payload.mediaUrls
+        : ctx.payload.mediaUrl
+          ? [ctx.payload.mediaUrl]
+          : [];
+      if (!text && urls.length === 0) {
+        return { channel: "nostr", messageId: "" };
+      }
+      // Nostr has no native media — append URLs to text
+      const parts: string[] = [];
+      if (text) parts.push(text);
+      for (const url of urls) parts.push(url);
+      const combined = parts.join("\n");
+      if (urls.length > 0) {
+        // Media URLs appended — send as single message (no chunking for media)
+        return nostrPlugin.outbound!.sendText!({ ...ctx, text: combined });
+      }
+      const outbound = nostrPlugin.outbound!;
+      const limit = outbound.textChunkLimit;
+      const chunks = limit && outbound.chunker ? outbound.chunker(combined, limit) : [combined];
+      if (!chunks.length) return { channel: "nostr", messageId: "" };
+      let lastResult: Awaited<ReturnType<NonNullable<typeof outbound.sendText>>>;
+      for (const chunk of chunks) {
+        lastResult = await outbound.sendText!({ ...ctx, text: chunk });
+      }
+      return lastResult!;
+    },
     sendText: async ({ cfg, to, text, accountId }) => {
       const core = getNostrRuntime();
       const aid = accountId ?? DEFAULT_ACCOUNT_ID;

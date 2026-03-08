@@ -400,4 +400,123 @@ describe("outbound", () => {
       ).rejects.toThrow("Outbound delivery aborted");
     });
   });
+
+  describe("sendPayload", () => {
+    it("text-only delegates to sendText", async () => {
+      const { getAccountConfig } = await import("./config.js");
+      const { sendMessageTwitchInternal } = await import("./send.js");
+
+      vi.mocked(getAccountConfig).mockReturnValue(mockAccount);
+      vi.mocked(sendMessageTwitchInternal).mockResolvedValue({
+        ok: true,
+        messageId: "payload-text-msg",
+      });
+
+      const result = await twitchOutbound.sendPayload!({
+        cfg: mockConfig,
+        to: "#testchannel",
+        payload: { text: "hello" },
+        accountId: "default",
+      });
+
+      expect(result.channel).toBe("twitch");
+      expect(sendMessageTwitchInternal).toHaveBeenCalledTimes(1);
+    });
+
+    it("single media delegates to sendMedia", async () => {
+      const { getAccountConfig } = await import("./config.js");
+      const { sendMessageTwitchInternal } = await import("./send.js");
+
+      vi.mocked(getAccountConfig).mockReturnValue(mockAccount);
+      vi.mocked(sendMessageTwitchInternal).mockResolvedValue({
+        ok: true,
+        messageId: "payload-media-msg",
+      });
+
+      const result = await twitchOutbound.sendPayload!({
+        cfg: mockConfig,
+        to: "#testchannel",
+        payload: { text: "caption", mediaUrl: "https://example.com/a.png" },
+        accountId: "default",
+      });
+
+      expect(result.channel).toBe("twitch");
+      expect(sendMessageTwitchInternal).toHaveBeenCalledTimes(1);
+    });
+
+    it("multi-media iterates URLs with caption on first", async () => {
+      const { getAccountConfig } = await import("./config.js");
+      const { sendMessageTwitchInternal } = await import("./send.js");
+
+      vi.mocked(getAccountConfig).mockReturnValue(mockAccount);
+      vi.mocked(sendMessageTwitchInternal).mockResolvedValue({
+        ok: true,
+        messageId: "payload-multi-msg",
+      });
+
+      const result = await twitchOutbound.sendPayload!({
+        cfg: mockConfig,
+        to: "#testchannel",
+        payload: {
+          text: "caption",
+          mediaUrls: ["https://example.com/a.png", "https://example.com/b.png"],
+        },
+        accountId: "default",
+      });
+
+      expect(result.channel).toBe("twitch");
+      // Two media URLs -> two sendMedia calls -> two sendText calls
+      expect(sendMessageTwitchInternal).toHaveBeenCalledTimes(2);
+    });
+
+    it("empty payload returns no-op", async () => {
+      const result = await twitchOutbound.sendPayload!({
+        cfg: mockConfig,
+        to: "#testchannel",
+        payload: {},
+        accountId: "default",
+      });
+
+      expect(result).toEqual({ channel: "twitch", messageId: "" });
+    });
+
+    it("returns no-op when chunker produces empty array", async () => {
+      const chunkerSpy = vi.spyOn(twitchOutbound as any, "chunker").mockReturnValue([]);
+      const sendTextSpy = vi.spyOn(twitchOutbound, "sendText");
+      const result = await twitchOutbound.sendPayload!({
+        cfg: mockConfig,
+        to: "#testchannel",
+        payload: { text: "   " },
+        accountId: "default",
+      } as never);
+      expect(sendTextSpy).not.toHaveBeenCalled();
+      expect(result).toEqual({ channel: "twitch", messageId: "" });
+      chunkerSpy.mockRestore();
+      sendTextSpy.mockRestore();
+    });
+
+    it("chunking splits long text", async () => {
+      const { getAccountConfig } = await import("./config.js");
+      const { sendMessageTwitchInternal } = await import("./send.js");
+
+      vi.mocked(getAccountConfig).mockReturnValue(mockAccount);
+      vi.mocked(sendMessageTwitchInternal).mockResolvedValue({
+        ok: true,
+        messageId: "payload-chunk-msg",
+      });
+
+      // textChunkLimit is 500, chunker mock splits at 500 chars
+      const longText = "A".repeat(1000);
+      const result = await twitchOutbound.sendPayload!({
+        cfg: mockConfig,
+        to: "#testchannel",
+        payload: { text: longText },
+        accountId: "default",
+      });
+
+      expect(result.channel).toBe("twitch");
+      // Chunker splits into 2 chunks of 500 chars
+      expect(sendMessageTwitchInternal).toHaveBeenCalledTimes(2);
+    });
+  });
 });
