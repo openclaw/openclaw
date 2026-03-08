@@ -99,6 +99,37 @@ If the Control UI loads, your Gateway is ready for use.
     ```
 
   </Accordion>
+  <Accordion title="Mount a custom Control UI build (optional)">
+    If you maintain a localized/custom dashboard build, point `gateway.controlUi.root`
+    to your static assets directory (must contain `index.html`).
+
+    ```bash
+    mkdir -p ~/.openclaw/control-ui-custom
+    # Copy your built static files, for example:
+    # cp -R /path/to/your-ui-dist/. ~/.openclaw/control-ui-custom/
+    ```
+
+    In `~/.openclaw/config.json`:
+
+    ```json
+    {
+      "gateway": {
+        "controlUi": {
+          "enabled": true,
+          "root": "/home/<your-username>/.openclaw/control-ui-custom"
+        }
+      }
+    }
+    ```
+
+    Then restart and open:
+
+    ```bash
+    openclaw gateway restart
+    openclaw dashboard
+    ```
+
+  </Accordion>
 </AccordionGroup>
 
 ## Useful environment variables

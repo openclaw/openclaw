@@ -123,6 +123,40 @@ Dashboard（local loopback）：`http://127.0.0.1:18789/`
 
 ⚠️ **Bun 警告（WhatsApp + Telegram）：**Bun 与这些渠道存在已知问题。如果你使用 WhatsApp 或 Telegram，请使用 **Node** 运行 Gateway 网关。
 
+### 3.1) 给中文用户挂载自定义 Dashboard（可选）
+
+如果你有单独维护的中文 UI（静态文件），可以直接复用官方 `openclaw dashboard` 流程，只替换 Control UI 资源目录。
+
+1. 准备静态资源目录（需要包含 `index.html`）：
+
+```bash
+mkdir -p ~/.openclaw/control-ui-cn
+# 将你的构建产物拷贝到该目录，例如：
+# cp -R /path/to/your-ui-dist/. ~/.openclaw/control-ui-cn/
+```
+
+2. 在 `~/.openclaw/config.json` 设置（`root` 使用绝对路径）：
+
+```json
+{
+  "gateway": {
+    "controlUi": {
+      "enabled": true,
+      "root": "/home/<your-username>/.openclaw/control-ui-cn"
+    }
+  }
+}
+```
+
+3. 重启 Gateway 网关并打开：
+
+```bash
+openclaw gateway restart
+openclaw dashboard
+```
+
+这样 URL、认证和网关协议都保持官方一致，仅 UI 页面替换为你的中文版本。
+
 ## 3.5) 快速验证（2 分钟）
 
 ```bash
