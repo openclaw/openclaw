@@ -101,7 +101,7 @@ export const execSchema = Type.Object({
   env: Type.Optional(Type.Record(Type.String(), Type.String())),
   yieldMs: Type.Optional(
     Type.Number({
-      description: "Milliseconds to wait before backgrounding (default 10000)",
+      description: "Milliseconds to wait before backgrounding when yield mode is requested",
     }),
   ),
   background: Type.Optional(Type.Boolean({ description: "Run in background immediately" })),

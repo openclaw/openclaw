@@ -447,6 +447,16 @@ describe("exec tool backgrounding", () => {
     isWin ? 15_000 : 5_000,
   );
 
+  it("does not auto-background unless yield/background is explicitly requested", async () => {
+    const tool = createTestExecTool({ backgroundMs: 10 });
+    const result = await executeExecCommand(
+      tool,
+      joinCommands([longDelayCmd, shellEcho(OUTPUT_DONE)]),
+    );
+    expect(readProcessStatus(result.details)).toBe(PROCESS_STATUS_COMPLETED);
+    expect(readTextContent(result.content) ?? "").toContain(OUTPUT_DONE);
+  });
+
   it("supports explicit background and derives session name from the command", async () => {
     const sessionId = await startBackgroundCommand(execTool, COMMAND_ECHO_HELLO);
 
