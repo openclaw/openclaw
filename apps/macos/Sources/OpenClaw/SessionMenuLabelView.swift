@@ -1,7 +1,14 @@
 import SwiftUI
 
+private struct MenuItemHighlightedKey: EnvironmentKey {
+    nonisolated(unsafe) static let defaultValue: Bool = false
+}
+
 extension EnvironmentValues {
-    @Entry var menuItemHighlighted: Bool = false
+    var menuItemHighlighted: Bool {
+        get { self[MenuItemHighlightedKey.self] }
+        set { self[MenuItemHighlightedKey.self] = newValue }
+    }
 }
 
 struct SessionMenuLabelView: View {
@@ -21,7 +28,7 @@ struct SessionMenuLabelView: View {
                 height: self.barHeight)
 
             HStack(alignment: .firstTextBaseline, spacing: 2) {
-                Text(self.row.label)
+                Text(self.row.displayLabel)
                     .font(.caption.weight(self.row.key == "main" ? .semibold : .regular))
                     .foregroundStyle(MenuItemHighlightColors.primary(self.isHighlighted))
                     .lineLimit(1)

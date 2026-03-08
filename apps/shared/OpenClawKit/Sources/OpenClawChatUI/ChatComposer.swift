@@ -103,7 +103,7 @@ struct OpenClawChatComposer: View {
                 set: { next in self.viewModel.switchSession(to: next) }))
         {
             ForEach(self.viewModel.sessionChoices, id: \.key) { session in
-                Text(session.displayName ?? session.key)
+                Text(session.preferredLabel)
                     .font(.system(.caption, design: .monospaced))
                     .tag(session.key)
             }
@@ -225,8 +225,10 @@ struct OpenClawChatComposer: View {
 
     private var activeSessionLabel: String {
         let match = self.viewModel.sessions.first { $0.key == self.viewModel.sessionKey }
-        let trimmed = match?.displayName?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        return trimmed.isEmpty ? self.viewModel.sessionKey : trimmed
+        return OpenClawChatSessionEntry.preferredLabel(
+            forKey: self.viewModel.sessionKey,
+            label: match?.label,
+            displayName: match?.displayName)
     }
 
     private var editorOverlay: some View {
