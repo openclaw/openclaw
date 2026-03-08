@@ -794,7 +794,7 @@ function createMoonshotThinkingWrapper(
 function requiresAnthropicToolPayloadCompatibilityForModel(model: {
   api?: unknown;
   provider?: unknown;
-  baseUrl?: unknown;
+  compat?: unknown;
 }): boolean {
   if (model.api !== "anthropic-messages") {
     return false;
@@ -807,19 +807,49 @@ function requiresAnthropicToolPayloadCompatibilityForModel(model: {
     return true;
   }
 
-  if (typeof model.baseUrl !== "string" || !model.baseUrl.trim()) {
+  if (!model.compat || typeof model.compat !== "object" || Array.isArray(model.compat)) {
     return false;
   }
 
-  try {
-    const parsed = new URL(model.baseUrl);
-    const host = parsed.hostname.toLowerCase();
-    const pathname = parsed.pathname.toLowerCase();
-    return host.endsWith("kimi.com") && pathname.startsWith("/coding");
-  } catch {
-    const normalized = model.baseUrl.toLowerCase();
-    return normalized.includes("kimi.com/coding");
+  return (
+    (model.compat as { requiresOpenAiAnthropicToolPayload?: unknown })
+      .requiresOpenAiAnthropicToolPayload === true
+  );
+}
+
+function usesOpenAiFunctionAnthropicToolSchemaForModel(model: {
+  provider?: unknown;
+  compat?: unknown;
+}): boolean {
+  if (typeof model.provider === "string" && usesOpenAiFunctionAnthropicToolSchema(model.provider)) {
+    return true;
   }
+  if (!model.compat || typeof model.compat !== "object" || Array.isArray(model.compat)) {
+    return false;
+  }
+  return (
+    (model.compat as { requiresOpenAiAnthropicToolPayload?: unknown })
+      .requiresOpenAiAnthropicToolPayload === true
+  );
+}
+
+function usesOpenAiStringModeAnthropicToolChoiceForModel(model: {
+  provider?: unknown;
+  compat?: unknown;
+}): boolean {
+  if (
+    typeof model.provider === "string" &&
+    usesOpenAiStringModeAnthropicToolChoice(model.provider)
+  ) {
+    return true;
+  }
+  if (!model.compat || typeof model.compat !== "object" || Array.isArray(model.compat)) {
+    return false;
+  }
+  return (
+    (model.compat as { requiresOpenAiAnthropicToolPayload?: unknown })
+      .requiresOpenAiAnthropicToolPayload === true
+  );
 }
 
 function normalizeOpenAiFunctionAnthropicToolDefinition(
@@ -903,19 +933,21 @@ function createAnthropicToolPayloadCompatibilityWrapper(
     return underlying(model, context, {
       ...options,
       onPayload: (payload) => {
-        const provider = typeof model.provider === "string" ? model.provider : undefined;
         if (
           payload &&
           typeof payload === "object" &&
           requiresAnthropicToolPayloadCompatibilityForModel(model)
         ) {
           const payloadObj = payload as Record<string, unknown>;
-          if (Array.isArray(payloadObj.tools) && usesOpenAiFunctionAnthropicToolSchema(provider)) {
+          if (
+            Array.isArray(payloadObj.tools) &&
+            usesOpenAiFunctionAnthropicToolSchemaForModel(model)
+          ) {
             payloadObj.tools = payloadObj.tools
               .map((tool) => normalizeOpenAiFunctionAnthropicToolDefinition(tool))
               .filter((tool): tool is Record<string, unknown> => !!tool);
           }
-          if (usesOpenAiStringModeAnthropicToolChoice(provider)) {
+          if (usesOpenAiStringModeAnthropicToolChoiceForModel(model)) {
             payloadObj.tool_choice = normalizeOpenAiStringModeAnthropicToolChoice(
               payloadObj.tool_choice,
             );
