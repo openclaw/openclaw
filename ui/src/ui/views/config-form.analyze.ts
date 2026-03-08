@@ -39,7 +39,15 @@ function normalizeSchemaNode(
   const normalized: JsonSchema = { ...schema };
   const pathLabel = pathKey(path) || "<root>";
 
-  if (schema.anyOf || schema.oneOf || schema.allOf) {
+  if (schema.allOf) {
+    const composition = normalizeAllOf(schema, path);
+    if (composition) {
+      return composition;
+    }
+    return { schema, unsupportedPaths: [pathLabel] };
+  }
+
+  if (schema.anyOf || schema.oneOf) {
     const union = normalizeUnion(schema, path);
     if (union) {
       return union;
@@ -175,9 +183,6 @@ function normalizeUnion(
   schema: JsonSchema,
   path: Array<string | number>,
 ): ConfigSchemaAnalysis | null {
-  if (schema.allOf) {
-    return null;
-  }
   const union = schema.anyOf ?? schema.oneOf;
   if (!union) {
     return null;
@@ -264,5 +269,161 @@ function normalizeUnion(
     };
   }
 
+  const objectUnion = normalizeObjectComposition(schema, path, remaining, nullable);
+  if (objectUnion) {
+    return objectUnion;
+  }
+
   return null;
+}
+
+function normalizeAllOf(
+  schema: JsonSchema,
+  path: Array<string | number>,
+): ConfigSchemaAnalysis | null {
+  const entries = schema.allOf;
+  if (!entries || entries.length === 0) {
+    return null;
+  }
+  return normalizeObjectComposition(schema, path, entries, Boolean(schema.nullable));
+}
+
+function normalizeObjectComposition(
+  schema: JsonSchema,
+  path: Array<string | number>,
+  entries: JsonSchema[],
+  nullable: boolean,
+): ConfigSchemaAnalysis | null {
+  if (entries.length === 0) {
+    return null;
+  }
+
+  const pathLabel = pathKey(path) || "<root>";
+  const unsupported = new Set<string>();
+  const normalized: JsonSchema = {
+    ...schema,
+    type: "object",
+    properties: {},
+    anyOf: undefined,
+    oneOf: undefined,
+    allOf: undefined,
+    nullable,
+  };
+
+  for (const entry of entries) {
+    if (!entry || typeof entry !== "object") {
+      return null;
+    }
+
+    const res = normalizeSchemaNode(entry, path);
+    if (!res.schema || schemaType(res.schema) !== "object") {
+      return null;
+    }
+    if (res.unsupportedPaths.includes(pathLabel)) {
+      return null;
+    }
+
+    normalized.nullable = Boolean(normalized.nullable || res.schema.nullable);
+
+    for (const issue of res.unsupportedPaths) {
+      unsupported.add(issue);
+    }
+
+    for (const [key, value] of Object.entries(res.schema.properties ?? {})) {
+      const existing = normalized.properties?.[key];
+      if (!existing) {
+        normalized.properties = {
+          ...(normalized.properties ?? {}),
+          [key]: value,
+        };
+        continue;
+      }
+
+      const mergedProperty = mergeObjectMember(existing, value, [...path, key]);
+      if (!mergedProperty) {
+        return null;
+      }
+
+      normalized.properties = {
+        ...(normalized.properties ?? {}),
+        [key]: mergedProperty.schema,
+      };
+      for (const issue of mergedProperty.unsupportedPaths) {
+        unsupported.add(issue);
+      }
+    }
+
+    const mergedAdditional = mergeAdditionalProperties(
+      normalized.additionalProperties,
+      res.schema.additionalProperties,
+      [...path, "*"],
+    );
+    if (mergedAdditional === null) {
+      return null;
+    }
+    if (mergedAdditional !== undefined) {
+      normalized.additionalProperties = mergedAdditional;
+    }
+  }
+
+  return {
+    schema: normalized,
+    unsupportedPaths: Array.from(unsupported),
+  };
+}
+
+function mergeObjectMember(
+  left: JsonSchema,
+  right: JsonSchema,
+  path: Array<string | number>,
+): ConfigSchemaAnalysis | null {
+  if (JSON.stringify(left) === JSON.stringify(right)) {
+    return {
+      schema: {
+        ...left,
+        nullable: Boolean(left.nullable || right.nullable),
+      },
+      unsupportedPaths: [],
+    };
+  }
+
+  if (schemaType(left) === "object" && schemaType(right) === "object") {
+    return normalizeObjectComposition({ type: "object" }, path, [left, right], false);
+  }
+
+  return null;
+}
+
+function mergeAdditionalProperties(
+  left: JsonSchema | boolean | undefined,
+  right: JsonSchema | boolean | undefined,
+  path: Array<string | number>,
+): JsonSchema | boolean | undefined | null {
+  if (right === undefined) {
+    return left;
+  }
+  if (left === undefined) {
+    return right;
+  }
+  if (left === right) {
+    return left;
+  }
+
+  const normalizedLeft = left === true ? {} : left;
+  const normalizedRight = right === true ? {} : right;
+
+  if (left === false || right === false) {
+    return normalizedLeft === normalizedRight ? left : null;
+  }
+
+  if (isAnySchema(normalizedLeft) || isAnySchema(normalizedRight)) {
+    return isAnySchema(normalizedLeft) ? normalizedRight : normalizedLeft;
+  }
+
+  if (JSON.stringify(normalizedLeft) === JSON.stringify(normalizedRight)) {
+    return normalizedLeft;
+  }
+
+  const merged = mergeObjectMember(normalizedLeft, normalizedRight, path);
+  return merged?.schema ?? null;
 }

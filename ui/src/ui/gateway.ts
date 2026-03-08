@@ -207,26 +207,28 @@ export class GatewayBrowserClient {
       | undefined;
 
     if (isSecureContext && deviceIdentity) {
-      const signedAtMs = Date.now();
-      const nonce = this.connectNonce ?? "";
-      const payload = buildDeviceAuthPayload({
-        deviceId: deviceIdentity.deviceId,
-        clientId: this.opts.clientName ?? GATEWAY_CLIENT_NAMES.CONTROL_UI,
-        clientMode: this.opts.mode ?? GATEWAY_CLIENT_MODES.WEBCHAT,
-        role,
-        scopes,
-        signedAtMs,
-        token: authToken ?? null,
-        nonce,
-      });
-      const signature = await signDevicePayload(deviceIdentity.privateKey, payload);
-      device = {
-        id: deviceIdentity.deviceId,
-        publicKey: deviceIdentity.publicKey,
-        signature,
-        signedAt: signedAtMs,
-        nonce,
-      };
+      const nonce = this.connectNonce?.trim() ?? "";
+      if (nonce) {
+        const signedAtMs = Date.now();
+        const payload = buildDeviceAuthPayload({
+          deviceId: deviceIdentity.deviceId,
+          clientId: this.opts.clientName ?? GATEWAY_CLIENT_NAMES.CONTROL_UI,
+          clientMode: this.opts.mode ?? GATEWAY_CLIENT_MODES.WEBCHAT,
+          role,
+          scopes,
+          signedAtMs,
+          token: authToken ?? null,
+          nonce,
+        });
+        const signature = await signDevicePayload(deviceIdentity.privateKey, payload);
+        device = {
+          id: deviceIdentity.deviceId,
+          publicKey: deviceIdentity.publicKey,
+          signature,
+          signedAt: signedAtMs,
+          nonce,
+        };
+      }
     }
     const params = {
       minProtocol: 3,
@@ -293,6 +295,10 @@ export class GatewayBrowserClient {
         const nonce = payload && typeof payload.nonce === "string" ? payload.nonce : null;
         if (nonce) {
           this.connectNonce = nonce;
+          if (this.connectTimer !== null) {
+            window.clearTimeout(this.connectTimer);
+            this.connectTimer = null;
+          }
           void this.sendConnect();
         }
         return;
@@ -354,7 +360,12 @@ export class GatewayBrowserClient {
       window.clearTimeout(this.connectTimer);
     }
     this.connectTimer = window.setTimeout(() => {
-      void this.sendConnect();
+      // Only send without nonce if crypto.subtle is unavailable (insecure
+      // context / non-device-auth gateway).  When device auth is possible,
+      // wait for the connect.challenge event that provides the nonce.
+      if (this.connectNonce !== null || typeof crypto === 'undefined' || !crypto.subtle) {
+        void this.sendConnect();
+      }
     }, 750);
   }
 }

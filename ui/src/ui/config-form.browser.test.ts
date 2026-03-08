@@ -395,6 +395,125 @@ describe("config form renderer", () => {
     expect(analysis.unsupportedPaths).toContain("mixed");
   });
 
+  it("normalizes object allOf compositions", () => {
+    const schema = {
+      type: "object",
+      properties: {
+        channel: {
+          allOf: [
+            {
+              type: "object",
+              properties: {
+                enabled: { type: "boolean" },
+              },
+            },
+            {
+              type: "object",
+              properties: {
+                username: { type: "string" },
+              },
+            },
+          ],
+        },
+      },
+    };
+
+    const analysis = analyzeConfigSchema(schema);
+    expect(analysis.unsupportedPaths).not.toContain("channel");
+    expect(analysis.schema?.properties?.channel?.type).toBe("object");
+    expect(analysis.schema?.properties?.channel?.properties?.enabled?.type).toBe("boolean");
+    expect(analysis.schema?.properties?.channel?.properties?.username?.type).toBe("string");
+  });
+
+  it("renders Twitch-like channel schemas composed with object unions", () => {
+    const container = document.createElement("div");
+    const schema = {
+      type: "object",
+      properties: {
+        channels: {
+          type: "object",
+          properties: {
+            twitch: {
+              anyOf: [
+                {
+                  allOf: [
+                    {
+                      type: "object",
+                      properties: {
+                        name: { type: "string" },
+                        enabled: { type: "boolean" },
+                      },
+                    },
+                    {
+                      type: "object",
+                      properties: {
+                        username: { type: "string" },
+                        accessToken: { type: "string" },
+                        channel: { type: "string" },
+                      },
+                    },
+                  ],
+                },
+                {
+                  allOf: [
+                    {
+                      type: "object",
+                      properties: {
+                        name: { type: "string" },
+                        enabled: { type: "boolean" },
+                      },
+                    },
+                    {
+                      type: "object",
+                      properties: {
+                        accounts: {
+                          type: "object",
+                          additionalProperties: {
+                            type: "object",
+                            properties: {
+                              username: { type: "string" },
+                            },
+                          },
+                        },
+                      },
+                    },
+                  ],
+                },
+              ],
+            },
+          },
+        },
+      },
+    };
+
+    const analysis = analyzeConfigSchema(schema);
+    expect(analysis.unsupportedPaths).not.toContain("channels.twitch");
+
+    render(
+      renderChannelConfigForm({
+        channelId: "twitch",
+        configValue: {
+          channels: {
+            twitch: {
+              enabled: true,
+              username: "streamer",
+            },
+          },
+        },
+        schema,
+        uiHints: {},
+        disabled: false,
+        onPatch: vi.fn(),
+      }),
+      container,
+    );
+
+    expect(container.textContent).toContain("Enabled");
+    expect(container.textContent).toContain("Username");
+    expect(container.textContent).toContain("Accounts");
+    expect(container.textContent).not.toContain("Use Raw mode");
+  });
+
   it("supports nullable types", () => {
     const schema = {
       type: "object",
