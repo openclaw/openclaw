@@ -766,4 +766,26 @@ describe("doctor config flow", () => {
 
     expectGoogleChatDmAllowFromRepaired(result.cfg);
   });
+
+  it("strips unknown channel-level keys even when ChannelsSchema uses passthrough", async () => {
+    // ChannelsSchema uses .passthrough() to allow extension channel plugin keys (matrix, nostr, etc.).
+    // This causes OpenClawSchema.safeParse() to return success=true even when the config contains
+    // a key that is not part of the core schema or any installed plugin. Without the fix, those
+    // passthrough-accepted keys would never be removed by doctor --fix.
+    const result = await runDoctorConfigWithInput({
+      repair: true,
+      config: {
+        channels: {
+          telegram: { botToken: "tok" },
+          // "typo_channel" is not a recognized core channel key; it should be stripped.
+          typo_channel: { enabled: true },
+        },
+      },
+      run: loadAndMaybeMigrateDoctorConfig,
+    });
+
+    const cfg = result.cfg as { channels: Record<string, unknown> };
+    expect(cfg.channels.telegram).toBeDefined();
+    expect(cfg.channels.typo_channel).toBeUndefined();
+  });
 });

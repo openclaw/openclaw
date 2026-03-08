@@ -108,21 +108,82 @@ function resolvePathTarget(root: unknown, path: Array<string | number>): unknown
   return current;
 }
 
+/**
+ * Collect unrecognized keys from sub-schemas that use .passthrough() instead of .strict().
+ *
+ * `ChannelsSchema` uses `.passthrough()` so that extension channel plugins (matrix, nostr,
+ * zalo, etc.) can add their own keys without breaking schema validation. However, this means
+ * `OpenClawSchema.safeParse()` returns `success: true` even when the config contains keys
+ * that are not part of the core schema and not provided by any installed plugin. Those
+ * passthrough-accepted keys are never surfaced as `unrecognized_keys` Zod issues, so the
+ * main parse loop below would miss them entirely.
+ *
+ * We detect them here by introspecting the known shape of the inner object schema (after
+ * unwrapping the outer `ZodOptional`) and comparing it against the actual keys present in
+ * the config at that path. Any key present in the config but absent from the schema shape
+ * is treated as an unrecognized key and returned as a synthetic issue for the stripping loop.
+ */
+function collectPassthroughUnknownKeyIssues(config: OpenClawConfig): UnrecognizedKeysIssue[] {
+  const issues: UnrecognizedKeysIssue[] = [];
+
+  // ChannelsSchema is optional (ZodOptional wrapping a ZodObject with .passthrough()).
+  // We need the inner ZodObject to access its .shape.
+  const channelsOptional = OpenClawSchema.shape.channels as {
+    _def?: { innerType?: { shape?: Record<string, unknown> } };
+  };
+  const channelsInnerShape = channelsOptional?._def?.innerType?.shape;
+  if (!channelsInnerShape) {
+    return issues;
+  }
+
+  const channelsRaw = config.channels;
+  if (!channelsRaw || typeof channelsRaw !== "object" || Array.isArray(channelsRaw)) {
+    return issues;
+  }
+
+  const knownChannelKeys = new Set(Object.keys(channelsInnerShape));
+  const unknownKeys: string[] = [];
+  for (const key of Object.keys(channelsRaw as Record<string, unknown>)) {
+    if (!knownChannelKeys.has(key)) {
+      unknownKeys.push(key);
+    }
+  }
+
+  if (unknownKeys.length > 0) {
+    issues.push({
+      code: "unrecognized_keys",
+      keys: unknownKeys,
+      path: ["channels"],
+      message: `Unrecognized key(s) in channels: ${unknownKeys.join(", ")}`,
+    });
+  }
+
+  return issues;
+}
+
 function stripUnknownConfigKeys(config: OpenClawConfig): {
   config: OpenClawConfig;
   removed: string[];
 } {
   const parsed = OpenClawSchema.safeParse(config);
-  if (parsed.success) {
+
+  // Collect issues from the main strict-schema parse (covers all .strict() sub-schemas).
+  const strictIssues: UnrecognizedKeysIssue[] = parsed.success
+    ? []
+    : parsed.error.issues.filter(isUnrecognizedKeysIssue);
+
+  // Also collect unknown keys from .passthrough() sub-schemas (e.g. ChannelsSchema),
+  // which safeParse accepts silently without emitting unrecognized_keys errors.
+  const passthroughIssues = collectPassthroughUnknownKeyIssues(config);
+
+  const allIssues = [...strictIssues, ...passthroughIssues];
+  if (allIssues.length === 0) {
     return { config, removed: [] };
   }
 
   const next = structuredClone(config);
   const removed: string[] = [];
-  for (const issue of parsed.error.issues) {
-    if (!isUnrecognizedKeysIssue(issue)) {
-      continue;
-    }
+  for (const issue of allIssues) {
     const path = normalizeIssuePath(issue.path);
     const target = resolvePathTarget(next, path);
     if (!target || typeof target !== "object" || Array.isArray(target)) {
