@@ -176,6 +176,51 @@ const logRunner = (message, deps) => {
   deps.stderr.write(`[openclaw] ${message}\n`);
 };
 
+const resolvePnpmCommand = (deps) => {
+  if (deps.platform === "win32") {
+    const pnpmCheck = deps.spawnSync("cmd.exe", ["/d", "/s", "/c", "where pnpm"], {
+      cwd: deps.cwd,
+      env: deps.env,
+      stdio: "ignore",
+    });
+    if (pnpmCheck.status === 0) {
+      return { command: "cmd.exe", args: ["/d", "/s", "/c", "pnpm", ...compilerArgs] };
+    }
+
+    const corepackCheck = deps.spawnSync("cmd.exe", ["/d", "/s", "/c", "where corepack"], {
+      cwd: deps.cwd,
+      env: deps.env,
+      stdio: "ignore",
+    });
+    if (corepackCheck.status === 0) {
+      return {
+        command: "cmd.exe",
+        args: ["/d", "/s", "/c", "corepack", "pnpm", ...compilerArgs],
+      };
+    }
+  } else {
+    const pnpmCheck = deps.spawnSync("sh", ["-lc", "command -v pnpm"], {
+      cwd: deps.cwd,
+      env: deps.env,
+      stdio: "ignore",
+    });
+    if (pnpmCheck.status === 0) {
+      return { command: "pnpm", args: compilerArgs };
+    }
+
+    const corepackCheck = deps.spawnSync("sh", ["-lc", "command -v corepack"], {
+      cwd: deps.cwd,
+      env: deps.env,
+      stdio: "ignore",
+    });
+    if (corepackCheck.status === 0) {
+      return { command: "corepack", args: ["pnpm", ...compilerArgs] };
+    }
+  }
+
+  return null;
+};
+
 const runOpenClaw = async (deps) => {
   const nodeProcess = deps.spawn(deps.execPath, ["openclaw.mjs", ...deps.args], {
     cwd: deps.cwd,
@@ -231,10 +276,12 @@ export async function runNodeMain(params = {}) {
   }
 
   logRunner("Building TypeScript (dist is stale).", deps);
-  const buildCmd = deps.platform === "win32" ? "cmd.exe" : "pnpm";
-  const buildArgs =
-    deps.platform === "win32" ? ["/d", "/s", "/c", "pnpm", ...compilerArgs] : compilerArgs;
-  const build = deps.spawn(buildCmd, buildArgs, {
+  const buildPlan = resolvePnpmCommand(deps);
+  if (!buildPlan) {
+    logRunner("Neither pnpm nor corepack was found in PATH.", deps);
+    return 1;
+  }
+  const build = deps.spawn(buildPlan.command, buildPlan.args, {
     cwd: deps.cwd,
     env: deps.env,
     stdio: "inherit",

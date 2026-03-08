@@ -63,11 +63,22 @@ if (-not $publicUrl) {
 Write-Host "[Ngrok] Public Webhook URL: $publicUrl" -ForegroundColor Green
 
 Write-Host "  -> Injecting dynamic URLs into .env..." -ForegroundColor Yellow
+$envMap = Get-EnvMap -EnvFile $EnvFile
+$lineWebhookPath = [string]$envMap["LINE_WEBHOOK_PATH"]
+if (-not $lineWebhookPath) {
+    $lineWebhookPath = "/line/webhook"
+}
+if (-not $lineWebhookPath.StartsWith("/")) {
+    $lineWebhookPath = "/$lineWebhookPath"
+}
+
 Set-EnvValues -EnvFile $EnvFile -Values @{
     WEBHOOK_BASE_URL      = $publicUrl
     CLAWDBOT_PUBLIC_URL   = $publicUrl
     OPENCLAW_PUBLIC_URL   = $publicUrl
     NGROK_TUNNEL_URL      = $publicUrl
     OPENCLAW_GATEWAY_PORT = $Port
+    OPENCLAW_PUBLIC_GATEWAY_URL = $publicUrl
+    LINE_WEBHOOK_URL      = "$publicUrl$lineWebhookPath"
 }
 Write-Host "[Ngrok] Injection complete." -ForegroundColor Green
