@@ -427,7 +427,8 @@ function computeNextProfileUsageStats(params: {
       recomputedUntil: params.now + backoffMs,
     });
     updatedStats.disabledReason = params.reason;
-  } else {
+  } else if (params.reason !== "timeout" && params.reason !== "format") {
+    // timeout/format aren't auth failures — skip cooldown
     const backoffMs = calculateAuthProfileCooldownMs(nextErrorCount);
     // Keep active cooldown windows immutable so retries within the window
     // cannot push recovery further out.
