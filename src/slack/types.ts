@@ -43,6 +43,7 @@ export type SlackMessageEvent = {
   channel_type?: "im" | "mpim" | "channel" | "group";
   files?: SlackFile[];
   attachments?: SlackAttachment[];
+  blocks?: unknown[];
 };
 
 export type SlackAppMentionEvent = {

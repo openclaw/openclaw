@@ -1,4 +1,6 @@
+import type { Block, KnownBlock } from "@slack/web-api";
 import { logVerbose } from "../../../globals.js";
+import { extractAllSlackBlocksText } from "../../blocks-fallback.js";
 import type { SlackFile, SlackMessageEvent } from "../../types.js";
 import {
   MAX_SLACK_MEDIA_FILES,
@@ -85,11 +87,17 @@ export async function resolveSlackMessageContent(params: {
           .join("\n")
       : undefined;
 
+  const botBlocksText =
+    params.isBotMessage && !botAttachmentText && params.message.blocks?.length
+      ? extractAllSlackBlocksText(params.message.blocks as (Block | KnownBlock)[]) || undefined
+      : undefined;
+
   const rawBody =
     [
       (params.message.text ?? "").trim(),
       attachmentContent?.text,
       botAttachmentText,
+      botBlocksText,
       mediaPlaceholder,
       fileOnlyPlaceholder,
     ]
