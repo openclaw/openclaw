@@ -56,6 +56,20 @@ const SessionsSpawnToolSchema = Type.Object({
       mountPath: Type.Optional(Type.String()),
     }),
   ),
+
+  // Workspace context injection: inject specific project files into the sub-agent's system prompt.
+  contextFiles: Type.Optional(
+    Type.Array(Type.String(), {
+      description:
+        'Workspace context files to inject into the sub-agent system prompt (e.g. ["TOOLS.md", "AGENTS.md"]). Paths must be simple filenames relative to the workspace root.',
+    }),
+  ),
+  inheritContext: Type.Optional(
+    Type.Boolean({
+      description:
+        "When true, automatically inherit all standard workspace project context files (AGENTS.md, SOUL.md, TOOLS.md, USER.md) into the sub-agent system prompt.",
+    }),
+  ),
 });
 
 export function createSessionsSpawnTool(opts?: {
@@ -160,6 +174,11 @@ export function createSessionsSpawnTool(opts?: {
         return jsonResult(result);
       }
 
+      const contextFiles = Array.isArray(params.contextFiles)
+        ? (params.contextFiles as string[]).filter((f) => typeof f === "string")
+        : undefined;
+      const inheritContext = params.inheritContext === true;
+
       const result = await spawnSubagentDirect(
         {
           task,
@@ -178,6 +197,8 @@ export function createSessionsSpawnTool(opts?: {
             params.attachAs && typeof params.attachAs === "object"
               ? readStringParam(params.attachAs as Record<string, unknown>, "mountPath")
               : undefined,
+          contextFiles: contextFiles && contextFiles.length > 0 ? contextFiles : undefined,
+          inheritContext: inheritContext || undefined,
         },
         {
           agentSessionKey: opts?.agentSessionKey,
