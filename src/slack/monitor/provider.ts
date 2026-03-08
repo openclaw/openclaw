@@ -1,5 +1,7 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import SlackBolt from "@slack/bolt";
+import type { SessionScope } from "../../config/sessions.js";
+import type { MonitorSlackOpts } from "./types.js";
 import { resolveTextChunkLimit } from "../../auto-reply/chunk.js";
 import { DEFAULT_GROUP_HISTORY_LIMIT } from "../../auto-reply/reply/history.js";
 import {
@@ -16,12 +18,11 @@ import {
   resolveDefaultGroupPolicy,
   warnMissingProviderGroupPolicyFallbackOnce,
 } from "../../config/runtime-group-policy.js";
-import type { SessionScope } from "../../config/sessions.js";
 import { normalizeResolvedSecretInputString } from "../../config/types.secrets.js";
 import { createConnectedChannelStatusPatch } from "../../gateway/channel-status-patches.js";
 import { warn } from "../../globals.js";
 import { computeBackoff, sleepWithAbort } from "../../infra/backoff.js";
-import { installRequestBodyLimitGuard } from "../../infra/http-body.js";
+import { installRequestBodyLimitGuard, readJsonBodyWithLimit } from "../../infra/http-body.js";
 import { normalizeMainKey } from "../../routing/session-key.js";
 import { createNonExitingRuntime, type RuntimeEnv } from "../../runtime.js";
 import { normalizeStringEntries } from "../../shared/string-normalization.js";
@@ -44,7 +45,6 @@ import {
   waitForSlackSocketDisconnect,
 } from "./reconnect-policy.js";
 import { registerSlackMonitorSlashCommands } from "./slash.js";
-import type { MonitorSlackOpts } from "./types.js";
 
 const slackBoltModule = SlackBolt as typeof import("@slack/bolt") & {
   default?: typeof import("@slack/bolt");
@@ -57,6 +57,58 @@ const { App, HTTPReceiver } = slackBolt;
 
 const SLACK_WEBHOOK_MAX_BODY_BYTES = 1024 * 1024;
 const SLACK_WEBHOOK_BODY_TIMEOUT_MS = 30_000;
+
+function readSingleHeader(req: IncomingMessage, name: string): string {
+  const raw = req.headers[name];
+  if (Array.isArray(raw)) {
+    return raw[0]?.trim() ?? "";
+  }
+  return typeof raw === "string" ? raw.trim() : "";
+}
+
+function isSlackUrlVerificationPayload(value: unknown): value is { challenge: string } {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    !Array.isArray(value) &&
+    (value as { type?: unknown }).type === "url_verification" &&
+    typeof (value as { challenge?: unknown }).challenge === "string"
+  );
+}
+
+async function maybeHandleUnsignedSlackUrlVerification(
+  req: IncomingMessage,
+  res: ServerResponse,
+): Promise<boolean> {
+  if (readSingleHeader(req, "x-slack-signature")) {
+    return false;
+  }
+
+  const body = await readJsonBodyWithLimit(req, {
+    maxBytes: SLACK_WEBHOOK_MAX_BODY_BYTES,
+    timeoutMs: SLACK_WEBHOOK_BODY_TIMEOUT_MS,
+    emptyObjectOnEmpty: false,
+  });
+  if (!body.ok) {
+    res.statusCode =
+      body.code === "PAYLOAD_TOO_LARGE" ? 413 : body.code === "REQUEST_BODY_TIMEOUT" ? 408 : 400;
+    res.setHeader("content-type", "text/plain; charset=utf-8");
+    res.end(body.error);
+    return true;
+  }
+
+  if (isSlackUrlVerificationPayload(body.value)) {
+    res.statusCode = 200;
+    res.setHeader("content-type", "application/json; charset=utf-8");
+    res.end(JSON.stringify({ challenge: body.value.challenge }));
+    return true;
+  }
+
+  res.statusCode = 401;
+  res.setHeader("content-type", "text/plain; charset=utf-8");
+  res.end("invalid slack signature");
+  return true;
+}
 
 function parseApiAppIdFromAppToken(raw?: string) {
   const token = raw?.trim();
@@ -210,6 +262,9 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
   const slackHttpHandler =
     slackMode === "http" && receiver
       ? async (req: IncomingMessage, res: ServerResponse) => {
+          if (await maybeHandleUnsignedSlackUrlVerification(req, res)) {
+            return;
+          }
           const guard = installRequestBodyLimitGuard(req, res, {
             maxBytes: SLACK_WEBHOOK_MAX_BODY_BYTES,
             timeoutMs: SLACK_WEBHOOK_BODY_TIMEOUT_MS,
@@ -517,4 +572,5 @@ export const __testing = {
   resolveDefaultGroupPolicy,
   getSocketEmitter,
   waitForSlackSocketDisconnect,
+  maybeHandleUnsignedSlackUrlVerification,
 };
