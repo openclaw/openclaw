@@ -114,6 +114,9 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
     mediaTypes?: string[];
     commandAuthorized: boolean;
     wasMentioned?: boolean;
+    replyToId?: string;
+    replyToBody?: string;
+    replyToSender?: string;
   };
 
   async function handleSignalInboundMessage(entry: SignalInboundEntry) {
@@ -214,6 +217,10 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       MediaTypes: entry.mediaTypes,
       WasMentioned: entry.isGroup ? entry.wasMentioned === true : undefined,
       CommandAuthorized: entry.commandAuthorized,
+      ReplyToId: entry.replyToId,
+      ReplyToBody: entry.replyToBody,
+      ReplyToSender: entry.replyToSender,
+      ReplyToIsQuote: entry.replyToId || entry.replyToBody ? true : undefined,
       OriginatingChannel: "signal" as const,
       OriginatingTo: signalTo,
     });
@@ -778,6 +785,18 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
     const senderName = envelope.sourceName ?? senderDisplay;
     const messageId =
       typeof envelope.timestamp === "number" ? String(envelope.timestamp) : undefined;
+
+    // Extract reply/quote context from Signal's quote field.
+    // signal-cli provides id (timestamp of quoted msg), text, and author identifiers.
+    const quote = dataMessage.quote;
+    const replyToId = typeof quote?.id === "number" ? String(quote.id) : undefined;
+    const replyToBody = quote?.text?.trim() || undefined;
+    const replyToSender =
+      quote?.authorNumber?.trim() ||
+      quote?.authorUuid?.trim() ||
+      quote?.author?.trim() ||
+      undefined;
+
     await inboundDebouncer.enqueue({
       senderName,
       senderDisplay,
@@ -796,6 +815,9 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       mediaTypes: mediaTypes.length > 0 ? mediaTypes : undefined,
       commandAuthorized,
       wasMentioned: effectiveWasMentioned,
+      replyToId,
+      replyToBody,
+      replyToSender,
     });
   };
 }

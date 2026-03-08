@@ -235,6 +235,91 @@ describe("signal createSignalEventHandler inbound context", () => {
     expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
   });
 
+  it("extracts reply/quote context into ReplyTo fields", async () => {
+    const handler = createSignalEventHandler(
+      createBaseSignalEventHandlerDeps({
+        // oxlint-disable-next-line typescript/no-explicit-any
+        cfg: { messages: { inbound: { debounceMs: 0 } } } as any,
+        historyLimit: 0,
+      }),
+    );
+
+    await handler(
+      createSignalReceiveEvent({
+        dataMessage: {
+          message: "what about this?",
+          attachments: [],
+          quote: {
+            id: 1700000099000,
+            text: "the original message",
+            authorNumber: "+15550003333",
+          },
+        },
+      }),
+    );
+
+    expect(capture.ctx).toBeTruthy();
+    expect(capture.ctx?.ReplyToId).toBe("1700000099000");
+    expect(capture.ctx?.ReplyToBody).toBe("the original message");
+    expect(capture.ctx?.ReplyToSender).toBe("+15550003333");
+    expect(capture.ctx?.ReplyToIsQuote).toBe(true);
+  });
+
+  it("extracts quote context with UUID author when no phone number", async () => {
+    const handler = createSignalEventHandler(
+      createBaseSignalEventHandlerDeps({
+        // oxlint-disable-next-line typescript/no-explicit-any
+        cfg: { messages: { inbound: { debounceMs: 0 } } } as any,
+        historyLimit: 0,
+      }),
+    );
+
+    await handler(
+      createSignalReceiveEvent({
+        dataMessage: {
+          message: "replying here",
+          attachments: [],
+          quote: {
+            id: 1700000088000,
+            text: "quoted text",
+            authorUuid: "abc-def-123",
+          },
+        },
+      }),
+    );
+
+    expect(capture.ctx).toBeTruthy();
+    expect(capture.ctx?.ReplyToId).toBe("1700000088000");
+    expect(capture.ctx?.ReplyToBody).toBe("quoted text");
+    expect(capture.ctx?.ReplyToSender).toBe("abc-def-123");
+    expect(capture.ctx?.ReplyToIsQuote).toBe(true);
+  });
+
+  it("does not set ReplyTo fields when no quote is present", async () => {
+    const handler = createSignalEventHandler(
+      createBaseSignalEventHandlerDeps({
+        // oxlint-disable-next-line typescript/no-explicit-any
+        cfg: { messages: { inbound: { debounceMs: 0 } } } as any,
+        historyLimit: 0,
+      }),
+    );
+
+    await handler(
+      createSignalReceiveEvent({
+        dataMessage: {
+          message: "plain message",
+          attachments: [],
+        },
+      }),
+    );
+
+    expect(capture.ctx).toBeTruthy();
+    expect(capture.ctx?.ReplyToId).toBeUndefined();
+    expect(capture.ctx?.ReplyToBody).toBeUndefined();
+    expect(capture.ctx?.ReplyToSender).toBeUndefined();
+    expect(capture.ctx?.ReplyToIsQuote).toBeUndefined();
+  });
+
   it("drops sync envelopes when syncMessage is present but null", async () => {
     const handler = createSignalEventHandler(
       createBaseSignalEventHandlerDeps({
