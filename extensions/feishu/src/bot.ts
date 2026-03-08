@@ -1356,6 +1356,9 @@ export async function handleFeishuMessage(params: {
       (groupConfig?.replyInThread ?? feishuCfg?.replyInThread ?? "disabled") === "enabled";
     const replyTargetMessageId =
       isTopicSession || configReplyInThread ? (ctx.rootId ?? ctx.messageId) : ctx.messageId;
+    // Typing indicator should be added to the new message, not the reply target.
+    // When replying, ctx.messageId is the new message, ctx.rootId is the reply target.
+    const typingTargetMessageId = ctx.messageId;
     const threadReply = isGroup ? (groupSession?.threadReply ?? false) : false;
 
     if (broadcastAgents) {
@@ -1407,6 +1410,7 @@ export async function handleFeishuMessage(params: {
             runtime: runtime as RuntimeEnv,
             chatId: ctx.chatId,
             replyToMessageId: replyTargetMessageId,
+            typingTargetMessageId,
             skipReplyToInMessages: !isGroup,
             replyInThread,
             rootId: ctx.rootId,
@@ -1505,6 +1509,7 @@ export async function handleFeishuMessage(params: {
         runtime: runtime as RuntimeEnv,
         chatId: ctx.chatId,
         replyToMessageId: replyTargetMessageId,
+        typingTargetMessageId,
         skipReplyToInMessages: !isGroup,
         replyInThread,
         rootId: ctx.rootId,
