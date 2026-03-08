@@ -1,3 +1,4 @@
+import { resolveChannelDefaultAccountId } from "../channels/plugins/helpers.js";
 import { listChannelPlugins } from "../channels/plugins/index.js";
 import type { ChannelId } from "../channels/plugins/types.js";
 import { formatCliCommand } from "../cli/command-format.js";
@@ -8,7 +9,6 @@ import { resolveGatewayAuth } from "../gateway/auth.js";
 import { isLoopbackHost, resolveGatewayBindHost } from "../gateway/net.js";
 import { resolveDmAllowState } from "../security/dm-policy-shared.js";
 import { note } from "../terminal/note.js";
-import { resolveDefaultChannelAccountContext } from "./channel-account-context.js";
 
 function collectImplicitHeartbeatDirectPolicyWarnings(cfg: OpenClawConfig): string[] {
   const warnings: string[] = [];
@@ -189,40 +189,57 @@ export async function noteSecurityWarnings(cfg: OpenClawConfig) {
     if (!plugin.security) {
       continue;
     }
-    const { defaultAccountId, account, enabled, configured } =
-      await resolveDefaultChannelAccountContext(plugin, cfg);
-    if (!enabled) {
-      continue;
-    }
-    if (!configured) {
-      continue;
-    }
-    const dmPolicy = plugin.security.resolveDmPolicy?.({
+    const accountIds = plugin.config.listAccountIds(cfg);
+    const defaultAccountId = resolveChannelDefaultAccountId({
+      plugin,
       cfg,
-      accountId: defaultAccountId,
-      account,
+      accountIds,
     });
-    if (dmPolicy) {
-      await warnDmPolicy({
-        label: plugin.meta.label ?? plugin.id,
-        provider: plugin.id,
-        accountId: defaultAccountId,
-        dmPolicy: dmPolicy.policy,
-        allowFrom: dmPolicy.allowFrom,
-        policyPath: dmPolicy.policyPath,
-        allowFromPath: dmPolicy.allowFromPath,
-        approveHint: dmPolicy.approveHint,
-        normalizeEntry: dmPolicy.normalizeEntry,
-      });
-    }
-    if (plugin.security.collectWarnings) {
-      const extra = await plugin.security.collectWarnings({
+    const orderedAccountIds = Array.from(new Set([defaultAccountId, ...accountIds]));
+
+    for (const accountId of orderedAccountIds) {
+      const account = plugin.config.resolveAccount(cfg, accountId);
+      const enabled = plugin.config.isEnabled ? plugin.config.isEnabled(account, cfg) : true;
+      if (!enabled) {
+        continue;
+      }
+      const configured = plugin.config.isConfigured
+        ? await plugin.config.isConfigured(account, cfg)
+        : true;
+      if (!configured) {
+        continue;
+      }
+      const accountLabel =
+        orderedAccountIds.length > 1
+          ? `${plugin.meta.label ?? plugin.id} (${accountId})`
+          : (plugin.meta.label ?? plugin.id);
+      const dmPolicy = plugin.security.resolveDmPolicy?.({
         cfg,
-        accountId: defaultAccountId,
+        accountId,
         account,
       });
-      if (extra?.length) {
-        warnings.push(...extra);
+      if (dmPolicy) {
+        await warnDmPolicy({
+          label: accountLabel,
+          provider: plugin.id,
+          accountId,
+          dmPolicy: dmPolicy.policy,
+          allowFrom: dmPolicy.allowFrom,
+          policyPath: dmPolicy.policyPath,
+          allowFromPath: dmPolicy.allowFromPath,
+          approveHint: dmPolicy.approveHint,
+          normalizeEntry: dmPolicy.normalizeEntry,
+        });
+      }
+      if (plugin.security.collectWarnings) {
+        const extra = await plugin.security.collectWarnings({
+          cfg,
+          accountId,
+          account,
+        });
+        if (extra?.length) {
+          warnings.push(...extra);
+        }
       }
     }
   }
