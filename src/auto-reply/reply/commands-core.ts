@@ -235,8 +235,10 @@ export async function handleCommands(params: HandleCommandsParams): Promise<Comm
     }
 
     // Trigger learning before reset/new commands (after ACP target resolution)
+    // Run in background - don't await, so reset happens immediately
     if (targetSessionEntry?.sessionId && targetSessionEntry.sessionFile) {
-      const learnResult = await runLearnForSession({
+      const thinkLevel = params.resolvedThinkLevel ?? (await params.resolveDefaultThinkingLevel());
+      runLearnForSession({
         sessionId: targetSessionEntry.sessionId,
         sessionKey: targetSessionKey,
         messageChannel: params.command.channel,
@@ -251,19 +253,20 @@ export async function handleCommands(params: HandleCommandsParams): Promise<Comm
         skillsSnapshot: targetSessionEntry.skillsSnapshot,
         provider: params.provider,
         model: params.model,
-        thinkLevel: params.resolvedThinkLevel ?? (await params.resolveDefaultThinkingLevel()),
+        thinkLevel,
         customFocus:
           "What insights and lessons should be remembered before starting a new session?",
         senderIsOwner: params.command.senderIsOwner,
         ownerNumbers: params.command.ownerList.length > 0 ? params.command.ownerList : undefined,
+      }).then((learnResult) => {
+        if (learnResult.ok) {
+          logVerbose(`Background pre-reset learning completed for session ${targetSessionKey}`);
+        } else {
+          logVerbose(
+            `Background pre-reset learning failed for session ${targetSessionKey}: ${learnResult.message ?? "unknown error"}`,
+          );
+        }
       });
-      if (learnResult.ok) {
-        logVerbose(`Pre-reset learning completed for session ${targetSessionKey}`);
-      } else {
-        logVerbose(
-          `Pre-reset learning failed for session ${targetSessionKey}: ${learnResult.message ?? "unknown error"}`,
-        );
-      }
     }
     if (boundAcpKey) {
       const resetResult = await resetAcpSessionInPlace({

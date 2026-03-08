@@ -8,12 +8,14 @@ import type { ThinkLevel } from "./directives.js";
 
 const LEARN_SYSTEM_PROMPT = [
   "Learning turn.",
-  "Analyze the session history and remember important insights.",
+  "Analyze the session history and remember important insights in the specific way the user requests.",
 ].join(" ");
 
 const LEARN_DEFAULT_PROMPT = [
   "Learning turn.",
-  "What important insights, lessons, or information should be remembered from this session?",
+  "Analyze the session history and remember important insights in the specific way the user requests.",
+  "Focus on: problems identified, solutions discovered, methods that worked, patterns noticed, and any valuable context.",
+  "IMPORTANT: Remember ONLY what is truly useful and worth retaining - filter out noise.",
 ].join(" ");
 
 async function resolveSessionFileWithResetFallback(sessionFile: string): Promise<string> {
