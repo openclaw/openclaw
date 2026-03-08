@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { DnsBlocklistError } from "./domain-filter.js";
 import {
   createPinnedLookup,
   type LookupFn,
@@ -212,5 +213,42 @@ describe("ssrf pinning", () => {
       addresses: ["127.0.0.1"],
     });
     expect(lookup).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("DNS blocklist integration", () => {
+  it("rejects a blocked domain with DnsBlocklistError before DNS resolution", async () => {
+    const lookup = createPublicLookupMock();
+
+    await expect(
+      resolvePinnedHostnameWithPolicy("malware.test", { lookupFn: lookup }),
+    ).rejects.toThrow(DnsBlocklistError);
+    expect(lookup).not.toHaveBeenCalled();
+  });
+
+  it("resolves a non-blocked domain normally (no regression)", async () => {
+    const lookup = createPublicLookupMock();
+
+    const pinned = await resolvePinnedHostnameWithPolicy("example.com", { lookupFn: lookup });
+    expect(pinned.hostname).toBe("example.com");
+    expect(pinned.addresses).toContain("93.184.216.34");
+    expect(lookup).toHaveBeenCalledTimes(1);
+  });
+
+  it("DnsBlocklistError is an instance of SsrFBlockedError", async () => {
+    const lookup = createPublicLookupMock();
+
+    await expect(
+      resolvePinnedHostnameWithPolicy("malware.test", { lookupFn: lookup }),
+    ).rejects.toBeInstanceOf(SsrFBlockedError);
+  });
+
+  it("rejects a subdomain of a blocked domain before DNS resolution", async () => {
+    const lookup = createPublicLookupMock();
+
+    await expect(
+      resolvePinnedHostnameWithPolicy("sub.malware.test", { lookupFn: lookup }),
+    ).rejects.toThrow(DnsBlocklistError);
+    expect(lookup).not.toHaveBeenCalled();
   });
 });
