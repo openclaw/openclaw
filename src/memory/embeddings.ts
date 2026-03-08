@@ -114,6 +114,45 @@ async function createLocalEmbeddingProvider(
   let embeddingContext: LlamaEmbeddingContext | null = null;
   let initPromise: Promise<LlamaEmbeddingContext> | null = null;
 
+  // Truncate text to fit the model's context window using its native tokenizer.
+  // This is a safety net for models with small context sizes (e.g. BERT 512 tokens)
+  // where the upstream byte-based chunk splitting may still produce inputs that
+  // exceed the token limit.
+  const truncateToContextSize = (text: string): string => {
+    if (!embeddingModel) {
+      return text;
+    }
+    const contextSize = embeddingModel.trainContextSize;
+    if (!contextSize || contextSize <= 0) {
+      return text;
+    }
+    const tokens = embeddingModel.tokenize(text);
+    if (tokens.length <= contextSize) {
+      return text;
+    }
+    return embeddingModel.detokenize(tokens.slice(0, contextSize));
+  };
+
+  const provider: EmbeddingProvider = {
+    id: "local",
+    model: modelPath,
+    embedQuery: async (text) => {
+      const ctx = await ensureContext();
+      const embedding = await ctx.getEmbeddingFor(truncateToContextSize(text));
+      return sanitizeAndNormalizeEmbedding(Array.from(embedding.vector));
+    },
+    embedBatch: async (texts) => {
+      const ctx = await ensureContext();
+      const embeddings = await Promise.all(
+        texts.map(async (text) => {
+          const embedding = await ctx.getEmbeddingFor(truncateToContextSize(text));
+          return sanitizeAndNormalizeEmbedding(Array.from(embedding.vector));
+        }),
+      );
+      return embeddings;
+    },
+  };
+
   const ensureContext = async (): Promise<LlamaEmbeddingContext> => {
     if (embeddingContext) {
       return embeddingContext;
@@ -133,6 +172,12 @@ async function createLocalEmbeddingProvider(
         if (!embeddingContext) {
           embeddingContext = await embeddingModel.createEmbeddingContext();
         }
+        // Expose model's actual context size so upstream chunk splitting
+        // can use token-accurate limits instead of the byte-based fallback.
+        const trainCtx = embeddingModel.trainContextSize;
+        if (typeof trainCtx === "number" && trainCtx > 0) {
+          provider.maxInputTokens = trainCtx;
+        }
         return embeddingContext;
       } catch (err) {
         initPromise = null;
@@ -142,25 +187,7 @@ async function createLocalEmbeddingProvider(
     return initPromise;
   };
 
-  return {
-    id: "local",
-    model: modelPath,
-    embedQuery: async (text) => {
-      const ctx = await ensureContext();
-      const embedding = await ctx.getEmbeddingFor(text);
-      return sanitizeAndNormalizeEmbedding(Array.from(embedding.vector));
-    },
-    embedBatch: async (texts) => {
-      const ctx = await ensureContext();
-      const embeddings = await Promise.all(
-        texts.map(async (text) => {
-          const embedding = await ctx.getEmbeddingFor(text);
-          return sanitizeAndNormalizeEmbedding(Array.from(embedding.vector));
-        }),
-      );
-      return embeddings;
-    },
-  };
+  return provider;
 }
 
 export async function createEmbeddingProvider(

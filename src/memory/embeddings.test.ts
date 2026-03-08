@@ -412,10 +412,14 @@ describe("local embedding normalization", () => {
     vector: number[],
     resolveModelFile: (modelPath: string, modelDirectory?: string) => Promise<string> = async () =>
       "/fake/model.gguf",
+    modelOverrides?: { trainContextSize?: number },
   ): void {
     importNodeLlamaCppMock.mockResolvedValue({
       getLlama: async () => ({
         loadModel: vi.fn().mockResolvedValue({
+          trainContextSize: modelOverrides?.trainContextSize ?? 8192,
+          tokenize: (text: string) => Array.from(text, (_, i) => i),
+          detokenize: (tokens: number[]) => tokens.map(() => "x").join(""),
           createEmbeddingContext: vi.fn().mockResolvedValue({
             getEmbeddingFor: vi.fn().mockResolvedValue({
               vector: new Float32Array(vector),
@@ -473,6 +477,47 @@ describe("local embedding normalization", () => {
     expect(embedding.every((value) => Number.isFinite(value))).toBe(true);
   });
 
+  it("truncates input to model context size for BERT-class models", async () => {
+    const getEmbeddingForSpy = vi.fn().mockResolvedValue({
+      vector: new Float32Array([1, 0, 0, 0]),
+    });
+
+    importNodeLlamaCppMock.mockResolvedValue({
+      getLlama: async () => ({
+        loadModel: vi.fn().mockResolvedValue({
+          trainContextSize: 512,
+          tokenize: (text: string) => Array.from(text, (_, i) => i),
+          detokenize: (tokens: number[]) => tokens.map(() => "x").join(""),
+          createEmbeddingContext: vi.fn().mockResolvedValue({
+            getEmbeddingFor: getEmbeddingForSpy,
+          }),
+        }),
+      }),
+      resolveModelFile: async () => "/fake/bge-small.gguf",
+      LlamaLogLevel: { error: 0 },
+    });
+
+    const result = await createLocalProviderForTest();
+    const provider = requireProvider(result);
+
+    // Text with 1000 characters exceeds 512-token context
+    await provider.embedQuery("a".repeat(1000));
+    const passedText = getEmbeddingForSpy.mock.calls[0]?.[0] as string;
+    expect(passedText.length).toBeLessThanOrEqual(512);
+  });
+
+  it("exposes trainContextSize as maxInputTokens after init", async () => {
+    mockSingleLocalEmbeddingVector([1, 0, 0, 0], undefined, { trainContextSize: 512 });
+
+    const result = await createLocalProviderForTest();
+    const provider = requireProvider(result);
+
+    // Before first call, maxInputTokens may not be set yet
+    await provider.embedQuery("hello");
+    // After init, maxInputTokens should reflect the model's context size
+    expect(provider.maxInputTokens).toBe(512);
+  });
+
   it("normalizes batch embeddings to magnitude ~1.0", async () => {
     const unnormalizedVectors = [
       [2.35, 3.45, 0.63, 4.3],
@@ -483,6 +528,9 @@ describe("local embedding normalization", () => {
     importNodeLlamaCppMock.mockResolvedValue({
       getLlama: async () => ({
         loadModel: vi.fn().mockResolvedValue({
+          trainContextSize: 8192,
+          tokenize: (text: string) => Array.from(text, (_, i) => i),
+          detokenize: (tokens: number[]) => tokens.map(() => "x").join(""),
           createEmbeddingContext: vi.fn().mockResolvedValue({
             getEmbeddingFor: vi
               .fn()
@@ -543,6 +591,9 @@ describe("local embedding ensureContext concurrency", () => {
               await new Promise((r) => setTimeout(r, params.initializationDelayMs));
             }
             return {
+              trainContextSize: 8192,
+              tokenize: (text: string) => Array.from(text, (_, i) => i),
+              detokenize: (tokens: number[]) => tokens.map(() => "x").join(""),
               createEmbeddingContext: async () => {
                 createContextSpy();
                 return {
