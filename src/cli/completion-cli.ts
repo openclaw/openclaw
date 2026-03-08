@@ -376,7 +376,9 @@ export async function installCompletion(shell: string, yes: boolean, binName = "
 
     await fs.writeFile(profilePath, update.next, "utf-8");
     if (!yes) {
-      console.log(`Completion installed. Restart your shell or run: source ${profilePath}`);
+      // Use the correct reload syntax for each shell: PowerShell uses dot-source, others use source.
+      const reloadHint = shell === "powershell" ? `. "${profilePath}"` : `source ${profilePath}`;
+      console.log(`Completion installed. Restart your shell or run: ${reloadHint}`);
     }
   } catch (err) {
     console.error(`Failed to install completion: ${err as string}`);
