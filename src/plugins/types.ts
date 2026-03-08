@@ -19,11 +19,15 @@ import type { PluginRuntime } from "./runtime/types.js";
 export type { PluginRuntime } from "./runtime/types.js";
 export type { AnyAgentTool } from "../agents/tools/common.js";
 
+export type LogTransport = (logObj: Record<string, unknown>) => void;
+
 export type PluginLogger = {
   debug?: (message: string) => void;
   info: (message: string) => void;
   warn: (message: string) => void;
   error: (message: string) => void;
+  /** Attach a log transport to receive all log records. Returns a cleanup function. */
+  attachTransport?: (transport: LogTransport) => () => void;
 };
 
 export type PluginConfigUiHint = {

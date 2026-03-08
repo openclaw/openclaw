@@ -73,6 +73,17 @@ export type SpawnSubagentParams = {
     mimeType?: string;
   }>;
   attachMountPath?: string;
+  /**
+   * Workspace context files to inject into the sub-agent's system prompt.
+   * Paths are relative to the requester agent's workspace directory.
+   * Example: ["TOOLS.md", "AGENTS.md"]
+   */
+  contextFiles?: string[];
+  /**
+   * When true, automatically inherit all workspace project context files
+   * (AGENTS.md, SOUL.md, TOOLS.md, USER.md) from the parent session's workspace.
+   */
+  inheritContext?: boolean;
 };
 
 export type SpawnSubagentContext = {
@@ -500,6 +511,41 @@ export async function spawnSubagentDirect(
     childDepth,
     maxSpawnDepth,
   });
+
+  // Inject workspace context files into the sub-agent's system prompt.
+  // Supports explicit contextFiles list or inheritContext=true (auto-inherits standard files).
+  const DEFAULT_INHERIT_CONTEXT_FILES = ["AGENTS.md", "SOUL.md", "TOOLS.md", "USER.md"];
+  const requestedContextFiles: string[] = params.inheritContext
+    ? DEFAULT_INHERIT_CONTEXT_FILES
+    : Array.isArray(params.contextFiles)
+      ? params.contextFiles
+      : [];
+
+  if (requestedContextFiles.length > 0) {
+    const requesterWorkspaceDir = resolveAgentWorkspaceDir(cfg, targetAgentId);
+    const contextSections: string[] = [];
+    for (const relPath of requestedContextFiles) {
+      // Only allow simple filenames (no path traversal)
+      const safeName = path.basename(relPath);
+      if (!safeName || safeName !== relPath.trim()) {
+        continue;
+      }
+      const absPath = path.join(requesterWorkspaceDir, safeName);
+      try {
+        const content = await fs.readFile(absPath, "utf8");
+        if (content.trim()) {
+          contextSections.push(`## ${safeName}\n\n${content.trim()}`);
+        }
+      } catch {
+        // File missing or unreadable — skip silently
+      }
+    }
+    if (contextSections.length > 0) {
+      childSystemPrompt +=
+        "\n\n# Workspace Project Context\n\nThe following files are injected from the requester's workspace for reference:\n\n" +
+        contextSections.join("\n\n---\n\n");
+    }
+  }
 
   const attachmentsCfg = (
     cfg as unknown as {
