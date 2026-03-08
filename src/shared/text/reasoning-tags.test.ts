@@ -187,8 +187,10 @@ describe("stripReasoningTagsFromText", () => {
   describe("strict vs preserve mode", () => {
     it("applies strict and preserve modes to unclosed tags", () => {
       const input = "Before <think>unclosed content after";
+      // After fix for Issue #37696, both modes preserve trailing text
+      // to prevent silent message loss when models forget </think>
       const cases = [
-        { mode: "strict" as const, expected: "Before" },
+        { mode: "strict" as const, expected: "Before unclosed content after" },
         { mode: "preserve" as const, expected: "Before unclosed content after" },
       ];
       for (const { mode, expected } of cases) {

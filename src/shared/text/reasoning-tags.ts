@@ -84,9 +84,13 @@ export function stripReasoningTagsFromText(
     lastIndex = idx + match[0].length;
   }
 
-  if (!inThinking || mode === "preserve") {
-    result += cleaned.slice(lastIndex);
-  }
+  // Fix for Issue #37696: Always preserve trailing text, even after unclosed tags
+  // When a model forgets </think>, we still want to show the visible response
+  // (only properly closed <think>...</think> blocks are stripped)
+  // Security note: This may expose reasoning text after unclosed <think>, but
+  // that's preferable to silently dropping the entire response (common with
+  // Qwen 3.5 and other models that occasionally forget closing tags)
+  result += cleaned.slice(lastIndex);
 
   return applyTrim(result, trimMode);
 }
