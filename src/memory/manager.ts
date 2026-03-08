@@ -18,7 +18,7 @@ import {
   type VoyageEmbeddingClient,
 } from "./embeddings.js";
 import { isFileMissingError, statRegularFile } from "./fs-utils.js";
-import { bm25RankToScore, buildFtsQuery, mergeHybridResults } from "./hybrid.js";
+import { bm25RankToScore, buildFtsOrQuery, buildFtsQuery, mergeHybridResults } from "./hybrid.js";
 import { isMemoryPath, normalizeExtraMemoryPaths } from "./internal.js";
 import { MemoryManagerEmbeddingOps } from "./manager-embedding-ops.js";
 import { searchKeyword, searchVector } from "./manager-search.js";
@@ -392,6 +392,7 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
       snippetMaxChars: SNIPPET_MAX_CHARS,
       sourceFilter,
       buildFtsQuery: (raw) => this.buildFtsQuery(raw),
+      buildFtsFallbackQuery: buildFtsOrQuery,
       bm25RankToScore,
     });
     return results.map((entry) => entry as MemorySearchResult & { id: string; textScore: number });

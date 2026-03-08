@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { bm25RankToScore, buildFtsQuery, mergeHybridResults } from "./hybrid.js";
+import { bm25RankToScore, buildFtsOrQuery, buildFtsQuery, mergeHybridResults } from "./hybrid.js";
 
 describe("memory hybrid helpers", () => {
   it("buildFtsQuery tokenizes and AND-joins", () => {
@@ -8,6 +8,16 @@ describe("memory hybrid helpers", () => {
     expect(buildFtsQuery("金银价格")).toBe('"金银价格"');
     expect(buildFtsQuery("価格 2026年")).toBe('"価格" AND "2026年"');
     expect(buildFtsQuery("   ")).toBeNull();
+  });
+
+  it("buildFtsOrQuery tokenizes and OR-joins", () => {
+    expect(buildFtsOrQuery("hello world")).toBe('"hello" OR "world"');
+    expect(buildFtsOrQuery("FOO_bar baz-1")).toBe('"FOO_bar" OR "baz" OR "1"');
+    expect(buildFtsOrQuery("金银价格")).toBe('"金银价格"');
+    expect(buildFtsOrQuery("価格 2026年")).toBe('"価格" OR "2026年"');
+    expect(buildFtsOrQuery("   ")).toBeNull();
+    // Single token: AND and OR produce the same result
+    expect(buildFtsOrQuery("hello")).toBe(buildFtsQuery("hello"));
   });
 
   it("bm25RankToScore is monotonic and clamped", () => {
