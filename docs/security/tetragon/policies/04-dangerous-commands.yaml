@@ -1,0 +1,72 @@
+# TracingPolicy: Monitor dangerous command patterns
+#
+# Detects execution of destructive commands (rm, chmod, chown) and
+# patterns like piping remote scripts to a shell (curl|bash, wget|sh).
+apiVersion: cilium.io/v1alpha1
+kind: TracingPolicy
+metadata:
+  name: openclaw-dangerous-commands
+spec:
+  kprobes:
+    - call: __x64_sys_execve
+      # NOTE: On arm64, replace __x64_sys_execve with __arm64_sys_execve
+      syscall: true
+      args:
+        - index: 0
+          type: string    # filename (binary path)
+        - index: 1
+          type: string    # first argv element
+      selectors:
+        # Destructive file operations
+        - matchArgs:
+            - index: 0
+              operator: Postfix
+              values:
+                - /rm
+          matchActions:
+            - action: Post
+
+        # Permission changes
+        - matchArgs:
+            - index: 0
+              operator: Postfix
+              values:
+                - /chmod
+                - /chown
+          matchActions:
+            - action: Post
+
+        # Remote code execution via curl/wget
+        # Note: pipe-to-shell is detected at the shell level since
+        # execve sees each side of the pipe separately. This catches
+        # curl/wget invocations; correlate with subsequent sh/bash
+        # exec events in your observability backend.
+        - matchArgs:
+            - index: 0
+              operator: Postfix
+              values:
+                - /curl
+                - /wget
+          matchActions:
+            - action: Post
+
+        # Direct shell invocations (often the receiving end of pipe)
+        - matchArgs:
+            - index: 0
+              operator: Postfix
+              values:
+                - /bash
+                - /sh
+                - /zsh
+          matchActions:
+            - action: Post
+
+        # Privilege escalation via sudo/su
+        - matchArgs:
+            - index: 0
+              operator: Postfix
+              values:
+                - /sudo
+                - /su
+          matchActions:
+            - action: Post

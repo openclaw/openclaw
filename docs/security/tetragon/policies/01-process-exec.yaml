@@ -1,0 +1,45 @@
+# TracingPolicy: Monitor all process execution by OpenClaw
+#
+# Captures every execve() call made by processes whose binary path
+# matches the openclaw installation. Useful for auditing which commands
+# an agent spawns during tool calls.
+apiVersion: cilium.io/v1alpha1
+kind: TracingPolicy
+metadata:
+  name: openclaw-process-exec
+spec:
+  tracepoints:
+    - subsystem: raw_syscalls
+      event: sys_enter
+      args:
+        - index: 4
+          type: syscall64
+      selectors:
+        - matchArgs:
+            - index: 4
+              operator: Equal
+              values:
+                - "59"  # __NR_execve
+          matchBinaries:
+            - operator: In
+              values:
+                - /usr/bin/node
+                - /usr/local/bin/node
+                - /usr/bin/bun
+                - /usr/local/bin/bun
+  kprobes:
+    - call: __x64_sys_execve
+      syscall: true
+      args:
+        - index: 0
+          type: string    # filename
+        - index: 1
+          type: string    # argv (first arg)
+      selectors:
+        - matchBinaries:
+            - operator: In
+              values:
+                - /usr/bin/node
+                - /usr/local/bin/node
+                - /usr/bin/bun
+                - /usr/local/bin/bun
