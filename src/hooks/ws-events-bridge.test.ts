@@ -68,7 +68,7 @@ describe("transformCloudEvent", () => {
       source: "",
       time: "",
       resourceType: "",
-      summary: "  from ",
+      summary: " unknown from ",
       data: {},
     });
   });
