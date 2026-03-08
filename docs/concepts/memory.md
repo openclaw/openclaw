@@ -451,14 +451,15 @@ If we want to get fancier later, common next steps are Reciprocal Rank Fusion (R
 
 #### Post-processing pipeline
 
-After merging vector and keyword scores, two optional post-processing stages
+After merging vector and keyword scores, optional post-processing stages
 refine the result list before it reaches the agent:
 
 ```
-Vector + Keyword → Weighted Merge → Temporal Decay → Sort → MMR → Top-K Results
+Vector + Keyword → Weighted Merge → Temporal Decay → Regime/Stress Penalty → Sort → MMR → Top-K Results
 ```
 
-Both stages are **off by default** and can be enabled independently.
+All post-processing stages are **off by default**. MMR and temporal decay are config-driven,
+while regime/stress penalty is currently programmatic (MVP extension point).
 
 #### MMR re-ranking (diversity)
 
@@ -576,9 +577,30 @@ The stale September note drops to the bottom despite having the best raw semanti
 stale information outranks recent context. A half-life of 30 days works well for
 daily-note-heavy workflows; increase it (e.g., 90 days) if you reference older notes frequently.
 
+#### Regime/stress instability penalty (MVP)
+
+OpenClaw also includes an opt-in **regime/stress scoring layer** that penalizes unstable
+scores across a pre/post split and synthetic stress scenarios.
+
+Score formula (when enabled):
+
+```
+baseScore_i = vectorWeight*vectorScore_i + textWeight*textScore_i
+instabilityPenalty = instabilityWeight * |mean(preScores) - mean(postScores)|
+stressPenalty_i = stressWeight * (max(stressScores_i) - min(stressScores_i))
+finalScore_i = max(0, baseScore_i - instabilityPenalty - stressPenalty_i)
+```
+
+- `pre/post` is split by index (default: half split), with a hook for custom regime assignment.
+- `stressScores_i` are generated from configurable stress scenarios (multiplier/offset shocks).
+- Feature is **disabled by default** to preserve existing behavior.
+
+This MVP currently ships as a scoring/evaluation extension point in the hybrid merge path
+(programmatic API), and is designed for future config-surface expansion.
+
 #### Configuration
 
-Both features are configured under `memorySearch.query.hybrid`:
+MMR and temporal decay are configured under `memorySearch.query.hybrid`:
 
 ```json5
 agents: {
