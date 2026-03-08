@@ -1285,13 +1285,9 @@ export async function handleFeishuMessage(params: {
       // Cross-account dedup: in multi-account setups, Feishu delivers the same
       // event to every bot account in the group. Only one account should handle
       // broadcast dispatch to avoid duplicate agent sessions and race conditions.
-      // Mentioned handlers always proceed (explicit @mention takes priority);
-      // non-mentioned handlers use a shared "broadcast" namespace so only the
-      // first to arrive claims the message.
-      if (
-        !ctx.mentionedBot &&
-        !(await tryRecordMessagePersistent(ctx.messageId, "broadcast", log))
-      ) {
+      // Both mentioned and non-mentioned handlers use a shared "broadcast"
+      // namespace so only the first account to arrive claims the message.
+      if (!(await tryRecordMessagePersistent(ctx.messageId, "broadcast", log))) {
         log(
           `feishu[${account.accountId}]: broadcast already claimed by another account for message ${ctx.messageId}; skipping`,
         );
@@ -1310,6 +1306,12 @@ export async function handleFeishuMessage(params: {
       log(
         `feishu[${account.accountId}]: broadcasting to ${broadcastAgents.length} agents (strategy=${strategy}, active=${activeAgentId ?? "none"})`,
       );
+
+      if (activeAgentId && !broadcastAgents.some((a) => normalizeAgentId(a) === activeAgentId)) {
+        log(
+          `feishu[${account.accountId}]: WARNING: broadcast active agent "${activeAgentId}" is not in broadcastAgents list; no Feishu reply will be sent`,
+        );
+      }
 
       const dispatchForAgent = async (agentId: string) => {
         if (hasKnownAgents && !agentIds.includes(normalizeAgentId(agentId))) {
