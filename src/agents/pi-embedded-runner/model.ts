@@ -160,7 +160,7 @@ export function resolveModelWithRegistry(params: {
   const inlineMatch = inlineModels.find(
     (entry) => normalizeProviderId(entry.provider) === normalizedProvider && entry.id === modelId,
   );
-  if (inlineMatch) {
+  if (inlineMatch?.api) {
     return normalizeModelCompat(inlineMatch as Model<Api>);
   }
 

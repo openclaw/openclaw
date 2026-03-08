@@ -1138,6 +1138,9 @@ describe("handleCommands hooks", () => {
         type: "command",
         action: "new",
         sessionKey: "agent:main:telegram:direct:123",
+        context: expect.objectContaining({
+          workspaceDir: testWorkspaceDir,
+        }),
       }),
     );
     spy.mockRestore();
