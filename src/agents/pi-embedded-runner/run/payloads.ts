@@ -76,6 +76,12 @@ function resolveToolErrorWarningPolicy(params: {
   const isMutatingToolError =
     params.lastToolError.mutatingAction ?? isLikelyMutatingToolName(params.lastToolError.toolName);
   if (isMutatingToolError) {
+    // When the assistant already replied, it will explain the failure in its own
+    // words.  Suppress the raw internal warning to avoid leaking implementation
+    // details (paths, char counts, tool names) into user-facing chat (#39631).
+    if (params.hasUserFacingReply) {
+      return { showWarning: false, includeDetails };
+    }
     return { showWarning: true, includeDetails };
   }
   if (params.suppressToolErrors) {
