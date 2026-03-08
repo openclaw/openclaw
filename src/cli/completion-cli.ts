@@ -340,12 +340,10 @@ export async function installCompletion(shell: string, yes: boolean, binName = "
   } else if (shell === "fish") {
     profilePath = path.join(home, ".config", "fish", "config.fish");
     sourceLine = formatCompletionSourceLine("fish", binName, cachePath);
-  } else if (shell === "powershell") {
+  } else {
+    // powershell — all CompletionShell values are now handled above.
     profilePath = getShellProfilePath("powershell");
     sourceLine = formatCompletionSourceLine("powershell", binName, cachePath);
-  } else {
-    console.error(`Automated installation not supported for ${shell} yet.`);
-    return;
   }
 
   try {
