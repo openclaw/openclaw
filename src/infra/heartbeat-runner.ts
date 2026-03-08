@@ -34,6 +34,7 @@ import {
   saveSessionStore,
   updateSessionStore,
 } from "../config/sessions.js";
+import { logVerbose } from "../globals.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { getQueueSize } from "../process/command-queue.js";
 import { CommandLane } from "../process/lanes.js";
@@ -456,6 +457,27 @@ async function restoreHeartbeatUpdatedAt(params: {
   });
 }
 
+// Phrases that indicate the heartbeat found nothing actionable.
+// When the model responds with a short message containing these
+// patterns instead of the expected HEARTBEAT_OK token, suppress
+// the response so it doesn't leak to the user.
+const HEARTBEAT_NOTHING_PATTERNS = [
+  /nothing needs attention/i,
+  /no (?:tasks?|items?|actions?) (?:due|pending|scheduled|need)/i,
+  /calendar (?:is )?clear/i,
+  /inbox (?:is )?empty/i,
+  /all (?:clear|caught up|good)/i,
+  /nothing (?:to do|to report|new)/i,
+  /no updates/i,
+];
+
+function looksLikeHeartbeatAck(text: string, maxAckChars: number): boolean {
+  if (text.length > maxAckChars) {
+    return false;
+  }
+  return HEARTBEAT_NOTHING_PATTERNS.some((pattern) => pattern.test(text));
+}
+
 function normalizeHeartbeatReply(
   payload: ReplyPayload,
   responsePrefix: string | undefined,
@@ -472,6 +494,14 @@ function normalizeHeartbeatReply(
       text: "",
       hasMedia,
     };
+  }
+  // Defense-in-depth: suppress responses that are clearly "nothing
+  // to do" acknowledgments even when the model omits HEARTBEAT_OK.
+  if (!stripped.didStrip && !hasMedia && looksLikeHeartbeatAck(stripped.text, ackMaxChars)) {
+    logVerbose(
+      `heartbeat: suppressing ack-like response without HEARTBEAT_OK token (${stripped.text.length} chars)`,
+    );
+    return { shouldSkip: true, text: "", hasMedia };
   }
   let finalText = stripped.text;
   if (responsePrefix && finalText && !finalText.startsWith(responsePrefix)) {
