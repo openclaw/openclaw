@@ -173,6 +173,9 @@ describe("loadPluginManifestRegistry", () => {
     expect(warnings).toHaveLength(1);
     expect(warnings[0]?.message).toContain("bundled copy takes priority");
     expect(warnings[0]?.message).toContain("plugins.load.paths");
+    // Both records are retained in the manifest registry — deduplication is the
+    // loader's responsibility (loader.ts first-seen-wins on discovery.candidates).
+    expect(registry.plugins).toHaveLength(2);
   });
 
   it("suppresses all warnings when the higher-precedence global plugin is discovered before bundled", () => {
@@ -192,6 +195,8 @@ describe("loadPluginManifestRegistry", () => {
     const registry = loadRegistry(candidates);
     const warnings = registry.diagnostics.filter((d) => d.level === "warn");
     expect(warnings).toHaveLength(0);
+    // Both records retained — deduplication is the loader's responsibility.
+    expect(registry.plugins).toHaveLength(2);
   });
 
   it("suppresses duplicate warning when candidates share the same physical directory via symlink", () => {
