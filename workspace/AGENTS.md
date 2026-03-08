@@ -148,16 +148,16 @@ No engagement on weekends (save API quota).
 
 ### Flow
 
-1. Run ONE search: `twclaw search "ERC-8004" --popular -n 10 --json`
+1. Run ONE search: `exec node skills/twitter-openclaw/bin/twclaw.js search "ERC-8004" --popular -n 10 --json`
 2. Filter: pick tweets relevant to ERC-8004, onchain agents, or trust/verification
 3. Propose up to 3 interactions to Gilberts via Telegram, with format:
    - Tweet URL + author + 1-line summary
    - Proposed action: **like**, **reply** (include draft text), or **retweet**
 4. **Wait for Gilberts approval** — do NOT execute any interaction without approval
 5. On approval, execute using twclaw:
-   - Like: `twclaw like <tweet-url> --yes`
-   - Reply: `twclaw reply <tweet-url> "text" --yes`
-   - Retweet: `twclaw retweet <tweet-url> --yes`
+   - Like: `exec node skills/twitter-openclaw/bin/twclaw.js like <tweet-url> --yes`
+   - Reply: `exec node skills/twitter-openclaw/bin/twclaw.js reply <tweet-url> "text" --yes`
+   - Retweet: `exec node skills/twitter-openclaw/bin/twclaw.js retweet <tweet-url> --yes`
 6. Log each action to `data/daily/YYYY-MM-DD/engagement_actions.md` (tweet URL, handle, action, 1-line summary — NO full tweet text)
 7. Confirm to Gilberts: "Done, [N] interactions executed"
 

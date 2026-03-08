@@ -107,7 +107,7 @@ Your content has one job: make people think "I need to follow this account to st
 
 1. Search and propose interactions to Gilberts via Telegram
 2. **Wait for approval** — do NOT execute without approval
-3. Execute via twclaw (`like`, `reply`, `retweet` with `--yes`)
+3. Execute via `exec node skills/twitter-openclaw/bin/twclaw.js` (`like`, `reply`, `retweet` with `--yes`)
 
 ### On-demand tweets → twclaw direct
 
@@ -115,7 +115,7 @@ When Gilberts asks to post a tweet directly:
 
 1. Draft and preview via Telegram
 2. **Wait for approval**
-3. Post via `twclaw tweet "text" --yes`
+3. Post via `exec node skills/twitter-openclaw/bin/twclaw.js tweet "text" --yes`
 
 ---
 

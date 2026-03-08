@@ -41,12 +41,15 @@ typefully drafts:list --status scheduled
 
 ## Tool 2: twclaw (Twitter/X Interaction)
 
+**Command:** `exec node skills/twitter-openclaw/bin/twclaw.js`
+
 ```bash
-twclaw search "ERC-8004" -n 10 --popular --json  # Search tweets
-twclaw like <tweet-url> --yes                    # Like a tweet
-twclaw reply <tweet-url> "text" --yes            # Reply to a tweet
-twclaw retweet <tweet-url> --yes                 # Retweet
-twclaw read <tweet-url>                          # Read a tweet (on-demand only)
+exec node skills/twitter-openclaw/bin/twclaw.js search "ERC-8004" -n 10 --popular --json  # Search
+exec node skills/twitter-openclaw/bin/twclaw.js like <tweet-url> --yes                    # Like
+exec node skills/twitter-openclaw/bin/twclaw.js reply <tweet-url> "text" --yes            # Reply
+exec node skills/twitter-openclaw/bin/twclaw.js retweet <tweet-url> --yes                 # Retweet
+exec node skills/twitter-openclaw/bin/twclaw.js tweet "text" --yes                        # Post tweet
+exec node skills/twitter-openclaw/bin/twclaw.js read <tweet-url>                          # Read (on-demand)
 ```
 
 Requires `TWITTER_BEARER_TOKEN` and `TWITTER_USER_ID`.
@@ -56,7 +59,7 @@ All write actions need `--yes` flag. ALL interactions require Gilberts approval 
 
 - **1 search/day** (`"ERC-8004"`, `-n 10`). No weekend searches
 - **3 actions/day max** (like + reply + retweet combined)
-- **NEVER call automatically**: `twclaw mentions`, `twclaw home`, `twclaw user-tweets` — only when Gilberts asks
+- **NEVER call automatically**: mentions, home, user-tweets — only when Gilberts asks
 - Total: **max 4 API calls/day**
 
 ## Tool 3: trust8004 API (Ecosystem Metrics)
