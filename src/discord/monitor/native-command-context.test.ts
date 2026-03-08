@@ -43,7 +43,7 @@ describe("buildDiscordNativeCommandContext", () => {
   it("builds guild slash command context with owner allowlist and channel metadata", () => {
     const ctx = buildDiscordNativeCommandContext({
       prompt: "/status",
-      commandArgs: { model: "gpt-5.2" },
+      commandArgs: { values: { model: "gpt-5.2" } },
       sessionKey: "agent:codex:discord:slash:user-1",
       commandTargetSessionKey: "agent:codex:discord:channel:chan-1",
       accountId: "default",
