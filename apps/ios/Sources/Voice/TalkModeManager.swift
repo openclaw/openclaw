@@ -34,6 +34,7 @@ final class TalkModeManager: NSObject {
     private typealias SpeechRequest = SFSpeechAudioBufferRecognitionRequest
     private static let defaultModelIdFallback = "eleven_v3"
     private static let defaultTalkProvider = "elevenlabs"
+    private static let defaultSilenceTimeoutMs = 900
     private static let redactedConfigSentinel = "__OPENCLAW_REDACTED__"
     var isEnabled: Bool = false
     var isListening: Bool = false
@@ -97,7 +98,7 @@ final class TalkModeManager: NSObject {
 
     private var gateway: GatewayNodeSession?
     private var gatewayConnected = false
-    private let silenceWindow: TimeInterval = 0.9
+    private var silenceWindow: TimeInterval = TimeInterval(TalkModeManager.defaultSilenceTimeoutMs) / 1000
     private var lastAudioActivity: Date?
     private var noiseFloorSamples: [Double] = []
     private var noiseFloor: Double?
@@ -2001,6 +2002,27 @@ extension TalkModeManager {
             config: normalizedProviders[providerID] ?? [:])
     }
 
+    static func resolvedSilenceTimeoutMs(_ talk: [String: Any]?) -> Int {
+        switch talk?["silenceTimeoutMs"] {
+        case let timeout as Int where timeout > 0:
+            return timeout
+        case let timeout as Double
+            where timeout > 0 && timeout.rounded(.towardZero) == timeout && timeout <= Double(Int.max):
+            return Int(timeout)
+        case let timeout as NSNumber:
+            if CFGetTypeID(timeout) == CFBooleanGetTypeID() {
+                return Self.defaultSilenceTimeoutMs
+            }
+            let value = timeout.doubleValue
+            if value > 0 && value.rounded(.towardZero) == value && value <= Double(Int.max) {
+                return Int(value)
+            }
+            return Self.defaultSilenceTimeoutMs
+        default:
+            return Self.defaultSilenceTimeoutMs
+        }
+    }
+
     func reloadConfig() async {
         guard let gateway else { return }
         self.pcmFormatUnavailable = false
@@ -2020,6 +2042,7 @@ extension TalkModeManager {
             }
             let activeProvider = selection?.provider ?? Self.defaultTalkProvider
             let activeConfig = selection?.config
+            let silenceTimeoutMs = Self.resolvedSilenceTimeoutMs(talk)
             self.defaultVoiceId = (activeConfig?["voiceId"] as? String)?
                 .trimmingCharacters(in: .whitespacesAndNewlines)
             if let aliases = activeConfig?["voiceAliases"] as? [String: Any] {
@@ -2067,8 +2090,9 @@ extension TalkModeManager {
             if let interrupt = talk?["interruptOnSpeech"] as? Bool {
                 self.interruptOnSpeech = interrupt
             }
+            self.silenceWindow = TimeInterval(silenceTimeoutMs) / 1000
             if selection != nil {
-                GatewayDiagnostics.log("talk config provider=\(activeProvider)")
+                GatewayDiagnostics.log("talk config provider=\(activeProvider) silenceTimeoutMs=\(silenceTimeoutMs)")
             }
         } catch {
             self.defaultModelId = Self.defaultModelIdFallback
@@ -2079,6 +2103,7 @@ extension TalkModeManager {
             self.gatewayTalkDefaultModelId = nil
             self.gatewayTalkApiKeyConfigured = false
             self.gatewayTalkConfigLoaded = false
+            self.silenceWindow = TimeInterval(Self.defaultSilenceTimeoutMs) / 1000
         }
     }
 

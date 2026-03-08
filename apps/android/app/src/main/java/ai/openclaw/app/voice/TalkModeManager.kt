@@ -59,8 +59,8 @@ class TalkModeManager(
     private const val tag = "TalkMode"
     private const val defaultModelIdFallback = "eleven_v3"
     private const val defaultOutputFormatFallback = "pcm_24000"
-private const val defaultTalkProvider = "elevenlabs"
-    private const val silenceWindowMs = 500L
+    private const val defaultTalkProvider = "elevenlabs"
+    private const val defaultSilenceTimeoutMs = 700L
     private const val listenWatchdogMs = 12_000L
     private const val chatFinalWaitWithSubscribeMs = 45_000L
     private const val chatFinalWaitWithoutSubscribeMs = 6_000L
@@ -105,6 +105,16 @@ private const val defaultTalkProvider = "elevenlabs"
         normalizedPayload = false,
       )
     }
+
+    internal fun resolvedSilenceTimeoutMs(talk: JsonObject?): Long {
+      val primitive = talk?.get("silenceTimeoutMs") as? JsonPrimitive ?: return defaultSilenceTimeoutMs
+      if (primitive.isString) return defaultSilenceTimeoutMs
+      val timeout = primitive.content.toDoubleOrNull() ?: return defaultSilenceTimeoutMs
+      if (timeout <= 0 || timeout % 1.0 != 0.0 || timeout > Long.MAX_VALUE.toDouble()) {
+        return defaultSilenceTimeoutMs
+      }
+      return timeout.toLong()
+    }
   }
 
   private val mainHandler = Handler(Looper.getMainLooper())
@@ -134,7 +144,7 @@ private const val defaultTalkProvider = "elevenlabs"
   private var listeningMode = false
 
   private var silenceJob: Job? = null
-  private val silenceWindowMs = 700L
+  private var silenceWindowMs = defaultSilenceTimeoutMs
   private var lastTranscript: String = ""
   private var lastHeardAtMs: Long? = null
   private var lastSpokenText: String? = null
@@ -1411,6 +1421,7 @@ private const val defaultTalkProvider = "elevenlabs"
         activeConfig?.get("outputFormat")?.asStringOrNull()?.trim()?.takeIf { it.isNotEmpty() }
       val key = activeConfig?.get("apiKey")?.asStringOrNull()?.trim()?.takeIf { it.isNotEmpty() }
       val interrupt = talk?.get("interruptOnSpeech")?.asBooleanOrNull()
+      val silenceTimeoutMs = resolvedSilenceTimeoutMs(talk)
 
       if (!isCanonicalMainSessionKey(mainSessionKey)) {
         mainSessionKey = mainKey
@@ -1427,7 +1438,11 @@ private const val defaultTalkProvider = "elevenlabs"
       if (!modelOverrideActive) currentModelId = defaultModelId
       defaultOutputFormat = outputFormat ?: defaultOutputFormatFallback
       apiKey = key ?: envKey?.takeIf { it.isNotEmpty() }
-      Log.d(tag, "reloadConfig apiKey=${if (apiKey != null) "set" else "null"} voiceId=$defaultVoiceId")
+      silenceWindowMs = silenceTimeoutMs
+      Log.d(
+        tag,
+        "reloadConfig apiKey=${if (apiKey != null) "set" else "null"} voiceId=$defaultVoiceId silenceTimeoutMs=$silenceTimeoutMs",
+      )
       if (interrupt != null) interruptOnSpeech = interrupt
       activeProviderIsElevenLabs = activeProvider == defaultTalkProvider
       if (!activeProviderIsElevenLabs) {
@@ -1441,6 +1456,7 @@ private const val defaultTalkProvider = "elevenlabs"
       }
       configLoaded = true
     } catch (_: Throwable) {
+      silenceWindowMs = defaultSilenceTimeoutMs
       defaultVoiceId = envVoice?.takeIf { it.isNotEmpty() } ?: sagVoice?.takeIf { it.isNotEmpty() }
       defaultModelId = defaultModelIdFallback
       if (!modelOverrideActive) currentModelId = defaultModelId
