@@ -1,7 +1,7 @@
 import {
   buildAccountScopedDmSecurityPolicy,
   collectAllowlistProviderRestrictSendersWarnings,
-} from "openclaw/plugin-sdk";
+} from "openclaw/plugin-sdk/compat";
 import {
   applyAccountNameToChannelSection,
   buildChannelConfigSchema,
