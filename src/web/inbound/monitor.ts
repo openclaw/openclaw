@@ -421,6 +421,44 @@ export async function monitorWebInbox(options: {
         continue;
       }
 
+      // Preflight voice-note transcription: replace <media:audio> with spoken text
+      if (
+        enriched.body === "<media:audio>" &&
+        enriched.mediaPath &&
+        enriched.mediaType?.startsWith("audio/")
+      ) {
+        try {
+          const { loadConfig } = await import("../../config/config.js");
+          const cfg = loadConfig();
+          const audioConfig = cfg.tools?.media?.audio;
+          if (audioConfig && audioConfig.enabled !== false) {
+            const { transcribeFirstAudio } = await import(
+              "../../media-understanding/audio-preflight.js"
+            );
+            const transcript = await transcribeFirstAudio({
+              ctx: {
+                MediaPaths: [enriched.mediaPath],
+                MediaTypes: enriched.mediaType ? [enriched.mediaType] : undefined,
+              },
+              cfg,
+              agentDir: undefined,
+            });
+            if (transcript) {
+              enriched.body = transcript;
+              // Clear mediaPath so the agent doesn't re-transcribe the audio
+              // via its tool pipeline. Keep mediaType so isInboundAudioContext()
+              // still detects audio for TTS.
+              enriched.mediaPath = undefined;
+              logVerbose(
+                `whatsapp: transcribed voice note (${transcript.length} chars)`,
+              );
+            }
+          }
+        } catch (err) {
+          logVerbose(`whatsapp: voice note transcription failed: ${String(err)}`);
+        }
+      }
+
       await enqueueInboundMessage(msg, inbound, enriched);
     }
   };

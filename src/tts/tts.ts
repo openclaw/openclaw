@@ -21,6 +21,7 @@ import type {
   TtsMode,
   TtsProvider,
   TtsModelOverrideConfig,
+  VoiceNoteLoopMode,
 } from "../config/types.tts.js";
 import { logVerbose } from "../globals.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
@@ -75,6 +76,13 @@ const TELEGRAM_OUTPUT = {
   voiceCompatible: true,
 };
 
+const WHATSAPP_OUTPUT = {
+  openai: "opus" as const,
+  elevenlabs: "opus_48000_64",
+  extension: ".opus",
+  voiceCompatible: true,
+};
+
 const DEFAULT_OUTPUT = {
   openai: "mp3" as const,
   elevenlabs: "mp3_44100_128",
@@ -95,6 +103,7 @@ export type ResolvedTtsConfig = {
   provider: TtsProvider;
   providerSource: "config" | "default";
   summaryModel?: string;
+  voiceNoteLoop: VoiceNoteLoopMode;
   modelOverrides: ResolvedTtsModelOverrides;
   elevenlabs: {
     apiKey?: string;
@@ -266,6 +275,7 @@ export function resolveTtsConfig(cfg: OpenClawConfig): ResolvedTtsConfig {
     provider: raw.provider ?? "edge",
     providerSource,
     summaryModel: raw.summaryModel?.trim() || undefined,
+    voiceNoteLoop: raw.voiceNoteLoop ?? "disabled",
     modelOverrides: resolveModelOverridePolicy(raw.modelOverrides),
     elevenlabs: {
       apiKey: normalizeResolvedSecretInputString({
@@ -501,6 +511,9 @@ const VOICE_BUBBLE_CHANNELS = new Set(["telegram", "feishu", "whatsapp"]);
 function resolveOutputFormat(channelId?: string | null) {
   if (channelId && VOICE_BUBBLE_CHANNELS.has(channelId)) {
     return TELEGRAM_OUTPUT;
+  }
+  if (channelId === "whatsapp") {
+    return WHATSAPP_OUTPUT;
   }
   return DEFAULT_OUTPUT;
 }
