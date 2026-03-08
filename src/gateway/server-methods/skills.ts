@@ -11,6 +11,7 @@ import type { OpenClawConfig } from "../../config/config.js";
 import { loadConfig, writeConfigFile } from "../../config/config.js";
 import { getRemoteSkillEligibility } from "../../infra/skills-remote.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
+import { clearHasBinaryCache } from "../../shared/config-eval.js";
 import { normalizeSecretInput } from "../../utils/normalize-secret-input.js";
 import {
   ErrorCodes,
@@ -137,6 +138,9 @@ export const skillsHandlers: GatewayRequestHandlers = {
       timeoutMs: p.timeoutMs,
       config: cfg,
     });
+    if (result.ok) {
+      clearHasBinaryCache();
+    }
     respond(
       result.ok,
       result,
