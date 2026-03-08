@@ -551,8 +551,16 @@ export type PluginHookMessageContext = {
   conversationId?: string;
 };
 
+export type PluginHookProvenanceFields = {
+  entityId?: string;
+  parentEntityId?: string;
+  sourceRefs?: string[];
+  derivedFrom?: string[];
+  confidence?: number;
+};
+
 // message_received hook
-export type PluginHookMessageReceivedEvent = {
+export type PluginHookMessageReceivedEvent = PluginHookProvenanceFields & {
   from: string;
   content: string;
   timestamp?: number;
@@ -609,7 +617,7 @@ export type PluginHookBeforeToolCallResult = {
 };
 
 // after_tool_call hook
-export type PluginHookAfterToolCallEvent = {
+export type PluginHookAfterToolCallEvent = PluginHookProvenanceFields & {
   toolName: string;
   params: Record<string, unknown>;
   /** Stable run identifier for this agent invocation. */
@@ -639,14 +647,14 @@ export type PluginHookToolResultPersistEvent = {
   message: AgentMessage;
   /** True when the tool result was synthesized by a guard/repair step. */
   isSynthetic?: boolean;
-};
+} & PluginHookProvenanceFields;
 
 export type PluginHookToolResultPersistResult = {
   message?: AgentMessage;
 };
 
 // before_message_write hook
-export type PluginHookBeforeMessageWriteEvent = {
+export type PluginHookBeforeMessageWriteEvent = PluginHookProvenanceFields & {
   message: AgentMessage;
   sessionKey?: string;
   agentId?: string;
@@ -740,12 +748,13 @@ export type PluginHookSubagentDeliveryTargetResult = {
 };
 
 // subagent_spawned hook
-export type PluginHookSubagentSpawnedEvent = PluginHookSubagentSpawnBase & {
-  runId: string;
-};
+export type PluginHookSubagentSpawnedEvent = PluginHookSubagentSpawnBase &
+  PluginHookProvenanceFields & {
+    runId: string;
+  };
 
 // subagent_ended hook
-export type PluginHookSubagentEndedEvent = {
+export type PluginHookSubagentEndedEvent = PluginHookProvenanceFields & {
   targetSessionKey: string;
   targetKind: PluginHookSubagentTargetKind;
   reason: string;

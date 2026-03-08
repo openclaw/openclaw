@@ -174,6 +174,12 @@ export type MsgContext = {
    * Used for hook confirmation messages like "Session context saved to memory".
    */
   HookMessages?: string[];
+  /** Canonical entity refs associated with this turn/session. */
+  entityRefs?: string[];
+  incidentId?: string;
+  threadEntityId?: string;
+  repoRefs?: string[];
+  artifactRefs?: string[];
 };
 
 export type FinalizedMsgContext = Omit<MsgContext, "CommandAuthorized"> & {

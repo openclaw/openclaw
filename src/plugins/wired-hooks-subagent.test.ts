@@ -54,6 +54,10 @@ describe("subagent hook runner methods", () => {
       mode: "run" as const,
       requester: baseRequester,
       threadRequested: true,
+      entityId: "subagent:abc",
+      parentEntityId: "session:def",
+      sourceRefs: ["run-1", "agent:main:main"],
+      confidence: 1,
     };
 
     await runner.runSubagentSpawned(event, baseSubagentCtx);
@@ -123,6 +127,10 @@ describe("subagent hook runner methods", () => {
       accountId: "work",
       runId: "run-1",
       outcome: "ok" as const,
+      entityId: "subagent:abc",
+      parentEntityId: "session:def",
+      sourceRefs: ["run-1", "agent:main:main"],
+      confidence: 1,
     };
 
     await runner.runSubagentEnded(event, baseSubagentCtx);

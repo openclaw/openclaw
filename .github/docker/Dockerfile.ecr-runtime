@@ -29,7 +29,9 @@ RUN apt-get update \
   && rm -rf /var/lib/apt/lists/* /var/cache/apt/archives/*
 
 COPY ${OPENCLAW_LOCAL_TARBALL} /tmp/openclaw-local.tgz
-RUN if [ -s /tmp/openclaw-local.tgz ]; then \
+RUN mkdir -p /Users/florian/morpho/openclaw-sre \
+  && if [ -s /tmp/openclaw-local.tgz ]; then \
+      tar -xzf /tmp/openclaw-local.tgz -C /Users/florian/morpho/openclaw-sre --strip-components=1 package; \
       npm install -g /tmp/openclaw-local.tgz; \
     else \
       npm install -g "openclaw@${OPENCLAW_VERSION}"; \
@@ -85,5 +87,6 @@ RUN mkdir -p /Users/florian/morpho \
 
 COPY --chown=node:node morpho-infra /Users/florian/morpho/morpho-infra
 COPY --chown=node:node morpho-infra-helm /Users/florian/morpho/morpho-infra-helm
+COPY --chown=node:node openclaw-sre /Users/florian/morpho/openclaw-sre
 
 USER node

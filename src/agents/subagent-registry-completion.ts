@@ -1,4 +1,10 @@
+import {
+  createSessionEntityId,
+  createSubagentEntityId,
+  normalizeRefs,
+} from "../plugins/hook-provenance.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
+import { distillSubagentOutcome } from "../sre/distillation/index.js";
 import type { SubagentRunOutcome } from "./subagent-announce.js";
 import {
   SUBAGENT_ENDED_OUTCOME_ERROR,
@@ -77,6 +83,18 @@ export async function emitSubagentEndedHookOnce(params: {
           endedAt: params.entry.endedAt,
           outcome: params.outcome,
           error: params.error,
+          entityId: createSubagentEntityId({
+            targetSessionKey: params.entry.childSessionKey,
+            runId: params.entry.runId,
+            reason: params.reason,
+          }),
+          parentEntityId: createSessionEntityId(params.entry.requesterSessionKey),
+          sourceRefs: normalizeRefs([
+            params.entry.runId,
+            params.entry.childSessionKey,
+            params.entry.requesterSessionKey,
+          ]),
+          confidence: 1,
         },
         {
           runId: params.entry.runId,
@@ -85,6 +103,14 @@ export async function emitSubagentEndedHookOnce(params: {
         },
       );
     }
+    await distillSubagentOutcome({
+      childSessionKey: params.entry.childSessionKey,
+      requesterSessionKey: params.entry.requesterSessionKey,
+      runId: params.entry.runId,
+      reason: params.reason,
+      outcome: params.outcome,
+      error: params.error,
+    }).catch(() => undefined);
     params.entry.endedHookEmittedAt = Date.now();
     params.persist();
     return true;

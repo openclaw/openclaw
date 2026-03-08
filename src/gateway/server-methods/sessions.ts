@@ -18,6 +18,11 @@ import {
 import { unbindThreadBindingsBySessionKey } from "../../discord/monitor/thread-bindings.js";
 import { logVerbose } from "../../globals.js";
 import { createInternalHookEvent, triggerInternalHook } from "../../hooks/internal-hooks.js";
+import {
+  createSessionEntityId,
+  createSubagentEntityId,
+  normalizeRefs,
+} from "../../plugins/hook-provenance.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import {
   isSubagentSessionKey,
@@ -174,6 +179,13 @@ async function emitSessionUnboundLifecycleEvent(params: {
       reason: params.reason,
       sendFarewell: true,
       outcome: params.reason === "session-reset" ? "reset" : "deleted",
+      entityId: createSubagentEntityId({
+        targetSessionKey: params.targetSessionKey,
+        reason: params.reason,
+      }),
+      parentEntityId: createSessionEntityId(params.targetSessionKey),
+      sourceRefs: normalizeRefs([params.targetSessionKey]),
+      confidence: 1,
     },
     {
       childSessionKey: params.targetSessionKey,

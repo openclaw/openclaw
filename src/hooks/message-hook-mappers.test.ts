@@ -74,16 +74,22 @@ describe("message hook mappers", () => {
       accountId: "acc-1",
       conversationId: "telegram:chat:456",
     });
-    expect(toPluginMessageReceivedEvent(canonical)).toEqual({
-      from: "telegram:user:123",
-      content: "commands-body",
-      timestamp: 1710000000,
-      metadata: expect.objectContaining({
-        messageId: "msg-1",
-        senderName: "User One",
-        threadId: 42,
+    expect(toPluginMessageReceivedEvent(canonical)).toEqual(
+      expect.objectContaining({
+        from: "telegram:user:123",
+        content: "commands-body",
+        timestamp: 1710000000,
+        entityId: expect.any(String),
+        parentEntityId: expect.any(String),
+        sourceRefs: ["msg-1"],
+        confidence: 1,
+        metadata: expect.objectContaining({
+          messageId: "msg-1",
+          senderName: "User One",
+          threadId: 42,
+        }),
       }),
-    });
+    );
     expect(toInternalMessageReceivedContext(canonical)).toEqual({
       from: "telegram:user:123",
       content: "commands-body",
@@ -150,5 +156,28 @@ describe("message hook mappers", () => {
       isGroup: true,
       groupId: "telegram:chat:456",
     });
+  });
+
+  it("keeps explicit relationship hints on plugin message_received events", () => {
+    const canonical = deriveInboundMessageHookContext(
+      makeInboundCtx({
+        SessionKey: "agent:main:telegram:direct:123",
+        incidentId: "incident:123",
+        threadEntityId: "entity:thread:42",
+        entityRefs: ["entity:message:42"],
+        repoRefs: ["repo:openclaw-sre"],
+        artifactRefs: ["artifact:evidence:1"],
+      }),
+    );
+
+    expect(toPluginMessageReceivedEvent(canonical)).toEqual(
+      expect.objectContaining({
+        entityId: expect.any(String),
+        parentEntityId: "incident:123",
+        sourceRefs: ["msg-1", "agent:main:telegram:direct:123"],
+        derivedFrom: ["entity:message:42", "repo:openclaw-sre", "artifact:evidence:1"],
+        confidence: 1,
+      }),
+    );
   });
 });

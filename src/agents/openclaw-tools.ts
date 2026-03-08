@@ -14,6 +14,9 @@ import { createImageTool } from "./tools/image-tool.js";
 import { createMessageTool } from "./tools/message-tool.js";
 import { createNodesTool } from "./tools/nodes-tool.js";
 import { createPdfTool } from "./tools/pdf-tool.js";
+import { createRelationshipExplainTool } from "./tools/relationship-explain.js";
+import { createRelationshipLookupTool } from "./tools/relationship-lookup.js";
+import { createRelationshipNeighborsTool } from "./tools/relationship-neighbors.js";
 import { createSessionStatusTool } from "./tools/session-status-tool.js";
 import { createSessionsHistoryTool } from "./tools/sessions-history-tool.js";
 import { createSessionsListTool } from "./tools/sessions-list-tool.js";
@@ -190,6 +193,9 @@ export function createOpenClawTools(options?: {
       agentSessionKey: options?.agentSessionKey,
       config: options?.config,
     }),
+    createRelationshipLookupTool(),
+    createRelationshipNeighborsTool(),
+    createRelationshipExplainTool(),
     ...(webSearchTool ? [webSearchTool] : []),
     ...(webFetchTool ? [webFetchTool] : []),
     ...(imageTool ? [imageTool] : []),

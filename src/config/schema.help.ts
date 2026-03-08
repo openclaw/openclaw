@@ -50,6 +50,59 @@ export const FIELD_HELP: Record<string, string> = {
     'Sensitive redaction mode: "off" disables built-in masking, while "tools" redacts sensitive tool/config payload fields. Keep "tools" in shared logs unless you have isolated secure log sinks.',
   "logging.redactPatterns":
     "Additional custom redact regex patterns applied to log output before emission/storage. Use this to mask org-specific tokens and identifiers not covered by built-in redaction rules.",
+  sre: "SRE feature gates for the incident operating-system substrate. Keep all flags off by default, then enable read-side or shadow behavior incrementally as each subsystem is validated.",
+  "sre.provenance":
+    "Controls provenance graph capture for incident entities, relationships, and explainability edges. Enable only when graph writes are validated for the target environment.",
+  "sre.provenance.enabled":
+    "Enables provenance graph capture for incident and runtime entities. Keep off until graph storage and compatibility readers are validated.",
+  "sre.structuredEvidence":
+    "Controls normalized evidence row generation for SRE investigations. Enable after dual-write validation confirms shell outputs and structured evidence stay aligned.",
+  "sre.structuredEvidence.enabled":
+    "Enables structured evidence contracts for incident collectors and normalizers. Keep off until evidence writers are ready for the current rollout phase.",
+  "sre.incidentDossier":
+    "Controls persistent dossier reads and writes under the dedicated SRE dossier state tree. Enable only after dossier storage and retrieval flows are verified end to end.",
+  "sre.incidentDossier.enabled":
+    "Enables persistent incident dossier storage. Keep off until dossier state layout and compatibility behavior are validated.",
+  "sre.contextBroker":
+    "Controls runtime-assisted retrieval and context injection for incidents, repos, and deployments. Enable only after shadow-mode context selection has been reviewed.",
+  "sre.contextBroker.enabled":
+    "Enables the SRE context broker feature gate. Keep off until injected-context quality is validated in shadow mode.",
+  "sre.repoOwnership":
+    "Controls loading and use of the machine-readable repo ownership map for source-of-truth and planning decisions. This flag can be enabled earlier in read-only mode because it does not mutate repos by itself.",
+  "sre.repoOwnership.enabled":
+    "Enables repo ownership loading for retrieval and planning gates. Keep off until the ownership map is seeded and validated for the target environment.",
+  "sre.repoOwnership.filePath":
+    "Path to the seeded repo ownership map consumed by retrieval and planning logic. Keep this aligned with the runtime-seeded SRE index path so ownership reads stay deterministic across restarts.",
+  "sre.multiRepoPlanning":
+    "Controls change-plan generation across openclaw-sre and sibling infra repos. Enable only after ownership rules and validation contracts are in place.",
+  "sre.multiRepoPlanning.enabled":
+    "Enables multi-repo planning flows. Keep off until plan-only validation is complete and mutation boundaries are explicit.",
+  "sre.multiRepoPr":
+    "Controls multi-repo PR orchestration after validated change plans exist. Keep this off until plan validation and human review gates are proven in dev.",
+  "sre.multiRepoPr.enabled":
+    "Enables multi-repo PR bundle orchestration. Keep off until single-repo and plan-only gates have been validated and human review is in place.",
+  "sre.changeIntel":
+    "Controls change-window and recent-change intelligence used during incident correlation. Enable after read-side collectors are validated for freshness and attribution quality.",
+  "sre.changeIntel.enabled":
+    "Enables change-intel collection and retrieval. Keep off until read-side change attribution is validated for the target environment.",
+  "sre.relationshipIndex":
+    "Controls relationship index writes and graph-backed lookup readiness. Enable after shadow-mode indexing confirms stable graph shape and provenance coverage.",
+  "sre.relationshipIndex.enabled":
+    "Enables relationship indexing for graph-backed lookup flows. Keep off until index storage and compatibility readers are validated.",
+  "sre.stateRoots":
+    "Directory layout for persistent SRE graph, dossier, index, and change-plan state. Keep these roots on the same writable state volume and distinct from the existing sentinel incident-state directory.",
+  "sre.stateRoots.graphDir":
+    "Filesystem root for relationship graph payloads and related graph-side artifacts. Keep this on the shared SRE state volume so graph data survives restarts.",
+  "sre.stateRoots.dossiersDir":
+    "Filesystem root for persistent incident dossier trees. Keep this writable and stable so dossier artifacts remain available across sessions and restarts.",
+  "sre.stateRoots.indexDir":
+    "Filesystem root for queryable SRE indexes, including repo ownership state. Keep this aligned with runtime seed-copy paths and other retrieval-side readers.",
+  "sre.stateRoots.plansDir":
+    "Filesystem root for persisted multi-repo change plans and execution metadata. Keep this distinct from graph and dossier storage to simplify locking and cleanup.",
+  "sre.repoBootstrap":
+    "Deterministic checkout-root settings for the baked-in SRE repo set available to the runtime image. Use this to keep repo discovery aligned with image contents and cross-repo planning logic.",
+  "sre.repoBootstrap.rootDir":
+    "Root directory containing the deterministic baked checkouts for openclaw-sre, morpho-infra, and morpho-infra-helm. Keep this aligned with the runtime image Dockerfile and deployment env wiring.",
   cli: "CLI presentation controls for local command output behavior such as banner and tagline style. Use this section to keep startup output aligned with operator preference without changing runtime behavior.",
   "cli.banner":
     "CLI startup banner controls for title/version line and tagline style behavior. Keep banner enabled for fast version/context checks, then tune tagline mode to your preferred noise level.",

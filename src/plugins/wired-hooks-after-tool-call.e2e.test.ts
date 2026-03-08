@@ -122,6 +122,10 @@ describe("after_tool_call hook wiring", () => {
           durationMs?: unknown;
           runId?: string;
           toolCallId?: string;
+          entityId?: string;
+          parentEntityId?: string;
+          sourceRefs?: string[];
+          confidence?: number;
         }
       | undefined;
     const context = firstCall?.[1] as
@@ -145,6 +149,10 @@ describe("after_tool_call hook wiring", () => {
     expect(typeof event.durationMs).toBe("number");
     expect(event.runId).toBe("test-run-1");
     expect(event.toolCallId).toBe("wired-hook-call-1");
+    expect(event.entityId).toBeDefined();
+    expect(event.parentEntityId).toBeDefined();
+    expect(event.sourceRefs).toEqual(["test-run-1", "wired-hook-call-1", "test-session"]);
+    expect(event.confidence).toBe(1);
     expect(context.toolName).toBe("read");
     expect(context.agentId).toBe("main");
     expect(context.sessionKey).toBe("test-session");

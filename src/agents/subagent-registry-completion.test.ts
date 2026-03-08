@@ -5,10 +5,16 @@ import type { SubagentRunRecord } from "./subagent-registry.types.js";
 const lifecycleMocks = vi.hoisted(() => ({
   getGlobalHookRunner: vi.fn(),
   runSubagentEnded: vi.fn(async () => {}),
+  distillSubagentOutcome: vi.fn(async (..._args: unknown[]) => ({})),
 }));
 
 vi.mock("../plugins/hook-runner-global.js", () => ({
   getGlobalHookRunner: () => lifecycleMocks.getGlobalHookRunner(),
+}));
+
+vi.mock("../sre/distillation/index.js", () => ({
+  distillSubagentOutcome: (...args: unknown[]) =>
+    lifecycleMocks.distillSubagentOutcome(...(args as [unknown])),
 }));
 
 import { emitSubagentEndedHookOnce } from "./subagent-registry-completion.js";
@@ -44,6 +50,7 @@ describe("emitSubagentEndedHookOnce", () => {
   beforeEach(() => {
     lifecycleMocks.getGlobalHookRunner.mockClear();
     lifecycleMocks.runSubagentEnded.mockClear();
+    lifecycleMocks.distillSubagentOutcome.mockClear();
   });
 
   it("records ended hook marker even when no subagent_ended hooks are registered", async () => {
@@ -72,6 +79,7 @@ describe("emitSubagentEndedHookOnce", () => {
 
     expect(emitted).toBe(true);
     expect(lifecycleMocks.runSubagentEnded).toHaveBeenCalledTimes(1);
+    expect(lifecycleMocks.distillSubagentOutcome).toHaveBeenCalledTimes(1);
     expect(typeof params.entry.endedHookEmittedAt).toBe("number");
     expect(params.persist).toHaveBeenCalledTimes(1);
   });

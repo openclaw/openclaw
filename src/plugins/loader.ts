@@ -7,6 +7,7 @@ import type { GatewayRequestHandler } from "../gateway/server-methods/types.js";
 import { openBoundaryFileSync } from "../infra/boundary-file-read.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { resolveUserPath } from "../utils.js";
+import { createRelationshipIndexPlugin } from "./bundled/relationship-index/index.js";
 import { clearPluginCommands } from "./commands.js";
 import {
   applyTestPluginDefaults,
@@ -319,6 +320,95 @@ function pushDiagnostics(diagnostics: PluginDiagnostic[], append: PluginDiagnost
   diagnostics.push(...append);
 }
 
+function registerInternalPlugin(params: {
+  config: OpenClawConfig;
+  createApi: ReturnType<typeof createPluginRegistry>["createApi"];
+  definition: OpenClawPluginDefinition;
+  logger: PluginLogger;
+  origin: PluginRecord["origin"];
+  registry: PluginRegistry;
+  seenIds: Map<string, PluginRecord["origin"]>;
+  source: string;
+}) {
+  const id = params.definition.id?.trim();
+  if (!id) {
+    return;
+  }
+  if (params.seenIds.has(id)) {
+    params.registry.diagnostics.push({
+      level: "warn",
+      pluginId: id,
+      source: params.source,
+      message: `internal plugin "${id}" skipped because the id is already registered`,
+    });
+    return;
+  }
+
+  const normalized = normalizePluginsConfig(params.config.plugins);
+  const entryConfig = normalized.entries[id];
+  const record = createPluginRecord({
+    id,
+    name: params.definition.name ?? id,
+    description: params.definition.description,
+    version: params.definition.version,
+    source: params.source,
+    origin: params.origin,
+    enabled: true,
+    configSchema: Boolean(params.definition.configSchema),
+  });
+  record.kind = params.definition.kind;
+  record.configJsonSchema =
+    params.definition.configSchema?.jsonSchema ?? params.definition.configSchema;
+
+  const register = params.definition.register ?? params.definition.activate;
+  if (!register) {
+    record.status = "error";
+    record.error = "missing plugin register handler";
+    params.registry.plugins.push(record);
+    params.seenIds.set(id, params.origin);
+    return;
+  }
+
+  try {
+    const validatedConfig = validatePluginConfig({
+      schema: params.definition.configSchema,
+      cacheKey: `internal:${id}`,
+      value: entryConfig?.config,
+    });
+    if (!validatedConfig.ok) {
+      record.status = "error";
+      record.error = `invalid plugin config: ${validatedConfig.errors?.join("; ")}`;
+      params.registry.plugins.push(record);
+      params.seenIds.set(id, params.origin);
+      return;
+    }
+
+    const api = params.createApi(record, {
+      config: params.config,
+      pluginConfig: validatedConfig.value,
+      hookPolicy: entryConfig?.hooks,
+    });
+    const result = register(api);
+    if (result && typeof result === "object" && "then" in result) {
+      throw new Error("internal plugin register handlers must be synchronous");
+    }
+    params.registry.plugins.push(record);
+    params.seenIds.set(id, params.origin);
+  } catch (err) {
+    recordPluginError({
+      logger: params.logger,
+      registry: params.registry,
+      record,
+      seenIds: params.seenIds,
+      pluginId: id,
+      origin: params.origin,
+      error: err,
+      logPrefix: `[plugins] ${id} failed to load from ${params.source}: `,
+      diagnosticMessagePrefix: "failed to load internal plugin: ",
+    });
+  }
+}
+
 type PathMatcher = {
   exact: Set<string>;
   dirs: string[];
@@ -597,6 +687,19 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
   const memorySlot = normalized.slots.memory;
   let selectedMemoryPluginId: string | null = null;
   let memorySlotMatched = false;
+
+  if (cfg.sre?.relationshipIndex?.enabled === true) {
+    registerInternalPlugin({
+      config: cfg,
+      createApi,
+      definition: createRelationshipIndexPlugin(),
+      logger,
+      origin: "bundled",
+      registry,
+      seenIds,
+      source: "core:relationship-index",
+    });
+  }
 
   for (const candidate of discovery.candidates) {
     const manifestRecord = manifestByRoot.get(candidate.rootDir);

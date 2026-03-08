@@ -32,6 +32,7 @@ import type {
   PluginHookMessageSendingEvent,
   PluginHookMessageSendingResult,
   PluginHookMessageSentEvent,
+  PluginHookProvenanceFields,
   PluginHookName,
   PluginHookRegistration,
   PluginHookSessionContext,
@@ -72,6 +73,7 @@ export type {
   PluginHookMessageSendingEvent,
   PluginHookMessageSendingResult,
   PluginHookMessageSentEvent,
+  PluginHookProvenanceFields,
   PluginHookToolContext,
   PluginHookBeforeToolCallEvent,
   PluginHookBeforeToolCallResult,
@@ -108,6 +110,33 @@ export type HookRunnerOptions = {
   catchErrors?: boolean;
 };
 
+export function mergePromptBuildResults(
+  acc: PluginHookBeforePromptBuildResult | undefined,
+  next: PluginHookBeforePromptBuildResult | undefined,
+): PluginHookBeforePromptBuildResult | undefined {
+  if (!acc) {
+    return next;
+  }
+  if (!next) {
+    return acc;
+  }
+  return {
+    systemPrompt: next.systemPrompt ?? acc.systemPrompt,
+    prependContext: concatOptionalTextSegments({
+      left: acc.prependContext,
+      right: next.prependContext,
+    }),
+    prependSystemContext: concatOptionalTextSegments({
+      left: acc.prependSystemContext,
+      right: next.prependSystemContext,
+    }),
+    appendSystemContext: concatOptionalTextSegments({
+      left: acc.appendSystemContext,
+      right: next.appendSystemContext,
+    }),
+  };
+}
+
 /**
  * Get hooks for a specific hook name, sorted by priority (higher first).
  */
@@ -139,21 +168,7 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
   const mergeBeforePromptBuild = (
     acc: PluginHookBeforePromptBuildResult | undefined,
     next: PluginHookBeforePromptBuildResult,
-  ): PluginHookBeforePromptBuildResult => ({
-    systemPrompt: next.systemPrompt ?? acc?.systemPrompt,
-    prependContext: concatOptionalTextSegments({
-      left: acc?.prependContext,
-      right: next.prependContext,
-    }),
-    prependSystemContext: concatOptionalTextSegments({
-      left: acc?.prependSystemContext,
-      right: next.prependSystemContext,
-    }),
-    appendSystemContext: concatOptionalTextSegments({
-      left: acc?.appendSystemContext,
-      right: next.appendSystemContext,
-    }),
-  });
+  ): PluginHookBeforePromptBuildResult => mergePromptBuildResults(acc, next) ?? next;
 
   const mergeSubagentSpawningResult = (
     acc: PluginHookSubagentSpawningResult | undefined,

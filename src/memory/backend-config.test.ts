@@ -77,6 +77,44 @@ describe("resolveMemoryBackendConfig", () => {
     expect(custom?.path).toBe(path.resolve(workspaceRoot, "notes"));
   });
 
+  it("classifies SRE-focused QMD collections by path intent", () => {
+    const cfg = {
+      agents: {
+        defaults: { workspace: "/workspace/root" },
+        list: [{ id: "main", workspace: "/workspace/root" }],
+      },
+      memory: {
+        backend: "qmd",
+        qmd: {
+          paths: [
+            { path: "/srv/sre-dossiers", name: "incident-dossiers", pattern: "**/*.md" },
+            { path: "/srv/skills", name: "sre-runbooks", pattern: "**/*.md" },
+            { path: "/workspace/root/docs", name: "repo-docs", pattern: "**/*.md" },
+            {
+              path: "/srv/state/sre-index/session-summaries",
+              name: "session-summary-index",
+              pattern: "**/*.md",
+            },
+          ],
+        },
+      },
+    } as OpenClawConfig;
+
+    const resolved = resolveMemoryBackendConfig({ cfg, agentId: "main" });
+    const bySourceKind = new Map(
+      (resolved.qmd?.collections ?? [])
+        .filter((collection) => collection.sourceKind)
+        .map((collection) => [collection.sourceKind, collection]),
+    );
+
+    expect(bySourceKind.get("incident-dossier")?.path).toBe("/srv/sre-dossiers");
+    expect(bySourceKind.get("runbook")?.path).toBe("/srv/skills");
+    expect(bySourceKind.get("repo-doc")?.path).toBe("/workspace/root/docs");
+    expect(bySourceKind.get("session-summary")?.path).toBe(
+      "/srv/state/sre-index/session-summaries",
+    );
+  });
+
   it("scopes qmd collection names per agent", () => {
     const cfg = {
       agents: {

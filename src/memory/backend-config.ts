@@ -25,6 +25,7 @@ export type ResolvedQmdCollection = {
   path: string;
   pattern: string;
   kind: "memory" | "custom" | "sessions";
+  sourceKind?: "incident-dossier" | "runbook" | "repo-doc" | "session-summary";
 };
 
 export type ResolvedQmdUpdateConfig = {
@@ -241,14 +242,45 @@ function resolveCustomPaths(
     const pattern = entry.pattern?.trim() || "**/*.md";
     const baseName = scopeCollectionBase(entry.name?.trim() || `custom-${index + 1}`, agentId);
     const name = ensureUniqueName(baseName, existing);
+    const sourceKind = inferCustomCollectionKind({
+      name: entry.name?.trim(),
+      path: resolved,
+      pattern,
+    });
     collections.push({
       name,
       path: resolved,
       pattern,
       kind: "custom",
+      sourceKind,
     });
   });
   return collections;
+}
+
+function inferCustomCollectionKind(params: {
+  name?: string;
+  path: string;
+  pattern: string;
+}): NonNullable<ResolvedQmdCollection["sourceKind"]> | undefined {
+  const haystack = [params.name ?? "", params.path, params.pattern].join("\n").toLowerCase();
+  if (haystack.includes("dossier")) {
+    return "incident-dossier";
+  }
+  if (
+    haystack.includes("runbook") ||
+    haystack.includes("heartbeat") ||
+    haystack.includes("safety")
+  ) {
+    return "runbook";
+  }
+  if (haystack.includes("session-summary")) {
+    return "session-summary";
+  }
+  if (haystack.includes("docs") || haystack.includes("readme") || haystack.includes("plan")) {
+    return "repo-doc";
+  }
+  return undefined;
 }
 
 function resolveMcporterConfig(raw?: MemoryQmdMcporterConfig): ResolvedQmdMcporterConfig {

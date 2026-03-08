@@ -120,6 +120,45 @@ const MemorySchema = z
   .strict()
   .optional();
 
+const SreFeatureToggleSchema = z
+  .object({
+    enabled: z.boolean().optional(),
+  })
+  .strict();
+
+const SreStateRootsSchema = z
+  .object({
+    graphDir: z.string().optional(),
+    dossiersDir: z.string().optional(),
+    indexDir: z.string().optional(),
+    plansDir: z.string().optional(),
+  })
+  .strict();
+
+const SreSchema = z
+  .object({
+    provenance: SreFeatureToggleSchema.optional(),
+    structuredEvidence: SreFeatureToggleSchema.optional(),
+    incidentDossier: SreFeatureToggleSchema.optional(),
+    contextBroker: SreFeatureToggleSchema.optional(),
+    repoOwnership: SreFeatureToggleSchema.extend({
+      filePath: z.string().optional(),
+    }).optional(),
+    multiRepoPlanning: SreFeatureToggleSchema.optional(),
+    multiRepoPr: SreFeatureToggleSchema.optional(),
+    changeIntel: SreFeatureToggleSchema.optional(),
+    relationshipIndex: SreFeatureToggleSchema.optional(),
+    stateRoots: SreStateRootsSchema.optional(),
+    repoBootstrap: z
+      .object({
+        rootDir: z.string().optional(),
+      })
+      .strict()
+      .optional(),
+  })
+  .strict()
+  .optional();
+
 const HttpUrlSchema = z
   .string()
   .url()
@@ -781,6 +820,7 @@ export const OpenClawSchema = z
       .strict()
       .optional(),
     memory: MemorySchema,
+    sre: SreSchema,
     skills: z
       .object({
         allowBundled: z.array(z.string()).optional(),

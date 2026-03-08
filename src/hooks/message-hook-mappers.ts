@@ -1,5 +1,10 @@
 import type { FinalizedMsgContext } from "../auto-reply/templating.js";
 import type { OpenClawConfig } from "../config/config.js";
+import {
+  createMessageEntityId,
+  createThreadEntityId,
+  normalizeRefs,
+} from "../plugins/hook-provenance.js";
 import type {
   PluginHookMessageContext,
   PluginHookMessageReceivedEvent,
@@ -39,6 +44,12 @@ export type CanonicalInboundMessageHookContext = {
   channelName?: string;
   isGroup: boolean;
   groupId?: string;
+  sessionKey?: string;
+  incidentId?: string;
+  threadEntityId?: string;
+  entityRefs?: string[];
+  repoRefs?: string[];
+  artifactRefs?: string[];
 };
 
 export type CanonicalSentMessageHookContext = {
@@ -108,6 +119,12 @@ export function deriveInboundMessageHookContext(
     channelName: ctx.GroupChannel,
     isGroup,
     groupId: isGroup ? conversationId : undefined,
+    sessionKey: ctx.SessionKey,
+    incidentId: ctx.incidentId,
+    threadEntityId: ctx.threadEntityId,
+    entityRefs: ctx.entityRefs,
+    repoRefs: ctx.repoRefs,
+    artifactRefs: ctx.artifactRefs,
   };
 }
 
@@ -150,10 +167,32 @@ export function toPluginMessageContext(
 export function toPluginMessageReceivedEvent(
   canonical: CanonicalInboundMessageHookContext,
 ): PluginHookMessageReceivedEvent {
+  const entityId = createMessageEntityId({
+    channelId: canonical.channelId,
+    messageId: canonical.messageId,
+    from: canonical.from,
+    content: canonical.content,
+    timestamp: canonical.timestamp,
+  });
+  const threadEntityId = createThreadEntityId({
+    explicitThreadEntityId: canonical.threadEntityId,
+    channelId: canonical.channelId,
+    conversationId: canonical.conversationId,
+    threadId: canonical.threadId,
+  });
   return {
     from: canonical.from,
     content: canonical.content,
     timestamp: canonical.timestamp,
+    entityId,
+    parentEntityId: canonical.incidentId ?? threadEntityId,
+    sourceRefs: normalizeRefs([canonical.messageId, canonical.sessionKey]),
+    derivedFrom: normalizeRefs([
+      ...(canonical.entityRefs ?? []),
+      ...(canonical.repoRefs ?? []),
+      ...(canonical.artifactRefs ?? []),
+    ]),
+    confidence: entityId ? 1 : undefined,
     metadata: {
       to: canonical.to,
       provider: canonical.provider,

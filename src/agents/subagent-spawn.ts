@@ -5,6 +5,11 @@ import { formatThinkingLevels, normalizeThinkLevel } from "../auto-reply/thinkin
 import { DEFAULT_SUBAGENT_MAX_SPAWN_DEPTH } from "../config/agent-limits.js";
 import { loadConfig } from "../config/config.js";
 import { callGateway } from "../gateway/call.js";
+import {
+  createSessionEntityId,
+  createSubagentEntityId,
+  normalizeRefs,
+} from "../plugins/hook-provenance.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import {
   isValidAgentId,
@@ -749,6 +754,14 @@ export async function spawnSubagentDirect(
               runId: childRunId,
               outcome: "error",
               error: "Session failed to start",
+              entityId: createSubagentEntityId({
+                targetSessionKey: childSessionKey,
+                runId: childRunId,
+                reason: "spawn-failed",
+              }),
+              parentEntityId: createSessionEntityId(requesterInternalKey),
+              sourceRefs: normalizeRefs([childRunId, childSessionKey, requesterInternalKey]),
+              confidence: 1,
             },
             {
               runId: childRunId,
@@ -845,6 +858,14 @@ export async function spawnSubagentDirect(
           },
           threadRequested: requestThreadBinding,
           mode: spawnMode,
+          entityId: createSubagentEntityId({
+            childSessionKey,
+            runId: childRunId,
+            agentId: targetAgentId,
+          }),
+          parentEntityId: createSessionEntityId(requesterInternalKey),
+          sourceRefs: normalizeRefs([childRunId, childSessionKey, requesterInternalKey]),
+          confidence: 1,
         },
         {
           runId: childRunId,

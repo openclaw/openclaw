@@ -155,6 +155,11 @@ export type SessionEntry = {
   subject?: string;
   groupChannel?: string;
   space?: string;
+  entityRefs?: string[];
+  incidentId?: string;
+  threadEntityId?: string;
+  repoRefs?: string[];
+  artifactRefs?: string[];
   origin?: SessionOrigin;
   deliveryContext?: DeliveryContext;
   lastChannel?: SessionChannelId;

@@ -1571,6 +1571,9 @@ describe("dispatchReplyFromConfig", () => {
         from: ctx.From,
         content: "/search hello",
         timestamp: 1710000000000,
+        entityId: expect.any(String),
+        sourceRefs: expect.arrayContaining(["sid-full"]),
+        confidence: 1,
         metadata: expect.objectContaining({
           originatingChannel: "Telegram",
           originatingTo: "telegram:999",

@@ -14,6 +14,7 @@ import { getMachineDisplayName } from "../../../infra/machine-name.js";
 import { ensureGlobalUndiciStreamTimeouts } from "../../../infra/net/undici-global-dispatcher.js";
 import { MAX_IMAGE_BYTES } from "../../../media/constants.js";
 import { getGlobalHookRunner } from "../../../plugins/hook-runner-global.js";
+import { mergePromptBuildResults } from "../../../plugins/hooks.js";
 import type {
   PluginHookAgentContext,
   PluginHookBeforeAgentStartResult,
@@ -22,6 +23,7 @@ import type {
 import { isSubagentSessionKey } from "../../../routing/session-key.js";
 import { joinPresentTextSegments } from "../../../shared/text/join-segments.js";
 import { resolveSignalReactionLevel } from "../../../signal/reaction-level.js";
+import { runContextBroker } from "../../../sre/context-broker/index.js";
 import { resolveTelegramInlineButtonsScope } from "../../../telegram/inline-buttons.js";
 import { resolveTelegramReactionLevel } from "../../../telegram/reaction-level.js";
 import { buildTtsSystemPromptHint } from "../../../tts/tts.js";
@@ -529,6 +531,7 @@ function wrapStreamFnDecodeXaiToolCallArguments(baseFn: StreamFn): StreamFn {
 }
 
 export async function resolvePromptBuildHookResult(params: {
+  config?: OpenClawConfig;
   prompt: string;
   messages: unknown[];
   hookCtx: PluginHookAgentContext;
@@ -567,21 +570,23 @@ export async function resolvePromptBuildHookResult(params: {
             return undefined;
           })
       : undefined);
-  return {
-    systemPrompt: promptBuildResult?.systemPrompt ?? legacyResult?.systemPrompt,
-    prependContext: joinPresentTextSegments([
-      promptBuildResult?.prependContext,
-      legacyResult?.prependContext,
-    ]),
-    prependSystemContext: joinPresentTextSegments([
-      promptBuildResult?.prependSystemContext,
-      legacyResult?.prependSystemContext,
-    ]),
-    appendSystemContext: joinPresentTextSegments([
-      promptBuildResult?.appendSystemContext,
-      legacyResult?.appendSystemContext,
-    ]),
-  };
+  const brokerResult = await runContextBroker({
+    config: params.config,
+    prompt: params.prompt,
+    sessionKey: params.hookCtx.sessionKey,
+    agentId: params.hookCtx.agentId,
+    workspaceDir: params.hookCtx.workspaceDir,
+  }).catch((err: unknown): PluginHookBeforePromptBuildResult => {
+    log.warn(`context broker failed: ${String(err)}`);
+    return {};
+  });
+
+  return (
+    mergePromptBuildResults(
+      mergePromptBuildResults(promptBuildResult, legacyResult),
+      brokerResult.prependContext ? { prependContext: brokerResult.prependContext } : undefined,
+    ) ?? {}
+  );
 }
 
 export function composeSystemPromptWithHookContext(params: {
@@ -1531,6 +1536,7 @@ export async function runEmbeddedAttempt(
           channelId: params.messageChannel ?? params.messageProvider ?? undefined,
         };
         const hookResult = await resolvePromptBuildHookResult({
+          config: params.config,
           prompt: params.prompt,
           messages: activeSession.messages,
           hookCtx,

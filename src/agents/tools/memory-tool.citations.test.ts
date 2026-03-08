@@ -86,8 +86,15 @@ describe("memory search citations", () => {
       throw new Error("tool missing");
     }
     const result = await tool.execute("call_citations_qmd", { query: "notes" });
-    const details = result.details as { results: Array<{ snippet: string; citation?: string }> };
+    const details = result.details as {
+      results: Array<{ snippet: string; citation?: string }>;
+      freshness?: { updateIntervalMs?: number };
+      qmdSources?: Array<{ kind: string; sourceKind?: string }>;
+    };
     expect(details.results[0]?.snippet.length).toBeLessThanOrEqual(20);
+    expect(details.freshness?.updateIntervalMs).toBeDefined();
+    expect(Array.isArray(details.qmdSources)).toBe(true);
+    expect(details.qmdSources?.[0]?.kind).toBeDefined();
   });
 
   it("honors auto mode for direct chats", async () => {

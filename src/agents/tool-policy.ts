@@ -1,3 +1,8 @@
+import type { OpenClawConfig } from "../config/config.js";
+import { loadRepoOwnershipForRuntime, matchRepoOwnershipPath } from "../plugins/path-safety.js";
+import { normalizeAgentId } from "../routing/session-key.js";
+import { logSreMetric } from "../sre/observability/log.js";
+import { resolvePathFromInput } from "./path-policy.js";
 import {
   expandToolGroups,
   normalizeToolList,
@@ -49,6 +54,185 @@ export function applyOwnerOnlyToolPolicy(tools: AnyAgentTool[], senderIsOwner: b
     return withGuard;
   }
   return withGuard.filter((tool) => !isOwnerOnlyTool(tool));
+}
+
+export type SreAgentExecutionRole = "fixer" | "investigator" | "verifier";
+
+const SRE_FIXER_AGENT_IDS = new Set(["sre-repo-runtime", "sre-repo-helm"]);
+const SRE_VERIFIER_AGENT_IDS = new Set(["sre-verifier"]);
+const SRE_FIXER_REPO_ALLOWLIST: Record<string, string[]> = {
+  "sre-repo-runtime": ["openclaw-sre"],
+  "sre-repo-helm": ["morpho-infra-helm"],
+};
+
+function isMutatingExecCommand(command: string): boolean {
+  const normalized = command.trim().toLowerCase();
+  if (!normalized) {
+    return false;
+  }
+  return (
+    /(^|[|&;]\s*)(cp|mv|rm|mkdir|touch|tee|patch)\b/.test(normalized) ||
+    /\bsed\s+-i\b/.test(normalized) ||
+    /\bperl\s+-i\b/.test(normalized) ||
+    /\bgit\s+(apply|checkout|switch|cherry-pick|commit|add|rm|mv|rebase|merge|reset)\b/.test(
+      normalized,
+    ) ||
+    />{1,2}/.test(normalized)
+  );
+}
+
+function extractMutatingToolPaths(toolName: string, params: Record<string, unknown>): string[] {
+  const normalizedTool = normalizeToolName(toolName);
+  if (normalizedTool === "write" || normalizedTool === "edit") {
+    return typeof params.path === "string" ? [params.path] : [];
+  }
+  if (normalizedTool === "apply_patch") {
+    const input = typeof params.input === "string" ? params.input : "";
+    return input
+      .split("\n")
+      .map((line) => line.trim())
+      .flatMap((line) => {
+        for (const prefix of [
+          "*** Add File: ",
+          "*** Delete File: ",
+          "*** Update File: ",
+          "*** Move to: ",
+        ]) {
+          if (line.startsWith(prefix)) {
+            return [line.slice(prefix.length).trim()];
+          }
+        }
+        return [];
+      })
+      .filter(Boolean);
+  }
+  return [];
+}
+
+function resolveAllowedFixerRepos(agentId: string): string[] {
+  return SRE_FIXER_REPO_ALLOWLIST[agentId] ?? [];
+}
+
+export function resolveSreAgentExecutionRole(
+  _config: OpenClawConfig | undefined,
+  agentId: string | undefined,
+): SreAgentExecutionRole | undefined {
+  const normalized = normalizeAgentId(agentId ?? "");
+  if (!normalized) {
+    return undefined;
+  }
+  if (SRE_FIXER_AGENT_IDS.has(normalized)) {
+    return "fixer";
+  }
+  if (SRE_VERIFIER_AGENT_IDS.has(normalized)) {
+    return "verifier";
+  }
+  if (normalized.startsWith("sre")) {
+    return "investigator";
+  }
+  return undefined;
+}
+
+async function assertOwnedMutationTargets(params: {
+  agentId: string;
+  config?: OpenClawConfig;
+  workspaceRoot: string;
+  toolName: string;
+  toolParams: Record<string, unknown>;
+}) {
+  const ownership = await loadRepoOwnershipForRuntime({ config: params.config });
+  const allowedRepos = new Set(resolveAllowedFixerRepos(params.agentId));
+  if (allowedRepos.size === 0) {
+    throw new Error(`No owned repos configured for fixer agent ${params.agentId}`);
+  }
+  const rawPaths = extractMutatingToolPaths(params.toolName, params.toolParams);
+  for (const rawPath of rawPaths) {
+    const resolved = resolvePathFromInput(rawPath, params.workspaceRoot);
+    const match = matchRepoOwnershipPath(resolved, ownership);
+    if (!match || !allowedRepos.has(match.repo.repoId) || !match.owned) {
+      logSreMetric("owned_path_rejection", {
+        agentId: params.agentId,
+        toolName: params.toolName,
+        path: rawPath,
+      });
+      throw new Error(`Owned-path policy blocked ${params.toolName}: ${rawPath}`);
+    }
+  }
+}
+
+async function assertFixerExecScope(params: {
+  agentId: string;
+  config?: OpenClawConfig;
+  workspaceRoot: string;
+  toolParams: Record<string, unknown>;
+}) {
+  const ownership = await loadRepoOwnershipForRuntime({ config: params.config });
+  const allowedRepos = new Set(resolveAllowedFixerRepos(params.agentId));
+  const workdirRaw =
+    typeof params.toolParams.workdir === "string" && params.toolParams.workdir.trim()
+      ? params.toolParams.workdir
+      : params.workspaceRoot;
+  const workdir = resolvePathFromInput(workdirRaw, params.workspaceRoot);
+  const match = matchRepoOwnershipPath(workdir, ownership);
+  if (!match || !allowedRepos.has(match.repo.repoId)) {
+    logSreMetric("owned_path_rejection", {
+      agentId: params.agentId,
+      toolName: "exec",
+      workdir: workdirRaw,
+    });
+    throw new Error(`Owned-path policy blocked exec outside owned repo: ${workdirRaw}`);
+  }
+}
+
+export function wrapToolWithOwnedPathPolicy(params: {
+  tool: AnyAgentTool;
+  agentId?: string;
+  config?: OpenClawConfig;
+  workspaceRoot: string;
+}): AnyAgentTool {
+  const role = resolveSreAgentExecutionRole(params.config, params.agentId);
+  if (!role || !params.tool.execute) {
+    return params.tool;
+  }
+  const toolName = normalizeToolName(params.tool.name);
+  const wrapped: AnyAgentTool = {
+    ...params.tool,
+    execute: async (toolCallId, rawParams, signal, onUpdate) => {
+      const toolParams =
+        rawParams && typeof rawParams === "object" ? (rawParams as Record<string, unknown>) : {};
+
+      if (toolName === "exec") {
+        const command = typeof toolParams.command === "string" ? toolParams.command : "";
+        if (role !== "fixer" && isMutatingExecCommand(command)) {
+          throw new Error(`Read-only agent cannot run mutating exec command: ${command}`);
+        }
+        if (role === "fixer") {
+          await assertFixerExecScope({
+            agentId: normalizeAgentId(params.agentId ?? ""),
+            config: params.config,
+            workspaceRoot: params.workspaceRoot,
+            toolParams,
+          });
+        }
+      }
+
+      if (toolName === "write" || toolName === "edit" || toolName === "apply_patch") {
+        if (role !== "fixer") {
+          throw new Error(`Read-only agent cannot use ${toolName}`);
+        }
+        await assertOwnedMutationTargets({
+          agentId: normalizeAgentId(params.agentId ?? ""),
+          config: params.config,
+          workspaceRoot: params.workspaceRoot,
+          toolName,
+          toolParams,
+        });
+      }
+
+      return await params.tool.execute(toolCallId, rawParams, signal, onUpdate);
+    },
+  };
+  return wrapped;
 }
 
 export type ToolPolicyLike = {

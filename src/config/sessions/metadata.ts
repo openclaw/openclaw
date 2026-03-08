@@ -7,6 +7,50 @@ import { normalizeMessageChannel } from "../../utils/message-channel.js";
 import { buildGroupDisplayName, resolveGroupSessionKey } from "./group.js";
 import type { GroupKeyResolution, SessionEntry, SessionOrigin } from "./types.js";
 
+type SessionRelationshipHintContext = MsgContext & {
+  entityRefs?: unknown;
+  incidentId?: unknown;
+  threadEntityId?: unknown;
+  repoRefs?: unknown;
+  artifactRefs?: unknown;
+  EntityRefs?: unknown;
+  IncidentId?: unknown;
+  ThreadEntityId?: unknown;
+  RepoRefs?: unknown;
+  ArtifactRefs?: unknown;
+};
+
+function trimNonEmptyString(value: unknown): string | undefined {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  const trimmed = value.trim();
+  return trimmed || undefined;
+}
+
+function normalizeRefList(value: unknown): string[] | undefined {
+  if (!Array.isArray(value)) {
+    return undefined;
+  }
+  const refs = value
+    .map((entry) => trimNonEmptyString(entry))
+    .filter((entry): entry is string => Boolean(entry));
+  if (refs.length === 0) {
+    return undefined;
+  }
+  return [...new Set(refs)];
+}
+
+function mergeRefList(
+  existing: string[] | undefined,
+  next: string[] | undefined,
+): string[] | undefined {
+  if (!existing?.length && !next?.length) {
+    return undefined;
+  }
+  return [...new Set([...(existing ?? []), ...(next ?? [])])];
+}
+
 const mergeOrigin = (
   existing: SessionOrigin | undefined,
   next: SessionOrigin | undefined,
@@ -93,6 +137,42 @@ export function snapshotSessionOrigin(entry?: SessionEntry): SessionOrigin | und
   return { ...entry.origin };
 }
 
+function deriveSessionRelationshipPatch(ctx: MsgContext): Partial<SessionEntry> | null {
+  const relationshipCtx = ctx as SessionRelationshipHintContext;
+  const patch: Partial<SessionEntry> = {};
+
+  const entityRefs = normalizeRefList(relationshipCtx.entityRefs ?? relationshipCtx.EntityRefs);
+  if (entityRefs) {
+    patch.entityRefs = entityRefs;
+  }
+
+  const incidentId = trimNonEmptyString(relationshipCtx.incidentId ?? relationshipCtx.IncidentId);
+  if (incidentId) {
+    patch.incidentId = incidentId;
+  }
+
+  const threadEntityId = trimNonEmptyString(
+    relationshipCtx.threadEntityId ?? relationshipCtx.ThreadEntityId,
+  );
+  if (threadEntityId) {
+    patch.threadEntityId = threadEntityId;
+  }
+
+  const repoRefs = normalizeRefList(relationshipCtx.repoRefs ?? relationshipCtx.RepoRefs);
+  if (repoRefs) {
+    patch.repoRefs = repoRefs;
+  }
+
+  const artifactRefs = normalizeRefList(
+    relationshipCtx.artifactRefs ?? relationshipCtx.ArtifactRefs,
+  );
+  if (artifactRefs) {
+    patch.artifactRefs = artifactRefs;
+  }
+
+  return Object.keys(patch).length > 0 ? patch : null;
+}
+
 export function deriveGroupSessionPatch(params: {
   ctx: MsgContext;
   sessionKey: string;
@@ -158,7 +238,8 @@ export function deriveSessionMetaPatch(params: {
 }): Partial<SessionEntry> | null {
   const groupPatch = deriveGroupSessionPatch(params);
   const origin = deriveSessionOrigin(params.ctx);
-  if (!groupPatch && !origin) {
+  const relationships = deriveSessionRelationshipPatch(params.ctx);
+  if (!groupPatch && !origin && !relationships) {
     return null;
   }
 
@@ -166,6 +247,21 @@ export function deriveSessionMetaPatch(params: {
   const mergedOrigin = mergeOrigin(params.existing?.origin, origin);
   if (mergedOrigin) {
     patch.origin = mergedOrigin;
+  }
+  if (relationships?.entityRefs) {
+    patch.entityRefs = mergeRefList(params.existing?.entityRefs, relationships.entityRefs);
+  }
+  if (relationships?.incidentId) {
+    patch.incidentId = relationships.incidentId;
+  }
+  if (relationships?.threadEntityId) {
+    patch.threadEntityId = relationships.threadEntityId;
+  }
+  if (relationships?.repoRefs) {
+    patch.repoRefs = mergeRefList(params.existing?.repoRefs, relationships.repoRefs);
+  }
+  if (relationships?.artifactRefs) {
+    patch.artifactRefs = mergeRefList(params.existing?.artifactRefs, relationships.artifactRefs);
   }
 
   return Object.keys(patch).length > 0 ? patch : null;

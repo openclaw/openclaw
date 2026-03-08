@@ -1,5 +1,10 @@
 import type { AgentEvent } from "@mariozechner/pi-agent-core";
 import { emitAgentEvent } from "../infra/agent-events.js";
+import {
+  createSessionEntityId,
+  createToolCallEntityId,
+  normalizeRefs,
+} from "../plugins/hook-provenance.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import type { PluginHookAfterToolCallEvent } from "../plugins/types.js";
 import { normalizeTextForComparison } from "./pi-embedded-helpers.js";
@@ -433,6 +438,12 @@ export async function handleToolExecutionEnd(
   const hookRunnerAfter = ctx.hookRunner ?? getGlobalHookRunner();
   if (hookRunnerAfter?.hasHooks("after_tool_call")) {
     const durationMs = startData?.startTime != null ? Date.now() - startData.startTime : undefined;
+    const entityId = createToolCallEntityId({
+      toolName,
+      toolCallId,
+      runId,
+      sessionKey: ctx.params.sessionKey,
+    });
     const hookEvent: PluginHookAfterToolCallEvent = {
       toolName,
       params: afterToolCallArgs,
@@ -441,6 +452,10 @@ export async function handleToolExecutionEnd(
       result: sanitizedResult,
       error: isToolError ? extractToolErrorMessage(sanitizedResult) : undefined,
       durationMs,
+      entityId,
+      parentEntityId: createSessionEntityId(ctx.params.sessionKey),
+      sourceRefs: normalizeRefs([runId, toolCallId, ctx.params.sessionKey]),
+      confidence: entityId ? 1 : undefined,
     };
     void hookRunnerAfter
       .runAfterToolCall(hookEvent, {

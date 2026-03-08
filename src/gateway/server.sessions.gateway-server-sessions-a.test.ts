@@ -718,13 +718,13 @@ describe("gateway server sessions", () => {
     });
     expect(subagentLifecycleHookMocks.runSubagentEnded).toHaveBeenCalledTimes(1);
     expect(subagentLifecycleHookMocks.runSubagentEnded).toHaveBeenCalledWith(
-      {
+      expect.objectContaining({
         targetSessionKey: "agent:main:discord:group:dev",
         targetKind: "acp",
         reason: "session-delete",
         sendFarewell: true,
         outcome: "deleted",
-      },
+      }),
       {
         childSessionKey: "agent:main:discord:group:dev",
       },
@@ -954,13 +954,13 @@ describe("gateway server sessions", () => {
     });
     expect(subagentLifecycleHookMocks.runSubagentEnded).toHaveBeenCalledTimes(1);
     expect(subagentLifecycleHookMocks.runSubagentEnded).toHaveBeenCalledWith(
-      {
+      expect.objectContaining({
         targetSessionKey: "agent:main:main",
         targetKind: "acp",
         reason: "session-reset",
         sendFarewell: true,
         outcome: "reset",
-      },
+      }),
       {
         childSessionKey: "agent:main:main",
       },

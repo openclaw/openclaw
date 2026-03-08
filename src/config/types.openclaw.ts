@@ -28,6 +28,39 @@ import type { SecretsConfig } from "./types.secrets.js";
 import type { SkillsConfig } from "./types.skills.js";
 import type { ToolsConfig } from "./types.tools.js";
 
+export type SreFeatureToggleConfig = {
+  enabled?: boolean;
+};
+
+export type SreStateRootsConfig = {
+  graphDir?: string;
+  dossiersDir?: string;
+  indexDir?: string;
+  plansDir?: string;
+};
+
+export type SreRepoBootstrapConfig = {
+  rootDir?: string;
+};
+
+export type SreRepoOwnershipConfig = SreFeatureToggleConfig & {
+  filePath?: string;
+};
+
+export type SreConfig = {
+  provenance?: SreFeatureToggleConfig;
+  structuredEvidence?: SreFeatureToggleConfig;
+  incidentDossier?: SreFeatureToggleConfig;
+  contextBroker?: SreFeatureToggleConfig;
+  repoOwnership?: SreRepoOwnershipConfig;
+  multiRepoPlanning?: SreFeatureToggleConfig;
+  multiRepoPr?: SreFeatureToggleConfig;
+  changeIntel?: SreFeatureToggleConfig;
+  relationshipIndex?: SreFeatureToggleConfig;
+  stateRoots?: SreStateRootsConfig;
+  repoBootstrap?: SreRepoBootstrapConfig;
+};
+
 export type OpenClawConfig = {
   meta?: {
     /** Last OpenClaw version that wrote this config. */
@@ -105,6 +138,7 @@ export type OpenClawConfig = {
   commands?: CommandsConfig;
   approvals?: ApprovalsConfig;
   session?: SessionConfig;
+  sre?: SreConfig;
   web?: WebConfig;
   channels?: ChannelsConfig;
   cron?: CronConfig;

@@ -82,6 +82,24 @@ export function createMemorySearchTool(options: {
             ? clampResultsByInjectedChars(decorated, resolved.qmd?.limits.maxInjectedChars)
             : decorated;
         const searchMode = (status.custom as { searchMode?: string } | undefined)?.searchMode;
+        const qmdSources =
+          status.backend === "qmd"
+            ? resolved.qmd?.collections.map((collection) => ({
+                name: collection.name,
+                kind: collection.kind,
+                sourceKind: collection.sourceKind,
+                path: collection.path,
+                pattern: collection.pattern,
+              }))
+            : undefined;
+        const freshness =
+          status.backend === "qmd" && resolved.qmd
+            ? {
+                updateIntervalMs: resolved.qmd.update.intervalMs,
+                embedIntervalMs: resolved.qmd.update.embedIntervalMs,
+                sessionRetentionDays: resolved.qmd.sessions.retentionDays,
+              }
+            : undefined;
         return jsonResult({
           results,
           provider: status.provider,
@@ -89,6 +107,8 @@ export function createMemorySearchTool(options: {
           fallback: status.fallback,
           citations: citationsMode,
           mode: searchMode,
+          qmdSources,
+          freshness,
         });
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);

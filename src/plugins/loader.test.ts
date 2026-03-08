@@ -345,6 +345,25 @@ describe("loadOpenClawPlugins", () => {
     expect(telegram?.error).toBe("disabled in config");
   });
 
+  it("loads the internal relationship-index plugin when the SRE flag is enabled", () => {
+    useNoBundledPlugins();
+
+    const registry = loadOpenClawPlugins({
+      cache: false,
+      config: {
+        sre: {
+          relationshipIndex: {
+            enabled: true,
+          },
+        },
+      },
+    });
+
+    const plugin = registry.plugins.find((entry) => entry.id === "relationship-index");
+    expect(plugin?.status).toBe("loaded");
+    expect(plugin?.origin).toBe("bundled");
+  });
+
   it("preserves package.json metadata for bundled memory plugins", () => {
     const registry = loadBundledMemoryPluginRegistry({
       packageMeta: {

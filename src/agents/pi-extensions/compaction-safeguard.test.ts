@@ -13,6 +13,10 @@ import {
 } from "./compaction-safeguard-runtime.js";
 import compactionSafeguardExtension, { __testing } from "./compaction-safeguard.js";
 
+const distillationMocks = vi.hoisted(() => ({
+  distillCompactionSummary: vi.fn(async (..._args: unknown[]) => ({})),
+}));
+
 vi.mock("../compaction.js", async (importOriginal) => {
   const actual = await importOriginal<typeof compactionModule>();
   return {
@@ -20,6 +24,11 @@ vi.mock("../compaction.js", async (importOriginal) => {
     summarizeInStages: vi.fn(actual.summarizeInStages),
   };
 });
+
+vi.mock("../../sre/distillation/index.js", () => ({
+  distillCompactionSummary: (...args: unknown[]) =>
+    distillationMocks.distillCompactionSummary(...(args as [unknown])),
+}));
 
 const mockSummarizeInStages = vi.mocked(compactionModule.summarizeInStages);
 
@@ -1214,6 +1223,75 @@ describe("compaction-safeguard recent-turn preservation", () => {
     const secondCall = mockSummarizeInStages.mock.calls[1]?.[0];
     expect(secondCall?.customInstructions).toContain("Quality check feedback");
     expect(secondCall?.customInstructions).toContain("missing_section:## Decisions");
+  });
+
+  it("runs runtime distillation after producing a compaction summary", async () => {
+    distillationMocks.distillCompactionSummary.mockClear();
+    mockSummarizeInStages.mockReset();
+    mockSummarizeInStages.mockResolvedValueOnce(
+      [
+        "## Decisions",
+        "- keep incident context",
+        "",
+        "## Open TODOs",
+        "- verify",
+        "",
+        "## Constraints/Rules",
+        "- no revert",
+        "",
+        "## Pending user asks",
+        "- answer follow-up",
+        "",
+        "## Exact identifiers",
+        "- incident:123",
+      ].join("\n"),
+    );
+
+    const sessionManager = stubSessionManager();
+    setCompactionSafeguardRuntime(sessionManager, {
+      model: createAnthropicModelFixture(),
+    });
+    const handler = createCompactionHandler();
+    const result = (await handler(
+      {
+        preparation: {
+          messagesToSummarize: [
+            castAgentMessage({
+              role: "user",
+              content: "Summarize this decision and todo.",
+            }),
+          ],
+          turnPrefixMessages: [],
+          firstKeptEntryId: "entry-1",
+          tokensBefore: 2_000,
+          fileOps: {
+            read: [],
+            edited: [],
+            written: [],
+          },
+          settings: { reserveTokens: 4_000 },
+          previousSummary: undefined,
+          isSplitTurn: false,
+        },
+        customInstructions: "",
+        signal: new AbortController().signal,
+      },
+      createCompactionContext({
+        sessionManager,
+        getApiKeyMock: vi.fn(async () => "key"),
+      }),
+    )) as {
+      cancel?: boolean;
+      compaction?: { summary?: string };
+    };
+
+    expect(result.cancel).not.toBe(true);
+    expect(distillationMocks.distillCompactionSummary).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionId: "stub-id",
+        workspaceDir: "/stub",
+      }),
+    );
   });
 
   it("does not treat preserved latest asks as satisfying overlap checks", async () => {

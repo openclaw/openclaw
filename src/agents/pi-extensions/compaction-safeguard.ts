@@ -6,6 +6,7 @@ import { extractSections } from "../../auto-reply/reply/post-compaction-context.
 import { openBoundaryFile } from "../../infra/boundary-file-read.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { extractKeywords, isQueryStopWordToken } from "../../memory/query-expansion.js";
+import { distillCompactionSummary } from "../../sre/distillation/index.js";
 import {
   BASE_CHUNK_RATIO,
   type CompactionSummarizationInstructions,
@@ -958,6 +959,21 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
       const workspaceContext = await readWorkspaceContextForSummary();
       if (workspaceContext) {
         summary = appendSummarySection(summary, workspaceContext);
+      }
+
+      try {
+        await distillCompactionSummary({
+          summary,
+          sessionFile: ctx.sessionManager.getSessionFile?.(),
+          sessionId: ctx.sessionManager.getSessionId?.(),
+          workspaceDir: ctx.sessionManager.getCwd?.(),
+        });
+      } catch (error) {
+        log.warn(
+          `Compaction safeguard: distillation failed: ${
+            error instanceof Error ? error.message : String(error)
+          }`,
+        );
       }
 
       return {
