@@ -469,17 +469,20 @@ export function createOllamaStreamFn(
 
         const reader = response.body.getReader();
         let accumulatedContent = "";
+        let fallbackContent = "";
+        let sawContent = false;
         const accumulatedToolCalls: OllamaToolCall[] = [];
         let finalResponse: OllamaChatResponse | undefined;
 
         for await (const chunk of parseNdjsonStream(reader)) {
           if (chunk.message?.content) {
+            sawContent = true;
             accumulatedContent += chunk.message.content;
-          } else if (chunk.message?.thinking) {
-            accumulatedContent += chunk.message.thinking;
-          } else if (chunk.message?.reasoning) {
+          } else if (!sawContent && chunk.message?.thinking) {
+            fallbackContent += chunk.message.thinking;
+          } else if (!sawContent && chunk.message?.reasoning) {
             // Backward compatibility for older/native variants that still use reasoning.
-            accumulatedContent += chunk.message.reasoning;
+            fallbackContent += chunk.message.reasoning;
           }
 
           // Ollama sends tool_calls in intermediate (done:false) chunks,
@@ -498,7 +501,7 @@ export function createOllamaStreamFn(
           throw new Error("Ollama API stream ended without a final response");
         }
 
-        finalResponse.message.content = accumulatedContent;
+        finalResponse.message.content = accumulatedContent || fallbackContent;
         if (accumulatedToolCalls.length > 0) {
           finalResponse.message.tool_calls = accumulatedToolCalls;
         }
