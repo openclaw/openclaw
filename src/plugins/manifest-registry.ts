@@ -231,10 +231,10 @@ export function loadPluginManifestRegistry(params: {
       }
       const existingRank = PLUGIN_ORIGIN_RANK[existing.candidate.origin];
       const candidateRank = PLUGIN_ORIGIN_RANK[candidate.origin];
-      const isBundledUserConflict =
-        existing.candidate.origin === "bundled" && candidate.origin !== "bundled";
-      if (isBundledUserConflict) {
-        // Bundled won (first-seen): user's install (global/workspace/config) is inactive.
+      const isBundledGlobalConflict =
+        existing.candidate.origin === "bundled" && candidate.origin === "global";
+      if (isBundledGlobalConflict) {
+        // Bundled won (first-seen): user's global install is inactive.
         // Emit a targeted message with a remediation hint.
         diagnostics.push({
           level: "warn",
