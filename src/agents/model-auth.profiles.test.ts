@@ -356,6 +356,24 @@ describe("getApiKeyForModel", () => {
     });
   });
 
+  it("sanitizes non-Latin1 characters from auth profile API keys", async () => {
+    const resolved = await resolveApiKeyForProvider({
+      provider: "anthropic",
+      store: {
+        version: 1,
+        profiles: {
+          "anthropic:default": {
+            type: "api_key",
+            provider: "anthropic",
+            key: "\u2502sk-ant-test-key",
+          },
+        },
+      },
+    });
+    expect(resolved.apiKey).toBe("sk-ant-test-key");
+    expect(resolved.source).toBe("profile:anthropic:default");
+  });
+
   it("resolveEnvApiKey('huggingface') returns HUGGINGFACE_HUB_TOKEN when set", async () => {
     await withEnvAsync(
       {

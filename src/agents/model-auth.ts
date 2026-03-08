@@ -181,12 +181,13 @@ export async function resolveApiKeyForProvider(params: {
       profileId,
       agentDir: params.agentDir,
     });
-    if (!resolved) {
+    const sanitizedApiKey = normalizeOptionalSecretInput(resolved?.apiKey);
+    if (!resolved || !sanitizedApiKey) {
       throw new Error(`No credentials found for profile "${profileId}".`);
     }
     const mode = store.profiles[profileId]?.type;
     return {
-      apiKey: resolved.apiKey,
+      apiKey: sanitizedApiKey,
       profileId,
       source: `profile:${profileId}`,
       mode: mode === "oauth" ? "oauth" : mode === "token" ? "token" : "api-key",
@@ -212,10 +213,11 @@ export async function resolveApiKeyForProvider(params: {
         profileId: candidate,
         agentDir: params.agentDir,
       });
-      if (resolved) {
+      const sanitizedApiKey = normalizeOptionalSecretInput(resolved?.apiKey);
+      if (resolved && sanitizedApiKey) {
         const mode = store.profiles[candidate]?.type;
         return {
-          apiKey: resolved.apiKey,
+          apiKey: sanitizedApiKey,
           profileId: candidate,
           source: `profile:${candidate}`,
           mode: mode === "oauth" ? "oauth" : mode === "token" ? "token" : "api-key",
