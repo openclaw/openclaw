@@ -140,7 +140,10 @@ def _parse_fallback_flow_list(value: str):
         return None
 
     raw_items.append("".join(current).strip())
-    return [_coerce_fallback_scalar(item) for item in raw_items]
+    try:
+        return [_coerce_fallback_scalar(item) for item in raw_items]
+    except UnicodeDecodeError:
+        return None
 
 
 def _coerce_allowed_tools(value):

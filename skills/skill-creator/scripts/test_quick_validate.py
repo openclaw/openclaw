@@ -276,6 +276,28 @@ allowed-tools: [gh, 123, true]
         self.assertFalse(valid)
         self.assertEqual(message, "'allowed-tools' entry #2 must be a string")
 
+    def test_fallback_invalid_escape_does_not_crash(self):
+        skill_dir = self.temp_dir / "fallback-flow-invalid-escape"
+        skill_dir.mkdir(parents=True, exist_ok=True)
+        content = """---
+name: fallback-flow-invalid-escape
+description: invalid escape should fail validation
+allowed-tools: [gh, "\\x"]
+---
+# Skill
+"""
+        (skill_dir / "SKILL.md").write_text(content, encoding="utf-8")
+
+        previous_yaml = quick_validate.yaml
+        quick_validate.yaml = None
+        try:
+            valid, message = quick_validate.validate_skill(skill_dir)
+        finally:
+            quick_validate.yaml = previous_yaml
+
+        self.assertFalse(valid)
+        self.assertEqual(message, "'allowed-tools' must be a list of tool names")
+
 
 if __name__ == "__main__":
     main()
