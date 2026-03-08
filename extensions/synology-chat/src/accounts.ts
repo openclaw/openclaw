@@ -64,6 +64,7 @@ export function resolveAccount(cfg: any, accountId?: string | null): ResolvedSyn
   const envAllowedUserIds = process.env.SYNOLOGY_ALLOWED_USER_IDS ?? "";
   const envRateLimit = process.env.SYNOLOGY_RATE_LIMIT;
   const envBotName = process.env.OPENCLAW_BOT_NAME ?? "OpenClaw";
+  const parsedRate = envRateLimit ? parseInt(envRateLimit, 10) : NaN;
 
   // Merge: account override > base channel config > env var
   return {
@@ -80,7 +81,7 @@ export function resolveAccount(cfg: any, accountId?: string | null): ResolvedSyn
     rateLimitPerMinute:
       accountOverride.rateLimitPerMinute ??
       channelCfg.rateLimitPerMinute ??
-      (envRateLimit ? parseInt(envRateLimit, 10) ?? 30 : 30),
+      (Number.isNaN(parsedRate) ? 30 : parsedRate),
     botName: accountOverride.botName ?? channelCfg.botName ?? envBotName,
     allowInsecureSsl: accountOverride.allowInsecureSsl ?? channelCfg.allowInsecureSsl ?? false,
   };
