@@ -2,15 +2,15 @@
 
 Describe the problem and fix in 2–5 bullets:
 
-- Problem:
-- Why it matters:
-- What changed:
-- What did NOT change (scope boundary):
+- Problem: In web chat UI, assistant message copy button is hidden on desktop unless hover is available, which reduces discoverability and slows copy workflow.
+- Why it matters: Users often copy assistant output into docs/notes; visible affordance improves usability and accessibility.
+- What changed: Updated chat copy-button styling so copy action is visible and clickable by default in assistant message bubbles.
+- What did NOT change (scope boundary): No backend/gateway/tooling changes, no message rendering logic changes, no clipboard API behavior changes.
 
 ## Change Type (select all)
 
 - [ ] Bug fix
-- [ ] Feature
+- [x] Feature
 - [ ] Refactor
 - [ ] Docs
 - [ ] Security hardening
@@ -24,7 +24,7 @@ Describe the problem and fix in 2–5 bullets:
 - [ ] Memory / storage
 - [ ] Integrations
 - [ ] API / contracts
-- [ ] UI / DX
+- [x] UI / DX
 - [ ] CI/CD / infra
 
 ## Linked Issue/PR
@@ -34,41 +34,43 @@ Describe the problem and fix in 2–5 bullets:
 
 ## User-visible / Behavior Changes
 
-List user-visible changes (including defaults/config).  
-If none, write `None`.
+- Assistant bubbles now show copy button by default (not only on hover).
+- Copy button remains keyboard-focusable and clickable.
+- Existing copied/error visual states remain unchanged.
 
 ## Security Impact (required)
 
-- New permissions/capabilities? (`Yes/No`)
-- Secrets/tokens handling changed? (`Yes/No`)
-- New/changed network calls? (`Yes/No`)
-- Command/tool execution surface changed? (`Yes/No`)
-- Data access scope changed? (`Yes/No`)
+- New permissions/capabilities? (`No`)
+- Secrets/tokens handling changed? (`No`)
+- New/changed network calls? (`No`)
+- Command/tool execution surface changed? (`No`)
+- Data access scope changed? (`No`)
 - If any `Yes`, explain risk + mitigation:
 
 ## Repro + Verification
 
 ### Environment
 
-- OS:
-- Runtime/container:
-- Model/provider:
-- Integration/channel (if any):
-- Relevant config (redacted):
+- OS: macOS (Apple Silicon)
+- Runtime/container: local dev runtime
+- Model/provider: N/A (UI-only change)
+- Integration/channel (if any): web chat UI
+- Relevant config (redacted): default
 
 ### Steps
 
-1.
-2.
-3.
+1. Open web chat UI with assistant messages.
+2. Observe top-right area of assistant bubble.
+3. Click copy button and verify copied/error state feedback.
 
 ### Expected
 
--
+- Copy button is visible by default on assistant bubbles.
+- Button copies message text and shows copied/error feedback.
 
 ### Actual
 
--
+- Matches expected.
 
 ## Evidence
 
@@ -76,33 +78,33 @@ Attach at least one:
 
 - [ ] Failing test/log before + passing after
 - [ ] Trace/log snippets
-- [ ] Screenshot/recording
+- [x] Screenshot/recording
 - [ ] Perf numbers (if relevant)
 
 ## Human Verification (required)
 
 What you personally verified (not just CI), and how:
 
-- Verified scenarios:
-- Edge cases checked:
-- What you did **not** verify:
+- Verified scenarios: assistant bubble displays copy button by default; click action still works; copied/error styles still work.
+- Edge cases checked: hover and non-hover behavior, focus-visible behavior.
+- What you did **not** verify: full cross-browser matrix and E2E automation.
 
 ## Compatibility / Migration
 
-- Backward compatible? (`Yes/No`)
-- Config/env changes? (`Yes/No`)
-- Migration needed? (`Yes/No`)
+- Backward compatible? (`Yes`)
+- Config/env changes? (`No`)
+- Migration needed? (`No`)
 - If yes, exact upgrade steps:
 
 ## Failure Recovery (if this breaks)
 
-- How to disable/revert this change quickly:
-- Files/config to restore:
-- Known bad symptoms reviewers should watch for:
+- How to disable/revert this change quickly: revert CSS block in `ui/src/styles/chat/grouped.css` for `.chat-copy-btn` opacity/pointer-events.
+- Files/config to restore: `ui/src/styles/chat/grouped.css`
+- Known bad symptoms reviewers should watch for: visual overlap in very narrow bubbles or unwanted visual noise from always-visible controls.
 
 ## Risks and Mitigations
 
 List only real risks for this PR. Add/remove entries as needed. If none, write `None`.
 
-- Risk:
-  - Mitigation:
+- Risk: Always-visible icon may feel visually busy in dense chat threads.
+  - Mitigation: keep icon compact, maintain subtle styling, preserve existing copied/error feedback only on interaction.

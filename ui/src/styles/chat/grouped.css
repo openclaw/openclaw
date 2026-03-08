@@ -155,8 +155,8 @@ img.chat-avatar {
   font-size: 14px;
   line-height: 1;
   cursor: pointer;
-  opacity: 0;
-  pointer-events: none;
+  opacity: 1;
+  pointer-events: auto;
   transition:
     opacity 120ms ease-out,
     background 120ms ease-out;
