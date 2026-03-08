@@ -158,10 +158,14 @@ function legacyProviderConfigFromTalk(
 
 function activeProviderFromTalk(talk: TalkConfig): string | undefined {
   const provider = normalizeString(talk.provider);
+  const providers = talk.providers;
   if (provider) {
+    if (providers && !(provider in providers)) {
+      return undefined;
+    }
     return provider;
   }
-  const providerIds = talk.providers ? Object.keys(talk.providers) : [];
+  const providerIds = providers ? Object.keys(providers) : [];
   return providerIds.length === 1 ? providerIds[0] : undefined;
 }
 

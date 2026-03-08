@@ -798,16 +798,6 @@ extension TalkModeRuntime {
                     "silenceTimeoutMs=\(cfg.silenceTimeoutMs, privacy: .public)")
     }
 
-    private struct TalkRuntimeConfig {
-        let voiceId: String?
-        let voiceAliases: [String: String]
-        let modelId: String?
-        let outputFormat: String?
-        let interruptOnSpeech: Bool
-        let silenceTimeoutMs: Int
-        let apiKey: String?
-    }
-
     static func selectTalkProviderConfig(
         _ talk: [String: AnyCodable]?) -> TalkProviderConfigSelection?
     {
@@ -818,7 +808,7 @@ extension TalkModeRuntime {
         TalkConfigParsing.resolvedSilenceTimeoutMs(talk, fallback: self.defaultSilenceTimeoutMs)
     }
 
-    private func fetchTalkConfig() async -> TalkRuntimeConfig {
+    private func fetchTalkConfig() async -> TalkModeGatewayConfigState {
         let env = ProcessInfo.processInfo.environment
         let envVoice = env["ELEVENLABS_VOICE_ID"]?.trimmingCharacters(in: .whitespacesAndNewlines)
         let sagVoice = env["SAG_VOICE_ID"]?.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -829,70 +819,34 @@ extension TalkModeRuntime {
                 method: .talkConfig,
                 params: ["includeSecrets": AnyCodable(true)],
                 timeoutMs: 8000)
-            let talk = snap.config?["talk"]?.dictionaryValue
-            let selection = Self.selectTalkProviderConfig(talk)
-            let activeProvider = selection?.provider ?? Self.defaultTalkProvider
-            let activeConfig = selection?.config
-            let silenceTimeoutMs = Self.resolvedSilenceTimeoutMs(talk)
-            let ui = snap.config?["ui"]?.dictionaryValue
-            let rawSeam = ui?["seamColor"]?.stringValue?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            let parsed = TalkModeGatewayConfigParser.parse(
+                snapshot: snap,
+                defaultProvider: Self.defaultTalkProvider,
+                defaultModelIdFallback: Self.defaultModelIdFallback,
+                defaultSilenceTimeoutMs: Self.defaultSilenceTimeoutMs,
+                envVoice: envVoice,
+                sagVoice: sagVoice,
+                envApiKey: envApiKey)
+            if parsed.missingResolvedPayload {
+                self.ttsLogger.info("talk config ignored: normalized payload missing talk.resolved")
+            }
             await MainActor.run {
-                AppStateStore.shared.seamColorHex = rawSeam.isEmpty ? nil : rawSeam
+                AppStateStore.shared.seamColorHex = parsed.seamColorHex
             }
-            let voice = activeConfig?["voiceId"]?.stringValue
-            let rawAliases = activeConfig?["voiceAliases"]?.dictionaryValue
-            let resolvedAliases: [String: String] =
-                rawAliases?.reduce(into: [:]) { acc, entry in
-                    let key = entry.key.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-                    let value = entry.value.stringValue?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-                    guard !key.isEmpty, !value.isEmpty else { return }
-                    acc[key] = value
-                } ?? [:]
-            let model = activeConfig?["modelId"]?.stringValue?.trimmingCharacters(in: .whitespacesAndNewlines)
-            let resolvedModel = (model?.isEmpty == false) ? model! : Self.defaultModelIdFallback
-            let outputFormat = activeConfig?["outputFormat"]?.stringValue
-            let interrupt = talk?["interruptOnSpeech"]?.boolValue
-            let apiKey = activeConfig?["apiKey"]?.stringValue
-            let resolvedVoice: String? = if activeProvider == Self.defaultTalkProvider {
-                (voice?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false ? voice : nil) ??
-                    (envVoice?.isEmpty == false ? envVoice : nil) ??
-                    (sagVoice?.isEmpty == false ? sagVoice : nil)
-            } else {
-                (voice?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false ? voice : nil)
-            }
-            let resolvedApiKey: String? = if activeProvider == Self.defaultTalkProvider {
-                (envApiKey?.isEmpty == false ? envApiKey : nil) ??
-                    (apiKey?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false ? apiKey : nil)
-            } else {
-                nil
-            }
-            if activeProvider != Self.defaultTalkProvider {
+            if parsed.activeProvider != Self.defaultTalkProvider {
                 self.ttsLogger
-                    .info("talk provider \(activeProvider, privacy: .public) unsupported; using system voice")
-            } else if selection?.normalizedPayload == true {
-                self.ttsLogger.info("talk config provider elevenlabs")
+                    .info("talk provider \(parsed.activeProvider, privacy: .public) unsupported; using system voice")
+            } else if parsed.normalizedPayload {
+                self.ttsLogger.info("talk config provider from talk.resolved")
             }
-            return TalkRuntimeConfig(
-                voiceId: resolvedVoice,
-                voiceAliases: resolvedAliases,
-                modelId: resolvedModel,
-                outputFormat: outputFormat,
-                interruptOnSpeech: interrupt ?? true,
-                silenceTimeoutMs: silenceTimeoutMs,
-                apiKey: resolvedApiKey)
+            return parsed
         } catch {
-            let resolvedVoice =
-                (envVoice?.isEmpty == false ? envVoice : nil) ??
-                (sagVoice?.isEmpty == false ? sagVoice : nil)
-            let resolvedApiKey = envApiKey?.isEmpty == false ? envApiKey : nil
-            return TalkRuntimeConfig(
-                voiceId: resolvedVoice,
-                voiceAliases: [:],
-                modelId: Self.defaultModelIdFallback,
-                outputFormat: nil,
-                interruptOnSpeech: true,
-                silenceTimeoutMs: Self.defaultSilenceTimeoutMs,
-                apiKey: resolvedApiKey)
+            return TalkModeGatewayConfigParser.fallback(
+                defaultModelIdFallback: Self.defaultModelIdFallback,
+                defaultSilenceTimeoutMs: Self.defaultSilenceTimeoutMs,
+                envVoice: envVoice,
+                sagVoice: sagVoice,
+                envApiKey: envApiKey)
         }
     }
 
