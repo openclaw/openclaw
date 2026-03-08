@@ -186,7 +186,7 @@ export async function applyBeforeResponseEmitHook(
     log.debug(
       `applying allContent modification (${emitResult.allContent.length} entries, original ${assistantTexts.length})`,
     );
-    rewriteAllAssistantContent(runMessages, emitResult.allContent);
+    rewriteAllAssistantContent(runMessages, activeSession.messages, emitResult.allContent);
     return { blocked: false, allContent: emitResult.allContent };
   }
 
@@ -328,29 +328,38 @@ export function rewriteLastAssistantContent(messages: AgentMessage[], newContent
  * entries, the extra messages are cleared. If there are fewer, the extra
  * entries are ignored (defensive).
  */
-export function rewriteAllAssistantContent(messages: AgentMessage[], newContents: string[]): void {
+/**
+ * @param runMessages - Scoped slice of messages from the current run (shared refs with sourceMessages).
+ *   In-place object mutations propagate, but splice/removal must operate on sourceMessages.
+ * @param sourceMessages - The original activeSession.messages array. Splices here affect the real session.
+ * @param newContents - Replacement text for each assistant turn.
+ */
+export function rewriteAllAssistantContent(
+  runMessages: AgentMessage[],
+  sourceMessages: AgentMessage[],
+  newContents: string[],
+): void {
   // Only count text-bearing assistant messages — matching getRunScopedMessages
   // and assistantTexts counting. Tool-call-only messages are skipped to keep
   // allContent indices aligned.
-  const assistantMsgs = messages.filter(
+  const assistantMsgs = runMessages.filter(
     (m) => m.role === "assistant" && extractAssistantText(m).length > 0,
   );
   if (newContents.length !== assistantMsgs.length) {
     log.warn(
       `rewriteAllAssistantContent: allContent length (${newContents.length}) differs from ` +
-        `assistant message count (${assistantMsgs.length}); extras will be cleared`,
+        `assistant message count (${assistantMsgs.length}); extras will be removed`,
     );
   }
   for (let i = 0; i < assistantMsgs.length; i++) {
     if (i < newContents.length) {
       rewriteSingleAssistantMessage(assistantMsgs[i], newContents[i]);
     } else {
-      // Extra messages beyond allContent length — remove entirely rather than
-      // blanking to "". Empty-content assistant messages break Anthropic API
-      // (rejects { role: "assistant", content: "" } or content: []).
-      const idx = messages.indexOf(assistantMsgs[i]);
+      // Extra messages beyond allContent length — remove from the SOURCE array
+      // (not the runMessages slice). splice on a slice only affects the copy.
+      const idx = sourceMessages.indexOf(assistantMsgs[i]);
       if (idx >= 0) {
-        messages.splice(idx, 1);
+        sourceMessages.splice(idx, 1);
       }
     }
   }
