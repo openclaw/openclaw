@@ -1,7 +1,7 @@
 import {
   collectAllowlistProviderRestrictSendersWarnings,
   formatAllowFromLowercase,
-} from "openclaw/plugin-sdk";
+} from "openclaw/plugin-sdk/compat";
 import type {
   ChannelMessageActionName,
   ChannelPlugin,
