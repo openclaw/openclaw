@@ -52,7 +52,10 @@ describe("models-config merge helpers", () => {
   it("merges explicit providers onto trimmed keys", () => {
     const merged = mergeProviders({
       explicit: {
-        " custom ": { api: "openai-responses", models: [] } as ProviderConfig,
+        " custom ": {
+          api: "openai-responses",
+          models: [] as ProviderConfig["models"],
+        } as ProviderConfig,
       },
     });
 
