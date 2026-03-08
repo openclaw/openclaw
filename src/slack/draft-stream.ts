@@ -1,5 +1,6 @@
 import { createDraftStreamLoop } from "../channels/draft-stream-loop.js";
 import { deleteSlackMessage, editSlackMessage } from "./actions.js";
+import type { SlackSendIdentity } from "./send.js";
 import { sendMessageSlack } from "./send.js";
 
 const SLACK_STREAM_MAX_CHARS = 4000;
@@ -19,6 +20,7 @@ export function createSlackDraftStream(params: {
   target: string;
   token: string;
   accountId?: string;
+  identity?: SlackSendIdentity;
   maxChars?: number;
   throttleMs?: number;
   resolveThreadTs?: () => string | undefined;
@@ -69,6 +71,7 @@ export function createSlackDraftStream(params: {
         token: params.token,
         accountId: params.accountId,
         threadTs: params.resolveThreadTs?.(),
+        identity: params.identity,
       });
       streamChannelId = sent.channelId || streamChannelId;
       streamMessageId = sent.messageId || streamMessageId;
