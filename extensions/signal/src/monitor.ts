@@ -44,6 +44,7 @@ import {
   resolveSignalReplyDelivery,
   type SignalReplyDeliveryState,
 } from "./monitor/reply-delivery.js";
+import { isSignalGroupTarget } from "./reply-quote.js";
 import { sendMessageSignal } from "./send.js";
 import { runSignalSseLoop } from "./sse-reconnect.js";
 
@@ -358,7 +359,10 @@ async function deliverReplies(params: {
           quoteAuthor: first ? effectiveQuoteAuthor : undefined,
         });
         if (first) {
-          markSignalReplyConsumed(params.replyDeliveryState, effectiveReplyTo);
+          markSignalReplyConsumed(params.replyDeliveryState, effectiveReplyTo, {
+            isGroup: isSignalGroupTarget(target),
+            quoteAuthor: effectiveQuoteAuthor,
+          });
         }
         first = false;
       }
@@ -377,7 +381,10 @@ async function deliverReplies(params: {
           quoteAuthor: first ? effectiveQuoteAuthor : undefined,
         });
         if (first) {
-          markSignalReplyConsumed(params.replyDeliveryState, effectiveReplyTo);
+          markSignalReplyConsumed(params.replyDeliveryState, effectiveReplyTo, {
+            isGroup: isSignalGroupTarget(target),
+            quoteAuthor: effectiveQuoteAuthor,
+          });
         }
         first = false;
       }
