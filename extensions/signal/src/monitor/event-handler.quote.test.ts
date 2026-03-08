@@ -345,6 +345,49 @@ describe("signal quote reply handling", () => {
     expect(String(ctx?.Body ?? "")).toContain("[Quoting +15550002222 id:1700000000001]");
   });
 
+  it("does not poison the quote-author cache from attacker-controlled quote metadata", async () => {
+    const handler = createQuoteHandler();
+
+    await handler(
+      createSignalReceiveEvent({
+        sourceNumber: "+15550002222",
+        sourceName: "Bob",
+        timestamp: 1700000000001,
+        dataMessage: {
+          message: "Forwarding this",
+          groupInfo: { groupId: "g1", groupName: "Test Group" },
+          quote: {
+            id: 1700000000000,
+            authorNumber: "+15550009999",
+            text: "Mallory wrote this",
+          },
+        },
+      }),
+    );
+
+    capturedCtx = undefined;
+
+    await handler(
+      createSignalReceiveEvent({
+        sourceNumber: "+15550003333",
+        sourceName: "Alice",
+        timestamp: 1700000000002,
+        dataMessage: {
+          message: "Replying to Bob",
+          groupInfo: { groupId: "g1", groupName: "Test Group" },
+          quote: {
+            id: 1700000000001,
+            text: "Forwarding this",
+          },
+        },
+      }),
+    );
+
+    const ctx = getCapturedCtx();
+    expect(ctx?.ReplyToSender).toBe("+15550002222");
+    expect(String(ctx?.Body ?? "")).toContain("[Quoting +15550002222 id:1700000000001]");
+  });
+
   it("resolves cached uuid senders with a uuid: prefix", async () => {
     const handler = createQuoteHandler();
     const senderUuid = "123e4567-e89b-12d3-a456-426614174000";
