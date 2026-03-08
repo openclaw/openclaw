@@ -413,7 +413,7 @@ describe("gateway server chat", () => {
     expect(textValues).toEqual(["hello", "real reply", "real text field reply", "NO_REPLY"]);
   });
 
-  test("chat.history hides delivery-mirror assistant transcript entries", async () => {
+  test("chat.history hides only delivery-mirror transcript artifacts", async () => {
     const historyMessages = await loadChatHistoryWithMessages([
       {
         role: "user",
@@ -430,14 +430,26 @@ describe("gateway server chat", () => {
       },
       {
         role: "assistant",
+        content: [{ type: "text", text: "real assistant uses delivery-mirror model id" }],
+        model: "delivery-mirror",
+        provider: "custom-provider",
+        api: "custom-api",
+        timestamp: 3,
+      },
+      {
+        role: "assistant",
         content: [{ type: "text", text: "real assistant reply" }],
         model: "gpt-5",
-        timestamp: 3,
+        timestamp: 4,
       },
     ]);
 
     const textValues = collectHistoryTextValues(historyMessages);
-    expect(textValues).toEqual(["hello", "real assistant reply"]);
+    expect(textValues).toEqual([
+      "hello",
+      "real assistant uses delivery-mirror model id",
+      "real assistant reply",
+    ]);
   });
 
   test("routes chat.send slash commands without agent runs", async () => {

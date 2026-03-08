@@ -367,7 +367,12 @@ function isDeliveryMirrorTranscriptMessage(message: unknown): boolean {
     return false;
   }
   const entry = message as Record<string, unknown>;
-  return entry.role === "assistant" && entry.model === "delivery-mirror";
+  return (
+    entry.role === "assistant" &&
+    entry.model === "delivery-mirror" &&
+    entry.provider === "openclaw" &&
+    entry.api === "openai-responses"
+  );
 }
 
 function sanitizeChatHistoryMessages(messages: unknown[]): unknown[] {
