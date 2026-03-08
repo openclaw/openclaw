@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { migrateLegacyConfig } from "./legacy-migrate.js";
 import { WHISPER_BASE_AUDIO_MODEL } from "./legacy-migrate.test-helpers.js";
+import { LEGACY_LOCAL_ONBOARD_MESSAGING_MIGRATION_MARKER_COMMAND } from "./legacy.local-onboard-tools-profile.js";
 
 describe("legacy migrate audio transcription", () => {
   it("moves routing.transcribeAudio into tools.media.audio.models", () => {
@@ -110,6 +111,9 @@ describe("legacy migrate local onboarding tools profile", () => {
     });
 
     expect(res.config?.tools?.profile).toBe("coding");
+    expect(res.config?.wizard?.lastRunCommand).toBe(
+      LEGACY_LOCAL_ONBOARD_MESSAGING_MIGRATION_MARKER_COMMAND,
+    );
     expect(res.changes).toContain(
       "Migrated tools.profile messaging → coding for legacy local onboarding config (2026.3.2) to restore file/runtime tools.",
     );
@@ -146,6 +150,77 @@ describe("legacy migrate local onboarding tools profile", () => {
 
     expect(res.config).toBeNull();
     expect(res.changes).toHaveLength(0);
+  });
+
+  it("does not migrate messaging profile when onboarding mode is not local", () => {
+    const res = migrateLegacyConfig({
+      wizard: {
+        lastRunCommand: "onboard",
+        lastRunMode: "remote",
+        lastRunVersion: "2026.3.2",
+      },
+      tools: {
+        profile: "messaging",
+      },
+    });
+
+    expect(res.config).toBeNull();
+    expect(res.changes).toHaveLength(0);
+  });
+
+  it("does not migrate messaging profile when onboarding command is not onboard", () => {
+    const res = migrateLegacyConfig({
+      wizard: {
+        lastRunCommand: "doctor",
+        lastRunMode: "local",
+        lastRunVersion: "2026.3.2",
+      },
+      tools: {
+        profile: "messaging",
+      },
+    });
+
+    expect(res.config).toBeNull();
+    expect(res.changes).toHaveLength(0);
+  });
+
+  it("does not migrate messaging profile when wizard metadata is missing", () => {
+    const res = migrateLegacyConfig({
+      tools: {
+        profile: "messaging",
+      },
+    });
+
+    expect(res.config).toBeNull();
+    expect(res.changes).toHaveLength(0);
+  });
+
+  it("preserves explicit messaging override after one-time migration marker is set", () => {
+    const first = migrateLegacyConfig({
+      wizard: {
+        lastRunCommand: "onboard",
+        lastRunMode: "local",
+        lastRunVersion: "2026.3.2",
+      },
+      tools: {
+        profile: "messaging",
+      },
+    });
+
+    expect(first.config?.tools?.profile).toBe("coding");
+    expect(first.config?.wizard?.lastRunCommand).toBe(
+      LEGACY_LOCAL_ONBOARD_MESSAGING_MIGRATION_MARKER_COMMAND,
+    );
+
+    const second = migrateLegacyConfig({
+      ...first.config,
+      tools: {
+        profile: "messaging",
+      },
+    });
+
+    expect(second.config).toBeNull();
+    expect(second.changes).toHaveLength(0);
   });
 });
 

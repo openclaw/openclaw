@@ -1,5 +1,5 @@
+import { isLegacyLocalOnboardMessagingToolsProfile } from "./legacy.local-onboard-tools-profile.js";
 import type { LegacyConfigRule } from "./legacy.shared.js";
-import { compareOpenClawVersions } from "./version.js";
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
@@ -45,42 +45,6 @@ function isLegacyGatewayBindHostAlias(value: unknown): boolean {
     normalized === "::1" ||
     normalized === "[::1]"
   );
-}
-
-function isLegacyLocalOnboardMessagingToolsProfile(
-  value: unknown,
-  root: Record<string, unknown>,
-): boolean {
-  if (value !== "messaging") {
-    return false;
-  }
-  const tools = isRecord(root.tools) ? root.tools : null;
-  if (!tools) {
-    return false;
-  }
-  if (Object.keys(tools).some((key) => key !== "profile")) {
-    return false;
-  }
-  const wizard = isRecord(root.wizard) ? root.wizard : null;
-  if (!wizard) {
-    return false;
-  }
-  const lastRunCommand =
-    typeof wizard.lastRunCommand === "string" ? wizard.lastRunCommand.trim() : "";
-  if (lastRunCommand !== "onboard") {
-    return false;
-  }
-  const lastRunMode = typeof wizard.lastRunMode === "string" ? wizard.lastRunMode.trim() : "";
-  if (lastRunMode !== "local") {
-    return false;
-  }
-  const lastRunVersion =
-    typeof wizard.lastRunVersion === "string" ? wizard.lastRunVersion.trim() : "";
-  if (!lastRunVersion) {
-    return false;
-  }
-  const compared = compareOpenClawVersions(lastRunVersion, "2026.3.2");
-  return compared !== null && compared <= 0;
 }
 
 export const LEGACY_CONFIG_RULES: LegacyConfigRule[] = [
