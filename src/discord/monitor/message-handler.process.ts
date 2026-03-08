@@ -348,9 +348,9 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
 
   const ctxPayload = finalizeInboundContext({
     Body: combinedBody,
-    BodyForAgent: baseText ?? text,
+    BodyForAgent: text,
     InboundHistory: inboundHistory,
-    RawBody: baseText,
+    RawBody: text,
     CommandBody: baseText,
     From: effectiveFrom,
     To: effectiveTo,
