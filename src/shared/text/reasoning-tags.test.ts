@@ -197,6 +197,54 @@ describe("stripReasoningTagsFromText", () => {
     });
   });
 
+  describe("strict-mode empty-result fallback", () => {
+    it("falls back to tag-only removal when strict mode strips all content", () => {
+      const cases = [
+        {
+          name: "unclosed think tag wrapping entire response",
+          input: "<think>This is the full response text",
+          expected: "This is the full response text",
+        },
+        {
+          name: "closed think tags wrapping entire response",
+          input: "<think>This is the full response text</think>",
+          expected: "This is the full response text",
+        },
+        {
+          name: "thinking tag wrapping entire response",
+          input: "<thinking>Full response here</thinking>",
+          expected: "Full response here",
+        },
+        {
+          name: "unclosed thinking tag wrapping entire response",
+          input: "<thinking>Full response here",
+          expected: "Full response here",
+        },
+      ] as const;
+      for (const { name, input, expected } of cases) {
+        expect(stripReasoningTagsFromText(input, { mode: "strict" }), name).toBe(expected);
+      }
+    });
+
+    it("does not fall back when there is visible text outside tags", () => {
+      const input = "Before <think>hidden</think>";
+      expect(stripReasoningTagsFromText(input, { mode: "strict" })).toBe("Before");
+    });
+
+    it("does not fall back for whitespace-only input", () => {
+      const input = "   ";
+      // No thinking tags present, so input passes through unchanged
+      expect(stripReasoningTagsFromText(input, { mode: "strict" })).toBe("   ");
+    });
+
+    it("preserves content inside code blocks during fallback", () => {
+      const input = "<think>Use ```code``` in your response</think>";
+      expect(stripReasoningTagsFromText(input, { mode: "strict" })).toBe(
+        "Use ```code``` in your response",
+      );
+    });
+  });
+
   describe("trim options", () => {
     it("applies configured trim strategies", () => {
       const cases = [

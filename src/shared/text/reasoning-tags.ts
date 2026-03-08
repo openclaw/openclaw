@@ -88,5 +88,17 @@ export function stripReasoningTagsFromText(
     result += cleaned.slice(lastIndex);
   }
 
-  return applyTrim(result, trimMode);
+  const trimmed = applyTrim(result, trimMode);
+
+  // When strict-mode stripping removes ALL visible text but the original had
+  // content, fall back to tag-only removal. This prevents silent response drops
+  // when models incorrectly wrap their entire response in <think> tags — a
+  // pattern observed with Gemini Flash during session startup sequences.
+  if (mode === "strict" && !trimmed && text.trim()) {
+    THINKING_TAG_RE.lastIndex = 0;
+    const tagOnly = cleaned.replace(THINKING_TAG_RE, "");
+    return applyTrim(tagOnly, trimMode);
+  }
+
+  return trimmed;
 }
