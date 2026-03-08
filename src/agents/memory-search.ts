@@ -77,6 +77,13 @@ export type ResolvedMemorySearchConfig = {
     enabled: boolean;
     maxEntries?: number;
   };
+  autoPrefetch: {
+    enabled: boolean;
+    minMessageLength: number;
+    maxResults: number;
+    skipPatterns: string[];
+    injection: "system" | "context";
+  };
 };
 
 const DEFAULT_OPENAI_MODEL = "text-embedding-3-small";
@@ -282,6 +289,20 @@ function mergeConfig(
     enabled: overrides?.cache?.enabled ?? defaults?.cache?.enabled ?? DEFAULT_CACHE_ENABLED,
     maxEntries: overrides?.cache?.maxEntries ?? defaults?.cache?.maxEntries,
   };
+  const autoPrefetch = {
+    enabled: overrides?.autoPrefetch?.enabled ?? defaults?.autoPrefetch?.enabled ?? false,
+    minMessageLength:
+      overrides?.autoPrefetch?.minMessageLength ?? defaults?.autoPrefetch?.minMessageLength ?? 20,
+    maxResults: overrides?.autoPrefetch?.maxResults ?? defaults?.autoPrefetch?.maxResults ?? 3,
+    skipPatterns: [
+      ...(defaults?.autoPrefetch?.skipPatterns ?? []),
+      ...(overrides?.autoPrefetch?.skipPatterns ?? []),
+    ],
+    injection:
+      overrides?.autoPrefetch?.injection ??
+      defaults?.autoPrefetch?.injection ??
+      ("context" as "system" | "context"),
+  };
 
   const overlap = clampNumber(chunking.overlap, 0, Math.max(0, chunking.tokens - 1));
   const minScore = clampNumber(query.minScore, 0, 1);
@@ -348,6 +369,13 @@ function mergeConfig(
         typeof cache.maxEntries === "number" && Number.isFinite(cache.maxEntries)
           ? Math.max(1, Math.floor(cache.maxEntries))
           : undefined,
+    },
+    autoPrefetch: {
+      enabled: Boolean(autoPrefetch.enabled),
+      minMessageLength: Math.max(0, Math.floor(autoPrefetch.minMessageLength)),
+      maxResults: Math.max(1, Math.floor(autoPrefetch.maxResults)),
+      skipPatterns: autoPrefetch.skipPatterns.filter(Boolean),
+      injection: autoPrefetch.injection,
     },
   };
 }

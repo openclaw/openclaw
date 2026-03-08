@@ -675,6 +675,16 @@ export const MemorySearchSchema = z
       })
       .strict()
       .optional(),
+    autoPrefetch: z
+      .object({
+        enabled: z.boolean().optional(),
+        minMessageLength: z.number().int().nonnegative().optional(),
+        maxResults: z.number().int().positive().optional(),
+        skipPatterns: z.array(z.string()).optional(),
+        injection: z.union([z.literal("system"), z.literal("context")]).optional(),
+      })
+      .strict()
+      .optional(),
   })
   .strict()
   .optional();
