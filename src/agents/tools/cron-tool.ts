@@ -284,12 +284,28 @@ Use jobId as the canonical identifier; id is accepted for compatibility. Use con
       switch (action) {
         case "status":
           return jsonResult(await callGateway("cron.status", gatewayOpts, {}));
-        case "list":
+        case "list": {
+          const cfg = loadConfig();
+          const { mainKey, alias } = resolveMainSessionAlias(cfg);
           return jsonResult(
             await callGateway("cron.list", gatewayOpts, {
               includeDisabled: Boolean(params.includeDisabled),
+              agentId: opts?.agentSessionKey
+                ? resolveSessionAgentId({
+                    sessionKey: opts.agentSessionKey,
+                    config: cfg,
+                  })
+                : undefined,
+              sessionKey: opts?.agentSessionKey
+                ? resolveInternalSessionKey({
+                    key: opts.agentSessionKey,
+                    alias,
+                    mainKey,
+                  })
+                : undefined,
             }),
           );
+        }
         case "add": {
           // Flat-params recovery: non-frontier models (e.g. Grok) sometimes flatten
           // job properties to the top level alongside `action` instead of nesting
@@ -478,10 +494,18 @@ Use jobId as the canonical identifier; id is accepted for compatibility. Use con
             throw new Error("patch required");
           }
           const patch = normalizeCronJobPatch(params.patch) ?? params.patch;
+          const cfg = loadConfig();
+          const { mainKey, alias } = resolveMainSessionAlias(cfg);
           return jsonResult(
             await callGateway("cron.update", gatewayOpts, {
               id,
               patch,
+              agentId: opts?.agentSessionKey
+                ? resolveSessionAgentId({ sessionKey: opts.agentSessionKey, config: cfg })
+                : undefined,
+              sessionKey: opts?.agentSessionKey
+                ? resolveInternalSessionKey({ key: opts.agentSessionKey, alias, mainKey })
+                : undefined,
             }),
           );
         }
@@ -490,7 +514,19 @@ Use jobId as the canonical identifier; id is accepted for compatibility. Use con
           if (!id) {
             throw new Error("jobId required (id accepted for backward compatibility)");
           }
-          return jsonResult(await callGateway("cron.remove", gatewayOpts, { id }));
+          const cfg = loadConfig();
+          const { mainKey, alias } = resolveMainSessionAlias(cfg);
+          return jsonResult(
+            await callGateway("cron.remove", gatewayOpts, {
+              id,
+              agentId: opts?.agentSessionKey
+                ? resolveSessionAgentId({ sessionKey: opts.agentSessionKey, config: cfg })
+                : undefined,
+              sessionKey: opts?.agentSessionKey
+                ? resolveInternalSessionKey({ key: opts.agentSessionKey, alias, mainKey })
+                : undefined,
+            }),
+          );
         }
         case "run": {
           const id = readStringParam(params, "jobId") ?? readStringParam(params, "id");
@@ -499,7 +535,20 @@ Use jobId as the canonical identifier; id is accepted for compatibility. Use con
           }
           const runMode =
             params.runMode === "due" || params.runMode === "force" ? params.runMode : "force";
-          return jsonResult(await callGateway("cron.run", gatewayOpts, { id, mode: runMode }));
+          const cfg = loadConfig();
+          const { mainKey, alias } = resolveMainSessionAlias(cfg);
+          return jsonResult(
+            await callGateway("cron.run", gatewayOpts, {
+              id,
+              mode: runMode,
+              agentId: opts?.agentSessionKey
+                ? resolveSessionAgentId({ sessionKey: opts.agentSessionKey, config: cfg })
+                : undefined,
+              sessionKey: opts?.agentSessionKey
+                ? resolveInternalSessionKey({ key: opts.agentSessionKey, alias, mainKey })
+                : undefined,
+            }),
+          );
         }
         case "runs": {
           const id = readStringParam(params, "jobId") ?? readStringParam(params, "id");

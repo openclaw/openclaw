@@ -4,6 +4,11 @@ import type { CronJob, CronJobCreate, CronJobPatch } from "./types.js";
 
 export type { CronEvent, CronServiceDeps } from "./service/state.js";
 
+export type CallerContext = {
+  agentId?: string;
+  sessionKey?: string;
+};
+
 export class CronService {
   private readonly state;
   constructor(deps: CronServiceDeps) {
@@ -22,28 +27,28 @@ export class CronService {
     return await ops.status(this.state);
   }
 
-  async list(opts?: { includeDisabled?: boolean }) {
-    return await ops.list(this.state, opts);
+  async list(opts?: { includeDisabled?: boolean }, callerContext?: CallerContext) {
+    return await ops.list(this.state, opts, callerContext);
   }
 
-  async listPage(opts?: ops.CronListPageOptions) {
-    return await ops.listPage(this.state, opts);
+  async listPage(opts?: ops.CronListPageOptions, callerContext?: CallerContext) {
+    return await ops.listPage(this.state, opts, callerContext);
   }
 
   async add(input: CronJobCreate) {
     return await ops.add(this.state, input);
   }
 
-  async update(id: string, patch: CronJobPatch) {
-    return await ops.update(this.state, id, patch);
+  async update(id: string, patch: CronJobPatch, callerContext?: CallerContext) {
+    return await ops.update(this.state, id, patch, callerContext);
   }
 
-  async remove(id: string) {
-    return await ops.remove(this.state, id);
+  async remove(id: string, callerContext?: CallerContext) {
+    return await ops.remove(this.state, id, callerContext);
   }
 
-  async run(id: string, mode?: "due" | "force") {
-    return await ops.run(this.state, id, mode);
+  async run(id: string, mode?: "due" | "force", callerContext?: CallerContext) {
+    return await ops.run(this.state, id, mode, callerContext);
   }
 
   getJob(id: string): CronJob | undefined {

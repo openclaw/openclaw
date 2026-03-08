@@ -27,6 +27,11 @@ type CronJobsEnabledFilter = "all" | "enabled" | "disabled";
 type CronJobsSortBy = "nextRunAtMs" | "updatedAtMs" | "name";
 type CronSortDir = "asc" | "desc";
 
+export type CallerContext = {
+  agentId?: string;
+  sessionKey?: string;
+};
+
 export type CronListPageOptions = {
   includeDisabled?: boolean;
   limit?: number;
@@ -35,6 +40,8 @@ export type CronListPageOptions = {
   enabled?: CronJobsEnabledFilter;
   sortBy?: CronJobsSortBy;
   sortDir?: CronSortDir;
+  agentId?: string;
+  sessionKey?: string;
 };
 
 export type CronListPageResult = {
@@ -144,11 +151,28 @@ export async function status(state: CronServiceState) {
   });
 }
 
-export async function list(state: CronServiceState, opts?: { includeDisabled?: boolean }) {
+export async function list(
+  state: CronServiceState,
+  opts?: { includeDisabled?: boolean },
+  callerContext?: CallerContext,
+) {
   return await locked(state, async () => {
     await ensureLoadedForRead(state);
     const includeDisabled = opts?.includeDisabled === true;
-    const jobs = (state.store?.jobs ?? []).filter((j) => includeDisabled || j.enabled);
+    const { agentId, sessionKey } = callerContext ?? {};
+    let jobs = (state.store?.jobs ?? []).filter((j) => includeDisabled || j.enabled);
+
+    if (agentId || sessionKey) {
+      jobs = jobs.filter((job) => {
+        if (!job.agentId && !job.sessionKey) {
+          return true;
+        }
+        const agentMatch = agentId != null && job.agentId === agentId;
+        const sessionMatch = sessionKey != null && job.sessionKey === sessionKey;
+        return agentMatch || sessionMatch;
+      });
+    }
+
     return jobs.toSorted((a, b) => (a.state.nextRunAtMs ?? 0) - (b.state.nextRunAtMs ?? 0));
   });
 }
@@ -192,15 +216,21 @@ function sortJobs(jobs: CronJob[], sortBy: CronJobsSortBy, sortDir: CronSortDir)
   });
 }
 
-export async function listPage(state: CronServiceState, opts?: CronListPageOptions) {
+export async function listPage(
+  state: CronServiceState,
+  opts?: CronListPageOptions,
+  callerContext?: CallerContext,
+) {
   return await locked(state, async () => {
     await ensureLoadedForRead(state);
     const query = opts?.query?.trim().toLowerCase() ?? "";
     const enabledFilter = resolveEnabledFilter(opts);
     const sortBy = opts?.sortBy ?? "nextRunAtMs";
     const sortDir = opts?.sortDir ?? "asc";
+    const { agentId, sessionKey } = callerContext ?? {};
     const source = state.store?.jobs ?? [];
-    const filtered = source.filter((job) => {
+
+    let filtered = source.filter((job) => {
       if (enabledFilter === "enabled" && !job.enabled) {
         return false;
       }
@@ -213,6 +243,18 @@ export async function listPage(state: CronServiceState, opts?: CronListPageOptio
       const haystack = [job.name, job.description ?? "", job.agentId ?? ""].join(" ").toLowerCase();
       return haystack.includes(query);
     });
+
+    if (agentId || sessionKey) {
+      filtered = filtered.filter((job) => {
+        if (!job.agentId && !job.sessionKey) {
+          return true;
+        }
+        const agentMatch = agentId != null && job.agentId === agentId;
+        const sessionMatch = sessionKey != null && job.sessionKey === sessionKey;
+        return agentMatch || sessionMatch;
+      });
+    }
+
     const sorted = sortJobs(filtered, sortBy, sortDir);
     const total = sorted.length;
     const offset = Math.max(0, Math.min(total, Math.floor(opts?.offset ?? 0)));
@@ -266,11 +308,30 @@ export async function add(state: CronServiceState, input: CronJobCreate) {
   });
 }
 
-export async function update(state: CronServiceState, id: string, patch: CronJobPatch) {
+export async function update(
+  state: CronServiceState,
+  id: string,
+  patch: CronJobPatch,
+  callerContext?: CallerContext,
+) {
   return await locked(state, async () => {
     warnIfDisabled(state, "update");
     await ensureLoaded(state, { skipRecompute: true });
+    const { agentId, sessionKey } = callerContext ?? {};
     const job = findJobOrThrow(state, id);
+
+    if (agentId || sessionKey) {
+      if (!job.agentId && !job.sessionKey) {
+        // legacy job - allow
+      } else {
+        const agentMatch = agentId != null && job.agentId === agentId;
+        const sessionMatch = sessionKey != null && job.sessionKey === sessionKey;
+        if (!agentMatch && !sessionMatch) {
+          throw new Error("Authorization denied: job belongs to different agent/session");
+        }
+      }
+    }
+
     const now = state.deps.nowMs();
     applyJobPatch(job, patch, { defaultAgentId: state.deps.defaultAgentId });
     if (job.schedule.kind === "every") {
@@ -320,10 +381,25 @@ export async function update(state: CronServiceState, id: string, patch: CronJob
   });
 }
 
-export async function remove(state: CronServiceState, id: string) {
+export async function remove(state: CronServiceState, id: string, callerContext?: CallerContext) {
   return await locked(state, async () => {
     warnIfDisabled(state, "remove");
     await ensureLoaded(state);
+    const { agentId, sessionKey } = callerContext ?? {};
+    const job = state.store?.jobs.find((j) => j.id === id);
+    if (job) {
+      if (agentId || sessionKey) {
+        if (!job.agentId && !job.sessionKey) {
+          // legacy job - allow
+        } else {
+          const agentMatch = agentId != null && job.agentId === agentId;
+          const sessionMatch = sessionKey != null && job.sessionKey === sessionKey;
+          if (!agentMatch && !sessionMatch) {
+            throw new Error("Authorization denied: job belongs to different agent/session");
+          }
+        }
+      }
+    }
     const before = state.store?.jobs.length ?? 0;
     if (!state.store) {
       return { ok: false, removed: false } as const;
@@ -339,15 +415,34 @@ export async function remove(state: CronServiceState, id: string) {
   });
 }
 
-export async function run(state: CronServiceState, id: string, mode?: "due" | "force") {
+export async function run(
+  state: CronServiceState,
+  id: string,
+  mode?: "due" | "force",
+  callerContext?: CallerContext,
+) {
   const prepared = await locked(state, async () => {
     warnIfDisabled(state, "run");
     await ensureLoaded(state, { skipRecompute: true });
+    const { agentId, sessionKey } = callerContext ?? {};
+    const job = findJobOrThrow(state, id);
+
+    if (agentId || sessionKey) {
+      if (!job.agentId && !job.sessionKey) {
+        // legacy job - allow
+      } else {
+        const agentMatch = agentId != null && job.agentId === agentId;
+        const sessionMatch = sessionKey != null && job.sessionKey === sessionKey;
+        if (!agentMatch && !sessionMatch) {
+          throw new Error("Authorization denied: job belongs to different agent/session");
+        }
+      }
+    }
+
     // Normalize job tick state (clears stale runningAtMs markers) before
     // checking if already running, so a stale marker from a crashed Phase-1
     // persist does not block manual triggers for up to STUCK_RUN_MS (#17554).
     recomputeNextRunsForMaintenance(state);
-    const job = findJobOrThrow(state, id);
     if (typeof job.state.runningAtMs === "number") {
       return { ok: true, ran: false, reason: "already-running" as const };
     }
