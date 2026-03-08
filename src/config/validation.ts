@@ -305,13 +305,117 @@ export function validateConfigObjectRawWithPlugins(raw: unknown): ValidateConfig
   return validateConfigObjectWithPluginsBase(raw, { applyDefaults: false });
 }
 
+function resolveWorkspaceDirFromRawConfig(raw: unknown): string | undefined {
+  if (!isRecord(raw)) {
+    return undefined;
+  }
+  const agents = isRecord(raw.agents) ? raw.agents : null;
+  const defaults = agents && isRecord(agents.defaults) ? agents.defaults : null;
+  const workspace = defaults?.workspace;
+  if (typeof workspace === "string" && workspace.trim() !== "") {
+    return workspace.trim();
+  }
+
+  const agentsConfig = agents ? { agents } : {};
+  const validatedAgentsConfig = validateConfigObjectRaw(agentsConfig);
+  return validatedAgentsConfig.ok
+    ? resolveAgentWorkspaceDir(
+        validatedAgentsConfig.config,
+        resolveDefaultAgentId(validatedAgentsConfig.config),
+      )
+    : undefined;
+}
+
+function parseUnrecognizedKeyNames(message: string): string[] {
+  const singular = /^Unrecognized key: "([^"]+)"$/.exec(message);
+  if (singular) {
+    return [singular[1]];
+  }
+  const plural = /^Unrecognized keys: (.+)$/.exec(message);
+  if (!plural) {
+    return [];
+  }
+  return plural[1]
+    .split(",")
+    .map((part) => part.trim())
+    .map((part) => /^"([^"]+)"$/.exec(part)?.[1] ?? "")
+    .filter(Boolean);
+}
+
+function resolveMisplacedPluginConfigHints(
+  raw: unknown,
+  issues: ConfigValidationIssue[],
+): ConfigValidationIssue[] {
+  if (!isRecord(raw)) {
+    return issues;
+  }
+
+  const rawPlugins = isRecord(raw.plugins) ? raw.plugins : null;
+  const rawEntries = rawPlugins && isRecord(rawPlugins.entries) ? rawPlugins.entries : null;
+  if (!rawEntries) {
+    return issues;
+  }
+
+  const agentsConfig = isRecord(raw.agents) ? { agents: raw.agents } : {};
+  const workspaceDir = resolveWorkspaceDirFromRawConfig(raw);
+
+  const registry = loadPluginManifestRegistry({
+    config: { ...agentsConfig, plugins: rawPlugins } as OpenClawConfig,
+    workspaceDir: workspaceDir ?? undefined,
+    cache: false,
+  });
+  const pluginSchemas = new Map(
+    registry.plugins.map((record) => [record.id, record.configSchema] as const),
+  );
+
+  return issues.map((issue) => {
+    const misplacedKeys = parseUnrecognizedKeyNames(issue.message);
+    const prefix = "plugins.entries.";
+    if (!issue.path.startsWith(prefix) || misplacedKeys.length === 0) {
+      return issue;
+    }
+
+    const pluginId = issue.path.slice(prefix.length);
+    if (!pluginId) {
+      return issue;
+    }
+    const pluginSchema = pluginSchemas.get(pluginId);
+    const schemaProperties =
+      pluginSchema && typeof pluginSchema === "object" && !Array.isArray(pluginSchema)
+        ? (pluginSchema as { properties?: Record<string, unknown> }).properties
+        : undefined;
+    if (!schemaProperties) {
+      return issue;
+    }
+
+    const hintedPaths = misplacedKeys
+      .filter((misplacedKey) =>
+        Object.prototype.hasOwnProperty.call(schemaProperties, misplacedKey),
+      )
+      .map((misplacedKey) => `"plugins.entries.${pluginId}.config.${misplacedKey}"`);
+    if (hintedPaths.length === 0) {
+      return issue;
+    }
+
+    const suggestion = hintedPaths.length === 1 ? hintedPaths[0] : hintedPaths.join(", ");
+    return {
+      ...issue,
+      message: `${issue.message}. Did you mean ${suggestion}?`,
+    };
+  });
+}
+
 function validateConfigObjectWithPluginsBase(
   raw: unknown,
   opts: { applyDefaults: boolean },
 ): ValidateConfigWithPluginsResult {
   const base = opts.applyDefaults ? validateConfigObject(raw) : validateConfigObjectRaw(raw);
   if (!base.ok) {
-    return { ok: false, issues: base.issues, warnings: [] };
+    return {
+      ok: false,
+      issues: resolveMisplacedPluginConfigHints(raw, base.issues),
+      warnings: [],
+    };
   }
 
   const config = base.config;
