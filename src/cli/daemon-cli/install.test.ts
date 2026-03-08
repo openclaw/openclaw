@@ -256,4 +256,27 @@ describe("runDaemonInstall", () => {
     expect(installDaemonServiceAndEmitMock).toHaveBeenCalledTimes(1);
     expect(actionState.warnings.some((warning) => warning.includes("Auto-generated"))).toBe(true);
   });
+
+  it("continues Linux install when service probe hits a non-fatal systemd bus failure", async () => {
+    service.isLoaded.mockRejectedValueOnce(
+      new Error("systemctl is-enabled unavailable: Failed to connect to bus"),
+    );
+
+    await runDaemonInstall({ json: true });
+
+    expect(actionState.failed).toEqual([]);
+    expect(installDaemonServiceAndEmitMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("fails install when service probe reports an unrelated error", async () => {
+    service.isLoaded.mockRejectedValueOnce(
+      new Error("systemctl is-enabled unavailable: read-only file system"),
+    );
+
+    await runDaemonInstall({ json: true });
+
+    expect(actionState.failed[0]?.message).toContain("Gateway service check failed");
+    expect(actionState.failed[0]?.message).toContain("read-only file system");
+    expect(installDaemonServiceAndEmitMock).not.toHaveBeenCalled();
+  });
 });
