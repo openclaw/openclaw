@@ -27,6 +27,13 @@
       "npmSpec": "@openclaw/tlon",
       "localPath": "extensions/tlon",
       "defaultChoice": "npm"
+    },
+    "releaseChecks": {
+      "rootDependencyMirrorAllowlist": [
+        "@tloncorp/api",
+        "@tloncorp/tlon-skill",
+        "@urbit/aura"
+      ]
     }
   }
 }

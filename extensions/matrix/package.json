@@ -29,6 +29,13 @@
       "npmSpec": "@openclaw/matrix",
       "localPath": "extensions/matrix",
       "defaultChoice": "npm"
+    },
+    "releaseChecks": {
+      "rootDependencyMirrorAllowlist": [
+        "@matrix-org/matrix-sdk-crypto-nodejs",
+        "@vector-im/matrix-bot-sdk",
+        "music-metadata"
+      ]
     }
   }
 }
