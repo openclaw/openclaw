@@ -824,8 +824,14 @@ export type PluginHookAfterLlmCallEvent = {
 export type PluginHookAfterLlmCallResult = {
   /** If true, block ALL tool execution for this turn. */
   block?: boolean;
+  /** Reason for blocking. Only surfaced when `block: true` is set.
+   *  For per-tool filtering (via `toolCalls`), the generic message
+   *  "Tool call X filtered by after_llm_call hook" is used instead. */
   blockReason?: string;
-  /** Filtered tool calls — only these will be allowed to execute. Omit to allow all. */
+  /** Filtered tool calls — only tools whose `id` appears in this list will execute.
+   *  `name` and `arguments` are included for plugin convenience (logging, auditing)
+   *  but are NOT enforced — the gate filters by `id` only. To modify tool arguments
+   *  before execution, use the `before_tool_call` hook instead. Omit to allow all. */
   toolCalls?: Array<{ id: string; name: string; arguments: Record<string, unknown> }>;
 };
 

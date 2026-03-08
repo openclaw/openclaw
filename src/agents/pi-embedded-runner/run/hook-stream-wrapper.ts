@@ -59,12 +59,13 @@ export function wrapStreamFnWithHooks(
     // --- before_llm_call ---
     let effectiveContext: Context = context;
     if (hookRunner.hasHooks("before_llm_call")) {
+      const toolDefs = (context.tools ?? []).map((t) => ({
+        name: t.name,
+        description: t.description,
+      }));
+      let result: Awaited<ReturnType<typeof hookRunner.runBeforeLlmCall>> | undefined;
       try {
-        const toolDefs = (context.tools ?? []).map((t) => ({
-          name: t.name,
-          description: t.description,
-        }));
-        const result = await hookRunner.runBeforeLlmCall(
+        result = await hookRunner.runBeforeLlmCall(
           {
             messages: context.messages as AgentMessage[],
             systemPrompt: context.systemPrompt ?? "",
@@ -74,42 +75,38 @@ export function wrapStreamFnWithHooks(
           },
           agentCtx,
         );
-
-        if (result?.block) {
-          const reason = result.blockReason ?? "blocked by before_llm_call hook";
-          log.warn(`before_llm_call: blocked LLM call: ${reason}`);
-          throw new BeforeLlmCallBlockError(reason);
-        }
-
-        // Apply modifications — only create new context if something changed
-        // Use !== undefined consistently: any explicit value (including [] or "")
-        // means the hook wants that exact value. Return undefined for "no change".
-        if (
-          result?.messages !== undefined ||
-          result?.systemPrompt !== undefined ||
-          result?.tools !== undefined
-        ) {
-          let filteredTools = context.tools;
-          if (result.tools !== undefined) {
-            const allowedNames = new Set(result.tools.map((t) => t.name));
-            filteredTools = (context.tools ?? []).filter((t) => allowedNames.has(t.name));
-          }
-          // Spread original context to preserve any extra fields (e.g. provider
-          // metadata) that upstream wrappers may have attached. Only override
-          // the fields the hook explicitly modified.
-          effectiveContext = {
-            ...context,
-            systemPrompt: result.systemPrompt ?? context.systemPrompt,
-            messages: (result.messages ?? context.messages) as Message[],
-            tools: filteredTools,
-          };
-        }
       } catch (err) {
-        // Re-throw explicit block errors (sentinel class, not string matching)
-        if (err instanceof BeforeLlmCallBlockError) {
-          throw err;
-        }
+        // Fail-open: log and continue with the original context.
         log.warn(`before_llm_call hook failed: ${String(err)}`);
+      }
+
+      // Block check is outside the try-catch — fail-open only applies to
+      // hook execution errors, not to an explicit block decision.
+      if (result?.block) {
+        const reason = result.blockReason ?? "blocked by before_llm_call hook";
+        log.warn(`before_llm_call: blocked LLM call: ${reason}`);
+        throw new BeforeLlmCallBlockError(reason);
+      }
+
+      // Apply modifications — only create new context if something changed.
+      // Use !== undefined consistently: any explicit value (including [] or "")
+      // means the hook wants that exact value. Return undefined for "no change".
+      if (
+        result?.messages !== undefined ||
+        result?.systemPrompt !== undefined ||
+        result?.tools !== undefined
+      ) {
+        let filteredTools = context.tools;
+        if (result.tools !== undefined) {
+          const allowedNames = new Set(result.tools.map((t) => t.name));
+          filteredTools = (context.tools ?? []).filter((t) => allowedNames.has(t.name));
+        }
+        effectiveContext = {
+          ...context,
+          systemPrompt: result.systemPrompt ?? context.systemPrompt,
+          messages: (result.messages ?? context.messages) as Message[],
+          tools: filteredTools,
+        };
       }
     }
 
