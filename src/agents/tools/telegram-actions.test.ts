@@ -81,12 +81,13 @@ describe("handleTelegramAction", () => {
   }
 
   async function expectReactionAdded(reactionLevel: "minimal" | "extensive") {
-    await handleTelegramAction(defaultReactionAction, reactionConfig(reactionLevel));
+    const cfg = reactionConfig(reactionLevel);
+    await handleTelegramAction(defaultReactionAction, cfg);
     expect(reactMessageTelegram).toHaveBeenCalledWith(
       "123",
       456,
       "✅",
-      expect.objectContaining({ token: "tok", remove: false }),
+      expect.objectContaining({ cfg, token: "tok", remove: false }),
     );
   }
 
@@ -339,6 +340,19 @@ describe("handleTelegramAction", () => {
     expect(sendStickerTelegram).toHaveBeenCalledWith(
       "123",
       "sticker-id",
+      expect.objectContaining({ cfg, token: "tok" }),
+    );
+  });
+
+  it("forwards cfg to sendPollTelegram", async () => {
+    const cfg = telegramConfig();
+    await handleTelegramAction(
+      { action: "poll", to: "@testchannel", question: "Ready?", answers: ["Yes", "No"] },
+      cfg,
+    );
+    expect(sendPollTelegram).toHaveBeenCalledWith(
+      "@testchannel",
+      expect.any(Object),
       expect.objectContaining({ cfg, token: "tok" }),
     );
   });
