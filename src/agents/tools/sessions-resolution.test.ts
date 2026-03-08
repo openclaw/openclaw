@@ -1,5 +1,17 @@
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
+
+const callGatewayMock = vi.fn();
+const logWarnMock = vi.fn();
+
+vi.mock("../../gateway/call.js", () => ({
+  callGateway: (opts: unknown) => callGatewayMock(opts),
+}));
+
+vi.mock("../../logger.js", () => ({
+  logWarn: (message: string) => logWarnMock(message),
+}));
+
 import {
   isResolvedSessionVisibleToRequester,
   looksLikeSessionId,
@@ -92,6 +104,11 @@ describe("session reference shape detection", () => {
 });
 
 describe("resolved session visibility checks", () => {
+  beforeEach(() => {
+    callGatewayMock.mockReset();
+    logWarnMock.mockReset();
+  });
+
   it("requires spawned-session verification only for sandboxed key-based cross-session access", () => {
     expect(
       shouldVerifyRequesterSpawnedSessionVisibility({
@@ -144,5 +161,125 @@ describe("resolved session visibility checks", () => {
         resolvedViaSessionId: false,
       }),
     ).resolves.toBe(true);
+    expect(callGatewayMock).not.toHaveBeenCalled();
+  });
+
+  it("retries sessions.list and recovers from transient failure", async () => {
+    vi.useFakeTimers();
+    try {
+      callGatewayMock
+        .mockRejectedValueOnce(new Error("temporary sessions.list outage"))
+        .mockResolvedValueOnce({ sessions: [{ key: "agent:main:subagent:child" }] });
+
+      const visibilityPromise = isResolvedSessionVisibleToRequester({
+        requesterSessionKey: "agent:main:main",
+        targetSessionKey: "agent:main:subagent:child",
+        restrictToSpawned: true,
+        resolvedViaSessionId: false,
+      });
+      await vi.runAllTimersAsync();
+
+      await expect(visibilityPromise).resolves.toBe(true);
+
+      expect(callGatewayMock).toHaveBeenCalledTimes(2);
+      expect(logWarnMock).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("takes fail-open path on persistent sessions.list failure and emits observability", async () => {
+    vi.useFakeTimers();
+    try {
+      callGatewayMock.mockRejectedValue(new Error("sessions.list failed hard"));
+
+      const visibilityPromise = isResolvedSessionVisibleToRequester({
+        requesterSessionKey: "agent:main:main",
+        targetSessionKey: "agent:main:not-child",
+        restrictToSpawned: true,
+        resolvedViaSessionId: false,
+      });
+      await vi.runAllTimersAsync();
+
+      await expect(visibilityPromise).resolves.toBe(true);
+
+      expect(callGatewayMock).toHaveBeenCalledTimes(3);
+      expect(logWarnMock).toHaveBeenCalledTimes(1);
+      expect(logWarnMock.mock.calls[0]?.[0]).toContain("reason=sessions_list_throw");
+      expect(logWarnMock.mock.calls[0]?.[0]).toContain("requester=agent:main:main");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("takes fail-open path on repeated unexpected sessions.list shape and emits observability", async () => {
+    vi.useFakeTimers();
+    try {
+      callGatewayMock.mockResolvedValue({ sessions: { nope: true } });
+
+      const visibilityPromise = isResolvedSessionVisibleToRequester({
+        requesterSessionKey: "agent:main:main",
+        targetSessionKey: "agent:main:not-child",
+        restrictToSpawned: true,
+        resolvedViaSessionId: false,
+      });
+      await vi.runAllTimersAsync();
+
+      await expect(visibilityPromise).resolves.toBe(true);
+
+      expect(callGatewayMock).toHaveBeenCalledTimes(3);
+      expect(logWarnMock).toHaveBeenCalledTimes(1);
+      expect(logWarnMock.mock.calls[0]?.[0]).toContain("reason=sessions_list_unexpected_shape");
+      expect(logWarnMock.mock.calls[0]?.[0]).toContain("requester=agent:main:main");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("recovers when an unexpected sessions.list shape is transient", async () => {
+    vi.useFakeTimers();
+    try {
+      callGatewayMock
+        .mockResolvedValueOnce({ sessions: { nope: true } })
+        .mockResolvedValueOnce({ sessions: [{ key: "agent:main:subagent:child" }] });
+
+      const visibilityPromise = isResolvedSessionVisibleToRequester({
+        requesterSessionKey: "agent:main:main",
+        targetSessionKey: "agent:main:subagent:child",
+        restrictToSpawned: true,
+        resolvedViaSessionId: false,
+      });
+      await vi.runAllTimersAsync();
+
+      await expect(visibilityPromise).resolves.toBe(true);
+      expect(callGatewayMock).toHaveBeenCalledTimes(2);
+      expect(logWarnMock).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps happy path behavior when sessions.list response is valid", async () => {
+    callGatewayMock.mockResolvedValue({ sessions: [{ key: "agent:main:subagent:one" }] });
+
+    await expect(
+      isResolvedSessionVisibleToRequester({
+        requesterSessionKey: "agent:main:main",
+        targetSessionKey: "agent:main:subagent:one",
+        restrictToSpawned: true,
+        resolvedViaSessionId: false,
+      }),
+    ).resolves.toBe(true);
+
+    await expect(
+      isResolvedSessionVisibleToRequester({
+        requesterSessionKey: "agent:main:main",
+        targetSessionKey: "agent:main:subagent:missing",
+        restrictToSpawned: true,
+        resolvedViaSessionId: false,
+      }),
+    ).resolves.toBe(false);
+
+    expect(logWarnMock).not.toHaveBeenCalled();
   });
 });
