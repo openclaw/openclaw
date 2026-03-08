@@ -252,6 +252,30 @@ describe("chunkMarkdown", () => {
     }
   });
 
+  it("does not break surrogate pairs when splitting long CJK lines", () => {
+    // "𠀀" (U+20000) is a surrogate pair: 2 UTF-16 code units per character.
+    // A line of 500 such characters = 1000 UTF-16 code units.
+    // With tokens=99 (odd), the fine-split must not cut inside a pair.
+    const surrogateChar = "\u{20000}"; // 𠀀
+    const longLine = surrogateChar.repeat(500);
+    const chunks = chunkMarkdown(longLine, { tokens: 99, overlap: 0 });
+    for (const chunk of chunks) {
+      // No chunk should contain the Unicode replacement character U+FFFD,
+      // which would indicate a broken surrogate pair.
+      expect(chunk.text).not.toContain("\uFFFD");
+      // Every character in the chunk should be a valid string (no lone surrogates).
+      for (let i = 0; i < chunk.text.length; i += 1) {
+        const code = chunk.text.charCodeAt(i);
+        if (code >= 0xd800 && code <= 0xdbff) {
+          // High surrogate must be followed by a low surrogate
+          const next = chunk.text.charCodeAt(i + 1);
+          expect(next).toBeGreaterThanOrEqual(0xdc00);
+          expect(next).toBeLessThanOrEqual(0xdfff);
+        }
+      }
+    }
+  });
+
   it("does not over-split long Latin lines (backward compat)", () => {
     // A single Latin line of 2000 chars. With tokens=200, maxChars=800.
     // Should be split at ~800-char boundaries (2000/800 ≈ 3 segments), NOT
