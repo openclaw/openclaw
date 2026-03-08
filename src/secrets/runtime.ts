@@ -4,6 +4,7 @@ import type { AuthProfileStore } from "../agents/auth-profiles.js";
 import {
   clearRuntimeAuthProfileStoreSnapshots,
   loadAuthProfileStoreForSecretsRuntime,
+  registerAuthStoreSnapshotSaveHook,
   replaceRuntimeAuthProfileStoreSnapshots,
 } from "../agents/auth-profiles.js";
 import {
@@ -117,6 +118,16 @@ export function activateSecretsRuntimeSnapshot(snapshot: PreparedSecretsRuntimeS
   setRuntimeConfigSnapshot(next.config, next.sourceConfig);
   replaceRuntimeAuthProfileStoreSnapshots(next.authStores);
   activeSnapshot = next;
+  registerAuthStoreSnapshotSaveHook((agentDir, store) => {
+    if (!activeSnapshot) {
+      return;
+    }
+    const resolvedDir = resolveUserPath(agentDir ?? resolveOpenClawAgentDir());
+    const entry = activeSnapshot.authStores.find((e) => e.agentDir === resolvedDir);
+    if (entry) {
+      entry.store = structuredClone(store);
+    }
+  });
 }
 
 export function getActiveSecretsRuntimeSnapshot(): PreparedSecretsRuntimeSnapshot | null {
@@ -156,6 +167,7 @@ export function resolveCommandSecretsFromActiveRuntimeSnapshot(params: {
 
 export function clearSecretsRuntimeSnapshot(): void {
   activeSnapshot = null;
+  registerAuthStoreSnapshotSaveHook(null);
   clearRuntimeConfigSnapshot();
   clearRuntimeAuthProfileStoreSnapshots();
 }

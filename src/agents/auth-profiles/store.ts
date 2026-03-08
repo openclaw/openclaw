@@ -20,6 +20,15 @@ const AUTH_PROFILE_TYPES = new Set<AuthProfileCredential["type"]>(["api_key", "o
 
 const runtimeAuthStoreSnapshots = new Map<string, AuthProfileStore>();
 
+let onSnapshotSaved: ((agentDir: string | undefined, store: AuthProfileStore) => void) | null =
+  null;
+
+export function registerAuthStoreSnapshotSaveHook(
+  hook: ((agentDir: string | undefined, store: AuthProfileStore) => void) | null,
+): void {
+  onSnapshotSaved = hook;
+}
+
 function resolveRuntimeStoreKey(agentDir?: string): string {
   return resolveAuthStorePath(agentDir);
 }
@@ -506,4 +515,14 @@ export function saveAuthProfileStore(store: AuthProfileStore, agentDir?: string)
     usageStats: store.usageStats ?? undefined,
   } satisfies AuthProfileStore;
   saveJsonFile(authPath, payload);
+  // Update the runtime snapshot for this specific store so subsequent reads
+  // see the freshly-saved credentials (e.g. rotated OAuth refresh tokens).
+  // We update rather than delete because the in-memory store may contain
+  // runtime-resolved key/token values (from keyRef/tokenRef) that are
+  // intentionally stripped before disk writes — deleting would lose them.
+  const snapshotKey = resolveRuntimeStoreKey(agentDir);
+  if (runtimeAuthStoreSnapshots.has(snapshotKey)) {
+    runtimeAuthStoreSnapshots.set(snapshotKey, cloneAuthProfileStore(store));
+  }
+  onSnapshotSaved?.(agentDir, store);
 }
