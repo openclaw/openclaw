@@ -703,16 +703,17 @@ async function deliverOutboundPayloadsCore(
     );
   }
   let replyConsumed = false;
-  // Slack uses replyToId as thread_ts — persistent thread context that must
-  // survive across all payloads. Never consume inherited reply state for Slack.
-  const isSlackChannel = channel === "slack";
+  // Slack and Mattermost use replyToId as persistent thread context (thread_ts
+  // and rootId respectively) that must survive across all payloads. Never
+  // consume inherited reply state for thread-based channels.
+  const isThreadBasedChannel = channel === "slack" || channel === "mattermost";
   const shouldConsumeReplyAfterSend = (replyTo: string | undefined) => {
     if (!replyTo) {
       return false;
     }
-    // Slack thread context (thread_ts) must persist across all payloads in a
-    // delivery — consuming it would orphan subsequent chunks from the thread.
-    if (isSlackChannel) {
+    // Thread-based channels use replyToId for thread routing, not one-shot
+    // quoting — consuming it would orphan subsequent chunks from the thread.
+    if (isThreadBasedChannel) {
       return false;
     }
     if (!isSignalChannel) {
