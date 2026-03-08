@@ -11,6 +11,14 @@ const mocks = vi.hoisted(() => ({
 
 registerGetReplyCommonMocks();
 
+// PR addition: mock resolveAgentConfig for per-agent thinking defaults
+vi.mock("../../agents/agent-scope.js", () => ({
+  resolveAgentConfig: vi.fn(() => undefined),
+  resolveAgentDir: vi.fn(() => "/tmp/agent"),
+  resolveAgentWorkspaceDir: vi.fn(() => "/tmp/workspace"),
+  resolveSessionAgentId: vi.fn(() => "main"),
+  resolveAgentSkillsFilter: vi.fn(() => undefined),
+}));
 vi.mock("../../link-understanding/apply.js", () => ({
   applyLinkUnderstanding: vi.fn(async () => undefined),
 }));
