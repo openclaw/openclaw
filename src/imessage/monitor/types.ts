@@ -25,6 +25,31 @@ export type IMessagePayload = {
   is_group?: boolean | null;
 };
 
+export type IMessageReactionPayload = {
+  /** Message id being reacted to. */
+  target_id?: number | null;
+  /** Chat row id. */
+  chat_id?: number | null;
+  /** Sender handle (phone/email). */
+  sender?: string | null;
+  /** True when the reaction is from the local user. */
+  is_from_me?: boolean | null;
+  /** Tapback type name. */
+  reaction_type?: string | null;
+  /** True when the tapback was added; false when removed. */
+  added?: boolean | null;
+  /** Text of the message being reacted to. */
+  target_text?: string | null;
+  /** Timestamp string. */
+  created_at?: string | null;
+  /** Chat identifier (e.g. iMessage;-;+1234567890). */
+  chat_identifier?: string | null;
+  chat_guid?: string | null;
+  chat_name?: string | null;
+  participants?: string[] | null;
+  is_group?: boolean | null;
+};
+
 export type MonitorIMessageOpts = {
   runtime?: RuntimeEnv;
   abortSignal?: AbortSignal;
@@ -37,4 +62,5 @@ export type MonitorIMessageOpts = {
   includeAttachments?: boolean;
   mediaMaxMb?: number;
   requireMention?: boolean;
+  includeReactions?: boolean;
 };
