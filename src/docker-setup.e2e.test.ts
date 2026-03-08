@@ -163,17 +163,19 @@ describe("docker-setup.sh", () => {
     sandbox = null;
   });
 
-  it("handles env defaults, home-volume mounts, and apt build args", async () => {
+  it("handles env defaults, home-volume mounts, and Docker build args", async () => {
     const activeSandbox = requireSandbox(sandbox);
 
     const result = runDockerSetup(activeSandbox, {
       OPENCLAW_DOCKER_APT_PACKAGES: "ffmpeg build-essential",
+      OPENCLAW_INSTALL_RUNTIME_PNPM: "1",
       OPENCLAW_EXTRA_MOUNTS: undefined,
       OPENCLAW_HOME_VOLUME: "openclaw-home",
     });
     expect(result.status).toBe(0);
     const envFile = await readFile(join(activeSandbox.rootDir, ".env"), "utf8");
     expect(envFile).toContain("OPENCLAW_DOCKER_APT_PACKAGES=ffmpeg build-essential");
+    expect(envFile).toContain("OPENCLAW_INSTALL_RUNTIME_PNPM=1");
     expect(envFile).toContain("OPENCLAW_EXTRA_MOUNTS=");
     expect(envFile).toContain("OPENCLAW_HOME_VOLUME=openclaw-home"); // pragma: allowlist secret
     const extraCompose = await readFile(
@@ -185,6 +187,7 @@ describe("docker-setup.sh", () => {
     expect(extraCompose).toContain("openclaw-home:");
     const log = await readFile(activeSandbox.logPath, "utf8");
     expect(log).toContain("--build-arg OPENCLAW_DOCKER_APT_PACKAGES=ffmpeg build-essential");
+    expect(log).toContain("--build-arg OPENCLAW_INSTALL_RUNTIME_PNPM=1");
     expect(log).toContain("run --rm openclaw-cli onboard --mode local --no-install-daemon");
     expect(log).toContain("run --rm openclaw-cli config set gateway.mode local");
     expect(log).toContain("run --rm openclaw-cli config set gateway.bind lan");

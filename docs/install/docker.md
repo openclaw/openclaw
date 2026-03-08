@@ -61,6 +61,7 @@ Optional env vars:
 - `OPENCLAW_IMAGE` — use a remote image instead of building locally (e.g. `ghcr.io/openclaw/openclaw:latest`)
 - `OPENCLAW_DOCKER_APT_PACKAGES` — install extra apt packages during build
 - `OPENCLAW_EXTENSIONS` — pre-install extension dependencies at build time (space-separated extension names, e.g. `diagnostics-otel matrix`)
+- `OPENCLAW_INSTALL_RUNTIME_PNPM` — opt in to shipping `pnpm` inside the runtime image (`1` installs it for container-local test/dev workflows)
 - `OPENCLAW_EXTRA_MOUNTS` — add extra host bind mounts
 - `OPENCLAW_HOME_VOLUME` — persist `/home/node` in a named volume
 - `OPENCLAW_SANDBOX` — opt in to Docker gateway sandbox bootstrap. Only explicit truthy values enable it: `1`, `true`, `yes`, `on`
@@ -346,6 +347,23 @@ Notes:
 - Only extensions with a `package.json` are affected; lightweight plugins without one are ignored.
 - If you change `OPENCLAW_EXTENSIONS`, rerun `docker-setup.sh` to rebuild
   the image.
+
+### Include pnpm in the runtime image (optional)
+
+The default image no longer ships `pnpm` in `/app` to keep the runtime layer
+smaller. If you want to run `pnpm ...` directly inside the container for local
+dev or live-test workflows, opt back in:
+
+```bash
+export OPENCLAW_INSTALL_RUNTIME_PNPM=1
+./docker-setup.sh
+```
+
+Or when building directly:
+
+```bash
+docker build --build-arg OPENCLAW_INSTALL_RUNTIME_PNPM=1 .
+```
 
 ### Power-user / full-featured container (opt-in)
 

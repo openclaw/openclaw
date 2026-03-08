@@ -356,6 +356,8 @@ These run `pnpm test:live` inside the repo Docker image, mounting your local con
 The live-model Docker runners also bind-mount the current checkout read-only and
 stage it into a temporary workdir inside the container. This keeps the runtime
 image slim while still running Vitest against your exact local source/config.
+They automatically rebuild the image with `OPENCLAW_INSTALL_RUNTIME_PNPM=1` so
+`pnpm test:live` remains available inside the container.
 
 Manual ACP plain-language thread smoke (not CI):
 
