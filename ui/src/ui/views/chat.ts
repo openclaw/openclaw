@@ -163,45 +163,74 @@ function generateAttachmentId(): string {
   return `att-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
 }
 
-function handlePaste(e: ClipboardEvent, props: ChatProps) {
-  const items = e.clipboardData?.items;
-  if (!items || !props.onAttachmentsChange) {
+const MAX_FILE_SIZE = 10 * 1024 * 1024; // 10 MB
+
+function addFiles(files: File[], props: ChatProps) {
+  if (!props.onAttachmentsChange) {
     return;
   }
-
-  const imageItems: DataTransferItem[] = [];
-  for (let i = 0; i < items.length; i++) {
-    const item = items[i];
-    if (item.type.startsWith("image/")) {
-      imageItems.push(item);
-    }
-  }
-
-  if (imageItems.length === 0) {
-    return;
-  }
-
-  e.preventDefault();
-
-  for (const item of imageItems) {
-    const file = item.getAsFile();
-    if (!file) {
+  for (const file of files) {
+    if (file.size > MAX_FILE_SIZE) {
       continue;
     }
-
     const reader = new FileReader();
     reader.addEventListener("load", () => {
       const dataUrl = reader.result as string;
       const newAttachment: ChatAttachment = {
         id: generateAttachmentId(),
         dataUrl,
-        mimeType: file.type,
+        mimeType: file.type || "application/octet-stream",
+        fileName: file.name,
       };
       const current = props.attachments ?? [];
       props.onAttachmentsChange?.([...current, newAttachment]);
     });
     reader.readAsDataURL(file);
   }
+}
+
+function handlePaste(e: ClipboardEvent, props: ChatProps) {
+  const items = e.clipboardData?.items;
+  if (!items || !props.onAttachmentsChange) {
+    return;
+  }
+
+  const pastedFiles: File[] = [];
+  for (let i = 0; i < items.length; i++) {
+    const item = items[i];
+    if (item.kind === "file") {
+      const file = item.getAsFile();
+      if (file) {
+        pastedFiles.push(file);
+      }
+    }
+  }
+
+  if (pastedFiles.length === 0) {
+    return;
+  }
+
+  e.preventDefault();
+  addFiles(pastedFiles, props);
+}
+
+function handleDrop(e: DragEvent, props: ChatProps) {
+  e.preventDefault();
+  e.stopPropagation();
+  const files = e.dataTransfer?.files;
+  if (!files || !props.onAttachmentsChange) {
+    return;
+  }
+  const droppedFiles: File[] = [];
+  for (let i = 0; i < files.length; i++) {
+    droppedFiles.push(files[i]);
+  }
+  addFiles(droppedFiles, props);
+}
+
+function handleDragOver(e: DragEvent) {
+  e.preventDefault();
+  e.stopPropagation();
 }
 
 function renderAttachmentPreview(props: ChatProps) {
@@ -215,11 +244,15 @@ function renderAttachmentPreview(props: ChatProps) {
       ${attachments.map(
         (att) => html`
           <div class="chat-attachment">
-            <img
-              src=${att.dataUrl}
-              alt="Attachment preview"
-              class="chat-attachment__img"
-            />
+            ${
+              att.mimeType.startsWith("image/")
+                ? html`<img
+                  src=${att.dataUrl}
+                  alt="Attachment preview"
+                  class="chat-attachment__img"
+                />`
+                : html`<div class="chat-attachment__file">${att.fileName || "file"}</div>`
+            }
             <button
               class="chat-attachment__remove"
               type="button"
@@ -253,8 +286,8 @@ export function renderChat(props: ChatProps) {
   const hasAttachments = (props.attachments?.length ?? 0) > 0;
   const composePlaceholder = props.connected
     ? hasAttachments
-      ? "Add a message or paste more images..."
-      : "Message (↩ to send, Shift+↩ for line breaks, paste images)"
+      ? "Add a message or paste more files..."
+      : "Message (↩ to send, Shift+↩ for line breaks, paste or attach files)"
     : "Connect to the gateway to start chatting…";
 
   const splitRatio = props.splitRatio ?? 0.6;
@@ -421,9 +454,42 @@ export function renderChat(props: ChatProps) {
           : nothing
       }
 
-      <div class="chat-compose">
+      <div class="chat-compose"
+        @dragover=${handleDragOver}
+        @drop=${(e: DragEvent) => handleDrop(e, props)}
+      >
         ${renderAttachmentPreview(props)}
         <div class="chat-compose__row">
+          <input
+            type="file"
+            multiple
+            style="display:none"
+            @change=${(e: Event) => {
+              const input = e.target as HTMLInputElement;
+              const files = input.files;
+              if (files) {
+                const arr: File[] = [];
+                for (let i = 0; i < files.length; i++) {
+                  arr.push(files[i]);
+                }
+                addFiles(arr, props);
+              }
+              input.value = "";
+            }}
+          />
+          <button
+            class="btn btn--icon chat-compose__attach"
+            type="button"
+            ?disabled=${!props.connected}
+            title="Attach file"
+            @click=${(e: Event) => {
+              const btn = e.currentTarget as HTMLElement;
+              const input = btn.previousElementSibling as HTMLInputElement;
+              input?.click();
+            }}
+          >
+            ${icons.paperclip}
+          </button>
           <label class="field chat-compose__field">
             <span>Message</span>
             <textarea

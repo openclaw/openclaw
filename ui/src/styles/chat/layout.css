@@ -259,6 +259,12 @@
   justify-content: flex-end;
 }
 
+/* Attach button in compose row */
+.chat-compose__attach {
+  flex-shrink: 0;
+  align-self: flex-end;
+}
+
 /* Compose input row - horizontal layout */
 .chat-compose__row {
   display: flex;
