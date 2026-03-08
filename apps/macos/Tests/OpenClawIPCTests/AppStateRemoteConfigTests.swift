@@ -43,7 +43,7 @@ struct AppStateRemoteConfigTests {
                     "transport": "direct",
                     "url": "wss://old-gateway.example",
                     "token": [
-                        "$secretRef": "gateway-token",
+                        "$secretRef": "gateway-token", // pragma: allowlist secret
                     ],
                 ],
             ],
@@ -59,7 +59,7 @@ struct AppStateRemoteConfigTests {
             remoteToken: "",
             remoteTokenDirty: false)
         let sshRemote = (sshRoot["gateway"] as? [String: Any])?["remote"] as? [String: Any]
-        #expect((sshRemote?["token"] as? [String: String])?["$secretRef"] == "gateway-token")
+        #expect((sshRemote?["token"] as? [String: String])?["$secretRef"] == "gateway-token") // pragma: allowlist secret
 
         let localRoot = AppState._testSyncedGatewayRoot(
             currentRoot: sshRoot,
@@ -73,7 +73,7 @@ struct AppStateRemoteConfigTests {
         let localGateway = localRoot["gateway"] as? [String: Any]
         let localRemote = localGateway?["remote"] as? [String: Any]
         #expect(localGateway?["mode"] as? String == "local")
-        #expect((localRemote?["token"] as? [String: String])?["$secretRef"] == "gateway-token")
+        #expect((localRemote?["token"] as? [String: String])?["$secretRef"] == "gateway-token") // pragma: allowlist secret
     }
 
     @Test
@@ -81,7 +81,7 @@ struct AppStateRemoteConfigTests {
         let remote = AppState._testUpdatedRemoteGatewayConfig(
             current: [
                 "token": [
-                    "$secretRef": "gateway-token",
+                    "$secretRef": "gateway-token", // pragma: allowlist secret
                 ],
             ],
             transport: .direct,
@@ -99,7 +99,7 @@ struct AppStateRemoteConfigTests {
     func updatedRemoteGatewayConfigClearsObjectTokenOnlyAfterExplicitEdit() {
         let current: [String: Any] = [
             "token": [
-                "$secretRef": "gateway-token",
+                "$secretRef": "gateway-token", // pragma: allowlist secret
             ],
         ]
 
@@ -112,7 +112,7 @@ struct AppStateRemoteConfigTests {
             remoteIdentity: "",
             remoteToken: "",
             remoteTokenDirty: false)
-        #expect((preserved["token"] as? [String: String])?["$secretRef"] == "gateway-token")
+        #expect((preserved["token"] as? [String: String])?["$secretRef"] == "gateway-token") // pragma: allowlist secret
 
         let cleared = AppState._testUpdatedRemoteGatewayConfig(
             current: current,

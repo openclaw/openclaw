@@ -39,7 +39,7 @@ async function writeAuthProfiles(
 const MATRIX_CASES: MatrixCase[] = [
   {
     name: "env api key injects a simple provider",
-    env: { NVIDIA_API_KEY: "test-nvidia-key" },
+    env: { NVIDIA_API_KEY: "test-nvidia-key" }, // pragma: allowlist secret
     assertProviders(providers) {
       expect(providers?.nvidia?.apiKey).toBe("NVIDIA_API_KEY");
       expect(providers?.nvidia?.baseUrl).toBe("https://integrate.api.nvidia.com/v1");
@@ -48,7 +48,7 @@ const MATRIX_CASES: MatrixCase[] = [
   },
   {
     name: "env api key injects paired plan providers",
-    env: { VOLCANO_ENGINE_API_KEY: "test-volcengine-key" },
+    env: { VOLCANO_ENGINE_API_KEY: "test-volcengine-key" }, // pragma: allowlist secret
     assertProviders(providers) {
       expect(providers?.volcengine?.apiKey).toBe("VOLCANO_ENGINE_API_KEY");
       expect(providers?.["volcengine-plan"]?.apiKey).toBe("VOLCANO_ENGINE_API_KEY");
@@ -116,7 +116,7 @@ const MATRIX_CASES: MatrixCase[] = [
   },
   {
     name: "explicit vllm config suppresses implicit vllm injection",
-    env: { VLLM_API_KEY: "test-vllm-key" },
+    env: { VLLM_API_KEY: "test-vllm-key" }, // pragma: allowlist secret
     explicitProviders: {
       vllm: {
         baseUrl: "http://127.0.0.1:8000/v1",
