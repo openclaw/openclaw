@@ -54,6 +54,17 @@ describe("imessage targets", () => {
     expect(normalizeIMessageHandle("CHATIDENT:foo")).toBe("chat_identifier:foo");
   });
 
+  it("rejects hex identifiers with chat_id prefix", () => {
+    expect(() => parseIMessageTarget("chat_id:2ecba0e20f3a4299b0efb228a5990731")).toThrow(
+      "Invalid chat_id: 2ecba0e20f3a4299b0efb228a5990731. Use chat_identifier: for hex identifiers.",
+    );
+  });
+
+  it("accepts numeric chat_id", () => {
+    const target = parseIMessageTarget("chat_id:123");
+    expect(target).toEqual({ kind: "chat_id", chatId: 123 });
+  });
+
   it("checks allowFrom against chat_id", () => {
     const ok = isAllowedIMessageSender({
       allowFrom: ["chat_id:9"],
