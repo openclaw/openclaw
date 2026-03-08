@@ -63,8 +63,19 @@ export function createAccountListHelpers(
     );
     if (baseTokenFields.length > 0) {
       const accounts = (base?.accounts ?? {}) as Record<string, Record<string, unknown>>;
+      // Build reverse map from normalized ID → raw config key so we can look
+      // up the account object even when normalizeAccountId transforms the keys.
+      const rawKeys = Object.keys(accounts);
+      const normalizedToRaw = new Map<string, string>();
+      for (const key of rawKeys) {
+        const normalized = normalizeAccountId(key);
+        if (normalized && !normalizedToRaw.has(normalized)) {
+          normalizedToRaw.set(normalized, key);
+        }
+      }
       const everyAccountHasOwnTokens = ids.every((id) => {
-        const acct = accounts[id];
+        const rawKey = normalizedToRaw.get(id) ?? id;
+        const acct = accounts[rawKey];
         if (!acct) {
           return false;
         }

@@ -95,6 +95,24 @@ describe("createAccountListHelpers", () => {
       expect(listAccountIds(config)).toEqual(["default", "tank"]);
     });
 
+    it("includes default when normalized IDs differ from raw config keys", () => {
+      const normalizedHelpers = createAccountListHelpers("testchannel", {
+        normalizeAccountId: (id: string) => id.toLowerCase().replace(/\s+/g, "-"),
+      });
+      const config = {
+        channels: {
+          testchannel: {
+            botToken: "xoxb-base",
+            accounts: {
+              "Router D": { botToken: "xoxb-router-d" },
+            },
+          },
+        },
+      } as unknown as OpenClawConfig;
+      // "Router D" normalizes to "router-d" — should still detect own token
+      expect(normalizedHelpers.listAccountIds(config)).toEqual(["default", "router-d"]);
+    });
+
     it("does NOT inject default in mixed configs (some accounts inherit base tokens)", () => {
       const config = {
         channels: {
