@@ -1,5 +1,9 @@
 FROM debian:bookworm-slim@sha256:98f4b71de414932439ac6ac690d7060df1f27161073c5036a7553723881bffbe
 
+# AF-005: Document that containers must be run with --security-opt no-new-privileges
+# and --cap-drop ALL (enforced via docker-compose.yml security_opt / cap_drop settings).
+LABEL security.no-new-privileges="true"
+
 ENV DEBIAN_FRONTEND=noninteractive
 
 RUN apt-get update \
