@@ -274,6 +274,9 @@ export async function navigateViaPlaywright(opts: {
       if (!isRetryableNavigateError(err)) {
         throw err;
       }
+      if (opts.signal?.aborted) {
+        throw opts.signal.reason ?? new Error("aborted");
+      }
       // Extension relays can briefly drop CDP during renderer swaps/navigation.
       // Force a clean reconnect, then retry once on the refreshed page handle.
       await forceDisconnectPlaywrightForTarget({
@@ -281,6 +284,9 @@ export async function navigateViaPlaywright(opts: {
         targetId: opts.targetId,
         reason: "retry navigate after detached frame",
       }).catch(() => {});
+      if (opts.signal?.aborted) {
+        throw opts.signal.reason ?? new Error("aborted");
+      }
       page = await getPageForTargetId(opts);
       ensurePageState(page);
       await page.goto(url, { timeout });
