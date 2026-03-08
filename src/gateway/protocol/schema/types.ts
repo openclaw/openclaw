@@ -124,3 +124,6 @@ export type ChatEvent = SchemaType<"ChatEvent">;
 export type UpdateRunParams = SchemaType<"UpdateRunParams">;
 export type TickEvent = SchemaType<"TickEvent">;
 export type ShutdownEvent = SchemaType<"ShutdownEvent">;
+export type ExecApprovalsTrustStatusParams = SchemaType<"ExecApprovalsTrustStatusParams">;
+export type ExecApprovalsTrustStatusResult = SchemaType<"ExecApprovalsTrustStatusResult">;
+export type TrustWindow = SchemaType<"TrustWindow">;

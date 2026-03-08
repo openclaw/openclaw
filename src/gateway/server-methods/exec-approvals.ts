@@ -1,12 +1,16 @@
 import {
   ensureExecApprovals,
+  getTrustWindow,
+  grantTrustWindow,
   mergeExecApprovalsSocketDefaults,
   normalizeExecApprovals,
   readExecApprovalsSnapshot,
+  revokeTrustWindow,
   saveExecApprovals,
   type ExecApprovalsFile,
   type ExecApprovalsSnapshot,
 } from "../../infra/exec-approvals.js";
+import { cleanupTrustAudit } from "../../infra/trust-audit.js";
 import {
   ErrorCodes,
   errorShape,
@@ -14,6 +18,7 @@ import {
   validateExecApprovalsNodeGetParams,
   validateExecApprovalsNodeSetParams,
   validateExecApprovalsSetParams,
+  validateExecApprovalsTrustStatusParams,
 } from "../protocol/index.js";
 import { resolveBaseHashParam } from "./base-hash.js";
 import {
@@ -189,5 +194,90 @@ export const execApprovalsHandlers: GatewayRequestHandlers = {
       const payload = safeParseJson(res.payloadJSON ?? null);
       respond(true, payload, undefined);
     });
+  },
+
+  "exec.approvals.trust.status": ({ params, respond }) => {
+    if (
+      !assertValidParams(
+        params,
+        validateExecApprovalsTrustStatusParams,
+        "exec.approvals.trust.status",
+        respond,
+      )
+    ) {
+      return;
+    }
+    const p = params as { agentId?: string };
+    const agentId = p.agentId?.trim() || "main";
+    const trustWindow = getTrustWindow(agentId);
+    respond(
+      true,
+      {
+        agentId,
+        trustWindow: trustWindow
+          ? {
+              status: trustWindow.status,
+              expiresAt: trustWindow.expiresAt,
+              grantedAt: trustWindow.grantedAt,
+              grantedBy: trustWindow.grantedBy,
+              security: trustWindow.security,
+              ask: trustWindow.ask,
+            }
+          : null,
+      },
+      undefined,
+    );
+  },
+
+  "exec.approvals.trust": ({ params, respond }) => {
+    const p =
+      params && typeof params === "object"
+        ? (params as {
+            agentId?: string;
+            minutes?: number;
+            grantedBy?: string;
+            force?: boolean;
+          })
+        : {};
+    const minutes = typeof p.minutes === "number" ? p.minutes : 0;
+    const result = grantTrustWindow({
+      agentId: p.agentId,
+      minutes,
+      grantedBy: p.grantedBy,
+      force: p.force,
+    });
+    if (!result.ok) {
+      respond(
+        true,
+        { ok: false, agentId: p.agentId?.trim() || "main", message: result.error },
+        undefined,
+      );
+      return;
+    }
+    respond(true, { ok: true, expiresAt: result.expiresAt, agentId: result.agentId }, undefined);
+  },
+
+  "exec.approvals.untrust": ({ params, respond }) => {
+    const p =
+      params && typeof params === "object"
+        ? (params as { agentId?: string; revokedBy?: string; keepAudit?: boolean })
+        : {};
+    const result = revokeTrustWindow({
+      agentId: p.agentId,
+      revokedBy: p.revokedBy,
+      keepAudit: p.keepAudit,
+    });
+    if (!result.ok) {
+      respond(
+        true,
+        { ok: false, agentId: p.agentId?.trim() || "main", message: result.error },
+        undefined,
+      );
+      return;
+    }
+    if (!p.keepAudit) {
+      cleanupTrustAudit(result.agentId);
+    }
+    respond(true, { ok: true, agentId: result.agentId, summary: result.summary }, undefined);
   },
 };

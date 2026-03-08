@@ -2934,6 +2934,72 @@ public struct ExecApprovalsSnapshot: Codable, Sendable {
     }
 }
 
+public struct ExecApprovalsTrustStatusParams: Codable, Sendable {
+    public let agentid: String?
+
+    public init(
+        agentid: String?)
+    {
+        self.agentid = agentid
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case agentid = "agentId"
+    }
+}
+
+public struct ExecApprovalsTrustStatusResult: Codable, Sendable {
+    public let agentid: String
+    public let trustwindow: AnyCodable?
+
+    public init(
+        agentid: String,
+        trustwindow: AnyCodable?)
+    {
+        self.agentid = agentid
+        self.trustwindow = trustwindow
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case agentid = "agentId"
+        case trustwindow = "trustWindow"
+    }
+}
+
+public struct TrustWindow: Codable, Sendable {
+    public let status: String
+    public let expiresat: Int
+    public let grantedat: Int
+    public let grantedby: String?
+    public let security: String
+    public let ask: String
+
+    public init(
+        status: String,
+        expiresat: Int,
+        grantedat: Int,
+        grantedby: String?,
+        security: String,
+        ask: String)
+    {
+        self.status = status
+        self.expiresat = expiresat
+        self.grantedat = grantedat
+        self.grantedby = grantedby
+        self.security = security
+        self.ask = ask
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case status
+        case expiresat = "expiresAt"
+        case grantedat = "grantedAt"
+        case grantedby = "grantedBy"
+        case security
+        case ask
+    }
+}
+
 public struct ExecApprovalRequestParams: Codable, Sendable {
     public let id: String?
     public let command: String

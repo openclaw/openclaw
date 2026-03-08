@@ -479,4 +479,144 @@ export function registerExecApprovalsCli(program: Command) {
       return true;
     },
   });
+
+  // ── Trust Window Commands ──────────────────────────────────────────────
+
+  type TrustOpts = ExecApprovalsCliOpts & {
+    minutes?: string;
+    yes?: boolean;
+    force?: boolean;
+    agent?: string;
+  };
+
+  approvals
+    .command("trust")
+    .description("Grant a time-bounded trust window (unrestricted exec)")
+    .requiredOption("--minutes <n>", "Duration in minutes")
+    .option("--agent <id>", "Agent id (defaults to main)")
+    .option("--yes", "Skip confirmation prompt", false)
+    .option("--force", "Allow exceeding default max duration", false)
+    .action(async (opts: TrustOpts) => {
+      try {
+        // TTY gate: prevent agent self-escalation.
+        // Check both TTY and the absence of agent-session markers in the environment.
+        // Agents running via PTY exec have OPENCLAW_SESSION_KEY set.
+        if (!process.stdin.isTTY) {
+          exitWithError(
+            "Trust window grants require an interactive terminal.\n" +
+              "This prevents automated processes from escalating their own privileges.",
+          );
+        }
+        if (process.env.OPENCLAW_SESSION_KEY || process.env.OPENCLAW_AGENT_ID) {
+          exitWithError(
+            "Trust window grants cannot be issued from within an agent session.\n" +
+              "Use the Discord /trust command or a direct terminal session.",
+          );
+        }
+
+        const minutes = parseInt(String(opts.minutes), 10);
+
+        const agentKey = opts.agent?.trim() || "main";
+
+        // Interactive confirmation (unless --yes)
+        if (!opts.yes) {
+          const readline = await import("node:readline");
+          const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+          const answer = await new Promise<string>((resolve) => {
+            rl.question(
+              `\n⚠️  This will allow agent "${agentKey}" to execute any command for ${minutes} minutes without approval.\n` +
+                `    Continue? [y/N] `,
+              resolve,
+            );
+          });
+          rl.close();
+          if (answer.trim().toLowerCase() !== "y") {
+            defaultRuntime.log("Cancelled.");
+            return;
+          }
+        }
+
+        const result = (await callGatewayFromCli("exec.approvals.trust", opts, {
+          agentId: agentKey,
+          minutes,
+          grantedBy: "cli",
+          force: opts.force,
+        })) as { ok: boolean; agentId?: string; expiresAt?: number };
+
+        if (typeof result.expiresAt !== "number") {
+          exitWithError("Failed to grant trust window.");
+        }
+
+        const expiresDate = new Date(result.expiresAt);
+        const timeStr = expiresDate.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+
+        defaultRuntime.log("");
+        defaultRuntime.log(`🔓 Trust window active`);
+        defaultRuntime.log(`   Agent: ${agentKey}`);
+        defaultRuntime.log(`   Duration: ${minutes} minutes`);
+        defaultRuntime.log(`   Expires at: ${timeStr}`);
+        defaultRuntime.log(`   Run \`openclaw approvals untrust\` to revoke early`);
+      } catch (err) {
+        defaultRuntime.error(formatCliError(err));
+        defaultRuntime.exit(1);
+      }
+    });
+
+  type UntrustOpts = ExecApprovalsCliOpts & {
+    agent?: string;
+    yes?: boolean;
+    keep?: boolean;
+  };
+
+  approvals
+    .command("untrust")
+    .description("Revoke an active trust window immediately")
+    .option("--agent <id>", "Agent id (defaults to main)")
+    .option("--yes", "Skip confirmation and auto-delete audit log", false)
+    .option("--keep", "Preserve the audit log file after summary", false)
+    .action(async (opts: UntrustOpts) => {
+      try {
+        const agentKey = opts.agent?.trim() || "main";
+
+        let keepAudit = Boolean(opts.keep);
+        if (!opts.keep && !opts.yes && process.stdin.isTTY) {
+          const readline = await import("node:readline");
+          const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+          const answer = await new Promise<string>((resolve) => {
+            rl.question(`\n  Delete audit log? [Y/n] `, resolve);
+          });
+          rl.close();
+          const trimmed = answer.trim().toLowerCase();
+          const shouldDelete = trimmed === "" || trimmed === "y" || trimmed === "yes";
+          keepAudit = !shouldDelete;
+        }
+
+        const result = (await callGatewayFromCli("exec.approvals.untrust", opts, {
+          agentId: agentKey,
+          revokedBy: "cli",
+          keepAudit,
+        })) as { ok: boolean; agentId?: string; summary?: string };
+
+        defaultRuntime.log(`🔒 Trust window revoked for agent "${agentKey}".`);
+        defaultRuntime.log(`   Normal approval policy restored.`);
+
+        if (result.summary) {
+          defaultRuntime.log("");
+          defaultRuntime.log(result.summary);
+        }
+
+        if (keepAudit) {
+          defaultRuntime.log("");
+          defaultRuntime.log(theme.muted("Audit log preserved."));
+        }
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        if (msg.includes("No active trust window")) {
+          defaultRuntime.log(msg);
+          return;
+        }
+        defaultRuntime.error(formatCliError(err));
+        defaultRuntime.exit(1);
+      }
+    });
 }

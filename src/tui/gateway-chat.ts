@@ -10,6 +10,7 @@ import {
 import { GatewayClient } from "../gateway/client.js";
 import { GATEWAY_CLIENT_CAPS } from "../gateway/protocol/client-info.js";
 import {
+  type ExecApprovalsTrustStatusResult,
   type HelloOk,
   PROTOCOL_VERSION,
   type SessionsListParams,
@@ -246,6 +247,15 @@ export class GatewayChatClient {
 
   async patchSession(opts: SessionsPatchParams): Promise<SessionsPatchResult> {
     return await this.client.request<SessionsPatchResult>("sessions.patch", opts);
+  }
+
+  async getTrustStatus(opts?: { agentId?: string }): Promise<ExecApprovalsTrustStatusResult> {
+    return await this.client.request<ExecApprovalsTrustStatusResult>(
+      "exec.approvals.trust.status",
+      {
+        agentId: opts?.agentId,
+      },
+    );
   }
 
   async resetSession(key: string, reason?: "new" | "reset") {
