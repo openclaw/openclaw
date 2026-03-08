@@ -156,7 +156,7 @@ describe("launchctl list detection", () => {
 });
 
 describe("launchd bootstrap repair", () => {
-  it("bootstraps and kickstarts the resolved label", async () => {
+  it("enables, bootstraps, and kickstarts the resolved label", async () => {
     const env: Record<string, string | undefined> = {
       HOME: "/Users/test",
       OPENCLAW_PROFILE: "default",
@@ -167,9 +167,23 @@ describe("launchd bootstrap repair", () => {
     const domain = typeof process.getuid === "function" ? `gui/${process.getuid()}` : "gui/501";
     const label = "ai.openclaw.gateway";
     const plistPath = resolveLaunchAgentPlistPath(env);
+    const serviceId = `${domain}/${label}`;
 
-    expect(state.launchctlCalls).toContainEqual(["bootstrap", domain, plistPath]);
-    expect(state.launchctlCalls).toContainEqual(["kickstart", "-k", `${domain}/${label}`]);
+    const enableIndex = state.launchctlCalls.findIndex(
+      (c) => c[0] === "enable" && c[1] === serviceId,
+    );
+    const bootstrapIndex = state.launchctlCalls.findIndex(
+      (c) => c[0] === "bootstrap" && c[1] === domain && c[2] === plistPath,
+    );
+    const kickstartIndex = state.launchctlCalls.findIndex(
+      (c) => c[0] === "kickstart" && c[1] === "-k" && c[2] === serviceId,
+    );
+
+    expect(enableIndex).toBeGreaterThanOrEqual(0);
+    expect(bootstrapIndex).toBeGreaterThanOrEqual(0);
+    expect(kickstartIndex).toBeGreaterThanOrEqual(0);
+    expect(enableIndex).toBeLessThan(bootstrapIndex);
+    expect(bootstrapIndex).toBeLessThan(kickstartIndex);
   });
 });
 
