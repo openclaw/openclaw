@@ -485,6 +485,8 @@ export type ToolsConfig = {
         /** Model to use (defaults to "moonshot-v1-128k"). */
         model?: string;
       };
+      /** HTTP/HTTPS proxy URL for web search API requests (e.g. "http://proxy:8080"). Applies to all search providers. */
+      proxy?: string;
     };
     fetch?: {
       /** Enable web fetch tool (default: true). */
