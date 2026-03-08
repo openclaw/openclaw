@@ -18,7 +18,7 @@
       "bot_token": "8461845004:AAE3eAnAyohsRh9XMrkv3pNx56iACKmOuws",
       "admin_chat_id": "458765683"
     },
-    "ollama_url": "http://192.168.0.212:11434",
+    "ollama_url": "http://host.docker.internal:11434",
     "session_management": {
       "heartbeat_interval_minutes": 60,
       "auto_reset_context_messages": 15
@@ -26,10 +26,10 @@
   },
   "brigades": {
     "Dmarket": {
-      "workspace_dir": "../Dmarket_bot/",
+      "workspace_dir": "D:/Dmarket_bot/",
       "description": "HFT and API connection bot operators.",
       "roles": {
-        "Planner": { "model": "deepseek-r1:14b", "unload_after_use": true, "num_ctx": 16384, "timeout_sec": 120, "system_prompt": "Ты Спокойный и Рассудительный Стратег 🧠🗺️. Создаешь глобальные планы и резюме.", "description": "Reads prompt, creates global plan, and generates self-summary." },
+        "Planner": { "model": "arkady-reasoning-27b", "unload_after_use": true, "num_ctx": 16384, "timeout_sec": 120, "system_prompt": "Ты Спокойный и Рассудительный Стратег 🧠🗺️. Создаешь глобальные планы и резюме.", "description": "Reads prompt, creates global plan, and generates self-summary." },
         "Foreman": { "model": "deepseek-r1:14b", "unload_after_use": true, "num_ctx": 16384, "timeout_sec": 90, "system_prompt": "Ты Требовательный Бригадир 👷‍♂️📋. Распределяешь задачи и контролируешь исполнителей.", "description": "Refines tasks and assigns them to specific Executor models." },
         "Executor_API": { "model": "qwen2.5-coder:14b", "unload_after_use": true, "num_ctx": 8192, "timeout_sec": 90, "system_prompt": "Ты Дерзкий Хакер-Технарь ⚡💻. Твоя задача - молниеносная интеграция API.", "description": "Integrates Dmarket API." },
         "Executor_Parser": { "model": "qwen2.5-coder:14b", "unload_after_use": true, "num_ctx": 8192, "timeout_sec": 90, "system_prompt": "Ты Педантичный Парсер 👓📊. Анализируешь потоки рыночных данных.", "description": "Parses incoming market data." },
@@ -45,7 +45,7 @@
       "workspace_dir": "./",
       "description": "Framework self-improvement and swarm operators.",
       "roles": {
-        "Planner": { "model": "deepseek-r1:14b", "unload_after_use": true, "num_ctx": 16384, "timeout_sec": 120, "system_prompt": "Ты Архитектор Системы 🏛️📐. Смотришь на фреймворк с высоты птичьего полета.", "description": "Plans major framework upgrades and infrastructure changes." },
+        "Planner": { "model": "arkady-reasoning-27b", "unload_after_use": true, "num_ctx": 16384, "timeout_sec": 120, "system_prompt": "Ты Архитектор Системы 🏛️📐. Смотришь на фреймворк с высоты птичьего полета.", "description": "Plans major framework upgrades and infrastructure changes." },
         "Foreman": { "model": "deepseek-r1:14b", "unload_after_use": true, "num_ctx": 16384, "timeout_sec": 90, "system_prompt": "Ты Строгий Надзиратель 🚧🛠️. Превращаешь архитектурные планы в таски.", "description": "Translates structural updates to actionable tasks." },
         "Executor_Architect": { "model": "deepseek-r1:14b", "unload_after_use": true, "num_ctx": 16384, "timeout_sec": 90, "system_prompt": "Ты Мастер Кода 🧙‍♂️⌨️. Разработчик ядра и структуры базы.", "description": "Writes the core structural code." },
         "Executor_Tools": { "model": "qwen2.5-coder:14b", "unload_after_use": true, "num_ctx": 8192, "timeout_sec": 90, "system_prompt": "Ты Инженер-Изобретатель ⚙️🔧. Создаешь новые скрипты и инструменты.", "description": "Builds and implements tools for the agents." },

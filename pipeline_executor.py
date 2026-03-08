@@ -60,7 +60,7 @@ class PipelineExecutor:
         # Initialize Isolated MCP Clients
         # Using specific paths: OpenClaw root and Dmarket_bot root
         workspace_root = os.path.abspath(os.path.dirname(__file__))
-        dmarket_root = os.path.abspath(os.path.join(workspace_root, "..", "Dmarket_bot"))
+        dmarket_root = "D:/Dmarket_bot"
         db_path = os.path.join(dmarket_root, "data", "dmarket_history.db")
         
         self.openclaw_mcp = OpenClawMCPClient(db_path=None, fs_allowed_dirs=[workspace_root])
@@ -271,6 +271,22 @@ class PipelineExecutor:
                             "steps": steps_results,
                             "final_response": response,
                         }
+                        
+                    if isinstance(parsed_json, dict) and parsed_json.get("action") == "verify_inventory":
+                        logger.info("Inventory verified. Auto-transitioning to create_offer step.")
+                        steps_results.append({
+                            "role": role_name,
+                            "model": model,
+                            "response": response,
+                        })
+                        # Jump to create_offer automatically
+                        return {
+                            "status": "create_offer",
+                            "brigade": brigade,
+                            "chain_executed": [s["role"] for s in steps_results],
+                            "steps": steps_results,
+                            "final_response": response + "\n\n[System]: Inventory verified. Proceeding to create_offer."
+                        }
                     
                     if "Planner" in role_name or "Foreman" in role_name:
                         logger.info("JSON instructions detected from Planner, executing Handoff to qwen2.5-coder:14b")
@@ -310,7 +326,14 @@ class PipelineExecutor:
                                 
                                 if json_match:
                                     try:
-                                        exec_json = json.loads(json_match.group(1) if "```" in executor_response else json_match.group(0))
+                                        exec_str = json_match.group(1) if "```" in executor_response else json_match.group(0)
+                                        exec_str = exec_str.strip().replace("}\n{", "},{")
+                                        if exec_str.startswith("{") and exec_str.endswith("}") and "},{" in exec_str:
+                                            exec_str = f"[{exec_str}]"
+                                            
+                                        exec_json = json.loads(exec_str)
+                                        if isinstance(exec_json, list):
+                                            exec_json = exec_json[0] if len(exec_json) > 0 else {}
                                         tool_name = exec_json.get("name")
                                         
                                         if tool_name == "create_table":
@@ -342,7 +365,14 @@ class PipelineExecutor:
                         
                         if json_match:
                             try:
-                                exec_json = json.loads(json_match.group(1) if "```" in executor_response else json_match.group(0))
+                                exec_str = json_match.group(1) if "```" in executor_response else json_match.group(0)
+                                exec_str = exec_str.strip().replace("}\n{", "},{")
+                                if exec_str.startswith("{") and exec_str.endswith("}") and "},{" in exec_str:
+                                    exec_str = f"[{exec_str}]"
+                                    
+                                exec_json = json.loads(exec_str)
+                                if isinstance(exec_json, list):
+                                    exec_json = exec_json[0] if len(exec_json) > 0 else {}
                                 tool_name = exec_json.get("name")
                                 tool_args = exec_json.get("arguments", {})
                                 
