@@ -506,24 +506,6 @@ export async function runReplyAgent(params: {
     const { replyPayloads } = payloadResult;
     didLogHeartbeatStrip = payloadResult.didLogHeartbeatStrip;
 
-    // Context usage warning: inject a standalone warning payload when block streaming
-    // has already delivered the reply (replyPayloads is empty in that mode).
-    let contextWarningInjected = false;
-    if (replyPayloads.length === 0 && promptTokens && contextTokensUsed && contextTokensUsed > 0) {
-      const contextWarningCfg = cfg?.agents?.defaults?.contextUsageWarning;
-      const contextWarningEnabled = contextWarningCfg?.enabled !== false;
-      const contextWarningThreshold = contextWarningCfg?.threshold ?? 0.7;
-      if (contextWarningEnabled) {
-        const contextPercent = promptTokens / contextTokensUsed;
-        if (contextPercent >= contextWarningThreshold) {
-          const pctLabel = Math.round(contextPercent * 100);
-          replyPayloads.push({
-            text: `📊 Context: ${pctLabel}% used — consider /new to start a fresh session`,
-          });
-          contextWarningInjected = true;
-        }
-      }
-    }
     if (replyPayloads.length === 0) {
       return finalizeWithFollowup(undefined, queueKey, runFollowupTurn);
     }
@@ -714,15 +696,8 @@ export async function runReplyAgent(params: {
       finalPayloads = appendUsageLine(finalPayloads, responseUsageLine);
     }
 
-    // Context usage warning (non-streaming path): auto-show usage footer when context exceeds threshold.
-    // Skip if warning was already injected via the block-streaming early path above.
-    if (
-      !responseUsageLine &&
-      !contextWarningInjected &&
-      promptTokens &&
-      contextTokensUsed &&
-      contextTokensUsed > 0
-    ) {
+    // Context usage warning: auto-show usage footer when context exceeds threshold.
+    if (!responseUsageLine && promptTokens && contextTokensUsed && contextTokensUsed > 0) {
       const contextWarningCfg = cfg?.agents?.defaults?.contextUsageWarning;
       const contextWarningEnabled = contextWarningCfg?.enabled !== false;
       const contextWarningThreshold = contextWarningCfg?.threshold ?? 0.7;
