@@ -464,6 +464,60 @@ describe("applyBeforeResponseEmitHook", () => {
     expect(result?.allContent).toEqual(["full turn 1", "full turn 2"]);
     expect(result?.content).toBeUndefined();
   });
+
+  it("allContent: [] returns empty consolidatedTexts (does not leak prior history)", async () => {
+    // When a plugin returns allContent: [] to remove all current-run turns,
+    // consolidatedTexts must be empty — NOT populated from prior-history
+    // assistant messages.
+    const hookRunner = makeMockHookRunner({ allContent: [] });
+    const activeSession = {
+      messages: [
+        makeMsg("assistant", "prior history answer"),
+        makeMsg("user", "new question"),
+        makeMsg("assistant", "current run answer"),
+      ],
+    };
+
+    const result = await applyBeforeResponseEmitHook({
+      hookRunner,
+      agentCtx: dummyCtx,
+      assistantTexts: ["current run answer"],
+      messagesSnapshot: activeSession.messages.slice(),
+      activeSession,
+    });
+
+    expect(result?.blocked).toBe(false);
+    expect(result?.allContent).toEqual([]);
+    expect(result?.consolidatedTexts).toEqual([]);
+  });
+
+  it("allContent shrink does not overshoot into prior history (no-user-boundary session)", async () => {
+    // In sessions without a user boundary (e.g. sub-agent), after shrinking
+    // allContent, the rescoped turn count must be capped to the original run's
+    // scope — not pick up prior-history assistants.
+    const hookRunner = makeMockHookRunner({ allContent: ["[REDACTED]"] });
+    const activeSession = {
+      messages: [
+        // No user message anywhere — simulates greeting-first / sub-agent session
+        makeMsg("assistant", "prior greeting"),
+        makeMsg("assistant", "turn 1"),
+        makeMsg("assistant", "turn 2"),
+      ],
+    };
+
+    const result = await applyBeforeResponseEmitHook({
+      hookRunner,
+      agentCtx: dummyCtx,
+      assistantTexts: ["turn 1", "turn 2"],
+      messagesSnapshot: activeSession.messages.slice(),
+      activeSession,
+    });
+
+    expect(result?.blocked).toBe(false);
+    // consolidatedTexts should only contain the rewritten turn, NOT the prior greeting
+    expect(result?.consolidatedTexts).toHaveLength(1);
+    expect(result?.consolidatedTexts?.[0]).toBe("[REDACTED]");
+  });
 });
 
 // ---------------------------------------------------------------------------

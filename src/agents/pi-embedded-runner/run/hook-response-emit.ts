@@ -217,10 +217,25 @@ export async function applyBeforeResponseEmitHook(
     // so using the pre-rewrite scopeCount would find too few messages and
     // return [], causing attempt.ts to treat partial shrinks as blocks.
     const postRewriteTurnCount = countCurrentRunAssistantTurns(activeSession.messages);
-    const freshRunMessages = getRunScopedMessages(
-      activeSession.messages,
-      postRewriteTurnCount || 1,
-    );
+
+    // When the plugin removed ALL assistant turns (allContent: []), the turn
+    // count is 0.  Don't force it to 1 — that would pick up a prior-history
+    // assistant message and leak stale text into consolidatedTexts.
+    if (postRewriteTurnCount === 0) {
+      return {
+        blocked: false,
+        allContent: emitResult.allContent,
+        consolidatedTexts: [],
+      };
+    }
+
+    // Cap the rescope to the plugin's declared output length — the plugin
+    // explicitly said how many turns it wants. Without this cap,
+    // countCurrentRunAssistantTurns can overshoot into prior history in
+    // sessions without a user boundary (e.g. sub-agent or greeting-first
+    // sessions where the counter walks past prior history).
+    const cappedTurnCount = Math.min(postRewriteTurnCount, emitResult.allContent.length);
+    const freshRunMessages = getRunScopedMessages(activeSession.messages, cappedTurnCount);
     const postRewriteTexts = freshRunMessages
       .filter((m) => m.role === "assistant" && extractAssistantText(m).length > 0)
       .map((m) => extractAssistantText(m));
