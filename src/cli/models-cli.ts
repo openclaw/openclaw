@@ -11,6 +11,7 @@ import {
   modelsAuthOrderSetCommand,
   modelsAuthPasteTokenCommand,
   modelsAuthSetupTokenCommand,
+  modelsAuthValidateCommand,
   modelsFallbacksAddCommand,
   modelsFallbacksClearCommand,
   modelsFallbacksListCommand,
@@ -372,6 +373,27 @@ export function registerModelsCli(program: Command) {
           {
             profileId: opts.profileId as string | undefined,
             yes: Boolean(opts.yes),
+          },
+          defaultRuntime,
+        );
+      });
+    });
+
+  auth
+    .command("validate")
+    .description("Validate auth-profiles.json schema")
+    .option("--file <path>", "Path to auth-profiles.json (default: agent's auth store)")
+    .option("--agent <id>", "Agent id (default: configured default agent)")
+    .option("--json", "Output JSON", false)
+    .action(async (opts, command) => {
+      const agent =
+        resolveOptionFromCommand<string>(command, "agent") ?? (opts.agent as string | undefined);
+      await runModelsCommand(async () => {
+        await modelsAuthValidateCommand(
+          {
+            file: opts.file as string | undefined,
+            agent,
+            json: Boolean(opts.json),
           },
           defaultRuntime,
         );
