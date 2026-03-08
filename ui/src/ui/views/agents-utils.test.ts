@@ -1,5 +1,7 @@
+import { render } from "lit";
 import { describe, expect, it } from "vitest";
 import {
+  buildModelOptions,
   resolveConfiguredCronModelSuggestions,
   resolveEffectiveModelFallbacks,
   sortLocaleStrings,
@@ -86,6 +88,57 @@ describe("resolveConfiguredCronModelSuggestions", () => {
     expect(resolveConfiguredCronModelSuggestions({ agents: { defaults: { model: "" } } })).toEqual(
       [],
     );
+  });
+});
+
+describe("buildModelOptions", () => {
+  const configForm = {
+    agents: {
+      defaults: {
+        models: {
+          "github-copilot/claude-sonnet-4.6": {},
+          "openai-codex/gpt-5.3-codex": { alias: "codex" },
+          "google/gemini-3-pro-preview": {},
+        },
+      },
+    },
+  };
+
+  function renderIntoSelect(current?: string | null) {
+    const select = document.createElement("select");
+    render(buildModelOptions(configForm, current), select);
+    return select;
+  }
+
+  it("marks exactly one option selected when current matches a configured model", () => {
+    const select = renderIntoSelect("openai-codex/gpt-5.3-codex");
+    const selected = Array.from(select.options).filter((o) => o.selected);
+    expect(selected).toHaveLength(1);
+    expect(selected[0].value).toBe("openai-codex/gpt-5.3-codex");
+  });
+
+  it("marks the prepended Current option selected when current is not in the configured list", () => {
+    const select = renderIntoSelect("unknown/model-x");
+    const selected = Array.from(select.options).filter((o) => o.selected);
+    expect(selected).toHaveLength(1);
+    expect(selected[0].value).toBe("unknown/model-x");
+    expect(selected[0].label).toContain("Current");
+  });
+
+  it("sets no explicit selected attribute when current is undefined", () => {
+    const select = renderIntoSelect(undefined);
+    // Browsers always auto-select the first option; verify no option has an
+    // explicit ?selected binding (hasAttribute vs the DOM .selected property).
+    const explicitlySelected = Array.from(select.options).filter((o) => o.hasAttribute("selected"));
+    expect(explicitlySelected).toHaveLength(0);
+  });
+
+  it("renders all configured models as options", () => {
+    const select = renderIntoSelect("github-copilot/claude-sonnet-4.6");
+    const values = Array.from(select.options).map((o) => o.value);
+    expect(values).toContain("github-copilot/claude-sonnet-4.6");
+    expect(values).toContain("openai-codex/gpt-5.3-codex");
+    expect(values).toContain("google/gemini-3-pro-preview");
   });
 });
 
