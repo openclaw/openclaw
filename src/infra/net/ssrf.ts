@@ -1,6 +1,6 @@
 import { lookup as dnsLookupCb, type LookupAddress } from "node:dns";
 import { lookup as dnsLookup } from "node:dns/promises";
-import { Agent, type Dispatcher } from "undici";
+import { Agent, EnvHttpProxyAgent, type Dispatcher } from "undici";
 import {
   extractEmbeddedIpv4FromIpv6,
   isBlockedSpecialUseIpv4Address,
@@ -329,7 +329,29 @@ export async function resolvePinnedHostname(
   return await resolvePinnedHostnameWithPolicy(hostname, { lookupFn });
 }
 
+function hasProxyEnv(): boolean {
+  return Boolean(
+    process.env.HTTPS_PROXY ||
+    process.env.https_proxy ||
+    process.env.HTTP_PROXY ||
+    process.env.http_proxy,
+  );
+}
+
 export function createPinnedDispatcher(pinned: PinnedHostname): Dispatcher {
+  // When HTTP proxy env vars are configured, use EnvHttpProxyAgent which
+  // automatically reads HTTP_PROXY, HTTPS_PROXY, and NO_PROXY from the
+  // environment.  DNS pinning is skipped because the proxy performs its own
+  // DNS resolution; the SSRF hostname/IP pre-checks in
+  // resolvePinnedHostnameWithPolicy still run before we reach this point.
+  if (hasProxyEnv()) {
+    // proxyTunnel: false ensures plain HTTP targets use absolute-URI style
+    // proxying (GET http://host/path) instead of CONNECT tunneling, which
+    // some proxies reject for non-TLS traffic.  HTTPS targets still use
+    // CONNECT regardless of this flag.
+    return new EnvHttpProxyAgent({ proxyTunnel: false });
+  }
+
   return new Agent({
     connect: {
       lookup: pinned.lookup,

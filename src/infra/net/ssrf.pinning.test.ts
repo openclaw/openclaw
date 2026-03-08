@@ -1,5 +1,7 @@
-import { describe, expect, it, vi } from "vitest";
+import { Agent, EnvHttpProxyAgent } from "undici";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  createPinnedDispatcher,
   createPinnedLookup,
   type LookupFn,
   resolvePinnedHostname,
@@ -10,6 +12,77 @@ import {
 function createPublicLookupMock(): LookupFn {
   return vi.fn(async () => [{ address: "93.184.216.34", family: 4 }]) as unknown as LookupFn;
 }
+
+const makePinned = () => ({
+  hostname: "example.com",
+  addresses: ["93.184.216.34"],
+  lookup: createPinnedLookup({ hostname: "example.com", addresses: ["93.184.216.34"] }),
+});
+
+function restoreEnvKey(key: string, saved: string | undefined): void {
+  if (saved === undefined) {
+    delete process.env[key];
+  } else {
+    process.env[key] = saved;
+  }
+}
+
+describe("createPinnedDispatcher proxy support", () => {
+  const savedEnv = {
+    HTTPS_PROXY: process.env.HTTPS_PROXY,
+    https_proxy: process.env.https_proxy,
+    HTTP_PROXY: process.env.HTTP_PROXY,
+    http_proxy: process.env.http_proxy,
+  };
+
+  afterEach(() => {
+    restoreEnvKey("HTTPS_PROXY", savedEnv.HTTPS_PROXY);
+    restoreEnvKey("https_proxy", savedEnv.https_proxy);
+    restoreEnvKey("HTTP_PROXY", savedEnv.HTTP_PROXY);
+    restoreEnvKey("http_proxy", savedEnv.http_proxy);
+  });
+
+  it("returns a plain Agent when no proxy env vars are set", () => {
+    delete process.env.HTTPS_PROXY;
+    delete process.env.https_proxy;
+    delete process.env.HTTP_PROXY;
+    delete process.env.http_proxy;
+
+    const dispatcher = createPinnedDispatcher(makePinned());
+    expect(dispatcher).toBeInstanceOf(Agent);
+    expect(dispatcher).not.toBeInstanceOf(EnvHttpProxyAgent);
+  });
+
+  it("returns an EnvHttpProxyAgent when HTTPS_PROXY is set", () => {
+    delete process.env.HTTP_PROXY;
+    delete process.env.http_proxy;
+    delete process.env.https_proxy;
+    process.env.HTTPS_PROXY = "http://proxy.test:8080";
+
+    const dispatcher = createPinnedDispatcher(makePinned());
+    expect(dispatcher).toBeInstanceOf(EnvHttpProxyAgent);
+  });
+
+  it("returns an EnvHttpProxyAgent when HTTP_PROXY is set", () => {
+    delete process.env.HTTPS_PROXY;
+    delete process.env.https_proxy;
+    delete process.env.http_proxy;
+    process.env.HTTP_PROXY = "http://proxy.test:8080";
+
+    const dispatcher = createPinnedDispatcher(makePinned());
+    expect(dispatcher).toBeInstanceOf(EnvHttpProxyAgent);
+  });
+
+  it("returns an EnvHttpProxyAgent when lowercase http_proxy is set", () => {
+    delete process.env.HTTPS_PROXY;
+    delete process.env.https_proxy;
+    delete process.env.HTTP_PROXY;
+    process.env.http_proxy = "http://proxy.test:8080";
+
+    const dispatcher = createPinnedDispatcher(makePinned());
+    expect(dispatcher).toBeInstanceOf(EnvHttpProxyAgent);
+  });
+});
 
 describe("ssrf pinning", () => {
   it("pins resolved addresses for the target hostname", async () => {
