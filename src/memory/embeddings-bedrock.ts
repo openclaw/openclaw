@@ -67,16 +67,20 @@ export async function createBedrockEmbeddingProvider(
 
   const providerConfig = options.config.models?.providers?.["amazon-bedrock"];
   const baseUrl = providerConfig?.baseUrl?.trim();
-  const region = parseRegionFromBaseUrl(baseUrl) ?? "us-east-1";
+  // Prefer region extracted from an explicit base URL; otherwise let the AWS SDK
+  // resolve the region from the environment (AWS_REGION, AWS_DEFAULT_REGION,
+  // shared-config profile, EC2 metadata, etc.).  Hard-coding "us-east-1" would
+  // break users whose Bedrock model access is in another region.
+  const region = parseRegionFromBaseUrl(baseUrl);
   const model = normalizeBedrockModel(options.model);
 
   debugEmbeddingsLog("memory embeddings: bedrock client", {
-    region,
+    region: region ?? "(sdk-resolved)",
     model,
     authSource: auth.source,
   });
 
-  const bedrockClient = new BedrockRuntimeClient({ region });
+  const bedrockClient = new BedrockRuntimeClient(region ? { region } : {});
 
   // Eagerly resolve credentials to fail fast in "auto" mode when no AWS
   // creds are configured.  The default chain succeeds with empty/expired
