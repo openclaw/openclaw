@@ -304,6 +304,8 @@ jobs:
           python -m pip install pre-commit
 
       - name: Detect secrets
+        env:
+          PR_BASE_REF: ${{ github.event.pull_request.base.ref }}
         run: |
           set -euo pipefail
 
@@ -314,7 +316,7 @@ jobs:
           fi
 
           BASE="${{ github.event.pull_request.base.sha }}"
-          BASE_REF="origin/${{ github.event.pull_request.base.ref }}"
+          BASE_REF="origin/${PR_BASE_REF:-main}"
           if git rev-parse --verify "$BASE_REF^{commit}" >/dev/null 2>&1; then
             MERGE_BASE="$(git merge-base HEAD "$BASE_REF" || true)"
             if [ -n "$MERGE_BASE" ]; then
@@ -342,6 +344,8 @@ jobs:
         run: pre-commit run --all-files detect-private-key
 
       - name: Audit changed GitHub workflows with zizmor
+        env:
+          PR_BASE_REF: ${{ github.event.pull_request.base.ref }}
         run: |
           set -euo pipefail
 
@@ -349,7 +353,7 @@ jobs:
             BASE="${{ github.event.before }}"
           else
             BASE="${{ github.event.pull_request.base.sha }}"
-            BASE_REF="origin/${{ github.event.pull_request.base.ref }}"
+            BASE_REF="origin/${PR_BASE_REF:-main}"
             if git rev-parse --verify "$BASE_REF^{commit}" >/dev/null 2>&1; then
               MERGE_BASE="$(git merge-base HEAD "$BASE_REF" || true)"
               if [ -n "$MERGE_BASE" ]; then
