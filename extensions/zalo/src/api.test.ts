@@ -83,4 +83,31 @@ describe("zalo api abort handling", () => {
       /non-JSON response/i,
     );
   });
+
+  it("does not treat non-JSON HTTP 408 as polling timeout", async () => {
+    const fetcher: ZaloFetch = async () =>
+      new Response("Request timeout from proxy", {
+        status: 408,
+        headers: {
+          "content-type": "text/plain; charset=utf-8",
+        },
+      });
+
+    await expect(
+      callZaloApi("getUpdates", "token", undefined, { fetch: fetcher }),
+    ).rejects.toMatchObject({
+      name: "ZaloApiError",
+    } satisfies Partial<ZaloApiError>);
+
+    await expect(
+      callZaloApi("getUpdates", "token", undefined, { fetch: fetcher }).catch((err: unknown) => {
+        expect(err).toBeInstanceOf(ZaloApiError);
+        if (!(err instanceof ZaloApiError)) {
+          return;
+        }
+        expect(err.errorCode).toBeUndefined();
+        expect(err.isPollingTimeout).toBe(false);
+      }),
+    ).resolves.toBeUndefined();
+  });
 });

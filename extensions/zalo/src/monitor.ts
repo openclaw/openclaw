@@ -3,6 +3,7 @@ import {
   createTypingCallbacks,
   createScopedPairingAccess,
   createReplyPrefixOptions,
+  logTypingFailure,
   resolveSenderCommandAuthorizationWithRuntime,
   resolveOutboundMediaUrls,
   sendMediaWithLeadingCaption,
@@ -68,8 +69,14 @@ export type ZaloMonitorOptions = {
   statusSink?: (patch: { lastInboundAt?: number; lastOutboundAt?: number }) => void;
 };
 
+export type ZaloMonitorResult = {
+  stop: () => void;
+};
+
 const ZALO_TEXT_LIMIT = 2000;
 const DEFAULT_MEDIA_MAX_MB = 5;
+const ZALO_TYPING_TIMEOUT_MS = 5_000;
+const WEBHOOK_CLEANUP_TIMEOUT_MS = 5_000;
 const SEND_RETRY_DELAYS_MS = [500, 1500] as const;
 const RETRYABLE_ZALO_API_ERROR_CODES = new Set([408, 425, 429, 500, 502, 503, 504]);
 const STICKER_REPLY_EMOJI_FALLBACK = "🙂";
@@ -1140,7 +1147,7 @@ async function deliverZaloReply(params: {
   }
 }
 
-export async function monitorZaloProvider(options: ZaloMonitorOptions): Promise<void> {
+export async function monitorZaloProvider(options: ZaloMonitorOptions): Promise<ZaloMonitorResult> {
   const {
     token,
     account,
@@ -1237,8 +1244,8 @@ export async function monitorZaloProvider(options: ZaloMonitorOptions): Promise<
         fetcher,
       });
       stopHandlers.push(unregister);
-      await waitForAbortSignal(abortSignal);
-      return;
+      await waitForAbort(abortSignal);
+      return { stop };
     }
 
     runtime.log?.(`[${account.accountId}] Zalo polling mode: clearing webhook before startup`);
@@ -1283,23 +1290,9 @@ export async function monitorZaloProvider(options: ZaloMonitorOptions): Promise<
       mediaMaxMb: effectiveMediaMaxMb,
       statusSink,
       fetcher,
-      abortSignal,
-      isStopped: () => stopped,
     });
-    stopHandlers.push(unregister);
-    abortSignal.addEventListener(
-      "abort",
-      () => {
-        void deleteWebhook(token, fetcher).catch(() => {});
-      },
-      { once: true },
-    );
     await waitForAbort(abortSignal);
-    stop();
     return { stop };
-  }
-
-    await waitForAbortSignal(abortSignal);
   } catch (err) {
     runtime.error?.(
       `[${account.accountId}] Zalo provider startup failed mode=${mode}: ${formatZaloError(err)}`,
@@ -1310,23 +1303,6 @@ export async function monitorZaloProvider(options: ZaloMonitorOptions): Promise<
     stop();
     runtime.log?.(`[${account.accountId}] Zalo provider stopped mode=${mode}`);
   }
-
-  startPollingLoop({
-    token,
-    account,
-    config,
-    runtime,
-    core,
-    abortSignal,
-    isStopped: () => stopped,
-    mediaMaxMb: effectiveMediaMaxMb,
-    statusSink,
-    fetcher,
-  });
-
-  await waitForAbort(abortSignal);
-  stop();
-  return { stop };
 }
 
 async function processUpdateForTesting(
