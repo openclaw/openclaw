@@ -821,6 +821,12 @@ export function ensureFeishuThreadBindingManagerForAccount(params: {
 }
 
 export function stopFeishuThreadBindingManager(accountId?: string): void {
+  if (accountId == null) {
+    for (const manager of [...MANAGERS_BY_ACCOUNT_ID.values()]) {
+      manager.stop();
+    }
+    return;
+  }
   const manager = MANAGERS_BY_ACCOUNT_ID.get(normalizeAccountId(accountId));
   manager?.stop();
 }

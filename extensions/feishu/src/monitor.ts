@@ -1,5 +1,4 @@
 import type { ClawdbotConfig, RuntimeEnv } from "openclaw/plugin-sdk/feishu";
-import { resolveThreadBindingSpawnPolicy } from "openclaw/plugin-sdk/feishu";
 import { listEnabledFeishuAccounts, resolveFeishuAccount } from "./accounts.js";
 import {
   monitorSingleAccount,
@@ -46,7 +45,7 @@ export async function monitorFeishuProvider(opts: MonitorFeishuOpts = {}): Promi
     if (!account.enabled || !account.configured) {
       throw new Error(`Feishu account "${opts.accountId}" not configured or disabled`);
     }
-    ensureFeishuThreadBindings({
+    ensureFeishuThreadBindingManagerForAccount({
       cfg,
       accountId: account.accountId,
     });
@@ -74,7 +73,7 @@ export async function monitorFeishuProvider(opts: MonitorFeishuOpts = {}): Promi
       break;
     }
 
-    ensureFeishuThreadBindings({
+    ensureFeishuThreadBindingManagerForAccount({
       cfg,
       accountId: account.accountId,
     });
@@ -107,27 +106,4 @@ export async function monitorFeishuProvider(opts: MonitorFeishuOpts = {}): Promi
 export function stopFeishuMonitor(accountId?: string): void {
   stopFeishuThreadBindingManager(accountId);
   stopFeishuMonitorState(accountId);
-}
-
-function ensureFeishuThreadBindings(params: { cfg: ClawdbotConfig; accountId: string }) {
-  const subagentPolicy = resolveThreadBindingSpawnPolicy({
-    cfg: params.cfg,
-    channel: "feishu",
-    accountId: params.accountId,
-    kind: "subagent",
-  });
-  const acpPolicy = resolveThreadBindingSpawnPolicy({
-    cfg: params.cfg,
-    channel: "feishu",
-    accountId: params.accountId,
-    kind: "acp",
-  });
-  if (!subagentPolicy.enabled && !acpPolicy.enabled) {
-    stopFeishuThreadBindingManager(params.accountId);
-    return;
-  }
-  ensureFeishuThreadBindingManagerForAccount({
-    cfg: params.cfg,
-    accountId: params.accountId,
-  });
 }

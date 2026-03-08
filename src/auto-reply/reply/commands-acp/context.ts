@@ -160,14 +160,13 @@ export function resolveAcpCommandBindingContext(params: HandleCommandsParams): {
   currentMessageId?: string;
 } {
   const parentConversationId = resolveAcpCommandParentConversationId(params);
+  const currentMessageId = resolveAcpCommandCurrentMessageId(params);
   return {
     channel: resolveAcpCommandChannel(params),
     accountId: resolveAcpCommandAccountId(params),
     threadId: resolveAcpCommandThreadId(params),
     conversationId: resolveAcpCommandConversationId(params),
     ...(parentConversationId ? { parentConversationId } : {}),
-    ...(resolveAcpCommandCurrentMessageId(params)
-      ? { currentMessageId: resolveAcpCommandCurrentMessageId(params) }
-      : {}),
+    ...(currentMessageId ? { currentMessageId } : {}),
   };
 }

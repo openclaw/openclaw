@@ -50,6 +50,8 @@ type PermissionError = {
 };
 
 const IGNORED_PERMISSION_SCOPE_TOKENS = ["contact:contact.base:readonly"];
+const THREAD_BINDING_REHYDRATION_COOLDOWN_MS = 5_000;
+const LAST_THREAD_BINDING_REHYDRATED_AT = new Map<string, number>();
 
 // Feishu API sometimes returns incorrect scope names in permission error
 // responses (e.g. "contact:contact.base:readonly" instead of the valid
@@ -57,6 +59,15 @@ const IGNORED_PERMISSION_SCOPE_TOKENS = ["contact:contact.base:readonly"];
 const FEISHU_SCOPE_CORRECTIONS: Record<string, string> = {
   "contact:contact.base:readonly": "contact:user.base:readonly",
 };
+
+function shouldRehydrateFeishuThreadBindings(accountId: string, now = Date.now()): boolean {
+  const lastAttemptAt = LAST_THREAD_BINDING_REHYDRATED_AT.get(accountId) ?? 0;
+  if (now - lastAttemptAt < THREAD_BINDING_REHYDRATION_COOLDOWN_MS) {
+    return false;
+  }
+  LAST_THREAD_BINDING_REHYDRATED_AT.set(accountId, now);
+  return true;
+}
 
 function resolveFeishuThreadRootMessageId(ctx: FeishuMessageContext): string | undefined {
   if (ctx.rootId?.trim()) {
@@ -1217,7 +1228,7 @@ export async function handleFeishuMessage(params: {
             })
           : null);
       let threadBinding = resolveThreadBinding();
-      if (!threadBinding) {
+      if (!threadBinding && shouldRehydrateFeishuThreadBindings(account.accountId)) {
         // ACP thread binding can be created by a different module instance than the
         // Feishu monitor. Rehydrate the local manager from disk once before giving up.
         stopFeishuThreadBindingManager(account.accountId);
@@ -1638,4 +1649,8 @@ export async function handleFeishuMessage(params: {
   } catch (err) {
     error(`feishu[${account.accountId}]: failed to dispatch message: ${String(err)}`);
   }
+}
+
+export function clearFeishuThreadBindingRehydrationStateForTest(): void {
+  LAST_THREAD_BINDING_REHYDRATED_AT.clear();
 }

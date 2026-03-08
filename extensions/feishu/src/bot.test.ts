@@ -6,11 +6,13 @@ import type { FeishuMessageEvent } from "./bot.js";
 import {
   buildBroadcastSessionKey,
   buildFeishuAgentBody,
+  clearFeishuThreadBindingRehydrationStateForTest,
   handleFeishuMessage,
   resolveBroadcastAgents,
   toMessageResourceType,
 } from "./bot.js";
 import { setFeishuRuntime } from "./runtime.js";
+import * as threadBindings from "./thread-bindings.js";
 import {
   ensureFeishuThreadBindingManagerForAccount,
   stopFeishuThreadBindingManager,
@@ -144,6 +146,7 @@ describe("handleFeishuMessage command authorization", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    clearFeishuThreadBindingRehydrationStateForTest();
     stopFeishuThreadBindingManager("default");
     mockShouldComputeCommandAuthorized.mockReset().mockReturnValue(true);
     mockResolveAgentRoute.mockReturnValue({
@@ -1863,6 +1866,58 @@ describe("handleFeishuMessage command authorization", () => {
         agentId: "codex",
       }),
     );
+  });
+
+  it("rehydrates missing thread bindings at most once within the cooldown window", async () => {
+    mockShouldComputeCommandAuthorized.mockReturnValue(false);
+
+    const cfg: ClawdbotConfig = {
+      channels: {
+        feishu: {
+          dmPolicy: "open",
+        },
+      },
+    } as ClawdbotConfig;
+
+    ensureFeishuThreadBindingManagerForAccount({
+      cfg,
+      accountId: "default",
+      persist: false,
+      enableSweeper: false,
+    });
+
+    const ensureSpy = vi.spyOn(threadBindings, "ensureFeishuThreadBindingManagerForAccount");
+    const stopSpy = vi.spyOn(threadBindings, "stopFeishuThreadBindingManager");
+
+    const firstEvent: FeishuMessageEvent = {
+      sender: { sender_id: { open_id: "ou-dm-thread" } },
+      message: {
+        message_id: "msg-dm-thread-miss-1",
+        chat_id: "oc-dm-thread",
+        chat_type: "p2p",
+        root_id: "om_dm_topic_root_missing",
+        message_type: "text",
+        content: JSON.stringify({ text: "第一次" }),
+      },
+    };
+
+    const secondEvent: FeishuMessageEvent = {
+      sender: { sender_id: { open_id: "ou-dm-thread" } },
+      message: {
+        message_id: "msg-dm-thread-miss-2",
+        chat_id: "oc-dm-thread",
+        chat_type: "p2p",
+        root_id: "om_dm_topic_root_missing",
+        message_type: "text",
+        content: JSON.stringify({ text: "第二次" }),
+      },
+    };
+
+    await dispatchMessage({ cfg, event: firstEvent });
+    await dispatchMessage({ cfg, event: secondEvent });
+
+    expect(stopSpy).toHaveBeenCalledTimes(1);
+    expect(ensureSpy).toHaveBeenCalledTimes(3);
   });
 
   it("uses the topic root message id for group topic roots when only thread_id is present", async () => {
