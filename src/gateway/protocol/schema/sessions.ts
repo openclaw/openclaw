@@ -129,3 +129,99 @@ export const SessionsUsageParamsSchema = Type.Object(
   },
   { additionalProperties: false },
 );
+
+export const SessionsActivityGetParamsSchema = Type.Object(
+  {
+    sessionKey: NonEmptyString,
+  },
+  { additionalProperties: false },
+);
+
+export const SessionsActivityListParamsSchema = Type.Object(
+  {
+    activeOnly: Type.Optional(Type.Boolean()),
+    agentId: Type.Optional(NonEmptyString),
+    limit: Type.Optional(Type.Integer({ minimum: 1 })),
+  },
+  { additionalProperties: false },
+);
+
+export const SessionActivityRuntimeSchema = Type.Object(
+  {
+    busy: Type.Boolean(),
+    activeRuns: Type.Integer({ minimum: 0 }),
+    busySince: Type.Union([Type.Integer({ minimum: 0 }), Type.Null()]),
+    lastRunActivityAt: Type.Union([Type.Integer({ minimum: 0 }), Type.Null()]),
+    staleRuns: Type.Integer({ minimum: 0 }),
+  },
+  { additionalProperties: false },
+);
+
+export const SessionActivityAttentionBlockedOnSchema = Type.Object(
+  {
+    kind: NonEmptyString,
+    childSessionKey: Type.Optional(NonEmptyString),
+    childRunId: Type.Optional(NonEmptyString),
+    label: Type.Optional(NonEmptyString),
+    startedAt: Type.Optional(Type.Integer({ minimum: 0 })),
+    approvalId: Type.Optional(NonEmptyString),
+  },
+  { additionalProperties: false },
+);
+
+export const SessionActivityAttentionSchema = Type.Object(
+  {
+    state: Type.Union([
+      Type.Literal("none"),
+      Type.Literal("awaiting_user"),
+      Type.Literal("awaiting_subagent"),
+      Type.Literal("awaiting_approval"),
+      Type.Literal("blocked"),
+      Type.Literal("paused"),
+    ]),
+    since: Type.Union([Type.Integer({ minimum: 0 }), Type.Null()]),
+    note: Type.Optional(Type.String()),
+    blockedOn: Type.Optional(Type.Array(SessionActivityAttentionBlockedOnSchema)),
+  },
+  { additionalProperties: false },
+);
+
+export const SessionActivityChildrenRecentSchema = Type.Object(
+  {
+    childSessionKey: NonEmptyString,
+    status: NonEmptyString,
+    childRunId: Type.Optional(NonEmptyString),
+    label: Type.Optional(NonEmptyString),
+    startedAt: Type.Optional(Type.Integer({ minimum: 0 })),
+  },
+  { additionalProperties: false },
+);
+
+export const SessionActivityChildrenSchema = Type.Object(
+  {
+    total: Type.Integer({ minimum: 0 }),
+    active: Type.Integer({ minimum: 0 }),
+    failed: Type.Integer({ minimum: 0 }),
+    recent: Type.Array(SessionActivityChildrenRecentSchema),
+  },
+  { additionalProperties: false },
+);
+
+export const SessionActivityEntrySchema = Type.Object(
+  {
+    sessionKey: NonEmptyString,
+    version: Type.Integer({ minimum: 0 }),
+    runtimeActivity: SessionActivityRuntimeSchema,
+    attention: SessionActivityAttentionSchema,
+    children: SessionActivityChildrenSchema,
+  },
+  { additionalProperties: false },
+);
+
+export const SessionsActivityListResultSchema = Type.Object(
+  {
+    ts: Type.Integer({ minimum: 0 }),
+    sessions: Type.Array(SessionActivityEntrySchema),
+  },
+  { additionalProperties: false },
+);

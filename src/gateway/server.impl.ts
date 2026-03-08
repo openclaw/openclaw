@@ -108,6 +108,7 @@ import {
 } from "./server/health-state.js";
 import { createReadinessChecker } from "./server/readiness.js";
 import { loadGatewayTlsRuntime } from "./server/tls.js";
+import { SessionActivityTracker } from "./session-activity.js";
 import {
   ensureGatewayStartupAuth,
   mergeGatewayAuthConfig,
@@ -629,6 +630,7 @@ export async function startGatewayServer(
   const nodeSubscribe = nodeSubscriptions.subscribe;
   const nodeUnsubscribe = nodeSubscriptions.unsubscribe;
   const nodeUnsubscribeAll = nodeSubscriptions.unsubscribeAll;
+  const sessionActivity = new SessionActivityTracker({ broadcast });
   const broadcastVoiceWakeChanged = (triggers: string[]) => {
     broadcast("voicewake.changed", { triggers }, { dropIfSlow: true });
   };
@@ -708,16 +710,19 @@ export async function startGatewayServer(
       removeChatRun,
       agentRunSeq,
       nodeSendToSession,
+      onCleanupTick: () => {
+        sessionActivity.sweep();
+      },
       ...(typeof cfgAtStart.media?.ttlHours === "number"
         ? { mediaCleanupTtlMs: resolveMediaCleanupTtlMs(cfgAtStart.media.ttlHours) }
         : {}),
     }));
   }
 
-  const agentUnsub = minimalTestGateway
-    ? null
-    : onAgentEvent(
-        createAgentEventHandler({
+  const agentUnsub = (() => {
+    const agentEventHandler = minimalTestGateway
+      ? null
+      : createAgentEventHandler({
           broadcast,
           broadcastToConnIds,
           nodeSendToSession,
@@ -726,8 +731,15 @@ export async function startGatewayServer(
           resolveSessionKeyForRun,
           clearAgentRunContext,
           toolEventRecipients,
-        }),
-      );
+        });
+    return onAgentEvent((evt) => {
+      sessionActivity.noteAgentEvent({
+        evt,
+        resolvedSessionKey: resolveSessionKeyForRun(evt.runId),
+      });
+      agentEventHandler?.(evt);
+    });
+  })();
 
   const heartbeatUnsub = minimalTestGateway
     ? null
@@ -815,6 +827,7 @@ export async function startGatewayServer(
     getHealthVersion,
     broadcast,
     broadcastToConnIds,
+    sessionActivity,
     nodeSendToSession,
     nodeSendToAllSubscribed,
     nodeSubscribe,

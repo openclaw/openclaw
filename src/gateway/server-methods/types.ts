@@ -11,6 +11,7 @@ import type { ConnectParams, ErrorShape, RequestFrame } from "../protocol/index.
 import type { GatewayBroadcastFn, GatewayBroadcastToConnIdsFn } from "../server-broadcast.js";
 import type { ChannelRuntimeSnapshot } from "../server-channels.js";
 import type { DedupeEntry } from "../server-shared.js";
+import type { SessionActivityTracker } from "../session-activity.js";
 
 type SubsystemLogger = ReturnType<typeof createSubsystemLogger>;
 
@@ -44,6 +45,7 @@ export type GatewayRequestContext = {
   getHealthVersion: () => number;
   broadcast: GatewayBroadcastFn;
   broadcastToConnIds: GatewayBroadcastToConnIdsFn;
+  sessionActivity?: SessionActivityTracker;
   nodeSendToSession: (sessionKey: string, event: string, payload: unknown) => void;
   nodeSendToAllSubscribed: (event: string, payload: unknown) => void;
   nodeSubscribe: (nodeId: string, sessionKey: string) => void;
