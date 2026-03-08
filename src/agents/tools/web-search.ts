@@ -1103,6 +1103,20 @@ async function runTavilySearch(params: {
     topic: params.freshness ? "news" : "general",
   };
 
+  // Map freshness recency values to Tavily's `days` parameter for the news topic.
+  if (params.freshness) {
+    const FRESHNESS_TO_DAYS: Record<string, number> = {
+      day: 1,
+      week: 7,
+      month: 30,
+      year: 365,
+    };
+    const days = FRESHNESS_TO_DAYS[params.freshness];
+    if (days !== undefined) {
+      body.days = days;
+    }
+  }
+
   if (params.country) {
     body.country = params.country;
   }
