@@ -36,6 +36,7 @@ import { pickGatewaySelfPresence } from "./status-all/gateway.js";
 import { buildStatusAllReportLines } from "./status-all/report-lines.js";
 import { readServiceStatusSummary } from "./status.service-summary.js";
 import { formatUpdateOneLiner } from "./status.update.js";
+import { formatStatusToolProfileValue } from "./status.tool-profile.js";
 
 export async function statusAllCommand(
   runtime: RuntimeEnv,
@@ -274,19 +275,7 @@ export async function statusAllCommand(
       (a) => a.lastActiveAgeMs != null && a.lastActiveAgeMs <= aliveThresholdMs,
     ).length;
 
-    const toolProfileValue = (() => {
-      const profile = cfg.tools?.profile;
-      if (!profile) {
-        return null;
-      }
-      if (profile === "messaging") {
-        return `${profile} · intentionally narrow by design; use \`tools.profile: \"full\"\` for broader command/control access`;
-      }
-      if (profile === "full") {
-        return `${profile} · broadest command/control surface`;
-      }
-      return profile;
-    })();
+    const toolProfileValue = formatStatusToolProfileValue(cfg.tools?.profile);
 
     const overviewRows = [
       { Item: "Version", Value: VERSION },

@@ -24,6 +24,7 @@ import { statusAllCommand } from "./status-all.js";
 import { groupChannelIssuesByChannel } from "./status-all/channel-issues.js";
 import { formatGatewayAuthUsed } from "./status-all/format.js";
 import { getDaemonStatusSummary, getNodeDaemonStatusSummary } from "./status.daemon.js";
+import { formatStatusToolProfileValue } from "./status.tool-profile.js";
 import {
   formatDuration,
   formatKTokens,
@@ -406,19 +407,7 @@ export async function statusCommand(
   const channelLabel = channelInfo.label;
   const gitLabel = formatGitInstallLabel(update);
 
-  const toolProfileValue = (() => {
-    const profile = cfg.tools?.profile;
-    if (!profile) {
-      return null;
-    }
-    if (profile === "messaging") {
-      return `${profile} · intentionally narrow by design; use \`tools.profile: \"full\"\` for broader command/control access`;
-    }
-    if (profile === "full") {
-      return `${profile} · broadest command/control surface`;
-    }
-    return profile;
-  })();
+  const toolProfileValue = formatStatusToolProfileValue(cfg.tools?.profile);
 
   const overviewRows = [
     { Item: "Dashboard", Value: dashboard },
