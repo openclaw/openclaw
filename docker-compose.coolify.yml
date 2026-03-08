@@ -1,0 +1,90 @@
+## Coolify VPS Deployment
+##
+## This Compose file is designed for Coolify-managed VPS deployments.
+## Coolify handles the reverse proxy (Traefik/Caddy), TLS, and domain routing.
+##
+## Required environment variables (set in Coolify dashboard):
+##   OPENCLAW_GATEWAY_TOKEN   - auth token for the gateway API
+##   OPENCLAW_CONFIG_DIR      - host path for config persistence (e.g. /data/openclaw/config)
+##   OPENCLAW_WORKSPACE_DIR   - host path for workspace persistence (e.g. /data/openclaw/workspace)
+##
+## Optional:
+##   OPENCLAW_IMAGE           - custom image (default: build from source)
+##   OPENAI_API_KEY           - OpenAI provider key
+##   ANTHROPIC_API_KEY        - Anthropic provider key
+##   GEMINI_API_KEY           - Google Gemini key
+##   TELEGRAM_BOT_TOKEN       - Telegram channel
+##   DISCORD_BOT_TOKEN        - Discord channel
+##   SLACK_BOT_TOKEN          - Slack bot token
+##   SLACK_APP_TOKEN          - Slack app token
+
+services:
+  openclaw-gateway:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: ${OPENCLAW_IMAGE:-openclaw:local}
+    environment:
+      HOME: /home/node
+      TERM: xterm-256color
+      NODE_ENV: production
+      # Gateway auth
+      OPENCLAW_GATEWAY_TOKEN: ${OPENCLAW_GATEWAY_TOKEN}
+      # Model provider keys
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
+      # Channel tokens
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
+      DISCORD_BOT_TOKEN: ${DISCORD_BOT_TOKEN:-}
+      SLACK_BOT_TOKEN: ${SLACK_BOT_TOKEN:-}
+      SLACK_APP_TOKEN: ${SLACK_APP_TOKEN:-}
+      # Tools
+      BRAVE_API_KEY: ${BRAVE_API_KEY:-}
+      ELEVENLABS_API_KEY: ${ELEVENLABS_API_KEY:-}
+      # Web session (optional)
+      CLAUDE_AI_SESSION_KEY: ${CLAUDE_AI_SESSION_KEY:-}
+      CLAUDE_WEB_SESSION_KEY: ${CLAUDE_WEB_SESSION_KEY:-}
+      CLAUDE_WEB_COOKIE: ${CLAUDE_WEB_COOKIE:-}
+      OPENCLAW_ALLOW_INSECURE_PRIVATE_WS: ${OPENCLAW_ALLOW_INSECURE_PRIVATE_WS:-}
+    volumes:
+      - ${OPENCLAW_CONFIG_DIR:-openclaw-config}:/home/node/.openclaw
+      - ${OPENCLAW_WORKSPACE_DIR:-openclaw-workspace}:/home/node/.openclaw/workspace
+    ports:
+      - "${OPENCLAW_GATEWAY_PORT:-18789}:18789"
+    init: true
+    restart: unless-stopped
+    command:
+      [
+        "node",
+        "dist/index.js",
+        "gateway",
+        "--bind",
+        "lan",
+        "--port",
+        "18789",
+        "--allow-unconfigured",
+      ]
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "fetch('http://127.0.0.1:18789/healthz').then((r)=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))",
+        ]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+        reservations:
+          memory: 512M
+
+volumes:
+  openclaw-config:
+  openclaw-workspace:
