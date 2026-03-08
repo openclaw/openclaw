@@ -45,6 +45,11 @@ Use this format when adding entries:
 
 ## Listed plugins
 
+- **Guardian** — Security layer for OpenClaw with regex blacklist + LLM intent verification to prevent dangerous tool execution.
+  npm: `openclaw-guardian`
+  repo: `https://github.com/fatcatMaoFei/openclaw-guardian`
+  install: `openclaw plugins install openclaw-guardian`
+
 - **WeChat** — Connect OpenClaw to WeChat personal accounts via WeChatPadPro (iPad protocol). Supports text, image, and file exchange with keyword-triggered conversations.
   npm: `@icesword760/openclaw-wechat`
   repo: `https://github.com/icesword0760/openclaw-wechat`
