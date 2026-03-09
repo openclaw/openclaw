@@ -278,6 +278,30 @@ describe("browser config", () => {
     expect(resolved.ssrfPolicy).toEqual({});
   });
 
+  it("passes through allowRfc2544BenchmarkRange when enabled", () => {
+    const resolved = resolveBrowserConfig({
+      ssrfPolicy: {
+        allowRfc2544BenchmarkRange: true,
+      },
+    });
+    expect(resolved.ssrfPolicy).toEqual({
+      dangerouslyAllowPrivateNetwork: true,
+      allowRfc2544BenchmarkRange: true,
+    });
+  });
+
+  it("omits allowRfc2544BenchmarkRange when not set or false", () => {
+    const resolved = resolveBrowserConfig({
+      ssrfPolicy: {
+        allowRfc2544BenchmarkRange: false,
+      },
+    });
+    expect(resolved.ssrfPolicy).toEqual({
+      dangerouslyAllowPrivateNetwork: true,
+    });
+    expect(resolved.ssrfPolicy).not.toHaveProperty("allowRfc2544BenchmarkRange");
+  });
+
   describe("default profile preference", () => {
     it("defaults to openclaw profile when defaultProfile is not configured", () => {
       const resolved = resolveBrowserConfig({

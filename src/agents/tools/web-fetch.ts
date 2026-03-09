@@ -1,6 +1,6 @@
 import { Type } from "@sinclair/typebox";
 import type { OpenClawConfig } from "../../config/config.js";
-import { SsrFBlockedError } from "../../infra/net/ssrf.js";
+import { SsrFBlockedError, type SsrFPolicy } from "../../infra/net/ssrf.js";
 import { logDebug } from "../../logger.js";
 import { wrapExternalContent, wrapWebContent } from "../../security/external-content.js";
 import { normalizeSecretInput } from "../../utils/normalize-secret-input.js";
@@ -64,19 +64,19 @@ const WebFetchSchema = Type.Object({
 
 type WebFetchConfig = NonNullable<OpenClawConfig["tools"]>["web"] extends infer Web
   ? Web extends { fetch?: infer Fetch }
-    ? Fetch
-    : undefined
+  ? Fetch
+  : undefined
   : undefined;
 
 type FirecrawlFetchConfig =
   | {
-      enabled?: boolean;
-      apiKey?: string;
-      baseUrl?: string;
-      onlyMainContent?: boolean;
-      maxAgeMs?: number;
-      timeoutSeconds?: number;
-    }
+    enabled?: boolean;
+    apiKey?: string;
+    baseUrl?: string;
+    onlyMainContent?: boolean;
+    maxAgeMs?: number;
+    timeoutSeconds?: number;
+  }
   | undefined;
 
 function resolveFetchConfig(cfg?: OpenClawConfig): WebFetchConfig {
@@ -122,6 +122,33 @@ function resolveFetchMaxResponseBytes(fetch?: WebFetchConfig): number {
   }
   const value = Math.floor(raw);
   return Math.min(FETCH_MAX_RESPONSE_BYTES_MAX, Math.max(FETCH_MAX_RESPONSE_BYTES_MIN, value));
+}
+
+/**
+ * Read ssrfPolicy from the web.fetch config block.
+ *
+ * When users sit behind proxy tools that use fake-IP DNS (e.g. Clash TUN
+ * mode mapping hostnames to 198.18.x.x), the default SSRF guard blocks
+ * every outgoing fetch.  Returning a policy object with
+ * `allowRfc2544BenchmarkRange: true` lets those addresses through.
+ */
+function resolveSsrfPolicy(fetch?: WebFetchConfig): SsrFPolicy | undefined {
+  if (!fetch || typeof fetch !== "object") {
+    return undefined;
+  }
+  const policy = "ssrfPolicy" in fetch ? fetch.ssrfPolicy : undefined;
+  if (!policy || typeof policy !== "object") {
+    return undefined;
+  }
+  const allowRfc2544 =
+    "allowRfc2544BenchmarkRange" in policy &&
+      typeof policy.allowRfc2544BenchmarkRange === "boolean"
+      ? policy.allowRfc2544BenchmarkRange
+      : false;
+  if (!allowRfc2544) {
+    return undefined;
+  }
+  return { allowRfc2544BenchmarkRange: true };
 }
 
 function resolveFirecrawlConfig(fetch?: WebFetchConfig): FirecrawlFetchConfig {
@@ -446,6 +473,7 @@ type WebFetchRuntimeParams = FirecrawlRuntimeParams & {
   cacheTtlMs: number;
   userAgent: string;
   readabilityEnabled: boolean;
+  ssrfPolicy?: SsrFPolicy;
 };
 
 function toFirecrawlContentParams(
@@ -500,8 +528,9 @@ async function maybeFetchFirecrawlWebFetchPayload(
 }
 
 async function runWebFetch(params: WebFetchRuntimeParams): Promise<Record<string, unknown>> {
+  const policySuffix = params.ssrfPolicy?.allowRfc2544BenchmarkRange ? ":rfc2544" : "";
   const cacheKey = normalizeCacheKey(
-    `fetch:${params.url}:${params.extractMode}:${params.maxChars}`,
+    `fetch:${params.url}:${params.extractMode}:${params.maxChars}${policySuffix}`,
   );
   const cached = readCache(FETCH_CACHE, cacheKey);
   if (cached) {
@@ -527,6 +556,7 @@ async function runWebFetch(params: WebFetchRuntimeParams): Promise<Record<string
       url: params.url,
       maxRedirects: params.maxRedirects,
       timeoutSeconds: params.timeoutSeconds,
+      policy: params.ssrfPolicy,
       init: {
         headers: {
           Accept: "text/markdown, text/html;q=0.9, */*;q=0.1",
@@ -744,6 +774,7 @@ export function createWebFetchTool(options?: {
       const extractMode = readStringParam(params, "extractMode") === "text" ? "text" : "markdown";
       const maxChars = readNumberParam(params, "maxChars", { integer: true });
       const maxCharsCap = resolveFetchMaxCharsCap(fetch);
+      const ssrfPolicy = resolveSsrfPolicy(fetch);
       const result = await runWebFetch({
         url,
         extractMode,
@@ -758,6 +789,7 @@ export function createWebFetchTool(options?: {
         cacheTtlMs: resolveCacheTtlMs(fetch?.cacheTtlMinutes, DEFAULT_CACHE_TTL_MINUTES),
         userAgent,
         readabilityEnabled,
+        ssrfPolicy,
         firecrawlEnabled,
         firecrawlApiKey,
         firecrawlBaseUrl,

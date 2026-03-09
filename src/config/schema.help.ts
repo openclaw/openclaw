@@ -280,6 +280,8 @@ export const FIELD_HELP: Record<string, string> = {
     "Explicit hostname allowlist exceptions for SSRF policy checks on browser/network requests. Keep this list minimal and review entries regularly to avoid stale broad access.",
   "browser.ssrfPolicy.hostnameAllowlist":
     "Legacy/alternate hostname allowlist field used by SSRF policy consumers for explicit host exceptions. Use stable exact hostnames and avoid wildcard-like broad patterns.",
+  "browser.ssrfPolicy.allowRfc2544BenchmarkRange":
+    "Allows the RFC 2544 benchmark IP range (198.18.0.0/15) through the browser SSRF guard. Enable this when running behind fake-IP DNS proxies such as Clash TUN mode that resolve hostnames to addresses in this range. Keep disabled unless your network setup specifically requires it.",
   "browser.remoteCdpTimeoutMs":
     "Timeout in milliseconds for connecting to a remote CDP endpoint before failing the browser attach attempt. Increase for high-latency tunnels, or lower for faster failure detection.",
   "browser.remoteCdpHandshakeTimeoutMs":
