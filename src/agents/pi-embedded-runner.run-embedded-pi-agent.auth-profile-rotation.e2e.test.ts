@@ -2,8 +2,9 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import type { AssistantMessage } from "@mariozechner/pi-ai";
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
+import { registerLogTransport, resetLogger, setLoggerOverride } from "../logging/logger.js";
 import type { AuthProfileFailureReason } from "./auth-profiles.js";
 import type { EmbeddedRunAttemptResult } from "./pi-embedded-runner/run/types.js";
 
@@ -51,6 +52,7 @@ vi.mock("./models-config.js", async (importOriginal) => {
 });
 
 let runEmbeddedPiAgent: typeof import("./pi-embedded-runner/run.js").runEmbeddedPiAgent;
+let unregisterLogTransport: (() => void) | undefined;
 
 beforeAll(async () => {
   ({ runEmbeddedPiAgent } = await import("./pi-embedded-runner/run.js"));
@@ -62,6 +64,13 @@ beforeEach(() => {
   resolveCopilotApiTokenMock.mockReset();
   computeBackoffMock.mockClear();
   sleepWithAbortMock.mockClear();
+});
+
+afterEach(() => {
+  unregisterLogTransport?.();
+  unregisterLogTransport = undefined;
+  setLoggerOverride(null);
+  resetLogger();
 });
 
 const baseUsage = {
@@ -718,6 +727,52 @@ describe("runEmbeddedPiAgent auth profile rotation", () => {
     );
     expect(sleepWithAbortMock).toHaveBeenCalledTimes(1);
     expect(sleepWithAbortMock).toHaveBeenCalledWith(321, undefined);
+  });
+
+  it("logs structured failover decision metadata for overloaded assistant rotation", async () => {
+    const records: Array<Record<string, unknown>> = [];
+    setLoggerOverride({
+      level: "trace",
+      consoleLevel: "silent",
+      file: path.join(os.tmpdir(), `openclaw-auth-rotation-${Date.now()}.log`),
+    });
+    unregisterLogTransport = registerLogTransport((record) => {
+      records.push(record);
+    });
+
+    await runAutoPinnedRotationCase({
+      errorMessage:
+        '{"type":"error","error":{"type":"overloaded_error","message":"Overloaded"},"request_id":"req_overload"}',
+      sessionKey: "agent:test:overloaded-logging",
+      runId: "run:overloaded-logging",
+    });
+
+    const decisionRecord = records.find(
+      (record) =>
+        record["2"] === "embedded run failover decision" &&
+        record["1"] &&
+        typeof record["1"] === "object" &&
+        (record["1"] as Record<string, unknown>).decision === "rotate_profile",
+    );
+
+    expect(decisionRecord).toBeDefined();
+    expect((decisionRecord as Record<string, unknown>)["1"]).toMatchObject({
+      event: "embedded_run_failover_decision",
+      tags: ["error_handling", "failover", "assistant", "rotate_profile"],
+      stage: "assistant",
+      decision: "rotate_profile",
+      failoverReason: "overloaded",
+      profileFailureReason: "overloaded",
+      fallbackConfigured: false,
+      provider: "openai",
+      model: "mock-1",
+      profileId: "openai:p1",
+      providerErrorType: "overloaded_error",
+      providerErrorMessage: "Overloaded",
+      requestId: "req_overload",
+      rawError:
+        '{"type":"error","error":{"type":"overloaded_error","message":"Overloaded"},"request_id":"req_overload"}',
+    });
   });
 
   it("rotates for overloaded prompt failures across auto-pinned profiles", async () => {

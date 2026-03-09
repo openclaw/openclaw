@@ -1,5 +1,6 @@
 import type { OpenClawConfig } from "../../config/config.js";
 import { normalizeProviderId } from "../model-selection.js";
+import { logAuthProfileFailureStateChange } from "./state-observation.js";
 import { saveAuthProfileStore, updateAuthProfileStoreWithLock } from "./store.js";
 import type { AuthProfileFailureReason, AuthProfileStore, ProfileUsageStats } from "./types.js";
 
@@ -440,7 +441,6 @@ function computeNextProfileUsageStats(params: {
 
   return updatedStats;
 }
-
 /**
  * Mark a profile as failed for a specific reason. Billing and permanent-auth
  * failures are treated as "disabled" (longer backoff) vs the regular cooldown
@@ -458,6 +458,9 @@ export async function markAuthProfileFailure(params: {
   if (!profile || isAuthCooldownBypassedForProvider(profile.provider)) {
     return;
   }
+  let nextStats: ProfileUsageStats | undefined;
+  let previousStats: ProfileUsageStats | undefined;
+  let updateTime = 0;
   const updated = await updateAuthProfileStoreWithLock({
     agentDir,
     updater: (freshStore) => {
@@ -472,19 +475,31 @@ export async function markAuthProfileFailure(params: {
         providerId: providerKey,
       });
 
-      updateUsageStatsEntry(freshStore, profileId, (existing) =>
-        computeNextProfileUsageStats({
-          existing: existing ?? {},
-          now,
-          reason,
-          cfgResolved,
-        }),
-      );
+      previousStats = freshStore.usageStats?.[profileId];
+      updateTime = now;
+      const computed = computeNextProfileUsageStats({
+        existing: previousStats ?? {},
+        now,
+        reason,
+        cfgResolved,
+      });
+      nextStats = computed;
+      updateUsageStatsEntry(freshStore, profileId, () => computed);
       return true;
     },
   });
   if (updated) {
     store.usageStats = updated.usageStats;
+    if (nextStats) {
+      logAuthProfileFailureStateChange({
+        profileId,
+        provider: profile.provider,
+        reason,
+        previous: previousStats,
+        next: nextStats,
+        now: updateTime,
+      });
+    }
     return;
   }
   if (!store.profiles[profileId]) {
@@ -498,15 +513,24 @@ export async function markAuthProfileFailure(params: {
     providerId: providerKey,
   });
 
-  updateUsageStatsEntry(store, profileId, (existing) =>
-    computeNextProfileUsageStats({
-      existing: existing ?? {},
-      now,
-      reason,
-      cfgResolved,
-    }),
-  );
+  previousStats = store.usageStats?.[profileId];
+  const computed = computeNextProfileUsageStats({
+    existing: previousStats ?? {},
+    now,
+    reason,
+    cfgResolved,
+  });
+  nextStats = computed;
+  updateUsageStatsEntry(store, profileId, () => computed);
   saveAuthProfileStore(store, agentDir);
+  logAuthProfileFailureStateChange({
+    profileId,
+    provider: store.profiles[profileId]?.provider ?? profile.provider,
+    reason,
+    previous: previousStats,
+    next: nextStats,
+    now,
+  });
 }
 
 /**
