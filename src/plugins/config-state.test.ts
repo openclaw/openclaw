@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { normalizePluginsConfig, resolveEffectiveEnableState } from "./config-state.js";
+import {
+  normalizePluginsConfig,
+  resolveEffectiveEnableState,
+  resolveEnableState,
+} from "./config-state.js";
 
 describe("normalizePluginsConfig", () => {
   it("uses default memory slot when not specified", () => {
@@ -108,6 +112,37 @@ describe("resolveEffectiveEnableState", () => {
         },
       },
     });
+    expect(state).toEqual({ enabled: false, reason: "disabled in config" });
+  });
+});
+
+describe("resolveEnableState", () => {
+  it("keeps the selected memory slot plugin enabled even when omitted from plugins.allow", () => {
+    const state = resolveEnableState(
+      "memory-core",
+      "bundled",
+      normalizePluginsConfig({
+        allow: ["telegram"],
+        slots: { memory: "memory-core" },
+      }),
+    );
+    expect(state).toEqual({ enabled: true });
+  });
+
+  it("keeps explicit disable authoritative for the selected memory slot plugin", () => {
+    const state = resolveEnableState(
+      "memory-core",
+      "bundled",
+      normalizePluginsConfig({
+        allow: ["telegram"],
+        slots: { memory: "memory-core" },
+        entries: {
+          "memory-core": {
+            enabled: false,
+          },
+        },
+      }),
+    );
     expect(state).toEqual({ enabled: false, reason: "disabled in config" });
   });
 });
