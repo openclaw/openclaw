@@ -23,7 +23,7 @@
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>
-	<string>2026.3.8</string>
+	<string>2026.3.9</string>
 	<key>CFBundleURLTypes</key>
 	<array>
 		<dict>
