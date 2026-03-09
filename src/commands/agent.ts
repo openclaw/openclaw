@@ -498,6 +498,7 @@ function runAgentAttempt(params: {
     onAgentEvent: params.onAgentEvent,
     bootstrapPromptWarningSignaturesSeen,
     bootstrapPromptWarningSignature,
+    disableEscalation: true,
   });
 }
 

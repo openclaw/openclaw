@@ -89,6 +89,7 @@ import { buildSystemPromptReport } from "../../system-prompt-report.js";
 import { sanitizeToolCallIdsForCloudCodeAssist } from "../../tool-call-id.js";
 import { resolveEffectiveToolFsWorkspaceOnly } from "../../tool-fs-policy.js";
 import { normalizeToolName } from "../../tool-policy.js";
+import { createEscalateTool, resolveEscalationModel } from "../../tools/escalate-tool.js";
 import { resolveTranscriptPolicy } from "../../transcript-policy.js";
 import { DEFAULT_BOOTSTRAP_FILENAME } from "../../workspace.js";
 import { isRunnerAbortError } from "../abort.js";
@@ -885,6 +886,22 @@ export async function runEmbeddedAttempt(
             params.requireExplicitMessageTarget ?? isSubagentSessionKey(params.sessionKey),
           disableMessageTool: params.disableMessageTool,
         });
+
+    // Self-escalation: register the escalate tool when an escalation model is configured
+    // and the current model is NOT the escalation target.
+    const escalationModel = resolveEscalationModel(params.config, sessionAgentId);
+    const escalationEnabled =
+      !!escalationModel &&
+      !params.disableTools &&
+      !params.disableEscalation &&
+      `${normalizeProviderId(params.provider)}/${params.modelId}` !== escalationModel.ref;
+    if (escalationEnabled) {
+      const escalateTool = createEscalateTool({
+        sessionKey: params.sessionKey ?? params.sessionId,
+      });
+      toolsRaw.push(escalateTool);
+    }
+
     const toolsEnabled = supportsModelTools(params.model);
     const tools = sanitizeToolsForGoogle({
       tools: toolsEnabled ? toolsRaw : [],
@@ -995,11 +1012,22 @@ export async function runEmbeddedAttempt(
     const ttsHint = params.config ? buildTtsSystemPromptHint(params.config) : undefined;
     const ownerDisplay = resolveOwnerDisplaySetting(params.config);
 
+    // Augment extra system prompt with escalation guidance when the escalate tool is available
+    // and the model actually supports tools (otherwise the tool was dropped by sanitizeToolsForGoogle).
+    let effectiveExtraSystemPrompt = params.extraSystemPrompt;
+    if (escalationEnabled && toolsEnabled) {
+      const escalationHint =
+        "If a task requires deep reasoning, complex analysis, multi-step debugging, creative writing, or you are uncertain about factual accuracy, use the escalate tool IMMEDIATELY as your first action — do not generate any text first.";
+      effectiveExtraSystemPrompt = effectiveExtraSystemPrompt
+        ? `${effectiveExtraSystemPrompt}\n\n${escalationHint}`
+        : escalationHint;
+    }
+
     const appendPrompt = buildEmbeddedSystemPrompt({
       workspaceDir: effectiveWorkspace,
       defaultThinkLevel: params.thinkLevel,
       reasoningLevel: params.reasoningLevel ?? "off",
-      extraSystemPrompt: params.extraSystemPrompt,
+      extraSystemPrompt: effectiveExtraSystemPrompt,
       ownerNumbers: params.ownerNumbers,
       ownerDisplay: ownerDisplay.ownerDisplay,
       ownerDisplaySecret: ownerDisplay.ownerDisplaySecret,
