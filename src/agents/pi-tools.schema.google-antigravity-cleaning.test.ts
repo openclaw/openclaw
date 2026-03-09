@@ -2,17 +2,17 @@ import { describe, expect, it } from "vitest";
 import { normalizeToolParameters } from "./pi-tools.schema.js";
 
 /**
- * Regression test for https://github.com/openclaw/openclaw/issues/22187
+ * Tests for google-antigravity schema cleaning behavior.
  *
  * google-antigravity proxies Anthropic models (e.g. Claude) through Google's
  * Cloud Code Assist API.  The API validates tool schemas against Gemini's
  * JSON Schema subset, so `cleanSchemaForGemini()` must always run for
  * google-routed requests — even when the *target* model is Anthropic.
  *
- * Before the fix, `isGeminiProvider && !isAnthropicProvider` skipped cleaning
- * for google-antigravity because the provider was also classified as Anthropic
- * (it proxies Anthropic models), causing 400 INVALID_ARGUMENT errors when
- * unsupported schema keywords like `patternProperties` reached the API.
+ * The `isAnthropicProvider` guard was removed as dead code: no current
+ * Google-routed provider name contains "anthropic", so the guard never
+ * triggered. Removing it simplifies the logic and future-proofs against
+ * hypothetical provider names that might match both "google" and "anthropic".
  */
 describe("normalizeToolParameters – google-antigravity schema cleaning", () => {
   const toolWithPatternProperties = {
