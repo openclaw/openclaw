@@ -149,17 +149,19 @@ describe("diagnoseFeishuChannel", () => {
               appSecret: "test_secret", // pragma: allowlist secret
             },
             default: {
+              appId: "test_app_id_default",
+              appSecret: "test_secret_default", // pragma: allowlist secret
               groupPolicy: "allowlist",
               groupAllowFrom: ["oc_group1", "oc_group2"],
             },
           },
           groups: {
             oc_group1: {
-              allow: ["user1"],
+              allowFrom: ["user1"],
               requireMention: true,
             },
             oc_group2: {
-              allow: ["user2"],
+              allowFrom: ["user2"],
             },
           },
         },

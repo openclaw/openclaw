@@ -12,6 +12,21 @@ interface FeishuDiagnosticResult {
 }
 
 /**
+ * Check if a value is a valid non-empty string
+ * Handles both string values and SecretInput objects
+ */
+function isValidCredential(value: unknown): boolean {
+  if (typeof value === "string") {
+    return value.trim().length > 0;
+  }
+  // Handle SecretInput objects (for env/secret refs)
+  if (value && typeof value === "object" && "secretRef" in value) {
+    return true; // SecretInput is considered valid
+  }
+  return false;
+}
+
+/**
  * Diagnose Feishu channel configuration
  * Focuses on group policy validation and common misconfigurations
  */
@@ -44,19 +59,28 @@ export async function diagnoseFeishuChannel(cfg: OpenClawConfig): Promise<Feishu
   const accountIds = Object.keys(accounts);
   result.accountsConfigured = accountIds.length;
 
-  if (accountIds.length === 0) {
+  // Support for top-level Feishu configs (single-account setups without accounts object)
+  // Check if we have top-level appId/appSecret (legacy/single-account config)
+  const hasTopLevelCredentials = !!(feishuCfg as Record<string, unknown>).appId;
+
+  if (accountIds.length === 0 && !hasTopLevelCredentials) {
     result.issues.push("- No Feishu accounts configured (channels.feishu.accounts is empty)");
     return result;
   }
 
-  // Check each account for required fields
+  // Check each account for required fields (including default account)
   for (const [accountId, account] of Object.entries(accounts)) {
-    if (accountId === "default") {
+    // Guard against malformed account objects (null, primitives, etc.)
+    if (!account || typeof account !== "object") {
+      result.issues.push(
+        `- Account '${accountId}': Malformed account configuration`,
+        `  Fix: Ensure account is a valid object with appId and appSecret`,
+      );
       continue;
-    } // Skip default account
+    }
 
-    const hasAppId = !!(account as Record<string, unknown>).appId?.toString().trim();
-    const hasAppSecret = !!(account as Record<string, unknown>).appSecret?.toString().trim();
+    const hasAppId = isValidCredential((account as Record<string, unknown>).appId);
+    const hasAppSecret = isValidCredential((account as Record<string, unknown>).appSecret);
 
     if (!hasAppId || !hasAppSecret) {
       result.issues.push(
@@ -101,14 +125,24 @@ export async function diagnoseFeishuChannel(cfg: OpenClawConfig): Promise<Feishu
 
   // Check individual group configurations
   for (const [groupId, groupConfig] of Object.entries(groups)) {
-    const allowList =
-      ((groupConfig as Record<string, unknown>).allow as string[] | undefined) ?? [];
+    // Guard against malformed group config objects
+    if (!groupConfig || typeof groupConfig !== "object") {
+      result.warnings.push(
+        `- Group ${groupId}: Malformed group configuration`,
+        `  Fix: Ensure group config is a valid object`,
+      );
+      continue;
+    }
+
+    // Read from allowFrom (correct field name for sender gating)
+    const allowFromList =
+      ((groupConfig as Record<string, unknown>).allowFrom as string[] | undefined) ?? [];
     const requireMention =
       ((groupConfig as Record<string, unknown>).requireMention as boolean | undefined) ?? false;
 
-    if (allowList.length === 0) {
+    if (allowFromList.length === 0) {
       result.warnings.push(
-        `- Group ${groupId}: No allow list configured`,
+        `- Group ${groupId}: No allowFrom list configured`,
         `  With groupPolicy="open", all members can trigger (mention-gated if requireMention=true)`,
       );
     }
@@ -182,9 +216,6 @@ export async function noteFeishuChannelDiagnostic(cfg: OpenClawConfig) {
     sections.push(`\n✓ Tips:`);
     sections.push(...result.tips);
   }
-
-  // Add diagnostic command hint
-  sections.push(`\n🔍 Detailed check: ${formatCliCommand("openclaw doctor channels feishu")}`);
 
   note(sections.join("\n"), "Feishu Channel");
 }
