@@ -57,7 +57,7 @@ describe("probeGateway", () => {
     setTimeout(() => {
       const onHelloOk = gatewayClientState.options?.onHelloOk as (() => Promise<void>) | undefined;
       if (onHelloOk) {
-        onHelloOk();
+        void onHelloOk();
       }
     }, 10);
 
