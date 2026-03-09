@@ -151,11 +151,16 @@ export class GatewayBrowserClient {
     if (this.closed) {
       return;
     }
+    console.log(`[GW:UI] connecting to ${this.opts.url}`);
     this.ws = new WebSocket(this.opts.url);
-    this.ws.addEventListener("open", () => this.queueConnect());
+    this.ws.addEventListener("open", () => {
+      console.log(`[GW:UI] ws open → ${this.opts.url}`);
+      this.queueConnect();
+    });
     this.ws.addEventListener("message", (ev) => this.handleMessage(String(ev.data ?? "")));
     this.ws.addEventListener("close", (ev) => {
       const reason = String(ev.reason ?? "");
+      console.log(`[GW:UI] ws closed code=${ev.code} reason=${reason || "(none)"}`);
       const connectError = this.pendingConnectError;
       this.pendingConnectError = undefined;
       this.ws = null;
@@ -165,7 +170,8 @@ export class GatewayBrowserClient {
         this.scheduleReconnect();
       }
     });
-    this.ws.addEventListener("error", () => {
+    this.ws.addEventListener("error", (ev) => {
+      console.error(`[GW:UI] ws error`, ev);
       // ignored; close handler will fire
     });
   }
@@ -315,6 +321,7 @@ export class GatewayBrowserClient {
     try {
       parsed = JSON.parse(raw);
     } catch {
+      console.warn(`[GW:UI] ← recv non-JSON:`, raw.slice(0, 200));
       return;
     }
 
@@ -322,6 +329,7 @@ export class GatewayBrowserClient {
     if (frame.type === "event") {
       const evt = parsed as GatewayEventFrame;
       if (evt.event === "connect.challenge") {
+        console.log(`[GW:UI] ← recv event connect.challenge (nonce handshake)`);
         const payload = evt.payload as { nonce?: unknown } | undefined;
         const nonce = payload && typeof payload.nonce === "string" ? payload.nonce : null;
         if (nonce) {
@@ -330,9 +338,11 @@ export class GatewayBrowserClient {
         }
         return;
       }
+      console.log(`[GW:UI] ← recv event "${evt.event}" seq=${evt.seq ?? "(none)"}`, evt.payload);
       const seq = typeof evt.seq === "number" ? evt.seq : null;
       if (seq !== null) {
         if (this.lastSeq !== null && seq > this.lastSeq + 1) {
+          console.warn(`[GW:UI] event gap: expected seq=${this.lastSeq + 1} received=${seq}`);
           this.opts.onGap?.({ expected: this.lastSeq + 1, received: seq });
         }
         this.lastSeq = seq;
@@ -349,12 +359,17 @@ export class GatewayBrowserClient {
       const res = parsed as GatewayResponseFrame;
       const pending = this.pending.get(res.id);
       if (!pending) {
+        console.warn(`[GW:UI] ← recv res id=${res.id} but no pending request found`);
         return;
       }
       this.pending.delete(res.id);
       if (res.ok) {
+        console.log(`[GW:UI] ← recv res id=${res.id} ok=true`, res.payload);
         pending.resolve(res.payload);
       } else {
+        console.warn(
+          `[GW:UI] ← recv res id=${res.id} ok=false code=${res.error?.code} msg=${res.error?.message}`,
+        );
         pending.reject(
           new GatewayRequestError({
             code: res.error?.code ?? "UNAVAILABLE",
@@ -365,6 +380,11 @@ export class GatewayBrowserClient {
       }
       return;
     }
+
+    console.warn(
+      `[GW:UI] ← recv unknown frame type=${String((frame as { type?: unknown }).type)}`,
+      parsed,
+    );
   }
 
   request<T = unknown>(method: string, params?: unknown): Promise<T> {
@@ -373,6 +393,7 @@ export class GatewayBrowserClient {
     }
     const id = generateUUID();
     const frame = { type: "req", id, method, params };
+    console.log(`[GW:UI] → send req method="${method}" id=${id}`, params);
     const p = new Promise<T>((resolve, reject) => {
       this.pending.set(id, { resolve: (v) => resolve(v as T), reject });
     });

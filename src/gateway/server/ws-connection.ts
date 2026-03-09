@@ -139,6 +139,13 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
     });
 
     logWs("in", "open", { connId, remoteAddr });
+    console.log(`[WS:DEBUG] ── NEW CONNECTION ──────────────────────────────────────────────────`);
+    console.log(`[WS:DEBUG] connId        = ${connId}`);
+    console.log(`[WS:DEBUG] remoteAddr    = ${remoteAddr ?? "unknown"}`);
+    console.log(`[WS:DEBUG] host          = ${requestHost ?? "n/a"}`);
+    console.log(`[WS:DEBUG] origin        = ${requestOrigin ?? "n/a"}`);
+    console.log(`[WS:DEBUG] userAgent     = ${requestUserAgent ?? "n/a"}`);
+    console.log(`[WS:DEBUG] forwardedFor  = ${forwardedFor ?? "n/a"}`);
     let handshakeState: "pending" | "connected" | "failed" = "pending";
     let closeCause: string | undefined;
     let closeMeta: Record<string, unknown> = {};
@@ -172,6 +179,12 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
     };
 
     const connectNonce = randomUUID();
+    console.log(`[WS:DEBUG] ── SEND CHALLENGE ─────────────────────────────────────────────────`);
+    console.log(`[WS:DEBUG] connId  = ${connId}`);
+    console.log(`[WS:DEBUG] nonce   = ${connectNonce}`);
+    console.log(
+      `[WS:DEBUG] frame   = ${JSON.stringify({ type: "event", event: "connect.challenge", payload: { nonce: connectNonce } })}`,
+    );
     send({
       type: "event",
       event: "connect.challenge",
@@ -205,6 +218,13 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
       );
 
     socket.once("close", (code, reason) => {
+      console.log(`[WS:DEBUG] ── CLOSE ─────────────────────────────────────────────────────────`);
+      console.log(`[WS:DEBUG] connId      = ${connId}`);
+      console.log(`[WS:DEBUG] code        = ${code}`);
+      console.log(`[WS:DEBUG] reason      = ${reason?.toString() ?? "n/a"}`);
+      console.log(`[WS:DEBUG] handshake   = ${handshakeState}`);
+      console.log(`[WS:DEBUG] closeCause  = ${closeCause ?? "n/a"}`);
+      console.log(`[WS:DEBUG] durationMs  = ${Date.now() - openedAt}ms`);
       const durationMs = Date.now() - openedAt;
       const logForwardedFor = sanitizeLogValue(forwardedFor);
       const logOrigin = sanitizeLogValue(requestOrigin);

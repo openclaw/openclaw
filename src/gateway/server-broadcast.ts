@@ -90,6 +90,24 @@ export function createGatewayBroadcaster(params: { clients: Set<GatewayWsClient>
       }
       logWs("out", "event", logMeta);
     }
+    // [DEBUG] Log broadcast events (skip tick and assistant text-delta to reduce noise)
+    const debugSkip =
+      event === "tick" ||
+      (event === "agent" && (payload as Record<string, unknown> | null)?.stream === "assistant");
+    if (!debugSkip) {
+      const agentSummary = event === "agent" ? summarizeAgentEventForWsLog(payload) : {};
+      const payloadPreview =
+        event === "agent"
+          ? JSON.stringify(agentSummary)
+          : JSON.stringify(payload ?? null).slice(0, 300);
+      console.log(
+        `[WS:DEBUG] \u2500\u2500 BROADCAST \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500`,
+      );
+      console.log(`[WS:DEBUG] event    = ${event}`);
+      console.log(`[WS:DEBUG] seq      = ${eventSeq ?? "targeted"}`);
+      console.log(`[WS:DEBUG] clients  = ${params.clients.size}`);
+      console.log(`[WS:DEBUG] payload  = ${payloadPreview}`);
+    }
     for (const c of params.clients) {
       if (targetConnIds && !targetConnIds.has(c.connId)) {
         continue;
