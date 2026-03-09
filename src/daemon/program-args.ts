@@ -167,8 +167,12 @@ async function resolveCliProgramArguments(params: {
   const runtime = params.runtime ?? "auto";
 
   if (runtime === "node") {
-    const nodePath =
+    const resolvedNodePath =
       params.nodePath ?? (isNodeRuntime(execPath) ? execPath : await resolveNodePath());
+    // launchd resolves ProgramArguments[0] before applying EnvironmentVariables,
+    // so a bare "node" will fail even when PATH is set in the plist. Ensure the
+    // runtime path is always absolute; fall back to process.execPath if not.
+    const nodePath = path.isAbsolute(resolvedNodePath) ? resolvedNodePath : execPath;
     const cliEntrypointPath = await resolveCliEntrypointPathForService();
     return {
       programArguments: [nodePath, cliEntrypointPath, ...params.args],

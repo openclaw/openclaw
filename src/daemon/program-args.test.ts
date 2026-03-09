@@ -65,6 +65,40 @@ describe("resolveGatewayProgramArguments", () => {
     expect(result.programArguments[1]).not.toContain("@2026.1.21-2");
   });
 
+  it("falls back to process.execPath when nodePath is not absolute", async () => {
+    // launchd resolves ProgramArguments[0] before EnvironmentVariables, so a
+    // bare "node" would fail. The fix ensures a non-absolute nodePath is
+    // replaced with process.execPath.
+    const entryPath = path.resolve("/usr/local/lib/node_modules/openclaw/dist/entry.js");
+    process.argv = ["node", entryPath];
+    fsMocks.realpath.mockResolvedValue(entryPath);
+    fsMocks.access.mockResolvedValue(undefined);
+
+    const result = await resolveGatewayProgramArguments({
+      port: 18789,
+      runtime: "node",
+      nodePath: "node", // bare name, not absolute
+    });
+
+    expect(path.isAbsolute(result.programArguments[0]!)).toBe(true);
+    expect(result.programArguments[0]).toBe(process.execPath);
+  });
+
+  it("uses provided absolute nodePath when runtime is node", async () => {
+    const entryPath = path.resolve("/usr/local/lib/node_modules/openclaw/dist/entry.js");
+    process.argv = ["node", entryPath];
+    fsMocks.realpath.mockResolvedValue(entryPath);
+    fsMocks.access.mockResolvedValue(undefined);
+
+    const result = await resolveGatewayProgramArguments({
+      port: 18789,
+      runtime: "node",
+      nodePath: "/opt/homebrew/bin/node",
+    });
+
+    expect(result.programArguments[0]).toBe("/opt/homebrew/bin/node");
+  });
+
   it("falls back to node_modules package dist when .bin path is not resolved", async () => {
     const argv1 = path.resolve("/tmp/.npm/_npx/63c3/node_modules/.bin/openclaw");
     const indexPath = path.resolve("/tmp/.npm/_npx/63c3/node_modules/openclaw/dist/index.js");
