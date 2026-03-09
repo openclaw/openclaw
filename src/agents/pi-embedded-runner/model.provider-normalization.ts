@@ -76,7 +76,7 @@ function normalizeOpenAICodexTransport(params: {
   const normalizedBaseUrl = normalizeOpenAICodexBaseUrl(params.model.baseUrl);
   const nextBaseUrl =
     nextApi === "openai-codex-responses"
-      ? normalizedBaseUrl ?? params.model.baseUrl ?? OPENAI_CODEX_BASE_URL
+      ? (normalizedBaseUrl ?? params.model.baseUrl ?? OPENAI_CODEX_BASE_URL)
       : params.model.baseUrl;
 
   if (nextApi === params.model.api && nextBaseUrl === params.model.baseUrl) {
