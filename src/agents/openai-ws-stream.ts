@@ -604,7 +604,7 @@ export function createOpenAIWebSocketStreamFn(
         ...(prevResponseId ? { previous_response_id: prevResponseId } : {}),
         ...extraParams,
       };
-      options?.onPayload?.(payload, model);
+      options?.onPayload?.(payload);
 
       try {
         session.manager.send(payload as Parameters<OpenAIWebSocketManager["send"]>[0]);
