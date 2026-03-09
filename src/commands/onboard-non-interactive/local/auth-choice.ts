@@ -715,7 +715,7 @@ export async function applyNonInteractiveAuthChoice(params: {
   if (authChoice === "moonshot-api-key") {
     return await applyMoonshotApiKeyChoice(applyMoonshotConfig);
   }
-  
+
   if (authChoice === "sambanova-api-key") {
     const resolved = await resolveNonInteractiveApiKey({
       provider: "sambanova",
@@ -737,6 +737,7 @@ export async function applyNonInteractiveAuthChoice(params: {
       mode: "api_key",
     });
     return applySambanovaConfig(nextConfig);
+  }
 
   if (authChoice === "moonshot-api-key-cn") {
     return await applyMoonshotApiKeyChoice(applyMoonshotConfigCn);
