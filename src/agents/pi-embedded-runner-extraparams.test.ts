@@ -1982,7 +1982,7 @@ describe("applyExtraParamsToAgent", () => {
     void agent.streamFn?.(model, context, {});
 
     expect(calls).toHaveLength(1);
-    expect(calls[0]?.temperature).toBe(0.2);
+    expect(calls[0]?.temperature).toBe(0.1);
   });
 
   it("preserves explicit configured temperatures over dynamic tool defaults", () => {

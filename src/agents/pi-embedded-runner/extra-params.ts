@@ -33,7 +33,7 @@ import {
 } from "./proxy-stream-wrappers.js";
 
 const DEFAULT_TOOL_TEMPERATURE = 0.3;
-const DEFAULT_EXECUTION_TOOL_TEMPERATURE = 0.2;
+const DEFAULT_EXECUTION_TOOL_TEMPERATURE = 0.1;
 const EXECUTION_TOOL_NAMES = new Set([
   "apply_patch",
   "bash",
