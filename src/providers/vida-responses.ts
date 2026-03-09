@@ -5,6 +5,7 @@ import {
   registerApiProvider,
   supportsXhigh,
 } from "@mariozechner/pi-ai";
+import fs from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
 import {
@@ -83,7 +84,7 @@ export const streamVidaResponses = (
       stream.push({ type: "done", reason: output.stopReason, message: output });
       stream.end();
     } catch (error) {
-      for (const block of output.content) delete block.index;
+      for (const block of output.content) {delete block.index;}
       output.stopReason = options?.signal?.aborted ? "aborted" : "error";
       output.errorMessage = error instanceof Error ? error.message : JSON.stringify(error);
       stream.push({ type: "error", reason: output.stopReason, error: output });
@@ -160,15 +161,44 @@ async function createClient(
 
 async function loadOpenAIClient(): Promise<any> {
   const require = createRequire(import.meta.url);
-  let resolved: string;
-  try {
-    resolved = require.resolve("openai");
-  } catch {
-    const piAiRoot = path.dirname(require.resolve("@mariozechner/pi-ai/package.json"));
-    resolved = require.resolve("openai", { paths: [piAiRoot] });
-  }
+  const resolved = resolveOpenAIClientPath(require);
   const mod = await import(resolved);
   return mod.default ?? mod;
+}
+
+type ModuleResolver = Pick<NodeJS.Require, "resolve">;
+
+function resolveOpenAIClientPath(require: ModuleResolver): string {
+  try {
+    return require.resolve("openai");
+  } catch {
+    const piAiEntry = require.resolve("@mariozechner/pi-ai");
+    const piAiRoot = resolvePackageRootFromEntry(piAiEntry, "@mariozechner/pi-ai");
+    return require.resolve("openai", { paths: [piAiRoot] });
+  }
+}
+
+function resolvePackageRootFromEntry(entryPath: string, packageName: string): string {
+  let current = path.dirname(entryPath);
+  while (true) {
+    const packageJsonPath = path.join(current, "package.json");
+    if (fs.existsSync(packageJsonPath)) {
+      try {
+        const raw = fs.readFileSync(packageJsonPath, "utf8");
+        const pkg = JSON.parse(raw) as { name?: unknown };
+        if (pkg.name === packageName) {
+          return current;
+        }
+      } catch {
+        // Ignore parse/read failures while walking upward.
+      }
+    }
+    const parent = path.dirname(current);
+    if (parent === current) {
+      throw new Error(`Unable to resolve package root for ${packageName} from ${entryPath}`);
+    }
+    current = parent;
+  }
 }
 
 function buildParams(model: any, context: any, options?: any): any {
@@ -236,6 +266,11 @@ export function buildVidaResponsesParamsForTest(model: any, context: any, option
   return buildParams(model, context, options);
 }
 
+/** @internal Exported for provider resolution tests. */
+export function resolveVidaResponsesOpenAIPathForTest(require: ModuleResolver): string {
+  return resolveOpenAIClientPath(require);
+}
+
 function getServiceTierCostMultiplier(serviceTier?: string): number {
   switch (serviceTier) {
     case "flex":
@@ -249,7 +284,7 @@ function getServiceTierCostMultiplier(serviceTier?: string): number {
 
 function applyServiceTierPricing(usage: any, serviceTier?: string): void {
   const multiplier = getServiceTierCostMultiplier(serviceTier);
-  if (multiplier === 1) return;
+  if (multiplier === 1) {return;}
   usage.cost.input *= multiplier;
   usage.cost.output *= multiplier;
   usage.cost.cacheRead *= multiplier;
@@ -284,9 +319,9 @@ function asRecord(value: unknown): Record<string, unknown> | undefined {
 }
 
 function normalizeReasoningEffort(value: unknown): string | undefined {
-  if (typeof value !== "string") return undefined;
+  if (typeof value !== "string") {return undefined;}
   const normalized = value.trim().toLowerCase();
-  if (!VALID_REASONING_EFFORTS.has(normalized)) return undefined;
+  if (!VALID_REASONING_EFFORTS.has(normalized)) {return undefined;}
   return normalized;
 }
 
@@ -316,7 +351,7 @@ function resolveRelayProviderMetadata(context: any, options?: any): Record<strin
 
 function hasVidaRelayFlag(metadata: Record<string, unknown>): boolean {
   const direct = metadata["vida.ignoreOnProviderRelay"];
-  if (direct === true || direct === "true" || direct === 1 || direct === "1") return true;
+  if (direct === true || direct === "true" || direct === 1 || direct === "1") {return true;}
   const vida = asRecord(metadata.vida);
   const nested = vida?.ignoreOnProviderRelay;
   return nested === true || nested === "true" || nested === 1 || nested === "1";
@@ -328,7 +363,7 @@ function resolveRelayReasoningEffort(
 ): string | undefined {
   const vida = asRecord(metadata?.vida);
   const rawEffort = normalizeReasoningEffort(vida?.reasoningEffort);
-  if (!rawEffort) return undefined;
+  if (!rawEffort) {return undefined;}
   if (supportsXhigh(model)) {
     return rawEffort;
   }
@@ -338,7 +373,7 @@ function resolveRelayReasoningEffort(
 let registered = false;
 
 export function registerVidaResponsesProvider(): void {
-  if (registered) return;
+  if (registered) {return;}
   registerApiProvider(
     {
       api: "vida-responses",
