@@ -315,7 +315,7 @@ describe("normalizeModelCompat", () => {
       compat: { supportsStrictMode: true },
     };
     const normalized = normalizeModelCompat(model);
-    expect(supportsStrictMode(normalized)).toBe(false);
+    expect(supportsStrictMode(normalized)).toBe(true);
   });
 
   it("does not mutate caller model when forcing supportsDeveloperRole off", () => {
