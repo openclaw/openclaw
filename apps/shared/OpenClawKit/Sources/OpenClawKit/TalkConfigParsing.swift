@@ -26,19 +26,9 @@ public enum TalkConfigParsing {
         if let resolvedSelection = self.resolvedProviderConfig(talk) {
             return resolvedSelection
         }
-        let rawProvider = talk["provider"]?.stringValue
-        let rawProviders = talk["providers"]
-        let hasNormalizedPayload = rawProvider != nil || rawProviders != nil
+        let hasNormalizedPayload = talk["provider"] != nil || talk["providers"] != nil
         if hasNormalizedPayload {
-            let normalizedProviders = self.normalizedTalkProviders(rawProviders)
-            let providerID =
-                self.normalizedTalkProviderID(rawProvider) ??
-                normalizedProviders.keys.min() ??
-                defaultProvider
-            return TalkProviderConfigSelection(
-                provider: providerID,
-                config: normalizedProviders[providerID] ?? [:],
-                normalizedPayload: true)
+            return nil
         }
         guard allowLegacyFallback else { return nil }
         return TalkProviderConfigSelection(
@@ -82,16 +72,5 @@ public enum TalkConfigParsing {
             provider: providerID,
             config: resolved["config"]?.dictionaryValue ?? [:],
             normalizedPayload: true)
-    }
-
-    private static func normalizedTalkProviders(_ raw: AnyCodable?) -> [String: [String: AnyCodable]] {
-        guard let providerMap = raw?.dictionaryValue else { return [:] }
-        return providerMap.reduce(into: [String: [String: AnyCodable]]()) { acc, entry in
-            guard
-                let providerID = self.normalizedTalkProviderID(entry.key),
-                let providerConfig = entry.value.dictionaryValue
-            else { return }
-            acc[providerID] = providerConfig
-        }
     }
 }
