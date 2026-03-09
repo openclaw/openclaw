@@ -26,12 +26,11 @@ export async function handleWhatsAppLogout(host: OpenClawApp) {
 
 export async function handleChannelConfigSave(host: OpenClawApp) {
   await saveConfig(host);
-  await loadConfig(host);
   await loadChannels(host, true);
 }
 
 export async function handleChannelConfigReload(host: OpenClawApp) {
-  await loadConfig(host);
+  await loadConfig(host, { discardPendingEdits: true });
   await loadChannels(host, true);
 }
 
@@ -164,11 +163,15 @@ export async function handleNostrProfileSave(host: OpenClawApp) {
       details?: unknown;
       persisted?: boolean;
     } | null;
+    const currentState = host.nostrProfileFormState;
+    if (!currentState) {
+      return;
+    }
 
     if (!response.ok || data?.ok === false || !data) {
       const errorMessage = data?.error ?? `Profile update failed (${response.status})`;
       host.nostrProfileFormState = {
-        ...state,
+        ...currentState,
         saving: false,
         error: errorMessage,
         success: null,
@@ -179,7 +182,7 @@ export async function handleNostrProfileSave(host: OpenClawApp) {
 
     if (!data.persisted) {
       host.nostrProfileFormState = {
-        ...state,
+        ...currentState,
         saving: false,
         error: "Profile publish failed on all relays.",
         success: null,
@@ -188,17 +191,21 @@ export async function handleNostrProfileSave(host: OpenClawApp) {
     }
 
     host.nostrProfileFormState = {
-      ...state,
+      ...currentState,
       saving: false,
       error: null,
       success: "Profile published to relays.",
       fieldErrors: {},
-      original: { ...state.values },
+      original: { ...currentState.values },
     };
     await loadChannels(host, true);
   } catch (err) {
+    const currentState = host.nostrProfileFormState;
+    if (!currentState) {
+      return;
+    }
     host.nostrProfileFormState = {
-      ...state,
+      ...currentState,
       saving: false,
       error: `Profile update failed: ${String(err)}`,
       success: null,
@@ -236,11 +243,15 @@ export async function handleNostrProfileImport(host: OpenClawApp) {
       merged?: NostrProfile;
       saved?: boolean;
     } | null;
+    const currentState = host.nostrProfileFormState;
+    if (!currentState) {
+      return;
+    }
 
     if (!response.ok || data?.ok === false || !data) {
       const errorMessage = data?.error ?? `Profile import failed (${response.status})`;
       host.nostrProfileFormState = {
-        ...state,
+        ...currentState,
         importing: false,
         error: errorMessage,
         success: null,
@@ -249,13 +260,13 @@ export async function handleNostrProfileImport(host: OpenClawApp) {
     }
 
     const merged = data.merged ?? data.imported ?? null;
-    const nextValues = merged ? { ...state.values, ...merged } : state.values;
+    const nextValues = merged ? { ...currentState.values, ...merged } : currentState.values;
     const showAdvanced = Boolean(
       nextValues.banner || nextValues.website || nextValues.nip05 || nextValues.lud16,
     );
 
     host.nostrProfileFormState = {
-      ...state,
+      ...currentState,
       importing: false,
       values: nextValues,
       error: null,
@@ -269,8 +280,12 @@ export async function handleNostrProfileImport(host: OpenClawApp) {
       await loadChannels(host, true);
     }
   } catch (err) {
+    const currentState = host.nostrProfileFormState;
+    if (!currentState) {
+      return;
+    }
     host.nostrProfileFormState = {
-      ...state,
+      ...currentState,
       importing: false,
       error: `Profile import failed: ${String(err)}`,
       success: null,

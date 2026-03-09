@@ -711,7 +711,7 @@ export function renderApp(state: AppViewState) {
                     removeConfigFormValue(state, [...basePath, "deny"]);
                   }
                 },
-                onConfigReload: () => loadConfig(state),
+                onConfigReload: () => loadConfig(state, { discardPendingEdits: true }),
                 onConfigSave: () => saveAgentsConfig(state),
                 onChannelsRefresh: () => loadChannels(state, false),
                 onCronRefresh: () => state.loadCron(),
@@ -1064,7 +1064,7 @@ export function renderApp(state: AppViewState) {
                   state.configActiveSubsection = null;
                 },
                 onSubsectionChange: (section) => (state.configActiveSubsection = section),
-                onReload: () => loadConfig(state),
+                onReload: () => loadConfig(state, { discardPendingEdits: true }),
                 onSave: () => saveConfig(state),
                 onApply: () => applyConfig(state),
                 onUpdate: () => runUpdate(state),
