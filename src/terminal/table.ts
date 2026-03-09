@@ -20,6 +20,27 @@ export type RenderTableOptions = {
   border?: "unicode" | "ascii" | "none";
 };
 
+function resolveDefaultBorder(
+  platform: NodeJS.Platform,
+  env: NodeJS.ProcessEnv,
+): "unicode" | "ascii" {
+  if (platform !== "win32") {
+    return "unicode";
+  }
+
+  const term = env.TERM ?? "";
+  const termProgram = env.TERM_PROGRAM ?? "";
+
+  const isModernTerminal =
+    !!env.WT_SESSION ||
+    term.includes("xterm") ||
+    term.includes("cygwin") ||
+    term.includes("msys") ||
+    termProgram === "vscode";
+
+  return isModernTerminal ? "unicode" : "ascii";
+}
+
 function repeat(ch: string, n: number): string {
   if (n <= 0) {
     return "";
@@ -239,7 +260,7 @@ export function renderTable(opts: RenderTableOptions): string {
     }
     return next;
   });
-  const border = opts.border ?? "unicode";
+  const border = opts.border ?? resolveDefaultBorder(process.platform, process.env);
   if (border === "none") {
     const columns = opts.columns;
     const header = columns.map((c) => c.header).join(" | ");
