@@ -56,7 +56,7 @@ describe("diagnoseFeishuChannel", () => {
     };
     const result = await diagnoseFeishuChannel(cfg);
 
-    expect(result.issues).toContainEqual(expect.stringContaining("Missing A PPI or AppSecret"));
+    expect(result.issues).toContainEqual(expect.stringContaining("Missing AppID or AppSecret"));
   });
 
   it("should detect allowlist mode without groupAllowFrom", async () => {
@@ -67,8 +67,7 @@ describe("diagnoseFeishuChannel", () => {
           accounts: {
             admin: {
               appId: "test_app_id",
-              // pragma: allowlist secret
-              appSecret: "test_secret",
+              appSecret: "test_secret", // pragma: allowlist secret
             },
             default: {
               groupPolicy: "allowlist",
@@ -93,8 +92,7 @@ describe("diagnoseFeishuChannel", () => {
           accounts: {
             admin: {
               appId: "test_app_id",
-              // pragma: allowlist secret
-              appSecret: "test_secret",
+              appSecret: "test_secret", // pragma: allowlist secret
             },
             default: {
               groupPolicy: "open",
@@ -116,8 +114,7 @@ describe("diagnoseFeishuChannel", () => {
           accounts: {
             admin: {
               appId: "test_app_id",
-              // pragma: allowlist secret
-              appSecret: "test_secret",
+              appSecret: "test_secret", // pragma: allowlist secret
             },
             default: {
               groupPolicy: "allowlist",
@@ -149,8 +146,7 @@ describe("diagnoseFeishuChannel", () => {
           accounts: {
             admin: {
               appId: "test_app_id",
-              // pragma: allowlist secret
-              appSecret: "test_secret",
+              appSecret: "test_secret", // pragma: allowlist secret
             },
             default: {
               groupPolicy: "allowlist",
@@ -185,8 +181,7 @@ describe("diagnoseFeishuChannel", () => {
           accounts: {
             admin: {
               appId: "test_app_id",
-              // pragma: allowlist secret
-              appSecret: "test_secret",
+              appSecret: "test_secret", // pragma: allowlist secret
             },
           },
           connectionMode: "webhook",
