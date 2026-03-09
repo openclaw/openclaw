@@ -1,5 +1,9 @@
 import { describe, it, expect } from "vitest";
-import { extractInboundSenderLabel, stripInboundMetadata } from "./strip-inbound-meta.js";
+import {
+  extractInboundSenderLabel,
+  stripInboundMetadata,
+  stripLeadingInboundMetadata,
+} from "./strip-inbound-meta.js";
 
 const CONV_BLOCK = `Conversation info (untrusted metadata):
 \`\`\`json
@@ -32,6 +36,15 @@ UNTRUSTED channel metadata (discord)
 Sender labels:
 example
 <<<END_EXTERNAL_UNTRUSTED_CONTENT id="deadbeefdeadbeef">>>`;
+
+const SESSION_RECAP_BLOCK = `<session-recap>
+<summary>Found 10 recent items across 3 categories</summary>
+<ledger-items count="2">
+  <item path="ledger/2026-03-09.md">
+    <title>ledger/2026-03-09.md</title>
+  </item>
+</ledger-items>
+</session-recap>`;
 
 describe("stripInboundMetadata", () => {
   it("fast-path: returns same string when no sentinels present", () => {
@@ -117,6 +130,38 @@ Real user content`;
 name: test
 Hello from user`;
     expect(stripInboundMetadata(input)).toBe(input);
+  });
+
+  it("strips a leading session recap block", () => {
+    const input = `${SESSION_RECAP_BLOCK}\n\nActual user message`;
+    expect(stripInboundMetadata(input)).toBe("Actual user message");
+  });
+
+  it("does not strip session recap text that appears mid-message", () => {
+    const input = `Hello world\n${SESSION_RECAP_BLOCK}\n\nFollow-up`;
+    expect(stripInboundMetadata(input)).toBe(input);
+  });
+
+  it("does not strip a malformed leading session recap block without a closing tag", () => {
+    const input = `<session-recap>\n<summary>Found 10 recent items across 3 categories</summary>\n\nActual user message`;
+    expect(stripInboundMetadata(input)).toBe(input);
+  });
+});
+
+describe("stripLeadingInboundMetadata", () => {
+  it("strips a leading session recap block", () => {
+    const input = `${SESSION_RECAP_BLOCK}\n\nActual user message`;
+    expect(stripLeadingInboundMetadata(input)).toBe("Actual user message");
+  });
+
+  it("does not strip session recap text that appears mid-message", () => {
+    const input = `Hello world\n${SESSION_RECAP_BLOCK}\n\nFollow-up`;
+    expect(stripLeadingInboundMetadata(input)).toBe(input);
+  });
+
+  it("does not strip a malformed leading session recap block without a closing tag", () => {
+    const input = `<session-recap>\n<summary>Found 10 recent items across 3 categories</summary>\n\nActual user message`;
+    expect(stripLeadingInboundMetadata(input)).toBe(input);
   });
 });
 

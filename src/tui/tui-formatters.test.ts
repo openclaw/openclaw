@@ -8,6 +8,10 @@ import {
 } from "./tui-formatters.js";
 
 describe("extractTextFromMessage", () => {
+  const SESSION_RECAP_BLOCK = `<session-recap>
+<summary>Found 10 recent items across 3 categories</summary>
+</session-recap>`;
+
   it("renders errorMessage when assistant content is empty", () => {
     const text = extractTextFromMessage({
       role: "assistant",
@@ -162,6 +166,25 @@ example
     });
 
     expect(text).toBe("Hello world");
+  });
+
+  it("strips a leading session recap block for user messages", () => {
+    const text = extractTextFromMessage({
+      role: "user",
+      content: `${SESSION_RECAP_BLOCK}\n\nActual user message`,
+    });
+
+    expect(text).toBe("Actual user message");
+  });
+
+  it("preserves session recap text when it appears mid-message", () => {
+    const content = `Hello world\n${SESSION_RECAP_BLOCK}\n\nFollow-up`;
+    const text = extractTextFromMessage({
+      role: "user",
+      content,
+    });
+
+    expect(text).toBe(content);
   });
 });
 
