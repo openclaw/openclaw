@@ -321,8 +321,15 @@ function normalizeToolNames(value: unknown): string[] {
 function resolveDynamicTemperature(params: {
   merged: Record<string, unknown>;
   override?: Record<string, unknown>;
+  thinkingLevel?: ThinkLevel;
 }): number | undefined {
   if (typeof params.merged.temperature === "number") {
+    return undefined;
+  }
+  if (
+    params.merged.thinking ||
+    (params.thinkingLevel && params.thinkingLevel !== "off" && params.thinkingLevel !== "none")
+  ) {
     return undefined;
   }
   const toolNames = normalizeToolNames(params.override?.availableToolNames);
@@ -394,13 +401,19 @@ export function applyExtraParamsToAgent(
         )
       : undefined;
   const merged = Object.assign({}, resolvedExtraParams, override);
-  const dynamicTemperature = resolveDynamicTemperature({ merged, override });
+  const dynamicTemperature = resolveDynamicTemperature({ merged, override, thinkingLevel });
   if (dynamicTemperature !== undefined) {
     merged.temperature = dynamicTemperature;
     log.debug(
       `applying dynamic temperature=${dynamicTemperature} for ${provider}/${modelId} based on available tools`,
     );
   }
+
+  // availableToolNames is used strictly for dynamic temperature resolution.
+  // We must strip it before passing it to the stream parameters to prevent
+  // unintended cache behavior overrides (e.g., Anthropic short cache).
+  delete merged.availableToolNames;
+
   const wrappedStreamFn = createStreamFnWithExtraParams(agent.streamFn, merged, provider);
 
   if (wrappedStreamFn) {
