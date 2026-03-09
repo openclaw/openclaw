@@ -280,13 +280,25 @@ function isRootManifestEntry(entryPath: string): boolean {
   return parts.length === 2 && parts[0] !== "" && parts[1] === "manifest.json";
 }
 
-function verifyManifestAgainstEntries(manifest: BackupManifest, entries: Set<string>): void {
+function isFileAssetKind(kind: string): boolean {
+  return kind === "config";
+}
+
+function isFileArchiveEntryType(type: string): boolean {
+  return type === "File" || type === "OldFile" || type === "ContiguousFile";
+}
+
+function verifyManifestAgainstEntries(
+  manifest: BackupManifest,
+  entries: ArchiveEntryRecord[],
+  entrySet: Set<string>,
+): void {
   const archiveRoot = normalizeArchiveRoot(manifest.archiveRoot);
   const manifestEntryPath = path.posix.join(archiveRoot, "manifest.json");
-  const normalizedEntries = [...entries];
-  const normalizedEntrySet = new Set(normalizedEntries);
+  const normalizedEntries = entries.map((entry) => entry.normalized);
+  const entryByPath = new Map(entries.map((entry) => [entry.normalized, entry]));
 
-  if (!normalizedEntrySet.has(manifestEntryPath)) {
+  if (!entrySet.has(manifestEntryPath)) {
     throw new Error(`Archive is missing manifest entry: ${manifestEntryPath}`);
   }
 
@@ -302,10 +314,20 @@ function verifyManifestAgainstEntries(manifest: BackupManifest, entries: Set<str
     if (!isArchivePathWithin(assetArchivePath, payloadRoot)) {
       throw new Error(`Manifest asset path is outside payload root: ${asset.archivePath}`);
     }
-    const exact = normalizedEntrySet.has(assetArchivePath);
+    const exactEntry = entryByPath.get(assetArchivePath);
+    const exact = Boolean(exactEntry);
     const nested = normalizedEntries.some(
       (entry) => entry !== assetArchivePath && isArchivePathWithin(entry, assetArchivePath),
     );
+    if (isFileAssetKind(asset.kind)) {
+      if (!exact || !exactEntry || !isFileArchiveEntryType(exactEntry.type) || nested) {
+        throw new Error(
+          `Archive is missing exact file payload for manifest asset: ${assetArchivePath}`,
+        );
+      }
+      continue;
+    }
+
     if (!exact && !nested) {
       throw new Error(`Archive is missing payload for manifest asset: ${assetArchivePath}`);
     }
@@ -376,7 +398,7 @@ export async function readVerifiedBackupArchive(
     throw new Error(`Archive is missing manifest entry: ${manifestEntryPath}`);
   }
   const manifest = parseManifest(manifestRaw);
-  verifyManifestAgainstEntries(manifest, normalizedEntrySet);
+  verifyManifestAgainstEntries(manifest, entries, normalizedEntrySet);
 
   return {
     archivePath,

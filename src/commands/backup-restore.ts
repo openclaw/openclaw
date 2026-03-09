@@ -128,6 +128,85 @@ function normalizeConfigWorkspacePath(value: string): string {
   return path.resolve(resolveUserPath(value));
 }
 
+function toArchiveSubpath(relativePath: string): string {
+  return relativePath.replaceAll("\\", "/");
+}
+
+function buildCoveredAssetArchivePath(params: {
+  coveredSourcePath: string;
+  backupStateDir: string | undefined;
+  stateArchivePath: string | undefined;
+}): string | undefined {
+  if (!params.backupStateDir || !params.stateArchivePath) {
+    return undefined;
+  }
+
+  const backupStateAliases = buildPathAliases(path.resolve(params.backupStateDir));
+  const coveredSourceAliases = buildPathAliases(path.resolve(params.coveredSourcePath));
+
+  for (const backupStateAlias of backupStateAliases) {
+    for (const coveredSourceAlias of coveredSourceAliases) {
+      if (!isPathWithin(coveredSourceAlias, backupStateAlias)) {
+        continue;
+      }
+
+      const relative = path.relative(backupStateAlias, coveredSourceAlias);
+      if (!relative || relative.startsWith("..") || path.isAbsolute(relative)) {
+        continue;
+      }
+
+      return path.posix.join(params.stateArchivePath, toArchiveSubpath(relative));
+    }
+  }
+  return undefined;
+}
+
+function buildCoveredAssetManifestEntries(
+  manifest: Awaited<ReturnType<typeof readVerifiedBackupArchive>>["manifest"],
+): BackupManifestAsset[] {
+  const supportedCoveredKinds: BackupAssetKind[] = ["config", "credentials"];
+  const explicitKinds = new Set(manifest.assets.map((asset) => asset.kind));
+  const stateAssetArchivePath = manifest.assets.find(
+    (asset) => asset.kind === "state",
+  )?.archivePath;
+  const coveredEntries = Array.isArray(manifest.skipped) ? manifest.skipped : [];
+  const synthesized: BackupManifestAsset[] = [];
+
+  for (const kind of supportedCoveredKinds) {
+    if (explicitKinds.has(kind)) {
+      continue;
+    }
+
+    const coveredEntry = coveredEntries.find(
+      (entry) =>
+        entry?.kind === kind &&
+        entry?.reason === "covered" &&
+        typeof entry?.sourcePath === "string" &&
+        entry.sourcePath.trim().length > 0,
+    );
+    if (!coveredEntry || typeof coveredEntry.sourcePath !== "string") {
+      continue;
+    }
+
+    const archivePath = buildCoveredAssetArchivePath({
+      coveredSourcePath: coveredEntry.sourcePath,
+      backupStateDir: manifest.paths?.stateDir,
+      stateArchivePath: stateAssetArchivePath,
+    });
+    if (!archivePath) {
+      continue;
+    }
+
+    synthesized.push({
+      kind,
+      sourcePath: coveredEntry.sourcePath,
+      archivePath,
+    });
+  }
+
+  return synthesized;
+}
+
 function buildPathAliases(inputPath: string): string[] {
   const resolved = path.resolve(inputPath);
   const aliases = new Set([resolved]);
@@ -291,12 +370,13 @@ async function buildRestoreItems(params: {
         currentStateDir,
       })
     : new Map<string, string>();
+  const restorableAssets = [...manifest.assets, ...buildCoveredAssetManifestEntries(manifest)];
 
   const items: BackupRestoreItem[] = [];
   const skipped: BackupRestoreSkipped[] = [];
   const workspaceRewrites = new Map<string, string>();
 
-  for (const asset of manifest.assets) {
+  for (const asset of restorableAssets) {
     if (!isKnownBackupKind(asset.kind)) {
       throw new Error(`Unsupported backup asset kind: ${asset.kind}`);
     }

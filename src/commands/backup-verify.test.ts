@@ -112,6 +112,57 @@ describe("backupVerifyCommand", () => {
     }
   });
 
+  it("fails when a config asset payload is only present as a nested path", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-backup-config-nested-"));
+    const archivePath = path.join(tempDir, "broken.tar.gz");
+    try {
+      const rootName = "2026-03-09T00-00-00.000Z-openclaw-backup";
+      const root = path.join(tempDir, rootName);
+      const nestedPayloadDir = path.join(
+        root,
+        "payload",
+        "posix",
+        "tmp",
+        ".openclaw",
+        "openclaw.json",
+      );
+      await fs.mkdir(nestedPayloadDir, { recursive: true });
+      await fs.writeFile(path.join(nestedPayloadDir, "child.txt"), "x\n", "utf8");
+      const manifest = {
+        schemaVersion: 1,
+        createdAt: "2026-03-09T00:00:00.000Z",
+        archiveRoot: rootName,
+        runtimeVersion: "test",
+        platform: process.platform,
+        nodeVersion: process.version,
+        assets: [
+          {
+            kind: "config",
+            sourcePath: "/tmp/.openclaw/openclaw.json",
+            archivePath: `${rootName}/payload/posix/tmp/.openclaw/openclaw.json`,
+          },
+        ],
+      };
+      await fs.writeFile(
+        path.join(root, "manifest.json"),
+        `${JSON.stringify(manifest, null, 2)}\n`,
+      );
+      await tar.c({ file: archivePath, gzip: true, cwd: tempDir }, [rootName]);
+
+      const runtime = {
+        log: vi.fn(),
+        error: vi.fn(),
+        exit: vi.fn(),
+      };
+
+      await expect(backupVerifyCommand(runtime, { archive: archivePath })).rejects.toThrow(
+        /missing exact file payload for manifest asset/i,
+      );
+    } finally {
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
   it("fails when archive paths contain traversal segments", async () => {
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-backup-traversal-"));
     const archivePath = path.join(tempDir, "broken.tar.gz");

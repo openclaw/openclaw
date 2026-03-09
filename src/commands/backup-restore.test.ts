@@ -18,7 +18,7 @@ describe("backupRestoreCommand", () => {
     return home;
   }
 
-  function setActiveHome(home: string, configPath?: string): void {
+  function setActiveHome(home: string, configPath?: string, oauthDir?: string): void {
     process.env.HOME = home;
     process.env.USERPROFILE = home;
     process.env.OPENCLAW_STATE_DIR = path.join(home, ".openclaw");
@@ -26,6 +26,11 @@ describe("backupRestoreCommand", () => {
       process.env.OPENCLAW_CONFIG_PATH = configPath;
     } else {
       delete process.env.OPENCLAW_CONFIG_PATH;
+    }
+    if (oauthDir) {
+      process.env.OPENCLAW_OAUTH_DIR = oauthDir;
+    } else {
+      delete process.env.OPENCLAW_OAUTH_DIR;
     }
     clearConfigCache();
   }
@@ -38,6 +43,7 @@ describe("backupRestoreCommand", () => {
 
   afterEach(async () => {
     delete process.env.OPENCLAW_CONFIG_PATH;
+    delete process.env.OPENCLAW_OAUTH_DIR;
     clearConfigCache();
     await sourceHome.restore();
     while (extraHomes.length > 0) {
@@ -105,6 +111,49 @@ describe("backupRestoreCommand", () => {
         path.join(targetHome, "workspace-external"),
       );
       expect(restored.updatedConfigWorkspacePaths).toBe(1);
+    } finally {
+      await fs.rm(archiveDir, { recursive: true, force: true });
+    }
+  });
+
+  it("restores covered config and credentials into active custom targets", async () => {
+    const sourceStateDir = path.join(sourceHome.home, ".openclaw");
+    const archiveDir = await fs.mkdtemp(
+      path.join(os.tmpdir(), "openclaw-backup-restore-covered-targets-"),
+    );
+
+    try {
+      setActiveHome(sourceHome.home);
+      await fs.mkdir(path.join(sourceStateDir, "credentials"), { recursive: true });
+      await fs.writeFile(
+        path.join(sourceStateDir, "openclaw.json"),
+        JSON.stringify({ profile: "from-backup" }),
+        "utf8",
+      );
+      await fs.writeFile(path.join(sourceStateDir, "credentials", "oauth.json"), "{}", "utf8");
+      await fs.writeFile(path.join(sourceStateDir, "state.txt"), "state\n", "utf8");
+
+      const runtime = {
+        log: vi.fn(),
+        error: vi.fn(),
+        exit: vi.fn(),
+      };
+      const created = await backupCreateCommand(runtime, {
+        output: archiveDir,
+        includeWorkspace: false,
+      });
+
+      const targetHome = await createExtraHome("openclaw-backup-restore-covered-target-home-");
+      const targetConfigPath = path.join(targetHome, "custom-config.json");
+      const targetOauthDir = path.join(targetHome, "oauth-dir");
+      setActiveHome(targetHome, targetConfigPath, targetOauthDir);
+
+      await backupRestoreCommand(runtime, {
+        archive: created.archivePath,
+      });
+
+      expect(await fs.readFile(targetConfigPath, "utf8")).toContain("from-backup");
+      expect(await fs.readFile(path.join(targetOauthDir, "oauth.json"), "utf8")).toBe("{}");
     } finally {
       await fs.rm(archiveDir, { recursive: true, force: true });
     }

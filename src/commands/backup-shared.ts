@@ -171,12 +171,8 @@ export async function resolveBackupPlanFromDisk(
 
   const rawCandidates: Array<Pick<BackupAssetCandidate, "kind" | "sourcePath">> = [
     { kind: "state", sourcePath: path.resolve(stateDir) },
-    ...(cleanupPlan.configInsideState
-      ? []
-      : [{ kind: "config" as const, sourcePath: path.resolve(configPath) }]),
-    ...(cleanupPlan.oauthInsideState
-      ? []
-      : [{ kind: "credentials" as const, sourcePath: path.resolve(oauthDir) }]),
+    { kind: "config" as const, sourcePath: path.resolve(configPath) },
+    { kind: "credentials" as const, sourcePath: path.resolve(oauthDir) },
     ...(includeWorkspace
       ? workspaceDirs.map((workspaceDir) => ({
           kind: "workspace" as const,
