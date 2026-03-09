@@ -88,7 +88,7 @@ Per-agent override: `agents.list[].tools.byProvider`.
 This is applied **after** the base tool profile and **before** allow/deny lists,
 so it can only narrow the tool set.
 Provider keys accept either `provider` (e.g. `google-antigravity`) or
-`provider/model` (e.g. `openai/gpt-5.2`).
+`provider/model` (e.g. `openai/gpt-5.4`).
 
 Example (keep global coding profile, but minimal tools for Google Antigravity):
 
@@ -110,7 +110,7 @@ Example (provider/model-specific allowlist for a flaky endpoint):
   tools: {
     allow: ["group:fs", "group:runtime", "sessions_list"],
     byProvider: {
-      "openai/gpt-5.2": { allow: ["group:fs", "sessions_list"] },
+      "openai/gpt-5.4": { allow: ["group:fs", "sessions_list"] },
     },
   },
 }

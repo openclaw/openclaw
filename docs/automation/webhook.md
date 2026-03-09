@@ -71,7 +71,7 @@ Payload:
   "deliver": true,
   "channel": "last",
   "to": "+15551234567",
-  "model": "openai/gpt-5.2-mini",
+  "model": "openai/gpt-5-mini",
   "thinking": "low",
   "timeoutSeconds": 120
 }
@@ -189,7 +189,7 @@ Add `model` to the agent payload (or mapping) to override the model for that run
 curl -X POST http://127.0.0.1:18789/hooks/agent \
   -H 'x-openclaw-token: SECRET' \
   -H 'Content-Type: application/json' \
-  -d '{"message":"Summarize inbox","name":"Email","model":"openai/gpt-5.2-mini"}'
+  -d '{"message":"Summarize inbox","name":"Email","model":"openai/gpt-5-mini"}'
 ```
 
 If you enforce `agents.defaults.models`, make sure the override model is included there.

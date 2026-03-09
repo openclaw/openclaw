@@ -49,7 +49,7 @@ that sets `deliver` + optional `channel`/`to`:
         name: "Gmail",
         sessionKey: "hook:gmail:{{messages[0].id}}",
         messageTemplate: "New email from {{messages[0].from}}\nSubject: {{messages[0].subject}}\n{{messages[0].snippet}}\n{{messages[0].body}}",
-        model: "openai/gpt-5.2-mini",
+        model: "openai/gpt-5-mini",
         deliver: true,
         channel: "last",
         // to: "+15551234567"

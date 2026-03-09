@@ -1992,7 +1992,7 @@ Models are referenced as `provider/model` (example: `anthropic/claude-opus-4-6`)
 
 **Recommended default:** `anthropic/claude-opus-4-6`.
 **Good alternative:** `anthropic/claude-sonnet-4-5`.
-**Reliable (less character):** `openai/gpt-5.2` - nearly as good as Opus, just less personality.
+**Reliable (less character):** `openai/gpt-5.4` - strong general-purpose OpenAI default.
 **Budget:** `zai/glm-4.7`.
 
 MiniMax M2.1 has its own docs: [MiniMax](/providers/minimax) and
@@ -2085,12 +2085,12 @@ Re-run `/model` **without** the `@profile` suffix:
 If you want to return to the default, pick it from `/model` (or send `/model <default provider/model>`).
 Use `/model status` to confirm which auth profile is active.
 
-### Can I use GPT 5.2 for daily tasks and Codex 5.3 for coding
+### Can I use GPT 5.4 for daily tasks and Codex 5.3 for coding
 
 Yes. Set one as default and switch as needed:
 
-- **Quick switch (per session):** `/model gpt-5.2` for daily tasks, `/model gpt-5.3-codex` for coding.
-- **Default + switch:** set `agents.defaults.model.primary` to `openai/gpt-5.2`, then switch to `openai-codex/gpt-5.3-codex` when coding (or the other way around).
+- **Quick switch (per session):** `/model gpt-5.4` for daily tasks, `/model gpt-5.3-codex` for coding.
+- **Default + switch:** set `agents.defaults.model.primary` to `openai/gpt-5.4`, then switch to `openai-codex/gpt-5.3-codex` when coding (or the other way around).
 - **Sub-agents:** route coding tasks to sub-agents with a different default model.
 
 See [Models](/concepts/models) and [Slash commands](/tools/slash-commands).
@@ -2145,7 +2145,7 @@ Fallbacks are for **errors**, not "hard tasks," so use `/model` or a separate ag
       model: { primary: "minimax/MiniMax-M2.1" },
       models: {
         "minimax/MiniMax-M2.1": { alias: "minimax" },
-        "openai/gpt-5.2": { alias: "gpt" },
+        "openai/gpt-5.4": { alias: "gpt" },
       },
     },
   },
@@ -2172,7 +2172,7 @@ Yes. OpenClaw ships a few default shorthands (only applied when the model exists
 
 - `opus` → `anthropic/claude-opus-4-6`
 - `sonnet` → `anthropic/claude-sonnet-4-5`
-- `gpt` → `openai/gpt-5.2`
+- `gpt` → `openai/gpt-5.4`
 - `gpt-mini` → `openai/gpt-5-mini`
 - `gemini` → `google/gemini-3-pro-preview`
 - `gemini-flash` → `google/gemini-3-flash-preview`

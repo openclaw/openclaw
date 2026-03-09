@@ -186,7 +186,7 @@ If you omit `capabilities`, the entry is eligible for the list it appears in.
 **Image**
 
 - Prefer your active model if it supports images.
-- Good defaults: `openai/gpt-5.2`, `anthropic/claude-opus-4-6`, `google/gemini-3-pro-preview`.
+- Good defaults: `openai/gpt-5.4`, `anthropic/claude-opus-4-6`, `google/gemini-3-pro-preview`.
 
 **Audio**
 
@@ -362,7 +362,7 @@ When `mode: "all"`, outputs are labeled `[Image 1/2]`, `[Audio 2/2]`, etc.
 When media understanding runs, `/status` includes a short summary line:
 
 ```
-📎 Media: image ok (openai/gpt-5.2) · audio skipped (maxBytes)
+📎 Media: image ok (openai/gpt-5.4) · audio skipped (maxBytes)
 ```
 
 This shows per‑capability outcomes and the chosen provider/model when applicable.
