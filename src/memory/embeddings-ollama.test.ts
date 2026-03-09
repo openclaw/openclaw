@@ -3,10 +3,10 @@ import type { OpenClawConfig } from "../config/config.js";
 import { createOllamaEmbeddingProvider } from "./embeddings-ollama.js";
 
 describe("embeddings-ollama", () => {
-  it("calls /api/embeddings and returns normalized vectors", async () => {
+  it("calls /api/embed and returns normalized vectors", async () => {
     const fetchMock = vi.fn(
       async () =>
-        new Response(JSON.stringify({ embedding: [3, 4] }), {
+        new Response(JSON.stringify({ embeddings: [[3, 4]] }), {
           status: 200,
           headers: { "content-type": "application/json" },
         }),
@@ -31,7 +31,7 @@ describe("embeddings-ollama", () => {
   it("resolves baseUrl/apiKey/headers from models.providers.ollama and strips /v1", async () => {
     const fetchMock = vi.fn(
       async () =>
-        new Response(JSON.stringify({ embedding: [1, 0] }), {
+        new Response(JSON.stringify({ embeddings: [[1, 0]] }), {
           status: 200,
           headers: { "content-type": "application/json" },
         }),
@@ -60,7 +60,7 @@ describe("embeddings-ollama", () => {
     await provider.embedQuery("hello");
 
     expect(fetchMock).toHaveBeenCalledWith(
-      "http://127.0.0.1:11434/api/embeddings",
+      "http://127.0.0.1:11434/api/embed",
       expect.objectContaining({
         method: "POST",
         headers: expect.objectContaining({
@@ -90,7 +90,7 @@ describe("embeddings-ollama", () => {
   it("falls back to env key when models.providers.ollama.apiKey is an unresolved SecretRef", async () => {
     const fetchMock = vi.fn(
       async () =>
-        new Response(JSON.stringify({ embedding: [1, 0] }), {
+        new Response(JSON.stringify({ embeddings: [[1, 0]] }), {
           status: 200,
           headers: { "content-type": "application/json" },
         }),
@@ -118,12 +118,45 @@ describe("embeddings-ollama", () => {
     await provider.embedQuery("hello");
 
     expect(fetchMock).toHaveBeenCalledWith(
-      "http://127.0.0.1:11434/api/embeddings",
+      "http://127.0.0.1:11434/api/embed",
       expect.objectContaining({
         headers: expect.objectContaining({
           Authorization: "Bearer ollama-env",
         }),
       }),
     );
+  });
+
+  it("supports batch embedding with /api/embed", async () => {
+    const fetchMock = vi.fn(
+      async () =>
+        new Response(
+          JSON.stringify({
+            embeddings: [
+              [3, 4],
+              [0, 5],
+            ],
+          }),
+          {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          },
+        ),
+    );
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+
+    const { provider } = await createOllamaEmbeddingProvider({
+      config: {} as OpenClawConfig,
+      provider: "ollama",
+      model: "nomic-embed-text",
+      fallback: "none",
+      remote: { baseUrl: "http://127.0.0.1:11434" },
+    });
+
+    const results = await provider.embedBatch(["hello", "world"]);
+    expect(fetchMock).toHaveBeenCalledTimes(1); // single batch request
+    expect(results).toHaveLength(2);
+    expect(results[0][0]).toBeCloseTo(0.6, 5);
+    expect(results[1][1]).toBeCloseTo(1.0, 5);
   });
 });
