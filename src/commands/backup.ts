@@ -330,6 +330,31 @@ async function loadExcludePatternsFromFile(filePath: string): Promise<string[]> 
   }
 }
 
+async function loadIgnoreFilesFromWorkspaces(workspaceDirs: string[]): Promise<string[]> {
+  const patterns: string[] = [];
+  const ignoreFiles = [".gitignore", ".openclawignore"];
+  
+  for (const workspaceDir of workspaceDirs) {
+    for (const ignoreFile of ignoreFiles) {
+      const filePath = path.join(workspaceDir, ignoreFile);
+      try {
+        const stats = await fs.stat(filePath);
+        if (stats.isFile()) {
+          const filePatterns = await loadExcludePatternsFromFile(filePath);
+          // Add prefix to avoid conflicts with main workspace
+          for (const pattern of filePatterns) {
+            patterns.push(`${workspaceDir}/${pattern}`);
+          }
+        }
+      } catch {
+        // File doesn't exist, skip
+      }
+    }
+  }
+  
+  return patterns;
+}
+
 export async function backupCreateCommand(
   runtime: RuntimeEnv,
   opts: BackupCreateOptions = {},
@@ -342,9 +367,16 @@ export async function backupCreateCommand(
 
   // Load exclude patterns
   let excludePatterns = opts.exclude ?? [];
+  
+  // Load from specified exclude file
   if (opts.excludeFile) {
     const filePatterns = await loadExcludePatternsFromFile(opts.excludeFile);
     excludePatterns = [...excludePatterns, ...filePatterns];
+  }
+  
+  // Auto-load .gitignore and .openclawignore from workspace directories
+  const workspacePatterns = await loadIgnoreFilesFromWorkspaces(plan.workspaceDirs);
+  excludePatterns = [...excludePatterns, ...workspacePatterns];
   }
 
   // Filter excluded assets
