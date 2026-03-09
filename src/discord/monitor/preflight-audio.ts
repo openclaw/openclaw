@@ -29,6 +29,8 @@ export async function resolveDiscordPreflightAudioMentionContext(params: {
   hasAudioAttachment: boolean;
   hasTypedText: boolean;
   transcript?: string;
+  transcriptionTriggered: boolean;
+  transcriptionDurationMs?: number;
 }> {
   const audioAttachments = collectAudioAttachments(params.message.attachments);
   const hasAudioAttachment = audioAttachments.length > 0;
@@ -42,11 +44,13 @@ export async function resolveDiscordPreflightAudioMentionContext(params: {
     params.mentionRegexes.length > 0;
 
   let transcript: string | undefined;
+  let transcriptionDurationMs: number | undefined;
   if (needsPreflightTranscription) {
     if (params.abortSignal?.aborted) {
       return {
         hasAudioAttachment,
         hasTypedText,
+        transcriptionTriggered: true,
       };
     }
     try {
@@ -61,6 +65,7 @@ export async function resolveDiscordPreflightAudioMentionContext(params: {
         .map((att) => att.url)
         .filter((url): url is string => typeof url === "string" && url.length > 0);
       if (audioUrls.length > 0) {
+        const startedAtMs = Date.now();
         transcript = await transcribeFirstAudio({
           ctx: {
             MediaUrls: audioUrls,
@@ -71,6 +76,7 @@ export async function resolveDiscordPreflightAudioMentionContext(params: {
           cfg: params.cfg,
           agentDir: undefined,
         });
+        transcriptionDurationMs = Date.now() - startedAtMs;
         if (params.abortSignal?.aborted) {
           transcript = undefined;
         }
@@ -84,5 +90,7 @@ export async function resolveDiscordPreflightAudioMentionContext(params: {
     hasAudioAttachment,
     hasTypedText,
     transcript,
+    transcriptionTriggered: needsPreflightTranscription,
+    transcriptionDurationMs,
   };
 }

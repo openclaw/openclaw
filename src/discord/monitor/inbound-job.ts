@@ -55,6 +55,12 @@ export function buildDiscordInboundJob(ctx: DiscordMessagePreflightContext): Dis
     queueKey: resolveDiscordInboundJobQueueKey(ctx),
     payload: {
       ...payload,
+      voicePerf: payload.voicePerf
+        ? {
+            ...payload.voicePerf,
+            enqueueAtMs: Date.now(),
+          }
+        : undefined,
       message: sanitizedMessage,
       data: {
         ...data,

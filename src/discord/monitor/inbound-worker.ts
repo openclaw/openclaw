@@ -7,6 +7,7 @@ import type { RuntimeEnv } from "./message-handler.preflight.types.js";
 import { processDiscordMessage } from "./message-handler.process.js";
 import type { DiscordMonitorStatusSink } from "./status.js";
 import { normalizeDiscordInboundWorkerTimeoutMs, runDiscordTaskWithTimeout } from "./timeouts.js";
+import { logDiscordVoicePerf } from "./voice-perf.js";
 
 type DiscordInboundWorkerParams = {
   runtime: RuntimeEnv;
@@ -41,6 +42,19 @@ async function processDiscordInboundJob(params: {
 }) {
   const timeoutMs = normalizeDiscordInboundWorkerTimeoutMs(params.runTimeoutMs);
   const contextSuffix = formatDiscordRunContextSuffix(params.job);
+  logDiscordVoicePerf({
+    trace: params.job.payload.voicePerf,
+    stage: "queue",
+    messageId: params.job.payload.data?.message?.id,
+    channelId: params.job.payload.messageChannelId,
+    fields: {
+      waitMs:
+        typeof params.job.payload.voicePerf?.enqueueAtMs === "number"
+          ? Date.now() - (params.job.payload.voicePerf?.enqueueAtMs ?? 0)
+          : undefined,
+      queueKey: params.job.queueKey,
+    },
+  });
   await runDiscordTaskWithTimeout({
     run: async (abortSignal) => {
       await processDiscordMessage(materializeDiscordInboundJob(params.job, abortSignal));

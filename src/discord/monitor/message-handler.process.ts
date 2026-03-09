@@ -51,6 +51,7 @@ import { buildDirectLabel, buildGuildLabel, resolveReplyContext } from "./reply-
 import { deliverDiscordReply } from "./reply-delivery.js";
 import { resolveDiscordAutoThreadReplyPlan, resolveDiscordThreadStarter } from "./threading.js";
 import { sendTyping } from "./typing.js";
+import { logDiscordVoicePerf } from "./voice-perf.js";
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => {
@@ -110,12 +111,15 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
     commandAuthorized,
     discordRestFetch,
     abortSignal,
+    voicePerf,
   } = ctx;
+  const processStartedAtMs = Date.now();
   if (isProcessAborted(abortSignal)) {
     return;
   }
 
   const ssrfPolicy = cfg.browser?.ssrfPolicy;
+  const mediaResolveStartedAtMs = Date.now();
   const mediaList = await resolveMediaList(message, mediaMaxBytes, discordRestFetch, ssrfPolicy);
   if (isProcessAborted(abortSignal)) {
     return;
@@ -130,6 +134,16 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
     return;
   }
   mediaList.push(...forwardedMediaList);
+  logDiscordVoicePerf({
+    trace: voicePerf,
+    stage: "media-download",
+    messageId: message.id,
+    channelId: messageChannelId,
+    fields: {
+      durationMs: Date.now() - mediaResolveStartedAtMs,
+      attachments: mediaList.length,
+    },
+  });
   const text = messageText;
   if (!text) {
     logVerbose("discord: drop message " + message.id + " (empty content)");
@@ -677,6 +691,7 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
         }
 
         const replyToId = replyReference.use();
+        const deliveryStartedAtMs = Date.now();
         await deliverDiscordReply({
           replies: [payload],
           target: deliverTarget,
@@ -693,6 +708,23 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
           sessionKey: ctxPayload.SessionKey,
           threadBindings,
           mediaLocalRoots,
+        });
+        const deliveryDurationMs = Date.now() - deliveryStartedAtMs;
+        deliveryCount += 1;
+        replyDeliveryMs += deliveryDurationMs;
+        logDiscordVoicePerf({
+          trace: voicePerf,
+          stage: "reply-delivery",
+          messageId: message.id,
+          channelId: messageChannelId,
+          fields: {
+            durationMs: deliveryDurationMs,
+            kind: info.kind,
+            replyIndex: deliveryCount,
+            isError: payload.isError,
+            hasMedia: Boolean(payload.mediaUrl) || (payload.mediaUrls?.length ?? 0) > 0,
+            textChars: payload.text?.length,
+          },
         });
         replyReference.markSent();
       },
@@ -711,11 +743,14 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
   let dispatchResult: Awaited<ReturnType<typeof dispatchInboundMessage>> | null = null;
   let dispatchError = false;
   let dispatchAborted = false;
+  let deliveryCount = 0;
+  let replyDeliveryMs = 0;
   try {
     if (isProcessAborted(abortSignal)) {
       dispatchAborted = true;
       return;
     }
+    const dispatchStartedAtMs = Date.now();
     dispatchResult = await dispatchInboundMessage({
       ctx: ctxPayload,
       cfg,
@@ -762,6 +797,17 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
           }
           await statusReactions.setTool(payload.name);
         },
+      },
+    });
+    logDiscordVoicePerf({
+      trace: voicePerf,
+      stage: "dispatch",
+      messageId: message.id,
+      channelId: messageChannelId,
+      fields: {
+        durationMs: Date.now() - dispatchStartedAtMs,
+        deliveries: deliveryCount,
+        replyDeliveryMs,
       },
     });
     if (isProcessAborted(abortSignal)) {
@@ -812,6 +858,31 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
         }
       }
     }
+    logDiscordVoicePerf({
+      trace: voicePerf,
+      stage: "discord-total",
+      messageId: message.id,
+      channelId: messageChannelId,
+      fields: {
+        totalMs:
+          typeof voicePerf?.startedAtMs === "number"
+            ? Date.now() - (voicePerf?.startedAtMs ?? 0)
+            : undefined,
+        processMs: Date.now() - processStartedAtMs,
+        queueWaitMs:
+          typeof voicePerf?.enqueueAtMs === "number"
+            ? processStartedAtMs - (voicePerf?.enqueueAtMs ?? 0)
+            : undefined,
+        preflightMs:
+          typeof voicePerf?.preflightFinishedAtMs === "number"
+            ? (voicePerf?.preflightFinishedAtMs ?? 0) - (voicePerf?.startedAtMs ?? 0)
+            : undefined,
+        preflightSttMs: voicePerf?.preflightTranscriptionDurationMs,
+        deliveries: deliveryCount,
+        replyDeliveryMs,
+        ok: !dispatchError && !dispatchAborted,
+      },
+    });
   }
   if (dispatchAborted) {
     return;

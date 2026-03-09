@@ -15,6 +15,7 @@ import type {
 import { logVerbose, shouldLogVerbose } from "../globals.js";
 import { resolveProxyFetchFromEnv } from "../infra/net/proxy-fetch.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
+import { getLogger } from "../logging/logger.js";
 import { runExec } from "../process/exec.js";
 import { MediaAttachmentCache } from "./attachments.js";
 import {
@@ -115,6 +116,11 @@ function commandBase(command: string): string {
   return path.parse(command).name;
 }
 
+function isParakeetCommand(command: string): boolean {
+  const id = commandBase(command);
+  return id.startsWith("parakeet") || id.startsWith("paraket");
+}
+
 function findArgValue(args: string[], keys: string[]): string | undefined {
   for (let i = 0; i < args.length; i += 1) {
     if (keys.includes(args[i] ?? "")) {
@@ -207,7 +213,86 @@ async function resolveCliOutput(params: {
     }
   }
 
+  if (isParakeetCommand(params.command)) {
+    const parsed = parseParakeetCliJson(params.stdout);
+    const transcript = resolveParakeetTranscript(parsed);
+    if (transcript) {
+      return transcript;
+    }
+  }
+
   return params.stdout.trim();
+}
+
+type ParakeetCliJson = {
+  transcript?: unknown;
+  text?: unknown;
+  result?: { transcript?: unknown; text?: unknown } | null;
+  metrics?: Record<string, unknown> | null;
+  audio_sec?: unknown;
+  model_load_sec?: unknown;
+  inference_sec?: unknown;
+  total_sec?: unknown;
+};
+
+function parseParakeetCliJson(stdout: string): ParakeetCliJson | null {
+  const trimmed = stdout.trim();
+  if (!trimmed) {
+    return null;
+  }
+  const candidates = [
+    trimmed,
+    ...trimmed
+      .split("\n")
+      .map((line) => line.trim())
+      .filter(Boolean),
+  ];
+  for (let i = candidates.length - 1; i >= 0; i -= 1) {
+    const candidate = candidates[i] ?? "";
+    if (!candidate.startsWith("{")) {
+      continue;
+    }
+    try {
+      const parsed = JSON.parse(candidate) as unknown;
+      if (parsed && typeof parsed === "object") {
+        return parsed as ParakeetCliJson;
+      }
+    } catch {}
+  }
+  return null;
+}
+
+function resolveParakeetTranscript(parsed: ParakeetCliJson | null): string | null {
+  const candidates = [
+    parsed?.transcript,
+    parsed?.text,
+    parsed?.result?.transcript,
+    parsed?.result?.text,
+  ];
+  for (const candidate of candidates) {
+    if (typeof candidate === "string" && candidate.trim()) {
+      return candidate.trim();
+    }
+  }
+  return null;
+}
+
+function resolveParakeetMetrics(parsed: ParakeetCliJson | null): Record<string, number> {
+  const sources = [parsed?.metrics ?? undefined, parsed ?? undefined];
+  const keys = ["audio_sec", "model_load_sec", "inference_sec", "total_sec"] as const;
+  const metrics: Record<string, number> = {};
+  for (const source of sources) {
+    if (!source || typeof source !== "object") {
+      continue;
+    }
+    for (const key of keys) {
+      const value = source[key];
+      if (typeof value === "number" && Number.isFinite(value) && metrics[key] === undefined) {
+        metrics[key] = value;
+      }
+    }
+  }
+  return metrics;
 }
 
 type ProviderQuery = Record<string, string | number | boolean>;
@@ -638,17 +723,39 @@ export async function runCliEntry(params: {
     if (shouldLogVerbose()) {
       logVerbose(`Media understanding via CLI: ${argv.join(" ")}`);
     }
+    const startedAtMs = Date.now();
     const { stdout } = await runExec(argv[0], argv.slice(1), {
       timeoutMs,
       maxBuffer: CLI_OUTPUT_MAX_BUFFER,
     });
+    const durationMs = Date.now() - startedAtMs;
     const resolved = await resolveCliOutput({
       command,
       args: argv.slice(1),
       stdout,
       mediaPath,
     });
+    const parakeetJson = isParakeetCommand(command) ? parseParakeetCliJson(stdout) : null;
+    const parakeetMetrics = resolveParakeetMetrics(parakeetJson);
     const text = trimOutput(resolved, maxChars);
+    const shouldLogVoicePerf =
+      ctx.Surface === "discord" &&
+      capability === "audio" &&
+      (process.env.OPENCLAW_VOICE_PERF === "1" ||
+        process.env.CLAWDBOT_VOICE_PERF === "1" ||
+        shouldLogVerbose());
+    if (shouldLogVoicePerf) {
+      const messageId = ctx.MessageSid?.trim() || "unknown";
+      const metricTokens = Object.entries(parakeetMetrics)
+        .map(([key, value]) => `${key}=${Math.round(value * 1000) / 1000}`)
+        .join(" ");
+      getLogger().info(
+        {
+          message: `voice-perf: stage=stt-cli messageId=${messageId} command=${commandBase(command)} durationMs=${durationMs} attachmentIndex=${params.attachmentIndex} transcriptChars=${text.length}${metricTokens ? ` ${metricTokens}` : ""}`,
+        },
+        "voice-perf",
+      );
+    }
     if (!text) {
       return null;
     }
