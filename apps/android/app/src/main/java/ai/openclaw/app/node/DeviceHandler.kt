@@ -25,6 +25,7 @@ import kotlinx.serialization.json.put
 
 class DeviceHandler(
   private val appContext: Context,
+  private val languageOverride: () -> String,
 ) {
   private data class BatterySnapshot(
     val status: Int,
@@ -112,7 +113,8 @@ class DeviceHandler(
     val manufacturer = Build.MANUFACTURER?.trim().orEmpty()
     val modelIdentifier = Build.DEVICE?.trim().orEmpty()
     val systemVersion = Build.VERSION.RELEASE?.trim().orEmpty()
-    val locale = Locale.getDefault().toLanguageTag().trim()
+    val override = languageOverride().trim()
+    val locale = if (override.isNotEmpty() && override != "auto") override else Locale.getDefault().toLanguageTag().trim()
     val appVersion = BuildConfig.VERSION_NAME.trim()
     val appBuild = BuildConfig.VERSION_CODE.toString()
 

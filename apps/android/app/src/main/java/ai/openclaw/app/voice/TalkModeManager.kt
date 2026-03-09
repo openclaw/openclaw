@@ -54,6 +54,7 @@ class TalkModeManager(
   private val session: GatewaySession,
   private val supportsChatSubscribe: Boolean,
   private val isConnected: () -> Boolean,
+  private val languageOverride: () -> String,
 ) {
   companion object {
     private const val tag = "TalkMode"
@@ -518,6 +519,10 @@ class TalkModeManager(
         // than on-device which cuts off aggressively after short silences.
         putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS, 2500L)
         putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_POSSIBLY_COMPLETE_SILENCE_LENGTH_MILLIS, 1800L)
+        val localeOverride = languageOverride().trim()
+        if (localeOverride.isNotEmpty() && localeOverride != "auto") {
+          putExtra(RecognizerIntent.EXTRA_LANGUAGE, localeOverride)
+        }
       }
 
     if (markListening) {
@@ -1204,6 +1209,15 @@ class TalkModeManager(
           null
         }
       if (tts == null) return@withContext false
+
+      val localeOverride = languageOverride().trim()
+      if (localeOverride.isNotEmpty() && localeOverride != "auto") {
+        try {
+          tts.setLanguage(java.util.Locale.forLanguageTag(localeOverride))
+        } catch (err: Throwable) {
+          Log.w(tag, "Failed to set TTS language to $localeOverride: ${err.message}")
+        }
+      }
 
       tts.setOnUtteranceProgressListener(
         object : UtteranceProgressListener() {

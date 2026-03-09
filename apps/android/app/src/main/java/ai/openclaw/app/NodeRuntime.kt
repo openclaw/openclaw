@@ -86,6 +86,7 @@ class NodeRuntime(context: Context) {
 
   private val deviceHandler: DeviceHandler = DeviceHandler(
     appContext = appContext,
+    languageOverride = { prefs.languageOverride.value }
   )
 
   private val notificationsHandler: NotificationsHandler = NotificationsHandler(
@@ -315,6 +316,7 @@ class NodeRuntime(context: Context) {
       session = operatorSession,
       supportsChatSubscribe = false,
       isConnected = { operatorConnected },
+      languageOverride = { prefs.languageOverride.value }
     ).also { speaker ->
       speaker.setPlaybackEnabled(prefs.speakerEnabled.value)
     }
@@ -386,6 +388,7 @@ class NodeRuntime(context: Context) {
       session = operatorSession,
       supportsChatSubscribe = true,
       isConnected = { operatorConnected },
+      languageOverride = { prefs.languageOverride.value }
     )
   }
 
@@ -495,6 +498,7 @@ class NodeRuntime(context: Context) {
   val cameraEnabled: StateFlow<Boolean> = prefs.cameraEnabled
   val locationMode: StateFlow<LocationMode> = prefs.locationMode
   val locationPreciseEnabled: StateFlow<Boolean> = prefs.locationPreciseEnabled
+  val languageOverride: StateFlow<String> = prefs.languageOverride
   val preventSleep: StateFlow<Boolean> = prefs.preventSleep
   val manualEnabled: StateFlow<Boolean> = prefs.manualEnabled
   val manualHost: StateFlow<String> = prefs.manualHost
@@ -624,6 +628,10 @@ class NodeRuntime(context: Context) {
 
   fun setLocationPreciseEnabled(value: Boolean) {
     prefs.setLocationPreciseEnabled(value)
+  }
+
+  fun setLanguageOverride(value: String) {
+    prefs.setLanguageOverride(value)
   }
 
   fun setPreventSleep(value: Boolean) {
