@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -446,7 +447,30 @@ function activatePluginRegistry(registry: PluginRegistry, cacheKey: string): voi
   initializeGlobalHookRunner(registry);
 }
 
-function resolveLoaderInstallKind(): "git" | "package" | "unknown" {
+type LoaderInstallContext = {
+  installKind: "git" | "package" | "unknown";
+  gitTag: string | null;
+  gitBranch: string | null;
+};
+
+let cachedLoaderInstallContext: LoaderInstallContext | null = null;
+
+function readLoaderGitMetadata(root: string, args: string[]): string | null {
+  try {
+    const output = execFileSync("git", ["-C", root, ...args], {
+      encoding: "utf-8",
+      stdio: ["ignore", "pipe", "ignore"],
+    }).trim();
+    return output || null;
+  } catch {
+    return null;
+  }
+}
+
+function resolveLoaderInstallContext(): LoaderInstallContext {
+  if (cachedLoaderInstallContext) {
+    return cachedLoaderInstallContext;
+  }
   const root =
     resolveOpenClawPackageRootSync({
       moduleUrl: import.meta.url,
@@ -454,9 +478,27 @@ function resolveLoaderInstallKind(): "git" | "package" | "unknown" {
       cwd: process.cwd(),
     }) ?? null;
   if (!root) {
-    return "unknown";
+    cachedLoaderInstallContext = {
+      installKind: "unknown",
+      gitTag: null,
+      gitBranch: null,
+    };
+    return cachedLoaderInstallContext;
   }
-  return fs.existsSync(path.join(root, ".git")) ? "git" : "package";
+  if (!fs.existsSync(path.join(root, ".git"))) {
+    cachedLoaderInstallContext = {
+      installKind: "package",
+      gitTag: null,
+      gitBranch: null,
+    };
+    return cachedLoaderInstallContext;
+  }
+  cachedLoaderInstallContext = {
+    installKind: "git",
+    gitTag: readLoaderGitMetadata(root, ["describe", "--tags", "--exact-match"]),
+    gitBranch: readLoaderGitMetadata(root, ["rev-parse", "--abbrev-ref", "HEAD"]),
+  };
+  return cachedLoaderInstallContext;
 }
 
 function readPluginPackageDependencies(rootDir: string): string[] {
@@ -670,9 +712,17 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
   const manifestByRoot = new Map(
     manifestRegistry.plugins.map((record) => [record.rootDir, record]),
   );
+  const installContext = resolveLoaderInstallContext();
   const effectiveChannel = resolveEffectiveUpdateChannel({
     configChannel: normalizeUpdateChannel(cfg.update?.channel),
-    installKind: resolveLoaderInstallKind(),
+    installKind: installContext.installKind,
+    git:
+      installContext.gitTag || installContext.gitBranch
+        ? {
+            tag: installContext.gitTag,
+            branch: installContext.gitBranch,
+          }
+        : undefined,
   }).channel;
 
   const seenIds = new Map<string, PluginRecord["origin"]>();

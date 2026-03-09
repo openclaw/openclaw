@@ -26,6 +26,42 @@ async function importFreshPluginTestModules() {
   };
 }
 
+async function importPluginTestModulesWithMocks(options?: { packageRoot?: string | null }) {
+  vi.resetModules();
+  vi.unmock("node:fs");
+  vi.unmock("node:fs/promises");
+  vi.unmock("node:module");
+  vi.unmock("./hook-runner-global.js");
+  vi.unmock("./hooks.js");
+  vi.unmock("./loader.js");
+  vi.unmock("jiti");
+  if (options && "packageRoot" in options) {
+    const packageRoot = options.packageRoot ?? null;
+    vi.doMock("../infra/openclaw-root.js", async () => {
+      const actual = await vi.importActual<typeof import("../infra/openclaw-root.js")>(
+        "../infra/openclaw-root.js",
+      );
+      return {
+        ...actual,
+        resolveOpenClawPackageRootSync: () => packageRoot,
+      };
+    });
+  } else {
+    vi.unmock("../infra/openclaw-root.js");
+  }
+  const [loader, hookRunnerGlobal, hooks] = await Promise.all([
+    import("./loader.js"),
+    import("./hook-runner-global.js"),
+    import("./hooks.js"),
+  ]);
+  vi.unmock("../infra/openclaw-root.js");
+  return {
+    ...loader,
+    ...hookRunnerGlobal,
+    ...hooks,
+  };
+}
+
 const {
   __testing,
   createHookRunner,
@@ -305,6 +341,29 @@ function createPluginSdkAliasFixture(params?: {
   return { root, srcFile, distFile };
 }
 
+function makeTaggedGitRepo(tag: string): string {
+  const repoRoot = makeTempDir();
+  fs.writeFileSync(path.join(repoRoot, "README.md"), `# ${tag}\n`, "utf-8");
+  execFileSync("git", ["init", "-q"], { cwd: repoRoot });
+  execFileSync("git", ["add", "README.md"], { cwd: repoRoot });
+  execFileSync(
+    "git",
+    [
+      "-c",
+      "user.name=OpenClaw Tests",
+      "-c",
+      "user.email=tests@openclaw.invalid",
+      "commit",
+      "-qm",
+      "init",
+    ],
+    { cwd: repoRoot },
+  );
+  execFileSync("git", ["tag", tag], { cwd: repoRoot });
+  execFileSync("git", ["checkout", "-q", tag], { cwd: repoRoot });
+  return repoRoot;
+}
+
 afterEach(() => {
   if (prevBundledDir === undefined) {
     delete process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
@@ -412,6 +471,64 @@ module.exports = { id: "feishu", register() {} };`,
       ),
     ).toBe(true);
   });
+
+  it.each([
+    {
+      tag: "v2026.3.8",
+      expectedChannel: "stable",
+    },
+    {
+      tag: "v2026.3.8-beta.1",
+      expectedChannel: "beta",
+    },
+  ])(
+    "reports an install hint for %s tagged git checkouts with unresolved package dependencies",
+    async ({ tag, expectedChannel }) => {
+      const repoRoot = makeTaggedGitRepo(tag);
+      const bundledDir = makeTempDir();
+      const pluginDir = path.join(bundledDir, "feishu");
+      const importedMarker = path.join(pluginDir, "imported.txt");
+      writePackagedPlugin({
+        id: "feishu",
+        dir: pluginDir,
+        dependencies: {
+          "@larksuiteoapi/node-sdk": "^1.59.0",
+        },
+        install: {
+          npmSpec: "@openclaw/feishu",
+        },
+        body: `require("node:fs").writeFileSync(${JSON.stringify(importedMarker)}, "loaded", "utf-8");
+module.exports = { id: "feishu", register() {} };`,
+      });
+
+      const { loadOpenClawPlugins: loadPluginsFromTaggedCheckout } =
+        await importPluginTestModulesWithMocks({
+          packageRoot: repoRoot,
+        });
+
+      const registry = withEnv({ OPENCLAW_BUNDLED_PLUGINS_DIR: bundledDir }, () =>
+        loadPluginsFromTaggedCheckout({
+          cache: false,
+          config: {
+            plugins: {
+              allow: ["feishu"],
+              entries: {
+                feishu: { enabled: true },
+              },
+            },
+          },
+        }),
+      );
+
+      const feishu = registry.plugins.find((entry) => entry.id === "feishu");
+      expect(feishu?.status).toBe("error");
+      expect(feishu?.error).toContain(
+        `plugin requires separate installation on ${expectedChannel}`,
+      );
+      expect(feishu?.error).toContain("openclaw plugins install @openclaw/feishu");
+      expect(fs.existsSync(importedMarker)).toBe(false);
+    },
+  );
 
   it("keeps bundled package plugins loadable on dev even when their declared dependencies are unresolved", () => {
     const bundledDir = makeTempDir();
