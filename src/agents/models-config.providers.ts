@@ -285,8 +285,33 @@ function normalizeProviderModels(
   return mutated ? { ...provider, models } : provider;
 }
 
+/**
+ * Appends /v1beta to Google Generative Language API base URLs that omit the
+ * API version path.  Users sometimes configure the bare host
+ * (https://generativelanguage.googleapis.com) while the embedded/probe path
+ * treats any explicit model.baseUrl as a fully-versioned URL and does not
+ * re-append the version – resulting in 404s (#41276).
+ *
+ * Only the canonical Google AI Studio domain is touched; custom proxies are
+ * left unchanged so they can supply their own version path.
+ */
+export function normalizeGoogleBaseUrl(baseUrl: string): string {
+  const trimmed = baseUrl.replace(/\/+$/, "");
+  if (trimmed.includes("generativelanguage.googleapis.com") && !/\/v\d/.test(trimmed)) {
+    return `${trimmed}/v1beta`;
+  }
+  return trimmed;
+}
+
 function normalizeGoogleProvider(provider: ProviderConfig): ProviderConfig {
-  return normalizeProviderModels(provider, normalizeGoogleModelId);
+  let normalized = normalizeProviderModels(provider, normalizeGoogleModelId);
+  if (typeof normalized.baseUrl === "string") {
+    const normalizedBaseUrl = normalizeGoogleBaseUrl(normalized.baseUrl);
+    if (normalizedBaseUrl !== normalized.baseUrl) {
+      normalized = { ...normalized, baseUrl: normalizedBaseUrl };
+    }
+  }
+  return normalized;
 }
 
 function normalizeAntigravityProvider(provider: ProviderConfig): ProviderConfig {
