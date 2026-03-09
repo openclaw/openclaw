@@ -27,6 +27,10 @@ vi.mock("../infra/exec-obfuscation-detect.js", () => ({
 let callGatewayTool: typeof import("./tools/gateway.js").callGatewayTool;
 let createExecTool: typeof import("./bash-tools.exec.js").createExecTool;
 let detectCommandObfuscation: typeof import("../infra/exec-obfuscation-detect.js").detectCommandObfuscation;
+let peekSystemEvents: typeof import("../infra/system-events.js").peekSystemEvents;
+let resetSystemEventsForTest: typeof import("../infra/system-events.js").resetSystemEventsForTest;
+let DEFAULT_MAX_OUTPUT: number;
+const TEST_SESSION_KEY = "discord:dm:exec-approval-output";
 
 function buildPreparedSystemRunPayload(rawInvokeParams: unknown) {
   const invoke = (rawInvokeParams ?? {}) as {
@@ -42,6 +46,37 @@ function buildPreparedSystemRunPayload(rawInvokeParams: unknown) {
   return buildSystemRunPreparePayload(params);
 }
 
+function buildMultilineOutput(lineCount: number, lineWidth: number) {
+  return (
+    Array.from({ length: lineCount }, (_, index) => {
+      const suffix = String(index).padStart(2, "0");
+      return `line-${suffix}:${"x".repeat(lineWidth)}`;
+    }).join("\n") + "\n"
+  );
+}
+
+function buildNodeStdoutCommand(output: string) {
+  const script = `process.stdout.write(${JSON.stringify(output)});`;
+  return `${JSON.stringify(process.execPath)} -e ${JSON.stringify(script)}`;
+}
+
+function tail(text: string, maxChars: number) {
+  if (text.length <= maxChars) {
+    return text;
+  }
+  return text.slice(text.length - maxChars);
+}
+
+async function waitForExecFinishedEvent(sessionKey: string) {
+  await expect
+    .poll(() => peekSystemEvents(sessionKey).find((event) => event.startsWith("Exec finished")), {
+      timeout: 10_000,
+      interval: 20,
+    })
+    .toBeTruthy();
+  return peekSystemEvents(sessionKey).find((event) => event.startsWith("Exec finished")) ?? "";
+}
+
 describe("exec approvals", () => {
   let previousHome: string | undefined;
   let previousUserProfile: string | undefined;
@@ -50,6 +85,8 @@ describe("exec approvals", () => {
     ({ callGatewayTool } = await import("./tools/gateway.js"));
     ({ createExecTool } = await import("./bash-tools.exec.js"));
     ({ detectCommandObfuscation } = await import("../infra/exec-obfuscation-detect.js"));
+    ({ peekSystemEvents, resetSystemEventsForTest } = await import("../infra/system-events.js"));
+    ({ DEFAULT_MAX_OUTPUT } = await import("./bash-tools.exec-runtime.js"));
   });
 
   beforeEach(async () => {
@@ -59,9 +96,11 @@ describe("exec approvals", () => {
     process.env.HOME = tempDir;
     // Windows uses USERPROFILE for os.homedir()
     process.env.USERPROFILE = tempDir;
+    resetSystemEventsForTest();
   });
 
   afterEach(() => {
+    resetSystemEventsForTest();
     vi.resetAllMocks();
     if (previousHome === undefined) {
       delete process.env.HOME;
@@ -290,6 +329,74 @@ describe("exec approvals", () => {
     await approvalSeen;
     expect(calls).toContain("exec.approval.request");
     expect(calls).toContain("exec.approval.waitDecision");
+  });
+
+  it("preserves full multiline output for async gateway approvals", async () => {
+    vi.mocked(callGatewayTool).mockImplementation(async (method, _opts, params) => {
+      if (method === "exec.approval.request") {
+        return { status: "accepted", id: (params as { id?: string })?.id };
+      }
+      if (method === "exec.approval.waitDecision") {
+        return { decision: "allow-once" };
+      }
+      return { ok: true };
+    });
+
+    const output = buildMultilineOutput(8, 64);
+    const tool = createExecTool({
+      host: "gateway",
+      ask: "always",
+      security: "full",
+      approvalRunningNoticeMs: 0,
+      sessionKey: TEST_SESSION_KEY,
+    });
+
+    const result = await tool.execute("call-gateway-output", {
+      command: buildNodeStdoutCommand(output),
+    });
+
+    expect(result.details.status).toBe("approval-pending");
+
+    const event = await waitForExecFinishedEvent(TEST_SESSION_KEY);
+    const body = event.slice(event.indexOf("\n") + 1);
+
+    expect(body).toBe(output.trimEnd());
+    expect(body.startsWith("line-00:")).toBe(true);
+    expect(body).toContain("\nline-01:");
+    expect(body.length).toBeGreaterThan(400);
+  });
+
+  it("marks captured output as truncated when approval delivery hits the exec cap", async () => {
+    vi.mocked(callGatewayTool).mockImplementation(async (method, _opts, params) => {
+      if (method === "exec.approval.request") {
+        return { status: "accepted", id: (params as { id?: string })?.id };
+      }
+      if (method === "exec.approval.waitDecision") {
+        return { decision: "allow-once" };
+      }
+      return { ok: true };
+    });
+
+    const output = buildMultilineOutput(3000, 64);
+    const tool = createExecTool({
+      host: "gateway",
+      ask: "always",
+      security: "full",
+      approvalRunningNoticeMs: 0,
+      sessionKey: TEST_SESSION_KEY,
+    });
+
+    const result = await tool.execute("call-gateway-output-truncated", {
+      command: buildNodeStdoutCommand(output),
+    });
+
+    expect(result.details.status).toBe("approval-pending");
+
+    const event = await waitForExecFinishedEvent(TEST_SESSION_KEY);
+    const body = event.slice(event.indexOf("\n") + 1);
+
+    expect(event).toContain("output truncated to capture cap");
+    expect(body).toBe(tail(output, DEFAULT_MAX_OUTPUT).trimEnd());
   });
 
   it("waits for approval registration before returning approval-pending", async () => {

@@ -12,7 +12,7 @@ import {
 import { detectCommandObfuscation } from "../infra/exec-obfuscation-detect.js";
 import type { SafeBinProfile } from "../infra/exec-safe-bin-policy.js";
 import { logInfo } from "../logger.js";
-import { markBackgrounded, tail } from "./bash-process-registry.js";
+import { markBackgrounded } from "./bash-process-registry.js";
 import {
   buildExecApprovalRequesterContext,
   buildExecApprovalTurnSourceContext,
@@ -25,10 +25,8 @@ import {
   resolveExecHostApprovalContext,
 } from "./bash-tools.exec-host-shared.js";
 import {
-  DEFAULT_NOTIFY_TAIL_CHARS,
   createApprovalSlug,
   emitExecSystemEvent,
-  normalizeNotifyOutput,
   runExecProcess,
 } from "./bash-tools.exec-runtime.js";
 import type { ExecToolDetails } from "./bash-tools.exec-types.js";
@@ -63,6 +61,23 @@ export type ProcessGatewayAllowlistResult = {
   execCommandOverride?: string;
   pendingResult?: AgentToolResult<ExecToolDetails>;
 };
+
+function buildGatewayApprovalCompletionSummary(params: {
+  approvalId: string;
+  sessionId: string;
+  exitLabel: string;
+  output: string;
+  truncated: boolean;
+}) {
+  const truncationSuffix = params.truncated ? ", output truncated to capture cap" : "";
+  const header =
+    `Exec finished (gateway id=${params.approvalId}, session=${params.sessionId}, ` +
+    `${params.exitLabel}${truncationSuffix})`;
+  if (!params.output) {
+    return header;
+  }
+  return `${header}\n${params.output}`;
+}
 
 export async function processGatewayAllowlist(
   params: ProcessGatewayAllowlistParams,
@@ -288,13 +303,15 @@ export async function processGatewayAllowlist(
       if (runningTimer) {
         clearTimeout(runningTimer);
       }
-      const output = normalizeNotifyOutput(
-        tail(outcome.aggregated || "", DEFAULT_NOTIFY_TAIL_CHARS),
-      );
       const exitLabel = outcome.timedOut ? "timeout" : `code ${outcome.exitCode ?? "?"}`;
-      const summary = output
-        ? `Exec finished (gateway id=${approvalId}, session=${run.session.id}, ${exitLabel})\n${output}`
-        : `Exec finished (gateway id=${approvalId}, session=${run.session.id}, ${exitLabel})`;
+      const outputTruncatedToCap = run.session.totalOutputChars > run.session.aggregated.length;
+      const summary = buildGatewayApprovalCompletionSummary({
+        approvalId,
+        sessionId: run.session.id,
+        exitLabel,
+        output: outcome.aggregated,
+        truncated: outputTruncatedToCap,
+      });
       emitExecSystemEvent(summary, { sessionKey: params.notifySessionKey, contextKey });
     })();
 
