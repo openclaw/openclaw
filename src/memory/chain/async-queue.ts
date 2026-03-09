@@ -8,7 +8,7 @@
  * @date 2026-03-09
  */
 
-import type { AsyncWriteTask, DeadLetterItem } from "./types";
+import type { AsyncWriteTask, DeadLetterItem } from "./types.js";
 
 /**
  * Async Queue Configuration

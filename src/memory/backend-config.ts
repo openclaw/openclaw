@@ -10,6 +10,7 @@ import type {
   MemoryQmdIndexPath,
   MemoryQmdMcporterConfig,
   MemoryQmdSearchMode,
+  MemoryChainConfig,
 } from "../config/types.memory.js";
 import { resolveUserPath } from "../utils.js";
 import { splitShellArgs } from "../utils/shell-argv.js";
@@ -344,13 +345,15 @@ export function resolveMemoryBackendConfig(params: {
     return {
       backend: "chain",
       citations,
-      chain: chainConfig,
+      chain: resolveChainConfig(chainConfig),
     };
   }
 
-  if (backend !== "qmd" && backend !== "chain") {
+  if (backend === "builtin") {
     return { backend: "builtin", citations };
   }
+
+  // backend must be "qmd" at this point
 
   const workspaceDir = resolveAgentWorkspaceDir(params.cfg, params.agentId);
   const qmdCfg = params.cfg.memory?.qmd;
@@ -398,5 +401,43 @@ export function resolveMemoryBackendConfig(params: {
     backend: "qmd",
     citations,
     qmd: resolved,
+  };
+}
+
+/**
+ * Resolve Chain Memory Backend configuration
+ */
+function resolveChainConfig(chainConfig: MemoryChainConfig): ResolvedChainConfig {
+  const resolvedProviders: ResolvedChainProvider[] = chainConfig.providers.map((provider) => ({
+    name: provider.name,
+    priority: provider.priority,
+    backend: provider.backend,
+    plugin: provider.plugin,
+    enabled: provider.enabled ?? true,
+    writeMode: provider.writeMode ?? "sync",
+    timeout: {
+      add: provider.timeout?.add ?? 5000,
+      search: provider.timeout?.search ?? 5000,
+      update: provider.timeout?.update ?? 5000,
+      delete: provider.timeout?.delete ?? 5000,
+    },
+    retry: {
+      maxAttempts: provider.retry?.maxAttempts ?? 3,
+      backoffMs: provider.retry?.backoffMs ?? 1000,
+    },
+    circuitBreaker: {
+      failureThreshold: provider.circuitBreaker?.failureThreshold ?? 5,
+      resetTimeoutMs: provider.circuitBreaker?.resetTimeoutMs ?? 60000,
+    },
+  }));
+
+  return {
+    providers: resolvedProviders,
+    global: {
+      defaultTimeout: chainConfig.global?.defaultTimeout ?? 5000,
+      enableAsyncWrite: chainConfig.global?.enableAsyncWrite ?? true,
+      enableFallback: chainConfig.global?.enableFallback ?? true,
+      healthCheckInterval: chainConfig.global?.healthCheckInterval ?? 30000,
+    },
   };
 }

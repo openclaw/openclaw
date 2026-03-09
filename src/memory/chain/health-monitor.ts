@@ -8,7 +8,7 @@
  * @date 2026-03-09
  */
 
-import type { HealthStatus, ProviderWrapper } from "./types";
+import type { HealthStatus, ProviderWrapper } from "./types.js";
 
 /**
  * Health Monitor Configuration
@@ -108,27 +108,31 @@ export class HealthMonitor {
   }
 
   /**
-   * Check single provider provider
+   * Check single provider health using real backend operation
    */
   private async checkProvider(provider: ProviderWrapper): Promise<void> {
     const startTime = Date.now();
 
     try {
-      // Use status() method for health check
-      // Avoid empty string search which returns empty array）
       const timeoutPromise = new Promise<never>((_, reject) => {
         setTimeout(() => reject(new Error("Health check timeout")), this.config.timeoutMs);
       });
 
-      // Call status to check if provider responds
-      await Promise.race([provider.manager.status(), timeoutPromise]);
+      // Use lightweight search for real backend health check
+      // This ensures we actually test the provider's ability to handle requests
+      // Using a unique health check query to avoid cache hits
+      const healthCheckQuery = `health_check_${Date.now()}`;
+      await Promise.race([
+        provider.manager.search(healthCheckQuery, { maxResults: 1 }),
+        timeoutPromise,
+      ]);
 
-      // Health checkSuccess
+      // Health check success
       const responseTime = Date.now() - startTime;
       provider.stats.health = this.calculateHealth(provider.stats, responseTime);
       provider.recordSuccess();
     } catch {
-      // Health checkFailure
+      // Health check failure
       provider.stats.health = "unhealthy";
       provider.recordFailure();
     }
