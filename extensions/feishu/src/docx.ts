@@ -113,12 +113,85 @@ async function convertMarkdown(client: Lark.Client, markdown: string) {
   };
 }
 
+function normalizeChildIds(children: unknown): string[] {
+  if (Array.isArray(children)) {
+    return children.filter((child): child is string => typeof child === "string");
+  }
+  if (typeof children === "string") {
+    return [children];
+  }
+  return [];
+}
+
+// Convert API may return `blocks` in a non-render order.
+// Reconstruct the document tree using first_level_block_ids plus children/parent links,
+// then emit blocks in pre-order so Descendant/Children APIs receive a deterministic sequence.
 function sortBlocksByFirstLevel(blocks: any[], firstLevelIds: string[]): any[] {
-  if (!firstLevelIds || firstLevelIds.length === 0) return blocks;
-  const sorted = firstLevelIds.map((id) => blocks.find((b) => b.block_id === id)).filter(Boolean);
-  const sortedIds = new Set(firstLevelIds);
-  const remaining = blocks.filter((b) => !sortedIds.has(b.block_id));
-  return [...sorted, ...remaining];
+  if (blocks.length <= 1) {
+    return blocks;
+  }
+
+  const byId = new Map<string, any>();
+  const originalOrder = new Map<string, number>();
+  for (const [index, block] of blocks.entries()) {
+    if (typeof block?.block_id === "string") {
+      byId.set(block.block_id, block);
+      originalOrder.set(block.block_id, index);
+    }
+  }
+
+  const childIds = new Set<string>();
+  for (const block of blocks) {
+    for (const childId of normalizeChildIds(block?.children)) {
+      childIds.add(childId);
+    }
+  }
+
+  const inferredTopLevelIds = blocks
+    .filter((block) => {
+      const blockId = block?.block_id;
+      if (typeof blockId !== "string") {
+        return false;
+      }
+      const parentId = typeof block?.parent_id === "string" ? block.parent_id : "";
+      return !childIds.has(blockId) && (!parentId || !byId.has(parentId));
+    })
+    .sort((a, b) => (originalOrder.get(a.block_id) ?? 0) - (originalOrder.get(b.block_id) ?? 0))
+    .map((block) => block.block_id);
+
+  const rootIds = (
+    firstLevelIds && firstLevelIds.length > 0 ? firstLevelIds : inferredTopLevelIds
+  ).filter((id, index, arr) => typeof id === "string" && byId.has(id) && arr.indexOf(id) === index);
+
+  const ordered: any[] = [];
+  const visited = new Set<string>();
+
+  const visit = (blockId: string) => {
+    if (!byId.has(blockId) || visited.has(blockId)) {
+      return;
+    }
+    visited.add(blockId);
+    const block = byId.get(blockId);
+    ordered.push(block);
+    for (const childId of normalizeChildIds(block?.children)) {
+      visit(childId);
+    }
+  };
+
+  for (const rootId of rootIds) {
+    visit(rootId);
+  }
+
+  // Fallback for malformed/partial trees from Convert API: keep any leftovers in original order.
+  for (const block of blocks) {
+    if (typeof block?.block_id === "string") {
+      visit(block.block_id);
+    } else {
+      ordered.push(block);
+    }
+  }
+
+  return ordered;
 }
 
 /* eslint-disable @typescript-eslint/no-explicit-any -- SDK block types */
