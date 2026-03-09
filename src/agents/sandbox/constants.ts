@@ -18,6 +18,7 @@ export const DEFAULT_TOOL_ALLOW = [
   "edit",
   "apply_patch",
   "image",
+  "image_gen",
   "sessions_list",
   "sessions_history",
   "sessions_send",
