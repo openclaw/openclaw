@@ -397,7 +397,10 @@ export const handleTotalUsageCommand: CommandHandler = async (params, allowTextC
       ? ((summary.totals.cacheRead / summary.totals.totalTokens) * 100).toFixed(1)
       : "0";
   const topModels = summary.models.slice(0, 5);
-  const maxModelNameLen = Math.max(...topModels.map((modelSummary) => modelSummary.model.length), 10);
+  const maxModelNameLen = Math.max(
+    ...topModels.map((modelSummary) => modelSummary.model.length),
+    10,
+  );
   const modelDistributionLines = topModels
     .map((modelSummary) => {
       const percent = ((modelSummary.totalTokens / summary.totals.totalTokens) * 100).toFixed(1);
