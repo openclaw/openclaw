@@ -642,9 +642,8 @@ After`,
     await processStreamOffDiscordMessage();
 
     expect(deliverDiscordReply).toHaveBeenCalledTimes(1);
-    const deliveryArgs = deliverDiscordReply.mock.calls[0]?.[0] as
-      | { replies?: Array<{ text?: string }> }
-      | undefined;
+    const deliveryCall = deliverDiscordReply.mock.calls.at(0) as Array<unknown> | undefined;
+    const deliveryArgs = deliveryCall?.[0] as { replies?: Array<{ text?: string }> } | undefined;
     expect(deliveryArgs?.replies?.[0]?.text).toBe("Before\n\nAfter");
   });
 });
