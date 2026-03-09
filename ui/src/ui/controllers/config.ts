@@ -184,9 +184,27 @@ export async function runUpdate(state: ConfigState) {
   state.updateRunning = true;
   state.lastError = null;
   try {
-    await state.client.request("update.run", {
+    const res = await state.client.request<{
+      ok?: boolean;
+      result?: { status?: "ok" | "error" | "skipped"; reason?: string | null };
+    }>("update.run", {
       sessionKey: state.applySessionKey,
     });
+    const status = res?.result?.status;
+    if (res?.ok === false || status === "error" || status === "skipped") {
+      const reason =
+        typeof res?.result?.reason === "string" && res.result.reason.trim()
+          ? res.result.reason.trim()
+          : null;
+      state.lastError =
+        status === "skipped"
+          ? reason
+            ? `Update skipped: ${reason}`
+            : "Update skipped."
+          : reason
+            ? `Update failed: ${reason}`
+            : "Update failed.";
+    }
   } catch (err) {
     state.lastError = String(err);
   } finally {
