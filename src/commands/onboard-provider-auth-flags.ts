@@ -23,6 +23,7 @@ type OnboardProviderAuthOptionKey = keyof Pick<
   | "xaiApiKey"
   | "litellmApiKey"
   | "qianfanApiKey"
+  | "nanogptApiKey"
   | "volcengineApiKey"
   | "byteplusApiKey"
 >;
@@ -183,6 +184,13 @@ export const ONBOARD_PROVIDER_AUTH_FLAGS: ReadonlyArray<OnboardProviderAuthFlag>
     cliFlag: "--qianfan-api-key",
     cliOption: "--qianfan-api-key <key>",
     description: "QIANFAN API key",
+  },
+  {
+    optionKey: "nanogptApiKey",
+    authChoice: "nanogpt-api-key",
+    cliFlag: "--nanogpt-api-key",
+    cliOption: "--nanogpt-api-key <key>",
+    description: "NanoGPT API key",
   },
   {
     optionKey: "volcengineApiKey",

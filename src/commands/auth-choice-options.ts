@@ -24,6 +24,12 @@ const AUTH_CHOICE_GROUP_DEFS: {
   choices: AuthChoice[];
 }[] = [
   {
+    value: "nanogpt",
+    label: "NanoGPT",
+    hint: "200+ models · pay-per-prompt or $8/month subscription",
+    choices: ["nanogpt-api-key"],
+  },
+  {
     value: "openai",
     label: "OpenAI",
     hint: "Codex OAuth + API key",
@@ -213,6 +219,11 @@ function buildProviderAuthChoiceOptions(): AuthChoiceOption[] {
 }
 
 const BASE_AUTH_CHOICE_OPTIONS: ReadonlyArray<AuthChoiceOption> = [
+  {
+    value: "nanogpt-api-key",
+    label: "NanoGPT API key (recommended)",
+    hint: "200+ models · pay-per-prompt or $8/month subscription",
+  },
   {
     value: "token",
     label: "Anthropic token (paste setup-token)",

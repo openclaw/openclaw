@@ -6,11 +6,17 @@ import {
 import {
   buildKilocodeProvider,
   buildKimiCodingProvider,
+  buildNanogptProvider,
   buildQianfanProvider,
   buildXiaomiProvider,
   QIANFAN_DEFAULT_MODEL_ID,
   XIAOMI_DEFAULT_MODEL_ID,
 } from "../agents/models-config.providers.js";
+import {
+  NANOGPT_BASE_URL,
+  NANOGPT_DEFAULT_MODEL_ID,
+  NANOGPT_SUBSCRIPTION_BASE_URL,
+} from "../agents/models-config.providers.static.js";
 import {
   buildSyntheticModelDefinition,
   SYNTHETIC_BASE_URL,
@@ -35,6 +41,7 @@ import {
   HUGGINGFACE_DEFAULT_MODEL_REF,
   KILOCODE_DEFAULT_MODEL_REF,
   MISTRAL_DEFAULT_MODEL_REF,
+  NANOGPT_DEFAULT_MODEL_REF,
   OPENROUTER_DEFAULT_MODEL_REF,
   TOGETHER_DEFAULT_MODEL_REF,
   XIAOMI_DEFAULT_MODEL_REF,
@@ -572,4 +579,36 @@ export function applyQianfanProviderConfig(cfg: OpenClawConfig): OpenClawConfig 
 export function applyQianfanConfig(cfg: OpenClawConfig): OpenClawConfig {
   const next = applyQianfanProviderConfig(cfg);
   return applyAgentDefaultModelPrimary(next, QIANFAN_DEFAULT_MODEL_REF);
+}
+
+export function applyNanogptProviderConfig(
+  cfg: OpenClawConfig,
+  params?: { subscriptionOnly?: boolean },
+): OpenClawConfig {
+  const subscriptionOnly = params?.subscriptionOnly ?? false;
+  const models = { ...cfg.agents?.defaults?.models };
+  models[NANOGPT_DEFAULT_MODEL_REF] = {
+    ...models[NANOGPT_DEFAULT_MODEL_REF],
+    alias: models[NANOGPT_DEFAULT_MODEL_REF]?.alias ?? "NanoGPT",
+  };
+
+  const defaultProvider = buildNanogptProvider(subscriptionOnly);
+  const baseUrl = subscriptionOnly ? NANOGPT_SUBSCRIPTION_BASE_URL : NANOGPT_BASE_URL;
+
+  return applyProviderConfigWithDefaultModels(cfg, {
+    agentModels: models,
+    providerId: "nanogpt",
+    api: "openai-completions",
+    baseUrl,
+    defaultModels: defaultProvider.models ?? [],
+    defaultModelId: NANOGPT_DEFAULT_MODEL_ID,
+  });
+}
+
+export function applyNanogptConfig(
+  cfg: OpenClawConfig,
+  params?: { subscriptionOnly?: boolean },
+): OpenClawConfig {
+  const next = applyNanogptProviderConfig(cfg, params);
+  return applyAgentDefaultModelPrimary(next, NANOGPT_DEFAULT_MODEL_REF);
 }

@@ -22,6 +22,8 @@ import {
   applyCloudflareAiGatewayProviderConfig,
   applyKilocodeConfig,
   applyKilocodeProviderConfig,
+  applyNanogptConfig,
+  applyNanogptProviderConfig,
   applyQianfanConfig,
   applyQianfanProviderConfig,
   applyKimiCodeConfig,
@@ -55,6 +57,7 @@ import {
   KIMI_CODING_MODEL_REF,
   MOONSHOT_DEFAULT_MODEL_REF,
   MISTRAL_DEFAULT_MODEL_REF,
+  NANOGPT_DEFAULT_MODEL_REF,
   SYNTHETIC_DEFAULT_MODEL_REF,
   TOGETHER_DEFAULT_MODEL_REF,
   VENICE_DEFAULT_MODEL_REF,
@@ -68,6 +71,7 @@ import {
   setKimiCodingApiKey,
   setMistralApiKey,
   setMoonshotApiKey,
+  setNanogptApiKey,
   setOpencodeZenApiKey,
   setSyntheticApiKey,
   setTogetherApiKey,
@@ -82,6 +86,7 @@ import { OPENCODE_ZEN_DEFAULT_MODEL } from "./opencode-zen-model-default.js";
 import { detectZaiEndpoint } from "./zai-endpoint-detect.js";
 
 const API_KEY_TOKEN_PROVIDER_AUTH_CHOICE: Record<string, AuthChoice> = {
+  nanogpt: "nanogpt-api-key",
   openrouter: "openrouter-api-key",
   litellm: "litellm-api-key",
   "vercel-ai-gateway": "ai-gateway-api-key",
@@ -671,6 +676,50 @@ export async function applyAuthChoiceApiProviders(
 
   if (authChoice === "huggingface-api-key") {
     return applyAuthChoiceHuggingface({ ...params, authChoice });
+  }
+
+  if (authChoice === "nanogpt-api-key") {
+    await ensureApiKeyFromOptionEnvOrPrompt({
+      token: params.opts?.token,
+      provider: "nanogpt",
+      tokenProvider: normalizedTokenProvider,
+      secretInputMode: requestedSecretInputMode,
+      config: nextConfig,
+      expectedProviders: ["nanogpt"],
+      envLabel: "NANOGPT_API_KEY",
+      promptMessage: "Enter NanoGPT API key",
+      normalize: normalizeApiKeyInput,
+      validate: validateApiKeyInput,
+      prompter: params.prompter,
+      setCredential: async (apiKey, mode) =>
+        setNanogptApiKey(apiKey, params.agentDir, { secretInputMode: mode }),
+      noteMessage: [
+        "NanoGPT provides pay-per-prompt access to 200+ AI models.",
+        "Get your API key at: https://nano-gpt.com",
+        "Optional $8/month subscription for unlimited open-source models.",
+      ].join("\n"),
+      noteTitle: "NanoGPT",
+    });
+
+    // Ask whether to use subscription-only models.
+    const subscriptionOnly = await params.prompter.confirm({
+      message: "Use subscription models only? ($8/month for unlimited open-source models)",
+      initialValue: false,
+    });
+
+    nextConfig = applyAuthProfileConfig(nextConfig, {
+      profileId: "nanogpt:default",
+      provider: "nanogpt",
+      mode: "api_key",
+    });
+    await applyProviderDefaultModel({
+      defaultModel: NANOGPT_DEFAULT_MODEL_REF,
+      applyDefaultConfig: (cfg) => applyNanogptConfig(cfg, { subscriptionOnly }),
+      applyProviderConfig: (cfg) => applyNanogptProviderConfig(cfg, { subscriptionOnly }),
+      noteDefault: NANOGPT_DEFAULT_MODEL_REF,
+    });
+
+    return { config: nextConfig, agentModelOverride };
   }
 
   return null;
