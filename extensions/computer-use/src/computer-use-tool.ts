@@ -204,7 +204,7 @@ export function createComputerUseTool(api: OpenClawPluginApi) {
             {
               method: "POST",
               body: JSON.stringify({
-                allow: readBoolean(params.allow) ?? true,
+                allow: readBoolean(params.allow) ?? false,
               }),
             },
             authToken,

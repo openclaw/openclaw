@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import register from "./index.js";
+import manifest from "./openclaw.plugin.json" with { type: "json" };
 
 describe("computer-use plugin registration", () => {
   it("registers the computer-use tool as optional", () => {
@@ -40,5 +41,9 @@ describe("computer-use plugin registration", () => {
       label: "Computer Use",
     });
     expect(registerTool.mock.calls[0]?.[1]).toEqual({ optional: true });
+  });
+
+  it("requires executorBaseUrl in the plugin config schema", () => {
+    expect(manifest.configSchema.required).toContain("executorBaseUrl");
   });
 });

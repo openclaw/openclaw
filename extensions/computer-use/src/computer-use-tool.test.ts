@@ -133,6 +133,28 @@ describe("computer-use tool", () => {
     expect((init.headers as Headers).get("authorization")).toBe("Bearer secret");
   });
 
+  it("defaults confirm decisions to reject until allow is explicit", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(
+        new Response(JSON.stringify({ taskId: "task-3", status: "rejected" }), { status: 200 }),
+      );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const tool = createComputerUseTool(
+      fakeApi({
+        pluginConfig: {
+          executorBaseUrl: "http://127.0.0.1:8100",
+        },
+      }) as never,
+    );
+
+    await tool.execute("tool-3", { action: "confirm", taskId: "task-3" });
+
+    const init = fetchMock.mock.calls[0]?.[1] as RequestInit;
+    expect(JSON.parse(String(init.body))).toEqual({ allow: false });
+  });
+
   it("throws when executorBaseUrl is missing", async () => {
     const tool = createComputerUseTool(fakeApi() as never);
     await expect(tool.execute("tool-4", { task: "Open browser" })).rejects.toThrow(
