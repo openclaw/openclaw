@@ -383,7 +383,6 @@ export async function checkQmdBinaryAvailable(
       "not found",
       "cannot find",
       "EINVAL", // Windows spawn EINVAL for non-existent executables
-      "spawn",
     ];
     const isNotFound = notFoundPatterns.some((pattern) => error.includes(pattern));
     if (isNotFound) {
