@@ -53,7 +53,15 @@ export type PluginRuntimeCore = {
     resolveStateDir: typeof import("../../config/paths.js").resolveStateDir;
   };
   modelAuth: {
-    getApiKeyForModel: typeof import("../../agents/model-auth.js").getApiKeyForModel;
-    resolveApiKeyForProvider: typeof import("../../agents/model-auth.js").resolveApiKeyForProvider;
+    /** Resolve auth for a model. Only provider/model and optional cfg are used. */
+    getApiKeyForModel: (params: {
+      model: import("@mariozechner/pi-ai").Model<import("@mariozechner/pi-ai").Api>;
+      cfg?: import("../../config/config.js").OpenClawConfig;
+    }) => Promise<import("../../agents/model-auth.js").ResolvedProviderAuth>;
+    /** Resolve auth for a provider by name. Only provider and optional cfg are used. */
+    resolveApiKeyForProvider: (params: {
+      provider: string;
+      cfg?: import("../../config/config.js").OpenClawConfig;
+    }) => Promise<import("../../agents/model-auth.js").ResolvedProviderAuth>;
   };
 };

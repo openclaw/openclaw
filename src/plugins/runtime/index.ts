@@ -64,23 +64,21 @@ export function createPluginRuntime(_options: CreatePluginRuntimeOptions = {}): 
     logging: createRuntimeLogging(),
     state: { resolveStateDir },
     modelAuth: {
-      // Wrap model-auth helpers to prevent plugins from passing arbitrary
-      // agentDir / store overrides, which would let them steer credential
-      // lookups outside their own context.  Only provider, model, cfg, and
-      // profileId are forwarded.
+      // Wrap model-auth helpers so plugins cannot steer credential lookups:
+      // - agentDir / store: stripped (prevents reading other agents' stores)
+      // - profileId / preferredProfile: stripped (prevents cross-provider
+      //   credential access via profile steering)
+      // Plugins only specify provider/model; the core auth pipeline picks
+      // the appropriate credential automatically.
       getApiKeyForModel: (params) =>
         getApiKeyForModelRaw({
           model: params.model,
           cfg: params.cfg,
-          profileId: params.profileId,
-          preferredProfile: params.preferredProfile,
         }),
       resolveApiKeyForProvider: (params) =>
         resolveApiKeyForProviderRaw({
           provider: params.provider,
           cfg: params.cfg,
-          profileId: params.profileId,
-          preferredProfile: params.preferredProfile,
         }),
     },
   } satisfies PluginRuntime;
