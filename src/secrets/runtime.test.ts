@@ -38,12 +38,19 @@ function loadAuthStoreWithProfiles(profiles: AuthProfileStore["profiles"]): Auth
   };
 }
 
+function createTrustedTestFileProvider(pathname: string) {
+  return {
+    source: "file" as const,
+    path: pathname,
+    mode: "json" as const,
+    ...(process.platform === "win32" ? { allowInsecurePath: true } : {}),
+  };
+}
+
 describe("secrets runtime snapshot", () => {
   afterEach(() => {
     clearSecretsRuntimeSnapshot();
   });
-
-  const allowInsecureTempSecretFile = process.platform === "win32";
 
   it("resolves env refs for config and auth profiles", async () => {
     const config = asConfig({
@@ -608,9 +615,6 @@ describe("secrets runtime snapshot", () => {
   });
 
   it("keeps active secrets runtime snapshots resolved after config writes", async () => {
-    if (os.platform() === "win32") {
-      return;
-    }
     await withTempHome("openclaw-secrets-runtime-write-", async (home) => {
       const configDir = path.join(home, ".openclaw");
       const secretFile = path.join(configDir, "secrets.json");
@@ -648,12 +652,7 @@ describe("secrets runtime snapshot", () => {
         config: asConfig({
           secrets: {
             providers: {
-              default: {
-                source: "file",
-                path: secretFile,
-                mode: "json",
-                ...(allowInsecureTempSecretFile ? { allowInsecurePath: true } : {}),
-              },
+              default: createTrustedTestFileProvider(secretFile),
             },
           },
           models: {
@@ -677,8 +676,17 @@ describe("secrets runtime snapshot", () => {
         key: "sk-file-runtime",
       });
 
+      const nextSourceConfig = getActiveSecretsRuntimeSnapshot()?.sourceConfig;
+      expect(nextSourceConfig).toBeDefined();
+      if (!nextSourceConfig) {
+        throw new Error("expected active secrets runtime source config");
+      }
+      expect(nextSourceConfig.secrets?.providers?.default).toMatchObject(
+        createTrustedTestFileProvider(secretFile),
+      );
+
       await writeConfigFile({
-        ...loadConfig(),
+        ...nextSourceConfig,
         gateway: { auth: { mode: "token" } },
       });
 
@@ -747,12 +755,7 @@ describe("secrets runtime snapshot", () => {
         config: asConfig({
           secrets: {
             providers: {
-              default: {
-                source: "file",
-                path: secretFile,
-                mode: "json",
-                ...(allowInsecureTempSecretFile ? { allowInsecurePath: true } : {}),
-              },
+              default: createTrustedTestFileProvider(secretFile),
             },
           },
           models: {
@@ -771,9 +774,18 @@ describe("secrets runtime snapshot", () => {
 
       activateSecretsRuntimeSnapshot(prepared);
 
+      const nextSourceConfig = getActiveSecretsRuntimeSnapshot()?.sourceConfig;
+      expect(nextSourceConfig).toBeDefined();
+      if (!nextSourceConfig) {
+        throw new Error("expected active secrets runtime source config");
+      }
+      expect(nextSourceConfig.secrets?.providers?.default).toMatchObject(
+        createTrustedTestFileProvider(secretFile),
+      );
+
       await expect(
         writeConfigFile({
-          ...loadConfig(),
+          ...nextSourceConfig,
           gateway: { auth: { mode: "token" } },
         }),
       ).rejects.toThrow(
