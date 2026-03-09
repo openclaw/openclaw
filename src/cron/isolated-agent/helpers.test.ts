@@ -3,6 +3,7 @@ import {
   isHeartbeatOnlyResponse,
   pickLastDeliverablePayload,
   pickLastNonEmptyTextFromPayloads,
+  pickSummaryFromOutput,
   pickSummaryFromPayloads,
 } from "./helpers.js";
 
@@ -83,6 +84,69 @@ describe("pickLastDeliverablePayload", () => {
     const normal = { text: "ok", isError: undefined };
     const error = { text: "bad", isError: true as const };
     expect(pickLastDeliverablePayload([normal, error])).toBe(normal);
+  });
+});
+
+describe("pickSummaryFromOutput — thinking tag stripping (regression #40480)", () => {
+  it("strips <think> tags from output text", () => {
+    const text = "<think>I need to analyze the data...</think>\n\nHere is your daily report.";
+    expect(pickSummaryFromOutput(text)).toBe("Here is your daily report.");
+  });
+
+  it("strips <thinking> tags", () => {
+    const text =
+      "<thinking>Step 1: gather data\nStep 2: format</thinking>Summary: all systems operational.";
+    expect(pickSummaryFromOutput(text)).toBe("Summary: all systems operational.");
+  });
+
+  it("returns undefined when text is only thinking content", () => {
+    expect(pickSummaryFromOutput("<think>internal only</think>")).toBeUndefined();
+  });
+
+  it("preserves text without thinking tags", () => {
+    expect(pickSummaryFromOutput("All clear, no issues.")).toBe("All clear, no issues.");
+  });
+});
+
+describe("pickSummaryFromPayloads — isReasoning filtering (regression #40480)", () => {
+  it("skips isReasoning payloads", () => {
+    const payloads = [
+      { text: "Internal reasoning about the task", isReasoning: true },
+      { text: "Daily report: everything is fine." },
+    ];
+    expect(pickSummaryFromPayloads(payloads)).toBe("Daily report: everything is fine.");
+  });
+
+  it("never returns reasoning-only payloads", () => {
+    expect(
+      pickSummaryFromPayloads([{ text: "Thinking about it...", isReasoning: true }]),
+    ).toBeUndefined();
+  });
+
+  it("falls back to error payload when only reasoning and error exist", () => {
+    const payloads = [
+      { text: "Some error", isError: true },
+      { text: "Reasoning content", isReasoning: true },
+    ];
+    expect(pickSummaryFromPayloads(payloads)).toBe("Some error");
+  });
+});
+
+describe("pickLastNonEmptyTextFromPayloads — isReasoning filtering (regression #40480)", () => {
+  it("skips isReasoning payloads", () => {
+    const payloads = [
+      { text: "User-visible answer" },
+      { text: "Internal reasoning", isReasoning: true },
+    ];
+    expect(pickLastNonEmptyTextFromPayloads(payloads)).toBe("User-visible answer");
+  });
+});
+
+describe("pickLastDeliverablePayload — isReasoning filtering (regression #40480)", () => {
+  it("skips isReasoning payloads", () => {
+    const deliverable = { text: "Deliverable content" };
+    const reasoning = { text: "Reasoning content", isReasoning: true as const };
+    expect(pickLastDeliverablePayload([deliverable, reasoning])).toBe(deliverable);
   });
 });
 

@@ -1,4 +1,5 @@
 import { DEFAULT_HEARTBEAT_ACK_MAX_CHARS } from "../../auto-reply/heartbeat.js";
+import { stripReasoningTagsFromText } from "../../shared/text/reasoning-tags.js";
 import { truncateUtf16Safe } from "../../utils.js";
 import { shouldSkipHeartbeatOnlyDelivery } from "../heartbeat-policy.js";
 
@@ -8,10 +9,16 @@ type DeliveryPayload = {
   mediaUrls?: string[];
   channelData?: Record<string, unknown>;
   isError?: boolean;
+  isReasoning?: boolean;
 };
 
 export function pickSummaryFromOutput(text: string | undefined) {
-  const clean = (text ?? "").trim();
+  // Strip thinking/reasoning tags so internal model monologue never leaks
+  // into user-facing cron announce summaries (#40480).
+  const clean = stripReasoningTagsFromText((text ?? "").trim(), {
+    mode: "strict",
+    trim: "both",
+  });
   if (!clean) {
     return undefined;
   }
@@ -20,10 +27,10 @@ export function pickSummaryFromOutput(text: string | undefined) {
 }
 
 export function pickSummaryFromPayloads(
-  payloads: Array<{ text?: string | undefined; isError?: boolean }>,
+  payloads: Array<{ text?: string | undefined; isError?: boolean; isReasoning?: boolean }>,
 ) {
   for (let i = payloads.length - 1; i >= 0; i--) {
-    if (payloads[i]?.isError) {
+    if (payloads[i]?.isError || payloads[i]?.isReasoning) {
       continue;
     }
     const summary = pickSummaryFromOutput(payloads[i]?.text);
@@ -32,6 +39,9 @@ export function pickSummaryFromPayloads(
     }
   }
   for (let i = payloads.length - 1; i >= 0; i--) {
+    if (payloads[i]?.isReasoning) {
+      continue;
+    }
     const summary = pickSummaryFromOutput(payloads[i]?.text);
     if (summary) {
       return summary;
@@ -41,10 +51,10 @@ export function pickSummaryFromPayloads(
 }
 
 export function pickLastNonEmptyTextFromPayloads(
-  payloads: Array<{ text?: string | undefined; isError?: boolean }>,
+  payloads: Array<{ text?: string | undefined; isError?: boolean; isReasoning?: boolean }>,
 ) {
   for (let i = payloads.length - 1; i >= 0; i--) {
-    if (payloads[i]?.isError) {
+    if (payloads[i]?.isError || payloads[i]?.isReasoning) {
       continue;
     }
     const clean = (payloads[i]?.text ?? "").trim();
@@ -53,6 +63,9 @@ export function pickLastNonEmptyTextFromPayloads(
     }
   }
   for (let i = payloads.length - 1; i >= 0; i--) {
+    if (payloads[i]?.isReasoning) {
+      continue;
+    }
     const clean = (payloads[i]?.text ?? "").trim();
     if (clean) {
       return clean;
@@ -69,7 +82,7 @@ export function pickLastDeliverablePayload(payloads: DeliveryPayload[]) {
     return text || hasMedia || hasChannelData;
   };
   for (let i = payloads.length - 1; i >= 0; i--) {
-    if (payloads[i]?.isError) {
+    if (payloads[i]?.isError || payloads[i]?.isReasoning) {
       continue;
     }
     if (isDeliverable(payloads[i])) {
@@ -77,6 +90,9 @@ export function pickLastDeliverablePayload(payloads: DeliveryPayload[]) {
     }
   }
   for (let i = payloads.length - 1; i >= 0; i--) {
+    if (payloads[i]?.isReasoning) {
+      continue;
+    }
     if (isDeliverable(payloads[i])) {
       return payloads[i];
     }
