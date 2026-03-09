@@ -583,7 +583,15 @@ async function resolveSubagentCompletionOrigin(params: {
 }
 
 async function sendAnnounce(item: AnnounceQueueItem) {
-  const cfg = loadConfig();
+  const { cfg, entry, canonicalKey } = loadRequesterSessionEntry(item.sessionKey);
+  const invalidModelRef = resolveInvalidCallbackModelRef(entry);
+  if (invalidModelRef) {
+    defaultRuntime.log(
+      `[warn] dropping stale callback envelope during send for session=${canonicalKey}: invalid model reference ${invalidModelRef}`,
+    );
+    return;
+  }
+
   const announceTimeoutMs = resolveSubagentAnnounceTimeoutMs(cfg);
   const requesterDepth = getSubagentDepthFromSessionStore(item.sessionKey);
   const requesterIsSubagent = requesterDepth >= 1;
@@ -656,6 +664,29 @@ function buildAnnounceQueueKey(sessionKey: string, origin?: DeliveryContext): st
   return `${sessionKey}:acct:${accountId}`;
 }
 
+function resolveInvalidCallbackModelRef(entry: unknown): string | null {
+  const candidates = [
+    entry?.modelOverride,
+    entry?.selectedModel,
+    entry?.fallbackNoticeSelectedModel,
+  ];
+
+  for (const candidate of candidates) {
+    if (typeof candidate !== "string") {
+      continue;
+    }
+    const normalized = candidate.trim();
+    if (!normalized) {
+      continue;
+    }
+    if (!normalized.includes("/")) {
+      return normalized;
+    }
+  }
+
+  return null;
+}
+
 async function maybeQueueSubagentAnnounce(params: {
   requesterSessionKey: string;
   announceId?: string;
@@ -671,6 +702,13 @@ async function maybeQueueSubagentAnnounce(params: {
   }
   const { cfg, entry } = loadRequesterSessionEntry(params.requesterSessionKey);
   const canonicalKey = resolveRequesterStoreKey(cfg, params.requesterSessionKey);
+  const invalidModelRef = resolveInvalidCallbackModelRef(entry);
+  if (invalidModelRef) {
+    defaultRuntime.log(
+      `[warn] dropping stale callback envelope during queue for session=${canonicalKey}: invalid model reference ${invalidModelRef}`,
+    );
+    return "none";
+  }
   const sessionId = entry?.sessionId;
   if (!sessionId) {
     return "none";
