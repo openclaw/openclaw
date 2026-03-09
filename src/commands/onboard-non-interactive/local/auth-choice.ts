@@ -15,6 +15,8 @@ import {
   applyCloudflareAiGatewayConfig,
   applyKilocodeConfig,
   applyQianfanConfig,
+  applyBailianConfig,
+  applyBailianConfigCn,
   applyKimiCodeConfig,
   applyMinimaxApiConfig,
   applyMinimaxApiConfigCn,
@@ -37,6 +39,7 @@ import {
   setCloudflareAiGatewayConfig,
   setByteplusApiKey,
   setQianfanApiKey,
+  setBailianApiKey,
   setGeminiApiKey,
   setKilocodeApiKey,
   setKimiCodingApiKey,
@@ -496,6 +499,60 @@ export async function applyNonInteractiveAuthChoice(params: {
       mode: "api_key",
     });
     return applyQianfanConfig(nextConfig);
+  }
+
+  if (authChoice === "bailian-api-key-cn") {
+    const resolved = await resolveApiKey({
+      provider: "bailian",
+      cfg: baseConfig,
+      flagValue: opts.bailianApiKeyCn,
+      flagName: "--bailian-api-key-cn",
+      envVar: "BAILIAN_API_KEY",
+      runtime,
+    });
+    if (!resolved) {
+      return null;
+    }
+    if (
+      !(await maybeSetResolvedApiKey(resolved, (value) =>
+        setBailianApiKey(value, undefined, apiKeyStorageOptions),
+      ))
+    ) {
+      return null;
+    }
+    nextConfig = applyAuthProfileConfig(nextConfig, {
+      profileId: "bailian:default",
+      provider: "bailian",
+      mode: "api_key",
+    });
+    return applyBailianConfigCn(nextConfig);
+  }
+
+  if (authChoice === "bailian-api-key") {
+    const resolved = await resolveApiKey({
+      provider: "bailian",
+      cfg: baseConfig,
+      flagValue: opts.bailianApiKey,
+      flagName: "--bailian-api-key",
+      envVar: "BAILIAN_API_KEY",
+      runtime,
+    });
+    if (!resolved) {
+      return null;
+    }
+    if (
+      !(await maybeSetResolvedApiKey(resolved, (value) =>
+        setBailianApiKey(value, undefined, apiKeyStorageOptions),
+      ))
+    ) {
+      return null;
+    }
+    nextConfig = applyAuthProfileConfig(nextConfig, {
+      profileId: "bailian:default",
+      provider: "bailian",
+      mode: "api_key",
+    });
+    return applyBailianConfig(nextConfig);
   }
 
   if (authChoice === "openai-api-key") {
