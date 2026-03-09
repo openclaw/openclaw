@@ -130,10 +130,23 @@ export function formatTargetDisplay(params: {
 }
 
 function preserveTargetCase(channel: ChannelId, raw: string, normalized: string): string {
+  const trimmed = raw.trim();
+
+  // For iMessage-style channels, explicit chat_* prefixes must be preserved as-is.
+  // Normalization can collapse chat_guid DM targets down to handles, which breaks
+  // callers that intentionally provide a concrete chat GUID (e.g. SMS vs iMessage).
+  if (
+    (channel === "bluebubbles" || channel === "imessage") &&
+    /^(chat_id:|chatid:|chat:|chat_guid:|chatguid:|guid:|chat_identifier:|chatidentifier:|chatident:)/i.test(
+      trimmed,
+    )
+  ) {
+    return trimmed;
+  }
+
   if (channel !== "slack") {
     return normalized;
   }
-  const trimmed = raw.trim();
   if (/^channel:/i.test(trimmed) || /^user:/i.test(trimmed)) {
     return trimmed;
   }

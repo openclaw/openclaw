@@ -75,4 +75,33 @@ describe("resolveMessagingTarget (directory fallback)", () => {
     expect(mocks.listGroups).not.toHaveBeenCalled();
     expect(mocks.listGroupsLive).not.toHaveBeenCalled();
   });
+
+  it("preserves explicit chat_guid targets for bluebubbles", async () => {
+    mocks.getChannelPlugin.mockReturnValue({
+      messaging: {
+        normalizeTarget: () => "+13239092441",
+        targetResolver: {
+          looksLikeId: () => true,
+        },
+      },
+      directory: {
+        listGroups: mocks.listGroups,
+        listGroupsLive: mocks.listGroupsLive,
+      },
+    });
+
+    const result = await resolveMessagingTarget({
+      cfg,
+      channel: "bluebubbles",
+      input: "chat_guid:SMS;-;+13239092441",
+    });
+
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.target.source).toBe("normalized");
+      expect(result.target.to).toBe("chat_guid:SMS;-;+13239092441");
+    }
+    expect(mocks.listGroups).not.toHaveBeenCalled();
+    expect(mocks.listGroupsLive).not.toHaveBeenCalled();
+  });
 });
