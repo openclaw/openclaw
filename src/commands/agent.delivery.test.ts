@@ -40,22 +40,33 @@ describe("deliverAgentCommandResult", () => {
     } as unknown as RuntimeEnv;
   }
 
-  function createResult(text = "hi", usageTotal?: number): EmbeddedPiRunResult {
+  function createResult(
+    text = "hi",
+    options?: {
+      usageTotal?: number;
+      didSendViaMessagingTool?: boolean;
+      messagingToolSentTexts?: string[];
+      messagingToolSentMediaUrls?: string[];
+    },
+  ): EmbeddedPiRunResult {
     return {
       payloads: text ? [{ text }] : [],
       meta: {
         durationMs: 1,
-        ...(usageTotal !== undefined
+        ...(options?.usageTotal !== undefined
           ? {
               agentMeta: {
                 sessionId: "test-session",
                 provider: "test",
                 model: "test-model",
-                usage: { total: usageTotal },
+                usage: { total: options.usageTotal },
               },
             }
           : {}),
       },
+      didSendViaMessagingTool: options?.didSendViaMessagingTool,
+      messagingToolSentTexts: options?.messagingToolSentTexts,
+      messagingToolSentMediaUrls: options?.messagingToolSentMediaUrls,
     };
   }
 
@@ -65,12 +76,17 @@ describe("deliverAgentCommandResult", () => {
     sessionEntry?: SessionEntry;
     runtime?: RuntimeEnv;
     resultText?: string;
-    usageTotal?: number;
+    resultOptions?: {
+      usageTotal?: number;
+      didSendViaMessagingTool?: boolean;
+      messagingToolSentTexts?: string[];
+      messagingToolSentMediaUrls?: string[];
+    };
   }) {
     const cfg = {} as OpenClawConfig;
     const deps = {} as CliDeps;
     const runtime = params.runtime ?? createRuntime();
-    const result = createResult(params.resultText, params.usageTotal);
+    const result = createResult(params.resultText, params.resultOptions);
 
     await deliverAgentCommandResult({
       cfg,
@@ -334,7 +350,27 @@ describe("deliverAgentCommandResult", () => {
     await runDelivery({
       runtime,
       resultText: "",
-      usageTotal: 150,
+      resultOptions: { didSendViaMessagingTool: true },
+      opts: {
+        message: "hello",
+        deliver: true,
+        channel: "whatsapp",
+        to: "+15551234567",
+      },
+    });
+
+    expect(mocks.deliverOutboundPayloads).not.toHaveBeenCalled();
+    expect(runtime.log).toHaveBeenCalledWith("No reply from agent.");
+  });
+
+  it("treats messaging-tool sent text metadata as intentional silence for empty payload runs", async () => {
+    const runtime = createRuntime();
+    await runDelivery({
+      runtime,
+      resultText: "",
+      resultOptions: {
+        messagingToolSentTexts: ["sent externally"],
+      },
       opts: {
         message: "hello",
         deliver: true,

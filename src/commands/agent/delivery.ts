@@ -221,11 +221,12 @@ export async function deliverAgentCommandResult(params: {
     // there were truly no payloads upstream, not when payloads normalized to empty.
     const meta = result.meta;
     const hadNoUpstreamPayloads = (payloads ?? []).length === 0;
+    const toolSentWithoutFinalPayload =
+      result.didSendViaMessagingTool === true ||
+      (result.messagingToolSentTexts?.length ?? 0) > 0 ||
+      (result.messagingToolSentMediaUrls?.length ?? 0) > 0;
     const succeededWithoutDeliverableOutput =
-      hadNoUpstreamPayloads &&
-      !meta.aborted &&
-      !meta.error &&
-      (meta.agentMeta?.usage?.total ?? 0) > 0;
+      hadNoUpstreamPayloads && !meta.aborted && !meta.error && toolSentWithoutFinalPayload;
     if (succeededWithoutDeliverableOutput) {
       runtime.log("No reply from agent.");
       return { payloads: normalizedPayloads, meta: result.meta };
