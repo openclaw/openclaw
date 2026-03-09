@@ -30,10 +30,17 @@ describe("toSanitizedMarkdownHtml", () => {
     expect(html).toContain("console.log(1)");
   });
 
-  it("flattens remote markdown images into alt text", () => {
+  it("renders remote https images inline (#40945)", () => {
     const html = toSanitizedMarkdownHtml("![Alt text](https://example.com/image.png)");
-    expect(html).not.toContain("<img");
-    expect(html).toContain("Alt text");
+    expect(html).toContain("<img");
+    expect(html).toContain("https://example.com/image.png");
+    expect(html).toContain('alt="Alt text"');
+  });
+
+  it("renders remote http images inline (#40945)", () => {
+    const html = toSanitizedMarkdownHtml("![Photo](http://example.com/photo.jpg)");
+    expect(html).toContain("<img");
+    expect(html).toContain("http://example.com/photo.jpg");
   });
 
   it("preserves base64 data URI images (#15437)", () => {
@@ -42,17 +49,23 @@ describe("toSanitizedMarkdownHtml", () => {
     expect(html).toContain("data:image/png;base64,");
   });
 
-  it("flattens non-data markdown image urls", () => {
+  it("flattens non-http/https image URLs to alt text (javascript:)", () => {
     const html = toSanitizedMarkdownHtml("![X](javascript:alert(1))");
     expect(html).not.toContain("<img");
     expect(html).not.toContain("javascript:");
     expect(html).toContain("X");
   });
 
-  it("uses a plain fallback label for unlabeled markdown images", () => {
-    const html = toSanitizedMarkdownHtml("![](https://example.com/image.png)");
+  it("flattens data:application/... image URLs to alt text", () => {
+    const html = toSanitizedMarkdownHtml("![X](data:application/octet-stream;base64,abc)");
     expect(html).not.toContain("<img");
-    expect(html).toContain("image");
+    expect(html).toContain("X");
+  });
+
+  it("uses a plain fallback label for unlabeled remote markdown images", () => {
+    const html = toSanitizedMarkdownHtml("![](https://example.com/image.png)");
+    expect(html).toContain("<img");
+    expect(html).toContain('alt="image"');
   });
 
   it("renders GFM markdown tables (#20410)", () => {
