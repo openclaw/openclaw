@@ -73,12 +73,12 @@ export function applyConfiguredContextWindows(params: {
         continue;
       }
       params.cache.set(modelId, contextWindow);
-      // When the model id is bare (no provider prefix), also store under the
-      // provider-qualified key so that qualified lookups in resolveContextTokensForModel
-      // respect explicit config overrides over discovered values.
-      if (!modelId.includes("/")) {
-        params.cache.set(`${providerId}/${modelId}`, contextWindow);
-      }
+      // Always store under the provider-qualified key so that qualified lookups
+      // in resolveContextTokensForModel respect explicit config overrides over
+      // discovered values. This covers both bare IDs (e.g. "claude-opus-4" →
+      // "anthropic/claude-opus-4") and slash-containing IDs common in OpenRouter
+      // (e.g. "anthropic/claude-sonnet-4-5" → "openrouter/anthropic/claude-sonnet-4-5").
+      params.cache.set(`${providerId}/${modelId}`, contextWindow);
     }
   }
 }
