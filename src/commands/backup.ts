@@ -281,9 +281,11 @@ function matchesExcludePattern(filePath: string, pattern: string): boolean {
   // Simple glob matching for common patterns
   const normalizedPath = filePath.replace(/\\/g, "/");
   
-  // Handle wildcards
-  if (pattern.includes("*")) {
-    const regex = new RegExp("^" + pattern.replace(/\*/g, ".*").replace(/\?/g, ".") + "$");
+  // Handle wildcards - escape regex special chars first
+  if (pattern.includes("*") || pattern.includes("?")) {
+    // Escape regex special characters except * and ?
+    const escaped = pattern.replace(/[.+^${}()|[\]\\]/g, "\\$&");
+    const regex = new RegExp("^" + escaped.replace(/\*/g, ".*").replace(/\?/g, ".") + "$");
     return regex.test(normalizedPath) || regex.test(path.basename(filePath));
   }
   
@@ -317,7 +319,7 @@ function filterExcludedAssets(assets: BackupAsset[], excludePatterns: string[]):
   return { included, excluded };
 }
 
-async function loadExcludePatternsFromFile(filePath: string): Promise<string[]> {
+async function loadExcludePatternsFromFile(filePath: string, required = false): Promise<string[]> {
   try {
     const content = await fs.readFile(filePath, "utf8");
     // Filter out empty lines and comments
@@ -325,7 +327,10 @@ async function loadExcludePatternsFromFile(filePath: string): Promise<string[]> 
       .split("\n")
       .map(line => line.trim())
       .filter(line => line && !line.startsWith("#"));
-  } catch {
+  } catch (err) {
+    if (required) {
+      throw new Error(`Failed to load exclude file: ${filePath}`, { cause: err });
+    }
     return [];
   }
 }
@@ -370,7 +375,7 @@ export async function backupCreateCommand(
   
   // Load from specified exclude file
   if (opts.excludeFile) {
-    const filePatterns = await loadExcludePatternsFromFile(opts.excludeFile);
+    const filePatterns = await loadExcludePatternsFromFile(opts.excludeFile, true);
     excludePatterns = [...excludePatterns, ...filePatterns];
   }
   
