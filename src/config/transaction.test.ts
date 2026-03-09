@@ -3,13 +3,8 @@ import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { withEnvAsync } from "../test-utils/env.js";
-import {
-  clearConfigCache,
-  readConfigFileSnapshot,
-  recoverConfigFromBackups,
-  resolveConfigSnapshotHash,
-  runConfigWriteTransaction,
-} from "./config.js";
+import { clearConfigCache, readConfigFileSnapshot, resolveConfigSnapshotHash } from "./config.js";
+import { runConfigWriteTransaction } from "./transaction.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "./types.js";
 
 function makeSnapshot(
@@ -43,13 +38,15 @@ describe("config transactions", () => {
   });
 
   async function withConfigCase<T>(params: {
-    raw: string;
+    raw?: string;
     run: (configPath: string) => Promise<T>;
   }): Promise<T> {
     const dir = path.join(fixtureRoot, `case-${caseId++}`);
     const configPath = path.join(dir, "openclaw.json");
     await fs.mkdir(dir, { recursive: true });
-    await fs.writeFile(configPath, params.raw, "utf-8");
+    if (typeof params.raw === "string") {
+      await fs.writeFile(configPath, params.raw, "utf-8");
+    }
     return await withEnvAsync(
       {
         OPENCLAW_CONFIG_PATH: configPath,
@@ -71,6 +68,7 @@ describe("config transactions", () => {
             gateway: { mode: "local", bind: "loopback" },
           },
         });
+
         expect(result.ok).toBe(true);
         expect(result.stage).toBeNull();
         expect(result.transactionId.length).toBeGreaterThan(0);
@@ -94,6 +92,7 @@ describe("config transactions", () => {
           verifyCommittedSnapshot: () => false,
           verificationErrorMessage: "forced verify failure",
         });
+
         expect(result.ok).toBe(false);
         expect(result.stage).toBe("verify");
         expect(result.rolledBack).toBe(true);
@@ -105,86 +104,33 @@ describe("config transactions", () => {
     });
   });
 
-  it("recovers from the first valid backup when config is invalid", async () => {
+  it("rolls back when the commit path throws after mutating the file", async () => {
     await withConfigCase({
-      raw: "{invalid-json",
+      raw: '{\n  "gateway": { "mode": "local" }\n}\n',
       run: async (configPath) => {
-        await fs.writeFile(
-          `${configPath}.bak`,
-          '{\n  "gateway": { "mode": "local", "bind": "loopback" }\n}\n',
-          "utf-8",
-        );
-
-        const result = await recoverConfigFromBackups();
-        expect(result.recovered).toBe(true);
-        expect(result.sourceBackupPath).toBe(`${configPath}.bak`);
-
-        const snapshot = await readConfigFileSnapshot();
-        expect(snapshot.valid).toBe(true);
-        expect(snapshot.config.gateway?.bind).toBe("loopback");
-      },
-    });
-  });
-
-  it("reports failure when no valid backups are available", async () => {
-    await withConfigCase({
-      raw: "{invalid-json",
-      run: async (configPath) => {
-        await fs.writeFile(`${configPath}.bak`, "{also-invalid", "utf-8");
-        await fs.writeFile(`${configPath}.bak.1`, "{still-invalid", "utf-8");
-
-        const result = await recoverConfigFromBackups();
-        expect(result.recovered).toBe(false);
-        expect(result.sourceBackupPath).toBeNull();
-      },
-    });
-  });
-
-  it("stops recovery after a successful restore write when restored config is still invalid", async () => {
-    await withConfigCase({
-      raw: "{invalid-json",
-      run: async (configPath) => {
-        const backupPath = `${configPath}.bak`;
-        await fs.writeFile(backupPath, '{\n  "gateway": { "mode": "local" }\n}\n', "utf-8");
-        const restoredIssues = [{ path: "gateway.bind", message: "invalid bind mode" }];
-
-        const result = await recoverConfigFromBackups(
+        const beforeRaw = await fs.readFile(configPath, "utf-8");
+        const result = await runConfigWriteTransaction(
           {
-            snapshot: makeSnapshot({
-              path: configPath,
-              exists: true,
-              valid: false,
-              raw: "{invalid-json",
-              issues: [{ path: "<root>", message: "parse failed" }],
-            }),
+            config: {
+              gateway: { mode: "local", bind: "loopback" },
+            },
+            skipPrepareIsolation: true,
           },
           {
-            createConfigIO: ((options: { configPath?: string }) => ({
-              readConfigFileSnapshot: async () => {
-                if (options.configPath === configPath) {
-                  return makeSnapshot({
-                    path: configPath,
-                    exists: true,
-                    valid: false,
-                    raw: '{ "gateway": { "bind": "broken" } }',
-                    issues: restoredIssues,
-                  });
-                }
-                return makeSnapshot({
-                  path: options.configPath ?? backupPath,
-                  exists: true,
-                  valid: true,
-                  raw: '{\n  "gateway": { "mode": "local" }\n}\n',
-                  config: { gateway: { mode: "local" } },
-                });
-              },
-            })) as typeof import("./io.js").createConfigIO,
+            writeConfigFile: async () => {
+              await fs.writeFile(configPath, '{\n  "gateway": { "mode": "broken" }\n}\n', "utf-8");
+              throw new Error("forced commit failure");
+            },
           },
         );
 
-        expect(result.recovered).toBe(false);
-        expect(result.sourceBackupPath).toBe(backupPath);
-        expect(result.issues).toEqual(restoredIssues);
+        expect(result.ok).toBe(false);
+        expect(result.stage).toBe("commit");
+        expect(result.rolledBack).toBe(true);
+        expect(result.error).toContain("forced commit failure");
+
+        const afterRaw = await fs.readFile(configPath, "utf-8");
+        expect(afterRaw).toBe(beforeRaw);
       },
     });
   });
@@ -236,64 +182,8 @@ describe("config transactions", () => {
     expect(env.OPENCLAW_TEST_ENV_LEAK).toBeUndefined();
   });
 
-  it("isolates backup-candidate validation reads from transaction env state", async () => {
-    await withConfigCase({
-      raw: "{invalid-json",
-      run: async (configPath) => {
-        const env = {
-          OPENCLAW_CONFIG_PATH: configPath,
-        } as NodeJS.ProcessEnv;
-        await fs.writeFile(`${configPath}.bak`, "{}\n", "utf-8");
-
-        const result = await recoverConfigFromBackups(
-          {
-            snapshot: makeSnapshot({
-              path: configPath,
-              exists: true,
-              valid: false,
-              raw: "{invalid-json",
-              issues: [{ path: "<root>", message: "parse failed" }],
-            }),
-          },
-          {
-            env,
-            createConfigIO: ((options: { configPath?: string; env?: NodeJS.ProcessEnv }) => ({
-              readConfigFileSnapshot: async () => {
-                if (options.env) {
-                  options.env.OPENCLAW_TEST_RECOVERY_ENV_LEAK = "leaked";
-                }
-                return makeSnapshot({
-                  path: options.configPath ?? `${configPath}.bak`,
-                  exists: true,
-                  valid: true,
-                  raw: '{\n  "gateway": { "mode": "local" }\n}\n',
-                  config: { gateway: { mode: "local" } },
-                });
-              },
-            })) as unknown as typeof import("./io.js").createConfigIO,
-            readConfigFileSnapshot: async () =>
-              makeSnapshot({
-                path: configPath,
-                exists: true,
-                valid: true,
-                raw: '{\n  "gateway": { "mode": "local" }\n}\n',
-                config: { gateway: { mode: "local" } },
-              }),
-            clearConfigCache: () => {},
-          },
-        );
-
-        expect(result.recovered).toBe(true);
-        expect(env.OPENCLAW_TEST_RECOVERY_ENV_LEAK).toBeUndefined();
-      },
-    });
-  });
-
   it("rejects transaction when expected base hash mismatches current snapshot", async () => {
     const configPath = "/tmp/openclaw-transaction-base-hash-mismatch.json";
-    const writeConfigFile = async () => {
-      throw new Error("should not write");
-    };
     const result = await runConfigWriteTransaction(
       {
         config: { gateway: { mode: "local" } },
@@ -309,7 +199,9 @@ describe("config transactions", () => {
             valid: true,
             config: { gateway: { mode: "local" } },
           }),
-        writeConfigFile,
+        writeConfigFile: async () => {
+          throw new Error("should not write");
+        },
       },
     );
 
@@ -339,6 +231,7 @@ describe("config transactions", () => {
     let readIndex = 0;
     const writeSpy: Array<OpenClawConfig> = [];
     const expectedBaseHash = resolveConfigSnapshotHash(snapshots[0]) ?? "";
+
     const result = await runConfigWriteTransaction(
       {
         config: { gateway: { mode: "local", bind: "loopback" } },

@@ -1,14 +1,7 @@
 import { spawnSync } from "node:child_process";
 import fsSync from "node:fs";
 import { isRestartEnabled } from "../../config/commands.js";
-import {
-  createConfigIO,
-  loadConfig,
-  readBestEffortConfig,
-  recoverConfigFromBackups,
-  resolveGatewayPort,
-} from "../../config/config.js";
-import { shouldRecoverInvalidConfigSnapshot } from "../../config/snapshot-recovery.js";
+import { readBestEffortConfig, resolveGatewayPort } from "../../config/config.js";
 import { parseCmdScriptCommandLine } from "../../daemon/cmd-argv.js";
 import { resolveGatewayService } from "../../daemon/service.js";
 import { probeGateway } from "../../gateway/probe.js";
@@ -48,109 +41,6 @@ async function resolveGatewayLifecyclePort(service = resolveGatewayService()) {
 
   const portFromArgs = parsePortFromArgs(command?.programArguments);
   return portFromArgs ?? resolveGatewayPort(await readBestEffortConfig(), mergedEnv);
-}
-
-class GatewayServiceCommandReadError extends Error {
-  constructor(message: string, options?: { cause?: unknown }) {
-    super(message, options);
-    this.name = "GatewayServiceCommandReadError";
-  }
-}
-
-async function resolveGatewayServiceRuntimeEnv() {
-  const service = resolveGatewayService();
-  let command: Awaited<ReturnType<typeof service.readCommand>>;
-  try {
-    command = await service.readCommand(process.env);
-  } catch (err) {
-    throw new GatewayServiceCommandReadError(
-      `failed to read gateway service command: ${String(err)}`,
-      { cause: err },
-    );
-  }
-  const serviceEnv = command?.environment ?? undefined;
-  return {
-    command,
-    mergedEnv: {
-      ...(process.env as Record<string, string | undefined>),
-      ...(serviceEnv ?? undefined),
-    } as NodeJS.ProcessEnv,
-  };
-}
-
-async function resolveGatewayRestartPort() {
-  const { command, mergedEnv } = await resolveGatewayServiceRuntimeEnv();
-  const cfg = createConfigIO({ env: { ...mergedEnv } }).loadConfig();
-  const portFromArgs = parsePortFromArgs(command?.programArguments);
-  return portFromArgs ?? resolveGatewayPort(cfg, mergedEnv);
-}
-
-async function resolveGatewayRestartPortWithFallback(): Promise<number> {
-  try {
-    return await resolveGatewayRestartPort();
-  } catch (err) {
-    if (err instanceof GatewayServiceCommandReadError) {
-      return resolveGatewayPort(loadConfig(), process.env);
-    }
-    throw err;
-  }
-}
-
-async function runRestartConfigPreflight(params: {
-  json: boolean;
-  warnings: string[];
-  fail: (message: string, hints?: string[]) => never;
-}): Promise<void> {
-  let mergedEnv = process.env;
-  try {
-    const serviceRuntime = await resolveGatewayServiceRuntimeEnv();
-    mergedEnv = serviceRuntime.mergedEnv;
-  } catch (err) {
-    if (!(err instanceof GatewayServiceCommandReadError)) {
-      throw err;
-    }
-  }
-  const configIo = createConfigIO({ env: { ...mergedEnv } });
-  const snapshot = await configIo.readConfigFileSnapshot().catch((err) => {
-    params.fail(`Gateway restart blocked: failed to read config (${String(err)}).`, [
-      formatCliCommand("openclaw config validate"),
-      formatCliCommand("openclaw doctor"),
-    ]);
-    return null;
-  });
-  if (!snapshot || snapshot.valid) {
-    return;
-  }
-
-  const issue = snapshot.issues[0];
-  const issueText = issue ? `${issue.path || "<root>"}: ${issue.message}` : "unknown issue";
-  if (!shouldRecoverInvalidConfigSnapshot(snapshot)) {
-    params.fail(`Gateway restart blocked: config is invalid (${issueText}). Fix and retry.`, [
-      formatCliCommand("openclaw config validate"),
-      formatCliCommand("openclaw doctor"),
-    ]);
-  }
-
-  const recovered = await recoverConfigFromBackups(
-    { snapshot },
-    {
-      env: mergedEnv,
-    },
-  );
-  if (recovered.recovered) {
-    const message = `Last config update failed validation (${issueText}). Recovered from backup (${recovered.sourceBackupPath ?? "unknown"}). Retry your previous config command if you still need the change.`;
-    params.warnings.push(message);
-    if (!params.json) {
-      defaultRuntime.log(theme.warn(message));
-    }
-    return;
-  }
-
-  const recoveryTail = recovered.error ? ` Recovery error: ${recovered.error}` : "";
-  params.fail(
-    `Gateway restart blocked: last config update failed validation (${issueText}).${recoveryTail} Retry the config command after fixing the issue.`,
-    [formatCliCommand("openclaw config validate"), formatCliCommand("openclaw doctor")],
-  );
 }
 
 function extractWindowsCommandLine(raw: string): string | null {
@@ -331,7 +221,9 @@ export async function runDaemonRestart(opts: DaemonLifecycleOptions = {}): Promi
   const json = Boolean(opts.json);
   const service = resolveGatewayService();
   let restartedWithoutServiceManager = false;
-  let unmanagedRestartPort: number | null = null;
+  const restartPort = await resolveGatewayLifecyclePort(service).catch(() =>
+    resolveGatewayPortFallback(),
+  );
   const restartWaitMs = POST_RESTART_HEALTH_ATTEMPTS * POST_RESTART_HEALTH_DELAY_MS;
   const restartWaitSeconds = Math.round(restartWaitMs / 1000);
 
@@ -341,22 +233,14 @@ export async function runDaemonRestart(opts: DaemonLifecycleOptions = {}): Promi
     renderStartHints: renderGatewayServiceStartHints,
     opts,
     checkTokenDrift: true,
-    preRestartCheck: async ({ json, warnings, fail }) => {
-      await runRestartConfigPreflight({ json, warnings, fail });
-    },
     onNotLoaded: async () => {
-      const restartPort = await resolveGatewayRestartPortWithFallback().catch(() =>
-        resolveGatewayPortFallback(),
-      );
       const handled = await restartGatewayWithoutServiceManager(restartPort);
       if (handled) {
         restartedWithoutServiceManager = true;
-        unmanagedRestartPort = restartPort;
       }
       return handled;
     },
     postRestartCheck: async ({ warnings, fail, stdout }) => {
-      const restartPort = unmanagedRestartPort ?? (await resolveGatewayRestartPortWithFallback());
       if (restartedWithoutServiceManager) {
         const health = await waitForGatewayHealthyListener({
           port: restartPort,
@@ -384,6 +268,7 @@ export async function runDaemonRestart(opts: DaemonLifecycleOptions = {}): Promi
           formatCliCommand("openclaw doctor"),
         ]);
       }
+
       let health = await waitForGatewayHealthyRestart({
         service,
         port: restartPort,

@@ -1,9 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
-import { formatConfigWriteFailureForCli } from "../config/config.js";
-import * as configModule from "../config/config.js";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { fixSecurityFootguns } from "./fix.js";
 
 const isWindows = process.platform === "win32";
@@ -197,41 +195,6 @@ describe("security fix", () => {
     expect(res.ok).toBe(false);
 
     await expectTightenedStateAndConfigPerms(stateDir, configPath);
-  });
-
-  it("keeps transaction failures formatter-compatible in fix errors", async () => {
-    const stateDir = await createStateDir("tx-failure");
-    const configPath = path.join(stateDir, "openclaw.json");
-    await writeJsonConfig(configPath, {
-      channels: {
-        telegram: { groupPolicy: "open" },
-      },
-    });
-
-    const txSpy = vi.spyOn(configModule, "runConfigWriteTransaction").mockResolvedValueOnce({
-      ok: false,
-      transactionId: "tx-security-fix",
-      stage: "verify",
-      rolledBack: true,
-      beforeHash: "abc123def456",
-      afterHash: "feedfacecafe",
-      error: "committed config failed verification",
-      issues: [],
-    });
-
-    try {
-      const env = createFixEnv(stateDir, configPath);
-      const res = await fixSecurityFootguns({ env, stateDir, configPath });
-      expect(res.ok).toBe(false);
-      const writeError = res.errors.find((entry) => entry.startsWith("writeConfigFile failed:"));
-      expect(writeError).toBeTruthy();
-      const formatted = formatConfigWriteFailureForCli(writeError ?? "");
-      expect(formatted).toContain("Last config update failed");
-      expect(formatted).toContain("Rolled back config version hash=abc123def456");
-      expect(formatted).toContain("committed config failed verification");
-    } finally {
-      txSpy.mockRestore();
-    }
   });
 
   it("tightens perms for credentials + agent auth/sessions + include files", async () => {

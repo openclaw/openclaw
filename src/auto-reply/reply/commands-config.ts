@@ -24,7 +24,6 @@ import {
 } from "./command-gates.js";
 import type { CommandHandler } from "./commands-types.js";
 import { parseConfigCommand } from "./config-commands.js";
-import { formatConfigWriteFailureText } from "./config-write-failure.js";
 import { parseDebugCommand } from "./debug-commands.js";
 
 export const handleConfigCommand: CommandHandler = async (params, allowTextCommands) => {
@@ -144,16 +143,7 @@ export const handleConfigCommand: CommandHandler = async (params, allowTextComma
         },
       };
     }
-    try {
-      await writeConfigFile(validated.config);
-    } catch (err) {
-      return {
-        shouldContinue: false,
-        reply: {
-          text: formatConfigWriteFailureText(err),
-        },
-      };
-    }
+    await writeConfigFile(validated.config);
     return {
       shouldContinue: false,
       reply: { text: `⚙️ Config updated: ${configCommand.path} removed.` },
@@ -179,16 +169,7 @@ export const handleConfigCommand: CommandHandler = async (params, allowTextComma
         },
       };
     }
-    try {
-      await writeConfigFile(validated.config);
-    } catch (err) {
-      return {
-        shouldContinue: false,
-        reply: {
-          text: formatConfigWriteFailureText(err),
-        },
-      };
-    }
+    await writeConfigFile(validated.config);
     const valueLabel =
       typeof configCommand.value === "string"
         ? `"${configCommand.value}"`

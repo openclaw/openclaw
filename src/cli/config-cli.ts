@@ -1,10 +1,6 @@
 import type { Command } from "commander";
 import JSON5 from "json5";
-import {
-  formatConfigWriteFailureForCli,
-  readConfigFileSnapshot,
-  writeConfigFile,
-} from "../config/config.js";
+import { readConfigFileSnapshot, writeConfigFile } from "../config/config.js";
 import { formatConfigIssueLines, normalizeConfigIssues } from "../config/issue-format.js";
 import { CONFIG_PATH } from "../config/paths.js";
 import { isBlockedObjectKey } from "../config/prototype-keys.js";
@@ -329,8 +325,7 @@ export async function runConfigUnset(opts: { path: string; runtime?: RuntimeEnv 
     await writeConfigFile(next, { unsetPaths: [parsedPath] });
     runtime.log(info(`Removed ${opts.path}. Restart the gateway to apply.`));
   } catch (err) {
-    const transactionFailure = formatConfigWriteFailureForCli(err);
-    runtime.error(danger(transactionFailure ?? String(err)));
+    runtime.error(danger(String(err)));
     runtime.exit(1);
   }
 }
@@ -451,8 +446,7 @@ export function registerConfigCli(program: Command) {
         await writeConfigFile(next);
         defaultRuntime.log(info(`Updated ${path}. Restart the gateway to apply.`));
       } catch (err) {
-        const transactionFailure = formatConfigWriteFailureForCli(err);
-        defaultRuntime.error(danger(transactionFailure ?? String(err)));
+        defaultRuntime.error(danger(String(err)));
         defaultRuntime.exit(1);
       }
     });

@@ -10,7 +10,6 @@ import {
   writeConfigFile as writeConfigFileDirect,
 } from "./io.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "./types.js";
-import { ConfigWriteTransactionError } from "./write-failure.js";
 
 const DEFAULT_NUMBERED_BACKUP_COUNT = 6;
 const SILENT_LOGGER = {
@@ -67,7 +66,7 @@ async function replaceFileWithCopyFallback(
   );
   await ioFs.promises.copyFile(sourceTmpPath, replaceTmpPath);
   await ioFs.promises.chmod(replaceTmpPath, 0o600).catch(() => {
-    // best-effort
+    // Best effort only.
   });
   try {
     await ioFs.promises.rename(replaceTmpPath, configPath);
@@ -77,12 +76,11 @@ async function replaceFileWithCopyFallback(
     if (!isRenameReplaceBlocked(code)) {
       throw err;
     }
-    // Best-effort fallback for platforms where atomic replace-by-rename is blocked.
     await ioFs.promises.rm(configPath, { force: true });
     await ioFs.promises.rename(replaceTmpPath, configPath);
   } finally {
     await ioFs.promises.rm(replaceTmpPath, { force: true }).catch(() => {
-      // best-effort
+      // Best effort only.
     });
   }
 }
@@ -108,7 +106,7 @@ async function writeRawAtomically(
     throw err;
   } finally {
     await ioFs.promises.rm(tmpPath, { force: true }).catch(() => {
-      // best-effort
+      // Best effort only.
     });
   }
 }
@@ -120,7 +118,7 @@ async function restorePreTransactionSnapshot(
 ): Promise<void> {
   if (!snapshot.exists) {
     await ioFs.promises.rm(snapshot.path, { force: true }).catch(() => {
-      // best-effort
+      // Best effort only.
     });
     return;
   }
@@ -140,7 +138,7 @@ async function cleanupStagingFiles(
   const candidates = [stagingPath, ...listBackupCandidates(stagingPath, numberedBackupCount)];
   for (const candidate of candidates) {
     await ioFs.promises.rm(candidate, { force: true }).catch(() => {
-      // best-effort
+      // Best effort only.
     });
   }
 }
@@ -163,10 +161,9 @@ async function runIsolatedVerification(params: {
 }): Promise<IsolatedVerificationResult> {
   const baseline = await params.deps.readConfigFileSnapshot();
   const stagingPath = `${baseline.path}.tx-${params.transactionId}.staging.json`;
-  const stagingEnv = cloneProcessEnv(params.deps.env);
   const stagingIo = params.deps.createConfigIO({
     configPath: stagingPath,
-    env: stagingEnv,
+    env: cloneProcessEnv(params.deps.env),
     logger: SILENT_LOGGER,
   });
   try {
@@ -244,6 +241,7 @@ export async function runConfigWriteTransaction(
   const expectedBaseHash = normalizeExpectedBaseHash(params.expectedBaseHash);
   const beforeSnapshot = await deps.readConfigFileSnapshot();
   const beforeHash = resolveConfigSnapshotHash(beforeSnapshot);
+
   if (expectedBaseHash && beforeHash !== expectedBaseHash) {
     return {
       ok: false,
@@ -282,8 +280,7 @@ export async function runConfigWriteTransaction(
   }
 
   if (expectedBaseHash) {
-    // Re-check right before commit to narrow race windows between concurrent
-    // writers that read the same base snapshot.
+    // Re-check right before commit to narrow the race window for concurrent writers.
     const latestSnapshot = await deps.readConfigFileSnapshot();
     const latestHash = resolveConfigSnapshotHash(latestSnapshot);
     if (latestHash !== expectedBaseHash) {
@@ -306,8 +303,6 @@ export async function runConfigWriteTransaction(
   try {
     await deps.writeConfigFile(params.config, writeOptions);
   } catch (err) {
-    // The write may have partially completed (e.g. Windows copy-fallback path).
-    // Re-read to check whether the on-disk file actually changed.
     const postFailSnapshot = await deps.readConfigFileSnapshot().catch(() => null);
     const postFailHash = postFailSnapshot ? resolveConfigSnapshotHash(postFailSnapshot) : null;
     const fileChanged = postFailHash !== null && postFailHash !== beforeHash;
@@ -325,7 +320,7 @@ export async function runConfigWriteTransaction(
           error: String(err),
         };
       } catch {
-        // Rollback also failed; report the commit-stage error with no rollback.
+        // Preserve the original commit error and report rollback failure via rolledBack=false.
       }
     }
     return {
@@ -357,10 +352,9 @@ export async function runConfigWriteTransaction(
 
   const verificationError =
     params.verificationErrorMessage ?? "committed config failed verification";
-  // Known limitation: commit writes the production file before this verify step.
-  // If verify fails, rollback restores the previous snapshot, but file watchers
-  // may observe the short-lived bad commit in between.
-
+  // Commit writes the production file before this verify step. If verification
+  // fails, we restore the previous snapshot immediately, but file watchers may
+  // still observe the short-lived bad commit.
   try {
     await restorePreTransactionSnapshot(deps.fs, beforeSnapshot, transactionId);
     deps.clearConfigCache();
@@ -409,167 +403,5 @@ export async function runConfigWriteTransaction(
     afterHash,
     error: verificationError,
     issues: committedSnapshot.issues,
-  };
-}
-
-export type CommitConfigWriteTransactionParams = RunConfigWriteTransactionParams;
-
-export type CommitConfigWriteTransactionResult = {
-  transactionId: string;
-  beforeHash: string | null;
-  afterHash: string | null;
-};
-
-export async function commitConfigWriteTransactionOrThrow(
-  params: CommitConfigWriteTransactionParams,
-  overrides: ConfigTransactionDeps = {},
-): Promise<CommitConfigWriteTransactionResult> {
-  const deps = normalizeDeps(overrides);
-  const expectedBaseHash = normalizeExpectedBaseHash(params.expectedBaseHash);
-  const beforeSnapshot = await deps.readConfigFileSnapshot();
-  const beforeHash = resolveConfigSnapshotHash(beforeSnapshot);
-
-  // First-time bootstrap has no previous state to roll back to.
-  if (!beforeSnapshot.exists) {
-    if (expectedBaseHash && beforeHash !== expectedBaseHash) {
-      throw new ConfigWriteTransactionError({
-        ok: false,
-        transactionId: crypto.randomUUID(),
-        stage: "prepare",
-        rolledBack: false,
-        beforeHash,
-        afterHash: null,
-        error: buildExpectedBaseHashMismatchError({
-          expectedBaseHash,
-          currentHash: beforeHash,
-        }),
-        issues: beforeSnapshot.issues,
-      });
-    }
-    await deps.writeConfigFile(params.config, params.writeOptions ?? {});
-    const committedSnapshot = await deps.readConfigFileSnapshot();
-    return {
-      transactionId: crypto.randomUUID(),
-      beforeHash,
-      afterHash: resolveConfigSnapshotHash(committedSnapshot),
-    };
-  }
-
-  const transaction = await runConfigWriteTransaction(params, deps);
-  if (!transaction.ok) {
-    throw new ConfigWriteTransactionError(transaction);
-  }
-  return {
-    transactionId: transaction.transactionId,
-    beforeHash: transaction.beforeHash,
-    afterHash: transaction.afterHash,
-  };
-}
-
-export async function writeConfigFile(
-  cfg: OpenClawConfig,
-  options: ConfigWriteOptions = {},
-): Promise<void> {
-  await commitConfigWriteTransactionOrThrow({
-    config: cfg,
-    writeOptions: options,
-  });
-}
-
-export type RecoverConfigFromBackupsParams = {
-  snapshot?: ConfigFileSnapshot;
-  numberedBackupCount?: number;
-};
-
-export type ConfigBackupRecoveryResult = {
-  recovered: boolean;
-  configPath: string;
-  sourceBackupPath: string | null;
-  error?: string;
-  issues?: ConfigFileSnapshot["issues"];
-};
-
-export async function recoverConfigFromBackups(
-  params: RecoverConfigFromBackupsParams = {},
-  overrides: ConfigTransactionDeps = {},
-): Promise<ConfigBackupRecoveryResult> {
-  const deps = normalizeDeps(overrides);
-  const snapshot = params.snapshot ?? (await deps.readConfigFileSnapshot());
-  if (snapshot.valid) {
-    return {
-      recovered: false,
-      configPath: snapshot.path,
-      sourceBackupPath: null,
-    };
-  }
-
-  const numberedBackupCount = params.numberedBackupCount ?? DEFAULT_NUMBERED_BACKUP_COUNT;
-  const candidates = listBackupCandidates(snapshot.path, numberedBackupCount);
-  for (const candidatePath of candidates) {
-    const candidateExists = await deps.fs.promises
-      .access(candidatePath)
-      .then(() => true)
-      .catch(() => false);
-    if (!candidateExists) {
-      continue;
-    }
-
-    const backupIo = deps.createConfigIO({
-      configPath: candidatePath,
-      env: cloneProcessEnv(deps.env),
-      logger: SILENT_LOGGER,
-    });
-    const backupSnapshot = await backupIo.readConfigFileSnapshot().catch(() => null);
-    if (
-      !backupSnapshot?.valid ||
-      !backupSnapshot.exists ||
-      typeof backupSnapshot.raw !== "string"
-    ) {
-      continue;
-    }
-
-    try {
-      await writeRawAtomically(
-        deps.fs,
-        snapshot.path,
-        backupSnapshot.raw,
-        `recover-${crypto.randomUUID()}`,
-      );
-      deps.clearConfigCache();
-      const restoredIo = deps.createConfigIO({
-        configPath: snapshot.path,
-        env: cloneProcessEnv(deps.env),
-        logger: SILENT_LOGGER,
-      });
-      const restoredSnapshot = await restoredIo.readConfigFileSnapshot();
-      if (!restoredSnapshot.valid) {
-        return {
-          recovered: false,
-          configPath: snapshot.path,
-          sourceBackupPath: candidatePath,
-          issues: restoredSnapshot.issues,
-        };
-      }
-      return {
-        recovered: true,
-        configPath: snapshot.path,
-        sourceBackupPath: candidatePath,
-      };
-    } catch (err) {
-      return {
-        recovered: false,
-        configPath: snapshot.path,
-        sourceBackupPath: candidatePath,
-        error: String(err),
-        issues: snapshot.issues,
-      };
-    }
-  }
-
-  return {
-    recovered: false,
-    configPath: snapshot.path,
-    sourceBackupPath: null,
-    issues: snapshot.issues,
   };
 }

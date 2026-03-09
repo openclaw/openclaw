@@ -31,7 +31,6 @@ import { resolveTelegramAccount } from "../../telegram/accounts.js";
 import { resolveWhatsAppAccount } from "../../web/accounts.js";
 import { rejectUnauthorizedCommand, requireCommandFlagEnabled } from "./command-gates.js";
 import type { CommandHandler } from "./commands-types.js";
-import { formatConfigWriteFailureText } from "./config-write-failure.js";
 
 type AllowlistScope = "dm" | "group" | "all";
 type AllowlistAction = "list" | "add" | "remove";
@@ -713,14 +712,7 @@ export const handleAllowlistCommand: CommandHandler = async (params, allowTextCo
           reply: { text: `⚠️ Config invalid after update (${issue.path}: ${issue.message}).` },
         };
       }
-      try {
-        await writeConfigFile(validated.config);
-      } catch (err) {
-        return {
-          shouldContinue: false,
-          reply: { text: formatConfigWriteFailureText(err) },
-        };
-      }
+      await writeConfigFile(validated.config);
     }
 
     if (!configChanged && !shouldTouchStore) {

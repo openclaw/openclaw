@@ -2,11 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { resolveDefaultAgentId } from "../agents/agent-scope.js";
 import type { OpenClawConfig } from "../config/config.js";
-import {
-  ConfigWriteTransactionError,
-  createConfigIO,
-  runConfigWriteTransaction,
-} from "../config/config.js";
+import { createConfigIO } from "../config/config.js";
 import { collectIncludePathsRecursive } from "../config/includes-scan.js";
 import { resolveConfigPath, resolveOAuthDir, resolveStateDir } from "../config/paths.js";
 import { readChannelAllowFromStore } from "../pairing/pairing-store.js";
@@ -404,19 +400,7 @@ export async function fixSecurityFootguns(opts?: {
   const actions: SecurityFixAction[] = [];
   const errors: string[] = [];
 
-  const createScopedConfigIO = (
-    params: {
-      env?: NodeJS.ProcessEnv;
-      configPath?: string;
-      logger?: Pick<typeof console, "error" | "warn">;
-    } = {},
-  ) =>
-    createConfigIO({
-      env: params.env ?? env,
-      configPath: params.configPath ?? configPath,
-      logger: params.logger,
-    });
-  const io = createScopedConfigIO();
+  const io = createConfigIO({ env, configPath });
   const snap = await io.readConfigFileSnapshot();
   if (!snap.valid) {
     errors.push(...snap.issues.map((i) => `${i.path}: ${i.message}`));
@@ -444,23 +428,7 @@ export async function fixSecurityFootguns(opts?: {
 
     if (changes.length > 0) {
       try {
-        const transaction = await runConfigWriteTransaction(
-          { config: fixed.cfg },
-          {
-            env,
-            createConfigIO: (overrides = {}) =>
-              createScopedConfigIO({
-                env: overrides.env ?? env,
-                configPath: overrides.configPath,
-                logger: overrides.logger,
-              }),
-            readConfigFileSnapshot: () => io.readConfigFileSnapshot(),
-            writeConfigFile: (cfg, options) => io.writeConfigFile(cfg, options),
-          },
-        );
-        if (!transaction.ok) {
-          throw new ConfigWriteTransactionError(transaction);
-        }
+        await io.writeConfigFile(fixed.cfg);
         configWritten = true;
       } catch (err) {
         errors.push(`writeConfigFile failed: ${String(err)}`);

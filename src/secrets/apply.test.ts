@@ -1,9 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { formatConfigWriteFailureForCli } from "../config/config.js";
-import * as configModule from "../config/config.js";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { runSecretsApply } from "./apply.js";
 import type { SecretsApplyPlan } from "./plan.js";
 
@@ -598,37 +596,6 @@ describe("secrets apply", () => {
     await expect(runSecretsApply({ plan, env: fixture.env, write: false })).rejects.toThrow(
       "Invalid plan target path",
     );
-  });
-
-  it("keeps transaction failures formatter-compatible for cli output", async () => {
-    const txSpy = vi.spyOn(configModule, "runConfigWriteTransaction").mockResolvedValueOnce({
-      ok: false,
-      transactionId: "tx-secrets-apply",
-      stage: "verify",
-      rolledBack: true,
-      beforeHash: "abc123def456",
-      afterHash: "feedfacecafe",
-      error: "committed config failed verification",
-      issues: [],
-    });
-    const plan = createPlan({
-      targets: [createOpenAiProviderTarget()],
-      options: createOneWayScrubOptions(),
-    });
-
-    try {
-      await runSecretsApply({ plan, env: fixture.env, write: true });
-      throw new Error("Expected runSecretsApply to fail");
-    } catch (err) {
-      const formatted = formatConfigWriteFailureForCli(err);
-      expect(formatted).toContain(
-        "Last config update failed and was rolled back to the previous version.",
-      );
-      expect(formatted).toContain("Rolled back config version hash=abc123def456");
-      expect(formatted).toContain("committed config failed verification");
-    } finally {
-      txSpy.mockRestore();
-    }
   });
 
   it("applies provider upserts and deletes from plan", async () => {

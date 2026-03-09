@@ -1,7 +1,6 @@
 import { loadAndMaybeMigrateDoctorConfig } from "../../commands/doctor-config-flow.js";
-import { readConfigFileSnapshot, recoverConfigFromBackups } from "../../config/config.js";
+import { readConfigFileSnapshot } from "../../config/config.js";
 import { formatConfigIssueLines } from "../../config/issue-format.js";
-import { shouldRecoverInvalidConfigSnapshot } from "../../config/snapshot-recovery.js";
 import type { RuntimeEnv } from "../../runtime.js";
 import { colorize, isRich, theme } from "../../terminal/theme.js";
 import { shortenHomePath } from "../../utils.js";
@@ -72,7 +71,7 @@ export async function ensureConfigReady(params: {
     }
   }
 
-  let snapshot = await getConfigSnapshot();
+  const snapshot = await getConfigSnapshot();
   const commandName = commandPath[0];
   const subcommandName = commandPath[1];
   const allowInvalid = commandName
@@ -81,30 +80,6 @@ export async function ensureConfigReady(params: {
         subcommandName &&
         ALLOWED_INVALID_GATEWAY_SUBCOMMANDS.has(subcommandName))
     : false;
-  let recovery: Awaited<ReturnType<typeof recoverConfigFromBackups>> | null = null;
-  if (snapshot.exists && !snapshot.valid && shouldRecoverInvalidConfigSnapshot(snapshot)) {
-    const issue = snapshot.issues[0];
-    const issueText = issue ? `${issue.path || "<root>"}: ${issue.message}` : "unknown issue";
-    recovery = await recoverConfigFromBackups({ snapshot }).catch((err) => ({
-      recovered: false,
-      configPath: snapshot.path,
-      sourceBackupPath: null,
-      error: String(err),
-      issues: snapshot.issues,
-    }));
-    if (recovery.recovered) {
-      configSnapshotPromise = readConfigFileSnapshot();
-      const recoveredSnapshot = await configSnapshotPromise;
-      if (recoveredSnapshot.valid) {
-        const message = `Last config update failed validation (${issueText}). Recovered from backup (${recovery.sourceBackupPath ?? "unknown"}). Retry your previous config command if you still need the change.`;
-        params.runtime.error(theme.warn(message));
-        return;
-      }
-      snapshot = recoveredSnapshot;
-      recovery = { ...recovery, issues: recoveredSnapshot.issues };
-    }
-  }
-
   const issues =
     snapshot.exists && !snapshot.valid
       ? formatConfigIssueLines(snapshot.issues, "-", { normalizeRoot: true })
@@ -132,15 +107,6 @@ export async function ensureConfigReady(params: {
   if (legacyIssues.length > 0) {
     params.runtime.error(muted("Legacy config keys detected:"));
     params.runtime.error(legacyIssues.map((issue) => `  ${error(issue)}`).join("\n"));
-  }
-  if (recovery && !recovery.recovered) {
-    params.runtime.error(muted("Automatic backup recovery failed."));
-    if (recovery.error) {
-      params.runtime.error(muted(`Recovery error: ${recovery.error}`));
-    }
-    params.runtime.error(
-      muted("Last config update failed. Fix the issue, then retry your config command."),
-    );
   }
   params.runtime.error("");
   params.runtime.error(

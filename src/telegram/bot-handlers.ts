@@ -14,7 +14,8 @@ import { listSkillCommandsForAgents } from "../auto-reply/skill-commands.js";
 import { buildCommandsMessagePaginated } from "../auto-reply/status.js";
 import { shouldDebounceTextInbound } from "../channels/inbound-debounce-policy.js";
 import { resolveChannelConfigWrites } from "../channels/plugins/config-writes.js";
-import { loadConfig, writeConfigFile } from "../config/config.js";
+import { loadConfig } from "../config/config.js";
+import { writeConfigFile } from "../config/io.js";
 import {
   loadSessionStore,
   resolveSessionStoreEntry,

@@ -1,6 +1,5 @@
 import { Command } from "commander";
 import { describe, expect, it, vi } from "vitest";
-import { runCommandWithRuntime } from "./cli-utils.js";
 import { parseCanvasSnapshotPayload } from "./nodes-canvas.js";
 import { parseByteSize } from "./parse-bytes.js";
 import { parseDurationMs } from "./parse-duration.js";
@@ -112,25 +111,5 @@ describe("parseDurationMs", () => {
   it("rejects invalid composite strings", () => {
     expect(() => parseDurationMs("1h30")).toThrow();
     expect(() => parseDurationMs("1h-30m")).toThrow();
-  });
-});
-
-describe("runCommandWithRuntime", () => {
-  it("formats config transaction failures with retry guidance", async () => {
-    const runtime = {
-      error: vi.fn(),
-      exit: vi.fn(),
-    };
-
-    await runCommandWithRuntime(runtime, async () => {
-      throw new Error(
-        "writeConfigFile transaction failed; stage=verify; rollback=ok; committed config failed verification",
-      );
-    });
-
-    expect(runtime.error).toHaveBeenCalledWith(
-      "Last config update failed and was rolled back to the previous version. Error: committed config failed verification. Retry the command.",
-    );
-    expect(runtime.exit).toHaveBeenCalledWith(1);
   });
 });

@@ -60,20 +60,4 @@ describe("models/shared", () => {
       }),
     );
   });
-
-  it("propagates transactional write failures", async () => {
-    const cfg = { update: { channel: "stable" } } as unknown as OpenClawConfig;
-    mocks.readConfigFileSnapshot.mockResolvedValue({
-      valid: true,
-      config: cfg,
-    });
-    mocks.writeConfigFile.mockRejectedValue(new Error("writeConfigFile transaction failed"));
-
-    await expect(
-      updateConfig((current) => ({
-        ...current,
-        update: { channel: "beta" },
-      })),
-    ).rejects.toThrow("writeConfigFile transaction failed");
-  });
 });
