@@ -64,7 +64,8 @@ describe("splitMarkdownIRPreserveWhitespace – word boundary splitting", () => 
   });
 
   it("preserves markdown formatting across word-boundary splits", () => {
-    const text = "This has **bold text** and _italic_ with a lot more words to push it past the limit";
+    const text =
+      "This has **bold text** and _italic_ with a lot more words to push it past the limit";
     const chunks = markdownToTelegramChunks(text, 40);
 
     const reconstructed = chunks.map((c) => c.text).join("");
