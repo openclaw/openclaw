@@ -246,7 +246,7 @@ describe("buildAgentSystemPrompt", () => {
       toolNames: ["memory_write"],
     });
 
-    expect(prompt).toContain("## Memory Recall");
+    expect(prompt).toContain("## Memory");
     expect(prompt).toContain(
       "When the user explicitly asks to remember/update something, use memory_write (append) so durable memory is saved to disk.",
     );
@@ -262,7 +262,7 @@ describe("buildAgentSystemPrompt", () => {
       toolNames: ["memory_upsert"],
     });
 
-    expect(prompt).toContain("## Memory Recall");
+    expect(prompt).toContain("## Memory");
     expect(prompt).toContain(
       "When the user explicitly asks to remember/update something, use memory_upsert (keyed update) so durable memory is saved to disk.",
     );
