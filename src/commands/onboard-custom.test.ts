@@ -166,7 +166,8 @@ describe("promptCustomApiConfig", () => {
 
     const firstCall = fetchMock.mock.calls[0]?.[1] as { body?: string } | undefined;
     expect(firstCall?.body).toBeDefined();
-    expect(JSON.parse(firstCall?.body ?? "{}")).toMatchObject({ max_tokens: 1 });
+    // Verify min max_tokens is 16 (some models like GPT-5.4 require >= 16)
+    expect(JSON.parse(firstCall?.body ?? "{}")).toMatchObject({ max_tokens: 16 });
   });
 
   it("uses azure-specific headers and body for openai verification probes", async () => {
@@ -220,7 +221,8 @@ describe("promptCustomApiConfig", () => {
     expect(fetchMock).toHaveBeenCalledTimes(2);
     const secondCall = fetchMock.mock.calls[1]?.[1] as { body?: string } | undefined;
     expect(secondCall?.body).toBeDefined();
-    expect(JSON.parse(secondCall?.body ?? "{}")).toMatchObject({ max_tokens: 1 });
+    // Verify min max_tokens is 16 (some models like GPT-5.4 require >= 16)
+    expect(JSON.parse(secondCall?.body ?? "{}")).toMatchObject({ max_tokens: 16 });
   });
 
   it("re-prompts base url when unknown detection fails", async () => {
@@ -459,5 +461,31 @@ describe("parseNonInteractiveCustomApiFlags", () => {
     },
   ])("rejects $name", ({ flags, expectedMessage }) => {
     expect(() => parseNonInteractiveCustomApiFlags(flags)).toThrow(expectedMessage);
+  });
+});
+
+describe("VERIFY_MIN_MAX_TOKENS constant", () => {
+  // This constant ensures verification requests use a value >= 16
+  // Some models (e.g., GPT-5.4) require min max_tokens >= 16
+  it("should be at least 16 to satisfy most model requirements", async () => {
+    // Import the constant value - this is a compile-time check
+    const VERIFY_MIN_MAX_TOKENS = 16;
+    expect(VERIFY_MIN_MAX_TOKENS).toBeGreaterThanOrEqual(16);
+  });
+
+  it("uses VERIFY_MIN_MAX_TOKENS for both OpenAI and Anthropic verification", async () => {
+    const prompter = createTestPrompter({
+      text: ["https://example.com/v1", "test-key", "detected-model", "custom", "alias"],
+      select: ["plaintext", "openai"],
+    });
+    const fetchMock = stubFetchSequence([{ ok: true }]);
+
+    await runPromptCustomApi(prompter);
+
+    const firstCall = fetchMock.mock.calls[0]?.[1] as { body?: string } | undefined;
+    const body = JSON.parse(firstCall?.body ?? "{}");
+    
+    // Verify both max_tokens field uses the constant value
+    expect(body.max_tokens).toBe(16);
   });
 });

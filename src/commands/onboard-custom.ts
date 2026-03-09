@@ -20,6 +20,9 @@ const DEFAULT_OLLAMA_BASE_URL = "http://127.0.0.1:11434/v1";
 const DEFAULT_CONTEXT_WINDOW = CONTEXT_WINDOW_HARD_MIN_TOKENS;
 const DEFAULT_MAX_TOKENS = 4096;
 const VERIFY_TIMEOUT_MS = 30_000;
+// Minimum max_tokens value for model verification requests
+// Some models (e.g., GPT-5.4) require minimum value >= 16
+const VERIFY_MIN_MAX_TOKENS = 16;
 
 function normalizeContextWindowForCustomModel(value: unknown): number {
   const parsed = typeof value === "number" && Number.isFinite(value) ? Math.floor(value) : 0;
@@ -346,7 +349,7 @@ async function requestOpenAiVerification(params: {
       body: {
         model: params.modelId,
         messages: [{ role: "user", content: "Hi" }],
-        max_tokens: 1,
+        max_tokens: VERIFY_MIN_MAX_TOKENS,
         stream: false,
       },
     });
@@ -374,7 +377,7 @@ async function requestAnthropicVerification(params: {
     headers: buildAnthropicHeaders(params.apiKey),
     body: {
       model: params.modelId,
-      max_tokens: 1,
+      max_tokens: VERIFY_MIN_MAX_TOKENS,
       messages: [{ role: "user", content: "Hi" }],
       stream: false,
     },
