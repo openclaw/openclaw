@@ -4,6 +4,7 @@ import { withTempHome as withTempHomeBase } from "../../test/helpers/temp-home.j
 import { runEmbeddedPiAgent } from "../agents/pi-embedded.js";
 import { runSubagentAnnounceFlow } from "../agents/subagent-announce.js";
 import type { CliDeps } from "../cli/deps.js";
+import { callGateway } from "../gateway/call.js";
 import { runCronIsolatedAgentTurn } from "./isolated-agent.js";
 import { makeCfg, makeJob, writeSessionStore } from "./isolated-agent.test-harness.js";
 import { setupIsolatedAgentTurnMocks } from "./isolated-agent.test-setup.js";
@@ -196,6 +197,7 @@ describe("runCronIsolatedAgentTurn", () => {
 
       vi.mocked(deps.sendMessageTelegram).mockClear();
       vi.mocked(runSubagentAnnounceFlow).mockClear();
+      vi.mocked(callGateway).mockClear();
 
       const deleteRes = await runCronIsolatedAgentTurn({
         cfg,
@@ -221,6 +223,17 @@ describe("runCronIsolatedAgentTurn", () => {
         "123",
         "HEARTBEAT_OK 🦞",
         expect.objectContaining({ accountId: undefined }),
+      );
+      expect(callGateway).toHaveBeenCalledTimes(1);
+      expect(callGateway).toHaveBeenCalledWith(
+        expect.objectContaining({
+          method: "sessions.delete",
+          params: expect.objectContaining({
+            key: "agent:main:cron:job-1",
+            deleteTranscript: true,
+            emitLifecycleHooks: false,
+          }),
+        }),
       );
     });
   });

@@ -401,6 +401,38 @@ describe("runCronIsolatedAgentTurn", () => {
     });
   });
 
+  it("returns error when text direct delivery fails and best-effort is disabled", async () => {
+    await withTelegramAnnounceFixture(
+      async ({ home, storePath, deps }) => {
+        mockAgentPayloads([{ text: "hello from cron" }]);
+
+        const res = await runTelegramAnnounceTurn({
+          home,
+          storePath,
+          deps,
+          delivery: {
+            mode: "announce",
+            channel: "telegram",
+            to: "123",
+            bestEffort: false,
+          },
+        });
+
+        expect(res.status).toBe("error");
+        expect(res.delivered).toBeUndefined();
+        expect(res.deliveryAttempted).toBe(true);
+        expect(res.error).toContain("boom");
+        expect(runSubagentAnnounceFlow).not.toHaveBeenCalled();
+        expect(deps.sendMessageTelegram).toHaveBeenCalledTimes(1);
+      },
+      {
+        deps: {
+          sendMessageTelegram: vi.fn().mockRejectedValue(new Error("boom")),
+        },
+      },
+    );
+  });
+
   it("delivers text directly when best-effort is enabled", async () => {
     const { res, deps } = await runTelegramDeliveryResult(true);
     expect(res.status).toBe("ok");

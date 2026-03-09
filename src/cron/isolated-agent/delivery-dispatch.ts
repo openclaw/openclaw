@@ -3,6 +3,7 @@ import { SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.js";
 import type { ReplyPayload } from "../../auto-reply/types.js";
 import { createOutboundSendDeps, type CliDeps } from "../../cli/outbound-send-deps.js";
 import type { OpenClawConfig } from "../../config/config.js";
+import { callGateway } from "../../gateway/call.js";
 import { deliverOutboundPayloads } from "../../infra/outbound/deliver.js";
 import { resolveAgentOutboundIdentity } from "../../infra/outbound/identity.js";
 import { buildOutboundSessionContext } from "../../infra/outbound/session-context.js";
@@ -191,6 +192,25 @@ export async function dispatchCronDelivery(
   const finalizeTextDelivery = async (
     delivery: SuccessfulDeliveryTarget,
   ): Promise<RunCronAgentTurnResult | null> => {
+    const cleanupDirectCronSessionIfNeeded = async (): Promise<void> => {
+      if (!params.job.deleteAfterRun) {
+        return;
+      }
+      try {
+        await callGateway({
+          method: "sessions.delete",
+          params: {
+            key: params.agentSessionKey,
+            deleteTranscript: true,
+            emitLifecycleHooks: false,
+          },
+          timeoutMs: 10_000,
+        });
+      } catch {
+        // Best-effort; direct delivery result should still be returned.
+      }
+    };
+
     if (!synthesizedText) {
       return null;
     }
@@ -287,7 +307,11 @@ export async function dispatchCronDelivery(
         ...params.telemetry,
       });
     }
-    return await deliverViaDirect(delivery);
+    try {
+      return await deliverViaDirect(delivery);
+    } finally {
+      await cleanupDirectCronSessionIfNeeded();
+    }
   };
 
   if (
