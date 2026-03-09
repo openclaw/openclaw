@@ -747,6 +747,10 @@ export const AgentEntrySchema = z
     sandbox: AgentSandboxSchema,
     tools: AgentToolsSchema,
     runtime: AgentRuntimeSchema,
+    /** Operator1: organizational department for agent grouping. */
+    department: z.string().optional(),
+    /** Operator1: organizational role for agent specialization. */
+    role: z.string().optional(),
   })
   .strict();
 

@@ -87,6 +87,10 @@ export type AgentConfig = {
   tools?: AgentToolsConfig;
   /** Optional runtime descriptor for this agent. */
   runtime?: AgentRuntimeConfig;
+  /** Operator1: organizational department for agent grouping. */
+  department?: string;
+  /** Operator1: organizational role for agent specialization. */
+  role?: string;
 };
 
 export type AgentsConfig = {
