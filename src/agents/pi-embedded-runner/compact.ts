@@ -955,11 +955,15 @@ export async function compactEmbeddedPiSession(
           workspaceDir: params.workspaceDir,
           messageProvider: resolvedMessageProvider,
         };
+        // Engine-owned compaction doesn't load the transcript at this level, so
+        // message counts are unavailable.  We pass sessionFile so hook subscribers
+        // can read the transcript themselves if they need exact counts.
         if (hookRunner?.hasHooks("before_compaction")) {
           try {
             await hookRunner.runBeforeCompaction(
               {
-                messageCount: 0,
+                messageCount: -1,
+                tokenCount: ceCtxInfo.tokens,
                 sessionFile: params.sessionFile,
               },
               hookCtx,
@@ -982,8 +986,8 @@ export async function compactEmbeddedPiSession(
           try {
             await hookRunner.runAfterCompaction(
               {
-                messageCount: 0,
-                compactedCount: 0,
+                messageCount: -1,
+                compactedCount: -1,
                 tokenCount: result.result?.tokensAfter,
                 sessionFile: params.sessionFile,
               },
