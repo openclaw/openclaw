@@ -27,6 +27,7 @@ import { danger, logVerbose } from "../globals.js";
 import { getAgentScopedMediaLocalRoots } from "../media/local-roots.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { getFallbackGatewayContext } from "../gateway/server-plugins.js";
+import { stripInlineDirectiveTagsFromMessageForDisplay } from "../utils/directive-tags.js";
 import type { TelegramMessageContext } from "./bot-message-context.js";
 import type { TelegramBotOptions } from "./bot.js";
 import { deliverReplies } from "./bot/delivery.js";
@@ -838,12 +839,16 @@ export const dispatchTelegramMessage = async ({
         message = lastMessage as Record<string, unknown> | undefined;
       }
 
+      const sanitizedMessage = message
+        ? stripInlineDirectiveTagsFromMessageForDisplay(message)
+        : undefined;
+
       const payload = {
         runId,
         sessionKey,
         seq,
         state: "final" as const,
-        message,
+        message: sanitizedMessage,
       };
       ctx.broadcast("chat", payload);
       ctx.nodeSendToSession(sessionKey, "chat", payload);

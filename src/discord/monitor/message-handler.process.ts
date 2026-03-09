@@ -29,6 +29,7 @@ import { readSessionUpdatedAt, resolveStorePath } from "../../config/sessions.js
 import { danger, logVerbose, shouldLogVerbose } from "../../globals.js";
 import { getFallbackGatewayContext } from "../../gateway/server-plugins.js";
 import { loadSessionEntry, readSessionMessages } from "../../gateway/session-utils.js";
+import { stripInlineDirectiveTagsFromMessageForDisplay } from "../../utils/directive-tags.js";
 import { convertMarkdownTables } from "../../markdown/tables.js";
 import { getAgentScopedMediaLocalRoots } from "../../media/local-roots.js";
 import { buildAgentSessionKey } from "../../routing/resolve-route.js";
@@ -859,12 +860,16 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
         message = lastMessage as Record<string, unknown> | undefined;
       }
 
+      const sanitizedMessage = message
+        ? stripInlineDirectiveTagsFromMessageForDisplay(message)
+        : undefined;
+
       const payload = {
         runId,
         sessionKey,
         seq,
         state: "final" as const,
-        message,
+        message: sanitizedMessage,
       };
       gatewayCtx.broadcast("chat", payload);
       gatewayCtx.nodeSendToSession(sessionKey, "chat", payload);
