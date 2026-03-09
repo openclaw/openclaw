@@ -95,8 +95,8 @@ describe("commands-acp context", () => {
       Provider: "slack",
       Surface: "slack",
       OriginatingChannel: "slack",
-      OriginatingTo: "channel:C1234567890",
-      NativeChannelId: "C1234567890",
+      OriginatingTo: "channel:C12345GHIJK",
+      NativeChannelId: "C12345GHIJK",
       MessageThreadId: "1741512345.678900",
     });
 

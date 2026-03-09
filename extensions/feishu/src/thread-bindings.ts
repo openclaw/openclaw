@@ -674,7 +674,11 @@ export function createFeishuThreadBindingManager(
         sweepTimer = null;
       }
       unregisterSessionBindingAdapter({ channel: "feishu", accountId });
-      clearBindingsForAccount(accountId);
+      if (!persist) {
+        // Keep persisted bindings resident across manager restarts so queued writes
+        // cannot flush an empty snapshot during shutdown.
+        clearBindingsForAccount(accountId);
+      }
       const existingManager = MANAGERS_BY_ACCOUNT_ID.get(accountId);
       if (existingManager === manager) {
         MANAGERS_BY_ACCOUNT_ID.delete(accountId);
