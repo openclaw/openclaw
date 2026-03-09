@@ -184,8 +184,22 @@ function generateFallbackText(body: unknown[]): string {
     const type = typeof el.type === "string" ? el.type : "";
     switch (type) {
       case "TextBlock":
-      case "RichTextBlock":
         if (typeof el.text === "string") lines.push(el.text);
+        break;
+      case "RichTextBlock":
+        // RichTextBlock content lives in inlines (TextRun[]), not a top-level text field.
+        if (Array.isArray(el.inlines)) {
+          const texts: string[] = [];
+          for (const inline of el.inlines) {
+            if (typeof inline === "string") {
+              texts.push(inline);
+            } else if (inline && typeof inline === "object") {
+              const run = inline as Record<string, unknown>;
+              if (typeof run.text === "string") texts.push(run.text);
+            }
+          }
+          if (texts.length > 0) lines.push(texts.join(""));
+        }
         break;
       case "FactSet":
         if (Array.isArray(el.facts)) {
