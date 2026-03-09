@@ -652,22 +652,11 @@ function loadRequesterSessionEntry(requesterSessionKey: string) {
   return { cfg, entry, canonicalKey };
 }
 
-function buildAnnounceQueueKey(
-  sessionKey: string,
-  origin?: DeliveryContext,
-  requesterMessageId?: string,
-): string {
+function buildAnnounceQueueKey(sessionKey: string, origin?: DeliveryContext): string {
   const accountId = normalizeAccountId(origin?.accountId);
-  const messageId =
-    typeof requesterMessageId === "string" && requesterMessageId.trim()
-      ? requesterMessageId.trim()
-      : undefined;
   const parts = [sessionKey];
   if (accountId) {
     parts.push(`acct:${accountId}`);
-  }
-  if (messageId) {
-    parts.push(`msg:${messageId}`);
   }
   return parts.join(":");
 }
@@ -719,7 +708,7 @@ async function maybeQueueSubagentAnnounce(params: {
   if (isActive && (shouldFollowup || queueSettings.mode === "steer")) {
     const origin = resolveAnnounceOrigin(entry, params.requesterOrigin);
     enqueueAnnounce({
-      key: buildAnnounceQueueKey(canonicalKey, origin, params.requesterMessageId),
+      key: buildAnnounceQueueKey(canonicalKey, origin),
       item: {
         announceId: params.announceId,
         prompt: params.triggerMessage,

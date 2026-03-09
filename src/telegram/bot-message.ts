@@ -126,6 +126,22 @@ function sweepExpiredReplyBurstState(params: {
   }
 }
 
+function pruneReplyBurstStateToMaxEntries(params: {
+  burstState: Map<string, ReplyBurstState>;
+  maxEntries: number;
+}) {
+  if (params.burstState.size <= params.maxEntries) {
+    return;
+  }
+  const overflow = params.burstState.size - params.maxEntries;
+  const oldest = [...params.burstState.entries()]
+    .toSorted((a, b) => a[1].lastInboundAt - b[1].lastInboundAt)
+    .slice(0, overflow);
+  for (const [key] of oldest) {
+    params.burstState.delete(key);
+  }
+}
+
 function buildReplyBurstKey(
   ctx: TelegramContext,
   adaptiveConfig: ReplyBurstAdaptiveConfig,
@@ -160,6 +176,9 @@ function resolveAdaptiveReplyToMode(params: {
   adaptiveConfig: ReplyBurstAdaptiveConfig;
   ctx: TelegramContext;
   now?: number;
+  maxBurstKeys: number;
+  sweepEveryMs: number;
+  lastSweepAtRef: { value: number };
 }): ReplyToMode {
   if (params.configuredMode === "off") {
     return "off";
@@ -224,9 +243,17 @@ function resolveAdaptiveReplyToMode(params: {
     emaShortRatio,
     ttlMs: Math.max(veryDenseWindowMs, params.adaptiveConfig.veryDenseWindowMs),
   });
-  sweepExpiredReplyBurstState({
-    now,
+  const shouldSweep = now - (params.lastSweepAtRef.value ?? 0) >= params.sweepEveryMs;
+  if (shouldSweep) {
+    sweepExpiredReplyBurstState({
+      now,
+      burstState: params.burstState,
+    });
+    params.lastSweepAtRef.value = now;
+  }
+  pruneReplyBurstStateToMaxEntries({
     burstState: params.burstState,
+    maxEntries: params.maxBurstKeys,
   });
   return streak >= 2 ? params.configuredMode : "off";
 }
@@ -257,6 +284,9 @@ export const createTelegramMessageProcessor = (deps: TelegramMessageProcessorDep
 
   const replyBurstState = new Map<string, ReplyBurstState>();
   const replyBurstAdaptiveConfig = resolveReplyBurstAdaptiveConfig(telegramCfg);
+  const replyBurstLastSweepAtRef = { value: 0 };
+  const replyBurstSweepEveryMs = 2_000;
+  const replyBurstMaxKeys = 5_000;
 
   return async (
     primaryCtx: TelegramContext,
@@ -295,6 +325,9 @@ export const createTelegramMessageProcessor = (deps: TelegramMessageProcessorDep
         burstState: replyBurstState,
         adaptiveConfig: replyBurstAdaptiveConfig,
         ctx: primaryCtx,
+        maxBurstKeys: replyBurstMaxKeys,
+        sweepEveryMs: replyBurstSweepEveryMs,
+        lastSweepAtRef: replyBurstLastSweepAtRef,
       });
 
       await dispatchTelegramMessage({

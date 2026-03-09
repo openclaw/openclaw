@@ -1283,7 +1283,11 @@ async function waitForSubagentCompletion(runId: string, waitTimeoutMs: number) {
       }
 
       if (wait?.status !== "ok" && wait?.status !== "error") {
-        return;
+        defaultRuntime.log(
+          `[warn] Unexpected agent.wait status run=${runId} status=${wait?.status}`,
+        );
+        await new Promise((resolve) => setTimeout(resolve, 5_000));
+        continue;
       }
       const entry = subagentRuns.get(runId);
       if (!entry) {
