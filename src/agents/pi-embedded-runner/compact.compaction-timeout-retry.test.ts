@@ -41,16 +41,25 @@ vi.mock("@mariozechner/pi-coding-agent", () => ({
       },
       agent: { replaceMessages: replaceMessagesMock, streamFn: vi.fn() },
       compact: compactMock,
+      abortCompaction: vi.fn(),
       dispose: vi.fn(),
     },
   })),
   SessionManager: { open: vi.fn(() => ({})) },
   SettingsManager: { create: vi.fn(() => ({})) },
+  DefaultResourceLoader: vi.fn(),
+  // AuthStorage and ModelRegistry are accessed as namespace properties by pi-model-discovery.ts
+  AuthStorage: vi.fn(),
+  ModelRegistry: vi.fn(),
   estimateTokens: vi.fn(() => 10),
 }));
 
 vi.mock("../../plugins/hook-runner-global.js", () => ({
   getGlobalHookRunner: () => ({ hasHooks: vi.fn(() => false) }),
+  initializeGlobalHookRunner: vi.fn(),
+}));
+vi.mock("../runtime-plugins.js", () => ({
+  ensureRuntimePluginsLoaded: vi.fn(),
 }));
 vi.mock("../../hooks/internal-hooks.js", async () => {
   const actual = await vi.importActual<typeof import("../../hooks/internal-hooks.js")>(
@@ -151,6 +160,7 @@ vi.mock("../../config/channel-capabilities.js", () => ({
 }));
 vi.mock("../../utils/message-channel.js", () => ({
   normalizeMessageChannel: vi.fn(() => undefined),
+  INTERNAL_MESSAGE_CHANNEL: "webchat",
 }));
 vi.mock("../pi-embedded-helpers.js", () => ({
   ensureSessionHeader: vi.fn(async () => {}),
