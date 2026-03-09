@@ -9,7 +9,7 @@ import type { PluginServicesHandle } from "../plugins/services.js";
 
 const log = createSubsystemLogger("gateway/shutdown");
 
-/** Timeout (ms) for the HTTP server close before force-resolving. */
+/** Timeout (ms) for the HTTP server close before force-rejecting. */
 const HTTP_CLOSE_TIMEOUT_MS = 8_000;
 
 export type ShutdownResult = {
@@ -182,8 +182,7 @@ export function createGatewayCloseHandler(params: {
         () =>
           new Promise<void>((resolve, reject) => {
             const timer = setTimeout(() => {
-              log.warn(`${label}: close timed out after ${HTTP_CLOSE_TIMEOUT_MS}ms, forcing`);
-              resolve();
+              reject(new Error(`close timed out after ${HTTP_CLOSE_TIMEOUT_MS}ms`));
             }, HTTP_CLOSE_TIMEOUT_MS);
             httpServer.close((err) => {
               clearTimeout(timer);

@@ -1,10 +1,10 @@
 import type { Server as HttpServer } from "node:http";
-import { type Mock, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { type Mock, afterEach, describe, expect, it, vi } from "vitest";
 import type { WebSocketServer } from "ws";
 import type { CanvasHostHandler, CanvasHostServer } from "../canvas-host/server.js";
 import type { HeartbeatRunner } from "../infra/heartbeat-runner.js";
 import type { PluginServicesHandle } from "../plugins/services.js";
-import { createGatewayCloseHandler, type ShutdownResult } from "./server-close.js";
+import { createGatewayCloseHandler } from "./server-close.js";
 
 vi.mock("../channels/plugins/index.js", () => ({
   listChannelPlugins: () => [{ id: "telegram" }, { id: "discord" }],
@@ -268,6 +268,26 @@ describe("createGatewayCloseHandler", () => {
     const result = await close({ reason: "test" });
 
     expect(result.warnings).toContain("http-server");
+  });
+
+  it("records warning when HTTP server close times out", async () => {
+    vi.useFakeTimers();
+    // Simulate a server that never calls the close callback (hangs).
+    const p = makeParams({
+      httpServer: {
+        close: vi.fn(() => {
+          // intentionally never invoke the callback
+        }),
+      } as unknown as HttpServer,
+    });
+    const close = createGatewayCloseHandler(p);
+    const resultPromise = close({ reason: "test" });
+    // Advance past the 8-second timeout
+    await vi.advanceTimersByTimeAsync(9_000);
+    const result = await resultPromise;
+
+    expect(result.warnings).toContain("http-server");
+    vi.useRealTimers();
   });
 
   it("handles multiple HTTP servers and labels them with index", async () => {
