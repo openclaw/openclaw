@@ -483,6 +483,8 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
   let releaseEarlyGatewayErrorGuard = () => {};
   let deactivateMessageHandler: (() => void) | undefined;
   let autoPresenceController: ReturnType<typeof createDiscordAutoPresenceController> | null = null;
+  let botUserId: string | undefined;
+  let botUserName: string | undefined;
   try {
     const commands: BaseCommand[] = commandSpecs.map((spec) =>
       createDiscordNativeCommand({
@@ -645,8 +647,6 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
 
     const logger = createSubsystemLogger("discord/monitor");
     const guildHistories = new Map<string, HistoryEntry[]>();
-    let botUserId: string | undefined;
-    let botUserName: string | undefined;
     let voiceManager: DiscordVoiceManager | null = null;
 
     if (nativeDisabledExplicit) {
