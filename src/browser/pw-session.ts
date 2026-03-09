@@ -564,6 +564,13 @@ export function refLocator(page: Page, ref: string) {
     return info.nth !== undefined ? locator.nth(info.nth) : locator;
   }
 
+  if (/^ax\d+$/i.test(normalized)) {
+    throw new Error(
+      `Unsupported ref "${normalized}". AX-tree refs (axN) are not actionable. ` +
+        `Run a new snapshot with format="ai" and use eN refs for click/type/act.`,
+    );
+  }
+
   return page.locator(`aria-ref=${normalized}`);
 }
 

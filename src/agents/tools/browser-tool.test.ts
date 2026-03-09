@@ -243,7 +243,7 @@ describe("browser tool snapshot maxChars", () => {
     );
   });
 
-  it("lets the server choose snapshot format when the user does not request one", async () => {
+  it("defaults to ai snapshot format when the user does not request one", async () => {
     const tool = createBrowserTool();
     await tool.execute?.("call-1", { action: "snapshot", profile: "chrome" });
 
@@ -256,8 +256,8 @@ describe("browser tool snapshot maxChars", () => {
     const opts = browserClientMocks.browserSnapshot.mock.calls.at(-1)?.[1] as
       | { format?: string; maxChars?: number }
       | undefined;
-    expect(opts?.format).toBeUndefined();
-    expect(Object.hasOwn(opts ?? {}, "maxChars")).toBe(false);
+    expect(opts?.format).toBe("ai");
+    expect(opts?.maxChars).toBe(DEFAULT_AI_SNAPSHOT_MAX_CHARS);
   });
 
   it("routes to node proxy when target=node", async () => {
