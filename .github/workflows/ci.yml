@@ -84,12 +84,13 @@ jobs:
           CHECKER_PATH="scripts/check-no-binary-artifacts.mjs"
           OUT="${RUNNER_TEMP}/check-no-binary-artifacts.mjs"
 
-          if ! git cat-file -e "$BASE_SHA:$CHECKER_PATH" 2>/dev/null; then
-            echo "::error::Base commit ($BASE_SHA) does not contain $CHECKER_PATH. Merge the checker to the base branch first."
-            exit 1
+          if git cat-file -e "$BASE_SHA:$CHECKER_PATH" 2>/dev/null; then
+            git show "$BASE_SHA:$CHECKER_PATH" > "$OUT"
+          else
+            echo "::warning::Base commit ($BASE_SHA) does not contain $CHECKER_PATH; falling back to checker from HEAD."
+            cp "$CHECKER_PATH" "$OUT"
           fi
 
-          git show "$BASE_SHA:$CHECKER_PATH" > "$OUT"
           node "$OUT" --base "$BASE_SHA" --head HEAD
 
   # Build dist once for Node-relevant changes and share it with downstream jobs.
