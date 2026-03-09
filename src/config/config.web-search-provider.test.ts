@@ -76,6 +76,47 @@ describe("web search provider config", () => {
 
     expect(res.ok).toBe(false);
   });
+
+  it("accepts brave context defaults", () => {
+    const res = validateConfigObject({
+      tools: {
+        web: {
+          search: {
+            provider: "brave",
+            context: {
+              enabled: true,
+              maxTokens: 4096,
+              maxUrls: 8,
+              maxTokensPerUrl: 1024,
+              thresholdMode: "balanced",
+              timeoutSeconds: 20,
+              cacheTtlMinutes: 15,
+            },
+          },
+        },
+      },
+    });
+
+    expect(res.ok).toBe(true);
+  });
+
+  it("accepts task memory source config", () => {
+    const res = validateConfigObject({
+      agents: {
+        defaults: {
+          memorySearch: {
+            enabled: true,
+            sources: ["memory", "tasks"],
+            experimental: {
+              taskMemory: true,
+            },
+          },
+        },
+      },
+    });
+
+    expect(res.ok).toBe(true);
+  });
 });
 
 describe("web search provider auto-detection", () => {

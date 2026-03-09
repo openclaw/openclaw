@@ -329,13 +329,15 @@ export type MemorySearchConfig = {
   /** Enable vector memory search (default: true). */
   enabled?: boolean;
   /** Sources to index and search (default: ["memory"]). */
-  sources?: Array<"memory" | "sessions">;
+  sources?: Array<"memory" | "sessions" | "tasks">;
   /** Extra paths to include in memory search (directories or .md files). */
   extraPaths?: string[];
   /** Experimental memory search settings. */
   experimental?: {
     /** Enable session transcript indexing (experimental, default: false). */
     sessionMemory?: boolean;
+    /** Enable task event indexing from memory/tasks/*.md (experimental, default: false). */
+    taskMemory?: boolean;
   };
   /** Embedding provider mode. */
   provider?: "openai" | "gemini" | "local" | "voyage" | "mistral" | "ollama";
@@ -504,6 +506,23 @@ export type ToolsConfig = {
       brave?: {
         /** Brave Search mode: "web" (standard results) or "llm-context" (pre-extracted page content). Default: "web". */
         mode?: "web" | "llm-context";
+      };
+      /** Brave LLM context extraction settings (used for grounded page-content responses). */
+      context?: {
+        /** Enable the Brave context path when supported by the caller. */
+        enabled?: boolean;
+        /** Maximum total extracted tokens returned across all source pages. */
+        maxTokens?: number;
+        /** Maximum number of source URLs included in the context response. */
+        maxUrls?: number;
+        /** Maximum extracted tokens per source URL. */
+        maxTokensPerUrl?: number;
+        /** Relevance threshold mode for Brave context extraction. */
+        thresholdMode?: "strict" | "balanced" | "lenient" | "disabled";
+        /** Timeout in seconds for context extraction requests. */
+        timeoutSeconds?: number;
+        /** Cache TTL in minutes for context extraction responses. */
+        cacheTtlMinutes?: number;
       };
     };
     fetch?: {

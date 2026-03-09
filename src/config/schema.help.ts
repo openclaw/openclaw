@@ -670,6 +670,22 @@ export const FIELD_HELP: Record<string, string> = {
     'Optional Sonar/OpenRouter model override (default: "perplexity/sonar-pro"). Setting this opts Perplexity into the legacy chat-completions compatibility path.',
   "tools.web.search.brave.mode":
     'Brave Search mode: "web" (URL results) or "llm-context" (pre-extracted page content for LLM grounding).',
+  "tools.web.search.context":
+    "Experimental/default config for the upcoming Brave context-extraction capability. This prepares grounded page-content settings for callers that request richer context than URL-only search results.",
+  "tools.web.search.context.enabled":
+    "Enables Brave context extraction defaults when provider=brave and callers opt into grounded context responses.",
+  "tools.web.search.context.maxTokens":
+    "Maximum total extracted tokens returned across all Brave context source pages.",
+  "tools.web.search.context.maxUrls":
+    "Maximum number of source URLs included in a Brave context response.",
+  "tools.web.search.context.maxTokensPerUrl":
+    "Maximum extracted tokens taken from any single Brave context source URL.",
+  "tools.web.search.context.thresholdMode":
+    'Brave context relevance threshold mode: "strict", "balanced", "lenient", or "disabled".',
+  "tools.web.search.context.timeoutSeconds":
+    "Timeout in seconds for Brave context extraction requests.",
+  "tools.web.search.context.cacheTtlMinutes":
+    "Cache TTL in minutes for Brave context extraction responses.",
   "tools.web.fetch.enabled": "Enable the web_fetch tool (lightweight HTTP fetch).",
   "tools.web.fetch.maxChars": "Max characters returned by web_fetch (truncated).",
   "tools.web.fetch.maxCharsCap":
@@ -778,11 +794,13 @@ export const FIELD_HELP: Record<string, string> = {
   "agents.defaults.memorySearch.enabled":
     "Master toggle for memory search indexing and retrieval behavior on this agent profile. Keep enabled for semantic recall, and disable when you want fully stateless responses.",
   "agents.defaults.memorySearch.sources":
-    'Chooses which sources are indexed: "memory" reads MEMORY.md + memory files, and "sessions" includes transcript history. Keep ["memory"] unless you need recall from prior chat transcripts.',
+    'Chooses which sources are indexed: "memory" reads MEMORY.md + memory files, "sessions" includes transcript history, and "tasks" includes memory/tasks/*.md task logs. Keep ["memory"] unless you need broader recall.',
   "agents.defaults.memorySearch.extraPaths":
     "Adds extra directories or .md files to the memory index beyond default memory files. Use this when key reference docs live elsewhere in your repo; keep paths small and intentional to avoid noisy recall.",
   "agents.defaults.memorySearch.experimental.sessionMemory":
     "Indexes session transcripts into memory search so responses can reference prior chat turns. Keep this off unless transcript recall is needed, because indexing cost and storage usage both increase.",
+  "agents.defaults.memorySearch.experimental.taskMemory":
+    "Indexes task memory files from memory/tasks/*.md into semantic recall. Keep this off unless task-log recall is useful, because it increases indexing volume and may surface operational notes in retrieval.",
   "agents.defaults.memorySearch.provider":
     'Selects the embedding backend used to build/query memory vectors: "openai", "gemini", "voyage", "mistral", "ollama", or "local". Keep your most reliable provider here and configure fallback for resilience.',
   "agents.defaults.memorySearch.model":

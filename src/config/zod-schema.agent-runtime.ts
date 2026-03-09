@@ -314,6 +314,25 @@ export const ToolsWebSearchSchema = z
       })
       .strict()
       .optional(),
+    context: z
+      .object({
+        enabled: z.boolean().optional(),
+        maxTokens: z.number().int().positive().optional(),
+        maxUrls: z.number().int().positive().optional(),
+        maxTokensPerUrl: z.number().int().positive().optional(),
+        thresholdMode: z
+          .union([
+            z.literal("strict"),
+            z.literal("balanced"),
+            z.literal("lenient"),
+            z.literal("disabled"),
+          ])
+          .optional(),
+        timeoutSeconds: z.number().int().positive().optional(),
+        cacheTtlMinutes: z.number().nonnegative().optional(),
+      })
+      .strict()
+      .optional(),
   })
   .strict()
   .optional();
@@ -613,11 +632,14 @@ export const AgentToolsSchema = z
 export const MemorySearchSchema = z
   .object({
     enabled: z.boolean().optional(),
-    sources: z.array(z.union([z.literal("memory"), z.literal("sessions")])).optional(),
+    sources: z
+      .array(z.union([z.literal("memory"), z.literal("sessions"), z.literal("tasks")]))
+      .optional(),
     extraPaths: z.array(z.string()).optional(),
     experimental: z
       .object({
         sessionMemory: z.boolean().optional(),
+        taskMemory: z.boolean().optional(),
       })
       .strict()
       .optional(),
