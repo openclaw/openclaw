@@ -1,0 +1,16 @@
+{
+  "name": "@openclaw/a2a",
+  "version": "2026.3.8",
+  "private": true,
+  "description": "OpenClaw A2A (Agent-to-Agent) protocol gateway — cross-network agent communication",
+  "type": "module",
+  "dependencies": {
+    "@a2a-js/sdk": "^0.3.10",
+    "@sinclair/typebox": "0.34.48"
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ]
+  }
+}
