@@ -1,3 +1,4 @@
+import { clearActiveTurn, writeActiveTurn } from "../../infra/active-turns.js";
 import {
   diagnosticLogger as diag,
   logMessageQueued,
@@ -216,6 +217,7 @@ export function setActiveEmbeddedRun(
   if (!sessionId.startsWith("probe-")) {
     diag.debug(`run registered: sessionId=${sessionId} totalActive=${ACTIVE_EMBEDDED_RUNS.size}`);
   }
+  writeActiveTurn(sessionId, sessionKey ?? sessionId);
 }
 
 export function clearActiveEmbeddedRun(
@@ -225,6 +227,7 @@ export function clearActiveEmbeddedRun(
 ) {
   if (ACTIVE_EMBEDDED_RUNS.get(sessionId) === handle) {
     ACTIVE_EMBEDDED_RUNS.delete(sessionId);
+    clearActiveTurn(sessionId);
     logSessionStateChange({ sessionId, sessionKey, state: "idle", reason: "run_completed" });
     if (!sessionId.startsWith("probe-")) {
       diag.debug(`run cleared: sessionId=${sessionId} totalActive=${ACTIVE_EMBEDDED_RUNS.size}`);
