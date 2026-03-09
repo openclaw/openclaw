@@ -30,10 +30,9 @@ describe("toSanitizedMarkdownHtml", () => {
     expect(html).toContain("console.log(1)");
   });
 
-  it("flattens remote markdown images into alt text", () => {
+  it("renders remote markdown images", () => {
     const html = toSanitizedMarkdownHtml("![Alt text](https://example.com/image.png)");
-    expect(html).not.toContain("<img");
-    expect(html).toContain("Alt text");
+    expect(html).toContain('<img src="https://example.com/image.png" alt="Alt text">');
   });
 
   it("preserves base64 data URI images (#15437)", () => {
@@ -42,7 +41,7 @@ describe("toSanitizedMarkdownHtml", () => {
     expect(html).toContain("data:image/png;base64,");
   });
 
-  it("flattens non-data markdown image urls", () => {
+  it("flattens unsafe markdown image urls", () => {
     const html = toSanitizedMarkdownHtml("![X](javascript:alert(1))");
     expect(html).not.toContain("<img");
     expect(html).not.toContain("javascript:");
@@ -51,8 +50,7 @@ describe("toSanitizedMarkdownHtml", () => {
 
   it("uses a plain fallback label for unlabeled markdown images", () => {
     const html = toSanitizedMarkdownHtml("![](https://example.com/image.png)");
-    expect(html).not.toContain("<img");
-    expect(html).toContain("image");
+    expect(html).toContain('<img src="https://example.com/image.png" alt="image">');
   });
 
   it("renders GFM markdown tables (#20410)", () => {

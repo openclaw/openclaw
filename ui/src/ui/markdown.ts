@@ -1,6 +1,7 @@
 import DOMPurify from "dompurify";
 import { marked } from "marked";
 import { truncateText } from "./format.ts";
+import { resolveSafeExternalUrl } from "./open-external-url.ts";
 
 const allowedTags = [
   "a",
@@ -43,7 +44,6 @@ const MARKDOWN_CHAR_LIMIT = 140_000;
 const MARKDOWN_PARSE_LIMIT = 40_000;
 const MARKDOWN_CACHE_LIMIT = 200;
 const MARKDOWN_CACHE_MAX_CHARS = 50_000;
-const INLINE_DATA_IMAGE_RE = /^data:image\/[a-z0-9.+-]+;base64,/i;
 const markdownCache = new Map<string, string>();
 
 function getCachedMarkdown(key: string): string | null {
@@ -141,15 +141,20 @@ htmlEscapeRenderer.html = ({ text }: { text: string }) => escapeHtml(text);
 htmlEscapeRenderer.image = (token: { href?: string | null; text?: string | null }) => {
   const label = normalizeMarkdownImageLabel(token.text);
   const href = token.href?.trim() ?? "";
-  if (!INLINE_DATA_IMAGE_RE.test(href)) {
+  const safeHref = resolveSafeExternalUrl(href, getMarkdownBaseHref(), { allowDataImage: true });
+  if (!safeHref) {
     return escapeHtml(label);
   }
-  return `<img src="${escapeHtml(href)}" alt="${escapeHtml(label)}">`;
+  return `<img src="${escapeHtml(safeHref)}" alt="${escapeHtml(label)}">`;
 };
 
 function normalizeMarkdownImageLabel(text?: string | null): string {
   const trimmed = text?.trim();
   return trimmed ? trimmed : "image";
+}
+
+function getMarkdownBaseHref(): string {
+  return globalThis.location?.href ?? "https://openclaw.ai/";
 }
 
 function escapeHtml(value: string): string {
