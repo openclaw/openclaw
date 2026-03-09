@@ -143,6 +143,29 @@ async function resolveProvidersForModelsJson(params: {
         delete providers[key];
       }
     }
+
+    // Run Bedrock/Copilot discovery when those providers are explicitly
+    // configured so they still receive model refresh and capability updates.
+    if (explicitKeys.has("amazon-bedrock")) {
+      const implicitBedrock = await resolveImplicitBedrockProvider({ agentDir, config: cfg });
+      if (implicitBedrock) {
+        const existing = providers["amazon-bedrock"];
+        providers["amazon-bedrock"] = existing
+          ? mergeProviderModels(implicitBedrock, existing)
+          : implicitBedrock;
+      }
+    }
+
+    if (explicitKeys.has("github-copilot")) {
+      const implicitCopilot = await resolveImplicitCopilotProvider({ agentDir });
+      if (implicitCopilot) {
+        const existing = providers["github-copilot"];
+        providers["github-copilot"] = existing
+          ? mergeProviderModels(implicitCopilot, existing)
+          : implicitCopilot;
+      }
+    }
+
     return providers;
   }
 
