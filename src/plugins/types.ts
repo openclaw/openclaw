@@ -35,7 +35,7 @@ export type PluginConfigUiHint = {
   placeholder?: string;
 };
 
-export type PluginKind = "memory";
+export type PluginKind = "memory" | "context-engine";
 
 export type PluginConfigValidation =
   | { ok: true; value?: unknown }
@@ -186,6 +186,12 @@ export type PluginCommandHandler = (
 export type OpenClawPluginCommandDefinition = {
   /** Command name without leading slash (e.g., "tts") */
   name: string;
+  /**
+   * Optional native-command aliases for slash/menu surfaces.
+   * `default` applies to all native providers unless a provider-specific
+   * override exists (for example `{ default: "talkvoice", discord: "voice2" }`).
+   */
+  nativeNames?: Partial<Record<string, string>> & { default?: string };
   /** Description shown in /help and command menus */
   description: string;
   /** Whether this command accepts arguments */
@@ -285,6 +291,11 @@ export type OpenClawPluginApi = {
    * Use this for simple state-toggling or status commands that don't need AI reasoning.
    */
   registerCommand: (command: OpenClawPluginCommandDefinition) => void;
+  /** Register a context engine implementation (exclusive slot — only one active at a time). */
+  registerContextEngine: (
+    id: string,
+    factory: import("../context-engine/registry.js").ContextEngineFactory,
+  ) => void;
   resolvePath: (input: string) => string;
   /** Register a lifecycle hook handler */
   on: <K extends PluginHookName>(
@@ -333,6 +344,55 @@ export type PluginHookName =
   | "gateway_start"
   | "gateway_stop";
 
+export const PLUGIN_HOOK_NAMES = [
+  "before_model_resolve",
+  "before_prompt_build",
+  "before_agent_start",
+  "llm_input",
+  "llm_output",
+  "agent_end",
+  "before_compaction",
+  "after_compaction",
+  "before_reset",
+  "message_received",
+  "message_sending",
+  "message_sent",
+  "before_tool_call",
+  "after_tool_call",
+  "tool_result_persist",
+  "before_message_write",
+  "session_start",
+  "session_end",
+  "subagent_spawning",
+  "subagent_delivery_target",
+  "subagent_spawned",
+  "subagent_ended",
+  "gateway_start",
+  "gateway_stop",
+] as const satisfies readonly PluginHookName[];
+
+type MissingPluginHookNames = Exclude<PluginHookName, (typeof PLUGIN_HOOK_NAMES)[number]>;
+type AssertAllPluginHookNamesListed = MissingPluginHookNames extends never ? true : never;
+const assertAllPluginHookNamesListed: AssertAllPluginHookNamesListed = true;
+void assertAllPluginHookNamesListed;
+
+const pluginHookNameSet = new Set<PluginHookName>(PLUGIN_HOOK_NAMES);
+
+export const isPluginHookName = (hookName: unknown): hookName is PluginHookName =>
+  typeof hookName === "string" && pluginHookNameSet.has(hookName as PluginHookName);
+
+export const PROMPT_INJECTION_HOOK_NAMES = [
+  "before_prompt_build",
+  "before_agent_start",
+] as const satisfies readonly PluginHookName[];
+
+export type PromptInjectionHookName = (typeof PROMPT_INJECTION_HOOK_NAMES)[number];
+
+const promptInjectionHookNameSet = new Set<PluginHookName>(PROMPT_INJECTION_HOOK_NAMES);
+
+export const isPromptInjectionHookName = (hookName: PluginHookName): boolean =>
+  promptInjectionHookNameSet.has(hookName);
+
 // Agent context shared across agent hooks
 export type PluginHookAgentContext = {
   agentId?: string;
@@ -369,7 +429,33 @@ export type PluginHookBeforePromptBuildEvent = {
 export type PluginHookBeforePromptBuildResult = {
   systemPrompt?: string;
   prependContext?: string;
+  /**
+   * Prepended to the agent system prompt so providers can cache it (e.g. prompt caching).
+   * Use for static plugin guidance instead of prependContext to avoid per-turn token cost.
+   */
+  prependSystemContext?: string;
+  /**
+   * Appended to the agent system prompt so providers can cache it (e.g. prompt caching).
+   * Use for static plugin guidance instead of prependContext to avoid per-turn token cost.
+   */
+  appendSystemContext?: string;
 };
+
+export const PLUGIN_PROMPT_MUTATION_RESULT_FIELDS = [
+  "systemPrompt",
+  "prependContext",
+  "prependSystemContext",
+  "appendSystemContext",
+] as const satisfies readonly (keyof PluginHookBeforePromptBuildResult)[];
+
+type MissingPluginPromptMutationResultFields = Exclude<
+  keyof PluginHookBeforePromptBuildResult,
+  (typeof PLUGIN_PROMPT_MUTATION_RESULT_FIELDS)[number]
+>;
+type AssertAllPluginPromptMutationResultFieldsListed =
+  MissingPluginPromptMutationResultFields extends never ? true : never;
+const assertAllPluginPromptMutationResultFieldsListed: AssertAllPluginPromptMutationResultFieldsListed = true;
+void assertAllPluginPromptMutationResultFieldsListed;
 
 // before_agent_start hook (legacy compatibility: combines both phases)
 export type PluginHookBeforeAgentStartEvent = {
@@ -380,6 +466,26 @@ export type PluginHookBeforeAgentStartEvent = {
 
 export type PluginHookBeforeAgentStartResult = PluginHookBeforePromptBuildResult &
   PluginHookBeforeModelResolveResult;
+
+export type PluginHookBeforeAgentStartOverrideResult = Omit<
+  PluginHookBeforeAgentStartResult,
+  keyof PluginHookBeforePromptBuildResult
+>;
+
+export const stripPromptMutationFieldsFromLegacyHookResult = (
+  result: PluginHookBeforeAgentStartResult | void,
+): PluginHookBeforeAgentStartOverrideResult | void => {
+  if (!result || typeof result !== "object") {
+    return result;
+  }
+  const remaining: Partial<PluginHookBeforeAgentStartResult> = { ...result };
+  for (const field of PLUGIN_PROMPT_MUTATION_RESULT_FIELDS) {
+    delete remaining[field];
+  }
+  return Object.keys(remaining).length > 0
+    ? (remaining as PluginHookBeforeAgentStartOverrideResult)
+    : undefined;
+};
 
 // llm_input hook
 export type PluginHookLlmInputEvent = {

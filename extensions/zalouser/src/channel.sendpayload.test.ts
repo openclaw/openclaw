@@ -1,4 +1,4 @@
-import type { ReplyPayload } from "openclaw/plugin-sdk";
+import type { ReplyPayload } from "openclaw/plugin-sdk/zalouser";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { zalouserPlugin } from "./channel.js";
 
@@ -24,7 +24,7 @@ vi.mock("./accounts.js", async (importOriginal) => {
 function baseCtx(payload: ReplyPayload) {
   return {
     cfg: {},
-    to: "987654321",
+    to: "user:987654321",
     text: "",
     payload,
   };
@@ -49,6 +49,22 @@ describe("zalouserPlugin outbound sendPayload", () => {
     expect(result).toMatchObject({ channel: "zalouser", messageId: "zlu-t1" });
   });
 
+  it("group target delegates with isGroup=true and stripped threadId", async () => {
+    mockedSend.mockResolvedValue({ ok: true, messageId: "zlu-g1" });
+
+    const result = await zalouserPlugin.outbound!.sendPayload!({
+      ...baseCtx({ text: "hello group" }),
+      to: "group:1471383327500481391",
+    });
+
+    expect(mockedSend).toHaveBeenCalledWith(
+      "1471383327500481391",
+      "hello group",
+      expect.objectContaining({ isGroup: true }),
+    );
+    expect(result).toMatchObject({ channel: "zalouser", messageId: "zlu-g1" });
+  });
+
   it("single media delegates to sendMedia", async () => {
     mockedSend.mockResolvedValue({ ok: true, messageId: "zlu-m1" });
 
@@ -62,6 +78,38 @@ describe("zalouserPlugin outbound sendPayload", () => {
       expect.objectContaining({ mediaUrl: "https://example.com/a.jpg" }),
     );
     expect(result).toMatchObject({ channel: "zalouser" });
+  });
+
+  it("treats bare numeric targets as direct chats for backward compatibility", async () => {
+    mockedSend.mockResolvedValue({ ok: true, messageId: "zlu-d1" });
+
+    const result = await zalouserPlugin.outbound!.sendPayload!({
+      ...baseCtx({ text: "hello" }),
+      to: "987654321",
+    });
+
+    expect(mockedSend).toHaveBeenCalledWith(
+      "987654321",
+      "hello",
+      expect.objectContaining({ isGroup: false }),
+    );
+    expect(result).toMatchObject({ channel: "zalouser", messageId: "zlu-d1" });
+  });
+
+  it("preserves provider-native group ids when sending to raw g- targets", async () => {
+    mockedSend.mockResolvedValue({ ok: true, messageId: "zlu-g-native" });
+
+    const result = await zalouserPlugin.outbound!.sendPayload!({
+      ...baseCtx({ text: "hello native group" }),
+      to: "g-1471383327500481391",
+    });
+
+    expect(mockedSend).toHaveBeenCalledWith(
+      "g-1471383327500481391",
+      "hello native group",
+      expect.objectContaining({ isGroup: true }),
+    );
+    expect(result).toMatchObject({ channel: "zalouser", messageId: "zlu-g-native" });
   });
 
   it("multi-media iterates URLs with caption on first", async () => {
@@ -113,5 +161,33 @@ describe("zalouserPlugin outbound sendPayload", () => {
       expect((call[1] as string).length).toBeLessThanOrEqual(2000);
     }
     expect(result).toMatchObject({ channel: "zalouser" });
+  });
+});
+
+describe("zalouserPlugin messaging target normalization", () => {
+  it("normalizes user/group aliases to canonical targets", () => {
+    const normalize = zalouserPlugin.messaging?.normalizeTarget;
+    expect(normalize).toBeTypeOf("function");
+    if (!normalize) {
+      return;
+    }
+    expect(normalize("zlu:g:30003")).toBe("group:30003");
+    expect(normalize("zalouser:u:20002")).toBe("user:20002");
+    expect(normalize("zlu:g-30003")).toBe("group:g-30003");
+    expect(normalize("zalouser:u-20002")).toBe("user:u-20002");
+    expect(normalize("20002")).toBe("20002");
+  });
+
+  it("treats canonical and provider-native user/group targets as ids", () => {
+    const looksLikeId = zalouserPlugin.messaging?.targetResolver?.looksLikeId;
+    expect(looksLikeId).toBeTypeOf("function");
+    if (!looksLikeId) {
+      return;
+    }
+    expect(looksLikeId("user:20002")).toBe(true);
+    expect(looksLikeId("group:30003")).toBe(true);
+    expect(looksLikeId("g-30003")).toBe(true);
+    expect(looksLikeId("u-20002")).toBe(true);
+    expect(looksLikeId("Alice Nguyen")).toBe(false);
   });
 });
