@@ -9,6 +9,8 @@ import { getFeishuRuntime } from "./runtime.js";
 import { assertFeishuMessageApiSuccess, toFeishuSendResult } from "./send-result.js";
 import { resolveFeishuSendTarget } from "./send-target.js";
 
+const FEISHU_MEDIA_HTTP_TIMEOUT_MS = 120_000;
+
 export type DownloadImageResult = {
   buffer: Buffer;
   contentType?: string;
@@ -97,7 +99,10 @@ export async function downloadImageFeishu(params: {
     throw new Error(`Feishu account "${account.accountId}" not configured`);
   }
 
-  const client = createFeishuClient(account);
+  const client = createFeishuClient({
+    ...account,
+    httpTimeoutMs: FEISHU_MEDIA_HTTP_TIMEOUT_MS,
+  });
 
   const response = await client.im.image.get({
     path: { image_key: normalizedImageKey },
@@ -132,7 +137,10 @@ export async function downloadMessageResourceFeishu(params: {
     throw new Error(`Feishu account "${account.accountId}" not configured`);
   }
 
-  const client = createFeishuClient(account);
+  const client = createFeishuClient({
+    ...account,
+    httpTimeoutMs: FEISHU_MEDIA_HTTP_TIMEOUT_MS,
+  });
 
   const response = await client.im.messageResource.get({
     path: { message_id: messageId, file_key: normalizedFileKey },
@@ -176,7 +184,10 @@ export async function uploadImageFeishu(params: {
     throw new Error(`Feishu account "${account.accountId}" not configured`);
   }
 
-  const client = createFeishuClient(account);
+  const client = createFeishuClient({
+    ...account,
+    httpTimeoutMs: FEISHU_MEDIA_HTTP_TIMEOUT_MS,
+  });
 
   // SDK accepts Buffer directly or fs.ReadStream for file paths
   // Using Readable.from(buffer) causes issues with form-data library
@@ -243,7 +254,10 @@ export async function uploadFileFeishu(params: {
     throw new Error(`Feishu account "${account.accountId}" not configured`);
   }
 
-  const client = createFeishuClient(account);
+  const client = createFeishuClient({
+    ...account,
+    httpTimeoutMs: FEISHU_MEDIA_HTTP_TIMEOUT_MS,
+  });
 
   // SDK accepts Buffer directly or fs.ReadStream for file paths
   // Using Readable.from(buffer) causes issues with form-data library
@@ -328,8 +342,8 @@ export async function sendFileFeishu(params: {
   cfg: ClawdbotConfig;
   to: string;
   fileKey: string;
-  /** Use "audio" for audio files, "file" for documents and video */
-  msgType?: "file" | "audio";
+  /** Use "audio" for audio, "media" for video (mp4), "file" for documents */
+  msgType?: "file" | "audio" | "media";
   replyToMessageId?: string;
   replyInThread?: boolean;
   accountId?: string;
@@ -467,8 +481,8 @@ export async function sendMediaFeishu(params: {
       fileType,
       accountId,
     });
-    // Feishu API: opus -> "audio", everything else (including video) -> "file"
-    const msgType = fileType === "opus" ? "audio" : "file";
+    // Feishu API: opus -> "audio", mp4/video -> "media" (playable), others -> "file"
+    const msgType = fileType === "opus" ? "audio" : fileType === "mp4" ? "media" : "file";
     return sendFileFeishu({
       cfg,
       to,

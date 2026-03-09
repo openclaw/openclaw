@@ -27,7 +27,7 @@ function toConcretePathSegments(pathPattern: string): string[] {
 function buildConfigForOpenClawTarget(entry: SecretRegistryEntry, envId: string): OpenClawConfig {
   const config = {} as OpenClawConfig;
   const refTargetPath =
-    entry.secretShape === "sibling_ref" && entry.refPathPattern
+    entry.secretShape === "sibling_ref" && entry.refPathPattern // pragma: allowlist secret
       ? entry.refPathPattern
       : entry.pathPattern;
   setPathCreateStrict(config, toConcretePathSegments(refTargetPath), {

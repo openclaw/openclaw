@@ -16,6 +16,7 @@ vi.mock("../subagent-spawn.js", () => ({
 
 vi.mock("../acp-spawn.js", () => ({
   ACP_SPAWN_MODES: ["run", "session"],
+  ACP_SPAWN_STREAM_TARGETS: ["parent"],
   spawnAcpDirect: (...args: unknown[]) => hoisted.spawnAcpDirectMock(...args),
 }));
 
@@ -78,6 +79,25 @@ describe("sessions_spawn tool", () => {
     expect(hoisted.spawnAcpDirectMock).not.toHaveBeenCalled();
   });
 
+  it("passes inherited workspaceDir from tool context, not from tool args", async () => {
+    const tool = createSessionsSpawnTool({
+      agentSessionKey: "agent:main:main",
+      workspaceDir: "/parent/workspace",
+    });
+
+    await tool.execute("call-ws", {
+      task: "inspect AGENTS",
+      workspaceDir: "/tmp/attempted-override",
+    });
+
+    expect(hoisted.spawnSubagentDirectMock).toHaveBeenCalledWith(
+      expect.any(Object),
+      expect.objectContaining({
+        workspaceDir: "/parent/workspace",
+      }),
+    );
+  });
+
   it("routes to ACP runtime when runtime=acp", async () => {
     const tool = createSessionsSpawnTool({
       agentSessionKey: "agent:main:main",
@@ -94,6 +114,7 @@ describe("sessions_spawn tool", () => {
       cwd: "/workspace",
       thread: true,
       mode: "session",
+      streamTo: "parent",
     });
 
     expect(result.details).toMatchObject({
@@ -108,6 +129,7 @@ describe("sessions_spawn tool", () => {
         cwd: "/workspace",
         thread: true,
         mode: "session",
+        streamTo: "parent",
       }),
       expect.objectContaining({
         agentSessionKey: "agent:main:main",
@@ -161,6 +183,26 @@ describe("sessions_spawn tool", () => {
     });
     const details = result.details as { error?: string };
     expect(details.error).toContain("attachments are currently unsupported for runtime=acp");
+    expect(hoisted.spawnAcpDirectMock).not.toHaveBeenCalled();
+    expect(hoisted.spawnSubagentDirectMock).not.toHaveBeenCalled();
+  });
+
+  it('rejects streamTo when runtime is not "acp"', async () => {
+    const tool = createSessionsSpawnTool({
+      agentSessionKey: "agent:main:main",
+    });
+
+    const result = await tool.execute("call-3b", {
+      runtime: "subagent",
+      task: "analyze file",
+      streamTo: "parent",
+    });
+
+    expect(result.details).toMatchObject({
+      status: "error",
+    });
+    const details = result.details as { error?: string };
+    expect(details.error).toContain("streamTo is only supported for runtime=acp");
     expect(hoisted.spawnAcpDirectMock).not.toHaveBeenCalled();
     expect(hoisted.spawnSubagentDirectMock).not.toHaveBeenCalled();
   });
