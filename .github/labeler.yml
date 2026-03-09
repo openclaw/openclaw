@@ -109,6 +109,21 @@
       - any-glob-to-any-file:
           - "extensions/zalouser/**"
           - "docs/channels/zalouser.md"
+"channel: qq":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/qq/**"
+          - "docs/channels/qq.md"
+"channel: wecom":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/wecom/**"
+          - "docs/channels/wecom.md"
+"channel: wechat":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/wechat/**"
+          - "docs/channels/wechat.md"
 
 "app: android":
   - changed-files:
