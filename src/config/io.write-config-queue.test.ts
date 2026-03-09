@@ -60,9 +60,17 @@ describe("config write serialization", () => {
       const gateway = persisted.gateway as Record<string, unknown> | undefined;
 
       // The second write must not corrupt or truncate the config.
-      // Both gateway.mode and gateway.port must survive.
+      // Both gateway.mode and gateway.port must survive because they exist
+      // in both snapshots.
       expect(gateway?.mode).toBe("local");
       expect(gateway?.port).toBe(18789);
+
+      // Note: gateway.auth is NOT expected to survive because write2 was
+      // built from baseCfg (pre-write1 snapshot) and does not re-read from
+      // disk. The queue prevents file corruption from concurrent rename
+      // races, but not lost updates from stale snapshots. The ownerDisplaySecret
+      // fix (re-reading inside the queue) prevents this and is tested separately below.
+      expect(gateway?.auth).toBeUndefined();
     });
   });
 
