@@ -8,7 +8,6 @@ import {
   resolveAwsSdkEnvVarName,
   resolveEnvApiKey,
 } from "../../agents/model-auth.js";
-import { ensureOpenClawModelsJson } from "../../agents/models-config.js";
 import { discoverAuthStorage, discoverModels } from "../../agents/pi-model-discovery.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import {
@@ -95,12 +94,9 @@ function loadAvailableModels(registry: ModelRegistry): Model<Api>[] {
 }
 
 export async function loadModelRegistry(
-  cfg: OpenClawConfig,
-  opts?: { sourceConfig?: OpenClawConfig },
+  _cfg: OpenClawConfig,
+  _opts?: { sourceConfig?: OpenClawConfig },
 ) {
-  // Persistence must be based on source config (pre-resolution) so SecretRef-managed
-  // credentials remain markers in models.json for command paths too.
-  await ensureOpenClawModelsJson(opts?.sourceConfig ?? cfg);
   const agentDir = resolveOpenClawAgentDir();
   const authStorage = discoverAuthStorage(agentDir);
   const registry = discoverModels(authStorage, agentDir);

@@ -14,6 +14,7 @@ import org.junit.Test
 @Serializable
 private data class TalkConfigContractFixture(
   @SerialName("selectionCases") val selectionCases: List<SelectionCase>,
+  @SerialName("timeoutCases") val timeoutCases: List<TimeoutCase>,
 ) {
   @Serializable
   data class SelectionCase(
@@ -29,6 +30,15 @@ private data class TalkConfigContractFixture(
     val provider: String,
     val normalizedPayload: Boolean,
     val voiceId: String? = null,
+    val apiKey: String? = null,
+  )
+
+  @Serializable
+  data class TimeoutCase(
+    val id: String,
+    val fallback: Long,
+    val expectedTimeoutMs: Long,
+    val talk: JsonObject,
   )
 }
 
@@ -38,7 +48,7 @@ class TalkModeConfigContractTest {
   @Test
   fun selectionFixtures() {
     for (fixture in loadFixtures().selectionCases) {
-      val selection = TalkModeManager.selectTalkProviderConfig(fixture.talk)
+      val selection = TalkModeGatewayConfigParser.selectTalkProviderConfig(fixture.talk)
       val expected = fixture.expectedSelection
       if (expected == null) {
         assertNull(fixture.id, selection)
@@ -52,7 +62,21 @@ class TalkModeConfigContractTest {
         expected.voiceId,
         (selection?.config?.get("voiceId") as? JsonPrimitive)?.content,
       )
+      assertEquals(
+        fixture.id,
+        expected.apiKey,
+        (selection?.config?.get("apiKey") as? JsonPrimitive)?.content,
+      )
       assertEquals(fixture.id, true, fixture.payloadValid)
+    }
+  }
+
+  @Test
+  fun timeoutFixtures() {
+    for (fixture in loadFixtures().timeoutCases) {
+      val timeout = TalkModeGatewayConfigParser.resolvedSilenceTimeoutMs(fixture.talk)
+      assertEquals(fixture.id, fixture.expectedTimeoutMs, timeout)
+      assertEquals(fixture.id, TalkDefaults.defaultSilenceTimeoutMs, fixture.fallback)
     }
   }
 
