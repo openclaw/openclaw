@@ -433,6 +433,55 @@ describe("runCronIsolatedAgentTurn", () => {
     );
   });
 
+  it("retries transient text direct delivery failures before succeeding", async () => {
+    const previousFastMode = process.env.OPENCLAW_TEST_FAST;
+    process.env.OPENCLAW_TEST_FAST = "1";
+    try {
+      await withTelegramAnnounceFixture(
+        async ({ home, storePath, deps }) => {
+          mockAgentPayloads([{ text: "hello from cron" }]);
+
+          const res = await runTelegramAnnounceTurn({
+            home,
+            storePath,
+            deps,
+            delivery: {
+              mode: "announce",
+              channel: "telegram",
+              to: "123",
+              bestEffort: false,
+            },
+          });
+
+          expect(res.status).toBe("ok");
+          expect(res.delivered).toBe(true);
+          expect(res.deliveryAttempted).toBe(true);
+          expect(runSubagentAnnounceFlow).not.toHaveBeenCalled();
+          expect(deps.sendMessageTelegram).toHaveBeenCalledTimes(2);
+          expect(deps.sendMessageTelegram).toHaveBeenLastCalledWith(
+            "123",
+            "hello from cron",
+            expect.objectContaining({ cfg: expect.any(Object) }),
+          );
+        },
+        {
+          deps: {
+            sendMessageTelegram: vi
+              .fn()
+              .mockRejectedValueOnce(new Error("UNAVAILABLE: temporary network error"))
+              .mockResolvedValue({ messageId: 7, chatId: "123", text: "hello from cron" }),
+          },
+        },
+      );
+    } finally {
+      if (previousFastMode === undefined) {
+        delete process.env.OPENCLAW_TEST_FAST;
+      } else {
+        process.env.OPENCLAW_TEST_FAST = previousFastMode;
+      }
+    }
+  });
+
   it("delivers text directly when best-effort is enabled", async () => {
     const { res, deps } = await runTelegramDeliveryResult(true);
     expect(res.status).toBe("ok");
