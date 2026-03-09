@@ -362,7 +362,14 @@ final class NodeAppModel {
                         await MainActor.run {
                             self.operatorConnected = false
                             self.gatewayConnected = false
+                            // Foreground recovery must actively restart the saved gateway config.
+                            // Disconnecting stale sockets alone can leave us idle if the old
+                            // reconnect tasks were suppressed or otherwise got stuck in background.
+                            self.gatewayStatusText = "Reconnecting…"
                             self.talkMode.updateGatewayConnected(false)
+                            if let cfg = self.activeGatewayConnectConfig {
+                                self.applyGatewayConnectConfig(cfg)
+                            }
                         }
                     }
                 }
