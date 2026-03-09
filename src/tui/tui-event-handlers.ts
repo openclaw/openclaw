@@ -185,7 +185,8 @@ export function createEventHandlers(context: EventHandlerContext) {
     if (evt.sessionKey && evt.sessionKey !== state.currentSessionKey) {
       const currentKey = state.currentSessionKey;
       const shouldUpdate =
-        currentKey.includes("unknown") ||
+        currentKey === "unknown" ||
+        currentKey.endsWith(":unknown") ||
         (currentKey.startsWith("agent:") &&
           evt.sessionKey.startsWith("agent:") &&
           currentKey.split(":")[1] === evt.sessionKey.split(":")[1]);
@@ -194,6 +195,9 @@ export function createEventHandlers(context: EventHandlerContext) {
         state.currentSessionKey = evt.sessionKey;
         // Also update lastSessionKey to prevent spurious session reset on next event
         lastSessionKey = evt.sessionKey;
+      } else {
+        // Drop events from mismatched sessions to prevent cross-session data leak
+        return;
       }
     }
     if (finalizedRuns.has(evt.runId)) {

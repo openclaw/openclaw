@@ -566,7 +566,7 @@ export const MemorySearchSchema = z
     remote: z
       .object({
         baseUrl: z.string().optional(),
-        apiKey: z.string().optional().register(sensitive),
+        apiKey: SecretInputSchema.optional().register(sensitive),
         headers: z.record(z.string(), z.string()).optional(),
         batch: z
           .object({
