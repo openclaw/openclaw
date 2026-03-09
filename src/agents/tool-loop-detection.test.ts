@@ -683,7 +683,13 @@ describe("tool-loop-detection", () => {
           toolParams: execParams,
           toolCallId,
           result: {
-            content: [{ type: "text", text: "Command still running" }],
+            // Real exec embeds volatile session/pid in content text
+            content: [
+              {
+                type: "text",
+                text: `Command still running (session sess-${1000 + i}, pid ${40000 + i}). Use process for follow-up.`,
+              },
+            ],
             details: {
               status: "running",
               sessionId: `sess-${1000 + i}`,
@@ -699,6 +705,46 @@ describe("tool-loop-detection", () => {
       expect(loopResult.stuck).toBe(true);
       if (loopResult.stuck) {
         expect(loopResult.level).toBe("warning");
+      }
+    });
+
+    it("does not flag running exec loop when tail output progresses (#34574)", () => {
+      const state = createState();
+      const execParams = { command: "make build", cwd: "/workspace" };
+
+      for (let i = 0; i < GLOBAL_CIRCUIT_BREAKER_THRESHOLD; i += 1) {
+        const toolCallId = `exec-tail-${i}`;
+        recordToolCall(state, "exec", execParams, toolCallId);
+        recordToolCallOutcome(state, {
+          toolName: "exec",
+          toolParams: execParams,
+          toolCallId,
+          result: {
+            content: [
+              {
+                type: "text",
+                text: `Command still running (session sess-${i}, pid ${50000 + i}).`,
+              },
+            ],
+            details: {
+              status: "running",
+              sessionId: `sess-${i}`,
+              pid: 50000 + i,
+              startedAt: Date.now() + i * 1000,
+              cwd: "/workspace",
+              tail: `Compiling module ${i}...`,
+            },
+          },
+        });
+      }
+
+      const loopResult = detectToolCallLoop(state, "exec", execParams, enabledLoopDetectionConfig);
+      // generic_repeat fires on args, but no-progress streak should not
+      // escalate to critical because tail output is progressing
+      expect(loopResult.stuck).toBe(true);
+      if (loopResult.stuck) {
+        expect(loopResult.level).toBe("warning");
+        expect(loopResult.detector).not.toBe("global_circuit_breaker");
       }
     });
   });

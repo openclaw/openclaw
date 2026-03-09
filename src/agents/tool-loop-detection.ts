@@ -227,7 +227,18 @@ function hashToolOutcome(
   // sessionId) that change on every invocation.  Hash only the stable
   // fields so that repeated identical commands are correctly detected as
   // a loop.  See https://github.com/nicepkg/openclaw/issues/34574.
+  //
+  // For "running" results the content text itself embeds volatile metadata
+  // (session id, pid) so we omit it and hash only the status + tail output.
+  // For "completed" results the content text mirrors `aggregated` which is
+  // stable, so we include it.
   if (toolName === "exec") {
+    if (details.status === "running") {
+      return digestStable({
+        status: "running",
+        tail: details.tail ?? null,
+      });
+    }
     return digestStable({
       status: details.status,
       exitCode: details.exitCode ?? null,
