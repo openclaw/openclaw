@@ -7,7 +7,7 @@ import {
   getShellPathFromLoginShell,
   resolveShellEnvFallbackTimeoutMs,
 } from "../infra/shell-env.js";
-import { logInfo } from "../logger.js";
+import { logInfo, logWarn } from "../logger.js";
 import { parseAgentSessionKey, resolveAgentIdFromSessionKey } from "../routing/session-key.js";
 import { markBackgrounded } from "./bash-process-registry.js";
 import { processGatewayAllowlist } from "./bash-tools.exec-host-gateway.js";
@@ -328,6 +328,16 @@ export function createExecTool(
       const configuredAsk = defaults?.ask ?? loadExecApprovals().defaults?.ask ?? "on-miss";
       const requestedAsk = normalizeExecAsk(params.ask);
       let ask = maxAsk(configuredAsk, requestedAsk ?? configuredAsk);
+      if (requestedSecurity && security !== requestedSecurity) {
+        logWarn(
+          `exec: agent=${agentId ?? "default"} security '${requestedSecurity}' clamped to '${security}' by config-level tools.exec.security — set tools.exec.security in your config to allow this`,
+        );
+      }
+      if (requestedAsk && ask !== requestedAsk) {
+        logWarn(
+          `exec: agent=${agentId ?? "default"} ask '${requestedAsk}' clamped to '${ask}' by config-level tools.exec.ask — set tools.exec.ask in your config to allow this`,
+        );
+      }
       const bypassApprovals = elevatedRequested && elevatedMode === "full";
       if (bypassApprovals) {
         ask = "off";

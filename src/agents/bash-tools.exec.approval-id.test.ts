@@ -27,6 +27,7 @@ vi.mock("../infra/exec-obfuscation-detect.js", () => ({
 let callGatewayTool: typeof import("./tools/gateway.js").callGatewayTool;
 let createExecTool: typeof import("./bash-tools.exec.js").createExecTool;
 let detectCommandObfuscation: typeof import("../infra/exec-obfuscation-detect.js").detectCommandObfuscation;
+let resolveExecApprovalsPath: typeof import("../infra/exec-approvals.js").resolveExecApprovalsPath;
 
 function buildPreparedSystemRunPayload(rawInvokeParams: unknown) {
   const invoke = (rawInvokeParams ?? {}) as {
@@ -50,6 +51,7 @@ describe("exec approvals", () => {
     ({ callGatewayTool } = await import("./tools/gateway.js"));
     ({ createExecTool } = await import("./bash-tools.exec.js"));
     ({ detectCommandObfuscation } = await import("../infra/exec-obfuscation-detect.js"));
+    ({ resolveExecApprovalsPath } = await import("../infra/exec-approvals.js"));
   });
 
   beforeEach(async () => {
@@ -290,6 +292,118 @@ describe("exec approvals", () => {
     await approvalSeen;
     expect(calls).toContain("exec.approval.request");
     expect(calls).toContain("exec.approval.waitDecision");
+  });
+
+  it("logs when config defaults clamp requested security and ask", async () => {
+    const warnings: string[] = [];
+    vi.spyOn(await import("../logger.js"), "logWarn").mockImplementation((message: string) => {
+      warnings.push(message);
+    });
+
+    vi.mocked(callGatewayTool).mockImplementation(async (method, _opts, params) => {
+      if (method === "exec.approval.request") {
+        return { status: "accepted", id: (params as { id?: string })?.id };
+      }
+      if (method === "exec.approval.waitDecision") {
+        return { decision: "deny" };
+      }
+      if (method === "node.invoke") {
+        const invoke = params as { command?: string };
+        if (invoke.command === "system.run.prepare") {
+          return buildPreparedSystemRunPayload(params);
+        }
+        return { payload: { success: true, stdout: "ok" } };
+      }
+      return { ok: true };
+    });
+
+    const tool = createExecTool({
+      host: "node",
+      security: "allowlist",
+      ask: "always",
+      approvalRunningNoticeMs: 0,
+    });
+
+    const result = await tool.execute("call-clamp-config", {
+      command: "echo ok",
+      security: "full",
+      ask: "off",
+    });
+
+    expect(result.details.status).toBeDefined();
+    expect(
+      warnings.some((message) =>
+        message.includes(
+          "security 'full' clamped to 'allowlist' by config-level tools.exec.security",
+        ),
+      ),
+    ).toBe(true);
+    expect(
+      warnings.some((message) =>
+        message.includes("ask 'off' clamped to 'always' by config-level tools.exec.ask"),
+      ),
+    ).toBe(true);
+  });
+
+  it("logs when agent exec approvals clamp node host security and ask", async () => {
+    const warnings: string[] = [];
+    vi.spyOn(await import("../logger.js"), "logWarn").mockImplementation((message: string) => {
+      warnings.push(message);
+    });
+
+    const approvalsFile = {
+      version: 1,
+      defaults: { security: "full", ask: "off", askFallback: "deny" },
+      agents: {
+        main: {
+          security: "allowlist",
+          ask: "always",
+        },
+      },
+    };
+    const approvalsPath = resolveExecApprovalsPath();
+    await fs.mkdir(path.dirname(approvalsPath), { recursive: true });
+    await fs.writeFile(approvalsPath, JSON.stringify(approvalsFile), "utf-8");
+
+    vi.mocked(callGatewayTool).mockImplementation(async (method, _opts, params) => {
+      if (method === "exec.approval.request") {
+        return { status: "accepted", id: (params as { id?: string })?.id };
+      }
+      if (method === "exec.approval.waitDecision") {
+        return { decision: "deny" };
+      }
+      if (method === "node.invoke") {
+        const invoke = params as { command?: string };
+        if (invoke.command === "system.run.prepare") {
+          return buildPreparedSystemRunPayload(params);
+        }
+        return { payload: { success: true, stdout: "ok" } };
+      }
+      return { ok: true };
+    });
+
+    const tool = createExecTool({
+      host: "node",
+      security: "full",
+      ask: "off",
+      approvalRunningNoticeMs: 0,
+    });
+
+    const result = await tool.execute("call-clamp-approvals", { command: "echo ok" });
+
+    expect(result.details.status).toBeDefined();
+    expect(
+      warnings.some((message) =>
+        message.includes(
+          "security 'full' clamped to 'allowlist' by agent exec approvals for host=node",
+        ),
+      ),
+    ).toBe(true);
+    expect(
+      warnings.some((message) =>
+        message.includes("ask 'off' clamped to 'always' by agent exec approvals for host=node"),
+      ),
+    ).toBe(true);
   });
 
   it("waits for approval registration before returning approval-pending", async () => {
