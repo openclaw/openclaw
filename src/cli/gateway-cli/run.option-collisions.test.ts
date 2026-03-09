@@ -1,3 +1,6 @@
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { Command } from "commander";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createCliRuntimeCapture } from "../test-runtime-capture.js";
@@ -238,5 +241,78 @@ describe("gateway run option collisions", () => {
         bind: "loopback",
       }),
     );
+  });
+
+  it("reads gateway password from --password-file", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gateway-run-"));
+    try {
+      const passwordFile = path.join(tempDir, "gateway-password.txt");
+      await fs.writeFile(passwordFile, "pw_from_file\n", "utf8");
+
+      await runGatewayCli([
+        "gateway",
+        "run",
+        "--auth",
+        "password",
+        "--password-file",
+        passwordFile,
+        "--allow-unconfigured",
+      ]);
+
+      expect(startGatewayServer).toHaveBeenCalledWith(
+        18789,
+        expect.objectContaining({
+          auth: expect.objectContaining({
+            mode: "password",
+            password: "pw_from_file", // pragma: allowlist secret
+          }),
+        }),
+      );
+      expect(runtimeErrors).not.toContain(
+        "Warning: --password can be exposed via process listings. Prefer --password-file or OPENCLAW_GATEWAY_PASSWORD.",
+      );
+    } finally {
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("warns when gateway password is passed inline", async () => {
+    await runGatewayCli([
+      "gateway",
+      "run",
+      "--auth",
+      "password",
+      "--password",
+      "pw_inline",
+      "--allow-unconfigured",
+    ]);
+
+    expect(runtimeErrors).toContain(
+      "Warning: --password can be exposed via process listings. Prefer --password-file or OPENCLAW_GATEWAY_PASSWORD.",
+    );
+  });
+
+  it("rejects using both --password and --password-file", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gateway-run-"));
+    try {
+      const passwordFile = path.join(tempDir, "gateway-password.txt");
+      await fs.writeFile(passwordFile, "pw_from_file\n", "utf8");
+
+      await expect(
+        runGatewayCli([
+          "gateway",
+          "run",
+          "--password",
+          "pw_inline",
+          "--password-file",
+          passwordFile,
+          "--allow-unconfigured",
+        ]),
+      ).rejects.toThrow("__exit__:1");
+
+      expect(runtimeErrors).toContain("Use either --password or --password-file.");
+    } finally {
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
   });
 });
