@@ -12,7 +12,7 @@ import { scheduleGatewaySigusr1Restart } from "../../infra/restart.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { stringEnum } from "../schema/typebox.js";
 import { type AnyAgentTool, jsonResult, readStringParam } from "./common.js";
-import { callGatewayTool, readGatewayCallOptions } from "./gateway.js";
+import { callGatewayTool, readGatewayCallOptions, resolveGatewayTarget } from "./gateway.js";
 
 const log = createSubsystemLogger("gateway-tool");
 
@@ -274,7 +274,12 @@ export function createGatewayTool(opts?: {
         // would write a sentinel with the wrong chat destination on the remote host,
         // causing post-restart wake messages to be sent to the caller's chat instead
         // of the session on the remote gateway. See #18612.
-        const isRemoteGateway = Boolean(gatewayOpts.gatewayUrl?.trim());
+        // Only suppress deliveryContext for truly remote gateways. A gatewayUrl
+        // override pointing to a local loopback address (127.0.0.1, localhost,
+        // [::1]) is still the local server and should forward context normally;
+        // treating it as remote would fall back to extractDeliveryInfo(sessionKey)
+        // and reintroduce the stale heartbeat routing this patch was meant to fix.
+        const isRemoteGateway = resolveGatewayTarget(gatewayOpts) === "remote";
         const deliveryContext =
           isTargetingOtherSession || isRemoteGateway ? undefined : liveDeliveryContextForRpc;
         return { sessionKey, note, restartDelayMs, deliveryContext };

@@ -12,6 +12,7 @@ const mocks = vi.hoisted(() => ({
   formatDoctorNonInteractiveHint: vi.fn(() => ""),
   callGatewayTool: vi.fn(async () => ({})),
   readGatewayCallOptions: vi.fn(() => ({})),
+  resolveGatewayTarget: vi.fn(() => undefined),
 }));
 
 vi.mock("../../config/commands.js", () => ({ isRestartEnabled: mocks.isRestartEnabled }));
@@ -31,6 +32,7 @@ vi.mock("../../infra/restart.js", () => ({
 vi.mock("./gateway.js", () => ({
   callGatewayTool: mocks.callGatewayTool,
   readGatewayCallOptions: mocks.readGatewayCallOptions,
+  resolveGatewayTarget: mocks.resolveGatewayTarget,
 }));
 
 import { createGatewayTool } from "./gateway-tool.js";
@@ -174,6 +176,7 @@ describe("createGatewayTool – live delivery context guard", () => {
     // destination on the remote host.
     mocks.callGatewayTool.mockClear();
     mocks.readGatewayCallOptions.mockReturnValueOnce({ gatewayUrl: "wss://remote-gw.example.com" });
+    mocks.resolveGatewayTarget.mockReturnValueOnce("remote");
     const tool = createGatewayTool({
       agentSessionKey: "agent:main:main",
       agentChannel: "discord",
@@ -191,6 +194,37 @@ describe("createGatewayTool – live delivery context guard", () => {
 
     const forwardedParams = getCallArg<Record<string, unknown>>(mocks.callGatewayTool, 0, 2);
     expect(forwardedParams?.deliveryContext).toBeUndefined();
+  });
+
+  it("forwards live RPC delivery context when gatewayUrl is a local loopback override", async () => {
+    // A gatewayUrl pointing to 127.0.0.1/localhost/[::1] is still the local server;
+    // deliveryContext must be forwarded so restart sentinels use the correct chat destination.
+    mocks.callGatewayTool.mockClear();
+    mocks.readGatewayCallOptions.mockReturnValueOnce({
+      gatewayUrl: "ws://127.0.0.1:18789",
+    });
+    mocks.resolveGatewayTarget.mockReturnValueOnce("local");
+    const tool = createGatewayTool({
+      agentSessionKey: "agent:main:main",
+      agentChannel: "discord",
+      agentTo: "123456789",
+    });
+
+    await execTool(tool, {
+      action: "config.patch",
+      raw: '{"key":"value"}',
+      baseHash: "abc123",
+      sessionKey: "agent:main:main",
+      note: "local loopback patch",
+      gatewayUrl: "ws://127.0.0.1:18789",
+    });
+
+    const forwardedParams = getCallArg<Record<string, unknown>>(mocks.callGatewayTool, 0, 2);
+    expect(forwardedParams?.deliveryContext).toEqual({
+      channel: "discord",
+      to: "123456789",
+      accountId: undefined,
+    });
   });
 
   it("does not forward live RPC delivery context when a non-default agent passes sessionKey='main'", async () => {

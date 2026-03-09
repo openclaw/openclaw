@@ -13,7 +13,7 @@ export type GatewayCallOptions = {
   timeoutMs?: number;
 };
 
-type GatewayOverrideTarget = "local" | "remote";
+export type GatewayOverrideTarget = "local" | "remote";
 
 export function readGatewayCallOptions(params: Record<string, unknown>): GatewayCallOptions {
   return {
@@ -111,6 +111,23 @@ function resolveGatewayOverrideToken(params: {
     remoteTokenFallback: params.target === "remote" ? "remote-only" : "remote-env-local",
     remotePasswordFallback: params.target === "remote" ? "remote-only" : "remote-env-local",
   }).token;
+}
+
+/**
+ * Resolves whether a GatewayCallOptions points to a local or remote gateway.
+ * Returns undefined when no gatewayUrl override is present (default local gateway).
+ * Local loopback overrides (127.0.0.1, localhost, [::1]) return "local";
+ * all other URL overrides return "remote".
+ */
+export function resolveGatewayTarget(opts?: GatewayCallOptions): GatewayOverrideTarget | undefined {
+  if (trimToUndefined(opts?.gatewayUrl) === undefined) {
+    return undefined;
+  }
+  const cfg = loadConfig();
+  return validateGatewayUrlOverrideForAgentTools({
+    cfg,
+    urlOverride: String(opts?.gatewayUrl),
+  }).target;
 }
 
 export function resolveGatewayOptions(opts?: GatewayCallOptions) {
