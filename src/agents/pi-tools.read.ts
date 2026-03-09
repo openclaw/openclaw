@@ -456,8 +456,36 @@ export function createSandboxedWriteTool(params: SandboxToolParams) {
   const base = createWriteTool(params.root, {
     operations: createSandboxWriteOperations(params),
   }) as unknown as AnyAgentTool;
-  // Sandbox write tool does not support append mode (sandbox bridge has no appendFile)
-  return wrapToolParamNormalization(base, CLAUDE_PARAM_GROUPS.write);
+  // Sandbox write tool does not support append mode (sandbox bridge has no appendFile).
+  // Explicitly reject append=true so the model gets a clear error instead of silently
+  // overwriting — which is the exact data-loss scenario append is meant to prevent.
+  const normalized = wrapToolParamNormalization(base, CLAUDE_PARAM_GROUPS.write);
+  return {
+    ...normalized,
+    execute: async (
+      toolCallId: string,
+      params: unknown,
+      signal: AbortSignal,
+      onUpdate?: unknown,
+    ) => {
+      const record =
+        params && typeof params === "object" ? (params as Record<string, unknown>) : undefined;
+      if (record?.append === true) {
+        return {
+          content: [
+            {
+              type: "text",
+              text:
+                "Error: append mode is not supported in sandboxed sessions. " +
+                "The sandbox bridge does not expose appendFile. " +
+                "Use the default overwrite mode or run outside the sandbox.",
+            },
+          ],
+        } as AgentToolResult;
+      }
+      return normalized.execute(toolCallId, params, signal, onUpdate);
+    },
+  };
 }
 
 export function createSandboxedEditTool(params: SandboxToolParams) {
