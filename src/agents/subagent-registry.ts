@@ -561,6 +561,7 @@ async function sendExternalCompletionNotification(entry: SubagentRunRecord): Pro
         channel,
         to: target,
         message,
+        idempotencyKey: `subagent-complete-${entry.runId}`,
       },
       timeoutMs: 15_000,
     });
@@ -596,9 +597,9 @@ function startSubagentAnnounceCleanupFlow(runId: string, entry: SubagentRunRecor
     expectsCompletionMessage: entry.expectsCompletionMessage,
     wakeOnDescendantSettle: entry.wakeOnDescendantSettle === true,
   })
-    .then(async (didAnnounce) => {
+    .then((didAnnounce) => {
       // Send external notification if configured (fire-and-forget).
-      await sendExternalCompletionNotification(entry);
+      void sendExternalCompletionNotification(entry);
       void finalizeSubagentCleanup(runId, entry.cleanup, didAnnounce);
     })
     .catch((error) => {
