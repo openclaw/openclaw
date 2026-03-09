@@ -1,0 +1,319 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>OpenClaw: Context & Memory Architecture</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+      color: #e8e8e8;
+      min-height: 100vh;
+      padding: 40px 20px;
+    }
+    h1 {
+      text-align: center;
+      font-size: 2.5rem;
+      margin-bottom: 10px;
+      background: linear-gradient(90deg, #f59e0b, #ef4444);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+    }
+    .subtitle {
+      text-align: center;
+      color: #9ca3af;
+      margin-bottom: 40px;
+      font-size: 1.1rem;
+    }
+    .container {
+      max-width: 1200px;
+      margin: 0 auto;
+    }
+    .diagram {
+      display: grid;
+      grid-template-columns: 1fr 1fr 1fr;
+      gap: 30px;
+      margin-bottom: 50px;
+    }
+    .box {
+      background: rgba(255,255,255,0.05);
+      border-radius: 16px;
+      padding: 24px;
+      border: 1px solid rgba(255,255,255,0.1);
+    }
+    .box h2 {
+      font-size: 1.3rem;
+      margin-bottom: 16px;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+    .box ul {
+      list-style: none;
+      font-size: 0.95rem;
+      line-height: 1.8;
+    }
+    .box li::before {
+      content: "→ ";
+      color: #f59e0b;
+    }
+    .emoji { font-size: 1.5rem; }
+    
+    /* Central Gateway Box */
+    .gateway-section {
+      grid-column: 1 / -1;
+      background: linear-gradient(135deg, rgba(245,158,11,0.15) 0%, rgba(239,68,68,0.15) 100%);
+      border: 2px solid rgba(245,158,11,0.4);
+      text-align: center;
+      padding: 30px;
+    }
+    .gateway-section h2 {
+      justify-content: center;
+      font-size: 1.6rem;
+    }
+    .gateway-section p {
+      max-width: 700px;
+      margin: 0 auto;
+      color: #d1d5db;
+    }
+    
+    /* Sessions Row */
+    .sessions-row {
+      grid-column: 1 / -1;
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 20px;
+    }
+    .session-box {
+      background: rgba(59,130,246,0.15);
+      border: 1px solid rgba(59,130,246,0.4);
+      border-radius: 12px;
+      padding: 20px;
+    }
+    .session-box h3 {
+      font-size: 1.1rem;
+      margin-bottom: 12px;
+      color: #60a5fa;
+    }
+    .session-box .context {
+      background: rgba(0,0,0,0.3);
+      border-radius: 8px;
+      padding: 12px;
+      font-size: 0.85rem;
+      margin-top: 10px;
+    }
+    .session-box .context-label {
+      color: #fbbf24;
+      font-weight: 600;
+      margin-bottom: 6px;
+    }
+    
+    /* Memory Section */
+    .memory-section {
+      grid-column: 1 / -1;
+      background: linear-gradient(135deg, rgba(34,197,94,0.15) 0%, rgba(16,185,129,0.15) 100%);
+      border: 2px solid rgba(34,197,94,0.4);
+    }
+    .memory-section h2 { color: #4ade80; }
+    .memory-files {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+      gap: 15px;
+      margin-top: 20px;
+    }
+    .memory-file {
+      background: rgba(0,0,0,0.3);
+      border-radius: 8px;
+      padding: 12px;
+      font-family: monospace;
+      font-size: 0.9rem;
+    }
+    .memory-file .filename {
+      color: #4ade80;
+      font-weight: 600;
+    }
+    .memory-file .desc {
+      color: #9ca3af;
+      font-size: 0.8rem;
+      margin-top: 4px;
+    }
+    
+    /* Flow arrows section */
+    .flow-section {
+      grid-column: 1 / -1;
+      text-align: center;
+      padding: 20px;
+    }
+    .arrow {
+      font-size: 2rem;
+      color: #f59e0b;
+      margin: 10px 0;
+    }
+    .flow-label {
+      color: #9ca3af;
+      font-size: 0.9rem;
+    }
+    
+    /* Key insight boxes */
+    .insights {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 20px;
+      margin-top: 40px;
+    }
+    .insight {
+      background: rgba(139,92,246,0.15);
+      border: 1px solid rgba(139,92,246,0.4);
+      border-radius: 12px;
+      padding: 20px;
+    }
+    .insight h3 {
+      color: #a78bfa;
+      margin-bottom: 10px;
+    }
+    .insight p {
+      color: #d1d5db;
+      font-size: 0.95rem;
+      line-height: 1.6;
+    }
+    
+    .highlight {
+      background: rgba(245,158,11,0.2);
+      padding: 2px 6px;
+      border-radius: 4px;
+      color: #fbbf24;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>🌘 OpenClaw Architecture</h1>
+    <p class="subtitle">How Context & Memory Work Together</p>
+    
+    <div class="diagram">
+      
+      <!-- Gateway Central -->
+      <div class="box gateway-section">
+        <h2><span class="emoji">🏠</span> Gateway (The Brain)</h2>
+        <p>The Gateway daemon runs on Trey's MacBook. It owns all connections (Discord, WhatsApp, Telegram, etc.) and manages all sessions. There's only ONE gateway—it's the source of truth.</p>
+      </div>
+      
+      <!-- Sessions Row -->
+      <div class="sessions-row">
+        <div class="session-box">
+          <h3>📱 #ren-general (This Chat)</h3>
+          <p>Session Key: <code>agent:main:discord:channel:1466858...</code></p>
+          <div class="context">
+            <div class="context-label">Context Window (~200k tokens)</div>
+            • System prompt (tools, rules, time)<br>
+            • Our conversation history<br>
+            • Tool calls & results<br>
+            • Injected workspace files
+          </div>
+        </div>
+        
+        <div class="session-box">
+          <h3>💬 #heady-convo (Other Channel)</h3>
+          <p>Session Key: <code>agent:main:discord:channel:OTHER...</code></p>
+          <div class="context">
+            <div class="context-label">Context Window (Separate!)</div>
+            • Its own conversation history<br>
+            • Same system prompt base<br>
+            • Different chat context<br>
+            • Can't see this channel
+          </div>
+        </div>
+        
+        <div class="session-box">
+          <h3>✉️ DM with Karlyn</h3>
+          <p>Session Key: <code>agent:main:discord:dm:11321570...</code></p>
+          <div class="context">
+            <div class="context-label">Context Window (Private)</div>
+            • Private conversation<br>
+            • Isolated from other sessions<br>
+            • Same memory file access<br>
+            • Different chat history
+          </div>
+        </div>
+      </div>
+      
+      <!-- Flow -->
+      <div class="flow-section">
+        <div class="arrow">⬆️ reads from ⬇️ writes to</div>
+        <div class="flow-label">Sessions can READ memory files into context, and WRITE to them for persistence</div>
+      </div>
+      
+      <!-- Memory Section -->
+      <div class="box memory-section">
+        <h2><span class="emoji">💾</span> Persistent Memory (Workspace Files)</h2>
+        <p>These files live on disk at <code>~/.openclaw/workspace/</code> and survive across ALL sessions and restarts. This is how I maintain continuity.</p>
+        
+        <div class="memory-files">
+          <div class="memory-file">
+            <div class="filename">MEMORY.md</div>
+            <div class="desc">Long-term curated memories (private sessions only)</div>
+          </div>
+          <div class="memory-file">
+            <div class="filename">memory/2026-01-31.md</div>
+            <div class="desc">Today's daily log</div>
+          </div>
+          <div class="memory-file">
+            <div class="filename">SOUL.md</div>
+            <div class="desc">Who I am, my personality</div>
+          </div>
+          <div class="memory-file">
+            <div class="filename">USER.md</div>
+            <div class="desc">Info about you & Karlyn</div>
+          </div>
+          <div class="memory-file">
+            <div class="filename">TOOLS.md</div>
+            <div class="desc">Local tool notes</div>
+          </div>
+          <div class="memory-file">
+            <div class="filename">AGENTS.md</div>
+            <div class="desc">Operating instructions</div>
+          </div>
+        </div>
+      </div>
+      
+    </div>
+    
+    <!-- Key Insights -->
+    <div class="insights">
+      <div class="insight">
+        <h3>🔑 Key Insight: Context vs Memory</h3>
+        <p>
+          <span class="highlight">Context</span> = what I see RIGHT NOW in a single conversation (ephemeral, per-session, has a token limit).<br><br>
+          <span class="highlight">Memory</span> = files on disk that persist forever (MEMORY.md, daily logs). I read these INTO context when needed.
+        </p>
+      </div>
+      
+      <div class="insight">
+        <h3>🔒 Why Sessions Are Separate</h3>
+        <p>
+          Each Discord channel = separate session = separate context window. I can't "see" what was said in #heady-convo from #ren-general.<br><br>
+          BUT: I can access the same <span class="highlight">memory files</span> from any session. That's how I know who you are everywhere.
+        </p>
+      </div>
+      
+      <div class="insight">
+        <h3>🔄 Session Reset</h3>
+        <p>
+          Sessions reset daily at 4 AM (configurable). When reset, context is cleared but memory files remain.<br><br>
+          You can also manually reset with <code>/new</code> or <code>/reset</code>.
+        </p>
+      </div>
+      
+      <div class="insight">
+        <h3>🧠 Memory Search</h3>
+        <p>
+          OpenClaw indexes my memory files with embeddings. When I need to recall something, I can semantically search across all my notes—even if wording differs.
+        </p>
+      </div>
+    </div>
+    
+  </div>
+</body>
+</html>
