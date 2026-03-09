@@ -26,5 +26,9 @@ vi.mock("../agents/subagent-announce.js", () => ({
   runSubagentAnnounceFlow: vi.fn(),
 }));
 
+vi.mock("../gateway/call.js", () => ({
+  callGateway: vi.fn(),
+}));
+
 export const makeIsolatedAgentJob = makeIsolatedAgentJobFixture;
 export const makeIsolatedAgentParams = makeIsolatedAgentParamsFixture;
