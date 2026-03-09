@@ -48,6 +48,8 @@ export type IrcNickServOptions = {
 
 export type IrcClient = {
   nick: string;
+  /** Resolves when the underlying TCP socket closes. */
+  closed: Promise<void>;
   isReady: () => boolean;
   sendRaw: (line: string) => void;
   join: (channel: string) => void;
@@ -147,6 +149,11 @@ export async function connectIrcClient(options: IrcClientOptions): Promise<IrcCl
   const readyPromise = new Promise<void>((resolve, reject) => {
     resolveReady = resolve;
     rejectReady = reject;
+  });
+
+  let resolveClosed: (() => void) | null = null;
+  const closedPromise = new Promise<void>((resolve) => {
+    resolveClosed = resolve;
   });
 
   const fail = (err: unknown) => {
@@ -410,6 +417,8 @@ export async function connectIrcClient(options: IrcClientOptions): Promise<IrcCl
         fail(new Error("IRC connection closed before ready"));
       }
     }
+    resolveClosed?.();
+    resolveClosed = null;
   });
 
   if (options.abortSignal) {
@@ -429,6 +438,7 @@ export async function connectIrcClient(options: IrcClientOptions): Promise<IrcCl
     get nick() {
       return currentNick;
     },
+    closed: closedPromise,
     isReady: () => ready && !closed,
     sendRaw,
     join,
