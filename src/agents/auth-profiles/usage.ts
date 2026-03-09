@@ -406,15 +406,8 @@ function computeNextProfileUsageStats(params: {
   // the old counters when the lock-based updater reads a fresh store. Without
   // this check, stale error counts from an expired cooldown cause the next
   // failure to escalate to a much longer cooldown (e.g. 1 min → 25 min).
-  const previousCooldownExpired = (() => {
-    const unusableUntil = resolveProfileUnusableUntil(params.existing);
-    // No cooldown/disabled window was ever set → fresh profile, nothing to expire.
-    if (unusableUntil === null) {
-      return false;
-    }
-    // The window exists and has expired.
-    return params.now >= unusableUntil;
-  })();
+  const unusableUntil = resolveProfileUnusableUntil(params.existing);
+  const previousCooldownExpired = typeof unusableUntil === "number" && params.now >= unusableUntil;
 
   const shouldResetCounters = windowExpired || previousCooldownExpired;
   const baseErrorCount = shouldResetCounters ? 0 : (params.existing.errorCount ?? 0);
