@@ -15,11 +15,11 @@ import {
   isPathWithinRoot,
   isWindowsAbsolutePath,
 } from "../shared/avatar-policy.js";
-import { isCanonicalDottedDecimalIPv4, isLoopbackIpAddress } from "../shared/net/ip.js";
 import { isRecord } from "../utils.js";
 import { findDuplicateAgentDirs, formatDuplicateAgentDirError } from "./agent-dirs.js";
 import { appendAllowedValuesHint, summarizeAllowedValues } from "./allowed-values.js";
 import { applyAgentDefaults, applyModelDefaults, applySessionDefaults } from "./defaults.js";
+import { doesGatewayBindResolveToLoopback } from "./gateway-control-ui-origins.js";
 import { findLegacyConfigIssues } from "./legacy.js";
 import type { OpenClawConfig, ConfigValidationIssue } from "./types.js";
 import { OpenClawSchema } from "./zod-schema.js";
@@ -200,15 +200,11 @@ function validateGatewayTailscaleBind(config: OpenClawConfig): ConfigValidationI
   if (tailscaleMode !== "serve" && tailscaleMode !== "funnel") {
     return [];
   }
-  const bindMode = config.gateway?.bind ?? "loopback";
-  if (bindMode === "loopback") {
-    return [];
-  }
-  const customBindHost = config.gateway?.customBindHost;
   if (
-    bindMode === "custom" &&
-    isCanonicalDottedDecimalIPv4(customBindHost) &&
-    isLoopbackIpAddress(customBindHost)
+    doesGatewayBindResolveToLoopback({
+      bind: config.gateway?.bind,
+      customBindHost: config.gateway?.customBindHost,
+    })
   ) {
     return [];
   }

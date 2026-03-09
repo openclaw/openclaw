@@ -1,3 +1,4 @@
+import { isCanonicalDottedDecimalIPv4, isLoopbackIpAddress } from "../shared/net/ip.js";
 import type { OpenClawConfig } from "./config.js";
 import { DEFAULT_GATEWAY_PORT } from "./paths.js";
 
@@ -27,6 +28,22 @@ export function resolveGatewayPortWithDefault(
   return typeof port === "number" && port > 0 ? port : fallback;
 }
 
+export function doesGatewayBindResolveToLoopback(params: {
+  bind: unknown;
+  customBindHost?: unknown;
+}): boolean {
+  const bind = params.bind ?? "loopback";
+  if (bind === "loopback") {
+    return true;
+  }
+  const customBindHost =
+    typeof params.customBindHost === "string" ? params.customBindHost : undefined;
+  return (
+    bind === "custom" &&
+    isCanonicalDottedDecimalIPv4(customBindHost) &&
+    isLoopbackIpAddress(customBindHost)
+  );
+}
 export function buildDefaultControlUiAllowedOrigins(params: {
   port: number;
   bind: unknown;
