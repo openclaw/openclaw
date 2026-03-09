@@ -98,7 +98,9 @@ export function applyGroupGating(params: ApplyGroupGatingParams) {
   const mentionConfig = buildMentionConfig(params.cfg, params.agentId);
   // Override with account-level allowFrom for correct self-chat detection.
   const account = resolveWhatsAppAccount({ cfg: params.cfg, accountId: params.accountId });
-  mentionConfig.allowFrom = account.allowFrom;
+  if (account.allowFrom != null) {
+    mentionConfig.allowFrom = account.allowFrom;
+  }
   const commandBody = stripMentionsForCommand(
     params.msg.body,
     mentionConfig.mentionRegexes,

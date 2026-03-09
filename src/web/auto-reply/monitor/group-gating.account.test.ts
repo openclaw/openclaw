@@ -172,4 +172,24 @@ describe("applyGroupGating account-level allowFrom", () => {
     expect(mentionConfig.allowFrom).toEqual(["+15551111111"]);
     expect(mentionConfig.allowFrom).not.toEqual(["*"]);
   });
+
+  it("does not clobber root allowFrom when account returns undefined", () => {
+    const rootAllowFrom = ["+15550000000"];
+    const mentionConfig = { mentionRegexes: [], allowFrom: rootAllowFrom };
+    mockedBuildMentionConfig.mockReturnValue(mentionConfig);
+    mockedResolveAccount.mockReturnValue({
+      accountId: "no-override-acct",
+      enabled: true,
+      sendReadReceipts: true,
+      authDir: "/tmp/auth",
+      isLegacyAuthDir: false,
+      // allowFrom is undefined — should NOT overwrite the root value.
+      allowFrom: undefined,
+    });
+
+    applyGroupGating(baseParams({ accountId: "no-override-acct" }));
+
+    // Root value should be preserved, not replaced with undefined.
+    expect(mentionConfig.allowFrom).toEqual(["+15550000000"]);
+  });
 });
