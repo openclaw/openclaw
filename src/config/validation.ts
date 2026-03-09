@@ -505,6 +505,18 @@ function validateConfigObjectWithPluginsBase(
   raw: unknown,
   opts: { applyDefaults: boolean; preserveUnknownKeys: boolean },
 ): ValidateConfigWithPluginsResult {
+  const legacyIssues = findLegacyConfigIssues(raw);
+  if (legacyIssues.length > 0) {
+    return {
+      ok: false,
+      issues: legacyIssues.map((iss) => ({
+        path: iss.path,
+        message: iss.message,
+      })),
+      warnings: [],
+    };
+  }
+
   const { sanitizedRaw, warnings: unknownKeyWarnings } = stripUnknownKeysWithWarnings(raw);
   const base = opts.applyDefaults
     ? validateConfigObject(sanitizedRaw)
