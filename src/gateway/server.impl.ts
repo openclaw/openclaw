@@ -24,6 +24,7 @@ import { resolveMainSessionKey } from "../config/sessions.js";
 import { clearAgentRunContext, onAgentEvent } from "../infra/agent-events.js";
 import {
   ensureControlUiAssetsBuilt,
+  isPackageProvenControlUiRootSync,
   resolveControlUiRootOverrideSync,
   resolveControlUiRootSync,
 } from "../infra/control-ui-assets.js";
@@ -545,7 +546,16 @@ export async function startGatewayServer(
       });
     }
     controlUiRootState = resolvedRoot
-      ? { kind: "resolved", path: resolvedRoot }
+      ? {
+          kind: isPackageProvenControlUiRootSync(resolvedRoot, {
+            moduleUrl: import.meta.url,
+            argv1: process.argv[1],
+            cwd: process.cwd(),
+          })
+            ? "bundled"
+            : "resolved",
+          path: resolvedRoot,
+        }
       : { kind: "missing" };
   }
 

@@ -97,4 +97,46 @@ describe("browser server-context loopback direct WebSocket profiles", () => {
       expect.any(Object),
     );
   });
+
+  it("uses an HTTPS /json base for secure direct WebSocket profiles with a /cdp suffix", async () => {
+    const fetchMock = vi.fn(async (url: unknown) => {
+      const u = String(url);
+      if (u === "https://127.0.0.1:18800/json/list?token=abc") {
+        return {
+          ok: true,
+          json: async () => [
+            {
+              id: "T2",
+              title: "Secure Tab",
+              url: "https://example.com",
+              webSocketDebuggerUrl: "wss://127.0.0.1/devtools/page/T2",
+              type: "page",
+            },
+          ],
+        } as unknown as Response;
+      }
+      if (u === "https://127.0.0.1:18800/json/activate/T2?token=abc") {
+        return { ok: true, json: async () => ({}) } as unknown as Response;
+      }
+      if (u === "https://127.0.0.1:18800/json/close/T2?token=abc") {
+        return { ok: true, json: async () => ({}) } as unknown as Response;
+      }
+      throw new Error(`unexpected fetch: ${u}`);
+    });
+
+    global.fetch = withFetchPreconnect(fetchMock);
+    const state = makeState("openclaw");
+    state.resolved.profiles.openclaw = {
+      cdpUrl: "wss://127.0.0.1:18800/cdp?token=abc",
+      color: "#FF4500",
+    };
+    const ctx = createBrowserRouteContext({ getState: () => state });
+    const openclaw = ctx.forProfile("openclaw");
+
+    const tabs = await openclaw.listTabs();
+    expect(tabs.map((tab) => tab.targetId)).toEqual(["T2"]);
+
+    await openclaw.focusTab("T2");
+    await openclaw.closeTab("T2");
+  });
 });
