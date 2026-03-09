@@ -272,7 +272,7 @@ export async function spawnSubagentDirect(
       : params.cleanup === "keep" || params.cleanup === "delete"
         ? params.cleanup
         : "keep";
-  const expectsCompletionMessage = params.expectsCompletionMessage !== false;
+  const expectsCompletionMessage = params.expectsCompletionMessage === true;
   const requesterOrigin = normalizeDeliveryContext({
     channel: ctx.agentChannel,
     accountId: ctx.agentAccountId,
