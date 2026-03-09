@@ -655,6 +655,7 @@ export class AcpSessionManager {
         for await (const event of runtime.runTurn({
           handle,
           text: input.text,
+          attachments: input.attachments,
           mode: input.mode,
           requestId: input.requestId,
           signal: combinedSignal,
