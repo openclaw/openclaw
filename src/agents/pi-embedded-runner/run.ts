@@ -43,6 +43,7 @@ import {
   formatAssistantErrorText,
   isAuthAssistantError,
   isBillingAssistantError,
+  isBillingErrorMessage,
   isCompactionFailureError,
   isLikelyContextOverflowError,
   isFailoverAssistantError,
@@ -966,14 +967,23 @@ export async function runEmbeddedPiAgent(
             ? (() => {
                 if (promptError) {
                   const errorText = describeUnknownError(promptError);
-                  if (isLikelyContextOverflowError(errorText)) {
+                  // Billing errors can contain size-related text that matches
+                  // the context overflow heuristic; exclude them first.
+                  if (
+                    !isBillingErrorMessage(errorText) &&
+                    isLikelyContextOverflowError(errorText)
+                  ) {
                     return { text: errorText, source: "promptError" as const };
                   }
                   // Prompt submission failed with a non-overflow error. Do not
                   // inspect prior assistant errors from history for this attempt.
                   return null;
                 }
-                if (assistantErrorText && isLikelyContextOverflowError(assistantErrorText)) {
+                if (
+                  assistantErrorText &&
+                  !isBillingErrorMessage(assistantErrorText) &&
+                  isLikelyContextOverflowError(assistantErrorText)
+                ) {
                   return { text: assistantErrorText, source: "assistantError" as const };
                 }
                 return null;

@@ -28,7 +28,7 @@ import {
   resolveModelRefFromString,
 } from "./model-selection.js";
 import type { FailoverReason } from "./pi-embedded-helpers.js";
-import { isLikelyContextOverflowError } from "./pi-embedded-helpers.js";
+import { isBillingErrorMessage, isLikelyContextOverflowError } from "./pi-embedded-helpers.js";
 
 const log = createSubsystemLogger("model-fallback");
 
@@ -558,11 +558,17 @@ export async function runWithModelFallback<T>(params: {
     }
     const err = attemptRun.error;
     {
+      const errMessage = err instanceof Error ? err.message : String(err);
+      // Billing errors are more specific than context overflow and must be
+      // checked first: some billing messages contain size-related text that
+      // matches the broad context overflow heuristic.
+      if (isBillingErrorMessage(errMessage)) {
+        throw err;
+      }
       // Context overflow errors should be handled by the inner runner's
       // compaction/retry logic, not by model fallback.  If one escapes as a
       // throw, rethrow it immediately rather than trying a different model
       // that may have a smaller context window and fail worse.
-      const errMessage = err instanceof Error ? err.message : String(err);
       if (isLikelyContextOverflowError(errMessage)) {
         throw err;
       }
