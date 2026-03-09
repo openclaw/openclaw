@@ -502,7 +502,7 @@ function validateMcpResult(
       return { pass: false, violations, ruleIds };
     }
     // Default: accept JSON object or array only, reject primitives
-    if (input === null || (typeof input !== "object" && !Array.isArray(input))) {
+    if (input === null || typeof input !== "object") {
       addViolation(
         "schema.type-mismatch",
         "MCP result with no declared schema must be a JSON object or array",
