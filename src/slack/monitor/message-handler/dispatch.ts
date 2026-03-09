@@ -1,6 +1,9 @@
 import { resolveHumanDelayConfig } from "../../../agents/identity.js";
 import { dispatchInboundMessage } from "../../../auto-reply/dispatch.js";
-import { clearHistoryEntriesIfEnabled } from "../../../auto-reply/reply/history.js";
+import {
+  clearHistoryEntriesIfEnabled,
+  recordPendingHistoryEntryIfEnabled,
+} from "../../../auto-reply/reply/history.js";
 import { createReplyDispatcherWithTyping } from "../../../auto-reply/reply/reply-dispatcher.js";
 import type { ReplyPayload } from "../../../auto-reply/types.js";
 import { removeAckReactionAfterReply } from "../../../channels/ack-reactions.js";
@@ -481,11 +484,27 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
   if (!anyReplyDelivered) {
     await draftStream.clear();
     if (prepared.isRoomish) {
-      clearHistoryEntriesIfEnabled({
-        historyMap: ctx.channelHistories,
-        historyKey: prepared.historyKey,
-        limit: ctx.historyLimit,
-      });
+      if (prepared.requireMention) {
+        clearHistoryEntriesIfEnabled({
+          historyMap: ctx.channelHistories,
+          historyKey: prepared.historyKey,
+          limit: ctx.historyLimit,
+        });
+      } else {
+        // Record this message even though no reply was delivered, so
+        // the next message still sees it as part of the sliding window.
+        recordPendingHistoryEntryIfEnabled({
+          historyMap: ctx.channelHistories,
+          historyKey: prepared.historyKey,
+          limit: ctx.historyLimit,
+          entry: {
+            sender: prepared.ctxPayload.SenderName ?? "unknown",
+            body: prepared.ctxPayload.RawBody ?? "",
+            timestamp: prepared.ctxPayload.Timestamp,
+            messageId: prepared.ctxPayload.MessageSid,
+          },
+        });
+      }
     }
     return;
   }
@@ -522,10 +541,26 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
   });
 
   if (prepared.isRoomish) {
-    clearHistoryEntriesIfEnabled({
-      historyMap: ctx.channelHistories,
-      historyKey: prepared.historyKey,
-      limit: ctx.historyLimit,
-    });
+    if (prepared.requireMention) {
+      clearHistoryEntriesIfEnabled({
+        historyMap: ctx.channelHistories,
+        historyKey: prepared.historyKey,
+        limit: ctx.historyLimit,
+      });
+    } else {
+      // Record this message in history so the next message has context
+      // of recent channel activity. Capped by historyLimit (sliding window).
+      recordPendingHistoryEntryIfEnabled({
+        historyMap: ctx.channelHistories,
+        historyKey: prepared.historyKey,
+        limit: ctx.historyLimit,
+        entry: {
+          sender: prepared.ctxPayload.SenderName ?? "unknown",
+          body: prepared.ctxPayload.RawBody ?? "",
+          timestamp: prepared.ctxPayload.Timestamp,
+          messageId: prepared.ctxPayload.MessageSid,
+        },
+      });
+    }
   }
 }
