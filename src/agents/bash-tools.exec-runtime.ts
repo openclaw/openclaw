@@ -221,9 +221,7 @@ function maybeNotifyOnExit(session: ProcessSession, status: "completed" | "faile
     ? `Exec ${status} (${session.id.slice(0, 8)}, ${exitLabel}) :: ${output}`
     : `Exec ${status} (${session.id.slice(0, 8)}, ${exitLabel})`;
   enqueueSystemEvent(summary, { sessionKey });
-  requestHeartbeatNow(
-    scopedHeartbeatWakeOptions(sessionKey, { reason: `exec:${session.id}:exit` }),
-  );
+  requestHeartbeatNow(scopedHeartbeatWakeOptions(sessionKey, { reason: "exec-event" }));
 }
 
 export function createApprovalSlug(id: string) {
