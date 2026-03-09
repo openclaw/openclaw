@@ -10,6 +10,7 @@ export type MediaGroupEntry = {
   messages: Array<{
     msg: Message;
     ctx: TelegramContext;
+    updateId?: number;
   }>;
   timer: ReturnType<typeof setTimeout>;
 };
@@ -63,5 +64,120 @@ export const createTelegramUpdateDedupe = () =>
     ttlMs: RECENT_TELEGRAM_UPDATE_TTL_MS,
     maxSize: RECENT_TELEGRAM_UPDATE_MAX,
   });
+
+export function createTelegramUpdateOffsetTracker(params: {
+  initialUpdateId?: number | null;
+  onUpdateId?: (updateId: number) => void | Promise<void>;
+}) {
+  const recentUpdates = createTelegramUpdateDedupe();
+  const initialUpdateId =
+    typeof params.initialUpdateId === "number" ? params.initialUpdateId : null;
+  const pendingUpdateIds = new Set<number>();
+  // Buffered handlers (for example Telegram media groups) can outlive the middleware call stack.
+  // Keep those update_ids pending until the deferred flush finishes so the persisted offset
+  // neither retries fatal groups forever nor skips buffered work on restart.
+  const deferredHoldCounts = new Map<number, number>();
+  const completedWhileDeferred = new Set<number>();
+  let highestCompletedUpdateId: number | null = initialUpdateId;
+  let highestPersistedUpdateId: number | null = initialUpdateId;
+
+  const maybePersistSafeWatermark = () => {
+    if (typeof params.onUpdateId !== "function") {
+      return;
+    }
+    if (highestCompletedUpdateId === null) {
+      return;
+    }
+    let safe = highestCompletedUpdateId;
+    if (pendingUpdateIds.size > 0) {
+      let minPending: number | null = null;
+      for (const id of pendingUpdateIds) {
+        if (minPending === null || id < minPending) {
+          minPending = id;
+        }
+      }
+      if (minPending !== null) {
+        safe = Math.min(safe, minPending - 1);
+      }
+    }
+    if (highestPersistedUpdateId !== null && safe <= highestPersistedUpdateId) {
+      return;
+    }
+    highestPersistedUpdateId = safe;
+    void params.onUpdateId(safe);
+  };
+
+  const markCompleted = (updateId: number) => {
+    pendingUpdateIds.delete(updateId);
+    completedWhileDeferred.delete(updateId);
+    if (highestCompletedUpdateId === null || updateId > highestCompletedUpdateId) {
+      highestCompletedUpdateId = updateId;
+    }
+    maybePersistSafeWatermark();
+  };
+
+  const beginUpdate = (updateId: number | null | undefined) => {
+    if (typeof updateId !== "number") {
+      return;
+    }
+    pendingUpdateIds.add(updateId);
+  };
+
+  const endUpdate = (updateId: number | null | undefined) => {
+    if (typeof updateId !== "number") {
+      return;
+    }
+    if ((deferredHoldCounts.get(updateId) ?? 0) > 0) {
+      completedWhileDeferred.add(updateId);
+      return;
+    }
+    markCompleted(updateId);
+  };
+
+  const holdDeferredUpdate = (updateId: number | null | undefined) => {
+    if (typeof updateId !== "number") {
+      return;
+    }
+    pendingUpdateIds.add(updateId);
+    deferredHoldCounts.set(updateId, (deferredHoldCounts.get(updateId) ?? 0) + 1);
+  };
+
+  const releaseDeferredUpdate = (updateId: number | null | undefined) => {
+    if (typeof updateId !== "number") {
+      return;
+    }
+    const currentCount = deferredHoldCounts.get(updateId);
+    if (!currentCount) {
+      return;
+    }
+    if (currentCount > 1) {
+      deferredHoldCounts.set(updateId, currentCount - 1);
+      return;
+    }
+    deferredHoldCounts.delete(updateId);
+    if (completedWhileDeferred.has(updateId)) {
+      markCompleted(updateId);
+    }
+  };
+
+  const shouldSkipUpdate = (ctx: TelegramUpdateKeyContext) => {
+    const updateId = resolveTelegramUpdateId(ctx);
+    const skipCutoff = highestPersistedUpdateId ?? initialUpdateId;
+    if (typeof updateId === "number" && skipCutoff !== null && updateId <= skipCutoff) {
+      return true;
+    }
+    const key = buildTelegramUpdateKey(ctx);
+    const skipped = recentUpdates.check(key);
+    return skipped;
+  };
+
+  return {
+    beginUpdate,
+    endUpdate,
+    holdDeferredUpdate,
+    releaseDeferredUpdate,
+    shouldSkipUpdate,
+  };
+}
 
 export { MEDIA_GROUP_TIMEOUT_MS };

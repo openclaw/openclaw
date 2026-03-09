@@ -33,7 +33,7 @@ import { createTelegramMessageProcessor } from "./bot-message.js";
 import { registerTelegramNativeCommands } from "./bot-native-commands.js";
 import {
   buildTelegramUpdateKey,
-  createTelegramUpdateDedupe,
+  createTelegramUpdateOffsetTracker,
   resolveTelegramUpdateId,
   type TelegramUpdateKeyContext,
 } from "./bot-updates.js";
@@ -167,51 +167,16 @@ export function createTelegramBot(opts: TelegramBotOptions) {
     runtime.error?.(danger(`telegram bot error: ${formatUncaughtError(err)}`));
   });
 
-  const recentUpdates = createTelegramUpdateDedupe();
   const initialUpdateId =
     typeof opts.updateOffset?.lastUpdateId === "number" ? opts.updateOffset.lastUpdateId : null;
-
-  // Track update_ids that have entered the middleware pipeline but have not completed yet.
-  // This includes updates that are "queued" behind sequentialize(...) for a chat/topic key.
-  // We only persist a watermark that is strictly less than the smallest pending update_id,
-  // so we never write an offset that would skip an update still waiting to run.
-  const pendingUpdateIds = new Set<number>();
-  let highestCompletedUpdateId: number | null = initialUpdateId;
-  let highestPersistedUpdateId: number | null = initialUpdateId;
-  const maybePersistSafeWatermark = () => {
-    if (typeof opts.updateOffset?.onUpdateId !== "function") {
-      return;
-    }
-    if (highestCompletedUpdateId === null) {
-      return;
-    }
-    let safe = highestCompletedUpdateId;
-    if (pendingUpdateIds.size > 0) {
-      let minPending: number | null = null;
-      for (const id of pendingUpdateIds) {
-        if (minPending === null || id < minPending) {
-          minPending = id;
-        }
-      }
-      if (minPending !== null) {
-        safe = Math.min(safe, minPending - 1);
-      }
-    }
-    if (highestPersistedUpdateId !== null && safe <= highestPersistedUpdateId) {
-      return;
-    }
-    highestPersistedUpdateId = safe;
-    void opts.updateOffset.onUpdateId(safe);
-  };
+  const updateOffsetTracker = createTelegramUpdateOffsetTracker({
+    initialUpdateId,
+    onUpdateId: opts.updateOffset?.onUpdateId,
+  });
 
   const shouldSkipUpdate = (ctx: TelegramUpdateKeyContext) => {
-    const updateId = resolveTelegramUpdateId(ctx);
-    const skipCutoff = highestPersistedUpdateId ?? initialUpdateId;
-    if (typeof updateId === "number" && skipCutoff !== null && updateId <= skipCutoff) {
-      return true;
-    }
     const key = buildTelegramUpdateKey(ctx);
-    const skipped = recentUpdates.check(key);
+    const skipped = updateOffsetTracker.shouldSkipUpdate(ctx);
     if (skipped && key && shouldLogVerbose()) {
       logVerbose(`telegram dedupe: skipped ${key}`);
     }
@@ -220,19 +185,11 @@ export function createTelegramBot(opts: TelegramBotOptions) {
 
   bot.use(async (ctx, next) => {
     const updateId = resolveTelegramUpdateId(ctx);
-    if (typeof updateId === "number") {
-      pendingUpdateIds.add(updateId);
-    }
+    updateOffsetTracker.beginUpdate(updateId);
     try {
       await next();
     } finally {
-      if (typeof updateId === "number") {
-        pendingUpdateIds.delete(updateId);
-        if (highestCompletedUpdateId === null || updateId > highestCompletedUpdateId) {
-          highestCompletedUpdateId = updateId;
-        }
-        maybePersistSafeWatermark();
-      }
+      updateOffsetTracker.endUpdate(updateId);
     }
   });
 
@@ -447,6 +404,8 @@ export function createTelegramBot(opts: TelegramBotOptions) {
     resolveGroupPolicy,
     resolveTelegramGroupConfig,
     shouldSkipUpdate,
+    holdDeferredUpdateId: updateOffsetTracker.holdDeferredUpdate,
+    releaseDeferredUpdateId: updateOffsetTracker.releaseDeferredUpdate,
     processMessage,
     logger,
   });
