@@ -12,11 +12,28 @@ export function buildMSTeamsAuthConfig(
   creds: MSTeamsCredentials,
   sdk: MSTeamsSdk,
 ): MSTeamsAuthConfig {
-  return sdk.getAuthConfigWithDefaults({
+  const base: Parameters<MSTeamsSdk["getAuthConfigWithDefaults"]>[0] = {
     clientId: creds.appId,
-    clientSecret: creds.appPassword,
     tenantId: creds.tenantId,
-  });
+  };
+
+  switch (creds.authType) {
+    case "certificate":
+      base.certPemFile = creds.certPemFile;
+      base.certKeyFile = creds.certKeyFile;
+      if (creds.sendX5C != null) base.sendX5C = creds.sendX5C;
+      break;
+    case "federatedCredential":
+      if (creds.ficClientId) base.FICClientId = creds.ficClientId;
+      if (creds.widAssertionFile) base.WIDAssertionFile = creds.widAssertionFile;
+      break;
+    case "clientSecret":
+    default:
+      base.clientSecret = creds.appPassword;
+      break;
+  }
+
+  return sdk.getAuthConfigWithDefaults(base);
 }
 
 export function createMSTeamsAdapter(
