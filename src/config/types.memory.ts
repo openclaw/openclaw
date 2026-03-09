@@ -1,6 +1,6 @@
 import type { SessionSendPolicyConfig } from "./types.base.js";
 
-export type MemoryBackend = "builtin" | "qmd";
+export type MemoryBackend = "builtin" | "qmd" | "chain";
 export type MemoryCitationsMode = "auto" | "on" | "off";
 export type MemoryQmdSearchMode = "query" | "search" | "vsearch";
 
@@ -8,6 +8,7 @@ export type MemoryConfig = {
   backend?: MemoryBackend;
   citations?: MemoryCitationsMode;
   qmd?: MemoryQmdConfig;
+  chain?: MemoryChainConfig;
 };
 
 export type MemoryQmdConfig = {
@@ -65,4 +66,41 @@ export type MemoryQmdLimitsConfig = {
   maxSnippetChars?: number;
   maxInjectedChars?: number;
   timeoutMs?: number;
+};
+
+// Chain Memory Backend Configuration
+export type MemoryChainConfig = {
+  providers: MemoryChainProvider[];
+  global?: MemoryChainGlobalConfig;
+};
+
+export type MemoryChainProvider = {
+  name: string;
+  priority: "primary" | "secondary" | "fallback";
+  backend?: string;
+  plugin?: string;
+  enabled?: boolean;
+  writeMode?: "sync" | "async";
+  timeout?: {
+    add?: number;
+    search?: number;
+    update?: number;
+    delete?: number;
+  };
+  retry?: {
+    maxAttempts?: number;
+    backoffMs?: number;
+  };
+  circuitBreaker?: {
+    failureThreshold?: number;
+    resetTimeoutMs?: number;
+  };
+  [key: string]: unknown;
+};
+
+export type MemoryChainGlobalConfig = {
+  defaultTimeout?: number;
+  enableAsyncWrite?: boolean;
+  enableFallback?: boolean;
+  healthCheckInterval?: number;
 };

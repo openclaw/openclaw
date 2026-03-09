@@ -48,6 +48,16 @@ export async function getMemorySearchManager(params: {
   purpose?: "default" | "status";
 }): Promise<MemorySearchManagerResult> {
   const resolved = resolveMemoryBackendConfig(params);
+  if (resolved.backend === "chain") {
+    const { ChainMemoryManager } = await import("./chain/manager.js");
+    const manager = await ChainMemoryManager.create({
+      cfg: params.cfg,
+      agentId: params.agentId,
+      chain: resolved.chain,
+    });
+    return { manager };
+  }
+
   if (resolved.backend === "qmd" && resolved.qmd) {
     const statusOnly = params.purpose === "status";
     const baseCacheKey = buildQmdCacheKey(params.agentId, resolved.qmd);
