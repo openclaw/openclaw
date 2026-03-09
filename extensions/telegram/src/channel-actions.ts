@@ -214,7 +214,11 @@ export const telegramMessageActions: ChannelMessageActionAdapter = {
 
     if (action === "delete") {
       const chatId = readTelegramChatIdParam(params);
+      const hasMessageIdParam = Object.hasOwn(params, "messageId");
       const messageId = readTelegramMessageIdParam(params, { required: false });
+      if (hasMessageIdParam && typeof messageId !== "number") {
+        throw new Error("messageId must be a valid number for action=delete.");
+      }
       if (typeof messageId === "number") {
         return await handleTelegramAction(
           {
