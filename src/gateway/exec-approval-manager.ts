@@ -39,6 +39,28 @@ export type ExecApprovalIdLookupResult =
 export class ExecApprovalManager {
   private pending = new Map<string, PendingEntry>();
 
+  private resolveRecordId(recordId: string): string | null {
+    const trimmed = recordId.trim();
+    if (!trimmed) {
+      return null;
+    }
+    if (this.pending.has(trimmed)) {
+      return trimmed;
+    }
+    let matchedId: string | null = null;
+    for (const id of this.pending.keys()) {
+      if (!id.startsWith(trimmed)) {
+        continue;
+      }
+      if (matchedId && matchedId !== id) {
+        // Ambiguous prefix - require full id.
+        return null;
+      }
+      matchedId = id;
+    }
+    return matchedId;
+  }
+
   create(
     request: ExecApprovalRequestPayload,
     timeoutMs: number,
@@ -102,7 +124,11 @@ export class ExecApprovalManager {
   }
 
   resolve(recordId: string, decision: ExecApprovalDecision, resolvedBy?: string | null): boolean {
-    const pending = this.pending.get(recordId);
+    const id = this.resolveRecordId(recordId);
+    if (!id) {
+      return false;
+    }
+    const pending = this.pending.get(id);
     if (!pending) {
       return false;
     }
@@ -119,15 +145,19 @@ export class ExecApprovalManager {
     pending.resolve(decision);
     setTimeout(() => {
       // Only delete if the entry hasn't been replaced
-      if (this.pending.get(recordId) === pending) {
-        this.pending.delete(recordId);
+      if (this.pending.get(id) === pending) {
+        this.pending.delete(id);
       }
     }, RESOLVED_ENTRY_GRACE_MS);
     return true;
   }
 
   expire(recordId: string, resolvedBy?: string | null): boolean {
-    const pending = this.pending.get(recordId);
+    const id = this.resolveRecordId(recordId);
+    if (!id) {
+      return false;
+    }
+    const pending = this.pending.get(id);
     if (!pending) {
       return false;
     }
@@ -140,20 +170,28 @@ export class ExecApprovalManager {
     pending.record.resolvedBy = resolvedBy ?? null;
     pending.resolve(null);
     setTimeout(() => {
-      if (this.pending.get(recordId) === pending) {
-        this.pending.delete(recordId);
+      if (this.pending.get(id) === pending) {
+        this.pending.delete(id);
       }
     }, RESOLVED_ENTRY_GRACE_MS);
     return true;
   }
 
   getSnapshot(recordId: string): ExecApprovalRecord | null {
-    const entry = this.pending.get(recordId);
+    const id = this.resolveRecordId(recordId);
+    if (!id) {
+      return null;
+    }
+    const entry = this.pending.get(id);
     return entry?.record ?? null;
   }
 
   consumeAllowOnce(recordId: string): boolean {
-    const entry = this.pending.get(recordId);
+    const id = this.resolveRecordId(recordId);
+    if (!id) {
+      return false;
+    }
+    const entry = this.pending.get(id);
     if (!entry) {
       return false;
     }
@@ -172,7 +210,11 @@ export class ExecApprovalManager {
    * Returns the decision promise if the ID is pending, null otherwise.
    */
   awaitDecision(recordId: string): Promise<ExecApprovalDecision | null> | null {
-    const entry = this.pending.get(recordId);
+    const id = this.resolveRecordId(recordId);
+    if (!id) {
+      return null;
+    }
+    const entry = this.pending.get(id);
     return entry?.promise ?? null;
   }
 
