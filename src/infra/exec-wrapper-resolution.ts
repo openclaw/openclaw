@@ -36,7 +36,7 @@ function withWindowsExeAliases(names: readonly string[]): string[] {
   return Array.from(expanded);
 }
 
-function stripWindowsExeSuffix(value: string): string {
+function stripWindowsExecutableSuffix(value: string): string {
   for (const suffix of WINDOWS_EXECUTABLE_SUFFIXES) {
     if (value.endsWith(suffix)) {
       return value.slice(0, -suffix.length);
@@ -120,7 +120,7 @@ export function basenameLower(token: string): string {
 }
 
 export function normalizeExecutableToken(token: string): string {
-  return stripWindowsExeSuffix(basenameLower(token));
+  return stripWindowsExecutableSuffix(basenameLower(token));
 }
 
 export function isDispatchWrapperExecutable(token: string): boolean {
@@ -137,7 +137,7 @@ function normalizeRawCommand(rawCommand?: string | null): string | null {
 }
 
 function findShellWrapperSpec(baseExecutable: string): ShellWrapperSpec | null {
-  const canonicalBase = stripWindowsExeSuffix(baseExecutable);
+  const canonicalBase = stripWindowsExecutableSuffix(baseExecutable);
   for (const spec of SHELL_WRAPPER_SPECS) {
     if (spec.names.has(canonicalBase)) {
       return spec;
