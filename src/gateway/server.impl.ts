@@ -148,7 +148,7 @@ function resolveRuntimeSessionActivitySource(runId: string): SessionActivitySour
 }
 
 function toCanonicalSessionKey(cfg: OpenClawConfig, key: string): string {
-  return resolveGatewaySessionStoreTarget({ cfg, key }).canonicalKey;
+  return resolveGatewaySessionStoreTarget({ cfg, key, scanLegacyKeys: false }).canonicalKey;
 }
 
 const log = createSubsystemLogger("gateway");

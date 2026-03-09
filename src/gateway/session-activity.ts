@@ -43,6 +43,10 @@ function compareRuns(a: ActiveSessionRun, b: ActiveSessionRun) {
   return a.runId.localeCompare(b.runId);
 }
 
+function normalizeRunId(runId: string): string {
+  return runId.trim();
+}
+
 export function createSessionActivityRegistry(): SessionActivityRegistry {
   const runsById = new Map<string, ActiveSessionRun>();
   const runIdsBySession = new Map<string, Set<string>>();
@@ -61,7 +65,7 @@ export function createSessionActivityRegistry(): SessionActivityRegistry {
   return {
     markRunStarted: ({ sessionKey, runId, source, startedAt }) => {
       const normalizedSessionKey = sessionKey.trim();
-      const normalizedRunId = runId.trim();
+      const normalizedRunId = normalizeRunId(runId);
       if (!normalizedSessionKey || !normalizedRunId) {
         return;
       }
@@ -85,19 +89,27 @@ export function createSessionActivityRegistry(): SessionActivityRegistry {
       sessionRuns.add(normalizedRunId);
     },
     touchRun: (runId, at) => {
-      const existing = runsById.get(runId);
+      const normalizedRunId = normalizeRunId(runId);
+      if (!normalizedRunId) {
+        return;
+      }
+      const existing = runsById.get(normalizedRunId);
       if (!existing) {
         return;
       }
       existing.lastActivityAt = Number.isFinite(at) ? Math.max(0, at ?? 0) : Date.now();
     },
     markRunFinished: (runId) => {
-      const existing = runsById.get(runId);
+      const normalizedRunId = normalizeRunId(runId);
+      if (!normalizedRunId) {
+        return;
+      }
+      const existing = runsById.get(normalizedRunId);
       if (!existing) {
         return;
       }
-      runsById.delete(runId);
-      removeRunIdFromSession(existing.sessionKey, runId);
+      runsById.delete(normalizedRunId);
+      removeRunIdFromSession(existing.sessionKey, normalizedRunId);
     },
     getRunning: (sessionKey) => {
       const sessionRuns = runIdsBySession.get(sessionKey);

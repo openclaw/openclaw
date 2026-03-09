@@ -77,4 +77,23 @@ describe("session activity registry", () => {
       lastActivityAt: 150,
     });
   });
+
+  it("normalizes run ids for touch and finish lookups", () => {
+    const registry = createSessionActivityRegistry();
+
+    registry.markRunStarted({
+      sessionKey: "agent:main:main",
+      runId: " run-1 ",
+      source: "chat",
+      startedAt: 100,
+    });
+
+    registry.touchRun(" run-1 ", 300);
+
+    expect(registry.getRunning("agent:main:main")?.lastActivityAt).toBe(300);
+
+    registry.markRunFinished(" run-1 ");
+
+    expect(registry.getRunning("agent:main:main")).toBeNull();
+  });
 });

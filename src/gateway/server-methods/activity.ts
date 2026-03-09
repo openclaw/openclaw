@@ -24,7 +24,7 @@ function normalizeRequestedKeys(params: SessionActivityParams): string[] {
 }
 
 function toCanonicalSessionKey(cfg: ReturnType<typeof loadConfig>, key: string): string {
-  return resolveGatewaySessionStoreTarget({ cfg, key }).canonicalKey;
+  return resolveGatewaySessionStoreTarget({ cfg, key, scanLegacyKeys: false }).canonicalKey;
 }
 
 function heartbeatSnapshotSortKey(entry: HeartbeatWakeSnapshotEntry): number {
