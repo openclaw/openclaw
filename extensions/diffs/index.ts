@@ -1,6 +1,6 @@
 import path from "node:path";
-import type { OpenClawPluginApi } from "openclaw/plugin-sdk";
-import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk";
+import type { OpenClawPluginApi } from "openclaw/plugin-sdk/diffs";
+import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/diffs";
 import {
   diffsPluginConfigSchema,
   resolveDiffsPluginDefaults,
@@ -36,7 +36,7 @@ const plugin = {
       }),
     });
     api.on("before_prompt_build", async () => ({
-      prependContext: DIFFS_AGENT_GUIDANCE,
+      prependSystemContext: DIFFS_AGENT_GUIDANCE,
     }));
   },
 };

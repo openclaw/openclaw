@@ -19,7 +19,7 @@ export type TokenCredential = {
    */
   type: "token";
   provider: string;
-  token: string;
+  token?: string;
   tokenRef?: SecretRef;
   /** Optional expiry timestamp (ms since epoch). */
   expires?: number;
@@ -39,6 +39,7 @@ export type AuthProfileFailureReason =
   | "auth"
   | "auth_permanent"
   | "format"
+  | "overloaded"
   | "rate_limit"
   | "billing"
   | "timeout"
