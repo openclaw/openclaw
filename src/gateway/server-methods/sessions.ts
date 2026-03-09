@@ -128,6 +128,18 @@ function migrateAndPruneSessionStoreKey(params: {
   return { target, primaryKey, entry: params.store[primaryKey] };
 }
 
+function stripRuntimeModelState(entry?: SessionEntry): SessionEntry | undefined {
+  if (!entry) {
+    return entry;
+  }
+  return {
+    ...entry,
+    model: undefined,
+    modelProvider: undefined,
+    systemPromptReport: undefined,
+  };
+}
+
 function archiveSessionTranscriptsForSession(params: {
   sessionId: string | undefined;
   storePath: string;
@@ -509,7 +521,11 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       const entry = store[primaryKey];
       const parsed = parseAgentSessionKey(primaryKey);
       const sessionAgentId = normalizeAgentId(parsed?.agentId ?? resolveDefaultAgentId(cfg));
-      const resolvedModel = resolveSessionModelRef(cfg, entry, sessionAgentId);
+      const resolvedModel = resolveSessionModelRef(
+        cfg,
+        stripRuntimeModelState(entry),
+        sessionAgentId,
+      );
       oldSessionId = entry?.sessionId;
       oldSessionFile = entry?.sessionFile;
       const now = Date.now();
