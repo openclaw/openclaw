@@ -84,6 +84,18 @@ export async function runSubagentAnnounceDispatch(params: {
   const primaryDirect = await params.direct();
   appendPhase("direct-primary", primaryDirect);
   if (primaryDirect.delivered) {
+    // Direct delivery succeeded, but we still need to inject the trigger
+    // message into the requester session so the main agent gets notified.
+    // This is best-effort; ignore failures since the external delivery
+    // already succeeded.
+    if (!params.signal?.aborted) {
+      try {
+        const triggerQueue = mapQueueOutcomeToDeliveryResult(await params.queue());
+        appendPhase("queue-fallback", triggerQueue);
+      } catch {
+        // Best-effort: external delivery already succeeded.
+      }
+    }
     return withPhases(primaryDirect);
   }
 
