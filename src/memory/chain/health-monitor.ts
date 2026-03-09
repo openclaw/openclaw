@@ -114,12 +114,14 @@ export class HealthMonitor {
     const startTime = Date.now();
 
     try {
-      // 执行简单的搜索操作作为健康检查
+      // 使用 status() 方法进行健康检查
+      // 避免使用空字符串搜索（会被 short-circuit 返回空数组）
       const timeoutPromise = new Promise<never>((_, reject) => {
         setTimeout(() => reject(new Error("Health check timeout")), this.config.timeoutMs);
       });
 
-      await Promise.race([provider.manager.search("", { maxResults: 1 }), timeoutPromise]);
+      // 调用 status() 检查 provider 是否响应
+      await Promise.race([provider.manager.status(), timeoutPromise]);
 
       // 健康检查成功
       const responseTime = Date.now() - startTime;

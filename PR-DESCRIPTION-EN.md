@@ -1,5 +1,54 @@
 # Chain Memory Backend - Multi-Provider Memory System
 
+## Background & Motivation
+
+**The Memory Module Proliferation Problem:**
+
+The AI agent memory ecosystem is rapidly evolving, with an increasing number of memory modules available:
+
+- **Mem0** - Advanced memory with semantic search
+- **Letta** - Stateful agent memory
+- **Zep** - Long-term memory for LLMs
+- **mem9** - Enterprise memory solutions
+- **OpenClaw builtin** - Text-based memory (MEMORY.md)
+
+**The Vendor Lock-in Challenge:**
+
+These memory systems use **different underlying technologies and data formats**:
+
+- Different storage backends (vector DBs, graph DBs, text files)
+- Different APIs and query languages
+- Different data schemas and structures
+
+**Result: Memory data becomes locked into a specific vendor's system.**
+
+**The Migration Nightmare:**
+
+- ❌ Cannot easily migrate from Mem0 to Letta
+- ❌ Cannot backup Mem0 data in a human-readable format
+- ❌ Cannot test multiple memory systems in parallel
+- ❌ Cannot fall back when a cloud memory service is down
+
+**The Solution: Keep the Builtin Memory as Backup**
+
+By **preserving the built-in text-based memory system** alongside advanced memory modules:
+
+- ✅ **Avoid vendor lock-in** - Always have a human-readable backup
+- ✅ **Easy migration** - Switch between memory modules without data loss
+- ✅ **Disaster recovery** - Cloud service down? Use local backup
+- ✅ **A/B testing** - Compare different memory systems easily
+- ✅ **Gradual adoption** - Try new memory modules risk-free
+
+**This PR enables the dual-write memory pattern:**
+
+```
+Primary Memory (Mem0/Letta/Zep)  ←→  Backup Memory (MEMORY.md)
+        ↓                                      ↓
+   Advanced features                      Human-readable
+   (semantic search,                      Easy to migrate
+    long-term storage)                    Disaster recovery
+```
+
 ## Problem
 
 OpenClaw's current memory plugin system is **exclusive**:
