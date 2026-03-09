@@ -115,16 +115,66 @@ export type StreamingThinkingFilter = {
 
 export function createStreamingThinkingFilter(): StreamingThinkingFilter {
   let insideBlock = false;
+  let insideCodeFence = false;
+  let codeFenceChar = ""; // "`" or "~"
+  let codeFenceLen = 0; // number of backticks/tildes in the opening fence
   let pendingPartial = "";
+  // Buffer for detecting code fence boundaries that may span chunks.
+  let lineBuffer = "";
+
+  /**
+   * Check accumulated text for code fence toggles. Updates insideCodeFence state.
+   * Processes complete lines only, keeping any incomplete trailing line in lineBuffer.
+   */
+  function processCodeFences(text: string): void {
+    lineBuffer += text;
+    const lines = lineBuffer.split("\n");
+    // Keep the last (potentially incomplete) line in the buffer.
+    lineBuffer = lines.pop() ?? "";
+    for (const line of lines) {
+      checkLineForFence(line);
+    }
+  }
+
+  function checkLineForFence(line: string): void {
+    const trimmed = line.trimStart();
+    if (!insideCodeFence) {
+      // Check for opening fence: line starting with ``` or ~~~
+      const m = trimmed.match(/^(`{3,}|~{3,})/);
+      if (m) {
+        insideCodeFence = true;
+        codeFenceChar = m[1][0];
+        codeFenceLen = m[1].length;
+      }
+    } else {
+      // Check for closing fence: line starting with at least as many of the same char
+      const escaped = codeFenceChar === "`" ? "`" : "~";
+      const closeRe = new RegExp(`^${escaped}{${codeFenceLen},}\\s*$`);
+      if (closeRe.test(trimmed)) {
+        insideCodeFence = false;
+        codeFenceChar = "";
+        codeFenceLen = 0;
+      }
+    }
+  }
 
   function filter(delta: string): string {
     const input = pendingPartial + delta;
     pendingPartial = "";
 
+    // Track code fence state for the incoming text.
+    processCodeFences(input);
+
+    // Inside a code fence — pass through unfiltered (preserve literal think tags).
+    if (insideCodeFence && !insideBlock) {
+      return input;
+    }
+
     if (!insideBlock) {
       // Look for an opening tag in this chunk.
       const openMatch = OPEN_TAG_RE.exec(input);
       if (openMatch) {
+        // Don't strip if the tag is inside a code fence detected in accumulated context.
         insideBlock = true;
         const before = input.slice(0, openMatch.index);
         const after = input.slice(openMatch.index + openMatch[0].length);
@@ -159,7 +209,11 @@ export function createStreamingThinkingFilter(): StreamingThinkingFilter {
 
   function reset() {
     insideBlock = false;
+    insideCodeFence = false;
+    codeFenceChar = "";
+    codeFenceLen = 0;
     pendingPartial = "";
+    lineBuffer = "";
   }
 
   return { filter, reset };

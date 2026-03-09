@@ -307,4 +307,61 @@ describe("createStreamingThinkingFilter", () => {
     // Simulates the P2 scenario: delta with leading newline + thinking tags
     expect(f.filter("\n<think>reasoning</think>After tool call")).toBe("\nAfter tool call");
   });
+
+  describe("code-fence preservation", () => {
+    it("preserves think tags inside triple-backtick code fences", () => {
+      const f = createStreamingThinkingFilter();
+      expect(f.filter("Example:\n")).toBe("Example:\n");
+      expect(f.filter("```\n")).toBe("```\n");
+      expect(f.filter("<think>literal</think>\n")).toBe("<think>literal</think>\n");
+      expect(f.filter("```\n")).toBe("```\n");
+      expect(f.filter("Done!")).toBe("Done!");
+    });
+
+    it("preserves think tags inside triple-tilde code fences", () => {
+      const f = createStreamingThinkingFilter();
+      expect(f.filter("~~~\n")).toBe("~~~\n");
+      expect(f.filter("<think>code</think>\n")).toBe("<think>code</think>\n");
+      expect(f.filter("~~~\n")).toBe("~~~\n");
+      expect(f.filter("visible")).toBe("visible");
+    });
+
+    it("preserves think tags inside fenced code with language tag", () => {
+      const f = createStreamingThinkingFilter();
+      expect(f.filter("```html\n")).toBe("```html\n");
+      expect(f.filter("<think>literal</think>\n")).toBe("<think>literal</think>\n");
+      expect(f.filter("```\n")).toBe("```\n");
+    });
+
+    it("still strips real think tags outside code fences", () => {
+      const f = createStreamingThinkingFilter();
+      // Send code fence content in separate chunks (realistic streaming)
+      expect(f.filter("```\n")).toBe("```\n");
+      expect(f.filter("<think>preserved</think>\n")).toBe("<think>preserved</think>\n");
+      expect(f.filter("```\n")).toBe("```\n");
+      // Now outside the fence, real think tags should be stripped
+      expect(f.filter("<think>")).toBe("");
+      expect(f.filter("hidden")).toBe("");
+      expect(f.filter("</think>visible")).toBe("visible");
+    });
+
+    it("handles code fence split across chunks", () => {
+      const f = createStreamingThinkingFilter();
+      expect(f.filter("text\n`")).toBe("text\n`");
+      expect(f.filter("``\n<think>inside fence</think>\n")).toBe(
+        "``\n<think>inside fence</think>\n",
+      );
+      expect(f.filter("```\n")).toBe("```\n");
+      // Now outside fence, think tags should be stripped
+      expect(f.filter("<think>hidden</think>after")).toBe("after");
+    });
+
+    it("resets code fence state on reset()", () => {
+      const f = createStreamingThinkingFilter();
+      f.filter("```\n");
+      f.reset();
+      // After reset, should not think we're in a code fence
+      expect(f.filter("<think>hidden</think>visible")).toBe("visible");
+    });
+  });
 });
