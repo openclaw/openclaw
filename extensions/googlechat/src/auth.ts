@@ -79,7 +79,9 @@ async function fetchChatCerts(): Promise<Record<string, string>> {
   if (cachedCerts && now - cachedCerts.fetchedAt < 10 * 60 * 1000) {
     return cachedCerts.certs;
   }
-  const res = await fetch(CHAT_CERTS_URL);
+  const res = await fetch(CHAT_CERTS_URL, {
+    signal: AbortSignal.timeout(10_000),
+  });
   if (!res.ok) {
     throw new Error(`Failed to fetch Chat certs (${res.status})`);
   }

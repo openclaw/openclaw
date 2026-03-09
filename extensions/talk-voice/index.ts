@@ -28,6 +28,7 @@ async function listVoices(apiKey: string): Promise<ElevenLabsVoice[]> {
     headers: {
       "xi-api-key": apiKey,
     },
+    signal: AbortSignal.timeout(10_000),
   });
   if (!res.ok) {
     throw new Error(`ElevenLabs voices API error (${res.status})`);
