@@ -12,6 +12,9 @@ OpenCode Zen is a **curated list of models** recommended by the OpenCode team fo
 It is an optional, hosted model access path that uses an API key and the `opencode` provider.
 Zen is currently in beta.
 
+If you want the separate Go-hosted catalog (`opencode-go/...`), see
+[OpenCode Go](/providers/opencode-go).
+
 ## CLI setup
 
 ```bash

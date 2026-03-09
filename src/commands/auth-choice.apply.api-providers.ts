@@ -34,6 +34,8 @@ import {
   applyMoonshotConfigCn,
   applyMoonshotProviderConfig,
   applyMoonshotProviderConfigCn,
+  applyOpencodeGoConfig,
+  applyOpencodeGoProviderConfig,
   applyOpencodeZenConfig,
   applyOpencodeZenProviderConfig,
   applySyntheticConfig,
@@ -68,6 +70,7 @@ import {
   setKimiCodingApiKey,
   setMistralApiKey,
   setMoonshotApiKey,
+  setOpencodeGoApiKey,
   setOpencodeZenApiKey,
   setSyntheticApiKey,
   setTogetherApiKey,
@@ -77,6 +80,7 @@ import {
   setZaiApiKey,
   ZAI_DEFAULT_MODEL_REF,
 } from "./onboard-auth.js";
+import { OPENCODE_GO_DEFAULT_MODEL } from "./opencode-go-model-default.js";
 import type { AuthChoice, SecretInputMode } from "./onboard-types.js";
 import { OPENCODE_ZEN_DEFAULT_MODEL } from "./opencode-zen-model-default.js";
 import { detectZaiEndpoint } from "./zai-endpoint-detect.js";
@@ -98,6 +102,7 @@ const API_KEY_TOKEN_PROVIDER_AUTH_CHOICE: Record<string, AuthChoice> = {
   huggingface: "huggingface-api-key",
   mistral: "mistral-api-key",
   opencode: "opencode-zen",
+  "opencode-go": "opencode-go",
   kilocode: "kilocode-api-key",
   qianfan: "qianfan-api-key",
 };
@@ -248,6 +253,24 @@ const SIMPLE_API_KEY_PROVIDER_FLOWS: Partial<Record<AuthChoice, SimpleApiKeyProv
       "OpenCode Zen bills per request. Check your OpenCode dashboard for details.",
     ].join("\n"),
     noteTitle: "OpenCode Zen",
+  },
+  "opencode-go": {
+    provider: "opencode-go",
+    profileId: "opencode-go:default",
+    expectedProviders: ["opencode-go"],
+    envLabel: "OPENCODE_API_KEY",
+    promptMessage: "Enter OpenCode Go API key",
+    setCredential: setOpencodeGoApiKey,
+    defaultModel: OPENCODE_GO_DEFAULT_MODEL,
+    applyDefaultConfig: applyOpencodeGoConfig,
+    applyProviderConfig: applyOpencodeGoProviderConfig,
+    noteDefault: OPENCODE_GO_DEFAULT_MODEL,
+    noteMessage: [
+      "OpenCode Go provides access to Kimi, GLM, and MiniMax models through the Go endpoint.",
+      "Get your API key at: https://opencode.ai/auth",
+      "OpenCode Go is separate from OpenCode Zen and does not replace it.",
+    ].join("\n"),
+    noteTitle: "OpenCode Go",
   },
   "together-api-key": {
     provider: "together",

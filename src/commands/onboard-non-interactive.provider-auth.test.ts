@@ -42,11 +42,6 @@ let upsertAuthProfile: typeof import("../agents/auth-profiles.js").upsertAuthPro
 type ProviderAuthConfigSnapshot = {
   auth?: { profiles?: Record<string, { provider?: string; mode?: string }> };
   agents?: { defaults?: { model?: { primary?: string } } };
-  talk?: {
-    provider?: string;
-    apiKey?: string | { source?: string; id?: string };
-    providers?: Record<string, { apiKey?: string | { source?: string; id?: string } }>;
-  };
   models?: {
     providers?: Record<
       string,
@@ -362,38 +357,6 @@ describe("onboard (non-interactive): provider auth", () => {
     });
   });
 
-  it("does not persist talk fallback secrets when OpenAI ref onboarding starts from an empty config", async () => {
-    await withOnboardEnv("openclaw-onboard-openai-ref-no-talk-leak-", async (env) => {
-      await withEnvAsync(
-        {
-          OPENAI_API_KEY: "sk-openai-env-key", // pragma: allowlist secret
-          ELEVENLABS_API_KEY: "elevenlabs-env-key", // pragma: allowlist secret
-        },
-        async () => {
-          const cfg = await runOnboardingAndReadConfig(env, {
-            authChoice: "openai-api-key",
-            secretInputMode: "ref", // pragma: allowlist secret
-          });
-
-          expect(cfg.agents?.defaults?.model?.primary).toBe(OPENAI_DEFAULT_MODEL);
-          expect(cfg.talk).toBeUndefined();
-
-          const store = ensureAuthProfileStore();
-          const profile = store.profiles["openai:default"];
-          expect(profile?.type).toBe("api_key");
-          if (profile?.type === "api_key") {
-            expect(profile.key).toBeUndefined();
-            expect(profile.keyRef).toEqual({
-              source: "env",
-              provider: "default",
-              id: "OPENAI_API_KEY",
-            });
-          }
-        },
-      );
-    });
-  });
-
   it.each([
     {
       name: "anthropic",
@@ -502,6 +465,36 @@ describe("onboard (non-interactive): provider auth", () => {
               source: "env",
               provider: "default",
               id: "OPENCODE_ZEN_API_KEY",
+            });
+          }
+        },
+      );
+    });
+  });
+
+  it("stores OPENCODE_API_KEY as keyRef for opencode-go ref mode", async () => {
+    await withOnboardEnv("openclaw-onboard-ref-opencode-go-", async ({ runtime }) => {
+      await withEnvAsync(
+        {
+          OPENCODE_API_KEY: "opencode-go-env-key", // pragma: allowlist secret
+          OPENCODE_ZEN_API_KEY: undefined,
+        },
+        async () => {
+          await runNonInteractiveOnboardingWithDefaults(runtime, {
+            authChoice: "opencode-go",
+            secretInputMode: "ref", // pragma: allowlist secret
+            skipSkills: true,
+          });
+
+          const store = ensureAuthProfileStore();
+          const profile = store.profiles["opencode-go:default"];
+          expect(profile?.type).toBe("api_key");
+          if (profile?.type === "api_key") {
+            expect(profile.key).toBeUndefined();
+            expect(profile.keyRef).toEqual({
+              source: "env",
+              provider: "default",
+              id: "OPENCODE_API_KEY",
             });
           }
         },

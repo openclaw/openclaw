@@ -500,6 +500,13 @@ describe("applyAuthChoice", () => {
       modelPrefix: "opencode/",
     },
     {
+      authChoice: "opencode-go",
+      tokenProvider: "opencode-go",
+      profileId: "opencode-go:default",
+      provider: "opencode-go",
+      modelPrefix: "opencode-go/",
+    },
+    {
       authChoice: "together-api-key",
       tokenProvider: "together",
       profileId: "together:default",
@@ -805,7 +812,7 @@ describe("applyAuthChoice", () => {
 
   it("keeps existing default model for explicit provider keys when setDefaultModel=false", async () => {
     const scenarios: Array<{
-      authChoice: "xai-api-key" | "opencode-zen";
+      authChoice: "xai-api-key" | "opencode-zen" | "opencode-go";
       token: string;
       promptMessage: string;
       existingPrimary: string;
@@ -832,6 +839,15 @@ describe("applyAuthChoice", () => {
         existingPrimary: "anthropic/claude-opus-4-5",
         expectedOverride: "opencode/claude-opus-4-6",
         expectProviderConfigUndefined: "opencode-zen",
+      },
+      {
+        authChoice: "opencode-go",
+        token: "sk-opencode-go-test",
+        promptMessage: "Enter OpenCode Go API key",
+        existingPrimary: "anthropic/claude-opus-4-5",
+        expectedOverride: "opencode-go/kimi-k2.5",
+        profileId: "opencode-go:default",
+        profileProvider: "opencode-go",
       },
     ];
     for (const scenario of scenarios) {

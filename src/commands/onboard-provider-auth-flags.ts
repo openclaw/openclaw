@@ -20,6 +20,7 @@ type OnboardProviderAuthOptionKey = keyof Pick<
   | "togetherApiKey"
   | "huggingfaceApiKey"
   | "opencodeZenApiKey"
+  | "opencodeGoApiKey"
   | "xaiApiKey"
   | "litellmApiKey"
   | "qianfanApiKey"
@@ -162,6 +163,13 @@ export const ONBOARD_PROVIDER_AUTH_FLAGS: ReadonlyArray<OnboardProviderAuthFlag>
     cliFlag: "--opencode-zen-api-key",
     cliOption: "--opencode-zen-api-key <key>",
     description: "OpenCode Zen API key",
+  },
+  {
+    optionKey: "opencodeGoApiKey",
+    authChoice: "opencode-go",
+    cliFlag: "--opencode-go-api-key",
+    cliOption: "--opencode-go-api-key <key>",
+    description: "OpenCode Go API key",
   },
   {
     optionKey: "xaiApiKey",
