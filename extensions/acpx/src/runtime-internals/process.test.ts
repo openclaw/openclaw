@@ -260,9 +260,9 @@ describe("buildChildEnv", () => {
     const originalOpenAiApiKeys = process.env.OPENAI_API_KEYS;
     const originalAzureOpenAiApiKey = process.env.AZURE_OPENAI_API_KEY;
     try {
-      process.env.OPENAI_API_KEY = "openai-key-fixture-primary";
-      process.env.OPENAI_API_KEYS = "openai-key-fixture-a,openai-key-fixture-b";
-      process.env.AZURE_OPENAI_API_KEY = "azure-openai-key-fixture";
+      process.env.OPENAI_API_KEY = "openai-fixture-primary";
+      process.env.OPENAI_API_KEYS = "openai-fixture-a,openai-fixture-b";
+      process.env.AZURE_OPENAI_API_KEY = "azure-openai-fixture";
 
       const childEnv = buildChildEnv({
         ACPX_AUTH_CHATGPT: "oauth-session",
@@ -295,11 +295,11 @@ describe("buildChildEnv", () => {
   it("preserves OpenAI API key env when ACPX OAuth auth is not requested", () => {
     const originalOpenAiApiKey = process.env.OPENAI_API_KEY;
     try {
-      process.env.OPENAI_API_KEY = "openai-key-fixture-primary";
+      process.env.OPENAI_API_KEY = "openai-fixture-primary";
 
       const childEnv = buildChildEnv();
 
-      expect(childEnv.OPENAI_API_KEY).toBe("openai-key-fixture-primary");
+      expect(childEnv.OPENAI_API_KEY).toBe("openai-fixture-primary");
       expect(childEnv.OPENCLAW_SHELL).toBe("acp");
     } finally {
       if (originalOpenAiApiKey === undefined) {
