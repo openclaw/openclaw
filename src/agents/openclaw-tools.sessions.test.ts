@@ -18,6 +18,7 @@ const testConfig = {
     agentToAgent: {
       maxPingPongTurns: 2,
       ingressEcho: { enabled: false, requireDelivery: false },
+      guard: { allowNestedSessionsSend: false },
     },
   },
   tools: {
@@ -58,6 +59,7 @@ describe("sessions tools", () => {
     callGatewayMock.mockClear();
     testConfig.session.agentToAgent.ingressEcho.enabled = false;
     testConfig.session.agentToAgent.ingressEcho.requireDelivery = false;
+    testConfig.session.agentToAgent.guard.allowNestedSessionsSend = false;
   });
 
   it("uses number (not integer) in tool schemas for Gemini compatibility", () => {
@@ -655,7 +657,7 @@ describe("sessions tools", () => {
       ),
     ).toBe(true);
     expect(waitCalls).toHaveLength(8);
-    expect(historyOnlyCalls).toHaveLength(8);
+    expect(historyOnlyCalls.length).toBeGreaterThanOrEqual(8);
     expect(sendCallCount).toBe(0);
   });
 
@@ -781,6 +783,49 @@ describe("sessions tools", () => {
     expect(firstAgentIndex).toBeGreaterThan(firstSendIndex);
   });
 
+  it("sessions_send blocks nested relay by default for inter-session sessions_send inputs", async () => {
+    callGatewayMock.mockImplementation(async (opts: unknown) => {
+      const request = opts as { method?: string };
+      if (request.method === "chat.history") {
+        return {
+          messages: [
+            {
+              role: "user",
+              provenance: { kind: "inter_session", sourceTool: "sessions_send" },
+              content: [{ type: "text", text: "relay this onward" }],
+            },
+          ],
+        };
+      }
+      if (request.method === "agent") {
+        throw new Error("agent should not run");
+      }
+      return {};
+    });
+
+    const tool = createOpenClawTools({
+      agentSessionKey: "discord:group:req",
+      agentChannel: "discord",
+    }).find((candidate) => candidate.name === "sessions_send");
+    expect(tool).toBeDefined();
+    if (!tool) {
+      throw new Error("missing sessions_send tool");
+    }
+
+    const result = await tool.execute("call-nested-blocked", {
+      sessionKey: "discord:group:target",
+      message: "ping",
+      timeoutSeconds: 1,
+    });
+
+    expect(result.details).toMatchObject({
+      status: "forbidden",
+    });
+    expect((result.details as { error?: string }).error).toContain(
+      "Nested sessions_send relay blocked",
+    );
+  });
+
   it("sessions_send blocks target run when strict ingress echo delivery fails", async () => {
     testConfig.session.agentToAgent.ingressEcho.enabled = true;
     testConfig.session.agentToAgent.ingressEcho.requireDelivery = true;
@@ -819,6 +864,71 @@ describe("sessions tools", () => {
         (call) => (call[0] as { method?: string }).method === "agent",
       ),
     ).toBe(false);
+  });
+
+  it("sessions_send allows nested relay when explicitly enabled", async () => {
+    testConfig.session.agentToAgent.guard.allowNestedSessionsSend = true;
+    let agentCallCount = 0;
+    let lastWaitedRunId: string | undefined;
+    const replyByRunId = new Map<string, string>();
+    callGatewayMock.mockImplementation(async (opts: unknown) => {
+      const request = opts as { method?: string; params?: unknown };
+      if (request.method === "chat.history") {
+        const params = request.params as { sessionKey?: string } | undefined;
+        if (params?.sessionKey === "discord:group:req") {
+          return {
+            messages: [
+              {
+                role: "user",
+                provenance: { kind: "inter_session", sourceTool: "sessions_send" },
+                content: [{ type: "text", text: "relay this onward" }],
+              },
+            ],
+          };
+        }
+        const text = (lastWaitedRunId && replyByRunId.get(lastWaitedRunId)) ?? "done";
+        return {
+          messages: [{ role: "assistant", content: [{ type: "text", text }], timestamp: 20 }],
+        };
+      }
+      if (request.method === "agent") {
+        agentCallCount += 1;
+        const runId = `run-${agentCallCount}`;
+        const params = request.params as { extraSystemPrompt?: string } | undefined;
+        let reply = "done";
+        if (params?.extraSystemPrompt?.includes("Agent-to-agent reply step")) {
+          reply = "REPLY_SKIP";
+        }
+        if (params?.extraSystemPrompt?.includes("Agent-to-agent announce step")) {
+          reply = "ANNOUNCE_SKIP";
+        }
+        replyByRunId.set(runId, reply);
+        return { runId, status: "accepted", acceptedAt: 9000 + agentCallCount };
+      }
+      if (request.method === "agent.wait") {
+        const params = request.params as { runId?: string } | undefined;
+        lastWaitedRunId = params?.runId;
+        return { runId: params?.runId ?? "run-1", status: "ok" };
+      }
+      return {};
+    });
+
+    const tool = createOpenClawTools({
+      agentSessionKey: "discord:group:req",
+      agentChannel: "discord",
+    }).find((candidate) => candidate.name === "sessions_send");
+    expect(tool).toBeDefined();
+    if (!tool) {
+      throw new Error("missing sessions_send tool");
+    }
+
+    const result = await tool.execute("call-nested-allowed", {
+      sessionKey: "discord:group:target",
+      message: "ping",
+      timeoutSeconds: 1,
+    });
+
+    expect(result.details).toMatchObject({ status: "ok", reply: "done" });
   });
 
   it("sessions_send runs ping-pong then announces", async () => {

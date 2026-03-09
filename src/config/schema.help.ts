@@ -1130,6 +1130,10 @@ export const FIELD_HELP: Record<string, string> = {
     "When true, OpenClaw attempts to echo the original sessions_send message into the target session's deliverable channel before starting the target run. Default: false.",
   "session.agentToAgent.ingressEcho.requireDelivery":
     "When true, ingress echo becomes strict: if delivery fails or no target can be resolved, OpenClaw blocks the target run instead of continuing best-effort. Default: false.",
+  "session.agentToAgent.guard":
+    "Loop/cost guardrails for agent-to-agent relays. Use this to block nested sessions_send hops when an agent is already responding to an inter-session sessions_send input.",
+  "session.agentToAgent.guard.allowNestedSessionsSend":
+    "When true, allows an agent handling an inter-session sessions_send input to call sessions_send again. Default: false, which blocks nested relay chains to prevent runaway A↔B cascades.",
   "session.threadBindings":
     "Shared defaults for thread-bound session routing behavior across providers that support thread focus workflows. Configure global defaults here and override per channel only when behavior differs.",
   "session.threadBindings.enabled":

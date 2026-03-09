@@ -135,6 +135,10 @@ export type SessionConfig = {
       /** Require ingress echo delivery before running the target agent. Default: false. */
       requireDelivery?: boolean;
     };
+    guard?: {
+      /** Allow nested sessions_send relays from already inter-session sessions_send inputs. Default: false. */
+      allowNestedSessionsSend?: boolean;
+    };
   };
   /** Shared defaults for thread-bound session routing across channels/providers. */
   threadBindings?: SessionThreadBindingsConfig;
