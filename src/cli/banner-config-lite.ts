@@ -1,8 +1,8 @@
 import { createConfigIO } from "../config/config.js";
 import type { TaglineMode } from "./tagline.js";
 
-export function parseTaglineMode(value: unknown): TaglineMode | undefined {
-  if (value === "random" || value === "default" || value === "off") {
+function parseTaglineMode(value: unknown): TaglineMode | undefined {
+  if (value === "random" || value === "default" || value === "off" || value === "script") {
     return value;
   }
   return undefined;

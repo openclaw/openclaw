@@ -567,6 +567,11 @@ export async function runCli(argv: string[] = process.argv) {
           return;
         }
       }
+      // Prime the script tagline cache so formatCliBannerLine in the help output
+      // can render it even though preaction hooks don't run on this fast path.
+      const { emitCliBanner } = await import("./banner.js");
+      const { VERSION } = await import("../version.js");
+      await emitCliBanner(VERSION, { argv: normalizedArgv });
       const { outputRootHelp } = await import("./program/root-help.js");
       await outputRootHelp(liveRootHelpOptions ?? undefined);
       return;
