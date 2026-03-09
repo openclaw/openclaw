@@ -104,6 +104,42 @@ describe("loadModelCatalog", () => {
     expect(spark?.reasoning).toBe(true);
   });
 
+  it("adds openai/gpt-5.4-codex when base gpt-5.2-codex exists", async () => {
+    __setModelCatalogImportForTest(
+      async () =>
+        ({
+          AuthStorage: class {},
+          ModelRegistry: class {
+            getAll() {
+              return [
+                {
+                  id: "gpt-5.2-codex",
+                  provider: "openai",
+                  name: "GPT-5.2 Codex",
+                  reasoning: true,
+                  contextWindow: 400000,
+                  input: ["text", "image"],
+                },
+              ];
+            }
+          },
+        }) as unknown as PiSdkModule,
+    );
+
+    const result = await loadModelCatalog({ config: {} as OpenClawConfig });
+    expect(result).toContainEqual(
+      expect.objectContaining({
+        provider: "openai",
+        id: "gpt-5.4-codex",
+      }),
+    );
+    const codex = result.find(
+      (entry) => entry.provider === "openai" && entry.id === "gpt-5.4-codex",
+    );
+    expect(codex?.name).toBe("gpt-5.4-codex");
+    expect(codex?.reasoning).toBe(true);
+  });
+
   it("merges configured models for opted-in non-pi-native providers", async () => {
     __setModelCatalogImportForTest(
       async () =>

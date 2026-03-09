@@ -9,6 +9,7 @@ import { buildInlineProviderModels, resolveModel } from "./model.js";
 import {
   buildOpenAICodexForwardCompatExpectation,
   makeModel,
+  mockDiscoveredModel,
   mockOpenAICodexTemplateModel,
   resetMockDiscoverModels,
 } from "./model.test-harness.js";
@@ -43,6 +44,37 @@ describe("pi embedded model e2e smoke", () => {
     const result = resolveModel("openai-codex", "gpt-5.3-codex", "/tmp/agent");
     expect(result.error).toBeUndefined();
     expect(result.model).toMatchObject(buildOpenAICodexForwardCompatExpectation("gpt-5.3-codex"));
+  });
+
+  it("builds an openai forward-compat fallback for gpt-5.4-codex", () => {
+    mockDiscoveredModel({
+      provider: "openai",
+      modelId: "gpt-5.2-codex",
+      templateModel: {
+        id: "gpt-5.2-codex",
+        name: "GPT-5.2 Codex",
+        provider: "openai",
+        api: "openai-responses",
+        baseUrl: "https://api.openai.com/v1",
+        reasoning: true,
+        input: ["text", "image"],
+        cost: { input: 1, output: 4, cacheRead: 0.1, cacheWrite: 0.5 },
+        contextWindow: 400000,
+        maxTokens: 128000,
+      },
+    });
+
+    const result = resolveModel("openai", "gpt-5.4-codex", "/tmp/agent");
+    expect(result.error).toBeUndefined();
+    expect(result.model).toMatchObject({
+      provider: "openai",
+      id: "gpt-5.4-codex",
+      api: "openai-responses",
+      baseUrl: "https://api.openai.com/v1",
+      reasoning: true,
+      contextWindow: 400000,
+      maxTokens: 128000,
+    });
   });
 
   it("keeps unknown-model errors for non-forward-compat IDs", () => {
