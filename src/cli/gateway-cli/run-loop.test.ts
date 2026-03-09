@@ -59,20 +59,41 @@ function removeNewSignalListeners(
   }
 }
 
-async function withIsolatedSignals(run: () => Promise<void>) {
-  const beforeSigterm = new Set(
-    process.listeners("SIGTERM") as Array<(...args: unknown[]) => void>,
-  );
-  const beforeSigint = new Set(process.listeners("SIGINT") as Array<(...args: unknown[]) => void>);
-  const beforeSigusr1 = new Set(
-    process.listeners("SIGUSR1") as Array<(...args: unknown[]) => void>,
-  );
+function addedSignalListener(
+  signal: NodeJS.Signals,
+  existing: Set<(...args: unknown[]) => void>,
+): (() => void) | null {
+  const listeners = process.listeners(signal) as Array<(...args: unknown[]) => void>;
+  for (let i = listeners.length - 1; i >= 0; i -= 1) {
+    const listener = listeners[i];
+    if (listener && !existing.has(listener)) {
+      return listener as () => void;
+    }
+  }
+  return null;
+}
+
+async function withIsolatedSignals(
+  run: (helpers: { captureSignal: (signal: NodeJS.Signals) => () => void }) => Promise<void>,
+) {
+  const existingListeners = {
+    SIGTERM: new Set(process.listeners("SIGTERM") as Array<(...args: unknown[]) => void>),
+    SIGINT: new Set(process.listeners("SIGINT") as Array<(...args: unknown[]) => void>),
+    SIGUSR1: new Set(process.listeners("SIGUSR1") as Array<(...args: unknown[]) => void>),
+  } satisfies Record<NodeJS.Signals, Set<(...args: unknown[]) => void>>;
+  const captureSignal = (signal: NodeJS.Signals) => {
+    const listener = addedSignalListener(signal, existingListeners[signal]);
+    if (!listener) {
+      throw new Error(`expected new ${signal} listener`);
+    }
+    return () => listener();
+  };
   try {
-    await run();
+    await run({ captureSignal });
   } finally {
-    removeNewSignalListeners("SIGTERM", beforeSigterm);
-    removeNewSignalListeners("SIGINT", beforeSigint);
-    removeNewSignalListeners("SIGUSR1", beforeSigusr1);
+    removeNewSignalListeners("SIGTERM", existingListeners.SIGTERM);
+    removeNewSignalListeners("SIGINT", existingListeners.SIGINT);
+    removeNewSignalListeners("SIGUSR1", existingListeners.SIGUSR1);
   }
 }
 
@@ -144,10 +165,11 @@ describe("runGatewayLoop", () => {
   it("exits 0 on SIGTERM after graceful close", async () => {
     vi.clearAllMocks();
 
-    await withIsolatedSignals(async () => {
+    await withIsolatedSignals(async ({ captureSignal }) => {
       const { close, runtime, exited } = await createSignaledLoopHarness();
+      const sigterm = captureSignal("SIGTERM");
 
-      process.emit("SIGTERM");
+      sigterm();
 
       await expect(exited).resolves.toBe(0);
       expect(close).toHaveBeenCalledWith({
@@ -161,7 +183,7 @@ describe("runGatewayLoop", () => {
   it("restarts after SIGUSR1 even when drain times out, and resets lanes for the new iteration", async () => {
     vi.clearAllMocks();
 
-    await withIsolatedSignals(async () => {
+    await withIsolatedSignals(async ({ captureSignal }) => {
       getActiveTaskCount.mockReturnValueOnce(2).mockReturnValueOnce(0);
       waitForActiveTasks.mockResolvedValueOnce({ drained: false });
 
@@ -172,6 +194,7 @@ describe("runGatewayLoop", () => {
       const closeFirst = vi.fn(async () => {});
       const closeSecond = vi.fn(async () => {});
       const closeThird = vi.fn(async () => {});
+      const { runtime, exited } = createRuntimeWithExitSignal();
 
       const start = vi.fn<StartServer>();
       let resolveFirst: (() => void) | null = null;
@@ -202,17 +225,18 @@ describe("runGatewayLoop", () => {
       });
 
       const { runGatewayLoop } = await import("./run-loop.js");
-      const { runtime, exited } = createRuntimeWithExitSignal();
       void runGatewayLoop({
         start: start as unknown as Parameters<typeof runGatewayLoop>[0]["start"],
         runtime: runtime as unknown as Parameters<typeof runGatewayLoop>[0]["runtime"],
       });
 
       await startedFirst;
+      const sigusr1 = captureSignal("SIGUSR1");
+      const sigterm = captureSignal("SIGTERM");
       expect(start).toHaveBeenCalledTimes(1);
       await new Promise<void>((resolve) => setImmediate(resolve));
 
-      process.emit("SIGUSR1");
+      sigusr1();
 
       await startedSecond;
       expect(start).toHaveBeenCalledTimes(2);
@@ -228,9 +252,10 @@ describe("runGatewayLoop", () => {
       expect(markGatewaySigusr1RestartHandled).toHaveBeenCalledTimes(1);
       expect(resetAllLanes).toHaveBeenCalledTimes(1);
 
-      process.emit("SIGUSR1");
+      sigusr1();
 
       await startedThird;
+      await new Promise<void>((resolve) => setImmediate(resolve));
       expect(closeSecond).toHaveBeenCalledWith({
         reason: "gateway restarting",
         restartExpectedMs: 1500,
@@ -240,8 +265,7 @@ describe("runGatewayLoop", () => {
       expect(resetAllLanes).toHaveBeenCalledTimes(2);
       expect(acquireGatewayLock).toHaveBeenCalledTimes(3);
 
-      await new Promise<void>((resolve) => setImmediate(resolve));
-      process.emit("SIGTERM");
+      sigterm();
       await expect(exited).resolves.toBe(0);
       expect(closeThird).toHaveBeenCalledWith({
         reason: "gateway stopping",
@@ -253,7 +277,7 @@ describe("runGatewayLoop", () => {
   it("releases the lock before exiting on spawned restart", async () => {
     vi.clearAllMocks();
 
-    await withIsolatedSignals(async () => {
+    await withIsolatedSignals(async ({ captureSignal }) => {
       const lockRelease = vi.fn(async () => {});
       acquireGatewayLock.mockResolvedValueOnce({
         release: lockRelease,
@@ -267,11 +291,12 @@ describe("runGatewayLoop", () => {
 
       const exitCallOrder: string[] = [];
       const { runtime, exited } = await createSignaledLoopHarness(exitCallOrder);
+      const sigusr1 = captureSignal("SIGUSR1");
       lockRelease.mockImplementation(async () => {
         exitCallOrder.push("lockRelease");
       });
 
-      process.emit("SIGUSR1");
+      sigusr1();
 
       await exited;
       expect(lockRelease).toHaveBeenCalled();
@@ -283,7 +308,7 @@ describe("runGatewayLoop", () => {
   it("forwards lockPort to initial and restart lock acquisitions", async () => {
     vi.clearAllMocks();
 
-    await withIsolatedSignals(async () => {
+    await withIsolatedSignals(async ({ captureSignal }) => {
       const closeFirst = vi.fn(async () => {});
       const closeSecond = vi.fn(async () => {});
       const closeThird = vi.fn(async () => {});
@@ -331,18 +356,21 @@ describe("runGatewayLoop", () => {
 
       await startedFirst;
       await new Promise<void>((resolve) => setImmediate(resolve));
-      process.emit("SIGUSR1");
+      const sigusr1 = captureSignal("SIGUSR1");
+      const sigterm = captureSignal("SIGTERM");
+
+      sigusr1();
       await startedSecond;
       await new Promise<void>((resolve) => setImmediate(resolve));
-      process.emit("SIGUSR1");
+      sigusr1();
       await startedThird;
+      await new Promise<void>((resolve) => setImmediate(resolve));
 
       expect(acquireGatewayLock).toHaveBeenNthCalledWith(1, { port: 18789 });
       expect(acquireGatewayLock).toHaveBeenNthCalledWith(2, { port: 18789 });
       expect(acquireGatewayLock).toHaveBeenNthCalledWith(3, { port: 18789 });
 
-      await new Promise<void>((resolve) => setImmediate(resolve));
-      process.emit("SIGTERM");
+      sigterm();
       await expect(exited).resolves.toBe(0);
       expect(closeThird).toHaveBeenCalledWith({
         reason: "gateway stopping",
@@ -354,7 +382,7 @@ describe("runGatewayLoop", () => {
   it("exits when lock reacquire fails during in-process restart fallback", async () => {
     vi.clearAllMocks();
 
-    await withIsolatedSignals(async () => {
+    await withIsolatedSignals(async ({ captureSignal }) => {
       const lockRelease = vi.fn(async () => {});
       acquireGatewayLock
         .mockResolvedValueOnce({
@@ -367,7 +395,8 @@ describe("runGatewayLoop", () => {
       });
 
       const { start, exited } = await createSignaledLoopHarness();
-      process.emit("SIGUSR1");
+      const sigusr1 = captureSignal("SIGUSR1");
+      sigusr1();
 
       await expect(exited).resolves.toBe(1);
       expect(acquireGatewayLock).toHaveBeenCalledTimes(2);
