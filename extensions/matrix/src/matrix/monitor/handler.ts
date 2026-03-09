@@ -77,6 +77,56 @@ export type MatrixMonitorHandlerParams = {
   accountId?: string | null;
 };
 
+export function resolveMatrixBaseRouteSession(params: {
+  buildAgentSessionKey: (params: {
+    agentId: string;
+    channel: string;
+    accountId?: string | null;
+    peer?: { kind: "direct" | "channel"; id: string } | null;
+  }) => string;
+  baseRoute: {
+    agentId: string;
+    sessionKey: string;
+    mainSessionKey: string;
+    matchedBy?: string;
+  };
+  isDirectMessage: boolean;
+  roomId: string;
+  accountId?: string | null;
+}): { sessionKey: string; lastRoutePolicy: "main" | "session" } {
+  const sessionKey =
+    params.isDirectMessage && params.baseRoute.matchedBy === "binding.peer.parent"
+      ? params.buildAgentSessionKey({
+          agentId: params.baseRoute.agentId,
+          channel: "matrix",
+          accountId: params.accountId,
+          peer: { kind: "channel", id: params.roomId },
+        })
+      : params.baseRoute.sessionKey;
+  return {
+    sessionKey,
+    lastRoutePolicy: sessionKey === params.baseRoute.mainSessionKey ? "main" : "session",
+  };
+}
+
+export function shouldOverrideMatrixDmToGroup(params: {
+  isDirectMessage: boolean;
+  roomConfigInfo?:
+    | {
+        config?: MatrixRoomConfig;
+        allowed: boolean;
+        matchSource?: string;
+      }
+    | undefined;
+}): boolean {
+  return (
+    params.isDirectMessage === true &&
+    params.roomConfigInfo?.config !== undefined &&
+    params.roomConfigInfo.allowed === true &&
+    params.roomConfigInfo.matchSource === "direct"
+  );
+}
+
 export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParams) {
   const {
     client,
@@ -204,7 +254,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
         aliases: roomAliases,
         name: roomName,
       });
-      if (isDirectMessage && roomConfigInfo?.config && roomConfigInfo.matchSource === "direct") {
+      if (shouldOverrideMatrixDmToGroup({ isDirectMessage, roomConfigInfo })) {
         logVerboseMessage(
           `matrix: overriding DM to group for configured room=${roomId} (${roomConfigInfo.matchKey})`,
         );
@@ -454,12 +504,20 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
         // while preserving DM trust semantics (secure 1:1, no group restrictions).
         parentPeer: isDirectMessage ? { kind: "channel", id: roomId } : undefined,
       });
+      const baseRouteSession = resolveMatrixBaseRouteSession({
+        buildAgentSessionKey: core.channel.routing.buildAgentSessionKey,
+        baseRoute,
+        isDirectMessage,
+        roomId,
+        accountId,
+      });
 
       const route = {
         ...baseRoute,
+        lastRoutePolicy: baseRouteSession.lastRoutePolicy,
         sessionKey: threadRootId
-          ? `${baseRoute.sessionKey}:thread:${threadRootId}`
-          : baseRoute.sessionKey,
+          ? `${baseRouteSession.sessionKey}:thread:${threadRootId}`
+          : baseRouteSession.sessionKey,
       };
 
       let threadStarterBody: string | undefined;

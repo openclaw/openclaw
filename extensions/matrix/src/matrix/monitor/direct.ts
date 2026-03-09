@@ -28,9 +28,7 @@ export function createDirectRoomTracker(client: MatrixClient, opts: DirectRoomTr
   const includeMemberCountInLogs = opts.includeMemberCountInLogs === true;
   let lastDmUpdateMs = 0;
   let cachedSelfUserId: string | null = null;
-  const memberCountCache = includeMemberCountInLogs
-    ? new Map<string, { count: number; ts: number }>()
-    : undefined;
+  const memberCountCache = new Map<string, { count: number; ts: number }>();
 
   const ensureSelfUserId = async (): Promise<string | null> => {
     if (cachedSelfUserId) {
@@ -58,9 +56,6 @@ export function createDirectRoomTracker(client: MatrixClient, opts: DirectRoomTr
   };
 
   const resolveMemberCount = async (roomId: string): Promise<number | null> => {
-    if (!memberCountCache) {
-      return null;
-    }
     const cached = memberCountCache.get(roomId);
     const now = Date.now();
     if (cached && now - cached.ts < DM_CACHE_TTL_MS) {
@@ -109,11 +104,6 @@ export function createDirectRoomTracker(client: MatrixClient, opts: DirectRoomTr
         return true;
       }
 
-      if (!includeMemberCountInLogs) {
-        log(`matrix: dm check room=${roomId} result=group`);
-        return false;
-      }
-
       // Conservative fallback: 2-member rooms without an explicit room name are likely
       // DMs with broken m.direct / is_direct flags. This has been observed on Continuwuity
       // where m.direct pointed to the wrong room and is_direct was never set on the invite.
@@ -151,6 +141,10 @@ export function createDirectRoomTracker(client: MatrixClient, opts: DirectRoomTr
         }
       }
 
+      if (!includeMemberCountInLogs) {
+        log(`matrix: dm check room=${roomId} result=group`);
+        return false;
+      }
       log(`matrix: dm check room=${roomId} result=group members=${memberCount ?? "unknown"}`);
       return false;
     },
