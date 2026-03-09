@@ -1,11 +1,13 @@
 import * as net from "node:net";
 import { Agent, EnvHttpProxyAgent, getGlobalDispatcher, setGlobalDispatcher } from "undici";
+import { hasHttpProxyEnvConfigured } from "./proxy-env.js";
 
 export const DEFAULT_UNDICI_STREAM_TIMEOUT_MS = 30 * 60 * 1000;
 
 const AUTO_SELECT_FAMILY_ATTEMPT_TIMEOUT_MS = 300;
 
 let lastAppliedDispatcherKey: string | null = null;
+let lastAppliedDispatcher: unknown = null;
 
 type DispatcherKind = "agent" | "env-proxy" | "unsupported";
 
@@ -78,29 +80,34 @@ export function ensureGlobalUndiciStreamTimeouts(opts?: { timeoutMs?: number }):
     return;
   }
 
+  const nextKind: DispatcherKind =
+    kind === "agent" && hasHttpProxyEnvConfigured() ? "env-proxy" : kind;
+
   const autoSelectFamily = resolveAutoSelectFamily();
-  const nextKey = resolveDispatcherKey({ kind, timeoutMs, autoSelectFamily });
-  if (lastAppliedDispatcherKey === nextKey) {
+  const nextKey = resolveDispatcherKey({ kind: nextKind, timeoutMs, autoSelectFamily });
+  if (lastAppliedDispatcherKey === nextKey && lastAppliedDispatcher === dispatcher) {
     return;
   }
 
   const connect = resolveConnectOptions(autoSelectFamily);
   try {
-    if (kind === "env-proxy") {
+    if (nextKind === "env-proxy") {
       const proxyOptions = {
         bodyTimeout: timeoutMs,
         headersTimeout: timeoutMs,
         ...(connect ? { connect } : {}),
       } as ConstructorParameters<typeof EnvHttpProxyAgent>[0];
-      setGlobalDispatcher(new EnvHttpProxyAgent(proxyOptions));
+      const nextDispatcher = new EnvHttpProxyAgent(proxyOptions);
+      setGlobalDispatcher(nextDispatcher);
+      lastAppliedDispatcher = nextDispatcher;
     } else {
-      setGlobalDispatcher(
-        new Agent({
-          bodyTimeout: timeoutMs,
-          headersTimeout: timeoutMs,
-          ...(connect ? { connect } : {}),
-        }),
-      );
+      const nextDispatcher = new Agent({
+        bodyTimeout: timeoutMs,
+        headersTimeout: timeoutMs,
+        ...(connect ? { connect } : {}),
+      });
+      setGlobalDispatcher(nextDispatcher);
+      lastAppliedDispatcher = nextDispatcher;
     }
     lastAppliedDispatcherKey = nextKey;
   } catch {
@@ -110,4 +117,5 @@ export function ensureGlobalUndiciStreamTimeouts(opts?: { timeoutMs?: number }):
 
 export function resetGlobalUndiciStreamTimeoutsForTests(): void {
   lastAppliedDispatcherKey = null;
+  lastAppliedDispatcher = null;
 }
