@@ -1,7 +1,12 @@
-import { chromium } from "playwright-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import * as chromeModule from "./chrome.js";
-import { closePlaywrightBrowserConnection, getPageForTargetId } from "./pw-session.js";
+
+vi.mock("./extension-relay.js", () => ({
+  getChromeExtensionRelayAuthHeaders: () => ({}),
+}));
+
+const { chromium } = await import("playwright-core");
+const chromeModule = await import("./chrome.js");
+const { closePlaywrightBrowserConnection, getPageForTargetId } = await import("./pw-session.js");
 
 const connectOverCdpSpy = vi.spyOn(chromium, "connectOverCDP");
 const getChromeWebSocketUrlSpy = vi.spyOn(chromeModule, "getChromeWebSocketUrl");
@@ -75,11 +80,13 @@ describe("pw-session getPageForTargetId", () => {
       on: pageOn,
       context: () => context,
       url: () => "https://alpha.example",
+      emulateMedia: vi.fn(async () => {}),
     } as unknown as import("playwright-core").Page;
     const pageB = {
       on: pageOn,
       context: () => context,
       url: () => "https://beta.example",
+      emulateMedia: vi.fn(async () => {}),
     } as unknown as import("playwright-core").Page;
 
     (context as unknown as { pages: () => unknown[] }).pages = () => [pageA, pageB];
@@ -135,11 +142,13 @@ describe("pw-session getPageForTargetId", () => {
       on: pageOn,
       context: () => context,
       url: () => "https://alpha.example",
+      emulateMedia: vi.fn(async () => {}),
     } as unknown as import("playwright-core").Page;
     const pageB = {
       on: pageOn,
       context: () => context,
       url: () => "https://beta.example",
+      emulateMedia: vi.fn(async () => {}),
     } as unknown as import("playwright-core").Page;
 
     (context as unknown as { pages: () => unknown[] }).pages = () => [pageA, pageB];
@@ -174,6 +183,8 @@ describe("pw-session getPageForTargetId", () => {
       });
       expect(resolved).toBe(pageB);
       expect(newCDPSession).not.toHaveBeenCalled();
+      expect(pageA.emulateMedia).toHaveBeenCalledWith({ colorScheme: null });
+      expect(pageB.emulateMedia).toHaveBeenCalledWith({ colorScheme: null });
     } finally {
       fetchSpy.mockRestore();
     }

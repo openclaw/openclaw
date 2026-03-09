@@ -106,6 +106,7 @@ const pageStates = new WeakMap<Page, PageState>();
 const contextStates = new WeakMap<BrowserContext, ContextState>();
 const observedContexts = new WeakSet<BrowserContext>();
 const observedPages = new WeakSet<Page>();
+const neutralizedExtensionRelayPages = new WeakSet<Page>();
 
 // Best-effort cache to make role refs stable even if Playwright returns a different Page object
 // for the same CDP target across requests.
@@ -329,6 +330,30 @@ function observeBrowser(browser: Browser) {
   }
 }
 
+async function neutralizeExtensionRelayPageMedia(page: Page): Promise<void> {
+  if (neutralizedExtensionRelayPages.has(page)) {
+    return;
+  }
+  try {
+    await page.emulateMedia({ colorScheme: null });
+    neutralizedExtensionRelayPages.add(page);
+  } catch {
+    // Best-effort only. If the page is mid-navigation or the target is gone,
+    // the next request can retry.
+  }
+}
+
+async function maybeNeutralizeExtensionRelayPages(params: {
+  cdpUrl: string;
+  pages: Page[];
+}): Promise<void> {
+  const isExtensionRelay = await isExtensionRelayCdpEndpoint(params.cdpUrl).catch(() => false);
+  if (!isExtensionRelay) {
+    return;
+  }
+  await Promise.all(params.pages.map((page) => neutralizeExtensionRelayPageMedia(page)));
+}
+
 async function connectBrowser(cdpUrl: string): Promise<ConnectedBrowser> {
   const normalized = normalizeCdpUrl(cdpUrl);
   const cached = cachedByCdpUrl.get(normalized);
@@ -362,6 +387,10 @@ async function connectBrowser(cdpUrl: string): Promise<ConnectedBrowser> {
         cachedByCdpUrl.set(normalized, connected);
         browser.on("disconnected", onDisconnected);
         observeBrowser(browser);
+        await maybeNeutralizeExtensionRelayPages({
+          cdpUrl: normalized,
+          pages: await getAllPages(browser),
+        });
         return connected;
       } catch (err) {
         lastErr = err;
@@ -513,6 +542,7 @@ export async function getPageForTargetId(opts: {
   }
   const first = pages[0];
   if (!opts.targetId) {
+    await maybeNeutralizeExtensionRelayPages({ cdpUrl: opts.cdpUrl, pages: [first] });
     return first;
   }
   const found = await findPageByTargetId(browser, opts.targetId, opts.cdpUrl);
@@ -521,10 +551,12 @@ export async function getPageForTargetId(opts: {
     // which prevents us from resolving a page's targetId via newCDPSession(). If Playwright
     // only exposes a single Page, use it as a best-effort fallback.
     if (pages.length === 1) {
+      await maybeNeutralizeExtensionRelayPages({ cdpUrl: opts.cdpUrl, pages: [first] });
       return first;
     }
     throw new BrowserTabNotFoundError();
   }
+  await maybeNeutralizeExtensionRelayPages({ cdpUrl: opts.cdpUrl, pages: [found] });
   return found;
 }
 
