@@ -786,48 +786,81 @@ export const registerTelegramNativeCommands = ({
       }
 
       // /settings — standalone handler that sends an inline keyboard control panel
-      bot.command("settings", async (ctx: TelegramNativeCommandContext) => {
-        const msg = ctx.message;
-        if (!msg) {
-          return;
-        }
-        if (shouldSkipUpdate(ctx)) {
-          return;
-        }
-        const auth = await resolveTelegramCommandAuth({
-          msg,
-          bot,
-          cfg,
-          accountId,
-          telegramCfg,
-          allowFrom,
-          groupAllowFrom,
-          useAccessGroups,
-          resolveGroupPolicy,
-          resolveTelegramGroupConfig,
-          requireAuth: true,
-        });
-        if (!auth) {
-          return;
-        }
-        if (auth.isGroup) {
-          const threadParams =
-            buildTelegramThreadParams(
-              resolveTelegramThreadSpec({
-                isGroup: true,
-                isForum: auth.isForum,
-                messageThreadId: (msg as { message_thread_id?: number }).message_thread_id,
-              }),
-            ) ?? {};
-          await withTelegramApiErrorLogging({
-            operation: "sendMessage",
-            runtime,
-            fn: () =>
-              bot.api.sendMessage(auth.chatId, "Settings is only available in DMs.", threadParams),
+      // Only register when native commands are enabled so operators can disable
+      // this config-mutation entry point via channels.telegram.commands.native: false.
+      if (nativeEnabled) {
+        bot.command("settings", async (ctx: TelegramNativeCommandContext) => {
+          const msg = ctx.message;
+          if (!msg) {
+            return;
+          }
+          if (shouldSkipUpdate(ctx)) {
+            return;
+          }
+          const auth = await resolveTelegramCommandAuth({
+            msg,
+            bot,
+            cfg,
+            accountId,
+            telegramCfg,
+            allowFrom,
+            groupAllowFrom,
+            useAccessGroups,
+            resolveGroupPolicy,
+            resolveTelegramGroupConfig,
+            requireAuth: true,
           });
-          return;
-        }
-        if (!resolveChannelConfigWrites({ cfg, channelId: "telegram", accountId })) {
+          if (!auth) {
+            return;
+          }
+          if (auth.isGroup) {
+            const threadParams =
+              buildTelegramThreadParams(
+                resolveTelegramThreadSpec({
+                  isGroup: true,
+                  isForum: auth.isForum,
+                  messageThreadId: (msg as { message_thread_id?: number }).message_thread_id,
+                }),
+              ) ?? {};
+            await withTelegramApiErrorLogging({
+              operation: "sendMessage",
+              runtime,
+              fn: () =>
+                bot.api.sendMessage(
+                  auth.chatId,
+                  "Settings is only available in DMs.",
+                  threadParams,
+                ),
+            });
+            return;
+          }
+          if (!resolveChannelConfigWrites({ cfg, channelId: "telegram", accountId })) {
+            const threadParams =
+              buildTelegramThreadParams(
+                resolveTelegramThreadSpec({
+                  isGroup: false,
+                  isForum: auth.isForum,
+                  messageThreadId: (msg as { message_thread_id?: number }).message_thread_id,
+                }),
+              ) ?? {};
+            await withTelegramApiErrorLogging({
+              operation: "sendMessage",
+              runtime,
+              fn: () =>
+                bot.api.sendMessage(
+                  auth.chatId,
+                  "Config writes are disabled for this account.",
+                  threadParams,
+                ),
+            });
+            return;
+          }
+          // Load fresh config so the menu reflects the current persisted state,
+          // not the snapshot from handler registration time.
+          const freshCfg = loadConfig();
+          const freshTelegramCfg = resolveTelegramAccount({ cfg: freshCfg, accountId }).config;
+          const { text, buttons } = buildSettingsCommandResponse(freshTelegramCfg);
+          const keyboard = buildInlineKeyboard(buttons);
           const threadParams =
             buildTelegramThreadParams(
               resolveTelegramThreadSpec({
@@ -840,38 +873,13 @@ export const registerTelegramNativeCommands = ({
             operation: "sendMessage",
             runtime,
             fn: () =>
-              bot.api.sendMessage(
-                auth.chatId,
-                "Config writes are disabled for this account.",
-                threadParams,
-              ),
+              bot.api.sendMessage(auth.chatId, text, {
+                ...(keyboard ? { reply_markup: keyboard } : {}),
+                ...threadParams,
+              }),
           });
-          return;
-        }
-        // Load fresh config so the menu reflects the current persisted state,
-        // not the snapshot from handler registration time.
-        const freshCfg = loadConfig();
-        const freshTelegramCfg = resolveTelegramAccount({ cfg: freshCfg, accountId }).config;
-        const { text, buttons } = buildSettingsCommandResponse(freshTelegramCfg);
-        const keyboard = buildInlineKeyboard(buttons);
-        const threadParams =
-          buildTelegramThreadParams(
-            resolveTelegramThreadSpec({
-              isGroup: false,
-              isForum: auth.isForum,
-              messageThreadId: (msg as { message_thread_id?: number }).message_thread_id,
-            }),
-          ) ?? {};
-        await withTelegramApiErrorLogging({
-          operation: "sendMessage",
-          runtime,
-          fn: () =>
-            bot.api.sendMessage(auth.chatId, text, {
-              ...(keyboard ? { reply_markup: keyboard } : {}),
-              ...threadParams,
-            }),
         });
-      });
+      }
 
       for (const pluginCommand of pluginCatalog.commands) {
         bot.command(pluginCommand.command, async (ctx: TelegramNativeCommandContext) => {

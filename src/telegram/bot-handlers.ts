@@ -1,5 +1,6 @@
 import type { Message, ReactionTypeEmoji } from "@grammyjs/types";
 import { resolveAgentDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
+import { resolveCommandAuthorization } from "../auto-reply/command-auth.js";
 import {
   createInboundDebouncer,
   resolveInboundDebounceMs,
@@ -1337,6 +1338,31 @@ export const registerTelegramHandlers = ({
         const freshCfg = loadConfig();
         const freshTelegramCfg = resolveTelegramAccount({ cfg: freshCfg, accountId }).config;
         const freshAllowFrom = freshTelegramCfg.allowFrom ?? allowFrom;
+        // Enforce commands.allowFrom when configured (takes priority over DM allowlist).
+        const commandsAllowFrom = freshCfg.commands?.allowFrom;
+        const commandsAllowFromConfigured =
+          commandsAllowFrom != null &&
+          typeof commandsAllowFrom === "object" &&
+          (Array.isArray(commandsAllowFrom.telegram) || Array.isArray(commandsAllowFrom["*"]));
+        if (commandsAllowFromConfigured) {
+          const commandsAuth = resolveCommandAuthorization({
+            ctx: {
+              Provider: "telegram",
+              Surface: "telegram",
+              OriginatingChannel: "telegram",
+              AccountId: accountId,
+              ChatType: "direct",
+              From: `telegram:${chatId}`,
+              SenderId: senderId || undefined,
+              SenderUsername: senderUsername || undefined,
+            },
+            cfg: freshCfg,
+            commandAuthorized: false,
+          });
+          if (!commandsAuth?.isAuthorizedSender) {
+            return;
+          }
+        }
         // Re-check sender auth at command level (stricter than callback-scope)
         // since settings callbacks mutate config.
         const settingsDmAllow = normalizeDmAllowFromWithStore({
