@@ -12,6 +12,7 @@ import {
 } from "../../../auto-reply/reply/history.js";
 import { finalizeInboundContext } from "../../../auto-reply/reply/inbound-context.js";
 import { dispatchReplyWithBufferedBlockDispatcher } from "../../../auto-reply/reply/provider-dispatcher.js";
+import { isSilentReplyText } from "../../../auto-reply/tokens.js";
 import type { ReplyPayload } from "../../../auto-reply/types.js";
 import { toLocationContext } from "../../../channels/location.js";
 import { createReplyPrefixOptions } from "../../../channels/reply-prefix.js";
@@ -389,11 +390,18 @@ export async function processMessage(params: {
         // The agent communicates via tool calls only; any text output is an LLM mistake.
         if (agentReplyMode === "silent" && payload.text?.trim()) {
           const hasMedia = Boolean(payload.mediaUrl || payload.mediaUrls?.length);
-          if (!hasMedia) {
+          if (isSilentReplyText(payload.text)) {
+            payload = { ...payload, text: undefined };
+          } else if (!hasMedia) {
             whatsappOutboundLog.warn(
               `Blocked non-silent reply to ${params.msg.from ?? conversationId} (replyMode=silent): ${elide(payload.text, 120)}`,
             );
             return;
+          } else {
+            whatsappOutboundLog.warn(
+              `Stripped media caption for silent reply to ${params.msg.from ?? conversationId} (replyMode=silent): ${elide(payload.text, 120)}`,
+            );
+            payload = { ...payload, text: undefined };
           }
         }
         await deliverWebReply({

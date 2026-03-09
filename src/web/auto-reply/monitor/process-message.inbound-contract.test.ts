@@ -366,6 +366,53 @@ describe("web processMessage inbound contract", () => {
     expect(deliverWebReplyMock).not.toHaveBeenCalled();
   });
 
+  it("strips media captions when agent replyMode is silent", async () => {
+    const args = makeProcessMessageArgs({
+      routeSessionKey: "agent:clients:whatsapp:direct:+1555",
+      groupHistoryKey: "+1555",
+      cfg: {
+        agents: {
+          list: [{ id: "clients", replyMode: "silent" }],
+        },
+        messages: {},
+        session: { store: sessionStorePath },
+      } as unknown as ReturnType<typeof import("../../../config/config.js").loadConfig>,
+      msg: {
+        id: "msg-silent-media-1",
+        from: "+1555",
+        to: "+2000",
+        chatType: "direct",
+        body: "hi",
+      },
+    });
+    args.route = { ...args.route, agentId: "clients" };
+
+    await processMessage(args);
+
+    // oxlint-disable-next-line typescript/no-explicit-any
+    const deliver = (capturedDispatchParams as any)?.dispatcherOptions?.deliver as
+      | ((
+          payload: { text?: string; mediaUrl?: string },
+          info: { kind: "tool" | "block" | "final" },
+        ) => Promise<void>)
+      | undefined;
+    expect(deliver).toBeTypeOf("function");
+
+    await deliver?.(
+      { text: "This caption should not leak", mediaUrl: "http://example.com/test.jpg" },
+      { kind: "final" },
+    );
+    expect(deliverWebReplyMock).toHaveBeenCalledTimes(1);
+    expect(deliverWebReplyMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        replyResult: expect.objectContaining({
+          text: undefined,
+          mediaUrl: "http://example.com/test.jpg",
+        }),
+      }),
+    );
+  });
+
   it("does not update main last route for isolated DM scope sessions", async () => {
     const updateLastRouteMock = vi.mocked(updateLastRouteInBackground);
     updateLastRouteMock.mockClear();

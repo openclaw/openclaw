@@ -166,6 +166,11 @@ describe("deliverWebReply", () => {
     });
 
     expect(msg.sendMedia).toHaveBeenCalledTimes(1);
+    expect(msg.sendMedia).toHaveBeenCalledWith(
+      expect.objectContaining({
+        caption: undefined,
+      }),
+    );
   });
 
   it("does NOT suppress text that merely contains NO_REPLY", async () => {
