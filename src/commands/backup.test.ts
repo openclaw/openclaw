@@ -467,13 +467,14 @@ describe("backup commands", () => {
     const backupDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-backups-efile-"));
     const excludeFile = path.join(tempHome.home, ".openclawignore");
     try {
-      await fs.writeFile(excludeFile, "# comment\n*.log\n\n.env\n", "utf8");
+      await fs.writeFile(excludeFile, "# comment\n*.log\n!keep.txt\n\n.env\n", "utf8");
       await fs.writeFile(
         path.join(stateDir, "openclaw.json"),
         JSON.stringify({ agents: { defaults: { workspace: externalWorkspace } } }),
         "utf8",
       );
       await fs.writeFile(path.join(externalWorkspace, "SOUL.md"), "# soul\n", "utf8");
+      await fs.writeFile(path.join(externalWorkspace, "keep.txt"), "keep\n", "utf8");
       await fs.writeFile(path.join(externalWorkspace, "app.log"), "log\n", "utf8");
       await fs.writeFile(path.join(externalWorkspace, ".env"), "SECRET=1\n", "utf8");
 
@@ -485,13 +486,14 @@ describe("backup commands", () => {
         nowMs: Date.UTC(2026, 2, 9, 13, 0, 0),
       });
 
-      expect(result.excludePatterns).toEqual(["*.log", ".env"]);
+      expect(result.excludePatterns).toEqual(["*.log", "!keep.txt", ".env"]);
 
       const extractDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-backup-extract-efile-"));
       try {
         await tar.x({ file: result.archivePath, cwd: extractDir, gzip: true });
         const archiveRoot = path.join(extractDir, result.archiveRoot);
         const workspaceAsset = result.assets.find((a) => a.kind === "workspace");
+        expect(workspaceAsset).toBeDefined();
         const encodedWorkspace = path.join(
           archiveRoot,
           "payload",
@@ -499,6 +501,7 @@ describe("backup commands", () => {
         );
 
         await expect(fs.access(path.join(encodedWorkspace, "SOUL.md"))).resolves.toBeUndefined();
+        await expect(fs.access(path.join(encodedWorkspace, "keep.txt"))).resolves.toBeUndefined();
         await expect(fs.access(path.join(encodedWorkspace, "app.log"))).rejects.toThrow();
         await expect(fs.access(path.join(encodedWorkspace, ".env"))).rejects.toThrow();
       } finally {

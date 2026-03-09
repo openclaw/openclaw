@@ -296,7 +296,7 @@ function matchesExcludePattern(relativePath: string, patterns: string[]): boolea
       : stripped.includes("/")
         ? stripped
         : `**/${stripped}`;
-    if (minimatch(normalized, glob, { dot: true })) {
+    if (minimatch(normalized, glob, { dot: true, nonegate: true })) {
       return true;
     }
   }
