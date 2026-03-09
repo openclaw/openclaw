@@ -818,48 +818,46 @@ export const dispatchTelegramMessage = async ({
   }
 
   // Only broadcast when there's an actual agent response, not just fallback
-  if (!queuedFinal) {
-    return;
-  }
+  if (queuedFinal) {
+    const ctx = getFallbackGatewayContext();
+    if (ctx && ctxPayload.SessionKey) {
+      try {
+        const runId = randomUUID();
+        const sessionKey = ctxPayload.SessionKey;
+        const seq = (ctx.agentRunSeq.get(runId) ?? 0) + 1;
+        ctx.agentRunSeq.set(runId, seq);
 
-  const ctx = getFallbackGatewayContext();
-  if (ctx && ctxPayload.SessionKey) {
-    try {
-      const runId = randomUUID();
-      const sessionKey = ctxPayload.SessionKey;
-      const seq = (ctx.agentRunSeq.get(runId) ?? 0) + 1;
-      ctx.agentRunSeq.set(runId, seq);
+        const { storePath, entry } = loadSessionEntry(sessionKey);
+        const sessionId = entry?.sessionId;
+        let message: Record<string, unknown> | undefined;
+        if (sessionId) {
+          const messages = readSessionMessages(sessionId, storePath, entry?.sessionFile);
+          const lastMessage = messages
+            .filter(
+              (m: unknown) =>
+                typeof m === "object" && m !== null && (m as Record<string, unknown>)?.role === "assistant",
+            )
+            .pop();
+          message = lastMessage as Record<string, unknown> | undefined;
+        }
 
-      const { storePath, entry } = loadSessionEntry(sessionKey);
-      const sessionId = entry?.sessionId;
-      let message: Record<string, unknown> | undefined;
-      if (sessionId) {
-        const messages = readSessionMessages(sessionId, storePath, entry?.sessionFile);
-        const lastMessage = messages
-          .filter(
-            (m: unknown) =>
-              typeof m === "object" && m !== null && (m as Record<string, unknown>)?.role === "assistant",
-          )
-          .pop();
-        message = lastMessage as Record<string, unknown> | undefined;
+        const sanitizedMessage = message
+          ? stripInlineDirectiveTagsFromMessageForDisplay(message)
+          : undefined;
+
+        const payload = {
+          runId,
+          sessionKey,
+          seq,
+          state: "final" as const,
+          message: sanitizedMessage,
+        };
+        ctx.broadcast("chat", payload);
+        ctx.nodeSendToSession(sessionKey, "chat", payload);
+        ctx.agentRunSeq.delete(runId);
+      } catch (err) {
+        runtime.error?.(`telegram broadcast failed: ${String(err)}`);
       }
-
-      const sanitizedMessage = message
-        ? stripInlineDirectiveTagsFromMessageForDisplay(message)
-        : undefined;
-
-      const payload = {
-        runId,
-        sessionKey,
-        seq,
-        state: "final" as const,
-        message: sanitizedMessage,
-      };
-      ctx.broadcast("chat", payload);
-      ctx.nodeSendToSession(sessionKey, "chat", payload);
-      ctx.agentRunSeq.delete(runId);
-    } catch (err) {
-      runtime.error?.(`telegram broadcast failed: ${String(err)}`);
     }
   }
 
