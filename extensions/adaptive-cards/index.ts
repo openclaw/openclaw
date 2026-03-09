@@ -1,5 +1,5 @@
 import { Type } from "@sinclair/typebox";
-import type { OpenClawPluginApi } from "openclaw/plugin-sdk";
+import type { OpenClawPluginApi } from "openclaw/plugin-sdk/core";
 
 /**
  * Marker tags used to embed Adaptive Card JSON inside tool result text.
