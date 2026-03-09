@@ -87,6 +87,8 @@ const METHOD_SCOPE_GROUPS: Record<OperatorScope, readonly string[]> = {
     "talk.config",
     "agents.files.list",
     "agents.files.get",
+    "clawhub.catalog",
+    "clawhub.installed",
   ],
   [WRITE_SCOPE]: [
     "send",
@@ -105,6 +107,8 @@ const METHOD_SCOPE_GROUPS: Record<OperatorScope, readonly string[]> = {
     "chat.abort",
     "browser.request",
     "push.test",
+    "clawhub.sync",
+    "clawhub.inspect",
   ],
   [ADMIN_SCOPE]: [
     "channels.logout",
@@ -132,6 +136,8 @@ const METHOD_SCOPE_GROUPS: Record<OperatorScope, readonly string[]> = {
     "set-heartbeats",
     "system-event",
     "agents.files.set",
+    "clawhub.download",
+    "clawhub.uninstall",
   ],
 };
 

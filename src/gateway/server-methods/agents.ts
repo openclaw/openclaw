@@ -345,6 +345,32 @@ async function listAgentFiles(workspaceDir: string, options?: { hideBootstrap?: 
     }
   }
 
+  // Scan memory/ subdirectory for daily memory files (e.g. memory/2026-03-06.md)
+  const memorySubdir = path.join(workspaceDir, "memory");
+  try {
+    const memoryDirEntries = await fs.readdir(memorySubdir);
+    const mdFiles = memoryDirEntries
+      .filter((f) => f.endsWith(".md"))
+      .toSorted()
+      .toReversed(); // newest first
+    for (const mdFile of mdFiles) {
+      const relName = `memory/${mdFile}`;
+      const fullPath = path.join(memorySubdir, mdFile);
+      const meta = await statFileSafely(fullPath);
+      if (meta) {
+        files.push({
+          name: relName,
+          path: path.join(workspaceDir, relName),
+          missing: false,
+          size: meta.size,
+          updatedAtMs: meta.updatedAtMs,
+        });
+      }
+    }
+  } catch {
+    // memory/ subdir may not exist — that's fine
+  }
+
   return files;
 }
 
