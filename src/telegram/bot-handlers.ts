@@ -13,6 +13,7 @@ import {
 import { resolveStoredModelOverride } from "../auto-reply/reply/model-selection.js";
 import { listSkillCommandsForAgents } from "../auto-reply/skill-commands.js";
 import { buildCommandsMessagePaginated } from "../auto-reply/status.js";
+import { resolveCommandAuthorizedFromAuthorizers } from "../channels/command-gating.js";
 import { shouldDebounceTextInbound } from "../channels/inbound-debounce-policy.js";
 import { resolveChannelConfigWrites } from "../channels/plugins/config-writes.js";
 import { loadConfig } from "../config/config.js";
@@ -1103,6 +1104,122 @@ export const registerTelegramHandlers = ({
         return await bot.api.sendMessage(callbackMessage.chat.id, text, params);
       };
 
+      // Settings panel callback handler (cfg_menu, cfg_s_*, cfg_v_*)
+      // Must run before the inlineButtonsScope gates — settings callbacks are
+      // DM-only and have their own auth (fresh config + resolveCommandAuthorization),
+      // so they should not be blocked by inlineButtonsScope=off or scope=group.
+      const settingsCallback = parseSettingsCallbackData(data);
+      if (settingsCallback) {
+        const settingsChatId = callbackMessage.chat.id;
+        const settingsIsGroup =
+          callbackMessage.chat.type === "group" || callbackMessage.chat.type === "supergroup";
+        if (settingsIsGroup) {
+          return;
+        } // DM-only
+        const settingsSenderId = callback.from?.id ? String(callback.from.id) : "";
+        const settingsSenderUsername = callback.from?.username ?? "";
+        // Load fresh config so changes to allowFrom/dmPolicy since handler
+        // registration are respected.
+        const freshCfg = loadConfig();
+        const freshTelegramCfg = resolveTelegramAccount({ cfg: freshCfg, accountId }).config;
+        const freshAllowFrom = freshTelegramCfg.allowFrom ?? allowFrom;
+        // Resolve storeAllowFrom via event auth context for DM.
+        const settingsEventAuth = await resolveTelegramEventAuthorizationContext({
+          chatId: settingsChatId,
+          isGroup: false,
+          isForum: false,
+          messageThreadId: undefined,
+        });
+        const settingsStoreAllowFrom = settingsEventAuth.storeAllowFrom;
+        const settingsDmAllow = normalizeDmAllowFromWithStore({
+          allowFrom: freshAllowFrom,
+          storeAllowFrom: settingsStoreAllowFrom,
+          dmPolicy: freshTelegramCfg.dmPolicy ?? "pairing",
+        });
+        const settingsDmSenderAllowed = isSenderAllowed({
+          allow: settingsDmAllow,
+          senderId: settingsSenderId,
+          senderUsername: settingsSenderUsername,
+        });
+        // Mirror /settings command handler auth: use resolveCommandAuthorizedFromAuthorizers
+        // so that when no allowlist is configured and access groups are off,
+        // commandAuthorized=true (open access), matching the command handler behavior.
+        const commandsAllowFrom = freshCfg.commands?.allowFrom;
+        const commandsAllowFromConfigured =
+          commandsAllowFrom != null &&
+          typeof commandsAllowFrom === "object" &&
+          (Array.isArray(commandsAllowFrom.telegram) || Array.isArray(commandsAllowFrom["*"]));
+        const useAccessGroups = freshCfg.commands?.useAccessGroups !== false;
+        const settingsCommandAuthorized = commandsAllowFromConfigured
+          ? Boolean(
+              resolveCommandAuthorization({
+                ctx: {
+                  Provider: "telegram",
+                  Surface: "telegram",
+                  OriginatingChannel: "telegram",
+                  AccountId: accountId,
+                  ChatType: "direct",
+                  From: `telegram:${settingsChatId}`,
+                  SenderId: settingsSenderId || undefined,
+                  SenderUsername: settingsSenderUsername || undefined,
+                },
+                cfg: freshCfg,
+                commandAuthorized: false,
+              })?.isAuthorizedSender,
+            )
+          : resolveCommandAuthorizedFromAuthorizers({
+              useAccessGroups,
+              authorizers: [
+                { configured: settingsDmAllow.hasEntries, allowed: settingsDmSenderAllowed },
+              ],
+              modeWhenAccessGroupsOff: "configured",
+            });
+        // Use resolveCommandAuthorization to enforce both commands.allowFrom
+        // and commands.ownerAllowFrom in a single check.
+        const commandsAuth = resolveCommandAuthorization({
+          ctx: {
+            Provider: "telegram",
+            Surface: "telegram",
+            OriginatingChannel: "telegram",
+            AccountId: accountId,
+            ChatType: "direct",
+            From: `telegram:${settingsChatId}`,
+            SenderId: settingsSenderId || undefined,
+            SenderUsername: settingsSenderUsername || undefined,
+          },
+          cfg: freshCfg,
+          commandAuthorized: settingsCommandAuthorized,
+        });
+        if (!commandsAuth.isAuthorizedSender) {
+          return;
+        }
+        if (!resolveChannelConfigWrites({ cfg: freshCfg, channelId: "telegram", accountId })) {
+          await replyToCallbackChat("Config writes are disabled for this account.");
+          return;
+        }
+        await handleSettingsCallback({
+          parsed: settingsCallback,
+          cfg: freshCfg,
+          accountId,
+          telegramCfg: freshTelegramCfg,
+          editMessage: async (text, buttons) => {
+            const keyboard = buildInlineKeyboard(buttons);
+            try {
+              await editCallbackMessage(text, keyboard ? { reply_markup: keyboard } : undefined);
+            } catch (editErr) {
+              const errStr = String(editErr);
+              if (!errStr.includes("message is not modified")) {
+                throw editErr;
+              }
+            }
+          },
+          answerCallback: async (text) => {
+            await replyToCallbackChat(text);
+          },
+        });
+        return;
+      }
+
       const inlineButtonsScope = resolveTelegramInlineButtonsScope({
         cfg,
         accountId,
@@ -1324,81 +1441,6 @@ export const registerTelegramHandlers = ({
           return;
         }
 
-        return;
-      }
-
-      // Settings panel callback handler (cfg_menu, cfg_s_*, cfg_v_*)
-      const settingsCallback = parseSettingsCallbackData(data);
-      if (settingsCallback) {
-        if (isGroup) {
-          return;
-        } // DM-only
-        // Load fresh config *before* the auth re-check so that changes to
-        // allowFrom / dmPolicy made since handler registration are respected.
-        const freshCfg = loadConfig();
-        const freshTelegramCfg = resolveTelegramAccount({ cfg: freshCfg, accountId }).config;
-        const freshAllowFrom = freshTelegramCfg.allowFrom ?? allowFrom;
-        // Re-check sender auth at command level (stricter than callback-scope)
-        // since settings callbacks mutate config.
-        const settingsDmAllow = normalizeDmAllowFromWithStore({
-          allowFrom: freshAllowFrom,
-          storeAllowFrom,
-          dmPolicy: freshTelegramCfg.dmPolicy ?? "pairing",
-        });
-        // When the allowlist has no entries, treat as unauthorized (matching
-        // the /settings command handler which denies empty allowlists when
-        // access-groups gating is enabled).
-        const dmSenderAllowed =
-          settingsDmAllow.hasEntries &&
-          isSenderAllowed({ allow: settingsDmAllow, senderId, senderUsername });
-        // Use resolveCommandAuthorization to enforce both commands.allowFrom
-        // and commands.ownerAllowFrom in a single check.
-        const commandsAuth = resolveCommandAuthorization({
-          ctx: {
-            Provider: "telegram",
-            Surface: "telegram",
-            OriginatingChannel: "telegram",
-            AccountId: accountId,
-            ChatType: "direct",
-            From: `telegram:${chatId}`,
-            SenderId: senderId || undefined,
-            SenderUsername: senderUsername || undefined,
-          },
-          cfg: freshCfg,
-          // When commands.allowFrom is unset, resolveCommandAuthorization
-          // falls back to commandAuthorized && isOwnerForCommands.
-          commandAuthorized: dmSenderAllowed,
-        });
-        if (!commandsAuth.isAuthorizedSender) {
-          return;
-        }
-        if (!resolveChannelConfigWrites({ cfg: freshCfg, channelId: "telegram", accountId })) {
-          await replyToCallbackChat("Config writes are disabled for this account.");
-          return;
-        }
-        await handleSettingsCallback({
-          parsed: settingsCallback,
-          cfg: freshCfg,
-          accountId,
-          telegramCfg: freshTelegramCfg,
-          editMessage: async (text, buttons) => {
-            const keyboard = buildInlineKeyboard(buttons);
-            try {
-              await editCallbackMessage(text, keyboard ? { reply_markup: keyboard } : undefined);
-            } catch (editErr) {
-              const errStr = String(editErr);
-              if (!errStr.includes("message is not modified")) {
-                throw editErr;
-              }
-            }
-          },
-          answerCallback: async (text) => {
-            // Use a follow-up toast via sendMessage since answerCallbackQuery was
-            // already called at the top of the handler. Telegram allows only one
-            // answer per callback query, so we reply inline instead.
-            await replyToCallbackChat(text);
-          },
-        });
         return;
       }
 
