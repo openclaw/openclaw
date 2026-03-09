@@ -5,6 +5,11 @@ import { log } from "./logger.js";
 
 type OpenAIServiceTier = "auto" | "default" | "flex" | "priority";
 
+type OpenAIChatMessagePayload = {
+  role?: unknown;
+  content?: unknown;
+};
+
 const OPENAI_RESPONSES_APIS = new Set(["openai-responses"]);
 const OPENAI_RESPONSES_PROVIDERS = new Set(["openai", "azure-openai-responses"]);
 
@@ -239,6 +244,72 @@ export function createCodexDefaultTransportWrapper(baseStreamFn: StreamFn | unde
       ...options,
       transport: options?.transport ?? "auto",
     });
+}
+
+function flattenAssistantContentBlocksToString(content: unknown): string | null {
+  if (!Array.isArray(content)) {
+    return null;
+  }
+
+  const textBlocks = content
+    .map((block) => {
+      if (!block || typeof block !== "object") {
+        return null;
+      }
+      const entry = block as { text?: unknown };
+      return typeof entry.text === "string" ? entry.text : null;
+    })
+    .filter((text): text is string => text !== null);
+
+  return textBlocks.join("");
+}
+
+function normalizeOpenAICompletionsAssistantMessageContent(payload: unknown): void {
+  if (!payload || typeof payload !== "object") {
+    return;
+  }
+
+  const messages = (payload as { messages?: unknown }).messages;
+  if (!Array.isArray(messages)) {
+    return;
+  }
+
+  for (const message of messages) {
+    if (!message || typeof message !== "object") {
+      continue;
+    }
+    const assistantMessage = message as OpenAIChatMessagePayload;
+    if (assistantMessage.role !== "assistant") {
+      continue;
+    }
+
+    const flattened = flattenAssistantContentBlocksToString(assistantMessage.content);
+    if (flattened === null) {
+      continue;
+    }
+    assistantMessage.content = flattened;
+  }
+}
+
+export function createOpenAICompletionsAssistantContentStringWrapper(
+  baseStreamFn: StreamFn | undefined,
+): StreamFn {
+  const underlying = baseStreamFn ?? streamSimple;
+  return (model, context, options) => {
+    if (model.api !== "openai-completions") {
+      return underlying(model, context, options);
+    }
+    const originalOnPayload = options?.onPayload;
+    return underlying(model, context, {
+      ...options,
+      onPayload: (payload, payloadModel) => {
+        // pi-ai serializes assistant text blocks as Anthropic-style arrays for
+        // openai-completions; many OpenAI-compatible backends only accept strings here.
+        normalizeOpenAICompletionsAssistantMessageContent(payload);
+        return originalOnPayload?.(payload, payloadModel);
+      },
+    });
+  };
 }
 
 export function createOpenAIDefaultTransportWrapper(baseStreamFn: StreamFn | undefined): StreamFn {
