@@ -146,6 +146,7 @@ describe("heartbeat runner skips when target session lane is busy", () => {
 
     // Should have proceeded past the lane checks and called getReplyFromConfig
     expect(replySpy).toHaveBeenCalled();
+    expect(result.status).toBe("ran");
 
     replySpy.mockRestore();
   });
