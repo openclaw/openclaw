@@ -352,10 +352,20 @@ export async function spawnSubagentDirect(
         .map((value) => normalizeAgentId(value).toLowerCase()),
     );
     if (!allowAny && !implicitAllow && !allowSet.has(normalizedTargetId)) {
-      const allowedText = allowSet.size > 0 ? Array.from(allowSet).join(", ") : "none";
+      const effectiveAllowed =
+        allowAgentsRaw === undefined
+          ? configuredIds
+          : allowSet.size > 0
+            ? Array.from(allowSet)
+            : [];
+      const allowedText = effectiveAllowed.length > 0 ? effectiveAllowed.join(", ") : "none";
+      const hint =
+        allowAgentsRaw === undefined
+          ? ` (no allowAgents configured — only configured agents are allowed: ${allowedText})`
+          : ` (allowed: ${allowedText})`;
       return {
         status: "forbidden",
-        error: `agentId is not allowed for sessions_spawn (allowed: ${allowedText})`,
+        error: `Agent "${targetAgentId}" is not allowed for sessions_spawn${hint}`,
       };
     }
   }
