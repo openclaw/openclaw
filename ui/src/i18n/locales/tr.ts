@@ -58,7 +58,7 @@ export const tr: TranslationMap = {
       subtitle: "Kontrol panelinin nereye bağlı olduğu ve nasıl kimlik doğruladığı.",
       wsUrl: "WebSocket URL",
       token: "Ağ Geçidi Jetonu",
-      password: "Parola (saklanmaz)",
+      password: "Parola (saklanmaz)", // pragma: allowlist secret
       sessionKey: "Varsayılan Oturum Anahtarı",
       language: "Dil",
       connectHint: "Bağlantı değişikliklerini uygulamak için Bağlan'a tıklayın.",
@@ -221,8 +221,7 @@ export const tr: TranslationMap = {
       timezoneOptional: "Saat dilimi (isteğe bağlı)",
       timezonePlaceholder: "America/Los_Angeles",
       timezoneHelp: "Yaygın bir saat dilimi seçin veya geçerli bir IANA saat dilimi girin.",
-      jitterHelp:
-        "Gecikme dağıtımı mı gerekiyor? Gelişmiş -> Gecikme penceresi / Gecikme birimi seçeneklerini kullanın.",
+      jitterHelp: "Dağıtım penceresi / Dağıtım birimi alanları için Gelişmiş bölümünü açın.",
       execution: "Çalıştırma",
       executionSub: "Ne zaman uyandırılacağını ve bu görevin ne yapacağını seçin.",
       session: "Oturum",
