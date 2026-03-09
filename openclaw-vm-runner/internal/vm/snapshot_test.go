@@ -179,7 +179,7 @@ func TestWriteMetadata_CreatesFile(t *testing.T) {
 	var meta SnapshotMetadata
 	require.NoError(t, json.Unmarshal(data, &meta))
 
-	assert.Equal(t, "abc123def456", meta.Version)
+	assert.Equal(t, "abc123def456", meta.Version) // pragma: allowlist secret
 	assert.Equal(t, uint32(42), meta.VsockCID)
 	assert.Equal(t, int64(512), meta.MemSizeMib)
 	assert.Equal(t, int64(2), meta.VcpuCount)
