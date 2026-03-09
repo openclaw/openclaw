@@ -67,6 +67,55 @@ function createMarkMessageSeen() {
   };
 }
 
+function createTestHandler() {
+  return createSlackMessageHandler({
+    ctx: {
+      cfg: {},
+      accountId: "default",
+      app: { client: {} },
+      runtime: {},
+      markMessageSeen: createMarkMessageSeen(),
+    } as Parameters<typeof createSlackMessageHandler>[0]["ctx"],
+    account: { accountId: "default" } as Parameters<typeof createSlackMessageHandler>[0]["account"],
+  });
+}
+
+function createSlackEvent(params: { type: "message" | "app_mention"; ts: string; text: string }) {
+  return { type: params.type, channel: "C1", ts: params.ts, text: params.text } as never;
+}
+
+async function sendMessageEvent(handler: ReturnType<typeof createTestHandler>, ts: string) {
+  await handler(createSlackEvent({ type: "message", ts, text: "hello" }), { source: "message" });
+}
+
+async function sendMentionEvent(handler: ReturnType<typeof createTestHandler>, ts: string) {
+  await handler(createSlackEvent({ type: "app_mention", ts, text: "<@U_BOT> hello" }), {
+    source: "app_mention",
+    wasMentioned: true,
+  });
+}
+
+async function createInFlightMessageScenario(ts: string) {
+  let resolveMessagePrepare: ((value: unknown) => void) | undefined;
+  const messagePrepare = new Promise<unknown>((resolve) => {
+    resolveMessagePrepare = resolve;
+  });
+  prepareSlackMessageMock.mockImplementation(async ({ opts }) => {
+    if (opts.source === "message") {
+      return messagePrepare;
+    }
+    return { ctxPayload: {} };
+  });
+
+  const handler = createTestHandler();
+  const messagePending = handler(createSlackEvent({ type: "message", ts, text: "hello" }), {
+    source: "message",
+  });
+  await Promise.resolve();
+
+  return { handler, messagePending, resolveMessagePrepare };
+}
+
 describe("createSlackMessageHandler app_mention race handling", () => {
   beforeEach(() => {
     prepareSlackMessageMock.mockReset();
@@ -81,41 +130,39 @@ describe("createSlackMessageHandler app_mention race handling", () => {
       return { ctxPayload: {} };
     });
 
-    const handler = createSlackMessageHandler({
-      ctx: {
-        cfg: {},
-        accountId: "default",
-        app: { client: {} },
-        runtime: {},
-        markMessageSeen: createMarkMessageSeen(),
-      } as Parameters<typeof createSlackMessageHandler>[0]["ctx"],
-      account: { accountId: "default" } as Parameters<
-        typeof createSlackMessageHandler
-      >[0]["account"],
-    });
+    const handler = createTestHandler();
 
-    await handler(
-      { type: "message", channel: "C1", ts: "1700000000.000100", text: "hello" } as never,
-      { source: "message" },
-    );
-    await handler(
-      {
-        type: "app_mention",
-        channel: "C1",
-        ts: "1700000000.000100",
-        text: "<@U_BOT> hello",
-      } as never,
-      { source: "app_mention", wasMentioned: true },
-    );
-    await handler(
-      {
-        type: "app_mention",
-        channel: "C1",
-        ts: "1700000000.000100",
-        text: "<@U_BOT> hello",
-      } as never,
-      { source: "app_mention", wasMentioned: true },
-    );
+    await sendMessageEvent(handler, "1700000000.000100");
+    await sendMentionEvent(handler, "1700000000.000100");
+    await sendMentionEvent(handler, "1700000000.000100");
+
+    expect(prepareSlackMessageMock).toHaveBeenCalledTimes(2);
+    expect(dispatchPreparedSlackMessageMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("allows app_mention while message handling is still in-flight, then keeps later duplicates deduped", async () => {
+    const { handler, messagePending, resolveMessagePrepare } =
+      await createInFlightMessageScenario("1700000000.000150");
+
+    await sendMentionEvent(handler, "1700000000.000150");
+
+    resolveMessagePrepare?.(null);
+    await messagePending;
+
+    await sendMentionEvent(handler, "1700000000.000150");
+
+    expect(prepareSlackMessageMock).toHaveBeenCalledTimes(2);
+    expect(dispatchPreparedSlackMessageMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("suppresses message dispatch when app_mention already dispatched during in-flight race", async () => {
+    const { handler, messagePending, resolveMessagePrepare } =
+      await createInFlightMessageScenario("1700000000.000175");
+
+    await sendMentionEvent(handler, "1700000000.000175");
+
+    resolveMessagePrepare?.({ ctxPayload: {} });
+    await messagePending;
 
     expect(prepareSlackMessageMock).toHaveBeenCalledTimes(2);
     expect(dispatchPreparedSlackMessageMock).toHaveBeenCalledTimes(1);
@@ -124,32 +171,10 @@ describe("createSlackMessageHandler app_mention race handling", () => {
   it("keeps app_mention deduped when message event already dispatched", async () => {
     prepareSlackMessageMock.mockResolvedValue({ ctxPayload: {} });
 
-    const handler = createSlackMessageHandler({
-      ctx: {
-        cfg: {},
-        accountId: "default",
-        app: { client: {} },
-        runtime: {},
-        markMessageSeen: createMarkMessageSeen(),
-      } as Parameters<typeof createSlackMessageHandler>[0]["ctx"],
-      account: { accountId: "default" } as Parameters<
-        typeof createSlackMessageHandler
-      >[0]["account"],
-    });
+    const handler = createTestHandler();
 
-    await handler(
-      { type: "message", channel: "C1", ts: "1700000000.000200", text: "hello" } as never,
-      { source: "message" },
-    );
-    await handler(
-      {
-        type: "app_mention",
-        channel: "C1",
-        ts: "1700000000.000200",
-        text: "<@U_BOT> hello",
-      } as never,
-      { source: "app_mention", wasMentioned: true },
-    );
+    await sendMessageEvent(handler, "1700000000.000200");
+    await sendMentionEvent(handler, "1700000000.000200");
 
     expect(prepareSlackMessageMock).toHaveBeenCalledTimes(1);
     expect(dispatchPreparedSlackMessageMock).toHaveBeenCalledTimes(1);

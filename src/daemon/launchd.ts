@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { parseStrictInteger, parseStrictPositiveInteger } from "../infra/parse-finite-number.js";
 import {
   GATEWAY_LAUNCH_AGENT_LABEL,
   resolveGatewayServiceDescription,
@@ -127,15 +128,15 @@ export function parseLaunchctlPrint(output: string): LaunchctlPrintInfo {
   }
   const pidValue = entries.pid;
   if (pidValue) {
-    const pid = Number.parseInt(pidValue, 10);
-    if (Number.isFinite(pid)) {
+    const pid = parseStrictPositiveInteger(pidValue);
+    if (pid !== undefined) {
       info.pid = pid;
     }
   }
   const exitStatusValue = entries["last exit status"];
   if (exitStatusValue) {
-    const status = Number.parseInt(exitStatusValue, 10);
-    if (Number.isFinite(status)) {
+    const status = parseStrictInteger(exitStatusValue);
+    if (status !== undefined) {
       info.lastExitStatus = status;
     }
   }
@@ -206,6 +207,9 @@ export async function repairLaunchAgentBootstrap(args: {
   const domain = resolveGuiDomain();
   const label = resolveLaunchAgentLabel({ env });
   const plistPath = resolveLaunchAgentPlistPath(env);
+  // launchd can persist "disabled" state after bootout; clear it before bootstrap
+  // (matches the same guard in installLaunchAgent and restartLaunchAgent).
+  await execLaunchctl(["enable", `${domain}/${label}`]);
   const boot = await execLaunchctl(["bootstrap", domain, plistPath]);
   if (boot.code !== 0) {
     return { ok: false, detail: (boot.stderr || boot.stdout).trim() || undefined };
@@ -465,6 +469,9 @@ export async function restartLaunchAgent({
     await waitForPidExit(previousPid);
   }
 
+  // launchd can persist "disabled" state after bootout; clear it before bootstrap
+  // (matches the same guard in installLaunchAgent).
+  await execLaunchctl(["enable", `${domain}/${label}`]);
   const boot = await execLaunchctl(["bootstrap", domain, plistPath]);
   if (boot.code !== 0) {
     const detail = (boot.stderr || boot.stdout).trim();
