@@ -2,7 +2,11 @@ import path from "node:path";
 
 export const CONFIG_BACKUP_COUNT = 5;
 
-/** Matches datetime-stamped backup suffixes: YYYYMMDD-HHmmssSSS (UTC) */
+/**
+ * Matches datetime-stamped backup suffixes: YYYYMMDD-HHmmssSSS (UTC).
+ * Validates structure only (digit counts), not value ranges — intentional,
+ * since only formatBackupTimestamp() produces these filenames.
+ */
 export const BACKUP_DATETIME_RE = /^\d{8}-\d{9}$/;
 
 /**
@@ -47,7 +51,8 @@ export async function rotateConfigBackups(
   const backupBase = `${configPath}.bak`;
   const timestamp = formatBackupTimestamp(now);
   await ioFs.rename(backupBase, `${backupBase}.${timestamp}`).catch(() => {
-    // best-effort — .bak may not exist on first run
+    // best-effort — .bak may not exist on first run, or target already exists
+    // (POSIX rename atomically replaces dest, so same-ms collision silently overwrites)
   });
 }
 
