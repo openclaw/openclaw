@@ -52,7 +52,50 @@ function expectPrimaryProbeSuccess(
 ) {
   expect(result.result).toBe(expectedResult);
   expect(run).toHaveBeenCalledTimes(1);
-  expect(run).toHaveBeenCalledWith("openai", "gpt-4.1-mini");
+  expect(run).toHaveBeenCalledWith("openai", "gpt-4.1-mini", {
+    allowTransientCooldownProbe: true,
+  });
+}
+
+async function expectProbeFailureFallsBack({
+  reason,
+  probeError,
+}: {
+  reason: "rate_limit" | "overloaded";
+  probeError: Error & { status: number };
+}) {
+  const cfg = makeCfg({
+    agents: {
+      defaults: {
+        model: {
+          primary: "openai/gpt-4.1-mini",
+          fallbacks: ["anthropic/claude-haiku-3-5", "google/gemini-2-flash"],
+        },
+      },
+    },
+  } as Partial<OpenClawConfig>);
+
+  mockedIsProfileInCooldown.mockReturnValue(true);
+  mockedGetSoonestCooldownExpiry.mockReturnValue(1_700_000_000_000 + 30 * 1000);
+  mockedResolveProfilesUnavailableReason.mockReturnValue(reason);
+
+  const run = vi.fn().mockRejectedValueOnce(probeError).mockResolvedValue("fallback-ok");
+
+  const result = await runWithModelFallback({
+    cfg,
+    provider: "openai",
+    model: "gpt-4.1-mini",
+    run,
+  });
+
+  expect(result.result).toBe("fallback-ok");
+  expect(run).toHaveBeenCalledTimes(2);
+  expect(run).toHaveBeenNthCalledWith(1, "openai", "gpt-4.1-mini", {
+    allowTransientCooldownProbe: true,
+  });
+  expect(run).toHaveBeenNthCalledWith(2, "anthropic", "claude-haiku-3-5", {
+    allowTransientCooldownProbe: true,
+  });
 }
 
 describe("runWithModelFallback – probe logic", () => {
@@ -163,44 +206,18 @@ describe("runWithModelFallback – probe logic", () => {
     expectPrimaryProbeSuccess(result, run, "recovered");
   });
 
-  it("does NOT probe non-primary candidates during cooldown", async () => {
-    const cfg = makeCfg({
-      agents: {
-        defaults: {
-          model: {
-            primary: "openai/gpt-4.1-mini",
-            fallbacks: ["anthropic/claude-haiku-3-5", "google/gemini-2-flash"],
-          },
-        },
-      },
-    } as Partial<OpenClawConfig>);
+  it("attempts non-primary fallbacks during rate-limit cooldown after primary probe failure", async () => {
+    await expectProbeFailureFallsBack({
+      reason: "rate_limit",
+      probeError: Object.assign(new Error("rate limited"), { status: 429 }),
+    });
+  });
 
-    // Override: ALL providers in cooldown for this test
-    mockedIsProfileInCooldown.mockReturnValue(true);
-
-    // All profiles in cooldown, cooldown just about to expire
-    const almostExpired = NOW + 30 * 1000; // 30s remaining
-    mockedGetSoonestCooldownExpiry.mockReturnValue(almostExpired);
-
-    // Primary probe fails with 429
-    const run = vi
-      .fn()
-      .mockRejectedValueOnce(Object.assign(new Error("rate limited"), { status: 429 }))
-      .mockResolvedValue("should-not-reach");
-
-    try {
-      await runWithModelFallback({
-        cfg,
-        provider: "openai",
-        model: "gpt-4.1-mini",
-        run,
-      });
-      expect.unreachable("should have thrown since all candidates exhausted");
-    } catch {
-      // Primary was probed (i === 0 + within margin), non-primary were skipped
-      expect(run).toHaveBeenCalledTimes(1); // only primary was actually called
-      expect(run).toHaveBeenCalledWith("openai", "gpt-4.1-mini");
-    }
+  it("attempts non-primary fallbacks during overloaded cooldown after primary probe failure", async () => {
+    await expectProbeFailureFallsBack({
+      reason: "overloaded",
+      probeError: Object.assign(new Error("service overloaded"), { status: 503 }),
+    });
   });
 
   it("throttles probe when called within 30s interval", async () => {
@@ -321,7 +338,73 @@ describe("runWithModelFallback – probe logic", () => {
       run,
     });
 
-    expect(run).toHaveBeenNthCalledWith(1, "openai", "gpt-4.1-mini");
-    expect(run).toHaveBeenNthCalledWith(2, "openai", "gpt-4.1-mini");
+    expect(run).toHaveBeenNthCalledWith(1, "openai", "gpt-4.1-mini", {
+      allowTransientCooldownProbe: true,
+    });
+    expect(run).toHaveBeenNthCalledWith(2, "openai", "gpt-4.1-mini", {
+      allowTransientCooldownProbe: true,
+    });
+  });
+
+  it("skips billing-cooldowned primary when no fallback candidates exist", async () => {
+    const cfg = makeCfg({
+      agents: {
+        defaults: {
+          model: {
+            primary: "openai/gpt-4.1-mini",
+            fallbacks: [],
+          },
+        },
+      },
+    } as Partial<OpenClawConfig>);
+
+    // Billing cooldown far from expiry — would normally be skipped
+    const expiresIn30Min = NOW + 30 * 60 * 1000;
+    mockedGetSoonestCooldownExpiry.mockReturnValue(expiresIn30Min);
+    mockedResolveProfilesUnavailableReason.mockReturnValue("billing");
+
+    await expect(
+      runWithModelFallback({
+        cfg,
+        provider: "openai",
+        model: "gpt-4.1-mini",
+        fallbacksOverride: [],
+        run: vi.fn().mockResolvedValue("billing-recovered"),
+      }),
+    ).rejects.toThrow("All models failed");
+  });
+
+  it("probes billing-cooldowned primary with fallbacks when near cooldown expiry", async () => {
+    const cfg = makeCfg();
+    // Cooldown expires in 1 minute — within 2-min probe margin
+    const expiresIn1Min = NOW + 60 * 1000;
+    mockedGetSoonestCooldownExpiry.mockReturnValue(expiresIn1Min);
+    mockedResolveProfilesUnavailableReason.mockReturnValue("billing");
+
+    const run = vi.fn().mockResolvedValue("billing-probe-ok");
+
+    const result = await runPrimaryCandidate(cfg, run);
+
+    expect(result.result).toBe("billing-probe-ok");
+    expect(run).toHaveBeenCalledTimes(1);
+    expect(run).toHaveBeenCalledWith("openai", "gpt-4.1-mini", {
+      allowTransientCooldownProbe: true,
+    });
+  });
+
+  it("skips billing-cooldowned primary with fallbacks when far from cooldown expiry", async () => {
+    const cfg = makeCfg();
+    const expiresIn30Min = NOW + 30 * 60 * 1000;
+    mockedGetSoonestCooldownExpiry.mockReturnValue(expiresIn30Min);
+    mockedResolveProfilesUnavailableReason.mockReturnValue("billing");
+
+    const run = vi.fn().mockResolvedValue("ok");
+
+    const result = await runPrimaryCandidate(cfg, run);
+
+    expect(result.result).toBe("ok");
+    expect(run).toHaveBeenCalledTimes(1);
+    expect(run).toHaveBeenCalledWith("anthropic", "claude-haiku-3-5");
+    expect(result.attempts[0]?.reason).toBe("billing");
   });
 });

@@ -4,9 +4,9 @@ export const ConnectErrorDetailCodes = {
   AUTH_TOKEN_MISSING: "AUTH_TOKEN_MISSING",
   AUTH_TOKEN_MISMATCH: "AUTH_TOKEN_MISMATCH",
   AUTH_TOKEN_NOT_CONFIGURED: "AUTH_TOKEN_NOT_CONFIGURED",
-  AUTH_PASSWORD_MISSING: "AUTH_PASSWORD_MISSING",
-  AUTH_PASSWORD_MISMATCH: "AUTH_PASSWORD_MISMATCH",
-  AUTH_PASSWORD_NOT_CONFIGURED: "AUTH_PASSWORD_NOT_CONFIGURED",
+  AUTH_PASSWORD_MISSING: "AUTH_PASSWORD_MISSING", // pragma: allowlist secret
+  AUTH_PASSWORD_MISMATCH: "AUTH_PASSWORD_MISMATCH", // pragma: allowlist secret
+  AUTH_PASSWORD_NOT_CONFIGURED: "AUTH_PASSWORD_NOT_CONFIGURED", // pragma: allowlist secret
   AUTH_DEVICE_TOKEN_MISMATCH: "AUTH_DEVICE_TOKEN_MISMATCH",
   AUTH_RATE_LIMITED: "AUTH_RATE_LIMITED",
   AUTH_TAILSCALE_IDENTITY_MISSING: "AUTH_TAILSCALE_IDENTITY_MISSING",
@@ -16,6 +16,12 @@ export const ConnectErrorDetailCodes = {
   CONTROL_UI_DEVICE_IDENTITY_REQUIRED: "CONTROL_UI_DEVICE_IDENTITY_REQUIRED",
   DEVICE_IDENTITY_REQUIRED: "DEVICE_IDENTITY_REQUIRED",
   DEVICE_AUTH_INVALID: "DEVICE_AUTH_INVALID",
+  DEVICE_AUTH_DEVICE_ID_MISMATCH: "DEVICE_AUTH_DEVICE_ID_MISMATCH",
+  DEVICE_AUTH_SIGNATURE_EXPIRED: "DEVICE_AUTH_SIGNATURE_EXPIRED",
+  DEVICE_AUTH_NONCE_REQUIRED: "DEVICE_AUTH_NONCE_REQUIRED",
+  DEVICE_AUTH_NONCE_MISMATCH: "DEVICE_AUTH_NONCE_MISMATCH",
+  DEVICE_AUTH_SIGNATURE_INVALID: "DEVICE_AUTH_SIGNATURE_INVALID",
+  DEVICE_AUTH_PUBLIC_KEY_INVALID: "DEVICE_AUTH_PUBLIC_KEY_INVALID",
   PAIRING_REQUIRED: "PAIRING_REQUIRED",
 } as const;
 
@@ -54,6 +60,27 @@ export function resolveAuthConnectErrorDetailCode(
       return ConnectErrorDetailCodes.AUTH_REQUIRED;
     default:
       return ConnectErrorDetailCodes.AUTH_UNAUTHORIZED;
+  }
+}
+
+export function resolveDeviceAuthConnectErrorDetailCode(
+  reason: string | undefined,
+): ConnectErrorDetailCode {
+  switch (reason) {
+    case "device-id-mismatch":
+      return ConnectErrorDetailCodes.DEVICE_AUTH_DEVICE_ID_MISMATCH;
+    case "device-signature-stale":
+      return ConnectErrorDetailCodes.DEVICE_AUTH_SIGNATURE_EXPIRED;
+    case "device-nonce-missing":
+      return ConnectErrorDetailCodes.DEVICE_AUTH_NONCE_REQUIRED;
+    case "device-nonce-mismatch":
+      return ConnectErrorDetailCodes.DEVICE_AUTH_NONCE_MISMATCH;
+    case "device-signature":
+      return ConnectErrorDetailCodes.DEVICE_AUTH_SIGNATURE_INVALID;
+    case "device-public-key":
+      return ConnectErrorDetailCodes.DEVICE_AUTH_PUBLIC_KEY_INVALID;
+    default:
+      return ConnectErrorDetailCodes.DEVICE_AUTH_INVALID;
   }
 }
 

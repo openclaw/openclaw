@@ -1,14 +1,20 @@
-import fs from "node:fs/promises";
-import path from "node:path";
-import { isNotFoundPathError, isPathInside } from "../../infra/path-guards.js";
+import fs from "node:fs";
 import { execDockerRaw, type ExecDockerRawResult } from "./docker.js";
+import { SandboxFsPathGuard } from "./fs-bridge-path-safety.js";
+import {
+  buildMkdirpPlan,
+  buildRemovePlan,
+  buildRenamePlan,
+  buildStatPlan,
+  buildWriteCommitPlan,
+  type SandboxFsCommandPlan,
+} from "./fs-bridge-shell-command-plans.js";
 import {
   buildSandboxFsMounts,
   resolveSandboxFsPathWithMounts,
   type SandboxResolvedFsPath,
-  type SandboxFsMount,
 } from "./fs-paths.js";
-import { isPathInsideContainerRoot, normalizeContainerPath } from "./path-utils.js";
+import { normalizeContainerPath } from "./path-utils.js";
 import type { SandboxContext, SandboxWorkspaceAccess } from "./types.js";
 
 type RunCommandOptions = {
@@ -16,12 +22,6 @@ type RunCommandOptions = {
   stdin?: Buffer | string;
   allowFailure?: boolean;
   signal?: AbortSignal;
-};
-
-type PathSafetyOptions = {
-  action: string;
-  allowFinalSymlink?: boolean;
-  requireWritable?: boolean;
 };
 
 export type SandboxResolvedPath = {
@@ -70,14 +70,18 @@ export function createSandboxFsBridge(params: { sandbox: SandboxContext }): Sand
 class SandboxFsBridgeImpl implements SandboxFsBridge {
   private readonly sandbox: SandboxContext;
   private readonly mounts: ReturnType<typeof buildSandboxFsMounts>;
-  private readonly mountsByContainer: ReturnType<typeof buildSandboxFsMounts>;
+  private readonly pathGuard: SandboxFsPathGuard;
 
   constructor(sandbox: SandboxContext) {
     this.sandbox = sandbox;
     this.mounts = buildSandboxFsMounts(sandbox);
-    this.mountsByContainer = [...this.mounts].toSorted(
+    const mountsByContainer = [...this.mounts].toSorted(
       (a, b) => b.containerRoot.length - a.containerRoot.length,
     );
+    this.pathGuard = new SandboxFsPathGuard({
+      mountsByContainer,
+      runCommand: (script, options) => this.runCommand(script, options),
+    });
   }
 
   resolvePath(params: { filePath: string; cwd?: string }): SandboxResolvedPath {
@@ -95,12 +99,7 @@ class SandboxFsBridgeImpl implements SandboxFsBridge {
     signal?: AbortSignal;
   }): Promise<Buffer> {
     const target = this.resolveResolvedPath(params);
-    await this.assertPathSafety(target, { action: "read files" });
-    const result = await this.runCommand('set -eu; cat -- "$1"', {
-      args: [target.containerPath],
-      signal: params.signal,
-    });
-    return result.stdout;
+    return this.readPinnedFile(target);
   }
 
   async writeFile(params: {
@@ -113,29 +112,33 @@ class SandboxFsBridgeImpl implements SandboxFsBridge {
   }): Promise<void> {
     const target = this.resolveResolvedPath(params);
     this.ensureWriteAccess(target, "write files");
-    await this.assertPathSafety(target, { action: "write files", requireWritable: true });
+    await this.pathGuard.assertPathSafety(target, { action: "write files", requireWritable: true });
     const buffer = Buffer.isBuffer(params.data)
       ? params.data
       : Buffer.from(params.data, params.encoding ?? "utf8");
-    const script =
-      params.mkdir === false
-        ? 'set -eu; cat >"$1"'
-        : 'set -eu; dir=$(dirname -- "$1"); if [ "$dir" != "." ]; then mkdir -p -- "$dir"; fi; cat >"$1"';
-    await this.runCommand(script, {
-      args: [target.containerPath],
-      stdin: buffer,
+    const tempPath = await this.writeFileToTempPath({
+      targetContainerPath: target.containerPath,
+      mkdir: params.mkdir !== false,
+      data: buffer,
       signal: params.signal,
     });
+
+    try {
+      await this.runCheckedCommand({
+        ...buildWriteCommitPlan(target, tempPath),
+        signal: params.signal,
+      });
+    } catch (error) {
+      await this.cleanupTempPath(tempPath, params.signal);
+      throw error;
+    }
   }
 
   async mkdirp(params: { filePath: string; cwd?: string; signal?: AbortSignal }): Promise<void> {
     const target = this.resolveResolvedPath(params);
     this.ensureWriteAccess(target, "create directories");
-    await this.assertPathSafety(target, { action: "create directories", requireWritable: true });
-    await this.runCommand('set -eu; mkdir -p -- "$1"', {
-      args: [target.containerPath],
-      signal: params.signal,
-    });
+    const anchoredTarget = await this.pathGuard.resolveAnchoredSandboxEntry(target);
+    await this.runPlannedCommand(buildMkdirpPlan(target, anchoredTarget), params.signal);
   }
 
   async remove(params: {
@@ -147,19 +150,16 @@ class SandboxFsBridgeImpl implements SandboxFsBridge {
   }): Promise<void> {
     const target = this.resolveResolvedPath(params);
     this.ensureWriteAccess(target, "remove files");
-    await this.assertPathSafety(target, {
-      action: "remove files",
-      requireWritable: true,
-      allowFinalSymlink: true,
-    });
-    const flags = [params.force === false ? "" : "-f", params.recursive ? "-r" : ""].filter(
-      Boolean,
+    const anchoredTarget = await this.pathGuard.resolveAnchoredSandboxEntry(target);
+    await this.runPlannedCommand(
+      buildRemovePlan({
+        target,
+        anchoredTarget,
+        recursive: params.recursive,
+        force: params.force,
+      }),
+      params.signal,
     );
-    const rmCommand = flags.length > 0 ? `rm ${flags.join(" ")}` : "rm";
-    await this.runCommand(`set -eu; ${rmCommand} -- "$1"`, {
-      args: [target.containerPath],
-      signal: params.signal,
-    });
   }
 
   async rename(params: {
@@ -172,21 +172,16 @@ class SandboxFsBridgeImpl implements SandboxFsBridge {
     const to = this.resolveResolvedPath({ filePath: params.to, cwd: params.cwd });
     this.ensureWriteAccess(from, "rename files");
     this.ensureWriteAccess(to, "rename files");
-    await this.assertPathSafety(from, {
-      action: "rename files",
-      requireWritable: true,
-      allowFinalSymlink: true,
-    });
-    await this.assertPathSafety(to, {
-      action: "rename files",
-      requireWritable: true,
-    });
-    await this.runCommand(
-      'set -eu; dir=$(dirname -- "$2"); if [ "$dir" != "." ]; then mkdir -p -- "$dir"; fi; mv -- "$1" "$2"',
-      {
-        args: [from.containerPath, to.containerPath],
-        signal: params.signal,
-      },
+    const anchoredFrom = await this.pathGuard.resolveAnchoredSandboxEntry(from);
+    const anchoredTo = await this.pathGuard.resolveAnchoredSandboxEntry(to);
+    await this.runPlannedCommand(
+      buildRenamePlan({
+        from,
+        to,
+        anchoredFrom,
+        anchoredTo,
+      }),
+      params.signal,
     );
   }
 
@@ -196,12 +191,7 @@ class SandboxFsBridgeImpl implements SandboxFsBridge {
     signal?: AbortSignal;
   }): Promise<SandboxFsStat | null> {
     const target = this.resolveResolvedPath(params);
-    await this.assertPathSafety(target, { action: "stat files" });
-    const result = await this.runCommand('set -eu; stat -c "%F|%s|%Y" -- "$1"', {
-      args: [target.containerPath],
-      signal: params.signal,
-      allowFailure: true,
-    });
+    const result = await this.runPlannedCommand(buildStatPlan(target), params.signal);
     if (result.code !== 0) {
       const stderr = result.stderr.toString("utf8");
       if (stderr.includes("No such file or directory")) {
@@ -244,77 +234,87 @@ class SandboxFsBridgeImpl implements SandboxFsBridge {
     });
   }
 
-  private async assertPathSafety(target: SandboxResolvedFsPath, options: PathSafetyOptions) {
-    const lexicalMount = this.resolveMountByContainerPath(target.containerPath);
-    if (!lexicalMount) {
-      throw new Error(
-        `Sandbox path escapes allowed mounts; cannot ${options.action}: ${target.containerPath}`,
-      );
-    }
-
-    await assertNoHostSymlinkEscape({
-      absolutePath: target.hostPath,
-      rootPath: lexicalMount.hostRoot,
-      allowFinalSymlink: options.allowFinalSymlink === true,
-    });
-
-    const canonicalContainerPath = await this.resolveCanonicalContainerPath({
-      containerPath: target.containerPath,
-      allowFinalSymlink: options.allowFinalSymlink === true,
-    });
-    const canonicalMount = this.resolveMountByContainerPath(canonicalContainerPath);
-    if (!canonicalMount) {
-      throw new Error(
-        `Sandbox path escapes allowed mounts; cannot ${options.action}: ${target.containerPath}`,
-      );
-    }
-    if (options.requireWritable && !canonicalMount.writable) {
-      throw new Error(
-        `Sandbox path is read-only; cannot ${options.action}: ${target.containerPath}`,
-      );
+  private async readPinnedFile(target: SandboxResolvedFsPath): Promise<Buffer> {
+    const opened = await this.pathGuard.openReadableFile(target);
+    try {
+      return fs.readFileSync(opened.fd);
+    } finally {
+      fs.closeSync(opened.fd);
     }
   }
 
-  private resolveMountByContainerPath(containerPath: string): SandboxFsMount | null {
-    const normalized = normalizeContainerPath(containerPath);
-    for (const mount of this.mountsByContainer) {
-      if (isPathInsideContainerRoot(normalizeContainerPath(mount.containerRoot), normalized)) {
-        return mount;
-      }
+  private async runCheckedCommand(
+    plan: SandboxFsCommandPlan & { stdin?: Buffer | string; signal?: AbortSignal },
+  ): Promise<ExecDockerRawResult> {
+    await this.pathGuard.assertPathChecks(plan.checks);
+    if (plan.recheckBeforeCommand) {
+      await this.pathGuard.assertPathChecks(plan.checks);
     }
-    return null;
+    return await this.runCommand(plan.script, {
+      args: plan.args,
+      stdin: plan.stdin,
+      allowFailure: plan.allowFailure,
+      signal: plan.signal,
+    });
   }
 
-  private async resolveCanonicalContainerPath(params: {
-    containerPath: string;
-    allowFinalSymlink: boolean;
+  private async runPlannedCommand(
+    plan: SandboxFsCommandPlan,
+    signal?: AbortSignal,
+  ): Promise<ExecDockerRawResult> {
+    return await this.runCheckedCommand({ ...plan, signal });
+  }
+
+  private async writeFileToTempPath(params: {
+    targetContainerPath: string;
+    mkdir: boolean;
+    data: Buffer;
+    signal?: AbortSignal;
   }): Promise<string> {
-    const script = [
-      "set -eu",
-      'target="$1"',
-      'allow_final="$2"',
-      'suffix=""',
-      'probe="$target"',
-      'if [ "$allow_final" = "1" ] && [ -L "$target" ]; then probe=$(dirname -- "$target"); fi',
-      'cursor="$probe"',
-      'while [ ! -e "$cursor" ] && [ ! -L "$cursor" ]; do',
-      '  parent=$(dirname -- "$cursor")',
-      '  if [ "$parent" = "$cursor" ]; then break; fi',
-      '  base=$(basename -- "$cursor")',
-      '  suffix="/$base$suffix"',
-      '  cursor="$parent"',
-      "done",
-      'canonical=$(readlink -f -- "$cursor")',
-      'printf "%s%s\\n" "$canonical" "$suffix"',
-    ].join("\n");
+    const script = params.mkdir
+      ? [
+          "set -eu",
+          'target="$1"',
+          'dir=$(dirname -- "$target")',
+          'if [ "$dir" != "." ]; then mkdir -p -- "$dir"; fi',
+          'base=$(basename -- "$target")',
+          'tmp=$(mktemp "$dir/.openclaw-write-$base.XXXXXX")',
+          'cat >"$tmp"',
+          'printf "%s\\n" "$tmp"',
+        ].join("\n")
+      : [
+          "set -eu",
+          'target="$1"',
+          'dir=$(dirname -- "$target")',
+          'base=$(basename -- "$target")',
+          'tmp=$(mktemp "$dir/.openclaw-write-$base.XXXXXX")',
+          'cat >"$tmp"',
+          'printf "%s\\n" "$tmp"',
+        ].join("\n");
     const result = await this.runCommand(script, {
-      args: [params.containerPath, params.allowFinalSymlink ? "1" : "0"],
+      args: [params.targetContainerPath],
+      stdin: params.data,
+      signal: params.signal,
     });
-    const canonical = result.stdout.toString("utf8").trim();
-    if (!canonical.startsWith("/")) {
-      throw new Error(`Failed to resolve canonical sandbox path: ${params.containerPath}`);
+    const tempPath = result.stdout.toString("utf8").trim().split(/\r?\n/).at(-1)?.trim();
+    if (!tempPath || !tempPath.startsWith("/")) {
+      throw new Error(
+        `Failed to create temporary sandbox write path for ${params.targetContainerPath}`,
+      );
     }
-    return normalizeContainerPath(canonical);
+    return normalizeContainerPath(tempPath);
+  }
+
+  private async cleanupTempPath(tempPath: string, signal?: AbortSignal): Promise<void> {
+    try {
+      await this.runCommand('set -eu; rm -f -- "$1"', {
+        args: [tempPath],
+        signal,
+        allowFailure: true,
+      });
+    } catch {
+      // Best-effort cleanup only.
+    }
   }
 
   private ensureWriteAccess(target: SandboxResolvedFsPath, action: string) {
@@ -350,54 +350,4 @@ function coerceStatType(typeRaw?: string): "file" | "directory" | "other" {
     return "file";
   }
   return "other";
-}
-
-async function assertNoHostSymlinkEscape(params: {
-  absolutePath: string;
-  rootPath: string;
-  allowFinalSymlink: boolean;
-}): Promise<void> {
-  const root = path.resolve(params.rootPath);
-  const target = path.resolve(params.absolutePath);
-  if (!isPathInside(root, target)) {
-    throw new Error(`Sandbox path escapes mount root (${root}): ${params.absolutePath}`);
-  }
-  const relative = path.relative(root, target);
-  if (!relative) {
-    return;
-  }
-  const rootReal = await tryRealpath(root);
-  const parts = relative.split(path.sep).filter(Boolean);
-  let current = root;
-  for (let idx = 0; idx < parts.length; idx += 1) {
-    current = path.join(current, parts[idx] ?? "");
-    const isLast = idx === parts.length - 1;
-    try {
-      const stat = await fs.lstat(current);
-      if (!stat.isSymbolicLink()) {
-        continue;
-      }
-      if (params.allowFinalSymlink && isLast) {
-        return;
-      }
-      const symlinkTarget = await tryRealpath(current);
-      if (!isPathInside(rootReal, symlinkTarget)) {
-        throw new Error(`Symlink escapes sandbox mount root (${rootReal}): ${current}`);
-      }
-      current = symlinkTarget;
-    } catch (error) {
-      if (isNotFoundPathError(error)) {
-        return;
-      }
-      throw error;
-    }
-  }
-}
-
-async function tryRealpath(value: string): Promise<string> {
-  try {
-    return await fs.realpath(value);
-  } catch {
-    return path.resolve(value);
-  }
 }

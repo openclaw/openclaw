@@ -1,3 +1,4 @@
+import { getAcpSessionManager } from "../../acp/control-plane/manager.js";
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { abortEmbeddedPiRun } from "../../agents/pi-embedded.js";
 import {
@@ -11,6 +12,7 @@ import {
 import type { OpenClawConfig } from "../../config/config.js";
 import {
   loadSessionStore,
+  resolveSessionStoreEntry,
   resolveStorePath,
   type SessionEntry,
   updateSessionStore,
@@ -20,8 +22,15 @@ import { parseAgentSessionKey } from "../../routing/session-key.js";
 import { resolveCommandAuthorization } from "../command-auth.js";
 import { normalizeCommandBody, type CommandNormalizeOptions } from "../commands-registry.js";
 import type { FinalizedMsgContext, MsgContext } from "../templating.js";
+import {
+  applyAbortCutoffToSessionEntry,
+  resolveAbortCutoffFromContext,
+  shouldPersistAbortCutoff,
+} from "./abort-cutoff.js";
 import { stripMentions, stripStructuralPrefixes } from "./mentions.js";
 import { clearSessionQueues } from "./queue.js";
+
+export { resolveAbortCutoffFromContext, shouldSkipMessageByAbortCutoff } from "./abort-cutoff.js";
 
 const ABORT_TRIGGERS = new Set([
   "stop",
@@ -164,13 +173,22 @@ export function formatAbortReplyText(stoppedSubagents?: number): string {
 export function resolveSessionEntryForKey(
   store: Record<string, SessionEntry> | undefined,
   sessionKey: string | undefined,
-) {
+): { entry?: SessionEntry; key?: string; legacyKeys?: string[] } {
   if (!store || !sessionKey) {
     return {};
   }
-  const direct = store[sessionKey];
-  if (direct) {
-    return { entry: direct, key: sessionKey };
+  const resolved = resolveSessionStoreEntry({ store, sessionKey });
+  if (resolved.existing) {
+    return resolved.legacyKeys.length > 0
+      ? {
+          entry: resolved.existing,
+          key: resolved.normalizedKey,
+          legacyKeys: resolved.legacyKeys,
+        }
+      : {
+          entry: resolved.existing,
+          key: resolved.normalizedKey,
+        };
   }
   return {};
 }
@@ -293,27 +311,64 @@ export async function tryFastAbortFromMessage(params: {
   if (targetKey) {
     const storePath = resolveStorePath(cfg.session?.store, { agentId });
     const store = loadSessionStore(storePath);
-    const { entry, key } = resolveSessionEntryForKey(store, targetKey);
+    const { entry, key, legacyKeys } = resolveSessionEntryForKey(store, targetKey);
+    const resolvedTargetKey = key ?? targetKey;
+    const acpManager = getAcpSessionManager();
+    const acpResolution = acpManager.resolveSession({
+      cfg,
+      sessionKey: resolvedTargetKey,
+    });
+    if (acpResolution.kind !== "none") {
+      try {
+        await acpManager.cancelSession({
+          cfg,
+          sessionKey: resolvedTargetKey,
+          reason: "fast-abort",
+        });
+      } catch (error) {
+        logVerbose(
+          `abort: ACP cancel failed for ${resolvedTargetKey}: ${error instanceof Error ? error.message : String(error)}`,
+        );
+      }
+    }
     const sessionId = entry?.sessionId;
     const aborted = sessionId ? abortEmbeddedPiRun(sessionId) : false;
-    const cleared = clearSessionQueues([key ?? targetKey, sessionId]);
+    const cleared = clearSessionQueues([resolvedTargetKey, sessionId]);
     if (cleared.followupCleared > 0 || cleared.laneCleared > 0) {
       logVerbose(
         `abort: cleared followups=${cleared.followupCleared} lane=${cleared.laneCleared} keys=${cleared.keys.join(",")}`,
       );
     }
+    const abortCutoff = shouldPersistAbortCutoff({
+      commandSessionKey: ctx.SessionKey,
+      targetSessionKey: resolvedTargetKey,
+    })
+      ? resolveAbortCutoffFromContext(ctx)
+      : undefined;
     if (entry && key) {
       entry.abortedLastRun = true;
+      applyAbortCutoffToSessionEntry(entry, abortCutoff);
       entry.updatedAt = Date.now();
       store[key] = entry;
+      for (const legacyKey of legacyKeys ?? []) {
+        if (legacyKey !== key) {
+          delete store[legacyKey];
+        }
+      }
       await updateSessionStore(storePath, (nextStore) => {
         const nextEntry = nextStore[key] ?? entry;
         if (!nextEntry) {
           return;
         }
         nextEntry.abortedLastRun = true;
+        applyAbortCutoffToSessionEntry(nextEntry, abortCutoff);
         nextEntry.updatedAt = Date.now();
         nextStore[key] = nextEntry;
+        for (const legacyKey of legacyKeys ?? []) {
+          if (legacyKey !== key) {
+            delete nextStore[legacyKey];
+          }
+        }
       });
     } else if (abortKey) {
       setAbortMemory(abortKey, true);

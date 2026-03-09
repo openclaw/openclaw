@@ -646,8 +646,12 @@ export function parseDiscordModalCustomId(id: string): string | null {
   return modalId;
 }
 
+function isDiscordComponentWildcardRegistrationId(id: string): boolean {
+  return /^__openclaw_discord_component_[a-z_]+_wildcard__$/.test(id);
+}
+
 export function parseDiscordComponentCustomIdForCarbon(id: string): ComponentParserResult {
-  if (id === "*") {
+  if (id === "*" || isDiscordComponentWildcardRegistrationId(id)) {
     return { key: "*", data: {} };
   }
   const parsed = parseCustomId(id);
@@ -658,7 +662,7 @@ export function parseDiscordComponentCustomIdForCarbon(id: string): ComponentPar
 }
 
 export function parseDiscordModalCustomIdForCarbon(id: string): ComponentParserResult {
-  if (id === "*") {
+  if (id === "*" || isDiscordComponentWildcardRegistrationId(id)) {
     return { key: "*", data: {} };
   }
   const parsed = parseCustomId(id);

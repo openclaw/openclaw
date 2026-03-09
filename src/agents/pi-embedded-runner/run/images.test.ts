@@ -63,7 +63,6 @@ describe("detectImageReferences", () => {
 
     expect(refs).toHaveLength(1);
     expect(refs.some((r) => r.type === "path")).toBe(true);
-    expect(refs.some((r) => r.type === "url")).toBe(false);
   });
 
   it("handles various image extensions", () => {
@@ -81,6 +80,17 @@ describe("detectImageReferences", () => {
     const refs = detectImageReferences(prompt);
 
     expect(refs).toHaveLength(1);
+  });
+
+  it("dedupe casing follows host filesystem conventions", () => {
+    const prompt = "Look at /tmp/Image.png and /tmp/image.png";
+    const refs = detectImageReferences(prompt);
+
+    if (process.platform === "win32") {
+      expect(refs).toHaveLength(1);
+      return;
+    }
+    expect(refs).toHaveLength(2);
   });
 
   it("returns empty array when no images found", () => {
@@ -256,25 +266,15 @@ describe("detectAndLoadPromptImages", () => {
     expect(result.detectedRefs).toHaveLength(0);
   });
 
-  it("skips history messages that already include image content", async () => {
+  it("returns no detected refs when prompt has no image references", async () => {
     const result = await detectAndLoadPromptImages({
       prompt: "no images here",
       workspaceDir: "/tmp",
       model: { input: ["text", "image"] },
-      historyMessages: [
-        {
-          role: "user",
-          content: [
-            { type: "text", text: "See /tmp/should-not-load.png" },
-            { type: "image", data: "abc", mimeType: "image/png" },
-          ],
-        },
-      ],
     });
 
     expect(result.detectedRefs).toHaveLength(0);
     expect(result.images).toHaveLength(0);
-    expect(result.historyImagesByIndex.size).toBe(0);
   });
 
   it("blocks prompt image refs outside workspace when sandbox workspaceOnly is enabled", async () => {
@@ -305,45 +305,6 @@ describe("detectAndLoadPromptImages", () => {
       expect(result.loadedCount).toBe(0);
       expect(result.skippedCount).toBe(1);
       expect(result.images).toHaveLength(0);
-    } finally {
-      await fs.rm(stateDir, { recursive: true, force: true });
-    }
-  });
-
-  it("blocks history image refs outside workspace when sandbox workspaceOnly is enabled", async () => {
-    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-native-image-sandbox-"));
-    const sandboxRoot = path.join(stateDir, "sandbox");
-    const agentRoot = path.join(stateDir, "agent");
-    await fs.mkdir(sandboxRoot, { recursive: true });
-    await fs.mkdir(agentRoot, { recursive: true });
-    const pngB64 =
-      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/woAAn8B9FD5fHAAAAAASUVORK5CYII=";
-    await fs.writeFile(path.join(agentRoot, "secret.png"), Buffer.from(pngB64, "base64"));
-    const sandbox = createUnsafeMountedSandbox({ sandboxRoot, agentRoot });
-    const bridge = sandbox.fsBridge;
-    if (!bridge) {
-      throw new Error("sandbox fs bridge missing");
-    }
-
-    try {
-      const result = await detectAndLoadPromptImages({
-        prompt: "No inline image in this turn.",
-        workspaceDir: sandboxRoot,
-        model: { input: ["text", "image"] },
-        workspaceOnly: true,
-        historyMessages: [
-          {
-            role: "user",
-            content: [{ type: "text", text: "Previous image /agent/secret.png" }],
-          },
-        ],
-        sandbox: { root: sandbox.workspaceDir, bridge },
-      });
-
-      expect(result.detectedRefs).toHaveLength(1);
-      expect(result.loadedCount).toBe(0);
-      expect(result.skippedCount).toBe(1);
-      expect(result.historyImagesByIndex.size).toBe(0);
     } finally {
       await fs.rm(stateDir, { recursive: true, force: true });
     }

@@ -1,8 +1,8 @@
-import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { resolveStateDir } from "../config/paths.js";
+import { writeJsonAtomic } from "../infra/json-files.js";
 
 const STORE_VERSION = 2;
 
@@ -11,6 +11,10 @@ type TelegramUpdateOffsetState = {
   lastUpdateId: number | null;
   botId: string | null;
 };
+
+function isValidUpdateId(value: unknown): value is number {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
+}
 
 function normalizeAccountId(accountId?: string) {
   const trimmed = accountId?.trim();
@@ -51,7 +55,7 @@ function safeParseState(raw: string): TelegramUpdateOffsetState | null {
     if (parsed?.version !== STORE_VERSION && parsed?.version !== 1) {
       return null;
     }
-    if (parsed.lastUpdateId !== null && typeof parsed.lastUpdateId !== "number") {
+    if (parsed.lastUpdateId !== null && !isValidUpdateId(parsed.lastUpdateId)) {
       return null;
     }
     if (
@@ -103,20 +107,20 @@ export async function writeTelegramUpdateOffset(params: {
   botToken?: string;
   env?: NodeJS.ProcessEnv;
 }): Promise<void> {
+  if (!isValidUpdateId(params.updateId)) {
+    throw new Error("Telegram update offset must be a non-negative safe integer.");
+  }
   const filePath = resolveTelegramUpdateOffsetPath(params.accountId, params.env);
-  const dir = path.dirname(filePath);
-  await fs.mkdir(dir, { recursive: true, mode: 0o700 });
-  const tmp = path.join(dir, `${path.basename(filePath)}.${crypto.randomUUID()}.tmp`);
   const payload: TelegramUpdateOffsetState = {
     version: STORE_VERSION,
     lastUpdateId: params.updateId,
     botId: extractBotIdFromToken(params.botToken),
   };
-  await fs.writeFile(tmp, `${JSON.stringify(payload, null, 2)}\n`, {
-    encoding: "utf-8",
+  await writeJsonAtomic(filePath, payload, {
+    mode: 0o600,
+    trailingNewline: true,
+    ensureDirMode: 0o700,
   });
-  await fs.chmod(tmp, 0o600);
-  await fs.rename(tmp, filePath);
 }
 
 export async function deleteTelegramUpdateOffset(params: {

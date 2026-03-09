@@ -114,6 +114,38 @@ describe("markAuthProfileFailure", () => {
       expect(reloaded.usageStats?.["anthropic:default"]?.cooldownUntil).toBe(firstCooldownUntil);
     });
   });
+  it("records overloaded failures in the cooldown bucket", async () => {
+    await withAuthProfileStore(async ({ agentDir, store }) => {
+      await markAuthProfileFailure({
+        store,
+        profileId: "anthropic:default",
+        reason: "overloaded",
+        agentDir,
+      });
+
+      const stats = store.usageStats?.["anthropic:default"];
+      expect(typeof stats?.cooldownUntil).toBe("number");
+      expect(stats?.disabledUntil).toBeUndefined();
+      expect(stats?.disabledReason).toBeUndefined();
+      expect(stats?.failureCounts?.overloaded).toBe(1);
+    });
+  });
+  it("disables auth_permanent failures via disabledUntil (like billing)", async () => {
+    await withAuthProfileStore(async ({ agentDir, store }) => {
+      await markAuthProfileFailure({
+        store,
+        profileId: "anthropic:default",
+        reason: "auth_permanent",
+        agentDir,
+      });
+
+      const stats = store.usageStats?.["anthropic:default"];
+      expect(typeof stats?.disabledUntil).toBe("number");
+      expect(stats?.disabledReason).toBe("auth_permanent");
+      // Should NOT set cooldownUntil (that's for transient errors)
+      expect(stats?.cooldownUntil).toBeUndefined();
+    });
+  });
   it("resets backoff counters outside the failure window", async () => {
     const agentDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-auth-"));
     try {

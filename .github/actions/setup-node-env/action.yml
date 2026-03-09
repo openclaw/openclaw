@@ -1,7 +1,7 @@
 name: Setup Node environment
 description: >
   Initialize submodules with retry, install Node 22, pnpm, optionally Bun,
-  and run pnpm install. Requires actions/checkout to run first.
+  and optionally run pnpm install. Requires actions/checkout to run first.
 inputs:
   node-version:
     description: Node.js version to install.
@@ -13,6 +13,14 @@ inputs:
     default: "10.23.0"
   install-bun:
     description: Whether to install Bun alongside Node.
+    required: false
+    default: "true"
+  use-sticky-disk:
+    description: Use Blacksmith sticky disks for pnpm store caching.
+    required: false
+    default: "false"
+  install-deps:
+    description: Whether to run pnpm install after environment setup.
     required: false
     default: "true"
   frozen-lockfile:
@@ -40,19 +48,20 @@ runs:
       uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
       with:
         node-version: ${{ inputs.node-version }}
-        check-latest: true
+        check-latest: false
 
     - name: Setup pnpm + cache store
       uses: ./.github/actions/setup-pnpm-store-cache
       with:
         pnpm-version: ${{ inputs.pnpm-version }}
         cache-key-suffix: "node22"
+        use-sticky-disk: ${{ inputs.use-sticky-disk }}
 
     - name: Setup Bun
       if: inputs.install-bun == 'true'
       uses: oven-sh/setup-bun@v2
       with:
-        bun-version: "1.3.9+cf6cdbbba"
+        bun-version: "1.3.9"
 
     - name: Runtime versions
       shell: bash
@@ -63,10 +72,12 @@ runs:
         if command -v bun &>/dev/null; then bun -v; fi
 
     - name: Capture node path
+      if: inputs.install-deps == 'true'
       shell: bash
       run: echo "NODE_BIN=$(dirname "$(node -p "process.execPath")")" >> "$GITHUB_ENV"
 
     - name: Install dependencies
+      if: inputs.install-deps == 'true'
       shell: bash
       env:
         CI: "true"

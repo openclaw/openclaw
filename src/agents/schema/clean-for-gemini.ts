@@ -304,14 +304,20 @@ function cleanSchemaForGeminiWithDefs(
       continue;
     }
 
-    if (key === "properties" && value && typeof value === "object") {
-      const props = value as Record<string, unknown>;
-      cleaned[key] = Object.fromEntries(
-        Object.entries(props).map(([k, v]) => [
-          k,
-          cleanSchemaForGeminiWithDefs(v, nextDefs, refStack),
-        ]),
-      );
+    if (key === "properties") {
+      if (value && typeof value === "object" && !Array.isArray(value)) {
+        const props = value as Record<string, unknown>;
+        cleaned[key] = Object.fromEntries(
+          Object.entries(props).map(([k, v]) => [
+            k,
+            cleanSchemaForGeminiWithDefs(v, nextDefs, refStack),
+          ]),
+        );
+      } else {
+        // Guard malformed schemas (e.g. properties: null) that can trigger
+        // downstream Object.* crashes in strict provider validators.
+        cleaned[key] = {};
+      }
     } else if (key === "items" && value) {
       if (Array.isArray(value)) {
         cleaned[key] = value.map((entry) =>

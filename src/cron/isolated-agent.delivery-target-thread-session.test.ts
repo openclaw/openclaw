@@ -110,6 +110,27 @@ describe("resolveDeliveryTarget thread session lookup", () => {
     expect(result.channel).toBe("telegram");
   });
 
+  it("explicit accountId overrides session lastAccountId", async () => {
+    mockStore["/mock/store.json"] = {
+      "agent:main:main": {
+        sessionId: "s1",
+        updatedAt: 1,
+        lastChannel: "telegram",
+        lastTo: "-100444",
+        lastAccountId: "session-account",
+      },
+    };
+
+    const result = await resolveDeliveryTarget(cfg, "main", {
+      channel: "telegram",
+      to: "-100444",
+      accountId: "explicit-account",
+    });
+
+    expect(result.accountId).toBe("explicit-account");
+    expect(result.to).toBe("-100444");
+  });
+
   it("preserves threadId from :topic: when lastTo differs", async () => {
     mockStore["/mock/store.json"] = {
       "agent:main:main": {

@@ -58,3 +58,57 @@ describe("describeIMessageEchoDropLog", () => {
     ).toContain("id=abc-123");
   });
 });
+
+describe("resolveIMessageInboundDecision command auth", () => {
+  const cfg = {} as OpenClawConfig;
+  const resolveDmCommandDecision = (params: { messageId: number; storeAllowFrom: string[] }) =>
+    resolveIMessageInboundDecision({
+      cfg,
+      accountId: "default",
+      message: {
+        id: params.messageId,
+        sender: "+15555550123",
+        text: "/status",
+        is_from_me: false,
+        is_group: false,
+      },
+      opts: undefined,
+      messageText: "/status",
+      bodyText: "/status",
+      allowFrom: [],
+      groupAllowFrom: [],
+      groupPolicy: "open",
+      dmPolicy: "open",
+      storeAllowFrom: params.storeAllowFrom,
+      historyLimit: 0,
+      groupHistories: new Map(),
+      echoCache: undefined,
+      logVerbose: undefined,
+    });
+
+  it("does not auto-authorize DM commands in open mode without allowlists", () => {
+    const decision = resolveDmCommandDecision({
+      messageId: 100,
+      storeAllowFrom: [],
+    });
+
+    expect(decision.kind).toBe("dispatch");
+    if (decision.kind !== "dispatch") {
+      return;
+    }
+    expect(decision.commandAuthorized).toBe(false);
+  });
+
+  it("authorizes DM commands for senders in pairing-store allowlist", () => {
+    const decision = resolveDmCommandDecision({
+      messageId: 101,
+      storeAllowFrom: ["+15555550123"],
+    });
+
+    expect(decision.kind).toBe("dispatch");
+    if (decision.kind !== "dispatch") {
+      return;
+    }
+    expect(decision.commandAuthorized).toBe(true);
+  });
+});

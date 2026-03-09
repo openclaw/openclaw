@@ -2,6 +2,7 @@ import { completeSimple, getModel } from "@mariozechner/pi-ai";
 import { Type } from "@sinclair/typebox";
 import { describe, expect, it } from "vitest";
 import { isTruthyEnvValue } from "../infra/env.js";
+import { makeZeroUsageSnapshot } from "./usage.js";
 
 const GEMINI_KEY = process.env.GEMINI_API_KEY ?? "";
 const LIVE = isTruthyEnvValue(process.env.GEMINI_LIVE_TEST) || isTruthyEnvValue(process.env.LIVE);
@@ -39,20 +40,7 @@ describeLive("gemini live switch", () => {
               api: "google-gemini-cli",
               provider: "google-antigravity",
               model: "claude-sonnet-4-20250514",
-              usage: {
-                input: 0,
-                output: 0,
-                cacheRead: 0,
-                cacheWrite: 0,
-                totalTokens: 0,
-                cost: {
-                  input: 0,
-                  output: 0,
-                  cacheRead: 0,
-                  cacheWrite: 0,
-                  total: 0,
-                },
-              },
+              usage: makeZeroUsageSnapshot(),
               stopReason: "stop",
               timestamp: now,
             },

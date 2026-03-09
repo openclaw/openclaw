@@ -1,11 +1,11 @@
 import { normalizeChatType, type ChatType } from "../../channels/chat-type.js";
-import { getChannelPlugin, normalizeChannelId } from "../../channels/plugins/index.js";
 import type { ChannelOutboundTargetMode } from "../../channels/plugins/types.js";
 import { formatCliCommand } from "../../cli/command-format.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import type { AgentDefaultsConfig } from "../../config/types.agent-defaults.js";
 import { parseDiscordTarget } from "../../discord/targets.js";
+import { mapAllowFromEntries } from "../../plugin-sdk/channel-config-helpers.js";
 import { normalizeAccountId } from "../../routing/session-key.js";
 import { parseSlackTarget } from "../../slack/targets.js";
 import { parseTelegramTarget, resolveTelegramTargetChatType } from "../../telegram/targets.js";
@@ -20,6 +20,10 @@ import {
   normalizeMessageChannel,
 } from "../../utils/message-channel.js";
 import { isWhatsAppGroupJid, normalizeWhatsAppTarget } from "../../whatsapp/normalize.js";
+import {
+  normalizeDeliverableOutboundChannel,
+  resolveOutboundChannelPlugin,
+} from "./channel-resolution.js";
 import { missingTargetError } from "./target-errors.js";
 
 export type OutboundChannel = DeliverableMessageChannel | "none";
@@ -181,7 +185,10 @@ export function resolveOutboundTarget(params: {
     };
   }
 
-  const plugin = getChannelPlugin(params.channel);
+  const plugin = resolveOutboundChannelPlugin({
+    channel: params.channel,
+    cfg: params.cfg,
+  });
   if (!plugin) {
     return {
       ok: false,
@@ -197,7 +204,7 @@ export function resolveOutboundTarget(params: {
           accountId: params.accountId ?? undefined,
         })
       : undefined);
-  const allowFrom = allowFromRaw?.map((entry) => String(entry));
+  const allowFrom = allowFromRaw ? mapAllowFromEntries(allowFromRaw) : undefined;
 
   // Fall back to per-channel defaultTo when no explicit target is provided.
   const effectiveTo =
@@ -242,7 +249,7 @@ export function resolveHeartbeatDeliveryTarget(params: {
   if (rawTarget === "none" || rawTarget === "last") {
     target = rawTarget;
   } else if (typeof rawTarget === "string") {
-    const normalized = normalizeChannelId(rawTarget);
+    const normalized = normalizeDeliverableOutboundChannel(rawTarget);
     if (normalized) {
       target = normalized;
     }
@@ -269,7 +276,10 @@ export function resolveHeartbeatDeliveryTarget(params: {
   let effectiveAccountId = heartbeatAccountId || resolvedTarget.accountId;
 
   if (heartbeatAccountId && resolvedTarget.channel) {
-    const plugin = getChannelPlugin(resolvedTarget.channel);
+    const plugin = resolveOutboundChannelPlugin({
+      channel: resolvedTarget.channel,
+      cfg,
+    });
     const listAccountIds = plugin?.config.listAccountIds;
     const accountIds = listAccountIds ? listAccountIds(cfg) : [];
     if (accountIds.length > 0) {
@@ -321,7 +331,7 @@ export function resolveHeartbeatDeliveryTarget(params: {
     to: resolved.to,
     sessionChatType: sessionChatTypeHint,
   });
-  if (deliveryChatType === "direct") {
+  if (deliveryChatType === "direct" && heartbeat?.directPolicy === "block") {
     return buildNoHeartbeatDeliveryTarget({
       reason: "dm-blocked",
       accountId: effectiveAccountId,
@@ -331,7 +341,10 @@ export function resolveHeartbeatDeliveryTarget(params: {
   }
 
   let reason: string | undefined;
-  const plugin = getChannelPlugin(resolvedTarget.channel);
+  const plugin = resolveOutboundChannelPlugin({
+    channel: resolvedTarget.channel,
+    cfg,
+  });
   if (plugin?.config.resolveAllowFrom) {
     const explicit = resolveOutboundTarget({
       channel: resolvedTarget.channel,
@@ -484,9 +497,7 @@ function resolveHeartbeatSenderId(params: {
     provider && lastTo ? `${provider}:${lastTo}` : undefined,
   ].filter((val): val is string => Boolean(val?.trim()));
 
-  const allowList = allowFrom
-    .map((entry) => String(entry))
-    .filter((entry) => entry && entry !== "*");
+  const allowList = mapAllowFromEntries(allowFrom).filter((entry) => entry && entry !== "*");
   if (allowFrom.includes("*")) {
     return candidates[0] ?? "heartbeat";
   }
@@ -516,12 +527,15 @@ export function resolveHeartbeatSenderContext(params: {
     params.delivery.accountId ??
     (provider === params.delivery.lastChannel ? params.delivery.lastAccountId : undefined);
   const allowFromRaw = provider
-    ? (getChannelPlugin(provider)?.config.resolveAllowFrom?.({
+    ? (resolveOutboundChannelPlugin({
+        channel: provider,
+        cfg: params.cfg,
+      })?.config.resolveAllowFrom?.({
         cfg: params.cfg,
         accountId,
       }) ?? [])
     : [];
-  const allowFrom = allowFromRaw.map((entry) => String(entry));
+  const allowFrom = mapAllowFromEntries(allowFromRaw);
 
   const sender = resolveHeartbeatSenderId({
     allowFrom,

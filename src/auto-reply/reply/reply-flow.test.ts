@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { expectInboundContextContract } from "../../../test/helpers/inbound-contract.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { defaultRuntime } from "../../runtime.js";
@@ -8,7 +8,11 @@ import { finalizeInboundContext } from "./inbound-context.js";
 import { normalizeInboundTextNewlines } from "./inbound-text.js";
 import { parseLineDirectives, hasLineDirectives } from "./line-directives.js";
 import type { FollowupRun, QueueSettings } from "./queue.js";
-import { enqueueFollowupRun, scheduleFollowupDrain } from "./queue.js";
+import {
+  enqueueFollowupRun,
+  resetRecentQueuedMessageIdDedupe,
+  scheduleFollowupDrain,
+} from "./queue.js";
 import { createReplyDispatcher } from "./reply-dispatcher.js";
 import { createReplyToModeFilter, resolveReplyToMode } from "./reply-threading.js";
 
@@ -627,6 +631,10 @@ function createRun(params: {
 }
 
 describe("followup queue deduplication", () => {
+  beforeEach(() => {
+    resetRecentQueuedMessageIdDedupe();
+  });
+
   it("deduplicates messages with same Discord message_id", async () => {
     const key = `test-dedup-message-id-${Date.now()}`;
     const calls: FollowupRun[] = [];
@@ -688,6 +696,96 @@ describe("followup queue deduplication", () => {
     await done.promise;
     // Should collect both unique messages
     expect(calls[0]?.prompt).toContain("[Queued messages while agent was busy]");
+  });
+
+  it("deduplicates same message_id after queue drain restarts", async () => {
+    const key = `test-dedup-after-drain-${Date.now()}`;
+    const calls: FollowupRun[] = [];
+    const done = createDeferred<void>();
+    const runFollowup = async (run: FollowupRun) => {
+      calls.push(run);
+      done.resolve();
+    };
+    const settings: QueueSettings = {
+      mode: "collect",
+      debounceMs: 0,
+      cap: 50,
+      dropPolicy: "summarize",
+    };
+
+    const first = enqueueFollowupRun(
+      key,
+      createRun({
+        prompt: "first",
+        messageId: "same-id",
+        originatingChannel: "signal",
+        originatingTo: "+10000000000",
+      }),
+      settings,
+    );
+    expect(first).toBe(true);
+
+    scheduleFollowupDrain(key, runFollowup);
+    await done.promise;
+
+    const redelivery = enqueueFollowupRun(
+      key,
+      createRun({
+        prompt: "first-redelivery",
+        messageId: "same-id",
+        originatingChannel: "signal",
+        originatingTo: "+10000000000",
+      }),
+      settings,
+    );
+
+    expect(redelivery).toBe(false);
+    expect(calls).toHaveLength(1);
+  });
+
+  it("does not collide recent message-id keys when routing contains delimiters", async () => {
+    const key = `test-dedup-key-collision-${Date.now()}`;
+    const calls: FollowupRun[] = [];
+    const done = createDeferred<void>();
+    const runFollowup = async (run: FollowupRun) => {
+      calls.push(run);
+      done.resolve();
+    };
+    const settings: QueueSettings = {
+      mode: "collect",
+      debounceMs: 0,
+      cap: 50,
+      dropPolicy: "summarize",
+    };
+
+    const first = enqueueFollowupRun(
+      key,
+      createRun({
+        prompt: "first",
+        messageId: "same-id",
+        originatingChannel: "signal|group",
+        originatingTo: "peer",
+      }),
+      settings,
+    );
+    expect(first).toBe(true);
+
+    scheduleFollowupDrain(key, runFollowup);
+    await done.promise;
+
+    // Different routing dimensions can produce identical pipe-joined strings.
+    // This must not be deduplicated as a replay of the first run.
+    const second = enqueueFollowupRun(
+      key,
+      createRun({
+        prompt: "second",
+        messageId: "same-id",
+        originatingChannel: "signal",
+        originatingTo: "group|peer",
+      }),
+      settings,
+    );
+    expect(second).toBe(true);
   });
 
   it("deduplicates exact prompt when routing matches and no message id", async () => {
@@ -1096,21 +1194,162 @@ describe("followup queue collect routing", () => {
   });
 });
 
+describe("followup queue drain restart after idle window", () => {
+  it("does not retain stale callbacks when scheduleFollowupDrain runs with an empty queue", async () => {
+    const key = `test-no-stale-callback-${Date.now()}`;
+    const settings: QueueSettings = { mode: "followup", debounceMs: 0, cap: 50 };
+    const staleCalls: FollowupRun[] = [];
+    const freshCalls: FollowupRun[] = [];
+    const drained = createDeferred<void>();
+
+    // Simulate finalizeWithFollowup calling schedule without pending queue items.
+    scheduleFollowupDrain(key, async (run) => {
+      staleCalls.push(run);
+    });
+
+    enqueueFollowupRun(key, createRun({ prompt: "after-empty-schedule" }), settings);
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(staleCalls).toHaveLength(0);
+
+    scheduleFollowupDrain(key, async (run) => {
+      freshCalls.push(run);
+      drained.resolve();
+    });
+    await drained.promise;
+
+    expect(staleCalls).toHaveLength(0);
+    expect(freshCalls).toHaveLength(1);
+    expect(freshCalls[0]?.prompt).toBe("after-empty-schedule");
+  });
+
+  it("processes a message enqueued after the drain empties and deletes the queue", async () => {
+    const key = `test-idle-window-race-${Date.now()}`;
+    const calls: FollowupRun[] = [];
+    const settings: QueueSettings = { mode: "followup", debounceMs: 0, cap: 50 };
+
+    const firstProcessed = createDeferred<void>();
+    const secondProcessed = createDeferred<void>();
+    let callCount = 0;
+    const runFollowup = async (run: FollowupRun) => {
+      callCount++;
+      calls.push(run);
+      if (callCount === 1) {
+        firstProcessed.resolve();
+      }
+      if (callCount === 2) {
+        secondProcessed.resolve();
+      }
+    };
+
+    // Enqueue first message and start drain.
+    enqueueFollowupRun(key, createRun({ prompt: "before-idle" }), settings);
+    scheduleFollowupDrain(key, runFollowup);
+
+    // Wait for the first message to be processed by the drain.
+    await firstProcessed.promise;
+
+    // Yield past the drain's finally block so it can set draining:false and
+    // delete the queue key from FOLLOWUP_QUEUES (the idle-window boundary).
+    await new Promise<void>((resolve) => setImmediate(resolve));
+
+    // Simulate the race: a new message arrives AFTER the drain finished and
+    // deleted the queue, but WITHOUT calling scheduleFollowupDrain again.
+    enqueueFollowupRun(key, createRun({ prompt: "after-idle" }), settings);
+
+    // kickFollowupDrainIfIdle should have restarted the drain automatically.
+    await secondProcessed.promise;
+
+    expect(calls).toHaveLength(2);
+    expect(calls[0]?.prompt).toBe("before-idle");
+    expect(calls[1]?.prompt).toBe("after-idle");
+  });
+
+  it("does not double-drain when a message arrives while drain is still running", async () => {
+    const key = `test-no-double-drain-${Date.now()}`;
+    const calls: FollowupRun[] = [];
+    const settings: QueueSettings = { mode: "followup", debounceMs: 0, cap: 50 };
+
+    const allProcessed = createDeferred<void>();
+    // runFollowup resolves only after both items are enqueued so the second
+    // item is already in the queue when the first drain step finishes.
+    let runFollowupResolve!: () => void;
+    const runFollowupGate = new Promise<void>((res) => {
+      runFollowupResolve = res;
+    });
+    const runFollowup = async (run: FollowupRun) => {
+      await runFollowupGate;
+      calls.push(run);
+      if (calls.length >= 2) {
+        allProcessed.resolve();
+      }
+    };
+
+    enqueueFollowupRun(key, createRun({ prompt: "first" }), settings);
+    scheduleFollowupDrain(key, runFollowup);
+
+    // Enqueue second message while the drain is mid-flight (draining:true).
+    enqueueFollowupRun(key, createRun({ prompt: "second" }), settings);
+
+    // Release the gate so both items can drain.
+    runFollowupResolve();
+
+    await allProcessed.promise;
+    expect(calls).toHaveLength(2);
+    expect(calls[0]?.prompt).toBe("first");
+    expect(calls[1]?.prompt).toBe("second");
+  });
+
+  it("does not process messages after clearSessionQueues clears the callback", async () => {
+    const key = `test-clear-callback-${Date.now()}`;
+    const calls: FollowupRun[] = [];
+    const settings: QueueSettings = { mode: "followup", debounceMs: 0, cap: 50 };
+
+    const firstProcessed = createDeferred<void>();
+    const runFollowup = async (run: FollowupRun) => {
+      calls.push(run);
+      firstProcessed.resolve();
+    };
+
+    enqueueFollowupRun(key, createRun({ prompt: "before-clear" }), settings);
+    scheduleFollowupDrain(key, runFollowup);
+    await firstProcessed.promise;
+
+    // Let drain finish and delete the queue.
+    await new Promise<void>((resolve) => setImmediate(resolve));
+
+    // Clear queues (simulates session teardown) — should also clear the callback.
+    const { clearSessionQueues } = await import("./queue.js");
+    clearSessionQueues([key]);
+
+    // Enqueue after clear: should NOT auto-start a drain (callback is gone).
+    enqueueFollowupRun(key, createRun({ prompt: "after-clear" }), settings);
+
+    // Yield a few ticks; no drain should fire.
+    await new Promise<void>((resolve) => setImmediate(resolve));
+
+    // Only the first message was processed; the post-clear one is still pending.
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.prompt).toBe("before-clear");
+  });
+});
+
 const emptyCfg = {} as OpenClawConfig;
 
 describe("createReplyDispatcher", () => {
-  it("drops empty payloads and silent tokens without media", async () => {
+  it("drops empty payloads and exact silent tokens without media", async () => {
     const deliver = vi.fn().mockResolvedValue(undefined);
     const dispatcher = createReplyDispatcher({ deliver });
 
     expect(dispatcher.sendFinalReply({})).toBe(false);
     expect(dispatcher.sendFinalReply({ text: " " })).toBe(false);
     expect(dispatcher.sendFinalReply({ text: SILENT_REPLY_TOKEN })).toBe(false);
-    expect(dispatcher.sendFinalReply({ text: `${SILENT_REPLY_TOKEN} -- nope` })).toBe(false);
-    expect(dispatcher.sendFinalReply({ text: `interject.${SILENT_REPLY_TOKEN}` })).toBe(false);
+    expect(dispatcher.sendFinalReply({ text: `${SILENT_REPLY_TOKEN} -- nope` })).toBe(true);
+    expect(dispatcher.sendFinalReply({ text: `interject.${SILENT_REPLY_TOKEN}` })).toBe(true);
 
     await dispatcher.waitForIdle();
-    expect(deliver).not.toHaveBeenCalled();
+    expect(deliver).toHaveBeenCalledTimes(2);
+    expect(deliver.mock.calls[0]?.[0]?.text).toBe(`${SILENT_REPLY_TOKEN} -- nope`);
+    expect(deliver.mock.calls[1]?.[0]?.text).toBe(`interject.${SILENT_REPLY_TOKEN}`);
   });
 
   it("strips heartbeat tokens and applies responsePrefix", async () => {
@@ -1162,7 +1401,7 @@ describe("createReplyDispatcher", () => {
     expect(deliver).toHaveBeenCalledTimes(3);
     expect(deliver.mock.calls[0][0].text).toBe("PFX already");
     expect(deliver.mock.calls[1][0].text).toBe("");
-    expect(deliver.mock.calls[2][0].text).toBe("");
+    expect(deliver.mock.calls[2][0].text).toBe(`PFX ${SILENT_REPLY_TOKEN} -- explanation`);
   });
 
   it("preserves ordering across tool, block, and final replies", async () => {

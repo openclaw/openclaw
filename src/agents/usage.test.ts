@@ -88,6 +88,37 @@ describe("normalizeUsage", () => {
     });
   });
 
+  it("clamps negative input to zero (pre-subtracted cached_tokens > prompt_tokens)", () => {
+    // pi-ai OpenAI-format providers subtract cached_tokens from prompt_tokens
+    // upstream.  When cached_tokens exceeds prompt_tokens the result is negative.
+    const usage = normalizeUsage({
+      input: -4900,
+      output: 200,
+      cacheRead: 5000,
+    });
+    expect(usage).toEqual({
+      input: 0,
+      output: 200,
+      cacheRead: 5000,
+      cacheWrite: undefined,
+      total: undefined,
+    });
+  });
+
+  it("clamps negative prompt_tokens alias to zero", () => {
+    const usage = normalizeUsage({
+      prompt_tokens: -12,
+      completion_tokens: 4,
+    });
+    expect(usage).toEqual({
+      input: 0,
+      output: 4,
+      cacheRead: undefined,
+      cacheWrite: undefined,
+      total: undefined,
+    });
+  });
+
   it("returns undefined when no valid fields are provided", () => {
     const usage = normalizeUsage(null);
     expect(usage).toBeUndefined();
