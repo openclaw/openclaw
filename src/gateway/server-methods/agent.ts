@@ -290,7 +290,6 @@ function sendSkillResponseToSession(
   error?: string,
 ): boolean {
   try {
-    // eslint-disable-next-line @typescript-eslint/no-unused-vars -- Response object created for future delivery implementation
     const skillResponse: SkillResponse = {
       kind: "skill_response",
       correlationId,
@@ -301,14 +300,13 @@ function sendSkillResponseToSession(
       error,
     };
 
-    // For now, just log that we would send this
-    // Real implementation uses nodeSendToSession or equivalent mechanism
+    // Deliver to the returnTo session via node-to-session messaging
+    context.nodeSendToSession(returnToSessionKey, "skill_response", skillResponse);
+
     context.log?.verbose?.(
-      `[A2A] Would route skill_response to ${returnToSessionKey}: correlationId=${correlationId}, status=${error ? "error" : "completed"}`,
+      `[A2A] Routed skill_response to ${returnToSessionKey}: correlationId=${correlationId}, status=${error ? "error" : "completed"}`,
     );
 
-    // TODO: Implement actual node-to-session message delivery
-    // This requires access to the nodeSendToSession mechanism
     return true;
   } catch (err_) {
     const err = typeof err_ === "string" ? err_ : JSON.stringify(err_ ?? "unknown error");
