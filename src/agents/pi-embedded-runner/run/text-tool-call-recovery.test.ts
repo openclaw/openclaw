@@ -61,6 +61,40 @@ describe("recoverTextToolCallsInMessage", () => {
       ],
     });
   });
+
+  it("does not recover downgraded text calls when structured tool calls are present", () => {
+    const message = {
+      role: "assistant",
+      content: [
+        {
+          type: "toolCall",
+          name: "read",
+          arguments: { path: "/tmp/demo.txt" },
+        },
+        {
+          type: "text",
+          text: 'exec({"command":"pwd"})',
+        },
+      ],
+    };
+
+    recoverTextToolCallsInMessage(message, new Set(["read", "exec"]));
+
+    expect(message).toEqual({
+      role: "assistant",
+      content: [
+        {
+          type: "toolCall",
+          name: "read",
+          arguments: { path: "/tmp/demo.txt" },
+        },
+        {
+          type: "text",
+          text: 'exec({"command":"pwd"})',
+        },
+      ],
+    });
+  });
 });
 
 describe("wrapStreamFnRecoverTextToolCalls", () => {

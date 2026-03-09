@@ -382,6 +382,9 @@ export function recoverTextToolCallsInMessage(
     return;
   }
 
+  // Safety-first: if the model already emitted a structured tool call in this
+  // message, avoid recovering additional text/XML calls from sibling text
+  // blocks. This prevents accidental double-dispatch in mixed-content turns.
   if (
     content.some(
       (block) =>
