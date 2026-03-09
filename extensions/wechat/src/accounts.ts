@@ -75,7 +75,10 @@ export function resolveWechatAccount(params: {
   const accountId = normalizeAccountId(params.accountId ?? DEFAULT_ACCOUNT_ID);
   const merged = mergeWechatAccountConfig(cfg, accountId);
 
-  const puppet = merged.puppet?.trim() || DEFAULT_PUPPET;
+  // Coerce to string — config may store unexpected types if set via CLI
+  const coerce = (v: unknown): string => (v != null ? String(v).trim() : "");
+
+  const puppet = coerce(merged.puppet) || DEFAULT_PUPPET;
   const puppetOptions = merged.puppetOptions ?? {};
   const enabled = merged.enabled !== false;
   // Wechaty is "configured" as long as the channel section exists; login happens via QR at runtime
@@ -84,7 +87,7 @@ export function resolveWechatAccount(params: {
   return {
     accountId,
     enabled,
-    name: merged.name?.trim() || undefined,
+    name: coerce(merged.name) || undefined,
     configured,
     puppet,
     puppetOptions,

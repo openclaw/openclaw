@@ -75,14 +75,17 @@ export function resolveQqAccount(params: {
   const accountId = normalizeAccountId(params.accountId ?? DEFAULT_ACCOUNT_ID);
   const merged = mergeQqAccountConfig(cfg, accountId);
 
+  // Coerce to string — config may store numbers if set via CLI
+  const coerce = (v: unknown): string => (v != null ? String(v).trim() : "");
+
   // Env var fallbacks for default account
   const appId =
-    merged.appId?.trim() ||
+    coerce(merged.appId) ||
     (accountId === DEFAULT_ACCOUNT_ID ? process.env.QQ_APP_ID?.trim() : undefined) ||
     "";
 
   const appSecret =
-    merged.appSecret?.trim() ||
+    coerce(merged.appSecret) ||
     (accountId === DEFAULT_ACCOUNT_ID ? process.env.QQ_APP_SECRET?.trim() : undefined) ||
     "";
 
@@ -92,7 +95,7 @@ export function resolveQqAccount(params: {
   return {
     accountId,
     enabled,
-    name: merged.name?.trim() || undefined,
+    name: coerce(merged.name) || undefined,
     configured,
     appId,
     appSecret,

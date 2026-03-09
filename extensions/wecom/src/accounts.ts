@@ -76,12 +76,15 @@ export function resolveWecomAccount(params: {
   const accountId = normalizeAccountId(params.accountId ?? DEFAULT_ACCOUNT_ID);
   const merged = mergeWecomAccountConfig(cfg, accountId);
 
+  // Coerce to string — config may store numbers if set via CLI
+  const coerce = (v: unknown): string => (v != null ? String(v).trim() : "");
+
   const corpId =
-    merged.corpId?.trim() ||
+    coerce(merged.corpId) ||
     (accountId === DEFAULT_ACCOUNT_ID ? process.env.WECOM_CORP_ID?.trim() : undefined) ||
     "";
   const corpSecret =
-    merged.corpSecret?.trim() ||
+    coerce(merged.corpSecret) ||
     (accountId === DEFAULT_ACCOUNT_ID ? process.env.WECOM_CORP_SECRET?.trim() : undefined) ||
     "";
   const agentId =
@@ -90,14 +93,14 @@ export function resolveWecomAccount(params: {
       ? Number.parseInt(process.env.WECOM_AGENT_ID, 10)
       : 0);
   const token =
-    merged.token?.trim() ||
+    coerce(merged.token) ||
     (accountId === DEFAULT_ACCOUNT_ID ? process.env.WECOM_TOKEN?.trim() : undefined) ||
     "";
   const encodingAESKey =
-    merged.encodingAESKey?.trim() ||
+    coerce(merged.encodingAESKey) ||
     (accountId === DEFAULT_ACCOUNT_ID ? process.env.WECOM_ENCODING_AES_KEY?.trim() : undefined) ||
     "";
-  const webhookPath = merged.webhookPath?.trim() || "/wecom";
+  const webhookPath = coerce(merged.webhookPath) || "/wecom";
 
   const enabled = merged.enabled !== false;
   const configured = Boolean(corpId && corpSecret && agentId);
@@ -105,7 +108,7 @@ export function resolveWecomAccount(params: {
   return {
     accountId,
     enabled,
-    name: merged.name?.trim() || undefined,
+    name: coerce(merged.name) || undefined,
     configured,
     corpId,
     corpSecret,
