@@ -43,7 +43,7 @@ describe("config write serialization", () => {
         ...baseCfg,
         commands: {
           ...baseCfg.commands,
-          ownerDisplaySecret: "test-secret-value",
+          ownerDisplaySecret: "test-secret-value", // pragma: allowlist secret
         },
       };
 
@@ -114,7 +114,7 @@ describe("config write serialization", () => {
           ...freshCfg,
           commands: {
             ...freshCfg.commands,
-            ownerDisplaySecret: "test-secret-value",
+            ownerDisplaySecret: "test-secret-value", // pragma: allowlist secret
           },
         });
       })();
@@ -133,7 +133,7 @@ describe("config write serialization", () => {
       expect(gateway?.mode).toBe("local");
       expect(gateway?.port).toBe(18789);
       expect(gateway?.auth).toEqual({ mode: "token" });
-      expect(commands?.ownerDisplaySecret).toBe("test-secret-value");
+      expect(commands?.ownerDisplaySecret).toBe("test-secret-value"); // pragma: allowlist secret
     });
   });
 });
