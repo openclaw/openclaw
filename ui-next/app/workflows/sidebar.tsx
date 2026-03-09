@@ -100,6 +100,7 @@ const NODES = {
       label: "Execute Tool",
       subline: "Run a catalog tool",
       icon: "🛠️",
+      actionType: "execute-tool",
     },
     {
       type: "action",
@@ -113,12 +114,14 @@ const NODES = {
       label: "Remote Invoke",
       subline: "Execute on a Node",
       icon: "💻",
+      actionType: "remote-invoke",
     },
     {
       type: "action",
       label: "Speak (TTS)",
       subline: "Convert to audio",
       icon: "🗣️",
+      actionType: "tts",
     },
   ],
   logic: [
@@ -127,18 +130,21 @@ const NODES = {
       label: "If / Else",
       subline: "Branch by condition",
       icon: "🔀",
+      actionType: "if-else",
     },
     {
       type: "logic",
       label: "Delay",
       subline: "Wait a duration",
       icon: "⏳",
+      actionType: "delay",
     },
     {
       type: "logic",
       label: "Custom JS",
       subline: "Transform data",
       icon: "📝",
+      actionType: "custom-js",
     },
   ],
 };

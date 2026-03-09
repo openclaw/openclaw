@@ -33,19 +33,43 @@ export interface WorkflowTriggerConfig {
 // ============================================
 export interface WorkflowChainStep {
   nodeId: string;
-  actionType: string; // "agent-prompt" | "send-message" | "if-else" | "unknown"
+  actionType: string;
   label: string;
+
+  // Agent Prompt
   agentId?: string;
   prompt?: string; // Hỗ trợ {{input}} — backend replace bằng output bước trước
-  body?: string; // Dùng cho "send-message"
-  // Extended fields for send-message
+
+  // Send Message
+  body?: string;
   channel?: string;
   recipientId?: string;
   accountId?: string;
-  // Branching fields for If/Else
+
+  // If/Else Branching
   condition?: string;
   trueChain?: WorkflowChainStep[];
   falseChain?: WorkflowChainStep[];
+
+  // Execute Tool
+  toolName?: string;
+  toolArgs?: Record<string, unknown>;
+
+  // Remote Invoke
+  targetNodeId?: string;
+  command?: string;
+  params?: Record<string, unknown>;
+
+  // TTS (Speak)
+  ttsText?: string;
+  voiceId?: string;
+  ttsProvider?: string;
+
+  // Delay
+  durationMs?: number;
+
+  // Custom JS
+  jsCode?: string;
 }
 
 const WF_CHAIN_PREFIX = "__wf_chain__:";

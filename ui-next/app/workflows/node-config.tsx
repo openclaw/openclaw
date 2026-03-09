@@ -383,6 +383,217 @@ export function NodeConfigPanel({ node, onClose, onUpdateData }: NodeConfigPanel
             )}
           </>
         )}
+
+        {/* Execute Tool */}
+        {data.label === "Execute Tool" && (
+          <>
+            <div style={styles.field}>
+              <span style={styles.label}>Tool Name</span>
+              <input
+                style={styles.input}
+                placeholder="e.g., browser.navigate, file.read"
+                value={(data.toolName as string) || ""}
+                onChange={(e) => handleChange("toolName", e.target.value)}
+              />
+            </div>
+
+            <div style={styles.field}>
+              <span style={styles.label}>Tool Arguments (JSON)</span>
+              <textarea
+                style={styles.textarea}
+                placeholder='{"url": "https://example.com"}'
+                value={(data.toolArgs as string) || ""}
+                onChange={(e) => handleChange("toolArgs", e.target.value)}
+              />
+            </div>
+
+            <div
+              style={{
+                padding: "8px 12px",
+                background: "var(--info-subtle)",
+                color: "var(--info)",
+                borderRadius: "var(--radius-md)",
+                fontSize: 11,
+                lineHeight: 1.5,
+              }}
+            >
+              <strong>⚠️ Coming Soon:</strong> Tool execution will be available in a future update.
+            </div>
+          </>
+        )}
+
+        {/* Remote Invoke */}
+        {data.label === "Remote Invoke" && (
+          <>
+            <div style={styles.field}>
+              <span style={styles.label}>Target Node</span>
+              <select
+                style={styles.select}
+                value={(data.targetNodeId as string) || ""}
+                onChange={(e) => handleChange("targetNodeId", e.target.value)}
+              >
+                <option value="">-- Select a node --</option>
+                <option value="macos-local">macOS (Local)</option>
+                <option value="ios-device">iOS Device</option>
+                <option value="android-device">Android Device</option>
+              </select>
+            </div>
+
+            <div style={styles.field}>
+              <span style={styles.label}>Command</span>
+              <input
+                style={styles.input}
+                placeholder="e.g., camera.snap, system.run"
+                value={(data.command as string) || ""}
+                onChange={(e) => handleChange("command", e.target.value)}
+              />
+            </div>
+
+            <div style={styles.field}>
+              <span style={styles.label}>Command Params (JSON)</span>
+              <textarea
+                style={styles.textarea}
+                placeholder='{"facing": "front", "duration": 5000}'
+                value={(data.params as string) || ""}
+                onChange={(e) => handleChange("params", e.target.value)}
+              />
+            </div>
+
+            <div
+              style={{
+                padding: "8px 12px",
+                background: "var(--info-subtle)",
+                color: "var(--info)",
+                borderRadius: "var(--radius-md)",
+                fontSize: 11,
+                lineHeight: 1.5,
+              }}
+            >
+              <strong>⚠️ Coming Soon:</strong> Remote invoke will be available in a future update.
+            </div>
+          </>
+        )}
+
+        {/* Speak (TTS) */}
+        {data.label === "Speak (TTS)" && (
+          <>
+            <div style={styles.field}>
+              <span style={styles.label}>Text to Speak</span>
+              <textarea
+                style={styles.textarea}
+                placeholder="Use {{input}} to include previous step's output"
+                value={(data.ttsText as string) || ""}
+                onChange={(e) => handleChange("ttsText", e.target.value)}
+              />
+            </div>
+
+            <div style={styles.field}>
+              <span style={styles.label}>Voice</span>
+              <select
+                style={styles.select}
+                value={(data.voiceId as string) || ""}
+                onChange={(e) => handleChange("voiceId", e.target.value)}
+              >
+                <option value="">-- Select voice --</option>
+                <option value="rachel">Rachel (Professional)</option>
+                <option value="adam">Adam (Deep)</option>
+                <option value="bella">Bella (British)</option>
+                <option value="josh">Josh (American)</option>
+              </select>
+            </div>
+
+            <div style={styles.field}>
+              <span style={styles.label}>Provider</span>
+              <select
+                style={styles.select}
+                value={(data.ttsProvider as string) || ""}
+                onChange={(e) => handleChange("ttsProvider", e.target.value)}
+              >
+                <option value="elevenlabs">ElevenLabs</option>
+                <option value="openai">OpenAI</option>
+                <option value="azure">Azure TTS</option>
+              </select>
+            </div>
+
+            <div
+              style={{
+                padding: "8px 12px",
+                background: "var(--info-subtle)",
+                color: "var(--info)",
+                borderRadius: "var(--radius-md)",
+                fontSize: 11,
+                lineHeight: 1.5,
+              }}
+            >
+              <strong>⚠️ Coming Soon:</strong> TTS conversion will be available in a future update.
+            </div>
+          </>
+        )}
+
+        {/* Delay */}
+        {data.label === "Delay" && (
+          <>
+            <div style={styles.field}>
+              <span style={styles.label}>Duration (milliseconds)</span>
+              <input
+                style={styles.input}
+                type="number"
+                placeholder="5000"
+                value={(data.durationMs as string) || ""}
+                onChange={(e) => handleChange("durationMs", e.target.value)}
+              />
+            </div>
+
+            <div
+              style={{
+                padding: "8px 12px",
+                background: "var(--ok-subtle)",
+                color: "var(--ok)",
+                borderRadius: "var(--radius-md)",
+                fontSize: 12,
+                fontWeight: 500,
+              }}
+            >
+              💡 Common delays: 1000ms (1s), 5000ms (5s), 60000ms (1min)
+            </div>
+          </>
+        )}
+
+        {/* Custom JS */}
+        {data.label === "Custom JS" && (
+          <>
+            <div style={styles.field}>
+              <span style={styles.label}>JavaScript Code</span>
+              <textarea
+                style={{ ...styles.textarea, fontFamily: "monospace", fontSize: 12 }}
+                placeholder={`// Transform input data
+// Available: input, variables
+return input.toUpperCase();`}
+                value={(data.jsCode as string) || ""}
+                onChange={(e) => handleChange("jsCode", e.target.value)}
+              />
+            </div>
+
+            <div
+              style={{
+                padding: "8px 12px",
+                background: "var(--warning-subtle)",
+                color: "var(--warning)",
+                borderRadius: "var(--radius-md)",
+                fontSize: 11,
+                lineHeight: 1.5,
+              }}
+            >
+              <strong>⚠️ Security Review Required:</strong> Custom JS execution needs security audit
+              before enabling.
+              <br />
+              <br />
+              <strong>Available variables:</strong>
+              <br />• <code>input</code> - Output from previous step
+              <br />• <code>variables</code> - Custom workflow variables
+            </div>
+          </>
+        )}
       </div>
     </aside>
   );
