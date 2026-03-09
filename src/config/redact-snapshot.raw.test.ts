@@ -7,7 +7,7 @@ describe("replaceSensitiveValuesInRaw", () => {
       channels: {
         qzone: { cookie: "" },
         youtube: { oauthClientSecret: "" },
-        discourse: { apiKey: "top-secret-value" },
+        discourse: { apiKey: "top-secret-value" }, // pragma: allowlist secret
       },
     });
 

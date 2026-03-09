@@ -251,18 +251,19 @@ describe("redactConfigSnapshot", () => {
       channels: {
         qzone: { cookie: "" },
         youtube: { oauthClientSecret: "" },
-        discourse: { apiKey: "abcdef1234567890ghij" },
+        discourse: { apiKey: "abcdef1234567890ghij" }, // pragma: allowlist secret
       },
     };
     const snapshot = makeSnapshot(config, JSON5.stringify(config));
 
     const result = redactConfigSnapshot(snapshot, mainSchemaHints);
+    const redactedRaw = result.raw ?? "";
 
-    expect(result.raw).not.toContain("abcdef1234567890ghij");
-    expect(result.raw).toContain(REDACTED_SENTINEL);
-    expect(result.raw).toContain("cookie:''");
-    expect(result.raw).toContain("oauthClientSecret:''");
-    expect(result.raw.length).toBeLessThan((snapshot.raw?.length ?? 0) * 3);
+    expect(redactedRaw).not.toContain("abcdef1234567890ghij");
+    expect(redactedRaw).toContain(REDACTED_SENTINEL);
+    expect(redactedRaw).toContain("cookie:''");
+    expect(redactedRaw).toContain("oauthClientSecret:''");
+    expect(redactedRaw.length).toBeLessThan((snapshot.raw?.length ?? 0) * 3);
   });
 
   it("redacts secrets in raw field via text-based redaction", () => {
