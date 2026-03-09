@@ -1,7 +1,11 @@
 import fs from "node:fs/promises";
 import { describe, expect, it, vi } from "vitest";
 import type { HeartbeatRunResult } from "../infra/heartbeat-wake.js";
-import { clearCommandLane, setCommandLaneConcurrency } from "../process/command-queue.js";
+import {
+  clearCommandLane,
+  enqueueCommandInLane,
+  setCommandLaneConcurrency,
+} from "../process/command-queue.js";
 import { CommandLane } from "../process/lanes.js";
 import * as schedule from "./schedule.js";
 import {
@@ -1566,6 +1570,54 @@ describe("Cron issue regressions", () => {
     });
 
     clearCommandLane(CommandLane.Cron);
+  });
+
+  it("manual isolated cron.run does not deadlock when isolated execution reuses the cron lane", async () => {
+    vi.useRealTimers();
+    clearCommandLane(CommandLane.Cron);
+    clearCommandLane(CommandLane.Nested);
+    setCommandLaneConcurrency(CommandLane.Cron, 1);
+    setCommandLaneConcurrency(CommandLane.Nested, 1);
+
+    const store = makeStorePath();
+    const dueAt = Date.parse("2026-02-06T10:05:02.500Z");
+    const job = createIsolatedRegressionJob({
+      id: "manual-cron-lane-deadlock",
+      name: "manual cron lane deadlock",
+      scheduledAt: dueAt,
+      schedule: { kind: "at", at: new Date(dueAt).toISOString() },
+      payload: { kind: "agentTurn", message: "manual deadlock", timeoutSeconds: 0.05 },
+      state: { nextRunAtMs: dueAt },
+    });
+    await writeCronJobs(store.storePath, [job]);
+
+    const innerTaskStarted = createDeferred<void>();
+    const state = createCronServiceState({
+      cronEnabled: true,
+      storePath: store.storePath,
+      log: createNoopLogger(),
+      nowMs: () => dueAt,
+      enqueueSystemEvent: vi.fn(),
+      requestHeartbeatNow: vi.fn(),
+      runIsolatedAgentJob: vi.fn(async () => {
+        return enqueueCommandInLane(CommandLane.Cron, async () => {
+          innerTaskStarted.resolve();
+          return { status: "ok" as const, summary: "inner cron lane run" };
+        });
+      }),
+    });
+
+    const ack = await enqueueRun(state, job.id, "force");
+    expect(ack).toEqual({ ok: true, enqueued: true, runId: expect.any(String) });
+
+    await innerTaskStarted.promise;
+    await vi.waitFor(() => {
+      const jobs = state.store?.jobs ?? [];
+      expect(jobs.find((entry) => entry.id === job.id)?.state.lastStatus).toBe("ok");
+    });
+
+    clearCommandLane(CommandLane.Cron);
+    clearCommandLane(CommandLane.Nested);
   });
 
   it("logs unexpected queued manual run background failures once", async () => {

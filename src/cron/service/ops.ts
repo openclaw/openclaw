@@ -531,8 +531,12 @@ export async function enqueueRun(state: CronServiceState, id: string, mode?: "du
   }
 
   const runId = `manual:${id}:${state.deps.nowMs()}:${nextManualRunId++}`;
+  // Manual cron.run requests can execute isolated jobs that enqueue their own
+  // work on the dedicated cron lane. Queue the outer background task on the
+  // nested lane so manual runs do not self-block behind their own inner cron
+  // execution.
   void enqueueCommandInLane(
-    CommandLane.Cron,
+    CommandLane.Nested,
     async () => {
       const result = await run(state, id, mode);
       if (result.ok && "ran" in result && !result.ran) {
