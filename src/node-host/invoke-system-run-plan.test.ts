@@ -226,33 +226,36 @@ describe("hardenApprovedExecutionPaths", () => {
   ];
 
   for (const runtimeCase of mutableOperandCases) {
-    it(`captures mutable ${runtimeCase.name} operands in approval plans`, () => {
-      withFakeRuntimeBin({
-        binName: runtimeCase.binName!,
-        run: () => {
-          const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-approval-script-plan-"));
-          const fixture = createScriptOperandFixture(tmp, runtimeCase);
-          fs.writeFileSync(fixture.scriptPath, fixture.initialBody);
-          try {
-            const prepared = buildSystemRunApprovalPlan({
-              command: fixture.command,
-              cwd: tmp,
-            });
-            expect(prepared.ok).toBe(true);
-            if (!prepared.ok) {
-              throw new Error("unreachable");
+    it.runIf(process.platform !== "win32")(
+      `captures mutable ${runtimeCase.name} operands in approval plans`,
+      () => {
+        withFakeRuntimeBin({
+          binName: runtimeCase.binName!,
+          run: () => {
+            const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-approval-script-plan-"));
+            const fixture = createScriptOperandFixture(tmp, runtimeCase);
+            fs.writeFileSync(fixture.scriptPath, fixture.initialBody);
+            try {
+              const prepared = buildSystemRunApprovalPlan({
+                command: fixture.command,
+                cwd: tmp,
+              });
+              expect(prepared.ok).toBe(true);
+              if (!prepared.ok) {
+                throw new Error("unreachable");
+              }
+              expect(prepared.plan.mutableFileOperand).toEqual({
+                argvIndex: fixture.expectedArgvIndex,
+                path: fs.realpathSync(fixture.scriptPath),
+                sha256: expect.any(String),
+              });
+            } finally {
+              fs.rmSync(tmp, { recursive: true, force: true });
             }
-            expect(prepared.plan.mutableFileOperand).toEqual({
-              argvIndex: fixture.expectedArgvIndex,
-              path: fs.realpathSync(fixture.scriptPath),
-              sha256: expect.any(String),
-            });
-          } finally {
-            fs.rmSync(tmp, { recursive: true, force: true });
-          }
-        },
-      });
-    });
+          },
+        });
+      },
+    );
   }
 
   it("captures mutable shell script operands in approval plans", () => {
@@ -281,7 +284,7 @@ describe("hardenApprovedExecutionPaths", () => {
     }
   });
 
-  it("does not snapshot bun package script names", () => {
+  it.runIf(process.platform !== "win32")("does not snapshot bun package script names", () => {
     withFakeRuntimeBin({
       binName: "bun",
       run: () => {
@@ -303,7 +306,7 @@ describe("hardenApprovedExecutionPaths", () => {
     });
   });
 
-  it("does not snapshot deno eval invocations", () => {
+  it.runIf(process.platform !== "win32")("does not snapshot deno eval invocations", () => {
     withFakeRuntimeBin({
       binName: "deno",
       run: () => {
