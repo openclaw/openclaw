@@ -56,12 +56,12 @@ export function renderExecApprovalPrompt(state: AppViewState) {
             ${renderMetaRow("Security", request.security)}
             ${renderMetaRow("Ask", request.ask)}
           </div>
-          ${
-            state.execApprovalError
-              ? html`<div class="exec-approval-error">${state.execApprovalError}</div>`
-              : nothing
-          }
         </div>
+        ${
+          state.execApprovalError
+            ? html`<div class="exec-approval-error">${state.execApprovalError}</div>`
+            : nothing
+        }
         <div class="exec-approval-actions">
           <button
             class="btn primary"
