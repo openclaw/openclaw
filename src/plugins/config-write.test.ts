@@ -7,7 +7,7 @@ import type { OpenClawConfig } from "../config/types.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { persistPluginConfigWrite } from "./config-write.js";
 
-async function makeTempModularConfig(params?: { pluginsRaw?: string }): Promise<{
+async function makeTempModularConfig(params?: { rootRaw?: string; pluginsRaw?: string }): Promise<{
   rootDir: string;
   configPath: string;
   pluginsPath: string;
@@ -22,15 +22,14 @@ async function makeTempModularConfig(params?: { pluginsRaw?: string }): Promise<
     JSON.stringify({ OPENAI_API_KEY: "${OPENAI_API_KEY}" }, null, 2),
     "utf-8",
   );
-  await fs.writeFile(
-    configPath,
+  const rootRaw =
+    params?.rootRaw ??
     `{
   env: { $include: "./config/env.json5" },
   plugins: { $include: "./config/plugins.json5" }
 }
-`,
-    "utf-8",
-  );
+`;
+  await fs.writeFile(configPath, rootRaw, "utf-8");
   await fs.writeFile(
     pluginsPath,
     params?.pluginsRaw ??
@@ -52,6 +51,7 @@ async function withConfigPath<T>(configPath: string, run: () => Promise<T>): Pro
       OPENCLAW_CONFIG_PATH: configPath,
       OPENCLAW_DISABLE_CONFIG_CACHE: "1",
       OPENAI_API_KEY: "sk-test",
+      OPENCLAW_GATEWAY_TOKEN: "gateway-token-live",
     },
     run,
   );
@@ -144,5 +144,81 @@ describe("persistPluginConfigWrite", () => {
         telegram: { enabled: true },
       },
     });
+  });
+
+  it("preserves plugin include env placeholders when plugin writes keep the same secret", async () => {
+    const paths = await makeTempModularConfig({
+      pluginsRaw: `{
+  entries: {
+    demo: {
+      enabled: false,
+      config: {
+        apiKey: "\${OPENAI_API_KEY}"
+      }
+    }
+  }
+}
+`,
+    });
+    tempRoots.push(paths.rootDir);
+
+    await withConfigPath(paths.configPath, async () => {
+      const current = (await readConfigFileSnapshotForWrite()).snapshot.config;
+      await persistPluginConfigWrite({
+        ...current,
+        plugins: {
+          ...current.plugins,
+          entries: {
+            ...current.plugins?.entries,
+            demo: {
+              ...current.plugins?.entries?.demo,
+              enabled: true,
+            },
+          },
+        },
+      });
+    });
+
+    const pluginsRaw = await fs.readFile(paths.pluginsPath, "utf-8");
+    expect(pluginsRaw).toContain("${OPENAI_API_KEY}");
+    expect(pluginsRaw).not.toContain("sk-test");
+  });
+
+  it("preserves root env placeholders when plugin writes update another field in the same subtree", async () => {
+    const paths = await makeTempModularConfig({
+      rootRaw: `{
+  env: { $include: "./config/env.json5" },
+  gateway: {
+    auth: {
+      token: "\${OPENCLAW_GATEWAY_TOKEN}"
+    },
+    port: 18080
+  },
+  plugins: { $include: "./config/plugins.json5" }
+}
+`,
+    });
+    tempRoots.push(paths.rootDir);
+
+    await withConfigPath(paths.configPath, async () => {
+      const current = (await readConfigFileSnapshotForWrite()).snapshot.config;
+      await persistPluginConfigWrite({
+        ...current,
+        gateway: {
+          ...current.gateway,
+          port: 19001,
+        },
+        plugins: {
+          entries: {
+            telegram: { enabled: true },
+          },
+        },
+      });
+    });
+
+    const rootRaw = await fs.readFile(paths.configPath, "utf-8");
+    expect(rootRaw).toContain("${OPENCLAW_GATEWAY_TOKEN}");
+    expect(rootRaw).not.toContain("gateway-token-live");
+    expect(rootRaw).toContain('"port": 19001');
   });
 });

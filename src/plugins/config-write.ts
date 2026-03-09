@@ -9,6 +9,7 @@ import {
   validateConfigObjectRawWithPlugins,
   writeConfigFile,
 } from "../config/config.js";
+import { restoreEnvVarRefs } from "../config/env-preserve.js";
 import { INCLUDE_KEY } from "../config/includes.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { writeTextAtomic } from "../infra/json-files.js";
@@ -69,11 +70,26 @@ async function ensureIncludedPluginsFileIsReadable(filePath: string): Promise<vo
   }
 }
 
+async function restoreConfigFragmentEnvRefs(
+  filePath: string,
+  value: unknown,
+  envSnapshot?: Record<string, string | undefined>,
+): Promise<unknown> {
+  const raw = await fs.readFile(filePath, "utf-8");
+  const parsed = parseConfigJson5(raw);
+  if (!parsed.ok) {
+    return value;
+  }
+  return restoreEnvVarRefs(value, parsed.parsed, envSnapshot ?? process.env);
+}
+
 async function writePluginsIncludeFile(
   filePath: string,
   plugins: OpenClawConfig["plugins"] | undefined,
+  envSnapshot?: Record<string, string | undefined>,
 ): Promise<void> {
-  await writeConfigFragment(filePath, plugins ?? {});
+  const nextValue = await restoreConfigFragmentEnvRefs(filePath, plugins ?? {}, envSnapshot);
+  await writeConfigFragment(filePath, nextValue);
 }
 
 function buildUpdatedRootSource(
@@ -127,9 +143,18 @@ export async function persistPluginConfigWrite(nextConfig: OpenClawConfig): Prom
     return;
   }
   await ensureIncludedPluginsFileIsReadable(includePath);
-  await writePluginsIncludeFile(includePath, validatedConfig.plugins);
+  await writePluginsIncludeFile(
+    includePath,
+    validatedConfig.plugins,
+    writeOptions.envSnapshotForRestore,
+  );
   if (nextRootSource) {
-    await writeConfigFragment(snapshot.path, nextRootSource);
+    const nextRootValue = await restoreConfigFragmentEnvRefs(
+      snapshot.path,
+      nextRootSource,
+      writeOptions.envSnapshotForRestore,
+    );
+    await writeConfigFragment(snapshot.path, nextRootValue);
   }
   clearConfigCache();
 }
