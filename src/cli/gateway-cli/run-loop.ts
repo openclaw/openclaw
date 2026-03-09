@@ -1,3 +1,8 @@
+import {
+  abortEmbeddedPiRun,
+  getActiveEmbeddedRunCount,
+  waitForActiveEmbeddedRuns,
+} from "../../agents/pi-embedded-runner/runs.js";
 import type { startGatewayServer } from "../../gateway/server.js";
 import { acquireGatewayLock } from "../../infra/gateway-lock.js";
 import { restartGatewayProcessWithFreshPid } from "../../infra/process-respawn.js";
@@ -90,7 +95,7 @@ export async function runGatewayLoop(params: {
     exitProcess(0);
   };
 
-  const DRAIN_TIMEOUT_MS = 30_000;
+  const DRAIN_TIMEOUT_MS = 90_000;
   const SHUTDOWN_TIMEOUT_MS = 5_000;
 
   const request = (action: GatewayRunSignalAction, signal: string) => {
@@ -121,15 +126,33 @@ export async function runGatewayLoop(params: {
           // sessions get an explicit restart error instead of silent task loss.
           markGatewayDraining();
           const activeTasks = getActiveTaskCount();
-          if (activeTasks > 0) {
+          const activeRuns = getActiveEmbeddedRunCount();
+
+          // Best-effort abort for compacting runs so long compaction operations
+          // don't hold session write locks across restart boundaries.
+          if (activeRuns > 0) {
+            abortEmbeddedPiRun(undefined, { mode: "compacting" });
+          }
+
+          if (activeTasks > 0 || activeRuns > 0) {
             gatewayLog.info(
-              `draining ${activeTasks} active task(s) before restart (timeout ${DRAIN_TIMEOUT_MS}ms)`,
+              `draining ${activeTasks} active task(s) and ${activeRuns} active embedded run(s) before restart (timeout ${DRAIN_TIMEOUT_MS}ms)`,
             );
-            const { drained } = await waitForActiveTasks(DRAIN_TIMEOUT_MS);
-            if (drained) {
-              gatewayLog.info("all active tasks drained");
+            const [tasksDrain, runsDrain] = await Promise.all([
+              activeTasks > 0
+                ? waitForActiveTasks(DRAIN_TIMEOUT_MS)
+                : Promise.resolve({ drained: true }),
+              activeRuns > 0
+                ? waitForActiveEmbeddedRuns(DRAIN_TIMEOUT_MS)
+                : Promise.resolve({ drained: true }),
+            ]);
+            if (tasksDrain.drained && runsDrain.drained) {
+              gatewayLog.info("all active work drained");
             } else {
               gatewayLog.warn("drain timeout reached; proceeding with restart");
+              // Final best-effort abort to avoid carrying active runs into the
+              // next lifecycle when drain time budget is exhausted.
+              abortEmbeddedPiRun(undefined, { mode: "all" });
             }
           }
         }
