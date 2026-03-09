@@ -223,9 +223,10 @@ export function createInboxApiPlugin() {
             const rt = getInboxApiRuntime();
             const currentCfg = await rt.config.loadConfig();
 
-            // CommandAuthorized defaults to false; the framework's authorizers
-            // handle command authorization based on DM policy/pairing state
-            const msgFields = buildInboundMsgFields(email, account.accountId, false);
+            // The monitor's checkAccess already verified the sender is allowed
+            // by DM policy / pairing store, so grant command authorization
+            // (matches Synology Chat's commandAuthorized: auth.allowed pattern)
+            const msgFields = buildInboundMsgFields(email, account.accountId, true);
             const msgCtx = rt.channel.reply.finalizeInboundContext(msgFields);
 
             await rt.channel.reply.dispatchReplyWithBufferedBlockDispatcher({

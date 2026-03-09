@@ -211,6 +211,40 @@ describe("startPolling", () => {
     expect(deliver).toHaveBeenCalledTimes(1);
   });
 
+  it("retries delivery on transient failure", async () => {
+    const controller = new AbortController();
+    const deliver = vi.fn();
+    const email = makeEmail({ messageId: "<retry@example.com>" });
+
+    vi.mocked(whoami).mockResolvedValue({
+      accountName: "test",
+      email: "test@inboxapi.ai",
+      domain: "inboxapi.ai",
+    });
+    vi.mocked(getLastEmail).mockResolvedValue(null);
+
+    let pollCycle = 0;
+    vi.mocked(getEmails).mockImplementation(async () => {
+      pollCycle++;
+      if (pollCycle <= 2) return [email];
+      controller.abort();
+      return [];
+    });
+
+    // First call fails, second call succeeds
+    deliver.mockRejectedValueOnce(new Error("transient failure")).mockResolvedValueOnce(undefined);
+
+    await startPolling({
+      account: makeAccount(),
+      deliver,
+      log: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+      abortSignal: controller.signal,
+    });
+
+    // Should be called twice: once failing, once succeeding
+    expect(deliver).toHaveBeenCalledTimes(2);
+  });
+
   it("paginates through all new emails before advancing high-water mark", async () => {
     const controller = new AbortController();
     const deliver = vi.fn();

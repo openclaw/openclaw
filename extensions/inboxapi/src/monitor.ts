@@ -103,18 +103,20 @@ export async function startPolling(deps: MonitorDeps): Promise<void> {
 
         // Deliver oldest-first
         for (const email of newEmails.reverse()) {
-          seenMessageIds.add(email.messageId);
-
           // Check DM policy (including pairing store)
           const senderEmail = extractSenderEmail(email.from);
           const allowed = await checkAccess(senderEmail, account);
           if (!allowed) {
+            seenMessageIds.add(email.messageId);
             log?.info?.(`InboxAPI: rejected email from ${senderEmail} (not allowed by DM policy)`);
             continue;
           }
 
           try {
             await deliver(email);
+            // Mark as seen only after successful delivery so transient
+            // failures are retried on the next poll cycle.
+            seenMessageIds.add(email.messageId);
           } catch (err: any) {
             log?.error?.(`InboxAPI: failed to deliver email ${email.messageId}: ${err.message}`);
           }
