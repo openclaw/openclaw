@@ -272,8 +272,7 @@ type BraveSearchResponse = {
   };
 };
 
-type BraveLlmContextSnippet = { text: string };
-type BraveLlmContextResult = { url: string; title: string; snippets: BraveLlmContextSnippet[] };
+type BraveLlmContextResult = { url: string; title: string; snippets: string[] };
 type BraveLlmContextResponse = {
   grounding: { generic?: BraveLlmContextResult[] };
   sources?: { url?: string; hostname?: string; date?: string }[];
@@ -1481,7 +1480,7 @@ async function runBraveLlmContextSearch(params: {
       const mapped = genericResults.map((entry) => ({
         url: entry.url ?? "",
         title: entry.title ?? "",
-        snippets: (entry.snippets ?? []).map((s) => s.text ?? "").filter(Boolean),
+        snippets: (entry.snippets ?? []).filter((s) => typeof s === "string" && s.length > 0),
         siteName: resolveSiteName(entry.url) || undefined,
       }));
 
