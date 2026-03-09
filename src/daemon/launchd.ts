@@ -27,9 +27,31 @@ import type {
 
 const LAUNCH_AGENT_DIR_MODE = 0o755;
 const LAUNCH_AGENT_PLIST_MODE = 0o644;
+const LAUNCHD_LOG_PREFIX_PATTERN = /^[A-Za-z0-9._-]+$/;
 
 function joinLaunchdPath(base: string, ...segments: string[]): string {
   return path.posix.join(toPosixPath(base), ...segments.map(toPosixPath));
+}
+
+function resolveLaunchdLogPrefix(env: GatewayServiceEnv): string {
+  const rawPrefix = env.OPENCLAW_LOG_PREFIX?.trim();
+  if (!rawPrefix) {
+    return "gateway";
+  }
+
+  const normalized = toPosixPath(rawPrefix);
+  const basename = path.posix.basename(normalized);
+  if (
+    basename !== normalized ||
+    basename === "." ||
+    basename === ".." ||
+    !LAUNCHD_LOG_PREFIX_PATTERN.test(basename)
+  ) {
+    throw new Error(
+      "Invalid OPENCLAW_LOG_PREFIX: use only letters, numbers, dot, underscore, or dash.",
+    );
+  }
+  return basename;
 }
 
 function resolveLaunchAgentLabel(args?: { env?: Record<string, string | undefined> }): string {
@@ -59,7 +81,7 @@ export function resolveGatewayLogPaths(env: GatewayServiceEnv): {
 } {
   const stateDir = toPosixPath(resolveGatewayStateDir(env));
   const logDir = joinLaunchdPath(stateDir, "logs");
-  const prefix = env.OPENCLAW_LOG_PREFIX?.trim() || "gateway";
+  const prefix = resolveLaunchdLogPrefix(env);
   return {
     logDir,
     stdoutPath: joinLaunchdPath(logDir, `${prefix}.log`),

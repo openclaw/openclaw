@@ -464,4 +464,26 @@ describe("resolveGatewayLogPaths", () => {
     expect(paths.stdoutPath.endsWith("/Users/test/.openclaw/logs/gateway.log")).toBe(true);
     expect(paths.stderrPath.endsWith("/Users/test/.openclaw/logs/gateway.err.log")).toBe(true);
   });
+
+  it.each(["../../Library/LaunchAgents/other", "/tmp/evil", "..\\..\\LaunchAgents\\other"])(
+    "rejects invalid log prefix path %s",
+    (prefix) => {
+      expect(() =>
+        resolveGatewayLogPaths({
+          HOME: "/Users/test",
+          OPENCLAW_LOG_PREFIX: prefix,
+        }),
+      ).toThrow(/Invalid OPENCLAW_LOG_PREFIX/);
+    },
+  );
+
+  it("accepts safe custom log prefixes", () => {
+    const paths = resolveGatewayLogPaths({
+      HOME: "/Users/test",
+      OPENCLAW_LOG_PREFIX: "gateway-launchd-int-123",
+    });
+
+    expect(paths.stdoutPath.endsWith("/logs/gateway-launchd-int-123.log")).toBe(true);
+    expect(paths.stderrPath.endsWith("/logs/gateway-launchd-int-123.err.log")).toBe(true);
+  });
 });
