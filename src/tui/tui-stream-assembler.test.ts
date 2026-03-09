@@ -79,6 +79,31 @@ describe("TuiStreamAssembler", () => {
     expect(output).toBe("Visible");
   });
 
+  it("strips <think> tags from text content when showThinking is false", () => {
+    const assembler = new TuiStreamAssembler();
+    // Some models (e.g. minimax, ollama) emit reasoning as plain <think> tags
+    // in text content rather than structured thinking blocks.
+    const output = assembler.ingestDelta(
+      "run-think-tags",
+      messageWithContent([text("<think>Internal reasoning here</think>The actual response")]),
+      false,
+    );
+    expect(output).toBe("The actual response");
+  });
+
+  it("preserves <think> tags in text content when showThinking is true", () => {
+    const assembler = new TuiStreamAssembler();
+    const output = assembler.ingestDelta(
+      "run-think-tags-show",
+      messageWithContent([text("<think>Internal reasoning</think>Response")]),
+      true,
+    );
+    // Tags should be preserved when thinking display is enabled
+    expect(output).toContain("<think>");
+    expect(output).toContain("Internal reasoning");
+    expect(output).toContain("Response");
+  });
+
   it("falls back to streamed text on empty final payload", () => {
     const assembler = new TuiStreamAssembler();
     assembler.ingestDelta("run-3", messageWithContent([text("Streamed")]), false);
