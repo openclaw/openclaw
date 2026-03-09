@@ -28,6 +28,16 @@ export type SlackStreamSession = {
   threadTs: string;
   /** True once stop() has been called. */
   stopped: boolean;
+  /**
+   * The Slack message timestamp of the stream message. Populated from the
+   * first non-null response returned by `streamer.append()` (which is the
+   * `chat.startStream` response). May be undefined if all appends were
+   * buffered and the stream was never flushed to Slack — in which case there
+   * is no orphaned message to clean up.
+   *
+   * Use this instead of accessing `streamer.streamTs` (private in the SDK).
+   */
+  streamMessageTs?: string;
 };
 
 export type StartSlackStreamParams = {
@@ -98,8 +108,14 @@ export async function startSlackStream(
 
   // If initial text is provided, send it as the first append which will
   // trigger the ChatStreamer to call chat.startStream under the hood.
+  // The first non-null response is a ChatStartStreamResponse and carries the
+  // stream message ts — capture it so callers never need to touch the private
+  // streamer.streamTs field.
   if (text) {
-    await streamer.append({ markdown_text: text });
+    const response = await streamer.append({ markdown_text: text });
+    if (response?.ts) {
+      session.streamMessageTs = response.ts;
+    }
     logVerbose(`slack-stream: appended initial text (${text.length} chars)`);
   }
 
@@ -121,7 +137,15 @@ export async function appendSlackStream(params: AppendSlackStreamParams): Promis
     return;
   }
 
-  await session.streamer.append({ markdown_text: text });
+  // Capture the stream message ts from the first non-null response (the
+  // ChatStartStreamResponse returned when the SDK flushes and calls
+  // chat.startStream). Subsequent appends return ChatAppendStreamResponse or
+  // null (buffered). Once captured we stop checking.
+  const response = await session.streamer.append({ markdown_text: text });
+  if (!session.streamMessageTs && response?.ts) {
+    session.streamMessageTs = response.ts;
+  }
+
   logVerbose(`slack-stream: appended ${text.length} chars`);
 }
 

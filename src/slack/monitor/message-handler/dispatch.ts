@@ -222,6 +222,7 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
   });
   let streamSession: SlackStreamSession | null = null;
   let streamFailed = false;
+  let lastStreamPayload: ReplyPayload | null = null;
   let usedReplyThreadTs: string | undefined;
 
   const deliverNormally = async (payload: ReplyPayload, forcedThreadTs?: string): Promise<void> => {
@@ -249,6 +250,9 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
       await deliverNormally(payload, streamSession?.threadTs);
       return;
     }
+    // Track the last payload so the stream finalizer can fall back to normal
+    // delivery if stopSlackStream fails after all content has been streamed.
+    lastStreamPayload = payload;
 
     const text = payload.text.trim();
     let plannedThreadTs: string | undefined;
@@ -287,6 +291,32 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
         danger(`slack-stream: streaming API call failed: ${String(err)}, falling back`),
       );
       streamFailed = true;
+
+      // Mark the stream as stopped so the end-of-dispatch finalizer does not
+      // call stopSlackStream on the orphaned message (which would finalize it
+      // and leave a duplicate visible on mobile Slack).
+      if (streamSession) {
+        streamSession.stopped = true;
+      }
+
+      // If startStream already created a Slack message, delete it to prevent
+      // the orphaned stream message from persisting alongside the fallback.
+      const orphanedTs = streamSession?.streamMessageTs;
+      if (orphanedTs) {
+        try {
+          await ctx.app.client.chat.delete({
+            token: ctx.botToken,
+            channel: message.channel,
+            ts: orphanedTs,
+          });
+          logVerbose(`slack-stream: deleted orphaned stream message ${orphanedTs}`);
+        } catch (deleteErr) {
+          logVerbose(
+            `slack-stream: failed to delete orphaned stream message ${orphanedTs}: ${String(deleteErr)}`,
+          );
+        }
+      }
+
       await deliverNormally(payload, streamSession?.threadTs ?? plannedThreadTs);
     }
   };
@@ -461,10 +491,34 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
   // -----------------------------------------------------------------------
   const finalStream = streamSession as SlackStreamSession | null;
   if (finalStream && !finalStream.stopped) {
+    // Capture the stream message timestamp before stopping so we can clean up
+    // if stopSlackStream fails (prevents ghost/duplicate on mobile Slack).
+    const streamMsgTs = finalStream.streamMessageTs;
     try {
       await stopSlackStream({ session: finalStream });
     } catch (err) {
       runtime.error?.(danger(`slack-stream: failed to stop stream: ${String(err)}`));
+      // If stop failed and a stream message exists, try to delete it so it
+      // does not persist as a ghost message alongside any fallback delivery.
+      if (streamMsgTs) {
+        try {
+          await ctx.app.client.chat.delete({
+            token: ctx.botToken,
+            channel: message.channel,
+            ts: streamMsgTs,
+          });
+          logVerbose(`slack-stream: deleted orphaned stream message ${streamMsgTs} after stop failure`);
+        } catch (deleteErr) {
+          logVerbose(
+            `slack-stream: failed to delete orphaned stream message ${streamMsgTs}: ${String(deleteErr)}`,
+          );
+        }
+      }
+      // Fall back to normal delivery so the user gets a response even when
+      // the stream could not be finalized.
+      if (lastStreamPayload) {
+        await deliverNormally(lastStreamPayload, finalStream.threadTs);
+      }
     }
   }
 
