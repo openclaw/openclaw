@@ -104,6 +104,24 @@ Tip: if a non‑dev gateway is already running (launchd/systemd), stop it first:
 openclaw gateway stop
 ```
 
+## Recover from invalid config startup failures
+
+If gateway startup fails with `Invalid config at ...`, repair with doctor first:
+
+```bash
+openclaw doctor --fix
+openclaw gateway run
+```
+
+If startup is still blocked and you need a quick rollback, restore the latest backup:
+
+```bash
+cp ~/.openclaw/openclaw.json.bak ~/.openclaw/openclaw.json
+openclaw gateway run
+```
+
+OpenClaw keeps a small backup ring (`openclaw.json.bak`, `.bak.1`, `.bak.2`, ...). If `.bak` is also broken, try an older backup file.
+
 ## Raw stream logging (OpenClaw)
 
 OpenClaw can log the **raw assistant stream** before any filtering/formatting.
