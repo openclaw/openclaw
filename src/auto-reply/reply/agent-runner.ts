@@ -508,6 +508,18 @@ export async function runReplyAgent(params: {
     didLogHeartbeatStrip = payloadResult.didLogHeartbeatStrip;
 
     if (replyPayloads.length === 0) {
+      // Block-streaming channels drop payloads after streamed delivery, so we
+      // must surface the truncation notice here before returning — it would
+      // never reach the wasTruncated block at the end of the function.
+      if (wasTruncated) {
+        return finalizeWithFollowup(
+          {
+            text: "⚠️ Response was cut off at the output token limit. You can ask me to continue from where I left off.",
+          },
+          queueKey,
+          runFollowupTurn,
+        );
+      }
       return finalizeWithFollowup(undefined, queueKey, runFollowupTurn);
     }
 
