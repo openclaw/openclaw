@@ -75,6 +75,12 @@ export async function loadAgentFileContent(
       name,
     });
     if (res?.file) {
+      // Reject stale responses that belong to a different selected agent.
+      // If agentFilesList is non-null and points to a different agent, ignore.
+      if (state.agentFilesList?.agentId && state.agentFilesList.agentId !== agentId) {
+        return;
+      }
+
       const content = res.file.content ?? "";
       const previousBase = state.agentFileContents[name] ?? "";
       const currentDraft = state.agentFileDrafts[name];
