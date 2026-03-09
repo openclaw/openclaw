@@ -442,13 +442,37 @@ function formatMemoryEntry(params: {
 
 function groupMemoryEntryBlocks(lines: string[]): string[][] {
   const blocks: string[][] = [];
+  let current: string[] = [];
+  let pendingBlankLines: string[] = [];
   for (const line of lines) {
-    if (blocks.length === 0 || line === "" || !/^[ \t]/.test(line)) {
-      blocks.push([line]);
+    if (line === "") {
+      if (current.length === 0) {
+        blocks.push([line]);
+      } else {
+        pendingBlankLines.push(line);
+      }
       continue;
     }
-    blocks[blocks.length - 1]?.push(line);
+    const isIndented = /^[ \t]/.test(line);
+    if (current.length === 0) {
+      current = [...pendingBlankLines, line];
+      pendingBlankLines = [];
+      continue;
+    }
+    if (isIndented) {
+      current.push(...pendingBlankLines, line);
+      pendingBlankLines = [];
+      continue;
+    }
+    blocks.push(current);
+    blocks.push(...pendingBlankLines.map((blankLine) => [blankLine]));
+    pendingBlankLines = [];
+    current = [line];
   }
+  if (current.length > 0) {
+    blocks.push(current);
+  }
+  blocks.push(...pendingBlankLines.map((blankLine) => [blankLine]));
   return blocks;
 }
 
@@ -468,21 +492,25 @@ async function resolveMemoryWritePath(params: {
 
 async function resolveLongtermMemoryWritePath(workspaceDir: string): Promise<string> {
   const primary = path.join(workspaceDir, "MEMORY.md");
-  if (await isRegularFile(primary)) {
+  if (await pathExists(primary)) {
     return primary;
   }
   const legacy = path.join(workspaceDir, "memory.md");
-  if (await isRegularFile(legacy)) {
+  if (await pathExists(legacy)) {
     return legacy;
   }
   return primary;
 }
 
-async function isRegularFile(absPath: string): Promise<boolean> {
+async function pathExists(absPath: string): Promise<boolean> {
   try {
-    return (await fs.lstat(absPath)).isFile();
-  } catch {
-    return false;
+    await fs.lstat(absPath);
+    return true;
+  } catch (err) {
+    if (isMissingFileError(err)) {
+      return false;
+    }
+    throw err;
   }
 }
 
