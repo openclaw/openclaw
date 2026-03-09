@@ -80,6 +80,7 @@ export function useChat(sendRpc: SendRpc) {
       const result = await sendRpc<{
         messages: ChatMessage[];
         thinkingLevel?: string;
+        isRunning?: boolean;
       }>("chat.history", {
         sessionKey: activeSessionKey,
         limit: 200,
@@ -88,7 +89,7 @@ export function useChat(sendRpc: SendRpc) {
       if (seq !== historySeqRef.current) {
         return;
       }
-      store.setMessages(result?.messages ?? []);
+      store.setMessages(result?.messages ?? [], result?.isRunning);
       if (result?.thinkingLevel) {
         store.setThinkingLevel(result.thinkingLevel);
       }
@@ -412,10 +413,15 @@ export function useChat(sendRpc: SendRpc) {
   // Watchdog: auto-clear stuck "thinking" indicator if no stream events for 60s.
   // This catches cases where the gateway "final" event was dropped (e.g. session
   // key format mismatch) and isStreaming stays true indefinitely.
+  // Skip if isAgentActive — the server confirmed the run is still in-flight.
   useEffect(() => {
     const watchdog = setInterval(() => {
       const s = useChatStore.getState();
       if (!s.isStreaming || !s.lastStreamEventAt) {
+        return;
+      }
+      // Server-side polling confirmed the agent is still running — don't clear
+      if (s.isAgentActive) {
         return;
       }
       if (Date.now() - s.lastStreamEventAt > 60_000) {

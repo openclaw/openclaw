@@ -119,7 +119,10 @@ export type ChatState = {
   setActiveSessionKey: (key: string) => void;
   setSessions: (sessions: SessionEntry[]) => void;
   setSessionsLoading: (loading: boolean) => void;
-  setMessages: (messages: Array<Omit<ChatMessage, "id"> & { id?: string }>) => void;
+  setMessages: (
+    messages: Array<Omit<ChatMessage, "id"> & { id?: string }>,
+    isRunning?: boolean,
+  ) => void;
   setMessagesLoading: (loading: boolean) => void;
   appendMessage: (message: Omit<ChatMessage, "id"> & { id?: string }) => void;
   /** Remove messages from index onwards (used by regenerate to drop the last exchange) */
@@ -269,7 +272,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
   setSessions: (sessions) => set({ sessions }),
   setSessionsLoading: (loading) => set({ sessionsLoading: loading }),
 
-  setMessages: (messages) => {
+  setMessages: (messages, isRunning) => {
     // Deduplicate: remove consecutive assistant messages with identical text
     // content (can occur when the transcript is written twice due to race conditions).
     const deduped: typeof messages = [];
@@ -299,11 +302,12 @@ export const useChatStore = create<ChatState>((set, get) => ({
       deduped.push(m);
     }
     const next = deduped.map((m, i) => ensureId({ ...m, seq: i + 1 }));
-    // Skip update if messages are unchanged (avoids flicker during live-polling).
-    // Use getMessageText() for stable comparison — content can be string or array,
-    // and array references differ each poll even when text is identical.
+    // Skip update if messages are unchanged AND run state hasn't changed
+    // (avoids flicker during live-polling).
     const prev = get().messages;
-    if (prev.length === next.length && prev.length > 0) {
+    const prevAgentActive = get().isAgentActive;
+    const agentActive = isRunning === true;
+    if (prev.length === next.length && prev.length > 0 && prevAgentActive === agentActive) {
       const pLast = prev[prev.length - 1];
       const nLast = next[next.length - 1];
       if (
@@ -314,20 +318,12 @@ export const useChatStore = create<ChatState>((set, get) => ({
         return;
       }
     }
-    // Detect agent activity: if polling brought new messages beyond what
-    // we had, the agent is working in the background.
-    const grewFromPoll = prev.length > 0 && next.length > prev.length;
-    const lastRole = next[next.length - 1]?.role;
-    // Agent is active if new messages arrived and last message is from
-    // assistant or a tool (not user — user messages come from our UI).
-    const agentActive = grewFromPoll && lastRole !== "user";
     set({
       messages: next,
       isSendPending: false,
-      // Only set isAgentActive when NOT already streaming (avoid conflict)
-      ...(agentActive && !get().isStreaming ? { isAgentActive: true } : {}),
-      // Clear if last message is a final assistant reply (no more tool calls expected)
-      ...(!agentActive && get().isAgentActive ? { isAgentActive: false } : {}),
+      // Use server-authoritative isRunning flag for agent activity detection.
+      // This is reliable even when the agent is doing tool calls with no text deltas.
+      isAgentActive: agentActive,
     });
   },
   setMessagesLoading: (loading) => set({ messagesLoading: loading }),

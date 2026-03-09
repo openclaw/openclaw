@@ -663,12 +663,22 @@ export const chatHandlers: GatewayRequestHandlers = {
       });
     }
     const verboseLevel = entry?.verboseLevel ?? cfg.agents?.defaults?.verboseDefault;
+    // Check if a chat run is currently active for this session.
+    // chatAbortControllers tracks all in-flight runs; match by sessionKey or sessionId.
+    let isRunning = false;
+    for (const [, ctrl] of context.chatAbortControllers) {
+      if (ctrl.sessionKey === sessionKey || (sessionId && ctrl.sessionId === sessionId)) {
+        isRunning = true;
+        break;
+      }
+    }
     respond(true, {
       sessionKey,
       sessionId,
       messages: bounded.messages,
       thinkingLevel,
       verboseLevel,
+      isRunning,
     });
   },
   "chat.abort": ({ params, respond, context }) => {
