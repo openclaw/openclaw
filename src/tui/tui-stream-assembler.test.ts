@@ -86,6 +86,18 @@ describe("TuiStreamAssembler", () => {
     expect(finalText).toBe("Streamed");
   });
 
+  it("falls back to event error message when final payload has no renderable text", () => {
+    const assembler = new TuiStreamAssembler();
+    const finalText = assembler.finalize(
+      "run-3-error",
+      { role: "assistant", content: [] },
+      false,
+      '401 {"error":{"message":"Missing scopes: model.request"}}',
+    );
+    expect(finalText).toContain("HTTP 401");
+    expect(finalText).toContain("Missing scopes: model.request");
+  });
+
   it("returns null when delta text is unchanged", () => {
     const assembler = new TuiStreamAssembler();
     const first = assembler.ingestDelta("run-4", messageWithContent([text("Repeat")]), false);

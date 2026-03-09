@@ -96,7 +96,7 @@ function runScript(
   const binDir = path.join(homeDir, "bin");
   const env = {
     HOME: homeDir,
-    PATH: `${binDir}:${sharedBinDir}:${BASE_PATH}`,
+    PATH: `${binDir}${path.delimiter}${sharedBinDir}${path.delimiter}${BASE_PATH}`,
     LANG: BASE_LANG,
     ...extraEnv,
   };

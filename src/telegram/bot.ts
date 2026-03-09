@@ -6,6 +6,11 @@ import { resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { resolveTextChunkLimit } from "../auto-reply/chunk.js";
 import { DEFAULT_GROUP_HISTORY_LIMIT, type HistoryEntry } from "../auto-reply/reply/history.js";
 import {
+  resolveThreadBindingIdleTimeoutMsForChannel,
+  resolveThreadBindingMaxAgeMsForChannel,
+  resolveThreadBindingSpawnPolicy,
+} from "../channels/thread-bindings-policy.js";
+import {
   isNativeCommandsExplicitlyDisabled,
   resolveNativeCommandsEnabled,
   resolveNativeSkillsEnabled,
@@ -36,6 +41,7 @@ import { buildTelegramGroupPeerId, resolveTelegramStreamMode } from "./bot/helpe
 import { resolveTelegramFetch } from "./fetch.js";
 import { createTelegramSendChatActionHandler } from "./sendchataction-401-backoff.js";
 import { getTelegramSequentialKey } from "./sequential-key.js";
+import { createTelegramThreadBindingManager } from "./thread-bindings.js";
 
 export type TelegramBotOptions = {
   token: string;
@@ -67,6 +73,27 @@ export function createTelegramBot(opts: TelegramBotOptions) {
     cfg,
     accountId: opts.accountId,
   });
+  const threadBindingPolicy = resolveThreadBindingSpawnPolicy({
+    cfg,
+    channel: "telegram",
+    accountId: account.accountId,
+    kind: "subagent",
+  });
+  const threadBindingManager = threadBindingPolicy.enabled
+    ? createTelegramThreadBindingManager({
+        accountId: account.accountId,
+        idleTimeoutMs: resolveThreadBindingIdleTimeoutMsForChannel({
+          cfg,
+          channel: "telegram",
+          accountId: account.accountId,
+        }),
+        maxAgeMs: resolveThreadBindingMaxAgeMsForChannel({
+          cfg,
+          channel: "telegram",
+          accountId: account.accountId,
+        }),
+      })
+    : null;
   const telegramCfg = account.config;
 
   const fetchImpl = resolveTelegramFetch(opts.proxyFetch, {
@@ -235,7 +262,7 @@ export function createTelegramBot(opts: TelegramBotOptions) {
   });
   const useAccessGroups = cfg.commands?.useAccessGroups !== false;
   const ackReactionScope = cfg.messages?.ackReactionScope ?? "group-mentions";
-  const mediaMaxBytes = (opts.mediaMaxMb ?? telegramCfg.mediaMaxMb ?? 5) * 1024 * 1024;
+  const mediaMaxBytes = (opts.mediaMaxMb ?? telegramCfg.mediaMaxMb ?? 100) * 1024 * 1024;
   const logger = getChildLogger({ module: "telegram-auto-reply" });
   const streamMode = resolveTelegramStreamMode(telegramCfg);
   const resolveGroupPolicy = (chatId: string | number) =>
@@ -378,6 +405,12 @@ export function createTelegramBot(opts: TelegramBotOptions) {
     processMessage,
     logger,
   });
+
+  const originalStop = bot.stop.bind(bot);
+  bot.stop = ((...args: Parameters<typeof originalStop>) => {
+    threadBindingManager?.stop();
+    return originalStop(...args);
+  }) as typeof bot.stop;
 
   return bot;
 }

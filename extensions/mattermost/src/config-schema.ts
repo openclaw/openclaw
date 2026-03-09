@@ -50,6 +50,12 @@ const MattermostAccountSchemaBase = z
       })
       .optional(),
     commands: MattermostSlashCommandsSchema,
+    interactions: z
+      .object({
+        callbackBaseUrl: z.string().optional(),
+        allowedSourceIps: z.array(z.string()).optional(),
+      })
+      .optional(),
   })
   .strict();
 

@@ -24,6 +24,27 @@ type HardeningCase = {
   checkRawCommandMatchesArgv?: boolean;
 };
 
+function createScriptOperandFixture(tmp: string): {
+  command: string[];
+  scriptPath: string;
+  initialBody: string;
+} {
+  if (process.platform === "win32") {
+    const scriptPath = path.join(tmp, "run.js");
+    return {
+      command: [process.execPath, "./run.js"],
+      scriptPath,
+      initialBody: 'console.log("SAFE");\n',
+    };
+  }
+  const scriptPath = path.join(tmp, "run.sh");
+  return {
+    command: ["/bin/sh", "./run.sh"],
+    scriptPath,
+    initialBody: "#!/bin/sh\necho SAFE\n",
+  };
+}
+
 describe("hardenApprovedExecutionPaths", () => {
   const cases: HardeningCase[] = [
     {
@@ -128,4 +149,30 @@ describe("hardenApprovedExecutionPaths", () => {
       }
     });
   }
+
+  it("captures mutable shell script operands in approval plans", () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-approval-script-plan-"));
+    const fixture = createScriptOperandFixture(tmp);
+    fs.writeFileSync(fixture.scriptPath, fixture.initialBody);
+    if (process.platform !== "win32") {
+      fs.chmodSync(fixture.scriptPath, 0o755);
+    }
+    try {
+      const prepared = buildSystemRunApprovalPlan({
+        command: fixture.command,
+        cwd: tmp,
+      });
+      expect(prepared.ok).toBe(true);
+      if (!prepared.ok) {
+        throw new Error("unreachable");
+      }
+      expect(prepared.plan.mutableFileOperand).toEqual({
+        argvIndex: 1,
+        path: fs.realpathSync(fixture.scriptPath),
+        sha256: expect.any(String),
+      });
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  });
 });

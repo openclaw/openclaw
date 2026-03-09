@@ -1055,6 +1055,11 @@ describe("runReplyAgent typing (heartbeat)", () => {
         expectedReason: "rate limit",
       },
       {
+        existingReason: undefined,
+        reportedReason: "overloaded",
+        expectedReason: "overloaded",
+      },
+      {
         existingReason: "rate limit",
         reportedReason: "timeout",
         expectedReason: "timeout",

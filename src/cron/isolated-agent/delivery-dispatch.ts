@@ -275,7 +275,19 @@ export async function dispatchCronDelivery(
     const initialSynthesizedText = synthesizedText.trim();
     let activeSubagentRuns = countActiveDescendantRuns(params.agentSessionKey);
     const expectedSubagentFollowup = expectsSubagentFollowup(initialSynthesizedText);
-    const hadActiveDescendants = activeSubagentRuns > 0;
+    // Also check for already-completed descendants. If the subagent finished
+    // before delivery-dispatch runs, activeSubagentRuns is 0 and
+    // expectedSubagentFollowup may be false (e.g. cron said "on it" which
+    // doesn't match the narrow hint list). We still need to use the
+    // descendant's output instead of the interim cron text.
+    const completedDescendantReply =
+      activeSubagentRuns === 0 && isLikelyInterimCronMessage(initialSynthesizedText)
+        ? await readDescendantSubagentFallbackReply({
+            sessionKey: params.agentSessionKey,
+            runStartedAt: params.runStartedAt,
+          })
+        : undefined;
+    const hadDescendants = activeSubagentRuns > 0 || Boolean(completedDescendantReply);
     if (activeSubagentRuns > 0 || expectedSubagentFollowup) {
       let finalReply = await waitForDescendantSubagentSummary({
         sessionKey: params.agentSessionKey,
@@ -284,11 +296,7 @@ export async function dispatchCronDelivery(
         observedActiveDescendants: activeSubagentRuns > 0 || expectedSubagentFollowup,
       });
       activeSubagentRuns = countActiveDescendantRuns(params.agentSessionKey);
-      if (
-        !finalReply &&
-        activeSubagentRuns === 0 &&
-        (hadActiveDescendants || expectedSubagentFollowup)
-      ) {
+      if (!finalReply && activeSubagentRuns === 0) {
         finalReply = await readDescendantSubagentFallbackReply({
           sessionKey: params.agentSessionKey,
           runStartedAt: params.runStartedAt,
@@ -300,21 +308,45 @@ export async function dispatchCronDelivery(
         synthesizedText = finalReply;
         deliveryPayloads = [{ text: finalReply }];
       }
+    } else if (completedDescendantReply) {
+      // Descendants already finished before we got here. Use their output
+      // directly instead of the cron agent's interim text.
+      outputText = completedDescendantReply;
+      summary = pickSummaryFromOutput(completedDescendantReply) ?? summary;
+      synthesizedText = completedDescendantReply;
+      deliveryPayloads = [{ text: completedDescendantReply }];
     }
     if (activeSubagentRuns > 0) {
       // Parent orchestration is still in progress; avoid announcing a partial
-      // update to the main requester.
-      return params.withRunSession({ status: "ok", summary, outputText, ...params.telemetry });
+      // update to the main requester. Mark deliveryAttempted so the timer does
+      // not fire a redundant enqueueSystemEvent fallback (double-announce bug).
+      deliveryAttempted = true;
+      return params.withRunSession({
+        status: "ok",
+        summary,
+        outputText,
+        deliveryAttempted,
+        ...params.telemetry,
+      });
     }
     if (
-      (hadActiveDescendants || expectedSubagentFollowup) &&
+      hadDescendants &&
       synthesizedText.trim() === initialSynthesizedText &&
       isLikelyInterimCronMessage(initialSynthesizedText) &&
       initialSynthesizedText.toUpperCase() !== SILENT_REPLY_TOKEN.toUpperCase()
     ) {
-      // Descendants existed but no post-orchestration synthesis arrived, so
-      // suppress stale parent text like "on it, pulling everything together".
-      return params.withRunSession({ status: "ok", summary, outputText, ...params.telemetry });
+      // Descendants existed but no post-orchestration synthesis arrived AND
+      // no descendant fallback reply was available. Suppress stale parent
+      // text like "on it, pulling everything together". Mark deliveryAttempted
+      // so the timer does not fire a redundant enqueueSystemEvent fallback.
+      deliveryAttempted = true;
+      return params.withRunSession({
+        status: "ok",
+        summary,
+        outputText,
+        deliveryAttempted,
+        ...params.telemetry,
+      });
     }
     if (synthesizedText.toUpperCase() === SILENT_REPLY_TOKEN.toUpperCase()) {
       return params.withRunSession({
@@ -465,39 +497,38 @@ export async function dispatchCronDelivery(
       }
     } else {
       const announceResult = await deliverViaAnnounce(params.resolvedDelivery);
-      if (announceResult) {
-        // Fall back to direct delivery only when the announce send was
-        // actually attempted and failed.  Early returns from
-        // deliverViaAnnounce (active subagents, interim suppression,
-        // SILENT_REPLY_TOKEN) are intentional suppressions that must NOT
-        // trigger direct delivery — doing so would bypass the suppression
-        // guard and leak partial/stale content to the channel.  (#32432)
-        if (announceDeliveryWasAttempted && !delivered && !params.isAborted()) {
-          const directFallback = await deliverViaDirect(params.resolvedDelivery);
-          if (directFallback) {
-            return {
-              result: directFallback,
-              delivered,
-              deliveryAttempted,
-              summary,
-              outputText,
-              synthesizedText,
-              deliveryPayloads,
-            };
-          }
-          // If direct delivery succeeded (returned null without error),
-          // `delivered` has been set to true by deliverViaDirect.
-          if (delivered) {
-            return {
-              delivered,
-              deliveryAttempted,
-              summary,
-              outputText,
-              synthesizedText,
-              deliveryPayloads,
-            };
-          }
+      // Fall back to direct delivery only when the announce send was actually
+      // attempted and failed. Early returns from deliverViaAnnounce (active
+      // subagents, interim suppression, SILENT_REPLY_TOKEN) are intentional
+      // suppressions that must NOT trigger direct delivery — doing so would
+      // bypass the suppression guard and leak partial/stale content.
+      if (announceDeliveryWasAttempted && !delivered && !params.isAborted()) {
+        const directFallback = await deliverViaDirect(params.resolvedDelivery);
+        if (directFallback) {
+          return {
+            result: directFallback,
+            delivered,
+            deliveryAttempted,
+            summary,
+            outputText,
+            synthesizedText,
+            deliveryPayloads,
+          };
         }
+        // If direct delivery succeeded (returned null without error),
+        // `delivered` has been set to true by deliverViaDirect.
+        if (delivered) {
+          return {
+            delivered,
+            deliveryAttempted,
+            summary,
+            outputText,
+            synthesizedText,
+            deliveryPayloads,
+          };
+        }
+      }
+      if (announceResult) {
         return {
           result: announceResult,
           delivered,
