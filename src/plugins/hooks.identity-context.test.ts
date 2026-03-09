@@ -244,8 +244,12 @@ describe("PluginHookAgentContext identity fields", () => {
       expect(ctx.channelId).toBe("discord");
     });
 
-    it("groupId null (DM) is distinct from groupId undefined (unknown)", () => {
-      // null = confirmed DM, no group → lower injection risk for security plugins
+    it("groupId from DM (null) and omitted groupId both arrive as null in hookCtx", () => {
+      // Design constraint: the ?? null coercion in attempt.ts collapses both
+      // "confirmed DM" (null) and "not computed" (undefined) to null at the
+      // hook level.  The distinction is preserved at the queue level
+      // (FollowupRun.run.groupId: null vs undefined) but not in hookCtx.
+      // Plugins that need the distinction should read from run params directly.
       const dmCtx = buildHookCtx({
         agentId: "main",
         sessionKey: "main:abc",
@@ -253,9 +257,7 @@ describe("PluginHookAgentContext identity fields", () => {
         groupId: null,
       });
       expect(dmCtx.groupId).toBeNull();
-      expect(dmCtx.groupId).not.toBeUndefined();
 
-      // undefined params → coerced to null by `?? null`, consistent with attempt.ts
       const unknownCtx = buildHookCtx({
         agentId: "main",
         sessionKey: "main:abc",
