@@ -7,7 +7,7 @@ import {
   TAILSCALE_EXPOSURE_OPTIONS,
   TAILSCALE_MISSING_BIN_NOTE_LINES,
 } from "../gateway/gateway-config-prompts.shared.js";
-import { findTailscaleBinary, getTailnetHostname } from "../infra/tailscale.js";
+import { findTailscaleBinary } from "../infra/tailscale.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { resolveDefaultSecretProviderAlias } from "../secrets/ref-contract.js";
 import { validateIPv4AddressInput } from "../shared/net/ipv4.js";
@@ -325,28 +325,6 @@ export async function promptGatewayConfig(
     trustedProxy: trustedProxyConfig,
   });
 
-  // When Tailscale is enabled, automatically add the Tailscale origin to allowedOrigins
-  // so users can access the Control UI via the Tailscale URL
-  let allowedOrigins = next.gateway?.controlUi?.allowedOrigins ?? [];
-  if (tailscaleMode !== "off") {
-    try {
-      const tailnetHostname = await getTailnetHostname();
-      const tailscaleOrigin = `https://${tailnetHostname}`;
-      // Compare case-insensitively to avoid duplicates with different casing
-      const normalizedOrigins = allowedOrigins.map((o) => o.toLowerCase());
-      if (!normalizedOrigins.includes(tailscaleOrigin.toLowerCase())) {
-        allowedOrigins = [...allowedOrigins, tailscaleOrigin];
-        runtime.log(`Added Tailscale origin to allowedOrigins: ${tailscaleOrigin}`);
-      }
-    } catch (err) {
-      const errorMsg = err instanceof Error ? err.message : String(err);
-      runtime.error(
-        `Could not detect Tailscale hostname: ${errorMsg}. ` +
-        "You may need to manually add your Tailscale origin to gateway.controlUi.allowedOrigins"
-      );
-    }
-  }
-
   next = {
     ...next,
     gateway: {
@@ -357,10 +335,6 @@ export async function promptGatewayConfig(
       auth: authConfig,
       ...(customBindHost && { customBindHost }),
       ...(trustedProxies && { trustedProxies }),
-      controlUi: {
-        ...next.gateway?.controlUi,
-        allowedOrigins,
-      },
       tailscale: {
         ...next.gateway?.tailscale,
         mode: tailscaleMode,
@@ -369,6 +343,8 @@ export async function promptGatewayConfig(
     },
   };
 
+  // Let the shared helper add the Tailscale origin to allowedOrigins.
+  // This handles IPv6 correctly and reuses the already-detected tailscale binary.
   next = await maybeAddTailnetOriginToControlUiAllowedOrigins({
     config: next,
     tailscaleMode,
