@@ -377,7 +377,6 @@ export async function backupCreateCommand(
   // Auto-load .gitignore and .openclawignore from workspace directories
   const workspacePatterns = await loadIgnoreFilesFromWorkspaces(plan.workspaceDirs);
   excludePatterns = [...excludePatterns, ...workspacePatterns];
-  }
 
   // Filter excluded assets
   const { included: filteredAssets, excluded: excludedAssets } = filterExcludedAssets(
