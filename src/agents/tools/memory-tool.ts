@@ -237,7 +237,7 @@ export function createMemoryWriteTool(options: {
         date,
       });
       await withMemoryFileLock(absPath, async () => {
-        await ensureMemoryFile(absPath);
+        await ensureMemoryFile(absPath, ctx.workspaceDir);
         const separator = await resolveMemoryAppendSeparator(absPath);
         await fs.appendFile(absPath, `${separator}${entry}\n`, "utf-8");
       });
@@ -292,13 +292,8 @@ export function createMemoryUpsertTool(options: {
         date,
       });
       const updated = await withMemoryFileLock(absPath, async () => {
-        await ensureMemoryFile(absPath);
-        let current = "";
-        try {
-          current = await fs.readFile(absPath, "utf-8");
-        } catch {
-          current = "";
-        }
+        await ensureMemoryFile(absPath, ctx.workspaceDir);
+        const current = await readMemoryFileOrEmpty(absPath);
         const lines = current.length > 0 ? current.split(/\r?\n/) : [];
         while (lines.length > 0 && lines.at(-1) === "") {
           lines.pop();
@@ -448,7 +443,7 @@ function formatMemoryEntry(params: {
 function groupMemoryEntryBlocks(lines: string[]): string[][] {
   const blocks: string[][] = [];
   for (const line of lines) {
-    if (line.startsWith("- ") || blocks.length === 0) {
+    if (blocks.length === 0 || line === "" || !/^[ \t]/.test(line)) {
       blocks.push([line]);
       continue;
     }
@@ -491,13 +486,63 @@ async function isRegularFile(absPath: string): Promise<boolean> {
   }
 }
 
-async function ensureMemoryFile(absPath: string) {
+async function ensureMemoryFile(absPath: string, workspaceDir: string) {
+  await assertMemoryWritePathSafe(absPath, workspaceDir);
   await fs.mkdir(path.dirname(absPath), { recursive: true });
   try {
     await fs.access(absPath);
   } catch {
     await fs.writeFile(absPath, "", "utf-8");
   }
+}
+
+async function readMemoryFileOrEmpty(absPath: string): Promise<string> {
+  try {
+    return await fs.readFile(absPath, "utf-8");
+  } catch (err) {
+    if (isMissingFileError(err)) {
+      return "";
+    }
+    throw err;
+  }
+}
+
+async function assertMemoryWritePathSafe(absPath: string, workspaceDir: string) {
+  const relPath = path.relative(workspaceDir, absPath);
+  if (!relPath || relPath.startsWith("..") || path.isAbsolute(relPath)) {
+    throw new ToolInputError("memory path must stay inside the workspace");
+  }
+  const segments = relPath.split(path.sep).filter(Boolean);
+  let current = workspaceDir;
+  for (const [index, segment] of segments.entries()) {
+    current = path.join(current, segment);
+    let stat;
+    try {
+      stat = await fs.lstat(current);
+    } catch (err) {
+      if (isMissingFileError(err)) {
+        return;
+      }
+      throw err;
+    }
+    if (stat.isSymbolicLink()) {
+      throw new ToolInputError("memory path cannot use symlinks");
+    }
+    const isLast = index === segments.length - 1;
+    if (isLast) {
+      if (!stat.isFile()) {
+        throw new ToolInputError("memory path must be a regular file");
+      }
+      continue;
+    }
+    if (!stat.isDirectory()) {
+      throw new ToolInputError("memory parent path must be a directory");
+    }
+  }
+}
+
+function isMissingFileError(err: unknown): err is NodeJS.ErrnoException {
+  return err instanceof Error && "code" in err && err.code === "ENOENT";
 }
 
 async function resolveMemoryAppendSeparator(absPath: string): Promise<string> {
