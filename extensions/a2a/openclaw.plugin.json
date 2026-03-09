@@ -1,0 +1,103 @@
+{
+  "id": "a2a",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "enabled": { "type": "boolean" },
+      "card": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "name": { "type": "string" },
+          "description": { "type": "string" },
+          "version": { "type": "string" },
+          "skills": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "id": { "type": "string" },
+                "name": { "type": "string" },
+                "description": { "type": "string" },
+                "tags": {
+                  "type": "array",
+                  "items": { "type": "string" }
+                }
+              }
+            }
+          },
+          "defaultInputModes": {
+            "type": "array",
+            "items": { "type": "string" }
+          },
+          "defaultOutputModes": {
+            "type": "array",
+            "items": { "type": "string" }
+          }
+        }
+      },
+      "auth": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "mode": {
+            "type": "string",
+            "enum": ["none", "bearer"]
+          },
+          "token": { "type": "string" }
+        }
+      },
+      "routing": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "defaultAgentId": { "type": "string" }
+        }
+      },
+      "peers": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "name": { "type": "string" },
+            "agentCardUrl": { "type": "string" },
+            "auth": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "type": {
+                  "type": "string",
+                  "enum": ["bearer"]
+                },
+                "token": { "type": "string" }
+              }
+            }
+          }
+        }
+      },
+      "timeouts": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "agentResponseMs": { "type": "number", "minimum": 0 },
+          "taskRetentionMs": { "type": "number", "minimum": 0 }
+        }
+      }
+    }
+  },
+  "uiHints": {
+    "enabled": { "label": "Enable A2A Gateway" },
+    "card.name": { "label": "Agent Card Name" },
+    "card.description": { "label": "Agent Description" },
+    "card.version": { "label": "Agent Version", "advanced": true },
+    "auth.mode": { "label": "Inbound Auth Mode" },
+    "auth.token": { "label": "Inbound Bearer Token", "sensitive": true },
+    "routing.defaultAgentId": { "label": "Default Agent ID" },
+    "peers": { "label": "Remote Peers", "advanced": true },
+    "timeouts.agentResponseMs": { "label": "Agent Response Timeout (ms)", "advanced": true },
+    "timeouts.taskRetentionMs": { "label": "Task Retention Time (ms)", "advanced": true }
+  }
+}
