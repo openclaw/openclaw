@@ -389,7 +389,10 @@ export function buildAgentSystemPrompt(params: {
       : sanitizedWorkspaceDir;
   const workspaceGuidance =
     params.sandboxInfo?.enabled && sanitizedSandboxContainerWorkspace
-      ? `For read/write/edit/apply_patch, file paths resolve against host workspace: ${sanitizedWorkspaceDir}. For bash/exec commands, use sandbox container paths under ${sanitizedSandboxContainerWorkspace} (or relative paths from that workdir), not host paths. Prefer relative paths so both sandboxed exec and file tools work consistently.`
+      ? `Sandboxed environment. Container working directory: ${sanitizedSandboxContainerWorkspace}
+- Always use container paths (${sanitizedSandboxContainerWorkspace}/file.txt) or relative paths (./file.txt)
+- All tools (read/write/edit/bash/exec) accept container paths; path mapping to host is automatic
+- Never use host paths like ${sanitizedWorkspaceDir} - they don't exist in the container`
       : "Treat this directory as the single global workspace for file operations unless explicitly instructed otherwise.";
   const safetySection = [
     "## Safety",
