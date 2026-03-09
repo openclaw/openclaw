@@ -4,6 +4,7 @@ import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 import { loadConfig } from "../config/config.js";
 import { type AgentEventPayload, getAgentRunContext } from "../infra/agent-events.js";
 import { resolveHeartbeatVisibility } from "../infra/heartbeat-visibility.js";
+import { stripReasoningTagsFromText } from "../shared/text/reasoning-tags.js";
 import { stripInlineDirectiveTagsForDisplay } from "../utils/directive-tags.js";
 import { loadSessionEntry } from "./session-utils.js";
 import { formatForLog } from "./ws-log.js";
@@ -346,9 +347,19 @@ export function createAgentEventHandler({
     text: string,
     delta?: unknown,
   ) => {
-    const cleanedText = stripInlineDirectiveTagsForDisplay(text).text;
+    // Strip inline directives and reasoning tags to prevent <think>/<thinking>
+    // content from leaking to TUI/webchat when models emit tags in text output.
+    const cleanedText = stripReasoningTagsFromText(stripInlineDirectiveTagsForDisplay(text).text, {
+      mode: "strict",
+      trim: "both",
+    });
     const cleanedDelta =
-      typeof delta === "string" ? stripInlineDirectiveTagsForDisplay(delta).text : "";
+      typeof delta === "string"
+        ? stripReasoningTagsFromText(stripInlineDirectiveTagsForDisplay(delta).text, {
+            mode: "strict",
+            trim: "both",
+          })
+        : "";
     const previousText = chatRunState.buffers.get(clientRunId) ?? "";
     const mergedText = resolveMergedAssistantText({
       previousText,

@@ -111,6 +111,35 @@ describe("sanitizeUserFacingText", () => {
   it.each(["\n\n", "  \n  "])("returns empty for whitespace-only input: %j", (input) => {
     expect(sanitizeUserFacingText(input)).toBe("");
   });
+
+  it("strips <think>...</think> tags and their content", () => {
+    expect(sanitizeUserFacingText("<think>internal reasoning</think>Hello")).toBe("Hello");
+    expect(sanitizeUserFacingText("Hi <think>some thought</think> there")).toBe("Hi  there");
+  });
+
+  it("strips <thinking>...</thinking> tags and their content", () => {
+    expect(sanitizeUserFacingText("<thinking>internal reasoning</thinking>Hello")).toBe("Hello");
+    expect(sanitizeUserFacingText("Hi <thinking>some thought</thinking> there")).toBe("Hi  there");
+  });
+
+  it("strips unclosed <think> tags in strict mode (discards trailing content)", () => {
+    expect(sanitizeUserFacingText("<think>reasoning without closing tag")).toBe("");
+  });
+
+  it("strips multiline thinking tags", () => {
+    const input = "<think>\nLine 1\nLine 2\n</think>\nActual response here";
+    expect(sanitizeUserFacingText(input)).toBe("Actual response here");
+  });
+
+  it("strips multiple thinking tag pairs", () => {
+    const input = "<think>first</think>Hello <thinking>second</thinking>World";
+    expect(sanitizeUserFacingText(input)).toBe("Hello World");
+  });
+
+  it("strips thinking tags combined with final tags", () => {
+    const input = "<think>reasoning</think><final>Hello world</final>";
+    expect(sanitizeUserFacingText(input)).toBe("Hello world");
+  });
 });
 
 describe("stripThoughtSignatures", () => {

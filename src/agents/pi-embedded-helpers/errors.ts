@@ -1,6 +1,7 @@
 import type { AssistantMessage } from "@mariozechner/pi-ai";
 import type { OpenClawConfig } from "../../config/config.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+import { stripReasoningTagsFromText } from "../../shared/text/reasoning-tags.js";
 import { formatSandboxToolPolicyBlockedMessage } from "../sandbox.js";
 import { stableStringify } from "../stable-stringify.js";
 import {
@@ -716,7 +717,10 @@ export function sanitizeUserFacingText(text: string, opts?: { errorContext?: boo
     return text;
   }
   const errorContext = opts?.errorContext ?? false;
-  const stripped = stripFinalTagsFromText(text);
+  // Strip both <final> and <think>/<thinking> tags to prevent reasoning content
+  // from leaking to channels when models emit tags in text (e.g. Ollama/Qwen, MiniMax).
+  const withoutFinal = stripFinalTagsFromText(text);
+  const stripped = stripReasoningTagsFromText(withoutFinal, { mode: "strict", trim: "both" });
   const trimmed = stripped.trim();
   if (!trimmed) {
     return "";
