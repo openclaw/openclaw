@@ -6,6 +6,7 @@ import type { OpenClawConfig } from "../../config/config.js";
 import {
   createAnthropicBetaHeadersWrapper,
   createAnthropicToolPayloadCompatibilityWrapper,
+  createBedrockAnthropicBetaWrapper,
   createBedrockNoCacheWrapper,
   isAnthropicBedrockModel,
   resolveAnthropicBetas,
@@ -360,10 +361,18 @@ export function applyExtraParamsToAgent(
 
   const anthropicBetas = resolveAnthropicBetas(merged, provider, modelId);
   if (anthropicBetas?.length) {
-    log.debug(
-      `applying Anthropic beta header for ${provider}/${modelId}: ${anthropicBetas.join(",")}`,
-    );
-    agent.streamFn = createAnthropicBetaHeadersWrapper(agent.streamFn, anthropicBetas);
+    if (provider === "amazon-bedrock") {
+      // Bedrock accepts anthropic_beta as a body parameter via additionalModelRequestFields
+      log.debug(
+        `applying Bedrock anthropic_beta for ${provider}/${modelId}: ${anthropicBetas.join(",")}`,
+      );
+      agent.streamFn = createBedrockAnthropicBetaWrapper(agent.streamFn, anthropicBetas);
+    } else {
+      log.debug(
+        `applying Anthropic beta header for ${provider}/${modelId}: ${anthropicBetas.join(",")}`,
+      );
+      agent.streamFn = createAnthropicBetaHeadersWrapper(agent.streamFn, anthropicBetas);
+    }
   }
 
   if (shouldApplySiliconFlowThinkingOffCompat({ provider, modelId, thinkingLevel })) {
