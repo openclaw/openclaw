@@ -237,7 +237,6 @@ class MicCaptureManager(
         )
         val localeOverride = languageOverride().trim()
         if (localeOverride.isNotEmpty() && localeOverride != "auto") {
-          android.util.Log.d(tag, "MicCaptureManager SpeechRecognizer Intent explicitly setting EXTRA_LANGUAGE=$localeOverride")
           putExtra(RecognizerIntent.EXTRA_LANGUAGE, localeOverride)
           putExtra(RecognizerIntent.EXTRA_LANGUAGE_PREFERENCE, localeOverride)
           putExtra(RecognizerIntent.EXTRA_ONLY_RETURN_LANGUAGE_PREFERENCE, true)

@@ -521,7 +521,6 @@ class TalkModeManager(
         putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_POSSIBLY_COMPLETE_SILENCE_LENGTH_MILLIS, 1800L)
         val localeOverride = languageOverride().trim()
         if (localeOverride.isNotEmpty() && localeOverride != "auto") {
-          android.util.Log.d(tag, "SpeechRecognizer Intent explicitly setting EXTRA_LANGUAGE=$localeOverride")
           putExtra(RecognizerIntent.EXTRA_LANGUAGE, localeOverride)
           putExtra(RecognizerIntent.EXTRA_LANGUAGE_PREFERENCE, localeOverride)
           putExtra(RecognizerIntent.EXTRA_ONLY_RETURN_LANGUAGE_PREFERENCE, true)
@@ -1199,8 +1198,25 @@ class TalkModeManager(
     }
   }
 
+  private fun updateSystemTtsLanguage(tts: TextToSpeech) {
+    val localeOverride = languageOverride().trim()
+    try {
+      if (localeOverride.isNotEmpty() && localeOverride != "auto") {
+        tts.setLanguage(java.util.Locale.forLanguageTag(localeOverride))
+      } else {
+        tts.setLanguage(java.util.Locale.getDefault())
+      }
+    } catch (err: Throwable) {
+      Log.w(tag, "Failed to set TTS language to $localeOverride: ${err.message}")
+    }
+  }
+
   private suspend fun ensureSystemTts(): Boolean {
-    if (systemTts != null) return true
+    val existingTts = systemTts
+    if (existingTts != null) {
+      updateSystemTtsLanguage(existingTts)
+      return true
+    }
     return withContext(Dispatchers.Main) {
       val deferred = CompletableDeferred<Boolean>()
       val tts =
@@ -1213,15 +1229,6 @@ class TalkModeManager(
           null
         }
       if (tts == null) return@withContext false
-
-      val localeOverride = languageOverride().trim()
-      if (localeOverride.isNotEmpty() && localeOverride != "auto") {
-        try {
-          tts.setLanguage(java.util.Locale.forLanguageTag(localeOverride))
-        } catch (err: Throwable) {
-          Log.w(tag, "Failed to set TTS language to $localeOverride: ${err.message}")
-        }
-      }
 
       tts.setOnUtteranceProgressListener(
         object : UtteranceProgressListener() {
@@ -1262,6 +1269,7 @@ class TalkModeManager(
           false
         }
       if (ok) {
+        updateSystemTtsLanguage(tts)
         systemTts = tts
       } else {
         tts.shutdown()
@@ -1620,10 +1628,7 @@ class TalkModeManager(
         request.outputFormat?.takeIf { it.isNotEmpty() }?.let { put("output_format", JsonPrimitive(it)) }
         request.seed?.let { put("seed", JsonPrimitive(it)) }
         request.normalize?.let { put("apply_text_normalization", JsonPrimitive(it)) }
-        request.language?.let { 
-          android.util.Log.d(tag, "ElevenLabs TTS request transmitting with language_code=$it")
-          put("language_code", JsonPrimitive(it)) 
-        }
+        request.language?.let { put("language_code", JsonPrimitive(it)) }
         if (voiceSettingsEntries.isNotEmpty()) {
           put("voice_settings", voiceSettingsEntries)
         }
