@@ -526,6 +526,9 @@ export async function runWithModelFallback<T>(params: {
 
   for (let i = 0; i < candidates.length; i += 1) {
     const candidate = candidates[i];
+    const isPrimary = i === 0;
+    const requestedModel =
+      params.provider === candidate.provider && params.model === candidate.model;
     let runOptions: ModelFallbackRunOptions | undefined;
     let attemptedDuringCooldown = false;
     if (authStore) {
@@ -538,9 +541,6 @@ export async function runWithModelFallback<T>(params: {
 
       if (profileIds.length > 0 && !isAnyProfileAvailable) {
         // All profiles for this provider are in cooldown.
-        const isPrimary = i === 0;
-        const requestedModel =
-          params.provider === candidate.provider && params.model === candidate.model;
         const now = Date.now();
         const probeThrottleKey = resolveProbeThrottleKey(candidate.provider, params.agentDir);
         const decision = resolveCooldownDecision({
@@ -627,6 +627,8 @@ export async function runWithModelFallback<T>(params: {
           attempt: i + 1,
           total: candidates.length,
           previousAttempts: attempts,
+          isPrimary,
+          requestedModelMatched: requestedModel,
           fallbackConfigured: hasFallbackCandidates,
         });
       }
@@ -686,6 +688,8 @@ export async function runWithModelFallback<T>(params: {
         code: described.code,
         error: described.message,
         nextCandidate: candidates[i + 1],
+        isPrimary,
+        requestedModelMatched: requestedModel,
         fallbackConfigured: hasFallbackCandidates,
       });
       await params.onError?.({

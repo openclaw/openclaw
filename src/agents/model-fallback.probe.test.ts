@@ -202,7 +202,7 @@ describe("runWithModelFallback – probe logic", () => {
     expectPrimaryProbeSuccess(result, run, "probed-ok");
   });
 
-  it("logs candidate_succeeded after a successful primary cooldown probe", async () => {
+  it("logs primary metadata on probe success and failure fallback decisions", async () => {
     const cfg = makeCfg();
     const records: Array<Record<string, unknown>> = [];
     mockedGetSoonestCooldownExpiry.mockReturnValue(NOW + 60 * 1000);
@@ -220,6 +220,32 @@ describe("runWithModelFallback – probe logic", () => {
     const result = await runPrimaryCandidate(cfg, run);
 
     expectPrimaryProbeSuccess(result, run, "probed-ok");
+
+    _probeThrottleInternals.lastProbeAttempt.clear();
+
+    const fallbackCfg = makeCfg({
+      agents: {
+        defaults: {
+          model: {
+            primary: "openai/gpt-4.1-mini",
+            fallbacks: ["anthropic/claude-haiku-3-5", "google/gemini-2-flash"],
+          },
+        },
+      },
+    } as Partial<OpenClawConfig>);
+    mockedGetSoonestCooldownExpiry.mockReturnValue(NOW + 60 * 1000);
+    const fallbackRun = vi
+      .fn()
+      .mockRejectedValueOnce(Object.assign(new Error("rate limited"), { status: 429 }))
+      .mockResolvedValueOnce("fallback-ok");
+
+    const fallbackResult = await runPrimaryCandidate(fallbackCfg, fallbackRun);
+
+    expect(fallbackResult.result).toBe("fallback-ok");
+    expect(fallbackRun).toHaveBeenNthCalledWith(1, "openai", "gpt-4.1-mini", {
+      allowTransientCooldownProbe: true,
+    });
+    expect(fallbackRun).toHaveBeenNthCalledWith(2, "anthropic", "claude-haiku-3-5");
 
     const decisionPayloads = records
       .filter(
@@ -244,6 +270,26 @@ describe("runWithModelFallback – probe logic", () => {
           decision: "candidate_succeeded",
           candidateProvider: "openai",
           candidateModel: "gpt-4.1-mini",
+          isPrimary: true,
+          requestedModelMatched: true,
+        }),
+        expect.objectContaining({
+          event: "model_fallback_decision",
+          decision: "candidate_failed",
+          candidateProvider: "openai",
+          candidateModel: "gpt-4.1-mini",
+          isPrimary: true,
+          requestedModelMatched: true,
+          nextCandidateProvider: "anthropic",
+          nextCandidateModel: "claude-haiku-3-5",
+        }),
+        expect.objectContaining({
+          event: "model_fallback_decision",
+          decision: "candidate_succeeded",
+          candidateProvider: "anthropic",
+          candidateModel: "claude-haiku-3-5",
+          isPrimary: false,
+          requestedModelMatched: false,
         }),
       ]),
     );
