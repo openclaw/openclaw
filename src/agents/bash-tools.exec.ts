@@ -370,7 +370,31 @@ export function createExecTool(
         validateHostEnv(params.env);
       }
 
-      const mergedEnv = params.env ? { ...baseEnv, ...params.env } : baseEnv;
+      const safeWorkspaceEnv = (workspaceEnv: Record<string, string>): Record<string, string> => {
+        const baseKeysLower = new Set(Object.keys(baseEnv).map((k) => k.toLowerCase()));
+        const safe: Record<string, string> = {};
+        for (const [key, value] of Object.entries(workspaceEnv)) {
+          const keyLower = key.toLowerCase();
+          // Always block PATH regardless of baseEnv — workspace env must never influence
+          // command resolution, even in minimal environments where PATH is not yet set.
+          if (keyLower === "path") {
+            continue;
+          }
+          if (!baseKeysLower.has(keyLower)) {
+            safe[key] = value;
+          }
+        }
+        return safe;
+      };
+
+      const effectiveBase =
+        host !== "sandbox" &&
+        defaults?.workspaceEnv &&
+        Object.keys(defaults.workspaceEnv).length > 0
+          ? { ...safeWorkspaceEnv(defaults.workspaceEnv), ...baseEnv }
+          : baseEnv;
+
+      const mergedEnv = params.env ? { ...effectiveBase, ...params.env } : effectiveBase;
 
       const env = sandbox
         ? buildSandboxEnv({
@@ -467,7 +491,10 @@ export function createExecTool(
 
       // Preflight: catch a common model failure mode (shell syntax leaking into Python/JS sources)
       // before we execute and burn tokens in cron loops.
-      await validateScriptFileForShellBleed({ command: params.command, workdir });
+      await validateScriptFileForShellBleed({
+        command: params.command,
+        workdir,
+      });
 
       const run = await runExecProcess({
         command: params.command,

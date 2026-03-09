@@ -1,8 +1,10 @@
+import { execSync } from "node:child_process";
+import fssync from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { loadDotEnv } from "./dotenv.js";
+import { loadDotEnv, parseWorkspaceDotEnv } from "./dotenv.js";
 
 async function writeEnvFile(filePath: string, contents: string) {
   await fs.mkdir(path.dirname(filePath), { recursive: true });
@@ -95,5 +97,103 @@ describe("loadDotEnv", () => {
         expect(process.env.FOO).toBe("from-global");
       });
     });
+  });
+});
+
+describe("parseWorkspaceDotEnv", () => {
+  it("parses workspace .env file", async () => {
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "ws-env-"));
+    try {
+      await fs.writeFile(
+        path.join(tmpDir, ".env"),
+        "GH_CONFIG_DIR=/custom/path\nMY_VAR=hello\n",
+        "utf8",
+      );
+      const result = parseWorkspaceDotEnv(tmpDir);
+      expect(result).toEqual({ GH_CONFIG_DIR: "/custom/path", MY_VAR: "hello" });
+    } finally {
+      await fs.rm(tmpDir, { recursive: true });
+    }
+  });
+
+  it("returns empty object when no .env exists", async () => {
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "ws-env-"));
+    try {
+      const result = parseWorkspaceDotEnv(tmpDir);
+      expect(result).toEqual({});
+    } finally {
+      await fs.rm(tmpDir, { recursive: true });
+    }
+  });
+
+  it("filters dangerous env keys", async () => {
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "ws-env-"));
+    try {
+      await fs.writeFile(
+        path.join(tmpDir, ".env"),
+        "SAFE_VAR=ok\nNODE_OPTIONS=--max-old-space-size=8192\nLD_PRELOAD=/evil.so\nDYLD_INSERT_LIBRARIES=/evil.dylib\n",
+        "utf8",
+      );
+      const result = parseWorkspaceDotEnv(tmpDir);
+      expect(result).toHaveProperty("SAFE_VAR", "ok");
+      expect(result).not.toHaveProperty("NODE_OPTIONS");
+      expect(result).not.toHaveProperty("LD_PRELOAD");
+      expect(result).not.toHaveProperty("DYLD_INSERT_LIBRARIES");
+    } finally {
+      await fs.rm(tmpDir, { recursive: true });
+    }
+  });
+
+  it("does not modify process.env", async () => {
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "ws-env-"));
+    try {
+      await fs.writeFile(
+        path.join(tmpDir, ".env"),
+        "OPENCLAW_WS_TEST_VAR=should-not-set\n",
+        "utf8",
+      );
+      delete process.env.OPENCLAW_WS_TEST_VAR;
+      parseWorkspaceDotEnv(tmpDir);
+      expect(process.env.OPENCLAW_WS_TEST_VAR).toBeUndefined();
+    } finally {
+      await fs.rm(tmpDir, { recursive: true });
+    }
+  });
+
+  it("returns empty object and does not block when .env is a FIFO", async () => {
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "ws-env-"));
+    const envPath = path.join(tmpDir, ".env");
+    try {
+      // Create a named pipe; skip on platforms where mkfifo is unavailable.
+      try {
+        execSync(`mkfifo ${JSON.stringify(envPath)}`);
+      } catch {
+        return; // mkfifo unavailable – skip
+      }
+      // Must return immediately without blocking.
+      const result = parseWorkspaceDotEnv(tmpDir);
+      expect(result).toEqual({});
+    } finally {
+      // Remove the FIFO if it still exists (non-blocking unlink).
+      try {
+        fssync.unlinkSync(envPath);
+      } catch {
+        /* ignore */
+      }
+      await fs.rm(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it("returns empty object when .env exceeds the size cap", async () => {
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "ws-env-"));
+    try {
+      // Write a file larger than MAX_WORKSPACE_ENV_BYTES (1 MiB).
+      const big = Buffer.alloc(1 * 1024 * 1024 + 1, "A");
+      await fs.writeFile(path.join(tmpDir, ".env"), big);
+      const result = parseWorkspaceDotEnv(tmpDir);
+      expect(result).toEqual({});
+    } finally {
+      await fs.rm(tmpDir, { recursive: true });
+    }
   });
 });

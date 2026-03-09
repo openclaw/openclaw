@@ -18,8 +18,22 @@ OpenClaw pulls environment variables from multiple sources. The rule is **never 
 3. **Global `.env`** at `~/.openclaw/.env` (aka `$OPENCLAW_STATE_DIR/.env`; does not override).
 4. **Config `env` block** in `~/.openclaw/openclaw.json` (applied only if missing).
 5. **Optional login-shell import** (`env.shellEnv.enabled` or `OPENCLAW_LOAD_SHELL_ENV=1`), applied only for missing expected keys.
+6. **Workspace `.env`** at `<workspaceDir>/.env` (per-agent; merged into exec child processes only, never into `process.env`; lowest priority of all sources).
 
 If the config file is missing entirely, step 4 is skipped; shell import still runs if enabled.
+
+## Workspace `.env` (per-agent env isolation)
+
+Each agent workspace can have its own `.env` file at `<workspaceDir>/.env`. This is loaded at agent-turn start and merged into exec tool child processes at the **lowest priority** — it never overrides variables already set in the process environment or any of the startup `.env` files.
+
+This enables running separate agents with different accounts or tool configs:
+
+```
+~/.openclaw/workspace-rcoding/.env   →  GH_CONFIG_DIR=/home/user/.config/gh-alt
+~/.openclaw/workspace-main/.env      →  (not set, uses default)
+```
+
+Dangerous keys (`NODE_OPTIONS`, `LD_PRELOAD`, `LD_LIBRARY_PATH`, `DYLD_*`, etc.) are filtered and never applied.
 
 ## Config `env` block
 
