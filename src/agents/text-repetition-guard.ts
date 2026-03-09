@@ -117,15 +117,25 @@ export function detectTextRepetition(
   const window = buffer.slice(-cfg.windowSize);
 
   // --- Strategy 1: N-gram frequency ---
+  // Uses leading context to avoid false positives on templated output
+  // (e.g. "Step 1: process item...", "Step 2: process item...") where
+  // the 30-char stem repeats but surrounding content differs.
   {
     const ngrams = new Map<string, number>();
     const step = Math.max(1, Math.floor(cfg.ngramSize / 3));
+    const contextLen = Math.ceil(cfg.ngramSize / 2);
     for (let i = 0; i <= window.length - cfg.ngramSize; i += step) {
       const gram = window.slice(i, i + cfg.ngramSize);
       if (isDegenerate(gram)) {
         continue;
       }
-      const count = (ngrams.get(gram) ?? 0) + 1;
+      // Include leading + trailing context in the map key so n-grams that
+      // share a stem but appear in different surrounding text are counted
+      // separately (e.g. "Step 1: do X..." vs "Step 2: do X...").
+      const contextStart = Math.max(0, i - contextLen);
+      const contextEnd = Math.min(window.length, i + cfg.ngramSize + contextLen);
+      const contextualKey = window.slice(contextStart, contextEnd);
+      const count = (ngrams.get(contextualKey) ?? 0) + 1;
       if (count >= cfg.maxNgramRepetitions) {
         const msg = `Text repetition detected (ngram): pattern repeated ${count} times`;
         log.warn(msg, { pattern: gram.slice(0, 60) });
@@ -137,7 +147,7 @@ export function detectTextRepetition(
           message: msg,
         };
       }
-      ngrams.set(gram, count);
+      ngrams.set(contextualKey, count);
     }
   }
 

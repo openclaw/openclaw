@@ -186,7 +186,6 @@ export function handleMessageUpdate(
       if (guardConfig?.enabled !== false) {
         const result = detectTextRepetition(ctx.state.deltaBuffer, guardConfig);
         if (result.looping) {
-          ctx.log.warn(`Text repetition guard triggered: ${result.message}`);
           void ctx.params.session.abort();
           return;
         }

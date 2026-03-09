@@ -112,6 +112,17 @@ describe("text-repetition-guard", () => {
     expect(result.looping).toBe(false);
   });
 
+  it("passes templated steps with shared stem but progressive numbering", () => {
+    // "Step 1: process item...", "Step 2: process item..." share a 30-char
+    // stem but are progressive, not looping.
+    let text = "Here is the plan:\n";
+    for (let i = 1; i <= 30; i++) {
+      text += `Step ${i}: process item and verify the output result\n`;
+    }
+    const result = detectTextRepetition(text, cfg);
+    expect(result.looping).toBe(false);
+  });
+
   it("passes short text below minimum threshold", () => {
     const text = "Done. Sent. ".repeat(10);
     const result = detectTextRepetition(text, cfg);
