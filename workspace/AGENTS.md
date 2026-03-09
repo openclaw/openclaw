@@ -146,10 +146,20 @@ the scanner keeps getting better
 Always use: `"ERC-8004"` — only engage with tweets about the ERC-8004 standard.
 No engagement on weekends (save API quota).
 
+### Quality Filters (CRITICAL)
+
+Before proposing any tweet for engagement, it MUST pass ALL these filters:
+
+- **Minimum engagement**: at least 5 likes OR 2 retweets OR 3 replies — skip dead tweets
+- **Real accounts only**: skip accounts with no profile picture, <50 followers, or that look like bots/spam
+- **No competitor content**: skip any tweet mentioning @8004_scan or from @8004_scan — they are a competitor
+- **Relevant content**: the tweet must actually discuss ERC-8004 meaningfully, not just mention it in passing
+- If no tweets pass these filters, tell Gilberts "No quality engagement opportunities today" and skip
+
 ### Flow
 
 1. Run ONE search: `exec node skills/twitter-openclaw/bin/twclaw.js search "ERC-8004" --popular -n 10 --json`
-2. Filter: pick tweets relevant to ERC-8004, onchain agents, or trust/verification
+2. Filter results using the Quality Filters above — discard low-quality and competitor tweets
 3. Propose up to 3 interactions to Gilberts via Telegram, with format:
    - Tweet URL + author + 1-line summary
    - Proposed action: **like**, **reply** (include draft text), or **retweet**
@@ -188,7 +198,8 @@ Monitor these accounts for engagement opportunities:
 
 - ALL interactions require Gilberts approval first — no exceptions
 - Do NOT engage with spam, scams, or controversial content
-- Do NOT engage with competitor scanner accounts
+- Do NOT engage with @8004_scan or any tweet mentioning @8004_scan — they are a competitor
+- Do NOT confuse yourself with @8004_scan — you are @trust8004
 - Log only tweet URL, handle, action type, and 1-line summary (X policy: no full text storage)
 - If search returns no relevant results, tell Gilberts "No engagement opportunities found today" and skip
 - Respect rate limits: if you get a 429, stop and report to Gilberts
