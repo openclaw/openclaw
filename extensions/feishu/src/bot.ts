@@ -35,8 +35,8 @@ import { getMessageFeishu, sendMessageFeishu } from "./send.js";
 import {
   ensureFeishuThreadBindingManagerForAccount,
   recordFeishuNativeThreadBinding,
+  rehydrateFeishuThreadBindingManagerForAccount,
   resolveFeishuThreadBindingByNativeThread,
-  stopFeishuThreadBindingManager,
 } from "./thread-bindings.js";
 import type { FeishuMessageContext, FeishuMediaInfo, ResolvedFeishuAccount } from "./types.js";
 import type { DynamicAgentCreationConfig } from "./types.js";
@@ -1255,9 +1255,9 @@ export async function handleFeishuMessage(params: {
       threadBinding = resolveThreadBinding();
       if (!threadBinding && shouldRehydrateFeishuThreadBindings(account.accountId)) {
         // ACP thread binding can be created by a different module instance than the
-        // Feishu monitor. Rehydrate the local manager from disk once before giving up.
-        stopFeishuThreadBindingManager(account.accountId);
-        ensureFeishuThreadBindingManagerForAccount({
+        // Feishu monitor. Merge any persisted bindings into the local manager
+        // without dropping live in-memory state that may not be flushed yet.
+        rehydrateFeishuThreadBindingManagerForAccount({
           cfg,
           accountId: account.accountId,
         });

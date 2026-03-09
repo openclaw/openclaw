@@ -184,6 +184,33 @@ function clearBindingsForAccount(accountId: string): void {
   }
 }
 
+function mergeBindingsFromDisk(accountId: string): number {
+  let merged = 0;
+  for (const entry of loadBindingsFromDisk(accountId)) {
+    const key = resolveBindingKey({
+      accountId,
+      conversationId: entry.conversationId,
+    });
+    const existing = BINDINGS_BY_ACCOUNT_CONVERSATION.get(key);
+    if (!existing) {
+      upsertBindingRecord({
+        ...entry,
+        accountId,
+      });
+      merged += 1;
+      continue;
+    }
+    if (!existing.nativeThreadId && entry.nativeThreadId) {
+      upsertBindingRecord({
+        ...existing,
+        nativeThreadId: entry.nativeThreadId,
+      });
+      merged += 1;
+    }
+  }
+  return merged;
+}
+
 function toSessionBindingTargetKind(raw: FeishuBindingTargetKind): BindingTargetKind {
   return raw === "subagent" ? "subagent" : "session";
 }
@@ -509,13 +536,7 @@ export function createFeishuThreadBindingManager(
   );
   const maxAgeMs = normalizeDurationMs(params.maxAgeMs, DEFAULT_THREAD_BINDING_MAX_AGE_MS);
 
-  const loaded = loadBindingsFromDisk(accountId);
-  for (const entry of loaded) {
-    upsertBindingRecord({
-      ...entry,
-      accountId,
-    });
-  }
+  mergeBindingsFromDisk(accountId);
 
   const listBindingsForAccount = () =>
     [...BINDINGS_BY_ACCOUNT_CONVERSATION.values()].filter((entry) => entry.accountId === accountId);
@@ -855,6 +876,20 @@ export function ensureFeishuThreadBindingManagerForAccount(params: {
       accountId,
     }),
   });
+}
+
+export function rehydrateFeishuThreadBindingManagerForAccount(params: {
+  cfg: ClawdbotConfig;
+  accountId?: string;
+  persist?: boolean;
+  enableSweeper?: boolean;
+}): FeishuThreadBindingManager | null {
+  const manager = ensureFeishuThreadBindingManagerForAccount(params);
+  if (!manager) {
+    return null;
+  }
+  mergeBindingsFromDisk(normalizeAccountId(params.accountId));
+  return manager;
 }
 
 export function stopFeishuThreadBindingManager(accountId?: string): void {

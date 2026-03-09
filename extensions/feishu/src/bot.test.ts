@@ -1946,6 +1946,7 @@ describe("handleFeishuMessage command authorization", () => {
     });
 
     const ensureSpy = vi.spyOn(threadBindings, "ensureFeishuThreadBindingManagerForAccount");
+    const rehydrateSpy = vi.spyOn(threadBindings, "rehydrateFeishuThreadBindingManagerForAccount");
     const stopSpy = vi.spyOn(threadBindings, "stopFeishuThreadBindingManager");
 
     const firstEvent: FeishuMessageEvent = {
@@ -1975,8 +1976,9 @@ describe("handleFeishuMessage command authorization", () => {
     await dispatchMessage({ cfg, event: firstEvent });
     await dispatchMessage({ cfg, event: secondEvent });
 
-    expect(stopSpy).toHaveBeenCalledTimes(1);
-    expect(ensureSpy).toHaveBeenCalledTimes(3);
+    expect(stopSpy).not.toHaveBeenCalled();
+    expect(ensureSpy).toHaveBeenCalledTimes(2);
+    expect(rehydrateSpy).toHaveBeenCalledTimes(1);
   });
 
   it("uses the topic root message id for group topic roots when only thread_id is present", async () => {
