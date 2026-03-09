@@ -246,6 +246,31 @@ describe("handleControlUiHttpRequest", () => {
     expect(body?.toString()).toBe("fake-png-bytes");
   });
 
+  it("serves data URL avatar with extra parameters (charset)", () => {
+    const b64 = Buffer.from("param-png-bytes").toString("base64");
+    const dataUrl = `data:image/png;charset=utf-8;base64,${b64}`;
+    const { res, setHeader, end, handled } = runAvatarRequest({
+      url: "/avatar/main",
+      method: "GET",
+      resolveAvatar: () => ({ kind: "data", url: dataUrl }),
+    });
+    expect(handled).toBe(true);
+    expect(res.statusCode).toBe(200);
+    expect(setHeader).toHaveBeenCalledWith("Content-Type", "image/png");
+    const body = end.mock.calls[0]?.[0] as Buffer | undefined;
+    expect(body?.toString()).toBe("param-png-bytes");
+  });
+
+  it("returns 404 for non-image MIME type data URL avatar (defence-in-depth)", () => {
+    const b64 = Buffer.from("<script>alert(1)</script>").toString("base64");
+    const { res, end, handled } = runAvatarRequest({
+      url: "/avatar/main",
+      method: "GET",
+      resolveAvatar: () => ({ kind: "data", url: `data:text/html;base64,${b64}` }),
+    });
+    expectNotFoundResponse({ handled, res, end });
+  });
+
   it("returns 404 for malformed data URL avatar", () => {
     const { res, end, handled } = runAvatarRequest({
       url: "/avatar/main",
@@ -253,6 +278,33 @@ describe("handleControlUiHttpRequest", () => {
       resolveAvatar: () => ({ kind: "data", url: "data:not-valid" }),
     });
     expectNotFoundResponse({ handled, res, end });
+  });
+
+  it("returns 404 for empty base64 payload in data URL avatar", () => {
+    const { res, end, handled } = runAvatarRequest({
+      url: "/avatar/main",
+      method: "GET",
+      resolveAvatar: () => ({ kind: "data", url: "data:image/png;base64,!!!!" }),
+    });
+    expectNotFoundResponse({ handled, res, end });
+  });
+
+  it("handles HEAD request for data URL avatar without sending body", () => {
+    const b64 = Buffer.from("head-test-bytes").toString("base64");
+    const dataUrl = `data:image/png;base64,${b64}`;
+    const { res, setHeader, end, handled } = runAvatarRequest({
+      url: "/avatar/main",
+      method: "HEAD",
+      resolveAvatar: () => ({ kind: "data", url: dataUrl }),
+    });
+    expect(handled).toBe(true);
+    expect(res.statusCode).toBe(200);
+    expect(setHeader).toHaveBeenCalledWith("Content-Type", "image/png");
+    expect(setHeader).toHaveBeenCalledWith(
+      "Content-Length",
+      String(Buffer.from(b64, "base64").length),
+    );
+    expect(end).toHaveBeenCalledWith();
   });
 
   it("rejects avatar symlink paths from resolver", async () => {

@@ -207,17 +207,39 @@ export function handleControlUiAvatarRequest(
   }
   if (resolved.kind === "data") {
     // Decode data URL and serve the bytes directly (#41201).
-    const match = resolved.url.match(/^data:([^;]+);base64,(.+)$/);
-    if (match) {
-      const [, mimeType, b64] = match;
-      const buf = Buffer.from(b64, "base64");
-      res.statusCode = 200;
-      res.setHeader("Content-Type", mimeType ?? "application/octet-stream");
-      res.setHeader("Content-Length", String(buf.length));
-      res.setHeader("Cache-Control", "private, max-age=300");
-      res.end(buf);
-    } else {
+    // Accept parameterized data URLs (e.g. data:image/png;charset=utf-8;base64,...).
+    const match = resolved.url.match(/^data:([^,]*);base64,(.+)$/);
+    if (!match) {
       respondControlUiNotFound(res);
+      return true;
+    }
+    const [, mediaTypeAndParams, b64] = match;
+    const mimeType =
+      (mediaTypeAndParams?.split(";", 1)[0] || "").trim() || "application/octet-stream";
+    // Defence-in-depth: only serve image MIME types from the avatar endpoint.
+    if (!mimeType.startsWith("image/")) {
+      respondControlUiNotFound(res);
+      return true;
+    }
+    // Estimate decoded size before allocating to enforce AVATAR_MAX_BYTES.
+    const estimatedBytes = Math.ceil((b64.length * 3) / 4);
+    if (estimatedBytes > AVATAR_MAX_BYTES) {
+      respondControlUiNotFound(res);
+      return true;
+    }
+    const buf = Buffer.from(b64, "base64");
+    if (buf.length === 0) {
+      respondControlUiNotFound(res);
+      return true;
+    }
+    res.statusCode = 200;
+    res.setHeader("Content-Type", mimeType);
+    res.setHeader("Content-Length", String(buf.length));
+    res.setHeader("Cache-Control", "private, max-age=300");
+    if (req.method === "HEAD") {
+      res.end();
+    } else {
+      res.end(buf);
     }
     return true;
   }
