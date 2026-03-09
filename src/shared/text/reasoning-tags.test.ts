@@ -347,13 +347,28 @@ describe("createStreamingThinkingFilter", () => {
 
     it("handles code fence split across chunks", () => {
       const f = createStreamingThinkingFilter();
-      expect(f.filter("text\n`")).toBe("text\n`");
-      expect(f.filter("``\n<think>inside fence</think>\n")).toBe(
-        "``\n<think>inside fence</think>\n",
-      );
+      // Fence opener arrives as a complete line in its own chunk
+      expect(f.filter("text\n")).toBe("text\n");
+      expect(f.filter("```\n")).toBe("```\n");
+      // Now inside fence — think tags should be preserved
+      expect(f.filter("<think>inside fence</think>\n")).toBe("<think>inside fence</think>\n");
       expect(f.filter("```\n")).toBe("```\n");
       // Now outside fence, think tags should be stripped
       expect(f.filter("<think>hidden</think>after")).toBe("after");
+    });
+
+    it("preserves think tags in single-chunk code fence", () => {
+      const f = createStreamingThinkingFilter();
+      const input = "```\n<think>literal</think>\n```\n";
+      expect(f.filter(input)).toBe(input);
+    });
+
+    it("preserves think tags in single-chunk fence then strips outside", () => {
+      const f = createStreamingThinkingFilter();
+      expect(f.filter("```\n<think>literal</think>\n```\n")).toBe(
+        "```\n<think>literal</think>\n```\n",
+      );
+      expect(f.filter("<think>hidden</think>visible")).toBe("visible");
     });
 
     it("resets code fence state on reset()", () => {

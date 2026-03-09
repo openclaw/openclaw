@@ -122,20 +122,6 @@ export function createStreamingThinkingFilter(): StreamingThinkingFilter {
   // Buffer for detecting code fence boundaries that may span chunks.
   let lineBuffer = "";
 
-  /**
-   * Check accumulated text for code fence toggles. Updates insideCodeFence state.
-   * Processes complete lines only, keeping any incomplete trailing line in lineBuffer.
-   */
-  function processCodeFences(text: string): void {
-    lineBuffer += text;
-    const lines = lineBuffer.split("\n");
-    // Keep the last (potentially incomplete) line in the buffer.
-    lineBuffer = lines.pop() ?? "";
-    for (const line of lines) {
-      checkLineForFence(line);
-    }
-  }
-
   function checkLineForFence(line: string): void {
     const trimmed = line.trimStart();
     if (!insideCodeFence) {
@@ -158,30 +144,107 @@ export function createStreamingThinkingFilter(): StreamingThinkingFilter {
     }
   }
 
-  function filter(delta: string): string {
-    const input = pendingPartial + delta;
-    pendingPartial = "";
+  /**
+   * Check accumulated text for code fence toggles. Updates insideCodeFence state.
+   * Processes complete lines only, keeping any incomplete trailing line in lineBuffer.
+   */
+  function processCodeFences(text: string): void {
+    lineBuffer += text;
+    const lines = lineBuffer.split("\n");
+    // Keep the last (potentially incomplete) line in the buffer.
+    lineBuffer = lines.pop() ?? "";
+    for (const line of lines) {
+      checkLineForFence(line);
+    }
+  }
 
-    // Track code fence state for the incoming text.
-    processCodeFences(input);
+  /**
+   * Check if the input contains a complete code fence block (opens and closes)
+   * that would need protection from think-tag filtering. Returns the input with
+   * fenced regions preserved if detected, or null to indicate normal filtering.
+   */
+  function protectInlineFencedRegions(input: string): string | null {
+    // Quick check: does this chunk contain a fence marker at all?
+    if (!/^(`{3,}|~{3,})/m.test(input)) {
+      return null;
+    }
+    // Split by lines and process, tracking which lines are fenced.
+    const lines = input.split("\n");
+    const fencedFlags: boolean[] = [];
+    // Use temporary fence state to check each line.
+    let tempInFence = insideCodeFence;
+    let tempChar = codeFenceChar;
+    let tempLen = codeFenceLen;
+    let anyFenced = false;
 
-    // Inside a code fence — pass through unfiltered (preserve literal think tags).
-    if (insideCodeFence && !insideBlock) {
-      return input;
+    for (const line of lines) {
+      const trimmed = line.trimStart();
+      if (!tempInFence) {
+        const m = trimmed.match(/^(`{3,}|~{3,})/);
+        if (m) {
+          tempInFence = true;
+          tempChar = m[1][0];
+          tempLen = m[1].length;
+          fencedFlags.push(true); // fence opener line itself is fenced
+          anyFenced = true;
+          continue;
+        }
+      } else {
+        const escaped = tempChar === "`" ? "`" : "~";
+        const closeRe = new RegExp(`^${escaped}{${tempLen},}\\s*$`);
+        if (closeRe.test(trimmed)) {
+          fencedFlags.push(true); // fence closer line itself is fenced
+          tempInFence = false;
+          tempChar = "";
+          tempLen = 0;
+          continue;
+        }
+      }
+      fencedFlags.push(tempInFence);
+      if (tempInFence) {
+        anyFenced = true;
+      }
     }
 
+    if (!anyFenced) {
+      return null;
+    }
+
+    // Build result: fenced lines pass through, non-fenced lines get think-tag filtered.
+    // We process non-fenced lines as a single block to maintain think-tag state.
+    let result = "";
+    let nonFencedBuffer = "";
+
+    for (let i = 0; i < lines.length; i++) {
+      const suffix = i < lines.length - 1 ? "\n" : "";
+      if (fencedFlags[i]) {
+        // Flush any non-fenced buffer through think-tag filtering first.
+        if (nonFencedBuffer) {
+          result += filterThinkTags(nonFencedBuffer);
+          nonFencedBuffer = "";
+        }
+        result += lines[i] + suffix;
+      } else {
+        nonFencedBuffer += lines[i] + suffix;
+      }
+    }
+    // Flush remaining non-fenced buffer.
+    if (nonFencedBuffer) {
+      result += filterThinkTags(nonFencedBuffer);
+    }
+    return result;
+  }
+
+  /** Apply think-tag filtering to a non-fenced text segment. */
+  function filterThinkTags(input: string): string {
     if (!insideBlock) {
-      // Look for an opening tag in this chunk.
       const openMatch = OPEN_TAG_RE.exec(input);
       if (openMatch) {
-        // Don't strip if the tag is inside a code fence detected in accumulated context.
         insideBlock = true;
         const before = input.slice(0, openMatch.index);
         const after = input.slice(openMatch.index + openMatch[0].length);
-        // Recurse to handle closing tag (or more opens) in the remainder.
-        return before + filter(after);
+        return before + filterThinkTags(after);
       }
-      // Check for a partial tag at the end that might complete in the next delta.
       const partialMatch = PARTIAL_OPEN_RE.exec(input);
       if (partialMatch && partialMatch[0].length > 0) {
         pendingPartial = partialMatch[0];
@@ -190,21 +253,43 @@ export function createStreamingThinkingFilter(): StreamingThinkingFilter {
       return input;
     }
 
-    // Inside a thinking block — look for closing tag.
     const closeMatch = CLOSE_TAG_RE.exec(input);
     if (closeMatch) {
       insideBlock = false;
       const after = input.slice(closeMatch.index + closeMatch[0].length);
-      // Recurse so further opens/text in the remainder are processed.
-      return filter(after);
+      return filterThinkTags(after);
     }
-    // Check for partial closing tag at the end.
     const partialClose = PARTIAL_CLOSE_RE.exec(input);
     if (partialClose && partialClose[0].length > 0) {
       pendingPartial = partialClose[0];
     }
-    // Suppress everything while inside the block.
     return "";
+  }
+
+  function filter(delta: string): string {
+    const input = pendingPartial + delta;
+    pendingPartial = "";
+
+    // Save fence state before processing this chunk.
+    const wasInFence = insideCodeFence;
+    processCodeFences(input);
+
+    // If we were already inside a code fence, pass through unfiltered.
+    if (wasInFence && !insideBlock) {
+      return input;
+    }
+
+    // Check if this chunk contains inline fence regions that need protection.
+    // This handles the case where a fence opens and closes within a single chunk.
+    if (!wasInFence) {
+      const protected_ = protectInlineFencedRegions(input);
+      if (protected_ !== null) {
+        return protected_;
+      }
+    }
+
+    // Normal think-tag filtering (no code fence involved).
+    return filterThinkTags(input);
   }
 
   function reset() {

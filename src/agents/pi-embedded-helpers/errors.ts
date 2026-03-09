@@ -720,7 +720,10 @@ export function sanitizeUserFacingText(text: string, opts?: { errorContext?: boo
   // Strip both <final> and <think>/<thinking> tags to prevent reasoning content
   // from leaking to channels when models emit tags in text (e.g. Ollama/Qwen, MiniMax).
   const withoutFinal = stripFinalTagsFromText(text);
-  const stripped = stripReasoningTagsFromText(withoutFinal, { mode: "strict", trim: "both" });
+  // Use trim:"none" to preserve leading indentation in the surviving answer text
+  // (e.g. "<think>...</think>\n    indented code" should keep the indentation).
+  // The overall .trim() below handles leading/trailing blanks for the full output.
+  const stripped = stripReasoningTagsFromText(withoutFinal, { mode: "strict", trim: "none" });
   const trimmed = stripped.trim();
   if (!trimmed) {
     return "";
