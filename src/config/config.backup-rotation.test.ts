@@ -1,7 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import type { OpenClawConfig } from "./types.js";
 import {
   CONFIG_BACKUP_COUNT,
   BACKUP_DATETIME_RE,
@@ -17,6 +16,7 @@ import {
   resolveConfigPathFromTempState,
 } from "./config.backup-rotation.test-helpers.js";
 import { withTempHome } from "./test-helpers.js";
+import type { OpenClawConfig } from "./types.js";
 
 describe("config backup rotation", () => {
   describe("formatBackupTimestamp", () => {
