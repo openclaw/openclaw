@@ -1,3 +1,5 @@
+import { spawn } from "node:child_process";
+import os from "node:os";
 import type { startGatewayServer } from "../../gateway/server.js";
 import { acquireGatewayLock } from "../../infra/gateway-lock.js";
 import { restartGatewayProcessWithFreshPid } from "../../infra/process-respawn.js";
@@ -16,6 +18,40 @@ import {
 import { createRestartIterationHook } from "../../process/restart-recovery.js";
 import type { defaultRuntime } from "../../runtime.js";
 
+/**
+ * Spawns `caffeinate -i` on macOS to prevent the system from idle-sleeping
+ * while the gateway is running. Returns a cleanup function that kills the
+ * caffeinate process when the gateway shuts down.
+ *
+ * macOS suspends TCP connections during sleep, which causes the Telegram
+ * long-polling loop to stall until the system wakes up. `caffeinate -i`
+ * prevents idle sleep without affecting display or user-initiated sleep.
+ */
+function spawnCaffeinate(): (() => void) | null {
+  if (os.platform() !== "darwin") {
+    return null;
+  }
+  try {
+    // -i: prevent idle sleep  -w <pid>: exit when the given process exits
+    const child = spawn("caffeinate", ["-i", "-w", String(process.pid)], {
+      detached: false,
+      stdio: "ignore",
+    });
+    child.unref();
+    gatewayLog.info("caffeinate started: system will not idle-sleep while gateway is running");
+    return () => {
+      try {
+        child.kill();
+      } catch {
+        // ignore cleanup errors
+      }
+    };
+  } catch {
+    gatewayLog.warn("caffeinate not available; system may sleep and interrupt Telegram polling");
+    return null;
+  }
+}
+
 const gatewayLog = createSubsystemLogger("gateway");
 
 type GatewayRunSignalAction = "stop" | "restart";
@@ -25,6 +61,7 @@ export async function runGatewayLoop(params: {
   runtime: typeof defaultRuntime;
   lockPort?: number;
 }) {
+  const stopCaffeinate = spawnCaffeinate();
   let lock = await acquireGatewayLock({ port: params.lockPort });
   let server: Awaited<ReturnType<typeof startGatewayServer>> | null = null;
   let shuttingDown = false;
@@ -196,6 +233,7 @@ export async function runGatewayLoop(params: {
       });
     }
   } finally {
+    stopCaffeinate?.();
     await releaseLockIfHeld();
     cleanupSignals();
   }
