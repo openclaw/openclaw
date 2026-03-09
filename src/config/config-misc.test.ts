@@ -325,6 +325,30 @@ describe("model compat config schema", () => {
 
     expect(res.ok).toBe(true);
   });
+
+  it("accepts requiresOpenAiAnthropicToolPayload compat field", () => {
+    const res = validateConfigObject({
+      models: {
+        providers: {
+          "kimi-coding": {
+            baseUrl: "https://api.kimi.example/v1",
+            api: "openai-completions",
+            models: [
+              {
+                id: "k2p5",
+                name: "Kimi K2.5",
+                compat: {
+                  requiresOpenAiAnthropicToolPayload: true,
+                },
+              },
+            ],
+          },
+        },
+      },
+    });
+
+    expect(res.ok).toBe(true);
+  });
 });
 
 describe("config paths", () => {

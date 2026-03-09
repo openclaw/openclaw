@@ -3,6 +3,7 @@ import type { AssistantMessage, UserMessage, Usage } from "@mariozechner/pi-ai";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import * as helpers from "./pi-embedded-helpers.js";
 import {
+  expectOpenAIResponsesStrictSanitizeCall,
   expectGoogleModelApiFullSanitizeCall,
   loadSanitizeSessionHistoryWithCleanMocks,
   makeMockSessionManager,
@@ -230,6 +231,20 @@ describe("sanitizeSessionHistory", () => {
       "session:history",
       expect.objectContaining({ sanitizeMode: "images-only", sanitizeToolCallIds: false }),
     );
+  });
+
+  it("sanitizes tool call ids for OpenAI-compatible responses providers", async () => {
+    setNonGoogleModelApi();
+
+    await sanitizeSessionHistory({
+      messages: mockMessages,
+      modelApi: "openai-responses",
+      provider: "custom",
+      sessionManager: mockSessionManager,
+      sessionId: TEST_SESSION_ID,
+    });
+
+    expectOpenAIResponsesStrictSanitizeCall(helpers.sanitizeSessionMessagesImages, mockMessages);
   });
 
   it("sanitizes tool call ids for openai-completions", async () => {

@@ -55,17 +55,24 @@ export function normalizeModelCompat(model: Model<Api>): Model<Api> {
   // The `developer` role and stream usage chunks are OpenAI-native behaviors.
   // Many OpenAI-compatible backends reject `developer` and/or emit usage-only
   // chunks that break strict parsers expecting choices[0]. For non-native
-  // openai-completions endpoints, force both compat flags off.
+  // openai-completions endpoints, default both compat flags to off but respect
+  // explicit user overrides from config.
   const compat = model.compat ?? undefined;
   // When baseUrl is empty the pi-ai library defaults to api.openai.com, so
   // leave compat unchanged and let default native behavior apply.
-  // Note: explicit true values are intentionally overridden for non-native
-  // endpoints for safety.
   const needsForce = baseUrl ? !isOpenAINativeEndpoint(baseUrl) : false;
   if (!needsForce) {
     return model;
   }
-  if (compat?.supportsDeveloperRole === false && compat?.supportsUsageInStreaming === false) {
+
+  // Honour explicit user opt-in: if the user has set supportsUsageInStreaming
+  // to true in their model config, keep it enabled.  This lets proxies that
+  // correctly implement usage streaming (e.g. LiteLLM) report token counts.
+  const keepUsage = compat?.supportsUsageInStreaming === true;
+  if (
+    compat?.supportsDeveloperRole === false &&
+    (compat?.supportsUsageInStreaming === false || keepUsage)
+  ) {
     return model;
   }
 
@@ -73,7 +80,7 @@ export function normalizeModelCompat(model: Model<Api>): Model<Api> {
   return {
     ...model,
     compat: compat
-      ? { ...compat, supportsDeveloperRole: false, supportsUsageInStreaming: false }
+      ? { ...compat, supportsDeveloperRole: false, supportsUsageInStreaming: keepUsage }
       : { supportsDeveloperRole: false, supportsUsageInStreaming: false },
   } as typeof model;
 }
