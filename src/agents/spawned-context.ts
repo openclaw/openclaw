@@ -72,7 +72,7 @@ export function resolveSpawnedWorkspaceInheritance(params: {
         resolveAgentConfig(params.config, normalizeAgentId(targetAgentId))?.workspace,
       )
     : undefined;
-  if (targetWorkspace && targetAgentId) {
+  if (targetWorkspace) {
     return resolveAgentWorkspaceDir(params.config, normalizeAgentId(targetAgentId));
   }
   const requesterAgentId = params.requesterSessionKey
