@@ -441,48 +441,53 @@ export type ToolsConfig = {
     search?: {
       /** Enable web search tool (default: true when API key is present). */
       enabled?: boolean;
-      /** Search provider ("brave", "perplexity", "grok", "gemini", or "kimi"). */
-      provider?: "brave" | "perplexity" | "grok" | "gemini" | "kimi";
+      /** Search provider ("brave", "gemini", "grok", "kimi", or "perplexity"). */
+      provider?: "brave" | "gemini" | "grok" | "kimi" | "perplexity";
       /** Brave Search API key (optional; defaults to BRAVE_API_KEY env var). */
-      apiKey?: string;
+      apiKey?: SecretInput;
       /** Default search results count (1-10). */
       maxResults?: number;
       /** Timeout in seconds for search requests. */
       timeoutSeconds?: number;
       /** Cache TTL in minutes for search results. */
       cacheTtlMinutes?: number;
-      /** Perplexity-specific configuration (used when provider="perplexity"). */
-      perplexity?: {
-        /** API key for Perplexity (defaults to PERPLEXITY_API_KEY env var). */
-        apiKey?: string;
-        /** @deprecated Legacy Sonar/OpenRouter field. Ignored by Search API. */
-        baseUrl?: string;
-        /** @deprecated Legacy Sonar/OpenRouter field. Ignored by Search API. */
+      /** Brave-specific configuration (used when provider="brave"). */
+      brave?: {
+        /** Brave Search mode: "web" (standard results) or "llm-context" (pre-extracted page content). Default: "web". */
+        mode?: "web" | "llm-context";
+      };
+      /** Gemini-specific configuration (used when provider="gemini"). */
+      gemini?: {
+        /** Gemini API key (defaults to GEMINI_API_KEY env var). */
+        apiKey?: SecretInput;
+        /** Model to use for grounded search (defaults to "gemini-2.5-flash"). */
         model?: string;
       };
       /** Grok-specific configuration (used when provider="grok"). */
       grok?: {
         /** API key for xAI (defaults to XAI_API_KEY env var). */
-        apiKey?: string;
+        apiKey?: SecretInput;
         /** Model to use (defaults to "grok-4-1-fast"). */
         model?: string;
         /** Include inline citations in response text as markdown links (default: false). */
         inlineCitations?: boolean;
       };
-      /** Gemini-specific configuration (used when provider="gemini"). */
-      gemini?: {
-        /** Gemini API key (defaults to GEMINI_API_KEY env var). */
-        apiKey?: string;
-        /** Model to use for grounded search (defaults to "gemini-2.5-flash"). */
-        model?: string;
-      };
       /** Kimi-specific configuration (used when provider="kimi"). */
       kimi?: {
         /** Moonshot/Kimi API key (defaults to KIMI_API_KEY or MOONSHOT_API_KEY env var). */
-        apiKey?: string;
+        apiKey?: SecretInput;
         /** Base URL for API requests (defaults to "https://api.moonshot.ai/v1"). */
         baseUrl?: string;
         /** Model to use (defaults to "moonshot-v1-128k"). */
+        model?: string;
+      };
+      /** Perplexity-specific configuration (used when provider="perplexity"). */
+      perplexity?: {
+        /** API key for Perplexity (defaults to PERPLEXITY_API_KEY env var). */
+        apiKey?: SecretInput;
+        /** @deprecated Legacy Sonar/OpenRouter field. Ignored by Search API. */
+        baseUrl?: string;
+        /** @deprecated Legacy Sonar/OpenRouter field. Ignored by Search API. */
         model?: string;
       };
     };
