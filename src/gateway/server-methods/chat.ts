@@ -13,6 +13,7 @@ import { stageSandboxMedia } from "../../auto-reply/reply/stage-sandbox-media.js
 import type { MsgContext, TemplateContext } from "../../auto-reply/templating.js";
 import { extractCanvasFromText } from "../../chat/canvas-render.js";
 import { resolveSessionFilePath } from "../../config/sessions.js";
+import { isDeliveryMirrorMessage } from "../../config/sessions/transcript.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { jsonUtf8Bytes } from "../../infra/json-utf8-bytes.js";
@@ -1717,10 +1718,11 @@ export const chatHandlers: GatewayRequestHandlers = {
       });
     }
     const verboseLevel = entry?.verboseLevel ?? cfg.agents?.defaults?.verboseDefault;
+    const visibleMessages = bounded.messages.filter((msg) => !isDeliveryMirrorMessage(msg));
     respond(true, {
       sessionKey,
       sessionId,
-      messages: bounded.messages,
+      messages: visibleMessages,
       thinkingLevel,
       fastMode: entry?.fastMode,
       verboseLevel,

@@ -19,6 +19,7 @@ import {
   type SessionEntry,
   updateSessionStore,
 } from "../../config/sessions.js";
+import { isDeliveryMirrorMessage } from "../../config/sessions/transcript.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   hasInternalHookListeners,
@@ -1604,7 +1605,8 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       return;
     }
     const allMessages = readSessionMessages(entry.sessionId, storePath, entry.sessionFile);
-    const messages = limit < allMessages.length ? allMessages.slice(-limit) : allMessages;
+    const filtered = allMessages.filter((msg) => !isDeliveryMirrorMessage(msg));
+    const messages = limit < filtered.length ? filtered.slice(-limit) : filtered;
     respond(true, { messages }, undefined);
   },
   "sessions.compact": async ({ req, params, respond, context, client, isWebchatConnect }) => {
