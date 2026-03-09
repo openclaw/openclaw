@@ -392,7 +392,14 @@ const saveSessionToMemory: HookHandler = async (event) => {
     // erasure of prior memory files when LLM slugs collide on the same day.
     let preExistingContent: string | null = null;
     if (blockPreSet) {
-      log.debug("Session save blocked by upstream hook (inline check)");
+      if (hasCustomContent) {
+        log.debug(
+          "blockSessionSave pre-set — sessionSaveContent was also set but will be ignored " +
+            "(blockSessionSave takes precedence over sessionSaveContent)",
+        );
+      } else {
+        log.debug("Session save blocked by upstream hook (inline check)");
+      }
     } else {
       await fs.mkdir(memoryDir, { recursive: true });
       try {
@@ -425,7 +432,8 @@ const saveSessionToMemory: HookHandler = async (event) => {
     // Defer retraction/replacement to post-hook phase so that hooks
     // registered after this handler can set blockSessionSave or
     // sessionSaveContent and still have them honored.
-    const writtenEntry = blockPreSet ? null : entry;
+    const inlineWriteHappened = !blockPreSet;
+    const writtenEntry = inlineWriteHappened ? entry : null;
     // Post-hook callback — errors propagate to the framework's per-action
     // catch in triggerInternalHook, which provides consistent log formatting
     // and per-action isolation.
@@ -433,7 +441,7 @@ const saveSessionToMemory: HookHandler = async (event) => {
       // If a later hook blocked the save, retract the file we just wrote.
       // If the file existed before our write (slug collision), restore the
       // original content instead of deleting — avoids erasing prior history.
-      if (event.context.blockSessionSave === true && writtenEntry !== null) {
+      if (event.context.blockSessionSave === true && inlineWriteHappened) {
         if (preExistingContent !== null) {
           // Slug collision: another entry already existed at this filename
           // before our inline write. Restore the original content rather
