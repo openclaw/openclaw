@@ -123,6 +123,18 @@ describe("text-repetition-guard", () => {
     expect(result.looping).toBe(false);
   });
 
+  it("passes progressive content where repeated ngrams come from distinct lines", () => {
+    // Each line shares a long common suffix but the lines themselves differ
+    // (e.g. numbered items with the same tail). The ngram detector should
+    // recognise the line diversity and skip.
+    let text = "";
+    for (let i = 1; i <= 30; i++) {
+      text += `Item ${i}: verify the output result and confirm correctness of this entry\n`;
+    }
+    const result = detectTextRepetition(text, cfg);
+    expect(result.looping).toBe(false);
+  });
+
   it("passes short text below minimum threshold", () => {
     const text = "Done. Sent. ".repeat(10);
     const result = detectTextRepetition(text, cfg);

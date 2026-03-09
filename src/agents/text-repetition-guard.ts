@@ -121,9 +121,32 @@ export function detectTextRepetition(
   // (e.g. "Step 1: process item...", "Step 2: process item...") where
   // the 30-char stem repeats but surrounding content differs.
   {
-    const ngrams = new Map<string, number>();
+    const ngrams = new Map<string, { count: number; lines: Set<string> }>();
     const step = Math.max(1, Math.floor(cfg.ngramSize / 3));
     const contextLen = Math.ceil(cfg.ngramSize / 2);
+    // Pre-split lines for line-diversity lookup.
+    const windowLines = window.split("\n");
+    let charOffset = 0;
+    const lineStartOffsets: number[] = [];
+    for (const line of windowLines) {
+      lineStartOffsets.push(charOffset);
+      charOffset += line.length + 1; // +1 for '\n'
+    }
+    /** Find the full line text containing offset `pos`. */
+    const lineAt = (pos: number): string => {
+      let lo = 0;
+      let hi = lineStartOffsets.length - 1;
+      while (lo < hi) {
+        const mid = (lo + hi + 1) >> 1;
+        if (lineStartOffsets[mid] <= pos) {
+          lo = mid;
+        } else {
+          hi = mid - 1;
+        }
+      }
+      return windowLines[lo];
+    };
+
     for (let i = 0; i <= window.length - cfg.ngramSize; i += step) {
       const gram = window.slice(i, i + cfg.ngramSize);
       if (isDegenerate(gram)) {
@@ -135,19 +158,28 @@ export function detectTextRepetition(
       const contextStart = Math.max(0, i - contextLen);
       const contextEnd = Math.min(window.length, i + cfg.ngramSize + contextLen);
       const contextualKey = window.slice(contextStart, contextEnd);
-      const count = (ngrams.get(contextualKey) ?? 0) + 1;
-      if (count >= cfg.maxNgramRepetitions) {
-        const msg = `Text repetition detected (ngram): pattern repeated ${count} times`;
+      const entry = ngrams.get(contextualKey) ?? { count: 0, lines: new Set<string>() };
+      entry.count++;
+      entry.lines.add(lineAt(i));
+      if (entry.count >= cfg.maxNgramRepetitions) {
+        // Line-diversity escape: if the repeated ngrams come from many
+        // distinct lines, this is progressive content (e.g. numbered steps
+        // that share a long suffix) rather than a true loop.
+        if (entry.lines.size > entry.count / 2) {
+          ngrams.set(contextualKey, entry);
+          continue;
+        }
+        const msg = `Text repetition detected (ngram): pattern repeated ${entry.count} times`;
         log.warn(msg, { pattern: gram.slice(0, 60) });
         return {
           looping: true,
           detector: "ngram",
           pattern: gram.slice(0, 80),
-          count,
+          count: entry.count,
           message: msg,
         };
       }
-      ngrams.set(contextualKey, count);
+      ngrams.set(contextualKey, entry);
     }
   }
 
