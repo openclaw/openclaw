@@ -1,5 +1,5 @@
 import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
-import { geminiAnalyzePdf } from "./pdf-native-providers";
+import { geminiAnalyzePdf } from "./pdf-native-providers.js";
 
 describe("geminiAnalyzePdf", () => {
   let fetchSpy: ReturnType<typeof vi.spyOn>;
