@@ -194,12 +194,8 @@ describe("runGatewayLoop", () => {
       start.mockRejectedValueOnce(new Error("stop-loop"));
 
       const { runGatewayLoop } = await import("./run-loop.js");
-      const runtime = {
-        log: vi.fn(),
-        error: vi.fn(),
-        exit: vi.fn(),
-      };
-      const loopPromise = runGatewayLoop({
+      const { runtime, exited } = createRuntimeWithExitSignal();
+      void runGatewayLoop({
         start: start as unknown as Parameters<typeof runGatewayLoop>[0]["start"],
         runtime: runtime as unknown as Parameters<typeof runGatewayLoop>[0]["runtime"],
       });
@@ -226,7 +222,13 @@ describe("runGatewayLoop", () => {
 
       process.emit("SIGUSR1");
 
-      await expect(loopPromise).rejects.toThrow("stop-loop");
+      await vi.waitFor(() => {
+        expect(gatewayLog.error).toHaveBeenCalledWith(
+          expect.stringContaining("gateway startup failed: stop-loop"),
+        );
+      });
+      expect(runtime.exit).not.toHaveBeenCalled();
+
       expect(closeSecond).toHaveBeenCalledWith({
         reason: "gateway restarting",
         restartExpectedMs: 1500,
@@ -235,6 +237,11 @@ describe("runGatewayLoop", () => {
       expect(markGatewayDraining).toHaveBeenCalledTimes(2);
       expect(resetAllLanes).toHaveBeenCalledTimes(2);
       expect(acquireGatewayLock).toHaveBeenCalledTimes(3);
+
+      process.emit("SIGTERM");
+
+      await expect(exited).resolves.toBe(0);
+      expect(runtime.exit).toHaveBeenCalledWith(0);
     });
   });
 
@@ -281,9 +288,9 @@ describe("runGatewayLoop", () => {
         .mockResolvedValueOnce({ close: closeFirst })
         .mockResolvedValueOnce({ close: closeSecond })
         .mockRejectedValueOnce(new Error("stop-loop"));
-      const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+      const { runtime, exited } = createRuntimeWithExitSignal();
       const { runGatewayLoop } = await import("./run-loop.js");
-      const loopPromise = runGatewayLoop({
+      void runGatewayLoop({
         start: start as unknown as Parameters<typeof runGatewayLoop>[0]["start"],
         runtime: runtime as unknown as Parameters<typeof runGatewayLoop>[0]["runtime"],
         lockPort: 18789,
@@ -294,10 +301,20 @@ describe("runGatewayLoop", () => {
       await new Promise<void>((resolve) => setImmediate(resolve));
       process.emit("SIGUSR1");
 
-      await expect(loopPromise).rejects.toThrow("stop-loop");
+      await vi.waitFor(() => {
+        expect(gatewayLog.error).toHaveBeenCalledWith(
+          expect.stringContaining("gateway startup failed: stop-loop"),
+        );
+      });
+      expect(runtime.exit).not.toHaveBeenCalled();
       expect(acquireGatewayLock).toHaveBeenNthCalledWith(1, { port: 18789 });
       expect(acquireGatewayLock).toHaveBeenNthCalledWith(2, { port: 18789 });
       expect(acquireGatewayLock).toHaveBeenNthCalledWith(3, { port: 18789 });
+
+      process.emit("SIGTERM");
+
+      await expect(exited).resolves.toBe(0);
+      expect(runtime.exit).toHaveBeenCalledWith(0);
     });
   });
 

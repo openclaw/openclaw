@@ -65,13 +65,25 @@ function createScriptOperandFixture(tmp: string, fixture?: RuntimeFixture): Scri
   };
 }
 
+function createFakeRuntimeShim(binDir: string, binName: string): string {
+  const runtimePath = path.join(
+    binDir,
+    process.platform === "win32" ? `${binName}.cmd` : binName,
+  );
+  const body =
+    process.platform === "win32" ? "@echo off\r\nexit /b 0\r\n" : "#!/bin/sh\nexit 0\n";
+  fs.writeFileSync(runtimePath, body);
+  if (process.platform !== "win32") {
+    fs.chmodSync(runtimePath, 0o755);
+  }
+  return runtimePath;
+}
+
 function withFakeRuntimeBin<T>(params: { binName: string; run: () => T }): T {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), `openclaw-${params.binName}-bin-`));
   const binDir = path.join(tmp, "bin");
   fs.mkdirSync(binDir, { recursive: true });
-  const runtimePath = path.join(binDir, params.binName);
-  fs.writeFileSync(runtimePath, "#!/bin/sh\nexit 0\n", { mode: 0o755 });
-  fs.chmodSync(runtimePath, 0o755);
+  createFakeRuntimeShim(binDir, params.binName);
   const oldPath = process.env.PATH;
   process.env.PATH = `${binDir}${path.delimiter}${oldPath ?? ""}`;
   try {
