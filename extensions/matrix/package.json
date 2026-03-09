@@ -1,10 +1,10 @@
 {
   "name": "@openclaw/matrix",
-  "version": "2026.3.8",
+  "version": "2026.3.8-beta.1",
   "description": "OpenClaw Matrix channel plugin",
   "type": "module",
   "dependencies": {
-    "@mariozechner/pi-agent-core": "0.55.3",
+    "@mariozechner/pi-agent-core": "0.57.1",
     "@matrix-org/matrix-sdk-crypto-nodejs": "^0.4.0",
     "@vector-im/matrix-bot-sdk": "0.8.0-element.3",
     "markdown-it": "14.1.1",
