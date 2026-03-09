@@ -110,6 +110,7 @@ import {
 import { createReadinessChecker } from "./server/readiness.js";
 import { loadGatewayTlsRuntime } from "./server/tls.js";
 import { createSessionActivityRegistry, type SessionActivitySource } from "./session-activity.js";
+import { resolveGatewaySessionStoreTarget } from "./session-utils.js";
 import {
   ensureGatewayStartupAuth,
   mergeGatewayAuthConfig,
@@ -140,7 +141,14 @@ function resolveRuntimeSessionActivitySource(runId: string): SessionActivitySour
   if (context?.activitySource === "cron") {
     return "cron";
   }
+  // Current run entrypoints register agent run context before lifecycle events
+  // fire. If context is missing here, treat it as a plain chat run and require
+  // future non-chat callers to set `activitySource` explicitly.
   return "chat";
+}
+
+function toCanonicalSessionKey(cfg: OpenClawConfig, key: string): string {
+  return resolveGatewaySessionStoreTarget({ cfg, key }).canonicalKey;
 }
 
 const log = createSubsystemLogger("gateway");
@@ -761,7 +769,7 @@ export async function startGatewayServer(
                 : undefined;
           if (phase === "start" && sessionKey) {
             sessionActivity.markRunStarted({
-              sessionKey,
+              sessionKey: toCanonicalSessionKey(cfgAtStart, sessionKey),
               runId: evt.runId,
               source: resolveRuntimeSessionActivitySource(evt.runId),
               startedAt: typeof evt.data.startedAt === "number" ? evt.data.startedAt : evt.ts,

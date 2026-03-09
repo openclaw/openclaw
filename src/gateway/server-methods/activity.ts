@@ -20,13 +20,17 @@ function normalizeRequestedKeys(params: SessionActivityParams): string[] {
   return [...keys];
 }
 
+function toCanonicalSessionKey(cfg: ReturnType<typeof loadConfig>, key: string): string {
+  return resolveGatewaySessionStoreTarget({ cfg, key }).canonicalKey;
+}
+
 export const activityHandlers: GatewayRequestHandlers = {
-  "session.activity": ({ respond, params, context }) => {
+  "sessions.activity": ({ respond, params, context }) => {
     if (
       !assertValidParams<SessionActivityParams>(
         params,
         validateSessionActivityParams,
-        "session.activity",
+        "sessions.activity",
         respond,
       )
     ) {
@@ -35,16 +39,14 @@ export const activityHandlers: GatewayRequestHandlers = {
 
     const cfg = loadConfig();
     const requestedKeys = normalizeRequestedKeys(params);
-    const canonicalRequestedKeys = requestedKeys.map(
-      (key) => resolveGatewaySessionStoreTarget({ cfg, key }).canonicalKey,
-    );
+    const canonicalRequestedKeys = requestedKeys.map((key) => toCanonicalSessionKey(cfg, key));
     const heartbeatByKey = new Map(
       listHeartbeatWakeSnapshotEntries()
         .filter(
           (entry): entry is typeof entry & { sessionKey: string } =>
             typeof entry.sessionKey === "string" && entry.sessionKey.trim().length > 0,
         )
-        .map((entry) => [entry.sessionKey, entry] as const),
+        .map((entry) => [toCanonicalSessionKey(cfg, entry.sessionKey), entry] as const),
     );
 
     const keys =
