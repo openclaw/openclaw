@@ -9,7 +9,7 @@ import {
   setAccountEnabledInConfigSection,
   registerPluginHttpRoute,
   buildChannelConfigSchema,
-} from "openclaw/plugin-sdk/synology-chat";
+} from "openclaw/plugin-sdk";
 import { z } from "zod";
 import { listAccountIds, resolveAccount } from "./accounts.js";
 import { sendMessage, sendFileUrl } from "./client.js";
@@ -21,23 +21,6 @@ const CHANNEL_ID = "synology-chat";
 const SynologyChatConfigSchema = buildChannelConfigSchema(z.object({}).passthrough());
 
 const activeRouteUnregisters = new Map<string, () => void>();
-
-function waitUntilAbort(signal?: AbortSignal, onAbort?: () => void): Promise<void> {
-  return new Promise((resolve) => {
-    const complete = () => {
-      onAbort?.();
-      resolve();
-    };
-    if (!signal) {
-      return;
-    }
-    if (signal.aborted) {
-      complete();
-      return;
-    }
-    signal.addEventListener("abort", complete, { once: true });
-  });
-}
 
 export function createSynologyChatPlugin() {
   return {
@@ -195,8 +178,15 @@ export function createSynologyChatPlugin() {
       deliveryMode: "gateway" as const,
       textChunkLimit: 2000,
 
-      sendText: async ({ to, text, accountId, cfg }: any) => {
-        const account: ResolvedSynologyChatAccount = resolveAccount(cfg ?? {}, accountId);
+      sendText: async ({ to, text, accountId, account: ctxAccount }: any) => {
+        let account: ResolvedSynologyChatAccount;
+        if (ctxAccount) {
+          account = ctxAccount;
+        } else {
+          const rt = getSynologyRuntime();
+          const currentCfg = await rt.config.loadConfig();
+          account = resolveAccount(currentCfg, accountId);
+        }
 
         if (!account.incomingUrl) {
           throw new Error("Synology Chat incoming URL not configured");
@@ -209,8 +199,15 @@ export function createSynologyChatPlugin() {
         return { channel: CHANNEL_ID, messageId: `sc-${Date.now()}`, chatId: to };
       },
 
-      sendMedia: async ({ to, mediaUrl, accountId, cfg }: any) => {
-        const account: ResolvedSynologyChatAccount = resolveAccount(cfg ?? {}, accountId);
+      sendMedia: async ({ to, mediaUrl, accountId, account: ctxAccount }: any) => {
+        let account: ResolvedSynologyChatAccount;
+        if (ctxAccount) {
+          account = ctxAccount;
+        } else {
+          const rt = getSynologyRuntime();
+          const currentCfg = await rt.config.loadConfig();
+          account = resolveAccount(currentCfg, accountId);
+        }
 
         if (!account.incomingUrl) {
           throw new Error("Synology Chat incoming URL not configured");
@@ -234,20 +231,20 @@ export function createSynologyChatPlugin() {
 
         if (!account.enabled) {
           log?.info?.(`Synology Chat account ${accountId} is disabled, skipping`);
-          return waitUntilAbort(ctx.abortSignal);
+          return { stop: () => { } };
         }
 
         if (!account.token || !account.incomingUrl) {
           log?.warn?.(
             `Synology Chat account ${accountId} not fully configured (missing token or incomingUrl)`,
           );
-          return waitUntilAbort(ctx.abortSignal);
+          return { stop: () => { } };
         }
         if (account.dmPolicy === "allowlist" && account.allowedUserIds.length === 0) {
           log?.warn?.(
             `Synology Chat account ${accountId} has dmPolicy=allowlist but empty allowedUserIds; refusing to start route`,
           );
-          return waitUntilAbort(ctx.abortSignal);
+          return { stop: () => { } };
         }
 
         log?.info?.(
@@ -260,30 +257,18 @@ export function createSynologyChatPlugin() {
             const rt = getSynologyRuntime();
             const currentCfg = await rt.config.loadConfig();
 
-            // The Chat API user_id (for sending) may differ from the webhook
-            // user_id (used for sessions/pairing). Use chatUserId for API calls.
-            const sendUserId = msg.chatUserId ?? msg.from;
-
-            // Build MsgContext using SDK's finalizeInboundContext for proper normalization
-            const msgCtx = rt.channel.reply.finalizeInboundContext({
+            // Build MsgContext (same format as LINE/Signal/etc.)
+            const msgCtx = {
               Body: msg.body,
-              RawBody: msg.body,
-              CommandBody: msg.body,
-              From: `synology-chat:${msg.from}`,
-              To: `synology-chat:${msg.from}`,
+              From: msg.from,
+              To: account.botName,
               SessionKey: msg.sessionKey,
               AccountId: account.accountId,
-              OriginatingChannel: CHANNEL_ID,
-              OriginatingTo: `synology-chat:${msg.from}`,
+              OriginatingChannel: CHANNEL_ID as any,
+              OriginatingTo: msg.from,
               ChatType: msg.chatType,
               SenderName: msg.senderName,
-              SenderId: msg.from,
-              Provider: CHANNEL_ID,
-              Surface: CHANNEL_ID,
-              ConversationLabel: msg.senderName || msg.from,
-              Timestamp: Date.now(),
-              CommandAuthorized: msg.commandAuthorized,
-            });
+            };
 
             // Dispatch via the SDK's buffered block dispatcher
             await rt.channel.reply.dispatchReplyWithBufferedBlockDispatcher({
@@ -296,7 +281,7 @@ export function createSynologyChatPlugin() {
                     await sendMessage(
                       account.incomingUrl,
                       text,
-                      sendUserId,
+                      msg.from,
                       account.allowInsecureSsl,
                     );
                   }
@@ -324,8 +309,6 @@ export function createSynologyChatPlugin() {
 
         const unregister = registerPluginHttpRoute({
           path: account.webhookPath,
-          auth: "plugin",
-          replaceExisting: true,
           pluginId: CHANNEL_ID,
           accountId: account.accountId,
           log: (msg: string) => log?.info?.(msg),
@@ -335,14 +318,25 @@ export function createSynologyChatPlugin() {
 
         log?.info?.(`Registered HTTP route: ${account.webhookPath} for Synology Chat`);
 
-        // Keep alive until abort signal fires.
-        // The gateway expects a Promise that stays pending while the channel is running.
-        // Resolving immediately triggers a restart loop.
-        return waitUntilAbort(ctx.abortSignal, () => {
-          log?.info?.(`Stopping Synology Chat channel (account: ${accountId})`);
-          if (typeof unregister === "function") unregister();
-          activeRouteUnregisters.delete(routeKey);
+        // Return a promise that stays pending until stop() is called.
+        // Without this, the framework sees startAccount() complete immediately
+        // and triggers an auto-restart loop, causing the route to briefly
+        // disappear between restarts and drop incoming messages.
+        let resolveStop: () => void;
+        const stopPromise = new Promise<void>((resolve) => {
+          resolveStop = resolve;
         });
+
+        return {
+          stop: () => {
+            log?.info?.(`Stopping Synology Chat channel (account: ${accountId})`);
+            if (typeof unregister === "function") unregister();
+            activeRouteUnregisters.delete(routeKey);
+            resolveStop();
+          },
+          // Some framework versions await a `running` promise to detect channel lifecycle
+          running: stopPromise,
+        };
       },
 
       stopAccount: async (ctx: any) => {
