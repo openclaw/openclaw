@@ -45,13 +45,52 @@ private func sessionEntry(key: String, updatedAt: Double) -> OpenClawChatSession
         contextTokens: nil)
 }
 
+private func sessionEntry(key: String, updatedAt: Double, model: String?) -> OpenClawChatSessionEntry {
+    OpenClawChatSessionEntry(
+        key: key,
+        kind: nil,
+        displayName: nil,
+        surface: nil,
+        subject: nil,
+        room: nil,
+        space: nil,
+        updatedAt: updatedAt,
+        sessionId: nil,
+        systemSent: nil,
+        abortedLastRun: nil,
+        thinkingLevel: nil,
+        verboseLevel: nil,
+        inputTokens: nil,
+        outputTokens: nil,
+        totalTokens: nil,
+        model: model,
+        contextTokens: nil)
+}
+
+private func modelChoice(id: String, name: String, provider: String = "anthropic") -> OpenClawChatModelChoice {
+    OpenClawChatModelChoice(modelID: id, name: name, provider: provider, contextWindow: nil)
+}
+
 private func makeViewModel(
     sessionKey: String = "main",
     historyResponses: [OpenClawChatHistoryPayload],
-    sessionsResponses: [OpenClawChatSessionsListResponse] = []) async -> (TestChatTransport, OpenClawChatViewModel)
+    sessionsResponses: [OpenClawChatSessionsListResponse] = [],
+    modelResponses: [[OpenClawChatModelChoice]] = [],
+    initialThinkingLevel: String? = nil,
+    onThinkingLevelChanged: (@MainActor @Sendable (String) -> Void)? = nil) async
+    -> (TestChatTransport, OpenClawChatViewModel)
 {
-    let transport = TestChatTransport(historyResponses: historyResponses, sessionsResponses: sessionsResponses)
-    let vm = await MainActor.run { OpenClawChatViewModel(sessionKey: sessionKey, transport: transport) }
+    let transport = TestChatTransport(
+        historyResponses: historyResponses,
+        sessionsResponses: sessionsResponses,
+        modelResponses: modelResponses)
+    let vm = await MainActor.run {
+        OpenClawChatViewModel(
+            sessionKey: sessionKey,
+            transport: transport,
+            initialThinkingLevel: initialThinkingLevel,
+            onThinkingLevelChanged: onThinkingLevelChanged)
+    }
     return (transport, vm)
 }
 
@@ -125,27 +164,38 @@ private func emitExternalFinal(
                 errorMessage: nil)))
 }
 
+@MainActor
+private final class CallbackBox {
+    var values: [String] = []
+}
+
 private actor TestChatTransportState {
     var historyCallCount: Int = 0
     var sessionsCallCount: Int = 0
+    var modelsCallCount: Int = 0
     var sentRunIds: [String] = []
     var abortedRunIds: [String] = []
+    var patchedModels: [String?] = []
+    var patchedThinkingLevels: [String] = []
 }
 
 private final class TestChatTransport: @unchecked Sendable, OpenClawChatTransport {
     private let state = TestChatTransportState()
     private let historyResponses: [OpenClawChatHistoryPayload]
     private let sessionsResponses: [OpenClawChatSessionsListResponse]
+    private let modelResponses: [[OpenClawChatModelChoice]]
 
     private let stream: AsyncStream<OpenClawChatTransportEvent>
     private let continuation: AsyncStream<OpenClawChatTransportEvent>.Continuation
 
     init(
         historyResponses: [OpenClawChatHistoryPayload],
-        sessionsResponses: [OpenClawChatSessionsListResponse] = [])
+        sessionsResponses: [OpenClawChatSessionsListResponse] = [],
+        modelResponses: [[OpenClawChatModelChoice]] = [])
     {
         self.historyResponses = historyResponses
         self.sessionsResponses = sessionsResponses
+        self.modelResponses = modelResponses
         var cont: AsyncStream<OpenClawChatTransportEvent>.Continuation!
         self.stream = AsyncStream { c in
             cont = c
@@ -201,6 +251,23 @@ private final class TestChatTransport: @unchecked Sendable, OpenClawChatTranspor
             sessions: [])
     }
 
+    func listModels() async throws -> [OpenClawChatModelChoice] {
+        let idx = await self.state.modelsCallCount
+        await self.state.setModelsCallCount(idx + 1)
+        if idx < self.modelResponses.count {
+            return self.modelResponses[idx]
+        }
+        return self.modelResponses.last ?? []
+    }
+
+    func setSessionModel(sessionKey _: String, model: String?) async throws {
+        await self.state.patchedModelsAppend(model)
+    }
+
+    func setSessionThinking(sessionKey _: String, thinkingLevel: String) async throws {
+        await self.state.patchedThinkingLevelsAppend(thinkingLevel)
+    }
+
     func requestHealth(timeoutMs _: Int) async throws -> Bool {
         true
     }
@@ -217,6 +284,14 @@ private final class TestChatTransport: @unchecked Sendable, OpenClawChatTranspor
     func abortedRunIds() async -> [String] {
         await self.state.abortedRunIds
     }
+
+    func patchedModels() async -> [String?] {
+        await self.state.patchedModels
+    }
+
+    func patchedThinkingLevels() async -> [String] {
+        await self.state.patchedThinkingLevels
+    }
 }
 
 extension TestChatTransportState {
@@ -228,12 +303,24 @@ extension TestChatTransportState {
         self.sessionsCallCount = v
     }
 
+    fileprivate func setModelsCallCount(_ v: Int) {
+        self.modelsCallCount = v
+    }
+
     fileprivate func sentRunIdsAppend(_ v: String) {
         self.sentRunIds.append(v)
     }
 
     fileprivate func abortedRunIdsAppend(_ v: String) {
         self.abortedRunIds.append(v)
+    }
+
+    fileprivate func patchedModelsAppend(_ v: String?) {
+        self.patchedModels.append(v)
+    }
+
+    fileprivate func patchedThinkingLevelsAppend(_ v: String) {
+        self.patchedThinkingLevels.append(v)
     }
 }
 
@@ -455,6 +542,96 @@ extension TestChatTransportState {
 
         let keys = await MainActor.run { vm.sessionChoices.map(\.key) }
         #expect(keys == ["main", "custom"])
+    }
+
+    @Test func bootstrapsModelSelectionFromSessionAndDefaults() async throws {
+        let now = Date().timeIntervalSince1970 * 1000
+        let history = historyPayload()
+        let sessions = OpenClawChatSessionsListResponse(
+            ts: now,
+            path: nil,
+            count: 1,
+            defaults: OpenClawChatSessionsDefaults(model: "openai/gpt-4.1-mini", contextTokens: nil),
+            sessions: [
+                sessionEntry(key: "main", updatedAt: now, model: "anthropic/claude-opus-4-6"),
+            ])
+        let models = [
+            modelChoice(id: "anthropic/claude-opus-4-6", name: "Claude Opus 4.6"),
+            modelChoice(id: "openai/gpt-4.1-mini", name: "GPT-4.1 mini", provider: "openai"),
+        ]
+
+        let (_, vm) = await makeViewModel(
+            historyResponses: [history],
+            sessionsResponses: [sessions],
+            modelResponses: [models])
+
+        try await loadAndWaitBootstrap(vm: vm)
+
+        #expect(await MainActor.run { vm.showsModelPicker })
+        #expect(await MainActor.run { vm.modelSelectionID } == "anthropic/claude-opus-4-6")
+        #expect(await MainActor.run { vm.defaultModelLabel } == "Default: openai/gpt-4.1-mini")
+    }
+
+    @Test func selectingDefaultModelPatchesNilAndUpdatesSelection() async throws {
+        let now = Date().timeIntervalSince1970 * 1000
+        let history = historyPayload()
+        let sessions = OpenClawChatSessionsListResponse(
+            ts: now,
+            path: nil,
+            count: 1,
+            defaults: OpenClawChatSessionsDefaults(model: "openai/gpt-4.1-mini", contextTokens: nil),
+            sessions: [
+                sessionEntry(key: "main", updatedAt: now, model: "anthropic/claude-opus-4-6"),
+            ])
+        let models = [
+            modelChoice(id: "anthropic/claude-opus-4-6", name: "Claude Opus 4.6"),
+            modelChoice(id: "openai/gpt-4.1-mini", name: "GPT-4.1 mini", provider: "openai"),
+        ]
+
+        let (transport, vm) = await makeViewModel(
+            historyResponses: [history],
+            sessionsResponses: [sessions],
+            modelResponses: [models])
+
+        try await loadAndWaitBootstrap(vm: vm)
+
+        await MainActor.run { vm.selectModel(OpenClawChatViewModel.defaultModelSelectionID) }
+
+        try await waitUntil("session model patched") {
+            let patched = await transport.patchedModels()
+            return patched == [nil]
+        }
+
+        #expect(await MainActor.run { vm.modelSelectionID } == OpenClawChatViewModel.defaultModelSelectionID)
+    }
+
+    @Test func explicitThinkingLevelWinsOverHistoryAndPersistsChanges() async throws {
+        let history = OpenClawChatHistoryPayload(
+            sessionKey: "main",
+            sessionId: "sess-main",
+            messages: [],
+            thinkingLevel: "off")
+        let callbackState = await MainActor.run { CallbackBox() }
+
+        let (transport, vm) = await makeViewModel(
+            historyResponses: [history],
+            initialThinkingLevel: "high",
+            onThinkingLevelChanged: { level in
+                callbackState.values.append(level)
+            })
+
+        try await loadAndWaitBootstrap(vm: vm, sessionId: "sess-main")
+        #expect(await MainActor.run { vm.thinkingLevel } == "high")
+
+        await MainActor.run { vm.selectThinkingLevel("medium") }
+
+        try await waitUntil("thinking level patched") {
+            let patched = await transport.patchedThinkingLevels()
+            return patched == ["medium"]
+        }
+
+        #expect(await MainActor.run { vm.thinkingLevel } == "medium")
+        #expect(await MainActor.run { callbackState.values } == ["medium"])
     }
 
     @Test func clearsStreamingOnExternalErrorEvent() async throws {

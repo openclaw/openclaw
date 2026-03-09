@@ -15,9 +15,13 @@ private let chatUILogger = Logger(subsystem: "ai.openclaw", category: "OpenClawC
 @MainActor
 @Observable
 public final class OpenClawChatViewModel {
+    public static let defaultModelSelectionID = "__default__"
+
     public private(set) var messages: [OpenClawChatMessage] = []
     public var input: String = ""
-    public var thinkingLevel: String = "off"
+    public private(set) var thinkingLevel: String
+    public private(set) var modelSelectionID: String = "__default__"
+    public private(set) var modelChoices: [OpenClawChatModelChoice] = []
     public private(set) var isLoading = false
     public private(set) var isSending = false
     public private(set) var isAborting = false
@@ -32,6 +36,9 @@ public final class OpenClawChatViewModel {
     public private(set) var pendingToolCalls: [OpenClawChatPendingToolCall] = []
     public private(set) var sessions: [OpenClawChatSessionEntry] = []
     private let transport: any OpenClawChatTransport
+    private var sessionDefaults: OpenClawChatSessionsDefaults?
+    private let prefersExplicitThinkingLevel: Bool
+    private let onThinkingLevelChanged: (@MainActor @Sendable (String) -> Void)?
 
     @ObservationIgnored
     private nonisolated(unsafe) var eventTask: Task<Void, Never>?
@@ -52,9 +59,18 @@ public final class OpenClawChatViewModel {
 
     private var lastHealthPollAt: Date?
 
-    public init(sessionKey: String, transport: any OpenClawChatTransport) {
+    public init(
+        sessionKey: String,
+        transport: any OpenClawChatTransport,
+        initialThinkingLevel: String? = nil,
+        onThinkingLevelChanged: (@MainActor @Sendable (String) -> Void)? = nil)
+    {
         self.sessionKey = sessionKey
         self.transport = transport
+        let normalizedThinkingLevel = Self.normalizedThinkingLevel(initialThinkingLevel)
+        self.thinkingLevel = normalizedThinkingLevel ?? "off"
+        self.prefersExplicitThinkingLevel = normalizedThinkingLevel != nil
+        self.onThinkingLevelChanged = onThinkingLevelChanged
 
         self.eventTask = Task { [weak self] in
             guard let self else { return }
@@ -99,6 +115,14 @@ public final class OpenClawChatViewModel {
         Task { await self.performSwitchSession(to: sessionKey) }
     }
 
+    public func selectThinkingLevel(_ level: String) {
+        Task { await self.performSelectThinkingLevel(level) }
+    }
+
+    public func selectModel(_ selectionID: String) {
+        Task { await self.performSelectModel(selectionID) }
+    }
+
     public var sessionChoices: [OpenClawChatSessionEntry] {
         let now = Date().timeIntervalSince1970 * 1000
         let cutoff = now - (24 * 60 * 60 * 1000)
@@ -132,6 +156,17 @@ public final class OpenClawChatViewModel {
         }
 
         return result
+    }
+
+    public var showsModelPicker: Bool {
+        !self.modelChoices.isEmpty
+    }
+
+    public var defaultModelLabel: String {
+        guard let defaultModelID = self.normalizedModelID(self.sessionDefaults?.model) else {
+            return "Default"
+        }
+        return "Default: \(self.modelLabel(for: defaultModelID))"
     }
 
     public func addAttachments(urls: [URL]) {
@@ -174,11 +209,14 @@ public final class OpenClawChatViewModel {
                 previous: self.messages,
                 incoming: Self.decodeMessages(payload.messages ?? []))
             self.sessionId = payload.sessionId
-            if let level = payload.thinkingLevel, !level.isEmpty {
+            if !self.prefersExplicitThinkingLevel,
+               let level = Self.normalizedThinkingLevel(payload.thinkingLevel)
+            {
                 self.thinkingLevel = level
             }
             await self.pollHealthIfNeeded(force: true)
             await self.fetchSessions(limit: 50)
+            await self.fetchModels()
             self.errorText = nil
         } catch {
             self.errorText = error.localizedDescription
@@ -422,6 +460,17 @@ public final class OpenClawChatViewModel {
         do {
             let res = try await self.transport.listSessions(limit: limit)
             self.sessions = res.sessions
+            self.sessionDefaults = res.defaults
+            self.syncSelectedModel()
+        } catch {
+            // Best-effort.
+        }
+    }
+
+    private func fetchModels() async {
+        do {
+            self.modelChoices = try await self.transport.listModels()
+            self.syncSelectedModel()
         } catch {
             // Best-effort.
         }
@@ -432,7 +481,42 @@ public final class OpenClawChatViewModel {
         guard !next.isEmpty else { return }
         guard next != self.sessionKey else { return }
         self.sessionKey = next
+        self.modelSelectionID = Self.defaultModelSelectionID
         await self.bootstrap()
+    }
+
+    private func performSelectThinkingLevel(_ level: String) async {
+        let next = Self.normalizedThinkingLevel(level) ?? "off"
+        guard next != self.thinkingLevel else { return }
+
+        self.thinkingLevel = next
+        self.onThinkingLevelChanged?(next)
+
+        do {
+            try await self.transport.setSessionThinking(sessionKey: self.sessionKey, thinkingLevel: next)
+        } catch {
+            // Best-effort. Persisting the user's local preference matters more than a patch error here.
+        }
+    }
+
+    private func performSelectModel(_ selectionID: String) async {
+        let next = self.normalizedSelectionID(selectionID)
+        guard next != self.modelSelectionID else { return }
+
+        let previous = self.modelSelectionID
+        self.modelSelectionID = next
+        self.errorText = nil
+
+        do {
+            try await self.transport.setSessionModel(
+                sessionKey: self.sessionKey,
+                model: self.modelID(forSelectionID: next))
+            self.updateCurrentSessionModel(self.modelID(forSelectionID: next))
+        } catch {
+            self.modelSelectionID = previous
+            self.errorText = error.localizedDescription
+            chatUILogger.error("sessions.patch(model) failed \(error.localizedDescription, privacy: .public)")
+        }
     }
 
     private func placeholderSession(key: String) -> OpenClawChatSessionEntry {
@@ -455,6 +539,89 @@ public final class OpenClawChatViewModel {
             totalTokens: nil,
             model: nil,
             contextTokens: nil)
+    }
+
+    private func syncSelectedModel() {
+        let explicitModelID = self.sessions.first(where: { $0.key == self.sessionKey })?.model
+            .flatMap(self.normalizedModelID)
+        if let explicitModelID {
+            self.modelSelectionID = explicitModelID
+            return
+        }
+        self.modelSelectionID = Self.defaultModelSelectionID
+    }
+
+    private func normalizedSelectionID(_ selectionID: String) -> String {
+        let trimmed = selectionID.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return Self.defaultModelSelectionID }
+        return trimmed
+    }
+
+    private func normalizedModelID(_ modelID: String?) -> String? {
+        guard let modelID else { return nil }
+        let trimmed = modelID.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+        return trimmed
+    }
+
+    private func modelID(forSelectionID selectionID: String) -> String? {
+        let normalized = self.normalizedSelectionID(selectionID)
+        if normalized == Self.defaultModelSelectionID {
+            return nil
+        }
+        return normalized
+    }
+
+    private func modelLabel(for modelID: String) -> String {
+        self.modelChoices.first(where: { $0.modelID == modelID })?.displayLabel ?? modelID
+    }
+
+    private func updateCurrentSessionModel(_ modelID: String?) {
+        if let index = self.sessions.firstIndex(where: { $0.key == self.sessionKey }) {
+            let current = self.sessions[index]
+            self.sessions[index] = OpenClawChatSessionEntry(
+                key: current.key,
+                kind: current.kind,
+                displayName: current.displayName,
+                surface: current.surface,
+                subject: current.subject,
+                room: current.room,
+                space: current.space,
+                updatedAt: current.updatedAt,
+                sessionId: current.sessionId,
+                systemSent: current.systemSent,
+                abortedLastRun: current.abortedLastRun,
+                thinkingLevel: current.thinkingLevel,
+                verboseLevel: current.verboseLevel,
+                inputTokens: current.inputTokens,
+                outputTokens: current.outputTokens,
+                totalTokens: current.totalTokens,
+                model: modelID,
+                contextTokens: current.contextTokens)
+        } else {
+            let placeholder = self.placeholderSession(key: self.sessionKey)
+            self.sessions.append(
+                OpenClawChatSessionEntry(
+                    key: placeholder.key,
+                    kind: placeholder.kind,
+                    displayName: placeholder.displayName,
+                    surface: placeholder.surface,
+                    subject: placeholder.subject,
+                    room: placeholder.room,
+                    space: placeholder.space,
+                    updatedAt: placeholder.updatedAt,
+                    sessionId: placeholder.sessionId,
+                    systemSent: placeholder.systemSent,
+                    abortedLastRun: placeholder.abortedLastRun,
+                    thinkingLevel: placeholder.thinkingLevel,
+                    verboseLevel: placeholder.verboseLevel,
+                    inputTokens: placeholder.inputTokens,
+                    outputTokens: placeholder.outputTokens,
+                    totalTokens: placeholder.totalTokens,
+                    model: modelID,
+                    contextTokens: placeholder.contextTokens))
+        }
+        self.syncSelectedModel()
     }
 
     private func handleTransportEvent(_ evt: OpenClawChatTransportEvent) {
@@ -573,7 +740,9 @@ public final class OpenClawChatViewModel {
                 previous: self.messages,
                 incoming: Self.decodeMessages(payload.messages ?? []))
             self.sessionId = payload.sessionId
-            if let level = payload.thinkingLevel, !level.isEmpty {
+            if !self.prefersExplicitThinkingLevel,
+               let level = Self.normalizedThinkingLevel(payload.thinkingLevel)
+            {
                 self.thinkingLevel = level
             }
         } catch {
@@ -681,5 +850,12 @@ public final class OpenClawChatViewModel {
         #else
         nil
         #endif
+    }
+
+    private static func normalizedThinkingLevel(_ level: String?) -> String? {
+        guard let level else { return nil }
+        let trimmed = level.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard ["off", "low", "medium", "high"].contains(trimmed) else { return nil }
+        return trimmed
     }
 }

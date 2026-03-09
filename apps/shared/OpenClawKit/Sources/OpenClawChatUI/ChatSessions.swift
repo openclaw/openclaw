@@ -1,5 +1,30 @@
 import Foundation
 
+public struct OpenClawChatModelChoice: Identifiable, Codable, Sendable, Hashable {
+    public var id: String { self.modelID }
+
+    public let modelID: String
+    public let name: String
+    public let provider: String
+    public let contextWindow: Int?
+
+    public init(modelID: String, name: String, provider: String, contextWindow: Int?) {
+        self.modelID = modelID
+        self.name = name
+        self.provider = provider
+        self.contextWindow = contextWindow
+    }
+
+    public var displayLabel: String {
+        if self.modelID.contains("/") {
+            return self.modelID
+        }
+        let trimmedProvider = self.provider.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedProvider.isEmpty else { return self.modelID }
+        return "\(trimmedProvider)/\(self.modelID)"
+    }
+}
+
 public struct OpenClawChatSessionsDefaults: Codable, Sendable {
     public let model: String?
     public let contextTokens: Int?

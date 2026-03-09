@@ -27,11 +27,15 @@ struct OpenClawChatComposer: View {
                     if self.showsSessionSwitcher {
                         self.sessionPicker
                     }
+                    if self.viewModel.showsModelPicker {
+                        self.modelPicker
+                    }
                     self.thinkingPicker
                     Spacer()
                     self.refreshButton
                     self.attachmentPicker
                 }
+                .padding(.horizontal, 10)
             }
 
             if self.showsAttachments, !self.viewModel.attachments.isEmpty {
@@ -83,7 +87,12 @@ struct OpenClawChatComposer: View {
     }
 
     private var thinkingPicker: some View {
-        Picker("Thinking", selection: self.$viewModel.thinkingLevel) {
+        Picker(
+            "Thinking",
+            selection: Binding(
+                get: { self.viewModel.thinkingLevel },
+                set: { next in self.viewModel.selectThinkingLevel(next) }))
+        {
             Text("Off").tag("off")
             Text("Low").tag("low")
             Text("Medium").tag("medium")
@@ -93,6 +102,25 @@ struct OpenClawChatComposer: View {
         .pickerStyle(.menu)
         .controlSize(.small)
         .frame(maxWidth: 140, alignment: .leading)
+    }
+
+    private var modelPicker: some View {
+        Picker(
+            "Model",
+            selection: Binding(
+                get: { self.viewModel.modelSelectionID },
+                set: { next in self.viewModel.selectModel(next) }))
+        {
+            Text(self.viewModel.defaultModelLabel).tag(OpenClawChatViewModel.defaultModelSelectionID)
+            ForEach(self.viewModel.modelChoices) { model in
+                Text(model.displayLabel).tag(model.modelID)
+            }
+        }
+        .labelsHidden()
+        .pickerStyle(.menu)
+        .controlSize(.small)
+        .frame(maxWidth: 240, alignment: .leading)
+        .help("Model")
     }
 
     private var sessionPicker: some View {
