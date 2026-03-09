@@ -3,6 +3,7 @@ import {
   isHeartbeatOnlyResponse,
   pickLastDeliverablePayload,
   pickLastNonEmptyTextFromPayloads,
+  pickSummaryFromOutput,
   pickSummaryFromPayloads,
 } from "./helpers.js";
 
@@ -83,6 +84,47 @@ describe("pickLastDeliverablePayload", () => {
     const normal = { text: "ok", isError: undefined };
     const error = { text: "bad", isError: true as const };
     expect(pickLastDeliverablePayload([normal, error])).toBe(normal);
+  });
+});
+
+describe("pickSummaryFromOutput strips thinking tags", () => {
+  it("strips <think> blocks from output text", () => {
+    const text = "<think>Let me analyze this...</think>Here is the summary.";
+    expect(pickSummaryFromOutput(text)).toBe("Here is the summary.");
+  });
+
+  it("returns cleaned text when only thinking tags are present", () => {
+    expect(pickSummaryFromOutput("<think>internal monologue only</think>")).toBeUndefined();
+  });
+});
+
+describe("reasoning payload filtering", () => {
+  it("pickSummaryFromPayloads skips isReasoning payloads", () => {
+    const payloads = [
+      { text: "Reasoning:\n_thinking..._", isReasoning: true },
+      { text: "Final answer" },
+    ];
+    expect(pickSummaryFromPayloads(payloads)).toBe("Final answer");
+  });
+
+  it("pickLastNonEmptyTextFromPayloads skips isReasoning payloads", () => {
+    const payloads = [
+      { text: "Final answer" },
+      { text: "Reasoning:\n_thinking..._", isReasoning: true },
+    ];
+    expect(pickLastNonEmptyTextFromPayloads(payloads)).toBe("Final answer");
+  });
+
+  it("pickLastDeliverablePayload skips isReasoning payloads", () => {
+    const real = { text: "Delivered content" };
+    const reasoning = { text: "Internal reasoning", isReasoning: true as const };
+    expect(pickLastDeliverablePayload([real, reasoning])).toBe(real);
+  });
+
+  it("never falls back to isReasoning payloads even with no other content", () => {
+    const payloads = [{ text: "Reasoning only", isReasoning: true }];
+    expect(pickSummaryFromPayloads(payloads)).toBeUndefined();
+    expect(pickLastNonEmptyTextFromPayloads(payloads)).toBeUndefined();
   });
 });
 
