@@ -13,6 +13,7 @@ import {
   sanitizeUserFacingText,
 } from "../../agents/pi-embedded-helpers.js";
 import { runEmbeddedPiAgent } from "../../agents/pi-embedded.js";
+import { pendingEscalations, resolveEscalationModel } from "../../agents/tools/escalate-tool.js";
 import {
   resolveGroupSessionKey,
   resolveSessionTranscriptPath,
@@ -21,6 +22,7 @@ import {
 } from "../../config/sessions.js";
 import { logVerbose } from "../../globals.js";
 import { emitAgentEvent, registerAgentRunContext } from "../../infra/agent-events.js";
+import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { defaultRuntime } from "../../runtime.js";
 import {
   isMarkdownCapableMessageChannel,
@@ -47,6 +49,8 @@ import type { FollowupRun } from "./queue.js";
 import { createBlockReplyDeliveryHandler } from "./reply-delivery.js";
 import { createReplyMediaPathNormalizer } from "./reply-media-paths.js";
 import type { TypingSignaler } from "./typing-mode.js";
+
+const log = createSubsystemLogger("agent-runner");
 
 export type RuntimeFallbackAttempt = {
   provider: string;
@@ -142,6 +146,58 @@ export async function runAgentTurnWithFallback(params: {
   let bootstrapPromptWarningSignaturesSeen = resolveBootstrapWarningSignaturesSeen(
     params.getActiveSessionEntry()?.systemPromptReport,
   );
+  let didEscalate = false;
+  let escalationProviderOverride: string | undefined;
+  let escalationModelOverride: string | undefined;
+
+  /**
+   * Check for a pending self-escalation and, if found, switch the run to the
+   * escalation model. Returns true when escalation was handled (caller should
+   * `continue` the loop).
+   */
+  // Derive escalation key consistently with the escalate tool, which stores
+  // under `sessionKey ?? sessionId` (transcript UUID fallback).
+  const resolveEscalationKey = () =>
+    params.sessionKey ?? params.followupRun.run.sessionKey ?? params.followupRun.run.sessionId;
+
+  const tryHandleEscalation = (path: "success" | "error"): boolean => {
+    if (didEscalate) {
+      return false;
+    }
+    const escalationKey = resolveEscalationKey();
+    const pending = escalationKey ? pendingEscalations.get(escalationKey) : undefined;
+    if (!pending) {
+      return false;
+    }
+    const resolved = resolveEscalationModel(
+      params.followupRun.run.config,
+      params.followupRun.run.agentId,
+    );
+    if (!resolved) {
+      // Config missing/invalid — consume the entry but don't set didEscalate
+      // so we don't block a future retry if config changes mid-session.
+      pendingEscalations.delete(escalationKey);
+      return false;
+    }
+    pendingEscalations.delete(escalationKey);
+    didEscalate = true;
+    const label =
+      path === "error"
+        ? "Self-escalation triggered (from error path)"
+        : "Self-escalation triggered";
+    log.info(`${label}: reason="${pending.reason}" → ${resolved.provider}/${resolved.model}`);
+    // Use local overrides instead of mutating the shared followupRun object,
+    // so outer retry/requeue mechanisms still see the original primary model.
+    escalationProviderOverride = resolved.provider;
+    escalationModelOverride = resolved.model;
+    didNotifyAgentRunStart = false;
+    return true;
+  };
+
+  // Capture once before the loop for post-loop defensive cleanup.
+  // The session key is stable for the lifetime of a turn (set before the loop
+  // and not reassigned), so this matches what tryHandleEscalation uses inside.
+  const escalationCleanupKey = resolveEscalationKey();
 
   while (true) {
     try {
@@ -199,6 +255,10 @@ export async function runAgentTurnWithFallback(params: {
       const onToolResult = params.opts?.onToolResult;
       const fallbackResult = await runWithModelFallback({
         ...resolveModelFallbackOptions(params.followupRun.run),
+        // When escalation is active, override provider/model without mutating the shared run object.
+        ...(escalationProviderOverride && escalationModelOverride
+          ? { provider: escalationProviderOverride, model: escalationModelOverride }
+          : {}),
         run: (provider, model, runOptions) => {
           // Notify that model selection is complete (including after fallback).
           // This allows responsePrefix template interpolation with the actual model.
@@ -510,8 +570,28 @@ export async function runAgentTurnWithFallback(params: {
         }
       }
 
+      // Self-escalation: if the model called the escalate tool, re-run on the escalation model.
+      if (tryHandleEscalation("success")) {
+        continue;
+      }
+
       break;
     } catch (err) {
+      // Defensive: check for pending escalation on error path too.
+      {
+        // Log original error before escalation decision so cause appears before consequence.
+        const pendingKey = resolveEscalationKey();
+        const hasPendingEscalation = !!pendingKey && pendingEscalations.has(pendingKey);
+        if (hasPendingEscalation) {
+          log.info(
+            `Primary model error before escalation: ${err instanceof Error ? err.message : String(err)}`,
+          );
+        }
+        if (tryHandleEscalation("error")) {
+          continue;
+        }
+      }
+
       const message = err instanceof Error ? err.message : String(err);
       const isContextOverflow = isLikelyContextOverflowError(message);
       const isCompactionFailure = isCompactionFailureError(message);
@@ -622,6 +702,12 @@ export async function runAgentTurnWithFallback(params: {
         },
       };
     }
+  }
+
+  // Clean up any stale escalation entry (defensive — tryHandleEscalation already
+  // deletes on the happy path, but this covers unexpected loop exits).
+  if (escalationCleanupKey) {
+    pendingEscalations.delete(escalationCleanupKey);
   }
 
   // If the run completed but with an embedded context overflow error that

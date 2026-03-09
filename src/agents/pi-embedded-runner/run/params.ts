@@ -71,6 +71,8 @@ export type RunEmbeddedPiAgentParams = {
   clientTools?: ClientToolDefinition[];
   /** Disable built-in tools for this run (LLM-only mode). */
   disableTools?: boolean;
+  /** Skip self-escalation tool registration. Set for call paths that don't consume pendingEscalations. */
+  disableEscalation?: boolean;
   provider?: string;
   model?: string;
   authProfileId?: string;
