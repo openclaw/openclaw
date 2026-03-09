@@ -18,7 +18,7 @@ export type ProbeFeishuOptions = {
 };
 
 type FeishuBotInfoResponse = {
-  code: number;
+  code?: number;
   msg?: string;
   bot?: { bot_name?: string; open_id?: string };
   data?: { bot?: { bot_name?: string; open_id?: string } };
@@ -114,7 +114,7 @@ export async function probeFeishu(
       };
     }
 
-    if (response.code !== 0) {
+    if (response.code !== undefined && response.code !== 0) {
       return setCachedProbeResult(
         cacheKey,
         {

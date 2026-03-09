@@ -10,7 +10,7 @@ export function assertFeishuMessageApiSuccess(
   response: FeishuMessageApiResponse,
   errorPrefix: string,
 ) {
-  if (response.code !== 0) {
+  if (response.code !== undefined && response.code !== 0) {
     throw new Error(`${errorPrefix}: ${response.msg || `code ${response.code}`}`);
   }
 }

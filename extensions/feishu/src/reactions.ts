@@ -41,7 +41,7 @@ export async function addReactionFeishu(params: {
     data?: { reaction_id?: string };
   };
 
-  if (response.code !== 0) {
+  if (response.code !== undefined && response.code !== 0) {
     throw new Error(`Feishu add reaction failed: ${response.msg || `code ${response.code}`}`);
   }
 
@@ -77,7 +77,7 @@ export async function removeReactionFeishu(params: {
     },
   })) as { code?: number; msg?: string };
 
-  if (response.code !== 0) {
+  if (response.code !== undefined && response.code !== 0) {
     throw new Error(`Feishu remove reaction failed: ${response.msg || `code ${response.code}`}`);
   }
 }
@@ -115,7 +115,7 @@ export async function listReactionsFeishu(params: {
     };
   };
 
-  if (response.code !== 0) {
+  if (response.code !== undefined && response.code !== 0) {
     throw new Error(`Feishu list reactions failed: ${response.msg || `code ${response.code}`}`);
   }
 
