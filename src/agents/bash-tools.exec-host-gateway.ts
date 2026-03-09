@@ -198,6 +198,7 @@ export async function processGatewayAllowlist(
         decision,
         askFallback,
         obfuscationDetected: obfuscation.detected,
+        securityWarning: params.securityWarning,
       });
       let approvedByAsk = baseDecision.approvedByAsk;
       let deniedReason = baseDecision.deniedReason;

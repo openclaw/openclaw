@@ -95,6 +95,7 @@ export function resolveBaseExecApprovalDecision(params: {
   decision: string | null;
   askFallback: ResolvedExecApprovals["agent"]["askFallback"];
   obfuscationDetected: boolean;
+  securityWarning?: boolean;
 }): {
   approvedByAsk: boolean;
   deniedReason: string | null;
@@ -108,6 +109,13 @@ export function resolveBaseExecApprovalDecision(params: {
       return {
         approvedByAsk: false,
         deniedReason: "approval-timeout (obfuscation-detected)",
+        timedOut: true,
+      };
+    }
+    if (params.securityWarning) {
+      return {
+        approvedByAsk: false,
+        deniedReason: "approval-timeout (security-warning)",
         timedOut: true,
       };
     }

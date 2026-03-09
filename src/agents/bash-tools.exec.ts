@@ -407,17 +407,16 @@ export function createExecTool(
           host === "sandbox" ? "posix" : process.platform === "win32" ? "powershell" : "posix";
 
         // tirith runs locally -- build full host env with resolved PATH.
+        // Use login-shell PATH directly (not env.PATH which includes pathPrepend).
+        // pathPrepend may contain workspace-local directories where a spoofed
+        // tirith binary could be placed to bypass the security scanner.
         const tirithExecEnv: Record<string, string> = { ...coerceEnv(process.env) };
-        if (host === "sandbox") {
-          const hostShellPath = getShellPathFromLoginShell({
-            env: process.env,
-            timeoutMs: resolveShellEnvFallbackTimeoutMs(process.env),
-          });
-          if (hostShellPath) {
-            tirithExecEnv.PATH = hostShellPath;
-          }
-        } else if (env.PATH) {
-          tirithExecEnv.PATH = env.PATH;
+        const hostShellPath = getShellPathFromLoginShell({
+          env: process.env,
+          timeoutMs: resolveShellEnvFallbackTimeoutMs(process.env),
+        });
+        if (hostShellPath) {
+          tirithExecEnv.PATH = hostShellPath;
         }
 
         const securityCheck = await checkCommandSecurity(params.command, commandSecurityConfig, {

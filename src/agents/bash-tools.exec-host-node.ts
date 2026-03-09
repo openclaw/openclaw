@@ -303,6 +303,7 @@ export async function executeNodeHostCommand(
         decision,
         askFallback,
         obfuscationDetected: obfuscation.detected,
+        securityWarning,
       });
       let approvedByAsk = baseDecision.approvedByAsk;
       let approvalDecision: "allow-once" | "allow-always" | null = null;
