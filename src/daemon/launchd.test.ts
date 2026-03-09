@@ -241,6 +241,29 @@ describe("launchd install", () => {
     expect(plist).toContain(`<integer>${LAUNCH_AGENT_THROTTLE_INTERVAL_SECONDS}</integer>`);
   });
 
+  it("enables service before bootstrap on restart (clears persisted disabled state)", async () => {
+    const env = createDefaultLaunchdEnv();
+    await restartLaunchAgent({
+      env,
+      stdout: new PassThrough(),
+    });
+
+    const domain = typeof process.getuid === "function" ? `gui/${process.getuid()}` : "gui/501";
+    const label = "ai.openclaw.gateway";
+    const plistPath = resolveLaunchAgentPlistPath(env);
+    const serviceId = `${domain}/${label}`;
+
+    const enableIndex = state.launchctlCalls.findIndex(
+      (c) => c[0] === "enable" && c[1] === serviceId,
+    );
+    const bootstrapIndex = state.launchctlCalls.findIndex(
+      (c) => c[0] === "bootstrap" && c[1] === domain && c[2] === plistPath,
+    );
+    expect(enableIndex).toBeGreaterThanOrEqual(0);
+    expect(bootstrapIndex).toBeGreaterThanOrEqual(0);
+    expect(enableIndex).toBeLessThan(bootstrapIndex);
+  });
+
   it("restarts LaunchAgent with bootout-bootstrap-kickstart order", async () => {
     const env = createDefaultLaunchdEnv();
     await restartLaunchAgent({

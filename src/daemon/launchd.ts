@@ -466,6 +466,8 @@ export async function restartLaunchAgent({
     await waitForPidExit(previousPid);
   }
 
+  // launchd can persist "disabled" state even after bootout; clear it before bootstrap.
+  await execLaunchctl(["enable", `${domain}/${label}`]);
   const boot = await execLaunchctl(["bootstrap", domain, plistPath]);
   if (boot.code !== 0) {
     const detail = (boot.stderr || boot.stdout).trim();
