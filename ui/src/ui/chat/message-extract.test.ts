@@ -56,6 +56,17 @@ describe("extractTextCached", () => {
     expect(extractText(message)).toBe("Visible user text");
     expect(extractTextCached(message)).toBe("Visible user text");
   });
+
+  it("strips a single-line leading session recap block from user messages", () => {
+    const message = {
+      role: "user",
+      content:
+        "<session-recap><summary>Found 10 recent items across 3 categories</summary></session-recap>\n\nVisible user text",
+    };
+
+    expect(extractText(message)).toBe("Visible user text");
+    expect(extractTextCached(message)).toBe("Visible user text");
+  });
 });
 
 describe("extractThinkingCached", () => {

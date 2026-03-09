@@ -177,6 +177,16 @@ example
     expect(text).toBe("Actual user message");
   });
 
+  it("strips a single-line leading session recap block for user messages", () => {
+    const text = extractTextFromMessage({
+      role: "user",
+      content:
+        "<session-recap><summary>Found 10 recent items across 3 categories</summary></session-recap>\n\nActual user message",
+    });
+
+    expect(text).toBe("Actual user message");
+  });
+
   it("preserves session recap text when it appears mid-message", () => {
     const content = `Hello world\n${SESSION_RECAP_BLOCK}\n\nFollow-up`;
     const text = extractTextFromMessage({

@@ -154,6 +154,12 @@ describe("stripLeadingInboundMetadata", () => {
     expect(stripLeadingInboundMetadata(input)).toBe("Actual user message");
   });
 
+  it("strips a single-line leading session recap block", () => {
+    const input =
+      "<session-recap><summary>Found 10 recent items across 3 categories</summary></session-recap>\n\nActual user message";
+    expect(stripLeadingInboundMetadata(input)).toBe("Actual user message");
+  });
+
   it("does not strip session recap text that appears mid-message", () => {
     const input = `Hello world\n${SESSION_RECAP_BLOCK}\n\nFollow-up`;
     expect(stripLeadingInboundMetadata(input)).toBe(input);

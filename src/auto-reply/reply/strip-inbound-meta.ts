@@ -33,6 +33,8 @@ const SENTINEL_FAST_RE = new RegExp(
     .join("|"),
 );
 const SESSION_RECAP_QUICK_RE = /<\s*session[-_]recap\b/i;
+const SESSION_RECAP_SINGLE_LINE_RE =
+  /^<\s*session[-_]recap\b[^<>]*>.*<\s*\/\s*session[-_]recap\s*>\s*$/i;
 const SESSION_RECAP_OPEN_LINE_RE = /^<\s*session[-_]recap\b[^<>]*>\s*$/i;
 const SESSION_RECAP_CLOSE_LINE_RE = /^<\s*\/\s*session[-_]recap\s*>\s*$/i;
 
@@ -115,7 +117,18 @@ function stripLeadingSessionRecapBlock(lines: string[]): { lines: string[]; stri
   while (index < lines.length && lines[index]?.trim() === "") {
     index += 1;
   }
-  if (index >= lines.length || !SESSION_RECAP_OPEN_LINE_RE.test(lines[index] ?? "")) {
+  if (index >= lines.length) {
+    return { lines, stripped: false };
+  }
+  const startLine = lines[index] ?? "";
+  if (SESSION_RECAP_SINGLE_LINE_RE.test(startLine)) {
+    let end = index + 1;
+    while (end < lines.length && lines[end]?.trim() === "") {
+      end += 1;
+    }
+    return { lines: lines.slice(end), stripped: true };
+  }
+  if (!SESSION_RECAP_OPEN_LINE_RE.test(startLine)) {
     return { lines, stripped: false };
   }
 
