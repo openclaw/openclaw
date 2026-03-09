@@ -131,6 +131,7 @@ import {
 } from "./compaction-timeout.js";
 import { pruneProcessedHistoryImages } from "./history-image-prune.js";
 import { detectAndLoadPromptImages } from "./images.js";
+import { wrapStreamFnRecoverTextToolCalls } from "./text-tool-call-recovery.js";
 import type { EmbeddedRunAttemptParams, EmbeddedRunAttemptResult } from "./types.js";
 
 type PromptBuildHookRunner = {
@@ -1363,6 +1364,17 @@ export async function runEmbeddedAttempt(
           } as unknown;
           return inner(model, nextContext as typeof context, options);
         };
+      }
+
+      // Kimi coding can occasionally downgrade tool calls into plain text/XML
+      // invocations (e.g. exec({...}) or <invoke name="Read">...</invoke>).
+      // Recover those into structured toolCall blocks before dispatch so the
+      // agent still executes the intended tool.
+      if (normalizeProviderId(params.provider) === "kimi-coding") {
+        activeSession.agent.streamFn = wrapStreamFnRecoverTextToolCalls(
+          activeSession.agent.streamFn,
+          allowedToolNames,
+        );
       }
 
       // Some models emit tool names with surrounding whitespace (e.g. " read ").
