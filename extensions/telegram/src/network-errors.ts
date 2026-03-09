@@ -155,15 +155,17 @@ function hasTelegramRetryAfterParameter(err: unknown): boolean {
   }
   if ("parameters" in err && err.parameters && typeof err.parameters === "object") {
     const retryAfter = (err.parameters as { retry_after?: unknown }).retry_after;
-    return typeof retryAfter === "number" && Number.isFinite(retryAfter);
+    return typeof retryAfter === "number" && Number.isFinite(retryAfter) && retryAfter > 0;
   }
   return false;
 }
 
 /**
  * Returns true if the error is safe to retry for a non-idempotent Telegram send operation
- * (e.g. sendMessage). Only matches errors that are guaranteed to have occurred *before*
- * the request reached Telegram's servers, preventing duplicate message delivery.
+ * (e.g. sendMessage). Only matches errors where the message is guaranteed not to have been
+ * delivered — either before reaching Telegram's servers (pre-connect errors) or server-side
+ * rejections that explicitly indicate no delivery occurred (e.g. 429 rate-limit with
+ * retry_after).
  *
  * Use this instead of isRecoverableTelegramNetworkError for sendMessage/sendPhoto/etc.
  * calls where a retry would create a duplicate visible message.
@@ -186,7 +188,7 @@ export function isSafeToRetrySendError(err: unknown): boolean {
 
     // grammY "Network request for X failed after N attempts" indicates a
     // transport-level failure — the request never reached Telegram.
-    const message = formatErrorMessage(candidate).trim().toLowerCase();
+    const message = formatErrorMessage(candidate).trim();
     if (message && GRAMMY_NETWORK_REQUEST_FAILED_AFTER_RE.test(message)) {
       return true;
     }
