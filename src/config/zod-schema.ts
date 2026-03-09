@@ -509,6 +509,7 @@ export const OpenClawSchema = z
           })
           .strict()
           .optional(),
+        startupStaggerMs: z.number().int().nonnegative().optional(),
         failureAlert: z
           .object({
             enabled: z.boolean().optional(),

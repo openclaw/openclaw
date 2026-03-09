@@ -98,13 +98,16 @@ function resolveRunConcurrency(state: CronServiceState): number {
   return Math.max(1, Math.floor(raw));
 }
 
+/** Sequential execution delay between immediately-run missed jobs on startup.
+ *  Distinct from `DEFAULT_MISSED_JOB_STAGGER_MS` which offsets *deferred* job scheduling. */
 function resolveStartupStaggerMs(state: CronServiceState): number {
   const raw = state.deps.cronConfig?.startupStaggerMs;
   if (typeof raw === "number" && Number.isFinite(raw)) {
     return Math.max(0, Math.floor(raw));
   }
-  return 10_000;
+  return DEFAULT_MISSED_JOB_STAGGER_MS;
 }
+
 function timeoutErrorMessage(): string {
   return "cron: job execution timed out";
 }

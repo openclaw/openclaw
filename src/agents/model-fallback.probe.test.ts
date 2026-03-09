@@ -148,10 +148,12 @@ describe("runWithModelFallback – cooldown respect", () => {
     const run = vi.fn().mockResolvedValue("recovered");
 
     const result = await runPrimaryCandidate(cfg, run);
-    // Run is called without allowRateLimitCooldownProbe (no longer set)
+    // Safety valve: expired cooldown probes with allowTransientCooldownProbe
     expect(result.result).toBe("recovered");
     expect(run).toHaveBeenCalledTimes(1);
-    expect(run).toHaveBeenCalledWith("openai", "gpt-4.1-mini");
+    expect(run).toHaveBeenCalledWith("openai", "gpt-4.1-mini", {
+      allowTransientCooldownProbe: true,
+    });
   });
 
   it("skips all same-provider models when all profiles in cooldown", async () => {
@@ -218,7 +220,9 @@ describe("runWithModelFallback – cooldown respect", () => {
     const result = await runPrimaryCandidate(cfg, run);
     expect(result.result).toBe("probed-ok");
     expect(run).toHaveBeenCalledTimes(1);
-    expect(run).toHaveBeenCalledWith("openai", "gpt-4.1-mini");
+    expect(run).toHaveBeenCalledWith("openai", "gpt-4.1-mini", {
+      allowTransientCooldownProbe: true,
+    });
   });
 
   it("handles non-finite soonest safely (treats as probe-worthy)", async () => {
@@ -232,7 +236,9 @@ describe("runWithModelFallback – cooldown respect", () => {
     const result = await runPrimaryCandidate(cfg, run);
     expect(result.result).toBe("ok-infinity");
     expect(run).toHaveBeenCalledTimes(1);
-    expect(run).toHaveBeenCalledWith("openai", "gpt-4.1-mini");
+    expect(run).toHaveBeenCalledWith("openai", "gpt-4.1-mini", {
+      allowTransientCooldownProbe: true,
+    });
   });
 
   it("handles NaN soonest safely (treats as probe-worthy)", async () => {
@@ -245,7 +251,9 @@ describe("runWithModelFallback – cooldown respect", () => {
     const result = await runPrimaryCandidate(cfg, run);
     expect(result.result).toBe("ok-nan");
     expect(run).toHaveBeenCalledTimes(1);
-    expect(run).toHaveBeenCalledWith("openai", "gpt-4.1-mini");
+    expect(run).toHaveBeenCalledWith("openai", "gpt-4.1-mini", {
+      allowTransientCooldownProbe: true,
+    });
   });
 
   it("handles null soonest safely (treats as probe-worthy)", async () => {
@@ -258,7 +266,9 @@ describe("runWithModelFallback – cooldown respect", () => {
     const result = await runPrimaryCandidate(cfg, run);
     expect(result.result).toBe("ok-null");
     expect(run).toHaveBeenCalledTimes(1);
-    expect(run).toHaveBeenCalledWith("openai", "gpt-4.1-mini");
+    expect(run).toHaveBeenCalledWith("openai", "gpt-4.1-mini", {
+      allowTransientCooldownProbe: true,
+    });
   });
 
   it("single candidate skips with rate_limit and exhausts candidates", async () => {

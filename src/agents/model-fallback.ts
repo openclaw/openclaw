@@ -491,6 +491,7 @@ export async function runWithModelFallback<T>(params: {
 
   for (let i = 0; i < candidates.length; i += 1) {
     const candidate = candidates[i];
+    let runOptions: ModelFallbackRunOptions | undefined;
     if (authStore) {
       const profileIds = resolveAuthProfileOrder({
         cfg: params.cfg,
@@ -530,6 +531,9 @@ export async function runWithModelFallback<T>(params: {
         if (decision.markProbe) {
           lastProbeAttempt.set(probeThrottleKey, now);
         }
+        // Safety-valve attempt (e.g. expired/corrupt cooldown): tell the
+        // embedded runner it may use a cooldowned auth profile for this probe.
+        runOptions = { allowTransientCooldownProbe: true };
       }
     }
 
@@ -537,7 +541,7 @@ export async function runWithModelFallback<T>(params: {
       run: params.run,
       ...candidate,
       attempts,
-      options: undefined,
+      options: runOptions,
     });
     if ("success" in attemptRun) {
       const notFoundAttempt =
