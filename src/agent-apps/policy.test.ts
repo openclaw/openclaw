@@ -4,8 +4,8 @@ import { resolveAotuiAgentAppNames, resolveAotuiRegistryEntries } from "./policy
 describe("AOTUI policy resolver", () => {
   it("maps OpenClaw config entries into runtime registry entries", () => {
     const entries = resolveAotuiRegistryEntries({
-      aotui: {
-        apps: {
+      apps: {
+        registry: {
           ide: {
             source: "npm:@agentina/aotui-ide",
             whatItIs: "IDE",
@@ -31,12 +31,12 @@ describe("AOTUI policy resolver", () => {
       {
         agents: {
           defaults: {
-            aotui: { apps: ["ide"] },
+            apps: ["ide"],
           },
           list: [
             {
               id: "reviewer",
-              aotui: { apps: ["ide", "diff"] },
+              apps: ["ide", "diff"],
             },
           ],
         },
@@ -52,7 +52,7 @@ describe("AOTUI policy resolver", () => {
       {
         agents: {
           defaults: {
-            aotui: { apps: ["ide", "terminal"] },
+            apps: ["ide", "terminal"],
           },
           list: [{ id: "main" }],
         },

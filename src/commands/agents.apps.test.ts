@@ -22,6 +22,7 @@ vi.mock("../agent-apps/install.js", async (importOriginal) => {
 });
 
 import {
+  agentsAppsListCommand,
   agentsAppsDisableCommand,
   agentsAppsEnableCommand,
   agentsAppsInstallCommand,
@@ -47,7 +48,7 @@ describe("agents apps commands", () => {
     await agentsAppsEnableCommand({}, runtime);
 
     expect(writeConfigFileMock).toHaveBeenCalledWith({
-      aotui: { enabled: true },
+      apps: { enabled: true },
     });
     expect(runtime.log).toHaveBeenCalledWith(
       "Enabled Agent Apps. Restart the gateway to apply the change.",
@@ -60,17 +61,30 @@ describe("agents apps commands", () => {
     await agentsAppsDisableCommand({}, runtime);
 
     expect(writeConfigFileMock).toHaveBeenCalledWith({
-      aotui: { enabled: false },
+      apps: { enabled: false },
     });
+  });
+
+  it("lists installed Agent Apps", async () => {
+    loadConfigMock.mockReturnValue({
+      apps: {
+        registry: {
+          terminal: { source: "local:/apps/terminal" },
+          ide: { source: "local:/apps/ide" },
+        },
+      },
+    });
+
+    await agentsAppsListCommand({}, runtime);
+
+    expect(runtime.log).toHaveBeenCalledWith("Installed Agent Apps:\n- ide\n- terminal");
   });
 
   it("installs an npm Agent App into the registry and default selection", async () => {
     loadConfigMock.mockReturnValue({
       agents: {
         defaults: {
-          aotui: {
-            apps: ["existing"],
-          },
+          apps: ["existing"],
         },
       },
     });
@@ -87,13 +101,11 @@ describe("agents apps commands", () => {
     expect(writeConfigFileMock).toHaveBeenCalledWith({
       agents: {
         defaults: {
-          aotui: {
-            apps: ["existing", "aotui-ide"],
-          },
+          apps: ["existing", "aotui-ide"],
         },
       },
-      aotui: {
-        apps: {
+      apps: {
+        registry: {
           "aotui-ide": {
             source:
               "local:/tmp/.openclaw/agent-apps/npm/scope-agentina__aotui-ide/latest/node_modules/@agentina/aotui-ide",
@@ -125,14 +137,12 @@ describe("agents apps commands", () => {
         list: [
           {
             id: "main",
-            aotui: {
-              apps: ["my-app"],
-            },
+            apps: ["my-app"],
           },
         ],
       },
-      aotui: {
-        apps: {
+      apps: {
+        registry: {
           "my-app": {
             source: expect.stringMatching(/^local:/),
             enabled: true,
@@ -144,8 +154,8 @@ describe("agents apps commands", () => {
 
   it("uninstalls an Agent App, clears selections, and removes managed cache files", async () => {
     loadConfigMock.mockReturnValue({
-      aotui: {
-        apps: {
+      apps: {
+        registry: {
           ide: {
             source:
               "local:/tmp/.openclaw/agent-apps/npm/scope-agentina__aotui-ide/latest/node_modules/@agentina/aotui-ide",
@@ -154,13 +164,11 @@ describe("agents apps commands", () => {
       },
       agents: {
         defaults: {
-          aotui: {
-            apps: ["ide", "other"],
-          },
+          apps: ["ide", "other"],
         },
         list: [
-          { id: "main", aotui: { apps: ["ide"] } },
-          { id: "ops", aotui: { apps: ["other"] } },
+          { id: "main", apps: ["ide"] },
+          { id: "ops", apps: ["other"] },
         ],
       },
     });
@@ -169,18 +177,16 @@ describe("agents apps commands", () => {
     await agentsAppsUninstallCommand({ name: "ide" }, runtime);
 
     expect(writeConfigFileMock).toHaveBeenCalledWith({
-      aotui: {
-        apps: undefined,
+      apps: {
+        registry: undefined,
       },
       agents: {
         defaults: {
-          aotui: {
-            apps: ["other"],
-          },
+          apps: ["other"],
         },
         list: [
-          { id: "main", aotui: { apps: [] } },
-          { id: "ops", aotui: { apps: ["other"] } },
+          { id: "main", apps: [] },
+          { id: "ops", apps: ["other"] },
         ],
       },
     });

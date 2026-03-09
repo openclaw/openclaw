@@ -59,7 +59,7 @@ describe("AOTUI runtime registry", () => {
 
   it("starts the gateway runtime once and reuses the same service", async () => {
     const runtime = await import("./runtime.js");
-    const config = { aotui: { apps: { ide: { source: "npm:@agentina/aotui-ide" } } } };
+    const config = { apps: { registry: { ide: { source: "npm:@agentina/aotui-ide" } } } };
 
     const first = await runtime.startAotuiGatewayRuntime(config as never);
     const second = await runtime.startAotuiGatewayRuntime();

@@ -4,6 +4,7 @@ import {
   agentsAppsDisableCommand,
   agentsAppsEnableCommand,
   agentsAppsInstallCommand,
+  agentsAppsListCommand,
   agentsAppsUninstallCommand,
   agentsAddCommand,
   agentsBindingsCommand,
@@ -97,7 +98,17 @@ ${theme.muted("Docs:")} ${formatDocsLink("/cli/agent", "docs.openclaw.ai/cli/age
 
   const apps = program
     .command("apps")
-    .description("Manage Agent Apps (AOTUI) capability and installed app registry");
+    .description("Manage Agent Apps capability and installed app registry");
+
+  apps
+    .command("list")
+    .description("List installed Agent Apps")
+    .option("--json", "Output JSON summary", false)
+    .action(async (opts) => {
+      await runCommandWithRuntime(defaultRuntime, async () => {
+        await agentsAppsListCommand({ json: Boolean(opts.json) }, defaultRuntime);
+      });
+    });
 
   apps
     .command("enable")

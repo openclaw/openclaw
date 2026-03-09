@@ -1,7 +1,7 @@
 import type { AcpConfig } from "./types.acp.js";
 import type { AgentBinding, AgentsConfig } from "./types.agents.js";
-import type { AotuiConfig } from "./types.aotui.js";
 import type { ApprovalsConfig } from "./types.approvals.js";
+import type { AgentAppsConfig } from "./types.apps.js";
 import type { AuthConfig } from "./types.auth.js";
 import type { DiagnosticsConfig, LoggingConfig, SessionConfig, WebConfig } from "./types.base.js";
 import type { BrowserConfig } from "./types.browser.js";
@@ -38,7 +38,7 @@ export type OpenClawConfig = {
   };
   auth?: AuthConfig;
   acp?: AcpConfig;
-  aotui?: AotuiConfig;
+  apps?: AgentAppsConfig;
   env?: {
     /** Opt-in: import missing secrets from a login shell environment (exec `$SHELL -l -c 'env -0'`). */
     shellEnv?: {

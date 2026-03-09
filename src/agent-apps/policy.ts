@@ -7,11 +7,11 @@ function normalizeRegistryName(name: string): string {
 }
 
 export function isAotuiEnabled(cfg?: OpenClawConfig): boolean {
-  return cfg?.aotui?.enabled !== false;
+  return cfg?.apps?.enabled === true;
 }
 
 export function resolveAotuiRegistryEntries(cfg?: OpenClawConfig): AppRegistryEntry[] {
-  const entries = cfg?.aotui?.apps;
+  const entries = cfg?.apps?.registry;
   if (!entries) {
     return [];
   }
@@ -39,9 +39,7 @@ export function resolveAotuiAgentAppNames(
 ): string[] {
   const agentConfig = cfg ? resolveAgentConfig(cfg, agentId) : undefined;
   const configuredNames =
-    agentConfig?.aotui?.apps !== undefined
-      ? agentConfig.aotui.apps
-      : cfg?.agents?.defaults?.aotui?.apps;
+    agentConfig?.apps !== undefined ? agentConfig.apps : cfg?.agents?.defaults?.apps;
 
   if (!configuredNames) {
     return [];

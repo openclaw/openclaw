@@ -15,6 +15,10 @@ export type AgentsAppsEnableDisableOptions = {
   json?: boolean;
 };
 
+export type AgentsAppsListOptions = {
+  json?: boolean;
+};
+
 export type AgentsAppsInstallOptions = {
   source: string;
   as?: string;
@@ -29,6 +33,25 @@ export type AgentsAppsUninstallOptions = {
   json?: boolean;
 };
 
+export async function agentsAppsListCommand(
+  opts: AgentsAppsListOptions,
+  runtime: Pick<RuntimeEnv, "log">,
+): Promise<void> {
+  const cfg = loadConfig();
+  const names = Object.keys(cfg.apps?.registry ?? {}).toSorted((left, right) =>
+    left.localeCompare(right),
+  );
+  if (opts.json) {
+    runtime.log(JSON.stringify({ ok: true, apps: names }, null, 2));
+    return;
+  }
+  if (names.length === 0) {
+    runtime.log("No installed Agent Apps.");
+    return;
+  }
+  runtime.log(`Installed Agent Apps:\n${names.map((name) => `- ${name}`).join("\n")}`);
+}
+
 export async function agentsAppsEnableCommand(
   opts: AgentsAppsEnableDisableOptions,
   runtime: Pick<RuntimeEnv, "log">,
@@ -36,8 +59,8 @@ export async function agentsAppsEnableCommand(
   const cfg = loadConfig();
   const next: OpenClawConfig = {
     ...cfg,
-    aotui: {
-      ...cfg.aotui,
+    apps: {
+      ...cfg.apps,
       enabled: true,
     },
   };
@@ -61,8 +84,8 @@ export async function agentsAppsDisableCommand(
   const cfg = loadConfig();
   const next: OpenClawConfig = {
     ...cfg,
-    aotui: {
-      ...cfg.aotui,
+    apps: {
+      ...cfg.apps,
       enabled: false,
     },
   };
@@ -101,17 +124,17 @@ export async function agentsAppsInstallCommand(
       : null;
   const source = resolvedSource?.localSource ?? parsedSource.source;
 
-  const previousEntry = cfg.aotui?.apps?.[registryName];
+  const previousEntry = cfg.apps?.registry?.[registryName];
   if (previousEntry && !opts.force) {
     throw new Error(`Agent app "${registryName}" already exists. Use --force to replace it.`);
   }
 
   let next: OpenClawConfig = {
     ...cfg,
-    aotui: {
-      ...cfg.aotui,
-      apps: {
-        ...cfg.aotui?.apps,
+    apps: {
+      ...cfg.apps,
+      registry: {
+        ...cfg.apps?.registry,
         [registryName]: {
           source,
           enabled: true,
@@ -156,7 +179,7 @@ export async function agentsAppsUninstallCommand(
   runtime: Pick<RuntimeEnv, "log">,
 ): Promise<void> {
   const cfg = loadConfig();
-  const entry = cfg.aotui?.apps?.[opts.name];
+  const entry = cfg.apps?.registry?.[opts.name];
   if (!entry) {
     throw new Error(`Unknown Agent App: ${opts.name}`);
   }
@@ -191,17 +214,14 @@ function applyAgentAppSelection(
   agentId?: string,
 ): OpenClawConfig {
   if (!agentId) {
-    const existing = cfg.agents?.defaults?.aotui?.apps ?? [];
+    const existing = cfg.agents?.defaults?.apps ?? [];
     return {
       ...cfg,
       agents: {
         ...cfg.agents,
         defaults: {
           ...cfg.agents?.defaults,
-          aotui: {
-            ...cfg.agents?.defaults?.aotui,
-            apps: appendUnique(existing, appName),
-          },
+          apps: appendUnique(existing, appName),
         },
       },
     };
@@ -217,10 +237,7 @@ function applyAgentAppSelection(
   const nextList = [...list];
   nextList[index] = {
     ...current,
-    aotui: {
-      ...current.aotui,
-      apps: appendUnique(current.aotui?.apps ?? [], appName),
-    },
+    apps: appendUnique(current.apps ?? [], appName),
   };
   return {
     ...cfg,
@@ -232,32 +249,26 @@ function applyAgentAppSelection(
 }
 
 function pruneAgentApp(cfg: OpenClawConfig, appName: string): OpenClawConfig {
-  const nextApps = { ...cfg.aotui?.apps };
+  const nextApps = { ...cfg.apps?.registry };
   delete nextApps[appName];
 
-  const defaultsApps = removeName(cfg.agents?.defaults?.aotui?.apps, appName);
+  const defaultsApps = removeName(cfg.agents?.defaults?.apps, appName);
   const nextList = listAgentEntries(cfg).map((entry) => ({
     ...entry,
-    aotui: {
-      ...entry.aotui,
-      apps: removeName(entry.aotui?.apps, appName),
-    },
+    apps: removeName(entry.apps, appName),
   }));
 
   return {
     ...cfg,
-    aotui: {
-      ...cfg.aotui,
-      apps: Object.keys(nextApps).length > 0 ? nextApps : undefined,
+    apps: {
+      ...cfg.apps,
+      registry: Object.keys(nextApps).length > 0 ? nextApps : undefined,
     },
     agents: {
       ...cfg.agents,
       defaults: {
         ...cfg.agents?.defaults,
-        aotui: {
-          ...cfg.agents?.defaults?.aotui,
-          apps: defaultsApps,
-        },
+        apps: defaultsApps,
       },
       list: nextList,
     },

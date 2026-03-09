@@ -160,7 +160,7 @@ const coreEntries: CoreCliEntry[] = [
       },
       {
         name: "apps",
-        description: "Manage Agent Apps (AOTUI) capability and installed app registry",
+        description: "Manage Agent Apps capability and installed app registry",
         hasSubcommands: true,
       },
     ],

@@ -1,6 +1,6 @@
-export type AotuiPromptRole = "user" | "assistant";
+export type AgentAppPromptRole = "user" | "assistant";
 
-export type AotuiAppRegistryEntryConfig = {
+export type AgentAppRegistryEntryConfig = {
   /** Stable registry name used by agent-level app selections. */
   source: string;
   /** Optional package/version constraint for npm-backed app sources. */
@@ -16,20 +16,12 @@ export type AotuiAppRegistryEntryConfig = {
   /** When the app should be used, exposed to the runtime prompt surface. */
   whenToUse?: string;
   /** Prompt projection role used by the runtime. */
-  promptRole?: AotuiPromptRole;
+  promptRole?: AgentAppPromptRole;
 };
 
-export type AotuiAgentSelectionConfig = {
-  /**
-   * Registry entry names to install for this agent.
-   * Omit to inherit defaults; set [] to install no AOTUI apps.
-   */
-  apps?: string[];
-};
-
-export type AotuiConfig = {
-  /** Global kill switch for Agent Apps. Default: true. */
+export type AgentAppsConfig = {
+  /** Global kill switch for Agent Apps. Default: false. */
   enabled?: boolean;
-  /** Global registry of installable AOTUI app descriptors owned by OpenClaw config. */
-  apps?: Record<string, AotuiAppRegistryEntryConfig>;
+  /** Global registry of installable Agent App descriptors owned by OpenClaw config. */
+  registry?: Record<string, AgentAppRegistryEntryConfig>;
 };

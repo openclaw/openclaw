@@ -1,10 +1,10 @@
 import { z } from "zod";
 
-export const AotuiPromptRoleSchema = z
+export const AgentAppPromptRoleSchema = z
   .union([z.literal("user"), z.literal("assistant")])
   .optional();
 
-export const AotuiAppRegistryEntrySchema = z
+export const AgentAppRegistryEntrySchema = z
   .object({
     source: z.string(),
     version: z.string().optional(),
@@ -13,21 +13,14 @@ export const AotuiAppRegistryEntrySchema = z
     description: z.string().optional(),
     whatItIs: z.string().optional(),
     whenToUse: z.string().optional(),
-    promptRole: AotuiPromptRoleSchema,
+    promptRole: AgentAppPromptRoleSchema,
   })
   .strict();
 
-export const AotuiAgentSelectionSchema = z
-  .object({
-    apps: z.array(z.string()).optional(),
-  })
-  .strict()
-  .optional();
-
-export const AotuiConfigSchema = z
+export const AgentAppsConfigSchema = z
   .object({
     enabled: z.boolean().optional(),
-    apps: z.record(z.string(), AotuiAppRegistryEntrySchema).optional(),
+    registry: z.record(z.string(), AgentAppRegistryEntrySchema).optional(),
   })
   .strict()
   .optional();

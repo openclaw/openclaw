@@ -1,7 +1,6 @@
 import type { ChatType } from "../channels/chat-type.js";
 import type { AgentDefaultsConfig } from "./types.agent-defaults.js";
 import type { AgentModelConfig, AgentSandboxConfig } from "./types.agents-shared.js";
-import type { AotuiAgentSelectionConfig } from "./types.aotui.js";
 import type { HumanDelayConfig, IdentityConfig } from "./types.base.js";
 import type { GroupChatConfig } from "./types.messages.js";
 import type { AgentToolsConfig, MemorySearchConfig } from "./types.tools.js";
@@ -83,8 +82,8 @@ export type AgentConfig = {
   };
   /** Optional per-agent sandbox overrides. */
   sandbox?: AgentSandboxConfig;
-  /** Optional per-agent AOTUI app selection override. */
-  aotui?: AotuiAgentSelectionConfig;
+  /** Optional per-agent Agent Apps selection override. */
+  apps?: string[];
   /** Optional per-agent stream params (e.g. cacheRetention, temperature). */
   params?: Record<string, unknown>;
   tools?: AgentToolsConfig;

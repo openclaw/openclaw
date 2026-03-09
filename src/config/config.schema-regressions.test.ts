@@ -175,10 +175,10 @@ describe("config schema regressions", () => {
     expect(res.ok).toBe(true);
   });
 
-  it("accepts OpenClaw-owned AOTUI registry and agent app selections", () => {
+  it("accepts OpenClaw-owned Agent Apps registry and agent app selections", () => {
     const res = validateConfigObject({
-      aotui: {
-        apps: {
+      apps: {
+        registry: {
           ide: {
             source: "npm:@agentina/aotui-ide",
             whatItIs: "IDE",
@@ -188,16 +188,12 @@ describe("config schema regressions", () => {
       },
       agents: {
         defaults: {
-          aotui: {
-            apps: ["ide"],
-          },
+          apps: ["ide"],
         },
         list: [
           {
             id: "reviewer",
-            aotui: {
-              apps: [],
-            },
+            apps: [],
           },
         ],
       },
