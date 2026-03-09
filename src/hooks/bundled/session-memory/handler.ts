@@ -340,7 +340,10 @@ const saveSessionToMemory: HookHandler = async (event) => {
         // plugin authors know to supply content when un-blocking.
         log.warn(
           "blockSessionSave was cleared but no sessionSaveContent provided — " +
-            "no memory file written (transcript was not loaded during pre-set block)",
+            "no memory file written. Transcript was not loaded because " +
+            "sessionSaveContent or blockSessionSave was pre-set during handler " +
+            "execution. To write a file after clearing blockSessionSave, also " +
+            "provide sessionSaveContent with the desired content.",
         );
       }
     });

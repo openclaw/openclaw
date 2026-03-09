@@ -553,6 +553,8 @@ describe("session-memory hook", () => {
     // semantics (prevents self-scheduling actions from executing in the
     // same drain cycle).
     const pending = [...event.postHookActions];
+    // Clear source array so re-drain is a no-op (matches production).
+    event.postHookActions.length = 0;
     for (const action of pending) {
       try {
         await action();

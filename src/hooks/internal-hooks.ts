@@ -298,6 +298,11 @@ export async function triggerInternalHook(event: InternalHookEvent): Promise<voi
   // scheduling action (one that pushes another action) could loop infinitely
   // because Array's for...of iterator is live and re-reads length each step.
   const pendingActions = [...(event.postHookActions ?? [])];
+  // Clear the source array so re-draining the same event is a no-op.
+  // Without this, passing an event twice would re-execute every action.
+  if (event.postHookActions) {
+    event.postHookActions.length = 0;
+  }
   for (const action of pendingActions) {
     try {
       await action();

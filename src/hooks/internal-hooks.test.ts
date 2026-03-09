@@ -539,6 +539,20 @@ describe("hooks", () => {
       await triggerInternalHook(event);
       expect(ran).toBe(true);
     });
+
+    it("clears postHookActions after drain — re-trigger is a no-op", async () => {
+      const event = createInternalHookEvent("command", "new", "test-session");
+      let count = 0;
+      event.postHookActions.push(() => {
+        count++;
+      });
+      await triggerInternalHook(event);
+      expect(count).toBe(1);
+      // Second trigger on same event should not re-execute
+      await triggerInternalHook(event);
+      expect(count).toBe(1);
+      expect(event.postHookActions).toEqual([]);
+    });
   });
 
   describe("getRegisteredEventKeys", () => {
