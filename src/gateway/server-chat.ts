@@ -362,15 +362,11 @@ export function createAgentEventHandler({
       mode: "strict",
       trim: "both",
     });
-    // Use trim:"none" on deltas to preserve leading whitespace/newlines that
-    // act as separators when appending to the buffer (P2 review fix).
-    const tagStrippedDelta =
-      typeof delta === "string"
-        ? stripReasoningTagsFromText(stripInlineDirectiveTagsForDisplay(delta).text, {
-            mode: "strict",
-            trim: "none",
-          })
-        : "";
+    // Strip inline directives but NOT reasoning tags from the delta — the
+    // stateful streaming filter needs to see raw <think>/<thinking> tag
+    // boundaries to correctly track cross-chunk reasoning blocks.
+    const rawDelta =
+      typeof delta === "string" ? stripInlineDirectiveTagsForDisplay(delta).text : "";
     // Apply stateful streaming filter to suppress thinking content that arrives
     // in bare delta chunks (between <think> open and </think> close tags).
     let thinkingFilter = chatRunState.thinkingFilters.get(clientRunId);
@@ -378,7 +374,7 @@ export function createAgentEventHandler({
       thinkingFilter = createStreamingThinkingFilter();
       chatRunState.thinkingFilters.set(clientRunId, thinkingFilter);
     }
-    const cleanedDelta = thinkingFilter.filter(tagStrippedDelta);
+    const cleanedDelta = thinkingFilter.filter(rawDelta);
     const previousText = chatRunState.buffers.get(clientRunId) ?? "";
     const mergedText = resolveMergedAssistantText({
       previousText,
