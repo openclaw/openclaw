@@ -207,6 +207,42 @@ describe("openclaw-tools: subagents (sessions_spawn allowlist)", () => {
     });
   });
 
+  it("sessions_spawn ignores tools.agentToAgent.enabled when subagent allowlist permits the target", async () => {
+    setSessionsSpawnConfigOverride({
+      session: {
+        mainKey: "main",
+        scope: "per-sender",
+      },
+      agents: {
+        list: [
+          {
+            id: "main",
+            subagents: {
+              allowAgents: ["*"],
+            },
+          },
+          {
+            id: "ssh-agent",
+          },
+        ],
+      },
+      tools: {
+        agentToAgent: {
+          enabled: false,
+        },
+      },
+    });
+    const getChildSessionKey = mockAcceptedSpawn(5300);
+
+    const result = await executeSpawn("call-agent-to-agent-disabled", "ssh-agent");
+
+    expect(result.details).toMatchObject({
+      status: "accepted",
+      runId: "run-1",
+    });
+    expect(getChildSessionKey()?.startsWith("agent:ssh-agent:subagent:")).toBe(true);
+  });
+
   it("forbids sandboxed cross-agent spawns that would unsandbox the child", async () => {
     setResearchUnsandboxedConfig({ includeSandboxedDefault: true });
 

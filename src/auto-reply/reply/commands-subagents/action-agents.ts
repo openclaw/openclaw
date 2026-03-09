@@ -1,4 +1,6 @@
+import { resolveAllowedSubagentTargets } from "../../../agents/subagent-allowlist.js";
 import { getSessionBindingService } from "../../../infra/outbound/session-binding-service.js";
+import { DEFAULT_AGENT_ID, parseAgentSessionKey } from "../../../routing/session-key.js";
 import type { CommandHandlerResult } from "../commands-types.js";
 import { formatRunLabel, sortSubagentRuns } from "../subagents-utils.js";
 import {
@@ -19,6 +21,15 @@ function formatConversationBindingText(params: {
     return `conversation:${params.conversationId}`;
   }
   return `binding:${params.conversationId}`;
+}
+
+function formatAllowedAgentLine(agent: { id: string; name?: string; configured: boolean }): string {
+  const nameText =
+    agent.name && agent.name.trim().toLowerCase() !== agent.id.toLowerCase()
+      ? ` (${agent.name})`
+      : "";
+  const configuredText = agent.configured ? "" : " [allowlisted only]";
+  return `- ${agent.id}${nameText}${configuredText}`;
 }
 
 export function handleSubagentsAgentsAction(ctx: SubagentsCommandContext): CommandHandlerResult {
@@ -53,9 +64,21 @@ export function handleSubagentsAgentsAction(ctx: SubagentsCommandContext): Comma
   });
 
   const lines = ["agents:", "-----"];
-  if (visibleRuns.length === 0) {
+  const requesterAgentId = parseAgentSessionKey(requesterKey)?.agentId ?? DEFAULT_AGENT_ID;
+  const allowedTargets = resolveAllowedSubagentTargets({
+    cfg: params.cfg,
+    requesterAgentId,
+  }).agents;
+  if (allowedTargets.length === 0) {
     lines.push("(none)");
   } else {
+    for (const agent of allowedTargets) {
+      lines.push(formatAllowedAgentLine(agent));
+    }
+  }
+
+  if (visibleRuns.length > 0) {
+    lines.push("", "active conversation bindings:", "-----");
     let index = 1;
     for (const entry of visibleRuns) {
       const binding = resolveSessionBindings(entry.childSessionKey)[0];

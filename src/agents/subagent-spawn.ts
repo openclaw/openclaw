@@ -21,6 +21,7 @@ import {
   normalizeSpawnedRunMetadata,
   resolveSpawnedWorkspaceInheritance,
 } from "./spawned-context.js";
+import { resolveAllowedSubagentTargets } from "./subagent-allowlist.js";
 import { buildSubagentSystemPrompt } from "./subagent-announce.js";
 import {
   decodeStrictBase64,
@@ -335,16 +336,13 @@ export async function spawnSubagentDirect(
   );
   const targetAgentId = requestedAgentId ? normalizeAgentId(requestedAgentId) : requesterAgentId;
   if (targetAgentId !== requesterAgentId) {
-    const allowAgents = resolveAgentConfig(cfg, requesterAgentId)?.subagents?.allowAgents ?? [];
-    const allowAny = allowAgents.some((value) => value.trim() === "*");
-    const normalizedTargetId = targetAgentId.toLowerCase();
-    const allowSet = new Set(
-      allowAgents
-        .filter((value) => value.trim() && value.trim() !== "*")
-        .map((value) => normalizeAgentId(value).toLowerCase()),
-    );
-    if (!allowAny && !allowSet.has(normalizedTargetId)) {
-      const allowedText = allowSet.size > 0 ? Array.from(allowSet).join(", ") : "none";
+    const allowedTargets = resolveAllowedSubagentTargets({
+      cfg,
+      requesterAgentId,
+    });
+    if (!allowedTargets.allowAny && !allowedTargets.crossAgentIds.includes(targetAgentId)) {
+      const allowedText =
+        allowedTargets.crossAgentIds.length > 0 ? allowedTargets.crossAgentIds.join(", ") : "none";
       return {
         status: "forbidden",
         error: `agentId is not allowed for sessions_spawn (allowed: ${allowedText})`,

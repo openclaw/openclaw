@@ -377,7 +377,7 @@ function buildChatCommands(): ChatCommandDefinition[] {
     defineChatCommand({
       key: "agents",
       nativeName: "agents",
-      description: "List thread-bound agents for this session.",
+      description: "List available spawn targets and active bindings for this session.",
       textAlias: "/agents",
       category: "management",
     }),

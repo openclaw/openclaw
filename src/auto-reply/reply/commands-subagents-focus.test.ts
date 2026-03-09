@@ -360,6 +360,58 @@ describe("/focus, /unfocus, /agents", () => {
     expect(text).not.toContain("default:tg-1");
   });
 
+  it("/agents lists the requester agent when no bindings exist", async () => {
+    const result = await handleSubagentsCommand(createDiscordCommandParams("/agents"), true);
+    const text = result?.reply?.text ?? "";
+
+    expect(text).toContain("agents:");
+    expect(text).toContain("- main");
+    expect(text).not.toContain("(none)");
+    expect(text).not.toContain("active conversation bindings:");
+  });
+
+  it("/agents includes allowlisted custom subagents even when tools.agentToAgent is disabled", async () => {
+    const cfg = {
+      session: { mainKey: "main", scope: "per-sender" },
+      agents: {
+        list: [
+          {
+            id: "main",
+            subagents: {
+              allowAgents: ["*"],
+            },
+          },
+          {
+            id: "ssh-agent",
+            name: "SSH Agent",
+          },
+        ],
+      },
+      tools: {
+        agentToAgent: {
+          enabled: false,
+        },
+      },
+    } satisfies OpenClawConfig;
+    const params = buildCommandTestParams("/agents", cfg, {
+      Provider: "discord",
+      Surface: "discord",
+      OriginatingChannel: "discord",
+      OriginatingTo: "channel:parent-1",
+      AccountId: "default",
+      MessageThreadId: "thread-1",
+    });
+    params.command.senderId = "user-1";
+
+    const result = await handleSubagentsCommand(params, true);
+    const text = result?.reply?.text ?? "";
+
+    expect(text).toContain("agents:");
+    expect(text).toContain("- main");
+    expect(text).toContain("- ssh-agent (SSH Agent)");
+    expect(text).not.toContain("(none)");
+  });
+
   it("/agents keeps finished session-mode runs visible while binding remains", async () => {
     addSubagentRunForTests({
       runId: "run-session-1",
