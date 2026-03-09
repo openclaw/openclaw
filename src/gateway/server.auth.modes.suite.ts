@@ -20,7 +20,7 @@ export function registerAuthModesSuite(): void {
     let port: number;
 
     beforeAll(async () => {
-      testState.gatewayAuth = { mode: "password", password: "secret" };
+      testState.gatewayAuth = { mode: "password", password: "secret" }; // pragma: allowlist secret
       port = await getFreePort();
       server = await startGatewayServer(port);
     });
@@ -31,14 +31,14 @@ export function registerAuthModesSuite(): void {
 
     test("accepts password auth when configured", async () => {
       const ws = await openWs(port);
-      const res = await connectReq(ws, { password: "secret" });
+      const res = await connectReq(ws, { password: "secret" }); // pragma: allowlist secret
       expect(res.ok).toBe(true);
       ws.close();
     });
 
     test("rejects invalid password", async () => {
       const ws = await openWs(port);
-      const res = await connectReq(ws, { password: "wrong" });
+      const res = await connectReq(ws, { password: "wrong" }); // pragma: allowlist secret
       expect(res.ok).toBe(false);
       expect(res.error?.message ?? "").toContain("unauthorized");
       ws.close();

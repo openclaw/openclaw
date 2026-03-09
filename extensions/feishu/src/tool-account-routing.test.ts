@@ -1,4 +1,4 @@
-import type { OpenClawPluginApi } from "openclaw/plugin-sdk";
+import type { OpenClawPluginApi } from "openclaw/plugin-sdk/feishu";
 import { beforeEach, describe, expect, test, vi } from "vitest";
 import { registerFeishuBitableTools } from "./bitable.js";
 import { registerFeishuDriveTools } from "./drive.js";
@@ -35,12 +35,12 @@ function createConfig(params: {
         accounts: {
           a: {
             appId: "app-a",
-            appSecret: "sec-a",
+            appSecret: "sec-a", // pragma: allowlist secret
             tools: params.toolsA,
           },
           b: {
             appId: "app-b",
-            appSecret: "sec-b",
+            appSecret: "sec-b", // pragma: allowlist secret
             tools: params.toolsB,
           },
         },

@@ -10,15 +10,19 @@ import type {
   AcpRuntimeStatus,
   AcpRuntimeTurnInput,
   PluginLogger,
-} from "openclaw/plugin-sdk";
-import { AcpRuntimeError } from "openclaw/plugin-sdk";
-import { type ResolvedAcpxPluginConfig } from "./config.js";
+} from "openclaw/plugin-sdk/acpx";
+import { AcpRuntimeError } from "openclaw/plugin-sdk/acpx";
+import { toAcpMcpServers, type ResolvedAcpxPluginConfig } from "./config.js";
 import { checkAcpxVersion } from "./ensure.js";
 import {
   parseJsonLines,
   parsePromptEventLine,
   toAcpxErrorEvent,
 } from "./runtime-internals/events.js";
+import {
+  buildMcpProxyAgentCommand,
+  resolveAcpxAgentCommand,
+} from "./runtime-internals/mcp-agent-command.js";
 import {
   resolveSpawnFailure,
   type SpawnCommandCache,
@@ -42,9 +46,29 @@ export const ACPX_BACKEND_ID = "acpx";
 
 const ACPX_RUNTIME_HANDLE_PREFIX = "acpx:v1:";
 const DEFAULT_AGENT_FALLBACK = "codex";
+const ACPX_EXIT_CODE_PERMISSION_DENIED = 5;
 const ACPX_CAPABILITIES: AcpRuntimeCapabilities = {
   controls: ["session/set_mode", "session/set_config_option", "session/status"],
 };
+
+function formatPermissionModeGuidance(): string {
+  return "Configure plugins.entries.acpx.config.permissionMode to one of: approve-reads, approve-all, deny-all.";
+}
+
+function formatAcpxExitMessage(params: {
+  stderr: string;
+  exitCode: number | null | undefined;
+}): string {
+  const stderr = params.stderr.trim();
+  if (params.exitCode === ACPX_EXIT_CODE_PERMISSION_DENIED) {
+    return [
+      stderr || "Permission denied by ACP runtime (acpx).",
+      "ACPX blocked a write/exec permission request in a non-interactive session.",
+      formatPermissionModeGuidance(),
+    ].join(" ");
+  }
+  return stderr || `acpx exited with code ${params.exitCode ?? "unknown"}`;
+}
 
 export function encodeAcpxRuntimeHandleState(state: AcpxHandleState): string {
   const payload = Buffer.from(JSON.stringify(state), "utf8").toString("base64url");
@@ -98,6 +122,7 @@ export class AcpxRuntime implements AcpRuntime {
   private readonly logger?: PluginLogger;
   private readonly queueOwnerTtlSeconds: number;
   private readonly spawnCommandCache: SpawnCommandCache = {};
+  private readonly mcpProxyAgentCommandCache = new Map<string, string>();
   private readonly spawnCommandOptions: SpawnCommandOptions;
   private readonly loggedSpawnResolutions = new Set<string>();
 
@@ -178,22 +203,49 @@ export class AcpxRuntime implements AcpRuntime {
     }
     const cwd = asTrimmedString(input.cwd) || this.config.cwd;
     const mode = input.mode;
+    const ensureCommand = await this.buildVerbArgs({
+      agent,
+      cwd,
+      command: ["sessions", "ensure", "--name", sessionName],
+    });
 
-    const events = await this.runControlCommand({
-      args: this.buildControlArgs({
-        cwd,
-        command: [agent, "sessions", "ensure", "--name", sessionName],
-      }),
+    let events = await this.runControlCommand({
+      args: ensureCommand,
       cwd,
       fallbackCode: "ACP_SESSION_INIT_FAILED",
-      env: this.buildAgentEnv(agent),
     });
-    const ensuredEvent = events.find(
+    let ensuredEvent = events.find(
       (event) =>
         asOptionalString(event.agentSessionId) ||
         asOptionalString(event.acpxSessionId) ||
         asOptionalString(event.acpxRecordId),
     );
+
+    if (!ensuredEvent) {
+      const newCommand = await this.buildVerbArgs({
+        agent,
+        cwd,
+        command: ["sessions", "new", "--name", sessionName],
+      });
+      events = await this.runControlCommand({
+        args: newCommand,
+        cwd,
+        fallbackCode: "ACP_SESSION_INIT_FAILED",
+      });
+      ensuredEvent = events.find(
+        (event) =>
+          asOptionalString(event.agentSessionId) ||
+          asOptionalString(event.acpxSessionId) ||
+          asOptionalString(event.acpxRecordId),
+      );
+      if (!ensuredEvent) {
+        throw new AcpRuntimeError(
+          "ACP_SESSION_INIT_FAILED",
+          `ACP session init failed: neither 'sessions ensure' nor 'sessions new' returned valid session identifiers for ${sessionName}.`,
+        );
+      }
+    }
+
     const acpxRecordId = ensuredEvent ? asOptionalString(ensuredEvent.acpxRecordId) : undefined;
     const agentSessionId = ensuredEvent ? asOptionalString(ensuredEvent.agentSessionId) : undefined;
     const backendSessionId = ensuredEvent
@@ -221,7 +273,7 @@ export class AcpxRuntime implements AcpRuntime {
 
   async *runTurn(input: AcpRuntimeTurnInput): AsyncIterable<AcpRuntimeEvent> {
     const state = this.resolveHandleState(input.handle);
-    const args = this.buildPromptArgs({
+    const args = await this.buildPromptArgs({
       agent: state.agent,
       sessionName: state.name,
       cwd: state.cwd,
@@ -251,7 +303,6 @@ export class AcpxRuntime implements AcpRuntime {
         command: this.config.command,
         args,
         cwd: state.cwd,
-        env: this.buildAgentEnv(state.agent),
       },
       this.spawnCommandOptions,
     );
@@ -305,15 +356,16 @@ export class AcpxRuntime implements AcpRuntime {
             { cause: exit.error },
           );
         }
-        throw new AcpRuntimeError("ACP_TURN_FAILED", exit.error.message, {
-          cause: exit.error,
-        });
+        throw new AcpRuntimeError("ACP_TURN_FAILED", exit.error.message, { cause: exit.error });
       }
 
       if ((exit.code ?? 0) !== 0 && !sawError) {
         yield {
           type: "error",
-          message: stderr.trim() || `acpx exited with code ${exit.code ?? "unknown"}`,
+          message: formatAcpxExitMessage({
+            stderr,
+            exitCode: exit.code,
+          }),
         };
         return;
       }
@@ -333,17 +385,22 @@ export class AcpxRuntime implements AcpRuntime {
     return ACPX_CAPABILITIES;
   }
 
-  async getStatus(input: { handle: AcpRuntimeHandle }): Promise<AcpRuntimeStatus> {
+  async getStatus(input: {
+    handle: AcpRuntimeHandle;
+    signal?: AbortSignal;
+  }): Promise<AcpRuntimeStatus> {
     const state = this.resolveHandleState(input.handle);
+    const args = await this.buildVerbArgs({
+      agent: state.agent,
+      cwd: state.cwd,
+      command: ["status", "--session", state.name],
+    });
     const events = await this.runControlCommand({
-      args: this.buildControlArgs({
-        cwd: state.cwd,
-        command: [state.agent, "status", "--session", state.name],
-      }),
+      args,
       cwd: state.cwd,
       fallbackCode: "ACP_TURN_FAILED",
       ignoreNoSession: true,
-      env: this.buildAgentEnv(state.agent),
+      signal: input.signal,
     });
     const detail = events.find((event) => !toAcpxErrorEvent(event)) ?? events[0];
     if (!detail) {
@@ -379,14 +436,15 @@ export class AcpxRuntime implements AcpRuntime {
     if (!mode) {
       throw new AcpRuntimeError("ACP_TURN_FAILED", "ACP runtime mode is required.");
     }
+    const args = await this.buildVerbArgs({
+      agent: state.agent,
+      cwd: state.cwd,
+      command: ["set-mode", mode, "--session", state.name],
+    });
     await this.runControlCommand({
-      args: this.buildControlArgs({
-        cwd: state.cwd,
-        command: [state.agent, "set-mode", mode, "--session", state.name],
-      }),
+      args,
       cwd: state.cwd,
       fallbackCode: "ACP_TURN_FAILED",
-      env: this.buildAgentEnv(state.agent),
     });
   }
 
@@ -401,14 +459,15 @@ export class AcpxRuntime implements AcpRuntime {
     if (!key || !value) {
       throw new AcpRuntimeError("ACP_TURN_FAILED", "ACP config option key/value are required.");
     }
+    const args = await this.buildVerbArgs({
+      agent: state.agent,
+      cwd: state.cwd,
+      command: ["set", key, value, "--session", state.name],
+    });
     await this.runControlCommand({
-      args: this.buildControlArgs({
-        cwd: state.cwd,
-        command: [state.agent, "set", key, value, "--session", state.name],
-      }),
+      args,
       cwd: state.cwd,
       fallbackCode: "ACP_TURN_FAILED",
-      env: this.buildAgentEnv(state.agent),
     });
   }
 
@@ -495,29 +554,31 @@ export class AcpxRuntime implements AcpRuntime {
 
   async cancel(input: { handle: AcpRuntimeHandle; reason?: string }): Promise<void> {
     const state = this.resolveHandleState(input.handle);
+    const args = await this.buildVerbArgs({
+      agent: state.agent,
+      cwd: state.cwd,
+      command: ["cancel", "--session", state.name],
+    });
     await this.runControlCommand({
-      args: this.buildControlArgs({
-        cwd: state.cwd,
-        command: [state.agent, "cancel", "--session", state.name],
-      }),
+      args,
       cwd: state.cwd,
       fallbackCode: "ACP_TURN_FAILED",
       ignoreNoSession: true,
-      env: this.buildAgentEnv(state.agent),
     });
   }
 
   async close(input: { handle: AcpRuntimeHandle; reason: string }): Promise<void> {
     const state = this.resolveHandleState(input.handle);
+    const args = await this.buildVerbArgs({
+      agent: state.agent,
+      cwd: state.cwd,
+      command: ["sessions", "close", state.name],
+    });
     await this.runControlCommand({
-      args: this.buildControlArgs({
-        cwd: state.cwd,
-        command: [state.agent, "sessions", "close", state.name],
-      }),
+      args,
       cwd: state.cwd,
       fallbackCode: "ACP_TURN_FAILED",
       ignoreNoSession: true,
-      env: this.buildAgentEnv(state.agent),
     });
   }
 
@@ -543,25 +604,12 @@ export class AcpxRuntime implements AcpRuntime {
     };
   }
 
-  private buildAgentEnv(agent: string): NodeJS.ProcessEnv {
-    // Codex ACP prefers ChatGPT device auth. If OPENAI_API_KEY is present in env,
-    // codex-acp will choose API-key auth and can fail with quota errors.
-    if (agent !== "codex") {
-      return process.env;
-    }
-    const env: NodeJS.ProcessEnv = { ...process.env };
-    delete env.OPENAI_API_KEY;
-    delete env.OPENAI_ORG_ID;
-    delete env.OPENAI_PROJECT_ID;
-    return env;
-  }
-
-  private buildControlArgs(params: { cwd: string; command: string[] }): string[] {
-    return ["--format", "json", "--json-strict", "--cwd", params.cwd, ...params.command];
-  }
-
-  private buildPromptArgs(params: { agent: string; sessionName: string; cwd: string }): string[] {
-    const args = [
+  private async buildPromptArgs(params: {
+    agent: string;
+    sessionName: string;
+    cwd: string;
+  }): Promise<string[]> {
+    const prefix = [
       "--format",
       "json",
       "--json-strict",
@@ -572,11 +620,58 @@ export class AcpxRuntime implements AcpRuntime {
       this.config.nonInteractivePermissions,
     ];
     if (this.config.timeoutSeconds) {
-      args.push("--timeout", String(this.config.timeoutSeconds));
+      prefix.push("--timeout", String(this.config.timeoutSeconds));
     }
-    args.push("--ttl", String(this.queueOwnerTtlSeconds));
-    args.push(params.agent, "prompt", "--session", params.sessionName, "--file", "-");
-    return args;
+    prefix.push("--ttl", String(this.queueOwnerTtlSeconds));
+    return await this.buildVerbArgs({
+      agent: params.agent,
+      cwd: params.cwd,
+      command: ["prompt", "--session", params.sessionName, "--file", "-"],
+      prefix,
+    });
+  }
+
+  private async buildVerbArgs(params: {
+    agent: string;
+    cwd: string;
+    command: string[];
+    prefix?: string[];
+  }): Promise<string[]> {
+    const prefix = params.prefix ?? ["--format", "json", "--json-strict", "--cwd", params.cwd];
+    const agentCommand = await this.resolveRawAgentCommand({
+      agent: params.agent,
+      cwd: params.cwd,
+    });
+    if (!agentCommand) {
+      return [...prefix, params.agent, ...params.command];
+    }
+    return [...prefix, "--agent", agentCommand, ...params.command];
+  }
+
+  private async resolveRawAgentCommand(params: {
+    agent: string;
+    cwd: string;
+  }): Promise<string | null> {
+    if (Object.keys(this.config.mcpServers).length === 0) {
+      return null;
+    }
+    const cacheKey = `${params.cwd}::${params.agent}`;
+    const cached = this.mcpProxyAgentCommandCache.get(cacheKey);
+    if (cached) {
+      return cached;
+    }
+    const targetCommand = await resolveAcpxAgentCommand({
+      acpxCommand: this.config.command,
+      cwd: params.cwd,
+      agent: params.agent,
+      spawnOptions: this.spawnCommandOptions,
+    });
+    const resolved = buildMcpProxyAgentCommand({
+      targetCommand,
+      mcpServers: toAcpMcpServers(this.config.mcpServers),
+    });
+    this.mcpProxyAgentCommandCache.set(cacheKey, resolved);
+    return resolved;
   }
 
   private async runControlCommand(params: {
@@ -584,16 +679,18 @@ export class AcpxRuntime implements AcpRuntime {
     cwd: string;
     fallbackCode: AcpRuntimeErrorCode;
     ignoreNoSession?: boolean;
-    env?: NodeJS.ProcessEnv;
+    signal?: AbortSignal;
   }): Promise<AcpxJsonObject[]> {
     const result = await spawnAndCollect(
       {
         command: this.config.command,
         args: params.args,
         cwd: params.cwd,
-        env: params.env,
       },
       this.spawnCommandOptions,
+      {
+        signal: params.signal,
+      },
     );
 
     if (result.error) {
@@ -613,9 +710,7 @@ export class AcpxRuntime implements AcpRuntime {
           { cause: result.error },
         );
       }
-      throw new AcpRuntimeError(params.fallbackCode, result.error.message, {
-        cause: result.error,
-      });
+      throw new AcpRuntimeError(params.fallbackCode, result.error.message, { cause: result.error });
     }
 
     const events = parseJsonLines(result.stdout);
@@ -633,7 +728,10 @@ export class AcpxRuntime implements AcpRuntime {
     if ((result.code ?? 0) !== 0) {
       throw new AcpRuntimeError(
         params.fallbackCode,
-        result.stderr.trim() || `acpx exited with code ${result.code ?? "unknown"}`,
+        formatAcpxExitMessage({
+          stderr: result.stderr,
+          exitCode: result.code,
+        }),
       );
     }
     return events;

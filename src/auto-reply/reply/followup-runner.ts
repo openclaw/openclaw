@@ -1,5 +1,6 @@
 import crypto from "node:crypto";
 import { resolveRunModelFallbacksOverride } from "../../agents/agent-scope.js";
+import { resolveBootstrapWarningSignaturesSeen } from "../../agents/bootstrap-budget.js";
 import { lookupContextTokens } from "../../agents/context.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../agents/defaults.js";
 import { runWithModelFallback } from "../../agents/model-fallback.js";
@@ -9,7 +10,7 @@ import type { TypingMode } from "../../config/types.js";
 import { logVerbose } from "../../globals.js";
 import { registerAgentRunContext } from "../../infra/agent-events.js";
 import { defaultRuntime } from "../../runtime.js";
-import { parseSlackTarget } from "../../slack/targets.js";
+import { isInternalMessageChannel } from "../../utils/message-channel.js";
 import { stripHeartbeatToken } from "../heartbeat.js";
 import type { OriginatingChannelType } from "../templating.js";
 import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../tokens.js";
@@ -131,55 +132,28 @@ export function createFollowupRunner(params: {
   return async (queued: FollowupRun) => {
     try {
       const runId = crypto.randomUUID();
+      const shouldSurfaceToControlUi = isInternalMessageChannel(
+        resolveOriginMessageProvider({
+          originatingChannel: queued.originatingChannel,
+          provider: queued.run.messageProvider,
+        }),
+      );
       if (queued.run.sessionKey) {
         registerAgentRunContext(runId, {
           sessionKey: queued.run.sessionKey,
           verboseLevel: queued.run.verboseLevel,
+          isControlUiVisible: shouldSurfaceToControlUi,
         });
       }
       let autoCompactionCompleted = false;
       let runResult: Awaited<ReturnType<typeof runEmbeddedPiAgent>>;
       let fallbackProvider = queued.run.provider;
       let fallbackModel = queued.run.model;
-
-      const replyToChannel = resolveOriginMessageProvider({
-        originatingChannel: queued.originatingChannel,
-        provider: queued.run.messageProvider,
-      }) as OriginatingChannelType | undefined;
-      const replyToMode = resolveReplyToMode(
-        queued.run.config,
-        replyToChannel,
-        queued.originatingAccountId,
-        queued.originatingChatType,
+      const activeSessionEntry =
+        (sessionKey ? sessionStore?.[sessionKey] : undefined) ?? sessionEntry;
+      let bootstrapPromptWarningSignaturesSeen = resolveBootstrapWarningSignaturesSeen(
+        activeSessionEntry?.systemPromptReport,
       );
-      // Tool auto-threading (Slack) relies on `currentThreadTs/currentChannelId` living on the run.
-      // Followup runs don't have an inbound TemplateContext, so reconstruct the bits we need from
-      // the queued routing info.
-      const slackTarget = (() => {
-        if (replyToChannel !== "slack") {
-          return null;
-        }
-        if (!queued.originatingTo) {
-          return null;
-        }
-        const parsed = parseSlackTarget(queued.originatingTo, {
-          defaultKind: "channel",
-        });
-        return parsed?.kind === "channel" ? parsed : null;
-      })();
-      const queuedThreadTs =
-        replyToChannel === "slack" &&
-        queued.originatingThreadId != null &&
-        queued.originatingThreadId !== ""
-          ? String(queued.originatingThreadId)
-          : undefined;
-      const toolReplyToMode =
-        replyToChannel === "slack" && queuedThreadTs ? ("all" as const) : replyToMode;
-      const hasRepliedRef =
-        replyToChannel === "slack" && (toolReplyToMode === "first" || toolReplyToMode === "all")
-          ? { value: false }
-          : undefined;
-
       try {
         const fallbackResult = await runWithModelFallback({
           cfg: queued.run.config,
@@ -191,9 +165,9 @@ export function createFollowupRunner(params: {
             agentId: queued.run.agentId,
             sessionKey: queued.run.sessionKey,
           }),
-          run: (provider, model) => {
+          run: async (provider, model, runOptions) => {
             const authProfile = resolveRunAuthProfile(queued.run, provider);
-            return runEmbeddedPiAgent({
+            const result = await runEmbeddedPiAgent({
               sessionId: queued.run.sessionId,
               sessionKey: queued.run.sessionKey,
               agentId: queued.run.agentId,
@@ -203,10 +177,9 @@ export function createFollowupRunner(params: {
               agentAccountId: queued.run.agentAccountId,
               messageTo: queued.originatingTo,
               messageThreadId: queued.originatingThreadId,
-              currentChannelId: slackTarget?.id,
-              currentThreadTs: queuedThreadTs,
-              replyToMode: toolReplyToMode,
-              hasRepliedRef,
+              currentChannelId: queued.originatingTo,
+              currentThreadTs:
+                queued.originatingThreadId != null ? String(queued.originatingThreadId) : undefined,
               groupId: queued.run.groupId,
               groupChannel: queued.run.groupChannel,
               groupSpace: queued.run.groupSpace,
@@ -235,7 +208,13 @@ export function createFollowupRunner(params: {
               bashElevated: queued.run.bashElevated,
               timeoutMs: queued.run.timeoutMs,
               runId,
+              allowTransientCooldownProbe: runOptions?.allowTransientCooldownProbe,
               blockReplyBreak: queued.run.blockReplyBreak,
+              bootstrapPromptWarningSignaturesSeen,
+              bootstrapPromptWarningSignature:
+                bootstrapPromptWarningSignaturesSeen[
+                  bootstrapPromptWarningSignaturesSeen.length - 1
+                ],
               onAgentEvent: (evt) => {
                 if (evt.stream !== "compaction") {
                   return;
@@ -246,6 +225,10 @@ export function createFollowupRunner(params: {
                 }
               },
             });
+            bootstrapPromptWarningSignaturesSeen = resolveBootstrapWarningSignaturesSeen(
+              result.meta?.systemPromptReport,
+            );
+            return result;
           },
         });
         runResult = fallbackResult.result;
@@ -276,6 +259,7 @@ export function createFollowupRunner(params: {
           modelUsed,
           providerUsed: fallbackProvider,
           contextTokensUsed,
+          systemPromptReport: runResult.meta?.systemPromptReport,
           logLabel: "followup",
         });
       }
@@ -296,6 +280,17 @@ export function createFollowupRunner(params: {
         }
         return [{ ...payload, text: stripped.text }];
       });
+      const replyToChannel = resolveOriginMessageProvider({
+        originatingChannel: queued.originatingChannel,
+        provider: queued.run.messageProvider,
+      }) as OriginatingChannelType | undefined;
+      const replyToMode = resolveReplyToMode(
+        queued.run.config,
+        replyToChannel,
+        queued.originatingAccountId,
+        queued.originatingChatType,
+      );
+
       const replyTaggedPayloads: ReplyPayload[] = applyReplyThreading({
         payloads: sanitizedPayloads,
         replyToMode,

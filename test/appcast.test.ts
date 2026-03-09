@@ -5,16 +5,21 @@ import { canonicalSparkleBuildFromVersion } from "../scripts/sparkle-build.ts";
 const APPCAST_URL = new URL("../appcast.xml", import.meta.url);
 
 describe("appcast.xml", () => {
-  it("uses the expected Sparkle version for 2026.3.1", () => {
+  it("uses canonical sparkle build for the latest stable appcast entry", () => {
     const appcast = readFileSync(APPCAST_URL, "utf8");
-    const shortVersion = "2026.3.1";
-    const items = Array.from(appcast.matchAll(/<item>[\s\S]*?<\/item>/g)).map((match) => match[0]);
-    const matchingItem = items.find((item) =>
-      item.includes(`<sparkle:shortVersionString>${shortVersion}</sparkle:shortVersionString>`),
-    );
+    const items = [...appcast.matchAll(/<item>([\s\S]*?)<\/item>/g)].map((match) => match[1] ?? "");
+    expect(items.length).toBeGreaterThan(0);
 
-    expect(matchingItem).toBeDefined();
-    const sparkleMatch = matchingItem?.match(/<sparkle:version>([^<]+)<\/sparkle:version>/);
-    expect(sparkleMatch?.[1]).toBe(String(canonicalSparkleBuildFromVersion(shortVersion)));
+    const stableItem = items.find((item) => /<sparkle:version>\d+90<\/sparkle:version>/.test(item));
+    expect(stableItem).toBeDefined();
+
+    const shortVersion = stableItem?.match(
+      /<sparkle:shortVersionString>([^<]+)<\/sparkle:shortVersionString>/,
+    )?.[1];
+    const sparkleVersion = stableItem?.match(/<sparkle:version>([^<]+)<\/sparkle:version>/)?.[1];
+
+    expect(shortVersion).toBeDefined();
+    expect(sparkleVersion).toBeDefined();
+    expect(sparkleVersion).toBe(String(canonicalSparkleBuildFromVersion(shortVersion!)));
   });
 });
