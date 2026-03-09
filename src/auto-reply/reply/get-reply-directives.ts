@@ -164,11 +164,15 @@ export async function resolveReplyDirectives(params: {
     triggerBodyNormalized,
     commandAuthorized,
   });
-  const allowTextCommands = shouldHandleTextCommands({
-    cfg,
-    surface: command.surface,
-    commandSource: ctx.CommandSource,
-  });
+  const inboundPolicy = ctx.InboundPolicy;
+  const allowTextCommands =
+    (inboundPolicy?.allowTextCommands ?? true) &&
+    shouldHandleTextCommands({
+      cfg,
+      surface: command.surface,
+      commandSource: ctx.CommandSource,
+    });
+  const allowOperationalDirectives = inboundPolicy?.allowOperationalDirectives !== false;
   const reservedCommands = new Set(
     listChatCommands().flatMap((cmd) =>
       cmd.textAliases.map((a) => a.replace(/^\//, "").toLowerCase()),
@@ -197,10 +201,12 @@ export async function resolveReplyDirectives(params: {
   const configuredAliases = rawAliases.filter(
     (alias) => !reservedCommands.has(alias.toLowerCase()),
   );
-  const allowStatusDirective = allowTextCommands && command.isAuthorizedSender;
+  const allowStatusDirective =
+    allowOperationalDirectives && allowTextCommands && command.isAuthorizedSender;
   let parsedDirectives = parseInlineDirectives(commandText, {
     modelAliases: configuredAliases,
     allowStatusDirective,
+    allowOperationalDirectives,
   });
   const hasInlineStatus =
     parsedDirectives.hasStatusDirective && parsedDirectives.cleaned.trim().length > 0;
@@ -239,6 +245,8 @@ export async function resolveReplyDirectives(params: {
     if (noMentions.trim().length > 0) {
       const directiveOnlyCheck = parseInlineDirectives(noMentions, {
         modelAliases: configuredAliases,
+        allowStatusDirective,
+        allowOperationalDirectives,
       });
       if (directiveOnlyCheck.cleaned.trim().length > 0) {
         const allowInlineStatus =
@@ -275,6 +283,7 @@ export async function resolveReplyDirectives(params: {
       return parseInlineDirectives(existingBody, {
         modelAliases: configuredAliases,
         allowStatusDirective,
+        allowOperationalDirectives,
       }).cleaned;
     }
 
@@ -283,6 +292,7 @@ export async function resolveReplyDirectives(params: {
       return parseInlineDirectives(existingBody, {
         modelAliases: configuredAliases,
         allowStatusDirective,
+        allowOperationalDirectives,
       }).cleaned;
     }
 
@@ -291,6 +301,7 @@ export async function resolveReplyDirectives(params: {
     const cleanedTail = parseInlineDirectives(tail, {
       modelAliases: configuredAliases,
       allowStatusDirective,
+      allowOperationalDirectives,
     }).cleaned;
     return `${head}${cleanedTail}`;
   })();

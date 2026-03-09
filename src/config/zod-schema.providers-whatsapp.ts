@@ -31,6 +31,14 @@ const WhatsAppAckReactionSchema = z
   .strict()
   .optional();
 
+const WhatsAppGateSchema = z
+  .object({
+    mode: z.enum(["active", "paused_silent", "paused_autoreply"]).optional(),
+    replyText: z.string().optional(),
+  })
+  .strict()
+  .optional();
+
 const WhatsAppSharedSchema = z.object({
   enabled: z.boolean().optional(),
   capabilities: z.array(z.string()).optional(),
@@ -56,7 +64,26 @@ const WhatsAppSharedSchema = z.object({
   ackReaction: WhatsAppAckReactionSchema,
   debounceMs: z.number().int().nonnegative().optional().default(0),
   heartbeat: ChannelHeartbeatVisibilitySchema,
+  gate: WhatsAppGateSchema,
 });
+
+function enforcePausedAutoreplyText(params: {
+  gate: { mode?: string; replyText?: string } | undefined;
+  ctx: z.RefinementCtx;
+  path?: Array<string | number>;
+}) {
+  if (params.gate?.mode !== "paused_autoreply") {
+    return;
+  }
+  if (typeof params.gate.replyText === "string" && params.gate.replyText.trim().length > 0) {
+    return;
+  }
+  params.ctx.addIssue({
+    code: z.ZodIssueCode.custom,
+    path: params.path ?? ["gate", "replyText"],
+    message: 'WhatsApp gate mode "paused_autoreply" requires a non-empty replyText',
+  });
+}
 
 function enforceOpenDmPolicyAllowFromStar(params: {
   dmPolicy: unknown;
@@ -141,6 +168,10 @@ export const WhatsAppConfigSchema = WhatsAppSharedSchema.extend({
       message:
         'channels.whatsapp.dmPolicy="allowlist" requires channels.whatsapp.allowFrom to contain at least one sender ID',
     });
+    enforcePausedAutoreplyText({
+      gate: value.gate,
+      ctx,
+    });
     if (!value.accounts) {
       return;
     }
@@ -165,6 +196,11 @@ export const WhatsAppConfigSchema = WhatsAppSharedSchema.extend({
         path: ["accounts", accountId, "allowFrom"],
         message:
           'channels.whatsapp.accounts.*.dmPolicy="allowlist" requires channels.whatsapp.accounts.*.allowFrom (or channels.whatsapp.allowFrom) to contain at least one sender ID',
+      });
+      enforcePausedAutoreplyText({
+        gate: account.gate ?? value.gate,
+        ctx,
+        path: ["accounts", accountId, "gate", "replyText"],
       });
     }
   });

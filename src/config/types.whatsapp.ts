@@ -35,6 +35,15 @@ export type WhatsAppAckReactionConfig = {
   group?: "always" | "mentions" | "never";
 };
 
+export type WhatsAppGateMode = "active" | "paused_silent" | "paused_autoreply";
+
+export type WhatsAppMessageGateConfig = {
+  /** Whether inbound WhatsApp messages should dispatch normally or pause before agent execution. */
+  mode?: WhatsAppGateMode;
+  /** Canned text reply sent when mode is "paused_autoreply". */
+  replyText?: string;
+};
+
 type WhatsAppSharedConfig = {
   /** Whether the WhatsApp channel is enabled. */
   enabled?: boolean;
@@ -78,6 +87,8 @@ type WhatsAppSharedConfig = {
   debounceMs?: number;
   /** Heartbeat visibility settings. */
   heartbeat?: ChannelHeartbeatVisibilityConfig;
+  /** Pre-dispatch inbound gate state for this WhatsApp surface. */
+  gate?: WhatsAppMessageGateConfig;
 };
 
 type WhatsAppConfigCore = {

@@ -2,14 +2,19 @@ import { vi } from "vitest";
 
 export function registerGetReplyCommonMocks(): void {
   vi.mock("../../agents/agent-scope.js", () => ({
+    resolveAgentConfig: vi.fn(() => undefined),
     resolveAgentDir: vi.fn(() => "/tmp/agent"),
     resolveAgentWorkspaceDir: vi.fn(() => "/tmp/workspace"),
     resolveSessionAgentId: vi.fn(() => "main"),
     resolveAgentSkillsFilter: vi.fn(() => undefined),
   }));
-  vi.mock("../../agents/model-selection.js", () => ({
-    resolveModelRefFromString: vi.fn(() => null),
-  }));
+  vi.mock("../../agents/model-selection.js", async (importOriginal) => {
+    const actual = await importOriginal<typeof import("../../agents/model-selection.js")>();
+    return {
+      ...actual,
+      resolveModelRefFromString: vi.fn(() => null),
+    };
+  });
   vi.mock("../../agents/timeout.js", () => ({
     resolveAgentTimeoutMs: vi.fn(() => 60000),
   }));
@@ -20,22 +25,30 @@ export function registerGetReplyCommonMocks(): void {
   vi.mock("../../channels/model-overrides.js", () => ({
     resolveChannelModelOverride: vi.fn(() => undefined),
   }));
-  vi.mock("../../config/config.js", () => ({
-    loadConfig: vi.fn(() => ({})),
-  }));
+  vi.mock("../../config/config.js", async (importOriginal) => {
+    const actual = await importOriginal<typeof import("../../config/config.js")>();
+    return {
+      ...actual,
+      loadConfig: vi.fn(() => ({})),
+    };
+  });
   vi.mock("../../runtime.js", () => ({
     defaultRuntime: { log: vi.fn() },
   }));
   vi.mock("../command-auth.js", () => ({
     resolveCommandAuthorization: vi.fn(() => ({ isAuthorizedSender: true })),
   }));
-  vi.mock("./directive-handling.js", () => ({
-    resolveDefaultModel: vi.fn(() => ({
-      defaultProvider: "openai",
-      defaultModel: "gpt-4o-mini",
-      aliasIndex: new Map(),
-    })),
-  }));
+  vi.mock("./directive-handling.js", async (importOriginal) => {
+    const actual = await importOriginal<typeof import("./directive-handling.js")>();
+    return {
+      ...actual,
+      resolveDefaultModel: vi.fn(() => ({
+        defaultProvider: "openai",
+        defaultModel: "gpt-4o-mini",
+        aliasIndex: new Map(),
+      })),
+    };
+  });
   vi.mock("./get-reply-run.js", () => ({
     runPreparedReply: vi.fn(async () => undefined),
   }));

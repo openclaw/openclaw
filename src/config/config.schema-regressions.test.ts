@@ -75,6 +75,47 @@ describe("config schema regressions", () => {
     expect(res.ok).toBe(true);
   });
 
+  it("accepts whatsapp gate config with paused_autoreply reply text", () => {
+    const res = validateConfigObject({
+      channels: {
+        whatsapp: {
+          gate: {
+            mode: "paused_autoreply",
+            replyText: "Support is offline right now.",
+          },
+          accounts: {
+            work: {
+              gate: {
+                mode: "paused_silent",
+              },
+            },
+          },
+        },
+      },
+    });
+
+    expect(res.ok).toBe(true);
+  });
+
+  it("rejects whatsapp paused_autoreply gate without reply text", () => {
+    const res = validateConfigObject({
+      channels: {
+        whatsapp: {
+          gate: {
+            mode: "paused_autoreply",
+          },
+        },
+      },
+    });
+
+    expect(res.ok).toBe(false);
+    if (!res.ok) {
+      expect(res.issues.some((issue) => issue.path === "channels.whatsapp.gate.replyText")).toBe(
+        true,
+      );
+    }
+  });
+
   it("rejects unsafe iMessage remoteHost", () => {
     const res = validateConfigObject({
       channels: {

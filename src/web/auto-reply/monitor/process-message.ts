@@ -17,6 +17,10 @@ import type { loadConfig } from "../../../config/config.js";
 import { resolveMarkdownTableMode } from "../../../config/markdown-tables.js";
 import { recordSessionMetaFromInbound } from "../../../config/sessions.js";
 import { logVerbose, shouldLogVerbose } from "../../../globals.js";
+import {
+  DEFAULT_INBOUND_ROUTE_POLICY,
+  type InboundRoutePolicy,
+} from "../../../inbound/policy-types.js";
 import type { getChildLogger } from "../../../logging.js";
 import { getAgentScopedMediaLocalRoots } from "../../../media/local-roots.js";
 import {
@@ -150,6 +154,7 @@ export async function processMessage(params: {
   maxMediaTextChunkLimit?: number;
   groupHistory?: GroupHistoryEntry[];
   suppressGroupHistoryClear?: boolean;
+  inboundPolicy?: InboundRoutePolicy;
 }) {
   const conversationId = params.msg.conversationId ?? params.msg.from;
   const { storePath, envelopeOptions, previousTimestamp } = resolveInboundSessionEnvelopeContext({
@@ -265,9 +270,12 @@ export async function processMessage(params: {
   const mediaLocalRoots = getAgentScopedMediaLocalRoots(params.cfg, params.route.agentId);
   let didLogHeartbeatStrip = false;
   let didSendReply = false;
-  const commandAuthorized = shouldComputeCommandAuthorized(params.msg.body, params.cfg)
-    ? await resolveWhatsAppCommandAuthorized({ cfg: params.cfg, msg: params.msg })
-    : undefined;
+  const inboundPolicy = params.inboundPolicy ?? DEFAULT_INBOUND_ROUTE_POLICY;
+  const commandAuthorized = !inboundPolicy.allowTextCommands
+    ? false
+    : shouldComputeCommandAuthorized(params.msg.body, params.cfg)
+      ? await resolveWhatsAppCommandAuthorized({ cfg: params.cfg, msg: params.msg })
+      : undefined;
   const configuredResponsePrefix = params.cfg.messages?.responsePrefix;
   const { onModelSelected, ...prefixOptions } = createReplyPrefixOptions({
     cfg: params.cfg,
@@ -325,6 +333,7 @@ export async function processMessage(params: {
     SenderId: params.msg.senderJid?.trim() || params.msg.senderE164,
     SenderE164: params.msg.senderE164,
     CommandAuthorized: commandAuthorized,
+    InboundPolicy: inboundPolicy,
     WasMentioned: params.msg.wasMentioned,
     ...(params.msg.location ? toLocationContext(params.msg.location) : {}),
     Provider: "whatsapp",

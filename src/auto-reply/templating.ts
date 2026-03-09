@@ -1,4 +1,5 @@
 import type { ChannelId } from "../channels/plugins/types.js";
+import type { InboundRoutePolicy } from "../inbound/policy-types.js";
 import type {
   MediaUnderstandingDecision,
   MediaUnderstandingOutput,
@@ -134,6 +135,7 @@ export type MsgContext = {
   Surface?: string;
   WasMentioned?: boolean;
   CommandAuthorized?: boolean;
+  InboundPolicy?: InboundRoutePolicy;
   CommandSource?: "text" | "native";
   CommandTargetSessionKey?: string;
   /**

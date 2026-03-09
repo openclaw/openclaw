@@ -28,6 +28,7 @@ function makeProcessMessageArgs(params: {
   groupHistories?: Map<string, Array<{ sender: string; body: string }>>;
   groupHistory?: Array<{ sender: string; body: string }>;
   rememberSentText?: (text: string | undefined, opts: unknown) => void;
+  inboundPolicy?: unknown;
 }) {
   return {
     // oxlint-disable-next-line typescript/no-explicit-any
@@ -57,6 +58,7 @@ function makeProcessMessageArgs(params: {
     echoForget: () => {},
     buildCombinedEchoKey: () => "echo",
     ...(params.groupHistory ? { groupHistory: params.groupHistory } : {}),
+    ...(params.inboundPolicy ? { inboundPolicy: params.inboundPolicy } : {}),
     // oxlint-disable-next-line typescript/no-explicit-any
   } as any;
 }
@@ -177,6 +179,48 @@ describe("web processMessage inbound contract", () => {
     expect(capturedCtx).toBeTruthy();
     // oxlint-disable-next-line typescript/no-explicit-any
     expectInboundContextContract(capturedCtx as any);
+  });
+
+  it("forces CommandAuthorized=false and includes InboundPolicy when WhatsApp policy disables commands", async () => {
+    capturedCtx = undefined;
+
+    await processMessage(
+      makeProcessMessageArgs({
+        routeSessionKey: "agent:main:whatsapp:direct:+1000",
+        groupHistoryKey: "+1000",
+        inboundPolicy: {
+          allowAgentDispatch: true,
+          allowTextCommands: false,
+          allowOperationalDirectives: false,
+          pauseMode: "active",
+        },
+        msg: {
+          id: "msg-policy-1",
+          from: "+1000",
+          to: "+2000",
+          chatType: "direct",
+          body: "/status",
+          senderE164: "+1000",
+        },
+      }),
+    );
+
+    expect(capturedCtx).toBeTruthy();
+    const ctx = capturedCtx as {
+      CommandAuthorized?: boolean;
+      InboundPolicy?: {
+        allowTextCommands?: boolean;
+        allowOperationalDirectives?: boolean;
+        pauseMode?: string;
+      };
+    };
+    expect(ctx.CommandAuthorized).toBe(false);
+    expect(ctx.InboundPolicy).toEqual({
+      allowAgentDispatch: true,
+      allowTextCommands: false,
+      allowOperationalDirectives: false,
+      pauseMode: "active",
+    });
   });
 
   it("falls back SenderId to SenderE164 when senderJid is empty", async () => {

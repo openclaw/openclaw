@@ -2,6 +2,8 @@ import type { getReplyFromConfig } from "../../../auto-reply/reply.js";
 import type { MsgContext } from "../../../auto-reply/templating.js";
 import { loadConfig } from "../../../config/config.js";
 import { logVerbose } from "../../../globals.js";
+import type { InboundRoutePolicy } from "../../../inbound/policy-types.js";
+import { resolveInboundRoutePolicy } from "../../../inbound/policy.js";
 import { resolveAgentRoute } from "../../../routing/resolve-route.js";
 import { buildGroupHistoryKey } from "../../../routing/session-key.js";
 import { normalizeE164 } from "../../../utils.js";
@@ -37,6 +39,7 @@ export function createWebOnMessageHandler(params: {
     opts?: {
       groupHistory?: GroupHistoryEntry[];
       suppressGroupHistoryClear?: boolean;
+      inboundPolicy?: InboundRoutePolicy;
     },
   ) =>
     processMessage({
@@ -58,20 +61,27 @@ export function createWebOnMessageHandler(params: {
       buildCombinedEchoKey: params.echoTracker.buildCombinedKey,
       groupHistory: opts?.groupHistory,
       suppressGroupHistoryClear: opts?.suppressGroupHistoryClear,
+      inboundPolicy: opts?.inboundPolicy,
     });
 
   return async (msg: WebInboundMsg) => {
     const conversationId = msg.conversationId ?? msg.from;
     const peerId = resolvePeerId(msg);
+    const routeCfg = loadConfig();
     // Fresh config for bindings lookup; other routing inputs are payload-derived.
     const route = resolveAgentRoute({
-      cfg: loadConfig(),
+      cfg: routeCfg,
       channel: "whatsapp",
       accountId: msg.accountId,
       peer: {
         kind: msg.chatType === "group" ? "group" : "direct",
         id: peerId,
       },
+    });
+    const inboundPolicy = resolveInboundRoutePolicy({
+      cfg: routeCfg,
+      channel: "whatsapp",
+      accountId: route.accountId,
     });
     const groupHistoryKey =
       msg.chatType === "group"
@@ -92,6 +102,17 @@ export function createWebOnMessageHandler(params: {
     if (params.echoTracker.has(msg.body)) {
       logVerbose("Skipping auto-reply: detected echo (message matches recently sent text)");
       params.echoTracker.forget(msg.body);
+      return;
+    }
+
+    if (!inboundPolicy.allowAgentDispatch) {
+      if (
+        inboundPolicy.pauseMode === "paused_autoreply" &&
+        typeof inboundPolicy.pauseReplyText === "string" &&
+        inboundPolicy.pauseReplyText.length > 0
+      ) {
+        await msg.reply(inboundPolicy.pauseReplyText);
+      }
       return;
     }
 
@@ -159,12 +180,16 @@ export function createWebOnMessageHandler(params: {
         route,
         groupHistoryKey,
         groupHistories: params.groupHistories,
-        processMessage: processForRoute,
+        processMessage: (broadcastMsg, broadcastRoute, broadcastGroupHistoryKey, broadcastOpts) =>
+          processForRoute(broadcastMsg, broadcastRoute, broadcastGroupHistoryKey, {
+            ...broadcastOpts,
+            inboundPolicy,
+          }),
       })
     ) {
       return;
     }
 
-    await processForRoute(msg, route, groupHistoryKey);
+    await processForRoute(msg, route, groupHistoryKey, { inboundPolicy });
   };
 }

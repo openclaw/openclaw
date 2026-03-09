@@ -1489,6 +1489,12 @@ export const FIELD_HELP: Record<string, string> = {
   "channels.whatsapp.selfChatMode": "Same-phone setup (bot uses your personal WhatsApp number).",
   "channels.whatsapp.debounceMs":
     "Debounce window (ms) for batching rapid consecutive messages from the same sender (0 to disable).",
+  "channels.whatsapp.gate":
+    "Pre-dispatch inbound WhatsApp gate that can keep automation active, pause silently, or send a canned pause reply before skipping agent execution.",
+  "channels.whatsapp.gate.mode":
+    'WhatsApp inbound gate mode: "active", "paused_silent", or "paused_autoreply".',
+  "channels.whatsapp.gate.replyText":
+    'Canned WhatsApp reply used when channels.whatsapp.gate.mode is "paused_autoreply".',
   "channels.signal.dmPolicy":
     'Direct message access control ("pairing" recommended). "open" requires channels.signal.allowFrom=["*"].',
   "channels.imessage.dmPolicy":

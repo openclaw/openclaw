@@ -58,6 +58,19 @@ function resolveModelSelectionForCommand(params: {
 }
 
 describe("/model chat UX", () => {
+  it("skips operational directives entirely when parsing is disabled", () => {
+    const directives = parseInlineDirectives("/model openai/gpt-4o /think high /exec gateway", {
+      allowOperationalDirectives: false,
+    });
+
+    expect(directives.cleaned).toBe("/model openai/gpt-4o /think high /exec gateway");
+    expect(directives.hasModelDirective).toBe(false);
+    expect(directives.hasThinkDirective).toBe(false);
+    expect(directives.hasExecDirective).toBe(false);
+    expect(directives.hasStatusDirective).toBe(false);
+    expect(directives.hasQueueDirective).toBe(false);
+  });
+
   it("shows summary for /model with no args", async () => {
     const directives = parseInlineDirectives("/model");
     const cfg = { commands: { text: true } } as unknown as OpenClawConfig;
