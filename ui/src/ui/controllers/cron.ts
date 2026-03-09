@@ -577,7 +577,11 @@ export function buildCronPayload(form: CronFormState) {
   }
   const timeoutRaw = form.timeoutSeconds.trim();
   if (timeoutRaw) {
-    payload.timeoutSeconds = toNumber(timeoutRaw, 0);
+    const timeout = Number(timeoutRaw);
+    if (!Number.isFinite(timeout) || timeout < 0) {
+      throw new Error(t("cron.errors.timeoutInvalid"));
+    }
+    payload.timeoutSeconds = timeout;
   }
   if (form.payloadLightContext) {
     payload.lightContext = true;
