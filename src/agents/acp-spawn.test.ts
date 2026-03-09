@@ -38,6 +38,7 @@ const hoisted = vi.hoisted(() => {
   const loadSessionStoreMock = vi.fn();
   const resolveStorePathMock = vi.fn();
   const resolveSessionTranscriptFileMock = vi.fn();
+  const registerSubagentRunMock = vi.fn();
   const state = {
     cfg: createDefaultSpawnConfig(),
   };
@@ -55,6 +56,7 @@ const hoisted = vi.hoisted(() => {
     loadSessionStoreMock,
     resolveStorePathMock,
     resolveSessionTranscriptFileMock,
+    registerSubagentRunMock,
     state,
   };
 });
@@ -133,6 +135,11 @@ vi.mock("./acp-spawn-parent-stream.js", () => ({
     hoisted.startAcpSpawnParentStreamRelayMock(...args),
   resolveAcpSpawnStreamLogPath: (...args: unknown[]) =>
     hoisted.resolveAcpSpawnStreamLogPathMock(...args),
+}));
+
+vi.mock("./subagent-registry.js", () => ({
+  registerSubagentRun: (params: unknown) => hoisted.registerSubagentRunMock(params),
+  countActiveRunsForSession: () => 0,
 }));
 
 const { spawnAcpDirect } = await import("./acp-spawn.js");
@@ -315,6 +322,7 @@ describe("spawnAcpDirect", () => {
           },
         };
       });
+    hoisted.registerSubagentRunMock.mockReset();
   });
 
   it("spawns ACP session, binds a new thread, and dispatches initial task", async () => {
@@ -367,6 +375,15 @@ describe("spawnAcpDirect", () => {
         mode: "persistent",
       }),
     );
+    expect(hoisted.registerSubagentRunMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        runId: "run-1",
+        childSessionKey: result.childSessionKey,
+        requesterSessionKey: "agent:main:main",
+        cleanup: "keep",
+        spawnMode: "session",
+      }),
+    );
     const transcriptCalls = hoisted.resolveSessionTranscriptFileMock.mock.calls.map(
       (call: unknown[]) => call[0] as { threadId?: string },
     );
@@ -407,6 +424,13 @@ describe("spawnAcpDirect", () => {
     expect(agentCall?.params?.channel).toBeUndefined();
     expect(agentCall?.params?.to).toBeUndefined();
     expect(agentCall?.params?.threadId).toBeUndefined();
+    expect(hoisted.registerSubagentRunMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        runId: "run-1",
+        cleanup: "keep",
+        spawnMode: "run",
+      }),
+    );
   });
 
   it("keeps ACP spawn running when session-file persistence fails", async () => {

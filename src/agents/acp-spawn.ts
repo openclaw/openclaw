@@ -41,7 +41,12 @@ import {
   startAcpSpawnParentStreamRelay,
 } from "./acp-spawn-parent-stream.js";
 import { resolveSandboxRuntimeStatus } from "./sandbox/runtime-status.js";
-import { resolveInternalSessionKey, resolveMainSessionAlias } from "./tools/sessions-helpers.js";
+import { registerSubagentRun } from "./subagent-registry.js";
+import {
+  resolveDisplaySessionKey,
+  resolveInternalSessionKey,
+  resolveMainSessionAlias,
+} from "./tools/sessions-resolution.js";
 
 const log = createSubsystemLogger("agents/acp-spawn");
 
@@ -514,6 +519,12 @@ export async function spawnAcpDirect(
     to: ctx.agentTo,
     threadId: ctx.agentThreadId,
   });
+  const { mainKey, alias } = resolveMainSessionAlias(cfg);
+  const requesterDisplayKey = resolveDisplaySessionKey({
+    key: requesterInternalKey,
+    alias,
+    mainKey,
+  });
   // For thread-bound ACP spawns, force bootstrap delivery to the new child thread.
   const boundThreadIdRaw = binding?.conversation.conversationId;
   const boundThreadId = boundThreadIdRaw ? String(boundThreadIdRaw).trim() || undefined : undefined;
@@ -581,6 +592,24 @@ export async function spawnAcpDirect(
       error: summarizeError(err),
       childSessionKey: sessionKey,
     };
+  }
+
+  try {
+    registerSubagentRun({
+      runId: childRunId,
+      childSessionKey: sessionKey,
+      requesterSessionKey: requesterInternalKey,
+      requesterOrigin,
+      requesterDisplayKey,
+      task: params.task,
+      cleanup: "keep",
+      label: params.label || undefined,
+      spawnMode,
+    });
+  } catch (err) {
+    log.warn(
+      `failed to register ACP subagent run ${childRunId} for ${sessionKey}: ${summarizeError(err)}`,
+    );
   }
 
   if (streamToParentRequested && parentSessionKey) {

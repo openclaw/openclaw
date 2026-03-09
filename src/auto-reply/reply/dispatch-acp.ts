@@ -11,6 +11,11 @@ import { readAcpSessionEntry } from "../../acp/runtime/session-meta.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { TtsAutoMode } from "../../config/types.tts.js";
 import { logVerbose } from "../../globals.js";
+import {
+  emitAgentEvent,
+  getAgentRunContext,
+  getLatestAgentRunIdForSession,
+} from "../../infra/agent-events.js";
 import { getSessionBindingService } from "../../infra/outbound/session-binding-service.js";
 import { generateSecureUuid } from "../../infra/secure-random.js";
 import { prefixSystemMessage } from "../../infra/system-message.js";
@@ -103,6 +108,18 @@ function resolveAcpRequestId(ctx: FinalizedMsgContext): string {
     return String(id);
   }
   return generateSecureUuid();
+}
+
+function resolveAcpLifecycleRunId(sessionKey: string, requestId: string): string | undefined {
+  const bySession = getLatestAgentRunIdForSession(sessionKey);
+  if (bySession) {
+    return bySession;
+  }
+  const requestContext = getAgentRunContext(requestId);
+  if (requestContext?.sessionKey === sessionKey) {
+    return requestId;
+  }
+  return undefined;
 }
 
 function hasBoundConversationForSession(params: {
@@ -226,6 +243,8 @@ export async function tryDispatchAcpReply(params: {
   });
 
   const acpDispatchStartedAt = Date.now();
+  const requestId = resolveAcpRequestId(params.ctx);
+  const lifecycleRunId = resolveAcpLifecycleRunId(sessionKey, requestId);
   try {
     const dispatchPolicyError = resolveAcpDispatchPolicyError(params.cfg);
     if (dispatchPolicyError) {
@@ -252,9 +271,20 @@ export async function tryDispatchAcpReply(params: {
       sessionKey,
       text: promptText,
       mode: "prompt",
-      requestId: resolveAcpRequestId(params.ctx),
+      requestId,
       onEvent: async (event) => await projector.onEvent(event),
     });
+    if (lifecycleRunId) {
+      emitAgentEvent({
+        runId: lifecycleRunId,
+        stream: "lifecycle",
+        sessionKey,
+        data: {
+          phase: "end",
+          endedAt: Date.now(),
+        },
+      });
+    }
 
     await projector.flush(true);
     const ttsMode = resolveTtsConfig(params.cfg).mode ?? "final";
@@ -319,6 +349,18 @@ export async function tryDispatchAcpReply(params: {
       fallbackCode: "ACP_TURN_FAILED",
       fallbackMessage: "ACP turn failed before completion.",
     });
+    if (lifecycleRunId) {
+      emitAgentEvent({
+        runId: lifecycleRunId,
+        stream: "lifecycle",
+        sessionKey,
+        data: {
+          phase: "error",
+          endedAt: Date.now(),
+          error: acpError.message,
+        },
+      });
+    }
     const delivered = await delivery.deliver("final", {
       text: formatAcpRuntimeErrorText(acpError),
       isError: true,
