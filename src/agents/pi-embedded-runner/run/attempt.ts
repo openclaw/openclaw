@@ -118,6 +118,7 @@ import { installToolResultContextGuard } from "../tool-result-context-guard.js";
 import { splitSdkTools } from "../tool-split.js";
 import { describeUnknownError, mapThinkingLevel } from "../utils.js";
 import { flushPendingToolResultsAfterIdle } from "../wait-for-idle-before-flush.js";
+import { waitForCompactionRetryWithAggregateTimeout } from "./compaction-retry-aggregate-timeout.js";
 import {
   selectCompactionTimeoutSnapshot,
   shouldFlagCompactionTimeout,
@@ -1498,6 +1499,7 @@ export async function runEmbeddedAttempt(
         toolMetas,
         unsubscribe,
         waitForCompactionRetry,
+        isCompactionInFlight,
         getMessagingToolSentTexts,
         getMessagingToolSentMediaUrls,
         getMessagingToolSentTargets,
@@ -1789,9 +1791,32 @@ export async function runEmbeddedAttempt(
         // Only trust snapshot if compaction wasn't running before or after capture
         const preCompactionSnapshot = wasCompactingBefore || wasCompactingAfter ? null : snapshot;
         const preCompactionSessionId = activeSession.sessionId;
+        const COMPACTION_RETRY_AGGREGATE_TIMEOUT_MS = 60_000;
 
         try {
-          await abortable(waitForCompactionRetry());
+          // Flush buffered block replies before waiting for compaction so the
+          // user receives the assistant response immediately.  Without this,
+          // coalesced/buffered blocks stay in the pipeline until compaction
+          // finishes — which can take minutes on large contexts (#35074).
+          if (params.onBlockReplyFlush) {
+            await params.onBlockReplyFlush();
+          }
+
+          const compactionRetryWait = await waitForCompactionRetryWithAggregateTimeout({
+            waitForCompactionRetry,
+            abortable,
+            aggregateTimeoutMs: COMPACTION_RETRY_AGGREGATE_TIMEOUT_MS,
+            isCompactionStillInFlight: isCompactionInFlight,
+          });
+          if (compactionRetryWait.timedOut) {
+            timedOutDuringCompaction = true;
+            if (!isProbeSession) {
+              log.warn(
+                `compaction retry aggregate timeout (${COMPACTION_RETRY_AGGREGATE_TIMEOUT_MS}ms): ` +
+                  `proceeding with pre-compaction state runId=${params.runId} sessionId=${params.sessionId}`,
+              );
+            }
+          }
         } catch (err) {
           if (isRunnerAbortError(err)) {
             if (!promptError) {
