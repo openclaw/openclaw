@@ -22,6 +22,36 @@ describe("sanitizeUserFacingText", () => {
     },
   );
 
+  // --- GLM / DeepSeek special token stripping ---
+  // @see https://github.com/openclaw/openclaw/issues/40020
+
+  it("strips GLM special tokens from output", () => {
+    expect(sanitizeUserFacingText("<|tool_call_result_begin|>Hello<|tool_call_result_end|>")).toBe(
+      "Hello",
+    );
+  });
+
+  it("strips multiple different special tokens", () => {
+    expect(sanitizeUserFacingText("<|user|>Question<|assistant|>Answer<|observation|>")).toBe(
+      "QuestionAnswer",
+    );
+  });
+
+  it("strips DeepSeek special tokens", () => {
+    expect(sanitizeUserFacingText("<|tool_list_end|>Here is the result")).toBe(
+      "Here is the result",
+    );
+  });
+
+  it("does not strip normal angle brackets", () => {
+    expect(sanitizeUserFacingText("a < b && c > d")).toBe("a < b && c > d");
+  });
+
+  it("does not strip HTML-like tags (handled separately)", () => {
+    // sanitizeUserFacingText does not strip HTML — that's sanitizeForPlainText's job
+    expect(sanitizeUserFacingText("<div>hello</div>")).toBe("<div>hello</div>");
+  });
+
   it("sanitizes role ordering errors", () => {
     const result = sanitizeUserFacingText("400 Incorrect role information", { errorContext: true });
     expect(result).toContain("Message ordering conflict");

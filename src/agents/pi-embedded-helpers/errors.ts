@@ -181,6 +181,16 @@ export function isCompactionFailureError(errorMessage?: string): boolean {
 const ERROR_PAYLOAD_PREFIX_RE =
   /^(?:error|api\s*error|apierror|openai\s*error|anthropic\s*error|gateway\s*error)[:\s-]+/i;
 const FINAL_TAG_RE = /<\s*\/?\s*final\s*>/gi;
+
+/**
+ * Matches special delimiter tokens leaked by GLM, DeepSeek, and similar models.
+ * These tokens use the `<|...|>` format (e.g. `<|tool_call_result_begin|>`,
+ * `<|tool_list_end|>`, `<|user|>`, `<|assistant|>`, `<|observation|>`).
+ * They should never appear in user-facing output.
+ *
+ * @see https://github.com/openclaw/openclaw/issues/40020
+ */
+const MODEL_SPECIAL_TOKEN_RE = /<\|[^|]*\|>/g;
 const ERROR_PREFIX_RE =
   /^(?:error|api\s*error|openai\s*error|anthropic\s*error|gateway\s*error|request failed|failed|exception)[:\s-]+/i;
 const CONTEXT_OVERFLOW_ERROR_HEAD_RE =
@@ -396,7 +406,7 @@ function stripFinalTagsFromText(text: string): string {
   if (!text) {
     return text;
   }
-  return text.replace(FINAL_TAG_RE, "");
+  return text.replace(FINAL_TAG_RE, "").replace(MODEL_SPECIAL_TOKEN_RE, "");
 }
 
 function collapseConsecutiveDuplicateBlocks(text: string): string {
