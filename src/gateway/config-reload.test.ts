@@ -192,6 +192,22 @@ describe("buildGatewayReloadPlan", () => {
     expect(plan.noopPaths).toContain("diagnostics.stuckSessionWarnMs");
   });
 
+  it("treats plugins.installs metadata as no-op (avoids restart loop for npm-installed plugins)", () => {
+    const plan = buildGatewayReloadPlan([
+      "plugins.installs.botschat.resolvedAt",
+      "plugins.installs.botschat.installedAt",
+    ]);
+    expect(plan.restartGateway).toBe(false);
+    expect(plan.noopPaths).toContain("plugins.installs.botschat.resolvedAt");
+    expect(plan.noopPaths).toContain("plugins.installs.botschat.installedAt");
+  });
+
+  it("still restarts for other plugins config changes", () => {
+    const plan = buildGatewayReloadPlan(["plugins.entries.foo.enabled"]);
+    expect(plan.restartGateway).toBe(true);
+    expect(plan.restartReasons).toContain("plugins.entries.foo.enabled");
+  });
+
   it("defaults unknown paths to restart", () => {
     const plan = buildGatewayReloadPlan(["unknownField"]);
     expect(plan.restartGateway).toBe(true);
