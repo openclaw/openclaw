@@ -515,18 +515,30 @@ private extension View {
 @MainActor
 struct ChatStreamingAssistantBubble: View {
     let text: String
-    let markdownVariant: ChatMarkdownVariant
     let showsAssistantTrace: Bool
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-            ChatAssistantTextBody(
-                text: self.text,
-                markdownVariant: self.markdownVariant,
-                includesThinking: self.showsAssistantTrace)
+            // Use plain Text during streaming to avoid re-parsing the full markdown
+            // tree on every token (StructuredText layout thrash → flicker).
+            // The final committed message re-renders with full markdown via ChatAssistantTextBody.
+            Text(self.visibleText)
+                .font(.system(size: 14))
+                .foregroundStyle(OpenClawChatTheme.assistantText)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .textSelection(.enabled)
         }
         .padding(12)
         .assistantBubbleContainerStyle()
+    }
+
+    /// Returns only the non-thinking text for display during streaming.
+    /// Thinking blocks are never shown during streaming regardless of showsAssistantTrace —
+    /// they appear only in the final committed message via ChatAssistantTextBody.
+    private var visibleText: String {
+        AssistantTextParser.segments(from: self.text, includeThinking: false)
+            .map(\.text)
+            .joined(separator: "\n\n")
     }
 }
 
