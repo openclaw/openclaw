@@ -2080,7 +2080,7 @@
 
 .chat-compose__actions {
   justify-content: flex-end;
-  align-self: stretch;
+  align-self: flex-start;
 }
 
 @media (max-width: 900px) {
