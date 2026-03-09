@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { OpenMemoryClient, type MemorySector } from "./openmemory-client.js";
+import { isMemoryPath } from "./internal.js";
 import type {
   MemorySearchManager,
   MemorySearchResult,
@@ -60,6 +61,7 @@ export class OpenMemorySearchManager implements MemorySearchManager {
   /**
    * Read a file from the local filesystem.
    * OpenMemory stores memories, not files, so we read from disk.
+   * Enforces path restrictions: must be within workspace and in memory directory.
    */
   async readFile(params: {
     relPath: string;
@@ -68,10 +70,32 @@ export class OpenMemorySearchManager implements MemorySearchManager {
   }): Promise<{ text: string; path: string }> {
     const { relPath, from, lines } = params;
 
+    const rawPath = relPath.trim();
+    if (!rawPath) {
+      throw new Error("path required");
+    }
+
     // Resolve path relative to workspace
-    const absPath = path.isAbsolute(relPath)
-      ? relPath
-      : path.resolve(this.workspaceDir, relPath);
+    const absPath = path.isAbsolute(rawPath)
+      ? path.resolve(rawPath)
+      : path.resolve(this.workspaceDir, rawPath);
+
+    // Security: enforce path restrictions (same as builtin manager)
+    const resolvedRelPath = path.relative(this.workspaceDir, absPath).replace(/\\/g, "/");
+    const inWorkspace =
+      resolvedRelPath.length > 0 &&
+      !resolvedRelPath.startsWith("..") &&
+      !path.isAbsolute(resolvedRelPath);
+    const allowedWorkspace = inWorkspace && isMemoryPath(resolvedRelPath);
+
+    if (!allowedWorkspace) {
+      throw new Error("path must be within memory directory (memory/*.md or MEMORY.md)");
+    }
+
+    // Only allow .md files
+    if (!absPath.endsWith(".md")) {
+      throw new Error("path must be a .md file");
+    }
 
     const content = await fs.readFile(absPath, "utf-8");
     const allLines = content.split("\n");
