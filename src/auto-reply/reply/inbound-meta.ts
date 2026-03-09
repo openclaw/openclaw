@@ -48,10 +48,19 @@ function resolveConversationTimezone(cfg?: OpenClawConfig): string | undefined {
 
   if (envelopeTimezone.toLowerCase() === "user") {
     const userTz = cfg?.agents?.defaults?.userTimezone?.trim();
-    return userTz ? resolveTimezone(userTz) : undefined;
+    if (!userTz) return undefined;
+    const validated = resolveTimezone(userTz);
+    if (!validated) {
+      console.warn(`[openclaw] Invalid userTimezone value: "${userTz}", falling back to system timezone`);
+    }
+    return validated;
   }
 
-  return resolveTimezone(envelopeTimezone);
+  const validated = resolveTimezone(envelopeTimezone);
+  if (!validated) {
+    console.warn(`[openclaw] Invalid envelopeTimezone value: "${envelopeTimezone}", falling back to system timezone`);
+  }
+  return validated;
 }
 
 function resolveInboundChannel(ctx: TemplateContext): string | undefined {

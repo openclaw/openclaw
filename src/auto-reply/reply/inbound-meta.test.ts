@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { TemplateContext } from "../templating.js";
 import { buildInboundMetaSystemPrompt, buildInboundUserContextPrefix } from "./inbound-meta.js";
@@ -434,6 +434,7 @@ describe("buildInboundUserContextPrefix - timezone handling", () => {
   });
 
   it("falls back to system timezone for invalid IANA string", () => {
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
     const cfg = {
       agents: { defaults: { envelopeTimezone: "Not/A_ValidZone" } },
     } as unknown as OpenClawConfig;
@@ -441,9 +442,12 @@ describe("buildInboundUserContextPrefix - timezone handling", () => {
     const conversationInfo = parseConversationInfoPayload(text);
     // Invalid IANA → resolveTimezone returns undefined → falls back to system timezone → timestamp still present
     expect(conversationInfo["timestamp"]).toEqual(expect.any(String));
+    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining("Invalid envelopeTimezone value"));
+    warnSpy.mockRestore();
   });
 
   it("falls back to system timezone when userTimezone is invalid IANA string", () => {
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
     const cfg = {
       agents: { defaults: { envelopeTimezone: "user", userTimezone: "Not/A_ValidZone" } },
     } as unknown as OpenClawConfig;
@@ -451,5 +455,7 @@ describe("buildInboundUserContextPrefix - timezone handling", () => {
     const conversationInfo = parseConversationInfoPayload(text);
     // Invalid userTimezone → resolveTimezone returns undefined → system timezone used → timestamp still present
     expect(conversationInfo["timestamp"]).toEqual(expect.any(String));
+    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining("Invalid userTimezone value"));
+    warnSpy.mockRestore();
   });
 });
