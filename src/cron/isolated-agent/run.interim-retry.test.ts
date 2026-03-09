@@ -80,6 +80,18 @@ describe("runCronIsolatedAgentTurn — interim ack retry", () => {
     await runTurnAndExpectOk(1, 1);
   });
 
+  it("does not retry when the first turn completed silently with NO_REPLY", async () => {
+    usePayloadTextExtraction();
+    runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: undefined,
+      silentReply: true,
+      meta: { agentMeta: { usage: { input: 10, output: 20 } } },
+    });
+
+    mockFallbackPassthrough();
+    await runTurnAndExpectOk(1, 1);
+  });
+
   it("does not retry when descendants were spawned in this run even if they already settled", async () => {
     usePayloadTextExtraction();
     runEmbeddedPiAgentMock.mockResolvedValueOnce({

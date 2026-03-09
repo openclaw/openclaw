@@ -1,5 +1,6 @@
 import "./run.overflow-compaction.mocks.shared.js";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.js";
 
 const runtimePluginMocks = vi.hoisted(() => ({
   ensureRuntimePluginsLoaded: vi.fn(),
@@ -126,5 +127,60 @@ describe("runEmbeddedPiAgent usage reporting", () => {
     // Check if total matches the last turn's total (200)
     // If the bug exists, it will likely be 350
     expect(usage?.total).toBe(200);
+  });
+
+  it("flags exact NO_REPLY completions as silent when payloads are suppressed", async () => {
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce({
+      aborted: false,
+      promptError: null,
+      timedOut: false,
+      sessionIdUsed: "test-session",
+      assistantTexts: [SILENT_REPLY_TOKEN],
+      lastAssistant: {
+        content: [{ type: "text", text: SILENT_REPLY_TOKEN }],
+        stopReason: "stop",
+      },
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    } as any);
+
+    const result = await runEmbeddedPiAgent({
+      sessionId: "test-session",
+      sessionKey: "test-key",
+      sessionFile: "/tmp/session.json",
+      workspaceDir: "/tmp/workspace",
+      prompt: "hello",
+      timeoutMs: 30000,
+      runId: "run-silent-reply",
+    });
+
+    expect(result.payloads).toBeUndefined();
+    expect(result.silentReply).toBe(true);
+  });
+
+  it("does not flag mixed assistant text as silent", async () => {
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce({
+      aborted: false,
+      promptError: null,
+      timedOut: false,
+      sessionIdUsed: "test-session",
+      assistantTexts: [`done ${SILENT_REPLY_TOKEN}`],
+      lastAssistant: {
+        content: [{ type: "text", text: `done ${SILENT_REPLY_TOKEN}` }],
+        stopReason: "stop",
+      },
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    } as any);
+
+    const result = await runEmbeddedPiAgent({
+      sessionId: "test-session",
+      sessionKey: "test-key",
+      sessionFile: "/tmp/session.json",
+      workspaceDir: "/tmp/workspace",
+      prompt: "hello",
+      timeoutMs: 30000,
+      runId: "run-mixed-reply",
+    });
+
+    expect(result.silentReply).toBeUndefined();
   });
 });
