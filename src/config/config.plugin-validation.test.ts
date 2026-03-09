@@ -1,9 +1,15 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { clearPluginDiscoveryCache } from "../plugins/discovery.js";
 import { clearPluginManifestRegistryCache } from "../plugins/manifest-registry.js";
-import { validateConfigObjectWithPlugins } from "./config.js";
+import { validateConfigObjectWithPlugins } from "./validation.js";
+
+vi.mock("@mariozechner/pi-ai/oauth", () => ({
+  getOAuthApiKey: vi.fn(),
+  getOAuthProviders: vi.fn(() => []),
+}));
 
 async function writePluginFixture(params: {
   dir: string;
@@ -39,6 +45,7 @@ describe("config plugin validation", () => {
   let bluebubblesPluginDir = "";
   let voiceCallSchemaPluginDir = "";
   const envSnapshot = {
+    OPENCLAW_PLUGIN_DISCOVERY_CACHE_MS: process.env.OPENCLAW_PLUGIN_DISCOVERY_CACHE_MS,
     OPENCLAW_STATE_DIR: process.env.OPENCLAW_STATE_DIR,
     OPENCLAW_PLUGIN_MANIFEST_CACHE_MS: process.env.OPENCLAW_PLUGIN_MANIFEST_CACHE_MS,
   };
@@ -103,7 +110,9 @@ describe("config plugin validation", () => {
       schema: voiceCallManifest.configSchema,
     });
     process.env.OPENCLAW_STATE_DIR = path.join(suiteHome, ".openclaw");
+    process.env.OPENCLAW_PLUGIN_DISCOVERY_CACHE_MS = "10000";
     process.env.OPENCLAW_PLUGIN_MANIFEST_CACHE_MS = "10000";
+    clearPluginDiscoveryCache();
     clearPluginManifestRegistryCache();
     // Warm the plugin manifest cache once so path-based validations can reuse
     // parsed manifests across test cases.
@@ -117,7 +126,14 @@ describe("config plugin validation", () => {
 
   afterAll(async () => {
     await fs.rm(fixtureRoot, { recursive: true, force: true });
+    clearPluginDiscoveryCache();
     clearPluginManifestRegistryCache();
+    if (envSnapshot.OPENCLAW_PLUGIN_DISCOVERY_CACHE_MS === undefined) {
+      delete process.env.OPENCLAW_PLUGIN_DISCOVERY_CACHE_MS;
+    } else {
+      process.env.OPENCLAW_PLUGIN_DISCOVERY_CACHE_MS =
+        envSnapshot.OPENCLAW_PLUGIN_DISCOVERY_CACHE_MS;
+    }
     if (envSnapshot.OPENCLAW_STATE_DIR === undefined) {
       delete process.env.OPENCLAW_STATE_DIR;
     } else {
@@ -205,6 +221,72 @@ describe("config plugin validation", () => {
         ]),
       );
     }
+  });
+
+  it("requires clearing discovery cache before a newly installed local plugin can satisfy plugins.allow", async () => {
+    const installedPluginDir = path.join(
+      process.env.OPENCLAW_STATE_DIR ?? "",
+      "extensions",
+      "repro-openclaw-plugin",
+    );
+    await fs.rm(installedPluginDir, { force: true, recursive: true });
+    clearPluginDiscoveryCache();
+    clearPluginManifestRegistryCache();
+
+    const baseConfig = {
+      agents: { list: [{ id: "pi" }] },
+      plugins: {
+        allow: ["telegram"],
+      },
+    };
+    const warmed = validateInSuite(baseConfig);
+    expect(warmed.ok).toBe(true);
+
+    await writePluginFixture({
+      dir: installedPluginDir,
+      id: "repro-openclaw-plugin",
+      schema: { type: "object", additionalProperties: false, properties: {} },
+    });
+    await fs.writeFile(
+      path.join(installedPluginDir, "package.json"),
+      JSON.stringify({
+        name: "repro-openclaw-plugin",
+        version: "1.0.0",
+        openclaw: {
+          extensions: ["./index.js"],
+        },
+      }),
+      "utf-8",
+    );
+    clearPluginManifestRegistryCache();
+
+    const nextConfig = {
+      agents: { list: [{ id: "pi" }] },
+      plugins: {
+        allow: ["telegram", "repro-openclaw-plugin"],
+        entries: {
+          "repro-openclaw-plugin": { enabled: true },
+        },
+      },
+    };
+
+    const stale = validateInSuite(nextConfig);
+    expect(stale.ok).toBe(false);
+    if (!stale.ok) {
+      expect(stale.issues).toContainEqual({
+        path: "plugins.allow",
+        message: "plugin not found: repro-openclaw-plugin",
+      });
+    }
+
+    clearPluginDiscoveryCache();
+    clearPluginManifestRegistryCache();
+    const refreshed = validateInSuite(nextConfig);
+    expect(refreshed.ok).toBe(true);
+
+    await fs.rm(installedPluginDir, { force: true, recursive: true });
+    clearPluginDiscoveryCache();
+    clearPluginManifestRegistryCache();
   });
 
   it("surfaces plugin config diagnostics", async () => {

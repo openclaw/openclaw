@@ -7,6 +7,7 @@ import { loadConfig, writeConfigFile } from "../config/config.js";
 import { resolveStateDir } from "../config/paths.js";
 import { resolveArchiveKind } from "../infra/archive.js";
 import { type BundledPluginSource, findBundledPluginSource } from "../plugins/bundled-sources.js";
+import { clearPluginDiscoveryCache } from "../plugins/discovery.js";
 import { enablePluginInConfig } from "../plugins/enable.js";
 import { installPluginFromNpmSpec, installPluginFromPath } from "../plugins/install.js";
 import { recordPluginInstall } from "../plugins/installs.js";
@@ -260,6 +261,7 @@ async function runPluginInstallCommand(params: {
     // Plugin CLI registrars may have warmed the manifest registry cache before install;
     // force a rescan so config validation sees the freshly installed plugin.
     clearPluginManifestRegistryCache();
+    clearPluginDiscoveryCache();
 
     let next = enablePluginInConfig(cfg, result.pluginId).config;
     const source: "archive" | "path" = resolveArchiveKind(resolved) ? "archive" : "path";
@@ -339,6 +341,7 @@ async function runPluginInstallCommand(params: {
   }
   // Ensure config validation sees newly installed plugin(s) even if the cache was warmed at startup.
   clearPluginManifestRegistryCache();
+  clearPluginDiscoveryCache();
 
   let next = enablePluginInConfig(cfg, result.pluginId).config;
   const installRecord = resolvePinnedNpmInstallRecordForCli(
