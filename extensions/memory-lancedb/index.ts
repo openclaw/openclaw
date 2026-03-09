@@ -24,17 +24,28 @@ import {
 // ============================================================================
 
 let lancedbImportPromise: Promise<typeof import("@lancedb/lancedb")> | null = null;
+let importLanceDBModule: () => Promise<typeof import("@lancedb/lancedb")> = () =>
+  import("@lancedb/lancedb");
+
 const loadLanceDB = async (): Promise<typeof import("@lancedb/lancedb")> => {
   if (!lancedbImportPromise) {
-    lancedbImportPromise = import("@lancedb/lancedb");
+    lancedbImportPromise = importLanceDBModule();
   }
   try {
     return await lancedbImportPromise;
   } catch (err) {
+    lancedbImportPromise = null;
     // Common on macOS today: upstream package may not ship darwin native bindings.
     throw new Error(`memory-lancedb: failed to load LanceDB. ${String(err)}`, { cause: err });
   }
 };
+
+export function __setLanceDBImporterForTests(
+  importer: (() => Promise<typeof import("@lancedb/lancedb")>) | null,
+): void {
+  importLanceDBModule = importer ?? (() => import("@lancedb/lancedb"));
+  lancedbImportPromise = null;
+}
 
 type MemoryEntry = {
   id: string;
@@ -75,7 +86,12 @@ class MemoryDB {
     }
 
     this.initPromise = this.doInitialize();
-    return this.initPromise;
+    try {
+      await this.initPromise;
+    } catch (err) {
+      this.initPromise = null;
+      throw err;
+    }
   }
 
   private async doInitialize(): Promise<void> {
