@@ -300,6 +300,7 @@ export function createBrowserTool(opts?: {
       "Use snapshot+act for UI automation. Avoid act:wait by default; use only in exceptional cases when no reliable UI state exists.",
       `target selects browser location (sandbox|host|node). Default: ${targetDefault}.`,
       hostHint,
+      "When this tool returns images (screenshot/snapshot), the media is delivered automatically to the user. Do not re-send it via the message tool.",
     ].join(" "),
     parameters: BrowserToolSchema,
     execute: async (_toolCallId, args) => {

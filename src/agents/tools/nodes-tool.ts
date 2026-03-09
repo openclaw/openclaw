@@ -176,7 +176,7 @@ export function createNodesTool(options?: {
     label: "Nodes",
     name: "nodes",
     description:
-      "Discover and control paired nodes (status/describe/pairing/notify/camera/photos/screen/location/notifications/run/invoke).",
+      "Discover and control paired nodes (status/describe/pairing/notify/camera/photos/screen/location/notifications/run/invoke). When this tool captures images (camera/screen), the media is delivered automatically to the user. Do not re-send it via the message tool.",
     parameters: NodesToolSchema,
     execute: async (_toolCallId, args) => {
       const params = args as Record<string, unknown>;

@@ -83,7 +83,7 @@ export function createCanvasTool(options?: { config?: OpenClawConfig }): AnyAgen
     label: "Canvas",
     name: "canvas",
     description:
-      "Control node canvases (present/hide/navigate/eval/snapshot/A2UI). Use snapshot to capture the rendered UI.",
+      "Control node canvases (present/hide/navigate/eval/snapshot/A2UI). Use snapshot to capture the rendered UI. Snapshots are delivered automatically to the user. Do not re-send them via the message tool.",
     parameters: CanvasToolSchema,
     execute: async (_toolCallId, args) => {
       const params = args as Record<string, unknown>;
