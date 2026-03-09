@@ -62,6 +62,8 @@ export type ChatCommandDefinition = {
   argsMenu?: CommandArgMenuSpec | "auto";
   scope: CommandScope;
   category?: CommandCategory;
+  /** When set, only register as a native command on the listed providers. */
+  providers?: string[];
 };
 
 export type NativeCommandSpec = {
