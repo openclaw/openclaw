@@ -37,7 +37,13 @@ export function guardSessionManager(
   }
 
   const hookRunner = getGlobalHookRunner();
-  const hasSanitization = !!(opts?.cfg && opts?.agentId && opts?.sessionId);
+  // Helper/memory sessions have sessionId starting with "session-memory-" and
+  // sessionKey containing ":session-memory-". Sanitizing their transcript would
+  // re-enqueue the helper prompt itself, spawning recursive background work.
+  const isHelperSession =
+    (opts?.sessionId?.startsWith("session-memory-") ?? false) ||
+    (opts?.sessionKey?.includes(":session-memory-") ?? false);
+  const hasSanitization = !!(opts?.cfg && opts?.agentId && opts?.sessionId && !isHelperSession);
   const hasHooks = hookRunner?.hasHooks("before_message_write") ?? false;
   const beforeMessageWrite =
     hasSanitization || hasHooks
