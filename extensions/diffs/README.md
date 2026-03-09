@@ -16,7 +16,7 @@ The tool can return:
 - `details.filePath`: a local rendered artifact path when file rendering is requested
 - `details.fileFormat`: the rendered file format (`png` or `pdf`)
 
-When the plugin is enabled, it also ships a companion skill from `skills/` that guides when to use `diffs`. This guidance is delivered through normal skill loading, not unconditional prompt-hook injection on every turn.
+When the plugin is enabled, it also ships a companion skill from `skills/` and prepends stable tool-usage guidance into system-prompt space via `before_prompt_build`. The hook uses `prependSystemContext`, so the guidance stays out of user-prompt space while still being available every turn.
 
 This means an agent can:
 

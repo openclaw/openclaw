@@ -4,6 +4,7 @@ import { withEnv } from "../test-utils/env.js";
 import {
   listTelegramAccountIds,
   resetMissingDefaultWarnFlag,
+  resolveTelegramPollActionGateState,
   resolveDefaultTelegramAccountId,
   resolveTelegramAccount,
 } from "./accounts.js";
@@ -305,6 +306,26 @@ describe("resolveTelegramAccount allowFrom precedence", () => {
 
     expect(resolved.config.allowFrom).toBeUndefined();
     expect(resolved.config.groupAllowFrom).toBeUndefined();
+  });
+});
+
+describe("resolveTelegramPollActionGateState", () => {
+  it("requires both sendMessage and poll actions", () => {
+    const state = resolveTelegramPollActionGateState((key) => key !== "poll");
+    expect(state).toEqual({
+      sendMessageEnabled: true,
+      pollEnabled: false,
+      enabled: false,
+    });
+  });
+
+  it("returns enabled only when both actions are enabled", () => {
+    const state = resolveTelegramPollActionGateState(() => true);
+    expect(state).toEqual({
+      sendMessageEnabled: true,
+      pollEnabled: true,
+      enabled: true,
+    });
   });
 });
 

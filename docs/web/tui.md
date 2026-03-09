@@ -122,6 +122,12 @@ Other Gateway slash commands (for example, `/context`) are forwarded to the Gate
 - Ctrl+O toggles between collapsed/expanded views.
 - While tools run, partial updates stream into the same card.
 
+## Terminal colors
+
+- The TUI keeps assistant body text in your terminal's default foreground so dark and light terminals both stay readable.
+- If your terminal uses a light background and auto-detection is wrong, set `OPENCLAW_THEME=light` before launching `openclaw tui`.
+- To force the original dark palette instead, set `OPENCLAW_THEME=dark`.
+
 ## History + streaming
 
 - On connect, the TUI loads the latest history (default 200 messages).
