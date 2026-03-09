@@ -429,9 +429,15 @@ function detectAgentModelOverrides(config: Record<string, unknown>): AgentModelO
   return overrides;
 }
 
-function isDefaultModelPath(path: string): boolean {
-  const normalized = path.toLowerCase();
-  return normalized === "agents.defaults.model" || normalized === "agents.defaults.model.primary";
+const DEFAULT_MODEL_SEGMENTS: string[][] = [
+  ["agents", "defaults", "model"],
+  ["agents", "defaults", "model", "primary"],
+];
+
+function isDefaultModelSegments(segments: PathSegment[]): boolean {
+  return DEFAULT_MODEL_SEGMENTS.some(
+    (target) => segments.length === target.length && segments.every((seg, i) => seg === target[i]),
+  );
 }
 
 export function registerConfigCli(program: Command) {
@@ -488,7 +494,7 @@ export function registerConfigCli(program: Command) {
         await writeConfigFile(next);
         defaultRuntime.log(info(`Updated ${path}. Restart the gateway to apply.`));
 
-        if (isDefaultModelPath(path)) {
+        if (isDefaultModelSegments(parsedPath)) {
           const overrides = detectAgentModelOverrides(next);
           if (overrides.length > 0) {
             defaultRuntime.log("");
