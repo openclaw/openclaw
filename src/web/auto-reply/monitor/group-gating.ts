@@ -29,6 +29,7 @@ type ApplyGroupGatingParams = {
   sessionKey: string;
   baseMentionConfig: MentionConfig;
   authDir?: string;
+  accountId?: string;
   groupHistories: Map<string, GroupHistoryEntry[]>;
   groupHistoryLimit: number;
   groupMemberNames: Map<string, Map<string, string>>;
