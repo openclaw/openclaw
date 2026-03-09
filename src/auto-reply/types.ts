@@ -56,6 +56,9 @@ export type GetReplyOptions = {
   onToolStart?: (payload: { name?: string; phase?: string }) => Promise<void> | void;
   /** Called when auto-compaction starts, to deliver a user-visible notice immediately. */
   onCompactionNotice?: (payload: ReplyPayload) => Promise<void> | void;
+  /** Called when auto-compaction starts, before the notice, so channel dispatchers
+   *  can finalize in-flight preview messages and prepare for post-compaction content. */
+  onCompactionBoundary?: () => Promise<void> | void;
   /** Called when the actual model is selected (including after fallback).
    * Use this to get model/provider/thinkLevel for responsePrefix template interpolation. */
   onModelSelected?: (ctx: ModelSelectedContext) => void;
