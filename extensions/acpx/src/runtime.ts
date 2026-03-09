@@ -765,14 +765,17 @@ export class AcpxRuntime implements AcpRuntime {
     if (!wantsMcpProxy && !wantsCodexBootstrap) {
       return null;
     }
-    const cacheKey = JSON.stringify([
-      params.cwd,
-      params.agent,
-      params.codexBootstrap?.model ?? "",
-      params.codexBootstrap?.reasoningEffort ?? "",
-      wantsMcpProxy ? "mcp" : "nomcp",
-    ]);
-    const cached = this.agentCommandCache.get(cacheKey);
+    const shouldCache = !wantsCodexBootstrap;
+    const cacheKey = shouldCache
+      ? JSON.stringify([
+          params.cwd,
+          params.agent,
+          params.codexBootstrap?.model ?? "",
+          params.codexBootstrap?.reasoningEffort ?? "",
+          wantsMcpProxy ? "mcp" : "nomcp",
+        ])
+      : null;
+    const cached = cacheKey ? this.agentCommandCache.get(cacheKey) : undefined;
     if (cached) {
       return cached;
     }
@@ -794,7 +797,9 @@ export class AcpxRuntime implements AcpRuntime {
         mcpServers: toAcpMcpServers(this.config.mcpServers),
       });
     }
-    this.agentCommandCache.set(cacheKey, resolvedCommand);
+    if (cacheKey) {
+      this.agentCommandCache.set(cacheKey, resolvedCommand);
+    }
     return resolvedCommand;
   }
 

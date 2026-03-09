@@ -954,6 +954,10 @@ export class AcpSessionManager {
         runtimeStatus: restoreValidation.runtimeStatus,
         failOnStatusError: false,
       });
+      this.enforceConcurrentSessionLimit({
+        cfg: params.cfg,
+        sessionKey: params.sessionKey,
+      });
       this.setCachedRuntimeState(params.sessionKey, {
         runtime,
         handle: restored.handle,
@@ -1120,8 +1124,7 @@ export class AcpSessionManager {
       detailStatus === "missing" ||
       detailStatus === "no-session" ||
       summary === "status=missing" ||
-      summary === "status=no-session" ||
-      summary === "acpx status unavailable"
+      summary === "status=no-session"
     );
   }
 

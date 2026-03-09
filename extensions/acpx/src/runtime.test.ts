@@ -524,6 +524,61 @@ describe("AcpxRuntime", () => {
     }
   });
 
+  it("does not cache override-bearing Codex agent commands across later verbs", async () => {
+    process.env.MOCK_ACPX_CONFIG_SHOW_AGENTS = JSON.stringify({
+      codex: {
+        command: "npx custom-codex-acp-one",
+      },
+    });
+    try {
+      const { runtime, logPath } = await createMockRuntimeFixture();
+      const handle = await runtime.ensureSession({
+        sessionKey: "agent:codex:acp:codex-bootstrap-no-cache",
+        agent: "codex",
+        mode: "persistent",
+        env: {
+          OPENCLAW_ACPX_CODEX_BOOTSTRAP: Buffer.from(
+            JSON.stringify({
+              model: "gpt-5.3-codex-spark",
+              reasoningEffort: "high",
+            }),
+            "utf8",
+          ).toString("base64url"),
+        },
+      });
+
+      process.env.MOCK_ACPX_CONFIG_SHOW_AGENTS = JSON.stringify({
+        codex: {
+          command: "npx custom-codex-acp-two",
+        },
+      });
+      await runtime.getStatus({ handle });
+
+      const logs = await readMockRuntimeLogEntries(logPath);
+      const ensureArgs = (logs.find((entry) => entry.kind === "ensure")?.args as string[]) ?? [];
+      const statusArgs = (logs.find((entry) => entry.kind === "status")?.args as string[]) ?? [];
+
+      const extractTargetCommand = (args: string[]) => {
+        const agentFlagIndex = args.indexOf("--agent");
+        expect(agentFlagIndex).toBeGreaterThanOrEqual(0);
+        const rawAgentCommand = args[agentFlagIndex + 1];
+        const payloadMatch = rawAgentCommand.match(/--payload\s+([A-Za-z0-9_-]+)/);
+        expect(payloadMatch?.[1]).toBeDefined();
+        const payload = JSON.parse(
+          Buffer.from(String(payloadMatch?.[1]), "base64url").toString("utf8"),
+        ) as {
+          targetCommand: string;
+        };
+        return payload.targetCommand;
+      };
+
+      expect(extractTargetCommand(ensureArgs)).toContain("custom-codex-acp-one");
+      expect(extractTargetCommand(statusArgs)).toContain("custom-codex-acp-two");
+    } finally {
+      delete process.env.MOCK_ACPX_CONFIG_SHOW_AGENTS;
+    }
+  });
+
   it("reuses Codex bootstrap from the previous handle when re-ensuring without env", async () => {
     const { runtime, logPath } = await createMockRuntimeFixture();
     const firstHandle = await runtime.ensureSession({
