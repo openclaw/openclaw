@@ -277,7 +277,7 @@ function prepareAcpThreadBinding(params: {
       error: `Thread bindings are unavailable for ${policy.channel}.`,
     };
   }
-  if (!capabilities.bindSupported || !capabilities.placements.includes("child")) {
+  if (!capabilities.bindSupported) {
     return {
       ok: false,
       error: `Thread bindings do not support ACP thread spawn for ${policy.channel}.`,

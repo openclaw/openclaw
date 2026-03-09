@@ -441,6 +441,38 @@ describe("spawnAcpDirect", () => {
     expect(transcriptCalls[1]?.threadId).toBe("requester-thread");
   });
 
+  it("allows current-thread ACP spawns when the binding adapter advertises only current placement", async () => {
+    hoisted.sessionBindingCapabilitiesMock.mockReset().mockReturnValue({
+      adapterAvailable: true,
+      bindSupported: true,
+      unbindSupported: true,
+      placements: ["current"],
+    });
+
+    const result = await spawnAcpDirect(
+      {
+        task: "Continue the investigation",
+        agentId: "codex",
+        mode: "session",
+        thread: true,
+      },
+      {
+        agentSessionKey: "agent:main:main",
+        agentChannel: "discord",
+        agentAccountId: "default",
+        agentTo: "channel:requester-thread",
+        agentThreadId: "requester-thread",
+      },
+    );
+
+    expect(result.status).toBe("accepted");
+    expect(hoisted.sessionBindingBindMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        placement: "current",
+      }),
+    );
+  });
+
   it("does not inline delivery for fresh oneshot ACP runs", async () => {
     const result = await spawnAcpDirect(
       {
