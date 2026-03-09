@@ -111,6 +111,30 @@ function extractErrorCodeWithCause(err: unknown): string | undefined {
 }
 
 /**
+ * Checks if an error is a ciao mDNS assertion error (network interface change).
+ * These occur when network interfaces change unexpectedly (WiFi reconnect, sleep/wake)
+ * and should not crash the gateway.
+ */
+export function isCiaoMdnsAssertionError(err: unknown): boolean {
+  if (!err || typeof err !== "object") {
+    return false;
+  }
+  const name = "name" in err ? String(err.name) : "";
+  const code = "code" in err ? String(err.code) : "";
+  // Match AssertionError with ERR_ASSERTION code
+  if (name !== "AssertionError" && code !== "ERR_ASSERTION") {
+    return false;
+  }
+  const message = "message" in err && typeof err.message === "string" ? err.message : "";
+  // Match ciao's MDNSServer network interface assertion failures
+  return (
+    message.includes("IPv4 address changed") ||
+    message.includes("IPv6 address changed") ||
+    message.includes("Reached illegal state")
+  );
+}
+
+/**
  * Checks if an error is an AbortError.
  * These are typically intentional cancellations (e.g., during shutdown) and shouldn't crash.
  */
@@ -244,6 +268,15 @@ export function installUnhandledRejectionHandler(): void {
     if (isTransientNetworkError(reason)) {
       console.warn(
         "[openclaw] Non-fatal unhandled rejection (continuing):",
+        formatUncaughtError(reason),
+      );
+      return;
+    }
+
+    // ciao mDNS assertion errors during network interface changes should not crash
+    if (isCiaoMdnsAssertionError(reason)) {
+      console.warn(
+        "[openclaw] Suppressed ciao mDNS assertion error (network interface change):",
         formatUncaughtError(reason),
       );
       return;

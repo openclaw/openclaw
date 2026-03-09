@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { isAbortError, isTransientNetworkError } from "./unhandled-rejections.js";
+import {
+  isAbortError,
+  isCiaoMdnsAssertionError,
+  isTransientNetworkError,
+} from "./unhandled-rejections.js";
 
 describe("isAbortError", () => {
   it("returns true for error with name AbortError", () => {
@@ -179,4 +183,65 @@ describe("isTransientNetworkError", () => {
     const error = new AggregateError([new Error("regular error")], "Multiple errors");
     expect(isTransientNetworkError(error)).toBe(false);
   });
+});
+
+describe("isCiaoMdnsAssertionError", () => {
+  it("returns true for IPv4 address change assertion error", () => {
+    const error = Object.assign(
+      new Error("Reached illegal state! IPv4 address changed from undefined to defined!"),
+      { name: "AssertionError", code: "ERR_ASSERTION" },
+    );
+    expect(isCiaoMdnsAssertionError(error)).toBe(true);
+  });
+
+  it("returns true for IPv6 address change assertion error", () => {
+    const error = Object.assign(
+      new Error("Reached illegal state! IPv6 address changed from defined to undefined!"),
+      { name: "AssertionError", code: "ERR_ASSERTION" },
+    );
+    expect(isCiaoMdnsAssertionError(error)).toBe(true);
+  });
+
+  it("returns true for generic 'Reached illegal state' assertion", () => {
+    const error = Object.assign(new Error("Reached illegal state! Network interface changed"), {
+      name: "AssertionError",
+      code: "ERR_ASSERTION",
+    });
+    expect(isCiaoMdnsAssertionError(error)).toBe(true);
+  });
+
+  it("returns true with only name AssertionError", () => {
+    const error = { name: "AssertionError", message: "IPv4 address changed" };
+    expect(isCiaoMdnsAssertionError(error)).toBe(true);
+  });
+
+  it("returns true with only code ERR_ASSERTION", () => {
+    const error = { code: "ERR_ASSERTION", message: "IPv6 address changed" };
+    expect(isCiaoMdnsAssertionError(error)).toBe(true);
+  });
+
+  it("returns false for regular AssertionError without network message", () => {
+    const error = Object.assign(new Error("Some other assertion failed"), {
+      name: "AssertionError",
+      code: "ERR_ASSERTION",
+    });
+    expect(isCiaoMdnsAssertionError(error)).toBe(false);
+  });
+
+  it("returns false for non-assertion errors with similar message", () => {
+    const error = new Error("IPv4 address changed from undefined to defined!");
+    expect(isCiaoMdnsAssertionError(error)).toBe(false);
+  });
+
+  it("returns false for regular errors", () => {
+    expect(isCiaoMdnsAssertionError(new Error("Something went wrong"))).toBe(false);
+    expect(isCiaoMdnsAssertionError(new TypeError("Cannot read property"))).toBe(false);
+  });
+
+  it.each([null, undefined, "string error", 42, { message: "plain object" }])(
+    "returns false for non-ciao input %#",
+    (value) => {
+      expect(isCiaoMdnsAssertionError(value)).toBe(false);
+    },
+  );
 });
