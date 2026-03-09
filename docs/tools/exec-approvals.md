@@ -30,6 +30,9 @@ Trust model note:
 - Gateway-authenticated callers are trusted operators for that Gateway.
 - Paired nodes extend that trusted operator capability onto the node host.
 - Exec approvals reduce accidental execution risk, but are not a per-user auth boundary.
+- Approved node-host runs also bind canonical execution context: canonical cwd, pinned executable
+  path when applicable, and interpreter-style script operands. If a bound script changes after
+  approval but before execution, the run is denied instead of executing drifted content.
 
 macOS split:
 
@@ -152,13 +155,13 @@ Long options are validated fail-closed in safe-bin mode: unknown flags and ambig
 abbreviations are rejected.
 Denied flags by safe-bin profile:
 
-{/* SAFE_BIN_DENIED_FLAGS:START */}
+{/_ SAFE_BIN_DENIED_FLAGS:START _/}
 
 - `grep`: `--dereference-recursive`, `--directories`, `--exclude-from`, `--file`, `--recursive`, `-R`, `-d`, `-f`, `-r`
 - `jq`: `--argfile`, `--from-file`, `--library-path`, `--rawfile`, `--slurpfile`, `-L`, `-f`
 - `sort`: `--compress-program`, `--files0-from`, `--output`, `--random-source`, `--temporary-directory`, `-T`, `-o`
 - `wc`: `--files0-from`
-{/* SAFE_BIN_DENIED_FLAGS:END */}
+  {/_ SAFE_BIN_DENIED_FLAGS:END _/}
 
 Safe bins also force argv tokens to be treated as **literal text** at execution time (no globbing
 and no `$VARS` expansion) for stdin-only segments, so patterns like `*` or `$HOME/...` cannot be
