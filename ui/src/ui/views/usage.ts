@@ -42,6 +42,52 @@ import {
 
 export type { UsageColumnId, SessionLogEntry, SessionLogRole };
 
+function createEmptyUsageTotals(): UsageTotals {
+  return {
+    input: 0,
+    output: 0,
+    cacheRead: 0,
+    cacheWrite: 0,
+    totalTokens: 0,
+    totalCost: 0,
+    inputCost: 0,
+    outputCost: 0,
+    cacheReadCost: 0,
+    cacheWriteCost: 0,
+    missingCostEntries: 0,
+  };
+}
+
+function addUsageTotals(
+  acc: UsageTotals,
+  usage: {
+    input: number;
+    output: number;
+    cacheRead: number;
+    cacheWrite: number;
+    totalTokens: number;
+    totalCost: number;
+    inputCost?: number;
+    outputCost?: number;
+    cacheReadCost?: number;
+    cacheWriteCost?: number;
+    missingCostEntries?: number;
+  },
+): UsageTotals {
+  acc.input += usage.input;
+  acc.output += usage.output;
+  acc.cacheRead += usage.cacheRead;
+  acc.cacheWrite += usage.cacheWrite;
+  acc.totalTokens += usage.totalTokens;
+  acc.totalCost += usage.totalCost;
+  acc.inputCost += usage.inputCost ?? 0;
+  acc.outputCost += usage.outputCost ?? 0;
+  acc.cacheReadCost += usage.cacheReadCost ?? 0;
+  acc.cacheWriteCost += usage.cacheWriteCost ?? 0;
+  acc.missingCostEntries += usage.missingCostEntries ?? 0;
+  return acc;
+}
+
 export function renderUsage(props: UsageProps) {
   // Show loading skeleton if loading and no data yet
   if (props.loading && !props.totals) {
@@ -206,69 +252,15 @@ export function renderUsage(props: UsageProps) {
   // Compute totals from sessions
   const computeSessionTotals = (sessions: UsageSessionEntry[]): UsageTotals => {
     return sessions.reduce(
-      (acc, s) => {
-        if (s.usage) {
-          acc.input += s.usage.input;
-          acc.output += s.usage.output;
-          acc.cacheRead += s.usage.cacheRead;
-          acc.cacheWrite += s.usage.cacheWrite;
-          acc.totalTokens += s.usage.totalTokens;
-          acc.totalCost += s.usage.totalCost;
-          acc.inputCost += s.usage.inputCost ?? 0;
-          acc.outputCost += s.usage.outputCost ?? 0;
-          acc.cacheReadCost += s.usage.cacheReadCost ?? 0;
-          acc.cacheWriteCost += s.usage.cacheWriteCost ?? 0;
-          acc.missingCostEntries += s.usage.missingCostEntries ?? 0;
-        }
-        return acc;
-      },
-      {
-        input: 0,
-        output: 0,
-        cacheRead: 0,
-        cacheWrite: 0,
-        totalTokens: 0,
-        totalCost: 0,
-        inputCost: 0,
-        outputCost: 0,
-        cacheReadCost: 0,
-        cacheWriteCost: 0,
-        missingCostEntries: 0,
-      },
+      (acc, s) => (s.usage ? addUsageTotals(acc, s.usage) : acc),
+      createEmptyUsageTotals(),
     );
   };
 
   // Compute totals from daily data for selected days (more accurate than session totals)
   const computeDailyTotals = (days: string[]): UsageTotals => {
     const matchingDays = props.costDaily.filter((d) => days.includes(d.date));
-    return matchingDays.reduce(
-      (acc, d) => {
-        acc.input += d.input;
-        acc.output += d.output;
-        acc.cacheRead += d.cacheRead;
-        acc.cacheWrite += d.cacheWrite;
-        acc.totalTokens += d.totalTokens;
-        acc.totalCost += d.totalCost;
-        acc.inputCost += d.inputCost ?? 0;
-        acc.outputCost += d.outputCost ?? 0;
-        acc.cacheReadCost += d.cacheReadCost ?? 0;
-        acc.cacheWriteCost += d.cacheWriteCost ?? 0;
-        return acc;
-      },
-      {
-        input: 0,
-        output: 0,
-        cacheRead: 0,
-        cacheWrite: 0,
-        totalTokens: 0,
-        totalCost: 0,
-        inputCost: 0,
-        outputCost: 0,
-        cacheReadCost: 0,
-        cacheWriteCost: 0,
-        missingCostEntries: 0,
-      },
-    );
+    return matchingDays.reduce((acc, day) => addUsageTotals(acc, day), createEmptyUsageTotals());
   };
 
   // Compute display totals and count based on filters

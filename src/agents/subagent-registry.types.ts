@@ -13,6 +13,7 @@ export type SubagentRunRecord = {
   cleanup: "delete" | "keep";
   label?: string;
   model?: string;
+  workspaceDir?: string;
   runTimeoutSeconds?: number;
   spawnMode?: SpawnSubagentMode;
   createdAt: number;
@@ -30,6 +31,27 @@ export type SubagentRunRecord = {
   lastAnnounceRetryAt?: number;
   /** Terminal lifecycle reason recorded when the run finishes. */
   endedReason?: SubagentLifecycleEndedReason;
+  /** Run ended while descendants were still pending and should be re-invoked once they settle. */
+  wakeOnDescendantSettle?: boolean;
+  /**
+   * Latest frozen completion output captured for announce delivery.
+   * Seeded at first end transition and refreshed by later assistant turns
+   * while completion delivery is still pending for this session.
+   */
+  frozenResultText?: string | null;
+  /** Timestamp when frozenResultText was last captured. */
+  frozenResultCapturedAt?: number;
+  /**
+   * Fallback completion output preserved across wake continuation restarts.
+   * Used when a late wake run replies with NO_REPLY after the real final
+   * summary was already produced by the prior run.
+   */
+  fallbackFrozenResultText?: string | null;
+  /** Timestamp when fallbackFrozenResultText was preserved. */
+  fallbackFrozenResultCapturedAt?: number;
   /** Set after the subagent_ended hook has been emitted successfully once. */
   endedHookEmittedAt?: number;
+  attachmentsDir?: string;
+  attachmentsRootDir?: string;
+  retainAttachmentsOnKeep?: boolean;
 };

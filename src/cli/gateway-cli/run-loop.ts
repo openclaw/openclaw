@@ -75,7 +75,9 @@ export async function runGatewayLoop(params: {
         `full process restart failed (${respawn.detail ?? "unknown error"}); falling back to in-process restart`,
       );
     } else {
-      gatewayLog.info("restart mode: in-process restart (OPENCLAW_NO_RESPAWN)");
+      gatewayLog.info(
+        `restart mode: in-process restart (${respawn.detail ?? "OPENCLAW_NO_RESPAWN"})`,
+      );
     }
     if (hadLock && !(await reacquireLockForInProcessRestart())) {
       return;
@@ -104,7 +106,10 @@ export async function runGatewayLoop(params: {
     const forceExitMs = isRestart ? DRAIN_TIMEOUT_MS + SHUTDOWN_TIMEOUT_MS : SHUTDOWN_TIMEOUT_MS;
     const forceExitTimer = setTimeout(() => {
       gatewayLog.error("shutdown timed out; exiting without full cleanup");
-      exitProcess(0);
+      // Exit non-zero on restart timeout so launchd/systemd treats it as a
+      // failure and triggers a clean process restart instead of assuming the
+      // shutdown was intentional. Stop-timeout stays at 0 (graceful). (#36822)
+      exitProcess(isRestart ? 1 : 0);
     }, forceExitMs);
 
     void (async () => {

@@ -9,6 +9,7 @@ type NextcloudTalkSendOpts = {
   accountId?: string;
   replyTo?: string;
   verbose?: boolean;
+  cfg?: CoreConfig;
 };
 
 function resolveCredentials(
@@ -60,7 +61,7 @@ export async function sendMessageNextcloudTalk(
   text: string,
   opts: NextcloudTalkSendOpts = {},
 ): Promise<NextcloudTalkSendResult> {
-  const cfg = getNextcloudTalkRuntime().config.loadConfig() as CoreConfig;
+  const cfg = (opts.cfg ?? getNextcloudTalkRuntime().config.loadConfig()) as CoreConfig;
   const account = resolveNextcloudTalkAccount({
     cfg,
     accountId: opts.accountId,
@@ -175,7 +176,7 @@ export async function sendReactionNextcloudTalk(
   reaction: string,
   opts: Omit<NextcloudTalkSendOpts, "replyTo"> = {},
 ): Promise<{ ok: true }> {
-  const cfg = getNextcloudTalkRuntime().config.loadConfig() as CoreConfig;
+  const cfg = (opts.cfg ?? getNextcloudTalkRuntime().config.loadConfig()) as CoreConfig;
   const account = resolveNextcloudTalkAccount({
     cfg,
     accountId: opts.accountId,

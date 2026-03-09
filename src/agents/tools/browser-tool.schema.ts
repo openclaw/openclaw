@@ -60,6 +60,7 @@ const BrowserActSchema = Type.Object({
   slowly: Type.Optional(Type.Boolean()),
   // press
   key: Type.Optional(Type.String()),
+  delayMs: Type.Optional(Type.Number()),
   // drag
   startRef: Type.Optional(Type.String()),
   endRef: Type.Optional(Type.String()),
@@ -72,7 +73,11 @@ const BrowserActSchema = Type.Object({
   height: Type.Optional(Type.Number()),
   // wait
   timeMs: Type.Optional(Type.Number()),
+  selector: Type.Optional(Type.String()),
+  url: Type.Optional(Type.String()),
+  loadState: Type.Optional(Type.String()),
   textGone: Type.Optional(Type.String()),
+  timeoutMs: Type.Optional(Type.Number()),
   // evaluate
   fn: Type.Optional(Type.String()),
 });
@@ -109,5 +114,25 @@ export const BrowserToolSchema = Type.Object({
   timeoutMs: Type.Optional(Type.Number()),
   accept: Type.Optional(Type.Boolean()),
   promptText: Type.Optional(Type.String()),
+  // Legacy flattened act params (preferred: request={...})
+  kind: Type.Optional(stringEnum(BROWSER_ACT_KINDS)),
+  doubleClick: Type.Optional(Type.Boolean()),
+  button: Type.Optional(Type.String()),
+  modifiers: Type.Optional(Type.Array(Type.String())),
+  text: Type.Optional(Type.String()),
+  submit: Type.Optional(Type.Boolean()),
+  slowly: Type.Optional(Type.Boolean()),
+  key: Type.Optional(Type.String()),
+  delayMs: Type.Optional(Type.Number()),
+  startRef: Type.Optional(Type.String()),
+  endRef: Type.Optional(Type.String()),
+  values: Type.Optional(Type.Array(Type.String())),
+  fields: Type.Optional(Type.Array(Type.Object({}, { additionalProperties: true }))),
+  width: Type.Optional(Type.Number()),
+  height: Type.Optional(Type.Number()),
+  timeMs: Type.Optional(Type.Number()),
+  textGone: Type.Optional(Type.String()),
+  loadState: Type.Optional(Type.String()),
+  fn: Type.Optional(Type.String()),
   request: Type.Optional(BrowserActSchema),
 });
