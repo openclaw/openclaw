@@ -368,6 +368,23 @@ function canonicalPairKey(signatureA: string, signatureB: string): string {
 }
 
 /**
+ * Return a non-stale view of the tool call history.  When the most recent
+ * entry is older than STALE_HISTORY_GAP_MS the entire history is considered
+ * stale (e.g. leftover from a previous heartbeat cycle) and an empty array
+ * is returned.  This helper is shared between detection and recording so that
+ * stale entries never influence loop decisions regardless of call ordering.
+ */
+function effectiveHistory(
+  history: NonNullable<SessionState["toolCallHistory"]>,
+): NonNullable<SessionState["toolCallHistory"]> {
+  const lastEntry = history.at(-1);
+  if (lastEntry && Date.now() - lastEntry.timestamp > STALE_HISTORY_GAP_MS) {
+    return [];
+  }
+  return history;
+}
+
+/**
  * Detect if an agent is stuck in a repetitive tool call loop.
  * Checks if the same tool+params combination has been called excessively.
  */
@@ -381,7 +398,9 @@ export function detectToolCallLoop(
   if (!resolvedConfig.enabled) {
     return { stuck: false };
   }
-  const history = state.toolCallHistory ?? [];
+  // Use staleness-aware view so stale history from a previous heartbeat
+  // cycle never causes false-positive warnings (#40144).
+  const history = effectiveHistory(state.toolCallHistory ?? []);
   const currentHash = hashToolCall(toolName, params);
   const noProgress = getNoProgressStreak(history, toolName, currentHash);
   const noProgressStreak = noProgress.count;
@@ -514,10 +533,7 @@ export function recordToolCall(
 
   // Clear stale history when there's a significant time gap (e.g. between
   // heartbeat cycles) to prevent false positive loop detection (#40144).
-  const lastEntry = state.toolCallHistory.at(-1);
-  if (lastEntry && Date.now() - lastEntry.timestamp > STALE_HISTORY_GAP_MS) {
-    state.toolCallHistory = [];
-  }
+  state.toolCallHistory = effectiveHistory(state.toolCallHistory);
 
   state.toolCallHistory.push({
     toolName,

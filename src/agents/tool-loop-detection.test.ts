@@ -651,5 +651,32 @@ describe("tool-loop-detection", () => {
       // history from both cycles would be combined
       expect(secondResult.stuck).toBe(false);
     });
+
+    it("detectToolCallLoop ignores stale history even when called before recordToolCall (real call ordering)", () => {
+      const state = createState();
+      const config = enabledLoopDetectionConfig;
+
+      // First heartbeat: drive history to WARNING_THRESHOLD with real ordering
+      // (detect before record, mirroring runBeforeToolCallHook).
+      for (let i = 0; i < WARNING_THRESHOLD; i += 1) {
+        detectToolCallLoop(state, "message", { text: "status" }, config);
+        recordToolCall(state, "message", { text: "status" }, `hb1-${i}`, config);
+      }
+
+      // Backdate all entries to simulate time passing between heartbeat cycles
+      for (const entry of state.toolCallHistory ?? []) {
+        entry.timestamp = Date.now() - STALE_HISTORY_GAP_MS - 1000;
+      }
+
+      // Second heartbeat: the FIRST detectToolCallLoop call must not see the
+      // stale WARNING_THRESHOLD entries — this is the exact scenario that was
+      // a false positive before the staleness guard was added to the detector.
+      const result = detectToolCallLoop(state, "message", { text: "status" }, config);
+      expect(result.stuck).toBe(false);
+
+      // After detection, record the call to mirror real ordering.
+      recordToolCall(state, "message", { text: "status" }, "hb2-0", config);
+      expect(state.toolCallHistory?.length).toBe(1);
+    });
   });
 });
