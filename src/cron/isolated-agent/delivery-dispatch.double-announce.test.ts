@@ -11,6 +11,7 @@
  */
 
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.js";
 
 // --- Module mocks (must be hoisted before imports) ---
 
@@ -253,6 +254,20 @@ describe("dispatchCronDelivery — double-announce guard", () => {
     expect(state.delivered).toBe(true);
 
     expect(deliverOutboundPayloads).toHaveBeenCalledTimes(1);
+  });
+
+  it("treats synthesized NO_REPLY as an intentional delivered completion", async () => {
+    vi.mocked(countActiveDescendantRuns).mockReturnValue(0);
+    vi.mocked(isLikelyInterimCronMessage).mockReturnValue(false);
+
+    const params = makeBaseParams({ synthesizedText: SILENT_REPLY_TOKEN });
+    const state = await dispatchCronDelivery(params);
+
+    expect(state.result?.status).toBe("ok");
+    expect(state.result?.delivered).toBe(true);
+    expect(state.delivered).toBe(false);
+    expect(state.deliveryAttempted).toBe(false);
+    expect(deliverOutboundPayloads).not.toHaveBeenCalled();
   });
 
   it("no delivery requested means deliveryAttempted stays false and no delivery is sent", async () => {

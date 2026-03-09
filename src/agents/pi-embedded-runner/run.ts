@@ -1,6 +1,7 @@
 import { randomBytes } from "node:crypto";
 import fs from "node:fs/promises";
 import type { ThinkLevel } from "../../auto-reply/thinking.js";
+import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.js";
 import {
   ensureContextEnginesInitialized,
   resolveContextEngine,
@@ -202,6 +203,24 @@ const toNormalizedUsage = (usage: UsageAccumulator) => {
     total: lastPromptTokens + usage.output || undefined,
   };
 };
+
+function resolveSilentReply(params: {
+  assistantTexts: string[];
+  payloadCount: number;
+  stopReason?: string;
+}): boolean {
+  if (params.payloadCount > 0 || params.stopReason === "error") {
+    return false;
+  }
+  for (let idx = params.assistantTexts.length - 1; idx >= 0; idx -= 1) {
+    const text = params.assistantTexts[idx];
+    if (!text?.trim()) {
+      continue;
+    }
+    return isSilentReplyText(text, SILENT_REPLY_TOKEN);
+  }
+  return false;
+}
 
 function resolveActiveErrorContext(params: {
   lastAssistant: { provider?: string; model?: string } | undefined;
@@ -1418,6 +1437,11 @@ export async function runEmbeddedPiAgent(
             inlineToolResultsAllowed: false,
             didSendViaMessagingTool: attempt.didSendViaMessagingTool,
           });
+          const silentReply = resolveSilentReply({
+            assistantTexts: attempt.assistantTexts,
+            payloadCount: payloads.length,
+            stopReason: lastAssistant?.stopReason,
+          });
 
           // Timeout aborts can leave the run without any assistant payloads.
           // Emit an explicit timeout error instead of silently completing, so
@@ -1464,6 +1488,7 @@ export async function runEmbeddedPiAgent(
           }
           return {
             payloads: payloads.length ? payloads : undefined,
+            silentReply: silentReply || undefined,
             meta: {
               durationMs: Date.now() - started,
               agentMeta,

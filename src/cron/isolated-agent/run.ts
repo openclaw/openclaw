@@ -36,6 +36,7 @@ import {
   normalizeVerboseLevel,
   supportsXHighThinking,
 } from "../../auto-reply/thinking.js";
+import { SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.js";
 import type { CliDeps } from "../../cli/outbound-send-deps.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import {
@@ -658,6 +659,7 @@ export async function runCronIsolatedAgentTurn(params: {
       const shouldRetryInterimAck =
         !interimRunResult.meta?.error &&
         !interimRunResult.didSendViaMessagingTool &&
+        !interimRunResult.silentReply &&
         !interimPayloadHasStructuredContent &&
         !interimPayloads.some((payload) => payload?.isError === true) &&
         countActiveDescendantRuns(agentSessionKey) === 0 &&
@@ -765,6 +767,10 @@ export async function runCronIsolatedAgentTurn(params: {
       : synthesizedText
         ? [{ text: synthesizedText }]
         : [];
+  if (finalRunResult.silentReply && !synthesizedText) {
+    synthesizedText = SILENT_REPLY_TOKEN;
+    deliveryPayloads = [{ text: SILENT_REPLY_TOKEN }];
+  }
   const deliveryPayloadHasStructuredContent =
     Boolean(deliveryPayload?.mediaUrl) ||
     (deliveryPayload?.mediaUrls?.length ?? 0) > 0 ||

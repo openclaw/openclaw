@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import "./test-helpers/fast-coding-tools.js";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 import type { OpenClawConfig } from "../config/config.js";
 
 function createMockUsage(input: number, output: number) {
@@ -33,7 +34,12 @@ vi.mock("@mariozechner/pi-ai", async () => {
 
   const buildAssistantMessage = (model: { api: string; provider: string; id: string }) => ({
     role: "assistant" as const,
-    content: [{ type: "text" as const, text: "ok" }],
+    content: [
+      {
+        type: "text" as const,
+        text: model.id === "mock-silent" ? SILENT_REPLY_TOKEN : "ok",
+      },
+    ],
     stopReason: "stop" as const,
     api: model.api,
     provider: model.provider,
@@ -287,5 +293,29 @@ describe("runEmbeddedPiAgent", () => {
 
     expect(result.meta.error).toBeUndefined();
     expect(result.payloads?.length ?? 0).toBeGreaterThan(0);
+    expect(result.silentReply).toBeUndefined();
+  });
+
+  it("marks exact NO_REPLY completions as silent without emitting payloads", async () => {
+    const sessionFile = nextSessionFile();
+    const cfg = makeOpenAiConfig(["mock-silent"]);
+    const sessionKey = nextSessionKey();
+    const result = await runEmbeddedPiAgent({
+      sessionId: "session:test",
+      sessionKey,
+      sessionFile,
+      workspaceDir,
+      config: cfg,
+      prompt: "silence please",
+      provider: "openai",
+      model: "mock-silent",
+      timeoutMs: 5_000,
+      agentDir,
+      runId: nextRunId("silent-turn"),
+      enqueue: immediateEnqueue,
+    });
+
+    expect(result.payloads).toBeUndefined();
+    expect(result.silentReply).toBe(true);
   });
 });
