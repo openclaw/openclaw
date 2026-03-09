@@ -2,21 +2,16 @@
 
 ## Summary
 
-This proposal adds a new optional `computer-use` plugin for OpenClaw.
+This proposal adds a narrow, plugin-first `computer-use` integration seam for
+OpenClaw.
 
-The plugin does not try to turn OpenClaw core into a full desktop automation
-runtime. Instead, it introduces a narrow integration seam:
+It does not turn OpenClaw core into a desktop runtime. Instead, it keeps the
+responsibility split explicit:
 
-- `GPT-5.4` handles UI understanding and next-step action decisions
-- an external executor service handles screenshots, mouse/keyboard execution,
-  confirmation gates, isolation, and state collection
-- OpenClaw orchestrates the task and exposes the capability as an optional tool
-
-This keeps the architecture aligned with OpenClaw's current direction:
-
-- core stays lean
-- risky computer control remains explicit and operator-controlled
-- experimental desktop automation can evolve as a plugin first
+- `gpt-5.4` handles UI understanding and next-step action planning
+- an external executor handles screenshots, execution, confirmation, and
+  isolation
+- OpenClaw remains the orchestration and policy layer
 
 ## Why Now
 
@@ -34,33 +29,24 @@ gets blurry. This proposal picks a clearer split:
 - the executor acts as the low-level operator
 - OpenClaw acts as the orchestration and policy layer
 
-OpenClaw already lists "better computer-use and agent harness capabilities" as
-an explicit next priority. However, there is not yet a focused integration path
-for `gpt-5.4` computer use that preserves OpenClaw's plugin-first and
-safe-default posture.
+OpenClaw already lists better computer-use and agent harness capabilities as a
+next priority. What is missing is a focused path for `gpt-5.4` computer use
+that keeps optional capability in plugins and keeps risky execution outside
+core.
 
 ## Problem
 
-Today, users who want to combine OpenClaw orchestration with high-capability
-computer use typically have to build a parallel loop outside OpenClaw:
-
-- OpenClaw can orchestrate tasks and subagents
-- computer use loops live in separate local services or custom scripts
-- the coupling point is ad hoc
-
-That makes it harder to:
-
-- keep task state visible inside OpenClaw workflows
-- add confirmation or kill switches consistently
-- swap executors without rewriting orchestration code
-- evolve toward a supported pattern that maintainers can reason about
+Today, users who want OpenClaw orchestration plus high-capability computer use
+usually have to build an ad hoc side loop outside OpenClaw. That makes it
+harder to keep state visible in workflows, enforce confirmation consistently,
+and evolve toward a maintainable pattern.
 
 ## Goals
 
-- Add a plugin-first integration point for `gpt-5.4` computer-use workflows
-- Keep execution out of core and behind an explicit executor boundary
+- Add a plugin-first seam for `gpt-5.4` computer-use workflows
+- Keep execution outside core behind an explicit executor boundary
 - Support human-in-the-loop confirmation for risky actions
-- Make the first contribution small enough for review and iteration
+- Keep the first PR small enough for review and iteration
 
 ## Non-Goals
 
@@ -73,22 +59,19 @@ That makes it harder to:
 
 ### Layer split
 
-1. OpenClaw plugin layer
+1. Plugin layer
    - exposes an optional `computer-use` tool
    - validates task parameters
    - forwards work to an executor service
-   - returns task status and structured results back into the agent loop
+   - returns structured task state into the agent loop
 
-2. External executor layer
-   - owns screenshot capture
-   - owns action execution
-   - owns confirmation gates for destructive steps
-   - owns replay, retries, and environment isolation
+2. Executor layer
+   - owns screenshots, action execution, confirmation, retries, and isolation
    - may call OpenAI Responses API with `model: "gpt-5.4"` and
      `tools: [{ type: "computer" }]`
 
 3. Model layer
-   - uses `gpt-5.4` for UI understanding and next-step action planning
+   - uses `gpt-5.4` for UI understanding and next-step planning
    - does not directly control the host machine
 
 ### Why plugin first
@@ -108,14 +91,10 @@ The first contribution should stay narrow:
 
 1. Add `extensions/computer-use`
 2. Register an optional `computer-use` tool
-3. Support four actions:
-   - `start`
-   - `status`
-   - `confirm`
-   - `cancel`
+3. Support `start`, `status`, `confirm`, and `cancel`
 4. Define a simple executor HTTP contract
-5. Default model targeting to `openai/gpt-5.4`
-6. Require explicit plugin enablement and explicit tool allowlisting
+5. Default targeting to `openai/gpt-5.4`
+6. Require explicit plugin enablement and tool allowlisting
 
 ## Executor HTTP Contract
 
@@ -167,15 +146,13 @@ Request body:
 
 The plugin must not hide the risk of computer use.
 
-Required principles:
-
 - plugin disabled by default
 - tool optional by default
 - explicit model target
 - explicit executor endpoint
 - executor auth token support
 - confirmation support for risky actions
-- no direct host execution inside the plugin itself
+- no direct host execution inside the plugin
 
 ## Why Not Put This In Core Yet
 
@@ -192,7 +169,7 @@ Those concerns are better validated outside core first.
 
 ## Validation Plan
 
-The first external validation should use a controlled workflow:
+First validation should stay controlled:
 
 - one machine
 - one app
@@ -201,18 +178,18 @@ The first external validation should use a controlled workflow:
 
 Success metrics:
 
-- end-to-end task success rate
-- number of human confirmations required
+- task success rate
+- human confirmations required
 - mean steps per task
 - mean latency per task
-- failure modes observed
+- observed failure modes
 
 ## Proposed Upstream Sequence
 
-1. GitHub Discussion with this design
-2. Plugin skeleton PR only
-3. Follow-up PR for docs and examples
-4. Separate repo or follow-up PR for a reference executor
+1. GitHub Discussion
+2. Plugin scaffold PR only
+3. Follow-up docs and examples
+4. Separate reference executor outside core
 
 ## Open Questions
 
