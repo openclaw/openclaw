@@ -46,6 +46,9 @@ export function attachMediaRoutes(
       } = await readFileWithinRoot({
         rootDir: mediaDir,
         relativePath: id,
+        // Resolve the live limit per request so config/runtime snapshot updates
+        // apply without restarting the media server. In steady state loadConfig()
+        // is cache-backed, so this should not normally hit disk on each request.
         maxBytes: resolveMediaMaxBytes(),
       });
       if (Date.now() - stat.mtimeMs > ttlMs) {

@@ -111,6 +111,31 @@ export function resolveMediaMaxBytes(config?: OpenClawConfig): number {
   return MEDIA_MAX_BYTES;
 }
 
+function formatMediaLimitBytes(bytes: number): string {
+  if (!Number.isFinite(bytes) || bytes <= 0) {
+    return `${bytes}B`;
+  }
+  const units = [
+    { label: "TB", size: 1024 ** 4 },
+    { label: "GB", size: 1024 ** 3 },
+    { label: "MB", size: 1024 ** 2 },
+    { label: "KB", size: 1024 },
+  ] as const;
+  for (const unit of units) {
+    if (bytes < unit.size) {
+      continue;
+    }
+    const value = bytes / unit.size;
+    const fractionDigits = value >= 10 || Number.isInteger(value) ? 0 : 1;
+    return `${value.toFixed(fractionDigits)}${unit.label}`;
+  }
+  return `${bytes}B`;
+}
+
+function mediaExceedsLimitMessage(maxBytes: number): string {
+  return `Media exceeds ${formatMediaLimitBytes(maxBytes)} limit`;
+}
+
 export async function ensureMediaDir() {
   const mediaDir = resolveMediaDir();
   await fs.mkdir(mediaDir, { recursive: true, mode: 0o700 });
@@ -251,9 +276,7 @@ async function downloadToFile(
               sniffLen += chunk.length;
             }
             if (total > maxBytes) {
-              req.destroy(
-                new Error(`Media exceeds ${(maxBytes / (1024 * 1024)).toFixed(0)}MB limit`),
-              );
+              req.destroy(new Error(mediaExceedsLimitMessage(maxBytes)));
             }
           });
           pipeline(res, out)
@@ -313,11 +336,9 @@ function toSaveMediaSourceError(err: SafeOpenError, maxBytes: number): SaveMedia
         cause: err,
       });
     case "too-large":
-      return new SaveMediaSourceError(
-        "too-large",
-        `Media exceeds ${(maxBytes / (1024 * 1024)).toFixed(0)}MB limit`,
-        { cause: err },
-      );
+      return new SaveMediaSourceError("too-large", mediaExceedsLimitMessage(maxBytes), {
+        cause: err,
+      });
     case "not-found":
       return new SaveMediaSourceError("not-found", "Media path does not exist", { cause: err });
     case "outside-workspace":
@@ -384,7 +405,7 @@ export async function saveMediaBuffer(
   originalFilename?: string,
 ): Promise<SavedMedia> {
   if (buffer.byteLength > maxBytes) {
-    throw new Error(`Media exceeds ${(maxBytes / (1024 * 1024)).toFixed(0)}MB limit`);
+    throw new Error(mediaExceedsLimitMessage(maxBytes));
   }
   const dir = path.join(resolveMediaDir(), subdir);
   await fs.mkdir(dir, { recursive: true, mode: 0o700 });

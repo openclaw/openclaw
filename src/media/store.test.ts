@@ -95,6 +95,25 @@ describe("media store", () => {
     });
   });
 
+  it("formats sub-megabyte limits accurately in buffer errors", async () => {
+    await withTempStore(async (store) => {
+      await expect(
+        store.saveMediaBuffer(Buffer.alloc(1025), undefined, "inbound", 1024),
+      ).rejects.toThrow("Media exceeds 1KB limit");
+    });
+  });
+
+  it("formats local-source limit errors without rounding down to whole MB", async () => {
+    await withTempStore(async (store, home) => {
+      const srcFile = path.join(home, "large-source.bin");
+      await fs.writeFile(srcFile, Buffer.alloc(2 * 1024 * 1024));
+
+      await expect(store.saveMediaSource(srcFile, undefined, "", 1_500_000)).rejects.toThrow(
+        "Media exceeds 1.4MB limit",
+      );
+    });
+  });
+
   it("retries buffer writes when cleanup prunes the target directory", async () => {
     await withTempStore(async (store) => {
       const originalWriteFile = fs.writeFile.bind(fs);
