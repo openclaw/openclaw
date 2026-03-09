@@ -174,11 +174,23 @@ export function stripInboundMetadata(text: string): string {
     result.push(line);
   }
 
-  // Strip the user message separator if present at the start of result.
+  // Skip any leading blank lines before checking for separator.
+  // The metadata blocks end with a blank line, so after stripping metadata
+  // we may have leading blanks before the "---" separator.
+  let separatorIndex = 0;
+  while (separatorIndex < result.length && result[separatorIndex]?.trim() === "") {
+    separatorIndex++;
+  }
+
+  // Strip the user message separator if present.
   // Only strip when we see the full pattern: "---" followed by "**User Message:**"
-  if (result[0]?.trim() === "---" && result[1]?.trim() === "**User Message:**") {
+  if (
+    separatorIndex < result.length &&
+    result[separatorIndex]?.trim() === "---" &&
+    result[separatorIndex + 1]?.trim() === "**User Message:**"
+  ) {
     // Remove the separator lines and any leading blank lines
-    result.splice(0, 2);
+    result.splice(0, separatorIndex + 2);
     while (result.length > 0 && result[0]?.trim() === "") {
       result.shift();
     }
