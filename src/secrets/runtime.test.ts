@@ -532,7 +532,7 @@ describe("secrets runtime snapshot", () => {
   });
 
   it("keeps active secrets runtime snapshots resolved after config writes", async () => {
-    if (os.platform() === "win32") {
+    if (allowInsecureTempSecretFile) {
       return;
     }
     await withTempHome("openclaw-secrets-runtime-write-", async (home) => {
@@ -576,7 +576,6 @@ describe("secrets runtime snapshot", () => {
                 source: "file",
                 path: secretFile,
                 mode: "json",
-                ...(allowInsecureTempSecretFile ? { allowInsecurePath: true } : {}),
               },
             },
           },
@@ -616,7 +615,7 @@ describe("secrets runtime snapshot", () => {
   });
 
   it("clears active secrets runtime state and throws when refresh fails after a write", async () => {
-    if (os.platform() === "win32") {
+    if (allowInsecureTempSecretFile) {
       return;
     }
     await withTempHome("openclaw-secrets-runtime-refresh-fail-", async (home) => {
@@ -675,7 +674,6 @@ describe("secrets runtime snapshot", () => {
                 source: "file",
                 path: secretFile,
                 mode: "json",
-                ...(allowInsecureTempSecretFile ? { allowInsecurePath: true } : {}),
               },
             },
           },
