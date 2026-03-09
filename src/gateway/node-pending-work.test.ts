@@ -3,7 +3,6 @@ import {
   acknowledgeNodePendingWork,
   drainNodePendingWork,
   enqueueNodePendingWork,
-  getNodePendingWorkStateCountForTests,
   resetNodePendingWorkForTests,
 } from "./node-pending-work.js";
 
@@ -43,25 +42,5 @@ describe("node pending work", () => {
 
     const afterAck = drainNodePendingWork("node-2");
     expect(afterAck.items.map((item) => item.id)).toEqual(["baseline-status"]);
-  });
-
-  it("keeps hasMore true when the baseline status item is deferred by maxItems", () => {
-    enqueueNodePendingWork({ nodeId: "node-3", type: "location.request" });
-
-    const drained = drainNodePendingWork("node-3", { maxItems: 1 });
-
-    expect(drained.items.map((item) => item.type)).toEqual(["location.request"]);
-    expect(drained.hasMore).toBe(true);
-  });
-
-  it("does not allocate state for drain-only nodes with no queued work", () => {
-    expect(getNodePendingWorkStateCountForTests()).toBe(0);
-
-    const drained = drainNodePendingWork("node-4");
-    const acked = acknowledgeNodePendingWork({ nodeId: "node-4", itemIds: ["baseline-status"] });
-
-    expect(drained.items.map((item) => item.id)).toEqual(["baseline-status"]);
-    expect(acked).toEqual({ revision: 0, removedItemIds: [] });
-    expect(getNodePendingWorkStateCountForTests()).toBe(0);
   });
 });

@@ -24,6 +24,7 @@ import { marketplaceHandlers } from "./server-methods/marketplace.js";
 import { mcpHandlers } from "./server-methods/mcp.js";
 import { memoryDashboardHandlers } from "./server-methods/memory-dashboard.js";
 import { modelsHandlers } from "./server-methods/models.js";
+import { nodePendingHandlers } from "./server-methods/nodes-pending.js";
 import { nodeHandlers } from "./server-methods/nodes.js";
 import { personasHandlers } from "./server-methods/personas.js";
 import { projectsHandlers } from "./server-methods/projects.js";
@@ -100,6 +101,7 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
   ...systemHandlers,
   ...updateHandlers,
   ...nodeHandlers,
+  ...nodePendingHandlers,
   ...pushHandlers,
   ...sendHandlers,
   ...usageHandlers,

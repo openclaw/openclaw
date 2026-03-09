@@ -45,7 +45,7 @@ const PRIORITY_RANK: Record<NodePendingWorkPriority, number> = {
 
 const stateByNodeId = new Map<string, NodePendingWorkState>();
 
-function getOrCreateState(nodeId: string): NodePendingWorkState {
+function getState(nodeId: string): NodePendingWorkState {
   let state = stateByNodeId.get(nodeId);
   if (!state) {
     state = {
@@ -106,7 +106,7 @@ export function enqueueNodePendingWork(params: {
     throw new Error("nodeId required");
   }
   const nowMs = Date.now();
-  const state = getOrCreateState(nodeId);
+  const state = getState(nodeId);
   pruneExpired(state, nowMs);
   const existing = [...state.itemsById.values()].find((item) => item.type === params.type);
   if (existing) {
@@ -134,25 +134,21 @@ export function drainNodePendingWork(nodeId: string, opts: DrainOptions = {}): D
     return { revision: 0, items: [], hasMore: false };
   }
   const nowMs = opts.nowMs ?? Date.now();
-  const state = stateByNodeId.get(normalizedNodeId);
-  const revision = state?.revision ?? 0;
-  if (state) {
-    pruneExpired(state, nowMs);
-  }
+  const state = getState(normalizedNodeId);
+  pruneExpired(state, nowMs);
   const maxItems = Math.min(MAX_ITEMS, Math.max(1, Math.trunc(opts.maxItems ?? DEFAULT_MAX_ITEMS)));
-  const explicitItems = state ? sortedItems(state) : [];
+  const explicitItems = sortedItems(state);
   const items = explicitItems.slice(0, maxItems);
   const hasExplicitStatus = explicitItems.some((item) => item.type === "status.request");
   const includeBaseline = opts.includeDefaultStatus !== false && !hasExplicitStatus;
   if (includeBaseline && items.length < maxItems) {
     items.push(makeBaselineStatusItem(nowMs));
   }
-  const explicitReturnedCount = items.filter((item) => item.id !== DEFAULT_STATUS_ITEM_ID).length;
-  const baselineIncluded = items.some((item) => item.id === DEFAULT_STATUS_ITEM_ID);
   return {
-    revision,
+    revision: state.revision,
     items,
-    hasMore: explicitItems.length > explicitReturnedCount || (includeBaseline && !baselineIncluded),
+    hasMore:
+      explicitItems.length > items.filter((item) => item.id !== DEFAULT_STATUS_ITEM_ID).length,
   };
 }
 
@@ -164,10 +160,7 @@ export function acknowledgeNodePendingWork(params: { nodeId: string; itemIds: st
   if (!nodeId) {
     return { revision: 0, removedItemIds: [] };
   }
-  const state = stateByNodeId.get(nodeId);
-  if (!state) {
-    return { revision: 0, removedItemIds: [] };
-  }
+  const state = getState(nodeId);
   const removedItemIds: string[] = [];
   for (const itemId of params.itemIds) {
     const trimmedId = itemId.trim();
@@ -186,8 +179,4 @@ export function acknowledgeNodePendingWork(params: { nodeId: string; itemIds: st
 
 export function resetNodePendingWorkForTests() {
   stateByNodeId.clear();
-}
-
-export function getNodePendingWorkStateCountForTests(): number {
-  return stateByNodeId.size;
 }
