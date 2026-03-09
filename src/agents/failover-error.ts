@@ -238,16 +238,18 @@ export function resolveFailoverReasonFromError(err: unknown): FailoverReason | n
   ) {
     return "timeout";
   }
-  if (isTimeoutError(err)) {
-    return "timeout";
-  }
-  // Walk into error cause chain (e.g. AbortError wrapping a rate-limit cause)
+  // Walk into error cause chain *before* timeout heuristics so that a specific
+  // cause (e.g. RESOURCE_EXHAUSTED wrapped in AbortError) overrides a parent
+  // message-based "timeout" guess from isTimeoutError.
   const cause = getErrorCause(err);
   if (cause && cause !== err) {
     const causeReason = resolveFailoverReasonFromError(cause);
     if (causeReason) {
       return causeReason;
     }
+  }
+  if (isTimeoutError(err)) {
+    return "timeout";
   }
   if (!message) {
     return null;
