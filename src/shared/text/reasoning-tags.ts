@@ -90,3 +90,77 @@ export function stripReasoningTagsFromText(
 
   return applyTrim(result, trimMode);
 }
+
+// --- Stateful streaming thinking-block filter ---
+// Tracks whether the stream is inside a <think>/<thinking>/<thought>/<antthinking>
+// block across incremental delta chunks, suppressing all content between the
+// opening and closing tags (inclusive).
+
+const OPEN_TAG_RE = /<\s*(?:think(?:ing)?|thought|antthinking)\b[^<>]*>/i;
+const CLOSE_TAG_RE = /<\s*\/\s*(?:think(?:ing)?|thought|antthinking)\b[^<>]*>/i;
+
+// Partial-tag detector: an incomplete `<...` at the end of a chunk that could
+// be the start of a thinking tag split across two deltas.
+const PARTIAL_OPEN_RE =
+  /<\s*(?:t(?:h(?:i(?:n(?:k(?:i(?:n(?:g)?)?)?)?)?)?)?|a(?:n(?:t(?:t(?:h(?:i(?:n(?:k(?:i(?:n(?:g)?)?)?)?)?)?)?)?)?)?)?$/i;
+const PARTIAL_CLOSE_RE =
+  /<\s*\/\s*(?:t(?:h(?:i(?:n(?:k(?:i(?:n(?:g)?)?)?)?)?)?)?|a(?:n(?:t(?:t(?:h(?:i(?:n(?:k(?:i(?:n(?:g)?)?)?)?)?)?)?)?)?)?)?$/i;
+
+export type StreamingThinkingFilter = {
+  /** Process a delta chunk — returns the portion safe to emit (may be empty). */
+  filter(delta: string): string;
+  /** Reset state (e.g. when a run ends). */
+  reset(): void;
+};
+
+export function createStreamingThinkingFilter(): StreamingThinkingFilter {
+  let insideBlock = false;
+  let pendingPartial = "";
+
+  function filter(delta: string): string {
+    const input = pendingPartial + delta;
+    pendingPartial = "";
+
+    if (!insideBlock) {
+      // Look for an opening tag in this chunk.
+      const openMatch = OPEN_TAG_RE.exec(input);
+      if (openMatch) {
+        insideBlock = true;
+        const before = input.slice(0, openMatch.index);
+        const after = input.slice(openMatch.index + openMatch[0].length);
+        // Recurse to handle closing tag (or more opens) in the remainder.
+        return before + filter(after);
+      }
+      // Check for a partial tag at the end that might complete in the next delta.
+      const partialMatch = PARTIAL_OPEN_RE.exec(input);
+      if (partialMatch && partialMatch[0].length > 0) {
+        pendingPartial = partialMatch[0];
+        return input.slice(0, partialMatch.index);
+      }
+      return input;
+    }
+
+    // Inside a thinking block — look for closing tag.
+    const closeMatch = CLOSE_TAG_RE.exec(input);
+    if (closeMatch) {
+      insideBlock = false;
+      const after = input.slice(closeMatch.index + closeMatch[0].length);
+      // Recurse so further opens/text in the remainder are processed.
+      return filter(after);
+    }
+    // Check for partial closing tag at the end.
+    const partialClose = PARTIAL_CLOSE_RE.exec(input);
+    if (partialClose && partialClose[0].length > 0) {
+      pendingPartial = partialClose[0];
+    }
+    // Suppress everything while inside the block.
+    return "";
+  }
+
+  function reset() {
+    insideBlock = false;
+    pendingPartial = "";
+  }
+
+  return { filter, reset };
+}

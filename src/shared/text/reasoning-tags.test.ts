@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { stripReasoningTagsFromText } from "./reasoning-tags.js";
+import { createStreamingThinkingFilter, stripReasoningTagsFromText } from "./reasoning-tags.js";
 
 describe("stripReasoningTagsFromText", () => {
   describe("basic functionality", () => {
@@ -220,5 +220,91 @@ describe("stripReasoningTagsFromText", () => {
         expect(stripReasoningTagsFromText(testCase.input, testCase.opts)).toBe(testCase.expected);
       }
     });
+  });
+});
+
+describe("createStreamingThinkingFilter", () => {
+  it("passes through text with no thinking tags", () => {
+    const f = createStreamingThinkingFilter();
+    expect(f.filter("Hello ")).toBe("Hello ");
+    expect(f.filter("world")).toBe("world");
+  });
+
+  it("suppresses content between streamed <think> and </think> tags", () => {
+    const f = createStreamingThinkingFilter();
+    expect(f.filter("<think>")).toBe("");
+    expect(f.filter("some reasoning")).toBe("");
+    expect(f.filter("more reasoning")).toBe("");
+    expect(f.filter("</think>Answer")).toBe("Answer");
+  });
+
+  it("suppresses content between <thinking> and </thinking> tags", () => {
+    const f = createStreamingThinkingFilter();
+    expect(f.filter("<thinking>")).toBe("");
+    expect(f.filter("reasoning")).toBe("");
+    expect(f.filter("</thinking>Result")).toBe("Result");
+  });
+
+  it("handles opening tag and content in a single chunk", () => {
+    const f = createStreamingThinkingFilter();
+    expect(f.filter("<think>reasoning</think>visible")).toBe("visible");
+  });
+
+  it("handles multiple thinking blocks across chunks", () => {
+    const f = createStreamingThinkingFilter();
+    expect(f.filter("A")).toBe("A");
+    expect(f.filter("<think>")).toBe("");
+    expect(f.filter("hidden")).toBe("");
+    expect(f.filter("</think>B")).toBe("B");
+    expect(f.filter("<think>")).toBe("");
+    expect(f.filter("also hidden")).toBe("");
+    expect(f.filter("</think>C")).toBe("C");
+  });
+
+  it("preserves text before an opening tag in the same chunk", () => {
+    const f = createStreamingThinkingFilter();
+    expect(f.filter("before<think>hidden")).toBe("before");
+    expect(f.filter("</think>after")).toBe("after");
+  });
+
+  it("handles tag split across two chunks", () => {
+    const f = createStreamingThinkingFilter();
+    expect(f.filter("text<thi")).toBe("text");
+    expect(f.filter("nk>reasoning")).toBe("");
+    expect(f.filter("</think>done")).toBe("done");
+  });
+
+  it("handles closing tag split across chunks", () => {
+    const f = createStreamingThinkingFilter();
+    expect(f.filter("<think>hidden")).toBe("");
+    expect(f.filter("</thi")).toBe("");
+    expect(f.filter("nk>visible")).toBe("visible");
+  });
+
+  it("resets state correctly", () => {
+    const f = createStreamingThinkingFilter();
+    f.filter("<think>hidden");
+    f.reset();
+    expect(f.filter("visible after reset")).toBe("visible after reset");
+  });
+
+  it("handles antthinking tags", () => {
+    const f = createStreamingThinkingFilter();
+    expect(f.filter("<antthinking>")).toBe("");
+    expect(f.filter("internal")).toBe("");
+    expect(f.filter("</antthinking>output")).toBe("output");
+  });
+
+  it("handles thought tags", () => {
+    const f = createStreamingThinkingFilter();
+    expect(f.filter("<thought>")).toBe("");
+    expect(f.filter("hmm")).toBe("");
+    expect(f.filter("</thought>answer")).toBe("answer");
+  });
+
+  it("handles inline thinking with leading newline preserved", () => {
+    const f = createStreamingThinkingFilter();
+    // Simulates the P2 scenario: delta with leading newline + thinking tags
+    expect(f.filter("\n<think>reasoning</think>After tool call")).toBe("\nAfter tool call");
   });
 });
