@@ -340,7 +340,9 @@ function resolveFallbackCandidates(params: {
 
 const lastProbeAttempt = new Map<string, number>();
 const MIN_PROBE_INTERVAL_MS = 30_000; // 30 seconds between probes per key
-const PROBE_MARGIN_MS = 2 * 60 * 1000;
+// No margin: respect cooldown end time exactly. clearExpiredCooldowns resets
+// profiles once cooldownUntil passes, so the next run proceeds normally.
+const PROBE_MARGIN_MS = 0;
 const PROBE_SCOPE_DELIMITER = "::";
 
 function resolveProbeThrottleKey(provider: string, agentDir?: string): string {
@@ -443,12 +445,11 @@ function resolveCooldownDecision(params: {
     };
   }
 
-  // For primary: try when requested model or when probe allows.
-  // For same-provider fallbacks: only relax cooldown on transient provider
-  // limits, which are often model-scoped and can recover on a sibling model.
-  const shouldAttemptDespiteCooldown =
-    (params.isPrimary && (!params.requestedModel || shouldProbe)) ||
-    (!params.isPrimary && (inferredReason === "rate_limit" || inferredReason === "overloaded"));
+  // Respect cooldown end time: only attempt if the probe check indicates the
+  // cooldown window has passed. With PROBE_MARGIN_MS=0 and clearExpiredCooldowns
+  // running first, this is effectively unreachable — the profile would already be
+  // cleared. Kept as a safety valve for edge-case timing.
+  const shouldAttemptDespiteCooldown = params.isPrimary && shouldProbe;
   if (!shouldAttemptDespiteCooldown) {
     return {
       type: "skip",
@@ -490,7 +491,6 @@ export async function runWithModelFallback<T>(params: {
 
   for (let i = 0; i < candidates.length; i += 1) {
     const candidate = candidates[i];
-    let runOptions: ModelFallbackRunOptions | undefined;
     if (authStore) {
       const profileIds = resolveAuthProfileOrder({
         cfg: params.cfg,
@@ -530,13 +530,6 @@ export async function runWithModelFallback<T>(params: {
         if (decision.markProbe) {
           lastProbeAttempt.set(probeThrottleKey, now);
         }
-        if (
-          decision.reason === "rate_limit" ||
-          decision.reason === "overloaded" ||
-          decision.reason === "billing"
-        ) {
-          runOptions = { allowTransientCooldownProbe: true };
-        }
       }
     }
 
@@ -544,7 +537,7 @@ export async function runWithModelFallback<T>(params: {
       run: params.run,
       ...candidate,
       attempts,
-      options: runOptions,
+      options: undefined,
     });
     if ("success" in attemptRun) {
       const notFoundAttempt =
