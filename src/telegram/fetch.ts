@@ -197,7 +197,7 @@ function resolveIpv4FallbackDispatcher(): EnvHttpProxyAgent {
   }
   ipv4FallbackDispatcher = new EnvHttpProxyAgent({
     connect: {
-      // Force IPv4 at the connector level for this retry only.
+      // Force IPv4 at the connector level for fallback requests.
       family: 4,
     },
   });
