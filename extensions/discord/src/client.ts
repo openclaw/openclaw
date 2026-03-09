@@ -35,11 +35,30 @@ function resolveToken(params: { accountId: string; fallbackToken?: string }) {
 /**
  * Install a proxied globalThis.fetch so that RequestClient (which uses
  * globalThis.fetch internally) routes all HTTP through the proxy.
- * Must be called before constructing RequestClient.
+ *
+ * Carbon's RequestClient calls bare `fetch()` with no way to inject a
+ * custom implementation, so overriding globalThis.fetch is the only
+ * viable approach. The override is installed **once** (idempotent) for
+ * the lifetime of the process. If a later call specifies a different
+ * proxy URL, a warning is logged — mixing per-account proxies is not
+ * supported with this strategy.
  */
+let _installedProxy: string | undefined;
+
 function installProxyFetch(proxyUrl?: string): void {
   const proxy = proxyUrl?.trim();
   if (!proxy) {
+    return;
+  }
+  if (_installedProxy) {
+    if (_installedProxy !== proxy) {
+      console.warn(
+        danger(
+          `discord: proxy already installed (${_installedProxy}); ignoring different proxy ${proxy}. ` +
+            "Carbon RequestClient does not support per-instance fetch — only one process-wide proxy is possible.",
+        ),
+      );
+    }
     return;
   }
   try {
@@ -49,6 +68,7 @@ function installProxyFetch(proxyUrl?: string): void {
         ...(init as Record<string, unknown>),
         dispatcher: agent,
       }) as unknown as Promise<Response>) as typeof fetch;
+    _installedProxy = proxy;
   } catch (err) {
     console.warn(danger(`discord: failed to create rest proxy agent: ${String(err)}`));
   }
