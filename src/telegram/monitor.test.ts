@@ -168,6 +168,7 @@ vi.mock("./bot.js", () => ({
     };
     return {
       on: vi.fn(),
+      use: vi.fn(),
       api,
       me: { username: "mybot" },
       init: initSpy,

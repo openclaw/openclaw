@@ -164,11 +164,22 @@ export class TelegramPollingSession {
     await this.#confirmPersistedOffset(bot);
 
     let lastGetUpdatesAt = Date.now();
+    // Track active update handlers so the watchdog does not treat
+    // "busy processing updates" as a stalled poller.
+    let activeUpdateHandlers = 0;
     bot.api.config.use((prev, method, payload, signal) => {
       if (method === "getUpdates") {
         lastGetUpdatesAt = Date.now();
       }
       return prev(method, payload, signal);
+    });
+    bot.use(async (_ctx, next) => {
+      activeUpdateHandlers += 1;
+      try {
+        await next();
+      } finally {
+        activeUpdateHandlers = Math.max(0, activeUpdateHandlers - 1);
+      }
     });
 
     const runner = run(bot, this.opts.runnerOptions);
@@ -200,6 +211,9 @@ export class TelegramPollingSession {
 
     const watchdog = setInterval(() => {
       if (this.opts.abortSignal?.aborted) {
+        return;
+      }
+      if (activeUpdateHandlers > 0) {
         return;
       }
       const elapsed = Date.now() - lastGetUpdatesAt;
