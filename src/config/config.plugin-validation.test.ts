@@ -37,6 +37,7 @@ describe("config plugin validation", () => {
   let badPluginDir = "";
   let enumPluginDir = "";
   let bluebubblesPluginDir = "";
+  let voiceCallSchemaPluginDir = "";
   const envSnapshot = {
     OPENCLAW_STATE_DIR: process.env.OPENCLAW_STATE_DIR,
     OPENCLAW_PLUGIN_MANIFEST_CACHE_MS: process.env.OPENCLAW_PLUGIN_MANIFEST_CACHE_MS,
@@ -83,6 +84,24 @@ describe("config plugin validation", () => {
       channels: ["bluebubbles"],
       schema: { type: "object" },
     });
+    voiceCallSchemaPluginDir = path.join(suiteHome, "voice-call-schema-plugin");
+    const voiceCallManifestPath = path.join(
+      process.cwd(),
+      "extensions",
+      "voice-call",
+      "openclaw.plugin.json",
+    );
+    const voiceCallManifest = JSON.parse(await fs.readFile(voiceCallManifestPath, "utf-8")) as {
+      configSchema?: Record<string, unknown>;
+    };
+    if (!voiceCallManifest.configSchema) {
+      throw new Error("voice-call manifest missing configSchema");
+    }
+    await writePluginFixture({
+      dir: voiceCallSchemaPluginDir,
+      id: "voice-call-schema-fixture",
+      schema: voiceCallManifest.configSchema,
+    });
     process.env.OPENCLAW_STATE_DIR = path.join(suiteHome, ".openclaw");
     process.env.OPENCLAW_PLUGIN_MANIFEST_CACHE_MS = "10000";
     clearPluginManifestRegistryCache();
@@ -91,7 +110,7 @@ describe("config plugin validation", () => {
     validateInSuite({
       plugins: {
         enabled: false,
-        load: { paths: [badPluginDir, bluebubblesPluginDir] },
+        load: { paths: [badPluginDir, bluebubblesPluginDir, voiceCallSchemaPluginDir] },
       },
     });
   });
@@ -227,6 +246,37 @@ describe("config plugin validation", () => {
       expect(issue?.allowedValues).toEqual(["markdown", "html"]);
       expect(issue?.allowedValuesHiddenCount).toBe(0);
     }
+  });
+
+  it("accepts voice-call webhookSecurity and streaming guard config fields", async () => {
+    const res = validateInSuite({
+      agents: { list: [{ id: "pi" }] },
+      plugins: {
+        enabled: true,
+        load: { paths: [voiceCallSchemaPluginDir] },
+        entries: {
+          "voice-call-schema-fixture": {
+            config: {
+              provider: "twilio",
+              webhookSecurity: {
+                allowedHosts: ["voice.example.com"],
+                trustForwardingHeaders: false,
+                trustedProxyIPs: ["127.0.0.1"],
+              },
+              streaming: {
+                enabled: true,
+                preStartTimeoutMs: 5000,
+                maxPendingConnections: 16,
+                maxPendingConnectionsPerIp: 4,
+                maxConnections: 64,
+              },
+              staleCallReaperSeconds: 180,
+            },
+          },
+        },
+      },
+    });
+    expect(res.ok).toBe(true);
   });
 
   it("accepts known plugin ids and valid channel/heartbeat enums", async () => {
