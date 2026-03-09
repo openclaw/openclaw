@@ -1,7 +1,6 @@
-import { Command } from "commander";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { BrowserParentOpts } from "./browser-cli-shared.js";
 import { registerBrowserStateCommands } from "./browser-cli-state.js";
+import { createBrowserProgram as createBrowserProgramShared } from "./browser-cli-test-helpers.js";
 
 const mocks = vi.hoisted(() => ({
   callBrowserRequest: vi.fn(async (..._args: unknown[]) => ({ ok: true })),
@@ -26,16 +25,8 @@ vi.mock("../runtime.js", () => ({
 }));
 
 describe("browser state option collisions", () => {
-  const createBrowserProgram = ({ withGatewayUrl = false } = {}) => {
-    const program = new Command();
-    const browser = program
-      .command("browser")
-      .option("--browser-profile <name>", "Browser profile")
-      .option("--json", "Output JSON", false);
-    if (withGatewayUrl) {
-      browser.option("--url <url>", "Gateway WebSocket URL");
-    }
-    const parentOpts = (cmd: Command) => cmd.parent?.opts?.() as BrowserParentOpts;
+  const createStateProgram = ({ withGatewayUrl = false } = {}) => {
+    const { program, browser, parentOpts } = createBrowserProgramShared({ withGatewayUrl });
     registerBrowserStateCommands(browser, parentOpts);
     return program;
   };
@@ -50,7 +41,7 @@ describe("browser state option collisions", () => {
   };
 
   const runBrowserCommand = async (argv: string[]) => {
-    const program = createBrowserProgram();
+    const program = createStateProgram();
     await program.parseAsync(["browser", ...argv], { from: "user" });
   };
 
@@ -83,7 +74,7 @@ describe("browser state option collisions", () => {
   });
 
   it("resolves --url via parent when addGatewayClientOptions captures it", async () => {
-    const program = createBrowserProgram({ withGatewayUrl: true });
+    const program = createStateProgram({ withGatewayUrl: true });
     await program.parseAsync(
       [
         "browser",
@@ -105,7 +96,7 @@ describe("browser state option collisions", () => {
   });
 
   it("inherits --url from parent when subcommand does not provide it", async () => {
-    const program = createBrowserProgram({ withGatewayUrl: true });
+    const program = createStateProgram({ withGatewayUrl: true });
     await program.parseAsync(
       ["browser", "--url", "https://inherited.example.com", "cookies", "set", "session", "abc"],
       { from: "user" },

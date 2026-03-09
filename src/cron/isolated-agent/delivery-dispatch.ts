@@ -7,7 +7,10 @@ import type { OpenClawConfig } from "../../config/config.js";
 import { resolveAgentMainSessionKey } from "../../config/sessions.js";
 import { deliverOutboundPayloads } from "../../infra/outbound/deliver.js";
 import { resolveAgentOutboundIdentity } from "../../infra/outbound/identity.js";
-import { resolveOutboundSessionRoute } from "../../infra/outbound/outbound-session.js";
+import {
+  ensureOutboundSessionEntry,
+  resolveOutboundSessionRoute,
+} from "../../infra/outbound/outbound-session.js";
 import { buildOutboundSessionContext } from "../../infra/outbound/session-context.js";
 import { logWarn } from "../../logger.js";
 import type { CronJob, CronRunTelemetry } from "../types.js";
@@ -20,6 +23,21 @@ import {
   readDescendantSubagentFallbackReply,
   waitForDescendantSubagentSummary,
 } from "./subagent-followup.js";
+
+function normalizeDeliveryTarget(channel: string, to: string): string {
+  const channelLower = channel.trim().toLowerCase();
+  const toTrimmed = to.trim();
+  if (channelLower === "feishu" || channelLower === "lark") {
+    const lowered = toTrimmed.toLowerCase();
+    if (lowered.startsWith("user:")) {
+      return toTrimmed.slice("user:".length).trim();
+    }
+    if (lowered.startsWith("chat:")) {
+      return toTrimmed.slice("chat:".length).trim();
+    }
+  }
+  return toTrimmed;
+}
 
 export function matchesMessagingToolDeliveryTarget(
   target: { provider?: string; to?: string; accountId?: string },
@@ -36,7 +54,11 @@ export function matchesMessagingToolDeliveryTarget(
   if (target.accountId && delivery.accountId && target.accountId !== delivery.accountId) {
     return false;
   }
-  return target.to === delivery.to;
+  // Strip :topic:NNN from message targets and normalize Feishu/Lark prefixes on
+  // both sides so cron duplicate suppression compares canonical IDs.
+  const normalizedTargetTo = normalizeDeliveryTarget(channel, target.to.replace(/:topic:\d+$/, ""));
+  const normalizedDeliveryTo = normalizeDeliveryTarget(channel, delivery.to);
+  return normalizedTargetTo === normalizedDeliveryTo;
 }
 
 export function resolveCronDeliveryBestEffort(job: CronJob): boolean {
@@ -74,7 +96,20 @@ async function resolveCronAnnounceSessionKey(params: {
       threadId: params.delivery.threadId,
     });
     const resolved = route?.sessionKey?.trim();
-    if (resolved) {
+    if (route && resolved) {
+      // Ensure the session entry exists so downstream announce / queue delivery
+      // can look up channel metadata (lastChannel, to, sessionId).  Named agents
+      // may not have a session entry for this target yet, causing announce
+      // delivery to silently fail (#32432).
+      await ensureOutboundSessionEntry({
+        cfg: params.cfg,
+        agentId: params.agentId,
+        channel: params.delivery.channel,
+        accountId: params.delivery.accountId,
+        route,
+      }).catch(() => {
+        // Best-effort: don't block delivery on session entry creation.
+      });
       return resolved;
     }
   } catch {
@@ -137,6 +172,12 @@ export async function dispatchCronDelivery(
   // Keep this strict so timer fallback can safely decide whether to wake main.
   let delivered = params.skipMessagingToolDelivery;
   let deliveryAttempted = params.skipMessagingToolDelivery;
+  // Tracks whether `runSubagentAnnounceFlow` was actually called.  Early
+  // returns from `deliverViaAnnounce` (active subagents, interim suppression,
+  // SILENT_REPLY_TOKEN) are intentional suppressions — not delivery failures —
+  // so the direct-delivery fallback must only fire when the announce send was
+  // actually attempted and failed.
+  let announceDeliveryWasAttempted = false;
   const failDeliveryTarget = (error: string) =>
     params.withRunSession({
       status: "error",
@@ -234,7 +275,19 @@ export async function dispatchCronDelivery(
     const initialSynthesizedText = synthesizedText.trim();
     let activeSubagentRuns = countActiveDescendantRuns(params.agentSessionKey);
     const expectedSubagentFollowup = expectsSubagentFollowup(initialSynthesizedText);
-    const hadActiveDescendants = activeSubagentRuns > 0;
+    // Also check for already-completed descendants. If the subagent finished
+    // before delivery-dispatch runs, activeSubagentRuns is 0 and
+    // expectedSubagentFollowup may be false (e.g. cron said "on it" which
+    // doesn't match the narrow hint list). We still need to use the
+    // descendant's output instead of the interim cron text.
+    const completedDescendantReply =
+      activeSubagentRuns === 0 && isLikelyInterimCronMessage(initialSynthesizedText)
+        ? await readDescendantSubagentFallbackReply({
+            sessionKey: params.agentSessionKey,
+            runStartedAt: params.runStartedAt,
+          })
+        : undefined;
+    const hadDescendants = activeSubagentRuns > 0 || Boolean(completedDescendantReply);
     if (activeSubagentRuns > 0 || expectedSubagentFollowup) {
       let finalReply = await waitForDescendantSubagentSummary({
         sessionKey: params.agentSessionKey,
@@ -243,11 +296,7 @@ export async function dispatchCronDelivery(
         observedActiveDescendants: activeSubagentRuns > 0 || expectedSubagentFollowup,
       });
       activeSubagentRuns = countActiveDescendantRuns(params.agentSessionKey);
-      if (
-        !finalReply &&
-        activeSubagentRuns === 0 &&
-        (hadActiveDescendants || expectedSubagentFollowup)
-      ) {
+      if (!finalReply && activeSubagentRuns === 0) {
         finalReply = await readDescendantSubagentFallbackReply({
           sessionKey: params.agentSessionKey,
           runStartedAt: params.runStartedAt,
@@ -259,21 +308,45 @@ export async function dispatchCronDelivery(
         synthesizedText = finalReply;
         deliveryPayloads = [{ text: finalReply }];
       }
+    } else if (completedDescendantReply) {
+      // Descendants already finished before we got here. Use their output
+      // directly instead of the cron agent's interim text.
+      outputText = completedDescendantReply;
+      summary = pickSummaryFromOutput(completedDescendantReply) ?? summary;
+      synthesizedText = completedDescendantReply;
+      deliveryPayloads = [{ text: completedDescendantReply }];
     }
     if (activeSubagentRuns > 0) {
       // Parent orchestration is still in progress; avoid announcing a partial
-      // update to the main requester.
-      return params.withRunSession({ status: "ok", summary, outputText, ...params.telemetry });
+      // update to the main requester. Mark deliveryAttempted so the timer does
+      // not fire a redundant enqueueSystemEvent fallback (double-announce bug).
+      deliveryAttempted = true;
+      return params.withRunSession({
+        status: "ok",
+        summary,
+        outputText,
+        deliveryAttempted,
+        ...params.telemetry,
+      });
     }
     if (
-      (hadActiveDescendants || expectedSubagentFollowup) &&
+      hadDescendants &&
       synthesizedText.trim() === initialSynthesizedText &&
       isLikelyInterimCronMessage(initialSynthesizedText) &&
       initialSynthesizedText.toUpperCase() !== SILENT_REPLY_TOKEN.toUpperCase()
     ) {
-      // Descendants existed but no post-orchestration synthesis arrived, so
-      // suppress stale parent text like "on it, pulling everything together".
-      return params.withRunSession({ status: "ok", summary, outputText, ...params.telemetry });
+      // Descendants existed but no post-orchestration synthesis arrived AND
+      // no descendant fallback reply was available. Suppress stale parent
+      // text like "on it, pulling everything together". Mark deliveryAttempted
+      // so the timer does not fire a redundant enqueueSystemEvent fallback.
+      deliveryAttempted = true;
+      return params.withRunSession({
+        status: "ok",
+        summary,
+        outputText,
+        deliveryAttempted,
+        ...params.telemetry,
+      });
     }
     if (synthesizedText.toUpperCase() === SILENT_REPLY_TOKEN.toUpperCase()) {
       return params.withRunSession({
@@ -294,6 +367,7 @@ export async function dispatchCronDelivery(
         });
       }
       deliveryAttempted = true;
+      announceDeliveryWasAttempted = true;
       const didAnnounce = await runSubagentAnnounceFlow({
         childSessionKey: params.agentSessionKey,
         childRunId: `${params.job.id}:${params.runSessionId}:${params.runStartedAt}`,
@@ -309,6 +383,10 @@ export async function dispatchCronDelivery(
         timeoutMs: params.timeoutMs,
         cleanup: params.job.deleteAfterRun ? "delete" : "keep",
         roundOneReply: synthesizedText,
+        // Cron output is a finished completion message: send it directly to the
+        // target channel via the completion-direct-send path rather than injecting
+        // a trigger message into the (likely idle) main agent session.
+        expectsCompletionMessage: true,
         // Keep delivery outcome truthful for cron state: if outbound send fails,
         // announce flow must report false so caller can apply best-effort policy.
         bestEffortDeliver: false,
@@ -322,31 +400,39 @@ export async function dispatchCronDelivery(
       if (didAnnounce) {
         delivered = true;
       } else {
+        // Announce delivery failed but the agent execution itself succeeded.
+        // Return ok so the job isn't penalized for a transient delivery issue
+        // (e.g. "pairing required" when no active client session exists).
+        // Delivery failure is tracked separately via delivered/deliveryAttempted.
         const message = "cron announce delivery failed";
+        logWarn(`[cron:${params.job.id}] ${message}`);
         if (!params.deliveryBestEffort) {
           return params.withRunSession({
-            status: "error",
+            status: "ok",
             summary,
             outputText,
             error: message,
+            delivered: false,
             deliveryAttempted,
             ...params.telemetry,
           });
         }
-        logWarn(`[cron:${params.job.id}] ${message}`);
       }
     } catch (err) {
+      // Same as above: announce delivery errors should not mark a successful
+      // agent execution as failed.
+      logWarn(`[cron:${params.job.id}] ${String(err)}`);
       if (!params.deliveryBestEffort) {
         return params.withRunSession({
-          status: "error",
+          status: "ok",
           summary,
           outputText,
           error: String(err),
+          delivered: false,
           deliveryAttempted,
           ...params.telemetry,
         });
       }
-      logWarn(`[cron:${params.job.id}] ${String(err)}`);
     }
     return null;
   };
@@ -411,6 +497,37 @@ export async function dispatchCronDelivery(
       }
     } else {
       const announceResult = await deliverViaAnnounce(params.resolvedDelivery);
+      // Fall back to direct delivery only when the announce send was actually
+      // attempted and failed. Early returns from deliverViaAnnounce (active
+      // subagents, interim suppression, SILENT_REPLY_TOKEN) are intentional
+      // suppressions that must NOT trigger direct delivery — doing so would
+      // bypass the suppression guard and leak partial/stale content.
+      if (announceDeliveryWasAttempted && !delivered && !params.isAborted()) {
+        const directFallback = await deliverViaDirect(params.resolvedDelivery);
+        if (directFallback) {
+          return {
+            result: directFallback,
+            delivered,
+            deliveryAttempted,
+            summary,
+            outputText,
+            synthesizedText,
+            deliveryPayloads,
+          };
+        }
+        // If direct delivery succeeded (returned null without error),
+        // `delivered` has been set to true by deliverViaDirect.
+        if (delivered) {
+          return {
+            delivered,
+            deliveryAttempted,
+            summary,
+            outputText,
+            synthesizedText,
+            deliveryPayloads,
+          };
+        }
+      }
       if (announceResult) {
         return {
           result: announceResult,

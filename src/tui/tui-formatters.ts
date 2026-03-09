@@ -11,6 +11,8 @@ const BINARY_LINE_REPLACEMENT_THRESHOLD = 12;
 const URL_PREFIX_RE = /^(https?:\/\/|file:\/\/)/i;
 const WINDOWS_DRIVE_RE = /^[a-zA-Z]:[\\/]/;
 const FILE_LIKE_RE = /^[a-zA-Z0-9._-]+$/;
+const EDGE_PUNCTUATION_RE = /^[`"'([{<]+|[`"')\]}>.,:;!?]+$/g;
+const TOKENISH_MIN_LENGTH = 24;
 const RTL_SCRIPT_RE = /[\u0590-\u08ff\ufb1d-\ufdff\ufe70-\ufefc]/;
 const BIDI_CONTROL_RE = /[\u202a-\u202e\u2066-\u2069]/;
 const RTL_ISOLATE_START = "\u2067";
@@ -56,6 +58,9 @@ function chunkToken(token: string, maxChars: number): string[] {
 }
 
 function isCopySensitiveToken(token: string): boolean {
+  const coreToken = token.replace(EDGE_PUNCTUATION_RE, "");
+  const candidate = coreToken || token;
+
   if (URL_PREFIX_RE.test(token)) {
     return true;
   }
@@ -73,7 +78,16 @@ function isCopySensitiveToken(token: string): boolean {
   if (token.includes("/") || token.includes("\\")) {
     return true;
   }
-  return token.includes("_") && FILE_LIKE_RE.test(token);
+  if (token.includes("_") && FILE_LIKE_RE.test(token)) {
+    return true;
+  }
+
+  // Preserve long credential-like tokens (hex/base62/etc.) to avoid introducing
+  // visible spaces that users may copy back into secrets.
+  if (candidate.length >= TOKENISH_MIN_LENGTH && /[a-z]/i.test(candidate) && /\d/.test(candidate)) {
+    return true;
+  }
+  return false;
 }
 
 function normalizeLongTokenForDisplay(token: string): string {
@@ -142,6 +156,7 @@ export function sanitizeRenderableText(text: string): string {
 export function resolveFinalAssistantText(params: {
   finalText?: string | null;
   streamedText?: string | null;
+  errorMessage?: string | null;
 }) {
   const finalText = params.finalText ?? "";
   if (finalText.trim()) {
@@ -150,6 +165,10 @@ export function resolveFinalAssistantText(params: {
   const streamedText = params.streamedText ?? "";
   if (streamedText.trim()) {
     return streamedText;
+  }
+  const errorMessage = params.errorMessage ?? "";
+  if (errorMessage.trim()) {
+    return formatRawAssistantErrorForUi(errorMessage);
   }
   return "(no output)";
 }

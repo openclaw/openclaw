@@ -1,6 +1,10 @@
 import { PassThrough } from "node:stream";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  LAUNCH_AGENT_THROTTLE_INTERVAL_SECONDS,
+  LAUNCH_AGENT_UMASK_DECIMAL,
+} from "./launchd-plist.js";
+import {
   installLaunchAgent,
   isLaunchAgentListed,
   parseLaunchctlPrint,
@@ -98,6 +102,39 @@ describe("launchd runtime parsing", () => {
       lastExitReason: "exited",
     });
   });
+
+  it("does not set pid when pid = 0", () => {
+    const output = ["state = running", "pid = 0"].join("\n");
+    const info = parseLaunchctlPrint(output);
+    expect(info.pid).toBeUndefined();
+    expect(info.state).toBe("running");
+  });
+
+  it("sets pid for positive values", () => {
+    const output = ["state = running", "pid = 1234"].join("\n");
+    const info = parseLaunchctlPrint(output);
+    expect(info.pid).toBe(1234);
+  });
+
+  it("does not set pid for negative values", () => {
+    const output = ["state = waiting", "pid = -1"].join("\n");
+    const info = parseLaunchctlPrint(output);
+    expect(info.pid).toBeUndefined();
+    expect(info.state).toBe("waiting");
+  });
+
+  it("rejects pid and exit status values with junk suffixes", () => {
+    const output = [
+      "state = waiting",
+      "pid = 123abc",
+      "last exit status = 7ms",
+      "last exit reason = exited",
+    ].join("\n");
+    expect(parseLaunchctlPrint(output)).toEqual({
+      state: "waiting",
+      lastExitReason: "exited",
+    });
+  });
 });
 
 describe("launchctl list detection", () => {
@@ -185,7 +222,7 @@ describe("launchd install", () => {
     expect(plist).toContain(`<string>${tmpDir}</string>`);
   });
 
-  it("writes KeepAlive=true policy", async () => {
+  it("writes KeepAlive=true policy with restrictive umask", async () => {
     const env = createDefaultLaunchdEnv();
     await installLaunchAgent({
       env,
@@ -198,8 +235,10 @@ describe("launchd install", () => {
     expect(plist).toContain("<key>KeepAlive</key>");
     expect(plist).toContain("<true/>");
     expect(plist).not.toContain("<key>SuccessfulExit</key>");
+    expect(plist).toContain("<key>Umask</key>");
+    expect(plist).toContain(`<integer>${LAUNCH_AGENT_UMASK_DECIMAL}</integer>`);
     expect(plist).toContain("<key>ThrottleInterval</key>");
-    expect(plist).toContain("<integer>60</integer>");
+    expect(plist).toContain(`<integer>${LAUNCH_AGENT_THROTTLE_INTERVAL_SECONDS}</integer>`);
   });
 
   it("restarts LaunchAgent with bootout-bootstrap-kickstart order", async () => {
