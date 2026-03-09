@@ -196,7 +196,7 @@ describe("discoverOpenClawPlugins", () => {
     );
 
     const { candidates } = await withStateDir(stateDir, async () => {
-      return discoverOpenClawPlugins({});
+      return discoverOpenClawPlugins({ extraPaths: [globalExt] });
     });
 
     const ids = candidates.map((c) => c.idHint);
