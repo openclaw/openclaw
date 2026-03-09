@@ -57,6 +57,7 @@ export type { OpenClawConfig } from "../config/config.js";
 export { isDangerousNameMatchingEnabled } from "../config/dangerous-name-matching.js";
 export { loadSessionStore, resolveStorePath } from "../config/sessions.js";
 export {
+  normalizeNonTelegramGroupPolicy,
   resolveAllowlistProviderRuntimeGroupPolicy,
   resolveDefaultGroupPolicy,
   warnMissingProviderGroupPolicyFallbackOnce,

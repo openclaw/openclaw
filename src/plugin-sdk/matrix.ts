@@ -60,6 +60,7 @@ export { createTypingCallbacks } from "../channels/typing.js";
 export type { OpenClawConfig } from "../config/config.js";
 export {
   GROUP_POLICY_BLOCKED_LABEL,
+  normalizeNonTelegramGroupPolicy,
   resolveAllowlistProviderRuntimeGroupPolicy,
   resolveDefaultGroupPolicy,
   warnMissingProviderGroupPolicyFallbackOnce,

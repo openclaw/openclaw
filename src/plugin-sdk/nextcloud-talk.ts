@@ -40,6 +40,7 @@ export { mapAllowFromEntries } from "./channel-config-helpers.js";
 export { evaluateMatchedGroupAccessForPolicy } from "./group-access.js";
 export {
   GROUP_POLICY_BLOCKED_LABEL,
+  normalizeNonTelegramGroupPolicy,
   resolveAllowlistProviderRuntimeGroupPolicy,
   resolveDefaultGroupPolicy,
   warnMissingProviderGroupPolicyFallbackOnce,

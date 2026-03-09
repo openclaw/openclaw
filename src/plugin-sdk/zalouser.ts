@@ -42,6 +42,7 @@ export { createReplyPrefixOptions } from "../channels/reply-prefix.js";
 export { createTypingCallbacks } from "../channels/typing.js";
 export type { OpenClawConfig } from "../config/config.js";
 export {
+  normalizeNonTelegramGroupPolicy,
   resolveDefaultGroupPolicy,
   resolveOpenProviderRuntimeGroupPolicy,
   warnMissingProviderGroupPolicyFallbackOnce,

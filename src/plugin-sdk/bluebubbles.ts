@@ -58,6 +58,7 @@ export type {
 export type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
 export { createReplyPrefixOptions } from "../channels/reply-prefix.js";
 export type { OpenClawConfig } from "../config/config.js";
+export { normalizeNonTelegramGroupPolicy } from "../config/runtime-group-policy.js";
 export type { DmPolicy, GroupPolicy } from "../config/types.js";
 export {
   hasConfiguredSecretInput,

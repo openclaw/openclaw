@@ -57,6 +57,7 @@ export type { OpenClawConfig } from "../config/config.js";
 export { isDangerousNameMatchingEnabled } from "../config/dangerous-name-matching.js";
 export { resolveToolsBySender } from "../config/group-policy.js";
 export {
+  normalizeNonTelegramGroupPolicy,
   resolveAllowlistProviderRuntimeGroupPolicy,
   resolveDefaultGroupPolicy,
 } from "../config/runtime-group-policy.js";
