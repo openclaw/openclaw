@@ -58,7 +58,7 @@ export const id: TranslationMap = {
       subtitle: "Lokasi koneksi dashboard dan cara autentikasinya.",
       wsUrl: "URL WebSocket",
       token: "Token Gateway",
-      password: "Kata Sandi (tidak diatur)",
+      password: "Kata Sandi (tidak diatur)", // pragma: allowlist secret
       sessionKey: "Default Session Key",
       language: "Bahasa",
       connectHint: "Klik Hubungkan untuk menerapkan perubahan koneksi.",
