@@ -318,6 +318,21 @@ function normalizeToolNames(value: unknown): string[] {
     .filter(Boolean);
 }
 
+function isThinkingDisabled(value: unknown): boolean {
+  if (value == null || value === false) {
+    return true;
+  }
+  if (typeof value === "string") {
+    const normalized = value.trim().toLowerCase();
+    return ["off", "none", "disabled", "disable", "false", "0"].includes(normalized);
+  }
+  if (typeof value === "object" && !Array.isArray(value)) {
+    const typeValue = (value as Record<string, unknown>).type;
+    return isThinkingDisabled(typeValue);
+  }
+  return false;
+}
+
 function resolveDynamicTemperature(params: {
   merged: Record<string, unknown>;
   override?: Record<string, unknown>;
@@ -327,21 +342,10 @@ function resolveDynamicTemperature(params: {
     return undefined;
   }
 
-  const thinking = params.merged.thinking;
-  const isThinkingEnabled =
-    (params.thinkingLevel && params.thinkingLevel !== "off") ||
-    (thinking != null &&
-      thinking !== "off" &&
-      thinking !== "none" &&
-      thinking !== "disabled" &&
-      thinking !== false &&
-      !(
-        typeof thinking === "object" &&
-        !Array.isArray(thinking) &&
-        (thinking as Record<string, unknown>).type === "disabled"
-      ));
+  const thinkingLevelDisabled = !params.thinkingLevel || params.thinkingLevel === "off";
+  const mergedThinkingDisabled = isThinkingDisabled(params.merged.thinking);
 
-  if (isThinkingEnabled) {
+  if (!thinkingLevelDisabled || !mergedThinkingDisabled) {
     return undefined;
   }
   const toolNames = normalizeToolNames(params.override?.availableToolNames);
