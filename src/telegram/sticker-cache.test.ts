@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -9,16 +10,18 @@ import {
   searchStickers,
 } from "./sticker-cache.js";
 
+const TEST_STATE_DIR = path.join(os.tmpdir(), "openclaw-test-sticker-cache");
+
 // Mock the state directory to use a temp location
 vi.mock("../config/paths.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../config/paths.js")>();
   return {
     ...actual,
-    STATE_DIR: "/tmp/openclaw-test-sticker-cache",
+    STATE_DIR: path.join(os.tmpdir(), "openclaw-test-sticker-cache"),
   };
 });
 
-const TEST_CACHE_DIR = "/tmp/openclaw-test-sticker-cache/telegram";
+const TEST_CACHE_DIR = path.join(TEST_STATE_DIR, "telegram");
 const TEST_CACHE_FILE = path.join(TEST_CACHE_DIR, "sticker-cache.json");
 
 describe("sticker-cache", () => {
