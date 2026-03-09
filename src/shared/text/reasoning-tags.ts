@@ -90,3 +90,33 @@ export function stripReasoningTagsFromText(
 
   return applyTrim(result, trimMode);
 }
+
+export function extractReasoningTagsFromText(text: string): string {
+  if (!text || !QUICK_TAG_RE.test(text)) {
+    return "";
+  }
+
+  const codeRegions = findCodeRegions(text);
+  THINKING_TAG_RE.lastIndex = 0;
+  let result = "";
+  let lastIndex = 0;
+  let inThinking = false;
+
+  for (const match of text.matchAll(THINKING_TAG_RE)) {
+    const idx = match.index ?? 0;
+    if (isInsideCode(idx, codeRegions)) {
+      continue;
+    }
+    if (inThinking) {
+      result += text.slice(lastIndex, idx);
+    }
+    inThinking = match[1] !== "/";
+    lastIndex = idx + match[0].length;
+  }
+
+  if (inThinking) {
+    result += text.slice(lastIndex);
+  }
+
+  return applyTrim(result, "both");
+}
