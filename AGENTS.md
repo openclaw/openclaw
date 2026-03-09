@@ -1,4 +1,24 @@
-# Repository Guidelines
+# CLAUDE.md
+
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+
+## Overview
+
+OpenClaw is a multi-channel AI gateway (TypeScript/ESM, Node 22+). It routes messages from messaging platforms (WhatsApp, Telegram, Discord, Slack, Signal, iMessage, Line, and 40+ extension channels) through a central WebSocket gateway to AI agent backends, then delivers responses back.
+
+**Message flow:** Platform → Channel Monitor → Gateway → Routing (binding lookup) → ACP Runtime → Agent Backend → streaming response → Channel Outbound → Platform delivery.
+
+**Key architectural layers:**
+- **Gateway** (`src/gateway/`): WebSocket control plane — auth, client registration, event streaming, health monitoring.
+- **Routing** (`src/routing/`): Resolves channel + peer → agent + session via hierarchical binding matching (peer > guild > team > account > channel > default).
+- **ACP** (`src/acp/`): Agent Control Plane — manages agent runtime backends, session lifecycle, prompt/response streaming (`AcpRuntimeEvent`: text_delta, tool_call, status).
+- **Channels** (`src/discord/`, `src/telegram/`, `src/slack/`, `src/signal/`, `src/imessage/`, `src/web/`, `src/line/`, `src/whatsapp/`): Built-in platform adapters. Extension channels live in `extensions/`.
+- **Plugin SDK** (`src/plugin-sdk/`, exported as `openclaw/plugin-sdk`): Public API for extensions — `ChannelPlugin`, `AcpRuntimeBackend`, channel-specific types via subpath exports (`openclaw/plugin-sdk/telegram`, etc.).
+- **CLI** (`src/cli/`, `src/commands/`): Commander.js-based CLI with dependency injection via `createDefaultDeps`.
+- **Media** (`src/media/`): Input validation, image ops, ffmpeg transcoding, PDF extraction.
+- **Config** (`src/config/`): Agent bindings, channel settings, provider configuration (`~/.openclaw/openclaw.json`).
+
+## Repository Guidelines
 
 - Repo: https://github.com/openclaw/openclaw
 - In chat replies, file references must be repo-root relative only (example: `extensions/bluebubbles/src/channel.ts:80`); never absolute paths or `~/...`.
@@ -102,6 +122,9 @@
 - Format check: `pnpm format` (oxfmt --check)
 - Format fix: `pnpm format:fix` (oxfmt --write)
 - Tests: `pnpm test` (vitest); coverage: `pnpm test:coverage`
+- Single test file: `pnpm exec vitest run src/routing/resolve-route.test.ts`
+- Test pattern match: `pnpm exec vitest run -t "test name pattern"`
+- Watch mode: `pnpm test:watch`
 
 ## Coding Style & Naming Conventions
 
@@ -115,7 +138,7 @@
 - In tests, prefer per-instance stubs over prototype mutation (`SomeClass.prototype.method = ...`) unless a test explicitly documents why prototype-level patching is required.
 - Add brief code comments for tricky or non-obvious logic.
 - Keep files concise; extract helpers instead of “V2” copies. Use existing patterns for CLI options and dependency injection via `createDefaultDeps`.
-- Aim to keep files under ~700 LOC; guideline only (not a hard guardrail). Split/refactor when it improves clarity or testability.
+- Aim to keep files under ~500 LOC; guideline only (not a hard guardrail). Split/refactor when it improves clarity or testability.
 - Naming: use **OpenClaw** for product/app/docs headings; use `openclaw` for CLI command, package/binary, paths, and config keys.
 
 ## Release Channels (Naming)

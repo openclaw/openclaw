@@ -1,0 +1,16 @@
+{
+  "name": "@openclaw/livekit-voice",
+  "version": "2026.3.4",
+  "description": "OpenClaw LiveKit voice-call plugin",
+  "type": "module",
+  "dependencies": {
+    "@sinclair/typebox": "0.34.48",
+    "livekit-server-sdk": "^2.13.3",
+    "zod": "^4.3.6"
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ]
+  }
+}

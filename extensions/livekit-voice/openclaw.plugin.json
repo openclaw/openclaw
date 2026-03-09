@@ -1,0 +1,15 @@
+{
+  "id": "livekit-voice",
+  "name": "LiveKit Voice",
+  "description": "Live voice calling via LiveKit with Gemini Native Audio",
+  "uiHints": {
+    "livekit.apiKey": { "label": "LiveKit API Key", "sensitive": true },
+    "livekit.apiSecret": { "label": "LiveKit API Secret", "sensitive": true },
+    "livekit.url": { "label": "LiveKit Server URL", "placeholder": "ws://localhost:7880" },
+    "agent.voice": { "label": "Voice", "placeholder": "Aoede" },
+    "agent.model": { "label": "Realtime Model", "placeholder": "gemini-live-2.5-flash-native-audio" },
+    "agent.project": { "label": "Google Cloud Project", "placeholder": "shiftmindlab" },
+    "agent.location": { "label": "Google Cloud Location", "placeholder": "us-central1" },
+    "frontend.publicUrl": { "label": "Frontend Public URL", "placeholder": "https://ada.makemethat.ai" }
+  }
+}

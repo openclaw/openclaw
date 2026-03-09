@@ -1,6 +1,7 @@
 node_modules
 **/node_modules/
 .env
+.env.local
 docker-compose.extra.yml
 dist
 pnpm-lock.yaml
