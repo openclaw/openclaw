@@ -1,5 +1,6 @@
 import { spawn } from "node:child_process";
-import { hasSupervisorHint } from "./supervisor-markers.js";
+import { triggerOpenClawRestart } from "./restart.js";
+import { detectRespawnSupervisor } from "./supervisor-markers.js";
 
 type RespawnMode = "spawned" | "supervised" | "disabled" | "failed";
 
@@ -17,13 +18,9 @@ function isTruthy(value: string | undefined): boolean {
   return normalized === "1" || normalized === "true" || normalized === "yes" || normalized === "on";
 }
 
-function isLikelySupervisedProcess(env: NodeJS.ProcessEnv = process.env): boolean {
-  return hasSupervisorHint(env);
-}
-
 /**
  * Attempt to restart this process with a fresh PID.
- * - supervised environments (launchd/systemd): caller should exit and let supervisor restart
+ * - supervised environments (launchd/systemd/schtasks): caller should exit and let supervisor restart
  * - OPENCLAW_NO_RESPAWN=1: caller should keep in-process restart behavior (tests/dev)
  * - otherwise: spawn detached child with current argv/execArgv, then caller exits
  */
@@ -31,8 +28,30 @@ export function restartGatewayProcessWithFreshPid(): GatewayRespawnResult {
   if (isTruthy(process.env.OPENCLAW_NO_RESPAWN)) {
     return { mode: "disabled" };
   }
-  if (isLikelySupervisedProcess(process.env)) {
+  const supervisor = detectRespawnSupervisor(process.env);
+  if (supervisor) {
+    // launchd: exit(0) is sufficient — KeepAlive=true restarts the service.
+    // Self-issued `kickstart -k` races with launchd's bootout state machine
+    // and can leave the LaunchAgent permanently unloaded.
+    // See: https://github.com/openclaw/openclaw/issues/39760
+    if (supervisor === "schtasks") {
+      const restart = triggerOpenClawRestart();
+      if (!restart.ok) {
+        return {
+          mode: "failed",
+          detail: restart.detail ?? `${restart.method} restart failed`,
+        };
+      }
+    }
     return { mode: "supervised" };
+  }
+  if (process.platform === "win32") {
+    // Detached respawn is unsafe on Windows without an identified Scheduled Task:
+    // the child becomes orphaned if the original process exits.
+    return {
+      mode: "disabled",
+      detail: "win32: detached respawn unsupported without Scheduled Task markers",
+    };
   }
 
   try {

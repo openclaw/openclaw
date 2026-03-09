@@ -11,8 +11,31 @@ export type ExecHost = "sandbox" | "gateway" | "node";
 export type ExecSecurity = "deny" | "allowlist" | "full";
 export type ExecAsk = "off" | "on-miss" | "always";
 
-export type SystemRunApprovalBindingV1 = {
-  version: 1;
+export function normalizeExecHost(value?: string | null): ExecHost | null {
+  const normalized = value?.trim().toLowerCase();
+  if (normalized === "sandbox" || normalized === "gateway" || normalized === "node") {
+    return normalized;
+  }
+  return null;
+}
+
+export function normalizeExecSecurity(value?: string | null): ExecSecurity | null {
+  const normalized = value?.trim().toLowerCase();
+  if (normalized === "deny" || normalized === "allowlist" || normalized === "full") {
+    return normalized;
+  }
+  return null;
+}
+
+export function normalizeExecAsk(value?: string | null): ExecAsk | null {
+  const normalized = value?.trim().toLowerCase();
+  if (normalized === "off" || normalized === "on-miss" || normalized === "always") {
+    return normalized;
+  }
+  return null;
+}
+
+export type SystemRunApprovalBinding = {
   argv: string[];
   cwd: string | null;
   agentId: string | null;
@@ -20,13 +43,19 @@ export type SystemRunApprovalBindingV1 = {
   envHash: string | null;
 };
 
-export type SystemRunApprovalPlanV2 = {
-  version: 2;
+export type SystemRunApprovalFileOperand = {
+  argvIndex: number;
+  path: string;
+  sha256: string;
+};
+
+export type SystemRunApprovalPlan = {
   argv: string[];
   cwd: string | null;
   rawCommand: string | null;
   agentId: string | null;
   sessionKey: string | null;
+  mutableFileOperand?: SystemRunApprovalFileOperand | null;
 };
 
 export type ExecApprovalRequestPayload = {
@@ -34,8 +63,8 @@ export type ExecApprovalRequestPayload = {
   commandArgv?: string[];
   // Optional UI-safe env key preview for approval prompts.
   envKeys?: string[];
-  systemRunBindingV1?: SystemRunApprovalBindingV1 | null;
-  systemRunPlanV2?: SystemRunApprovalPlanV2 | null;
+  systemRunBinding?: SystemRunApprovalBinding | null;
+  systemRunPlan?: SystemRunApprovalPlan | null;
   cwd?: string | null;
   nodeId?: string | null;
   host?: string | null;

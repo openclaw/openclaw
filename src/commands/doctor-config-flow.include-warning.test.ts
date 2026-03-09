@@ -1,15 +1,14 @@
 import { describe, expect, it, vi } from "vitest";
 import { withTempHomeConfig } from "../config/test-helpers.js";
-
-const { noteSpy } = vi.hoisted(() => ({
-  noteSpy: vi.fn(),
-}));
+import { note } from "../terminal/note.js";
 
 vi.mock("../terminal/note.js", () => ({
-  note: noteSpy,
+  note: vi.fn(),
 }));
 
 import { loadAndMaybeMigrateDoctorConfig } from "./doctor-config-flow.js";
+
+const noteSpy = vi.mocked(note);
 
 describe("doctor include warning", () => {
   it("surfaces include confinement hint for escaped include paths", async () => {

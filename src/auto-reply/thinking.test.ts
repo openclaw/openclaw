@@ -33,6 +33,12 @@ describe("normalizeThinkLevel", () => {
   it("accepts on as low", () => {
     expect(normalizeThinkLevel("on")).toBe("low");
   });
+
+  it("accepts adaptive and auto aliases", () => {
+    expect(normalizeThinkLevel("adaptive")).toBe("adaptive");
+    expect(normalizeThinkLevel("auto")).toBe("adaptive");
+    expect(normalizeThinkLevel("Adaptive")).toBe("adaptive");
+  });
 });
 
 describe("listThinkingLevels", () => {
@@ -42,8 +48,14 @@ describe("listThinkingLevels", () => {
     expect(listThinkingLevels(undefined, "gpt-5.3-codex-spark")).toContain("xhigh");
   });
 
-  it("includes xhigh for openai gpt-5.2", () => {
+  it("includes xhigh for openai gpt-5.2 and gpt-5.4 variants", () => {
     expect(listThinkingLevels("openai", "gpt-5.2")).toContain("xhigh");
+    expect(listThinkingLevels("openai", "gpt-5.4")).toContain("xhigh");
+    expect(listThinkingLevels("openai", "gpt-5.4-pro")).toContain("xhigh");
+  });
+
+  it("includes xhigh for openai-codex gpt-5.4", () => {
+    expect(listThinkingLevels("openai-codex", "gpt-5.4")).toContain("xhigh");
   });
 
   it("includes xhigh for github-copilot gpt-5.2 refs", () => {
@@ -53,6 +65,11 @@ describe("listThinkingLevels", () => {
 
   it("excludes xhigh for non-codex models", () => {
     expect(listThinkingLevels(undefined, "gpt-4.1-mini")).not.toContain("xhigh");
+  });
+
+  it("always includes adaptive", () => {
+    expect(listThinkingLevels(undefined, "gpt-4.1-mini")).toContain("adaptive");
+    expect(listThinkingLevels("anthropic", "claude-opus-4-6")).toContain("adaptive");
   });
 });
 

@@ -14,21 +14,18 @@ import type {
 } from "../../channels/plugins/types.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { getAgentScopedMediaLocalRoots } from "../../media/local-roots.js";
+import { hasPollCreationParams, resolveTelegramPollVisibility } from "../../poll-params.js";
+import { resolvePollMaxSelections } from "../../polls.js";
 import { buildChannelAccountBindings } from "../../routing/bindings.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
-import {
-  isDeliverableMessageChannel,
-  normalizeMessageChannel,
-  type GatewayClientMode,
-  type GatewayClientName,
-} from "../../utils/message-channel.js";
+import { type GatewayClientMode, type GatewayClientName } from "../../utils/message-channel.js";
 import { throwIfAborted } from "./abort.js";
 import {
   listConfiguredMessageChannels,
   resolveMessageChannelSelection,
 } from "./channel-selection.js";
-import { applyTargetToParams } from "./channel-target.js";
 import type { OutboundSendDeps } from "./deliver.js";
+import { normalizeMessageActionInput } from "./message-action-normalization.js";
 import {
   hydrateAttachmentParamsForAction,
   normalizeSandboxMediaList,
@@ -41,7 +38,6 @@ import {
   resolveSlackAutoThreadId,
   resolveTelegramAutoThreadId,
 } from "./message-action-params.js";
-import { actionHasTarget, actionRequiresTarget } from "./message-action-spec.js";
 import type { MessagePollResult, MessageSendResult } from "./message.js";
 import {
   applyCrossContextDecoration,
@@ -217,12 +213,19 @@ async function maybeApplyCrossContextMarker(params: {
   });
 }
 
-async function resolveChannel(cfg: OpenClawConfig, params: Record<string, unknown>) {
-  const channelHint = readStringParam(params, "channel");
+async function resolveChannel(
+  cfg: OpenClawConfig,
+  params: Record<string, unknown>,
+  toolContext?: { currentChannelProvider?: string },
+) {
   const selection = await resolveMessageChannelSelection({
     cfg,
-    channel: channelHint,
+    channel: readStringParam(params, "channel"),
+    fallbackChannel: toolContext?.currentChannelProvider,
   });
+  if (selection.source === "tool-context-fallback") {
+    params.channel = selection.channel;
+  }
   return selection.channel;
 }
 
@@ -306,7 +309,7 @@ async function handleBroadcastAction(
   if (!broadcastEnabled) {
     throw new Error("Broadcast is disabled. Set tools.message.broadcast.enabled to true.");
   }
-  const rawTargets = readStringArrayParam(params, "targets", { required: true }) ?? [];
+  const rawTargets = readStringArrayParam(params, "targets", { required: true });
   if (rawTargets.length === 0) {
     throw new Error("Broadcast requires at least one target in --targets.");
   }
@@ -317,7 +320,7 @@ async function handleBroadcastAction(
   }
   const targetChannels =
     channelHint && channelHint.trim().toLowerCase() !== "all"
-      ? [await resolveChannel(input.cfg, { channel: channelHint })]
+      ? [await resolveChannel(input.cfg, { channel: channelHint }, input.toolContext)]
       : configured;
   const results: Array<{
     channel: ChannelId;
@@ -570,7 +573,7 @@ async function handlePollAction(ctx: ResolvedActionContext): Promise<MessageActi
   const question = readStringParam(params, "pollQuestion", {
     required: true,
   });
-  const options = readStringArrayParam(params, "pollOption", { required: true }) ?? [];
+  const options = readStringArrayParam(params, "pollOption", { required: true });
   if (options.length < 2) {
     throw new Error("pollOption requires at least two values");
   }
@@ -578,17 +581,16 @@ async function handlePollAction(ctx: ResolvedActionContext): Promise<MessageActi
   const allowMultiselect = readBooleanParam(params, "pollMulti") ?? false;
   const pollAnonymous = readBooleanParam(params, "pollAnonymous");
   const pollPublic = readBooleanParam(params, "pollPublic");
-  if (pollAnonymous && pollPublic) {
-    throw new Error("pollAnonymous and pollPublic are mutually exclusive");
-  }
-  const isAnonymous = pollAnonymous ? true : pollPublic ? false : undefined;
+  const isAnonymous = resolveTelegramPollVisibility({ pollAnonymous, pollPublic });
   const durationHours = readNumberParam(params, "pollDurationHours", {
     integer: true,
+    strict: true,
   });
   const durationSeconds = readNumberParam(params, "pollDurationSeconds", {
     integer: true,
+    strict: true,
   });
-  const maxSelections = allowMultiselect ? Math.max(2, options.length) : 1;
+  const maxSelections = resolvePollMaxSelections(options.length, allowMultiselect);
 
   if (durationSeconds !== undefined && channel !== "telegram") {
     throw new Error("pollDurationSeconds is only supported for Telegram polls");
@@ -695,7 +697,7 @@ export async function runMessageAction(
   input: RunMessageActionParams,
 ): Promise<MessageActionRunResult> {
   const cfg = input.cfg;
-  const params = { ...input.params };
+  let params = { ...input.params };
   const resolvedAgentId =
     input.agentId ??
     (input.sessionKey
@@ -709,52 +711,13 @@ export async function runMessageAction(
   if (action === "broadcast") {
     return handleBroadcastAction(input, params);
   }
+  params = normalizeMessageActionInput({
+    action,
+    args: params,
+    toolContext: input.toolContext,
+  });
 
-  const explicitTarget = typeof params.target === "string" ? params.target.trim() : "";
-  const hasLegacyTarget =
-    (typeof params.to === "string" && params.to.trim().length > 0) ||
-    (typeof params.channelId === "string" && params.channelId.trim().length > 0);
-  if (explicitTarget && hasLegacyTarget) {
-    delete params.to;
-    delete params.channelId;
-  }
-  if (
-    !explicitTarget &&
-    !hasLegacyTarget &&
-    actionRequiresTarget(action) &&
-    !actionHasTarget(action, params)
-  ) {
-    const inferredTarget = input.toolContext?.currentChannelId?.trim();
-    if (inferredTarget) {
-      params.target = inferredTarget;
-    }
-  }
-  if (!explicitTarget && actionRequiresTarget(action) && hasLegacyTarget) {
-    const legacyTo = typeof params.to === "string" ? params.to.trim() : "";
-    const legacyChannelId = typeof params.channelId === "string" ? params.channelId.trim() : "";
-    const legacyTarget = legacyTo || legacyChannelId;
-    if (legacyTarget) {
-      params.target = legacyTarget;
-      delete params.to;
-      delete params.channelId;
-    }
-  }
-  const explicitChannel = typeof params.channel === "string" ? params.channel.trim() : "";
-  if (!explicitChannel) {
-    const inferredChannel = normalizeMessageChannel(input.toolContext?.currentChannelProvider);
-    if (inferredChannel && isDeliverableMessageChannel(inferredChannel)) {
-      params.channel = inferredChannel;
-    }
-  }
-
-  applyTargetToParams({ action, args: params });
-  if (actionRequiresTarget(action)) {
-    if (!actionHasTarget(action, params)) {
-      throw new Error(`Action ${action} requires a target.`);
-    }
-  }
-
-  const channel = await resolveChannel(cfg, params);
+  const channel = await resolveChannel(cfg, params, input.toolContext);
   let accountId = readStringParam(params, "accountId") ?? input.defaultAccountId;
   if (!accountId && resolvedAgentId) {
     const byAgent = buildChannelAccountBindings(cfg).get(channel);
@@ -803,6 +766,10 @@ export async function runMessageAction(
     toolContext: input.toolContext,
     cfg,
   });
+
+  if (action === "send" && hasPollCreationParams(params)) {
+    throw new Error('Poll fields require action "poll"; use action "poll" instead of "send".');
+  }
 
   const gateway = resolveGateway(input);
 

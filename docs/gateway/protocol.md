@@ -149,6 +149,10 @@ Common scopes:
 - `operator.approvals`
 - `operator.pairing`
 
+Method scope is only the first gate. Some slash commands reached through
+`chat.send` apply stricter command-level checks on top. For example, persistent
+`/config set` and `/config unset` writes require `operator.admin`.
+
 ### Caps/commands/permissions (node)
 
 Nodes declare capability claims at connect time:
@@ -182,6 +186,7 @@ The Gateway treats these as **claims** and enforces server-side allowlists.
 
 - When an exec request needs approval, the gateway broadcasts `exec.approval.requested`.
 - Operator clients resolve by calling `exec.approval.resolve` (requires `operator.approvals` scope).
+- For `host=node`, `exec.approval.request` must include `systemRunPlan` (canonical `argv`/`cwd`/`rawCommand`/session metadata). Requests missing `systemRunPlan` are rejected.
 
 ## Versioning
 

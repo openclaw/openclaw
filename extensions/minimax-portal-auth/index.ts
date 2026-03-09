@@ -1,9 +1,10 @@
 import {
+  buildOauthProviderAuthResult,
   emptyPluginConfigSchema,
   type OpenClawPluginApi,
   type ProviderAuthContext,
   type ProviderAuthResult,
-} from "openclaw/plugin-sdk";
+} from "openclaw/plugin-sdk/minimax-portal-auth";
 import { loginMiniMaxPortalOAuth, type MiniMaxRegion } from "./oauth.js";
 
 const PROVIDER_ID = "minimax-portal";
@@ -60,22 +61,14 @@ function createOAuthHandler(region: MiniMaxRegion) {
         await ctx.prompter.note(result.notification_message, "MiniMax OAuth");
       }
 
-      const profileId = `${PROVIDER_ID}:default`;
       const baseUrl = result.resourceUrl || defaultBaseUrl;
 
-      return {
-        profiles: [
-          {
-            profileId,
-            credential: {
-              type: "oauth" as const,
-              provider: PROVIDER_ID,
-              access: result.access,
-              refresh: result.refresh,
-              expires: result.expires,
-            },
-          },
-        ],
+      return buildOauthProviderAuthResult({
+        providerId: PROVIDER_ID,
+        defaultModel: modelRef(DEFAULT_MODEL),
+        access: result.access,
+        refresh: result.refresh,
+        expires: result.expires,
         configPatch: {
           models: {
             providers: {
@@ -85,13 +78,19 @@ function createOAuthHandler(region: MiniMaxRegion) {
                 api: "anthropic-messages",
                 models: [
                   buildModelDefinition({
-                    id: "MiniMax-M2.1",
-                    name: "MiniMax M2.1",
+                    id: "MiniMax-M2.5",
+                    name: "MiniMax M2.5",
                     input: ["text"],
                   }),
                   buildModelDefinition({
-                    id: "MiniMax-M2.5",
-                    name: "MiniMax M2.5",
+                    id: "MiniMax-M2.5-highspeed",
+                    name: "MiniMax M2.5 Highspeed",
+                    input: ["text"],
+                    reasoning: true,
+                  }),
+                  buildModelDefinition({
+                    id: "MiniMax-M2.5-Lightning",
+                    name: "MiniMax M2.5 Lightning",
                     input: ["text"],
                     reasoning: true,
                   }),
@@ -102,19 +101,23 @@ function createOAuthHandler(region: MiniMaxRegion) {
           agents: {
             defaults: {
               models: {
-                [modelRef("MiniMax-M2.1")]: { alias: "minimax-m2.1" },
                 [modelRef("MiniMax-M2.5")]: { alias: "minimax-m2.5" },
+                [modelRef("MiniMax-M2.5-highspeed")]: {
+                  alias: "minimax-m2.5-highspeed",
+                },
+                [modelRef("MiniMax-M2.5-Lightning")]: {
+                  alias: "minimax-m2.5-lightning",
+                },
               },
             },
           },
         },
-        defaultModel: modelRef(DEFAULT_MODEL),
         notes: [
           "MiniMax OAuth tokens auto-refresh. Re-run login if refresh fails or access is revoked.",
           `Base URL defaults to ${defaultBaseUrl}. Override models.providers.${PROVIDER_ID}.baseUrl if needed.`,
           ...(result.notification_message ? [result.notification_message] : []),
         ],
-      };
+      });
     } catch (err) {
       const errorMsg = err instanceof Error ? err.message : String(err);
       progress.stop(`MiniMax OAuth failed: ${errorMsg}`);

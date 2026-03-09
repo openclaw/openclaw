@@ -1,40 +1,62 @@
 import crypto from "node:crypto";
-import type { SystemRunApprovalBindingV1, SystemRunApprovalPlanV2 } from "./exec-approvals.js";
+import type {
+  SystemRunApprovalBinding,
+  SystemRunApprovalFileOperand,
+  SystemRunApprovalPlan,
+} from "./exec-approvals.js";
 import { normalizeEnvVarKey } from "./host-env-security.js";
+import { normalizeNonEmptyString, normalizeStringArray } from "./system-run-normalize.js";
 
 type NormalizedSystemRunEnvEntry = [key: string, value: string];
 
-function normalizeString(value: unknown): string | null {
-  if (typeof value !== "string") {
-    return null;
+function normalizeSystemRunApprovalFileOperand(
+  value: unknown,
+): SystemRunApprovalFileOperand | null | undefined {
+  if (value === undefined) {
+    return undefined;
   }
-  const trimmed = value.trim();
-  return trimmed ? trimmed : null;
-}
-
-function normalizeStringArray(value: unknown): string[] {
-  return Array.isArray(value) ? value.map((entry) => String(entry)) : [];
-}
-
-export function normalizeSystemRunApprovalPlanV2(value: unknown): SystemRunApprovalPlanV2 | null {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     return null;
   }
   const candidate = value as Record<string, unknown>;
-  if (candidate.version !== 2) {
+  const argvIndex =
+    typeof candidate.argvIndex === "number" &&
+    Number.isInteger(candidate.argvIndex) &&
+    candidate.argvIndex >= 0
+      ? candidate.argvIndex
+      : null;
+  const filePath = normalizeNonEmptyString(candidate.path);
+  const sha256 = normalizeNonEmptyString(candidate.sha256);
+  if (argvIndex === null || !filePath || !sha256) {
     return null;
   }
+  return {
+    argvIndex,
+    path: filePath,
+    sha256,
+  };
+}
+
+export function normalizeSystemRunApprovalPlan(value: unknown): SystemRunApprovalPlan | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return null;
+  }
+  const candidate = value as Record<string, unknown>;
   const argv = normalizeStringArray(candidate.argv);
   if (argv.length === 0) {
     return null;
   }
+  const mutableFileOperand = normalizeSystemRunApprovalFileOperand(candidate.mutableFileOperand);
+  if (candidate.mutableFileOperand !== undefined && mutableFileOperand === null) {
+    return null;
+  }
   return {
-    version: 2,
     argv,
-    cwd: normalizeString(candidate.cwd),
-    rawCommand: normalizeString(candidate.rawCommand),
-    agentId: normalizeString(candidate.agentId),
-    sessionKey: normalizeString(candidate.sessionKey),
+    cwd: normalizeNonEmptyString(candidate.cwd),
+    rawCommand: normalizeNonEmptyString(candidate.rawCommand),
+    agentId: normalizeNonEmptyString(candidate.agentId),
+    sessionKey: normalizeNonEmptyString(candidate.sessionKey),
+    mutableFileOperand: mutableFileOperand ?? undefined,
   };
 }
 
@@ -75,21 +97,20 @@ export function buildSystemRunApprovalEnvBinding(env: unknown): {
   };
 }
 
-export function buildSystemRunApprovalBindingV1(params: {
+export function buildSystemRunApprovalBinding(params: {
   argv: unknown;
   cwd?: unknown;
   agentId?: unknown;
   sessionKey?: unknown;
   env?: unknown;
-}): { binding: SystemRunApprovalBindingV1; envKeys: string[] } {
+}): { binding: SystemRunApprovalBinding; envKeys: string[] } {
   const envBinding = buildSystemRunApprovalEnvBinding(params.env);
   return {
     binding: {
-      version: 1,
       argv: normalizeStringArray(params.argv),
-      cwd: normalizeString(params.cwd),
-      agentId: normalizeString(params.agentId),
-      sessionKey: normalizeString(params.sessionKey),
+      cwd: normalizeNonEmptyString(params.cwd),
+      agentId: normalizeNonEmptyString(params.agentId),
+      sessionKey: normalizeNonEmptyString(params.sessionKey),
       envHash: envBinding.envHash,
     },
     envKeys: envBinding.envKeys,
@@ -161,17 +182,11 @@ export function matchSystemRunApprovalEnvHash(params: {
   return { ok: true };
 }
 
-export function matchSystemRunApprovalBindingV1(params: {
-  expected: SystemRunApprovalBindingV1;
-  actual: SystemRunApprovalBindingV1;
+export function matchSystemRunApprovalBinding(params: {
+  expected: SystemRunApprovalBinding;
+  actual: SystemRunApprovalBinding;
   actualEnvKeys: string[];
 }): SystemRunApprovalMatchResult {
-  if (params.expected.version !== 1 || params.actual.version !== 1) {
-    return requestMismatch({
-      expectedVersion: params.expected.version,
-      actualVersion: params.actual.version,
-    });
-  }
   if (!argvMatches(params.expected.argv, params.actual.argv)) {
     return requestMismatch();
   }
@@ -191,11 +206,10 @@ export function matchSystemRunApprovalBindingV1(params: {
   });
 }
 
-export function missingSystemRunApprovalBindingV1(params: {
+export function missingSystemRunApprovalBinding(params: {
   actualEnvKeys: string[];
 }): SystemRunApprovalMatchResult {
   return requestMismatch({
-    requiredBindingVersion: 1,
     envKeys: params.actualEnvKeys,
   });
 }

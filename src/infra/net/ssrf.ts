@@ -63,7 +63,7 @@ function normalizeHostnameAllowlist(values?: string[]): string[] {
   );
 }
 
-function resolveAllowPrivateNetwork(policy?: SsrFPolicy): boolean {
+export function isPrivateNetworkAllowedByPolicy(policy?: SsrFPolicy): boolean {
   return policy?.dangerouslyAllowPrivateNetwork === true || policy?.allowPrivateNetwork === true;
 }
 
@@ -282,7 +282,7 @@ export async function resolvePinnedHostnameWithPolicy(
     throw new Error("Invalid hostname");
   }
 
-  const allowPrivateNetwork = resolveAllowPrivateNetwork(params.policy);
+  const allowPrivateNetwork = isPrivateNetworkAllowedByPolicy(params.policy);
   const allowedHostnames = normalizeHostnameSet(params.policy?.allowedHostnames);
   const hostnameAllowlist = normalizeHostnameAllowlist(params.policy?.hostnameAllowlist);
   const isExplicitAllowed = allowedHostnames.has(normalized);
