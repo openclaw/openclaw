@@ -245,6 +245,9 @@ async function assertSecurePath(params: {
     }
   }
   if (params.allowInsecurePath) {
+    if (process.platform !== "win32") {
+      throw new Error(`${params.label} allowInsecurePath is only supported on Windows.`);
+    }
     return effectivePath;
   }
 

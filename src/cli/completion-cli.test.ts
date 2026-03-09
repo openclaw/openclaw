@@ -13,6 +13,13 @@ describe("generateZshCompletion", () => {
     expect(script).toContain("if ! (( $+functions[compdef] )); then");
     expect(script).toContain("autoload -Uz compinit");
     expect(script).toContain("compinit");
-    expect(script).toContain("compdef _openclaw_root_completion openclaw");
+    expect(script).toContain("compdef _openclaw_root_completion -- openclaw");
+  });
+
+  it("rejects unsafe command names before emitting zsh code", () => {
+    const program = new Command();
+    program.name("openclaw; rm -rf /");
+
+    expect(() => generateZshCompletion(program)).toThrow(/unsafe command name/i);
   });
 });

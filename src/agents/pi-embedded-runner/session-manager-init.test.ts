@@ -63,6 +63,21 @@ describe("shouldInjectBootstrapContext", () => {
     const sessionFile = await makeSessionFile("{not-json}\n");
     expect(await shouldInjectBootstrapContext(sessionFile)).toBe(true);
   });
+
+  it("falls back to injecting bootstrap context when the first assistant entry is beyond the scan cap", async () => {
+    const oversizedUserContent = "x".repeat(300_000);
+    const sessionFile = await makeSessionFile(
+      [
+        JSON.stringify({ type: "session", id: "sess-1", cwd: "/tmp" }),
+        JSON.stringify({
+          type: "message",
+          message: { role: "user", content: oversizedUserContent },
+        }),
+        JSON.stringify({ type: "message", message: { role: "assistant", content: "hi" } }),
+      ].join("\n"),
+    );
+    expect(await shouldInjectBootstrapContext(sessionFile)).toBe(true);
+  });
 });
 
 describe("prepareSessionManagerForRun", () => {

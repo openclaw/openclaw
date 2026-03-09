@@ -48,6 +48,18 @@ function sanitizeCompletionBasename(value: string): string {
   return trimmed.replace(/[^a-zA-Z0-9._-]/g, "-");
 }
 
+function sanitizeZshCommandName(value: string): string {
+  const trimmed = value.trim();
+  if (!/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(trimmed)) {
+    throw new Error(`Unsafe command name for zsh completion: ${value}`);
+  }
+  return trimmed;
+}
+
+function toZshFunctionSegment(value: string): string {
+  return sanitizeZshCommandName(value).replace(/[^A-Za-z0-9]/g, "_");
+}
+
 function resolveCompletionCacheDir(env: NodeJS.ProcessEnv = process.env): string {
   const stateDir = resolveStateDir(env, os.homedir);
   return path.join(stateDir, "completions");
@@ -377,7 +389,9 @@ export async function installCompletion(shell: string, yes: boolean, binName = "
 }
 
 export function generateZshCompletion(program: Command): string {
-  const rootCmd = program.name();
+  const rootCmd = sanitizeZshCommandName(program.name());
+  const rootPrefix = `_${toZshFunctionSegment(rootCmd)}`;
+  const rootFn = `${rootPrefix}_root_completion`;
   const script = `
 #compdef ${rootCmd}
 
@@ -386,7 +400,7 @@ if ! (( $+functions[compdef] )); then
   compinit
 fi
 
-_${rootCmd}_root_completion() {
+${rootFn}() {
   local -a commands
   local -a options
   
@@ -398,15 +412,20 @@ _${rootCmd}_root_completion() {
   case $state in
     (args)
       case $line[1] in
-        ${program.commands.map((cmd) => `(${cmd.name()}) _${rootCmd}_${cmd.name().replace(/-/g, "_")} ;;`).join("\n        ")}
+        ${program.commands
+          .map((cmd) => {
+            const cmdName = sanitizeZshCommandName(cmd.name());
+            return `(${cmdName}) ${rootPrefix}_${toZshFunctionSegment(cmdName)} ;;`;
+          })
+          .join("\n        ")}
       esac
       ;;
   esac
 }
 
-${generateZshSubcommands(program, rootCmd)}
+${generateZshSubcommands(program, rootPrefix)}
 
-compdef _${rootCmd}_root_completion ${rootCmd}
+compdef ${rootFn} -- ${rootCmd}
 `;
   return script;
 }
@@ -434,13 +453,14 @@ function generateZshArgs(cmd: Command): string {
 function generateZshSubcmdList(cmd: Command): string {
   const list = cmd.commands
     .map((c) => {
+      const name = sanitizeZshCommandName(c.name());
       const desc = c
         .description()
         .replace(/\\/g, "\\\\")
         .replace(/'/g, "'\\''")
         .replace(/\[/g, "\\[")
         .replace(/\]/g, "\\]");
-      return `'${c.name()}[${desc}]'`;
+      return `'${name}[${desc}]'`;
     })
     .join(" ");
   return `"1: :_values 'command' ${list}"`;
@@ -449,11 +469,11 @@ function generateZshSubcmdList(cmd: Command): string {
 function generateZshSubcommands(program: Command, prefix: string): string {
   let script = "";
   for (const cmd of program.commands) {
-    const cmdName = cmd.name();
-    const funcName = `_${prefix}_${cmdName.replace(/-/g, "_")}`;
+    const cmdName = sanitizeZshCommandName(cmd.name());
+    const funcName = `${prefix}_${toZshFunctionSegment(cmdName)}`;
 
     // Recurse first
-    script += generateZshSubcommands(cmd, `${prefix}_${cmdName.replace(/-/g, "_")}`);
+    script += generateZshSubcommands(cmd, funcName);
 
     const subCommands = cmd.commands;
     if (subCommands.length > 0) {
@@ -467,13 +487,18 @@ ${funcName}() {
     ${generateZshSubcmdList(cmd)} \\
     "*::arg:->args"
 
-  case $state in
-    (args)
-      case $line[1] in
-        ${subCommands.map((sub) => `(${sub.name()}) ${funcName}_${sub.name().replace(/-/g, "_")} ;;`).join("\n        ")}
+      case $state in
+        (args)
+          case $line[1] in
+        ${subCommands
+          .map((sub) => {
+            const subName = sanitizeZshCommandName(sub.name());
+            return `(${subName}) ${funcName}_${toZshFunctionSegment(subName)} ;;`;
+          })
+          .join("\n        ")}
+          esac
+          ;;
       esac
-      ;;
-  esac
 }
 `;
     } else {
