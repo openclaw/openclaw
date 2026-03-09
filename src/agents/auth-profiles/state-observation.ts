@@ -2,6 +2,7 @@ import { stateLog } from "./constants.js";
 import type { AuthProfileFailureReason, ProfileUsageStats } from "./types.js";
 
 export function logAuthProfileFailureStateChange(params: {
+  runId?: string;
   profileId: string;
   provider: string;
   reason: AuthProfileFailureReason;
@@ -29,6 +30,7 @@ export function logAuthProfileFailureStateChange(params: {
   stateLog.warn("auth profile failure state updated", {
     event: "auth_profile_failure_state_updated",
     tags: ["error_handling", "auth_profiles", windowType],
+    runId: params.runId,
     profileId: params.profileId,
     provider: params.provider,
     reason: params.reason,

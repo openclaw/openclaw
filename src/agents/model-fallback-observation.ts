@@ -24,6 +24,7 @@ export function logModelFallbackDecision(params: {
     | "probe_cooldown_candidate"
     | "candidate_failed"
     | "candidate_succeeded";
+  runId?: string;
   requestedProvider: string;
   requestedModel: string;
   candidate: ModelCandidate;
@@ -49,6 +50,7 @@ export function logModelFallbackDecision(params: {
   decisionLog.info("model fallback decision", {
     event: "model_fallback_decision",
     tags: ["error_handling", "model_fallback", params.decision],
+    runId: params.runId,
     decision: params.decision,
     requestedProvider: params.requestedProvider,
     requestedModel: params.requestedModel,

@@ -469,6 +469,7 @@ export async function runWithModelFallback<T>(params: {
   cfg: OpenClawConfig | undefined;
   provider: string;
   model: string;
+  runId?: string;
   agentDir?: string;
   /** Optional explicit fallbacks list; when provided (even empty), replaces agents.defaults.model.fallbacks. */
   fallbacksOverride?: string[];
@@ -527,6 +528,7 @@ export async function runWithModelFallback<T>(params: {
           });
           logModelFallbackDecision({
             decision: "skip_candidate",
+            runId: params.runId,
             requestedProvider: params.provider,
             requestedModel: params.model,
             candidate,
@@ -555,6 +557,7 @@ export async function runWithModelFallback<T>(params: {
         }
         logModelFallbackDecision({
           decision: "probe_cooldown_candidate",
+          runId: params.runId,
           requestedProvider: params.provider,
           requestedModel: params.model,
           candidate,
@@ -581,6 +584,7 @@ export async function runWithModelFallback<T>(params: {
       if (i > 0 || attempts.length > 0) {
         logModelFallbackDecision({
           decision: "candidate_succeeded",
+          runId: params.runId,
           requestedProvider: params.provider,
           requestedModel: params.model,
           candidate,
@@ -635,6 +639,7 @@ export async function runWithModelFallback<T>(params: {
       });
       logModelFallbackDecision({
         decision: "candidate_failed",
+        runId: params.runId,
         requestedProvider: params.provider,
         requestedModel: params.model,
         candidate,

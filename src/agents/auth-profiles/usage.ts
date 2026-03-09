@@ -453,8 +453,9 @@ export async function markAuthProfileFailure(params: {
   reason: AuthProfileFailureReason;
   cfg?: OpenClawConfig;
   agentDir?: string;
+  runId?: string;
 }): Promise<void> {
-  const { store, profileId, reason, agentDir, cfg } = params;
+  const { store, profileId, reason, agentDir, cfg, runId } = params;
   const profile = store.profiles[profileId];
   if (!profile || isAuthCooldownBypassedForProvider(profile.provider)) {
     return;
@@ -493,6 +494,7 @@ export async function markAuthProfileFailure(params: {
     store.usageStats = updated.usageStats;
     if (nextStats) {
       logAuthProfileFailureStateChange({
+        runId,
         profileId,
         provider: profile.provider,
         reason,
@@ -525,6 +527,7 @@ export async function markAuthProfileFailure(params: {
   updateUsageStatsEntry(store, profileId, () => computed);
   saveAuthProfileStore(store, agentDir);
   logAuthProfileFailureStateChange({
+    runId,
     profileId,
     provider: store.profiles[profileId]?.provider ?? profile.provider,
     reason,
@@ -543,12 +546,14 @@ export async function markAuthProfileCooldown(params: {
   store: AuthProfileStore;
   profileId: string;
   agentDir?: string;
+  runId?: string;
 }): Promise<void> {
   await markAuthProfileFailure({
     store: params.store,
     profileId: params.profileId,
     reason: "unknown",
     agentDir: params.agentDir,
+    runId: params.runId,
   });
 }
 

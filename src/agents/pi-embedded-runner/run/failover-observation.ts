@@ -6,6 +6,7 @@ import { failoverLog } from "../logger.js";
 export type FailoverDecisionObservation = {
   stage: "prompt" | "assistant";
   decision: "rotate_profile" | "fallback_model" | "surface_error";
+  runId?: string;
   rawError?: string;
   failoverReason: FailoverReason | null;
   profileFailureReason?: AuthProfileFailureReason | null;
@@ -33,6 +34,7 @@ export function createFailoverDecisionLogger(
     failoverLog.warn("embedded run failover decision", {
       event: "embedded_run_failover_decision",
       tags: ["error_handling", "failover", base.stage, decision],
+      runId: base.runId,
       stage: base.stage,
       decision,
       failoverReason: base.failoverReason,

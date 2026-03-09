@@ -23,6 +23,7 @@ describe("logModelFallbackDecision", () => {
 
     logModelFallbackDecision({
       decision: "candidate_failed",
+      runId: "run:model-fallback",
       requestedProvider: "openai",
       requestedModel: "gpt-5",
       candidate: { provider: "openai", model: "gpt-5" },
@@ -45,6 +46,7 @@ describe("logModelFallbackDecision", () => {
     expect(records).toHaveLength(1);
     expect(records[0]?.["1"]).toMatchObject({
       event: "model_fallback_decision",
+      runId: "run:model-fallback",
       errorPreview: expect.stringContaining('"request_id":"sha256:'),
       errorHash: expect.stringMatching(/^sha256:/),
       errorFingerprint: expect.stringMatching(/^sha256:/),

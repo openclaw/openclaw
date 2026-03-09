@@ -763,6 +763,7 @@ export async function runEmbeddedPiAgent(
           reason,
           cfg: params.config,
           agentDir,
+          runId: params.runId,
         });
       };
       const resolveAuthProfileFailureReason = (
@@ -1231,6 +1232,7 @@ export async function runEmbeddedPiAgent(
             const failedPromptProfileId = lastProfileId;
             const logPromptFailoverDecision = createFailoverDecisionLogger({
               stage: "prompt",
+              runId: params.runId,
               rawError: errorText,
               failoverReason: promptFailoverReason,
               profileFailureReason: promptProfileFailureReason,
@@ -1306,6 +1308,7 @@ export async function runEmbeddedPiAgent(
           const failedAssistantProfileId = lastProfileId;
           const logAssistantFailoverDecision = createFailoverDecisionLogger({
             stage: "assistant",
+            runId: params.runId,
             rawError: lastAssistant?.errorMessage?.trim(),
             failoverReason: assistantFailoverReason,
             profileFailureReason: assistantProfileFailureReason,
