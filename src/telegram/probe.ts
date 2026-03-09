@@ -24,6 +24,9 @@ export type TelegramProbeOptions = {
   network?: TelegramNetworkConfig;
 };
 
+const probeFetcherCache = new Map<string, typeof fetch>();
+const MAX_PROBE_FETCHER_CACHE_SIZE = 64;
+
 function resolveProbeOptions(
   proxyOrOptions?: string | TelegramProbeOptions,
 ): TelegramProbeOptions | undefined {
@@ -36,6 +39,53 @@ function resolveProbeOptions(
   return proxyOrOptions;
 }
 
+function shouldUseProbeFetcherCache(): boolean {
+  return !process.env.VITEST && process.env.NODE_ENV !== "test";
+}
+
+function buildProbeFetcherCacheKey(token: string, options?: TelegramProbeOptions): string {
+  const proxyKey = options?.proxyUrl?.trim() ?? "";
+  const autoSelectFamily = options?.network?.autoSelectFamily;
+  const autoSelectFamilyKey =
+    typeof autoSelectFamily === "boolean" ? String(autoSelectFamily) : "default";
+  const dnsResultOrderKey = options?.network?.dnsResultOrder ?? "default";
+  return `${token}::${proxyKey}::${autoSelectFamilyKey}::${dnsResultOrderKey}`;
+}
+
+function setCachedProbeFetcher(cacheKey: string, fetcher: typeof fetch): typeof fetch {
+  probeFetcherCache.set(cacheKey, fetcher);
+  if (probeFetcherCache.size > MAX_PROBE_FETCHER_CACHE_SIZE) {
+    const oldestKey = probeFetcherCache.keys().next().value;
+    if (oldestKey !== undefined) {
+      probeFetcherCache.delete(oldestKey);
+    }
+  }
+  return fetcher;
+}
+
+function resolveProbeFetcher(token: string, options?: TelegramProbeOptions): typeof fetch {
+  const cacheEnabled = shouldUseProbeFetcherCache();
+  const cacheKey = cacheEnabled ? buildProbeFetcherCacheKey(token, options) : null;
+  if (cacheKey) {
+    const cachedFetcher = probeFetcherCache.get(cacheKey);
+    if (cachedFetcher) {
+      return cachedFetcher;
+    }
+  }
+
+  const proxyUrl = options?.proxyUrl?.trim();
+  const proxyFetch = proxyUrl ? makeProxyFetch(proxyUrl) : undefined;
+  const resolved = resolveTelegramFetch(proxyFetch, { network: options?.network });
+  if (!resolved) {
+    throw new Error("fetch is not available");
+  }
+
+  if (cacheKey) {
+    return setCachedProbeFetcher(cacheKey, resolved);
+  }
+  return resolved;
+}
+
 export async function probeTelegram(
   token: string,
   timeoutMs: number,
@@ -43,11 +93,7 @@ export async function probeTelegram(
 ): Promise<TelegramProbe> {
   const started = Date.now();
   const options = resolveProbeOptions(proxyOrOptions);
-  const proxyFetch = options?.proxyUrl ? makeProxyFetch(options.proxyUrl) : undefined;
-  const fetcher = resolveTelegramFetch(proxyFetch, { network: options?.network });
-  if (!fetcher) {
-    throw new Error("fetch is not available");
-  }
+  const fetcher = resolveProbeFetcher(token, options);
   const base = `${TELEGRAM_API_BASE}/bot${token}`;
   const retryDelayMs = Math.max(50, Math.min(1000, timeoutMs));
 

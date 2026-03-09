@@ -58,6 +58,7 @@ describe("probeTelegram retry logic", () => {
   afterEach(() => {
     resolveTelegramFetch.mockReset();
     makeProxyFetch.mockReset();
+    vi.unstubAllEnvs();
     vi.clearAllMocks();
     if (originalFetch) {
       global.fetch = originalFetch;
@@ -160,5 +161,57 @@ describe("probeTelegram retry logic", () => {
         dnsResultOrder: "ipv4first",
       },
     });
+  });
+
+  it("reuses probe fetcher across repeated probes for the same account transport settings", async () => {
+    const fetchMock = installFetchMock();
+    vi.stubEnv("VITEST", "");
+    vi.stubEnv("NODE_ENV", "production");
+
+    mockGetMeSuccess(fetchMock);
+    mockGetWebhookInfoSuccess(fetchMock);
+    await probeTelegram(`${token}-cache`, timeoutMs, {
+      network: {
+        autoSelectFamily: true,
+        dnsResultOrder: "ipv4first",
+      },
+    });
+
+    mockGetMeSuccess(fetchMock);
+    mockGetWebhookInfoSuccess(fetchMock);
+    await probeTelegram(`${token}-cache`, timeoutMs, {
+      network: {
+        autoSelectFamily: true,
+        dnsResultOrder: "ipv4first",
+      },
+    });
+
+    expect(resolveTelegramFetch).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not reuse probe fetcher cache when network settings differ", async () => {
+    const fetchMock = installFetchMock();
+    vi.stubEnv("VITEST", "");
+    vi.stubEnv("NODE_ENV", "production");
+
+    mockGetMeSuccess(fetchMock);
+    mockGetWebhookInfoSuccess(fetchMock);
+    await probeTelegram(`${token}-cache-variant`, timeoutMs, {
+      network: {
+        autoSelectFamily: true,
+        dnsResultOrder: "ipv4first",
+      },
+    });
+
+    mockGetMeSuccess(fetchMock);
+    mockGetWebhookInfoSuccess(fetchMock);
+    await probeTelegram(`${token}-cache-variant`, timeoutMs, {
+      network: {
+        autoSelectFamily: false,
+        dnsResultOrder: "ipv4first",
+      },
+    });
+
+    expect(resolveTelegramFetch).toHaveBeenCalledTimes(2);
   });
 });
