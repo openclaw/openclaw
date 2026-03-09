@@ -567,7 +567,12 @@ describe("secrets runtime snapshot", () => {
         config: asConfig({
           secrets: {
             providers: {
-              default: { source: "file", path: secretFile, mode: "json" },
+              default: {
+                source: "file",
+                path: secretFile,
+                mode: "json",
+                ...(process.platform === "win32" ? { allowInsecurePath: true } : {}),
+              },
             },
           },
           models: {
@@ -658,7 +663,12 @@ describe("secrets runtime snapshot", () => {
         config: asConfig({
           secrets: {
             providers: {
-              default: { source: "file", path: secretFile, mode: "json" },
+              default: {
+                source: "file",
+                path: secretFile,
+                mode: "json",
+                ...(process.platform === "win32" ? { allowInsecurePath: true } : {}),
+              },
             },
           },
           models: {
