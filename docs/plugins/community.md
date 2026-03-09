@@ -50,7 +50,7 @@ Use this format when adding entries:
   repo: `https://github.com/icesword0760/openclaw-wechat`
   install: `openclaw plugins install @icesword760/openclaw-wechat`
 
-- **Carapace** — Cedar authorization proxy for MCP tool access. Aggregates MCP servers, enforces Cedar policies on every tool call via Cedarling WASM, and provides a local GUI for human oversight. Default-deny or allow-all modes, visual policy builder, risk-based tool categorization.
+- **Carapace** — Cedar authorization for everything your agent does. Gates MCP tool calls, shell commands (by binary name), and outbound API requests (by domain) via Cedarling WASM (Cedar 4.4.2). Local GUI with visual policy builder, risk-based categorization, and human oversight.
   npm: `@clawdreyhepburn/carapace`
   repo: `https://github.com/clawdreyhepburn/carapace`
   install: `openclaw plugins install @clawdreyhepburn/carapace`
