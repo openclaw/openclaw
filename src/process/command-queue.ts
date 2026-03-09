@@ -317,7 +317,10 @@ export function waitForActiveTasks(timeoutMs: number): Promise<{ drained: boolea
         resolve({ drained: false });
         return;
       }
-      setTimeout(check, POLL_INTERVAL_MS);
+      const t = setTimeout(check, POLL_INTERVAL_MS);
+      if (typeof t === "object" && "unref" in t) {
+        t.unref();
+      }
     };
     check();
   });
