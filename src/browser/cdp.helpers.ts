@@ -172,6 +172,14 @@ export async function fetchCdpChecked(
       fetch(url, { ...init, headers, signal: ctrl.signal }),
     );
     if (!res.ok) {
+      if (res.status === 429) {
+        const text = await res.text().catch(() => "");
+        const detail = text ? ` (${text.slice(0, 200)})` : "";
+        throw new Error(
+          `Browserbase rate limit reached (max concurrent sessions).${detail} ` +
+            `Do NOT retry - wait for the current session to complete, or upgrade your plan.`,
+        );
+      }
       throw new Error(`HTTP ${res.status}`);
     }
     return res;

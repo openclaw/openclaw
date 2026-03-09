@@ -102,6 +102,14 @@ const BROWSER_TOOL_MODEL_HINT =
   "Do NOT retry the browser tool — it will keep failing. " +
   "Use an alternative approach or inform the user that the browser is currently unavailable.";
 
+const BROWSER_RATE_LIMIT_MESSAGE =
+  "Browserbase rate limit reached (max concurrent sessions). " +
+  "Wait for the current session to complete, or upgrade your plan.";
+
+function isRateLimitStatus(status: number): boolean {
+  return status === 429;
+}
+
 function resolveBrowserFetchOperatorHint(url: string): string {
   const isLocal = !isAbsoluteHttp(url);
   return isLocal
@@ -176,6 +184,12 @@ async function fetchHttpJson<T>(
     const res = await fetch(url, { ...init, signal: ctrl.signal });
     if (!res.ok) {
       const text = await res.text().catch(() => "");
+      if (isRateLimitStatus(res.status)) {
+        const detail = text ? ` (${text.slice(0, 200)})` : "";
+        throw new BrowserServiceError(
+          `${BROWSER_RATE_LIMIT_MESSAGE}${detail} ${BROWSER_TOOL_MODEL_HINT}`,
+        );
+      }
       throw new BrowserServiceError(text || `HTTP ${res.status}`);
     }
     return (await res.json()) as T;
@@ -269,6 +283,15 @@ export async function fetchBrowserJson<T>(
     });
 
     if (result.status >= 400) {
+      if (isRateLimitStatus(result.status)) {
+        const detail =
+          result.body && typeof result.body === "object" && "error" in result.body
+            ? ` (${String((result.body as { error?: unknown }).error).slice(0, 200)})`
+            : "";
+        throw new BrowserServiceError(
+          `${BROWSER_RATE_LIMIT_MESSAGE}${detail} ${BROWSER_TOOL_MODEL_HINT}`,
+        );
+      }
       const message =
         result.body && typeof result.body === "object" && "error" in result.body
           ? String((result.body as { error?: unknown }).error)
