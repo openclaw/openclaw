@@ -33,9 +33,11 @@ type AllowedValuesCollection = {
   hasValues: boolean;
 };
 type IssueScore = {
-  hard: number;
+  rootTypeMismatch: number;
+  discriminatorMismatch: number;
   unknown: number;
-  softTypeLiteralMismatch: number;
+  otherHard: number;
+  missingDiscriminator: number;
   total: number;
 };
 
@@ -119,10 +121,13 @@ function toUnknownKeyIssue(
   };
 }
 
-function collectUnknownKeyIssues(issues: ReadonlyArray<unknown>): UnknownKeyIssue[] {
+function collectUnknownKeyIssues(
+  issues: ReadonlyArray<unknown>,
+  rootRaw: unknown,
+): UnknownKeyIssue[] {
   const collected: UnknownKeyIssue[] = [];
   for (const issue of issues) {
-    collectUnknownKeyIssuesFromIssue(issue, collected, []);
+    collectUnknownKeyIssuesFromIssue(issue, collected, [], rootRaw);
   }
   return collected;
 }
@@ -131,6 +136,7 @@ function collectUnknownKeyIssuesFromIssue(
   issue: unknown,
   collected: UnknownKeyIssue[],
   basePathSegments: Array<string | number>,
+  rootRaw: unknown,
 ): void {
   const effectivePathSegments = combineIssuePathSegments(
     basePathSegments,
@@ -154,46 +160,72 @@ function collectUnknownKeyIssuesFromIssue(
   // Evaluate only the most plausible union branch. Collecting unknown keys
   // from every branch can strip fields that are valid in the intended branch
   // (for example bindings[].acp when route/acp union branches both fail).
-  const selectedBranch = selectBestUnionIssueBranch(nested);
+  const scopeValue = resolveIssuePathValue(rootRaw, effectivePathSegments);
+  const selectedBranch = selectBestUnionIssueBranch(nested, scopeValue);
   if (!selectedBranch) {
     return;
   }
   for (const nestedIssue of selectedBranch) {
-    collectUnknownKeyIssuesFromIssue(nestedIssue, collected, effectivePathSegments);
+    collectUnknownKeyIssuesFromIssue(nestedIssue, collected, effectivePathSegments, rootRaw);
   }
 }
 
 function addIssueScore(left: IssueScore, right: IssueScore): IssueScore {
   return {
-    hard: left.hard + right.hard,
+    rootTypeMismatch: left.rootTypeMismatch + right.rootTypeMismatch,
+    discriminatorMismatch: left.discriminatorMismatch + right.discriminatorMismatch,
     unknown: left.unknown + right.unknown,
-    softTypeLiteralMismatch: left.softTypeLiteralMismatch + right.softTypeLiteralMismatch,
+    otherHard: left.otherHard + right.otherHard,
+    missingDiscriminator: left.missingDiscriminator + right.missingDiscriminator,
     total: left.total + right.total,
   };
 }
 
 function compareIssueScore(a: IssueScore, b: IssueScore): number {
-  if (a.hard !== b.hard) {
-    return a.hard - b.hard;
+  if (a.rootTypeMismatch !== b.rootTypeMismatch) {
+    return a.rootTypeMismatch - b.rootTypeMismatch;
+  }
+  if (a.discriminatorMismatch !== b.discriminatorMismatch) {
+    return a.discriminatorMismatch - b.discriminatorMismatch;
   }
   if (a.unknown !== b.unknown) {
     return a.unknown - b.unknown;
   }
-  if (a.softTypeLiteralMismatch !== b.softTypeLiteralMismatch) {
-    return a.softTypeLiteralMismatch - b.softTypeLiteralMismatch;
+  if (a.otherHard !== b.otherHard) {
+    return a.otherHard - b.otherHard;
+  }
+  if (a.missingDiscriminator !== b.missingDiscriminator) {
+    return a.missingDiscriminator - b.missingDiscriminator;
   }
   return a.total - b.total;
 }
 
-function isSoftTypeLiteralMismatchIssue(record: UnknownIssueRecord | null): boolean {
+function resolveIssuePathValue(root: unknown, pathSegments: Array<string | number>): unknown {
+  let current: unknown = root;
+  for (const segment of pathSegments) {
+    if (typeof segment === "number") {
+      if (!Array.isArray(current)) {
+        return undefined;
+      }
+      current = current[segment];
+      continue;
+    }
+    if (!isRecord(current)) {
+      return undefined;
+    }
+    current = current[segment];
+  }
+  return current;
+}
+
+function isLiteralTypeIssue(record: UnknownIssueRecord | null): boolean {
   if (!record || record.code !== "invalid_value") {
     return false;
   }
   if (!Array.isArray(record.path) || record.path.length === 0) {
     return false;
   }
-  const lastPathSegment = record.path.at(-1);
-  if (lastPathSegment !== "type") {
+  if (record.path.at(-1) !== "type") {
     return false;
   }
   const values = record.values;
@@ -202,45 +234,136 @@ function isSoftTypeLiteralMismatchIssue(record: UnknownIssueRecord | null): bool
   );
 }
 
-function scoreIssueForUnknownKeyStripping(issue: unknown): IssueScore {
+function classifyLiteralTypeIssue(
+  record: UnknownIssueRecord | null,
+  scopeValue: unknown,
+): "mismatch" | "missing" | "other" {
+  if (!isLiteralTypeIssue(record) || !isRecord(scopeValue)) {
+    return "other";
+  }
+  const rawType = scopeValue.type;
+  if (typeof rawType === "string") {
+    const values = record?.values;
+    if (Array.isArray(values) && !values.includes(rawType)) {
+      return "mismatch";
+    }
+    return "other";
+  }
+  if (rawType == null || typeof rawType !== "string") {
+    return "missing";
+  }
+  return "other";
+}
+
+function scoreIssueForUnknownKeyStripping(issue: unknown, scopeValue: unknown): IssueScore {
   const record = toIssueRecord(issue);
   const code = typeof record?.code === "string" ? record.code : "";
   if (code === "unrecognized_keys") {
-    return { hard: 0, unknown: 1, softTypeLiteralMismatch: 0, total: 1 };
+    return {
+      rootTypeMismatch: 0,
+      discriminatorMismatch: 0,
+      unknown: 1,
+      otherHard: 0,
+      missingDiscriminator: 0,
+      total: 1,
+    };
   }
-  if (isSoftTypeLiteralMismatchIssue(record)) {
-    return { hard: 0, unknown: 0, softTypeLiteralMismatch: 1, total: 1 };
+  if (code === "invalid_type" && Array.isArray(record?.path) && record.path.length === 0) {
+    return {
+      rootTypeMismatch: 1,
+      discriminatorMismatch: 0,
+      unknown: 0,
+      otherHard: 0,
+      missingDiscriminator: 0,
+      total: 1,
+    };
+  }
+  const typeIssueKind = classifyLiteralTypeIssue(record, scopeValue);
+  if (typeIssueKind === "mismatch") {
+    return {
+      rootTypeMismatch: 0,
+      discriminatorMismatch: 1,
+      unknown: 0,
+      otherHard: 0,
+      missingDiscriminator: 0,
+      total: 1,
+    };
+  }
+  if (typeIssueKind === "missing") {
+    return {
+      rootTypeMismatch: 0,
+      discriminatorMismatch: 0,
+      unknown: 0,
+      otherHard: 0,
+      missingDiscriminator: 1,
+      total: 1,
+    };
   }
   if (code === "invalid_union") {
     const nested = record?.errors;
     if (!Array.isArray(nested) || nested.length === 0) {
-      return { hard: 1, unknown: 0, softTypeLiteralMismatch: 0, total: 1 };
+      return {
+        rootTypeMismatch: 0,
+        discriminatorMismatch: 0,
+        unknown: 0,
+        otherHard: 1,
+        missingDiscriminator: 0,
+        total: 1,
+      };
     }
-    const selectedBranch = selectBestUnionIssueBranch(nested);
+    const nestedScopeValue = resolveIssuePathValue(scopeValue, toIssuePathSegments(issue));
+    const selectedBranch = selectBestUnionIssueBranch(nested, nestedScopeValue);
     if (!selectedBranch) {
-      return { hard: 1, unknown: 0, softTypeLiteralMismatch: 0, total: 1 };
+      return {
+        rootTypeMismatch: 0,
+        discriminatorMismatch: 0,
+        unknown: 0,
+        otherHard: 1,
+        missingDiscriminator: 0,
+        total: 1,
+      };
     }
-    return scoreIssueListForUnknownKeyStripping(selectedBranch);
+    return scoreIssueListForUnknownKeyStripping(selectedBranch, nestedScopeValue);
   }
-  return { hard: 1, unknown: 0, softTypeLiteralMismatch: 0, total: 1 };
+  return {
+    rootTypeMismatch: 0,
+    discriminatorMismatch: 0,
+    unknown: 0,
+    otherHard: 1,
+    missingDiscriminator: 0,
+    total: 1,
+  };
 }
 
-function scoreIssueListForUnknownKeyStripping(issues: ReadonlyArray<unknown>): IssueScore {
-  let score: IssueScore = { hard: 0, unknown: 0, softTypeLiteralMismatch: 0, total: 0 };
+function scoreIssueListForUnknownKeyStripping(
+  issues: ReadonlyArray<unknown>,
+  scopeValue: unknown,
+): IssueScore {
+  let score: IssueScore = {
+    rootTypeMismatch: 0,
+    discriminatorMismatch: 0,
+    unknown: 0,
+    otherHard: 0,
+    missingDiscriminator: 0,
+    total: 0,
+  };
   for (const issue of issues) {
-    score = addIssueScore(score, scoreIssueForUnknownKeyStripping(issue));
+    score = addIssueScore(score, scoreIssueForUnknownKeyStripping(issue, scopeValue));
   }
   return score;
 }
 
-function selectBestUnionIssueBranch(nested: unknown[]): ReadonlyArray<unknown> | null {
+function selectBestUnionIssueBranch(
+  nested: unknown[],
+  scopeValue: unknown,
+): ReadonlyArray<unknown> | null {
   let bestBranch: ReadonlyArray<unknown> | null = null;
   let bestScore: IssueScore | null = null;
   for (const branch of nested) {
     if (!Array.isArray(branch) || branch.length === 0) {
       continue;
     }
-    const branchScore = scoreIssueListForUnknownKeyStripping(branch);
+    const branchScore = scoreIssueListForUnknownKeyStripping(branch, scopeValue);
     if (!bestScore || compareIssueScore(branchScore, bestScore) < 0) {
       bestScore = branchScore;
       bestBranch = branch;
@@ -299,7 +422,7 @@ function stripUnknownKeysWithWarnings(raw: unknown): {
       return { sanitizedRaw, warnings };
     }
 
-    const unknownKeyIssues = collectUnknownKeyIssues(parsed.error.issues);
+    const unknownKeyIssues = collectUnknownKeyIssues(parsed.error.issues, sanitizedRaw);
     if (unknownKeyIssues.length === 0) {
       if (!cloned) {
         return { sanitizedRaw: raw, warnings: [] };
