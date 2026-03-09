@@ -200,6 +200,24 @@ describe("wrapStreamFnRecoverTextToolCalls", () => {
     });
   });
 
+  it("does not recover XML invokes wrapped by unknown closing tags", async () => {
+    const finalMessage = {
+      role: "assistant",
+      content: [
+        {
+          type: "text",
+          text: '<invoke name="exec">{"command":"pwd"}</invoke></div>',
+        },
+      ],
+    };
+    const baseFn = vi.fn(() => createFakeStream({ events: [], resultMessage: finalMessage }));
+
+    const stream = await invokeRecoveredStream(baseFn, new Set(["exec"]));
+    const result = await stream.result();
+
+    expect(result).toEqual(finalMessage);
+  });
+
   it("blocks prototype-polluting XML parameter keys", async () => {
     const finalMessage = {
       role: "assistant",

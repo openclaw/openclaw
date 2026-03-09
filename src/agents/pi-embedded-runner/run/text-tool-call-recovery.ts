@@ -22,8 +22,7 @@ const MAX_XML_PARAMETER_CANDIDATES = 64;
 const MAX_BARE_TEXT_TOOL_CALL_CANDIDATES = 8;
 
 const BASIC_XML_ENTITY_RE = /&(?:amp|lt|gt|quot|apos|#39);/i;
-const XML_INVOKE_RE =
-  /<invoke\b[^>]*\bname=(?:"([^"]+)"|'([^']+)')[^>]*>([\s\S]*?)<\/invoke>(?:\s*<\/[a-z0-9:_-]+>)?/gi;
+const XML_INVOKE_RE = /<invoke\b[^>]*\bname=(?:"([^"]+)"|'([^']+)')[^>]*>([\s\S]*?)<\/invoke>/gi;
 const XML_PARAMETER_RE =
   /<parameter\b[^>]*\bname=(?:"([^"]+)"|'([^']+)')[^>]*>([\s\S]*?)<\/parameter>/gi;
 const RECOVERABLE_XML_CONTAINER_SEGMENT_RE =
