@@ -201,6 +201,43 @@ describe("cron tool", () => {
     expect(call?.params?.agentId).toBeNull();
   });
 
+  it("auto-fills agentId from session when not provided", async () => {
+    const tool = createCronTool({ agentSessionKey: "agent:xiaomeng:feishu:direct:abc" });
+    await tool.execute("call-auto-fill", {
+      action: "add",
+      job: {
+        name: "wake-up",
+        schedule: { at: new Date(123).toISOString() },
+        payload: { kind: "systemEvent", text: "hello" },
+      },
+    });
+
+    const call = callGatewayMock.mock.calls[0]?.[0] as {
+      params?: { agentId?: unknown };
+    };
+    // resolveSessionAgentId mock returns "agent-123"
+    expect(call?.params?.agentId).toBe("agent-123");
+  });
+
+  it("auto-fills agentId when job.agentId is undefined", async () => {
+    const tool = createCronTool({ agentSessionKey: "agent:xiaomeng:feishu:direct:abc" });
+    await tool.execute("call-undefined", {
+      action: "add",
+      job: {
+        name: "wake-up",
+        schedule: { at: new Date(123).toISOString() },
+        agentId: undefined,
+        payload: { kind: "systemEvent", text: "hello" },
+      },
+    });
+
+    const call = callGatewayMock.mock.calls[0]?.[0] as {
+      params?: { agentId?: unknown };
+    };
+    // resolveSessionAgentId mock returns "agent-123"
+    expect(call?.params?.agentId).toBe("agent-123");
+  });
+
   it("stamps cron.add with caller sessionKey when missing", async () => {
     callGatewayMock.mockResolvedValueOnce({ ok: true });
 
