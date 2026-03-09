@@ -512,3 +512,208 @@ describe("validateAnthropicTurns strips dangling tool_use blocks", () => {
     expect(result).toHaveLength(3);
   });
 });
+
+describe("validateAnthropicTurns strips orphaned tool_result blocks", () => {
+  it("should strip tool_result blocks without matching tool_use in prior assistant", () => {
+    const msgs = asMessages([
+      { role: "user", content: [{ type: "text", text: "Use tool" }] },
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "No tools here" }],
+      },
+      {
+        role: "user",
+        content: [
+          { type: "toolResult", toolUseId: "tool-1", content: [{ type: "text", text: "Result" }] },
+          { type: "text", text: "Thanks" },
+        ],
+      },
+    ]);
+
+    const result = validateAnthropicTurns(msgs);
+
+    expect(result).toHaveLength(3);
+    const userContent = (result[2] as { content?: unknown[] }).content;
+    // Orphaned tool_result should be stripped, text preserved
+    expect(userContent).toEqual([{ type: "text", text: "Thanks" }]);
+  });
+
+  it("should preserve tool_result blocks with matching tool_use in prior assistant", () => {
+    const msgs = asMessages([
+      { role: "user", content: [{ type: "text", text: "Use tool" }] },
+      {
+        role: "assistant",
+        content: [
+          { type: "toolUse", id: "tool-1", name: "test", input: {} },
+          { type: "text", text: "Checking" },
+        ],
+      },
+      {
+        role: "user",
+        content: [
+          { type: "toolResult", toolUseId: "tool-1", content: [{ type: "text", text: "Result" }] },
+          { type: "text", text: "Thanks" },
+        ],
+      },
+    ]);
+
+    const result = validateAnthropicTurns(msgs);
+
+    expect(result).toHaveLength(3);
+    const userContent = (result[2] as { content?: unknown[] }).content;
+    expect(userContent).toEqual([
+      { type: "toolResult", toolUseId: "tool-1", content: [{ type: "text", text: "Result" }] },
+      { type: "text", text: "Thanks" },
+    ]);
+  });
+
+  it("should strip only orphaned tool_result blocks in a mix", () => {
+    const msgs = asMessages([
+      { role: "user", content: [{ type: "text", text: "Use tools" }] },
+      {
+        role: "assistant",
+        content: [
+          { type: "toolUse", id: "tool-1", name: "test1", input: {} },
+          { type: "toolUse", id: "tool-2", name: "test2", input: {} },
+        ],
+      },
+      {
+        role: "user",
+        content: [
+          { type: "toolResult", toolUseId: "tool-1", content: [{ type: "text", text: "Result 1" }] },
+          { type: "toolResult", toolUseId: "tool-2", content: [{ type: "text", text: "Result 2" }] },
+          { type: "toolResult", toolUseId: "tool-3", content: [{ type: "text", text: "Orphan" }] },
+          { type: "text", text: "Done" },
+        ],
+      },
+    ]);
+
+    const result = validateAnthropicTurns(msgs);
+
+    expect(result).toHaveLength(3);
+    const userContent = (result[2] as { content?: unknown[] }).content;
+    // tool-1 and tool-2 results kept, tool-3 orphan stripped
+    expect(userContent).toEqual([
+      { type: "toolResult", toolUseId: "tool-1", content: [{ type: "text", text: "Result 1" }] },
+      { type: "toolResult", toolUseId: "tool-2", content: [{ type: "text", text: "Result 2" }] },
+      { type: "text", text: "Done" },
+    ]);
+  });
+
+  it("should insert fallback text when all user content is orphaned tool_result", () => {
+    const msgs = asMessages([
+      { role: "user", content: [{ type: "text", text: "Use tool" }] },
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "No tools" }],
+      },
+      {
+        role: "user",
+        content: [
+          { type: "toolResult", toolUseId: "tool-1", content: [{ type: "text", text: "Result" }] },
+        ],
+      },
+    ]);
+
+    const result = validateAnthropicTurns(msgs);
+
+    expect(result).toHaveLength(3);
+    const userContent = (result[2] as { content?: unknown[] }).content;
+    expect(userContent).toEqual([{ type: "text", text: "[tool results omitted]" }]);
+  });
+
+  it("should strip tool_result when there is no preceding assistant message", () => {
+    const msgs = asMessages([
+      {
+        role: "user",
+        content: [
+          { type: "toolResult", toolUseId: "tool-1", content: [{ type: "text", text: "Result" }] },
+          { type: "text", text: "Hello" },
+        ],
+      },
+    ]);
+
+    const result = validateAnthropicTurns(msgs);
+
+    expect(result).toHaveLength(1);
+    const userContent = (result[0] as { content?: unknown[] }).content;
+    expect(userContent).toEqual([{ type: "text", text: "Hello" }]);
+  });
+
+  it("is idempotent - running twice produces same result", () => {
+    const msgs = asMessages([
+      { role: "user", content: [{ type: "text", text: "Use tool" }] },
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "No tools" }],
+      },
+      {
+        role: "user",
+        content: [
+          { type: "toolResult", toolUseId: "tool-1", content: [{ type: "text", text: "Result" }] },
+          { type: "text", text: "Thanks" },
+        ],
+      },
+    ]);
+
+    const firstPass = validateAnthropicTurns(msgs);
+    const secondPass = validateAnthropicTurns(firstPass);
+
+    expect(secondPass).toEqual(firstPass);
+  });
+
+  it("strips orphaned tool_result after dangling tool_use is stripped", () => {
+    // Scenario: assistant has tool_use with non-Anthropic ID, user has matching tool_result.
+    // stripDanglingAnthropicToolUses strips the tool_use (no matching result with that ID in user),
+    // then stripOrphanedAnthropicToolResults strips the now-orphaned tool_result.
+    const msgs = asMessages([
+      { role: "user", content: [{ type: "text", text: "Use tool" }] },
+      {
+        role: "assistant",
+        content: [
+          { type: "toolUse", id: "tool-A", name: "test", input: {} },
+          { type: "toolUse", id: "tool-B", name: "test2", input: {} },
+        ],
+      },
+      {
+        role: "user",
+        content: [
+          { type: "toolResult", toolUseId: "tool-A", content: [{ type: "text", text: "Result A" }] },
+          // tool-B result is missing, so tool-B tool_use gets stripped by stripDanglingAnthropicToolUses
+          { type: "text", text: "Done" },
+        ],
+      },
+    ]);
+
+    const result = validateAnthropicTurns(msgs);
+
+    expect(result).toHaveLength(3);
+    // tool-A preserved in both assistant and user
+    const assistantContent = (result[1] as { content?: unknown[] }).content;
+    expect(assistantContent).toEqual([
+      { type: "toolUse", id: "tool-A", name: "test", input: {} },
+    ]);
+    const userContent = (result[2] as { content?: unknown[] }).content;
+    expect(userContent).toEqual([
+      { type: "toolResult", toolUseId: "tool-A", content: [{ type: "text", text: "Result A" }] },
+      { type: "text", text: "Done" },
+    ]);
+  });
+
+  it("does not crash when user content is non-array", () => {
+    const msgs = [
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "Hi" }],
+      },
+      {
+        role: "user",
+        content: "legacy-content",
+      },
+    ] as unknown as AgentMessage[];
+
+    expect(() => validateAnthropicTurns(msgs)).not.toThrow();
+    const result = validateAnthropicTurns(msgs);
+    expect(result).toHaveLength(2);
+  });
+});
