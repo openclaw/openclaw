@@ -2,6 +2,7 @@ import { spawnSync } from "node:child_process";
 import fsSync from "node:fs";
 import { isRestartEnabled } from "../../config/commands.js";
 import { readBestEffortConfig, resolveGatewayPort } from "../../config/config.js";
+import { launchAgentPlistExists, repairLaunchAgentBootstrap } from "../../daemon/launchd.js";
 import { parseCmdScriptCommandLine } from "../../daemon/cmd-argv.js";
 import { resolveGatewayService } from "../../daemon/service.js";
 import { probeGateway } from "../../gateway/probe.js";
@@ -180,6 +181,29 @@ async function restartGatewayWithoutServiceManager(port: number) {
   };
 }
 
+async function restartGatewayLaunchAgentIfInstalled() {
+  if (process.platform !== "darwin") {
+    return null;
+  }
+  const serviceEnv = process.env as Record<string, string | undefined>;
+  const plistExists = await launchAgentPlistExists(serviceEnv);
+  if (!plistExists) {
+    return null;
+  }
+  const repaired = await repairLaunchAgentBootstrap({ env: serviceEnv });
+  if (!repaired.ok) {
+    throw new Error(
+      repaired.detail
+        ? `launchd bootstrap repair failed: ${repaired.detail}`
+        : "launchd bootstrap repair failed",
+    );
+  }
+  return {
+    result: "restarted" as const,
+    message: "Gateway LaunchAgent was installed but not loaded; re-bootstrapped launchd service.",
+  };
+}
+
 export async function runDaemonUninstall(opts: DaemonLifecycleOptions = {}) {
   return await runServiceUninstall({
     serviceNoun: "Gateway",
@@ -234,7 +258,9 @@ export async function runDaemonRestart(opts: DaemonLifecycleOptions = {}): Promi
     opts,
     checkTokenDrift: true,
     onNotLoaded: async () => {
-      const handled = await restartGatewayWithoutServiceManager(restartPort);
+      const handled =
+        (await restartGatewayLaunchAgentIfInstalled()) ??
+        (await restartGatewayWithoutServiceManager(restartPort));
       if (handled) {
         restartedWithoutServiceManager = true;
       }

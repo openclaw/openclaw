@@ -2,6 +2,8 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vite
 
 const mockReadFileSync = vi.hoisted(() => vi.fn());
 const mockSpawnSync = vi.hoisted(() => vi.fn());
+const launchAgentPlistExists = vi.hoisted(() => vi.fn());
+const repairLaunchAgentBootstrap = vi.hoisted(() => vi.fn());
 
 type RestartHealthSnapshot = {
   healthy: boolean;
@@ -85,6 +87,12 @@ vi.mock("../../daemon/service.js", () => ({
   resolveGatewayService: () => service,
 }));
 
+vi.mock("../../daemon/launchd.js", () => ({
+  launchAgentPlistExists: (env: Record<string, string | undefined>) => launchAgentPlistExists(env),
+  repairLaunchAgentBootstrap: (args: { env?: Record<string, string | undefined> }) =>
+    repairLaunchAgentBootstrap(args),
+}));
+
 vi.mock("./restart-health.js", () => ({
   DEFAULT_RESTART_HEALTH_ATTEMPTS: 120,
   DEFAULT_RESTART_HEALTH_DELAY_MS: 500,
@@ -127,6 +135,8 @@ describe("runDaemonRestart health checks", () => {
     loadConfig.mockReset();
     mockReadFileSync.mockReset();
     mockSpawnSync.mockReset();
+    launchAgentPlistExists.mockReset();
+    repairLaunchAgentBootstrap.mockReset();
 
     service.readCommand.mockResolvedValue({
       programArguments: ["openclaw", "gateway", "--port", "18789"],
@@ -157,6 +167,8 @@ describe("runDaemonRestart health checks", () => {
       configSnapshot: { commands: { restart: true } },
     });
     isRestartEnabled.mockReturnValue(true);
+    launchAgentPlistExists.mockResolvedValue(false);
+    repairLaunchAgentBootstrap.mockResolvedValue({ ok: true });
     mockReadFileSync.mockImplementation((path: string) => {
       const match = path.match(/\/proc\/(\d+)\/cmdline$/);
       if (!match) {
@@ -278,6 +290,35 @@ describe("runDaemonRestart health checks", () => {
     expect(waitForGatewayHealthyRestart).not.toHaveBeenCalled();
     expect(terminateStaleGatewayPids).not.toHaveBeenCalled();
     expect(service.restart).not.toHaveBeenCalled();
+  });
+
+  it("re-bootstraps an installed LaunchAgent when restart finds it not loaded", async () => {
+    vi.spyOn(process, "platform", "get").mockReturnValue("darwin");
+    launchAgentPlistExists.mockResolvedValue(true);
+    repairLaunchAgentBootstrap.mockResolvedValue({ ok: true });
+    runServiceRestart.mockImplementation(
+      async (params: RestartParams & { onNotLoaded?: () => Promise<unknown> }) => {
+        await params.onNotLoaded?.();
+        await params.postRestartCheck?.({
+          json: Boolean(params.opts?.json),
+          stdout: process.stdout,
+          warnings: [],
+          fail: (message: string) => {
+            throw new Error(message);
+          },
+        });
+        return true;
+      },
+    );
+
+    await runDaemonRestart({ json: true });
+
+    expect(launchAgentPlistExists).toHaveBeenCalledTimes(1);
+    expect(repairLaunchAgentBootstrap).toHaveBeenCalledWith({ env: process.env });
+    expect(waitForGatewayHealthyListener).toHaveBeenCalledTimes(1);
+    expect(waitForGatewayHealthyRestart).not.toHaveBeenCalled();
+    expect(service.restart).not.toHaveBeenCalled();
+    expect(findGatewayPidsOnPortSync).not.toHaveBeenCalled();
   });
 
   it("fails unmanaged restart when multiple gateway listeners are present", async () => {
