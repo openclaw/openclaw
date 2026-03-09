@@ -214,6 +214,23 @@ const applyCostTotal = (totals: CostUsageTotals, costTotal: number | undefined) 
   totals.totalCost += costTotal;
 };
 
+/**
+ * Check whether a filename is a JSONL transcript (active or reset-archived).
+ * Active files end in `.jsonl`; reset archives match `*.jsonl.reset.<timestamp>`.
+ */
+const isTranscriptFile = (name: string): boolean =>
+  name.endsWith(".jsonl") || /\.jsonl\.reset\.\d{4}-/.test(name);
+
+/**
+ * Extract the session ID from a transcript filename.
+ * - Active: `<sessionId>.jsonl` → `<sessionId>`
+ * - Reset:  `<sessionId>.jsonl.reset.<timestamp>` → `<sessionId>`
+ */
+const extractSessionId = (name: string): string => {
+  const jsonlIdx = name.indexOf(".jsonl");
+  return jsonlIdx >= 0 ? name.slice(0, jsonlIdx) : name;
+};
+
 async function* readJsonlRecords(filePath: string): AsyncGenerator<Record<string, unknown>> {
   const fileStream = fs.createReadStream(filePath, { encoding: "utf-8" });
   const rl = readline.createInterface({ input: fileStream, crlfDelay: Infinity });
@@ -318,7 +335,7 @@ export async function loadCostUsageSummary(params?: {
   const files = (
     await Promise.all(
       entries
-        .filter((entry) => entry.isFile() && entry.name.endsWith(".jsonl"))
+        .filter((entry) => entry.isFile() && isTranscriptFile(entry.name))
         .map(async (entry) => {
           const filePath = path.join(sessionsDir, entry.name);
           const stats = await fs.promises.stat(filePath).catch(() => null);
@@ -393,7 +410,7 @@ export async function discoverAllSessions(params?: {
   const discovered: DiscoveredSession[] = [];
 
   for (const entry of entries) {
-    if (!entry.isFile() || !entry.name.endsWith(".jsonl")) {
+    if (!entry.isFile() || !isTranscriptFile(entry.name)) {
       continue;
     }
 
@@ -409,8 +426,8 @@ export async function discoverAllSessions(params?: {
     }
     // Do not exclude by endMs: a session can have activity in range even if it continued later.
 
-    // Extract session ID from filename (remove .jsonl)
-    const sessionId = entry.name.slice(0, -6);
+    // Extract session ID from filename
+    const sessionId = extractSessionId(entry.name);
 
     // Try to read first user message for label extraction
     let firstUserMessage: string | undefined;
