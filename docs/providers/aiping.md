@@ -34,7 +34,7 @@ OpenClaw now provides AIPing routing presets directly in the wizard:
 
 ```json5
 {
-  env: { AIPING_API_KEY: "your-aiping-key" },
+  env: { AIPING_API_KEY: "your-aiping-key" }, // pragma: allowlist secret
   agents: { defaults: { model: { primary: "aiping/DeepSeek-V3.2" } } },
   models: {
     mode: "merge",

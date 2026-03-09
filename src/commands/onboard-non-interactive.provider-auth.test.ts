@@ -622,7 +622,7 @@ describe("onboard (non-interactive): provider auth", () => {
   it("infers AIPing auth choice from --aiping-api-key and sets default model", async () => {
     await withOnboardEnv("openclaw-onboard-aiping-infer-", async (env) => {
       const cfg = await runOnboardingAndReadConfig(env, {
-        aipingApiKey: "aiping-api-key",
+        aipingApiKey: "aiping-api-key", // pragma: allowlist secret
       });
 
       expect(cfg.auth?.profiles?.["aiping:default"]?.provider).toBe("aiping");
