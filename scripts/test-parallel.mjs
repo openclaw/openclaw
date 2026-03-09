@@ -101,13 +101,20 @@ const highMemLocalHost = !isCI && hostMemoryGiB >= 96;
 const lowMemLocalHost = !isCI && hostMemoryGiB < 64;
 const nodeMajor = Number.parseInt(process.versions.node.split(".")[0] ?? "", 10);
 // vmForks is a big win for transform/import heavy suites, but Node 24 had
-// regressions with Vitest's vm runtime in this repo, and low-memory local hosts
-// are more likely to hit per-worker V8 heap ceilings. Keep it opt-out via
-// OPENCLAW_TEST_VM_FORKS=0, and let users force-enable with =1.
+// regressions with Vitest's vm runtime in this repo, low-memory local hosts
+// are more likely to hit per-worker V8 heap ceilings, and macOS CI has shown
+// cross-file mock leakage in Slack suites under vmForks. Keep it opt-out via
+// OPENCLAW_TEST_VM_FORKS=0, let users force-enable with =1 on supported hosts,
+// and hard-disable it on macOS CI.
 const supportsVmForks = Number.isFinite(nodeMajor) ? nodeMajor !== 24 : true;
+const disableVmForksForMacCi = isCI && isMacOS;
 const useVmForks =
-  process.env.OPENCLAW_TEST_VM_FORKS === "1" ||
-  (process.env.OPENCLAW_TEST_VM_FORKS !== "0" && !isWindows && supportsVmForks && !lowMemLocalHost);
+  !disableVmForksForMacCi &&
+  (process.env.OPENCLAW_TEST_VM_FORKS === "1" ||
+    (process.env.OPENCLAW_TEST_VM_FORKS !== "0" &&
+      !isWindows &&
+      supportsVmForks &&
+      !lowMemLocalHost));
 const disableIsolation = process.env.OPENCLAW_TEST_NO_ISOLATE === "1";
 const includeGatewaySuite = process.env.OPENCLAW_TEST_INCLUDE_GATEWAY === "1";
 const includeExtensionsSuite = process.env.OPENCLAW_TEST_INCLUDE_EXTENSIONS === "1";
@@ -169,7 +176,7 @@ const runs = [
             "run",
             "--config",
             "vitest.extensions.config.ts",
-            ...(useVmForks ? ["--pool=vmForks"] : []),
+            ...(useVmForks ? ["--pool=vmForks"] : disableVmForksForMacCi ? ["--pool=forks"] : []),
           ],
         },
       ]
