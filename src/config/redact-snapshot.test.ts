@@ -255,6 +255,25 @@ describe("redactConfigSnapshot", () => {
     expect(result.raw).toContain(REDACTED_SENTINEL);
   });
 
+  it("keeps raw config stable when a sensitive field is blank", () => {
+    const config = {
+      gateway: {
+        auth: {
+          token: "",
+        },
+      },
+      ui: {
+        seamColor: "#0088cc",
+      },
+    };
+    const raw = JSON.stringify(config, null, 2);
+    const snapshot = makeSnapshot(config, raw);
+    const result = redactConfigSnapshot(snapshot, mainSchemaHints);
+
+    expectGatewayAuthFieldValue(result, "token", REDACTED_SENTINEL);
+    expect(result.raw).toBe(raw);
+  });
+
   it("keeps non-sensitive raw fields intact when secret values overlap", () => {
     const config = {
       gateway: {
