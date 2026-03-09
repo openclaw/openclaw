@@ -87,11 +87,14 @@ function expectSupportsDeveloperRoleForcedOff(overrides?: Partial<Model<Api>>): 
   expect(supportsDeveloperRole(normalized)).toBe(false);
 }
 
-function expectSupportsUsageInStreamingForcedOff(overrides?: Partial<Model<Api>>): void {
+function expectSupportsUsageInStreamingUnchanged(
+  overrides?: Partial<Model<Api>>,
+  expected?: boolean,
+): void {
   const model = { ...baseModel(), ...overrides };
   delete (model as { compat?: unknown }).compat;
   const normalized = normalizeModelCompat(model as Model<Api>);
-  expect(supportsUsageInStreaming(normalized)).toBe(false);
+  expect(supportsUsageInStreaming(normalized)).toBe(expected);
 }
 
 function expectResolvedForwardCompat(
@@ -219,8 +222,8 @@ describe("normalizeModelCompat", () => {
     });
   });
 
-  it("forces supportsUsageInStreaming off for generic custom openai-completions provider", () => {
-    expectSupportsUsageInStreamingForcedOff({
+  it("keeps supportsUsageInStreaming available for generic custom openai-completions providers", () => {
+    expectSupportsUsageInStreamingUnchanged({
       provider: "custom-cpa",
       baseUrl: "https://cpa.example.com/v1",
     });
@@ -262,7 +265,7 @@ describe("normalizeModelCompat", () => {
     expect(supportsDeveloperRole(normalized)).toBe(false);
   });
 
-  it("overrides explicit supportsUsageInStreaming true on non-native endpoints", () => {
+  it("preserves explicit supportsUsageInStreaming true on non-native endpoints", () => {
     const model = {
       ...baseModel(),
       provider: "custom-cpa",
@@ -270,7 +273,7 @@ describe("normalizeModelCompat", () => {
       compat: { supportsUsageInStreaming: true },
     };
     const normalized = normalizeModelCompat(model);
-    expect(supportsUsageInStreaming(normalized)).toBe(false);
+    expect(supportsUsageInStreaming(normalized)).toBe(true);
   });
 
   it("does not mutate caller model when forcing supportsDeveloperRole off", () => {
@@ -285,7 +288,7 @@ describe("normalizeModelCompat", () => {
     expect(supportsDeveloperRole(model)).toBeUndefined();
     expect(supportsUsageInStreaming(model)).toBeUndefined();
     expect(supportsDeveloperRole(normalized)).toBe(false);
-    expect(supportsUsageInStreaming(normalized)).toBe(false);
+    expect(supportsUsageInStreaming(normalized)).toBeUndefined();
   });
 
   it("does not override explicit compat false", () => {

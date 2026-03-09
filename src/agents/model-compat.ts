@@ -52,28 +52,26 @@ export function normalizeModelCompat(model: Model<Api>): Model<Api> {
     return model;
   }
 
-  // The `developer` role and stream usage chunks are OpenAI-native behaviors.
-  // Many OpenAI-compatible backends reject `developer` and/or emit usage-only
-  // chunks that break strict parsers expecting choices[0]. For non-native
-  // openai-completions endpoints, force both compat flags off.
+  // The `developer` role is an OpenAI-native behavior. Many OpenAI-compatible
+  // backends reject it, so force it off for non-native openai-completions
+  // endpoints. Streaming usage chunks are handled by pi-ai and should not be
+  // disabled here for generic compatible providers.
   const compat = model.compat ?? undefined;
   // When baseUrl is empty the pi-ai library defaults to api.openai.com, so
   // leave compat unchanged and let default native behavior apply.
-  // Note: explicit true values are intentionally overridden for non-native
-  // endpoints for safety.
+  // Note: explicit true values are intentionally overridden for developer role
+  // on non-native endpoints for safety.
   const needsForce = baseUrl ? !isOpenAINativeEndpoint(baseUrl) : false;
   if (!needsForce) {
     return model;
   }
-  if (compat?.supportsDeveloperRole === false && compat?.supportsUsageInStreaming === false) {
+  if (compat?.supportsDeveloperRole === false) {
     return model;
   }
 
   // Return a new object — do not mutate the caller's model reference.
   return {
     ...model,
-    compat: compat
-      ? { ...compat, supportsDeveloperRole: false, supportsUsageInStreaming: false }
-      : { supportsDeveloperRole: false, supportsUsageInStreaming: false },
+    compat: compat ? { ...compat, supportsDeveloperRole: false } : { supportsDeveloperRole: false },
   } as typeof model;
 }
