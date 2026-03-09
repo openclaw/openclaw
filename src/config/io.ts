@@ -952,7 +952,7 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
       // entries (for auto-migration) when they are present in the parsed source.
       const legacyIssues = findLegacyConfigIssues(resolvedConfigRaw, parsedRes.parsed);
 
-      const validated = validateConfigObjectWithPlugins(resolvedConfigRaw);
+      const validated = validateConfigObjectWithPlugins(resolvedConfigRaw, parsedRes.parsed);
       if (!validated.ok) {
         return {
           snapshot: {

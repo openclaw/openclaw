@@ -228,8 +228,9 @@ function validateGatewayTailscaleBind(config: OpenClawConfig): ConfigValidationI
  */
 export function validateConfigObjectRaw(
   raw: unknown,
+  sourceRaw?: unknown,
 ): { ok: true; config: OpenClawConfig } | { ok: false; issues: ConfigValidationIssue[] } {
-  const legacyIssues = findLegacyConfigIssues(raw);
+  const legacyIssues = findLegacyConfigIssues(raw, sourceRaw);
   if (legacyIssues.length > 0) {
     return {
       ok: false,
@@ -274,8 +275,9 @@ export function validateConfigObjectRaw(
 
 export function validateConfigObject(
   raw: unknown,
+  sourceRaw?: unknown,
 ): { ok: true; config: OpenClawConfig } | { ok: false; issues: ConfigValidationIssue[] } {
-  const result = validateConfigObjectRaw(raw);
+  const result = validateConfigObjectRaw(raw, sourceRaw);
   if (!result.ok) {
     return result;
   }
@@ -297,19 +299,27 @@ type ValidateConfigWithPluginsResult =
       warnings: ConfigValidationIssue[];
     };
 
-export function validateConfigObjectWithPlugins(raw: unknown): ValidateConfigWithPluginsResult {
-  return validateConfigObjectWithPluginsBase(raw, { applyDefaults: true });
+export function validateConfigObjectWithPlugins(
+  raw: unknown,
+  sourceRaw?: unknown,
+): ValidateConfigWithPluginsResult {
+  return validateConfigObjectWithPluginsBase(raw, { applyDefaults: true, sourceRaw });
 }
 
-export function validateConfigObjectRawWithPlugins(raw: unknown): ValidateConfigWithPluginsResult {
-  return validateConfigObjectWithPluginsBase(raw, { applyDefaults: false });
+export function validateConfigObjectRawWithPlugins(
+  raw: unknown,
+  sourceRaw?: unknown,
+): ValidateConfigWithPluginsResult {
+  return validateConfigObjectWithPluginsBase(raw, { applyDefaults: false, sourceRaw });
 }
 
 function validateConfigObjectWithPluginsBase(
   raw: unknown,
-  opts: { applyDefaults: boolean },
+  opts: { applyDefaults: boolean; sourceRaw?: unknown },
 ): ValidateConfigWithPluginsResult {
-  const base = opts.applyDefaults ? validateConfigObject(raw) : validateConfigObjectRaw(raw);
+  const base = opts.applyDefaults
+    ? validateConfigObject(raw, opts.sourceRaw)
+    : validateConfigObjectRaw(raw, opts.sourceRaw);
   if (!base.ok) {
     return { ok: false, issues: base.issues, warnings: [] };
   }

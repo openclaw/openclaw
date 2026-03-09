@@ -6,7 +6,12 @@ import {
   unsetConfigValueAtPath,
 } from "./config-paths.js";
 import { readConfigFileSnapshot, validateConfigObject } from "./config.js";
-import { buildWebSearchProviderConfig, withTempHome, writeOpenClawConfig } from "./test-helpers.js";
+import {
+  buildWebSearchProviderConfig,
+  withEnvOverride,
+  withTempHome,
+  writeOpenClawConfig,
+} from "./test-helpers.js";
 import { OpenClawSchema } from "./zod-schema.js";
 
 describe("$schema key in config (#14998)", () => {
@@ -406,6 +411,29 @@ describe("config strict validation", () => {
       const snap = await readConfigFileSnapshot();
       expect(snap.valid).toBe(false);
       expect(snap.legacyIssues.some((issue) => issue.path === "gateway.bind")).toBe(true);
+    });
+  });
+
+  it("does not reject env-driven legacy messaging profile defaults that cannot be auto-migrated", async () => {
+    await withTempHome(async (home) => {
+      await writeOpenClawConfig(home, {
+        wizard: {
+          lastRunCommand: "onboard",
+          lastRunMode: "local",
+          lastRunVersion: "2026.3.2",
+        },
+        tools: {
+          profile: "${OPENCLAW_TOOLS_PROFILE}",
+        },
+      });
+
+      await withEnvOverride({ OPENCLAW_TOOLS_PROFILE: "messaging" }, async () => {
+        const snap = await readConfigFileSnapshot();
+        expect(snap.resolved.tools?.profile).toBe("messaging");
+        expect(snap.valid).toBe(true);
+        expect(snap.legacyIssues.some((issue) => issue.path === "tools.profile")).toBe(false);
+        expect(snap.issues.some((issue) => issue.path === "tools.profile")).toBe(false);
+      });
     });
   });
 });
