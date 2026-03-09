@@ -121,7 +121,7 @@ describe("buildPrimaryModelConfig", () => {
       }),
     ).toEqual({
       primary: "openai/gpt-5",
-      fallback: ["openai/gpt-5-mini"],
+      fallbacks: ["openai/gpt-5-mini"],
     });
   });
 

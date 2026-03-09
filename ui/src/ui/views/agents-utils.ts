@@ -254,7 +254,7 @@ export function resolveEffectiveModelFallbacks(
 export function buildPrimaryModelConfig(
   primary: string,
   existingModel?: unknown,
-): string | { primary: string; fallbacks?: string[]; fallback?: string[] } {
+): string | { primary: string; fallbacks?: string[] } {
   const trimmedPrimary = primary.trim();
   if (!trimmedPrimary) {
     return "";
@@ -262,17 +262,11 @@ export function buildPrimaryModelConfig(
   if (!existingModel || typeof existingModel !== "object" || Array.isArray(existingModel)) {
     return trimmedPrimary;
   }
-  const record = existingModel as Record<string, unknown>;
-  if (Array.isArray(record.fallbacks)) {
+  const fallbacks = resolveModelFallbacks(existingModel);
+  if (fallbacks) {
     return {
       primary: trimmedPrimary,
-      fallbacks: record.fallbacks.filter((entry): entry is string => typeof entry === "string"),
-    };
-  }
-  if (Array.isArray(record.fallback)) {
-    return {
-      primary: trimmedPrimary,
-      fallback: record.fallback.filter((entry): entry is string => typeof entry === "string"),
+      fallbacks,
     };
   }
   return trimmedPrimary;
