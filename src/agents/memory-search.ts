@@ -10,6 +10,7 @@ export type ResolvedMemorySearchConfig = {
   enabled: boolean;
   sources: Array<"memory" | "sessions">;
   extraPaths: string[];
+  excludeDirs: string[];
   provider: "openai" | "local" | "gemini" | "voyage" | "mistral" | "ollama" | "auto";
   remote?: {
     baseUrl?: string;
@@ -101,6 +102,22 @@ const DEFAULT_TEMPORAL_DECAY_ENABLED = false;
 const DEFAULT_TEMPORAL_DECAY_HALF_LIFE_DAYS = 30;
 const DEFAULT_CACHE_ENABLED = true;
 const DEFAULT_SOURCES: Array<"memory" | "sessions"> = ["memory"];
+
+/** Directory basenames excluded from recursive memory-file walks by default. */
+export const DEFAULT_EXCLUDE_DIRS = [
+  "node_modules",
+  ".git",
+  "__pycache__",
+  ".venv",
+  "venv",
+  "dist",
+  "build",
+  ".next",
+  ".nuxt",
+  "vendor",
+  ".tox",
+  "egg-info",
+];
 
 function normalizeSources(
   sources: Array<"memory" | "sessions"> | undefined,
@@ -202,6 +219,13 @@ function mergeConfig(
     .map((value) => value.trim())
     .filter(Boolean);
   const extraPaths = Array.from(new Set(rawPaths));
+  const excludeDirs = Array.from(
+    new Set([
+      ...DEFAULT_EXCLUDE_DIRS,
+      ...(defaults?.excludeDirs ?? []),
+      ...(overrides?.excludeDirs ?? []),
+    ]),
+  );
   const vector = {
     enabled: overrides?.store?.vector?.enabled ?? defaults?.store?.vector?.enabled ?? true,
     extensionPath:
@@ -305,6 +329,7 @@ function mergeConfig(
     enabled,
     sources,
     extraPaths,
+    excludeDirs,
     provider,
     remote,
     experimental: {

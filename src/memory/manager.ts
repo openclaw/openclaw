@@ -669,6 +669,7 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
       requestedProvider: this.requestedProvider,
       sources: Array.from(this.sources),
       extraPaths: this.settings.extraPaths,
+      excludeDirs: this.settings.excludeDirs,
       sourceCounts,
       cache: this.cache.enabled
         ? {
