@@ -21,7 +21,7 @@ import {
   writeCache,
 } from "./web-shared.js";
 
-const SEARCH_PROVIDERS = ["brave", "gemini", "grok", "kimi", "perplexity"] as const;
+const SEARCH_PROVIDERS = ["brave", "gemini", "grok", "kimi", "nanogpt", "perplexity"] as const;
 const DEFAULT_SEARCH_COUNT = 5;
 const MAX_SEARCH_COUNT = 10;
 
@@ -42,6 +42,8 @@ const KIMI_WEB_SEARCH_TOOL = {
   type: "builtin_function",
   function: { name: "$web_search" },
 } as const;
+
+const NANOGPT_WEB_SEARCH_ENDPOINT = "https://nano-gpt.com/api/web";
 
 const SEARCH_CACHE = new Map<string, CacheEntry<Record<string, unknown>>>();
 const BRAVE_FRESHNESS_SHORTCUTS = new Set(["pd", "pw", "pm", "py"]);
@@ -305,6 +307,26 @@ type KimiConfig = {
   model?: string;
 };
 
+type NanogptConfig = {
+  apiKey?: string;
+};
+
+type NanogptWebSearchResult = {
+  title?: string;
+  url?: string;
+  content?: string;
+  snippet?: string;
+};
+
+type NanogptWebSearchResponse = {
+  data?: NanogptWebSearchResult[];
+  metadata?: {
+    query?: string;
+    provider?: string;
+    cost?: number;
+  };
+};
+
 type GrokSearchResponse = {
   output?: Array<{
     type?: string;
@@ -523,6 +545,14 @@ function missingSearchKeyPayload(provider: (typeof SEARCH_PROVIDERS)[number]) {
       docs: "https://docs.openclaw.ai/tools/web",
     };
   }
+  if (provider === "nanogpt") {
+    return {
+      error: "missing_nanogpt_api_key",
+      message:
+        "web_search (nanogpt) needs a NanoGPT API key. Set NANOGPT_API_KEY in the Gateway environment, or configure tools.web.search.nanogpt.apiKey.",
+      docs: "https://docs.openclaw.ai/tools/web",
+    };
+  }
   return {
     error: "missing_perplexity_api_key",
     message:
@@ -548,12 +578,23 @@ function resolveSearchProvider(search?: WebSearchConfig): (typeof SEARCH_PROVIDE
   if (raw === "kimi") {
     return "kimi";
   }
+  if (raw === "nanogpt") {
+    return "nanogpt";
+  }
   if (raw === "perplexity") {
     return "perplexity";
   }
 
-  // Auto-detect provider from available API keys (alphabetical order)
+  // Auto-detect provider from available API keys (nanogpt first, then alphabetical)
   if (raw === "") {
+    // NanoGPT (preferred default in this fork)
+    const nanogptConfig = resolveNanogptConfig(search);
+    if (resolveNanogptApiKey(nanogptConfig)) {
+      logVerbose(
+        'web_search: no provider configured, auto-detected "nanogpt" from available API keys',
+      );
+      return "nanogpt";
+    }
     // Brave
     if (resolveSearchApiKey(search)) {
       logVerbose(
@@ -807,6 +848,26 @@ function resolveKimiBaseUrl(kimi?: KimiConfig): string {
   const fromConfig =
     kimi && "baseUrl" in kimi && typeof kimi.baseUrl === "string" ? kimi.baseUrl.trim() : "";
   return fromConfig || DEFAULT_KIMI_BASE_URL;
+}
+
+function resolveNanogptConfig(search?: WebSearchConfig): NanogptConfig {
+  if (!search || typeof search !== "object") {
+    return {};
+  }
+  const nanogpt = "nanogpt" in search ? search.nanogpt : undefined;
+  if (!nanogpt || typeof nanogpt !== "object") {
+    return {};
+  }
+  return nanogpt as NanogptConfig;
+}
+
+function resolveNanogptApiKey(nanogpt?: NanogptConfig): string | undefined {
+  const fromConfig = normalizeApiKey(nanogpt?.apiKey);
+  if (fromConfig) {
+    return fromConfig;
+  }
+  const fromEnv = normalizeApiKey(process.env.NANOGPT_API_KEY);
+  return fromEnv || undefined;
 }
 
 function resolveGeminiConfig(search?: WebSearchConfig): GeminiConfig {
@@ -1682,6 +1743,56 @@ async function runWebSearch(params: {
     return payload;
   }
 
+  if (params.provider === "nanogpt") {
+    const body: Record<string, unknown> = {
+      query: params.query,
+      provider: "brave",
+      outputType: "searchResults",
+    };
+    const response = await withTrustedWebSearchEndpoint(
+      {
+        url: NANOGPT_WEB_SEARCH_ENDPOINT,
+        timeoutSeconds: params.timeoutSeconds,
+        init: {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${params.apiKey}`,
+          },
+          body: JSON.stringify(body),
+        },
+      },
+      async (res) => {
+        const result = await readResponseText(res, { maxBytes: 64_000 });
+        return JSON.parse(result.text) as NanogptWebSearchResponse;
+      },
+    );
+
+    const results = (response.data ?? []).slice(0, params.count ?? DEFAULT_SEARCH_COUNT);
+    const mapped = results.map((r) => ({
+      title: r.title ? wrapWebContent(r.title, "web_search") : "",
+      url: r.url ?? "",
+      snippet:
+        r.content || r.snippet ? wrapWebContent((r.content || r.snippet)!, "web_search") : "",
+    }));
+
+    const payload = {
+      query: params.query,
+      provider: params.provider,
+      count: mapped.length,
+      tookMs: Date.now() - start,
+      externalContent: {
+        untrusted: true,
+        source: "web_search",
+        provider: params.provider,
+        wrapped: true,
+      },
+      results: mapped,
+    };
+    writeCache(SEARCH_CACHE, cacheKey, payload, params.cacheTtlMs);
+    return payload;
+  }
+
   if (params.provider !== "brave") {
     throw new Error("Unsupported web search provider.");
   }
@@ -1816,23 +1927,26 @@ export function createWebSearchTool(options?: {
   const grokConfig = resolveGrokConfig(search);
   const geminiConfig = resolveGeminiConfig(search);
   const kimiConfig = resolveKimiConfig(search);
+  const nanogptConfig = resolveNanogptConfig(search);
   const braveConfig = resolveBraveConfig(search);
   const braveMode = resolveBraveMode(braveConfig);
 
   const description =
-    provider === "perplexity"
-      ? perplexityTransport.transport === "chat_completions"
-        ? "Search the web using Perplexity Sonar via Perplexity/OpenRouter chat completions. Returns AI-synthesized answers with citations from web-grounded search."
-        : "Search the web using the Perplexity Search API. Returns structured results (title, URL, snippet) for fast research. Supports domain, region, language, and freshness filtering."
-      : provider === "grok"
-        ? "Search the web using xAI Grok. Returns AI-synthesized answers with citations from real-time web search."
-        : provider === "kimi"
-          ? "Search the web using Kimi by Moonshot. Returns AI-synthesized answers with citations from native $web_search."
-          : provider === "gemini"
-            ? "Search the web using Gemini with Google Search grounding. Returns AI-synthesized answers with citations from Google Search."
-            : braveMode === "llm-context"
-              ? "Search the web using Brave Search LLM Context API. Returns pre-extracted page content (text chunks, tables, code blocks) optimized for LLM grounding."
-              : "Search the web using Brave Search API. Supports region-specific and localized search via country and language parameters. Returns titles, URLs, and snippets for fast research.";
+    provider === "nanogpt"
+      ? "Search the web using NanoGPT. Returns structured search results (title, URL, snippet) via NanoGPT's web search API."
+      : provider === "perplexity"
+        ? perplexityTransport.transport === "chat_completions"
+          ? "Search the web using Perplexity Sonar via Perplexity/OpenRouter chat completions. Returns AI-synthesized answers with citations from web-grounded search."
+          : "Search the web using the Perplexity Search API. Returns structured results (title, URL, snippet) for fast research. Supports domain, region, language, and freshness filtering."
+        : provider === "grok"
+          ? "Search the web using xAI Grok. Returns AI-synthesized answers with citations from real-time web search."
+          : provider === "kimi"
+            ? "Search the web using Kimi by Moonshot. Returns AI-synthesized answers with citations from native $web_search."
+            : provider === "gemini"
+              ? "Search the web using Gemini with Google Search grounding. Returns AI-synthesized answers with citations from Google Search."
+              : braveMode === "llm-context"
+                ? "Search the web using Brave Search LLM Context API. Returns pre-extracted page content (text chunks, tables, code blocks) optimized for LLM grounding."
+                : "Search the web using Brave Search API. Supports region-specific and localized search via country and language parameters. Returns titles, URLs, and snippets for fast research.";
 
   return {
     label: "Web Search",
@@ -1853,7 +1967,9 @@ export function createWebSearchTool(options?: {
               ? resolveKimiApiKey(kimiConfig)
               : provider === "gemini"
                 ? resolveGeminiApiKey(geminiConfig)
-                : resolveSearchApiKey(search);
+                : provider === "nanogpt"
+                  ? resolveNanogptApiKey(nanogptConfig)
+                  : resolveSearchApiKey(search);
 
       if (!apiKey) {
         return jsonResult(missingSearchKeyPayload(provider));

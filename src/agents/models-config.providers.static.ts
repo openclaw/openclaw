@@ -126,6 +126,22 @@ const OPENROUTER_DEFAULT_COST = {
   cacheWrite: 0,
 };
 
+// NanoGPT: pay-per-prompt aggregator with 200+ models.
+// Base URL for standard pay-as-you-go access (includes subscription + paid models).
+export const NANOGPT_BASE_URL = "https://nano-gpt.com/api/v1";
+// Subscription-only base URL: restricts requests to models included in the $8/month plan.
+export const NANOGPT_SUBSCRIPTION_BASE_URL = "https://nano-gpt.com/api/subscription/v1";
+export const NANOGPT_DEFAULT_MODEL_ID = "deepseek-r1";
+const NANOGPT_DEFAULT_CONTEXT_WINDOW = 128000;
+const NANOGPT_DEFAULT_MAX_TOKENS = 8192;
+// NanoGPT charges at-cost; costs vary per model so we use 0 as placeholder.
+const NANOGPT_DEFAULT_COST = {
+  input: 0,
+  output: 0,
+  cacheRead: 0,
+  cacheWrite: 0,
+};
+
 export const QIANFAN_BASE_URL = "https://qianfan.baidubce.com/v2";
 export const QIANFAN_DEFAULT_MODEL_ID = "deepseek-v3.2";
 const QIANFAN_DEFAULT_CONTEXT_WINDOW = 98304;
@@ -433,5 +449,83 @@ export function buildKilocodeProvider(): ProviderConfig {
       contextWindow: model.contextWindow ?? KILOCODE_DEFAULT_CONTEXT_WINDOW,
       maxTokens: model.maxTokens ?? KILOCODE_DEFAULT_MAX_TOKENS,
     })),
+  };
+}
+
+export function buildNanogptProvider(subscriptionOnly?: boolean): ProviderConfig {
+  const baseUrl = subscriptionOnly ? NANOGPT_SUBSCRIPTION_BASE_URL : NANOGPT_BASE_URL;
+  // Subscription-included models (open-source, free with $8/month plan).
+  const subscriptionModels: ProviderModelConfig[] = [
+    {
+      id: "deepseek-r1",
+      name: "DeepSeek R1",
+      reasoning: true,
+      input: ["text"],
+      cost: NANOGPT_DEFAULT_COST,
+      contextWindow: 128000,
+      maxTokens: NANOGPT_DEFAULT_MAX_TOKENS,
+    },
+    {
+      id: "deepseek-v3-0324",
+      name: "DeepSeek V3",
+      reasoning: false,
+      input: ["text"],
+      cost: NANOGPT_DEFAULT_COST,
+      contextWindow: 128000,
+      maxTokens: NANOGPT_DEFAULT_MAX_TOKENS,
+    },
+    {
+      id: "Qwen/Qwen3-235B-A22B",
+      name: "Qwen 3 235B",
+      reasoning: true,
+      input: ["text"],
+      cost: NANOGPT_DEFAULT_COST,
+      contextWindow: 131072,
+      maxTokens: NANOGPT_DEFAULT_MAX_TOKENS,
+    },
+    {
+      id: "meta-llama/Llama-4-Maverick-17B-128E-Instruct",
+      name: "Llama 4 Maverick",
+      reasoning: false,
+      input: ["text", "image"],
+      cost: NANOGPT_DEFAULT_COST,
+      contextWindow: 131072,
+      maxTokens: NANOGPT_DEFAULT_MAX_TOKENS,
+    },
+  ];
+  // Premium pay-as-you-go models (not in subscription, billed per token).
+  const paidModels: ProviderModelConfig[] = [
+    {
+      id: "claude-sonnet-4-20250514",
+      name: "Claude Sonnet 4",
+      reasoning: true,
+      input: ["text", "image"],
+      cost: { input: 3.0, output: 15.0, cacheRead: 0.3, cacheWrite: 3.75 },
+      contextWindow: 200000,
+      maxTokens: NANOGPT_DEFAULT_MAX_TOKENS,
+    },
+    {
+      id: "gpt-4.1",
+      name: "GPT-4.1",
+      reasoning: false,
+      input: ["text", "image"],
+      cost: { input: 2.0, output: 8.0, cacheRead: 0.5, cacheWrite: 2.0 },
+      contextWindow: 1047576,
+      maxTokens: 32768,
+    },
+    {
+      id: "gemini-2.5-pro-preview-05-06",
+      name: "Gemini 2.5 Pro",
+      reasoning: true,
+      input: ["text", "image"],
+      cost: { input: 1.25, output: 10.0, cacheRead: 0.31, cacheWrite: 1.25 },
+      contextWindow: 1048576,
+      maxTokens: 65536,
+    },
+  ];
+  return {
+    baseUrl,
+    api: "openai-completions",
+    models: subscriptionOnly ? subscriptionModels : [...subscriptionModels, ...paidModels],
   };
 }

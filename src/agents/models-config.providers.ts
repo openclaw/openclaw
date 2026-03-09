@@ -30,6 +30,7 @@ import {
   buildMinimaxPortalProvider,
   buildMinimaxProvider,
   buildMoonshotProvider,
+  buildNanogptProvider,
   buildNvidiaProvider,
   buildOpenAICodexProvider,
   buildOpenrouterProvider,
@@ -45,6 +46,7 @@ import {
 export {
   buildKimiCodingProvider,
   buildKilocodeProvider,
+  buildNanogptProvider,
   buildNvidiaProvider,
   buildQianfanProvider,
   buildXiaomiProvider,
@@ -518,6 +520,7 @@ const SIMPLE_IMPLICIT_PROVIDER_LOADERS: ImplicitProviderLoader[] = [
     ...(await buildKilocodeProviderWithDiscovery()),
     apiKey,
   })),
+  withApiKey("nanogpt", async ({ apiKey }) => ({ ...buildNanogptProvider(), apiKey })),
 ];
 
 const PROFILE_IMPLICIT_PROVIDER_LOADERS: ImplicitProviderLoader[] = [
