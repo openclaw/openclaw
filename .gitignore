@@ -1,5 +1,9 @@
 node_modules
 **/node_modules/
+
+# Content pipeline outputs (generated, not versioned)
+outputs/
+data/research/
 .env
 docker-compose.extra.yml
 dist
