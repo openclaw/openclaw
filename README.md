@@ -1,4 +1,8 @@
-# 🦞 OpenClaw — Personal AI Assistant
+# 🦞 OpenClaw — Personal AI Assistant (中国用户定制版)
+
+> **注意**: 这是 OpenClaw 的中国用户定制版本，针对国内网络环境和使用习惯进行了优化。
+>
+> **Note**: This is a customized version of OpenClaw for Chinese users, optimized for China's network environment and usage habits.
 
 <p align="center">
     <picture>

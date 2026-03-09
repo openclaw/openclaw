@@ -1,17 +1,22 @@
 {
-  "name": "openclaw",
-  "version": "2026.3.8",
-  "description": "Multi-channel AI gateway with extensible messaging integrations",
-  "keywords": [],
-  "homepage": "https://github.com/openclaw/openclaw#readme",
+  "name": "@openxd/openclaw",
+  "version": "2026.3.9",
+  "description": "Multi-channel AI gateway with extensible messaging integrations (中国用户定制版)",
+  "keywords": [
+    "ai-gateway",
+    "china",
+    "openclaw",
+    "中国定制"
+  ],
+  "homepage": "https://github.com/xiaoguangmm/openclaw#readme",
   "bugs": {
-    "url": "https://github.com/openclaw/openclaw/issues"
+    "url": "https://github.com/xiaoguangmm/openclaw/issues"
   },
   "license": "MIT",
-  "author": "",
+  "author": "xiaoguangmm",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/openclaw/openclaw.git"
+    "url": "git+https://github.com/xiaoguangmm/openclaw.git"
   },
   "bin": {
     "openclaw": "openclaw.mjs"
