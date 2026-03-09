@@ -47,15 +47,16 @@ Set the `ERNIE_API_KEY` environment variable:
 export ERNIE_API_KEY="bce-v3/ALTAK-your-api-key-here"  # pragma: allowlist secret
 
 # Fish
-set -gx ERNIE_API_KEY "bce-v3/ALTAK-your-api-key-here"
+set -gx ERNIE_API_KEY "bce-v3/ALTAK-your-api-key-here"  # pragma: allowlist secret
 
 # PowerShell
-$env:ERNIE_API_KEY = "bce-v3/ALTAK-your-api-key-here"
+$env:ERNIE_API_KEY = "bce-v3/ALTAK-your-api-key-here"  # pragma: allowlist secret
 ```
 
 Add to your shell profile (`~/.bashrc`, `~/.zshrc`, etc.) for persistence:
 
 ```bash
+# pragma: allowlist secret
 echo 'export ERNIE_API_KEY="bce-v3/ALTAK-your-api-key-here"' >> ~/.bashrc
 source ~/.bashrc
 ```
