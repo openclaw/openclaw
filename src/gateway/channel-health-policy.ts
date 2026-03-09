@@ -110,8 +110,10 @@ export function evaluateChannelHealth(
   // explicitly operating in webhook mode. In these cases, there is no persistent
   // outgoing socket that can go half-dead, so the lack of incoming events
   // does not necessarily indicate a connection failure.
+  // NOTE: channelId may be scoped with an account suffix (e.g. "telegram:default"),
+  // so we match by prefix rather than exact equality.
   if (
-    policy.channelId !== "telegram" &&
+    !policy.channelId.startsWith("telegram") &&
     snapshot.mode !== "webhook" &&
     snapshot.connected === true &&
     snapshot.lastEventAt != null

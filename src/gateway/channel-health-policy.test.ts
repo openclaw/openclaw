@@ -143,6 +143,28 @@ describe("evaluateChannelHealth", () => {
     expect(evaluation).toEqual({ healthy: true, reason: "healthy" });
   });
 
+  it("skips stale-socket detection for scoped telegram channel ids (e.g. telegram:default)", () => {
+    // Regression: channelId may include an account suffix; a strict equality check
+    // against "telegram" would miss "telegram:default" and trigger false stale-socket restarts.
+    const evaluation = evaluateChannelHealth(
+      {
+        running: true,
+        connected: true,
+        enabled: true,
+        configured: true,
+        lastStartAt: 0,
+        lastEventAt: null,
+      },
+      {
+        channelId: "telegram:default",
+        now: 100_000,
+        channelConnectGraceMs: 10_000,
+        staleEventThresholdMs: 30_000,
+      },
+    );
+    expect(evaluation).toEqual({ healthy: true, reason: "healthy" });
+  });
+
   it("skips stale-socket detection for channels in webhook mode", () => {
     const evaluation = evaluateChannelHealth(
       {
