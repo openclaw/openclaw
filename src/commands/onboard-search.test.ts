@@ -286,7 +286,7 @@ describe("setupSearch", () => {
   it("exports all 6 providers in SEARCH_PROVIDER_OPTIONS", () => {
     expect(SEARCH_PROVIDER_OPTIONS).toHaveLength(6);
     const values = SEARCH_PROVIDER_OPTIONS.map((e) => e.value);
-    expect(values).toEqual(["brave", "gemini", "grok", "kimi", "perplexity", "exa"]);
+    expect(values).toEqual(["brave", "exa", "gemini", "grok", "kimi", "perplexity"]);
   });
 
   it("sets provider and key for exa", async () => {
