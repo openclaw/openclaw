@@ -35,6 +35,7 @@ type AllowedValuesCollection = {
 type IssueScore = {
   hard: number;
   unknown: number;
+  softTypeLiteralMismatch: number;
   total: number;
 };
 
@@ -166,6 +167,7 @@ function addIssueScore(left: IssueScore, right: IssueScore): IssueScore {
   return {
     hard: left.hard + right.hard,
     unknown: left.unknown + right.unknown,
+    softTypeLiteralMismatch: left.softTypeLiteralMismatch + right.softTypeLiteralMismatch,
     total: left.total + right.total,
   };
 }
@@ -177,31 +179,54 @@ function compareIssueScore(a: IssueScore, b: IssueScore): number {
   if (a.unknown !== b.unknown) {
     return a.unknown - b.unknown;
   }
+  if (a.softTypeLiteralMismatch !== b.softTypeLiteralMismatch) {
+    return a.softTypeLiteralMismatch - b.softTypeLiteralMismatch;
+  }
   return a.total - b.total;
+}
+
+function isSoftTypeLiteralMismatchIssue(record: UnknownIssueRecord | null): boolean {
+  if (!record || record.code !== "invalid_value") {
+    return false;
+  }
+  if (!Array.isArray(record.path) || record.path.length === 0) {
+    return false;
+  }
+  const lastPathSegment = record.path.at(-1);
+  if (lastPathSegment !== "type") {
+    return false;
+  }
+  const values = record.values;
+  return (
+    Array.isArray(values) && values.length > 0 && values.every((entry) => typeof entry === "string")
+  );
 }
 
 function scoreIssueForUnknownKeyStripping(issue: unknown): IssueScore {
   const record = toIssueRecord(issue);
   const code = typeof record?.code === "string" ? record.code : "";
   if (code === "unrecognized_keys") {
-    return { hard: 0, unknown: 1, total: 1 };
+    return { hard: 0, unknown: 1, softTypeLiteralMismatch: 0, total: 1 };
+  }
+  if (isSoftTypeLiteralMismatchIssue(record)) {
+    return { hard: 0, unknown: 0, softTypeLiteralMismatch: 1, total: 1 };
   }
   if (code === "invalid_union") {
     const nested = record?.errors;
     if (!Array.isArray(nested) || nested.length === 0) {
-      return { hard: 1, unknown: 0, total: 1 };
+      return { hard: 1, unknown: 0, softTypeLiteralMismatch: 0, total: 1 };
     }
     const selectedBranch = selectBestUnionIssueBranch(nested);
     if (!selectedBranch) {
-      return { hard: 1, unknown: 0, total: 1 };
+      return { hard: 1, unknown: 0, softTypeLiteralMismatch: 0, total: 1 };
     }
     return scoreIssueListForUnknownKeyStripping(selectedBranch);
   }
-  return { hard: 1, unknown: 0, total: 1 };
+  return { hard: 1, unknown: 0, softTypeLiteralMismatch: 0, total: 1 };
 }
 
 function scoreIssueListForUnknownKeyStripping(issues: ReadonlyArray<unknown>): IssueScore {
-  let score: IssueScore = { hard: 0, unknown: 0, total: 0 };
+  let score: IssueScore = { hard: 0, unknown: 0, softTypeLiteralMismatch: 0, total: 0 };
   for (const issue of issues) {
     score = addIssueScore(score, scoreIssueForUnknownKeyStripping(issue));
   }
