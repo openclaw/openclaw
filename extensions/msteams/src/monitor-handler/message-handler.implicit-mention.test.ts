@@ -1,43 +1,6 @@
 import { describe, expect, it, beforeEach } from "vitest";
-import { extractMSTeamsConversationMessageId, normalizeMSTeamsConversationId } from "../inbound.js";
-import {
-  clearMSTeamsSentMessageCache,
-  recordMSTeamsSentMessage,
-  wasMSTeamsMessageSent,
-} from "../sent-message-cache.js";
-
-/**
- * Tests for the implicit mention detection logic as implemented in
- * message-handler.ts lines 678-687. We test the computation directly
- * rather than through the full handler to avoid needing the full
- * PluginRuntime/routing setup.
- *
- * The logic under test:
- *   const rawConversationId = activity.conversation?.id ?? "";
- *   const conversationId = normalizeMSTeamsConversationId(rawConversationId);
- *   const replyToId = activity.replyToId ?? undefined;
- *   const threadRootId = extractMSTeamsConversationMessageId(rawConversationId);
- *   const implicitMention = Boolean(
- *     conversationId && (
- *       (replyToId && wasMSTeamsMessageSent(conversationId, replyToId)) ||
- *       (threadRootId && wasMSTeamsMessageSent(conversationId, threadRootId))
- *     ),
- *   );
- */
-function computeImplicitMention(activity: {
-  conversation?: { id?: string };
-  replyToId?: string;
-}): boolean {
-  const rawConversationId = activity.conversation?.id ?? "";
-  const conversationId = normalizeMSTeamsConversationId(rawConversationId);
-  const replyToId = activity.replyToId ?? undefined;
-  const threadRootId = extractMSTeamsConversationMessageId(rawConversationId);
-  return Boolean(
-    conversationId &&
-    ((replyToId && wasMSTeamsMessageSent(conversationId, replyToId)) ||
-      (threadRootId && wasMSTeamsMessageSent(conversationId, threadRootId))),
-  );
-}
+import { clearMSTeamsSentMessageCache, recordMSTeamsSentMessage } from "../sent-message-cache.js";
+import { computeImplicitMention } from "./implicit-mention.js";
 
 describe("implicit mention detection (conversation.id threadRootId fallback)", () => {
   const CONV_ID = "19:group@thread.tacv2";

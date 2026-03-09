@@ -46,7 +46,8 @@ import { extractMSTeamsPollVote } from "../polls.js";
 import { createMSTeamsReplyDispatcher } from "../reply-dispatcher.js";
 import { getMSTeamsRuntime } from "../runtime.js";
 import type { MSTeamsTurnContext } from "../sdk-types.js";
-import { recordMSTeamsSentMessage, wasMSTeamsMessageSent } from "../sent-message-cache.js";
+import { recordMSTeamsSentMessage } from "../sent-message-cache.js";
+import { computeImplicitMention } from "./implicit-mention.js";
 import { resolveMSTeamsInboundMedia } from "./inbound-media.js";
 
 export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
@@ -687,13 +688,7 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
     const wasMentioned = wasMSTeamsBotMentioned(activity);
     const rawConversationId = activity.conversation?.id ?? "";
     const conversationId = normalizeMSTeamsConversationId(rawConversationId);
-    const replyToId = activity.replyToId ?? undefined;
-    const threadRootId = extractMSTeamsConversationMessageId(rawConversationId);
-    const implicitMention = Boolean(
-      conversationId &&
-      ((replyToId && wasMSTeamsMessageSent(conversationId, replyToId)) ||
-        (threadRootId && wasMSTeamsMessageSent(conversationId, threadRootId))),
-    );
+    const implicitMention = computeImplicitMention(activity);
 
     await inboundDebouncer.enqueue({
       context,
