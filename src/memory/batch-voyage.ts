@@ -89,7 +89,7 @@ async function submitVoyageBatch(params: {
         input_type: "document",
       },
       metadata: {
-        source: "clawdbot-memory",
+        source: "openclaw-memory",
         agent: params.agentId,
       },
     },
