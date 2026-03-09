@@ -12,6 +12,7 @@ import {
   restartLaunchAgent,
   resolveLaunchAgentPlistPath,
 } from "./launchd.js";
+import { prepareRestartScript, runRestartScript } from "./restart-helper.js";
 
 const state = vi.hoisted(() => ({
   launchctlCalls: [] as string[][],
@@ -51,6 +52,11 @@ vi.mock("./exec-file.js", () => ({
     }
     return { stdout: "", stderr: "", code: 0 };
   }),
+}));
+
+vi.mock("./restart-helper.js", () => ({
+  prepareRestartScript: vi.fn(async () => "/tmp/openclaw-restart-test.sh"),
+  runRestartScript: vi.fn(async () => undefined),
 }));
 
 vi.mock("node:fs/promises", async (importOriginal) => {
@@ -114,6 +120,8 @@ beforeEach(() => {
   state.files.clear();
   state.fileModes.clear();
   vi.clearAllMocks();
+  vi.mocked(prepareRestartScript).mockResolvedValue("/tmp/openclaw-restart-test.sh");
+  vi.mocked(runRestartScript).mockResolvedValue(undefined);
 });
 
 describe("launchd runtime parsing", () => {
@@ -304,7 +312,7 @@ describe("launchd install", () => {
     expect(state.fileModes.get(plistPath)).toBe(0o644);
   });
 
-  it("restarts LaunchAgent with bootout-enable-bootstrap-kickstart order", async () => {
+  it("prefers a detached restart helper so launchd restart survives the current process tree", async () => {
     const env = createDefaultLaunchdEnv();
     await restartLaunchAgent({
       env,
@@ -313,32 +321,16 @@ describe("launchd install", () => {
 
     const domain = typeof process.getuid === "function" ? `gui/${process.getuid()}` : "gui/501";
     const label = "ai.openclaw.gateway";
-    const plistPath = resolveLaunchAgentPlistPath(env);
     const serviceId = `${domain}/${label}`;
-    const bootoutIndex = state.launchctlCalls.findIndex(
-      (c) => c[0] === "bootout" && c[1] === serviceId,
-    );
-    const enableIndex = state.launchctlCalls.findIndex(
-      (c) => c[0] === "enable" && c[1] === serviceId,
-    );
-    const bootstrapIndex = state.launchctlCalls.findIndex(
-      (c) => c[0] === "bootstrap" && c[1] === domain && c[2] === plistPath,
-    );
-    const kickstartIndex = state.launchctlCalls.findIndex(
-      (c) => c[0] === "kickstart" && c[1] === "-k" && c[2] === serviceId,
-    );
-
-    expect(bootoutIndex).toBeGreaterThanOrEqual(0);
-    expect(enableIndex).toBeGreaterThanOrEqual(0);
-    expect(bootstrapIndex).toBeGreaterThanOrEqual(0);
-    expect(kickstartIndex).toBeGreaterThanOrEqual(0);
-    expect(bootoutIndex).toBeLessThan(enableIndex);
-    expect(enableIndex).toBeLessThan(bootstrapIndex);
-    expect(bootstrapIndex).toBeLessThan(kickstartIndex);
+    expect(prepareRestartScript).toHaveBeenCalledWith(env);
+    expect(runRestartScript).toHaveBeenCalledWith("/tmp/openclaw-restart-test.sh");
+    expect(state.launchctlCalls).toEqual([]);
+    expect(state.launchctlCalls.some((call) => call.includes(serviceId))).toBe(false);
   });
 
-  it("waits for previous launchd pid to exit before bootstrapping", async () => {
+  it("falls back to the synchronous launchctl restart path when no detached helper is available", async () => {
     const env = createDefaultLaunchdEnv();
+    vi.mocked(prepareRestartScript).mockResolvedValueOnce(null);
     state.printOutput = ["state = running", "pid = 4242"].join("\n");
     const killSpy = vi.spyOn(process, "kill");
     killSpy
@@ -367,6 +359,7 @@ describe("launchd install", () => {
       expect(bootoutIndex).toBeGreaterThanOrEqual(0);
       expect(bootstrapIndex).toBeGreaterThanOrEqual(0);
       expect(bootoutIndex).toBeLessThan(bootstrapIndex);
+      expect(runRestartScript).not.toHaveBeenCalled();
     } finally {
       vi.useRealTimers();
       killSpy.mockRestore();

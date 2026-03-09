@@ -14,6 +14,7 @@ import {
 } from "./launchd-plist.js";
 import { formatLine, toPosixPath, writeFormattedLines } from "./output.js";
 import { resolveGatewayStateDir, resolveHomeDir } from "./paths.js";
+import { prepareRestartScript, runRestartScript } from "./restart-helper.js";
 import { parseKeyValueOutput } from "./runtime-parse.js";
 import type { GatewayServiceRuntime } from "./service-runtime.js";
 import type {
@@ -473,6 +474,19 @@ export async function restartLaunchAgent({
   env,
 }: GatewayServiceControlArgs): Promise<void> {
   const serviceEnv = env ?? (process.env as GatewayServiceEnv);
+  const detachedRestartScript = await prepareRestartScript(serviceEnv);
+  if (detachedRestartScript) {
+    await runRestartScript(detachedRestartScript);
+    try {
+      const domain = resolveGuiDomain();
+      const label = resolveLaunchAgentLabel({ env: serviceEnv });
+      stdout.write(`${formatLine("Restarted LaunchAgent", `${domain}/${label}`)}\n`);
+    } catch {
+      // Detached restarts deliberately outlive the current process tree.
+    }
+    return;
+  }
+
   const domain = resolveGuiDomain();
   const label = resolveLaunchAgentLabel({ env: serviceEnv });
   const plistPath = resolveLaunchAgentPlistPath(serviceEnv);
