@@ -128,6 +128,13 @@ export type SessionConfig = {
   agentToAgent?: {
     /** Max ping-pong turns between requester/target (0–5). Default: 5. */
     maxPingPongTurns?: number;
+    /** Optional pre-run ingress echo to the target session's bound channel/session. */
+    ingressEcho?: {
+      /** Attempt ingress echo before the target agent run. Default: false. */
+      enabled?: boolean;
+      /** Require ingress echo delivery before running the target agent. Default: false. */
+      requireDelivery?: boolean;
+    };
   };
   /** Shared defaults for thread-bound session routing across channels/providers. */
   threadBindings?: SessionThreadBindingsConfig;

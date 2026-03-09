@@ -91,6 +91,8 @@ Behavior:
 - `timeoutSeconds > 0`: wait up to N seconds for completion, then return `{ runId, status: "ok", reply }`.
 - If wait times out: `{ runId, status: "timeout", error }`. Run continues; call `sessions_history` later.
 - If the run fails: `{ runId, status: "error", error }`.
+- If `session.agentToAgent.ingressEcho.enabled=true`, OpenClaw first attempts to echo the original `sessions_send` payload into the target session's bound channel before starting the native target run.
+- `session.agentToAgent.ingressEcho.requireDelivery=true` makes that pre-run echo strict: if delivery fails or no deliverable target can be resolved, the target run is blocked.
 - Announce delivery runs after the primary run completes and is best-effort; `status: "ok"` does not guarantee the announce was delivered.
 - Waits via gateway `agent.wait` (server-side) so reconnects don't drop the wait.
 - Agent-to-agent message context is injected for the primary run.

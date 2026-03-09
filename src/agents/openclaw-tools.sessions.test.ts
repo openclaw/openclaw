@@ -11,21 +11,26 @@ vi.mock("../gateway/call.js", () => ({
   callGateway: (opts: unknown) => callGatewayMock(opts),
 }));
 
+const testConfig = {
+  session: {
+    mainKey: "main",
+    scope: "per-sender",
+    agentToAgent: {
+      maxPingPongTurns: 2,
+      ingressEcho: { enabled: false, requireDelivery: false },
+    },
+  },
+  tools: {
+    // Keep sessions tools permissive in this suite; dedicated visibility tests cover defaults.
+    sessions: { visibility: "all" },
+  },
+};
+
 vi.mock("../config/config.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../config/config.js")>();
   return {
     ...actual,
-    loadConfig: () => ({
-      session: {
-        mainKey: "main",
-        scope: "per-sender",
-        agentToAgent: { maxPingPongTurns: 2 },
-      },
-      tools: {
-        // Keep sessions tools permissive in this suite; dedicated visibility tests cover defaults.
-        sessions: { visibility: "all" },
-      },
-    }),
+    loadConfig: () => structuredClone(testConfig),
     resolveGatewayPort: () => 18789,
   };
 });
@@ -51,6 +56,8 @@ describe("sessions tools", () => {
 
   beforeEach(() => {
     callGatewayMock.mockClear();
+    testConfig.session.agentToAgent.ingressEcho.enabled = false;
+    testConfig.session.agentToAgent.ingressEcho.requireDelivery = false;
   });
 
   it("uses number (not integer) in tool schemas for Gemini compatibility", () => {
@@ -698,6 +705,120 @@ describe("sessions tools", () => {
       method: "agent",
       params: { sessionKey: targetKey },
     });
+  });
+
+  it("sessions_send includes ingressEcho when pre-run echo succeeds", async () => {
+    const calls: Array<{ method?: string; params?: unknown }> = [];
+    let agentCallCount = 0;
+    let lastWaitedRunId: string | undefined;
+    const replyByRunId = new Map<string, string>();
+    callGatewayMock.mockImplementation(async (opts: unknown) => {
+      const request = opts as { method?: string; params?: unknown };
+      calls.push(request);
+      if (request.method === "send") {
+        const params = request.params as { message?: string } | undefined;
+        if ((params?.message ?? "").includes("A2A ingress echo:")) {
+          return { messageId: "m-ingress" };
+        }
+        return { messageId: "m-announce" };
+      }
+      if (request.method === "agent") {
+        agentCallCount += 1;
+        const runId = `run-${agentCallCount}`;
+        const params = request.params as { extraSystemPrompt?: string } | undefined;
+        let reply = "done";
+        if (params?.extraSystemPrompt?.includes("Agent-to-agent reply step")) {
+          reply = "REPLY_SKIP";
+        }
+        if (params?.extraSystemPrompt?.includes("Agent-to-agent announce step")) {
+          reply = "ANNOUNCE_SKIP";
+        }
+        replyByRunId.set(runId, reply);
+        return { runId, status: "accepted", acceptedAt: 5000 + agentCallCount };
+      }
+      if (request.method === "agent.wait") {
+        const params = request.params as { runId?: string } | undefined;
+        lastWaitedRunId = params?.runId;
+        return { runId: params?.runId ?? "run-1", status: "ok" };
+      }
+      if (request.method === "chat.history") {
+        const text = (lastWaitedRunId && replyByRunId.get(lastWaitedRunId)) ?? "done";
+        return {
+          messages: [{ role: "assistant", content: [{ type: "text", text }], timestamp: 20 }],
+        };
+      }
+      return {};
+    });
+
+    testConfig.session.agentToAgent.ingressEcho.enabled = true;
+    const tool = createOpenClawTools({
+      agentSessionKey: "discord:group:req",
+      agentChannel: "discord",
+    }).find((candidate) => candidate.name === "sessions_send");
+    expect(tool).toBeDefined();
+    if (!tool) {
+      throw new Error("missing sessions_send tool");
+    }
+
+    const result = await tool.execute("call-ingress-ok", {
+      sessionKey: "discord:group:target",
+      message: "ping",
+      timeoutSeconds: 1,
+    });
+
+    expect(result.details).toMatchObject({
+      status: "ok",
+      ingressEcho: {
+        status: "sent",
+        channel: "discord",
+        to: "channel:target",
+        messageId: "m-ingress",
+      },
+    });
+    const firstSendIndex = calls.findIndex((call) => call.method === "send");
+    const firstAgentIndex = calls.findIndex((call) => call.method === "agent");
+    expect(firstSendIndex).toBeGreaterThanOrEqual(0);
+    expect(firstAgentIndex).toBeGreaterThan(firstSendIndex);
+  });
+
+  it("sessions_send blocks target run when strict ingress echo delivery fails", async () => {
+    testConfig.session.agentToAgent.ingressEcho.enabled = true;
+    testConfig.session.agentToAgent.ingressEcho.requireDelivery = true;
+    callGatewayMock.mockImplementation(async (opts: unknown) => {
+      const request = opts as { method?: string };
+      if (request.method === "send") {
+        throw new Error("send failed");
+      }
+      if (request.method === "agent") {
+        throw new Error("agent should not run");
+      }
+      return {};
+    });
+
+    const tool = createOpenClawTools({
+      agentSessionKey: "discord:group:req",
+      agentChannel: "discord",
+    }).find((candidate) => candidate.name === "sessions_send");
+    expect(tool).toBeDefined();
+    if (!tool) {
+      throw new Error("missing sessions_send tool");
+    }
+
+    const result = await tool.execute("call-ingress-blocked", {
+      sessionKey: "discord:group:target",
+      message: "ping",
+      timeoutSeconds: 1,
+    });
+
+    expect(result.details).toMatchObject({
+      status: "error",
+      ingressEcho: { status: "blocked" },
+    });
+    expect(
+      callGatewayMock.mock.calls.some(
+        (call) => (call[0] as { method?: string }).method === "agent",
+      ),
+    ).toBe(false);
   });
 
   it("sessions_send runs ping-pong then announces", async () => {

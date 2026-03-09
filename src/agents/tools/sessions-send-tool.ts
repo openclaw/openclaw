@@ -11,6 +11,7 @@ import {
 import { AGENT_LANE_NESTED } from "../lanes.js";
 import type { AnyAgentTool } from "./common.js";
 import { jsonResult, readStringParam } from "./common.js";
+import { resolveAnnounceTarget } from "./sessions-announce-target.js";
 import {
   createSessionVisibilityGuard,
   createAgentToAgentPolicy,
@@ -21,7 +22,12 @@ import {
   resolveVisibleSessionReference,
   stripToolMessages,
 } from "./sessions-helpers.js";
-import { buildAgentToAgentMessageContext, resolvePingPongTurns } from "./sessions-send-helpers.js";
+import {
+  buildAgentToAgentIngressEchoText,
+  buildAgentToAgentMessageContext,
+  resolveIngressEchoPolicy,
+  resolvePingPongTurns,
+} from "./sessions-send-helpers.js";
 import { runSessionsSendA2AFlow } from "./sessions-send-tool.a2a.js";
 
 const SessionsSendToolSchema = Type.Object({
@@ -212,6 +218,83 @@ export function createSessionsSendTool(opts?: {
         });
       }
 
+      const ingressEchoPolicy = resolveIngressEchoPolicy(cfg);
+      let ingressEcho: Record<string, unknown> = {
+        status: ingressEchoPolicy.enabled ? "not_applicable" : "disabled",
+      };
+      if (ingressEchoPolicy.enabled) {
+        const announceTarget = await resolveAnnounceTarget({
+          sessionKey: resolvedKey,
+          displayKey,
+        });
+        if (announceTarget) {
+          const echoMessage = buildAgentToAgentIngressEchoText({
+            requesterSessionKey: opts?.agentSessionKey,
+            requesterChannel: opts?.agentChannel,
+            targetSessionKey: displayKey,
+            message,
+          });
+          try {
+            const response = await callGateway({
+              method: "send",
+              params: {
+                to: announceTarget.to,
+                message: echoMessage,
+                channel: announceTarget.channel,
+                accountId: announceTarget.accountId,
+                threadId: announceTarget.threadId,
+                idempotencyKey: crypto.randomUUID(),
+              },
+              timeoutMs: 10_000,
+            });
+            ingressEcho = {
+              status: "sent",
+              channel: announceTarget.channel,
+              to: announceTarget.to,
+              accountId: announceTarget.accountId,
+              threadId:
+                (typeof response?.threadId === "string" ? response.threadId : undefined) ??
+                announceTarget.threadId,
+              messageId:
+                typeof response?.messageId === "string"
+                  ? response.messageId
+                  : typeof response?.id === "string"
+                    ? response.id
+                    : undefined,
+            };
+          } catch (err) {
+            const errorText =
+              err instanceof Error ? err.message : typeof err === "string" ? err : "error";
+            ingressEcho = {
+              status: ingressEchoPolicy.requireDelivery ? "blocked" : "failed",
+              channel: announceTarget.channel,
+              to: announceTarget.to,
+              accountId: announceTarget.accountId,
+              threadId: announceTarget.threadId,
+              error: errorText,
+            };
+            if (ingressEchoPolicy.requireDelivery) {
+              return jsonResult({
+                runId: crypto.randomUUID(),
+                status: "error",
+                error: errorText,
+                sessionKey: displayKey,
+                ingressEcho,
+              });
+            }
+          }
+        } else if (ingressEchoPolicy.requireDelivery) {
+          ingressEcho = { status: "blocked", error: "No ingress echo target could be resolved." };
+          return jsonResult({
+            runId: crypto.randomUUID(),
+            status: "error",
+            error: "No ingress echo target could be resolved.",
+            sessionKey: displayKey,
+            ingressEcho,
+          });
+        }
+      }
+
       const agentMessageContext = buildAgentToAgentMessageContext({
         requesterSessionKey: opts?.agentSessionKey,
         requesterChannel: opts?.agentChannel,
@@ -266,6 +349,7 @@ export function createSessionsSendTool(opts?: {
             status: "accepted",
             sessionKey: displayKey,
             delivery,
+            ingressEcho,
           });
         } catch (err) {
           const messageText =
@@ -275,6 +359,7 @@ export function createSessionsSendTool(opts?: {
             status: "error",
             error: messageText,
             sessionKey: displayKey,
+            ingressEcho,
           });
         }
       }
@@ -296,6 +381,7 @@ export function createSessionsSendTool(opts?: {
           status: "error",
           error: messageText,
           sessionKey: displayKey,
+          ingressEcho,
         });
       }
 
@@ -320,6 +406,7 @@ export function createSessionsSendTool(opts?: {
           status: messageText.includes("gateway timeout") ? "timeout" : "error",
           error: messageText,
           sessionKey: displayKey,
+          ingressEcho,
         });
       }
 
@@ -329,6 +416,7 @@ export function createSessionsSendTool(opts?: {
           status: "timeout",
           error: waitError,
           sessionKey: displayKey,
+          ingressEcho,
         });
       }
       if (waitStatus === "error") {
@@ -337,6 +425,7 @@ export function createSessionsSendTool(opts?: {
           status: "error",
           error: waitError ?? "agent error",
           sessionKey: displayKey,
+          ingressEcho,
         });
       }
 
@@ -355,6 +444,7 @@ export function createSessionsSendTool(opts?: {
         reply,
         sessionKey: displayKey,
         delivery,
+        ingressEcho,
       });
     },
   };
