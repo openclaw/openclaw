@@ -265,7 +265,15 @@ export async function applyBeforeResponseEmitHook(
       "plugin returned content: '' — treating as block (empty assistant messages corrupt " +
         "session history). Use block: true to suppress a response explicitly.",
     );
-    clearAllAssistantContent(activeSession.messages, runMessages);
+    // Use the same broader block scope as explicit block: true — includes
+    // tool-call-only assistant messages and their toolResults, which may
+    // contain sensitive data in tool arguments/results.
+    const blockMessages = getRunScopedMessagesForBlock(activeSession.messages, scopeCount);
+    if (blockMessages.length === 0 && activeSession.messages.length > 0) {
+      clearAllAssistantContent(activeSession.messages);
+    } else {
+      clearAllAssistantContent(activeSession.messages, blockMessages);
+    }
     return { blocked: true };
   }
 
