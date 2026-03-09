@@ -213,11 +213,12 @@ export function createDiscordMessageHandler(
       if (dedupeKey && discordInboundMessageDedupe.peek(dedupeKey)) {
         return;
       }
+
+      await debouncer.enqueue({ data, client, abortSignal: options?.abortSignal });
+
       if (dedupeKey) {
         discordInboundMessageDedupe.check(dedupeKey);
       }
-
-      await debouncer.enqueue({ data, client, abortSignal: options?.abortSignal });
     } catch (err) {
       params.runtime.error?.(danger(`handler failed: ${String(err)}`));
     }

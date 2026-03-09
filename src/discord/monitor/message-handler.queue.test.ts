@@ -17,7 +17,8 @@ vi.mock("./message-handler.process.js", () => ({
   processDiscordMessage: processDiscordMessageMock,
 }));
 
-const { createDiscordMessageHandler, resetDiscordInboundMessageDedupe } = await import("./message-handler.js");
+const { createDiscordMessageHandler, resetDiscordInboundMessageDedupe } =
+  await import("./message-handler.js");
 
 function createDeferred<T = void>() {
   let resolve: (value: T | PromiseLike<T>) => void = () => {};
@@ -114,12 +115,16 @@ describe("createDiscordMessageHandler queue behavior", () => {
 
     const handler = createDiscordMessageHandler(createDiscordHandlerParams());
 
-    await expect(handler(createMessageData("dup-1") as never, {} as never)).resolves.toBeUndefined();
+    await expect(
+      handler(createMessageData("dup-1") as never, {} as never),
+    ).resolves.toBeUndefined();
     await vi.waitFor(() => {
       expect(processDiscordMessageMock).toHaveBeenCalledTimes(1);
     });
 
-    await expect(handler(createMessageData("dup-1") as never, {} as never)).resolves.toBeUndefined();
+    await expect(
+      handler(createMessageData("dup-1") as never, {} as never),
+    ).resolves.toBeUndefined();
     await Promise.resolve();
 
     expect(preflightDiscordMessageMock).toHaveBeenCalledTimes(1);
