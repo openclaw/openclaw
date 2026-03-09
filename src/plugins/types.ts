@@ -1898,9 +1898,9 @@ export type PluginHookContextAssembledEvent = {
   systemPrompt: string;
   /** The effective user prompt for this turn (after hook modifications). */
   prompt: string;
-  /** Snapshot of messages at context assembly time. The array is shallow-copied
-   *  to prevent handlers from modifying the message list, but message objects
-   *  themselves are shared references. Handlers should treat messages as read-only. */
+  /** Deep-copy snapshot of messages at context assembly time (via structuredClone).
+   *  Both the array and individual message objects are independent copies —
+   *  handlers can freely inspect or mutate them without affecting session state. */
   messages: AgentMessage[];
   messageCount: number;
   /** Number of images attached to the prompt. */
