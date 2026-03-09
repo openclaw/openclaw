@@ -455,6 +455,7 @@ export function createSandboxedWriteTool(params: SandboxToolParams) {
   const base = createWriteTool(params.root, {
     operations: createSandboxWriteOperations(params),
   }) as unknown as AnyAgentTool;
+  // Sandbox write tool does not support append mode (sandbox bridge has no appendFile)
   return wrapToolParamNormalization(base, CLAUDE_PARAM_GROUPS.write);
 }
 
@@ -469,7 +470,11 @@ export function createHostWorkspaceWriteTool(root: string, options?: { workspace
   const base = createWriteTool(root, {
     operations: createHostWriteOperations(root, options),
   }) as unknown as AnyAgentTool;
-  return wrapToolParamNormalization(base, CLAUDE_PARAM_GROUPS.write);
+  return wrapWriteToolWithAppendMode(
+    wrapToolParamNormalization(base, CLAUDE_PARAM_GROUPS.write),
+    root,
+    options,
+  );
 }
 
 export function createHostWorkspaceEditTool(root: string, options?: { workspaceOnly?: boolean }) {
@@ -670,4 +675,102 @@ function createFsAccessError(code: string, filePath: string): NodeJS.ErrnoExcept
   const error = new Error(`Sandbox FS error (${code}): ${filePath}`) as NodeJS.ErrnoException;
   error.code = code;
   return error;
+}
+
+// ---------------------------------------------------------------------------
+// Append mode extension for the Write tool
+// ---------------------------------------------------------------------------
+
+/**
+ * Wrap a write tool to support an optional `append` boolean parameter.
+ *
+ * When `append` is true the content is appended to the file instead of
+ * overwriting it.  This prevents silent data loss when multiple isolated
+ * sessions (e.g. cron jobs) write to the same file concurrently.
+ *
+ * The upstream `createWriteTool` from `@mariozechner/pi-coding-agent` does
+ * not support append — this wrapper intercepts the parameter at the OpenClaw
+ * layer and performs the append via `fs.appendFile` before delegating other
+ * writes to the original tool.
+ *
+ * @see https://github.com/openclaw/openclaw/issues/40001
+ */
+function wrapWriteToolWithAppendMode(
+  tool: AnyAgentTool,
+  root: string,
+  options?: { workspaceOnly?: boolean },
+): AnyAgentTool {
+  // Extend the parameters schema to advertise the `append` parameter.
+  const baseParams = (tool.parameters ?? tool.schema) as Record<string, unknown> | undefined;
+  const extendedParams = baseParams?.properties
+    ? {
+        ...baseParams,
+        properties: {
+          ...(baseParams.properties as Record<string, unknown>),
+          append: {
+            type: "boolean" as const,
+            description:
+              "If true, append content to the file instead of overwriting. " +
+              "Useful when multiple sessions write to the same file.",
+          },
+        },
+      }
+    : baseParams;
+
+  return {
+    ...tool,
+    description:
+      (tool.description ?? "") +
+      " Set append=true to append content instead of overwriting the file.",
+    parameters: extendedParams,
+    schema: extendedParams,
+    execute: async (toolCallId, params, signal, onUpdate) => {
+      const record =
+        params && typeof params === "object" ? (params as Record<string, unknown>) : undefined;
+      const shouldAppend = record?.append === true;
+
+      if (!shouldAppend) {
+        // Normal write — delegate to the original tool.
+        return tool.execute(toolCallId, params, signal, onUpdate);
+      }
+
+      // Append mode — handle directly.
+      const filePath = (record?.path ?? record?.file_path) as string | undefined;
+      const content = record?.content as string | undefined;
+
+      if (!filePath) {
+        return { content: [{ type: "text", text: "Error: path is required" }] };
+      }
+      if (content === undefined || content === null) {
+        return { content: [{ type: "text", text: "Error: content is required" }] };
+      }
+
+      try {
+        const workspaceOnly = options?.workspaceOnly ?? false;
+        let resolved: string;
+
+        if (workspaceOnly) {
+          const relative = toRelativeWorkspacePath(root, filePath);
+          resolved = path.resolve(root, relative);
+        } else {
+          // Resolve relative paths against the workspace root.
+          resolved = path.isAbsolute(filePath)
+            ? path.resolve(filePath)
+            : path.resolve(root, filePath);
+        }
+
+        await fs.mkdir(path.dirname(resolved), { recursive: true });
+        await fs.appendFile(resolved, content, "utf-8");
+
+        return {
+          content: [{ type: "text", text: `Successfully appended to ${filePath}` }],
+        } as AgentToolResult;
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        return {
+          content: [{ type: "text", text: `Error appending to file: ${message}` }],
+        } as AgentToolResult;
+      }
+    },
+  };
 }
