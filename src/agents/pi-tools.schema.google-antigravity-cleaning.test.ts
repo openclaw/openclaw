@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { normalizeToolParameters } from "./pi-tools.schema.js";
+import type { AnyAgentTool } from "./pi-tools.types.js";
+
+const noop = () => Promise.resolve({ content: [], details: {} });
 
 /**
  * Tests for google-antigravity schema cleaning behavior.
@@ -17,7 +20,9 @@ import { normalizeToolParameters } from "./pi-tools.schema.js";
 describe("normalizeToolParameters – google-antigravity schema cleaning", () => {
   const toolWithPatternProperties = {
     name: "test_tool",
+    label: "Test Tool",
     description: "A tool with patternProperties that Gemini rejects",
+    execute: noop,
     parameters: {
       type: "object",
       properties: {
@@ -28,11 +33,13 @@ describe("normalizeToolParameters – google-antigravity schema cleaning", () =>
       },
       required: ["name"],
     },
-  };
+  } as AnyAgentTool;
 
   const toolWithAdditionalKeywords = {
     name: "test_tool_extra",
+    label: "Test Tool Extra",
     description: "A tool with multiple unsupported Gemini keywords",
+    execute: noop,
     parameters: {
       type: "object",
       properties: {
@@ -44,7 +51,7 @@ describe("normalizeToolParameters – google-antigravity schema cleaning", () =>
       },
       required: ["value"],
     },
-  };
+  } as AnyAgentTool;
 
   it("should clean schemas for google-antigravity provider", () => {
     const result = normalizeToolParameters(toolWithPatternProperties, {
@@ -100,7 +107,7 @@ describe("normalizeToolParameters – google-antigravity schema cleaning", () =>
     expect(params.patternProperties).toBeDefined();
   });
 
-  it("should strip unsupported Gemini keywords for google-antigravity", () => {
+  it("should preserve exclusiveMinimum/exclusiveMaximum for google-antigravity", () => {
     const result = normalizeToolParameters(toolWithAdditionalKeywords, {
       modelProvider: "google-antigravity",
       modelId: "claude-opus-4-6",
@@ -111,8 +118,8 @@ describe("normalizeToolParameters – google-antigravity schema cleaning", () =>
         Record<string, unknown>
       >
     )?.value;
-    // Gemini does not support exclusiveMinimum / exclusiveMaximum
-    expect(valueSchema?.exclusiveMinimum).toBeUndefined();
-    expect(valueSchema?.exclusiveMaximum).toBeUndefined();
+    // exclusiveMinimum / exclusiveMaximum are not in the Gemini unsupported list
+    expect(valueSchema?.exclusiveMinimum).toBe(0);
+    expect(valueSchema?.exclusiveMaximum).toBe(100);
   });
 });
