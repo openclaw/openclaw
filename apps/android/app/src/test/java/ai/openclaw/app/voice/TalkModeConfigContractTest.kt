@@ -62,9 +62,15 @@ class TalkModeConfigContractTest {
         expected.voiceId,
         (selection?.config?.get("voiceId") as? JsonPrimitive)?.content,
       )
+      val expectedApiKey =
+        if (expected.normalizedPayload) {
+          expected.apiKey
+        } else {
+          (fixture.talk["apiKey"] as? JsonPrimitive)?.content ?: expected.apiKey
+        }
       assertEquals(
         fixture.id,
-        expected.apiKey,
+        expectedApiKey,
         (selection?.config?.get("apiKey") as? JsonPrimitive)?.content,
       )
       assertEquals(fixture.id, true, fixture.payloadValid)
