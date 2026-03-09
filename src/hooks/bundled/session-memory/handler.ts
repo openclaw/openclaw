@@ -332,7 +332,7 @@ const saveSessionToMemory: HookHandler = async (event) => {
     // one silently overwrites the earlier memory entry.
     if (!slug) {
       const timeSlug = now.toISOString().split("T")[1].split(".")[0].replace(/:/g, "");
-      const rand = Math.random().toString(36).slice(2, 6); // 4-char alphanumeric
+      const rand = Math.random().toString(36).slice(2, 6) || "0000"; // 4-char alphanumeric
       slug = `${timeSlug.slice(0, 6)}-${rand}`;
       log.debug("Using fallback timestamp slug", { slug });
     }
@@ -439,11 +439,12 @@ const saveSessionToMemory: HookHandler = async (event) => {
             await fs.unlink(memoryFilePath);
             log.debug("Session save retracted by post-hook (blockSessionSave)");
           } catch (err) {
-            // ENOENT is expected when the inline write didn't happen
-            // (e.g. blockSessionSave was set before writeFileWithinRoot).
-            // Re-throw so triggerInternalHook logs it. Note: the error
-            // is caught per-action and does NOT propagate to the caller;
-            // the file may remain on disk if unlink fails (e.g. EACCES).
+            // ENOENT can occur if the file was externally deleted between
+            // the inline write and the post-hook drain — not a concern.
+            // Re-throw non-ENOENT errors (e.g. EACCES, EROFS) so
+            // triggerInternalHook logs them. Note: errors are caught
+            // per-action and do NOT propagate to the session caller;
+            // the file may remain on disk under adversarial FS conditions.
             if ((err as NodeJS.ErrnoException).code !== "ENOENT") {
               throw err;
             }

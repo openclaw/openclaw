@@ -292,7 +292,13 @@ export async function triggerInternalHook(event: InternalHookEvent): Promise<voi
   // a chance to mutate event.context, eliminating FIFO ordering issues.
   // Actions execute in push order; errors are caught per-action so one
   // failure doesn't block others.
-  for (const action of event.postHookActions) {
+  //
+  // Snapshot the array before draining so that actions pushed *by* post-hook
+  // callbacks do not execute in this drain cycle. Without this, a self-
+  // scheduling action (one that pushes another action) could loop infinitely
+  // because Array's for...of iterator is live and re-reads length each step.
+  const pendingActions = [...(event.postHookActions ?? [])];
+  for (const action of pendingActions) {
     try {
       await action();
     } catch (err) {
