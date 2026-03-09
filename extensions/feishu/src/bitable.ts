@@ -712,7 +712,7 @@ export function registerFeishuBitableTools(api: OpenClawPluginApi) {
   }>({
     name: "feishu_bitable_delete_record",
     label: "Feishu Bitable Delete Record",
-    description: "Delete a record (row) from a Bitable table",
+    description: "Permanently delete a record (row) from a Bitable table. This action is irreversible.",
     parameters: DeleteRecordSchema,
     async execute({ params, defaultAccountId }) {
       return deleteRecord(
