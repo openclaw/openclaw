@@ -43,7 +43,7 @@ jobs:
           repo-token: ${{ steps.app-token.outputs.token || steps.app-token-fallback.outputs.token }}
           sync-labels: true
       - name: Apply PR size label
-        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7
+        uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8.0.0
         with:
           github-token: ${{ steps.app-token.outputs.token || steps.app-token-fallback.outputs.token }}
           script: |
@@ -132,7 +132,7 @@ jobs:
               labels: [targetSizeLabel],
             });
       - name: Apply maintainer or trusted-contributor label
-        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7
+        uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8.0.0
         with:
           github-token: ${{ steps.app-token.outputs.token || steps.app-token-fallback.outputs.token }}
           script: |
@@ -203,7 +203,7 @@ jobs:
             //   });
             // }
       - name: Apply too-many-prs label
-        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7
+        uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8.0.0
         with:
           github-token: ${{ steps.app-token.outputs.token || steps.app-token-fallback.outputs.token }}
           script: |
@@ -394,7 +394,7 @@ jobs:
           app-id: "2971289"
           private-key: ${{ secrets.GH_APP_PRIVATE_KEY_FALLBACK }}
       - name: Backfill PR labels
-        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7
+        uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8.0.0
         with:
           github-token: ${{ steps.app-token.outputs.token || steps.app-token-fallback.outputs.token }}
           script: |
@@ -642,7 +642,7 @@ jobs:
           app-id: "2971289"
           private-key: ${{ secrets.GH_APP_PRIVATE_KEY_FALLBACK }}
       - name: Apply maintainer or trusted-contributor label
-        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7
+        uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8.0.0
         with:
           github-token: ${{ steps.app-token.outputs.token || steps.app-token-fallback.outputs.token }}
           script: |

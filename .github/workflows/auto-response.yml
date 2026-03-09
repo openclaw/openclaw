@@ -30,7 +30,7 @@ jobs:
           app-id: "2971289"
           private-key: ${{ secrets.GH_APP_PRIVATE_KEY_FALLBACK }}
       - name: Handle labeled items
-        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7
+        uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8.0.0
         with:
           github-token: ${{ steps.app-token.outputs.token || steps.app-token-fallback.outputs.token }}
           script: |
