@@ -441,8 +441,8 @@ export type ToolsConfig = {
     search?: {
       /** Enable web search tool (default: true when API key is present). */
       enabled?: boolean;
-      /** Search provider ("brave", "perplexity", "grok", "gemini", or "kimi"). */
-      provider?: "brave" | "perplexity" | "grok" | "gemini" | "kimi";
+      /** Search provider ("brave", "perplexity", "grok", "gemini", "kimi", or "zai"). */
+      provider?: "brave" | "perplexity" | "grok" | "gemini" | "kimi" | "zai";
       /** Brave Search API key (optional; defaults to BRAVE_API_KEY env var). */
       apiKey?: SecretInput;
       /** Default search results count (1-10). */
@@ -484,6 +484,17 @@ export type ToolsConfig = {
         baseUrl?: string;
         /** Model to use (defaults to "moonshot-v1-128k"). */
         model?: string;
+      };
+      /** ZAI-specific configuration (used when provider="zai"). */
+      zai?: {
+        /** Z.AI API key (defaults to ZAI_API_KEY or Z_AI_API_KEY env var). */
+        apiKey?: SecretInput;
+        /** Search engine to use (defaults to "search_pro"). */
+        engine?: "search_std" | "search_pro" | "search_pro_sogou" | "search_pro_quark";
+        /** Enable search intent analysis (default: true). */
+        intent?: boolean;
+        /** Content size for results (default: "medium"). */
+        contentSize?: "medium" | "high";
       };
       /** Brave-specific configuration (used when provider="brave"). */
       brave?: {

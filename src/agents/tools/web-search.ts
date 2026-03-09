@@ -21,7 +21,7 @@ import {
   writeCache,
 } from "./web-shared.js";
 
-const SEARCH_PROVIDERS = ["brave", "perplexity", "grok", "gemini", "kimi"] as const;
+const SEARCH_PROVIDERS = ["brave", "perplexity", "grok", "gemini", "kimi", "zai"] as const;
 const DEFAULT_SEARCH_COUNT = 5;
 const MAX_SEARCH_COUNT = 10;
 
@@ -42,6 +42,8 @@ const KIMI_WEB_SEARCH_TOOL = {
   type: "builtin_function",
   function: { name: "$web_search" },
 } as const;
+const ZAI_SEARCH_ENDPOINT = "https://open.bigmodel.cn/api/paas/v4/web_search";
+const DEFAULT_ZAI_ENGINE = "search_pro";
 
 const SEARCH_CACHE = new Map<string, CacheEntry<Record<string, unknown>>>();
 const BRAVE_FRESHNESS_SHORTCUTS = new Set(["pd", "pw", "pm", "py"]);
@@ -305,6 +307,37 @@ type KimiConfig = {
   model?: string;
 };
 
+type ZaiConfig = {
+  apiKey?: string;
+  engine?: "search_std" | "search_pro" | "search_pro_sogou" | "search_pro_quark";
+  intent?: boolean;
+  contentSize?: "medium" | "high";
+};
+
+type ZaiSearchIntent = {
+  query?: string;
+  intent?: "SEARCH_ALL" | "SEARCH_NONE" | "SEARCH_ALWAYS";
+  keywords?: string;
+};
+
+type ZaiSearchResult = {
+  title?: string;
+  content?: string;
+  link?: string;
+  media?: string;
+  icon?: string;
+  refer?: string;
+  publish_date?: string;
+};
+
+type ZaiSearchResponse = {
+  id?: string;
+  created?: number;
+  request_id?: string;
+  search_intent?: ZaiSearchIntent[];
+  search_result?: ZaiSearchResult[];
+};
+
 type GrokSearchResponse = {
   output?: Array<{
     type?: string;
@@ -524,6 +557,14 @@ function missingSearchKeyPayload(provider: (typeof SEARCH_PROVIDERS)[number]) {
       docs: "https://docs.openclaw.ai/tools/web",
     };
   }
+  if (provider === "zai") {
+    return {
+      error: "missing_zai_api_key",
+      message:
+        "web_search (zai) needs a Z.AI API key. Set ZAI_API_KEY or Z_AI_API_KEY in the Gateway environment, or configure tools.web.search.zai.apiKey.",
+      docs: "https://docs.openclaw.ai/tools/web",
+    };
+  }
   return {
     error: "missing_brave_api_key",
     message: `web_search needs a Brave Search API key. Run \`${formatCliCommand("openclaw configure --section web")}\` to store it, or set BRAVE_API_KEY in the Gateway environment.`,
@@ -547,6 +588,9 @@ function resolveSearchProvider(search?: WebSearchConfig): (typeof SEARCH_PROVIDE
   }
   if (raw === "kimi") {
     return "kimi";
+  }
+  if (raw === "zai") {
+    return "zai";
   }
   if (raw === "brave") {
     return "brave";
@@ -593,6 +637,12 @@ function resolveSearchProvider(search?: WebSearchConfig): (typeof SEARCH_PROVIDE
         'web_search: no provider configured, auto-detected "grok" from available API keys',
       );
       return "grok";
+    }
+    // 6. ZAI
+    const zaiConfig = resolveZaiConfig(search);
+    if (resolveZaiApiKey(zaiConfig)) {
+      logVerbose('web_search: no provider configured, auto-detected "zai" from available API keys');
+      return "zai";
     }
   }
 
@@ -807,6 +857,36 @@ function resolveKimiBaseUrl(kimi?: KimiConfig): string {
   const fromConfig =
     kimi && "baseUrl" in kimi && typeof kimi.baseUrl === "string" ? kimi.baseUrl.trim() : "";
   return fromConfig || DEFAULT_KIMI_BASE_URL;
+}
+
+function resolveZaiConfig(search?: WebSearchConfig): ZaiConfig {
+  if (!search || typeof search !== "object") {
+    return {};
+  }
+  const zai = "zai" in search ? search.zai : undefined;
+  if (!zai || typeof zai !== "object") {
+    return {};
+  }
+  return zai as ZaiConfig;
+}
+
+function resolveZaiApiKey(zai?: ZaiConfig): string | undefined {
+  const fromConfig = normalizeApiKey(zai?.apiKey);
+  if (fromConfig) {
+    return fromConfig;
+  }
+  const fromEnvZai = normalizeApiKey(process.env.ZAI_API_KEY);
+  if (fromEnvZai) {
+    return fromEnvZai;
+  }
+  const fromEnvZ = normalizeApiKey(process.env.Z_AI_API_KEY);
+  return fromEnvZ || undefined;
+}
+
+function resolveZaiEngine(zai?: ZaiConfig): string {
+  const fromConfig =
+    zai && "engine" in zai && typeof zai.engine === "string" ? zai.engine.trim() : "";
+  return fromConfig || DEFAULT_ZAI_ENGINE;
 }
 
 function resolveGeminiConfig(search?: WebSearchConfig): GeminiConfig {
@@ -1429,6 +1509,93 @@ async function runKimiSearch(params: {
   };
 }
 
+async function runZaiSearch(params: {
+  query: string;
+  apiKey: string;
+  engine: string;
+  intent?: boolean;
+  contentSize?: "medium" | "high";
+  count: number;
+  timeoutSeconds: number;
+  domainFilter?: string[];
+  recency?: string;
+}): Promise<{ content: string; citations: string[] }> {
+  const body: Record<string, unknown> = {
+    search_query: params.query,
+    search_engine: params.engine,
+    search_intent: params.intent ?? true,
+    count: params.count,
+  };
+  if (params.domainFilter && params.domainFilter.length > 0) {
+    body.search_domain_filter = params.domainFilter;
+  }
+  if (params.recency) {
+    body.search_recency_filter = params.recency;
+  }
+  if (params.contentSize) {
+    body.content_size = params.contentSize;
+  }
+
+  return withTrustedWebSearchEndpoint(
+    {
+      url: ZAI_SEARCH_ENDPOINT,
+      timeoutSeconds: params.timeoutSeconds,
+      init: {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${params.apiKey}`,
+        },
+        body: JSON.stringify(body),
+      },
+    },
+    async (res) => {
+      if (!res.ok) {
+        const detailResult = await readResponseText(res, { maxBytes: 64_000 });
+        const detail = detailResult.text;
+        throw new Error(`ZAI Search API error (${res.status}): ${detail || res.statusText}`);
+      }
+
+      const data = (await res.json()) as ZaiSearchResponse;
+      const citations: string[] = [];
+      const results: string[] = [];
+
+      if (data.search_result && Array.isArray(data.search_result)) {
+        for (const result of data.search_result) {
+          if (result.link) {
+            citations.push(result.link);
+          }
+          const title = result.title || "";
+          const content = result.content || "";
+          const link = result.link || "";
+          const date = result.publish_date || "";
+
+          let entry = "";
+          if (title) {
+            entry += `**${title}**\n`;
+          }
+          if (content) {
+            entry += `${content}\n`;
+          }
+          if (link) {
+            entry += `Source: ${link}\n`;
+          }
+          if (date) {
+            entry += `Date: ${date}`;
+          }
+          if (entry.trim()) {
+            results.push(entry.trim());
+          }
+        }
+      }
+
+      const content = results.length > 0 ? results.join("\n\n---\n\n") : "No search results found.";
+
+      return { content, citations };
+    },
+  );
+}
+
 async function runBraveLlmContextSearch(params: {
   query: string;
   apiKey: string;
@@ -1515,6 +1682,9 @@ async function runWebSearch(params: {
   geminiModel?: string;
   kimiBaseUrl?: string;
   kimiModel?: string;
+  zaiEngine?: string;
+  zaiIntent?: boolean;
+  zaiContentSize?: "medium" | "high";
   braveMode?: "web" | "llm-context";
 }): Promise<Record<string, unknown>> {
   const effectiveBraveMode = params.braveMode ?? "web";
@@ -1642,6 +1812,38 @@ async function runWebSearch(params: {
       query: params.query,
       provider: params.provider,
       model: params.kimiModel ?? DEFAULT_KIMI_MODEL,
+      tookMs: Date.now() - start,
+      externalContent: {
+        untrusted: true,
+        source: "web_search",
+        provider: params.provider,
+        wrapped: true,
+      },
+      content: wrapWebContent(content),
+      citations,
+    };
+    writeCache(SEARCH_CACHE, cacheKey, payload, params.cacheTtlMs);
+    return payload;
+  }
+
+  if (params.provider === "zai") {
+    const engine = params.zaiEngine ?? DEFAULT_ZAI_ENGINE;
+    const { content, citations } = await runZaiSearch({
+      query: params.query,
+      apiKey: params.apiKey,
+      engine,
+      intent: params.zaiIntent,
+      contentSize: params.zaiContentSize,
+      count: params.count,
+      timeoutSeconds: params.timeoutSeconds,
+      domainFilter: params.searchDomainFilter,
+      recency: params.freshness,
+    });
+
+    const payload = {
+      query: params.query,
+      provider: params.provider,
+      engine,
       tookMs: Date.now() - start,
       externalContent: {
         untrusted: true,
@@ -1816,6 +2018,7 @@ export function createWebSearchTool(options?: {
   const grokConfig = resolveGrokConfig(search);
   const geminiConfig = resolveGeminiConfig(search);
   const kimiConfig = resolveKimiConfig(search);
+  const zaiConfig = resolveZaiConfig(search);
   const braveConfig = resolveBraveConfig(search);
   const braveMode = resolveBraveMode(braveConfig);
 
@@ -1828,11 +2031,13 @@ export function createWebSearchTool(options?: {
         ? "Search the web using xAI Grok. Returns AI-synthesized answers with citations from real-time web search."
         : provider === "kimi"
           ? "Search the web using Kimi by Moonshot. Returns AI-synthesized answers with citations from native $web_search."
-          : provider === "gemini"
-            ? "Search the web using Gemini with Google Search grounding. Returns AI-synthesized answers with citations from Google Search."
-            : braveMode === "llm-context"
-              ? "Search the web using Brave Search LLM Context API. Returns pre-extracted page content (text chunks, tables, code blocks) optimized for LLM grounding."
-              : "Search the web using Brave Search API. Supports region-specific and localized search via country and language parameters. Returns titles, URLs, and snippets for fast research.";
+          : provider === "zai"
+            ? "Search the web using Z.AI (智谱). Returns structured search results with citations from real-time web search."
+            : provider === "gemini"
+              ? "Search the web using Gemini with Google Search grounding. Returns AI-synthesized answers with citations from Google Search."
+              : braveMode === "llm-context"
+                ? "Search the web using Brave Search LLM Context API. Returns pre-extracted page content (text chunks, tables, code blocks) optimized for LLM grounding."
+                : "Search the web using Brave Search API. Supports region-specific and localized search via country and language parameters. Returns titles, URLs, and snippets for fast research.";
 
   return {
     label: "Web Search",
@@ -1851,9 +2056,11 @@ export function createWebSearchTool(options?: {
             ? resolveGrokApiKey(grokConfig)
             : provider === "kimi"
               ? resolveKimiApiKey(kimiConfig)
-              : provider === "gemini"
-                ? resolveGeminiApiKey(geminiConfig)
-                : resolveSearchApiKey(search);
+              : provider === "zai"
+                ? resolveZaiApiKey(zaiConfig)
+                : provider === "gemini"
+                  ? resolveGeminiApiKey(geminiConfig)
+                  : resolveSearchApiKey(search);
 
       if (!apiKey) {
         return jsonResult(missingSearchKeyPayload(provider));
@@ -2089,6 +2296,9 @@ export function createWebSearchTool(options?: {
         geminiModel: resolveGeminiModel(geminiConfig),
         kimiBaseUrl: resolveKimiBaseUrl(kimiConfig),
         kimiModel: resolveKimiModel(kimiConfig),
+        zaiEngine: resolveZaiEngine(zaiConfig),
+        zaiIntent: zaiConfig.intent,
+        zaiContentSize: zaiConfig.contentSize,
         braveMode,
       });
       return jsonResult(result);
@@ -2120,6 +2330,8 @@ export const __testing = {
   resolveKimiModel,
   resolveKimiBaseUrl,
   extractKimiCitations,
+  resolveZaiApiKey,
+  resolveZaiEngine,
   resolveRedirectUrl: resolveCitationRedirectUrl,
   resolveBraveMode,
 } as const;

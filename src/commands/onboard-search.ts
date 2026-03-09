@@ -10,7 +10,7 @@ import type { RuntimeEnv } from "../runtime.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
 import type { SecretInputMode } from "./onboard-types.js";
 
-export type SearchProvider = "perplexity" | "brave" | "gemini" | "grok" | "kimi";
+export type SearchProvider = "perplexity" | "brave" | "gemini" | "grok" | "kimi" | "zai";
 
 type SearchProviderEntry = {
   value: SearchProvider;
@@ -61,6 +61,14 @@ export const SEARCH_PROVIDER_OPTIONS: readonly SearchProviderEntry[] = [
     envKeys: ["PERPLEXITY_API_KEY"],
     placeholder: "pplx-...",
     signupUrl: "https://www.perplexity.ai/settings/api",
+  },
+  {
+    value: "zai",
+    label: "ZAI (智谱AI)",
+    hint: "Zhipu AI web search",
+    envKeys: ["ZAI_API_KEY", "Z_AI_API_KEY"],
+    placeholder: "...",
+    signupUrl: "https://open.bigmodel.cn/",
   },
 ] as const;
 
