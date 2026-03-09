@@ -1345,8 +1345,11 @@ export const registerTelegramHandlers = ({
           storeAllowFrom,
           dmPolicy: freshTelegramCfg.dmPolicy ?? "pairing",
         });
+        // When the allowlist has no entries, treat as unauthorized (matching
+        // the /settings command handler which denies empty allowlists when
+        // access-groups gating is enabled).
         const dmSenderAllowed =
-          !settingsDmAllow.hasEntries ||
+          settingsDmAllow.hasEntries &&
           isSenderAllowed({ allow: settingsDmAllow, senderId, senderUsername });
         // Use resolveCommandAuthorization to enforce both commands.allowFrom
         // and commands.ownerAllowFrom in a single check.
