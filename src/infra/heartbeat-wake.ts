@@ -35,6 +35,8 @@ let timerKind: WakeTimerKind | null = null;
 
 const DEFAULT_COALESCE_MS = 250;
 const DEFAULT_RETRY_MS = 1_000;
+const DEFAULT_IN_FLIGHT_RETRY_MS = 60_000;
+let inFlightRetryMs = DEFAULT_IN_FLIGHT_RETRY_MS;
 const REASON_PRIORITY = {
   RETRY: 0,
   INTERVAL: 1,
@@ -154,13 +156,15 @@ function schedule(coalesceMs: number, kind: WakeTimerKind = "normal") {
         };
         const res = await active(wakeOpts);
         if (res.status === "skipped" && res.reason === "requests-in-flight") {
-          // The main lane is busy; retry this wake target soon.
+          // The main lane is busy; retry after a longer backoff so the
+          // heartbeat does not fire the instant the conversation turn
+          // completes and block Telegram messages with a long write lock.
           queuePendingWakeReason({
             reason: pendingWake.reason ?? "retry",
             agentId: pendingWake.agentId,
             sessionKey: pendingWake.sessionKey,
           });
-          schedule(DEFAULT_RETRY_MS, "retry");
+          schedule(inFlightRetryMs, "retry");
         }
       }
     } catch {
@@ -247,6 +251,19 @@ export function hasPendingHeartbeatWake() {
   return pendingWakes.size > 0 || Boolean(timer) || scheduled;
 }
 
+/**
+ * Configure the retry delay used when a heartbeat is skipped because the
+ * main lane has requests in flight (active conversation). A longer delay
+ * prevents the heartbeat from firing immediately when a conversation turn
+ * completes, which would hold the session write lock and block channel
+ * message delivery (e.g. Telegram).
+ *
+ * Default: 60 000 ms (60 s).
+ */
+export function setInFlightRetryMs(ms: number) {
+  inFlightRetryMs = Number.isFinite(ms) && ms > 0 ? ms : DEFAULT_IN_FLIGHT_RETRY_MS;
+}
+
 export function resetHeartbeatWakeStateForTests() {
   if (timer) {
     clearTimeout(timer);
@@ -259,4 +276,5 @@ export function resetHeartbeatWakeStateForTests() {
   running = false;
   handlerGeneration += 1;
   handler = null;
+  inFlightRetryMs = DEFAULT_IN_FLIGHT_RETRY_MS;
 }

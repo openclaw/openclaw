@@ -158,9 +158,10 @@ describe("startHeartbeatRunner", () => {
     await vi.advanceTimersByTimeAsync(30 * 60_000 + 1_000);
     expect(runSpy).toHaveBeenCalledTimes(1);
 
-    // The wake layer retries after DEFAULT_RETRY_MS (1 s).  No scheduleNext()
-    // is called inside runOnce, so we must wait for the full cooldown.
-    await vi.advanceTimersByTimeAsync(1_000);
+    // The wake layer retries after the in-flight retry delay (60 s default).
+    // No scheduleNext() is called inside runOnce, so we must wait for the
+    // full cooldown.
+    await vi.advanceTimersByTimeAsync(60_000);
     expect(runSpy).toHaveBeenCalledTimes(2);
 
     runner.stop();
@@ -171,7 +172,8 @@ describe("startHeartbeatRunner", () => {
     vi.setSystemTime(new Date(0));
 
     // Simulate a long-running heartbeat: the first 5 calls return
-    // requests-in-flight (retries from the wake layer), then the 6th succeeds.
+    // requests-in-flight (retries from the wake layer at 60s intervals),
+    // then the 6th succeeds.
     let callCount = 0;
     const runSpy = vi.fn().mockImplementation(async () => {
       callCount++;
@@ -192,15 +194,14 @@ describe("startHeartbeatRunner", () => {
     await vi.advanceTimersByTimeAsync(30 * 60_000 + 1_000);
     expect(runSpy).toHaveBeenCalledTimes(1);
 
-    // Simulate 4 more retries at short intervals (wake layer retries).
+    // Simulate 4 more retries at 60s intervals (wake layer retries).
     for (let i = 0; i < 4; i++) {
-      requestHeartbeatNow({ reason: "retry", coalesceMs: 0 });
-      await vi.advanceTimersByTimeAsync(1_000);
+      await vi.advanceTimersByTimeAsync(60_000);
     }
     expect(runSpy).toHaveBeenCalledTimes(5);
 
     // The next interval tick at ~t=60m should still fire — the schedule
-    // must not have been pushed to t=30m * 6 = 180m by the 5 retries.
+    // must not have been pushed forward by the 5 retries.
     await vi.advanceTimersByTimeAsync(30 * 60_000);
     expect(runSpy).toHaveBeenCalledTimes(6);
 

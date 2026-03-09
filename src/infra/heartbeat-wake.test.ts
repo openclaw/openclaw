@@ -5,13 +5,15 @@ import {
   requestHeartbeatNow,
   resetHeartbeatWakeStateForTests,
   setHeartbeatWakeHandler,
+  setInFlightRetryMs,
 } from "./heartbeat-wake.js";
 
 describe("heartbeat-wake", () => {
-  async function expectRetryAfterDefaultDelay(params: {
+  async function expectRetryAfterDelay(params: {
     handler: ReturnType<typeof vi.fn>;
     initialReason: string;
     expectedRetryReason: string;
+    retryDelayMs: number;
   }) {
     setHeartbeatWakeHandler(
       params.handler as unknown as Parameters<typeof setHeartbeatWakeHandler>[0],
@@ -21,10 +23,10 @@ describe("heartbeat-wake", () => {
     await vi.advanceTimersByTimeAsync(1);
     expect(params.handler).toHaveBeenCalledTimes(1);
 
-    await vi.advanceTimersByTimeAsync(500);
+    await vi.advanceTimersByTimeAsync(params.retryDelayMs / 2);
     expect(params.handler).toHaveBeenCalledTimes(1);
 
-    await vi.advanceTimersByTimeAsync(500);
+    await vi.advanceTimersByTimeAsync(params.retryDelayMs / 2);
     expect(params.handler).toHaveBeenCalledTimes(2);
     expect(params.handler.mock.calls[1]?.[0]).toEqual({ reason: params.expectedRetryReason });
   }
@@ -59,16 +61,32 @@ describe("heartbeat-wake", () => {
     expect(hasPendingHeartbeatWake()).toBe(false);
   });
 
-  it("retries requests-in-flight after the default retry delay", async () => {
+  it("retries requests-in-flight after the default in-flight retry delay (60s)", async () => {
     vi.useFakeTimers();
     const handler = vi
       .fn()
       .mockResolvedValueOnce({ status: "skipped", reason: "requests-in-flight" })
       .mockResolvedValueOnce({ status: "ran", durationMs: 1 });
-    await expectRetryAfterDefaultDelay({
+    await expectRetryAfterDelay({
       handler,
       initialReason: "interval",
       expectedRetryReason: "interval",
+      retryDelayMs: 60_000,
+    });
+  });
+
+  it("respects custom retryDelayMs for requests-in-flight", async () => {
+    vi.useFakeTimers();
+    setInFlightRetryMs(120_000);
+    const handler = vi
+      .fn()
+      .mockResolvedValueOnce({ status: "skipped", reason: "requests-in-flight" })
+      .mockResolvedValueOnce({ status: "ran", durationMs: 1 });
+    await expectRetryAfterDelay({
+      handler,
+      initialReason: "interval",
+      expectedRetryReason: "interval",
+      retryDelayMs: 120_000,
     });
   });
 
@@ -84,9 +102,9 @@ describe("heartbeat-wake", () => {
     await vi.advanceTimersByTimeAsync(1);
     expect(handler).toHaveBeenCalledTimes(1);
 
-    // Retry is now waiting for 1000ms. This should not preempt cooldown.
+    // Retry is now waiting for 60 000ms. This should not preempt cooldown.
     requestHeartbeatNow({ reason: "hook:wake", coalesceMs: 0 });
-    await vi.advanceTimersByTimeAsync(998);
+    await vi.advanceTimersByTimeAsync(59_998);
     expect(handler).toHaveBeenCalledTimes(1);
 
     await vi.advanceTimersByTimeAsync(1);
@@ -94,16 +112,17 @@ describe("heartbeat-wake", () => {
     expect(handler.mock.calls[1]?.[0]).toEqual({ reason: "hook:wake" });
   });
 
-  it("retries thrown handler errors after the default retry delay", async () => {
+  it("retries thrown handler errors after the default error retry delay (1s)", async () => {
     vi.useFakeTimers();
     const handler = vi
       .fn()
       .mockRejectedValueOnce(new Error("boom"))
       .mockResolvedValueOnce({ status: "skipped", reason: "disabled" });
-    await expectRetryAfterDefaultDelay({
+    await expectRetryAfterDelay({
       handler,
       initialReason: "exec-event",
       expectedRetryReason: "exec-event",
+      retryDelayMs: 1_000,
     });
   });
 
@@ -273,7 +292,7 @@ describe("heartbeat-wake", () => {
       sessionKey: "agent:ops:discord:channel:alerts",
     });
 
-    await vi.advanceTimersByTimeAsync(1000);
+    await vi.advanceTimersByTimeAsync(60_000);
     expect(handler).toHaveBeenCalledTimes(2);
     expect(handler.mock.calls[1]?.[0]).toEqual({
       reason: "cron:job-1",

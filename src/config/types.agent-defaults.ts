@@ -260,6 +260,17 @@ export type AgentDefaultsConfig = {
      * Default: false (only the final heartbeat payload is delivered).
      */
     includeReasoning?: boolean;
+    /**
+     * Retry delay in milliseconds when a heartbeat is skipped because the
+     * main lane has requests in flight (active conversation).
+     *
+     * A longer delay prevents the heartbeat from firing immediately when a
+     * conversation turn completes, which would hold the session write lock
+     * and block channel message delivery (e.g. Telegram).
+     *
+     * Default: 60000 (60 seconds).
+     */
+    retryDelayMs?: number;
   };
   /** Max concurrent agent runs across all conversations. Default: 1 (sequential). */
   maxConcurrent?: number;
