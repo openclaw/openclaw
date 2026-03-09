@@ -2,7 +2,6 @@ import type { OpenClawConfig } from "../config/config.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import type { ResolvedQmdConfig } from "./backend-config.js";
 import { resolveMemoryBackendConfig } from "./backend-config.js";
-import { closeAllMemoryIndexManagers } from "./manager.js";
 import type {
   MemoryEmbeddingProbeResult,
   MemorySearchManager,
@@ -96,6 +95,7 @@ export async function closeAllMemorySearchManagers(): Promise<void> {
       log.warn(`failed to close qmd memory manager: ${String(err)}`);
     }
   }
+  const { closeAllMemoryIndexManagers } = await loadManagerRuntime();
   await closeAllMemoryIndexManagers();
 }
 
