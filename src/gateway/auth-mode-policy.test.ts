@@ -13,7 +13,7 @@ describe("gateway auth mode policy", () => {
         auth: {
           mode: "token",
           token: "token-value",
-          password: "password-value",
+          password: "password-value", // pragma: allowlist secret
         },
       },
     };
@@ -36,7 +36,7 @@ describe("gateway auth mode policy", () => {
       gateway: {
         auth: {
           token: "token-value",
-          password: "password-value",
+          password: "password-value", // pragma: allowlist secret
         },
       },
     };
@@ -65,7 +65,7 @@ describe("gateway auth mode policy", () => {
       gateway: {
         auth: {
           token: "token-value",
-          password: "password-value",
+          password: "password-value", // pragma: allowlist secret
         },
       },
     };
