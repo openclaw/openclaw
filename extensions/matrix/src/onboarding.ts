@@ -200,7 +200,7 @@ export const matrixOnboardingAdapter: ChannelOnboardingAdapter = {
   configure: async ({ cfg, runtime, prompter, forceAllowFrom }) => {
     let next = cfg as CoreConfig;
     await ensureMatrixSdkInstalled({
-      runtime,
+      log: runtime.log,
       confirm: async (message) =>
         await prompter.confirm({
           message,

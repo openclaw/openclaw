@@ -1,7 +1,11 @@
-import { describe, expect, it, vi } from "vitest";
-import { ensureMatrixCryptoRuntime } from "./deps.js";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { ensureMatrixCryptoRuntime, ensureMatrixSdkInstalled } from "./deps.js";
 
 const logStub = vi.fn();
+
+beforeEach(() => {
+  logStub.mockReset();
+});
 
 describe("ensureMatrixCryptoRuntime", () => {
   it("returns immediately when matrix SDK loads", async () => {
@@ -70,5 +74,76 @@ describe("ensureMatrixCryptoRuntime", () => {
 
     expect(runCommand).not.toHaveBeenCalled();
     expect(requireFn).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("ensureMatrixSdkInstalled", () => {
+  it("returns immediately when the matrix SDK is already available", async () => {
+    const runCommand = vi.fn();
+
+    await ensureMatrixSdkInstalled({
+      log: logStub,
+      isAvailable: () => true,
+      runCommand,
+      resolvePluginRoot: () => "/tmp/matrix",
+    });
+
+    expect(runCommand).not.toHaveBeenCalled();
+    expect(logStub).not.toHaveBeenCalled();
+  });
+
+  it("installs the matrix SDK when missing and rechecks availability", async () => {
+    let available = false;
+    const runCommand = vi.fn(async () => {
+      available = true;
+      return { code: 0, stdout: "", stderr: "" };
+    });
+
+    await ensureMatrixSdkInstalled({
+      log: logStub,
+      isAvailable: () => available,
+      runCommand,
+      resolvePluginRoot: () => "/tmp/matrix",
+    });
+
+    expect(runCommand).toHaveBeenCalledWith({
+      argv: ["npm", "install", "--omit=dev", "--silent"],
+      cwd: "/tmp/matrix",
+      timeoutMs: 300_000,
+      env: { COREPACK_ENABLE_DOWNLOAD_PROMPT: "0" },
+    });
+    expect(logStub).toHaveBeenCalledWith("matrix: installing dependencies via npm (/tmp/matrix)…");
+  });
+
+  it("coalesces concurrent install attempts into a single command", async () => {
+    let available = false;
+    let resolveInstall: (() => void) | undefined;
+    const runCommand = vi.fn(
+      async () =>
+        await new Promise<{ code: number; stdout: string; stderr: string }>((resolve) => {
+          resolveInstall = () => {
+            available = true;
+            resolve({ code: 0, stdout: "", stderr: "" });
+          };
+        }),
+    );
+
+    const first = ensureMatrixSdkInstalled({
+      log: logStub,
+      isAvailable: () => available,
+      runCommand,
+      resolvePluginRoot: () => "/tmp/matrix",
+    });
+    const second = ensureMatrixSdkInstalled({
+      log: logStub,
+      isAvailable: () => available,
+      runCommand,
+      resolvePluginRoot: () => "/tmp/matrix",
+    });
+
+    resolveInstall?.();
+    await Promise.all([first, second]);
+
+    expect(runCommand).toHaveBeenCalledTimes(1);
   });
 });

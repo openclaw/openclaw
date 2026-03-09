@@ -6,6 +6,7 @@ import {
   normalizeSecretInputString,
 } from "../../secret-input.js";
 import type { CoreConfig } from "../../types.js";
+import { ensureMatrixSdkInstalled } from "../deps.js";
 import { loadMatrixSdk } from "../sdk-runtime.js";
 import { ensureMatrixSdkLoggingConfigured } from "./logging.js";
 import type { MatrixAuth, MatrixResolvedConfig } from "./types.js";
@@ -134,6 +135,10 @@ export async function resolveMatrixAuth(params?: {
   if (resolved.accessToken) {
     let userId = resolved.userId;
     if (!userId) {
+      const logger = getMatrixRuntime().logging.getChildLogger({ plugin: "matrix" });
+      await ensureMatrixSdkInstalled({
+        log: (message) => logger.info(message),
+      });
       // Fetch userId from access token via whoami
       ensureMatrixSdkLoggingConfigured();
       const { MatrixClient } = loadMatrixSdk();

@@ -2,10 +2,11 @@ import fs from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { runPluginCommandWithTimeout, type RuntimeEnv } from "openclaw/plugin-sdk/matrix";
+import { runPluginCommandWithTimeout } from "openclaw/plugin-sdk/matrix";
 
 const MATRIX_SDK_PACKAGE = "@vector-im/matrix-bot-sdk";
 const MATRIX_CRYPTO_DOWNLOAD_HELPER = "@matrix-org/matrix-sdk-crypto-nodejs/download-lib.js";
+let matrixSdkInstallPromise: Promise<void> | null = null;
 
 function formatCommandError(result: { stderr: string; stdout: string }): string {
   const stderr = result.stderr.trim();
@@ -88,39 +89,52 @@ export async function ensureMatrixCryptoRuntime(
 }
 
 export async function ensureMatrixSdkInstalled(params: {
-  runtime: RuntimeEnv;
+  log?: (message: string) => void;
   confirm?: (message: string) => Promise<boolean>;
+  isAvailable?: () => boolean;
+  resolvePluginRoot?: () => string;
+  runCommand?: typeof runPluginCommandWithTimeout;
 }): Promise<void> {
-  if (isMatrixSdkAvailable()) {
+  const isAvailable = params.isAvailable ?? isMatrixSdkAvailable;
+  if (isAvailable()) {
     return;
   }
-  const confirm = params.confirm;
-  if (confirm) {
-    const ok = await confirm("Matrix requires @vector-im/matrix-bot-sdk. Install now?");
-    if (!ok) {
-      throw new Error("Matrix requires @vector-im/matrix-bot-sdk (install dependencies first).");
-    }
-  }
+  if (!matrixSdkInstallPromise) {
+    matrixSdkInstallPromise = (async () => {
+      const confirm = params.confirm;
+      if (confirm) {
+        const ok = await confirm("Matrix requires @vector-im/matrix-bot-sdk. Install now?");
+        if (!ok) {
+          throw new Error(
+            "Matrix requires @vector-im/matrix-bot-sdk (install dependencies first).",
+          );
+        }
+      }
 
-  const root = resolvePluginRoot();
-  const command = fs.existsSync(path.join(root, "pnpm-lock.yaml"))
-    ? ["pnpm", "install"]
-    : ["npm", "install", "--omit=dev", "--silent"];
-  params.runtime.log?.(`matrix: installing dependencies via ${command[0]} (${root})…`);
-  const result = await runPluginCommandWithTimeout({
-    argv: command,
-    cwd: root,
-    timeoutMs: 300_000,
-    env: { COREPACK_ENABLE_DOWNLOAD_PROMPT: "0" },
-  });
-  if (result.code !== 0) {
-    throw new Error(
-      result.stderr.trim() || result.stdout.trim() || "Matrix dependency install failed.",
-    );
+      const root = (params.resolvePluginRoot ?? resolvePluginRoot)();
+      const command = fs.existsSync(path.join(root, "pnpm-lock.yaml"))
+        ? ["pnpm", "install"]
+        : ["npm", "install", "--omit=dev", "--silent"];
+      params.log?.(`matrix: installing dependencies via ${command[0]} (${root})…`);
+      const result = await (params.runCommand ?? runPluginCommandWithTimeout)({
+        argv: command,
+        cwd: root,
+        timeoutMs: 300_000,
+        env: { COREPACK_ENABLE_DOWNLOAD_PROMPT: "0" },
+      });
+      if (result.code !== 0) {
+        throw new Error(
+          result.stderr.trim() || result.stdout.trim() || "Matrix dependency install failed.",
+        );
+      }
+      if (!isAvailable()) {
+        throw new Error(
+          "Matrix dependency install completed but @vector-im/matrix-bot-sdk is still missing.",
+        );
+      }
+    })().finally(() => {
+      matrixSdkInstallPromise = null;
+    });
   }
-  if (!isMatrixSdkAvailable()) {
-    throw new Error(
-      "Matrix dependency install completed but @vector-im/matrix-bot-sdk is still missing.",
-    );
-  }
+  await matrixSdkInstallPromise;
 }
