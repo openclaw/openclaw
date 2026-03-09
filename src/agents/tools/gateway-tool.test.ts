@@ -168,6 +168,31 @@ describe("createGatewayTool – live delivery context guard", () => {
     expect(sentinelPayload?.deliveryContext?.to).toBe("123456789");
   });
 
+  it("does not forward live RPC delivery context when gatewayUrl targets a remote gateway", async () => {
+    // A remote gateway has its own extractDeliveryInfo(sessionKey) — forwarding
+    // the local agent's deliveryContext would write a sentinel with the wrong
+    // destination on the remote host.
+    mocks.callGatewayTool.mockClear();
+    mocks.readGatewayCallOptions.mockReturnValueOnce({ gatewayUrl: "wss://remote-gw.example.com" });
+    const tool = createGatewayTool({
+      agentSessionKey: "agent:main:main",
+      agentChannel: "discord",
+      agentTo: "123456789",
+    });
+
+    await execTool(tool, {
+      action: "config.patch",
+      raw: '{"key":"value"}',
+      baseHash: "abc123",
+      sessionKey: "agent:main:main",
+      note: "remote patch",
+      gatewayUrl: "wss://remote-gw.example.com",
+    });
+
+    const forwardedParams = getCallArg<Record<string, unknown>>(mocks.callGatewayTool, 0, 2);
+    expect(forwardedParams?.deliveryContext).toBeUndefined();
+  });
+
   it("does not forward live RPC delivery context when a non-default agent passes sessionKey='main'", async () => {
     // "main" resolves to "agent:main:main" (default agent), which differs from the
     // current session "agent:shopping-claw:main". Live context must NOT be forwarded.
