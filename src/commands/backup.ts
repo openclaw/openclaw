@@ -529,7 +529,9 @@ export async function backupCreateCommand(
       // Filter function to exclude individual entries within archived directories
       const filterFn = (entryPath: string): boolean => {
         // Always include manifest
-        if (entryPath === manifestPath) return true;
+        if (entryPath === manifestPath) {
+          return true;
+        }
         // Check against exclude patterns
         return !excludePatterns.some((pattern) => matchesExcludePattern(entryPath, pattern));
       };
