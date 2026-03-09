@@ -330,34 +330,70 @@ describe("runGatewayLoop", () => {
       const closeFirst = vi.fn(async () => {});
       const closeSecond = vi.fn(async () => {});
       const closeThird = vi.fn(async () => {});
-      const { runtime, exited } = createRuntimeWithExitSignal();
+      restartGatewayProcessWithFreshPid.mockReturnValueOnce({ mode: "disabled" });
 
-      const start = vi
-        .fn()
-        .mockResolvedValueOnce({ close: closeFirst })
-        .mockResolvedValueOnce({ close: closeSecond })
-        .mockResolvedValueOnce({ close: closeThird });
+      type StartServer = () => Promise<{
+        close: (opts: { reason: string; restartExpectedMs: number | null }) => Promise<void>;
+      }>;
+
+      const start = vi.fn<StartServer>();
+      let resolveFirst: (() => void) | null = null;
+      const startedFirst = new Promise<void>((resolve) => {
+        resolveFirst = resolve;
+      });
+      start.mockImplementationOnce(async () => {
+        resolveFirst?.();
+        return { close: closeFirst };
+      });
+
+      let resolveSecond: (() => void) | null = null;
+      const startedSecond = new Promise<void>((resolve) => {
+        resolveSecond = resolve;
+      });
+      start.mockImplementationOnce(async () => {
+        resolveSecond?.();
+        return { close: closeSecond };
+      });
+
+      let resolveThird: (() => void) | null = null;
+      const startedThird = new Promise<void>((resolve) => {
+        resolveThird = resolve;
+      });
+      start.mockImplementationOnce(async () => {
+        resolveThird?.();
+        return { close: closeThird };
+      });
+
+      const { runtime, exited } = createRuntimeWithExitSignal();
       const { runGatewayLoop } = await import("./run-loop.js");
       void runGatewayLoop({
         start: start as unknown as Parameters<typeof runGatewayLoop>[0]["start"],
         runtime: runtime as unknown as Parameters<typeof runGatewayLoop>[0]["runtime"],
         lockPort: 18789,
       });
+
+      await startedFirst;
       await new Promise<void>((resolve) => setImmediate(resolve));
       const sigusr1 = captureSignal("SIGUSR1");
       const sigterm = captureSignal("SIGTERM");
 
       sigusr1();
+      await startedSecond;
       await new Promise<void>((resolve) => setImmediate(resolve));
       sigusr1();
-
+      await startedThird;
       await new Promise<void>((resolve) => setImmediate(resolve));
+
       expect(acquireGatewayLock).toHaveBeenNthCalledWith(1, { port: 18789 });
       expect(acquireGatewayLock).toHaveBeenNthCalledWith(2, { port: 18789 });
       expect(acquireGatewayLock).toHaveBeenNthCalledWith(3, { port: 18789 });
 
       sigterm();
       await expect(exited).resolves.toBe(0);
+      expect(closeThird).toHaveBeenCalledWith({
+        reason: "gateway stopping",
+        restartExpectedMs: null,
+      });
     });
   });
 

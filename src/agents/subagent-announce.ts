@@ -9,10 +9,16 @@ import {
   resolveStorePath,
 } from "../config/sessions.js";
 import { callGateway } from "../gateway/call.js";
+import { requestHeartbeatNow } from "../infra/heartbeat-wake.js";
 import { createBoundDeliveryRouter } from "../infra/outbound/bound-delivery-router.js";
 import type { ConversationRef } from "../infra/outbound/session-binding-service.js";
+import { enqueueSystemEvent } from "../infra/system-events.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
-import { normalizeAccountId, normalizeMainKey } from "../routing/session-key.js";
+import {
+  normalizeAccountId,
+  normalizeMainKey,
+  scopedHeartbeatWakeOptions,
+} from "../routing/session-key.js";
 import { defaultRuntime } from "../runtime.js";
 import { isCronSessionKey } from "../sessions/session-key-utils.js";
 import { extractTextFromChatContent } from "../shared/chat-content.js";
@@ -1010,6 +1016,11 @@ export type SubagentRunOutcome = {
 
 export type SubagentAnnounceType = "subagent task" | "cron job";
 
+function buildWakeParentCompletionReason(announceType: SubagentAnnounceType): string {
+  const normalizedType = announceType.trim().replace(/\s+/g, "-");
+  return `subagent:${normalizedType}:completion`;
+}
+
 function buildAnnounceReplyInstruction(params: {
   requesterIsSubagent: boolean;
   announceType: SubagentAnnounceType;
@@ -1157,6 +1168,12 @@ export async function runSubagentAnnounceFlow(params: {
   expectsCompletionMessage?: boolean;
   spawnMode?: SpawnSubagentMode;
   wakeOnDescendantSettle?: boolean;
+  /**
+   * Opt-in parent/requester wake after settled completion announce delivery.
+   * Unlike wakeOnDescendantSettle (child re-entry), this wakes the requester
+   * session so it can continue follow-up orchestration work.
+   */
+  wakeParentOnCompletion?: boolean;
   signal?: AbortSignal;
   bestEffortDeliver?: boolean;
 }): Promise<boolean> {
@@ -1444,6 +1461,25 @@ export async function runSubagentAnnounceFlow(params: {
       signal: params.signal,
     });
     didAnnounce = delivery.delivered;
+    if (
+      params.wakeParentOnCompletion === true &&
+      requesterIsSubagent &&
+      didAnnounce &&
+      delivery.path === "direct"
+    ) {
+      const wakeText = `Subagent completed: ${taskLabel} (${outcome.status})`;
+      const queued = enqueueSystemEvent(wakeText, {
+        sessionKey: targetRequesterSessionKey,
+        contextKey: `subagent-completion:${announceId}`,
+      });
+      if (queued) {
+        requestHeartbeatNow(
+          scopedHeartbeatWakeOptions(targetRequesterSessionKey, {
+            reason: buildWakeParentCompletionReason(announceType),
+          }),
+        );
+      }
+    }
     if (!delivery.delivered && delivery.path === "direct" && delivery.error) {
       defaultRuntime.error?.(
         `Subagent completion direct announce failed for run ${params.childRunId}: ${delivery.error}`,
