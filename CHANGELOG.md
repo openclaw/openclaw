@@ -14,7 +14,6 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
-- ACP/bridge mode: reject unsupported per-session MCP server setup and propagate rejected session-mode changes so IDE clients see explicit bridge limitations instead of silent success. (#41424) Thanks @mbelinky.
 - macOS/LaunchAgent install: tighten LaunchAgent directory and plist permissions during install so launchd bootstrap does not fail when the target home path or generated plist inherited group/world-writable modes.
 - Gateway/Control UI: keep dashboard auth tokens in session-scoped browser storage so same-tab refreshes preserve remote token auth without restoring long-lived localStorage token persistence, while scoping tokens to the selected gateway URL and fragment-only bootstrap flow. (#40892) thanks @velvet-shark.
 - Models/Kimi Coding: send `anthropic-messages` tools in native Anthropic format again so `kimi-coding` stops degrading tool calls into XML/plain-text pseudo invocations instead of real `tool_use` blocks. (#38669, #39907, #40552) Thanks @opriz.
@@ -28,6 +27,7 @@ Docs: https://docs.openclaw.ai
 - Cron/subagent followup: do not misclassify empty or `NO_REPLY` cron responses as interim acknowledgements that need a rerun, so deliberately silent cron jobs are no longer retried. (#41383) thanks @jackal092927.
 - Auth/cooldowns: reset expired auth-profile cooldown error counters before computing the next backoff so stale on-disk counters do not re-escalate into long cooldown loops after expiry. (#41028) thanks @zerone0x.
 - Gateway/node pending drain followup: keep `hasMore` true when the deferred baseline status item still needs delivery, and avoid allocating empty pending-work state for drain-only nodes with no queued work. (#41429) Thanks @mbelinky.
+- ACP/bridge mode: reject unsupported per-session MCP server setup and propagate rejected session-mode changes so IDE clients see explicit bridge limitations instead of silent success. (#41424) Thanks @mbelinky.
 
 ## 2026.3.8
 
