@@ -37,6 +37,29 @@ function loadAuthStoreWithProfiles(profiles: AuthProfileStore["profiles"]): Auth
   };
 }
 
+function applyWindowsInsecureFileProviderFlag(config: OpenClawConfig): OpenClawConfig {
+  if (process.platform !== "win32") {
+    return config;
+  }
+  const defaultProvider = config.secrets?.providers?.default;
+  if (!defaultProvider || defaultProvider.source !== "file") {
+    return config;
+  }
+  return {
+    ...config,
+    secrets: {
+      ...config.secrets,
+      providers: {
+        ...config.secrets?.providers,
+        default: {
+          ...defaultProvider,
+          allowInsecurePath: true,
+        },
+      },
+    },
+  };
+}
+
 describe("secrets runtime snapshot", () => {
   afterEach(() => {
     clearSecretsRuntimeSnapshot();
@@ -602,7 +625,7 @@ describe("secrets runtime snapshot", () => {
       });
 
       await writeConfigFile({
-        ...loadConfig(),
+        ...applyWindowsInsecureFileProviderFlag(loadConfig()),
         gateway: { auth: { mode: "token" } },
       });
 
@@ -697,7 +720,7 @@ describe("secrets runtime snapshot", () => {
 
       await expect(
         writeConfigFile({
-          ...loadConfig(),
+          ...applyWindowsInsecureFileProviderFlag(loadConfig()),
           gateway: { auth: { mode: "token" } },
         }),
       ).rejects.toThrow(

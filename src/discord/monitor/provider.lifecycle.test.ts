@@ -352,6 +352,75 @@ describe("runDiscordGatewayLifecycle", () => {
     }
   });
 
+  it("clears resume state after repeated 1005/1006 closes before READY/RESUMED", async () => {
+    const { runDiscordGatewayLifecycle } = await import("./provider.lifecycle.js");
+    const { emitter, gateway } = createGatewayHarness({
+      state: {
+        sessionId: "session-3",
+        resumeGatewayUrl: "wss://gateway.discord.gg",
+        sequence: 789,
+      },
+      sequence: 789,
+    });
+    getDiscordGatewayEmitterMock.mockReturnValueOnce(emitter);
+    waitForDiscordGatewayStopMock.mockImplementationOnce(async () => {
+      emitter.emit("debug", "WebSocket connection closed with code 1006");
+      emitter.emit("debug", "WebSocket connection closed with code 1006");
+      emitter.emit("debug", "WebSocket connection closed with code 1006");
+    });
+
+    const { lifecycleParams, runtimeLog } = createLifecycleHarness({ gateway });
+    await expect(runDiscordGatewayLifecycle(lifecycleParams)).resolves.toBeUndefined();
+
+    expect(gateway.state).toBeDefined();
+    expect(gateway.state?.sessionId).toBeNull();
+    expect(gateway.state?.resumeGatewayUrl).toBeNull();
+    expect(gateway.state?.sequence).toBeNull();
+    expect(gateway.sequence).toBeNull();
+    expect(runtimeLog).toHaveBeenCalledWith(
+      expect.stringContaining("forcing fresh identify on next reconnect"),
+    );
+  });
+
+  it("resets abnormal-close counter after a connected close event", async () => {
+    const { runDiscordGatewayLifecycle } = await import("./provider.lifecycle.js");
+    const { emitter, gateway } = createGatewayHarness({
+      state: {
+        sessionId: "session-4",
+        resumeGatewayUrl: "wss://gateway.discord.gg",
+        sequence: 321,
+      },
+      sequence: 321,
+    });
+    getDiscordGatewayEmitterMock.mockReturnValueOnce(emitter);
+    waitForDiscordGatewayStopMock.mockImplementationOnce(async () => {
+      // Seed the abnormal-close counter first while disconnected.
+      emitter.emit("debug", "WebSocket connection closed with code 1006");
+      emitter.emit("debug", "WebSocket connection closed with code 1006");
+
+      // A connected close should reset the accumulated counter.
+      gateway.isConnected = true;
+      emitter.emit("debug", "WebSocket connection closed with code 1006");
+      gateway.isConnected = false;
+
+      // After reset, two more closes should not hit the threshold.
+      emitter.emit("debug", "WebSocket connection closed with code 1006");
+      emitter.emit("debug", "WebSocket connection closed with code 1006");
+    });
+
+    const { lifecycleParams, runtimeLog } = createLifecycleHarness({ gateway });
+    await expect(runDiscordGatewayLifecycle(lifecycleParams)).resolves.toBeUndefined();
+
+    expect(gateway.state).toBeDefined();
+    expect(gateway.state?.sessionId).toBe("session-4");
+    expect(gateway.state?.resumeGatewayUrl).toBe("wss://gateway.discord.gg");
+    expect(gateway.state?.sequence).toBe(321);
+    expect(gateway.sequence).toBe(321);
+    expect(runtimeLog).not.toHaveBeenCalledWith(
+      expect.stringContaining("forcing fresh identify on next reconnect"),
+    );
+  });
+
   it("force-stops when reconnect stalls after a close event", async () => {
     vi.useFakeTimers();
     try {
