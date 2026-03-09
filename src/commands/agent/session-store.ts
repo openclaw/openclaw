@@ -79,25 +79,34 @@ export async function updateSessionStoreAfterAgentRun(params: {
   if (result.meta.systemPromptReport) {
     next.systemPromptReport = result.meta.systemPromptReport;
   }
+
+  // Always derive totalTokens to support promptTokens-only providers (e.g., Kimi)
+  const totalTokens = deriveSessionTotalTokens({
+    usage,
+    contextTokens,
+    promptTokens,
+  });
+
   if (hasNonzeroUsage(usage)) {
     const input = usage.input ?? 0;
     const output = usage.output ?? 0;
-    const totalTokens = deriveSessionTotalTokens({
-      usage,
-      contextTokens,
-      promptTokens,
-    });
     next.inputTokens = input;
     next.outputTokens = output;
-    if (typeof totalTokens === "number" && Number.isFinite(totalTokens) && totalTokens > 0) {
-      next.totalTokens = totalTokens;
-      next.totalTokensFresh = true;
-    } else {
-      next.totalTokens = undefined;
-      next.totalTokensFresh = false;
-    }
     next.cacheRead = usage.cacheRead ?? 0;
     next.cacheWrite = usage.cacheWrite ?? 0;
+  }
+
+  // Update totalTokens when valid, or mark stale if we have usage/promptTokens but invalid total.
+  // If no token data at all, preserve previous totalTokens.
+  if (typeof totalTokens === "number" && Number.isFinite(totalTokens) && totalTokens > 0) {
+    next.totalTokens = totalTokens;
+    next.totalTokensFresh = true;
+  } else if (
+    hasNonzeroUsage(usage) ||
+    (typeof promptTokens === "number" && Number.isFinite(promptTokens) && promptTokens > 0)
+  ) {
+    next.totalTokens = undefined;
+    next.totalTokensFresh = false;
   }
   if (compactionsThisRun > 0) {
     next.compactionCount = (entry.compactionCount ?? 0) + compactionsThisRun;
