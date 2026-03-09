@@ -1,7 +1,7 @@
 async function readChunkWithIdleTimeout(
   reader: ReadableStreamDefaultReader<Uint8Array>,
   chunkTimeoutMs: number,
-): Promise<ReadableStreamReadResult<Uint8Array>> {
+): Promise<Awaited<ReturnType<typeof reader.read>>> {
   let timeoutId: ReturnType<typeof setTimeout> | undefined;
   let timedOut = false;
 
