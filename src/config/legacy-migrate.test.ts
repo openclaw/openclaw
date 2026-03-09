@@ -236,21 +236,37 @@ describe("legacy migrate heartbeat config", () => {
   });
 });
 
-describe("legacy migrate controlUi.allowedOrigins seed (issue #29385)", () => {
-  it("migrates bind=lan to loopback for tailscale serve before seeding allowedOrigins", () => {
+describe("legacy migrate gateway.bind to loopback for tailscale serve/funnel (issue #40910)", () => {
+  it.each([
+    {
+      bind: "lan" as const,
+      mode: "serve" as const,
+      auth: { mode: "token" as const, token: "tok" },
+    },
+    {
+      bind: "tailnet" as const,
+      mode: "serve" as const,
+      auth: { mode: "token" as const, token: "tok" },
+    },
+    {
+      bind: "tailnet" as const,
+      mode: "funnel" as const,
+      auth: { mode: "password" as const, password: "pw" },
+    },
+  ])("migrates bind=$bind to loopback for tailscale $mode", ({ bind, mode, auth }) => {
     const res = migrateLegacyConfig({
       gateway: {
-        bind: "lan",
-        tailscale: { mode: "serve" },
-        auth: { mode: "token", token: "tok" },
+        bind,
+        tailscale: { mode },
+        auth,
       },
     });
 
     expect(res.config?.gateway?.bind).toBe("loopback");
-    expect(res.config?.gateway?.tailscale?.mode).toBe("serve");
+    expect(res.config?.gateway?.tailscale?.mode).toBe(mode);
     expect(res.config?.gateway?.controlUi?.allowedOrigins).toBeUndefined();
     expect(res.changes).toContain(
-      'Migrated gateway.bind → "loopback" for gateway.tailscale.mode="serve".',
+      `Migrated gateway.bind → "loopback" for gateway.tailscale.mode="${mode}".`,
     );
     expect(res.changes.some((c) => c.includes("gateway.controlUi.allowedOrigins"))).toBe(false);
   });
@@ -271,6 +287,9 @@ describe("legacy migrate controlUi.allowedOrigins seed (issue #29385)", () => {
       'Migrated gateway.bind → "loopback" for gateway.tailscale.mode="serve".',
     );
   });
+});
+
+describe("legacy migrate controlUi.allowedOrigins seed (issue #29385)", () => {
   it("seeds allowedOrigins for bind=lan with no existing controlUi config", () => {
     const res = migrateLegacyConfig({
       gateway: {
