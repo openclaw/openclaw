@@ -1,38 +1,23 @@
-# fly.toml app configuration file generated for onedmon on 2026-03-09T00:55:30Z
+# fly.toml app configuration file generated for onedmon on 2026-03-09T02:22:20Z
 #
 # See https://fly.io/docs/reference/configuration/ for information about how to use this file.
 #
 
-app = "onedmon"
-primary_region = "ams"
+app = 'onedmon'
+primary_region = 'gru'
 
 [build]
-  dockerfile = "Dockerfile"
-
-  [build.args]
-  OPENCLAW_DOCKER_BUILD_NODE_OPTIONS = "--max-old-space-size=1536"
-
-[env]
-  NODE_ENV = "production"
-  OPENCLAW_PREFER_PNPM = "1"
-  OPENCLAW_STATE_DIR = "/data"
-  NODE_OPTIONS = "--max-old-space-size=1536"
-
-[processes]
-  app = "node dist/index.js gateway --allow-unconfigured --port 8080 --bind lan"
 
 [http_service]
   internal_port = 8080
   force_https = true
-  auto_stop_machines = "stop"
+  auto_stop_machines = 'stop'
   auto_start_machines = true
   min_machines_running = 0
-  processes = ["app"]
+  processes = ['app']
 
 [[vm]]
-  size = "shared-cpu-2x"
-  memory = "2gb"
-
-[mounts]
-  source = "openclaw_data"
-  destination = "/data"
+  memory = '1gb'
+  cpu_kind = 'shared'
+  cpus = 1
+  memory_mb = 1024
