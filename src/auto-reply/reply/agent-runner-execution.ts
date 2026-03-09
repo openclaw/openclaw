@@ -344,13 +344,15 @@ export async function runAgentTurnWithFallback(params: {
                 ...embeddedContext,
                 allowGatewaySubagentBinding: true,
                 trigger: params.isHeartbeat ? "heartbeat" : "user",
-                groupId: resolveGroupSessionKey(params.sessionCtx)?.id,
-                groupChannel:
-                  params.sessionCtx.GroupChannel?.trim() ?? params.sessionCtx.GroupSubject?.trim(),
-                groupSpace: params.sessionCtx.GroupSpace?.trim() ?? undefined,
+                // Use stored run values for all identity fields — ensures hooks
+                // see the same trust context as the originating message, even if
+                // the live sessionCtx has drifted (e.g. group metadata updated).
+                groupId: params.followupRun.run.groupId,
+                groupChannel: params.followupRun.run.groupChannel,
+                groupSpace: params.followupRun.run.groupSpace,
                 ...senderContext,
-                spawnedBy: params.followupRun.run.spawnedBy,
                 sourceProvider: params.followupRun.run.sourceProvider,
+                spawnedBy: params.followupRun.run.spawnedBy,
                 ...runBaseParams,
                 prompt: params.commandBody,
                 extraSystemPrompt: params.followupRun.run.extraSystemPrompt,
