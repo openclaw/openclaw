@@ -1,6 +1,8 @@
 import type { ExecApprovalForwarder } from "../../infra/exec-approval-forwarder.js";
 import {
   DEFAULT_EXEC_APPROVAL_TIMEOUT_MS,
+  evaluateShellAllowlist,
+  resolveAllowAlwaysPatterns,
   type ExecApprovalDecision,
 } from "../../infra/exec-approvals.js";
 import { buildSystemRunApprovalBinding } from "../../infra/system-run-approval-binding.js";
@@ -276,6 +278,44 @@ export function createExecApprovalHandlers(
         return;
       }
       const snapshot = manager.getSnapshot(p.id);
+      if (!snapshot) {
+        respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "unknown approval id"));
+        return;
+      }
+      if (decision === "allow-always") {
+        const analysis = evaluateShellAllowlist({
+          command: snapshot.request.command,
+          allowlist: [],
+          safeBins: new Set<string>(),
+          cwd: snapshot.request.cwd ?? undefined,
+          platform: process.platform,
+        });
+        if (analysis.analysisOk) {
+          const persistedPatterns = resolveAllowAlwaysPatterns({
+            segments: analysis.segments,
+            cwd: snapshot.request.cwd ?? undefined,
+            platform: process.platform,
+          });
+          const recheck = evaluateShellAllowlist({
+            command: snapshot.request.command,
+            allowlist: persistedPatterns.map((pattern) => ({ pattern })),
+            safeBins: new Set<string>(),
+            cwd: snapshot.request.cwd ?? undefined,
+            platform: process.platform,
+          });
+          if (!recheck.analysisOk || !recheck.allowlistSatisfied) {
+            respond(
+              false,
+              undefined,
+              errorShape(
+                ErrorCodes.INVALID_REQUEST,
+                "cannot persist allow-always for this command; use allow-once",
+              ),
+            );
+            return;
+          }
+        }
+      }
       const resolvedBy = client?.connect?.client?.displayName ?? client?.connect?.client?.id;
       const ok = manager.resolve(p.id, decision, resolvedBy ?? null);
       if (!ok) {

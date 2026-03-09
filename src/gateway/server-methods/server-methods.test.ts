@@ -531,6 +531,52 @@ describe("exec approval handlers", () => {
     expect(broadcasts.some((entry) => entry.event === "exec.approval.resolved")).toBe(true);
   });
 
+  it("rejects allow-always when no allowlist pattern can be persisted", async () => {
+    const { handlers, broadcasts, respond, context } = createExecApprovalFixture();
+
+    const requestPromise = requestExecApproval({
+      handlers,
+      respond,
+      context,
+      params: {
+        command: "cd some-dir && ls",
+        commandArgv: ["cd", "some-dir", "&&", "ls"],
+        host: "gateway",
+        twoPhase: true,
+      },
+    });
+
+    const requested = broadcasts.find((entry) => entry.event === "exec.approval.requested");
+    expect(requested).toBeTruthy();
+    const id = (requested?.payload as { id?: string })?.id ?? "";
+
+    const resolveRespond = vi.fn();
+    await handlers["exec.approval.resolve"]({
+      params: { id, decision: "allow-always" } as ExecApprovalResolveArgs["params"],
+      respond: resolveRespond as unknown as ExecApprovalResolveArgs["respond"],
+      context: toExecApprovalResolveContext(context),
+      client: null,
+      req: { id: "req-allow-always", type: "req", method: "exec.approval.resolve" },
+      isWebchatConnect: execApprovalNoop,
+    });
+
+    expect(resolveRespond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({
+        message: "cannot persist allow-always for this command; use allow-once",
+      }),
+    );
+
+    await resolveExecApproval({
+      handlers,
+      id,
+      respond: vi.fn(),
+      context,
+    });
+    await requestPromise;
+  });
+
   it("stores versioned system.run binding and sorted env keys on approval request", async () => {
     const { handlers, broadcasts, respond, context } = createExecApprovalFixture();
     await requestExecApproval({
