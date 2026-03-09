@@ -23,6 +23,16 @@ export function buildMemoryPromptSection(params: {
   return _builder?.(params) ?? [];
 }
 
+/** Return the current builder (used by the plugin cache to snapshot state). */
+export function getMemoryPromptSectionBuilder(): MemoryPromptSectionBuilder | undefined {
+  return _builder;
+}
+
+/** Restore a previously-snapshotted builder (used on plugin cache hits). */
+export function restoreMemoryPromptSection(builder: MemoryPromptSectionBuilder | undefined): void {
+  _builder = builder;
+}
+
 /** Clear the registered builder (called on plugin reload and in tests). */
 export function clearMemoryPromptSection(): void {
   _builder = undefined;
