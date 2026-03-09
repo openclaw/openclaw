@@ -158,6 +158,37 @@ describe("doctor state integrity oauth dir checks", () => {
     expect(files.some((name) => name.startsWith("orphan-session.jsonl.deleted."))).toBe(true);
   });
 
+  it("suppresses orphan transcript warnings when QMD session indexing is enabled", async () => {
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: {
+          workspace: tempHome,
+        },
+      },
+      memory: {
+        backend: "qmd",
+        qmd: {
+          sessions: {
+            enabled: true,
+          },
+        },
+      },
+    };
+    setupSessionState(cfg, process.env, process.env.HOME ?? "");
+    const sessionsDir = resolveSessionTranscriptsDirForAgent("main", process.env, () => tempHome);
+    fs.writeFileSync(path.join(sessionsDir, "orphan-session.jsonl"), '{"type":"session"}\n');
+    const confirmSkipInNonInteractive = vi.fn(async () => false);
+
+    await noteStateIntegrity(cfg, { confirmSkipInNonInteractive });
+
+    expect(stateIntegrityText()).not.toContain("orphan transcript file");
+    expect(confirmSkipInNonInteractive).not.toHaveBeenCalledWith(
+      expect.objectContaining({
+        message: expect.stringContaining("orphan transcript file"),
+      }),
+    );
+  });
+
   it("prints openclaw-only verification hints when recent sessions are missing transcripts", async () => {
     const cfg: OpenClawConfig = {};
     writeSessionStore(cfg, {

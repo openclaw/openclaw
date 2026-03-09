@@ -16,6 +16,7 @@ import {
   resolveStorePath,
 } from "../config/sessions.js";
 import { resolveRequiredHomeDir } from "../infra/home-dir.js";
+import { resolveMemoryBackendConfig } from "../memory/backend-config.js";
 import { parseAgentSessionKey } from "../sessions/session-key-utils.js";
 import { note } from "../terminal/note.js";
 import { shortenHomePath } from "../utils.js";
@@ -102,6 +103,11 @@ function countJsonlLines(filePath: string): number {
   } catch {
     return 0;
   }
+}
+
+function shouldSuppressOrphanTranscriptWarning(cfg: OpenClawConfig, agentId: string): boolean {
+  const memoryBackend = resolveMemoryBackendConfig({ cfg, agentId });
+  return memoryBackend.backend === "qmd" && memoryBackend.qmd?.sessions.enabled === true;
 }
 
 function findOtherStateDirs(stateDir: string): string[] {
@@ -490,6 +496,7 @@ export async function noteStateIntegrity(
   const displayStoreDir = shortenHomePath(storeDir);
   const displayConfigPath = configPath ? shortenHomePath(configPath) : undefined;
   const requireOAuthDir = shouldRequireOAuthDir(cfg, env);
+  const suppressOrphanTranscriptWarning = shouldSuppressOrphanTranscriptWarning(cfg, agentId);
   const cloudSyncedStateDir = detectMacCloudSyncedStateDir(stateDir);
   const linuxSdBackedStateDir = detectLinuxSdBackedStateDir(stateDir);
 
@@ -769,7 +776,7 @@ export async function noteStateIntegrity(
       .filter((entry) => entry.isFile() && isPrimarySessionTranscriptFileName(entry.name))
       .map((entry) => path.resolve(path.join(sessionsDir, entry.name)))
       .filter((filePath) => !referencedTranscriptPaths.has(filePath));
-    if (orphanTranscriptPaths.length > 0) {
+    if (orphanTranscriptPaths.length > 0 && !suppressOrphanTranscriptWarning) {
       warnings.push(
         `- Found ${orphanTranscriptPaths.length} orphan transcript file(s) in ${displaySessionsDir}. They are not referenced by sessions.json and can consume disk over time.`,
       );
