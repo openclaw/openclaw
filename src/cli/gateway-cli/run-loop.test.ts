@@ -47,12 +47,13 @@ vi.mock("../../logging/subsystem.js", () => ({
   createSubsystemLogger: () => gatewayLog,
 }));
 
+type SignalListener = (...args: unknown[]) => void;
 const LOOP_SIGNALS = ["SIGTERM", "SIGINT", "SIGUSR1"] as const;
 type LoopSignal = (typeof LOOP_SIGNALS)[number];
 
-function removeNewSignalListeners(signal: LoopSignal, existing: Set<(...args: unknown[]) => void>) {
+function removeNewSignalListeners(signal: LoopSignal, existing: Set<SignalListener>) {
   for (const listener of process.listeners(signal)) {
-    const fn = listener as (...args: unknown[]) => void;
+    const fn = listener as SignalListener;
     if (!existing.has(fn)) {
       process.removeListener(signal, fn);
     }
@@ -61,9 +62,9 @@ function removeNewSignalListeners(signal: LoopSignal, existing: Set<(...args: un
 
 function addedSignalListener(
   signal: LoopSignal,
-  existing: Set<(...args: unknown[]) => void>,
+  existing: Set<SignalListener>,
 ): (() => void) | null {
-  const listeners = process.listeners(signal) as Array<(...args: unknown[]) => void>;
+  const listeners = process.listeners(signal) as SignalListener[];
   for (let i = listeners.length - 1; i >= 0; i -= 1) {
     const listener = listeners[i];
     if (listener && !existing.has(listener)) {
@@ -79,9 +80,9 @@ async function withIsolatedSignals(
   const existingListeners = Object.fromEntries(
     LOOP_SIGNALS.map((signal) => [
       signal,
-      new Set(process.listeners(signal) as Array<(...args: unknown[]) => void>),
+      new Set(process.listeners(signal) as SignalListener[]),
     ]),
-  ) as Record<LoopSignal, Set<(...args: unknown[]) => void>>;
+  ) as Record<LoopSignal, Set<SignalListener>>;
   const captureSignal = (signal: LoopSignal) => {
     const listener = addedSignalListener(signal, existingListeners[signal]);
     if (!listener) {
@@ -284,7 +285,6 @@ describe("runGatewayLoop", () => {
         release: lockRelease,
       });
 
-      // Override process-respawn to return "spawned" mode
       restartGatewayProcessWithFreshPid.mockReturnValueOnce({
         mode: "spawned",
         pid: 9999,
