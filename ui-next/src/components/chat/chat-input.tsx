@@ -15,6 +15,7 @@ import {
   Pause,
   Play,
   ListPlus,
+  Clock,
 } from "lucide-react";
 import { useRef, useState, useMemo, useCallback, useEffect } from "react";
 import { AutocompleteMenu, useAutocomplete } from "@/components/chat/autocomplete-menu";
@@ -114,22 +115,38 @@ export function ChatInput({
   const ctxTokenUsed = useMemo(() => {
     // totalTokens = prompt/context tokens from the last API call (accurate context window usage)
     const total = activeSession?.totalTokens as number | undefined;
-    if (total && total > 0) return total;
+    if (total && total > 0) {
+      return total;
+    }
     // Fallback to summing input+output (less accurate)
-    const inp = (activeSession?.inputTokens as number | undefined) ?? activeSession?.tokenCounts?.totalInput ?? 0;
-    const out = (activeSession?.outputTokens as number | undefined) ?? activeSession?.tokenCounts?.totalOutput ?? 0;
+    const inp =
+      (activeSession?.inputTokens as number | undefined) ??
+      activeSession?.tokenCounts?.totalInput ??
+      0;
+    const out =
+      (activeSession?.outputTokens as number | undefined) ??
+      activeSession?.tokenCounts?.totalOutput ??
+      0;
     return inp + out;
   }, [activeSession]);
   const ctxTotal = useMemo(() => {
     const fromSession = activeSession?.contextTokens as number | undefined;
-    if (fromSession) return fromSession;
-    if (!models?.length || !activeSession?.model) return 0;
+    if (fromSession) {
+      return fromSession;
+    }
+    if (!models?.length || !activeSession?.model) {
+      return 0;
+    }
     const match = models.find((m) => m.id === activeSession.model);
     return match?.contextWindow ?? 0;
   }, [activeSession, models]);
   const ctxRatio = ctxTotal > 0 ? Math.min(ctxTokenUsed / ctxTotal, 1) : 0;
   const fmtCtx = (n: number) =>
-    n >= 1_000_000 ? `${(n / 1_000_000).toFixed(1)}M` : n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n);
+    n >= 1_000_000
+      ? `${(n / 1_000_000).toFixed(1)}M`
+      : n >= 1000
+        ? `${(n / 1000).toFixed(1)}k`
+        : String(n);
 
   // TTS auto mode
   const [ttsMode, setTtsMode] = useState<TtsAutoMode>("off");
@@ -458,7 +475,7 @@ export function ChatInput({
     sendRpc("config.patch", { messages: { tts: { auto: next } } }).catch(() => {});
   }, [ttsMode, sendRpc]);
 
-  const handleReply = useCallback(
+  const _handleReply = useCallback(
     (msg: ChatMessage) => {
       const msgText = getMessageText(msg);
       const lines = msgText.split("\n").slice(0, 2);
@@ -610,7 +627,9 @@ export function ChatInput({
             <>
               <span className="text-muted-foreground/20">·</span>
               <span className="flex items-center gap-1.5 tabular-nums">
-                <span>{fmtCtx(ctxTokenUsed)} / {fmtCtx(ctxTotal)}</span>
+                <span>
+                  {fmtCtx(ctxTokenUsed)} / {fmtCtx(ctxTotal)}
+                </span>
                 <span className="w-12 h-1 rounded-full bg-secondary/40 overflow-hidden">
                   <span
                     className={cn(
@@ -643,9 +662,17 @@ export function ChatInput({
         {messageQueue.length > 0 && (
           <div className="mb-2 rounded-xl border border-border/60 bg-card/60 backdrop-blur-sm overflow-hidden animate-in fade-in slide-in-from-bottom-2 duration-200">
             <div className="flex items-center justify-between px-3 py-1.5 border-b border-border/40 bg-muted/30">
-              <span className="text-[11px] font-mono text-muted-foreground">
-                Queue ({messageQueue.length})
-              </span>
+              <div className="flex items-center gap-2">
+                <span className="text-[11px] font-mono text-muted-foreground">
+                  Queue ({messageQueue.length})
+                </span>
+                {isStreaming && messageQueue.some((m) => m.status === "pending") && (
+                  <span className="flex items-center gap-1 text-[10px] text-yellow-500/80 font-mono animate-pulse">
+                    <Clock className="h-3 w-3" />
+                    Waiting for response…
+                  </span>
+                )}
+              </div>
               <div className="flex items-center gap-1">
                 {isQueueRunning ? (
                   <button
@@ -684,6 +711,8 @@ export function ChatInput({
                   <span className="text-[10px] font-mono text-muted-foreground/60 w-4 shrink-0 text-center">
                     {item.status === "sending" ? (
                       <RefreshCw className="h-3 w-3 animate-spin text-primary" />
+                    ) : isStreaming ? (
+                      <Clock className="h-3 w-3 text-yellow-500/60" />
                     ) : (
                       i + 1
                     )}
@@ -868,7 +897,9 @@ export function ChatInput({
               <button
                 onClick={() => {
                   setInputValue((prev) => {
-                    if (prev.startsWith("/")) return prev;
+                    if (prev.startsWith("/")) {
+                      return prev;
+                    }
                     return "/";
                   });
                   autocomplete.handleInputChange("/");

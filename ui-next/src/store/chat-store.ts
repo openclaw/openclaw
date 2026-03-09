@@ -196,6 +196,47 @@ export function getMessageImages(msg: ChatMessage): Array<{ url: string; alt?: s
 
 const emptyDraft: SessionDraft = { inputValue: "", attachments: [] };
 
+// ─── Queue persistence (survives page refresh) ──────────────────────────────
+const QUEUE_STORAGE_KEY = "operator1:messageQueue";
+
+function loadPersistedQueue(): { messageQueue: QueuedMessage[]; isQueueRunning: boolean } {
+  try {
+    const raw = localStorage.getItem(QUEUE_STORAGE_KEY);
+    if (!raw) {
+      return { messageQueue: [], isQueueRunning: false };
+    }
+    const parsed = JSON.parse(raw) as { messageQueue?: QueuedMessage[]; isQueueRunning?: boolean };
+    const queue = (parsed.messageQueue ?? []).map((m) => ({
+      ...m,
+      // Reset any "sending" items back to "pending" (the send was interrupted by refresh)
+      status: "pending" as const,
+    }));
+    return {
+      messageQueue: queue,
+      isQueueRunning: queue.length > 0 && (parsed.isQueueRunning ?? false),
+    };
+  } catch {
+    return { messageQueue: [], isQueueRunning: false };
+  }
+}
+
+function persistQueue(queue: QueuedMessage[], isQueueRunning: boolean) {
+  try {
+    if (queue.length === 0) {
+      localStorage.removeItem(QUEUE_STORAGE_KEY);
+    } else {
+      localStorage.setItem(
+        QUEUE_STORAGE_KEY,
+        JSON.stringify({ messageQueue: queue, isQueueRunning }),
+      );
+    }
+  } catch {
+    // storage full or unavailable — ignore
+  }
+}
+
+const restoredQueue = loadPersistedQueue();
+
 const initialState = {
   activeSessionKey: "main",
   sessions: [] as SessionEntry[],
@@ -208,8 +249,8 @@ const initialState = {
   isPaused: false,
   pauseBuffer: "",
   isSendPending: false,
-  messageQueue: [] as QueuedMessage[],
-  isQueueRunning: false,
+  messageQueue: restoredQueue.messageQueue,
+  isQueueRunning: restoredQueue.isQueueRunning,
   thinkingLevel: "off",
   drafts: {} as Record<string, SessionDraft>,
 };
@@ -230,12 +271,20 @@ export const useChatStore = create<ChatState>((set, get) => ({
       if (m.role === "assistant" && deduped.length > 0) {
         const prev = deduped[deduped.length - 1];
         if (prev.role === "assistant") {
-          const prevText = typeof prev.content === "string"
-            ? prev.content
-            : (prev.content ?? []).filter((c) => c.type === "text").map((c) => c.text ?? "").join("");
-          const curText = typeof m.content === "string"
-            ? m.content
-            : (m.content ?? []).filter((c) => c.type === "text").map((c) => c.text ?? "").join("");
+          const prevText =
+            typeof prev.content === "string"
+              ? prev.content
+              : (prev.content ?? [])
+                  .filter((c) => c.type === "text")
+                  .map((c) => c.text ?? "")
+                  .join("");
+          const curText =
+            typeof m.content === "string"
+              ? m.content
+              : (m.content ?? [])
+                  .filter((c) => c.type === "text")
+                  .map((c) => c.text ?? "")
+                  .join("");
           if (prevText === curText && prevText.length > 0) {
             continue; // skip duplicate
           }
@@ -295,19 +344,20 @@ export const useChatStore = create<ChatState>((set, get) => ({
       // has the same runId (can happen when two "final" events arrive).
       const lastMsg = state.messages[state.messages.length - 1];
       const alreadyAppended = lastMsg?.runId === runId && lastMsg.role === "assistant";
-      const newMessages = finalText.trim() && !alreadyAppended
-        ? [
-            ...state.messages,
-            ensureId({
-              role: "assistant" as const,
-              content: finalText,
-              timestamp: Date.now(),
-              runId,
-              usage,
-              seq: state.messages.length + 1,
-            }),
-          ]
-        : state.messages;
+      const newMessages =
+        finalText.trim() && !alreadyAppended
+          ? [
+              ...state.messages,
+              ensureId({
+                role: "assistant" as const,
+                content: finalText,
+                timestamp: Date.now(),
+                runId,
+                usage,
+                seq: state.messages.length + 1,
+              }),
+            ]
+          : state.messages;
       return {
         messages: newMessages,
         isStreaming: false,
@@ -441,3 +491,10 @@ export const useChatStore = create<ChatState>((set, get) => ({
 
   reset: () => set(initialState),
 }));
+
+// Persist queue to localStorage on every change
+useChatStore.subscribe((state, prev) => {
+  if (state.messageQueue !== prev.messageQueue || state.isQueueRunning !== prev.isQueueRunning) {
+    persistQueue(state.messageQueue, state.isQueueRunning);
+  }
+});
