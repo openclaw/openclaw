@@ -56,6 +56,7 @@ describe("Feishu reply fallback for withdrawn/deleted targets", () => {
       to: "user:ou_target",
       text: "hello",
       replyToMessageId: "om_parent",
+      replyInThread: true,
     });
 
     expect(replyMock).toHaveBeenCalledTimes(1);
@@ -78,6 +79,7 @@ describe("Feishu reply fallback for withdrawn/deleted targets", () => {
       to: "user:ou_target",
       card: { schema: "2.0" },
       replyToMessageId: "om_parent",
+      replyInThread: true,
     });
 
     expect(replyMock).toHaveBeenCalledTimes(1);
@@ -97,6 +99,7 @@ describe("Feishu reply fallback for withdrawn/deleted targets", () => {
         to: "user:ou_target",
         text: "hello",
         replyToMessageId: "om_parent",
+        replyInThread: true,
       }),
     ).rejects.toThrow("Feishu reply failed");
 

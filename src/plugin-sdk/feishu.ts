@@ -80,3 +80,9 @@ export {
   WEBHOOK_RATE_LIMIT_DEFAULTS,
 } from "./webhook-memory-guards.js";
 export { applyBasicWebhookRequestGuards } from "./webhook-request-guards.js";
+export {
+  getSessionBindingService,
+  registerSessionBindingAdapter,
+  unregisterSessionBindingAdapter,
+} from "../infra/outbound/session-binding-service.js";
+export { getGlobalHookRunner } from "../plugins/hook-runner-global.js";

@@ -7,6 +7,7 @@ import {
 } from "./monitor.account.js";
 import { fetchBotIdentityForMonitor } from "./monitor.startup.js";
 import {
+  botOpenIds,
   clearFeishuWebhookRateLimitStateForTest,
   getFeishuWebhookRateLimitStateSizeForTest,
   isWebhookRateLimitedForTest,
@@ -88,6 +89,11 @@ export async function monitorFeishuProvider(opts: MonitorFeishuOpts = {}): Promi
   }
 
   await Promise.all(monitorPromises);
+}
+
+export function getBotOpenId(accountId: string): string | undefined {
+  const value = botOpenIds.get(accountId)?.trim();
+  return value ? value : undefined;
 }
 
 export function stopFeishuMonitor(accountId?: string): void {

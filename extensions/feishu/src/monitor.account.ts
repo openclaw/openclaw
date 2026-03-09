@@ -1,6 +1,7 @@
 import * as crypto from "crypto";
 import * as Lark from "@larksuiteoapi/node-sdk";
 import type { ClawdbotConfig, RuntimeEnv, HistoryEntry } from "openclaw/plugin-sdk/feishu";
+import { getGlobalHookRunner } from "openclaw/plugin-sdk/feishu";
 import { resolveFeishuAccount } from "./accounts.js";
 import { raceWithTimeoutAndAbort } from "./async.js";
 import {
@@ -24,6 +25,7 @@ import { botNames, botOpenIds } from "./monitor.state.js";
 import { monitorWebhook, monitorWebSocket } from "./monitor.transport.js";
 import { getFeishuRuntime } from "./runtime.js";
 import { getMessageFeishu } from "./send.js";
+import { createFeishuThreadBindingManager } from "./thread-bindings.manager.js";
 import type { ResolvedFeishuAccount } from "./types.js";
 
 const FEISHU_REACTION_VERIFY_TIMEOUT_MS = 1_500;
@@ -36,6 +38,17 @@ export type FeishuReactionCreatedEvent = {
   operator_type?: string;
   user_id?: { open_id?: string };
   action_time?: string;
+};
+
+type FeishuMessageRecalledEvent = {
+  message_id?: string;
+  chat_id?: string;
+  recall_time?: string;
+  action_time?: string;
+  operator_id?: unknown;
+  user_id?: unknown;
+  deleter_id?: unknown;
+  message?: unknown;
 };
 
 type ResolveReactionSyntheticEventParams = {
@@ -123,6 +136,93 @@ export async function resolveReactionSyntheticEvent(
         text: `[reacted with ${emoji} to message ${messageId}]`,
       }),
     },
+  };
+}
+
+/** Duck-typed accessor for hook runner methods that may not yet exist in the
+ * base type system. Returns the hook runner cast to a loose record type so
+ * callers can safely check for and call individual methods at runtime. */
+function getDuckTypedHookRunner(): Record<string, (...args: unknown[]) => unknown> | null {
+  return getGlobalHookRunner() as Record<string, (...args: unknown[]) => unknown> | null;
+}
+
+function asNonEmptyString(value: unknown): string | undefined {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : undefined;
+}
+
+function asRecord(value: unknown): Record<string, unknown> | undefined {
+  if (value && typeof value === "object") {
+    return value as Record<string, unknown>;
+  }
+  return undefined;
+}
+
+function pickFirstString(...values: Array<string | undefined>): string | undefined {
+  for (const value of values) {
+    if (value) {
+      return value;
+    }
+  }
+  return undefined;
+}
+
+function resolveOpenIdLike(value: unknown): string | undefined {
+  const record = asRecord(value);
+  if (!record) {
+    return undefined;
+  }
+  return pickFirstString(
+    asNonEmptyString(record.open_id),
+    asNonEmptyString(record.user_id),
+    asNonEmptyString(record.union_id),
+    resolveOpenIdLike(record.sender_id),
+    resolveOpenIdLike(record.id),
+    resolveOpenIdLike(record.user),
+  );
+}
+
+function buildRecalledEventSummary(eventData: unknown): {
+  messageId: string;
+  chatId: string;
+  operatorOpenId: string;
+  senderOpenId: string;
+  rootId: string;
+  threadId: string;
+  recallTime: string;
+} {
+  const event = (eventData as FeishuMessageRecalledEvent | undefined) ?? {};
+  const message = asRecord(event.message);
+  const messageSender = asRecord(message?.sender);
+  return {
+    messageId:
+      pickFirstString(asNonEmptyString(event.message_id), asNonEmptyString(message?.message_id)) ??
+      "unknown",
+    chatId:
+      pickFirstString(asNonEmptyString(event.chat_id), asNonEmptyString(message?.chat_id)) ??
+      "unknown",
+    operatorOpenId:
+      pickFirstString(
+        resolveOpenIdLike(event.operator_id),
+        resolveOpenIdLike(event.deleter_id),
+        resolveOpenIdLike(event.user_id),
+        resolveOpenIdLike(message?.recalled_by),
+        resolveOpenIdLike(message?.deleted_by),
+      ) ?? "unknown",
+    senderOpenId:
+      pickFirstString(resolveOpenIdLike(message?.sender_id), resolveOpenIdLike(messageSender)) ??
+      "unknown",
+    rootId: asNonEmptyString(message?.root_id) ?? "unknown",
+    threadId: asNonEmptyString(message?.thread_id) ?? "unknown",
+    recallTime:
+      pickFirstString(
+        asNonEmptyString(event.recall_time),
+        asNonEmptyString(event.action_time),
+        asNonEmptyString(message?.update_time),
+      ) ?? "unknown",
   };
 }
 
@@ -397,10 +497,30 @@ function registerEventHandlers(
     "im.message.message_read_v1": async () => {
       // Ignore read receipts
     },
+    "im.message.recalled_v1": async (data) => {
+      try {
+        const summary = buildRecalledEventSummary(data);
+        log(
+          `feishu[${accountId}]: message recalled chat=${summary.chatId} message=${summary.messageId} ` +
+            `operator=${summary.operatorOpenId} sender=${summary.senderOpenId} ` +
+            `root=${summary.rootId} thread=${summary.threadId} recall_time=${summary.recallTime}`,
+        );
+      } catch (err) {
+        error(`feishu[${accountId}]: error handling message recalled event: ${String(err)}`);
+      }
+    },
     "im.chat.member.bot.added_v1": async (data) => {
       try {
         const event = data as unknown as FeishuBotAddedEvent;
         log(`feishu[${accountId}]: bot added to chat ${event.chat_id}`);
+        if (!event.chat_id) return;
+        const hookRunner = getDuckTypedHookRunner();
+        if (hookRunner && typeof hookRunner.runChatMemberBotAdded === "function") {
+          void hookRunner.runChatMemberBotAdded(
+            { chatId: event.chat_id },
+            { channelId: "feishu", accountId },
+          );
+        }
       } catch (err) {
         error(`feishu[${accountId}]: error handling bot added event: ${String(err)}`);
       }
@@ -409,8 +529,103 @@ function registerEventHandlers(
       try {
         const event = data as unknown as { chat_id: string };
         log(`feishu[${accountId}]: bot removed from chat ${event.chat_id}`);
+        if (!event.chat_id) return;
+        const hookRunner = getDuckTypedHookRunner();
+        if (hookRunner && typeof hookRunner.runChatMemberBotDeleted === "function") {
+          void hookRunner.runChatMemberBotDeleted(
+            { chatId: event.chat_id },
+            { channelId: "feishu", accountId },
+          );
+        }
       } catch (err) {
         error(`feishu[${accountId}]: error handling bot removed event: ${String(err)}`);
+      }
+    },
+    "im.chat.member.user.added_v1": async (data) => {
+      try {
+        const event = data as unknown as {
+          chat_id?: string;
+          users?: Array<{
+            name?: string;
+            user_id?: { open_id?: string; union_id?: string };
+          }>;
+        };
+        log(`feishu[${accountId}]: users added to chat ${event.chat_id}`);
+        if (!event.chat_id) return;
+        const hookRunner = getDuckTypedHookRunner();
+        if (hookRunner && typeof hookRunner.runChatMemberUserAdded === "function") {
+          const users = (event.users ?? [])
+            .filter((u) => !!u.user_id?.open_id)
+            .map((u) => ({
+              openId: u.user_id!.open_id!,
+              unionId: u.user_id?.union_id,
+              name: u.name,
+            }));
+          void hookRunner.runChatMemberUserAdded(
+            { chatId: event.chat_id, users },
+            { channelId: "feishu", accountId },
+          );
+        }
+      } catch (err) {
+        error(`feishu[${accountId}]: error handling user added event: ${String(err)}`);
+      }
+    },
+    "im.chat.member.user.deleted_v1": async (data) => {
+      try {
+        const event = data as unknown as {
+          chat_id?: string;
+          users?: Array<{
+            name?: string;
+            user_id?: { open_id?: string; union_id?: string };
+          }>;
+        };
+        log(`feishu[${accountId}]: users deleted from chat ${event.chat_id}`);
+        if (!event.chat_id) return;
+        const hookRunner = getDuckTypedHookRunner();
+        if (hookRunner && typeof hookRunner.runChatMemberUserDeleted === "function") {
+          const users = (event.users ?? [])
+            .filter((u) => !!u.user_id?.open_id)
+            .map((u) => ({
+              openId: u.user_id!.open_id!,
+              unionId: u.user_id?.union_id,
+              name: u.name,
+            }));
+          void hookRunner.runChatMemberUserDeleted(
+            { chatId: event.chat_id, users },
+            { channelId: "feishu", accountId },
+          );
+        }
+      } catch (err) {
+        error(`feishu[${accountId}]: error handling user deleted event: ${String(err)}`);
+      }
+    },
+    "im.chat.member.user.withdrawn_v1": async (data) => {
+      try {
+        const event = data as unknown as {
+          chat_id?: string;
+          users?: Array<{
+            name?: string;
+            user_id?: { open_id?: string; union_id?: string };
+          }>;
+        };
+        log(`feishu[${accountId}]: users withdrawn from chat ${event.chat_id}`);
+        if (!event.chat_id) return;
+        const hookRunner = getDuckTypedHookRunner();
+        if (hookRunner && typeof hookRunner.runChatMemberUserWithdrawn === "function") {
+          const users = (event.users ?? [])
+            .filter((u) => !!u.user_id?.open_id)
+            .map((u) => ({
+              openId: u.user_id!.open_id!,
+              unionId: u.user_id?.union_id,
+              name: u.name,
+            }));
+          void hookRunner.runChatMemberUserWithdrawn(
+            { chatId: event.chat_id, users },
+            { channelId: "feishu", accountId },
+          );
+        }
+      } catch (err) {
+        error(`feishu[${accountId}]: error handling user withdrawn event: ${String(err)}`);
       }
     },
     "im.message.reaction.created_v1": async (data) => {
@@ -525,6 +740,25 @@ export async function monitorSingleAccount(params: MonitorSingleAccountParams): 
   const warmupCount = await warmupDedupFromDisk(accountId, log);
   if (warmupCount > 0) {
     log(`feishu[${accountId}]: dedup warmup loaded ${warmupCount} entries from disk`);
+  }
+
+  const threadBindingManager = createFeishuThreadBindingManager({
+    accountId,
+    cfg,
+    persist: true,
+    enableSweeper: true,
+  });
+  log(`feishu[${accountId}]: thread binding adapter registered`);
+
+  if (abortSignal) {
+    abortSignal.addEventListener(
+      "abort",
+      () => {
+        threadBindingManager.stop();
+        log(`feishu[${accountId}]: thread binding adapter stopped`);
+      },
+      { once: true },
+    );
   }
 
   const eventDispatcher = createEventDispatcher(account);

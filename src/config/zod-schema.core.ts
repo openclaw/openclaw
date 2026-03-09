@@ -453,8 +453,8 @@ export const CliBackendSchema = z
   .object({
     command: z.string(),
     args: z.array(z.string()).optional(),
-    output: z.union([z.literal("json"), z.literal("text"), z.literal("jsonl")]).optional(),
-    resumeOutput: z.union([z.literal("json"), z.literal("text"), z.literal("jsonl")]).optional(),
+    output: z.union([z.literal("json"), z.literal("text"), z.literal("jsonl"), z.literal("stream-json")]).optional(),
+    resumeOutput: z.union([z.literal("json"), z.literal("text"), z.literal("jsonl"), z.literal("stream-json")]).optional(),
     input: z.union([z.literal("arg"), z.literal("stdin")]).optional(),
     maxPromptArgChars: z.number().int().positive().optional(),
     env: z.record(z.string(), z.string()).optional(),

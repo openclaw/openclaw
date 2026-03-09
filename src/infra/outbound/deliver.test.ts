@@ -804,7 +804,40 @@ describe("deliverOutboundPayloads", () => {
     });
 
     expect(mocks.appendAssistantMessageToSessionTranscript).toHaveBeenCalledWith(
-      expect.objectContaining({ text: "report.pdf" }),
+      expect.objectContaining({
+        text: "report.pdf",
+        messageMeta: {
+          channel: "telegram",
+          accountId: undefined,
+          chatId: "c1",
+          chatType: "direct",
+          providerMessageId: "m1",
+          providerMessageIds: ["m1"],
+        },
+      }),
+    );
+  });
+
+  it("stores every provider message id in transcript mirror metadata for chunked replies", async () => {
+    mocks.appendAssistantMessageToSessionTranscript.mockClear();
+
+    await runChunkedWhatsAppDelivery({
+      mirror: {
+        sessionKey: "agent:main:main",
+      },
+    });
+
+    expect(mocks.appendAssistantMessageToSessionTranscript).toHaveBeenCalledWith(
+      expect.objectContaining({
+        messageMeta: {
+          channel: "whatsapp",
+          accountId: undefined,
+          chatId: undefined,
+          chatType: "direct",
+          providerMessageId: "w2",
+          providerMessageIds: ["w1", "w2"],
+        },
+      }),
     );
   });
 

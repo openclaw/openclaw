@@ -13,6 +13,7 @@ export type FeishuAccountConfig = z.infer<typeof FeishuAccountConfigSchema>;
 
 export type FeishuDomain = "feishu" | "lark" | (string & {});
 export type FeishuConnectionMode = "websocket" | "webhook";
+export type FeishuDispatchMode = "auto" | "plugin";
 
 export type FeishuDefaultAccountSelectionSource =
   | "explicit-default"

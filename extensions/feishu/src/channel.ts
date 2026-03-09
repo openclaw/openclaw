@@ -138,6 +138,14 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount> = {
           ],
         },
         connectionMode: { type: "string", enum: ["websocket", "webhook"] },
+        dispatchMode: { type: "string", enum: ["auto", "plugin"] },
+        pluginMode: {
+          type: "object",
+          additionalProperties: false,
+          properties: {
+            forwardControlCommands: { type: "boolean" },
+          },
+        },
         webhookPath: { type: "string" },
         webhookHost: { type: "string" },
         webhookPort: { type: "integer", minimum: 1 },
@@ -155,6 +163,7 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount> = {
         },
         topicSessionMode: { type: "string", enum: ["disabled", "enabled"] },
         replyInThread: { type: "string", enum: ["disabled", "enabled"] },
+        streamingInThread: { type: "string", enum: ["disabled", "enabled"] },
         historyLimit: { type: "integer", minimum: 0 },
         dmHistoryLimit: { type: "integer", minimum: 0 },
         textChunkLimit: { type: "integer", minimum: 1 },
@@ -177,6 +186,15 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount> = {
               webhookHost: { type: "string" },
               webhookPath: { type: "string" },
               webhookPort: { type: "integer", minimum: 1 },
+              dispatchMode: { type: "string", enum: ["auto", "plugin"] },
+              streamingInThread: { type: "string", enum: ["disabled", "enabled"] },
+              pluginMode: {
+                type: "object",
+                additionalProperties: false,
+                properties: {
+                  forwardControlCommands: { type: "boolean" },
+                },
+              },
             },
           },
         },

@@ -299,6 +299,14 @@ describe("appendAssistantMessageToSessionTranscript", () => {
     const result = await appendAssistantMessageToSessionTranscript({
       sessionKey,
       text: "Hello from delivery mirror!",
+      messageMeta: {
+        channel: "feishu",
+        accountId: "default",
+        chatId: "oc_dm_1",
+        chatType: "direct",
+        providerMessageId: "om_reply_1",
+        providerMessageIds: ["om_reply_1"],
+      },
       storePath: fixture.storePath(),
     });
 
@@ -322,6 +330,14 @@ describe("appendAssistantMessageToSessionTranscript", () => {
       expect(messageLine.message.role).toBe("assistant");
       expect(messageLine.message.content[0].type).toBe("text");
       expect(messageLine.message.content[0].text).toBe("Hello from delivery mirror!");
+      expect(messageLine.message.openclawMessageMeta).toEqual({
+        channel: "feishu",
+        accountId: "default",
+        chatId: "oc_dm_1",
+        chatType: "direct",
+        providerMessageId: "om_reply_1",
+        providerMessageIds: ["om_reply_1"],
+      });
     }
   });
 });

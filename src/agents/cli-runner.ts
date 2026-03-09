@@ -7,6 +7,7 @@ import { isTruthyEnvValue } from "../infra/env.js";
 import { requestHeartbeatNow } from "../infra/heartbeat-wake.js";
 import { enqueueSystemEvent } from "../infra/system-events.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import type { PluginHookAgentContext } from "../plugins/types.js";
 import { getProcessSupervisor } from "../process/supervisor/index.js";
 import { scopedHeartbeatWakeOptions } from "../routing/session-key.js";
 import { resolveSessionAgentIds } from "./agent-scope.js";
@@ -23,6 +24,7 @@ import {
   buildCliSupervisorScopeKey,
   buildCliArgs,
   buildSystemPrompt,
+  createStreamJsonProcessor,
   enqueueCliRun,
   normalizeCliModel,
   parseCliJson,
@@ -69,6 +71,18 @@ export async function runCliAgent(params: {
   /** Backward-compat fallback when only the previous signature is available. */
   bootstrapPromptWarningSignature?: string;
   images?: ImageContent[];
+  onAssistantTurn?: (text: string) => void;
+  onSystemInit?: (payload: { subtype: string; sessionId?: string }) => void;
+  onToolUse?: (toolName: string) => void;
+  onThinkingTurn?: (payload: { text: string; delta?: string }) => void;
+  onToolUseEvent?: (payload: { name: string; toolUseId?: string; input?: unknown }) => void;
+  onToolResult?: (payload: { toolUseId?: string; text?: string; isError?: boolean }) => void;
+  abortSignal?: AbortSignal;
+  trigger?: PluginHookAgentContext["trigger"];
+  messageChannel?: string;
+  messageAccountId?: string;
+  messageTo?: string;
+  messageThreadId?: string | number;
 }): Promise<EmbeddedPiRunResult> {
   const started = Date.now();
   const workspaceResolution = resolveRunWorkspaceDir({
@@ -244,7 +258,7 @@ export async function runCliAgent(params: {
     const queueKey = serialize ? backendResolved.id : `${backendResolved.id}:${params.runId}`;
 
     try {
-      const output = await enqueueCliRun(queueKey, async () => {
+      return await enqueueCliRun(queueKey, async () => {
         log.info(
           `cli exec: provider=${params.provider} model=${normalizedModel} promptChars=${params.prompt.length}`,
         );
@@ -304,6 +318,21 @@ export async function runCliAgent(params: {
           cliSessionId: useResume ? resolvedSessionId : undefined,
         });
 
+        const outputMode = useResume ? (backend.resumeOutput ?? backend.output) : backend.output;
+
+        // Stream-json mode: process NDJSON lines as they arrive via onStdout
+        const streamProcessor =
+          outputMode === "stream-json"
+            ? createStreamJsonProcessor(backend, {
+                onSystemInit: params.onSystemInit,
+                onAssistantTurn: params.onAssistantTurn,
+                onToolUse: params.onToolUse,
+                onThinkingTurn: params.onThinkingTurn,
+                onToolUseEvent: params.onToolUseEvent,
+                onToolResult: params.onToolResult,
+              })
+            : undefined;
+
         const managedRun = await supervisor.spawn({
           sessionId: params.sessionId,
           backendId: backendResolved.id,
@@ -316,6 +345,7 @@ export async function runCliAgent(params: {
           cwd: workspaceDir,
           env,
           input: stdinPayload,
+          ...(streamProcessor ? { onStdout: streamProcessor.feed } : {}),
         });
         const result = await managedRun.wait();
 
@@ -382,21 +412,30 @@ export async function runCliAgent(params: {
           });
         }
 
-        const outputMode = useResume ? (backend.resumeOutput ?? backend.output) : backend.output;
-
-        if (outputMode === "text") {
-          return { text: stdout, sessionId: undefined };
-        }
-        if (outputMode === "jsonl") {
+        let output: {
+          text: string;
+          sessionId?: string;
+          usage?: {
+            input?: number;
+            output?: number;
+            cacheRead?: number;
+            cacheWrite?: number;
+            total?: number;
+          };
+        };
+        if (streamProcessor) {
+          output = streamProcessor.finish();
+        } else if (outputMode === "text") {
+          output = { text: stdout, sessionId: undefined };
+        } else if (outputMode === "jsonl") {
           const parsed = parseCliJsonl(stdout, backend);
-          return parsed ?? { text: stdout };
+          output = parsed ?? { text: stdout };
+        } else {
+          const parsed = parseCliJson(stdout, backend);
+          output = parsed ?? { text: stdout };
         }
-
-        const parsed = parseCliJson(stdout, backend);
-        return parsed ?? { text: stdout };
+        return output;
       });
-
-      return output;
     } finally {
       if (cleanupImages) {
         await cleanupImages();
@@ -488,6 +527,18 @@ export async function runClaudeCliAgent(params: {
   ownerNumbers?: string[];
   claudeSessionId?: string;
   images?: ImageContent[];
+  onAssistantTurn?: (text: string) => void;
+  onSystemInit?: (payload: { subtype: string; sessionId?: string }) => void;
+  onToolUse?: (toolName: string) => void;
+  onThinkingTurn?: (payload: { text: string; delta?: string }) => void;
+  onToolUseEvent?: (payload: { name: string; toolUseId?: string; input?: unknown }) => void;
+  onToolResult?: (payload: { toolUseId?: string; text?: string; isError?: boolean }) => void;
+  abortSignal?: AbortSignal;
+  trigger?: PluginHookAgentContext["trigger"];
+  messageChannel?: string;
+  messageAccountId?: string;
+  messageTo?: string;
+  messageThreadId?: string | number;
 }): Promise<EmbeddedPiRunResult> {
   return runCliAgent({
     sessionId: params.sessionId,
@@ -506,5 +557,17 @@ export async function runClaudeCliAgent(params: {
     ownerNumbers: params.ownerNumbers,
     cliSessionId: params.claudeSessionId,
     images: params.images,
+    onAssistantTurn: params.onAssistantTurn,
+    onSystemInit: params.onSystemInit,
+    onToolUse: params.onToolUse,
+    onThinkingTurn: params.onThinkingTurn,
+    onToolUseEvent: params.onToolUseEvent,
+    onToolResult: params.onToolResult,
+    abortSignal: params.abortSignal,
+    trigger: params.trigger,
+    messageChannel: params.messageChannel,
+    messageAccountId: params.messageAccountId,
+    messageTo: params.messageTo,
+    messageThreadId: params.messageThreadId,
   });
 }

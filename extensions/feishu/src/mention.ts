@@ -131,3 +131,12 @@ export function buildMentionedCardContent(targets: MentionTarget[], message: str
   const mentionParts = targets.map((t) => formatMentionForCard(t));
   return `${mentionParts.join(" ")} ${message}`;
 }
+
+/**
+ * Normalize `<at user_id="...">name</at>` text-format mention tags to
+ * the card-format `<at id=...></at>` syntax expected by Feishu interactive cards.
+ * Returns the input unchanged when no text-format mentions are found.
+ */
+export function normalizeMentionTagsForCard(text: string): string {
+  return text.replace(/<at\s+user_id="([^"]+)">[^<]*<\/at>/g, "<at id=$1></at>");
+}

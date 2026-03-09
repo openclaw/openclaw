@@ -603,6 +603,27 @@ export type { HookEntry } from "../hooks/types.js";
 export { clamp, escapeRegExp, normalizeE164, safeParseJson, sleep } from "../utils.js";
 export { stripAnsi } from "../terminal/ansi.js";
 export { missingTargetError } from "../infra/outbound/target-errors.js";
+export {
+  getSessionBindingService,
+  registerSessionBindingAdapter,
+  unregisterSessionBindingAdapter,
+  SessionBindingError,
+  isSessionBindingError,
+} from "../infra/outbound/session-binding-service.js";
+export type {
+  BindingTargetKind,
+  BindingStatus,
+  ConversationRef,
+  SessionBindingAdapter,
+  SessionBindingAdapterCapabilities,
+  SessionBindingBindInput,
+  SessionBindingCapabilities,
+  SessionBindingErrorCode,
+  SessionBindingPlacement,
+  SessionBindingRecord,
+  SessionBindingService,
+  SessionBindingUnbindInput,
+} from "../infra/outbound/session-binding-service.js";
 export { registerLogTransport } from "../logging/logger.js";
 export type { LogTransport, LogTransportRecord } from "../logging/logger.js";
 export {
@@ -803,3 +824,8 @@ export type { ContextEngineFactory } from "../context-engine/registry.js";
 
 // Security utilities
 export { redactSensitiveText } from "../logging/redact.js";
+
+// Plugin hooks
+export type { HookRunner } from "../plugins/hooks.js";
+export { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
+export { emitMessageReceivedHooks } from "../auto-reply/reply/message-received-hooks.js";

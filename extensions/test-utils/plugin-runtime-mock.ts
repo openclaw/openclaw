@@ -250,6 +250,9 @@ export function createPluginRuntimeMock(overrides: DeepPartial<PluginRuntime> = 
         debug: vi.fn(),
       })),
     },
+    hooks: {
+      emitMessageSent: vi.fn(),
+    },
     state: {
       resolveStateDir: vi.fn(() => "/tmp/openclaw"),
     },
