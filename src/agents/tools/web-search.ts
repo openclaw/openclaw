@@ -545,11 +545,20 @@ function resolvePluginSearchProvider(
   if (!registry || registry.searchProviders.length === 0) {
     return null;
   }
-  // Explicit match by provider id
+  // Explicit match by provider id (case-insensitive to match Zod-validated config)
   if (raw) {
-    const match = registry.searchProviders.find((entry) => entry.provider.id === raw);
+    const match = registry.searchProviders.find(
+      (entry) => entry.provider.id.trim().toLowerCase() === raw,
+    );
     if (match) {
       return match.provider;
+    }
+    // Warn when a non-built-in provider id doesn't resolve to any plugin
+    const builtIn = new Set(SEARCH_PROVIDERS as readonly string[]);
+    if (!builtIn.has(raw)) {
+      logVerbose(
+        `web_search: provider "${raw}" is not registered as a plugin provider, falling back to built-in resolution`,
+      );
     }
   }
   // Auto-detect: try each plugin provider's isAvailable()
@@ -1902,7 +1911,13 @@ function createPluginSearchTool(
             })),
           }),
           ...(result.content && { content: wrapWebContent(result.content) }),
-          ...(result.citations && { citations: result.citations }),
+          ...(result.citations && {
+            citations: result.citations.map((c) =>
+              typeof c === "string"
+                ? c
+                : { ...c, title: c.title ? wrapWebContent(c.title) : undefined },
+            ),
+          }),
         };
         writeCache(SEARCH_CACHE, cacheKey, payload, cacheTtlMs);
         return jsonResult(payload);
