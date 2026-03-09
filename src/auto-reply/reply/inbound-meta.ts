@@ -52,7 +52,9 @@ function resolveConversationTimezone(cfg?: OpenClawConfig): string | undefined {
 
   if (envelopeTimezone.toLowerCase() === "user") {
     const userTz = cfg?.agents?.defaults?.userTimezone?.trim();
-    if (!userTz) return undefined;
+    if (!userTz) {
+      return undefined;
+    }
     const validated = resolveTimezone(userTz);
     if (!validated) {
       console.warn(
