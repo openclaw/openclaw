@@ -1,6 +1,9 @@
+import fs from "node:fs/promises";
+import { SessionManager } from "@mariozechner/pi-coding-agent";
 import { getAcpSessionManager } from "../acp/control-plane/manager.js";
 import { resolveAcpAgentPolicyError, resolveAcpDispatchPolicyError } from "../acp/policy.js";
 import { toAcpRuntimeError } from "../acp/runtime/errors.js";
+import { resolveAcpSessionCwd } from "../acp/runtime/session-identifiers.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 
 const log = createSubsystemLogger("commands/agent");
@@ -33,11 +36,14 @@ import {
   resolveDefaultModelForAgent,
   resolveThinkingDefault,
 } from "../agents/model-selection.js";
+import { prepareSessionManagerForRun } from "../agents/pi-embedded-runner/session-manager-init.js";
 import { runEmbeddedPiAgent } from "../agents/pi-embedded.js";
 import { buildWorkspaceSkillSnapshot } from "../agents/skills.js";
 import { getSkillsSnapshotVersion } from "../agents/skills/refresh.js";
+import { normalizeSpawnedRunMetadata } from "../agents/spawned-context.js";
 import { resolveAgentTimeoutMs } from "../agents/timeout.js";
 import { ensureAgentWorkspace } from "../agents/workspace.js";
+import { normalizeReplyPayload } from "../auto-reply/reply/normalize-reply.js";
 import {
   formatThinkingLevels,
   formatXHighModelHint,
@@ -47,22 +53,27 @@ import {
   type ThinkLevel,
   type VerboseLevel,
 } from "../auto-reply/thinking.js";
+import {
+  isSilentReplyPrefixText,
+  isSilentReplyText,
+  SILENT_REPLY_TOKEN,
+} from "../auto-reply/tokens.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import { resolveCommandSecretRefsViaGateway } from "../cli/command-secret-gateway.js";
 import { getAgentRuntimeCommandSecretTargetIds } from "../cli/command-secret-targets.js";
 import { type CliDeps, createDefaultDeps } from "../cli/deps.js";
-import { loadConfig } from "../config/config.js";
+import {
+  loadConfig,
+  readConfigFileSnapshotForWrite,
+  setRuntimeConfigSnapshot,
+} from "../config/config.js";
 import {
   mergeSessionEntry,
-  parseSessionThreadInfo,
-  resolveAndPersistSessionFile,
   resolveAgentIdFromSessionKey,
-  resolveSessionFilePath,
-  resolveSessionFilePathOptions,
-  resolveSessionTranscriptPath,
   type SessionEntry,
   updateSessionStore,
 } from "../config/sessions.js";
+import { resolveSessionTranscriptFile } from "../config/sessions/transcript.js";
 import {
   clearAgentRunContext,
   emitAgentEvent,
@@ -75,6 +86,7 @@ import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
 import { applyVerboseOverride } from "../sessions/level-overrides.js";
 import { applyModelOverrideToSessionEntry } from "../sessions/model-overrides.js";
 import { resolveSendPolicy } from "../sessions/send-policy.js";
+import { emitSessionTranscriptUpdate } from "../sessions/transcript-events.js";
 import { resolveMessageChannel } from "../utils/message-channel.js";
 import { deliverAgentCommandResult } from "./agent/delivery.js";
 import { resolveAgentRunContext } from "./agent/run-context.js";
@@ -148,6 +160,163 @@ function prependInternalEventContext(
   return [renderedEvents, body].filter(Boolean).join("\n\n");
 }
 
+function createAcpVisibleTextAccumulator() {
+  let pendingSilentPrefix = "";
+  let visibleText = "";
+  const startsWithWordChar = (chunk: string): boolean => /^[\p{L}\p{N}]/u.test(chunk);
+
+  const resolveNextCandidate = (base: string, chunk: string): string => {
+    if (!base) {
+      return chunk;
+    }
+    if (
+      isSilentReplyText(base, SILENT_REPLY_TOKEN) &&
+      !chunk.startsWith(base) &&
+      startsWithWordChar(chunk)
+    ) {
+      return chunk;
+    }
+    // Some ACP backends emit cumulative snapshots even on text_delta-style hooks.
+    // Accept those only when they strictly extend the buffered text.
+    if (chunk.startsWith(base) && chunk.length > base.length) {
+      return chunk;
+    }
+    return `${base}${chunk}`;
+  };
+
+  const mergeVisibleChunk = (base: string, chunk: string): { text: string; delta: string } => {
+    if (!base) {
+      return { text: chunk, delta: chunk };
+    }
+    if (chunk.startsWith(base) && chunk.length > base.length) {
+      const delta = chunk.slice(base.length);
+      return { text: chunk, delta };
+    }
+    return {
+      text: `${base}${chunk}`,
+      delta: chunk,
+    };
+  };
+
+  return {
+    consume(chunk: string): { text: string; delta: string } | null {
+      if (!chunk) {
+        return null;
+      }
+
+      if (!visibleText) {
+        const leadCandidate = resolveNextCandidate(pendingSilentPrefix, chunk);
+        const trimmedLeadCandidate = leadCandidate.trim();
+        if (
+          isSilentReplyText(trimmedLeadCandidate, SILENT_REPLY_TOKEN) ||
+          isSilentReplyPrefixText(trimmedLeadCandidate, SILENT_REPLY_TOKEN)
+        ) {
+          pendingSilentPrefix = leadCandidate;
+          return null;
+        }
+        if (pendingSilentPrefix) {
+          pendingSilentPrefix = "";
+          visibleText = leadCandidate;
+          return {
+            text: visibleText,
+            delta: leadCandidate,
+          };
+        }
+      }
+
+      const nextVisible = mergeVisibleChunk(visibleText, chunk);
+      visibleText = nextVisible.text;
+      return nextVisible.delta ? nextVisible : null;
+    },
+    finalize(): string {
+      return visibleText.trim();
+    },
+    finalizeRaw(): string {
+      return visibleText;
+    },
+  };
+}
+
+const ACP_TRANSCRIPT_USAGE = {
+  input: 0,
+  output: 0,
+  cacheRead: 0,
+  cacheWrite: 0,
+  totalTokens: 0,
+  cost: {
+    input: 0,
+    output: 0,
+    cacheRead: 0,
+    cacheWrite: 0,
+    total: 0,
+  },
+} as const;
+
+async function persistAcpTurnTranscript(params: {
+  body: string;
+  finalText: string;
+  sessionId: string;
+  sessionKey: string;
+  sessionEntry: SessionEntry | undefined;
+  sessionStore?: Record<string, SessionEntry>;
+  storePath?: string;
+  sessionAgentId: string;
+  threadId?: string | number;
+  sessionCwd: string;
+}): Promise<SessionEntry | undefined> {
+  const promptText = params.body;
+  const replyText = params.finalText;
+  if (!promptText && !replyText) {
+    return params.sessionEntry;
+  }
+
+  const { sessionFile, sessionEntry } = await resolveSessionTranscriptFile({
+    sessionId: params.sessionId,
+    sessionKey: params.sessionKey,
+    sessionEntry: params.sessionEntry,
+    sessionStore: params.sessionStore,
+    storePath: params.storePath,
+    agentId: params.sessionAgentId,
+    threadId: params.threadId,
+  });
+  const hadSessionFile = await fs
+    .access(sessionFile)
+    .then(() => true)
+    .catch(() => false);
+  const sessionManager = SessionManager.open(sessionFile);
+  await prepareSessionManagerForRun({
+    sessionManager,
+    sessionFile,
+    hadSessionFile,
+    sessionId: params.sessionId,
+    cwd: params.sessionCwd,
+  });
+
+  if (promptText) {
+    sessionManager.appendMessage({
+      role: "user",
+      content: promptText,
+      timestamp: Date.now(),
+    });
+  }
+
+  if (replyText) {
+    sessionManager.appendMessage({
+      role: "assistant",
+      content: [{ type: "text", text: replyText }],
+      api: "openai-responses",
+      provider: "openclaw",
+      model: "acp-runtime",
+      usage: ACP_TRANSCRIPT_USAGE,
+      stopReason: "stop",
+      timestamp: Date.now(),
+    });
+  }
+
+  emitSessionTranscriptUpdate(sessionFile);
+  return sessionEntry;
+}
+
 function runAgentAttempt(params: {
   providerOverride: string;
   modelOverride: string;
@@ -174,7 +343,7 @@ function runAgentAttempt(params: {
   primaryProvider: string;
   sessionStore?: Record<string, SessionEntry>;
   storePath?: string;
-  allowRateLimitCooldownProbe?: boolean;
+  allowTransientCooldownProbe?: boolean;
 }) {
   const effectivePrompt = resolveFallbackRetryPrompt({
     body: params.body,
@@ -325,20 +494,19 @@ function runAgentAttempt(params: {
     inputProvenance: params.opts.inputProvenance,
     streamParams: params.opts.streamParams,
     agentDir: params.agentDir,
-    allowRateLimitCooldownProbe: params.allowRateLimitCooldownProbe,
+    allowTransientCooldownProbe: params.allowTransientCooldownProbe,
     onAgentEvent: params.onAgentEvent,
     bootstrapPromptWarningSignaturesSeen,
     bootstrapPromptWarningSignature,
   });
 }
 
-async function agentCommandInternal(
+async function prepareAgentCommandExecution(
   opts: AgentCommandOpts & { senderIsOwner: boolean },
-  runtime: RuntimeEnv = defaultRuntime,
-  deps: CliDeps = createDefaultDeps(),
+  runtime: RuntimeEnv,
 ) {
-  const message = (opts.message ?? "").trim();
-  if (!message) {
+  const message = opts.message ?? "";
+  if (!message.trim()) {
     throw new Error("Message (--message) is required");
   }
   const body = prependInternalEventContext(message, opts.internalEvents);
@@ -347,10 +515,29 @@ async function agentCommandInternal(
   }
 
   const loadedRaw = loadConfig();
+  const sourceConfig = await (async () => {
+    try {
+      const { snapshot } = await readConfigFileSnapshotForWrite();
+      if (snapshot.valid) {
+        return snapshot.resolved;
+      }
+    } catch {
+      // Fall back to runtime-loaded config when source snapshot is unavailable.
+    }
+    return loadedRaw;
+  })();
   const { resolvedConfig: cfg, diagnostics } = await resolveCommandSecretRefsViaGateway({
     config: loadedRaw,
     commandName: "agent",
     targetIds: getAgentRuntimeCommandSecretTargetIds(),
+  });
+  setRuntimeConfigSnapshot(cfg, sourceConfig);
+  const normalizedSpawned = normalizeSpawnedRunMetadata({
+    spawnedBy: opts.spawnedBy,
+    groupId: opts.groupId,
+    groupChannel: opts.groupChannel,
+    groupSpace: opts.groupSpace,
+    workspaceDir: opts.workspaceDir,
   });
   for (const entry of diagnostics) {
     runtime.log(`[secrets] ${entry}`);
@@ -425,7 +612,7 @@ async function agentCommandInternal(
   const {
     sessionId,
     sessionKey,
-    sessionEntry: resolvedSessionEntry,
+    sessionEntry: sessionEntryRaw,
     sessionStore,
     storePath,
     isNewSession,
@@ -443,14 +630,15 @@ async function agentCommandInternal(
     agentId: sessionAgentId,
     sessionKey,
   });
-  const workspaceDirRaw = resolveAgentWorkspaceDir(cfg, sessionAgentId);
+  // Internal callers (for example subagent spawns) may pin workspace inheritance.
+  const workspaceDirRaw =
+    normalizedSpawned.workspaceDir ?? resolveAgentWorkspaceDir(cfg, sessionAgentId);
   const agentDir = resolveAgentDir(cfg, sessionAgentId);
   const workspace = await ensureAgentWorkspace({
     dir: workspaceDirRaw,
     ensureBootstrapFiles: !agentCfg?.skipBootstrap,
   });
   const workspaceDir = workspace.dir;
-  let sessionEntry = resolvedSessionEntry;
   const runId = opts.runId?.trim() || sessionId;
   const acpManager = getAcpSessionManager();
   const acpResolution = sessionKey
@@ -459,6 +647,65 @@ async function agentCommandInternal(
         sessionKey,
       })
     : null;
+
+  return {
+    body,
+    cfg,
+    normalizedSpawned,
+    agentCfg,
+    thinkOverride,
+    thinkOnce,
+    verboseOverride,
+    timeoutMs,
+    sessionId,
+    sessionKey,
+    sessionEntry: sessionEntryRaw,
+    sessionStore,
+    storePath,
+    isNewSession,
+    persistedThinking,
+    persistedVerbose,
+    sessionAgentId,
+    outboundSession,
+    workspaceDir,
+    agentDir,
+    runId,
+    acpManager,
+    acpResolution,
+  };
+}
+
+async function agentCommandInternal(
+  opts: AgentCommandOpts & { senderIsOwner: boolean },
+  runtime: RuntimeEnv = defaultRuntime,
+  deps: CliDeps = createDefaultDeps(),
+) {
+  const prepared = await prepareAgentCommandExecution(opts, runtime);
+  const {
+    body,
+    cfg,
+    normalizedSpawned,
+    agentCfg,
+    thinkOverride,
+    thinkOnce,
+    verboseOverride,
+    timeoutMs,
+    sessionId,
+    sessionKey,
+    sessionStore,
+    storePath,
+    isNewSession,
+    persistedThinking,
+    persistedVerbose,
+    sessionAgentId,
+    outboundSession,
+    workspaceDir,
+    agentDir,
+    runId,
+    acpManager,
+    acpResolution,
+  } = prepared;
+  let sessionEntry = prepared.sessionEntry;
 
   try {
     if (opts.deliver === true) {
@@ -492,7 +739,7 @@ async function agentCommandInternal(
         },
       });
 
-      let streamedText = "";
+      const visibleTextAccumulator = createAcpVisibleTextAccumulator();
       let stopReason: string | undefined;
       try {
         const dispatchPolicyError = resolveAcpDispatchPolicyError(cfg);
@@ -528,13 +775,16 @@ async function agentCommandInternal(
             if (!event.text) {
               return;
             }
-            streamedText += event.text;
+            const visibleUpdate = visibleTextAccumulator.consume(event.text);
+            if (!visibleUpdate) {
+              return;
+            }
             emitAgentEvent({
               runId,
               stream: "assistant",
               data: {
-                text: streamedText,
-                delta: event.text,
+                text: visibleUpdate.text,
+                delta: visibleUpdate.delta,
               },
             });
           },
@@ -566,14 +816,31 @@ async function agentCommandInternal(
         },
       });
 
-      const finalText = streamedText.trim();
-      const payloads = finalText
-        ? [
-            {
-              text: finalText,
-            },
-          ]
-        : [];
+      const finalTextRaw = visibleTextAccumulator.finalizeRaw();
+      const finalText = visibleTextAccumulator.finalize();
+      try {
+        sessionEntry = await persistAcpTurnTranscript({
+          body,
+          finalText: finalTextRaw,
+          sessionId,
+          sessionKey,
+          sessionEntry,
+          sessionStore,
+          storePath,
+          sessionAgentId,
+          threadId: opts.threadId,
+          sessionCwd: resolveAcpSessionCwd(acpResolution.meta) ?? workspaceDir,
+        });
+      } catch (error) {
+        log.warn(
+          `ACP transcript persistence failed for ${sessionKey}: ${error instanceof Error ? error.message : String(error)}`,
+        );
+      }
+
+      const normalizedFinalPayload = normalizeReplyPayload({
+        text: finalText,
+      });
+      const payloads = normalizedFinalPayload ? [normalizedFinalPayload] : [];
       const result = {
         payloads,
         meta: {
@@ -782,29 +1049,27 @@ async function agentCommandInternal(
         });
       }
     }
-    const sessionPathOpts = resolveSessionFilePathOptions({
-      agentId: sessionAgentId,
-      storePath,
-    });
-    let sessionFile = resolveSessionFilePath(sessionId, sessionEntry, sessionPathOpts);
+    let sessionFile: string | undefined;
     if (sessionStore && sessionKey) {
-      const threadIdFromSessionKey = parseSessionThreadInfo(sessionKey).threadId;
-      const fallbackSessionFile = !sessionEntry?.sessionFile
-        ? resolveSessionTranscriptPath(
-            sessionId,
-            sessionAgentId,
-            opts.threadId ?? threadIdFromSessionKey,
-          )
-        : undefined;
-      const resolvedSessionFile = await resolveAndPersistSessionFile({
+      const resolvedSessionFile = await resolveSessionTranscriptFile({
         sessionId,
         sessionKey,
         sessionStore,
         storePath,
         sessionEntry,
-        agentId: sessionPathOpts?.agentId,
-        sessionsDir: sessionPathOpts?.sessionsDir,
-        fallbackSessionFile,
+        agentId: sessionAgentId,
+        threadId: opts.threadId,
+      });
+      sessionFile = resolvedSessionFile.sessionFile;
+      sessionEntry = resolvedSessionFile.sessionEntry;
+    }
+    if (!sessionFile) {
+      const resolvedSessionFile = await resolveSessionTranscriptFile({
+        sessionId,
+        sessionKey: sessionKey ?? sessionId,
+        sessionEntry,
+        agentId: sessionAgentId,
+        threadId: opts.threadId,
       });
       sessionFile = resolvedSessionFile.sessionFile;
       sessionEntry = resolvedSessionFile.sessionEntry;
@@ -822,7 +1087,7 @@ async function agentCommandInternal(
         runContext.messageChannel,
         opts.replyChannel ?? opts.channel,
       );
-      const spawnedBy = opts.spawnedBy ?? sessionEntry?.spawnedBy;
+      const spawnedBy = normalizedSpawned.spawnedBy ?? sessionEntry?.spawnedBy;
       // Keep fallback candidate resolution centralized so session model overrides,
       // per-agent overrides, and default fallbacks stay consistent across callers.
       const effectiveFallbacksOverride = resolveEffectiveModelFallbacks({
@@ -868,7 +1133,7 @@ async function agentCommandInternal(
             primaryProvider: provider,
             sessionStore,
             storePath,
-            allowRateLimitCooldownProbe: runOptions?.allowRateLimitCooldownProbe,
+            allowTransientCooldownProbe: runOptions?.allowTransientCooldownProbe,
             onAgentEvent: (evt) => {
               // Track lifecycle end for fallback emission below.
               if (
@@ -959,6 +1224,9 @@ export async function agentCommand(
   return await agentCommandInternal(
     {
       ...opts,
+      // agentCommand is the trusted-operator entrypoint used by CLI/local flows.
+      // Ingress callers must opt into owner semantics explicitly via
+      // agentCommandFromIngress so network-facing paths cannot inherit this default by accident.
       senderIsOwner: opts.senderIsOwner ?? true,
     },
     runtime,
@@ -972,6 +1240,8 @@ export async function agentCommandFromIngress(
   deps: CliDeps = createDefaultDeps(),
 ) {
   if (typeof opts.senderIsOwner !== "boolean") {
+    // HTTP/WS ingress must declare the trust level explicitly at the boundary.
+    // This keeps network-facing callers from silently picking up the local trusted default.
     throw new Error("senderIsOwner must be explicitly set for ingress agent runs.");
   }
   return await agentCommandInternal(

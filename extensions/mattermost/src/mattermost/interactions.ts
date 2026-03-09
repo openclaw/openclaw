@@ -1,11 +1,16 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/mattermost";
+import {
+  isTrustedProxyAddress,
+  resolveClientIp,
+  type OpenClawConfig,
+} from "openclaw/plugin-sdk/mattermost";
 import { getMattermostRuntime } from "../runtime.js";
 import { updateMattermostPost, type MattermostClient } from "./client.js";
 
 const INTERACTION_MAX_BODY_BYTES = 64 * 1024;
 const INTERACTION_BODY_TIMEOUT_MS = 10_000;
+const SIGNED_CHANNEL_ID_CONTEXT_KEY = "__openclaw_channel_id";
 
 /**
  * Mattermost interactive message callback payload.
@@ -30,6 +35,16 @@ export type MattermostInteractionResponse = {
     props?: Record<string, unknown>;
   };
   ephemeral_text?: string;
+};
+
+export type MattermostInteractiveButtonInput = {
+  id?: string;
+  callback_data?: string;
+  text?: string;
+  name?: string;
+  label?: string;
+  style?: "default" | "primary" | "danger";
+  context?: Record<string, unknown>;
 };
 
 // ── Callback URL registry ──────────────────────────────────────────────
@@ -63,6 +78,34 @@ function isWildcardBindHost(rawHost: string): boolean {
 
 function normalizeCallbackBaseUrl(baseUrl: string): string {
   return baseUrl.trim().replace(/\/+$/, "");
+}
+
+function headerValue(value: string | string[] | undefined): string | undefined {
+  if (Array.isArray(value)) {
+    return value[0]?.trim() || undefined;
+  }
+  return value?.trim() || undefined;
+}
+
+function isAllowedInteractionSource(params: {
+  req: IncomingMessage;
+  allowedSourceIps?: string[];
+  trustedProxies?: string[];
+  allowRealIpFallback?: boolean;
+}): boolean {
+  const { allowedSourceIps } = params;
+  if (!allowedSourceIps?.length) {
+    return true;
+  }
+
+  const clientIp = resolveClientIp({
+    remoteAddr: params.req.socket?.remoteAddress,
+    forwardedFor: headerValue(params.req.headers["x-forwarded-for"]),
+    realIp: headerValue(params.req.headers["x-real-ip"]),
+    trustedProxies: params.trustedProxies,
+    allowRealIpFallback: params.allowRealIpFallback,
+  });
+  return isTrustedProxyAddress(clientIp, allowedSourceIps);
 }
 
 /**
@@ -151,13 +194,26 @@ export function getInteractionSecret(accountId?: string): string {
   );
 }
 
+function canonicalizeInteractionContext(value: unknown): unknown {
+  if (Array.isArray(value)) {
+    return value.map((item) => canonicalizeInteractionContext(item));
+  }
+  if (value && typeof value === "object") {
+    const entries = Object.entries(value as Record<string, unknown>)
+      .filter(([, entryValue]) => entryValue !== undefined)
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([key, entryValue]) => [key, canonicalizeInteractionContext(entryValue)]);
+    return Object.fromEntries(entries);
+  }
+  return value;
+}
+
 export function generateInteractionToken(
   context: Record<string, unknown>,
   accountId?: string,
 ): string {
   const secret = getInteractionSecret(accountId);
-  // Sort keys for stable serialization — Mattermost may reorder context keys
-  const payload = JSON.stringify(context, Object.keys(context).sort());
+  const payload = JSON.stringify(canonicalizeInteractionContext(context));
   return createHmac("sha256", secret).update(payload).digest("hex");
 }
 
@@ -250,6 +306,46 @@ export function buildButtonAttachments(params: {
   ];
 }
 
+export function buildButtonProps(params: {
+  callbackUrl: string;
+  accountId?: string;
+  channelId: string;
+  buttons: Array<unknown>;
+  text?: string;
+}): Record<string, unknown> | undefined {
+  const rawButtons = params.buttons.flatMap((item) =>
+    Array.isArray(item) ? item : [item],
+  ) as MattermostInteractiveButtonInput[];
+
+  const buttons = rawButtons
+    .map((btn) => ({
+      id: String(btn.id ?? btn.callback_data ?? "").trim(),
+      name: String(btn.text ?? btn.name ?? btn.label ?? "").trim(),
+      style: btn.style ?? "default",
+      context:
+        typeof btn.context === "object" && btn.context !== null
+          ? {
+              ...btn.context,
+              [SIGNED_CHANNEL_ID_CONTEXT_KEY]: params.channelId,
+            }
+          : { [SIGNED_CHANNEL_ID_CONTEXT_KEY]: params.channelId },
+    }))
+    .filter((btn) => btn.id && btn.name);
+
+  if (buttons.length === 0) {
+    return undefined;
+  }
+
+  return {
+    attachments: buildButtonAttachments({
+      callbackUrl: params.callbackUrl,
+      accountId: params.accountId,
+      buttons,
+      text: params.text,
+    }),
+  };
+}
+
 // ── Request body reader ────────────────────────────────────────────────
 
 function readInteractionBody(req: IncomingMessage): Promise<string> {
@@ -291,7 +387,18 @@ export function createMattermostInteractionHandler(params: {
   client: MattermostClient;
   botUserId: string;
   accountId: string;
+  allowedSourceIps?: string[];
+  trustedProxies?: string[];
+  allowRealIpFallback?: boolean;
   resolveSessionKey?: (channelId: string, userId: string) => Promise<string>;
+  handleInteraction?: (opts: {
+    payload: MattermostInteractionPayload;
+    userName: string;
+    actionId: string;
+    actionName: string;
+    originalMessage: string;
+    context: Record<string, unknown>;
+  }) => Promise<MattermostInteractionResponse | null>;
   dispatchButtonClick?: (opts: {
     channelId: string;
     userId: string;
@@ -312,6 +419,23 @@ export function createMattermostInteractionHandler(params: {
       res.setHeader("Allow", "POST");
       res.setHeader("Content-Type", "application/json");
       res.end(JSON.stringify({ error: "Method Not Allowed" }));
+      return;
+    }
+
+    if (
+      !isAllowedInteractionSource({
+        req,
+        allowedSourceIps: params.allowedSourceIps,
+        trustedProxies: params.trustedProxies,
+        allowRealIpFallback: params.allowRealIpFallback,
+      })
+    ) {
+      log?.(
+        `mattermost interaction: rejected callback source remote=${req.socket?.remoteAddress ?? "?"}`,
+      );
+      res.statusCode = 403;
+      res.setHeader("Content-Type", "application/json");
+      res.end(JSON.stringify({ error: "Forbidden origin" }));
       return;
     }
 
@@ -363,10 +487,98 @@ export function createMattermostInteractionHandler(params: {
       return;
     }
 
+    const signedChannelId =
+      typeof contextWithoutToken[SIGNED_CHANNEL_ID_CONTEXT_KEY] === "string"
+        ? contextWithoutToken[SIGNED_CHANNEL_ID_CONTEXT_KEY].trim()
+        : "";
+    if (signedChannelId && signedChannelId !== payload.channel_id) {
+      log?.(
+        `mattermost interaction: signed channel mismatch payload=${payload.channel_id} signed=${signedChannelId}`,
+      );
+      res.statusCode = 403;
+      res.setHeader("Content-Type", "application/json");
+      res.end(JSON.stringify({ error: "Channel mismatch" }));
+      return;
+    }
+
+    const userName = payload.user_name ?? payload.user_id;
+    let originalMessage = "";
+    let clickedButtonName: string | null = null;
+    try {
+      const originalPost = await client.request<{
+        channel_id?: string | null;
+        message?: string;
+        props?: Record<string, unknown>;
+      }>(`/posts/${payload.post_id}`);
+      const postChannelId = originalPost.channel_id?.trim();
+      if (!postChannelId || postChannelId !== payload.channel_id) {
+        log?.(
+          `mattermost interaction: post channel mismatch payload=${payload.channel_id} post=${postChannelId ?? "<missing>"}`,
+        );
+        res.statusCode = 403;
+        res.setHeader("Content-Type", "application/json");
+        res.end(JSON.stringify({ error: "Post/channel mismatch" }));
+        return;
+      }
+      originalMessage = originalPost.message ?? "";
+
+      // Ensure the callback can only target an action that exists on the original post.
+      const postAttachments = Array.isArray(originalPost?.props?.attachments)
+        ? (originalPost.props.attachments as Array<{
+            actions?: Array<{ id?: string; name?: string }>;
+          }>)
+        : [];
+      for (const att of postAttachments) {
+        const match = att.actions?.find((a) => a.id === actionId);
+        if (match?.name) {
+          clickedButtonName = match.name;
+          break;
+        }
+      }
+      if (clickedButtonName === null) {
+        log?.(`mattermost interaction: action ${actionId} not found in post ${payload.post_id}`);
+        res.statusCode = 403;
+        res.setHeader("Content-Type", "application/json");
+        res.end(JSON.stringify({ error: "Unknown action" }));
+        return;
+      }
+    } catch (err) {
+      log?.(`mattermost interaction: failed to validate post ${payload.post_id}: ${String(err)}`);
+      res.statusCode = 500;
+      res.setHeader("Content-Type", "application/json");
+      res.end(JSON.stringify({ error: "Failed to validate interaction" }));
+      return;
+    }
+
     log?.(
       `mattermost interaction: action=${actionId} user=${payload.user_name ?? payload.user_id} ` +
         `post=${payload.post_id} channel=${payload.channel_id}`,
     );
+
+    if (params.handleInteraction) {
+      try {
+        const response = await params.handleInteraction({
+          payload,
+          userName,
+          actionId,
+          actionName: clickedButtonName,
+          originalMessage,
+          context: contextWithoutToken,
+        });
+        if (response !== null) {
+          res.statusCode = 200;
+          res.setHeader("Content-Type", "application/json");
+          res.end(JSON.stringify(response));
+          return;
+        }
+      } catch (err) {
+        log?.(`mattermost interaction: custom handler failed: ${String(err)}`);
+        res.statusCode = 500;
+        res.setHeader("Content-Type", "application/json");
+        res.end(JSON.stringify({ error: "Interaction handler failed" }));
+        return;
+      }
+    }
 
     // Dispatch as system event so the agent can handle it.
     // Wrapped in try/catch — the post update below must still run even if
@@ -387,34 +599,6 @@ export function createMattermostInteractionHandler(params: {
       });
     } catch (err) {
       log?.(`mattermost interaction: system event dispatch failed: ${String(err)}`);
-    }
-
-    // Fetch the original post to preserve its message and find the clicked button name.
-    const userName = payload.user_name ?? payload.user_id;
-    let originalMessage = "";
-    let clickedButtonName = actionId; // fallback to action ID if we can't find the name
-    try {
-      const originalPost = await client.request<{
-        message?: string;
-        props?: Record<string, unknown>;
-      }>(`/posts/${payload.post_id}`);
-      originalMessage = originalPost?.message ?? "";
-
-      // Find the clicked button's display name from the original attachments
-      const postAttachments = Array.isArray(originalPost?.props?.attachments)
-        ? (originalPost.props.attachments as Array<{
-            actions?: Array<{ id?: string; name?: string }>;
-          }>)
-        : [];
-      for (const att of postAttachments) {
-        const match = att.actions?.find((a) => a.id === actionId);
-        if (match?.name) {
-          clickedButtonName = match.name;
-          break;
-        }
-      }
-    } catch (err) {
-      log?.(`mattermost interaction: failed to fetch post ${payload.post_id}: ${String(err)}`);
     }
 
     // Update the post via API to replace buttons with a completion indicator.
