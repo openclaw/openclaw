@@ -305,6 +305,8 @@ jobs:
       - name: Detect secrets
         env:
           PR_BASE_REF: ${{ github.base_ref }}
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
           set -euo pipefail
 
@@ -317,18 +319,25 @@ jobs:
           DIFF_RANGE=""
           changed_files=()
 
-          # PR jobs run on GitHub's synthetic merge commit. Diffing that merge
-          # commit against its first parent gives the exact PR file set without
-          # requiring extra history/merge-base resolution in shallow checkouts.
-          if git rev-parse --verify "HEAD^2^{commit}" >/dev/null 2>&1; then
-            DIFF_RANGE="HEAD^1..HEAD"
-          else
+          # Only GitHub's synthetic pull_request merge ref has parents that
+          # match the current base SHA and PR head SHA exactly. User-authored
+          # merge commits can also have two parents, so parent count alone is
+          # not enough to safely narrow the diff to HEAD^1..HEAD.
+          if [ -n "${PR_BASE_SHA}" ] && [ -n "${PR_HEAD_SHA}" ]; then
+            merge_parent_1="$(git rev-parse --verify "HEAD^1^{commit}" 2>/dev/null || true)"
+            merge_parent_2="$(git rev-parse --verify "HEAD^2^{commit}" 2>/dev/null || true)"
+            if [ "$merge_parent_1" = "$PR_BASE_SHA" ] && [ "$merge_parent_2" = "$PR_HEAD_SHA" ]; then
+              DIFF_RANGE="HEAD^1..HEAD"
+            fi
+          fi
+
+          if [ -z "$DIFF_RANGE" ]; then
             BASE_REF="origin/${PR_BASE_REF}"
             if ! git rev-parse --verify "$BASE_REF^{commit}" >/dev/null 2>&1; then
               git fetch --no-tags --depth=1 origin "${PR_BASE_REF}" || true
             fi
             if git rev-parse --verify "$BASE_REF^{commit}" >/dev/null 2>&1; then
-              DIFF_RANGE="$BASE_REF..HEAD"
+              DIFF_RANGE="$BASE_REF...HEAD"
             fi
           fi
 

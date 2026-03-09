@@ -5,7 +5,7 @@ import {
   setConfigValueAtPath,
   unsetConfigValueAtPath,
 } from "./config-paths.js";
-import { readConfigFileSnapshot, validateConfigObject } from "./config.js";
+import { loadConfig, readConfigFileSnapshot, validateConfigObject } from "./config.js";
 import {
   buildWebSearchProviderConfig,
   withEnvOverride,
@@ -433,6 +433,26 @@ describe("config strict validation", () => {
         expect(snap.valid).toBe(true);
         expect(snap.legacyIssues.some((issue) => issue.path === "tools.profile")).toBe(false);
         expect(snap.issues.some((issue) => issue.path === "tools.profile")).toBe(false);
+      });
+    });
+  });
+
+  it("does not throw in loadConfig() for env-driven messaging defaults that are not source-literal", async () => {
+    await withTempHome(async (home) => {
+      await writeOpenClawConfig(home, {
+        wizard: {
+          lastRunCommand: "onboard",
+          lastRunMode: "local",
+          lastRunVersion: "2026.3.2",
+        },
+        tools: {
+          profile: "${OPENCLAW_TOOLS_PROFILE}",
+        },
+      });
+
+      await withEnvOverride({ OPENCLAW_TOOLS_PROFILE: "messaging" }, async () => {
+        expect(() => loadConfig()).not.toThrow();
+        expect(loadConfig().tools?.profile).toBe("messaging");
       });
     });
   });
