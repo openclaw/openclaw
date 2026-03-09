@@ -127,7 +127,7 @@ export async function agentsViewSystemPromptCommand(
   const ownerDisplay = resolveOwnerDisplaySetting(cfg);
   const ttsHint = buildTtsSystemPromptHint(cfg);
 
-  const bootstrapFileNames = bootstrapFiles.map((f) => f.filename);
+  const bootstrapFileNames = bootstrapFiles.map((f) => f.name);
   const workspaceNotes =
     bootstrapFileNames.length > 0
       ? [`Loaded context files: ${bootstrapFileNames.join(", ")}`]
