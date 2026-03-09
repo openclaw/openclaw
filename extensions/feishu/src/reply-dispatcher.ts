@@ -147,6 +147,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
   let streamText = "";
   let lastPartial = "";
   let hadBlockReply = false;
+  let dispatcherRef: { getQueuedCounts: () => Record<string, number> } | null = null;
   const deliveredFinalTexts = new Set<string>();
   let partialUpdateQueue: Promise<void> = Promise.resolve();
   let streamingStartPromise: Promise<void> | null = null;
@@ -230,7 +231,12 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
       if (messageId && streamText) {
         cacheStreamingText(messageId, streamText);
       }
-      await streaming.close(text, { addShowFullTextButton: hadBlockReply });
+      // Show the "full text" button when tool calls or block replies occurred —
+      // these intermediate steps may cause incomplete card rendering.
+      const counts = dispatcherRef?.getQueuedCounts();
+      const hadIntermediateSteps =
+        hadBlockReply || (counts?.tool ?? 0) > 0 || (counts?.block ?? 0) > 0;
+      await streaming.close(text, { addShowFullTextButton: hadIntermediateSteps });
     }
     streaming = null;
     streamingStartPromise = null;
@@ -401,6 +407,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
         typingCallbacks.onCleanup?.();
       },
     });
+  dispatcherRef = dispatcher;
 
   return {
     dispatcher,
