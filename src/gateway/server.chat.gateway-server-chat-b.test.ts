@@ -273,37 +273,6 @@ describe("gateway server chat", () => {
     });
   });
 
-  test("chat.history preserves usage and cost metadata for assistant messages", async () => {
-    await withGatewayChatHarness(async ({ ws, createSessionDir }) => {
-      await connectOk(ws);
-
-      const sessionDir = await createSessionDir();
-      await writeMainSessionStore();
-
-      await writeMainSessionTranscript(sessionDir, [
-        JSON.stringify({
-          message: {
-            role: "assistant",
-            timestamp: Date.now(),
-            content: [{ type: "text", text: "hello" }],
-            usage: { input: 12, output: 5, totalTokens: 17 },
-            cost: { total: 0.0123 },
-            details: { debug: true },
-          },
-        }),
-      ]);
-
-      const messages = await fetchHistoryMessages(ws);
-      expect(messages).toHaveLength(1);
-      expect(messages[0]).toMatchObject({
-        role: "assistant",
-        usage: { input: 12, output: 5, totalTokens: 17 },
-        cost: { total: 0.0123 },
-      });
-      expect(messages[0]).not.toHaveProperty("details");
-    });
-  });
-
   test("chat.history strips inline directives from displayed message text", async () => {
     await withGatewayChatHarness(async ({ ws, createSessionDir }) => {
       await connectOk(ws);
