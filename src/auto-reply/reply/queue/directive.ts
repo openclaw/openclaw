@@ -143,7 +143,7 @@ export function extractQueueDirective(body?: string): {
       hasOptions: false,
     };
   }
-  const re = /(?:^|\s)\/queue(?=$|\s|:)/i;
+  const re = /(?:^|\s)\/queue(?:@[A-Za-z0-9_]+)?(?=$|\s|:)/i;
   const match = re.exec(body);
   if (!match) {
     return {

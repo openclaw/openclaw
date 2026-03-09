@@ -222,3 +222,52 @@ describe("directive parsing", () => {
     expect(res.cleaned).toBe("line 1\nline 2\n\nline 3");
   });
 });
+
+describe("directive parsing with Telegram @bot mention suffix", () => {
+  it("/think@BotName high", () => {
+    const res = extractThinkDirective("/think@BotName high");
+    expect(res.hasDirective).toBe(true);
+    expect(res.thinkLevel).toBe("high");
+    expect(res.cleaned).toBe("");
+  });
+
+  it("/verbose@BotName on", () => {
+    const res = extractVerboseDirective("/verbose@BotName on");
+    expect(res.hasDirective).toBe(true);
+    expect(res.cleaned).toBe("");
+  });
+
+  it("/reasoning@BotName high", () => {
+    const res = extractReasoningDirective("/reasoning@BotName high");
+    expect(res.hasDirective).toBe(true);
+    expect(res.cleaned).toBe("");
+  });
+
+  it("/elevated@BotName", () => {
+    const res = extractElevatedDirective("/elevated@BotName");
+    expect(res.hasDirective).toBe(true);
+  });
+
+  it("/status@BotName", () => {
+    const res = extractStatusDirective("/status@BotName");
+    expect(res.hasDirective).toBe(true);
+    expect(res.cleaned).toBe("");
+  });
+
+  it("/exec@BotName", () => {
+    const res = extractExecDirective("/exec@BotName");
+    expect(res.hasDirective).toBe(true);
+  });
+
+  it("/queue@BotName drop", () => {
+    const res = extractQueueDirective("/queue@BotName drop");
+    expect(res.hasDirective).toBe(true);
+  });
+
+  it("strips @bot inline: message /think@Bot high continue", () => {
+    const res = extractThinkDirective("message /think@Bot high continue");
+    expect(res.hasDirective).toBe(true);
+    expect(res.thinkLevel).toBe("high");
+    expect(res.cleaned).toBe("message continue");
+  });
+});
