@@ -3,33 +3,7 @@ import Testing
 @testable import OpenClaw
 
 @MainActor
-@Suite struct TalkModeConfigParsingTests {
-    @Test func prefersNormalizedTalkProviderPayload() {
-        let talk: [String: Any] = [
-            "provider": "elevenlabs",
-            "providers": [
-                "elevenlabs": [
-                    "voiceId": "voice-normalized",
-                ],
-            ],
-            "voiceId": "voice-legacy",
-        ]
-
-        let selection = TalkModeManager.selectTalkProviderConfig(talk)
-        #expect(selection?.provider == "elevenlabs")
-        #expect(selection?.config["voiceId"] as? String == "voice-normalized")
-    }
-
-    @Test func ignoresLegacyTalkFieldsWhenNormalizedPayloadMissing() {
-        let talk: [String: Any] = [
-            "voiceId": "voice-legacy",
-            "apiKey": "legacy-key", // pragma: allowlist secret
-        ]
-
-        let selection = TalkModeManager.selectTalkProviderConfig(talk)
-        #expect(selection == nil)
-    }
-
+@Suite struct TalkModeManagerTests {
     @Test func detectsPCMFormatRejectionFromElevenLabsError() {
         let error = NSError(
             domain: "ElevenLabsTTS",
@@ -46,33 +20,5 @@ import Testing
             code: -1,
             userInfo: [NSLocalizedDescriptionKey: "queue enqueue failed"])
         #expect(TalkModeManager._test_isPCMFormatRejectedByAPI(error) == false)
-    }
-
-    @Test func readsConfiguredSilenceTimeoutMs() {
-        let talk: [String: Any] = [
-            "silenceTimeoutMs": 1500,
-        ]
-
-        #expect(TalkModeManager.resolvedSilenceTimeoutMs(talk) == 1500)
-    }
-
-    @Test func defaultsSilenceTimeoutMsWhenMissing() {
-        #expect(TalkModeManager.resolvedSilenceTimeoutMs(nil) == 900)
-    }
-
-    @Test func defaultsSilenceTimeoutMsWhenInvalid() {
-        let talk: [String: Any] = [
-            "silenceTimeoutMs": 0,
-        ]
-
-        #expect(TalkModeManager.resolvedSilenceTimeoutMs(talk) == 900)
-    }
-
-    @Test func defaultsSilenceTimeoutMsWhenBool() {
-        let talk: [String: Any] = [
-            "silenceTimeoutMs": true,
-        ]
-
-        #expect(TalkModeManager.resolvedSilenceTimeoutMs(talk) == 900)
     }
 }

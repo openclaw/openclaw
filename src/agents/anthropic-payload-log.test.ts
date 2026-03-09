@@ -28,8 +28,8 @@ describe("createAnthropicPayloadLogger", () => {
         },
       ],
     };
-    const streamFn: StreamFn = ((_, __, options) => {
-      options?.onPayload?.(payload);
+    const streamFn: StreamFn = ((model, __, options) => {
+      options?.onPayload?.(payload, model);
       return {} as never;
     }) as StreamFn;
 
