@@ -28,6 +28,10 @@ function supportsUsageInStreaming(model: Model<Api>): boolean | undefined {
     ?.supportsUsageInStreaming;
 }
 
+function supportsStrictMode(model: Model<Api>): boolean | undefined {
+  return (model.compat as { supportsStrictMode?: boolean } | undefined)?.supportsStrictMode;
+}
+
 function createTemplateModel(provider: string, id: string): Model<Api> {
   return {
     id,
@@ -92,6 +96,13 @@ function expectSupportsUsageInStreamingForcedOff(overrides?: Partial<Model<Api>>
   delete (model as { compat?: unknown }).compat;
   const normalized = normalizeModelCompat(model as Model<Api>);
   expect(supportsUsageInStreaming(normalized)).toBe(false);
+}
+
+function expectSupportsStrictModeForcedOff(overrides?: Partial<Model<Api>>): void {
+  const model = { ...baseModel(), ...overrides };
+  delete (model as { compat?: unknown }).compat;
+  const normalized = normalizeModelCompat(model as Model<Api>);
+  expect(supportsStrictMode(normalized)).toBe(false);
 }
 
 function expectResolvedForwardCompat(
@@ -296,16 +307,19 @@ describe("normalizeModelCompat", () => {
     expect(normalized).not.toBe(model);
     expect(supportsDeveloperRole(model)).toBeUndefined();
     expect(supportsUsageInStreaming(model)).toBeUndefined();
+    expect(supportsStrictMode(model)).toBeUndefined();
     expect(supportsDeveloperRole(normalized)).toBe(false);
     expect(supportsUsageInStreaming(normalized)).toBe(false);
+    expect(supportsStrictMode(normalized)).toBe(false);
   });
 
   it("does not override explicit compat false", () => {
     const model = baseModel();
-    model.compat = { supportsDeveloperRole: false, supportsUsageInStreaming: false };
+    model.compat = { supportsDeveloperRole: false, supportsUsageInStreaming: false, supportsStrictMode: false };
     const normalized = normalizeModelCompat(model);
     expect(supportsDeveloperRole(normalized)).toBe(false);
     expect(supportsUsageInStreaming(normalized)).toBe(false);
+    expect(supportsStrictMode(normalized)).toBe(false);
   });
 });
 
