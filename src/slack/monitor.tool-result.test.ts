@@ -426,6 +426,36 @@ describe("monitorSlackProvider tool results", () => {
     sleepSpy.mockRestore();
   });
 
+  it("does not send no-final fallback when tool progress ends with intentional NO_REPLY", async () => {
+    setDirectMessageReplyMode("all");
+    const sleepSpy = vi.spyOn(utils, "sleep").mockResolvedValue(undefined);
+    replyMock.mockImplementation(async (...args: unknown[]) => {
+      const opts = (args[1] ?? {}) as {
+        onToolResult?: (payload: { text?: string }) => Promise<void> | void;
+      };
+      await opts.onToolResult?.({ text: "working..." });
+      return { text: "NO_REPLY" };
+    });
+
+    await runSlackMessageOnce(monitorSlackProvider, {
+      event: makeSlackMessageEvent(),
+    });
+
+    const keepaliveText =
+      "I am still here. I could not complete that reply yet; retrying now in this same thread.";
+    const statusText =
+      "Status update: still waiting on a complete final reply for this turn. Please retry your last message if it does not arrive shortly.";
+    const keepaliveCall = sendMock.mock.calls.find(
+      (call) => typeof call[1] === "string" && call[1] === keepaliveText,
+    );
+    const statusCall = sendMock.mock.calls.find(
+      (call) => typeof call[1] === "string" && call[1] === statusText,
+    );
+    expect(keepaliveCall).toBeUndefined();
+    expect(statusCall).toBeUndefined();
+    sleepSpy.mockRestore();
+  });
+
   async function expectMentionPatternMessageAccepted(text: string): Promise<void> {
     setRequireMentionChannelConfig(["\\bopenclaw\\b"]);
     replyMock.mockResolvedValue({ text: "hi" });

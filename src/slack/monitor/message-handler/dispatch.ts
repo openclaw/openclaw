@@ -230,6 +230,7 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
   let streamSession: SlackStreamSession | null = null;
   let streamFailed = false;
   let usedReplyThreadTs: string | undefined;
+  let sawIntentionalSilentFinalSkip = false;
 
   const deliverNormally = async (payload: ReplyPayload, forcedThreadTs?: string): Promise<void> => {
     const replyThreadTs = forcedThreadTs ?? replyPlan.nextThreadTs();
@@ -363,6 +364,11 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
       runtime.error?.(danger(`slack ${info.kind} reply failed: ${String(err)}`));
       typingCallbacks.onIdle?.();
     },
+    onSkip: (_payload, info) => {
+      if (info.kind === "final" && info.reason === "silent") {
+        sawIntentionalSilentFinalSkip = true;
+      }
+    },
   });
 
   const draftStream = createSlackDraftStream({
@@ -477,7 +483,10 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
 
   const hasProgressWithoutFinal = hasStreamedMessage || (counts.tool ?? 0) > 0;
   const shouldSendNoFinalFallback =
-    !queuedFinal && (counts.final ?? 0) === 0 && hasProgressWithoutFinal;
+    !queuedFinal &&
+    (counts.final ?? 0) === 0 &&
+    hasProgressWithoutFinal &&
+    !sawIntentionalSilentFinalSkip;
   let sentEmptyFallback = false;
   if (shouldSendNoFinalFallback) {
     const fallbackThreadTs = usedReplyThreadTs ?? statusThreadTs;
