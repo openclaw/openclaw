@@ -2,8 +2,8 @@ import path from "node:path";
 import type { AnyAgentTool } from "../agents/tools/common.js";
 import type { ChannelDock } from "../channels/dock.js";
 import type { ChannelPlugin } from "../channels/plugins/types.js";
-import { registerContextEngine } from "../context-engine/registry.js";
 import type { SessionStoreAdapter } from "../config/sessions/adapter.js";
+import { registerContextEngine } from "../context-engine/registry.js";
 import type {
   GatewayRequestHandler,
   GatewayRequestHandlers,
@@ -609,6 +609,14 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       registerCommand: (command) => registerCommand(record, command),
       registerContextEngine: (id, factory) => registerContextEngine(id, factory),
       registerSessionStoreAdapter: (adapter) => {
+        if (pluginSessionStoreAdapter) {
+          pushDiagnostic({
+            level: "warn",
+            pluginId: record.id,
+            source: record.source,
+            message: "session store adapter already registered; overriding previous adapter",
+          });
+        }
         pluginSessionStoreAdapter = adapter;
       },
       resolvePath: (input: string) => resolveUserPath(input),

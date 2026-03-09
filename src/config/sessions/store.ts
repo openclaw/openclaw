@@ -222,17 +222,22 @@ export function loadSessionStore(
 ): Record<string, SessionEntry> {
   if (pluginAdapterConfig && storePath === pluginAdapterConfig.storePath) {
     const adapter = pluginAdapterConfig.adapter;
+    let store: Record<string, SessionEntry>;
     if (adapter.toRecord) {
-      return structuredClone(adapter.toRecord());
-    }
-    const store: Record<string, SessionEntry> = {};
-    for (const key of adapter.list()) {
-      const entry = adapter.load(key);
-      if (entry) {
-        store[key] = entry;
+      store = structuredClone(adapter.toRecord());
+    } else {
+      store = {};
+      for (const key of adapter.list()) {
+        const entry = adapter.load(key);
+        if (entry) {
+          store[key] = entry;
+        }
       }
+      store = structuredClone(store);
     }
-    return structuredClone(store);
+    applySessionStoreMigrations(store);
+    normalizeSessionStore(store);
+    return store;
   }
 
   // Check cache first if enabled
