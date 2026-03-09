@@ -174,6 +174,16 @@ export function stripInboundMetadata(text: string): string {
     result.push(line);
   }
 
+  // Strip the user message separator if present at the start of result.
+  // Only strip when we see the full pattern: "---" followed by "**User Message:**"
+  if (result[0]?.trim() === "---" && result[1]?.trim() === "**User Message:**") {
+    // Remove the separator lines and any leading blank lines
+    result.splice(0, 2);
+    while (result.length > 0 && result[0]?.trim() === "") {
+      result.shift();
+    }
+  }
+
   return result.join("\n").replace(/^\n+/, "").replace(/\n+$/, "");
 }
 
@@ -222,12 +232,14 @@ export function stripLeadingInboundMetadata(text: string): string {
   }
 
   // Strip the user message separator if present.
-  // Expected format: "---" followed by "**User Message:**" then optional blank lines.
-  if (index < lines.length && lines[index]?.trim() === "---") {
-    index++;
-    if (index < lines.length && lines[index]?.trim() === "**User Message:**") {
-      index++;
-    }
+  // Only strip when we see the full pattern: "---" followed by "**User Message:**"
+  // This avoids corrupting old-format messages that happen to start with "---"
+  if (
+    index < lines.length &&
+    lines[index]?.trim() === "---" &&
+    lines[index + 1]?.trim() === "**User Message:**"
+  ) {
+    index += 2;
     while (index < lines.length && lines[index]?.trim() === "") {
       index++;
     }
