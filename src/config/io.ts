@@ -817,7 +817,19 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
         );
         if (!AUTO_OWNER_DISPLAY_SECRET_PERSIST_IN_FLIGHT.has(configPath)) {
           AUTO_OWNER_DISPLAY_SECRET_PERSIST_IN_FLIGHT.add(configPath);
-          void writeConfigFile(cfgWithOwnerDisplaySecret, { expectedConfigPath: configPath })
+          const secretToWrite = ownerDisplaySecretResolution.generatedSecret;
+          // Use enqueueConfigWrite directly to perform an atomic read-modify-write.
+          // The loadConfig() call MUST happen inside the queue so it sees the latest
+          // disk state after any prior writes (e.g., auth token bootstrap) complete.
+          // Previously, the stale config captured at loadConfig() time was written
+          // directly, which caused the merge-patch to undo concurrent changes.
+          void enqueueConfigWrite(async () => {
+            const freshIo = createConfigIO(deps);
+            const freshCfg = freshIo.loadConfig();
+            const freshWithSecret = ensureOwnerDisplaySecret(freshCfg, () => secretToWrite).config;
+            // Call the inner write directly (already inside the queue).
+            await freshIo.writeConfigFile(freshWithSecret, { expectedConfigPath: configPath });
+          })
             .then(() => {
               AUTO_OWNER_DISPLAY_SECRET_BY_PATH.delete(configPath);
               AUTO_OWNER_DISPLAY_SECRET_PERSIST_WARNED.delete(configPath);
@@ -1324,6 +1336,23 @@ let runtimeConfigSnapshot: OpenClawConfig | null = null;
 let runtimeConfigSourceSnapshot: OpenClawConfig | null = null;
 let runtimeConfigSnapshotRefreshHandler: RuntimeConfigSnapshotRefreshHandler | null = null;
 
+// Serialize all config writes to prevent concurrent read-modify-write races.
+// Each write reads the current snapshot, computes a merge patch, then atomically
+// replaces the file. Without serialization, concurrent writers can read the same
+// snapshot and the last rename wins, silently discarding the other's changes.
+// This is critical during gateway startup where the async ownerDisplaySecret
+// auto-persist fires concurrently with synchronous auth/plugin writes.
+let configWriteQueue: Promise<void> = Promise.resolve();
+
+function enqueueConfigWrite(fn: () => Promise<void>): Promise<void> {
+  const next = configWriteQueue.then(fn, fn);
+  configWriteQueue = next.then(
+    () => undefined,
+    () => undefined,
+  );
+  return next;
+}
+
 function resolveConfigCacheMs(env: NodeJS.ProcessEnv): number {
   const raw = env.OPENCLAW_CONFIG_CACHE_MS?.trim();
   if (raw === "" || raw === "0") {
@@ -1423,52 +1452,54 @@ export async function writeConfigFile(
   cfg: OpenClawConfig,
   options: ConfigWriteOptions = {},
 ): Promise<void> {
-  const io = createConfigIO();
-  let nextCfg = cfg;
-  const hadRuntimeSnapshot = Boolean(runtimeConfigSnapshot);
-  const hadBothSnapshots = Boolean(runtimeConfigSnapshot && runtimeConfigSourceSnapshot);
-  if (hadBothSnapshots) {
-    const runtimePatch = createMergePatch(runtimeConfigSnapshot!, cfg);
-    nextCfg = coerceConfig(applyMergePatch(runtimeConfigSourceSnapshot!, runtimePatch));
-  }
-  const sameConfigPath =
-    options.expectedConfigPath === undefined || options.expectedConfigPath === io.configPath;
-  await io.writeConfigFile(nextCfg, {
-    envSnapshotForRestore: sameConfigPath ? options.envSnapshotForRestore : undefined,
-    unsetPaths: options.unsetPaths,
-  });
-  // Keep the last-known-good runtime snapshot active until the specialized refresh path
-  // succeeds, so concurrent readers do not observe unresolved SecretRefs mid-refresh.
-  const refreshHandler = runtimeConfigSnapshotRefreshHandler;
-  if (refreshHandler) {
-    try {
-      const refreshed = await refreshHandler.refresh({ sourceConfig: nextCfg });
-      if (refreshed) {
-        return;
-      }
-    } catch (error) {
-      try {
-        refreshHandler.clearOnRefreshFailure?.();
-      } catch {
-        // Keep the original refresh failure as the surfaced error.
-      }
-      const detail = error instanceof Error ? error.message : String(error);
-      throw new ConfigRuntimeRefreshError(
-        `Config was written to ${io.configPath}, but runtime snapshot refresh failed: ${detail}`,
-        { cause: error },
-      );
+  return enqueueConfigWrite(async () => {
+    const io = createConfigIO();
+    let nextCfg = cfg;
+    const hadRuntimeSnapshot = Boolean(runtimeConfigSnapshot);
+    const hadBothSnapshots = Boolean(runtimeConfigSnapshot && runtimeConfigSourceSnapshot);
+    if (hadBothSnapshots) {
+      const runtimePatch = createMergePatch(runtimeConfigSnapshot!, cfg);
+      nextCfg = coerceConfig(applyMergePatch(runtimeConfigSourceSnapshot!, runtimePatch));
     }
-  }
-  if (hadBothSnapshots) {
-    // Refresh both snapshots from disk atomically so follow-up reads get normalized config and
-    // subsequent writes still get secret-preservation merge-patch (hadBothSnapshots stays true).
-    const fresh = io.loadConfig();
-    setRuntimeConfigSnapshot(fresh, nextCfg);
-    return;
-  }
-  if (hadRuntimeSnapshot) {
-    clearRuntimeConfigSnapshot();
-  }
-  // When we had no runtime snapshot, keep callers reading from disk/cache so external/manual
-  // edits to openclaw.json remain visible (no stale snapshot).
+    const sameConfigPath =
+      options.expectedConfigPath === undefined || options.expectedConfigPath === io.configPath;
+    await io.writeConfigFile(nextCfg, {
+      envSnapshotForRestore: sameConfigPath ? options.envSnapshotForRestore : undefined,
+      unsetPaths: options.unsetPaths,
+    });
+    // Keep the last-known-good runtime snapshot active until the specialized refresh path
+    // succeeds, so concurrent readers do not observe unresolved SecretRefs mid-refresh.
+    const refreshHandler = runtimeConfigSnapshotRefreshHandler;
+    if (refreshHandler) {
+      try {
+        const refreshed = await refreshHandler.refresh({ sourceConfig: nextCfg });
+        if (refreshed) {
+          return;
+        }
+      } catch (error) {
+        try {
+          refreshHandler.clearOnRefreshFailure?.();
+        } catch {
+          // Keep the original refresh failure as the surfaced error.
+        }
+        const detail = error instanceof Error ? error.message : String(error);
+        throw new ConfigRuntimeRefreshError(
+          `Config was written to ${io.configPath}, but runtime snapshot refresh failed: ${detail}`,
+          { cause: error },
+        );
+      }
+    }
+    if (hadBothSnapshots) {
+      // Refresh both snapshots from disk atomically so follow-up reads get normalized config and
+      // subsequent writes still get secret-preservation merge-patch (hadBothSnapshots stays true).
+      const fresh = io.loadConfig();
+      setRuntimeConfigSnapshot(fresh, nextCfg);
+      return;
+    }
+    if (hadRuntimeSnapshot) {
+      clearRuntimeConfigSnapshot();
+    }
+    // When we had no runtime snapshot, keep callers reading from disk/cache so external/manual
+    // edits to openclaw.json remain visible (no stale snapshot).
+  }); // enqueueConfigWrite
 }
