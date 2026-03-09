@@ -406,7 +406,34 @@ export class GatewayClient {
         }
       }
     } catch (err) {
-      logDebug(`gateway client parse error: ${String(err)}`);
+      // Truncate raw message for safe logging (avoid excessive length in case of large payloads)
+      const truncatedRaw = raw.length > 300 ? raw.slice(0, 300) + "..." : raw;
+      const parseError = new Error(
+        `Failed to parse JSON message from gateway: ${String(err)}; raw (truncated): ${truncatedRaw}`,
+      );
+      // In PROBE mode, treat parse failures as fatal protocol errors to ensure explicit failure
+      // instead of silently continuing and causing ambiguous probe results.
+      if (this.opts.mode === GATEWAY_CLIENT_MODES.PROBE) {
+        // Mark as closed to prevent any reconnection attempts
+        this.closed = true;
+        // Clear reconnect timer if pending
+        if (this.connectTimer) {
+          clearTimeout(this.connectTimer);
+          this.connectTimer = null;
+        }
+        // Clear tick watcher
+        if (this.tickTimer) {
+          clearInterval(this.tickTimer);
+          this.tickTimer = null;
+        }
+        // Flush any pending requests with the parse error
+        this.flushPendingErrors(parseError);
+        // Notify and close the connection
+        this.opts.onConnectError?.(parseError);
+        this.ws?.close(1008, "parse error");
+        return;
+      }
+      logDebug(`gateway client parse error: ${String(err)}; raw (truncated): ${truncatedRaw}`);
     }
   }
 

@@ -65,6 +65,21 @@ export async function probeGateway(opts: {
       },
       onClose: (code, reason) => {
         close = { code, reason };
+        // In PROBE mode, a close with code 1008 and reason "parse error" is a fatal
+        // protocol error that should immediately fail the probe, not wait for timeout.
+        // This handles the case where the gateway sends non-JSON content.
+        if (code === 1008 && reason === "parse error") {
+          settle({
+            ok: false,
+            connectLatencyMs,
+            error: connectError ?? `gateway protocol error: ${reason}`,
+            close,
+            health: null,
+            status: null,
+            presence: null,
+            configSnapshot: null,
+          });
+        }
       },
       onHelloOk: async () => {
         connectLatencyMs = Date.now() - startedAt;
