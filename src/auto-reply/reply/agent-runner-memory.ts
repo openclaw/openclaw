@@ -502,6 +502,7 @@ export async function runMemoryFlushIfNeeded(params: {
           ...runBaseParams,
           trigger: "memory",
           memoryFlushWritePath,
+          disableEscalation: true,
           prompt: resolveMemoryFlushPromptForRun({
             prompt: memoryFlushSettings.prompt,
             cfg: params.cfg,

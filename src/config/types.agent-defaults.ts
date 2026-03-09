@@ -16,10 +16,8 @@ export type AgentModelEntryConfig = {
   streaming?: boolean;
 };
 
-export type AgentModelListConfig = {
-  primary?: string;
-  fallbacks?: string[];
-};
+/** The object form of AgentModelConfig (non-string branch of the union). */
+export type AgentModelListConfig = Exclude<AgentModelConfig, string>;
 
 export type AgentContextPruningConfig = {
   mode?: "off" | "cache-ttl";
