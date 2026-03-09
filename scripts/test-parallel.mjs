@@ -31,6 +31,8 @@ const unitIsolatedFilesRaw = [
   "src/commands/doctor.runs-legacy-state-migrations-yes-mode-without.test.ts",
   // Setup-heavy CLI update flow suite; move off unit-fast critical path.
   "src/cli/update-cli.test.ts",
+  // Uses temp repos + module cache resets; keep it off vmForks to avoid ref-resolution flakes.
+  "src/infra/git-commit.test.ts",
   // Expensive schema build/bootstrap checks; keep coverage but run in isolated lane.
   "src/config/schema.test.ts",
   "src/config/schema.tags.test.ts",
@@ -86,6 +88,8 @@ const unitIsolatedFilesRaw = [
   "src/slack/monitor/slash.test.ts",
   // Uses process-level unhandledRejection listeners; keep it off vmForks to avoid cross-file leakage.
   "src/imessage/monitor.shutdown.unhandled-rejection.test.ts",
+  // Mutates process.cwd() and mocks core module loaders; isolate from the shared fast lane.
+  "src/infra/git-commit.test.ts",
 ];
 const unitIsolatedFiles = unitIsolatedFilesRaw.filter((file) => fs.existsSync(file));
 
@@ -119,7 +123,9 @@ const testProfile =
   rawTestProfile === "serial"
     ? rawTestProfile
     : "normal";
-const shouldSplitUnitRuns = testProfile !== "low" && testProfile !== "serial";
+// Even on low-memory hosts, keep the isolated lane split so files like
+// git-commit.test.ts still get the worker/process isolation they require.
+const shouldSplitUnitRuns = testProfile !== "serial";
 const runs = [
   ...(shouldSplitUnitRuns
     ? [
