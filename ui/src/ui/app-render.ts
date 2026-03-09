@@ -713,6 +713,27 @@ export function renderApp(state: AppViewState) {
                 },
                 onConfigReload: () => loadConfig(state),
                 onConfigSave: () => saveAgentsConfig(state),
+                onDefaultModelChange: (modelId) => {
+                  const basePath = ["agents", "defaults", "model"];
+                  if (!modelId) {
+                    removeConfigFormValue(state, basePath);
+                    return;
+                  }
+                  const currentConfig = getCurrentConfigValue() as
+                    | { agents?: { defaults?: { model?: unknown } } }
+                    | null;
+                  const existing = currentConfig?.agents?.defaults?.model;
+                  if (existing && typeof existing === "object" && !Array.isArray(existing)) {
+                    const fallbacks = (existing as { fallbacks?: unknown }).fallbacks;
+                    const next = {
+                      primary: modelId,
+                      ...(Array.isArray(fallbacks) ? { fallbacks } : {}),
+                    };
+                    updateConfigFormValue(state, basePath, next);
+                    return;
+                  }
+                  updateConfigFormValue(state, basePath, modelId);
+                },
                 onChannelsRefresh: () => loadChannels(state, false),
                 onCronRefresh: () => state.loadCron(),
                 onSkillsFilterChange: (next) => (state.skillsFilter = next),

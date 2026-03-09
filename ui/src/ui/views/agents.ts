@@ -79,6 +79,7 @@ export type AgentsProps = {
   onToolsOverridesChange: (agentId: string, alsoAllow: string[], deny: string[]) => void;
   onConfigReload: () => void;
   onConfigSave: () => void;
+  onDefaultModelChange: (modelId: string | null) => void;
   onModelChange: (agentId: string, modelId: string | null) => void;
   onModelFallbacksChange: (agentId: string, fallbacks: string[]) => void;
   onChannelsRefresh: () => void;
@@ -98,6 +99,36 @@ export type AgentContext = {
   skillsLabel: string;
   isDefault: boolean;
 };
+
+export function resolveOverviewModelState(
+  configForm: Record<string, unknown> | null,
+  agentId: string,
+) {
+  const config = resolveAgentConfig(configForm, agentId);
+  const model = config.entry?.model
+    ? resolveModelLabel(config.entry?.model)
+    : resolveModelLabel(config.defaults?.model);
+  const defaultModel = resolveModelLabel(config.defaults?.model);
+  const modelPrimary =
+    resolveModelPrimary(config.entry?.model) || (model !== "-" ? normalizeModelValue(model) : null);
+  const defaultPrimary =
+    resolveModelPrimary(config.defaults?.model) ||
+    (defaultModel !== "-" ? normalizeModelValue(defaultModel) : null);
+  const effectivePrimary = modelPrimary ?? defaultPrimary ?? null;
+  const modelFallbacks = resolveEffectiveModelFallbacks(
+    config.entry?.model,
+    config.defaults?.model,
+  );
+
+  return {
+    model,
+    defaultModel,
+    modelPrimary,
+    defaultPrimary,
+    effectivePrimary,
+    modelFallbacks,
+  };
+}
 
 export function renderAgents(props: AgentsProps) {
   const agents = props.agentsList?.agents ?? [];
@@ -182,6 +213,7 @@ export function renderAgents(props: AgentsProps) {
                         configDirty: props.configDirty,
                         onConfigReload: props.onConfigReload,
                         onConfigSave: props.onConfigSave,
+                        onDefaultModelChange: props.onDefaultModelChange,
                         onModelChange: props.onModelChange,
                         onModelFallbacksChange: props.onModelFallbacksChange,
                       })
@@ -357,6 +389,7 @@ function renderAgentOverview(params: {
   configDirty: boolean;
   onConfigReload: () => void;
   onConfigSave: () => void;
+  onDefaultModelChange: (modelId: string | null) => void;
   onModelChange: (agentId: string, modelId: string | null) => void;
   onModelFallbacksChange: (agentId: string, fallbacks: string[]) => void;
 }) {
@@ -372,6 +405,7 @@ function renderAgentOverview(params: {
     configDirty,
     onConfigReload,
     onConfigSave,
+    onDefaultModelChange,
     onModelChange,
     onModelFallbacksChange,
   } = params;
@@ -380,19 +414,9 @@ function renderAgentOverview(params: {
     agentFilesList && agentFilesList.agentId === agent.id ? agentFilesList.workspace : null;
   const workspace =
     workspaceFromFiles || config.entry?.workspace || config.defaults?.workspace || "default";
-  const model = config.entry?.model
-    ? resolveModelLabel(config.entry?.model)
-    : resolveModelLabel(config.defaults?.model);
-  const defaultModel = resolveModelLabel(config.defaults?.model);
-  const modelPrimary =
-    resolveModelPrimary(config.entry?.model) || (model !== "-" ? normalizeModelValue(model) : null);
-  const defaultPrimary =
-    resolveModelPrimary(config.defaults?.model) ||
-    (defaultModel !== "-" ? normalizeModelValue(defaultModel) : null);
-  const effectivePrimary = modelPrimary ?? defaultPrimary ?? null;
-  const modelFallbacks = resolveEffectiveModelFallbacks(
-    config.entry?.model,
-    config.defaults?.model,
+  const { model, defaultPrimary, effectivePrimary, modelFallbacks } = resolveOverviewModelState(
+    configForm,
+    agent.id,
   );
   const fallbackText = modelFallbacks ? modelFallbacks.join(", ") : "";
   const identityName =
@@ -446,6 +470,20 @@ function renderAgentOverview(params: {
 
       <div class="agent-model-select" style="margin-top: 20px;">
         <div class="label">Model Selection</div>
+        <div class="row" style="gap: 12px; flex-wrap: wrap; margin-bottom: 12px;">
+          <label class="field" style="min-width: 260px; flex: 1;">
+            <span>Active Primary Model (global default)</span>
+            <select
+              .value=${defaultPrimary ?? ""}
+              ?disabled=${!configForm || configLoading || configSaving}
+              @change=${(e: Event) =>
+                onDefaultModelChange((e.target as HTMLSelectElement).value || null)}
+            >
+              <option value="">Unset</option>
+              ${buildModelOptions(configForm, defaultPrimary ?? undefined)}
+            </select>
+          </label>
+        </div>
         <div class="row" style="gap: 12px; flex-wrap: wrap;">
           <label class="field" style="min-width: 260px; flex: 1;">
             <span>Primary model${isDefault ? " (default)" : ""}</span>
