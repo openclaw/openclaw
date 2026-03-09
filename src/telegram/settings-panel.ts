@@ -41,15 +41,12 @@ function resolveConfigPath(accountId: string, setting: SettingKey): string[] {
 }
 
 /** Read the effective value of a setting from the Telegram account config. */
-function readCurrentValue(
-  telegramCfg: TelegramAccountConfig,
-  setting: SettingKey,
-): string | undefined {
+function readCurrentValue(telegramCfg: TelegramAccountConfig, setting: SettingKey): string {
   switch (setting) {
     case "dmpol":
-      return telegramCfg.dmPolicy;
+      return telegramCfg.dmPolicy ?? "pairing";
     case "grppol":
-      return telegramCfg.groupPolicy;
+      return telegramCfg.groupPolicy ?? "open";
     case "stream":
       return normalizeStreamingDisplay(telegramCfg.streaming);
   }

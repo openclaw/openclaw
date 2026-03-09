@@ -19,6 +19,7 @@ import { resolveNativeCommandSessionTargets } from "../channels/native-command-s
 import { resolveChannelConfigWrites } from "../channels/plugins/config-writes.js";
 import { createReplyPrefixOptions } from "../channels/reply-prefix.js";
 import { recordInboundSessionMetaSafe } from "../channels/session-meta.js";
+import { loadConfig } from "../config/config.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { ChannelGroupPolicy } from "../config/group-policy.js";
 import { resolveMarkdownTableMode } from "../config/markdown-tables.js";
@@ -45,6 +46,7 @@ import {
 import { resolveAgentRoute } from "../routing/resolve-route.js";
 import { resolveThreadSessionKeys } from "../routing/session-key.js";
 import type { RuntimeEnv } from "../runtime.js";
+import { resolveTelegramAccount } from "./accounts.js";
 import { withTelegramApiErrorLogging } from "./api-logging.js";
 import { isSenderAllowed, normalizeDmAllowFromWithStore } from "./bot-access.js";
 import type { TelegramMediaRef } from "./bot-message-context.js";
@@ -839,7 +841,11 @@ export const registerTelegramNativeCommands = ({
           });
           return;
         }
-        const { text, buttons } = buildSettingsCommandResponse(telegramCfg);
+        // Load fresh config so the menu reflects the current persisted state,
+        // not the snapshot from handler registration time.
+        const freshCfg = loadConfig();
+        const freshTelegramCfg = resolveTelegramAccount({ cfg: freshCfg, accountId }).config;
+        const { text, buttons } = buildSettingsCommandResponse(freshTelegramCfg);
         const keyboard = buildInlineKeyboard(buttons);
         const threadParams =
           buildTelegramThreadParams(

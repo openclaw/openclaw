@@ -1332,6 +1332,19 @@ export const registerTelegramHandlers = ({
         if (isGroup) {
           return;
         } // DM-only
+        // Re-check sender auth at command level (stricter than callback-scope)
+        // since settings callbacks mutate config.
+        const settingsDmAllow = normalizeDmAllowFromWithStore({
+          allowFrom: allowFrom,
+          storeAllowFrom,
+          dmPolicy: telegramCfg.dmPolicy ?? "pairing",
+        });
+        if (
+          settingsDmAllow.hasEntries &&
+          !isSenderAllowed({ allow: settingsDmAllow, senderId, senderUsername })
+        ) {
+          return;
+        }
         if (!resolveChannelConfigWrites({ cfg, channelId: "telegram", accountId })) {
           await replyToCallbackChat("Config writes are disabled for this account.");
           return;
