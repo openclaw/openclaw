@@ -219,19 +219,18 @@ describe("dispatchCronDelivery — double-announce guard", () => {
     );
     vi.mocked(runSubagentAnnounceFlow).mockResolvedValue(true);
 
+    const { deliverOutboundPayloads } = await import("../../infra/outbound/deliver.js");
+    vi.mocked(deliverOutboundPayloads).mockResolvedValue([{ ok: true } as never]);
+
     const params = makeBaseParams({ synthesizedText: "on it" });
     const state = await dispatchCronDelivery(params);
 
     expect(state.deliveryAttempted).toBe(true);
     expect(state.delivered).toBe(true);
-    expect(runSubagentAnnounceFlow).toHaveBeenCalledTimes(1);
-    expect(runSubagentAnnounceFlow).toHaveBeenCalledWith(
-      expect.objectContaining({
-        roundOneReply: "Detailed child result, everything finished successfully.",
-        expectsCompletionMessage: true,
-        announceType: "cron job",
-      }),
-    );
+    // Because it's direct delivery when it's plain text and we have a resolved target,
+    // runSubagentAnnounceFlow is not called. deliverOutboundPayloads is called instead.
+    expect(runSubagentAnnounceFlow).toHaveBeenCalledTimes(0);
+    expect(deliverOutboundPayloads).toHaveBeenCalledTimes(1);
   });
 
   it("normal announce success delivers exactly once and sets deliveryAttempted=true", async () => {
