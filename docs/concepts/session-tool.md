@@ -93,7 +93,11 @@ Behavior:
 - If the run fails: `{ runId, status: "error", error }`.
 - If `session.agentToAgent.ingressEcho.enabled=true`, OpenClaw first attempts to echo the original `sessions_send` payload into the target session's bound channel before starting the native target run.
 - `session.agentToAgent.ingressEcho.requireDelivery=true` makes that pre-run echo strict: if delivery fails or no deliverable target can be resolved, the target run is blocked.
-- Announce delivery runs after the primary run completes and is best-effort; `status: "ok"` does not guarantee the announce was delivered.
+- If `session.agentToAgent.relay.enabled=true`, OpenClaw can mirror A2A conversation turns into channel targets.
+- `session.agentToAgent.relay.mode="target-only"` mirrors only the target channel; `"dual-channel"` mirrors both requester and target channels.
+- `session.agentToAgent.relay.mirrorTurns="round1"` mirrors the initial request + first reply; `"all"` also mirrors ping-pong turns.
+- In dual-channel relay mode, OpenClaw suppresses the extra target-side announce step to reduce duplicate-looking channel messages.
+- Announce delivery runs after the primary run completes and is best-effort when announce is active; `status: "ok"` does not guarantee the announce was delivered.
 - Waits via gateway `agent.wait` (server-side) so reconnects don't drop the wait.
 - Agent-to-agent message context is injected for the primary run.
 - Inter-session messages are persisted with `message.provenance.kind = "inter_session"` so transcript readers can distinguish routed agent instructions from external user input.
