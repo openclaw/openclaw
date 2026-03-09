@@ -110,6 +110,7 @@ import {
   setActiveEmbeddedRun,
 } from "../runs.js";
 import { buildEmbeddedSandboxInfo } from "../sandbox-info.js";
+import { waitForAgentSessionEventQueue } from "../session-event-queue.js";
 import { prewarmSessionFile, trackSessionManagerAccess } from "../session-manager-cache.js";
 import { prepareSessionManagerForRun } from "../session-manager-init.js";
 import { resolveEmbeddedRunSkillEntries } from "../skills-runtime.js";
@@ -2002,6 +2003,14 @@ export async function runEmbeddedAttempt(
             `CRITICAL: unsubscribe failed, possible resource leak: runId=${params.runId} ${String(err)}`,
           );
         }
+        await waitForAgentSessionEventQueue({
+          session: activeSession,
+          onTimeout: () => {
+            log.warn(
+              `timed out waiting for agent session event queue drain: runId=${params.runId} sessionId=${params.sessionId}`,
+            );
+          },
+        });
         clearActiveEmbeddedRun(params.sessionId, queueHandle, params.sessionKey);
         params.abortSignal?.removeEventListener?.("abort", onAbort);
       }
