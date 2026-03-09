@@ -29,8 +29,10 @@ repos:
         args:
           - --baseline
           - .secrets.baseline
-          - --exclude-files
+          - '--exclude-files'
           - '(^|/)pnpm-lock\.yaml$'
+          - '--exclude-files'
+          - '^\.venv-precommit/'
           - --exclude-lines
           - 'key_content\.include\?\("BEGIN PRIVATE KEY"\)'
           - --exclude-lines

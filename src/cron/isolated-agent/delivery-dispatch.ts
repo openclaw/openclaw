@@ -500,10 +500,7 @@ export async function dispatchCronDelivery(
       !params.skipHeartbeatDelivery &&
       !hasPendingDescendantFollowup &&
       !params.job.deleteAfterRun &&
-      !isSilentReply &&
-      (params.deliveryPayloadHasStructuredContent ||
-        params.resolvedDelivery.threadId != null ||
-        (params.resolvedDelivery.ok && !params.deliveryPayloadHasStructuredContent));
+      !isSilentReply;
     if (useDirectDelivery) {
       const directResult = await deliverViaDirect(params.resolvedDelivery);
       if (directResult) {

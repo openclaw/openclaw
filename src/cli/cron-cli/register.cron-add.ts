@@ -207,9 +207,10 @@ export function registerCronAddCommand(cron: Command) {
           }
           if (
             (opts.announce || typeof opts.deliver === "boolean") &&
-            (sessionTarget !== "isolated" || payload.kind !== "agentTurn")
+            (sessionTarget !== "isolated" || payload.kind !== "agentTurn") &&
+            !(sessionTarget === "main" && payload.kind === "systemEvent")
           ) {
-            throw new Error("--announce/--no-deliver require --session isolated.");
+            throw new Error("--announce/--no-deliver require --session isolated or main.");
           }
 
           const accountId =
@@ -217,13 +218,22 @@ export function registerCronAddCommand(cron: Command) {
               ? opts.account.trim()
               : undefined;
 
-          if (accountId && (sessionTarget !== "isolated" || payload.kind !== "agentTurn")) {
-            throw new Error("--account requires an isolated agentTurn job with delivery.");
-          }
-
           const hasDeliveryTarget =
             (typeof opts.channel === "string" && opts.channel.trim()) ||
             (typeof opts.to === "string" && opts.to.trim());
+
+          const isMainAnnounce =
+            sessionTarget === "main" &&
+            payload.kind === "systemEvent" &&
+            (hasAnnounce || hasDeliveryTarget);
+
+          if (
+            accountId &&
+            (sessionTarget !== "isolated" || payload.kind !== "agentTurn") &&
+            !isMainAnnounce
+          ) {
+            throw new Error("--account requires a job with delivery.");
+          }
           const deliveryMode =
             sessionTarget === "isolated" && payload.kind === "agentTurn"
               ? hasAnnounce
