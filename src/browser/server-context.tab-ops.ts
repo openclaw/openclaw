@@ -5,6 +5,8 @@ import type { ResolvedBrowserProfile } from "./config.js";
 import {
   assertBrowserNavigationAllowed,
   assertBrowserNavigationResultAllowed,
+  InvalidBrowserNavigationUrlError,
+  requiresInspectableBrowserNavigationRedirects,
   withBrowserNavigationPolicy,
 } from "./navigation-guard.js";
 import { getBrowserProfileCapabilities } from "./profile-capabilities.js";
@@ -151,6 +153,12 @@ export function createProfileTabOps({
           type: page.type,
         };
       }
+    }
+
+    if (requiresInspectableBrowserNavigationRedirects(state().resolved.ssrfPolicy)) {
+      throw new InvalidBrowserNavigationUrlError(
+        "Navigation blocked: strict browser SSRF policy requires Playwright-backed redirect-hop inspection",
+      );
     }
 
     const createdViaCdp = await createTargetViaCdp({

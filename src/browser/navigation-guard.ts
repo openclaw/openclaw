@@ -25,10 +25,19 @@ export type BrowserNavigationPolicyOptions = {
   ssrfPolicy?: SsrFPolicy;
 };
 
+export type BrowserNavigationRequestLike = {
+  url(): string;
+  redirectedFrom(): BrowserNavigationRequestLike | null;
+};
+
 export function withBrowserNavigationPolicy(
   ssrfPolicy?: SsrFPolicy,
 ): BrowserNavigationPolicyOptions {
   return ssrfPolicy ? { ssrfPolicy } : {};
+}
+
+export function requiresInspectableBrowserNavigationRedirects(ssrfPolicy?: SsrFPolicy): boolean {
+  return !isPrivateNetworkAllowedByPolicy(ssrfPolicy);
 }
 
 export async function assertBrowserNavigationAllowed(
@@ -100,5 +109,26 @@ export async function assertBrowserNavigationResultAllowed(
     isAllowedNonNetworkNavigationUrl(parsed)
   ) {
     await assertBrowserNavigationAllowed(opts);
+  }
+}
+
+export async function assertBrowserNavigationRedirectChainAllowed(
+  opts: {
+    request?: BrowserNavigationRequestLike | null;
+    lookupFn?: LookupFn;
+  } & BrowserNavigationPolicyOptions,
+): Promise<void> {
+  const chain: string[] = [];
+  let current = opts.request ?? null;
+  while (current) {
+    chain.push(current.url());
+    current = current.redirectedFrom();
+  }
+  for (const url of chain.toReversed()) {
+    await assertBrowserNavigationAllowed({
+      url,
+      lookupFn: opts.lookupFn,
+      ssrfPolicy: opts.ssrfPolicy,
+    });
   }
 }

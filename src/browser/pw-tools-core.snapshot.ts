@@ -2,6 +2,7 @@ import type { SsrFPolicy } from "../infra/net/ssrf.js";
 import { type AriaSnapshotNode, formatAriaSnapshot, type RawAXNode } from "./cdp.js";
 import {
   assertBrowserNavigationAllowed,
+  assertBrowserNavigationRedirectChainAllowed,
   assertBrowserNavigationResultAllowed,
   withBrowserNavigationPolicy,
 } from "./navigation-guard.js";
@@ -196,8 +197,10 @@ export async function navigateViaPlaywright(opts: {
   const timeout = Math.max(1000, Math.min(120_000, opts.timeoutMs ?? 20_000));
   let page = await getPageForTargetId(opts);
   ensurePageState(page);
+  const navigate = async () => await page.goto(url, { timeout });
+  let response;
   try {
-    await page.goto(url, { timeout });
+    response = await navigate();
   } catch (err) {
     if (!isRetryableNavigateError(err)) {
       throw err;
@@ -211,8 +214,12 @@ export async function navigateViaPlaywright(opts: {
     }).catch(() => {});
     page = await getPageForTargetId(opts);
     ensurePageState(page);
-    await page.goto(url, { timeout });
+    response = await navigate();
   }
+  await assertBrowserNavigationRedirectChainAllowed({
+    request: response?.request(),
+    ...withBrowserNavigationPolicy(opts.ssrfPolicy),
+  });
   const finalUrl = page.url();
   await assertBrowserNavigationResultAllowed({
     url: finalUrl,
