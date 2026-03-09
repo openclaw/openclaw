@@ -296,14 +296,9 @@ async function executeKill(
     }
 
     const results = await Promise.allSettled(
-      matched.map((key) =>
-        client.request<{ aborted?: boolean }>("chat.abort", { sessionKey: key }),
-      ),
+      matched.map((key) => client.request("chat.abort", { sessionKey: key })),
     );
-    const successCount = results.filter(
-      (entry) =>
-        entry.status === "fulfilled" && (entry.value as { aborted?: boolean })?.aborted !== false,
-    ).length;
+    const successCount = results.filter((entry) => entry.status === "fulfilled").length;
     if (successCount === 0) {
       const firstFailure = results.find((entry) => entry.status === "rejected");
       throw firstFailure?.reason ?? new Error("abort failed");
@@ -348,16 +343,15 @@ function resolveKillTargets(
     }
     const normalizedKey = key.toLowerCase();
     const parsed = parseAgentSessionKey(normalizedKey);
-    // For "all", only match subagents belonging to the current session's agent
-    const belongsToCurrentSession =
-      currentParsed?.agentId != null && parsed?.agentId === currentParsed.agentId;
     const isMatch =
-      (normalizedTarget === "all" && belongsToCurrentSession) ||
+      normalizedTarget === "all" ||
       normalizedKey === normalizedTarget ||
       (parsed?.agentId ?? "") === normalizedTarget ||
       normalizedKey.endsWith(`:subagent:${normalizedTarget}`) ||
       normalizedKey === `subagent:${normalizedTarget}` ||
-      (belongsToCurrentSession && normalizedKey.endsWith(`:subagent:${normalizedTarget}`));
+      (currentParsed?.agentId != null &&
+        parsed?.agentId === currentParsed.agentId &&
+        normalizedKey.endsWith(`:subagent:${normalizedTarget}`));
     if (isMatch) {
       keys.add(key);
     }
