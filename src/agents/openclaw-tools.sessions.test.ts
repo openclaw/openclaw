@@ -1031,7 +1031,7 @@ describe("sessions tools", () => {
     expect(result.details).toMatchObject({ status: "ok", reply: "done" });
   });
 
-  it("sessions_send relays round1 turns to both source and target channels in dual-channel mode", async () => {
+  it("sessions_send relays round1 turns to both source and target channels in dual-channel mode and suppresses announce", async () => {
     testConfig.session.agentToAgent.relay.enabled = true;
     testConfig.session.agentToAgent.relay.mode = "dual-channel";
     testConfig.session.agentToAgent.relay.mirrorTurns = "round1";
@@ -1119,6 +1119,7 @@ describe("sessions tools", () => {
     ).toEqual(["channel:req", "channel:req", "channel:target", "channel:target"]);
     expect(relaySends.some((entry) => (entry.message ?? "").includes("ping"))).toBe(true);
     expect(relaySends.some((entry) => (entry.message ?? "").includes("done"))).toBe(true);
+    expect(sends).toHaveLength(4);
   });
 
   it("sessions_send runs ping-pong then announces", async () => {
