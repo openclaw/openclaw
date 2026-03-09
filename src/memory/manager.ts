@@ -749,6 +749,12 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
     }
   }
 
+  /** Close all cached MemoryIndexManager instances (for process cleanup). */
+  static async closeAll(): Promise<void> {
+    const managers = [...INDEX_CACHE.values()];
+    await Promise.allSettled(managers.map((m) => m.close()));
+  }
+
   async close(): Promise<void> {
     if (this.closed) {
       return;

@@ -135,6 +135,15 @@ export async function runCli(argv: string[] = process.argv) {
   }
 
   await program.parseAsync(parseArgv);
+
+  // Close cached memory managers so their FSWatcher handles don't keep
+  // the process alive after one-shot CLI commands complete (#40365).
+  try {
+    const { MemoryIndexManager } = await import("../memory/manager.js");
+    await MemoryIndexManager.closeAll();
+  } catch {
+    // Best-effort cleanup; module may not have been loaded.
+  }
 }
 
 export function isCliMainModule(): boolean {
