@@ -3,6 +3,36 @@ import fs from "node:fs/promises";
 type SessionHeaderEntry = { type: "session"; id?: string; cwd?: string };
 type SessionMessageEntry = { type: "message"; message?: { role?: string } };
 
+export async function shouldInjectBootstrapContext(sessionFile: string): Promise<boolean> {
+  let content: string;
+  try {
+    content = await fs.readFile(sessionFile, "utf-8");
+  } catch {
+    return true;
+  }
+
+  for (const rawLine of content.split(/\r?\n/)) {
+    const line = rawLine.trim();
+    if (!line) {
+      continue;
+    }
+    try {
+      const entry = JSON.parse(line) as {
+        type?: string;
+        message?: { role?: string };
+      };
+      if (entry.type === "message" && entry.message?.role === "assistant") {
+        return false;
+      }
+    } catch {
+      // Fall back to injecting bootstrap context if the transcript cannot be parsed cleanly yet.
+      return true;
+    }
+  }
+
+  return true;
+}
+
 /**
  * pi-coding-agent SessionManager persistence quirk:
  * - If the file exists but has no assistant message, SessionManager marks itself `flushed=true`
