@@ -399,9 +399,9 @@ function normalizeMemoryText(raw: string): string {
 
 function normalizeMemoryKey(raw: string): string {
   return raw
+    .trim()
     .replace(/\s+/g, "-")
     .replace(/[^a-zA-Z0-9._:-]/g, "")
-    .trim()
     .toLowerCase();
 }
 

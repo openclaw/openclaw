@@ -523,6 +523,26 @@ describe("memory write tools", () => {
     } satisfies Partial<ToolInputError>);
   });
 
+  it("memory_upsert trims surrounding whitespace before normalizing keys", async () => {
+    const workspace = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-memory-upsert-keytrim-"));
+    const cfg = configWithWorkspace(workspace);
+    const tool = createMemoryUpsertTool({ config: cfg });
+    expect(tool).not.toBeNull();
+    if (!tool) {
+      throw new Error("tool missing");
+    }
+
+    const result = await tool.execute("call_upsert_trimmed_key", {
+      key: "  favorite food  ",
+      text: "sushi",
+      target: "longterm",
+    });
+
+    expect(result.details).toMatchObject({ key: "favorite-food" });
+    const content = await fs.readFile(path.join(workspace, "MEMORY.md"), "utf-8");
+    expect(content).toBe("- [key:favorite-food] sushi\n");
+  });
+
   it("surfaces blank memory text as ToolInputError", async () => {
     const workspace = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-memory-blank-text-"));
     const cfg = configWithWorkspace(workspace);
