@@ -137,7 +137,11 @@ export async function resolveTelegramInboundBody(params: {
   const commandAuthorized = commandGate.commandAuthorized;
   const historyKey = isGroup ? buildTelegramGroupPeerId(chatId, resolvedThreadId) : undefined;
 
-  let placeholder = resolveTelegramMediaPlaceholder(msg) ?? "";
+  // Only emit a media placeholder when media was actually resolved.
+  // When allMedia is empty (e.g. getFile() failed silently), emitting a
+  // placeholder like <media:video> is misleading — it makes it look like
+  // the agent received the media when it did not.
+  let placeholder = allMedia.length > 0 ? (resolveTelegramMediaPlaceholder(msg) ?? "") : "";
   const cachedStickerDescription = allMedia[0]?.stickerMetadata?.cachedDescription;
   const stickerSupportsVision = msg.sticker
     ? await resolveStickerVisionSupport({ cfg, agentId: routeAgentId })

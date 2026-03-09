@@ -53,6 +53,7 @@ import {
   buildTelegramParentPeer,
   resolveTelegramForumThreadId,
   resolveTelegramGroupAllowFromContext,
+  resolveTelegramMediaPlaceholder,
 } from "./bot/helpers.js";
 import type { TelegramContext } from "./bot/types.js";
 import { resolveTelegramConversationRoute } from "./conversation-route.js";
@@ -1013,6 +1014,27 @@ export const registerTelegramHandlers = ({
     if (msg.sticker && !media && !hasText) {
       logVerbose("telegram: skipping sticker-only message (unsupported sticker type)");
       return;
+    }
+
+    // When resolveMedia returns null for a message that contains media fields
+    // (e.g. video, photo), the getFile() call failed silently.  Warn the user
+    // so they know the media was not attached instead of silently proceeding
+    // with a misleading placeholder-only body.
+    if (!media && !msg.sticker && resolveTelegramMediaPlaceholder(msg)) {
+      logger.warn({ chatId }, "telegram: media resolution returned null; notifying user");
+      await withTelegramApiErrorLogging({
+        operation: "sendMessage",
+        runtime,
+        fn: () =>
+          bot.api.sendMessage(
+            chatId,
+            "⚠️ Failed to download media. The file may exceed Telegram's 20 MB download limit. Please try again or send a smaller file.",
+            {
+              reply_to_message_id: msg.message_id,
+            },
+          ),
+      }).catch(() => {});
+      // Still proceed so any accompanying text caption reaches the agent.
     }
 
     const allMedia = media
