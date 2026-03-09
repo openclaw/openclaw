@@ -530,6 +530,14 @@ export function createOpenAIWebSocketStreamFn(
       let prevResponseId = session.manager.previousResponseId;
       let inputItems: InputItem[];
 
+      const resetReplayState = (reason: string) => {
+        log.warn(`[ws-stream] session=${sessionId}: ${reason}`);
+        session.manager.previousResponseId = null;
+        prevResponseId = null;
+        session.lastContextLength = 0;
+        session.lastContextBoundaryKey = null;
+      };
+
       // Validate replay boundary before attempting incremental send.
       if (prevResponseId && session.lastContextLength > 0) {
         const boundaryIndex = session.lastContextLength - 1;
@@ -539,13 +547,9 @@ export function createOpenAIWebSocketStreamFn(
           session.lastContextBoundaryKey != null &&
           boundaryKey !== session.lastContextBoundaryKey
         ) {
-          log.warn(
-            `[ws-stream] session=${sessionId}: context boundary drift detected; clearing previous_response_id and replay cursor`,
+          resetReplayState(
+            "context boundary drift detected; clearing previous_response_id and replay cursor",
           );
-          session.manager.previousResponseId = null;
-          prevResponseId = null;
-          session.lastContextLength = 0;
-          session.lastContextBoundaryKey = null;
         }
       }
 
@@ -572,13 +576,9 @@ export function createOpenAIWebSocketStreamFn(
         const unknownOutputs = outputIds.filter((id) => !knownCalls.has(id));
 
         if (unknownOutputs.length > 0) {
-          log.warn(
-            `[ws-stream] session=${sessionId}: replay window missing matching function_call items; unknown=${unknownOutputs.join(",")}; clearing previous_response_id and replay cursor`,
+          resetReplayState(
+            `replay window missing matching function_call items; unknown=${unknownOutputs.join(",")}; clearing previous_response_id and replay cursor`,
           );
-          session.manager.previousResponseId = null;
-          prevResponseId = null;
-          session.lastContextLength = 0;
-          session.lastContextBoundaryKey = null;
           inputItems = buildFullInput(context);
         }
 
