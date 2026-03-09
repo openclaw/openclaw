@@ -120,7 +120,7 @@ export function resolveFeishuReplyPolicy(params: {
   const requireMention =
     params.groupConfig?.requireMention ?? params.globalConfig?.requireMention ?? true;
 
-  if (requireMention && params.isThreadReply) {
+  if (params.isThreadReply) {
     const threadOverride =
       params.groupConfig?.requireMentionInThread ?? params.globalConfig?.requireMentionInThread;
     if (threadOverride !== undefined) {
