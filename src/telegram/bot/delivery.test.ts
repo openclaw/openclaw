@@ -324,12 +324,12 @@ describe("deliverReplies", () => {
     });
     const bot = createBot({ sendMessage });
 
-    // Force two chunks where the first renders to empty HTML.
-    // Use a small textLimit and text that will produce an empty first chunk.
+    // Three chunks: chunk 0 is whitespace-only (skipped), chunks 1+2 are real.
+    // Small textLimit forces paragraph-boundary splitting so "   " is its own chunk.
     await deliverReplies({
       replies: [
         {
-          text: "real content here",
+          text: "   \n\nchunk one txt\n\nchunk two txt",
           channelData: {
             telegram: {
               buttons: [[{ text: "Click me", callback_data: "click" }]],
@@ -342,20 +342,21 @@ describe("deliverReplies", () => {
       runtime,
       bot,
       replyToMode: "off",
-      textLimit: 4000,
+      textLimit: 20,
     });
 
-    // At minimum sendMessage should have been called and the last call
-    // should carry the reply_markup when buttons are present.
-    expect(sendMessage).toHaveBeenCalled();
-    const firstCall = sendMessage.mock.calls[0];
-    expect(firstCall[2]).toEqual(
+    // Chunk 0 (whitespace) is skipped — only 2 sendMessage calls for real content.
+    expect(sendMessage).toHaveBeenCalledTimes(2);
+    // First sendMessage call (chunk 1, the first non-empty chunk) should carry reply_markup.
+    expect(sendMessage.mock.calls[0][2]).toEqual(
       expect.objectContaining({
         reply_markup: {
           inline_keyboard: [[{ text: "Click me", callback_data: "click" }]],
         },
       }),
     );
+    // Second sendMessage call (chunk 2) should NOT have reply_markup.
+    expect(sendMessage.mock.calls[1][2]).not.toHaveProperty("reply_markup");
   });
 
   it("falls back to plain text when Telegram rejects with 'text must be non-empty' (Mode C)", async () => {

@@ -4,11 +4,11 @@ import { formatErrorMessage } from "../../infra/errors.js";
 import type { RuntimeEnv } from "../../runtime.js";
 import { withTelegramApiErrorLogging } from "../api-logging.js";
 import { markdownToTelegramHtml } from "../format.js";
+import { EMPTY_TEXT_ERR_RE } from "../network-errors.js";
 import { buildInlineKeyboard } from "../send.js";
 import { buildTelegramThreadParams, type TelegramThreadSpec } from "./helpers.js";
 
 const PARSE_ERR_RE = /can't parse entities|parse entities|find end of the entity/i;
-const EMPTY_TEXT_ERR_RE = /message text is empty|text must be non-empty/i;
 const THREAD_NOT_FOUND_RE = /message thread not found/i;
 
 function isTelegramThreadNotFoundError(err: unknown): boolean {
