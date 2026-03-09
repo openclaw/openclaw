@@ -108,6 +108,7 @@ const supportsVmForks = Number.isFinite(nodeMajor) ? nodeMajor !== 24 : true;
 const useVmForks =
   process.env.OPENCLAW_TEST_VM_FORKS === "1" ||
   (process.env.OPENCLAW_TEST_VM_FORKS !== "0" && !isWindows && supportsVmForks && !lowMemLocalHost);
+const useVmForksForUnitAndExtensions = useVmForks && !(isCI && isMacOS);
 const disableIsolation = process.env.OPENCLAW_TEST_NO_ISOLATE === "1";
 const includeGatewaySuite = process.env.OPENCLAW_TEST_INCLUDE_GATEWAY === "1";
 const includeExtensionsSuite = process.env.OPENCLAW_TEST_INCLUDE_EXTENSIONS === "1";
@@ -130,7 +131,7 @@ const runs = [
             "run",
             "--config",
             "vitest.unit.config.ts",
-            `--pool=${useVmForks ? "vmForks" : "forks"}`,
+            `--pool=${useVmForksForUnitAndExtensions ? "vmForks" : "forks"}`,
             ...(disableIsolation ? ["--isolate=false"] : []),
             ...unitIsolatedFiles.flatMap((file) => ["--exclude", file]),
           ],
@@ -155,7 +156,7 @@ const runs = [
             "run",
             "--config",
             "vitest.unit.config.ts",
-            `--pool=${useVmForks ? "vmForks" : "forks"}`,
+            `--pool=${useVmForksForUnitAndExtensions ? "vmForks" : "forks"}`,
             ...(disableIsolation ? ["--isolate=false"] : []),
           ],
         },
@@ -169,7 +170,7 @@ const runs = [
             "run",
             "--config",
             "vitest.extensions.config.ts",
-            ...(useVmForks ? ["--pool=vmForks"] : []),
+            ...(useVmForksForUnitAndExtensions ? ["--pool=vmForks"] : []),
           ],
         },
       ]
