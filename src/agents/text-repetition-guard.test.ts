@@ -12,18 +12,17 @@ describe("text-repetition-guard", () => {
   // -----------------------------------------------------------------------
 
   it("detects 'Wait/Check/Done/Sent' loop (real Gemini failure mode)", () => {
+    // Real failure mode: model emits same boilerplate without variation.
     let text = "I will now verify each item:\n";
     for (let i = 0; i < 30; i++) {
-      text += `Wait, I should check item ${i}... Done. Sent.\n`;
+      text += "Wait, I should check this item... Done. Sent.\n";
     }
     const result = detectTextRepetition(text, cfg);
     expect(result.looping).toBe(true);
   });
 
   it("detects consecutive identical lines", () => {
-    const text =
-      "Starting analysis...\n" +
-      "Wait, I should check this again.\n".repeat(20);
+    const text = "Starting analysis...\n" + "Wait, I should check this again.\n".repeat(20);
     const result = detectTextRepetition(text, cfg);
     expect(result.looping).toBe(true);
     if (result.looping) {
@@ -32,9 +31,7 @@ describe("text-repetition-guard", () => {
   });
 
   it("detects suffix cycle pattern", () => {
-    const text =
-      "Let me verify the details. ".repeat(5) +
-      "Check. Verify. Done. ".repeat(30);
+    const text = "Let me verify the details. ".repeat(5) + "Check. Verify. Done. ".repeat(30);
     const result = detectTextRepetition(text, cfg);
     expect(result.looping).toBe(true);
     if (result.looping) {
@@ -43,9 +40,9 @@ describe("text-repetition-guard", () => {
   });
 
   it("detects line-group cycle", () => {
-    let text = "Starting:\n";
-    for (let i = 0; i < 15; i++) {
-      text += "Step A: check\nStep B: verify\n";
+    let text = "Starting the verification process now:\n";
+    for (let i = 0; i < 30; i++) {
+      text += "Step A: checking the verification status\nStep B: verifying the check result\n";
     }
     const result = detectTextRepetition(text, cfg);
     expect(result.looping).toBe(true);
@@ -101,9 +98,7 @@ describe("text-repetition-guard", () => {
     }
     code += "```\n";
     const padded =
-      code.length >= 700
-        ? code
-        : code + "\nThe code above handles data fetching.".repeat(5);
+      code.length >= 700 ? code : code + "\nThe code above handles data fetching.".repeat(5);
     const result = detectTextRepetition(padded, cfg);
     expect(result.looping).toBe(false);
   });

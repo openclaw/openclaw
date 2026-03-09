@@ -17,6 +17,8 @@ import {
   formatReasoningMessage,
   promoteThinkingTagsToBlocks,
 } from "./pi-embedded-utils.js";
+import { resolveTextRepetitionGuardConfig } from "./pi-tools.js";
+import { detectTextRepetition } from "./text-repetition-guard.js";
 
 const stripTrailingDirective = (text: string): string => {
   const openIndex = text.lastIndexOf("[[");
@@ -168,6 +170,27 @@ export function handleMessageUpdate(
       ctx.blockChunker.append(chunk);
     } else {
       ctx.state.blockBuffer += chunk;
+    }
+
+    // Text repetition guard: throttle checks to every ~200 chars of new content.
+    const TEXT_REPETITION_CHECK_INTERVAL = 200;
+    if (
+      ctx.state.deltaBuffer.length - ctx.state.textRepetitionLastCheckedLen >=
+      TEXT_REPETITION_CHECK_INTERVAL
+    ) {
+      ctx.state.textRepetitionLastCheckedLen = ctx.state.deltaBuffer.length;
+      const guardConfig = resolveTextRepetitionGuardConfig({
+        cfg: ctx.params.config,
+        agentId: ctx.params.agentId,
+      });
+      // Guard defaults to enabled when no config is present.
+      if (guardConfig?.enabled !== false) {
+        const result = detectTextRepetition(ctx.state.deltaBuffer, guardConfig);
+        if (result.looping) {
+          ctx.log.warn(`Text repetition guard triggered: ${result.message}`);
+          void ctx.params.session.abort();
+        }
+      }
     }
   }
 
@@ -429,6 +452,7 @@ export function handleMessageEnd(
   }
 
   ctx.state.deltaBuffer = "";
+  ctx.state.textRepetitionLastCheckedLen = 0;
   ctx.state.blockBuffer = "";
   ctx.blockChunker?.reset();
   ctx.state.blockState.thinking = false;
