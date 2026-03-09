@@ -104,6 +104,8 @@ x-i18n:
   - [我设置了 `gateway.bind: "lan"`（或 `"tailnet"`），现在什么都监听不了 / UI 显示未授权](#i-set-gatewaybind-lan-or-tailnet-and-now-nothing-listens-the-ui-says-unauthorized)
   - [为什么现在在 localhost 也需要令牌？](#why-do-i-need-a-token-on-localhost-now)
   - [更改配置后需要重启吗？](#do-i-have-to-restart-after-changing-config)
+  - [如何禁用有趣的 CLI 标语？](#how-do-i-disable-funny-cli-taglines)
+  - [如何通过脚本设置自定义标语？](#how-do-i-set-a-custom-tagline-from-a-script)
   - [如何启用网络搜索（和网页抓取）？](#how-do-i-enable-web-search-and-web-fetch)
   - [config.apply 清空了我的配置，如何恢复和避免？](#configapply-wiped-my-config-how-do-i-recover-and-avoid-this)
   - [如何运行一个中心 Gateway 网关配合跨设备的专用工作节点？](#how-do-i-run-a-central-gateway-with-specialized-workers-across-devices)
@@ -1263,6 +1265,58 @@ Gateway 网关监视配置文件并支持热重载：
 
 - `gateway.reload.mode: "hybrid"`（默认）：安全更改热应用，关键更改重启
 - 也支持 `hot`、`restart`、`off`
+
+### 如何禁用有趣的 CLI 标语
+
+在配置中设置 `cli.banner.taglineMode`：
+
+```json5
+{
+  cli: {
+    banner: {
+      taglineMode: "off", // random | default | off | script
+    },
+  },
+}
+```
+
+- `off`：隐藏标语文字，但保留横幅标题/版本行。
+- `default`：每次使用固定标语 `All your chats, one OpenClaw.`。
+- `random`：轮换有趣/季节性标语（默认行为）。
+- `script`：从 JS 文件加载标语（详见下文）。
+- 如需完全隐藏横幅，设置环境变量 `OPENCLAW_HIDE_BANNER=1`。
+
+### 如何通过脚本设置自定义标语
+
+将 `taglineMode` 设为 `"script"` 并将 `taglineScriptFile` 指向一个 JS 文件：
+
+```json5
+{
+  cli: {
+    banner: {
+      taglineMode: "script",
+      taglineScriptFile: "~/.openclaw/tagline.js",
+    },
+  },
+}
+```
+
+文件的默认导出可以是**字符串**或**（可能是异步的）函数**（返回字符串）：
+
+```js
+// tagline.js — 静态字符串
+export default "Brought to you by cowsay.";
+```
+
+```js
+// tagline.js — 每次启动时运行 cowsay
+import { execSync } from "node:child_process";
+export default function () {
+  return execSync("cowsay 'OpenClaw ready'", { encoding: "utf8" }).trim();
+}
+```
+
+若脚本抛出异常，或其导出既非字符串也非函数，标语将静默置空。
 
 ### 如何启用网络搜索（和网页抓取）
 

@@ -112,7 +112,7 @@ export function registerPreActionHooks(program: Command, programVersion: string)
       commandPath[0] === "completion" ||
       (commandPath[0] === "plugins" && commandPath[1] === "update");
     if (!hideBanner) {
-      emitCliBanner(programVersion);
+      await emitCliBanner(programVersion);
     }
     const verbose = getVerboseFlag(argv, { includeDebug: true });
     setVerbose(verbose);

@@ -55,7 +55,9 @@ export const FIELD_HELP: Record<string, string> = {
   "cli.banner":
     "CLI startup banner controls for title/version line and tagline style behavior. Keep banner enabled for fast version/context checks, then tune tagline mode to your preferred noise level.",
   "cli.banner.taglineMode":
-    'Controls tagline style in the CLI startup banner: "random" (default) picks from the rotating tagline pool, "default" always shows the neutral default tagline, and "off" hides tagline text while keeping the banner version line.',
+    'Controls tagline style in the CLI startup banner: "random" (default) picks from the rotating tagline pool, "default" always shows the neutral default tagline, "off" hides tagline text while keeping the banner version line, and "script" loads the tagline from a JS file (set cli.banner.taglineScriptFile to the file path).',
+  "cli.banner.taglineScriptFile":
+    'Path to a JS file whose default export provides the tagline when cli.banner.taglineMode is "script". Supports ~ for the home directory. The export may be a plain string or a (possibly async) function returning a string.',
   update:
     "Update-channel and startup-check behavior for keeping OpenClaw runtime versions current. Use conservative channels in production and more experimental channels only in controlled environments.",
   "update.channel": 'Update channel for git + npm installs ("stable", "beta", or "dev").',

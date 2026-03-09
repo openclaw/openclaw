@@ -1,5 +1,5 @@
 const DEFAULT_TAGLINE = "All your chats, one OpenClaw.";
-export type TaglineMode = "random" | "default" | "off";
+export type TaglineMode = "random" | "default" | "off" | "script";
 
 const HOLIDAY_TAGLINES = {
   newYear:
@@ -250,6 +250,10 @@ export interface TaglineOptions {
   random?: () => number;
   now?: () => Date;
   mode?: TaglineMode;
+  /** Absolute or relative path to a JS file used when mode is "script". */
+  scriptPath?: string;
+  /** Pre-resolved tagline string from a script; populated before calling pickTagline. */
+  resolvedTagline?: string;
 }
 
 export function activeTaglines(options: TaglineOptions = {}): string[] {
@@ -261,12 +265,37 @@ export function activeTaglines(options: TaglineOptions = {}): string[] {
   return filtered.length > 0 ? filtered : TAGLINES;
 }
 
+/**
+ * Load a JS file's default export and resolve it to a tagline string.
+ * The export may be a string, a plain function, or an async function.
+ */
+export async function resolveScriptTagline(scriptPath: string): Promise<string> {
+  const { pathToFileURL } = await import("node:url");
+  const { resolveUserPath } = await import("../utils.js");
+  // Expand ~ and resolve to an absolute path, consistent with other path-ish config fields.
+  const absolutePath = resolveUserPath(scriptPath) || scriptPath;
+  const mod = await import(pathToFileURL(absolutePath).href);
+  const exported = mod.default;
+  if (typeof exported === "string") {
+    return exported;
+  }
+  if (typeof exported === "function") {
+    const result = await exported();
+    return typeof result === "string" ? result : "";
+  }
+  return "";
+}
+
 export function pickTagline(options: TaglineOptions = {}): string {
   if (options.mode === "off") {
     return "";
   }
   if (options.mode === "default") {
     return DEFAULT_TAGLINE;
+  }
+  // Script tagline is pre-resolved by the caller (resolveScriptTagline) before pickTagline is invoked.
+  if (options.mode === "script") {
+    return options.resolvedTagline ?? "";
   }
   const env = options.env ?? process.env;
   const override = env?.OPENCLAW_TAGLINE_INDEX;
