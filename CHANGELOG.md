@@ -8,6 +8,7 @@ Docs: https://docs.openclaw.ai
 
 - Browser/SSRF: block private-network intermediate redirect hops in strict browser navigation flows and fail closed when remote tab-open paths cannot inspect redirect chains. Thanks @zpbrent.
 - MS Teams/authz: keep `groupPolicy: "allowlist"` enforcing sender allowlists even when a team/channel route allowlist is configured, so route matches no longer widen group access to every sender in that route. Thanks @zpbrent.
+- Agents/loop-detection: clear stale tool call history between heartbeat cycles to prevent false positive loop detection. (#40656) thanks @riftzen-bit.
 
 ## 2026.3.8
 
