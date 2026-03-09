@@ -156,61 +156,67 @@ async function expectCronEditWithScheduleLookupExit(
   ).rejects.toThrow("__exit__:1");
 }
 
+async function runCronRunAndCaptureExit(params: {
+  ran?: boolean;
+  enqueued?: boolean;
+  args?: string[];
+}) {
+  resetGatewayMock();
+  callGatewayFromCli.mockImplementation(
+    async (method: string, _opts: unknown, callParams?: unknown) => {
+      if (method === "cron.status") {
+        return { enabled: true };
+      }
+      if (method === "cron.run") {
+        return {
+          ok: true,
+          params: callParams,
+          ...(typeof params.ran === "boolean" ? { ran: params.ran } : {}),
+          ...(typeof params.enqueued === "boolean" ? { enqueued: params.enqueued } : {}),
+        };
+      }
+      return { ok: true, params: callParams };
+    },
+  );
+
+  const runtimeModule = await import("../runtime.js");
+  const runtime = runtimeModule.defaultRuntime as { exit: (code: number) => void };
+  const originalExit = runtime.exit;
+  const exitSpy = vi.fn();
+  runtime.exit = exitSpy;
+  try {
+    const program = buildProgram();
+    await program.parseAsync(params.args ?? ["cron", "run", "job-1"], { from: "user" });
+  } finally {
+    runtime.exit = originalExit;
+  }
+  const runCall = callGatewayFromCli.mock.calls.find((call) => call[0] === "cron.run");
+  return {
+    exitSpy,
+    runOpts: (runCall?.[1] ?? {}) as { timeout?: string },
+  };
+}
+
 describe("cron cli", () => {
-  it("exits 0 for cron run when job executes successfully", async () => {
-    resetGatewayMock();
-    callGatewayFromCli.mockImplementation(
-      async (method: string, _opts: unknown, params?: unknown) => {
-        if (method === "cron.status") {
-          return { enabled: true };
-        }
-        if (method === "cron.run") {
-          return { ok: true, params, ran: true };
-        }
-        return { ok: true, params };
-      },
-    );
-
-    const runtimeModule = await import("../runtime.js");
-    const runtime = runtimeModule.defaultRuntime as { exit: (code: number) => void };
-    const originalExit = runtime.exit;
-    const exitSpy = vi.fn();
-    runtime.exit = exitSpy;
-    try {
-      const program = buildProgram();
-      await program.parseAsync(["cron", "run", "job-1"], { from: "user" });
-      expect(exitSpy).toHaveBeenCalledWith(0);
-    } finally {
-      runtime.exit = originalExit;
-    }
-  });
-
-  it("exits 1 for cron run when job does not execute", async () => {
-    resetGatewayMock();
-    callGatewayFromCli.mockImplementation(
-      async (method: string, _opts: unknown, params?: unknown) => {
-        if (method === "cron.status") {
-          return { enabled: true };
-        }
-        if (method === "cron.run") {
-          return { ok: true, params, ran: false };
-        }
-        return { ok: true, params };
-      },
-    );
-
-    const runtimeModule = await import("../runtime.js");
-    const runtime = runtimeModule.defaultRuntime as { exit: (code: number) => void };
-    const originalExit = runtime.exit;
-    const exitSpy = vi.fn();
-    runtime.exit = exitSpy;
-    try {
-      const program = buildProgram();
-      await program.parseAsync(["cron", "run", "job-1"], { from: "user" });
-      expect(exitSpy).toHaveBeenCalledWith(1);
-    } finally {
-      runtime.exit = originalExit;
-    }
+  it.each([
+    {
+      name: "exits 0 for cron run when job executes successfully",
+      ran: true,
+      expectedExitCode: 0,
+    },
+    {
+      name: "exits 0 for cron run when job is queued successfully",
+      enqueued: true,
+      expectedExitCode: 0,
+    },
+    {
+      name: "exits 1 for cron run when job does not execute",
+      ran: false,
+      expectedExitCode: 1,
+    },
+  ])("$name", async ({ ran, enqueued, expectedExitCode }) => {
+    const { exitSpy } = await runCronRunAndCaptureExit({ ran, enqueued });
+    expect(exitSpy).toHaveBeenCalledWith(expectedExitCode);
   });
 
   it("trims model and thinking on cron add", { timeout: CRON_CLI_TEST_TIMEOUT_MS }, async () => {
@@ -685,5 +691,41 @@ describe("cron cli", () => {
     const updateCall = callGatewayFromCli.mock.calls.find((call) => call[0] === "cron.update");
     const patch = updateCall?.[2] as { patch?: { failureAlert?: boolean } };
     expect(patch?.patch?.failureAlert).toBe(false);
+  });
+
+  it("patches failure alert mode/accountId on cron edit", async () => {
+    callGatewayFromCli.mockClear();
+
+    const program = buildProgram();
+
+    await program.parseAsync(
+      [
+        "cron",
+        "edit",
+        "job-1",
+        "--failure-alert-after",
+        "1",
+        "--failure-alert-mode",
+        "webhook",
+        "--failure-alert-account-id",
+        "bot-a",
+      ],
+      { from: "user" },
+    );
+
+    const updateCall = callGatewayFromCli.mock.calls.find((call) => call[0] === "cron.update");
+    const patch = updateCall?.[2] as {
+      patch?: {
+        failureAlert?: {
+          after?: number;
+          mode?: "announce" | "webhook";
+          accountId?: string;
+        };
+      };
+    };
+
+    expect(patch?.patch?.failureAlert?.after).toBe(1);
+    expect(patch?.patch?.failureAlert?.mode).toBe("webhook");
+    expect(patch?.patch?.failureAlert?.accountId).toBe("bot-a");
   });
 });

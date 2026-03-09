@@ -1,6 +1,7 @@
 import type { SystemRunApprovalPlan } from "./exec-approvals.js";
 import { normalizeSystemRunApprovalPlan } from "./system-run-approval-binding.js";
 import { formatExecCommand, resolveSystemRunCommand } from "./system-run-command.js";
+import { normalizeNonEmptyString, normalizeStringArray } from "./system-run-normalize.js";
 
 type PreparedRunPayload = {
   cmdText: string;
@@ -32,18 +33,6 @@ type SystemRunApprovalRuntimeContext =
       details?: Record<string, unknown>;
     };
 
-function normalizeString(value: unknown): string | null {
-  if (typeof value !== "string") {
-    return null;
-  }
-  const trimmed = value.trim();
-  return trimmed ? trimmed : null;
-}
-
-function normalizeStringArray(value: unknown): string[] {
-  return Array.isArray(value) ? value.map((entry) => String(entry)) : [];
-}
-
 function normalizeCommandText(value: unknown): string {
   return typeof value === "string" ? value : "";
 }
@@ -53,7 +42,7 @@ export function parsePreparedSystemRunPayload(payload: unknown): PreparedRunPayl
     return null;
   }
   const raw = payload as { cmdText?: unknown; plan?: unknown };
-  const cmdText = normalizeString(raw.cmdText);
+  const cmdText = normalizeNonEmptyString(raw.cmdText);
   const plan = normalizeSystemRunApprovalPlan(raw.plan);
   if (!cmdText || !plan) {
     return null;
@@ -70,7 +59,7 @@ export function resolveSystemRunApprovalRequestContext(params: {
   agentId?: unknown;
   sessionKey?: unknown;
 }): SystemRunApprovalRequestContext {
-  const host = normalizeString(params.host) ?? "";
+  const host = normalizeNonEmptyString(params.host) ?? "";
   const plan = host === "node" ? normalizeSystemRunApprovalPlan(params.systemRunPlan) : null;
   const fallbackArgv = normalizeStringArray(params.commandArgv);
   const fallbackCommand = normalizeCommandText(params.command);
@@ -78,9 +67,9 @@ export function resolveSystemRunApprovalRequestContext(params: {
     plan,
     commandArgv: plan?.argv ?? (fallbackArgv.length > 0 ? fallbackArgv : undefined),
     commandText: plan ? (plan.rawCommand ?? formatExecCommand(plan.argv)) : fallbackCommand,
-    cwd: plan?.cwd ?? normalizeString(params.cwd),
-    agentId: plan?.agentId ?? normalizeString(params.agentId),
-    sessionKey: plan?.sessionKey ?? normalizeString(params.sessionKey),
+    cwd: plan?.cwd ?? normalizeNonEmptyString(params.cwd),
+    agentId: plan?.agentId ?? normalizeNonEmptyString(params.agentId),
+    sessionKey: plan?.sessionKey ?? normalizeNonEmptyString(params.sessionKey),
   };
 }
 
@@ -115,9 +104,9 @@ export function resolveSystemRunApprovalRuntimeContext(params: {
     ok: true,
     plan: null,
     argv: command.argv,
-    cwd: normalizeString(params.cwd),
-    agentId: normalizeString(params.agentId),
-    sessionKey: normalizeString(params.sessionKey),
-    rawCommand: normalizeString(params.rawCommand),
+    cwd: normalizeNonEmptyString(params.cwd),
+    agentId: normalizeNonEmptyString(params.agentId),
+    sessionKey: normalizeNonEmptyString(params.sessionKey),
+    rawCommand: normalizeNonEmptyString(params.rawCommand),
   };
 }

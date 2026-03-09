@@ -1,9 +1,20 @@
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
-import type { ClawdbotConfig } from "openclaw/plugin-sdk";
+import type { ClawdbotConfig } from "openclaw/plugin-sdk/feishu";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  createFeishuClientMockModule,
+  createFeishuRuntimeMockModule,
+} from "./monitor.test-mocks.js";
 
 const probeFeishuMock = vi.hoisted(() => vi.fn());
+
+vi.mock("./probe.js", () => ({
+  probeFeishu: probeFeishuMock,
+}));
+
+vi.mock("./client.js", () => createFeishuClientMockModule());
+vi.mock("./runtime.js", () => createFeishuRuntimeMockModule());
 
 vi.mock("@larksuiteoapi/node-sdk", () => ({
   adaptDefault: vi.fn(
@@ -12,15 +23,6 @@ vi.mock("@larksuiteoapi/node-sdk", () => ({
       res.end("ok");
     },
   ),
-}));
-
-vi.mock("./probe.js", () => ({
-  probeFeishu: probeFeishuMock,
-}));
-
-vi.mock("./client.js", () => ({
-  createFeishuWSClient: vi.fn(() => ({ start: vi.fn() })),
-  createEventDispatcher: vi.fn(() => ({ register: vi.fn() })),
 }));
 
 import {
@@ -71,7 +73,7 @@ function buildConfig(params: {
           [params.accountId]: {
             enabled: true,
             appId: "cli_test",
-            appSecret: "secret_test",
+            appSecret: "secret_test", // pragma: allowlist secret
             connectionMode: "webhook",
             webhookHost: "127.0.0.1",
             webhookPort: params.port,

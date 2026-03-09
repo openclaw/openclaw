@@ -83,7 +83,7 @@ export function resolveTelegramPreviewStreamMode(
   if (typeof params.streaming === "boolean") {
     return params.streaming ? "partial" : "off";
   }
-  return "off";
+  return "partial";
 }
 
 export function resolveDiscordPreviewStreamMode(
@@ -141,4 +141,18 @@ export function resolveSlackNativeStreaming(
     return params.streaming;
   }
   return true;
+}
+
+export function formatSlackStreamModeMigrationMessage(
+  pathPrefix: string,
+  resolvedStreaming: string,
+): string {
+  return `Moved ${pathPrefix}.streamMode → ${pathPrefix}.streaming (${resolvedStreaming}).`;
+}
+
+export function formatSlackStreamingBooleanMigrationMessage(
+  pathPrefix: string,
+  resolvedNativeStreaming: boolean,
+): string {
+  return `Moved ${pathPrefix}.streaming (boolean) → ${pathPrefix}.nativeStreaming (${resolvedNativeStreaming}).`;
 }

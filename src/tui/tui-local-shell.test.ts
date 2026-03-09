@@ -12,62 +12,63 @@ const createSelector = () => {
   return selector;
 };
 
+function createShellHarness(params?: {
+  spawnCommand?: typeof import("node:child_process").spawn;
+  env?: Record<string, string>;
+}) {
+  const messages: string[] = [];
+  const chatLog = {
+    addSystem: (line: string) => {
+      messages.push(line);
+    },
+  };
+  const tui = { requestRender: vi.fn() };
+  const openOverlay = vi.fn();
+  const closeOverlay = vi.fn();
+  let lastSelector: ReturnType<typeof createSelector> | null = null;
+  const createSelectorSpy = vi.fn(() => {
+    lastSelector = createSelector();
+    return lastSelector;
+  });
+  const spawnCommand = params?.spawnCommand ?? vi.fn();
+  const { runLocalShellLine } = createLocalShellRunner({
+    chatLog,
+    tui,
+    openOverlay,
+    closeOverlay,
+    createSelector: createSelectorSpy,
+    spawnCommand,
+    ...(params?.env ? { env: params.env } : {}),
+  });
+  return {
+    messages,
+    openOverlay,
+    createSelectorSpy,
+    spawnCommand,
+    runLocalShellLine,
+    getLastSelector: () => lastSelector,
+  };
+}
+
 describe("createLocalShellRunner", () => {
   it("logs denial on subsequent ! attempts without re-prompting", async () => {
-    const messages: string[] = [];
-    const chatLog = {
-      addSystem: (line: string) => {
-        messages.push(line);
-      },
-    };
-    const tui = { requestRender: vi.fn() };
-    const openOverlay = vi.fn();
-    const closeOverlay = vi.fn();
-    let lastSelector: ReturnType<typeof createSelector> | null = null;
-    const createSelectorSpy = vi.fn(() => {
-      lastSelector = createSelector();
-      return lastSelector;
-    });
-    const spawnCommand = vi.fn();
+    const harness = createShellHarness();
 
-    const { runLocalShellLine } = createLocalShellRunner({
-      chatLog,
-      tui,
-      openOverlay,
-      closeOverlay,
-      createSelector: createSelectorSpy,
-      spawnCommand,
-    });
-
-    const firstRun = runLocalShellLine("!ls");
-    expect(openOverlay).toHaveBeenCalledTimes(1);
-    const selector = lastSelector as ReturnType<typeof createSelector> | null;
+    const firstRun = harness.runLocalShellLine("!ls");
+    expect(harness.openOverlay).toHaveBeenCalledTimes(1);
+    const selector = harness.getLastSelector();
     selector?.onSelect?.({ value: "no", label: "No" });
     await firstRun;
 
-    await runLocalShellLine("!pwd");
+    await harness.runLocalShellLine("!pwd");
 
-    expect(messages).toContain("local shell: not enabled");
-    expect(messages).toContain("local shell: not enabled for this session");
-    expect(createSelectorSpy).toHaveBeenCalledTimes(1);
-    expect(spawnCommand).not.toHaveBeenCalled();
+    expect(harness.messages).toContain("local shell: not enabled");
+    expect(harness.messages).toContain("local shell: not enabled for this session");
+    expect(harness.createSelectorSpy).toHaveBeenCalledTimes(1);
+    expect(harness.spawnCommand).not.toHaveBeenCalled();
   });
 
   it("sets OPENCLAW_SHELL when running local shell commands", async () => {
-    const messages: string[] = [];
-    const chatLog = {
-      addSystem: (line: string) => {
-        messages.push(line);
-      },
-    };
-    const tui = { requestRender: vi.fn() };
-    const openOverlay = vi.fn();
-    const closeOverlay = vi.fn();
-    let lastSelector: ReturnType<typeof createSelector> | null = null;
-    const createSelectorSpy = vi.fn(() => {
-      lastSelector = createSelector();
-      return lastSelector;
-    });
     const spawnCommand = vi.fn((_command: string, _options: unknown) => {
       const stdout = new EventEmitter();
       const stderr = new EventEmitter();
@@ -82,27 +83,22 @@ describe("createLocalShellRunner", () => {
       };
     });
 
-    const { runLocalShellLine } = createLocalShellRunner({
-      chatLog,
-      tui,
-      openOverlay,
-      closeOverlay,
-      createSelector: createSelectorSpy,
+    const harness = createShellHarness({
       spawnCommand: spawnCommand as unknown as typeof import("node:child_process").spawn,
       env: { PATH: "/tmp/bin", USER: "dev" },
     });
 
-    const firstRun = runLocalShellLine("!echo hi");
-    expect(openOverlay).toHaveBeenCalledTimes(1);
-    const selector = lastSelector as ReturnType<typeof createSelector> | null;
+    const firstRun = harness.runLocalShellLine("!echo hi");
+    expect(harness.openOverlay).toHaveBeenCalledTimes(1);
+    const selector = harness.getLastSelector();
     selector?.onSelect?.({ value: "yes", label: "Yes" });
     await firstRun;
 
-    expect(createSelectorSpy).toHaveBeenCalledTimes(1);
+    expect(harness.createSelectorSpy).toHaveBeenCalledTimes(1);
     expect(spawnCommand).toHaveBeenCalledTimes(1);
     const spawnOptions = spawnCommand.mock.calls[0]?.[1] as { env?: Record<string, string> };
     expect(spawnOptions.env?.OPENCLAW_SHELL).toBe("tui-local");
     expect(spawnOptions.env?.PATH).toBe("/tmp/bin");
-    expect(messages).toContain("local shell: enabled for this session");
+    expect(harness.messages).toContain("local shell: enabled for this session");
   });
 });

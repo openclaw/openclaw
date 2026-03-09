@@ -1,19 +1,40 @@
 import crypto from "node:crypto";
-import type { SystemRunApprovalBinding, SystemRunApprovalPlan } from "./exec-approvals.js";
+import type {
+  SystemRunApprovalBinding,
+  SystemRunApprovalFileOperand,
+  SystemRunApprovalPlan,
+} from "./exec-approvals.js";
 import { normalizeEnvVarKey } from "./host-env-security.js";
+import { normalizeNonEmptyString, normalizeStringArray } from "./system-run-normalize.js";
 
 type NormalizedSystemRunEnvEntry = [key: string, value: string];
 
-function normalizeString(value: unknown): string | null {
-  if (typeof value !== "string") {
+function normalizeSystemRunApprovalFileOperand(
+  value: unknown,
+): SystemRunApprovalFileOperand | null | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
     return null;
   }
-  const trimmed = value.trim();
-  return trimmed ? trimmed : null;
-}
-
-function normalizeStringArray(value: unknown): string[] {
-  return Array.isArray(value) ? value.map((entry) => String(entry)) : [];
+  const candidate = value as Record<string, unknown>;
+  const argvIndex =
+    typeof candidate.argvIndex === "number" &&
+    Number.isInteger(candidate.argvIndex) &&
+    candidate.argvIndex >= 0
+      ? candidate.argvIndex
+      : null;
+  const filePath = normalizeNonEmptyString(candidate.path);
+  const sha256 = normalizeNonEmptyString(candidate.sha256);
+  if (argvIndex === null || !filePath || !sha256) {
+    return null;
+  }
+  return {
+    argvIndex,
+    path: filePath,
+    sha256,
+  };
 }
 
 export function normalizeSystemRunApprovalPlan(value: unknown): SystemRunApprovalPlan | null {
@@ -25,12 +46,17 @@ export function normalizeSystemRunApprovalPlan(value: unknown): SystemRunApprova
   if (argv.length === 0) {
     return null;
   }
+  const mutableFileOperand = normalizeSystemRunApprovalFileOperand(candidate.mutableFileOperand);
+  if (candidate.mutableFileOperand !== undefined && mutableFileOperand === null) {
+    return null;
+  }
   return {
     argv,
-    cwd: normalizeString(candidate.cwd),
-    rawCommand: normalizeString(candidate.rawCommand),
-    agentId: normalizeString(candidate.agentId),
-    sessionKey: normalizeString(candidate.sessionKey),
+    cwd: normalizeNonEmptyString(candidate.cwd),
+    rawCommand: normalizeNonEmptyString(candidate.rawCommand),
+    agentId: normalizeNonEmptyString(candidate.agentId),
+    sessionKey: normalizeNonEmptyString(candidate.sessionKey),
+    mutableFileOperand: mutableFileOperand ?? undefined,
   };
 }
 
@@ -82,9 +108,9 @@ export function buildSystemRunApprovalBinding(params: {
   return {
     binding: {
       argv: normalizeStringArray(params.argv),
-      cwd: normalizeString(params.cwd),
-      agentId: normalizeString(params.agentId),
-      sessionKey: normalizeString(params.sessionKey),
+      cwd: normalizeNonEmptyString(params.cwd),
+      agentId: normalizeNonEmptyString(params.agentId),
+      sessionKey: normalizeNonEmptyString(params.sessionKey),
       envHash: envBinding.envHash,
     },
     envKeys: envBinding.envKeys,
