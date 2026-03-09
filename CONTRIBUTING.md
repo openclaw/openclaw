@@ -70,6 +70,9 @@ Welcome to the lobster tank! 🦞
 
 - **Altay** - Agents, CLI, error handling
   - GitHub [@altaywtf](https://github.com/altaywtf) · X: [@altaywtf](https://x.com/altaywtf)
+
+- **Robin Waslander** - Security, PR triage, bug fixes
+  - GitHub: [@hydro13](https://github.com/hydro13) · X: [@Robin_waslander](https://x.com/Robin_waslander)
  
 ## How to Contribute
 
