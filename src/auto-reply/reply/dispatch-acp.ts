@@ -63,6 +63,8 @@ function resolveAcpPromptText(ctx: FinalizedMsgContext): string {
   ]).trim();
 }
 
+const ACP_ATTACHMENT_MAX_BYTES = 10 * 1024 * 1024; // 10 MB — consistent with Telegram mediaMaxMb default
+
 async function resolveAcpAttachments(ctx: FinalizedMsgContext): Promise<AcpTurnAttachment[]> {
   const mediaAttachments = normalizeAttachments(ctx);
   const results: AcpTurnAttachment[] = [];
@@ -72,6 +74,13 @@ async function resolveAcpAttachments(ctx: FinalizedMsgContext): Promise<AcpTurnA
       continue;
     }
     try {
+      const stat = await fs.stat(filePath);
+      if (stat.size > ACP_ATTACHMENT_MAX_BYTES) {
+        logVerbose(
+          `dispatch-acp: skipping attachment ${filePath} (${stat.size} bytes exceeds ${ACP_ATTACHMENT_MAX_BYTES} byte limit)`,
+        );
+        continue;
+      }
       const buf = await fs.readFile(filePath);
       results.push({ mediaType: attachment.mime ?? "application/octet-stream", data: buf.toString("base64") });
     } catch {
