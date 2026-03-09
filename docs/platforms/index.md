@@ -30,6 +30,7 @@ Native companion apps for Windows are also planned; the Gateway is recommended v
 - Hetzner (Docker): [Hetzner](/install/hetzner)
 - GCP (Compute Engine): [GCP](/install/gcp)
 - exe.dev (VM + HTTPS proxy): [exe.dev](/install/exe-dev)
+- EasyRunner (self-hosted PaaS): [EasyRunner](/platforms/easyrunner)
 
 ## Common links
 

@@ -1,3 +1,11 @@
+---
+summary: "Deploying OpenClaw on EasyRunner (self-hosted PaaS with Podman + Caddy)"
+read_when:
+  - Setting up OpenClaw on EasyRunner
+  - Looking for a self-hosted PaaS option for OpenClaw
+title: "EasyRunner"
+---
+
 # Deploying OpenClaw on EasyRunner
 
 This guide covers deploying OpenClaw to a server managed by [EasyRunner](https://easyrunner.xyz), a self-hosted PaaS that uses Podman containers with Caddy as a reverse proxy.
@@ -17,7 +25,20 @@ git clone https://github.com/openclaw/openclaw.git
 cd openclaw
 ```
 
-### 2. Create EasyRunner App Configuration
+### 2. Build the Container Image
+
+Build the `localhost/openclaw:latest` image that the compose file references. SSH into your server first, then:
+
+```bash
+ssh your-user@your-server
+git clone https://github.com/openclaw/openclaw.git
+cd openclaw
+podman build -t localhost/openclaw:latest .
+```
+
+Rebuild and redeploy whenever you want to update to a newer version.
+
+### 3. Create EasyRunner App Configuration
 
 Create `.easyrunner/docker-compose-app.yaml`:
 
@@ -56,7 +77,7 @@ networks:
     driver: bridge
 ```
 
-### 3. Generate a Secure Token
+### 4. Generate a Secure Token
 
 Generate a hex-only token (avoids shell encoding issues):
 
@@ -66,7 +87,7 @@ openssl rand -hex 32
 
 Update `OPENCLAW_GATEWAY_TOKEN` in your compose file with the generated token.
 
-### 4. Register and Deploy
+### 5. Register and Deploy
 
 ```bash
 # Register the app with EasyRunner
@@ -76,7 +97,7 @@ er app add openclaw . --server your-server-name
 er app deploy openclaw your-server-name
 ```
 
-### 5. Access the Control UI
+### 6. Access the Control UI
 
 Open `https://your-domain.com` in your browser. Enter your gateway token when prompted.
 
