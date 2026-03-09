@@ -147,7 +147,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
   let streamText = "";
   let lastPartial = "";
   let hadBlockReply = false;
-  let dispatcherRef: { getQueuedCounts: () => Record<string, number> } | null = null;
+  let hadToolUse = false;
   const deliveredFinalTexts = new Set<string>();
   let partialUpdateQueue: Promise<void> = Promise.resolve();
   let streamingStartPromise: Promise<void> | null = null;
@@ -233,9 +233,10 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
       }
       // Show the "full text" button when tool calls or block replies occurred —
       // these intermediate steps may cause incomplete card rendering.
-      const counts = dispatcherRef?.getQueuedCounts();
-      const hadIntermediateSteps =
-        hadBlockReply || (counts?.tool ?? 0) > 0 || (counts?.block ?? 0) > 0;
+      const hadIntermediateSteps = hadBlockReply || hadToolUse;
+      params.runtime.log?.(
+        `feishu[${account.accountId}] closeStreaming: hadBlockReply=${hadBlockReply}, hadToolUse=${hadToolUse}, hadIntermediateSteps=${hadIntermediateSteps}`,
+      );
       await streaming.close(text, { addShowFullTextButton: hadIntermediateSteps });
     }
     streaming = null;
@@ -407,14 +408,15 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
         typingCallbacks.onCleanup?.();
       },
     });
-  dispatcherRef = dispatcher;
-
   return {
     dispatcher,
     replyOptions: {
       ...replyOptions,
       onModelSelected: prefixContext.onModelSelected,
       disableBlockStreaming: true,
+      onToolStart: () => {
+        hadToolUse = true;
+      },
       onPartialReply: streamingEnabled
         ? (payload: ReplyPayload) => {
             if (!payload.text) {
