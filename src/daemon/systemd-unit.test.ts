@@ -125,6 +125,28 @@ describe("collectSystemdExecStartValues", () => {
     );
     expect(collectSystemdExecStartValues(content)).toEqual([]);
   });
+
+  it("does not let comment lines with trailing backslash consume the next line", () => {
+    const content = [
+      "[Service]",
+      "# note \\",
+      "ExecStart=/snap/bin/chromium --headless --remote-debugging-port=18800",
+    ].join("\n");
+    expect(collectSystemdExecStartValues(content)).toEqual([
+      "/snap/bin/chromium --headless --remote-debugging-port=18800",
+    ]);
+  });
+
+  it("ignores semicolon comment lines with trailing backslash", () => {
+    const content = [
+      "[Service]",
+      "; todo \\",
+      "ExecStart=/usr/local/bin/helper --mode openclaw",
+    ].join("\n");
+    expect(collectSystemdExecStartValues(content)).toEqual([
+      "/usr/local/bin/helper --mode openclaw",
+    ]);
+  });
 });
 
 describe("extractSystemdExecStartCommandToken", () => {

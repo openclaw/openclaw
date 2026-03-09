@@ -183,6 +183,11 @@ export function collectSystemdExecStartValues(contents: string): string[] {
 
   for (const rawLine of contents.split(/\r?\n/)) {
     const trimmedLine = rawLine.trim();
+    // systemd ignores comment lines (# or ;) entirely — they do not
+    // participate in backslash continuation.
+    if (trimmedLine.startsWith("#") || trimmedLine.startsWith(";")) {
+      continue;
+    }
     if (!trimmedLine && !currentLine) {
       continue;
     }
