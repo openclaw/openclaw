@@ -274,23 +274,33 @@ const saveSessionToMemory: HookHandler = async (event) => {
       // If the file existed before our write (slug collision), restore the
       // original content instead of deleting — avoids erasing prior history.
       if (event.context.blockSessionSave === true && writtenEntry !== null) {
-        try {
-          if (preExistingContent !== null) {
-            await writeFileWithinRoot({
-              rootDir: memoryDir,
-              relativePath: filename,
-              data: preExistingContent,
-              encoding: "utf-8",
-            });
-            log.debug("Session save retracted by post-hook — pre-existing file restored");
-          } else {
+        if (preExistingContent !== null) {
+          // Slug collision: another entry already existed at this filename
+          // before our inline write. Restore the original content rather
+          // than deleting — preserves the prior session's history.
+          // writeFileWithinRoot errors (e.g. ENOENT if memoryDir was
+          // removed after our inline write) are NOT swallowed — they
+          // indicate a real filesystem inconsistency that must surface.
+          await writeFileWithinRoot({
+            rootDir: memoryDir,
+            relativePath: filename,
+            data: preExistingContent,
+            encoding: "utf-8",
+          });
+          log.debug("Session save retracted by post-hook — pre-existing file restored");
+        } else {
+          try {
             await fs.unlink(memoryFilePath);
             log.debug("Session save retracted by post-hook (blockSessionSave)");
-          }
-        } catch (err) {
-          // File may not exist if inline write also didn't happen — that's fine.
-          if ((err as NodeJS.ErrnoException).code !== "ENOENT") {
-            throw err;
+          } catch (err) {
+            // ENOENT is expected when the inline write didn't happen
+            // (e.g. blockSessionSave was set before writeFileWithinRoot).
+            // Re-throw so triggerInternalHook logs it. Note: the error
+            // is caught per-action and does NOT propagate to the caller;
+            // the file may remain on disk if unlink fails (e.g. EACCES).
+            if ((err as NodeJS.ErrnoException).code !== "ENOENT") {
+              throw err;
+            }
           }
         }
         return;
