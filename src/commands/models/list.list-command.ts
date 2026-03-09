@@ -1,16 +1,18 @@
-import type { Api, Model } from "@mariozechner/pi-ai";
 import type { ModelRegistry } from "@mariozechner/pi-coding-agent";
-import { loadModelCatalog } from "../../agents/model-catalog.js";
 import { parseModelRef } from "../../agents/model-selection.js";
-import { resolveModelWithRegistry } from "../../agents/pi-embedded-runner/model.js";
 import type { RuntimeEnv } from "../../runtime.js";
 import { resolveConfiguredEntries } from "./list.configured.js";
 import { formatErrorWithStack } from "./list.errors.js";
-import { loadModelRegistry, toModelRow } from "./list.registry.js";
+import {
+  appendCatalogSupplementRows,
+  appendConfiguredRows,
+  appendDiscoveredRows,
+  loadListModelRegistry,
+} from "./list.rows.js";
 import { printModelTable } from "./list.table.js";
 import type { ModelRow } from "./list.types.js";
 import { loadModelsConfigWithSource } from "./load-config.js";
-import { DEFAULT_PROVIDER, ensureFlagCompatibility, isLocalBaseUrl, modelKey } from "./shared.js";
+import { DEFAULT_PROVIDER, ensureFlagCompatibility } from "./shared.js";
 
 export async function modelsListCommand(
   opts: {
@@ -39,17 +41,17 @@ export async function modelsListCommand(
     return parsed?.provider ?? raw.toLowerCase();
   })();
 
-  let models: Model<Api>[] = [];
   let modelRegistry: ModelRegistry | undefined;
+  let discoveredKeys = new Set<string>();
   let availableKeys: Set<string> | undefined;
   let availabilityErrorMessage: string | undefined;
   try {
     // Keep command behavior explicit: sync models.json from the source config
     // before building the read-only model registry view.
     await ensureOpenClawModelsJson(sourceConfig ?? cfg);
-    const loaded = await loadModelRegistry(cfg, { sourceConfig });
+    const loaded = await loadListModelRegistry(cfg, { sourceConfig });
     modelRegistry = loaded.registry;
-    models = loaded.models;
+    discoveredKeys = loaded.discoveredKeys;
     availableKeys = loaded.availableKeys;
     availabilityErrorMessage = loaded.availabilityErrorMessage;
   } catch (err) {
@@ -62,83 +64,36 @@ export async function modelsListCommand(
       `Model availability lookup failed; falling back to auth heuristics for discovered models: ${availabilityErrorMessage}`,
     );
   }
-  const discoveredKeys = new Set(models.map((model) => modelKey(model.provider, model.id)));
-
   const { entries } = resolveConfiguredEntries(cfg);
   const configuredByKey = new Map(entries.map((entry) => [entry.key, entry]));
 
   const rows: ModelRow[] = [];
+  const rowContext = {
+    cfg,
+    authStore,
+    availableKeys,
+    configuredByKey,
+    discoveredKeys,
+    filter: {
+      provider: providerFilter,
+      local: opts.local,
+    },
+  };
 
   if (opts.all) {
-    const seenKeys = new Set<string>();
-    const sorted = [...models].toSorted((a, b) => {
-      const p = a.provider.localeCompare(b.provider);
-      if (p !== 0) {
-        return p;
-      }
-      return a.id.localeCompare(b.id);
+    const seenKeys = appendDiscoveredRows({
+      rows,
+      models: modelRegistry?.getAll() ?? [],
+      context: rowContext,
     });
 
-    for (const model of sorted) {
-      if (providerFilter && model.provider.toLowerCase() !== providerFilter) {
-        continue;
-      }
-      if (opts.local && !isLocalBaseUrl(model.baseUrl)) {
-        continue;
-      }
-      const key = modelKey(model.provider, model.id);
-      const configured = configuredByKey.get(key);
-      rows.push(
-        toModelRow({
-          model,
-          key,
-          tags: configured ? Array.from(configured.tags) : [],
-          aliases: configured?.aliases ?? [],
-          availableKeys,
-          cfg,
-          authStore,
-        }),
-      );
-      seenKeys.add(key);
-    }
-
     if (modelRegistry) {
-      const catalog = await loadModelCatalog({ config: cfg });
-      for (const entry of catalog) {
-        if (providerFilter && entry.provider.toLowerCase() !== providerFilter) {
-          continue;
-        }
-        const key = modelKey(entry.provider, entry.id);
-        if (seenKeys.has(key)) {
-          continue;
-        }
-        const model = resolveModelWithRegistry({
-          provider: entry.provider,
-          modelId: entry.id,
-          modelRegistry,
-          cfg,
-        });
-        if (!model) {
-          continue;
-        }
-        if (opts.local && !isLocalBaseUrl(model.baseUrl)) {
-          continue;
-        }
-        const configured = configuredByKey.get(key);
-        rows.push(
-          toModelRow({
-            model,
-            key,
-            tags: configured ? Array.from(configured.tags) : [],
-            aliases: configured?.aliases ?? [],
-            availableKeys,
-            cfg,
-            authStore,
-            allowProviderAvailabilityFallback: !discoveredKeys.has(key),
-          }),
-        );
-        seenKeys.add(key);
-      }
+      await appendCatalogSupplementRows({
+        rows,
+        modelRegistry,
+        context: rowContext,
+        seenKeys,
+      });
     }
   } else {
     const registry = modelRegistry;
@@ -147,37 +102,12 @@ export async function modelsListCommand(
       process.exitCode = 1;
       return;
     }
-    for (const entry of entries) {
-      if (providerFilter && entry.ref.provider.toLowerCase() !== providerFilter) {
-        continue;
-      }
-      const model = resolveModelWithRegistry({
-        provider: entry.ref.provider,
-        modelId: entry.ref.model,
-        modelRegistry: registry,
-        cfg,
-      });
-      if (opts.local && model && !isLocalBaseUrl(model.baseUrl)) {
-        continue;
-      }
-      if (opts.local && !model) {
-        continue;
-      }
-      rows.push(
-        toModelRow({
-          model,
-          key: entry.key,
-          tags: Array.from(entry.tags),
-          aliases: entry.aliases,
-          availableKeys,
-          cfg,
-          authStore,
-          allowProviderAvailabilityFallback: model
-            ? !discoveredKeys.has(modelKey(model.provider, model.id))
-            : false,
-        }),
-      );
-    }
+    appendConfiguredRows({
+      rows,
+      entries,
+      modelRegistry: registry,
+      context: rowContext,
+    });
   }
 
   if (rows.length === 0) {
