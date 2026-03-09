@@ -21,6 +21,7 @@ import { resolvePluginProviders } from "../../plugins/providers.js";
 import type { ProviderAuthResult, ProviderPlugin } from "../../plugins/types.js";
 import type { RuntimeEnv } from "../../runtime.js";
 import { stylePromptHint, stylePromptMessage } from "../../terminal/prompt-style.js";
+import { normalizeSecretInput } from "../../utils/normalize-secret-input.js";
 import { createClackPrompter } from "../../wizard/clack-prompter.js";
 import { validateAnthropicSetupToken } from "../auth-token.js";
 import { isRemoteEnvironment } from "../oauth-env.js";
@@ -161,7 +162,7 @@ export async function modelsAuthPasteTokenCommand(
     message: `Paste token for ${provider}`,
     validate: (value) => (value?.trim() ? undefined : "Required"),
   });
-  const token = String(tokenInput ?? "").trim();
+  const token = normalizeSecretInput(tokenInput);
 
   const expires =
     opts.expiresIn?.trim() && opts.expiresIn.trim().length > 0

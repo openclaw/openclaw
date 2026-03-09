@@ -1,4 +1,5 @@
 import { normalizeProviderId } from "../agents/model-selection.js";
+import { normalizeSecretInput } from "../utils/normalize-secret-input.js";
 
 export const ANTHROPIC_SETUP_TOKEN_PREFIX = "sk-ant-oat01-";
 export const ANTHROPIC_SETUP_TOKEN_MIN_LENGTH = 80;
@@ -24,7 +25,7 @@ export function buildTokenProfileId(params: { provider: string; name: string }):
 }
 
 export function validateAnthropicSetupToken(raw: string): string | undefined {
-  const trimmed = raw.trim();
+  const trimmed = normalizeSecretInput(raw);
   if (!trimmed) {
     return "Required";
   }

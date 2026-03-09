@@ -1,4 +1,5 @@
 import { upsertAuthProfile } from "../agents/auth-profiles.js";
+import { normalizeSecretInput } from "../utils/normalize-secret-input.js";
 import { normalizeApiKeyInput, validateApiKeyInput } from "./auth-choice.api-key.js";
 import {
   normalizeSecretInputModeInput,
@@ -59,7 +60,7 @@ export async function applyAuthChoiceAnthropic(
         message: "Paste Anthropic setup-token",
         validate: (value) => validateAnthropicSetupToken(String(value ?? "")),
       });
-      token = String(tokenRaw ?? "").trim();
+      token = normalizeSecretInput(tokenRaw);
     }
     const tokenValidationError = validateAnthropicSetupToken(token);
     if (tokenValidationError) {
