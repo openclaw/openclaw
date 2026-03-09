@@ -487,12 +487,20 @@ export async function dispatchCronDelivery(
     // so cleanup/keep/delete and suppression are handled there.
     // When there are active descendants or text suggests follow-up, use
     // announce path so we wait for subagent completion and suppress interim.
+    // When job is configured to deleteAfterRun, use announce path so session
+    // cleanup runs.
+    // When reply is SILENT_REPLY_TOKEN, use announce path so suppression
+    // logic applies and the literal token isn't sent.
     const hasPendingDescendantFollowup =
       countActiveDescendantRuns(params.agentSessionKey) > 0 ||
       expectsSubagentFollowup(params.synthesizedText ?? "");
+    const isSilentReply =
+      params.synthesizedText?.toUpperCase() === SILENT_REPLY_TOKEN.toUpperCase();
     const useDirectDelivery =
       !params.skipHeartbeatDelivery &&
       !hasPendingDescendantFollowup &&
+      !params.job.deleteAfterRun &&
+      !isSilentReply &&
       (params.deliveryPayloadHasStructuredContent ||
         params.resolvedDelivery.threadId != null ||
         (params.resolvedDelivery.ok && !params.deliveryPayloadHasStructuredContent));
