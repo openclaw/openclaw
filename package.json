@@ -413,6 +413,9 @@
     "@napi-rs/canvas": "^0.1.89",
     "node-llama-cpp": "3.16.2"
   },
+  "overrides": {
+    "libsignal": "https://codeload.github.com/whiskeysockets/libsignal-node/tar.gz/1c30d7d7e76a3b0aa120b04dc6a26f5a12dccf67"
+  },
   "engines": {
     "node": ">=22.12.0"
   },
