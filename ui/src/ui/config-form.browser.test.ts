@@ -463,6 +463,48 @@ describe("config form renderer", () => {
     }
   });
 
+  it("renders AgentModelSchema-style union with plain-string value without crashing", () => {
+    const onPatch = vi.fn();
+    const container = document.createElement("div");
+    const schema = {
+      type: "object",
+      properties: {
+        model: {
+          anyOf: [
+            { type: "string" },
+            {
+              type: "object",
+              properties: {
+                primary: { type: "string" },
+                fallbacks: { type: "array", items: { type: "string" } },
+              },
+            },
+          ],
+        },
+      },
+    };
+    const analysis = analyzeConfigSchema(schema);
+    render(
+      renderConfigForm({
+        schema: analysis.schema,
+        uiHints: {},
+        unsupportedPaths: analysis.unsupportedPaths,
+        value: { model: "gpt-4" },
+        onPatch,
+      }),
+      container,
+    );
+
+    const primaryInput = container.querySelector('input[type="text"]');
+    expect(primaryInput).not.toBeNull();
+    expect(primaryInput?.value).toBe("");
+    if (primaryInput) {
+      primaryInput.value = "gpt-4o";
+      primaryInput.dispatchEvent(new Event("input", { bubbles: true }));
+      expect(onPatch).toHaveBeenCalledWith(["model", "primary"], "gpt-4o");
+    }
+  });
+
   it("normalizes string | number | object union to object", () => {
     const schema = {
       type: "object",
