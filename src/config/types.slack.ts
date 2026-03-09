@@ -57,6 +57,16 @@ export type SlackActionConfig = {
   memberInfo?: boolean;
   channelInfo?: boolean;
   emojiList?: boolean;
+  homeTab?: boolean;
+};
+
+export type SlackHomeTabConfig = {
+  /** If false, disable the Home tab. Default: true. */
+  enabled?: boolean;
+  /** Show available commands/interaction methods. Default: true. */
+  showCommands?: boolean;
+  /** Optional static Block Kit blocks to append to the default view. */
+  customBlocks?: unknown[];
 };
 
 export type SlackSlashCommandConfig = {
@@ -189,6 +199,8 @@ export type SlackAccountConfig = {
   ackReaction?: string;
   /** Reaction emoji added while processing a reply (e.g. "hourglass_flowing_sand"). Removed when done. Useful as a typing indicator fallback when assistant mode is not enabled. */
   typingReaction?: string;
+  /** Home tab configuration. */
+  homeTab?: SlackHomeTabConfig;
 };
 
 export type SlackConfig = {
