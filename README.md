@@ -490,6 +490,12 @@ by Peter Steinberger and the community.
 - [steipete.me](https://steipete.me)
 - [@openclaw](https://x.com/openclaw)
 
+## Built with OpenClaw
+
+Real-world examples of what you can build on top of OpenClaw:
+
+- **[MiniClaw](https://miniclaw.bot)** — A personal AI OS for Mac. Personality, memory, plugins, cron jobs, email, SEO automation, and a project board — all running on your own hardware. Built by [@augmentedmike](https://github.com/augmentedmike).
+
 ## Community
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines, maintainers, and how to submit PRs.
