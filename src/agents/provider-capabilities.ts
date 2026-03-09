@@ -34,8 +34,8 @@ const PROVIDER_CAPABILITIES: Record<string, Partial<ProviderCapabilities>> = {
     providerFamily: "anthropic",
   },
   "kimi-coding": {
-    anthropicToolSchemaMode: "openai-functions",
-    anthropicToolChoiceMode: "openai-string-modes",
+    anthropicToolSchemaMode: "native",
+    anthropicToolChoiceMode: "native",
     preserveAnthropicThinkingSignatures: false,
   },
   mistral: {

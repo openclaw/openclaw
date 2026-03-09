@@ -31,8 +31,8 @@ describe("resolveProviderCapabilities", () => {
       resolveProviderCapabilities("kimi-code"),
     );
     expect(resolveProviderCapabilities("kimi-code")).toEqual({
-      anthropicToolSchemaMode: "openai-functions",
-      anthropicToolChoiceMode: "openai-string-modes",
+      anthropicToolSchemaMode: "native",
+      anthropicToolChoiceMode: "native",
       providerFamily: "default",
       preserveAnthropicThinkingSignatures: false,
       openAiCompatTurnValidation: true,
