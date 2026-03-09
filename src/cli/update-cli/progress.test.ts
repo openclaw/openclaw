@@ -42,6 +42,16 @@ describe("inferUpdateFailureHints", () => {
     expect(hints.join("\n")).toContain("--omit=optional");
   });
 
+  it("returns EBUSY hint when gateway process is locking the install directory (Windows)", () => {
+    const result = makeResult(
+      "global update",
+      "npm ERR! code EBUSY\nnpm ERR! syscall rename\nnpm ERR! errno -4082\nnpm ERR! EBUSY: resource busy or locked",
+    );
+    const hints = inferUpdateFailureHints(result);
+    expect(hints.join("\n")).toContain("EBUSY");
+    expect(hints.join("\n")).toContain("gateway stop");
+  });
+
   it("does not return npm hints for non-npm install modes", () => {
     const result = makeResult(
       "global update",

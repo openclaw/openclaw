@@ -65,6 +65,13 @@ export function inferUpdateFailureHints(result: UpdateRunResult): string[] {
     hints.push("If it still fails: npm i -g openclaw@latest --omit=optional");
   }
 
+  if (failedStep.name.startsWith("global update") && stderr.includes("ebusy")) {
+    hints.push("Detected EBUSY: the running gateway process is locking the install directory.");
+    hints.push(
+      "Stop the gateway first, then update: openclaw gateway stop && npm i -g openclaw@latest",
+    );
+  }
+
   return hints;
 }
 
