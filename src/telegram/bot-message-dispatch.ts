@@ -21,13 +21,12 @@ import {
   resolveSessionStoreEntry,
   resolveStorePath,
 } from "../config/sessions.js";
-import { loadSessionEntry } from "../gateway/session-utils.js";
+import { loadSessionEntry, readSessionMessages } from "../gateway/session-utils.js";
 import type { OpenClawConfig, ReplyToMode, TelegramAccountConfig } from "../config/types.js";
 import { danger, logVerbose } from "../globals.js";
 import { getAgentScopedMediaLocalRoots } from "../media/local-roots.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { getFallbackGatewayContext } from "../gateway/server-plugins.js";
-import { readSessionMessages } from "../gateway/session-utils.fs.js";
 import type { TelegramMessageContext } from "./bot-message-context.js";
 import type { TelegramBotOptions } from "./bot.js";
 import { deliverReplies } from "./bot/delivery.js";
