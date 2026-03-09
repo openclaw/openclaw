@@ -816,6 +816,33 @@ async function sendSubagentAnnounceDirectly(params: {
         }),
     });
 
+    // When direct delivery succeeds for group topic sessions, still inject a
+    // lightweight trigger into the requester session so the main agent is aware
+    // of the sub-agent completion (fixes #40605).
+    if (shouldDeliverExternally && !params.requesterIsSubagent) {
+      try {
+        await callGateway({
+          method: "agent",
+          params: {
+            sessionKey: canonicalRequesterSessionKey,
+            message: params.triggerMessage,
+            deliver: false,
+            internalEvents: params.internalEvents,
+            inputProvenance: {
+              kind: "inter_session",
+              sourceSessionKey: params.sourceSessionKey,
+              sourceChannel: params.sourceChannel ?? INTERNAL_MESSAGE_CHANNEL,
+              sourceTool: params.sourceTool ?? "subagent_announce",
+            },
+            idempotencyKey: `${params.directIdempotencyKey}:trigger`,
+          },
+          timeoutMs: announceTimeoutMs,
+        });
+      } catch {
+        // Best-effort trigger injection; don't fail the entire announce if this fails
+      }
+    }
+
     return {
       delivered: true,
       path: "direct",
