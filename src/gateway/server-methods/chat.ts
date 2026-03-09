@@ -760,11 +760,12 @@ export const chatHandlers: GatewayRequestHandlers = {
     const sessionId = entry?.sessionId;
     const rawMessages =
       sessionId && storePath ? readSessionMessages(sessionId, storePath, entry?.sessionFile) : [];
+    const visible = rawMessages.filter((msg) => !isDeliveryMirrorMessage(msg));
     const hardMax = 1000;
     const defaultLimit = 200;
     const requested = typeof limit === "number" ? limit : defaultLimit;
     const max = Math.min(hardMax, requested);
-    const sliced = rawMessages.length > max ? rawMessages.slice(-max) : rawMessages;
+    const sliced = visible.length > max ? visible.slice(-max) : visible;
     const sanitized = stripEnvelopeFromMessages(sliced);
     const normalized = sanitizeChatHistoryMessages(sanitized);
     const maxHistoryBytes = getMaxChatHistoryMessagesBytes();
@@ -795,11 +796,10 @@ export const chatHandlers: GatewayRequestHandlers = {
       });
     }
     const verboseLevel = entry?.verboseLevel ?? cfg.agents?.defaults?.verboseDefault;
-    const visibleMessages = bounded.messages.filter((msg) => !isDeliveryMirrorMessage(msg));
     respond(true, {
       sessionKey,
       sessionId,
-      messages: visibleMessages,
+      messages: bounded.messages,
       thinkingLevel,
       verboseLevel,
     });

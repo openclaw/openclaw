@@ -433,4 +433,14 @@ describe("isDeliveryMirrorMessage", () => {
       }),
     ).toBe(false);
   });
+
+  it("returns false when model matches but provider does not", () => {
+    expect(
+      isDeliveryMirrorMessage({
+        role: "assistant",
+        provider: "anthropic",
+        model: "delivery-mirror",
+      }),
+    ).toBe(false);
+  });
 });

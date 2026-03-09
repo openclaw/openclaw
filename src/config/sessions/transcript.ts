@@ -145,12 +145,7 @@ export function isDeliveryMirrorMessage(msg: unknown): boolean {
   if (!("role" in msg) || !("provider" in msg) || !("model" in msg)) {
     return false;
   }
-  return (
-    typeof msg.role === "string" &&
-    msg.role.toLowerCase() === "assistant" &&
-    msg.provider === "openclaw" &&
-    msg.model === "delivery-mirror"
-  );
+  return msg.role === "assistant" && msg.provider === "openclaw" && msg.model === "delivery-mirror";
 }
 
 export async function appendAssistantMessageToSessionTranscript(params: {
