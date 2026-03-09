@@ -44,11 +44,12 @@ export const normalizeAllowFrom = (list?: Array<string | number>): NormalizedAll
   const normalized = entries
     .filter((value) => value !== "*")
     .map((value) => value.replace(/^(telegram|tg):/i, ""));
-  const invalidEntries = normalized.filter((value) => !/^\d+$/.test(value));
+  // Allow optional leading minus for negative Telegram group/supergroup chat IDs
+  const invalidEntries = normalized.filter((value) => !/^-?\d+$/.test(value));
   if (invalidEntries.length > 0) {
     warnInvalidAllowFromEntries([...new Set(invalidEntries)]);
   }
-  const ids = normalized.filter((value) => /^\d+$/.test(value));
+  const ids = normalized.filter((value) => /^-?\d+$/.test(value));
   return {
     entries: ids,
     hasWildcard,
