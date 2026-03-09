@@ -28,7 +28,7 @@ vi.mock("../infra/runtime-guard.js", () => ({
   assertSupportedRuntime: assertRuntimeMock,
 }));
 
-vi.mock("../memory/index.js", () => ({
+vi.mock("../memory/search-manager.js", () => ({
   closeAllMemorySearchManagers: closeAllMemorySearchManagersMock,
 }));
 
