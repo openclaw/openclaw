@@ -151,6 +151,7 @@ describe("control UI routing", () => {
     await app.updateComplete;
 
     expect(app.settings.token).toBe("abc123");
+    expect(sessionStorage.getItem("openclaw.control.token.v1")).toBe("abc123");
     expect(JSON.parse(localStorage.getItem("openclaw.control.settings.v1") ?? "{}").token).toBe(
       undefined,
     );
@@ -179,6 +180,7 @@ describe("control UI routing", () => {
     expect(JSON.parse(localStorage.getItem("openclaw.control.settings.v1") ?? "{}")).toMatchObject({
       gatewayUrl: "wss://gateway.example/openclaw",
     });
+    expect(sessionStorage.getItem("openclaw.control.token.v1")).toBe("abc123");
     expect(JSON.parse(localStorage.getItem("openclaw.control.settings.v1") ?? "{}").token).toBe(
       undefined,
     );
@@ -191,10 +193,26 @@ describe("control UI routing", () => {
     await app.updateComplete;
 
     expect(app.settings.token).toBe("abc123");
+    expect(sessionStorage.getItem("openclaw.control.token.v1")).toBe("abc123");
     expect(JSON.parse(localStorage.getItem("openclaw.control.settings.v1") ?? "{}").token).toBe(
       undefined,
     );
     expect(window.location.pathname).toBe("/ui/overview");
     expect(window.location.hash).toBe("");
+  });
+
+  it("restores the token after a same-tab refresh", async () => {
+    const first = mountApp("/ui/overview?token=abc123");
+    await first.updateComplete;
+    first.remove();
+
+    const refreshed = mountApp("/ui/overview");
+    await refreshed.updateComplete;
+
+    expect(refreshed.settings.token).toBe("abc123");
+    expect(sessionStorage.getItem("openclaw.control.token.v1")).toBe("abc123");
+    expect(JSON.parse(localStorage.getItem("openclaw.control.settings.v1") ?? "{}").token).toBe(
+      undefined,
+    );
   });
 });

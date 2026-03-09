@@ -66,8 +66,10 @@ describe("loadSettings default gateway URL derivation", () => {
   beforeEach(() => {
     vi.resetModules();
     vi.stubGlobal("localStorage", createStorageMock());
+    vi.stubGlobal("sessionStorage", createStorageMock());
     vi.stubGlobal("navigator", { language: "en-US" } as Navigator);
     localStorage.clear();
+    sessionStorage.clear();
     setControlUiBasePath(undefined);
   });
 
@@ -132,6 +134,22 @@ describe("loadSettings default gateway URL derivation", () => {
       navCollapsed: false,
       navGroupsCollapsed: {},
     });
+    expect(sessionStorage.getItem("openclaw.control.token.v1")).toBeNull();
+  });
+
+  it("loads the current-tab token from sessionStorage", async () => {
+    setTestLocation({
+      protocol: "https:",
+      host: "gateway.example:8443",
+      pathname: "/",
+    });
+    sessionStorage.setItem("openclaw.control.token.v1", "session-token");
+
+    const { loadSettings } = await import("./storage.ts");
+    expect(loadSettings()).toMatchObject({
+      gatewayUrl: "wss://gateway.example:8443",
+      token: "session-token",
+    });
   });
 
   it("does not persist gateway tokens when saving settings", async () => {
@@ -166,5 +184,31 @@ describe("loadSettings default gateway URL derivation", () => {
       navCollapsed: false,
       navGroupsCollapsed: {},
     });
+    expect(sessionStorage.getItem("openclaw.control.token.v1")).toBe("memory-only-token");
+  });
+
+  it("clears the current-tab token when saving an empty token", async () => {
+    setTestLocation({
+      protocol: "https:",
+      host: "gateway.example:8443",
+      pathname: "/",
+    });
+    sessionStorage.setItem("openclaw.control.token.v1", "stale-token");
+
+    const { saveSettings } = await import("./storage.ts");
+    saveSettings({
+      gatewayUrl: "wss://gateway.example:8443/openclaw",
+      token: "",
+      sessionKey: "main",
+      lastActiveSessionKey: "main",
+      theme: "system",
+      chatFocusMode: false,
+      chatShowThinking: true,
+      splitRatio: 0.6,
+      navCollapsed: false,
+      navGroupsCollapsed: {},
+    });
+
+    expect(sessionStorage.getItem("openclaw.control.token.v1")).toBeNull();
   });
 });

@@ -1,4 +1,5 @@
 const KEY = "openclaw.control.settings.v1";
+const TOKEN_SESSION_KEY = "openclaw.control.token.v1";
 
 type PersistedUiSettings = Omit<UiSettings, "token"> & { token?: never };
 
@@ -20,6 +21,43 @@ export type UiSettings = {
   locale?: string;
 };
 
+function getSessionStorage(): Storage | null {
+  if (typeof window !== "undefined" && window.sessionStorage) {
+    return window.sessionStorage;
+  }
+  if (typeof sessionStorage !== "undefined") {
+    return sessionStorage;
+  }
+  return null;
+}
+
+function loadSessionToken(): string {
+  try {
+    const storage = getSessionStorage();
+    const token = storage?.getItem(TOKEN_SESSION_KEY) ?? "";
+    return token.trim();
+  } catch {
+    return "";
+  }
+}
+
+function persistSessionToken(token: string) {
+  try {
+    const storage = getSessionStorage();
+    if (!storage) {
+      return;
+    }
+    const normalized = token.trim();
+    if (normalized) {
+      storage.setItem(TOKEN_SESSION_KEY, normalized);
+      return;
+    }
+    storage.removeItem(TOKEN_SESSION_KEY);
+  } catch {
+    // best-effort
+  }
+}
+
 export function loadSettings(): UiSettings {
   const defaultUrl = (() => {
     const proto = location.protocol === "https:" ? "wss" : "ws";
@@ -35,7 +73,7 @@ export function loadSettings(): UiSettings {
 
   const defaults: UiSettings = {
     gatewayUrl: defaultUrl,
-    token: "",
+    token: loadSessionToken(),
     sessionKey: "main",
     lastActiveSessionKey: "main",
     theme: "system",
@@ -106,6 +144,7 @@ export function saveSettings(next: UiSettings) {
 }
 
 function persistSettings(next: UiSettings) {
+  persistSessionToken(next.token);
   const persisted: PersistedUiSettings = {
     gatewayUrl: next.gatewayUrl,
     sessionKey: next.sessionKey,
