@@ -28,6 +28,7 @@ import {
   buildAgentToAgentMessageContext,
   resolveIngressEchoPolicy,
   resolvePingPongTurns,
+  resolveRelayPolicy,
 } from "./sessions-send-helpers.js";
 import { runSessionsSendA2AFlow } from "./sessions-send-tool.a2a.js";
 
@@ -348,8 +349,29 @@ export function createSessionsSendTool(opts?: {
       };
       const requesterSessionKey = opts?.agentSessionKey;
       const requesterChannel = opts?.agentChannel;
+      const relayPolicy = resolveRelayPolicy(cfg);
+      const requesterAgentId = requesterSessionKey
+        ? (resolveAgentIdFromSessionKey(requesterSessionKey) ?? "requester")
+        : "requester";
+      const targetAgentId = resolveAgentIdFromSessionKey(resolvedKey) ?? "target";
+      const sourceRelayTarget =
+        requesterSessionKey && requesterSessionKey !== resolvedKey
+          ? await resolveAnnounceTarget({
+              sessionKey: requesterSessionKey,
+              displayKey: requesterSessionKey,
+            })
+          : null;
+      const targetRelayTarget = await resolveAnnounceTarget({
+        sessionKey: resolvedKey,
+        displayKey,
+      });
       const maxPingPongTurns = resolvePingPongTurns(cfg);
       const delivery = { status: "pending", mode: "announce" as const };
+      const relay = {
+        status: relayPolicy.enabled ? "pending" : "disabled",
+        mode: relayPolicy.mode,
+        mirrorTurns: relayPolicy.mirrorTurns,
+      };
       const startA2AFlow = (roundOneReply?: string, waitRunId?: string) => {
         void runSessionsSendA2AFlow({
           targetSessionKey: resolvedKey,
@@ -361,6 +383,11 @@ export function createSessionsSendTool(opts?: {
           requesterChannel,
           roundOneReply,
           waitRunId,
+          relayPolicy,
+          sourceRelayTarget,
+          targetRelayTarget,
+          requesterAgentId,
+          targetAgentId,
         });
       };
 
@@ -381,6 +408,7 @@ export function createSessionsSendTool(opts?: {
             sessionKey: displayKey,
             delivery,
             ingressEcho,
+            relay,
           });
         } catch (err) {
           const messageText =
@@ -476,6 +504,7 @@ export function createSessionsSendTool(opts?: {
         sessionKey: displayKey,
         delivery,
         ingressEcho,
+        relay,
       });
     },
   };

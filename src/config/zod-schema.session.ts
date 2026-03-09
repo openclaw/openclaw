@@ -71,6 +71,15 @@ export const SessionSchema = z
           })
           .strict()
           .optional(),
+        relay: z
+          .object({
+            enabled: z.boolean().optional(),
+            mode: z.union([z.literal("target-only"), z.literal("dual-channel")]).optional(),
+            mirrorTurns: z.union([z.literal("round1"), z.literal("all")]).optional(),
+            requireDelivery: z.boolean().optional(),
+          })
+          .strict()
+          .optional(),
       })
       .strict()
       .optional(),

@@ -139,6 +139,16 @@ export type SessionConfig = {
       /** Allow nested sessions_send relays from already inter-session sessions_send inputs. Default: false. */
       allowNestedSessionsSend?: boolean;
     };
+    relay?: {
+      /** Enable channel-visible relay mirroring for agent-to-agent sessions_send flows. Default: false. */
+      enabled?: boolean;
+      /** Relay mode. target-only mirrors only target-side visibility; dual-channel mirrors both requester and target channels. Default: target-only. */
+      mode?: "target-only" | "dual-channel";
+      /** Which conversational turns to mirror. Default: round1. */
+      mirrorTurns?: "round1" | "all";
+      /** Require relay delivery before continuing. Default: false. */
+      requireDelivery?: boolean;
+    };
   };
   /** Shared defaults for thread-bound session routing across channels/providers. */
   threadBindings?: SessionThreadBindingsConfig;
