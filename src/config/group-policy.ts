@@ -300,7 +300,7 @@ function resolveChannelGroups(
 
 type ChannelGroupPolicyMode = "open" | "allowlist" | "disabled";
 
-function resolveChannelGroupPolicyMode(
+export function resolveChannelGroupPolicyMode(
   cfg: OpenClawConfig,
   channel: GroupPolicyChannel,
   accountId?: string | null,
@@ -384,12 +384,6 @@ export function resolveChannelGroupRequireMention(params: {
   }
   if (overrideOrder !== "before-config" && typeof requireMentionOverride === "boolean") {
     return requireMentionOverride;
-  }
-  // When groupPolicy is "open", default to not requiring mentions — the user
-  // explicitly opted into processing all group messages.
-  const groupPolicy = resolveChannelGroupPolicyMode(params.cfg, params.channel, params.accountId);
-  if (groupPolicy === "open") {
-    return false;
   }
   return true;
 }

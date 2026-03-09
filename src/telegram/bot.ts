@@ -19,6 +19,7 @@ import type { OpenClawConfig, ReplyToMode } from "../config/config.js";
 import { loadConfig } from "../config/config.js";
 import {
   resolveChannelGroupPolicy,
+  resolveChannelGroupPolicyMode,
   resolveChannelGroupRequireMention,
 } from "../config/group-policy.js";
 import { loadSessionStore, resolveStorePath } from "../config/sessions.js";
@@ -342,8 +343,15 @@ export function createTelegramBot(opts: TelegramBotOptions) {
     }
     return undefined;
   };
-  const resolveGroupRequireMention = (chatId: string | number) =>
-    resolveChannelGroupRequireMention({
+  const resolveGroupRequireMention = (chatId: string | number) => {
+    // When Telegram groupPolicy is "open", the user explicitly opted into
+    // processing all group messages — default to not requiring mentions.
+    // This is scoped to Telegram only; other channels retain their own defaults.
+    const groupPolicy = resolveChannelGroupPolicyMode(cfg, "telegram", account.accountId);
+    if (groupPolicy === "open") {
+      return false;
+    }
+    return resolveChannelGroupRequireMention({
       cfg,
       channel: "telegram",
       accountId: account.accountId,
@@ -351,6 +359,7 @@ export function createTelegramBot(opts: TelegramBotOptions) {
       requireMentionOverride: opts.requireMention,
       overrideOrder: "after-config",
     });
+  };
   const resolveTelegramGroupConfig = (chatId: string | number, messageThreadId?: number) => {
     const groups = telegramCfg.groups;
     const direct = telegramCfg.direct;

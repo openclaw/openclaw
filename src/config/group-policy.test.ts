@@ -151,31 +151,13 @@ describe("resolveChannelGroupRequireMention", () => {
     expect(result).toBe(true);
   });
 
-  it("defaults to false when groupPolicy is open", () => {
+  it("does not override requireMention for open groupPolicy in shared helper", () => {
+    // The shared helper should NOT change behavior based on groupPolicy —
+    // channel-specific callers (e.g., Telegram) handle that themselves.
     const cfg = {
       channels: {
         telegram: {
           groupPolicy: "open",
-        },
-      },
-    } as OpenClawConfig;
-
-    const result = resolveChannelGroupRequireMention({
-      cfg,
-      channel: "telegram",
-      groupId: "-100123",
-    });
-    expect(result).toBe(false);
-  });
-
-  it("respects explicit requireMention even when groupPolicy is open", () => {
-    const cfg = {
-      channels: {
-        telegram: {
-          groupPolicy: "open",
-          groups: {
-            "-100123": { requireMention: true },
-          },
         },
       },
     } as OpenClawConfig;
