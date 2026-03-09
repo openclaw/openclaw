@@ -3,10 +3,12 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { ensureAuthProfileStore, type AuthProfileStore } from "../agents/auth-profiles.js";
-import { loadConfig, type OpenClawConfig } from "../config/config.js";
+import { loadConfig, type OpenClawConfig, writeConfigFile } from "../config/config.js";
+import { withTempHome } from "../config/home-env.test-harness.js";
 import {
   activateSecretsRuntimeSnapshot,
   clearSecretsRuntimeSnapshot,
+  getActiveSecretsRuntimeSnapshot,
   prepareSecretsRuntimeSnapshot,
 } from "./runtime.js";
 
@@ -40,6 +42,8 @@ describe("secrets runtime snapshot", () => {
     clearSecretsRuntimeSnapshot();
   });
 
+  const allowInsecureTempSecretFile = process.platform === "win32";
+
   it("resolves env refs for config and auth profiles", async () => {
     const config = asConfig({
       agents: {
@@ -56,6 +60,13 @@ describe("secrets runtime snapshot", () => {
           openai: {
             baseUrl: "https://api.openai.com/v1",
             apiKey: { source: "env", provider: "default", id: "OPENAI_API_KEY" },
+            headers: {
+              Authorization: {
+                source: "env",
+                provider: "default",
+                id: "OPENAI_PROVIDER_AUTH_HEADER",
+              },
+            },
             models: [],
           },
         },
@@ -122,21 +133,22 @@ describe("secrets runtime snapshot", () => {
     const snapshot = await prepareSecretsRuntimeSnapshot({
       config,
       env: {
-        OPENAI_API_KEY: "sk-env-openai",
-        GITHUB_TOKEN: "ghp-env-token",
-        REVIEW_SKILL_API_KEY: "sk-skill-ref",
-        MEMORY_REMOTE_API_KEY: "mem-ref-key",
-        TALK_API_KEY: "talk-ref-key",
-        TALK_PROVIDER_API_KEY: "talk-provider-ref-key",
+        OPENAI_API_KEY: "sk-env-openai", // pragma: allowlist secret
+        OPENAI_PROVIDER_AUTH_HEADER: "Bearer sk-env-header", // pragma: allowlist secret
+        GITHUB_TOKEN: "ghp-env-token", // pragma: allowlist secret
+        REVIEW_SKILL_API_KEY: "sk-skill-ref", // pragma: allowlist secret
+        MEMORY_REMOTE_API_KEY: "mem-ref-key", // pragma: allowlist secret
+        TALK_API_KEY: "talk-ref-key", // pragma: allowlist secret
+        TALK_PROVIDER_API_KEY: "talk-provider-ref-key", // pragma: allowlist secret
         REMOTE_GATEWAY_TOKEN: "remote-token-ref",
-        REMOTE_GATEWAY_PASSWORD: "remote-password-ref",
+        REMOTE_GATEWAY_PASSWORD: "remote-password-ref", // pragma: allowlist secret
         TELEGRAM_BOT_TOKEN_REF: "telegram-bot-ref",
-        TELEGRAM_WEBHOOK_SECRET_REF: "telegram-webhook-ref",
+        TELEGRAM_WEBHOOK_SECRET_REF: "telegram-webhook-ref", // pragma: allowlist secret
         TELEGRAM_WORK_BOT_TOKEN_REF: "telegram-work-ref",
-        SLACK_SIGNING_SECRET_REF: "slack-signing-ref",
+        SLACK_SIGNING_SECRET_REF: "slack-signing-ref", // pragma: allowlist secret
         SLACK_WORK_BOT_TOKEN_REF: "slack-work-bot-ref",
         SLACK_WORK_APP_TOKEN_REF: "slack-work-app-ref",
-        WEB_SEARCH_API_KEY: "web-search-ref",
+        WEB_SEARCH_API_KEY: "web-search-ref", // pragma: allowlist secret
       },
       agentDirs: ["/tmp/openclaw-agent-main"],
       loadAuthStore: () =>
@@ -162,6 +174,9 @@ describe("secrets runtime snapshot", () => {
     });
 
     expect(snapshot.config.models?.providers?.openai?.apiKey).toBe("sk-env-openai");
+    expect(snapshot.config.models?.providers?.openai?.headers?.Authorization).toBe(
+      "Bearer sk-env-header",
+    );
     expect(snapshot.config.skills?.entries?.["review-pr"]?.apiKey).toBe("sk-skill-ref");
     expect(snapshot.config.agents?.defaults?.memorySearch?.remote?.apiKey).toBe("mem-ref-key");
     expect(snapshot.config.talk?.apiKey).toBe("talk-ref-key");
@@ -305,7 +320,7 @@ describe("secrets runtime snapshot", () => {
         },
       }),
       env: {
-        WEB_SEARCH_API_KEY: "web-search-ref",
+        WEB_SEARCH_API_KEY: "web-search-ref", // pragma: allowlist secret
       },
       agentDirs: ["/tmp/openclaw-agent-main"],
       loadAuthStore: () => ({ version: 1, profiles: {} }),
@@ -343,8 +358,8 @@ describe("secrets runtime snapshot", () => {
         },
       }),
       env: {
-        WEB_SEARCH_API_KEY: "web-search-ref",
-        WEB_SEARCH_GEMINI_API_KEY: "web-search-gemini-ref",
+        WEB_SEARCH_API_KEY: "web-search-ref", // pragma: allowlist secret
+        WEB_SEARCH_GEMINI_API_KEY: "web-search-gemini-ref", // pragma: allowlist secret
       },
       agentDirs: ["/tmp/openclaw-agent-main"],
       loadAuthStore: () => ({ version: 1, profiles: {} }),
@@ -374,7 +389,7 @@ describe("secrets runtime snapshot", () => {
         },
       }),
       env: {
-        WEB_SEARCH_GEMINI_API_KEY: "web-search-gemini-ref",
+        WEB_SEARCH_GEMINI_API_KEY: "web-search-gemini-ref", // pragma: allowlist secret
       },
       agentDirs: ["/tmp/openclaw-agent-main"],
       loadAuthStore: () => ({ version: 1, profiles: {} }),
@@ -399,7 +414,7 @@ describe("secrets runtime snapshot", () => {
           {
             providers: {
               openai: {
-                apiKey: "sk-from-file-provider",
+                apiKey: "sk-from-file-provider", // pragma: allowlist secret
               },
             },
           },
@@ -494,7 +509,7 @@ describe("secrets runtime snapshot", () => {
           },
         },
       }),
-      env: { OPENAI_API_KEY: "sk-runtime" },
+      env: { OPENAI_API_KEY: "sk-runtime" }, // pragma: allowlist secret
       agentDirs: ["/tmp/openclaw-agent-main"],
       loadAuthStore: () =>
         loadAuthStoreWithProfiles({
@@ -513,6 +528,264 @@ describe("secrets runtime snapshot", () => {
     expect(store.profiles["openai:default"]).toMatchObject({
       type: "api_key",
       key: "sk-runtime",
+    });
+  });
+
+  it("keeps active secrets runtime snapshots resolved after config writes", async () => {
+    if (os.platform() === "win32") {
+      return;
+    }
+    await withTempHome("openclaw-secrets-runtime-write-", async (home) => {
+      const configDir = path.join(home, ".openclaw");
+      const secretFile = path.join(configDir, "secrets.json");
+      const agentDir = path.join(configDir, "agents", "main", "agent");
+      const authStorePath = path.join(agentDir, "auth-profiles.json");
+      await fs.mkdir(agentDir, { recursive: true });
+      await fs.chmod(configDir, 0o700).catch(() => {
+        // best-effort on tmp dirs that already have secure perms
+      });
+      await fs.writeFile(
+        secretFile,
+        `${JSON.stringify({ providers: { openai: { apiKey: "sk-file-runtime" } } }, null, 2)}\n`, // pragma: allowlist secret
+        { encoding: "utf8", mode: 0o600 },
+      );
+      await fs.writeFile(
+        authStorePath,
+        `${JSON.stringify(
+          {
+            version: 1,
+            profiles: {
+              "openai:default": {
+                type: "api_key",
+                provider: "openai",
+                keyRef: { source: "file", provider: "default", id: "/providers/openai/apiKey" },
+              },
+            },
+          },
+          null,
+          2,
+        )}\n`,
+        { encoding: "utf8", mode: 0o600 },
+      );
+
+      const prepared = await prepareSecretsRuntimeSnapshot({
+        config: asConfig({
+          secrets: {
+            providers: {
+              default: {
+                source: "file",
+                path: secretFile,
+                mode: "json",
+                ...(allowInsecureTempSecretFile ? { allowInsecurePath: true } : {}),
+              },
+            },
+          },
+          models: {
+            providers: {
+              openai: {
+                baseUrl: "https://api.openai.com/v1",
+                apiKey: { source: "file", provider: "default", id: "/providers/openai/apiKey" },
+                models: [],
+              },
+            },
+          },
+        }),
+        agentDirs: [agentDir],
+      });
+
+      activateSecretsRuntimeSnapshot(prepared);
+
+      expect(loadConfig().models?.providers?.openai?.apiKey).toBe("sk-file-runtime");
+      expect(ensureAuthProfileStore(agentDir).profiles["openai:default"]).toMatchObject({
+        type: "api_key",
+        key: "sk-file-runtime",
+      });
+
+      await writeConfigFile({
+        ...loadConfig(),
+        gateway: { auth: { mode: "token" } },
+      });
+
+      expect(loadConfig().gateway?.auth).toEqual({ mode: "token" });
+      expect(loadConfig().models?.providers?.openai?.apiKey).toBe("sk-file-runtime");
+      expect(ensureAuthProfileStore(agentDir).profiles["openai:default"]).toMatchObject({
+        type: "api_key",
+        key: "sk-file-runtime",
+      });
+    });
+  });
+
+  it("clears active secrets runtime state and throws when refresh fails after a write", async () => {
+    if (os.platform() === "win32") {
+      return;
+    }
+    await withTempHome("openclaw-secrets-runtime-refresh-fail-", async (home) => {
+      const configDir = path.join(home, ".openclaw");
+      const secretFile = path.join(configDir, "secrets.json");
+      const agentDir = path.join(configDir, "agents", "main", "agent");
+      const authStorePath = path.join(agentDir, "auth-profiles.json");
+      await fs.mkdir(agentDir, { recursive: true });
+      await fs.chmod(configDir, 0o700).catch(() => {
+        // best-effort on tmp dirs that already have secure perms
+      });
+      await fs.writeFile(
+        secretFile,
+        `${JSON.stringify({ providers: { openai: { apiKey: "sk-file-runtime" } } }, null, 2)}\n`, // pragma: allowlist secret
+        { encoding: "utf8", mode: 0o600 },
+      );
+      await fs.writeFile(
+        authStorePath,
+        `${JSON.stringify(
+          {
+            version: 1,
+            profiles: {
+              "openai:default": {
+                type: "api_key",
+                provider: "openai",
+                keyRef: { source: "file", provider: "default", id: "/providers/openai/apiKey" },
+              },
+            },
+          },
+          null,
+          2,
+        )}\n`,
+        { encoding: "utf8", mode: 0o600 },
+      );
+
+      let loadAuthStoreCalls = 0;
+      const loadAuthStore = () => {
+        loadAuthStoreCalls += 1;
+        if (loadAuthStoreCalls > 1) {
+          throw new Error("simulated secrets runtime refresh failure");
+        }
+        return loadAuthStoreWithProfiles({
+          "openai:default": {
+            type: "api_key",
+            provider: "openai",
+            keyRef: { source: "file", provider: "default", id: "/providers/openai/apiKey" },
+          },
+        });
+      };
+
+      const prepared = await prepareSecretsRuntimeSnapshot({
+        config: asConfig({
+          secrets: {
+            providers: {
+              default: {
+                source: "file",
+                path: secretFile,
+                mode: "json",
+                ...(allowInsecureTempSecretFile ? { allowInsecurePath: true } : {}),
+              },
+            },
+          },
+          models: {
+            providers: {
+              openai: {
+                baseUrl: "https://api.openai.com/v1",
+                apiKey: { source: "file", provider: "default", id: "/providers/openai/apiKey" },
+                models: [],
+              },
+            },
+          },
+        }),
+        agentDirs: [agentDir],
+        loadAuthStore,
+      });
+
+      activateSecretsRuntimeSnapshot(prepared);
+
+      await expect(
+        writeConfigFile({
+          ...loadConfig(),
+          gateway: { auth: { mode: "token" } },
+        }),
+      ).rejects.toThrow(
+        /runtime snapshot refresh failed: simulated secrets runtime refresh failure/i,
+      );
+
+      expect(getActiveSecretsRuntimeSnapshot()).toBeNull();
+      expect(loadConfig().gateway?.auth).toEqual({ mode: "token" });
+      expect(loadConfig().models?.providers?.openai?.apiKey).toEqual({
+        source: "file",
+        provider: "default",
+        id: "/providers/openai/apiKey",
+      });
+
+      const persistedStore = ensureAuthProfileStore(agentDir).profiles["openai:default"];
+      expect(persistedStore).toMatchObject({
+        type: "api_key",
+        keyRef: { source: "file", provider: "default", id: "/providers/openai/apiKey" },
+      });
+      expect("key" in persistedStore ? persistedStore.key : undefined).toBeUndefined();
+    });
+  });
+
+  it("recomputes config-derived agent dirs when refreshing active secrets runtime snapshots", async () => {
+    await withTempHome("openclaw-secrets-runtime-agent-dirs-", async (home) => {
+      const mainAgentDir = path.join(home, ".openclaw", "agents", "main", "agent");
+      const opsAgentDir = path.join(home, ".openclaw", "agents", "ops", "agent");
+      await fs.mkdir(mainAgentDir, { recursive: true });
+      await fs.mkdir(opsAgentDir, { recursive: true });
+      await fs.writeFile(
+        path.join(mainAgentDir, "auth-profiles.json"),
+        `${JSON.stringify(
+          {
+            version: 1,
+            profiles: {
+              "openai:default": {
+                type: "api_key",
+                provider: "openai",
+                keyRef: { source: "env", provider: "default", id: "OPENAI_API_KEY" },
+              },
+            },
+          },
+          null,
+          2,
+        )}\n`,
+        { encoding: "utf8", mode: 0o600 },
+      );
+      await fs.writeFile(
+        path.join(opsAgentDir, "auth-profiles.json"),
+        `${JSON.stringify(
+          {
+            version: 1,
+            profiles: {
+              "anthropic:ops": {
+                type: "api_key",
+                provider: "anthropic",
+                keyRef: { source: "env", provider: "default", id: "ANTHROPIC_API_KEY" },
+              },
+            },
+          },
+          null,
+          2,
+        )}\n`,
+        { encoding: "utf8", mode: 0o600 },
+      );
+
+      const prepared = await prepareSecretsRuntimeSnapshot({
+        config: asConfig({}),
+        env: {
+          OPENAI_API_KEY: "sk-main-runtime", // pragma: allowlist secret
+          ANTHROPIC_API_KEY: "sk-ops-runtime", // pragma: allowlist secret
+        },
+      });
+
+      activateSecretsRuntimeSnapshot(prepared);
+      expect(ensureAuthProfileStore(opsAgentDir).profiles["anthropic:ops"]).toBeUndefined();
+
+      await writeConfigFile({
+        agents: {
+          list: [{ id: "ops", agentDir: opsAgentDir }],
+        },
+      });
+
+      expect(ensureAuthProfileStore(opsAgentDir).profiles["anthropic:ops"]).toMatchObject({
+        type: "api_key",
+        key: "sk-ops-runtime",
+        keyRef: { source: "env", provider: "default", id: "ANTHROPIC_API_KEY" },
+      });
     });
   });
 
@@ -603,7 +876,7 @@ describe("secrets runtime snapshot", () => {
           auth: {
             mode: "password",
             token: "local-token",
-            password: "local-password",
+            password: "local-password", // pragma: allowlist secret
           },
           remote: {
             enabled: true,
@@ -642,7 +915,7 @@ describe("secrets runtime snapshot", () => {
         },
       }),
       env: {
-        GATEWAY_PASSWORD_REF: "resolved-gateway-password",
+        GATEWAY_PASSWORD_REF: "resolved-gateway-password", // pragma: allowlist secret
       },
       agentDirs: ["/tmp/openclaw-agent-main"],
       loadAuthStore: () => ({ version: 1, profiles: {} }),
@@ -650,6 +923,71 @@ describe("secrets runtime snapshot", () => {
 
     expect(snapshot.config.gateway?.auth?.password).toBe("resolved-gateway-password");
     expect(snapshot.warnings.map((warning) => warning.path)).not.toContain("gateway.auth.password");
+  });
+
+  it("treats gateway.auth.token ref as active when token mode is explicit", async () => {
+    const snapshot = await prepareSecretsRuntimeSnapshot({
+      config: asConfig({
+        gateway: {
+          auth: {
+            mode: "token",
+            token: { source: "env", provider: "default", id: "GATEWAY_TOKEN_REF" },
+          },
+        },
+      }),
+      env: {
+        GATEWAY_TOKEN_REF: "resolved-gateway-token",
+      },
+      agentDirs: ["/tmp/openclaw-agent-main"],
+      loadAuthStore: () => ({ version: 1, profiles: {} }),
+    });
+
+    expect(snapshot.config.gateway?.auth?.token).toBe("resolved-gateway-token");
+    expect(snapshot.warnings.map((warning) => warning.path)).not.toContain("gateway.auth.token");
+  });
+
+  it("treats gateway.auth.token ref as inactive when password mode is explicit", async () => {
+    const snapshot = await prepareSecretsRuntimeSnapshot({
+      config: asConfig({
+        gateway: {
+          auth: {
+            mode: "password",
+            token: { source: "env", provider: "default", id: "GATEWAY_TOKEN_REF" },
+            password: "password-123", // pragma: allowlist secret
+          },
+        },
+      }),
+      env: {
+        GATEWAY_TOKEN_REF: "resolved-gateway-token",
+      },
+      agentDirs: ["/tmp/openclaw-agent-main"],
+      loadAuthStore: () => ({ version: 1, profiles: {} }),
+    });
+
+    expect(snapshot.config.gateway?.auth?.token).toEqual({
+      source: "env",
+      provider: "default",
+      id: "GATEWAY_TOKEN_REF",
+    });
+    expect(snapshot.warnings.map((warning) => warning.path)).toContain("gateway.auth.token");
+  });
+
+  it("fails when gateway.auth.token ref is active and unresolved", async () => {
+    await expect(
+      prepareSecretsRuntimeSnapshot({
+        config: asConfig({
+          gateway: {
+            auth: {
+              mode: "token",
+              token: { source: "env", provider: "default", id: "MISSING_GATEWAY_TOKEN_REF" },
+            },
+          },
+        }),
+        env: {},
+        agentDirs: ["/tmp/openclaw-agent-main"],
+        loadAuthStore: () => ({ version: 1, profiles: {} }),
+      }),
+    ).rejects.toThrow(/MISSING_GATEWAY_TOKEN_REF/i);
   });
 
   it("treats gateway.auth.password ref as inactive when auth mode is trusted-proxy", async () => {
@@ -663,7 +1001,7 @@ describe("secrets runtime snapshot", () => {
         },
       }),
       env: {
-        GATEWAY_PASSWORD_REF: "resolved-gateway-password",
+        GATEWAY_PASSWORD_REF: "resolved-gateway-password", // pragma: allowlist secret
       },
       agentDirs: ["/tmp/openclaw-agent-main"],
       loadAuthStore: () => ({ version: 1, profiles: {} }),
@@ -757,7 +1095,7 @@ describe("secrets runtime snapshot", () => {
       }),
       env: {
         REMOTE_TOKEN: "resolved-remote-token",
-        REMOTE_PASSWORD: "resolved-remote-password",
+        REMOTE_PASSWORD: "resolved-remote-password", // pragma: allowlist secret
       },
       agentDirs: ["/tmp/openclaw-agent-main"],
       loadAuthStore: () => ({ version: 1, profiles: {} }),
@@ -781,7 +1119,7 @@ describe("secrets runtime snapshot", () => {
         },
       }),
       env: {
-        REMOTE_PASSWORD: "resolved-remote-password",
+        REMOTE_PASSWORD: "resolved-remote-password", // pragma: allowlist secret
       },
       agentDirs: ["/tmp/openclaw-agent-main"],
       loadAuthStore: () => ({ version: 1, profiles: {} }),
@@ -915,8 +1253,8 @@ describe("secrets runtime snapshot", () => {
         },
       }),
       env: {
-        NEXTCLOUD_BOT_SECRET: "resolved-nextcloud-bot-secret",
-        NEXTCLOUD_API_PASSWORD: "resolved-nextcloud-api-password",
+        NEXTCLOUD_BOT_SECRET: "resolved-nextcloud-bot-secret", // pragma: allowlist secret
+        NEXTCLOUD_API_PASSWORD: "resolved-nextcloud-api-password", // pragma: allowlist secret
       },
       agentDirs: ["/tmp/openclaw-agent-main"],
       loadAuthStore: () => ({ version: 1, profiles: {} }),
@@ -957,8 +1295,8 @@ describe("secrets runtime snapshot", () => {
         },
       }),
       env: {
-        NEXTCLOUD_WORK_BOT_SECRET: "resolved-nextcloud-work-bot-secret",
-        NEXTCLOUD_WORK_API_PASSWORD: "resolved-nextcloud-work-api-password",
+        NEXTCLOUD_WORK_BOT_SECRET: "resolved-nextcloud-work-bot-secret", // pragma: allowlist secret
+        NEXTCLOUD_WORK_API_PASSWORD: "resolved-nextcloud-work-api-password", // pragma: allowlist secret
       },
       agentDirs: ["/tmp/openclaw-agent-main"],
       loadAuthStore: () => ({ version: 1, profiles: {} }),
@@ -993,7 +1331,7 @@ describe("secrets runtime snapshot", () => {
       }),
       env: {
         REMOTE_GATEWAY_TOKEN: "tailscale-remote-token",
-        REMOTE_GATEWAY_PASSWORD: "tailscale-remote-password",
+        REMOTE_GATEWAY_PASSWORD: "tailscale-remote-password", // pragma: allowlist secret
       },
       agentDirs: ["/tmp/openclaw-agent-main"],
       loadAuthStore: () => ({ version: 1, profiles: {} }),
@@ -1866,7 +2204,7 @@ describe("secrets runtime snapshot", () => {
             list: [{ id: "worker" }],
           },
         },
-        env: { OPENAI_API_KEY: "sk-runtime-worker" },
+        env: { OPENAI_API_KEY: "sk-runtime-worker" }, // pragma: allowlist secret
       });
 
       await expect(fs.access(workerStorePath)).rejects.toMatchObject({ code: "ENOENT" });

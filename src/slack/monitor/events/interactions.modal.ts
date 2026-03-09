@@ -77,6 +77,7 @@ type SlackInteractionContextPrefix = "slack:interaction:view" | "slack:interacti
 function resolveModalSessionRouting(params: {
   ctx: SlackMonitorContext;
   metadata: ReturnType<typeof parseSlackModalPrivateMetadata>;
+  userId?: string;
 }): { sessionKey: string; channelId?: string; channelType?: string } {
   const metadata = params.metadata;
   if (metadata.sessionKey) {
@@ -91,6 +92,7 @@ function resolveModalSessionRouting(params: {
       sessionKey: params.ctx.resolveSlackSystemEventSessionKey({
         channelId: metadata.channelId,
         channelType: metadata.channelType,
+        senderId: params.userId,
       }),
       channelId: metadata.channelId,
       channelType: metadata.channelType,
@@ -139,6 +141,7 @@ function resolveSlackModalEventBase(params: {
   const sessionRouting = resolveModalSessionRouting({
     ctx: params.ctx,
     metadata,
+    userId,
   });
   return {
     callbackId,
