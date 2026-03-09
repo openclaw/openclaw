@@ -172,6 +172,74 @@ describe("runtime config snapshot writes", () => {
     });
   });
 
+  it("preserves file secret provider allowInsecurePath across runtime snapshot writes", async () => {
+    await withTempHome("openclaw-config-runtime-file-provider-", async (home) => {
+      const configPath = path.join(home, ".openclaw", "openclaw.json");
+      const sourceConfig: OpenClawConfig = {
+        secrets: {
+          providers: {
+            default: {
+              source: "file",
+              path: path.join(home, ".openclaw", "secrets.json"),
+              mode: "json",
+              allowInsecurePath: true,
+            },
+          },
+        },
+        models: {
+          providers: {
+            openai: {
+              baseUrl: "https://api.openai.com/v1",
+              apiKey: { source: "file", provider: "default", id: "/providers/openai/apiKey" },
+              models: [],
+            },
+          },
+        },
+      };
+      const runtimeConfig: OpenClawConfig = {
+        ...structuredClone(sourceConfig),
+        models: {
+          providers: {
+            openai: {
+              baseUrl: "https://api.openai.com/v1",
+              apiKey: "sk-runtime-resolved", // pragma: allowlist secret
+              models: [],
+            },
+          },
+        },
+      };
+
+      await fs.mkdir(path.dirname(configPath), { recursive: true });
+      await fs.writeFile(configPath, `${JSON.stringify(sourceConfig, null, 2)}\n`, "utf8");
+
+      try {
+        setRuntimeConfigSnapshot(runtimeConfig, sourceConfig);
+
+        await writeConfigFile({
+          ...loadConfig(),
+          gateway: { auth: { mode: "token" as const } },
+        });
+
+        const persisted = JSON.parse(await fs.readFile(configPath, "utf8")) as {
+          secrets?: {
+            providers?: {
+              default?: {
+                allowInsecurePath?: boolean;
+              };
+            };
+          };
+        };
+        expect(persisted.secrets?.providers?.default?.allowInsecurePath).toBe(true);
+        expect(loadConfig().secrets?.providers?.default).toMatchObject({
+          source: "file",
+          allowInsecurePath: true,
+        });
+      } finally {
+        resetRuntimeConfigState();
+      }
+    });
+  });
+
   it("keeps the last-known-good runtime snapshot active while a specialized refresh is pending", async () => {
     await withTempHome("openclaw-config-runtime-refresh-pending-", async (home) => {
       const configPath = path.join(home, ".openclaw", "openclaw.json");
