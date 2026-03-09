@@ -92,6 +92,8 @@ export type ChatState = {
   isStreaming: boolean;
   streamRunId: string | null;
   streamContent: string;
+  /** Timestamp (ms) of last stream event — used to detect stuck streams */
+  lastStreamEventAt: number;
 
   // Pause-display: UI pauses rendering deltas while backend continues
   isPaused: boolean;
@@ -246,6 +248,7 @@ const initialState = {
   isStreaming: false,
   streamRunId: null as string | null,
   streamContent: "",
+  lastStreamEventAt: 0,
   isPaused: false,
   pauseBuffer: "",
   isSendPending: false,
@@ -317,6 +320,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
       isSendPending: false,
       streamRunId: runId,
       streamContent: "",
+      lastStreamEventAt: Date.now(),
       isPaused: false,
       pauseBuffer: "",
     }),
@@ -328,9 +332,9 @@ export const useChatStore = create<ChatState>((set, get) => ({
       }
       // When paused, buffer the latest text but don't update visible content
       if (state.isPaused) {
-        return { pauseBuffer: text };
+        return { pauseBuffer: text, lastStreamEventAt: Date.now() };
       }
-      return { streamContent: text };
+      return { streamContent: text, lastStreamEventAt: Date.now() };
     }),
 
   finalizeStream: (runId, text, usage) =>

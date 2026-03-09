@@ -280,14 +280,19 @@ export function useChat(sendRpc: SendRpc) {
       return;
     }
     if (s.isStreaming || s.isSendPending) {
-      // Defense-in-depth: if isStreaming is stuck with no streamRunId,
-      // the stream was finalized but isStreaming was re-armed (Bug 1 scenario).
-      // Force-clear the stuck state so the queue can advance.
-      if (s.isStreaming && !s.streamRunId) {
+      // Defense-in-depth: detect stuck streams and force-clear them.
+      // Case 1: isStreaming with no streamRunId (re-armed after finalize).
+      // Case 2: isStreaming but no stream events received for 30s+ (server
+      //         finished but the "final" event was dropped, e.g. session key mismatch).
+      const stuckNoRunId = s.isStreaming && !s.streamRunId;
+      const staleStream =
+        s.isStreaming && s.lastStreamEventAt > 0 && Date.now() - s.lastStreamEventAt > 30_000;
+      if (stuckNoRunId || staleStream) {
         useChatStore.setState({
           isStreaming: false,
           isSendPending: false,
           streamRunId: null,
+          lastStreamEventAt: 0,
         });
         return; // State change triggers subscriber, which will call us again
       }
@@ -403,6 +408,23 @@ export function useChat(sendRpc: SendRpc) {
     const timer = setTimeout(trySendNextQueued, 800);
     return () => clearTimeout(timer);
   }, [isConnected, trySendNextQueued]);
+
+  // Watchdog: auto-clear stuck "thinking" indicator if no stream events for 60s.
+  // This catches cases where the gateway "final" event was dropped (e.g. session
+  // key format mismatch) and isStreaming stays true indefinitely.
+  useEffect(() => {
+    const watchdog = setInterval(() => {
+      const s = useChatStore.getState();
+      if (!s.isStreaming || !s.lastStreamEventAt) {
+        return;
+      }
+      if (Date.now() - s.lastStreamEventAt > 60_000) {
+        console.warn("[chat] stale stream detected — clearing stuck thinking state");
+        s.finalizeStream(s.streamRunId ?? "", s.streamContent || undefined);
+      }
+    }, 10_000);
+    return () => clearInterval(watchdog);
+  }, []);
 
   // Auto-load sessions when connected
   useEffect(() => {
