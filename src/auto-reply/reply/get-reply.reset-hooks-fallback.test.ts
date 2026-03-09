@@ -8,12 +8,16 @@ const mocks = vi.hoisted(() => ({
   initSessionState: vi.fn(),
 }));
 
-vi.mock("../../agents/agent-scope.js", () => ({
-  resolveAgentDir: vi.fn(() => "/tmp/agent"),
-  resolveAgentWorkspaceDir: vi.fn(() => "/tmp/workspace"),
-  resolveSessionAgentId: vi.fn(() => "main"),
-  resolveAgentSkillsFilter: vi.fn(() => undefined),
-}));
+vi.mock("../../agents/agent-scope.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../agents/agent-scope.js")>();
+  return {
+    ...actual,
+    resolveAgentDir: vi.fn(() => "/tmp/agent"),
+    resolveAgentWorkspaceDir: vi.fn(() => "/tmp/workspace"),
+    resolveSessionAgentId: vi.fn(() => "main"),
+    resolveAgentSkillsFilter: vi.fn(() => undefined),
+  };
+});
 vi.mock("../../agents/model-selection.js", () => ({
   resolveModelRefFromString: vi.fn(() => null),
 }));

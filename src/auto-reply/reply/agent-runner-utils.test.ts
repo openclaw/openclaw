@@ -6,10 +6,14 @@ const hoisted = vi.hoisted(() => {
   return { resolveRunModelFallbacksOverrideMock };
 });
 
-vi.mock("../../agents/agent-scope.js", () => ({
-  resolveRunModelFallbacksOverride: (...args: unknown[]) =>
-    hoisted.resolveRunModelFallbacksOverrideMock(...args),
-}));
+vi.mock("../../agents/agent-scope.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../agents/agent-scope.js")>();
+  return {
+    ...actual,
+    resolveRunModelFallbacksOverride: (...args: unknown[]) =>
+      hoisted.resolveRunModelFallbacksOverrideMock(...args),
+  };
+});
 
 const {
   buildEmbeddedRunBaseParams,

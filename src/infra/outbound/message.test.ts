@@ -6,18 +6,29 @@ const mocks = vi.hoisted(() => ({
   deliverOutboundPayloads: vi.fn(),
 }));
 
-vi.mock("../../channels/plugins/index.js", () => ({
-  normalizeChannelId: (channel?: string) => channel?.trim().toLowerCase() ?? undefined,
-  getChannelPlugin: mocks.getChannelPlugin,
-}));
+vi.mock("../../channels/plugins/index.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../channels/plugins/index.js")>();
+  return {
+    ...actual,
+    getChannelPlugin: mocks.getChannelPlugin,
+  };
+});
 
-vi.mock("./targets.js", () => ({
-  resolveOutboundTarget: mocks.resolveOutboundTarget,
-}));
+vi.mock("./targets.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./targets.js")>();
+  return {
+    ...actual,
+    resolveOutboundTarget: mocks.resolveOutboundTarget,
+  };
+});
 
-vi.mock("./deliver.js", () => ({
-  deliverOutboundPayloads: mocks.deliverOutboundPayloads,
-}));
+vi.mock("./deliver.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./deliver.js")>();
+  return {
+    ...actual,
+    deliverOutboundPayloads: mocks.deliverOutboundPayloads,
+  };
+});
 
 import { sendMessage } from "./message.js";
 
@@ -31,14 +42,14 @@ describe("sendMessage", () => {
       outbound: { deliveryMode: "direct" },
     });
     mocks.resolveOutboundTarget.mockImplementation(({ to }: { to: string }) => ({ ok: true, to }));
-    mocks.deliverOutboundPayloads.mockResolvedValue([{ channel: "mattermost", messageId: "m1" }]);
+    mocks.deliverOutboundPayloads.mockResolvedValue([{ channel: "telegram", messageId: "m1" }]);
   });
 
   it("passes explicit agentId to outbound delivery for scoped media roots", async () => {
     await sendMessage({
       cfg: {},
-      channel: "mattermost",
-      to: "channel:town-square",
+      channel: "telegram",
+      to: "123456",
       content: "hi",
       agentId: "work",
     });
@@ -46,8 +57,8 @@ describe("sendMessage", () => {
     expect(mocks.deliverOutboundPayloads).toHaveBeenCalledWith(
       expect.objectContaining({
         agentId: "work",
-        channel: "mattermost",
-        to: "channel:town-square",
+        channel: "telegram",
+        to: "123456",
       }),
     );
   });
