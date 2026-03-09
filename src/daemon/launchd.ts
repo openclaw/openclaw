@@ -25,6 +25,9 @@ import type {
   GatewayServiceManageArgs,
 } from "./service-types.js";
 
+const LAUNCH_AGENT_DIR_MODE = 0o755;
+const LAUNCH_AGENT_PLIST_MODE = 0o644;
+
 function resolveLaunchAgentLabel(args?: { env?: Record<string, string | undefined> }): string {
   const envLabel = args?.env?.OPENCLAW_LAUNCHD_LABEL?.trim();
   if (envLabel) {
@@ -110,6 +113,20 @@ function resolveGuiDomain(): string {
     return "gui/501";
   }
   return `gui/${process.getuid()}`;
+}
+
+async function ensureSecureDirectory(targetPath: string): Promise<void> {
+  await fs.mkdir(targetPath, { recursive: true, mode: LAUNCH_AGENT_DIR_MODE });
+  try {
+    const stat = await fs.stat(targetPath);
+    const mode = stat.mode & 0o777;
+    const tightenedMode = mode & ~0o022;
+    if (tightenedMode !== mode) {
+      await fs.chmod(targetPath, tightenedMode);
+    }
+  } catch {
+    // Best effort: keep install working even if chmod/stat is unavailable.
+  }
 }
 
 export type LaunchctlPrintInfo = {
@@ -207,6 +224,9 @@ export async function repairLaunchAgentBootstrap(args: {
   const domain = resolveGuiDomain();
   const label = resolveLaunchAgentLabel({ env });
   const plistPath = resolveLaunchAgentPlistPath(env);
+  // launchd can persist "disabled" state after bootout; clear it before bootstrap
+  // (matches the same guard in installLaunchAgent and restartLaunchAgent).
+  await execLaunchctl(["enable", `${domain}/${label}`]);
   const boot = await execLaunchctl(["bootstrap", domain, plistPath]);
   if (boot.code !== 0) {
     return { ok: false, detail: (boot.stderr || boot.stdout).trim() || undefined };
@@ -256,8 +276,8 @@ export async function uninstallLegacyLaunchAgents({
     return agents;
   }
 
-  const home = resolveHomeDir(env);
-  const trashDir = path.join(home, ".Trash");
+  const home = toPosixPath(resolveHomeDir(env));
+  const trashDir = path.posix.join(home, ".Trash");
   try {
     await fs.mkdir(trashDir, { recursive: true });
   } catch {
@@ -303,8 +323,8 @@ export async function uninstallLaunchAgent({
     return;
   }
 
-  const home = resolveHomeDir(env);
-  const trashDir = path.join(home, ".Trash");
+  const home = toPosixPath(resolveHomeDir(env));
+  const trashDir = path.posix.join(home, ".Trash");
   const dest = path.join(trashDir, `${label}.plist`);
   try {
     await fs.mkdir(trashDir, { recursive: true });
@@ -379,7 +399,7 @@ export async function installLaunchAgent({
   description,
 }: GatewayServiceInstallArgs): Promise<{ plistPath: string }> {
   const { logDir, stdoutPath, stderrPath } = resolveGatewayLogPaths(env);
-  await fs.mkdir(logDir, { recursive: true });
+  await ensureSecureDirectory(logDir);
 
   const domain = resolveGuiDomain();
   const label = resolveLaunchAgentLabel({ env });
@@ -395,7 +415,11 @@ export async function installLaunchAgent({
   }
 
   const plistPath = resolveLaunchAgentPlistPathForLabel(env, label);
-  await fs.mkdir(path.dirname(plistPath), { recursive: true });
+  const home = toPosixPath(resolveHomeDir(env));
+  const libraryDir = path.posix.join(home, "Library");
+  await ensureSecureDirectory(home);
+  await ensureSecureDirectory(libraryDir);
+  await ensureSecureDirectory(path.dirname(plistPath));
 
   const serviceDescription = resolveGatewayServiceDescription({ env, environment, description });
   const plist = buildLaunchAgentPlist({
@@ -407,7 +431,8 @@ export async function installLaunchAgent({
     stderrPath,
     environment,
   });
-  await fs.writeFile(plistPath, plist, "utf8");
+  await fs.writeFile(plistPath, plist, { encoding: "utf8", mode: LAUNCH_AGENT_PLIST_MODE });
+  await fs.chmod(plistPath, LAUNCH_AGENT_PLIST_MODE).catch(() => undefined);
 
   await execLaunchctl(["bootout", domain, plistPath]);
   await execLaunchctl(["unload", plistPath]);
@@ -466,6 +491,9 @@ export async function restartLaunchAgent({
     await waitForPidExit(previousPid);
   }
 
+  // launchd can persist "disabled" state after bootout; clear it before bootstrap
+  // (matches the same guard in installLaunchAgent).
+  await execLaunchctl(["enable", `${domain}/${label}`]);
   const boot = await execLaunchctl(["bootstrap", domain, plistPath]);
   if (boot.code !== 0) {
     const detail = (boot.stderr || boot.stdout).trim();
