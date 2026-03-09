@@ -162,6 +162,32 @@ By default, sub-agents cannot spawn their own sub-agents (`maxSpawnDepth: 1`). Y
 }
 ```
 
+### Subagent prompt hook (runtime injection)
+
+You can enforce common protocol text on every `runtime: "subagent"` spawn with a prompt hook:
+
+```json5
+{
+  agents: {
+    subagent: {
+      promptHook: {
+        enabled: true,
+        mode: "wrap", // prepend | append | wrap
+        prefixPath: "~/.openclaw/prompts/subagent_hook_prefix.md",
+        suffixPath: "~/.openclaw/prompts/subagent_hook_suffix.md",
+        maxBytes: 65536,
+        onMissing: "warn", // warn | disable
+      },
+    },
+  },
+}
+```
+
+- Applies only to `sessions_spawn` with `runtime: "subagent"`.
+- `warn`: continue with available segments when files are missing/unreadable.
+- `disable`: skip hook injection entirely if any configured segment cannot be loaded.
+- Operational logs include metadata (`applied`/`partial`/`skipped`, mode, file hashes), not full prompt bodies.
+
 ### Depth levels
 
 | Depth | Session key shape                            | Role                                          | Can spawn?                   |
@@ -214,11 +240,7 @@ Sub-agents report back via an announce step:
 
 - The announce step runs inside the sub-agent session (not the requester session).
 - If the sub-agent replies exactly `ANNOUNCE_SKIP`, nothing is posted.
-- Otherwise delivery depends on requester depth:
-  - top-level requester sessions use a follow-up `agent` call with external delivery (`deliver=true`)
-  - nested requester subagent sessions receive an internal follow-up injection (`deliver=false`) so the orchestrator can synthesize child results in-session
-  - if a nested requester subagent session is gone, OpenClaw falls back to that session's requester when available
-- Child completion aggregation is scoped to the current requester run when building nested completion findings, preventing stale prior-run child outputs from leaking into the current announce.
+- Otherwise the announce reply is posted to the requester chat channel via a follow-up `agent` call (`deliver=true`).
 - Announce replies preserve thread/topic routing when available on channel adapters.
 - Announce context is normalized to a stable internal event block:
   - source (`subagent` or `cron`)
