@@ -758,7 +758,7 @@ export class AcpGatewayAgent implements Agent {
       // do not treat transient backend errors (timeouts, rate-limits) as deliberate
       // refusals.  TODO: when ChatEventSchema gains a structured errorKind field
       // (e.g. "refusal" | "timeout" | "rate_limit"), use it to distinguish here.
-      this.finishPrompt(pending.sessionId, pending, "end_turn");
+      void this.finishPrompt(pending.sessionId, pending, "end_turn");
     }
   }
 
