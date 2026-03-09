@@ -199,6 +199,7 @@ export const ModelCompatSchema = z
     requiresAssistantAfterToolResult: z.boolean().optional(),
     requiresThinkingAsText: z.boolean().optional(),
     requiresMistralToolIds: z.boolean().optional(),
+    requiresOpenAiAnthropicToolPayload: z.boolean().optional(),
   })
   .strict()
   .optional();
