@@ -67,6 +67,7 @@ import {
 } from "./server/plugins-http.js";
 import type { ReadinessChecker } from "./server/readiness.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
+import { handleAdminBillingHttpRequest } from "../billing/admin-http.js";
 import { handleBillingHttpRequest } from "../billing/billing-http.js";
 import { enforcePaywallHttp } from "../billing/paywall.js";
 import { handleToolsInvokeHttpRequest } from "./tools-invoke-http.js";
@@ -643,6 +644,24 @@ export function createGatewayHttpServer(opts: {
           // Billing routes (/billing/*) — always reachable, no auth required for checkout/webhook
           name: "billing",
           run: () => handleBillingHttpRequest(req, res),
+        },
+        {
+          // Admin dashboard (/admin/billing/*) — requires gateway Bearer token
+          name: "admin-billing",
+          run: async () => {
+            if (!requestPath.startsWith("/admin/billing")) {
+              return false;
+            }
+            const bearerToken = getBearerToken(req);
+            const authResult = await authorizeHttpGatewayConnect({
+              auth: resolvedAuth,
+              connectAuth: bearerToken ? { token: bearerToken, password: bearerToken } : null,
+              req,
+              trustedProxies,
+              allowRealIpFallback,
+            });
+            return handleAdminBillingHttpRequest(req, res, { authorized: authResult.ok });
+          },
         },
         {
           // Paywall gate: block AI/agent requests when no active subscription

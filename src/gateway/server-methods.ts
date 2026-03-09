@@ -1,3 +1,5 @@
+import { paywallError } from "../billing/paywall.js";
+import { recordMessage, resolveUserId } from "../billing/usage-tracker.js";
 import { withPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
 import { formatControlPlaneActor, resolveControlPlaneActor } from "./control-plane-audit.js";
 import { consumeControlPlaneWriteBudget } from "./control-plane-rate-limit.js";
@@ -130,6 +132,33 @@ export async function handleGatewayRequest(
       return;
     }
   }
+  // Paywall: block AI-invoking methods when no active subscription.
+  // Pass-through methods (connect, health, config reads, etc.) are unaffected.
+  const AI_GATED_METHODS = new Set(["chat.send", "chat.inject"]);
+  if (AI_GATED_METHODS.has(req.method)) {
+    const paywallErr = paywallError();
+    if (paywallErr) {
+      respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.UNAVAILABLE, paywallErr.error.message, {
+          details: { code: paywallErr.error.code },
+        }),
+      );
+      return;
+    }
+    // Record usage for this message
+    const token = client?.connect?.auth?.token ?? client?.connect?.auth?.deviceToken;
+    const label = client?.connect?.client?.displayName;
+    const params = req.params as Record<string, unknown> | undefined;
+    const messageText = typeof params?.message === "string" ? params.message : "";
+    recordMessage({
+      userId: resolveUserId(token),
+      label,
+      messageLength: messageText.length,
+    });
+  }
+
   const handler = opts.extraHandlers?.[req.method] ?? coreGatewayHandlers[req.method];
   if (!handler) {
     respond(
