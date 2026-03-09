@@ -1,19 +1,17 @@
 import type { SqliteRepository, PreparedStatement } from "./sqlite-repository.js";
 
-export type EscalationStatus = "pending" | "accepted";
-
 // Stored escalation row from SQLite (window_message_ids parsed from JSON)
 export type StoredEscalation = {
   id: number;
   conversation_id: string;
   escalation_type: string;
   window_message_ids: number[];
-  status: EscalationStatus;
+  created: boolean;
   created_at: number;
 };
 
 export type EscalationRepository = {
-  /** Insert a new escalation (status defaults to "pending") */
+  /** Insert a new escalation (created defaults to false) */
   insertEscalation: (params: {
     conversationId: string;
     escalationType: string;
@@ -21,17 +19,17 @@ export type EscalationRepository = {
   }) => void;
   /** Get the most recent escalation for a conversation, or null */
   getLastEscalation: (conversationId: string) => StoredEscalation | null;
-  /** Mark the most recent pending escalation as accepted */
-  markAccepted: (conversationId: string) => void;
+  /** Mark the most recent uncreated escalation as created */
+  markCreated: (conversationId: string) => void;
 };
 
-// Raw row shape from SQLite (window_message_ids is a JSON string)
+// Raw row shape from SQLite (window_message_ids is a JSON string, created is 0/1)
 type EscalationRow = {
   id: number;
   conversation_id: string;
   escalation_type: string;
   window_message_ids: string;
-  status: EscalationStatus;
+  created: number;
   created_at: number;
 };
 
@@ -43,7 +41,7 @@ type EscalationRow = {
 export class EscalationRepositoryImpl implements EscalationRepository {
   private readonly insertStmt: PreparedStatement;
   private readonly queryStmt: PreparedStatement;
-  private readonly acceptStmt: PreparedStatement;
+  private readonly markCreatedStmt: PreparedStatement;
 
   constructor(db: SqliteRepository) {
     // Create schema (if it doesn't exist)
@@ -53,7 +51,7 @@ export class EscalationRepositoryImpl implements EscalationRepository {
         conversation_id TEXT NOT NULL,
         escalation_type TEXT NOT NULL,
         window_message_ids TEXT NOT NULL,
-        status TEXT NOT NULL DEFAULT 'pending',
+        created INTEGER NOT NULL DEFAULT 0,
         created_at INTEGER NOT NULL
       );
       CREATE INDEX IF NOT EXISTS idx_esc_conv ON escalations (conversation_id, created_at DESC);
@@ -61,26 +59,26 @@ export class EscalationRepositoryImpl implements EscalationRepository {
 
     // Prepared statements
     this.insertStmt = db.prepare(`
-      INSERT INTO escalations (conversation_id, escalation_type, window_message_ids, status, created_at)
-      VALUES (?, ?, ?, 'pending', ?)
+      INSERT INTO escalations (conversation_id, escalation_type, window_message_ids, created, created_at)
+      VALUES (?, ?, ?, 0, ?)
     `);
 
     // Order by id DESC — autoincrement guarantees insertion order even when
     // created_at timestamps collide (same ms)
     this.queryStmt = db.prepare(`
-      SELECT id, conversation_id, escalation_type, window_message_ids, status, created_at
+      SELECT id, conversation_id, escalation_type, window_message_ids, created, created_at
       FROM escalations
       WHERE conversation_id = ?
       ORDER BY id DESC
       LIMIT 1
     `);
 
-    this.acceptStmt = db.prepare(`
+    this.markCreatedStmt = db.prepare(`
       UPDATE escalations
-      SET status = 'accepted'
+      SET created = 1
       WHERE id = (
         SELECT id FROM escalations
-        WHERE conversation_id = ? AND status = 'pending'
+        WHERE conversation_id = ? AND created = 0
         ORDER BY id DESC
         LIMIT 1
       )
@@ -106,12 +104,16 @@ export class EscalationRepositoryImpl implements EscalationRepository {
 
     const row = rows[0];
     return {
-      ...row,
+      id: row.id,
+      conversation_id: row.conversation_id,
+      escalation_type: row.escalation_type,
       window_message_ids: JSON.parse(row.window_message_ids) as number[],
+      created: Boolean(row.created),
+      created_at: row.created_at,
     };
   }
 
-  markAccepted(conversationId: string): void {
-    this.acceptStmt.run(conversationId);
+  markCreated(conversationId: string): void {
+    this.markCreatedStmt.run(conversationId);
   }
 }

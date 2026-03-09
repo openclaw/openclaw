@@ -43,7 +43,7 @@ describe("EscalationRepository", () => {
     expect(result).not.toBeNull();
     expect(result!.conversation_id).toBe("chat-1");
     expect(result!.escalation_type).toBe("add_calendar_event");
-    expect(result!.status).toBe("pending");
+    expect(result!.created).toBe(false);
     expect(result!.id).toBeGreaterThan(0);
     expect(result!.created_at).toBeGreaterThan(0);
   });
@@ -84,19 +84,19 @@ describe("EscalationRepository", () => {
     expect(result!.window_message_ids).toEqual(ids);
   });
 
-  // ---- markAccepted ----
+  // ---- markCreated ----
 
-  it("markAccepted updates the latest pending escalation", () => {
+  it("markCreated updates the latest uncreated escalation", () => {
     repo.insertEscalation({
       conversationId: "chat-1",
       escalationType: "add_calendar_event",
       windowMessageIds: [1, 2, 3],
     });
 
-    repo.markAccepted("chat-1");
+    repo.markCreated("chat-1");
 
     const result = repo.getLastEscalation("chat-1");
-    expect(result!.status).toBe("accepted");
+    expect(result!.created).toBe(true);
   });
 
   // ---- Isolation ----

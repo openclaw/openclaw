@@ -1,5 +1,6 @@
 import type { Detector } from "../interfaces/detector.ts";
 import type { AgentRepository } from "../repository/agent-repository.ts";
+import type { EscalationRepository } from "../repository/escalation-repository.ts";
 import type { MessageRepository } from "../repository/message-repository.ts";
 import type { OllamaRepository } from "../repository/ollama-repository.ts";
 import type { EscalationAction, Logger, MeetingClassification, StoredMessage } from "../types.ts";
@@ -8,6 +9,7 @@ export type MeetingDetectorDeps = {
   messageRepo: MessageRepository;
   ollama: OllamaRepository;
   agentRepo: AgentRepository;
+  escalationRepo: EscalationRepository;
   logger: Logger;
 };
 
@@ -15,6 +17,7 @@ export type MeetingDetectorResult = {
   escalation: EscalationAction;
   agentNotified: boolean;
   classifications: Array<MeetingClassification | null>;
+  deduped: boolean;
 };
 
 /**
@@ -180,7 +183,14 @@ Use the calendar-guard skill to review the conversation and confirm whether a ca
 --- Conversation ---
 ${conversation}`;
 
-  const { messageRepo, ollama, agentRepo, logger } = deps;
+  /**
+   * Check if any stored message IDs overlap with the current window.
+   * Any overlap = the original meeting context is still visible.
+   */
+  const hasOverlap = (storedIds: number[], currentIds: Set<number>): boolean =>
+    storedIds.some((id) => currentIds.has(id));
+
+  const { messageRepo, ollama, agentRepo, escalationRepo, logger } = deps;
 
   return async (ctx) => {
     const { conversationId } = ctx;
@@ -188,6 +198,21 @@ ${conversation}`;
     logger.info(`meeting-detector: processing conversation ${conversationId}`);
 
     const messages = messageRepo.getConversation(conversationId, { limit: CONTEXT_LIMIT });
+    const currentIds = new Set(messages.map((m) => m.id));
+
+    // Dedup: check if the current window overlaps with the last escalation.
+    // If so, skip entirely (no Ollama calls) to avoid duplicate escalations.
+    const lastEscalation = escalationRepo.getLastEscalation(conversationId);
+    if (lastEscalation && hasOverlap(lastEscalation.window_message_ids, currentIds)) {
+      logger.info(`meeting-detector: dedup skip for ${conversationId}`);
+      return {
+        escalation: "none" as EscalationAction,
+        agentNotified: false,
+        classifications: [],
+        deduped: true,
+      };
+    }
+
     const conversation = formatConversation(messages);
 
     // Run agents sequentially — each gets its own prompt and model
@@ -211,7 +236,7 @@ ${conversation}`;
     // No escalation — log and return
     if (escalation === "none") {
       logger.info(`meeting-detector: no escalation for ${conversationId}`);
-      return { escalation, agentNotified: false, classifications };
+      return { escalation, agentNotified: false, classifications, deduped: false };
     }
 
     // Build the appropriate agent prompt based on escalation type
@@ -233,10 +258,19 @@ ${conversation}`;
 
     const agentResult = await agentRepo.send(agentPrompt);
 
+    // Only persist escalation if the agent send succeeded — allows retry on next cycle
+    if (agentResult.success) {
+      escalationRepo.insertEscalation({
+        conversationId,
+        escalationType: escalation,
+        windowMessageIds: [...currentIds],
+      });
+    }
+
     logger.info(
       `meeting-detector: escalation result for ${conversationId}: ${agentResult.success ? "success" : "failure"}`,
     );
 
-    return { escalation, agentNotified: agentResult.success, classifications };
+    return { escalation, agentNotified: agentResult.success, classifications, deduped: false };
   };
 };

@@ -1,5 +1,6 @@
 import { describe, it, expect, vi } from "vitest";
 import type { AgentRepository } from "../../repository/agent-repository.ts";
+import type { EscalationRepository } from "../../repository/escalation-repository.ts";
 import type { MessageRepository } from "../../repository/message-repository.ts";
 import type { OllamaRepository } from "../../repository/ollama-repository.ts";
 import type { Logger, MeetingClassification, StoredMessage } from "../../types.ts";
@@ -51,6 +52,30 @@ const createMockLogger = (): Logger => ({
   error: vi.fn(),
 });
 
+// Mock escalation repo — defaults to no prior escalation (null)
+const createMockEscalationRepo = (
+  lastEscalation: { window_message_ids: number[] } | null = null,
+): EscalationRepository => ({
+  insertEscalation: vi.fn(),
+  getLastEscalation: vi.fn().mockReturnValue(
+    lastEscalation
+      ? {
+          id: 1,
+          conversation_id: "chat-1",
+          escalation_type: "add_calendar_event",
+          window_message_ids: lastEscalation.window_message_ids,
+          created: false,
+          created_at: Date.now(),
+        }
+      : null,
+  ),
+  markCreated: vi.fn(),
+});
+
+// Helper to create messages with specific IDs (for dedup tests)
+const messagesWithIds = (ids: number[]): StoredMessage[] =>
+  ids.map((id) => ({ ...sampleMessages[0], id }));
+
 // Shorthand for classification results
 const TT: MeetingClassification = {
   has_agreed_to_meet: true,
@@ -76,11 +101,16 @@ const FF: MeetingClassification = {
 // Helper to create deps object
 const createDeps = (
   ollama: OllamaRepository,
-  overrides?: { repo?: MessageRepository; agentRepo?: AgentRepository },
+  overrides?: {
+    repo?: MessageRepository;
+    agentRepo?: AgentRepository;
+    escalationRepo?: EscalationRepository;
+  },
 ) => ({
   messageRepo: overrides?.repo ?? createMockRepo(),
   ollama,
   agentRepo: overrides?.agentRepo ?? createMockAgentRepo(),
+  escalationRepo: overrides?.escalationRepo ?? createMockEscalationRepo(),
   logger: createMockLogger(),
 });
 
@@ -167,6 +197,7 @@ describe("meetingDetector", () => {
 
       expect(result.escalation).toBe("add_calendar_event");
       expect(result.agentNotified).toBe(true);
+      expect(result.deduped).toBe(false);
     });
 
     it("returns confirm_with_customer when A is T+T and B is T+F", async () => {
@@ -215,6 +246,7 @@ describe("meetingDetector", () => {
 
       expect(result.escalation).toBe("none");
       expect(result.agentNotified).toBe(false);
+      expect(result.deduped).toBe(false);
     });
 
     it("returns none when neither agent detects a meeting", async () => {
@@ -223,6 +255,7 @@ describe("meetingDetector", () => {
 
       expect(result.escalation).toBe("none");
       expect(result.agentNotified).toBe(false);
+      expect(result.deduped).toBe(false);
     });
 
     it("returns none when agent A returns null (error = do nothing)", async () => {
@@ -341,6 +374,93 @@ describe("meetingDetector", () => {
       const result = await execute({ conversationId: "chat-1" });
 
       expect(result.classifications).toEqual([TT, FF]);
+    });
+  });
+
+  describe("deduplication", () => {
+    it("first detection escalates normally when no prior escalation exists", async () => {
+      const agentRepo = createMockAgentRepo();
+      const escalationRepo = createMockEscalationRepo(null);
+      const execute = meetingDetector(
+        createDeps(createMockOllama(TT, TT), { agentRepo, escalationRepo }),
+      );
+      const result = await execute({ conversationId: "chat-1" });
+
+      expect(agentRepo.send).toHaveBeenCalled();
+      expect(escalationRepo.insertEscalation).toHaveBeenCalledWith({
+        conversationId: "chat-1",
+        escalationType: "add_calendar_event",
+        windowMessageIds: [1, 2],
+      });
+      expect(result.deduped).toBe(false);
+    });
+
+    it("skips when current window overlaps with last escalation", async () => {
+      const agentRepo = createMockAgentRepo();
+      const ollama = createMockOllama(TT, TT);
+      // Last escalation used IDs [1, 2] — same as sampleMessages
+      const escalationRepo = createMockEscalationRepo({ window_message_ids: [1, 2] });
+      const execute = meetingDetector(createDeps(ollama, { agentRepo, escalationRepo }));
+      const result = await execute({ conversationId: "chat-1" });
+
+      expect(agentRepo.send).not.toHaveBeenCalled();
+      expect(ollama.generate).not.toHaveBeenCalled();
+      expect(result.deduped).toBe(true);
+    });
+
+    it("skips when even 1 message ID overlaps (partial overlap)", async () => {
+      const repo = createMockRepo(messagesWithIds([3, 4, 5]));
+      const agentRepo = createMockAgentRepo();
+      const ollama = createMockOllama(TT, TT);
+      // Stored [1,2,3] — current [3,4,5] — overlap on ID 3
+      const escalationRepo = createMockEscalationRepo({ window_message_ids: [1, 2, 3] });
+      const execute = meetingDetector(createDeps(ollama, { repo, agentRepo, escalationRepo }));
+      const result = await execute({ conversationId: "chat-1" });
+
+      expect(agentRepo.send).not.toHaveBeenCalled();
+      expect(result.deduped).toBe(true);
+    });
+
+    it("escalates when no IDs overlap (window scrolled past)", async () => {
+      const repo = createMockRepo(messagesWithIds([4, 5, 6]));
+      const agentRepo = createMockAgentRepo();
+      // Stored [1,2,3] — current [4,5,6] — no overlap
+      const escalationRepo = createMockEscalationRepo({ window_message_ids: [1, 2, 3] });
+      const execute = meetingDetector(
+        createDeps(createMockOllama(TT, TT), { repo, agentRepo, escalationRepo }),
+      );
+      const result = await execute({ conversationId: "chat-1" });
+
+      expect(agentRepo.send).toHaveBeenCalled();
+      expect(result.deduped).toBe(false);
+    });
+
+    it("does not insert escalation when agent send fails", async () => {
+      const agentRepo = createMockAgentRepo(false);
+      const escalationRepo = createMockEscalationRepo(null);
+      const execute = meetingDetector(
+        createDeps(createMockOllama(TT, TT), { agentRepo, escalationRepo }),
+      );
+      await execute({ conversationId: "chat-1" });
+
+      expect(escalationRepo.insertEscalation).not.toHaveBeenCalled();
+    });
+
+    it("does not insert escalation when no meeting detected", async () => {
+      const escalationRepo = createMockEscalationRepo(null);
+      const execute = meetingDetector(createDeps(createMockOllama(FF, FF), { escalationRepo }));
+      await execute({ conversationId: "chat-1" });
+
+      expect(escalationRepo.insertEscalation).not.toHaveBeenCalled();
+    });
+
+    it("dedup check runs before Ollama — overlapping window skips LLM calls", async () => {
+      const ollama = createMockOllama(TT, TT);
+      const escalationRepo = createMockEscalationRepo({ window_message_ids: [1, 2] });
+      const execute = meetingDetector(createDeps(ollama, { escalationRepo }));
+      await execute({ conversationId: "chat-1" });
+
+      expect(ollama.generate).not.toHaveBeenCalled();
     });
   });
 });
