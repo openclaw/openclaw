@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import type { Bot } from "grammy";
 import { resolveAgentDir } from "../agents/agent-scope.js";
 import {
@@ -20,10 +21,13 @@ import {
   resolveSessionStoreEntry,
   resolveStorePath,
 } from "../config/sessions.js";
+import { loadSessionEntry } from "../gateway/session-utils.js";
 import type { OpenClawConfig, ReplyToMode, TelegramAccountConfig } from "../config/types.js";
 import { danger, logVerbose } from "../globals.js";
 import { getAgentScopedMediaLocalRoots } from "../media/local-roots.js";
 import type { RuntimeEnv } from "../runtime.js";
+import { getFallbackGatewayContext } from "../gateway/server-plugins.js";
+import { readSessionMessages } from "../gateway/session-utils.fs.js";
 import type { TelegramMessageContext } from "./bot-message-context.js";
 import type { TelegramBotOptions } from "./bot.js";
 import { deliverReplies } from "./bot/delivery.js";
@@ -811,6 +815,41 @@ export const dispatchTelegramMessage = async ({
   if (!hasFinalResponse) {
     clearGroupHistory();
     return;
+  }
+
+  const ctx = getFallbackGatewayContext();
+  if (ctx && ctxPayload.SessionKey) {
+    try {
+      const runId = randomUUID();
+      const sessionKey = ctxPayload.SessionKey;
+      const seq = (ctx.agentRunSeq.get(runId) ?? 0) + 1;
+      ctx.agentRunSeq.set(runId, seq);
+
+      const { storePath, entry } = loadSessionEntry(sessionKey);
+      const sessionId = entry?.sessionId;
+      let message: Record<string, unknown> | undefined;
+      if (sessionId) {
+        const messages = readSessionMessages(sessionId, storePath, entry?.sessionFile);
+        const lastMessage = messages
+          .filter(
+            (m: unknown) =>
+              typeof m === "object" && m !== null && (m as Record<string, unknown>)?.role === "assistant",
+          )
+          .pop();
+        message = lastMessage as Record<string, unknown> | undefined;
+      }
+
+      const payload = {
+        runId,
+        sessionKey,
+        seq,
+        state: "final" as const,
+        message,
+      };
+      ctx.broadcast("chat", payload);
+    } catch (err) {
+      runtime.error?.(`telegram broadcast failed: ${String(err)}`);
+    }
   }
 
   if (statusReactionController) {

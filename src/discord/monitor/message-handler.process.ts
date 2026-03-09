@@ -1,4 +1,5 @@
 import { ChannelType, type RequestClient } from "@buape/carbon";
+import { randomUUID } from "node:crypto";
 import { resolveAckReaction, resolveHumanDelayConfig } from "../../agents/identity.js";
 import { EmbeddedBlockChunker } from "../../agents/pi-embedded-block-chunker.js";
 import { resolveChunkMode } from "../../auto-reply/chunk.js";
@@ -26,6 +27,8 @@ import { resolveDiscordPreviewStreamMode } from "../../config/discord-preview-st
 import { resolveMarkdownTableMode } from "../../config/markdown-tables.js";
 import { readSessionUpdatedAt, resolveStorePath } from "../../config/sessions.js";
 import { danger, logVerbose, shouldLogVerbose } from "../../globals.js";
+import { getFallbackGatewayContext } from "../../gateway/server-plugins.js";
+import { loadSessionEntry, readSessionMessages } from "../../gateway/session-utils.js";
 import { convertMarkdownTables } from "../../markdown/tables.js";
 import { getAgentScopedMediaLocalRoots } from "../../media/local-roots.js";
 import { buildAgentSessionKey } from "../../routing/resolve-route.js";
@@ -833,6 +836,42 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
     }
     return;
   }
+
+  const gatewayCtx = getFallbackGatewayContext();
+  if (gatewayCtx && ctxPayload.SessionKey) {
+    try {
+      const runId = randomUUID();
+      const sessionKey = ctxPayload.SessionKey;
+      const seq = (gatewayCtx.agentRunSeq.get(runId) ?? 0) + 1;
+      gatewayCtx.agentRunSeq.set(runId, seq);
+
+      const { storePath, entry } = loadSessionEntry(sessionKey);
+      const sessionId = entry?.sessionId;
+      let message: Record<string, unknown> | undefined;
+      if (sessionId) {
+        const messages = readSessionMessages(sessionId, storePath, entry?.sessionFile);
+        const lastMessage = messages
+          .filter(
+            (m: unknown) =>
+              typeof m === "object" && m !== null && (m as Record<string, unknown>)?.role === "assistant",
+          )
+          .pop();
+        message = lastMessage as Record<string, unknown> | undefined;
+      }
+
+      const payload = {
+        runId,
+        sessionKey,
+        seq,
+        state: "final" as const,
+        message,
+      };
+      gatewayCtx.broadcast("chat", payload);
+    } catch (err) {
+      logVerbose(`discord broadcast failed: ${String(err)}`);
+    }
+  }
+
   if (shouldLogVerbose()) {
     const finalCount = dispatchResult.counts.final;
     logVerbose(
