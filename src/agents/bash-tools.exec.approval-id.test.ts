@@ -77,6 +77,7 @@ describe("exec approvals", () => {
 
   it("reuses approval id as the node runId", async () => {
     let invokeParams: unknown;
+    let agentParams: unknown;
 
     vi.mocked(callGatewayTool).mockImplementation(async (method, _opts, params) => {
       if (method === "exec.approval.request") {
@@ -84,6 +85,10 @@ describe("exec approvals", () => {
       }
       if (method === "exec.approval.waitDecision") {
         return { decision: "allow-once" };
+      }
+      if (method === "agent") {
+        agentParams = params;
+        return { status: "ok" };
       }
       if (method === "node.invoke") {
         const invoke = params as { command?: string };
@@ -102,6 +107,7 @@ describe("exec approvals", () => {
       host: "node",
       ask: "always",
       approvalRunningNoticeMs: 0,
+      sessionKey: "agent:main:main",
     });
 
     const result = await tool.execute("call1", { command: "ls -la" });
@@ -126,6 +132,12 @@ describe("exec approvals", () => {
         interval: 20,
       })
       .toBe(approvalId);
+    expect(
+      (invokeParams as { params?: { suppressNotifyOnExit?: boolean } } | undefined)?.params,
+    ).toMatchObject({
+      suppressNotifyOnExit: true,
+    });
+    await expect.poll(() => agentParams, { timeout: 2_000, interval: 20 }).toBeTruthy();
   });
 
   it("skips approval when node allowlist is satisfied", async () => {
@@ -311,6 +323,53 @@ describe("exec approvals", () => {
     await approvalSeen;
     expect(calls).toContain("exec.approval.request");
     expect(calls).toContain("exec.approval.waitDecision");
+  });
+
+  it("starts a direct agent follow-up after approved gateway exec completes", async () => {
+    const agentCalls: Array<Record<string, unknown>> = [];
+
+    vi.mocked(callGatewayTool).mockImplementation(async (method, _opts, params) => {
+      if (method === "exec.approval.request") {
+        return { status: "accepted", id: (params as { id?: string })?.id };
+      }
+      if (method === "exec.approval.waitDecision") {
+        return { decision: "allow-once" };
+      }
+      if (method === "agent") {
+        agentCalls.push(params as Record<string, unknown>);
+        return { status: "ok" };
+      }
+      return { ok: true };
+    });
+
+    const tool = createExecTool({
+      host: "gateway",
+      ask: "always",
+      approvalRunningNoticeMs: 0,
+      sessionKey: "agent:main:main",
+      elevated: { enabled: true, allowed: true, defaultLevel: "ask" },
+    });
+
+    const result = await tool.execute("call-gw-followup", {
+      command: "echo ok",
+      workdir: process.cwd(),
+      gatewayUrl: undefined,
+      gatewayToken: undefined,
+    });
+
+    expect(result.details.status).toBe("approval-pending");
+    await expect.poll(() => agentCalls.length, { timeout: 3_000, interval: 20 }).toBe(1);
+    expect(agentCalls[0]).toEqual(
+      expect.objectContaining({
+        sessionKey: "agent:main:main",
+        deliver: true,
+        idempotencyKey: expect.stringContaining("exec-approval-followup:"),
+      }),
+    );
+    expect(typeof agentCalls[0]?.message).toBe("string");
+    expect(agentCalls[0]?.message).toContain(
+      "An async command the user already approved has completed.",
+    );
   });
 
   it("requires a separate approval for each elevated command after allow-once", async () => {

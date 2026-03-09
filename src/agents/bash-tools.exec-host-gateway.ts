@@ -13,6 +13,7 @@ import { detectCommandObfuscation } from "../infra/exec-obfuscation-detect.js";
 import type { SafeBinProfile } from "../infra/exec-safe-bin-policy.js";
 import { logInfo } from "../logger.js";
 import { markBackgrounded, tail } from "./bash-process-registry.js";
+import { sendExecApprovalFollowup } from "./bash-tools.exec-approval-followup.js";
 import {
   buildExecApprovalRequesterContext,
   buildExecApprovalTurnSourceContext,
@@ -28,7 +29,6 @@ import {
   buildApprovalPendingMessage,
   DEFAULT_NOTIFY_TAIL_CHARS,
   createApprovalSlug,
-  emitExecSystemEvent,
   normalizeNotifyOutput,
   runExecProcess,
 } from "./bash-tools.exec-runtime.js";
@@ -142,8 +142,6 @@ export async function processGatewayAllowlist(
     const {
       approvalId,
       approvalSlug,
-      contextKey,
-      noticeSeconds,
       warningText,
       expiresAtMs: defaultExpiresAtMs,
       preResolvedDecision: defaultPreResolvedDecision,
@@ -181,13 +179,15 @@ export async function processGatewayAllowlist(
         approvalId,
         preResolvedDecision,
         onFailure: () =>
-          emitExecSystemEvent(
-            `Exec denied (gateway id=${approvalId}, approval-request-failed): ${params.command}`,
-            {
-              sessionKey: params.notifySessionKey,
-              contextKey,
-            },
-          ),
+          void sendExecApprovalFollowup({
+            approvalId,
+            sessionKey: params.notifySessionKey,
+            turnSourceChannel: params.turnSourceChannel,
+            turnSourceTo: params.turnSourceTo,
+            turnSourceAccountId: params.turnSourceAccountId,
+            turnSourceThreadId: params.turnSourceThreadId,
+            resultText: `Exec denied (gateway id=${approvalId}, approval-request-failed): ${params.command}`,
+          }),
       });
       if (decision === undefined) {
         return;
@@ -231,13 +231,15 @@ export async function processGatewayAllowlist(
       }
 
       if (deniedReason) {
-        emitExecSystemEvent(
-          `Exec denied (gateway id=${approvalId}, ${deniedReason}): ${params.command}`,
-          {
-            sessionKey: params.notifySessionKey,
-            contextKey,
-          },
-        );
+        await sendExecApprovalFollowup({
+          approvalId,
+          sessionKey: params.notifySessionKey,
+          turnSourceChannel: params.turnSourceChannel,
+          turnSourceTo: params.turnSourceTo,
+          turnSourceAccountId: params.turnSourceAccountId,
+          turnSourceThreadId: params.turnSourceThreadId,
+          resultText: `Exec denied (gateway id=${approvalId}, ${deniedReason}): ${params.command}`,
+        }).catch(() => {});
         return;
       }
 
@@ -263,32 +265,21 @@ export async function processGatewayAllowlist(
           timeoutSec: effectiveTimeout,
         });
       } catch {
-        emitExecSystemEvent(
-          `Exec denied (gateway id=${approvalId}, spawn-failed): ${params.command}`,
-          {
-            sessionKey: params.notifySessionKey,
-            contextKey,
-          },
-        );
+        await sendExecApprovalFollowup({
+          approvalId,
+          sessionKey: params.notifySessionKey,
+          turnSourceChannel: params.turnSourceChannel,
+          turnSourceTo: params.turnSourceTo,
+          turnSourceAccountId: params.turnSourceAccountId,
+          turnSourceThreadId: params.turnSourceThreadId,
+          resultText: `Exec denied (gateway id=${approvalId}, spawn-failed): ${params.command}`,
+        }).catch(() => {});
         return;
       }
 
       markBackgrounded(run.session);
 
-      let runningTimer: NodeJS.Timeout | null = null;
-      if (params.approvalRunningNoticeMs > 0) {
-        runningTimer = setTimeout(() => {
-          emitExecSystemEvent(
-            `Exec running (gateway id=${approvalId}, session=${run?.session.id}, >${noticeSeconds}s): ${params.command}`,
-            { sessionKey: params.notifySessionKey, contextKey },
-          );
-        }, params.approvalRunningNoticeMs);
-      }
-
       const outcome = await run.promise;
-      if (runningTimer) {
-        clearTimeout(runningTimer);
-      }
       const output = normalizeNotifyOutput(
         tail(outcome.aggregated || "", DEFAULT_NOTIFY_TAIL_CHARS),
       );
@@ -296,7 +287,15 @@ export async function processGatewayAllowlist(
       const summary = output
         ? `Exec finished (gateway id=${approvalId}, session=${run.session.id}, ${exitLabel})\n${output}`
         : `Exec finished (gateway id=${approvalId}, session=${run.session.id}, ${exitLabel})`;
-      emitExecSystemEvent(summary, { sessionKey: params.notifySessionKey, contextKey });
+      await sendExecApprovalFollowup({
+        approvalId,
+        sessionKey: params.notifySessionKey,
+        turnSourceChannel: params.turnSourceChannel,
+        turnSourceTo: params.turnSourceTo,
+        turnSourceAccountId: params.turnSourceAccountId,
+        turnSourceThreadId: params.turnSourceThreadId,
+        resultText: summary,
+      }).catch(() => {});
     })();
 
     return {

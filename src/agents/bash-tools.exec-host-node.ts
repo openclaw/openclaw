@@ -12,6 +12,7 @@ import { detectCommandObfuscation } from "../infra/exec-obfuscation-detect.js";
 import { buildNodeShellCommand } from "../infra/node-shell.js";
 import { parsePreparedSystemRunPayload } from "../infra/system-run-approval-context.js";
 import { logInfo } from "../logger.js";
+import { sendExecApprovalFollowup } from "./bash-tools.exec-approval-followup.js";
 import {
   buildExecApprovalRequesterContext,
   buildExecApprovalTurnSourceContext,
@@ -25,8 +26,9 @@ import {
 } from "./bash-tools.exec-host-shared.js";
 import {
   buildApprovalPendingMessage,
+  DEFAULT_NOTIFY_TAIL_CHARS,
   createApprovalSlug,
-  emitExecSystemEvent,
+  normalizeNotifyOutput,
 } from "./bash-tools.exec-runtime.js";
 import type { ExecToolDetails } from "./bash-tools.exec-types.js";
 import { callGatewayTool } from "./tools/gateway.js";
@@ -191,6 +193,7 @@ export async function executeNodeHostCommand(
     approvedByAsk: boolean,
     approvalDecision: "allow-once" | "allow-always" | null,
     runId?: string,
+    suppressNotifyOnExit?: boolean,
   ) =>
     ({
       nodeId,
@@ -206,6 +209,7 @@ export async function executeNodeHostCommand(
         approved: approvedByAsk,
         approvalDecision: approvalDecision ?? undefined,
         runId: runId ?? undefined,
+        suppressNotifyOnExit: suppressNotifyOnExit === true ? true : undefined,
       },
       idempotencyKey: crypto.randomUUID(),
     }) satisfies Record<string, unknown>;
@@ -214,8 +218,6 @@ export async function executeNodeHostCommand(
     const {
       approvalId,
       approvalSlug,
-      contextKey,
-      noticeSeconds,
       warningText,
       expiresAtMs: defaultExpiresAtMs,
       preResolvedDecision: defaultPreResolvedDecision,
@@ -253,10 +255,15 @@ export async function executeNodeHostCommand(
         approvalId,
         preResolvedDecision,
         onFailure: () =>
-          emitExecSystemEvent(
-            `Exec denied (node=${nodeId} id=${approvalId}, approval-request-failed): ${params.command}`,
-            { sessionKey: params.notifySessionKey, contextKey },
-          ),
+          void sendExecApprovalFollowup({
+            approvalId,
+            sessionKey: params.notifySessionKey,
+            turnSourceChannel: params.turnSourceChannel,
+            turnSourceTo: params.turnSourceTo,
+            turnSourceAccountId: params.turnSourceAccountId,
+            turnSourceThreadId: params.turnSourceThreadId,
+            resultText: `Exec denied (node=${nodeId} id=${approvalId}, approval-request-failed): ${params.command}`,
+          }),
       });
       if (decision === undefined) {
         return;
@@ -282,44 +289,67 @@ export async function executeNodeHostCommand(
       }
 
       if (deniedReason) {
-        emitExecSystemEvent(
-          `Exec denied (node=${nodeId} id=${approvalId}, ${deniedReason}): ${params.command}`,
-          {
-            sessionKey: params.notifySessionKey,
-            contextKey,
-          },
-        );
+        await sendExecApprovalFollowup({
+          approvalId,
+          sessionKey: params.notifySessionKey,
+          turnSourceChannel: params.turnSourceChannel,
+          turnSourceTo: params.turnSourceTo,
+          turnSourceAccountId: params.turnSourceAccountId,
+          turnSourceThreadId: params.turnSourceThreadId,
+          resultText: `Exec denied (node=${nodeId} id=${approvalId}, ${deniedReason}): ${params.command}`,
+        }).catch(() => {});
         return;
       }
 
-      let runningTimer: NodeJS.Timeout | null = null;
-      if (params.approvalRunningNoticeMs > 0) {
-        runningTimer = setTimeout(() => {
-          emitExecSystemEvent(
-            `Exec running (node=${nodeId} id=${approvalId}, >${noticeSeconds}s): ${params.command}`,
-            { sessionKey: params.notifySessionKey, contextKey },
-          );
-        }, params.approvalRunningNoticeMs);
-      }
-
       try {
-        await callGatewayTool(
+        const raw = await callGatewayTool<{
+          payload?: {
+            stdout?: string;
+            stderr?: string;
+            error?: string | null;
+            exitCode?: number | null;
+            timedOut?: boolean;
+          };
+        }>(
           "node.invoke",
           { timeoutMs: invokeTimeoutMs },
-          buildInvokeParams(approvedByAsk, approvalDecision, approvalId),
+          buildInvokeParams(approvedByAsk, approvalDecision, approvalId, true),
         );
+        const payload =
+          raw?.payload && typeof raw.payload === "object"
+            ? (raw.payload as {
+                stdout?: string;
+                stderr?: string;
+                error?: string | null;
+                exitCode?: number | null;
+                timedOut?: boolean;
+              })
+            : {};
+        const combined = [payload.stdout, payload.stderr, payload.error].filter(Boolean).join("\n");
+        const output = normalizeNotifyOutput(combined.slice(-DEFAULT_NOTIFY_TAIL_CHARS));
+        const exitLabel = payload.timedOut ? "timeout" : `code ${payload.exitCode ?? "?"}`;
+        const summary = output
+          ? `Exec finished (node=${nodeId} id=${approvalId}, ${exitLabel})\n${output}`
+          : `Exec finished (node=${nodeId} id=${approvalId}, ${exitLabel})`;
+        await sendExecApprovalFollowup({
+          approvalId,
+          sessionKey: params.notifySessionKey,
+          turnSourceChannel: params.turnSourceChannel,
+          turnSourceTo: params.turnSourceTo,
+          turnSourceAccountId: params.turnSourceAccountId,
+          turnSourceThreadId: params.turnSourceThreadId,
+          resultText: summary,
+        }).catch(() => {});
       } catch {
-        emitExecSystemEvent(
-          `Exec denied (node=${nodeId} id=${approvalId}, invoke-failed): ${params.command}`,
-          {
-            sessionKey: params.notifySessionKey,
-            contextKey,
-          },
-        );
-      } finally {
-        if (runningTimer) {
-          clearTimeout(runningTimer);
-        }
+        await sendExecApprovalFollowup({
+          approvalId,
+          sessionKey: params.notifySessionKey,
+          turnSourceChannel: params.turnSourceChannel,
+          turnSourceTo: params.turnSourceTo,
+          turnSourceAccountId: params.turnSourceAccountId,
+          turnSourceThreadId: params.turnSourceThreadId,
+          resultText: `Exec denied (node=${nodeId} id=${approvalId}, invoke-failed): ${params.command}`,
+        }).catch(() => {});
       }
     })();
 
