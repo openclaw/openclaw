@@ -190,10 +190,9 @@ export const dispatchTelegramMessage = async ({
   const draftReplyToMessageId =
     replyToMode !== "off" && typeof msg.message_id === "number" ? msg.message_id : undefined;
   const draftMinInitialChars = DRAFT_MIN_INITIAL_CHARS;
-  // Use message transport (sendMessage + editMessageText) for all lanes in
-  // DMs so that streamMessageId is tracked. Draft transport doesn't track a
-  // messageId, causing resolvePreviewTarget() to miss the preview on final
-  // delivery — which sends a duplicate message. (Fixes #33453)
+  // Keep DM preview lanes on real message transport. Native draft previews still
+  // require a draft->message materialize hop, and that overlap keeps reintroducing
+  // a visible duplicate flash at finalize time.
   const useMessagePreviewTransportForDm = threadSpec?.scope === "dm" && canStreamAnswerDraft;
   const mediaLocalRoots = getAgentScopedMediaLocalRoots(cfg, route.agentId);
   const archivedAnswerPreviews: ArchivedPreview[] = [];

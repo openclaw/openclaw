@@ -114,6 +114,28 @@ describe("model-selection", () => {
       });
     });
 
+    it("normalizes deprecated google flash preview ids to the working model id", () => {
+      expect(parseModelRef("google/gemini-3.1-flash-preview", "openai")).toEqual({
+        provider: "google",
+        model: "gemini-3-flash-preview",
+      });
+      expect(parseModelRef("gemini-3.1-flash-preview", "google")).toEqual({
+        provider: "google",
+        model: "gemini-3-flash-preview",
+      });
+    });
+
+    it("normalizes gemini 3.1 flash-lite to the preview model id", () => {
+      expect(parseModelRef("google/gemini-3.1-flash-lite", "openai")).toEqual({
+        provider: "google",
+        model: "gemini-3.1-flash-lite-preview",
+      });
+      expect(parseModelRef("gemini-3.1-flash-lite", "google")).toEqual({
+        provider: "google",
+        model: "gemini-3.1-flash-lite-preview",
+      });
+    });
+
     it("keeps openai gpt-5.3 codex refs on the openai provider", () => {
       expect(parseModelRef("openai/gpt-5.3-codex", "anthropic")).toEqual({
         provider: "openai",

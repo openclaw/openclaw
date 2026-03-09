@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { loadConfig } from "../../config/config.js";
 import { listDevicePairing } from "../../infra/device-pairing.js";
 import {
@@ -28,6 +29,7 @@ import {
   validateNodeEventParams,
   validateNodeInvokeParams,
   validateNodeListParams,
+  validateNodePendingAckParams,
   validateNodePairApproveParams,
   validateNodePairListParams,
   validateNodePairRejectParams,
@@ -50,6 +52,8 @@ const NODE_WAKE_RECONNECT_RETRY_WAIT_MS = 12_000;
 const NODE_WAKE_RECONNECT_POLL_MS = 150;
 const NODE_WAKE_THROTTLE_MS = 15_000;
 const NODE_WAKE_NUDGE_THROTTLE_MS = 10 * 60_000;
+const NODE_PENDING_ACTION_TTL_MS = 10 * 60_000;
+const NODE_PENDING_ACTION_MAX_PER_NODE = 64;
 
 type NodeWakeState = {
   lastWakeAtMs: number;
@@ -77,6 +81,17 @@ type NodeWakeNudgeAttempt = {
   apnsReason?: string;
 };
 
+type PendingNodeAction = {
+  id: string;
+  nodeId: string;
+  command: string;
+  paramsJSON?: string;
+  idempotencyKey: string;
+  enqueuedAtMs: number;
+};
+
+const pendingNodeActionsById = new Map<string, PendingNodeAction[]>();
+
 function isNodeEntry(entry: { role?: string; roles?: string[] }) {
   if (entry.role === "node") {
     return true;
@@ -89,6 +104,108 @@ function isNodeEntry(entry: { role?: string; roles?: string[] }) {
 
 async function delayMs(ms: number): Promise<void> {
   await new Promise<void>((resolve) => setTimeout(resolve, ms));
+}
+
+function isForegroundRestrictedIosCommand(command: string): boolean {
+  return (
+    command === "canvas.present" ||
+    command === "canvas.navigate" ||
+    command.startsWith("canvas.") ||
+    command.startsWith("camera.") ||
+    command.startsWith("screen.") ||
+    command.startsWith("talk.")
+  );
+}
+
+function shouldQueueAsPendingForegroundAction(params: {
+  platform?: string;
+  command: string;
+  error: unknown;
+}): boolean {
+  const platform = (params.platform ?? "").trim().toLowerCase();
+  if (!platform.startsWith("ios") && !platform.startsWith("ipados")) {
+    return false;
+  }
+  if (!isForegroundRestrictedIosCommand(params.command)) {
+    return false;
+  }
+  const error =
+    params.error && typeof params.error === "object"
+      ? (params.error as { code?: unknown; message?: unknown })
+      : null;
+  const code = typeof error?.code === "string" ? error.code.trim().toUpperCase() : "";
+  const message = typeof error?.message === "string" ? error.message.trim().toUpperCase() : "";
+  return code === "NODE_BACKGROUND_UNAVAILABLE" || message.includes("BACKGROUND_UNAVAILABLE");
+}
+
+function prunePendingNodeActions(nodeId: string, nowMs: number): PendingNodeAction[] {
+  const queue = pendingNodeActionsById.get(nodeId) ?? [];
+  const minTimestampMs = nowMs - NODE_PENDING_ACTION_TTL_MS;
+  const live = queue.filter((entry) => entry.enqueuedAtMs >= minTimestampMs);
+  if (live.length === 0) {
+    pendingNodeActionsById.delete(nodeId);
+    return [];
+  }
+  pendingNodeActionsById.set(nodeId, live);
+  return live;
+}
+
+function enqueuePendingNodeAction(params: {
+  nodeId: string;
+  command: string;
+  paramsJSON?: string;
+  idempotencyKey: string;
+}): PendingNodeAction {
+  const nowMs = Date.now();
+  const queue = prunePendingNodeActions(params.nodeId, nowMs);
+  const existing = queue.find((entry) => entry.idempotencyKey === params.idempotencyKey);
+  if (existing) {
+    return existing;
+  }
+  const entry: PendingNodeAction = {
+    id: randomUUID(),
+    nodeId: params.nodeId,
+    command: params.command,
+    paramsJSON: params.paramsJSON,
+    idempotencyKey: params.idempotencyKey,
+    enqueuedAtMs: nowMs,
+  };
+  queue.push(entry);
+  if (queue.length > NODE_PENDING_ACTION_MAX_PER_NODE) {
+    queue.splice(0, queue.length - NODE_PENDING_ACTION_MAX_PER_NODE);
+  }
+  pendingNodeActionsById.set(params.nodeId, queue);
+  return entry;
+}
+
+function listPendingNodeActions(nodeId: string): PendingNodeAction[] {
+  return prunePendingNodeActions(nodeId, Date.now());
+}
+
+function ackPendingNodeActions(nodeId: string, ids: string[]): PendingNodeAction[] {
+  if (ids.length === 0) {
+    return listPendingNodeActions(nodeId);
+  }
+  const pending = prunePendingNodeActions(nodeId, Date.now());
+  const idSet = new Set(ids);
+  const remaining = pending.filter((entry) => !idSet.has(entry.id));
+  if (remaining.length === 0) {
+    pendingNodeActionsById.delete(nodeId);
+    return [];
+  }
+  pendingNodeActionsById.set(nodeId, remaining);
+  return remaining;
+}
+
+function toPendingParamsJSON(params: unknown): string | undefined {
+  if (params === undefined) {
+    return undefined;
+  }
+  try {
+    return JSON.stringify(params);
+  } catch {
+    return undefined;
+  }
 }
 
 async function maybeWakeNodeWithApns(
@@ -596,6 +713,66 @@ export const nodeHandlers: GatewayRequestHandlers = {
       undefined,
     );
   },
+  "node.pending.pull": async ({ params, respond, client }) => {
+    if (!validateNodeListParams(params)) {
+      respondInvalidParams({
+        respond,
+        method: "node.pending.pull",
+        validator: validateNodeListParams,
+      });
+      return;
+    }
+    const nodeId = client?.connect?.device?.id ?? client?.connect?.client?.id;
+    const trimmedNodeId = String(nodeId ?? "").trim();
+    if (!trimmedNodeId) {
+      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "nodeId required"));
+      return;
+    }
+
+    const pending = listPendingNodeActions(trimmedNodeId);
+    respond(
+      true,
+      {
+        nodeId: trimmedNodeId,
+        actions: pending.map((entry) => ({
+          id: entry.id,
+          command: entry.command,
+          paramsJSON: entry.paramsJSON ?? null,
+          enqueuedAtMs: entry.enqueuedAtMs,
+        })),
+      },
+      undefined,
+    );
+  },
+  "node.pending.ack": async ({ params, respond, client }) => {
+    if (!validateNodePendingAckParams(params)) {
+      respondInvalidParams({
+        respond,
+        method: "node.pending.ack",
+        validator: validateNodePendingAckParams,
+      });
+      return;
+    }
+    const nodeId = client?.connect?.device?.id ?? client?.connect?.client?.id;
+    const trimmedNodeId = String(nodeId ?? "").trim();
+    if (!trimmedNodeId) {
+      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "nodeId required"));
+      return;
+    }
+    const ackIds = Array.from(
+      new Set((params.ids ?? []).map((value) => String(value ?? "").trim()).filter(Boolean)),
+    );
+    const remaining = ackPendingNodeActions(trimmedNodeId, ackIds);
+    respond(
+      true,
+      {
+        nodeId: trimmedNodeId,
+        ackedIds: ackIds,
+        remainingCount: remaining.length,
+      },
+      undefined,
+    );
+  },
   "node.invoke": async ({ params, respond, context, client, req }) => {
     if (!validateNodeInvokeParams(params)) {
       respondInvalidParams({
@@ -759,7 +936,56 @@ export const nodeHandlers: GatewayRequestHandlers = {
         timeoutMs: p.timeoutMs,
         idempotencyKey: p.idempotencyKey,
       });
-      if (!respondUnavailableOnNodeInvokeError(respond, res)) {
+      if (!res.ok) {
+        if (
+          shouldQueueAsPendingForegroundAction({
+            platform: nodeSession.platform,
+            command,
+            error: res.error,
+          })
+        ) {
+          const paramsJSON = toPendingParamsJSON(forwardedParams.params);
+          const queued = enqueuePendingNodeAction({
+            nodeId,
+            command,
+            paramsJSON,
+            idempotencyKey: p.idempotencyKey,
+          });
+          const wake = await maybeWakeNodeWithApns(nodeId);
+          context.logGateway.info(
+            `node pending queued node=${nodeId} req=${req.id} command=${command} ` +
+              `queuedId=${queued.id} wakePath=${wake.path} wakeAvailable=${wake.available}`,
+          );
+          respond(
+            false,
+            undefined,
+            errorShape(
+              ErrorCodes.UNAVAILABLE,
+              "node command queued until iOS returns to foreground",
+              {
+                retryable: true,
+                details: {
+                  code: "QUEUED_UNTIL_FOREGROUND",
+                  queuedActionId: queued.id,
+                  nodeId,
+                  command,
+                  wake: {
+                    path: wake.path,
+                    available: wake.available,
+                    throttled: wake.throttled,
+                    apnsStatus: wake.apnsStatus,
+                    apnsReason: wake.apnsReason,
+                  },
+                  nodeError: res.error ?? null,
+                },
+              },
+            ),
+          );
+          return;
+        }
+        if (!respondUnavailableOnNodeInvokeError(respond, res)) {
+          return;
+        }
         return;
       }
       const payload = res.payloadJSON ? safeParseJson(res.payloadJSON) : res.payload;

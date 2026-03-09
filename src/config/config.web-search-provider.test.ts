@@ -17,6 +17,8 @@ describe("web search provider config", () => {
         provider: "perplexity",
         providerConfig: {
           apiKey: "test-key", // pragma: allowlist secret
+          baseUrl: "https://openrouter.ai/api/v1",
+          model: "perplexity/sonar-pro",
         },
       }),
     );
@@ -48,6 +50,32 @@ describe("web search provider config", () => {
 
     expect(res.ok).toBe(true);
   });
+
+  it("accepts brave llm-context mode config", () => {
+    const res = validateConfigObject(
+      buildWebSearchProviderConfig({
+        provider: "brave",
+        providerConfig: {
+          mode: "llm-context",
+        },
+      }),
+    );
+
+    expect(res.ok).toBe(true);
+  });
+
+  it("rejects invalid brave mode config values", () => {
+    const res = validateConfigObject(
+      buildWebSearchProviderConfig({
+        provider: "brave",
+        providerConfig: {
+          mode: "invalid-mode",
+        },
+      }),
+    );
+
+    expect(res.ok).toBe(false);
+  });
 });
 
 describe("web search provider auto-detection", () => {
@@ -70,8 +98,8 @@ describe("web search provider auto-detection", () => {
     vi.restoreAllMocks();
   });
 
-  it("falls back to perplexity when no keys available", () => {
-    expect(resolveSearchProvider({})).toBe("perplexity");
+  it("falls back to brave when no keys available", () => {
+    expect(resolveSearchProvider({})).toBe("brave");
   });
 
   it("auto-detects brave when only BRAVE_API_KEY is set", () => {
@@ -94,6 +122,11 @@ describe("web search provider auto-detection", () => {
     expect(resolveSearchProvider({})).toBe("perplexity");
   });
 
+  it("auto-detects perplexity when only OPENROUTER_API_KEY is set", () => {
+    process.env.OPENROUTER_API_KEY = "sk-or-v1-test"; // pragma: allowlist secret
+    expect(resolveSearchProvider({})).toBe("perplexity");
+  });
+
   it("auto-detects grok when only XAI_API_KEY is set", () => {
     process.env.XAI_API_KEY = "test-xai-key"; // pragma: allowlist secret
     expect(resolveSearchProvider({})).toBe("grok");
@@ -109,12 +142,19 @@ describe("web search provider auto-detection", () => {
     expect(resolveSearchProvider({})).toBe("kimi");
   });
 
-  it("follows priority order — perplexity wins when multiple keys available", () => {
-    process.env.PERPLEXITY_API_KEY = "test-perplexity-key"; // pragma: allowlist secret
+  it("follows priority order — brave wins when multiple keys available", () => {
     process.env.BRAVE_API_KEY = "test-brave-key"; // pragma: allowlist secret
     process.env.GEMINI_API_KEY = "test-gemini-key"; // pragma: allowlist secret
+    process.env.PERPLEXITY_API_KEY = "test-perplexity-key"; // pragma: allowlist secret
     process.env.XAI_API_KEY = "test-xai-key"; // pragma: allowlist secret
-    expect(resolveSearchProvider({})).toBe("perplexity");
+    expect(resolveSearchProvider({})).toBe("brave");
+  });
+
+  it("gemini wins over perplexity and grok when brave unavailable", () => {
+    process.env.GEMINI_API_KEY = "test-gemini-key"; // pragma: allowlist secret
+    process.env.PERPLEXITY_API_KEY = "test-perplexity-key"; // pragma: allowlist secret
+    process.env.XAI_API_KEY = "test-xai-key"; // pragma: allowlist secret
+    expect(resolveSearchProvider({})).toBe("gemini");
   });
 
   it("brave wins over gemini and grok when perplexity unavailable", () => {
