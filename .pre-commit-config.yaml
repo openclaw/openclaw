@@ -29,8 +29,10 @@ repos:
         args:
           - --baseline
           - .secrets.baseline
-          - --exclude-files
+          - '--exclude-files'
           - '(^|/)pnpm-lock\.yaml$'
+          - '--exclude-files'
+          - '^\.venv-precommit/'
           - --exclude-lines
           - 'key_content\.include\?\("BEGIN PRIVATE KEY"\)'
           - --exclude-lines
@@ -70,7 +72,25 @@ repos:
           - --exclude-lines
           - 'ap[i]Key: "A[I]za\.\.\.",'
           - --exclude-lines
+          - 'OPENROUTER_API_KEY: "sk-or-v1-test"'
+          - --exclude-lines
+          - 'PERPLEXITY_API_KEY: "pplx-test"'
+          - --exclude-lines
+          - 'apiKey: "enterprise-perplexity-test"'
+          - --exclude-lines
+          - 'apiKey: "pplx-test"'
+          - --exclude-lines
+          - "PERPLEXITY_DIRECT_BASE_URL|DEFAULT_PERPLEXITY_BASE_URL"
+          - --exclude-lines
           - '"ap[i]Key": "(resolved|normalized|legacy)-key"(,)?'
+          - --exclude-files
+          - '^docs/perplexity\.md$'
+          - --exclude-files
+          - '^docs/tools/web\.md$'
+          - --exclude-files
+          - '^src/agents/models-config\.merge\.test\.ts$'
+          - --exclude-files
+          - '^test-fixtures/talk-config-contract\.json$'
           - --exclude-lines
           - 'sparkle:edSignature="[A-Za-z0-9+/=]+"'
   # Shell script linting

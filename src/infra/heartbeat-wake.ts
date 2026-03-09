@@ -13,6 +13,7 @@ export type HeartbeatWakeHandler = (opts: {
   reason?: string;
   agentId?: string;
   sessionKey?: string;
+  heartbeat?: { target?: string; to?: string; accountId?: string };
 }) => Promise<HeartbeatRunResult>;
 
 type WakeTimerKind = "normal" | "retry";
@@ -22,6 +23,8 @@ type PendingWakeReason = {
   requestedAt: number;
   agentId?: string;
   sessionKey?: string;
+  /** Optional heartbeat override (e.g. cron main delivery target). Passed to handler when wake runs. */
+  heartbeat?: { target?: string; to?: string; accountId?: string };
 };
 
 let handler: HeartbeatWakeHandler | null = null;
@@ -65,10 +68,31 @@ function normalizeWakeTarget(value?: string): string | undefined {
   return trimmed || undefined;
 }
 
-function getWakeTargetKey(params: { agentId?: string; sessionKey?: string }) {
+function heartbeatOverrideKey(heartbeat?: {
+  target?: string;
+  to?: string;
+  accountId?: string;
+}): string {
+  if (heartbeat == null) {
+    return "";
+  }
+  const o = {
+    accountId: heartbeat.accountId ?? "",
+    target: heartbeat.target ?? "",
+    to: heartbeat.to ?? "",
+  };
+  return JSON.stringify(o);
+}
+
+function getWakeTargetKey(params: {
+  agentId?: string;
+  sessionKey?: string;
+  heartbeat?: { target?: string; to?: string; accountId?: string };
+}) {
   const agentId = normalizeWakeTarget(params.agentId);
   const sessionKey = normalizeWakeTarget(params.sessionKey);
-  return `${agentId ?? ""}::${sessionKey ?? ""}`;
+  const heartbeatSuffix = heartbeatOverrideKey(params.heartbeat);
+  return `${agentId ?? ""}::${sessionKey ?? ""}::${heartbeatSuffix}`;
 }
 
 function queuePendingWakeReason(params?: {
@@ -76,6 +100,7 @@ function queuePendingWakeReason(params?: {
   requestedAt?: number;
   agentId?: string;
   sessionKey?: string;
+  heartbeat?: { target?: string; to?: string; accountId?: string };
 }) {
   const requestedAt = params?.requestedAt ?? Date.now();
   const normalizedReason = normalizeWakeReason(params?.reason);
@@ -84,6 +109,7 @@ function queuePendingWakeReason(params?: {
   const wakeTargetKey = getWakeTargetKey({
     agentId: normalizedAgentId,
     sessionKey: normalizedSessionKey,
+    heartbeat: params?.heartbeat,
   });
   const next: PendingWakeReason = {
     reason: normalizedReason,
@@ -91,6 +117,7 @@ function queuePendingWakeReason(params?: {
     requestedAt,
     agentId: normalizedAgentId,
     sessionKey: normalizedSessionKey,
+    ...(params?.heartbeat != null ? { heartbeat: params.heartbeat } : {}),
   };
   const previous = pendingWakes.get(wakeTargetKey);
   if (!previous) {
@@ -151,6 +178,7 @@ function schedule(coalesceMs: number, kind: WakeTimerKind = "normal") {
           reason: pendingWake.reason ?? undefined,
           ...(pendingWake.agentId ? { agentId: pendingWake.agentId } : {}),
           ...(pendingWake.sessionKey ? { sessionKey: pendingWake.sessionKey } : {}),
+          ...(pendingWake.heartbeat != null ? { heartbeat: pendingWake.heartbeat } : {}),
         };
         const res = await active(wakeOpts);
         if (res.status === "skipped" && res.reason === "requests-in-flight") {
@@ -159,6 +187,7 @@ function schedule(coalesceMs: number, kind: WakeTimerKind = "normal") {
             reason: pendingWake.reason ?? "retry",
             agentId: pendingWake.agentId,
             sessionKey: pendingWake.sessionKey,
+            ...(pendingWake.heartbeat != null ? { heartbeat: pendingWake.heartbeat } : {}),
           });
           schedule(DEFAULT_RETRY_MS, "retry");
         }
@@ -170,6 +199,7 @@ function schedule(coalesceMs: number, kind: WakeTimerKind = "normal") {
           reason: pendingWake.reason ?? "retry",
           agentId: pendingWake.agentId,
           sessionKey: pendingWake.sessionKey,
+          ...(pendingWake.heartbeat != null ? { heartbeat: pendingWake.heartbeat } : {}),
         });
       }
       schedule(DEFAULT_RETRY_MS, "retry");
@@ -230,11 +260,13 @@ export function requestHeartbeatNow(opts?: {
   coalesceMs?: number;
   agentId?: string;
   sessionKey?: string;
+  heartbeat?: { target?: string; to?: string; accountId?: string };
 }) {
   queuePendingWakeReason({
     reason: opts?.reason,
     agentId: opts?.agentId,
     sessionKey: opts?.sessionKey,
+    heartbeat: opts?.heartbeat,
   });
   schedule(opts?.coalesceMs ?? DEFAULT_COALESCE_MS, "normal");
 }

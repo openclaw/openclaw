@@ -1142,11 +1142,14 @@ export function startHeartbeatRunner(opts: {
         scheduleNext();
         return { status: "skipped", reason: "disabled" };
       }
+      const heartbeatOverride = params?.heartbeat
+        ? { ...targetAgent.heartbeat, ...params.heartbeat }
+        : targetAgent.heartbeat;
       try {
         const res = await runOnce({
           cfg: state.cfg,
           agentId: targetAgent.agentId,
-          heartbeat: targetAgent.heartbeat,
+          heartbeat: heartbeatOverride,
           reason,
           sessionKey: requestedSessionKey,
           deps: { runtime: state.runtime },

@@ -46,7 +46,7 @@ describe("applyJobPatch", () => {
     });
   };
 
-  it("clears delivery when switching to main session", () => {
+  it("keeps announce delivery when switching to main session (main can deliver to channel)", () => {
     const job = createIsolatedAgentTurnJob("job-1", {
       mode: "announce",
       channel: "telegram",
@@ -56,7 +56,7 @@ describe("applyJobPatch", () => {
     expect(() => applyJobPatch(job, switchToMainPatch())).not.toThrow();
     expect(job.sessionTarget).toBe("main");
     expect(job.payload.kind).toBe("systemEvent");
-    expect(job.delivery).toBeUndefined();
+    expect(job.delivery).toEqual({ mode: "announce", channel: "telegram", to: "123" });
   });
 
   it("keeps webhook delivery when switching to main session", () => {
@@ -229,7 +229,7 @@ describe("applyJobPatch", () => {
     expect(job.delivery).toEqual({ mode: "webhook", to: "https://example.invalid/trim" });
   });
 
-  it("rejects failureDestination on main jobs without webhook delivery mode", () => {
+  it("allows failureDestination on main jobs with announce delivery mode (P2)", () => {
     const job = createMainSystemEventJob("job-main-failure-dest", {
       mode: "announce",
       channel: "telegram",
@@ -241,9 +241,12 @@ describe("applyJobPatch", () => {
       },
     });
 
-    expect(() => applyJobPatch(job, { enabled: true })).toThrow(
-      'cron delivery.failureDestination is only supported for sessionTarget="isolated" unless delivery.mode="webhook"',
-    );
+    expect(() => applyJobPatch(job, { enabled: true })).not.toThrow();
+    expect(job.delivery?.failureDestination).toEqual({
+      mode: "announce",
+      channel: "telegram",
+      to: "999",
+    });
   });
 
   it("validates and trims webhook failureDestination target URLs", () => {
@@ -418,23 +421,26 @@ describe("createJob rejects sessionTarget main for non-default agents", () => {
     ).not.toThrow();
   });
 
-  it("rejects failureDestination on main jobs without webhook delivery mode", () => {
+  it("allows failureDestination on main jobs with announce delivery mode (P2)", () => {
     const state = createMockState(now, { defaultAgentId: "main" });
-    expect(() =>
-      createJob(state, {
-        ...mainJobInput("main"),
-        delivery: {
+    const job = createJob(state, {
+      ...mainJobInput("main"),
+      delivery: {
+        mode: "announce",
+        channel: "telegram",
+        to: "123",
+        failureDestination: {
           mode: "announce",
-          channel: "telegram",
-          to: "123",
-          failureDestination: {
-            mode: "announce",
-            channel: "signal",
-            to: "+15550001111",
-          },
+          channel: "signal",
+          to: "+15550001111",
         },
-      }),
-    ).toThrow('cron channel delivery config is only supported for sessionTarget="isolated"');
+      },
+    });
+    expect(job.delivery?.failureDestination).toEqual({
+      mode: "announce",
+      channel: "signal",
+      to: "+15550001111",
+    });
   });
 });
 

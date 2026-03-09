@@ -40,6 +40,7 @@ Optional legacy controls:
       search: {
         provider: "perplexity",
         perplexity: {
+          // pragma: allowlist secret
           apiKey: "pplx-...",
         },
       },
@@ -71,6 +72,8 @@ Optional legacy controls:
 
 **Via config:** run `openclaw configure --section web`. It stores the key in
 `~/.openclaw/openclaw.json` under `tools.web.search.perplexity.apiKey`.
+
+<!-- pragma: allowlist secret -->
 
 **Via environment:** set `PERPLEXITY_API_KEY` or `OPENROUTER_API_KEY`
 in the Gateway process environment. For a gateway install, put it in

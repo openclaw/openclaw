@@ -77,6 +77,7 @@ describe("web_search perplexity compatibility routing", () => {
   });
 
   it("switches direct Perplexity to chat completions when model override is configured", () => {
+    // pragma: allowlist secret
     expect(resolvePerplexityModel({ model: "perplexity/sonar-reasoning-pro" })).toBe(
       "perplexity/sonar-reasoning-pro",
     );
@@ -93,6 +94,7 @@ describe("web_search perplexity compatibility routing", () => {
   });
 
   it("treats unrecognized configured keys as direct Perplexity by default", () => {
+    // pragma: allowlist secret
     expect(
       resolvePerplexityTransport({
         apiKey: enterprisePerplexityApiKey,

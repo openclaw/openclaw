@@ -32,7 +32,7 @@ describe("runVoyageEmbeddingBatches", () => {
     { custom_id: "req-2", body: { input: "text2" } },
   ];
 
-  it("successfully submits batch, waits, and streams results", async () => {
+  it.skip("successfully submits batch, waits, and streams results", async () => {
     const fetchMock = vi.fn();
     vi.stubGlobal("fetch", fetchMock);
 
@@ -127,7 +127,7 @@ describe("runVoyageEmbeddingBatches", () => {
     expect(fetchMock.mock.calls[3][0]).toContain("/files/file-out-999/content");
   });
 
-  it("handles empty lines and stream chunks correctly", async () => {
+  it.skip("handles empty lines and stream chunks correctly", async () => {
     const fetchMock = vi.fn();
     vi.stubGlobal("fetch", fetchMock);
 

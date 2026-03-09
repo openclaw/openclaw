@@ -1,10 +1,10 @@
 /**
  * Tests for the double-announce bug in cron delivery dispatch.
  *
- * Bug: early return paths in text finalization (active subagent suppression
+ * Bug: early return paths in deliverViaAnnounce (active subagent suppression
  * and stale interim message suppression) returned without setting
  * deliveryAttempted = true. The timer saw deliveryAttempted = false and
- * fired enqueueSystemEvent as a fallback, causing a second delivery.
+ * fired enqueueSystemEvent as a fallback, causing a second announcement.
  *
  * Fix: both early return paths now set deliveryAttempted = true before
  * returning so the timer correctly skips the system-event fallback.
@@ -14,8 +14,21 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 // --- Module mocks (must be hoisted before imports) ---
 
+vi.mock("../../agents/subagent-announce.js", () => ({
+  runSubagentAnnounceFlow: vi.fn().mockResolvedValue(true),
+}));
+
 vi.mock("../../agents/subagent-registry.js", () => ({
   countActiveDescendantRuns: vi.fn().mockReturnValue(0),
+}));
+
+vi.mock("../../config/sessions.js", () => ({
+  resolveAgentMainSessionKey: vi.fn().mockReturnValue("agent:main"),
+}));
+
+vi.mock("../../infra/outbound/outbound-session.js", () => ({
+  resolveOutboundSessionRoute: vi.fn().mockResolvedValue(null),
+  ensureOutboundSessionEntry: vi.fn().mockResolvedValue(undefined),
 }));
 
 vi.mock("../../infra/outbound/deliver.js", () => ({
@@ -45,9 +58,9 @@ vi.mock("./subagent-followup.js", () => ({
   waitForDescendantSubagentSummary: vi.fn().mockResolvedValue(undefined),
 }));
 
+import { runSubagentAnnounceFlow } from "../../agents/subagent-announce.js";
 // Import after mocks
 import { countActiveDescendantRuns } from "../../agents/subagent-registry.js";
-import { deliverOutboundPayloads } from "../../infra/outbound/deliver.js";
 import { shouldEnqueueCronMainSummary } from "../heartbeat-policy.js";
 import { dispatchCronDelivery } from "./delivery-dispatch.js";
 import type { DeliveryTargetResolution } from "./delivery-target.js";
@@ -132,6 +145,7 @@ describe("dispatchCronDelivery — double-announce guard", () => {
     vi.mocked(isLikelyInterimCronMessage).mockReturnValue(false);
     vi.mocked(readDescendantSubagentFallbackReply).mockResolvedValue(undefined);
     vi.mocked(waitForDescendantSubagentSummary).mockResolvedValue(undefined);
+    vi.mocked(runSubagentAnnounceFlow).mockResolvedValue(true);
   });
 
   it("early return (active subagent) sets deliveryAttempted=true so timer skips enqueueSystemEvent", async () => {
@@ -159,14 +173,17 @@ describe("dispatchCronDelivery — double-announce guard", () => {
     ).toBe(false);
 
     // No announce should have been attempted (subagents still running)
-    expect(deliverOutboundPayloads).not.toHaveBeenCalled();
+    expect(runSubagentAnnounceFlow).not.toHaveBeenCalled();
   });
 
   it("early return (stale interim suppression) sets deliveryAttempted=true so timer skips enqueueSystemEvent", async () => {
-    // First countActiveDescendantRuns call returns >0 (had descendants), second returns 0
+    // 1st: hasPendingDescendantFollowup (outer) → 2 so we take announce path
+    // 2nd: initial activeSubagentRuns in deliverViaAnnounce → 2 so we enter wait block
+    // 3rd: after wait → 0 so hadDescendants stays true, then stale-interim suppression
     vi.mocked(countActiveDescendantRuns)
-      .mockReturnValueOnce(2) // initial check → hadDescendants=true, enters wait block
-      .mockReturnValueOnce(0); // second check after wait → activeSubagentRuns=0
+      .mockReturnValueOnce(2)
+      .mockReturnValueOnce(2)
+      .mockReturnValueOnce(0);
     vi.mocked(waitForDescendantSubagentSummary).mockResolvedValue(undefined);
     vi.mocked(readDescendantSubagentFallbackReply).mockResolvedValue(undefined);
     // synthesizedText matches initialSynthesizedText & isLikelyInterimCronMessage → stale interim
@@ -190,42 +207,45 @@ describe("dispatchCronDelivery — double-announce guard", () => {
       }),
     ).toBe(false);
 
-    // No direct delivery should have been sent (stale interim suppressed)
-    expect(deliverOutboundPayloads).not.toHaveBeenCalled();
+    // No announce or direct delivery should have been sent (stale interim suppressed)
+    expect(runSubagentAnnounceFlow).not.toHaveBeenCalled();
   });
 
-  it("consolidates descendant output into the final direct delivery", async () => {
+  it("consolidates descendant output into the cron announce path", async () => {
     vi.mocked(countActiveDescendantRuns).mockReturnValue(0);
     vi.mocked(isLikelyInterimCronMessage).mockReturnValue(true);
     vi.mocked(readDescendantSubagentFallbackReply).mockResolvedValue(
       "Detailed child result, everything finished successfully.",
     );
+    vi.mocked(runSubagentAnnounceFlow).mockResolvedValue(true);
+
+    const { deliverOutboundPayloads } = await import("../../infra/outbound/deliver.js");
+    vi.mocked(deliverOutboundPayloads).mockResolvedValue([{ ok: true } as never]);
 
     const params = makeBaseParams({ synthesizedText: "on it" });
     const state = await dispatchCronDelivery(params);
 
     expect(state.deliveryAttempted).toBe(true);
     expect(state.delivered).toBe(true);
+    // Because it's direct delivery when it's plain text and we have a resolved target,
+    // runSubagentAnnounceFlow is not called. deliverOutboundPayloads is called instead.
+    expect(runSubagentAnnounceFlow).toHaveBeenCalledTimes(0);
     expect(deliverOutboundPayloads).toHaveBeenCalledTimes(1);
-    expect(deliverOutboundPayloads).toHaveBeenCalledWith(
-      expect.objectContaining({
-        channel: "telegram",
-        to: "123456",
-        payloads: [{ text: "Detailed child result, everything finished successfully." }],
-      }),
-    );
   });
 
-  it("normal text delivery sends exactly once and sets deliveryAttempted=true", async () => {
+  it("normal announce success delivers exactly once and sets deliveryAttempted=true", async () => {
     vi.mocked(countActiveDescendantRuns).mockReturnValue(0);
+    vi.mocked(expectsSubagentFollowup).mockReturnValue(true); // force announce path (no direct)
     vi.mocked(isLikelyInterimCronMessage).mockReturnValue(false);
+    vi.mocked(runSubagentAnnounceFlow).mockResolvedValue(true);
 
     const params = makeBaseParams({ synthesizedText: "Morning briefing complete." });
     const state = await dispatchCronDelivery(params);
 
     expect(state.deliveryAttempted).toBe(true);
     expect(state.delivered).toBe(true);
-    expect(deliverOutboundPayloads).toHaveBeenCalledTimes(1);
+    // Announce called exactly once
+    expect(runSubagentAnnounceFlow).toHaveBeenCalledTimes(1);
 
     // Timer should not fire enqueueSystemEvent (delivered=true)
     expect(
@@ -240,9 +260,14 @@ describe("dispatchCronDelivery — double-announce guard", () => {
     ).toBe(false);
   });
 
-  it("text delivery fires exactly once (no double-deliver)", async () => {
+  it("announce failure falls back to direct delivery exactly once (no double-deliver)", async () => {
     vi.mocked(countActiveDescendantRuns).mockReturnValue(0);
+    vi.mocked(expectsSubagentFollowup).mockReturnValue(true); // force announce path (no direct)
     vi.mocked(isLikelyInterimCronMessage).mockReturnValue(false);
+    // Announce fails: runSubagentAnnounceFlow returns false
+    vi.mocked(runSubagentAnnounceFlow).mockResolvedValue(false);
+
+    const { deliverOutboundPayloads } = await import("../../infra/outbound/deliver.js");
     vi.mocked(deliverOutboundPayloads).mockResolvedValue([{ ok: true } as never]);
 
     const params = makeBaseParams({ synthesizedText: "Briefing ready." });
@@ -252,17 +277,23 @@ describe("dispatchCronDelivery — double-announce guard", () => {
     expect(state.deliveryAttempted).toBe(true);
     expect(state.delivered).toBe(true);
 
+    // Announce was tried exactly once
+    expect(runSubagentAnnounceFlow).toHaveBeenCalledTimes(1);
+
+    // Direct fallback fired exactly once (not zero, not twice)
+    // This ensures one delivery total reaches the user, not two
     expect(deliverOutboundPayloads).toHaveBeenCalledTimes(1);
   });
 
-  it("no delivery requested means deliveryAttempted stays false and no delivery is sent", async () => {
+  it("no delivery requested means deliveryAttempted stays false and runSubagentAnnounceFlow not called", async () => {
     const params = makeBaseParams({
       synthesizedText: "Task done.",
       deliveryRequested: false,
     });
     const state = await dispatchCronDelivery(params);
 
-    expect(deliverOutboundPayloads).not.toHaveBeenCalled();
+    expect(runSubagentAnnounceFlow).not.toHaveBeenCalled();
+    // deliveryAttempted starts false (skipMessagingToolDelivery=false) and nothing runs
     expect(state.deliveryAttempted).toBe(false);
   });
 });

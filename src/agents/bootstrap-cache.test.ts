@@ -6,9 +6,13 @@ import {
 } from "./bootstrap-cache.js";
 import type { WorkspaceBootstrapFile } from "./workspace.js";
 
-vi.mock("./workspace.js", () => ({
-  loadWorkspaceBootstrapFiles: vi.fn(),
-}));
+vi.mock("./workspace.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./workspace.js")>();
+  return {
+    ...actual,
+    loadWorkspaceBootstrapFiles: vi.fn(),
+  };
+});
 
 import { loadWorkspaceBootstrapFiles } from "./workspace.js";
 

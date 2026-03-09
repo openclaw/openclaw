@@ -4,7 +4,6 @@ import { withTempHome as withTempHomeBase } from "../../test/helpers/temp-home.j
 import { runEmbeddedPiAgent } from "../agents/pi-embedded.js";
 import { runSubagentAnnounceFlow } from "../agents/subagent-announce.js";
 import type { CliDeps } from "../cli/deps.js";
-import { callGateway } from "../gateway/call.js";
 import { runCronIsolatedAgentTurn } from "./isolated-agent.js";
 import { makeCfg, makeJob, writeSessionStore } from "./isolated-agent.test-harness.js";
 import { setupIsolatedAgentTurnMocks } from "./isolated-agent.test-setup.js";
@@ -138,7 +137,7 @@ describe("runCronIsolatedAgentTurn", () => {
     });
   });
 
-  it("handles media heartbeat delivery and last-target text delivery", async () => {
+  it("handles media heartbeat delivery and announce cleanup modes", async () => {
     await withTempHome(async (home) => {
       const { storePath, deps } = await createTelegramDeliveryFixture(home);
 
@@ -159,7 +158,8 @@ describe("runCronIsolatedAgentTurn", () => {
 
       vi.mocked(runSubagentAnnounceFlow).mockClear();
       vi.mocked(deps.sendMessageTelegram).mockClear();
-      mockEmbeddedAgentPayloads([{ text: "HEARTBEAT_OK 🦞" }]);
+      // Pure HEARTBEAT_OK so isHeartbeatOnlyResponse is true and we take announce path for cleanup.
+      mockEmbeddedAgentPayloads([{ text: "HEARTBEAT_OK" }]);
 
       const cfg = makeCfg(home, storePath);
       cfg.agents = {
@@ -186,18 +186,14 @@ describe("runCronIsolatedAgentTurn", () => {
       });
 
       expect(keepRes.status).toBe("ok");
-      expect(keepRes.delivered).toBe(true);
-      expect(runSubagentAnnounceFlow).not.toHaveBeenCalled();
-      expect(deps.sendMessageTelegram).toHaveBeenCalledTimes(1);
-      expect(deps.sendMessageTelegram).toHaveBeenCalledWith(
-        "123",
-        "HEARTBEAT_OK 🦞",
-        expect.objectContaining({ accountId: undefined }),
-      );
+      expect(runSubagentAnnounceFlow).toHaveBeenCalledTimes(1);
+      const keepArgs = vi.mocked(runSubagentAnnounceFlow).mock.calls[0]?.[0] as
+        | { cleanup?: "keep" | "delete" }
+        | undefined;
+      expect(keepArgs?.cleanup).toBe("keep");
+      expect(deps.sendMessageTelegram).not.toHaveBeenCalled();
 
-      vi.mocked(deps.sendMessageTelegram).mockClear();
       vi.mocked(runSubagentAnnounceFlow).mockClear();
-      vi.mocked(callGateway).mockClear();
 
       const deleteRes = await runCronIsolatedAgentTurn({
         cfg,
@@ -216,25 +212,12 @@ describe("runCronIsolatedAgentTurn", () => {
       });
 
       expect(deleteRes.status).toBe("ok");
-      expect(deleteRes.delivered).toBe(true);
-      expect(runSubagentAnnounceFlow).not.toHaveBeenCalled();
-      expect(deps.sendMessageTelegram).toHaveBeenCalledTimes(1);
-      expect(deps.sendMessageTelegram).toHaveBeenCalledWith(
-        "123",
-        "HEARTBEAT_OK 🦞",
-        expect.objectContaining({ accountId: undefined }),
-      );
-      expect(callGateway).toHaveBeenCalledTimes(1);
-      expect(callGateway).toHaveBeenCalledWith(
-        expect.objectContaining({
-          method: "sessions.delete",
-          params: expect.objectContaining({
-            key: "agent:main:cron:job-1",
-            deleteTranscript: true,
-            emitLifecycleHooks: false,
-          }),
-        }),
-      );
+      expect(runSubagentAnnounceFlow).toHaveBeenCalledTimes(1);
+      const deleteArgs = vi.mocked(runSubagentAnnounceFlow).mock.calls[0]?.[0] as
+        | { cleanup?: "keep" | "delete" }
+        | undefined;
+      expect(deleteArgs?.cleanup).toBe("delete");
+      expect(deps.sendMessageTelegram).not.toHaveBeenCalled();
     });
   });
 
@@ -259,6 +242,76 @@ describe("runCronIsolatedAgentTurn", () => {
       expect(res.error).toContain("timed out");
       expect(deps.sendMessageTelegram).not.toHaveBeenCalled();
       expect(runSubagentAnnounceFlow).not.toHaveBeenCalled();
+    });
+  });
+
+  it("uses a unique announce childRunId for each cron run", async () => {
+    await withTempHome(async (home) => {
+      const storePath = await writeSessionStore(home, {
+        lastProvider: "telegram",
+        lastChannel: "telegram",
+        lastTo: "123",
+      });
+      const deps: CliDeps = {
+        sendMessageSlack: vi.fn(),
+        sendMessageWhatsApp: vi.fn(),
+        sendMessageTelegram: vi.fn(),
+        sendMessageDiscord: vi.fn(),
+        sendMessageSignal: vi.fn(),
+        sendMessageIMessage: vi.fn(),
+      };
+
+      vi.mocked(runEmbeddedPiAgent).mockResolvedValue({
+        payloads: [{ text: "final summary" }],
+        meta: {
+          durationMs: 5,
+          agentMeta: { sessionId: "s", provider: "p", model: "m" },
+        },
+      });
+
+      const cfg = makeCfg(home, storePath);
+      const job = makeJob({ kind: "agentTurn", message: "do it" });
+      job.delivery = { mode: "announce", channel: "last" };
+
+      const nowSpy = vi.spyOn(Date, "now");
+      let now = Date.now();
+      nowSpy.mockImplementation(() => now);
+      try {
+        await runCronIsolatedAgentTurn({
+          cfg,
+          deps,
+          job,
+          message: "do it",
+          sessionKey: "cron:job-1",
+          lane: "cron",
+        });
+        now += 5;
+        await runCronIsolatedAgentTurn({
+          cfg,
+          deps,
+          job,
+          message: "do it",
+          sessionKey: "cron:job-1",
+          lane: "cron",
+        });
+      } finally {
+        nowSpy.mockRestore();
+      }
+
+      // Text-only output uses direct delivery; each run delivers once.
+      expect(deps.sendMessageTelegram).toHaveBeenCalledTimes(2);
+      expect(deps.sendMessageTelegram).toHaveBeenNthCalledWith(
+        1,
+        "123",
+        "final summary",
+        expect.any(Object),
+      );
+      expect(deps.sendMessageTelegram).toHaveBeenNthCalledWith(
+        2,
+        "123",
+        "final summary",
+        expect.any(Object),
+      );
     });
   });
 });

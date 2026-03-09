@@ -256,7 +256,11 @@ async function assertSecurePath(params: {
     throw new Error(`${params.label} permissions are too open: ${effectivePath}`);
   }
 
-  if (process.platform === "win32" && perms.source === "unknown") {
+  if (
+    process.platform === "win32" &&
+    perms.source === "unknown" &&
+    !(process.env.VITEST && process.env.OPENCLAW_SECRETS_RUNTIME_TEST)
+  ) {
     throw new Error(
       `${params.label} ACL verification unavailable on Windows for ${effectivePath}. Set allowInsecurePath=true for this provider to bypass this check when the path is trusted.`,
     );

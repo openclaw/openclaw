@@ -133,6 +133,7 @@ describe("secrets runtime snapshot", () => {
     const snapshot = await prepareSecretsRuntimeSnapshot({
       config,
       env: {
+        OPENCLAW_SECRETS_RUNTIME_TEST: "1",
         OPENAI_API_KEY: "sk-env-openai", // pragma: allowlist secret
         OPENAI_PROVIDER_AUTH_HEADER: "Bearer sk-env-header", // pragma: allowlist secret
         GITHUB_TOKEN: "ghp-env-token", // pragma: allowlist secret
@@ -509,7 +510,7 @@ describe("secrets runtime snapshot", () => {
           },
         },
       }),
-      env: { OPENAI_API_KEY: "sk-runtime" }, // pragma: allowlist secret
+      env: { OPENAI_API_KEY: "sk-runtime", OPENCLAW_SECRETS_RUNTIME_TEST: "1" }, // pragma: allowlist secret
       agentDirs: ["/tmp/openclaw-agent-main"],
       loadAuthStore: () =>
         loadAuthStoreWithProfiles({
@@ -590,6 +591,7 @@ describe("secrets runtime snapshot", () => {
             },
           },
         }),
+        env: { OPENCLAW_SECRETS_RUNTIME_TEST: "1" },
         agentDirs: [agentDir],
       });
 
@@ -689,6 +691,7 @@ describe("secrets runtime snapshot", () => {
             },
           },
         }),
+        env: { OPENCLAW_SECRETS_RUNTIME_TEST: "1" },
         agentDirs: [agentDir],
         loadAuthStore,
       });

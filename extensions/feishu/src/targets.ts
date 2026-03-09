@@ -2,6 +2,7 @@ import type { FeishuIdType } from "./types.js";
 
 const CHAT_ID_PREFIX = "oc_";
 const OPEN_ID_PREFIX = "ou_";
+const UNION_ID_PREFIX = "on_";
 const USER_ID_REGEX = /^[a-zA-Z0-9_-]+$/;
 
 function stripProviderPrefix(raw: string): string {
@@ -15,6 +16,9 @@ export function detectIdType(id: string): FeishuIdType | null {
   }
   if (trimmed.startsWith(OPEN_ID_PREFIX)) {
     return "open_id";
+  }
+  if (trimmed.startsWith(UNION_ID_PREFIX)) {
+    return "union_id";
   }
   if (USER_ID_REGEX.test(trimmed)) {
     return "user_id";
@@ -48,6 +52,9 @@ export function normalizeFeishuTarget(raw: string): string | null {
   if (lowered.startsWith("open_id:")) {
     return withoutProvider.slice("open_id:".length).trim() || null;
   }
+  if (lowered.startsWith("union_id:")) {
+    return withoutProvider.slice("union_id:".length).trim() || null;
+  }
 
   return withoutProvider;
 }
@@ -60,10 +67,13 @@ export function formatFeishuTarget(id: string, type?: FeishuIdType): string {
   if (type === "open_id" || trimmed.startsWith(OPEN_ID_PREFIX)) {
     return `user:${trimmed}`;
   }
+  if (type === "union_id" || trimmed.startsWith(UNION_ID_PREFIX)) {
+    return `user:${trimmed}`;
+  }
   return trimmed;
 }
 
-export function resolveReceiveIdType(id: string): "chat_id" | "open_id" | "user_id" {
+export function resolveReceiveIdType(id: string): "chat_id" | "open_id" | "union_id" | "user_id" {
   const trimmed = id.trim();
   const lowered = trimmed.toLowerCase();
   if (
@@ -76,15 +86,23 @@ export function resolveReceiveIdType(id: string): "chat_id" | "open_id" | "user_
   if (lowered.startsWith("open_id:")) {
     return "open_id";
   }
+  if (lowered.startsWith("union_id:")) {
+    return "union_id";
+  }
   if (lowered.startsWith("user:") || lowered.startsWith("dm:")) {
     const normalized = trimmed.replace(/^(user|dm):/i, "").trim();
-    return normalized.startsWith(OPEN_ID_PREFIX) ? "open_id" : "user_id";
+    if (normalized.startsWith(OPEN_ID_PREFIX)) return "open_id";
+    if (normalized.startsWith(UNION_ID_PREFIX)) return "union_id";
+    return "user_id";
   }
   if (trimmed.startsWith(CHAT_ID_PREFIX)) {
     return "chat_id";
   }
   if (trimmed.startsWith(OPEN_ID_PREFIX)) {
     return "open_id";
+  }
+  if (trimmed.startsWith(UNION_ID_PREFIX)) {
+    return "union_id";
   }
   return "user_id";
 }
@@ -94,13 +112,16 @@ export function looksLikeFeishuId(raw: string): boolean {
   if (!trimmed) {
     return false;
   }
-  if (/^(chat|group|channel|user|dm|open_id):/i.test(trimmed)) {
+  if (/^(chat|group|channel|user|dm|open_id|union_id):/i.test(trimmed)) {
     return true;
   }
   if (trimmed.startsWith(CHAT_ID_PREFIX)) {
     return true;
   }
   if (trimmed.startsWith(OPEN_ID_PREFIX)) {
+    return true;
+  }
+  if (trimmed.startsWith(UNION_ID_PREFIX)) {
     return true;
   }
   return false;

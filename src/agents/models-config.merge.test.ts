@@ -57,7 +57,7 @@ describe("models-config merge helpers", () => {
         " custom ": {
           api: "openai-responses",
           models: [] as ProviderConfig["models"],
-        } as ProviderConfig,
+        } as unknown as ProviderConfig,
       },
     });
 
