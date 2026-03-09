@@ -5,6 +5,7 @@ import { applySessionsPatchToStore } from "./sessions-patch.js";
 
 const SUBAGENT_MODEL = "synthetic/hf:moonshotai/Kimi-K2.5";
 const KIMI_SUBAGENT_KEY = "agent:kimi:subagent:child";
+const ACP_SESSION_KEY = "agent:codex:acp:session-1";
 const MAIN_SESSION_KEY = "agent:main:main";
 const EMPTY_CFG = {} as OpenClawConfig;
 
@@ -250,6 +251,16 @@ describe("gateway sessions patch", () => {
       }),
     );
     expect(entry.spawnDepth).toBe(2);
+  });
+
+  test("accepts spawnedBy for ACP sessions", async () => {
+    const entry = expectPatchOk(
+      await runPatch({
+        storeKey: ACP_SESSION_KEY,
+        patch: { key: ACP_SESSION_KEY, spawnedBy: MAIN_SESSION_KEY },
+      }),
+    );
+    expect(entry.spawnedBy).toBe(MAIN_SESSION_KEY);
   });
 
   test("rejects spawnDepth on non-subagent sessions", async () => {

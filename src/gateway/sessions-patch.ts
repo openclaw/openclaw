@@ -19,6 +19,7 @@ import {
 import type { OpenClawConfig } from "../config/config.js";
 import type { SessionEntry } from "../config/sessions.js";
 import {
+  isAcpSessionKey,
   isSubagentSessionKey,
   normalizeAgentId,
   parseAgentSessionKey,
@@ -97,7 +98,7 @@ export async function applySessionsPatchToStore(params: {
       if (!trimmed) {
         return invalid("invalid spawnedBy: empty");
       }
-      if (!isSubagentSessionKey(storeKey)) {
+      if (!isSubagentSessionKey(storeKey) && !isAcpSessionKey(storeKey)) {
         return invalid("spawnedBy is only supported for subagent:* sessions");
       }
       if (existing?.spawnedBy && existing.spawnedBy !== trimmed) {
