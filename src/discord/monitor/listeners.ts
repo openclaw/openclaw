@@ -13,7 +13,6 @@ import { danger, logVerbose } from "../../globals.js";
 import { formatDurationSeconds } from "../../infra/format-time/format-duration.ts";
 import { enqueueSystemEvent } from "../../infra/system-events.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
-import { KeyedAsyncQueue } from "../../plugin-sdk/keyed-async-queue.js";
 import { resolveAgentRoute } from "../../routing/resolve-route.js";
 import {
   readStoreAllowFromForDmPolicy,
@@ -34,6 +33,7 @@ import { resolveDiscordChannelInfo } from "./message-utils.js";
 import { setPresence } from "./presence-cache.js";
 import { isThreadArchived } from "./thread-bindings.discord-api.js";
 import { closeDiscordThreadSessions } from "./thread-session-close.js";
+import { normalizeDiscordListenerTimeoutMs, runDiscordTaskWithTimeout } from "./timeouts.js";
 
 type LoadedConfig = ReturnType<typeof import("../../config/config.js").loadConfig>;
 type RuntimeEnv = import("../../runtime.js").RuntimeEnv;
@@ -70,15 +70,7 @@ type DiscordReactionRoutingParams = {
 };
 
 const DISCORD_SLOW_LISTENER_THRESHOLD_MS = 30_000;
-const DISCORD_DEFAULT_LISTENER_TIMEOUT_MS = 120_000;
 const discordEventQueueLog = createSubsystemLogger("discord/event-queue");
-
-function normalizeDiscordListenerTimeoutMs(raw: number | undefined): number {
-  if (!Number.isFinite(raw) || (raw ?? 0) <= 0) {
-    return DISCORD_DEFAULT_LISTENER_TIMEOUT_MS;
-  }
-  return Math.max(1_000, Math.floor(raw!));
-}
 
 function formatListenerContextValue(value: unknown): string | null {
   if (value === undefined || value === null) {
@@ -138,57 +130,44 @@ async function runDiscordListenerWithSlowLog(params: {
   logger: Logger | undefined;
   listener: string;
   event: string;
-  run: (abortSignal: AbortSignal) => Promise<void>;
+  run: (abortSignal: AbortSignal | undefined) => Promise<void>;
   timeoutMs?: number;
   context?: Record<string, unknown>;
   onError?: (err: unknown) => void;
 }) {
   const startedAt = Date.now();
   const timeoutMs = normalizeDiscordListenerTimeoutMs(params.timeoutMs);
-  let timedOut = false;
-  let timeoutHandle: ReturnType<typeof setTimeout> | null = null;
   const logger = params.logger ?? discordEventQueueLog;
-  const abortController = new AbortController();
-  const runPromise = params.run(abortController.signal).catch((err) => {
-    if (timedOut) {
-      const errorName =
-        err && typeof err === "object" && "name" in err ? String(err.name) : undefined;
-      if (abortController.signal.aborted && errorName === "AbortError") {
+  let timedOut = false;
+
+  try {
+    timedOut = await runDiscordTaskWithTimeout({
+      run: params.run,
+      timeoutMs,
+      onTimeout: (resolvedTimeoutMs) => {
+        logger.error(
+          danger(
+            `discord handler timed out after ${formatDurationSeconds(resolvedTimeoutMs, {
+              decimals: 1,
+              unit: "seconds",
+            })}${formatListenerContextSuffix(params.context)}`,
+          ),
+        );
+      },
+      onAbortAfterTimeout: () => {
         logger.warn(
           `discord handler canceled after timeout${formatListenerContextSuffix(params.context)}`,
         );
-        return;
-      }
-      logger.error(
-        danger(
-          `discord handler failed after timeout: ${String(err)}${formatListenerContextSuffix(params.context)}`,
-        ),
-      );
-      return;
-    }
-    throw err;
-  });
-
-  try {
-    const timeoutPromise = new Promise<"timeout">((resolve) => {
-      timeoutHandle = setTimeout(() => resolve("timeout"), timeoutMs);
-      timeoutHandle.unref?.();
+      },
+      onErrorAfterTimeout: (err) => {
+        logger.error(
+          danger(
+            `discord handler failed after timeout: ${String(err)}${formatListenerContextSuffix(params.context)}`,
+          ),
+        );
+      },
     });
-    const result = await Promise.race([
-      runPromise.then(() => "completed" as const),
-      timeoutPromise,
-    ]);
-    if (result === "timeout") {
-      timedOut = true;
-      abortController.abort();
-      logger.error(
-        danger(
-          `discord handler timed out after ${formatDurationSeconds(timeoutMs, {
-            decimals: 1,
-            unit: "seconds",
-          })}${formatListenerContextSuffix(params.context)}`,
-        ),
-      );
+    if (timedOut) {
       return;
     }
   } catch (err) {
@@ -198,9 +177,6 @@ async function runDiscordListenerWithSlowLog(params: {
     }
     throw err;
   } finally {
-    if (timeoutHandle) {
-      clearTimeout(timeoutHandle);
-    }
     if (!timedOut) {
       logSlowDiscordListener({
         logger: params.logger,
@@ -222,44 +198,27 @@ export function registerDiscordListener(listeners: Array<object>, listener: obje
 }
 
 export class DiscordMessageListener extends MessageCreateListener {
-  private readonly channelQueue = new KeyedAsyncQueue();
-  private readonly listenerTimeoutMs: number;
-
   constructor(
     private handler: DiscordMessageHandler,
     private logger?: Logger,
     private onEvent?: () => void,
-    options?: { timeoutMs?: number },
+    _options?: { timeoutMs?: number },
   ) {
     super();
-    this.listenerTimeoutMs = normalizeDiscordListenerTimeoutMs(options?.timeoutMs);
   }
 
   async handle(data: DiscordMessageEvent, client: Client) {
     this.onEvent?.();
-    const channelId = data.channel_id;
-    const context = {
-      channelId,
-      messageId: (data as { message?: { id?: string } }).message?.id,
-      guildId: (data as { guild_id?: string }).guild_id,
-    } satisfies Record<string, unknown>;
-    // Serialize messages within the same channel to preserve ordering,
-    // but allow different channels to proceed in parallel so that
-    // channel-bound agents are not blocked by each other.
-    void this.channelQueue.enqueue(channelId, () =>
-      runDiscordListenerWithSlowLog({
-        logger: this.logger,
-        listener: this.constructor.name,
-        event: this.type,
-        timeoutMs: this.listenerTimeoutMs,
-        context,
-        run: (abortSignal) => this.handler(data, client, { abortSignal }),
-        onError: (err) => {
-          const logger = this.logger ?? discordEventQueueLog;
-          logger.error(danger(`discord handler failed: ${String(err)}`));
-        },
-      }),
-    );
+    // Fire-and-forget: hand off to the handler without blocking the
+    // Carbon listener.  Per-session ordering and run timeouts are owned
+    // by the inbound worker queue, so the listener no longer serializes
+    // or applies its own timeout.
+    void Promise.resolve()
+      .then(() => this.handler(data, client))
+      .catch((err) => {
+        const logger = this.logger ?? discordEventQueueLog;
+        logger.error(danger(`discord handler failed: ${String(err)}`));
+      });
   }
 }
 
