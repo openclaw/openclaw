@@ -1,6 +1,9 @@
+import fs from "node:fs/promises";
+import { SessionManager } from "@mariozechner/pi-coding-agent";
 import { getAcpSessionManager } from "../acp/control-plane/manager.js";
 import { resolveAcpAgentPolicyError, resolveAcpDispatchPolicyError } from "../acp/policy.js";
 import { toAcpRuntimeError } from "../acp/runtime/errors.js";
+import { resolveAcpSessionCwd } from "../acp/runtime/session-identifiers.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 
 const log = createSubsystemLogger("commands/agent");
@@ -33,9 +36,11 @@ import {
   resolveDefaultModelForAgent,
   resolveThinkingDefault,
 } from "../agents/model-selection.js";
+import { prepareSessionManagerForRun } from "../agents/pi-embedded-runner/session-manager-init.js";
 import { runEmbeddedPiAgent } from "../agents/pi-embedded.js";
 import { buildWorkspaceSkillSnapshot } from "../agents/skills.js";
 import { getSkillsSnapshotVersion } from "../agents/skills/refresh.js";
+import { normalizeSpawnedRunMetadata } from "../agents/spawned-context.js";
 import { resolveAgentTimeoutMs } from "../agents/timeout.js";
 import { ensureAgentWorkspace } from "../agents/workspace.js";
 import { normalizeReplyPayload } from "../auto-reply/reply/normalize-reply.js";
@@ -64,15 +69,11 @@ import {
 } from "../config/config.js";
 import {
   mergeSessionEntry,
-  parseSessionThreadInfo,
-  resolveAndPersistSessionFile,
   resolveAgentIdFromSessionKey,
-  resolveSessionFilePath,
-  resolveSessionFilePathOptions,
-  resolveSessionTranscriptPath,
   type SessionEntry,
   updateSessionStore,
 } from "../config/sessions.js";
+import { resolveSessionTranscriptFile } from "../config/sessions/transcript.js";
 import {
   clearAgentRunContext,
   emitAgentEvent,
@@ -85,6 +86,7 @@ import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
 import { applyVerboseOverride } from "../sessions/level-overrides.js";
 import { applyModelOverrideToSessionEntry } from "../sessions/model-overrides.js";
 import { resolveSendPolicy } from "../sessions/send-policy.js";
+import { emitSessionTranscriptUpdate } from "../sessions/transcript-events.js";
 import { resolveMessageChannel } from "../utils/message-channel.js";
 import { deliverAgentCommandResult } from "./agent/delivery.js";
 import { resolveAgentRunContext } from "./agent/run-context.js";
@@ -229,7 +231,90 @@ function createAcpVisibleTextAccumulator() {
     finalize(): string {
       return visibleText.trim();
     },
+    finalizeRaw(): string {
+      return visibleText;
+    },
   };
+}
+
+const ACP_TRANSCRIPT_USAGE = {
+  input: 0,
+  output: 0,
+  cacheRead: 0,
+  cacheWrite: 0,
+  totalTokens: 0,
+  cost: {
+    input: 0,
+    output: 0,
+    cacheRead: 0,
+    cacheWrite: 0,
+    total: 0,
+  },
+} as const;
+
+async function persistAcpTurnTranscript(params: {
+  body: string;
+  finalText: string;
+  sessionId: string;
+  sessionKey: string;
+  sessionEntry: SessionEntry | undefined;
+  sessionStore?: Record<string, SessionEntry>;
+  storePath?: string;
+  sessionAgentId: string;
+  threadId?: string | number;
+  sessionCwd: string;
+}): Promise<SessionEntry | undefined> {
+  const promptText = params.body;
+  const replyText = params.finalText;
+  if (!promptText && !replyText) {
+    return params.sessionEntry;
+  }
+
+  const { sessionFile, sessionEntry } = await resolveSessionTranscriptFile({
+    sessionId: params.sessionId,
+    sessionKey: params.sessionKey,
+    sessionEntry: params.sessionEntry,
+    sessionStore: params.sessionStore,
+    storePath: params.storePath,
+    agentId: params.sessionAgentId,
+    threadId: params.threadId,
+  });
+  const hadSessionFile = await fs
+    .access(sessionFile)
+    .then(() => true)
+    .catch(() => false);
+  const sessionManager = SessionManager.open(sessionFile);
+  await prepareSessionManagerForRun({
+    sessionManager,
+    sessionFile,
+    hadSessionFile,
+    sessionId: params.sessionId,
+    cwd: params.sessionCwd,
+  });
+
+  if (promptText) {
+    sessionManager.appendMessage({
+      role: "user",
+      content: promptText,
+      timestamp: Date.now(),
+    });
+  }
+
+  if (replyText) {
+    sessionManager.appendMessage({
+      role: "assistant",
+      content: [{ type: "text", text: replyText }],
+      api: "openai-responses",
+      provider: "openclaw",
+      model: "acp-runtime",
+      usage: ACP_TRANSCRIPT_USAGE,
+      stopReason: "stop",
+      timestamp: Date.now(),
+    });
+  }
+
+  emitSessionTranscriptUpdate(sessionFile);
+  return sessionEntry;
 }
 
 function runAgentAttempt(params: {
@@ -416,13 +501,12 @@ function runAgentAttempt(params: {
   });
 }
 
-async function agentCommandInternal(
+async function prepareAgentCommandExecution(
   opts: AgentCommandOpts & { senderIsOwner: boolean },
-  runtime: RuntimeEnv = defaultRuntime,
-  deps: CliDeps = createDefaultDeps(),
+  runtime: RuntimeEnv,
 ) {
-  const message = (opts.message ?? "").trim();
-  if (!message) {
+  const message = opts.message ?? "";
+  if (!message.trim()) {
     throw new Error("Message (--message) is required");
   }
   const body = prependInternalEventContext(message, opts.internalEvents);
@@ -448,6 +532,13 @@ async function agentCommandInternal(
     targetIds: getAgentRuntimeCommandSecretTargetIds(),
   });
   setRuntimeConfigSnapshot(cfg, sourceConfig);
+  const normalizedSpawned = normalizeSpawnedRunMetadata({
+    spawnedBy: opts.spawnedBy,
+    groupId: opts.groupId,
+    groupChannel: opts.groupChannel,
+    groupSpace: opts.groupSpace,
+    workspaceDir: opts.workspaceDir,
+  });
   for (const entry of diagnostics) {
     runtime.log(`[secrets] ${entry}`);
   }
@@ -521,7 +612,7 @@ async function agentCommandInternal(
   const {
     sessionId,
     sessionKey,
-    sessionEntry: resolvedSessionEntry,
+    sessionEntry: sessionEntryRaw,
     sessionStore,
     storePath,
     isNewSession,
@@ -539,14 +630,15 @@ async function agentCommandInternal(
     agentId: sessionAgentId,
     sessionKey,
   });
-  const workspaceDirRaw = resolveAgentWorkspaceDir(cfg, sessionAgentId);
+  // Internal callers (for example subagent spawns) may pin workspace inheritance.
+  const workspaceDirRaw =
+    normalizedSpawned.workspaceDir ?? resolveAgentWorkspaceDir(cfg, sessionAgentId);
   const agentDir = resolveAgentDir(cfg, sessionAgentId);
   const workspace = await ensureAgentWorkspace({
     dir: workspaceDirRaw,
     ensureBootstrapFiles: !agentCfg?.skipBootstrap,
   });
   const workspaceDir = workspace.dir;
-  let sessionEntry = resolvedSessionEntry;
   const runId = opts.runId?.trim() || sessionId;
   const acpManager = getAcpSessionManager();
   const acpResolution = sessionKey
@@ -555,6 +647,65 @@ async function agentCommandInternal(
         sessionKey,
       })
     : null;
+
+  return {
+    body,
+    cfg,
+    normalizedSpawned,
+    agentCfg,
+    thinkOverride,
+    thinkOnce,
+    verboseOverride,
+    timeoutMs,
+    sessionId,
+    sessionKey,
+    sessionEntry: sessionEntryRaw,
+    sessionStore,
+    storePath,
+    isNewSession,
+    persistedThinking,
+    persistedVerbose,
+    sessionAgentId,
+    outboundSession,
+    workspaceDir,
+    agentDir,
+    runId,
+    acpManager,
+    acpResolution,
+  };
+}
+
+async function agentCommandInternal(
+  opts: AgentCommandOpts & { senderIsOwner: boolean },
+  runtime: RuntimeEnv = defaultRuntime,
+  deps: CliDeps = createDefaultDeps(),
+) {
+  const prepared = await prepareAgentCommandExecution(opts, runtime);
+  const {
+    body,
+    cfg,
+    normalizedSpawned,
+    agentCfg,
+    thinkOverride,
+    thinkOnce,
+    verboseOverride,
+    timeoutMs,
+    sessionId,
+    sessionKey,
+    sessionStore,
+    storePath,
+    isNewSession,
+    persistedThinking,
+    persistedVerbose,
+    sessionAgentId,
+    outboundSession,
+    workspaceDir,
+    agentDir,
+    runId,
+    acpManager,
+    acpResolution,
+  } = prepared;
+  let sessionEntry = prepared.sessionEntry;
 
   try {
     if (opts.deliver === true) {
@@ -665,8 +816,29 @@ async function agentCommandInternal(
         },
       });
 
+      const finalTextRaw = visibleTextAccumulator.finalizeRaw();
+      const finalText = visibleTextAccumulator.finalize();
+      try {
+        sessionEntry = await persistAcpTurnTranscript({
+          body,
+          finalText: finalTextRaw,
+          sessionId,
+          sessionKey,
+          sessionEntry,
+          sessionStore,
+          storePath,
+          sessionAgentId,
+          threadId: opts.threadId,
+          sessionCwd: resolveAcpSessionCwd(acpResolution.meta) ?? workspaceDir,
+        });
+      } catch (error) {
+        log.warn(
+          `ACP transcript persistence failed for ${sessionKey}: ${error instanceof Error ? error.message : String(error)}`,
+        );
+      }
+
       const normalizedFinalPayload = normalizeReplyPayload({
-        text: visibleTextAccumulator.finalize(),
+        text: finalText,
       });
       const payloads = normalizedFinalPayload ? [normalizedFinalPayload] : [];
       const result = {
@@ -877,29 +1049,27 @@ async function agentCommandInternal(
         });
       }
     }
-    const sessionPathOpts = resolveSessionFilePathOptions({
-      agentId: sessionAgentId,
-      storePath,
-    });
-    let sessionFile = resolveSessionFilePath(sessionId, sessionEntry, sessionPathOpts);
+    let sessionFile: string | undefined;
     if (sessionStore && sessionKey) {
-      const threadIdFromSessionKey = parseSessionThreadInfo(sessionKey).threadId;
-      const fallbackSessionFile = !sessionEntry?.sessionFile
-        ? resolveSessionTranscriptPath(
-            sessionId,
-            sessionAgentId,
-            opts.threadId ?? threadIdFromSessionKey,
-          )
-        : undefined;
-      const resolvedSessionFile = await resolveAndPersistSessionFile({
+      const resolvedSessionFile = await resolveSessionTranscriptFile({
         sessionId,
         sessionKey,
         sessionStore,
         storePath,
         sessionEntry,
-        agentId: sessionPathOpts?.agentId,
-        sessionsDir: sessionPathOpts?.sessionsDir,
-        fallbackSessionFile,
+        agentId: sessionAgentId,
+        threadId: opts.threadId,
+      });
+      sessionFile = resolvedSessionFile.sessionFile;
+      sessionEntry = resolvedSessionFile.sessionEntry;
+    }
+    if (!sessionFile) {
+      const resolvedSessionFile = await resolveSessionTranscriptFile({
+        sessionId,
+        sessionKey: sessionKey ?? sessionId,
+        sessionEntry,
+        agentId: sessionAgentId,
+        threadId: opts.threadId,
       });
       sessionFile = resolvedSessionFile.sessionFile;
       sessionEntry = resolvedSessionFile.sessionEntry;
@@ -917,7 +1087,7 @@ async function agentCommandInternal(
         runContext.messageChannel,
         opts.replyChannel ?? opts.channel,
       );
-      const spawnedBy = opts.spawnedBy ?? sessionEntry?.spawnedBy;
+      const spawnedBy = normalizedSpawned.spawnedBy ?? sessionEntry?.spawnedBy;
       // Keep fallback candidate resolution centralized so session model overrides,
       // per-agent overrides, and default fallbacks stay consistent across callers.
       const effectiveFallbacksOverride = resolveEffectiveModelFallbacks({

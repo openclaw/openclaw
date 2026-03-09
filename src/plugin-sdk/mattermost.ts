@@ -30,13 +30,18 @@ export { formatPairingApproveHint } from "../channels/plugins/helpers.js";
 export { resolveChannelMediaMaxBytes } from "../channels/plugins/media-limits.js";
 export type { ChannelOnboardingAdapter } from "../channels/plugins/onboarding-types.js";
 export {
+  buildSingleChannelSecretPromptState,
   promptAccountId,
   promptSingleChannelSecretInput,
+  resolveAccountIdForConfigure,
 } from "../channels/plugins/onboarding/helpers.js";
 export {
   applyAccountNameToChannelSection,
+  applySetupAccountConfigPatch,
   migrateBaseNameToDefaultAccount,
 } from "../channels/plugins/setup-helpers.js";
+export { buildComputedAccountStatusSnapshot } from "./status-helpers.js";
+export { createAccountListHelpers } from "../channels/plugins/account-helpers.js";
 export type {
   BaseProbeResult,
   ChannelAccountSnapshot,
@@ -72,6 +77,7 @@ export {
   requireOpenAllowFrom,
 } from "../config/zod-schema.core.js";
 export { createDedupeCache } from "../infra/dedupe.js";
+export { parseStrictPositiveInteger } from "../infra/parse-finite-number.js";
 export { rawDataToString } from "../infra/ws.js";
 export { isLoopbackHost, isTrustedProxyAddress, resolveClientIp } from "../gateway/net.js";
 export { registerPluginHttpRoute } from "../plugins/http-registry.js";
@@ -90,6 +96,7 @@ export {
   resolveDmGroupAccessWithLists,
   resolveEffectiveAllowFromLists,
 } from "../security/dm-policy-shared.js";
+export { evaluateSenderGroupAccessForPolicy } from "./group-access.js";
 export type { WizardPrompter } from "../wizard/prompts.js";
 export { buildAgentMediaPayload } from "./agent-media-payload.js";
 export { loadOutboundMediaFromUrl } from "./outbound-media.js";

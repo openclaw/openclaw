@@ -153,6 +153,6 @@ describe("acp cli option collisions", () => {
 
   it("reports missing token-file read errors", async () => {
     await parseAcp(["--token-file", "/tmp/openclaw-acp-missing-token.txt"]);
-    expectCliError(/Failed to read Gateway token file/);
+    expectCliError(/Failed to (inspect|read) Gateway token file/);
   });
 });
