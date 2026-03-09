@@ -1,11 +1,19 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const { fetchWithSsrFGuardMock } = vi.hoisted(() => ({
+const {
+  fetchWithSsrFGuardMock,
+  withStrictGuardedFetchModeMock,
+  withTrustedEnvProxyGuardedFetchModeMock,
+} = vi.hoisted(() => ({
   fetchWithSsrFGuardMock: vi.fn(),
+  withStrictGuardedFetchModeMock: vi.fn((params) => params),
+  withTrustedEnvProxyGuardedFetchModeMock: vi.fn((params) => params),
 }));
 
 vi.mock("../../infra/net/fetch-guard.js", () => ({
   fetchWithSsrFGuard: fetchWithSsrFGuardMock,
+  withStrictGuardedFetchMode: withStrictGuardedFetchModeMock,
+  withTrustedEnvProxyGuardedFetchMode: withTrustedEnvProxyGuardedFetchModeMock,
 }));
 
 import { __testing } from "./web-search.js";
@@ -15,6 +23,8 @@ describe("web_search redirect resolution hardening", () => {
 
   beforeEach(() => {
     fetchWithSsrFGuardMock.mockReset();
+    withStrictGuardedFetchModeMock.mockClear();
+    withTrustedEnvProxyGuardedFetchModeMock.mockClear();
   });
 
   it("resolves redirects via SSRF-guarded HEAD requests", async () => {
@@ -28,6 +38,13 @@ describe("web_search redirect resolution hardening", () => {
     const resolved = await resolveRedirectUrl("https://example.com/start");
     expect(resolved).toBe("https://example.com/final");
     expect(fetchWithSsrFGuardMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        url: "https://example.com/start",
+        timeoutMs: 5000,
+        init: { method: "HEAD" },
+      }),
+    );
+    expect(withStrictGuardedFetchModeMock).toHaveBeenCalledWith(
       expect.objectContaining({
         url: "https://example.com/start",
         timeoutMs: 5000,
