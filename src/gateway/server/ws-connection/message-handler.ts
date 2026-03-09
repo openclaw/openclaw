@@ -91,6 +91,26 @@ type SubsystemLogger = ReturnType<typeof createSubsystemLogger>;
 const DEVICE_SIGNATURE_SKEW_MS = 2 * 60 * 1000;
 const BROWSER_ORIGIN_LOOPBACK_RATE_LIMIT_IP = "198.18.0.1";
 
+type ActiveChatRunSnapshot = {
+  runId: string;
+  sessionKey: string;
+  startedAtMs: number;
+};
+
+function listActiveChatRuns(
+  chatAbortControllers: Map<string, { sessionKey: string; startedAtMs: number }>,
+): ActiveChatRunSnapshot[] {
+  const runs: ActiveChatRunSnapshot[] = [];
+  for (const [runId, entry] of chatAbortControllers) {
+    runs.push({
+      runId,
+      sessionKey: entry.sessionKey,
+      startedAtMs: entry.startedAtMs,
+    });
+  }
+  return runs;
+}
+
 export type WsOriginCheckMetrics = {
   hostHeaderFallbackAccepted: number;
 };
@@ -1013,7 +1033,12 @@ export function attachGatewayWsMessageHandler(params: {
           incrementPresenceVersion();
         }
 
+        const requestContext = buildRequestContext();
         const snapshot = buildGatewaySnapshot();
+        const activeChatRuns = listActiveChatRuns(requestContext.chatAbortControllers);
+        if (activeChatRuns.length > 0) {
+          snapshot.activeChatRuns = activeChatRuns;
+        }
         const cachedHealth = getHealthCache();
         if (cachedHealth) {
           snapshot.health = cachedHealth;

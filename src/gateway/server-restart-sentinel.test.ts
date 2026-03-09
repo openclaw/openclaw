@@ -1,7 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
-  resolveSessionAgentId: vi.fn(() => "agent-from-key"),
   consumeRestartSentinel: vi.fn(async () => ({
     payload: {
       sessionKey: "agent:main:main",
@@ -16,7 +15,10 @@ const mocks = vi.hoisted(() => ({
   summarizeRestartSentinel: vi.fn(() => "restart summary"),
   resolveMainSessionKeyFromConfig: vi.fn(() => "agent:main:main"),
   parseSessionThreadInfo: vi.fn(() => ({ baseSessionKey: null, threadId: undefined })),
-  loadSessionEntry: vi.fn(() => ({ cfg: {}, entry: {} })),
+  loadSessionEntry: vi.fn(() => ({ cfg: {}, storePath: "/tmp/sessions.json", entry: {} })),
+  resolveSessionAgentId: vi.fn(() => "main"),
+  resolveSessionFilePath: vi.fn(() => "/tmp/sess.jsonl"),
+  appendInjectedAssistantMessageToTranscript: vi.fn(() => ({ ok: true })),
   resolveAnnounceTargetFromKey: vi.fn(() => null),
   deliveryContextFromSession: vi.fn(() => undefined),
   mergeDeliveryContext: vi.fn((a?: Record<string, unknown>, b?: Record<string, unknown>) => ({
@@ -41,6 +43,7 @@ vi.mock("../infra/restart-sentinel.js", () => ({
 
 vi.mock("../config/sessions.js", () => ({
   resolveMainSessionKeyFromConfig: mocks.resolveMainSessionKeyFromConfig,
+  resolveSessionFilePath: mocks.resolveSessionFilePath,
 }));
 
 vi.mock("../config/sessions/delivery-info.js", () => ({
@@ -49,6 +52,14 @@ vi.mock("../config/sessions/delivery-info.js", () => ({
 
 vi.mock("./session-utils.js", () => ({
   loadSessionEntry: mocks.loadSessionEntry,
+}));
+
+vi.mock("../agents/agent-scope.js", () => ({
+  resolveSessionAgentId: mocks.resolveSessionAgentId,
+}));
+
+vi.mock("./server-methods/chat-transcript-inject.js", () => ({
+  appendInjectedAssistantMessageToTranscript: mocks.appendInjectedAssistantMessageToTranscript,
 }));
 
 vi.mock("../agents/tools/sessions-send-helpers.js", () => ({
@@ -86,7 +97,28 @@ describe("scheduleRestartSentinelWake", () => {
       expect.objectContaining({
         channel: "whatsapp",
         to: "+15550002",
-        session: { key: "agent:main:main", agentId: "agent-from-key" },
+        session: { key: "agent:main:main", agentId: "main" },
+      }),
+    );
+    expect(mocks.enqueueSystemEvent).not.toHaveBeenCalled();
+  });
+  it("injects an assistant restart notice for internal sessions without external delivery", async () => {
+    mocks.consumeRestartSentinel.mockResolvedValueOnce({
+      payload: { sessionKey: "agent:main:main" } as unknown as Awaited<
+        ReturnType<typeof mocks.consumeRestartSentinel>
+      >["payload"],
+    });
+    mocks.loadSessionEntry.mockReturnValue({
+      cfg: {},
+      storePath: "/tmp/sessions.json",
+      entry: { sessionId: "sess-1", sessionFile: "/tmp/sess.jsonl" },
+    });
+    await scheduleRestartSentinelWake({ deps: {} as never });
+
+    expect(mocks.appendInjectedAssistantMessageToTranscript).toHaveBeenCalledWith(
+      expect.objectContaining({
+        transcriptPath: "/tmp/sess.jsonl",
+        message: "restart message",
       }),
     );
     expect(mocks.enqueueSystemEvent).not.toHaveBeenCalled();

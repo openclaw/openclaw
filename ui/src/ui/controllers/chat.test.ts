@@ -565,4 +565,22 @@ describe("loadChatHistory", () => {
     expect(state.chatLoading).toBe(false);
     expect(state.lastError).toBeNull();
   });
+
+  it("adds an interruption notice when shutdown abort arrives without assistant text", () => {
+    const state = createState({
+      sessionKey: "main",
+      chatRunId: "run-1",
+    });
+    const payload: ChatEventPayload = {
+      runId: "run-1",
+      sessionKey: "main",
+      state: "aborted",
+      stopReason: "shutdown",
+    };
+
+    expect(handleChatEvent(state, payload)).toBe("aborted");
+    expect(state.chatRunId).toBe(null);
+    expect(state.chatMessages).toHaveLength(1);
+    expect(JSON.stringify(state.chatMessages[0])).toContain("gateway restart");
+  });
 });

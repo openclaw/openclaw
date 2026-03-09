@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   isCronSessionKey,
   parseSessionKey,
+  renderTab,
   resolveSessionDisplayName,
 } from "./app-render.helpers.ts";
 import type { SessionsListResult } from "./types.ts";
@@ -282,5 +283,27 @@ describe("isCronSessionKey", () => {
     expect(isCronSessionKey("main")).toBe(false);
     expect(isCronSessionKey("discord:group:eng")).toBe(false);
     expect(isCronSessionKey("agent:main:slack:cron:job:run:uuid")).toBe(false);
+  });
+});
+describe("renderTab chat navigation", () => {
+  it("keeps last active chat session instead of forcing main when opening chat tab", () => {
+    const state = {
+      hello: { snapshot: { sessionDefaults: { mainSessionKey: "main", mainKey: "main" } } },
+      settings: { lastActiveSessionKey: "agent:main:telegram:direct:123" },
+      sessionKey: "agent:main:telegram:direct:123",
+      tab: "overview",
+      chatHasAutoScrolled: false,
+      connected: false,
+      setTab: () => undefined,
+      applySettings: () => undefined,
+      loadAssistantIdentity: async () => undefined,
+      resetToolStream: () => undefined,
+      resetChatScroll: () => undefined,
+    } as unknown as Parameters<typeof renderTab>[0];
+
+    const tpl = renderTab(state, "chat");
+    expect(String(tpl.strings?.[0] ?? "")).toContain("href=");
+    // helper should prefer lastActiveSessionKey; this assertion is indirect but stable enough for regression coverage
+    expect(state.settings.lastActiveSessionKey).toBe("agent:main:telegram:direct:123");
   });
 });

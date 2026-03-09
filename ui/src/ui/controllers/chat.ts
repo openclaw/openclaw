@@ -49,6 +49,7 @@ export type ChatEventPayload = {
   state: "delta" | "final" | "aborted" | "error";
   message?: unknown;
   errorMessage?: string;
+  stopReason?: string;
 };
 
 function maybeResetToolStream(state: ChatState) {
@@ -147,6 +148,20 @@ function normalizeFinalAssistantMessage(message: unknown): Record<string, unknow
     roleRequirement: "optional",
     allowTextField: true,
   });
+}
+
+function buildInterruptedRunNotice(stopReason?: string): Record<string, unknown> {
+  const text =
+    stopReason === "shutdown"
+      ? "[openclaw] The previous run was interrupted by a gateway restart before it could finish."
+      : stopReason === "timeout"
+        ? "[openclaw] The previous run was stopped after timing out."
+        : "[openclaw] The previous run was interrupted before it could finish.";
+  return {
+    role: "assistant",
+    content: [{ type: "text", text }],
+    timestamp: Date.now(),
+  };
 }
 
 export async function sendChatMessage(
@@ -321,6 +336,12 @@ export function handleChatEvent(state: ChatState, payload?: ChatEventPayload) {
             timestamp: Date.now(),
           },
         ];
+      } else if (
+        payload.stopReason &&
+        payload.stopReason !== "rpc" &&
+        payload.stopReason !== "stop"
+      ) {
+        state.chatMessages = [...state.chatMessages, buildInterruptedRunNotice(payload.stopReason)];
       }
     }
     state.chatStream = null;

@@ -91,6 +91,8 @@ type GatewayHost = {
   serverVersion: string | null;
   sessionKey: string;
   chatRunId: string | null;
+  chatStream: string | null;
+  chatStreamStartedAt: number | null;
   refreshSessionsAfterChat: Set<string>;
   execApprovalQueue: ExecApprovalRequest[];
   execApprovalError: string | null;
@@ -103,6 +105,61 @@ type SessionDefaultsSnapshot = {
   mainSessionKey?: string;
   scope?: string;
 };
+
+type ActiveChatRunSnapshot = {
+  runId?: string;
+  sessionKey?: string;
+  startedAtMs?: number;
+};
+
+function resolveActiveChatRunForSession(
+  snapshot: unknown,
+  sessionKey: string,
+): ActiveChatRunSnapshot | null {
+  if (!snapshot || typeof snapshot !== "object") {
+    return null;
+  }
+  const activeChatRuns = (snapshot as { activeChatRuns?: unknown }).activeChatRuns;
+  if (!Array.isArray(activeChatRuns)) {
+    return null;
+  }
+  for (const entry of activeChatRuns) {
+    if (!entry || typeof entry !== "object") {
+      continue;
+    }
+    const run = entry as ActiveChatRunSnapshot;
+    if (
+      typeof run.runId === "string" &&
+      typeof run.sessionKey === "string" &&
+      run.sessionKey === sessionKey
+    ) {
+      return run;
+    }
+  }
+  return null;
+}
+
+export function reconcileRecoveredChatRunState(
+  host: {
+    sessionKey: string;
+    chatRunId: string | null;
+    chatStream: string | null;
+    chatStreamStartedAt: number | null;
+  },
+  snapshot: unknown,
+): void {
+  const activeRun = resolveActiveChatRunForSession(snapshot, host.sessionKey);
+  if (activeRun?.runId) {
+    host.chatRunId = activeRun.runId;
+    if (host.chatStreamStartedAt == null && typeof activeRun.startedAtMs === "number") {
+      host.chatStreamStartedAt = activeRun.startedAtMs;
+    }
+    return;
+  }
+  host.chatRunId = null;
+  host.chatStream = null;
+  host.chatStreamStartedAt = null;
+}
 
 export function resolveControlUiClientVersion(params: {
   gatewayUrl: string;
@@ -213,11 +270,15 @@ export function connectGateway(host: GatewayHost) {
       host.lastErrorCode = null;
       host.hello = hello;
       applySnapshot(host, hello);
-      // Reset orphaned chat run state from before disconnect.
-      // Any in-flight run's final event was lost during the disconnect window.
-      host.chatRunId = null;
-      (host as unknown as { chatStream: string | null }).chatStream = null;
-      (host as unknown as { chatStreamStartedAt: number | null }).chatStreamStartedAt = null;
+      reconcileRecoveredChatRunState(
+        host as unknown as {
+          sessionKey: string;
+          chatRunId: string | null;
+          chatStream: string | null;
+          chatStreamStartedAt: number | null;
+        },
+        hello.snapshot,
+      );
       resetToolStream(host as unknown as Parameters<typeof resetToolStream>[0]);
       void loadAssistantIdentity(host as unknown as OpenClawApp);
       void loadAgents(host as unknown as OpenClawApp);

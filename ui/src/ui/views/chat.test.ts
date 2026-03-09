@@ -226,6 +226,24 @@ describe("chat view", () => {
     expect(container.textContent).not.toContain("Stop");
   });
 
+  it("shows queue while an active run is abortable even before stream text arrives", () => {
+    const container = document.createElement("div");
+    render(
+      renderChat(
+        createProps({
+          canAbort: true,
+          onAbort: () => undefined,
+          stream: null,
+          sending: false,
+        }),
+      ),
+      container,
+    );
+
+    expect(container.textContent).toContain("Queue");
+    expect(container.textContent).not.toContain("Send");
+  });
+
   it("shows sender labels from sanitized gateway messages instead of generic You", () => {
     const container = document.createElement("div");
     render(

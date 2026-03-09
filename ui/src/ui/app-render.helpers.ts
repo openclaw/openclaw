@@ -18,6 +18,14 @@ type SessionDefaultsSnapshot = {
 };
 
 function resolveSidebarChatSessionKey(state: AppViewState): string {
+  const lastActive = state.settings.lastActiveSessionKey?.trim();
+  if (lastActive) {
+    return lastActive;
+  }
+  const current = state.sessionKey?.trim();
+  if (current) {
+    return current;
+  }
   const snapshot = state.hello?.snapshot as
     | { sessionDefaults?: SessionDefaultsSnapshot }
     | undefined;

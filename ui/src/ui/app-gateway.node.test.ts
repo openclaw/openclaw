@@ -1,12 +1,27 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { GATEWAY_EVENT_UPDATE_AVAILABLE } from "../../../src/gateway/events.js";
 import { ConnectErrorDetailCodes } from "../../../src/gateway/protocol/connect-error-details.js";
-import { connectGateway, resolveControlUiClientVersion } from "./app-gateway.ts";
+
+const localStorageStub = (() => {
+  const store = new Map<string, string>();
+  return {
+    getItem: vi.fn((key: string) => store.get(key) ?? null),
+    setItem: vi.fn((key: string, value: string) => store.set(key, value)),
+    removeItem: vi.fn((key: string) => store.delete(key)),
+    clear: vi.fn(() => store.clear()),
+  };
+})();
+
+vi.stubGlobal("localStorage", localStorageStub);
+
+const { connectGateway, reconcileRecoveredChatRunState, resolveControlUiClientVersion } =
+  await import("./app-gateway.ts");
 
 type GatewayClientMock = {
   start: ReturnType<typeof vi.fn>;
   stop: ReturnType<typeof vi.fn>;
   options: { clientVersion?: string };
+  emitHello: (hello: unknown) => void;
   emitClose: (info: {
     code: number;
     reason?: string;
@@ -37,6 +52,7 @@ vi.mock("./gateway.ts", () => {
     constructor(
       private opts: {
         clientVersion?: string;
+        onHello?: (hello: unknown) => void;
         onClose?: (info: {
           code: number;
           reason: string;
@@ -50,6 +66,9 @@ vi.mock("./gateway.ts", () => {
         start: this.start,
         stop: this.stop,
         options: { clientVersion: this.opts.clientVersion },
+        emitHello: (hello) => {
+          this.opts.onHello?.(hello as never);
+        },
         emitClose: (info) => {
           this.opts.onClose?.({
             code: info.code,
@@ -107,6 +126,8 @@ function createHost() {
     serverVersion: null,
     sessionKey: "main",
     chatRunId: null,
+    chatStream: null,
+    chatStreamStartedAt: null,
     refreshSessionsAfterChat: new Set<string>(),
     execApprovalQueue: [],
     execApprovalError: null,
@@ -335,5 +356,38 @@ describe("resolveControlUiClientVersion", () => {
         pageUrl: "https://control.example.com/openclaw/",
       }),
     ).toBeUndefined();
+  });
+});
+
+describe("reconcileRecoveredChatRunState", () => {
+  it("keeps the session busy when snapshot reports an active run", () => {
+    const host = {
+      sessionKey: "main",
+      chatRunId: null,
+      chatStream: null,
+      chatStreamStartedAt: null,
+    };
+
+    reconcileRecoveredChatRunState(host, {
+      activeChatRuns: [{ runId: "run-1", sessionKey: "main", startedAtMs: 123 }],
+    });
+
+    expect(host.chatRunId).toBe("run-1");
+    expect(host.chatStreamStartedAt).toBe(123);
+  });
+
+  it("clears stale busy state when snapshot reports no active run", () => {
+    const host = {
+      sessionKey: "main",
+      chatRunId: "run-stale",
+      chatStream: "partial",
+      chatStreamStartedAt: 456,
+    };
+
+    reconcileRecoveredChatRunState(host, { activeChatRuns: [] });
+
+    expect(host.chatRunId).toBeNull();
+    expect(host.chatStream).toBeNull();
+    expect(host.chatStreamStartedAt).toBeNull();
   });
 });

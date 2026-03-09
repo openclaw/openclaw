@@ -1,7 +1,11 @@
+import fs from "node:fs/promises";
+import path from "node:path";
+import { CURRENT_SESSION_VERSION } from "@mariozechner/pi-coding-agent";
+import { resolveSessionAgentId } from "../agents/agent-scope.js";
 import { resolveAnnounceTargetFromKey } from "../agents/tools/sessions-send-helpers.js";
 import { normalizeChannelId } from "../channels/plugins/index.js";
 import type { CliDeps } from "../cli/deps.js";
-import { resolveMainSessionKeyFromConfig } from "../config/sessions.js";
+import { resolveMainSessionKeyFromConfig, resolveSessionFilePath } from "../config/sessions.js";
 import { parseSessionThreadInfo } from "../config/sessions/delivery-info.js";
 import { deliverOutboundPayloads } from "../infra/outbound/deliver.js";
 import { buildOutboundSessionContext } from "../infra/outbound/session-context.js";
@@ -13,7 +17,44 @@ import {
 } from "../infra/restart-sentinel.js";
 import { enqueueSystemEvent } from "../infra/system-events.js";
 import { deliveryContextFromSession, mergeDeliveryContext } from "../utils/delivery-context.js";
+import { appendInjectedAssistantMessageToTranscript } from "./server-methods/chat-transcript-inject.js";
 import { loadSessionEntry } from "./session-utils.js";
+
+async function ensureTranscriptFile(params: { transcriptPath: string; sessionId: string }) {
+  await fs.mkdir(path.dirname(params.transcriptPath), { recursive: true });
+  try {
+    await fs.access(params.transcriptPath);
+    return;
+  } catch {}
+  const header = {
+    type: "session",
+    version: CURRENT_SESSION_VERSION,
+    id: params.sessionId,
+    timestamp: new Date(0).toISOString(),
+    cwd: process.cwd(),
+  };
+  await fs.writeFile(params.transcriptPath, `${JSON.stringify(header)}\n`, "utf-8");
+}
+
+async function injectRestartNoticeIntoSession(params: { sessionKey: string; message: string }) {
+  const { cfg, storePath, entry } = loadSessionEntry(params.sessionKey);
+  const sessionId = entry?.sessionId?.trim();
+  if (!sessionId || !storePath) {
+    return false;
+  }
+  const transcriptPath = resolveSessionFilePath(sessionId, entry, {
+    sessionsDir: path.dirname(storePath),
+    agentId: resolveSessionAgentId({ sessionKey: params.sessionKey, config: cfg }),
+  });
+  await ensureTranscriptFile({ transcriptPath, sessionId });
+  const appended = appendInjectedAssistantMessageToTranscript({
+    transcriptPath,
+    message: params.message,
+    label: "OpenClaw",
+    idempotencyKey: `restart-sentinel:${params.sessionKey}:${params.message}`,
+  });
+  return appended.ok;
+}
 
 export async function scheduleRestartSentinelWake(_params: { deps: CliDeps }) {
   const sentinel = await consumeRestartSentinel();
@@ -27,7 +68,9 @@ export async function scheduleRestartSentinelWake(_params: { deps: CliDeps }) {
 
   if (!sessionKey) {
     const mainSessionKey = resolveMainSessionKeyFromConfig();
-    enqueueSystemEvent(message, { sessionKey: mainSessionKey });
+    if (!(await injectRestartNoticeIntoSession({ sessionKey: mainSessionKey, message }))) {
+      enqueueSystemEvent(message, { sessionKey: mainSessionKey });
+    }
     return;
   }
 
@@ -54,7 +97,9 @@ export async function scheduleRestartSentinelWake(_params: { deps: CliDeps }) {
   const channel = channelRaw ? normalizeChannelId(channelRaw) : null;
   const to = origin?.to;
   if (!channel || !to) {
-    enqueueSystemEvent(message, { sessionKey });
+    if (!(await injectRestartNoticeIntoSession({ sessionKey, message }))) {
+      enqueueSystemEvent(message, { sessionKey });
+    }
     return;
   }
 
