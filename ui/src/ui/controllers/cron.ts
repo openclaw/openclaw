@@ -576,9 +576,9 @@ export function buildCronPayload(form: CronFormState) {
   if (thinking) {
     payload.thinking = thinking;
   }
-  const timeoutSeconds = toNumber(form.timeoutSeconds, 0);
-  if (timeoutSeconds > 0) {
-    payload.timeoutSeconds = timeoutSeconds;
+  const timeoutRaw = form.timeoutSeconds.trim();
+  if (timeoutRaw) {
+    payload.timeoutSeconds = toNumber(timeoutRaw, 0);
   }
   if (form.payloadLightContext) {
     payload.lightContext = true;
