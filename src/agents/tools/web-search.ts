@@ -1,7 +1,7 @@
 import { Type } from "@sinclair/typebox";
 import { formatCliCommand } from "../../cli/command-format.js";
 import type { OpenClawConfig } from "../../config/config.js";
-import { normalizeResolvedSecretInputString } from "../../config/types.secrets.js";
+import { isSecretRef, normalizeResolvedSecretInputString } from "../../config/types.secrets.js";
 import { logVerbose } from "../../globals.js";
 import { wrapWebContent } from "../../security/external-content.js";
 import { normalizeSecretInput } from "../../utils/normalize-secret-input.js";
@@ -648,6 +648,12 @@ function resolvePerplexityApiKey(perplexity?: PerplexityConfig): {
 }
 
 function normalizeApiKey(key: unknown): string {
+  if (isSecretRef(key)) {
+    throw new Error(
+      `web_search provider apiKey: unresolved SecretRef "${key.source}:${key.provider}:${key.id}". ` +
+        `Resolve the secret reference against an active gateway runtime or provide a plain string API key.`,
+    );
+  }
   return normalizeSecretInput(key);
 }
 
@@ -2122,4 +2128,5 @@ export const __testing = {
   extractKimiCitations,
   resolveRedirectUrl: resolveCitationRedirectUrl,
   resolveBraveMode,
+  normalizeApiKey,
 } as const;

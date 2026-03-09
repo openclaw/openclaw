@@ -23,6 +23,7 @@ const {
   resolveKimiBaseUrl,
   extractKimiCitations,
   resolveBraveMode,
+  normalizeApiKey,
 } = __testing;
 
 const kimiApiKeyEnv = ["KIMI_API", "KEY"].join("_");
@@ -391,5 +392,26 @@ describe("resolveBraveMode", () => {
 
   it("falls back to 'web' for unrecognized mode values", () => {
     expect(resolveBraveMode({ mode: "invalid" })).toBe("web");
+  });
+});
+
+describe("normalizeApiKey SecretRef handling", () => {
+  it("normalizes plain string API keys", () => {
+    expect(normalizeApiKey("sk-test-123")).toBe("sk-test-123");
+  });
+
+  it("returns empty string for undefined/null", () => {
+    expect(normalizeApiKey(undefined)).toBe("");
+    expect(normalizeApiKey(null)).toBe("");
+  });
+
+  it("throws on unresolved SecretRef objects instead of silently dropping them", () => {
+    const secretRef = { source: "env", provider: "default", id: "PERPLEXITY_API_KEY" };
+    expect(() => normalizeApiKey(secretRef)).toThrow(/unresolved SecretRef/i);
+  });
+
+  it("includes SecretRef details in error message", () => {
+    const secretRef = { source: "file", provider: "vault", id: "grok-key" };
+    expect(() => normalizeApiKey(secretRef)).toThrow(/file:vault:grok-key/);
   });
 });
