@@ -1,5 +1,6 @@
 import { AGENT_LANE_NESTED } from "../../agents/lanes.js";
-import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.js";
+import { parseReplyDirectives } from "../../auto-reply/reply/reply-directives.js";
+import { SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.js";
 import { getChannelPlugin, normalizeChannelId } from "../../channels/plugins/index.js";
 import { createOutboundSendDeps, type CliDeps } from "../../cli/outbound-send-deps.js";
 import type { OpenClawConfig } from "../../config/config.js";
@@ -196,11 +197,17 @@ export async function deliverAgentCommandResult(params: {
   }
 
   const hasExplicitSilentPayload = (payloads ?? []).some((payload) => {
-    const text = payload.text?.trim() ?? "";
-    if (!isSilentReplyText(text, SILENT_REPLY_TOKEN)) {
+    const parsed = parseReplyDirectives(payload.text ?? "", {
+      silentToken: SILENT_REPLY_TOKEN,
+    });
+    if (!parsed.isSilent) {
       return false;
     }
-    return !payload.mediaUrl && (payload.mediaUrls?.length ?? 0) === 0;
+    const hasMedia =
+      Boolean(payload.mediaUrl?.trim() || parsed.mediaUrl?.trim()) ||
+      (payload.mediaUrls?.some((url) => Boolean(url?.trim())) ?? false) ||
+      (parsed.mediaUrls?.some((url) => Boolean(url?.trim())) ?? false);
+    return !hasMedia;
   });
   const deliveryPayloads = normalizeOutboundPayloads(payloads ?? []);
   if (deliveryPayloads.length === 0) {

@@ -456,6 +456,38 @@ describe("monitorSlackProvider tool results", () => {
     sleepSpy.mockRestore();
   });
 
+  it("keeps delayed no-final status in the same first-reply thread", async () => {
+    setDirectMessageReplyMode("first");
+    const sleepSpy = vi.spyOn(utils, "sleep").mockResolvedValue(undefined);
+    replyMock.mockImplementation(async (...args: unknown[]) => {
+      const opts = (args[1] ?? {}) as {
+        onToolResult?: (payload: { text?: string }) => Promise<void> | void;
+      };
+      await opts.onToolResult?.({ text: "working..." });
+      return undefined;
+    });
+
+    await runSlackMessageOnce(monitorSlackProvider, {
+      event: makeSlackMessageEvent(),
+    });
+
+    const fallbackText =
+      "I am still here. I could not complete that reply yet; retrying now in this same thread.";
+    const statusText =
+      "Status update: still waiting on a complete final reply for this turn. Please retry your last message if it does not arrive shortly.";
+    const fallbackCall = sendMock.mock.calls.find(
+      (call) => typeof call[1] === "string" && call[1] === fallbackText,
+    );
+    const delayedStatusCall = sendMock.mock.calls.find(
+      (call) => typeof call[1] === "string" && call[1] === statusText,
+    );
+    expect(fallbackCall).toBeDefined();
+    expect(delayedStatusCall).toBeDefined();
+    expect(fallbackCall?.[2]).toMatchObject({ threadTs: "123" });
+    expect(delayedStatusCall?.[2]).toMatchObject({ threadTs: "123" });
+    sleepSpy.mockRestore();
+  });
+
   async function expectMentionPatternMessageAccepted(text: string): Promise<void> {
     setRequireMentionChannelConfig(["\\bopenclaw\\b"]);
     replyMock.mockResolvedValue({ text: "hi" });

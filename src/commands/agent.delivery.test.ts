@@ -298,6 +298,23 @@ describe("deliverAgentCommandResult", () => {
     expect(runtime.log).toHaveBeenCalledWith("No reply from agent.");
   });
 
+  it("keeps explicit silent behavior for NO_REPLY with inline directives", async () => {
+    const runtime = createRuntime();
+    await runDelivery({
+      runtime,
+      resultText: "NO_REPLY [[reply_to_current]]",
+      opts: {
+        message: "hello",
+        deliver: true,
+        channel: "whatsapp",
+        to: "+15551234567",
+      },
+    });
+
+    expect(mocks.deliverOutboundPayloads).not.toHaveBeenCalled();
+    expect(runtime.log).toHaveBeenCalledWith("No reply from agent.");
+  });
+
   it("prefixes nested agent outputs with context", async () => {
     const runtime = createRuntime();
     await runDelivery({

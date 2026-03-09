@@ -489,13 +489,13 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
     !sawIntentionalSilentFinalSkip;
   let sentEmptyFallback = false;
   if (shouldSendNoFinalFallback) {
-    const fallbackThreadTs = usedReplyThreadTs ?? statusThreadTs;
+    const resolveFallbackThreadTs = () => usedReplyThreadTs ?? statusThreadTs;
     try {
       await deliverNormally(
         {
           text: SLACK_NO_FINAL_KEEPALIVE_TEXT,
         },
-        fallbackThreadTs,
+        resolveFallbackThreadTs(),
       );
       sentEmptyFallback = true;
       void (async () => {
@@ -505,7 +505,7 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
             {
               text: SLACK_NO_FINAL_STATUS_TEXT,
             },
-            fallbackThreadTs,
+            resolveFallbackThreadTs(),
           );
         } catch (err) {
           runtime.error?.(danger(`slack delayed fallback status failed: ${String(err)}`));
