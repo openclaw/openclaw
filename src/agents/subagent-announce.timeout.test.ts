@@ -24,11 +24,13 @@ let fallbackRequesterResolution: {
   requesterOrigin?: { channel?: string; to?: string; accountId?: string };
 } | null = null;
 
+let chatHistoryMessages: Array<Record<string, unknown>> = [];
+
 vi.mock("../gateway/call.js", () => ({
   callGateway: vi.fn(async (request: GatewayCall) => {
     gatewayCalls.push(request);
     if (request.method === "chat.history") {
-      return { messages: [] };
+      return { messages: chatHistoryMessages };
     }
     return {};
   }),
@@ -129,6 +131,7 @@ describe("subagent announce timeout config", () => {
     shouldIgnorePostCompletion = false;
     pendingDescendantRuns = 0;
     fallbackRequesterResolution = null;
+    chatHistoryMessages = [];
   });
 
   it("uses 60s timeout by default for direct announce agent call", async () => {
@@ -248,5 +251,88 @@ describe("subagent announce timeout config", () => {
     expect(directAgentCall?.params?.channel).toBe("discord");
     expect(directAgentCall?.params?.to).toBe("chan-main");
     expect(directAgentCall?.params?.accountId).toBe("acct-main");
+  });
+
+  it("includes partial progress from assistant messages when subagent times out", async () => {
+    // Simulate a session with assistant text from intermediate tool-call rounds.
+    chatHistoryMessages = [
+      { role: "user", content: "do a complex task" },
+      {
+        role: "assistant",
+        content: [
+          { type: "text", text: "I'll start by reading the files..." },
+          { type: "toolCall", id: "call1", name: "read", arguments: {} },
+        ],
+      },
+      {
+        role: "toolResult",
+        toolCallId: "call1",
+        content: [{ type: "text", text: "file contents" }],
+      },
+      {
+        role: "assistant",
+        content: [
+          { type: "text", text: "Now analyzing the code structure. Found 3 modules." },
+          { type: "toolCall", id: "call2", name: "read", arguments: {} },
+        ],
+      },
+      { role: "toolResult", toolCallId: "call2", content: [{ type: "text", text: "more data" }] },
+      // Last assistant turn was a tool call with no text — simulating mid-work timeout.
+      {
+        role: "assistant",
+        content: [{ type: "toolCall", id: "call3", name: "exec", arguments: {} }],
+      },
+    ];
+
+    await runAnnounceFlowForTest("run-timeout-partial", {
+      outcome: { status: "timeout" },
+      roundOneReply: undefined,
+    });
+
+    const directAgentCall = findGatewayCall(
+      (call) => call.method === "agent" && call.expectFinal === true,
+    );
+    expect(directAgentCall).toBeDefined();
+
+    // The announce message should contain the partial progress.
+    const internalEvents =
+      (directAgentCall?.params?.internalEvents as Array<{
+        result?: string;
+        statusLabel?: string;
+      }>) ?? [];
+    expect(internalEvents[0]?.statusLabel).toBe("timed out");
+    // The result should include the partial assistant text, not just "(no output)".
+    expect(internalEvents[0]?.result).toBeTruthy();
+    expect(internalEvents[0]?.result).not.toBe("(no output)");
+    expect(internalEvents[0]?.result).toContain("tool call");
+  });
+
+  it("reports tool call count in partial progress for timeout with no assistant text", async () => {
+    // Subagent only made tool calls but never produced assistant text.
+    chatHistoryMessages = [
+      { role: "user", content: "do something" },
+      {
+        role: "assistant",
+        content: [{ type: "toolCall", id: "call1", name: "read", arguments: {} }],
+      },
+      { role: "toolResult", toolCallId: "call1", content: [{ type: "text", text: "data" }] },
+      {
+        role: "assistant",
+        content: [{ type: "toolCall", id: "call2", name: "exec", arguments: {} }],
+      },
+    ];
+
+    await runAnnounceFlowForTest("run-timeout-no-text", {
+      outcome: { status: "timeout" },
+      roundOneReply: undefined,
+    });
+
+    const directAgentCall = findGatewayCall(
+      (call) => call.method === "agent" && call.expectFinal === true,
+    );
+    const internalEvents =
+      (directAgentCall?.params?.internalEvents as Array<{ result?: string }>) ?? [];
+    // Should report tool call count even without assistant text.
+    expect(internalEvents[0]?.result).toContain("2 tool call(s)");
   });
 });
