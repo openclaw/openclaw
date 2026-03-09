@@ -1,5 +1,6 @@
 import { redactIdentifier } from "../../logging/redact-identifier.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+import { sanitizeForConsole } from "../pi-embedded-error-observation.js";
 import type { AuthProfileFailureReason, ProfileUsageStats } from "./types.js";
 
 const observationLog = createSubsystemLogger("agent/embedded");
@@ -30,6 +31,8 @@ export function logAuthProfileFailureStateChange(params: {
         previousCooldownUntil > params.now &&
         previousCooldownUntil === params.next.cooldownUntil;
   const safeProfileId = redactIdentifier(params.profileId, { len: 12 });
+  const safeRunId = sanitizeForConsole(params.runId) ?? "-";
+  const safeProvider = sanitizeForConsole(params.provider) ?? "-";
 
   observationLog.warn("auth profile failure state updated", {
     event: "auth_profile_failure_state_updated",
@@ -50,7 +53,7 @@ export function logAuthProfileFailureStateChange(params: {
     disabledReason: params.next.disabledReason,
     failureCounts: params.next.failureCounts,
     consoleMessage:
-      `auth profile failure state updated: runId=${params.runId ?? "-"} profile=${safeProfileId} provider=${params.provider} ` +
+      `auth profile failure state updated: runId=${safeRunId} profile=${safeProfileId} provider=${safeProvider} ` +
       `reason=${params.reason} window=${windowType} reused=${String(windowReused)}`,
   });
 }
