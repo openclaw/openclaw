@@ -287,6 +287,8 @@ export function registerBackupCommand(program: Command) {
       "Restore a local archive or encrypted backup snapshot into the current installation",
     )
     .option("--archive <path>", "Restore from a local backup archive instead of backup snapshot")
+    .option("--installation-id <id>", "Override the installation id used to locate snapshots")
+    .option("--mode <mode>", "Restore scope: full-host (default), config-only, or workspace-only")
     .option("--force-stop", "Stop the gateway service before restoring", false)
     .option("--json", "Output JSON", false)
     .action(async (snapshotId, opts) => {
@@ -294,6 +296,8 @@ export function registerBackupCommand(program: Command) {
         await backupRestoreCommand(defaultRuntime, {
           snapshotId: typeof snapshotId === "string" ? snapshotId : undefined,
           archive: opts.archive as string | undefined,
+          installationId: opts.installationId as string | undefined,
+          mode: opts.mode as "full-host" | "config-only" | "workspace-only" | undefined,
           forceStop: Boolean(opts.forceStop),
           json: Boolean(opts.json),
         });

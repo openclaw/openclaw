@@ -18,7 +18,7 @@ function payloadPath(targetDir: string, installationId: string, snapshotId: stri
 async function writeFileAtomic(filePath: string, content: string | Buffer): Promise<void> {
   await fs.mkdir(path.dirname(filePath), { recursive: true });
   const tempPath = `${filePath}.tmp`;
-  await fs.writeFile(tempPath, content);
+  await fs.writeFile(tempPath, content, { mode: 0o600 });
   await fs.rename(tempPath, filePath);
 }
 
@@ -33,12 +33,12 @@ export function createFolderSnapshotStore(
   return {
     async uploadSnapshot(params) {
       await writeFileAtomic(
-        envelopePath(config.targetDir, params.installationId, params.snapshotId),
-        `${JSON.stringify(params.envelope, null, 2)}\n`,
-      );
-      await writeFileAtomic(
         payloadPath(config.targetDir, params.installationId, params.snapshotId),
         await fs.readFile(params.payloadPath),
+      );
+      await writeFileAtomic(
+        envelopePath(config.targetDir, params.installationId, params.snapshotId),
+        `${JSON.stringify(params.envelope, null, 2)}\n`,
       );
     },
 

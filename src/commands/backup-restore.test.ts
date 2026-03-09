@@ -143,4 +143,77 @@ describe("backup restore", () => {
       await fs.rm(extractDir, { recursive: true, force: true });
     }
   });
+
+  it("matches workspace assets by source path when manifest workspaceDirs order differs", async () => {
+    const extractDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-restore-extract-"));
+    const workspaceA = path.join(tempHome.home, "workspace-a");
+    const workspaceB = path.join(tempHome.home, "workspace-b");
+    const rootDir = path.join(extractDir, "archive-root");
+    try {
+      await fs.mkdir(path.join(rootDir, "assets", "workspace-a"), { recursive: true });
+      await fs.mkdir(path.join(rootDir, "assets", "workspace-b"), { recursive: true });
+      const operations = await buildRestoreOperations({
+        mode: "workspace-only",
+        extractedRoot: rootDir,
+        manifest: {
+          schemaVersion: 1,
+          createdAt: "2026-03-09T00:00:00.000Z",
+          archiveRoot: "archive-root",
+          runtimeVersion: "2026.3.9",
+          platform: process.platform,
+          nodeVersion: process.version,
+          paths: {
+            workspaceDirs: [workspaceB, workspaceA],
+          },
+          assets: [
+            {
+              kind: "workspace",
+              sourcePath: workspaceA,
+              archivePath: "archive-root/assets/workspace-a",
+            },
+            {
+              kind: "workspace",
+              sourcePath: workspaceB,
+              archivePath: "archive-root/assets/workspace-b",
+            },
+          ],
+        },
+      });
+
+      const workspaceOps = operations.filter((entry) => entry.kind === "workspace");
+      expect(workspaceOps).toEqual([
+        expect.objectContaining({ targetPath: workspaceA }),
+        expect.objectContaining({ targetPath: workspaceB }),
+      ]);
+    } finally {
+      await fs.rm(extractDir, { recursive: true, force: true });
+    }
+  });
+
+  it("emits a single JSON payload when restore runs with --json", async () => {
+    const stateDir = path.join(tempHome.home, ".openclaw");
+    const archiveDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-restore-json-"));
+    try {
+      await fs.writeFile(path.join(stateDir, "state.txt"), "state\n", "utf8");
+
+      const created = await backupCreateCommand(runtime, {
+        output: archiveDir,
+        includeWorkspace: false,
+      });
+
+      vi.mocked(runtime.log).mockClear();
+      await backupRestoreCommand(runtime, {
+        archive: created.archivePath,
+        mode: "full-host",
+        json: true,
+      });
+
+      expect(runtime.log).toHaveBeenCalledTimes(1);
+      const message = vi.mocked(runtime.log).mock.calls[0]?.[0];
+      expect(typeof message).toBe("string");
+      expect(() => JSON.parse(String(message))).not.toThrow();
+    } finally {
+      await fs.rm(archiveDir, { recursive: true, force: true });
+    }
+  });
 });

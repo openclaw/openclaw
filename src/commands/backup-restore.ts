@@ -53,6 +53,11 @@ type RestoreOperation = {
   targetPath: string;
 };
 
+function workspacePathKey(value: string): string {
+  const resolved = path.resolve(value);
+  return process.platform === "win32" ? resolved.toLowerCase() : resolved;
+}
+
 function selectWorkspaceTargets(params: {
   workspaceAssetCount: number;
   manifestWorkspaceDirs: string[];
@@ -279,6 +284,15 @@ export async function buildRestoreOperations(params: {
   const configAsset = assetByKind.get("config")?.[0];
   const credentialsAsset = assetByKind.get("credentials")?.[0];
   const workspaceAssets = assetByKind.get("workspace") ?? [];
+  const manifestWorkspaceMap = new Map(
+    manifestWorkspaceDirs.map((entry) => [workspacePathKey(entry), entry] as const),
+  );
+  const workspaceAssetSourceKeys = workspaceAssets.map((asset) =>
+    workspacePathKey(asset.sourcePath),
+  );
+  const canMatchWorkspaceTargetsBySourcePath =
+    manifestWorkspaceMap.size === workspaceAssets.length &&
+    workspaceAssetSourceKeys.every((key) => manifestWorkspaceMap.has(key));
 
   if (params.mode === "config-only") {
     if (!configAsset) {
@@ -323,19 +337,31 @@ export async function buildRestoreOperations(params: {
     if (workspaceAssets.length > 0) {
       // The manifest records the exact workspace roots that were archived. Prefer it over
       // config-derived values because config parsing may fall back to the default workspace.
-      const workspaceTargets = selectWorkspaceTargets({
-        workspaceAssetCount: workspaceAssets.length,
-        manifestWorkspaceDirs,
-        restoredWorkspaceDirs,
-        currentWorkspaceDirs,
-      });
-      if (!workspaceTargets) {
+      const workspaceTargetsBySourcePath = canMatchWorkspaceTargetsBySourcePath
+        ? new Map(
+            workspaceAssets.map((asset) => [
+              workspacePathKey(asset.sourcePath),
+              manifestWorkspaceMap.get(workspacePathKey(asset.sourcePath)),
+            ]),
+          )
+        : undefined;
+      const workspaceTargets = workspaceTargetsBySourcePath
+        ? undefined
+        : selectWorkspaceTargets({
+            workspaceAssetCount: workspaceAssets.length,
+            manifestWorkspaceDirs,
+            restoredWorkspaceDirs,
+            currentWorkspaceDirs,
+          });
+      if (!workspaceTargetsBySourcePath && !workspaceTargets) {
         throw new Error(
           `Workspace restore target mismatch: archive has ${workspaceAssets.length} workspace asset(s), but no compatible restore target set was found.`,
         );
       }
       for (const [index, asset] of workspaceAssets.entries()) {
-        const targetPath = workspaceTargets[index];
+        const targetPath =
+          workspaceTargetsBySourcePath?.get(workspacePathKey(asset.sourcePath)) ??
+          workspaceTargets?.[index];
         if (!targetPath) {
           continue;
         }
@@ -370,7 +396,8 @@ export async function backupRestoreCommand(
     restoreSource.tempDir ?? (await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-restore-")));
 
   try {
-    const verified = await backupVerifyCommand(runtime, {
+    const verifyRuntime: RuntimeEnv = opts.json ? { ...runtime, log: () => {} } : runtime;
+    const verified = await backupVerifyCommand(verifyRuntime, {
       archive: restoreSource.archivePath,
       json: false,
     });

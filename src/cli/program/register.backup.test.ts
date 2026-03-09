@@ -227,12 +227,24 @@ describe("registerBackupCommand", () => {
   });
 
   it("runs backup restore with forwarded options", async () => {
-    await runCli(["backup", "restore", "snap_test", "--force-stop", "--json"]);
+    await runCli([
+      "backup",
+      "restore",
+      "snap_test",
+      "--installation-id",
+      "inst_123",
+      "--mode",
+      "workspace-only",
+      "--force-stop",
+      "--json",
+    ]);
 
     expect(backupRestoreCommand).toHaveBeenCalledWith(
       runtime,
       expect.objectContaining({
         snapshotId: "snap_test",
+        installationId: "inst_123",
+        mode: "workspace-only",
         forceStop: true,
         json: true,
       }),
