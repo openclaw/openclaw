@@ -225,6 +225,107 @@ export function stripDowngradedToolCallText(text: string): string {
 }
 
 /**
+ * Strip multi-tool JSON payloads emitted by some model providers as text content.
+ * Certain providers (e.g. Minimax, DeepSeek) may emit parallel tool-call plans
+ * as raw JSON in assistant text blocks, for example:
+ *   {"tool_uses":[{"recipient_name":"functions.feishu_bitable_app","parameters":{...}},...]}
+ * These are internal orchestration payloads that must never reach the user.
+ * See: https://github.com/openclaw/openclaw/issues/41435
+ */
+export function stripMultiToolCallJsonPayload(text: string): string {
+  if (!text) {
+    return text;
+  }
+  // Fast guard: skip processing if the text has no "tool_uses": pattern.
+  if (!/"tool_uses"\s*:/.test(text)) {
+    return text;
+  }
+
+  let result = "";
+  let cursor = 0;
+  let changed = false;
+
+  while (cursor < text.length) {
+    // Find the next `{` that could be the start of a tool_uses JSON object.
+    const startIdx = text.indexOf("{", cursor);
+    if (startIdx < 0) {
+      result += text.slice(cursor);
+      break;
+    }
+
+    // Lightweight check: "tool_uses": must appear near the start of the object.
+    const lookAhead = text.slice(startIdx, startIdx + 60);
+    if (!/"tool_uses"\s*:/.test(lookAhead)) {
+      result += text.slice(cursor, startIdx + 1);
+      cursor = startIdx + 1;
+      continue;
+    }
+
+    // Walk the JSON object with bracket-depth tracking to find the matching `}`.
+    let depth = 0;
+    let inString = false;
+    let escape = false;
+    let end = -1;
+    for (let i = startIdx; i < text.length; i++) {
+      const ch = text[i];
+      if (inString) {
+        if (escape) {
+          escape = false;
+        } else if (ch === "\\") {
+          escape = true;
+        } else if (ch === '"') {
+          inString = false;
+        }
+        continue;
+      }
+      if (ch === '"') {
+        inString = true;
+        continue;
+      }
+      if (ch === "{" || ch === "[") {
+        depth++;
+        continue;
+      }
+      if (ch === "}" || ch === "]") {
+        depth--;
+        if (depth === 0) {
+          end = i + 1;
+          break;
+        }
+      }
+    }
+
+    if (end < 0) {
+      // Could not find the closing bracket; leave the remainder as-is.
+      result += text.slice(cursor);
+      break;
+    }
+
+    const candidate = text.slice(startIdx, end);
+
+    // Confirm this is an internal orchestration payload by checking for
+    // "recipient_name" – the field name used in multi-tool call blobs.
+    if (/"recipient_name"\s*:/.test(candidate)) {
+      result += text.slice(cursor, startIdx);
+      changed = true;
+      cursor = end;
+      // Skip surrounding whitespace/newlines after the stripped payload.
+      while (cursor < text.length && /\s/.test(text[cursor])) {
+        cursor++;
+      }
+    } else {
+      result += text.slice(cursor, startIdx + 1);
+      cursor = startIdx + 1;
+    }
+  }
+
+  if (!changed) {
+    return text;
+  }
+  return result.trim();
+}
+
+/**
  * Strip thinking tags and their content from text.
  * This is a safety net for cases where the model outputs <think> tags
  * that slip through other filtering mechanisms.
@@ -238,7 +339,9 @@ export function extractAssistantText(msg: AssistantMessage): string {
     extractTextFromChatContent(msg.content, {
       sanitizeText: (text) =>
         stripThinkingTagsFromText(
-          stripDowngradedToolCallText(stripModelSpecialTokens(stripMinimaxToolCallXml(text))),
+          stripMultiToolCallJsonPayload(
+            stripDowngradedToolCallText(stripModelSpecialTokens(stripMinimaxToolCallXml(text))),
+          ),
         ).trim(),
       joinWith: "\n",
       normalizeText: (text) => text.trim(),

@@ -5,6 +5,7 @@ import {
   formatReasoningMessage,
   promoteThinkingTagsToBlocks,
   stripDowngradedToolCallText,
+  stripMultiToolCallJsonPayload,
 } from "./pi-embedded-utils.js";
 
 function makeAssistantMessage(
@@ -585,9 +586,74 @@ describe("promoteThinkingTagsToBlocks", () => {
 
 describe("empty input handling", () => {
   it("returns empty string", () => {
-    const helpers = [formatReasoningMessage, stripDowngradedToolCallText];
+    const helpers = [
+      formatReasoningMessage,
+      stripDowngradedToolCallText,
+      stripMultiToolCallJsonPayload,
+    ];
     for (const helper of helpers) {
       expect(helper("")).toBe("");
     }
+  });
+});
+
+describe("stripMultiToolCallJsonPayload", () => {
+  it("strips a standalone tool_uses JSON payload with recipient_name", () => {
+    const payload = `{"tool_uses":[{"recipient_name":"functions.feishu_bitable_app","parameters":{"action":"list","page_size":50}},{"recipient_name":"functions.feishu_search_doc_wiki","parameters":{"action":"search","query":"expenses","filter":{"doc_types":["BITABLE"],"sort_type":"EDIT_TIME"},"page_size":10}}]}`;
+    expect(stripMultiToolCallJsonPayload(payload)).toBe("");
+  });
+
+  it("strips tool_uses payload when mixed with leading/trailing text", () => {
+    const payload = `{"tool_uses":[{"recipient_name":"functions.feishu_bitable_app","parameters":{"action":"list"}}]}`;
+    const text = `Let me look this up.\n${payload}\nI found the results.`;
+    const result = stripMultiToolCallJsonPayload(text);
+    expect(result).not.toContain("tool_uses");
+    expect(result).not.toContain("recipient_name");
+    expect(result).toContain("Let me look this up.");
+    expect(result).toContain("I found the results.");
+  });
+
+  it("strips multiple tool_uses payloads in the same text", () => {
+    const p1 = `{"tool_uses":[{"recipient_name":"functions.read","parameters":{"path":"/tmp/a"}}]}`;
+    const p2 = `{"tool_uses":[{"recipient_name":"functions.write","parameters":{"path":"/tmp/b"}}]}`;
+    const text = `${p1}\n${p2}`;
+    expect(stripMultiToolCallJsonPayload(text)).toBe("");
+  });
+
+  it("passes through normal text with no tool_uses", () => {
+    const text = "I will look up the expense record and check the reimbursement status.";
+    expect(stripMultiToolCallJsonPayload(text)).toBe(text);
+  });
+
+  it("passes through JSON without recipient_name (not an orchestration payload)", () => {
+    const text = `{"tool_uses":[{"name":"feishu_bitable_app","parameters":{"action":"list"}}]}`;
+    expect(stripMultiToolCallJsonPayload(text)).toBe(text);
+  });
+
+  it("passes through text mentioning tool_uses in prose", () => {
+    const text = "The system uses tool_uses to dispatch calls, but this is just an explanation.";
+    expect(stripMultiToolCallJsonPayload(text)).toBe(text);
+  });
+
+  it("strips via extractAssistantText pipeline (integration)", () => {
+    const payload = `{"tool_uses":[{"recipient_name":"functions.feishu_bitable_app","parameters":{"action":"list","page_size":50}}]}`;
+    const msg: AssistantMessage = {
+      role: "assistant",
+      api: "anthropic",
+      provider: "anthropic",
+      model: "claude-3-5-sonnet-latest",
+      usage: {
+        input: 0,
+        output: 0,
+        cacheRead: 0,
+        cacheWrite: 0,
+        totalTokens: 0,
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+      },
+      stopReason: "stop",
+      content: [{ type: "text", text: payload }],
+      timestamp: Date.now(),
+    };
+    expect(extractAssistantText(msg)).toBe("");
   });
 });
