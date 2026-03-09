@@ -657,13 +657,21 @@ export class DiscordVoiceManager {
     const speaker = await this.resolveSpeakerContext(entry.guildId, userId);
     const prompt = speaker.label ? `${speaker.label}: ${transcript}` : transcript;
 
+    // Use a :voice: session key instead of :channel: so that the session is not
+    // treated as a group chat (which would trigger NO_REPLY / silent-reply policies).
+    const voiceSessionKey = entry.route.sessionKey.replace(/:channel:/, ":voice:");
+
     const result = await agentCommandFromIngress(
       {
         message: prompt,
-        sessionKey: entry.route.sessionKey,
+        sessionKey: voiceSessionKey,
         agentId: entry.route.agentId,
         messageChannel: "discord",
         senderIsOwner: speaker.senderIsOwner,
+        extraSystemPrompt:
+          "You are in a live VOICE CONVERSATION. " +
+          "ALWAYS respond with a spoken reply — never output NO_REPLY or HEARTBEAT_OK. " +
+          "Keep answers concise (1–3 sentences). Do not use markdown formatting.",
         deliver: false,
       },
       this.params.runtime,
