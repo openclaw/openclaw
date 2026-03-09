@@ -101,6 +101,7 @@ function normalizeStringList(raw: string[] | undefined): string[] | undefined {
 function resolveBrowserSsrFPolicy(cfg: BrowserConfig | undefined): SsrFPolicy | undefined {
   const allowPrivateNetwork = cfg?.ssrfPolicy?.allowPrivateNetwork;
   const dangerouslyAllowPrivateNetwork = cfg?.ssrfPolicy?.dangerouslyAllowPrivateNetwork;
+  const allowRfc2544BenchmarkRange = cfg?.ssrfPolicy?.allowRfc2544BenchmarkRange;
   const allowedHostnames = normalizeStringList(cfg?.ssrfPolicy?.allowedHostnames);
   const hostnameAllowlist = normalizeStringList(cfg?.ssrfPolicy?.hostnameAllowlist);
   const hasExplicitPrivateSetting =
@@ -114,6 +115,7 @@ function resolveBrowserSsrFPolicy(cfg: BrowserConfig | undefined): SsrFPolicy | 
   if (
     !resolvedAllowPrivateNetwork &&
     !hasExplicitPrivateSetting &&
+    !allowRfc2544BenchmarkRange &&
     !allowedHostnames &&
     !hostnameAllowlist
   ) {
@@ -122,6 +124,7 @@ function resolveBrowserSsrFPolicy(cfg: BrowserConfig | undefined): SsrFPolicy | 
 
   return {
     ...(resolvedAllowPrivateNetwork ? { dangerouslyAllowPrivateNetwork: true } : {}),
+    ...(allowRfc2544BenchmarkRange === true ? { allowRfc2544BenchmarkRange: true } : {}),
     ...(allowedHostnames ? { allowedHostnames } : {}),
     ...(hostnameAllowlist ? { hostnameAllowlist } : {}),
   };
@@ -236,10 +239,10 @@ export function resolveBrowserConfig(
   const rawCdpUrl = (cfg?.cdpUrl ?? "").trim();
   let cdpInfo:
     | {
-        parsed: URL;
-        port: number;
-        normalized: string;
-      }
+      parsed: URL;
+      port: number;
+      normalized: string;
+    }
     | undefined;
   if (rawCdpUrl) {
     cdpInfo = parseHttpUrl(rawCdpUrl, "browser.cdpUrl");

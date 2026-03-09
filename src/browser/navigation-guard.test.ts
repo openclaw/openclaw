@@ -130,6 +130,27 @@ describe("browser navigation guard", () => {
     ).rejects.toBeInstanceOf(InvalidBrowserNavigationUrlError);
   });
 
+  it("blocks RFC 2544 benchmark range IPs by default", async () => {
+    const lookupFn = createLookupFn("198.18.0.1");
+    await expect(
+      assertBrowserNavigationAllowed({
+        url: "https://example.com",
+        lookupFn,
+      }),
+    ).rejects.toBeInstanceOf(SsrFBlockedError);
+  });
+
+  it("allows RFC 2544 benchmark range IPs when allowRfc2544BenchmarkRange is enabled", async () => {
+    const lookupFn = createLookupFn("198.18.0.1");
+    await expect(
+      assertBrowserNavigationAllowed({
+        url: "https://example.com",
+        lookupFn,
+        ssrfPolicy: { allowRfc2544BenchmarkRange: true },
+      }),
+    ).resolves.toBeUndefined();
+  });
+
   it("validates final network URLs after navigation", async () => {
     const lookupFn = createLookupFn("127.0.0.1");
     await expect(

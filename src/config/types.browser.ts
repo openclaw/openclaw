@@ -20,6 +20,12 @@ export type BrowserSsrFPolicyConfig = {
   /** If true, permit browser navigation to private/internal networks. Default: true */
   dangerouslyAllowPrivateNetwork?: boolean;
   /**
+   * If true, allow the RFC 2544 benchmark IP range (198.18.0.0/15) through
+   * the SSRF guard. Useful when running behind fake-IP DNS proxies such as
+   * Clash TUN mode.
+   */
+  allowRfc2544BenchmarkRange?: boolean;
+  /**
    * Explicitly allowed hostnames (exact-match), including blocked names like localhost.
    * Example: ["localhost", "metadata.internal"]
    */

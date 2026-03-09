@@ -504,6 +504,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "browser.ssrfPolicy.dangerouslyAllowPrivateNetwork": "Browser Dangerously Allow Private Network",
   "browser.ssrfPolicy.allowedHostnames": "Browser Allowed Hostnames",
   "browser.ssrfPolicy.hostnameAllowlist": "Browser Hostname Allowlist",
+  "browser.ssrfPolicy.allowRfc2544BenchmarkRange": "Browser Allow RFC 2544 Benchmark Range",
   "browser.remoteCdpTimeoutMs": "Remote CDP Timeout (ms)",
   "browser.remoteCdpHandshakeTimeoutMs": "Remote CDP Handshake Timeout (ms)",
   session: "Session",
