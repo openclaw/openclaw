@@ -910,14 +910,6 @@ export const SlackAccountSchema = z
     responsePrefix: z.string().optional(),
     ackReaction: z.string().optional(),
     typingReaction: z.string().optional(),
-    socketMode: z
-      .object({
-        clientPingTimeout: z.number().int().positive().optional(),
-        serverPingTimeout: z.number().int().positive().optional(),
-        pingPongLoggingEnabled: z.boolean().optional(),
-      })
-      .strict()
-      .optional(),
   })
   .strict()
   .superRefine((value) => {
@@ -934,6 +926,14 @@ export const SlackConfigSchema = SlackAccountSchema.safeExtend({
   groupPolicy: GroupPolicySchema.optional().default("allowlist"),
   accounts: z.record(z.string(), SlackAccountSchema.optional()).optional(),
   defaultAccount: z.string().optional(),
+  socketMode: z
+    .object({
+      clientPingTimeout: z.number().int().positive().optional(),
+      serverPingTimeout: z.number().int().positive().optional(),
+      pingPongLoggingEnabled: z.boolean().optional(),
+    })
+    .strict()
+    .optional(),
 }).superRefine((value, ctx) => {
   const dmPolicy = value.dmPolicy ?? value.dm?.policy ?? "pairing";
   const allowFrom = value.allowFrom ?? value.dm?.allowFrom;
