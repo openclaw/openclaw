@@ -1,7 +1,7 @@
 import { normalizeChatType } from "../../channels/chat-type.js";
 import { resolveSenderLabel } from "../../channels/sender-label.js";
-import { formatZonedTimestamp, resolveTimezone } from "../../infra/format-time/format-datetime.js";
 import type { OpenClawConfig } from "../../config/config.js";
+import { formatZonedTimestamp, resolveTimezone } from "../../infra/format-time/format-datetime.js";
 import type { TemplateContext } from "../templating.js";
 
 function safeTrim(value: unknown): string | undefined {
@@ -38,7 +38,11 @@ function formatConversationTimestamp(value: unknown, timeZone?: string): string 
 function resolveConversationTimezone(cfg?: OpenClawConfig): string | undefined {
   const envelopeTimezone = cfg?.agents?.defaults?.envelopeTimezone?.trim();
 
-  if (!envelopeTimezone || envelopeTimezone.toLowerCase() === "local" || envelopeTimezone.toLowerCase() === "host") {
+  if (
+    !envelopeTimezone ||
+    envelopeTimezone.toLowerCase() === "local" ||
+    envelopeTimezone.toLowerCase() === "host"
+  ) {
     return undefined; // use system timezone
   }
 
@@ -51,14 +55,18 @@ function resolveConversationTimezone(cfg?: OpenClawConfig): string | undefined {
     if (!userTz) return undefined;
     const validated = resolveTimezone(userTz);
     if (!validated) {
-      console.warn(`[openclaw] Invalid userTimezone value: "${userTz}", falling back to system timezone`);
+      console.warn(
+        `[openclaw] Invalid userTimezone value: "${userTz}", falling back to system timezone`,
+      );
     }
     return validated;
   }
 
   const validated = resolveTimezone(envelopeTimezone);
   if (!validated) {
-    console.warn(`[openclaw] Invalid envelopeTimezone value: "${envelopeTimezone}", falling back to system timezone`);
+    console.warn(
+      `[openclaw] Invalid envelopeTimezone value: "${envelopeTimezone}", falling back to system timezone`,
+    );
   }
   return validated;
 }
