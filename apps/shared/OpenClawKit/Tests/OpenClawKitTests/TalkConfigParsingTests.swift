@@ -24,7 +24,7 @@ struct TalkConfigParsingTests {
         #expect(selection?.config["voiceId"]?.stringValue == "voice-resolved")
     }
 
-    @Test func prefersNormalizedTalkProviderPayload() {
+    @Test func rejectsNormalizedTalkProviderPayloadWithoutResolved() {
         let talk: [String: AnyCodable] = [
             "provider": AnyCodable("elevenlabs"),
             "providers": AnyCodable([
@@ -36,9 +36,7 @@ struct TalkConfigParsingTests {
         ]
 
         let selection = TalkConfigParsing.selectProviderConfig(talk, defaultProvider: "elevenlabs")
-        #expect(selection?.provider == "elevenlabs")
-        #expect(selection?.normalizedPayload == true)
-        #expect(selection?.config["voiceId"]?.stringValue == "voice-normalized")
+        #expect(selection == nil)
     }
 
     @Test func fallsBackToLegacyTalkFieldsWhenNormalizedPayloadMissing() {
@@ -63,6 +61,36 @@ struct TalkConfigParsingTests {
             talk,
             defaultProvider: "elevenlabs",
             allowLegacyFallback: false)
+        #expect(selection == nil)
+    }
+
+    @Test func rejectsNormalizedPayloadWhenProviderMissingFromProviders() {
+        let talk: [String: AnyCodable] = [
+            "provider": AnyCodable("acme"),
+            "providers": AnyCodable([
+                "elevenlabs": [
+                    "voiceId": "voice-normalized",
+                ],
+            ]),
+        ]
+
+        let selection = TalkConfigParsing.selectProviderConfig(talk, defaultProvider: "elevenlabs")
+        #expect(selection == nil)
+    }
+
+    @Test func rejectsNormalizedPayloadWhenMultipleProvidersAndNoProvider() {
+        let talk: [String: AnyCodable] = [
+            "providers": AnyCodable([
+                "acme": [
+                    "voiceId": "voice-acme",
+                ],
+                "elevenlabs": [
+                    "voiceId": "voice-eleven",
+                ],
+            ]),
+        ]
+
+        let selection = TalkConfigParsing.selectProviderConfig(talk, defaultProvider: "elevenlabs")
         #expect(selection == nil)
     }
 

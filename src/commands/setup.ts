@@ -50,6 +50,10 @@ export async function setupCommand(
         workspace,
       },
     },
+    gateway: {
+      ...cfg.gateway,
+      mode: cfg.gateway?.mode ?? "local",
+    },
   });
   const configChanged = JSON.stringify(next) !== JSON.stringify(cfg);
 
@@ -58,10 +62,17 @@ export async function setupCommand(
     if (!existingRaw.exists) {
       runtime.log(`Wrote ${formatConfigPath(configPath)}`);
     } else {
-      const suffix =
-        defaults.workspace !== workspace
-          ? "(set agents.defaults.workspace)"
-          : "(set workflow lane defaults)";
+      const updates: string[] = [];
+      if (defaults.workspace !== workspace) {
+        updates.push("set agents.defaults.workspace");
+      }
+      if (cfg.gateway?.mode !== next.gateway?.mode) {
+        updates.push("set gateway.mode");
+      }
+      if (configChanged && updates.length === 0) {
+        updates.push("set workflow lane defaults");
+      }
+      const suffix = updates.length > 0 ? `(${updates.join(", ")})` : undefined;
       logConfigUpdated(runtime, { path: configPath, suffix });
     }
   } else {

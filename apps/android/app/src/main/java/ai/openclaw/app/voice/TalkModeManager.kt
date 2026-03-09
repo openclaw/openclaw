@@ -64,68 +64,6 @@ class TalkModeManager(
     private const val chatFinalWaitWithSubscribeMs = 45_000L
     private const val chatFinalWaitWithoutSubscribeMs = 6_000L
     private const val maxCachedRunCompletions = 128
-
-    internal data class TalkProviderConfigSelection(
-      val provider: String,
-      val config: JsonObject,
-      val normalizedPayload: Boolean,
-    )
-
-    private fun normalizeTalkProviderId(raw: String?): String? {
-      val trimmed = raw?.trim()?.lowercase().orEmpty()
-      return trimmed.takeIf { it.isNotEmpty() }
-    }
-
-    private fun selectResolvedTalkProviderConfig(talk: JsonObject): TalkProviderConfigSelection? {
-      val resolved = talk["resolved"].asObjectOrNull() ?: return null
-      val providerId = normalizeTalkProviderId(resolved["provider"].asStringOrNull()) ?: return null
-      return TalkProviderConfigSelection(
-        provider = providerId,
-        config = resolved["config"].asObjectOrNull() ?: buildJsonObject {},
-        normalizedPayload = true,
-      )
-    }
-
-    internal fun selectTalkProviderConfig(talk: JsonObject?): TalkProviderConfigSelection? {
-      if (talk == null) return null
-      selectResolvedTalkProviderConfig(talk)?.let { return it }
-      val rawProvider = talk["provider"].asStringOrNull()
-      val rawProviders = talk["providers"].asObjectOrNull()
-      val hasNormalizedPayload = rawProvider != null || rawProviders != null
-      if (hasNormalizedPayload) {
-        val providers =
-          rawProviders?.entries?.mapNotNull { (key, value) ->
-            val providerId = normalizeTalkProviderId(key) ?: return@mapNotNull null
-            val providerConfig = value.asObjectOrNull() ?: return@mapNotNull null
-            providerId to providerConfig
-          }?.toMap().orEmpty()
-        val providerId =
-          normalizeTalkProviderId(rawProvider)
-            ?: providers.keys.sorted().firstOrNull()
-            ?: defaultTalkProvider
-        return TalkProviderConfigSelection(
-          provider = providerId,
-          config = providers[providerId] ?: buildJsonObject {},
-          normalizedPayload = true,
-        )
-      }
-      return TalkProviderConfigSelection(
-        provider = defaultTalkProvider,
-        config = talk,
-        normalizedPayload = false,
-      )
-    }
-
-    internal fun resolvedSilenceTimeoutMs(talk: JsonObject?): Long {
-      val fallback = TalkDefaults.defaultSilenceTimeoutMs
-      val primitive = talk?.get("silenceTimeoutMs") as? JsonPrimitive ?: return fallback
-      if (primitive.isString) return fallback
-      val timeout = primitive.content.toDoubleOrNull() ?: return fallback
-      if (timeout <= 0 || timeout % 1.0 != 0.0 || timeout > Long.MAX_VALUE.toDouble()) {
-        return fallback
-      }
-      return timeout.toLong()
-    }
   }
 
   private val mainHandler = Handler(Looper.getMainLooper())
@@ -875,7 +813,7 @@ class TalkModeManager(
     _lastAssistantText.value = cleaned
 
     val requestedVoice = directive?.voiceId?.trim()?.takeIf { it.isNotEmpty() }
-    val resolvedVoice = resolveVoiceAlias(requestedVoice)
+    val resolvedVoice = TalkModeVoiceResolver.resolveVoiceAlias(requestedVoice, voiceAliases)
     if (requestedVoice != null && resolvedVoice == null) {
       Log.w(tag, "unknown voice alias: $requestedVoice")
     }
@@ -898,12 +836,35 @@ class TalkModeManager(
       apiKey?.trim()?.takeIf { it.isNotEmpty() }
         ?: System.getenv("ELEVENLABS_API_KEY")?.trim()
     val preferredVoice = resolvedVoice ?: currentVoiceId ?: defaultVoiceId
-    val voiceId =
+    val resolvedPlaybackVoice =
       if (!apiKey.isNullOrEmpty()) {
-        resolveVoiceId(preferredVoice, apiKey)
+        try {
+          TalkModeVoiceResolver.resolveVoiceId(
+            preferred = preferredVoice,
+            fallbackVoiceId = fallbackVoiceId,
+            defaultVoiceId = defaultVoiceId,
+            currentVoiceId = currentVoiceId,
+            voiceOverrideActive = voiceOverrideActive,
+            listVoices = { TalkModeVoiceResolver.listVoices(apiKey, json) },
+          )
+        } catch (err: Throwable) {
+          Log.w(tag, "list voices failed: ${err.message ?: err::class.simpleName}")
+          null
+        }
       } else {
         null
       }
+    resolvedPlaybackVoice?.let { resolved ->
+      fallbackVoiceId = resolved.fallbackVoiceId
+      defaultVoiceId = resolved.defaultVoiceId
+      currentVoiceId = resolved.currentVoiceId
+      resolved.selectedVoiceName?.let { name ->
+        resolved.voiceId?.let { voiceId ->
+          Log.d(tag, "default voice selected $name ($voiceId)")
+        }
+      }
+    }
+    val voiceId = resolvedPlaybackVoice?.voiceId
 
     _statusText.value = "Speaking…"
     _isSpeaking.value = true
@@ -1414,66 +1375,64 @@ class TalkModeManager(
     try {
       val res = session.request("talk.config", """{"includeSecrets":true}""")
       val root = json.parseToJsonElement(res).asObjectOrNull()
-      val config = root?.get("config").asObjectOrNull()
-      val talk = config?.get("talk").asObjectOrNull()
-      val selection = selectTalkProviderConfig(talk)
-      val activeProvider = selection?.provider ?: defaultTalkProvider
-      val activeConfig = selection?.config
-      val sessionCfg = config?.get("session").asObjectOrNull()
-      val mainKey = normalizeMainKey(sessionCfg?.get("mainKey").asStringOrNull())
-      val voice = activeConfig?.get("voiceId")?.asStringOrNull()?.trim()?.takeIf { it.isNotEmpty() }
-      val aliases =
-        activeConfig?.get("voiceAliases").asObjectOrNull()?.entries?.mapNotNull { (key, value) ->
-          val id = value.asStringOrNull()?.trim()?.takeIf { it.isNotEmpty() } ?: return@mapNotNull null
-          normalizeAliasKey(key).takeIf { it.isNotEmpty() }?.let { it to id }
-        }?.toMap().orEmpty()
-      val model = activeConfig?.get("modelId")?.asStringOrNull()?.trim()?.takeIf { it.isNotEmpty() }
-      val outputFormat =
-        activeConfig?.get("outputFormat")?.asStringOrNull()?.trim()?.takeIf { it.isNotEmpty() }
-      val key = activeConfig?.get("apiKey")?.asStringOrNull()?.trim()?.takeIf { it.isNotEmpty() }
-      val interrupt = talk?.get("interruptOnSpeech")?.asBooleanOrNull()
-      val silenceTimeoutMs = resolvedSilenceTimeoutMs(talk)
+      val parsed =
+        TalkModeGatewayConfigParser.parse(
+          config = root?.get("config").asObjectOrNull(),
+          defaultProvider = defaultTalkProvider,
+          defaultModelIdFallback = defaultModelIdFallback,
+          defaultOutputFormatFallback = defaultOutputFormatFallback,
+          envVoice = envVoice,
+          sagVoice = sagVoice,
+          envKey = envKey,
+        )
+      if (parsed.missingResolvedPayload) {
+        Log.w(tag, "talk config ignored: normalized payload missing talk.resolved")
+      }
 
       if (!isCanonicalMainSessionKey(mainSessionKey)) {
-        mainSessionKey = mainKey
+        mainSessionKey = parsed.mainSessionKey
       }
-      defaultVoiceId =
-        if (activeProvider == defaultTalkProvider) {
-          voice ?: envVoice?.takeIf { it.isNotEmpty() } ?: sagVoice?.takeIf { it.isNotEmpty() }
-        } else {
-          voice
-        }
-      voiceAliases = aliases
+      defaultVoiceId = parsed.defaultVoiceId
+      voiceAliases = parsed.voiceAliases
       if (!voiceOverrideActive) currentVoiceId = defaultVoiceId
-      defaultModelId = model ?: defaultModelIdFallback
+      defaultModelId = parsed.defaultModelId
       if (!modelOverrideActive) currentModelId = defaultModelId
-      defaultOutputFormat = outputFormat ?: defaultOutputFormatFallback
-      apiKey = key ?: envKey?.takeIf { it.isNotEmpty() }
-      silenceWindowMs = silenceTimeoutMs
+      defaultOutputFormat = parsed.defaultOutputFormat
+      apiKey = parsed.apiKey
+      silenceWindowMs = parsed.silenceTimeoutMs
       Log.d(
         tag,
-        "reloadConfig apiKey=${if (apiKey != null) "set" else "null"} voiceId=$defaultVoiceId silenceTimeoutMs=$silenceTimeoutMs",
+        "reloadConfig apiKey=${if (apiKey != null) "set" else "null"} voiceId=$defaultVoiceId silenceTimeoutMs=${parsed.silenceTimeoutMs}",
       )
-      if (interrupt != null) interruptOnSpeech = interrupt
-      activeProviderIsElevenLabs = activeProvider == defaultTalkProvider
+      if (parsed.interruptOnSpeech != null) interruptOnSpeech = parsed.interruptOnSpeech
+      activeProviderIsElevenLabs = parsed.activeProvider == defaultTalkProvider
       if (!activeProviderIsElevenLabs) {
         // Clear ElevenLabs credentials so playAssistant won't attempt ElevenLabs calls
         apiKey = null
         defaultVoiceId = null
         if (!voiceOverrideActive) currentVoiceId = null
-        Log.w(tag, "talk provider $activeProvider unsupported; using system voice fallback")
-      } else if (selection?.normalizedPayload == true) {
+        Log.w(tag, "talk provider ${parsed.activeProvider} unsupported; using system voice fallback")
+      } else if (parsed.normalizedPayload) {
         Log.d(tag, "talk config provider=elevenlabs")
       }
       configLoaded = true
     } catch (_: Throwable) {
-      silenceWindowMs = TalkDefaults.defaultSilenceTimeoutMs
-      defaultVoiceId = envVoice?.takeIf { it.isNotEmpty() } ?: sagVoice?.takeIf { it.isNotEmpty() }
-      defaultModelId = defaultModelIdFallback
+      val fallback =
+        TalkModeGatewayConfigParser.fallback(
+          defaultProvider = defaultTalkProvider,
+          defaultModelIdFallback = defaultModelIdFallback,
+          defaultOutputFormatFallback = defaultOutputFormatFallback,
+          envVoice = envVoice,
+          sagVoice = sagVoice,
+          envKey = envKey,
+        )
+      silenceWindowMs = fallback.silenceTimeoutMs
+      defaultVoiceId = fallback.defaultVoiceId
+      defaultModelId = fallback.defaultModelId
       if (!modelOverrideActive) currentModelId = defaultModelId
-      apiKey = envKey?.takeIf { it.isNotEmpty() }
-      voiceAliases = emptyMap()
-      defaultOutputFormat = defaultOutputFormatFallback
+      apiKey = fallback.apiKey
+      voiceAliases = fallback.voiceAliases
+      defaultOutputFormat = fallback.defaultOutputFormat
       // Keep config load retryable after transient fetch failures.
       configLoaded = false
     }
@@ -1766,82 +1725,6 @@ class TalkModeManager(
       }
     }
   }
-
-  private fun resolveVoiceAlias(value: String?): String? {
-    val trimmed = value?.trim().orEmpty()
-    if (trimmed.isEmpty()) return null
-    val normalized = normalizeAliasKey(trimmed)
-    voiceAliases[normalized]?.let { return it }
-    if (voiceAliases.values.any { it.equals(trimmed, ignoreCase = true) }) return trimmed
-    return if (isLikelyVoiceId(trimmed)) trimmed else null
-  }
-
-  private suspend fun resolveVoiceId(preferred: String?, apiKey: String): String? {
-    val trimmed = preferred?.trim().orEmpty()
-    if (trimmed.isNotEmpty()) {
-      val resolved = resolveVoiceAlias(trimmed)
-      // If it resolves as an alias, use the alias target.
-      // Otherwise treat it as a direct voice ID (e.g. "21m00Tcm4TlvDq8ikWAM").
-      return resolved ?: trimmed
-    }
-    fallbackVoiceId?.let { return it }
-
-    return try {
-      val voices = listVoices(apiKey)
-      val first = voices.firstOrNull() ?: return null
-      fallbackVoiceId = first.voiceId
-      if (defaultVoiceId.isNullOrBlank()) {
-        defaultVoiceId = first.voiceId
-      }
-      if (!voiceOverrideActive) {
-        currentVoiceId = first.voiceId
-      }
-      val name = first.name ?: "unknown"
-      Log.d(tag, "default voice selected $name (${first.voiceId})")
-      first.voiceId
-    } catch (err: Throwable) {
-      Log.w(tag, "list voices failed: ${err.message ?: err::class.simpleName}")
-      null
-    }
-  }
-
-  private suspend fun listVoices(apiKey: String): List<ElevenLabsVoice> {
-    return withContext(Dispatchers.IO) {
-      val url = URL("https://api.elevenlabs.io/v1/voices")
-      val conn = url.openConnection() as HttpURLConnection
-      conn.requestMethod = "GET"
-      conn.connectTimeout = 15_000
-      conn.readTimeout = 15_000
-      conn.setRequestProperty("xi-api-key", apiKey)
-
-      val code = conn.responseCode
-      val stream = if (code >= 400) conn.errorStream else conn.inputStream
-      val data = stream.readBytes()
-      if (code >= 400) {
-        val message = data.toString(Charsets.UTF_8)
-        throw IllegalStateException("ElevenLabs voices failed: $code $message")
-      }
-
-      val root = json.parseToJsonElement(data.toString(Charsets.UTF_8)).asObjectOrNull()
-      val voices = (root?.get("voices") as? JsonArray) ?: JsonArray(emptyList())
-      voices.mapNotNull { entry ->
-        val obj = entry.asObjectOrNull() ?: return@mapNotNull null
-        val voiceId = obj["voice_id"].asStringOrNull() ?: return@mapNotNull null
-        val name = obj["name"].asStringOrNull()
-        ElevenLabsVoice(voiceId, name)
-      }
-    }
-  }
-
-  private fun isLikelyVoiceId(value: String): Boolean {
-    if (value.length < 10) return false
-    return value.all { it.isLetterOrDigit() || it == '-' || it == '_' }
-  }
-
-  private fun normalizeAliasKey(value: String): String =
-    value.trim().lowercase()
-
-  private data class ElevenLabsVoice(val voiceId: String, val name: String?)
 
   private val listener =
     object : RecognitionListener {
