@@ -71,6 +71,23 @@ function shouldUseStreaming(params: {
   return true;
 }
 
+export function shouldSkipPinnedMainLastRouteUpdate(params: {
+  pinnedMainDmOwner: string | null;
+  senderRecipient: string | undefined;
+  targetSessionKey: string;
+  mainSessionKey: string;
+}): boolean {
+  if (params.targetSessionKey !== params.mainSessionKey) {
+    return false;
+  }
+  const ownerRecipient = params.pinnedMainDmOwner?.trim().toLowerCase();
+  const senderRecipient = params.senderRecipient?.trim().toLowerCase();
+  if (!ownerRecipient || !senderRecipient) {
+    return false;
+  }
+  return ownerRecipient !== senderRecipient;
+}
+
 export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessage) {
   const { ctx, account, message, route } = prepared;
   const cfg = ctx.cfg;
@@ -96,20 +113,22 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
       allowFrom: ctx.allowFrom,
       normalizeEntry: normalizeSlackAllowOwnerEntry,
     });
+    const updateLastRouteSessionKey = resolveInboundLastRouteSessionKey({
+      route,
+      sessionKey: prepared.ctxPayload.SessionKey ?? route.sessionKey,
+    });
     const senderRecipient = message.user?.trim().toLowerCase();
-    const skipMainUpdate =
-      pinnedMainDmOwner &&
-      senderRecipient &&
-      pinnedMainDmOwner.trim().toLowerCase() !== senderRecipient;
+    const skipMainUpdate = shouldSkipPinnedMainLastRouteUpdate({
+      pinnedMainDmOwner,
+      senderRecipient,
+      targetSessionKey: updateLastRouteSessionKey,
+      mainSessionKey: route.mainSessionKey,
+    });
     if (skipMainUpdate) {
       logVerbose(
         `slack: skip main-session last route for ${senderRecipient} (pinned owner ${pinnedMainDmOwner})`,
       );
     } else {
-      const updateLastRouteSessionKey = resolveInboundLastRouteSessionKey({
-        route,
-        sessionKey: prepared.ctxPayload.SessionKey ?? route.sessionKey,
-      });
       await updateLastRoute({
         storePath,
         sessionKey: updateLastRouteSessionKey,
