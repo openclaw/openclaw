@@ -443,6 +443,7 @@ describe("isLikelyContextOverflowError", () => {
 
 describe("isTransientHttpError", () => {
   it("returns true for retryable 5xx status codes", () => {
+    expect(isTransientHttpError("499 Client Closed Request")).toBe(true);
     expect(isTransientHttpError("500 Internal Server Error")).toBe(true);
     expect(isTransientHttpError("502 Bad Gateway")).toBe(true);
     expect(isTransientHttpError("503 Service Unavailable")).toBe(true);

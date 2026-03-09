@@ -69,6 +69,7 @@ describe("failover-error", () => {
     expect(resolveFailoverReasonFromError({ status: 408 })).toBe("timeout");
     expect(resolveFailoverReasonFromError({ status: 400 })).toBe("format");
     // Keep the status-only path behavior-preserving and conservative.
+    expect(resolveFailoverReasonFromError({ status: 499 })).toBe("timeout");
     expect(resolveFailoverReasonFromError({ status: 500 })).toBeNull();
     expect(resolveFailoverReasonFromError({ status: 502 })).toBe("timeout");
     expect(resolveFailoverReasonFromError({ status: 503 })).toBe("timeout");
@@ -87,6 +88,12 @@ describe("failover-error", () => {
         message: OPENAI_RATE_LIMIT_MESSAGE,
       }),
     ).toBe("rate_limit");
+    expect(
+      resolveFailoverReasonFromError({
+        status: 499,
+        message: ANTHROPIC_OVERLOADED_PAYLOAD,
+      }),
+    ).toBe("overloaded");
     expect(
       resolveFailoverReasonFromError({
         status: 529,
