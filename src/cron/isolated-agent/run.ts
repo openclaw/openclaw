@@ -191,6 +191,17 @@ function appendCronDeliveryInstruction(params: {
   return `${params.commandBody}\n\nReturn your summary as plain text; it will be delivered automatically. If the task explicitly calls for messaging a specific external recipient, note who/where it should go instead of sending it yourself.`.trim();
 }
 
+export function resolveSilentCronDeliveryText(params: {
+  silentReply?: boolean;
+  synthesizedText?: string;
+  didSendViaMessagingTool?: boolean;
+}): string | undefined {
+  if (!params.silentReply || params.synthesizedText || params.didSendViaMessagingTool) {
+    return undefined;
+  }
+  return SILENT_REPLY_TOKEN;
+}
+
 export async function runCronIsolatedAgentTurn(params: {
   cfg: OpenClawConfig;
   deps: CliDeps;
@@ -767,9 +778,14 @@ export async function runCronIsolatedAgentTurn(params: {
       : synthesizedText
         ? [{ text: synthesizedText }]
         : [];
-  if (finalRunResult.silentReply && !synthesizedText) {
-    synthesizedText = SILENT_REPLY_TOKEN;
-    deliveryPayloads = [{ text: SILENT_REPLY_TOKEN }];
+  const silentCronDeliveryText = resolveSilentCronDeliveryText({
+    silentReply: finalRunResult.silentReply,
+    synthesizedText,
+    didSendViaMessagingTool: finalRunResult.didSendViaMessagingTool,
+  });
+  if (silentCronDeliveryText) {
+    synthesizedText = silentCronDeliveryText;
+    deliveryPayloads = [{ text: silentCronDeliveryText }];
   }
   const deliveryPayloadHasStructuredContent =
     Boolean(deliveryPayload?.mediaUrl) ||

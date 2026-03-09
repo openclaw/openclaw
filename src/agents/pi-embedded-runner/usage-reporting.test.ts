@@ -183,4 +183,31 @@ describe("runEmbeddedPiAgent usage reporting", () => {
 
     expect(result.silentReply).toBeUndefined();
   });
+
+  it("does not flag NO_REPLY as silent when the run stopped at max_tokens", async () => {
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce({
+      aborted: false,
+      promptError: null,
+      timedOut: false,
+      sessionIdUsed: "test-session",
+      assistantTexts: [SILENT_REPLY_TOKEN],
+      lastAssistant: {
+        content: [{ type: "text", text: SILENT_REPLY_TOKEN }],
+        stopReason: "max_tokens",
+      },
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    } as any);
+
+    const result = await runEmbeddedPiAgent({
+      sessionId: "test-session",
+      sessionKey: "test-key",
+      sessionFile: "/tmp/session.json",
+      workspaceDir: "/tmp/workspace",
+      prompt: "hello",
+      timeoutMs: 30000,
+      runId: "run-max-tokens-no-reply",
+    });
+
+    expect(result.silentReply).toBeUndefined();
+  });
 });

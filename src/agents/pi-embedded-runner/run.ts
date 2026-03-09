@@ -209,7 +209,11 @@ function resolveSilentReply(params: {
   payloadCount: number;
   stopReason?: string;
 }): boolean {
-  if (params.payloadCount > 0 || params.stopReason === "error") {
+  if (
+    params.payloadCount > 0 ||
+    params.stopReason === "error" ||
+    params.stopReason === "max_tokens"
+  ) {
     return false;
   }
   for (let idx = params.assistantTexts.length - 1; idx >= 0; idx -= 1) {
