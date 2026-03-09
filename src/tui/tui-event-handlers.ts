@@ -136,11 +136,16 @@ export function createEventHandlers(context: EventHandlerContext) {
     return sessionRuns.has(activeRunId);
   };
 
-  const maybeRefreshHistoryForRun = (runId: string, opts?: { force?: boolean }) => {
-    const force = Boolean(opts?.force);
-    if (isLocalRunId?.(runId) && !force) {
+  const maybeRefreshHistoryForRun = (
+    runId: string,
+    opts?: { allowLocalWithoutDisplayableFinal?: boolean },
+  ) => {
+    const isLocalRun = isLocalRunId?.(runId) ?? false;
+    if (isLocalRun) {
       forgetLocalRunId?.(runId);
-      return;
+      if (!opts?.allowLocalWithoutDisplayableFinal) {
+        return;
+      }
     }
     if (hasConcurrentActiveRun(runId)) {
       return;
@@ -215,7 +220,9 @@ export function createEventHandlers(context: EventHandlerContext) {
     if (evt.state === "final") {
       const wasActiveRun = state.activeChatRunId === evt.runId;
       if (!evt.message) {
-        maybeRefreshHistoryForRun(evt.runId, { force: true });
+        maybeRefreshHistoryForRun(evt.runId, {
+          allowLocalWithoutDisplayableFinal: true,
+        });
         chatLog.dropAssistant(evt.runId);
         finalizeRun({ runId: evt.runId, wasActiveRun, status: "idle" });
         tui.requestRender();
@@ -231,7 +238,6 @@ export function createEventHandlers(context: EventHandlerContext) {
         tui.requestRender();
         return;
       }
-      const wasLocalRun = Boolean(isLocalRunId?.(evt.runId));
       maybeRefreshHistoryForRun(evt.runId);
       const stopReason =
         evt.message && typeof evt.message === "object" && !Array.isArray(evt.message)
@@ -246,9 +252,6 @@ export function createEventHandlers(context: EventHandlerContext) {
         state.showThinking,
         evt.errorMessage,
       );
-      if (finalText === "(no output)" && wasLocalRun) {
-        maybeRefreshHistoryForRun(evt.runId, { force: true });
-      }
       const suppressEmptyExternalPlaceholder =
         finalText === "(no output)" && !isLocalRunId?.(evt.runId);
       if (suppressEmptyExternalPlaceholder) {
