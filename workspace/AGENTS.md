@@ -159,7 +159,7 @@ Before proposing any tweet for engagement, it MUST pass ALL these filters:
 
 ### Flow
 
-1. Run ONE search: `exec node skills/twitter-openclaw/bin/twclaw.js search "ERC-8004" --popular -n 10 --json`
+1. Run ONE search: `exec node skills/twitter-openclaw/bin/twclaw.js search "ERC-8004" --recent -n 10 --json`
 2. Filter results using the Quality Filters above — discard low-quality and competitor tweets
 3. Propose up to 3 interactions to Gilberts via Telegram, with format:
    - Tweet URL + author + 1-line summary
