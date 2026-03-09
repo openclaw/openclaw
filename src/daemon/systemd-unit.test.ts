@@ -147,6 +147,12 @@ describe("collectSystemdExecStartValues", () => {
       "/usr/local/bin/helper --mode openclaw",
     ]);
   });
+
+  it("does not treat backslash followed by trailing space as continuation", () => {
+    const content =
+      "[Service]\n" + "ExecStart=/usr/bin/helper \\ \n" + "--remote-debugging-port=18800";
+    expect(collectSystemdExecStartValues(content)).toEqual(["/usr/bin/helper \\"]);
+  });
 });
 
 describe("extractSystemdExecStartCommandToken", () => {

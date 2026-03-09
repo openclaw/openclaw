@@ -191,9 +191,12 @@ export function collectSystemdExecStartValues(contents: string): string[] {
     if (!trimmedLine && !currentLine) {
       continue;
     }
-    // Only an odd number of trailing backslashes is a continuation;
-    // even count (e.g. \\) represents escaped literal backslashes.
-    const hasContinuation = hasUnescapedTrailingBackslash(trimmedLine);
+    // systemd only treats a trailing backslash as line continuation when it
+    // is the very last character on the raw line (no trailing whitespace).
+    // Check the raw line (split already strips \n/\r), not the trimmed
+    // version, so `ExecStart=/usr/bin/helper \ ` (space after backslash)
+    // is not mistaken for a continuation.
+    const hasContinuation = hasUnescapedTrailingBackslash(rawLine);
     const linePart = hasContinuation ? trimmedLine.slice(0, -1).trim() : trimmedLine;
     currentLine = currentLine ? `${currentLine} ${linePart}`.trim() : linePart;
     if (hasContinuation) {
