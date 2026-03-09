@@ -78,14 +78,16 @@ describe("sessionHasAssistantMessages", () => {
     tmpDir = await makeTempWorkspace("openclaw-ctx-inject-");
   });
 
-  it("returns false for nonexistent file", () => {
-    expect(sessionHasAssistantMessages(path.join(tmpDir, "nonexistent.jsonl"))).toBe(false);
+  it("returns false for nonexistent file", async () => {
+    await expect(sessionHasAssistantMessages(path.join(tmpDir, "nonexistent.jsonl"))).resolves.toBe(
+      false,
+    );
   });
 
   it("returns false for empty file", async () => {
     const file = path.join(tmpDir, "empty.jsonl");
     await fs.writeFile(file, "", "utf8");
-    expect(sessionHasAssistantMessages(file)).toBe(false);
+    await expect(sessionHasAssistantMessages(file)).resolves.toBe(false);
   });
 
   it("returns false when only user messages exist", async () => {
@@ -95,7 +97,7 @@ describe("sessionHasAssistantMessages", () => {
       JSON.stringify({ message: { role: "user", content: "world" } }),
     ].join("\n");
     await fs.writeFile(file, lines, "utf8");
-    expect(sessionHasAssistantMessages(file)).toBe(false);
+    await expect(sessionHasAssistantMessages(file)).resolves.toBe(false);
   });
 
   it("returns true when assistant message exists", async () => {
@@ -105,7 +107,7 @@ describe("sessionHasAssistantMessages", () => {
       JSON.stringify({ message: { role: "assistant", content: "hi there" } }),
     ].join("\n");
     await fs.writeFile(file, lines, "utf8");
-    expect(sessionHasAssistantMessages(file)).toBe(true);
+    await expect(sessionHasAssistantMessages(file)).resolves.toBe(true);
   });
 
   it("handles malformed lines gracefully", async () => {
@@ -115,7 +117,7 @@ describe("sessionHasAssistantMessages", () => {
       JSON.stringify({ message: { role: "assistant", content: "ok" } }),
     ].join("\n");
     await fs.writeFile(file, lines, "utf8");
-    expect(sessionHasAssistantMessages(file)).toBe(true);
+    await expect(sessionHasAssistantMessages(file)).resolves.toBe(true);
   });
 });
 

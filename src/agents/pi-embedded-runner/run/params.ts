@@ -5,6 +5,7 @@ import type { OpenClawConfig } from "../../../config/config.js";
 import type { enqueueCommand } from "../../../process/command-queue.js";
 import type { InputProvenance } from "../../../sessions/input-provenance.js";
 import type { ExecElevatedDefaults, ExecToolDefaults } from "../../bash-tools.js";
+import type { ContextInjectionMode } from "../../bootstrap-files.js";
 import type { BlockReplyPayload } from "../../pi-embedded-payloads.js";
 import type { BlockReplyChunking, ToolResultFormat } from "../../pi-embedded-subscribe.js";
 import type { SkillSnapshot } from "../../skills.js";
@@ -86,7 +87,7 @@ export type RunEmbeddedPiAgentParams = {
   /** Run kind hint for context mode behavior. */
   bootstrapContextRunKind?: "default" | "heartbeat" | "cron";
   /** Context injection mode: "always" (default) or "first-message-only". */
-  contextInjection?: "always" | "first-message-only";
+  contextInjection?: ContextInjectionMode;
   /** Seen bootstrap truncation warning signatures for this session (once mode dedupe). */
   bootstrapPromptWarningSignaturesSeen?: string[];
   /** Last shown bootstrap truncation warning signature for this session. */

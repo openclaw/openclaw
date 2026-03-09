@@ -1,4 +1,4 @@
-import fsSync from "node:fs";
+import fs from "node:fs/promises";
 import type { OpenClawConfig } from "../config/config.js";
 import { getOrLoadBootstrapFiles } from "./bootstrap-cache.js";
 import { applyBootstrapHookOverrides } from "./bootstrap-hooks.js";
@@ -19,15 +19,15 @@ const SESSION_HEAD_MAX_LINES = 100;
 
 /**
  * Check whether a Pi session file already contains at least one assistant
- * message. Reads only the first chunk of the file (sync, fast) to avoid
- * loading the entire transcript into memory.
+ * message. Reads only the first chunk of the file to avoid loading the entire
+ * transcript into memory.
  */
-export function sessionHasAssistantMessages(sessionFile: string): boolean {
-  let fd: number | null = null;
+export async function sessionHasAssistantMessages(sessionFile: string): Promise<boolean> {
+  let handle: fs.FileHandle | undefined;
   try {
-    fd = fsSync.openSync(sessionFile, "r");
+    handle = await fs.open(sessionFile, "r");
     const buf = Buffer.alloc(SESSION_HEAD_MAX_BYTES);
-    const bytesRead = fsSync.readSync(fd, buf, 0, buf.length, 0);
+    const { bytesRead } = await handle.read(buf, 0, buf.length, 0);
     if (bytesRead <= 0) {
       return false;
     }
@@ -49,9 +49,7 @@ export function sessionHasAssistantMessages(sessionFile: string): boolean {
   } catch {
     // file doesn't exist or can't be read — treat as no history
   } finally {
-    if (fd !== null) {
-      fsSync.closeSync(fd);
-    }
+    await handle?.close();
   }
   return false;
 }
