@@ -225,20 +225,19 @@ export function buildKilocodeModelDefinition(): ModelDefinitionConfig {
   };
 }
 
-// Alibaba Cloud Model Studio (Bailian) Coding Plan
-export const BAILIAN_CN_BASE_URL = "https://coding.dashscope.aliyuncs.com/v1";
-export const BAILIAN_GLOBAL_BASE_URL = "https://coding-intl.dashscope.aliyuncs.com/v1";
-export const BAILIAN_BASE_URL = BAILIAN_CN_BASE_URL;
-export const BAILIAN_DEFAULT_MODEL_ID = "qwen3.5-plus";
-export const BAILIAN_DEFAULT_MODEL_REF = `bailian/${BAILIAN_DEFAULT_MODEL_ID}`;
-export const BAILIAN_DEFAULT_COST = {
+// Alibaba Cloud Model Studio Coding Plan
+export const MODELSTUDIO_CN_BASE_URL = "https://coding.dashscope.aliyuncs.com/v1";
+export const MODELSTUDIO_GLOBAL_BASE_URL = "https://coding-intl.dashscope.aliyuncs.com/v1";
+export const MODELSTUDIO_DEFAULT_MODEL_ID = "qwen3.5-plus";
+export const MODELSTUDIO_DEFAULT_MODEL_REF = `modelstudio/${MODELSTUDIO_DEFAULT_MODEL_ID}`;
+export const MODELSTUDIO_DEFAULT_COST = {
   input: 0,
   output: 0,
   cacheRead: 0,
   cacheWrite: 0,
 };
 
-const BAILIAN_MODEL_CATALOG = {
+const MODELSTUDIO_MODEL_CATALOG = {
   "qwen3.5-plus": {
     name: "qwen3.5-plus",
     reasoning: false,
@@ -297,9 +296,9 @@ const BAILIAN_MODEL_CATALOG = {
   },
 } as const;
 
-type BailianCatalogId = keyof typeof BAILIAN_MODEL_CATALOG;
+type ModelStudioCatalogId = keyof typeof MODELSTUDIO_MODEL_CATALOG;
 
-export function buildBailianModelDefinition(params: {
+export function buildModelStudioModelDefinition(params: {
   id: string;
   name?: string;
   reasoning?: boolean;
@@ -308,7 +307,7 @@ export function buildBailianModelDefinition(params: {
   contextWindow?: number;
   maxTokens?: number;
 }): ModelDefinitionConfig {
-  const catalog = BAILIAN_MODEL_CATALOG[params.id as BailianCatalogId];
+  const catalog = MODELSTUDIO_MODEL_CATALOG[params.id as ModelStudioCatalogId];
   return {
     id: params.id,
     name: params.name ?? catalog?.name ?? params.id,
@@ -316,14 +315,14 @@ export function buildBailianModelDefinition(params: {
     input:
       (params.input as ("text" | "image")[]) ??
       ([...(catalog?.input ?? ["text"])] as ("text" | "image")[]),
-    cost: params.cost ?? BAILIAN_DEFAULT_COST,
+    cost: params.cost ?? MODELSTUDIO_DEFAULT_COST,
     contextWindow: params.contextWindow ?? catalog?.contextWindow ?? 262144,
     maxTokens: params.maxTokens ?? catalog?.maxTokens ?? 65536,
   };
 }
 
-export function buildBailianDefaultModelDefinition(): ModelDefinitionConfig {
-  return buildBailianModelDefinition({
-    id: BAILIAN_DEFAULT_MODEL_ID,
+export function buildModelStudioDefaultModelDefinition(): ModelDefinitionConfig {
+  return buildModelStudioModelDefinition({
+    id: MODELSTUDIO_DEFAULT_MODEL_ID,
   });
 }
