@@ -72,6 +72,7 @@ Welcome to the lobster tank! 🦞
 
 - **Robin Waslander** - Security, PR triage, bug fixes
   - GitHub: [@hydro13](https://github.com/hydro13) · X: [@Robin_waslander](https://x.com/Robin_waslander)
+
 ## How to Contribute
 
 1. **Bugs & small fixes** → Open a PR!
