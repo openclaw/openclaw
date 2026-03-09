@@ -217,7 +217,10 @@ async function resolveStickerMedia(params: {
       },
     };
   } catch (err) {
-    logVerbose(`telegram: failed to process sticker: ${String(err)}`);
+    // Log only error name to avoid leaking bot token in URL
+    logVerbose(
+      `telegram: failed to process sticker: ${err instanceof Error ? err.name : "UnknownError"}`,
+    );
     return null;
   }
 }
