@@ -28,6 +28,10 @@ import type {
 const LAUNCH_AGENT_DIR_MODE = 0o755;
 const LAUNCH_AGENT_PLIST_MODE = 0o644;
 
+function joinLaunchdPath(base: string, ...segments: string[]): string {
+  return path.posix.join(toPosixPath(base), ...segments.map(toPosixPath));
+}
+
 function resolveLaunchAgentLabel(args?: { env?: Record<string, string | undefined> }): string {
   const envLabel = args?.env?.OPENCLAW_LAUNCHD_LABEL?.trim();
   if (envLabel) {
@@ -40,8 +44,7 @@ function resolveLaunchAgentPlistPathForLabel(
   env: Record<string, string | undefined>,
   label: string,
 ): string {
-  const home = toPosixPath(resolveHomeDir(env));
-  return path.posix.join(home, "Library", "LaunchAgents", `${label}.plist`);
+  return joinLaunchdPath(resolveHomeDir(env), "Library", "LaunchAgents", `${label}.plist`);
 }
 
 export function resolveLaunchAgentPlistPath(env: GatewayServiceEnv): string {
@@ -54,13 +57,13 @@ export function resolveGatewayLogPaths(env: GatewayServiceEnv): {
   stdoutPath: string;
   stderrPath: string;
 } {
-  const stateDir = resolveGatewayStateDir(env);
-  const logDir = path.join(stateDir, "logs");
+  const stateDir = toPosixPath(resolveGatewayStateDir(env));
+  const logDir = joinLaunchdPath(stateDir, "logs");
   const prefix = env.OPENCLAW_LOG_PREFIX?.trim() || "gateway";
   return {
     logDir,
-    stdoutPath: path.join(logDir, `${prefix}.log`),
-    stderrPath: path.join(logDir, `${prefix}.err.log`),
+    stdoutPath: joinLaunchdPath(logDir, `${prefix}.log`),
+    stderrPath: joinLaunchdPath(logDir, `${prefix}.err.log`),
   };
 }
 
@@ -276,8 +279,8 @@ export async function uninstallLegacyLaunchAgents({
     return agents;
   }
 
-  const home = resolveHomeDir(env);
-  const trashDir = path.join(home, ".Trash");
+  const home = toPosixPath(resolveHomeDir(env));
+  const trashDir = joinLaunchdPath(home, ".Trash");
   try {
     await fs.mkdir(trashDir, { recursive: true });
   } catch {
@@ -294,7 +297,7 @@ export async function uninstallLegacyLaunchAgents({
       continue;
     }
 
-    const dest = path.join(trashDir, `${agent.label}.plist`);
+    const dest = joinLaunchdPath(trashDir, `${agent.label}.plist`);
     try {
       await fs.rename(agent.plistPath, dest);
       stdout.write(`${formatLine("Moved legacy LaunchAgent to Trash", dest)}\n`);
@@ -323,9 +326,9 @@ export async function uninstallLaunchAgent({
     return;
   }
 
-  const home = resolveHomeDir(env);
-  const trashDir = path.join(home, ".Trash");
-  const dest = path.join(trashDir, `${label}.plist`);
+  const home = toPosixPath(resolveHomeDir(env));
+  const trashDir = joinLaunchdPath(home, ".Trash");
+  const dest = joinLaunchdPath(trashDir, `${label}.plist`);
   try {
     await fs.mkdir(trashDir, { recursive: true });
     await fs.rename(plistPath, dest);
@@ -415,10 +418,10 @@ export async function installLaunchAgent({
   }
 
   const plistPath = resolveLaunchAgentPlistPathForLabel(env, label);
-  const home = resolveHomeDir(env);
+  const home = toPosixPath(resolveHomeDir(env));
   await ensureSecureDirectory(home);
-  await ensureSecureDirectory(path.join(home, "Library"));
-  await ensureSecureDirectory(path.dirname(plistPath));
+  await ensureSecureDirectory(joinLaunchdPath(home, "Library"));
+  await ensureSecureDirectory(path.posix.dirname(plistPath));
 
   const serviceDescription = resolveGatewayServiceDescription({ env, environment, description });
   const plist = buildLaunchAgentPlist({

@@ -10,6 +10,7 @@ import {
   parseLaunchctlPrint,
   repairLaunchAgentBootstrap,
   restartLaunchAgent,
+  resolveGatewayLogPaths,
   resolveLaunchAgentPlistPath,
 } from "./launchd.js";
 
@@ -445,5 +446,20 @@ describe("resolveLaunchAgentPlistPath", () => {
     },
   ])("$name", ({ env, expected }) => {
     expect(resolveLaunchAgentPlistPath(env)).toBe(expected);
+  });
+});
+
+describe("resolveGatewayLogPaths", () => {
+  it("normalizes mixed separators to POSIX paths for launchd plist output", () => {
+    const env = {
+      HOME: "/Users/test",
+      OPENCLAW_STATE_DIR: "/Users/test\\.openclaw",
+    };
+
+    expect(resolveGatewayLogPaths(env)).toEqual({
+      logDir: "/Users/test/.openclaw/logs",
+      stdoutPath: "/Users/test/.openclaw/logs/gateway.log",
+      stderrPath: "/Users/test/.openclaw/logs/gateway.err.log",
+    });
   });
 });
