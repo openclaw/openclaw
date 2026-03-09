@@ -218,7 +218,7 @@ export const id: TranslationMap = {
       expressionPlaceholder: "0 7 * * *",
       everyAmountPlaceholder: "30",
       timezoneOptional: "Zona Waktu (opsional)",
-      timezonePlaceholder: "Jakarta/Asia",
+      timezonePlaceholder: "Asia/Jakarta",
       timezoneHelp: "Pilih zona waktu umum atau masukkan zona waktu IANA yang valid.",
       jitterHelp: "Perlu jitter? Gunakan Advanced → Stagger window / Stagger unit.",
       execution: "Eksekusi",
