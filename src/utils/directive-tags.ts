@@ -19,7 +19,7 @@ const REPLY_TAG_RE = /\[\[\s*(?:reply_to_current|reply_to\s*:\s*([^\]\n]+))\s*\]
 
 function collapseSingleLineDirectiveWhitespace(text: string): string {
   if (text.includes("\n")) {
-    return text;
+    return text.replace(/[ \t]+\n/g, "\n");
   }
   return text.replace(/[^\S\n]+/g, " ");
 }
