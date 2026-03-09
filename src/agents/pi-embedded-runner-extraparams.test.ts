@@ -804,7 +804,9 @@ describe("applyExtraParamsToAgent", () => {
 
     const model = {
       api: "anthropic-messages",
-      provider: "kimi-code",
+      provider: "kimi-coding",
+      id: "k2p5",
+      baseUrl: "https://api.kimi.com/coding/",
       id: "k2p5",
       baseUrl: "https://api.kimi.com/coding/",
       compat: {
