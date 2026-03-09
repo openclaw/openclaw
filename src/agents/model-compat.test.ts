@@ -262,13 +262,25 @@ describe("normalizeModelCompat", () => {
     expect(supportsDeveloperRole(normalized)).toBe(false);
   });
 
-  it("overrides explicit supportsUsageInStreaming true on non-native endpoints", () => {
+  it("respects explicit supportsUsageInStreaming true on non-native endpoints", () => {
     const model = {
       ...baseModel(),
       provider: "custom-cpa",
       baseUrl: "https://proxy.example.com/v1",
       compat: { supportsUsageInStreaming: true },
     };
+    const normalized = normalizeModelCompat(model);
+    expect(supportsUsageInStreaming(normalized)).toBe(true);
+    expect(supportsDeveloperRole(normalized)).toBe(false);
+  });
+
+  it("defaults supportsUsageInStreaming to false when not explicitly set", () => {
+    const model = {
+      ...baseModel(),
+      provider: "custom-cpa",
+      baseUrl: "https://proxy.example.com/v1",
+    };
+    delete (model as { compat?: unknown }).compat;
     const normalized = normalizeModelCompat(model);
     expect(supportsUsageInStreaming(normalized)).toBe(false);
   });
