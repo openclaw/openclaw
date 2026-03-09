@@ -24,7 +24,7 @@ describe("gateway role policy", () => {
     expect(isRoleAuthorizedForMethod("node", "node.pending.drain")).toBe(true);
     expect(isRoleAuthorizedForMethod("node", "status")).toBe(false);
     expect(isRoleAuthorizedForMethod("operator", "status")).toBe(true);
-    expect(isRoleAuthorizedForMethod("operator", "node.pending.drain")).toBe(true);
+    expect(isRoleAuthorizedForMethod("operator", "node.pending.drain")).toBe(false);
     expect(isRoleAuthorizedForMethod("operator", "node.event")).toBe(false);
   });
 });

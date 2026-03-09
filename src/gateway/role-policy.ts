@@ -1,7 +1,6 @@
 import { isNodeRoleMethod } from "./method-scopes.js";
 
 export const GATEWAY_ROLES = ["operator", "node"] as const;
-const SHARED_ROLE_METHODS = new Set(["node.pending.drain"]);
 
 export type GatewayRole = (typeof GATEWAY_ROLES)[number];
 
@@ -17,9 +16,6 @@ export function roleCanSkipDeviceIdentity(role: GatewayRole, sharedAuthOk: boole
 }
 
 export function isRoleAuthorizedForMethod(role: GatewayRole, method: string): boolean {
-  if (SHARED_ROLE_METHODS.has(method)) {
-    return true;
-  }
   if (isNodeRoleMethod(method)) {
     return role === "node";
   }
