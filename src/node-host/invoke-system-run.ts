@@ -451,6 +451,11 @@ async function executeSystemRunPhase(
         env: phase.env,
         platform: process.platform,
       });
+      if (patterns.length === 0) {
+        logWarn(
+          "exec: allow-always could not persist any allowlist patterns (command may contain only shell builtins like cd, export, etc.)",
+        );
+      }
       for (const pattern of patterns) {
         if (pattern) {
           addAllowlistEntry(phase.approvals.file, phase.agentId, pattern);

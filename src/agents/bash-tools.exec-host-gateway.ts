@@ -11,7 +11,7 @@ import {
 } from "../infra/exec-approvals.js";
 import { detectCommandObfuscation } from "../infra/exec-obfuscation-detect.js";
 import type { SafeBinProfile } from "../infra/exec-safe-bin-policy.js";
-import { logInfo } from "../logger.js";
+import { logInfo, logWarn } from "../logger.js";
 import { markBackgrounded, tail } from "./bash-process-registry.js";
 import {
   buildExecApprovalRequesterContext,
@@ -217,6 +217,11 @@ export async function processGatewayAllowlist(
             env: params.env,
             platform: process.platform,
           });
+          if (patterns.length === 0) {
+            logWarn(
+              "exec: allow-always could not persist any allowlist patterns (command may contain only shell builtins like cd, export, etc.)",
+            );
+          }
           for (const pattern of patterns) {
             if (pattern) {
               addAllowlistEntry(approvals.file, params.agentId, pattern);
