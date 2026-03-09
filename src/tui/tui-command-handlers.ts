@@ -1,3 +1,5 @@
+import { createProviderAuthChecker } from "../commands/model-picker.js";
+import { formatTokenK } from "../commands/models/shared.js";
 import { randomUUID } from "node:crypto";
 import type { Component, SelectItem, TUI } from "@mariozechner/pi-tui";
 import {

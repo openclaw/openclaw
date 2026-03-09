@@ -58,7 +58,7 @@ function hasAuthForProvider(
   return false;
 }
 
-function createProviderAuthChecker(params: {
+export function createProviderAuthChecker(params: {
   cfg: OpenClawConfig;
   agentDir?: string;
 }): (provider: string) => boolean {
