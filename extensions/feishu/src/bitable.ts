@@ -340,6 +340,7 @@ async function createApp(
   name: string,
   folderToken?: string,
   logger?: CleanupLogger,
+  options?: { grantToRequester?: boolean; requesterOpenId?: string },
 ) {
   const res = await client.bitable.app.create({
     data: {
@@ -354,7 +355,7 @@ async function createApp(
     throw new Error("Failed to create Bitable: no app_token returned");
   }
 
-  const log: CleanupLogger = logger ?? { debug: () => {}, warn: () => {} };
+  const log: CleanupLogger = logger ?? { debug: () => { }, warn: () => { } };
   let tableId: string | undefined;
   let cleanedRows = 0;
   let cleanedFields = 0;
@@ -375,6 +376,36 @@ async function createApp(
     log.debug(`Cleanup failed (non-critical): ${err}`);
   }
 
+  // Grant permission to the requesting user (mirrors docx.ts createDoc behavior)
+  const shouldGrantToRequester = options?.grantToRequester !== false;
+  const requesterOpenId = options?.requesterOpenId?.trim();
+  const requesterPermType: "edit" = "edit";
+
+  let requesterPermissionAdded = false;
+  let requesterPermissionSkippedReason: string | undefined;
+  let requesterPermissionError: string | undefined;
+
+  if (shouldGrantToRequester) {
+    if (!requesterOpenId) {
+      requesterPermissionSkippedReason = "trusted requester identity unavailable";
+    } else {
+      try {
+        await client.drive.permissionMember.create({
+          path: { token: appToken },
+          params: { type: "bitable", need_notification: false },
+          data: {
+            member_type: "openid",
+            member_id: requesterOpenId,
+            perm: requesterPermType,
+          },
+        });
+        requesterPermissionAdded = true;
+      } catch (err) {
+        requesterPermissionError = err instanceof Error ? err.message : String(err);
+      }
+    }
+  }
+
   return {
     app_token: appToken,
     table_id: tableId,
@@ -382,6 +413,15 @@ async function createApp(
     url: res.data?.app?.url,
     cleaned_placeholder_rows: cleanedRows,
     cleaned_default_fields: cleanedFields,
+    ...(shouldGrantToRequester && {
+      requester_permission_added: requesterPermissionAdded,
+      ...(requesterOpenId && { requester_open_id: requesterOpenId }),
+      requester_perm_type: requesterPermType,
+      ...(requesterPermissionSkippedReason && {
+        requester_permission_skipped_reason: requesterPermissionSkippedReason,
+      }),
+      ...(requesterPermissionError && { requester_permission_error: requesterPermissionError }),
+    }),
     hint: tableId
       ? `Table created. Use app_token="${appToken}" and table_id="${tableId}" for other bitable tools.`
       : "Table created. Use feishu_bitable_get_meta to get table_id and field details.",
@@ -496,6 +536,12 @@ const CreateAppSchema = Type.Object({
   folder_token: Type.Optional(
     Type.String({
       description: "Optional folder token to place the Bitable in a specific folder",
+    }),
+  ),
+  grant_to_requester: Type.Optional(
+    Type.Boolean({
+      description:
+        "Grant edit permission to the trusted requesting Feishu user from runtime context (default: true).",
     }),
   ),
 });
@@ -684,18 +730,48 @@ export function registerFeishuBitableTools(api: OpenClawPluginApi) {
     },
   });
 
-  registerBitableTool<{ name: string; folder_token?: string; accountId?: string }>({
-    name: "feishu_bitable_create_app",
-    label: "Feishu Bitable Create App",
-    description: "Create a new Bitable (multidimensional table) application",
-    parameters: CreateAppSchema,
-    async execute({ params, defaultAccountId }) {
-      return createApp(getClient(params, defaultAccountId), params.name, params.folder_token, {
-        debug: (msg) => api.logger.debug?.(msg),
-        warn: (msg) => api.logger.warn?.(msg),
-      });
+  // Create app tool needs access to requester identity for permission granting
+  api.registerTool(
+    (ctx) => {
+      const defaultAccountId = ctx.agentAccountId;
+      const trustedRequesterOpenId =
+        ctx.messageChannel === "feishu" ? ctx.requesterSenderId?.trim() || undefined : undefined;
+      return {
+        name: "feishu_bitable_create_app",
+        label: "Feishu Bitable Create App",
+        description: "Create a new Bitable (multidimensional table) application",
+        parameters: CreateAppSchema,
+        async execute(_toolCallId, rawParams) {
+          const params = rawParams as {
+            name: string;
+            folder_token?: string;
+            grant_to_requester?: boolean;
+            accountId?: string;
+          };
+          try {
+            return json(
+              await createApp(
+                getClient(params, defaultAccountId),
+                params.name,
+                params.folder_token,
+                {
+                  debug: (msg) => api.logger.debug?.(msg),
+                  warn: (msg) => api.logger.warn?.(msg),
+                },
+                {
+                  grantToRequester: params.grant_to_requester,
+                  requesterOpenId: trustedRequesterOpenId,
+                },
+              ),
+            );
+          } catch (err) {
+            return json({ error: err instanceof Error ? err.message : String(err) });
+          }
+        },
+      };
     },
-  });
+    { name: "feishu_bitable_create_app" },
+  );
 
   registerBitableTool<{
     app_token: string;
