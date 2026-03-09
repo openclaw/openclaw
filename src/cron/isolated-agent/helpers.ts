@@ -108,6 +108,25 @@ export function isHeartbeatOnlyResponse(payloads: DeliveryPayload[], ackMaxChars
   return shouldSkipHeartbeatOnlyDelivery(payloads, ackMaxChars);
 }
 
+/**
+ * Pick the text of the first non-reasoning payload (for fallback summary paths
+ * where pickSummaryFromPayloads returned undefined). See Copilot review on #41208.
+ */
+export function pickFirstNonReasoningText(
+  payloads: Array<{ text?: string | undefined; isReasoning?: boolean }>,
+): string | undefined {
+  for (const p of payloads) {
+    if (p?.isReasoning) {
+      continue;
+    }
+    const clean = (p?.text ?? "").trim();
+    if (clean) {
+      return clean;
+    }
+  }
+  return undefined;
+}
+
 export function resolveHeartbeatAckMaxChars(agentCfg?: { heartbeat?: { ackMaxChars?: number } }) {
   const raw = agentCfg?.heartbeat?.ackMaxChars ?? DEFAULT_HEARTBEAT_ACK_MAX_CHARS;
   return Math.max(0, raw);

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   isHeartbeatOnlyResponse,
+  pickFirstNonReasoningText,
   pickLastDeliverablePayload,
   pickLastNonEmptyTextFromPayloads,
   pickSummaryFromOutput,
@@ -106,6 +107,11 @@ describe("pickSummaryFromOutput — thinking tag stripping (regression #40480)",
   it("preserves text without thinking tags", () => {
     expect(pickSummaryFromOutput("All clear, no issues.")).toBe("All clear, no issues.");
   });
+
+  it("strips <antthinking> tags", () => {
+    const text = "<antthinking>Internal chain of thought</antthinking>Final answer.";
+    expect(pickSummaryFromOutput(text)).toBe("Final answer.");
+  });
 });
 
 describe("pickSummaryFromPayloads — isReasoning filtering (regression #40480)", () => {
@@ -147,6 +153,31 @@ describe("pickLastDeliverablePayload — isReasoning filtering (regression #4048
     const deliverable = { text: "Deliverable content" };
     const reasoning = { text: "Reasoning content", isReasoning: true as const };
     expect(pickLastDeliverablePayload([deliverable, reasoning])).toBe(deliverable);
+  });
+});
+
+describe("pickFirstNonReasoningText", () => {
+  it("picks first non-reasoning text", () => {
+    const payloads = [
+      { text: "Internal reasoning", isReasoning: true },
+      { text: "User-facing text" },
+    ];
+    expect(pickFirstNonReasoningText(payloads)).toBe("User-facing text");
+  });
+
+  it("returns undefined when all payloads are reasoning", () => {
+    expect(
+      pickFirstNonReasoningText([{ text: "reasoning only", isReasoning: true }]),
+    ).toBeUndefined();
+  });
+
+  it("skips empty text payloads", () => {
+    const payloads = [{ text: "" }, { text: "actual content" }];
+    expect(pickFirstNonReasoningText(payloads)).toBe("actual content");
+  });
+
+  it("returns undefined for empty payloads", () => {
+    expect(pickFirstNonReasoningText([])).toBeUndefined();
   });
 });
 
