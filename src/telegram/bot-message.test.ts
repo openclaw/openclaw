@@ -155,6 +155,59 @@ describe("telegram bot message processor", () => {
     expect(second.replyToMode).toBe("first");
   });
 
+  it("honors custom fixed burst windows when learning is disabled", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-03-06T00:00:00.000Z"));
+    buildTelegramMessageContext.mockResolvedValue({ route: { sessionKey: "agent:main:main" } });
+
+    const processMessage = createTelegramMessageProcessor({
+      ...baseDeps,
+      telegramCfg: {
+        replyAdaptive: {
+          baseWindowMs: 5_000,
+          denseWindowMs: 8_000,
+          veryDenseWindowMs: 10_000,
+        },
+      },
+    } as unknown as Parameters<typeof createTelegramMessageProcessor>[0]);
+
+    await processSampleMessage(processMessage, { messageId: 463, text: "short" });
+    vi.setSystemTime(new Date("2026-03-06T00:00:11.000Z"));
+    await processSampleMessage(processMessage, { messageId: 464, text: "short" });
+
+    const second = dispatchTelegramMessage.mock.calls[1]?.[0] as { replyToMode?: string };
+    expect(second.replyToMode).toBe("off");
+    vi.useRealTimers();
+  });
+
+  it("expands burst eligibility with EMA learning when enabled", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-03-06T00:00:00.000Z"));
+    buildTelegramMessageContext.mockResolvedValue({ route: { sessionKey: "agent:main:main" } });
+
+    const processMessage = createTelegramMessageProcessor({
+      ...baseDeps,
+      telegramCfg: {
+        replyAdaptive: {
+          learning: {
+            enabled: true,
+            shortMessageWeight: 0.9,
+          },
+        },
+      },
+    } as unknown as Parameters<typeof createTelegramMessageProcessor>[0]);
+
+    await processSampleMessage(processMessage, { messageId: 465, text: "a" });
+    vi.setSystemTime(new Date("2026-03-06T00:00:09.000Z"));
+    await processSampleMessage(processMessage, { messageId: 466, text: "b" });
+    vi.setSystemTime(new Date("2026-03-06T00:00:33.000Z"));
+    await processSampleMessage(processMessage, { messageId: 467, text: "c" });
+
+    const third = dispatchTelegramMessage.mock.calls[2]?.[0] as { replyToMode?: string };
+    expect(third.replyToMode).toBe("first");
+    vi.useRealTimers();
+  });
+
   it("skips dispatch when no context is produced", async () => {
     buildTelegramMessageContext.mockResolvedValue(null);
     const processMessage = createTelegramMessageProcessor(baseDeps);
