@@ -1,7 +1,9 @@
 import { createServer, type RequestListener } from "node:http";
 import type { AddressInfo } from "node:net";
-import type { OpenClawConfig, PluginRuntime } from "openclaw/plugin-sdk";
+import type { OpenClawConfig, PluginRuntime } from "openclaw/plugin-sdk/zalo";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createEmptyPluginRegistry } from "../../../src/plugins/registry.js";
+import { setActivePluginRegistry } from "../../../src/plugins/runtime.js";
 import {
   clearZaloWebhookSecurityStateForTest,
   getZaloWebhookRateLimitStateSizeForTest,
@@ -47,13 +49,16 @@ function registerTarget(params: {
   path: string;
   secret?: string;
   statusSink?: (patch: { lastInboundAt?: number; lastOutboundAt?: number }) => void;
+  account?: ResolvedZaloAccount;
+  config?: OpenClawConfig;
+  core?: PluginRuntime;
 }): () => void {
   return registerZaloWebhookTarget({
     token: "tok",
-    account: DEFAULT_ACCOUNT,
-    config: {} as OpenClawConfig,
+    account: params.account ?? DEFAULT_ACCOUNT,
+    config: params.config ?? ({} as OpenClawConfig),
     runtime: {},
-    core: {} as PluginRuntime,
+    core: params.core ?? ({} as PluginRuntime),
     secret: params.secret ?? "secret",
     path: params.path,
     mediaMaxMb: 5,
@@ -61,9 +66,86 @@ function registerTarget(params: {
   });
 }
 
+function createPairingAuthCore(params?: { storeAllowFrom?: string[]; pairingCreated?: boolean }): {
+  core: PluginRuntime;
+  readAllowFromStore: ReturnType<typeof vi.fn>;
+  upsertPairingRequest: ReturnType<typeof vi.fn>;
+} {
+  const readAllowFromStore = vi.fn().mockResolvedValue(params?.storeAllowFrom ?? []);
+  const upsertPairingRequest = vi
+    .fn()
+    .mockResolvedValue({ code: "PAIRCODE", created: params?.pairingCreated ?? false });
+  const core = {
+    logging: {
+      shouldLogVerbose: () => false,
+    },
+    channel: {
+      pairing: {
+        readAllowFromStore,
+        upsertPairingRequest,
+        buildPairingReply: vi.fn(() => "Pairing code: PAIRCODE"),
+      },
+      commands: {
+        shouldComputeCommandAuthorized: vi.fn(() => false),
+        resolveCommandAuthorizedFromAuthorizers: vi.fn(() => false),
+      },
+    },
+  } as unknown as PluginRuntime;
+  return { core, readAllowFromStore, upsertPairingRequest };
+}
+
+async function postUntilRateLimited(params: {
+  baseUrl: string;
+  path: string;
+  secret: string;
+  withNonceQuery?: boolean;
+  attempts?: number;
+}): Promise<boolean> {
+  const attempts = params.attempts ?? 130;
+  for (let i = 0; i < attempts; i += 1) {
+    const url = params.withNonceQuery
+      ? `${params.baseUrl}${params.path}?nonce=${i}`
+      : `${params.baseUrl}${params.path}`;
+    const response = await fetch(url, {
+      method: "POST",
+      headers: {
+        "x-bot-api-secret-token": params.secret,
+        "content-type": "application/json",
+      },
+      body: "{}",
+    });
+    if (response.status === 429) {
+      return true;
+    }
+  }
+  return false;
+}
+
 describe("handleZaloWebhookRequest", () => {
   afterEach(() => {
     clearZaloWebhookSecurityStateForTest();
+    setActivePluginRegistry(createEmptyPluginRegistry());
+  });
+
+  it("registers and unregisters plugin HTTP route at path boundaries", () => {
+    const registry = createEmptyPluginRegistry();
+    setActivePluginRegistry(registry);
+    const unregisterA = registerTarget({ path: "/hook" });
+    const unregisterB = registerTarget({ path: "/hook" });
+
+    expect(registry.httpRoutes).toHaveLength(1);
+    expect(registry.httpRoutes[0]).toEqual(
+      expect.objectContaining({
+        pluginId: "zalo",
+        path: "/hook",
+        source: "zalo-webhook",
+      }),
+    );
+
+    unregisterA();
+    expect(registry.httpRoutes).toHaveLength(1);
+    unregisterB();
+    expect(registry.httpRoutes).toHaveLength(0);
   });
 
   it("returns 400 for non-object payloads", async () => {
@@ -184,21 +266,11 @@ describe("handleZaloWebhookRequest", () => {
 
     try {
       await withServer(webhookRequestHandler, async (baseUrl) => {
-        let saw429 = false;
-        for (let i = 0; i < 130; i += 1) {
-          const response = await fetch(`${baseUrl}/hook-rate`, {
-            method: "POST",
-            headers: {
-              "x-bot-api-secret-token": "secret",
-              "content-type": "application/json",
-            },
-            body: "{}",
-          });
-          if (response.status === 429) {
-            saw429 = true;
-            break;
-          }
-        }
+        const saw429 = await postUntilRateLimited({
+          baseUrl,
+          path: "/hook-rate",
+          secret: "secret", // pragma: allowlist secret
+        });
 
         expect(saw429).toBe(true);
       });
@@ -206,7 +278,6 @@ describe("handleZaloWebhookRequest", () => {
       unregister();
     }
   });
-
   it("does not grow status counters when query strings churn on unauthorized requests", async () => {
     const unregister = registerTarget({ path: "/hook-query-status" });
 
@@ -216,7 +287,7 @@ describe("handleZaloWebhookRequest", () => {
           const response = await fetch(`${baseUrl}/hook-query-status?nonce=${i}`, {
             method: "POST",
             headers: {
-              "x-bot-api-secret-token": "invalid-token",
+              "x-bot-api-secret-token": "invalid-token", // pragma: allowlist secret
               "content-type": "application/json",
             },
             body: "{}",
@@ -236,21 +307,12 @@ describe("handleZaloWebhookRequest", () => {
 
     try {
       await withServer(webhookRequestHandler, async (baseUrl) => {
-        let saw429 = false;
-        for (let i = 0; i < 130; i += 1) {
-          const response = await fetch(`${baseUrl}/hook-query-rate?nonce=${i}`, {
-            method: "POST",
-            headers: {
-              "x-bot-api-secret-token": "secret",
-              "content-type": "application/json",
-            },
-            body: "{}",
-          });
-          if (response.status === 429) {
-            saw429 = true;
-            break;
-          }
-        }
+        const saw429 = await postUntilRateLimited({
+          baseUrl,
+          path: "/hook-query-rate",
+          secret: "secret", // pragma: allowlist secret
+          withNonceQuery: true,
+        });
 
         expect(saw429).toBe(true);
         expect(getZaloWebhookRateLimitStateSizeForTest()).toBe(1);
@@ -258,5 +320,66 @@ describe("handleZaloWebhookRequest", () => {
     } finally {
       unregister();
     }
+  });
+
+  it("scopes DM pairing store reads and writes to accountId", async () => {
+    const { core, readAllowFromStore, upsertPairingRequest } = createPairingAuthCore({
+      pairingCreated: false,
+    });
+    const account: ResolvedZaloAccount = {
+      ...DEFAULT_ACCOUNT,
+      accountId: "work",
+      config: {
+        dmPolicy: "pairing",
+        allowFrom: [],
+      },
+    };
+    const unregister = registerTarget({
+      path: "/hook-account-scope",
+      account,
+      core,
+    });
+
+    const payload = {
+      event_name: "message.text.received",
+      message: {
+        from: { id: "123", name: "Attacker" },
+        chat: { id: "dm-work", chat_type: "PRIVATE" },
+        message_id: "msg-work-1",
+        date: Math.floor(Date.now() / 1000),
+        text: "hello",
+      },
+    };
+
+    try {
+      await withServer(webhookRequestHandler, async (baseUrl) => {
+        const response = await fetch(`${baseUrl}/hook-account-scope`, {
+          method: "POST",
+          headers: {
+            "x-bot-api-secret-token": "secret",
+            "content-type": "application/json",
+          },
+          body: JSON.stringify(payload),
+        });
+
+        expect(response.status).toBe(200);
+      });
+    } finally {
+      unregister();
+    }
+
+    expect(readAllowFromStore).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: "zalo",
+        accountId: "work",
+      }),
+    );
+    expect(upsertPairingRequest).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: "zalo",
+        id: "123",
+        accountId: "work",
+      }),
+    );
   });
 });

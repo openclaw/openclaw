@@ -5,10 +5,7 @@ import {
   type ExecAsk,
   type ExecSecurity,
   evaluateShellAllowlist,
-  maxAsk,
-  minSecurity,
   requiresExecApproval,
-  resolveExecApprovals,
   resolveExecApprovalsFromFile,
 } from "../infra/exec-approvals.js";
 import { detectCommandObfuscation } from "../infra/exec-obfuscation-detect.js";
@@ -19,13 +16,14 @@ import {
   buildExecApprovalRequesterContext,
   buildExecApprovalTurnSourceContext,
   registerExecApprovalRequestForHostOrThrow,
-  waitForExecApprovalDecision,
 } from "./bash-tools.exec-approval-request.js";
 import {
-  DEFAULT_APPROVAL_TIMEOUT_MS,
-  createApprovalSlug,
-  emitExecSystemEvent,
-} from "./bash-tools.exec-runtime.js";
+  createDefaultExecApprovalRequestContext,
+  resolveBaseExecApprovalDecision,
+  resolveApprovalDecisionOrUndefined,
+  resolveExecHostApprovalContext,
+} from "./bash-tools.exec-host-shared.js";
+import { createApprovalSlug, emitExecSystemEvent } from "./bash-tools.exec-runtime.js";
 import type { ExecToolDetails } from "./bash-tools.exec-types.js";
 import { callGatewayTool } from "./tools/gateway.js";
 import { listNodes, resolveNodeIdFromList } from "./tools/nodes-utils.js";
@@ -56,16 +54,12 @@ export type ExecuteNodeHostCommandParams = {
 export async function executeNodeHostCommand(
   params: ExecuteNodeHostCommandParams,
 ): Promise<AgentToolResult<ExecToolDetails>> {
-  const approvals = resolveExecApprovals(params.agentId, {
+  const { hostSecurity, hostAsk, askFallback } = resolveExecHostApprovalContext({
+    agentId: params.agentId,
     security: params.security,
     ask: params.ask,
+    host: "node",
   });
-  const hostSecurity = minSecurity(params.security, approvals.agent.security);
-  const hostAsk = maxAsk(params.ask, approvals.agent.ask);
-  const askFallback = approvals.agent.askFallback;
-  if (hostSecurity === "deny") {
-    throw new Error("exec denied: host=node security=deny");
-  }
   if (params.boundNode && params.requestedNode && params.boundNode !== params.requestedNode) {
     throw new Error(`exec node not allowed (bound to ${params.boundNode})`);
   }
@@ -213,13 +207,21 @@ export async function executeNodeHostCommand(
     }) satisfies Record<string, unknown>;
 
   if (requiresAsk) {
-    const approvalId = crypto.randomUUID();
-    const approvalSlug = createApprovalSlug(approvalId);
-    const contextKey = `exec:${approvalId}`;
-    const noticeSeconds = Math.max(1, Math.round(params.approvalRunningNoticeMs / 1000));
-    const warningText = params.warnings.length ? `${params.warnings.join("\n")}\n\n` : "";
-    let expiresAtMs = Date.now() + DEFAULT_APPROVAL_TIMEOUT_MS;
-    let preResolvedDecision: string | null | undefined;
+    const {
+      approvalId,
+      approvalSlug,
+      contextKey,
+      noticeSeconds,
+      warningText,
+      expiresAtMs: defaultExpiresAtMs,
+      preResolvedDecision: defaultPreResolvedDecision,
+    } = createDefaultExecApprovalRequestContext({
+      warnings: params.warnings,
+      approvalRunningNoticeMs: params.approvalRunningNoticeMs,
+      createApprovalSlug,
+    });
+    let expiresAtMs = defaultExpiresAtMs;
+    let preResolvedDecision = defaultPreResolvedDecision;
 
     // Register first so the returned approval ID is actionable immediately.
     const registration = await registerExecApprovalRequestForHostOrThrow({
@@ -243,38 +245,30 @@ export async function executeNodeHostCommand(
     preResolvedDecision = registration.finalDecision;
 
     void (async () => {
-      let decision: string | null = preResolvedDecision ?? null;
-      try {
-        // Some gateways may return a final decision inline during registration.
-        // Only call waitDecision when registration did not already carry one.
-        if (preResolvedDecision === undefined) {
-          decision = await waitForExecApprovalDecision(approvalId);
-        }
-      } catch {
-        emitExecSystemEvent(
-          `Exec denied (node=${nodeId} id=${approvalId}, approval-request-failed): ${params.command}`,
-          { sessionKey: params.notifySessionKey, contextKey },
-        );
+      const decision = await resolveApprovalDecisionOrUndefined({
+        approvalId,
+        preResolvedDecision,
+        onFailure: () =>
+          emitExecSystemEvent(
+            `Exec denied (node=${nodeId} id=${approvalId}, approval-request-failed): ${params.command}`,
+            { sessionKey: params.notifySessionKey, contextKey },
+          ),
+      });
+      if (decision === undefined) {
         return;
       }
 
-      let approvedByAsk = false;
+      const baseDecision = resolveBaseExecApprovalDecision({
+        decision,
+        askFallback,
+        obfuscationDetected: obfuscation.detected,
+      });
+      let approvedByAsk = baseDecision.approvedByAsk;
       let approvalDecision: "allow-once" | "allow-always" | null = null;
-      let deniedReason: string | null = null;
+      let deniedReason = baseDecision.deniedReason;
 
-      if (decision === "deny") {
-        deniedReason = "user-denied";
-      } else if (!decision) {
-        if (obfuscation.detected) {
-          deniedReason = "approval-timeout (obfuscation-detected)";
-        } else if (askFallback === "full") {
-          approvedByAsk = true;
-          approvalDecision = "allow-once";
-        } else if (askFallback === "allowlist") {
-          // Defer allowlist enforcement to the node host.
-        } else {
-          deniedReason = "approval-timeout";
-        }
+      if (baseDecision.timedOut && askFallback === "full" && approvedByAsk) {
+        approvalDecision = "allow-once";
       } else if (decision === "allow-once") {
         approvedByAsk = true;
         approvalDecision = "allow-once";

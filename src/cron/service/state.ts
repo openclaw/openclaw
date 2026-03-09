@@ -96,6 +96,8 @@ export type CronServiceDeps = {
     text: string;
     channel: CronMessageChannel;
     to?: string;
+    mode?: "announce" | "webhook";
+    accountId?: string;
   }) => Promise<void>;
   onEvent?: (evt: CronEvent) => void;
 };
@@ -140,6 +142,7 @@ export type CronStatusSummary = {
 
 export type CronRunResult =
   | { ok: true; ran: true }
+  | { ok: true; enqueued: true; runId: string }
   | { ok: true; ran: false; reason: "not-due" }
   | { ok: true; ran: false; reason: "already-running" }
   | { ok: false };

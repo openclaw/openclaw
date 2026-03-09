@@ -322,16 +322,14 @@ export function isValidIPv4(host: string): boolean {
  * Note: 0.0.0.0 and :: are NOT loopback - they bind to all interfaces.
  */
 export function isLoopbackHost(host: string): boolean {
-  if (!host) {
+  const parsed = parseHostForAddressChecks(host);
+  if (!parsed) {
     return false;
   }
-  const h = host.trim().toLowerCase();
-  if (h === "localhost") {
+  if (parsed.isLocalhost) {
     return true;
   }
-  // Handle bracketed IPv6 addresses like [::1]
-  const unbracket = h.startsWith("[") && h.endsWith("]") ? h.slice(1, -1) : h;
-  return isLoopbackAddress(unbracket);
+  return isLoopbackAddress(parsed.unbracketedHost);
 }
 
 /**
@@ -353,16 +351,14 @@ export function isLocalishHost(hostHeader?: string): boolean {
  * RFC 1918, link-local, CGNAT, and IPv6 ULA/link-local addresses.
  */
 export function isPrivateOrLoopbackHost(host: string): boolean {
-  if (!host) {
+  const parsed = parseHostForAddressChecks(host);
+  if (!parsed) {
     return false;
   }
-  const h = host.trim().toLowerCase();
-  if (h === "localhost") {
+  if (parsed.isLocalhost) {
     return true;
   }
-  // Handle bracketed IPv6 addresses like [::1]
-  const unbracket = h.startsWith("[") && h.endsWith("]") ? h.slice(1, -1) : h;
-  const normalized = normalizeIp(unbracket);
+  const normalized = normalizeIp(parsed.unbracketedHost);
   if (!normalized || !isPrivateOrLoopbackAddress(normalized)) {
     return false;
   }
@@ -379,6 +375,26 @@ export function isPrivateOrLoopbackHost(host: string): boolean {
     }
   }
   return true;
+}
+
+function parseHostForAddressChecks(
+  host: string,
+): { isLocalhost: boolean; unbracketedHost: string } | null {
+  if (!host) {
+    return null;
+  }
+  const normalizedHost = host.trim().toLowerCase();
+  if (normalizedHost === "localhost") {
+    return { isLocalhost: true, unbracketedHost: normalizedHost };
+  }
+  return {
+    isLocalhost: false,
+    // Handle bracketed IPv6 addresses like [::1]
+    unbracketedHost:
+      normalizedHost.startsWith("[") && normalizedHost.endsWith("]")
+        ? normalizedHost.slice(1, -1)
+        : normalizedHost,
+  };
 }
 
 /**
@@ -405,11 +421,17 @@ export function isSecureWebSocketUrl(
     return false;
   }
 
-  if (parsed.protocol === "wss:") {
+  // Node's ws client accepts http(s) URLs and normalizes them to ws(s).
+  // Treat those aliases the same way here so loopback cron announce delivery
+  // and TLS-backed https endpoints follow the same security policy.
+  const protocol =
+    parsed.protocol === "https:" ? "wss:" : parsed.protocol === "http:" ? "ws:" : parsed.protocol;
+
+  if (protocol === "wss:") {
     return true;
   }
 
-  if (parsed.protocol !== "ws:") {
+  if (protocol !== "ws:") {
     return false;
   }
 
@@ -419,7 +441,16 @@ export function isSecureWebSocketUrl(
   }
   // Optional break-glass for trusted private-network overlays.
   if (opts?.allowPrivateWs) {
-    return isPrivateOrLoopbackHost(parsed.hostname);
+    if (isPrivateOrLoopbackHost(parsed.hostname)) {
+      return true;
+    }
+    // Hostnames may resolve to private networks (for example in VPN/Tailnet DNS),
+    // but resolution is not available in this synchronous validator.
+    const hostForIpCheck =
+      parsed.hostname.startsWith("[") && parsed.hostname.endsWith("]")
+        ? parsed.hostname.slice(1, -1)
+        : parsed.hostname;
+    return net.isIP(hostForIpCheck) === 0;
   }
   return false;
 }

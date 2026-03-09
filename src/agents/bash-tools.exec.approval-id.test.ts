@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { buildSystemRunPreparePayload } from "../test-utils/system-run-prepare-payload.js";
 
 vi.mock("./tools/gateway.js", () => ({
   callGatewayTool: vi.fn(),
@@ -38,20 +39,7 @@ function buildPreparedSystemRunPayload(rawInvokeParams: unknown) {
     };
   };
   const params = invoke.params ?? {};
-  const argv = Array.isArray(params.command) ? params.command.map(String) : [];
-  const rawCommand = typeof params.rawCommand === "string" ? params.rawCommand : null;
-  return {
-    payload: {
-      cmdText: rawCommand ?? argv.join(" "),
-      plan: {
-        argv,
-        cwd: typeof params.cwd === "string" ? params.cwd : null,
-        rawCommand,
-        agentId: typeof params.agentId === "string" ? params.agentId : null,
-        sessionKey: typeof params.sessionKey === "string" ? params.sessionKey : null,
-      },
-    },
-  };
+  return buildSystemRunPreparePayload(params);
 }
 
 describe("exec approvals", () => {
@@ -197,6 +185,77 @@ describe("exec approvals", () => {
     const result = await tool.execute("call3", { command: "echo ok", elevated: true });
     expect(result.details.status).toBe("completed");
     expect(calls).not.toContain("exec.approval.request");
+  });
+
+  it("uses exec-approvals ask=off to suppress gateway prompts", async () => {
+    const approvalsPath = path.join(process.env.HOME ?? "", ".openclaw", "exec-approvals.json");
+    await fs.mkdir(path.dirname(approvalsPath), { recursive: true });
+    await fs.writeFile(
+      approvalsPath,
+      JSON.stringify(
+        {
+          version: 1,
+          defaults: { security: "full", ask: "off", askFallback: "full" },
+          agents: {
+            main: { security: "full", ask: "off", askFallback: "full" },
+          },
+        },
+        null,
+        2,
+      ),
+    );
+
+    const calls: string[] = [];
+    vi.mocked(callGatewayTool).mockImplementation(async (method) => {
+      calls.push(method);
+      return { ok: true };
+    });
+
+    const tool = createExecTool({
+      host: "gateway",
+      ask: "on-miss",
+      security: "full",
+      approvalRunningNoticeMs: 0,
+    });
+
+    const result = await tool.execute("call3b", { command: "echo ok" });
+    expect(result.details.status).toBe("completed");
+    expect(calls).not.toContain("exec.approval.request");
+    expect(calls).not.toContain("exec.approval.waitDecision");
+  });
+
+  it("inherits ask=off from exec-approvals defaults when tool ask is unset", async () => {
+    const approvalsPath = path.join(process.env.HOME ?? "", ".openclaw", "exec-approvals.json");
+    await fs.mkdir(path.dirname(approvalsPath), { recursive: true });
+    await fs.writeFile(
+      approvalsPath,
+      JSON.stringify(
+        {
+          version: 1,
+          defaults: { security: "full", ask: "off", askFallback: "full" },
+          agents: {},
+        },
+        null,
+        2,
+      ),
+    );
+
+    const calls: string[] = [];
+    vi.mocked(callGatewayTool).mockImplementation(async (method) => {
+      calls.push(method);
+      return { ok: true };
+    });
+
+    const tool = createExecTool({
+      host: "gateway",
+      security: "full",
+      approvalRunningNoticeMs: 0,
+    });
+
+    const result = await tool.execute("call3c", { command: "echo ok" });
+    expect(result.details.status).toBe("completed");
+    expect(calls).not.toContain("exec.approval.request");
+    expect(calls).not.toContain("exec.approval.waitDecision");
   });
 
   it("requires approval for elevated ask when allowlist misses", async () => {
