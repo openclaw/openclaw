@@ -49,6 +49,33 @@ describe("config validation fail-closed behavior", () => {
     );
   });
 
+  it("ignores unknown keys nested under union-backed object config values", async () => {
+    await withTempHomeConfig(
+      {
+        agents: {
+          list: [{ id: "main" }],
+          defaults: {
+            model: {
+              primary: "gpt-4o-mini",
+              extra: true,
+            },
+          },
+        },
+      },
+      async () => {
+        const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+        const cfg = loadConfig();
+        expect(cfg.agents?.defaults?.model).toEqual({
+          primary: "gpt-4o-mini",
+        });
+        const warnedText = warnSpy.mock.calls.map((call) => String(call[0] ?? "")).join("\n");
+        expect(warnedText.toLowerCase()).toContain("unknown config key ignored");
+        expect(warnedText).toContain("agents.defaults.model");
+        expect(warnedText).toContain('"extra"');
+      },
+    );
+  });
+
   it("still throws INVALID_CONFIG for invalid known fields", async () => {
     await withTempHomeConfig(
       {
