@@ -160,8 +160,11 @@ function resolveAdaptiveReplyToMode(params: {
   ctx: TelegramContext;
   now?: number;
 }): ReplyToMode {
-  if (params.configuredMode === "off" || !params.adaptiveConfig.enabled) {
+  if (params.configuredMode === "off") {
     return "off";
+  }
+  if (!params.adaptiveConfig.enabled) {
+    return params.configuredMode;
   }
   const now = params.now ?? Date.now();
   const key = buildReplyBurstKey(params.ctx, params.adaptiveConfig);

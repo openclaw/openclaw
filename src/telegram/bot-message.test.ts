@@ -180,6 +180,24 @@ describe("telegram bot message processor", () => {
     vi.useRealTimers();
   });
 
+  it("preserves configured reply mode when adaptive logic is disabled", async () => {
+    buildTelegramMessageContext.mockResolvedValue({ route: { sessionKey: "agent:main:main" } });
+
+    const processMessage = createTelegramMessageProcessor({
+      ...baseDeps,
+      telegramCfg: {
+        replyAdaptive: {
+          enabled: false,
+        },
+      },
+    } as unknown as Parameters<typeof createTelegramMessageProcessor>[0]);
+
+    await processSampleMessage(processMessage, { messageId: 468, text: "hello" });
+
+    const first = dispatchTelegramMessage.mock.calls[0]?.[0] as { replyToMode?: string };
+    expect(first.replyToMode).toBe("first");
+  });
+
   it("expands burst eligibility with EMA learning when enabled", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-03-06T00:00:00.000Z"));
