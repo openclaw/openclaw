@@ -176,6 +176,7 @@ Common `agentTurn` fields:
 - `message`: required text prompt.
 - `model` / `thinking`: optional overrides (see below).
 - `timeoutSeconds`: optional timeout override.
+- `lightContext`: optional lightweight bootstrap mode for jobs that do not need workspace bootstrap file injection.
 
 Delivery config:
 
@@ -234,6 +235,14 @@ Resolution priority:
 1. Job payload override (highest)
 2. Hook-specific defaults (e.g., `hooks.gmail.model`)
 3. Agent config default
+
+### Lightweight bootstrap context
+
+Isolated jobs (`agentTurn`) can set `lightContext: true` to run with lightweight bootstrap context.
+
+- Use this for scheduled chores that do not need workspace bootstrap file injection.
+- In practice, the embedded runtime runs with `bootstrapContextMode: "lightweight"`, which keeps cron bootstrap context empty on purpose.
+- CLI equivalents: `openclaw cron add --light-context ...` and `openclaw cron edit --light-context`.
 
 ### Delivery (channel + target)
 
@@ -298,7 +307,8 @@ Recurring, isolated job with delivery:
   "wakeMode": "next-heartbeat",
   "payload": {
     "kind": "agentTurn",
-    "message": "Summarize overnight updates."
+    "message": "Summarize overnight updates.",
+    "lightContext": true
   },
   "delivery": {
     "mode": "announce",
@@ -360,6 +370,7 @@ When a job fails, OpenClaw classifies errors as **transient** (retryable) or **p
 ### Transient errors (retried)
 
 - Rate limit (429, too many requests, resource exhausted)
+- Provider overload (for example Anthropic `529 overloaded_error`, overload fallback summaries)
 - Network errors (timeout, ECONNRESET, fetch failed, socket)
 - Server errors (5xx)
 - Cloudflare-related errors
@@ -397,7 +408,7 @@ Configure `cron.retry` to override these defaults (see [Configuration](/automati
     retry: {
       maxAttempts: 3,
       backoffMs: [60000, 120000, 300000],
-      retryOn: ["rate_limit", "network", "server_error"],
+      retryOn: ["rate_limit", "overloaded", "network", "server_error"],
     },
     webhook: "https://example.invalid/legacy", // deprecated fallback for stored notify:true jobs
     webhookToken: "replace-with-dedicated-webhook-token", // optional bearer token for webhook mode
@@ -609,6 +620,8 @@ openclaw cron run <jobId>
 openclaw cron run <jobId> --due
 ```
 
+`cron.run` now acknowledges once the manual run is queued, not after the job finishes. Successful queue responses look like `{ ok: true, enqueued: true, runId }`. If the job is already running or `--due` finds nothing due, the response stays `{ ok: true, ran: false, reason }`. Use `openclaw cron runs --id <jobId>` or the `cron.runs` gateway method to inspect the eventual finished entry.
+
 Edit an existing job (patch fields):
 
 ```bash
@@ -655,7 +668,7 @@ openclaw system event --mode now --text "Next heartbeat: check battery."
 - OpenClaw applies exponential retry backoff for recurring jobs after consecutive errors:
   30s, 1m, 5m, 15m, then 60m between retries.
 - Backoff resets automatically after the next successful run.
-- One-shot (`at`) jobs retry transient errors (rate limit, network, server_error) up to 3 times with backoff; permanent errors disable immediately. See [Retry policy](/automation/cron-jobs#retry-policy).
+- One-shot (`at`) jobs retry transient errors (rate limit, overloaded, network, server_error) up to 3 times with backoff; permanent errors disable immediately. See [Retry policy](/automation/cron-jobs#retry-policy).
 
 ### Telegram delivers to the wrong place
 

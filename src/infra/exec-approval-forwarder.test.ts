@@ -94,6 +94,39 @@ async function expectDiscordSessionTargetRequest(params: {
   expect(deliver).toHaveBeenCalledTimes(params.expectedDeliveryCount);
 }
 
+async function expectSessionFilterRequestResult(params: {
+  sessionFilter: string[];
+  sessionKey: string;
+  expectedAccepted: boolean;
+  expectedDeliveryCount: number;
+}) {
+  const cfg = {
+    approvals: {
+      exec: {
+        enabled: true,
+        mode: "session",
+        sessionFilter: params.sessionFilter,
+      },
+    },
+  } as OpenClawConfig;
+
+  const { deliver, forwarder } = createForwarder({
+    cfg,
+    resolveSessionTarget: () => ({ channel: "slack", to: "U1" }),
+  });
+
+  const request = {
+    ...baseRequest,
+    request: {
+      ...baseRequest.request,
+      sessionKey: params.sessionKey,
+    },
+  };
+
+  await expect(forwarder.handleRequested(request)).resolves.toBe(params.expectedAccepted);
+  expect(deliver).toHaveBeenCalledTimes(params.expectedDeliveryCount);
+}
+
 describe("exec approval forwarder", () => {
   it("forwards to session target and resolves", async () => {
     vi.useFakeTimers();
@@ -167,31 +200,21 @@ describe("exec approval forwarder", () => {
   });
 
   it("rejects unsafe nested-repetition regex in sessionFilter", async () => {
-    const cfg = {
-      approvals: {
-        exec: {
-          enabled: true,
-          mode: "session",
-          sessionFilter: ["(a+)+$"],
-        },
-      },
-    } as OpenClawConfig;
-
-    const { deliver, forwarder } = createForwarder({
-      cfg,
-      resolveSessionTarget: () => ({ channel: "slack", to: "U1" }),
+    await expectSessionFilterRequestResult({
+      sessionFilter: ["(a+)+$"],
+      sessionKey: `${"a".repeat(28)}!`,
+      expectedAccepted: false,
+      expectedDeliveryCount: 0,
     });
+  });
 
-    const request = {
-      ...baseRequest,
-      request: {
-        ...baseRequest.request,
-        sessionKey: `${"a".repeat(28)}!`,
-      },
-    };
-
-    await expect(forwarder.handleRequested(request)).resolves.toBe(false);
-    expect(deliver).not.toHaveBeenCalled();
+  it("matches long session keys with tail-bounded regex checks", async () => {
+    await expectSessionFilterRequestResult({
+      sessionFilter: ["discord:tail$"],
+      sessionKey: `${"x".repeat(5000)}discord:tail`,
+      expectedAccepted: true,
+      expectedDeliveryCount: 1,
+    });
   });
 
   it("returns false when all targets are skipped", async () => {

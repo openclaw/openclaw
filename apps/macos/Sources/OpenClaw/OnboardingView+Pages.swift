@@ -134,10 +134,10 @@ extension OnboardingView {
             if self.gatewayDiscovery.gateways.isEmpty {
                 ProgressView().controlSize(.small)
                 Button("Refresh") {
-                    self.gatewayDiscovery.refreshWideAreaFallbackNow(timeoutSeconds: 5.0)
+                    self.gatewayDiscovery.refreshRemoteFallbackNow(timeoutSeconds: 5.0)
                 }
                 .buttonStyle(.link)
-                .help("Retry Tailscale discovery (DNS-SD).")
+                .help("Retry remote discovery (Tailscale DNS-SD + Serve probe).")
             }
             Spacer(minLength: 0)
         }
@@ -198,6 +198,25 @@ extension OnboardingView {
                         }
                         .pickerStyle(.segmented)
                         .frame(width: fieldWidth)
+                    }
+                    GridRow {
+                        Text("Gateway token")
+                            .font(.callout.weight(.semibold))
+                            .frame(width: labelWidth, alignment: .leading)
+                        SecureField("remote gateway auth token (gateway.remote.token)", text: self.$state.remoteToken)
+                            .textFieldStyle(.roundedBorder)
+                            .frame(width: fieldWidth)
+                    }
+                    if self.state.remoteTokenUnsupported {
+                        GridRow {
+                            Text("")
+                                .frame(width: labelWidth, alignment: .leading)
+                            Text(
+                                "The current gateway.remote.token value is not plain text. OpenClaw for macOS cannot use it directly; enter a plaintext token here to replace it.")
+                                .font(.caption)
+                                .foregroundStyle(.orange)
+                                .frame(width: fieldWidth, alignment: .leading)
+                        }
                     }
                     if self.state.remoteTransport == .direct {
                         GridRow {
@@ -315,25 +334,9 @@ extension OnboardingView {
                     }
                 }
                 Spacer(minLength: 0)
-                if selected {
-                    Image(systemName: "checkmark.circle.fill")
-                        .foregroundStyle(Color.accentColor)
-                } else {
-                    Image(systemName: "arrow.right.circle")
-                        .foregroundStyle(.secondary)
-                }
+                SelectionStateIndicator(selected: selected)
             }
-            .padding(.horizontal, 10)
-            .padding(.vertical, 8)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(
-                RoundedRectangle(cornerRadius: 10, style: .continuous)
-                    .fill(selected ? Color.accentColor.opacity(0.12) : Color.clear))
-            .overlay(
-                RoundedRectangle(cornerRadius: 10, style: .continuous)
-                    .strokeBorder(
-                        selected ? Color.accentColor.opacity(0.45) : Color.clear,
-                        lineWidth: 1))
+            .openClawSelectableRowChrome(selected: selected)
         }
         .buttonStyle(.plain)
     }
