@@ -31,6 +31,8 @@ export type CronConfig = {
   enabled?: boolean;
   store?: string;
   maxConcurrentRuns?: number;
+  /** Delay in ms between consecutive missed-job executions on startup (default: 10000). */
+  startupStaggerMs?: number;
   /** Override default retry policy for one-shot jobs on transient errors. */
   retry?: CronRetryConfig;
   /**
