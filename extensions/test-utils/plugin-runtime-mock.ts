@@ -66,6 +66,9 @@ export function createPluginRuntimeMock(overrides: DeepPartial<PluginRuntime> = 
       createMemoryGetTool: vi.fn() as unknown as PluginRuntime["tools"]["createMemoryGetTool"],
       createMemorySearchTool:
         vi.fn() as unknown as PluginRuntime["tools"]["createMemorySearchTool"],
+      createMemoryWriteTool: vi.fn() as unknown as PluginRuntime["tools"]["createMemoryWriteTool"],
+      createMemoryUpsertTool:
+        vi.fn() as unknown as PluginRuntime["tools"]["createMemoryUpsertTool"],
       registerMemoryCli: vi.fn() as unknown as PluginRuntime["tools"]["registerMemoryCli"],
     },
     channel: {
