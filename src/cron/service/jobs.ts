@@ -1,5 +1,4 @@
 import crypto from "node:crypto";
-import { normalizeAgentId } from "../../routing/session-key.js";
 import { parseAbsoluteTimeMs } from "../parse.js";
 import {
   coerceFiniteScheduleNumber,
@@ -140,24 +139,10 @@ export function assertSupportedJobSpec(job: Pick<CronJob, "sessionTarget" | "pay
   }
 }
 
-function assertMainSessionAgentId(
-  job: Pick<CronJob, "sessionTarget" | "agentId">,
-  defaultAgentId: string | undefined,
-) {
-  if (job.sessionTarget !== "main") {
-    return;
-  }
-  if (!job.agentId) {
-    return;
-  }
-  const normalized = normalizeAgentId(job.agentId);
-  const normalizedDefault = normalizeAgentId(defaultAgentId);
-  if (normalized !== normalizedDefault) {
-    throw new Error(
-      `cron: sessionTarget "main" is only valid for the default agent. Use sessionTarget "isolated" with payload.kind "agentTurn" for non-default agents (agentId: ${job.agentId})`,
-    );
-  }
-}
+// assertMainSessionAgentId removed: non-default agents can legitimately use
+// sessionTarget "main" for cron jobs. The underlying routing issue (heartbeat
+// skipping non-default agents) is fixed in heartbeat-runner.ts.
+// See: https://github.com/openclaw/openclaw/pull/40719
 
 const TELEGRAM_TME_URL_REGEX = /^https?:\/\/t\.me\/|t\.me\//i;
 const TELEGRAM_SLASH_TOPIC_REGEX = /^-?\d+\/\d+$/;
@@ -552,7 +537,6 @@ export function createJob(state: CronServiceState, input: CronJobCreate): CronJo
     },
   };
   assertSupportedJobSpec(job);
-  assertMainSessionAgentId(job, state.deps.defaultAgentId);
   assertDeliverySupport(job);
   assertFailureDestinationSupport(job);
   job.state.nextRunAtMs = computeJobNextRunAtMs(job, now);
@@ -562,7 +546,7 @@ export function createJob(state: CronServiceState, input: CronJobCreate): CronJo
 export function applyJobPatch(
   job: CronJob,
   patch: CronJobPatch,
-  opts?: { defaultAgentId?: string },
+  _opts?: { defaultAgentId?: string },
 ) {
   if ("name" in patch) {
     job.name = normalizeRequiredName(patch.name);
@@ -642,7 +626,6 @@ export function applyJobPatch(
     job.sessionKey = normalizeOptionalSessionKey((patch as { sessionKey?: unknown }).sessionKey);
   }
   assertSupportedJobSpec(job);
-  assertMainSessionAgentId(job, opts?.defaultAgentId);
   assertDeliverySupport(job);
   assertFailureDestinationSupport(job);
 }

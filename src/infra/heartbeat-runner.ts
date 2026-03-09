@@ -616,10 +616,11 @@ export async function runHeartbeatOnce(opts: {
   if (!heartbeatsEnabled) {
     return { status: "skipped", reason: "disabled" };
   }
-  if (!isHeartbeatEnabledForAgent(cfg, agentId)) {
+  const isCronTriggered = opts.reason?.startsWith("cron:") === true;
+  if (!isCronTriggered && !isHeartbeatEnabledForAgent(cfg, agentId)) {
     return { status: "skipped", reason: "disabled" };
   }
-  if (!resolveHeartbeatIntervalMs(cfg, undefined, heartbeat)) {
+  if (!isCronTriggered && !resolveHeartbeatIntervalMs(cfg, undefined, heartbeat)) {
     return { status: "skipped", reason: "disabled" };
   }
 
