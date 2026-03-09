@@ -97,6 +97,7 @@ vi.mock("../../logging/subsystem.js", () => ({
 
 vi.mock("../../runtime.js", () => ({
   defaultRuntime,
+  createGatewayRuntime: () => defaultRuntime,
 }));
 
 vi.mock("../command-format.js", () => ({
