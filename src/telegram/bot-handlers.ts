@@ -1126,7 +1126,10 @@ export const registerTelegramHandlers = ({
         // registration are respected.
         const freshCfg = loadConfig();
         const freshTelegramCfg = resolveTelegramAccount({ cfg: freshCfg, accountId }).config;
-        const freshAllowFrom = freshTelegramCfg.allowFrom ?? allowFrom;
+        // Use only the fresh config allowFrom — do NOT fall back to the stale
+        // allowFrom captured at handler registration time, otherwise deleting
+        // the allowlist at runtime silently restores the old entries.
+        const freshAllowFrom = freshTelegramCfg.allowFrom;
         // Resolve full event auth context from the real callback message,
         // including groupConfig, topicConfig, dmThreadId, groupAllowOverride,
         // so per-DM/topic overrides are enforced.
