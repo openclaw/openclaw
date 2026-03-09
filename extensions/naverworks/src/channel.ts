@@ -39,6 +39,22 @@ const NaverWorksConfigSchema = buildChannelConfigSchema(
 
 const activeRouteUnregisters = new Map<string, () => void>();
 
+function hasNaverWorksOutboundAuth(account: ReturnType<typeof resolveAccount>): boolean {
+  if (account.accessToken?.trim()) {
+    return true;
+  }
+  return Boolean(
+    account.clientId?.trim() &&
+    account.clientSecret?.trim() &&
+    account.serviceAccount?.trim() &&
+    account.privateKey,
+  );
+}
+
+function isNaverWorksConfigured(account: ReturnType<typeof resolveAccount>): boolean {
+  return Boolean(account.botId?.trim()) && hasNaverWorksOutboundAuth(account);
+}
+
 async function downloadInboundMedia(params: {
   runtime: ReturnType<typeof getNaverWorksRuntime>;
   account: ReturnType<typeof resolveAccount>;
@@ -120,6 +136,13 @@ export function createNaverWorksPlugin() {
       listAccountIds: (cfg: any) => listAccountIds(cfg),
       resolveAccount: (cfg: any, accountId?: string | null) => resolveAccount(cfg, accountId),
       defaultAccountId: () => DEFAULT_ACCOUNT_ID,
+      isConfigured: (account: ReturnType<typeof resolveAccount>) => isNaverWorksConfigured(account),
+      describeAccount: (account: ReturnType<typeof resolveAccount>) => ({
+        accountId: account.accountId,
+        enabled: account.enabled,
+        configured: isNaverWorksConfigured(account),
+        dmPolicy: account.dmPolicy,
+      }),
       setAccountEnabled: ({ cfg, accountId, enabled }: any) =>
         setAccountEnabledInConfigSection({
           cfg,
@@ -127,6 +150,111 @@ export function createNaverWorksPlugin() {
           accountId,
           enabled,
         }),
+    },
+
+    messaging: {
+      normalizeTarget: (raw: string) => {
+        const trimmed = raw?.trim();
+        if (!trimmed) {
+          return undefined;
+        }
+        return trimmed.replace(/^naverworks:/i, "");
+      },
+      targetResolver: {
+        looksLikeId: (raw: string, normalized?: string | null) =>
+          Boolean((normalized ?? raw)?.trim()),
+        hint: "<userId>",
+      },
+    },
+
+    outbound: {
+      deliveryMode: "direct",
+      sendText: async ({ cfg, to, text, accountId }) => {
+        const account = resolveAccount(cfg as Record<string, unknown>, accountId);
+        const sent = await sendMessageNaverWorks({
+          account,
+          toUserId: to,
+          text,
+        });
+        if (!sent.ok) {
+          if (sent.reason === "not-configured") {
+            throw new Error(
+              `NAVER WORKS account \"${account.accountId}\" is not configured for outbound delivery (set botId and auth settings).`,
+            );
+          }
+          throw new Error(
+            `NAVER WORKS send failed (${sent.reason}, status=${sent.status ?? "unknown"}): ${sent.body?.slice(0, 300) ?? ""}`,
+          );
+        }
+        return {
+          channel: CHANNEL_ID,
+          messageId: `naverworks:${Date.now()}:${Math.random().toString(36).slice(2, 10)}`,
+        };
+      },
+      sendMedia: async ({ cfg, to, text, mediaUrl, accountId }) => {
+        const account = resolveAccount(cfg as Record<string, unknown>, accountId);
+        const caption = text?.trim();
+        if (caption) {
+          const sentText = await sendMessageNaverWorks({
+            account,
+            toUserId: to,
+            text: caption,
+          });
+          if (!sentText.ok) {
+            throw new Error(
+              `NAVER WORKS text preface failed (${sentText.reason}, status=${sentText.status ?? "unknown"}).`,
+            );
+          }
+        }
+        const sentMedia = await sendMessageNaverWorks({
+          account,
+          toUserId: to,
+          mediaUrl,
+        });
+        if (!sentMedia.ok) {
+          if (sentMedia.reason === "not-configured") {
+            throw new Error(
+              `NAVER WORKS account \"${account.accountId}\" is not configured for media outbound delivery (set botId and auth settings).`,
+            );
+          }
+          throw new Error(
+            `NAVER WORKS media send failed (${sentMedia.reason}, status=${sentMedia.status ?? "unknown"}): ${sentMedia.body?.slice(0, 300) ?? ""}`,
+          );
+        }
+        return {
+          channel: CHANNEL_ID,
+          messageId: `naverworks:${Date.now()}:${Math.random().toString(36).slice(2, 10)}`,
+        };
+      },
+    },
+
+    status: {
+      defaultRuntime: {
+        accountId: DEFAULT_ACCOUNT_ID,
+        running: false,
+        connected: false,
+        lastStartAt: null,
+        lastStopAt: null,
+        lastInboundAt: null,
+        lastOutboundAt: null,
+        lastError: null,
+      },
+      buildAccountSnapshot: ({ account, runtime }: any) => {
+        const configured = isNaverWorksConfigured(account);
+        return {
+          accountId: account.accountId,
+          enabled: account.enabled,
+          configured,
+          dmPolicy: account.dmPolicy,
+          running: runtime?.running ?? false,
+          connected: runtime?.connected ?? runtime?.running ?? false,
+          lastStartAt: runtime?.lastStartAt ?? null,
+          lastStopAt: runtime?.lastStopAt ?? null,
+          lastInboundAt: runtime?.lastInboundAt ?? null,
+          lastOutboundAt: runtime?.lastOutboundAt ?? null,
+          lastError: runtime?.lastError ?? null,
+        };
+      },
     },
 
     gateway: {
@@ -325,6 +453,7 @@ export function createNaverWorksPlugin() {
           `naverworks[${account.accountId}]: webhook route registered at ${account.webhookPath}`,
         );
         activeRouteUnregisters.set(routeKey, unregister);
+        ctx.setStatus({ connected: true, lastError: null });
 
         try {
           // Webhook mode is passive; keep account task alive until the runtime aborts it.
@@ -339,6 +468,7 @@ export function createNaverWorksPlugin() {
           log?.info?.(
             `naverworks[${account.accountId}]: abort received; unregistering webhook route`,
           );
+          ctx.setStatus({ connected: false });
           unregister();
           activeRouteUnregisters.delete(routeKey);
         }
