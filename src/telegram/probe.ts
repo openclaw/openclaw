@@ -92,10 +92,13 @@ export async function probeTelegram(
   proxyOrOptions?: string | TelegramProbeOptions,
 ): Promise<TelegramProbe> {
   const started = Date.now();
+  const timeoutBudgetMs = Math.max(1, Math.floor(timeoutMs));
+  const deadlineMs = started + timeoutBudgetMs;
   const options = resolveProbeOptions(proxyOrOptions);
   const fetcher = resolveProbeFetcher(token, options);
   const base = `${TELEGRAM_API_BASE}/bot${token}`;
-  const retryDelayMs = Math.max(50, Math.min(1000, timeoutMs));
+  const retryDelayMs = Math.max(50, Math.min(1000, Math.floor(timeoutBudgetMs / 5)));
+  const resolveRemainingBudgetMs = () => Math.max(0, deadlineMs - Date.now());
 
   const result: TelegramProbe = {
     ok: false,
@@ -110,19 +113,35 @@ export async function probeTelegram(
 
     // Retry loop for initial connection (handles network/DNS startup races)
     for (let i = 0; i < 3; i++) {
+      const remainingBudgetMs = resolveRemainingBudgetMs();
+      if (remainingBudgetMs <= 0) {
+        break;
+      }
       try {
-        meRes = await fetchWithTimeout(`${base}/getMe`, {}, timeoutMs, fetcher);
+        meRes = await fetchWithTimeout(
+          `${base}/getMe`,
+          {},
+          Math.max(1, Math.min(timeoutBudgetMs, remainingBudgetMs)),
+          fetcher,
+        );
         break;
       } catch (err) {
         fetchError = err;
         if (i < 2) {
-          await new Promise((resolve) => setTimeout(resolve, retryDelayMs));
+          const remainingAfterAttemptMs = resolveRemainingBudgetMs();
+          if (remainingAfterAttemptMs <= 0) {
+            break;
+          }
+          const delayMs = Math.min(retryDelayMs, remainingAfterAttemptMs);
+          if (delayMs > 0) {
+            await new Promise((resolve) => setTimeout(resolve, delayMs));
+          }
         }
       }
     }
 
     if (!meRes) {
-      throw fetchError;
+      throw fetchError ?? new Error(`probe timed out after ${timeoutBudgetMs}ms`);
     }
 
     const meJson = (await meRes.json()) as {
@@ -159,16 +178,24 @@ export async function probeTelegram(
 
     // Try to fetch webhook info, but don't fail health if it errors.
     try {
-      const webhookRes = await fetchWithTimeout(`${base}/getWebhookInfo`, {}, timeoutMs, fetcher);
-      const webhookJson = (await webhookRes.json()) as {
-        ok?: boolean;
-        result?: { url?: string; has_custom_certificate?: boolean };
-      };
-      if (webhookRes.ok && webhookJson?.ok) {
-        result.webhook = {
-          url: webhookJson.result?.url ?? null,
-          hasCustomCert: webhookJson.result?.has_custom_certificate ?? null,
+      const webhookRemainingBudgetMs = resolveRemainingBudgetMs();
+      if (webhookRemainingBudgetMs > 0) {
+        const webhookRes = await fetchWithTimeout(
+          `${base}/getWebhookInfo`,
+          {},
+          Math.max(1, Math.min(timeoutBudgetMs, webhookRemainingBudgetMs)),
+          fetcher,
+        );
+        const webhookJson = (await webhookRes.json()) as {
+          ok?: boolean;
+          result?: { url?: string; has_custom_certificate?: boolean };
         };
+        if (webhookRes.ok && webhookJson?.ok) {
+          result.webhook = {
+            url: webhookJson.result?.url ?? null,
+            hasCustomCert: webhookJson.result?.has_custom_certificate ?? null,
+          };
+        }
       }
     } catch {
       // ignore webhook errors for probe

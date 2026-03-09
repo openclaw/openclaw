@@ -263,6 +263,47 @@ describe("resolveTelegramFetch", () => {
     expect(secondCallInit?.dispatcher).toBe(callerDispatcher);
   });
 
+  it("does not arm sticky fallback from caller-provided dispatcher failures", async () => {
+    const fetchError = buildFetchFallbackError("EHOSTUNREACH");
+    undiciFetch
+      .mockRejectedValueOnce(fetchError)
+      .mockResolvedValueOnce({ ok: true } as Response)
+      .mockResolvedValueOnce({ ok: true } as Response);
+
+    const resolved = resolveTelegramFetchOrThrow(undefined, {
+      network: {
+        autoSelectFamily: true,
+      },
+    });
+
+    const callerDispatcher = { name: "caller" };
+
+    await resolved("https://api.telegram.org/botx/sendMessage", {
+      dispatcher: callerDispatcher,
+    } as RequestInit);
+    await resolved("https://api.telegram.org/botx/sendChatAction");
+
+    expect(undiciFetch).toHaveBeenCalledTimes(3);
+
+    const firstCallInit = undiciFetch.mock.calls[0]?.[1] as
+      | (RequestInit & { dispatcher?: unknown })
+      | undefined;
+    const secondCallInit = undiciFetch.mock.calls[1]?.[1] as
+      | (RequestInit & { dispatcher?: unknown })
+      | undefined;
+    const thirdDispatcher = getDispatcherFromUndiciCall(3);
+
+    expect(firstCallInit?.dispatcher).toBe(callerDispatcher);
+    expect(secondCallInit?.dispatcher).toBe(callerDispatcher);
+    expect(thirdDispatcher?.options?.connect).toEqual(
+      expect.objectContaining({
+        autoSelectFamily: true,
+        autoSelectFamilyAttemptTimeout: 300,
+      }),
+    );
+    expect(thirdDispatcher?.options?.connect?.family).not.toBe(4);
+  });
+
   it("does not retry when error codes do not match fallback rules", async () => {
     const fetchError = buildFetchFallbackError("ECONNRESET");
     undiciFetch.mockRejectedValue(fetchError);

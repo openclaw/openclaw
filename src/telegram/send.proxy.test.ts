@@ -76,6 +76,7 @@ describe("telegram proxy client", () => {
   };
 
   beforeEach(() => {
+    vi.unstubAllEnvs();
     botApi.sendMessage.mockResolvedValue({ message_id: 1, chat: { id: "123" } });
     botApi.setMessageReaction.mockResolvedValue(undefined);
     botApi.deleteMessage.mockResolvedValue(true);
@@ -85,6 +86,33 @@ describe("telegram proxy client", () => {
     });
     makeProxyFetch.mockClear();
     resolveTelegramFetch.mockClear();
+  });
+
+  it("reuses cached Telegram client options for repeated sends with same account transport settings", async () => {
+    const { fetchImpl } = prepareProxyFetch();
+    vi.stubEnv("VITEST", "");
+    vi.stubEnv("NODE_ENV", "production");
+
+    await sendMessageTelegram("123", "first", { token: "tok", accountId: "foo" });
+    await sendMessageTelegram("123", "second", { token: "tok", accountId: "foo" });
+
+    expect(makeProxyFetch).toHaveBeenCalledTimes(1);
+    expect(resolveTelegramFetch).toHaveBeenCalledTimes(1);
+    expect(botCtorSpy).toHaveBeenCalledTimes(2);
+    expect(botCtorSpy).toHaveBeenNthCalledWith(
+      1,
+      "tok",
+      expect.objectContaining({
+        client: expect.objectContaining({ fetch: fetchImpl }),
+      }),
+    );
+    expect(botCtorSpy).toHaveBeenNthCalledWith(
+      2,
+      "tok",
+      expect.objectContaining({
+        client: expect.objectContaining({ fetch: fetchImpl }),
+      }),
+    );
   });
 
   it.each([

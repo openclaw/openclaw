@@ -297,6 +297,9 @@ export function resolveTelegramFetch(
   };
 
   return (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const callerProvidedDispatcher = Boolean(
+      (init as RequestInitWithDispatcher | undefined)?.dispatcher,
+    );
     const initialInit = withDispatcherIfMissing(
       init,
       stickyIpv4FallbackEnabled ? resolveStickyIpv4Dispatcher() : defaultDispatcher,
@@ -305,13 +308,19 @@ export function resolveTelegramFetch(
       return await sourceFetch(input, initialInit);
     } catch (err) {
       if (shouldRetryWithIpv4Fallback(err)) {
-        if (!stickyIpv4FallbackEnabled) {
+        if (!callerProvidedDispatcher && !stickyIpv4FallbackEnabled) {
           stickyIpv4FallbackEnabled = true;
           log.warn(
             `fetch fallback: enabling sticky IPv4-only dispatcher (codes=${formatErrorCodes(err)})`,
           );
         }
-        return sourceFetch(input, withDispatcherIfMissing(init, resolveStickyIpv4Dispatcher()));
+        return sourceFetch(
+          input,
+          withDispatcherIfMissing(
+            init,
+            callerProvidedDispatcher ? defaultDispatcher : resolveStickyIpv4Dispatcher(),
+          ),
+        );
       }
       throw err;
     }
