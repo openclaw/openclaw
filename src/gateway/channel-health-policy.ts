@@ -113,7 +113,8 @@ export function evaluateChannelHealth(
   // NOTE: channelId may be scoped with an account suffix (e.g. "telegram:default"),
   // so we match by prefix rather than exact equality.
   if (
-    !policy.channelId.startsWith("telegram") &&
+    policy.channelId !== "telegram" &&
+    !policy.channelId.startsWith("telegram:") &&
     snapshot.mode !== "webhook" &&
     snapshot.connected === true &&
     snapshot.lastEventAt != null
