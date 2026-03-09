@@ -1,25 +1,20 @@
 # Business Intelligence 누적 기록
 
-## 2026-03-02 (월)
+## 2026-03-09
 
 ### 핵심 발견
 
-1. 베트남 TOPIK 대입 반영 확정 → MAITUTOR 즉시 진입 타이밍
-2. 한국 M.AX 1조455억(+52%), 중소기업 AI 상용화 870억/2년 → MAIAX 정부사업
-3. TikTok Shop+Shopee = 베트남 이커머스 97% → MAIBEAUTY/MAITOK 라이브커머스 집중
-4. EU CRA 2026.09 취약점 관리 의무화 → MAIOSS 컴플라이언스 도구
-5. 베트남 고용시장: 영업46%+AI엔지니어30% 수요, 50% 기업 인재난 → MAISTAR7
+- TikTok Shop 베트남 점유율 40% 돌파 (Shopee 추격 중)
+- TikTok Shop SEA 3/30 정책: 비활성/오해 유발 영상 제한, 수수료 기준 변경
+- 삼성전자 2030 AI 공장 전환 전략 발표 (디지털트윈 + AI 에이전트)
+- EU CRA 가이던스 초안 3/7 공개 — FOSS 상업 통합 시 제조사 책임
+- 베트남 교육 4개 법률 2026.1.1 동시 시행
+- AI 모델 범용화 가속 → 앱/UX 레이어 차별화 시대
 
-### 시급 액션
+### 수익화 기회
 
-- MAITUTOR: TOPIK AI 튜터 베트남 출시 기획
-- MAIAX: AW2026(3/4-6 COEX) 참관 + 870억 공고 모니터링
-- MAIOSS: CRA 컴플라이언스 도구 9월 전 MVP
-
-### 소스
-
-- beautysummit.ai, oreateai.com (TikTok Shop GMV)
-- insidevina.com (베트남 고용시장 2026)
-- koreatechdesk.com, en.sedaily.com (M.AX 정책)
-- vietnam.vn (TOPIK 대입, 한국어 열풍)
-- theembeddedkit.io, opensource.org (EU CRA)
+1. MAIBEAUTY: TikTok 40% 점유 기반 AI 아바타 라이브커머스 최적 타이밍
+2. MAITOK: 3/30 정책 변경 → 셀러 콘텐츠 자동검수 도구 수요
+3. MAIOSS: CRA 컴플라이언스 자동화 SaaS (SBOM + 취약점 + 보고서)
+4. MAIAX: 삼성 AI 공장 → 중소기업 라이트 디지털트윈 시장
+5. MAIBOTALKS: B2B 피벗 — AI 음성 에이전트 인터뷰/설문 자동화

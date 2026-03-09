@@ -17,12 +17,15 @@ _PR #10404 (Mnemo SecondBrain) 경험 기반. 2026-02-21_
 
 **근본 원인**: community-plugins.json을 텍스트 에디터/쉘로 직접 편집하면 `ensure_ascii=True`로 된 `\uXXXX` 이스케이프가 깨진다.
 
-### PR #10406 (재제출 → ✅ 한 번에 통과)
+### PR #10406 (재제출 → 봇 통과 → 휴먼 리뷰 대기)
 
 - Python `json.load()` → append → `json.dump(ensure_ascii=True)` 사용
 - diff: **8줄만 변경** (엔트리 추가만, 기존 내용 무변경)
 - `plugin-validation` check: **SUCCESS** (코멘트 0개 = 에러 없음)
-- 리뷰 대기 중
+- Feb 27: ObsidianReviewBot eslint 스캔 — Required 이슈 다수 (any types, sentence case, async/await, direct styles, default hotkey, console statements)
+- Mar 1: 코드 수정 push (commit `6af0892`) → 봇 재스캔 통과
+- Mar 1: 봇 코멘트: "Changes requested by bot have been made, ready for additional review by human"
+- Label: **"Ready for review"** — 휴먼 리뷰어 배정 대기 ("it might take a few weeks")
 
 ## 핵심 실수 & 교훈
 

@@ -216,3 +216,37 @@ commit `24c61b9f`, pushed
 ---
 
 _Last updated: 2026-02-25_
+
+## MAIBOT 연동 — 스크립트 매핑
+
+### 지니님 요청 패턴 → 실행 매핑
+
+| 지니님 말              | 실행                                                                |
+| ---------------------- | ------------------------------------------------------------------- |
+| "비트코인 분석해줘"    | `cd C:\TEST\M.AI.UPbit; python scripts/analyze.py KRW-BTC`          |
+| "이더리움 지금 어때?"  | `cd C:\TEST\M.AI.UPbit; python scripts/analyze.py KRW-ETH`          |
+| "시장 상황 알려줘"     | `cd C:\TEST\M.AI.UPbit; python scripts/monitor.py`                  |
+| "내 포트폴리오 보여줘" | `cd C:\TEST\M.AI.UPbit; python scripts/portfolio.py`                |
+| "비트코인 5만원 사줘"  | `scripts/trade.py buy KRW-BTC 50000` (미리보기) → 확인 후 --confirm |
+| "리포트 만들어줘"      | `cd C:\TEST\M.AI.UPbit; python scripts/daily_report.py`             |
+| "추천 종목 알려줘"     | `maiupbit recommend --method performance --top 5 --format json`     |
+
+### 퀀트 전략 (Phase 7, 강환국 전략)
+
+| 지니님 말                 | 실행                                                                              |
+| ------------------------- | --------------------------------------------------------------------------------- |
+| "지금 시즌 어때?"         | `$env:PYTHONPATH="C:\TEST\M.AI.UPbit"; python scripts/quant.py season`            |
+| "모멘텀 좋은 코인 알려줘" | `$env:PYTHONPATH="C:\TEST\M.AI.UPbit"; python scripts/quant.py momentum --top 5`  |
+| "돌파 전략 BTC"           | `$env:PYTHONPATH="C:\TEST\M.AI.UPbit"; python scripts/quant.py breakout KRW-BTC`  |
+| "팩터 분석해줘"           | `$env:PYTHONPATH="C:\TEST\M.AI.UPbit"; python scripts/quant.py factor --top 5`    |
+| "GTAA 자산배분 알려줘"    | `$env:PYTHONPATH="C:\TEST\M.AI.UPbit"; python scripts/quant.py allocate`          |
+| "퀀트 백테스트 해줘"      | `$env:PYTHONPATH="C:\TEST\M.AI.UPbit"; python scripts/quant.py backtest momentum` |
+
+> ⚠️ `scripts/quant.py` 직접 실행 시 `$env:PYTHONPATH="C:\TEST\M.AI.UPbit"` 필수
+> 대안: `python -m maiupbit quant <서브커맨드>` (PYTHONPATH 불필요)
+
+### ⚠️ 매매 안전 규칙
+
+- `trade.py`는 **절대 --confirm 없이 실행 금지**
+- 지니님 명시 확인 후에만 --confirm
+- API 키: `.env`에 `UPBIT_ACCESS_KEY`, `UPBIT_SECRET_KEY`
