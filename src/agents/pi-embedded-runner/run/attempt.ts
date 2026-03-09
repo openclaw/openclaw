@@ -10,11 +10,14 @@ import {
 import { resolveHeartbeatPrompt } from "../../../auto-reply/heartbeat.js";
 import { resolveChannelCapabilities } from "../../../config/channel-capabilities.js";
 import type { OpenClawConfig } from "../../../config/config.js";
+import { resolveStateDir } from "../../../config/paths.js";
 import { getMachineDisplayName } from "../../../infra/machine-name.js";
 import {
   ensureGlobalUndiciEnvProxyDispatcher,
   ensureGlobalUndiciStreamTimeouts,
 } from "../../../infra/net/undici-global-dispatcher.js";
+import { ensureGlobalUndiciStreamTimeouts } from "../../../infra/net/undici-global-dispatcher.js";
+import { clearActiveTurn, writeActiveTurn } from "../../../infra/pending-inbound-store.js";
 import { MAX_IMAGE_BYTES } from "../../../media/constants.js";
 import { resolveSignalReactionLevel } from "../../../plugin-sdk/signal.js";
 import {
@@ -2302,6 +2305,20 @@ export async function runEmbeddedAttempt(
       };
       setActiveEmbeddedRun(params.sessionId, queueHandle, params.sessionKey);
 
+      // Track active turn on disk for crash recovery.
+      // Fire-and-forget: disk write failure must not block the run.
+      if (!params.sessionId?.startsWith("probe-")) {
+        const runtimeChannel = params.messageChannel ?? params.messageProvider ?? "unknown";
+        writeActiveTurn(resolveStateDir(process.env), {
+          sessionId: params.sessionId,
+          sessionKey: params.sessionKey ?? params.sessionId,
+          channel: runtimeChannel,
+          startedAt: Date.now(),
+        }).catch((err) => {
+          log.warn(`active-turn write failed: sessionId=${params.sessionId} ${String(err)}`);
+        });
+      }
+
       let abortWarnTimer: NodeJS.Timeout | undefined;
       const isProbeSession = params.sessionId?.startsWith("probe-") ?? false;
       const compactionTimeoutMs = resolveCompactionTimeoutMs(params.config);
@@ -2823,6 +2840,12 @@ export async function runEmbeddedAttempt(
           );
         }
         clearActiveEmbeddedRun(params.sessionId, queueHandle, params.sessionKey);
+        // Clear active-turn disk record (fire-and-forget).
+        if (!params.sessionId?.startsWith("probe-")) {
+          clearActiveTurn(resolveStateDir(process.env), params.sessionId).catch((err) => {
+            log.warn(`active-turn clear failed: sessionId=${params.sessionId} ${String(err)}`);
+          });
+        }
         params.abortSignal?.removeEventListener?.("abort", onAbort);
       }
 
