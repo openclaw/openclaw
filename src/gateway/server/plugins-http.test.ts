@@ -110,6 +110,80 @@ describe("createGatewayPluginRequestHandler", () => {
     expect(second).toHaveBeenCalledTimes(1);
   });
 
+  it("fails closed when a matched gateway route reaches dispatch without auth", async () => {
+    const exactPluginHandler = vi.fn(async () => false);
+    const prefixGatewayHandler = vi.fn(async () => true);
+    const handler = createGatewayPluginRequestHandler({
+      registry: createTestRegistry({
+        httpRoutes: [
+          createRoute({
+            path: "/plugin/secure/report",
+            match: "exact",
+            auth: "plugin",
+            handler: exactPluginHandler,
+          }),
+          createRoute({
+            path: "/plugin/secure",
+            match: "prefix",
+            auth: "gateway",
+            handler: prefixGatewayHandler,
+          }),
+        ],
+      }),
+      log: createPluginLog(),
+    });
+
+    const { res } = makeMockHttpResponse();
+    const handled = await handler(
+      { url: "/plugin/secure/report" } as IncomingMessage,
+      res,
+      undefined,
+      {
+        gatewayAuthSatisfied: false,
+      },
+    );
+    expect(handled).toBe(false);
+    expect(exactPluginHandler).not.toHaveBeenCalled();
+    expect(prefixGatewayHandler).not.toHaveBeenCalled();
+  });
+
+  it("allows gateway route fallthrough only after gateway auth succeeds", async () => {
+    const exactPluginHandler = vi.fn(async () => false);
+    const prefixGatewayHandler = vi.fn(async () => true);
+    const handler = createGatewayPluginRequestHandler({
+      registry: createTestRegistry({
+        httpRoutes: [
+          createRoute({
+            path: "/plugin/secure/report",
+            match: "exact",
+            auth: "plugin",
+            handler: exactPluginHandler,
+          }),
+          createRoute({
+            path: "/plugin/secure",
+            match: "prefix",
+            auth: "gateway",
+            handler: prefixGatewayHandler,
+          }),
+        ],
+      }),
+      log: createPluginLog(),
+    });
+
+    const { res } = makeMockHttpResponse();
+    const handled = await handler(
+      { url: "/plugin/secure/report" } as IncomingMessage,
+      res,
+      undefined,
+      {
+        gatewayAuthSatisfied: true,
+      },
+    );
+    expect(handled).toBe(true);
+    expect(exactPluginHandler).toHaveBeenCalledTimes(1);
+    expect(prefixGatewayHandler).toHaveBeenCalledTimes(1);
+  });
+
   it("matches canonicalized route variants", async () => {
     const routeHandler = vi.fn(async (_req, res: ServerResponse) => {
       res.statusCode = 200;
@@ -188,5 +262,15 @@ describe("plugin HTTP route auth checks", () => {
     expect(shouldEnforceGatewayAuthForPluginPath(registry, deeplyEncodedChannelPath)).toBe(true);
     expect(shouldEnforceGatewayAuthForPluginPath(registry, decodeOverflowPublicPath)).toBe(true);
     expect(shouldEnforceGatewayAuthForPluginPath(registry, "/not-plugin")).toBe(false);
+  });
+
+  it("enforces auth when any overlapping matched route requires gateway auth", () => {
+    const registry = createTestRegistry({
+      httpRoutes: [
+        createRoute({ path: "/plugin/secure/report", match: "exact", auth: "plugin" }),
+        createRoute({ path: "/plugin/secure", match: "prefix", auth: "gateway" }),
+      ],
+    });
+    expect(shouldEnforceGatewayAuthForPluginPath(registry, "/plugin/secure/report")).toBe(true);
   });
 });

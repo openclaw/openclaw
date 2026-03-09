@@ -15,6 +15,7 @@ import { loadSessionStore, resolveStorePath } from "../../config/sessions.js";
 import type { DiscordExecApprovalConfig } from "../../config/types.discord.js";
 import { buildGatewayConnectionDetails } from "../../gateway/call.js";
 import { GatewayClient } from "../../gateway/client.js";
+import { resolveGatewayConnectionAuth } from "../../gateway/connection-auth.js";
 import type { EventFrame } from "../../gateway/protocol/index.js";
 import type {
   ExecApprovalDecision,
@@ -400,13 +401,27 @@ export class DiscordExecApprovalHandler {
 
     logDebug("discord exec approvals: starting handler");
 
-    const { url: gatewayUrl } = buildGatewayConnectionDetails({
+    const { url: gatewayUrl, urlSource } = buildGatewayConnectionDetails({
       config: this.opts.cfg,
       url: this.opts.gatewayUrl,
+    });
+    const gatewayUrlOverrideSource =
+      urlSource === "cli --url"
+        ? "cli"
+        : urlSource === "env OPENCLAW_GATEWAY_URL"
+          ? "env"
+          : undefined;
+    const auth = await resolveGatewayConnectionAuth({
+      config: this.opts.cfg,
+      env: process.env,
+      urlOverride: gatewayUrlOverrideSource ? gatewayUrl : undefined,
+      urlOverrideSource: gatewayUrlOverrideSource,
     });
 
     this.gatewayClient = new GatewayClient({
       url: gatewayUrl,
+      token: auth.token,
+      password: auth.password,
       clientName: GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT,
       clientDisplayName: "Discord Exec Approvals",
       mode: GATEWAY_CLIENT_MODES.BACKEND,

@@ -282,7 +282,7 @@ export function createSynologyChatPlugin() {
               Surface: CHANNEL_ID,
               ConversationLabel: msg.senderName || msg.from,
               Timestamp: Date.now(),
-              CommandAuthorized: true,
+              CommandAuthorized: msg.commandAuthorized,
             });
 
             // Dispatch via the SDK's buffered block dispatcher

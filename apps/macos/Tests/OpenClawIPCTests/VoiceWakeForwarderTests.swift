@@ -2,7 +2,7 @@ import Testing
 @testable import OpenClaw
 
 @Suite(.serialized) struct VoiceWakeForwarderTests {
-    @Test func prefixedTranscriptUsesMachineName() {
+    @Test func `prefixed transcript uses machine name`() {
         let transcript = "hello world"
         let prefixed = VoiceWakeForwarder.prefixedTranscript(transcript, machineName: "My-Mac")
 
@@ -11,7 +11,7 @@ import Testing
         #expect(prefixed.hasSuffix("\n\nhello world"))
     }
 
-    @Test func forwardOptionsDefaults() {
+    @Test func `forward options defaults`() {
         let opts = VoiceWakeForwarder.ForwardOptions()
         #expect(opts.sessionKey == "main")
         #expect(opts.thinking == "low")

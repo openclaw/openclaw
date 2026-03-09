@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
+import { resetLogger, setLoggerOverride } from "../logging/logger.js";
 import type { AuthProfileStore } from "./auth-profiles.js";
 import { saveAuthProfileStore } from "./auth-profiles.js";
 import { AUTH_STORE_VERSION } from "./auth-profiles/constants.js";
@@ -487,6 +488,63 @@ describe("runWithModelFallback", () => {
     expect(run).toHaveBeenCalledTimes(2);
     expect(run.mock.calls[1]?.[0]).toBe("anthropic");
     expect(run.mock.calls[1]?.[1]).toBe("claude-haiku-3-5");
+  });
+
+  it("warns when falling back due to model_not_found", async () => {
+    setLoggerOverride({ level: "silent", consoleLevel: "warn" });
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const cfg = makeCfg();
+      const run = vi
+        .fn()
+        .mockRejectedValueOnce(new Error("Model not found: openai/gpt-6"))
+        .mockResolvedValueOnce("ok");
+
+      const result = await runWithModelFallback({
+        cfg,
+        provider: "openai",
+        model: "gpt-6",
+        run,
+      });
+
+      expect(result.result).toBe("ok");
+      expect(warnSpy).toHaveBeenCalledWith(
+        expect.stringContaining('Model "openai/gpt-6" not found'),
+      );
+    } finally {
+      warnSpy.mockRestore();
+      setLoggerOverride(null);
+      resetLogger();
+    }
+  });
+
+  it("sanitizes model identifiers in model_not_found warnings", async () => {
+    setLoggerOverride({ level: "silent", consoleLevel: "warn" });
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const cfg = makeCfg();
+      const run = vi
+        .fn()
+        .mockRejectedValueOnce(new Error("Model not found: openai/gpt-6"))
+        .mockResolvedValueOnce("ok");
+
+      const result = await runWithModelFallback({
+        cfg,
+        provider: "openai",
+        model: "gpt-6\u001B[31m\nspoof",
+        run,
+      });
+
+      expect(result.result).toBe("ok");
+      const warning = warnSpy.mock.calls[0]?.[0] as string;
+      expect(warning).toContain('Model "openai/gpt-6spoof" not found');
+      expect(warning).not.toContain("\u001B");
+      expect(warning).not.toContain("\n");
+    } finally {
+      warnSpy.mockRestore();
+      setLoggerOverride(null);
+      resetLogger();
+    }
   });
 
   it("skips providers when all profiles are in cooldown", async () => {
