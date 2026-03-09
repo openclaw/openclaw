@@ -13,6 +13,7 @@ import {
 type SystemRunParamsLike = {
   command?: unknown;
   rawCommand?: unknown;
+  systemRunPlan?: unknown;
   cwd?: unknown;
   env?: unknown;
   timeoutMs?: unknown;
@@ -69,6 +70,7 @@ function pickSystemRunParams(raw: Record<string, unknown>): Record<string, unkno
   for (const key of [
     "command",
     "rawCommand",
+    "systemRunPlan",
     "cwd",
     "env",
     "timeoutMs",
@@ -225,6 +227,7 @@ export function sanitizeSystemRunParamsForForwarding(opts: {
   }
   if (runtimeContext.plan) {
     next.command = [...runtimeContext.plan.argv];
+    next.systemRunPlan = runtimeContext.plan;
     if (runtimeContext.rawCommand) {
       next.rawCommand = runtimeContext.rawCommand;
     } else {

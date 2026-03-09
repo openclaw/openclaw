@@ -15,6 +15,12 @@ type WarningParams = {
 
 const warnedContexts = new Map<string, string>();
 const log = createSubsystemLogger("session-maintenance-warning");
+let deliverRuntimePromise: Promise<typeof import("./outbound/deliver-runtime.js")> | null = null;
+
+function loadDeliverRuntime() {
+  deliverRuntimePromise ??= import("./outbound/deliver-runtime.js");
+  return deliverRuntimePromise;
+}
 
 function shouldSendWarning(): boolean {
   return !process.env.VITEST && process.env.NODE_ENV !== "test";
@@ -95,7 +101,7 @@ export async function deliverSessionMaintenanceWarning(params: WarningParams): P
   }
 
   try {
-    const { deliverOutboundPayloads } = await import("./outbound/deliver.js");
+    const { deliverOutboundPayloads } = await loadDeliverRuntime();
     const outboundSession = buildOutboundSessionContext({
       cfg: params.cfg,
       sessionKey: params.sessionKey,
