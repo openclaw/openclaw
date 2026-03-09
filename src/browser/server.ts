@@ -4,11 +4,10 @@ import { loadConfig } from "../config/config.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { resolveBrowserConfig } from "./config.js";
 import { ensureBrowserControlAuth, resolveBrowserControlAuth } from "./control-auth.js";
-import { isPwAiLoaded } from "./pw-ai-state.js";
 import { registerBrowserRoutes } from "./routes/index.js";
 import type { BrowserRouteRegistrar } from "./routes/types.js";
+import { createBrowserRuntimeState, stopBrowserRuntime } from "./runtime-lifecycle.js";
 import { type BrowserServerState, createBrowserRouteContext } from "./server-context.js";
-import { ensureExtensionRelayForProfiles, stopKnownBrowserProfiles } from "./server-lifecycle.js";
 import {
   installBrowserAuthMiddleware,
   installBrowserCommonMiddleware,
@@ -74,14 +73,9 @@ export async function startBrowserControlServerFromConfig(): Promise<BrowserServ
     return null;
   }
 
-  state = {
+  state = await createBrowserRuntimeState({
     server,
     port,
-    resolved,
-    profiles: new Map(),
-  };
-
-  await ensureExtensionRelayForProfiles({
     resolved,
     onWarn: (message) => logServer.warn(message),
   });
@@ -93,29 +87,13 @@ export async function startBrowserControlServerFromConfig(): Promise<BrowserServ
 
 export async function stopBrowserControlServer(): Promise<void> {
   const current = state;
-  if (!current) {
-    return;
-  }
-
-  await stopKnownBrowserProfiles({
+  await stopBrowserRuntime({
+    current,
     getState: () => state,
+    clearState: () => {
+      state = null;
+    },
+    closeServer: true,
     onWarn: (message) => logServer.warn(message),
   });
-
-  if (current.server) {
-    await new Promise<void>((resolve) => {
-      current.server?.close(() => resolve());
-    });
-  }
-  state = null;
-
-  // Optional: avoid importing heavy Playwright bridge when this process never used it.
-  if (isPwAiLoaded()) {
-    try {
-      const mod = await import("./pw-ai.js");
-      await mod.closePlaywrightBrowserConnection();
-    } catch {
-      // ignore
-    }
-  }
 }

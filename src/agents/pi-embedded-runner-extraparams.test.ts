@@ -207,8 +207,8 @@ describe("applyExtraParamsToAgent", () => {
     payload?: Record<string, unknown>;
   }) {
     const payload = params.payload ?? { store: false };
-    const baseStreamFn: StreamFn = (_model, _context, options) => {
-      options?.onPayload?.(payload);
+    const baseStreamFn: StreamFn = (model, _context, options) => {
+      options?.onPayload?.(payload, model);
       return {} as ReturnType<StreamFn>;
     };
     const agent = { streamFn: baseStreamFn };
@@ -232,8 +232,8 @@ describe("applyExtraParamsToAgent", () => {
     payload?: Record<string, unknown>;
   }) {
     const payload = params.payload ?? {};
-    const baseStreamFn: StreamFn = (_model, _context, options) => {
-      options?.onPayload?.(payload);
+    const baseStreamFn: StreamFn = (model, _context, options) => {
+      options?.onPayload?.(payload, model);
       return {} as ReturnType<StreamFn>;
     };
     const agent = { streamFn: baseStreamFn };
@@ -276,7 +276,7 @@ describe("applyExtraParamsToAgent", () => {
     const payloads: Record<string, unknown>[] = [];
     const baseStreamFn: StreamFn = (_model, _context, options) => {
       const payload: Record<string, unknown> = { model: "deepseek/deepseek-r1" };
-      options?.onPayload?.(payload);
+      options?.onPayload?.(payload, model);
       payloads.push(payload);
       return {} as ReturnType<StreamFn>;
     };
@@ -308,7 +308,7 @@ describe("applyExtraParamsToAgent", () => {
     const payloads: Record<string, unknown>[] = [];
     const baseStreamFn: StreamFn = (_model, _context, options) => {
       const payload: Record<string, unknown> = {};
-      options?.onPayload?.(payload);
+      options?.onPayload?.(payload, model);
       payloads.push(payload);
       return {} as ReturnType<StreamFn>;
     };
@@ -332,7 +332,7 @@ describe("applyExtraParamsToAgent", () => {
     const payloads: Record<string, unknown>[] = [];
     const baseStreamFn: StreamFn = (_model, _context, options) => {
       const payload: Record<string, unknown> = { reasoning_effort: "high" };
-      options?.onPayload?.(payload);
+      options?.onPayload?.(payload, model);
       payloads.push(payload);
       return {} as ReturnType<StreamFn>;
     };
@@ -357,7 +357,7 @@ describe("applyExtraParamsToAgent", () => {
     const payloads: Record<string, unknown>[] = [];
     const baseStreamFn: StreamFn = (_model, _context, options) => {
       const payload: Record<string, unknown> = { reasoning: { max_tokens: 256 } };
-      options?.onPayload?.(payload);
+      options?.onPayload?.(payload, model);
       payloads.push(payload);
       return {} as ReturnType<StreamFn>;
     };
@@ -381,7 +381,7 @@ describe("applyExtraParamsToAgent", () => {
     const payloads: Record<string, unknown>[] = [];
     const baseStreamFn: StreamFn = (_model, _context, options) => {
       const payload: Record<string, unknown> = { reasoning_effort: "medium" };
-      options?.onPayload?.(payload);
+      options?.onPayload?.(payload, model);
       payloads.push(payload);
       return {} as ReturnType<StreamFn>;
     };
@@ -588,7 +588,7 @@ describe("applyExtraParamsToAgent", () => {
     const payloads: Record<string, unknown>[] = [];
     const baseStreamFn: StreamFn = (_model, _context, options) => {
       const payload: Record<string, unknown> = { thinking: "off" };
-      options?.onPayload?.(payload);
+      options?.onPayload?.(payload, model);
       payloads.push(payload);
       return {} as ReturnType<StreamFn>;
     };
@@ -619,7 +619,7 @@ describe("applyExtraParamsToAgent", () => {
     const payloads: Record<string, unknown>[] = [];
     const baseStreamFn: StreamFn = (_model, _context, options) => {
       const payload: Record<string, unknown> = { thinking: "off" };
-      options?.onPayload?.(payload);
+      options?.onPayload?.(payload, model);
       payloads.push(payload);
       return {} as ReturnType<StreamFn>;
     };
@@ -650,7 +650,7 @@ describe("applyExtraParamsToAgent", () => {
     const payloads: Record<string, unknown>[] = [];
     const baseStreamFn: StreamFn = (_model, _context, options) => {
       const payload: Record<string, unknown> = {};
-      options?.onPayload?.(payload);
+      options?.onPayload?.(payload, model);
       payloads.push(payload);
       return {} as ReturnType<StreamFn>;
     };
@@ -674,7 +674,7 @@ describe("applyExtraParamsToAgent", () => {
     const payloads: Record<string, unknown>[] = [];
     const baseStreamFn: StreamFn = (_model, _context, options) => {
       const payload: Record<string, unknown> = { tool_choice: "required" };
-      options?.onPayload?.(payload);
+      options?.onPayload?.(payload, model);
       payloads.push(payload);
       return {} as ReturnType<StreamFn>;
     };
@@ -699,7 +699,7 @@ describe("applyExtraParamsToAgent", () => {
     const payloads: Record<string, unknown>[] = [];
     const baseStreamFn: StreamFn = (_model, _context, options) => {
       const payload: Record<string, unknown> = {};
-      options?.onPayload?.(payload);
+      options?.onPayload?.(payload, model);
       payloads.push(payload);
       return {} as ReturnType<StreamFn>;
     };
@@ -757,7 +757,7 @@ describe("applyExtraParamsToAgent", () => {
         ],
         tool_choice: { type: "tool", name: "read" },
       };
-      options?.onPayload?.(payload);
+      options?.onPayload?.(payload, model);
       payloads.push(payload);
       return {} as ReturnType<StreamFn>;
     };
@@ -803,6 +803,44 @@ describe("applyExtraParamsToAgent", () => {
     });
   });
 
+  it.each([
+    { input: { type: "auto" }, expected: "auto" },
+    { input: { type: "none" }, expected: "none" },
+    { input: { type: "required" }, expected: "required" },
+  ])("normalizes anthropic tool_choice %j for kimi-coding endpoints", ({ input, expected }) => {
+    const payloads: Record<string, unknown>[] = [];
+    const baseStreamFn: StreamFn = (_model, _context, options) => {
+      const payload: Record<string, unknown> = {
+        tools: [
+          {
+            name: "read",
+            description: "Read file",
+            input_schema: { type: "object", properties: {} },
+          },
+        ],
+        tool_choice: input,
+      };
+      options?.onPayload?.(payload, model);
+      payloads.push(payload);
+      return {} as ReturnType<StreamFn>;
+    };
+    const agent = { streamFn: baseStreamFn };
+
+    applyExtraParamsToAgent(agent, undefined, "kimi-coding", "k2p5", undefined, "low");
+
+    const model = {
+      api: "anthropic-messages",
+      provider: "kimi-coding",
+      id: "k2p5",
+      baseUrl: "https://api.kimi.com/coding/",
+    } as Model<"anthropic-messages">;
+    const context: Context = { messages: [] };
+    void agent.streamFn?.(model, context, {});
+
+    expect(payloads).toHaveLength(1);
+    expect(payloads[0]?.tool_choice).toBe(expected);
+  });
+
   it("does not rewrite anthropic tool schema for non-kimi endpoints", () => {
     const payloads: Record<string, unknown>[] = [];
     const baseStreamFn: StreamFn = (_model, _context, options) => {
@@ -815,7 +853,7 @@ describe("applyExtraParamsToAgent", () => {
           },
         ],
       };
-      options?.onPayload?.(payload);
+      options?.onPayload?.(payload, model);
       payloads.push(payload);
       return {} as ReturnType<StreamFn>;
     };
@@ -838,6 +876,57 @@ describe("applyExtraParamsToAgent", () => {
         name: "read",
         description: "Read file",
         input_schema: { type: "object", properties: {} },
+      },
+    ]);
+  });
+
+  it("uses explicit compat metadata for anthropic tool payload normalization", () => {
+    const payloads: Record<string, unknown>[] = [];
+    const baseStreamFn: StreamFn = (_model, _context, options) => {
+      const payload: Record<string, unknown> = {
+        tools: [
+          {
+            name: "read",
+            description: "Read file",
+            input_schema: { type: "object", properties: {} },
+          },
+        ],
+      };
+      options?.onPayload?.(payload, model);
+      payloads.push(payload);
+      return {} as ReturnType<StreamFn>;
+    };
+    const agent = { streamFn: baseStreamFn };
+
+    applyExtraParamsToAgent(
+      agent,
+      undefined,
+      "custom-anthropic-proxy",
+      "proxy-model",
+      undefined,
+      "low",
+    );
+
+    const model = {
+      api: "anthropic-messages",
+      provider: "custom-anthropic-proxy",
+      id: "proxy-model",
+      compat: {
+        requiresOpenAiAnthropicToolPayload: true,
+      },
+    } as unknown as Model<"anthropic-messages">;
+    const context: Context = { messages: [] };
+    void agent.streamFn?.(model, context, {});
+
+    expect(payloads).toHaveLength(1);
+    expect(payloads[0]?.tools).toEqual([
+      {
+        type: "function",
+        function: {
+          name: "read",
+          description: "Read file",
+          parameters: { type: "object", properties: {} },
+        },
       },
     ]);
   });
@@ -867,7 +956,7 @@ describe("applyExtraParamsToAgent", () => {
           },
         },
       };
-      options?.onPayload?.(payload);
+      options?.onPayload?.(payload, model);
       payloads.push(payload);
       return {} as ReturnType<StreamFn>;
     };
@@ -914,7 +1003,7 @@ describe("applyExtraParamsToAgent", () => {
           },
         },
       };
-      options?.onPayload?.(payload);
+      options?.onPayload?.(payload, model);
       payloads.push(payload);
       return {} as ReturnType<StreamFn>;
     };
