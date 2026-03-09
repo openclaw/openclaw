@@ -1,6 +1,5 @@
 import type { OpenClawPluginConfigSchema } from "openclaw/plugin-sdk/acp";
 
-export const ACP_REMOTE_DRAFT_REVISION = "openclaw-ndjson-http-v1";
 export const ACP_REMOTE_PROTOCOL_VERSION = 1;
 
 export type AcpRemotePluginConfig = {
@@ -8,7 +7,6 @@ export type AcpRemotePluginConfig = {
   headers?: Record<string, string>;
   timeoutSeconds?: number;
   retryDelayMs?: number;
-  requiredDraftRevision?: string;
   protocolVersion?: number;
 };
 
@@ -17,7 +15,6 @@ export type ResolvedAcpRemotePluginConfig = {
   headers: Record<string, string>;
   timeoutMs: number;
   retryDelayMs: number;
-  requiredDraftRevision: string;
   protocolVersion: number;
 };
 
@@ -60,7 +57,6 @@ function parseAcpRemotePluginConfig(value: unknown): ParseResult {
     "headers",
     "timeoutSeconds",
     "retryDelayMs",
-    "requiredDraftRevision",
     "protocolVersion",
   ]);
   for (const key of Object.keys(value)) {
@@ -100,11 +96,6 @@ function parseAcpRemotePluginConfig(value: unknown): ParseResult {
     return { ok: false, message: "retryDelayMs must be a non-negative number" };
   }
 
-  const requiredDraftRevision = normalizeText(value.requiredDraftRevision);
-  if (value.requiredDraftRevision !== undefined && !requiredDraftRevision) {
-    return { ok: false, message: "requiredDraftRevision must be a non-empty string" };
-  }
-
   const protocolVersion = value.protocolVersion;
   if (
     protocolVersion !== undefined &&
@@ -120,7 +111,6 @@ function parseAcpRemotePluginConfig(value: unknown): ParseResult {
       headers: headers as Record<string, string> | undefined,
       timeoutSeconds: typeof timeoutSeconds === "number" ? timeoutSeconds : undefined,
       retryDelayMs: typeof retryDelayMs === "number" ? retryDelayMs : undefined,
-      requiredDraftRevision,
       protocolVersion: typeof protocolVersion === "number" ? protocolVersion : undefined,
     },
   };
@@ -157,7 +147,6 @@ export function createAcpRemotePluginConfigSchema(): OpenClawPluginConfigSchema 
         },
         timeoutSeconds: { type: "number", minimum: 0.001 },
         retryDelayMs: { type: "number", minimum: 0 },
-        requiredDraftRevision: { type: "string" },
         protocolVersion: {
           type: "integer",
           minimum: 1,
@@ -181,7 +170,6 @@ export function resolveAcpRemotePluginConfig(params: {
     headers: { ...(normalized.headers ?? {}) },
     timeoutMs: Math.round((normalized.timeoutSeconds ?? DEFAULT_TIMEOUT_SECONDS) * 1000),
     retryDelayMs: Math.max(0, Math.round(normalized.retryDelayMs ?? DEFAULT_RETRY_DELAY_MS)),
-    requiredDraftRevision: normalized.requiredDraftRevision ?? ACP_REMOTE_DRAFT_REVISION,
     protocolVersion: normalized.protocolVersion ?? ACP_REMOTE_PROTOCOL_VERSION,
   };
 }

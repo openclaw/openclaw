@@ -1,7 +1,7 @@
 {
   "id": "acp-remote",
   "name": "ACP Remote Runtime",
-  "description": "ACP runtime backend that connects OpenClaw to a remote ACP gateway over newline-delimited JSON-RPC HTTP streams.",
+  "description": "ACP runtime backend that connects OpenClaw to a remote ACP gateway over Streamable HTTP.",
   "configSchema": {
     "type": "object",
     "additionalProperties": false,
@@ -23,9 +23,6 @@
         "type": "number",
         "minimum": 0
       },
-      "requiredDraftRevision": {
-        "type": "string"
-      },
       "protocolVersion": {
         "type": "integer",
         "minimum": 1,
@@ -37,7 +34,7 @@
   "uiHints": {
     "url": {
       "label": "Gateway URL",
-      "help": "HTTP endpoint that accepts newline-delimited ACP JSON-RPC requests and streams newline-delimited responses."
+      "help": "HTTP endpoint that accepts ACP JSON-RPC requests over Streamable HTTP and returns JSON or SSE responses."
     },
     "headers": {
       "label": "HTTP Headers",
@@ -52,11 +49,6 @@
     "retryDelayMs": {
       "label": "Prompt Retry Delay Ms",
       "help": "Delay before reissuing a dropped prompt request with the same OpenClaw request id.",
-      "advanced": true
-    },
-    "requiredDraftRevision": {
-      "label": "Required Draft Revision",
-      "help": "Compatibility revision that the remote gateway must echo during initialize.",
       "advanced": true
     },
     "protocolVersion": {

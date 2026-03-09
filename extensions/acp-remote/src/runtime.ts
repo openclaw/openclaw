@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash } from "node:crypto";
 import type {
   AcpRuntime,
   AcpRuntimeCapabilities,
@@ -171,6 +171,11 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+function buildStableClientId(sessionKey: string): string {
+  const digest = createHash("sha256").update(sessionKey).digest("hex").slice(0, 24);
+  return `openclaw:${digest}`;
+}
+
 function isAbortLikeError(error: unknown): boolean {
   if (!(error instanceof Error)) {
     return false;
@@ -246,6 +251,23 @@ function normalizeStopReason(value: unknown): string | undefined {
   return normalizeText(value);
 }
 
+function normalizeContentType(value: string | null): string {
+  return value?.split(";")[0]?.trim().toLowerCase() ?? "";
+}
+
+function parseJsonRpcPayload(value: unknown, method: string): JsonRpcMessage[] {
+  if (Array.isArray(value)) {
+    if (!value.every(isRecord)) {
+      throw new Error(`ACP remote ${method} returned a non-object JSON-RPC payload.`);
+    }
+    return value as JsonRpcMessage[];
+  }
+  if (!isRecord(value)) {
+    throw new Error(`ACP remote ${method} returned a non-object JSON-RPC payload.`);
+  }
+  return [value as JsonRpcMessage];
+}
+
 function serializeNotification(message: JsonRpcNotification): string {
   return JSON.stringify(message);
 }
@@ -284,10 +306,7 @@ export class AcpRemoteRuntime implements AcpRuntime {
       return {
         ok: state.loadSession,
         message: `ACP remote gateway ready at ${this.config.url}`,
-        details: [
-          `protocolVersion=${state.protocolVersion}`,
-          `draftRevision=${this.config.requiredDraftRevision}`,
-        ],
+        details: [`protocolVersion=${state.protocolVersion}`, "transport=streamable-http"],
       };
     } catch (error) {
       return {
@@ -337,7 +356,7 @@ export class AcpRemoteRuntime implements AcpRuntime {
     const cwd = normalizeText(input.cwd) ?? process.cwd();
     const sessionId = sessionKey;
     const existing = this.sessionStateBySessionId.get(sessionId);
-    const clientId = existing?.clientId ?? randomUUID();
+    const clientId = existing?.clientId ?? buildStableClientId(sessionKey);
 
     try {
       const result = await this.request<Record<string, unknown> | null>({
@@ -625,11 +644,7 @@ export class AcpRemoteRuntime implements AcpRuntime {
   }
 
   private buildMeta(extra: Record<string, unknown>): Record<string, unknown> {
-    return {
-      openclawDraftRevision: this.config.requiredDraftRevision,
-      openclawTransport: "ndjson-http-response-stream",
-      ...extra,
-    };
+    return { ...extra };
   }
 
   private async initializeRemote(
@@ -651,7 +666,6 @@ export class AcpRemoteRuntime implements AcpRuntime {
           terminal: false,
         },
         clientInfo: ACP_REMOTE_CLIENT_INFO,
-        _meta: this.buildMeta({}),
       },
     });
 
@@ -660,15 +674,6 @@ export class AcpRemoteRuntime implements AcpRuntime {
       throw new AcpRuntimeError(
         "ACP_BACKEND_UNAVAILABLE",
         `ACP remote protocol mismatch: expected ${this.config.protocolVersion}, got ${protocolVersion ?? "unknown"}.`,
-      );
-    }
-
-    const responseMeta = isRecord(result._meta) ? result._meta : {};
-    const returnedDraftRevision = normalizeText(responseMeta.openclawDraftRevision);
-    if (returnedDraftRevision !== this.config.requiredDraftRevision) {
-      throw new AcpRuntimeError(
-        "ACP_BACKEND_UNAVAILABLE",
-        `ACP remote draft revision mismatch: expected ${this.config.requiredDraftRevision}, got ${returnedDraftRevision ?? "unknown"}.`,
       );
     }
 
@@ -846,16 +851,16 @@ export class AcpRemoteRuntime implements AcpRuntime {
     const response = await fetch(this.config.url, {
       method: "POST",
       headers: {
-        accept: "application/x-ndjson",
-        "content-type": "application/x-ndjson",
+        accept: "application/json, text/event-stream",
+        "content-type": "application/json",
         ...this.config.headers,
       },
-      body: `${JSON.stringify({
+      body: JSON.stringify({
         jsonrpc: "2.0",
         id: params.id,
         method: params.method,
         params: params.params,
-      })}\n`,
+      }),
       signal,
     });
 
@@ -870,32 +875,62 @@ export class AcpRemoteRuntime implements AcpRuntime {
       throw new MissingTerminalResponseError(params.method);
     }
 
-    const reader = response.body.getReader();
-    const decoder = new TextDecoder();
-    let buffer = "";
-    while (true) {
-      const chunk = await reader.read();
-      if (chunk.done) {
-        break;
-      }
-      buffer += decoder.decode(chunk.value, { stream: true });
+    const contentType = normalizeContentType(response.headers.get("content-type"));
+    if (contentType === "text/event-stream") {
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+      const emitEvent = async function* (rawEvent: string): AsyncIterable<JsonRpcMessage> {
+        const dataLines: string[] = [];
+        for (const rawLine of rawEvent.split("\n")) {
+          const line = rawLine.trimEnd();
+          if (!line || line.startsWith(":")) {
+            continue;
+          }
+          if (line.startsWith("data:")) {
+            dataLines.push(line.slice(5).trimStart());
+          }
+        }
+        if (dataLines.length === 0) {
+          return;
+        }
+        const payload = JSON.parse(dataLines.join("\n")) as unknown;
+        for (const message of parseJsonRpcPayload(payload, params.method)) {
+          yield message;
+        }
+      };
+
       while (true) {
-        const newlineIndex = buffer.indexOf("\n");
-        if (newlineIndex === -1) {
+        const chunk = await reader.read();
+        if (chunk.done) {
           break;
         }
-        const line = buffer.slice(0, newlineIndex).trim();
-        buffer = buffer.slice(newlineIndex + 1);
-        if (!line) {
-          continue;
+        buffer += decoder.decode(chunk.value, { stream: true }).replaceAll("\r\n", "\n");
+        while (true) {
+          const eventEnd = buffer.indexOf("\n\n");
+          if (eventEnd === -1) {
+            break;
+          }
+          const rawEvent = buffer.slice(0, eventEnd);
+          buffer = buffer.slice(eventEnd + 2);
+          yield* emitEvent(rawEvent);
         }
-        yield JSON.parse(line) as JsonRpcMessage;
       }
+
+      const tail = `${buffer}${decoder.decode()}`.replaceAll("\r\n", "\n").trim();
+      if (tail) {
+        yield* emitEvent(tail);
+      }
+      return;
     }
 
-    const finalChunk = `${buffer}${decoder.decode()}`.trim();
-    if (finalChunk) {
-      yield JSON.parse(finalChunk) as JsonRpcMessage;
+    const text = await response.text();
+    if (!text.trim()) {
+      return;
+    }
+    const payload = JSON.parse(text) as unknown;
+    for (const message of parseJsonRpcPayload(payload, params.method)) {
+      yield message;
     }
   }
 
@@ -937,15 +972,15 @@ export class AcpRemoteRuntime implements AcpRuntime {
     const response = await fetch(this.config.url, {
       method: "POST",
       headers: {
-        accept: "application/x-ndjson",
-        "content-type": "application/x-ndjson",
+        accept: "application/json, text/event-stream",
+        "content-type": "application/json",
         ...this.config.headers,
       },
-      body: `${JSON.stringify({
+      body: JSON.stringify({
         jsonrpc: "2.0",
         method: params.method,
         params: params.params,
-      })}\n`,
+      }),
       signal,
     });
 
@@ -955,6 +990,9 @@ export class AcpRemoteRuntime implements AcpRuntime {
         response.status,
         `ACP remote ${params.method} failed with HTTP ${response.status}${text ? `: ${text.trim()}` : ""}`,
       );
+    }
+    if (response.status === 202 || response.status === 204) {
+      return;
     }
     await response.text().catch(() => "");
   }

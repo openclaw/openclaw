@@ -1,8 +1,9 @@
 import { createServer } from "node:http";
+import type { IncomingHttpHeaders } from "node:http";
 import type { AddressInfo } from "node:net";
 import { afterEach, describe, expect, it } from "vitest";
 import { runAcpRuntimeAdapterContract } from "../../../src/acp/runtime/adapter-contract.testkit.js";
-import { ACP_REMOTE_DRAFT_REVISION } from "./config.js";
+import { ACP_REMOTE_PROTOCOL_VERSION } from "./config.js";
 import { AcpRemoteRuntime, decodeAcpRemoteHandleState } from "./runtime.js";
 
 type RpcRequest = {
@@ -11,32 +12,44 @@ type RpcRequest = {
   params?: Record<string, unknown>;
 };
 
+type CapturedRequest = {
+  headers: IncomingHttpHeaders;
+  request: RpcRequest;
+};
+
 class MockAcpRemoteGateway {
   private readonly server = createServer(async (req, res) => {
     const chunks: Buffer[] = [];
     for await (const chunk of req) {
       chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
     }
-    const requestLine = Buffer.concat(chunks).toString("utf8").trim().split("\n")[0] ?? "";
-    const request = JSON.parse(requestLine || "{}") as RpcRequest;
+    const request = JSON.parse(Buffer.concat(chunks).toString("utf8") || "{}") as RpcRequest;
+    this.requests.push({
+      headers: req.headers,
+      request,
+    });
 
-    const send = (message: unknown) => {
-      res.write(`${JSON.stringify(message)}\n`);
+    const writeJson = (message: unknown) => {
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify(message));
     };
 
-    const ok = () => {
-      res.writeHead(200, { "content-type": "application/x-ndjson" });
+    const beginSse = () => {
+      res.writeHead(200, { "content-type": "text/event-stream; charset=utf-8" });
+    };
+
+    const writeSse = (message: unknown) => {
+      res.write(`event: message\ndata: ${JSON.stringify(message)}\n\n`);
     };
 
     if (request.method === "initialize") {
-      ok();
-      send({
+      writeJson({
         jsonrpc: "2.0",
         id: request.id,
         result: {
-          protocolVersion: request.params?.protocolVersion ?? 1,
+          protocolVersion: this.protocolVersion,
           agentCapabilities: {
-            loadSession: true,
+            loadSession: this.loadSession,
             promptCapabilities: {
               image: false,
               audio: false,
@@ -53,21 +66,16 @@ class MockAcpRemoteGateway {
             name: "mock-acp-gateway",
             version: "test",
           },
-          _meta: {
-            openclawDraftRevision: this.draftRevision,
-          },
         },
       });
-      res.end();
       return;
     }
 
     if (request.method === "session/load") {
-      ok();
       const sessionId = String(request.params?.sessionId ?? "");
       this.loadCalls.push(sessionId);
       if (!this.sessions.has(sessionId)) {
-        send({
+        writeJson({
           jsonrpc: "2.0",
           id: request.id,
           error: {
@@ -78,28 +86,36 @@ class MockAcpRemoteGateway {
             },
           },
         });
-        res.end();
         return;
       }
-      send({
+      beginSse();
+      const session = this.sessions.get(sessionId);
+      if (session?.history.length) {
+        for (const notification of session.history) {
+          writeSse(notification);
+        }
+      }
+      writeSse({
         jsonrpc: "2.0",
         id: request.id,
         result: {
-          modes: this.sessions.get(sessionId)?.currentModeId
+          modes: session?.currentModeId
             ? {
-                currentModeId: this.sessions.get(sessionId)?.currentModeId,
-                availableModes: [{ id: "contract", name: "Contract" }],
+                currentModeId: session.currentModeId,
+                availableModes: [
+                  { id: "prompt", name: "Prompt" },
+                  { id: "steer", name: "Steer" },
+                  { id: "contract", name: "Contract" },
+                ],
               }
             : undefined,
-          configOptions: Object.entries(this.sessions.get(sessionId)?.configOptions ?? {}).map(
-            ([id, currentValue]) => ({
-              type: "select",
-              id,
-              name: id,
-              currentValue,
-              options: [],
-            }),
-          ),
+          configOptions: Object.entries(session?.configOptions ?? {}).map(([id, currentValue]) => ({
+            type: "select",
+            id,
+            name: id,
+            currentValue,
+            options: [],
+          })),
         },
       });
       res.end();
@@ -107,26 +123,24 @@ class MockAcpRemoteGateway {
     }
 
     if (request.method === "session/new") {
-      ok();
       const sessionId = String(request.params?._meta?.openclawSessionId ?? "");
       this.newCalls.push(sessionId);
       this.sessions.set(sessionId, {
         currentModeId: undefined,
         configOptions: {},
+        history: [],
       });
-      send({
+      writeJson({
         jsonrpc: "2.0",
         id: request.id,
         result: {
           sessionId,
         },
       });
-      res.end();
       return;
     }
 
     if (request.method === "session/set_mode") {
-      ok();
       const sessionId = String(request.params?.sessionId ?? "");
       const modeId = String(request.params?.modeId ?? "");
       this.setModeCalls.push({ sessionId, modeId });
@@ -134,17 +148,24 @@ class MockAcpRemoteGateway {
       if (session) {
         session.currentModeId = modeId;
       }
-      send({
+      writeJson({
         jsonrpc: "2.0",
         id: request.id,
-        result: {},
+        result: {
+          modes: {
+            currentModeId: modeId,
+            availableModes: [
+              { id: "prompt", name: "Prompt" },
+              { id: "steer", name: "Steer" },
+              { id: "contract", name: "Contract" },
+            ],
+          },
+        },
       });
-      res.end();
       return;
     }
 
     if (request.method === "session/set_config_option") {
-      ok();
       const sessionId = String(request.params?.sessionId ?? "");
       const configId = String(request.params?.configId ?? "");
       const value = String(request.params?.value ?? "");
@@ -153,7 +174,7 @@ class MockAcpRemoteGateway {
       if (session) {
         session.configOptions[configId] = value;
       }
-      send({
+      writeJson({
         jsonrpc: "2.0",
         id: request.id,
         result: {
@@ -168,34 +189,31 @@ class MockAcpRemoteGateway {
           ],
         },
       });
-      res.end();
       return;
     }
 
     if (request.method === "session/close") {
-      ok();
       const sessionId = String(request.params?.sessionId ?? "");
       this.closeCalls.push(sessionId);
       this.sessions.delete(sessionId);
-      send({
+      writeJson({
         jsonrpc: "2.0",
         id: request.id,
         result: {},
       });
-      res.end();
       return;
     }
 
     if (request.method === "session/cancel") {
-      ok();
       const sessionId = String(request.params?.sessionId ?? "");
       this.cancelCalls.push(sessionId);
+      res.writeHead(202);
       res.end();
       return;
     }
 
     if (request.method === "session/prompt") {
-      ok();
+      beginSse();
       const sessionId = String(request.params?.sessionId ?? "");
       const prompt = request.params?.prompt;
       const text =
@@ -265,20 +283,23 @@ class MockAcpRemoteGateway {
           return result;
         })();
 
+      const session = this.sessions.get(sessionId);
+      if (session) {
+        session.history.push(...stored.notifications);
+      }
       for (const notification of stored.notifications) {
-        send(notification);
+        writeSse(notification);
       }
       if (this.dropFirstPromptAttempt && attempt === 1) {
         res.end();
         return;
       }
-      send(stored.terminal);
+      writeSse(stored.terminal);
       res.end();
       return;
     }
 
-    ok();
-    send({
+    writeJson({
       jsonrpc: "2.0",
       id: request.id,
       error: {
@@ -286,18 +307,20 @@ class MockAcpRemoteGateway {
         message: `unsupported method: ${String(request.method)}`,
       },
     });
-    res.end();
   });
 
-  draftRevision = ACP_REMOTE_DRAFT_REVISION;
+  protocolVersion = ACP_REMOTE_PROTOCOL_VERSION;
+  loadSession = true;
   dropFirstPromptAttempt = false;
   readonly sessions = new Map<
     string,
     {
       currentModeId?: string;
       configOptions: Record<string, string>;
+      history: unknown[];
     }
   >();
+  readonly requests: CapturedRequest[] = [];
   readonly promptAttempts = new Map<string, number>();
   readonly promptResults = new Map<
     string,
@@ -349,12 +372,7 @@ afterEach(async () => {
   }
 });
 
-async function createRuntime(
-  params: {
-    gateway?: MockAcpRemoteGateway;
-    requiredDraftRevision?: string;
-  } = {},
-) {
+async function createRuntime(params: { gateway?: MockAcpRemoteGateway } = {}) {
   const gateway = params.gateway ?? new MockAcpRemoteGateway();
   const url = await gateway.start();
   servers.push(gateway);
@@ -363,8 +381,7 @@ async function createRuntime(
     headers: {},
     timeoutMs: 5_000,
     retryDelayMs: 1,
-    requiredDraftRevision: params.requiredDraftRevision ?? ACP_REMOTE_DRAFT_REVISION,
-    protocolVersion: 1,
+    protocolVersion: ACP_REMOTE_PROTOCOL_VERSION,
   });
   return { runtime, gateway };
 }
@@ -396,14 +413,14 @@ describe("AcpRemoteRuntime", () => {
     expect(gateway.closeCalls.length).toBeGreaterThanOrEqual(1);
   });
 
-  it("reopens sessions by stable OpenClaw session key", async () => {
+  it("reopens sessions with a stable lease identity derived from the session key", async () => {
     const { runtime, gateway } = await createRuntime();
 
     const first = await runtime.ensureSession({
       sessionKey: "agent:codex:acp:stable",
       agent: "codex",
       mode: "persistent",
-      cwd: "/tmp/workspace",
+      cwd: "/home/test/workspace",
     });
     const decoded = decodeAcpRemoteHandleState(first.runtimeSessionName);
 
@@ -415,11 +432,60 @@ describe("AcpRemoteRuntime", () => {
       sessionKey: "agent:codex:acp:stable",
       agent: "codex",
       mode: "persistent",
-      cwd: "/tmp/workspace",
+      cwd: "/home/test/workspace",
     });
+
+    const loadRequests = gateway.requests.filter(
+      (entry) => entry.request.method === "session/load" || entry.request.method === "session/new",
+    );
+    const clientIds = loadRequests.map((entry) =>
+      String(
+        (entry.request.params?._meta as { openclawClientId?: unknown } | undefined)
+          ?.openclawClientId ?? "",
+      ),
+    );
 
     expect(gateway.loadCalls).toEqual(["agent:codex:acp:stable", "agent:codex:acp:stable"]);
     expect(gateway.newCalls).toEqual(["agent:codex:acp:stable"]);
+    expect(new Set(clientIds)).toEqual(new Set([decoded?.clientId]));
+  });
+
+  it("uses Streamable HTTP headers and omits private transport markers", async () => {
+    const { runtime, gateway } = await createRuntime();
+
+    const handle = await runtime.ensureSession({
+      sessionKey: "agent:codex:acp:transport",
+      agent: "codex",
+      mode: "persistent",
+      cwd: "/home/test/workspace",
+    });
+    await runtime.setMode({ handle, mode: "steer" });
+    await runtime.setConfigOption({ handle, key: "verbosity", value: "verbose" });
+    await runtime.cancel({ handle, reason: "transport-check" });
+
+    const initializeRequest = gateway.requests.find(
+      (entry) => entry.request.method === "initialize",
+    );
+    const promptOrControlRequests = gateway.requests.filter((entry) =>
+      [
+        "session/new",
+        "session/load",
+        "session/set_mode",
+        "session/set_config_option",
+        "session/cancel",
+      ].includes(String(entry.request.method)),
+    );
+
+    expect(initializeRequest?.headers.accept).toContain("application/json");
+    expect(initializeRequest?.headers.accept).toContain("text/event-stream");
+    expect(initializeRequest?.headers["content-type"]).toContain("application/json");
+    expect(initializeRequest?.request.params?._meta).toBeUndefined();
+
+    for (const entry of promptOrControlRequests) {
+      const meta = (entry.request.params?._meta as Record<string, unknown> | undefined) ?? {};
+      expect(meta.openclawDraftRevision).toBeUndefined();
+      expect(meta.openclawTransport).toBeUndefined();
+    }
   });
 
   it("retries dropped prompt streams and suppresses replay duplicates", async () => {
@@ -431,7 +497,7 @@ describe("AcpRemoteRuntime", () => {
       sessionKey: "agent:codex:acp:retry",
       agent: "codex",
       mode: "persistent",
-      cwd: "/tmp/workspace",
+      cwd: "/home/test/workspace",
     });
 
     const events = [];
@@ -475,9 +541,9 @@ describe("AcpRemoteRuntime", () => {
     });
   });
 
-  it("fails probe when the remote draft revision is incompatible", async () => {
+  it("fails probe when the remote endpoint does not advertise session/load support", async () => {
     const gateway = new MockAcpRemoteGateway();
-    gateway.draftRevision = "wrong-draft";
+    gateway.loadSession = false;
     const { runtime } = await createRuntime({ gateway });
 
     await runtime.probeAvailability();
