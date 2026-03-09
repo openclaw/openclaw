@@ -29,7 +29,7 @@ export type PluginRuntimeCore = {
     requestHeartbeatNow: typeof import("../../infra/heartbeat-wake.js").requestHeartbeatNow;
     /**
      * Run a single heartbeat cycle synchronously (bypassing the coalesce timer).
-     * Accepts an optional `heartbeat` config override so callers can force
+     * Run a single heartbeat cycle immediately (bypassing the coalesce timer).
      * delivery to the last active channel — the same pattern the cron service
      * uses to avoid the default `target: "none"` suppression.
      */
