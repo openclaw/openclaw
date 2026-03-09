@@ -981,7 +981,7 @@ export async function compactEmbeddedPiSession(
           force: params.trigger === "manual",
           runtimeContext: params as Record<string, unknown>,
         });
-        if (hookRunner?.hasHooks("after_compaction")) {
+        if (result.ok && result.compacted && hookRunner?.hasHooks("after_compaction")) {
           try {
             await hookRunner.runAfterCompaction(
               {
