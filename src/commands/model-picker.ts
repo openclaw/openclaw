@@ -325,6 +325,7 @@ export async function promptDefaultModel(
     message: params.message ?? "Default model",
     options,
     initialValue,
+    searchable: true,
   });
 
   if (selection === KEEP_VALUE) {
