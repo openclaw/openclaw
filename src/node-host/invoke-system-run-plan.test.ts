@@ -69,9 +69,16 @@ function withFakeRuntimeBin<T>(params: { binName: string; run: () => T }): T {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), `openclaw-${params.binName}-bin-`));
   const binDir = path.join(tmp, "bin");
   fs.mkdirSync(binDir, { recursive: true });
-  const runtimePath = path.join(binDir, params.binName);
-  fs.writeFileSync(runtimePath, "#!/bin/sh\nexit 0\n", { mode: 0o755 });
-  fs.chmodSync(runtimePath, 0o755);
+  const runtimePath =
+    process.platform === "win32"
+      ? path.join(binDir, `${params.binName}.cmd`)
+      : path.join(binDir, params.binName);
+  const runtimeBody =
+    process.platform === "win32" ? "@echo off\r\nexit /b 0\r\n" : "#!/bin/sh\nexit 0\n";
+  fs.writeFileSync(runtimePath, runtimeBody, { mode: 0o755 });
+  if (process.platform !== "win32") {
+    fs.chmodSync(runtimePath, 0o755);
+  }
   const oldPath = process.env.PATH;
   process.env.PATH = `${binDir}${path.delimiter}${oldPath ?? ""}`;
   try {
