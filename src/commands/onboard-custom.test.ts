@@ -3,6 +3,7 @@ import { CONTEXT_WINDOW_HARD_MIN_TOKENS } from "../agents/context-window-guard.j
 import { defaultRuntime } from "../runtime.js";
 import {
   applyCustomApiConfig,
+  DEFAULT_VERIFY_MIN_MAX_TOKENS,
   parseNonInteractiveCustomApiFlags,
   promptCustomApiConfig,
 } from "./onboard-custom.js";
@@ -166,8 +167,9 @@ describe("promptCustomApiConfig", () => {
 
     const firstCall = fetchMock.mock.calls[0]?.[1] as { body?: string } | undefined;
     expect(firstCall?.body).toBeDefined();
-    // Verify min max_tokens is 16 (some models like GPT-5.4 require >= 16)
-    expect(JSON.parse(firstCall?.body ?? "{}")).toMatchObject({ max_tokens: 16 });
+    // First attempt uses max_tokens: 1, then retries with 16 on min_tokens error
+    // Since first call succeeds (ok: true), only one call is made
+    expect(JSON.parse(firstCall?.body ?? "{}")).toMatchObject({ max_tokens: 1 });
   });
 
   it("uses azure-specific headers and body for openai verification probes", async () => {
@@ -219,9 +221,10 @@ describe("promptCustomApiConfig", () => {
     await runPromptCustomApi(prompter);
 
     expect(fetchMock).toHaveBeenCalledTimes(2);
+    // First call fails (404), second call succeeds with retry logic
+    // The retry should use the fallback max_tokens (16)
     const secondCall = fetchMock.mock.calls[1]?.[1] as { body?: string } | undefined;
     expect(secondCall?.body).toBeDefined();
-    // Verify min max_tokens is 16 (some models like GPT-5.4 require >= 16)
     expect(JSON.parse(secondCall?.body ?? "{}")).toMatchObject({ max_tokens: 16 });
   });
 
@@ -468,24 +471,30 @@ describe("VERIFY_MIN_MAX_TOKENS constant", () => {
   // This constant ensures verification requests use a value >= 16
   // Some models (e.g., GPT-5.4) require min max_tokens >= 16
   it("should be at least 16 to satisfy most model requirements", async () => {
-    // Import the constant value - this is a compile-time check
-    const VERIFY_MIN_MAX_TOKENS = 16;
+    // The constant is configurable via OPENCLAW_VERIFY_MIN_TOKENS env var
+    // Default value is 16
+    const VERIFY_MIN_MAX_TOKENS = DEFAULT_VERIFY_MIN_MAX_TOKENS;
     expect(VERIFY_MIN_MAX_TOKENS).toBeGreaterThanOrEqual(16);
   });
 
-  it("uses VERIFY_MIN_MAX_TOKENS for both OpenAI and Anthropic verification", async () => {
+  it("uses retry logic with fallback max_tokens when initial verification fails", async () => {
     const prompter = createTestPrompter({
       text: ["https://example.com/v1", "test-key", "detected-model", "custom", "alias"],
       select: ["plaintext", "openai"],
     });
-    const fetchMock = stubFetchSequence([{ ok: true }]);
+    // First call fails with 400 (min_tokens error), second call succeeds
+    const fetchMock = stubFetchSequence([{ ok: false, status: 400 }, { ok: true }]);
 
     await runPromptCustomApi(prompter);
 
-    const firstCall = fetchMock.mock.calls[0]?.[1] as { body?: string } | undefined;
-    const body = JSON.parse(firstCall?.body ?? "{}");
+    expect(fetchMock).toHaveBeenCalledTimes(2);
     
-    // Verify both max_tokens field uses the constant value
-    expect(body.max_tokens).toBe(16);
+    // First call uses max_tokens: 1
+    const firstCall = fetchMock.mock.calls[0]?.[1] as { body?: string } | undefined;
+    expect(JSON.parse(firstCall?.body ?? "{}").max_tokens).toBe(1);
+    
+    // Second call (retry) uses fallback max_tokens (16)
+    const secondCall = fetchMock.mock.calls[1]?.[1] as { body?: string } | undefined;
+    expect(JSON.parse(secondCall?.body ?? "{}").max_tokens).toBe(16);
   });
 });

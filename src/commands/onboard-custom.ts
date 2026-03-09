@@ -22,7 +22,8 @@ const DEFAULT_MAX_TOKENS = 4096;
 const VERIFY_TIMEOUT_MS = 30_000;
 // Minimum max_tokens value for model verification requests
 // Some models (e.g., GPT-5.4) require minimum value >= 16
-const VERIFY_MIN_MAX_TOKENS = 16;
+// Can be overridden via OPENCLAW_VERIFY_MIN_TOKENS environment variable
+export const DEFAULT_VERIFY_MIN_MAX_TOKENS = parseInt(process.env.OPENCLAW_VERIFY_MIN_TOKENS ?? "16", 10);
 
 function normalizeContextWindowForCustomModel(value: unknown): number {
   const parsed = typeof value === "number" && Number.isFinite(value) ? Math.floor(value) : 0;
@@ -318,6 +319,49 @@ async function requestVerification(params: {
   }
 }
 
+/**
+ * Helper function that tries verification with initial max_tokens,
+ * and retries with higher value if the first attempt fails due to min_tokens constraint.
+ * This handles models like GPT-5.4 that require max_tokens >= 16.
+ */
+async function requestVerificationWithRetry(params: {
+  endpoint: string;
+  headers: Record<string, string>;
+  body: Record<string, unknown>;
+  fallbackMaxTokens: number;
+}): Promise<VerificationResult> {
+  // First attempt with initial max_tokens (usually 1)
+  const result = await requestVerification(params);
+  
+  // If successful or error is not related to min_tokens, return result
+  if (result.ok || !isMinTokensError(result.status, result.error)) {
+    return result;
+  }
+  
+  // Retry with higher max_tokens
+  const bodyWithFallback = { ...params.body, max_tokens: params.fallbackMaxTokens };
+  return await requestVerification({
+    ...params,
+    body: bodyWithFallback,
+  });
+}
+
+/**
+ * Check if the error is related to minimum max_tokens constraint
+ */
+function isMinTokensError(status: number | undefined, error: unknown): boolean {
+  // Status 400 with error message containing min_tokens related text
+  if (status === 400 && error instanceof Error) {
+    const errorMessage = error.message.toLowerCase();
+    return (
+      errorMessage.includes("max_output_tokens") ||
+      errorMessage.includes("min") &&
+      (errorMessage.includes("token") || errorMessage.includes("max_tokens"))
+    );
+  }
+  return false;
+}
+
 async function requestOpenAiVerification(params: {
   baseUrl: string;
   apiKey: string;
@@ -343,16 +387,19 @@ async function requestOpenAiVerification(params: {
       },
     });
   } else {
-    return await requestVerification({
+    // Try with default min tokens first, retry with higher value if needed
+    const result = await requestVerificationWithRetry({
       endpoint,
       headers,
       body: {
         model: params.modelId,
         messages: [{ role: "user", content: "Hi" }],
-        max_tokens: VERIFY_MIN_MAX_TOKENS,
+        max_tokens: 1,
         stream: false,
       },
+      fallbackMaxTokens: DEFAULT_VERIFY_MIN_MAX_TOKENS,
     });
+    return result;
   }
 }
 
@@ -372,15 +419,16 @@ async function requestAnthropicVerification(params: {
     modelId: params.modelId,
     endpointPath: "messages",
   });
-  return await requestVerification({
+  return await requestVerificationWithRetry({
     endpoint,
     headers: buildAnthropicHeaders(params.apiKey),
     body: {
       model: params.modelId,
-      max_tokens: VERIFY_MIN_MAX_TOKENS,
+      max_tokens: 1,
       messages: [{ role: "user", content: "Hi" }],
       stream: false,
     },
+    fallbackMaxTokens: DEFAULT_VERIFY_MIN_MAX_TOKENS,
   });
 }
 
