@@ -3,6 +3,8 @@ import {
   resolveAgentModelFallbackValues,
   resolveAgentModelPrimaryValue,
 } from "../config/model-input.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
+import { sanitizeForLog } from "../terminal/ansi.js";
 import {
   ensureAuthProfileStore,
   getSoonestCooldownExpiry,
@@ -27,6 +29,8 @@ import {
 } from "./model-selection.js";
 import type { FailoverReason } from "./pi-embedded-helpers.js";
 import { isLikelyContextOverflowError } from "./pi-embedded-helpers.js";
+
+const log = createSubsystemLogger("model-fallback");
 
 type ModelCandidate = {
   provider: string;
@@ -415,11 +419,23 @@ function resolveCooldownDecision(params: {
       profileIds: params.profileIds,
       now: params.now,
     }) ?? "rate_limit";
-  const isPersistentIssue =
-    inferredReason === "auth" ||
-    inferredReason === "auth_permanent" ||
-    inferredReason === "billing";
-  if (isPersistentIssue) {
+  const isPersistentAuthIssue = inferredReason === "auth" || inferredReason === "auth_permanent";
+  if (isPersistentAuthIssue) {
+    return {
+      type: "skip",
+      reason: inferredReason,
+      error: `Provider ${params.candidate.provider} has ${inferredReason} issue (skipping all models)`,
+    };
+  }
+
+  // Billing is semi-persistent: the user may fix their balance, or a transient
+  // 402 might have been misclassified. Probe the primary only when fallbacks
+  // exist; otherwise repeated single-provider probes just churn the disabled
+  // auth state without opening any recovery path.
+  if (inferredReason === "billing") {
+    if (params.isPrimary && params.hasFallbackCandidates && shouldProbe) {
+      return { type: "attempt", reason: inferredReason, markProbe: true };
+    }
     return {
       type: "skip",
       reason: inferredReason,
@@ -514,7 +530,11 @@ export async function runWithModelFallback<T>(params: {
         if (decision.markProbe) {
           lastProbeAttempt.set(probeThrottleKey, now);
         }
-        if (decision.reason === "rate_limit" || decision.reason === "overloaded") {
+        if (
+          decision.reason === "rate_limit" ||
+          decision.reason === "overloaded" ||
+          decision.reason === "billing"
+        ) {
           runOptions = { allowTransientCooldownProbe: true };
         }
       }
@@ -527,6 +547,13 @@ export async function runWithModelFallback<T>(params: {
       options: runOptions,
     });
     if ("success" in attemptRun) {
+      const notFoundAttempt =
+        i > 0 ? attempts.find((a) => a.reason === "model_not_found") : undefined;
+      if (notFoundAttempt) {
+        log.warn(
+          `Model "${sanitizeForLog(notFoundAttempt.provider)}/${sanitizeForLog(notFoundAttempt.model)}" not found. Fell back to "${sanitizeForLog(candidate.provider)}/${sanitizeForLog(candidate.model)}".`,
+        );
+      }
       return attemptRun.success;
     }
     const err = attemptRun.error;

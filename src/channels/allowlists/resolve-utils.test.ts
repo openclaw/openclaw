@@ -1,9 +1,11 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import type { RuntimeEnv } from "../../runtime.js";
 import {
   addAllowlistUserEntriesFromConfigEntry,
   buildAllowlistResolutionSummary,
   canonicalizeAllowlistWithResolvedIds,
   patchAllowlistUsersInConfigEntries,
+  summarizeMapping,
 } from "./resolve-utils.js";
 
 describe("buildAllowlistResolutionSummary", () => {
@@ -92,5 +94,33 @@ describe("patchAllowlistUsersInConfigEntries", () => {
     });
     expect((patched.alpha as { users: string[] }).users).toEqual(["111", "Bob"]);
     expect((patched.beta as { users: string[] }).users).toEqual(["*"]);
+  });
+});
+
+describe("summarizeMapping", () => {
+  it("logs sampled resolved and unresolved entries", () => {
+    const runtime: RuntimeEnv = {
+      log: vi.fn(),
+      error: vi.fn(),
+      exit: vi.fn(),
+    };
+
+    summarizeMapping("discord allowlist", ["a", "b", "c", "d", "e", "f", "g"], ["x", "y"], runtime);
+
+    expect(runtime.log).toHaveBeenCalledWith(
+      "discord allowlist resolved: a, b, c, d, e, f (+1)\ndiscord allowlist unresolved: x, y",
+    );
+  });
+
+  it("skips logging when both lists are empty", () => {
+    const runtime: RuntimeEnv = {
+      log: vi.fn(),
+      error: vi.fn(),
+      exit: vi.fn(),
+    };
+
+    summarizeMapping("discord allowlist", [], [], runtime);
+
+    expect(runtime.log).not.toHaveBeenCalled();
   });
 });
