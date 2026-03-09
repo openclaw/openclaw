@@ -1,3 +1,5 @@
+import os from "node:os";
+import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { DEFAULT_EMOJIS } from "../../channels/status-reactions.js";
 import {
@@ -175,7 +177,9 @@ beforeEach(() => {
     contentType: "image/png",
   });
   mediaMocks.saveMediaBuffer.mockResolvedValue({
-    path: "/tmp/proxy-media.png",
+    id: "proxy-media.png",
+    path: path.join(os.tmpdir(), "proxy-media.png"),
+    size: 5,
     contentType: "image/png",
   });
   dispatchInboundMessage.mockResolvedValue(createNoQueuedDispatchResult());
