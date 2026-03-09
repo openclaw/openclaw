@@ -150,6 +150,7 @@ No engagement on weekends (save API quota).
 
 Before proposing any tweet for engagement, it MUST pass ALL these filters:
 
+- **Recent only**: tweet must be from the last 3 days — skip anything older
 - **Minimum engagement**: at least 5 likes OR 2 retweets OR 3 replies — skip dead tweets
 - **Real accounts only**: skip accounts with no profile picture, <50 followers, or that look like bots/spam
 - **No competitor content**: skip any tweet mentioning @8004_scan or from @8004_scan — they are a competitor
@@ -162,23 +163,24 @@ Before proposing any tweet for engagement, it MUST pass ALL these filters:
 2. Filter results using the Quality Filters above — discard low-quality and competitor tweets
 3. Propose up to 3 interactions to Gilberts via Telegram, with format:
    - Tweet URL + author + 1-line summary
-   - Proposed action: **like**, **reply** (include draft text), or **retweet**
+   - Proposed action: **like**, **retweet**, or both
 4. **Wait for Gilberts approval** — do NOT execute any interaction without approval
 5. On approval, execute using twclaw:
    - Like: `exec node skills/twitter-openclaw/bin/twclaw.js like <tweet-url> --yes`
-   - Reply: `exec node skills/twitter-openclaw/bin/twclaw.js reply <tweet-url> "text" --yes`
    - Retweet: `exec node skills/twitter-openclaw/bin/twclaw.js retweet <tweet-url> --yes`
+
+**NOTE:** Only reply if tweet has `reply_settings: "everyone"`. Otherwise, just like/retweet.
+
+- Reply: `exec node skills/twitter-openclaw/bin/twclaw.js reply <tweet-url> "text" --yes`
+
 6. Log each action to `data/daily/YYYY-MM-DD/engagement_actions.md` (tweet URL, handle, action, 1-line summary — NO full tweet text)
 7. Confirm to Gilberts: "Done, [N] interactions executed"
 
-### Reply Guidelines
+### Engagement Types
 
-- Replies must add value: a data point, a clarification, a relevant insight from the scanner
-- Keep replies short (1-2 sentences max)
-- Use the same warm, crypto-native tone from SOUL.md
-- NEVER reply with generic "check us out" or "interesting!" — always contribute something specific
-- If the tweet mentions a specific chain or agent count, reference real data if available
-- Don't be salesy. Be helpful
+- **Like**: default action for relevant ERC-8004 content
+- **Retweet**: only for high-quality tweets that our followers would benefit from seeing
+- **Reply**: ONLY if `reply_settings` is `"everyone"` in the search results. If restricted, skip reply and just like/retweet. Replies must add value — a data point, insight, or clarification. Never generic "check us out" or "interesting!"
 
 ### Key Accounts Watchlist
 

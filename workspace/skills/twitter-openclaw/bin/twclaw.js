@@ -11,7 +11,7 @@ const MAX_PAGES = 25;
 const SEARCH_PAGE_MIN = 10;
 
 const TWEET_FIELDS =
-  "id,text,author_id,created_at,conversation_id,public_metrics,referenced_tweets,lang,possibly_sensitive";
+  "id,text,author_id,created_at,conversation_id,public_metrics,referenced_tweets,lang,possibly_sensitive,reply_settings";
 const USER_FIELDS = "id,name,username,created_at,verified,description,public_metrics";
 
 const HELP = `twclaw - Twitter/X CLI for OpenClaw
@@ -353,6 +353,7 @@ function toTweetView(tweet, usersById = new Map()) {
     quotes: metrics.quotes,
     bookmarks: metrics.bookmarks,
     impressions: metrics.impressions,
+    reply_settings: tweet.reply_settings || "everyone",
     url: tweet.id ? `https://x.com/${handle}/status/${tweet.id}` : "",
   };
 }
