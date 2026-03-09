@@ -13,6 +13,7 @@ import type { OutboundTargetResolution } from "./targets.js";
 import {
   resolveOutboundTarget,
   resolveSessionDeliveryTarget,
+  HEARTBEAT_SENDER_PLACEHOLDER,
   type SessionDeliveryTarget,
 } from "./targets.js";
 
@@ -123,7 +124,16 @@ export function resolveAgentDeliveryPlan(params: {
     isDeliverableMessageChannel(resolvedChannel) &&
     resolvedChannel === baseDelivery.lastChannel
   ) {
-    resolvedTo = baseDelivery.lastTo;
+    // Don't use "heartbeat" as delivery target - it's a placeholder for heartbeat-triggered
+    // runs and should not be delivered to a user's channel. This prevents cross-channel
+    // delivery bugs where heartbeat-triggered responses incorrectly route to the wrong channel
+    // (e.g., webchat heartbeat triggering delivery to feishu with target="heartbeat").
+    // @see https://github.com/openclaw/openclaw/issues/35300
+    // @see https://github.com/openclaw/openclaw/issues/39756
+    const lastTo = baseDelivery.lastTo;
+    if (lastTo && lastTo.toLowerCase() !== HEARTBEAT_SENDER_PLACEHOLDER) {
+      resolvedTo = lastTo;
+    }
   }
 
   return {

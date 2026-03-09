@@ -19,6 +19,9 @@ import {
   isDeliverableMessageChannel,
   normalizeMessageChannel,
 } from "../../utils/message-channel.js";
+
+/** Placeholder used for heartbeat-triggered runs - should not be used as actual delivery target */
+export const HEARTBEAT_SENDER_PLACEHOLDER = "heartbeat";
 import { isWhatsAppGroupJid, normalizeWhatsAppTarget } from "../../whatsapp/normalize.js";
 import {
   normalizeDeliverableOutboundChannel,
@@ -499,7 +502,7 @@ function resolveHeartbeatSenderId(params: {
 
   const allowList = mapAllowFromEntries(allowFrom).filter((entry) => entry && entry !== "*");
   if (allowFrom.includes("*")) {
-    return candidates[0] ?? "heartbeat";
+    return candidates[0] ?? HEARTBEAT_SENDER_PLACEHOLDER;
   }
   if (candidates.length > 0 && allowList.length > 0) {
     const matched = candidates.find((candidate) => allowList.includes(candidate));
@@ -513,7 +516,7 @@ function resolveHeartbeatSenderId(params: {
   if (allowList.length > 0) {
     return allowList[0];
   }
-  return candidates[0] ?? "heartbeat";
+  return candidates[0] ?? HEARTBEAT_SENDER_PLACEHOLDER;
 }
 
 export function resolveHeartbeatSenderContext(params: {

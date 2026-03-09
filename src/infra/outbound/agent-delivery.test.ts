@@ -14,6 +14,7 @@ vi.mock("./targets.js", async () => {
 
 import type { OpenClawConfig } from "../../config/config.js";
 import { resolveAgentDeliveryPlan, resolveAgentOutboundTarget } from "./agent-delivery.js";
+import { HEARTBEAT_SENDER_PLACEHOLDER } from "./targets.js";
 
 describe("agent delivery helpers", () => {
   it("builds a delivery plan from session delivery context", () => {
@@ -131,6 +132,27 @@ describe("agent delivery helpers", () => {
     });
 
     expect(plan.resolvedChannel).toBe("whatsapp");
+    expect(plan.resolvedTo).toBeUndefined();
+  });
+
+  it("does not use 'heartbeat' placeholder as delivery target", () => {
+    // This tests the fix for #35300 and #39756:
+    // When lastTo is set to "heartbeat" (a placeholder), it should not be
+    // used as the delivery target, preventing cross-channel delivery bugs.
+    const plan = resolveAgentDeliveryPlan({
+      sessionEntry: {
+        sessionId: "s4",
+        updatedAt: 4,
+        deliveryContext: { channel: "feishu", to: HEARTBEAT_SENDER_PLACEHOLDER },
+      },
+      requestedChannel: "last",
+      explicitTo: undefined,
+      accountId: undefined,
+      wantsDelivery: true,
+    });
+
+    // When lastTo is "heartbeat", resolvedTo should be undefined
+    // (the key fix - we don't use "heartbeat" as delivery target)
     expect(plan.resolvedTo).toBeUndefined();
   });
 });
