@@ -23,6 +23,14 @@ type SearchProviderEntry = {
 
 export const SEARCH_PROVIDER_OPTIONS: readonly SearchProviderEntry[] = [
   {
+    value: "qveris",
+    label: "QVeris Smart Search",
+    hint: "QVeris web search · shares QVeris API key",
+    envKeys: ["QVERIS_API_KEY"],
+    placeholder: "qv_...",
+    signupUrl: "https://qveris.ai",
+  },
+  {
     value: "perplexity",
     label: "Perplexity Search",
     hint: "Structured results · domain/language/freshness filters",
@@ -81,6 +89,9 @@ function rawKeyValue(config: OpenClawConfig, provider: SearchProvider): unknown 
       return search?.grok?.apiKey;
     case "kimi":
       return search?.kimi?.apiKey;
+    case "qveris":
+      // Falls back to the global QVeris API key used by tool search
+      return search?.qveris?.apiKey || config.tools?.qveris?.apiKey;
   }
 }
 
@@ -129,6 +140,9 @@ export function applySearchKey(
 ): OpenClawConfig {
   const search = { ...config.tools?.web?.search, provider, enabled: true };
   switch (provider) {
+    case "qveris":
+      search.qveris = { ...search.qveris, apiKey: key };
+      break;
     case "brave":
       search.apiKey = key;
       break;
@@ -253,6 +267,24 @@ export async function setupSearch(
       ? applySearchKey(config, choice, existingKey)
       : applyProviderOnly(config, choice);
     return preserveDisabledState(config, result);
+  }
+
+  // QVeris reuses the global QVeris API key — skip the key prompt when available
+  if (choice === "qveris") {
+    const globalQverisKey = config.tools?.qveris?.apiKey;
+    const qverisKeyAvailable = hasConfiguredSecretInput(globalQverisKey) || envAvailable;
+    if (qverisKeyAvailable) {
+      const keySource = envAvailable
+        ? "API key: provided via QVERIS_API_KEY env var."
+        : "API key: from QVeris tool config.";
+      await prompter.note(
+        ["QVeris web search will use the same API key as QVeris tool search.", keySource].join(
+          "\n",
+        ),
+        "Web search",
+      );
+      return applyProviderOnly(config, choice);
+    }
   }
 
   const useSecretRefMode = opts?.secretInputMode === "ref"; // pragma: allowlist secret

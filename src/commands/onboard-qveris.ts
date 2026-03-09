@@ -1,9 +1,6 @@
 import type { OpenClawConfig } from "../config/config.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
 
-export const DEFAULT_QVERIS_WEB_SEARCH_TOOL_ID =
-  "xiaosu.smartsearch.search.retrieve.v2.6c50f296_domestic";
-
 function resolveConfigApiKey(cfg: OpenClawConfig): string {
   return cfg.tools?.qveris?.apiKey?.trim() ?? "";
 }
@@ -24,14 +21,14 @@ export async function promptQverisConfig(
   await prompter.note(
     [
       "QVeris enables dynamic tool search/execution across domains like finance and research.",
-      "When enabled here, web_search is also defaulted to QVeris smart search (xiaosu) to avoid requiring Brave API keys.",
+      "Web search via QVeris is configured separately in the web search step.",
       "Docs: https://qveris.ai",
     ].join("\n"),
     "QVeris",
   );
 
   const enableQveris = await prompter.confirm({
-    message: "Enable QVeris tools and default web_search to QVeris?",
+    message: "Enable QVeris tool search?",
     initialValue: currentlyEnabled,
   });
 
@@ -76,18 +73,6 @@ export async function promptQverisConfig(
         ...cfg.tools?.qveris,
         enabled: true,
         ...(nextApiKey ? { apiKey: nextApiKey } : {}),
-      },
-      web: {
-        ...cfg.tools?.web,
-        search: {
-          ...cfg.tools?.web?.search,
-          enabled: true,
-          provider: "qveris",
-          qveris: {
-            ...cfg.tools?.web?.search?.qveris,
-            toolId: DEFAULT_QVERIS_WEB_SEARCH_TOOL_ID,
-          },
-        },
       },
     },
   };
