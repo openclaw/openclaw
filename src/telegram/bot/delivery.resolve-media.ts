@@ -100,9 +100,8 @@ function resolveRequiredFetchImpl(proxyFetch?: typeof fetch): typeof fetch {
   return fetchImpl;
 }
 
-/** Default timeout for downloading Telegram media files (30 seconds).
- *  Prevents the polling loop from hanging indefinitely when a download stalls. */
-const TELEGRAM_DOWNLOAD_TIMEOUT_MS = 30_000;
+/** Default idle timeout for Telegram media downloads (30 seconds). */
+const TELEGRAM_DOWNLOAD_IDLE_TIMEOUT_MS = 30_000;
 
 async function downloadAndSaveTelegramFile(params: {
   filePath: string;
@@ -117,7 +116,7 @@ async function downloadAndSaveTelegramFile(params: {
     fetchImpl: params.fetchImpl,
     filePathHint: params.filePath,
     maxBytes: params.maxBytes,
-    timeoutMs: TELEGRAM_DOWNLOAD_TIMEOUT_MS,
+    readIdleTimeoutMs: TELEGRAM_DOWNLOAD_IDLE_TIMEOUT_MS,
     ssrfPolicy: TELEGRAM_MEDIA_SSRF_POLICY,
   });
   const originalName = params.telegramFileName ?? fetched.fileName ?? params.filePath;

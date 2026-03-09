@@ -12,21 +12,12 @@ function makeStream(chunks: Uint8Array[]) {
   });
 }
 
-function makeAbortableStallingFetch(firstChunk: Uint8Array) {
-  return vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
-    const signal = init?.signal;
+function makeStallingFetch(firstChunk: Uint8Array) {
+  return vi.fn(async () => {
     return new Response(
       new ReadableStream<Uint8Array>({
         start(controller) {
           controller.enqueue(firstChunk);
-          const abort = () => {
-            controller.error(signal?.reason ?? new Error("aborted"));
-          };
-          if (signal?.aborted) {
-            abort();
-            return;
-          }
-          signal?.addEventListener("abort", abort, { once: true });
         },
       }),
       { status: 200 },
@@ -76,11 +67,11 @@ describe("fetchRemoteMedia", () => {
     ).rejects.toThrow("exceeds maxBytes");
   });
 
-  it("aborts stalled body reads when timeoutMs expires", async () => {
+  it("aborts stalled body reads when idle timeout expires", async () => {
     const lookupFn = vi.fn(async () => [
       { address: "93.184.216.34", family: 4 },
     ]) as unknown as LookupFn;
-    const fetchImpl = makeAbortableStallingFetch(new Uint8Array([1, 2]));
+    const fetchImpl = makeStallingFetch(new Uint8Array([1, 2]));
 
     await expect(
       fetchRemoteMedia({
@@ -88,7 +79,7 @@ describe("fetchRemoteMedia", () => {
         fetchImpl,
         lookupFn,
         maxBytes: 1024,
-        timeoutMs: 20,
+        readIdleTimeoutMs: 20,
       }),
     ).rejects.toMatchObject({
       code: "fetch_failed",

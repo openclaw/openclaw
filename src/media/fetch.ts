@@ -31,9 +31,8 @@ type FetchMediaOptions = {
   filePathHint?: string;
   maxBytes?: number;
   maxRedirects?: number;
-  /** Abort the download if it takes longer than this (ms). Covers both the
-   *  initial connection and streaming the response body. */
-  timeoutMs?: number;
+  /** Abort if the response body stops yielding data for this long (ms). */
+  readIdleTimeoutMs?: number;
   ssrfPolicy?: SsrFPolicy;
   lookupFn?: LookupFn;
 };
@@ -90,7 +89,7 @@ export async function fetchRemoteMedia(options: FetchMediaOptions): Promise<Fetc
     filePathHint,
     maxBytes,
     maxRedirects,
-    timeoutMs,
+    readIdleTimeoutMs,
     ssrfPolicy,
     lookupFn,
   } = options;
@@ -105,7 +104,6 @@ export async function fetchRemoteMedia(options: FetchMediaOptions): Promise<Fetc
         fetchImpl,
         init: requestInit,
         maxRedirects,
-        timeoutMs,
         policy: ssrfPolicy,
         lookupFn,
       }),
@@ -156,6 +154,7 @@ export async function fetchRemoteMedia(options: FetchMediaOptions): Promise<Fetc
                 "max_bytes",
                 `Failed to fetch media from ${res.url || url}: payload exceeds maxBytes ${maxBytes}`,
               ),
+            chunkTimeoutMs: readIdleTimeoutMs,
           })
         : Buffer.from(await res.arrayBuffer());
     } catch (err) {
