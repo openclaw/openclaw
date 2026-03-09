@@ -219,11 +219,15 @@ export async function uploadImageFeishu(params: {
 }
 
 /**
- * Encode a filename for safe use in Feishu multipart/form-data uploads.
- * Non-ASCII characters (Chinese, em-dash, full-width brackets, etc.) cause
- * the upload to silently fail when passed raw through the SDK's form-data
- * serialization.  RFC 5987 percent-encoding keeps headers 7-bit clean while
- * Feishu's server decodes and preserves the original display name.
+ * Percent-encode a filename using encodeURIComponent for all non-ASCII chars.
+ *
+ * NOTE: This function is no longer called by `uploadFileFeishu`, which now
+ * passes the original filename directly to the Feishu API (see #40770).
+ * The Feishu API accepts Unicode filenames natively; encoding them caused
+ * the literal percent-encoded string to appear as the display name in Feishu.
+ *
+ * Kept exported for any callers that may rely on the encoding behaviour, but
+ * consider it deprecated for new upload paths.
  */
 export function sanitizeFileNameForUpload(fileName: string): string {
   const ASCII_ONLY = /^[\x20-\x7E]+$/;
