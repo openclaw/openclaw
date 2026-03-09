@@ -18,6 +18,19 @@ export function saveJsonFile(pathname: string, data: unknown) {
   if (!fs.existsSync(dir)) {
     fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
   }
-  fs.writeFileSync(pathname, `${JSON.stringify(data, null, 2)}\n`, "utf8");
-  fs.chmodSync(pathname, 0o600);
+  // Atomic write: write to temp file then rename to prevent corruption
+  // from concurrent writes (see #40471).
+  const tmpPath = `${pathname}.tmp`;
+  try {
+    fs.writeFileSync(tmpPath, `${JSON.stringify(data, null, 2)}\n`, { encoding: "utf8", mode: 0o600 });
+    fs.renameSync(tmpPath, pathname);
+  } catch (err) {
+    // Clean up temp file on failure
+    try {
+      fs.unlinkSync(tmpPath);
+    } catch {
+      // Ignore cleanup errors (temp file may not exist)
+    }
+    throw err;
+  }
 }
