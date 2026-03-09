@@ -116,7 +116,6 @@ export const DEFAULT_EXCLUDE_DIRS = [
   ".nuxt",
   "vendor",
   ".tox",
-  "egg-info",
 ];
 
 function normalizeSources(
