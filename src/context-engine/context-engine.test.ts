@@ -433,6 +433,10 @@ describe("Bundle chunk isolation (#40096)", () => {
   it("concurrent registration from multiple chunks does not lose entries", async () => {
     const ts = Date.now().toString(36);
     const registryUrl = new URL("./registry.ts", import.meta.url).href;
+    let releaseRegistrations: (() => void) | undefined;
+    const registrationStart = new Promise<void>((resolve) => {
+      releaseRegistrations = resolve;
+    });
 
     // Load 5 "chunks" in parallel
     const chunks = await Promise.all(
@@ -442,12 +446,14 @@ describe("Bundle chunk isolation (#40096)", () => {
       ),
     );
 
-    // Each chunk registers a unique engine
-    const ids = chunks.map((chunk, i) => {
+    const ids = chunks.map((_, i) => `concurrent-${ts}-${i}`);
+    const registrationTasks = chunks.map(async (chunk, i) => {
       const id = `concurrent-${ts}-${i}`;
+      await registrationStart;
       chunk.registerContextEngine(id, () => new MockContextEngine());
-      return id;
     });
+    releaseRegistrations?.();
+    await Promise.all(registrationTasks);
 
     // All 5 engines must be visible from any chunk
     const allIds = chunks[0].listContextEngineIds();
