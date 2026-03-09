@@ -8,6 +8,7 @@ const detectBrowserOpenSupportMock = vi.hoisted(() => vi.fn());
 const openUrlMock = vi.hoisted(() => vi.fn());
 const formatControlUiSshHintMock = vi.hoisted(() => vi.fn());
 const copyToClipboardMock = vi.hoisted(() => vi.fn());
+const resolveSecretRefValuesMock = vi.hoisted(() => vi.fn());
 const resolveGatewayServiceMock = vi.hoisted(() => vi.fn());
 const readGatewayServiceCommandMock = vi.hoisted(() => vi.fn());
 
@@ -25,6 +26,10 @@ vi.mock("./onboard-helpers.js", () => ({
 
 vi.mock("../infra/clipboard.js", () => ({
   copyToClipboard: copyToClipboardMock,
+}));
+
+vi.mock("../secrets/resolve.js", () => ({
+  resolveSecretRefValues: resolveSecretRefValuesMock,
 }));
 
 vi.mock("../daemon/service.js", () => ({
@@ -78,6 +83,8 @@ describe("dashboardCommand", () => {
     resolveGatewayServiceMock.mockReturnValue({
       readCommand: readGatewayServiceCommandMock,
     });
+    delete process.env.OPENCLAW_GATEWAY_TOKEN;
+    delete process.env.CLAWDBOT_GATEWAY_TOKEN;
   });
 
   it("opens and copies the dashboard link by default", async () => {
@@ -102,35 +109,18 @@ describe("dashboardCommand", () => {
   });
 
   it("falls back to service token when config and shell token are missing", async () => {
-    const prevGatewayToken = process.env.OPENCLAW_GATEWAY_TOKEN;
-    const prevLegacyToken = process.env.CLAWDBOT_GATEWAY_TOKEN;
-    try {
-      delete process.env.OPENCLAW_GATEWAY_TOKEN;
-      delete process.env.CLAWDBOT_GATEWAY_TOKEN;
-      mockSnapshot("");
-      readGatewayServiceCommandMock.mockResolvedValue({
-        programArguments: ["node", "gateway"],
-        environment: { OPENCLAW_GATEWAY_TOKEN: "service-token" },
-      });
-      copyToClipboardMock.mockResolvedValue(true);
+    mockSnapshot("");
+    readGatewayServiceCommandMock.mockResolvedValue({
+      programArguments: ["node", "gateway"],
+      environment: { OPENCLAW_GATEWAY_TOKEN: "service-token" },
+    });
+    copyToClipboardMock.mockResolvedValue(true);
 
-      await dashboardCommand(runtime, { noOpen: true });
+    await dashboardCommand(runtime, { noOpen: true });
 
-      expect(copyToClipboardMock).toHaveBeenCalledWith(
-        "http://127.0.0.1:18789/#token=service-token",
-      );
-    } finally {
-      if (prevGatewayToken === undefined) {
-        delete process.env.OPENCLAW_GATEWAY_TOKEN;
-      } else {
-        process.env.OPENCLAW_GATEWAY_TOKEN = prevGatewayToken;
-      }
-      if (prevLegacyToken === undefined) {
-        delete process.env.CLAWDBOT_GATEWAY_TOKEN;
-      } else {
-        process.env.CLAWDBOT_GATEWAY_TOKEN = prevLegacyToken;
-      }
-    }
+    expect(copyToClipboardMock).toHaveBeenCalledWith(
+      "http://127.0.0.1:18789/#token=service-token",
+    );
   });
 
   it("prints SSH hint when browser cannot open", async () => {
