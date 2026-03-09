@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  buildPrimaryModelConfig,
   resolveConfiguredCronModelSuggestions,
   resolveEffectiveModelFallbacks,
   sortLocaleStrings,
@@ -96,5 +97,38 @@ describe("sortLocaleStrings", () => {
 
   it("accepts any iterable input, including sets", () => {
     expect(sortLocaleStrings(new Set(["beta", "alpha"]))).toEqual(["alpha", "beta"]);
+  });
+});
+
+describe("buildPrimaryModelConfig", () => {
+  it("preserves modern fallbacks arrays when updating primary", () => {
+    expect(
+      buildPrimaryModelConfig("openai/gpt-5", {
+        primary: "openai/gpt-4.1",
+        fallbacks: ["openai/gpt-5-mini"],
+      }),
+    ).toEqual({
+      primary: "openai/gpt-5",
+      fallbacks: ["openai/gpt-5-mini"],
+    });
+  });
+
+  it("preserves legacy fallback arrays when updating primary", () => {
+    expect(
+      buildPrimaryModelConfig("openai/gpt-5", {
+        primary: "openai/gpt-4.1",
+        fallback: ["openai/gpt-5-mini"],
+      }),
+    ).toEqual({
+      primary: "openai/gpt-5",
+      fallback: ["openai/gpt-5-mini"],
+    });
+  });
+
+  it("returns a plain string when no fallback list exists", () => {
+    expect(buildPrimaryModelConfig("openai/gpt-5", "openai/gpt-4.1")).toBe("openai/gpt-5");
+    expect(buildPrimaryModelConfig("openai/gpt-5", { primary: "openai/gpt-4.1" })).toBe(
+      "openai/gpt-5",
+    );
   });
 });
