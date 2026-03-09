@@ -1,7 +1,7 @@
 /**
- * Chain Memory Backend - 异步写入队列
+ * Chain Memory Backend - Async Write Queue
  *
- * 处理次要 provider 的异步写入操作
+ * Handles async write operations for secondary providers
  *
  * @module async-queue
  * @author Tutu
@@ -11,22 +11,22 @@
 import type { AsyncWriteTask, DeadLetterItem } from "./types";
 
 /**
- * 异步队列配置
+ * Async Queue Configuration
  */
 export interface AsyncQueueConfig {
-  maxConcurrent: number; // 最大并发数，默认 10
-  retryDelayMs: number; // 重试延迟，默认 1000ms
-  maxRetries: number; // 最大重试次数，默认 3
-  deadLetterMaxSize: number; // 死信队列最大大小，默认 1000
+  maxConcurrent: number; // Max concurrent tasks, default 10
+  retryDelayMs: number; // Retry delay, default 1000ms
+  maxRetries: number; // Max retries, default 3
+  deadLetterMaxSize: number; // Max dead letter queue size, default 1000
 }
 
 /**
- * 队列处理器
+ * Queue Processor
  */
 export type QueueProcessor = (task: AsyncWriteTask) => Promise<void>;
 
 /**
- * 异步写入队列
+ * Async Write Queue
  */
 export class AsyncWriteQueue {
   private config: AsyncQueueConfig;
@@ -47,14 +47,14 @@ export class AsyncWriteQueue {
   }
 
   /**
-   * 设置处理器
+   * Set processor
    */
   setProcessor(processor: QueueProcessor): void {
     this.processor = processor;
   }
 
   /**
-   * 添加任务到队列
+   * Add task to queue
    */
   enqueue(providerName: string, operation: "add" | "update" | "delete", data: unknown): string {
     const task: AsyncWriteTask = {
@@ -69,14 +69,14 @@ export class AsyncWriteQueue {
 
     this.queue.push(task);
 
-    // 触发处理
+    // Trigger processing
     void this.processQueue();
 
     return task.id;
   }
 
   /**
-   * 处理队列
+   * Process queue
    */
   private async processQueue(): Promise<void> {
     if (this.isProcessing || !this.processor) {
@@ -92,13 +92,13 @@ export class AsyncWriteQueue {
           break;
         }
 
-        // 检查是否超过最大重试次数
+        // Check if max retries exceeded
         if (task.attempts >= task.maxAttempts) {
           this.moveToDeadLetter(task, "Max retries exceeded");
           continue;
         }
 
-        // 处理任务
+        // Process task
         this.processing.add(task.id);
         void this.executeTask(task);
       }
@@ -108,7 +108,7 @@ export class AsyncWriteQueue {
   }
 
   /**
-   * 执行单个任务
+   * Execute single task
    */
   private async executeTask(task: AsyncWriteTask): Promise<void> {
     if (!this.processor) {
@@ -119,29 +119,29 @@ export class AsyncWriteQueue {
       task.attempts++;
       await this.processor(task);
 
-      // 成功
+      // Success
       this.processing.delete(task.id);
     } catch (error) {
-      // 失败
+      // Failure
       this.processing.delete(task.id);
 
       const errorMessage = error instanceof Error ? error.message : String(error);
 
       if (task.attempts < task.maxAttempts) {
-        // 重试
+        // Retry
         setTimeout(() => {
-          this.queue.unshift(task); // 放回队列头部
+          this.queue.unshift(task); // Put back at queue head
           void this.processQueue();
         }, this.config.retryDelayMs);
       } else {
-        // 超过重试次数，移到死信队列
+        // Exceeded attempts, move to dead letter queue
         this.moveToDeadLetter(task, errorMessage);
       }
     }
   }
 
   /**
-   * 移动到死信队列
+   * Move to dead letter queue
    */
   private moveToDeadLetter(task: AsyncWriteTask, error: string): void {
     const deadLetterItem: DeadLetterItem = {
@@ -150,20 +150,20 @@ export class AsyncWriteQueue {
       failedAt: Date.now(),
     };
 
-    // 检查死信队列大小
+    // Check dead letter queue size
     if (this.deadLetterQueue.length >= this.config.deadLetterMaxSize) {
-      // 移除最老的项
+      // Remove oldest item
       this.deadLetterQueue.shift();
     }
 
     this.deadLetterQueue.push(deadLetterItem);
 
-    // 记录日志
+    // Log
     console.error(`Task ${task.id} moved to dead letter queue:`, error);
   }
 
   /**
-   * 获取队列状态
+   * Get queue status
    */
   getStatus(): {
     pending: number;
@@ -178,14 +178,14 @@ export class AsyncWriteQueue {
   }
 
   /**
-   * 获取死信队列
+   * Get dead letter queue
    */
   getDeadLetterQueue(): DeadLetterItem[] {
     return [...this.deadLetterQueue];
   }
 
   /**
-   * 重试死信队列中的项
+   * RetryItems in dead letter queue
    */
   retryDeadLetter(taskId: string): boolean {
     const index = this.deadLetterQueue.findIndex((item) => item.id === taskId);
@@ -196,7 +196,7 @@ export class AsyncWriteQueue {
     const item = this.deadLetterQueue[index];
     this.deadLetterQueue.splice(index, 1);
 
-    // 重置尝试次数并重新入队
+    // Reset attempts and re-enqueue
     const task: AsyncWriteTask = {
       id: item.id,
       providerName: item.providerName,
@@ -214,7 +214,7 @@ export class AsyncWriteQueue {
   }
 
   /**
-   * 清空队列
+   * Clear queue
    */
   clear(): void {
     this.queue = [];
@@ -222,28 +222,28 @@ export class AsyncWriteQueue {
   }
 
   /**
-   * 清空死信队列
+   * Clear dead letter queue
    */
   clearDeadLetter(): void {
     this.deadLetterQueue = [];
   }
 
   /**
-   * 等待所有任务完成
-   * @param timeoutMs - 超时时间（毫秒），默认 30 秒。设置为 0 表示无限等待
+   * Wait for all tasks to complete
+   * @param timeoutMs - Timeout in milliseconds, default 30s. Set to 0 for no timeout
    */
   async drain(timeoutMs: number = 30000): Promise<void> {
     return new Promise((resolve, reject) => {
       const startTime = Date.now();
       const checkInterval = setInterval(() => {
-        // 检查队列是否清空
+        // Check if queue is empty
         if (this.queue.length === 0 && this.processing.size === 0) {
           clearInterval(checkInterval);
           resolve();
           return;
         }
 
-        // 检查是否超时
+        // Check if timeout
         if (timeoutMs > 0 && Date.now() - startTime > timeoutMs) {
           clearInterval(checkInterval);
           reject(
@@ -258,7 +258,7 @@ export class AsyncWriteQueue {
   }
 
   /**
-   * 获取配置
+   * Get configuration
    */
   getConfig(): AsyncQueueConfig {
     return { ...this.config };

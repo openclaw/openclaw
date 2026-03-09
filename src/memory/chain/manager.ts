@@ -1,7 +1,7 @@
 /**
  * Chain Memory Backend - Chain Memory Manager
  *
- * 协调多个 provider，实现故障隔离和降级
+ * Coordinate multiple providers with fault isolation and degradation
  *
  * @module manager
  * @author Tutu
@@ -23,7 +23,7 @@ import { ProviderWrapper as ProviderWrapperClass } from "./wrapper";
 /**
  * Chain Memory Manager
  *
- * 实现多 provider 协调，故障隔离和降级
+ * Implement multi-provider coordination with fault isolation and degradation
  */
 export class ChainMemoryManager implements MemorySearchManager {
   private config: ChainConfig;
@@ -34,10 +34,10 @@ export class ChainMemoryManager implements MemorySearchManager {
   private asyncQueue: AsyncWriteQueue;
   private healthMonitor: HealthMonitor;
   private getBackendManager: (backend: string, config?: unknown) => MemorySearchManager;
-  private getPluginManager?: (plugin: string, config?: unknown) => MemorySearchManager; // 新增
+  private getPluginManager?: (plugin: string, config?: unknown) => MemorySearchManager; // Newly added
 
   constructor(options: ChainManagerOptions) {
-    // 验证配置
+    // Validate configuration
     const validated = validateChainConfig(options.config);
     this.config = {
       providers: validated.providers,
@@ -45,16 +45,16 @@ export class ChainMemoryManager implements MemorySearchManager {
     };
 
     this.getBackendManager = options.getBackendManager;
-    this.getPluginManager = options.getPluginManager; // 新增
+    this.getPluginManager = options.getPluginManager; // Newly added
 
-    // 初始化异步队列
+    // Initialize async queue
     this.asyncQueue = new AsyncWriteQueue({
       maxConcurrent: 10,
       retryDelayMs: 1000,
       maxRetries: 3,
     });
 
-    // 设置队列处理器
+    // SetQueue Processor
     // TODO: Async write queue needs redesign
     // The current MemorySearchManager interface doesn't have add/update/delete methods
     // We need to either:
@@ -78,37 +78,37 @@ export class ChainMemoryManager implements MemorySearchManager {
       // This prevents the queue from crashing while we redesign the async write feature
     });
 
-    // 初始化健康监控
+    // InitializeHealth Monitor
     this.healthMonitor = new HealthMonitor({
       checkIntervalMs: this.config.global.healthCheckInterval,
       timeoutMs: this.config.global.defaultTimeout,
     });
 
-    // 初始化 providers
+    // Initialize providers
     this.initializeProviders();
 
-    // 启动健康监控
+    // StartHealth Monitor
     this.healthMonitor.start();
   }
 
   /**
-   * 初始化 providers
+   * Initialize providers
    */
   private initializeProviders(): void {
     for (const providerConfig of this.config.providers) {
-      // 跳过禁用的 provider
+      // Skip disabled provider
       if (providerConfig.enabled === false) {
         continue;
       }
 
-      // 获取底层 manager（支持 backend 或 plugin）
+      // Get underlying manager, support backend or plugin plugin）
       let manager: MemorySearchManager;
 
       if (providerConfig.backend) {
-        // 使用 backend
+        // Use backend
         manager = this.getBackendManager(providerConfig.backend, providerConfig);
       } else if (providerConfig.plugin) {
-        // 使用 plugin
+        // Use plugin
         if (!this.getPluginManager) {
           throw new Error(
             `getPluginManager not provided but plugin '${providerConfig.plugin}' specified for provider '${providerConfig.name}'`,
@@ -116,22 +116,22 @@ export class ChainMemoryManager implements MemorySearchManager {
         }
         manager = this.getPluginManager(providerConfig.plugin, providerConfig);
       } else {
-        // 理论上不会发生（config-validator 已经验证）
+        // Should not happen (validated by config-validator)
         throw new Error(
           `Either backend or plugin must be specified for provider '${providerConfig.name}'`,
         );
       }
 
-      // 创建 wrapper
+      // Create wrapper
       const wrapper = new ProviderWrapperClass(providerConfig, manager);
 
-      // 注册到 map
+      // Register to map
       this.providers.set(providerConfig.name, wrapper);
 
-      // 注册到健康监控
+      // Register toHealth Monitor
       this.healthMonitor.registerProvider(wrapper);
 
-      // 根据 priority 分类
+      // Classify by priority
       if (providerConfig.priority === "primary") {
         this.primary = wrapper;
       } else if (providerConfig.priority === "secondary") {
@@ -143,23 +143,23 @@ export class ChainMemoryManager implements MemorySearchManager {
   }
 
   /**
-   * 搜索记忆
+   * Search memory
    */
   async search(
     query: string,
     options?: { maxResults?: number; minScore?: number; sessionKey?: string },
   ): Promise<MemorySearchResult[]> {
-    // 尝试 primary
+    // Try primary
     if (this.primary && this.primary.isAvailable()) {
       try {
         return await this.primary.search(query, options);
       } catch (error) {
-        // Primary 失败，尝试降级
+        // Primary Failure，Try fallback
         console.error(`Primary search failed:`, error);
       }
     }
 
-    // 尝试 secondary
+    // Try secondary
     for (const provider of this.secondary) {
       if (provider.isAvailable()) {
         try {
@@ -170,7 +170,7 @@ export class ChainMemoryManager implements MemorySearchManager {
       }
     }
 
-    // 尝试 fallback
+    // Try fallback
     if (this.config.global.enableFallback && this.fallback && this.fallback.isAvailable()) {
       try {
         return await this.fallback.search(query, options);
@@ -179,19 +179,19 @@ export class ChainMemoryManager implements MemorySearchManager {
       }
     }
 
-    // 所有都失败，返回空
+    // All providers returned empty
     return [];
   }
 
   /**
-   * 读取文件
+   * Read file
    */
   async readFile(options: {
     relPath: string;
     from?: number;
     lines?: number;
   }): Promise<{ path: string; text: string }> {
-    // 尝试 primary
+    // Try primary
     if (this.primary && this.primary.isAvailable()) {
       try {
         return await this.primary.manager.readFile(options);
@@ -200,7 +200,7 @@ export class ChainMemoryManager implements MemorySearchManager {
       }
     }
 
-    // 尝试 fallback
+    // Try fallback
     if (this.config.global.enableFallback && this.fallback && this.fallback.isAvailable()) {
       try {
         return await this.fallback.manager.readFile(options);
@@ -213,7 +213,7 @@ export class ChainMemoryManager implements MemorySearchManager {
   }
 
   /**
-   * 获取状态
+   * Get status
    */
   status(): {
     backend: string;
@@ -240,8 +240,8 @@ export class ChainMemoryManager implements MemorySearchManager {
   }
 
   /**
-   * 探测 embedding 可用性
-   * 委托给 primary provider
+   * Probe embedding availability
+   * Delegate to primary provider
    */
   async probeEmbeddingAvailability(): Promise<MemoryEmbeddingProbeResult> {
     if (!this.primary) {
@@ -251,8 +251,8 @@ export class ChainMemoryManager implements MemorySearchManager {
   }
 
   /**
-   * 探测 vector 可用性
-   * 委托给 primary provider
+   * Probe vector availability
+   * Delegate to primary provider
    */
   async probeVectorAvailability(): Promise<boolean> {
     if (!this.primary) {
@@ -262,7 +262,7 @@ export class ChainMemoryManager implements MemorySearchManager {
   }
 
   /**
-   * 获取详细状态
+   * Get detailed status
    */
   getStatus(): ChainManagerStatus {
     const providerStats = Array.from(this.providers.values()).map((p) => p.getStats());
@@ -277,19 +277,19 @@ export class ChainMemoryManager implements MemorySearchManager {
   }
 
   /**
-   * 关闭 manager
+   * Close manager
    */
   async close(): Promise<void> {
-    // 停止健康监控
+    // StopHealth Monitor
     this.healthMonitor.stop();
 
-    // 等待异步队列完成
+    // Wait for async queue to complete
     await this.asyncQueue.drain();
 
-    // 清空队列
+    // Clear queue
     this.asyncQueue.clear();
 
-    // 关闭所有子 providers
+    // Close all child providers
     for (const [name, provider] of this.providers) {
       try {
         if (provider.close) {
@@ -302,21 +302,21 @@ export class ChainMemoryManager implements MemorySearchManager {
   }
 
   /**
-   * 获取 provider
+   * Get provider
    */
   getProvider(name: string) {
     return this.providers.get(name);
   }
 
   /**
-   * 获取所有 providers
+   * Get all providers
    */
   getProviders(): ProviderWrapper[] {
     return Array.from(this.providers.values());
   }
 
   /**
-   * 重置 provider 的熔断器
+   * Reset providerCircuit Breaker
    */
   resetCircuitBreaker(providerName: string): boolean {
     const provider = this.providers.get(providerName);
@@ -329,14 +329,14 @@ export class ChainMemoryManager implements MemorySearchManager {
   }
 
   /**
-   * 获取死信队列
+   * Get dead letter queue
    */
   getDeadLetterQueue() {
     return this.asyncQueue.getDeadLetterQueue();
   }
 
   /**
-   * 重试死信队列中的项
+   * RetryItems in dead letter queue
    */
   retryDeadLetter(taskId: string): boolean {
     return this.asyncQueue.retryDeadLetter(taskId);

@@ -1,10 +1,10 @@
 /**
- * Chain Memory Backend - 熔断器
+ * Chain Memory Backend - Circuit Breaker
  *
- * 实现熔断器模式，防止级联故障
+ * Implement circuit breaker pattern to prevent cascading failures
  *
- * 状态转换：
- * CLOSED (正常) → OPEN (熔断) → HALF-OPEN (试探) → CLOSED
+ * State transitions：
+ * CLOSED (Normal - CLOSED, Circuit open - OPEN, Probe - HALF-OPEN) → CLOSED
  *
  * @module circuit-breaker
  * @author Tutu
@@ -14,15 +14,15 @@
 import type { CircuitBreakerState } from "./types";
 
 /**
- * 熔断器配置
+ * Circuit Breaker Configuration
  */
 export interface CircuitBreakerConfig {
-  failureThreshold: number; // 失败阈值，默认 5
-  resetTimeoutMs: number; // 重置超时，默认 60000ms
+  failureThreshold: number; // Failure threshold, default 5
+  resetTimeoutMs: number; // Reset timeout, default 60000ms
 }
 
 /**
- * 熔断器实现
+ * Circuit Breaker Implementation
  */
 export class CircuitBreaker {
   private state: CircuitBreakerState = "CLOSED";
@@ -38,9 +38,9 @@ export class CircuitBreaker {
   }
 
   /**
-   * 记录成功
+   * Record Success
    *
-   * 成功后重置失败计数，状态变为 CLOSED
+   * Reset failure count and state after timeout CLOSED
    */
   recordSuccess(): void {
     this.failures = 0;
@@ -48,9 +48,9 @@ export class CircuitBreaker {
   }
 
   /**
-   * 记录失败
+   * Record Failure
    *
-   * 失败后增加失败计数，达到阈值后状态变为 OPEN
+   * After failure, increment failure count. State becomes OPEN when threshold is reached
    */
   recordFailure(): void {
     this.failures++;
@@ -62,10 +62,10 @@ export class CircuitBreaker {
   }
 
   /**
-   * 检查熔断器是否打开（是否应该拒绝请求）
+   * Check if circuit is open and if request should be rejected）
    *
-   * @returns true - 应该拒绝请求（熔断器打开）
-   *          false - 可以尝试请求
+   * @returns true - Should reject request, circuit is open）
+   *          false - Can try request
    */
   isOpen(): boolean {
     if (this.state === "CLOSED") {
@@ -73,35 +73,35 @@ export class CircuitBreaker {
     }
 
     if (this.state === "OPEN") {
-      // 检查是否应该进入 HALF-OPEN 状态
+      // Check if should enter HALF-OPEN state
       const elapsed = Date.now() - this.lastFailureTime;
       if (elapsed >= this.config.resetTimeoutMs) {
         this.state = "HALF-OPEN";
-        return false; // 允许一个试探请求
+        return false; // Allow one probe request
       }
-      return true; // 仍然打开
+      return true; // Still open
     }
 
-    // HALF-OPEN 状态，允许一个试探请求
+    // HALF-OPEN state, allow one probe request
     return false;
   }
 
   /**
-   * 获取当前状态
+   * Get current state
    */
   getState(): CircuitBreakerState {
     return this.state;
   }
 
   /**
-   * 获取失败计数
+   * Get failure count
    */
   getFailureCount(): number {
     return this.failures;
   }
 
   /**
-   * 手动重置熔断器
+   * Manual resetCircuit Breaker
    */
   reset(): void {
     this.failures = 0;
@@ -110,7 +110,7 @@ export class CircuitBreaker {
   }
 
   /**
-   * 获取统计信息
+   * Get statistics
    */
   getStats(): {
     state: CircuitBreakerState;

@@ -1,7 +1,7 @@
 /**
- * Chain Memory Backend - Provider 包装器
+ * Chain Memory Backend - Provider Wrapper
  *
- * 包装单个 provider，提供超时、重试、熔断器功能
+ * Wrap single provider with timeout and circuit breaker
  *
  * @module wrapper
  * @author Tutu
@@ -18,7 +18,7 @@ import type {
 } from "./types";
 
 /**
- * Provider 包装器实现
+ * Provider Wrapper Implementation
  */
 export class ProviderWrapper implements IProviderWrapper {
   config: ProviderConfig;
@@ -36,13 +36,13 @@ export class ProviderWrapper implements IProviderWrapper {
     this.config = config;
     this.manager = manager;
 
-    // 初始化熔断器
+    // Initialize Circuit Breaker
     this.circuitBreakerInstance = new CircuitBreaker({
       failureThreshold: config.circuitBreaker?.failureThreshold ?? 5,
       resetTimeoutMs: config.circuitBreaker?.resetTimeoutMs ?? 60000,
     });
 
-    // 初始化统计信息
+    // Initialize statistics
     this.stats = {
       name: config.name,
       priority: config.priority,
@@ -55,7 +55,7 @@ export class ProviderWrapper implements IProviderWrapper {
       avgResponseTime: 0,
     };
 
-    // 初始化熔断器状态
+    // Initialize Circuit Breaker state
     this.circuitBreaker = {
       state: "CLOSED",
       failures: 0,
@@ -64,7 +64,7 @@ export class ProviderWrapper implements IProviderWrapper {
   }
 
   /**
-   * 执行搜索
+   * Execute search
    */
   async search(query: string, options?: unknown): Promise<MemorySearchResult[]> {
     const timeout = this.config.timeout?.search ?? 5000;
@@ -73,20 +73,20 @@ export class ProviderWrapper implements IProviderWrapper {
   }
 
   /**
-   * 检查是否可用
+   * Check if available
    */
   isAvailable(): boolean {
-    // 检查是否启用
+    // Check if enabled
     if (this.config.enabled === false) {
       return false;
     }
 
-    // 检查熔断器
+    // CheckCircuit Breaker
     return !this.circuitBreakerInstance.isOpen();
   }
 
   /**
-   * 记录成功
+   * Record Success
    */
   recordSuccess(): void {
     this.circuitBreakerInstance.recordSuccess();
@@ -97,7 +97,7 @@ export class ProviderWrapper implements IProviderWrapper {
   }
 
   /**
-   * 记录失败
+   * Record Failure
    */
   recordFailure(): void {
     this.circuitBreakerInstance.recordFailure();
@@ -110,14 +110,14 @@ export class ProviderWrapper implements IProviderWrapper {
   }
 
   /**
-   * 带超时和重试的执行
+   * Execute with timeout and circuit breaker
    */
   private async executeWithTimeout<T>(
     operation: () => Promise<T>,
     timeoutMs: number,
     operationName: string,
   ): Promise<T> {
-    // 检查熔断器
+    // CheckCircuit Breaker
     if (this.circuitBreakerInstance.isOpen()) {
       throw new Error(`Circuit breaker is OPEN for ${this.config.name}`);
     }
@@ -130,17 +130,17 @@ export class ProviderWrapper implements IProviderWrapper {
 
     for (let attempt = 1; attempt <= maxAttempts; attempt++) {
       try {
-        // 创建超时 promise
+        // Create timeout promise
         const timeoutPromise = new Promise<never>((_, reject) => {
           setTimeout(() => {
             reject(new Error(`${operationName} timeout after ${timeoutMs}ms`));
           }, timeoutMs);
         });
 
-        // 执行操作
+        // Execute operation
         const result = await Promise.race([operation(), timeoutPromise]);
 
-        // 成功
+        // Success
         const responseTime = Date.now() - startTime;
         this.updateResponseTime(responseTime);
         this.recordSuccess();
@@ -149,20 +149,20 @@ export class ProviderWrapper implements IProviderWrapper {
       } catch (error) {
         lastError = error instanceof Error ? error : new Error(String(error));
 
-        // 如果不是最后一次尝试，等待后重试
+        // If not last attempt, wait before retryRetry
         if (attempt < maxAttempts) {
           await this.sleep(backoffMs * attempt);
         }
       }
     }
 
-    // 所有尝试都失败
+    // All attempts failedFailure
     this.recordFailure();
     throw lastError || new Error(`${operationName} failed after ${maxAttempts} attempts`);
   }
 
   /**
-   * 更新熔断器状态
+   * Update statistics
    */
   private updateCircuitBreakerState(): void {
     const state = this.circuitBreakerInstance.getState();
@@ -176,10 +176,10 @@ export class ProviderWrapper implements IProviderWrapper {
   }
 
   /**
-   * 更新平均响应时间
+   * Update average response time
    */
   private updateResponseTime(responseTime: number): void {
-    // 使用指数移动平均
+    // Use exponential moving average
     const alpha = 0.1;
     this.stats.avgResponseTime =
       this.stats.avgResponseTime === 0
@@ -188,21 +188,21 @@ export class ProviderWrapper implements IProviderWrapper {
   }
 
   /**
-   * 睡眠
+   * Sleep
    */
   private sleep(ms: number): Promise<void> {
     return new Promise((resolve) => setTimeout(resolve, ms));
   }
 
   /**
-   * 获取统计信息
+   * Get statistics
    */
   getStats(): ProviderStats {
     return { ...this.stats };
   }
 
   /**
-   * 重置熔断器
+   * ResetCircuit Breaker
    */
   resetCircuitBreaker(): void {
     this.circuitBreakerInstance.reset();
