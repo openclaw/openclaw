@@ -134,12 +134,11 @@ function findEntry(entries: Record<string, string>, ...keys: string[]): string |
 const RESULT_CODE_RE = /^(?:0x[0-9a-f]+|\d{3,10})$/i;
 
 function findResultCodeFallback(entries: Record<string, string>): string | undefined {
-  for (const value of Object.values(entries)) {
-    if (RESULT_CODE_RE.test(value.trim())) {
-      return value.trim();
-    }
-  }
-  return undefined;
+  // Collect all matches and only return when exactly one exists, so an unexpected
+  // numeric value (e.g. a port number appearing before the result code in a future
+  // schtasks locale) doesn't silently shadow the real code.
+  const matches = Object.values(entries).filter((v) => RESULT_CODE_RE.test(v.trim()));
+  return matches.length === 1 ? matches[0]!.trim() : undefined;
 }
 
 export function parseSchtasksQuery(output: string): ScheduledTaskInfo {
@@ -149,6 +148,8 @@ export function parseSchtasksQuery(output: string): ScheduledTaskInfo {
   if (status) {
     info.status = status;
   }
+  // "last run" is a secondary lookup for locales/versions that abbreviate
+  // "Last Run Time" to "Last Run" in verbose LIST output.
   const lastRunTime = findEntry(entries, "last run time", "last run");
   if (lastRunTime) {
     info.lastRunTime = lastRunTime;

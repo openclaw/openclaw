@@ -85,6 +85,35 @@ describe("schtasks runtime parsing", () => {
     const parsed = parseSchtasksQuery(output);
     expect(parsed.lastRunResult).toBeUndefined();
   });
+
+  it("parses lastRunTime from abbreviated 'Last Run' key variant", () => {
+    // Some older Windows locales shorten "Last Run Time" to "Last Run" in verbose output.
+    const output = [
+      "TaskName: \\OpenClaw Gateway",
+      "Status: Ready",
+      "Last Run: 1/8/2026 1:23:45 AM",
+      "Last Run Result: 0x0",
+    ].join("\r\n");
+    expect(parseSchtasksQuery(output)).toEqual({
+      status: "Ready",
+      lastRunTime: "1/8/2026 1:23:45 AM",
+      lastRunResult: "0x0",
+    });
+  });
+
+  it("returns undefined from fallback when multiple numeric values are present (ambiguity guard)", () => {
+    // If two or more fields match RESULT_CODE_RE, the fallback cannot determine
+    // which is the result code and returns undefined rather than guessing.
+    const output = [
+      "Aufgabenname: \\OpenClaw Gateway",
+      "Status: Bereit",
+      "Letztes Ergebnis: 0x41301",
+      "Unbekannt: 267009",
+    ].join("\r\n");
+    const parsed = parseSchtasksQuery(output);
+    // Both "0x41301" and "267009" match RESULT_CODE_RE — ambiguous, so fallback yields undefined.
+    expect(parsed.lastRunResult).toBeUndefined();
+  });
 });
 
 describe("scheduled task runtime derivation", () => {
