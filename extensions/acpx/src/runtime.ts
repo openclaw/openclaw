@@ -213,6 +213,7 @@ export class AcpxRuntime implements AcpRuntime {
       args: ensureCommand,
       cwd,
       fallbackCode: "ACP_SESSION_INIT_FAILED",
+      timeoutMs: 3000,
     });
     let ensuredEvent = events.find(
       (event) =>
@@ -231,6 +232,7 @@ export class AcpxRuntime implements AcpRuntime {
         args: newCommand,
         cwd,
         fallbackCode: "ACP_SESSION_INIT_FAILED",
+        timeoutMs: 3000,
       });
       ensuredEvent = events.find(
         (event) =>
@@ -680,12 +682,14 @@ export class AcpxRuntime implements AcpRuntime {
     fallbackCode: AcpRuntimeErrorCode;
     ignoreNoSession?: boolean;
     signal?: AbortSignal;
+    timeoutMs?: number;
   }): Promise<AcpxJsonObject[]> {
     const result = await spawnAndCollect(
       {
         command: this.config.command,
         args: params.args,
         cwd: params.cwd,
+        timeoutMs: params.timeoutMs ?? 3000,
       },
       this.spawnCommandOptions,
       {

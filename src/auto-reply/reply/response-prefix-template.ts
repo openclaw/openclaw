@@ -16,6 +16,8 @@ export type ResponsePrefixContext = {
   thinkingLevel?: string;
   /** Agent identity name */
   identityName?: string;
+  /** Channel type (e.g., "telegram", "webchat", "control-ui") */
+  channel?: string;
 };
 
 // Regex pattern for template variables: {variableName} or {variable.name}

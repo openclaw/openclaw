@@ -21,14 +21,31 @@ type ReplyDispatchDeliverer = (
   info: { kind: ReplyDispatchKind },
 ) => Promise<void>;
 
-const DEFAULT_HUMAN_DELAY_MIN_MS = 800;
-const DEFAULT_HUMAN_DELAY_MAX_MS = 2500;
+const DEFAULT_HUMAN_DELAY_MIN_MS = 200;
+const DEFAULT_HUMAN_DELAY_MAX_MS = 600;
+const WEBCHAT_HUMAN_DELAY_MIN_MS = 0;
+const WEBCHAT_HUMAN_DELAY_MAX_MS = 100;
 
 /** Generate a random delay within the configured range. */
-function getHumanDelay(config: HumanDelayConfig | undefined): number {
+function getHumanDelay(config: HumanDelayConfig | undefined, isWebchat = false): number {
   const mode = config?.mode ?? "off";
   if (mode === "off") {
     return 0;
+  }
+  // Webchat clients (Control UI, webchat) get minimal delay for responsiveness (fixes #41014)
+  if (isWebchat) {
+    const min =
+      mode === "custom"
+        ? (config?.minMs ?? WEBCHAT_HUMAN_DELAY_MIN_MS)
+        : WEBCHAT_HUMAN_DELAY_MIN_MS;
+    const max =
+      mode === "custom"
+        ? (config?.maxMs ?? WEBCHAT_HUMAN_DELAY_MAX_MS)
+        : WEBCHAT_HUMAN_DELAY_MAX_MS;
+    if (max <= min) {
+      return min;
+    }
+    return Math.floor(Math.random() * (max - min + 1)) + min;
   }
   const min =
     mode === "custom" ? (config?.minMs ?? DEFAULT_HUMAN_DELAY_MIN_MS) : DEFAULT_HUMAN_DELAY_MIN_MS;
@@ -150,7 +167,10 @@ export function createReplyDispatcher(options: ReplyDispatcherOptions): ReplyDis
       .then(async () => {
         // Add human-like delay between block replies for natural rhythm.
         if (shouldDelay) {
-          const delayMs = getHumanDelay(options.humanDelay);
+          // Detect webchat clients for minimal delay (fixes #41014)
+          const channel = options.responsePrefixContext?.channel;
+          const isWebchat = channel === "webchat" || channel === "control-ui";
+          const delayMs = getHumanDelay(options.humanDelay, isWebchat);
           if (delayMs > 0) {
             await sleep(delayMs);
           }
