@@ -2,6 +2,7 @@ import type { SsrFPolicy } from "../infra/net/ssrf.js";
 import { type AriaSnapshotNode, formatAriaSnapshot, type RawAXNode } from "./cdp.js";
 import {
   assertBrowserNavigationAllowed,
+  assertBrowserNavigationRedirectChainAllowed,
   assertBrowserNavigationResultAllowed,
   withBrowserNavigationPolicy,
 } from "./navigation-guard.js";
@@ -19,6 +20,7 @@ import {
   storeRoleRefsForTarget,
   type WithSnapshotForAI,
 } from "./pw-session.js";
+import { withPageScopedCdpClient } from "./pw-session.page-cdp.js";
 
 export async function snapshotAriaViaPlaywright(opts: {
   cdpUrl: string;
@@ -31,17 +33,21 @@ export async function snapshotAriaViaPlaywright(opts: {
     targetId: opts.targetId,
   });
   ensurePageState(page);
-  const session = await page.context().newCDPSession(page);
-  try {
-    await session.send("Accessibility.enable").catch(() => {});
-    const res = (await session.send("Accessibility.getFullAXTree")) as {
-      nodes?: RawAXNode[];
-    };
-    const nodes = Array.isArray(res?.nodes) ? res.nodes : [];
-    return { nodes: formatAriaSnapshot(nodes, limit) };
-  } finally {
-    await session.detach().catch(() => {});
-  }
+  const res = (await withPageScopedCdpClient({
+    cdpUrl: opts.cdpUrl,
+    page,
+    targetId: opts.targetId,
+    fn: async (send) => {
+      await send("Accessibility.enable").catch(() => {});
+      return (await send("Accessibility.getFullAXTree")) as {
+        nodes?: RawAXNode[];
+      };
+    },
+  })) as {
+    nodes?: RawAXNode[];
+  };
+  const nodes = Array.isArray(res?.nodes) ? res.nodes : [];
+  return { nodes: formatAriaSnapshot(nodes, limit) };
 }
 
 export async function snapshotAiViaPlaywright(opts: {
@@ -191,8 +197,10 @@ export async function navigateViaPlaywright(opts: {
   const timeout = Math.max(1000, Math.min(120_000, opts.timeoutMs ?? 20_000));
   let page = await getPageForTargetId(opts);
   ensurePageState(page);
+  const navigate = async () => await page.goto(url, { timeout });
+  let response;
   try {
-    await page.goto(url, { timeout });
+    response = await navigate();
   } catch (err) {
     if (!isRetryableNavigateError(err)) {
       throw err;
@@ -206,8 +214,12 @@ export async function navigateViaPlaywright(opts: {
     }).catch(() => {});
     page = await getPageForTargetId(opts);
     ensurePageState(page);
-    await page.goto(url, { timeout });
+    response = await navigate();
   }
+  await assertBrowserNavigationRedirectChainAllowed({
+    request: response?.request(),
+    ...withBrowserNavigationPolicy(opts.ssrfPolicy),
+  });
   const finalUrl = page.url();
   await assertBrowserNavigationResultAllowed({
     url: finalUrl,
