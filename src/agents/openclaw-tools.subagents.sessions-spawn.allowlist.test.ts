@@ -4,6 +4,7 @@ import {
   getCallGatewayMock,
   getSessionsSpawnTool,
   resetSessionsSpawnConfigOverride,
+  setupSessionsSpawnGatewayMock,
   setSessionsSpawnConfigOverride,
 } from "./openclaw-tools.subagents.sessions-spawn.test-harness.js";
 import { resetSubagentRegistryForTests } from "./subagent-registry.js";
@@ -205,6 +206,53 @@ describe("openclaw-tools: subagents (sessions_spawn allowlist)", () => {
       callId: "call10",
       acceptedAt: 5200,
     });
+  });
+
+  it("uses the target agent workspace for cross-agent spawns", async () => {
+    setSessionsSpawnConfigOverride({
+      session: {
+        mainKey: "main",
+        scope: "per-sender",
+      },
+      agents: {
+        list: [
+          {
+            id: "main",
+            workspace: "/workspace/main",
+            subagents: {
+              allowAgents: ["research"],
+            },
+          },
+          {
+            id: "research",
+            workspace: "/workspace/research",
+          },
+        ],
+      },
+    });
+
+    let childWorkspaceDir: string | undefined;
+    setupSessionsSpawnGatewayMock({
+      onAgentSubagentSpawn: (params: unknown) => {
+        childWorkspaceDir = (params as { workspaceDir?: string } | undefined)?.workspaceDir;
+      },
+    });
+
+    const tool = await getSessionsSpawnTool({
+      agentSessionKey: "main",
+      agentChannel: "whatsapp",
+      workspaceDir: "/workspace/main",
+    });
+    const result = await tool.execute("call-cross-agent-workspace", {
+      task: "read AGENTS.md",
+      agentId: "research",
+    });
+
+    expect(result.details).toMatchObject({
+      status: "accepted",
+      runId: "run-1",
+    });
+    expect(childWorkspaceDir).toBe("/workspace/research");
   });
 
   it("forbids sandboxed cross-agent spawns that would unsandbox the child", async () => {
