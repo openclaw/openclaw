@@ -15,6 +15,7 @@ Docs: https://docs.openclaw.ai
 - Models/Kimi Coding: send `anthropic-messages` tools in native Anthropic format again so `kimi-coding` stops degrading tool calls into XML/plain-text pseudo invocations instead of real `tool_use` blocks. (#38669, #39907, #40552) Thanks @opriz.
 - Context engine/tests: add bundled-registry regression coverage for cross-chunk resolution, plugin-sdk re-exports, and concurrent chunk registration. (#40460) thanks @dsantoreis.
 - Agents/embedded runner: bound compaction retry waiting and drain embedded runs during SIGUSR1 restart so session lanes recover instead of staying blocked behind compaction. (#40324) thanks @cgdusek.
+- CLI/update: surface an EBUSY recovery hint when a running process locks the install directory during npm global update on Windows, and scope detection to the rename syscall to avoid false positives. (#40724) Thanks @ademczuk.
 
 ## 2026.3.8
 
