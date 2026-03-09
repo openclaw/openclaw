@@ -952,7 +952,7 @@ export async function compactEmbeddedPiSession(
           sessionId: params.sessionId,
           agentId: sessionAgentId,
           sessionKey: hookSessionKey,
-          workspaceDir: params.workspaceDir,
+          workspaceDir: resolveUserPath(params.workspaceDir),
           messageProvider: resolvedMessageProvider,
         };
         // Engine-owned compaction doesn't load the transcript at this level, so
@@ -963,7 +963,6 @@ export async function compactEmbeddedPiSession(
             await hookRunner.runBeforeCompaction(
               {
                 messageCount: -1,
-                tokenCount: ceCtxInfo.tokens,
                 sessionFile: params.sessionFile,
               },
               hookCtx,
