@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { storeDeviceAuthToken } from "./device-auth.ts";
+import { loadDeviceAuthToken, storeDeviceAuthToken } from "./device-auth.ts";
 import type { DeviceIdentity } from "./device-identity.ts";
 
 const wsInstances = vi.hoisted((): MockWebSocket[] => []);
@@ -165,5 +165,80 @@ describe("GatewayBrowserClient", () => {
     expect(signDevicePayloadMock).toHaveBeenCalledWith("private-key", expect.any(String));
     const signedPayload = signDevicePayloadMock.mock.calls[0]?.[1];
     expect(signedPayload).toContain("|stored-device-token|nonce-1");
+  });
+
+  it("does not clear stored device token on transient connect failure", async () => {
+    const client = new GatewayBrowserClient({
+      url: "ws://127.0.0.1:18789",
+      token: "shared-auth-token",
+    });
+
+    client.start();
+    const ws = getLatestWebSocket();
+    ws.emitOpen();
+    ws.emitMessage({
+      type: "event",
+      event: "connect.challenge",
+      payload: { nonce: "nonce-1" },
+    });
+    await vi.waitFor(() => expect(ws.sent.length).toBeGreaterThan(0));
+
+    const connectFrame = JSON.parse(ws.sent.at(-1) ?? "{}") as { id?: string };
+    ws.emitMessage({
+      type: "res",
+      id: connectFrame.id,
+      ok: false,
+      error: {
+        code: "UNAVAILABLE",
+        message: "gateway restarting",
+      },
+    });
+
+    await vi.waitFor(() =>
+      expect(
+        loadDeviceAuthToken({
+          deviceId: "device-1",
+          role: "operator",
+        })?.token,
+      ).toBe("stored-device-token"),
+    );
+  });
+
+  it("clears stored device token only for auth mismatch failures", async () => {
+    const client = new GatewayBrowserClient({
+      url: "ws://127.0.0.1:18789",
+      token: "shared-auth-token",
+    });
+
+    client.start();
+    const ws = getLatestWebSocket();
+    ws.emitOpen();
+    ws.emitMessage({
+      type: "event",
+      event: "connect.challenge",
+      payload: { nonce: "nonce-1" },
+    });
+    await vi.waitFor(() => expect(ws.sent.length).toBeGreaterThan(0));
+
+    const connectFrame = JSON.parse(ws.sent.at(-1) ?? "{}") as { id?: string };
+    ws.emitMessage({
+      type: "res",
+      id: connectFrame.id,
+      ok: false,
+      error: {
+        code: "AUTH_FAILED",
+        message: "token mismatch",
+        details: { code: "AUTH_DEVICE_TOKEN_MISMATCH" },
+      },
+    });
+
+    await vi.waitFor(() =>
+      expect(
+        loadDeviceAuthToken({
+          deviceId: "device-1",
+          role: "operator",
+        }),
+      ).toBeNull(),
+    );
   });
 });

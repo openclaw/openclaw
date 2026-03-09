@@ -99,7 +99,7 @@ function normalizeAuthToken(value: string | undefined | null): string | undefine
 // 4008 = application-defined code (browser rejects 1008 "Policy Violation")
 const CONNECT_FAILED_CLOSE_CODE = 4008;
 
-function isNonRecoverableAuthError(error: GatewayErrorInfo | undefined): boolean {
+export function isNonRecoverableAuthError(error: GatewayErrorInfo | undefined): boolean {
   if (!error) {
     return false;
   }
@@ -112,6 +112,18 @@ function isNonRecoverableAuthError(error: GatewayErrorInfo | undefined): boolean
     detailCode === ConnectErrorDetailCodes.AUTH_PASSWORD_MISMATCH ||
     detailCode === ConnectErrorDetailCodes.AUTH_RATE_LIMITED ||
     detailCode === ConnectErrorDetailCodes.AUTH_TOKEN_MISSING
+  );
+}
+
+function isAuthMismatchError(error: unknown): boolean {
+  if (!(error instanceof GatewayRequestError)) {
+    return false;
+  }
+  const detailCode = resolveGatewayErrorDetailCode(error);
+  return (
+    detailCode === ConnectErrorDetailCodes.AUTH_PASSWORD_MISMATCH ||
+    detailCode === ConnectErrorDetailCodes.AUTH_TOKEN_MISMATCH ||
+    detailCode === ConnectErrorDetailCodes.AUTH_DEVICE_TOKEN_MISMATCH
   );
 }
 
@@ -308,7 +320,7 @@ export class GatewayBrowserClient {
         } else {
           this.pendingConnectError = undefined;
         }
-        if (canFallbackToShared && deviceIdentity) {
+        if (canFallbackToShared && deviceIdentity && isAuthMismatchError(err)) {
           clearDeviceAuthToken({ deviceId: deviceIdentity.deviceId, role });
           this.lastGoodAuthToken = sharedToken ?? this.lastGoodAuthToken;
         }
