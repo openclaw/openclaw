@@ -157,7 +157,15 @@ const mattermostMessageActions: ChannelMessageActionAdapter = {
     }
 
     const message = typeof params.message === "string" ? params.message : "";
-    const replyToId = typeof params.replyToId === "string" ? params.replyToId : undefined;
+    // The message tool passes the reply target as "replyTo", not "replyToId".
+    // handleSendAction reads params.replyTo into a local var but never writes
+    // it back, so the plugin handler must check both property names.
+    const replyToId =
+      typeof params.replyToId === "string"
+        ? params.replyToId
+        : typeof params.replyTo === "string"
+          ? params.replyTo
+          : undefined;
     const resolvedAccountId = accountId || undefined;
 
     const mediaUrl =
