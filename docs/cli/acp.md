@@ -96,6 +96,52 @@ Each ACP session maps to a single Gateway session key. One agent can have many
 sessions; ACP defaults to an isolated `acp:<uuid>` session unless you override
 the key or label.
 
+## Use from `acpx` (Codex, Claude, other ACP clients)
+
+If you want a coding agent such as Codex or Claude Code to talk to your
+OpenClaw bot over ACP, use `acpx` with its built-in `openclaw` target.
+
+Typical flow:
+
+1. Run the Gateway and make sure the ACP bridge can reach it.
+2. Point `acpx openclaw` at `openclaw acp`.
+3. Target the OpenClaw session key you want the coding agent to use.
+
+Examples:
+
+```bash
+# One-shot request into your default OpenClaw ACP session
+acpx openclaw exec "Summarize the active OpenClaw session state."
+
+# Persistent named session for follow-up turns
+acpx openclaw sessions ensure --name codex-bridge
+acpx openclaw -s codex-bridge --cwd /path/to/repo \
+  "Ask my OpenClaw work agent for recent context relevant to this repo."
+```
+
+If you want `acpx openclaw` to target a specific Gateway and session key every
+time, override the `openclaw` agent command in `~/.acpx/config.json`:
+
+```json
+{
+  "agents": {
+    "openclaw": {
+      "command": "env OPENCLAW_HIDE_BANNER=1 OPENCLAW_SUPPRESS_NOTES=1 openclaw acp --url ws://127.0.0.1:18789 --token-file ~/.openclaw/gateway.token --session agent:main:main"
+    }
+  }
+}
+```
+
+For a repo-local OpenClaw checkout, use the direct CLI entrypoint instead of the
+dev runner so the ACP stream stays clean. For example:
+
+```bash
+env OPENCLAW_HIDE_BANNER=1 OPENCLAW_SUPPRESS_NOTES=1 node openclaw.mjs acp ...
+```
+
+This is the easiest way to let Codex, Claude Code, or another ACP-aware client
+pull contextual information from an OpenClaw agent without scraping a terminal.
+
 ## Zed editor setup
 
 Add a custom ACP agent in `~/.config/zed/settings.json` (or use Zed’s Settings UI):
@@ -179,6 +225,10 @@ Security note:
 
 - `--token` and `--password` can be visible in local process listings on some systems.
 - Prefer `--token-file`/`--password-file` or environment variables (`OPENCLAW_GATEWAY_TOKEN`, `OPENCLAW_GATEWAY_PASSWORD`).
+- Gateway auth resolution follows the shared contract used by other Gateway clients:
+  - local mode: env (`OPENCLAW_GATEWAY_*`) -> `gateway.auth.*` -> `gateway.remote.*` fallback when `gateway.auth.*` is unset
+  - remote mode: `gateway.remote.*` with env/config fallback per remote precedence rules
+  - `--url` is override-safe and does not reuse implicit config/env credentials; pass explicit `--token`/`--password` (or file variants)
 - ACP runtime backend child processes receive `OPENCLAW_SHELL=acp`, which can be used for context-specific shell/profile rules.
 - `openclaw acp client` sets `OPENCLAW_SHELL=acp-client` on the spawned bridge process.
 

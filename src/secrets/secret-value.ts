@@ -1,6 +1,6 @@
 import { isNonEmptyString, isRecord } from "./shared.js";
 
-export type SecretExpectedResolvedValue = "string" | "string-or-object";
+export type SecretExpectedResolvedValue = "string" | "string-or-object"; // pragma: allowlist secret
 
 export function isExpectedResolvedSecretValue(
   value: unknown,

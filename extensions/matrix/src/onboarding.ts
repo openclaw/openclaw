@@ -1,17 +1,19 @@
-import type { DmPolicy } from "openclaw/plugin-sdk";
+import type { DmPolicy } from "openclaw/plugin-sdk/matrix";
 import {
   addWildcardAllowFrom,
+  buildSingleChannelSecretPromptState,
   formatResolvedUnresolvedNote,
   formatDocsLink,
   hasConfiguredSecretInput,
   mergeAllowFromEntries,
   promptSingleChannelSecretInput,
   promptChannelAccessConfig,
+  setTopLevelChannelGroupPolicy,
   type SecretInput,
   type ChannelOnboardingAdapter,
   type ChannelOnboardingDmPolicy,
   type WizardPrompter,
-} from "openclaw/plugin-sdk";
+} from "openclaw/plugin-sdk/matrix";
 import { listMatrixDirectoryGroupsLive } from "./directory-live.js";
 import { resolveMatrixAccount } from "./matrix/accounts.js";
 import { ensureMatrixSdkInstalled, isMatrixSdkAvailable } from "./matrix/deps.js";
@@ -143,17 +145,12 @@ async function promptMatrixAllowFrom(params: {
 }
 
 function setMatrixGroupPolicy(cfg: CoreConfig, groupPolicy: "open" | "allowlist" | "disabled") {
-  return {
-    ...cfg,
-    channels: {
-      ...cfg.channels,
-      matrix: {
-        ...cfg.channels?.matrix,
-        enabled: true,
-        groupPolicy,
-      },
-    },
-  };
+  return setTopLevelChannelGroupPolicy({
+    cfg,
+    channel: "matrix",
+    groupPolicy,
+    enabled: true,
+  }) as CoreConfig;
 }
 
 function setMatrixGroupRooms(cfg: CoreConfig, roomKeys: string[]) {
@@ -327,14 +324,20 @@ export const matrixOnboardingAdapter: ChannelOnboardingAdapter = {
             },
           }),
         ).trim();
+        const passwordPromptState = buildSingleChannelSecretPromptState({
+          accountConfigured: Boolean(existingPasswordConfigured),
+          hasConfigToken: existingPasswordConfigured,
+          allowEnv: true,
+          envValue: envPassword,
+        });
         const passwordResult = await promptSingleChannelSecretInput({
           cfg: next,
           prompter,
           providerHint: "matrix",
           credentialLabel: "password",
-          accountConfigured: Boolean(existingPasswordConfigured),
-          canUseEnv: Boolean(envPassword?.trim()) && !existingPasswordConfigured,
-          hasConfigToken: existingPasswordConfigured,
+          accountConfigured: passwordPromptState.accountConfigured,
+          canUseEnv: passwordPromptState.canUseEnv,
+          hasConfigToken: passwordPromptState.hasConfigToken,
           envPrompt: "MATRIX_PASSWORD detected. Use env var?",
           keepPrompt: "Matrix password already configured. Keep it?",
           inputPrompt: "Matrix password",

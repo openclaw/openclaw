@@ -1158,19 +1158,22 @@ If your AI does something bad:
 
 ## Secret Scanning (detect-secrets)
 
-CI runs `detect-secrets scan --baseline .secrets.baseline` in the `secrets` job.
-If it fails, there are new candidates not yet in the baseline.
+CI runs the `detect-secrets` pre-commit hook in the `secrets` job.
+Pushes to `main` always run an all-files scan. Pull requests use a changed-file
+fast path when a base commit is available, and fall back to an all-files scan
+otherwise. If it fails, there are new candidates not yet in the baseline.
 
 ### If CI fails
 
 1. Reproduce locally:
 
    ```bash
-   detect-secrets scan --baseline .secrets.baseline
+   pre-commit run --all-files detect-secrets
    ```
 
 2. Understand the tools:
-   - `detect-secrets scan` finds candidates and compares them to the baseline.
+   - `detect-secrets` in pre-commit runs `detect-secrets-hook` with the repo's
+     baseline and excludes.
    - `detect-secrets audit` opens an interactive review to mark each baseline
      item as real or false positive.
 3. For real secrets: rotate/remove them, then re-run the scan to update the baseline.
