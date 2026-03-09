@@ -56,8 +56,7 @@ $env:ERNIE_API_KEY = "bce-v3/ALTAK-your-api-key-here"  # pragma: allowlist secre
 Add to your shell profile (`~/.bashrc`, `~/.zshrc`, etc.) for persistence:
 
 ```bash
-# pragma: allowlist secret
-echo 'export ERNIE_API_KEY="bce-v3/ALTAK-your-api-key-here"' >> ~/.bashrc
+echo 'export ERNIE_API_KEY="your-api-key-here"' >> ~/.bashrc  # pragma: allowlist secret
 source ~/.bashrc
 ```
 
