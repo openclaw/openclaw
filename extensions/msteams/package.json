@@ -1,6 +1,6 @@
 {
   "name": "@openclaw/msteams",
-  "version": "2026.3.8-beta.1",
+  "version": "2026.3.9",
   "description": "OpenClaw Microsoft Teams channel plugin",
   "type": "module",
   "dependencies": {
