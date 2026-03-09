@@ -1,4 +1,5 @@
 import type { ChildProcessWithoutNullStreams, SpawnOptions } from "node:child_process";
+import { StringDecoder } from "node:string_decoder";
 import { killProcessTree } from "../../kill-tree.js";
 import { spawnWithFallback } from "../../spawn-utils.js";
 import type { ManagedRunStdin, SpawnProcessAdapter } from "../types.js";
@@ -107,15 +108,33 @@ export async function createChildAdapter(params: {
       }
     : undefined;
 
+  // Use StringDecoder to handle multi-byte UTF-8 characters that may be split
+  // across Buffer chunks (e.g. Chinese text). Without this, partial byte
+  // sequences at chunk boundaries become U+FFFD replacement characters (mojibake).
+  const stdoutDecoder = new StringDecoder("utf8");
+  const stderrDecoder = new StringDecoder("utf8");
+
   const onStdout = (listener: (chunk: string) => void) => {
     child.stdout.on("data", (chunk) => {
-      listener(chunk.toString());
+      listener(stdoutDecoder.write(chunk));
+    });
+    child.stdout.on("end", () => {
+      const remaining = stdoutDecoder.end();
+      if (remaining) {
+        listener(remaining);
+      }
     });
   };
 
   const onStderr = (listener: (chunk: string) => void) => {
     child.stderr.on("data", (chunk) => {
-      listener(chunk.toString());
+      listener(stderrDecoder.write(chunk));
+    });
+    child.stderr.on("end", () => {
+      const remaining = stderrDecoder.end();
+      if (remaining) {
+        listener(remaining);
+      }
     });
   };
 

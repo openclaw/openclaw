@@ -138,4 +138,55 @@ describe("createChildAdapter", () => {
     };
     expect(spawnArgs.options?.env).toEqual({ FOO: "bar", COUNT: "12" });
   });
+
+  it("decodes multi-byte UTF-8 characters split across stdout chunks", async () => {
+    const { child } = createStubChild(5555);
+    spawnWithFallbackMock.mockResolvedValue({ child, usedFallback: false });
+    const adapter = await createChildAdapter({
+      argv: ["node", "-e", "''"],
+      stdinMode: "pipe-open",
+    });
+
+    const chunks: string[] = [];
+    adapter.onStdout((chunk) => chunks.push(chunk));
+
+    // "你好" in UTF-8 is 6 bytes: e4 bd a0 e5 a5 bd
+    // Split the first character across two Buffer chunks to simulate
+    // a multi-byte boundary split that causes mojibake without StringDecoder.
+    const fullBytes = Buffer.from("你好", "utf8"); // [e4, bd, a0, e5, a5, bd]
+    const part1 = fullBytes.subarray(0, 2); // [e4, bd] — incomplete first char
+    const part2 = fullBytes.subarray(2); // [a0, e5, a5, bd] — rest
+
+    child.stdout!.emit("data", part1);
+    child.stdout!.emit("data", part2);
+    child.stdout!.emit("end");
+
+    const result = chunks.join("");
+    expect(result).toBe("你好");
+  });
+
+  it("decodes multi-byte UTF-8 characters split across stderr chunks", async () => {
+    const { child } = createStubChild(6666);
+    spawnWithFallbackMock.mockResolvedValue({ child, usedFallback: false });
+    const adapter = await createChildAdapter({
+      argv: ["node", "-e", "''"],
+      stdinMode: "pipe-open",
+    });
+
+    const chunks: string[] = [];
+    adapter.onStderr((chunk) => chunks.push(chunk));
+
+    // "中文" in UTF-8 is 6 bytes: e4 b8 ad e6 96 87
+    // Split in the middle of the second character.
+    const fullBytes = Buffer.from("中文", "utf8");
+    const part1 = fullBytes.subarray(0, 4); // first char + 1 byte of second
+    const part2 = fullBytes.subarray(4); // remaining 2 bytes of second char
+
+    child.stderr!.emit("data", part1);
+    child.stderr!.emit("data", part2);
+    child.stderr!.emit("end");
+
+    const result = chunks.join("");
+    expect(result).toBe("中文");
+  });
 });
