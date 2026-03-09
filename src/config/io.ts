@@ -1059,12 +1059,14 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
   async function writeConfigFile(cfg: OpenClawConfig, options: ConfigWriteOptions = {}) {
     clearConfigCache();
     let persistCandidate: unknown = cfg;
+    let persistCandidateSource: unknown = cfg;
     const { snapshot } = await readConfigFileSnapshotInternal();
     let envRefMap: Map<string, string> | null = null;
     let changedPaths: Set<string> | null = null;
     if (snapshot.valid && snapshot.exists) {
       const patch = createMergePatch(snapshot.config, cfg);
       persistCandidate = applyMergePatch(snapshot.resolved, patch);
+      persistCandidateSource = applyMergePatch(snapshot.parsed, patch);
       try {
         const resolvedIncludes = resolveConfigIncludes(snapshot.parsed, configPath, {
           readFile: (candidate) => deps.fs.readFileSync(candidate, "utf-8"),
@@ -1089,7 +1091,7 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
       }
     }
 
-    const validated = validateConfigObjectRawWithPlugins(persistCandidate);
+    const validated = validateConfigObjectRawWithPlugins(persistCandidate, persistCandidateSource);
     if (!validated.ok) {
       const issue = validated.issues[0];
       const pathLabel = issue?.path ? issue.path : "<root>";
