@@ -313,7 +313,10 @@ export async function triggerInternalHook(event: InternalHookEvent): Promise<voi
  * *during* its own execution, those entries land in the already-cleared source
  * array and will persist after this function returns — a subsequent drain
  * call will execute them.
- * Errors are caught per-action so one failure doesn't block others.
+ * Errors are caught per-action via try/catch.  Per-action isolation (one
+ * failure doesn't block others) holds only when `onError` does not rethrow.
+ * If `onError` rethrows, subsequent actions are skipped — callers that want
+ * fail-fast semantics (e.g. tests) can use this intentionally.
  *
  * Exported for use in tests that need to drain post-hook actions without
  * going through the full triggerInternalHook pipeline, ensuring they

@@ -251,8 +251,18 @@ const saveSessionToMemory: HookHandler = async (event) => {
       await fs.mkdir(memoryDir, { recursive: true });
       try {
         preExistingContent = await fs.readFile(memoryFilePath, "utf-8");
-      } catch {
+      } catch (err: unknown) {
         // File doesn't exist yet — normal case, nothing to preserve.
+        // Rethrow non-ENOENT errors (EACCES, EISDIR, etc.) to avoid silently
+        // losing preExistingContent, which would cause late-block retraction
+        // to delete the file instead of restoring a prior session's history.
+        if (
+          err instanceof Error &&
+          "code" in err &&
+          (err as NodeJS.ErrnoException).code !== "ENOENT"
+        ) {
+          throw err;
+        }
       }
       await writeFileWithinRoot({
         rootDir: memoryDir,
