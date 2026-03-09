@@ -64,4 +64,22 @@ describe("LruMap", () => {
     expect(lru.get("a")).toBeUndefined();
     expect(lru.size).toBe(0);
   });
+
+  it("throws on invalid maxSize", () => {
+    expect(() => new LruMap(0)).toThrow("maxSize must be a positive integer");
+    expect(() => new LruMap(-1)).toThrow("maxSize must be a positive integer");
+    expect(() => new LruMap(NaN)).toThrow("maxSize must be a positive integer");
+    expect(() => new LruMap(Infinity)).toThrow("maxSize must be a positive integer");
+  });
+
+  it("set on existing key refreshes LRU order for eviction", () => {
+    const lru = new LruMap<string, number>(2);
+    lru.set("a", 1);
+    lru.set("b", 2);
+    lru.set("a", 10); // refreshes "a", "b" is now oldest
+    lru.set("c", 3); // should evict "b", not "a"
+    expect(lru.get("a")).toBe(10);
+    expect(lru.get("b")).toBeUndefined();
+    expect(lru.get("c")).toBe(3);
+  });
 });

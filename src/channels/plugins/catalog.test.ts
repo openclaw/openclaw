@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { MANIFEST_KEY } from "../../compat/legacy-names.js";
 import type { OpenClawPackageManifest } from "../../plugins/manifest.js";
 import {
@@ -181,20 +181,12 @@ describe("external catalog loading", () => {
     expect(entries.find((e) => e.id === "no-label")).toBeUndefined();
   });
 
-  it("logs a warning for malformed JSON catalog files", async () => {
+  it("handles malformed JSON catalog files without crashing", () => {
     const catalogPath = path.join(tmpDir, "bad.json");
     fs.writeFileSync(catalogPath, "NOT VALID JSON {{{");
 
-    const { logWarn } = await import("../../logger.js");
-    const spy = vi.spyOn({ logWarn }, "logWarn");
-
-    // We need to mock the module-level import. Instead, verify via the
-    // vi.mock approach or just verify the file is silently handled (the
-    // previous behavior was silent; now it logs). We can verify no crash
-    // and the entry is absent.
     const entries = listChannelPluginCatalogEntries({ catalogPaths: [catalogPath] });
     expect(entries.find((e) => e.id === "bad")).toBeUndefined();
-    spy.mockRestore();
   });
 
   it("handles multiple catalog paths", () => {
