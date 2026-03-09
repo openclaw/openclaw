@@ -80,7 +80,7 @@ openclaw onboard \
   --accept-risk \
   --auth-choice token \
   --token-provider ernie \
-  --token "bce-v3/ALTAK-your-api-key-here"
+  --token "your-api-key-here"  # pragma: allowlist secret
 ```
 
 ### Method 4: Configuration File
@@ -94,7 +94,7 @@ Add to your `~/.openclaw/config.json`:
       "ernie": {
         "baseUrl": "https://qianfan.baidubce.com/v2",
         "api": "openai-completions",
-        "apiKey": "bce-v3/ALTAK-your-api-key-here",
+        "apiKey": "your-api-key-here",
         "models": [
           {
             "id": "ernie-5.0-thinking-preview",
