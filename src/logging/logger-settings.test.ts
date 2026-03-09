@@ -51,6 +51,21 @@ afterEach(() => {
 });
 
 describe("getResolvedLoggerSettings", () => {
+  it("substitutes YYYY-MM-DD placeholder in configured file path with actual date", () => {
+    process.env.OPENCLAW_TEST_FILE_LOG = "1";
+    const customDir = "/tmp/custom-logs";
+    logging.setLoggerOverride({
+      level: "info",
+      file: `${customDir}/openclaw-YYYY-MM-DD.log`,
+    });
+    const today = new Date();
+    const yyyy = today.getFullYear();
+    const mm = String(today.getMonth() + 1).padStart(2, "0");
+    const dd = String(today.getDate()).padStart(2, "0");
+    const expected = `${customDir}/openclaw-${yyyy}-${mm}-${dd}.log`;
+    expect(logging.getResolvedLoggerSettings().file).toBe(expected);
+  });
+
   it("uses a silent fast path in default Vitest mode without config reads", () => {
     const settings = logging.getResolvedLoggerSettings();
     expect(settings.level).toBe("silent");
