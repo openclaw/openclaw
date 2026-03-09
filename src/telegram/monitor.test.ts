@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { getChannelActivity, resetChannelActivityForTest } from "../infra/channel-activity.js";
 import { monitorTelegramProvider } from "./monitor.js";
 
 type MockCtx = {
@@ -212,6 +213,7 @@ describe("monitorTelegramProvider (grammY)", () => {
     createTelegramBotErrors.length = 0;
     createdBotStops.length = 0;
     consoleErrorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    resetChannelActivityForTest();
   });
 
   afterEach(() => {
@@ -291,6 +293,26 @@ describe("monitorTelegramProvider (grammY)", () => {
     await monitorTelegramProvider({ token: "tok", abortSignal: abort.signal });
 
     expectRecoverableRetryState(2);
+  });
+
+  it("records activity heartbeats while polling (avoids stale-socket false positives)", async () => {
+    vi.useFakeTimers();
+    const abort = new AbortController();
+    runSpy.mockImplementationOnce(() =>
+      makeRunnerStub({
+        task: async () => {
+          await vi.advanceTimersByTimeAsync(61_000);
+          abort.abort();
+        },
+      }),
+    );
+
+    await monitorTelegramProvider({ token: "tok", abortSignal: abort.signal });
+
+    const activity = getChannelActivity({ channel: "telegram" });
+    expect(activity.inboundAt).not.toBeNull();
+
+    vi.useRealTimers();
   });
 
   it("deletes webhook before starting polling", async () => {

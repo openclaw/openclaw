@@ -3,6 +3,7 @@ import { type ChannelId, getChannelPlugin, listChannelPlugins } from "../channel
 import type { ChannelAccountSnapshot } from "../channels/plugins/types.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { type BackoffPolicy, computeBackoff, sleepWithAbort } from "../infra/backoff.js";
+import { getChannelActivity } from "../infra/channel-activity.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { resetDirectoryCache } from "../infra/outbound/target-resolver.js";
 import type { createSubsystemLogger } from "../logging/subsystem.js";
@@ -407,6 +408,16 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
         const configured = described?.configured;
         const current = store.runtimes.get(id) ?? cloneDefaultRuntime(plugin.id, id);
         const next = { ...current, accountId: id };
+
+        // Ensure `lastEventAt` is meaningful for health monitoring even for channels
+        // without continuous event streams (e.g. Telegram long polling).
+        // We default it from the most recent inbound/outbound activity timestamp.
+        const activity = getChannelActivity({ channel: plugin.id, accountId: id });
+        const activityLastEventAt =
+          Math.max(activity.inboundAt ?? 0, activity.outboundAt ?? 0) || null;
+        if (next.lastEventAt == null && activityLastEventAt != null) {
+          next.lastEventAt = activityLastEventAt;
+        }
         next.enabled = enabled;
         next.configured = typeof configured === "boolean" ? configured : (next.configured ?? true);
         if (!next.running) {

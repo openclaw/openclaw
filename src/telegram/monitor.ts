@@ -4,6 +4,7 @@ import type { OpenClawConfig } from "../config/config.js";
 import { loadConfig } from "../config/config.js";
 import { waitForAbortSignal } from "../infra/abort-signal.js";
 import { computeBackoff, sleepWithAbort } from "../infra/backoff.js";
+import { recordChannelActivity } from "../infra/channel-activity.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { formatDurationPrecise } from "../infra/format-time/format-duration.ts";
 import { registerUnhandledRejectionHandler } from "../infra/unhandled-rejections.js";
@@ -262,6 +263,38 @@ export async function monitorTelegramProvider(opts: MonitorTelegramOpts = {}) {
       const runner = run(bot, runnerOptions);
       activeRunner = runner;
       let stopPromise: Promise<void> | undefined;
+
+      // Telegram can legitimately have long quiet periods with no updates.
+      // Refresh activity while the polling runner is alive so the gateway
+      // health monitor doesn't treat it as a stale socket.
+      let activityTimer: ReturnType<typeof setInterval> | null = null;
+      const startActivityHeartbeat = () => {
+        if (activityTimer) {
+          return;
+        }
+        activityTimer = setInterval(() => {
+          if (opts.abortSignal?.aborted) {
+            return;
+          }
+          recordChannelActivity({
+            channel: "telegram",
+            accountId: opts.accountId,
+            direction: "inbound",
+            at: Date.now(),
+          });
+        }, 60_000);
+        if (typeof activityTimer === "object" && "unref" in activityTimer) {
+          activityTimer.unref();
+        }
+      };
+      const stopActivityHeartbeat = () => {
+        if (!activityTimer) {
+          return;
+        }
+        clearInterval(activityTimer);
+        activityTimer = null;
+      };
+      startActivityHeartbeat();
       const stopRunner = () => {
         stopPromise ??= Promise.resolve(runner.stop())
           .then(() => undefined)
@@ -315,6 +348,7 @@ export async function monitorTelegramProvider(opts: MonitorTelegramOpts = {}) {
         return shouldRestart ? "continue" : "exit";
       } finally {
         opts.abortSignal?.removeEventListener("abort", stopOnAbort);
+        stopActivityHeartbeat();
         await stopRunner();
         await stopBot();
       }
