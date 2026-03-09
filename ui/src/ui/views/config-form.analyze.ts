@@ -110,7 +110,12 @@ function normalizeSchemaNode(
     type !== "boolean" &&
     !normalized.enum
   ) {
-    unsupported.add(pathLabel);
+    // Fallback: empty schema (e.g. from .transform()) -> treat as string for UI.
+    if (isAnySchema(schema)) {
+      normalized.type = "string";
+    } else {
+      unsupported.add(pathLabel);
+    }
   }
 
   return {
@@ -317,6 +322,64 @@ function normalizeUnion(
       },
       unsupportedPaths: [],
     };
+  }
+
+  // Primitives + literals mixed (e.g. string | number | false): preserve anyOf for renderer.
+  if (
+    remaining.length > 0 &&
+    literals.length > 0 &&
+    remaining.every((entry) => schemaType(entry) && primitiveTypes.has(schemaType(entry)!))
+  ) {
+    const literalVariants = literals.map((l) => ({ const: l }) as JsonSchema);
+    return {
+      schema: {
+        ...schema,
+        anyOf: [...literalVariants, ...remaining],
+        oneOf: undefined,
+        allOf: undefined,
+        nullable,
+      },
+      unsupportedPaths: [],
+    };
+  }
+
+  // Multi-object discriminated union: fallback to first variant that normalizes successfully.
+  if (remaining.length > 1) {
+    let best: ConfigSchemaAnalysis | null = null;
+    for (const entry of remaining) {
+      const res = normalizeSchemaNode(entry, path);
+      if (res.schema && res.unsupportedPaths.length === 0) {
+        return {
+          schema: {
+            ...res.schema,
+            title: schema.title ?? res.schema.title,
+            description: schema.description ?? res.schema.description,
+            nullable: nullable || res.schema.nullable,
+            anyOf: undefined,
+            oneOf: undefined,
+            allOf: undefined,
+          },
+          unsupportedPaths: [],
+        };
+      }
+      if (!best || (res.schema && res.unsupportedPaths.length < best.unsupportedPaths.length)) {
+        best = res.schema ? { ...res, unsupportedPaths: res.unsupportedPaths } : null;
+      }
+    }
+    if (best?.schema) {
+      return {
+        schema: {
+          ...best.schema,
+          title: schema.title ?? best.schema.title,
+          description: schema.description ?? best.schema.description,
+          nullable: nullable || best.schema.nullable,
+          anyOf: undefined,
+          oneOf: undefined,
+          allOf: undefined,
+        },
+        unsupportedPaths: best.unsupportedPaths,
+      };
+    }
   }
 
   return null;
