@@ -1,7 +1,11 @@
 import { DiscordApiError, fetchDiscord } from "./api.js";
-import { listGuilds, type DiscordGuildSummary } from "./guilds.js";
+import { listGuilds } from "./guilds.js";
 import { normalizeDiscordSlug } from "./monitor/allow-list.js";
-import { normalizeDiscordToken } from "./token.js";
+import {
+  buildDiscordUnresolvedResults,
+  filterDiscordGuilds,
+  resolveDiscordAllowlistToken,
+} from "./resolve-allowlist-common.js";
 
 type DiscordChannelSummary = {
   id: string;
@@ -146,25 +150,14 @@ function preferActiveMatch(candidates: DiscordChannelSummary[]): DiscordChannelS
   return scored[0]?.channel ?? candidates[0];
 }
 
-function resolveGuildByName(
-  guilds: DiscordGuildSummary[],
-  input: string,
-): DiscordGuildSummary | undefined {
-  const slug = normalizeDiscordSlug(input);
-  if (!slug) {
-    return undefined;
-  }
-  return guilds.find((guild) => guild.slug === slug);
-}
-
 export async function resolveDiscordChannelAllowlist(params: {
   token: string;
   entries: string[];
   fetcher?: typeof fetch;
 }): Promise<DiscordChannelResolution[]> {
-  const token = normalizeDiscordToken(params.token, "channels.discord.token");
+  const token = resolveDiscordAllowlistToken(params.token);
   if (!token) {
-    return params.entries.map((input) => ({
+    return buildDiscordUnresolvedResults(params.entries, (input) => ({
       input,
       resolved: false,
     }));
@@ -187,11 +180,10 @@ export async function resolveDiscordChannelAllowlist(params: {
   for (const input of params.entries) {
     const parsed = parseDiscordChannelInput(input);
     if (parsed.guildOnly) {
-      const guildById = parsed.guildId
-        ? guilds.find((entry) => entry.id === parsed.guildId)
-        : undefined;
-      const guild =
-        guildById ?? (parsed.guild ? resolveGuildByName(guilds, parsed.guild) : undefined);
+      const guild = filterDiscordGuilds(guilds, {
+        guildId: parsed.guildId,
+        guildName: parsed.guild,
+      })[0];
       if (guild) {
         results.push({
           input,
@@ -277,11 +269,10 @@ export async function resolveDiscordChannelAllowlist(params: {
     }
 
     if (parsed.guildId || parsed.guild) {
-      const guildById = parsed.guildId
-        ? guilds.find((entry) => entry.id === parsed.guildId)
-        : undefined;
-      const guild =
-        guildById ?? (parsed.guild ? resolveGuildByName(guilds, parsed.guild) : undefined);
+      const guild = filterDiscordGuilds(guilds, {
+        guildId: parsed.guildId,
+        guildName: parsed.guild,
+      })[0];
       const channelQuery = parsed.channel?.trim();
       if (!guild || !channelQuery) {
         results.push({

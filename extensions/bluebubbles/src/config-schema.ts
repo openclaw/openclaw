@@ -1,8 +1,10 @@
 import { MarkdownConfigSchema, ToolPolicySchema } from "openclaw/plugin-sdk/bluebubbles";
+import {
+  AllowFromEntrySchema,
+  buildCatchallMultiAccountChannelSchema,
+} from "openclaw/plugin-sdk/compat";
 import { z } from "zod";
 import { buildSecretInputSchema, hasConfiguredSecretInput } from "./secret-input.js";
-
-const allowFromEntry = z.union([z.string(), z.number()]);
 
 const bluebubblesActionSchema = z
   .object({
@@ -34,8 +36,8 @@ const bluebubblesAccountSchema = z
     password: buildSecretInputSchema().optional(),
     webhookPath: z.string().optional(),
     dmPolicy: z.enum(["pairing", "allowlist", "open", "disabled"]).optional(),
-    allowFrom: z.array(allowFromEntry).optional(),
-    groupAllowFrom: z.array(allowFromEntry).optional(),
+    allowFrom: z.array(AllowFromEntrySchema).optional(),
+    groupAllowFrom: z.array(AllowFromEntrySchema).optional(),
     groupPolicy: z.enum(["open", "disabled", "allowlist"]).optional(),
     historyLimit: z.number().int().min(0).optional(),
     dmHistoryLimit: z.number().int().min(0).optional(),
@@ -60,8 +62,8 @@ const bluebubblesAccountSchema = z
     }
   });
 
-export const BlueBubblesConfigSchema = bluebubblesAccountSchema.extend({
-  accounts: z.object({}).catchall(bluebubblesAccountSchema).optional(),
-  defaultAccount: z.string().optional(),
+export const BlueBubblesConfigSchema = buildCatchallMultiAccountChannelSchema(
+  bluebubblesAccountSchema,
+).extend({
   actions: bluebubblesActionSchema,
 });
