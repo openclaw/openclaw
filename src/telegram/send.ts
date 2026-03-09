@@ -133,10 +133,12 @@ function resolveTelegramClientOptions(
     Number.isFinite(account.config.timeoutSeconds)
       ? Math.max(1, Math.floor(account.config.timeoutSeconds))
       : undefined;
-  return fetchImpl || timeoutSeconds
+  const apiRoot = account.config.apiRoot?.trim() || undefined;
+  return fetchImpl || timeoutSeconds || apiRoot
     ? {
         ...(fetchImpl ? { fetch: fetchImpl as unknown as ApiClientOptions["fetch"] } : {}),
         ...(timeoutSeconds ? { timeoutSeconds } : {}),
+        ...(apiRoot ? { apiRoot } : {}),
       }
     : undefined;
 }
