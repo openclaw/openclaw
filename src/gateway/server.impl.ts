@@ -311,7 +311,7 @@ export async function startGatewayServer(
         ? formatConfigIssueLines(configSnapshot.issues, "", { normalizeRoot: true }).join("\n")
         : "Unknown validation issue.";
     throw new Error(
-      `Invalid config at ${configSnapshot.path}.\n${issues}\nRun "${formatCliCommand("openclaw doctor")}" to repair, then retry.`,
+      `Invalid config at ${configSnapshot.path}.\n${issues}\nRun "${formatCliCommand("openclaw doctor --fix")}" to repair, then retry. If recovery still fails, restore "${configSnapshot.path}.bak" over "${configSnapshot.path}" and start again.`,
     );
   }
 
@@ -404,7 +404,9 @@ export async function startGatewayServer(
         freshSnapshot.issues.length > 0
           ? formatConfigIssueLines(freshSnapshot.issues, "", { normalizeRoot: true }).join("\n")
           : "Unknown validation issue.";
-      throw new Error(`Invalid config at ${freshSnapshot.path}.\n${issues}`);
+      throw new Error(
+        `Invalid config at ${freshSnapshot.path}.\n${issues}\nRun "${formatCliCommand("openclaw doctor --fix")}" to repair, then retry. If recovery still fails, restore "${freshSnapshot.path}.bak" over "${freshSnapshot.path}" and start again.`,
+      );
     }
     const startupPreflightConfig = applyGatewayAuthOverridesForStartupPreflight(
       freshSnapshot.config,
