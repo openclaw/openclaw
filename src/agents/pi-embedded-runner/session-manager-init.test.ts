@@ -2,7 +2,10 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { shouldInjectBootstrapContext } from "./session-manager-init.js";
+import {
+  prepareSessionManagerForRun,
+  shouldInjectBootstrapContext,
+} from "./session-manager-init.js";
 
 const tempRoots: string[] = [];
 
@@ -59,5 +62,92 @@ describe("shouldInjectBootstrapContext", () => {
   it("falls back to injecting bootstrap context when the transcript is malformed", async () => {
     const sessionFile = await makeSessionFile("{not-json}\n");
     expect(await shouldInjectBootstrapContext(sessionFile)).toBe(true);
+  });
+});
+
+describe("prepareSessionManagerForRun", () => {
+  it("updates in-memory header metadata for fresh session files", async () => {
+    const sessionFile = await makeSessionFile();
+    const header = { type: "session" as const };
+    const sessionManager = {
+      sessionId: "old-session",
+      flushed: false,
+      fileEntries: [header],
+    };
+
+    await prepareSessionManagerForRun({
+      sessionManager,
+      sessionFile,
+      hadSessionFile: false,
+      sessionId: "sess-1",
+      cwd: "/workspace",
+    });
+
+    expect(header).toEqual({ type: "session", id: "sess-1", cwd: "/workspace" });
+    expect(sessionManager.sessionId).toBe("sess-1");
+  });
+
+  it("resets pre-created session files that do not have an assistant message yet", async () => {
+    const sessionFile = await makeSessionFile("existing transcript");
+    const header = { type: "session" as const, id: "sess-1", cwd: "/workspace" };
+    const sessionManager = {
+      sessionId: "sess-1",
+      flushed: true,
+      fileEntries: [
+        header,
+        { type: "message" as const, message: { role: "user", content: "hello" } },
+      ],
+      byId: new Map([["msg-1", { id: "msg-1" }]]),
+      labelsById: new Map([["last", { id: "msg-1" }]]),
+      leafId: "msg-1",
+    };
+
+    await prepareSessionManagerForRun({
+      sessionManager,
+      sessionFile,
+      hadSessionFile: true,
+      sessionId: "sess-1",
+      cwd: "/workspace",
+    });
+
+    expect(await fs.readFile(sessionFile, "utf-8")).toBe("");
+    expect(sessionManager.fileEntries).toEqual([header]);
+    expect(sessionManager.byId.size).toBe(0);
+    expect(sessionManager.labelsById.size).toBe(0);
+    expect(sessionManager.leafId).toBeNull();
+    expect(sessionManager.flushed).toBe(false);
+  });
+
+  it("keeps existing session state once an assistant message has already been persisted", async () => {
+    const sessionFile = await makeSessionFile("existing transcript");
+    const header = { type: "session" as const, id: "sess-1", cwd: "/workspace" };
+    const byId = new Map([["msg-1", { id: "msg-1" }]]);
+    const labelsById = new Map([["last", { id: "msg-1" }]]);
+    const sessionManager = {
+      sessionId: "sess-1",
+      flushed: true,
+      fileEntries: [
+        header,
+        { type: "message" as const, message: { role: "assistant", content: "hi" } },
+      ],
+      byId,
+      labelsById,
+      leafId: "msg-1",
+    };
+
+    await prepareSessionManagerForRun({
+      sessionManager,
+      sessionFile,
+      hadSessionFile: true,
+      sessionId: "sess-1",
+      cwd: "/workspace",
+    });
+
+    expect(await fs.readFile(sessionFile, "utf-8")).toBe("existing transcript");
+    expect(sessionManager.fileEntries).toHaveLength(2);
+    expect(sessionManager.byId).toBe(byId);
+    expect(sessionManager.labelsById).toBe(labelsById);
+    expect(sessionManager.leafId).toBe("msg-1");
+    expect(sessionManager.flushed).toBe(true);
   });
 });

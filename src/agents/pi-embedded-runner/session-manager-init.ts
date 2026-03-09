@@ -2,6 +2,11 @@ import fs from "node:fs/promises";
 
 type SessionHeaderEntry = { type: "session"; id?: string; cwd?: string };
 type SessionMessageEntry = { type: "message"; message?: { role?: string } };
+type SessionTranscriptEntry = { type?: string; message?: { role?: string } };
+
+function isAssistantMessageEntry(entry: SessionTranscriptEntry): entry is SessionMessageEntry {
+  return entry.type === "message" && entry.message?.role === "assistant";
+}
 
 export async function shouldInjectBootstrapContext(sessionFile: string): Promise<boolean> {
   let content: string;
@@ -17,14 +22,13 @@ export async function shouldInjectBootstrapContext(sessionFile: string): Promise
       continue;
     }
     try {
-      const entry = JSON.parse(line) as {
-        type?: string;
-        message?: { role?: string };
-      };
-      if (entry.type === "message" && entry.message?.role === "assistant") {
+      const entry = JSON.parse(line) as SessionTranscriptEntry;
+      if (isAssistantMessageEntry(entry)) {
         return false;
       }
     } catch {
+      // Treat any read/parse uncertainty as "inject bootstrap" because missing bootstrap
+      // context is more harmful than redundantly re-injecting it on a retry.
       // Fall back to injecting bootstrap context if the transcript cannot be parsed cleanly.
       return true;
     }
@@ -60,9 +64,7 @@ export async function prepareSessionManagerForRun(params: {
   };
 
   const header = sm.fileEntries.find((e): e is SessionHeaderEntry => e.type === "session");
-  const hasAssistant = sm.fileEntries.some(
-    (e) => e.type === "message" && (e as SessionMessageEntry).message?.role === "assistant",
-  );
+  const hasAssistant = sm.fileEntries.some(isAssistantMessageEntry);
 
   if (!params.hadSessionFile && header) {
     header.id = params.sessionId;
