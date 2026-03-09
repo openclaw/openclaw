@@ -537,6 +537,28 @@ function wrapStreamFnDecodeXaiToolCallArguments(baseFn: StreamFn): StreamFn {
   };
 }
 
+/** Deep-merge two pluginMeta objects per plugin ID, with `overrides` winning on per-key collisions. */
+function deepMergePluginMeta(
+  base?: Record<string, Record<string, unknown>>,
+  overrides?: Record<string, Record<string, unknown>>,
+): Record<string, Record<string, unknown>> | undefined {
+  if (!base && !overrides) {
+    return undefined;
+  }
+  if (!base) {
+    return overrides;
+  }
+  if (!overrides) {
+    return base;
+  }
+
+  const merged: Record<string, Record<string, unknown>> = { ...base };
+  for (const [pluginId, overrideValue] of Object.entries(overrides)) {
+    merged[pluginId] = merged[pluginId] ? { ...merged[pluginId], ...overrideValue } : overrideValue;
+  }
+  return merged;
+}
+
 export async function resolvePromptBuildHookResult(params: {
   prompt: string;
   messages: unknown[];
@@ -590,8 +612,9 @@ export async function resolvePromptBuildHookResult(params: {
       promptBuildResult?.appendSystemContext,
       legacyResult?.appendSystemContext,
     ]),
-    // prompt-build takes precedence over legacy on key collisions (consistent with systemPrompt ordering)
-    messageMeta: { ...legacyResult?.messageMeta, ...promptBuildResult?.messageMeta },
+    // Deep-merge per plugin ID so keys from both hook phases are preserved;
+    // prompt-build values take precedence on per-key collisions within the same plugin.
+    messageMeta: deepMergePluginMeta(legacyResult?.messageMeta, promptBuildResult?.messageMeta),
   };
 }
 
