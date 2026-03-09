@@ -265,7 +265,7 @@ export function renderOverview(props: OverviewProps) {
             >
               ${SUPPORTED_LOCALES.map((loc) => {
                 const key = loc.replace(/-([a-zA-Z])/g, (_, c) => c.toUpperCase());
-                return html`<option value=${loc}>${t(`languages.${key}`)}</option>`;
+                return html`<option value=${loc} ?selected=${loc === currentLocale}>${t(`languages.${key}`)}</option>`;
               })}
             </select>
           </label>
