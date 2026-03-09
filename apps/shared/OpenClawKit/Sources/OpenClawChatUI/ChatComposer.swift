@@ -9,7 +9,7 @@ import UniformTypeIdentifiers
 
 @MainActor
 struct OpenClawChatComposer: View {
-    private static let menuThinkingLevels = ["off", "low", "medium", "high"]
+    private static let menuThinkingLevels = ["off", "low", "medium", "high", "adaptive"]
 
     @Bindable var viewModel: OpenClawChatViewModel
     let style: OpenClawChatView.Style
@@ -99,6 +99,7 @@ struct OpenClawChatComposer: View {
             Text("Low").tag("low")
             Text("Medium").tag("medium")
             Text("High").tag("high")
+            Text("Adaptive").tag("adaptive")
             if !Self.menuThinkingLevels.contains(self.viewModel.thinkingLevel) {
                 Text(self.viewModel.thinkingLevel.capitalized).tag(self.viewModel.thinkingLevel)
             }
