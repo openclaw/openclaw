@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { getAcpSessionManager } from "../../../acp/control-plane/manager.js";
+import { resolveAcpSessionResolutionError } from "../../../acp/control-plane/manager.utils.js";
 import {
   cleanupFailedAcpSpawn,
   type AcpSpawnRuntimeCloseHandle,
@@ -10,11 +11,11 @@ import {
   resolveAcpDispatchPolicyError,
   resolveAcpDispatchPolicyMessage,
 } from "../../../acp/policy.js";
-import { AcpRuntimeError } from "../../../acp/runtime/errors.js";
 import {
   resolveAcpSessionCwd,
   resolveAcpThreadSessionDetailLines,
 } from "../../../acp/runtime/session-identifiers.js";
+import { resolveAcpSpawnRuntimePolicyError } from "../../../agents/acp-spawn.js";
 import {
   resolveThreadBindingIntroText,
   resolveThreadBindingThreadName,
@@ -22,7 +23,8 @@ import {
 import {
   formatThreadBindingDisabledError,
   formatThreadBindingSpawnDisabledError,
-  resolveThreadBindingSessionTtlMsForChannel,
+  resolveThreadBindingIdleTimeoutMsForChannel,
+  resolveThreadBindingMaxAgeMsForChannel,
   resolveThreadBindingSpawnPolicy,
 } from "../../../channels/thread-bindings-policy.js";
 import type { OpenClawConfig } from "../../../config/config.js";
@@ -36,7 +38,7 @@ import type { CommandHandlerResult, HandleCommandsParams } from "../commands-typ
 import {
   resolveAcpCommandAccountId,
   resolveAcpCommandBindingContext,
-  resolveAcpCommandThreadId,
+  resolveAcpCommandConversationId,
 } from "./context.js";
 import {
   ACP_STEER_OUTPUT_LIMIT,
@@ -122,25 +124,27 @@ async function bindSpawnedAcpSessionToThread(params: {
   }
 
   const currentThreadId = bindingContext.threadId ?? "";
-
-  if (threadMode === "here" && !currentThreadId) {
+  const currentConversationId = bindingContext.conversationId?.trim() || "";
+  const requiresThreadIdForHere = channel !== "telegram";
+  if (
+    threadMode === "here" &&
+    ((requiresThreadIdForHere && !currentThreadId) ||
+      (!requiresThreadIdForHere && !currentConversationId))
+  ) {
     return {
       ok: false,
       error: `--thread here requires running /acp spawn inside an active ${channel} thread/conversation.`,
     };
   }
 
-  const threadId = currentThreadId || undefined;
-  const placement = threadId ? "current" : "child";
+  const placement = channel === "telegram" ? "current" : currentThreadId ? "current" : "child";
   if (!capabilities.placements.includes(placement)) {
     return {
       ok: false,
       error: `Thread bindings do not support ${placement} placement for ${channel}.`,
     };
   }
-  const channelId = placement === "child" ? bindingContext.conversationId : undefined;
-
-  if (placement === "child" && !channelId) {
+  if (!currentConversationId) {
     return {
       ok: false,
       error: `Could not resolve a ${channel} conversation for ACP thread spawn.`,
@@ -148,11 +152,11 @@ async function bindSpawnedAcpSessionToThread(params: {
   }
 
   const senderId = commandParams.command.senderId?.trim() || "";
-  if (threadId) {
+  if (placement === "current") {
     const existingBinding = bindingService.resolveByConversation({
       channel: spawnPolicy.channel,
       accountId: spawnPolicy.accountId,
-      conversationId: threadId,
+      conversationId: currentConversationId,
     });
     const boundBy =
       typeof existingBinding?.metadata?.boundBy === "string"
@@ -161,19 +165,13 @@ async function bindSpawnedAcpSessionToThread(params: {
     if (existingBinding && boundBy && boundBy !== "system" && senderId && senderId !== boundBy) {
       return {
         ok: false,
-        error: `Only ${boundBy} can rebind this thread.`,
+        error: `Only ${boundBy} can rebind this ${channel === "telegram" ? "conversation" : "thread"}.`,
       };
     }
   }
 
   const label = params.label || params.agentId;
-  const conversationId = threadId || channelId;
-  if (!conversationId) {
-    return {
-      ok: false,
-      error: `Could not resolve a ${channel} conversation for ACP thread spawn.`,
-    };
-  }
+  const conversationId = currentConversationId;
 
   try {
     const binding = await bindingService.bind({
@@ -196,7 +194,12 @@ async function bindSpawnedAcpSessionToThread(params: {
         introText: resolveThreadBindingIntroText({
           agentId: params.agentId,
           label,
-          sessionTtlMs: resolveThreadBindingSessionTtlMsForChannel({
+          idleTimeoutMs: resolveThreadBindingIdleTimeoutMsForChannel({
+            cfg: commandParams.cfg,
+            channel: spawnPolicy.channel,
+            accountId: spawnPolicy.accountId,
+          }),
+          maxAgeMs: resolveThreadBindingMaxAgeMsForChannel({
             cfg: commandParams.cfg,
             channel: spawnPolicy.channel,
             accountId: spawnPolicy.accountId,
@@ -251,6 +254,13 @@ export async function handleAcpSpawnAction(
   }
 
   const spawn = parsed.value;
+  const runtimePolicyError = resolveAcpSpawnRuntimePolicyError({
+    cfg: params.cfg,
+    requesterSessionKey: params.sessionKey,
+  });
+  if (runtimePolicyError) {
+    return stopWithText(`⚠️ ${runtimePolicyError}`);
+  }
   const agentPolicyError = resolveAcpAgentPolicyError(params.cfg, spawn.agentId);
   if (agentPolicyError) {
     return stopWithText(
@@ -338,12 +348,13 @@ export async function handleAcpSpawnAction(
     `✅ Spawned ACP session ${sessionKey} (${spawn.mode}, backend ${initializedBackend}).`,
   ];
   if (binding) {
-    const currentThreadId = resolveAcpCommandThreadId(params) ?? "";
+    const currentConversationId = resolveAcpCommandConversationId(params)?.trim() || "";
     const boundConversationId = binding.conversation.conversationId.trim();
-    if (currentThreadId && boundConversationId === currentThreadId) {
-      parts.push(`Bound this thread to ${sessionKey}.`);
+    const placementLabel = binding.conversation.channel === "telegram" ? "conversation" : "thread";
+    if (currentConversationId && boundConversationId === currentConversationId) {
+      parts.push(`Bound this ${placementLabel} to ${sessionKey}.`);
     } else {
-      parts.push(`Created thread ${boundConversationId} and bound it to ${sessionKey}.`);
+      parts.push(`Created ${placementLabel} ${boundConversationId} and bound it to ${sessionKey}.`);
     }
   } else {
     parts.push("Session is unbound (use /focus <session-key> to bind this thread/conversation).");
@@ -354,59 +365,108 @@ export async function handleAcpSpawnAction(
     parts.push(`ℹ️ ${dispatchNote}`);
   }
 
+  const shouldPinBindingNotice =
+    binding?.conversation.channel === "telegram" &&
+    binding.conversation.conversationId.includes(":topic:");
+  if (shouldPinBindingNotice) {
+    return {
+      shouldContinue: false,
+      reply: {
+        text: parts.join(" "),
+        channelData: { telegram: { pin: true } },
+      },
+    };
+  }
+
   return stopWithText(parts.join(" "));
+}
+
+function resolveAcpSessionForCommandOrStop(params: {
+  acpManager: ReturnType<typeof getAcpSessionManager>;
+  cfg: OpenClawConfig;
+  sessionKey: string;
+}): CommandHandlerResult | null {
+  const resolved = params.acpManager.resolveSession({
+    cfg: params.cfg,
+    sessionKey: params.sessionKey,
+  });
+  const error = resolveAcpSessionResolutionError(resolved);
+  if (error) {
+    return stopWithText(
+      collectAcpErrorText({
+        error,
+        fallbackCode: "ACP_SESSION_INIT_FAILED",
+        fallbackMessage: error.message,
+      }),
+    );
+  }
+  return null;
+}
+
+async function resolveAcpTokenTargetSessionKeyOrStop(params: {
+  commandParams: HandleCommandsParams;
+  restTokens: string[];
+}): Promise<string | CommandHandlerResult> {
+  const token = params.restTokens.join(" ").trim() || undefined;
+  const target = await resolveAcpTargetSessionKey({
+    commandParams: params.commandParams,
+    token,
+  });
+  if (!target.ok) {
+    return stopWithText(`⚠️ ${target.error}`);
+  }
+  return target.sessionKey;
+}
+
+async function withResolvedAcpSessionTarget(params: {
+  commandParams: HandleCommandsParams;
+  restTokens: string[];
+  run: (ctx: {
+    acpManager: ReturnType<typeof getAcpSessionManager>;
+    sessionKey: string;
+  }) => Promise<CommandHandlerResult>;
+}): Promise<CommandHandlerResult> {
+  const acpManager = getAcpSessionManager();
+  const targetSessionKey = await resolveAcpTokenTargetSessionKeyOrStop({
+    commandParams: params.commandParams,
+    restTokens: params.restTokens,
+  });
+  if (typeof targetSessionKey !== "string") {
+    return targetSessionKey;
+  }
+  const guardFailure = resolveAcpSessionForCommandOrStop({
+    acpManager,
+    cfg: params.commandParams.cfg,
+    sessionKey: targetSessionKey,
+  });
+  if (guardFailure) {
+    return guardFailure;
+  }
+  return await params.run({
+    acpManager,
+    sessionKey: targetSessionKey,
+  });
 }
 
 export async function handleAcpCancelAction(
   params: HandleCommandsParams,
   restTokens: string[],
 ): Promise<CommandHandlerResult> {
-  const acpManager = getAcpSessionManager();
-  const token = restTokens.join(" ").trim() || undefined;
-  const target = await resolveAcpTargetSessionKey({
+  return await withResolvedAcpSessionTarget({
     commandParams: params,
-    token,
-  });
-  if (!target.ok) {
-    return stopWithText(`⚠️ ${target.error}`);
-  }
-
-  const resolved = acpManager.resolveSession({
-    cfg: params.cfg,
-    sessionKey: target.sessionKey,
-  });
-  if (resolved.kind === "none") {
-    return stopWithText(
-      collectAcpErrorText({
-        error: new AcpRuntimeError(
-          "ACP_SESSION_INIT_FAILED",
-          `Session is not ACP-enabled: ${target.sessionKey}`,
-        ),
-        fallbackCode: "ACP_SESSION_INIT_FAILED",
-        fallbackMessage: "Session is not ACP-enabled.",
+    restTokens,
+    run: async ({ acpManager, sessionKey }) =>
+      await withAcpCommandErrorBoundary({
+        run: async () =>
+          await acpManager.cancelSession({
+            cfg: params.cfg,
+            sessionKey,
+            reason: "manual-cancel",
+          }),
+        fallbackCode: "ACP_TURN_FAILED",
+        fallbackMessage: "ACP cancel failed before completion.",
+        onSuccess: () => stopWithText(`✅ Cancel requested for ACP session ${sessionKey}.`),
       }),
-    );
-  }
-  if (resolved.kind === "stale") {
-    return stopWithText(
-      collectAcpErrorText({
-        error: resolved.error,
-        fallbackCode: "ACP_SESSION_INIT_FAILED",
-        fallbackMessage: resolved.error.message,
-      }),
-    );
-  }
-
-  return await withAcpCommandErrorBoundary({
-    run: async () =>
-      await acpManager.cancelSession({
-        cfg: params.cfg,
-        sessionKey: target.sessionKey,
-        reason: "manual-cancel",
-      }),
-    fallbackCode: "ACP_TURN_FAILED",
-    fallbackMessage: "ACP cancel failed before completion.",
-    onSuccess: () => stopWithText(`✅ Cancel requested for ACP session ${target.sessionKey}.`),
   });
 }
 
@@ -472,30 +532,13 @@ export async function handleAcpSteerAction(
     return stopWithText(`⚠️ ${target.error}`);
   }
 
-  const resolved = acpManager.resolveSession({
+  const guardFailure = resolveAcpSessionForCommandOrStop({
+    acpManager,
     cfg: params.cfg,
     sessionKey: target.sessionKey,
   });
-  if (resolved.kind === "none") {
-    return stopWithText(
-      collectAcpErrorText({
-        error: new AcpRuntimeError(
-          "ACP_SESSION_INIT_FAILED",
-          `Session is not ACP-enabled: ${target.sessionKey}`,
-        ),
-        fallbackCode: "ACP_SESSION_INIT_FAILED",
-        fallbackMessage: "Session is not ACP-enabled.",
-      }),
-    );
-  }
-  if (resolved.kind === "stale") {
-    return stopWithText(
-      collectAcpErrorText({
-        error: resolved.error,
-        fallbackCode: "ACP_SESSION_INIT_FAILED",
-        fallbackMessage: resolved.error.message,
-      }),
-    );
+  if (guardFailure) {
+    return guardFailure;
   }
 
   return await withAcpCommandErrorBoundary({
@@ -521,68 +564,38 @@ export async function handleAcpCloseAction(
   params: HandleCommandsParams,
   restTokens: string[],
 ): Promise<CommandHandlerResult> {
-  const acpManager = getAcpSessionManager();
-  const token = restTokens.join(" ").trim() || undefined;
-  const target = await resolveAcpTargetSessionKey({
+  return await withResolvedAcpSessionTarget({
     commandParams: params,
-    token,
+    restTokens,
+    run: async ({ acpManager, sessionKey }) => {
+      let runtimeNotice = "";
+      try {
+        const closed = await acpManager.closeSession({
+          cfg: params.cfg,
+          sessionKey,
+          reason: "manual-close",
+          allowBackendUnavailable: true,
+          clearMeta: true,
+        });
+        runtimeNotice = closed.runtimeNotice ? ` (${closed.runtimeNotice})` : "";
+      } catch (error) {
+        return stopWithText(
+          collectAcpErrorText({
+            error,
+            fallbackCode: "ACP_TURN_FAILED",
+            fallbackMessage: "ACP close failed before completion.",
+          }),
+        );
+      }
+
+      const removedBindings = await getSessionBindingService().unbind({
+        targetSessionKey: sessionKey,
+        reason: "manual",
+      });
+
+      return stopWithText(
+        `✅ Closed ACP session ${sessionKey}${runtimeNotice}. Removed ${removedBindings.length} binding${removedBindings.length === 1 ? "" : "s"}.`,
+      );
+    },
   });
-  if (!target.ok) {
-    return stopWithText(`⚠️ ${target.error}`);
-  }
-
-  const resolved = acpManager.resolveSession({
-    cfg: params.cfg,
-    sessionKey: target.sessionKey,
-  });
-  if (resolved.kind === "none") {
-    return stopWithText(
-      collectAcpErrorText({
-        error: new AcpRuntimeError(
-          "ACP_SESSION_INIT_FAILED",
-          `Session is not ACP-enabled: ${target.sessionKey}`,
-        ),
-        fallbackCode: "ACP_SESSION_INIT_FAILED",
-        fallbackMessage: "Session is not ACP-enabled.",
-      }),
-    );
-  }
-  if (resolved.kind === "stale") {
-    return stopWithText(
-      collectAcpErrorText({
-        error: resolved.error,
-        fallbackCode: "ACP_SESSION_INIT_FAILED",
-        fallbackMessage: resolved.error.message,
-      }),
-    );
-  }
-
-  let runtimeNotice = "";
-  try {
-    const closed = await acpManager.closeSession({
-      cfg: params.cfg,
-      sessionKey: target.sessionKey,
-      reason: "manual-close",
-      allowBackendUnavailable: true,
-      clearMeta: true,
-    });
-    runtimeNotice = closed.runtimeNotice ? ` (${closed.runtimeNotice})` : "";
-  } catch (error) {
-    return stopWithText(
-      collectAcpErrorText({
-        error,
-        fallbackCode: "ACP_TURN_FAILED",
-        fallbackMessage: "ACP close failed before completion.",
-      }),
-    );
-  }
-
-  const removedBindings = await getSessionBindingService().unbind({
-    targetSessionKey: target.sessionKey,
-    reason: "manual",
-  });
-
-  return stopWithText(
-    `✅ Closed ACP session ${target.sessionKey}${runtimeNotice}. Removed ${removedBindings.length} binding${removedBindings.length === 1 ? "" : "s"}.`,
-  );
 }

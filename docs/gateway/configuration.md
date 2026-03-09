@@ -184,7 +184,8 @@ When validation fails:
         dmScope: "per-channel-peer",  // recommended for multi-user
         threadBindings: {
           enabled: true,
-          ttlHours: 24,
+          idleHours: 24,
+          maxAgeHours: 0,
         },
         reset: {
           mode: "daily",
@@ -196,7 +197,7 @@ When validation fails:
     ```
 
     - `dmScope`: `main` (shared) | `per-peer` | `per-channel-peer` | `per-account-channel-peer`
-    - `threadBindings`: global defaults for thread-bound session routing (Discord supports `/focus`, `/unfocus`, `/agents`, and `/session ttl`).
+    - `threadBindings`: global defaults for thread-bound session routing (Discord supports `/focus`, `/unfocus`, `/agents`, `/session idle`, and `/session max-age`).
     - See [Session Management](/concepts/session) for scoping, identity links, and send policy.
     - See [full reference](/gateway/configuration-reference#session) for all fields.
 
@@ -289,6 +290,11 @@ When validation fails:
       },
     }
     ```
+
+    Security note:
+    - Treat all hook/webhook payload content as untrusted input.
+    - Keep unsafe-content bypass flags disabled (`hooks.gmail.allowUnsafeExternalContent`, `hooks.mappings[].allowUnsafeExternalContent`) unless doing tightly scoped debugging.
+    - For hook-driven agents, prefer strong modern model tiers and strict tool policy (for example messaging-only plus sandboxing where possible).
 
     See [full reference](/gateway/configuration-reference#hooks) for all mapping options and Gmail integration.
 
@@ -526,6 +532,7 @@ Rules:
 ```
 
 SecretRef details (including `secrets.providers` for `env`/`file`/`exec`) are in [Secrets Management](/gateway/secrets).
+Supported credential paths are listed in [SecretRef Credential Surface](/reference/secretref-credential-surface).
 </Accordion>
 
 See [Environment](/help/environment) for full precedence and sources.

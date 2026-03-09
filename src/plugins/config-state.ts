@@ -11,7 +11,16 @@ export type NormalizedPluginsConfig = {
   slots: {
     memory?: string | null;
   };
-  entries: Record<string, { enabled?: boolean; config?: unknown }>;
+  entries: Record<
+    string,
+    {
+      enabled?: boolean;
+      hooks?: {
+        allowPromptInjection?: boolean;
+      };
+      config?: unknown;
+    }
+  >;
 };
 
 export const BUNDLED_ENABLED_BY_DEFAULT = new Set<string>([
@@ -55,8 +64,23 @@ const normalizePluginEntries = (entries: unknown): NormalizedPluginsConfig["entr
       continue;
     }
     const entry = value as Record<string, unknown>;
+    const hooksRaw = entry.hooks;
+    const hooks =
+      hooksRaw && typeof hooksRaw === "object" && !Array.isArray(hooksRaw)
+        ? {
+            allowPromptInjection: (hooksRaw as { allowPromptInjection?: unknown })
+              .allowPromptInjection,
+          }
+        : undefined;
+    const normalizedHooks =
+      hooks && typeof hooks.allowPromptInjection === "boolean"
+        ? {
+            allowPromptInjection: hooks.allowPromptInjection,
+          }
+        : undefined;
     normalized[key] = {
       enabled: typeof entry.enabled === "boolean" ? entry.enabled : undefined,
+      hooks: normalizedHooks,
       config: "config" in entry ? entry.config : undefined,
     };
   }

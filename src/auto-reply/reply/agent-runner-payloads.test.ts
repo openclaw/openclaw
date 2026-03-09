@@ -10,8 +10,8 @@ const baseParams = {
 };
 
 describe("buildReplyPayloads media filter integration", () => {
-  it("strips media URL from payload when in messagingToolSentMediaUrls", () => {
-    const { replyPayloads } = buildReplyPayloads({
+  it("strips media URL from payload when in messagingToolSentMediaUrls", async () => {
+    const { replyPayloads } = await buildReplyPayloads({
       ...baseParams,
       payloads: [{ text: "hello", mediaUrl: "file:///tmp/photo.jpg" }],
       messagingToolSentMediaUrls: ["file:///tmp/photo.jpg"],
@@ -21,8 +21,8 @@ describe("buildReplyPayloads media filter integration", () => {
     expect(replyPayloads[0].mediaUrl).toBeUndefined();
   });
 
-  it("preserves media URL when not in messagingToolSentMediaUrls", () => {
-    const { replyPayloads } = buildReplyPayloads({
+  it("preserves media URL when not in messagingToolSentMediaUrls", async () => {
+    const { replyPayloads } = await buildReplyPayloads({
       ...baseParams,
       payloads: [{ text: "hello", mediaUrl: "file:///tmp/photo.jpg" }],
       messagingToolSentMediaUrls: ["file:///tmp/other.jpg"],
@@ -32,8 +32,63 @@ describe("buildReplyPayloads media filter integration", () => {
     expect(replyPayloads[0].mediaUrl).toBe("file:///tmp/photo.jpg");
   });
 
-  it("applies media filter after text filter", () => {
-    const { replyPayloads } = buildReplyPayloads({
+  it("normalizes sent media URLs before deduping normalized reply media", async () => {
+    const normalizeMediaPaths = async (payload: { mediaUrl?: string; mediaUrls?: string[] }) => {
+      const normalizeMedia = (value?: string) =>
+        value === "./out/photo.jpg" ? "/tmp/workspace/out/photo.jpg" : value;
+      return {
+        ...payload,
+        mediaUrl: normalizeMedia(payload.mediaUrl),
+        mediaUrls: payload.mediaUrls?.map((value) => normalizeMedia(value) ?? value),
+      };
+    };
+
+    const { replyPayloads } = await buildReplyPayloads({
+      ...baseParams,
+      payloads: [{ text: "hello", mediaUrl: "./out/photo.jpg" }],
+      messagingToolSentMediaUrls: ["./out/photo.jpg"],
+      normalizeMediaPaths,
+    });
+
+    expect(replyPayloads).toHaveLength(1);
+    expect(replyPayloads[0]).toMatchObject({
+      text: "hello",
+      mediaUrl: undefined,
+      mediaUrls: undefined,
+    });
+  });
+
+  it("drops only invalid media when reply media normalization fails", async () => {
+    const normalizeMediaPaths = async (payload: { mediaUrl?: string }) => {
+      if (payload.mediaUrl === "./bad.png") {
+        throw new Error("Path escapes sandbox root");
+      }
+      return payload;
+    };
+
+    const { replyPayloads } = await buildReplyPayloads({
+      ...baseParams,
+      payloads: [
+        { text: "keep text", mediaUrl: "./bad.png", audioAsVoice: true },
+        { text: "keep second" },
+      ],
+      normalizeMediaPaths,
+    });
+
+    expect(replyPayloads).toHaveLength(2);
+    expect(replyPayloads[0]).toMatchObject({
+      text: "keep text",
+      mediaUrl: undefined,
+      mediaUrls: undefined,
+      audioAsVoice: false,
+    });
+    expect(replyPayloads[1]).toMatchObject({
+      text: "keep second",
+    });
+  });
+
+  it("applies media filter after text filter", async () => {
+    const { replyPayloads } = await buildReplyPayloads({
       ...baseParams,
       payloads: [{ text: "hello world!", mediaUrl: "file:///tmp/photo.jpg" }],
       messagingToolSentTexts: ["hello world!"],
@@ -44,8 +99,8 @@ describe("buildReplyPayloads media filter integration", () => {
     expect(replyPayloads).toHaveLength(0);
   });
 
-  it("does not dedupe text for cross-target messaging sends", () => {
-    const { replyPayloads } = buildReplyPayloads({
+  it("does not dedupe text for cross-target messaging sends", async () => {
+    const { replyPayloads } = await buildReplyPayloads({
       ...baseParams,
       payloads: [{ text: "hello world!" }],
       messageProvider: "telegram",
@@ -58,8 +113,8 @@ describe("buildReplyPayloads media filter integration", () => {
     expect(replyPayloads[0]?.text).toBe("hello world!");
   });
 
-  it("does not dedupe media for cross-target messaging sends", () => {
-    const { replyPayloads } = buildReplyPayloads({
+  it("does not dedupe media for cross-target messaging sends", async () => {
+    const { replyPayloads } = await buildReplyPayloads({
       ...baseParams,
       payloads: [{ text: "photo", mediaUrl: "file:///tmp/photo.jpg" }],
       messageProvider: "telegram",
@@ -72,8 +127,8 @@ describe("buildReplyPayloads media filter integration", () => {
     expect(replyPayloads[0]?.mediaUrl).toBe("file:///tmp/photo.jpg");
   });
 
-  it("suppresses same-target replies when messageProvider is synthetic but originatingChannel is set", () => {
-    const { replyPayloads } = buildReplyPayloads({
+  it("suppresses same-target replies when messageProvider is synthetic but originatingChannel is set", async () => {
+    const { replyPayloads } = await buildReplyPayloads({
       ...baseParams,
       payloads: [{ text: "hello world!" }],
       messageProvider: "heartbeat",
@@ -86,8 +141,36 @@ describe("buildReplyPayloads media filter integration", () => {
     expect(replyPayloads).toHaveLength(0);
   });
 
-  it("does not suppress same-target replies when accountId differs", () => {
-    const { replyPayloads } = buildReplyPayloads({
+  it("suppresses same-target replies when message tool target provider is generic", async () => {
+    const { replyPayloads } = await buildReplyPayloads({
+      ...baseParams,
+      payloads: [{ text: "hello world!" }],
+      messageProvider: "heartbeat",
+      originatingChannel: "feishu",
+      originatingTo: "ou_abc123",
+      messagingToolSentTexts: ["different message"],
+      messagingToolSentTargets: [{ tool: "message", provider: "message", to: "ou_abc123" }],
+    });
+
+    expect(replyPayloads).toHaveLength(0);
+  });
+
+  it("suppresses same-target replies when target provider is channel alias", async () => {
+    const { replyPayloads } = await buildReplyPayloads({
+      ...baseParams,
+      payloads: [{ text: "hello world!" }],
+      messageProvider: "heartbeat",
+      originatingChannel: "feishu",
+      originatingTo: "ou_abc123",
+      messagingToolSentTexts: ["different message"],
+      messagingToolSentTargets: [{ tool: "message", provider: "lark", to: "ou_abc123" }],
+    });
+
+    expect(replyPayloads).toHaveLength(0);
+  });
+
+  it("does not suppress same-target replies when accountId differs", async () => {
+    const { replyPayloads } = await buildReplyPayloads({
       ...baseParams,
       payloads: [{ text: "hello world!" }],
       messageProvider: "heartbeat",

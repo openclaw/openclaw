@@ -5,6 +5,7 @@ import type {
   CronJob,
   CronJobCreate,
   CronJobPatch,
+  CronMessageChannel,
   CronRunOutcome,
   CronRunStatus,
   CronRunTelemetry,
@@ -56,6 +57,8 @@ export type CronServiceDeps = {
     reason?: string;
     agentId?: string;
     sessionKey?: string;
+    /** Optional heartbeat config override (e.g. target: "last" for cron-triggered heartbeats). */
+    heartbeat?: { target?: string };
   }) => Promise<HeartbeatRunResult>;
   /**
    * WakeMode=now: max time to wait for runHeartbeatOnce to stop returning
@@ -88,6 +91,14 @@ export type CronServiceDeps = {
     } & CronRunOutcome &
       CronRunTelemetry
   >;
+  sendCronFailureAlert?: (params: {
+    job: CronJob;
+    text: string;
+    channel: CronMessageChannel;
+    to?: string;
+    mode?: "announce" | "webhook";
+    accountId?: string;
+  }) => Promise<void>;
   onEvent?: (evt: CronEvent) => void;
 };
 
@@ -131,6 +142,7 @@ export type CronStatusSummary = {
 
 export type CronRunResult =
   | { ok: true; ran: true }
+  | { ok: true; enqueued: true; runId: string }
   | { ok: true; ran: false; reason: "not-due" }
   | { ok: true; ran: false; reason: "already-running" }
   | { ok: false };

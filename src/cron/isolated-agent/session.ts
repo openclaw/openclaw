@@ -1,4 +1,5 @@
 import crypto from "node:crypto";
+import { clearBootstrapSnapshotOnSessionRollover } from "../../agents/bootstrap-cache.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import {
   evaluateSessionFreshness,
@@ -58,6 +59,11 @@ export function resolveCronSession(params: {
     systemSent = false;
   }
 
+  clearBootstrapSnapshotOnSessionRollover({
+    sessionKey: params.sessionKey,
+    previousSessionId: isNewSession ? entry?.sessionId : undefined,
+  });
+
   const sessionEntry: SessionEntry = {
     // Preserve existing per-session overrides even when rolling to a new sessionId.
     ...entry,
@@ -65,6 +71,19 @@ export function resolveCronSession(params: {
     sessionId,
     updatedAt: params.nowMs,
     systemSent,
+    // When starting a fresh session (forceNew / isolated), clear delivery routing
+    // state inherited from prior sessions. Without this, lastThreadId leaks into
+    // the new session and causes announce-mode cron deliveries to post as thread
+    // replies instead of channel top-level messages.
+    // deliveryContext must also be cleared because normalizeSessionEntryDelivery
+    // repopulates lastThreadId from deliveryContext.threadId on store writes.
+    ...(isNewSession && {
+      lastChannel: undefined,
+      lastTo: undefined,
+      lastAccountId: undefined,
+      lastThreadId: undefined,
+      deliveryContext: undefined,
+    }),
   };
   return { storePath, store, sessionEntry, systemSent, isNewSession };
 }
