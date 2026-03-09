@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const {
   hookRunner,
+  ensureRuntimePluginsLoaded,
   resolveModelMock,
   sessionCompactImpl,
   triggerInternalHook,
@@ -12,6 +13,7 @@ const {
     runBeforeCompaction: vi.fn(),
     runAfterCompaction: vi.fn(),
   },
+  ensureRuntimePluginsLoaded: vi.fn(),
   resolveModelMock: vi.fn(() => ({
     model: { provider: "openai", api: "responses", id: "fake", input: [] },
     error: null,
@@ -30,6 +32,10 @@ const {
 
 vi.mock("../../plugins/hook-runner-global.js", () => ({
   getGlobalHookRunner: () => hookRunner,
+}));
+
+vi.mock("../runtime-plugins.js", () => ({
+  ensureRuntimePluginsLoaded,
 }));
 
 vi.mock("../../hooks/internal-hooks.js", async () => {
@@ -254,6 +260,7 @@ const sessionHook = (action: string) =>
 
 describe("compactEmbeddedPiSessionDirect hooks", () => {
   beforeEach(() => {
+    ensureRuntimePluginsLoaded.mockReset();
     triggerInternalHook.mockClear();
     hookRunner.hasHooks.mockReset();
     hookRunner.runBeforeCompaction.mockReset();
@@ -277,6 +284,19 @@ describe("compactEmbeddedPiSessionDirect hooks", () => {
       return params.messages;
     });
     unregisterApiProviders(getCustomApiRegistrySourceId("ollama"));
+  });
+
+  it("bootstraps runtime plugins with the resolved workspace", async () => {
+    await compactEmbeddedPiSessionDirect({
+      sessionId: "session-1",
+      sessionFile: "/tmp/session.jsonl",
+      workspaceDir: "/tmp/workspace",
+    });
+
+    expect(ensureRuntimePluginsLoaded).toHaveBeenCalledWith({
+      config: undefined,
+      workspaceDir: "/tmp/workspace",
+    });
   });
 
   it("emits internal + plugin compaction hooks with counts", async () => {

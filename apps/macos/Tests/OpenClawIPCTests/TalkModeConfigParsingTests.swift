@@ -3,7 +3,7 @@ import Testing
 @testable import OpenClaw
 
 struct TalkModeConfigParsingTests {
-    @Test func `prefers normalized talk provider payload`() {
+    @Test func `rejects normalized talk provider payload without resolved`() {
         let talk: [String: AnyCodable] = [
             "provider": AnyCodable("elevenlabs"),
             "providers": AnyCodable([
@@ -15,9 +15,7 @@ struct TalkModeConfigParsingTests {
         ]
 
         let selection = TalkModeRuntime.selectTalkProviderConfig(talk)
-        #expect(selection?.provider == "elevenlabs")
-        #expect(selection?.normalizedPayload == true)
-        #expect(selection?.config["voiceId"]?.stringValue == "voice-normalized")
+        #expect(selection == nil)
     }
 
     @Test func `falls back to legacy talk fields when normalized payload missing`() {
@@ -33,7 +31,7 @@ struct TalkModeConfigParsingTests {
         #expect(selection?.config["apiKey"]?.stringValue == "legacy-key")
     }
 
-    @Test func readsConfiguredSilenceTimeoutMs() {
+    @Test func `reads configured silence timeout ms`() {
         let talk: [String: AnyCodable] = [
             "silenceTimeoutMs": AnyCodable(1500),
         ]
@@ -41,15 +39,15 @@ struct TalkModeConfigParsingTests {
         #expect(TalkModeRuntime.resolvedSilenceTimeoutMs(talk) == 1500)
     }
 
-    @Test func defaultsSilenceTimeoutMsWhenMissing() {
-        #expect(TalkModeRuntime.resolvedSilenceTimeoutMs(nil) == 700)
+    @Test func `defaults silence timeout ms when missing`() {
+        #expect(TalkModeRuntime.resolvedSilenceTimeoutMs(nil) == TalkDefaults.silenceTimeoutMs)
     }
 
-    @Test func defaultsSilenceTimeoutMsWhenInvalid() {
+    @Test func `defaults silence timeout ms when invalid`() {
         let talk: [String: AnyCodable] = [
             "silenceTimeoutMs": AnyCodable(0),
         ]
 
-        #expect(TalkModeRuntime.resolvedSilenceTimeoutMs(talk) == 700)
+        #expect(TalkModeRuntime.resolvedSilenceTimeoutMs(talk) == TalkDefaults.silenceTimeoutMs)
     }
 }

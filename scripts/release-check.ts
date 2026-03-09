@@ -4,21 +4,18 @@ import { execSync } from "node:child_process";
 import { readdirSync, readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
+import {
+  collectBundledExtensionManifestErrors,
+  normalizeBundledExtensionMetadata,
+  type BundledExtension,
+  type ExtensionPackageJson as PackageJson,
+} from "./lib/bundled-extension-manifest.ts";
 import { sparkleBuildFloorsFromShortVersion, type SparkleBuildFloors } from "./sparkle-build.ts";
+
+export { collectBundledExtensionManifestErrors } from "./lib/bundled-extension-manifest.ts";
 
 type PackFile = { path: string };
 type PackResult = { files?: PackFile[] };
-type PackageJson = {
-  name?: string;
-  version?: string;
-  dependencies?: Record<string, string>;
-  optionalDependencies?: Record<string, string>;
-  openclaw?: {
-    install?: {
-      npmSpec?: string;
-    };
-  };
-};
 
 const requiredPathGroups = [
   ["dist/index.js", "dist/index.mjs"],
@@ -128,18 +125,9 @@ function normalizePluginSyncVersion(version: string): string {
   return normalized.replace(/[-+].*$/, "");
 }
 
-const ALLOWLISTED_BUNDLED_EXTENSION_ROOT_DEP_GAPS: Record<string, string[]> = {
-  googlechat: ["google-auth-library"],
-  matrix: ["@matrix-org/matrix-sdk-crypto-nodejs", "@vector-im/matrix-bot-sdk", "music-metadata"],
-  msteams: ["@microsoft/agents-hosting"],
-  nostr: ["nostr-tools"],
-  tlon: ["@tloncorp/api", "@tloncorp/tlon-skill", "@urbit/aura"],
-  zalouser: ["zca-js"],
-};
-
 export function collectBundledExtensionRootDependencyGapErrors(params: {
   rootPackage: PackageJson;
-  extensions: Array<{ id: string; packageJson: PackageJson }>;
+  extensions: BundledExtension[];
 }): string[] {
   const rootDeps = {
     ...params.rootPackage.dependencies,
@@ -147,17 +135,15 @@ export function collectBundledExtensionRootDependencyGapErrors(params: {
   };
   const errors: string[] = [];
 
-  for (const extension of params.extensions) {
-    if (!extension.packageJson.openclaw?.install?.npmSpec) {
+  for (const extension of normalizeBundledExtensionMetadata(params.extensions)) {
+    if (!extension.npmSpec) {
       continue;
     }
 
     const missing = Object.keys(extension.packageJson.dependencies ?? {})
       .filter((dep) => dep !== "openclaw" && !rootDeps[dep])
       .toSorted();
-    const allowlisted = [
-      ...(ALLOWLISTED_BUNDLED_EXTENSION_ROOT_DEP_GAPS[extension.id] ?? []),
-    ].toSorted();
+    const allowlisted = extension.rootDependencyMirrorAllowlist.toSorted();
     if (missing.join("\n") !== allowlisted.join("\n")) {
       const unexpected = missing.filter((dep) => !allowlisted.includes(dep));
       const resolved = allowlisted.filter((dep) => !missing.includes(dep));
@@ -178,7 +164,7 @@ export function collectBundledExtensionRootDependencyGapErrors(params: {
   return errors;
 }
 
-function collectBundledExtensions(): Array<{ id: string; packageJson: PackageJson }> {
+function collectBundledExtensions(): BundledExtension[] {
   const extensionsDir = resolve("extensions");
   const entries = readdirSync(extensionsDir, { withFileTypes: true }).filter((entry) =>
     entry.isDirectory(),
@@ -201,9 +187,18 @@ function collectBundledExtensions(): Array<{ id: string; packageJson: PackageJso
 
 function checkBundledExtensionRootDependencyMirrors() {
   const rootPackage = JSON.parse(readFileSync(resolve("package.json"), "utf8")) as PackageJson;
+  const extensions = collectBundledExtensions();
+  const manifestErrors = collectBundledExtensionManifestErrors(extensions);
+  if (manifestErrors.length > 0) {
+    console.error("release-check: bundled extension manifest validation failed:");
+    for (const error of manifestErrors) {
+      console.error(`  - ${error}`);
+    }
+    process.exit(1);
+  }
   const errors = collectBundledExtensionRootDependencyGapErrors({
     rootPackage,
-    extensions: collectBundledExtensions(),
+    extensions,
   });
   if (errors.length > 0) {
     console.error("release-check: bundled extension root dependency mirror validation failed:");
