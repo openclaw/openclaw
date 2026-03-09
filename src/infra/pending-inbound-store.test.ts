@@ -3,9 +3,13 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
+  clearActiveTurn,
   clearPendingInbound,
   readPendingInbound,
+  readStaleActiveTurns,
+  writeActiveTurn,
   writePendingInbound,
+  type ActiveTurnEntry,
   type PendingInboundEntry,
 } from "./pending-inbound-store.js";
 
@@ -126,5 +130,84 @@ describe("pending-inbound-store", () => {
     const result = await readPendingInbound(stateDir);
     expect(result).toHaveLength(1);
     expect(result[0].capturedAt).toBe(now);
+  });
+
+  // --- Active Turn tests ---
+
+  it("writeActiveTurn + readStaleActiveTurns round-trip", async () => {
+    const turn: ActiveTurnEntry = {
+      sessionId: "sess-001",
+      sessionKey: "telegram:12345",
+      channel: "telegram",
+      startedAt: 1700000000000,
+    };
+
+    await writeActiveTurn(stateDir, turn);
+    const result = await readStaleActiveTurns(stateDir);
+
+    expect(result).toHaveLength(1);
+    expect(result[0]).toEqual(turn);
+  });
+
+  it("clearActiveTurn removes entry", async () => {
+    await writeActiveTurn(stateDir, {
+      sessionId: "sess-002",
+      sessionKey: "telegram:999",
+      channel: "telegram",
+      startedAt: 1700000000000,
+    });
+    await writeActiveTurn(stateDir, {
+      sessionId: "sess-003",
+      sessionKey: "discord:channel:456",
+      channel: "discord",
+      startedAt: 1700000001000,
+    });
+
+    await clearActiveTurn(stateDir, "sess-002");
+    const result = await readStaleActiveTurns(stateDir);
+
+    expect(result).toHaveLength(1);
+    expect(result[0].sessionId).toBe("sess-003");
+  });
+
+  it("readStaleActiveTurns on missing file returns []", async () => {
+    const result = await readStaleActiveTurns(stateDir);
+    expect(result).toEqual([]);
+  });
+
+  it("active turns and pending inbound entries coexist without collision", async () => {
+    // Write a pending inbound entry
+    await writePendingInbound(stateDir, {
+      channel: "telegram",
+      id: "msg-100",
+      payload: { text: "hello" },
+      capturedAt: 1700000000000,
+    });
+
+    // Write an active turn entry
+    await writeActiveTurn(stateDir, {
+      sessionId: "sess-010",
+      sessionKey: "telegram:777",
+      channel: "telegram",
+      startedAt: 1700000001000,
+    });
+
+    // Both should be independently readable
+    const pending = await readPendingInbound(stateDir);
+    expect(pending).toHaveLength(1);
+    expect(pending[0].id).toBe("msg-100");
+
+    const turns = await readStaleActiveTurns(stateDir);
+    expect(turns).toHaveLength(1);
+    expect(turns[0].sessionId).toBe("sess-010");
+
+    // Clearing one does not affect the other
+    await clearActiveTurn(stateDir, "sess-010");
+    const pendingAfter = await readPendingInbound(stateDir);
+    expect(pendingAfter).toHaveLength(1);
+    expect(pendingAfter[0].id).toBe("msg-100");
+
+    const turnsAfter = await readStaleActiveTurns(stateDir);
+    expect(turnsAfter).toEqual([]);
   });
 });

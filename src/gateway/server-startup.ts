@@ -20,7 +20,12 @@ import {
 } from "../hooks/internal-hooks.js";
 import { loadInternalHooks } from "../hooks/loader.js";
 import { isTruthyEnvValue } from "../infra/env.js";
-import { clearPendingInbound, readPendingInbound } from "../infra/pending-inbound-store.js";
+import {
+  clearActiveTurn,
+  clearPendingInbound,
+  readPendingInbound,
+  readStaleActiveTurns,
+} from "../infra/pending-inbound-store.js";
 import { enqueueSystemEvent } from "../infra/system-events.js";
 import type { loadOpenClawPlugins } from "../plugins/loader.js";
 import { type PluginServicesHandle, startPluginServices } from "../plugins/services.js";
@@ -185,6 +190,45 @@ export async function startGatewaySidecars(params: {
     }
   } catch (err) {
     params.log.warn(`pending-inbound: replay startup failed: ${String(err)}`);
+  }
+
+  // Recover stale active turns — runs that were in-flight when the process died.
+  // Notify the originating session so the user knows to resend.
+  try {
+    const stateDir = resolveStateDir(process.env);
+    const staleTurns = await readStaleActiveTurns(stateDir);
+    if (staleTurns.length > 0) {
+      params.log.warn(
+        `active-turn recovery: found ${staleTurns.length} stale turn(s) from previous process`,
+      );
+      for (const turn of staleTurns) {
+        // Consume first to prevent infinite retry on crash.
+        await clearActiveTurn(stateDir, turn.sessionId);
+
+        // Skip probe sessions — they are synthetic health-check runs.
+        if (turn.sessionId.startsWith("probe-")) {
+          continue;
+        }
+
+        try {
+          const recoveryMessage =
+            "⚠️ I was restarted mid-conversation. Please resend your last message.";
+          enqueueSystemEvent(`[active-turn-recovery] ${recoveryMessage}`, {
+            sessionKey: turn.sessionKey,
+            contextKey: `active-turn-recovery:${turn.sessionId}`,
+          });
+          params.log.warn(
+            `active-turn recovery: notified session ${turn.sessionKey} (sessionId=${turn.sessionId}, channel=${turn.channel})`,
+          );
+        } catch (err) {
+          params.log.warn(
+            `active-turn recovery: notify failed for session ${turn.sessionKey}: ${String(err)}`,
+          );
+        }
+      }
+    }
+  } catch (err) {
+    params.log.warn(`active-turn recovery: startup failed: ${String(err)}`);
   }
 
   if (params.cfg.hooks?.internal?.enabled) {
