@@ -158,6 +158,25 @@ describe("isSafeToRetrySendError", () => {
     expect(isSafeToRetrySendError(null)).toBe(false);
   });
 
+  it("allows retry for 429 rate-limit with retry_after parameter", () => {
+    const err = Object.assign(new Error("Too Many Requests: retry after 30"), {
+      parameters: { retry_after: 30 },
+    });
+    expect(isSafeToRetrySendError(err)).toBe(true);
+  });
+
+  it("does NOT allow retry for error with parameters but no retry_after", () => {
+    const err = Object.assign(new Error("Bad Request"), {
+      parameters: {},
+    });
+    expect(isSafeToRetrySendError(err)).toBe(false);
+  });
+
+  it("allows retry for grammY 'failed after N attempts' envelope error", () => {
+    const err = new Error("Network request for 'sendMessage' failed after 3 attempts.");
+    expect(isSafeToRetrySendError(err)).toBe(true);
+  });
+
   it("detects pre-connect error nested in cause chain", () => {
     const root = Object.assign(new Error("ECONNREFUSED"), { code: "ECONNREFUSED" });
     const wrapped = Object.assign(new Error("fetch failed"), { cause: root });
