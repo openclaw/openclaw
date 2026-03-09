@@ -190,46 +190,55 @@ export async function runSessionsSendA2AFlow(params: {
       }
     }
 
-    const announcePrompt = buildAgentToAgentAnnounceContext({
-      requesterSessionKey: params.requesterSessionKey,
-      requesterChannel: params.requesterChannel,
-      targetSessionKey: params.displayKey,
-      targetChannel,
-      originalMessage: params.message,
-      roundOneReply: primaryReply,
-      latestReply,
-    });
-    const announceReply = await runAgentStep({
-      sessionKey: params.targetSessionKey,
-      message: "Agent-to-agent announce step.",
-      extraSystemPrompt: announcePrompt,
-      timeoutMs: params.announceTimeoutMs,
-      lane: resolveNestedAgentLaneForSession(params.targetSessionKey),
-      sourceSessionKey: params.requesterSessionKey,
-      sourceChannel: params.requesterChannel,
-      sourceTool: "sessions_send",
-    });
-    if (announceTarget && announceReply && announceReply.trim() && !isAnnounceSkip(announceReply)) {
-      try {
-        await sessionsSendA2ADeps.callGateway({
-          method: "send",
-          params: {
-            to: announceTarget.to,
-            message: announceReply.trim(),
+    const suppressAnnounceForRelay =
+      params.relayPolicy?.enabled === true && params.relayPolicy.mode === "dual-channel";
+    if (!suppressAnnounceForRelay) {
+      const announcePrompt = buildAgentToAgentAnnounceContext({
+        requesterSessionKey: params.requesterSessionKey,
+        requesterChannel: params.requesterChannel,
+        targetSessionKey: params.displayKey,
+        targetChannel,
+        originalMessage: params.message,
+        roundOneReply: primaryReply,
+        latestReply,
+      });
+      const announceReply = await runAgentStep({
+        sessionKey: params.targetSessionKey,
+        message: "Agent-to-agent announce step.",
+        extraSystemPrompt: announcePrompt,
+        timeoutMs: params.announceTimeoutMs,
+        lane: resolveNestedAgentLaneForSession(params.targetSessionKey),
+        sourceSessionKey: params.requesterSessionKey,
+        sourceChannel: params.requesterChannel,
+        sourceTool: "sessions_send",
+      });
+      if (
+        announceTarget &&
+        announceReply &&
+        announceReply.trim() &&
+        !isAnnounceSkip(announceReply)
+      ) {
+        try {
+          await sessionsSendA2ADeps.callGateway({
+            method: "send",
+            params: {
+              to: announceTarget.to,
+              message: announceReply.trim(),
+              channel: announceTarget.channel,
+              accountId: announceTarget.accountId,
+              threadId: announceTarget.threadId,
+              idempotencyKey: crypto.randomUUID(),
+            },
+            timeoutMs: 10_000,
+          });
+        } catch (err) {
+          log.warn("sessions_send announce delivery failed", {
+            runId: runContextId,
             channel: announceTarget.channel,
-            accountId: announceTarget.accountId,
-            threadId: announceTarget.threadId,
-            idempotencyKey: crypto.randomUUID(),
-          },
-          timeoutMs: 10_000,
-        });
-      } catch (err) {
-        log.warn("sessions_send announce delivery failed", {
-          runId: runContextId,
-          channel: announceTarget.channel,
-          to: announceTarget.to,
-          error: formatErrorMessage(err),
-        });
+            to: announceTarget.to,
+            error: formatErrorMessage(err),
+          });
+        }
       }
     }
   } catch (err) {
