@@ -183,14 +183,14 @@ const ERROR_PAYLOAD_PREFIX_RE =
 const FINAL_TAG_RE = /<\s*\/?\s*final\s*>/gi;
 
 /**
- * Matches special delimiter tokens leaked by GLM, DeepSeek, and similar models.
- * These tokens use the `<|...|>` format (e.g. `<|tool_call_result_begin|>`,
- * `<|tool_list_end|>`, `<|user|>`, `<|assistant|>`, `<|observation|>`).
- * They should never appear in user-facing output.
+ * Matches known special delimiter tokens leaked by GLM, DeepSeek, and similar models.
+ * Uses an explicit allowlist to avoid false positives on legitimate content
+ * (e.g. F# pipe operators `<|`, code discussions about tokens).
  *
  * @see https://github.com/openclaw/openclaw/issues/40020
  */
-const MODEL_SPECIAL_TOKEN_RE = /<\|[^|]*\|>/g;
+const MODEL_SPECIAL_TOKEN_RE =
+  /<\|(?:endoftext|im_start|im_end|user|assistant|system|observation|EOT|begin▁of▁sentence|end▁of▁sentence|tool_list_start|tool_list_end|tool_call_start|tool_call_end|tool_call_result_begin|tool_call_result_end|tool_content_start|tool_content_end)\|>/g;
 const ERROR_PREFIX_RE =
   /^(?:error|api\s*error|openai\s*error|anthropic\s*error|gateway\s*error|request failed|failed|exception)[:\s-]+/i;
 const CONTEXT_OVERFLOW_ERROR_HEAD_RE =
@@ -402,7 +402,7 @@ export function classifyFailoverReasonFromHttpStatus(
   return null;
 }
 
-function stripFinalTagsFromText(text: string): string {
+function stripSpecialMarkupFromText(text: string): string {
   if (!text) {
     return text;
   }
@@ -726,7 +726,7 @@ export function sanitizeUserFacingText(text: string, opts?: { errorContext?: boo
     return text;
   }
   const errorContext = opts?.errorContext ?? false;
-  const stripped = stripFinalTagsFromText(text);
+  const stripped = stripSpecialMarkupFromText(text);
   const trimmed = stripped.trim();
   if (!trimmed) {
     return "";
