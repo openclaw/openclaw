@@ -327,12 +327,19 @@ function resolveDynamicTemperature(params: {
     return undefined;
   }
 
+  const thinking = params.merged.thinking;
   const isThinkingEnabled =
     (params.thinkingLevel && params.thinkingLevel !== "off") ||
-    (params.merged.thinking != null &&
-      params.merged.thinking !== "off" &&
-      params.merged.thinking !== "none" &&
-      params.merged.thinking !== false);
+    (thinking != null &&
+      thinking !== "off" &&
+      thinking !== "none" &&
+      thinking !== "disabled" &&
+      thinking !== false &&
+      !(
+        typeof thinking === "object" &&
+        !Array.isArray(thinking) &&
+        (thinking as Record<string, unknown>).type === "disabled"
+      ));
 
   if (isThinkingEnabled) {
     return undefined;

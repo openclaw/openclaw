@@ -2098,4 +2098,34 @@ describe("applyExtraParamsToAgent", () => {
     void agent.streamFn?.(model, { messages: [] }, {});
     expect(calls[0]?.temperature).toBe(0.3);
   });
+
+  it("applies dynamic temperature when thinking is disabled via string 'disabled'", () => {
+    const { calls, agent } = createOptionsCaptureAgent();
+    applyExtraParamsToAgent(agent, undefined, "anthropic", "claude-sonnet-4-6", {
+      availableToolNames: new Set(["web_search"]),
+      thinking: "disabled",
+    });
+    const model = {
+      api: "anthropic-messages",
+      provider: "anthropic",
+      id: "claude-sonnet-4-6",
+    } as Model<"anthropic-messages">;
+    void agent.streamFn?.(model, { messages: [] }, {});
+    expect(calls[0]?.temperature).toBe(0.3);
+  });
+
+  it("applies dynamic temperature when thinking is disabled via object { type: 'disabled' }", () => {
+    const { calls, agent } = createOptionsCaptureAgent();
+    applyExtraParamsToAgent(agent, undefined, "anthropic", "claude-sonnet-4-6", {
+      availableToolNames: new Set(["web_search"]),
+      thinking: { type: "disabled" },
+    });
+    const model = {
+      api: "anthropic-messages",
+      provider: "anthropic",
+      id: "claude-sonnet-4-6",
+    } as Model<"anthropic-messages">;
+    void agent.streamFn?.(model, { messages: [] }, {});
+    expect(calls[0]?.temperature).toBe(0.3);
+  });
 });
