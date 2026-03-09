@@ -35,21 +35,21 @@ agents, workflows, and subagents coordinate computer-use jobs.
           defaultModel: "gpt-5.4",
           defaultRequireConfirmation: true,
           defaultMaxSteps: 25,
-          defaultTimeoutMs: 120000
-        }
-      }
-    }
+          defaultTimeoutMs: 120000,
+        },
+      },
+    },
   },
   agents: {
     list: [
       {
         id: "main",
         tools: {
-          allow: ["computer-use"]
-        }
-      }
-    ]
-  }
+          allow: ["computer-use"],
+        },
+      },
+    ],
+  },
 }
 ```
 

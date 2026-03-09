@@ -77,7 +77,8 @@ function resolveProviderModel(
     primaryProvider ??
     "openai";
 
-  const model = readString(params.model) ?? readString(pluginCfg.defaultModel) ?? primaryModel ?? "gpt-5.4";
+  const model =
+    readString(params.model) ?? readString(pluginCfg.defaultModel) ?? primaryModel ?? "gpt-5.4";
 
   return { provider, model };
 }
@@ -119,8 +120,7 @@ export function createComputerUseTool(api: OpenClawPluginApi) {
   return {
     name: "computer-use",
     label: "Computer Use",
-    description:
-      "Start and manage GPT-5.4 computer-use jobs through an external executor service.",
+    description: "Start and manage GPT-5.4 computer-use jobs through an external executor service.",
     parameters: Type.Object({
       action: Type.Optional(
         Type.String({
@@ -141,7 +141,9 @@ export function createComputerUseTool(api: OpenClawPluginApi) {
       requireConfirmation: Type.Optional(
         Type.Boolean({ description: "Require executor-side confirmation for risky actions." }),
       ),
-      allow: Type.Optional(Type.Boolean({ description: "Confirmation decision for a blocked run." })),
+      allow: Type.Optional(
+        Type.Boolean({ description: "Confirmation decision for a blocked run." }),
+      ),
       metadata: Type.Optional(Type.Unknown({ description: "Executor-specific metadata payload." })),
     }),
 
@@ -185,9 +187,15 @@ export function createComputerUseTool(api: OpenClawPluginApi) {
         ).json;
       } else if (action === "status") {
         const taskId = ensureTaskId(params);
-        response = (await httpJson(`${baseUrl}/v1/tasks/${encodeURIComponent(taskId)}`, {
-          method: "GET",
-        }, authToken)).json;
+        response = (
+          await httpJson(
+            `${baseUrl}/v1/tasks/${encodeURIComponent(taskId)}`,
+            {
+              method: "GET",
+            },
+            authToken,
+          )
+        ).json;
       } else if (action === "confirm") {
         const taskId = ensureTaskId(params);
         response = (
