@@ -217,8 +217,17 @@ export async function processGatewayAllowlist(
             env: params.env,
             platform: process.platform,
           });
-          for (const pattern of patterns) {
-            if (pattern) {
+          const validPatterns = patterns.filter((p) => p);
+          if (validPatterns.length === 0) {
+            emitExecSystemEvent(
+              `⚠️ Exec approval allowed once (allow-always not available for shell builtins like 'cd'). ID: ${approvalId}`,
+              {
+                sessionKey: params.notifySessionKey,
+                contextKey,
+              },
+            );
+          } else {
+            for (const pattern of validPatterns) {
               addAllowlistEntry(approvals.file, params.agentId, pattern);
             }
           }

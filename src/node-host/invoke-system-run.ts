@@ -419,8 +419,13 @@ async function executeSystemRunPhase(
         env: phase.env,
         platform: process.platform,
       });
-      for (const pattern of patterns) {
-        if (pattern) {
+      const validPatterns = patterns.filter((p) => p);
+      if (validPatterns.length === 0) {
+        logWarn(
+          `exec-approvals: allow-always not available for shell builtins (command: ${phase.cmdText})`,
+        );
+      } else {
+        for (const pattern of validPatterns) {
           addAllowlistEntry(phase.approvals.file, phase.agentId, pattern);
         }
       }
