@@ -55,6 +55,11 @@ describe("archiveSessionTranscript", () => {
     expect(marker.type).toBe("archive_marker");
     expect(marker.totalArchived).toBe(result.linesRemoved);
     expect(typeof marker.archivedAt).toBe("string");
+
+    // Verify exactly keepLastTurns user turns are retained
+    const entries = lines.slice(2).map((l) => JSON.parse(l) as Record<string, unknown>);
+    const keptUserTurns = entries.filter((e) => e.role === "user");
+    expect(keptUserTurns).toHaveLength(5);
   });
 
   it("inserts correct archive marker format", async () => {
