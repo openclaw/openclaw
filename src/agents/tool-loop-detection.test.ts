@@ -344,6 +344,28 @@ describe("tool-loop-detection", () => {
       expect(state.toolCallHistory).toHaveLength(WARNING_THRESHOLD);
     });
 
+    it("detectToolCallLoop does not flag a loop on the first call of a new heartbeat cycle", () => {
+      const state = createState();
+      // Build up history to WARNING_THRESHOLD
+      for (let i = 0; i < WARNING_THRESHOLD; i += 1) {
+        recordToolCall(state, "read", { path: "/file.txt" }, `old-${i}`);
+      }
+      // Backdate all entries
+      for (const call of state.toolCallHistory!) {
+        call.timestamp = Date.now() - 120_000;
+      }
+      // Production order: detect THEN record
+      const result = detectToolCallLoop(
+        state,
+        "read",
+        { path: "/file.txt" },
+        enabledLoopDetectionConfig,
+      );
+      expect(result.stuck).toBe(false);
+      recordToolCall(state, "read", { path: "/file.txt" }, "new-1");
+      expect(state.toolCallHistory).toHaveLength(1);
+    });
+
     it("does not flag unique tool calls", () => {
       const state = createState();
 
