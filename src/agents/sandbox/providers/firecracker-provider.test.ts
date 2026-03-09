@@ -107,6 +107,7 @@ describe("FirecrackerProvider", () => {
     });
 
     it("wraps gRPC errors through mapGrpcError", async () => {
+      // @ts-expect-error -- nice-grpc is an optional dependency for Firecracker support
       const { ClientError, Status } = await import("nice-grpc");
       mockSandboxClient.createSandbox.mockRejectedValueOnce(
         new ClientError("test.Service", Status.ALREADY_EXISTS, "VM exists"),
@@ -224,6 +225,7 @@ describe("FirecrackerProvider", () => {
     });
 
     it("wraps gRPC errors through mapGrpcError", async () => {
+      // @ts-expect-error -- nice-grpc is an optional dependency for Firecracker support
       const { ClientError, Status } = await import("nice-grpc");
       mockExecClient.exec.mockImplementationOnce(() => {
         throw new ClientError("test.Service", Status.INTERNAL, "exec failed");
@@ -261,6 +263,7 @@ describe("FirecrackerProvider", () => {
     });
 
     it("wraps gRPC errors through mapGrpcError", async () => {
+      // @ts-expect-error -- nice-grpc is an optional dependency for Firecracker support
       const { ClientError, Status } = await import("nice-grpc");
       mockSandboxClient.destroySandbox.mockRejectedValueOnce(
         new ClientError("test.Service", Status.NOT_FOUND, "VM not found"),
@@ -308,6 +311,7 @@ describe("FirecrackerProvider", () => {
     });
 
     it("wraps gRPC errors through mapGrpcError", async () => {
+      // @ts-expect-error -- nice-grpc is an optional dependency for Firecracker support
       const { ClientError, Status } = await import("nice-grpc");
       mockSandboxClient.sandboxStatus.mockRejectedValueOnce(
         new ClientError("test.Service", Status.NOT_FOUND, "not found"),
@@ -351,6 +355,7 @@ describe("FirecrackerProvider", () => {
     });
 
     it("wraps gRPC errors through mapGrpcError", async () => {
+      // @ts-expect-error -- nice-grpc is an optional dependency for Firecracker support
       const { ClientError, Status } = await import("nice-grpc");
       mockSandboxClient.listSandboxes.mockRejectedValueOnce(
         new ClientError("test.Service", Status.UNAVAILABLE, "unavailable"),

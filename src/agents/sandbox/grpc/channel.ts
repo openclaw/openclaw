@@ -5,7 +5,9 @@
  * domain socket. The socket path is configurable via environment variable.
  */
 
+// @ts-expect-error -- Optional gRPC dependency for Firecracker support
 import { ChannelCredentials } from "@grpc/grpc-js";
+// @ts-expect-error -- Optional gRPC dependency for Firecracker support
 import { createChannel, type Channel } from "nice-grpc";
 
 /**

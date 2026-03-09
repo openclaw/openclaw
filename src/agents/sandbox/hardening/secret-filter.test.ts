@@ -5,10 +5,10 @@ describe("secret-filter", () => {
   describe("filterSecretsFromEnv", () => {
     it("strips known secret env vars", () => {
       const env = {
-        OPENAI_API_KEY: "sk-xxx",
-        ANTHROPIC_API_KEY: "ant-xxx",
-        AWS_SECRET_ACCESS_KEY: "aws-xxx",
-        MY_APP_SECRET: "secret-val",
+        OPENAI_API_KEY: "sk-xxx", // pragma: allowlist secret
+        ANTHROPIC_API_KEY: "ant-xxx", // pragma: allowlist secret
+        AWS_SECRET_ACCESS_KEY: "aws-xxx", // pragma: allowlist secret
+        MY_APP_SECRET: "secret-val", // pragma: allowlist secret
         AUTH_TOKEN: "tok-xxx",
         PATH: "/usr/bin",
       };
@@ -46,8 +46,8 @@ describe("secret-filter", () => {
 
     it("returns empty object for all-secret input", () => {
       const env = {
-        DB_PASSWORD: "pass123",
-        API_KEY: "key123",
+        DB_PASSWORD: "pass123", // pragma: allowlist secret
+        API_KEY: "key123", // pragma: allowlist secret
       };
       const filtered = filterSecretsFromEnv(env);
       expect(Object.keys(filtered)).toHaveLength(0);

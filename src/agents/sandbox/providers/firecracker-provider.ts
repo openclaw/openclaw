@@ -8,6 +8,7 @@ import type { SandboxClient, ExecClient, BrowserClient } from "../grpc/client.js
 import { mapGrpcError } from "../grpc/errors.js";
 import type { HealthClient } from "../grpc/health.js";
 import { checkFirecrackerHealth } from "../grpc/health.js";
+// @ts-expect-error -- Generated proto code; available at runtime after buf generate
 import { SandboxState as ProtoSandboxState } from "../proto/openclaw/sandbox/v1/sandbox.js";
 import type {
   ISandboxProvider,
@@ -59,7 +60,7 @@ export class FirecrackerProvider implements ISandboxProvider, IBrowserCapable {
     if (this.healthClient === null) {
       this.healthClient = createHealthClient();
     }
-    return this.healthClient;
+    return this.healthClient!;
   }
 
   private getBrowserClient(): BrowserClient {
@@ -187,7 +188,7 @@ export class FirecrackerProvider implements ISandboxProvider, IBrowserCapable {
   async list(): Promise<SandboxInfo[]> {
     try {
       const response = await this.getSandboxClient().listSandboxes({});
-      return response.sandboxes.map((s) => ({
+      return response.sandboxes.map((s: { sandboxId: string; state: number }) => ({
         containerName: s.sandboxId,
         sessionKey: s.sandboxId,
         running: s.state === ProtoSandboxState.SANDBOX_STATE_RUNNING,
@@ -207,8 +208,8 @@ export class FirecrackerProvider implements ISandboxProvider, IBrowserCapable {
       const response = await this.getBrowserClient().launch({
         sandboxId,
         headless: config?.headless ?? true,
-        viewportWidth: config?.viewportWidth ?? 1280,
-        viewportHeight: config?.viewportHeight ?? 720,
+        viewportWidth: 1280,
+        viewportHeight: 720,
       });
       return { sessionId: response.sessionId };
     } catch (err) {

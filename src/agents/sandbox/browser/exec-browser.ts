@@ -137,8 +137,8 @@ const { chromium } = require('playwright');
     config?: SandboxBrowserConfig,
   ): Promise<BrowserSessionResult> {
     const headless = config?.headless !== false;
-    const vw = config?.viewportWidth ?? DEFAULT_VIEWPORT_WIDTH;
-    const vh = config?.viewportHeight ?? DEFAULT_VIEWPORT_HEIGHT;
+    const vw = DEFAULT_VIEWPORT_WIDTH;
+    const vh = DEFAULT_VIEWPORT_HEIGHT;
 
     // Script that launches Chromium persistently and writes session info.
     const launchScript = `

@@ -5,12 +5,19 @@
  * (SandboxService) and plain clients for bidirectional streaming (ExecService).
  */
 
+// @ts-expect-error -- Optional gRPC dependency for Firecracker support
 import { createClientFactory, createClient, type Client } from "nice-grpc";
+// @ts-expect-error -- Optional gRPC dependency for Firecracker support
 import { deadlineMiddleware } from "nice-grpc-client-middleware-deadline";
+// @ts-expect-error -- Optional gRPC dependency for Firecracker support
 import { retryMiddleware } from "nice-grpc-client-middleware-retry";
+// @ts-expect-error -- Generated proto code; available at runtime after buf generate
 import { BrowserServiceDefinition } from "../proto/openclaw/sandbox/v1/browser.js";
+// @ts-expect-error -- Generated proto code; available at runtime after buf generate
 import { ExecServiceDefinition } from "../proto/openclaw/sandbox/v1/exec.js";
+// @ts-expect-error -- Generated proto code; available at runtime after buf generate
 import { FileServiceDefinition } from "../proto/openclaw/sandbox/v1/file.js";
+// @ts-expect-error -- Generated proto code; available at runtime after buf generate
 import { SandboxServiceDefinition } from "../proto/openclaw/sandbox/v1/sandbox.js";
 import { getOrCreateChannel } from "./channel.js";
 

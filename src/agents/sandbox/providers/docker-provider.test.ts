@@ -83,14 +83,14 @@ describe("DockerProvider", () => {
     const baseCfg = {
       mode: "all" as const,
       scope: "session" as const,
-      workspaceAccess: "read-write" as const,
+      workspaceAccess: "rw" as const,
       workspaceRoot: "/workspace",
       docker: { image: "node:20" },
       browser: { enabled: false },
-      tools: { allowNetwork: true },
-      prune: { enabled: true },
+      tools: { allow: ["*"], deny: [] },
+      prune: { idleHours: 24, maxAgeDays: 7 },
       backend: "docker" as const,
-    };
+    } as any;
 
     const baseParams = {
       sessionKey: "sess-abc",
@@ -137,7 +137,7 @@ describe("DockerProvider", () => {
         ...baseParams,
         cfg: {
           ...baseCfg,
-          resourceLimits: { cpus: 2, memory: "1g", pidsLimit: 512 },
+          resourceLimits: { cpus: 2, memoryMB: 1024, pidsLimit: 512 },
         },
       };
 
@@ -146,7 +146,7 @@ describe("DockerProvider", () => {
       // Find the create call (first execDocker call)
       const createCall = mockExecDocker.mock.calls[0]![0] as string[];
       expect(createCall).toContain("--cpus=2");
-      expect(createCall).toContain("--memory=1g");
+      expect(createCall).toContain("--memory=1024m");
       expect(createCall).toContain("--pids-limit=512");
     });
 
@@ -189,7 +189,7 @@ describe("DockerProvider", () => {
           env: {
             PATH: "/usr/bin",
             HOME: "/home/user",
-            OPENAI_API_KEY: "sk-secret-123",
+            OPENAI_API_KEY: "sk-secret-123", // pragma: allowlist secret
             MY_CUSTOM_VAR: "hello",
           },
         },
@@ -323,6 +323,8 @@ describe("DockerProvider", () => {
           running: true,
           imageMatch: true,
           image: "node:20",
+          createdAtMs: 0,
+          lastUsedAtMs: 0,
         },
         {
           containerName: "sandbox-2",
@@ -330,6 +332,8 @@ describe("DockerProvider", () => {
           running: false,
           imageMatch: false,
           image: "node:18",
+          createdAtMs: 0,
+          lastUsedAtMs: 0,
         },
       ]);
 
@@ -363,7 +367,7 @@ describe("DockerProvider", () => {
       const mockLaunch = vi.fn().mockResolvedValue({ sessionId: "exec-123" });
       vi.spyOn(ExecBrowserHelper.prototype, "launchBrowser").mockImplementation(mockLaunch);
 
-      const result = await provider.launchBrowser("container-1", { enabled: true });
+      const result = await provider.launchBrowser("container-1", { enabled: true } as any);
 
       expect(result).toEqual({ sessionId: "exec-123" });
       expect(mockLaunch).toHaveBeenCalledWith("container-1", { enabled: true });

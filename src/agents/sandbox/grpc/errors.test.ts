@@ -1,4 +1,6 @@
+// @ts-expect-error -- Optional gRPC dependency for Firecracker support
 import { Status } from "nice-grpc";
+// @ts-expect-error -- Optional gRPC dependency for Firecracker support
 import { ClientError } from "nice-grpc";
 import { describe, it, expect } from "vitest";
 import { SandboxProviderError, mapGrpcError } from "./errors.js";

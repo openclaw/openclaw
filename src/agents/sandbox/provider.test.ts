@@ -83,14 +83,14 @@ describe("ISandboxProvider interface contract", () => {
     const cfg = {
       mode: "all",
       scope: "session",
-      workspaceAccess: "read-write",
+      workspaceAccess: "rw",
       workspaceRoot: "/workspace",
       docker: { image: "node:20" },
       browser: { enabled: false },
-      tools: { allowNetwork: true },
-      prune: { enabled: true },
+      tools: { allow: ["*"], deny: [] },
+      prune: { idleHours: 24, maxAgeDays: 7 },
       backend: "auto",
-    } as SandboxConfig;
+    } as unknown as SandboxConfig;
 
     const params: EnsureSandboxParams = {
       sessionKey: "sess-123",

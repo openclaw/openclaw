@@ -36,14 +36,14 @@ function makeSandboxParams(overrides?: Partial<EnsureSandboxParams>): EnsureSand
     cfg: {
       mode: "all" as const,
       scope: "session" as const,
-      workspaceAccess: "read-write" as const,
+      workspaceAccess: "rw" as const,
       workspaceRoot: "/workspace",
       docker: { image: "node:20" },
       browser: { enabled: false },
-      tools: { allowNetwork: true },
-      prune: { enabled: true },
+      tools: { allow: ["*"], deny: [] },
+      prune: { idleHours: 24, maxAgeDays: 7 },
       backend: "gvisor" as const,
-    },
+    } as any,
     ...overrides,
   };
 }
@@ -192,14 +192,14 @@ describe("GVisorProvider", () => {
       });
 
       const params = makeSandboxParams();
-      params.cfg.resourceLimits = { cpus: 2, memory: "1g", pidsLimit: 512 };
+      params.cfg.resourceLimits = { cpus: 2, memoryMB: 1024, pidsLimit: 512 };
 
       await provider.ensureSandbox(params);
 
       const createCall = mockExecDocker.mock.calls.find((call) => call[0][0] === "create");
       expect(createCall).toBeDefined();
       expect(createCall![0]).toContain("--cpus=2");
-      expect(createCall![0]).toContain("--memory=1g");
+      expect(createCall![0]).toContain("--memory=1024m");
       expect(createCall![0]).toContain("--pids-limit=512");
     });
 
@@ -278,10 +278,10 @@ describe("GVisorProvider", () => {
       const params = makeSandboxParams();
       // Add env vars including secrets to the config
       params.cfg.env = {
-        OPENAI_API_KEY: "sk-secret-key",
+        OPENAI_API_KEY: "sk-secret-key", // pragma: allowlist secret
         NODE_ENV: "production",
         PATH: "/usr/bin",
-        DB_PASSWORD: "secret123",
+        DB_PASSWORD: "secret123", // pragma: allowlist secret
       };
 
       await provider.ensureSandbox(params);
@@ -441,6 +441,8 @@ describe("GVisorProvider", () => {
           running: true,
           imageMatch: true,
           image: "node:20",
+          createdAtMs: 0,
+          lastUsedAtMs: 0,
         },
         {
           containerName: "sandbox-2",
@@ -448,6 +450,8 @@ describe("GVisorProvider", () => {
           running: false,
           imageMatch: false,
           image: "node:18",
+          createdAtMs: 0,
+          lastUsedAtMs: 0,
         },
       ]);
 
@@ -481,7 +485,7 @@ describe("GVisorProvider", () => {
       const mockLaunch = vi.fn().mockResolvedValue({ sessionId: "exec-123" });
       vi.spyOn(ExecBrowserHelper.prototype, "launchBrowser").mockImplementation(mockLaunch);
 
-      const result = await provider.launchBrowser("container-1", { enabled: true });
+      const result = await provider.launchBrowser("container-1", { enabled: true } as any);
 
       expect(result).toEqual({ sessionId: "exec-123" });
       expect(mockLaunch).toHaveBeenCalledWith("container-1", { enabled: true });

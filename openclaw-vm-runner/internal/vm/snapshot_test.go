@@ -154,7 +154,7 @@ func TestWriteMetadata_CreatesFile(t *testing.T) {
 		MemFilePath:  filepath.Join(dir, "memory.bin"),
 		SnapshotPath: filepath.Join(dir, "vmstate.snap"),
 		RootfsPath:   rootfs,
-		Version:      "abc123def456",
+		Version:      "abc123def456", // pragma: allowlist secret
 		CreatedAt:    now,
 	}
 	cfg := &VMConfig{

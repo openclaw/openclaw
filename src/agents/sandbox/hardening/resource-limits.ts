@@ -2,19 +2,12 @@
  * Resource limit configuration and Docker CLI flag builder for sandbox containers.
  */
 
-export interface ResourceLimits {
-  /** Number of CPUs (fractional allowed, e.g. 0.5). */
-  cpus?: number;
-  /** Memory limit string (e.g. "512m", "1g"). */
-  memory?: string;
-  /** Maximum number of PIDs in the container. */
-  pidsLimit?: number;
-}
+import type { ResourceLimits } from "../types.js";
 
 /** Sensible defaults for sandboxed agent containers. */
-export const DEFAULT_RESOURCE_LIMITS: Required<ResourceLimits> = {
+export const DEFAULT_RESOURCE_LIMITS: ResourceLimits = {
   cpus: 1,
-  memory: "512m",
+  memoryMB: 512,
   pidsLimit: 256,
 };
 
@@ -29,12 +22,16 @@ export function buildResourceLimitFlags(limits: ResourceLimits): string[] {
     flags.push(`--cpus=${limits.cpus}`);
   }
 
-  if (limits.memory !== undefined) {
-    flags.push(`--memory=${limits.memory}`);
+  if (limits.memoryMB !== undefined) {
+    flags.push(`--memory=${limits.memoryMB}m`);
   }
 
   if (limits.pidsLimit !== undefined) {
     flags.push(`--pids-limit=${limits.pidsLimit}`);
+  }
+
+  if (limits.diskMB !== undefined) {
+    flags.push(`--storage-opt=size=${limits.diskMB}m`);
   }
 
   return flags;

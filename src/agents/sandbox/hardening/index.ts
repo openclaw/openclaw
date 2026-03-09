@@ -2,13 +2,9 @@
  * Barrel re-exports for all hardening utility modules.
  */
 
-export {
-  type ResourceLimits,
-  DEFAULT_RESOURCE_LIMITS,
-  buildResourceLimitFlags,
-} from "./resource-limits.js";
+export { DEFAULT_RESOURCE_LIMITS, buildResourceLimitFlags } from "./resource-limits.js";
 
-export { type NetworkMode, buildNetworkFlag } from "./network-isolation.js";
+export { DEFAULT_NETWORK_MODE, buildNetworkFlag } from "./network-isolation.js";
 
 export { syncToSandbox, syncFromSandbox } from "./filesystem.js";
 

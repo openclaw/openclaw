@@ -1,10 +1,10 @@
 import { createSubsystemLogger } from "../../../logging/subsystem.js";
 import { ExecBrowserHelper } from "../browser/exec-browser.js";
-import { DEFAULT_RESOURCE_LIMITS } from "../constants.js";
-import { DEFAULT_NETWORK_MODE } from "../constants.js";
 import { execDockerRaw, execDocker, dockerContainerState } from "../docker.js";
 import {
+  DEFAULT_RESOURCE_LIMITS,
   buildResourceLimitFlags,
+  DEFAULT_NETWORK_MODE,
   buildNetworkFlag,
   filterSecretsFromEnv,
   syncToSandbox as fsSyncToSandbox,

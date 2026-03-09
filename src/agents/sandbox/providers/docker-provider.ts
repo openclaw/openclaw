@@ -1,12 +1,11 @@
 import { ExecBrowserHelper } from "../browser/exec-browser.js";
-import { DEFAULT_RESOURCE_LIMITS, DEFAULT_NETWORK_MODE } from "../constants.js";
 import { execDockerRaw, execDocker, dockerContainerState } from "../docker.js";
 import {
   syncToSandbox as fsSyncToSandbox,
   syncFromSandbox as fsSyncFromSandbox,
 } from "../hardening/filesystem.js";
-import { buildNetworkFlag } from "../hardening/network-isolation.js";
-import { buildResourceLimitFlags } from "../hardening/resource-limits.js";
+import { DEFAULT_NETWORK_MODE, buildNetworkFlag } from "../hardening/network-isolation.js";
+import { DEFAULT_RESOURCE_LIMITS, buildResourceLimitFlags } from "../hardening/resource-limits.js";
 import { filterSecretsFromEnv } from "../hardening/secret-filter.js";
 import { listSandboxContainers } from "../manage.js";
 import type {

@@ -5,6 +5,7 @@
  * SandboxProviderError instances with retry semantics.
  */
 
+// @ts-expect-error -- Optional gRPC dependency for Firecracker support
 import { Status, ClientError } from "nice-grpc";
 
 export interface SandboxProviderErrorOptions {
@@ -95,21 +96,24 @@ export function mapGrpcError(err: unknown, operation: string): SandboxProviderEr
 
   // Map nice-grpc ClientError using status code
   if (err instanceof ClientError) {
-    const mapping = STATUS_MAP[err.code];
+    const mapping = STATUS_MAP[(err as any).code];
     if (mapping) {
-      return new SandboxProviderError(`${operation}: ${mapping.message} - ${err.message}`, {
-        operation,
-        grpcCode: err.code,
-        isRetryable: mapping.isRetryable,
-      });
+      return new SandboxProviderError(
+        `${operation}: ${mapping.message} - ${(err as any).message}`,
+        {
+          operation,
+          grpcCode: (err as any).code,
+          isRetryable: mapping.isRetryable,
+        },
+      );
     }
 
     // Unknown gRPC status code
     return new SandboxProviderError(
-      `${operation}: gRPC error (code ${err.code}) - ${err.message}`,
+      `${operation}: gRPC error (code ${(err as any).code}) - ${(err as any).message}`,
       {
         operation,
-        grpcCode: err.code,
+        grpcCode: (err as any).code,
         isRetryable: false,
       },
     );

@@ -51,9 +51,7 @@ describe("ExecBrowserHelper", () => {
       const result = await helper.launchBrowser("test-container", {
         enabled: true,
         headless: true,
-        viewportWidth: 1280,
-        viewportHeight: 720,
-      });
+      } as any);
 
       expect(result).toEqual({ sessionId: "exec-12345" });
       expect(execFn).toHaveBeenCalledTimes(2);
@@ -76,7 +74,7 @@ describe("ExecBrowserHelper", () => {
         makeExecResult({ wsEndpoint: "ws://127.0.0.1:9222/devtools/browser/abc", pid: 99 }),
       );
 
-      await helper.launchBrowser("c1", { enabled: true });
+      await helper.launchBrowser("c1", { enabled: true } as any);
 
       // Check the second call (cat session) has timeout >= 30000
       const secondCall = execFn.mock.calls[1];

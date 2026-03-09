@@ -107,7 +107,7 @@ describe("createSandboxClient", () => {
   it("creates client with the SandboxService definition and channel", () => {
     createSandboxClient();
     expect(mockCreate).toHaveBeenCalledTimes(1);
-    const createArgs = mockCreate.mock.calls[0];
+    const createArgs = mockCreate.mock.calls[0] as any[];
     expect(createArgs[0]).toHaveProperty("name", "SandboxService");
     expect(createArgs[1]).toBe(mockChannel);
   });
@@ -122,7 +122,7 @@ describe("createExecClient", () => {
     const client = createExecClient();
     expect(client).toBeDefined();
     expect(mockCreateClient).toHaveBeenCalled();
-    const createArgs = mockCreateClient.mock.calls[0];
+    const createArgs = mockCreateClient.mock.calls[0] as any[];
     expect(createArgs[0]).toHaveProperty("name", "ExecService");
   });
 
@@ -154,7 +154,7 @@ describe("createFileClient", () => {
     const client = createFileClient();
     expect(client).toBeDefined();
     expect(mockCreateClient).toHaveBeenCalled();
-    const createArgs = mockCreateClient.mock.calls[0];
+    const createArgs = mockCreateClient.mock.calls[0] as any[];
     expect(createArgs[0]).toHaveProperty("name", "FileService");
   });
 
@@ -166,7 +166,7 @@ describe("createFileClient", () => {
 
   it("passes the channel from getOrCreateChannel", () => {
     createFileClient();
-    const createArgs = mockCreateClient.mock.calls[0];
+    const createArgs = mockCreateClient.mock.calls[0] as any[];
     expect(createArgs[1]).toBe(mockChannel);
   });
 

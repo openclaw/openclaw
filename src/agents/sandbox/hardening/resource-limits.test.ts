@@ -1,16 +1,13 @@
 import { describe, it, expect } from "vitest";
-import {
-  buildResourceLimitFlags,
-  DEFAULT_RESOURCE_LIMITS,
-  type ResourceLimits,
-} from "./resource-limits.js";
+import type { ResourceLimits } from "../types.js";
+import { buildResourceLimitFlags, DEFAULT_RESOURCE_LIMITS } from "./resource-limits.js";
 
 describe("resource-limits", () => {
   describe("buildResourceLimitFlags", () => {
     it("builds full flag set from complete config", () => {
       const flags = buildResourceLimitFlags({
         cpus: 1,
-        memory: "512m",
+        memoryMB: 512,
         pidsLimit: 256,
       });
       expect(flags).toEqual(["--cpus=1", "--memory=512m", "--pids-limit=256"]);
@@ -26,9 +23,9 @@ describe("resource-limits", () => {
       expect(flags).toEqual([]);
     });
 
-    it("handles memory-only config", () => {
-      const flags = buildResourceLimitFlags({ memory: "1g" });
-      expect(flags).toEqual(["--memory=1g"]);
+    it("handles memoryMB-only config", () => {
+      const flags = buildResourceLimitFlags({ memoryMB: 1024 });
+      expect(flags).toEqual(["--memory=1024m"]);
     });
 
     it("handles pidsLimit-only config", () => {
@@ -41,7 +38,7 @@ describe("resource-limits", () => {
     it("has sensible defaults", () => {
       expect(DEFAULT_RESOURCE_LIMITS).toEqual({
         cpus: 1,
-        memory: "512m",
+        memoryMB: 512,
         pidsLimit: 256,
       });
     });
