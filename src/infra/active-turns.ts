@@ -4,6 +4,13 @@ import { resolveStateDir } from "../config/paths.js";
 
 const ACTIVE_TURNS_DIRNAME = "active-turns";
 
+/**
+ * Track pending write promises per session so that clearActiveTurn can wait
+ * for the write to finish before unlinking, preventing the race where unlink
+ * fires before rename completes and leaves a stale marker on disk.
+ */
+const pendingWrites = new Map<string, Promise<void>>();
+
 export type ActiveTurnMarker = {
   sessionId: string;
   sessionKey: string;
@@ -34,7 +41,7 @@ export function writeActiveTurn(
   }
   const marker: ActiveTurnMarker = { sessionId, sessionKey, startedAt: Date.now() };
   const filePath = resolveMarkerPath(sessionId, env);
-  void (async () => {
+  const writePromise = (async () => {
     const dir = path.dirname(filePath);
     await fs.promises.mkdir(dir, { recursive: true, mode: 0o700 });
     const tmp = `${filePath}.${process.pid}.tmp`;
@@ -46,19 +53,32 @@ export function writeActiveTurn(
   })().catch(() => {
     // Best-effort — never block the hot path.
   });
+  pendingWrites.set(sessionId, writePromise);
+  void writePromise.finally(() => {
+    // Only clean up if this is still the latest write for this session.
+    if (pendingWrites.get(sessionId) === writePromise) {
+      pendingWrites.delete(sessionId);
+    }
+  });
 }
 
 /**
  * Remove an active turn marker from disk. Fire-and-forget — never throws.
+ * Waits for any pending write to finish first so the unlink doesn't race
+ * ahead of the atomic rename.
  */
 export function clearActiveTurn(sessionId: string, env?: NodeJS.ProcessEnv): void {
   if (sessionId.startsWith("probe-")) {
     return;
   }
   const filePath = resolveMarkerPath(sessionId, env);
-  void fs.promises.unlink(filePath).catch(() => {
-    // Best-effort — silently ignore ENOENT or other errors.
-  });
+  const pending = pendingWrites.get(sessionId);
+  const doUnlink = () => fs.promises.unlink(filePath).catch(() => {});
+  if (pending) {
+    void pending.then(doUnlink);
+  } else {
+    void doUnlink();
+  }
 }
 
 /**
@@ -82,7 +102,13 @@ export async function loadActiveTurnMarkers(env?: NodeJS.ProcessEnv): Promise<Ac
     try {
       const raw = await fs.promises.readFile(filePath, "utf-8");
       const parsed = JSON.parse(raw) as ActiveTurnMarker;
-      if (parsed && typeof parsed.sessionId === "string" && typeof parsed.sessionKey === "string") {
+      if (
+        parsed &&
+        typeof parsed.sessionId === "string" &&
+        typeof parsed.sessionKey === "string" &&
+        typeof parsed.startedAt === "number" &&
+        Number.isFinite(parsed.startedAt)
+      ) {
         markers.push(parsed);
       }
     } catch {

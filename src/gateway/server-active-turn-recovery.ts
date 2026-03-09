@@ -115,7 +115,3 @@ async function deliverRecoveryNotification(sessionKey: string): Promise<void> {
     enqueueSystemEvent(`Active turn recovery failed: ${String(err)}`, { sessionKey });
   }
 }
-
-export function shouldRecoverInterruptedTurns(): boolean {
-  return !process.env.VITEST && process.env.NODE_ENV !== "test";
-}
