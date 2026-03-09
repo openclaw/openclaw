@@ -34,50 +34,7 @@ export type IMessageSendResult = {
   messageId: string;
 };
 
-const LEADING_REPLY_TAG_RE = /^\s*\[\[\s*reply_to\s*:\s*([^\]\n]+)\s*\]\]\s*/i;
-const MAX_REPLY_TO_ID_LENGTH = 256;
-
-function stripUnsafeReplyTagChars(value: string): string {
-  let next = "";
-  for (const ch of value) {
-    const code = ch.charCodeAt(0);
-    if ((code >= 0 && code <= 31) || code === 127 || ch === "[" || ch === "]") {
-      continue;
-    }
-    next += ch;
-  }
-  return next;
-}
-
-function sanitizeReplyToId(rawReplyToId?: string): string | undefined {
-  const trimmed = rawReplyToId?.trim();
-  if (!trimmed) {
-    return undefined;
-  }
-  const sanitized = stripUnsafeReplyTagChars(trimmed).trim();
-  if (!sanitized) {
-    return undefined;
-  }
-  if (sanitized.length > MAX_REPLY_TO_ID_LENGTH) {
-    return sanitized.slice(0, MAX_REPLY_TO_ID_LENGTH);
-  }
-  return sanitized;
-}
-
-function prependReplyTagIfNeeded(message: string, replyToId?: string): string {
-  const resolvedReplyToId = sanitizeReplyToId(replyToId);
-  if (!resolvedReplyToId) {
-    return message;
-  }
-  const replyTag = `[[reply_to:${resolvedReplyToId}]]`;
-  const existingLeadingTag = message.match(LEADING_REPLY_TAG_RE);
-  if (existingLeadingTag) {
-    const remainder = message.slice(existingLeadingTag[0].length).trimStart();
-    return remainder ? `${replyTag} ${remainder}` : replyTag;
-  }
-  const trimmedMessage = message.trimStart();
-  return trimmedMessage ? `${replyTag} ${trimmedMessage}` : replyTag;
-}
+const ALL_REPLY_TAGS_RE = /\[\[\s*(?:reply_to_current|reply_to\s*:\s*[^\]\n]*)\s*\]\]/gi;
 
 function resolveMessageId(result: Record<string, unknown> | null | undefined): string | null {
   if (!result) {
@@ -147,7 +104,9 @@ export async function sendMessageIMessage(
     });
     message = convertMarkdownTables(message, tableMode);
   }
-  message = prependReplyTagIfNeeded(message, opts.replyToId);
+  // iMessage has no native reply-threading RPC parameter, so strip any
+  // reply directive tags that would otherwise render as literal text.
+  message = message.replace(ALL_REPLY_TAGS_RE, "").trim();
 
   const params: Record<string, unknown> = {
     text: message,
