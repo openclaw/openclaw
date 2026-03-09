@@ -188,7 +188,7 @@ describe("web media loading", () => {
     const result = await loadWebMedia(tinyPngWrongExtFile, 1024 * 1024);
 
     expect(result.kind).toBe("image");
-    expect(result.contentType).toBe("image/jpeg");
+    expect(result.contentType).toBe("image/png");
   });
 
   it("normalizes HEIC local files to JPEG output", async () => {
@@ -342,6 +342,7 @@ describe("web media loading", () => {
 
     expect(result.kind).toBe("image");
     expect(result.contentType).toBe("image/jpeg");
+    expect(result.fileName).toBe(path.basename(fallbackPngFile, ".png") + ".jpg");
     expect(result.buffer.length).toBeLessThanOrEqual(fallbackPngCap);
   });
 });

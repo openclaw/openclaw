@@ -212,6 +212,14 @@ async function optimizeImageWithFallback(params: {
 }): Promise<OptimizedImage> {
   const { buffer, cap, meta } = params;
   const isPng = meta?.contentType === "image/png" || meta?.fileName?.toLowerCase().endsWith(".png");
+  if (isPng && buffer.length <= cap) {
+    return {
+      buffer,
+      optimizedSize: buffer.length,
+      resizeSide: 0,
+      format: "png",
+    };
+  }
   const hasAlpha = isPng && (await hasAlphaChannel(buffer));
 
   if (hasAlpha) {
@@ -268,10 +276,7 @@ async function loadWebMediaInternal(
     }
 
     const contentType = optimized.format === "png" ? "image/png" : "image/jpeg";
-    const fileName =
-      optimized.format === "jpeg" && meta && isHeicSource(meta)
-        ? toJpegFileName(meta.fileName)
-        : meta?.fileName;
+    const fileName = optimized.format === "jpeg" ? toJpegFileName(meta?.fileName) : meta?.fileName;
 
     return {
       buffer: optimized.buffer,
