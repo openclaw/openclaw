@@ -53,6 +53,19 @@ describe("sanitizeOutboundText", () => {
     expect(sanitizeOutboundText(text)).toBe("Hello\n\nWorld");
   });
 
+  it("strips [[reply_to_current]] directive", () => {
+    expect(sanitizeOutboundText("[[reply_to_current]] Hello there")).toBe("Hello there");
+  });
+
+  it("strips [[reply_to:ID]] directive", () => {
+    expect(sanitizeOutboundText("[[reply_to:abc-123]] Got it")).toBe("Got it");
+  });
+
+  it("strips reply directive embedded mid-text", () => {
+    const text = "Some text [[reply_to:id-1]] more text";
+    expect(sanitizeOutboundText(text)).not.toContain("[[reply_to:");
+  });
+
   it("handles combined internal markers in one message", () => {
     const text = "<thinking>step 1</thinking>NO_REPLY +#+#+#+# assistant to=final\n\nActual reply";
     const result = sanitizeOutboundText(text);
