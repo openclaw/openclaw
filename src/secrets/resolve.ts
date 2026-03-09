@@ -289,6 +289,7 @@ async function readFileProviderPayload(params: {
     const secureFilePath = await assertSecurePath({
       targetPath: filePath,
       label: `secrets.providers.${params.providerName}.path`,
+      allowInsecurePath: params.providerConfig.allowInsecurePath,
     });
     const timeoutMs = normalizePositiveInt(
       params.providerConfig.timeoutMs,
