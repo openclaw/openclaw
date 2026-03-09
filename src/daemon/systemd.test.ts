@@ -638,6 +638,26 @@ describe("readSystemdServiceExecStart", () => {
     const command = await readSystemdServiceExecStart({ HOME: "/home/test" });
     expect(command?.environment?.OPENCLAW_GATEWAY_TOKEN).toBe("apostrophe-token");
   });
+
+  it("handles backslash-escaped spaces in EnvironmentFile paths", async () => {
+    vi.spyOn(fs, "readFile").mockImplementation(async (pathname) => {
+      const pathValue = pathLikeToString(pathname);
+      if (pathValue.endsWith("/openclaw-gateway.service")) {
+        return [
+          "[Service]",
+          "ExecStart=/usr/bin/openclaw gateway run",
+          "EnvironmentFile=%h/.openclaw/My\\ File.env",
+        ].join("\n");
+      }
+      if (pathValue === "/home/test/.openclaw/My File.env") {
+        return "OPENCLAW_GATEWAY_TOKEN=escaped-space-token\n"; // pragma: allowlist secret
+      }
+      throw new Error(`unexpected readFile path: ${pathValue}`);
+    });
+
+    const command = await readSystemdServiceExecStart({ HOME: "/home/test" });
+    expect(command?.environment?.OPENCLAW_GATEWAY_TOKEN).toBe("escaped-space-token");
+  });
 });
 
 describe("systemd service control", () => {

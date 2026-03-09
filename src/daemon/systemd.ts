@@ -2,7 +2,6 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { parseStrictInteger, parseStrictPositiveInteger } from "../infra/parse-finite-number.js";
-import { splitArgsPreservingQuotes } from "./arg-split.js";
 import {
   LEGACY_GATEWAY_SYSTEMD_SERVICE_NAMES,
   resolveGatewayServiceDescription,
@@ -134,13 +133,40 @@ function expandSystemdSpecifier(input: string, env: GatewayServiceEnv): string {
 }
 
 function parseEnvironmentFileSpecs(raw: string): string[] {
-  // Use backslash-quote-only so that apostrophes in file paths (e.g.
-  // %h/.openclaw/O'Neil.env) are treated as literal characters.  systemd
-  // only recognises double-quote wrapping for EnvironmentFile values, not
-  // single-quote grouping.
-  return splitArgsPreservingQuotes(raw, { escapeMode: "backslash-quote-only" })
-    .map((entry) => entry.trim())
-    .filter(Boolean);
+  // Inline split matching systemd EnvironmentFile semantics:
+  //  - backslash escapes any character (including spaces and quotes)
+  //  - double-quote grouping preserves whitespace
+  //  - single quotes (apostrophes) are literal (not grouping delimiters)
+  const specs: string[] = [];
+  let current = "";
+  let inDoubleQuotes = false;
+
+  for (let i = 0; i < raw.length; i++) {
+    const char = raw[i];
+    if (char === "\\") {
+      if (i + 1 < raw.length) {
+        current += raw[i + 1];
+        i++;
+      }
+      continue;
+    }
+    if (char === '"') {
+      inDoubleQuotes = !inDoubleQuotes;
+      continue;
+    }
+    if (!inDoubleQuotes && /\s/.test(char)) {
+      if (current) {
+        specs.push(current);
+        current = "";
+      }
+      continue;
+    }
+    current += char;
+  }
+  if (current) {
+    specs.push(current);
+  }
+  return specs;
 }
 
 function parseEnvironmentFileLine(rawLine: string): { key: string; value: string } | null {
