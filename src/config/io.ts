@@ -1517,7 +1517,7 @@ export async function writeConfigFile(
         );
       }
     }
-    if (hadBothSnapshots) {
+    if (runtimeConfigSnapshot && runtimeConfigSourceSnapshot) {
       // Refresh both snapshots from disk atomically so follow-up reads get normalized config and
       // subsequent writes still get secret-preservation merge-patch (hadBothSnapshots stays true).
       const fresh = io.loadConfig();
