@@ -5,7 +5,9 @@ import { KeyedAsyncQueue } from "../../plugin-sdk/keyed-async-queue.js";
 import { materializeDiscordInboundJob, type DiscordInboundJob } from "./inbound-job.js";
 import type { RuntimeEnv } from "./message-handler.preflight.types.js";
 import { processDiscordMessage } from "./message-handler.process.js";
+import { deliverDiscordReply } from "./reply-delivery.js";
 import type { DiscordMonitorStatusSink } from "./status.js";
+import { resolveDiscordReplyDeliveryPlan } from "./threading.js";
 import { normalizeDiscordInboundWorkerTimeoutMs, runDiscordTaskWithTimeout } from "./timeouts.js";
 
 type DiscordInboundWorkerParams = {
@@ -41,9 +43,14 @@ async function processDiscordInboundJob(params: {
 }) {
   const timeoutMs = normalizeDiscordInboundWorkerTimeoutMs(params.runTimeoutMs);
   const contextSuffix = formatDiscordRunContextSuffix(params.job);
+  let finalReplyDelivered = false;
   await runDiscordTaskWithTimeout({
     run: async (abortSignal) => {
-      await processDiscordMessage(materializeDiscordInboundJob(params.job, abortSignal));
+      await processDiscordMessage(materializeDiscordInboundJob(params.job, abortSignal), {
+        onFinalReplyDelivered: () => {
+          finalReplyDelivered = true;
+        },
+      });
     },
     timeoutMs,
     abortSignals: [params.job.runtime.abortSignal, params.lifecycleSignal],
@@ -56,6 +63,14 @@ async function processDiscordInboundJob(params: {
           })}${contextSuffix}`,
         ),
       );
+      if (finalReplyDelivered) {
+        return;
+      }
+      void sendDiscordInboundWorkerTimeoutReply({
+        job: params.job,
+        runtime: params.runtime,
+        contextSuffix,
+      });
     },
     onErrorAfterTimeout: (error) => {
       params.runtime.error?.(
@@ -63,6 +78,53 @@ async function processDiscordInboundJob(params: {
       );
     },
   });
+}
+
+async function sendDiscordInboundWorkerTimeoutReply(params: {
+  job: DiscordInboundJob;
+  runtime: RuntimeEnv;
+  contextSuffix: string;
+}) {
+  const messageChannelId = params.job.payload.messageChannelId?.trim();
+  const messageId = params.job.payload.message?.id?.trim();
+  const token = params.job.payload.token?.trim();
+  if (!messageChannelId || !messageId || !token) {
+    params.runtime.error?.(
+      danger(
+        `discord inbound worker timeout reply skipped: missing reply target${params.contextSuffix}`,
+      ),
+    );
+    return;
+  }
+
+  const deliveryPlan = resolveDiscordReplyDeliveryPlan({
+    replyTarget: `channel:${params.job.payload.threadChannel?.id ?? messageChannelId}`,
+    replyToMode: params.job.payload.replyToMode,
+    messageId,
+    threadChannel: params.job.payload.threadChannel,
+  });
+
+  try {
+    await deliverDiscordReply({
+      replies: [{ text: "Discord inbound worker timed out.", isError: true }],
+      target: deliveryPlan.deliverTarget,
+      token,
+      accountId: params.job.payload.accountId,
+      runtime: params.runtime,
+      textLimit: params.job.payload.textLimit,
+      maxLinesPerMessage: params.job.payload.discordConfig?.maxLinesPerMessage,
+      replyToId: deliveryPlan.replyReference.use(),
+      replyToMode: params.job.payload.replyToMode,
+      sessionKey: params.job.payload.route.sessionKey ?? params.job.payload.baseSessionKey,
+      threadBindings: params.job.runtime.threadBindings,
+    });
+  } catch (error) {
+    params.runtime.error?.(
+      danger(
+        `discord inbound worker timeout reply failed: ${String(error)}${params.contextSuffix}`,
+      ),
+    );
+  }
 }
 
 export function createDiscordInboundWorker(

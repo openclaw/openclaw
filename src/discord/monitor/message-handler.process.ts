@@ -64,7 +64,14 @@ function isProcessAborted(abortSignal?: AbortSignal): boolean {
   return Boolean(abortSignal?.aborted);
 }
 
-export async function processDiscordMessage(ctx: DiscordMessagePreflightContext) {
+type DiscordMessageProcessObserver = {
+  onFinalReplyDelivered?: () => void;
+};
+
+export async function processDiscordMessage(
+  ctx: DiscordMessagePreflightContext,
+  observer?: DiscordMessageProcessObserver,
+) {
   const {
     cfg,
     discordConfig,
@@ -628,6 +635,7 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
               );
               finalizedViaPreviewMessage = true;
               replyReference.markSent();
+              observer?.onFinalReplyDelivered?.();
               return;
             } catch (err) {
               logVerbose(
@@ -658,6 +666,7 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
                 );
                 finalizedViaPreviewMessage = true;
                 replyReference.markSent();
+                observer?.onFinalReplyDelivered?.();
                 return;
               } catch (err) {
                 logVerbose(
@@ -695,6 +704,9 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
           mediaLocalRoots,
         });
         replyReference.markSent();
+        if (isFinal) {
+          observer?.onFinalReplyDelivered?.();
+        }
       },
       onError: (err, info) => {
         runtime.error?.(danger(`discord ${info.kind} reply failed: ${String(err)}`));
