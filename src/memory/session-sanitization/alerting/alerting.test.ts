@@ -456,8 +456,8 @@ describe("evaluateSemanticCatch", () => {
     const smallCfg = resolveAlertingConfig(
       makeCfg({ rules: { semanticCatchNoSyntacticFlag: { escalateAfter: 2 } } }),
     );
-    // Add 2 prior tier-2 sanitized_block events to the index
-    for (let i = 0; i < 2; i++) {
+    // Add 3 prior tier-2 sanitized_block events (> escalateAfter threshold of 2)
+    for (let i = 0; i < 3; i++) {
       addToIndex(makeEvent("sanitized_block", { tier: 2 }), NOW - 1000 * (i + 1));
     }
     const entry = makeEvent("sanitized_block", { tier: 2, toolCallId: "tc-new" });

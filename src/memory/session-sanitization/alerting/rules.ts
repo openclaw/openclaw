@@ -193,8 +193,7 @@ export const evaluateSemanticCatch: RuleEvaluator = ({ entry, cfg, recentContext
   }).filter((e) => e.tier === 2);
 
   const severity: AlertSeverity =
-    const severity: AlertSeverity =
-      prior24h.length > cfg.rules.semanticCatchNoSyntacticFlag.escalateAfter ? "high" : "medium";
+    prior24h.length > cfg.rules.semanticCatchNoSyntacticFlag.escalateAfter ? "high" : "medium";
 
   return {
     alertId: makeAlertId("semanticCatch", entry.agentId, entry.sessionId, now),
