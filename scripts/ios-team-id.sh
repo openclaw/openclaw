@@ -62,6 +62,54 @@ load_teams_from_xcode_preferences() {
     [[ -z "$team_id" ]] && continue
     append_team "$team_id" "${is_free:-0}" "${team_name:-}"
   done < <(
+    defaults export com.apple.dt.Xcode - 2>/dev/null \
+      | "$python_cmd" -c '
+import plistlib
+import sys
+
+raw = sys.stdin.buffer.read()
+if not raw:
+    raise SystemExit(0)
+
+try:
+    data = plistlib.loads(raw)
+except Exception:
+    raise SystemExit(0)
+
+if not isinstance(data, dict):
+    raise SystemExit(0)
+
+containers = []
+for key in ("IDEProvisioningTeamByIdentifier", "IDEProvisioningTeams"):
+    container = data.get(key)
+    if isinstance(container, dict):
+        containers.extend(container.values())
+    elif isinstance(container, list):
+        containers.append(container)
+
+for teams in containers:
+    if not isinstance(teams, list):
+        continue
+    for team in teams:
+        if not isinstance(team, dict):
+            continue
+        team_id = str(team.get("teamID", "")).strip()
+        if not team_id:
+            continue
+        is_free = "1" if bool(team.get("isFreeProvisioningTeam", False)) else "0"
+        team_name = str(team.get("teamName", "")).replace("\t", " ").strip()
+        print(f"{team_id}\t{is_free}\t{team_name}")
+'
+  )
+
+  if [[ ${#team_ids[@]} -gt 0 ]]; then
+    return 0
+  fi
+
+  while IFS=$'\t' read -r team_id is_free team_name; do
+    [[ -z "$team_id" ]] && continue
+    append_team "$team_id" "${is_free:-0}" "${team_name:-}"
+  done < <(
     plutil -extract IDEProvisioningTeams json -o - "$plist_path" 2>/dev/null \
       | "$python_cmd" -c '
 import json
