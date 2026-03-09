@@ -15,8 +15,11 @@ Docs: https://docs.openclaw.ai
 - CLI/backup: add `openclaw backup create` and `openclaw backup verify` for local state archives, including `--only-config`, `--no-include-workspace`, manifest/payload validation, and backup guidance in destructive flows. (#40163) thanks @shichangs.
 - CLI/backup: improve archive naming for date sorting, add config-only backup mode, and harden backup planning, publication, and verification edge cases. (#40163) Thanks @gumadeiras.
 
+### Breaking
+
 ### Fixes
 
+- Docker/runtime image: prune dev dependencies, strip build-only dist metadata for smaller Docker images. (#40307) Thanks @vincentkoc.
 - Plugins/channel onboarding: prefer bundled channel plugins over duplicate npm-installed copies during onboarding and release-channel sync, preventing bundled plugins from being shadowed by npm installs with the same plugin ID. (#40092)
 - macOS app/chat UI: route browser proxy through the local node browser service, preserve plain-text paste semantics, strip completed assistant trace/debug wrapper noise from transcripts, refresh permission state after returning from System Settings, and tolerate malformed cron rows in the macOS tab. (#39516) Thanks @Imhermes1.
 - Mattermost replies: keep `root_id` pinned to the existing thread root when an agent replies inside a thread, while still using reply-target threading for top-level posts. (#27744) thanks @hnykda.
@@ -30,6 +33,7 @@ Docs: https://docs.openclaw.ai
 - Hooks/session-memory: keep `/new` and `/reset` memory artifacts in the bound agent workspace and align saved reset session keys with that workspace when stale main-agent keys leak into the hook path. (#39875) thanks @rbutera.
 - Sessions/model switch: clear stale cached `contextTokens` when a session changes models so status and runtime paths recompute against the active model window. (#38044) thanks @yuweuii.
 - ACP/session history: persist transcripts for successful ACP child runs, preserve exact transcript text, record ACP spawned-session lineage, and keep spawn-time transcript-path persistence best-effort so history storage failures do not block execution. (#40137) thanks @mbelinky.
+- Agents/openai-codex: normalize `gpt-5.4` fallback transport back to `openai-codex-responses` on `chatgpt.com/backend-api` when config drifts to the generic OpenAI responses endpoint. (#38736) Thanks @0xsline.
 - Browser/CDP: normalize loopback direct WebSocket CDP URLs back to HTTP(S) for `/json/*` tab operations so local `ws://` / `wss://` profiles can still list, focus, open, and close tabs after the new direct-WS support lands. (#31085) Thanks @shrey150.
 - Browser/CDP: rewrite wildcard `ws://0.0.0.0` and `ws://[::]` debugger URLs from remote `/json/version` responses back to the external CDP host/port, fixing Browserless-style container endpoints. (#17760) Thanks @joeharouni.
 - Browser/extension relay: wait briefly for a previously attached Chrome tab to reappear after transient relay drops before failing with `tab not found`, reducing noisy reconnect flakes. (#32461) Thanks @AaronWander.
@@ -37,6 +41,12 @@ Docs: https://docs.openclaw.ai
 - Docs/browser: add a layered WSL2 + Windows remote Chrome CDP troubleshooting guide, including Control UI origin pitfalls and extension-relay bind-address guidance. (#39407) Thanks @Owlock.
 - Context engine registry/bundled builds: share the registry state through a `globalThis` singleton so duplicated bundled module copies can resolve engines registered by each other at runtime, with regression coverage for duplicate-module imports. (#40115) thanks @jalehman.
 - macOS/Tailscale gateway discovery: keep Tailscale Serve probing alive when other remote gateways are already discovered, prefer direct transport for resolved `.ts.net` and Tailscale Serve gateways, and set `TERM=dumb` for GUI-launched Tailscale CLI discovery. (#40167) thanks @ngutman.
+- Podman/setup: fix `cannot chdir: Permission denied` in `run_as_user` when `setup-podman.sh` is invoked from a directory the target user cannot access, by wrapping user-switch calls in a subshell that cd's to `/tmp` with `/` fallback. (#39435) Thanks @langdon and @jlcbk.
+- Podman/SELinux: auto-detect SELinux enforcing/permissive mode and add `:Z` relabel to bind mounts in `run-openclaw-podman.sh` and the Quadlet template, fixing `EACCES` on Fedora/RHEL hosts. Supports `OPENCLAW_BIND_MOUNT_OPTIONS` override. (#39449) Thanks @langdon and @githubbzxs.
+- TUI/theme: detect light terminal backgrounds via `COLORFGBG` and pick a WCAG AA-compliant light palette, with `OPENCLAW_THEME=light|dark` override for terminals without auto-detection. (#38636) Thanks @ademczuk and @vincentkoc.
+- Agents/context-engine plugins: bootstrap runtime plugins once at embedded-run, compaction, and subagent boundaries so plugin-provided context engines and hooks load from the active workspace before runtime resolution. (#40232)
+- Config/runtime snapshots: keep secrets-runtime-resolved config and auth-profile snapshots intact after config writes so follow-up reads still see file-backed secret values while picking up the persisted config update. (#37313) thanks @bbblending.
+- Gateway/Control UI: resolve bundled dashboard assets through symlinked global wrappers and auto-detected package roots, while keeping configured and custom roots on the strict hardlink boundary. (#40385) Thanks @velvet-shark.
 
 ## 2026.3.7
 
@@ -122,6 +132,7 @@ Docs: https://docs.openclaw.ai
 - Agents/compaction safeguard pre-check: skip embedded compaction before entering the Pi SDK when a session has no real conversation messages, avoiding unnecessary LLM API calls on idle sessions. (#36451) thanks @Sid-Qin.
 - Config/schema cache key stability: build merged schema cache keys with incremental hashing to avoid large single-string serialization and prevent `RangeError: Invalid string length` on high-cardinality plugin/channel metadata. (#36603) Thanks @powermaster888.
 - iMessage/cron completion announces: strip leaked inline reply tags (for example `[[reply_to:6100]]`) from user-visible completion text so announcement deliveries do not expose threading metadata. (#24600) Thanks @vincentkoc.
+- Cron/manual run enqueue flow: queue `cron.run` requests behind the cron execution lane, return immediate `{ ok: true, enqueued: true, runId }` acknowledgements, preserve `{ ok: true, ran: false, reason }` skip responses for already-running and not-due jobs, and document the asynchronous completion flow. (#40204)
 - Control UI/iMessage duplicate reply routing: keep internal webchat turns on dispatcher delivery (instead of origin-channel reroute) so Control UI chats do not duplicate replies into iMessage, while preserving webchat-provider relayed routing for external surfaces. Fixes #33483. Thanks @alicexmolt.
 - Sessions/daily reset transcript archival: archive prior transcript files during stale-session scheduled/daily resets by capturing the previous session entry before rollover, preventing orphaned transcript files on disk. (#35493) Thanks @byungsker.
 - Feishu/group slash command detection: normalize group mention wrappers before command-authorization probing so mention-prefixed commands (for example `@Bot/model` and `@Bot /reset`) are recognized as gateway commands instead of being forwarded to the agent. (#35994) Thanks @liuxiaopai-ai.
