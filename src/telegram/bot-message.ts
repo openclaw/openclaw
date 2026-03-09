@@ -28,7 +28,6 @@ type TelegramMessageProcessorDeps = Omit<
     channel: string;
     senderName?: string;
   }) => void;
-
 };
 
 export const createTelegramMessageProcessor = (deps: TelegramMessageProcessorDeps) => {
@@ -54,7 +53,6 @@ export const createTelegramMessageProcessor = (deps: TelegramMessageProcessorDep
     textLimit,
     opts,
     onInboundMessage,
-    
   } = deps;
 
   return async (
@@ -63,7 +61,6 @@ export const createTelegramMessageProcessor = (deps: TelegramMessageProcessorDep
     storeAllowFrom: string[],
     options?: { messageIdOverride?: string; forceWasMentioned?: boolean },
     replyMedia?: TelegramMediaRef[],
-    
   ) => {
     const context = await buildTelegramMessageContext({
       primaryCtx,
@@ -90,13 +87,13 @@ export const createTelegramMessageProcessor = (deps: TelegramMessageProcessorDep
       return;
     }
     if (onInboundMessage && context.ctxPayload.Body) {
-    onInboundMessage({
-    sessionKey: context.ctxPayload.SessionKey ?? "",
-    text: context.ctxPayload.Body,
-    channel: "telegram",
-    senderName: context.ctxPayload.From,
-  });
-}
+      onInboundMessage({
+        sessionKey: context.ctxPayload.SessionKey ?? "",
+        text: context.ctxPayload.Body,
+        channel: "telegram",
+        senderName: context.ctxPayload.From,
+      });
+    }
     await dispatchTelegramMessage({
       context,
       bot,

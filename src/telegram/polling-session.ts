@@ -6,7 +6,7 @@ import { withTelegramApiErrorLogging } from "./api-logging.js";
 import { createTelegramBot } from "./bot.js";
 import { isRecoverableTelegramNetworkError } from "./network-errors.js";
 
-const TELEGRAM_POLL_RESTART_POLICY = {
+export const TELEGRAM_POLL_RESTART_POLICY = {
   initialMs: 2000,
   maxMs: 30_000,
   factor: 1.8,
@@ -260,7 +260,7 @@ export class TelegramPollingSession {
   }
 }
 
-const isGetUpdatesConflict = (err: unknown) => {
+export const isGetUpdatesConflict = (err: unknown) => {
   if (!err || typeof err !== "object") {
     return false;
   }

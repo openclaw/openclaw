@@ -91,11 +91,11 @@ type ChannelManagerOptions = {
    */
   channelRuntime?: PluginRuntime["channel"];
   onInboundMessage?: (params: {
-  sessionKey: string;
-  text: string;
-  channel: string;
-  senderName?: string;
-}) => void;
+    sessionKey: string;
+    text: string;
+    channel: string;
+    senderName?: string;
+  }) => void;
 };
 
 type StartChannelOptions = {

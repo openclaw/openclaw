@@ -1,15 +1,22 @@
 import type { RunOptions } from "@grammyjs/runner";
+import { run } from "@grammyjs/runner";
+import type { Bot as TelegramBot } from "grammy";
 import { resolveAgentMaxConcurrent } from "../config/agent-limits.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { loadConfig } from "../config/config.js";
 import { waitForAbortSignal } from "../infra/abort-signal.js";
+import { computeBackoff, sleepWithAbort } from "../infra/backoff.ts";
 import { formatErrorMessage } from "../infra/errors.js";
+import { formatDurationPrecise } from "../infra/format-time/format-duration.ts";
 import { registerUnhandledRejectionHandler } from "../infra/unhandled-rejections.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { resolveTelegramAccount } from "./accounts.js";
 import { resolveTelegramAllowedUpdates } from "./allowed-updates.js";
+import { withTelegramApiErrorLogging } from "./api-logging.js";
+import { createTelegramBot } from "./bot.js";
 import { isRecoverableTelegramNetworkError } from "./network-errors.js";
 import { TelegramPollingSession } from "./polling-session.js";
+import { TELEGRAM_POLL_RESTART_POLICY, isGetUpdatesConflict } from "./polling-session.js";
 import { makeProxyFetch } from "./proxy.js";
 import { readTelegramUpdateOffset, writeTelegramUpdateOffset } from "./update-offset-store.js";
 import { startTelegramWebhook } from "./webhook.js";
@@ -27,7 +34,7 @@ export type MonitorTelegramOpts = {
   webhookHost?: string;
   proxyFetch?: typeof fetch;
   webhookUrl?: string;
-  onInboundMessage?: (params: {       
+  onInboundMessage?: (params: {
     sessionKey: string;
     text: string;
     channel: string;
@@ -79,6 +86,8 @@ const isGrammyHttpError = (err: unknown): boolean => {
 export async function monitorTelegramProvider(opts: MonitorTelegramOpts = {}) {
   const log = opts.runtime?.error ?? console.error;
   let pollingSession: TelegramPollingSession | undefined;
+  let activeRunner: ReturnType<typeof run> | undefined;
+  let forceRestarted = false;
 
   const unregisterHandler = registerUnhandledRejectionHandler((err) => {
     const isNetworkError = isRecoverableTelegramNetworkError(err, { context: "polling" });

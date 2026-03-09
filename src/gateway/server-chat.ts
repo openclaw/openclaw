@@ -655,7 +655,7 @@ export type EmitInboundUserMessage = (params: {
 }) => void;
 
 export function createEmitInboundUserMessage(
-  broadcast: ChatEventBroadcast
+  broadcast: ChatEventBroadcast,
 ): EmitInboundUserMessage {
   return ({ sessionKey, text, channel, senderName }) => {
     const payload = {
