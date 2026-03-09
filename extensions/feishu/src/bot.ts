@@ -1285,11 +1285,13 @@ export async function handleFeishuMessage(params: {
       // Cross-account dedup: in multi-account setups, Feishu delivers the same
       // event to every bot account in the group. Only one account should handle
       // broadcast dispatch to avoid duplicate agent sessions and race conditions.
-      // Both mentioned and non-mentioned handlers use a shared "broadcast"
-      // namespace so only the first account to arrive claims the message.
-      if (!(await tryRecordMessagePersistent(ctx.messageId, "broadcast", log))) {
+      // Mentioned accounts use a "broadcast-mention" namespace (explicit @mention
+      // takes priority); non-mentioned accounts use a "broadcast" namespace so
+      // only the first non-mentioned account to arrive claims the message.
+      const dedupNs = ctx.mentionedBot ? "broadcast-mention" : "broadcast";
+      if (!(await tryRecordMessagePersistent(ctx.messageId, dedupNs, log))) {
         log(
-          `feishu[${account.accountId}]: broadcast already claimed by another account for message ${ctx.messageId}; skipping`,
+          `feishu[${account.accountId}]: broadcast already claimed by another account (ns=${dedupNs}) for message ${ctx.messageId}; skipping`,
         );
         return;
       }
