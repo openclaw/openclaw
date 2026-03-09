@@ -226,6 +226,18 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
     }
   }
 
+  /**
+   * Close all cached MemoryIndexManager instances and clear the cache.
+   * Call this during process shutdown (e.g. one-shot CLI exit) to release
+   * FSWatcher handles so the process exits cleanly without hanging.
+   */
+  static async closeAll(): Promise<void> {
+    const managers = Array.from(INDEX_CACHE.values());
+    INDEX_CACHE.clear();
+    INDEX_CACHE_PENDING.clear();
+    await Promise.allSettled(managers.map((m) => m.close()));
+  }
+
   private constructor(params: {
     cacheKey: string;
     cfg: OpenClawConfig;

@@ -10,6 +10,7 @@ import {
   agentsUnbindCommand,
 } from "../../commands/agents.js";
 import { setVerbose } from "../../globals.js";
+import { MemoryIndexManager } from "../../memory/index.js";
 import { defaultRuntime } from "../../runtime.js";
 import { formatDocsLink } from "../../terminal/links.js";
 import { theme } from "../../terminal/theme.js";
@@ -80,6 +81,9 @@ ${theme.muted("Docs:")} ${formatDocsLink("/cli/agent", "docs.openclaw.ai/cli/age
       await runCommandWithRuntime(defaultRuntime, async () => {
         await agentCliCommand(opts, defaultRuntime, deps);
       });
+      // Release any cached memory manager FSWatcher handles so the one-shot
+      // CLI process exits cleanly without lingering I/O references.
+      await MemoryIndexManager.closeAll();
     });
 
   const agents = program
