@@ -180,7 +180,7 @@ describe("backup commands", () => {
     }
   });
 
-  it("optionally verifies the archive after writing it", async () => {
+  it("verifies the archive after writing it by default", async () => {
     const stateDir = path.join(tempHome.home, ".openclaw");
     const archiveDir = await fs.mkdtemp(
       path.join(os.tmpdir(), "openclaw-backup-verify-on-create-"),
@@ -197,14 +197,71 @@ describe("backup commands", () => {
 
       const result = await backupCreateCommand(runtime, {
         output: archiveDir,
-        verify: true,
       });
 
       expect(result.verified).toBe(true);
+      expect(runtime.log).toHaveBeenCalledWith(
+        expect.stringContaining("Validated backup archive:"),
+      );
       expect(backupVerifyCommandMock).toHaveBeenCalledWith(
         expect.objectContaining({ log: expect.any(Function) }),
         expect.objectContaining({ archive: result.archivePath, json: false }),
       );
+    } finally {
+      await fs.rm(archiveDir, { recursive: true, force: true });
+    }
+  });
+
+  it("allows callers to skip verification explicitly", async () => {
+    const stateDir = path.join(tempHome.home, ".openclaw");
+    const archiveDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-backup-no-verify-"));
+    try {
+      await fs.writeFile(path.join(stateDir, "openclaw.json"), JSON.stringify({}), "utf8");
+      await fs.writeFile(path.join(stateDir, "state.txt"), "state\n", "utf8");
+
+      const runtime = {
+        log: vi.fn(),
+        error: vi.fn(),
+        exit: vi.fn(),
+      };
+
+      const result = await backupCreateCommand(runtime, {
+        output: archiveDir,
+        verify: false,
+      });
+
+      expect(result.verified).toBe(false);
+      expect(backupVerifyCommandMock).not.toHaveBeenCalled();
+    } finally {
+      await fs.rm(archiveDir, { recursive: true, force: true });
+    }
+  });
+
+  it("removes the written archive when post-write validation fails", async () => {
+    const stateDir = path.join(tempHome.home, ".openclaw");
+    const archiveDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-backup-invalid-"));
+    try {
+      await fs.writeFile(path.join(stateDir, "openclaw.json"), JSON.stringify({}), "utf8");
+      await fs.writeFile(path.join(stateDir, "state.txt"), "state\n", "utf8");
+      backupVerifyCommandMock.mockRejectedValueOnce(new Error("manifest mismatch"));
+
+      const runtime = {
+        log: vi.fn(),
+        error: vi.fn(),
+        exit: vi.fn(),
+      };
+      const nowMs = Date.UTC(2026, 2, 9, 0, 0, 0);
+
+      const expectedPath = path.join(archiveDir, `${buildBackupArchiveRoot(nowMs)}.tar.gz`);
+
+      await expect(
+        backupCreateCommand(runtime, {
+          output: archiveDir,
+          nowMs,
+        }),
+      ).rejects.toThrow(/failed validation after writing and was removed/i);
+
+      await expect(fs.access(expectedPath)).rejects.toThrow();
     } finally {
       await fs.rm(archiveDir, { recursive: true, force: true });
     }

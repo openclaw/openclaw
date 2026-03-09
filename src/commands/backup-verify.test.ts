@@ -39,6 +39,9 @@ describe("backupVerifyCommand", () => {
       expect(verified.ok).toBe(true);
       expect(verified.archiveRoot).toBe(buildBackupArchiveRoot(nowMs));
       expect(verified.assetCount).toBeGreaterThan(0);
+      expect(runtime.log).toHaveBeenCalledWith(
+        expect.stringContaining("Validated existing backup archive:"),
+      );
     } finally {
       await fs.rm(archiveDir, { recursive: true, force: true });
     }

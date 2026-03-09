@@ -17,4 +17,4 @@ openclaw uninstall --all --yes
 openclaw uninstall --dry-run
 ```
 
-Run `openclaw backup create` first if you want a restorable snapshot before removing state or workspaces.
+Run `openclaw backup create` first if you want a validated, restorable snapshot before removing state or workspaces.

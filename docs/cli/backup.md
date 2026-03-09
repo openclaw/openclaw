@@ -1,5 +1,5 @@
 ---
-summary: "CLI reference for `openclaw backup` (create local backup archives)"
+summary: "CLI reference for `openclaw backup` (create, validate, and restore local backup archives)"
 read_when:
   - You want a first-class backup archive for local OpenClaw state
   - You want to preview which paths would be included before reset or uninstall
@@ -8,16 +8,22 @@ title: "backup"
 
 # `openclaw backup`
 
-Create a local backup archive for OpenClaw state, config, credentials, sessions, and optionally workspaces.
+Create a validated local backup archive for OpenClaw state, config, credentials, sessions, and optionally workspaces.
 
 ```bash
 openclaw backup create
 openclaw backup create --output ~/Backups
 openclaw backup create --dry-run --json
-openclaw backup create --verify
 openclaw backup create --no-include-workspace
 openclaw backup create --only-config
+openclaw backup list
+openclaw backup list ~/Backups
 openclaw backup verify ./2026-03-09T00-00-00.000Z-openclaw-backup.tar.gz
+openclaw backup restore
+openclaw backup restore ./2026-03-09T00-00-00.000Z-openclaw-backup.tar.gz
+openclaw backup restore --choose
+openclaw backup restore ~/Backups/latest.tar.gz --dry-run
+openclaw backup restore ~/Backups/latest.tar.gz --force --no-include-workspace
 ```
 
 ## Notes
@@ -27,9 +33,41 @@ openclaw backup verify ./2026-03-09T00-00-00.000Z-openclaw-backup.tar.gz
 - If the current working directory is inside a backed-up source tree, OpenClaw falls back to your home directory for the default archive location.
 - Existing archive files are never overwritten.
 - Output paths inside the source state/workspace trees are rejected to avoid self-inclusion.
+- `openclaw backup create` writes the archive and validates its manifest and payload layout before reporting success.
+- If that post-write validation fails, OpenClaw removes the invalid archive before returning the error.
 - `openclaw backup verify <archive>` validates that the archive contains exactly one root manifest, rejects traversal-style archive paths, and checks that every manifest-declared payload exists in the tarball.
-- `openclaw backup create --verify` runs that validation immediately after writing the archive.
 - `openclaw backup create --only-config` backs up just the active JSON config file.
+
+## Typical use
+
+For normal backups, run `openclaw backup create`. It writes the archive and validates it before returning success.
+
+Run `openclaw backup list` when you want to see the available local backup versions before restoring.
+
+Use `openclaw backup verify <archive>` when you want to re-check an existing archive later, for example after moving, copying, or downloading it.
+
+## Restore
+
+`openclaw backup restore` restores the newest validated backup it can find in the current directory or `~/Backups`.
+
+`openclaw backup restore <archive>` validates the archive first, then restores it into the current OpenClaw paths for state, config, and credentials.
+
+- Use `--dry-run` to preview restore targets without writing files.
+- Use `--force` to replace existing restore targets.
+- Use `--choose` to answer which backup version you want to restore instead of taking the newest one automatically.
+- Use `--no-include-workspace` to skip restoring external workspace directories.
+- Restore stages payloads in temporary locations first and never modifies or deletes the source backup archive.
+- When `--force` is replacing existing targets, OpenClaw only switches them after staging succeeds and rolls back the live targets if publication fails mid-restore.
+
+If you store backups in another directory, pass it to `openclaw backup list <dir>` or `openclaw backup restore --choose <dir>`.
+
+Workspace restore targets follow a best-effort mapping strategy:
+
+- If the current config already defines the same number of workspaces, OpenClaw restores into those current workspace paths.
+- Otherwise, OpenClaw remaps backed-up workspace paths relative to the current state directory base when it can do so safely.
+- If workspace targets still cannot be determined unambiguously, restore stops and asks you to rerun with `--no-include-workspace`.
+
+When OpenClaw remaps workspace restore targets, it also updates matching workspace paths in the restored config file so the config points at the restored locations.
 
 ## What gets backed up
 
@@ -68,7 +106,7 @@ Practical limits come from the local machine and destination filesystem:
 
 - Available space for the temporary archive write plus the final archive
 - Time to walk large workspace trees and compress them into a `.tar.gz`
-- Time to rescan the archive if you use `openclaw backup create --verify` or run `openclaw backup verify`
+- Time to rescan the archive during `openclaw backup create` or when you run `openclaw backup verify`
 - Filesystem behavior at the destination path. OpenClaw prefers a no-overwrite hard-link publish step and falls back to exclusive copy when hard links are unsupported
 
 Large workspaces are usually the main driver of archive size. If you want a smaller or faster backup, use `--no-include-workspace`.
