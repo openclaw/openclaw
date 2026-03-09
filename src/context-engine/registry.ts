@@ -12,7 +12,12 @@ export type ContextEngineFactory = () => ContextEngine | Promise<ContextEngine>;
 // Registry (module-level singleton)
 // ---------------------------------------------------------------------------
 
-const _engines = new Map<string, ContextEngineFactory>();
+const _engines: Map<string, ContextEngineFactory> =
+  (globalThis as unknown as { __openclawContextEngines?: Map<string, ContextEngineFactory> })
+    .__openclawContextEngines ||
+  ((
+    globalThis as unknown as { __openclawContextEngines: Map<string, ContextEngineFactory> }
+  ).__openclawContextEngines = new Map<string, ContextEngineFactory>());
 
 /**
  * Register a context engine implementation under the given id.
