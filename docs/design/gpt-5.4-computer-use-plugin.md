@@ -26,6 +26,14 @@ Responses API. That changes the implementation boundary for computer use:
 - the model decides what action to take
 - local code executes the action and returns updated state
 
+That creates a design question for OpenClaw: if both the model runtime and the
+agent framework try to own direct computer control, the responsibility boundary
+gets blurry. This proposal picks a clearer split:
+
+- `gpt-5.4` acts as the high-level planner
+- the executor acts as the low-level operator
+- OpenClaw acts as the orchestration and policy layer
+
 OpenClaw already lists "better computer-use and agent harness capabilities" as
 an explicit next priority. However, there is not yet a focused integration path
 for `gpt-5.4` computer use that preserves OpenClaw's plugin-first and
