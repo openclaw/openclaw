@@ -91,9 +91,10 @@ export function createStreamingDirectiveAccumulator() {
   };
 
   const consume = (raw: string, options: ConsumeOptions = {}): ReplyDirectiveParseResult | null => {
-    const withSilent = `${pendingSilent}${raw ?? ""}`;
+    // Reconstruct in original stream order: silent-prefix (from prior chunk's start)
+    // must precede the trailing-directive tail (from prior chunk's end).
+    let combined = `${pendingSilent}${pendingTail}${raw ?? ""}`;
     pendingSilent = "";
-    let combined = `${pendingTail}${withSilent}`;
     pendingTail = "";
 
     if (!options.final) {
