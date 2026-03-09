@@ -1,10 +1,22 @@
 import type { Message, ReactionTypeEmoji } from "@grammyjs/types";
-import { resolveAgentDir, resolveDefaultAgentId } from "openclaw/plugin-sdk/agent-runtime";
-import { resolveDefaultModelForAgent } from "openclaw/plugin-sdk/agent-runtime";
-import { shouldDebounceTextInbound } from "openclaw/plugin-sdk/channel-runtime";
-import { resolveChannelConfigWrites } from "openclaw/plugin-sdk/channel-runtime";
-import { loadConfig } from "openclaw/plugin-sdk/config-runtime";
-import { writeConfigFile } from "openclaw/plugin-sdk/config-runtime";
+import { resolveAgentDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
+import {
+  createInboundDebouncer,
+  resolveInboundDebounceMs,
+} from "../auto-reply/inbound-debounce.js";
+import { buildCommandsPaginationKeyboard } from "../auto-reply/reply/commands-info.js";
+import {
+  buildModelsProviderData,
+  formatModelsAvailableHeader,
+} from "../auto-reply/reply/commands-models.js";
+import { resolveStoredModelOverride } from "../auto-reply/reply/model-selection.js";
+import { listSkillCommandsForAgents } from "../auto-reply/skill-commands.js";
+import { buildCommandsMessagePaginated } from "../auto-reply/status.js";
+import { shouldDebounceTextInbound } from "../channels/inbound-debounce-policy.js";
+import { resolveChannelConfigWrites } from "../channels/plugins/config-writes.js";
+import { loadConfig } from "../config/config.js";
+import { writeConfigFile } from "../config/io.js";
+import { resolveStateDir } from "../config/paths.js";
 import {
   loadSessionStore,
   resolveSessionStoreEntry,
@@ -16,32 +28,15 @@ import type {
   TelegramDirectConfig,
   TelegramGroupConfig,
   TelegramTopicConfig,
-} from "openclaw/plugin-sdk/config-runtime";
-import { applyModelOverrideToSessionEntry } from "openclaw/plugin-sdk/config-runtime";
-import { readChannelAllowFromStore } from "openclaw/plugin-sdk/conversation-runtime";
-import {
-  buildPluginBindingResolvedText,
-  parsePluginBindingApprovalCustomId,
-  resolvePluginConversationBindingApproval,
-} from "openclaw/plugin-sdk/conversation-runtime";
-import { enqueueSystemEvent } from "openclaw/plugin-sdk/infra-runtime";
-import { MediaFetchError } from "openclaw/plugin-sdk/media-runtime";
-import { dispatchPluginInteractiveHandler } from "openclaw/plugin-sdk/plugin-runtime";
-import {
-  createInboundDebouncer,
-  resolveInboundDebounceMs,
-} from "openclaw/plugin-sdk/reply-runtime";
-import { buildCommandsPaginationKeyboard } from "openclaw/plugin-sdk/reply-runtime";
-import {
-  buildModelsProviderData,
-  formatModelsAvailableHeader,
-} from "openclaw/plugin-sdk/reply-runtime";
-import { resolveStoredModelOverride } from "openclaw/plugin-sdk/reply-runtime";
-import { listSkillCommandsForAgents } from "openclaw/plugin-sdk/reply-runtime";
-import { buildCommandsMessagePaginated } from "openclaw/plugin-sdk/reply-runtime";
-import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
-import { resolveThreadSessionKeys } from "openclaw/plugin-sdk/routing";
-import { danger, logVerbose, warn } from "openclaw/plugin-sdk/runtime-env";
+} from "../config/types.js";
+import { danger, logVerbose, warn } from "../globals.js";
+import { writePendingInbound } from "../infra/pending-inbound-store.js";
+import { enqueueSystemEvent } from "../infra/system-events.js";
+import { MediaFetchError } from "../media/fetch.js";
+import { readChannelAllowFromStore } from "../pairing/pairing-store.js";
+import { isGatewayDraining } from "../process/command-queue.js";
+import { resolveAgentRoute } from "../routing/resolve-route.js";
+import { resolveThreadSessionKeys } from "../routing/session-key.js";
 import { withTelegramApiErrorLogging } from "./api-logging.js";
 import {
   isSenderAllowed,
@@ -1620,6 +1615,24 @@ export const registerTelegramHandlers = ({
     try {
       if (shouldSkipUpdate(event.ctxForDedupe)) {
         return;
+      }
+      if (isGatewayDraining()) {
+        const stateDir = resolveStateDir(process.env);
+        await writePendingInbound(stateDir, {
+          channel: "telegram",
+          id: String(event.msg.message_id ?? Date.now()),
+          payload: {
+            chatId: event.chatId,
+            messageId: event.msg.message_id,
+            text: event.msg.text ?? event.msg.caption ?? "",
+            senderId: event.senderId,
+            senderUsername: event.senderUsername,
+            isGroup: event.isGroup,
+            date: event.msg.date,
+          },
+          capturedAt: Date.now(),
+        });
+        return; // provider already got 200, no retry needed
       }
       const eventAuthContext = await resolveTelegramEventAuthorizationContext({
         chatId: event.chatId,
