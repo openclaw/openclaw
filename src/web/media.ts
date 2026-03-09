@@ -9,7 +9,6 @@ import { fetchRemoteMedia } from "../media/fetch.js";
 import {
   convertHeicToJpeg,
   hasAlphaChannel,
-  isAnimatedImage,
   optimizeImageToPng,
   resizeToJpeg,
 } from "../media/image-ops.js";
@@ -295,19 +294,17 @@ async function loadWebMediaInternal(
       // Skip optimization for formats that shouldn't be converted to JPEG:
       // - GIF: loses transparency and animation
       // - WebP: already efficient, conversion loses quality
-      // - Animated images (APNG, etc.): loses animation frames
       const isGif = params.contentType === "image/gif";
       const isWebp = params.contentType === "image/webp";
-      // Only check for animated frames when optimization is enabled; skip the
-      // metadata decode when the caller has already opted out of optimization.
-      const isAnimated = optimizeImages && !isGif && !isWebp && (await isAnimatedImage(params.buffer));
-      const shouldSkipOptimization = isGif || isWebp || isAnimated;
+      const shouldSkipOptimization = isGif || isWebp;
       if (shouldSkipOptimization || !optimizeImages) {
         if (params.buffer.length > cap) {
           let skipLabel = "Media";
-          if (isGif) skipLabel = "GIF";
-          else if (isWebp) skipLabel = "WebP";
-          else if (isAnimated) skipLabel = "Animated image";
+          if (isGif) {
+            skipLabel = "GIF";
+          } else if (isWebp) {
+            skipLabel = "WebP";
+          }
           throw new Error(formatCapLimit(skipLabel, cap, params.buffer.length));
         }
         return {
