@@ -72,6 +72,37 @@ describe("gateway config methods", () => {
     expect(res.payload?.config).toBeTruthy();
   });
 
+  it("rejects config.patch when the resulting gateway runtime config would fail to start", async () => {
+    const current = await rpcReq<{
+      hash?: string;
+      config?: Record<string, unknown>;
+    }>(requireWs(), "config.get", {});
+    expect(current.ok).toBe(true);
+    expect(typeof current.payload?.hash).toBe("string");
+
+    const res = await rpcReq<{ ok?: boolean; error?: { message?: string } }>(
+      requireWs(),
+      "config.patch",
+      {
+        raw: JSON.stringify({
+          gateway: {
+            tailscale: { mode: "funnel" },
+          },
+        }),
+        baseHash: current.payload?.hash,
+      },
+    );
+
+    expect(res.ok).toBe(false);
+    expect(res.error?.message).toContain("tailscale funnel requires gateway auth mode=password");
+
+    const after = await rpcReq<{
+      hash?: string;
+    }>(requireWs(), "config.get", {});
+    expect(after.ok).toBe(true);
+    expect(after.payload?.hash).toBe(current.payload?.hash);
+  });
+
   it("returns a path-scoped config schema lookup", async () => {
     const res = await rpcReq<{
       path: string;

@@ -6,6 +6,7 @@ import {
   parseConfigJson5,
   readConfigFileSnapshot,
   readConfigFileSnapshotForWrite,
+  resolveGatewayPort,
   resolveConfigSnapshotHash,
   validateConfigObjectWithPlugins,
 } from "../../config/config.js";
@@ -49,6 +50,7 @@ import {
   validateConfigSchemaParams,
   validateConfigSetParams,
 } from "../protocol/index.js";
+import { resolveGatewayRuntimeConfig } from "../server-runtime-config.js";
 import { resolveBaseHashParam } from "./base-hash.js";
 import { parseRestartRequestParams } from "./restart-request.js";
 import type { GatewayRequestHandlers, RespondFn } from "./types.js";
@@ -266,6 +268,23 @@ async function commitConfigTransactionOrRespond(params: {
   expectedBaseHash: string | null;
   respond: RespondFn;
 }): Promise<boolean> {
+  try {
+    await resolveGatewayRuntimeConfig({
+      cfg: params.config,
+      port: resolveGatewayPort(params.config, process.env),
+    });
+  } catch (error) {
+    params.respond(
+      false,
+      undefined,
+      errorShape(
+        ErrorCodes.INVALID_REQUEST,
+        error instanceof Error ? error.message : String(error),
+      ),
+    );
+    return false;
+  }
+
   const transaction = await runConfigWriteTransaction({
     config: params.config,
     writeOptions: params.writeOptions,
