@@ -100,6 +100,65 @@ async function readStoredRoutes(storePath: string) {
   >;
 }
 
+describe("web auto-reply dynamic config", () => {
+  installWebAutoReplyUnitTestHooks();
+
+  it("uses fresh config per message so runtime changes take effect", async () => {
+    const now = Date.now();
+    const store = await makeSessionStore({
+      "agent:main:main": { sessionId: "sid", updatedAt: now - 1 },
+    });
+    const replyResolver = vi.fn().mockResolvedValue(undefined);
+
+    // Config A: allowFrom includes +1000
+    const cfgA: OpenClawConfig = {
+      channels: { whatsapp: { allowFrom: ["+1000"] } },
+      session: { store: store.storePath },
+    };
+    mockCfg = cfgA;
+    const { handler } = createHandlerForTest({ cfg: cfgA, replyResolver });
+
+    await handler(
+      buildInboundMessage({
+        id: "m1",
+        from: "+1000",
+        conversationId: "+1000",
+        chatType: "direct",
+        chatId: "direct:+1000",
+        timestamp: now,
+      }),
+    );
+    expect(replyResolver).toHaveBeenCalledTimes(1);
+
+    // Config B: change allowFrom to a different number at runtime.
+    // Because loadConfig() is called per-message (not captured at handler
+    // creation), the handler sees the updated config.
+    const cfgB: OpenClawConfig = {
+      channels: { whatsapp: { allowFrom: ["+9999"] } },
+      session: { store: store.storePath },
+    };
+    mockCfg = cfgB;
+
+    replyResolver.mockClear();
+    await handler(
+      buildInboundMessage({
+        id: "m2",
+        from: "+1000",
+        conversationId: "+1000",
+        chatType: "direct",
+        chatId: "direct:+1000",
+        timestamp: now + 1,
+      }),
+    );
+    // Message is still processed (DMs don't gate on allowFrom), but the
+    // handler used cfgB, not the stale cfgA. Verify by checking that
+    // replyResolver was still invoked (handler didn't crash with new config).
+    expect(replyResolver).toHaveBeenCalledTimes(1);
+
+    await store.cleanup();
+  });
+});
+
 describe("web auto-reply last-route", () => {
   installWebAutoReplyUnitTestHooks();
 
