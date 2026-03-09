@@ -17,7 +17,7 @@ describe("langfuse agent hook payload safety", () => {
   it("redacts sensitive keys recursively", () => {
     expect(
       redactPayload({
-        token: "secret-token",
+        token: "secret-token", // pragma: allowlist secret
         nested: {
           password: "p@ss",
           ok: "visible",

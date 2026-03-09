@@ -57,7 +57,7 @@ describe("langfuse observability layer", () => {
       LANGFUSE_ENABLED: "1",
       LANGFUSE_HOST: "http://127.0.0.1:3300",
       LANGFUSE_PUBLIC_KEY: "pk-test",
-      LANGFUSE_SECRET_KEY: "sk-test",
+      LANGFUSE_SECRET_KEY: "sk-test", // pragma: allowlist secret
     });
 
     const handle = instrumentation.startTrace({ name: "root" });
