@@ -19,7 +19,7 @@ describe("langfuse agent hook payload safety", () => {
       redactPayload({
         token: "secret-token", // pragma: allowlist secret
         nested: {
-          password: "p@ss",
+          password: "p@ss", // pragma: allowlist secret
           ok: "visible",
         },
       }),
