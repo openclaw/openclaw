@@ -4,7 +4,40 @@ import type { CanvasHostHandler, CanvasHostServer } from "../canvas-host/server.
 import { type ChannelId, listChannelPlugins } from "../channels/plugins/index.js";
 import { stopGmailWatcher } from "../hooks/gmail-watcher.js";
 import type { HeartbeatRunner } from "../infra/heartbeat-runner.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import type { PluginServicesHandle } from "../plugins/services.js";
+
+const log = createSubsystemLogger("gateway/shutdown");
+
+/** Timeout (ms) for the HTTP server close before force-resolving. */
+const HTTP_CLOSE_TIMEOUT_MS = 8_000;
+
+export type ShutdownResult = {
+  /** Total wall-clock time of the shutdown sequence in ms. */
+  durationMs: number;
+  /** Names of subsystems that encountered non-fatal errors during shutdown. */
+  warnings: string[];
+};
+
+/**
+ * Attempt an async shutdown step and track any failure as a warning.
+ * Returns `true` if the step succeeded, `false` otherwise.
+ */
+async function shutdownStep(
+  name: string,
+  fn: () => Promise<void> | void,
+  warnings: string[],
+): Promise<boolean> {
+  try {
+    await fn();
+    return true;
+  } catch (err: unknown) {
+    const detail = err instanceof Error ? err.message : String(err);
+    log.warn(`${name}: ${detail}`);
+    warnings.push(name);
+    return false;
+  }
+}
 
 export function createGatewayCloseHandler(params: {
   bonjourStop: (() => Promise<void>) | null;
@@ -32,107 +65,146 @@ export function createGatewayCloseHandler(params: {
   httpServer: HttpServer;
   httpServers?: HttpServer[];
 }) {
-  return async (opts?: { reason?: string; restartExpectedMs?: number | null }) => {
+  return async (opts?: {
+    reason?: string;
+    restartExpectedMs?: number | null;
+  }): Promise<ShutdownResult> => {
+    const start = Date.now();
+    const warnings: string[] = [];
+
     const reasonRaw = typeof opts?.reason === "string" ? opts.reason.trim() : "";
     const reason = reasonRaw || "gateway stopping";
     const restartExpectedMs =
       typeof opts?.restartExpectedMs === "number" && Number.isFinite(opts.restartExpectedMs)
         ? Math.max(0, Math.floor(opts.restartExpectedMs))
         : null;
+
+    log.info(`shutdown started: ${reason}`);
+
+    // --- Discovery & networking teardown ---
     if (params.bonjourStop) {
-      try {
-        await params.bonjourStop();
-      } catch {
-        /* ignore */
-      }
+      await shutdownStep("bonjour", () => params.bonjourStop!(), warnings);
     }
     if (params.tailscaleCleanup) {
-      await params.tailscaleCleanup();
+      await shutdownStep("tailscale", () => params.tailscaleCleanup!(), warnings);
     }
+
+    // --- Canvas ---
     if (params.canvasHost) {
-      try {
-        await params.canvasHost.close();
-      } catch {
-        /* ignore */
-      }
+      await shutdownStep("canvas-host", () => params.canvasHost!.close(), warnings);
     }
     if (params.canvasHostServer) {
-      try {
-        await params.canvasHostServer.close();
-      } catch {
-        /* ignore */
-      }
+      await shutdownStep("canvas-host-server", () => params.canvasHostServer!.close(), warnings);
     }
+
+    // --- Channels & plugins ---
     for (const plugin of listChannelPlugins()) {
-      await params.stopChannel(plugin.id);
+      await shutdownStep(`channel/${plugin.id}`, () => params.stopChannel(plugin.id), warnings);
     }
     if (params.pluginServices) {
-      await params.pluginServices.stop().catch(() => {});
+      await shutdownStep("plugin-services", () => params.pluginServices!.stop(), warnings);
     }
-    await stopGmailWatcher();
+    await shutdownStep("gmail-watcher", () => stopGmailWatcher(), warnings);
+
+    // --- Schedulers ---
     params.cron.stop();
     params.heartbeatRunner.stop();
-    try {
-      params.updateCheckStop?.();
-    } catch {
-      /* ignore */
-    }
+    await shutdownStep("update-check", () => params.updateCheckStop?.(), warnings);
+
+    // --- Node presence timers ---
     for (const timer of params.nodePresenceTimers.values()) {
       clearInterval(timer);
     }
     params.nodePresenceTimers.clear();
+
+    // --- Broadcast shutdown event to connected clients ---
     params.broadcast("shutdown", {
       reason,
       restartExpectedMs,
     });
+
+    // --- Clear intervals ---
     clearInterval(params.tickInterval);
     clearInterval(params.healthInterval);
     clearInterval(params.dedupeCleanup);
     if (params.mediaCleanup) {
       clearInterval(params.mediaCleanup);
     }
+
+    // --- Event subscriptions ---
     if (params.agentUnsub) {
-      try {
-        params.agentUnsub();
-      } catch {
-        /* ignore */
-      }
+      await shutdownStep("agent-unsub", () => params.agentUnsub!(), warnings);
     }
     if (params.heartbeatUnsub) {
-      try {
-        params.heartbeatUnsub();
-      } catch {
-        /* ignore */
-      }
+      await shutdownStep("heartbeat-unsub", () => params.heartbeatUnsub!(), warnings);
     }
+
+    // --- Client connections ---
     params.chatRunState.clear();
+    let clientCloseFailures = 0;
     for (const c of params.clients) {
       try {
         c.socket.close(1012, "service restart");
       } catch {
-        /* ignore */
+        clientCloseFailures++;
       }
     }
-    params.clients.clear();
-    await params.configReloader.stop().catch(() => {});
-    if (params.browserControl) {
-      await params.browserControl.stop().catch(() => {});
+    if (clientCloseFailures > 0) {
+      log.warn(`failed to close ${clientCloseFailures} WebSocket client(s)`);
+      warnings.push("ws-clients");
     }
+    params.clients.clear();
+
+    // --- Config & browser ---
+    await shutdownStep("config-reloader", () => params.configReloader.stop(), warnings);
+    if (params.browserControl) {
+      await shutdownStep("browser-control", () => params.browserControl!.stop(), warnings);
+    }
+
+    // --- WebSocket server ---
     await new Promise<void>((resolve) => params.wss.close(() => resolve()));
+
+    // --- HTTP server(s) with timeout ---
     const servers =
       params.httpServers && params.httpServers.length > 0
         ? params.httpServers
         : [params.httpServer];
-    for (const server of servers) {
-      const httpServer = server as HttpServer & {
+    for (let i = 0; i < servers.length; i++) {
+      const httpServer = servers[i] as HttpServer & {
         closeIdleConnections?: () => void;
       };
       if (typeof httpServer.closeIdleConnections === "function") {
         httpServer.closeIdleConnections();
       }
-      await new Promise<void>((resolve, reject) =>
-        httpServer.close((err) => (err ? reject(err) : resolve())),
+      const label = servers.length > 1 ? `http-server[${i}]` : "http-server";
+      await shutdownStep(
+        label,
+        () =>
+          new Promise<void>((resolve, reject) => {
+            const timer = setTimeout(() => {
+              log.warn(`${label}: close timed out after ${HTTP_CLOSE_TIMEOUT_MS}ms, forcing`);
+              resolve();
+            }, HTTP_CLOSE_TIMEOUT_MS);
+            httpServer.close((err) => {
+              clearTimeout(timer);
+              if (err) {
+                reject(err);
+              } else {
+                resolve();
+              }
+            });
+          }),
+        warnings,
       );
     }
+
+    const durationMs = Date.now() - start;
+    if (warnings.length > 0) {
+      log.warn(`shutdown completed in ${durationMs}ms with warnings: ${warnings.join(", ")}`);
+    } else {
+      log.info(`shutdown completed cleanly in ${durationMs}ms`);
+    }
+
+    return { durationMs, warnings };
   };
 }
