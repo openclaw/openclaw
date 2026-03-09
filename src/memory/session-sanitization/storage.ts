@@ -67,16 +67,31 @@ export function resolveSessionMemoryBaseDir(agentId: string): string {
   );
 }
 
+function normalizeSessionId(sessionId: string): string {
+  return sessionId
+    .trim()
+    .replace(/[^a-zA-Z0-9._-]+/g, "_")
+    .slice(0, 128);
+}
+
 export function resolveSessionMemoryRawDir(agentId: string, sessionId: string): string {
-  return path.join(resolveSessionMemoryBaseDir(agentId), "raw", sessionId);
+  return path.join(resolveSessionMemoryBaseDir(agentId), "raw", normalizeSessionId(sessionId));
 }
 
 export function resolveSessionMemorySummaryFile(agentId: string, sessionId: string): string {
-  return path.join(resolveSessionMemoryBaseDir(agentId), "summary", `${sessionId}.jsonl`);
+  return path.join(
+    resolveSessionMemoryBaseDir(agentId),
+    "summary",
+    `${normalizeSessionId(sessionId)}.jsonl`,
+  );
 }
 
 export function resolveSessionMemoryAuditFile(agentId: string, sessionId: string): string {
-  return path.join(resolveSessionMemoryBaseDir(agentId), "audit", `${sessionId}.jsonl`);
+  return path.join(
+    resolveSessionMemoryBaseDir(agentId),
+    "audit",
+    `${normalizeSessionId(sessionId)}.jsonl`,
+  );
 }
 
 export function resolveSessionMemoryRawFile(params: {
