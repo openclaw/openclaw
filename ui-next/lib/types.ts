@@ -58,6 +58,26 @@ export type SessionsPatchResult = {
     reasoningLevel?: string;
     elevatedLevel?: string;
   };
+  resolved?: {
+    modelProvider: string;
+    model: string;
+  };
+};
+
+// ============================================
+// Models
+// ============================================
+
+export type ModelChoice = {
+  id: string;
+  name: string;
+  provider: string;
+  contextWindow?: number;
+  reasoning?: boolean;
+};
+
+export type ModelsListResult = {
+  models: ModelChoice[];
 };
 
 // ============================================

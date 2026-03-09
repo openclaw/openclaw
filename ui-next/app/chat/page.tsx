@@ -1,9 +1,17 @@
 "use client";
 
 import { useState, useCallback, useEffect, useRef } from "react";
+import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
+import { vscDarkPlus } from "react-syntax-highlighter/dist/esm/styles/prism";
 import { formatRelativeTimestamp } from "@/lib/format";
 import type { GatewayEventFrame } from "@/lib/gateway";
-import type { SessionsListResult, GatewaySessionRow } from "@/lib/types";
+import type {
+  SessionsListResult,
+  GatewaySessionRow,
+  ModelChoice,
+  ModelsListResult,
+  SessionsPatchResult,
+} from "@/lib/types";
 import { useGateway, useGatewayEvents } from "@/lib/use-gateway";
 
 // ============================================
@@ -219,46 +227,428 @@ const styles = {
     color: "var(--muted)",
     fontSize: 14,
   } as React.CSSProperties,
+  modelSelect: {
+    height: 28,
+    padding: "0 10px",
+    fontSize: 12,
+    fontWeight: 500,
+    borderWidth: 1,
+    borderStyle: "solid",
+    borderColor: "var(--border)",
+    borderRadius: "var(--radius-md)",
+    background: "var(--card)",
+    color: "var(--text)",
+    cursor: "pointer",
+    minWidth: 180,
+    maxWidth: 280,
+  } as React.CSSProperties,
+  modelBadge: {
+    padding: "4px 8px",
+    fontSize: 11,
+    fontWeight: 600,
+    borderRadius: "var(--radius-md)",
+    background: "var(--accent-subtle)",
+    color: "var(--accent)",
+    borderWidth: 1,
+    borderStyle: "solid",
+    borderColor: "var(--accent)",
+  } as React.CSSProperties,
+  thinkingBlock: {
+    marginTop: 4,
+    borderWidth: 1,
+    borderStyle: "solid",
+    borderColor: "var(--border)",
+    borderRadius: "var(--radius-md)",
+    overflow: "hidden",
+  } as React.CSSProperties,
+  thinkingHeader: {
+    display: "flex",
+    alignItems: "center",
+    gap: 8,
+    padding: "6px 10px",
+    background: "var(--secondary)",
+    cursor: "pointer",
+    userSelect: "none" as const,
+    fontSize: 11,
+    fontWeight: 600,
+    color: "var(--muted)",
+  } as React.CSSProperties,
+  thinkingContent: {
+    padding: "8px 12px",
+    background: "var(--bg)",
+    fontSize: 12,
+    lineHeight: 1.6,
+    color: "var(--text)",
+    whiteSpace: "pre-wrap" as const,
+  } as React.CSSProperties,
+  codeBlock: {
+    marginTop: 8,
+    borderRadius: "var(--radius-md)",
+    overflow: "hidden",
+    borderWidth: 1,
+    borderStyle: "solid",
+    borderColor: "var(--border)",
+  } as React.CSSProperties,
+  codeHeader: {
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "space-between",
+    padding: "6px 12px",
+    background: "var(--secondary)",
+    borderBottom: "1px solid var(--border)",
+    fontSize: 11,
+    fontWeight: 600,
+    color: "var(--muted)",
+  } as React.CSSProperties,
+  codeLanguage: {
+    textTransform: "uppercase" as const,
+    letterSpacing: "0.05em",
+  } as React.CSSProperties,
+  copyBtn: {
+    background: "transparent",
+    borderWidth: 1,
+    borderStyle: "solid",
+    borderColor: "var(--border)",
+    borderRadius: "var(--radius-sm)",
+    padding: "2px 8px",
+    fontSize: 10,
+    color: "var(--text)",
+    cursor: "pointer",
+  } as React.CSSProperties,
+  expandBtn: {
+    background: "var(--accent)",
+    borderWidth: 0,
+    borderRadius: "var(--radius-sm)",
+    padding: "6px 16px",
+    fontSize: 12,
+    fontWeight: 600,
+    color: "#fff",
+    cursor: "pointer",
+    marginTop: 8,
+  } as React.CSSProperties,
+  partialCodeContainer: {
+    position: "relative" as const,
+    overflow: "hidden",
+  } as React.CSSProperties,
+  codeFadeOverlay: {
+    position: "absolute" as const,
+    bottom: 0,
+    left: 0,
+    right: 0,
+    height: 80,
+    background: "linear-gradient(to bottom, transparent, var(--bg))",
+    pointerEvents: "none" as const,
+  } as React.CSSProperties,
 };
 
 // ============================================
 // Message Component
 // ============================================
 
+function detectLanguage(code: string): string {
+  // Try to detect language from common patterns
+  const trimmed = code.trim();
+
+  // Check for shebang
+  if (trimmed.startsWith("#!")) {
+    if (trimmed.includes("python")) {
+      return "python";
+    }
+    if (trimmed.includes("node") || trimmed.includes("nodejs")) {
+      return "javascript";
+    }
+    if (trimmed.includes("bash") || trimmed.includes("sh")) {
+      return "bash";
+    }
+  }
+
+  // Check for common patterns
+  if (trimmed.startsWith("<?php")) {
+    return "php";
+  }
+  if (trimmed.startsWith("<!DOCTYPE html") || trimmed.startsWith("<html")) {
+    return "html";
+  }
+  if (trimmed.startsWith("{") && trimmed.includes('"')) {
+    return "json";
+  }
+  if (
+    trimmed.startsWith("package ") ||
+    trimmed.startsWith("import ") ||
+    trimmed.startsWith("public class")
+  ) {
+    return "java";
+  }
+  if (
+    trimmed.startsWith("func ") ||
+    trimmed.startsWith("package ") ||
+    trimmed.startsWith("var ") ||
+    trimmed.startsWith("const ")
+  ) {
+    return "go";
+  }
+  if (
+    trimmed.startsWith("import ") ||
+    trimmed.startsWith("from ") ||
+    trimmed.startsWith("class ") ||
+    trimmed.startsWith("def ")
+  ) {
+    return "python";
+  }
+  if (
+    trimmed.startsWith("function ") ||
+    trimmed.startsWith("const ") ||
+    trimmed.startsWith("let ") ||
+    trimmed.startsWith("var ") ||
+    trimmed.startsWith("console.")
+  ) {
+    return "javascript";
+  }
+  if (
+    trimmed.startsWith("fn ") ||
+    trimmed.startsWith("let ") ||
+    trimmed.startsWith("const ") ||
+    trimmed.startsWith("pub fn")
+  ) {
+    return "rust";
+  }
+  if (
+    trimmed.startsWith("module ") ||
+    trimmed.startsWith("import ") ||
+    trimmed.startsWith("def ")
+  ) {
+    return "ruby";
+  }
+  if (
+    trimmed.startsWith("using ") ||
+    trimmed.startsWith("namespace ") ||
+    trimmed.startsWith("class ") ||
+    trimmed.startsWith("public ")
+  ) {
+    return "csharp";
+  }
+  if (
+    trimmed.startsWith("import ") ||
+    trimmed.startsWith("class ") ||
+    trimmed.startsWith("fun ") ||
+    trimmed.startsWith("val ") ||
+    trimmed.startsWith("var ")
+  ) {
+    return "kotlin";
+  }
+  if (
+    trimmed.startsWith("import ") ||
+    trimmed.startsWith("class ") ||
+    trimmed.startsWith("fun ") ||
+    trimmed.startsWith("package ")
+  ) {
+    return "kotlin";
+  }
+  if (
+    trimmed.startsWith("library ") ||
+    trimmed.startsWith("import ") ||
+    trimmed.startsWith("class ") ||
+    trimmed.startsWith("fun ")
+  ) {
+    return "kotlin";
+  }
+  if (
+    trimmed.startsWith("void ") ||
+    trimmed.startsWith("int ") ||
+    trimmed.startsWith("string ") ||
+    trimmed.startsWith("#include")
+  ) {
+    return "cpp";
+  }
+  if (
+    trimmed.startsWith("#include") ||
+    trimmed.startsWith("int main") ||
+    trimmed.startsWith("void ")
+  ) {
+    return "c";
+  }
+  if (
+    trimmed.startsWith("import ") ||
+    trimmed.startsWith("class ") ||
+    trimmed.startsWith("def ") ||
+    trimmed.startsWith("print ")
+  ) {
+    return "python";
+  }
+
+  // Check for Dart patterns
+  if (
+    trimmed.includes("void main()") ||
+    (trimmed.includes("class ") && trimmed.includes("Widget")) ||
+    trimmed.startsWith("import 'package:")
+  ) {
+    return "dart";
+  }
+
+  return "";
+}
+
+function parseContentWithCode(content: string): React.ReactNode[] {
+  const codeBlockRegex = /```(\w+)?\n([\s\S]*?)```/g;
+  const elements: React.ReactNode[] = [];
+  let lastIndex = 0;
+  let match;
+
+  while ((match = codeBlockRegex.exec(content)) !== null) {
+    // Add text before code block
+    if (match.index > lastIndex) {
+      const textBefore = content.slice(lastIndex, match.index);
+      if (textBefore.trim()) {
+        elements.push(<span key={`text-${lastIndex}`}>{textBefore}</span>);
+      }
+    }
+
+    const language = match[1] || detectLanguage(match[2]);
+    const code = match[2].trim();
+
+    elements.push(<CodeBlock key={`code-${match.index}`} language={language} code={code} />);
+
+    lastIndex = match.index + match[0].length;
+  }
+
+  // Add remaining text
+  if (lastIndex < content.length) {
+    const textAfter = content.slice(lastIndex);
+    if (textAfter.trim()) {
+      elements.push(<span key={`text-${lastIndex}`}>{textAfter}</span>);
+    }
+  }
+
+  return elements;
+}
+
+function CodeBlock({ language, code }: { language: string; code: string }) {
+  const [copied, setCopied] = useState(false);
+  const [expanded, setExpanded] = useState(false);
+
+  const MAX_LINES = 20; // Show partial if more than this
+  const codeLines = code.split("\n");
+  const isLong = codeLines.length > MAX_LINES;
+  const displayCode = expanded || !isLong ? code : codeLines.slice(0, MAX_LINES).join("\n");
+
+  const handleCopy = async () => {
+    try {
+      await navigator.clipboard.writeText(code);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } catch (err) {
+      console.error("Failed to copy:", err);
+    }
+  };
+
+  const displayLanguage = language || "code";
+
+  return (
+    <div style={styles.codeBlock}>
+      <div style={styles.codeHeader}>
+        <span style={styles.codeLanguage}>{displayLanguage}</span>
+        <div style={{ display: "flex", gap: 6 }}>
+          {isLong && !expanded && (
+            <span style={{ fontSize: 10, color: "var(--muted)", alignSelf: "center" }}>
+              {codeLines.length} lines
+            </span>
+          )}
+          <button style={styles.copyBtn} onClick={handleCopy} title="Copy code">
+            {copied ? "✓ Copied" : "📋 Copy"}
+          </button>
+        </div>
+      </div>
+      <div style={isLong && !expanded ? styles.partialCodeContainer : {}}>
+        <SyntaxHighlighter
+          language={language || "plaintext"}
+          style={vscDarkPlus}
+          customStyle={{
+            margin: 0,
+            padding: 12,
+            background: "var(--bg)",
+            fontSize: 12,
+            lineHeight: 1.6,
+            borderRadius: 0,
+          }}
+          showLineNumbers
+          wrapLines
+        >
+          {displayCode}
+        </SyntaxHighlighter>
+        {isLong && !expanded && (
+          <>
+            <div style={styles.codeFadeOverlay} />
+            <div style={{ padding: "8px 12px", textAlign: "center" as const }}>
+              <button style={styles.expandBtn} onClick={() => setExpanded(true)}>
+                Show Full Code ({codeLines.length - MAX_LINES} more lines)
+              </button>
+            </div>
+          </>
+        )}
+      </div>
+      {expanded && isLong && (
+        <div style={{ padding: "8px 12px", borderTop: "1px solid var(--border)" }}>
+          <button
+            style={{ ...styles.btn, background: "var(--secondary)" }}
+            onClick={() => setExpanded(false)}
+          >
+            ▲ Show Less
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function Message({ message }: { message: ChatMessage }) {
+  const [thinkingExpanded, setThinkingExpanded] = useState(false);
   const isUser = message.role === "user";
 
   let contentToRender: React.ReactNode;
+  let thinkingContent: React.ReactNode = null;
+
   if (typeof message.content === "string") {
-    contentToRender = message.content;
+    contentToRender = parseContentWithCode(message.content);
   } else if (message.content && typeof message.content === "object") {
     if (Array.isArray(message.content) && message.content.length > 0) {
-      contentToRender = message.content.map((part, idx) => {
+      const textParts: React.ReactNode[] = [];
+      const thinkingParts: React.ReactNode[] = [];
+
+      message.content.forEach((part, idx) => {
         if (part.type === "text") {
-          return <span key={idx}>{part.text}</span>;
+          textParts.push(<span key={idx}>{parseContentWithCode(part.text)}</span>);
         }
-        if (part.type === "thinking") {
-          return (
+        if (part.type === "thinking" && part.thinking) {
+          thinkingParts.push(
             <div key={idx}>
-              <span style={{ color: "var(--muted)", fontStyle: "italic" }}>thinking…</span>
               <div
-                style={{
-                  marginTop: 4,
-                  backgroundColor: "var(--muted)",
-                  width: "100%",
-                  padding: "4px 8px",
-                  borderRadius: "var(--radius-md)",
-                }}
+                style={styles.thinkingHeader}
+                onClick={() => setThinkingExpanded(!thinkingExpanded)}
+                title={thinkingExpanded ? "Collapse" : "Expand"}
               >
-                <p style={{ color: "var(--text)", fontSize: 12 }}>{part.thinking}</p>
+                <span
+                  style={{
+                    transition: "transform 0.2s",
+                    display: "inline-block",
+                    transform: thinkingExpanded ? "rotate(90deg)" : "rotate(0deg)",
+                  }}
+                >
+                  ▶
+                </span>
+                <span>
+                  Thinking {thinkingExpanded ? "(click to collapse)" : "(click to expand)"}
+                </span>
               </div>
-            </div>
+              {thinkingExpanded && <div style={styles.thinkingContent}>{part.thinking}</div>}
+            </div>,
           );
         }
-        return null;
       });
+
+      contentToRender = textParts.length > 0 ? textParts : null;
+      thinkingContent = thinkingParts.length > 0 ? thinkingParts : null;
     } else {
-      return "";
+      contentToRender = "";
     }
   }
 
@@ -275,6 +665,7 @@ function Message({ message }: { message: ChatMessage }) {
           ...(isUser ? styles.bubbleUser : styles.bubbleAssistant),
         }}
       >
+        {thinkingContent}
         {contentToRender}
       </div>
       {message.timestamp && (
@@ -299,6 +690,9 @@ export default function ChatPage() {
   const [chatStream, setChatStream] = useState<string | null>(null);
   const [draft, setDraft] = useState("");
   const [isSidebarVisible, setIsSidebarVisible] = useState(true);
+  const [models, setModels] = useState<ModelChoice[]>([]);
+  const [modelsLoading, setModelsLoading] = useState(false);
+  const [currentModel, setCurrentModel] = useState<string | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const selectedSessionKeyRef = useRef<string | null>(null);
   selectedSessionKeyRef.current = selectedSessionKey;
@@ -323,6 +717,22 @@ export default function ChatPage() {
       console.error("Failed to load sessions:", err);
     }
   }, [state, request, selectedSessionKey]);
+
+  const loadModels = useCallback(async () => {
+    if (state !== "connected") {
+      return;
+    }
+
+    setModelsLoading(true);
+    try {
+      const res = await request<ModelsListResult>("models.list", {});
+      setModels(res.models ?? []);
+    } catch (err) {
+      console.error("Failed to load models:", err);
+    } finally {
+      setModelsLoading(false);
+    }
+  }, [state, request]);
 
   const loadChatHistory = useCallback(async () => {
     // Read from ref to always use the LATEST session key (avoids stale closure)
@@ -384,6 +794,32 @@ export default function ChatPage() {
       setSending(false);
     }
   }, [draft, selectedSessionKey, state, request]);
+
+  const changeModel = useCallback(
+    async (modelId: string) => {
+      if (!selectedSessionKey || state !== "connected") {
+        return;
+      }
+
+      try {
+        const result = await request<SessionsPatchResult>("sessions.patch", {
+          key: selectedSessionKey,
+          model: modelId || null,
+        });
+        // Update current model from the resolved response
+        if (result.resolved) {
+          setCurrentModel(`${result.resolved.modelProvider}/${result.resolved.model}`);
+        } else {
+          setCurrentModel(modelId || null);
+        }
+        // Reload sessions to update the session list with new model info
+        void loadSessions();
+      } catch (err) {
+        setError(err instanceof Error ? err.message : "Failed to change model");
+      }
+    },
+    [selectedSessionKey, state, request, loadSessions],
+  );
 
   // Listen for real-time "chat" events from the gateway
   useGatewayEvents(client, (evt: GatewayEventFrame) => {
@@ -521,14 +957,30 @@ export default function ChatPage() {
   useEffect(() => {
     if (state === "connected") {
       void loadSessions();
+      void loadModels();
     }
-  }, [state, loadSessions]);
+  }, [state, loadSessions, loadModels]);
 
   useEffect(() => {
     if (selectedSessionKey) {
       void loadChatHistory();
     }
   }, [selectedSessionKey, loadChatHistory]);
+
+  // Update current model when sessions or selected session changes
+  useEffect(() => {
+    if (selectedSessionKey && sessions.length > 0) {
+      const session = sessions.find((s) => s.key === selectedSessionKey);
+      if (session) {
+        // Combine provider and model ID properly
+        const modelStr =
+          session.modelProvider && session.model
+            ? `${session.modelProvider}/${session.model}`
+            : session.model || session.modelProvider || null;
+        setCurrentModel(modelStr);
+      }
+    }
+  }, [selectedSessionKey, sessions]);
 
   useEffect(() => {
     scrollToBottom();
@@ -677,24 +1129,55 @@ export default function ChatPage() {
             {selectedSessionKey && (
               <div
                 style={{
-                  fontSize: 12,
-                  color: "var(--ok)",
                   display: "flex",
                   alignItems: "center",
-                  gap: 6,
-                  fontWeight: 500,
+                  gap: 10,
                 }}
               >
-                <span
+                {/* Model Selector */}
+                <select
                   style={{
-                    display: "inline-block",
-                    width: 8,
-                    height: 8,
-                    background: "var(--ok)",
-                    borderRadius: "50%",
+                    ...styles.modelSelect,
+                    opacity: modelsLoading ? 0.6 : 1,
                   }}
-                />
-                Active Session
+                  value={currentModel || ""}
+                  onChange={(e) => changeModel(e.target.value)}
+                  disabled={modelsLoading || state !== "connected"}
+                  title={modelsLoading ? "Loading models..." : "Select AI model"}
+                >
+                  <option value="" disabled>
+                    {modelsLoading ? "Loading..." : "none"}
+                  </option>
+                  {models.map((m) => (
+                    <option key={`${m.provider}/${m.id}`} value={`${m.provider}/${m.id}`}>
+                      {m.name} {m.contextWindow ? `(${Math.round(m.contextWindow / 1024)}k)` : ""}
+                      {m.reasoning ? " · Reasoning" : ""}
+                    </option>
+                  ))}
+                </select>
+
+                {/* Active Session Indicator */}
+                <div
+                  style={{
+                    fontSize: 12,
+                    color: "var(--ok)",
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 6,
+                    fontWeight: 500,
+                  }}
+                >
+                  <span
+                    style={{
+                      display: "inline-block",
+                      width: 8,
+                      height: 8,
+                      background: "var(--ok)",
+                      borderRadius: "50%",
+                    }}
+                  />
+                  Active
+                </div>
               </div>
             )}
           </div>
