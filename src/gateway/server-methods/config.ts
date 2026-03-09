@@ -153,7 +153,7 @@ function parseValidateConfigFromRawOrRespond(
     );
     return null;
   }
-  const validated = validateConfigObjectWithPlugins(restored.result);
+  const validated = validateConfigObjectWithPlugins(restored.result, parsedRes.parsed);
   if (!validated.ok) {
     respond(
       false,
@@ -378,6 +378,9 @@ export const configHandlers: GatewayRequestHandlers = {
     const merged = applyMergePatch(snapshot.config, parsedRes.parsed, {
       mergeObjectArraysById: true,
     });
+    const mergedSource = applyMergePatch(snapshot.parsed, parsedRes.parsed, {
+      mergeObjectArraysById: true,
+    });
     const schemaPatch = loadSchemaWithPlugins();
     const restoredMerge = restoreRedactedValues(merged, snapshot.config, schemaPatch.uiHints);
     if (!restoredMerge.ok) {
@@ -393,7 +396,7 @@ export const configHandlers: GatewayRequestHandlers = {
     }
     const migrated = applyLegacyMigrations(restoredMerge.result);
     const resolved = migrated.next ?? restoredMerge.result;
-    const validated = validateConfigObjectWithPlugins(resolved);
+    const validated = validateConfigObjectWithPlugins(resolved, mergedSource);
     if (!validated.ok) {
       respond(
         false,

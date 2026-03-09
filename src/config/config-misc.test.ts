@@ -9,6 +9,7 @@ import {
   loadConfig,
   readConfigFileSnapshot,
   validateConfigObject,
+  validateConfigObjectWithPlugins,
   writeConfigFile,
 } from "./config.js";
 import {
@@ -440,6 +441,39 @@ describe("config strict validation", () => {
         expect(snap.issues.some((issue) => issue.path === "tools.profile")).toBe(false);
       });
     });
+  });
+
+  it("accepts resolved env messaging defaults when source config keeps tools.profile as env", () => {
+    const resolved = {
+      wizard: {
+        lastRunCommand: "onboard",
+        lastRunMode: "local",
+        lastRunVersion: "2026.3.2",
+      },
+      tools: {
+        profile: "messaging",
+      },
+    };
+
+    const source = {
+      wizard: {
+        lastRunCommand: "onboard",
+        lastRunMode: "local",
+        lastRunVersion: "2026.3.2",
+      },
+      tools: {
+        profile: "${OPENCLAW_TOOLS_PROFILE}",
+      },
+    };
+
+    const withoutSource = validateConfigObjectWithPlugins(resolved);
+    expect(withoutSource.ok).toBe(false);
+    if (!withoutSource.ok) {
+      expect(withoutSource.issues.some((issue) => issue.path === "tools.profile")).toBe(true);
+    }
+
+    const withSource = validateConfigObjectWithPlugins(resolved, source);
+    expect(withSource.ok).toBe(true);
   });
 
   it("does not throw in loadConfig() for env-driven messaging defaults that are not source-literal", async () => {
