@@ -220,12 +220,7 @@ export async function deliverAgentCommandResult(params: {
       }
       return { payloads: fallbackPayloadsJson, meta: result.meta };
     }
-    if (
-      deliver &&
-      deliveryChannel &&
-      !isInternalMessageChannel(deliveryChannel) &&
-      deliveryTarget
-    ) {
+    if (deliveryChannel && !isInternalMessageChannel(deliveryChannel) && deliveryTarget) {
       await deliverOutboundPayloads({
         cfg,
         channel: deliveryChannel,
@@ -255,7 +250,7 @@ export async function deliverAgentCommandResult(params: {
       });
       return { payloads: fallbackPayloadsJson, meta: result.meta };
     }
-    runtime.log("No reply from agent.");
+    runtime.log(NORMALIZED_EMPTY_FALLBACK_TEXT);
     return { payloads: normalizedPayloads, meta: result.meta };
   }
   const logPayload = (payload: NormalizedOutboundPayload) => {

@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { HISTORY_CONTEXT_MARKER } from "../auto-reply/reply/history.js";
 import { resetInboundDedupe } from "../auto-reply/reply/inbound-dedupe.js";
 import { CURRENT_MESSAGE_MARKER } from "../auto-reply/reply/mentions.js";
+import * as utils from "../utils.js";
 import {
   defaultSlackTestConfig,
   getSlackTestState,
@@ -393,20 +394,20 @@ describe("monitorSlackProvider tool results", () => {
     });
   });
 
-  it("sends an in-thread fallback when only block replies were emitted", async () => {
+  it("sends an in-thread fallback when tool progress was emitted without final reply", async () => {
     setDirectMessageReplyMode("all");
+    const sleepSpy = vi.spyOn(utils, "sleep").mockResolvedValue(undefined);
     replyMock.mockImplementation(async (...args: unknown[]) => {
       const opts = (args[1] ?? {}) as {
-        onBlockReply?: (payload: { text?: string }) => Promise<void> | void;
+        onToolResult?: (payload: { text?: string }) => Promise<void> | void;
       };
-      await opts.onBlockReply?.({ text: "working..." });
+      await opts.onToolResult?.({ text: "working..." });
       return undefined;
     });
 
     await runSlackMessageOnce(monitorSlackProvider, {
       event: makeSlackMessageEvent(),
     });
-    await new Promise((resolve) => setTimeout(resolve, 2600));
 
     const fallbackText =
       "I am still here. I could not complete that reply yet; retrying now in this same thread.";
@@ -422,6 +423,7 @@ describe("monitorSlackProvider tool results", () => {
     expect(delayedStatusCall).toBeDefined();
     expect(fallbackCall?.[2]).toMatchObject({ threadTs: "123" });
     expect(delayedStatusCall?.[2]).toMatchObject({ threadTs: "123" });
+    sleepSpy.mockRestore();
   });
 
   async function expectMentionPatternMessageAccepted(text: string): Promise<void> {
