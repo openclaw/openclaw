@@ -201,7 +201,8 @@ function parseArgs(argv) {
 
 function bearerToken() {
   // Check refreshed token file first (written by twitter-refresh-token.mjs)
-  const tokenFile = process.env.TWITTER_TOKEN_FILE || "/tmp/twitter-tokens.env";
+  const tokenFile =
+    process.env.TWITTER_TOKEN_FILE || "/home/node/.openclaw/workspace/data/twitter-tokens.env";
   try {
     const content = fs.readFileSync(tokenFile, "utf-8");
     const match = content.match(/^TWITTER_BEARER_TOKEN=(.+)$/m);

@@ -11,7 +11,8 @@
 
 import fs from "node:fs";
 
-const TOKEN_FILE = process.env.TWITTER_TOKEN_FILE || "/tmp/twitter-tokens.env";
+const TOKEN_FILE =
+  process.env.TWITTER_TOKEN_FILE || "/home/node/.openclaw/workspace/data/twitter-tokens.env";
 
 function readTokenFile() {
   try {
@@ -82,11 +83,17 @@ async function refreshToken() {
 
   fs.writeFileSync(TOKEN_FILE, envContent, { mode: 0o600 });
 
-  // Also export to current process env (for sourcing)
-  console.log(`export TWITTER_BEARER_TOKEN="${tokens.access_token}"`);
-  console.log(`export TWITTER_REFRESH_TOKEN="${tokens.refresh_token}"`);
-
-  console.error(`Token refreshed. Expires in ${tokens.expires_in}s. Written to ${TOKEN_FILE}`);
+  console.log(`[twitter-refresh] Token refreshed successfully`);
+  console.log(
+    `[twitter-refresh] Expires in: ${tokens.expires_in}s (${Math.round(tokens.expires_in / 60)}min)`,
+  );
+  console.log(`[twitter-refresh] Written to: ${TOKEN_FILE}`);
+  console.log(
+    `[twitter-refresh] Access token starts with: ${tokens.access_token.substring(0, 15)}...`,
+  );
+  console.log(
+    `[twitter-refresh] Refresh token source: ${fileTokens.TWITTER_REFRESH_TOKEN ? "file" : "env var"}`,
+  );
 }
 
 refreshToken().catch((err) => {

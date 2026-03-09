@@ -109,11 +109,21 @@ services:
           done
 
           # Twitter token refresh loop (every 90 min, token expires in 2h)
+          # Tokens persist in data/ volume, surviving redeploys
           if [ -n "$$TWITTER_REFRESH_TOKEN" ] && [ -n "$$TWITTER_CLIENT_ID" ]; then
+            echo "[twitter-refresh] loop started (every 90min)"
             (while true; do
+              echo "[twitter-refresh] sleeping 90min..."
               sleep 5400
-              eval "$$(node /home/node/.openclaw/workspace/scripts/twitter-refresh-token.mjs 2>/tmp/twitter-refresh.log)" 2>/dev/null || true
+              echo "[twitter-refresh] refreshing token..."
+              if node /home/node/.openclaw/workspace/scripts/twitter-refresh-token.mjs 2>&1; then
+                echo "[twitter-refresh] OK — token refreshed"
+              else
+                echo "[twitter-refresh] FAILED — see error above"
+              fi
             done) &
+          else
+            echo "[twitter-refresh] SKIPPED — missing TWITTER_REFRESH_TOKEN or TWITTER_CLIENT_ID"
           fi
 
           exec node dist/index.js gateway --bind loopback --port 18789 --allow-unconfigured
