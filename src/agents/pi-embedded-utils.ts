@@ -242,20 +242,34 @@ export function extractAssistantThinking(msg: AssistantMessage): string {
   return blocks.join("\n").trim();
 }
 
-export function formatReasoningMessage(text: string): string {
+export type ReasoningFormat = "italic" | "code" | "spoiler";
+
+export function formatReasoningMessage(text: string, format: ReasoningFormat = "italic"): string {
   const trimmed = text.trim();
   if (!trimmed) {
     return "";
   }
-  // Show reasoning in italics (cursive) for markdown-friendly surfaces (Discord, etc.).
   // Keep the plain "Reasoning:" prefix so existing parsing/detection keeps working.
-  // Note: Underscore markdown cannot span multiple lines on Telegram, so we wrap
-  // each non-empty line separately.
-  const italicLines = trimmed
-    .split("\n")
-    .map((line) => (line ? `_${line}_` : line))
-    .join("\n");
-  return `Reasoning:\n${italicLines}`;
+  switch (format) {
+    case "code":
+      return `Reasoning:\n\`\`\`\n${trimmed}\n\`\`\``;
+    case "spoiler":
+      // Telegram spoiler syntax: ||text||
+      // Wrap each non-empty line separately (same as italic) since some
+      // channels don't support multiline spoiler spans.
+      return `Reasoning:\n${trimmed
+        .split("\n")
+        .map((line) => (line ? `||${line}||` : line))
+        .join("\n")}`;
+    case "italic":
+    default:
+      // Note: Underscore markdown cannot span multiple lines on Telegram,
+      // so we wrap each non-empty line separately.
+      return `Reasoning:\n${trimmed
+        .split("\n")
+        .map((line) => (line ? `_${line}_` : line))
+        .join("\n")}`;
+  }
 }
 
 type ThinkTaggedSplitBlock =

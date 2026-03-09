@@ -189,6 +189,8 @@ export type AgentDefaultsConfig = {
   verboseDefault?: "off" | "on" | "full";
   /** Default elevated level when no /elevated directive is present. */
   elevatedDefault?: "off" | "on" | "ask" | "full";
+  /** Display format for reasoning/thinking blocks in channel replies. */
+  reasoningFormat?: "italic" | "code" | "spoiler";
   /** Default block streaming level when no override is present. */
   blockStreamingDefault?: "off" | "on";
   /**

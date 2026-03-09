@@ -17,6 +17,7 @@ import {
   extractAssistantText,
   extractAssistantThinking,
   formatReasoningMessage,
+  type ReasoningFormat,
 } from "../../pi-embedded-utils.js";
 import { isLikelyMutatingToolName } from "../../tool-mutation.js";
 
@@ -98,6 +99,7 @@ export function buildEmbeddedRunPayloads(params: {
   model?: string;
   verboseLevel?: VerboseLevel;
   reasoningLevel?: ReasoningLevel;
+  reasoningFormat?: ReasoningFormat;
   toolResultFormat?: ToolResultFormat;
   suppressToolErrorWarnings?: boolean;
   inlineToolResultsAllowed: boolean;
@@ -186,7 +188,10 @@ export function buildEmbeddedRunPayloads(params: {
 
   const reasoningText =
     params.lastAssistant && params.reasoningLevel === "on"
-      ? formatReasoningMessage(extractAssistantThinking(params.lastAssistant))
+      ? formatReasoningMessage(
+          extractAssistantThinking(params.lastAssistant),
+          params.reasoningFormat,
+        )
       : "";
   if (reasoningText) {
     replyItems.push({ text: reasoningText, isReasoning: true });

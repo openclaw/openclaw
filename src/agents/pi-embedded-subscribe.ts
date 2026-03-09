@@ -33,6 +33,7 @@ export type {
 
 export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionParams) {
   const reasoningMode = params.reasoningMode ?? "off";
+  const reasoningFormat = params.reasoningFormat ?? "italic";
   const toolResultFormat = params.toolResultFormat ?? "markdown";
   const useMarkdown = toolResultFormat === "markdown";
   const state: EmbeddedPiSubscribeState = {
@@ -556,7 +557,7 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     if (!state.streamReasoning || !params.onReasoningStream) {
       return;
     }
-    const formatted = formatReasoningMessage(text);
+    const formatted = formatReasoningMessage(text, reasoningFormat);
     if (!formatted) {
       return;
     }
