@@ -6,6 +6,7 @@ import {
   readTool,
 } from "@mariozechner/pi-coding-agent";
 import type { OpenClawConfig } from "../config/config.js";
+import type { InputProvenance } from "../sessions/input-provenance.js";
 import type { ToolLoopDetectionConfig } from "../config/types.tools.js";
 import { logWarn } from "../logger.js";
 import { getPluginToolMeta } from "../plugins/tools.js";
@@ -228,6 +229,8 @@ export function createOpenClawCodingTools(options?: {
   requireExplicitMessageTarget?: boolean;
   /** If true, omit the message tool from the tool list. */
   disableMessageTool?: boolean;
+  /** Provenance for the current run, used for narrow tool gating. */
+  inputProvenance?: InputProvenance;
   /** Whether the sender is an owner (required for owner-only tools). */
   senderIsOwner?: boolean;
   interactionMode?: "chat" | "plan";
@@ -471,6 +474,7 @@ export function createOpenClawCodingTools(options?: {
       modelHasVision: options?.modelHasVision,
       requireExplicitMessageTarget: options?.requireExplicitMessageTarget,
       disableMessageTool: options?.disableMessageTool,
+      inputProvenance: options?.inputProvenance,
       requesterAgentIdOverride: agentId,
       requesterSenderId: options?.senderId,
       senderIsOwner: options?.senderIsOwner,

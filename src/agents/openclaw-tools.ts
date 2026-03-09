@@ -62,6 +62,8 @@ export function createOpenClawTools(options?: {
   requireExplicitMessageTarget?: boolean;
   /** If true, omit the message tool from the tool list. */
   disableMessageTool?: boolean;
+  /** Provenance for the current run, used for narrow tool gating. */
+  inputProvenance?: InputProvenance;
   /** Trusted sender id from inbound context (not tool args). */
   requesterSenderId?: string | null;
   /** Whether the requesting sender is an owner. */
@@ -105,6 +107,9 @@ export function createOpenClawTools(options?: {
         requireExplicitTarget: options?.requireExplicitMessageTarget,
         requesterSenderId: options?.requesterSenderId ?? undefined,
       });
+  const disableSessionsSendTool =
+    options?.inputProvenance?.kind === "inter_session" &&
+    options.inputProvenance.sourceTool === "sessions_send";
   const tools: AnyAgentTool[] = [
     ...(options?.interactionMode === "plan"
       ? [
@@ -147,11 +152,15 @@ export function createOpenClawTools(options?: {
       agentSessionKey: options?.agentSessionKey,
       sandboxed: options?.sandboxed,
     }),
-    createSessionsSendTool({
-      agentSessionKey: options?.agentSessionKey,
-      agentChannel: options?.agentChannel,
-      sandboxed: options?.sandboxed,
-    }),
+    ...(disableSessionsSendTool
+      ? []
+      : [
+          createSessionsSendTool({
+            agentSessionKey: options?.agentSessionKey,
+            agentChannel: options?.agentChannel,
+            sandboxed: options?.sandboxed,
+          }),
+        ]),
     createSessionsSpawnTool({
       agentSessionKey: options?.agentSessionKey,
       agentChannel: options?.agentChannel,

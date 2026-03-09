@@ -323,6 +323,7 @@ export async function runEmbeddedAttempt(
           requireExplicitMessageTarget:
             params.requireExplicitMessageTarget ?? isSubagentSessionKey(params.sessionKey),
           disableMessageTool: params.disableMessageTool,
+          inputProvenance: params.inputProvenance,
           interactionMode: params.interactionMode,
           runId: params.runId,
         });
