@@ -247,6 +247,9 @@ export function createAnthropicBetaHeadersWrapper(
   const underlying = baseStreamFn ?? streamSimple;
   return (model, context, options) => {
     const isOauth = isAnthropicOAuthApiKey(options?.apiKey);
+    if (!isOauth && betas.length === 0) {
+      return underlying(model, context, options);
+    }
     const requestedContext1m = betas.includes(ANTHROPIC_CONTEXT_1M_BETA);
     const effectiveBetas =
       isOauth && requestedContext1m
