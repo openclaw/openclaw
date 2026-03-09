@@ -153,26 +153,64 @@ function resolveRecoveredToolCallName(
 function findMarkdownCodeRanges(text: string): TextRange[] {
   const ranges: TextRange[] = [];
 
-  const fenceMarker = "```";
-  let searchFrom = 0;
-  let openFenceStart: number | null = null;
-  while (searchFrom < text.length) {
-    const markerIndex = text.indexOf(fenceMarker, searchFrom);
-    if (markerIndex === -1) {
-      break;
-    }
-    if (openFenceStart === null) {
-      openFenceStart = markerIndex;
-    } else {
-      ranges.push({ start: openFenceStart, end: markerIndex + fenceMarker.length });
-      openFenceStart = null;
-    }
-    searchFrom = markerIndex + fenceMarker.length;
+  type FenceState = { start: number; markerChar: "`" | "~"; markerLength: number };
+  const lineRanges: TextRange[] = [];
+  let lineStart = 0;
+  while (lineStart < text.length) {
+    const lineEnd = text.indexOf("\n", lineStart);
+    const end = lineEnd === -1 ? text.length : lineEnd + 1;
+    lineRanges.push({ start: lineStart, end });
+    lineStart = end;
   }
-  if (openFenceStart !== null) {
+
+  let openFence: FenceState | null = null;
+  for (const lineRange of lineRanges) {
+    const lineText = text.slice(lineRange.start, lineRange.end).replace(/\r?\n$/, "");
+
+    if (openFence) {
+      const closeRe = new RegExp(
+        `^[ \\t]{0,3}${openFence.markerChar}{${openFence.markerLength},}[ \\t]*$`,
+      );
+      if (closeRe.test(lineText)) {
+        ranges.push({ start: openFence.start, end: lineRange.end });
+        openFence = null;
+      }
+      continue;
+    }
+
+    const fenceStartMatch = lineText.match(/^[ \t]{0,3}([`~]{3,})/);
+    if (!fenceStartMatch) {
+      continue;
+    }
+    const marker = fenceStartMatch[1] ?? "";
+    const markerChar = marker[0] as "`" | "~" | undefined;
+    if (!markerChar || !marker.split("").every((char) => char === markerChar)) {
+      continue;
+    }
+    openFence = {
+      start: lineRange.start,
+      markerChar,
+      markerLength: marker.length,
+    };
+  }
+
+  if (openFence) {
     // Treat unterminated fences as code through end-of-text so streamed
     // partials cannot execute tool-call examples before the fence closes.
-    ranges.push({ start: openFenceStart, end: text.length });
+    ranges.push({ start: openFence.start, end: text.length });
+  }
+
+  for (const lineRange of lineRanges) {
+    const lineText = text.slice(lineRange.start, lineRange.end).replace(/\r?\n$/, "");
+    if (!lineText || !/^(\t| {4})/.test(lineText)) {
+      continue;
+    }
+    const overlapsExisting = ranges.some(
+      (range) => lineRange.start < range.end && range.start < lineRange.end,
+    );
+    if (!overlapsExisting) {
+      ranges.push({ start: lineRange.start, end: lineRange.end });
+    }
   }
 
   const inlineCodeRe = /`[^`\r\n]*`/g;

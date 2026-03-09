@@ -242,6 +242,43 @@ exec({"command":"ls"})
     });
   });
 
+  it("does not recover tool-call examples inside tilde code fences", async () => {
+    const text = `~~~ts
+exec({"command":"pwd"})
+~~~`;
+    const finalMessage = {
+      role: "assistant",
+      content: [{ type: "text", text }],
+    };
+    const baseFn = vi.fn(() => createFakeStream({ events: [], resultMessage: finalMessage }));
+
+    const stream = await invokeRecoveredStream(baseFn, new Set(["exec"]));
+    const result = await stream.result();
+
+    expect(result).toEqual({
+      role: "assistant",
+      content: [{ type: "text", text }],
+    });
+  });
+
+  it("does not recover tool-call examples inside indented markdown code blocks", async () => {
+    const text = `Try this:
+    exec({"command":"pwd"})`;
+    const finalMessage = {
+      role: "assistant",
+      content: [{ type: "text", text }],
+    };
+    const baseFn = vi.fn(() => createFakeStream({ events: [], resultMessage: finalMessage }));
+
+    const stream = await invokeRecoveredStream(baseFn, new Set(["exec"]));
+    const result = await stream.result();
+
+    expect(result).toEqual({
+      role: "assistant",
+      content: [{ type: "text", text }],
+    });
+  });
+
   it("does not recover tool-call examples inside unterminated fenced code in partial streams", async () => {
     const text = `\`\`\`ts
 exec({"command":"pwd"})`;
