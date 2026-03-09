@@ -687,8 +687,7 @@ export const FIELD_HELP: Record<string, string> = {
   "tools.web.search.exa.apiKey": "Exa API key (fallback: EXA_API_KEY env var).",
   "tools.web.search.exa.numResults":
     "Default number of results from Exa (1-100; other providers are clamped to 1-10).",
-  "tools.web.search.exa.type":
-    'Exa search type: "auto" (default), "neural", or "keyword".',
+  "tools.web.search.exa.type": 'Exa search type: "auto" (default), "neural", or "keyword".',
   "tools.web.search.exa.contents":
     "Include page text snippets in results (default: false). Exa charges extra per page for contents.",
   "tools.web.fetch.enabled": "Enable the web_fetch tool (lightweight HTTP fetch).",
