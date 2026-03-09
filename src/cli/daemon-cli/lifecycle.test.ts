@@ -152,6 +152,12 @@ describe("runDaemonRestart health checks", () => {
       healthy: true,
       portUsage: { port: 18789, status: "busy", listeners: [], hints: [] },
     });
+    waitForGatewayHealthyRestart.mockResolvedValue({
+      healthy: true,
+      staleGatewayPids: [],
+      runtime: { status: "running" },
+      portUsage: { port: 18789, status: "busy", listeners: [], hints: [] },
+    });
     probeGateway.mockResolvedValue({
       ok: true,
       configSnapshot: { commands: { restart: true } },
@@ -278,6 +284,33 @@ describe("runDaemonRestart health checks", () => {
     expect(waitForGatewayHealthyRestart).not.toHaveBeenCalled();
     expect(terminateStaleGatewayPids).not.toHaveBeenCalled();
     expect(service.restart).not.toHaveBeenCalled();
+  });
+
+  it("bootstraps an installed macOS LaunchAgent when restart finds it unloaded", async () => {
+    vi.spyOn(process, "platform", "get").mockReturnValue("darwin");
+    findGatewayPidsOnPortSync.mockReturnValue([]);
+    runServiceRestart.mockImplementation(
+      async (params: RestartParams & { onNotLoaded?: () => Promise<unknown> }) => {
+        await params.onNotLoaded?.();
+        await params.postRestartCheck?.({
+          json: Boolean(params.opts?.json),
+          stdout: process.stdout,
+          warnings: [],
+          fail: (message: string) => {
+            throw new Error(message);
+          },
+        });
+        return true;
+      },
+    );
+
+    await runDaemonRestart({ json: true });
+
+    expect(service.readCommand).toHaveBeenCalled();
+    expect(service.restart).toHaveBeenCalledTimes(1);
+    expect(waitForGatewayHealthyRestart).toHaveBeenCalledTimes(1);
+    expect(waitForGatewayHealthyListener).not.toHaveBeenCalled();
+    expect(terminateStaleGatewayPids).not.toHaveBeenCalled();
   });
 
   it("fails unmanaged restart when multiple gateway listeners are present", async () => {

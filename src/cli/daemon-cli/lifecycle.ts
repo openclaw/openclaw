@@ -180,6 +180,27 @@ async function restartGatewayWithoutServiceManager(port: number) {
   };
 }
 
+async function restartInstalledLaunchAgentWhenUnloaded(
+  service: {
+    readCommand: (env: NodeJS.ProcessEnv) => Promise<unknown>;
+    restart: (args: { env: NodeJS.ProcessEnv; stdout: NodeJS.WritableStream }) => Promise<void>;
+  },
+  stdout: NodeJS.WritableStream,
+): Promise<{ result: "restarted"; message: string } | null> {
+  if (process.platform !== "darwin") {
+    return null;
+  }
+  const installed = await service.readCommand(process.env).catch(() => null);
+  if (!installed) {
+    return null;
+  }
+  await service.restart({ env: process.env, stdout });
+  return {
+    result: "restarted",
+    message: "Gateway LaunchAgent was not loaded; bootstrapped from the existing plist.",
+  };
+}
+
 export async function runDaemonUninstall(opts: DaemonLifecycleOptions = {}) {
   return await runServiceUninstall({
     serviceNoun: "Gateway",
@@ -233,12 +254,14 @@ export async function runDaemonRestart(opts: DaemonLifecycleOptions = {}): Promi
     renderStartHints: renderGatewayServiceStartHints,
     opts,
     checkTokenDrift: true,
-    onNotLoaded: async () => {
+    onNotLoaded: async (ctx) => {
+      const stdout = ctx?.stdout ?? process.stdout;
       const handled = await restartGatewayWithoutServiceManager(restartPort);
       if (handled) {
         restartedWithoutServiceManager = true;
+        return handled;
       }
-      return handled;
+      return await restartInstalledLaunchAgentWhenUnloaded(service, stdout);
     },
     postRestartCheck: async ({ warnings, fail, stdout }) => {
       if (restartedWithoutServiceManager) {

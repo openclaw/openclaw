@@ -409,7 +409,7 @@ export async function runServiceRestart(params: {
       await params.postRestartCheck({ json, stdout, warnings, fail });
     }
     let restarted = loaded;
-    if (loaded) {
+    if (loaded || handledNotLoaded?.result === "restarted") {
       try {
         restarted = await params.service.isLoaded({ env: process.env });
       } catch {

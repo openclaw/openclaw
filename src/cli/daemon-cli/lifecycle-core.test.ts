@@ -176,4 +176,33 @@ describe("runServiceRestart token drift", () => {
     expect(payload.result).toBe("restarted");
     expect(payload.message).toContain("unmanaged process");
   });
+
+  it("rechecks service status after a not-loaded restart handler bootstraps the service", async () => {
+    const postRestartCheck = vi.fn(async () => {});
+    service.isLoaded.mockResolvedValueOnce(false).mockResolvedValueOnce(true);
+
+    await runServiceRestart({
+      serviceNoun: "Gateway",
+      service,
+      renderStartHints: () => [],
+      opts: { json: true },
+      onNotLoaded: async () => ({
+        result: "restarted",
+        message: "Gateway LaunchAgent was not loaded; bootstrapped from the existing plist.",
+      }),
+      postRestartCheck,
+    });
+
+    expect(postRestartCheck).toHaveBeenCalledTimes(1);
+    expect(service.restart).not.toHaveBeenCalled();
+    const jsonLine = runtimeLogs.find((line) => line.trim().startsWith("{"));
+    const payload = JSON.parse(jsonLine ?? "{}") as {
+      result?: string;
+      message?: string;
+      service?: { loaded?: boolean };
+    };
+    expect(payload.result).toBe("restarted");
+    expect(payload.message).toContain("bootstrapped");
+    expect(payload.service?.loaded).toBe(true);
+  });
 });
