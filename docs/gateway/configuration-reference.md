@@ -1634,6 +1634,22 @@ Batches rapid text-only messages from the same sender into a single agent turn. 
         model: "gpt-4o-mini-tts",
         voice: "alloy",
       },
+      typecast: {
+        apiKey: "typecast_api_key",
+        baseHost: "https://api.typecast.ai",
+        voiceId: "tc_your_voice_id",
+        model: "ssfm-v30",
+        language: "kor",
+        emotionPreset: "normal",
+        emotionIntensity: 1.0,
+        seed: 42,
+        output: {
+          volume: 100,
+          audioPitch: 0,
+          audioTempo: 1.0,
+          audioFormat: "mp3",
+        },
+      },
     },
   },
 }
