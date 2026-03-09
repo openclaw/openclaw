@@ -1,5 +1,5 @@
 import { createServer } from "node:http";
-import { webhookCallback } from "grammy";
+import { InputFile, webhookCallback } from "grammy";
 import type { OpenClawConfig } from "../config/config.js";
 import { isDiagnosticsEnabled } from "../infra/diagnostic-events.js";
 import { formatErrorMessage } from "../infra/errors.js";
@@ -87,6 +87,7 @@ export async function startTelegramWebhook(opts: {
   abortSignal?: AbortSignal;
   healthPath?: string;
   publicUrl?: string;
+  webhookCertPath?: string;
 }) {
   const path = opts.path ?? "/telegram-webhook";
   const healthPath = opts.healthPath ?? "/healthz";
@@ -120,7 +121,7 @@ export async function startTelegramWebhook(opts: {
   });
 
   if (diagnosticsEnabled) {
-    startDiagnosticHeartbeat();
+    startDiagnosticHeartbeat(opts.config);
   }
 
   const server = createServer((req, res) => {
@@ -222,6 +223,8 @@ export async function startTelegramWebhook(opts: {
     port,
     host,
   });
+  const boundAddress = server.address();
+  const boundPort = boundAddress && typeof boundAddress !== "string" ? boundAddress.port : port;
 
   const publicUrl = resolveWebhookPublicUrl({
     configuredPublicUrl: opts.publicUrl,
@@ -239,6 +242,7 @@ export async function startTelegramWebhook(opts: {
         bot.api.setWebhook(publicUrl, {
           secret_token: secret,
           allowed_updates: resolveTelegramAllowedUpdates(),
+          certificate: opts.webhookCertPath ? new InputFile(opts.webhookCertPath) : undefined,
         }),
     });
   } catch (err) {
@@ -250,7 +254,8 @@ export async function startTelegramWebhook(opts: {
     throw err;
   }
 
-  runtime.log?.(`webhook listening on ${publicUrl}`);
+  runtime.log?.(`webhook local listener on http://${host}:${boundPort}${path}`);
+  runtime.log?.(`webhook advertised to telegram on ${publicUrl}`);
 
   let shutDown = false;
   const shutdown = () => {

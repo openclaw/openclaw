@@ -8,6 +8,7 @@ import {
   resolveAgentModelFallbackValues,
   resolveAgentModelPrimaryValue,
 } from "../config/model-input.js";
+import type { ModelApi } from "../config/types.models.js";
 import {
   applyAuthProfileConfig,
   applyLitellmProviderConfig,
@@ -45,7 +46,7 @@ import {
 
 function createLegacyProviderConfig(params: {
   providerId: string;
-  api: "anthropic-messages" | "openai-completions" | "openai-responses";
+  api: ModelApi;
   modelId?: string;
   modelName?: string;
   baseUrl?: string;
@@ -365,12 +366,13 @@ describe("applyMinimaxApiConfig", () => {
     expect(cfg.models?.providers?.minimax).toMatchObject({
       baseUrl: "https://api.minimax.io/anthropic",
       api: "anthropic-messages",
+      authHeader: true,
     });
   });
 
-  it("does not set reasoning for non-reasoning models", () => {
-    const cfg = applyMinimaxApiConfig({}, "MiniMax-M2.1");
-    expect(cfg.models?.providers?.minimax?.models[0]?.reasoning).toBe(false);
+  it("keeps reasoning enabled for MiniMax-M2.5", () => {
+    const cfg = applyMinimaxApiConfig({}, "MiniMax-M2.5");
+    expect(cfg.models?.providers?.minimax?.models[0]?.reasoning).toBe(true);
   });
 
   it("preserves existing model params when adding alias", () => {
@@ -379,7 +381,7 @@ describe("applyMinimaxApiConfig", () => {
         agents: {
           defaults: {
             models: {
-              "minimax/MiniMax-M2.1": {
+              "minimax/MiniMax-M2.5": {
                 alias: "MiniMax",
                 params: { custom: "value" },
               },
@@ -387,9 +389,9 @@ describe("applyMinimaxApiConfig", () => {
           },
         },
       },
-      "MiniMax-M2.1",
+      "MiniMax-M2.5",
     );
-    expect(cfg.agents?.defaults?.models?.["minimax/MiniMax-M2.1"]).toMatchObject({
+    expect(cfg.agents?.defaults?.models?.["minimax/MiniMax-M2.5"]).toMatchObject({
       alias: "Minimax",
       params: { custom: "value" },
     });
@@ -404,6 +406,7 @@ describe("applyMinimaxApiConfig", () => {
     );
     expect(cfg.models?.providers?.minimax?.baseUrl).toBe("https://api.minimax.io/anthropic");
     expect(cfg.models?.providers?.minimax?.api).toBe("anthropic-messages");
+    expect(cfg.models?.providers?.minimax?.authHeader).toBe(true);
     expect(cfg.models?.providers?.minimax?.apiKey).toBe("old-key");
     expect(cfg.models?.providers?.minimax?.models.map((m) => m.id)).toEqual([
       "old-model",
@@ -417,7 +420,7 @@ describe("applyMinimaxApiConfig", () => {
         providers: {
           anthropic: {
             baseUrl: "https://api.anthropic.com",
-            apiKey: "anthropic-key",
+            apiKey: "anthropic-key", // pragma: allowlist secret
             api: "anthropic-messages",
             models: [
               {
@@ -511,8 +514,8 @@ describe("primary model defaults", () => {
   it("sets correct primary model", () => {
     const configCases = [
       {
-        getConfig: () => applyMinimaxApiConfig({}, "MiniMax-M2.1-lightning"),
-        primaryModel: "minimax/MiniMax-M2.1-lightning",
+        getConfig: () => applyMinimaxApiConfig({}, "MiniMax-M2.5-highspeed"),
+        primaryModel: "minimax/MiniMax-M2.5-highspeed",
       },
       {
         getConfig: () => applyZaiConfig({}, { modelId: "glm-5" }),
@@ -642,8 +645,8 @@ describe("provider alias defaults", () => {
   it("adds expected alias for provider defaults", () => {
     const aliasCases = [
       {
-        applyConfig: () => applyMinimaxApiConfig({}, "MiniMax-M2.1"),
-        modelRef: "minimax/MiniMax-M2.1",
+        applyConfig: () => applyMinimaxApiConfig({}, "MiniMax-M2.5"),
+        modelRef: "minimax/MiniMax-M2.5",
         alias: "Minimax",
       },
       {

@@ -23,7 +23,7 @@ function buildForwardCompatTemplate(params: {
   id: string;
   name: string;
   provider: string;
-  api: "anthropic-messages" | "google-gemini-cli" | "openai-completions";
+  api: "anthropic-messages" | "google-gemini-cli" | "openai-completions" | "openai-responses";
   baseUrl: string;
   input?: readonly ["text"] | readonly ["text", "image"];
   cost?: { input: number; output: number; cacheRead: number; cacheWrite: number };
@@ -149,6 +149,58 @@ describe("buildInlineProviderModels", () => {
       name: "claude-opus-4.5",
     });
   });
+
+  it("merges provider-level headers into inline models", () => {
+    const providers: Parameters<typeof buildInlineProviderModels>[0] = {
+      proxy: {
+        baseUrl: "https://proxy.example.com",
+        api: "anthropic-messages",
+        headers: { "User-Agent": "custom-agent/1.0" },
+        models: [makeModel("claude-sonnet-4-6")],
+      },
+    };
+
+    const result = buildInlineProviderModels(providers);
+
+    expect(result).toHaveLength(1);
+    expect(result[0].headers).toEqual({ "User-Agent": "custom-agent/1.0" });
+  });
+
+  it("omits headers when neither provider nor model specifies them", () => {
+    const providers: Parameters<typeof buildInlineProviderModels>[0] = {
+      plain: {
+        baseUrl: "http://localhost:8000",
+        models: [makeModel("some-model")],
+      },
+    };
+
+    const result = buildInlineProviderModels(providers);
+
+    expect(result).toHaveLength(1);
+    expect(result[0].headers).toBeUndefined();
+  });
+
+  it("preserves literal marker-shaped headers in inline provider models", () => {
+    const providers: Parameters<typeof buildInlineProviderModels>[0] = {
+      custom: {
+        headers: {
+          Authorization: "secretref-env:OPENAI_HEADER_TOKEN",
+          "X-Managed": "secretref-managed",
+          "X-Static": "tenant-a",
+        },
+        models: [makeModel("custom-model")],
+      },
+    };
+
+    const result = buildInlineProviderModels(providers);
+
+    expect(result).toHaveLength(1);
+    expect(result[0].headers).toEqual({
+      Authorization: "secretref-env:OPENAI_HEADER_TOKEN",
+      "X-Managed": "secretref-managed",
+      "X-Static": "tenant-a",
+    });
+  });
 });
 
 describe("resolveModel", () => {
@@ -171,6 +223,245 @@ describe("resolveModel", () => {
     expect(result.model?.id).toBe("missing-model");
   });
 
+  it("includes provider headers in provider fallback model", () => {
+    const cfg = {
+      models: {
+        providers: {
+          custom: {
+            baseUrl: "http://localhost:9000",
+            headers: { "X-Custom-Auth": "token-123" },
+            models: [makeModel("listed-model")],
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    // Requesting a non-listed model forces the providerCfg fallback branch.
+    const result = resolveModel("custom", "missing-model", "/tmp/agent", cfg);
+
+    expect(result.error).toBeUndefined();
+    expect((result.model as unknown as { headers?: Record<string, string> }).headers).toEqual({
+      "X-Custom-Auth": "token-123",
+    });
+  });
+
+  it("preserves literal marker-shaped provider headers in fallback models", () => {
+    const cfg = {
+      models: {
+        providers: {
+          custom: {
+            baseUrl: "http://localhost:9000",
+            headers: {
+              Authorization: "secretref-env:OPENAI_HEADER_TOKEN",
+              "X-Managed": "secretref-managed",
+              "X-Custom-Auth": "token-123",
+            },
+            models: [makeModel("listed-model")],
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    const result = resolveModel("custom", "missing-model", "/tmp/agent", cfg);
+
+    expect(result.error).toBeUndefined();
+    expect((result.model as unknown as { headers?: Record<string, string> }).headers).toEqual({
+      Authorization: "secretref-env:OPENAI_HEADER_TOKEN",
+      "X-Managed": "secretref-managed",
+      "X-Custom-Auth": "token-123",
+    });
+  });
+
+  it("drops marker headers from discovered models.json entries", () => {
+    mockDiscoveredModel({
+      provider: "custom",
+      modelId: "listed-model",
+      templateModel: {
+        ...makeModel("listed-model"),
+        provider: "custom",
+        headers: {
+          Authorization: "secretref-env:OPENAI_HEADER_TOKEN",
+          "X-Managed": "secretref-managed",
+          "X-Static": "tenant-a",
+        },
+      },
+    });
+
+    const result = resolveModel("custom", "listed-model", "/tmp/agent");
+
+    expect(result.error).toBeUndefined();
+    expect((result.model as unknown as { headers?: Record<string, string> }).headers).toEqual({
+      "X-Static": "tenant-a",
+    });
+  });
+
+  it("prefers matching configured model metadata for fallback token limits", () => {
+    const cfg = {
+      models: {
+        providers: {
+          custom: {
+            baseUrl: "http://localhost:9000",
+            models: [
+              {
+                ...makeModel("model-a"),
+                contextWindow: 4096,
+                maxTokens: 1024,
+              },
+              {
+                ...makeModel("model-b"),
+                contextWindow: 262144,
+                maxTokens: 32768,
+              },
+            ],
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    const result = resolveModel("custom", "model-b", "/tmp/agent", cfg);
+
+    expect(result.model?.contextWindow).toBe(262144);
+    expect(result.model?.maxTokens).toBe(32768);
+  });
+
+  it("propagates reasoning from matching configured fallback model", () => {
+    const cfg = {
+      models: {
+        providers: {
+          custom: {
+            baseUrl: "http://localhost:9000",
+            models: [
+              {
+                ...makeModel("model-a"),
+                reasoning: false,
+              },
+              {
+                ...makeModel("model-b"),
+                reasoning: true,
+              },
+            ],
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    const result = resolveModel("custom", "model-b", "/tmp/agent", cfg);
+
+    expect(result.model?.reasoning).toBe(true);
+  });
+
+  it("prefers configured provider api metadata over discovered registry model", () => {
+    mockDiscoveredModel({
+      provider: "onehub",
+      modelId: "glm-5",
+      templateModel: {
+        id: "glm-5",
+        name: "GLM-5 (cached)",
+        provider: "onehub",
+        api: "anthropic-messages",
+        baseUrl: "https://old-provider.example.com/v1",
+        reasoning: false,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 8192,
+        maxTokens: 2048,
+      },
+    });
+
+    const cfg = {
+      models: {
+        providers: {
+          onehub: {
+            baseUrl: "http://new-provider.example.com/v1",
+            api: "openai-completions",
+            models: [
+              {
+                ...makeModel("glm-5"),
+                api: "openai-completions",
+                reasoning: true,
+                contextWindow: 198000,
+                maxTokens: 16000,
+              },
+            ],
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    const result = resolveModel("onehub", "glm-5", "/tmp/agent", cfg);
+
+    expect(result.error).toBeUndefined();
+    expect(result.model).toMatchObject({
+      provider: "onehub",
+      id: "glm-5",
+      api: "openai-completions",
+      baseUrl: "http://new-provider.example.com/v1",
+      reasoning: true,
+      contextWindow: 198000,
+      maxTokens: 16000,
+    });
+  });
+
+  it("prefers exact provider config over normalized alias match when both keys exist", () => {
+    mockDiscoveredModel({
+      provider: "qwen",
+      modelId: "qwen3-coder-plus",
+      templateModel: {
+        id: "qwen3-coder-plus",
+        name: "Qwen3 Coder Plus",
+        provider: "qwen",
+        api: "openai-completions",
+        baseUrl: "https://default-provider.example.com/v1",
+        reasoning: false,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 8192,
+        maxTokens: 2048,
+      },
+    });
+
+    const cfg = {
+      models: {
+        providers: {
+          "qwen-portal": {
+            baseUrl: "https://canonical-provider.example.com/v1",
+            api: "openai-completions",
+            headers: { "X-Provider": "canonical" },
+            models: [{ ...makeModel("qwen3-coder-plus"), reasoning: false }],
+          },
+          qwen: {
+            baseUrl: "https://alias-provider.example.com/v1",
+            api: "anthropic-messages",
+            headers: { "X-Provider": "alias" },
+            models: [
+              {
+                ...makeModel("qwen3-coder-plus"),
+                api: "anthropic-messages",
+                reasoning: true,
+                contextWindow: 262144,
+                maxTokens: 32768,
+              },
+            ],
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    const result = resolveModel("qwen", "qwen3-coder-plus", "/tmp/agent", cfg);
+
+    expect(result.error).toBeUndefined();
+    expect(result.model).toMatchObject({
+      provider: "qwen",
+      id: "qwen3-coder-plus",
+      api: "anthropic-messages",
+      baseUrl: "https://alias-provider.example.com",
+      reasoning: true,
+      contextWindow: 262144,
+      maxTokens: 32768,
+      headers: { "X-Provider": "alias" },
+    });
+  });
+
   it("builds an openai-codex fallback for gpt-5.3-codex", () => {
     mockOpenAICodexTemplateModel();
 
@@ -178,6 +469,53 @@ describe("resolveModel", () => {
 
     expect(result.error).toBeUndefined();
     expect(result.model).toMatchObject(buildOpenAICodexForwardCompatExpectation("gpt-5.3-codex"));
+  });
+
+  it("builds an openai-codex fallback for gpt-5.4", () => {
+    mockOpenAICodexTemplateModel();
+
+    const result = resolveModel("openai-codex", "gpt-5.4", "/tmp/agent");
+
+    expect(result.error).toBeUndefined();
+    expect(result.model).toMatchObject(buildOpenAICodexForwardCompatExpectation("gpt-5.4"));
+  });
+
+  it("applies provider overrides to openai gpt-5.4 forward-compat models", () => {
+    mockDiscoveredModel({
+      provider: "openai",
+      modelId: "gpt-5.2",
+      templateModel: buildForwardCompatTemplate({
+        id: "gpt-5.2",
+        name: "GPT-5.2",
+        provider: "openai",
+        api: "openai-responses",
+        baseUrl: "https://api.openai.com/v1",
+      }),
+    });
+
+    const cfg = {
+      models: {
+        providers: {
+          openai: {
+            baseUrl: "https://proxy.example.com/v1",
+            headers: { "X-Proxy-Auth": "token-123" },
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    const result = resolveModel("openai", "gpt-5.4", "/tmp/agent", cfg);
+
+    expect(result.error).toBeUndefined();
+    expect(result.model).toMatchObject({
+      provider: "openai",
+      id: "gpt-5.4",
+      api: "openai-responses",
+      baseUrl: "https://proxy.example.com/v1",
+    });
+    expect((result.model as unknown as { headers?: Record<string, string> }).headers).toEqual({
+      "X-Proxy-Auth": "token-123",
+    });
   });
 
   it("builds an anthropic forward-compat fallback for claude-opus-4-6", () => {
@@ -323,5 +661,81 @@ describe("resolveModel", () => {
 
     expect(result.model).toBeUndefined();
     expect(result.error).toBe("Unknown model: google-antigravity/some-model");
+  });
+
+  it("applies provider baseUrl override to registry-found models", () => {
+    mockDiscoveredModel({
+      provider: "anthropic",
+      modelId: "claude-sonnet-4-5",
+      templateModel: buildForwardCompatTemplate({
+        id: "claude-sonnet-4-5",
+        name: "Claude Sonnet 4.5",
+        provider: "anthropic",
+        api: "anthropic-messages",
+        baseUrl: "https://api.anthropic.com",
+      }),
+    });
+
+    const cfg = {
+      models: {
+        providers: {
+          anthropic: {
+            baseUrl: "https://my-proxy.example.com",
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    const result = resolveModel("anthropic", "claude-sonnet-4-5", "/tmp/agent", cfg);
+    expect(result.error).toBeUndefined();
+    expect(result.model?.baseUrl).toBe("https://my-proxy.example.com");
+  });
+
+  it("applies provider headers override to registry-found models", () => {
+    mockDiscoveredModel({
+      provider: "anthropic",
+      modelId: "claude-sonnet-4-5",
+      templateModel: buildForwardCompatTemplate({
+        id: "claude-sonnet-4-5",
+        name: "Claude Sonnet 4.5",
+        provider: "anthropic",
+        api: "anthropic-messages",
+        baseUrl: "https://api.anthropic.com",
+      }),
+    });
+
+    const cfg = {
+      models: {
+        providers: {
+          anthropic: {
+            headers: { "X-Custom-Auth": "token-123" },
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    const result = resolveModel("anthropic", "claude-sonnet-4-5", "/tmp/agent", cfg);
+    expect(result.error).toBeUndefined();
+    expect((result.model as unknown as { headers?: Record<string, string> }).headers).toEqual({
+      "X-Custom-Auth": "token-123",
+    });
+  });
+
+  it("does not override when no provider config exists", () => {
+    mockDiscoveredModel({
+      provider: "anthropic",
+      modelId: "claude-sonnet-4-5",
+      templateModel: buildForwardCompatTemplate({
+        id: "claude-sonnet-4-5",
+        name: "Claude Sonnet 4.5",
+        provider: "anthropic",
+        api: "anthropic-messages",
+        baseUrl: "https://api.anthropic.com",
+      }),
+    });
+
+    const result = resolveModel("anthropic", "claude-sonnet-4-5", "/tmp/agent");
+    expect(result.error).toBeUndefined();
+    expect(result.model?.baseUrl).toBe("https://api.anthropic.com");
   });
 });

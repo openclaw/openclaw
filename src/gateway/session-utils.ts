@@ -22,7 +22,7 @@ import {
   type SessionEntry,
   type SessionScope,
 } from "../config/sessions.js";
-import { openVerifiedFileSync } from "../infra/safe-open-sync.js";
+import { openBoundaryFileSync } from "../infra/boundary-file-read.js";
 import {
   normalizeAgentId,
   normalizeMainKey,
@@ -102,14 +102,13 @@ function resolveIdentityAvatarUrl(
     return undefined;
   }
   try {
-    const resolvedReal = fs.realpathSync(resolvedCandidate);
-    if (!isPathWithinRoot(workspaceRoot, resolvedReal)) {
-      return undefined;
-    }
-    const opened = openVerifiedFileSync({
-      filePath: resolvedReal,
-      resolvedPath: resolvedReal,
+    const opened = openBoundaryFileSync({
+      absolutePath: resolvedCandidate,
+      rootPath: workspaceRoot,
+      rootRealPath: workspaceRoot,
+      boundaryLabel: "workspace root",
       maxBytes: AVATAR_MAX_BYTES,
+      skipLexicalRootCheck: true,
     });
     if (!opened.ok) {
       return undefined;
@@ -311,35 +310,25 @@ function listExistingAgentIdsFromDisk(): string[] {
 }
 
 function listConfiguredAgentIds(cfg: OpenClawConfig): string[] {
-  const agents = cfg.agents?.list ?? [];
-  if (agents.length > 0) {
-    const ids = new Set<string>();
-    for (const entry of agents) {
-      if (entry?.id) {
-        ids.add(normalizeAgentId(entry.id));
-      }
-    }
-    const defaultId = normalizeAgentId(resolveDefaultAgentId(cfg));
-    ids.add(defaultId);
-    const sorted = Array.from(ids).filter(Boolean);
-    sorted.sort((a, b) => a.localeCompare(b));
-    return sorted.includes(defaultId)
-      ? [defaultId, ...sorted.filter((id) => id !== defaultId)]
-      : sorted;
-  }
-
   const ids = new Set<string>();
   const defaultId = normalizeAgentId(resolveDefaultAgentId(cfg));
   ids.add(defaultId);
+
+  for (const entry of cfg.agents?.list ?? []) {
+    if (entry?.id) {
+      ids.add(normalizeAgentId(entry.id));
+    }
+  }
+
   for (const id of listExistingAgentIdsFromDisk()) {
     ids.add(id);
   }
+
   const sorted = Array.from(ids).filter(Boolean);
   sorted.sort((a, b) => a.localeCompare(b));
-  if (sorted.includes(defaultId)) {
-    return [defaultId, ...sorted.filter((id) => id !== defaultId)];
-  }
-  return sorted;
+  return sorted.includes(defaultId)
+    ? [defaultId, ...sorted.filter((id) => id !== defaultId)]
+    : sorted;
 }
 
 export function listAgentsForGateway(cfg: OpenClawConfig): {

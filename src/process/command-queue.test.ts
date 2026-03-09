@@ -21,8 +21,10 @@ import {
   CommandLaneClearedError,
   enqueueCommand,
   enqueueCommandInLane,
+  GatewayDrainingError,
   getActiveTaskCount,
   getQueueSize,
+  markGatewayDraining,
   resetAllLanes,
   setCommandLaneConcurrency,
   waitForActiveTasks,
@@ -52,6 +54,7 @@ function enqueueBlockedMainTask<T = void>(
 
 describe("command queue", () => {
   beforeEach(() => {
+    resetAllLanes();
     diagnosticMocks.logLaneEnqueue.mockClear();
     diagnosticMocks.logLaneDequeue.mockClear();
     diagnosticMocks.diag.debug.mockClear();
@@ -287,5 +290,48 @@ describe("command queue", () => {
     // Let the active task finish normally.
     release();
     await expect(first).resolves.toBe("first");
+  });
+
+  it("keeps draining functional after synchronous onWait failure", async () => {
+    const lane = `drain-sync-throw-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+    setCommandLaneConcurrency(lane, 1);
+
+    const deferred = createDeferred();
+    const first = enqueueCommandInLane(lane, async () => {
+      await deferred.promise;
+      return "first";
+    });
+    const second = enqueueCommandInLane(lane, async () => "second", {
+      warnAfterMs: 0,
+      onWait: () => {
+        throw new Error("onWait exploded");
+      },
+    });
+    await Promise.resolve();
+    expect(getQueueSize(lane)).toBeGreaterThanOrEqual(2);
+
+    deferred.resolve();
+    await expect(first).resolves.toBe("first");
+    await expect(second).resolves.toBe("second");
+  });
+
+  it("rejects new enqueues with GatewayDrainingError after markGatewayDraining", async () => {
+    markGatewayDraining();
+    await expect(enqueueCommand(async () => "blocked")).rejects.toBeInstanceOf(
+      GatewayDrainingError,
+    );
+  });
+
+  it("does not affect already-active tasks after markGatewayDraining", async () => {
+    const { task, release } = enqueueBlockedMainTask(async () => "ok");
+    markGatewayDraining();
+    release();
+    await expect(task).resolves.toBe("ok");
+  });
+
+  it("resetAllLanes clears gateway draining flag and re-allows enqueue", async () => {
+    markGatewayDraining();
+    resetAllLanes();
+    await expect(enqueueCommand(async () => "ok")).resolves.toBe("ok");
   });
 });

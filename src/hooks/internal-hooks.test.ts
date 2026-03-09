@@ -142,6 +142,25 @@ describe("hooks", () => {
       const event = createInternalHookEvent("command", "new", "test-session");
       await expect(triggerInternalHook(event)).resolves.not.toThrow();
     });
+
+    it("stores handlers in the global singleton registry", async () => {
+      const globalHooks = globalThis as typeof globalThis & {
+        __openclaw_internal_hook_handlers__?: Map<string, Array<(event: unknown) => unknown>>;
+      };
+      const handler = vi.fn();
+      registerInternalHook("command:new", handler);
+
+      const event = createInternalHookEvent("command", "new", "test-session");
+      await triggerInternalHook(event);
+
+      expect(handler).toHaveBeenCalledWith(event);
+      expect(globalHooks.__openclaw_internal_hook_handlers__?.has("command:new")).toBe(true);
+
+      const injectedHandler = vi.fn();
+      globalHooks.__openclaw_internal_hook_handlers__?.set("command:new", [injectedHandler]);
+      await triggerInternalHook(event);
+      expect(injectedHandler).toHaveBeenCalledWith(event);
+    });
   });
 
   describe("createInternalHookEvent", () => {

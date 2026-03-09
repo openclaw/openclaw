@@ -47,14 +47,38 @@ describe("normalizePluginsConfig", () => {
     });
     expect(result.slots.memory).toBe("memory-core");
   });
+
+  it("normalizes plugin hook policy flags", () => {
+    const result = normalizePluginsConfig({
+      entries: {
+        "voice-call": {
+          hooks: {
+            allowPromptInjection: false,
+          },
+        },
+      },
+    });
+    expect(result.entries["voice-call"]?.hooks?.allowPromptInjection).toBe(false);
+  });
+
+  it("drops invalid plugin hook policy values", () => {
+    const result = normalizePluginsConfig({
+      entries: {
+        "voice-call": {
+          hooks: {
+            allowPromptInjection: "nope",
+          } as unknown as { allowPromptInjection: boolean },
+        },
+      },
+    });
+    expect(result.entries["voice-call"]?.hooks).toBeUndefined();
+  });
 });
 
 describe("resolveEffectiveEnableState", () => {
-  it("enables bundled channels when channels.<id>.enabled=true", () => {
-    const normalized = normalizePluginsConfig({
-      enabled: true,
-    });
-    const state = resolveEffectiveEnableState({
+  function resolveBundledTelegramState(config: Parameters<typeof normalizePluginsConfig>[0]) {
+    const normalized = normalizePluginsConfig(config);
+    return resolveEffectiveEnableState({
       id: "telegram",
       origin: "bundled",
       config: normalized,
@@ -65,28 +89,22 @@ describe("resolveEffectiveEnableState", () => {
           },
         },
       },
+    });
+  }
+
+  it("enables bundled channels when channels.<id>.enabled=true", () => {
+    const state = resolveBundledTelegramState({
+      enabled: true,
     });
     expect(state).toEqual({ enabled: true });
   });
 
   it("keeps explicit plugin-level disable authoritative", () => {
-    const normalized = normalizePluginsConfig({
+    const state = resolveBundledTelegramState({
       enabled: true,
       entries: {
         telegram: {
           enabled: false,
-        },
-      },
-    });
-    const state = resolveEffectiveEnableState({
-      id: "telegram",
-      origin: "bundled",
-      config: normalized,
-      rootConfig: {
-        channels: {
-          telegram: {
-            enabled: true,
-          },
         },
       },
     });
