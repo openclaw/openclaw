@@ -8,8 +8,8 @@
  * @date 2026-03-09
  */
 
+import { validateChainConfig } from "../../config-validator";
 import type { MemorySearchManager, MemorySearchResult } from "../../types";
-import { validateChainConfig } from "../config-validator";
 import { AsyncWriteQueue } from "./async-queue";
 import { HealthMonitor } from "./health-monitor";
 import type {
@@ -266,6 +266,17 @@ export class ChainMemoryManager implements MemorySearchManager {
 
     // 清空队列
     this.asyncQueue.clear();
+
+    // 关闭所有子 providers
+    for (const [name, provider] of this.providers) {
+      try {
+        if (provider.close) {
+          await provider.close();
+        }
+      } catch (error) {
+        log.error(`Failed to close provider ${name}:`, error);
+      }
+    }
   }
 
   /**
