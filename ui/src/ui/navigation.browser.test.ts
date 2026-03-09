@@ -146,11 +146,11 @@ describe("control UI routing", () => {
     expect(container.scrollTop).toBe(maxScroll);
   });
 
-  it("hydrates token from URL params and strips it", async () => {
+  it("strips query token params without importing them", async () => {
     const app = mountApp("/ui/overview?token=abc123");
     await app.updateComplete;
 
-    expect(app.settings.token).toBe("abc123");
+    expect(app.settings.token).toBe("");
     expect(JSON.parse(localStorage.getItem("openclaw.control.settings.v1") ?? "{}").token).toBe(
       undefined,
     );
@@ -167,12 +167,12 @@ describe("control UI routing", () => {
     expect(window.location.search).toBe("");
   });
 
-  it("hydrates token from URL params even when settings already set", async () => {
+  it("hydrates token from URL hash when settings already set", async () => {
     localStorage.setItem(
       "openclaw.control.settings.v1",
       JSON.stringify({ token: "existing-token", gatewayUrl: "wss://gateway.example/openclaw" }),
     );
-    const app = mountApp("/ui/overview?token=abc123");
+    const app = mountApp("/ui/overview#token=abc123");
     await app.updateComplete;
 
     expect(app.settings.token).toBe("abc123");
@@ -183,7 +183,7 @@ describe("control UI routing", () => {
       undefined,
     );
     expect(window.location.pathname).toBe("/ui/overview");
-    expect(window.location.search).toBe("");
+    expect(window.location.hash).toBe("");
   });
 
   it("hydrates token from URL hash and strips it", async () => {
@@ -196,5 +196,57 @@ describe("control UI routing", () => {
     );
     expect(window.location.pathname).toBe("/ui/overview");
     expect(window.location.hash).toBe("");
+  });
+
+  it("clears the current token when the gateway URL changes", async () => {
+    const app = mountApp("/ui/overview#token=abc123");
+    await app.updateComplete;
+
+    const gatewayUrlInput = app.querySelector<HTMLInputElement>(
+      'input[placeholder="ws://100.x.y.z:18789"]',
+    );
+    expect(gatewayUrlInput).not.toBeNull();
+    gatewayUrlInput!.value = "wss://other-gateway.example/openclaw";
+    gatewayUrlInput!.dispatchEvent(new Event("input", { bubbles: true }));
+    await app.updateComplete;
+
+    expect(app.settings.gatewayUrl).toBe("wss://other-gateway.example/openclaw");
+    expect(app.settings.token).toBe("");
+  });
+
+  it("keeps a hash token pending until the gateway URL change is confirmed", async () => {
+    const app = mountApp(
+      "/ui/overview?gatewayUrl=wss://other-gateway.example/openclaw#token=abc123",
+    );
+    await app.updateComplete;
+
+    expect(app.settings.gatewayUrl).not.toBe("wss://other-gateway.example/openclaw");
+    expect(app.settings.token).toBe("");
+
+    const confirmButton = Array.from(app.querySelectorAll<HTMLButtonElement>("button")).find(
+      (button) => button.textContent?.trim() === "Confirm",
+    );
+    expect(confirmButton).not.toBeUndefined();
+    confirmButton?.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+    await app.updateComplete;
+
+    expect(app.settings.gatewayUrl).toBe("wss://other-gateway.example/openclaw");
+    expect(app.settings.token).toBe("abc123");
+    expect(window.location.search).toBe("");
+    expect(window.location.hash).toBe("");
+  });
+
+  it("restores the token after a same-tab refresh", async () => {
+    const first = mountApp("/ui/overview#token=abc123");
+    await first.updateComplete;
+    first.remove();
+
+    const refreshed = mountApp("/ui/overview");
+    await refreshed.updateComplete;
+
+    expect(refreshed.settings.token).toBe("abc123");
+    expect(JSON.parse(localStorage.getItem("openclaw.control.settings.v1") ?? "{}").token).toBe(
+      undefined,
+    );
   });
 });

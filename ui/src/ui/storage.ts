@@ -1,4 +1,6 @@
 const KEY = "openclaw.control.settings.v1";
+const LEGACY_TOKEN_SESSION_KEY = "openclaw.control.token.v1";
+const TOKEN_SESSION_KEY_PREFIX = "openclaw.control.token.v1:";
 
 type PersistedUiSettings = Omit<UiSettings, "token"> & { token?: never };
 
@@ -20,6 +22,72 @@ export type UiSettings = {
   locale?: string;
 };
 
+function getSessionStorage(): Storage | null {
+  if (typeof window !== "undefined" && window.sessionStorage) {
+    return window.sessionStorage;
+  }
+  if (typeof sessionStorage !== "undefined") {
+    return sessionStorage;
+  }
+  return null;
+}
+
+function normalizeGatewayTokenScope(gatewayUrl: string): string {
+  const trimmed = gatewayUrl.trim();
+  if (!trimmed) {
+    return "default";
+  }
+  try {
+    const base =
+      typeof location !== "undefined"
+        ? `${location.protocol}//${location.host}${location.pathname || "/"}`
+        : undefined;
+    const parsed = base ? new URL(trimmed, base) : new URL(trimmed);
+    const pathname =
+      parsed.pathname === "/" ? "" : parsed.pathname.replace(/\/+$/, "") || parsed.pathname;
+    return `${parsed.protocol}//${parsed.host}${pathname}`;
+  } catch {
+    return trimmed;
+  }
+}
+
+function tokenSessionKeyForGateway(gatewayUrl: string): string {
+  return `${TOKEN_SESSION_KEY_PREFIX}${normalizeGatewayTokenScope(gatewayUrl)}`;
+}
+
+function loadSessionToken(gatewayUrl: string): string {
+  try {
+    const storage = getSessionStorage();
+    if (!storage) {
+      return "";
+    }
+    storage.removeItem(LEGACY_TOKEN_SESSION_KEY);
+    const token = storage.getItem(tokenSessionKeyForGateway(gatewayUrl)) ?? "";
+    return token.trim();
+  } catch {
+    return "";
+  }
+}
+
+function persistSessionToken(gatewayUrl: string, token: string) {
+  try {
+    const storage = getSessionStorage();
+    if (!storage) {
+      return;
+    }
+    storage.removeItem(LEGACY_TOKEN_SESSION_KEY);
+    const key = tokenSessionKeyForGateway(gatewayUrl);
+    const normalized = token.trim();
+    if (normalized) {
+      storage.setItem(key, normalized);
+      return;
+    }
+    storage.removeItem(key);
+  } catch {
+    // best-effort
+  }
+}
+
 export function loadSettings(): UiSettings {
   const defaultUrl = (() => {
     const proto = location.protocol === "https:" ? "wss" : "ws";
@@ -35,7 +103,7 @@ export function loadSettings(): UiSettings {
 
   const defaults: UiSettings = {
     gatewayUrl: defaultUrl,
-    token: "",
+    token: loadSessionToken(defaultUrl),
     sessionKey: "main",
     lastActiveSessionKey: "main",
     theme: "system",
@@ -58,7 +126,11 @@ export function loadSettings(): UiSettings {
           ? parsed.gatewayUrl.trim()
           : defaults.gatewayUrl,
       // Gateway auth is intentionally in-memory only; scrub any legacy persisted token on load.
-      token: defaults.token,
+      token: loadSessionToken(
+        typeof parsed.gatewayUrl === "string" && parsed.gatewayUrl.trim()
+          ? parsed.gatewayUrl.trim()
+          : defaults.gatewayUrl,
+      ),
       sessionKey:
         typeof parsed.sessionKey === "string" && parsed.sessionKey.trim()
           ? parsed.sessionKey.trim()
@@ -106,6 +178,7 @@ export function saveSettings(next: UiSettings) {
 }
 
 function persistSettings(next: UiSettings) {
+  persistSessionToken(next.gatewayUrl, next.token);
   const persisted: PersistedUiSettings = {
     gatewayUrl: next.gatewayUrl,
     sessionKey: next.sessionKey,
