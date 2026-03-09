@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { emitAgentEvent } from "../infra/agent-events.js";
 import { createInlineCodeState } from "../markdown/code-spans.js";
 import {
@@ -28,6 +29,50 @@ export function handleAgentStart(ctx: EmbeddedPiSubscribeContext) {
     stream: "lifecycle",
     data: { phase: "start" },
   });
+}
+
+function emitRawUsageFromAssistant(lastAssistant: unknown) {
+  try {
+    if (!lastAssistant || typeof lastAssistant !== "object") {
+      return;
+    }
+    const a = lastAssistant as {
+      model?: string;
+      provider?: string;
+      usage?: { input?: number; output?: number; cacheRead?: number };
+    };
+    const usage = a.usage ?? {};
+    const evtId = `rt_${Date.now()}_${randomUUID().slice(0, 8)}`;
+    void fetch("http://127.0.0.1:8091/telemetry/model-usage/raw", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "X-Actor-Id": "bridge",
+      },
+      body: JSON.stringify({
+        id: evtId,
+        ts: new Date().toISOString(),
+        model: a.model ?? "unknown",
+        lane: "session",
+        surface: "openclaw-runtime",
+        status: "ok",
+        input_tokens: usage.input ?? 0,
+        output_tokens: usage.output ?? 0,
+        cached_tokens: usage.cacheRead ?? 0,
+        request_id: evtId,
+        latency_ms: 0,
+        metadata: {
+          provider: a.provider ?? "unknown",
+          access_mode: "api",
+          department: "unknown",
+          task_type: "unknown",
+          task_tier: "unknown",
+        },
+      }),
+    }).catch(() => {});
+  } catch {
+    // best-effort telemetry only
+  }
 }
 
 export function handleAgentEnd(ctx: EmbeddedPiSubscribeContext) {
@@ -77,6 +122,7 @@ export function handleAgentEnd(ctx: EmbeddedPiSubscribeContext) {
       },
     });
   } else {
+    emitRawUsageFromAssistant(lastAssistant);
     ctx.log.debug(`embedded run agent end: runId=${ctx.params.runId} isError=${isError}`);
     emitAgentEvent({
       runId: ctx.params.runId,
