@@ -1,7 +1,6 @@
 import { loadConfig } from "../config/config.js";
 import { resolveMarkdownTableMode } from "../config/markdown-tables.js";
 import { convertMarkdownTables } from "../markdown/tables.js";
-import { kindFromMime } from "../media/mime.js";
 import { resolveOutboundAttachmentFromUrl } from "../media/outbound-attachment.js";
 import { resolveIMessageAccount, type ResolvedIMessageAccount } from "./accounts.js";
 import { createIMessageRpcClient, type IMessageRpcClient } from "./client.js";
@@ -128,12 +127,6 @@ export async function sendMessageIMessage(
       localRoots: opts.mediaLocalRoots,
     });
     filePath = resolved.path;
-    if (!message.trim()) {
-      const kind = kindFromMime(resolved.contentType ?? undefined);
-      if (kind) {
-        message = kind === "image" ? "<media:image>" : `<media:${kind}>`;
-      }
-    }
   }
 
   if (!message.trim() && !filePath) {
@@ -150,10 +143,12 @@ export async function sendMessageIMessage(
   message = prependReplyTagIfNeeded(message, opts.replyToId);
 
   const params: Record<string, unknown> = {
-    text: message,
     service: service || "auto",
     region,
   };
+  if (message.trim()) {
+    params.text = message;
+  }
   if (filePath) {
     params.file = filePath;
   }
