@@ -21,6 +21,7 @@ beforeAll(async () => {
       allowPluginLocalInstall: false,
       installCommand: "n/a",
       cwd: process.cwd(),
+      mcpServers: {},
       permissionMode: "approve-reads",
       nonInteractivePermissions: "fail",
       strictWindowsCmdWrapper: true,
@@ -320,6 +321,58 @@ describe("AcpxRuntime", () => {
     expect(logs.find((entry) => entry.kind === "set-mode")?.mode).toBe("plan");
     expect(logs.find((entry) => entry.kind === "set")?.key).toBe("model");
     expect(logs.find((entry) => entry.kind === "status")).toBeDefined();
+  });
+
+  it("routes ACPX commands through an MCP proxy agent when MCP servers are configured", async () => {
+    process.env.MOCK_ACPX_CONFIG_SHOW_AGENTS = JSON.stringify({
+      codex: {
+        command: "npx custom-codex-acp",
+      },
+    });
+    try {
+      const { runtime, logPath } = await createMockRuntimeFixture({
+        mcpServers: {
+          canva: {
+            command: "npx",
+            args: ["-y", "mcp-remote@latest", "https://mcp.canva.com/mcp"],
+            env: {
+              CANVA_TOKEN: "secret",
+            },
+          },
+        },
+      });
+
+      const handle = await runtime.ensureSession({
+        sessionKey: "agent:codex:acp:mcp",
+        agent: "codex",
+        mode: "persistent",
+      });
+      await runtime.setMode({
+        handle,
+        mode: "plan",
+      });
+
+      const logs = await readMockRuntimeLogEntries(logPath);
+      const ensureArgs = (logs.find((entry) => entry.kind === "ensure")?.args as string[]) ?? [];
+      const setModeArgs = (logs.find((entry) => entry.kind === "set-mode")?.args as string[]) ?? [];
+
+      for (const args of [ensureArgs, setModeArgs]) {
+        const agentFlagIndex = args.indexOf("--agent");
+        expect(agentFlagIndex).toBeGreaterThanOrEqual(0);
+        const rawAgentCommand = args[agentFlagIndex + 1];
+        expect(rawAgentCommand).toContain("mcp-proxy.mjs");
+        const payloadMatch = rawAgentCommand.match(/--payload\s+([A-Za-z0-9_-]+)/);
+        expect(payloadMatch?.[1]).toBeDefined();
+        const payload = JSON.parse(
+          Buffer.from(String(payloadMatch?.[1]), "base64url").toString("utf8"),
+        ) as {
+          targetCommand: string;
+        };
+        expect(payload.targetCommand).toContain("custom-codex-acp");
+      }
+    } finally {
+      delete process.env.MOCK_ACPX_CONFIG_SHOW_AGENTS;
+    }
   });
 
   it("skips prompt execution when runTurn starts with an already-aborted signal", async () => {

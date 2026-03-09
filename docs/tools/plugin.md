@@ -31,8 +31,12 @@ openclaw plugins list
 openclaw plugins install @openclaw/voice-call
 ```
 
-Npm specs are **registry-only** (package name + optional version/tag). Git/URL/file
-specs are rejected.
+Npm specs are **registry-only** (package name + optional **exact version** or
+**dist-tag**). Git/URL/file specs and semver ranges are rejected.
+
+Bare specs and `@latest` stay on the stable track. If npm resolves either of
+those to a prerelease, OpenClaw stops and asks you to opt in explicitly with a
+prerelease tag such as `@beta`/`@rc` or an exact prerelease version.
 
 3. Restart the Gateway, then configure under `plugins.entries.<id>.config`.
 
@@ -66,6 +70,7 @@ Plugins can register:
 - Agent tools
 - CLI commands
 - Background services
+- Context engines
 - Optional config validation
 - **Skills** (by listing `skills` directories in the plugin manifest)
 - **Auto-reply commands** (execute without invoking the AI agent)
@@ -136,6 +141,7 @@ Notes:
 - `api.registerHttpHandler(...)` is obsolete. Use `api.registerHttpRoute(...)`.
 - Plugin routes must declare `auth` explicitly.
 - Exact `path + match` conflicts are rejected unless `replaceExisting: true`, and one plugin cannot replace another plugin's route.
+- Overlapping routes with different `auth` levels are rejected. Keep `exact`/`prefix` fallthrough chains on the same auth level only.
 
 ## Plugin SDK import paths
 
@@ -177,6 +183,38 @@ Compatibility note:
 - New and migrated bundled plugins should use channel or extension-specific
   subpaths; use `core` for generic surfaces and `compat` only when broader
   shared helpers are required.
+
+## Read-only channel inspection
+
+If your plugin registers a channel, prefer implementing
+`plugin.config.inspectAccount(cfg, accountId)` alongside `resolveAccount(...)`.
+
+Why:
+
+- `resolveAccount(...)` is the runtime path. It is allowed to assume credentials
+  are fully materialized and can fail fast when required secrets are missing.
+- Read-only command paths such as `openclaw status`, `openclaw status --all`,
+  `openclaw channels status`, `openclaw channels resolve`, and doctor/config
+  repair flows should not need to materialize runtime credentials just to
+  describe configuration.
+
+Recommended `inspectAccount(...)` behavior:
+
+- Return descriptive account state only.
+- Preserve `enabled` and `configured`.
+- Include credential source/status fields when relevant, such as:
+  - `tokenSource`, `tokenStatus`
+  - `botTokenSource`, `botTokenStatus`
+  - `appTokenSource`, `appTokenStatus`
+  - `signingSecretSource`, `signingSecretStatus`
+- You do not need to return raw token values just to report read-only
+  availability. Returning `tokenStatus: "available"` (and the matching source
+  field) is enough for status-style commands.
+- Use `configured_unavailable` when a credential is configured via SecretRef but
+  unavailable in the current command path.
+
+This lets read-only commands report “configured but unavailable in this command
+path” instead of crashing or misreporting the account as not configured.
 
 Performance note:
 
@@ -338,6 +376,7 @@ Fields:
 - `allow`: allowlist (optional)
 - `deny`: denylist (optional; deny wins)
 - `load.paths`: extra plugin files/dirs
+- `slots`: exclusive slot selectors such as `memory` and `contextEngine`
 - `entries.<id>`: per‑plugin toggles + config
 
 Config changes **require a gateway restart**.
@@ -361,13 +400,29 @@ Some plugin categories are **exclusive** (only one active at a time). Use
   plugins: {
     slots: {
       memory: "memory-core", // or "none" to disable memory plugins
+      contextEngine: "legacy", // or a plugin id such as "lossless-claw"
     },
   },
 }
 ```
 
-If multiple plugins declare `kind: "memory"`, only the selected one loads. Others
-are disabled with diagnostics.
+Supported exclusive slots:
+
+- `memory`: active memory plugin (`"none"` disables memory plugins)
+- `contextEngine`: active context engine plugin (`"legacy"` is the built-in default)
+
+If multiple plugins declare `kind: "memory"` or `kind: "context-engine"`, only
+the selected plugin loads for that slot. Others are disabled with diagnostics.
+
+### Context engine plugins
+
+Context engine plugins own session context orchestration for ingest, assembly,
+and compaction. Register them from your plugin with
+`api.registerContextEngine(id, factory)`, then select the active engine with
+`plugins.slots.contextEngine`.
+
+Use this when your plugin needs to replace or extend the default context
+pipeline rather than just add memory search or hooks.
 
 ## Control UI (schema + labels)
 
@@ -432,6 +487,37 @@ Plugins export either:
 
 - A function: `(api) => { ... }`
 - An object: `{ id, name, configSchema, register(api) { ... } }`
+
+Context engine plugins can also register a runtime-owned context manager:
+
+```ts
+export default function (api) {
+  api.registerContextEngine("lossless-claw", () => ({
+    info: { id: "lossless-claw", name: "Lossless Claw", ownsCompaction: true },
+    async ingest() {
+      return { ingested: true };
+    },
+    async assemble({ messages }) {
+      return { messages, estimatedTokens: 0 };
+    },
+    async compact() {
+      return { ok: true, compacted: false };
+    },
+  }));
+}
+```
+
+Then enable it in config:
+
+```json5
+{
+  plugins: {
+    slots: {
+      contextEngine: "lossless-claw",
+    },
+  },
+}
+```
 
 ## Plugin hooks
 
@@ -777,6 +863,7 @@ Command handler context:
 Command options:
 
 - `name`: Command name (without the leading `/`)
+- `nativeNames`: Optional native-command aliases for slash/menu surfaces. Use `default` for all native providers, or provider-specific keys like `discord`
 - `description`: Help text shown in command lists
 - `acceptsArgs`: Whether the command accepts arguments (default: false). If false and arguments are provided, the command won't match and the message falls through to other handlers
 - `requireAuth`: Whether to require authorized sender (default: true)

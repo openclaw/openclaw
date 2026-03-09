@@ -141,6 +141,18 @@ describe("resolveOpenClawPackageRoot", () => {
     expect(resolveOpenClawPackageRootSync({ moduleUrl })).toBe(pkgRoot);
   });
 
+  it("ignores invalid moduleUrl values and falls back to cwd", async () => {
+    const pkgRoot = fx("invalid-moduleurl");
+    setFile(path.join(pkgRoot, "package.json"), JSON.stringify({ name: "openclaw" }));
+
+    expect(resolveOpenClawPackageRootSync({ moduleUrl: "not-a-file-url", cwd: pkgRoot })).toBe(
+      pkgRoot,
+    );
+    await expect(
+      resolveOpenClawPackageRoot({ moduleUrl: "not-a-file-url", cwd: pkgRoot }),
+    ).resolves.toBe(pkgRoot);
+  });
+
   it("returns null for non-openclaw package roots", async () => {
     const pkgRoot = fx("not-openclaw");
     setFile(path.join(pkgRoot, "package.json"), JSON.stringify({ name: "not-openclaw" }));

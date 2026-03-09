@@ -66,6 +66,10 @@ import {
   ConfigGetParamsSchema,
   type ConfigPatchParams,
   ConfigPatchParamsSchema,
+  type ConfigSchemaLookupParams,
+  ConfigSchemaLookupParamsSchema,
+  type ConfigSchemaLookupResult,
+  ConfigSchemaLookupResultSchema,
   type ConfigSchemaParams,
   ConfigSchemaParamsSchema,
   type ConfigSchemaResponse,
@@ -142,6 +146,8 @@ import {
   NodeInvokeResultParamsSchema,
   type NodeListParams,
   NodeListParamsSchema,
+  type NodePendingAckParams,
+  NodePendingAckParamsSchema,
   type NodePairApproveParams,
   NodePairApproveParamsSchema,
   type NodePairListParams,
@@ -281,6 +287,9 @@ export const validateNodePairVerifyParams = ajv.compile<NodePairVerifyParams>(
 );
 export const validateNodeRenameParams = ajv.compile<NodeRenameParams>(NodeRenameParamsSchema);
 export const validateNodeListParams = ajv.compile<NodeListParams>(NodeListParamsSchema);
+export const validateNodePendingAckParams = ajv.compile<NodePendingAckParams>(
+  NodePendingAckParamsSchema,
+);
 export const validateNodeDescribeParams = ajv.compile<NodeDescribeParams>(NodeDescribeParamsSchema);
 export const validateNodeInvokeParams = ajv.compile<NodeInvokeParams>(NodeInvokeParamsSchema);
 export const validateNodeInvokeResultParams = ajv.compile<NodeInvokeResultParams>(
@@ -318,12 +327,19 @@ export const validateConfigSetParams = ajv.compile<ConfigSetParams>(ConfigSetPar
 export const validateConfigApplyParams = ajv.compile<ConfigApplyParams>(ConfigApplyParamsSchema);
 export const validateConfigPatchParams = ajv.compile<ConfigPatchParams>(ConfigPatchParamsSchema);
 export const validateConfigSchemaParams = ajv.compile<ConfigSchemaParams>(ConfigSchemaParamsSchema);
+export const validateConfigSchemaLookupParams = ajv.compile<ConfigSchemaLookupParams>(
+  ConfigSchemaLookupParamsSchema,
+);
+export const validateConfigSchemaLookupResult = ajv.compile<ConfigSchemaLookupResult>(
+  ConfigSchemaLookupResultSchema,
+);
 export const validateWizardStartParams = ajv.compile<WizardStartParams>(WizardStartParamsSchema);
 export const validateWizardNextParams = ajv.compile<WizardNextParams>(WizardNextParamsSchema);
 export const validateWizardCancelParams = ajv.compile<WizardCancelParams>(WizardCancelParamsSchema);
 export const validateWizardStatusParams = ajv.compile<WizardStatusParams>(WizardStatusParamsSchema);
 export const validateTalkModeParams = ajv.compile<TalkModeParams>(TalkModeParamsSchema);
 export const validateTalkConfigParams = ajv.compile<TalkConfigParams>(TalkConfigParamsSchema);
+export const validateTalkConfigResult = ajv.compile<TalkConfigResult>(TalkConfigResultSchema);
 export const validateChannelsStatusParams = ajv.compile<ChannelsStatusParams>(
   ChannelsStatusParamsSchema,
 );
@@ -454,6 +470,7 @@ export {
   NodePairRejectParamsSchema,
   NodePairVerifyParamsSchema,
   NodeListParamsSchema,
+  NodePendingAckParamsSchema,
   NodeInvokeParamsSchema,
   SessionsListParamsSchema,
   SessionsPreviewParamsSchema,
@@ -467,7 +484,9 @@ export {
   ConfigApplyParamsSchema,
   ConfigPatchParamsSchema,
   ConfigSchemaParamsSchema,
+  ConfigSchemaLookupParamsSchema,
   ConfigSchemaResponseSchema,
+  ConfigSchemaLookupResultSchema,
   WizardStartParamsSchema,
   WizardNextParamsSchema,
   WizardCancelParamsSchema,

@@ -61,6 +61,17 @@ export function applyModelOverrideToSessionEntry(params: {
     }
   }
 
+  // contextTokens are derived from the active session model. When the selected
+  // model changes (or runtime model is already stale), the cached window can
+  // pin the session to an older/smaller limit until another run refreshes it.
+  if (
+    entry.contextTokens !== undefined &&
+    (selectionUpdated || (runtimePresent && !runtimeAligned))
+  ) {
+    delete entry.contextTokens;
+    updated = true;
+  }
+
   if (profileOverride) {
     if (entry.authProfileOverride !== profileOverride) {
       entry.authProfileOverride = profileOverride;

@@ -118,7 +118,7 @@ Gateway 网关启动后，打开浏览器控制界面。
 - 远程访问：[Web 界面](/web)和 [Tailscale](/gateway/tailscale)
 
 <p align="center">
-  <img src="whatsapp-openclaw.jpg" alt="OpenClaw" width="420" />
+  <img src="/whatsapp-openclaw.jpg" alt="OpenClaw" width="420" />
 </p>
 
 ## 配置（可选）
