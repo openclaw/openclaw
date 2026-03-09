@@ -313,7 +313,10 @@ async function cleanupNewBitable(
         const obj = v as Record<string, unknown>;
         // Rich text fields: [{type:'text', text:''}]
         if ("text" in obj && Object.keys(obj).length <= 2) {
-          return obj.text === "" || obj.text === null || obj.text === undefined;
+          const otherKeys = Object.keys(obj).filter((k) => k !== "text");
+          if (otherKeys.length === 0 || otherKeys[0] === "type") {
+            return obj.text === "" || obj.text === null || obj.text === undefined;
+          }
         }
         return Object.values(obj).every((val) => isEmptyValue(val));
       }
