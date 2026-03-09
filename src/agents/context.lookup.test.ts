@@ -35,7 +35,7 @@ describe("lookupContextTokens", () => {
     }));
 
     const { lookupContextTokens } = await import("./context.js");
-    expect(lookupContextTokens("openrouter/claude-sonnet")).toBe(321_000);
+    expect(await lookupContextTokens("openrouter/claude-sonnet")).toBe(321_000);
   });
 
   it("does not skip eager warmup when --profile is followed by -- terminator", async () => {
@@ -75,16 +75,60 @@ describe("lookupContextTokens", () => {
     process.argv = ["node", "openclaw", "config", "validate"];
     try {
       const { lookupContextTokens } = await import("./context.js");
-      expect(lookupContextTokens("openrouter/claude-sonnet")).toBeUndefined();
+      expect(await lookupContextTokens("openrouter/claude-sonnet")).toBeUndefined();
       expect(loadConfigMock).toHaveBeenCalledTimes(1);
-      expect(lookupContextTokens("openrouter/claude-sonnet")).toBeUndefined();
+      expect(await lookupContextTokens("openrouter/claude-sonnet")).toBeUndefined();
       expect(loadConfigMock).toHaveBeenCalledTimes(1);
       await vi.advanceTimersByTimeAsync(1_000);
-      expect(lookupContextTokens("openrouter/claude-sonnet")).toBe(654_321);
+      expect(await lookupContextTokens("openrouter/claude-sonnet")).toBe(654_321);
       expect(loadConfigMock).toHaveBeenCalledTimes(2);
     } finally {
       process.argv = argvSnapshot;
       vi.useRealTimers();
+    }
+  });
+
+  it("cold-start: awaits discovered context window from async model discovery", async () => {
+    // Simulate a delayed async phase (ensureOpenClawModelsJson takes time) so that
+    // the MODEL_CACHE is not yet populated when lookupContextTokens is first called.
+    let resolveModelsJson!: () => void;
+    const modelsJsonDelay = new Promise<void>((resolve) => {
+      resolveModelsJson = resolve;
+    });
+
+    vi.doMock("../config/config.js", () => ({
+      loadConfig: () => ({ models: {} }), // no config-level context windows
+    }));
+    vi.doMock("./models-config.js", () => ({
+      ensureOpenClawModelsJson: vi.fn(async () => {
+        await modelsJsonDelay; // block the async phase until we release it
+      }),
+    }));
+    vi.doMock("./agent-paths.js", () => ({
+      resolveOpenClawAgentDir: () => "/tmp/openclaw-agent",
+    }));
+    vi.doMock("./pi-model-discovery.js", () => ({
+      discoverAuthStorage: vi.fn(() => ({})),
+      discoverModels: vi.fn(() => ({
+        getAll: () => [{ id: "vertex/gemini-discovered", contextWindow: 2_097_152 }],
+      })),
+    }));
+
+    // config validate mode: skip eager warmup so loadPromise starts null
+    const argvSnapshot = process.argv;
+    process.argv = ["node", "openclaw", "config", "validate"];
+    try {
+      const { lookupContextTokens } = await import("./context.js");
+
+      // Start the lookup before discovery completes — async fix must await it.
+      const lookupPromise = lookupContextTokens("vertex/gemini-discovered");
+
+      // Now release the delayed discovery phase.
+      resolveModelsJson();
+
+      expect(await lookupPromise).toBe(2_097_152);
+    } finally {
+      process.argv = argvSnapshot;
     }
   });
 });

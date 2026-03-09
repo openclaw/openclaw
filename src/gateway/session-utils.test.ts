@@ -623,10 +623,10 @@ describe("listSessionsFromStore search", () => {
     } as SessionEntry,
   });
 
-  test("returns all sessions when search is empty or missing", () => {
+  test("returns all sessions when search is empty or missing", async () => {
     const cases = [{ opts: { search: "" } }, { opts: {} }] as const;
     for (const testCase of cases) {
-      const result = listSessionsFromStore({
+      const result = await listSessionsFromStore({
         cfg: baseCfg,
         storePath: "/tmp/sessions.json",
         store: makeStore(),
@@ -636,7 +636,7 @@ describe("listSessionsFromStore search", () => {
     }
   });
 
-  test("filters sessions across display metadata and key fields", () => {
+  test("filters sessions across display metadata and key fields", async () => {
     const cases = [
       { search: "WORK PROJECT", expectedKey: "agent:main:work-project" },
       { search: "reunion", expectedKey: "agent:main:personal-chat" },
@@ -649,7 +649,7 @@ describe("listSessionsFromStore search", () => {
     ] as const;
 
     for (const testCase of cases) {
-      const result = listSessionsFromStore({
+      const result = await listSessionsFromStore({
         cfg: baseCfg,
         storePath: "/tmp/sessions.json",
         store: makeStore(),
@@ -664,7 +664,7 @@ describe("listSessionsFromStore search", () => {
     }
   });
 
-  test("hides cron run alias session keys from sessions list", () => {
+  test("hides cron run alias session keys from sessions list", async () => {
     const now = Date.now();
     const store: Record<string, SessionEntry> = {
       "agent:main:cron:job-1": {
@@ -679,7 +679,7 @@ describe("listSessionsFromStore search", () => {
       } as SessionEntry,
     };
 
-    const result = listSessionsFromStore({
+    const result = await listSessionsFromStore({
       cfg: baseCfg,
       storePath: "/tmp/sessions.json",
       store,
@@ -710,8 +710,8 @@ describe("listSessionsFromStore search", () => {
       runtimeModel: "anthropic/claude-sonnet-4-6",
       expectedProvider: "vercel-ai-gateway",
     },
-  ])("$name", ({ cfg, runtimeModel, expectedProvider }) => {
-    const result = listSessionsFromStore({
+  ])("$name", async ({ cfg, runtimeModel, expectedProvider }) => {
+    const result = await listSessionsFromStore({
       cfg,
       storePath: "/tmp/sessions.json",
       store: createLegacyRuntimeStore(runtimeModel),
@@ -722,7 +722,7 @@ describe("listSessionsFromStore search", () => {
     expect(result.sessions[0]?.model).toBe(runtimeModel);
   });
 
-  test("exposes unknown totals when freshness is stale or missing", () => {
+  test("exposes unknown totals when freshness is stale or missing", async () => {
     const now = Date.now();
     const store: Record<string, SessionEntry> = {
       "agent:main:fresh": {
@@ -745,7 +745,7 @@ describe("listSessionsFromStore search", () => {
       } as SessionEntry,
     };
 
-    const result = listSessionsFromStore({
+    const result = await listSessionsFromStore({
       cfg: baseCfg,
       storePath: "/tmp/sessions.json",
       store,

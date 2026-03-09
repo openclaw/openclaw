@@ -1,5 +1,5 @@
 import { setCliSessionId } from "../../agents/cli-session.js";
-import { resolveContextTokensForModel } from "../../agents/context.js";
+import { lookupContextTokens, resolveContextTokensForModel } from "../../agents/context.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../agents/defaults.js";
 import { isCliProvider } from "../../agents/model-selection.js";
 import { deriveSessionTotalTokens, hasNonzeroUsage } from "../../agents/usage.js";
@@ -46,6 +46,9 @@ export async function updateSessionStoreAfterAgentRun(params: {
   const compactionsThisRun = Math.max(0, result.meta.agentMeta?.compactionCount ?? 0);
   const modelUsed = result.meta.agentMeta?.model ?? fallbackModel ?? defaultModel;
   const providerUsed = result.meta.agentMeta?.provider ?? fallbackProvider ?? defaultProvider;
+  // Pre-warm the cache so resolveContextTokensForModel reads the discovered
+  // value rather than the 200k fallback on a cold start.
+  await lookupContextTokens(modelUsed);
   const contextTokens =
     resolveContextTokensForModel({
       cfg,

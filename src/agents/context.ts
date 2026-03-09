@@ -147,8 +147,9 @@ function ensureContextWindowCacheLoaded(): Promise<void> {
   loadPromise = (async () => {
     try {
       await ensureOpenClawModelsJson(cfg);
-    } catch {
+    } catch (err) {
       // Continue with best-effort discovery/overrides.
+      console.warn("[context] ensureOpenClawModelsJson failed:", err);
     }
 
     try {
@@ -164,8 +165,9 @@ function ensureContextWindowCacheLoaded(): Promise<void> {
         cache: MODEL_CACHE,
         models,
       });
-    } catch {
+    } catch (err) {
       // If model discovery fails, continue with config overrides only.
+      console.warn("[context] model discovery failed:", err);
     }
 
     applyConfiguredContextWindows({
@@ -178,12 +180,20 @@ function ensureContextWindowCacheLoaded(): Promise<void> {
   return loadPromise;
 }
 
-export function lookupContextTokens(modelId?: string): number | undefined {
+/** Sync best-effort read from the cache — may miss models not yet discovered. */
+function lookupContextTokensFromCache(modelId?: string): number | undefined {
   if (!modelId) {
     return undefined;
   }
-  // Best-effort: kick off loading, but don't block.
-  void ensureContextWindowCacheLoaded();
+  return MODEL_CACHE.get(modelId);
+}
+
+/** Async authoritative lookup — awaits cache loading before reading. */
+export async function lookupContextTokens(modelId?: string): Promise<number | undefined> {
+  if (!modelId) {
+    return undefined;
+  }
+  await ensureContextWindowCacheLoaded();
   return MODEL_CACHE.get(modelId);
 }
 
@@ -269,5 +279,7 @@ export function resolveContextTokensForModel(params: {
     }
   }
 
-  return lookupContextTokens(params.model) ?? params.fallbackContextTokens;
+  // Use the sync cached lookup here; callers that need the authoritative value
+  // should await lookupContextTokens() directly before calling this function.
+  return lookupContextTokensFromCache(params.model) ?? params.fallbackContextTokens;
 }
