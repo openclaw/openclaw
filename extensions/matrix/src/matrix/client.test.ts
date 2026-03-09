@@ -1,6 +1,22 @@
-import { describe, expect, it } from "vitest";
+import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/matrix";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { CoreConfig } from "../types.js";
-import { resolveMatrixConfig } from "./client.js";
+import { resolveMatrixAuth, resolveMatrixConfig } from "./client.js";
+
+vi.mock("openclaw/plugin-sdk/matrix", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/matrix")>();
+  return {
+    ...actual,
+    fetchWithSsrFGuard: vi.fn(),
+  };
+});
+
+vi.mock("./credentials.js", () => ({
+  loadMatrixCredentials: vi.fn(() => null),
+  saveMatrixCredentials: vi.fn(),
+  credentialsMatchConfig: vi.fn(() => false),
+  touchMatrixCredentials: vi.fn(),
+}));
 
 describe("resolveMatrixConfig", () => {
   it("prefers config over env", () => {
@@ -52,5 +68,47 @@ describe("resolveMatrixConfig", () => {
     expect(resolved.deviceName).toBe("EnvDevice");
     expect(resolved.initialSyncLimit).toBeUndefined();
     expect(resolved.encryption).toBe(false);
+  });
+});
+
+describe("resolveMatrixAuth", () => {
+  afterEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("allowlists the configured homeserver hostname for password login", async () => {
+    vi.mocked(fetchWithSsrFGuard).mockResolvedValue({
+      response: {
+        ok: true,
+        json: async () => ({
+          access_token: "syt_token",
+          user_id: "@clio:cloud-city.dev",
+          device_id: "DEVICE123",
+        }),
+      } as Response,
+      finalUrl: "https://matrix.cloud-city.dev/_matrix/client/v3/login",
+      release: vi.fn().mockResolvedValue(undefined),
+    });
+
+    const cfg = {
+      channels: {
+        matrix: {
+          homeserver: "https://matrix.cloud-city.dev",
+          userId: "@clio:cloud-city.dev",
+          password: "clio-password", // pragma: allowlist secret
+        },
+      },
+    } as CoreConfig;
+
+    const auth = await resolveMatrixAuth({ cfg, env: {} as NodeJS.ProcessEnv });
+
+    expect(auth.accessToken).toBe("syt_token");
+    expect(fetchWithSsrFGuard).toHaveBeenCalledWith(
+      expect.objectContaining({
+        url: "https://matrix.cloud-city.dev/_matrix/client/v3/login",
+        policy: { allowedHostnames: ["matrix.cloud-city.dev"] },
+        auditContext: "matrix.login",
+      }),
+    );
   });
 });
