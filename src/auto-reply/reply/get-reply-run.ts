@@ -300,6 +300,7 @@ export async function runPreparedReply(
             : {}),
         }
       : { ...sessionCtx, ThreadStarterBody: undefined },
+    cfg,
   );
   const baseBodyForPrompt = isBareSessionReset
     ? baseBodyFinal
