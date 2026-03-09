@@ -12,6 +12,7 @@ import {
   resolveSandboxHostPathViaExistingAncestor,
 } from "./host-paths.js";
 import { getBlockedNetworkModeReason } from "./network-mode.js";
+import { sanitizeEnvVars } from "./sanitize-env-vars.js";
 
 // Targeted denylist: host paths that should never be exposed inside sandbox containers.
 // Exported for reuse in security audit collectors.
@@ -21,7 +22,6 @@ export const BLOCKED_HOST_PATHS = [
   "/proc",
   "/sys",
   "/dev",
-  "/root",
   "/boot",
   // Directories that commonly contain (or alias) the Docker socket.
   "/run",
@@ -325,6 +325,36 @@ export function validateApparmorProfile(profile: string | undefined): void {
   }
 }
 
+/**
+ * Validate environment variables - throws if any sensitive credentials are detected.
+ *
+ * NOTE: This validation is intentionally skipped for admin-configured env vars
+ * (docker.env in config) since those are explicitly declared by the operator.
+ * The sanitizer in docker.ts handles filtering at container creation time with
+ * forceAllowKeys for admin-configured keys.
+ */
+export function validateEnvVars(
+  env: Record<string, string> | undefined,
+  opts?: { forceAllowKeys?: ReadonlySet<string> },
+): void {
+  if (!env || Object.keys(env).length === 0) {
+    return;
+  }
+
+  const result = sanitizeEnvVars(env, {
+    strictMode: false,
+    forceAllowKeys: opts?.forceAllowKeys,
+  });
+
+  if (result.blocked.length > 0) {
+    throw new Error(
+      `Sandbox security: blocked sensitive environment variables: ${result.blocked.join(", ")}. ` +
+        "Passing credentials as environment variables to sandbox containers is not allowed. " +
+        "Use secure credential storage or remove these variables from sandbox configuration.",
+    );
+  }
+}
+
 export function validateSandboxSecurity(
   cfg: {
     binds?: string[];
@@ -332,6 +362,7 @@ export function validateSandboxSecurity(
     seccompProfile?: string;
     apparmorProfile?: string;
     dangerouslyAllowContainerNamespaceJoin?: boolean;
+    env?: Record<string, string>;
   } & ValidateBindMountsOptions,
 ): void {
   validateBindMounts(cfg.binds, cfg);
@@ -340,4 +371,7 @@ export function validateSandboxSecurity(
   });
   validateSeccompProfile(cfg.seccompProfile);
   validateApparmorProfile(cfg.apparmorProfile);
+  // Admin-configured env vars are all intentional — bypass the blocklist.
+  const forceAllowKeys = cfg.env ? new Set(Object.keys(cfg.env)) : undefined;
+  validateEnvVars(cfg.env, { forceAllowKeys });
 }

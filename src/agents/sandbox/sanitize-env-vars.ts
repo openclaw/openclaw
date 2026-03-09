@@ -40,6 +40,9 @@ export type EnvSanitizationOptions = {
   strictMode?: boolean;
   customBlockedPatterns?: ReadonlyArray<RegExp>;
   customAllowedPatterns?: ReadonlyArray<RegExp>;
+  /** Keys explicitly configured by the admin (e.g. from docker.env in config).
+   *  These bypass the blocklist — the admin has intentionally declared them. */
+  forceAllowKeys?: ReadonlySet<string>;
 };
 
 export function validateEnvVarValue(value: string): string | undefined {
@@ -69,6 +72,7 @@ export function sanitizeEnvVars(
 
   const blockedPatterns = [...BLOCKED_ENV_VAR_PATTERNS, ...(options.customBlockedPatterns ?? [])];
   const allowedPatterns = [...ALLOWED_ENV_VAR_PATTERNS, ...(options.customAllowedPatterns ?? [])];
+  const forceAllowKeys = options.forceAllowKeys;
 
   for (const [rawKey, value] of Object.entries(envVars)) {
     const key = rawKey.trim();
@@ -76,7 +80,7 @@ export function sanitizeEnvVars(
       continue;
     }
 
-    if (matchesAnyPattern(key, blockedPatterns)) {
+    if (!forceAllowKeys?.has(key) && matchesAnyPattern(key, blockedPatterns)) {
       blocked.push(key);
       continue;
     }
