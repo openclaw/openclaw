@@ -22,9 +22,6 @@ const gatewayLog = {
   error: vi.fn(),
 };
 
-const testSignals = ["SIGTERM", "SIGINT", "SIGUSR1"] as const;
-type TestSignal = (typeof testSignals)[number];
-
 vi.mock("../../infra/gateway-lock.js", () => ({
   acquireGatewayLock: (opts?: { port?: number }) => acquireGatewayLock(opts),
 }));
@@ -50,7 +47,10 @@ vi.mock("../../logging/subsystem.js", () => ({
   createSubsystemLogger: () => gatewayLog,
 }));
 
-function removeNewSignalListeners(signal: TestSignal, existing: Set<(...args: unknown[]) => void>) {
+const LOOP_SIGNALS = ["SIGTERM", "SIGINT", "SIGUSR1"] as const;
+type LoopSignal = (typeof LOOP_SIGNALS)[number];
+
+function removeNewSignalListeners(signal: LoopSignal, existing: Set<(...args: unknown[]) => void>) {
   for (const listener of process.listeners(signal)) {
     const fn = listener as (...args: unknown[]) => void;
     if (!existing.has(fn)) {
@@ -60,7 +60,7 @@ function removeNewSignalListeners(signal: TestSignal, existing: Set<(...args: un
 }
 
 function addedSignalListener(
-  signal: TestSignal,
+  signal: LoopSignal,
   existing: Set<(...args: unknown[]) => void>,
 ): (() => void) | null {
   const listeners = process.listeners(signal) as Array<(...args: unknown[]) => void>;
@@ -74,15 +74,15 @@ function addedSignalListener(
 }
 
 async function withIsolatedSignals(
-  run: (helpers: { captureSignal: (signal: TestSignal) => () => void }) => Promise<void>,
+  run: (helpers: { captureSignal: (signal: LoopSignal) => () => void }) => Promise<void>,
 ) {
   const existingListeners = Object.fromEntries(
-    testSignals.map((signal) => [
+    LOOP_SIGNALS.map((signal) => [
       signal,
       new Set(process.listeners(signal) as Array<(...args: unknown[]) => void>),
     ]),
-  ) as Record<TestSignal, Set<(...args: unknown[]) => void>>;
-  const captureSignal = (signal: TestSignal) => {
+  ) as Record<LoopSignal, Set<(...args: unknown[]) => void>>;
+  const captureSignal = (signal: LoopSignal) => {
     const listener = addedSignalListener(signal, existingListeners[signal]);
     if (!listener) {
       throw new Error(`expected new ${signal} listener`);
@@ -92,7 +92,7 @@ async function withIsolatedSignals(
   try {
     await run({ captureSignal });
   } finally {
-    for (const signal of testSignals) {
+    for (const signal of LOOP_SIGNALS) {
       removeNewSignalListeners(signal, existingListeners[signal]);
     }
   }
