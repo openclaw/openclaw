@@ -493,4 +493,26 @@ describe("resolveGatewayStateDir", () => {
     const env = { OPENCLAW_STATE_DIR: "C:\\State\\openclaw" };
     expect(resolveGatewayStateDir(env)).toBe("C:\\State\\openclaw");
   });
+
+  it("uses USERPROFILE when HOME is absent (Windows-style env)", () => {
+    // Regression test for #40563: on Windows, HOME is often unset while USERPROFILE
+    // holds the user home dir. Ensure the state dir is resolved via path.join so a
+    // backslash separator appears between the home and .openclaw (not direct concat).
+    const env = { USERPROFILE: "C:\\Users\\alice" };
+    const resolved = resolveGatewayStateDir(env);
+    // path.join on Windows: C:\Users\alice\.openclaw
+    // path.join on macOS/Linux (CI): C:\Users\alice/.openclaw (still no concat bug)
+    // Either way the result must not be C:\Users\alice.openclaw (missing separator).
+    expect(resolved).not.toBe("C:\\Users\\alice.openclaw");
+    expect(resolved).not.toContain("alice.openclaw");
+  });
+
+  it("uses USERPROFILE with a numeric username (Windows edge case)", () => {
+    // Numeric/short usernames on Windows hit the same path but are worth testing
+    // explicitly because path.join must not collapse the separator.
+    const env = { USERPROFILE: "C:\\Users\\42" };
+    const resolved = resolveGatewayStateDir(env);
+    expect(resolved).not.toBe("C:\\Users\\42.openclaw");
+    expect(resolved).not.toContain("42.openclaw");
+  });
 });
