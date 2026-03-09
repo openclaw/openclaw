@@ -23,6 +23,8 @@ import type {
   SetSessionModeRequest,
   SetSessionModeResponse,
   StopReason,
+  ToolCallLocation,
+  ToolKind,
 } from "@agentclientprotocol/sdk";
 import { PROTOCOL_VERSION } from "@agentclientprotocol/sdk";
 import { listThinkingLevels } from "../auto-reply/thinking.js";
@@ -37,8 +39,11 @@ import { shortenHomePath } from "../utils.js";
 import { getAvailableCommands } from "./commands.js";
 import {
   extractAttachmentsFromPrompt,
+  extractToolCallContent,
+  extractToolCallLocations,
   extractTextFromPrompt,
   formatToolTitle,
+  inferToolKind,
 } from "./event-mapper.js";
 import { readBool, readNumber, readString } from "./meta.js";
 import { parseSessionMeta, resetSessionIfNeeded, resolveSessionKey } from "./session-mapper.js";
@@ -62,7 +67,14 @@ type PendingPrompt = {
   reject: (err: Error) => void;
   sentTextLength?: number;
   sentText?: string;
-  toolCalls?: Set<string>;
+  toolCalls?: Map<string, PendingToolCall>;
+};
+
+type PendingToolCall = {
+  kind: ToolKind;
+  locations?: ToolCallLocation[];
+  rawInput?: Record<string, unknown>;
+  title: string;
 };
 
 type AcpGatewayAgentOptions = AcpServerOptions & {
@@ -681,21 +693,48 @@ export class AcpGatewayAgent implements Agent {
 
     if (phase === "start") {
       if (!pending.toolCalls) {
-        pending.toolCalls = new Set();
+        pending.toolCalls = new Map();
       }
       if (pending.toolCalls.has(toolCallId)) {
         return;
       }
-      pending.toolCalls.add(toolCallId);
       const args = data.args as Record<string, unknown> | undefined;
+      const title = formatToolTitle(name, args);
+      const kind = inferToolKind(name);
+      const locations = extractToolCallLocations(args);
+      pending.toolCalls.set(toolCallId, {
+        title,
+        kind,
+        rawInput: args,
+        locations,
+      });
       await this.connection.sessionUpdate({
         sessionId: pending.sessionId,
         update: {
           sessionUpdate: "tool_call",
           toolCallId,
-          title: formatToolTitle(name, args),
+          title,
           status: "in_progress",
           rawInput: args,
+          kind,
+          locations,
+        },
+      });
+      return;
+    }
+
+    if (phase === "update") {
+      const toolState = pending.toolCalls?.get(toolCallId);
+      const partialResult = data.partialResult;
+      await this.connection.sessionUpdate({
+        sessionId: pending.sessionId,
+        update: {
+          sessionUpdate: "tool_call_update",
+          toolCallId,
+          status: "in_progress",
+          rawOutput: partialResult,
+          content: extractToolCallContent(partialResult),
+          locations: extractToolCallLocations(toolState?.locations, partialResult),
         },
       });
       return;
@@ -703,6 +742,7 @@ export class AcpGatewayAgent implements Agent {
 
     if (phase === "result") {
       const isError = Boolean(data.isError);
+      const toolState = pending.toolCalls?.get(toolCallId);
       pending.toolCalls?.delete(toolCallId);
       await this.connection.sessionUpdate({
         sessionId: pending.sessionId,
@@ -711,6 +751,8 @@ export class AcpGatewayAgent implements Agent {
           toolCallId,
           status: isError ? "failed" : "completed",
           rawOutput: data.result,
+          content: extractToolCallContent(data.result),
+          locations: extractToolCallLocations(toolState?.locations, data.result),
         },
       });
     }
