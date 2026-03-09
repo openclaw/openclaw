@@ -631,12 +631,14 @@ describe("session-memory hook", () => {
     });
 
     // Pin Math.random AND timestamp to force deterministic slug — both
-    // handler calls produce the same fallback filename, exercising the
-    // slug-collision restoration path (preExistingContent !== null).
-    // Without pinning the clock, a wall-clock second boundary between
-    // event1 and event2 would produce different HHMMSS prefixes → no collision.
-    const origRandom = Math.random;
-    Math.random = () => 0.5;
+    // handler calls produce the same LLM-generated slug ("simple-math"
+    // via the mock), exercising the slug-collision restoration path
+    // (preExistingContent !== null).  Math.random is pinned as a backstop
+    // for the edge case where sessionContent is null and the LLM path
+    // never fires.  Without pinning the clock, a wall-clock second
+    // boundary between event1 and event2 would produce different HHMMSS
+    // prefixes → no collision.
+    vi.spyOn(Math, "random").mockReturnValue(0.5);
     const fixedTimestamp = new Date("2024-01-15T12:34:56.000Z");
 
     try {
@@ -682,7 +684,7 @@ describe("session-memory hook", () => {
       expect(restoredContent).toContain("first session");
       expect(restoredContent).not.toContain("second session");
     } finally {
-      Math.random = origRandom;
+      vi.restoreAllMocks();
     }
   });
 
