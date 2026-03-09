@@ -2,6 +2,7 @@ import type { CronConfig, CronRetryOn } from "../../config/types.cron.js";
 import { isCronSystemEvent } from "../../infra/heartbeat-events-filter.js";
 import type { HeartbeatRunResult } from "../../infra/heartbeat-wake.js";
 import { DEFAULT_AGENT_ID } from "../../routing/session-key.js";
+import { sleep } from "../../utils.js";
 import { resolveCronDeliveryPlan } from "../delivery.js";
 import { shouldEnqueueCronMainSummary } from "../heartbeat-policy.js";
 import { sweepCronRunSessions } from "../session-reaper.js";
@@ -97,6 +98,14 @@ function resolveRunConcurrency(state: CronServiceState): number {
     return 1;
   }
   return Math.max(1, Math.floor(raw));
+}
+
+function resolveStartupStaggerMs(state: CronServiceState): number {
+  const raw = state.deps.cronConfig?.startupStaggerMs;
+  if (typeof raw === "number" && Number.isFinite(raw)) {
+    return Math.max(0, Math.floor(raw));
+  }
+  return 10_000;
 }
 function timeoutErrorMessage(): string {
   return "cron: job execution timed out";
@@ -912,8 +921,19 @@ async function executeStartupCatchupPlan(
   state: CronServiceState,
   plan: StartupCatchupPlan,
 ): Promise<TimedCronRunOutcome[]> {
+  const staggerMs = resolveStartupStaggerMs(state);
+  if (plan.candidates.length > 1 && staggerMs > 0) {
+    state.deps.log.info(
+      { count: plan.candidates.length, staggerMs },
+      "cron: staggering missed jobs on startup",
+    );
+  }
+
   const outcomes: TimedCronRunOutcome[] = [];
   for (const candidate of plan.candidates) {
+    if (outcomes.length > 0 && staggerMs > 0) {
+      await sleep(staggerMs);
+    }
     outcomes.push(await runStartupCatchupCandidate(state, candidate));
   }
   return outcomes;
