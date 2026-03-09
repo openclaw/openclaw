@@ -431,4 +431,143 @@ describe("backup commands", () => {
       delete process.env.OPENCLAW_CONFIG_PATH;
     }
   });
+
+  describe("exclude patterns", () => {
+    it("excludes files matching --exclude pattern", async () => {
+      const stateDir = path.join(tempHome.home, ".openclaw");
+      await fs.mkdir(path.join(stateDir, "workspace"), { recursive: true });
+      await fs.writeFile(path.join(stateDir, "workspace", "important.txt"), "important", "utf8");
+      await fs.writeFile(path.join(stateDir, "workspace", "node_modules", "dep.js"), "dep", "utf8");
+      await fs.writeFile(
+        path.join(stateDir, "openclaw.json"),
+        JSON.stringify({ agents: { defaults: { workspace: path.join(stateDir, "workspace") } } }),
+        "utf8",
+      );
+
+      const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+
+      const result = await backupCreateCommand(runtime, {
+        dryRun: true,
+        exclude: ["node_modules"],
+      });
+
+      expect(result.assets.some((a) => a.sourcePath.includes("node_modules"))).toBe(false);
+      expect(result.skipped.some((s) => s.reason === "excluded")).toBe(true);
+    });
+
+    it("escapes regex special characters in exclude patterns", async () => {
+      const stateDir = path.join(tempHome.home, ".openclaw");
+      await fs.mkdir(path.join(stateDir, "workspace"), { recursive: true });
+      await fs.writeFile(path.join(stateDir, "workspace", "file.txt"), "txt", "utf8");
+      await fs.writeFile(path.join(stateDir, "workspace", "file.old.txt"), "old", "utf8");
+      await fs.writeFile(
+        path.join(stateDir, "openclaw.json"),
+        JSON.stringify({ agents: { defaults: { workspace: path.join(stateDir, "workspace") } } }),
+        "utf8",
+      );
+
+      const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+
+      // Pattern file.old.txt should only match literal file, not file.txt
+      const result = await backupCreateCommand(runtime, {
+        dryRun: true,
+        exclude: ["file.old.txt"],
+      });
+
+      // file.txt should still be included
+      expect(result.assets.some((a) => a.sourcePath.includes("file.txt"))).toBe(true);
+      // file.old.txt should be excluded
+      expect(result.assets.some((a) => a.sourcePath.includes("file.old.txt"))).toBe(false);
+    });
+
+    it("loads exclude patterns from --exclude-file", async () => {
+      const stateDir = path.join(tempHome.home, ".openclaw");
+      const excludeFile = path.join(tempHome.home, ".openclawignore");
+      await fs.mkdir(path.join(stateDir, "workspace"), { recursive: true });
+      await fs.writeFile(path.join(stateDir, "workspace", "important.txt"), "important", "utf8");
+      await fs.writeFile(path.join(stateDir, "workspace", "secret.env"), "secret", "utf8");
+      await fs.writeFile(excludeFile, "secret.env\n*.log", "utf8");
+      await fs.writeFile(
+        path.join(stateDir, "openclaw.json"),
+        JSON.stringify({ agents: { defaults: { workspace: path.join(stateDir, "workspace") } } }),
+        "utf8",
+      );
+
+      const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+
+      const result = await backupCreateCommand(runtime, {
+        dryRun: true,
+        excludeFile: excludeFile,
+      });
+
+      expect(result.assets.some((a) => a.sourcePath.includes("important.txt"))).toBe(true);
+      expect(result.assets.some((a) => a.sourcePath.includes("secret.env"))).toBe(false);
+    });
+
+    it("throws error when --exclude-file does not exist", async () => {
+      const stateDir = path.join(tempHome.home, ".openclaw");
+      await fs.mkdir(path.join(stateDir, "workspace"), { recursive: true });
+      await fs.writeFile(
+        path.join(stateDir, "openclaw.json"),
+        JSON.stringify({ agents: { defaults: { workspace: path.join(stateDir, "workspace") } } }),
+        "utf8",
+      );
+
+      const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+
+      await expect(
+        backupCreateCommand(runtime, {
+          dryRun: true,
+          excludeFile: "/nonexistent/file.txt",
+        }),
+      ).rejects.toThrow("Failed to load exclude file");
+    });
+
+    it("auto-loads .gitignore from workspace directories", async () => {
+      const stateDir = path.join(tempHome.home, ".openclaw");
+      const workspaceDir = path.join(stateDir, "workspace");
+      await fs.mkdir(workspaceDir, { recursive: true });
+      await fs.writeFile(path.join(workspaceDir, "keep.txt"), "keep", "utf8");
+      await fs.writeFile(path.join(workspaceDir, "skip.log"), "skip", "utf8");
+      await fs.writeFile(path.join(workspaceDir, ".gitignore"), "*.log\nnode_modules/", "utf8");
+      await fs.writeFile(
+        path.join(stateDir, "openclaw.json"),
+        JSON.stringify({ agents: { defaults: { workspace: workspaceDir } } }),
+        "utf8",
+      );
+
+      const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+
+      const result = await backupCreateCommand(runtime, {
+        dryRun: true,
+      });
+
+      expect(result.assets.some((a) => a.sourcePath.includes("keep.txt"))).toBe(true);
+      expect(result.assets.some((a) => a.sourcePath.includes("skip.log"))).toBe(false);
+    });
+
+    it("supports multiple --exclude patterns", async () => {
+      const stateDir = path.join(tempHome.home, ".openclaw");
+      await fs.mkdir(path.join(stateDir, "workspace"), { recursive: true });
+      await fs.writeFile(path.join(stateDir, "workspace", "a.txt"), "a", "utf8");
+      await fs.writeFile(path.join(stateDir, "workspace", "b.txt"), "b", "utf8");
+      await fs.writeFile(path.join(stateDir, "workspace", "c.txt"), "c", "utf8");
+      await fs.writeFile(
+        path.join(stateDir, "openclaw.json"),
+        JSON.stringify({ agents: { defaults: { workspace: path.join(stateDir, "workspace") } } }),
+        "utf8",
+      );
+
+      const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+
+      const result = await backupCreateCommand(runtime, {
+        dryRun: true,
+        exclude: ["a.txt", "b.txt"],
+      });
+
+      expect(result.assets.some((a) => a.sourcePath.includes("c.txt"))).toBe(true);
+      expect(result.assets.some((a) => a.sourcePath.includes("a.txt"))).toBe(false);
+      expect(result.assets.some((a) => a.sourcePath.includes("b.txt"))).toBe(false);
+    });
+  });
 });
