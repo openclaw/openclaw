@@ -279,12 +279,47 @@ describe("applyPluginAutoEnable", () => {
       expect(result.changes).toEqual([]);
     });
 
-    it("still adds plugins.entries for a bundled plugin (not auto-loaded from extensions directory)", () => {
-      // Bundled plugins need plugins.entries to be explicitly enabled; they are NOT
-      // auto-discovered from the filesystem the same way installed plugins are.
-      const result = applyWithApnChannelConfig();
+    it('still adds plugins.entries for a bundled plugin (origin "bundled", not auto-loaded from extensions directory)', () => {
+      // Bundled plugins are part of OpenClaw's own distribution. They are NOT
+      // auto-discovered from ~/.openclaw/extensions/, so they still require an
+      // explicit plugins.entries entry. The fix must NOT skip them.
+      const bundledRegistry: PluginManifestRegistry = {
+        plugins: [
+          {
+            id: "feishu",
+            channels: ["feishu"],
+            providers: [],
+            skills: [],
+            origin: "bundled" as const,
+            rootDir: "/fake/feishu",
+            source: "/fake/feishu/index.js",
+            manifestPath: "/fake/feishu/openclaw.plugin.json",
+          },
+        ],
+        diagnostics: [],
+      };
+      const result = applyPluginAutoEnable({
+        config: {
+          channels: { feishu: { appId: "cli_xxx", appSecret: "xxx" } },
+        },
+        env: {},
+        manifestRegistry: bundledRegistry,
+      });
 
-      expect(result.config.plugins?.entries?.["apn-channel"]?.enabled).toBe(true);
+      expect(result.config.plugins?.entries?.feishu?.enabled).toBe(true);
+    });
+
+    it("falls back to channel key as plugin id when no installed manifest declares the channel", () => {
+      // Without a matching manifest entry, behavior is unchanged (backward compat).
+      const result = applyPluginAutoEnable({
+        config: {
+          channels: { "unknown-chan": { someKey: "value" } },
+        },
+        env: {},
+        manifestRegistry: makeRegistry([]),
+      });
+
+      expect(result.config.plugins?.entries?.["unknown-chan"]?.enabled).toBe(true);
     });
   });
 
