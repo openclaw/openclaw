@@ -9,12 +9,7 @@
  */
 
 import { createSubsystemLogger } from "../../logging/subsystem.js";
-import type {
-  CachedSlot,
-  CacheLocation,
-  RamTierConfig,
-  TierStats,
-} from "./types.js";
+import type { CachedSlot, CacheLocation, RamTierConfig, TierStats } from "./types.js";
 import { DEFAULT_RAM_CONFIG } from "./types.js";
 
 const log = createSubsystemLogger("ram-cache");
@@ -35,7 +30,7 @@ type RamCacheEntry = {
   accessCount: number;
   lastAccessTime: number;
   insertTime: number;
-  frequency: number;  // For LFU decay
+  frequency: number; // For LFU decay
 };
 
 /** Least Recently Used */
@@ -364,7 +359,7 @@ export class RamCache {
 
   getPrefetchBudgetAvailable(): number {
     const prefetchBytes = Array.from(this.entries.values())
-      .filter(e => e.slot.isPrefetch)
+      .filter((e) => e.slot.isPrefetch)
       .reduce((sum, e) => sum + e.data.length, 0);
 
     return this.config.prefetchBudgetBytes - prefetchBytes;
@@ -406,7 +401,7 @@ export class RamCache {
   }
 
   getAllSlots(): CachedSlot[] {
-    return Array.from(this.entries.values()).map(e => ({ ...e.slot }));
+    return Array.from(this.entries.values()).map((e) => ({ ...e.slot }));
   }
 
   private updateAvgLatency(latencyMs: number): void {

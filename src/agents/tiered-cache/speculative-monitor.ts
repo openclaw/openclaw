@@ -55,7 +55,9 @@ type ParsedSpecStats = {
  */
 function parseSpecStatsLog(line: string): ParsedSpecStats | null {
   // Parse acceptance rate line
-  const acceptMatch = line.match(/draft acceptance rate = ([\d.]+)\s*\(\s*(\d+)\s*accepted\s*\/\s*(\d+)\s*generated\)/);
+  const acceptMatch = line.match(
+    /draft acceptance rate = ([\d.]+)\s*\(\s*(\d+)\s*accepted\s*\/\s*(\d+)\s*generated\)/,
+  );
   if (acceptMatch) {
     return {
       type: "none",
@@ -66,11 +68,13 @@ function parseSpecStatsLog(line: string): ParsedSpecStats | null {
   }
 
   // Parse ngram-mod stats line
-  const ngramModMatch = line.match(/statistics ngram_mod:\s*#calls = (\d+),\s*#gen drafts = (\d+),\s*#acc drafts = (\d+),\s*#gen tokens = (\d+),\s*#acc tokens = (\d+),\s*dur\(b,g,a\) = ([\d.]+),\s*([\d.]+),\s*([\d.]+)\s*ms/);
+  const ngramModMatch = line.match(
+    /statistics ngram_mod:\s*#calls = (\d+),\s*#gen drafts = (\d+),\s*#acc drafts = (\d+),\s*#gen tokens = (\d+),\s*#acc tokens = (\d+),\s*dur\(b,g,a\) = ([\d.]+),\s*([\d.]+),\s*([\d.]+)\s*ms/,
+  );
   if (ngramModMatch) {
     return {
       type: "ngram-mod",
-      acceptanceRate: 0,  // Calculated from tokens
+      acceptanceRate: 0, // Calculated from tokens
       accepted: 0,
       generated: 0,
       calls: {
@@ -95,7 +99,9 @@ function parseSpecStatsLog(line: string): ParsedSpecStats | null {
   }
 
   // Parse ngram-map stats line (with separate call counts)
-  const ngramMapMatch = line.match(/statistics (\w+):\s*#calls\(b,g,a\) = (\d+)\s+(\d+)\s+(\d+),\s*#gen drafts = (\d+),\s*#acc drafts = (\d+),\s*#gen tokens = (\d+),\s*#acc tokens = (\d+),\s*dur\(b,g,a\) = ([\d.]+),\s*([\d.]+),\s*([\d.]+)\s*ms/);
+  const ngramMapMatch = line.match(
+    /statistics (\w+):\s*#calls\(b,g,a\) = (\d+)\s+(\d+)\s+(\d+),\s*#gen drafts = (\d+),\s*#acc drafts = (\d+),\s*#gen tokens = (\d+),\s*#acc tokens = (\d+),\s*dur\(b,g,a\) = ([\d.]+),\s*([\d.]+),\s*([\d.]+)\s*ms/,
+  );
   if (ngramMapMatch) {
     return {
       type: ngramMapMatch[1] as SpecType,
@@ -222,7 +228,7 @@ export class SpeculativeMonitor {
 
     // Update durations (average)
     if (parsed.durations) {
-      const alpha = 0.1;  // EMA smoothing
+      const alpha = 0.1; // EMA smoothing
       this.stats.durationBeginMs =
         this.stats.durationBeginMs * (1 - alpha) + parsed.durations.begin * alpha;
       this.stats.durationGenerateMs =
@@ -275,26 +281,34 @@ export class SpeculativeMonitor {
     }
 
     // Average draft length
-    const avgDraftLength = this.stats.draftsGenerated > 0
-      ? this.stats.tokensGenerated / this.stats.draftsGenerated
-      : this.config.draftMax;
+    const avgDraftLength =
+      this.stats.draftsGenerated > 0
+        ? this.stats.tokensGenerated / this.stats.draftsGenerated
+        : this.config.draftMax;
 
     // Rough improvement estimate
     // Higher acceptance rate + longer drafts = more improvement
-    const draftFactor = avgDraftLength / 10;  // Normalize by typical batch size
-    const improvement = 1 + (this.stats.acceptanceRate * draftFactor * 0.5);
+    const draftFactor = avgDraftLength / 10; // Normalize by typical batch size
+    const improvement = 1 + this.stats.acceptanceRate * draftFactor * 0.5;
 
-    return Math.min(improvement, 3.0);  // Cap at 3x
+    return Math.min(improvement, 3.0); // Cap at 3x
   }
 
   /**
    * Get stats history for plotting
    */
-  getHistory(): Array<{ timestamp: number; acceptanceRate: number; throughputImprovement: number }> {
-    return this.history.map(h => ({
+  getHistory(): Array<{
+    timestamp: number;
+    acceptanceRate: number;
+    throughputImprovement: number;
+  }> {
+    return this.history.map((h) => ({
       timestamp: h.timestamp,
       acceptanceRate: h.stats.acceptanceRate,
-      throughputImprovement: h.stats.acceptanceRate * (h.stats.tokensGenerated / Math.max(h.stats.draftsGenerated, 1)) / 10,
+      throughputImprovement:
+        (h.stats.acceptanceRate *
+          (h.stats.tokensGenerated / Math.max(h.stats.draftsGenerated, 1))) /
+        10,
     }));
   }
 
@@ -332,8 +346,8 @@ export class SpeculativeMonitor {
     if (this.stats.tokensGenerated > 0) {
       log.info(
         `Speculative: ${(this.stats.acceptanceRate * 100).toFixed(1)}% acceptance, ` +
-        `${this.stats.tokensAccepted}/${this.stats.tokensGenerated} tokens, ` +
-        `~${this.getEstimatedThroughputImprovement().toFixed(2)}x speedup`
+          `${this.stats.tokensAccepted}/${this.stats.tokensGenerated} tokens, ` +
+          `~${this.getEstimatedThroughputImprovement().toFixed(2)}x speedup`,
       );
     }
   }

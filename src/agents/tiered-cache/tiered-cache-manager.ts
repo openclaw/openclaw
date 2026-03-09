@@ -57,10 +57,7 @@ export class TieredCacheManager {
   constructor(config: Partial<TieredCacheConfig> = {}) {
     this.config = { ...DEFAULT_TIERED_CACHE_CONFIG, ...config };
 
-    this.gpuCache = new GpuCache(
-      this.config.llamaServerUrl,
-      this.config.gpu
-    );
+    this.gpuCache = new GpuCache(this.config.llamaServerUrl, this.config.gpu);
 
     this.ramCache = new RamCache(this.config.ram);
     this.diskCache = new DiskCache(this.config.disk);
@@ -179,7 +176,7 @@ export class TieredCacheManager {
     slotId: string,
     sessionId: string,
     data: Buffer,
-    metadata: { tokenCount: number; sourcePaths?: string[] } = { tokenCount: 0 }
+    metadata: { tokenCount: number; sourcePaths?: string[] } = { tokenCount: 0 },
   ): Promise<CacheStoreResult> {
     const startTime = Date.now();
 
@@ -231,7 +228,10 @@ export class TieredCacheManager {
 
     // Fall back to Disk
     await this.diskCache.store(slot, data);
-    slot.location = { tier: "disk", path: join(this.config.disk.basePath, "slots", `${slotId}.bin`) };
+    slot.location = {
+      tier: "disk",
+      path: join(this.config.disk.basePath, "slots", `${slotId}.bin`),
+    };
 
     this.emitEvent({ type: "slot_created", slot });
 
@@ -449,7 +449,9 @@ export class TieredCacheManager {
 
       // Would need to generate the content somehow
       // This is where you'd integrate with your context generation logic
-      log.debug(`Would prefetch ${pred.slotId} (confidence: ${pred.confidence.toFixed(2)}, reason: ${pred.reason})`);
+      log.debug(
+        `Would prefetch ${pred.slotId} (confidence: ${pred.confidence.toFixed(2)}, reason: ${pred.reason})`,
+      );
     }
   }
 
@@ -509,8 +511,9 @@ export class TieredCacheManager {
       log.warn(`RAM cache pressure high: ${(ramPressure * 100).toFixed(1)}%`);
 
       // Demote oldest to disk
-      const slots = this.ramCache.getAllSlots()
-        .filter(s => !s.isPinned)
+      const slots = this.ramCache
+        .getAllSlots()
+        .filter((s) => !s.isPinned)
         .sort((a, b) => a.lastAccessedAt - b.lastAccessedAt);
 
       for (const slot of slots.slice(0, 2)) {
@@ -533,8 +536,7 @@ export class TieredCacheManager {
     const totalMisses = gpuStats.missCount + ramStats.missCount + diskStats.missCount;
     const overallHitRate = totalHits / (totalHits + totalMisses) || 0;
 
-    const avgLatency =
-      (gpuStats.avgLatencyMs + ramStats.avgLatencyMs + diskStats.avgLatencyMs) / 3;
+    const avgLatency = (gpuStats.avgLatencyMs + ramStats.avgLatencyMs + diskStats.avgLatencyMs) / 3;
 
     return {
       gpu: gpuStats,
@@ -543,7 +545,7 @@ export class TieredCacheManager {
       speculative: speculativeStats,
       overallHitRate,
       overallLatencyMs: avgLatency,
-      prefetchAccuracy: 0,  // Would need to track prefetch hits
+      prefetchAccuracy: 0, // Would need to track prefetch hits
       uptimeMs: Date.now() - this.startTime,
     };
   }
@@ -597,7 +599,7 @@ export class TieredCacheManager {
   private recordAccess(
     slotId: string,
     accessType: "hit" | "miss" | "prefetch_hit" | "prefetch_miss",
-    sourceTier: "gpu" | "ram" | "disk"
+    sourceTier: "gpu" | "ram" | "disk",
   ): void {
     this.prefetcher.recordAccess({
       sessionId: slotId,
@@ -612,7 +614,7 @@ export class TieredCacheManager {
       id: String(state.id),
       sessionId: state.sessionId ?? String(state.id),
       tokenCount: state.n_tokens ?? 0,
-      sizeBytes: state.n_tokens * 512,  // Estimate
+      sizeBytes: state.n_tokens * 512, // Estimate
       location: { tier: "gpu", slotId: state.id },
       createdAt: Date.now(),
       lastAccessedAt: state.lastUsedAt ?? Date.now(),
@@ -629,7 +631,7 @@ export class TieredCacheManager {
 // ============================================================================
 
 export async function createTieredCacheManager(
-  config: Partial<TieredCacheConfig> = {}
+  config: Partial<TieredCacheConfig> = {},
 ): Promise<TieredCacheManager> {
   const manager = new TieredCacheManager(config);
   await manager.initialize();

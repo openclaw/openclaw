@@ -9,12 +9,7 @@
  */
 
 import { createSubsystemLogger } from "../../logging/subsystem.js";
-import type {
-  CachedSlot,
-  CacheLocation,
-  GpuTierConfig,
-  TierStats,
-} from "./types.js";
+import type { CachedSlot, CacheLocation, GpuTierConfig, TierStats } from "./types.js";
 import { DEFAULT_GPU_CONFIG } from "./types.js";
 
 const log = createSubsystemLogger("gpu-cache");
@@ -62,7 +57,7 @@ export class GpuCache {
   private closed = false;
 
   // Estimate bytes per token for q8_0 (approximately 0.5KB per token pair)
-  private readonly bytesPerToken = 512;  // For q8_0 KV cache
+  private readonly bytesPerToken = 512; // For q8_0 KV cache
 
   constructor(serverUrl: string, config: Partial<GpuTierConfig> = {}) {
     this.config = { ...DEFAULT_GPU_CONFIG, ...config };
@@ -171,10 +166,7 @@ export class GpuCache {
 
     // Find available slot
     const slots = await this.refreshSlots();
-    const available = slots.find(s =>
-      !s.is_processing &&
-      !this.sessionToSlot.has(String(s.id))
-    );
+    const available = slots.find((s) => !s.is_processing && !this.sessionToSlot.has(String(s.id)));
 
     if (available) {
       this.sessionToSlot.set(sessionId, available.id);
@@ -227,7 +219,7 @@ export class GpuCache {
     options: {
       systemPrompt?: string;
       maxTokens?: number;
-    } = {}
+    } = {},
   ): Promise<{ tokensProcessed: number }> {
     const startTime = Date.now();
 
@@ -252,7 +244,7 @@ export class GpuCache {
         throw new Error(`Warmup failed: ${response.status}`);
       }
 
-      const result = await response.json() as any;
+      const result = (await response.json()) as any;
       const tokensProcessed = result.usage?.prompt_tokens ?? 0;
 
       // Update slot state
@@ -289,7 +281,7 @@ export class GpuCache {
         throw new Error(`Save failed: ${response.status}`);
       }
 
-      const result = await response.json() as SaveSlotResponse;
+      const result = (await response.json()) as SaveSlotResponse;
 
       const latency = Date.now() - startTime;
       this.updateAvgLatency(latency);
@@ -336,7 +328,7 @@ export class GpuCache {
   async cachePrefix(
     sessionId: string,
     prefix: string,
-    options: { hash?: string } = {}
+    options: { hash?: string } = {},
   ): Promise<{ slotId: number; tokensCached: number }> {
     const slotId = await this.acquireSlot(sessionId);
     if (slotId === null) {
@@ -475,5 +467,5 @@ type GpuSlotState = {
 // ============================================================================
 
 function sleep(ms: number): Promise<void> {
-  return new Promise(resolve => setTimeout(resolve, ms));
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }

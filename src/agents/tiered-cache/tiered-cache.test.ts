@@ -5,8 +5,8 @@
  */
 
 import { DiskCache } from "./disk-cache.js";
-import { RamCache } from "./ram-cache.js";
 import { Prefetcher } from "./prefetcher.js";
+import { RamCache } from "./ram-cache.js";
 import type { CachedSlot, PrefetchPrediction } from "./types.js";
 
 const TEST_DIR = "/tmp/tiered-cache-test";
@@ -37,7 +37,7 @@ async function testRamCache(): Promise<void> {
   console.log("\n--- RAM Cache Tests ---\n");
 
   const cache = new RamCache({
-    maxMemoryBytes: 1024 * 1024,  // 1MB for testing
+    maxMemoryBytes: 1024 * 1024, // 1MB for testing
     evictionPolicy: "lru",
   });
 
@@ -210,7 +210,7 @@ async function testPrefetcher(): Promise<void> {
       });
 
       // Simulate time passing
-      await new Promise(r => setTimeout(r, 10));
+      await new Promise((r) => setTimeout(r, 10));
     }
 
     const stats = prefetcher.getStats();

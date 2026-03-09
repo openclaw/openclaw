@@ -24,7 +24,7 @@ async function basicUsageExample(): Promise<void> {
     },
     ram: {
       enabled: true,
-      maxMemoryBytes: 40 * 1024 * 1024 * 1024,  // 40GB
+      maxMemoryBytes: 40 * 1024 * 1024 * 1024, // 40GB
       evictionPolicy: "lru",
     },
     disk: {
@@ -222,7 +222,7 @@ async function monitoringExample(): Promise<void> {
   });
 
   // Run for a bit
-  await new Promise(r => setTimeout(r, 30000));
+  await new Promise((r) => setTimeout(r, 30000));
 
   clearInterval(statsInterval);
   await cache.close();

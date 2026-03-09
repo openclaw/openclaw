@@ -9,11 +9,7 @@
  */
 
 import { createSubsystemLogger } from "../../logging/subsystem.js";
-import type {
-  AccessPattern,
-  PrefetcherConfig,
-  PrefetchPrediction,
-} from "./types.js";
+import type { AccessPattern, PrefetcherConfig, PrefetchPrediction } from "./types.js";
 import { DEFAULT_PREFETCHER_CONFIG } from "./types.js";
 
 const log = createSubsystemLogger("prefetcher");
@@ -31,8 +27,8 @@ type SessionSequence = {
 };
 
 type TimePattern = {
-  hourOfDay: number;  // 0-23
-  dayOfWeek: number;  // 0-6
+  hourOfDay: number; // 0-23
+  dayOfWeek: number; // 0-6
   sessionIds: Set<string>;
   accessCount: number;
 };
@@ -42,7 +38,7 @@ type SessionStats = {
   totalAccesses: number;
   lastAccessTime: number;
   avgIntervalMs: number;
-  accessIntervals: number[];  // Last N intervals
+  accessIntervals: number[]; // Last N intervals
 };
 
 // ============================================================================
@@ -144,8 +140,8 @@ export class Prefetcher {
         }
 
         // Calculate average
-        existing.avgIntervalMs = existing.accessIntervals.reduce((a, b) => a + b, 0) /
-          existing.accessIntervals.length;
+        existing.avgIntervalMs =
+          existing.accessIntervals.reduce((a, b) => a + b, 0) / existing.accessIntervals.length;
       }
 
       existing.lastAccessTime = now;
@@ -247,7 +243,7 @@ export class Prefetcher {
 
     // Deduplicate and filter
     const seen = new Set<string>();
-    const filtered = predictions.filter(p => {
+    const filtered = predictions.filter((p) => {
       if (seen.has(p.slotId)) return false;
       if (p.confidence < this.config.minConfidence) return false;
       seen.add(p.slotId);
@@ -273,7 +269,7 @@ export class Prefetcher {
 
     for (const [key, seq] of this.sessionSequences) {
       if (seq.fromSession !== currentSessionId) continue;
-      if (seq.count < 2) continue;  // Need at least 2 occurrences
+      if (seq.count < 2) continue; // Need at least 2 occurrences
 
       const confidence = Math.min(0.9, seq.count / 10 + 0.3);
       const predictedTime = now + seq.avgTimeBetweenMs;
@@ -331,9 +327,9 @@ export class Prefetcher {
 
     for (const stats of sorted) {
       // Skip if accessed recently
-      if (now - stats.lastAccessTime < 300000) continue;  // 5 minutes
+      if (now - stats.lastAccessTime < 300000) continue; // 5 minutes
 
-      const recencyWeight = Math.max(0, 1 - (now - stats.lastAccessTime) / 86400000);  // 1 day
+      const recencyWeight = Math.max(0, 1 - (now - stats.lastAccessTime) / 86400000); // 1 day
       const frequencyWeight = Math.min(stats.totalAccesses / 100, 0.5);
       const confidence = recencyWeight * 0.5 + frequencyWeight;
 
@@ -368,12 +364,12 @@ export class Prefetcher {
 
   shouldPrefetch(slotId: string): boolean {
     const predictions = this.getPredictions();
-    return predictions.some(p => p.slotId === slotId);
+    return predictions.some((p) => p.slotId === slotId);
   }
 
   getConfidence(slotId: string): number {
     const predictions = this.getPredictions();
-    const pred = predictions.find(p => p.slotId === slotId);
+    const pred = predictions.find((p) => p.slotId === slotId);
     return pred?.confidence ?? 0;
   }
 
@@ -400,8 +396,7 @@ export class Prefetcher {
   }
 
   getSequencePatterns(): SessionSequence[] {
-    return Array.from(this.sessionSequences.values())
-      .sort((a, b) => b.count - a.count);
+    return Array.from(this.sessionSequences.values()).sort((a, b) => b.count - a.count);
   }
 
   // --------------------------------------------------------------------------

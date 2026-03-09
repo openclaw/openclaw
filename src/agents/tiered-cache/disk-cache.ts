@@ -9,7 +9,16 @@
  */
 
 import { createHash } from "crypto";
-import { createReadStream, createWriteStream, existsSync, mkdirSync, readdirSync, statSync, unlinkSync, writeFileSync } from "fs";
+import {
+  createReadStream,
+  createWriteStream,
+  existsSync,
+  mkdirSync,
+  readdirSync,
+  statSync,
+  unlinkSync,
+  writeFileSync,
+} from "fs";
 import { readFile, writeFile, access, mkdir } from "fs/promises";
 import { join, dirname, basename } from "path";
 import { pipeline } from "stream/promises";
@@ -349,12 +358,15 @@ export class DiskCache {
 
     // Store template and metadata
     await writeFile(templatePath, data);
-    await writeFile(metaPath, JSON.stringify({
-      name,
-      hash,
-      size: data.length,
-      createdAt: Date.now(),
-    }));
+    await writeFile(
+      metaPath,
+      JSON.stringify({
+        name,
+        hash,
+        size: data.length,
+        createdAt: Date.now(),
+      }),
+    );
 
     log.debug(`Stored template ${name} (${data.length} bytes)`);
     return templatePath;
@@ -386,12 +398,15 @@ export class DiskCache {
     await writeFile(checkpointPath, compressed);
 
     // Store metadata
-    await writeFile(`${checkpointPath}.meta`, JSON.stringify({
-      sessionId,
-      timestamp,
-      size: data.length,
-      compressedSize: compressed.length,
-    }));
+    await writeFile(
+      `${checkpointPath}.meta`,
+      JSON.stringify({
+        sessionId,
+        timestamp,
+        size: data.length,
+        compressedSize: compressed.length,
+      }),
+    );
 
     log.info(`Created checkpoint for session ${sessionId}`);
     return checkpointPath;
@@ -403,10 +418,10 @@ export class DiskCache {
     try {
       const files = readdirSync(checkpointDir);
       return files
-        .filter(f => f.endsWith(".ckpt"))
-        .map(f => join(checkpointDir, f))
+        .filter((f) => f.endsWith(".ckpt"))
+        .map((f) => join(checkpointDir, f))
         .sort()
-        .reverse();  // Most recent first
+        .reverse(); // Most recent first
     } catch {
       return [];
     }
@@ -430,7 +445,7 @@ export class DiskCache {
 
     // Sort entries by last accessed time
     const sorted = Array.from(this.index.entries.values())
-      .filter(e => !this.isPinned(e.id))
+      .filter((e) => !this.isPinned(e.id))
       .sort((a, b) => a.lastAccessedAt - b.lastAccessedAt);
 
     let freed = 0;
@@ -458,9 +473,12 @@ export class DiskCache {
 
   private startCleanupTimer(): void {
     // Run cleanup every 5 minutes
-    setInterval(() => {
-      void this.runCleanup();
-    }, 5 * 60 * 1000);
+    setInterval(
+      () => {
+        void this.runCleanup();
+      },
+      5 * 60 * 1000,
+    );
   }
 
   private async runCleanup(): Promise<void> {
