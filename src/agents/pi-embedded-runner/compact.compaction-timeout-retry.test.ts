@@ -221,7 +221,7 @@ function makeTimeoutError(): Error {
 
 describe("compactEmbeddedPiSessionDirect — compaction timeout retry", () => {
   beforeEach(() => {
-    compactCallCount = 0;
+    _compactCallCount = 0;
     sessionMessages = [
       { role: "user", content: "hello", timestamp: 1 },
       { role: "assistant", content: [{ type: "text", text: "hi" }], timestamp: 2 },

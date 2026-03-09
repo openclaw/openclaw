@@ -739,6 +739,7 @@ export async function compactEmbeddedPiSessionDirect(
 
         // Attempt compaction; if it times out, truncate oversized tool results and retry once.
         let result: Awaited<ReturnType<typeof session.compact>>;
+        let retried = false;
         try {
           result = await compactWithSafetyTimeout(() => session.compact(params.customInstructions));
         } catch (firstErr) {
@@ -767,6 +768,7 @@ export async function compactEmbeddedPiSessionDirect(
           }
           // Retry with shorter timeout. If this also times out, the error propagates to the
           // outer catch which returns fail("Compaction timed out").
+          retried = true;
           result = await compactWithSafetyTimeout(
             () => session.compact(params.customInstructions),
             EMBEDDED_COMPACTION_RETRY_TIMEOUT_MS,
@@ -795,7 +797,7 @@ export async function compactEmbeddedPiSessionDirect(
             `[compaction-diag] end runId=${runId} sessionKey=${params.sessionKey ?? params.sessionId} ` +
               `diagId=${diagId} trigger=${trigger} provider=${provider}/${modelId} ` +
               `attempt=${attempt} maxAttempts=${maxAttempts} outcome=compacted reason=none ` +
-              `durationMs=${Date.now() - compactStartedAt} retrying=false ` +
+              `durationMs=${Date.now() - compactStartedAt} retried=${retried} ` +
               `post.messages=${postMetrics.messages} post.historyTextChars=${postMetrics.historyTextChars} ` +
               `post.toolResultChars=${postMetrics.toolResultChars} post.estTokens=${postMetrics.estTokens ?? "unknown"} ` +
               `delta.messages=${postMetrics.messages - preMetrics.messages} ` +
