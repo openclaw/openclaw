@@ -65,6 +65,7 @@ cat ~/.openclaw/openclaw.json
 - Config normalization for legacy values.
 - OpenCode Zen provider override warnings (`models.providers.opencode`).
 - Legacy on-disk state migration (sessions/agent dir/WhatsApp auth).
+- Legacy cron store migration (`jobId`, `schedule.cron`, top-level delivery/payload fields, payload `provider`, simple `notify: true` webhook fallback jobs).
 - State integrity and permissions checks (sessions, transcripts, state dir).
 - Config file permission checks (chmod 600) when running locally.
 - Model auth health: checks OAuth expiry, can refresh expiring tokens, and reports auth-profile cooldown/disabled states.
@@ -157,6 +158,25 @@ it leaves any legacy folders behind as backups. The Gateway/CLI also auto-migrat
 the legacy sessions + agent dir on startup so history/auth/models land in the
 per-agent path without a manual doctor run. WhatsApp auth is intentionally only
 migrated via `openclaw doctor`.
+
+### 3b) Legacy cron store migrations
+
+Doctor also checks the cron job store (`~/.openclaw/cron/jobs.json` by default,
+or `cron.store` when overridden) for old job shapes that the scheduler still
+accepts for compatibility.
+
+Current cron cleanups include:
+
+- `jobId` → `id`
+- `schedule.cron` → `schedule.expr`
+- top-level payload fields (`message`, `model`, `thinking`, ...) → `payload`
+- top-level delivery fields (`deliver`, `channel`, `to`, `provider`, ...) → `delivery`
+- payload `provider` delivery aliases → explicit `delivery.channel`
+- simple legacy `notify: true` webhook fallback jobs → explicit `delivery.mode="webhook"` with `delivery.to=cron.webhook`
+
+Doctor only auto-migrates `notify: true` jobs when it can do so without
+changing behavior. If a job combines legacy notify fallback with an existing
+non-webhook delivery mode, doctor warns and leaves that job for manual review.
 
 ### 4) State integrity checks (session persistence, routing, and safety)
 
