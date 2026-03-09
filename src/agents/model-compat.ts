@@ -53,28 +53,26 @@ export function normalizeModelCompat(model: Model<Api>): Model<Api> {
   }
 
   // The `developer` role and stream usage chunks are OpenAI-native behaviors.
-  // Many OpenAI-compatible backends reject `developer`, emit usage-only chunks
-  // that break strict parsers expecting choices[0], or reject the `strict`
-  // boolean inside tool schemas. For non-native openai-completions endpoints,
-  // force these compat flags off unless the user has explicitly opted in.
+  // Many OpenAI-compatible backends reject `developer` and/or emit usage-only
+  // chunks that break strict parsers expecting choices[0]. Additionally, the
+  // `strict` boolean inside tools validation is rejected by several providers
+  // causing tool calls to be ignored. For non-native openai-completions endpoints,
+  // force these compat flags off.
   const compat = model.compat ?? undefined;
   // When baseUrl is empty the pi-ai library defaults to api.openai.com, so
-  // leave compat unchanged and let default native behavior apply.
+  // note: explicit true values are intentionally overriden for non-native
+  // endpoints for supportsDeveloperRole and supportsUsageInStreaming out of safety,
+  // but supportsStrictMode explicitly allows an escape hatch since some vanity urls
+  // are true native proxies.
   const needsForce = baseUrl ? !isOpenAINativeEndpoint(baseUrl) : false;
   if (!needsForce) {
     return model;
   }
-
-  // Respect explicit user overrides: if the user has set a compat flag to
-  // true in their model definition, they know their endpoint supports it.
-  const forcedDeveloperRole = compat?.supportsDeveloperRole === true;
-  const forcedUsageStreaming = compat?.supportsUsageInStreaming === true;
-  const forcedStrictMode = compat?.supportsStrictMode === true;
-
+  const targetStrictMode = compat?.supportsStrictMode ?? false;
   if (
-    compat?.supportsDeveloperRole === (forcedDeveloperRole || false) &&
-    compat?.supportsUsageInStreaming === (forcedUsageStreaming || false) &&
-    compat?.supportsStrictMode === (forcedStrictMode || false)
+    compat?.supportsDeveloperRole === false &&
+    compat?.supportsUsageInStreaming === false &&
+    compat?.supportsStrictMode === targetStrictMode
   ) {
     return model;
   }
@@ -85,9 +83,9 @@ export function normalizeModelCompat(model: Model<Api>): Model<Api> {
     compat: compat
       ? {
           ...compat,
-          supportsDeveloperRole: forcedDeveloperRole || false,
-          supportsUsageInStreaming: forcedUsageStreaming || false,
-          supportsStrictMode: forcedStrictMode || false,
+          supportsDeveloperRole: false,
+          supportsUsageInStreaming: false,
+          supportsStrictMode: targetStrictMode,
         }
       : {
           supportsDeveloperRole: false,
