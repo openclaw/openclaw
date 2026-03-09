@@ -132,6 +132,79 @@ Skills provide your tools. When you need one, check its `SKILL.md`. Keep local n
 - **Discord links:** Wrap multiple links in `<>` to suppress embeds: `<https://example.com>`
 - **WhatsApp:** No headers — use **bold** or CAPS for emphasis
 
+### 📋 Workflow Tool - Track Multi-Step Tasks
+
+For complex tasks with multiple steps, use the **workflow** tool to create and track progress. The UI at `/workflow` shows a visual DAG of your task flow.
+
+**When to use workflow:**
+
+- Multi-step deployments or operations
+- Tasks spanning multiple heartbeats
+- Anything you want to report progress on to Discord
+
+**Actions:**
+
+| Action        | Description                           |
+| ------------- | ------------------------------------- |
+| `create`      | Create a new workflow plan with tasks |
+| `list`        | List active/history plans             |
+| `get`         | Get plan details by ID                |
+| `start_task`  | Mark a task as in_progress            |
+| `update_task` | Update task status/result             |
+| `complete`    | Archive the plan (marks completed)    |
+| `delete`      | Remove an active plan                 |
+
+**Example - Create a workflow:**
+
+```json
+{
+  "action": "create",
+  "title": "Deploy Application",
+  "description": "Full deployment pipeline",
+  "source": "task",
+  "tasks": [
+    { "content": "Build frontend" },
+    { "content": "Run tests" },
+    { "content": "Deploy to staging" },
+    { "content": "Verify deployment" }
+  ]
+}
+```
+
+**Example - Update task progress:**
+
+```json
+{
+  "action": "start_task",
+  "planId": "wfp_abc123",
+  "taskId": "wft_task1"
+}
+```
+
+```json
+{
+  "action": "update_task",
+  "planId": "wfp_abc123",
+  "taskId": "wft_task1",
+  "taskStatus": "completed",
+  "taskResult": "Frontend built successfully"
+}
+```
+
+**Example - Complete and report to Discord:**
+
+```json
+{
+  "action": "complete",
+  "planId": "wfp_abc123",
+  "discordReport": true
+}
+```
+
+**Heartbeat Integration:** When you have an active workflow, the heartbeat prompt will show your pending tasks. Use the workflow tool to update progress as you work.
+
+**Visualization:** Open the gateway UI at `/workflow` to see a DAG graph view of task progress with status colors (gray=pending, blue=in_progress, green=completed, red=failed).
+
 ## 💓 Heartbeats - Be Proactive!
 
 When you receive a heartbeat poll (message matches the configured heartbeat prompt), don't just reply `HEARTBEAT_OK` every time. Use heartbeats productively!

@@ -89,6 +89,7 @@ import { renderNodes } from "./views/nodes.ts";
 import { renderOverview } from "./views/overview.ts";
 import { renderSessions } from "./views/sessions.ts";
 import { renderSkills } from "./views/skills.ts";
+import { renderWorkflow } from "./views/workflow.ts";
 
 const AVATAR_DATA_RE = /^data:/i;
 const AVATAR_HTTP_RE = /^https?:\/\//i;
@@ -545,6 +546,29 @@ export function renderApp(state: AppViewState) {
                   }
                   await loadCronRuns(state, state.cronRunsJobId);
                 },
+              })
+            : nothing
+        }
+
+        ${
+          state.tab === "workflow"
+            ? renderWorkflow({
+                basePath: state.basePath,
+                loading: state.workflowLoading,
+                error: state.workflowError,
+                activePlans: state.workflowActivePlans,
+                historyPlans: state.workflowHistoryPlans,
+                historyTotal: state.workflowHistoryTotal,
+                selectedPlanId: state.workflowSelectedPlanId,
+                selectedPlan: state.workflowSelectedPlan,
+                scope: state.workflowScope,
+                viewMode: state.workflowViewMode,
+                onRefresh: () => state.handleWorkflowLoad(),
+                onScopeChange: (scope) => state.handleWorkflowScopeChange(scope),
+                onSelectPlan: (planId, scope) => state.handleWorkflowSelectPlan(planId, scope),
+                onClosePlanDetail: () => state.handleWorkflowClosePlanDetail(),
+                onLoadMoreHistory: () => state.handleWorkflowLoadMoreHistory(),
+                onViewModeChange: (mode) => state.handleWorkflowViewModeChange(mode),
               })
             : nothing
         }

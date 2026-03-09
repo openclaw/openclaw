@@ -33,6 +33,7 @@ import type {
 import type { ChatAttachment, ChatQueueItem } from "./ui-types.ts";
 import type { NostrProfileFormState } from "./views/channels.nostr-profile-form.ts";
 import type { SessionLogEntry } from "./views/usage.ts";
+import type { WorkflowPlan } from "./views/workflow.ts";
 
 export type AppViewState = {
   settings: UiSettings;
@@ -190,6 +191,17 @@ export type AppViewState = {
   usageLogFilterTools: string[];
   usageLogFilterHasTools: boolean;
   usageLogFilterQuery: string;
+  workflowLoading: boolean;
+  workflowError: string | null;
+  workflowActivePlans: WorkflowPlan[];
+  workflowHistoryPlans: WorkflowPlan[];
+  workflowHistoryTotal: number;
+  workflowHistoryOffset: number;
+  workflowHistoryLimit: number;
+  workflowSelectedPlanId: string | null;
+  workflowSelectedPlan: WorkflowPlan | null;
+  workflowScope: "active" | "history" | "all";
+  workflowViewMode: "list" | "graph";
 } & Pick<
   CronState,
   | "cronLoading"
@@ -296,6 +308,12 @@ export type AppViewState = {
     handleCronAdd: () => Promise<void>;
     handleCronRunsLoad: (jobId: string) => Promise<void>;
     handleCronFormUpdate: (path: string, value: unknown) => void;
+    handleWorkflowLoad: () => Promise<void>;
+    handleWorkflowScopeChange: (scope: "active" | "history" | "all") => void;
+    handleWorkflowSelectPlan: (planId: string, scope: "active" | "history") => Promise<void>;
+    handleWorkflowClosePlanDetail: () => void;
+    handleWorkflowLoadMoreHistory: () => Promise<void>;
+    handleWorkflowViewModeChange: (mode: "list" | "graph") => void;
     handleSessionsLoad: () => Promise<void>;
     handleSessionsPatch: (key: string, patch: unknown) => Promise<void>;
     handleLoadNodes: () => Promise<void>;
