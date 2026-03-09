@@ -515,6 +515,18 @@ export async function restartLaunchAgent({
   if (start.code !== 0) {
     throw new Error(`launchctl kickstart failed: ${start.stderr || start.stdout}`.trim());
   }
+
+  // Verify the service is actually loaded after restart
+  const verify = await execLaunchctl(["print", `${domain}/${label}`]);
+  if (verify.code !== 0) {
+    // Service not loaded - try one more bootstrap
+    const retry = await execLaunchctl(["bootstrap", domain, plistPath]);
+    if (retry.code !== 0) {
+      const detail = (retry.stderr || retry.stdout).trim();
+      throw new Error(`launchctl bootstrap failed after restart: ${detail}`);
+    }
+    stdout.write(`${formatLine("Re-loaded LaunchAgent after restart", `${domain}/${label}`)}\n`);
+  }
   try {
     stdout.write(`${formatLine("Restarted LaunchAgent", `${domain}/${label}`)}\n`);
   } catch (err: unknown) {
