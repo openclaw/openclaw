@@ -94,6 +94,7 @@ function resolveWithMocks(params: {
   fallbackLstatSync?: NonNullable<TmpDirOptions["lstatSync"]>;
   accessSync?: NonNullable<TmpDirOptions["accessSync"]>;
   chmodSync?: NonNullable<TmpDirOptions["chmodSync"]>;
+  rmSync?: NonNullable<TmpDirOptions["rmSync"]>;
   warn?: NonNullable<TmpDirOptions["warn"]>;
   uid?: number;
   tmpdirPath?: string;
@@ -102,6 +103,7 @@ function resolveWithMocks(params: {
   const fallbackPath = fallbackTmp(uid);
   const accessSync = params.accessSync ?? vi.fn();
   const chmodSync = params.chmodSync ?? vi.fn();
+  const rmSync = params.rmSync ?? vi.fn();
   const warn = params.warn ?? vi.fn();
   const wrappedLstatSync = vi.fn((target: string) => {
     if (target === POSIX_OPENCLAW_TMP_DIR) {
@@ -123,6 +125,7 @@ function resolveWithMocks(params: {
     chmodSync,
     lstatSync: wrappedLstatSync,
     mkdirSync,
+    rmSync,
     getuid,
     tmpdir,
     warn,
@@ -197,7 +200,55 @@ describe("resolvePreferredOpenClawTmpDir", () => {
     expectFallsBackToOsTmpDir({ lstatSync: vi.fn(() => makeDirStat({ mode: 0o40777 })) });
   });
 
-  it("throws when fallback path is a symlink", () => {
+  it("removes and recreates fallback dir owned by a different user", () => {
+    const lstatSync = symlinkTmpDirLstat();
+    let removed = false;
+    // First call: dir exists but owned by different user (uid 999).
+    // After remove+recreate: dir is now owned by current user (uid 501).
+    const fallbackLstatSync = vi.fn(() => {
+      if (removed) {
+        return secureDirStat(501);
+      }
+      return makeDirStat({ uid: 999 });
+    });
+    const rmSync = vi.fn(() => {
+      removed = true;
+    });
+    const warn = vi.fn();
+
+    const fb = fallbackTmp();
+    const accessSync = vi.fn();
+    const chmodSync = vi.fn();
+    const mkdirSync = vi.fn();
+    const getuid = vi.fn(() => 501);
+    const tmpdir = vi.fn(() => "/var/fallback");
+
+    const resolved = resolvePreferredOpenClawTmpDir({
+      accessSync,
+      chmodSync,
+      lstatSync: vi.fn((target: string) => {
+        if (target === POSIX_OPENCLAW_TMP_DIR) {
+          return lstatSync(target);
+        }
+        if (target === fb) {
+          return fallbackLstatSync(target);
+        }
+        return secureDirStat(501);
+      }),
+      mkdirSync,
+      rmSync,
+      getuid,
+      tmpdir,
+      warn,
+    });
+
+    expect(resolved).toBe(fb);
+    expect(rmSync).toHaveBeenCalledWith(fb, { recursive: true, force: true });
+    expect(mkdirSync).toHaveBeenCalledWith(fb, { recursive: true, mode: 0o700 });
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining("replaced invalid temp dir"));
+  });
+
+  it("throws when fallback path is a symlink and remove-recreate also fails", () => {
     const lstatSync = symlinkTmpDirLstat();
     const fallbackLstatSync = vi.fn(() => makeDirStat({ isSymbolicLink: true, mode: 0o120777 }));
 

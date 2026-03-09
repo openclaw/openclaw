@@ -15,6 +15,7 @@ type ResolvePreferredOpenClawTmpDirOptions = {
     uid?: number;
   };
   mkdirSync?: (path: string, opts: { recursive: boolean; mode?: number }) => void;
+  rmSync?: (path: string, opts: { recursive: boolean; force: boolean }) => void;
   getuid?: () => number | undefined;
   tmpdir?: () => string;
   warn?: (message: string) => void;
@@ -38,6 +39,7 @@ export function resolvePreferredOpenClawTmpDir(
   const chmodSync = options.chmodSync ?? fs.chmodSync;
   const lstatSync = options.lstatSync ?? fs.lstatSync;
   const mkdirSync = options.mkdirSync ?? fs.mkdirSync;
+  const rmSync = options.rmSync ?? fs.rmSync;
   const warn = options.warn ?? ((message: string) => console.warn(message));
   const getuid =
     options.getuid ??
@@ -116,6 +118,17 @@ export function resolvePreferredOpenClawTmpDir(
     }
   };
 
+  const tryRemoveAndRecreate = (dirPath: string): boolean => {
+    try {
+      rmSync(dirPath, { recursive: true, force: true });
+      mkdirSync(dirPath, { recursive: true, mode: 0o700 });
+      chmodSync(dirPath, 0o700);
+      return resolveDirState(dirPath) === "available";
+    } catch {
+      return false;
+    }
+  };
+
   const ensureTrustedFallbackDir = (): string => {
     const fallbackPath = fallback();
     const state = resolveDirState(fallbackPath);
@@ -124,6 +137,14 @@ export function resolvePreferredOpenClawTmpDir(
     }
     if (state === "invalid") {
       if (tryRepairWritableBits(fallbackPath)) {
+        return fallbackPath;
+      }
+      // Repair failed — attempt to remove and recreate the directory.
+      // This handles cases where the dir was left by a previous install
+      // under a different uid or with unsafe permissions (e.g. after
+      // reinstall, Docker leftover, or uid remapping).
+      if (tryRemoveAndRecreate(fallbackPath)) {
+        warn(`[openclaw] replaced invalid temp dir: ${fallbackPath}`);
         return fallbackPath;
       }
       throw new Error(`Unsafe fallback OpenClaw temp dir: ${fallbackPath}`);
