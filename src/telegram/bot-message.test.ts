@@ -43,12 +43,18 @@ describe("telegram bot message processor", () => {
 
   async function processSampleMessage(
     processMessage: ReturnType<typeof createTelegramMessageProcessor>,
-    opts: { messageId?: number; text?: string } = {},
+    opts: {
+      messageId?: number;
+      text?: string;
+      chatType?: "private" | "group" | "supergroup";
+      fromId?: number;
+    } = {},
   ) {
     await processMessage(
       {
         message: {
-          chat: { id: 123, type: "private", title: "chat" },
+          chat: { id: 123, type: opts.chatType ?? "private", title: "chat" },
+          from: opts.fromId != null ? { id: opts.fromId } : undefined,
           message_id: opts.messageId ?? 456,
           text: opts.text,
         },
@@ -123,6 +129,30 @@ describe("telegram bot message processor", () => {
     const third = dispatchTelegramMessage.mock.calls[2]?.[0] as { replyToMode?: string };
     expect(third.replyToMode).toBe("first");
     vi.useRealTimers();
+  });
+
+  it("treats rapid group messages from different senders as one burst", async () => {
+    buildTelegramMessageContext.mockResolvedValue({ route: { sessionKey: "agent:main:main" } });
+
+    const processMessage = createTelegramMessageProcessor(baseDeps);
+    await processSampleMessage(processMessage, {
+      messageId: 461,
+      text: "a",
+      chatType: "group",
+      fromId: 1,
+    });
+    await processSampleMessage(processMessage, {
+      messageId: 462,
+      text: "b",
+      chatType: "group",
+      fromId: 2,
+    });
+
+    expect(dispatchTelegramMessage).toHaveBeenCalledTimes(2);
+    const first = dispatchTelegramMessage.mock.calls[0]?.[0] as { replyToMode?: string };
+    const second = dispatchTelegramMessage.mock.calls[1]?.[0] as { replyToMode?: string };
+    expect(first.replyToMode).toBe("off");
+    expect(second.replyToMode).toBe("first");
   });
 
   it("skips dispatch when no context is produced", async () => {

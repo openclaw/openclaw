@@ -50,12 +50,18 @@ function sweepExpiredReplyBurstState(params: {
 function buildReplyBurstKey(ctx: TelegramContext): string {
   const msg = ctx.message;
   const chatId = String(msg.chat.id);
-  const senderId = msg.from?.id != null ? String(msg.from.id) : "unknown";
+  const chatType = msg.chat.type;
+  const senderScope =
+    chatType === "group" || chatType === "supergroup"
+      ? "chat"
+      : msg.from?.id != null
+        ? String(msg.from.id)
+        : "unknown";
   const threadId =
     typeof (msg as { message_thread_id?: number }).message_thread_id === "number"
       ? String((msg as { message_thread_id?: number }).message_thread_id)
       : "none";
-  return `${chatId}:${senderId}:${threadId}`;
+  return `${chatId}:${senderScope}:${threadId}`;
 }
 
 function resolveMessageTextLength(ctx: TelegramContext): number {
