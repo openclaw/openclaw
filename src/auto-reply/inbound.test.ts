@@ -236,7 +236,7 @@ describe("inbound dedupe", () => {
     ).toBe(false);
   });
 
-  it("does not dedupe across session keys", () => {
+  it("does not dedupe across agent ids", () => {
     resetInboundDedupe();
     const base: MsgContext = {
       Provider: "whatsapp",
@@ -248,10 +248,34 @@ describe("inbound dedupe", () => {
       shouldSkipDuplicateInbound({ ...base, SessionKey: "agent:alpha:main" }, { now: 100 }),
     ).toBe(false);
     expect(
-      shouldSkipDuplicateInbound({ ...base, SessionKey: "agent:bravo:main" }, { now: 200 }),
+      shouldSkipDuplicateInbound(
+        { ...base, SessionKey: "agent:bravo:whatsapp:direct:+1555" },
+        {
+          now: 200,
+        },
+      ),
     ).toBe(false);
     expect(
       shouldSkipDuplicateInbound({ ...base, SessionKey: "agent:alpha:main" }, { now: 300 }),
+    ).toBe(true);
+  });
+
+  it("dedupes when the same agent sees the same inbound message under different session keys", () => {
+    resetInboundDedupe();
+    const base: MsgContext = {
+      Provider: "telegram",
+      OriginatingChannel: "telegram",
+      OriginatingTo: "telegram:7463849194",
+      MessageSid: "msg-1",
+    };
+    expect(
+      shouldSkipDuplicateInbound({ ...base, SessionKey: "agent:main:main" }, { now: 100 }),
+    ).toBe(false);
+    expect(
+      shouldSkipDuplicateInbound(
+        { ...base, SessionKey: "agent:main:telegram:direct:7463849194" },
+        { now: 200 },
+      ),
     ).toBe(true);
   });
 });
