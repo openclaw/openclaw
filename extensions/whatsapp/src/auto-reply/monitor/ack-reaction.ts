@@ -1,7 +1,6 @@
 import { shouldAckReactionForWhatsApp } from "../../../../../src/channels/ack-reactions.js";
 import type { loadConfig } from "../../../../../src/config/config.js";
 import { logVerbose } from "../../../../../src/globals.js";
-import { resolveWhatsAppAccount } from "../../accounts.js";
 import { sendReactionWhatsApp } from "../../send.js";
 import { formatError } from "../../session.js";
 import type { WebInboundMsg } from "../types.js";
@@ -22,9 +21,7 @@ export function maybeSendAckReaction(params: {
     return;
   }
 
-  // Resolve account-level ackReaction so multi-account overrides apply.
-  const account = resolveWhatsAppAccount({ cfg: params.cfg, accountId: params.accountId });
-  const ackConfig = account.ackReaction ?? params.cfg.channels?.whatsapp?.ackReaction;
+  const ackConfig = params.cfg.channels?.whatsapp?.ackReaction;
   const emoji = (ackConfig?.emoji ?? "").trim();
   const directEnabled = ackConfig?.direct ?? true;
   const groupMode = ackConfig?.group ?? "mentions";

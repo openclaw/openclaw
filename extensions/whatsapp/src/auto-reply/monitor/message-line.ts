@@ -4,7 +4,6 @@ import {
   type EnvelopeFormatOptions,
 } from "../../../../../src/auto-reply/envelope.js";
 import type { loadConfig } from "../../../../../src/config/config.js";
-import { resolveWhatsAppAccount } from "../../accounts.js";
 import type { WebInboundMsg } from "../types.js";
 
 export function formatReplyContext(msg: WebInboundMsg) {
@@ -20,16 +19,14 @@ export function buildInboundLine(params: {
   cfg: ReturnType<typeof loadConfig>;
   msg: WebInboundMsg;
   agentId: string;
-  accountId?: string;
   previousTimestamp?: number;
   envelope?: EnvelopeFormatOptions;
 }) {
   const { cfg, msg, agentId, previousTimestamp, envelope } = params;
-  // Resolve account-level messagePrefix and allowFrom for multi-account setups.
-  const account = resolveWhatsAppAccount({ cfg, accountId: params.accountId });
+  // WhatsApp inbound prefix: channels.whatsapp.messagePrefix > legacy messages.messagePrefix > identity/defaults
   const messagePrefix = resolveMessagePrefix(cfg, agentId, {
-    configured: account.messagePrefix ?? cfg.channels?.whatsapp?.messagePrefix,
-    hasAllowFrom: (account.allowFrom?.length ?? 0) > 0,
+    configured: cfg.channels?.whatsapp?.messagePrefix,
+    hasAllowFrom: (cfg.channels?.whatsapp?.allowFrom?.length ?? 0) > 0,
   });
   const prefixStr = messagePrefix ? `${messagePrefix} ` : "";
   const replyContext = formatReplyContext(msg);

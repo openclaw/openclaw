@@ -161,7 +161,6 @@ export async function processMessage(params: {
     cfg: params.cfg,
     msg: params.msg,
     agentId: params.route.agentId,
-    accountId: params.route.accountId,
     previousTimestamp,
     envelope: envelopeOptions,
   });
