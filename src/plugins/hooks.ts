@@ -148,9 +148,14 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
       right: next.prependContext,
     }),
     // Namespace each plugin's messageMeta under its pluginId so plugins
-    // cannot interfere with each other's metadata.
+    // cannot interfere with each other's metadata. Deep-merge within
+    // the plugin's own namespace so multiple hooks from the same plugin
+    // don't overwrite each other's metadata.
     messageMeta: next.messageMeta
-      ? { ...acc?.messageMeta, [pluginId]: next.messageMeta }
+      ? {
+          ...acc?.messageMeta,
+          [pluginId]: { ...acc?.messageMeta?.[pluginId], ...next.messageMeta },
+        }
       : acc?.messageMeta,
     prependSystemContext: concatOptionalTextSegments({
       left: acc?.prependSystemContext,
