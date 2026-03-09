@@ -3,8 +3,10 @@ import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
+  INLINE_PROFILE_PREFIX,
   calculateAuthProfileCooldownMs,
   ensureAuthProfileStore,
+  isProfileInCooldown,
   markAuthProfileFailure,
 } from "./auth-profiles.js";
 
@@ -210,6 +212,96 @@ describe("markAuthProfileFailure", () => {
 
       const reloaded = ensureAuthProfileStore(agentDir);
       expect(reloaded.usageStats?.["openrouter:default"]).toBeUndefined();
+    });
+  });
+});
+
+describe("markAuthProfileFailure — inline provider profiles (#39807)", () => {
+  it("auto-creates a synthetic profile for inline providers on billing failure", async () => {
+    await withAuthProfileStore(async ({ agentDir, store }) => {
+      const inlineProfileId = `${INLINE_PROFILE_PREFIX}minimax`;
+
+      // No profile exists for inline provider initially
+      expect(store.profiles[inlineProfileId]).toBeUndefined();
+
+      await markAuthProfileFailure({
+        store,
+        profileId: inlineProfileId,
+        reason: "billing",
+        agentDir,
+      });
+
+      // Synthetic profile was auto-created
+      expect(store.profiles[inlineProfileId]).toBeDefined();
+      expect(store.profiles[inlineProfileId].type).toBe("api_key");
+      expect(store.profiles[inlineProfileId].provider).toBe("minimax");
+
+      // Billing backoff was applied
+      const stats = store.usageStats?.[inlineProfileId];
+      expect(typeof stats?.disabledUntil).toBe("number");
+      expect(stats?.disabledReason).toBe("billing");
+      expect(isProfileInCooldown(store, inlineProfileId)).toBe(true);
+    });
+  });
+
+  it("applies exponential backoff on repeated billing failures for inline providers", async () => {
+    await withAuthProfileStore(async ({ agentDir, store }) => {
+      const inlineProfileId = `${INLINE_PROFILE_PREFIX}minimax`;
+
+      await markAuthProfileFailure({
+        store,
+        profileId: inlineProfileId,
+        reason: "billing",
+        agentDir,
+      });
+      const firstDisabledUntil = store.usageStats?.[inlineProfileId]?.disabledUntil;
+      expect(typeof firstDisabledUntil).toBe("number");
+
+      // Second failure within window should not extend the existing disable window
+      await markAuthProfileFailure({
+        store,
+        profileId: inlineProfileId,
+        reason: "billing",
+        agentDir,
+      });
+      const secondDisabledUntil = store.usageStats?.[inlineProfileId]?.disabledUntil;
+      expect(secondDisabledUntil).toBe(firstDisabledUntil);
+    });
+  });
+
+  it("does not create synthetic profiles for non-inline profile IDs", async () => {
+    await withAuthProfileStore(async ({ agentDir, store }) => {
+      const fakeProfileId = "nonexistent:provider";
+      await markAuthProfileFailure({
+        store,
+        profileId: fakeProfileId,
+        reason: "billing",
+        agentDir,
+      });
+
+      // Should not auto-create — no inline: prefix
+      expect(store.profiles[fakeProfileId]).toBeUndefined();
+      expect(store.usageStats?.[fakeProfileId]).toBeUndefined();
+    });
+  });
+
+  it("persists inline profile cooldown state to disk", async () => {
+    await withAuthProfileStore(async ({ agentDir, store }) => {
+      const inlineProfileId = `${INLINE_PROFILE_PREFIX}deepseek`;
+
+      await markAuthProfileFailure({
+        store,
+        profileId: inlineProfileId,
+        reason: "billing",
+        agentDir,
+      });
+
+      // Reload from disk
+      const reloaded = ensureAuthProfileStore(agentDir);
+      expect(reloaded.profiles[inlineProfileId]).toBeDefined();
+      expect(reloaded.profiles[inlineProfileId].provider).toBe("deepseek");
+      expect(typeof reloaded.usageStats?.[inlineProfileId]?.disabledUntil).toBe("number");
+      expect(isProfileInCooldown(reloaded, inlineProfileId)).toBe(true);
     });
   });
 });

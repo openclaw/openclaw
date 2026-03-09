@@ -41,6 +41,7 @@ export type {
   TokenCredential,
 } from "./auth-profiles/types.js";
 export {
+  INLINE_PROFILE_PREFIX,
   calculateAuthProfileCooldownMs,
   clearAuthProfileCooldown,
   clearExpiredCooldowns,

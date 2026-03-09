@@ -3,6 +3,32 @@ import { normalizeProviderId } from "../model-selection.js";
 import { saveAuthProfileStore, updateAuthProfileStoreWithLock } from "./store.js";
 import type { AuthProfileFailureReason, AuthProfileStore, ProfileUsageStats } from "./types.js";
 
+/**
+ * Prefix for synthetic profile IDs auto-generated for inline-key providers
+ * (configured via `models.providers` with an `apiKey` but no entry in
+ * `auth.profiles`). Allows the cooldown system to track billing/auth
+ * failures for these providers. See #39807.
+ */
+export const INLINE_PROFILE_PREFIX = "inline:";
+
+/**
+ * If `profileId` starts with the inline prefix and no profile entry exists
+ * in the store, create a minimal synthetic entry so cooldown tracking works.
+ */
+function ensureInlineProviderProfile(store: AuthProfileStore, profileId: string): void {
+  if (!profileId.startsWith(INLINE_PROFILE_PREFIX)) {
+    return;
+  }
+  if (store.profiles[profileId]) {
+    return;
+  }
+  const provider = profileId.slice(INLINE_PROFILE_PREFIX.length);
+  if (!provider) {
+    return;
+  }
+  store.profiles[profileId] = { type: "api_key", provider };
+}
+
 const FAILURE_REASON_PRIORITY: AuthProfileFailureReason[] = [
   "auth_permanent",
   "auth",
@@ -454,6 +480,7 @@ export async function markAuthProfileFailure(params: {
   agentDir?: string;
 }): Promise<void> {
   const { store, profileId, reason, agentDir, cfg } = params;
+  ensureInlineProviderProfile(store, profileId);
   const profile = store.profiles[profileId];
   if (!profile || isAuthCooldownBypassedForProvider(profile.provider)) {
     return;
@@ -461,6 +488,7 @@ export async function markAuthProfileFailure(params: {
   const updated = await updateAuthProfileStoreWithLock({
     agentDir,
     updater: (freshStore) => {
+      ensureInlineProviderProfile(freshStore, profileId);
       const profile = freshStore.profiles[profileId];
       if (!profile || isAuthCooldownBypassedForProvider(profile.provider)) {
         return false;
@@ -487,6 +515,7 @@ export async function markAuthProfileFailure(params: {
     store.usageStats = updated.usageStats;
     return;
   }
+  ensureInlineProviderProfile(store, profileId);
   if (!store.profiles[profileId]) {
     return;
   }

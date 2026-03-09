@@ -235,7 +235,13 @@ export async function resolveApiKeyForProvider(params: {
 
   const customKey = getCustomProviderApiKey(cfg, provider);
   if (customKey) {
-    return { apiKey: customKey, source: "models.json", mode: "api-key" };
+    const syntheticProfileId = `inline:${normalizeProviderId(provider)}`;
+    return {
+      apiKey: customKey,
+      profileId: syntheticProfileId,
+      source: "models.json",
+      mode: "api-key",
+    };
   }
 
   const syntheticLocalAuth = resolveSyntheticLocalProviderAuth({ cfg, provider });
