@@ -82,10 +82,10 @@ describe("transcribeOpenAiAudio", () => {
 
     expect(result.text).toBe("transcribed");
     const form = getRequest().init?.body as FormData;
-    const file = form.get("file") as Blob | { name?: string } | null;
-    if (file && "name" in file && typeof file.name === "string") {
-      expect(file.name).toBe("voice-note.aac");
-    }
+    const file = form.get("file");
+    expect(file).not.toBeNull();
+    expect(file).toHaveProperty("name");
+    expect((file as File).name).toBe("voice-note.aac");
   });
 
   it("throws when the provider response omits text", async () => {
