@@ -143,7 +143,7 @@ What you set:
   <Accordion title="OpenAI Code subscription (OAuth)">
     Browser flow; paste `code#state`.
 
-    Sets `agents.defaults.model` to `openai-codex/gpt-5.3-codex` when model is unset or `openai/*`.
+    Sets `agents.defaults.model` to `openai-codex/gpt-5.4` when model is unset or `openai/*`.
 
   </Accordion>
   <Accordion title="OpenAI API key">
@@ -247,7 +247,7 @@ Typical fields in `~/.openclaw/openclaw.json`:
 
 - `agents.defaults.workspace`
 - `agents.defaults.model` / `models.providers` (if Minimax chosen)
-- `tools.profile` (local onboarding defaults to `"messaging"` when unset; existing explicit values are preserved)
+- `tools.profile` (local onboarding defaults to `"coding"` when unset; existing explicit values are preserved)
 - `gateway.*` (mode, bind, auth, tailscale)
 - `session.dmScope` (local onboarding defaults this to `per-channel-peer` when unset; existing explicit values are preserved)
 - `channels.telegram.botToken`, `channels.discord.token`, `channels.signal.*`, `channels.imessage.*`

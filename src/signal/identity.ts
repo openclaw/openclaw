@@ -1,3 +1,4 @@
+import { evaluateSenderGroupAccessForPolicy } from "../plugin-sdk/group-access.js";
 import { normalizeE164 } from "../utils.js";
 
 export type SignalSender =
@@ -129,15 +130,10 @@ export function isSignalGroupAllowed(params: {
   allowFrom: string[];
   sender: SignalSender;
 }): boolean {
-  const { groupPolicy, allowFrom, sender } = params;
-  if (groupPolicy === "disabled") {
-    return false;
-  }
-  if (groupPolicy === "open") {
-    return true;
-  }
-  if (allowFrom.length === 0) {
-    return false;
-  }
-  return isSignalSenderAllowed(sender, allowFrom);
+  return evaluateSenderGroupAccessForPolicy({
+    groupPolicy: params.groupPolicy,
+    groupAllowFrom: params.allowFrom,
+    senderId: params.sender.raw,
+    isSenderAllowed: () => isSignalSenderAllowed(params.sender, params.allowFrom),
+  }).allowed;
 }

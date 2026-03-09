@@ -1,10 +1,9 @@
 import Testing
 @testable import OpenClaw
 
-@Suite
 @MainActor
 struct ExecApprovalsGatewayPrompterTests {
-    @Test func sessionMatchPrefersActiveSession() {
+    @Test func `session match prefers active session`() {
         let matches = ExecApprovalsGatewayPrompter._testShouldPresent(
             mode: .remote,
             activeSession: " main ",
@@ -20,7 +19,7 @@ struct ExecApprovalsGatewayPrompterTests {
         #expect(!mismatched)
     }
 
-    @Test func sessionFallbackUsesRecentActivity() {
+    @Test func `session fallback uses recent activity`() {
         let recent = ExecApprovalsGatewayPrompter._testShouldPresent(
             mode: .remote,
             activeSession: nil,
@@ -38,7 +37,7 @@ struct ExecApprovalsGatewayPrompterTests {
         #expect(!stale)
     }
 
-    @Test func defaultBehaviorMatchesMode() {
+    @Test func `default behavior matches mode`() {
         let local = ExecApprovalsGatewayPrompter._testShouldPresent(
             mode: .local,
             activeSession: nil,

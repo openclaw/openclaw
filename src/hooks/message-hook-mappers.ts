@@ -213,23 +213,10 @@ export function toInternalMessageTranscribedContext(
   canonical: CanonicalInboundMessageHookContext,
   cfg: OpenClawConfig,
 ): MessageTranscribedHookContext & { cfg: OpenClawConfig } {
+  const shared = toInternalInboundMessageHookContextBase(canonical);
   return {
-    from: canonical.from,
-    to: canonical.to,
-    body: canonical.body,
-    bodyForAgent: canonical.bodyForAgent,
+    ...shared,
     transcript: canonical.transcript ?? "",
-    timestamp: canonical.timestamp,
-    channelId: canonical.channelId,
-    conversationId: canonical.conversationId,
-    messageId: canonical.messageId,
-    senderId: canonical.senderId,
-    senderName: canonical.senderName,
-    senderUsername: canonical.senderUsername,
-    provider: canonical.provider,
-    surface: canonical.surface,
-    mediaPath: canonical.mediaPath,
-    mediaType: canonical.mediaType,
     cfg,
   };
 }
@@ -238,12 +225,22 @@ export function toInternalMessagePreprocessedContext(
   canonical: CanonicalInboundMessageHookContext,
   cfg: OpenClawConfig,
 ): MessagePreprocessedHookContext & { cfg: OpenClawConfig } {
+  const shared = toInternalInboundMessageHookContextBase(canonical);
+  return {
+    ...shared,
+    transcript: canonical.transcript,
+    isGroup: canonical.isGroup,
+    groupId: canonical.groupId,
+    cfg,
+  };
+}
+
+function toInternalInboundMessageHookContextBase(canonical: CanonicalInboundMessageHookContext) {
   return {
     from: canonical.from,
     to: canonical.to,
     body: canonical.body,
     bodyForAgent: canonical.bodyForAgent,
-    transcript: canonical.transcript,
     timestamp: canonical.timestamp,
     channelId: canonical.channelId,
     conversationId: canonical.conversationId,
@@ -255,9 +252,6 @@ export function toInternalMessagePreprocessedContext(
     surface: canonical.surface,
     mediaPath: canonical.mediaPath,
     mediaType: canonical.mediaType,
-    isGroup: canonical.isGroup,
-    groupId: canonical.groupId,
-    cfg,
   };
 }
 
