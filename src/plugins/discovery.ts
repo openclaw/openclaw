@@ -267,10 +267,11 @@ function deriveIdHint(params: {
   let unscoped = rawPackageName.includes("/")
     ? (rawPackageName.split("/").pop() ?? rawPackageName)
     : rawPackageName;
-  // Strip the "openclaw-" prefix for unscoped packages so the hint matches
-  // the manifest id (example: openclaw-groupme -> groupme). This mirrors the
-  // scope-stripping above — both serve the same namespacing purpose.
-  if (unscoped.startsWith("openclaw-")) {
+  // Strip the "openclaw-" prefix only for truly unscoped packages so the hint
+  // matches the manifest id (example: openclaw-groupme -> groupme). Scoped
+  // packages like @acme/openclaw-foo keep the prefix after scope removal so
+  // the hint stays "openclaw-foo" and matches the manifest id.
+  if (!rawPackageName.includes("/") && unscoped.startsWith("openclaw-")) {
     unscoped = unscoped.slice("openclaw-".length);
   }
 
