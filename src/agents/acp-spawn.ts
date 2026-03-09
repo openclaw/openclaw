@@ -23,6 +23,8 @@ import {
 } from "../channels/thread-bindings-policy.js";
 import { loadConfig } from "../config/config.js";
 import type { OpenClawConfig } from "../config/config.js";
+import { loadSessionStore, resolveStorePath, type SessionEntry } from "../config/sessions.js";
+import { resolveSessionTranscriptFile } from "../config/sessions/transcript.js";
 import { callGateway } from "../gateway/call.js";
 import { resolveConversationIdFromTargets } from "../infra/outbound/conversation-id.js";
 import {
@@ -30,14 +32,25 @@ import {
   isSessionBindingError,
   type SessionBindingRecord,
 } from "../infra/outbound/session-binding-service.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { normalizeDeliveryContext } from "../utils/delivery-context.js";
+import {
+  type AcpSpawnParentRelayHandle,
+  resolveAcpSpawnStreamLogPath,
+  startAcpSpawnParentStreamRelay,
+} from "./acp-spawn-parent-stream.js";
 import { resolveSandboxRuntimeStatus } from "./sandbox/runtime-status.js";
+import { resolveInternalSessionKey, resolveMainSessionAlias } from "./tools/sessions-helpers.js";
+
+const log = createSubsystemLogger("agents/acp-spawn");
 
 export const ACP_SPAWN_MODES = ["run", "session"] as const;
 export type SpawnAcpMode = (typeof ACP_SPAWN_MODES)[number];
 export const ACP_SPAWN_SANDBOX_MODES = ["inherit", "require"] as const;
 export type SpawnAcpSandboxMode = (typeof ACP_SPAWN_SANDBOX_MODES)[number];
+export const ACP_SPAWN_STREAM_TARGETS = ["parent"] as const;
+export type SpawnAcpStreamTarget = (typeof ACP_SPAWN_STREAM_TARGETS)[number];
 
 export type SpawnAcpParams = {
   task: string;
@@ -47,6 +60,7 @@ export type SpawnAcpParams = {
   mode?: SpawnAcpMode;
   thread?: boolean;
   sandbox?: SpawnAcpSandboxMode;
+  streamTo?: SpawnAcpStreamTarget;
 };
 
 export type SpawnAcpContext = {
@@ -63,6 +77,7 @@ export type SpawnAcpResult = {
   childSessionKey?: string;
   runId?: string;
   mode?: SpawnAcpMode;
+  streamLogPath?: string;
   note?: string;
   error?: string;
 };
@@ -71,6 +86,27 @@ export const ACP_SPAWN_ACCEPTED_NOTE =
   "initial ACP task queued in isolated session; follow-ups continue in the bound thread.";
 export const ACP_SPAWN_SESSION_ACCEPTED_NOTE =
   "thread-bound ACP session stays active after this task; continue in-thread for follow-ups.";
+
+export function resolveAcpSpawnRuntimePolicyError(params: {
+  cfg: OpenClawConfig;
+  requesterSessionKey?: string;
+  requesterSandboxed?: boolean;
+  sandbox?: SpawnAcpSandboxMode;
+}): string | undefined {
+  const sandboxMode = params.sandbox === "require" ? "require" : "inherit";
+  const requesterRuntime = resolveSandboxRuntimeStatus({
+    cfg: params.cfg,
+    sessionKey: params.requesterSessionKey,
+  });
+  const requesterSandboxed = params.requesterSandboxed === true || requesterRuntime.sandboxed;
+  if (requesterSandboxed) {
+    return 'Sandboxed sessions cannot spawn ACP sessions because runtime="acp" runs on the host. Use runtime="subagent" from sandboxed sessions.';
+  }
+  if (sandboxMode === "require") {
+    return 'sessions_spawn sandbox="require" is unsupported for runtime="acp" because ACP sessions run outside the sandbox. Use runtime="subagent" or sandbox="inherit".';
+  }
+  return undefined;
+}
 
 type PreparedAcpThreadBinding = {
   channel: string;
@@ -130,6 +166,50 @@ function summarizeError(err: unknown): string {
     return err;
   }
   return "error";
+}
+
+function resolveRequesterInternalSessionKey(params: {
+  cfg: OpenClawConfig;
+  requesterSessionKey?: string;
+}): string {
+  const { mainKey, alias } = resolveMainSessionAlias(params.cfg);
+  const requesterSessionKey = params.requesterSessionKey?.trim();
+  return requesterSessionKey
+    ? resolveInternalSessionKey({
+        key: requesterSessionKey,
+        alias,
+        mainKey,
+      })
+    : alias;
+}
+
+async function persistAcpSpawnSessionFileBestEffort(params: {
+  sessionId: string;
+  sessionKey: string;
+  sessionEntry: SessionEntry | undefined;
+  sessionStore: Record<string, SessionEntry>;
+  storePath: string;
+  agentId: string;
+  threadId?: string | number;
+  stage: "spawn" | "thread-bind";
+}): Promise<SessionEntry | undefined> {
+  try {
+    const resolvedSessionFile = await resolveSessionTranscriptFile({
+      sessionId: params.sessionId,
+      sessionKey: params.sessionKey,
+      sessionEntry: params.sessionEntry,
+      sessionStore: params.sessionStore,
+      storePath: params.storePath,
+      agentId: params.agentId,
+      threadId: params.threadId,
+    });
+    return resolvedSessionFile.sessionEntry;
+  } catch (error) {
+    log.warn(
+      `ACP session-file persistence failed during ${params.stage} for ${params.sessionKey}: ${summarizeError(error)}`,
+    );
+    return params.sessionEntry;
+  }
 }
 
 function resolveConversationIdForThreadBinding(params: {
@@ -227,30 +307,34 @@ export async function spawnAcpDirect(
   ctx: SpawnAcpContext,
 ): Promise<SpawnAcpResult> {
   const cfg = loadConfig();
+  const requesterInternalKey = resolveRequesterInternalSessionKey({
+    cfg,
+    requesterSessionKey: ctx.agentSessionKey,
+  });
   if (!isAcpEnabledByPolicy(cfg)) {
     return {
       status: "forbidden",
       error: "ACP is disabled by policy (`acp.enabled=false`).",
     };
   }
-  const sandboxMode = params.sandbox === "require" ? "require" : "inherit";
-  const requesterRuntime = resolveSandboxRuntimeStatus({
-    cfg,
-    sessionKey: ctx.agentSessionKey,
-  });
-  const requesterSandboxed = ctx.sandboxed === true || requesterRuntime.sandboxed;
-  if (requesterSandboxed) {
+  const streamToParentRequested = params.streamTo === "parent";
+  const parentSessionKey = ctx.agentSessionKey?.trim();
+  if (streamToParentRequested && !parentSessionKey) {
     return {
-      status: "forbidden",
-      error:
-        'Sandboxed sessions cannot spawn ACP sessions because runtime="acp" runs on the host. Use runtime="subagent" from sandboxed sessions.',
+      status: "error",
+      error: 'sessions_spawn streamTo="parent" requires an active requester session context.',
     };
   }
-  if (sandboxMode === "require") {
+  const runtimePolicyError = resolveAcpSpawnRuntimePolicyError({
+    cfg,
+    requesterSessionKey: ctx.agentSessionKey,
+    requesterSandboxed: ctx.sandboxed,
+    sandbox: params.sandbox,
+  });
+  if (runtimePolicyError) {
     return {
       status: "forbidden",
-      error:
-        'sessions_spawn sandbox="require" is unsupported for runtime="acp" because ACP sessions run outside the sandbox. Use runtime="subagent" or sandbox="inherit".',
+      error: runtimePolicyError,
     };
   }
 
@@ -316,11 +400,27 @@ export async function spawnAcpDirect(
       method: "sessions.patch",
       params: {
         key: sessionKey,
+        spawnedBy: requesterInternalKey,
         ...(params.label ? { label: params.label } : {}),
       },
       timeoutMs: 10_000,
     });
     sessionCreated = true;
+    const storePath = resolveStorePath(cfg.session?.store, { agentId: targetAgentId });
+    const sessionStore = loadSessionStore(storePath);
+    let sessionEntry: SessionEntry | undefined = sessionStore[sessionKey];
+    const sessionId = sessionEntry?.sessionId;
+    if (sessionId) {
+      sessionEntry = await persistAcpSpawnSessionFileBestEffort({
+        sessionId,
+        sessionKey,
+        sessionStore,
+        storePath,
+        sessionEntry,
+        agentId: targetAgentId,
+        stage: "spawn",
+      });
+    }
     const initialized = await acpManager.initializeSession({
       cfg,
       sessionKey,
@@ -378,6 +478,21 @@ export async function spawnAcpDirect(
           `Failed to create and bind a ${preparedBinding.channel} thread for this ACP session.`,
         );
       }
+      if (sessionId) {
+        const boundThreadId = String(binding.conversation.conversationId).trim() || undefined;
+        if (boundThreadId) {
+          sessionEntry = await persistAcpSpawnSessionFileBestEffort({
+            sessionId,
+            sessionKey,
+            sessionStore,
+            storePath,
+            sessionEntry,
+            agentId: targetAgentId,
+            threadId: boundThreadId,
+            stage: "thread-bind",
+          });
+        }
+      }
     }
   } catch (err) {
     await cleanupFailedAcpSpawn({
@@ -410,20 +525,42 @@ export async function spawnAcpDirect(
     ? `channel:${boundThreadId}`
     : requesterOrigin?.to?.trim() || (deliveryThreadId ? `channel:${deliveryThreadId}` : undefined);
   const hasDeliveryTarget = Boolean(requesterOrigin?.channel && inferredDeliveryTo);
+  // Fresh one-shot ACP runs should bootstrap the worker first, then let higher layers
+  // decide how to relay status. Inline delivery is reserved for thread-bound sessions.
+  const useInlineDelivery =
+    hasDeliveryTarget && spawnMode === "session" && !streamToParentRequested;
   const childIdem = crypto.randomUUID();
   let childRunId: string = childIdem;
+  const streamLogPath =
+    streamToParentRequested && parentSessionKey
+      ? resolveAcpSpawnStreamLogPath({
+          childSessionKey: sessionKey,
+        })
+      : undefined;
+  let parentRelay: AcpSpawnParentRelayHandle | undefined;
+  if (streamToParentRequested && parentSessionKey) {
+    // Register relay before dispatch so fast lifecycle failures are not missed.
+    parentRelay = startAcpSpawnParentStreamRelay({
+      runId: childIdem,
+      parentSessionKey,
+      childSessionKey: sessionKey,
+      agentId: targetAgentId,
+      logPath: streamLogPath,
+      emitStartNotice: false,
+    });
+  }
   try {
     const response = await callGateway<{ runId?: string }>({
       method: "agent",
       params: {
         message: params.task,
         sessionKey,
-        channel: hasDeliveryTarget ? requesterOrigin?.channel : undefined,
-        to: hasDeliveryTarget ? inferredDeliveryTo : undefined,
-        accountId: hasDeliveryTarget ? (requesterOrigin?.accountId ?? undefined) : undefined,
-        threadId: hasDeliveryTarget ? deliveryThreadId : undefined,
+        channel: useInlineDelivery ? requesterOrigin?.channel : undefined,
+        to: useInlineDelivery ? inferredDeliveryTo : undefined,
+        accountId: useInlineDelivery ? (requesterOrigin?.accountId ?? undefined) : undefined,
+        threadId: useInlineDelivery ? deliveryThreadId : undefined,
         idempotencyKey: childIdem,
-        deliver: hasDeliveryTarget,
+        deliver: useInlineDelivery,
         label: params.label || undefined,
       },
       timeoutMs: 10_000,
@@ -432,6 +569,7 @@ export async function spawnAcpDirect(
       childRunId = response.runId.trim();
     }
   } catch (err) {
+    parentRelay?.dispose();
     await cleanupFailedAcpSpawn({
       cfg,
       sessionKey,
@@ -442,6 +580,30 @@ export async function spawnAcpDirect(
       status: "error",
       error: summarizeError(err),
       childSessionKey: sessionKey,
+    };
+  }
+
+  if (streamToParentRequested && parentSessionKey) {
+    if (parentRelay && childRunId !== childIdem) {
+      parentRelay.dispose();
+      // Defensive fallback if gateway returns a runId that differs from idempotency key.
+      parentRelay = startAcpSpawnParentStreamRelay({
+        runId: childRunId,
+        parentSessionKey,
+        childSessionKey: sessionKey,
+        agentId: targetAgentId,
+        logPath: streamLogPath,
+        emitStartNotice: false,
+      });
+    }
+    parentRelay?.notifyStarted();
+    return {
+      status: "accepted",
+      childSessionKey: sessionKey,
+      runId: childRunId,
+      mode: spawnMode,
+      ...(streamLogPath ? { streamLogPath } : {}),
+      note: spawnMode === "session" ? ACP_SPAWN_SESSION_ACCEPTED_NOTE : ACP_SPAWN_ACCEPTED_NOTE,
     };
   }
 

@@ -199,6 +199,30 @@ describe("DiscordVoiceManager", () => {
     );
   };
 
+  type ProcessSegmentInvoker = {
+    processSegment: (params: {
+      entry: unknown;
+      wavPath: string;
+      userId: string;
+      durationSeconds: number;
+    }) => Promise<void>;
+  };
+
+  const processVoiceSegment = async (
+    manager: InstanceType<typeof managerModule.DiscordVoiceManager>,
+    userId: string,
+  ) =>
+    await (manager as unknown as ProcessSegmentInvoker).processSegment({
+      entry: {
+        guildId: "g1",
+        channelId: "c1",
+        route: { sessionKey: "discord:g1:c1", agentId: "agent-1" },
+      },
+      wavPath: "/tmp/test.wav",
+      userId,
+      durationSeconds: 1.2,
+    });
+
   it("keeps the new session when an old disconnected handler fires", async () => {
     const oldConnection = createConnectionMock();
     const newConnection = createConnectionMock();
@@ -212,14 +236,14 @@ describe("DiscordVoiceManager", () => {
 
     const manager = createManager();
 
-    await manager.join({ guildId: "g1", channelId: "c1" });
-    await manager.join({ guildId: "g1", channelId: "c2" });
+    await manager.join({ guildId: "g1", channelId: "1001" });
+    await manager.join({ guildId: "g1", channelId: "1002" });
 
     const oldDisconnected = oldConnection.handlers.get("disconnected");
     expect(oldDisconnected).toBeTypeOf("function");
     await oldDisconnected?.();
 
-    expectConnectedStatus(manager, "c2");
+    expectConnectedStatus(manager, "1002");
   });
 
   it("keeps the new session when an old destroyed handler fires", async () => {
@@ -229,14 +253,14 @@ describe("DiscordVoiceManager", () => {
 
     const manager = createManager();
 
-    await manager.join({ guildId: "g1", channelId: "c1" });
-    await manager.join({ guildId: "g1", channelId: "c2" });
+    await manager.join({ guildId: "g1", channelId: "1001" });
+    await manager.join({ guildId: "g1", channelId: "1002" });
 
     const oldDestroyed = oldConnection.handlers.get("destroyed");
     expect(oldDestroyed).toBeTypeOf("function");
     oldDestroyed?.();
 
-    expectConnectedStatus(manager, "c2");
+    expectConnectedStatus(manager, "1002");
   });
 
   it("removes voice listeners on leave", async () => {
@@ -244,7 +268,7 @@ describe("DiscordVoiceManager", () => {
     joinVoiceChannelMock.mockReturnValueOnce(connection);
     const manager = createManager();
 
-    await manager.join({ guildId: "g1", channelId: "c1" });
+    await manager.join({ guildId: "g1", channelId: "1001" });
     await manager.leave({ guildId: "g1" });
 
     const player = createAudioPlayerMock.mock.results[0]?.value;
@@ -262,7 +286,7 @@ describe("DiscordVoiceManager", () => {
       },
     });
 
-    await manager.join({ guildId: "g1", channelId: "c1" });
+    await manager.join({ guildId: "g1", channelId: "1001" });
 
     expect(joinVoiceChannelMock).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -275,7 +299,7 @@ describe("DiscordVoiceManager", () => {
   it("attempts rejoin after repeated decrypt failures", async () => {
     const manager = createManager();
 
-    await manager.join({ guildId: "g1", channelId: "c1" });
+    await manager.join({ guildId: "g1", channelId: "1001" });
 
     emitDecryptFailure(manager);
     emitDecryptFailure(manager);
@@ -298,25 +322,7 @@ describe("DiscordVoiceManager", () => {
       },
     });
     const manager = createManager({ allowFrom: ["discord:u-owner"] }, client);
-    await (
-      manager as unknown as {
-        processSegment: (params: {
-          entry: unknown;
-          wavPath: string;
-          userId: string;
-          durationSeconds: number;
-        }) => Promise<void>;
-      }
-    ).processSegment({
-      entry: {
-        guildId: "g1",
-        channelId: "c1",
-        route: { sessionKey: "discord:g1:c1", agentId: "agent-1" },
-      },
-      wavPath: "/tmp/test.wav",
-      userId: "u-owner",
-      durationSeconds: 1.2,
-    });
+    await processVoiceSegment(manager, "u-owner");
 
     const commandArgs = agentCommandMock.mock.calls.at(-1)?.[0] as
       | { senderIsOwner?: boolean }
@@ -336,25 +342,7 @@ describe("DiscordVoiceManager", () => {
       },
     });
     const manager = createManager({ allowFrom: ["discord:u-owner"] }, client);
-    await (
-      manager as unknown as {
-        processSegment: (params: {
-          entry: unknown;
-          wavPath: string;
-          userId: string;
-          durationSeconds: number;
-        }) => Promise<void>;
-      }
-    ).processSegment({
-      entry: {
-        guildId: "g1",
-        channelId: "c1",
-        route: { sessionKey: "discord:g1:c1", agentId: "agent-1" },
-      },
-      wavPath: "/tmp/test.wav",
-      userId: "u-guest",
-      durationSeconds: 1.2,
-    });
+    await processVoiceSegment(manager, "u-guest");
 
     const commandArgs = agentCommandMock.mock.calls.at(-1)?.[0] as
       | { senderIsOwner?: boolean }
@@ -374,26 +362,7 @@ describe("DiscordVoiceManager", () => {
       },
     });
     const manager = createManager({ allowFrom: ["discord:u-cache"] }, client);
-    const runSegment = async () =>
-      await (
-        manager as unknown as {
-          processSegment: (params: {
-            entry: unknown;
-            wavPath: string;
-            userId: string;
-            durationSeconds: number;
-          }) => Promise<void>;
-        }
-      ).processSegment({
-        entry: {
-          guildId: "g1",
-          channelId: "c1",
-          route: { sessionKey: "discord:g1:c1", agentId: "agent-1" },
-        },
-        wavPath: "/tmp/test.wav",
-        userId: "u-cache",
-        durationSeconds: 1.2,
-      });
+    const runSegment = async () => await processVoiceSegment(manager, "u-cache");
 
     await runSegment();
     await runSegment();

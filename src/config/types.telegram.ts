@@ -6,6 +6,7 @@ import type {
   MarkdownConfig,
   OutboundRetryConfig,
   ReplyToMode,
+  SessionThreadBindingsConfig,
 } from "./types.base.js";
 import type { ChannelHeartbeatVisibilityConfig } from "./types.channels.js";
 import type { DmConfig, ProviderCommandsConfig } from "./types.messages.js";
@@ -14,6 +15,8 @@ import type { GroupToolPolicyBySenderConfig, GroupToolPolicyConfig } from "./typ
 export type TelegramActionConfig = {
   reactions?: boolean;
   sendMessage?: boolean;
+  /** Enable poll creation. Requires sendMessage to also be enabled. */
+  poll?: boolean;
   deleteMessage?: boolean;
   editMessage?: boolean;
   /** Enable sticker actions (send and search). */
@@ -137,8 +140,12 @@ export type TelegramAccountConfig = {
   webhookHost?: string;
   /** Local webhook listener bind port (default: 8787). */
   webhookPort?: number;
+  /** Path to the self-signed certificate (PEM) to upload to Telegram during webhook registration. */
+  webhookCertPath?: string;
   /** Per-action tool gating (default: true for all). */
   actions?: TelegramActionConfig;
+  /** Telegram thread/conversation binding overrides. */
+  threadBindings?: SessionThreadBindingsConfig;
   /**
    * Controls which user reactions trigger notifications:
    * - "off" (default): ignore all reactions
@@ -187,6 +194,8 @@ export type TelegramTopicConfig = {
   systemPrompt?: string;
   /** If true, skip automatic voice-note transcription for mention detection in this topic. */
   disableAudioPreflight?: boolean;
+  /** Route this topic to a specific agent (overrides group-level and binding routing). */
+  agentId?: string;
 };
 
 export type TelegramGroupConfig = {

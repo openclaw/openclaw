@@ -40,6 +40,7 @@ function resolveSignalReactionTarget(raw: string): { recipient?: string; groupId
 }
 
 async function mutateSignalReaction(params: {
+  cfg: Parameters<typeof resolveSignalAccount>[0]["cfg"];
   accountId?: string;
   target: { recipient?: string; groupId?: string };
   timestamp: number;
@@ -49,6 +50,7 @@ async function mutateSignalReaction(params: {
   targetAuthorUuid?: string;
 }) {
   const options = {
+    cfg: params.cfg,
     accountId: params.accountId,
     groupId: params.target.groupId,
     targetAuthor: params.targetAuthor,
@@ -153,6 +155,7 @@ export const signalMessageActions: ChannelMessageActionAdapter = {
           throw new Error("Emoji required to remove reaction.");
         }
         return await mutateSignalReaction({
+          cfg,
           accountId: accountId ?? undefined,
           target,
           timestamp,
@@ -167,6 +170,7 @@ export const signalMessageActions: ChannelMessageActionAdapter = {
         throw new Error("Emoji required to add reaction.");
       }
       return await mutateSignalReaction({
+        cfg,
         accountId: accountId ?? undefined,
         target,
         timestamp,
