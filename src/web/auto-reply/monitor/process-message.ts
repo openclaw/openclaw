@@ -359,6 +359,12 @@ export async function processMessage(params: {
   });
   trackBackgroundTask(params.backgroundTasks, metaTask);
 
+  // Resolve per-agent replyMode. "silent" blocks substantive text from reaching WhatsApp,
+  // preventing unapproved LLM output from leaking to end users when the agent is designed
+  // to communicate exclusively via tool calls (queue-based approval workflow).
+  const agentReplyMode =
+    params.cfg.agents?.list?.find((a) => a.id === params.route.agentId)?.replyMode ?? "normal";
+
   const { queuedFinal } = await dispatchReplyWithBufferedBlockDispatcher({
     ctx: ctxPayload,
     cfg: params.cfg,
@@ -378,6 +384,17 @@ export async function processMessage(params: {
           // Block (reasoning/thinking) and tool updates are meant for the internal
           // web UI only; sending them here leaks chain-of-thought to end users.
           return;
+        }
+        // replyMode: "silent" — suppress any substantive text reply.
+        // The agent communicates via tool calls only; any text output is an LLM mistake.
+        if (agentReplyMode === "silent" && payload.text?.trim()) {
+          const hasMedia = Boolean(payload.mediaUrl || payload.mediaUrls?.length);
+          if (!hasMedia) {
+            whatsappOutboundLog.warn(
+              `Blocked non-silent reply to ${params.msg.from ?? conversationId} (replyMode=silent): ${elide(payload.text, 120)}`,
+            );
+            return;
+          }
         }
         await deliverWebReply({
           replyResult: payload,

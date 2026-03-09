@@ -120,6 +120,69 @@ describe("deliverWebReply", () => {
     );
   });
 
+  it("suppresses text-only NO_REPLY token", async () => {
+    const msg = makeMsg();
+
+    await deliverWebReply({
+      replyResult: { text: "NO_REPLY" },
+      msg,
+      maxMediaBytes: 1024 * 1024,
+      textLimit: 200,
+      replyLogger,
+      skipLog: true,
+    });
+
+    expect(msg.reply).not.toHaveBeenCalled();
+    expect(msg.sendMedia).not.toHaveBeenCalled();
+  });
+
+  it("suppresses NO_REPLY with surrounding whitespace", async () => {
+    const msg = makeMsg();
+
+    await deliverWebReply({
+      replyResult: { text: "  NO_REPLY  \n" },
+      msg,
+      maxMediaBytes: 1024 * 1024,
+      textLimit: 200,
+      replyLogger,
+      skipLog: true,
+    });
+
+    expect(msg.reply).not.toHaveBeenCalled();
+    expect(msg.sendMedia).not.toHaveBeenCalled();
+  });
+
+  it("does NOT suppress NO_REPLY when media is attached", async () => {
+    const msg = makeMsg();
+    mockLoadedImageMedia();
+
+    await deliverWebReply({
+      replyResult: { text: "NO_REPLY", mediaUrl: "http://example.com/img.jpg" },
+      msg,
+      maxMediaBytes: 1024 * 1024,
+      textLimit: 200,
+      replyLogger,
+      skipLog: true,
+    });
+
+    expect(msg.sendMedia).toHaveBeenCalledTimes(1);
+  });
+
+  it("does NOT suppress text that merely contains NO_REPLY", async () => {
+    const msg = makeMsg();
+
+    await deliverWebReply({
+      replyResult: { text: "Please do NO_REPLY to spam" },
+      msg,
+      maxMediaBytes: 1024 * 1024,
+      textLimit: 200,
+      replyLogger,
+      skipLog: true,
+    });
+
+    expect(msg.reply).toHaveBeenCalledTimes(1);
+  });
+
   it("sends chunked text replies and logs a summary", async () => {
     const msg = makeMsg();
 

@@ -331,6 +331,41 @@ describe("web processMessage inbound contract", () => {
     expect(updateLastRouteMock).toHaveBeenCalledTimes(1);
   });
 
+  it("blocks substantive text when agent replyMode is silent", async () => {
+    const args = makeProcessMessageArgs({
+      routeSessionKey: "agent:clients:whatsapp:direct:+1555",
+      groupHistoryKey: "+1555",
+      cfg: {
+        agents: {
+          list: [{ id: "clients", replyMode: "silent" }],
+        },
+        messages: {},
+        session: { store: sessionStorePath },
+      } as unknown as ReturnType<typeof import("../../../config/config.js").loadConfig>,
+      msg: {
+        id: "msg-silent-1",
+        from: "+1555",
+        to: "+2000",
+        chatType: "direct",
+        body: "hi",
+      },
+    });
+    // Override default agentId so it matches the silent agent config
+    args.route = { ...args.route, agentId: "clients" };
+
+    await processMessage(args);
+
+    // oxlint-disable-next-line typescript/no-explicit-any
+    const deliver = (capturedDispatchParams as any)?.dispatcherOptions?.deliver as
+      | ((payload: { text?: string }, info: { kind: "tool" | "block" | "final" }) => Promise<void>)
+      | undefined;
+    expect(deliver).toBeTypeOf("function");
+
+    // A substantive text-only reply should be suppressed
+    await deliver?.({ text: "Oops I leaked text" }, { kind: "final" });
+    expect(deliverWebReplyMock).not.toHaveBeenCalled();
+  });
+
   it("does not update main last route for isolated DM scope sessions", async () => {
     const updateLastRouteMock = vi.mocked(updateLastRouteInBackground);
     updateLastRouteMock.mockClear();

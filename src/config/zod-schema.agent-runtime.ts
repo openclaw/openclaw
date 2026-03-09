@@ -704,6 +704,7 @@ export const AgentEntrySchema = z
       .optional(),
     sandbox: AgentSandboxSchema,
     tools: AgentToolsSchema,
+    replyMode: z.enum(["normal", "silent"]).optional(),
   })
   .strict();
 

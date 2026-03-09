@@ -32,6 +32,15 @@ export type AgentConfig = {
   /** Optional per-agent stream params (e.g. cacheRetention, temperature). */
   params?: Record<string, unknown>;
   tools?: AgentToolsConfig;
+  /**
+   * Reply mode for this agent's outbound messages.
+   * - "normal" (default): send all LLM text replies to the channel.
+   * - "silent": suppress any text reply that is NOT the NO_REPLY token.
+   *   Use this for agents that communicate exclusively via tool calls
+   *   (e.g. queue-based approval workflows) to prevent unapproved text
+   *   from leaking to end users.
+   */
+  replyMode?: "normal" | "silent";
 };
 
 export type AgentsConfig = {

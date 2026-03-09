@@ -1,4 +1,5 @@
 import { chunkMarkdownTextWithMode, type ChunkMode } from "../../auto-reply/chunk.js";
+import { isSilentReplyText } from "../../auto-reply/tokens.js";
 import type { ReplyPayload } from "../../auto-reply/types.js";
 import type { MarkdownTableMode } from "../../config/types.base.js";
 import { logVerbose, shouldLogVerbose } from "../../globals.js";
@@ -42,14 +43,21 @@ export async function deliverWebReply(params: {
 }) {
   const { replyResult, msg, maxMediaBytes, textLimit, replyLogger, connectionId, skipLog } = params;
   const replyStarted = Date.now();
+  const hasSilentTextToken = isSilentReplyText(replyResult.text);
   if (shouldSuppressReasoningReply(replyResult)) {
     whatsappOutboundLog.debug(`Suppressed reasoning payload to ${msg.from}`);
+    return;
+  }
+  // Defense in depth: suppress NO_REPLY token even if the dispatcher normalizer missed it.
+  // Mirrors the same guard in slack/send.ts to prevent silent tokens from leaking.
+  if (hasSilentTextToken && !replyResult.mediaUrl && !replyResult.mediaUrls?.length) {
+    whatsappOutboundLog.debug(`Suppressed NO_REPLY token before WhatsApp send to ${msg.from}`);
     return;
   }
   const tableMode = params.tableMode ?? "code";
   const chunkMode = params.chunkMode ?? "length";
   const convertedText = markdownToWhatsApp(
-    convertMarkdownTables(replyResult.text || "", tableMode),
+    convertMarkdownTables(hasSilentTextToken ? "" : (replyResult.text ?? ""), tableMode),
   );
   const textChunks = chunkMarkdownTextWithMode(convertedText, textLimit, chunkMode);
   const mediaList = replyResult.mediaUrls?.length
