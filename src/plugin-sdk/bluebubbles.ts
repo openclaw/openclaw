@@ -75,6 +75,7 @@ export {
   resolveServicePrefixedTarget,
 } from "../imessage/target-parsing-helpers.js";
 export { stripMarkdown } from "../line/markdown-to-line.js";
+export { parseFiniteNumber } from "../infra/parse-finite-number.js";
 export { emptyPluginConfigSchema } from "../plugins/config-schema.js";
 export type { PluginRuntime } from "../plugins/runtime/types.js";
 export type { OpenClawPluginApi } from "../plugins/types.js";
