@@ -2,6 +2,10 @@ import { describe, expect, it, vi } from "vitest";
 
 const loadSessionStoreMock = vi.fn();
 const updateSessionStoreMock = vi.fn();
+const { formatUserTimeMock, realFormatUserTime } = vi.hoisted(() => ({
+  formatUserTimeMock: vi.fn(),
+  realFormatUserTime: vi.fn(),
+}));
 
 vi.mock("../config/sessions.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../config/sessions.js")>();
@@ -76,6 +80,16 @@ vi.mock("../infra/provider-usage.js", () => ({
   formatUsageSummaryLine: () => null,
 }));
 
+vi.mock("../agents/date-time.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../agents/date-time.js")>();
+  realFormatUserTime.mockImplementation(actual.formatUserTime);
+  return {
+    ...actual,
+    formatUserTime: (...args: Parameters<typeof actual.formatUserTime>) =>
+      formatUserTimeMock(...args),
+  };
+});
+
 import "./test-helpers/fast-core-tools.js";
 import { createOpenClawTools } from "./openclaw-tools.js";
 
@@ -83,6 +97,10 @@ function resetSessionStore(store: Record<string, unknown>) {
   loadSessionStoreMock.mockClear();
   updateSessionStoreMock.mockClear();
   loadSessionStoreMock.mockReturnValue(store);
+  formatUserTimeMock.mockReset();
+  formatUserTimeMock.mockImplementation((date, timeZone, format) =>
+    realFormatUserTime(date, timeZone, format),
+  );
 }
 
 function getSessionStatusTool(agentSessionKey = "main") {
@@ -113,6 +131,30 @@ describe("session_status tool", () => {
       const result = await tool.execute("call-time", {});
       const details = result.details as { ok?: boolean; statusText?: string };
       expect(details.ok).toBe(true);
+      expect(details.statusText).toContain("2026-03-09 10:15 UTC");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("includes a machine-readable UTC time even when localized time formatting fails", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-03-09T10:15:00Z"));
+    resetSessionStore({
+      main: {
+        sessionId: "s1",
+        updatedAt: 10,
+      },
+    });
+    formatUserTimeMock.mockReturnValueOnce(undefined);
+
+    try {
+      const tool = getSessionStatusTool();
+
+      const result = await tool.execute("call-time-fallback", {});
+      const details = result.details as { ok?: boolean; statusText?: string };
+      expect(details.ok).toBe(true);
+      expect(details.statusText).toContain("🕒 Time zone:");
       expect(details.statusText).toContain("2026-03-09 10:15 UTC");
     } finally {
       vi.useRealTimers();

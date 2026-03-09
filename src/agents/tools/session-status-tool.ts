@@ -348,7 +348,7 @@ export function createSessionStatusTool(opts?: {
       const utcTime = new Date(nowMs).toISOString().replace("T", " ").slice(0, 16) + " UTC";
       const timeLine = userTime
         ? `🕒 Time: ${userTime} (${userTimezone}) / ${utcTime}`
-        : `🕒 Time zone: ${userTimezone}`;
+        : `🕒 Time zone: ${userTimezone} / ${utcTime}`;
 
       const agentDefaults = cfg.agents?.defaults ?? {};
       const defaultLabel = `${configured.provider}/${configured.model}`;
