@@ -199,6 +199,27 @@ export type SlackAccountConfig = {
   ackReaction?: string;
   /** Reaction emoji added while processing a reply (e.g. "hourglass_flowing_sand"). Removed when done. Useful as a typing indicator fallback when assistant mode is not enabled. */
   typingReaction?: string;
+  /**
+   * Socket Mode tuning. Only applies when mode is "socket" (the default).
+   * These values are passed to the underlying @slack/socket-mode SocketModeClient.
+   */
+  socketMode?: SlackSocketModeConfig;
+};
+
+export type SlackSocketModeConfig = {
+  /**
+   * How long to wait for a pong response to the client's ping, in ms.
+   * The SDK default (5000) is too aggressive for many Slack server environments.
+   * Recommended: 15000-30000. Default when omitted: SDK default (5000).
+   */
+  clientPingTimeout?: number;
+  /**
+   * How long to wait for ping messages from the server, in ms.
+   * Default when omitted: SDK default (30000).
+   */
+  serverPingTimeout?: number;
+  /** Log ping/pong messages at DEBUG level. Default: false. */
+  pingPongLoggingEnabled?: boolean;
 };
 
 export type SlackConfig = {

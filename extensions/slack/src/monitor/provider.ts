@@ -207,6 +207,28 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
           clientOptions,
         },
   );
+
+  // Apply Socket Mode tuning (ping/pong timeouts) if configured.
+  // Bolt doesn't expose these in AppOptions or SocketModeReceiverOptions,
+  // so we set them on the underlying SocketModeClient after construction
+  // but before start(). The client reads these when creating the websocket.
+  if (slackMode === "socket" && slackCfg.socketMode) {
+    const socketClient = (app as unknown as { receiver?: { client?: Record<string, unknown> } })
+      .receiver?.client;
+    if (socketClient) {
+      const sm = slackCfg.socketMode;
+      if (sm.clientPingTimeout !== undefined) {
+        socketClient.clientPingTimeoutMS = sm.clientPingTimeout;
+      }
+      if (sm.serverPingTimeout !== undefined) {
+        socketClient.serverPingTimeoutMS = sm.serverPingTimeout;
+      }
+      if (sm.pingPongLoggingEnabled !== undefined) {
+        socketClient.pingPongLoggingEnabled = sm.pingPongLoggingEnabled;
+      }
+    }
+  }
+
   const slackHttpHandler =
     slackMode === "http" && receiver
       ? async (req: IncomingMessage, res: ServerResponse) => {

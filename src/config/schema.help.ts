@@ -1483,6 +1483,12 @@ export const FIELD_HELP: Record<string, string> = {
   "channels.slack.commands.native": 'Override native commands for Slack (bool or "auto").',
   "channels.slack.commands.nativeSkills":
     'Override native skill commands for Slack (bool or "auto").',
+  "channels.slack.socketMode.clientPingTimeout":
+    "How long to wait for a pong response to the client's ping, in ms. The SDK default (5000) is too aggressive for many environments; recommended: 15000-30000.",
+  "channels.slack.socketMode.serverPingTimeout":
+    "How long to wait for ping messages from the server, in ms (SDK default: 30000).",
+  "channels.slack.socketMode.pingPongLoggingEnabled":
+    "Log ping/pong messages at DEBUG level (default: false).",
   "channels.slack.streaming":
     'Unified Slack stream preview mode: "off" | "partial" | "block" | "progress". Legacy boolean/streamMode keys are auto-mapped.',
   "channels.slack.nativeStreaming":

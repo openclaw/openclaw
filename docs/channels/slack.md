@@ -517,6 +517,22 @@ openclaw pairing list slack
     Validate bot + app tokens and Socket Mode enablement in Slack app settings.
   </Accordion>
 
+  <Accordion title="Pong timeout warnings in Socket Mode">
+    The `@slack/socket-mode` SDK defaults to a 5000 ms client ping timeout, which is too aggressive for many Slack server environments. If you see frequent "pong timeout" warnings or reconnects, increase the timeout:
+
+    ```yaml
+    channels:
+      slack:
+        socketMode:
+          clientPingTimeout: 15000  # ms (recommended: 15000-30000)
+          serverPingTimeout: 30000  # ms (SDK default)
+          pingPongLoggingEnabled: false  # set true to debug ping/pong
+    ```
+
+    These values are passed to the underlying `SocketModeClient` after construction.
+
+  </Accordion>
+
   <Accordion title="HTTP mode not receiving events">
     Validate:
 
