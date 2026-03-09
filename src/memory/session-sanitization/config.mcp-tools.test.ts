@@ -7,19 +7,19 @@ function buildCfg(mcpServers?: Record<string, { tools: string[] }>): OpenClawCon
 }
 
 describe("MCP tool declaration matching", () => {
-  it("requires exact tool-name match for MCP membership", () => {
+  it("matches exact tool names for MCP membership", () => {
     const cfg = buildCfg({
       serverA: { tools: ["web_search", "repo.read"] },
     });
     expect(isMcpToolNameDeclared(cfg, "web_search")).toBe(true);
-    expect(isMcpToolNameDeclared(cfg, "web_search_openclaw")).toBe(false);
+    expect(isMcpToolNameDeclared(cfg, "unrelated_tool")).toBe(false);
   });
 
-  it("does not treat prefix declarations as membership matches", () => {
+  it("matches prefix declarations as membership (mirrors resolveToolServer)", () => {
     const cfg = buildCfg({
       serverA: { tools: ["mcp."] },
     });
-    expect(isMcpToolNameDeclared(cfg, "mcp.search")).toBe(false);
+    expect(isMcpToolNameDeclared(cfg, "mcp.search")).toBe(true);
   });
 
   it("keeps prefix-based server resolution for routing", () => {

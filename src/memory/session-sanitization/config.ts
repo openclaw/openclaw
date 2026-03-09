@@ -297,7 +297,7 @@ export function isMcpToolNameDeclared(cfg: OpenClawConfig | undefined, toolName:
   for (const entry of Object.values(registry)) {
     if (
       Array.isArray(entry?.tools) &&
-      entry.tools.some((t) => typeof t === "string" && t === toolName)
+      entry.tools.some((t) => typeof t === "string" && (t === toolName || toolName.startsWith(t)))
     ) {
       return true;
     }

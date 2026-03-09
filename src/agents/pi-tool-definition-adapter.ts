@@ -361,11 +361,9 @@ export function wrapMcpToolDefinitions(
 
   let changed = false;
   const next = defs.map((def) => {
-    // Gate: only tools explicitly declared by exact name in cfg.mcpServers are
-    // confirmed MCP tools.  Prefix entries in the registry are for server-
-    // resolution disambiguation only, not for MCP membership.  A native tool
-    // whose name happens to share a prefix with a configured server entry must
-    // never reach processMcpToolResult.
+    // Gate: only tools claimed by cfg.mcpServers (by exact name or prefix) are
+    // confirmed MCP tools and must be routed through processMcpToolResult.
+    // isMcpToolNameDeclared mirrors resolveToolServer's exact+prefix matching.
     if (!isMcpToolNameDeclared(params.cfg, def.name)) {
       return def;
     }
