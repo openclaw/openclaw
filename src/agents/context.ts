@@ -63,7 +63,7 @@ export function applyDiscoveredContextWindows(params: {
 
     // 1. Scoped lookup (highest precedence)
     if (provider) {
-      const scopedKey = `${provider.toLowerCase().trim()}::${normalizedModelId}`;
+      const scopedKey = `${provider.toLowerCase().trim()}::${bareModelId}`;
       if (!CONFIG_DERIVED_KEYS.has(scopedKey)) {
         const existingScoped = params.cache.get(scopedKey);
         if (existingScoped === undefined || contextWindow < existingScoped) {
@@ -108,7 +108,7 @@ export function applyConfiguredContextWindows(params: {
       const bareModelId = getBareModelId(modelId);
 
       // Set scoped key (Config overrides discovery)
-      const scopedKey = `${normalizedProvider}::${normalizedModelId}`;
+      const scopedKey = `${normalizedProvider}::${bareModelId}`;
       params.cache.set(scopedKey, contextWindow);
       CONFIG_DERIVED_KEYS.add(scopedKey);
 
@@ -234,7 +234,7 @@ export function lookupContextTokens(modelId?: string, provider?: string): number
   const normalizedModelId = normalizeModelId(modelId);
 
   if (provider) {
-    const scopedKey = `${provider.toLowerCase().trim()}::${normalizedModelId}`;
+    const scopedKey = `${provider.toLowerCase().trim()}::${getBareModelId(normalizedModelId)}`;
     const scopedLimit = MODEL_CACHE.get(scopedKey);
     if (scopedLimit !== undefined) {
       return scopedLimit;
