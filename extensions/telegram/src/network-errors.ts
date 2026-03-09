@@ -149,6 +149,17 @@ export function isTelegramPollingNetworkError(err: unknown): boolean {
   return getTelegramNetworkErrorOrigin(err)?.method === "getupdates";
 }
 
+function hasTelegramRetryAfterParameter(err: unknown): boolean {
+  if (!err || typeof err !== "object") {
+    return false;
+  }
+  if ("parameters" in err && err.parameters && typeof err.parameters === "object") {
+    const retryAfter = (err.parameters as { retry_after?: unknown }).retry_after;
+    return typeof retryAfter === "number" && Number.isFinite(retryAfter);
+  }
+  return false;
+}
+
 /**
  * Returns true if the error is safe to retry for a non-idempotent Telegram send operation
  * (e.g. sendMessage). Only matches errors that are guaranteed to have occurred *before*
@@ -164,6 +175,19 @@ export function isSafeToRetrySendError(err: unknown): boolean {
   for (const candidate of collectTelegramErrorCandidates(err)) {
     const code = normalizeCode(getErrorCode(candidate));
     if (code && PRE_CONNECT_ERROR_CODES.has(code)) {
+      return true;
+    }
+
+    // 429 rate-limit with retry_after: Telegram explicitly rejected the
+    // request without delivering it — safe to retry after the indicated delay.
+    if (hasTelegramRetryAfterParameter(candidate)) {
+      return true;
+    }
+
+    // grammY "Network request for X failed after N attempts" indicates a
+    // transport-level failure — the request never reached Telegram.
+    const message = formatErrorMessage(candidate).trim().toLowerCase();
+    if (message && GRAMMY_NETWORK_REQUEST_FAILED_AFTER_RE.test(message)) {
       return true;
     }
   }
