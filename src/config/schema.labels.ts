@@ -118,6 +118,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "browser.attachOnly": "Browser Attach-only Mode",
   "browser.cdpPortRangeStart": "Browser CDP Port Range Start",
   "browser.defaultProfile": "Browser Default Profile",
+  "browser.relayBindHost": "Browser Relay Bind Address",
   "browser.profiles": "Browser Profiles",
   "browser.profiles.*.cdpPort": "Browser Profile CDP Port",
   "browser.profiles.*.cdpUrl": "Browser Profile CDP URL",
@@ -217,9 +218,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "tools.web.search.maxResults": "Web Search Max Results",
   "tools.web.search.timeoutSeconds": "Web Search Timeout (sec)",
   "tools.web.search.cacheTtlMinutes": "Web Search Cache TTL (min)",
-  "tools.web.search.perplexity.apiKey": "Perplexity API Key", // pragma: allowlist secret
-  "tools.web.search.perplexity.baseUrl": "Perplexity Base URL",
-  "tools.web.search.perplexity.model": "Perplexity Model",
+  "tools.web.search.brave.mode": "Brave Search Mode",
   "tools.web.search.gemini.apiKey": "Gemini Search API Key", // pragma: allowlist secret
   "tools.web.search.gemini.model": "Gemini Search Model",
   "tools.web.search.grok.apiKey": "Grok Search API Key", // pragma: allowlist secret
@@ -227,6 +226,9 @@ export const FIELD_LABELS: Record<string, string> = {
   "tools.web.search.kimi.apiKey": "Kimi Search API Key", // pragma: allowlist secret
   "tools.web.search.kimi.baseUrl": "Kimi Search Base URL",
   "tools.web.search.kimi.model": "Kimi Search Model",
+  "tools.web.search.perplexity.apiKey": "Perplexity API Key", // pragma: allowlist secret
+  "tools.web.search.perplexity.baseUrl": "Perplexity Base URL",
+  "tools.web.search.perplexity.model": "Perplexity Model",
   "tools.web.fetch.enabled": "Enable Web Fetch Tool",
   "tools.web.fetch.maxChars": "Web Fetch Max Chars",
   "tools.web.fetch.maxCharsCap": "Web Fetch Hard Max Chars",
@@ -457,6 +459,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "agents.defaults.compaction.qualityGuard.enabled": "Compaction Quality Guard Enabled",
   "agents.defaults.compaction.qualityGuard.maxRetries": "Compaction Quality Guard Max Retries",
   "agents.defaults.compaction.postCompactionSections": "Post-Compaction Context Sections",
+  "agents.defaults.compaction.model": "Compaction Model Override",
   "agents.defaults.compaction.memoryFlush": "Compaction Memory Flush",
   "agents.defaults.compaction.memoryFlush.enabled": "Compaction Memory Flush Enabled",
   "agents.defaults.compaction.memoryFlush.softThresholdTokens":
@@ -650,6 +653,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "talk.modelId": "Talk Model ID",
   "talk.outputFormat": "Talk Output Format",
   "talk.interruptOnSpeech": "Talk Interrupt on Speech",
+  "talk.silenceTimeoutMs": "Talk Silence Timeout (ms)",
   messages: "Messages",
   "messages.messagePrefix": "Inbound Message Prefix",
   "messages.responsePrefix": "Outbound Response Prefix",
