@@ -216,11 +216,16 @@ export async function deliverAgentCommandResult(params: {
       return { payloads: normalizedPayloads, meta: result.meta };
     }
     // Treat upstream-suppressed empty runs as intentional silence when the run
-    // succeeded but simply had no deliverable output (e.g., tool-only success or
-    // messaging-tool delivered the response directly).
+    // succeeded but produced no payloads at all (e.g., tool-only success where
+    // messaging-tool delivered the response directly). This only applies when
+    // there were truly no payloads upstream, not when payloads normalized to empty.
     const meta = result.meta;
+    const hadNoUpstreamPayloads = (payloads ?? []).length === 0;
     const succeededWithoutDeliverableOutput =
-      !meta.aborted && !meta.error && (meta.agentMeta?.usage?.total ?? 0) > 0;
+      hadNoUpstreamPayloads &&
+      !meta.aborted &&
+      !meta.error &&
+      (meta.agentMeta?.usage?.total ?? 0) > 0;
     if (succeededWithoutDeliverableOutput) {
       runtime.log("No reply from agent.");
       return { payloads: normalizedPayloads, meta: result.meta };
