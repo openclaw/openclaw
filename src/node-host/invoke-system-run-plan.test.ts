@@ -24,25 +24,66 @@ type HardeningCase = {
   checkRawCommandMatchesArgv?: boolean;
 };
 
-function createScriptOperandFixture(tmp: string): {
+type ScriptOperandFixture = {
   command: string[];
   scriptPath: string;
   initialBody: string;
-} {
-  if (process.platform === "win32") {
-    const scriptPath = path.join(tmp, "run.js");
+  expectedArgvIndex: number;
+};
+
+type RuntimeFixture = {
+  name: string;
+  argv: string[];
+  scriptName: string;
+  initialBody: string;
+  expectedArgvIndex: number;
+  binName?: string;
+};
+
+function createScriptOperandFixture(tmp: string, fixture?: RuntimeFixture): ScriptOperandFixture {
+  if (fixture) {
     return {
-      command: [process.execPath, "./run.js"],
-      scriptPath,
-      initialBody: 'console.log("SAFE");\n',
+      command: fixture.argv,
+      scriptPath: path.join(tmp, fixture.scriptName),
+      initialBody: fixture.initialBody,
+      expectedArgvIndex: fixture.expectedArgvIndex,
     };
   }
-  const scriptPath = path.join(tmp, "run.sh");
+  if (process.platform === "win32") {
+    return {
+      command: [process.execPath, "./run.js"],
+      scriptPath: path.join(tmp, "run.js"),
+      initialBody: 'console.log("SAFE");\n',
+      expectedArgvIndex: 1,
+    };
+  }
   return {
     command: ["/bin/sh", "./run.sh"],
-    scriptPath,
+    scriptPath: path.join(tmp, "run.sh"),
     initialBody: "#!/bin/sh\necho SAFE\n",
+    expectedArgvIndex: 1,
   };
+}
+
+function withFakeRuntimeBin<T>(params: { binName: string; run: () => T }): T {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), `openclaw-${params.binName}-bin-`));
+  const binDir = path.join(tmp, "bin");
+  fs.mkdirSync(binDir, { recursive: true });
+  const runtimePath = path.join(binDir, params.binName);
+  fs.writeFileSync(runtimePath, "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+  fs.chmodSync(runtimePath, 0o755);
+  const oldPath = process.env.PATH;
+  process.env.PATH = `${binDir}${path.delimiter}${oldPath ?? ""}`;
+  try {
+    return params.run();
+  } finally {
+    if (oldPath === undefined) {
+      delete process.env.PATH;
+    } else {
+      process.env.PATH = oldPath;
+    }
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
 }
 
 describe("hardenApprovedExecutionPaths", () => {
@@ -150,6 +191,63 @@ describe("hardenApprovedExecutionPaths", () => {
     });
   }
 
+  const mutableOperandCases: RuntimeFixture[] = [
+    {
+      name: "bun direct file",
+      binName: "bun",
+      argv: ["bun", "./run.ts"],
+      scriptName: "run.ts",
+      initialBody: 'console.log("SAFE");\n',
+      expectedArgvIndex: 1,
+    },
+    {
+      name: "bun run file",
+      binName: "bun",
+      argv: ["bun", "run", "./run.ts"],
+      scriptName: "run.ts",
+      initialBody: 'console.log("SAFE");\n',
+      expectedArgvIndex: 2,
+    },
+    {
+      name: "deno run file with flags",
+      binName: "deno",
+      argv: ["deno", "run", "-A", "--allow-read", "--", "./run.ts"],
+      scriptName: "run.ts",
+      initialBody: 'console.log("SAFE");\n',
+      expectedArgvIndex: 5,
+    },
+  ];
+
+  for (const runtimeCase of mutableOperandCases) {
+    it(`captures mutable ${runtimeCase.name} operands in approval plans`, () => {
+      withFakeRuntimeBin({
+        binName: runtimeCase.binName!,
+        run: () => {
+          const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-approval-script-plan-"));
+          const fixture = createScriptOperandFixture(tmp, runtimeCase);
+          fs.writeFileSync(fixture.scriptPath, fixture.initialBody);
+          try {
+            const prepared = buildSystemRunApprovalPlan({
+              command: fixture.command,
+              cwd: tmp,
+            });
+            expect(prepared.ok).toBe(true);
+            if (!prepared.ok) {
+              throw new Error("unreachable");
+            }
+            expect(prepared.plan.mutableFileOperand).toEqual({
+              argvIndex: fixture.expectedArgvIndex,
+              path: fs.realpathSync(fixture.scriptPath),
+              sha256: expect.any(String),
+            });
+          } finally {
+            fs.rmSync(tmp, { recursive: true, force: true });
+          }
+        },
+      });
+    });
+  }
+
   it("captures mutable shell script operands in approval plans", () => {
     const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-approval-script-plan-"));
     const fixture = createScriptOperandFixture(tmp);
@@ -167,12 +265,56 @@ describe("hardenApprovedExecutionPaths", () => {
         throw new Error("unreachable");
       }
       expect(prepared.plan.mutableFileOperand).toEqual({
-        argvIndex: 1,
+        argvIndex: fixture.expectedArgvIndex,
         path: fs.realpathSync(fixture.scriptPath),
         sha256: expect.any(String),
       });
     } finally {
       fs.rmSync(tmp, { recursive: true, force: true });
     }
+  });
+
+  it("does not snapshot bun package script names", () => {
+    withFakeRuntimeBin({
+      binName: "bun",
+      run: () => {
+        const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-bun-package-script-"));
+        try {
+          const prepared = buildSystemRunApprovalPlan({
+            command: ["bun", "run", "dev"],
+            cwd: tmp,
+          });
+          expect(prepared.ok).toBe(true);
+          if (!prepared.ok) {
+            throw new Error("unreachable");
+          }
+          expect(prepared.plan.mutableFileOperand).toBeUndefined();
+        } finally {
+          fs.rmSync(tmp, { recursive: true, force: true });
+        }
+      },
+    });
+  });
+
+  it("does not snapshot deno eval invocations", () => {
+    withFakeRuntimeBin({
+      binName: "deno",
+      run: () => {
+        const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-deno-eval-"));
+        try {
+          const prepared = buildSystemRunApprovalPlan({
+            command: ["deno", "eval", "console.log('SAFE')"],
+            cwd: tmp,
+          });
+          expect(prepared.ok).toBe(true);
+          if (!prepared.ok) {
+            throw new Error("unreachable");
+          }
+          expect(prepared.plan.mutableFileOperand).toBeUndefined();
+        } finally {
+          fs.rmSync(tmp, { recursive: true, force: true });
+        }
+      },
+    });
   });
 });
