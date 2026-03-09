@@ -1,5 +1,6 @@
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
 import type { DiscordActionConfig } from "../../config/config.js";
+import type { OpenClawConfig } from "../../config/config.js";
 import { readDiscordComponentSpec } from "../../discord/components.js";
 import {
   createThreadDiscord,
@@ -25,11 +26,14 @@ import {
 } from "../../discord/send.js";
 import type { DiscordSendComponents, DiscordSendEmbeds } from "../../discord/send.shared.js";
 import { resolveDiscordChannelId } from "../../discord/targets.js";
+import { readBooleanParam } from "../../plugin-sdk/boolean-param.js";
+import { resolvePollMaxSelections } from "../../polls.js";
 import { withNormalizedTimestamp } from "../date-time.js";
 import { assertMediaNotDataUrl } from "../sandbox-paths.js";
 import {
   type ActionGate,
   jsonResult,
+  readNumberParam,
   readReactionParams,
   readStringArrayParam,
   readStringParam,
@@ -59,6 +63,7 @@ export async function handleDiscordMessagingAction(
   options?: {
     mediaLocalRoots?: readonly string[];
   },
+  cfg?: OpenClawConfig,
 ): Promise<AgentToolResult<unknown>> {
   const resolveChannelId = () =>
     resolveDiscordChannelId(
@@ -67,6 +72,7 @@ export async function handleDiscordMessagingAction(
       }),
     );
   const accountId = readStringParam(params, "accountId");
+  const cfgOptions = cfg ? { cfg } : {};
   const normalizeMessage = (message: unknown) => {
     if (!message || typeof message !== "object") {
       return message;
@@ -90,22 +96,28 @@ export async function handleDiscordMessagingAction(
       });
       if (remove) {
         if (accountId) {
-          await removeReactionDiscord(channelId, messageId, emoji, { accountId });
+          await removeReactionDiscord(channelId, messageId, emoji, {
+            ...cfgOptions,
+            accountId,
+          });
         } else {
-          await removeReactionDiscord(channelId, messageId, emoji);
+          await removeReactionDiscord(channelId, messageId, emoji, cfgOptions);
         }
         return jsonResult({ ok: true, removed: emoji });
       }
       if (isEmpty) {
         const removed = accountId
-          ? await removeOwnReactionsDiscord(channelId, messageId, { accountId })
-          : await removeOwnReactionsDiscord(channelId, messageId);
+          ? await removeOwnReactionsDiscord(channelId, messageId, { ...cfgOptions, accountId })
+          : await removeOwnReactionsDiscord(channelId, messageId, cfgOptions);
         return jsonResult({ ok: true, removed: removed.removed });
       }
       if (accountId) {
-        await reactMessageDiscord(channelId, messageId, emoji, { accountId });
+        await reactMessageDiscord(channelId, messageId, emoji, {
+          ...cfgOptions,
+          accountId,
+        });
       } else {
-        await reactMessageDiscord(channelId, messageId, emoji);
+        await reactMessageDiscord(channelId, messageId, emoji, cfgOptions);
       }
       return jsonResult({ ok: true, added: emoji });
     }
@@ -117,10 +129,9 @@ export async function handleDiscordMessagingAction(
       const messageId = readStringParam(params, "messageId", {
         required: true,
       });
-      const limitRaw = params.limit;
-      const limit =
-        typeof limitRaw === "number" && Number.isFinite(limitRaw) ? limitRaw : undefined;
+      const limit = readNumberParam(params, "limit");
       const reactions = await fetchReactionsDiscord(channelId, messageId, {
+        ...cfgOptions,
         ...(accountId ? { accountId } : {}),
         limit,
       });
@@ -137,6 +148,7 @@ export async function handleDiscordMessagingAction(
         label: "stickerIds",
       });
       await sendStickerDiscord(to, stickerIds, {
+        ...cfgOptions,
         ...(accountId ? { accountId } : {}),
         content,
       });
@@ -155,17 +167,13 @@ export async function handleDiscordMessagingAction(
         required: true,
         label: "answers",
       });
-      const allowMultiselectRaw = params.allowMultiselect;
-      const allowMultiselect =
-        typeof allowMultiselectRaw === "boolean" ? allowMultiselectRaw : undefined;
-      const durationRaw = params.durationHours;
-      const durationHours =
-        typeof durationRaw === "number" && Number.isFinite(durationRaw) ? durationRaw : undefined;
-      const maxSelections = allowMultiselect ? Math.max(2, answers.length) : 1;
+      const allowMultiselect = readBooleanParam(params, "allowMultiselect");
+      const durationHours = readNumberParam(params, "durationHours");
+      const maxSelections = resolvePollMaxSelections(answers.length, allowMultiselect);
       await sendPollDiscord(
         to,
         { question, options: answers, maxSelections, durationHours },
-        { ...(accountId ? { accountId } : {}), content },
+        { ...cfgOptions, ...(accountId ? { accountId } : {}), content },
       );
       return jsonResult({ ok: true });
     }
@@ -215,10 +223,7 @@ export async function handleDiscordMessagingAction(
       }
       const channelId = resolveChannelId();
       const query = {
-        limit:
-          typeof params.limit === "number" && Number.isFinite(params.limit)
-            ? params.limit
-            : undefined,
+        limit: readNumberParam(params, "limit"),
         before: readStringParam(params, "before"),
         after: readStringParam(params, "after"),
         around: readStringParam(params, "around"),
@@ -276,6 +281,7 @@ export async function handleDiscordMessagingAction(
           ? componentSpec
           : { ...componentSpec, text: normalizedContent };
         const result = await sendDiscordComponentMessage(to, payload, {
+          ...cfgOptions,
           ...(accountId ? { accountId } : {}),
           silent,
           replyTo: replyTo ?? undefined,
@@ -301,6 +307,7 @@ export async function handleDiscordMessagingAction(
         }
         assertMediaNotDataUrl(mediaUrl);
         const result = await sendVoiceMessageDiscord(to, mediaUrl, {
+          ...cfgOptions,
           ...(accountId ? { accountId } : {}),
           replyTo,
           silent,
@@ -309,6 +316,7 @@ export async function handleDiscordMessagingAction(
       }
 
       const result = await sendMessageDiscord(to, content ?? "", {
+        ...cfgOptions,
         ...(accountId ? { accountId } : {}),
         mediaUrl,
         mediaLocalRoots: options?.mediaLocalRoots,
@@ -358,11 +366,7 @@ export async function handleDiscordMessagingAction(
       const name = readStringParam(params, "name", { required: true });
       const messageId = readStringParam(params, "messageId");
       const content = readStringParam(params, "content");
-      const autoArchiveMinutesRaw = params.autoArchiveMinutes;
-      const autoArchiveMinutes =
-        typeof autoArchiveMinutesRaw === "number" && Number.isFinite(autoArchiveMinutesRaw)
-          ? autoArchiveMinutesRaw
-          : undefined;
+      const autoArchiveMinutes = readNumberParam(params, "autoArchiveMinutes");
       const appliedTags = readStringArrayParam(params, "appliedTags");
       const payload = {
         name,
@@ -384,13 +388,9 @@ export async function handleDiscordMessagingAction(
         required: true,
       });
       const channelId = readStringParam(params, "channelId");
-      const includeArchived =
-        typeof params.includeArchived === "boolean" ? params.includeArchived : undefined;
+      const includeArchived = readBooleanParam(params, "includeArchived");
       const before = readStringParam(params, "before");
-      const limit =
-        typeof params.limit === "number" && Number.isFinite(params.limit)
-          ? params.limit
-          : undefined;
+      const limit = readNumberParam(params, "limit");
       const threads = accountId
         ? await listThreadsDiscord(
             {
@@ -422,6 +422,7 @@ export async function handleDiscordMessagingAction(
       const mediaUrl = readStringParam(params, "mediaUrl");
       const replyTo = readStringParam(params, "replyTo");
       const result = await sendMessageDiscord(`channel:${channelId}`, content, {
+        ...cfgOptions,
         ...(accountId ? { accountId } : {}),
         mediaUrl,
         mediaLocalRoots: options?.mediaLocalRoots,
@@ -483,10 +484,7 @@ export async function handleDiscordMessagingAction(
       const channelIds = readStringArrayParam(params, "channelIds");
       const authorId = readStringParam(params, "authorId");
       const authorIds = readStringArrayParam(params, "authorIds");
-      const limit =
-        typeof params.limit === "number" && Number.isFinite(params.limit)
-          ? params.limit
-          : undefined;
+      const limit = readNumberParam(params, "limit");
       const channelIdList = [...(channelIds ?? []), ...(channelId ? [channelId] : [])];
       const authorIdList = [...(authorIds ?? []), ...(authorId ? [authorId] : [])];
       const results = accountId

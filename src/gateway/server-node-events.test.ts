@@ -24,6 +24,8 @@ const buildSessionLookup = (
   legacyKey: undefined,
 });
 
+const ingressAgentCommandMock = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
+
 vi.mock("../infra/system-events.js", () => ({
   enqueueSystemEvent: vi.fn(),
 }));
@@ -31,7 +33,8 @@ vi.mock("../infra/heartbeat-wake.js", () => ({
   requestHeartbeatNow: vi.fn(),
 }));
 vi.mock("../commands/agent.js", () => ({
-  agentCommand: vi.fn(),
+  agentCommand: ingressAgentCommandMock,
+  agentCommandFromIngress: ingressAgentCommandMock,
 }));
 vi.mock("../config/config.js", () => ({
   loadConfig: vi.fn(() => ({ session: { mainKey: "agent:main:main" } })),
@@ -111,7 +114,10 @@ describe("node exec events", () => {
       "Exec started (node=node-1 id=run-1): ls -la",
       { sessionKey: "agent:main:main", contextKey: "exec:run-1" },
     );
-    expect(requestHeartbeatNowMock).toHaveBeenCalledWith({ reason: "exec-event" });
+    expect(requestHeartbeatNowMock).toHaveBeenCalledWith({
+      reason: "exec-event",
+      sessionKey: "agent:main:main",
+    });
   });
 
   it("enqueues exec.finished events with output", async () => {
@@ -185,7 +191,10 @@ describe("node exec events", () => {
       "Exec denied (node=node-3 id=run-3, allowlist-miss): rm -rf /",
       { sessionKey: "agent:demo:main", contextKey: "exec:run-3" },
     );
-    expect(requestHeartbeatNowMock).toHaveBeenCalledWith({ reason: "exec-event" });
+    expect(requestHeartbeatNowMock).toHaveBeenCalledWith({
+      reason: "exec-event",
+      sessionKey: "agent:demo:main",
+    });
   });
 
   it("suppresses exec.started when notifyOnExit is false", async () => {

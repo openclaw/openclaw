@@ -14,16 +14,11 @@ export const BATCH_SIZE = 1000; // Feishu API limit per request
 type Logger = { info?: (msg: string) => void };
 
 /**
- * Collect all descendant blocks for a given set of first-level block IDs.
+ * Collect all descendant blocks for a given first-level block ID.
  * Recursively traverses the block tree to gather all children.
  */
 // eslint-disable-next-line @typescript-eslint/no-explicit-any -- SDK block types
-function collectDescendants(blocks: any[], firstLevelIds: string[]): any[] {
-  const blockMap = new Map<string, any>();
-  for (const block of blocks) {
-    blockMap.set(block.block_id, block);
-  }
-
+function collectDescendants(blockMap: Map<string, any>, rootId: string): any[] {
   const result: any[] = [];
   const visited = new Set<string>();
 
@@ -47,9 +42,7 @@ function collectDescendants(blocks: any[], firstLevelIds: string[]): any[] {
     }
   }
 
-  for (const id of firstLevelIds) {
-    collect(id);
-  }
+  collect(rootId);
 
   return result;
 }
@@ -123,9 +116,13 @@ export async function insertBlocksInBatches(
   const batches: { firstLevelIds: string[]; blocks: any[] }[] = [];
   let currentBatch: { firstLevelIds: string[]; blocks: any[] } = { firstLevelIds: [], blocks: [] };
   const usedBlockIds = new Set<string>();
+  const blockMap = new Map<string, any>();
+  for (const block of blocks) {
+    blockMap.set(block.block_id, block);
+  }
 
   for (const firstLevelId of firstLevelBlockIds) {
-    const descendants = collectDescendants(blocks, [firstLevelId]);
+    const descendants = collectDescendants(blockMap, firstLevelId);
     const newBlocks = descendants.filter((b) => !usedBlockIds.has(b.block_id));
 
     // A single block whose subtree exceeds the API limit cannot be split

@@ -56,6 +56,7 @@ Supported keys:
     modelId: "eleven_v3",
     outputFormat: "mp3_44100_128",
     apiKey: "elevenlabs_api_key",
+    silenceTimeoutMs: 1500,
     interruptOnSpeech: true,
   },
 }
@@ -64,6 +65,7 @@ Supported keys:
 Defaults:
 
 - `interruptOnSpeech`: true
+- `silenceTimeoutMs`: when unset, Talk keeps the platform default pause window before sending the transcript (`700 ms on macOS and Android, 900 ms on iOS`)
 - `voiceId`: falls back to `ELEVENLABS_VOICE_ID` / `SAG_VOICE_ID` (or first ElevenLabs voice when API key is available)
 - `modelId`: defaults to `eleven_v3` when unset
 - `apiKey`: falls back to `ELEVENLABS_API_KEY` (or gateway shell profile if available)

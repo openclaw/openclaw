@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import os from "node:os";
 import type {
   Agent,
   AgentSideConnection,
@@ -60,6 +61,32 @@ type AcpGatewayAgentOptions = AcpServerOptions & {
 
 const SESSION_CREATE_RATE_LIMIT_DEFAULT_MAX_REQUESTS = 120;
 const SESSION_CREATE_RATE_LIMIT_DEFAULT_WINDOW_MS = 10_000;
+
+function buildSystemInputProvenance(originSessionId: string) {
+  return {
+    kind: "external_user" as const,
+    originSessionId,
+    sourceChannel: "acp",
+    sourceTool: "openclaw_acp",
+  };
+}
+
+function buildSystemProvenanceReceipt(params: {
+  cwd: string;
+  sessionId: string;
+  sessionKey: string;
+}) {
+  return [
+    "[Source Receipt]",
+    "bridge=openclaw-acp",
+    `originHost=${os.hostname()}`,
+    `originCwd=${shortenHomePath(params.cwd)}`,
+    `acpSessionId=${params.sessionId}`,
+    `originSessionId=${params.sessionId}`,
+    `targetSession=${params.sessionKey}`,
+    "[/Source Receipt]",
+  ].join("\n");
+}
 
 export class AcpGatewayAgent implements Agent {
   private connection: AgentSideConnection;
@@ -251,6 +278,17 @@ export class AcpGatewayAgent implements Agent {
     const prefixCwd = meta.prefixCwd ?? this.opts.prefixCwd ?? true;
     const displayCwd = shortenHomePath(session.cwd);
     const message = prefixCwd ? `[Working directory: ${displayCwd}]\n\n${userText}` : userText;
+    const provenanceMode = this.opts.provenanceMode ?? "off";
+    const systemInputProvenance =
+      provenanceMode === "off" ? undefined : buildSystemInputProvenance(params.sessionId);
+    const systemProvenanceReceipt =
+      provenanceMode === "meta+receipt"
+        ? buildSystemProvenanceReceipt({
+            cwd: session.cwd,
+            sessionId: params.sessionId,
+            sessionKey: session.sessionKey,
+          })
+        : undefined;
 
     // Defense-in-depth: also check the final assembled message (includes cwd prefix)
     if (Buffer.byteLength(message, "utf-8") > MAX_PROMPT_BYTES) {
@@ -281,6 +319,8 @@ export class AcpGatewayAgent implements Agent {
             thinking: readString(params._meta, ["thinking", "thinkingLevel"]),
             deliver: readBool(params._meta, ["deliver"]),
             timeoutMs: readNumber(params._meta, ["timeoutMs"]),
+            systemInputProvenance,
+            systemProvenanceReceipt,
           },
           { expectFinal: true },
         )
@@ -423,7 +463,9 @@ export class AcpGatewayAgent implements Agent {
     }
 
     if (state === "final") {
-      this.finishPrompt(pending.sessionId, pending, "end_turn");
+      const rawStopReason = payload.stopReason as string | undefined;
+      const stopReason: StopReason = rawStopReason === "max_tokens" ? "max_tokens" : "end_turn";
+      this.finishPrompt(pending.sessionId, pending, stopReason);
       return;
     }
     if (state === "aborted") {

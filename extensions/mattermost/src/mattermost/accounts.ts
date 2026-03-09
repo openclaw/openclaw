@@ -1,9 +1,5 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk";
-import {
-  DEFAULT_ACCOUNT_ID,
-  normalizeAccountId,
-  normalizeOptionalAccountId,
-} from "openclaw/plugin-sdk/account-id";
+import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "openclaw/plugin-sdk/account-id";
+import { createAccountListHelpers, type OpenClawConfig } from "openclaw/plugin-sdk/mattermost";
 import { normalizeResolvedSecretInputString, normalizeSecretInputString } from "../secret-input.js";
 import type { MattermostAccountConfig, MattermostChatMode } from "../types.js";
 import { normalizeMattermostBaseUrl } from "./client.js";
@@ -28,36 +24,11 @@ export type ResolvedMattermostAccount = {
   blockStreamingCoalesce?: MattermostAccountConfig["blockStreamingCoalesce"];
 };
 
-function listConfiguredAccountIds(cfg: OpenClawConfig): string[] {
-  const accounts = cfg.channels?.mattermost?.accounts;
-  if (!accounts || typeof accounts !== "object") {
-    return [];
-  }
-  return Object.keys(accounts).filter(Boolean);
-}
-
-export function listMattermostAccountIds(cfg: OpenClawConfig): string[] {
-  const ids = listConfiguredAccountIds(cfg);
-  if (ids.length === 0) {
-    return [DEFAULT_ACCOUNT_ID];
-  }
-  return ids.toSorted((a, b) => a.localeCompare(b));
-}
-
-export function resolveDefaultMattermostAccountId(cfg: OpenClawConfig): string {
-  const preferred = normalizeOptionalAccountId(cfg.channels?.mattermost?.defaultAccount);
-  if (
-    preferred &&
-    listMattermostAccountIds(cfg).some((accountId) => normalizeAccountId(accountId) === preferred)
-  ) {
-    return preferred;
-  }
-  const ids = listMattermostAccountIds(cfg);
-  if (ids.includes(DEFAULT_ACCOUNT_ID)) {
-    return DEFAULT_ACCOUNT_ID;
-  }
-  return ids[0] ?? DEFAULT_ACCOUNT_ID;
-}
+const {
+  listAccountIds: listMattermostAccountIds,
+  resolveDefaultAccountId: resolveDefaultMattermostAccountId,
+} = createAccountListHelpers("mattermost");
+export { listMattermostAccountIds, resolveDefaultMattermostAccountId };
 
 function resolveAccountConfig(
   cfg: OpenClawConfig,
@@ -83,7 +54,21 @@ function mergeMattermostAccountConfig(
     defaultAccount?: unknown;
   };
   const account = resolveAccountConfig(cfg, accountId) ?? {};
-  return { ...base, ...account };
+
+  // Shallow merging is fine for most keys, but `commands` should be merged
+  // so that account-specific overrides (callbackPath/callbackUrl) do not
+  // accidentally reset global settings like `native: true`.
+  const mergedCommands = {
+    ...(base.commands ?? {}),
+    ...(account.commands ?? {}),
+  };
+
+  const merged = { ...base, ...account };
+  if (Object.keys(mergedCommands).length > 0) {
+    merged.commands = mergedCommands;
+  }
+
+  return merged;
 }
 
 function resolveMattermostRequireMention(config: MattermostAccountConfig): boolean | undefined {

@@ -98,12 +98,22 @@ function withLoopbackBrowserAuth(
   });
 }
 
-function enhanceBrowserFetchError(url: string, err: unknown, timeoutMs: number): Error {
+const BROWSER_TOOL_MODEL_HINT =
+  "Do NOT retry the browser tool — it will keep failing. " +
+  "Use an alternative approach or inform the user that the browser is currently unavailable.";
+
+const BROWSER_TOOL_BOUNDED_RETRY_HINT =
+  'Do NOT blindly retry in a loop. Take a fresh browser snapshot (snapshotFormat="ai", refs="aria"), then retry this action once with updated refs. ' +
+  "If it still times out, report the browser as unavailable.";
+
+function resolveBrowserFetchOperatorHint(url: string): string {
   const isLocal = !isAbsoluteHttp(url);
-  // Human-facing hint for logs/diagnostics.
-  const operatorHint = isLocal
+  return isLocal
     ? `Restart the OpenClaw gateway (OpenClaw.app menubar, or \`${formatCliCommand("openclaw gateway")}\`).`
     : "If this is a sandboxed session, ensure the sandbox browser is running.";
+}
+
+function isBrowserActionPath(url: string): boolean {
   const parsedPath = (() => {
     try {
       return new URL(url, "http://localhost").pathname.toLowerCase();
@@ -118,15 +128,46 @@ function enhanceBrowserFetchError(url: string, err: unknown, timeoutMs: number):
     parsedPath === "/navigate" ||
     parsedPath === "/pdf" ||
     parsedPath.startsWith("/hooks/");
-  // Model-facing suffix: avoid indefinite tool loops while still allowing a bounded
-  // recovery attempt for likely action-level timeouts.
-  const strictModelHint =
-    "Do NOT retry the browser tool — it will keep failing. " +
-    "Use an alternative approach or inform the user that the browser is currently unavailable.";
-  const boundedRetryHint =
-    'Do NOT blindly retry in a loop. Take a fresh browser snapshot (snapshotFormat="ai", refs="aria"), then retry this action once with updated refs. ' +
-    "If it still times out, report the browser as unavailable.";
-  const msg = String(err);
+  return actionPath;
+}
+
+function normalizeErrorMessage(err: unknown): string {
+  if (err instanceof Error && err.message.trim().length > 0) {
+    return err.message.trim();
+  }
+  return String(err);
+}
+
+function appendBrowserToolModelHint(message: string, modelHint = BROWSER_TOOL_MODEL_HINT): string {
+  if (
+    message.includes(BROWSER_TOOL_MODEL_HINT) ||
+    message.includes(BROWSER_TOOL_BOUNDED_RETRY_HINT)
+  ) {
+    return message;
+  }
+  return `${message} ${modelHint}`;
+}
+
+function enhanceDispatcherPathError(url: string, err: unknown): Error {
+  const msg = normalizeErrorMessage(err);
+  const msgLower = msg.toLowerCase();
+  const modelHint =
+    isBrowserActionPath(url) &&
+    (msgLower.includes("timed out") ||
+      msgLower.includes("timeout") ||
+      msgLower.includes("aborted") ||
+      msgLower.includes("abort") ||
+      msgLower.includes("aborterror"))
+      ? BROWSER_TOOL_BOUNDED_RETRY_HINT
+      : BROWSER_TOOL_MODEL_HINT;
+  const suffix = `${resolveBrowserFetchOperatorHint(url)} ${modelHint}`;
+  const normalized = msg.endsWith(".") ? msg : `${msg}.`;
+  return new Error(`${normalized} ${suffix}`, err instanceof Error ? { cause: err } : undefined);
+}
+
+function enhanceBrowserFetchError(url: string, err: unknown, timeoutMs: number): Error {
+  const operatorHint = resolveBrowserFetchOperatorHint(url);
+  const msg = normalizeErrorMessage(err);
   const msgLower = msg.toLowerCase();
   const looksLikeTimeout =
     msgLower.includes("timed out") ||
@@ -135,14 +176,21 @@ function enhanceBrowserFetchError(url: string, err: unknown, timeoutMs: number):
     msgLower.includes("abort") ||
     msgLower.includes("aborterror");
   if (looksLikeTimeout) {
-    const modelHint = isLocal && actionPath ? boundedRetryHint : strictModelHint;
+    const modelHint =
+      !isAbsoluteHttp(url) && isBrowserActionPath(url)
+        ? BROWSER_TOOL_BOUNDED_RETRY_HINT
+        : BROWSER_TOOL_MODEL_HINT;
     return new Error(
-      `Can't reach the OpenClaw browser control service (timed out after ${timeoutMs}ms). ${operatorHint} ${modelHint}`,
+      appendBrowserToolModelHint(
+        `Can't reach the OpenClaw browser control service (timed out after ${timeoutMs}ms). ${operatorHint}`,
+        modelHint,
+      ),
     );
   }
-  const modelHint = strictModelHint;
   return new Error(
-    `Can't reach the OpenClaw browser control service. ${operatorHint} ${modelHint} (${msg})`,
+    appendBrowserToolModelHint(
+      `Can't reach the OpenClaw browser control service. ${operatorHint} (${msg})`,
+    ),
   );
 }
 
@@ -184,11 +232,13 @@ export async function fetchBrowserJson<T>(
   init?: RequestInit & { timeoutMs?: number },
 ): Promise<T> {
   const timeoutMs = init?.timeoutMs ?? 5000;
+  let isDispatcherPath = false;
   try {
     if (isAbsoluteHttp(url)) {
       const httpInit = withLoopbackBrowserAuth(url, init);
       return await fetchHttpJson<T>(url, { ...httpInit, timeoutMs });
     }
+    isDispatcherPath = true;
     const started = await startBrowserControlServiceFromConfig();
     if (!started) {
       throw new Error("browser control disabled");
@@ -269,6 +319,11 @@ export async function fetchBrowserJson<T>(
   } catch (err) {
     if (err instanceof BrowserServiceError) {
       throw err;
+    }
+    // Dispatcher-path failures are service-operation failures, not network
+    // reachability failures. Keep the original context, but retain anti-retry hints.
+    if (isDispatcherPath) {
+      throw enhanceDispatcherPathError(url, err);
     }
     throw enhanceBrowserFetchError(url, err, timeoutMs);
   }
