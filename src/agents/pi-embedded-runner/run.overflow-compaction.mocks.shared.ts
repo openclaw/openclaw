@@ -6,6 +6,25 @@ import type {
   PluginHookBeforePromptBuildResult,
 } from "../../plugins/types.js";
 
+type MockCompactionResult =
+  | {
+      ok: true;
+      compacted: true;
+      result: {
+        summary: string;
+        firstKeptEntryId?: string;
+        tokensBefore?: number;
+        tokensAfter?: number;
+      };
+      reason?: string;
+    }
+  | {
+      ok: false;
+      compacted: false;
+      reason: string;
+      result?: undefined;
+    };
+
 export const mockedGlobalHookRunner = {
   hasHooks: vi.fn((_hookName: string) => false),
   runBeforeAgentStart: vi.fn(
@@ -31,16 +50,16 @@ export const mockedGlobalHookRunner = {
 };
 
 export const mockedContextEngine = {
-  info: { ownsCompaction: false },
-  compact: vi.fn(async () => ({
+  info: { ownsCompaction: false as boolean },
+  compact: vi.fn<(params: unknown) => Promise<MockCompactionResult>>(async () => ({
     ok: false as const,
     compacted: false as const,
     reason: "nothing to compact",
   })),
 };
 
-export const mockedContextEngineCompact = mockedContextEngine.compact;
-export const mockedEnsureRuntimePluginsLoaded = vi.fn();
+export const mockedContextEngineCompact = vi.mocked(mockedContextEngine.compact);
+export const mockedEnsureRuntimePluginsLoaded: (...args: unknown[]) => void = vi.fn();
 
 vi.mock("../../plugins/hook-runner-global.js", () => ({
   getGlobalHookRunner: vi.fn(() => mockedGlobalHookRunner),
