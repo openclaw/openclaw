@@ -1,3 +1,4 @@
+import { resolveEffectiveMessagesConfig } from "../../agents/identity.js";
 import { runSubagentAnnounceFlow } from "../../agents/subagent-announce.js";
 import { countActiveDescendantRuns } from "../../agents/subagent-registry.js";
 import { SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.js";
@@ -193,13 +194,28 @@ export async function dispatchCronDelivery(
     delivery: SuccessfulDeliveryTarget,
   ): Promise<RunCronAgentTurnResult | null> => {
     const identity = resolveAgentOutboundIdentity(params.cfgWithAgentDefaults, params.agentId);
+    // Apply responsePrefix to direct delivery payloads (same logic as interactive replies).
+    const { responsePrefix } = resolveEffectiveMessagesConfig(
+      params.cfgWithAgentDefaults,
+      params.agentId,
+      { channel: delivery.channel, accountId: delivery.accountId },
+    );
+    const applyPrefix = (text: string | undefined): string | undefined => {
+      if (!responsePrefix || !text || text.startsWith(responsePrefix)) {
+        return text;
+      }
+      return `${responsePrefix} ${text}`;
+    };
     try {
-      const payloadsForDelivery =
+      const rawPayloads =
         deliveryPayloads.length > 0
           ? deliveryPayloads
           : synthesizedText
             ? [{ text: synthesizedText }]
             : [];
+      const payloadsForDelivery = responsePrefix
+        ? rawPayloads.map((p) => (p.text ? { ...p, text: applyPrefix(p.text) } : p))
+        : rawPayloads;
       if (payloadsForDelivery.length === 0) {
         return null;
       }
