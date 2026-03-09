@@ -19,6 +19,8 @@ excluded:
   - "*.playground"
   # Generated (protocol-gen-swift.ts)
   - apps/macos/Sources/MoltbotProtocol/GatewayModels.swift
+  # Generated (generate-host-env-security-policy-swift.mjs)
+  - apps/macos/Sources/OpenClaw/HostEnvSecurityPolicy.generated.swift
 
 analyzer_rules:
   - unused_declaration
