@@ -312,6 +312,11 @@ export class OpenAIWebSocketManager extends EventEmitter<InternalEvents> {
     return this._previousResponseId;
   }
 
+  /** Clears tracked previous_response_id so callers can force full replay. */
+  clearPreviousResponseId(): void {
+    this._previousResponseId = null;
+  }
+
   /**
    * Opens a WebSocket connection to the OpenAI Responses API.
    * Resolves when the connection is established (open event fires).

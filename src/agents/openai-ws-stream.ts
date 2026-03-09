@@ -103,12 +103,44 @@ export function hasWsSession(sessionId: string): boolean {
 
 type AnyMessage = Message & { role: string; content: unknown };
 
+type ToolResultMessage = Message & {
+  role: "toolResult";
+  toolCallId?: string;
+  toolUseId?: string;
+};
+
 function toNonEmptyString(value: unknown): string | null {
   if (typeof value !== "string") {
     return null;
   }
   const trimmed = value.trim();
   return trimmed.length > 0 ? trimmed : null;
+}
+
+function isToolResultMessage(message: Message): message is ToolResultMessage {
+  return (message as AnyMessage).role === "toolResult";
+}
+
+function collectAssistantToolCallIds(messages: Message[]): Set<string> {
+  const callIds = new Set<string>();
+
+  for (const message of messages) {
+    const m = message as AnyMessage;
+    if (m.role !== "assistant" || !Array.isArray(m.content)) {
+      continue;
+    }
+    for (const block of m.content as Array<{ type?: string; id?: string }>) {
+      if (block.type !== "toolCall") {
+        continue;
+      }
+      const callId = toNonEmptyString(block.id);
+      if (callId) {
+        callIds.add(callId);
+      }
+    }
+  }
+
+  return callIds;
 }
 
 /** Convert pi-ai content (string | ContentPart[]) to plain text. */
@@ -532,7 +564,7 @@ export function createOpenAIWebSocketStreamFn(
 
       const resetReplayState = (reason: string) => {
         log.warn(`[ws-stream] session=${sessionId}: ${reason}`);
-        session.manager.previousResponseId = null;
+        session.manager.clearPreviousResponseId();
         prevResponseId = null;
         session.lastContextLength = 0;
         session.lastContextBoundaryKey = null;
@@ -554,41 +586,54 @@ export function createOpenAIWebSocketStreamFn(
       }
 
       if (prevResponseId && session.lastContextLength > 0) {
-        const incrementalMessages = context.messages.slice(session.lastContextLength);
-        inputItems =
-          incrementalMessages.length === 0
-            ? buildFullInput(context)
-            : convertMessagesToInputItems(incrementalMessages);
+        const replayWindow = context.messages.slice(session.lastContextLength);
+        const incrementalToolResults = replayWindow.filter(isToolResultMessage);
 
-        // Validate that replay window has matching function_call items for outputs.
-        const knownCalls = new Set(
-          inputItems
-            .filter((i) => i?.type === "function_call" && typeof i.call_id === "string")
-            .map((i) => i.call_id as string),
-        );
-        const outputIds = Array.from(
-          new Set(
-            inputItems
-              .filter((i) => i?.type === "function_call_output" && typeof i.call_id === "string")
-              .map((i) => i.call_id as string),
-          ),
-        );
-        const unknownOutputs = outputIds.filter((id) => !knownCalls.has(id));
-
-        if (unknownOutputs.length > 0) {
+        if (incrementalToolResults.length === 0) {
           resetReplayState(
-            `replay window missing matching function_call items; unknown=${unknownOutputs.join(",")}; clearing previous_response_id and replay cursor`,
+            "no incremental tool results available for replay; resetting to full-context send",
           );
           inputItems = buildFullInput(context);
-        }
+          log.debug(
+            `[ws-stream] session=${sessionId}: full context send (${inputItems.length} items) after replay reset`,
+          );
+        } else {
+          inputItems = convertMessagesToInputItems(incrementalToolResults);
 
-        log.debug(
-          `[ws-stream] session=${sessionId}: incremental send (${inputItems.length} items) previous_response_id=${prevResponseId}`,
-        );
+          // Validate that every tool-result call_id maps to an assistant toolCall in context.
+          const knownCallIds = collectAssistantToolCallIds(context.messages);
+          const outputIds = Array.from(
+            new Set(
+              inputItems
+                .filter(
+                  (i): i is Extract<InputItem, { type: "function_call_output" }> =>
+                    i.type === "function_call_output",
+                )
+                .map((i) => i.call_id),
+            ),
+          );
+          const unknownOutputs = outputIds.filter((id) => !knownCallIds.has(id));
+
+          if (unknownOutputs.length > 0) {
+            resetReplayState(
+              `tool-result replay has unknown call_id(s) without matching assistant toolCall in context; unknown=${unknownOutputs.join(",")}`,
+            );
+            inputItems = buildFullInput(context);
+            log.debug(
+              `[ws-stream] session=${sessionId}: full context send (${inputItems.length} items) after replay call_id mismatch`,
+            );
+          } else {
+            log.debug(
+              `[ws-stream] session=${sessionId}: incremental tool-result send (${inputItems.length} items) previous_response_id=${prevResponseId}`,
+            );
+          }
+        }
       } else {
         // First turn or replay-state reset: send full context
         inputItems = buildFullInput(context);
-        log.debug(`[ws-stream] session=${sessionId}: full context send (${inputItems.length} items)`);
+        log.debug(
+          `[ws-stream] session=${sessionId}: full context send (${inputItems.length} items)`,
+        );
       }
 
       // ── 4. Build & send response.create ──────────────────────────────────
@@ -715,7 +760,9 @@ export function createOpenAIWebSocketStreamFn(
             session.lastContextLength = capturedContextLength;
             const boundaryIndex = capturedContextLength - 1;
             const boundaryMessage = boundaryIndex >= 0 ? context.messages[boundaryIndex] : null;
-            session.lastContextBoundaryKey = boundaryMessage ? JSON.stringify(boundaryMessage) : null;
+            session.lastContextBoundaryKey = boundaryMessage
+              ? JSON.stringify(boundaryMessage)
+              : null;
             // Build and emit the assistant message
             const assistantMsg = buildAssistantMessageFromResponse(event.response, {
               api: model.api,
