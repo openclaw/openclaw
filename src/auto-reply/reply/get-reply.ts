@@ -9,9 +9,7 @@ import { resolveAgentTimeoutMs } from "../../agents/timeout.js";
 import { DEFAULT_AGENT_WORKSPACE_DIR, ensureAgentWorkspace } from "../../agents/workspace.js";
 import { resolveChannelModelOverride } from "../../channels/model-overrides.js";
 import { type OpenClawConfig, loadConfig } from "../../config/config.js";
-import { shouldLogVerbose } from "../../globals.js";
 import { applyLinkUnderstanding } from "../../link-understanding/apply.js";
-import { getLogger } from "../../logging/logger.js";
 import { applyMediaUnderstanding } from "../../media-understanding/apply.js";
 import { defaultRuntime } from "../../runtime.js";
 import { normalizeStringEntries } from "../../shared/string-normalization.js";
@@ -126,31 +124,14 @@ export async function getReplyFromConfig(
   opts?.onTypingController?.(typing);
 
   const finalized = finalizeInboundContext(ctx);
-  const isDiscordAudioTurn =
-    finalized.Surface === "discord" &&
-    (finalized.MediaTypes ?? []).some((mediaType) => mediaType?.startsWith("audio/"));
-  const shouldLogVoicePerf =
-    isDiscordAudioTurn &&
-    (process.env.OPENCLAW_VOICE_PERF === "1" ||
-      process.env.CLAWDBOT_VOICE_PERF === "1" ||
-      shouldLogVerbose());
 
   if (!isFastTestEnv) {
-    const mediaStartedAtMs = isDiscordAudioTurn ? Date.now() : 0;
     await applyMediaUnderstanding({
       ctx: finalized,
       cfg,
       agentDir,
       activeModel: { provider, model },
     });
-    if (shouldLogVoicePerf) {
-      getLogger().info(
-        {
-          message: `voice-perf: stage=apply-media messageId=${finalized.MessageSid ?? "unknown"} durationMs=${Date.now() - mediaStartedAtMs} transcriptChars=${finalized.Transcript?.length ?? 0} mediaOutputs=${finalized.MediaUnderstanding?.length ?? 0}`,
-        },
-        "voice-perf",
-      );
-    }
     await applyLinkUnderstanding({
       ctx: finalized,
       cfg,

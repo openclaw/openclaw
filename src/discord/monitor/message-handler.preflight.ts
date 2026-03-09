@@ -68,7 +68,6 @@ import { resolveDiscordSenderIdentity, resolveDiscordWebhookId } from "./sender-
 import { resolveDiscordSystemEvent } from "./system-events.js";
 import { isRecentlyUnboundThreadWebhookMessage } from "./thread-bindings.js";
 import { resolveDiscordThreadChannel, resolveDiscordThreadParentInfo } from "./threading.js";
-import { logDiscordVoicePerf } from "./voice-perf.js";
 
 export type {
   DiscordMessagePreflightContext,
@@ -137,7 +136,6 @@ export function shouldIgnoreBoundThreadWebhookMessage(params: {
 export async function preflightDiscordMessage(
   params: DiscordMessagePreflightParams,
 ): Promise<DiscordMessagePreflightContext | null> {
-  const preflightStartedAtMs = Date.now();
   if (isPreflightAborted(params.abortSignal)) {
     return null;
   }
@@ -584,47 +582,18 @@ export async function preflightDiscordMessage(
 
   // Preflight audio transcription for mention detection in guilds.
   // This allows voice notes to be checked for mentions before being dropped.
-  const {
-    hasAudioAttachment,
-    hasTypedText,
-    transcript: preflightTranscript,
-    transcriptionTriggered,
-    transcriptionDurationMs,
-  } = await resolveDiscordPreflightAudioMentionContext({
-    message,
-    isDirectMessage,
-    shouldRequireMention,
-    mentionRegexes,
-    cfg: params.cfg,
-    abortSignal: params.abortSignal,
-  });
+  const { hasTypedText, transcript: preflightTranscript } =
+    await resolveDiscordPreflightAudioMentionContext({
+      message,
+      isDirectMessage,
+      shouldRequireMention,
+      mentionRegexes,
+      cfg: params.cfg,
+      abortSignal: params.abortSignal,
+    });
   if (isPreflightAborted(params.abortSignal)) {
     return null;
   }
-  const voicePerf = hasAudioAttachment
-    ? {
-        isVoiceMessage: true,
-        startedAtMs: preflightStartedAtMs,
-        preflightFinishedAtMs: Date.now(),
-        preflightTranscriptionTriggered: transcriptionTriggered,
-        preflightTranscriptionDurationMs: transcriptionDurationMs,
-      }
-    : undefined;
-  logDiscordVoicePerf({
-    trace: voicePerf,
-    stage: "preflight",
-    messageId: message.id,
-    channelId: messageChannelId,
-    fields: {
-      durationMs: voicePerf?.preflightFinishedAtMs
-        ? (voicePerf.preflightFinishedAtMs ?? 0) - (voicePerf.startedAtMs ?? 0)
-        : undefined,
-      mentionSttTriggered: transcriptionTriggered,
-      mentionSttMs: transcriptionDurationMs,
-      transcriptChars: preflightTranscript?.length,
-      typedText: hasTypedText,
-    },
-  });
 
   const mentionText = hasTypedText ? baseText : "";
   const wasMentioned =
@@ -866,6 +835,5 @@ export async function preflightDiscordMessage(
     historyEntry,
     threadBindings: params.threadBindings,
     discordRestFetch: params.discordRestFetch,
-    voicePerf,
   };
 }

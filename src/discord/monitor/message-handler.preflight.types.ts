@@ -7,7 +7,6 @@ import type { DiscordChannelConfigResolved, DiscordGuildEntryResolved } from "./
 import type { DiscordChannelInfo } from "./message-utils.js";
 import type { DiscordThreadBindingLookup } from "./reply-delivery.js";
 import type { DiscordSenderIdentity } from "./sender-identity.js";
-import type { DiscordVoicePerfTrace } from "./voice-perf.js";
 
 export type { DiscordSenderIdentity } from "./sender-identity.js";
 import type { DiscordThreadChannel } from "./threading.js";
@@ -88,7 +87,6 @@ export type DiscordMessagePreflightContext = {
   historyEntry?: HistoryEntry;
   threadBindings: DiscordThreadBindingLookup;
   discordRestFetch?: typeof fetch;
-  voicePerf?: DiscordVoicePerfTrace;
 };
 
 export type DiscordMessagePreflightParams = {
