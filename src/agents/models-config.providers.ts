@@ -557,15 +557,20 @@ const PROFILE_IMPLICIT_PROVIDER_LOADERS: ImplicitProviderLoader[] = [
       return undefined;
     }
 
-    const hasOAuthProfile = listProfilesForProvider(ctx.authStore, "chutes").some(
+    const oauthProfileId = listProfilesForProvider(ctx.authStore, "chutes").find(
       (id) => ctx.authStore.profiles[id]?.type === "oauth",
     );
-    if (!hasOAuthProfile) {
+    if (!oauthProfileId) {
       return undefined;
     }
+    // Pass the stored access token so authenticated discovery can see private/
+    // token-scoped models. discoverChutesModels retries without auth on 401,
+    // so an expired token degrades gracefully to the public catalog.
+    const oauthCred = ctx.authStore.profiles[oauthProfileId];
+    const accessToken = oauthCred?.type === "oauth" ? oauthCred.access : undefined;
     return {
       chutes: {
-        ...(await buildChutesProvider()),
+        ...(await buildChutesProvider(accessToken)),
         apiKey: CHUTES_OAUTH_MARKER,
       },
     };
