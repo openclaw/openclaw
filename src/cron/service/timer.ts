@@ -960,13 +960,15 @@ export async function executeJobCore(
     const text = resolveJobPayloadTextForMain(job);
     if (!text) {
       const kind = job.payload.kind;
-      return {
-        status: "skipped",
-        error:
-          kind === "systemEvent"
-            ? "main job requires non-empty systemEvent text"
-            : 'main job requires payload.kind="systemEvent"',
-      };
+      const skipReason =
+        kind === "systemEvent"
+          ? "main job requires non-empty systemEvent text"
+          : 'main job requires payload.kind="systemEvent"';
+      state.deps.log.warn(
+        { jobId: job.id, jobName: job.name, payload: { kind } },
+        `cron: main-session job skipped: ${skipReason}`,
+      );
+      return { status: "skipped", error: skipReason };
     }
     // Preserve the job session namespace for main-target reminders so heartbeat
     // routing can deliver follow-through in the originating channel/thread.
