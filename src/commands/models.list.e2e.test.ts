@@ -324,23 +324,7 @@ describe("models list/status", () => {
     await expect(loadModelRegistry({})).rejects.toThrow("model discovery unavailable");
   });
 
-  it("loadModelRegistry persists using source config snapshot when provided", async () => {
-    modelRegistryState.models = [OPENAI_MODEL];
-    modelRegistryState.available = [OPENAI_MODEL];
-    const sourceConfig = {
-      models: { providers: { openai: { apiKey: "$OPENAI_API_KEY" } } }, // pragma: allowlist secret
-    };
-    const resolvedConfig = {
-      models: { providers: { openai: { apiKey: "sk-resolved-runtime-value" } } }, // pragma: allowlist secret
-    };
-
-    await loadModelRegistry(resolvedConfig as never, { sourceConfig: sourceConfig as never });
-
-    expect(ensureOpenClawModelsJson).toHaveBeenCalledTimes(1);
-    expect(ensureOpenClawModelsJson).toHaveBeenCalledWith(sourceConfig);
-  });
-
-  it("loadModelRegistry uses resolved config when no source snapshot is provided", async () => {
+  it("loadModelRegistry does not persist models.json as a side effect", async () => {
     modelRegistryState.models = [OPENAI_MODEL];
     modelRegistryState.available = [OPENAI_MODEL];
     const resolvedConfig = {
@@ -349,8 +333,29 @@ describe("models list/status", () => {
 
     await loadModelRegistry(resolvedConfig as never);
 
-    expect(ensureOpenClawModelsJson).toHaveBeenCalledTimes(1);
-    expect(ensureOpenClawModelsJson).toHaveBeenCalledWith(resolvedConfig);
+    expect(ensureOpenClawModelsJson).not.toHaveBeenCalled();
+  });
+
+  it("modelsListCommand persists using the write snapshot config when provided", async () => {
+    modelRegistryState.models = [OPENAI_MODEL];
+    modelRegistryState.available = [OPENAI_MODEL];
+    const sourceConfig = {
+      models: { providers: { openai: { apiKey: "$OPENAI_API_KEY" } } }, // pragma: allowlist secret
+    };
+    const resolvedConfig = {
+      models: { providers: { openai: { apiKey: "sk-resolved-runtime-value" } } }, // pragma: allowlist secret
+    };
+    readConfigFileSnapshotForWrite.mockResolvedValue({
+      snapshot: { valid: true, resolved: resolvedConfig, source: sourceConfig },
+      writeOptions: {},
+    });
+    setDefaultModel("openai/gpt-4.1-mini");
+    const runtime = makeRuntime();
+
+    await modelsListCommand({ all: true, json: true }, runtime);
+
+    expect(ensureOpenClawModelsJson).toHaveBeenCalled();
+    expect(ensureOpenClawModelsJson.mock.calls[0]?.[0]).toEqual(resolvedConfig);
   });
 
   it("toModelRow does not crash without cfg/authStore when availability is undefined", async () => {
