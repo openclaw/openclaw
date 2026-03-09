@@ -311,7 +311,16 @@ async function executeRound(state: ChannelState, pending: PendingRound): Promise
     try {
       await reg.processMessage(modifiedCtx);
     } catch (err) {
+      if (state.responseCallbacks.has(reg.accountId)) {
+        state.responseCallbacks.delete(reg.accountId);
+      }
       logVerbose(`fanout: agent ${reg.accountId} processing error: ${String(err)}`);
+      results.push({
+        accountId: reg.accountId,
+        botUserId: reg.botUserId,
+        responded: false,
+      });
+      continue;
     }
 
     // Wait for response

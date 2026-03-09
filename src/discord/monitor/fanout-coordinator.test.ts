@@ -9,6 +9,47 @@ function makeCtx(): DiscordMessagePreflightContext {
 }
 
 describe("fanout coordinator", () => {
+  it("counts processing errors as a completed silent turn without waiting for timeout", async () => {
+    vi.useFakeTimers();
+    try {
+      const channelId = `chan-err-${Date.now()}`;
+      const erroredProcess = vi.fn(async () => {
+        throw new Error("rate limited");
+      });
+      const nextProcess = vi.fn(async () => {});
+
+      registerFanOutAgent({
+        channelId,
+        messageId: "m1",
+        accountId: "gilfoyle",
+        botUserId: "bot-g",
+        mentionedUserIds: [],
+        ctx: makeCtx(),
+        processMessage: erroredProcess,
+      });
+
+      await vi.advanceTimersByTimeAsync(1500);
+      expect(erroredProcess).toHaveBeenCalledTimes(1);
+
+      registerFanOutAgent({
+        channelId,
+        messageId: "m2",
+        accountId: "gilfoyle",
+        botUserId: "bot-g",
+        mentionedUserIds: [],
+        ctx: makeCtx(),
+        processMessage: nextProcess,
+      });
+
+      await Promise.resolve();
+      await vi.advanceTimersByTimeAsync(1500);
+
+      expect(nextProcess).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("drains a queued pending round even when the previous round had no responses", async () => {
     vi.useFakeTimers();
     try {
