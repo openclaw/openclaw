@@ -27,6 +27,7 @@ import { SsrFBlockedError } from "../infra/net/ssrf.js";
 import { deliverOutboundPayloads } from "../infra/outbound/deliver.js";
 import { enqueueSystemEvent } from "../infra/system-events.js";
 import { getChildLogger } from "../logging.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import { normalizeAgentId, toAgentStoreSessionKey } from "../routing/session-key.js";
 import { defaultRuntime } from "../runtime.js";
 
@@ -354,7 +355,15 @@ export function buildGatewayCronService(params: {
         deps: createOutboundSendDeps(params.deps),
       });
     },
-    log: getChildLogger({ module: "cron", storePath }),
+    log: (() => {
+      const sub = createSubsystemLogger("cron");
+      return {
+        debug: (obj: unknown, msg?: string) => sub.debug(msg ?? "", typeof obj === "object" && obj !== null ? (obj as Record<string, unknown>) : { value: obj }),
+        info: (obj: unknown, msg?: string) => sub.info(msg ?? "", typeof obj === "object" && obj !== null ? (obj as Record<string, unknown>) : { value: obj }),
+        warn: (obj: unknown, msg?: string) => sub.warn(msg ?? "", typeof obj === "object" && obj !== null ? (obj as Record<string, unknown>) : { value: obj }),
+        error: (obj: unknown, msg?: string) => sub.error(msg ?? "", typeof obj === "object" && obj !== null ? (obj as Record<string, unknown>) : { value: obj }),
+      };
+    })(),
     onEvent: (evt) => {
       params.broadcast("cron", evt, { dropIfSlow: true });
       if (evt.action === "finished") {

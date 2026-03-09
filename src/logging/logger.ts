@@ -223,7 +223,15 @@ export function getChildLogger(
   opts?: { level?: LogLevel },
 ): TsLogger<LogObj> {
   const base = getLogger();
-  const minLevel = opts?.level ? levelToMinLevel(opts.level) : undefined;
+  // Always resolve minLevel: use the explicit override if provided, otherwise
+  // inherit the parent logger's minLevel.  tslog sub-loggers default to
+  // minLevel=0 (silly) when the parameter is omitted, which would bypass
+  // the configured logging.level filter.  Passing the parent's minLevel
+  // explicitly ensures child loggers respect the same threshold.
+  const settings = resolveSettings();
+  const minLevel = opts?.level
+    ? levelToMinLevel(opts.level)
+    : levelToMinLevel(settings.level);
   const name = bindings ? JSON.stringify(bindings) : undefined;
   return base.getSubLogger({
     name,
