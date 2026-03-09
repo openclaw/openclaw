@@ -569,7 +569,7 @@ export function createOpenAIWebSocketStreamFn(
       if (streamOpts?.temperature !== undefined) {
         extraParams.temperature = streamOpts.temperature;
       }
-      if (streamOpts?.maxTokens) {
+      if (streamOpts?.maxTokens !== undefined) {
         extraParams.max_output_tokens = streamOpts.maxTokens;
       }
       if (streamOpts?.topP !== undefined) {
@@ -604,7 +604,7 @@ export function createOpenAIWebSocketStreamFn(
         ...(prevResponseId ? { previous_response_id: prevResponseId } : {}),
         ...extraParams,
       };
-      options?.onPayload?.(payload);
+      options?.onPayload?.(payload, model);
 
       try {
         session.manager.send(payload as Parameters<OpenAIWebSocketManager["send"]>[0]);

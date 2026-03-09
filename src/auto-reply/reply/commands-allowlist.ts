@@ -23,6 +23,7 @@ import {
   normalizeAccountId,
   normalizeOptionalAccountId,
 } from "../../routing/session-key.js";
+import { normalizeStringEntries } from "../../shared/string-normalization.js";
 import { resolveSignalAccount } from "../../signal/accounts.js";
 import { resolveSlackAccount } from "../../slack/accounts.js";
 import { resolveSlackUserAllowlist } from "../../slack/resolve-users.js";
@@ -165,7 +166,7 @@ function normalizeAllowFrom(params: {
       allowFrom: params.values,
     });
   }
-  return params.values.map((entry) => String(entry).trim()).filter(Boolean);
+  return normalizeStringEntries(params.values);
 }
 
 function formatEntryList(entries: string[], resolved?: Map<string, string>): string {

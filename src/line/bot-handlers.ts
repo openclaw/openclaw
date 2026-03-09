@@ -24,12 +24,13 @@ import {
   warnMissingProviderGroupPolicyFallbackOnce,
 } from "../config/runtime-group-policy.js";
 import { danger, logVerbose } from "../globals.js";
+import { issuePairingChallenge } from "../pairing/pairing-challenge.js";
 import { resolvePairingIdLabel } from "../pairing/pairing-labels.js";
-import { buildPairingReply } from "../pairing/pairing-messages.js";
 import {
   readChannelAllowFromStore,
   upsertChannelPairingRequest,
 } from "../pairing/pairing-store.js";
+import { evaluateMatchedGroupAccessForPolicy } from "../plugin-sdk/group-access.js";
 import { resolveAgentRoute } from "../routing/resolve-route.js";
 import type { RuntimeEnv } from "../runtime.js";
 import {
@@ -237,15 +238,6 @@ async function sendLinePairingReply(params: {
   context: LineHandlerContext;
 }): Promise<void> {
   const { senderId, replyToken, context } = params;
-  const { code, created } = await upsertChannelPairingRequest({
-    channel: "line",
-    id: senderId,
-    accountId: context.account.accountId,
-  });
-  if (!created) {
-    return;
-  }
-  logVerbose(`line pairing request sender=${senderId}`);
   const idLabel = (() => {
     try {
       return resolvePairingIdLabel("line");
@@ -253,30 +245,42 @@ async function sendLinePairingReply(params: {
       return "lineUserId";
     }
   })();
-  const text = buildPairingReply({
+  await issuePairingChallenge({
     channel: "line",
-    idLine: `Your ${idLabel}: ${senderId}`,
-    code,
-  });
-  try {
-    if (replyToken) {
-      await replyMessageLine(replyToken, [{ type: "text", text }], {
+    senderId,
+    senderIdLine: `Your ${idLabel}: ${senderId}`,
+    upsertPairingRequest: async ({ id, meta }) =>
+      await upsertChannelPairingRequest({
+        channel: "line",
+        id,
         accountId: context.account.accountId,
-        channelAccessToken: context.account.channelAccessToken,
-      });
-      return;
-    }
-  } catch (err) {
-    logVerbose(`line pairing reply failed for ${senderId}: ${String(err)}`);
-  }
-  try {
-    await pushMessageLine(`line:${senderId}`, text, {
-      accountId: context.account.accountId,
-      channelAccessToken: context.account.channelAccessToken,
-    });
-  } catch (err) {
-    logVerbose(`line pairing reply failed for ${senderId}: ${String(err)}`);
-  }
+        meta,
+      }),
+    onCreated: () => {
+      logVerbose(`line pairing request sender=${senderId}`);
+    },
+    sendPairingReply: async (text) => {
+      if (replyToken) {
+        try {
+          await replyMessageLine(replyToken, [{ type: "text", text }], {
+            accountId: context.account.accountId,
+            channelAccessToken: context.account.channelAccessToken,
+          });
+          return;
+        } catch (err) {
+          logVerbose(`line pairing reply failed for ${senderId}: ${String(err)}`);
+        }
+      }
+      try {
+        await pushMessageLine(`line:${senderId}`, text, {
+          accountId: context.account.accountId,
+          channelAccessToken: context.account.channelAccessToken,
+        });
+      } catch (err) {
+        logVerbose(`line pairing reply failed for ${senderId}: ${String(err)}`);
+      }
+    },
+  });
 }
 
 async function shouldProcessLineEvent(
@@ -341,23 +345,33 @@ async function shouldProcessLineEvent(
         return denied;
       }
     }
-    if (groupPolicy === "disabled") {
+    const senderGroupAccess = evaluateMatchedGroupAccessForPolicy({
+      groupPolicy,
+      requireMatchInput: true,
+      hasMatchInput: Boolean(senderId),
+      allowlistConfigured: effectiveGroupAllow.entries.length > 0,
+      allowlistMatched:
+        Boolean(senderId) &&
+        isSenderAllowed({
+          allow: effectiveGroupAllow,
+          senderId,
+        }),
+    });
+    if (!senderGroupAccess.allowed && senderGroupAccess.reason === "disabled") {
       logVerbose("Blocked line group message (groupPolicy: disabled)");
       return denied;
     }
-    if (groupPolicy === "allowlist") {
-      if (!senderId) {
-        logVerbose("Blocked line group message (no sender ID, groupPolicy: allowlist)");
-        return denied;
-      }
-      if (!effectiveGroupAllow.hasEntries) {
-        logVerbose("Blocked line group message (groupPolicy: allowlist, no groupAllowFrom)");
-        return denied;
-      }
-      if (!isSenderAllowed({ allow: effectiveGroupAllow, senderId })) {
-        logVerbose(`Blocked line group message from ${senderId} (groupPolicy: allowlist)`);
-        return denied;
-      }
+    if (!senderGroupAccess.allowed && senderGroupAccess.reason === "missing_match_input") {
+      logVerbose("Blocked line group message (no sender ID, groupPolicy: allowlist)");
+      return denied;
+    }
+    if (!senderGroupAccess.allowed && senderGroupAccess.reason === "empty_allowlist") {
+      logVerbose("Blocked line group message (groupPolicy: allowlist, no groupAllowFrom)");
+      return denied;
+    }
+    if (!senderGroupAccess.allowed && senderGroupAccess.reason === "not_allowlisted") {
+      logVerbose(`Blocked line group message from ${senderId} (groupPolicy: allowlist)`);
+      return denied;
     }
     return {
       allowed: true,

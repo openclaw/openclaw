@@ -265,6 +265,40 @@ describe("handleLineWebhookEvents", () => {
     expect(readAllowFromStoreMock).toHaveBeenCalledWith("line", undefined, "default");
   });
 
+  it("blocks group messages without sender id when groupPolicy is allowlist", async () => {
+    const processMessage = vi.fn();
+    const event = {
+      type: "message",
+      message: { id: "m5a", type: "text", text: "hi" },
+      replyToken: "reply-token",
+      timestamp: Date.now(),
+      source: { type: "group", groupId: "group-1" },
+      mode: "active",
+      webhookEventId: "evt-5a",
+      deliveryContext: { isRedelivery: false },
+    } as MessageEvent;
+
+    await handleLineWebhookEvents([event], {
+      cfg: {
+        channels: { line: { groupPolicy: "allowlist", groupAllowFrom: ["user-5"] } },
+      },
+      account: {
+        accountId: "default",
+        enabled: true,
+        channelAccessToken: "token",
+        channelSecret: "secret",
+        tokenSource: "config",
+        config: { groupPolicy: "allowlist", groupAllowFrom: ["user-5"] },
+      },
+      runtime: createRuntime(),
+      mediaMaxBytes: 1,
+      processMessage,
+    });
+
+    expect(processMessage).not.toHaveBeenCalled();
+    expect(buildLineMessageContextMock).not.toHaveBeenCalled();
+  });
+
   it("does not authorize group messages from DM pairing-store entries when group allowlist is empty", async () => {
     readAllowFromStoreMock.mockResolvedValueOnce(["user-5"]);
     const processMessage = vi.fn();

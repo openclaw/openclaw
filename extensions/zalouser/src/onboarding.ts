@@ -5,13 +5,13 @@ import type {
   WizardPrompter,
 } from "openclaw/plugin-sdk/zalouser";
 import {
-  addWildcardAllowFrom,
   DEFAULT_ACCOUNT_ID,
   formatResolvedUnresolvedNote,
   mergeAllowFromEntries,
   normalizeAccountId,
-  promptAccountId,
   promptChannelAccessConfig,
+  resolveAccountIdForConfigure,
+  setTopLevelChannelDmPolicyWithAllowFrom,
 } from "openclaw/plugin-sdk/zalouser";
 import {
   listZalouserAccountIds,
@@ -73,19 +73,11 @@ function setZalouserDmPolicy(
   cfg: OpenClawConfig,
   dmPolicy: "pairing" | "allowlist" | "open" | "disabled",
 ): OpenClawConfig {
-  const allowFrom =
-    dmPolicy === "open" ? addWildcardAllowFrom(cfg.channels?.zalouser?.allowFrom) : undefined;
-  return {
-    ...cfg,
-    channels: {
-      ...cfg.channels,
-      zalouser: {
-        ...cfg.channels?.zalouser,
-        dmPolicy,
-        ...(allowFrom ? { allowFrom } : {}),
-      },
-    },
-  } as OpenClawConfig;
+  return setTopLevelChannelDmPolicyWithAllowFrom({
+    cfg,
+    channel: "zalouser",
+    dmPolicy,
+  }) as OpenClawConfig;
 }
 
 async function noteZalouserHelp(prompter: WizardPrompter): Promise<void> {
@@ -226,20 +218,16 @@ export const zalouserOnboardingAdapter: ChannelOnboardingAdapter = {
     shouldPromptAccountIds,
     forceAllowFrom,
   }) => {
-    const zalouserOverride = accountOverrides.zalouser?.trim();
     const defaultAccountId = resolveDefaultZalouserAccountId(cfg);
-    let accountId = zalouserOverride ? normalizeAccountId(zalouserOverride) : defaultAccountId;
-
-    if (shouldPromptAccountIds && !zalouserOverride) {
-      accountId = await promptAccountId({
-        cfg,
-        prompter,
-        label: "Zalo Personal",
-        currentId: accountId,
-        listAccountIds: listZalouserAccountIds,
-        defaultAccountId,
-      });
-    }
+    const accountId = await resolveAccountIdForConfigure({
+      cfg,
+      prompter,
+      label: "Zalo Personal",
+      accountOverride: accountOverrides.zalouser,
+      shouldPromptAccountIds,
+      listAccountIds: listZalouserAccountIds,
+      defaultAccountId,
+    });
 
     let next = cfg;
     const account = resolveZalouserAccountSync({ cfg: next, accountId });

@@ -52,4 +52,40 @@ describe("models-config", () => {
       expect(ids).toEqual(["gemini-3-pro-preview", "gemini-3-flash-preview"]);
     });
   });
+
+  it("normalizes the deprecated google flash preview id to the working preview id", async () => {
+    await withModelsTempHome(async () => {
+      const cfg: OpenClawConfig = {
+        models: {
+          providers: {
+            google: {
+              baseUrl: "https://generativelanguage.googleapis.com/v1beta",
+              apiKey: "GEMINI_KEY", // pragma: allowlist secret
+              api: "google-generative-ai",
+              models: [
+                {
+                  id: "gemini-3.1-flash-preview",
+                  name: "Gemini 3.1 Flash Preview",
+                  api: "google-generative-ai",
+                  reasoning: false,
+                  input: ["text", "image"],
+                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                  contextWindow: 1048576,
+                  maxTokens: 65536,
+                },
+              ],
+            },
+          },
+        },
+      };
+
+      await ensureOpenClawModelsJson(cfg);
+
+      const parsed = await readGeneratedModelsJson<{
+        providers: Record<string, { models: Array<{ id: string }> }>;
+      }>();
+      const ids = parsed.providers.google?.models?.map((model) => model.id);
+      expect(ids).toEqual(["gemini-3-flash-preview"]);
+    });
+  });
 });

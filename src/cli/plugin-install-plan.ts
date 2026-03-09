@@ -12,6 +12,36 @@ function isBareNpmPackageName(spec: string): boolean {
   return /^[a-z0-9][a-z0-9-._~]*$/.test(trimmed);
 }
 
+export function resolveBundledInstallPlanForCatalogEntry(params: {
+  pluginId: string;
+  npmSpec: string;
+  findBundledSource: BundledLookup;
+}): { bundledSource: BundledPluginSource } | null {
+  const pluginId = params.pluginId.trim();
+  const npmSpec = params.npmSpec.trim();
+  if (!pluginId || !npmSpec) {
+    return null;
+  }
+
+  const bundledById = params.findBundledSource({
+    kind: "pluginId",
+    value: pluginId,
+  });
+  if (bundledById?.pluginId === pluginId) {
+    return { bundledSource: bundledById };
+  }
+
+  const bundledBySpec = params.findBundledSource({
+    kind: "npmSpec",
+    value: npmSpec,
+  });
+  if (bundledBySpec?.pluginId === pluginId) {
+    return { bundledSource: bundledBySpec };
+  }
+
+  return null;
+}
+
 export function resolveBundledInstallPlanBeforeNpm(params: {
   rawSpec: string;
   findBundledSource: BundledLookup;

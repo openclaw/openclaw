@@ -24,14 +24,12 @@ class OpenClawProtocolConstantsTest {
   fun capabilitiesUseStableStrings() {
     assertEquals("canvas", OpenClawCapability.Canvas.rawValue)
     assertEquals("camera", OpenClawCapability.Camera.rawValue)
-    assertEquals("screen", OpenClawCapability.Screen.rawValue)
     assertEquals("voiceWake", OpenClawCapability.VoiceWake.rawValue)
     assertEquals("location", OpenClawCapability.Location.rawValue)
     assertEquals("sms", OpenClawCapability.Sms.rawValue)
     assertEquals("device", OpenClawCapability.Device.rawValue)
     assertEquals("notifications", OpenClawCapability.Notifications.rawValue)
     assertEquals("system", OpenClawCapability.System.rawValue)
-    assertEquals("appUpdate", OpenClawCapability.AppUpdate.rawValue)
     assertEquals("photos", OpenClawCapability.Photos.rawValue)
     assertEquals("contacts", OpenClawCapability.Contacts.rawValue)
     assertEquals("calendar", OpenClawCapability.Calendar.rawValue)
@@ -43,11 +41,6 @@ class OpenClawProtocolConstantsTest {
     assertEquals("camera.list", OpenClawCameraCommand.List.rawValue)
     assertEquals("camera.snap", OpenClawCameraCommand.Snap.rawValue)
     assertEquals("camera.clip", OpenClawCameraCommand.Clip.rawValue)
-  }
-
-  @Test
-  fun screenCommandsUseStableStrings() {
-    assertEquals("screen.record", OpenClawScreenCommand.Record.rawValue)
   }
 
   @Test
