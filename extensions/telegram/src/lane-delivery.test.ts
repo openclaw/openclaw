@@ -154,7 +154,10 @@ describe("createLaneTextDeliverer", () => {
   });
 
   it("primes stop-created previews with final text before editing", async () => {
-    const harness = createHarness({ answerMessageIdAfterStop: 777 });
+    const harness = createHarness({
+      answerMessageIdAfterStop: 777,
+      answerHasStreamedMessage: true,
+    });
     harness.lanes.answer.lastPartialText = "no";
 
     const result = await harness.deliverLaneText({
@@ -177,7 +180,10 @@ describe("createLaneTextDeliverer", () => {
   });
 
   it("keeps stop-created preview when follow-up final edit fails", async () => {
-    const harness = createHarness({ answerMessageIdAfterStop: 777 });
+    const harness = createHarness({
+      answerMessageIdAfterStop: 777,
+      answerHasStreamedMessage: true,
+    });
     harness.editPreview.mockRejectedValue(new Error("500: edit failed after stop flush"));
 
     const result = await harness.deliverLaneText({

@@ -39,6 +39,7 @@ import { renderTelegramHtmlText } from "./format.js";
 import {
   type ArchivedPreview,
   createLaneDeliveryStateTracker,
+  type LaneDeliveryResult,
   createLaneTextDeliverer,
   type DraftLaneState,
   type LaneName,
@@ -509,6 +510,11 @@ export const dispatchTelegramMessage = async ({
       deliveryState.markDelivered();
     },
   });
+  const noteAnswerFinalWithoutPreview = (result: LaneDeliveryResult) => {
+    if (result === "sent") {
+      skipNextAnswerMessageStartRotation = true;
+    }
+  };
 
   let queuedFinal = false;
   let hadErrorReplyFailureOrSkip = false;
@@ -579,13 +585,14 @@ export const dispatchTelegramMessage = async ({
                 | { buttons?: TelegramInlineButtons }
                 | undefined
             )?.buttons;
-            await deliverLaneText({
+            const result = await deliverLaneText({
               laneName: "answer",
               text: buffered.text,
               payload: buffered.payload,
               infoKind: "final",
               previewButtons: bufferedButtons,
             });
+            noteAnswerFinalWithoutPreview(result);
             reasoningStepState.resetForNextStep();
           };
 
@@ -620,6 +627,7 @@ export const dispatchTelegramMessage = async ({
               continue;
             }
             if (info.kind === "final") {
+              noteAnswerFinalWithoutPreview(result);
               if (reasoningLane.hasStreamedMessage) {
                 activePreviewLifecycleByLane.reasoning = "complete";
                 retainPreviewOnCleanupByLane.reasoning = true;
