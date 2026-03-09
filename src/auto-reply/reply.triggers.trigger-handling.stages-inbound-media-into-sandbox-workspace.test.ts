@@ -16,7 +16,13 @@ const childProcessMocks = vi.hoisted(() => ({
 }));
 
 vi.mock("../agents/sandbox.js", () => sandboxMocks);
-vi.mock("node:child_process", () => childProcessMocks);
+vi.mock("node:child_process", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:child_process")>();
+  return {
+    ...actual,
+    spawn: childProcessMocks.spawn,
+  };
+});
 
 import { ensureSandboxWorkspaceForSession } from "../agents/sandbox.js";
 import { stageSandboxMedia } from "./reply/stage-sandbox-media.js";
@@ -176,6 +182,39 @@ describe("stageSandboxMedia", () => {
       ).rejects.toThrow();
       expect(ctx.MediaPath).toBe(mediaPath);
       expect(sessionCtx.MediaPath).toBe(mediaPath);
+    });
+  });
+
+  it("honors tools.media.maxBytes when staging into sandbox workspaces", async () => {
+    await withSandboxMediaTempHome("openclaw-triggers-", async (home) => {
+      const { cfg, workspaceDir, sandboxDir } = setupSandboxWorkspace(home);
+      cfg.tools = {
+        media: {
+          maxBytes: MEDIA_MAX_BYTES + 1024,
+        },
+      };
+
+      const mediaPath = await writeInboundMedia(
+        home,
+        "large.pdf",
+        Buffer.alloc(MEDIA_MAX_BYTES + 1, 0x41),
+      );
+
+      const { ctx, sessionCtx } = createSandboxMediaContexts(mediaPath);
+      await stageSandboxMedia({
+        ctx,
+        sessionCtx,
+        cfg,
+        sessionKey: "agent:main:main",
+        workspaceDir,
+      });
+
+      const stagedPath = `media/inbound/${basename(mediaPath)}`;
+      expect(ctx.MediaPath).toBe(stagedPath);
+      expect(sessionCtx.MediaPath).toBe(stagedPath);
+      await expect(
+        fs.stat(join(sandboxDir, "media", "inbound", basename(mediaPath))),
+      ).resolves.toBeTruthy();
     });
   });
 });

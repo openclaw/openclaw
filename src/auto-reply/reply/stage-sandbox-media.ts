@@ -13,11 +13,9 @@ import {
   isInboundPathAllowed,
   resolveIMessageRemoteAttachmentRoots,
 } from "../../media/inbound-path-policy.js";
-import { getMediaDir, MEDIA_MAX_BYTES } from "../../media/store.js";
+import { getMediaDir, resolveMediaMaxBytes } from "../../media/store.js";
 import { CONFIG_DIR } from "../../utils.js";
 import type { MsgContext, TemplateContext } from "../templating.js";
-
-const STAGED_MEDIA_MAX_BYTES = MEDIA_MAX_BYTES;
 
 export async function stageSandboxMedia(params: {
   ctx: MsgContext;
@@ -27,6 +25,7 @@ export async function stageSandboxMedia(params: {
   workspaceDir: string;
 }) {
   const { ctx, sessionCtx, cfg, sessionKey, workspaceDir } = params;
+  const stagedMediaMaxBytes = resolveMediaMaxBytes(cfg);
   const hasPathsArray = Array.isArray(ctx.MediaPaths) && ctx.MediaPaths.length > 0;
   const rawPaths = resolveRawPaths(ctx);
   if (rawPaths.length === 0 || !sessionKey) {
@@ -84,21 +83,19 @@ export async function stageSandboxMedia(params: {
           remotePath: source,
           rootDir: effectiveWorkspaceDir,
           relativeDestPath: relativeDest,
-          maxBytes: STAGED_MEDIA_MAX_BYTES,
+          maxBytes: stagedMediaMaxBytes,
         });
       } else {
         await stageLocalFileIntoRoot({
           sourcePath: source,
           rootDir: effectiveWorkspaceDir,
           relativeDestPath: relativeDest,
-          maxBytes: STAGED_MEDIA_MAX_BYTES,
+          maxBytes: stagedMediaMaxBytes,
         });
       }
     } catch (err) {
       if (err instanceof SafeOpenError && err.code === "too-large") {
-        logVerbose(
-          `Blocking inbound media staging above ${STAGED_MEDIA_MAX_BYTES} bytes: ${source}`,
-        );
+        logVerbose(`Blocking inbound media staging above ${stagedMediaMaxBytes} bytes: ${source}`);
       } else {
         logVerbose(`Failed to stage inbound media path ${source}: ${String(err)}`);
       }

@@ -692,6 +692,7 @@ export const ToolsMediaSchema = z
   .object({
     models: z.array(MediaUnderstandingModelSchema).optional(),
     concurrency: z.number().int().positive().optional(),
+    maxBytes: z.number().int().positive().optional(),
     image: ToolsMediaUnderstandingSchema.optional(),
     audio: ToolsMediaUnderstandingSchema.optional(),
     video: ToolsMediaUnderstandingSchema.optional(),

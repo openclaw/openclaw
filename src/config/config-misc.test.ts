@@ -110,6 +110,30 @@ describe("web search provider config", () => {
   });
 });
 
+describe("tools.media.maxBytes", () => {
+  it("accepts a positive global media staging limit", () => {
+    const res = validateConfigObject({
+      tools: {
+        media: {
+          maxBytes: 10 * 1024 * 1024,
+        },
+      },
+    });
+    expect(res.ok).toBe(true);
+  });
+
+  it("rejects non-positive values", () => {
+    const res = validateConfigObject({
+      tools: {
+        media: {
+          maxBytes: 0,
+        },
+      },
+    });
+    expect(res.ok).toBe(false);
+  });
+});
+
 describe("talk.voiceAliases", () => {
   it("accepts a string map of voice aliases", () => {
     const res = validateConfigObject({
