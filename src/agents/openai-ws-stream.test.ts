@@ -50,6 +50,10 @@ const { MockManager } = vi.hoisted(() => {
       return this._previousResponseId;
     }
 
+    clearPreviousResponseId(): void {
+      this._previousResponseId = null;
+    }
+
     async connect(_apiKey: string): Promise<void> {
       this.connectCallCount++;
       if (this.connectShouldFail || _globalConnectShouldFail) {
@@ -885,17 +889,94 @@ describe("createOpenAIWebSocketStreamFn", () => {
     });
     await done2;
 
-    // Turn 2 should have sent previous_response_id and only tool results
+    // Turn 2 should have sent previous_response_id and incremental replay items
     expect(manager.sentEvents).toHaveLength(2);
     const sent2 = manager.sentEvents[1] as {
       previous_response_id?: string;
       input: Array<{ type: string }>;
     };
     expect(sent2.previous_response_id).toBe("resp_turn1");
-    // Input should only contain tool results, not the full history
+    // Input should include assistant function_call + tool result pairing
     const inputTypes = (sent2.input ?? []).map((i) => i.type);
-    expect(inputTypes.every((t) => t === "function_call_output")).toBe(true);
-    expect(inputTypes).toHaveLength(1);
+    expect(inputTypes).toEqual(["function_call", "function_call_output"]);
+  });
+
+  it("falls back to full context when the message boundary no longer matches", async () => {
+    const sessionId = "sess-boundary-drift";
+    const streamFn = createOpenAIWebSocketStreamFn("sk-test", sessionId);
+
+    const ctx1 = {
+      systemPrompt: "You are helpful.",
+      messages: [userMsg("Run ls")] as Parameters<typeof convertMessagesToInputItems>[0],
+      tools: [],
+    };
+
+    const stream1 = streamFn(
+      modelStub as Parameters<typeof streamFn>[0],
+      ctx1 as Parameters<typeof streamFn>[1],
+    );
+
+    await new Promise<void>((resolve, reject) => {
+      queueMicrotask(async () => {
+        try {
+          await new Promise((r) => setImmediate(r));
+          const manager = MockManager.lastInstance!;
+          manager.setPreviousResponseId("resp_turn1");
+          manager.simulateEvent({
+            type: "response.completed",
+            response: makeResponseObject("resp_turn1", "ok"),
+          });
+          for await (const _ of await resolveStream(stream1)) {
+            // consume
+          }
+          resolve();
+        } catch (e) {
+          reject(e);
+        }
+      });
+    });
+
+    const ctx2 = {
+      systemPrompt: "You are helpful.",
+      messages: [
+        userMsg("Different boundary now"),
+        userMsg("Run ls"),
+        assistantMsg([], [{ id: "call_1", name: "exec", args: { cmd: "ls" } }]),
+        toolResultMsg("call_1", "file.txt"),
+      ] as Parameters<typeof convertMessagesToInputItems>[0],
+      tools: [],
+    };
+
+    const stream2 = streamFn(
+      modelStub as Parameters<typeof streamFn>[0],
+      ctx2 as Parameters<typeof streamFn>[1],
+    );
+
+    await new Promise<void>((resolve, reject) => {
+      queueMicrotask(async () => {
+        try {
+          await new Promise((r) => setImmediate(r));
+          MockManager.lastInstance!.simulateEvent({
+            type: "response.completed",
+            response: makeResponseObject("resp_turn2", "ok"),
+          });
+          for await (const _ of await resolveStream(stream2)) {
+            // consume
+          }
+          resolve();
+        } catch (e) {
+          reject(e);
+        }
+      });
+    });
+
+    const sent2 = MockManager.lastInstance!.sentEvents[1] as {
+      previous_response_id?: string;
+      input: Array<{ type: string }>;
+    };
+    expect(sent2.previous_response_id).toBeUndefined();
+    const inputTypes = (sent2.input ?? []).map((i) => i.type);
+    expect(inputTypes).toEqual(["message", "message", "function_call", "function_call_output"]);
   });
 
   it("sends instructions (system prompt) in each request", async () => {

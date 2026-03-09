@@ -312,7 +312,7 @@ export class OpenAIWebSocketManager extends EventEmitter<InternalEvents> {
     return this._previousResponseId;
   }
 
-  /** Clears tracked previous_response_id so callers can force full replay. */
+  /** Clears cached previous_response_id so next turn falls back to full-context send. */
   clearPreviousResponseId(): void {
     this._previousResponseId = null;
   }
