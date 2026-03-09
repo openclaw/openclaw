@@ -271,11 +271,7 @@ describe("onboard (non-interactive): provider auth", () => {
       expect(cfg.auth?.profiles?.["groq:default"]?.provider).toBe("groq");
       expect(cfg.auth?.profiles?.["groq:default"]?.mode).toBe("api_key");
       expect(cfg.agents?.defaults?.model?.primary).toBe("groq/llama-3.3-70b-versatile");
-      await expectApiKeyProfile({
-        profileId: "groq:default",
-        provider: "groq",
-        key: "groq-test-key",
-      });
+      await expectApiKeyProfile({ profileId: "groq:default", provider: "groq", key: "groq-test-key" });
     });
   });
 

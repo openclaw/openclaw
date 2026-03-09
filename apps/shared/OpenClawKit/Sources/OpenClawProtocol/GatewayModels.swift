@@ -539,6 +539,7 @@ public struct AgentParams: Codable, Sendable {
     public let idempotencykey: String
     public let label: String?
     public let spawnedby: String?
+    public let workspacedir: String?
 
     public init(
         message: String,
@@ -566,7 +567,8 @@ public struct AgentParams: Codable, Sendable {
         inputprovenance: [String: AnyCodable]?,
         idempotencykey: String,
         label: String?,
-        spawnedby: String?)
+        spawnedby: String?,
+        workspacedir: String?)
     {
         self.message = message
         self.agentid = agentid
@@ -594,6 +596,7 @@ public struct AgentParams: Codable, Sendable {
         self.idempotencykey = idempotencykey
         self.label = label
         self.spawnedby = spawnedby
+        self.workspacedir = workspacedir
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -623,6 +626,7 @@ public struct AgentParams: Codable, Sendable {
         case idempotencykey = "idempotencyKey"
         case label
         case spawnedby = "spawnedBy"
+        case workspacedir = "workspaceDir"
     }
 }
 
@@ -831,6 +835,20 @@ public struct NodeRenameParams: Codable, Sendable {
 }
 
 public struct NodeListParams: Codable, Sendable {}
+
+public struct NodePendingAckParams: Codable, Sendable {
+    public let ids: [String]
+
+    public init(
+        ids: [String])
+    {
+        self.ids = ids
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case ids
+    }
+}
 
 public struct NodeDescribeParams: Codable, Sendable {
     public let nodeid: String

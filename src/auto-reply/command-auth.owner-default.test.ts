@@ -1,29 +1,13 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
-import { setActivePluginRegistry } from "../plugins/runtime.js";
-import { createOutboundTestPlugin, createTestRegistry } from "../test-utils/channel-plugins.js";
 import { resolveCommandAuthorization } from "./command-auth.js";
 import type { MsgContext } from "./templating.js";
+import { installDiscordRegistryHooks } from "./test-helpers/command-auth-registry-fixture.js";
 
-const createRegistry = () =>
-  createTestRegistry([
-    {
-      pluginId: "discord",
-      plugin: createOutboundTestPlugin({ id: "discord", outbound: { deliveryMode: "direct" } }),
-      source: "test",
-    },
-  ]);
+installDiscordRegistryHooks();
 
-beforeEach(() => {
-  setActivePluginRegistry(createRegistry());
-});
-
-afterEach(() => {
-  setActivePluginRegistry(createRegistry());
-});
-
-describe("senderIsOwner defaults to true when no owner allowlist configured (#26319)", () => {
-  it("senderIsOwner is true when no ownerAllowFrom is configured (single-user default)", () => {
+describe("senderIsOwner only reflects explicit owner authorization", () => {
+  it("does not treat direct-message senders as owners when no ownerAllowFrom is configured", () => {
     const cfg = {
       channels: { discord: {} },
     } as OpenClawConfig;
@@ -42,12 +26,11 @@ describe("senderIsOwner defaults to true when no owner allowlist configured (#26
       commandAuthorized: true,
     });
 
-    // Without an explicit ownerAllowFrom list, the sole authorized user should
-    // be treated as owner so ownerOnly tools (cron, gateway) are available.
-    expect(auth.senderIsOwner).toBe(true);
+    expect(auth.senderIsOwner).toBe(false);
+    expect(auth.isAuthorizedSender).toBe(true);
   });
 
-  it("senderIsOwner is false when no ownerAllowFrom is configured in a group chat", () => {
+  it("does not treat group-chat senders as owners when no ownerAllowFrom is configured", () => {
     const cfg = {
       channels: { discord: {} },
     } as OpenClawConfig;
@@ -67,6 +50,7 @@ describe("senderIsOwner defaults to true when no owner allowlist configured (#26
     });
 
     expect(auth.senderIsOwner).toBe(false);
+    expect(auth.isAuthorizedSender).toBe(true);
   });
 
   it("senderIsOwner is false when ownerAllowFrom is configured and sender does not match", () => {
