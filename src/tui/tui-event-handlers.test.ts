@@ -316,37 +316,6 @@ describe("tui-event-handlers: handleAgentEvent", () => {
     expect(tui.requestRender).toHaveBeenCalled();
   });
 
-  it("refreshes history for local runs when final event has no message", () => {
-    const { state, loadHistory, noteLocalRunId, handleChatEvent } = createHandlersHarness({
-      state: { activeChatRunId: null },
-    });
-    const runId = "run-local-empty-final";
-    noteLocalRunId(runId);
-
-    handleChatEvent({
-      runId,
-      sessionKey: state.currentSessionKey,
-      state: "final",
-    } as ChatEvent);
-
-    expect(loadHistory).toHaveBeenCalled();
-  });
-
-  it("does not double-refresh history for non-local empty final output", () => {
-    const { state, loadHistory, handleChatEvent } = createHandlersHarness({
-      state: { activeChatRunId: null },
-    });
-
-    handleChatEvent({
-      runId: "run-nonlocal-empty-final",
-      sessionKey: state.currentSessionKey,
-      state: "final",
-      message: { content: [] },
-    } as ChatEvent);
-
-    expect(loadHistory).toHaveBeenCalledTimes(1);
-  });
-
   it("ignores lifecycle updates for non-active runs in the same session", () => {
     const { state, tui, setActivityStatus, handleChatEvent, handleAgentEvent } =
       createHandlersHarness({
@@ -551,5 +520,21 @@ describe("tui-event-handlers: handleAgentEvent", () => {
 
     expect(chatLog.dropAssistant).toHaveBeenCalledWith("run-silent");
     expect(chatLog.finalizeAssistant).not.toHaveBeenCalled();
+  });
+
+  it("reloads history when a local run ends without a displayable final message", () => {
+    const { state, loadHistory, noteLocalRunId, handleChatEvent } = createHandlersHarness({
+      state: { activeChatRunId: "run-local-silent" },
+    });
+
+    noteLocalRunId("run-local-silent");
+
+    handleChatEvent({
+      runId: "run-local-silent",
+      sessionKey: state.currentSessionKey,
+      state: "final",
+    });
+
+    expect(loadHistory).toHaveBeenCalledTimes(1);
   });
 });
