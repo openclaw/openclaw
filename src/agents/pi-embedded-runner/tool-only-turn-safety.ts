@@ -43,85 +43,37 @@ export function resolveToolOnlyTurnSafetyConfig(cfg?: {
 }
 
 /**
- * Tracks consecutive assistant turns that contain only tool calls and no
- * user-visible text content.
+ * Build a nudge message for tool-only turn safety valve.
+ *
+ * Used by the inline implementation in pi-embedded-subscribe.handlers.messages.ts
+ * when the consecutive tool-only turn threshold is reached.
  */
-export class ToolOnlyTurnTracker {
-  private consecutiveToolOnlyTurns = 0;
-  private hasEmittedTextReply = false;
-  private nudgeInjected = false;
-  private readonly config: ToolOnlyTurnSafetyConfig;
+export function buildToolOnlyTurnNudgeMessage(consecutiveToolOnlyTurns: number): string {
+  log.warn(
+    `tool-only turn safety valve triggered: ${consecutiveToolOnlyTurns} consecutive tool-only turns`,
+  );
+  return (
+    `You have completed ${consecutiveToolOnlyTurns} consecutive tool calls without ` +
+    `sending any text reply to the user. Please pause, summarise your progress so far, ` +
+    `and reply to the user before continuing with more tool calls.`
+  );
+}
 
-  constructor(config: ToolOnlyTurnSafetyConfig) {
-    this.config = config;
+/**
+ * Build an API-error notification message for the user.
+ *
+ * Used by the inline implementation in run.ts when an API error occurs and
+ * no text reply has been sent yet.
+ */
+export function buildApiErrorNotice(
+  errorSummary: string,
+  config: ToolOnlyTurnSafetyConfig,
+): string | null {
+  if (!config.notifyUserOnApiError) {
+    return null;
   }
-
-  /** Call when an assistant message ends with user-visible text. */
-  recordTextReply(): void {
-    this.consecutiveToolOnlyTurns = 0;
-    this.hasEmittedTextReply = true;
-    this.nudgeInjected = false;
-  }
-
-  /** Call when an assistant message ends with only tool calls (no text). */
-  recordToolOnlyTurn(): void {
-    this.consecutiveToolOnlyTurns++;
-  }
-
-  /** Whether the agent has ever produced a text reply in this run. */
-  get hasReplied(): boolean {
-    return this.hasEmittedTextReply;
-  }
-
-  /** Current consecutive tool-only turn count. */
-  get count(): number {
-    return this.consecutiveToolOnlyTurns;
-  }
-
-  /**
-   * Check whether a nudge should be injected. Returns the nudge message text
-   * if the threshold is reached, or `null` if no nudge is needed.
-   *
-   * Once a nudge is returned it will not be returned again until the agent
-   * produces a text reply (resetting the counter).
-   */
-  checkNudge(): string | null {
-    const threshold = this.config.maxConsecutiveToolOnlyTurns;
-    if (threshold <= 0) {
-      return null;
-    }
-    if (this.consecutiveToolOnlyTurns < threshold) {
-      return null;
-    }
-    if (this.nudgeInjected) {
-      return null;
-    }
-    this.nudgeInjected = true;
-    const msg =
-      `You have completed ${this.consecutiveToolOnlyTurns} consecutive tool calls without ` +
-      `sending any text reply to the user. Please pause, summarise your progress so far, ` +
-      `and reply to the user before continuing with more tool calls.`;
-    log.warn(
-      `tool-only turn safety valve triggered: ${this.consecutiveToolOnlyTurns} consecutive tool-only turns`,
-    );
-    return msg;
-  }
-
-  /**
-   * Build an API-error notification message for the user when no text reply
-   * has been sent yet and `notifyUserOnApiError` is enabled.
-   */
-  buildApiErrorNotice(errorSummary: string): string | null {
-    if (!this.config.notifyUserOnApiError) {
-      return null;
-    }
-    // If the agent already replied to the user, don't add noise.
-    if (this.hasEmittedTextReply) {
-      return null;
-    }
-    return (
-      `⚠️ The AI service encountered a temporary error (${errorSummary}). ` +
-      `I'm retrying automatically — please hold on.`
-    );
-  }
+  return (
+    `⚠️ The AI service encountered a temporary error (${errorSummary}). ` +
+    `I'm retrying automatically — please hold on.`
+  );
 }

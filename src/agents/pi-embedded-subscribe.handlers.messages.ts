@@ -9,7 +9,10 @@ import {
   isMessagingToolDuplicateNormalized,
   normalizeTextForComparison,
 } from "./pi-embedded-helpers.js";
-import { DEFAULT_MAX_CONSECUTIVE_TOOL_ONLY_TURNS } from "./pi-embedded-runner/tool-only-turn-safety.js";
+import {
+  buildToolOnlyTurnNudgeMessage,
+  resolveToolOnlyTurnSafetyConfig,
+} from "./pi-embedded-runner/tool-only-turn-safety.js";
 import type { EmbeddedPiSubscribeContext } from "./pi-embedded-subscribe.handlers.types.js";
 import { appendRawStream } from "./pi-embedded-subscribe.raw-stream.js";
 import {
@@ -25,11 +28,7 @@ const messageLog = createSubsystemLogger("agent/embedded/messages");
 
 /** Resolve the maxConsecutiveToolOnlyTurns setting from config. */
 function resolveMaxConsecutiveToolOnlyTurns(config?: OpenClawConfig): number {
-  const raw = config?.tools?.maxConsecutiveToolOnlyTurns;
-  if (typeof raw === "number" && Number.isInteger(raw) && raw >= 0) {
-    return raw;
-  }
-  return DEFAULT_MAX_CONSECUTIVE_TOOL_ONLY_TURNS;
+  return resolveToolOnlyTurnSafetyConfig(config?.tools).maxConsecutiveToolOnlyTurns;
 }
 
 /** Check whether an assistant message contains any tool-call content blocks. */
@@ -486,13 +485,7 @@ export function handleMessageEnd(
       !ctx.state.toolOnlyNudgeInjected
     ) {
       ctx.state.toolOnlyNudgeInjected = true;
-      const nudgeMsg =
-        `You have completed ${ctx.state.consecutiveToolOnlyTurns} consecutive tool calls ` +
-        `without sending any text reply to the user. Please pause, summarise your progress ` +
-        `so far, and reply to the user before continuing with more tool calls.`;
-      messageLog.warn(
-        `tool-only turn safety valve triggered: ${ctx.state.consecutiveToolOnlyTurns} consecutive tool-only turns`,
-      );
+      const nudgeMsg = buildToolOnlyTurnNudgeMessage(ctx.state.consecutiveToolOnlyTurns);
       // Fire-and-forget steer to avoid blocking the event handler.
       void ctx.params.session.steer(nudgeMsg).catch((err: unknown) => {
         messageLog.warn(`tool-only turn nudge steer failed: ${String(err)}`);

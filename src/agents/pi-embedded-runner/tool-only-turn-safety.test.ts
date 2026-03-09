@@ -1,9 +1,10 @@
 import { describe, expect, it } from "vitest";
 import {
+  buildApiErrorNotice,
+  buildToolOnlyTurnNudgeMessage,
   DEFAULT_MAX_CONSECUTIVE_TOOL_ONLY_TURNS,
   DEFAULT_NOTIFY_USER_ON_API_ERROR,
   resolveToolOnlyTurnSafetyConfig,
-  ToolOnlyTurnTracker,
 } from "./tool-only-turn-safety.js";
 
 describe("resolveToolOnlyTurnSafetyConfig", () => {
@@ -44,136 +45,44 @@ describe("resolveToolOnlyTurnSafetyConfig", () => {
   });
 });
 
-describe("ToolOnlyTurnTracker", () => {
-  const defaultConfig = resolveToolOnlyTurnSafetyConfig();
-
-  describe("recordTextReply / recordToolOnlyTurn", () => {
-    it("starts with count 0 and no reply", () => {
-      const tracker = new ToolOnlyTurnTracker(defaultConfig);
-      expect(tracker.count).toBe(0);
-      expect(tracker.hasReplied).toBe(false);
-    });
-
-    it("increments count on tool-only turns", () => {
-      const tracker = new ToolOnlyTurnTracker(defaultConfig);
-      tracker.recordToolOnlyTurn();
-      tracker.recordToolOnlyTurn();
-      tracker.recordToolOnlyTurn();
-      expect(tracker.count).toBe(3);
-    });
-
-    it("resets count on text reply", () => {
-      const tracker = new ToolOnlyTurnTracker(defaultConfig);
-      tracker.recordToolOnlyTurn();
-      tracker.recordToolOnlyTurn();
-      tracker.recordTextReply();
-      expect(tracker.count).toBe(0);
-      expect(tracker.hasReplied).toBe(true);
-    });
+describe("buildToolOnlyTurnNudgeMessage", () => {
+  it("includes the consecutive turn count", () => {
+    const msg = buildToolOnlyTurnNudgeMessage(15);
+    expect(msg).toContain("15 consecutive tool calls");
+    expect(msg).toContain("reply to the user");
   });
 
-  describe("checkNudge", () => {
-    it("returns null before threshold is reached", () => {
-      const tracker = new ToolOnlyTurnTracker(
-        resolveToolOnlyTurnSafetyConfig({
-          maxConsecutiveToolOnlyTurns: 5,
-        }),
-      );
-      for (let i = 0; i < 4; i++) {
-        tracker.recordToolOnlyTurn();
-      }
-      expect(tracker.checkNudge()).toBeNull();
-    });
-
-    it("returns nudge message when threshold is reached", () => {
-      const tracker = new ToolOnlyTurnTracker(
-        resolveToolOnlyTurnSafetyConfig({
-          maxConsecutiveToolOnlyTurns: 5,
-        }),
-      );
-      for (let i = 0; i < 5; i++) {
-        tracker.recordToolOnlyTurn();
-      }
-      const nudge = tracker.checkNudge();
-      expect(nudge).not.toBeNull();
-      expect(nudge).toContain("5 consecutive tool calls");
-      expect(nudge).toContain("reply to the user");
-    });
-
-    it("returns nudge only once per streak", () => {
-      const tracker = new ToolOnlyTurnTracker(
-        resolveToolOnlyTurnSafetyConfig({
-          maxConsecutiveToolOnlyTurns: 3,
-        }),
-      );
-      for (let i = 0; i < 3; i++) {
-        tracker.recordToolOnlyTurn();
-      }
-      const first = tracker.checkNudge();
-      expect(first).not.toBeNull();
-
-      tracker.recordToolOnlyTurn();
-      const second = tracker.checkNudge();
-      expect(second).toBeNull();
-    });
-
-    it("resets nudge flag after text reply", () => {
-      const tracker = new ToolOnlyTurnTracker(
-        resolveToolOnlyTurnSafetyConfig({
-          maxConsecutiveToolOnlyTurns: 3,
-        }),
-      );
-      for (let i = 0; i < 3; i++) {
-        tracker.recordToolOnlyTurn();
-      }
-      expect(tracker.checkNudge()).not.toBeNull();
-
-      tracker.recordTextReply();
-      for (let i = 0; i < 3; i++) {
-        tracker.recordToolOnlyTurn();
-      }
-      const nudge = tracker.checkNudge();
-      expect(nudge).not.toBeNull();
-      expect(nudge).toContain("3 consecutive tool calls");
-    });
-
-    it("returns null when disabled (threshold=0)", () => {
-      const tracker = new ToolOnlyTurnTracker(
-        resolveToolOnlyTurnSafetyConfig({
-          maxConsecutiveToolOnlyTurns: 0,
-        }),
-      );
-      for (let i = 0; i < 100; i++) {
-        tracker.recordToolOnlyTurn();
-      }
-      expect(tracker.checkNudge()).toBeNull();
-    });
+  it("works with custom counts", () => {
+    const msg = buildToolOnlyTurnNudgeMessage(5);
+    expect(msg).toContain("5 consecutive tool calls");
   });
 
-  describe("buildApiErrorNotice", () => {
-    it("returns notice when no text reply has been sent", () => {
-      const tracker = new ToolOnlyTurnTracker(defaultConfig);
-      const notice = tracker.buildApiErrorNotice("overloaded_error");
-      expect(notice).not.toBeNull();
-      expect(notice).toContain("overloaded_error");
-      expect(notice).toContain("⚠️");
-    });
+  it("asks the agent to summarise and reply", () => {
+    const msg = buildToolOnlyTurnNudgeMessage(10);
+    expect(msg).toContain("summarise your progress");
+    expect(msg).toContain("reply to the user");
+  });
+});
 
-    it("returns null after text reply was sent", () => {
-      const tracker = new ToolOnlyTurnTracker(defaultConfig);
-      tracker.recordTextReply();
-      const notice = tracker.buildApiErrorNotice("overloaded_error");
-      expect(notice).toBeNull();
-    });
+describe("buildApiErrorNotice", () => {
+  it("returns notice with error summary when enabled", () => {
+    const config = resolveToolOnlyTurnSafetyConfig({ notifyUserOnApiError: true });
+    const notice = buildApiErrorNotice("overloaded_error", config);
+    expect(notice).not.toBeNull();
+    expect(notice).toContain("overloaded_error");
+    expect(notice).toContain("⚠️");
+    expect(notice).toContain("retrying automatically");
+  });
 
-    it("returns null when notifyUserOnApiError is disabled", () => {
-      const tracker = new ToolOnlyTurnTracker(
-        resolveToolOnlyTurnSafetyConfig({
-          notifyUserOnApiError: false,
-        }),
-      );
-      const notice = tracker.buildApiErrorNotice("overloaded_error");
-      expect(notice).toBeNull();
-    });
+  it("returns null when notifyUserOnApiError is disabled", () => {
+    const config = resolveToolOnlyTurnSafetyConfig({ notifyUserOnApiError: false });
+    const notice = buildApiErrorNotice("overloaded_error", config);
+    expect(notice).toBeNull();
+  });
+
+  it("includes the error summary in the message", () => {
+    const config = resolveToolOnlyTurnSafetyConfig();
+    const notice = buildApiErrorNotice("rate_limit_exceeded", config);
+    expect(notice).toContain("rate_limit_exceeded");
   });
 });
