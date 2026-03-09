@@ -70,10 +70,11 @@ export function resolveSpawnedWorkspaceInheritance(params: {
   // If spawning to a specific target agent with an explicitly configured workspace, use that.
   // This fixes #40825: sessions_spawn(agentId) should respect agent's configured workspace.
   // Only use the target's workspace if it is explicitly configured; otherwise fall back to parent.
+  // Use resolveAgentWorkspaceDir for proper path normalization (tilde expansion, etc.)
   if (params.targetAgentId) {
     const targetConfig = resolveAgentConfig(params.config, normalizeAgentId(params.targetAgentId));
     if (targetConfig?.workspace) {
-      return targetConfig.workspace;
+      return resolveAgentWorkspaceDir(params.config, normalizeAgentId(params.targetAgentId));
     }
   }
   const requesterAgentId = params.requesterSessionKey

@@ -116,6 +116,27 @@ describe("resolveSpawnedWorkspaceInheritance", () => {
     // Should fall back to requester's workspace since target has no explicit workspace
     expect(resolved).toBe("/home/user/main-ws");
   });
+
+  it("normalizes tilde-prefixed workspace paths for target agent", () => {
+    const config = {
+      agents: {
+        list: [
+          { id: "main", workspace: "/home/user/main-ws" },
+          { id: "ct-manager", workspace: "~/agents/ct-manager" },
+        ],
+      },
+    };
+    const resolved = resolveSpawnedWorkspaceInheritance({
+      config,
+      requesterSessionKey: "agent:main:subagent:parent",
+      explicitWorkspaceDir: undefined,
+      targetAgentId: "ct-manager",
+    });
+    // Should expand tilde to a normalized path ending with /agents/ct-manager
+    expect(resolved).toMatch(/\/agents\/ct-manager$/);
+    // Should not contain literal tilde
+    expect(resolved).not.toContain("~");
+  });
 });
 
 describe("resolveIngressWorkspaceOverrideForSpawnedRun", () => {
