@@ -166,9 +166,9 @@ export function extractAssistantText(message: unknown): string | undefined {
       normalizeText: (text) => text.trim(),
     }) ?? "";
   const stopReason = (message as { stopReason?: unknown }).stopReason;
-  const errorMessage = (message as { errorMessage?: unknown }).errorMessage;
-  const errorContext =
-    stopReason === "error" || (typeof errorMessage === "string" && Boolean(errorMessage.trim()));
+  // Gate on stopReason only — a non-error response with a stale/background errorMessage
+  // should not have its content rewritten with error templates (#13935).
+  const errorContext = stopReason === "error";
 
   return joined ? sanitizeUserFacingText(joined, { errorContext }) : undefined;
 }
