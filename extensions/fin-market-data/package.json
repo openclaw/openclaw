@@ -1,0 +1,40 @@
+{
+  "name": "@openfinclaw/fin-market-data",
+  "version": "0.0.1",
+  "description": "OpenFinClaw market data tools — prices, orderbooks, tickers, market overview",
+  "keywords": [
+    "financial",
+    "market-data",
+    "openclaw",
+    "openfinclaw",
+    "trading"
+  ],
+  "homepage": "https://github.com/cryptoSUN2049/openFinclaw#readme",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/cryptoSUN2049/openFinclaw.git",
+    "directory": "extensions/fin-market-data"
+  },
+  "files": [
+    "*.ts",
+    "src",
+    "openclaw.plugin.json"
+  ],
+  "type": "module",
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org"
+  },
+  "devDependencies": {
+    "openfinclaw": "workspace:*"
+  },
+  "peerDependencies": {
+    "openfinclaw": ">=0.0.1"
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ]
+  }
+}

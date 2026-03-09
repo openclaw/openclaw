@@ -1,41 +1,39 @@
 {
   "$schema": "https://openclaw.ai/schema/config.json",
-  "name": "finclaw-starter",
-  "description": "FinClaw starter workspace with finance-focused defaults",
-  "skills": {
-    "autoDiscover": true,
-    "skillsDir": "./skills"
+  "wizard": {
+    "lastRunAt": "2026-03-05T06:41:21.682Z",
+    "lastRunVersion": "2026.3.3",
+    "lastRunCommand": "doctor",
+    "lastRunMode": "local"
   },
-  "cron": [
-    {
-      "schedule": "0 9 * * *",
-      "prompt": "Morning brief: Call fin_fund_status, summarize overnight activity, identify strategies needing attention. Send the brief via message_send.",
-      "model": "sonnet",
-      "name": "morning-brief"
-    },
-    {
-      "schedule": "0 10 * * *",
-      "prompt": "Ideation scan: Call fin_ideation_trigger to scan markets for new strategy opportunities. Report any promising ideas found.",
-      "model": "sonnet",
-      "name": "ideation-scan"
-    },
-    {
-      "schedule": "0 12 * * *",
-      "prompt": "Evolution check: Call fin_evolution_scan to detect alpha decay in active strategies. Recommend evolution or retirement for degrading alphas.",
-      "model": "sonnet",
-      "name": "evolution-check"
-    },
-    {
-      "schedule": "0 18 * * *",
-      "prompt": "Evening review: Call fin_leaderboard and fin_list_promotions_ready. Analyze top/bottom performers, recommend promotions. Send summary via message_send.",
-      "model": "sonnet",
-      "name": "evening-review"
-    },
-    {
-      "schedule": "0 10 * * 0",
-      "prompt": "Weekly rebalance: Call fin_fund_status, fin_leaderboard, fin_fund_rebalance. Compile a comprehensive weekly performance report covering returns, risk metrics, strategy lifecycle changes, and capital allocation. Send via message_send.",
-      "model": "opus",
-      "name": "weekly-rebalance"
+  "tools": {
+    "profile": "coding",
+    "alsoAllow": ["read", "exec", "write", "edit"]
+  },
+  "commands": {
+    "native": "auto",
+    "nativeSkills": "auto",
+    "restart": true,
+    "ownerDisplay": "raw"
+  },
+  "skills": {
+    "load": {
+      "extraDirs": ["skills", "commons/skills"]
     }
-  ]
+  },
+  "plugins": {
+    "entries": {
+      "fin-backtest-remote": {
+        "enabled": true,
+        "config": {
+          "baseUrl": "http://150.109.16.195:8000",
+          "apiKey": ""
+        }
+      }
+    }
+  },
+  "meta": {
+    "lastTouchedVersion": "2026.3.3",
+    "lastTouchedAt": "2026-03-05T06:41:21.726Z"
+  }
 }

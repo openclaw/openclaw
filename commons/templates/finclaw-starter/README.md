@@ -16,39 +16,47 @@ A starter workspace for financial intelligence with OpenClaw. This template incl
    cd my-finance-workspace
    ```
 
-3. Install recommended skills:
+3. Install recommended skills (include strategy builder and remote backtest support):
 
    ```bash
-   openclaw commons install fin-quant-fund
-   openclaw commons install fin-strategy-research
+   openclaw commons install fin-strategy-builder
+   openclaw commons install fin-dca-strategy
+   openclaw commons install fin-tax-report
    ```
 
-4. Configure your exchange connections in `openclaw.json`.
+4. (Optional) Configure remote backtest: edit `openclaw.json` and set `plugins.entries.fin-backtest-remote.config.apiKey` if your Findoo Backtest server requires it. Leave empty for local/dev without auth.
 
-## Required Extensions
+5. Configure your exchange connections in `openclaw.json`.
 
-| Extension              | Purpose                                            |
-| ---------------------- | -------------------------------------------------- |
-| findoo-trader-plugin   | Trading, paper trading, strategy engine, fund mgmt |
-| findoo-datahub-plugin  | Market data, indicators, regime detection          |
-| findoo-backtest-plugin | Remote backtesting                                 |
-| fin-evolution-engine   | GEP gene evolution, RDAVD fitness                  |
+## Included Configuration
+
+- **openclaw.json** - Base configuration with:
+  - **tools.profile: "coding"** so that Strategy Builder (fin-strategy-builder) and coding-agent have **read**, **exec**, **write**, **edit** for generating strategies and running commands.
+  - **plugins.entries.fin-backtest-remote** enabled with a default **baseUrl**; set **apiKey** if your Findoo Backtest server requires authentication.
+- **skills.json** - List of recommended financial skills (includes **fin-strategy-builder** for conversation-time strategy creation and remote backtest flow).
+
+## Strategy & Remote Backtest (conversation)
+
+To use **strategy building** and **remote Findoo backtest** in chat:
+
+1. **Tools**: Already set by template — `tools.profile: "coding"`.
+2. **Strategy builder skill**: Run `openclaw commons install fin-strategy-builder` so the agent can create FEP v1.1 strategy packages in the current session.
+3. **Remote backtest plugin**: Template enables `fin-backtest-remote` with a default baseUrl. Set `plugins.entries.fin-backtest-remote.config.apiKey` in `openclaw.json` if your server requires it; restart Gateway after config changes.
+
+See [Conversation strategy & backtest config](https://docs.openclaw.ai/finance/conversation-strategy-backtest-config) for full details.
 
 ## Recommended Skills
 
-| Skill                  | Description                                       |
-| ---------------------- | ------------------------------------------------- |
-| fin-quant-fund         | One-person quant fund management                  |
-| fin-strategy-research  | Strategy research and Walk-Forward validation     |
-| fin-strategy-evolution | Strategy lifecycle — promotion, mutation, culling |
-| fin-trade-review       | Trade review and learning                         |
-| fin-backtest           | Strategy backtesting with Monte Carlo             |
-| fin-risk-manager       | Position sizing, VaR, stress testing              |
-| fin-news-intel         | AI-powered news analysis and sentiment            |
-| fin-macro-calendar     | Economic calendar and regime classification       |
-| fin-onchain            | On-chain analytics, DeFi yields                   |
-| fin-dca-strategy       | Dollar-cost averaging plan builder                |
-| fin-tax-report         | Tax reporting and capital gains                   |
+| Skill                | Description                                                     |
+| -------------------- | --------------------------------------------------------------- |
+| fin-strategy-builder | FEP v1.1 strategy packages, validate, submit to remote backtest |
+| fin-market-data      | Real-time prices, charts, and market data                       |
+| fin-portfolio        | Portfolio tracking and P&L analysis                             |
+| fin-trading          | Order execution with safety confirmations                       |
+| fin-dca-strategy     | Dollar-cost averaging plan builder                              |
+| fin-tax-report       | Tax reporting and capital gains calculation                     |
+| fin-alerts           | Price and portfolio alert monitoring                            |
+| fin-expert           | Deep financial analysis and research                            |
 
 ## Learn More
 
