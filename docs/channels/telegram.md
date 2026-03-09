@@ -424,10 +424,12 @@ curl "https://api.telegram.org/bot<bot_token>/getUpdates"
     - `sendMessage` (`to`, `content`, optional `mediaUrl`, `replyToMessageId`, `messageThreadId`)
     - `react` (`chatId`, `messageId`, `emoji`)
     - `deleteMessage` (`chatId`, `messageId`)
+    - `deleteForumTopic` (`chatId`, `topicId`)
     - `editMessage` (`chatId`, `messageId`, `content`)
     - `createForumTopic` (`chatId`, `name`, optional `iconColor`, `iconCustomEmojiId`)
 
     Channel message actions expose ergonomic aliases (`send`, `react`, `delete`, `edit`, `sticker`, `sticker-search`, `topic-create`).
+    For `delete`, pass `messageId` to delete a message (existing behavior), or pass `threadId`/`topicId` to delete a forum topic.
 
     Gating controls:
 

@@ -14,6 +14,7 @@ import {
 import { resolveTelegramReactionLevel } from "../../../extensions/telegram/src/reaction-level.js";
 import {
   createForumTopicTelegram,
+  deleteForumTopicTelegram,
   deleteMessageTelegram,
   editMessageTelegram,
   reactMessageTelegram,
@@ -339,6 +340,30 @@ export async function handleTelegramAction(
       accountId: accountId ?? undefined,
     });
     return jsonResult({ ok: true, deleted: true });
+  }
+
+  if (action === "deleteForumTopic") {
+    if (!isActionEnabled("createForumTopic")) {
+      throw new Error("Telegram createForumTopic is disabled.");
+    }
+    const chatId = readStringOrNumberParam(params, "chatId", {
+      required: true,
+    });
+    const topicId = readNumberParam(params, "topicId", {
+      required: true,
+      integer: true,
+    });
+    const token = resolveTelegramToken(cfg, { accountId }).token;
+    if (!token) {
+      throw new Error(
+        "Telegram bot token missing. Set TELEGRAM_BOT_TOKEN or channels.telegram.botToken.",
+      );
+    }
+    await deleteForumTopicTelegram(chatId ?? "", topicId ?? 0, {
+      token,
+      accountId: accountId ?? undefined,
+    });
+    return jsonResult({ ok: true, deleted: true, topicId });
   }
 
   if (action === "editMessage") {

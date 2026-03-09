@@ -24,6 +24,7 @@ import {
   resolveTelegramPollActionGateState,
 } from "./accounts.js";
 import { isTelegramInlineButtonsEnabled } from "./inline-buttons.js";
+import { parseTelegramTarget } from "./targets.js";
 
 const providerId = "telegram";
 
@@ -62,15 +63,33 @@ function readTelegramChatIdParam(params: Record<string, unknown>): string | numb
   );
 }
 
-function readTelegramMessageIdParam(params: Record<string, unknown>): number {
+function readTelegramMessageIdParam(
+  params: Record<string, unknown>,
+  options?: { required?: boolean },
+): number | undefined {
+  const required = options?.required ?? true;
   const messageId = readNumberParam(params, "messageId", {
-    required: true,
+    required,
     integer: true,
   });
-  if (typeof messageId !== "number") {
+  if (required && typeof messageId !== "number") {
     throw new Error("messageId is required.");
   }
-  return messageId;
+  return typeof messageId === "number" ? messageId : undefined;
+}
+
+function readTelegramTopicIdParam(params: Record<string, unknown>): number | undefined {
+  const explicitTopicId =
+    readNumberParam(params, "topicId", { integer: true }) ??
+    readNumberParam(params, "threadId", { integer: true });
+  if (typeof explicitTopicId === "number") {
+    return explicitTopicId;
+  }
+  const targetLike = readStringParam(params, "to") ?? readStringParam(params, "chatId");
+  if (!targetLike) {
+    return undefined;
+  }
+  return parseTelegramTarget(targetLike).messageThreadId;
 }
 
 export const telegramMessageActions: ChannelMessageActionAdapter = {
@@ -202,17 +221,35 @@ export const telegramMessageActions: ChannelMessageActionAdapter = {
 
     if (action === "delete") {
       const chatId = readTelegramChatIdParam(params);
-      const messageId = readTelegramMessageIdParam(params);
-      return await handleTelegramAction(
-        {
-          action: "deleteMessage",
-          chatId,
-          messageId,
-          accountId: accountId ?? undefined,
-        },
-        cfg,
-        { mediaLocalRoots },
-      );
+      const messageId = readTelegramMessageIdParam(params, { required: false });
+      if (typeof messageId === "number") {
+        return await handleTelegramAction(
+          {
+            action: "deleteMessage",
+            chatId,
+            messageId,
+            accountId: accountId ?? undefined,
+          },
+          cfg,
+          { mediaLocalRoots },
+        );
+      }
+
+      const topicId = readTelegramTopicIdParam(params);
+      if (typeof topicId === "number") {
+        return await handleTelegramAction(
+          {
+            action: "deleteForumTopic",
+            chatId,
+            topicId,
+            accountId: accountId ?? undefined,
+          },
+          cfg,
+          { mediaLocalRoots },
+        );
+      }
+
+      throw new Error("messageId or threadId/topicId is required.");
     }
 
     if (action === "edit") {

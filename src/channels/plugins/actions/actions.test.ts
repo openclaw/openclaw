@@ -778,6 +778,34 @@ describe("telegramMessageActions", () => {
         },
       },
       {
+        name: "delete maps to deleteMessage when messageId is provided",
+        action: "delete" as const,
+        params: {
+          to: "-1001234567890",
+          messageId: 42,
+        },
+        expectedPayload: {
+          action: "deleteMessage",
+          chatId: "-1001234567890",
+          messageId: 42,
+          accountId: undefined,
+        },
+      },
+      {
+        name: "delete maps to deleteForumTopic when threadId is provided",
+        action: "delete" as const,
+        params: {
+          to: "-1001234567890",
+          threadId: 271,
+        },
+        expectedPayload: {
+          action: "deleteForumTopic",
+          chatId: "-1001234567890",
+          topicId: 271,
+          accountId: undefined,
+        },
+      },
+      {
         name: "topic-create maps to createForumTopic",
         action: "topic-create" as const,
         params: {
@@ -804,6 +832,27 @@ describe("telegramMessageActions", () => {
         expect.objectContaining({ mediaLocalRoots: undefined }),
       );
     }
+  });
+
+  it("rejects delete when neither messageId nor topic/thread id is provided", async () => {
+    const cfg = telegramCfg();
+    const handleAction = telegramMessageActions.handleAction;
+    if (!handleAction) {
+      throw new Error("telegram handleAction unavailable");
+    }
+
+    await expect(
+      handleAction({
+        channel: "telegram",
+        action: "delete",
+        params: {
+          to: "-1001234567890",
+        },
+        cfg,
+      }),
+    ).rejects.toThrow(/messageId or threadId\/topicId is required/i);
+
+    expect(handleTelegramAction).not.toHaveBeenCalled();
   });
 
   it("forwards trusted mediaLocalRoots for send", async () => {
