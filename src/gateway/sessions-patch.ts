@@ -99,7 +99,7 @@ export async function applySessionsPatchToStore(params: {
         return invalid("invalid spawnedBy: empty");
       }
       if (!isSubagentSessionKey(storeKey) && !isAcpSessionKey(storeKey)) {
-        return invalid("spawnedBy is only supported for subagent:* sessions");
+        return invalid("spawnedBy is only supported for subagent:* and acp:* sessions");
       }
       if (existing?.spawnedBy && existing.spawnedBy !== trimmed) {
         return invalid("spawnedBy cannot be changed once set");
