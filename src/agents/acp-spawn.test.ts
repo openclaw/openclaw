@@ -317,7 +317,7 @@ describe("spawnAcpDirect", () => {
       });
   });
 
-  it("spawns ACP session, binds a new thread, and dispatches initial task", async () => {
+  it("spawns ACP session from a parent channel, binds a new thread, and dispatches initial task", async () => {
     const result = await spawnAcpDirect(
       {
         task: "Investigate flaky tests",
@@ -330,7 +330,6 @@ describe("spawnAcpDirect", () => {
         agentChannel: "discord",
         agentAccountId: "default",
         agentTo: "channel:parent-channel",
-        agentThreadId: "requester-thread",
       },
     );
 
@@ -373,6 +372,73 @@ describe("spawnAcpDirect", () => {
     expect(transcriptCalls).toHaveLength(2);
     expect(transcriptCalls[0]?.threadId).toBeUndefined();
     expect(transcriptCalls[1]?.threadId).toBe("child-thread");
+  });
+
+  it("reuses the current Discord thread when spawning from an existing thread", async () => {
+    hoisted.sessionBindingBindMock
+      .mockReset()
+      .mockImplementation(
+        async (input: {
+          placement?: string;
+          targetSessionKey: string;
+          conversation: { accountId: string; conversationId: string };
+          metadata?: Record<string, unknown>;
+        }) =>
+          createSessionBinding({
+            targetSessionKey: input.targetSessionKey,
+            conversation: {
+              channel: "discord",
+              accountId: input.conversation.accountId,
+              conversationId:
+                input.placement === "current" ? input.conversation.conversationId : "child-thread",
+              parentConversationId: "parent-channel",
+            },
+            metadata: {
+              boundBy:
+                typeof input.metadata?.boundBy === "string" ? input.metadata.boundBy : "system",
+              agentId: "codex",
+              webhookId: "wh-1",
+            },
+          }),
+      );
+
+    const result = await spawnAcpDirect(
+      {
+        task: "Continue the investigation",
+        agentId: "codex",
+        mode: "session",
+        thread: true,
+      },
+      {
+        agentSessionKey: "agent:main:main",
+        agentChannel: "discord",
+        agentAccountId: "default",
+        agentTo: "channel:requester-thread",
+        agentThreadId: "requester-thread",
+      },
+    );
+
+    expect(result.status).toBe("accepted");
+    expect(hoisted.sessionBindingBindMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        placement: "current",
+        conversation: expect.objectContaining({
+          conversationId: "requester-thread",
+        }),
+      }),
+    );
+
+    const agentCall = hoisted.callGatewayMock.mock.calls
+      .map((call: unknown[]) => call[0] as { method?: string; params?: Record<string, unknown> })
+      .find((request) => request.method === "agent");
+    expect(agentCall?.params?.to).toBe("channel:requester-thread");
+    expect(agentCall?.params?.threadId).toBe("requester-thread");
+
+    const transcriptCalls = hoisted.resolveSessionTranscriptFileMock.mock.calls.map(
+      (call: unknown[]) => call[0] as { threadId?: string },
+    );
+    expect(transcriptCalls).toHaveLength(2);
+    expect(transcriptCalls[1]?.threadId).toBe("requester-thread");
   });
 
   it("does not inline delivery for fresh oneshot ACP runs", async () => {

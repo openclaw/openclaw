@@ -30,6 +30,7 @@ import { resolveConversationIdFromTargets } from "../infra/outbound/conversation
 import {
   getSessionBindingService,
   isSessionBindingError,
+  type SessionBindingPlacement,
   type SessionBindingRecord,
 } from "../infra/outbound/session-binding-service.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
@@ -112,6 +113,7 @@ type PreparedAcpThreadBinding = {
   channel: string;
   accountId: string;
   conversationId: string;
+  placement: SessionBindingPlacement;
 };
 
 function resolveSpawnMode(params: {
@@ -291,6 +293,14 @@ function prepareAcpThreadBinding(params: {
       error: `Could not resolve a ${policy.channel} conversation for ACP thread spawn.`,
     };
   }
+  const placement: SessionBindingPlacement =
+    policy.channel === "discord" && params.threadId != null ? "current" : "child";
+  if (!capabilities.placements.includes(placement)) {
+    return {
+      ok: false,
+      error: `Thread bindings do not support ACP thread spawn for ${policy.channel}.`,
+    };
+  }
 
   return {
     ok: true,
@@ -298,6 +308,7 @@ function prepareAcpThreadBinding(params: {
       channel: policy.channel,
       accountId: policy.accountId,
       conversationId,
+      placement,
     },
   };
 }
@@ -443,7 +454,7 @@ export async function spawnAcpDirect(
           accountId: preparedBinding.accountId,
           conversationId: preparedBinding.conversationId,
         },
-        placement: "child",
+        placement: preparedBinding.placement,
         metadata: {
           threadName: resolveThreadBindingThreadName({
             agentId: targetAgentId,
