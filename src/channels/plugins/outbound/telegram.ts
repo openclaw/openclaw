@@ -146,10 +146,9 @@ export const telegramOutbound: ChannelOutboundAdapter = {
     // NOTE: deliver.ts chunks long Telegram text for sendText paths, but sendPayload bypasses
     // that code path. Chunk here to avoid Telegram 400 "message is too long" errors.
     // Preserve RAW HTML in this path (no escaping/transformation).
+    // NOTE: chunkTelegramRawHtml may hard-slice long strings, which can split HTML tags.
+    // We intentionally do NOT attempt an HTML-aware chunker here (future work) to keep this fix small.
     let textChunks = chunkTelegramRawHtml(rawText, telegramOutbound.textChunkLimit ?? 4000);
-    if (textChunks.length === 0 && rawText) {
-      textChunks = [rawText];
-    }
 
     const basePayloadOpts = {
       ...contextOpts,
@@ -167,6 +166,16 @@ export const telegramOutbound: ChannelOutboundAdapter = {
       });
 
     if (mediaUrls.length === 0) {
+      // Prevent silent "success" when there is nothing to send.
+      // If buttons exist without text, Telegram still needs a message body; use an invisible placeholder.
+      if (textChunks.length === 0) {
+        if (telegramData?.buttons?.length) {
+          textChunks = ["\u2063"]; // INVISIBLE SEPARATOR
+        } else {
+          throw new Error("telegramOutbound.sendPayload: empty payload (no text, no media)");
+        }
+      }
+
       let finalResult: Awaited<ReturnType<typeof send>> | undefined;
       for (let i = 0; i < textChunks.length; i += 1) {
         finalResult = await sendTextChunk(textChunks[i] ?? "", { isFirst: i === 0 });
