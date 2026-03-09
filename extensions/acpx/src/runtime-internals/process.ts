@@ -69,6 +69,8 @@ const CODEX_API_AUTH_ENV_KEYS = [
   "ACPX_AUTH_CODEX_API_KEY",
 ] as const;
 
+const codexAuthModeCache = new Map<string, string | null>();
+
 type CodexAuthFile = {
   auth_mode?: string;
 };
@@ -89,11 +91,17 @@ function resolveCodexAuthMode(params: {
   try {
     const home = resolveHomeDir(params.baseEnv, params.homeDir);
     const authPath = path.join(home, ".codex", "auth.json");
+    if (codexAuthModeCache.has(authPath)) {
+      return codexAuthModeCache.get(authPath) ?? null;
+    }
     if (!existsSync(authPath)) {
       return null;
     }
     const parsed = JSON.parse(readFileSync(authPath, "utf8")) as CodexAuthFile;
-    return typeof parsed.auth_mode === "string" ? parsed.auth_mode.trim().toLowerCase() : null;
+    const mode =
+      typeof parsed.auth_mode === "string" ? parsed.auth_mode.trim().toLowerCase() : null;
+    codexAuthModeCache.set(authPath, mode);
+    return mode;
   } catch {
     return null;
   }

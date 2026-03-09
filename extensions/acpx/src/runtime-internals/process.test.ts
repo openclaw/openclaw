@@ -1,6 +1,5 @@
 import { spawn } from "node:child_process";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
-import { homedir } from "node:os";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -109,9 +108,20 @@ describe("resolveAcpxSpawnEnv", () => {
     expect(env.OPENAI_API_KEY).toBe("test-openai-key");
   });
 
-  it("falls back to the current home directory when HOME is absent", async () => {
-    const env = resolveAcpxSpawnEnv({}, { agent: "codex", homeDir: homedir() });
+  it("falls back to USERPROFILE when HOME is absent", async () => {
+    const homeDir = await createTempDir();
+    await writeCodexAuthFile({ homeDir, authMode: "chatgpt" });
+
+    const env = resolveAcpxSpawnEnv(
+      {
+        USERPROFILE: homeDir,
+        OPENAI_API_KEY: "test-openai-key", // pragma: allowlist secret
+      },
+      { agent: "codex" },
+    );
+
     expect(env.OPENCLAW_SHELL).toBe("acp");
+    expect(env.OPENAI_API_KEY).toBeUndefined();
   });
 });
 
