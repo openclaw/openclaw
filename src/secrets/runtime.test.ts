@@ -8,6 +8,7 @@ import { withTempHome } from "../config/home-env.test-harness.js";
 import {
   activateSecretsRuntimeSnapshot,
   clearSecretsRuntimeSnapshot,
+  getActiveRuntimeWebToolsMetadata,
   getActiveSecretsRuntimeSnapshot,
   prepareSecretsRuntimeSnapshot,
 } from "./runtime.js";
@@ -342,7 +343,7 @@ describe("secrets runtime snapshot", () => {
     );
   });
 
-  it("resolves provider-specific refs in web search auto mode", async () => {
+  it("keeps non-selected provider refs inactive in web search auto mode", async () => {
     const snapshot = await prepareSecretsRuntimeSnapshot({
       config: asConfig({
         tools: {
@@ -366,9 +367,19 @@ describe("secrets runtime snapshot", () => {
     });
 
     expect(snapshot.config.tools?.web?.search?.apiKey).toBe("web-search-ref");
-    expect(snapshot.config.tools?.web?.search?.gemini?.apiKey).toBe("web-search-gemini-ref");
-    expect(snapshot.warnings.map((warning) => warning.path)).not.toContain(
-      "tools.web.search.gemini.apiKey",
+    expect(snapshot.config.tools?.web?.search?.gemini?.apiKey).toEqual({
+      source: "env",
+      provider: "default",
+      id: "WEB_SEARCH_GEMINI_API_KEY",
+    });
+    expect(snapshot.webTools.search.selectedProvider).toBe("brave");
+    expect(snapshot.warnings).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          code: "SECRETS_REF_IGNORED_INACTIVE_SURFACE",
+          path: "tools.web.search.gemini.apiKey",
+        }),
+      ]),
     );
   });
 
@@ -399,6 +410,44 @@ describe("secrets runtime snapshot", () => {
     expect(snapshot.warnings.map((warning) => warning.path)).not.toContain(
       "tools.web.search.gemini.apiKey",
     );
+  });
+
+  it("exposes active runtime web tool metadata as a defensive clone", async () => {
+    const snapshot = await prepareSecretsRuntimeSnapshot({
+      config: asConfig({
+        tools: {
+          web: {
+            search: {
+              provider: "gemini",
+              gemini: {
+                apiKey: { source: "env", provider: "default", id: "WEB_SEARCH_GEMINI_API_KEY" },
+              },
+            },
+          },
+        },
+      }),
+      env: {
+        WEB_SEARCH_GEMINI_API_KEY: "web-search-gemini-ref", // pragma: allowlist secret
+      },
+      agentDirs: ["/tmp/openclaw-agent-main"],
+      loadAuthStore: () => ({ version: 1, profiles: {} }),
+    });
+
+    activateSecretsRuntimeSnapshot(snapshot);
+
+    const first = getActiveRuntimeWebToolsMetadata();
+    expect(first?.search.providerConfigured).toBe("gemini");
+    expect(first?.search.selectedProvider).toBe("gemini");
+    expect(first?.search.selectedProviderKeySource).toBe("secretRef");
+    if (!first) {
+      throw new Error("missing runtime web tools metadata");
+    }
+    first.search.providerConfigured = "brave";
+    first.search.selectedProvider = "brave";
+
+    const second = getActiveRuntimeWebToolsMetadata();
+    expect(second?.search.providerConfigured).toBe("gemini");
+    expect(second?.search.selectedProvider).toBe("gemini");
   });
 
   it("resolves file refs via configured file provider", async () => {

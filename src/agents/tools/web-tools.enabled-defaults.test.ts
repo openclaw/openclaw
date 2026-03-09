@@ -166,6 +166,39 @@ describe("web tools defaults", () => {
     const tool = createWebSearchTool({ config: {}, sandboxed: false });
     expect(tool?.name).toBe("web_search");
   });
+
+  it("prefers runtime-selected web_search provider over local provider config", async () => {
+    const mockFetch = installMockFetch(createProviderSuccessPayload("gemini"));
+    const tool = createWebSearchTool({
+      config: {
+        tools: {
+          web: {
+            search: {
+              provider: "brave",
+              apiKey: "brave-config-test", // pragma: allowlist secret
+              gemini: {
+                apiKey: "gemini-config-test", // pragma: allowlist secret
+              },
+            },
+          },
+        },
+      },
+      sandboxed: true,
+      runtimeWebSearch: {
+        providerConfigured: "brave",
+        providerSource: "auto-detect",
+        selectedProvider: "gemini",
+        selectedProviderKeySource: "secretRef",
+        diagnostics: [],
+      },
+    });
+
+    const result = await tool?.execute?.("call-runtime-provider", { query: "runtime override" });
+
+    expect(mockFetch).toHaveBeenCalled();
+    expect(String(mockFetch.mock.calls[0]?.[0])).toContain("generativelanguage.googleapis.com");
+    expect((result?.details as { provider?: string } | undefined)?.provider).toBe("gemini");
+  });
 });
 
 describe("web_search country and language parameters", () => {

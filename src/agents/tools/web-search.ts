@@ -3,6 +3,7 @@ import { formatCliCommand } from "../../cli/command-format.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { normalizeResolvedSecretInputString } from "../../config/types.secrets.js";
 import { logVerbose } from "../../globals.js";
+import type { RuntimeWebSearchMetadata } from "../../secrets/runtime-web-tools.js";
 import { wrapWebContent } from "../../security/external-content.js";
 import { normalizeSecretInput } from "../../utils/normalize-secret-input.js";
 import type { AnyAgentTool } from "./common.js";
@@ -1819,15 +1820,21 @@ async function runWebSearch(params: {
 export function createWebSearchTool(options?: {
   config?: OpenClawConfig;
   sandboxed?: boolean;
+  runtimeWebSearch?: RuntimeWebSearchMetadata;
 }): AnyAgentTool | null {
   const search = resolveSearchConfig(options?.config);
   if (!resolveSearchEnabled({ search, sandboxed: options?.sandboxed })) {
     return null;
   }
 
-  const provider = resolveSearchProvider(search);
+  const provider =
+    options?.runtimeWebSearch?.selectedProvider ??
+    options?.runtimeWebSearch?.providerConfigured ??
+    resolveSearchProvider(search);
   const perplexityConfig = resolvePerplexityConfig(search);
-  const perplexitySchemaTransportHint = resolvePerplexitySchemaTransportHint(perplexityConfig);
+  const perplexitySchemaTransportHint =
+    options?.runtimeWebSearch?.perplexityTransport ??
+    resolvePerplexitySchemaTransportHint(perplexityConfig);
   const grokConfig = resolveGrokConfig(search);
   const geminiConfig = resolveGeminiConfig(search);
   const kimiConfig = resolveKimiConfig(search);
