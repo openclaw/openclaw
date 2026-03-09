@@ -110,7 +110,7 @@ describe("resolveTelegramFetch", () => {
     const proxyFetch = vi.fn(async () => ({ ok: true }) as Response) as unknown as typeof fetch;
     const wrapped = resolveFetch(proxyFetch);
 
-    const resolved = resolveTelegramFetch(proxyFetch ? wrapped : undefined);
+    const resolved = resolveTelegramFetch(wrapped);
 
     expect(resolved).toBe(wrapped);
   });
