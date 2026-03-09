@@ -109,6 +109,45 @@ describe("exec PATH login shell merge", () => {
     expect(value).toBe("exec");
   });
 
+  it("injects agent and session markers for host=gateway commands", async () => {
+    if (isWin) {
+      return;
+    }
+
+    const tool = createExecTool({
+      host: "gateway",
+      security: "full",
+      ask: "off",
+      sessionKey: "agent:agent2:main",
+    });
+    const result = await tool.execute("call-openclaw-agent-env", {
+      command: 'printf "%s|%s" "${OPENCLAW_AGENT_ID:-}" "${OPENCLAW_SESSION_KEY:-}"',
+    });
+    const value = normalizeText(result.content.find((c) => c.type === "text")?.text);
+
+    expect(value).toBe("agent2|agent:agent2:main");
+  });
+
+  it("prefers an explicit agent id for legacy or global session contexts", async () => {
+    if (isWin) {
+      return;
+    }
+
+    const tool = createExecTool({
+      host: "gateway",
+      security: "full",
+      ask: "off",
+      agentId: "agent1",
+      sessionKey: "global",
+    });
+    const result = await tool.execute("call-openclaw-agent-explicit", {
+      command: 'printf "%s|%s" "${OPENCLAW_AGENT_ID:-}" "${OPENCLAW_SESSION_KEY:-}"',
+    });
+    const value = normalizeText(result.content.find((c) => c.type === "text")?.text);
+
+    expect(value).toBe("agent1|global");
+  });
+
   it("throws security violation when env.PATH is provided", async () => {
     if (isWin) {
       return;

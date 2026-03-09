@@ -853,6 +853,8 @@ export async function runTui(opts: TuiOptions) {
     tui,
     openOverlay,
     closeOverlay,
+    agentId: () => state.currentAgentId || undefined,
+    sessionKey: () => state.currentSessionKey || undefined,
   });
   updateAutocompleteProvider();
   const submitHandler = createEditorSubmitHandler({

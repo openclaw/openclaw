@@ -10,7 +10,7 @@ vi.mock("../infra/system-events.js", () => ({
 
 import { requestHeartbeatNow } from "../infra/heartbeat-wake.js";
 import { enqueueSystemEvent } from "../infra/system-events.js";
-import { emitExecSystemEvent } from "./bash-tools.exec-runtime.js";
+import { emitExecSystemEvent, resolveExecRuntimeEnv } from "./bash-tools.exec-runtime.js";
 
 const requestHeartbeatNowMock = vi.mocked(requestHeartbeatNow);
 const enqueueSystemEventMock = vi.mocked(enqueueSystemEvent);
@@ -60,5 +60,31 @@ describe("emitExecSystemEvent", () => {
 
     expect(enqueueSystemEventMock).not.toHaveBeenCalled();
     expect(requestHeartbeatNowMock).not.toHaveBeenCalled();
+  });
+});
+
+describe("resolveExecRuntimeEnv", () => {
+  it("derives OPENCLAW_AGENT_ID from the agent session key and keeps the session marker", () => {
+    const env = resolveExecRuntimeEnv({ PATH: "/usr/bin" }, { sessionKey: "agent:agent2:main" });
+
+    expect(env.PATH).toBe("/usr/bin");
+    expect(env.OPENCLAW_SHELL).toBe("exec");
+    expect(env.OPENCLAW_AGENT_ID).toBe("agent2");
+    expect(env.OPENCLAW_SESSION_KEY).toBe("agent:agent2:main");
+  });
+
+  it("prefers an explicit agent id over the session-key fallback", () => {
+    const env = resolveExecRuntimeEnv(
+      {
+        OPENCLAW_SHELL: "wrong",
+        OPENCLAW_AGENT_ID: "wrong",
+        PATH: "/usr/bin",
+      },
+      { agentId: "agent1", sessionKey: "agent:agent2:main" },
+    );
+
+    expect(env.OPENCLAW_SHELL).toBe("exec");
+    expect(env.OPENCLAW_AGENT_ID).toBe("agent1");
+    expect(env.OPENCLAW_SESSION_KEY).toBe("agent:agent2:main");
   });
 });

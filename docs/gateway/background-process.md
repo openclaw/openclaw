@@ -29,6 +29,7 @@ Behavior:
 - Output is kept in memory until the session is polled or cleared.
 - If the `process` tool is disallowed, `exec` runs synchronously and ignores `yieldMs`/`background`.
 - Spawned exec commands receive `OPENCLAW_SHELL=exec` for context-aware shell/profile rules.
+- When the exec turn is tied to an agent session, spawned child processes also receive `OPENCLAW_AGENT_ID` and `OPENCLAW_SESSION_KEY`.
 
 ## Child process bridging
 

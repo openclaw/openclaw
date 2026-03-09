@@ -64,6 +64,8 @@ OpenClaw also injects context markers into spawned child processes:
 - `OPENCLAW_SHELL=acp`: set for ACP runtime backend process spawns (for example `acpx`).
 - `OPENCLAW_SHELL=acp-client`: set for `openclaw acp client` when it spawns the ACP bridge process.
 - `OPENCLAW_SHELL=tui-local`: set for local TUI `!` shell commands.
+- `OPENCLAW_AGENT_ID`: set for child processes spawned by runtimes such as `exec`, `acp-client`, and `tui-local` when a stable agent identity is available (`main`, `anotherAgent`, etc.).
+- `OPENCLAW_SESSION_KEY`: set for child processes spawned by runtimes such as `exec`, `acp-client`, and `tui-local` when the parent context has a bound session key.
 
 These are runtime markers (not required user config). They can be used in shell/profile logic
 to apply context-specific rules.

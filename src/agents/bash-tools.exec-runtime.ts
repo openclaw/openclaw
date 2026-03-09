@@ -6,7 +6,10 @@ import { requestHeartbeatNow } from "../infra/heartbeat-wake.js";
 import { isDangerousHostEnvVarName } from "../infra/host-env-security.js";
 import { findPathKey, mergePathPrepend } from "../infra/path-prepend.js";
 import { enqueueSystemEvent } from "../infra/system-events.js";
-import { scopedHeartbeatWakeOptions } from "../routing/session-key.js";
+import {
+  resolveAgentIdFromSessionKey,
+  scopedHeartbeatWakeOptions,
+} from "../routing/session-key.js";
 import type { ProcessSession } from "./bash-process-registry.js";
 import type { ExecToolDetails } from "./bash-tools.exec-types.js";
 import type { BashSandboxConfig } from "./bash-tools.shared.js";
@@ -252,6 +255,20 @@ export function emitExecSystemEvent(
   requestHeartbeatNow(scopedHeartbeatWakeOptions(sessionKey, { reason: "exec-event" }));
 }
 
+export function resolveExecRuntimeEnv(
+  baseEnv: Record<string, string>,
+  opts: { agentId?: string; sessionKey?: string },
+): Record<string, string> {
+  const sessionKey = opts.sessionKey?.trim();
+  const runtimeAgentId = opts.agentId?.trim() || resolveAgentIdFromSessionKey(sessionKey);
+  return {
+    ...baseEnv,
+    OPENCLAW_SHELL: "exec",
+    OPENCLAW_AGENT_ID: runtimeAgentId,
+    ...(sessionKey ? { OPENCLAW_SESSION_KEY: sessionKey } : {}),
+  };
+}
+
 export async function runExecProcess(opts: {
   command: string;
   // Execute this instead of `command` (which is kept for display/session/logging).
@@ -268,6 +285,7 @@ export async function runExecProcess(opts: {
   notifyOnExit: boolean;
   notifyOnExitEmptySuccess?: boolean;
   scopeKey?: string;
+  agentId?: string;
   sessionKey?: string;
   timeoutSec: number | null;
   onUpdate?: (partialResult: AgentToolResult<ExecToolDetails>) => void;
@@ -276,10 +294,10 @@ export async function runExecProcess(opts: {
   const sessionId = createSessionSlug();
   const execCommand = opts.execCommand ?? opts.command;
   const supervisor = getProcessSupervisor();
-  const shellRuntimeEnv: Record<string, string> = {
-    ...opts.env,
-    OPENCLAW_SHELL: "exec",
-  };
+  const shellRuntimeEnv = resolveExecRuntimeEnv(opts.env, {
+    agentId: opts.agentId,
+    sessionKey: opts.sessionKey,
+  });
 
   const session: ProcessSession = {
     id: sessionId,
