@@ -328,7 +328,56 @@ async function cleanupSessionBeforeMutation(params: {
   });
 }
 
+function isSessionArchiveParams(
+  params: Record<string, unknown>,
+): params is { key: string; archived: boolean } {
+  return typeof params.key === "string" && typeof params.archived === "boolean";
+}
+
 export const sessionsHandlers: GatewayRequestHandlers = {
+  "sessions.archive": async ({ params, respond }) => {
+    if (!isSessionArchiveParams(params)) {
+      respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          "params.key (string) and params.archived (boolean) are required",
+        ),
+      );
+      return;
+    }
+    const key = requireSessionKey(params.key, respond);
+    if (!key) {
+      return;
+    }
+
+    const { cfg, storePath } = resolveGatewaySessionTargetFromKey(key);
+    const next = await updateSessionStore(storePath, (store) => {
+      const { primaryKey } = migrateAndPruneSessionStoreKey({ cfg, key, store });
+      const entry = store[primaryKey];
+      if (!entry) {
+        return null;
+      }
+      if (params.archived) {
+        entry.archived = true;
+        entry.archivedAt = Date.now();
+      } else {
+        delete entry.archived;
+        delete entry.archivedAt;
+      }
+      return entry;
+    });
+    if (!next) {
+      respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.INVALID_REQUEST, `session not found: ${key}`),
+      );
+      return;
+    }
+    respond(true, { ok: true, key, archived: params.archived }, undefined);
+  },
   "sessions.list": ({ params, respond }) => {
     if (!assertValidParams(params, validateSessionsListParams, "sessions.list", respond)) {
       return;

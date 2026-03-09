@@ -23,6 +23,8 @@ import {
   PinOff,
   Filter,
   Clock,
+  Calendar,
+  X,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { useRef, useState, useMemo, useCallback, useEffect } from "react";
@@ -343,6 +345,31 @@ function useSidebarAgentMap() {
 type FilterType = "all" | "chats" | "cron" | "agent" | "channel";
 type FilterValue = { type: FilterType; value?: string; label: string };
 
+type DateRange = "all" | "today" | "week" | "month" | "custom";
+type DateRangeValue = { range: DateRange; label: string; fromMs?: number; toMs?: number };
+
+const DATE_RANGE_OPTIONS: DateRangeValue[] = [
+  { range: "all", label: "Any time" },
+  { range: "today", label: "Today" },
+  { range: "week", label: "Last 7 days" },
+  { range: "month", label: "Last 30 days" },
+];
+
+function getDateRangeCutoff(range: DateRange): number {
+  const now = Date.now();
+  const day = 86400000;
+  switch (range) {
+    case "today":
+      return now - day;
+    case "week":
+      return now - 7 * day;
+    case "month":
+      return now - 30 * day;
+    default:
+      return 0;
+  }
+}
+
 // ─── Session Sidebar ───
 
 export function SessionSidebarContent({
@@ -400,6 +427,8 @@ export function SessionSidebarContent({
 
   // Active filter — default to "Chats" (hides cron/internal)
   const [activeFilter, setActiveFilter] = useState<FilterValue>({ type: "chats", label: "Chats" });
+  const [dateRange, setDateRange] = useState<DateRangeValue>(DATE_RANGE_OPTIONS[0]);
+  const [showDatePicker, setShowDatePicker] = useState(false);
 
   // Derive available filters from session data
   const availableFilters = useMemo(() => {
@@ -475,9 +504,9 @@ export function SessionSidebarContent({
     }
   }, [showArchived, loadArchivedSessions]);
 
-  // Close menu/confirmations when clicking outside
+  // Close menu/confirmations/date picker when clicking outside
   useEffect(() => {
-    if (menuOpen === null && confirmDelete === null && confirmReset === null) {
+    if (menuOpen === null && confirmDelete === null && confirmReset === null && !showDatePicker) {
       return;
     }
     const handleMouseDown = (e: MouseEvent) => {
@@ -486,10 +515,11 @@ export function SessionSidebarContent({
         setConfirmDelete(null);
         setConfirmReset(null);
       }
+      setShowDatePicker(false);
     };
     document.addEventListener("mousedown", handleMouseDown);
     return () => document.removeEventListener("mousedown", handleMouseDown);
-  }, [menuOpen, confirmDelete, confirmReset]);
+  }, [menuOpen, confirmDelete, confirmReset, showDatePicker]);
 
   // Apply search + filter
   const filteredSessions = useMemo(() => {
@@ -497,10 +527,8 @@ export function SessionSidebarContent({
 
     // Apply active filter
     if (activeFilter.type === "chats") {
-      // Default: hide cron/internal sessions
       result = result.filter((s) => !isCronOrInternalSession(s));
     } else if (activeFilter.type === "cron") {
-      // Show only cron/internal sessions
       result = result.filter((s) => isCronOrInternalSession(s));
     } else if (activeFilter.type === "agent" && activeFilter.value) {
       const aid = activeFilter.value;
@@ -509,7 +537,12 @@ export function SessionSidebarContent({
       const ch = activeFilter.value;
       result = result.filter((s) => getSessionChannel(s) === ch);
     }
-    // "all" shows everything — no filter applied
+
+    // Apply date range filter
+    if (dateRange.range !== "all") {
+      const cutoff = dateRange.fromMs ?? getDateRangeCutoff(dateRange.range);
+      result = result.filter((s) => (s.lastActiveMs ?? 0) >= cutoff);
+    }
 
     // Apply search
     if (searchQuery.trim()) {
@@ -522,7 +555,7 @@ export function SessionSidebarContent({
     }
 
     return result;
-  }, [sessions, searchQuery, activeFilter]);
+  }, [sessions, searchQuery, activeFilter, dateRange]);
 
   // Split into pinned vs unpinned
   const pinnedSessions = useMemo(
@@ -971,7 +1004,8 @@ export function SessionSidebarContent({
 
       {/* Filter chips (hidden when collapsed) */}
       {showFilters && (
-        <div className="px-3 pb-2 shrink-0">
+        <div className="px-3 pb-2 shrink-0 space-y-1.5">
+          {/* Type filter row */}
           <div className="flex items-center gap-1.5 overflow-x-auto scrollbar-none">
             {availableFilters.map((filter) => {
               const isActive =
@@ -995,6 +1029,51 @@ export function SessionSidebarContent({
                 </button>
               );
             })}
+          </div>
+          {/* Date range row */}
+          <div className="relative flex items-center gap-1.5">
+            <button
+              onClick={() => setShowDatePicker(!showDatePicker)}
+              className={cn(
+                "shrink-0 rounded-full px-2.5 py-1 text-[10px] font-medium transition-colors whitespace-nowrap flex items-center gap-1",
+                dateRange.range !== "all"
+                  ? "bg-chart-5/15 text-chart-5 ring-1 ring-chart-5/20"
+                  : "bg-muted/50 text-muted-foreground/70 hover:bg-muted hover:text-muted-foreground",
+              )}
+            >
+              <Calendar className="h-2.5 w-2.5" />
+              {dateRange.label}
+            </button>
+            {dateRange.range !== "all" && (
+              <button
+                onClick={() => setDateRange(DATE_RANGE_OPTIONS[0])}
+                className="shrink-0 rounded-full p-0.5 text-muted-foreground/50 hover:text-muted-foreground hover:bg-muted/50 transition-colors"
+                title="Clear date filter"
+              >
+                <X className="h-2.5 w-2.5" />
+              </button>
+            )}
+            {showDatePicker && (
+              <div className="absolute left-0 top-full z-50 mt-1 w-36 rounded-xl border border-border bg-popover/95 backdrop-blur-md p-1 shadow-lg animate-in fade-in zoom-in-95 duration-100 origin-top-left">
+                {DATE_RANGE_OPTIONS.map((opt) => (
+                  <button
+                    key={opt.range}
+                    onClick={() => {
+                      setDateRange(opt);
+                      setShowDatePicker(false);
+                    }}
+                    className={cn(
+                      "flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-xs font-medium transition-colors",
+                      dateRange.range === opt.range
+                        ? "bg-primary/10 text-primary"
+                        : "hover:bg-muted text-muted-foreground",
+                    )}
+                  >
+                    {opt.label}
+                  </button>
+                ))}
+              </div>
+            )}
           </div>
         </div>
       )}

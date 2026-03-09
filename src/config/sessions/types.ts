@@ -168,6 +168,10 @@ export type SessionEntry = {
   teamRunId?: string;
   /** Bound project ID for this session (operator1-specific). */
   projectId?: string;
+  /** Whether this session is archived (hidden from default list view). */
+  archived?: boolean;
+  /** Timestamp (ms) when the session was archived. */
+  archivedAt?: number;
 };
 
 function normalizeRuntimeField(value: string | undefined): string | undefined {

@@ -21,6 +21,10 @@ export const SessionsListParamsSchema = Type.Object(
     spawnedBy: Type.Optional(NonEmptyString),
     agentId: Type.Optional(NonEmptyString),
     search: Type.Optional(Type.String()),
+    /** Show only archived sessions. */
+    archivedOnly: Type.Optional(Type.Boolean()),
+    /** Include archived sessions in results (default: false). */
+    includeArchived: Type.Optional(Type.Boolean()),
   },
   { additionalProperties: false },
 );

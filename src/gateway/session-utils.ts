@@ -724,6 +724,8 @@ export function listSessionsFromStore(params: {
   const { cfg, storePath, store, opts } = params;
   const now = Date.now();
 
+  const archivedOnly = opts.archivedOnly === true;
+  const includeArchived = opts.includeArchived === true;
   const includeGlobal = opts.includeGlobal === true;
   const includeUnknown = opts.includeUnknown === true;
   const includeDerivedTitles = opts.includeDerivedTitles === true;
@@ -774,6 +776,15 @@ export function listSessionsFromStore(params: {
         return true;
       }
       return entry?.label === label;
+    })
+    .filter(([, entry]) => {
+      if (archivedOnly) {
+        return entry?.archived === true;
+      }
+      if (!includeArchived) {
+        return entry?.archived !== true;
+      }
+      return true;
     })
     .map(([key, entry]) => {
       const updatedAt = entry?.updatedAt ?? null;
@@ -841,6 +852,8 @@ export function listSessionsFromStore(params: {
         lastChannel: deliveryFields.lastChannel ?? entry?.lastChannel,
         lastTo: deliveryFields.lastTo ?? entry?.lastTo,
         lastAccountId: deliveryFields.lastAccountId ?? entry?.lastAccountId,
+        archived: entry?.archived,
+        archivedAt: entry?.archivedAt,
       };
     })
     .toSorted((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0));
