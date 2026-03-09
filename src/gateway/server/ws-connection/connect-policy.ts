@@ -75,6 +75,7 @@ export function evaluateMissingDeviceIdentity(params: {
   authOk: boolean;
   hasSharedAuth: boolean;
   isLocalClient: boolean;
+  authMode?: string;
 }): MissingDeviceIdentityDecision {
   if (params.hasDeviceIdentity) {
     return { kind: "allow" };
@@ -93,6 +94,19 @@ export function evaluateMissingDeviceIdentity(params: {
     }
   }
   if (roleCanSkipDeviceIdentity(params.role, params.sharedAuthOk)) {
+    return { kind: "allow" };
+  }
+  // For localhost Control UI connections with allowInsecureAuth, allow missing token
+  // so the UI can show a token prompt. This fixes #17745 where localhost users
+  // could never enter a token because the connection closed immediately.
+  if (
+    params.isControlUi &&
+    params.controlUiAuthPolicy.allowInsecureAuthConfigured &&
+    params.isLocalClient &&
+    params.authMode === "token" &&
+    !params.authOk &&
+    !params.sharedAuthOk
+  ) {
     return { kind: "allow" };
   }
   if (!params.authOk && params.hasSharedAuth) {
