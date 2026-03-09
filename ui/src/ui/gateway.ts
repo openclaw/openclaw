@@ -5,7 +5,10 @@ import {
   type GatewayClientMode,
   type GatewayClientName,
 } from "../../../src/gateway/protocol/client-info.js";
-import { readConnectErrorDetailCode } from "../../../src/gateway/protocol/connect-error-details.js";
+import {
+  ConnectErrorDetailCodes,
+  readConnectErrorDetailCode,
+} from "../../../src/gateway/protocol/connect-error-details.js";
 import { clearDeviceAuthToken, loadDeviceAuthToken, storeDeviceAuthToken } from "./device-auth.ts";
 import { loadOrCreateDeviceIdentity, signDevicePayload } from "./device-identity.ts";
 import { generateUUID } from "./uuid.ts";
@@ -105,9 +108,10 @@ function isNonRecoverableAuthError(error: GatewayErrorInfo | undefined): boolean
   }
   const detailCode = resolveGatewayErrorDetailCode(error);
   return (
-    detailCode === "AUTH_PASSWORD_MISMATCH" ||
-    detailCode === "AUTH_RATE_LIMITED" ||
-    detailCode === "AUTH_TOKEN_MISSING"
+    detailCode === ConnectErrorDetailCodes.AUTH_PASSWORD_MISSING ||
+    detailCode === ConnectErrorDetailCodes.AUTH_PASSWORD_MISMATCH ||
+    detailCode === ConnectErrorDetailCodes.AUTH_RATE_LIMITED ||
+    detailCode === ConnectErrorDetailCodes.AUTH_TOKEN_MISSING
   );
 }
 
@@ -137,6 +141,7 @@ export class GatewayBrowserClient {
     this.ws?.close();
     this.ws = null;
     this.pendingConnectError = undefined;
+    this.lastGoodAuthToken = undefined;
     this.flushPending(new Error("gateway client stopped"));
   }
 
