@@ -155,7 +155,18 @@ function resolveGeminiCliDirs(geminiPath: string, resolvedPath: string): string[
       continue;
     }
     seen.add(key);
-    deduped.push(candidate);
+    // Only include candidates that actually look like a gemini-cli package dir
+    // or a parent that contains gemini-cli-core.  Without this guard the first
+    // candidate (`dirname(dirname(resolvedPath))`) can resolve to an unrelated
+    // ancestor (e.g. the nvm root on Windows) and `findFile` may then pick up
+    // an `oauth2.js` from a completely different package (e.g. discord-api-types),
+    // causing credential extraction to silently fail.
+    if (
+      existsSync(join(candidate, "package.json")) ||
+      existsSync(join(candidate, "node_modules", "@google", "gemini-cli-core"))
+    ) {
+      deduped.push(candidate);
+    }
   }
   return deduped;
 }
@@ -224,15 +235,13 @@ function generatePkce(): { verifier: string; challenge: string } {
   return { verifier, challenge };
 }
 
-function resolvePlatform(): "WINDOWS" | "MACOS" | "PLATFORM_UNSPECIFIED" {
-  if (process.platform === "win32") {
-    return "WINDOWS";
-  }
+function resolvePlatform(): "MACOS" | "PLATFORM_UNSPECIFIED" {
   if (process.platform === "darwin") {
     return "MACOS";
   }
-  // Google's loadCodeAssist API rejects "LINUX" as an invalid Platform enum value.
-  // Use "PLATFORM_UNSPECIFIED" for Linux and other platforms to match the pi-ai runtime.
+  // Google's loadCodeAssist API rejects both "LINUX" and "WINDOWS" as invalid
+  // Platform enum values (returns 400 INVALID_ARGUMENT).
+  // Use "PLATFORM_UNSPECIFIED" for all non-macOS platforms.
   return "PLATFORM_UNSPECIFIED";
 }
 
