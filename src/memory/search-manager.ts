@@ -75,6 +75,23 @@ export async function getMemorySearchManager(params: {
     }
   }
 
+  // Handle OpenMemory backend
+  if (resolved.backend === "openmemory" && resolved.openmemory) {
+    try {
+      const { OpenMemorySearchManager } = await import("./openmemory-search-manager.js");
+      const manager = new OpenMemorySearchManager({
+        url: resolved.openmemory.url,
+        userId: resolved.openmemory.userId,
+        timeout: resolved.openmemory.timeout,
+        agentId: params.agentId,
+      });
+      return { manager };
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      log.warn(`openmemory unavailable; falling back to builtin: ${message}`);
+    }
+  }
+
   try {
     const { MemoryIndexManager } = await loadManagerRuntime();
     const manager = await MemoryIndexManager.get(params);
