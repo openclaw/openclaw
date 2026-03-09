@@ -125,8 +125,11 @@ export async function runReplyAgent(params: {
   const isHeartbeat = opts?.isHeartbeat === true;
 
   // Early exit if session was halted due to compaction failure.
-  // Skip for heartbeat turns to avoid spamming the halt message on every interval.
-  if (activeSessionEntry?.haltedAt && !isHeartbeat) {
+  // Block all turns — including heartbeats — to stop token spend (#33898).
+  if (activeSessionEntry?.haltedAt) {
+    if (isHeartbeat) {
+      return { text: "HEARTBEAT_OK" };
+    }
     const haltMessage =
       followupRun.run.config?.agents?.defaults?.compaction?.onFailureMessage ??
       "\u26a0\ufe0f Session halted: compaction failed. Use /new to start a fresh session.";
