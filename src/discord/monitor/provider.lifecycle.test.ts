@@ -394,9 +394,16 @@ describe("runDiscordGatewayLifecycle", () => {
     });
     getDiscordGatewayEmitterMock.mockReturnValueOnce(emitter);
     waitForDiscordGatewayStopMock.mockImplementationOnce(async () => {
+      // Seed the abnormal-close counter first while disconnected.
+      emitter.emit("debug", "WebSocket connection closed with code 1006");
+      emitter.emit("debug", "WebSocket connection closed with code 1006");
+
+      // A connected close should reset the accumulated counter.
       gateway.isConnected = true;
       emitter.emit("debug", "WebSocket connection closed with code 1006");
       gateway.isConnected = false;
+
+      // After reset, two more closes should not hit the threshold.
       emitter.emit("debug", "WebSocket connection closed with code 1006");
       emitter.emit("debug", "WebSocket connection closed with code 1006");
     });
