@@ -231,7 +231,7 @@ export const id: TranslationMap = {
       now: "Sekarang",
       nextHeartbeat: "Heartbeat berikutnya",
       wakeModeHelp:
-        "Sekarang,langsung memicu eksekusi. Heartbeat berikutnya, menunggu siklus berikutnya.",
+        "Sekarang, langsung memicu eksekusi. Heartbeat berikutnya, menunggu siklus berikutnya.",
       payloadKind: "Apa yang harus dijalankan?",
       systemEvent: "Kirim pesan ke main timeline",
       agentTurn: "Jalankan tugas assistant (isolated)",
