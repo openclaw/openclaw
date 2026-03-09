@@ -65,7 +65,7 @@ describe("handleControlUiHttpRequest", () => {
     resolveAvatar: Parameters<typeof handleControlUiAvatarRequest>[2]["resolveAvatar"];
     basePath?: string;
   }) {
-    const { res, end } = makeMockHttpResponse();
+    const { res, setHeader, end } = makeMockHttpResponse();
     const handled = handleControlUiAvatarRequest(
       { url: params.url, method: params.method } as IncomingMessage,
       res,
@@ -74,7 +74,7 @@ describe("handleControlUiHttpRequest", () => {
         resolveAvatar: params.resolveAvatar,
       },
     );
-    return { res, end, handled };
+    return { res, setHeader, end, handled };
   }
 
   async function writeAssetFile(rootPath: string, filename: string, contents: string) {
@@ -216,6 +216,43 @@ describe("handleControlUiHttpRequest", () => {
     } finally {
       await fs.rm(tmp, { recursive: true, force: true });
     }
+  });
+
+  it("redirects to remote avatar URL (regression #41201)", () => {
+    const { res, setHeader, end, handled } = runAvatarRequest({
+      url: "/avatar/main",
+      method: "GET",
+      resolveAvatar: () => ({ kind: "remote", url: "https://example.com/avatar.png" }),
+    });
+    expect(handled).toBe(true);
+    expect(res.statusCode).toBe(302);
+    expect(setHeader).toHaveBeenCalledWith("Location", "https://example.com/avatar.png");
+    expect(end).toHaveBeenCalledWith();
+  });
+
+  it("serves data URL avatar bytes directly (regression #41201)", () => {
+    const b64 = Buffer.from("fake-png-bytes").toString("base64");
+    const dataUrl = `data:image/png;base64,${b64}`;
+    const { res, setHeader, end, handled } = runAvatarRequest({
+      url: "/avatar/main",
+      method: "GET",
+      resolveAvatar: () => ({ kind: "data", url: dataUrl }),
+    });
+    expect(handled).toBe(true);
+    expect(res.statusCode).toBe(200);
+    expect(setHeader).toHaveBeenCalledWith("Content-Type", "image/png");
+    const body = end.mock.calls[0]?.[0] as Buffer | undefined;
+    expect(body).toBeInstanceOf(Buffer);
+    expect(body?.toString()).toBe("fake-png-bytes");
+  });
+
+  it("returns 404 for malformed data URL avatar", () => {
+    const { res, end, handled } = runAvatarRequest({
+      url: "/avatar/main",
+      method: "GET",
+      resolveAvatar: () => ({ kind: "data", url: "data:not-valid" }),
+    });
+    expectNotFoundResponse({ handled, res, end });
   });
 
   it("rejects avatar symlink paths from resolver", async () => {

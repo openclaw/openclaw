@@ -198,6 +198,29 @@ export function handleControlUiAvatarRequest(
   }
 
   const resolved = opts.resolveAvatar(agentId);
+  if (resolved.kind === "remote") {
+    // Redirect the browser to the external avatar URL (#41201).
+    res.statusCode = 302;
+    res.setHeader("Location", resolved.url);
+    res.end();
+    return true;
+  }
+  if (resolved.kind === "data") {
+    // Decode data URL and serve the bytes directly (#41201).
+    const match = resolved.url.match(/^data:([^;]+);base64,(.+)$/);
+    if (match) {
+      const [, mimeType, b64] = match;
+      const buf = Buffer.from(b64, "base64");
+      res.statusCode = 200;
+      res.setHeader("Content-Type", mimeType ?? "application/octet-stream");
+      res.setHeader("Content-Length", String(buf.length));
+      res.setHeader("Cache-Control", "private, max-age=300");
+      res.end(buf);
+    } else {
+      respondControlUiNotFound(res);
+    }
+    return true;
+  }
   if (resolved.kind !== "local") {
     respondControlUiNotFound(res);
     return true;
