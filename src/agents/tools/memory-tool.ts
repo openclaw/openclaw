@@ -1,3 +1,5 @@
+import fs from "node:fs/promises";
+import path from "node:path";
 import { Type } from "@sinclair/typebox";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { MemoryCitationsMode } from "../../config/types.memory.js";
@@ -5,10 +7,12 @@ import { resolveMemoryBackendConfig } from "../../memory/backend-config.js";
 import { getMemorySearchManager } from "../../memory/index.js";
 import type { MemorySearchResult } from "../../memory/types.js";
 import { parseAgentSessionKey } from "../../routing/session-key.js";
-import { resolveSessionAgentId } from "../agent-scope.js";
+import { resolveAgentWorkspaceDir, resolveSessionAgentId } from "../agent-scope.js";
+import { resolveUserTimezone } from "../date-time.js";
 import { resolveMemorySearchConfig } from "../memory-search.js";
+import { optionalStringEnum } from "../schema/typebox.js";
 import type { AnyAgentTool } from "./common.js";
-import { jsonResult, readNumberParam, readStringParam } from "./common.js";
+import { ToolInputError, jsonResult, readNumberParam, readStringParam } from "./common.js";
 
 const MemorySearchSchema = Type.Object({
   query: Type.String(),
@@ -21,6 +25,47 @@ const MemoryGetSchema = Type.Object({
   from: Type.Optional(Type.Number()),
   lines: Type.Optional(Type.Number()),
 });
+
+const MemoryWriteSchema = Type.Object({
+  text: Type.String(),
+  target: optionalStringEnum(["daily", "longterm"]),
+  date: Type.Optional(Type.String()),
+  kind: Type.Optional(Type.String()),
+  source: Type.Optional(Type.String()),
+  confidence: Type.Optional(Type.Number()),
+});
+
+const MemoryUpsertSchema = Type.Object({
+  key: Type.String(),
+  text: Type.String(),
+  target: optionalStringEnum(["daily", "longterm"]),
+  date: Type.Optional(Type.String()),
+  kind: Type.Optional(Type.String()),
+  source: Type.Optional(Type.String()),
+  confidence: Type.Optional(Type.Number()),
+});
+
+const memoryFileLocks = new Map<string, Promise<void>>();
+
+async function withMemoryFileLock<T>(absPath: string, action: () => Promise<T>): Promise<T> {
+  const lockKey = path.resolve(absPath);
+  const previous = memoryFileLocks.get(lockKey) ?? Promise.resolve();
+  let releaseCurrent: (() => void) | undefined;
+  const current = new Promise<void>((resolve) => {
+    releaseCurrent = resolve;
+  });
+  const queued = previous.then(() => current);
+  memoryFileLocks.set(lockKey, queued);
+  try {
+    await previous;
+    return await action();
+  } finally {
+    releaseCurrent?.();
+    if (memoryFileLocks.get(lockKey) === queued) {
+      memoryFileLocks.delete(lockKey);
+    }
+  }
+}
 
 function resolveMemoryToolContext(options: { config?: OpenClawConfig; agentSessionKey?: string }) {
   const cfg = options.config;
@@ -35,6 +80,25 @@ function resolveMemoryToolContext(options: { config?: OpenClawConfig; agentSessi
     return null;
   }
   return { cfg, agentId };
+}
+
+function resolveMemoryWriteToolContext(options: {
+  config?: OpenClawConfig;
+  agentSessionKey?: string;
+}) {
+  const cfg = options.config;
+  if (!cfg) {
+    return null;
+  }
+  const agentId = resolveSessionAgentId({
+    sessionKey: options.agentSessionKey,
+    config: cfg,
+  });
+  return {
+    cfg,
+    agentId,
+    workspaceDir: resolveAgentWorkspaceDir(cfg, agentId),
+  };
 }
 
 export function createMemorySearchTool(options: {
@@ -137,6 +201,316 @@ export function createMemoryGetTool(options: {
       }
     },
   };
+}
+
+export function createMemoryWriteTool(options: {
+  config?: OpenClawConfig;
+  agentSessionKey?: string;
+}): AnyAgentTool | null {
+  const ctx = resolveMemoryWriteToolContext(options);
+  if (!ctx) {
+    return null;
+  }
+  return {
+    label: "Memory Write",
+    name: "memory_write",
+    description:
+      "Append a durable note to MEMORY.md or memory/YYYY-MM-DD.md. Use when the user says to remember something.",
+    parameters: MemoryWriteSchema,
+    execute: async (_toolCallId, params) => {
+      const text = normalizeMemoryText(readStringParam(params, "text", { required: true }));
+      if (!text) {
+        throw new ToolInputError("text is required");
+      }
+      const target = readMemoryTarget(params, "target", "daily");
+      const requestedDate = readStringParam(params, "date");
+      const date = resolveMemoryWriteDate(ctx.cfg, target, requestedDate);
+      const entry = formatMemoryEntry({
+        text,
+        kind: readStringParam(params, "kind"),
+        source: readStringParam(params, "source"),
+        confidence: readNumberParam(params, "confidence"),
+      });
+      const absPath = await resolveMemoryWritePath({
+        workspaceDir: ctx.workspaceDir,
+        target,
+        date,
+      });
+      await withMemoryFileLock(absPath, async () => {
+        await ensureMemoryFile(absPath);
+        const separator = await resolveMemoryAppendSeparator(absPath);
+        await fs.appendFile(absPath, `${separator}${entry}\n`, "utf-8");
+      });
+      return jsonResult({
+        ok: true,
+        target,
+        path: asWorkspaceRelativePath(absPath, ctx.workspaceDir),
+        date: target === "daily" ? date : undefined,
+        appended: entry,
+      });
+    },
+  };
+}
+
+export function createMemoryUpsertTool(options: {
+  config?: OpenClawConfig;
+  agentSessionKey?: string;
+}): AnyAgentTool | null {
+  const ctx = resolveMemoryWriteToolContext(options);
+  if (!ctx) {
+    return null;
+  }
+  return {
+    label: "Memory Upsert",
+    name: "memory_upsert",
+    description:
+      "Upsert a keyed durable note in MEMORY.md or memory/YYYY-MM-DD.md. Reuses key:<id> to update existing memory instead of appending duplicates.",
+    parameters: MemoryUpsertSchema,
+    execute: async (_toolCallId, params) => {
+      const keyRaw = readStringParam(params, "key", { required: true });
+      const key = normalizeMemoryKey(keyRaw);
+      if (!key) {
+        throw new ToolInputError("key is required");
+      }
+      const text = normalizeMemoryText(readStringParam(params, "text", { required: true }));
+      if (!text) {
+        throw new ToolInputError("text is required");
+      }
+      const target = readMemoryTarget(params, "target", "longterm");
+      const requestedDate = readStringParam(params, "date");
+      const date = resolveMemoryWriteDate(ctx.cfg, target, requestedDate);
+      const body = formatMemoryEntry({
+        text,
+        kind: readStringParam(params, "kind"),
+        source: readStringParam(params, "source"),
+        confidence: readNumberParam(params, "confidence"),
+      });
+      const entry = `- [key:${key}] ${body.slice(2)}`;
+      const absPath = await resolveMemoryWritePath({
+        workspaceDir: ctx.workspaceDir,
+        target,
+        date,
+      });
+      const updated = await withMemoryFileLock(absPath, async () => {
+        await ensureMemoryFile(absPath);
+        let current = "";
+        try {
+          current = await fs.readFile(absPath, "utf-8");
+        } catch {
+          current = "";
+        }
+        const lines = current.length > 0 ? current.split(/\r?\n/) : [];
+        while (lines.length > 0 && lines.at(-1) === "") {
+          lines.pop();
+        }
+        const prefix = `- [key:${key}] `;
+        const blocks = groupMemoryEntryBlocks(lines);
+        const existingIndexes = blocks.flatMap((block, index) =>
+          block[0]?.startsWith(prefix) ? [index] : [],
+        );
+        const alreadyExists = existingIndexes.length > 0;
+        const nextBlocks = blocks.filter((block) => !block[0]?.startsWith(prefix));
+        if (alreadyExists) {
+          nextBlocks.splice(
+            Math.min(existingIndexes[0] ?? nextBlocks.length, nextBlocks.length),
+            0,
+            [entry],
+          );
+        } else {
+          nextBlocks.push([entry]);
+        }
+        await fs.writeFile(absPath, `${nextBlocks.flat().join("\n")}\n`, "utf-8");
+        return alreadyExists;
+      });
+      return jsonResult({
+        ok: true,
+        updated,
+        key,
+        target,
+        path: asWorkspaceRelativePath(absPath, ctx.workspaceDir),
+        date: target === "daily" ? date : undefined,
+        value: entry,
+      });
+    },
+  };
+}
+
+function readMemoryTarget(
+  params: Record<string, unknown>,
+  field: string,
+  fallback: "daily" | "longterm",
+): "daily" | "longterm" {
+  const raw = readStringParam(params, field)?.trim().toLowerCase();
+  if (!raw) {
+    return fallback;
+  }
+  if (raw === "daily" || raw === "longterm") {
+    return raw;
+  }
+  throw new ToolInputError(`${field} must be "daily" or "longterm"`);
+}
+
+function normalizeMemoryDate(cfg: OpenClawConfig, raw?: string): string {
+  if (!raw) {
+    return formatDateStampInTimezone(
+      Date.now(),
+      resolveUserTimezone(cfg.agents?.defaults?.userTimezone),
+    );
+  }
+  const trimmed = raw.trim();
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(trimmed)) {
+    throw new ToolInputError(`date must be YYYY-MM-DD`);
+  }
+  return trimmed;
+}
+
+function resolveMemoryWriteDate(
+  cfg: OpenClawConfig,
+  target: "daily" | "longterm",
+  raw?: string,
+): string | undefined {
+  if (target !== "daily") {
+    return undefined;
+  }
+  return normalizeMemoryDate(cfg, raw);
+}
+
+function formatDateStampInTimezone(nowMs: number, timezone: string): string {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: timezone,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(new Date(nowMs));
+  const year = parts.find((part) => part.type === "year")?.value;
+  const month = parts.find((part) => part.type === "month")?.value;
+  const day = parts.find((part) => part.type === "day")?.value;
+  if (year && month && day) {
+    return `${year}-${month}-${day}`;
+  }
+  return new Date(nowMs).toISOString().slice(0, 10);
+}
+
+function normalizeMemoryText(raw: string): string {
+  const normalized = raw
+    .replace(/\s*\n+\s*/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (!normalized) {
+    return "";
+  }
+  return /^\[key:/i.test(normalized) ? `\\${normalized}` : normalized;
+}
+
+function normalizeMemoryKey(raw: string): string {
+  return raw
+    .replace(/\s+/g, "-")
+    .replace(/[^a-zA-Z0-9._:-]/g, "")
+    .trim()
+    .toLowerCase();
+}
+
+function normalizeMemoryMetaValue(raw?: string): string | undefined {
+  if (!raw) {
+    return undefined;
+  }
+  const normalized = raw
+    .replace(/\s*\n+\s*/g, " ")
+    .replace(/[()[\],]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  return normalized || undefined;
+}
+
+function formatMemoryEntry(params: {
+  text: string;
+  kind?: string;
+  source?: string;
+  confidence?: number;
+}): string {
+  const meta: string[] = [];
+  const kind = normalizeMemoryMetaValue(params.kind);
+  if (kind) {
+    meta.push(`kind:${kind}`);
+  }
+  const source = normalizeMemoryMetaValue(params.source);
+  if (source) {
+    meta.push(`source:${source}`);
+  }
+  if (typeof params.confidence === "number" && Number.isFinite(params.confidence)) {
+    const clamped = Math.max(0, Math.min(1, params.confidence));
+    meta.push(`confidence:${clamped.toFixed(2)}`);
+  }
+  const suffix = meta.length > 0 ? ` (${meta.join(", ")})` : "";
+  return `- ${params.text}${suffix}`;
+}
+
+function groupMemoryEntryBlocks(lines: string[]): string[][] {
+  const blocks: string[][] = [];
+  for (const line of lines) {
+    if (line.startsWith("- ") || blocks.length === 0) {
+      blocks.push([line]);
+      continue;
+    }
+    blocks[blocks.length - 1]?.push(line);
+  }
+  return blocks;
+}
+
+async function resolveMemoryWritePath(params: {
+  workspaceDir: string;
+  target: "daily" | "longterm";
+  date?: string;
+}): Promise<string> {
+  if (params.target === "longterm") {
+    return await resolveLongtermMemoryWritePath(params.workspaceDir);
+  }
+  if (!params.date) {
+    throw new ToolInputError("date must be YYYY-MM-DD");
+  }
+  return path.join(params.workspaceDir, "memory", `${params.date}.md`);
+}
+
+async function resolveLongtermMemoryWritePath(workspaceDir: string): Promise<string> {
+  const primary = path.join(workspaceDir, "MEMORY.md");
+  if (await isRegularFile(primary)) {
+    return primary;
+  }
+  const legacy = path.join(workspaceDir, "memory.md");
+  if (await isRegularFile(legacy)) {
+    return legacy;
+  }
+  return primary;
+}
+
+async function isRegularFile(absPath: string): Promise<boolean> {
+  try {
+    return (await fs.lstat(absPath)).isFile();
+  } catch {
+    return false;
+  }
+}
+
+async function ensureMemoryFile(absPath: string) {
+  await fs.mkdir(path.dirname(absPath), { recursive: true });
+  try {
+    await fs.access(absPath);
+  } catch {
+    await fs.writeFile(absPath, "", "utf-8");
+  }
+}
+
+async function resolveMemoryAppendSeparator(absPath: string): Promise<string> {
+  const current = await fs.readFile(absPath, "utf-8");
+  return current.length > 0 && !current.endsWith("\n") ? "\n" : "";
+}
+
+function asWorkspaceRelativePath(absPath: string, workspaceDir: string): string {
+  const rel = path.relative(workspaceDir, absPath).replace(/\\/g, "/");
+  if (!rel || rel.startsWith("..")) {
+    return path.basename(absPath);
+  }
+  return rel;
 }
 
 function resolveMemoryCitationsMode(cfg: OpenClawConfig): MemoryCitationsMode {
