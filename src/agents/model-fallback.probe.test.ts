@@ -1,5 +1,8 @@
+import os from "node:os";
+import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
+import { registerLogTransport, resetLogger, setLoggerOverride } from "../logging/logger.js";
 import type { AuthProfileStore } from "./auth-profiles.js";
 import { makeModelFallbackCfg } from "./test-helpers/model-fallback-config-fixture.js";
 
@@ -28,6 +31,7 @@ const mockedResolveProfilesUnavailableReason = vi.mocked(resolveProfilesUnavaila
 const mockedResolveAuthProfileOrder = vi.mocked(resolveAuthProfileOrder);
 
 const makeCfg = makeModelFallbackCfg;
+let unregisterLogTransport: (() => void) | undefined;
 
 function expectFallbackUsed(
   result: { result: unknown; attempts: Array<{ reason?: string }> },
@@ -149,6 +153,10 @@ describe("runWithModelFallback – probe logic", () => {
 
   afterEach(() => {
     Date.now = realDateNow;
+    unregisterLogTransport?.();
+    unregisterLogTransport = undefined;
+    setLoggerOverride(null);
+    resetLogger();
     vi.restoreAllMocks();
   });
 
@@ -192,6 +200,53 @@ describe("runWithModelFallback – probe logic", () => {
 
     const result = await runPrimaryCandidate(cfg, run);
     expectPrimaryProbeSuccess(result, run, "probed-ok");
+  });
+
+  it("logs candidate_succeeded after a successful primary cooldown probe", async () => {
+    const cfg = makeCfg();
+    const records: Array<Record<string, unknown>> = [];
+    mockedGetSoonestCooldownExpiry.mockReturnValue(NOW + 60 * 1000);
+    setLoggerOverride({
+      level: "trace",
+      consoleLevel: "silent",
+      file: path.join(os.tmpdir(), `openclaw-model-fallback-probe-${Date.now()}.log`),
+    });
+    unregisterLogTransport = registerLogTransport((record) => {
+      records.push(record);
+    });
+
+    const run = vi.fn().mockResolvedValue("probed-ok");
+
+    const result = await runPrimaryCandidate(cfg, run);
+
+    expectPrimaryProbeSuccess(result, run, "probed-ok");
+
+    const decisionPayloads = records
+      .filter(
+        (record) =>
+          record["2"] === "model fallback decision" &&
+          record["1"] &&
+          typeof record["1"] === "object",
+      )
+      .map((record) => record["1"] as Record<string, unknown>);
+
+    expect(decisionPayloads).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          event: "model_fallback_decision",
+          decision: "probe_cooldown_candidate",
+          candidateProvider: "openai",
+          candidateModel: "gpt-4.1-mini",
+          allowTransientCooldownProbe: true,
+        }),
+        expect.objectContaining({
+          event: "model_fallback_decision",
+          decision: "candidate_succeeded",
+          candidateProvider: "openai",
+          candidateModel: "gpt-4.1-mini",
+        }),
+      ]),
+    );
   });
 
   it("probes primary model when cooldown already expired", async () => {

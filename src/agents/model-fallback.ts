@@ -527,6 +527,7 @@ export async function runWithModelFallback<T>(params: {
   for (let i = 0; i < candidates.length; i += 1) {
     const candidate = candidates[i];
     let runOptions: ModelFallbackRunOptions | undefined;
+    let attemptedDuringCooldown = false;
     if (authStore) {
       const profileIds = resolveAuthProfileOrder({
         cfg: params.cfg,
@@ -589,6 +590,7 @@ export async function runWithModelFallback<T>(params: {
         ) {
           runOptions = { allowTransientCooldownProbe: true };
         }
+        attemptedDuringCooldown = true;
         logModelFallbackDecision({
           decision: "probe_cooldown_candidate",
           runId: params.runId,
@@ -615,7 +617,7 @@ export async function runWithModelFallback<T>(params: {
       options: runOptions,
     });
     if ("success" in attemptRun) {
-      if (i > 0 || attempts.length > 0) {
+      if (i > 0 || attempts.length > 0 || attemptedDuringCooldown) {
         logModelFallbackDecision({
           decision: "candidate_succeeded",
           runId: params.runId,
