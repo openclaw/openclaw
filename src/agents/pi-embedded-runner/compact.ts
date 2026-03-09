@@ -114,6 +114,7 @@ export type CompactEmbeddedPiSessionParams = {
   /** Whether the sender is an owner (required for owner-only tools). */
   senderIsOwner?: boolean;
   sessionFile: string;
+  /** Optional caller-observed live prompt tokens used for compaction diagnostics. */
   currentTokenCount?: number;
   workspaceDir: string;
   agentDir?: string;
@@ -151,6 +152,12 @@ function hasRealConversationContent(msg: AgentMessage): boolean {
 
 function createCompactionDiagId(): string {
   return `cmp-${Date.now().toString(36)}-${generateSecureToken(4)}`;
+}
+
+function normalizeObservedTokenCount(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) && value > 0
+    ? Math.floor(value)
+    : undefined;
 }
 
 function getMessageTextChars(msg: AgentMessage): number {
@@ -705,6 +712,7 @@ export async function compactEmbeddedPiSessionDirect(
         const missingSessionKey = !params.sessionKey || !params.sessionKey.trim();
         const hookSessionKey = params.sessionKey?.trim() || params.sessionId;
         const hookRunner = getGlobalHookRunner();
+        const observedTokenCount = normalizeObservedTokenCount(params.currentTokenCount);
         const messageCountOriginal = originalMessages.length;
         let tokenCountOriginal: number | undefined;
         try {
@@ -716,14 +724,16 @@ export async function compactEmbeddedPiSessionDirect(
           tokenCountOriginal = undefined;
         }
         const messageCountBefore = session.messages.length;
-        let tokenCountBefore: number | undefined;
-        try {
-          tokenCountBefore = 0;
-          for (const message of session.messages) {
-            tokenCountBefore += estimateTokens(message);
+        let tokenCountBefore = observedTokenCount;
+        if (tokenCountBefore === undefined) {
+          try {
+            tokenCountBefore = 0;
+            for (const message of session.messages) {
+              tokenCountBefore += estimateTokens(message);
+            }
+          } catch {
+            tokenCountBefore = undefined;
           }
-        } catch {
-          tokenCountBefore = undefined;
         }
         // TODO(#7175): Consider exposing full message snapshots or pre-compaction injection
         // hooks; current events only report counts/metadata.
@@ -806,7 +816,7 @@ export async function compactEmbeddedPiSessionDirect(
             tokensAfter += estimateTokens(message);
           }
           // Sanity check: tokensAfter should be less than tokensBefore
-          if (tokensAfter > result.tokensBefore) {
+          if (tokensAfter > (observedTokenCount ?? result.tokensBefore)) {
             tokensAfter = undefined; // Don't trust the estimate
           }
         } catch {
@@ -880,7 +890,7 @@ export async function compactEmbeddedPiSessionDirect(
           result: {
             summary: result.summary,
             firstKeptEntryId: result.firstKeptEntryId,
-            tokensBefore: result.tokensBefore,
+            tokensBefore: observedTokenCount ?? result.tokensBefore,
             tokensAfter,
             details: result.details,
           },
@@ -981,6 +991,7 @@ export async function compactEmbeddedPiSession(
           sessionId: params.sessionId,
           sessionFile: params.sessionFile,
           tokenBudget: ceCtxInfo.tokens,
+          currentTokenCount: params.currentTokenCount,
           customInstructions: params.customInstructions,
           force: params.trigger === "manual",
           runtimeContext: params as Record<string, unknown>,
