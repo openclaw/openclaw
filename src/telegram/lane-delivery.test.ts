@@ -362,6 +362,102 @@ describe("createLaneTextDeliverer", () => {
     expect(harness.markDelivered).not.toHaveBeenCalled();
   });
 
+  // --- Orphaned preview cleanup after fallback send ---
+
+  it("deletes orphaned preview after successful fallback final send", async () => {
+    // When the final delivery has media, preview edit is skipped and fallback
+    // sendPayload runs.  The orphaned preview message should be deleted after
+    // a successful send to prevent the user from seeing duplicates.
+    const harness = createHarness({ answerMessageId: 555 });
+
+    const result = await harness.deliverLaneText({
+      laneName: "answer",
+      text: "Final with image",
+      payload: { text: "Final with image", mediaUrl: "file:///tmp/photo.png" },
+      infoKind: "final",
+    });
+
+    expect(result).toBe("sent");
+    expect(harness.sendPayload).toHaveBeenCalledWith(
+      expect.objectContaining({ text: "Final with image", mediaUrl: "file:///tmp/photo.png" }),
+    );
+    expect(harness.deletePreviewMessage).toHaveBeenCalledWith(555);
+  });
+
+  it("does not delete orphaned preview when fallback send fails", async () => {
+    // When the send fails, the preview is kept so the user still sees
+    // *something* rather than a blank conversation.
+    const harness = createHarness({ answerMessageId: 555 });
+    harness.sendPayload.mockResolvedValue(false);
+
+    const result = await harness.deliverLaneText({
+      laneName: "answer",
+      text: "Final with image",
+      payload: { text: "Final with image", mediaUrl: "file:///tmp/photo.png" },
+      infoKind: "final",
+    });
+
+    expect(result).toBe("skipped");
+    expect(harness.sendPayload).toHaveBeenCalledTimes(1);
+    expect(harness.deletePreviewMessage).not.toHaveBeenCalled();
+  });
+
+  it("does not delete orphaned preview when no preview message exists", async () => {
+    // No preview was ever created (no messageId), so nothing to clean up.
+    const harness = createHarness();
+
+    const result = await harness.deliverLaneText({
+      laneName: "answer",
+      text: "Final with image",
+      payload: { text: "Final with image", mediaUrl: "file:///tmp/photo.png" },
+      infoKind: "final",
+    });
+
+    expect(result).toBe("sent");
+    expect(harness.sendPayload).toHaveBeenCalledTimes(1);
+    expect(harness.deletePreviewMessage).not.toHaveBeenCalled();
+  });
+
+  it("logs error but does not throw when orphaned preview cleanup fails", async () => {
+    // If deletePreviewMessage fails (e.g. message already deleted, network
+    // error), the error should be logged but not propagate — the fallback
+    // send already succeeded and the delivery result should remain "sent".
+    const harness = createHarness({ answerMessageId: 555 });
+    harness.deletePreviewMessage.mockRejectedValue(new Error("404: message not found"));
+
+    const result = await harness.deliverLaneText({
+      laneName: "answer",
+      text: "Final with image",
+      payload: { text: "Final with image", mediaUrl: "file:///tmp/photo.png" },
+      infoKind: "final",
+    });
+
+    expect(result).toBe("sent");
+    expect(harness.deletePreviewMessage).toHaveBeenCalledWith(555);
+    expect(harness.log).toHaveBeenCalledWith(
+      expect.stringContaining("orphaned preview cleanup failed"),
+    );
+  });
+
+  it("deletes orphaned preview created by stop() during fallback", async () => {
+    // Edge case: preview didn't exist before stop(), but stop() creates one
+    // via its final flush.  The fallback send should still clean it up.
+    const harness = createHarness({ answerMessageIdAfterStop: 888 });
+
+    const result = await harness.deliverLaneText({
+      laneName: "answer",
+      text: "Final with image",
+      payload: { text: "Final with image", mediaUrl: "file:///tmp/photo.png" },
+      infoKind: "final",
+    });
+
+    expect(result).toBe("sent");
+    expect(harness.sendPayload).toHaveBeenCalledTimes(1);
+    expect(harness.deletePreviewMessage).toHaveBeenCalledWith(888);
+  });
+
+  // --- Consumed boundary preview cleanup (pre-existing test) ---
+
   it("deletes consumed boundary previews after fallback final send", async () => {
     const harness = createHarness();
     harness.archivedAnswerPreviews.push({
