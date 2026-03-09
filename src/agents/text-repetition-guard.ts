@@ -70,6 +70,10 @@ function resolveConfig(partial?: TextRepetitionGuardConfig): ResolvedTextRepetit
   );
   merged.ngramSize = Math.max(1, merged.ngramSize);
   merged.checkIntervalChars = Math.max(1, merged.checkIntervalChars);
+  merged.windowSize = Math.max(100, merged.windowSize);
+  merged.maxNgramRepetitions = Math.max(1, merged.maxNgramRepetitions);
+  merged.maxIdenticalLines = Math.max(1, merged.maxIdenticalLines);
+  merged.minCycleRepeats = Math.max(2, merged.minCycleRepeats);
   return merged;
 }
 
@@ -174,6 +178,9 @@ export function detectTextRepetition(
       for (let i = tail.length - pLen; i >= 0; i -= pLen) {
         if (tail.slice(i, i + pLen) === pat) {
           repeats++;
+          if (repeats >= cfg.minCycleRepeats) {
+            break;
+          }
         } else {
           break;
         }
@@ -195,7 +202,9 @@ export function detectTextRepetition(
   // --- Strategy 4: Line-group cycle ---
   {
     const nonEmpty = window.split("\n").filter((l) => l.trim().length > 0);
-    if (nonEmpty.length >= 12) {
+    // Minimum lines needed: smallest group size (2) * minCycleRepeats
+    const minLinesNeeded = 2 * cfg.minCycleRepeats;
+    if (nonEmpty.length >= minLinesNeeded) {
       for (let groupSize = 2; groupSize <= 5; groupSize++) {
         const lastGroup = nonEmpty.slice(-groupSize);
         let groupRepeats = 0;
