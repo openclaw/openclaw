@@ -11,7 +11,7 @@
  * @date 2026-03-09
  */
 
-import type { CircuitBreakerState } from "./types";
+import type { CircuitBreakerState } from "./types.js";
 
 /**
  * Circuit Breaker Configuration

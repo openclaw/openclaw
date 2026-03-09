@@ -6,7 +6,7 @@
  * @date 2026-03-09
  */
 
-import type { MemorySearchManager, MemorySearchResult } from "../../types";
+import type { MemorySearchManager, MemorySearchResult } from "../types.js";
 
 /**
  * Provider Priority

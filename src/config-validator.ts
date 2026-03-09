@@ -1,7 +1,7 @@
 /**
- * Chain Memory Backend - 配置验证器
+ * Chain Memory Backend - Configuration Validator
  *
- * 使用 Zod schema 校验器自动验证配置的正确性
+ * Use Zod schema validator to automatically validate configuration
  *
  * @module config-validator
  * @author Tutu
@@ -11,14 +11,14 @@
 import { z } from "zod";
 
 /**
- * Priority 类型定义
+ * Priority type definition
  */
 const PrioritySchema = z.enum(["primary", "secondary", "fallback"], {
   message: "priority must be one of: primary, secondary, fallback",
 });
 
 /**
- * Backend 类型定义（不能是 chain）
+ * Backend type definition (cannot be chain)
  */
 const BackendSchema = z.enum(["builtin", "qmd"], {
   message: "backend must be one of: builtin, qmd",
@@ -182,7 +182,7 @@ const ChainConfigSchema = z.object({
  * 验证结果类型
  */
 export interface ValidationResult {
-  providers: unknown[];
+  providers: z.infer<typeof ProviderSchema>[];
   global: {
     defaultTimeout: number;
     enableAsyncWrite: boolean;

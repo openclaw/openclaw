@@ -8,17 +8,23 @@
  * @date 2026-03-09
  */
 
-import { validateChainConfig } from "../../config-validator";
-import type { MemorySearchManager, MemorySearchResult } from "../../types";
-import { AsyncWriteQueue } from "./async-queue";
-import { HealthMonitor } from "./health-monitor";
+import { validateChainConfig } from "../../config-validator.js";
+import type {
+  MemorySearchManager,
+  MemorySearchResult,
+  MemoryEmbeddingProbeResult,
+  MemoryProviderStatus,
+} from "../types.js";
+import { AsyncWriteQueue } from "./async-queue.js";
+import { HealthMonitor } from "./health-monitor.js";
 import type {
   ChainConfig,
   ProviderWrapper,
   ChainManagerStatus,
   ChainManagerOptions,
-} from "./types";
-import { ProviderWrapper as ProviderWrapperClass } from "./wrapper";
+  AsyncWriteTask,
+} from "./types.js";
+import { ProviderWrapper as ProviderWrapperClass } from "./wrapper.js";
 
 /**
  * Chain Memory Manager
@@ -61,7 +67,7 @@ export class ChainMemoryManager implements MemorySearchManager {
     // 1. Extend the interface with write methods
     // 2. Use sync() with appropriate parameters
     // 3. Implement a different approach for dual-write
-    this.asyncQueue.setProcessor(async (task) => {
+    this.asyncQueue.setProcessor(async (task: AsyncWriteTask) => {
       const provider = this.providers.get(task.providerName);
       if (!provider) {
         throw new Error(`Provider ${task.providerName} not found`);
@@ -69,7 +75,7 @@ export class ChainMemoryManager implements MemorySearchManager {
 
       // TODO: Implement proper write operations
       // Currently disabled to prevent runtime errors
-      log.warn(
+      console.warn(
         `Async write operation '${task.operation}' for provider '${task.providerName}' is not yet implemented. ` +
           `Task ID: ${task.id}`,
       );
@@ -191,10 +197,10 @@ export class ChainMemoryManager implements MemorySearchManager {
     from?: number;
     lines?: number;
   }): Promise<{ path: string; text: string }> {
-    // Try primary
+    // Try primary (through wrapper for consistency)
     if (this.primary && this.primary.isAvailable()) {
       try {
-        return await this.primary.manager.readFile(options);
+        return await this.primary.readFile(options);
       } catch (error) {
         console.error(`Primary readFile failed:`, error);
       }
@@ -203,7 +209,7 @@ export class ChainMemoryManager implements MemorySearchManager {
     // Try fallback
     if (this.config.global.enableFallback && this.fallback && this.fallback.isAvailable()) {
       try {
-        return await this.fallback.manager.readFile(options);
+        return await this.fallback.readFile(options);
       } catch (error) {
         console.error(`Fallback readFile failed:`, error);
       }
@@ -215,13 +221,7 @@ export class ChainMemoryManager implements MemorySearchManager {
   /**
    * Get status
    */
-  status(): {
-    backend: string;
-    provider: string;
-    model: string;
-    fallback?: string;
-    custom?: unknown;
-  } {
+  status(): MemoryProviderStatus {
     const providerStats = Array.from(this.providers.values()).map((p) => p.getStats());
 
     const queueStatus = this.asyncQueue.getStatus();
@@ -230,7 +230,9 @@ export class ChainMemoryManager implements MemorySearchManager {
       backend: "chain",
       provider: "chain",
       model: "multi-provider",
-      fallback: this.fallback?.config.name,
+      fallback: this.fallback?.config.name
+        ? { from: this.fallback.config.name, reason: "Configured as fallback provider" }
+        : undefined,
       custom: {
         providers: providerStats,
         queue: queueStatus,
@@ -245,7 +247,7 @@ export class ChainMemoryManager implements MemorySearchManager {
    */
   async probeEmbeddingAvailability(): Promise<MemoryEmbeddingProbeResult> {
     if (!this.primary) {
-      return { available: false, reason: "No primary provider configured" };
+      return { ok: false, error: "No primary provider configured" };
     }
     return this.primary.probeEmbeddingAvailability();
   }
@@ -296,7 +298,7 @@ export class ChainMemoryManager implements MemorySearchManager {
           await provider.close();
         }
       } catch (error) {
-        log.error(`Failed to close provider ${name}:`, error);
+        console.error(`Failed to close provider ${name}:`, error);
       }
     }
   }

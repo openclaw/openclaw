@@ -8,14 +8,14 @@
  * @date 2026-03-09
  */
 
-import type { MemorySearchManager, MemorySearchResult } from "../../types";
-import { CircuitBreaker } from "./circuit-breaker";
+import type { MemorySearchManager, MemorySearchResult } from "../types.js";
+import { CircuitBreaker } from "./circuit-breaker.js";
 import type {
   ProviderConfig,
   ProviderStats,
   ProviderWrapper as IProviderWrapper,
   CircuitBreakerState,
-} from "./types";
+} from "./types.js";
 
 /**
  * Provider Wrapper Implementation
@@ -66,10 +66,49 @@ export class ProviderWrapper implements IProviderWrapper {
   /**
    * Execute search
    */
-  async search(query: string, options?: unknown): Promise<MemorySearchResult[]> {
+  async search(
+    query: string,
+    options?: { maxResults?: number; minScore?: number; sessionKey?: string },
+  ): Promise<MemorySearchResult[]> {
     const timeout = this.config.timeout?.search ?? 5000;
 
     return this.executeWithTimeout(() => this.manager.search(query, options), timeout, "search");
+  }
+
+  /**
+   * Read file through wrapper (with timeout and circuit breaker)
+   */
+  async readFile(options: {
+    relPath: string;
+    from?: number;
+    lines?: number;
+  }): Promise<{ path: string; text: string }> {
+    const timeout = this.config.timeout?.search ?? 5000;
+
+    return this.executeWithTimeout(() => this.manager.readFile(options), timeout, "readFile");
+  }
+
+  /**
+   * Probe embedding availability
+   */
+  async probeEmbeddingAvailability(): Promise<{ ok: boolean; error?: string }> {
+    return this.manager.probeEmbeddingAvailability();
+  }
+
+  /**
+   * Probe vector availability
+   */
+  async probeVectorAvailability(): Promise<boolean> {
+    return this.manager.probeVectorAvailability();
+  }
+
+  /**
+   * Close provider
+   */
+  async close(): Promise<void> {
+    if (this.manager.close) {
+      await this.manager.close();
+    }
   }
 
   /**
@@ -81,7 +120,7 @@ export class ProviderWrapper implements IProviderWrapper {
       return false;
     }
 
-    // CheckCircuit Breaker
+    // Check Circuit Breaker
     return !this.circuitBreakerInstance.isOpen();
   }
 
@@ -117,7 +156,7 @@ export class ProviderWrapper implements IProviderWrapper {
     timeoutMs: number,
     operationName: string,
   ): Promise<T> {
-    // CheckCircuit Breaker
+    // Check Circuit Breaker
     if (this.circuitBreakerInstance.isOpen()) {
       throw new Error(`Circuit breaker is OPEN for ${this.config.name}`);
     }
@@ -129,16 +168,23 @@ export class ProviderWrapper implements IProviderWrapper {
     let lastError: Error | undefined;
 
     for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+      let timeoutId: NodeJS.Timeout | undefined;
+
       try {
         // Create timeout promise
         const timeoutPromise = new Promise<never>((_, reject) => {
-          setTimeout(() => {
+          timeoutId = setTimeout(() => {
             reject(new Error(`${operationName} timeout after ${timeoutMs}ms`));
           }, timeoutMs);
         });
 
         // Execute operation
         const result = await Promise.race([operation(), timeoutPromise]);
+
+        // Clear timeout on success to avoid memory leak
+        if (timeoutId) {
+          clearTimeout(timeoutId);
+        }
 
         // Success
         const responseTime = Date.now() - startTime;
@@ -147,16 +193,21 @@ export class ProviderWrapper implements IProviderWrapper {
 
         return result;
       } catch (error) {
+        // Clear timeout on failure as well
+        if (timeoutId) {
+          clearTimeout(timeoutId);
+        }
+
         lastError = error instanceof Error ? error : new Error(String(error));
 
-        // If not last attempt, wait before retryRetry
+        // If not last attempt, wait before retry
         if (attempt < maxAttempts) {
           await this.sleep(backoffMs * attempt);
         }
       }
     }
 
-    // All attempts failedFailure
+    // All attempts failed
     this.recordFailure();
     throw lastError || new Error(`${operationName} failed after ${maxAttempts} attempts`);
   }
@@ -202,7 +253,7 @@ export class ProviderWrapper implements IProviderWrapper {
   }
 
   /**
-   * ResetCircuit Breaker
+   * Reset Circuit Breaker
    */
   resetCircuitBreaker(): void {
     this.circuitBreakerInstance.reset();

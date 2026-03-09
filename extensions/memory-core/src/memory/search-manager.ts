@@ -48,11 +48,19 @@ export async function getMemorySearchManager(params: {
   purpose?: "default" | "status";
 }): Promise<MemorySearchManagerResult> {
   const resolved = resolveMemoryBackendConfig(params);
-  if (resolved.backend === "chain") {
+  if (resolved.backend === "chain" && resolved.chain) {
     const { ChainMemoryManager } = await import("./chain/manager.js");
     const manager = new ChainMemoryManager({
-      config: resolved.chain,
-      getBackendManager: async (backend: string, _config?: unknown) => {
+      config: {
+        providers: resolved.chain.providers,
+        global: resolved.chain.global ?? {
+          defaultTimeout: 5000,
+          enableAsyncWrite: true,
+          enableFallback: true,
+          healthCheckInterval: 30000,
+        },
+      },
+      getBackendManager: (backend: string, _config?: unknown) => {
         // TODO: Implement backend manager factory
         throw new Error(`Backend ${backend} not implemented yet`);
       },
