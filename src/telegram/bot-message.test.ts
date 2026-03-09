@@ -48,12 +48,13 @@ describe("telegram bot message processor", () => {
       text?: string;
       chatType?: "private" | "group" | "supergroup";
       fromId?: number;
+      chatId?: number;
     } = {},
   ) {
     await processMessage(
       {
         message: {
-          chat: { id: 123, type: opts.chatType ?? "private", title: "chat" },
+          chat: { id: opts.chatId ?? 123, type: opts.chatType ?? "private", title: "chat" },
           from: opts.fromId != null ? { id: opts.fromId } : undefined,
           message_id: opts.messageId ?? 456,
           text: opts.text,
@@ -223,6 +224,42 @@ describe("telegram bot message processor", () => {
 
     const third = dispatchTelegramMessage.mock.calls[2]?.[0] as { replyToMode?: string };
     expect(third.replyToMode).toBe("first");
+    vi.useRealTimers();
+  });
+
+  it("does not evict another chat using a larger learned ttl", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-03-06T00:00:00.000Z"));
+    buildTelegramMessageContext.mockResolvedValue({ route: { sessionKey: "agent:main:main" } });
+
+    const processMessage = createTelegramMessageProcessor({
+      ...baseDeps,
+      telegramCfg: {
+        replyAdaptive: {
+          learning: {
+            enabled: true,
+            shortMessageWeight: 0,
+            baseMinMs: 10_000,
+            baseMaxMs: 80_000,
+            denseMultiplier: 1,
+            veryDenseMultiplier: 1,
+          },
+        },
+      },
+    } as unknown as Parameters<typeof createTelegramMessageProcessor>[0]);
+
+    await processSampleMessage(processMessage, { messageId: 500, text: "a", chatId: 1 });
+    vi.setSystemTime(new Date("2026-03-06T00:00:40.000Z"));
+    await processSampleMessage(processMessage, { messageId: 501, text: "a", chatId: 1 });
+
+    vi.setSystemTime(new Date("2026-03-06T00:00:41.000Z"));
+    await processSampleMessage(processMessage, { messageId: 600, text: "x", chatId: 2 });
+
+    vi.setSystemTime(new Date("2026-03-06T00:00:52.000Z"));
+    await processSampleMessage(processMessage, { messageId: 502, text: "a", chatId: 1 });
+
+    const fourth = dispatchTelegramMessage.mock.calls[3]?.[0] as { replyToMode?: string };
+    expect(fourth.replyToMode).toBe("first");
     vi.useRealTimers();
   });
 

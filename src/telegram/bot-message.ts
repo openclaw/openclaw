@@ -68,6 +68,7 @@ type ReplyBurstState = {
   recentShortMessageAt: number[];
   emaGapMs: number;
   emaShortRatio: number;
+  ttlMs: number;
 };
 
 function clamp(value: number, min: number, max: number): number {
@@ -116,10 +117,9 @@ function resolveReplyBurstAdaptiveConfig(
 function sweepExpiredReplyBurstState(params: {
   now: number;
   burstState: Map<string, ReplyBurstState>;
-  ttlMs: number;
 }) {
   for (const [key, state] of params.burstState) {
-    if (params.now - state.lastInboundAt > params.ttlMs) {
+    if (params.now - state.lastInboundAt > state.ttlMs) {
       params.burstState.delete(key);
     }
   }
@@ -219,11 +219,11 @@ function resolveAdaptiveReplyToMode(params: {
     recentShortMessageAt,
     emaGapMs,
     emaShortRatio,
+    ttlMs: Math.max(veryDenseWindowMs, params.adaptiveConfig.veryDenseWindowMs),
   });
   sweepExpiredReplyBurstState({
     now,
     burstState: params.burstState,
-    ttlMs: Math.max(veryDenseWindowMs, params.adaptiveConfig.veryDenseWindowMs),
   });
   return streak >= 2 ? params.configuredMode : "off";
 }
