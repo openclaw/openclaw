@@ -94,6 +94,7 @@ export type RegisterTelegramHandlerParams = {
   bot: Bot;
   mediaMaxBytes: number;
   opts: TelegramBotOptions;
+  telegramFetchImpl?: typeof fetch;
   runtime: RuntimeEnv;
   telegramCfg: TelegramAccountConfig;
   allowFrom?: Array<string | number>;
