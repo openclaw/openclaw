@@ -240,7 +240,7 @@ async function downloadGraphHostedContent(params: {
     try {
       const saved = await getMSTeamsRuntime().channel.media.saveMediaBuffer(
         buffer,
-        mime ?? itemContentType ?? undefined,
+        mime ?? itemContentType,
         "inbound",
         params.maxBytes,
       );
