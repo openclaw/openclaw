@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createFixtureSuite } from "../test-utils/fixture-suite.js";
 import { createTempHomeEnv, type TempHomeEnv } from "../test-utils/temp-home.js";
@@ -174,6 +175,31 @@ describe("buildWorkspaceSkillsPrompt", () => {
     expect(prompt).toContain("peekaboo");
     expect(prompt).toContain("Capture UI");
     expect(prompt).toContain(path.join(bundledSkillDir, "SKILL.md"));
+  });
+
+  it("keeps bundled coding-agent scoped to explicit external delegation", async () => {
+    const workspaceDir = await makeWorkspace();
+    const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
+    const codingAgentSkillPath = path.join(repoRoot, "skills", "coding-agent", "SKILL.md");
+    const entries = loadWorkspaceSkillEntries(workspaceDir, {
+      managedSkillsDir: path.join(workspaceDir, ".managed"),
+      bundledSkillsDir: path.join(repoRoot, "skills"),
+    });
+    const content = await fs.readFile(codingAgentSkillPath, "utf-8");
+
+    const codingAgent = entries.find((entry) => entry.skill.name === "coding-agent");
+
+    expect(codingAgent).toBeDefined();
+    expect(codingAgent?.invocation?.disableModelInvocation).toBe(false);
+    expect(content).toContain(
+      "description: 'Use only when you explicitly need to hand work to an external Codex, Claude Code, Pi, or OpenCode process.",
+    );
+    expect(content).toContain(
+      "After the external coding agent is actually running, send 1 short kickoff message",
+    );
+    expect(content).toContain(
+      "If task tools are available in the current session, call `task_start` before that kickoff update.",
+    );
   });
 
   it("loads extra skill folders from config (lowest precedence)", async () => {

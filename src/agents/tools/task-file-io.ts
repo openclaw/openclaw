@@ -165,6 +165,10 @@ export function formatTaskFileMd(task: TaskFile): string {
   if (task.previousWorkSessionId) {
     lines.push(`- **Previous Work Session:** ${task.previousWorkSessionId}`);
   }
+  // These metadata labels are also used as a lightweight compatibility layer
+  // by task-enforcer recovery. If they change, update the markdown readers in
+  // parseTaskFileMd() and task-enforcer together or continuation sessions will
+  // stop recognizing the active task after restart/session handoff.
   if (task.createdBySessionKey) {
     lines.push(`- **Created By Session:** ${task.createdBySessionKey}`);
   }
@@ -178,6 +182,10 @@ export function formatTaskFileMd(task: TaskFile): string {
     lines.push("## Context", task.context, "");
   }
 
+  // Keep the section title and checkbox line format stable. Runtime checks use
+  // the on-disk markdown to answer "does this task already have steps?" even
+  // before the full parser runs, so cosmetic format changes here can break Task
+  // Hub enforcement during merges or partial cherry-picks.
   if (task.steps && task.steps.length > 0) {
     lines.push("## Steps");
     const sortedSteps = [...task.steps].toSorted((a, b) => a.order - b.order);
@@ -863,6 +871,10 @@ export async function updateCurrentTaskPointer(
     return;
   }
 
+  // The **Focus:** line is intentionally machine-readable. task-enforcer uses
+  // it as the tie-breaker when a logical task continues in a fresh session
+  // (for example Discord -> main), so changing this layout requires matching
+  // updates in readCurrentTaskId() and parseCurrentTaskId().
   const content = [
     "# Current Task",
     "",

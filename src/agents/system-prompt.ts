@@ -17,11 +17,28 @@ import { sanitizeForPromptLiteral } from "./sanitize-for-prompt.js";
 export type PromptMode = "full" | "minimal" | "none";
 type OwnerIdDisplay = "raw" | "hash";
 
-function buildSkillsSection(params: { skillsPrompt?: string; readToolName: string }) {
+function buildSkillsSection(params: {
+  skillsPrompt?: string;
+  readToolName: string;
+  taskStartToolName?: string;
+}) {
   const trimmed = params.skillsPrompt?.trim();
   if (!trimmed) {
     return [];
   }
+  const taskStartBeforeSkillGuidance = params.taskStartToolName
+    ? `- If the user has already asked you to begin meaningful work, call \`${params.taskStartToolName}\` before reading any SKILL.md or sending a kickoff update.`
+    : "";
+  const taskStartStatusGuidance = params.taskStartToolName
+    ? `- Do not say you started, are starting, or have delegated meaningful work based only on reading a skill. For tracked work, call \`${params.taskStartToolName}\` before any "started/in progress" status reply.`
+    : "- Do not say you started, are starting, or have delegated meaningful work based only on reading a skill.";
+  const taskStartPlanningGuidance = params.taskStartToolName
+    ? `- For tracked work, mark truly tiny one-off tasks with \`${params.taskStartToolName}(simple: true)\`. Otherwise include \`steps: [...]\` in \`${params.taskStartToolName}\` before any kickoff/progress reply so Task Hub can show the breakdown immediately.`
+    : "";
+  // Keep this narrative guidance synchronized with task-crud/task-enforcer.
+  // If prompt wording drifts from runtime enforcement, merges tend to recreate
+  // the same loophole in a different form: the model follows stale guidance
+  // while hooks expect a newer task contract.
   return [
     "## Skills (mandatory)",
     "Before replying: scan <available_skills> <description> entries.",
@@ -29,6 +46,11 @@ function buildSkillsSection(params: { skillsPrompt?: string; readToolName: strin
     "- If multiple could apply: choose the most specific one, then read/follow it.",
     "- If none clearly apply: do not read any SKILL.md.",
     "Constraints: never read more than one skill up front; only read after selecting.",
+    "- Reading a SKILL.md is preparation only; it does not count as starting work or delegation.",
+    "- For ordinary work in the current session, use this session's own tools. Only choose delegation skills when the user explicitly asks for that external agent/runtime or the task already requires external delegation.",
+    taskStartBeforeSkillGuidance,
+    taskStartStatusGuidance,
+    taskStartPlanningGuidance,
     "- When a skill drives external API writes, assume rate limits: prefer fewer larger writes, avoid tight one-item loops, serialize bursts when possible, and respect 429/Retry-After.",
     trimmed,
     "",
@@ -401,6 +423,7 @@ export function buildAgentSystemPrompt(params: {
   const skillsSection = buildSkillsSection({
     skillsPrompt,
     readToolName,
+    taskStartToolName: availableTools.has("task_start") ? resolveToolName("task_start") : undefined,
   });
   const memorySection = buildMemorySection({
     isMinimal,

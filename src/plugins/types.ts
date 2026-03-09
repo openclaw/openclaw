@@ -594,6 +594,13 @@ export type PluginHookMessageSentEvent = {
 export type PluginHookToolContext = {
   agentId?: string;
   sessionKey?: string;
+  /**
+   * Runtime-resolved agent workspace for this tool invocation.
+   * Prefer this over recomputing from config inside hooks: continuation,
+   * compaction, and session-specific runners can legitimately execute against
+   * a different workspace than a naive "current default agent" lookup.
+   */
+  workspaceDir?: string;
   /** Ephemeral session UUID — regenerated on /new and /reset. */
   sessionId?: string;
   /** Stable run identifier for this agent invocation. */

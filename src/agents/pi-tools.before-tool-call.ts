@@ -9,6 +9,13 @@ import type { AnyAgentTool } from "./tools/common.js";
 export type HookContext = {
   agentId?: string;
   sessionKey?: string;
+  /**
+   * Forward the exact workspace selected by the tool runtime.
+   * Hooks such as task-enforcer must inspect the same task directory that
+   * task_start/task_update will write to, otherwise merges/restarts can
+   * reintroduce "active task not found" drift.
+   */
+  workspaceDir?: string;
   /** Ephemeral session UUID — regenerated on /new and /reset. */
   sessionId?: string;
   runId?: string;
@@ -158,6 +165,7 @@ export async function runBeforeToolCallHook(args: {
       toolName,
       ...(args.ctx?.agentId ? { agentId: args.ctx.agentId } : {}),
       ...(args.ctx?.sessionKey ? { sessionKey: args.ctx.sessionKey } : {}),
+      ...(args.ctx?.workspaceDir ? { workspaceDir: args.ctx.workspaceDir } : {}),
       ...(args.ctx?.sessionId ? { sessionId: args.ctx.sessionId } : {}),
       ...(args.ctx?.runId ? { runId: args.ctx.runId } : {}),
       ...(args.toolCallId ? { toolCallId: args.toolCallId } : {}),

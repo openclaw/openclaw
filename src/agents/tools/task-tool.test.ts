@@ -71,7 +71,10 @@ describe("task-tool", () => {
 
     it("creates task with default priority", async () => {
       const tool = createTaskStartTool({ config: mockConfig });
-      const result = await tool!.execute("call-1", { description: "Test task" });
+      const result = await tool!.execute("call-1", {
+        description: "Test task",
+        simple: true,
+      });
 
       expect(fs.mkdir).toHaveBeenCalled();
       expect(fs.writeFile).toHaveBeenCalled();
@@ -87,6 +90,7 @@ describe("task-tool", () => {
       const result = await tool!.execute("call-1", {
         description: "Urgent task",
         priority: "urgent",
+        simple: true,
       });
 
       const parsed = result.details as Record<string, unknown>;
@@ -98,6 +102,7 @@ describe("task-tool", () => {
       await tool!.execute("call-1", {
         description: "Task with context",
         context: "User requested via Discord",
+        simple: true,
       });
 
       const writeCall = vi.mocked(fs.writeFile).mock.calls[0];
@@ -121,6 +126,18 @@ describe("task-tool", () => {
       const content = writeCall[1] as string;
       expect(content).toContain("**Simple:** true");
       expect(content).not.toContain("## Steps");
+    });
+
+    it("rejects non-simple task_start calls that omit steps", async () => {
+      const tool = createTaskStartTool({ config: mockConfig });
+      const result = await tool!.execute("call-1", {
+        description: "Resume PR #35 contract alignment and remaining follow-up work",
+      });
+
+      const parsed = result.details as Record<string, unknown>;
+      expect(parsed.success).toBe(false);
+      expect(parsed.error).toContain("STEP PLANNING REQUIRED");
+      expect(fs.writeFile).not.toHaveBeenCalled();
     });
 
     it("creates task with steps, first step auto in_progress", async () => {
@@ -502,6 +519,7 @@ Test task
         description: "Test task description",
         context: "Test context",
         priority: "high",
+        simple: true,
       });
 
       const writeCall = vi
@@ -617,6 +635,7 @@ High priority task
       const result = await tool!.execute("call-1", {
         description: "Task needing approval",
         requires_approval: true,
+        simple: true,
       });
 
       const parsed = result.details as Record<string, unknown>;
@@ -638,6 +657,7 @@ High priority task
       const result = await tool!.execute("call-1", {
         description: "Regular task",
         requires_approval: false,
+        simple: true,
       });
 
       const parsed = result.details as Record<string, unknown>;

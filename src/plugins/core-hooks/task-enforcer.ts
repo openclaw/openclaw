@@ -31,6 +31,12 @@ let enforcerCleanupTimer: ReturnType<typeof setInterval> | null = null;
 const activeTaskCache = new Map<string, { result: boolean; cachedAt: number }>();
 const CACHE_TTL_MS = 30_000; // 30 seconds
 
+type ResolvedActiveTask = {
+  taskId: string;
+  simple: boolean;
+  hasSteps: boolean;
+};
+
 function cleanupStaleSessions(): void {
   const now = Date.now();
   for (const [key, timestamp] of taskStartedSessions) {
@@ -197,6 +203,105 @@ async function hasActiveTaskFiles(
   }
 }
 
+function parseCurrentTaskId(content: string): string | null {
+  const match = content.match(/^\*\*Focus:\*\*\s+(task_[a-z0-9_]+)\s*$/im);
+  return match?.[1] ?? null;
+}
+
+function resolveWorkspaceDirForEnforcement(ctx: PluginHookToolContext): string | null {
+  if (typeof ctx.workspaceDir === "string" && ctx.workspaceDir.trim()) {
+    return ctx.workspaceDir.trim();
+  }
+  if (!ctx.agentId) {
+    return null;
+  }
+  // Fallback only. The runtime-provided workspaceDir above is the authoritative
+  // source because some runners resolve agent/workspace differently from the
+  // global default config lookup. If this ever regresses to config-only, expect
+  // false "TASK TRACKING REQUIRED" or missing "STEPS REQUIRED" decisions.
+  const cfg = loadConfig();
+  return resolveAgentWorkspaceDir(cfg, ctx.agentId) ?? null;
+}
+
+async function resolveActiveTaskForEnforcement(
+  workspaceDir: string,
+  sessionKey?: string,
+): Promise<ResolvedActiveTask | null> {
+  const tasksDir = path.join(workspaceDir, "tasks");
+  let currentTaskId: string | null = null;
+  let focusedTask: ResolvedActiveTask | null = null;
+  let fallbackTask: ResolvedActiveTask | null = null;
+
+  try {
+    const currentTaskContent = await fs.readFile(
+      path.join(workspaceDir, "CURRENT_TASK.md"),
+      "utf-8",
+    );
+    currentTaskId = parseCurrentTaskId(currentTaskContent);
+  } catch {
+    currentTaskId = null;
+  }
+
+  try {
+    const files = await fs.readdir(tasksDir);
+    for (const file of files) {
+      if (!file.startsWith("task_") || !file.endsWith(".md")) {
+        continue;
+      }
+
+      try {
+        const content = await fs.readFile(path.join(tasksDir, file), "utf-8");
+        const isActive =
+          content.includes("**Status:** in_progress") ||
+          content.includes("**Status:** pending") ||
+          content.includes("**Status:** pending_approval");
+        if (!isActive) {
+          continue;
+        }
+
+        const resolved = {
+          taskId: file.replace(/\.md$/, ""),
+          simple: content.includes("**Simple:** true"),
+          hasSteps: content.includes("\n## Steps\n"),
+        };
+
+        const sessionMatch = content.match(/\*\*Created By Session:\*\*\s*(.+)/);
+        if (sessionKey && sessionMatch && sessionMatch[1].trim() === sessionKey) {
+          return resolved;
+        }
+
+        // Continuation prompts routinely resume work in a fresh session
+        // (for example Discord -> main). If recovery only trusts the original
+        // Created By Session metadata, the resumed session is forced to open a
+        // duplicate task instead of continuing the focused one. CURRENT_TASK.md
+        // is the merge-safe tie-breaker: it preserves the intended logical
+        // focus task even after the session key changes.
+        if (currentTaskId && resolved.taskId === currentTaskId) {
+          focusedTask = resolved;
+        }
+
+        if (!fallbackTask) {
+          fallbackTask = resolved;
+        }
+      } catch {
+        continue;
+      }
+    }
+  } catch {
+    return null;
+  }
+
+  if (focusedTask) {
+    return focusedTask;
+  }
+
+  if (!sessionKey) {
+    return fallbackTask;
+  }
+
+  return null;
+}
+
 const STALE_TASK_THRESHOLD_MS = 24 * 60 * 60 * 1000; // 24 hours
 
 /**
@@ -295,12 +400,15 @@ export async function taskEnforcerHandler(
   let hasStartedTask = taskStartedSessions.has(sessionKey);
 
   // If not in cache, check actual task files on disk (recovery after restart)
+  let activeTaskForSession: ResolvedActiveTask | null = null;
   if (!hasStartedTask && ctx.agentId) {
     try {
-      const cfg = loadConfig();
-      const workspaceDir = resolveAgentWorkspaceDir(cfg, ctx.agentId);
+      const workspaceDir = resolveWorkspaceDirForEnforcement(ctx);
       if (workspaceDir) {
-        const hasTasksOnDisk = await hasActiveTaskFiles(workspaceDir, ctx.agentId, ctx.sessionKey);
+        activeTaskForSession = await resolveActiveTaskForEnforcement(workspaceDir, ctx.sessionKey);
+        const hasTasksOnDisk =
+          activeTaskForSession !== null ||
+          (await hasActiveTaskFiles(workspaceDir, ctx.agentId, ctx.sessionKey));
         if (hasTasksOnDisk) {
           // Recover state: mark session as having an active task
           taskStartedSessions.set(sessionKey, Date.now());
@@ -321,6 +429,32 @@ export async function taskEnforcerHandler(
         `TASK TRACKING REQUIRED: You must call task_start() before using ${toolName}. ` +
         `This is mandatory for all work. Call task_start() first with a brief description ` +
         `of what you're about to do, then retry this tool.`,
+    };
+  }
+
+  if (ctx.agentId && !activeTaskForSession) {
+    try {
+      const workspaceDir = resolveWorkspaceDirForEnforcement(ctx);
+      if (workspaceDir) {
+        activeTaskForSession = await resolveActiveTaskForEnforcement(workspaceDir, ctx.sessionKey);
+      }
+    } catch (err) {
+      log.debug(`Failed to resolve active task metadata for ${sessionKey}: ${String(err)}`);
+    }
+  }
+
+  if (activeTaskForSession && !activeTaskForSession.simple && !activeTaskForSession.hasSteps) {
+    // Keep this guard strict. Non-simple tasks must define steps before any
+    // work tool runs, otherwise Task Hub loses the decomposition the user asked
+    // for and later status replies can make the task look "in progress" with
+    // no visible plan. Changes here must stay aligned with task_start and the
+    // continuation prompt so all three entry points enforce the same contract.
+    return {
+      block: true,
+      blockReason:
+        `STEPS REQUIRED: Active task ${activeTaskForSession.taskId} is not marked simple and has no steps. ` +
+        `Before using ${toolName}, call task_update(task_id: "${activeTaskForSession.taskId}", action: "set_steps", steps: [...]). ` +
+        `Non-simple tasks must define steps before any work tools run so Task Hub can track progress consistently.`,
     };
   }
 

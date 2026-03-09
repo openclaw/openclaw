@@ -18,13 +18,34 @@ vi.mock("../../agents/agent-scope.js", () => ({
   resolveAgentWorkspaceDir: vi.fn(() => "/workspace/main"),
 }));
 
+import type { PluginHookBeforeToolCallEvent, PluginHookToolContext } from "../types.js";
 import {
   taskEnforcerHandler,
   clearTaskEnforcerState,
   hasActiveTask,
   markTaskStarted,
 } from "./task-enforcer.js";
-import type { PluginHookBeforeToolCallEvent, PluginHookToolContext } from "../types.js";
+
+function normalizeReadFilePath(filePath: unknown): string {
+  if (typeof filePath === "string") {
+    return filePath;
+  }
+  if (filePath instanceof URL) {
+    return filePath.pathname;
+  }
+  if (Buffer.isBuffer(filePath)) {
+    return filePath.toString("utf8");
+  }
+  if (
+    typeof filePath === "object" &&
+    filePath !== null &&
+    "fd" in filePath &&
+    typeof filePath.fd === "number"
+  ) {
+    return `fd:${filePath.fd}`;
+  }
+  throw new TypeError(`Unsupported readFile path: ${typeof filePath}`);
+}
 
 describe("task-enforcer", () => {
   beforeEach(() => {
@@ -38,13 +59,14 @@ describe("task-enforcer", () => {
 
   const createEvent = (toolName: string): PluginHookBeforeToolCallEvent => ({
     toolName,
-    parameters: {},
+    params: {},
   });
 
-  const createContext = (agentId = "main"): PluginHookToolContext => ({
-    agentId,
-    sessionKey: "test-session",
-  } as PluginHookToolContext);
+  const createContext = (agentId = "main"): PluginHookToolContext =>
+    ({
+      agentId,
+      sessionKey: "test-session",
+    }) as PluginHookToolContext;
 
   describe("exempt tools", () => {
     it.each([
@@ -63,15 +85,12 @@ describe("task-enforcer", () => {
   });
 
   describe("enforced tools", () => {
-    it.each(["write", "edit", "bash", "exec"])(
-      "blocks %s without task_start",
-      async (toolName) => {
-        vi.mocked(fs.readdir).mockResolvedValue([]);
-        const result = await taskEnforcerHandler(createEvent(toolName), createContext());
-        expect(result?.block).toBe(true);
-        expect(result?.blockReason).toContain("TASK TRACKING REQUIRED");
-      }
-    );
+    it.each(["write", "edit", "bash", "exec"])("blocks %s without task_start", async (toolName) => {
+      vi.mocked(fs.readdir).mockResolvedValue([]);
+      const result = await taskEnforcerHandler(createEvent(toolName), createContext());
+      expect(result?.block).toBe(true);
+      expect(result?.blockReason).toContain("TASK TRACKING REQUIRED");
+    });
 
     it("allows enforced tools after task_start", async () => {
       const ctx = createContext();
@@ -86,11 +105,30 @@ describe("task-enforcer", () => {
   });
 
   describe("disk recovery", () => {
-    it("recovers state from disk when task file matches session", async () => {
+    it("recovers state from disk when task file matches session and already has steps", async () => {
       vi.mocked(fs.readdir).mockResolvedValue(["task_abc123.md"] as never);
       // Task file has matching session key
       vi.mocked(fs.readFile).mockResolvedValue(
-        "- **Status:** in_progress\n- **Created By Session:** test-session"
+        [
+          "# Task: task_abc123",
+          "",
+          "## Metadata",
+          "- **Status:** in_progress",
+          "- **Created By Session:** test-session",
+          "",
+          "## Description",
+          "Tracked task",
+          "",
+          "## Steps",
+          "- [>] (s1) First step",
+          "- [ ] (s2) Second step",
+          "",
+          "## Progress",
+          "- Task started",
+          "",
+          "## Last Activity",
+          "2026-03-09T01:30:58.252Z",
+        ].join("\n"),
       );
 
       const result = await taskEnforcerHandler(createEvent("write"), createContext());
@@ -103,7 +141,7 @@ describe("task-enforcer", () => {
       vi.mocked(fs.readdir).mockResolvedValue(["task_abc123.md"] as never);
       // Task file has DIFFERENT session key
       vi.mocked(fs.readFile).mockResolvedValue(
-        "- **Status:** in_progress\n- **Created By Session:** old-session"
+        "- **Status:** in_progress\n- **Created By Session:** old-session",
       );
 
       const result = await taskEnforcerHandler(createEvent("write"), createContext());
@@ -118,6 +156,83 @@ describe("task-enforcer", () => {
       const result = await taskEnforcerHandler(createEvent("write"), createContext());
       // Should block — legacy files without session metadata don't bypass
       expect(result?.block).toBe(true);
+    });
+
+    it("recovers the focused current task across sessions and requires steps before work", async () => {
+      vi.mocked(fs.readdir).mockResolvedValue(["task_abc123.md"] as never);
+      vi.mocked(fs.readFile).mockImplementation(async (filePath) => {
+        const normalized = normalizeReadFilePath(filePath);
+        if (normalized.endsWith("CURRENT_TASK.md")) {
+          return "# Current Task\n\n**Focus:** task_abc123\n";
+        }
+        return [
+          "# Task: task_abc123",
+          "",
+          "## Metadata",
+          "- **Status:** in_progress",
+          "- **Priority:** high",
+          "- **Created:** 2026-03-09T01:26:05.958Z",
+          "- **Created By Session:** discord:old-session",
+          "",
+          "## Description",
+          "Complex task",
+          "",
+          "## Progress",
+          "- Task started",
+          "",
+          "## Last Activity",
+          "2026-03-09T01:30:58.252Z",
+          "",
+          "---",
+          "*Managed by task tools*",
+        ].join("\n");
+      });
+
+      const result = await taskEnforcerHandler(createEvent("exec"), createContext());
+
+      expect(result?.block).toBe(true);
+      expect(result?.blockReason).toContain("STEPS REQUIRED");
+      expect(result?.blockReason).toContain('action: "set_steps"');
+      expect(result?.blockReason).toContain("task_abc123");
+    });
+
+    it("allows work when the focused current task already has steps, even from another session", async () => {
+      vi.mocked(fs.readdir).mockResolvedValue(["task_abc123.md"] as never);
+      vi.mocked(fs.readFile).mockImplementation(async (filePath) => {
+        const normalized = normalizeReadFilePath(filePath);
+        if (normalized.endsWith("CURRENT_TASK.md")) {
+          return "# Current Task\n\n**Focus:** task_abc123\n";
+        }
+        return [
+          "# Task: task_abc123",
+          "",
+          "## Metadata",
+          "- **Status:** in_progress",
+          "- **Priority:** high",
+          "- **Created:** 2026-03-09T01:26:05.958Z",
+          "- **Created By Session:** discord:old-session",
+          "",
+          "## Description",
+          "Complex task",
+          "",
+          "## Steps",
+          "- [>] (s1) Analyze current state",
+          "- [ ] (s2) Implement the change",
+          "",
+          "## Progress",
+          "- Task started",
+          "",
+          "## Last Activity",
+          "2026-03-09T01:30:58.252Z",
+          "",
+          "---",
+          "*Managed by task tools*",
+        ].join("\n");
+      });
+
+      const result = await taskEnforcerHandler(createEvent("exec"), createContext());
+
+      expect(result?.block).not.toBe(true);
     });
 
     it("blocks when no task files on disk", async () => {

@@ -125,9 +125,34 @@ describe("startTaskContinuationRunner", () => {
         message: expect.stringContaining("TASK CONTINUATION"),
         agentId: "main",
         deliver: false,
-
       }),
     );
+    runner.stop();
+  });
+
+  it("tells non-simple step-less tasks to define steps before continuing", async () => {
+    const idleTask = {
+      id: "task_complex123",
+      status: "in_progress" as const,
+      priority: "high" as const,
+      description: "Investigate and fix contract mismatch",
+      created: "2026-02-05T09:50:00Z",
+      lastActivity: "2026-02-05T09:50:00Z",
+      progress: ["Task started"],
+    };
+    vi.mocked(findActiveTask).mockResolvedValue(idleTask);
+
+    const runner = startTaskContinuationRunner({
+      cfg: { agents: { defaults: {} } } as OpenClawConfig,
+    });
+
+    await vi.advanceTimersByTimeAsync(3 * 60_000);
+
+    const message = vi.mocked(agentCommand).mock.calls[0][0].message;
+    expect(message).toContain('action: "set_steps"');
+    expect(message).toContain('task_id: "task_complex123"');
+    expect(message).toContain("Before continuing");
+
     runner.stop();
   });
 

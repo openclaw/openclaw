@@ -465,6 +465,31 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).toContain(
       "- If exactly one skill clearly applies: read its SKILL.md at <location> with `read`, then follow it.",
     );
+    expect(prompt).toContain(
+      "- Reading a SKILL.md is preparation only; it does not count as starting work or delegation.",
+    );
+    expect(prompt).toContain(
+      "- For ordinary work in the current session, use this session's own tools. Only choose delegation skills when the user explicitly asks for that external agent/runtime or the task already requires external delegation.",
+    );
+  });
+
+  it("includes task tracking guidance in skills section when task_start is available", () => {
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      toolNames: ["task_start"],
+      skillsPrompt:
+        "<available_skills>\n  <skill>\n    <name>demo</name>\n  </skill>\n</available_skills>",
+    });
+
+    expect(prompt).toContain(
+      "- If the user has already asked you to begin meaningful work, call `task_start` before reading any SKILL.md or sending a kickoff update.",
+    );
+    expect(prompt).toContain(
+      '- Do not say you started, are starting, or have delegated meaningful work based only on reading a skill. For tracked work, call `task_start` before any "started/in progress" status reply.',
+    );
+    expect(prompt).toContain(
+      "- For tracked work, mark truly tiny one-off tasks with `task_start(simple: true)`. Otherwise include `steps: [...]` in `task_start` before any kickoff/progress reply so Task Hub can show the breakdown immediately.",
+    );
   });
 
   it("appends available skills when provided", () => {

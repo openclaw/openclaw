@@ -102,7 +102,7 @@ export function createTaskStartTool(options: {
     label: "Task Start",
     name: "task_start",
     description:
-      "Start a new task. Creates a task file in tasks/ directory. Multiple tasks can exist simultaneously. If requires_approval is true, task starts in pending_approval status and needs task_approve before work begins. Returns the task_id for future reference.",
+      "Start a new task. Creates a task file in tasks/ directory. Multiple tasks can exist simultaneously. Pass simple:true only for truly small one-off work. For anything non-simple, include steps:[...] up front so Task Hub can track decomposition before progress updates. If requires_approval is true, task starts in pending_approval status and needs task_approve before work begins. Returns the task_id for future reference.",
     parameters: TaskStartSchema,
     execute: async (_toolCallId, params) => {
       const description = readStringParam(params, "description", { required: true });
@@ -117,6 +117,21 @@ export function createTaskStartTool(options: {
       const stepsInput = Array.isArray(rawSteps)
         ? (rawSteps as Array<{ content: string; status?: string }>)
         : undefined;
+      const hasSteps = (stepsInput?.length ?? 0) > 0;
+
+      // Make the complexity choice explicit at task creation time. If we wait
+      // until exec/write, the agent can still post "started" updates with an
+      // empty task and Task Hub never sees the intended decomposition. Keep
+      // this check aligned with task-enforcer's work-tool gate: task_start is
+      // the only place that can stop "start now" replies from creating a blank
+      // non-simple task before any work tool is called.
+      if (!simple && !hasSteps) {
+        return jsonResult({
+          success: false,
+          error:
+            "STEP PLANNING REQUIRED: task_start without steps is only allowed for truly simple work. Retry with simple:true for a trivial task, or include steps:[{content: ...}] for anything non-simple.",
+        });
+      }
 
       // Duplicate detection: reject if a similar task already exists
       const activeTasks = await listTasks(workspaceDir, "in_progress");
@@ -154,7 +169,10 @@ export function createTaskStartTool(options: {
         createdBySessionKey: options.agentSessionKey,
         progress: [initialProgress],
         simple: simple || undefined,
-        steps: stepsInput
+        // Step state is persisted directly in the task file because downstream
+        // recovery/enforcement reads the markdown on disk after restarts,
+        // compaction, and cross-session continuation.
+        steps: hasSteps
           ? stepsInput.map((s, i) => ({
               id: `s${i + 1}`,
               content: s.content,

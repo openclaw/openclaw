@@ -393,7 +393,16 @@ export async function compactEmbeddedPiSessionDirect(
         : model;
 
     const runAbortController = new AbortController();
+    const { defaultAgentId, sessionAgentId } = resolveSessionAgentIds({
+      sessionKey: params.sessionKey,
+      config: params.config,
+    });
+    // Compaction must build tools for the session-scoped agent, not just the
+    // config default agent. Task enforcement keys off the agentId/workspace
+    // carried through tool creation, so using the wrong agent here lets
+    // compaction sessions miss the real task files and diverge from normal runs.
     const toolsRaw = createOpenClawCodingTools({
+      agentId: sessionAgentId,
       exec: {
         elevated: params.bashElevated,
       },
@@ -501,10 +510,6 @@ export async function compactEmbeddedPiSessionDirect(
     const userTimezone = resolveUserTimezone(params.config?.agents?.defaults?.userTimezone);
     const userTimeFormat = resolveUserTimeFormat(params.config?.agents?.defaults?.timeFormat);
     const userTime = formatUserTime(new Date(), userTimezone, userTimeFormat);
-    const { defaultAgentId, sessionAgentId } = resolveSessionAgentIds({
-      sessionKey: params.sessionKey,
-      config: params.config,
-    });
     const isDefaultAgent = sessionAgentId === defaultAgentId;
     const promptMode =
       isSubagentSessionKey(params.sessionKey) || isCronSessionKey(params.sessionKey)

@@ -360,6 +360,19 @@ function formatContinuationPrompt(task: TaskFile, pendingCount: number): string 
     lines.push(`**Latest Progress:** ${lastProgress}`);
   }
 
+  // Keep this prompt aligned with task-enforcer's upfront step gate.
+  // Continuation runs must push agents toward the existing task's steps, not
+  // toward creating a new helper task or free-form progress updates.
+  if (!task.simple && (!task.steps || task.steps.length === 0)) {
+    lines.push(``);
+    lines.push(
+      `Before continuing, define steps with task_update(task_id: "${task.id}", action: "set_steps", steps: [...]).`,
+    );
+    lines.push(
+      `Because this task is not marked simple, do not use work tools until those steps exist.`,
+    );
+  }
+
   lines.push(``);
   lines.push(
     `Please continue working on this task. Use task_update() to log progress and task_complete() when finished.`,

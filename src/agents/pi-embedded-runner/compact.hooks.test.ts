@@ -244,13 +244,17 @@ vi.mock("./utils.js", () => ({
 }));
 
 import { getApiProvider, unregisterApiProviders } from "@mariozechner/pi-ai";
+import { resolveSessionAgentIds } from "../agent-scope.js";
 import { getCustomApiRegistrySourceId } from "../custom-api-registry.js";
+import { createOpenClawCodingTools } from "../pi-tools.js";
 import { compactEmbeddedPiSessionDirect } from "./compact.js";
 
 const sessionHook = (action: string) =>
   triggerInternalHook.mock.calls.find(
     (call) => call[0]?.type === "session" && call[0]?.action === action,
   )?.[0];
+const mockedCreateOpenClawCodingTools = vi.mocked(createOpenClawCodingTools);
+const mockedResolveSessionAgentIds = vi.mocked(resolveSessionAgentIds);
 
 describe("compactEmbeddedPiSessionDirect hooks", () => {
   beforeEach(() => {
@@ -275,6 +279,12 @@ describe("compactEmbeddedPiSessionDirect hooks", () => {
     sanitizeSessionHistoryMock.mockReset();
     sanitizeSessionHistoryMock.mockImplementation(async (params: { messages: unknown[] }) => {
       return params.messages;
+    });
+    mockedCreateOpenClawCodingTools.mockClear();
+    mockedResolveSessionAgentIds.mockReset();
+    mockedResolveSessionAgentIds.mockReturnValue({
+      defaultAgentId: "main",
+      sessionAgentId: "main",
     });
     unregisterApiProviders(getCustomApiRegistrySourceId("ollama"));
   });
@@ -379,6 +389,29 @@ describe("compactEmbeddedPiSessionDirect hooks", () => {
       messageCount: 0,
       tokenCount: 0,
     });
+  });
+
+  it("passes the resolved session agentId into tool creation for cron sessions", async () => {
+    mockedResolveSessionAgentIds.mockReturnValue({
+      defaultAgentId: "main",
+      sessionAgentId: "seum",
+    });
+
+    const result = await compactEmbeddedPiSessionDirect({
+      sessionId: "session-1",
+      sessionKey: "agent:seum:cron:job-1",
+      sessionFile: "/tmp/session.jsonl",
+      workspaceDir: "/tmp",
+      customInstructions: "focus on decisions",
+    });
+
+    expect(result.ok).toBe(true);
+    expect(mockedCreateOpenClawCodingTools).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agentId: "seum",
+        sessionKey: "agent:seum:cron:job-1",
+      }),
+    );
   });
 
   it("registers the Ollama api provider before compaction", async () => {

@@ -6,7 +6,7 @@ import { logWarn } from "../logger.js";
 import { getPluginToolMeta } from "../plugins/tools.js";
 import { isSubagentSessionKey } from "../routing/session-key.js";
 import { resolveGatewayMessageChannel } from "../utils/message-channel.js";
-import { resolveAgentConfig } from "./agent-scope.js";
+import { resolveAgentConfig, resolveAgentWorkspaceDir } from "./agent-scope.js";
 import { createApplyPatchTool } from "./apply-patch.js";
 import {
   createExecTool,
@@ -552,10 +552,17 @@ export function createOpenClawCodingTools(options?: {
       modelId: options?.modelId,
     }),
   );
+  // Keep hook-side task enforcement bound to the same resolved workspace as
+  // the actual tool execution path. Recomputing from config inside the hook
+  // caused continuation/compaction sessions to miss the active task file and
+  // silently bypass step enforcement.
+  const taskWorkspaceDir =
+    options?.config && agentId ? resolveAgentWorkspaceDir(options.config, agentId) : undefined;
   const withHooks = normalized.map((tool) =>
     wrapToolWithBeforeToolCallHook(tool, {
       agentId,
       sessionKey: options?.sessionKey,
+      workspaceDir: taskWorkspaceDir,
       sessionId: options?.sessionId,
       runId: options?.runId,
       loopDetection: resolveToolLoopDetectionConfig({ cfg: options?.config, agentId }),
