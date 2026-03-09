@@ -502,8 +502,14 @@ export async function runPreparedReply(
       // if a full channel key like "telegram:group:123" is ever propagated.
       sourceProvider:
         (
-          (ctx.OriginatingChannel ?? ctx.Provider ?? sessionCtx.Provider)?.trim().toLowerCase() ||
-          ""
+          (
+            ctx.OriginatingChannel ??
+            sessionCtx.OriginatingChannel ??
+            ctx.Provider ??
+            sessionCtx.Provider
+          )
+            ?.trim()
+            .toLowerCase() || ""
         ).split(":")[0] || undefined,
       agentAccountId: sessionCtx.AccountId,
       groupId: resolveGroupSessionKey(sessionCtx)?.id ?? undefined,
