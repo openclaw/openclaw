@@ -31,6 +31,16 @@ describe("buildApiErrorObservationFields", () => {
     expect(observed.rawErrorHash).toMatch(/^sha256:/);
   });
 
+  it("redacts observation-only header and cookie formats", () => {
+    const observed = buildApiErrorObservationFields(
+      "x-api-key: sk-abcdefghijklmnopqrstuvwxyz123456 Cookie: session=abcdefghijklmnopqrstuvwxyz123456",
+    );
+
+    expect(observed.rawErrorPreview).not.toContain("abcdefghijklmnopqrstuvwxyz123456");
+    expect(observed.rawErrorPreview).toContain("x-api-key: ***");
+    expect(observed.rawErrorPreview).toContain("Cookie: sessio");
+  });
+
   it("builds sanitized generic text observation fields", () => {
     const observed = buildTextObservationFields(
       '{"type":"error","error":{"type":"overloaded_error","message":"Overloaded"},"request_id":"req_prev"}',

@@ -94,6 +94,35 @@ describe("handleAgentEnd", () => {
     });
   });
 
+  it("redacts logged error text while keeping lifecycle events unchanged", () => {
+    const onAgentEvent = vi.fn();
+    const ctx = createContext(
+      {
+        role: "assistant",
+        stopReason: "error",
+        errorMessage: "x-api-key: sk-abcdefghijklmnopqrstuvwxyz123456",
+        content: [{ type: "text", text: "" }],
+      },
+      { onAgentEvent },
+    );
+
+    handleAgentEnd(ctx);
+
+    const warn = vi.mocked(ctx.log.warn);
+    expect(warn.mock.calls[0]?.[1]).toMatchObject({
+      event: "embedded_run_agent_end",
+      error: "x-api-key: ***",
+      rawErrorPreview: "x-api-key: ***",
+    });
+    expect(onAgentEvent).toHaveBeenCalledWith({
+      stream: "lifecycle",
+      data: {
+        phase: "error",
+        error: "x-api-key: sk-abcdefghijklmnopqrstuvwxyz123456",
+      },
+    });
+  });
+
   it("keeps non-error run-end logging on debug only", () => {
     const ctx = createContext(undefined);
 

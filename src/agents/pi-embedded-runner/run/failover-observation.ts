@@ -1,3 +1,4 @@
+import { redactIdentifier } from "../../../logging/redact-identifier.js";
 import type { AuthProfileFailureReason } from "../../auth-profiles.js";
 import { buildApiErrorObservationFields } from "../../pi-embedded-error-observation.js";
 import type { FailoverReason } from "../../pi-embedded-helpers.js";
@@ -27,7 +28,8 @@ export function createFailoverDecisionLogger(
   decision: FailoverDecisionObservation["decision"],
   extra?: Pick<FailoverDecisionObservation, "status">,
 ) => void {
-  const profileText = base.profileId ?? "-";
+  const safeProfileId = base.profileId ? redactIdentifier(base.profileId, { len: 12 }) : undefined;
+  const profileText = safeProfileId ?? "-";
   const reasonText = base.failoverReason ?? "none";
   return (decision, extra) => {
     const observedError = buildApiErrorObservationFields(base.rawError);
@@ -41,7 +43,7 @@ export function createFailoverDecisionLogger(
       profileFailureReason: base.profileFailureReason,
       provider: base.provider,
       model: base.model,
-      profileId: base.profileId,
+      profileId: safeProfileId,
       fallbackConfigured: base.fallbackConfigured,
       timedOut: base.timedOut,
       aborted: base.aborted,
