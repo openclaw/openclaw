@@ -17,7 +17,7 @@ const (
 	bodyTagEnd          = "</body>"
 )
 
-func processFileDoc(ctx context.Context, translator *PiTranslator, docsRoot, filePath, srcLang, tgtLang string, overwrite bool) (bool, error) {
+func processFileDoc(ctx context.Context, translator *PiTranslator, docsRoot, filePath, srcLang, tgtLang string, overwrite bool, routes *routeIndex) (bool, error) {
 	absPath, relPath, err := resolveDocsPath(docsRoot, filePath)
 	if err != nil {
 		return false, err
@@ -59,6 +59,7 @@ func processFileDoc(ctx context.Context, translator *PiTranslator, docsRoot, fil
 	if err != nil {
 		return false, fmt.Errorf("tagged output invalid for %s: %w", relPath, err)
 	}
+	translatedBody = routes.localizeBodyLinks(translatedBody)
 	if sourceFront != "" && strings.TrimSpace(translatedFront) == "" {
 		return false, fmt.Errorf("translation removed frontmatter for %s", relPath)
 	}
