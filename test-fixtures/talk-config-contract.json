@@ -82,7 +82,7 @@
         "provider": "elevenlabs",
         "normalizedPayload": false,
         "voiceId": "voice-legacy",
-        "apiKey": "legacy-key"
+        "apiKey": "xxxxx"
       },
       "talk": {
         "voiceId": "voice-legacy",
