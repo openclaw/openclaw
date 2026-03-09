@@ -43,12 +43,21 @@ async function processDiscordInboundJob(params: {
 }) {
   const timeoutMs = normalizeDiscordInboundWorkerTimeoutMs(params.runTimeoutMs);
   const contextSuffix = formatDiscordRunContextSuffix(params.job);
-  let finalReplyDelivered = false;
+  let finalReplyStarted = false;
+  let createdThreadId: string | undefined;
+  let sessionKey: string | undefined;
   await runDiscordTaskWithTimeout({
     run: async (abortSignal) => {
       await processDiscordMessage(materializeDiscordInboundJob(params.job, abortSignal), {
+        onFinalReplyStart: () => {
+          finalReplyStarted = true;
+        },
         onFinalReplyDelivered: () => {
-          finalReplyDelivered = true;
+          finalReplyStarted = true;
+        },
+        onReplyPlanResolved: (resolved) => {
+          createdThreadId = resolved.createdThreadId?.trim() || undefined;
+          sessionKey = resolved.sessionKey?.trim() || undefined;
         },
       });
     },
@@ -63,13 +72,15 @@ async function processDiscordInboundJob(params: {
           })}${contextSuffix}`,
         ),
       );
-      if (finalReplyDelivered) {
+      if (finalReplyStarted) {
         return;
       }
       void sendDiscordInboundWorkerTimeoutReply({
         job: params.job,
         runtime: params.runtime,
         contextSuffix,
+        createdThreadId,
+        sessionKey,
       });
     },
     onErrorAfterTimeout: (error) => {
@@ -84,6 +95,8 @@ async function sendDiscordInboundWorkerTimeoutReply(params: {
   job: DiscordInboundJob;
   runtime: RuntimeEnv;
   contextSuffix: string;
+  createdThreadId?: string;
+  sessionKey?: string;
 }) {
   const messageChannelId = params.job.payload.messageChannelId?.trim();
   const messageId = params.job.payload.message?.id?.trim();
@@ -102,6 +115,7 @@ async function sendDiscordInboundWorkerTimeoutReply(params: {
     replyToMode: params.job.payload.replyToMode,
     messageId,
     threadChannel: params.job.payload.threadChannel,
+    createdThreadId: params.createdThreadId,
   });
 
   try {
@@ -116,7 +130,10 @@ async function sendDiscordInboundWorkerTimeoutReply(params: {
       maxLinesPerMessage: params.job.payload.discordConfig?.maxLinesPerMessage,
       replyToId: deliveryPlan.replyReference.use(),
       replyToMode: params.job.payload.replyToMode,
-      sessionKey: params.job.payload.route.sessionKey ?? params.job.payload.baseSessionKey,
+      sessionKey:
+        params.sessionKey ??
+        params.job.payload.route.sessionKey ??
+        params.job.payload.baseSessionKey,
       threadBindings: params.job.runtime.threadBindings,
     });
   } catch (error) {

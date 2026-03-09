@@ -70,7 +70,9 @@ function isProcessAborted(abortSignal?: AbortSignal): boolean {
 }
 
 type DiscordMessageProcessObserver = {
+  onFinalReplyStart?: () => void;
   onFinalReplyDelivered?: () => void;
+  onReplyPlanResolved?: (params: { createdThreadId?: string; sessionKey?: string }) => void;
 };
 
 export async function processDiscordMessage(
@@ -404,6 +406,10 @@ export async function processDiscordMessage(
     OriginatingTo: autoThreadContext?.OriginatingTo ?? replyTarget,
   });
   const persistedSessionKey = ctxPayload.SessionKey ?? route.sessionKey;
+  observer?.onReplyPlanResolved?.({
+    createdThreadId: replyPlan.createdThreadId,
+    sessionKey: persistedSessionKey,
+  });
 
   await recordInboundSession({
     storePath,
@@ -604,6 +610,14 @@ export async function processDiscordMessage(
 
   // When draft streaming is active, suppress block streaming to avoid double-streaming.
   const disableBlockStreamingForDraft = draftStream ? true : undefined;
+  let finalReplyStartNotified = false;
+  const notifyFinalReplyStart = () => {
+    if (finalReplyStartNotified) {
+      return;
+    }
+    finalReplyStartNotified = true;
+    observer?.onFinalReplyStart?.();
+  };
 
   const { dispatcher, replyOptions, markDispatchIdle, markRunComplete } =
     createReplyDispatcherWithTyping({
@@ -640,6 +654,7 @@ export async function processDiscordMessage(
               return;
             }
             try {
+              notifyFinalReplyStart();
               await editMessageDiscord(
                 deliverChannelId,
                 previewMessageId,
@@ -671,6 +686,7 @@ export async function processDiscordMessage(
               !payload.isError
             ) {
               try {
+                notifyFinalReplyStart();
                 await editMessageDiscord(
                   deliverChannelId,
                   messageIdAfterStop,
@@ -699,6 +715,9 @@ export async function processDiscordMessage(
         }
 
         const replyToId = replyReference.use();
+        if (isFinal) {
+          notifyFinalReplyStart();
+        }
         await deliverDiscordReply({
           cfg,
           replies: [payload],
