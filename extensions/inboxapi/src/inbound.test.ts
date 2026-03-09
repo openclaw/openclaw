@@ -58,6 +58,7 @@ describe("buildInboundMsgFields", () => {
   it("builds SDK-compatible fields", () => {
     const fields = buildInboundMsgFields(makeEmail(), "default");
     expect(fields.From).toBe("inboxapi:alice@example.com");
+    expect(fields.To).toBe("inboxapi:bot@inboxapi.ai");
     expect(fields.OriginatingChannel).toBe("inboxapi");
     expect(fields.AccountId).toBe("default");
     expect(fields.ChatType).toBe("direct");

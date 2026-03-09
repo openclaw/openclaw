@@ -29,6 +29,7 @@ function waitUntilAbort(signal?: AbortSignal, onAbort?: () => void): Promise<voi
       resolve();
     };
     if (!signal) {
+      resolve();
       return;
     }
     if (signal.aborted) {

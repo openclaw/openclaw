@@ -54,7 +54,7 @@ export function buildInboundMsgFields(email: InboxApiEmail, accountId: string) {
     RawBody: ctx.body,
     CommandBody: ctx.body,
     From: `${CHANNEL_ID}:${ctx.from}`,
-    To: `${CHANNEL_ID}:${ctx.from}`,
+    To: `${CHANNEL_ID}:${Array.isArray(email.to) ? email.to[0] : email.to}`,
     SessionKey: ctx.sessionKey,
     AccountId: accountId,
     OriginatingChannel: CHANNEL_ID,
