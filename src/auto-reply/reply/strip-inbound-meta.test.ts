@@ -33,6 +33,24 @@ Sender labels:
 example
 <<<END_EXTERNAL_UNTRUSTED_CONTENT id="deadbeefdeadbeef">>>`;
 
+const SESSION_RECAP_BLOCK = `<session-recap>
+<summary>Found 10 recent items across 3 categories</summary>
+<ledger-items count="2">
+  <item path="ledger/2026-03-09.md">
+    <title>ledger/2026-03-09.md</title>
+    <snippet>some snippet</snippet>
+  </item>
+</ledger-items>
+<handoff-items count="1">
+  <item path="handoffs/handoff-2026-03-09-1012">
+    <title>handoff-2026-03-09-1012</title>
+  </item>
+</handoff-items>
+<task-items count="1">
+  <item path="tasks/foo" status="open">foo task</item>
+</task-items>
+</session-recap>`;
+
 describe("stripInboundMetadata", () => {
   it("fast-path: returns same string when no sentinels present", () => {
     const text = "Hello, how are you?";
@@ -117,6 +135,38 @@ Real user content`;
 name: test
 Hello from user`;
     expect(stripInboundMetadata(input)).toBe(input);
+  });
+
+  // --- session-recap tests ---
+
+  it("strips a leading <session-recap> block", () => {
+    const input = `${SESSION_RECAP_BLOCK}\n\nWhat should I do today?`;
+    expect(stripInboundMetadata(input)).toBe("What should I do today?");
+  });
+
+  it("strips a leading <session-recap> block with no user text after it", () => {
+    expect(stripInboundMetadata(SESSION_RECAP_BLOCK)).toBe("");
+  });
+
+  it("strips <session-recap> block followed by standard metadata blocks", () => {
+    const input = `${SESSION_RECAP_BLOCK}\n\n${CONV_BLOCK}\n\nHello`;
+    expect(stripInboundMetadata(input)).toBe("Hello");
+  });
+
+  it("does not strip <session-recap> when it appears mid-message", () => {
+    const input = `User message\n\n${SESSION_RECAP_BLOCK}`;
+    expect(stripInboundMetadata(input)).toBe(input);
+  });
+
+  it("strips leading blank lines before <session-recap> and user content", () => {
+    const input = `\n\n${SESSION_RECAP_BLOCK}\n\nActual user text`;
+    expect(stripInboundMetadata(input)).toBe("Actual user text");
+  });
+
+  it("handles session_recap (underscore variant) open tag", () => {
+    const block = `<session_recap>\n<summary>summary</summary>\n</session_recap>`;
+    const input = `${block}\n\nUser text`;
+    expect(stripInboundMetadata(input)).toBe("User text");
   });
 });
 
