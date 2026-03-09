@@ -49,3 +49,11 @@ Use this format when adding entries:
   npm: `@icesword760/openclaw-wechat`
   repo: `https://github.com/icesword0760/openclaw-wechat`
   install: `openclaw plugins install @icesword760/openclaw-wechat`
+
+
+- **Memory-Munch** — Deterministic, token-efficient memory retrieval plugin for OpenClaw with native
+memory fallback.
+ npm: `@dottedt/memory-munch-tools`
+ repo: `https://github.com/dottedt/memory-munch`
+ install: `openclaw plugins install @dottedt/memory-munch-tools`
+
