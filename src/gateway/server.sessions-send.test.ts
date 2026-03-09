@@ -111,6 +111,12 @@ afterAll(async () => {
   envSnapshot.restore();
 });
 
+beforeEach(() => {
+  testState.gatewayAuth = { mode: "token", token: gatewayToken };
+  process.env.OPENCLAW_GATEWAY_TOKEN = gatewayToken;
+  process.env.OPENCLAW_GATEWAY_PORT = String(gatewayPort);
+});
+
 describe("sessions_send gateway loopback", () => {
   it("returns reply when lifecycle ends before agent.wait", async () => {
     const spy = agentCommand as unknown as Mock<(opts: unknown) => Promise<void>>;
