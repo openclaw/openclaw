@@ -585,7 +585,33 @@ describe("dispatchTelegramMessage draft streaming", () => {
   });
 
   it("starts a fresh preview when a late partial follows a final-only prior answer", async () => {
-    const answerDraftStream = createSequencedDraftStream(1001);
+    let messageId: number | undefined;
+    let nextMessageId = 1001;
+    let finalized = false;
+    const answerDraftStream = {
+      update: vi.fn().mockImplementation(() => {
+        if (finalized) {
+          return;
+        }
+        if (messageId == null) {
+          messageId = nextMessageId++;
+        }
+      }),
+      flush: vi.fn().mockResolvedValue(undefined),
+      messageId: vi.fn().mockImplementation(() => messageId),
+      previewMode: vi.fn().mockReturnValue("message"),
+      previewRevision: vi.fn().mockReturnValue(0),
+      lastDeliveredText: vi.fn().mockReturnValue(""),
+      clear: vi.fn().mockResolvedValue(undefined),
+      stop: vi.fn().mockImplementation(async () => {
+        finalized = true;
+      }),
+      materialize: vi.fn().mockImplementation(async () => messageId),
+      forceNewMessage: vi.fn().mockImplementation(() => {
+        finalized = false;
+        messageId = undefined;
+      }),
+    };
     const reasoningDraftStream = createDraftStream();
     createTelegramDraftStream
       .mockImplementationOnce(() => answerDraftStream)
@@ -607,15 +633,77 @@ describe("dispatchTelegramMessage draft streaming", () => {
 
     await dispatchWithContext({ context: createContext(), streamMode: "partial" });
 
-    expect(answerDraftStream.forceNewMessage).not.toHaveBeenCalled();
-    expect(answerDraftStream.update).toHaveBeenNthCalledWith(1, "Message B early");
-    expect(answerDraftStream.update).toHaveBeenNthCalledWith(2, "Message B partial");
+    expect(answerDraftStream.forceNewMessage).toHaveBeenCalledTimes(1);
     expect(deliverReplies).toHaveBeenCalledWith(
       expect.objectContaining({
         replies: [expect.objectContaining({ text: "Message A final" })],
       }),
     );
     expect(editMessageTelegram).toHaveBeenCalledWith(
+      123,
+      1001,
+      "Message B final",
+      expect.any(Object),
+    );
+  });
+
+  it("rotates on message start after preview finalization falls back to a normal send", async () => {
+    let messageId: number | undefined = 999;
+    let nextMessageId = 1001;
+    let finalized = false;
+    const answerDraftStream = {
+      update: vi.fn().mockImplementation(() => {
+        if (finalized) {
+          return;
+        }
+        if (messageId == null) {
+          messageId = nextMessageId++;
+        }
+      }),
+      flush: vi.fn().mockResolvedValue(undefined),
+      messageId: vi.fn().mockImplementation(() => messageId),
+      previewMode: vi.fn().mockReturnValue("message"),
+      previewRevision: vi.fn().mockReturnValue(0),
+      lastDeliveredText: vi.fn().mockReturnValue(""),
+      clear: vi.fn().mockResolvedValue(undefined),
+      stop: vi.fn().mockImplementation(async () => {
+        finalized = true;
+      }),
+      materialize: vi.fn().mockImplementation(async () => messageId),
+      forceNewMessage: vi.fn().mockImplementation(() => {
+        finalized = false;
+        messageId = undefined;
+      }),
+    };
+    const reasoningDraftStream = createDraftStream();
+    createTelegramDraftStream
+      .mockImplementationOnce(() => answerDraftStream)
+      .mockImplementationOnce(() => reasoningDraftStream);
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
+      async ({ dispatcherOptions, replyOptions }) => {
+        await replyOptions?.onPartialReply?.({ text: "Message A partial" });
+        await dispatcherOptions.deliver({ text: "Message A final" }, { kind: "final" });
+        await replyOptions?.onAssistantMessageStart?.();
+        await replyOptions?.onPartialReply?.({ text: "Message B partial" });
+        await dispatcherOptions.deliver({ text: "Message B final" }, { kind: "final" });
+        return { queuedFinal: true };
+      },
+    );
+    deliverReplies.mockResolvedValue({ delivered: true });
+    editMessageTelegram
+      .mockRejectedValueOnce(new Error("500: preview edit failed"))
+      .mockResolvedValueOnce({ ok: true, chatId: "123", messageId: "1001" });
+
+    await dispatchWithContext({ context: createContext(), streamMode: "partial" });
+
+    expect(answerDraftStream.forceNewMessage).toHaveBeenCalledTimes(1);
+    expect(deliverReplies).toHaveBeenCalledWith(
+      expect.objectContaining({
+        replies: [expect.objectContaining({ text: "Message A final" })],
+      }),
+    );
+    expect(editMessageTelegram).toHaveBeenNthCalledWith(
+      2,
       123,
       1001,
       "Message B final",
