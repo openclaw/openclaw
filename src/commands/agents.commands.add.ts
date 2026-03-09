@@ -291,7 +291,7 @@ export async function agentsAddCommand(
           break; // Success - exit the loop
         } catch (error) {
           // If user cancelled to go back to auth selection, loop again
-          if (error instanceof Error && error.message === "AUTH_CHOICE_CANCELLED") {
+          if (error instanceof WizardCancelledError) {
             continue;
           }
           // Re-throw other errors
