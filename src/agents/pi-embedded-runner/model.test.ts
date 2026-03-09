@@ -223,6 +223,63 @@ describe("resolveModel", () => {
     expect(result.model?.id).toBe("missing-model");
   });
 
+  it("strips a redundant same-provider prefix before resolving inline openai-compatible models", () => {
+    const cfg = {
+      models: {
+        providers: {
+          google: {
+            baseUrl: "https://generativelanguage.googleapis.com/v1beta/openai",
+            api: "openai-completions",
+            models: [
+              {
+                ...makeModel("gemini-2.5-pro"),
+                api: "openai-completions",
+              },
+            ],
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    const result = resolveModel("google", "google/gemini-2.5-pro", "/tmp/agent", cfg);
+
+    expect(result.error).toBeUndefined();
+    expect(result.model).toMatchObject({
+      provider: "google",
+      id: "gemini-2.5-pro",
+      api: "openai-completions",
+      baseUrl: "https://generativelanguage.googleapis.com/v1beta/openai",
+    });
+  });
+
+  it("preserves cross-provider model ids for pass-through providers", () => {
+    const cfg = {
+      models: {
+        providers: {
+          openrouter: {
+            baseUrl: "https://openrouter.ai/api/v1",
+            api: "openai-completions",
+            models: [
+              {
+                ...makeModel("anthropic/claude-sonnet-4-6"),
+                api: "openai-completions",
+              },
+            ],
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    const result = resolveModel("openrouter", "anthropic/claude-sonnet-4-6", "/tmp/agent", cfg);
+
+    expect(result.error).toBeUndefined();
+    expect(result.model).toMatchObject({
+      provider: "openrouter",
+      id: "anthropic/claude-sonnet-4-6",
+      api: "openai-completions",
+    });
+  });
+
   it("includes provider headers in provider fallback model", () => {
     const cfg = {
       models: {

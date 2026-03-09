@@ -7,7 +7,11 @@ import { DEFAULT_CONTEXT_TOKENS } from "../defaults.js";
 import { buildModelAliasLines } from "../model-alias-lines.js";
 import { isSecretRefHeaderValueMarker } from "../model-auth-markers.js";
 import { resolveForwardCompatModel } from "../model-forward-compat.js";
-import { findNormalizedProviderValue, normalizeProviderId } from "../model-selection.js";
+import {
+  findNormalizedProviderValue,
+  normalizeProviderId,
+  parseModelRef,
+} from "../model-selection.js";
 import { discoverAuthStorage, discoverModels } from "../pi-model-discovery.js";
 import { normalizeResolvedProviderModel } from "./model.provider-normalization.js";
 
@@ -250,13 +254,25 @@ export function resolveModel(
   const resolvedAgentDir = agentDir ?? resolveOpenClawAgentDir();
   const authStorage = discoverAuthStorage(resolvedAgentDir);
   const modelRegistry = discoverModels(authStorage, resolvedAgentDir);
-  const model = resolveModelWithRegistry({ provider, modelId, modelRegistry, cfg });
+  const normalizedModelId = (() => {
+    const parsed = parseModelRef(modelId, provider);
+    if (!parsed) {
+      return modelId;
+    }
+    return parsed.provider === normalizeProviderId(provider) ? parsed.model : modelId;
+  })();
+  const model = resolveModelWithRegistry({
+    provider,
+    modelId: normalizedModelId,
+    modelRegistry,
+    cfg,
+  });
   if (model) {
     return { model, authStorage, modelRegistry };
   }
 
   return {
-    error: buildUnknownModelError(provider, modelId),
+    error: buildUnknownModelError(provider, normalizedModelId),
     authStorage,
     modelRegistry,
   };
