@@ -33,6 +33,21 @@ function normalizeBaseUrl(value: string): string {
   return value.endsWith("/") ? value.slice(0, -1) : value;
 }
 
+function parseModelRef(value: string | undefined): { provider?: string; model?: string } {
+  const ref = readString(value);
+  if (!ref) {
+    return {};
+  }
+  const slash = ref.indexOf("/");
+  if (slash <= 0 || slash === ref.length - 1) {
+    return { model: ref };
+  }
+  return {
+    provider: ref.slice(0, slash),
+    model: ref.slice(slash + 1),
+  };
+}
+
 function ensureAction(params: Record<string, unknown>): ComputerUseAction {
   const action = readString(params.action) ?? "start";
   if (action === "start" || action === "status" || action === "confirm" || action === "cancel") {
@@ -67,18 +82,16 @@ function resolveProviderModel(
     typeof defaultsModel === "string"
       ? defaultsModel.trim()
       : (defaultsModel?.primary?.trim() ?? undefined);
-  const primaryProvider = typeof primary === "string" ? primary.split("/")[0] : undefined;
-  const primaryModel =
-    typeof primary === "string" ? primary.split("/").slice(1).join("/") : undefined;
+  const parsedPrimary = parseModelRef(primary);
 
   const provider =
     readString(params.provider) ??
     readString(pluginCfg.defaultProvider) ??
-    primaryProvider ??
+    parsedPrimary.provider ??
     "openai";
 
   const model =
-    readString(params.model) ?? readString(pluginCfg.defaultModel) ?? primaryModel ?? "gpt-5.4";
+    readString(params.model) ?? readString(pluginCfg.defaultModel) ?? parsedPrimary.model ?? "gpt-5.4";
 
   return { provider, model };
 }
@@ -149,14 +162,27 @@ export function createComputerUseTool(api: OpenClawPluginApi) {
 
     async execute(_id: string, params: Record<string, unknown>) {
       const pluginCfg = (api.pluginConfig ?? {}) as PluginCfg;
-      const baseUrlRaw =
-        readString(params.executorBaseUrl) ?? readString(pluginCfg.executorBaseUrl);
+      const overrideBaseUrl = readString(params.executorBaseUrl);
+      const configuredBaseUrl = readString(pluginCfg.executorBaseUrl);
+      const baseUrlRaw = overrideBaseUrl ?? configuredBaseUrl;
       if (!baseUrlRaw) {
         throw new Error("computer-use plugin requires executorBaseUrl");
       }
       const baseUrl = normalizeBaseUrl(baseUrlRaw);
-      const authToken =
-        readString(params.executorAuthToken) ?? readString(pluginCfg.executorAuthToken);
+      const overrideAuthToken = readString(params.executorAuthToken);
+      const configuredAuthToken = readString(pluginCfg.executorAuthToken);
+      if (
+        overrideBaseUrl &&
+        configuredBaseUrl &&
+        normalizeBaseUrl(overrideBaseUrl) !== normalizeBaseUrl(configuredBaseUrl) &&
+        configuredAuthToken &&
+        !overrideAuthToken
+      ) {
+        throw new Error(
+          "executorBaseUrl override requires an explicit executorAuthToken when plugin executorAuthToken is configured",
+        );
+      }
+      const authToken = overrideAuthToken ?? configuredAuthToken;
       const action = ensureAction(params);
 
       let response: unknown;

@@ -78,6 +78,34 @@ describe("computer-use tool", () => {
     });
   });
 
+  it("treats slashless default model refs as model-only defaults", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(
+        new Response(JSON.stringify({ taskId: "task-1", status: "queued" }), { status: 200 }),
+      );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const tool = createComputerUseTool(
+      fakeApi({
+        config: {
+          agents: { defaults: { model: { primary: "gpt-5.4" } } },
+        },
+        pluginConfig: {
+          executorBaseUrl: "http://127.0.0.1:8100/",
+        },
+      }) as never,
+    );
+
+    await tool.execute("tool-1", { task: "Open settings" });
+
+    const init = fetchMock.mock.calls[0]?.[1] as RequestInit;
+    expect(JSON.parse(String(init.body))).toMatchObject({
+      provider: "openai",
+      model: "gpt-5.4",
+    });
+  });
+
   it("uses taskId for status checks", async () => {
     const fetchMock = vi
       .fn()
@@ -160,6 +188,29 @@ describe("computer-use tool", () => {
     await expect(tool.execute("tool-4", { task: "Open browser" })).rejects.toThrow(
       /executorBaseUrl/i,
     );
+  });
+
+  it("rejects executorBaseUrl overrides that would reuse the configured auth token", async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+
+    const tool = createComputerUseTool(
+      fakeApi({
+        pluginConfig: {
+          executorBaseUrl: "http://127.0.0.1:8100",
+          executorAuthToken: "secret",
+        },
+      }) as never,
+    );
+
+    await expect(
+      tool.execute("tool-4", {
+        task: "Open browser",
+        executorBaseUrl: "http://attacker.invalid:8100",
+      }),
+    ).rejects.toThrow(/executorBaseUrl override requires an explicit executorAuthToken/i);
+
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 
   it("surfaces executor error payloads", async () => {
