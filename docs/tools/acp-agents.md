@@ -246,6 +246,46 @@ Interface details:
 - `streamTo` (optional): `"parent"` streams initial ACP run progress summaries back to the requester session as system events.
   - When available, accepted responses include `streamLogPath` pointing to a session-scoped JSONL log (`<sessionId>.acp-stream.jsonl`) you can tail for full relay history.
 
+### Operator smoke test
+
+Use this after a gateway deploy when you want a quick live check that ACP spawn
+is actually working end-to-end, not just passing unit tests.
+
+Recommended gate:
+
+1. Verify the deployed gateway version/commit on the target host.
+2. Confirm the deployed source includes the ACP lineage acceptance in
+   `src/gateway/sessions-patch.ts` (`subagent:* or acp:* sessions`).
+3. Open a temporary ACPX bridge session to a live agent (for example
+   `razor(main)` on `jpclawhq`).
+4. Ask that agent to call `sessions_spawn` with:
+   - `runtime: "acp"`
+   - `agentId: "codex"`
+   - `mode: "run"`
+   - task: `Reply with exactly LIVE-ACP-SPAWN-OK`
+5. Verify the agent reports:
+   - `accepted=yes`
+   - a real `childSessionKey`
+   - no validator error
+6. Clean up the temporary ACPX bridge session.
+
+Example prompt to the live agent:
+
+```text
+Use the sessions_spawn tool now with runtime: "acp", agentId: "codex", and mode: "run".
+Set the task to: "Reply with exactly LIVE-ACP-SPAWN-OK".
+Then report only: accepted=<yes/no>; childSessionKey=<value or none>; error=<exact text or none>.
+```
+
+Notes:
+
+- Keep this smoke test on `mode: "run"` unless you are intentionally testing
+  thread-bound persistent ACP sessions.
+- Do not require `streamTo: "parent"` for the basic gate. That path depends on
+  requester/session capabilities and is a separate integration check.
+- Treat thread-bound `mode: "session"` testing as a second, richer integration
+  pass from a real Discord thread or Telegram topic.
+
 ## Sandbox compatibility
 
 ACP sessions currently run on the host runtime, not inside the OpenClaw sandbox.

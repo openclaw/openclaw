@@ -463,6 +463,18 @@ describe("gateway server sessions", () => {
     expect(spawnedPatched.ok).toBe(true);
     expect(spawnedPatched.payload?.entry.spawnedBy).toBe("agent:main:main");
 
+    const acpPatched = await rpcReq<{
+      ok: true;
+      entry: { spawnedBy?: string; spawnDepth?: number };
+    }>(ws, "sessions.patch", {
+      key: "agent:main:acp:child",
+      spawnedBy: "agent:main:main",
+      spawnDepth: 1,
+    });
+    expect(acpPatched.ok).toBe(true);
+    expect(acpPatched.payload?.entry.spawnedBy).toBe("agent:main:main");
+    expect(acpPatched.payload?.entry.spawnDepth).toBe(1);
+
     const spawnedPatchedInvalidKey = await rpcReq(ws, "sessions.patch", {
       key: "agent:main:main",
       spawnedBy: "agent:main:main",
