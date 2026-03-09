@@ -186,7 +186,7 @@ const saveSessionToMemory: HookHandler = async (event) => {
     // one silently overwrites the earlier memory entry.
     if (!slug) {
       const timeSlug = now.toISOString().split("T")[1].split(".")[0].replace(/:/g, "");
-      const rand = Math.random().toString(36).slice(2, 6) || "0000"; // 4-char alphanumeric
+      const rand = (Math.random().toString(36) + "0000").slice(2, 6); // guaranteed 4-char
       slug = `${timeSlug.slice(0, 6)}-${rand}`;
       log.debug("Using fallback timestamp slug", { slug });
     }
