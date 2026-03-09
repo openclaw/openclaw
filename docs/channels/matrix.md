@@ -242,6 +242,17 @@ openclaw matrix verify backup restore --verbose
 All `verify` commands are concise by default (including quiet internal SDK logging) and show detailed diagnostics only with `--verbose`.
 Use `--json` for full machine-readable output when scripting.
 
+In multi-account setups, Matrix CLI commands use the implicit Matrix default account unless you pass `--account <id>`.
+Use `--account` whenever you want verification or device operations to target a named account explicitly:
+
+```bash
+openclaw matrix verify status --account assistant
+openclaw matrix verify backup restore --account assistant
+openclaw matrix devices list --account assistant
+```
+
+When encryption is disabled or unavailable for a named account, Matrix warnings and verification errors point at that account's config key, for example `channels.matrix.accounts.assistant.encryption`.
+
 When `encryption: true`, Matrix defaults `startupVerification` to `"if-unverified"`.
 On startup, if this device is still unverified, Matrix will request self-verification in another Matrix client,
 skip duplicate requests while one is already pending, and apply a local cooldown before retrying after restarts.
@@ -407,6 +418,7 @@ See [Pairing](/channels/pairing) for the shared DM pairing flow and storage layo
 
 Top-level `channels.matrix` values act as defaults for named accounts unless an account overrides them.
 Set `defaultAccount` when you want OpenClaw to prefer one named Matrix account for implicit routing, probing, and CLI operations.
+Pass `--account <id>` to `openclaw matrix verify ...` and `openclaw matrix devices ...` when you want to override that implicit selection for one command.
 
 ## Target resolution
 
