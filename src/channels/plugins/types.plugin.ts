@@ -45,8 +45,7 @@ export type ChannelConfigSchema = {
   uiHints?: Record<string, ChannelConfigUiHint>;
 };
 
-// oxlint-disable-next-line typescript/no-explicit-any
-export type ChannelPlugin<ResolvedAccount = any, Probe = unknown, Audit = unknown> = {
+export type ChannelPlugin<ResolvedAccount = unknown, Probe = unknown, Audit = unknown> = {
   id: ChannelId;
   meta: ChannelMeta;
   capabilities: ChannelCapabilities;

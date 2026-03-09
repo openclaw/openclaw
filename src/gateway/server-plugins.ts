@@ -24,7 +24,7 @@ const FALLBACK_GATEWAY_CONTEXT_STATE_KEY: unique symbol = Symbol.for(
 );
 
 type FallbackGatewayContextState = {
-  context: GatewayRequestContext | undefined;
+  getContext: (() => GatewayRequestContext) | undefined;
 };
 
 const fallbackGatewayContextState = (() => {
@@ -35,14 +35,13 @@ const fallbackGatewayContextState = (() => {
   if (existing) {
     return existing;
   }
-  const created: FallbackGatewayContextState = { context: undefined };
+  const created: FallbackGatewayContextState = { getContext: undefined };
   globalState[FALLBACK_GATEWAY_CONTEXT_STATE_KEY] = created;
   return created;
 })();
 
-export function setFallbackGatewayContext(ctx: GatewayRequestContext): void {
-  // TODO: This startup snapshot can become stale if runtime config/context changes.
-  fallbackGatewayContextState.context = ctx;
+export function setFallbackGatewayContext(getCtx: () => GatewayRequestContext): void {
+  fallbackGatewayContextState.getContext = getCtx;
 }
 
 // ── Internal gateway dispatch for plugin runtime ────────────────────
@@ -69,7 +68,7 @@ async function dispatchGatewayMethod<T>(
   params: Record<string, unknown>,
 ): Promise<T> {
   const scope = getPluginRuntimeGatewayRequestScope();
-  const context = scope?.context ?? fallbackGatewayContextState.context;
+  const context = scope?.context ?? fallbackGatewayContextState.getContext?.();
   const isWebchatConnect = scope?.isWebchatConnect ?? (() => false);
   if (!context) {
     throw new Error(

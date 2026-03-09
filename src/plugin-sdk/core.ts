@@ -1,3 +1,11 @@
+/**
+ * Lightweight plugin SDK entry point (`openclaw/plugin-sdk/core`).
+ *
+ * Exports only the minimal set of types and utilities needed by simple plugins
+ * that don't require channel-specific APIs, webhook helpers, or media utilities.
+ * Use `openclaw/plugin-sdk` for the full API surface.
+ */
+
 export type {
   AnyAgentTool,
   OpenClawPluginApi,

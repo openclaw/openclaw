@@ -165,14 +165,14 @@ describe("loadGatewayPlugins", () => {
     const runtime = createSubagentRuntime(first);
 
     const staleContext = createTestContext("stale");
-    first.setFallbackGatewayContext(staleContext);
+    first.setFallbackGatewayContext(() => staleContext);
     await runtime.run({ sessionKey: "s-1", message: "hello" });
     expect(getLastDispatchedContext()).toBe(staleContext);
 
     vi.resetModules();
     const reloaded = await importServerPluginsModule();
     const freshContext = createTestContext("fresh");
-    reloaded.setFallbackGatewayContext(freshContext);
+    reloaded.setFallbackGatewayContext(() => freshContext);
 
     await runtime.run({ sessionKey: "s-1", message: "hello again" });
     expect(getLastDispatchedContext()).toBe(freshContext);
@@ -184,11 +184,11 @@ describe("loadGatewayPlugins", () => {
     const firstContext = createTestContext("before-restart");
     const secondContext = createTestContext("after-restart");
 
-    serverPlugins.setFallbackGatewayContext(firstContext);
+    serverPlugins.setFallbackGatewayContext(() => firstContext);
     await runtime.run({ sessionKey: "s-2", message: "before restart" });
     expect(getLastDispatchedContext()).toBe(firstContext);
 
-    serverPlugins.setFallbackGatewayContext(secondContext);
+    serverPlugins.setFallbackGatewayContext(() => secondContext);
     await runtime.run({ sessionKey: "s-2", message: "after restart" });
     expect(getLastDispatchedContext()).toBe(secondContext);
   });
@@ -200,7 +200,7 @@ describe("loadGatewayPlugins", () => {
       marker: string;
     };
 
-    serverPlugins.setFallbackGatewayContext(context);
+    serverPlugins.setFallbackGatewayContext(() => context);
     context.marker = "after-mutation";
 
     await runtime.run({ sessionKey: "s-3", message: "mutated context" });

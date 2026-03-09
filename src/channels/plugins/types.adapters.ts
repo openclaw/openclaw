@@ -149,7 +149,7 @@ export type ChannelStatusAdapter<ResolvedAccount, Probe = unknown, Audit = unkno
     runtime?: ChannelAccountSnapshot;
     probe?: Probe;
     audit?: Audit;
-  }) => ChannelAccountSnapshot | Promise<ChannelAccountSnapshot>;
+  }) => ChannelAccountSnapshot<Probe, Audit> | Promise<ChannelAccountSnapshot<Probe, Audit>>;
   logSelfId?: (params: {
     account: ResolvedAccount;
     cfg: OpenClawConfig;

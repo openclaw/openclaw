@@ -62,8 +62,10 @@ export function authorizeUserForDm(
 }
 
 /**
- * Sanitize user input to prevent prompt injection attacks.
- * Filters known dangerous patterns and truncates long messages.
+ * Basic prompt-injection heuristic filter.
+ * Note: Regex-based prompt-injection filtering is inherently incomplete
+ * and can be bypassed by adversarial input. This provides defense-in-depth
+ * but should not be relied upon as a primary security control.
  */
 export function sanitizeInput(text: string): string {
   const dangerousPatterns = [

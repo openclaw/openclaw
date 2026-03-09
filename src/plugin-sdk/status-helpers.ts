@@ -65,7 +65,7 @@ export function buildProbeChannelStatusSummary<TExtra extends Record<string, unk
   };
 }
 
-export function buildBaseAccountStatusSnapshot(params: {
+export function buildBaseAccountStatusSnapshot<TProbe = unknown>(params: {
   account: {
     accountId: string;
     name?: string;
@@ -73,7 +73,7 @@ export function buildBaseAccountStatusSnapshot(params: {
     configured?: boolean;
   };
   runtime?: RuntimeLifecycleSnapshot | null;
-  probe?: unknown;
+  probe?: TProbe;
 }) {
   const { account, runtime, probe } = params;
   return {
@@ -87,13 +87,13 @@ export function buildBaseAccountStatusSnapshot(params: {
   };
 }
 
-export function buildComputedAccountStatusSnapshot(params: {
+export function buildComputedAccountStatusSnapshot<TProbe = unknown>(params: {
   accountId: string;
   name?: string;
   enabled?: boolean;
   configured?: boolean;
   runtime?: RuntimeLifecycleSnapshot | null;
-  probe?: unknown;
+  probe?: TProbe;
 }) {
   const { accountId, name, enabled, configured, runtime, probe } = params;
   return buildBaseAccountStatusSnapshot({
@@ -108,9 +108,9 @@ export function buildComputedAccountStatusSnapshot(params: {
   });
 }
 
-export function buildRuntimeAccountStatusSnapshot(params: {
+export function buildRuntimeAccountStatusSnapshot<TProbe = unknown>(params: {
   runtime?: RuntimeLifecycleSnapshot | null;
-  probe?: unknown;
+  probe?: TProbe;
 }) {
   const { runtime, probe } = params;
   return {
