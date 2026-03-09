@@ -5,11 +5,13 @@ import {
   type AcpSpawnRuntimeCloseHandle,
 } from "../acp/control-plane/spawn.js";
 import { isAcpEnabledByPolicy, resolveAcpAgentPolicyError } from "../acp/policy.js";
+import { requireAcpRuntimeBackend } from "../acp/runtime/registry.js";
 import {
   resolveAcpSessionCwd,
   resolveAcpThreadSessionDetailLines,
 } from "../acp/runtime/session-identifiers.js";
 import type { AcpRuntimeSessionMode } from "../acp/runtime/types.js";
+import { normalizeThinkLevel } from "../auto-reply/thinking.js";
 import {
   resolveThreadBindingIntroText,
   resolveThreadBindingThreadName,
@@ -51,11 +53,15 @@ export const ACP_SPAWN_SANDBOX_MODES = ["inherit", "require"] as const;
 export type SpawnAcpSandboxMode = (typeof ACP_SPAWN_SANDBOX_MODES)[number];
 export const ACP_SPAWN_STREAM_TARGETS = ["parent"] as const;
 export type SpawnAcpStreamTarget = (typeof ACP_SPAWN_STREAM_TARGETS)[number];
+const ACPX_CODEX_BOOTSTRAP_ENV_KEY = "OPENCLAW_ACPX_CODEX_BOOTSTRAP";
+const ACPX_CODEX_SUPPORTED_THINKING_LEVELS = ["low", "medium", "high", "xhigh"] as const;
 
 export type SpawnAcpParams = {
   task: string;
   label?: string;
   agentId?: string;
+  model?: string;
+  thinking?: string;
   cwd?: string;
   mode?: SpawnAcpMode;
   thread?: boolean;
@@ -156,6 +162,11 @@ function normalizeOptionalAgentId(value: string | undefined | null): string | un
     return undefined;
   }
   return normalizeAgentId(trimmed);
+}
+
+function normalizeOptionalBackendId(value: string | undefined | null): string | undefined {
+  const trimmed = (value ?? "").trim().toLowerCase();
+  return trimmed || undefined;
 }
 
 function summarizeError(err: unknown): string {
@@ -302,6 +313,100 @@ function prepareAcpThreadBinding(params: {
   };
 }
 
+function normalizeSpawnModelOverride(value: string | undefined): string | undefined {
+  const trimmed = value?.trim();
+  return trimmed || undefined;
+}
+
+function normalizeCodexReasoningEffort(
+  value: string | undefined,
+): { ok: true; reasoningEffort?: string } | { ok: false; error: string } {
+  const trimmed = value?.trim();
+  if (!trimmed) {
+    return { ok: true };
+  }
+  const normalized = normalizeThinkLevel(trimmed);
+  if (!normalized) {
+    return {
+      ok: false,
+      error: `Invalid thinking level "${value}". Codex ACP spawn supports: ${ACPX_CODEX_SUPPORTED_THINKING_LEVELS.join(", ")}.`,
+    };
+  }
+  if (normalized === "adaptive") {
+    return {
+      ok: false,
+      error: `ACP spawn thinking="adaptive" is unsupported for Codex on acpx. Use one of: ${ACPX_CODEX_SUPPORTED_THINKING_LEVELS.join(", ")}.`,
+    };
+  }
+  if (normalized === "off") {
+    return {
+      ok: false,
+      error: `ACP spawn thinking="off" is unsupported for Codex on acpx because the Codex CLI accepts only: ${ACPX_CODEX_SUPPORTED_THINKING_LEVELS.join(", ")}.`,
+    };
+  }
+  if (normalized === "minimal") {
+    return {
+      ok: false,
+      error: `ACP spawn thinking="minimal" is unsupported for Codex on acpx because the Codex CLI accepts only: ${ACPX_CODEX_SUPPORTED_THINKING_LEVELS.join(", ")}.`,
+    };
+  }
+  return {
+    ok: true,
+    reasoningEffort: normalized,
+  };
+}
+
+function buildCodexAcpxBootstrapEnv(payload: {
+  model?: string;
+  reasoningEffort?: string;
+}): Record<string, string> | undefined {
+  if (!payload.model && !payload.reasoningEffort) {
+    return undefined;
+  }
+  const encoded = Buffer.from(JSON.stringify(payload), "utf8").toString("base64url");
+  return {
+    [ACPX_CODEX_BOOTSTRAP_ENV_KEY]: encoded,
+  };
+}
+
+function formatUnsupportedAcpSpawnOverrideNote(): string {
+  return 'Ignored ACP model/thinking overrides because they are currently supported only for agentId="codex" on the acpx backend.';
+}
+
+function resolveAcpSpawnBootstrapEnv(params: {
+  backendId?: string;
+  agentId: string;
+  model?: string;
+  thinking?: string;
+}): { ok: true; env?: Record<string, string>; note?: string } | { ok: false; error: string } {
+  const model = normalizeSpawnModelOverride(params.model);
+  const thinking = params.thinking?.trim() || undefined;
+  const backendId = normalizeOptionalBackendId(params.backendId) ?? "acpx";
+  if (backendId !== "acpx" || params.agentId !== "codex") {
+    if (!model && !thinking) {
+      return { ok: true };
+    }
+    return {
+      ok: true,
+      note: formatUnsupportedAcpSpawnOverrideNote(),
+    };
+  }
+  const reasoningResult = normalizeCodexReasoningEffort(thinking);
+  if (!reasoningResult.ok) {
+    return reasoningResult;
+  }
+  if (!model && !reasoningResult.reasoningEffort) {
+    return { ok: true };
+  }
+  return {
+    ok: true,
+    env: buildCodexAcpxBootstrapEnv({
+      model,
+      reasoningEffort: reasoningResult.reasoningEffort,
+    }),
+  };
+}
+
 export async function spawnAcpDirect(
   params: SpawnAcpParams,
   ctx: SpawnAcpContext,
@@ -368,6 +473,28 @@ export async function spawnAcpDirect(
       error: agentPolicyError.message,
     };
   }
+  let resolvedBackendId: string;
+  try {
+    resolvedBackendId = requireAcpRuntimeBackend(cfg.acp?.backend).id;
+  } catch (error) {
+    return {
+      status: "error",
+      error: summarizeError(error),
+    };
+  }
+  const bootstrapEnv = resolveAcpSpawnBootstrapEnv({
+    backendId: resolvedBackendId,
+    agentId: targetAgentId,
+    model: params.model,
+    thinking: params.thinking,
+  });
+  if (!bootstrapEnv.ok) {
+    return {
+      status: "error",
+      error: bootstrapEnv.error,
+    };
+  }
+  const acceptedNotePrefix = bootstrapEnv.note?.trim() || undefined;
 
   const sessionKey = `agent:${targetAgentId}:acp:${crypto.randomUUID()}`;
   const runtimeMode = resolveAcpSessionMode(spawnMode);
@@ -427,7 +554,8 @@ export async function spawnAcpDirect(
       agent: targetAgentId,
       mode: runtimeMode,
       cwd: params.cwd,
-      backendId: cfg.acp?.backend,
+      env: bootstrapEnv.env,
+      backendId: resolvedBackendId,
     });
     initializedRuntime = {
       runtime: initialized.runtime,
@@ -603,7 +731,12 @@ export async function spawnAcpDirect(
       runId: childRunId,
       mode: spawnMode,
       ...(streamLogPath ? { streamLogPath } : {}),
-      note: spawnMode === "session" ? ACP_SPAWN_SESSION_ACCEPTED_NOTE : ACP_SPAWN_ACCEPTED_NOTE,
+      note: [
+        acceptedNotePrefix,
+        spawnMode === "session" ? ACP_SPAWN_SESSION_ACCEPTED_NOTE : ACP_SPAWN_ACCEPTED_NOTE,
+      ]
+        .filter(Boolean)
+        .join(" "),
     };
   }
 
@@ -612,6 +745,11 @@ export async function spawnAcpDirect(
     childSessionKey: sessionKey,
     runId: childRunId,
     mode: spawnMode,
-    note: spawnMode === "session" ? ACP_SPAWN_SESSION_ACCEPTED_NOTE : ACP_SPAWN_ACCEPTED_NOTE,
+    note: [
+      acceptedNotePrefix,
+      spawnMode === "session" ? ACP_SPAWN_SESSION_ACCEPTED_NOTE : ACP_SPAWN_ACCEPTED_NOTE,
+    ]
+      .filter(Boolean)
+      .join(" "),
   };
 }

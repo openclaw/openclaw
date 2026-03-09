@@ -37,6 +37,12 @@ export type AcpRuntimeEnsureInput = {
   mode: AcpRuntimeSessionMode;
   cwd?: string;
   env?: Record<string, string>;
+  /**
+   * Previously persisted runtime handle for this session, if one exists.
+   * Backends can use this to rehydrate backend-specific state during restore
+   * without forcing core to understand adapter-specific handle encoding.
+   */
+  previousHandle?: AcpRuntimeHandle;
 };
 
 export type AcpRuntimeTurnInput = {

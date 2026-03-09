@@ -220,6 +220,8 @@ Use `runtime: "acp"` to start an ACP session from an agent turn or tool call.
   "task": "Open the repo and summarize failing tests",
   "runtime": "acp",
   "agentId": "codex",
+  "model": "gpt-5.3-codex-spark",
+  "thinking": "high",
   "thread": true,
   "mode": "session"
 }
@@ -236,6 +238,10 @@ Interface details:
 - `task` (required): initial prompt sent to the ACP session.
 - `runtime` (required for ACP): must be `"acp"`.
 - `agentId` (optional): ACP target harness id. Falls back to `acp.defaultAgent` if set.
+- `model` (optional): currently supported only when `agentId` resolves to `codex` on the `acpx` backend. The override is applied during Codex ACP bootstrap.
+- `thinking` (optional): currently supported only when `agentId` resolves to `codex` on the `acpx` backend.
+  - supported values: `low`, `medium`, `high`, `xhigh`
+  - `off`, `minimal`, `adaptive`, and `none` are rejected for ACP Codex bootstrap because the Codex CLI does not accept them
 - `thread` (optional, default `false`): request thread binding flow where supported.
 - `mode` (optional): `run` (one-shot) or `session` (persistent).
   - default is `run`
@@ -245,6 +251,12 @@ Interface details:
 - `label` (optional): operator-facing label used in session/banner text.
 - `streamTo` (optional): `"parent"` streams initial ACP run progress summaries back to the requester session as system events.
   - When available, accepted responses include `streamLogPath` pointing to a session-scoped JSONL log (`<sessionId>.acp-stream.jsonl`) you can tail for full relay history.
+
+Current override scope:
+
+- ACP `model` / `thinking` overrides currently apply only to `agentId: "codex"` on the `acpx` backend.
+- For other ACP harnesses, OpenClaw ignores those two fields, continues the spawn, and returns a note explaining that the overrides were skipped.
+- Other ACP harnesses still use their normal backend/runtime defaults or later `/acp` session controls.
 
 ## Sandbox compatibility
 

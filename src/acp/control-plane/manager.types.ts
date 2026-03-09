@@ -44,6 +44,7 @@ export type AcpInitializeSessionInput = {
   agent: string;
   mode: AcpRuntimeSessionMode;
   cwd?: string;
+  env?: Record<string, string>;
   backendId?: string;
 };
 

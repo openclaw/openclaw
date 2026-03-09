@@ -2,6 +2,8 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import type { SessionBindingRecord } from "../infra/outbound/session-binding-service.js";
 
+const ACPX_CODEX_BOOTSTRAP_ENV_KEY = "OPENCLAW_ACPX_CODEX_BOOTSTRAP";
+
 function createDefaultSpawnConfig(): OpenClawConfig {
   return {
     acp: {
@@ -26,6 +28,7 @@ function createDefaultSpawnConfig(): OpenClawConfig {
 
 const hoisted = vi.hoisted(() => {
   const callGatewayMock = vi.fn();
+  const requireAcpRuntimeBackendMock = vi.fn();
   const sessionBindingCapabilitiesMock = vi.fn();
   const sessionBindingBindMock = vi.fn();
   const sessionBindingUnbindMock = vi.fn();
@@ -43,6 +46,7 @@ const hoisted = vi.hoisted(() => {
   };
   return {
     callGatewayMock,
+    requireAcpRuntimeBackendMock,
     sessionBindingCapabilitiesMock,
     sessionBindingBindMock,
     sessionBindingUnbindMock,
@@ -92,6 +96,10 @@ vi.mock("../gateway/call.js", () => ({
   callGateway: (opts: unknown) => hoisted.callGatewayMock(opts),
 }));
 
+vi.mock("../acp/runtime/registry.js", () => ({
+  requireAcpRuntimeBackend: (id?: string) => hoisted.requireAcpRuntimeBackendMock(id),
+}));
+
 vi.mock("../config/sessions.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../config/sessions.js")>();
   return {
@@ -136,6 +144,18 @@ vi.mock("./acp-spawn-parent-stream.js", () => ({
 }));
 
 const { spawnAcpDirect } = await import("./acp-spawn.js");
+
+function decodeCodexBootstrapEnv(input: unknown) {
+  const env = input as { env?: Record<string, string> } | undefined;
+  const encoded = env?.env?.[ACPX_CODEX_BOOTSTRAP_ENV_KEY];
+  if (!encoded) {
+    return undefined;
+  }
+  return JSON.parse(Buffer.from(encoded, "base64url").toString("utf8")) as {
+    model?: string;
+    reasoningEffort?: string;
+  };
+}
 
 function createSessionBindingCapabilities() {
   return {
@@ -206,6 +226,9 @@ describe("spawnAcpDirect", () => {
       }
       return {};
     });
+    hoisted.requireAcpRuntimeBackendMock
+      .mockReset()
+      .mockImplementation((id?: string) => ({ id: id?.trim() || "acpx", runtime: {} }));
 
     hoisted.closeSessionMock.mockReset().mockResolvedValue({
       runtimeClosed: true,
@@ -217,6 +240,7 @@ describe("spawnAcpDirect", () => {
         agent: string;
         mode: "persistent" | "oneshot";
         cwd?: string;
+        env?: Record<string, string>;
       };
       const runtimeSessionName = `${args.sessionKey}:runtime`;
       const cwd = typeof args.cwd === "string" ? args.cwd : undefined;
@@ -375,6 +399,45 @@ describe("spawnAcpDirect", () => {
     expect(transcriptCalls[1]?.threadId).toBe("child-thread");
   });
 
+  it("passes Codex model and thinking overrides through the ACP bootstrap env", async () => {
+    const result = await spawnAcpDirect(
+      {
+        task: "Investigate flaky tests",
+        agentId: "codex",
+        model: "gpt-5.3-codex-spark",
+        thinking: "high",
+      },
+      {
+        agentSessionKey: "agent:main:main",
+      },
+    );
+
+    expect(result.status).toBe("accepted");
+    const initCall = hoisted.initializeSessionMock.mock.calls[0]?.[0];
+    expect(decodeCodexBootstrapEnv(initCall)).toEqual({
+      model: "gpt-5.3-codex-spark",
+      reasoningEffort: "high",
+    });
+  });
+
+  it('rejects Codex ACP thinking="off" before session init because the Codex CLI does not support it', async () => {
+    const result = await spawnAcpDirect(
+      {
+        task: "Investigate flaky tests",
+        agentId: "codex",
+        thinking: "off",
+      },
+      {
+        agentSessionKey: "agent:main:main",
+      },
+    );
+
+    expect(result.status).toBe("error");
+    expect(result.error).toContain('thinking="off" is unsupported');
+    expect(result.error).toContain("low, medium, high, xhigh");
+    expect(hoisted.initializeSessionMock).not.toHaveBeenCalled();
+  });
+
   it("does not inline delivery for fresh oneshot ACP runs", async () => {
     const result = await spawnAcpDirect(
       {
@@ -486,6 +549,136 @@ describe("spawnAcpDirect", () => {
       status: "forbidden",
     });
   });
+
+  it("accepts ACP spawns and strips unsupported model/thinking overrides for other harnesses", async () => {
+    hoisted.state.cfg = {
+      ...hoisted.state.cfg,
+      acp: {
+        enabled: true,
+        backend: "acpx",
+        allowedAgents: ["codex", "claude"],
+      },
+    };
+
+    const result = await spawnAcpDirect(
+      {
+        task: "hello",
+        agentId: "claude",
+        model: "claude-opus-4-5",
+        thinking: "medium",
+      },
+      {
+        agentSessionKey: "agent:main:main",
+      },
+    );
+
+    expect(result.status).toBe("accepted");
+    expect(result.note).toContain('supported only for agentId="codex" on the acpx backend');
+    const initCall = hoisted.initializeSessionMock.mock.calls[0]?.[0];
+    expect(initCall).toMatchObject({
+      agent: "claude",
+    });
+    expect(decodeCodexBootstrapEnv(initCall)).toBeUndefined();
+  });
+
+  it("ignores invalid thinking overrides for non-Codex ACP harnesses", async () => {
+    hoisted.state.cfg = {
+      ...hoisted.state.cfg,
+      acp: {
+        enabled: true,
+        backend: "acpx",
+        allowedAgents: ["codex", "claude"],
+      },
+    };
+
+    const result = await spawnAcpDirect(
+      {
+        task: "hello",
+        agentId: "claude",
+        thinking: "adaptive",
+      },
+      {
+        agentSessionKey: "agent:main:main",
+      },
+    );
+
+    expect(result.status).toBe("accepted");
+    expect(result.note).toContain('supported only for agentId="codex" on the acpx backend');
+    const initCall = hoisted.initializeSessionMock.mock.calls[0]?.[0];
+    expect(initCall).toMatchObject({
+      agent: "claude",
+    });
+    expect(decodeCodexBootstrapEnv(initCall)).toBeUndefined();
+  });
+
+  it("uses the resolved runtime backend instead of assuming acpx when config backend is unset", async () => {
+    hoisted.state.cfg = {
+      ...hoisted.state.cfg,
+      acp: {
+        enabled: true,
+        allowedAgents: ["codex"],
+      },
+    };
+    hoisted.requireAcpRuntimeBackendMock.mockReturnValue({
+      id: "custom",
+      runtime: {},
+    });
+
+    const result = await spawnAcpDirect(
+      {
+        task: "hello",
+        agentId: "codex",
+        thinking: "adaptive",
+      },
+      {
+        agentSessionKey: "agent:main:main",
+      },
+    );
+
+    expect(hoisted.requireAcpRuntimeBackendMock).toHaveBeenCalledWith(undefined);
+    expect(result.status).toBe("accepted");
+    expect(result.note).toContain('supported only for agentId="codex" on the acpx backend');
+    const initCall = hoisted.initializeSessionMock.mock.calls[0]?.[0];
+    expect(initCall).toMatchObject({
+      agent: "codex",
+      backendId: "custom",
+    });
+    expect(decodeCodexBootstrapEnv(initCall)).toBeUndefined();
+  });
+
+  it.each([
+    {
+      thinking: "adaptive",
+      message: 'thinking="adaptive" is unsupported',
+    },
+    {
+      thinking: "minimal",
+      message: 'thinking="minimal" is unsupported',
+    },
+    {
+      thinking: "none",
+      message: 'Invalid thinking level "none".',
+    },
+  ])(
+    "rejects unsupported Codex ACP thinking=$thinking before session init",
+    async ({ thinking, message }) => {
+      const result = await spawnAcpDirect(
+        {
+          task: "hello",
+          agentId: "codex",
+          thinking,
+        },
+        {
+          agentSessionKey: "agent:main:main",
+        },
+      );
+
+      expect(result.status).toBe("error");
+      expect(result.error).toContain(message);
+      expect(result.error).toContain("low, medium, high, xhigh");
+      expect(hoisted.initializeSessionMock).not.toHaveBeenCalled();
+    },
+  );
 
   it("requires an explicit ACP agent when no config default exists", async () => {
     const result = await spawnAcpDirect(

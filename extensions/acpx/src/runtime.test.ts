@@ -284,6 +284,29 @@ describe("AcpxRuntime", () => {
     expect(close?.sessionName).toBe("agent:claude:acp:789");
   });
 
+  it("prefers handle.cwd over the encoded runtime cwd for restored sessions", async () => {
+    const { runtime, logPath } = await createMockRuntimeFixture();
+    const handle = await runtime.ensureSession({
+      sessionKey: "agent:codex:acp:cwd-override",
+      agent: "codex",
+      mode: "persistent",
+    });
+    const overrideCwd = os.tmpdir();
+
+    await runtime.getStatus({
+      handle: {
+        ...handle,
+        cwd: overrideCwd,
+      },
+    });
+
+    const logs = await readMockRuntimeLogEntries(logPath);
+    const statusArgs = (logs.findLast((entry) => entry.kind === "status")?.args as string[]) ?? [];
+    const cwdFlagIndex = statusArgs.indexOf("--cwd");
+    expect(cwdFlagIndex).toBeGreaterThanOrEqual(0);
+    expect(statusArgs[cwdFlagIndex + 1]).toBe(overrideCwd);
+  });
+
   it("exposes control capabilities and runs set-mode/set/status commands", async () => {
     const { runtime, logPath } = await createMockRuntimeFixture();
     const handle = await runtime.ensureSession({
@@ -373,6 +396,239 @@ describe("AcpxRuntime", () => {
     } finally {
       delete process.env.MOCK_ACPX_CONFIG_SHOW_AGENTS;
     }
+  });
+
+  it("routes Codex ACP spawns through a dedicated bootstrap wrapper and reuses it for later verbs", async () => {
+    const { runtime, logPath } = await createMockRuntimeFixture();
+    const handle = await runtime.ensureSession({
+      sessionKey: "agent:codex:acp:codex-bootstrap",
+      agent: "codex",
+      mode: "persistent",
+      env: {
+        OPENCLAW_ACPX_CODEX_BOOTSTRAP: Buffer.from(
+          JSON.stringify({
+            model: "gpt-5.3-codex-spark",
+            reasoningEffort: "high",
+          }),
+          "utf8",
+        ).toString("base64url"),
+      },
+    });
+    await runtime.getStatus({ handle });
+
+    const decoded = decodeAcpxRuntimeHandleState(handle.runtimeSessionName);
+    expect(decoded?.codexBootstrap).toEqual({
+      model: "gpt-5.3-codex-spark",
+      reasoningEffort: "high",
+    });
+
+    const logs = await readMockRuntimeLogEntries(logPath);
+    const ensureArgs = (logs.find((entry) => entry.kind === "ensure")?.args as string[]) ?? [];
+    const statusArgs = (logs.find((entry) => entry.kind === "status")?.args as string[]) ?? [];
+
+    for (const args of [ensureArgs, statusArgs]) {
+      const agentFlagIndex = args.indexOf("--agent");
+      expect(agentFlagIndex).toBeGreaterThanOrEqual(0);
+      const rawAgentCommand = args[agentFlagIndex + 1];
+      expect(rawAgentCommand).toContain("codex-bootstrap-wrapper.mjs");
+      const payloadMatch = rawAgentCommand.match(/--payload\s+([A-Za-z0-9_-]+)/);
+      expect(payloadMatch?.[1]).toBeDefined();
+      const payload = JSON.parse(
+        Buffer.from(String(payloadMatch?.[1]), "base64url").toString("utf8"),
+      ) as {
+        targetCommand: string;
+        bootstrap: { model?: string; reasoningEffort?: string };
+      };
+      expect(payload.targetCommand).toContain("@zed-industries/codex-acp");
+      expect(payload.bootstrap).toEqual({
+        model: "gpt-5.3-codex-spark",
+        reasoningEffort: "high",
+      });
+    }
+  });
+
+  it("composes Codex bootstrap and MCP proxy wrappers when both are configured", async () => {
+    process.env.MOCK_ACPX_CONFIG_SHOW_AGENTS = JSON.stringify({
+      codex: {
+        command: "npx custom-codex-acp",
+      },
+    });
+    try {
+      const { runtime, logPath } = await createMockRuntimeFixture({
+        mcpServers: {
+          canva: {
+            command: "npx",
+            args: ["-y", "mcp-remote@latest", "https://mcp.canva.com/mcp"],
+            env: {
+              CANVA_TOKEN: "secret",
+            },
+          },
+        },
+      });
+      const handle = await runtime.ensureSession({
+        sessionKey: "agent:codex:acp:codex-bootstrap-mcp",
+        agent: "codex",
+        mode: "persistent",
+        env: {
+          OPENCLAW_ACPX_CODEX_BOOTSTRAP: Buffer.from(
+            JSON.stringify({
+              model: "gpt-5.3-codex-spark",
+              reasoningEffort: "high",
+            }),
+            "utf8",
+          ).toString("base64url"),
+        },
+      });
+      await runtime.getStatus({ handle });
+
+      const logs = await readMockRuntimeLogEntries(logPath);
+      const ensureArgs = (logs.find((entry) => entry.kind === "ensure")?.args as string[]) ?? [];
+      const statusArgs = (logs.find((entry) => entry.kind === "status")?.args as string[]) ?? [];
+
+      for (const args of [ensureArgs, statusArgs]) {
+        const agentFlagIndex = args.indexOf("--agent");
+        expect(agentFlagIndex).toBeGreaterThanOrEqual(0);
+        const rawAgentCommand = args[agentFlagIndex + 1];
+        expect(rawAgentCommand).toContain("mcp-proxy.mjs");
+        const outerPayloadMatch = rawAgentCommand.match(/--payload\s+([A-Za-z0-9_-]+)/);
+        expect(outerPayloadMatch?.[1]).toBeDefined();
+        const outerPayload = JSON.parse(
+          Buffer.from(String(outerPayloadMatch?.[1]), "base64url").toString("utf8"),
+        ) as {
+          targetCommand: string;
+          mcpServers: Array<{ name: string }>;
+        };
+        expect(outerPayload.mcpServers).toEqual([
+          expect.objectContaining({
+            name: "canva",
+          }),
+        ]);
+        expect(outerPayload.targetCommand).toContain("codex-bootstrap-wrapper.mjs");
+
+        const innerPayloadMatch = outerPayload.targetCommand.match(/--payload\s+([A-Za-z0-9_-]+)/);
+        expect(innerPayloadMatch?.[1]).toBeDefined();
+        const innerPayload = JSON.parse(
+          Buffer.from(String(innerPayloadMatch?.[1]), "base64url").toString("utf8"),
+        ) as {
+          targetCommand: string;
+          bootstrap: { model?: string; reasoningEffort?: string };
+        };
+        expect(innerPayload.targetCommand).toContain("custom-codex-acp");
+        expect(innerPayload.bootstrap).toEqual({
+          model: "gpt-5.3-codex-spark",
+          reasoningEffort: "high",
+        });
+      }
+    } finally {
+      delete process.env.MOCK_ACPX_CONFIG_SHOW_AGENTS;
+    }
+  });
+
+  it("does not cache override-bearing Codex agent commands across later verbs", async () => {
+    process.env.MOCK_ACPX_CONFIG_SHOW_AGENTS = JSON.stringify({
+      codex: {
+        command: "npx custom-codex-acp-one",
+      },
+    });
+    try {
+      const { runtime, logPath } = await createMockRuntimeFixture();
+      const handle = await runtime.ensureSession({
+        sessionKey: "agent:codex:acp:codex-bootstrap-no-cache",
+        agent: "codex",
+        mode: "persistent",
+        env: {
+          OPENCLAW_ACPX_CODEX_BOOTSTRAP: Buffer.from(
+            JSON.stringify({
+              model: "gpt-5.3-codex-spark",
+              reasoningEffort: "high",
+            }),
+            "utf8",
+          ).toString("base64url"),
+        },
+      });
+
+      process.env.MOCK_ACPX_CONFIG_SHOW_AGENTS = JSON.stringify({
+        codex: {
+          command: "npx custom-codex-acp-two",
+        },
+      });
+      await runtime.getStatus({ handle });
+
+      const logs = await readMockRuntimeLogEntries(logPath);
+      const ensureArgs = (logs.find((entry) => entry.kind === "ensure")?.args as string[]) ?? [];
+      const statusArgs = (logs.find((entry) => entry.kind === "status")?.args as string[]) ?? [];
+
+      const extractTargetCommand = (args: string[]) => {
+        const agentFlagIndex = args.indexOf("--agent");
+        expect(agentFlagIndex).toBeGreaterThanOrEqual(0);
+        const rawAgentCommand = args[agentFlagIndex + 1];
+        const payloadMatch = rawAgentCommand.match(/--payload\s+([A-Za-z0-9_-]+)/);
+        expect(payloadMatch?.[1]).toBeDefined();
+        const payload = JSON.parse(
+          Buffer.from(String(payloadMatch?.[1]), "base64url").toString("utf8"),
+        ) as {
+          targetCommand: string;
+        };
+        return payload.targetCommand;
+      };
+
+      expect(extractTargetCommand(ensureArgs)).toContain("custom-codex-acp-one");
+      expect(extractTargetCommand(statusArgs)).toContain("custom-codex-acp-two");
+    } finally {
+      delete process.env.MOCK_ACPX_CONFIG_SHOW_AGENTS;
+    }
+  });
+
+  it("reuses Codex bootstrap from the previous handle when re-ensuring without env", async () => {
+    const { runtime, logPath } = await createMockRuntimeFixture();
+    const firstHandle = await runtime.ensureSession({
+      sessionKey: "agent:codex:acp:codex-bootstrap-restore",
+      agent: "codex",
+      mode: "persistent",
+      env: {
+        OPENCLAW_ACPX_CODEX_BOOTSTRAP: Buffer.from(
+          JSON.stringify({
+            model: "gpt-5.3-codex-spark",
+            reasoningEffort: "high",
+          }),
+          "utf8",
+        ).toString("base64url"),
+      },
+    });
+    const restoredHandle = await runtime.ensureSession({
+      sessionKey: "agent:codex:acp:codex-bootstrap-restore",
+      agent: "codex",
+      mode: "persistent",
+      previousHandle: firstHandle,
+    });
+
+    const decoded = decodeAcpxRuntimeHandleState(restoredHandle.runtimeSessionName);
+    expect(decoded?.codexBootstrap).toEqual({
+      model: "gpt-5.3-codex-spark",
+      reasoningEffort: "high",
+    });
+
+    const logs = await readMockRuntimeLogEntries(logPath);
+    const ensureEntries = logs.filter((entry) => entry.kind === "ensure");
+    expect(ensureEntries).toHaveLength(2);
+    const ensureArgs = (ensureEntries[1]?.args as string[]) ?? [];
+    const agentFlagIndex = ensureArgs.indexOf("--agent");
+    expect(agentFlagIndex).toBeGreaterThanOrEqual(0);
+    const rawAgentCommand = ensureArgs[agentFlagIndex + 1];
+    expect(rawAgentCommand).toContain("codex-bootstrap-wrapper.mjs");
+    const payloadMatch = rawAgentCommand.match(/--payload\s+([A-Za-z0-9_-]+)/);
+    expect(payloadMatch?.[1]).toBeDefined();
+    const payload = JSON.parse(
+      Buffer.from(String(payloadMatch?.[1]), "base64url").toString("utf8"),
+    ) as {
+      targetCommand: string;
+      bootstrap: { model?: string; reasoningEffort?: string };
+    };
+    expect(payload.targetCommand).toContain("@zed-industries/codex-acp");
+    expect(payload.bootstrap).toEqual({
+      model: "gpt-5.3-codex-spark",
+      reasoningEffort: "high",
+    });
   });
 
   it("skips prompt execution when runTurn starts with an already-aborted signal", async () => {
