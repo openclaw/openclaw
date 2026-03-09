@@ -1472,13 +1472,18 @@ export async function writeConfigFile(
   options: ConfigWriteOptions = {},
 ): Promise<void> {
   const io = createConfigIO();
+
+  // Capture snapshot state at call time because the environment might shift
+  // (e.g. setRuntimeConfigSnapshot) while waiting in the write queue.
+  const capturedRuntimeSnapshot = runtimeConfigSnapshot;
+  const capturedSourceSnapshot = runtimeConfigSourceSnapshot;
+  const hadBothSnapshots = Boolean(capturedRuntimeSnapshot && capturedSourceSnapshot);
+
   return enqueueConfigWrite(async () => {
     let nextCfg = cfg;
-    const hadRuntimeSnapshot = Boolean(runtimeConfigSnapshot);
-    const hadBothSnapshots = Boolean(runtimeConfigSnapshot && runtimeConfigSourceSnapshot);
     if (hadBothSnapshots) {
-      const runtimePatch = createMergePatch(runtimeConfigSnapshot!, cfg);
-      nextCfg = coerceConfig(applyMergePatch(runtimeConfigSourceSnapshot!, runtimePatch));
+      const runtimePatch = createMergePatch(capturedRuntimeSnapshot!, cfg);
+      nextCfg = coerceConfig(applyMergePatch(capturedSourceSnapshot!, runtimePatch));
     }
     const sameConfigPath =
       options.expectedConfigPath === undefined || options.expectedConfigPath === io.configPath;
@@ -1515,7 +1520,7 @@ export async function writeConfigFile(
       setRuntimeConfigSnapshot(fresh, nextCfg);
       return;
     }
-    if (hadRuntimeSnapshot) {
+    if (capturedRuntimeSnapshot) {
       clearRuntimeConfigSnapshot();
     }
     // When we had no runtime snapshot, keep callers reading from disk/cache so external/manual
