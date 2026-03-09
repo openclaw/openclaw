@@ -24,6 +24,15 @@ type PendingWakeReason = {
   sessionKey?: string;
 };
 
+export type HeartbeatWakeSnapshotEntry = {
+  phase: "queued" | "running";
+  reason: string;
+  requestedAt: number;
+  startedAt?: number;
+  agentId?: string;
+  sessionKey?: string;
+};
+
 let handler: HeartbeatWakeHandler | null = null;
 let handlerGeneration = 0;
 const pendingWakes = new Map<string, PendingWakeReason>();
@@ -32,6 +41,7 @@ let running = false;
 let timer: NodeJS.Timeout | null = null;
 let timerDueAt: number | null = null;
 let timerKind: WakeTimerKind | null = null;
+let activeWake: (PendingWakeReason & { startedAt: number }) | null = null;
 
 const DEFAULT_COALESCE_MS = 250;
 const DEFAULT_RETRY_MS = 1_000;
@@ -147,6 +157,10 @@ function schedule(coalesceMs: number, kind: WakeTimerKind = "normal") {
     running = true;
     try {
       for (const pendingWake of pendingBatch) {
+        activeWake = {
+          ...pendingWake,
+          startedAt: Date.now(),
+        };
         const wakeOpts = {
           reason: pendingWake.reason ?? undefined,
           ...(pendingWake.agentId ? { agentId: pendingWake.agentId } : {}),
@@ -162,6 +176,7 @@ function schedule(coalesceMs: number, kind: WakeTimerKind = "normal") {
           });
           schedule(DEFAULT_RETRY_MS, "retry");
         }
+        activeWake = null;
       }
     } catch {
       // Error is already logged by the heartbeat runner; schedule a retry.
@@ -174,6 +189,7 @@ function schedule(coalesceMs: number, kind: WakeTimerKind = "normal") {
       }
       schedule(DEFAULT_RETRY_MS, "retry");
     } finally {
+      activeWake = null;
       running = false;
       if (pendingWakes.size > 0 || scheduled) {
         schedule(delay, "normal");
@@ -247,6 +263,30 @@ export function hasPendingHeartbeatWake() {
   return pendingWakes.size > 0 || Boolean(timer) || scheduled;
 }
 
+export function listHeartbeatWakeSnapshotEntries(): HeartbeatWakeSnapshotEntry[] {
+  const queued = Array.from(pendingWakes.values()).map((entry) => ({
+    phase: "queued" as const,
+    reason: entry.reason,
+    requestedAt: entry.requestedAt,
+    agentId: entry.agentId,
+    sessionKey: entry.sessionKey,
+  }));
+  if (!activeWake) {
+    return queued;
+  }
+  return [
+    {
+      phase: "running",
+      reason: activeWake.reason,
+      requestedAt: activeWake.requestedAt,
+      startedAt: activeWake.startedAt,
+      agentId: activeWake.agentId,
+      sessionKey: activeWake.sessionKey,
+    },
+    ...queued,
+  ];
+}
+
 export function resetHeartbeatWakeStateForTests() {
   if (timer) {
     clearTimeout(timer);
@@ -257,6 +297,7 @@ export function resetHeartbeatWakeStateForTests() {
   pendingWakes.clear();
   scheduled = false;
   running = false;
+  activeWake = null;
   handlerGeneration += 1;
   handler = null;
 }

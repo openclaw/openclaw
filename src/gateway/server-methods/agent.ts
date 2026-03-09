@@ -535,7 +535,7 @@ export const agentHandlers: GatewayRequestHandlers = {
           bestEffortDeliver = true;
         }
       }
-      registerAgentRunContext(idem, { sessionKey: canonicalSessionKey });
+      registerAgentRunContext(idem, { sessionKey: canonicalSessionKey, activitySource: "chat" });
     }
 
     const runId = idem;

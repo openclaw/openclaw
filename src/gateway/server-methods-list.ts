@@ -54,6 +54,7 @@ const BASE_METHODS = [
   "secrets.reload",
   "secrets.resolve",
   "sessions.list",
+  "session.activity",
   "sessions.preview",
   "sessions.patch",
   "sessions.reset",

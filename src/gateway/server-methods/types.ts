@@ -11,6 +11,7 @@ import type { ConnectParams, ErrorShape, RequestFrame } from "../protocol/index.
 import type { GatewayBroadcastFn, GatewayBroadcastToConnIdsFn } from "../server-broadcast.js";
 import type { ChannelRuntimeSnapshot } from "../server-channels.js";
 import type { DedupeEntry } from "../server-shared.js";
+import type { SessionActivityRegistry } from "../session-activity.js";
 
 type SubsystemLogger = ReturnType<typeof createSubsystemLogger>;
 
@@ -63,6 +64,7 @@ export type GatewayRequestContext = {
     clientRunId: string,
     sessionKey?: string,
   ) => { sessionKey: string; clientRunId: string } | undefined;
+  sessionActivity: SessionActivityRegistry;
   registerToolEventRecipient: (runId: string, connId: string) => void;
   dedupe: Map<string, DedupeEntry>;
   wizardSessions: Map<string, WizardSession>;

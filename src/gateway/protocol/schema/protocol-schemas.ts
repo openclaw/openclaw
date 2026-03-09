@@ -1,4 +1,5 @@
 import type { TSchema } from "@sinclair/typebox";
+import { SessionActivityParamsSchema } from "./activity.js";
 import {
   AgentEventSchema,
   AgentIdentityParamsSchema,
@@ -167,6 +168,7 @@ export const ProtocolSchemas = {
   Snapshot: SnapshotSchema,
   ErrorShape: ErrorShapeSchema,
   AgentEvent: AgentEventSchema,
+  SessionActivityParams: SessionActivityParamsSchema,
   SendParams: SendParamsSchema,
   PollParams: PollParamsSchema,
   AgentParams: AgentParamsSchema,

@@ -21,7 +21,7 @@ import {
 import { formatConfigIssueLines } from "../config/issue-format.js";
 import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
 import { resolveMainSessionKey } from "../config/sessions.js";
-import { clearAgentRunContext, onAgentEvent } from "../infra/agent-events.js";
+import { clearAgentRunContext, getAgentRunContext, onAgentEvent } from "../infra/agent-events.js";
 import {
   ensureControlUiAssetsBuilt,
   isPackageProvenControlUiRootSync,
@@ -109,6 +109,7 @@ import {
 } from "./server/health-state.js";
 import { createReadinessChecker } from "./server/readiness.js";
 import { loadGatewayTlsRuntime } from "./server/tls.js";
+import { createSessionActivityRegistry, type SessionActivitySource } from "./session-activity.js";
 import {
   ensureGatewayStartupAuth,
   mergeGatewayAuthConfig,
@@ -129,6 +130,17 @@ function resolveMediaCleanupTtlMs(ttlHoursRaw: number): number {
     throw new Error(`Invalid media.ttlHours: ${String(ttlHoursRaw)}`);
   }
   return ttlMs;
+}
+
+function resolveRuntimeSessionActivitySource(runId: string): SessionActivitySource {
+  const context = getAgentRunContext(runId);
+  if (context?.activitySource === "heartbeat" || context?.isHeartbeat === true) {
+    return "heartbeat";
+  }
+  if (context?.activitySource === "cron") {
+    return "cron";
+  }
+  return "chat";
 }
 
 const log = createSubsystemLogger("gateway");
@@ -643,6 +655,7 @@ export async function startGatewayServer(
     broadcast("voicewake.changed", { triggers }, { dropIfSlow: true });
   };
   const hasMobileNodeConnected = () => hasConnectedMobileNode(nodeRegistry);
+  const sessionActivity = createSessionActivityRegistry();
   applyGatewayLaneConcurrency(cfgAtStart);
 
   let cronState = buildGatewayCronService({
@@ -724,20 +737,43 @@ export async function startGatewayServer(
     }));
   }
 
+  const agentEventHandler = createAgentEventHandler({
+    broadcast,
+    broadcastToConnIds,
+    nodeSendToSession,
+    agentRunSeq,
+    chatRunState,
+    resolveSessionKeyForRun,
+    clearAgentRunContext,
+    toolEventRecipients,
+  });
   const agentUnsub = minimalTestGateway
     ? null
-    : onAgentEvent(
-        createAgentEventHandler({
-          broadcast,
-          broadcastToConnIds,
-          nodeSendToSession,
-          agentRunSeq,
-          chatRunState,
-          resolveSessionKeyForRun,
-          clearAgentRunContext,
-          toolEventRecipients,
-        }),
-      );
+    : onAgentEvent((evt) => {
+        if (evt.stream === "lifecycle") {
+          const phase = typeof evt.data.phase === "string" ? evt.data.phase : "";
+          const contextSessionKey = getAgentRunContext(evt.runId)?.sessionKey;
+          const sessionKey =
+            typeof evt.sessionKey === "string" && evt.sessionKey.trim()
+              ? evt.sessionKey.trim()
+              : typeof contextSessionKey === "string" && contextSessionKey.trim()
+                ? contextSessionKey.trim()
+                : undefined;
+          if (phase === "start" && sessionKey) {
+            sessionActivity.markRunStarted({
+              sessionKey,
+              runId: evt.runId,
+              source: resolveRuntimeSessionActivitySource(evt.runId),
+              startedAt: typeof evt.data.startedAt === "number" ? evt.data.startedAt : evt.ts,
+            });
+          } else if (phase === "end" || phase === "error") {
+            sessionActivity.markRunFinished(evt.runId);
+          }
+        } else {
+          sessionActivity.touchRun(evt.runId, evt.ts);
+        }
+        agentEventHandler(evt);
+      });
 
   const heartbeatUnsub = minimalTestGateway
     ? null
@@ -850,6 +886,7 @@ export async function startGatewayServer(
     chatDeltaSentAt: chatRunState.deltaSentAt,
     addChatRun,
     removeChatRun,
+    sessionActivity,
     registerToolEventRecipient: toolEventRecipients.add,
     dedupe,
     wizardSessions,

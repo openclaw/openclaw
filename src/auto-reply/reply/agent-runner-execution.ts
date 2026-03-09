@@ -130,6 +130,7 @@ export async function runAgentTurnWithFallback(params: {
       sessionKey: params.sessionKey,
       verboseLevel: params.resolvedVerboseLevel,
       isHeartbeat: params.isHeartbeat,
+      activitySource: params.isHeartbeat ? "heartbeat" : "chat",
       isControlUiVisible: shouldSurfaceToControlUi,
     });
   }
