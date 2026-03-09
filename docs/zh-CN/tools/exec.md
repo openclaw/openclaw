@@ -80,7 +80,7 @@ x-i18n:
 
 ```bash
 openclaw config get agents.list
-openclaw config set agents.list[0].tools.exec.node "node-id-or-name"
+openclaw config set 'agents.list[0].tools.exec.node' "node-id-or-name"
 ```
 
 控制 UI：Nodes 标签页包含一个小的"Exec 节点绑定"面板用于相同的设置。

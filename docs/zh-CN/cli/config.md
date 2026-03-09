@@ -23,24 +23,25 @@ x-i18n:
 openclaw config get browser.executablePath
 openclaw config set browser.executablePath "/usr/bin/google-chrome"
 openclaw config set agents.defaults.heartbeat.every "2h"
-openclaw config set agents.list[0].tools.exec.node "node-id-or-name"
+openclaw config set 'agents.list[0].tools.exec.node' "node-id-or-name"
 openclaw config unset tools.web.search.apiKey
 ```
 
 ## 路径
 
-路径使用点号或括号表示法：
+路径使用点号或括号表示法。**包含括号的路径需要加引号**以防止
+shell 将其解释为通配符：
 
 ```bash
 openclaw config get agents.defaults.workspace
-openclaw config get agents.list[0].id
+openclaw config get 'agents.list[0].id'
 ```
 
 使用智能体列表索引来定位特定智能体：
 
 ```bash
 openclaw config get agents.list
-openclaw config set agents.list[1].tools.exec.node "node-id-or-name"
+openclaw config set 'agents.list[1].tools.exec.node' "node-id-or-name"
 ```
 
 ## 值
