@@ -220,7 +220,7 @@ export class GatewayBrowserClient {
     let deviceIdentity: Awaited<ReturnType<typeof loadOrCreateDeviceIdentity>> | null = null;
     let canFallbackToShared = false;
     const sharedToken = normalizeAuthToken(this.opts.token);
-    let authToken = this.lastGoodAuthToken ?? sharedToken;
+    let authToken = sharedToken ?? this.lastGoodAuthToken;
 
     if (isSecureContext) {
       deviceIdentity = await loadOrCreateDeviceIdentity();
@@ -230,8 +230,8 @@ export class GatewayBrowserClient {
           role,
         })?.token,
       );
-      authToken = storedToken ?? this.lastGoodAuthToken ?? sharedToken;
-      canFallbackToShared = Boolean(storedToken && sharedToken);
+      authToken = storedToken ?? sharedToken ?? this.lastGoodAuthToken;
+      canFallbackToShared = Boolean(sharedToken);
     }
     const auth =
       authToken || this.opts.password
@@ -322,7 +322,7 @@ export class GatewayBrowserClient {
         }
         if (canFallbackToShared && deviceIdentity && isAuthMismatchError(err)) {
           clearDeviceAuthToken({ deviceId: deviceIdentity.deviceId, role });
-          this.lastGoodAuthToken = sharedToken ?? this.lastGoodAuthToken;
+          this.lastGoodAuthToken = sharedToken;
         }
         this.ws?.close(CONNECT_FAILED_CLOSE_CODE, "connect failed");
       });
