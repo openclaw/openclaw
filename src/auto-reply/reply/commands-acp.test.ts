@@ -755,6 +755,32 @@ describe("/acp command", () => {
     });
   });
 
+  it("preserves runtime notice in archive close replies", async () => {
+    hoisted.sessionBindingResolveByConversationMock.mockReturnValue(
+      createSpawnedAcpThreadSession(),
+    );
+    hoisted.readAcpSessionEntryMock.mockReturnValue(createAcpSessionEntry());
+    hoisted.sessionBindingUnbindMock.mockResolvedValue([
+      createSpawnedAcpThreadSession() as SessionBindingRecord,
+    ]);
+    hoisted.closeMock.mockRejectedValue(
+      new AcpRuntimeError("ACP_BACKEND_UNAVAILABLE", "backend unavailable"),
+    );
+
+    const result = await runThreadAcpCommand("/acp close", baseCfg);
+
+    expect(result?.reply?.text).toBe(
+      "✅ ACP session closed and thread archived (backend unavailable).",
+    );
+    expect(result?.reply?.channelData).toEqual({
+      discord: {
+        archiveCurrentThreadAfterReply: true,
+        archiveFailureText:
+          "⚠️ ACP session closed, but thread archive failed (backend unavailable).",
+      },
+    });
+  });
+
   it("keeps the existing close reply for manually attached Discord threads", async () => {
     mockBoundThreadSession();
     hoisted.sessionBindingUnbindMock.mockResolvedValue([

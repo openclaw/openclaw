@@ -630,11 +630,11 @@ export async function handleAcpCloseAction(
         return {
           shouldContinue: false,
           reply: {
-            text: "✅ ACP session closed and thread archived.",
+            text: `✅ ACP session closed and thread archived${runtimeNotice}.`,
             channelData: {
               discord: {
                 archiveCurrentThreadAfterReply: true,
-                archiveFailureText: "⚠️ ACP session closed, but thread archive failed.",
+                archiveFailureText: `⚠️ ACP session closed, but thread archive failed${runtimeNotice}.`,
               },
             },
           },

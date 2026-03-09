@@ -295,6 +295,52 @@ describe("discordOutbound", () => {
     expect(result).toEqual(DEFAULT_DISCORD_SEND_RESULT);
   });
 
+  it("honors sendDiscord overrides for archive-after-reply payloads", async () => {
+    const sendDiscordOverride = vi.fn().mockResolvedValue({
+      messageId: "override-msg-1",
+      channelId: "override-thread-1",
+    });
+
+    const result = await discordOutbound.sendPayload?.({
+      cfg: {},
+      to: "channel:parent-1",
+      payload: {
+        text: "✅ ACP session closed and thread archived.",
+        channelData: {
+          discord: {
+            archiveCurrentThreadAfterReply: true,
+            archiveFailureText: "⚠️ ACP session closed, but thread archive failed.",
+          },
+        },
+      },
+      accountId: "default",
+      threadId: "thread-1",
+      deps: {
+        sendDiscord: sendDiscordOverride,
+      },
+    });
+
+    expect(sendDiscordOverride).toHaveBeenCalledWith(
+      "channel:thread-1",
+      "✅ ACP session closed and thread archived.",
+      expect.objectContaining({
+        accountId: "default",
+      }),
+    );
+    expect(hoisted.sendMessageDiscordMock).not.toHaveBeenCalled();
+    expect(hoisted.archiveDiscordThreadMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        accountId: "default",
+        threadId: "thread-1",
+      }),
+    );
+    expect(result).toEqual({
+      channel: "discord",
+      messageId: "override-msg-1",
+      channelId: "override-thread-1",
+    });
+  });
+
   it("edits the reply to partial success text when thread archive fails", async () => {
     hoisted.archiveDiscordThreadMock.mockRejectedValueOnce(new Error("archive failed"));
 

@@ -78,11 +78,13 @@ async function sendDiscordArchiveAfterReplyPayload(
   const accountId = ctx.accountId ?? undefined;
   const text = ctx.payload.text ?? "";
 
-  const sent = await sendMessageDiscord(target, text, {
+  const send = ctx.deps?.sendDiscord ?? sendMessageDiscord;
+  const sent = await send(target, text, {
     cfg: ctx.cfg,
     accountId,
     replyTo: ctx.replyToId ?? undefined,
     silent: ctx.silent ?? undefined,
+    verbose: false,
   });
   const delivery = { channel: "discord" as const, ...sent };
 
