@@ -10,7 +10,7 @@ export const usageStylesPart1 = `
   }
   .usage-page-subtitle {
     font-size: 13px;
-    color: var(--text-muted);
+    color: var(--muted);
     margin: 0 0 12px;
   }
   /* ===== FILTERS & HEADER ===== */
@@ -257,7 +257,7 @@ export const usageStylesPart1 = `
   }
   .usage-filter-badge {
     font-size: 11px;
-    color: var(--text-muted);
+    color: var(--muted);
   }
   .usage-filter-popover {
     position: absolute;
@@ -296,7 +296,7 @@ export const usageStylesPart1 = `
   }
   .usage-query-hint {
     font-size: 11px;
-    color: var(--text-muted);
+    color: var(--muted);
   }
   .usage-query-chips {
     display: flex;
@@ -317,7 +317,7 @@ export const usageStylesPart1 = `
   .usage-query-chip button {
     background: none;
     border: none;
-    color: var(--text-muted);
+    color: var(--muted);
     cursor: pointer;
     padding: 0;
     line-height: 1;
@@ -378,7 +378,7 @@ export const usageStylesPart1 = `
     border: 1px solid var(--border);
     background: transparent;
     font-size: 11px;
-    color: var(--text-muted);
+    color: var(--muted);
   }
   .usage-metric-badge strong {
     font-size: 12px;
@@ -498,7 +498,7 @@ export const usageStylesPart1 = `
   }
   .usage-mosaic-sub {
     font-size: 12px;
-    color: var(--text-muted);
+    color: var(--muted);
   }
   .usage-mosaic-grid {
     display: grid;
@@ -569,7 +569,7 @@ export const usageStylesPart1 = `
     gap: 6px;
     margin-top: 8px;
     font-size: 11px;
-    color: var(--text-muted);
+    color: var(--muted);
   }
   .usage-hour-legend {
     display: flex;
@@ -577,7 +577,7 @@ export const usageStylesPart1 = `
     align-items: center;
     margin-top: 10px;
     font-size: 11px;
-    color: var(--text-muted);
+    color: var(--muted);
   }
   .usage-hour-legend span {
     display: inline-block;
@@ -592,7 +592,7 @@ export const usageStylesPart1 = `
     grid-template-columns: repeat(7, minmax(10px, 1fr));
     gap: 6px;
     font-size: 10px;
-    color: var(--text-muted);
+    color: var(--muted);
     margin-bottom: 6px;
   }
   .usage-calendar {
@@ -612,7 +612,7 @@ export const usageStylesPart1 = `
   }
   .usage-summary-title {
     font-size: 11px;
-    color: var(--text-muted);
+    color: var(--muted);
     margin-bottom: 6px;
     display: inline-flex;
     align-items: center;
@@ -629,7 +629,7 @@ export const usageStylesPart1 = `
     border: 1px solid var(--border);
     background: var(--bg);
     font-size: 10px;
-    color: var(--text-muted);
+    color: var(--muted);
     cursor: help;
   }
   .usage-summary-value {
@@ -648,7 +648,7 @@ export const usageStylesPart1 = `
   }
   .usage-summary-hint {
     font-size: 10px;
-    color: var(--text-muted);
+    color: var(--muted);
     cursor: help;
     border: 1px solid var(--border);
     border-radius: 999px;
@@ -661,7 +661,7 @@ export const usageStylesPart1 = `
   }
   .usage-summary-sub {
     font-size: 11px;
-    color: var(--text-muted);
+    color: var(--muted);
     margin-top: 4px;
   }
   .usage-list {
@@ -686,7 +686,7 @@ export const usageStylesPart1 = `
   }
   .usage-list-sub {
     font-size: 11px;
-    color: var(--text-muted);
+    color: var(--muted);
   }
   .usage-list-item.button {
     border: none;

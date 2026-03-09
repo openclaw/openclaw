@@ -5,8 +5,7 @@ import {
   readNumberParam,
   readReactionParams,
   readStringParam,
-} from "openclaw/plugin-sdk";
-import type { CoreConfig } from "./types.js";
+} from "openclaw/plugin-sdk/matrix";
 import {
   deleteMatrixMessage,
   editMatrixMessage,
@@ -21,6 +20,7 @@ import {
   unpinMatrixMessage,
 } from "./matrix/actions.js";
 import { reactMatrixMessage } from "./matrix/send.js";
+import type { CoreConfig } from "./types.js";
 
 const messageActions = new Set(["sendMessage", "editMessage", "deleteMessage", "readMessages"]);
 const reactionActions = new Set(["react", "reactions"]);

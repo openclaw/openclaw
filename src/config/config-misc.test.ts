@@ -1,5 +1,3 @@
-import fs from "node:fs/promises";
-import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   getConfigValueAtPath,
@@ -8,7 +6,7 @@ import {
   unsetConfigValueAtPath,
 } from "./config-paths.js";
 import { readConfigFileSnapshot, validateConfigObject } from "./config.js";
-import { withTempHome } from "./test-helpers.js";
+import { buildWebSearchProviderConfig, withTempHome, writeOpenClawConfig } from "./test-helpers.js";
 import { OpenClawSchema } from "./zod-schema.js";
 
 describe("$schema key in config (#14998)", () => {
@@ -33,6 +31,19 @@ describe("$schema key in config (#14998)", () => {
   });
 });
 
+describe("plugins.slots.contextEngine", () => {
+  it("accepts a contextEngine slot id", () => {
+    const result = OpenClawSchema.safeParse({
+      plugins: {
+        slots: {
+          contextEngine: "my-context-engine",
+        },
+      },
+    });
+    expect(result.success).toBe(true);
+  });
+});
+
 describe("ui.seamColor", () => {
   it("accepts hex colors", () => {
     const res = validateConfigObject({ ui: { seamColor: "#FF4500" } });
@@ -50,23 +61,50 @@ describe("ui.seamColor", () => {
   });
 });
 
-describe("web search provider config", () => {
-  it("accepts perplexity provider and config", () => {
-    const res = validateConfigObject({
-      tools: {
-        web: {
-          search: {
-            enabled: true,
-            provider: "perplexity",
-            perplexity: {
-              apiKey: "test-key",
-              baseUrl: "https://api.perplexity.ai",
-              model: "perplexity/sonar-pro",
+describe("plugins.entries.*.hooks.allowPromptInjection", () => {
+  it("accepts boolean values", () => {
+    const result = OpenClawSchema.safeParse({
+      plugins: {
+        entries: {
+          "voice-call": {
+            hooks: {
+              allowPromptInjection: false,
             },
           },
         },
       },
     });
+    expect(result.success).toBe(true);
+  });
+
+  it("rejects non-boolean values", () => {
+    const result = OpenClawSchema.safeParse({
+      plugins: {
+        entries: {
+          "voice-call": {
+            hooks: {
+              allowPromptInjection: "no",
+            },
+          },
+        },
+      },
+    });
+    expect(result.success).toBe(false);
+  });
+});
+
+describe("web search provider config", () => {
+  it("accepts kimi provider and config", () => {
+    const res = validateConfigObject(
+      buildWebSearchProviderConfig({
+        provider: "kimi",
+        providerConfig: {
+          apiKey: "test-key",
+          baseUrl: "https://api.moonshot.ai/v1",
+          model: "moonshot-v1-128k",
+        },
+      }),
+    );
 
     expect(res.ok).toBe(true);
   });
@@ -153,6 +191,29 @@ describe("gateway.tools config", () => {
   });
 });
 
+describe("gateway.channelHealthCheckMinutes", () => {
+  it("accepts zero to disable monitor", () => {
+    const res = validateConfigObject({
+      gateway: {
+        channelHealthCheckMinutes: 0,
+      },
+    });
+    expect(res.ok).toBe(true);
+  });
+
+  it("rejects negative intervals", () => {
+    const res = validateConfigObject({
+      gateway: {
+        channelHealthCheckMinutes: -1,
+      },
+    });
+    expect(res.ok).toBe(false);
+    if (!res.ok) {
+      expect(res.issues[0]?.path).toBe("gateway.channelHealthCheckMinutes");
+    }
+  });
+});
+
 describe("cron webhook schema", () => {
   it("accepts cron.webhookToken and legacy cron.webhook", () => {
     const res = OpenClawSchema.safeParse({
@@ -160,6 +221,21 @@ describe("cron webhook schema", () => {
         enabled: true,
         webhook: "https://example.invalid/legacy-cron-webhook",
         webhookToken: "secret-token",
+      },
+    });
+
+    expect(res.success).toBe(true);
+  });
+
+  it("accepts cron.webhookToken SecretRef values", () => {
+    const res = OpenClawSchema.safeParse({
+      cron: {
+        webhook: "https://example.invalid/legacy-cron-webhook",
+        webhookToken: {
+          source: "env",
+          provider: "default",
+          id: "CRON_WEBHOOK_TOKEN",
+        },
       },
     });
 
@@ -174,6 +250,19 @@ describe("cron webhook schema", () => {
     });
 
     expect(res.success).toBe(false);
+  });
+
+  it("accepts cron.retry config", () => {
+    const res = OpenClawSchema.safeParse({
+      cron: {
+        retry: {
+          maxAttempts: 5,
+          backoffMs: [60000, 120000, 300000],
+          retryOn: ["rate_limit", "overloaded", "network"],
+        },
+      },
+    });
+    expect(res.success).toBe(true);
   });
 });
 
@@ -273,21 +362,50 @@ describe("config strict validation", () => {
 
   it("flags legacy config entries without auto-migrating", async () => {
     await withTempHome(async (home) => {
-      const configDir = path.join(home, ".openclaw");
-      await fs.mkdir(configDir, { recursive: true });
-      await fs.writeFile(
-        path.join(configDir, "openclaw.json"),
-        JSON.stringify({
-          agents: { list: [{ id: "pi" }] },
-          routing: { allowFrom: ["+15555550123"] },
-        }),
-        "utf-8",
-      );
+      await writeOpenClawConfig(home, {
+        agents: { list: [{ id: "pi" }] },
+        routing: { allowFrom: ["+15555550123"] },
+      });
 
       const snap = await readConfigFileSnapshot();
 
       expect(snap.valid).toBe(false);
       expect(snap.legacyIssues).not.toHaveLength(0);
+    });
+  });
+
+  it("does not mark resolved-only gateway.bind aliases as auto-migratable legacy", async () => {
+    await withTempHome(async (home) => {
+      await writeOpenClawConfig(home, {
+        gateway: { bind: "${OPENCLAW_BIND}" },
+      });
+
+      const prev = process.env.OPENCLAW_BIND;
+      process.env.OPENCLAW_BIND = "0.0.0.0";
+      try {
+        const snap = await readConfigFileSnapshot();
+        expect(snap.valid).toBe(false);
+        expect(snap.legacyIssues).toHaveLength(0);
+        expect(snap.issues.some((issue) => issue.path === "gateway.bind")).toBe(true);
+      } finally {
+        if (prev === undefined) {
+          delete process.env.OPENCLAW_BIND;
+        } else {
+          process.env.OPENCLAW_BIND = prev;
+        }
+      }
+    });
+  });
+
+  it("still marks literal gateway.bind host aliases as legacy", async () => {
+    await withTempHome(async (home) => {
+      await writeOpenClawConfig(home, {
+        gateway: { bind: "0.0.0.0" },
+      });
+
+      const snap = await readConfigFileSnapshot();
+      expect(snap.valid).toBe(false);
+      expect(snap.legacyIssues.some((issue) => issue.path === "gateway.bind")).toBe(true);
     });
   });
 });

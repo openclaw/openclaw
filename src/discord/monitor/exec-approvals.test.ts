@@ -1,11 +1,11 @@
-import type { ButtonInteraction, ComponentData } from "@buape/carbon";
-import { Routes } from "discord-api-types/v10";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import type { ButtonInteraction, ComponentData } from "@buape/carbon";
+import { Routes } from "discord-api-types/v10";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { DiscordExecApprovalConfig } from "../../config/types.discord.js";
 import { clearSessionStoreCacheForTest } from "../../config/sessions.js";
+import type { DiscordExecApprovalConfig } from "../../config/types.discord.js";
 import {
   buildExecApprovalCustomId,
   extractDiscordChannelId,
@@ -26,6 +26,27 @@ const writeStore = (store: Record<string, unknown>) => {
 
 beforeEach(() => {
   writeStore({});
+  mockGatewayClientCtor.mockClear();
+  mockResolveGatewayConnectionAuth.mockReset().mockImplementation(
+    async (params: {
+      config?: {
+        gateway?: {
+          auth?: {
+            token?: string;
+            password?: string;
+          };
+        };
+      };
+      env: NodeJS.ProcessEnv;
+    }) => {
+      const configToken = params.config?.gateway?.auth?.token;
+      const configPassword = params.config?.gateway?.auth?.password;
+      const envToken = params.env.OPENCLAW_GATEWAY_TOKEN ?? params.env.CLAWDBOT_GATEWAY_TOKEN;
+      const envPassword =
+        params.env.OPENCLAW_GATEWAY_PASSWORD ?? params.env.CLAWDBOT_GATEWAY_PASSWORD;
+      return { token: envToken ?? configToken, password: envPassword ?? configPassword };
+    },
+  );
 });
 
 // ─── Mocks ────────────────────────────────────────────────────────────────────
@@ -33,6 +54,12 @@ beforeEach(() => {
 const mockRestPost = vi.hoisted(() => vi.fn());
 const mockRestPatch = vi.hoisted(() => vi.fn());
 const mockRestDelete = vi.hoisted(() => vi.fn());
+const gatewayClientStarts = vi.hoisted(() => vi.fn());
+const gatewayClientStops = vi.hoisted(() => vi.fn());
+const gatewayClientRequests = vi.hoisted(() => vi.fn(async () => ({ ok: true })));
+const gatewayClientParams = vi.hoisted(() => [] as Array<Record<string, unknown>>);
+const mockGatewayClientCtor = vi.hoisted(() => vi.fn());
+const mockResolveGatewayConnectionAuth = vi.hoisted(() => vi.fn());
 
 vi.mock("../send.shared.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../send.shared.js")>();
@@ -54,13 +81,23 @@ vi.mock("../../gateway/client.js", () => ({
     private params: Record<string, unknown>;
     constructor(params: Record<string, unknown>) {
       this.params = params;
+      gatewayClientParams.push(params);
+      mockGatewayClientCtor(params);
     }
-    start() {}
-    stop() {}
+    start() {
+      gatewayClientStarts();
+    }
+    stop() {
+      gatewayClientStops();
+    }
     async request() {
-      return { ok: true };
+      return gatewayClientRequests();
     }
   },
+}));
+
+vi.mock("../../gateway/connection-auth.js", () => ({
+  resolveGatewayConnectionAuth: mockResolveGatewayConnectionAuth,
 }));
 
 vi.mock("../../logger.js", () => ({
@@ -79,7 +116,7 @@ function createHandler(config: DiscordExecApprovalConfig, accountId = "default")
   });
 }
 
-type ExecApprovalHandlerInternals = DiscordExecApprovalHandler & {
+type ExecApprovalHandlerInternals = {
   pending: Map<
     string,
     { discordMessageId: string; discordChannelId: string; timeoutId: NodeJS.Timeout }
@@ -118,6 +155,17 @@ function createRequest(
     expiresAtMs: Date.now() + 60000,
   };
 }
+
+beforeEach(() => {
+  mockRestPost.mockReset();
+  mockRestPatch.mockReset();
+  mockRestDelete.mockReset();
+  gatewayClientStarts.mockReset();
+  gatewayClientStops.mockReset();
+  gatewayClientRequests.mockReset();
+  gatewayClientRequests.mockResolvedValue({ ok: true });
+  gatewayClientParams.length = 0;
+});
 
 // ─── buildExecApprovalCustomId ────────────────────────────────────────────────
 
@@ -204,42 +252,50 @@ describe("roundtrip encoding", () => {
 // ─── extractDiscordChannelId ──────────────────────────────────────────────────
 
 describe("extractDiscordChannelId", () => {
-  it("extracts channel ID from standard session key", () => {
-    expect(extractDiscordChannelId("agent:main:discord:channel:123456789")).toBe("123456789");
-  });
+  it("extracts channel IDs and rejects invalid session key inputs", () => {
+    const cases: Array<{
+      name: string;
+      input: string | null | undefined;
+      expected: string | null;
+    }> = [
+      {
+        name: "standard session key",
+        input: "agent:main:discord:channel:123456789",
+        expected: "123456789",
+      },
+      {
+        name: "agent-specific session key",
+        input: "agent:test-agent:discord:channel:999888777",
+        expected: "999888777",
+      },
+      {
+        name: "group session key",
+        input: "agent:main:discord:group:222333444",
+        expected: "222333444",
+      },
+      {
+        name: "longer session key",
+        input: "agent:my-agent:discord:channel:111222333:thread:444555",
+        expected: "111222333",
+      },
+      {
+        name: "non-discord session key",
+        input: "agent:main:telegram:channel:123456789",
+        expected: null,
+      },
+      {
+        name: "missing channel/group segment",
+        input: "agent:main:discord:dm:123456789",
+        expected: null,
+      },
+      { name: "null input", input: null, expected: null },
+      { name: "undefined input", input: undefined, expected: null },
+      { name: "empty input", input: "", expected: null },
+    ];
 
-  it("extracts channel ID from agent session key", () => {
-    expect(extractDiscordChannelId("agent:test-agent:discord:channel:999888777")).toBe("999888777");
-  });
-
-  it("extracts channel ID from group session key", () => {
-    expect(extractDiscordChannelId("agent:main:discord:group:222333444")).toBe("222333444");
-  });
-
-  it("returns null for non-discord session key", () => {
-    expect(extractDiscordChannelId("agent:main:telegram:channel:123456789")).toBeNull();
-  });
-
-  it("returns null for session key without channel segment", () => {
-    expect(extractDiscordChannelId("agent:main:discord:dm:123456789")).toBeNull();
-  });
-
-  it("returns null for null input", () => {
-    expect(extractDiscordChannelId(null)).toBeNull();
-  });
-
-  it("returns null for undefined input", () => {
-    expect(extractDiscordChannelId(undefined)).toBeNull();
-  });
-
-  it("returns null for empty string", () => {
-    expect(extractDiscordChannelId("")).toBeNull();
-  });
-
-  it("extracts from longer session keys", () => {
-    expect(extractDiscordChannelId("agent:my-agent:discord:channel:111222333:thread:444555")).toBe(
-      "111222333",
-    );
+    for (const testCase of cases) {
+      expect(extractDiscordChannelId(testCase.input), testCase.name).toBe(testCase.expected);
+    }
   });
 });
 
@@ -301,6 +357,26 @@ describe("DiscordExecApprovalHandler.shouldHandle", () => {
     );
   });
 
+  it("rejects unsafe nested-repetition regex in session filter", () => {
+    const handler = createHandler({
+      enabled: true,
+      approvers: ["123"],
+      sessionFilter: ["(a+)+$"],
+    });
+    expect(handler.shouldHandle(createRequest({ sessionKey: `${"a".repeat(28)}!` }))).toBe(false);
+  });
+
+  it("matches long session keys with tail-bounded regex checks", () => {
+    const handler = createHandler({
+      enabled: true,
+      approvers: ["123"],
+      sessionFilter: ["discord:tail$"],
+    });
+    expect(
+      handler.shouldHandle(createRequest({ sessionKey: `${"x".repeat(5000)}discord:tail` })),
+    ).toBe(true);
+  });
+
   it("filters by discord account when session store includes account", () => {
     writeStore({
       "agent:test-agent:discord:channel:999888777": {
@@ -353,19 +429,29 @@ describe("DiscordExecApprovalHandler.shouldHandle", () => {
 // ─── DiscordExecApprovalHandler.getApprovers ──────────────────────────────────
 
 describe("DiscordExecApprovalHandler.getApprovers", () => {
-  it("returns configured approvers", () => {
-    const handler = createHandler({ enabled: true, approvers: ["111", "222"] });
-    expect(handler.getApprovers()).toEqual(["111", "222"]);
-  });
+  it("returns approvers for configured, empty, and undefined lists", () => {
+    const cases = [
+      {
+        name: "configured approvers",
+        config: { enabled: true, approvers: ["111", "222"] } as DiscordExecApprovalConfig,
+        expected: ["111", "222"],
+      },
+      {
+        name: "empty approvers",
+        config: { enabled: true, approvers: [] } as DiscordExecApprovalConfig,
+        expected: [],
+      },
+      {
+        name: "undefined approvers",
+        config: { enabled: true } as DiscordExecApprovalConfig,
+        expected: [],
+      },
+    ] as const;
 
-  it("returns empty array when no approvers configured", () => {
-    const handler = createHandler({ enabled: true, approvers: [] });
-    expect(handler.getApprovers()).toEqual([]);
-  });
-
-  it("returns empty array when approvers is undefined", () => {
-    const handler = createHandler({ enabled: true } as DiscordExecApprovalConfig);
-    expect(handler.getApprovers()).toEqual([]);
+    for (const testCase of cases) {
+      const handler = createHandler(testCase.config);
+      expect(handler.getApprovers(), testCase.name).toEqual(testCase.expected);
+    }
   });
 });
 
@@ -525,49 +611,106 @@ describe("ExecApprovalButton", () => {
 
 describe("DiscordExecApprovalHandler target config", () => {
   beforeEach(() => {
-    mockRestPost.mockReset();
-    mockRestPatch.mockReset();
-    mockRestDelete.mockReset();
+    mockRestPost.mockClear().mockResolvedValue({ id: "mock-message", channel_id: "mock-channel" });
+    mockRestPatch.mockClear().mockResolvedValue({});
+    mockRestDelete.mockClear().mockResolvedValue({});
   });
 
-  it("defaults target to dm when not specified", () => {
-    const config: DiscordExecApprovalConfig = {
-      enabled: true,
-      approvers: ["123"],
-    };
-    // target should be undefined, handler defaults to "dm"
-    expect(config.target).toBeUndefined();
+  it("accepts all target modes and defaults to dm when target is omitted", () => {
+    const cases = [
+      {
+        name: "default target",
+        config: { enabled: true, approvers: ["123"] } as DiscordExecApprovalConfig,
+        expectedTarget: undefined,
+      },
+      {
+        name: "channel target",
+        config: {
+          enabled: true,
+          approvers: ["123"],
+          target: "channel",
+        } as DiscordExecApprovalConfig,
+      },
+      {
+        name: "both target",
+        config: {
+          enabled: true,
+          approvers: ["123"],
+          target: "both",
+        } as DiscordExecApprovalConfig,
+      },
+      {
+        name: "dm target",
+        config: {
+          enabled: true,
+          approvers: ["123"],
+          target: "dm",
+        } as DiscordExecApprovalConfig,
+      },
+    ] as const;
 
-    const handler = createHandler(config);
-    // Handler should still handle requests (no crash on missing target)
-    expect(handler.shouldHandle(createRequest())).toBe(true);
+    for (const testCase of cases) {
+      if ("expectedTarget" in testCase) {
+        expect(testCase.config.target, testCase.name).toBe(testCase.expectedTarget);
+      }
+      const handler = createHandler(testCase.config);
+      expect(handler.shouldHandle(createRequest()), testCase.name).toBe(true);
+    }
   });
+});
 
-  it("accepts target=channel in config", () => {
-    const handler = createHandler({
-      enabled: true,
-      approvers: ["123"],
-      target: "channel",
+describe("DiscordExecApprovalHandler gateway auth", () => {
+  it("passes the shared gateway token from config into GatewayClient", async () => {
+    const handler = new DiscordExecApprovalHandler({
+      token: "discord-bot-token",
+      accountId: "default",
+      config: { enabled: true, approvers: ["123"] },
+      cfg: {
+        gateway: {
+          mode: "local",
+          bind: "loopback",
+          auth: { mode: "token", token: "shared-gateway-token" },
+        },
+      },
     });
-    expect(handler.shouldHandle(createRequest())).toBe(true);
+
+    await handler.start();
+
+    expect(gatewayClientStarts).toHaveBeenCalledTimes(1);
+    expect(gatewayClientParams[0]).toMatchObject({
+      url: "ws://127.0.0.1:18789",
+      token: "shared-gateway-token",
+      password: undefined,
+      scopes: ["operator.approvals"],
+    });
   });
 
-  it("accepts target=both in config", () => {
-    const handler = createHandler({
-      enabled: true,
-      approvers: ["123"],
-      target: "both",
+  it("prefers OPENCLAW_GATEWAY_TOKEN when config token is missing", async () => {
+    vi.stubEnv("OPENCLAW_GATEWAY_TOKEN", "env-gateway-token");
+    const handler = new DiscordExecApprovalHandler({
+      token: "discord-bot-token",
+      accountId: "default",
+      config: { enabled: true, approvers: ["123"] },
+      cfg: {
+        gateway: {
+          mode: "local",
+          bind: "loopback",
+          auth: { mode: "token" },
+        },
+      },
     });
-    expect(handler.shouldHandle(createRequest())).toBe(true);
-  });
 
-  it("accepts target=dm in config", () => {
-    const handler = createHandler({
-      enabled: true,
-      approvers: ["123"],
-      target: "dm",
+    try {
+      await handler.start();
+    } finally {
+      vi.unstubAllEnvs();
+    }
+
+    expect(gatewayClientStarts).toHaveBeenCalledTimes(1);
+    expect(gatewayClientParams[0]).toMatchObject({
+      token: "env-gateway-token",
+      password: undefined,
     });
-    expect(handler.shouldHandle(createRequest())).toBe(true);
   });
 });
 
@@ -575,9 +718,9 @@ describe("DiscordExecApprovalHandler target config", () => {
 
 describe("DiscordExecApprovalHandler timeout cleanup", () => {
   beforeEach(() => {
-    mockRestPost.mockReset();
-    mockRestPatch.mockReset();
-    mockRestDelete.mockReset();
+    mockRestPost.mockClear().mockResolvedValue({ id: "mock-message", channel_id: "mock-channel" });
+    mockRestPatch.mockClear().mockResolvedValue({});
+    mockRestDelete.mockClear().mockResolvedValue({});
   });
 
   it("cleans up request cache for the exact approval id", async () => {
@@ -619,9 +762,9 @@ describe("DiscordExecApprovalHandler timeout cleanup", () => {
 
 describe("DiscordExecApprovalHandler delivery routing", () => {
   beforeEach(() => {
-    mockRestPost.mockReset();
-    mockRestPatch.mockReset();
-    mockRestDelete.mockReset();
+    mockRestPost.mockClear().mockResolvedValue({ id: "mock-message", channel_id: "mock-channel" });
+    mockRestPatch.mockClear().mockResolvedValue({});
+    mockRestDelete.mockClear().mockResolvedValue({});
   });
 
   it("falls back to DM delivery when channel target has no channel id", async () => {
@@ -659,5 +802,76 @@ describe("DiscordExecApprovalHandler delivery routing", () => {
     );
 
     clearPendingTimeouts(handler);
+  });
+});
+
+describe("DiscordExecApprovalHandler gateway auth resolution", () => {
+  it("passes CLI URL overrides to shared gateway auth resolver", async () => {
+    mockResolveGatewayConnectionAuth.mockResolvedValue({
+      token: "resolved-token",
+      password: "resolved-password", // pragma: allowlist secret
+    });
+    const handler = new DiscordExecApprovalHandler({
+      token: "test-token",
+      accountId: "default",
+      gatewayUrl: "wss://override.example/ws",
+      config: { enabled: true, approvers: ["123"] },
+      cfg: { session: { store: STORE_PATH } },
+    });
+
+    await handler.start();
+
+    expect(mockResolveGatewayConnectionAuth).toHaveBeenCalledWith(
+      expect.objectContaining({
+        env: process.env,
+        urlOverride: "wss://override.example/ws",
+        urlOverrideSource: "cli",
+      }),
+    );
+    expect(mockGatewayClientCtor).toHaveBeenCalledWith(
+      expect.objectContaining({
+        url: "wss://override.example/ws",
+        token: "resolved-token",
+        password: "resolved-password", // pragma: allowlist secret
+      }),
+    );
+
+    await handler.stop();
+  });
+
+  it("passes env URL overrides to shared gateway auth resolver", async () => {
+    const previousGatewayUrl = process.env.OPENCLAW_GATEWAY_URL;
+    try {
+      process.env.OPENCLAW_GATEWAY_URL = "wss://gateway-from-env.example/ws";
+      const handler = new DiscordExecApprovalHandler({
+        token: "test-token",
+        accountId: "default",
+        config: { enabled: true, approvers: ["123"] },
+        cfg: { session: { store: STORE_PATH } },
+      });
+
+      await handler.start();
+
+      expect(mockResolveGatewayConnectionAuth).toHaveBeenCalledWith(
+        expect.objectContaining({
+          env: process.env,
+          urlOverride: "wss://gateway-from-env.example/ws",
+          urlOverrideSource: "env",
+        }),
+      );
+      expect(mockGatewayClientCtor).toHaveBeenCalledWith(
+        expect.objectContaining({
+          url: "wss://gateway-from-env.example/ws",
+        }),
+      );
+
+      await handler.stop();
+    } finally {
+      if (typeof previousGatewayUrl === "string") {
+        process.env.OPENCLAW_GATEWAY_URL = previousGatewayUrl;
+      } else {
+        delete process.env.OPENCLAW_GATEWAY_URL;
+      }
+    }
   });
 });

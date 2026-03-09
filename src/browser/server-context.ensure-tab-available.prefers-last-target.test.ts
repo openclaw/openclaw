@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { withFetchPreconnect } from "../test-utils/fetch-mock.js";
 import type { BrowserServerState } from "./server-context.js";
 import "./server-context.chrome-test-harness.js";
 import { createBrowserRouteContext } from "./server-context.js";
@@ -11,9 +12,15 @@ function makeBrowserState(): BrowserServerState {
     resolved: {
       enabled: true,
       controlPort: 18791,
+      cdpPortRangeStart: 18800,
+      cdpPortRangeEnd: 18899,
       cdpProtocol: "http",
       cdpHost: "127.0.0.1",
       cdpIsLoopback: true,
+      evaluateEnabled: false,
+      remoteCdpTimeoutMs: 1500,
+      remoteCdpHandshakeTimeoutMs: 3000,
+      extraArgs: [],
       color: "#FF4500",
       headless: true,
       noSandbox: false,
@@ -52,7 +59,7 @@ function stubChromeJsonList(responses: unknown[]) {
     } as unknown as Response;
   });
 
-  global.fetch = fetchMock;
+  global.fetch = withFetchPreconnect(fetchMock);
   return fetchMock;
 }
 
@@ -92,7 +99,7 @@ describe("browser server-context ensureTabAvailable", () => {
     expect(second.targetId).toBe("A");
   });
 
-  it("falls back to the only attached tab when an invalid targetId is provided (extension)", async () => {
+  it("rejects invalid targetId even when only one extension tab remains", async () => {
     const responses = [
       [{ id: "A", type: "page", url: "https://a.example", webSocketDebuggerUrl: "ws://x/a" }],
       [{ id: "A", type: "page", url: "https://a.example", webSocketDebuggerUrl: "ws://x/a" }],
@@ -102,8 +109,7 @@ describe("browser server-context ensureTabAvailable", () => {
 
     const ctx = createBrowserRouteContext({ getState: () => state });
     const chrome = ctx.forProfile("chrome");
-    const chosen = await chrome.ensureTabAvailable("NOT_A_TAB");
-    expect(chosen.targetId).toBe("A");
+    await expect(chrome.ensureTabAvailable("NOT_A_TAB")).rejects.toThrow(/tab not found/i);
   });
 
   it("returns a descriptive message when no extension tabs are attached", async () => {
@@ -114,5 +120,59 @@ describe("browser server-context ensureTabAvailable", () => {
     const ctx = createBrowserRouteContext({ getState: () => state });
     const chrome = ctx.forProfile("chrome");
     await expect(chrome.ensureTabAvailable()).rejects.toThrow(/no attached Chrome tabs/i);
+  });
+
+  it("waits briefly for extension tabs to reappear when a previous target exists", async () => {
+    vi.useFakeTimers();
+    try {
+      const responses = [
+        // First call: select tab A and store lastTargetId.
+        [{ id: "A", type: "page", url: "https://a.example", webSocketDebuggerUrl: "ws://x/a" }],
+        [{ id: "A", type: "page", url: "https://a.example", webSocketDebuggerUrl: "ws://x/a" }],
+        // Second call: transient drop, then the extension re-announces attached tab A.
+        [],
+        [{ id: "A", type: "page", url: "https://a.example", webSocketDebuggerUrl: "ws://x/a" }],
+        [{ id: "A", type: "page", url: "https://a.example", webSocketDebuggerUrl: "ws://x/a" }],
+      ];
+      stubChromeJsonList(responses);
+      const state = makeBrowserState();
+
+      const ctx = createBrowserRouteContext({ getState: () => state });
+      const chrome = ctx.forProfile("chrome");
+      const first = await chrome.ensureTabAvailable();
+      expect(first.targetId).toBe("A");
+
+      const secondPromise = chrome.ensureTabAvailable();
+      await vi.advanceTimersByTimeAsync(250);
+      const second = await secondPromise;
+      expect(second.targetId).toBe("A");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("still fails after the extension-tab grace window expires", async () => {
+    vi.useFakeTimers();
+    try {
+      const responses = [
+        [{ id: "A", type: "page", url: "https://a.example", webSocketDebuggerUrl: "ws://x/a" }],
+        [{ id: "A", type: "page", url: "https://a.example", webSocketDebuggerUrl: "ws://x/a" }],
+        ...Array.from({ length: 20 }, () => []),
+      ];
+      stubChromeJsonList(responses);
+      const state = makeBrowserState();
+
+      const ctx = createBrowserRouteContext({ getState: () => state });
+      const chrome = ctx.forProfile("chrome");
+      await chrome.ensureTabAvailable();
+
+      const pending = expect(chrome.ensureTabAvailable()).rejects.toThrow(
+        /no attached Chrome tabs/i,
+      );
+      await vi.advanceTimersByTimeAsync(3_500);
+      await pending;
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

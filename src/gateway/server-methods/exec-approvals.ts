@@ -1,4 +1,3 @@
-import type { GatewayRequestHandlers, RespondFn } from "./types.js";
 import {
   ensureExecApprovals,
   mergeExecApprovalsSocketDefaults,
@@ -22,6 +21,7 @@ import {
   respondUnavailableOnThrow,
   safeParseJson,
 } from "./nodes.helpers.js";
+import type { GatewayRequestHandlers, RespondFn } from "./types.js";
 import { assertValidParams } from "./validation.js";
 
 function requireApprovalsBaseHash(
@@ -86,6 +86,15 @@ function toExecApprovalsPayload(snapshot: ExecApprovalsSnapshot) {
   };
 }
 
+function resolveNodeIdOrRespond(nodeId: string, respond: RespondFn): string | null {
+  const id = nodeId.trim();
+  if (!id) {
+    respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "nodeId required"));
+    return null;
+  }
+  return id;
+}
+
 export const execApprovalsHandlers: GatewayRequestHandlers = {
   "exec.approvals.get": ({ params, respond }) => {
     if (!assertValidParams(params, validateExecApprovalsGetParams, "exec.approvals.get", respond)) {
@@ -131,9 +140,8 @@ export const execApprovalsHandlers: GatewayRequestHandlers = {
       return;
     }
     const { nodeId } = params as { nodeId: string };
-    const id = nodeId.trim();
+    const id = resolveNodeIdOrRespond(nodeId, respond);
     if (!id) {
-      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "nodeId required"));
       return;
     }
     await respondUnavailableOnThrow(respond, async () => {
@@ -165,9 +173,8 @@ export const execApprovalsHandlers: GatewayRequestHandlers = {
       file: ExecApprovalsFile;
       baseHash?: string;
     };
-    const id = nodeId.trim();
+    const id = resolveNodeIdOrRespond(nodeId, respond);
     if (!id) {
-      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "nodeId required"));
       return;
     }
     await respondUnavailableOnThrow(respond, async () => {

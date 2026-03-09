@@ -1,12 +1,16 @@
-import type { IncomingMessage } from "node:http";
 import { EventEmitter } from "node:events";
+import type { IncomingMessage } from "node:http";
 
 export function createMockIncomingRequest(chunks: string[]): IncomingMessage {
-  const req = new EventEmitter() as IncomingMessage & { destroyed?: boolean; destroy: () => void };
+  const req = new EventEmitter() as IncomingMessage & {
+    destroyed?: boolean;
+    destroy: (error?: Error) => IncomingMessage;
+  };
   req.destroyed = false;
   req.headers = {};
   req.destroy = () => {
     req.destroyed = true;
+    return req;
   };
 
   void Promise.resolve().then(() => {

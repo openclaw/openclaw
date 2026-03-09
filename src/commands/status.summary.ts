@@ -1,7 +1,7 @@
-import type { HeartbeatStatus, SessionStatus, StatusSummary } from "./status.types.js";
-import { lookupContextTokens } from "../agents/context.js";
+import { resolveContextTokensForModel } from "../agents/context.js";
 import { DEFAULT_CONTEXT_TOKENS, DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
 import { resolveConfiguredModelRef } from "../agents/model-selection.js";
+import type { OpenClawConfig } from "../config/config.js";
 import { loadConfig } from "../config/config.js";
 import {
   loadSessionStore,
@@ -10,12 +10,17 @@ import {
   resolveStorePath,
   type SessionEntry,
 } from "../config/sessions.js";
-import { classifySessionKey, listAgentsForGateway } from "../gateway/session-utils.js";
+import {
+  classifySessionKey,
+  listAgentsForGateway,
+  resolveSessionModelRef,
+} from "../gateway/session-utils.js";
 import { buildChannelSummary } from "../infra/channel-summary.js";
 import { resolveHeartbeatSummaryForAgent } from "../infra/heartbeat-runner.js";
 import { peekSystemEvents } from "../infra/system-events.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
 import { resolveLinkChannelContext } from "./status.link-channel.js";
+import type { HeartbeatStatus, SessionStatus, StatusSummary } from "./status.types.js";
 
 const buildFlags = (entry?: SessionEntry): string[] => {
   if (!entry) {
@@ -72,10 +77,14 @@ export function redactSensitiveStatusSummary(summary: StatusSummary): StatusSumm
 }
 
 export async function getStatusSummary(
-  options: { includeSensitive?: boolean } = {},
+  options: {
+    includeSensitive?: boolean;
+    config?: OpenClawConfig;
+    sourceConfig?: OpenClawConfig;
+  } = {},
 ): Promise<StatusSummary> {
   const { includeSensitive = true } = options;
-  const cfg = loadConfig();
+  const cfg = options.config ?? loadConfig();
   const linkContext = await resolveLinkChannelContext(cfg);
   const agentList = listAgentsForGateway(cfg);
   const heartbeatAgents: HeartbeatStatus[] = agentList.agents.map((agent) => {
@@ -90,6 +99,7 @@ export async function getStatusSummary(
   const channelSummary = await buildChannelSummary(cfg, {
     colorize: true,
     includeAllowFrom: true,
+    sourceConfig: options.sourceConfig,
   });
   const mainSessionKey = resolveMainSessionKey(cfg);
   const queuedSystemEvents = peekSystemEvents(mainSessionKey);
@@ -101,9 +111,13 @@ export async function getStatusSummary(
   });
   const configModel = resolved.model ?? DEFAULT_MODEL;
   const configContextTokens =
-    cfg.agents?.defaults?.contextTokens ??
-    lookupContextTokens(configModel) ??
-    DEFAULT_CONTEXT_TOKENS;
+    resolveContextTokensForModel({
+      cfg,
+      provider: resolved.provider ?? DEFAULT_PROVIDER,
+      model: configModel,
+      contextTokensOverride: cfg.agents?.defaults?.contextTokens,
+      fallbackContextTokens: DEFAULT_CONTEXT_TOKENS,
+    }) ?? DEFAULT_CONTEXT_TOKENS;
 
   const now = Date.now();
   const storeCache = new Map<string, Record<string, SessionEntry | undefined>>();
@@ -125,9 +139,16 @@ export async function getStatusSummary(
       .map(([key, entry]) => {
         const updatedAt = entry?.updatedAt ?? null;
         const age = updatedAt ? now - updatedAt : null;
-        const model = entry?.model ?? configModel ?? null;
+        const resolvedModel = resolveSessionModelRef(cfg, entry, opts.agentIdOverride);
+        const model = resolvedModel.model ?? configModel ?? null;
         const contextTokens =
-          entry?.contextTokens ?? lookupContextTokens(model) ?? configContextTokens ?? null;
+          resolveContextTokensForModel({
+            cfg,
+            provider: resolvedModel.provider,
+            model,
+            contextTokensOverride: entry?.contextTokens,
+            fallbackContextTokens: configContextTokens ?? undefined,
+          }) ?? null;
         const total = resolveFreshSessionTotalTokens(entry);
         const totalTokensFresh =
           typeof entry?.totalTokens === "number" ? entry?.totalTokensFresh !== false : false;
@@ -155,6 +176,8 @@ export async function getStatusSummary(
           abortedLastRun: entry?.abortedLastRun,
           inputTokens: entry?.inputTokens,
           outputTokens: entry?.outputTokens,
+          cacheRead: entry?.cacheRead,
+          cacheWrite: entry?.cacheWrite,
           totalTokens: total ?? null,
           totalTokensFresh,
           remainingTokens: remaining,

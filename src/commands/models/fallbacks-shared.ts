@@ -1,13 +1,13 @@
-import type { OpenClawConfig } from "../../config/config.js";
-import type { RuntimeEnv } from "../../runtime.js";
 import { buildModelAliasIndex, resolveModelRefFromString } from "../../agents/model-selection.js";
-import { loadConfig } from "../../config/config.js";
+import type { OpenClawConfig } from "../../config/config.js";
 import { logConfigUpdated } from "../../config/logging.js";
+import { resolveAgentModelFallbackValues, toAgentModelListLike } from "../../config/model-input.js";
+import type { RuntimeEnv } from "../../runtime.js";
+import { loadModelsConfig } from "./load-config.js";
 import {
   DEFAULT_PROVIDER,
   ensureFlagCompatibility,
   mergePrimaryFallbackConfig,
-  type PrimaryFallbackConfig,
   modelKey,
   resolveModelTarget,
   resolveModelKeysFromEntries,
@@ -17,17 +17,14 @@ import {
 type DefaultsFallbackKey = "model" | "imageModel";
 
 function getFallbacks(cfg: OpenClawConfig, key: DefaultsFallbackKey): string[] {
-  const entry = cfg.agents?.defaults?.[key] as unknown as PrimaryFallbackConfig | undefined;
-  return entry?.fallbacks ?? [];
+  return resolveAgentModelFallbackValues(cfg.agents?.defaults?.[key]);
 }
 
 function patchDefaultsFallbacks(
   cfg: OpenClawConfig,
   params: { key: DefaultsFallbackKey; fallbacks: string[]; models?: Record<string, unknown> },
 ): OpenClawConfig {
-  const existing = cfg.agents?.defaults?.[params.key] as unknown as
-    | PrimaryFallbackConfig
-    | undefined;
+  const existing = toAgentModelListLike(cfg.agents?.defaults?.[params.key]);
   return {
     ...cfg,
     agents: {
@@ -47,7 +44,7 @@ export async function listFallbacksCommand(
   runtime: RuntimeEnv,
 ) {
   ensureFlagCompatibility(opts);
-  const cfg = loadConfig();
+  const cfg = await loadModelsConfig({ commandName: `models ${params.key} list`, runtime });
   const fallbacks = getFallbacks(cfg, params.key);
 
   if (opts.json) {

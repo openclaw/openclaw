@@ -1,13 +1,13 @@
 import type { WebhookRequestBody } from "@line/bot-sdk";
-import type { OpenClawConfig } from "../config/config.js";
-import type { RuntimeEnv } from "../runtime.js";
-import type { LineChannelData, ResolvedLineAccount } from "./types.js";
 import { chunkMarkdownText } from "../auto-reply/chunk.js";
 import { dispatchReplyWithBufferedBlockDispatcher } from "../auto-reply/reply/provider-dispatcher.js";
 import { createReplyPrefixOptions } from "../channels/reply-prefix.js";
+import type { OpenClawConfig } from "../config/config.js";
 import { danger, logVerbose } from "../globals.js";
+import { waitForAbortSignal } from "../infra/abort-signal.js";
 import { normalizePluginHttpPath } from "../plugins/http-path.js";
 import { registerPluginHttpRoute } from "../plugins/http-registry.js";
+import type { RuntimeEnv } from "../runtime.js";
 import { deliverLineAutoReply } from "./auto-reply-delivery.js";
 import { createLineBot } from "./bot.js";
 import { processLineMessage } from "./markdown-to-line.js";
@@ -26,6 +26,7 @@ import {
   createLocationMessage,
 } from "./send.js";
 import { buildTemplateMessageFromPayload } from "./template-messages.js";
+import type { LineChannelData, ResolvedLineAccount } from "./types.js";
 import { createLineNodeWebhookHandler } from "./webhook-node.js";
 
 export interface MonitorLineProviderOptions {
@@ -287,6 +288,8 @@ export async function monitorLineProvider(
   const normalizedPath = normalizePluginHttpPath(webhookPath, "/line/webhook") ?? "/line/webhook";
   const unregisterHttp = registerPluginHttpRoute({
     path: normalizedPath,
+    auth: "plugin",
+    replaceExisting: true,
     pluginId: "line",
     accountId: resolvedAccountId,
     log: (msg) => logVerbose(msg),
@@ -296,7 +299,12 @@ export async function monitorLineProvider(
   logVerbose(`line: registered webhook handler at ${normalizedPath}`);
 
   // Handle abort signal
+  let stopped = false;
   const stopHandler = () => {
+    if (stopped) {
+      return;
+    }
+    stopped = true;
     logVerbose(`line: stopping provider for account ${resolvedAccountId}`);
     unregisterHttp();
     recordChannelRuntimeState({
@@ -309,7 +317,12 @@ export async function monitorLineProvider(
     });
   };
 
-  abortSignal?.addEventListener("abort", stopHandler);
+  if (abortSignal?.aborted) {
+    stopHandler();
+  } else if (abortSignal) {
+    abortSignal.addEventListener("abort", stopHandler, { once: true });
+    await waitForAbortSignal(abortSignal);
+  }
 
   return {
     account: bot.account,

@@ -1,12 +1,13 @@
 import type { OpenClawConfig, HookConfig } from "../config/config.js";
-import type { HookEligibilityContext, HookEntry } from "./types.js";
 import {
+  evaluateRuntimeEligibility,
   hasBinary,
   isConfigPathTruthyWithDefaults,
   resolveConfigPath,
   resolveRuntimePlatform,
 } from "../shared/config-eval.js";
 import { resolveHookKey } from "./frontmatter.js";
+import type { HookEligibilityContext, HookEntry } from "./types.js";
 
 const DEFAULT_CONFIG_VALUES: Record<string, boolean> = {
   "browser.enabled": true,
@@ -35,6 +36,30 @@ export function resolveHookConfig(
   return entry;
 }
 
+function evaluateHookRuntimeEligibility(params: {
+  entry: HookEntry;
+  config?: OpenClawConfig;
+  hookConfig?: HookConfig;
+  eligibility?: HookEligibilityContext;
+}): boolean {
+  const { entry, config, hookConfig, eligibility } = params;
+  const remote = eligibility?.remote;
+  const base = {
+    os: entry.metadata?.os,
+    remotePlatforms: remote?.platforms,
+    always: entry.metadata?.always,
+    requires: entry.metadata?.requires,
+    hasRemoteBin: remote?.hasBin,
+    hasAnyRemoteBin: remote?.hasAnyBin,
+  };
+  return evaluateRuntimeEligibility({
+    ...base,
+    hasBin: hasBinary,
+    hasEnv: (envName) => Boolean(process.env[envName] || hookConfig?.env?.[envName]),
+    isConfigPathTruthy: (configPath) => isConfigPathTruthy(config, configPath),
+  });
+}
+
 export function shouldIncludeHook(params: {
   entry: HookEntry;
   config?: OpenClawConfig;
@@ -44,76 +69,16 @@ export function shouldIncludeHook(params: {
   const hookKey = resolveHookKey(entry.hook.name, entry);
   const hookConfig = resolveHookConfig(config, hookKey);
   const pluginManaged = entry.hook.source === "openclaw-plugin";
-  const osList = entry.metadata?.os ?? [];
-  const remotePlatforms = eligibility?.remote?.platforms ?? [];
 
   // Check if explicitly disabled
   if (!pluginManaged && hookConfig?.enabled === false) {
     return false;
   }
 
-  // Check OS requirement
-  if (
-    osList.length > 0 &&
-    !osList.includes(resolveRuntimePlatform()) &&
-    !remotePlatforms.some((platform) => osList.includes(platform))
-  ) {
-    return false;
-  }
-
-  // If marked as 'always', bypass all other checks
-  if (entry.metadata?.always === true) {
-    return true;
-  }
-
-  // Check required binaries (all must be present)
-  const requiredBins = entry.metadata?.requires?.bins ?? [];
-  if (requiredBins.length > 0) {
-    for (const bin of requiredBins) {
-      if (hasBinary(bin)) {
-        continue;
-      }
-      if (eligibility?.remote?.hasBin?.(bin)) {
-        continue;
-      }
-      return false;
-    }
-  }
-
-  // Check anyBins (at least one must be present)
-  const requiredAnyBins = entry.metadata?.requires?.anyBins ?? [];
-  if (requiredAnyBins.length > 0) {
-    const anyFound =
-      requiredAnyBins.some((bin) => hasBinary(bin)) ||
-      eligibility?.remote?.hasAnyBin?.(requiredAnyBins);
-    if (!anyFound) {
-      return false;
-    }
-  }
-
-  // Check required environment variables
-  const requiredEnv = entry.metadata?.requires?.env ?? [];
-  if (requiredEnv.length > 0) {
-    for (const envName of requiredEnv) {
-      if (process.env[envName]) {
-        continue;
-      }
-      if (hookConfig?.env?.[envName]) {
-        continue;
-      }
-      return false;
-    }
-  }
-
-  // Check required config paths
-  const requiredConfig = entry.metadata?.requires?.config ?? [];
-  if (requiredConfig.length > 0) {
-    for (const configPath of requiredConfig) {
-      if (!isConfigPathTruthy(config, configPath)) {
-        return false;
-      }
-    }
-  }
-
-  return true;
+  return evaluateHookRuntimeEligibility({
+    entry,
+    config,
+    hookConfig,
+    eligibility,
+  });
 }

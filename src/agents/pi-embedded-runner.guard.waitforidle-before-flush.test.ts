@@ -43,10 +43,11 @@ describe("flushPendingToolResultsAfterIdle", () => {
 
   it("waits for idle so real tool results can land before flush", async () => {
     const sm = guardSessionManager(SessionManager.inMemory());
+    const appendMessage = sm.appendMessage.bind(sm) as unknown as (message: AgentMessage) => void;
     const idle = deferred<void>();
     const agent = { waitForIdle: () => idle.promise };
 
-    sm.appendMessage(assistantToolCall("call_retry_1"));
+    appendMessage(assistantToolCall("call_retry_1"));
     const flushPromise = flushPendingToolResultsAfterIdle({
       agent,
       sessionManager: sm,
@@ -58,7 +59,7 @@ describe("flushPendingToolResultsAfterIdle", () => {
     expect(getMessages(sm).map((m) => m.role)).toEqual(["assistant"]);
 
     // Tool completes before idle wait finishes.
-    sm.appendMessage(toolResult("call_retry_1", "command output here"));
+    appendMessage(toolResult("call_retry_1", "command output here"));
     idle.resolve();
     await flushPromise;
 
@@ -72,10 +73,11 @@ describe("flushPendingToolResultsAfterIdle", () => {
 
   it("flushes pending tool call after timeout when idle never resolves", async () => {
     const sm = guardSessionManager(SessionManager.inMemory());
+    const appendMessage = sm.appendMessage.bind(sm) as unknown as (message: AgentMessage) => void;
     vi.useFakeTimers();
     const agent = { waitForIdle: () => new Promise<void>(() => {}) };
 
-    sm.appendMessage(assistantToolCall("call_orphan_1"));
+    appendMessage(assistantToolCall("call_orphan_1"));
 
     const flushPromise = flushPendingToolResultsAfterIdle({
       agent,
@@ -93,6 +95,33 @@ describe("flushPendingToolResultsAfterIdle", () => {
     expect((entries[1] as { content?: Array<{ text?: string }> }).content?.[0]?.text).toContain(
       "missing tool result",
     );
+  });
+
+  it("clears pending without synthetic flush when timeout cleanup is requested", async () => {
+    const sm = guardSessionManager(SessionManager.inMemory());
+    const appendMessage = sm.appendMessage.bind(sm) as unknown as (message: AgentMessage) => void;
+    vi.useFakeTimers();
+    const agent = { waitForIdle: () => new Promise<void>(() => {}) };
+
+    appendMessage(assistantToolCall("call_orphan_2"));
+
+    const flushPromise = flushPendingToolResultsAfterIdle({
+      agent,
+      sessionManager: sm,
+      timeoutMs: 30,
+      clearPendingOnTimeout: true,
+    });
+    await vi.advanceTimersByTimeAsync(30);
+    await flushPromise;
+
+    expect(getMessages(sm).map((m) => m.role)).toEqual(["assistant"]);
+
+    appendMessage({
+      role: "user",
+      content: "still there?",
+      timestamp: Date.now(),
+    } as AgentMessage);
+    expect(getMessages(sm).map((m) => m.role)).toEqual(["assistant", "user"]);
   });
 
   it("clears timeout handle when waitForIdle resolves first", async () => {

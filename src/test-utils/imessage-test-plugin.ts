@@ -1,6 +1,7 @@
-import type { ChannelOutboundAdapter, ChannelPlugin } from "../channels/plugins/types.js";
 import { imessageOutbound } from "../channels/plugins/outbound/imessage.js";
+import type { ChannelOutboundAdapter, ChannelPlugin } from "../channels/plugins/types.js";
 import { normalizeIMessageHandle } from "../imessage/targets.js";
+import { collectStatusIssuesFromLastError } from "../plugin-sdk/status-helpers.js";
 
 export const createIMessageTestPlugin = (params?: {
   outbound?: ChannelOutboundAdapter;
@@ -20,21 +21,7 @@ export const createIMessageTestPlugin = (params?: {
     resolveAccount: () => ({}),
   },
   status: {
-    collectStatusIssues: (accounts) =>
-      accounts.flatMap((account) => {
-        const lastError = typeof account.lastError === "string" ? account.lastError.trim() : "";
-        if (!lastError) {
-          return [];
-        }
-        return [
-          {
-            channel: "imessage",
-            accountId: account.accountId,
-            kind: "runtime",
-            message: `Channel error: ${lastError}`,
-          },
-        ];
-      }),
+    collectStatusIssues: (accounts) => collectStatusIssuesFromLastError("imessage", accounts),
   },
   outbound: params?.outbound ?? imessageOutbound,
   messaging: {

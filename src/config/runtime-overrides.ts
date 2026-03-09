@@ -1,10 +1,33 @@
-import type { OpenClawConfig } from "./types.js";
 import { isPlainObject } from "../utils.js";
 import { parseConfigPath, setConfigValueAtPath, unsetConfigValueAtPath } from "./config-paths.js";
+import { isBlockedObjectKey } from "./prototype-keys.js";
+import type { OpenClawConfig } from "./types.js";
 
 type OverrideTree = Record<string, unknown>;
 
 let overrides: OverrideTree = {};
+
+function sanitizeOverrideValue(value: unknown, seen = new WeakSet<object>()): unknown {
+  if (Array.isArray(value)) {
+    return value.map((entry) => sanitizeOverrideValue(entry, seen));
+  }
+  if (!isPlainObject(value)) {
+    return value;
+  }
+  if (seen.has(value)) {
+    return {};
+  }
+  seen.add(value);
+  const sanitized: OverrideTree = {};
+  for (const [key, entry] of Object.entries(value)) {
+    if (entry === undefined || isBlockedObjectKey(key)) {
+      continue;
+    }
+    sanitized[key] = sanitizeOverrideValue(entry, seen);
+  }
+  seen.delete(value);
+  return sanitized;
+}
 
 function mergeOverrides(base: unknown, override: unknown): unknown {
   if (!isPlainObject(base) || !isPlainObject(override)) {
@@ -12,7 +35,7 @@ function mergeOverrides(base: unknown, override: unknown): unknown {
   }
   const next: OverrideTree = { ...base };
   for (const [key, value] of Object.entries(override)) {
-    if (value === undefined) {
+    if (value === undefined || isBlockedObjectKey(key)) {
       continue;
     }
     next[key] = mergeOverrides((base as OverrideTree)[key], value);
@@ -39,7 +62,7 @@ export function setConfigOverride(
   if (!parsed.ok || !parsed.path) {
     return { ok: false, error: parsed.error ?? "Invalid path." };
   }
-  setConfigValueAtPath(overrides, parsed.path, value);
+  setConfigValueAtPath(overrides, parsed.path, sanitizeOverrideValue(value));
   return { ok: true };
 }
 

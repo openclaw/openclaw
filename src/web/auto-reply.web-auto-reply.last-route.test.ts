@@ -36,7 +36,9 @@ function createHandlerForTest(opts: { cfg: OpenClawConfig; replyResolver: unknow
     groupMemberNames: new Map(),
     echoTracker: createEchoTracker({ maxItems: 10 }),
     backgroundTasks,
-    replyResolver: opts.replyResolver,
+    replyResolver: opts.replyResolver as Parameters<
+      typeof createWebOnMessageHandler
+    >[0]["replyResolver"],
     replyLogger: makeReplyLogger(),
     baseMentionConfig: buildMentionConfig(opts.cfg),
     account: {},
@@ -74,7 +76,7 @@ function buildInboundMessage(params: {
     timestamp: params.timestamp,
     chatType: params.chatType,
     chatId: params.chatId,
-    accountId: params.accountId,
+    accountId: params.accountId ?? "default",
     senderE164: params.senderE164,
     senderName: params.senderName,
     selfE164: params.selfE164,

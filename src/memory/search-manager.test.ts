@@ -1,21 +1,53 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { OpenClawConfig } from "../config/config.js";
 
-const mockPrimary = {
-  search: vi.fn(async () => []),
-  readFile: vi.fn(async () => ({ text: "", path: "MEMORY.md" })),
-  status: vi.fn(() => ({
-    backend: "qmd" as const,
-    provider: "qmd",
-    model: "qmd",
-    requestedProvider: "qmd",
+function createManagerStatus(params: {
+  backend: "qmd" | "builtin";
+  provider: string;
+  model: string;
+  requestedProvider: string;
+  withMemorySourceCounts?: boolean;
+}) {
+  const base = {
+    backend: params.backend,
+    provider: params.provider,
+    model: params.model,
+    requestedProvider: params.requestedProvider,
     files: 0,
     chunks: 0,
     dirty: false,
     workspaceDir: "/tmp",
     dbPath: "/tmp/index.sqlite",
+  };
+  if (!params.withMemorySourceCounts) {
+    return base;
+  }
+  return {
+    ...base,
     sources: ["memory" as const],
     sourceCounts: [{ source: "memory" as const, files: 0, chunks: 0 }],
-  })),
+  };
+}
+
+const qmdManagerStatus = createManagerStatus({
+  backend: "qmd",
+  provider: "qmd",
+  model: "qmd",
+  requestedProvider: "qmd",
+  withMemorySourceCounts: true,
+});
+
+const fallbackManagerStatus = createManagerStatus({
+  backend: "builtin",
+  provider: "openai",
+  model: "text-embedding-3-small",
+  requestedProvider: "openai",
+});
+
+const mockPrimary = {
+  search: vi.fn(async () => []),
+  readFile: vi.fn(async () => ({ text: "", path: "MEMORY.md" })),
+  status: vi.fn(() => qmdManagerStatus),
   sync: vi.fn(async () => {}),
   probeEmbeddingAvailability: vi.fn(async () => ({ ok: true })),
   probeVectorAvailability: vi.fn(async () => true),
@@ -36,17 +68,7 @@ const fallbackSearch = vi.fn(async () => [
 const fallbackManager = {
   search: fallbackSearch,
   readFile: vi.fn(async () => ({ text: "", path: "MEMORY.md" })),
-  status: vi.fn(() => ({
-    backend: "builtin" as const,
-    provider: "openai",
-    model: "text-embedding-3-small",
-    requestedProvider: "openai",
-    files: 0,
-    chunks: 0,
-    dirty: false,
-    workspaceDir: "/tmp",
-    dbPath: "/tmp/index.sqlite",
-  })),
+  status: vi.fn(() => fallbackManagerStatus),
   sync: vi.fn(async () => {}),
   probeEmbeddingAvailability: vi.fn(async () => ({ ok: true })),
   probeVectorAvailability: vi.fn(async () => true),
@@ -69,15 +91,17 @@ vi.mock("./manager.js", () => ({
 
 import { QmdMemoryManager } from "./qmd-manager.js";
 import { getMemorySearchManager } from "./search-manager.js";
+// eslint-disable-next-line @typescript-eslint/unbound-method -- mocked static function
+const createQmdManagerMock = vi.mocked(QmdMemoryManager.create);
 
 type SearchManagerResult = Awaited<ReturnType<typeof getMemorySearchManager>>;
 type SearchManager = NonNullable<SearchManagerResult["manager"]>;
 
-function createQmdCfg(agentId: string) {
+function createQmdCfg(agentId: string): OpenClawConfig {
   return {
     memory: { backend: "qmd", qmd: {} },
     agents: { list: [{ id: agentId, default: true, workspace: "/tmp/workspace" }] },
-  } as const;
+  };
 }
 
 function requireManager(result: SearchManagerResult): SearchManager {
@@ -110,9 +134,9 @@ beforeEach(() => {
   fallbackManager.probeEmbeddingAvailability.mockClear();
   fallbackManager.probeVectorAvailability.mockClear();
   fallbackManager.close.mockClear();
-  mockMemoryIndexGet.mockReset();
+  mockMemoryIndexGet.mockClear();
   mockMemoryIndexGet.mockResolvedValue(fallbackManager);
-  QmdMemoryManager.create.mockClear();
+  createQmdManagerMock.mockClear();
 });
 
 describe("getMemorySearchManager caching", () => {
@@ -124,7 +148,7 @@ describe("getMemorySearchManager caching", () => {
 
     expect(first.manager).toBe(second.manager);
     // eslint-disable-next-line @typescript-eslint/unbound-method
-    expect(QmdMemoryManager.create).toHaveBeenCalledTimes(1);
+    expect(createQmdManagerMock).toHaveBeenCalledTimes(1);
   });
 
   it("evicts failed qmd wrapper so next call retries qmd", async () => {
@@ -146,7 +170,7 @@ describe("getMemorySearchManager caching", () => {
     requireManager(second);
     expect(second.manager).not.toBe(first.manager);
     // eslint-disable-next-line @typescript-eslint/unbound-method
-    expect(QmdMemoryManager.create).toHaveBeenCalledTimes(2);
+    expect(createQmdManagerMock).toHaveBeenCalledTimes(2);
   });
 
   it("does not cache status-only qmd managers", async () => {
@@ -159,14 +183,14 @@ describe("getMemorySearchManager caching", () => {
     requireManager(first);
     requireManager(second);
     // eslint-disable-next-line @typescript-eslint/unbound-method
-    expect(QmdMemoryManager.create).toHaveBeenCalledTimes(2);
+    expect(createQmdManagerMock).toHaveBeenCalledTimes(2);
     // eslint-disable-next-line @typescript-eslint/unbound-method
-    expect(QmdMemoryManager.create).toHaveBeenNthCalledWith(
+    expect(createQmdManagerMock).toHaveBeenNthCalledWith(
       1,
       expect.objectContaining({ agentId, mode: "status" }),
     );
     // eslint-disable-next-line @typescript-eslint/unbound-method
-    expect(QmdMemoryManager.create).toHaveBeenNthCalledWith(
+    expect(createQmdManagerMock).toHaveBeenNthCalledWith(
       2,
       expect.objectContaining({ agentId, mode: "status" }),
     );
@@ -193,7 +217,7 @@ describe("getMemorySearchManager caching", () => {
     const third = await getMemorySearchManager({ cfg, agentId: retryAgentId });
     expect(third.manager).toBe(secondManager);
     // eslint-disable-next-line @typescript-eslint/unbound-method
-    expect(QmdMemoryManager.create).toHaveBeenCalledTimes(2);
+    expect(createQmdManagerMock).toHaveBeenCalledTimes(2);
   });
 
   it("falls back to builtin search when qmd fails with sqlite busy", async () => {

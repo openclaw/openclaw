@@ -1,7 +1,5 @@
 import type { OpenClawConfig } from "../config/config.js";
 import type { DispatchFromConfigResult } from "./reply/dispatch-from-config.js";
-import type { FinalizedMsgContext, MsgContext } from "./templating.js";
-import type { GetReplyOptions } from "./types.js";
 import { dispatchReplyFromConfig } from "./reply/dispatch-from-config.js";
 import { finalizeInboundContext } from "./reply/inbound-context.js";
 import {
@@ -11,6 +9,8 @@ import {
   type ReplyDispatcherOptions,
   type ReplyDispatcherWithTypingOptions,
 } from "./reply/reply-dispatcher.js";
+import type { FinalizedMsgContext, MsgContext } from "./templating.js";
+import type { GetReplyOptions } from "./types.js";
 
 export type DispatchInboundResult = DispatchFromConfigResult;
 

@@ -1,9 +1,15 @@
-import { Type } from "@sinclair/typebox";
 import crypto from "node:crypto";
-import type { SessionEntry } from "../../config/sessions.js";
-import type { AnyAgentTool } from "./common.js";
+import { Type } from "@sinclair/typebox";
 import { clearSessionQueues } from "../../auto-reply/reply/queue.js";
+import {
+  resolveSubagentLabel,
+  resolveSubagentTargetFromRuns,
+  sortSubagentRuns,
+  type SubagentTargetResolution,
+} from "../../auto-reply/reply/subagents-utils.js";
+import { DEFAULT_SUBAGENT_MAX_SPAWN_DEPTH } from "../../config/agent-limits.js";
 import { loadConfig } from "../../config/config.js";
+import type { SessionEntry } from "../../config/sessions.js";
 import { loadSessionStore, resolveStorePath, updateSessionStore } from "../../config/sessions.js";
 import { callGateway } from "../../gateway/call.js";
 import { logVerbose } from "../../globals.js";
@@ -25,12 +31,14 @@ import { optionalStringEnum } from "../schema/typebox.js";
 import { getSubagentDepthFromSessionStore } from "../subagent-depth.js";
 import {
   clearSubagentRunSteerRestart,
+  countPendingDescendantRuns,
   listSubagentRunsForRequester,
   markSubagentRunTerminated,
   markSubagentRunForSteerRestart,
   replaceSubagentRunAfterSteer,
   type SubagentRunRecord,
 } from "../subagent-registry.js";
+import type { AnyAgentTool } from "./common.js";
 import { jsonResult, readNumberParam, readStringParam } from "./common.js";
 import { resolveInternalSessionKey, resolveMainSessionAlias } from "./sessions-helpers.js";
 
@@ -63,17 +71,12 @@ type ResolvedRequesterKey = {
   callerIsSubagent: boolean;
 };
 
-type TargetResolution = {
-  entry?: SubagentRunRecord;
-  error?: string;
-};
-
-function resolveRunLabel(entry: SubagentRunRecord, fallback = "subagent") {
-  const raw = entry.label?.trim() || entry.task?.trim() || "";
-  return raw || fallback;
-}
-
-function resolveRunStatus(entry: SubagentRunRecord) {
+function resolveRunStatus(entry: SubagentRunRecord, options?: { pendingDescendants?: number }) {
+  const pendingDescendants = Math.max(0, options?.pendingDescendants ?? 0);
+  if (pendingDescendants > 0) {
+    const childLabel = pendingDescendants === 1 ? "child" : "children";
+    return `active (waiting on ${pendingDescendants} ${childLabel})`;
+  }
   if (!entry.endedAt) {
     return "running";
   }
@@ -85,14 +88,6 @@ function resolveRunStatus(entry: SubagentRunRecord) {
     return "failed";
   }
   return status;
-}
-
-function sortRuns(runs: SubagentRunRecord[]) {
-  return [...runs].toSorted((a, b) => {
-    const aTime = a.startedAt ?? a.createdAt ?? 0;
-    const bTime = b.startedAt ?? b.createdAt ?? 0;
-    return bTime - aTime;
-  });
 }
 
 function resolveModelRef(entry?: SessionEntry) {
@@ -142,60 +137,24 @@ function resolveModelDisplay(entry?: SessionEntry, fallbackModel?: string) {
 function resolveSubagentTarget(
   runs: SubagentRunRecord[],
   token: string | undefined,
-  options?: { recentMinutes?: number },
-): TargetResolution {
-  const trimmed = token?.trim();
-  if (!trimmed) {
-    return { error: "Missing subagent target." };
-  }
-  const sorted = sortRuns(runs);
-  const recentMinutes = options?.recentMinutes ?? DEFAULT_RECENT_MINUTES;
-  const recentCutoff = Date.now() - recentMinutes * 60_000;
-  const numericOrder = [
-    ...sorted.filter((entry) => !entry.endedAt),
-    ...sorted.filter((entry) => !!entry.endedAt && (entry.endedAt ?? 0) >= recentCutoff),
-  ];
-  if (trimmed === "last") {
-    return { entry: sorted[0] };
-  }
-  if (/^\d+$/.test(trimmed)) {
-    const idx = Number.parseInt(trimmed, 10);
-    if (!Number.isFinite(idx) || idx <= 0 || idx > numericOrder.length) {
-      return { error: `Invalid subagent index: ${trimmed}` };
-    }
-    return { entry: numericOrder[idx - 1] };
-  }
-  if (trimmed.includes(":")) {
-    const bySessionKey = sorted.find((entry) => entry.childSessionKey === trimmed);
-    return bySessionKey
-      ? { entry: bySessionKey }
-      : { error: `Unknown subagent session: ${trimmed}` };
-  }
-  const lowered = trimmed.toLowerCase();
-  const byExactLabel = sorted.filter((entry) => resolveRunLabel(entry).toLowerCase() === lowered);
-  if (byExactLabel.length === 1) {
-    return { entry: byExactLabel[0] };
-  }
-  if (byExactLabel.length > 1) {
-    return { error: `Ambiguous subagent label: ${trimmed}` };
-  }
-  const byLabelPrefix = sorted.filter((entry) =>
-    resolveRunLabel(entry).toLowerCase().startsWith(lowered),
-  );
-  if (byLabelPrefix.length === 1) {
-    return { entry: byLabelPrefix[0] };
-  }
-  if (byLabelPrefix.length > 1) {
-    return { error: `Ambiguous subagent label prefix: ${trimmed}` };
-  }
-  const byRunIdPrefix = sorted.filter((entry) => entry.runId.startsWith(trimmed));
-  if (byRunIdPrefix.length === 1) {
-    return { entry: byRunIdPrefix[0] };
-  }
-  if (byRunIdPrefix.length > 1) {
-    return { error: `Ambiguous subagent run id prefix: ${trimmed}` };
-  }
-  return { error: `Unknown subagent target: ${trimmed}` };
+  options?: { recentMinutes?: number; isActive?: (entry: SubagentRunRecord) => boolean },
+): SubagentTargetResolution {
+  return resolveSubagentTargetFromRuns({
+    runs,
+    token,
+    recentWindowMinutes: options?.recentMinutes ?? DEFAULT_RECENT_MINUTES,
+    label: (entry) => resolveSubagentLabel(entry),
+    isActive: options?.isActive,
+    errors: {
+      missingTarget: "Missing subagent target.",
+      invalidIndex: (value) => `Invalid subagent index: ${value}`,
+      unknownSession: (value) => `Unknown subagent session: ${value}`,
+      ambiguousLabel: (value) => `Ambiguous subagent label: ${value}`,
+      ambiguousLabelPrefix: (value) => `Ambiguous subagent label prefix: ${value}`,
+      ambiguousRunIdPrefix: (value) => `Ambiguous subagent run id prefix: ${value}`,
+      unknownTarget: (value) => `Unknown subagent target: ${value}`,
+    },
+  });
 }
 
 function resolveStorePathForKey(
@@ -248,7 +207,8 @@ function resolveRequesterKey(params: {
   // Check if this sub-agent can spawn children (orchestrator).
   // If so, it should see its own children, not its parent's children.
   const callerDepth = getSubagentDepthFromSessionStore(callerSessionKey, { cfg: params.cfg });
-  const maxSpawnDepth = params.cfg.agents?.defaults?.subagents?.maxSpawnDepth ?? 1;
+  const maxSpawnDepth =
+    params.cfg.agents?.defaults?.subagents?.maxSpawnDepth ?? DEFAULT_SUBAGENT_MAX_SPAWN_DEPTH;
   if (callerDepth < maxSpawnDepth) {
     // Orchestrator sub-agent: use its own session key as requester
     // so it sees children it spawned.
@@ -346,7 +306,7 @@ async function cascadeKillChildren(params: {
       });
       if (stopResult.killed) {
         killed += 1;
-        labels.push(resolveRunLabel(run));
+        labels.push(resolveSubagentLabel(run));
       }
     }
 
@@ -401,11 +361,22 @@ export function createSubagentsTool(opts?: { agentSessionKey?: string }): AnyAge
         cfg,
         agentSessionKey: opts?.agentSessionKey,
       });
-      const runs = sortRuns(listSubagentRunsForRequester(requester.requesterSessionKey));
+      const runs = sortSubagentRuns(listSubagentRunsForRequester(requester.requesterSessionKey));
       const recentMinutesRaw = readNumberParam(params, "recentMinutes");
       const recentMinutes = recentMinutesRaw
         ? Math.max(1, Math.min(MAX_RECENT_MINUTES, Math.floor(recentMinutesRaw)))
         : DEFAULT_RECENT_MINUTES;
+      const pendingDescendantCache = new Map<string, number>();
+      const pendingDescendantCount = (sessionKey: string) => {
+        if (pendingDescendantCache.has(sessionKey)) {
+          return pendingDescendantCache.get(sessionKey) ?? 0;
+        }
+        const pending = Math.max(0, countPendingDescendantRuns(sessionKey));
+        pendingDescendantCache.set(sessionKey, pending);
+        return pending;
+      };
+      const isActiveRun = (entry: SubagentRunRecord) =>
+        !entry.endedAt || pendingDescendantCount(entry.childSessionKey) > 0;
 
       if (action === "list") {
         const now = Date.now();
@@ -421,9 +392,12 @@ export function createSubagentsTool(opts?: { agentSessionKey?: string }): AnyAge
           }).entry;
           const totalTokens = resolveTotalTokens(sessionEntry);
           const usageText = formatTokenUsageDisplay(sessionEntry);
-          const status = resolveRunStatus(entry);
+          const pendingDescendants = pendingDescendantCount(entry.childSessionKey);
+          const status = resolveRunStatus(entry, {
+            pendingDescendants,
+          });
           const runtime = formatDurationCompact(runtimeMs);
-          const label = truncateLine(resolveRunLabel(entry), 48);
+          const label = truncateLine(resolveSubagentLabel(entry), 48);
           const task = truncateLine(entry.task.trim(), 72);
           const line = `${index}. ${label} (${resolveModelDisplay(sessionEntry, entry.model)}, ${runtime}${usageText ? `, ${usageText}` : ""}) ${status}${task.toLowerCase() !== label.toLowerCase() ? ` - ${task}` : ""}`;
           const baseView = {
@@ -433,6 +407,7 @@ export function createSubagentsTool(opts?: { agentSessionKey?: string }): AnyAge
             label,
             task,
             status,
+            pendingDescendants,
             runtime,
             runtimeMs,
             model: resolveModelRef(sessionEntry) || entry.model,
@@ -443,10 +418,13 @@ export function createSubagentsTool(opts?: { agentSessionKey?: string }): AnyAge
           return { line, view: entry.endedAt ? { ...baseView, endedAt: entry.endedAt } : baseView };
         };
         const active = runs
-          .filter((entry) => !entry.endedAt)
+          .filter((entry) => isActiveRun(entry))
           .map((entry) => buildListEntry(entry, now - (entry.startedAt ?? entry.createdAt)));
         const recent = runs
-          .filter((entry) => !!entry.endedAt && (entry.endedAt ?? 0) >= recentCutoff)
+          .filter(
+            (entry) =>
+              !isActiveRun(entry) && !!entry.endedAt && (entry.endedAt ?? 0) >= recentCutoff,
+          )
           .map((entry) =>
             buildListEntry(entry, (entry.endedAt ?? now) - (entry.startedAt ?? entry.createdAt)),
           );
@@ -483,7 +461,7 @@ export function createSubagentsTool(opts?: { agentSessionKey?: string }): AnyAge
               const stopResult = await killSubagentRun({ cfg, entry, cache });
               if (stopResult.killed) {
                 killed += 1;
-                killedLabels.push(resolveRunLabel(entry));
+                killedLabels.push(resolveSubagentLabel(entry));
               }
             }
 
@@ -509,7 +487,10 @@ export function createSubagentsTool(opts?: { agentSessionKey?: string }): AnyAge
                 : "no running subagents to kill.",
           });
         }
-        const resolved = resolveSubagentTarget(runs, target, { recentMinutes });
+        const resolved = resolveSubagentTarget(runs, target, {
+          recentMinutes,
+          isActive: isActiveRun,
+        });
         if (!resolved.entry) {
           return jsonResult({
             status: "error",
@@ -543,7 +524,7 @@ export function createSubagentsTool(opts?: { agentSessionKey?: string }): AnyAge
             target,
             runId: resolved.entry.runId,
             sessionKey: resolved.entry.childSessionKey,
-            text: `${resolveRunLabel(resolved.entry)} is already finished.`,
+            text: `${resolveSubagentLabel(resolved.entry)} is already finished.`,
           });
         }
         const cascadeText =
@@ -556,12 +537,12 @@ export function createSubagentsTool(opts?: { agentSessionKey?: string }): AnyAge
           target,
           runId: resolved.entry.runId,
           sessionKey: resolved.entry.childSessionKey,
-          label: resolveRunLabel(resolved.entry),
+          label: resolveSubagentLabel(resolved.entry),
           cascadeKilled: cascade.killed,
           cascadeLabels: cascade.killed > 0 ? cascade.labels : undefined,
           text: stopResult.killed
-            ? `killed ${resolveRunLabel(resolved.entry)}${cascadeText}.`
-            : `killed ${cascade.killed} descendant${cascade.killed === 1 ? "" : "s"} of ${resolveRunLabel(resolved.entry)}.`,
+            ? `killed ${resolveSubagentLabel(resolved.entry)}${cascadeText}.`
+            : `killed ${cascade.killed} descendant${cascade.killed === 1 ? "" : "s"} of ${resolveSubagentLabel(resolved.entry)}.`,
         });
       }
       if (action === "steer") {
@@ -575,7 +556,10 @@ export function createSubagentsTool(opts?: { agentSessionKey?: string }): AnyAge
             error: `Message too long (${message.length} chars, max ${MAX_STEER_MESSAGE_CHARS}).`,
           });
         }
-        const resolved = resolveSubagentTarget(runs, target, { recentMinutes });
+        const resolved = resolveSubagentTarget(runs, target, {
+          recentMinutes,
+          isActive: isActiveRun,
+        });
         if (!resolved.entry) {
           return jsonResult({
             status: "error",
@@ -591,7 +575,7 @@ export function createSubagentsTool(opts?: { agentSessionKey?: string }): AnyAge
             target,
             runId: resolved.entry.runId,
             sessionKey: resolved.entry.childSessionKey,
-            text: `${resolveRunLabel(resolved.entry)} is already finished.`,
+            text: `${resolveSubagentLabel(resolved.entry)} is already finished.`,
           });
         }
         if (
@@ -714,8 +698,8 @@ export function createSubagentsTool(opts?: { agentSessionKey?: string }): AnyAge
           sessionKey: resolved.entry.childSessionKey,
           sessionId,
           mode: "restart",
-          label: resolveRunLabel(resolved.entry),
-          text: `steered ${resolveRunLabel(resolved.entry)}.`,
+          label: resolveSubagentLabel(resolved.entry),
+          text: `steered ${resolveSubagentLabel(resolved.entry)}.`,
         });
       }
       return jsonResult({

@@ -1,5 +1,6 @@
-import type { RuntimeEnv } from "../../runtime.js";
 import { logConfigUpdated } from "../../config/logging.js";
+import { resolveAgentModelPrimaryValue } from "../../config/model-input.js";
+import type { RuntimeEnv } from "../../runtime.js";
 import { applyDefaultModelPrimaryUpdate, updateConfig } from "./shared.js";
 
 export async function modelsSetCommand(modelRaw: string, runtime: RuntimeEnv) {
@@ -8,5 +9,7 @@ export async function modelsSetCommand(modelRaw: string, runtime: RuntimeEnv) {
   });
 
   logConfigUpdated(runtime);
-  runtime.log(`Default model: ${updated.agents?.defaults?.model?.primary ?? modelRaw}`);
+  runtime.log(
+    `Default model: ${resolveAgentModelPrimaryValue(updated.agents?.defaults?.model) ?? modelRaw}`,
+  );
 }

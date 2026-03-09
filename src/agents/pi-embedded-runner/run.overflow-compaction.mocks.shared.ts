@@ -1,4 +1,36 @@
 import { vi } from "vitest";
+import type {
+  PluginHookAgentContext,
+  PluginHookBeforeAgentStartResult,
+  PluginHookBeforeModelResolveResult,
+  PluginHookBeforePromptBuildResult,
+} from "../../plugins/types.js";
+
+export const mockedGlobalHookRunner = {
+  hasHooks: vi.fn((_hookName: string) => false),
+  runBeforeAgentStart: vi.fn(
+    async (
+      _event: { prompt: string; messages?: unknown[] },
+      _ctx: PluginHookAgentContext,
+    ): Promise<PluginHookBeforeAgentStartResult | undefined> => undefined,
+  ),
+  runBeforePromptBuild: vi.fn(
+    async (
+      _event: { prompt: string; messages: unknown[] },
+      _ctx: PluginHookAgentContext,
+    ): Promise<PluginHookBeforePromptBuildResult | undefined> => undefined,
+  ),
+  runBeforeModelResolve: vi.fn(
+    async (
+      _event: { prompt: string },
+      _ctx: PluginHookAgentContext,
+    ): Promise<PluginHookBeforeModelResolveResult | undefined> => undefined,
+  ),
+};
+
+vi.mock("../../plugins/hook-runner-global.js", () => ({
+  getGlobalHookRunner: vi.fn(() => mockedGlobalHookRunner),
+}));
 
 vi.mock("../auth-profiles.js", () => ({
   isProfileInCooldown: vi.fn(() => false),
@@ -11,19 +43,45 @@ vi.mock("../usage.js", () => ({
   normalizeUsage: vi.fn((usage?: unknown) =>
     usage && typeof usage === "object" ? usage : undefined,
   ),
-  derivePromptTokens: vi.fn(
-    (usage?: { input?: number; cacheRead?: number; cacheWrite?: number }) => {
-      if (!usage) {
-        return undefined;
-      }
-      const input = usage.input ?? 0;
-      const cacheRead = usage.cacheRead ?? 0;
-      const cacheWrite = usage.cacheWrite ?? 0;
-      const sum = input + cacheRead + cacheWrite;
-      return sum > 0 ? sum : undefined;
-    },
+  derivePromptTokens: vi.fn((usage?: { input?: number; cacheRead?: number; cacheWrite?: number }) =>
+    usage
+      ? (() => {
+          const sum = (usage.input ?? 0) + (usage.cacheRead ?? 0) + (usage.cacheWrite ?? 0);
+          return sum > 0 ? sum : undefined;
+        })()
+      : undefined,
   ),
   hasNonzeroUsage: vi.fn(() => false),
+}));
+
+vi.mock("../workspace-run.js", () => ({
+  resolveRunWorkspaceDir: vi.fn((params: { workspaceDir: string }) => ({
+    workspaceDir: params.workspaceDir,
+    usedFallback: false,
+    fallbackReason: undefined,
+    agentId: "main",
+  })),
+  redactRunIdentifier: vi.fn((value?: string) => value ?? ""),
+}));
+
+vi.mock("../pi-embedded-helpers.js", () => ({
+  formatBillingErrorMessage: vi.fn(() => ""),
+  classifyFailoverReason: vi.fn(() => null),
+  formatAssistantErrorText: vi.fn(() => ""),
+  isAuthAssistantError: vi.fn(() => false),
+  isBillingAssistantError: vi.fn(() => false),
+  isCompactionFailureError: vi.fn(() => false),
+  isLikelyContextOverflowError: vi.fn((msg?: string) => {
+    const lower = (msg ?? "").toLowerCase();
+    return lower.includes("request_too_large") || lower.includes("context window exceeded");
+  }),
+  isFailoverAssistantError: vi.fn(() => false),
+  isFailoverErrorMessage: vi.fn(() => false),
+  parseImageSizeError: vi.fn(() => null),
+  parseImageDimensionError: vi.fn(() => null),
+  isRateLimitAssistantError: vi.fn(() => false),
+  isTimeoutErrorMessage: vi.fn(() => false),
+  pickFallbackThinkingLevel: vi.fn(() => null),
 }));
 
 vi.mock("./run/attempt.js", () => ({

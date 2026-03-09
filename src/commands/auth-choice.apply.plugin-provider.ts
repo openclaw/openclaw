@@ -1,4 +1,3 @@
-import type { ApplyAuthChoiceParams, ApplyAuthChoiceResult } from "./auth-choice.apply.js";
 import { resolveOpenClawAgentDir } from "../agents/agent-paths.js";
 import {
   resolveDefaultAgentId,
@@ -9,6 +8,7 @@ import { upsertAuthProfile } from "../agents/auth-profiles.js";
 import { resolveDefaultAgentWorkspaceDir } from "../agents/workspace.js";
 import { enablePluginInConfig } from "../plugins/enable.js";
 import { resolvePluginProviders } from "../plugins/providers.js";
+import type { ApplyAuthChoiceParams, ApplyAuthChoiceResult } from "./auth-choice.apply.js";
 import { isRemoteEnvironment } from "./oauth-env.js";
 import { createVpsAwareOAuthHandlers } from "./oauth-flow.js";
 import { applyAuthProfileConfig } from "./onboard-auth.js";

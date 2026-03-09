@@ -1,18 +1,15 @@
 import { beforeEach, vi } from "vitest";
-import type { MockFn } from "../test-utils/vitest-mock-fn.js";
 import { resetInboundDedupe } from "../auto-reply/reply/inbound-dedupe.js";
+import type { MsgContext } from "../auto-reply/templating.js";
+import type { GetReplyOptions, ReplyPayload } from "../auto-reply/types.js";
+import type { OpenClawConfig } from "../config/config.js";
+import type { MockFn } from "../test-utils/vitest-mock-fn.js";
 
 type AnyMock = MockFn<(...args: unknown[]) => unknown>;
 type AnyAsyncMock = MockFn<(...args: unknown[]) => Promise<unknown>>;
 
-type ReplyOpts =
-  | {
-      onReplyStart?: () => void | Promise<void>;
-    }
-  | undefined;
-
 const { sessionStorePath } = vi.hoisted(() => ({
-  sessionStorePath: `/tmp/openclaw-telegram-${Math.random().toString(16).slice(2)}.json`,
+  sessionStorePath: `/tmp/openclaw-telegram-${process.pid}-${process.env.VITEST_POOL_ID ?? "0"}.json`,
 }));
 
 const { loadWebMedia } = vi.hoisted((): { loadWebMedia: AnyMock } => ({
@@ -114,6 +111,7 @@ export const botCtorSpy: AnyMock = vi.fn();
 export const answerCallbackQuerySpy: AnyAsyncMock = vi.fn(async () => undefined);
 export const sendChatActionSpy: AnyMock = vi.fn();
 export const editMessageTextSpy: AnyAsyncMock = vi.fn(async () => ({ message_id: 88 }));
+export const sendMessageDraftSpy: AnyAsyncMock = vi.fn(async () => true);
 export const setMessageReactionSpy: AnyAsyncMock = vi.fn(async () => undefined);
 export const setMyCommandsSpy: AnyAsyncMock = vi.fn(async () => undefined);
 export const getMeSpy: AnyAsyncMock = vi.fn(async () => ({
@@ -123,18 +121,21 @@ export const getMeSpy: AnyAsyncMock = vi.fn(async () => ({
 export const sendMessageSpy: AnyAsyncMock = vi.fn(async () => ({ message_id: 77 }));
 export const sendAnimationSpy: AnyAsyncMock = vi.fn(async () => ({ message_id: 78 }));
 export const sendPhotoSpy: AnyAsyncMock = vi.fn(async () => ({ message_id: 79 }));
+export const getFileSpy: AnyAsyncMock = vi.fn(async () => ({ file_path: "media/file.jpg" }));
 
 type ApiStub = {
   config: { use: (arg: unknown) => void };
   answerCallbackQuery: typeof answerCallbackQuerySpy;
   sendChatAction: typeof sendChatActionSpy;
   editMessageText: typeof editMessageTextSpy;
+  sendMessageDraft: typeof sendMessageDraftSpy;
   setMessageReaction: typeof setMessageReactionSpy;
   setMyCommands: typeof setMyCommandsSpy;
   getMe: typeof getMeSpy;
   sendMessage: typeof sendMessageSpy;
   sendAnimation: typeof sendAnimationSpy;
   sendPhoto: typeof sendPhotoSpy;
+  getFile: typeof getFileSpy;
 };
 
 const apiStub: ApiStub = {
@@ -142,12 +143,14 @@ const apiStub: ApiStub = {
   answerCallbackQuery: answerCallbackQuerySpy,
   sendChatAction: sendChatActionSpy,
   editMessageText: editMessageTextSpy,
+  sendMessageDraft: sendMessageDraftSpy,
   setMessageReaction: setMessageReactionSpy,
   setMyCommands: setMyCommandsSpy,
   getMe: getMeSpy,
   sendMessage: sendMessageSpy,
   sendAnimation: sendAnimationSpy,
   sendPhoto: sendPhotoSpy,
+  getFile: getFileSpy,
 };
 
 vi.mock("grammy", () => ({
@@ -166,7 +169,6 @@ vi.mock("grammy", () => ({
     }
   },
   InputFile: class {},
-  webhookCallback: vi.fn(),
 }));
 
 const sequentializeMiddleware = vi.fn();
@@ -185,12 +187,16 @@ vi.mock("@grammyjs/transformer-throttler", () => ({
   apiThrottler: () => throttlerSpy(),
 }));
 
-export const replySpy: MockFn<(ctx: unknown, opts?: ReplyOpts) => Promise<void>> = vi.fn(
-  async (_ctx, opts) => {
-    await opts?.onReplyStart?.();
-    return undefined;
-  },
-);
+export const replySpy: MockFn<
+  (
+    ctx: MsgContext,
+    opts?: GetReplyOptions,
+    configOverride?: OpenClawConfig,
+  ) => Promise<ReplyPayload | ReplyPayload[] | undefined>
+> = vi.fn(async (_ctx, opts) => {
+  await opts?.onReplyStart?.();
+  return undefined;
+});
 
 vi.mock("../auto-reply/reply.js", () => ({
   getReplyFromConfig: replySpy,
@@ -203,6 +209,17 @@ export const getOnHandler = (event: string) => {
     throw new Error(`Missing handler for event: ${event}`);
   }
   return handler as (ctx: Record<string, unknown>) => Promise<void>;
+};
+
+const DEFAULT_TELEGRAM_TEST_CONFIG: OpenClawConfig = {
+  agents: {
+    defaults: {
+      envelopeTimezone: "utc",
+    },
+  },
+  channels: {
+    telegram: { dmPolicy: "open", allowFrom: ["*"] },
+  },
 };
 
 export function makeTelegramMessageCtx(params: {
@@ -258,16 +275,7 @@ export function makeForumGroupMessageCtx(params?: {
 beforeEach(() => {
   resetInboundDedupe();
   loadConfig.mockReset();
-  loadConfig.mockReturnValue({
-    agents: {
-      defaults: {
-        envelopeTimezone: "utc",
-      },
-    },
-    channels: {
-      telegram: { dmPolicy: "open", allowFrom: ["*"] },
-    },
-  });
+  loadConfig.mockReturnValue(DEFAULT_TELEGRAM_TEST_CONFIG);
   loadWebMedia.mockReset();
   readChannelAllowFromStore.mockReset();
   readChannelAllowFromStore.mockResolvedValue([]);
@@ -289,6 +297,8 @@ beforeEach(() => {
   sendPhotoSpy.mockResolvedValue({ message_id: 79 });
   sendMessageSpy.mockReset();
   sendMessageSpy.mockResolvedValue({ message_id: 77 });
+  getFileSpy.mockReset();
+  getFileSpy.mockResolvedValue({ file_path: "media/file.jpg" });
 
   setMessageReactionSpy.mockReset();
   setMessageReactionSpy.mockResolvedValue(undefined);
@@ -305,6 +315,8 @@ beforeEach(() => {
   });
   editMessageTextSpy.mockReset();
   editMessageTextSpy.mockResolvedValue({ message_id: 88 });
+  sendMessageDraftSpy.mockReset();
+  sendMessageDraftSpy.mockResolvedValue(true);
   enqueueSystemEventSpy.mockReset();
   wasSentByBot.mockReset();
   wasSentByBot.mockReturnValue(false);

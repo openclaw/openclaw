@@ -1,9 +1,9 @@
 import type { WebClient as SlackWebClient } from "@slack/web-api";
-import type { FetchLike } from "../../media/fetch.js";
-import type { SlackFile } from "../types.js";
 import { normalizeHostname } from "../../infra/net/hostname.js";
+import type { FetchLike } from "../../media/fetch.js";
 import { fetchRemoteMedia } from "../../media/fetch.js";
 import { saveMediaBuffer } from "../../media/store.js";
+import type { SlackAttachment, SlackFile } from "../types.js";
 
 function isSlackHostname(hostname: string): boolean {
   const normalized = normalizeHostname(hostname);
@@ -108,6 +108,11 @@ export async function fetchWithSlackAuth(url: string, token: string): Promise<Re
   return fetch(resolvedUrl.toString(), { redirect: "follow" });
 }
 
+const SLACK_MEDIA_SSRF_POLICY = {
+  allowedHostnames: ["*.slack.com", "*.slack-edge.com", "*.slack-files.com"],
+  allowRfc2544BenchmarkRange: true,
+};
+
 /**
  * Slack voice messages (audio clips, huddle recordings) carry a `subtype` of
  * `"slack_audio"` but are served with a `video/*` MIME type (e.g. `video/mp4`,
@@ -125,14 +130,41 @@ function resolveSlackMediaMimetype(
   return mime;
 }
 
+function looksLikeHtmlBuffer(buffer: Buffer): boolean {
+  const head = buffer.subarray(0, 512).toString("utf-8").replace(/^\s+/, "").toLowerCase();
+  return head.startsWith("<!doctype html") || head.startsWith("<html");
+}
+
 export type SlackMediaResult = {
   path: string;
   contentType?: string;
   placeholder: string;
 };
 
-const MAX_SLACK_MEDIA_FILES = 8;
+export const MAX_SLACK_MEDIA_FILES = 8;
 const MAX_SLACK_MEDIA_CONCURRENCY = 3;
+const MAX_SLACK_FORWARDED_ATTACHMENTS = 8;
+
+function isForwardedSlackAttachment(attachment: SlackAttachment): boolean {
+  // Narrow this parser to Slack's explicit "shared/forwarded" attachment payloads.
+  return attachment.is_share === true;
+}
+
+function resolveForwardedAttachmentImageUrl(attachment: SlackAttachment): string | null {
+  const rawUrl = attachment.image_url?.trim();
+  if (!rawUrl) {
+    return null;
+  }
+  try {
+    const parsed = new URL(rawUrl);
+    if (parsed.protocol !== "https:" || !isSlackHostname(parsed.hostname)) {
+      return null;
+    }
+    return parsed.toString();
+  } catch {
+    return null;
+  }
+}
 
 async function mapLimit<T, R>(
   items: T[],
@@ -191,10 +223,25 @@ export async function resolveSlackMedia(params: {
           fetchImpl,
           filePathHint: file.name,
           maxBytes: params.maxBytes,
+          ssrfPolicy: SLACK_MEDIA_SSRF_POLICY,
         });
         if (fetched.buffer.byteLength > params.maxBytes) {
           return null;
         }
+
+        // Guard against auth/login HTML pages returned instead of binary media.
+        // Allow user-provided HTML files through.
+        const fileMime = file.mimetype?.toLowerCase();
+        const fileName = file.name?.toLowerCase() ?? "";
+        const isExpectedHtml =
+          fileMime === "text/html" || fileName.endsWith(".html") || fileName.endsWith(".htm");
+        if (!isExpectedHtml) {
+          const detectedMime = fetched.contentType?.split(";")[0]?.trim().toLowerCase();
+          if (detectedMime === "text/html" || looksLikeHtmlBuffer(fetched.buffer)) {
+            return null;
+          }
+        }
+
         const effectiveMime = resolveSlackMediaMimetype(file, fetched.contentType);
         const saved = await saveMediaBuffer(
           fetched.buffer,
@@ -217,6 +264,83 @@ export async function resolveSlackMedia(params: {
 
   const results = resolved.filter((entry): entry is SlackMediaResult => Boolean(entry));
   return results.length > 0 ? results : null;
+}
+
+/** Extracts text and media from forwarded-message attachments. Returns null when empty. */
+export async function resolveSlackAttachmentContent(params: {
+  attachments?: SlackAttachment[];
+  token: string;
+  maxBytes: number;
+}): Promise<{ text: string; media: SlackMediaResult[] } | null> {
+  const attachments = params.attachments;
+  if (!attachments || attachments.length === 0) {
+    return null;
+  }
+
+  const forwardedAttachments = attachments
+    .filter((attachment) => isForwardedSlackAttachment(attachment))
+    .slice(0, MAX_SLACK_FORWARDED_ATTACHMENTS);
+  if (forwardedAttachments.length === 0) {
+    return null;
+  }
+
+  const textBlocks: string[] = [];
+  const allMedia: SlackMediaResult[] = [];
+
+  for (const att of forwardedAttachments) {
+    const text = att.text?.trim() || att.fallback?.trim();
+    if (text) {
+      const author = att.author_name;
+      const heading = author ? `[Forwarded message from ${author}]` : "[Forwarded message]";
+      textBlocks.push(`${heading}\n${text}`);
+    }
+
+    const imageUrl = resolveForwardedAttachmentImageUrl(att);
+    if (imageUrl) {
+      try {
+        const fetchImpl = createSlackMediaFetch(params.token);
+        const fetched = await fetchRemoteMedia({
+          url: imageUrl,
+          fetchImpl,
+          maxBytes: params.maxBytes,
+          ssrfPolicy: SLACK_MEDIA_SSRF_POLICY,
+        });
+        if (fetched.buffer.byteLength <= params.maxBytes) {
+          const saved = await saveMediaBuffer(
+            fetched.buffer,
+            fetched.contentType,
+            "inbound",
+            params.maxBytes,
+          );
+          const label = fetched.fileName ?? "forwarded image";
+          allMedia.push({
+            path: saved.path,
+            contentType: fetched.contentType ?? saved.contentType,
+            placeholder: `[Forwarded image: ${label}]`,
+          });
+        }
+      } catch {
+        // Skip images that fail to download
+      }
+    }
+
+    if (att.files && att.files.length > 0) {
+      const fileMedia = await resolveSlackMedia({
+        files: att.files,
+        token: params.token,
+        maxBytes: params.maxBytes,
+      });
+      if (fileMedia) {
+        allMedia.push(...fileMedia);
+      }
+    }
+  }
+
+  const combinedText = textBlocks.join("\n\n");
+  if (!combinedText && allMedia.length === 0) {
+    return null;
+  }
+  return { text: combinedText, media: allMedia };
 }
 
 export type SlackThreadStarter = {

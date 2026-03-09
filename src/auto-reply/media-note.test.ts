@@ -79,7 +79,11 @@ describe("buildInboundMediaNote", () => {
     const note = buildInboundMediaNote({
       MediaPaths: ["/tmp/a.png", "/tmp/b.png"],
       MediaUrls: ["https://example.com/a.png", "https://example.com/b.png"],
-      MediaUnderstandingDecisions: [createSuccessfulImageMediaDecision()],
+      MediaUnderstandingDecisions: [
+        createSuccessfulImageMediaDecision() as unknown as NonNullable<
+          Parameters<typeof buildInboundMediaNote>[0]["MediaUnderstandingDecisions"]
+        >[number],
+      ],
     });
     expect(note).toBe("[media attached: /tmp/b.png | https://example.com/b.png]");
   });

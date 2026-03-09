@@ -1,8 +1,12 @@
-import type { Context, Tool } from "@mariozechner/pi-ai/dist/types.js";
-import { convertMessages, convertTools } from "@mariozechner/pi-ai/dist/providers/google-shared.js";
+import type { Context, Tool } from "@mariozechner/pi-ai";
 import { describe, expect, it } from "vitest";
 import {
+  convertMessages,
+  convertTools,
+} from "../../node_modules/@mariozechner/pi-ai/dist/providers/google-shared.js";
+import {
   asRecord,
+  expectConvertedRoles,
   getFirstToolParameters,
   makeGoogleAssistantMessage,
   makeModel,
@@ -24,7 +28,9 @@ describe("google-shared convertTools", () => {
     ] as unknown as Tool[];
 
     const converted = convertTools(tools);
-    const params = getFirstToolParameters(converted);
+    const params = getFirstToolParameters(
+      converted as Parameters<typeof getFirstToolParameters>[0],
+    );
 
     expect(params.type).toBeUndefined();
     expect(params.properties).toBeDefined();
@@ -64,7 +70,9 @@ describe("google-shared convertTools", () => {
     ] as unknown as Tool[];
 
     const converted = convertTools(tools);
-    const params = getFirstToolParameters(converted);
+    const params = getFirstToolParameters(
+      converted as Parameters<typeof getFirstToolParameters>[0],
+    );
     const properties = asRecord(params.properties);
     const mode = asRecord(properties.mode);
     const options = asRecord(properties.options);
@@ -105,7 +113,9 @@ describe("google-shared convertTools", () => {
     ] as unknown as Tool[];
 
     const converted = convertTools(tools);
-    const params = getFirstToolParameters(converted);
+    const params = getFirstToolParameters(
+      converted as Parameters<typeof getFirstToolParameters>[0],
+    );
     const config = asRecord(asRecord(params.properties).config);
     const configProps = asRecord(config.properties);
     const retries = asRecord(configProps.retries);
@@ -226,10 +236,7 @@ describe("google-shared convertMessages", () => {
     } as unknown as Context;
 
     const contents = convertMessages(model, context);
-    expect(contents).toHaveLength(3);
-    expect(contents[0].role).toBe("user");
-    expect(contents[1].role).toBe("model");
-    expect(contents[2].role).toBe("model");
+    expectConvertedRoles(contents, ["user", "model", "model"]);
     expect(contents[1].parts).toHaveLength(1);
     expect(contents[2].parts).toHaveLength(1);
   });
