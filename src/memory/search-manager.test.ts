@@ -263,4 +263,17 @@ describe("getMemorySearchManager caching", () => {
     // eslint-disable-next-line @typescript-eslint/unbound-method
     expect(createQmdManagerMock).toHaveBeenCalledTimes(2);
   });
+
+  it("closes builtin index managers on teardown after runtime is loaded", async () => {
+    const retryAgentId = "teardown-with-fallback";
+    const { manager } = await createFailedQmdSearchHarness({
+      agentId: retryAgentId,
+      errorMessage: "qmd query failed",
+    });
+    await manager.search("hello");
+
+    await closeAllMemorySearchManagers();
+
+    expect(mockCloseAllMemoryIndexManagers).toHaveBeenCalledTimes(1);
+  });
 });

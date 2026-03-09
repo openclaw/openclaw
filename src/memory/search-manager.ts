@@ -95,8 +95,10 @@ export async function closeAllMemorySearchManagers(): Promise<void> {
       log.warn(`failed to close qmd memory manager: ${String(err)}`);
     }
   }
-  const { closeAllMemoryIndexManagers } = await loadManagerRuntime();
-  await closeAllMemoryIndexManagers();
+  if (managerRuntimePromise !== null) {
+    const { closeAllMemoryIndexManagers } = await loadManagerRuntime();
+    await closeAllMemoryIndexManagers();
+  }
 }
 
 class FallbackMemoryManager implements MemorySearchManager {
