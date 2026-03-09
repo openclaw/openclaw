@@ -341,83 +341,72 @@ export class FeishuStreamingSession {
       this.state.currentText = text;
     }
 
-    // Close streaming mode
+    // Close streaming mode (and optionally append "Show full text" button)
+    // via batch_update API to combine both operations in a single request.
     this.state.sequence += 1;
-    await fetchWithSsrFGuard({
-      url: `${apiBase}/cardkit/v1/cards/${this.state.cardId}/settings`,
-      init: {
-        method: "PATCH",
-        headers: {
-          Authorization: `Bearer ${await getToken(this.creds)}`,
-          "Content-Type": "application/json; charset=utf-8",
-        },
-        body: JSON.stringify({
-          settings: JSON.stringify({
+    const batchActions: Record<string, unknown>[] = [
+      {
+        action: "partial_update_setting",
+        params: {
+          settings: {
             config: { streaming_mode: false, summary: { content: truncateSummary(text) } },
-          }),
-          sequence: this.state.sequence,
-          uuid: `c_${this.state.cardId}_${this.state.sequence}`,
-        }),
+          },
+        },
       },
-      policy: { allowedHostnames: resolveAllowedHostnames(this.creds.domain) },
-      auditContext: "feishu.streaming-card.close",
-    })
-      .then(async ({ release }) => {
-        await release();
-      })
-      .catch((e) => this.log?.(`Close failed: ${String(e)}`));
+    ];
 
-    // Append "Show full text" button when the response included intermediate
-    // steps (tool calls / block narration) that may not have rendered fully.
-    if (options?.addShowFullTextButton && this.state) {
-      this.state.sequence += 1;
-      const buttonElement = {
-        tag: "action",
-        actions: [
-          {
-            tag: "button",
-            text: { tag: "plain_text", content: "\u{1F4CB} \u67E5\u770B\u5B8C\u6574\u56DE\u590D" },
-            type: "default",
-            size: "small",
-            value: {
-              command: "__show_full_text__",
-              message_id: this.state.messageId,
+    if (options?.addShowFullTextButton) {
+      batchActions.push({
+        action: "add_elements",
+        params: {
+          type: "append",
+          elements: [
+            {
+              tag: "action",
+              actions: [
+                {
+                  tag: "button",
+                  text: { tag: "plain_text", content: "\u{1F4CB} \u67E5\u770B\u5B8C\u6574\u56DE\u590D" },
+                  type: "default",
+                  size: "small",
+                  value: {
+                    command: "__show_full_text__",
+                    message_id: this.state.messageId,
+                  },
+                },
+              ],
+              element_id: "show_full_btn",
             },
+          ],
+        },
+      });
+    }
+
+    try {
+      const { response, release } = await fetchWithSsrFGuard({
+        url: `${apiBase}/cardkit/v1/cards/${this.state.cardId}/batch_update`,
+        init: {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${await getToken(this.creds)}`,
+            "Content-Type": "application/json; charset=utf-8",
           },
-        ],
-        element_id: "show_full_btn",
-      };
-      const btnBody = {
-        elements: JSON.stringify([buttonElement]),
-        type: "append",
-        sequence: this.state.sequence,
-        uuid: `btn_${this.state.cardId}_${this.state.sequence}`,
-      };
-      this.log?.(
-        `Adding show-full-text button: cardId=${this.state.cardId}, seq=${this.state.sequence}`,
-      );
-      try {
-        const { response, release } = await fetchWithSsrFGuard({
-          url: `${apiBase}/cardkit/v1/cards/${this.state.cardId}/elements`,
-          init: {
-            method: "POST",
-            headers: {
-              Authorization: `Bearer ${await getToken(this.creds)}`,
-              "Content-Type": "application/json",
-            },
-            body: JSON.stringify(btnBody),
-          },
-          policy: { allowedHostnames: resolveAllowedHostnames(this.creds.domain) },
-          auditContext: "feishu.streaming-card.add-button",
-        });
-        const respText = await response.text();
-        release();
-        this.log?.(
-          `Add button response: status=${response.status}, body=${respText.slice(0, 500)}`,
-        );
-      } catch (e) {
-        this.log?.(`Add show-full-text button failed: ${String(e)}`);
+          body: JSON.stringify({
+            actions: JSON.stringify(batchActions),
+            sequence: this.state.sequence,
+            uuid: `c_${this.state.cardId}_${this.state.sequence}`,
+          }),
+        },
+        policy: { allowedHostnames: resolveAllowedHostnames(this.creds.domain) },
+        auditContext: "feishu.streaming-card.close",
+      });
+      const respText = await response.text();
+      release();
+      if (response.status !== 200 || !respText.includes('"code":0')) {
+        this.log?.(`batch_update failed: status=${response.status}, body=${respText.slice(0, 500)}`);
       }
+    } catch (e) {
+      this.log?.(`Close failed: ${String(e)}`);
     }
 
     this.log?.(`Closed streaming: cardId=${this.state.cardId}`);
