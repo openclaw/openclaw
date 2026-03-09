@@ -278,25 +278,61 @@ function remapArchiveEntryPath(params: {
 }
 
 function matchesExcludePattern(filePath: string, pattern: string): boolean {
-  // Simple glob matching for common patterns
-  const normalizedPath = filePath.replace(/\\/g, "/");
-
-  // Handle wildcards (both * and ? work independently now)
-  if (pattern.includes("*") || pattern.includes("?")) {
-    // Escape regex special characters except * and ?
-    const escaped = pattern.replace(/[.+^${}()|[\]\\]/g, "\\$&");
-    const regex = new RegExp("^" + escaped.replace(/\*/g, ".*").replace(/\?/g, ".") + "$");
-    return regex.test(normalizedPath) || regex.test(path.basename(normalizedPath));
+  // Handle negation patterns (starting with !)
+  const isNegation = pattern.startsWith("!");
+  if (isNegation) {
+    pattern = pattern.slice(1);
   }
+
+  // Normalize path
+  const normalizedPath = filePath.replace(/\\/g, "/");
+  const basename = path.basename(normalizedPath);
+
+  // Build regex from gitignore pattern
+  let regexPattern = pattern;
+
+  // Handle character classes [abc] and ranges [a-z]
+  // Convert to regex: [abc] -> \[abc\], [a-z] -> \[a-z\]
+  regexPattern = regexPattern.replace(/\[([^\]]+)\]/g, (match) => {
+    return "[" + match.slice(1, -1) + "]";
+  });
+
+  // Handle ** (matches directories recursively)
+  // **/foo matches foo at any level
+  // foo/** matches everything under foo
+  if (regexPattern.startsWith("**/")) {
+    regexPattern = ".*/" + regexPattern.slice(3);
+  } else if (regexPattern.endsWith("/**")) {
+    regexPattern = regexPattern.slice(0, -2) + "(/.*)?";
+  } else {
+    // Regular * doesn't match slashes
+    regexPattern = regexPattern.replace(/\*/g, "[^/]*");
+  }
+
+  // ? matches any single character except /
+  regexPattern = regexPattern.replace(/\?/g, "[^/]");
+
+  // Escape other regex special characters
+  regexPattern = regexPattern.replace(/[.+^${}()|[\]\\]/g, "\\$&");
+
+  // Match from start (anchored)
+  const regex = new RegExp("^" + regexPattern + "$");
+
+  // Check if matches full path or basename
+  const matchesFull = regex.test(normalizedPath);
+  const matchesBasename = regex.test(basename);
 
   // Handle directory patterns (ending with /)
   if (pattern.endsWith("/")) {
-    const dirPattern = pattern.slice(0, -1);
-    return normalizedPath.includes(dirPattern + "/") || normalizedPath.includes(dirPattern + "\\");
+    const isDir =
+      normalizedPath.endsWith("/") || normalizedPath.split("/").slice(-1)[0] !== basename;
+    return (matchesFull || matchesBasename) && isDir;
   }
 
-  // Exact match or basename match (not substring to avoid false positives)
-  return normalizedPath === pattern || path.basename(normalizedPath) === pattern;
+  const matched = matchesFull || matchesBasename;
+
+  // Negation means include (opposite of exclude)
+  return isNegation ? !matched : matched;
 }
 
 function filterExcludedAssets(
@@ -307,13 +343,29 @@ function filterExcludedAssets(
     return { included: assets, excluded: [] };
   }
 
+  // Separate negation patterns from exclusion patterns
+  const negationPatterns = excludePatterns.filter((p) => p.startsWith("!"));
+  const exclusionPatterns = excludePatterns.filter((p) => !p.startsWith("!"));
+
   const included: BackupAsset[] = [];
   const excluded: BackupAsset[] = [];
 
   for (const asset of assets) {
-    const isExcluded = excludePatterns.some((pattern) =>
-      matchesExcludePattern(asset.sourcePath, pattern),
+    const sourcePath = asset.sourcePath;
+
+    // Check exclusion patterns first
+    const isExcludedByNormal = exclusionPatterns.some((pattern) =>
+      matchesExcludePattern(sourcePath, pattern),
     );
+
+    // Check negation patterns - if any negation matches, file is included
+    const isNegated = negationPatterns.some((pattern) =>
+      matchesExcludePattern(sourcePath, pattern),
+    );
+
+    // File is excluded if matched by exclusion pattern AND not negated
+    const isExcluded = isExcludedByNormal && !isNegated;
+
     if (isExcluded) {
       excluded.push(asset);
     } else {
