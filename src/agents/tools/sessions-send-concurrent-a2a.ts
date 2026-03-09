@@ -65,14 +65,14 @@ export async function runConcurrentA2AFlowForTarget(params: {
     let latestReply = params.roundOneReply;
 
     // ========== Phase 1: Wait for primary run completion (if not fire-and-forget) ==========
-    if (!params.isFireAndForget && params.waitRunId) {
+    if (!primaryReply && params.waitRunId) {
       log.debug("Concurrent A2A: waiting for primary run", {
         runId: runContextId,
         sessionKey: params.targetSessionKey,
         waitRunId: params.waitRunId,
       });
 
-      const waitMs = Math.min(params.primaryTimeoutMs, 60_000);
+      const waitMs = Math.min(params.announceTimeoutMs, 60_000);
       const wait = await callGateway<{ status?: string; error?: string }>({
         method: "agent.wait",
         params: {
