@@ -1,8 +1,9 @@
 import { RequestClient } from "@buape/carbon";
-import { ProxyAgent } from "undici";
+import { ProxyAgent, fetch as undiciFetch } from "undici";
 import { loadConfig } from "openclaw/plugin-sdk/config-runtime";
 import type { RetryConfig } from "openclaw/plugin-sdk/infra-runtime";
 import type { RetryRunner } from "openclaw/plugin-sdk/infra-runtime";
+import { danger } from "openclaw/plugin-sdk/runtime-env";
 import { normalizeAccountId } from "openclaw/plugin-sdk/routing";
 import {
   mergeDiscordAccountConfig,
@@ -31,12 +32,34 @@ function resolveToken(params: { accountId: string; fallbackToken?: string }) {
   return fallback;
 }
 
+/**
+ * Install a proxied globalThis.fetch so that RequestClient (which uses
+ * globalThis.fetch internally) routes all HTTP through the proxy.
+ * Must be called before constructing RequestClient.
+ */
+function installProxyFetch(proxyUrl?: string): void {
+  const proxy = proxyUrl?.trim();
+  if (!proxy) {
+    return;
+  }
+  try {
+    const agent = new ProxyAgent(proxy);
+    globalThis.fetch = ((input: RequestInfo | URL, init?: RequestInit) =>
+      undiciFetch(input as string | URL, {
+        ...(init as Record<string, unknown>),
+        dispatcher: agent,
+      }) as unknown as Promise<Response>) as typeof fetch;
+  } catch (err) {
+    console.warn(danger(`discord: failed to create rest proxy agent: ${String(err)}`));
+  }
+}
+
 function resolveRest(token: string, proxy?: string, rest?: RequestClient) {
   if (rest) {
     return rest;
   }
-  const dispatcher = proxy?.trim() ? new ProxyAgent(proxy.trim()) : undefined;
-  return new RequestClient(token, { dispatcher });
+  installProxyFetch(proxy);
+  return new RequestClient(token);
 }
 
 function resolveAccountWithoutToken(params: {
