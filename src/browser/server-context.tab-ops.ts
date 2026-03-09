@@ -7,6 +7,7 @@ import {
   assertBrowserNavigationResultAllowed,
   withBrowserNavigationPolicy,
 } from "./navigation-guard.js";
+import { getBrowserProfileCapabilities } from "./profile-capabilities.js";
 import type { PwAiModule } from "./pw-ai-module.js";
 import { getPwAiModule } from "./pw-ai-module.js";
 import {
@@ -59,10 +60,10 @@ export function createProfileTabOps({
   getProfileState,
 }: TabOpsDeps): ProfileTabOps {
   const cdpHttpBase = normalizeCdpHttpBaseForJsonEndpoints(profile.cdpUrl);
+  const capabilities = getBrowserProfileCapabilities(profile);
 
   const listTabs = async (): Promise<BrowserTab[]> => {
-    // For remote profiles, use Playwright's persistent connection to avoid ephemeral sessions
-    if (!profile.cdpIsLoopback) {
+    if (capabilities.usesPersistentPlaywright) {
       const mod = await getPwAiModule({ mode: "strict" });
       const listPagesViaPlaywright = (mod as Partial<PwAiModule> | null)?.listPagesViaPlaywright;
       if (typeof listPagesViaPlaywright === "function") {
@@ -99,8 +100,7 @@ export function createProfileTabOps({
   const enforceManagedTabLimit = async (keepTargetId: string): Promise<void> => {
     const profileState = getProfileState();
     if (
-      profile.driver !== "openclaw" ||
-      !profile.cdpIsLoopback ||
+      !capabilities.supportsManagedTabLimit ||
       state().resolved.attachOnly ||
       !profileState.running
     ) {
@@ -132,9 +132,7 @@ export function createProfileTabOps({
   const openTab = async (url: string): Promise<BrowserTab> => {
     const ssrfPolicyOpts = withBrowserNavigationPolicy(state().resolved.ssrfPolicy);
 
-    // For remote profiles, use Playwright's persistent connection to create tabs
-    // This ensures the tab persists beyond a single request.
-    if (!profile.cdpIsLoopback) {
+    if (capabilities.usesPersistentPlaywright) {
       const mod = await getPwAiModule({ mode: "strict" });
       const createPageViaPlaywright = (mod as Partial<PwAiModule> | null)?.createPageViaPlaywright;
       if (typeof createPageViaPlaywright === "function") {

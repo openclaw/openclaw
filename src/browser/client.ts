@@ -30,6 +30,8 @@ export type ProfileStatus = {
   tabCount: number;
   isDefault: boolean;
   isRemote: boolean;
+  missingFromConfig?: boolean;
+  reconcileReason?: string | null;
 };
 
 export type BrowserResetProfileResult = {
