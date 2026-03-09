@@ -702,7 +702,11 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
       log.warn(
         "Compaction safeguard: cancelling compaction with no real conversation messages to summarize.",
       );
-      return { cancel: true };
+      return {
+        cancel: true,
+        reason:
+          "No conversation messages to summarize — session contains only system/tool traffic. This is normal for fresh sessions or after /reset.",
+      };
     }
     const { readFiles, modifiedFiles } = computeFileLists(preparation.fileOps);
     const fileOpsSummary = formatFileOperations(readFiles, modifiedFiles);
