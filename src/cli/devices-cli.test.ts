@@ -53,6 +53,18 @@ async function runDevicesCommand(argv: string[]) {
 }
 
 describe("devices cli approve", () => {
+  it("rejects invalid timeout before calling the gateway", async () => {
+    const program = new Command();
+    program.exitOverride();
+    registerDevicesCli(program);
+
+    await expect(
+      program.parseAsync(["devices", "list", "--timeout", "-1"], { from: "user" }),
+    ).rejects.toThrow("--timeout must be a positive integer (milliseconds)");
+
+    expect(callGateway).not.toHaveBeenCalled();
+  });
+
   it("approves an explicit request id without listing", async () => {
     callGateway.mockResolvedValueOnce({ device: { deviceId: "device-1" } });
 

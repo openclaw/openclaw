@@ -17,6 +17,7 @@ import { formatCliChannelOptions } from "./channel-options.js";
 import { runCommandWithRuntime } from "./cli-utils.js";
 import { hasExplicitOptions } from "./command-options.js";
 import { formatHelpExamples } from "./help-format.js";
+import { parseTimeoutOption } from "./parse-timeout.js";
 
 const optionNamesAdd = [
   "channel",
@@ -104,7 +105,7 @@ export function registerChannelsCli(program: Command) {
     .command("status")
     .description("Show gateway channel status (use status --deep for local)")
     .option("--probe", "Probe channel credentials", false)
-    .option("--timeout <ms>", "Timeout in ms", "10000")
+    .option("--timeout <ms>", "Timeout in ms", parseTimeoutOption, "10000")
     .option("--json", "Output JSON", false)
     .action(async (opts) => {
       await runChannelsCommand(async () => {
