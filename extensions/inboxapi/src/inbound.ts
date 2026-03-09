@@ -3,7 +3,12 @@
  * Converts InboxAPI emails into the format expected by OpenClaw's routing.
  */
 
-import { deriveSessionKey, extractSenderEmail, extractSenderName } from "./threading.js";
+import {
+  deriveSessionKey,
+  extractSenderEmail,
+  extractSenderName,
+  getThreadRootId,
+} from "./threading.js";
 import type { InboxApiEmail } from "./types.js";
 
 const CHANNEL_ID = "inboxapi";
@@ -15,7 +20,8 @@ export interface InboundEmailContext {
   sessionKey: string;
   conversationLabel: string;
   currentMessageId: string;
-  replyToId?: string;
+  /** InboxAPI internal ID for replying */
+  replyToInternalId: string;
   chatType: "direct";
 }
 
@@ -39,7 +45,8 @@ export function mapEmailToInbound(email: InboxApiEmail): InboundEmailContext {
     sessionKey: deriveSessionKey(email),
     conversationLabel: email.subject || "(no subject)",
     currentMessageId: email.messageId,
-    replyToId: email.inReplyTo,
+    // Use InboxAPI internal ID for reply operations (not RFC Message-ID)
+    replyToInternalId: email.id,
     chatType: "direct",
   };
 }
@@ -47,8 +54,14 @@ export function mapEmailToInbound(email: InboxApiEmail): InboundEmailContext {
 /**
  * Build the full MsgContext fields for SDK finalizeInboundContext.
  */
-export function buildInboundMsgFields(email: InboxApiEmail, accountId: string) {
+export function buildInboundMsgFields(
+  email: InboxApiEmail,
+  accountId: string,
+  commandAuthorized: boolean,
+) {
   const ctx = mapEmailToInbound(email);
+  const ts = Date.parse(email.date);
+  const threadRootId = getThreadRootId(email);
   return {
     Body: ctx.body,
     RawBody: ctx.body,
@@ -65,10 +78,14 @@ export function buildInboundMsgFields(email: InboxApiEmail, accountId: string) {
     Provider: CHANNEL_ID,
     Surface: CHANNEL_ID,
     ConversationLabel: ctx.conversationLabel,
-    Timestamp: new Date(email.date).getTime() || Date.now(),
+    Timestamp: Number.isFinite(ts) ? ts : Date.now(),
     CurrentMessageId: ctx.currentMessageId,
-    ReplyToId: ctx.replyToId,
-    CommandAuthorized: true,
+    // Store the InboxAPI internal ID for reply operations
+    ReplyToId: ctx.replyToInternalId,
+    MessageSid: email.id,
+    MessageSidFull: email.messageId,
+    MessageThreadId: threadRootId,
+    CommandAuthorized: commandAuthorized,
   };
 }
 

@@ -12,6 +12,19 @@ vi.mock("./auth.js", () => ({
   resolveAccessToken: vi.fn().mockResolvedValue("test-token"),
 }));
 
+// Mock SDK dm-policy functions used by monitor.ts
+const mockReadStoreAllowFrom = vi.fn().mockResolvedValue([]);
+const mockResolveDmGroupAccess = vi.fn().mockReturnValue({
+  decision: "allow",
+  reason: "open",
+  effectiveAllowFrom: [],
+  effectiveGroupAllowFrom: [],
+});
+vi.mock("openclaw/plugin-sdk/inboxapi", () => ({
+  readStoreAllowFromForDmPolicy: (...args: any[]) => mockReadStoreAllowFrom(...args),
+  resolveDmGroupAccessWithLists: (...args: any[]) => mockResolveDmGroupAccess(...args),
+}));
+
 import { whoami, getLastEmail, getEmails } from "./client.js";
 import { startPolling } from "./monitor.js";
 import type { ResolvedInboxApiAccount, InboxApiEmail } from "./types.js";
@@ -52,6 +65,13 @@ describe("startPolling", () => {
     vi.mocked(whoami).mockReset();
     vi.mocked(getLastEmail).mockReset();
     vi.mocked(getEmails).mockReset();
+    mockReadStoreAllowFrom.mockReset().mockResolvedValue([]);
+    mockResolveDmGroupAccess.mockReset().mockReturnValue({
+      decision: "allow",
+      reason: "open",
+      effectiveAllowFrom: [],
+      effectiveGroupAllowFrom: [],
+    });
   });
 
   it("verifies identity on startup", async () => {
@@ -64,7 +84,6 @@ describe("startPolling", () => {
     vi.mocked(getLastEmail).mockResolvedValue(null);
     vi.mocked(getEmails).mockResolvedValue([]);
 
-    // Abort after a short delay
     setTimeout(() => controller.abort(), 100);
 
     const log = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
@@ -109,7 +128,6 @@ describe("startPolling", () => {
     vi.mocked(getEmails).mockImplementation(async () => {
       callCount++;
       if (callCount === 1) return [email];
-      // Abort after first successful poll
       controller.abort();
       return [];
     });
@@ -124,7 +142,7 @@ describe("startPolling", () => {
     expect(deliver).toHaveBeenCalledWith(email);
   });
 
-  it("skips emails not in allowlist", async () => {
+  it("skips emails blocked by DM policy", async () => {
     const controller = new AbortController();
     const deliver = vi.fn();
     const email = makeEmail({ from: "blocked@example.com" });
@@ -135,6 +153,12 @@ describe("startPolling", () => {
       domain: "inboxapi.ai",
     });
     vi.mocked(getLastEmail).mockResolvedValue(null);
+    mockResolveDmGroupAccess.mockReturnValue({
+      decision: "block",
+      reason: "dm-allowlist-not-matched",
+      effectiveAllowFrom: [],
+      effectiveGroupAllowFrom: [],
+    });
 
     let callCount = 0;
     vi.mocked(getEmails).mockImplementation(async () => {
@@ -152,6 +176,9 @@ describe("startPolling", () => {
     });
 
     expect(deliver).not.toHaveBeenCalled();
+    expect(mockReadStoreAllowFrom).toHaveBeenCalledWith(
+      expect.objectContaining({ provider: "inboxapi", dmPolicy: "allowlist" }),
+    );
   });
 
   it("does not re-deliver seen emails", async () => {
@@ -169,7 +196,7 @@ describe("startPolling", () => {
     let callCount = 0;
     vi.mocked(getEmails).mockImplementation(async () => {
       callCount++;
-      if (callCount <= 2) return [email]; // same email both polls
+      if (callCount <= 2) return [email];
       controller.abort();
       return [];
     });
@@ -181,7 +208,54 @@ describe("startPolling", () => {
       abortSignal: controller.signal,
     });
 
-    // Should only be delivered once despite appearing in two polls
     expect(deliver).toHaveBeenCalledTimes(1);
+  });
+
+  it("paginates through all new emails before advancing high-water mark", async () => {
+    const controller = new AbortController();
+    const deliver = vi.fn();
+
+    const e1 = makeEmail({ messageId: "<e1@x.com>", date: "2026-03-09T01:00:00Z" });
+    const e2 = makeEmail({ messageId: "<e2@x.com>", date: "2026-03-09T02:00:00Z" });
+    const e3 = makeEmail({ messageId: "<e3@x.com>", date: "2026-03-09T03:00:00Z" });
+
+    vi.mocked(whoami).mockResolvedValue({
+      accountName: "test",
+      email: "test@inboxapi.ai",
+      domain: "inboxapi.ai",
+    });
+    vi.mocked(getLastEmail).mockResolvedValue(null);
+
+    let pollCycle = 0;
+    let pageInCycle = 0;
+    vi.mocked(getEmails).mockImplementation(async () => {
+      if (pollCycle === 0) {
+        pageInCycle++;
+        // First page: 2 emails (= pollBatchSize, so pagination continues)
+        if (pageInCycle === 1) return [e2, e1];
+        // Second page: 1 email (< pollBatchSize, pagination stops)
+        if (pageInCycle === 2) return [e3];
+        return [];
+      }
+      controller.abort();
+      return [];
+    });
+
+    // Use a deliver callback that marks first poll cycle done after all deliveries
+    deliver.mockImplementation(async () => {
+      if (deliver.mock.calls.length === 3) {
+        pollCycle = 1;
+      }
+    });
+
+    await startPolling({
+      account: makeAccount({ pollBatchSize: 2 }),
+      deliver,
+      log: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+      abortSignal: controller.signal,
+    });
+
+    // All 3 emails should be delivered (none skipped by pagination)
+    expect(deliver).toHaveBeenCalledTimes(3);
   });
 });

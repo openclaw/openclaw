@@ -49,6 +49,7 @@ const pluginSdkEntrypoints = [
   "slack",
   "signal",
   "imessage",
+  "inboxapi",
   "whatsapp",
   "line",
   "msteams",

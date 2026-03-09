@@ -48,15 +48,15 @@ describe("mapEmailToInbound", () => {
     expect(ctx.conversationLabel).toBe("(no subject)");
   });
 
-  it("includes replyToId from inReplyTo", () => {
-    const ctx = mapEmailToInbound(makeEmail({ inReplyTo: "<parent@example.com>" }));
-    expect(ctx.replyToId).toBe("<parent@example.com>");
+  it("stores InboxAPI internal ID as replyToInternalId", () => {
+    const ctx = mapEmailToInbound(makeEmail({ id: "internal-123" }));
+    expect(ctx.replyToInternalId).toBe("internal-123");
   });
 });
 
 describe("buildInboundMsgFields", () => {
   it("builds SDK-compatible fields", () => {
-    const fields = buildInboundMsgFields(makeEmail(), "default");
+    const fields = buildInboundMsgFields(makeEmail(), "default", false);
     expect(fields.From).toBe("inboxapi:alice@example.com");
     expect(fields.To).toBe("inboxapi:bot@inboxapi.ai");
     expect(fields.OriginatingChannel).toBe("inboxapi");
@@ -64,6 +64,34 @@ describe("buildInboundMsgFields", () => {
     expect(fields.ChatType).toBe("direct");
     expect(fields.ConversationLabel).toBe("Test Subject");
     expect(fields.SenderName).toBe("Alice");
+    expect(fields.CommandAuthorized).toBe(false);
+  });
+
+  it("sets MessageSid and MessageSidFull", () => {
+    const fields = buildInboundMsgFields(makeEmail(), "default", false);
+    expect(fields.MessageSid).toBe("e1");
+    expect(fields.MessageSidFull).toBe("<msg1@example.com>");
+  });
+
+  it("sets MessageThreadId from thread root", () => {
+    const email = makeEmail({ references: ["<root@example.com>", "<mid@example.com>"] });
+    const fields = buildInboundMsgFields(email, "default", false);
+    expect(fields.MessageThreadId).toBe("<root@example.com>");
+  });
+
+  it("uses InboxAPI internal ID as ReplyToId", () => {
+    const fields = buildInboundMsgFields(makeEmail({ id: "internal-456" }), "default", false);
+    expect(fields.ReplyToId).toBe("internal-456");
+  });
+
+  it("handles invalid date gracefully", () => {
+    const fields = buildInboundMsgFields(makeEmail({ date: "invalid" }), "default", false);
+    expect(Number.isFinite(fields.Timestamp)).toBe(true);
+    expect(fields.Timestamp).toBeGreaterThan(0);
+  });
+
+  it("passes commandAuthorized through", () => {
+    const fields = buildInboundMsgFields(makeEmail(), "default", true);
     expect(fields.CommandAuthorized).toBe(true);
   });
 });

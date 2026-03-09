@@ -33,6 +33,7 @@
     "src/plugin-sdk/feishu.ts",
     "src/plugin-sdk/google-gemini-cli-auth.ts",
     "src/plugin-sdk/googlechat.ts",
+    "src/plugin-sdk/inboxapi.ts",
     "src/plugin-sdk/irc.ts",
     "src/plugin-sdk/llm-task.ts",
     "src/plugin-sdk/lobster.ts",

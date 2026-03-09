@@ -17,6 +17,7 @@ const pluginSdkSubpaths = [
   "slack",
   "signal",
   "imessage",
+  "inboxapi",
   "whatsapp",
   "line",
   "msteams",

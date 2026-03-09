@@ -179,15 +179,15 @@ export function createInboxApiPlugin() {
       deliveryMode: "gateway" as const,
       textChunkLimit: 50_000,
 
-      sendText: async ({ to, text, accountId, cfg }: any) => {
-        return sendOutboundText({ to, text, accountId, cfg });
+      sendText: async ({ to, text, replyToId, accountId, cfg }: any) => {
+        return sendOutboundText({ to, text, replyToId, accountId, cfg });
       },
 
-      sendMedia: async ({ to, mediaUrl, accountId, cfg }: any) => {
+      sendMedia: async ({ to, mediaUrl, replyToId, accountId, cfg }: any) => {
         // Email doesn't directly support media URLs without attachments;
         // embed as a link in the message body
-        const text = mediaUrl ? `[Attachment](${mediaUrl})` : "";
-        return sendOutboundText({ to, text, accountId, cfg });
+        const body = mediaUrl ? `[Attachment](${mediaUrl})` : "";
+        return sendOutboundText({ to, text: body, replyToId, accountId, cfg });
       },
     },
 
@@ -223,7 +223,9 @@ export function createInboxApiPlugin() {
             const rt = getInboxApiRuntime();
             const currentCfg = await rt.config.loadConfig();
 
-            const msgFields = buildInboundMsgFields(email, account.accountId);
+            // CommandAuthorized defaults to false; the framework's authorizers
+            // handle command authorization based on DM policy/pairing state
+            const msgFields = buildInboundMsgFields(email, account.accountId, false);
             const msgCtx = rt.channel.reply.finalizeInboundContext(msgFields);
 
             await rt.channel.reply.dispatchReplyWithBufferedBlockDispatcher({

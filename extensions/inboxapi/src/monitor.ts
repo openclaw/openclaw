@@ -3,11 +3,15 @@
  * Polls for new emails and dispatches them to the agent.
  */
 
+import {
+  readStoreAllowFromForDmPolicy,
+  resolveDmGroupAccessWithLists,
+} from "openclaw/plugin-sdk/inboxapi";
 import { resolveAccessToken } from "./auth.js";
 import type { InboxApiClientOptions } from "./client.js";
 import { getEmails, getLastEmail, whoami } from "./client.js";
 import { extractSenderEmail } from "./threading.js";
-import type { ResolvedInboxApiAccount, InboxApiEmail } from "./types.js";
+import type { InboxApiEmail, ResolvedInboxApiAccount } from "./types.js";
 
 export interface MonitorDeps {
   account: ResolvedInboxApiAccount;
@@ -79,40 +83,66 @@ export async function startPolling(deps: MonitorDeps): Promise<void> {
     if (abortSignal?.aborted) break;
 
     try {
-      const emails = await getEmails(clientOpts, {
-        limit: account.pollBatchSize,
-        since: lastSeenDate,
-      });
+      // Fetch pages until all new emails are consumed, so we never
+      // advance the high-water mark past unprocessed messages.
+      let pageSince = lastSeenDate;
+      let latestDate = lastSeenDate;
 
-      // Filter to truly new emails (not yet seen)
-      const newEmails = emails.filter((e) => !seenMessageIds.has(e.messageId));
-      if (newEmails.length === 0) continue;
+      // eslint-disable-next-line no-constant-condition
+      while (true) {
+        if (abortSignal?.aborted) break;
 
-      // Process newest-first for high-water mark, but deliver oldest-first
-      for (const email of newEmails.reverse()) {
-        seenMessageIds.add(email.messageId);
+        const emails = await getEmails(clientOpts, {
+          limit: account.pollBatchSize,
+          since: pageSince,
+        });
 
-        // Check DM policy
-        const senderEmail = extractSenderEmail(email.from);
-        if (!isAllowed(senderEmail, account)) {
-          log?.info?.(`InboxAPI: rejected email from ${senderEmail} (not in allowlist)`);
-          continue;
+        // Filter to truly new emails (not yet seen)
+        const newEmails = emails.filter((e) => !seenMessageIds.has(e.messageId));
+        if (newEmails.length === 0) break;
+
+        // Deliver oldest-first
+        for (const email of newEmails.reverse()) {
+          seenMessageIds.add(email.messageId);
+
+          // Check DM policy (including pairing store)
+          const senderEmail = extractSenderEmail(email.from);
+          const allowed = await checkAccess(senderEmail, account);
+          if (!allowed) {
+            log?.info?.(`InboxAPI: rejected email from ${senderEmail} (not allowed by DM policy)`);
+            continue;
+          }
+
+          try {
+            await deliver(email);
+          } catch (err: any) {
+            log?.error?.(`InboxAPI: failed to deliver email ${email.messageId}: ${err.message}`);
+          }
         }
 
-        try {
-          await deliver(email);
-        } catch (err: any) {
-          log?.error?.(`InboxAPI: failed to deliver email ${email.messageId}: ${err.message}`);
+        // Track the newest date we've processed in this page.
+        // Don't assume any particular ordering — find the max date explicitly.
+        for (const e of emails) {
+          if (!latestDate || e.date > latestDate) {
+            latestDate = e.date;
+          }
         }
+        // Advance page cursor to latest date to avoid re-fetching
+        if (latestDate) {
+          pageSince = latestDate;
+        }
+
+        // If we got fewer than a full page, no more pages to fetch
+        if (emails.length < account.pollBatchSize) break;
       }
 
-      // Update high-water mark to the most recent email
-      const newestEmail = emails[0];
-      if (newestEmail) {
-        lastSeenDate = newestEmail.date;
+      // Only advance high-water mark after all pages are consumed
+      if (latestDate) {
+        lastSeenDate = latestDate;
       }
 
-      // Prune seen set to avoid unbounded growth (keep last 1000)
+      // Prune seen set to avoid unbounded growth: when it exceeds 1000,
+      // trim down to the most recent 500 entries.
       if (seenMessageIds.size > 1000) {
         const arr = Array.from(seenMessageIds);
         seenMessageIds = new Set(arr.slice(arr.length - 500));
@@ -123,20 +153,30 @@ export async function startPolling(deps: MonitorDeps): Promise<void> {
   }
 }
 
-/** Check if a sender is allowed under the account's DM policy */
-function isAllowed(senderEmail: string, account: ResolvedInboxApiAccount): boolean {
-  switch (account.dmPolicy) {
-    case "disabled":
-      return false;
-    case "open":
-      return true;
-    case "allowlist":
-    case "pairing":
-      if (account.allowFrom.length === 0) return false;
-      return account.allowFrom.includes(senderEmail.toLowerCase());
-    default:
-      return false;
-  }
+/** Check if a sender is allowed under the account's DM policy, including pairing store */
+async function checkAccess(
+  senderEmail: string,
+  account: ResolvedInboxApiAccount,
+): Promise<boolean> {
+  // Read pairing store approvals for pairing/open policies
+  const storeAllowFrom = await readStoreAllowFromForDmPolicy({
+    provider: "inboxapi",
+    accountId: account.accountId,
+    dmPolicy: account.dmPolicy,
+  });
+
+  const access = resolveDmGroupAccessWithLists({
+    isGroup: false,
+    dmPolicy: account.dmPolicy,
+    groupPolicy: "disabled",
+    allowFrom: account.allowFrom,
+    groupAllowFrom: [],
+    storeAllowFrom,
+    isSenderAllowed: (allowEntries) =>
+      allowEntries.some((entry) => entry.toLowerCase() === senderEmail.toLowerCase()),
+  });
+
+  return access.decision === "allow";
 }
 
 function sleep(ms: number): Promise<void> {
