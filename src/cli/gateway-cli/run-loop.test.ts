@@ -171,6 +171,7 @@ describe("runGatewayLoop", () => {
 
       const closeFirst = vi.fn(async () => {});
       const closeSecond = vi.fn(async () => {});
+      const closeThird = vi.fn(async () => {});
 
       const start = vi.fn<StartServer>();
       let resolveFirst: (() => void) | null = null;
@@ -191,15 +192,18 @@ describe("runGatewayLoop", () => {
         return { close: closeSecond };
       });
 
-      start.mockRejectedValueOnce(new Error("stop-loop"));
+      let resolveThird: (() => void) | null = null;
+      const startedThird = new Promise<void>((resolve) => {
+        resolveThird = resolve;
+      });
+      start.mockImplementationOnce(async () => {
+        resolveThird?.();
+        return { close: closeThird };
+      });
 
       const { runGatewayLoop } = await import("./run-loop.js");
-      const runtime = {
-        log: vi.fn(),
-        error: vi.fn(),
-        exit: vi.fn(),
-      };
-      const loopPromise = runGatewayLoop({
+      const { runtime, exited } = createRuntimeWithExitSignal();
+      void runGatewayLoop({
         start: start as unknown as Parameters<typeof runGatewayLoop>[0]["start"],
         runtime: runtime as unknown as Parameters<typeof runGatewayLoop>[0]["runtime"],
       });
@@ -226,7 +230,7 @@ describe("runGatewayLoop", () => {
 
       process.emit("SIGUSR1");
 
-      await expect(loopPromise).rejects.toThrow("stop-loop");
+      await startedThird;
       expect(closeSecond).toHaveBeenCalledWith({
         reason: "gateway restarting",
         restartExpectedMs: 1500,
@@ -235,6 +239,14 @@ describe("runGatewayLoop", () => {
       expect(markGatewayDraining).toHaveBeenCalledTimes(2);
       expect(resetAllLanes).toHaveBeenCalledTimes(2);
       expect(acquireGatewayLock).toHaveBeenCalledTimes(3);
+
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      process.emit("SIGTERM");
+      await expect(exited).resolves.toBe(0);
+      expect(closeThird).toHaveBeenCalledWith({
+        reason: "gateway stopping",
+        restartExpectedMs: null,
+      });
     });
   });
 
@@ -274,30 +286,68 @@ describe("runGatewayLoop", () => {
     await withIsolatedSignals(async () => {
       const closeFirst = vi.fn(async () => {});
       const closeSecond = vi.fn(async () => {});
+      const closeThird = vi.fn(async () => {});
       restartGatewayProcessWithFreshPid.mockReturnValueOnce({ mode: "disabled" });
 
-      const start = vi
-        .fn()
-        .mockResolvedValueOnce({ close: closeFirst })
-        .mockResolvedValueOnce({ close: closeSecond })
-        .mockRejectedValueOnce(new Error("stop-loop"));
-      const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+      type StartServer = () => Promise<{
+        close: (opts: { reason: string; restartExpectedMs: number | null }) => Promise<void>;
+      }>;
+
+      const start = vi.fn<StartServer>();
+      let resolveFirst: (() => void) | null = null;
+      const startedFirst = new Promise<void>((resolve) => {
+        resolveFirst = resolve;
+      });
+      start.mockImplementationOnce(async () => {
+        resolveFirst?.();
+        return { close: closeFirst };
+      });
+
+      let resolveSecond: (() => void) | null = null;
+      const startedSecond = new Promise<void>((resolve) => {
+        resolveSecond = resolve;
+      });
+      start.mockImplementationOnce(async () => {
+        resolveSecond?.();
+        return { close: closeSecond };
+      });
+
+      let resolveThird: (() => void) | null = null;
+      const startedThird = new Promise<void>((resolve) => {
+        resolveThird = resolve;
+      });
+      start.mockImplementationOnce(async () => {
+        resolveThird?.();
+        return { close: closeThird };
+      });
+
+      const { runtime, exited } = createRuntimeWithExitSignal();
       const { runGatewayLoop } = await import("./run-loop.js");
-      const loopPromise = runGatewayLoop({
+      void runGatewayLoop({
         start: start as unknown as Parameters<typeof runGatewayLoop>[0]["start"],
         runtime: runtime as unknown as Parameters<typeof runGatewayLoop>[0]["runtime"],
         lockPort: 18789,
       });
 
+      await startedFirst;
       await new Promise<void>((resolve) => setImmediate(resolve));
       process.emit("SIGUSR1");
+      await startedSecond;
       await new Promise<void>((resolve) => setImmediate(resolve));
       process.emit("SIGUSR1");
+      await startedThird;
 
-      await expect(loopPromise).rejects.toThrow("stop-loop");
       expect(acquireGatewayLock).toHaveBeenNthCalledWith(1, { port: 18789 });
       expect(acquireGatewayLock).toHaveBeenNthCalledWith(2, { port: 18789 });
       expect(acquireGatewayLock).toHaveBeenNthCalledWith(3, { port: 18789 });
+
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      process.emit("SIGTERM");
+      await expect(exited).resolves.toBe(0);
+      expect(closeThird).toHaveBeenCalledWith({
+        reason: "gateway stopping",
+        restartExpectedMs: null,
+      });
     });
   });
 
