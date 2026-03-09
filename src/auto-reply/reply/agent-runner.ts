@@ -44,7 +44,7 @@ import {
   hasSessionRelatedCronJobs,
   hasUnbackedReminderCommitment,
 } from "./agent-runner-reminder-guard.js";
-import { appendUsageLine, formatResponseUsageLine } from "./agent-runner-utils.js";
+import { appendUsageLine, formatResponseUsageLine, trustStatusLine } from "./agent-runner-utils.js";
 import { createAudioAsVoiceBuffer, createBlockReplyPipeline } from "./block-reply-pipeline.js";
 import { resolveEffectiveBlockStreamingConfig } from "./block-streaming.js";
 import { createFollowupRunner } from "./followup-runner.js";
@@ -694,6 +694,14 @@ export async function runReplyAgent(params: {
     }
     if (responseUsageLine) {
       finalPayloads = appendUsageLine(finalPayloads, responseUsageLine);
+    }
+
+    const trustLine = trustStatusLine({
+      agentId: followupRun.run.agentId,
+      channel: replyToChannel,
+    });
+    if (trustLine) {
+      finalPayloads = appendUsageLine(finalPayloads, trustLine);
     }
 
     return finalizeWithFollowup(

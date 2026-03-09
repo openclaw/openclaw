@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { makePathEnv, makeTempDir } from "./exec-approvals-test-helpers.js";
 import {
   analyzeArgvCommand,
@@ -9,6 +9,9 @@ import {
   buildSafeBinsShellCommand,
   evaluateExecAllowlist,
   evaluateShellAllowlist,
+  getTrustWindow,
+  grantTrustWindow,
+  initTrustWindowCache,
   matchAllowlist,
   maxAsk,
   mergeExecApprovalsSocketDefaults,
@@ -21,7 +24,9 @@ import {
   resolveCommandResolutionFromArgv,
   resolveExecApprovalsPath,
   resolveExecApprovalsSocketPath,
+  resolveExecApprovalsFromFile,
   type ExecAllowlistEntry,
+  type ExecApprovalsFile,
 } from "./exec-approvals.js";
 
 function buildNestedEnvShellCommand(params: {
@@ -917,6 +922,177 @@ describe("exec approvals policy helpers", () => {
         ask: "on-miss",
         security: "full",
         analysisOk: false,
+        allowlistSatisfied: false,
+      }),
+    ).toBe(false);
+  });
+});
+
+describe("trust window", () => {
+  const withTempHome = (fn: () => void) => {
+    const dir = makeTempDir();
+    const prevOpenClawHome = process.env.OPENCLAW_HOME;
+    process.env.OPENCLAW_HOME = dir;
+    initTrustWindowCache();
+    try {
+      fn();
+    } finally {
+      initTrustWindowCache();
+      process.env.OPENCLAW_HOME = prevOpenClawHome;
+    }
+  };
+
+  it("overrides security/ask when active and not expired", () => {
+    withTempHome(() => {
+      const now = Date.now();
+      const result = grantTrustWindow({ agentId: "main", minutes: 1 });
+      expect(result.ok).toBe(true);
+      const trustWindow = getTrustWindow("main");
+      expect(trustWindow).toBeTruthy();
+      if (trustWindow) {
+        trustWindow.expiresAt = now + 60_000;
+      }
+      const file: ExecApprovalsFile = {
+        version: 1,
+        agents: {
+          main: {
+            security: "allowlist",
+            ask: "on-miss",
+          },
+        },
+      };
+      const resolved = resolveExecApprovalsFromFile({ file, agentId: "main" });
+      expect(resolved.agent.security).toBe("full");
+      expect(resolved.agent.ask).toBe("off");
+    });
+  });
+
+  it("ignores expired window — falls back to base policy", () => {
+    withTempHome(() => {
+      const now = Date.now();
+      const result = grantTrustWindow({ agentId: "main", minutes: 1 });
+      expect(result.ok).toBe(true);
+      const trustWindow = getTrustWindow("main");
+      expect(trustWindow).toBeTruthy();
+      if (trustWindow) {
+        trustWindow.expiresAt = now - 1000;
+        trustWindow.grantedAt = now - 61_000;
+      }
+      const file: ExecApprovalsFile = {
+        version: 1,
+        agents: {
+          main: {
+            security: "allowlist",
+            ask: "on-miss",
+          },
+        },
+      };
+      const resolved = resolveExecApprovalsFromFile({ file, agentId: "main" });
+      expect(resolved.agent.security).toBe("allowlist");
+      expect(resolved.agent.ask).toBe("on-miss");
+    });
+  });
+
+  it("does not write to disk (pure read path)", () => {
+    withTempHome(() => {
+      const now = Date.now();
+      const result = grantTrustWindow({ agentId: "main", minutes: 1 });
+      expect(result.ok).toBe(true);
+      const trustWindow = getTrustWindow("main");
+      if (trustWindow) {
+        trustWindow.expiresAt = now - 1000;
+        trustWindow.grantedAt = now - 61_000;
+      }
+      const writeSpy = vi.spyOn(fs, "writeFileSync");
+      const file: ExecApprovalsFile = {
+        version: 1,
+        agents: {
+          main: {
+            security: "allowlist",
+            ask: "on-miss",
+          },
+        },
+      };
+      resolveExecApprovalsFromFile({ file, agentId: "main" });
+      expect(writeSpy).not.toHaveBeenCalled();
+      writeSpy.mockRestore();
+    });
+  });
+
+  it("overrides security: deny base policy when window is active", () => {
+    withTempHome(() => {
+      const now = Date.now();
+      const result = grantTrustWindow({ agentId: "main", minutes: 1 });
+      expect(result.ok).toBe(true);
+      const trustWindow = getTrustWindow("main");
+      if (trustWindow) {
+        trustWindow.expiresAt = now + 60_000;
+      }
+      const file: ExecApprovalsFile = {
+        version: 1,
+        agents: {
+          main: {
+            security: "deny",
+          },
+        },
+      };
+      const resolved = resolveExecApprovalsFromFile({ file, agentId: "main" });
+      expect(resolved.agent.security).toBe("full");
+      expect(resolved.agent.ask).toBe("off");
+    });
+  });
+
+  it("does not affect other agents", () => {
+    withTempHome(() => {
+      const now = Date.now();
+      const result = grantTrustWindow({ agentId: "main", minutes: 1 });
+      expect(result.ok).toBe(true);
+      const trustWindow = getTrustWindow("main");
+      if (trustWindow) {
+        trustWindow.expiresAt = now + 60_000;
+      }
+      const file: ExecApprovalsFile = {
+        version: 1,
+        agents: {
+          main: {
+            security: "allowlist",
+            ask: "on-miss",
+          },
+          other: {
+            security: "deny",
+            ask: "always",
+          },
+        },
+      };
+      const resolvedOther = resolveExecApprovalsFromFile({ file, agentId: "other" });
+      expect(resolvedOther.agent.security).toBe("deny");
+      expect(resolvedOther.agent.ask).toBe("always");
+    });
+  });
+
+  it("agent without trustWindow is unaffected", () => {
+    withTempHome(() => {
+      const file: ExecApprovalsFile = {
+        version: 1,
+        agents: {
+          main: {
+            security: "allowlist",
+            ask: "on-miss",
+          },
+        },
+      };
+      const resolved = resolveExecApprovalsFromFile({ file, agentId: "main" });
+      expect(resolved.agent.security).toBe("allowlist");
+      expect(resolved.agent.ask).toBe("on-miss");
+    });
+  });
+
+  it("requiresExecApproval returns false during active trust window settings", () => {
+    expect(
+      requiresExecApproval({
+        ask: "off",
+        security: "full",
+        analysisOk: true,
         allowlistSatisfied: false,
       }),
     ).toBe(false);

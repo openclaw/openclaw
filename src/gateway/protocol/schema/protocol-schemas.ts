@@ -88,8 +88,11 @@ import {
   ExecApprovalsNodeSetParamsSchema,
   ExecApprovalsSetParamsSchema,
   ExecApprovalsSnapshotSchema,
+  ExecApprovalsTrustStatusParamsSchema,
+  ExecApprovalsTrustStatusResultSchema,
   ExecApprovalRequestParamsSchema,
   ExecApprovalResolveParamsSchema,
+  TrustWindowSchema,
 } from "./exec-approvals.js";
 import {
   ConnectParamsSchema,
@@ -270,6 +273,9 @@ export const ProtocolSchemas = {
   ExecApprovalsNodeGetParams: ExecApprovalsNodeGetParamsSchema,
   ExecApprovalsNodeSetParams: ExecApprovalsNodeSetParamsSchema,
   ExecApprovalsSnapshot: ExecApprovalsSnapshotSchema,
+  ExecApprovalsTrustStatusParams: ExecApprovalsTrustStatusParamsSchema,
+  ExecApprovalsTrustStatusResult: ExecApprovalsTrustStatusResultSchema,
+  TrustWindow: TrustWindowSchema,
   ExecApprovalRequestParams: ExecApprovalRequestParamsSchema,
   ExecApprovalResolveParams: ExecApprovalResolveParamsSchema,
   DevicePairListParams: DevicePairListParamsSchema,

@@ -3,7 +3,8 @@ import type { FollowupRun } from "./queue.js";
 
 const hoisted = vi.hoisted(() => {
   const resolveRunModelFallbacksOverrideMock = vi.fn();
-  return { resolveRunModelFallbacksOverrideMock };
+  const getTrustWindowMock = vi.fn();
+  return { resolveRunModelFallbacksOverrideMock, getTrustWindowMock };
 });
 
 vi.mock("../../agents/agent-scope.js", () => ({
@@ -11,11 +12,16 @@ vi.mock("../../agents/agent-scope.js", () => ({
     hoisted.resolveRunModelFallbacksOverrideMock(...args),
 }));
 
+vi.mock("../../infra/exec-approvals.js", () => ({
+  getTrustWindow: (...args: unknown[]) => hoisted.getTrustWindowMock(...args),
+}));
+
 const {
   buildEmbeddedRunBaseParams,
   buildEmbeddedRunContexts,
   resolveModelFallbackOptions,
   resolveProviderScopedAuthProfile,
+  trustStatusLine,
 } = await import("./agent-runner-utils.js");
 
 function makeRun(overrides: Partial<FollowupRun["run"]> = {}): FollowupRun["run"] {
@@ -172,5 +178,52 @@ describe("agent-runner-utils", () => {
 
     expect(resolved.embeddedContext.messageProvider).toBe("telegram");
     expect(resolved.embeddedContext.messageTo).toBe("268300329");
+  });
+
+  it("returns undefined when no trust window is active", () => {
+    hoisted.getTrustWindowMock.mockReturnValue(undefined);
+
+    expect(trustStatusLine({ agentId: "main", now: () => 0 })).toBeUndefined();
+  });
+
+  it("formats trust status line with remaining minutes", () => {
+    const now = 1_000_000;
+    hoisted.getTrustWindowMock.mockReturnValue({
+      status: "active",
+      expiresAt: now + 47 * 60_000,
+      grantedAt: now - 60_000,
+      security: "full",
+      ask: "off",
+    });
+
+    expect(trustStatusLine({ agentId: "main", channel: "discord", now: () => now })).toBe(
+      "-# 🔓 **Trust active** · 47m remaining",
+    );
+  });
+
+  it("uses warning icon within five minutes", () => {
+    const now = 2_000_000;
+    hoisted.getTrustWindowMock.mockReturnValue({
+      status: "active",
+      expiresAt: now + 4 * 60_000,
+      grantedAt: now - 60_000,
+      security: "full",
+      ask: "off",
+    });
+
+    expect(trustStatusLine({ agentId: "main", now: () => now })).toBe("⚠️ Trust · 4m remaining");
+  });
+
+  it("returns undefined when trust window is expired", () => {
+    const now = 3_000_000;
+    hoisted.getTrustWindowMock.mockReturnValue({
+      status: "active",
+      expiresAt: now - 1,
+      grantedAt: now - 60_000,
+      security: "full",
+      ask: "off",
+    });
+
+    expect(trustStatusLine({ agentId: "main", now: () => now })).toBeUndefined();
   });
 });

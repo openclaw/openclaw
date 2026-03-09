@@ -137,9 +137,8 @@ export function resolveExecHostApprovalContext(params: {
   // prompts even when tool/runtime defaults are stricter (for example on-miss).
   const hostAsk = approvals.agent.ask === "off" ? "off" : maxAsk(params.ask, approvals.agent.ask);
   const askFallback = approvals.agent.askFallback;
-  if (hostSecurity === "deny") {
-    throw new Error(`exec denied: host=${params.host} security=deny`);
-  }
+  // Note: callers that support trust-window overrides must check deny themselves
+  // after evaluating trust state. Don't throw here — return the resolved context.
   return { approvals, hostSecurity, hostAsk, askFallback };
 }
 

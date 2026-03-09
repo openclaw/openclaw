@@ -128,7 +128,8 @@ vi.mock("@buape/carbon", () => {
       return clientGetPluginMock(name);
     }
   }
-  return { Client, ReadyListener };
+  class Command {}
+  return { Client, Command, ReadyListener };
 });
 
 vi.mock("@buape/carbon/gateway", () => ({
