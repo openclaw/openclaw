@@ -333,6 +333,19 @@ export async function runServiceRestart(params: {
   if (loaded === null) {
     return false;
   }
+
+  // Pre-flight config validation: check before any restart action (including
+  // onNotLoaded which may send SIGUSR1 to an unmanaged process). (#35862)
+  {
+    const configError = await getConfigValidationError();
+    if (configError) {
+      fail(
+        `${params.serviceNoun} aborted: config is invalid.\n${configError}\nFix the config and retry, or run "openclaw doctor" to repair.`,
+      );
+      return false;
+    }
+  }
+
   if (!loaded) {
     try {
       handledNotLoaded = (await params.onNotLoaded?.({ json, stdout, fail })) ?? null;
@@ -385,17 +398,6 @@ export async function runServiceRestart(params: {
           defaultRuntime.log(`\n⚠️  ${warning}\n`);
         }
       }
-    }
-  }
-
-  // Pre-flight config validation (#35862)
-  {
-    const configError = await getConfigValidationError();
-    if (configError) {
-      fail(
-        `${params.serviceNoun} aborted: config is invalid.\n${configError}\nFix the config and retry, or run "openclaw doctor" to repair.`,
-      );
-      return false;
     }
   }
 
