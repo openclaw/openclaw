@@ -62,7 +62,8 @@ export async function agentsViewSystemPromptCommand(
 
   const machineName = await getMachineDisplayName();
   const defaultModelRef = resolveDefaultModelForAgent({ cfg, agentId });
-  const modelLabel = opts.model ?? `${defaultModelRef.provider}/${defaultModelRef.model}`;
+  const defaultModelLabel = `${defaultModelRef.provider}/${defaultModelRef.model}`;
+  const modelLabel = opts.model ?? defaultModelLabel;
 
   const { runtimeInfo, userTimezone, userTime, userTimeFormat } = buildSystemPromptParams({
     config: cfg,
@@ -75,7 +76,7 @@ export async function agentsViewSystemPromptCommand(
       arch: os.arch(),
       node: process.version,
       model: modelLabel,
-      defaultModel: modelLabel,
+      defaultModel: defaultModelLabel,
       shell: detectRuntimeShell(),
       channel: opts.channel,
     },
