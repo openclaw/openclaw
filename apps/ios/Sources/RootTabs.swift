@@ -85,14 +85,22 @@ struct RootTabs: View {
             isPresented: self.$showGatewayActions,
             onDisconnect: { self.appModel.disconnectGateway() },
             onOpenSettings: { self.selectedTab = Tab.settings.rawValue })
-        .onChange(of: self.pendingTalkMode) { _, isPending in
-            guard isPending else { return }
-            // Clear the flag and navigate to the Voice tab.
-            // Using @AppStorage means this fires immediately whether the app is
-            // in the foreground or returning from background.
-            self.pendingTalkMode = false
-            self.selectedTab = Tab.voice.rawValue
+        .task {
+            // Handle the case where the flag is already `true` when RootTabs first
+            // renders — e.g. the Action Button intent fired before the UI was built.
+            self.consumePendingTalkMode()
         }
+        .onChange(of: self.pendingTalkMode) { _, _ in
+            // Handle changes while the app is running (foreground Siri, background wake).
+            self.consumePendingTalkMode()
+        }
+    }
+
+    /// Consumes the pending Talk Mode flag and navigates to the Voice tab if set.
+    private func consumePendingTalkMode() {
+        guard self.pendingTalkMode else { return }
+        self.pendingTalkMode = false
+        self.selectedTab = Tab.voice.rawValue
     }
 
     private var gatewayStatus: StatusPill.GatewayState {
