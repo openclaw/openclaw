@@ -1,74 +1,71 @@
+---
+name: bodhi-distiller
+description: Morning synthesis of recent thoughts. Runs daily at 6am.
+user-invocable: true
+disable-model-invocation: false
+metadata: {"openclaw":{"cron":"0 6 * * *"}}
+---
+
 # bodhi-distiller
 
-**Status:** Planned (Phase 4)
-**Trigger:** Cron — daily at 6:00am (local time)
-**Schedule:** `0 6 * * *`
+Runs every morning at 6am. Queries the last 7 days of vault nodes, groups by domain, and sends a morning digest via Telegram. Also detects emerging patterns and proposes Pattern nodes for approval.
 
----
+## Channel
 
-## What It Does
+Delivers via Telegram. Never Signal. Never WhatsApp.
 
-The Distiller runs every morning. It looks at everything you captured in the last
-7 days, finds recurring themes, and sends you a short synthesis via Signal.
+## Query
 
-It also detects pattern candidates — tags that have appeared 3+ times — and
-proposes creating a Pattern node for human approval.
+Pull all nodes created or updated in the last 7 days from the vault.
 
----
+Group by domain tags: `wellness`, `fitness`, `health`, `mental-health`, `cognitive`.
 
-## Input
+A domain qualifies for the digest only if it has 3 or more nodes in the window. Domains with fewer than 3 nodes are omitted.
 
-All vault nodes from the last 7 days. Queried directly from the vault JSON store.
-
----
-
-## Output
-
-A morning digest message sent via Signal:
+## Digest Format
 
 ```
-Morning.
+What your mind has been working on:
 
-Here is what your mind has been working on:
-
-• [theme 1] — appeared [n] times, energy avg [x]
-• [theme 2] — connected to [related tag]
-• [synthesis observation]
+[wellness] theme -- n nodes, avg energy x.x
+[cognitive] observation about patterns
 
 One thing to sit with: [most energetic or recurring idea]
 ```
 
-Optional pattern proposal (sent separately):
+Claude (Sonnet/Opus) reads the grouped nodes and generates the digest bullets. The `content` field (raw thought) is what gets read. The `content_enriched` field may inform grouping but the user's own words drive the synthesis.
+
+## Pattern Detection
+
+Tags appearing 3 or more times in the 7-day window are flagged as pattern candidates.
+
+When a pattern candidate is found, send a separate message:
 
 ```
-Noticed a pattern in your vault: "[tag]" appeared [n] times this week.
-Create a Pattern node? Reply "yes", a name, or "no".
+Noticed a pattern: "[tag]" appeared [n] times this week.
+Create a Pattern node? Reply yes, a name, or no.
 ```
 
----
+If approved, write a Pattern node with `SURFACES_FROM` edges connecting to the source nodes.
 
-## Analysis Steps
+## Silence Rule
 
-1. Query all nodes created or updated in last 7 days
-2. Group by `type` and by `tags` frequency
-3. Compute average `energy_level` per tag cluster
-4. Claude Sonnet 4.6 reads grouped nodes and generates digest bullets
-5. Identify tags appearing 3+ times → flag as pattern candidates
-6. Send digest via Signal
-7. If pattern candidates exist, send separate pattern proposal
+If fewer than 3 total nodes exist in the 7-day window, skip entirely. Send nothing. Silence is correct when the vault is quiet.
 
-**Non-delivery condition:** If fewer than 3 nodes exist in the 7-day window, skip.
-Silence is correct when the vault is quiet.
+## Energy Handling
 
----
+Energy is inferred from the original node language by the Curator. The Distiller reads the stored energy values. It never prompts the user for energy.
 
-## Planned Implementation
+## Model
 
-- [ ] Register with OpenClaw Gateway as cron skill (`bodhi-distiller`)
-- [ ] Implement vault query module (7-day window, by type + tag)
-- [ ] Implement frequency analysis (tag counts, energy averages)
-- [ ] Implement digest generation prompt (Claude Sonnet 4.6)
-- [ ] Implement pattern proposal conversation handler
-- [ ] Implement Signal delivery via OpenClaw Gateway
-- [ ] Handle pattern confirmation ("yes" → write Pattern node with SURFACES_FROM edges)
-- [ ] Tests for query, analysis, and delivery paths
+Claude (Sonnet/Opus) generates the digest. Small models are never used for synthesis.
+
+## Rules
+
+- Deliver via Telegram only
+- Never prompt for energy
+- Skip if fewer than 3 nodes in 7 days
+- Group by domain, require 3+ nodes per domain to include
+- Pattern proposals require explicit user approval
+- content field is the raw thought, always preserved
+- Domains: wellness, fitness, health, mental-health, cognitive

@@ -1,0 +1,48 @@
+{
+  "logging": { "level": "info" },
+
+  "agents": {
+    "defaults": {
+      "model": "anthropic/claude-sonnet-4-6",
+      "workspace": "~/.openclaw/workspace",
+      "thinkingDefault": "medium",
+      "timeoutSeconds": 300,
+      "heartbeat": { "every": "0m" }
+    }
+  },
+
+  "channels": {
+    "telegram": {
+      "dmPolicy": "allowlist",
+      "allowFrom": ["$BODHI_TELEGRAM_USER_ID"]
+    }
+  },
+
+  "skills": {
+    "load": {
+      "extraDirs": ["skills/bodhi-curator", "skills/bodhi-enricher", "skills/bodhi-distiller", "skills/bodhi-surveyor", "skills/bodhi-janitor"],
+      "watch": false
+    }
+  },
+
+  "cron": {
+    "enabled": true,
+    "maxConcurrentRuns": 1,
+    "sessionRetention": "48h",
+    "retry": {
+      "maxAttempts": 3,
+      "backoffMs": [30000, 60000, 300000],
+      "retryOn": ["rate_limit", "overloaded", "network", "server_error"]
+    }
+  },
+
+  "session": {
+    "scope": "per-sender",
+    "resetTriggers": ["/new", "/reset"],
+    "reset": {
+      "mode": "daily",
+      "atHour": 4,
+      "idleMinutes": 1440
+    }
+  }
+}

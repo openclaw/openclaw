@@ -1,106 +1,167 @@
+---
+name: bodhi-curator
+description: Captures incoming thoughts to the vault. Entry point for every message.
+user-invocable: false
+disable-model-invocation: false
+---
+
 # bodhi-curator
 
-**Status:** Planned (Phase 2)
-**Trigger:** Real-time — incoming message via Signal or WhatsApp
-**Schedule:** N/A (event-driven)
+The entry point. Every message flows through the Curator before anything else touches it. It classifies the thought, infers energy from language, detects the wellness domain, generates tags, and writes a node to the vault. Speed is everything. Target: 2 seconds for text, 4 seconds for media.
 
----
+## Channel
 
-## What It Does
+Primary channel is Telegram. Never Signal. Never WhatsApp.
 
-The Curator is the entry point for all captures. Every message you send to Bodhi
-flows through the Curator before anything else touches it.
+## Multimodal Intake
 
-It classifies the message, generates tags, prompts for an energy level,
-and writes the resulting node to the vault.
+The Curator handles all content types that arrive via Telegram. Each media type follows a specific pipeline.
 
----
+### Text messages
 
-## Input
+Standard flow. Classify, tag, infer energy, write node.
 
-An incoming message object from the OpenClaw Gateway:
+- `content` = user's exact words, never edited
+- `media_type` = "text"
+- `media_ref` = not set
 
-```typescript
-{
-  channel: "signal" | "whatsapp",
-  sender: string,        // phone number or contact ID
-  content: string,       // raw message text
-  timestamp: string,     // ISO 8601
-  attachments?: string[] // file paths, if any
-}
+### Images and photos
+
+Claude vision analyzes the image. The user's caption (if any) is preserved as `content`. If no caption, generate a brief factual description (one sentence, no interpretation).
+
+- `content` = user's caption, or AI description if no caption
+- `media_type` = "image"
+- `media_ref` = Telegram file_id
+
+Domain signals from images:
+
+| Visual content | Domain |
+|---------------|--------|
+| Recipe, meal prep, ingredients, nutrition label | health |
+| Workout screenshot, exercise form, gym equipment | fitness |
+| Sleep tracker, step counter, hydration app | wellness |
+| Meditation app, journal page, therapy notes | mental-health |
+| Book highlights, study notes, brain training | cognitive |
+
+### Voice notes
+
+Transcription via Whisper (local) or OpenClaw's audio pipeline. Process the transcript as text.
+
+- `content` = transcription of voice note
+- `media_type` = "voice"
+- `media_ref` = Telegram file_id
+
+### Links and URLs
+
+Extract page title and brief summary. Tag with `reference`.
+
+- `content` = user's message text containing the URL
+- `media_type` = "link"
+- `media_ref` = the URL itself
+
+### Documents
+
+Extract text content or title. Tag with `reference`.
+
+- `content` = user's caption, or document title/summary
+- `media_type` = "document"
+- `media_ref` = Telegram file_id
+
+### Video
+
+Describe key frame content. Process like an image with temporal context.
+
+- `content` = user's caption, or brief description of video content
+- `media_type` = "video"
+- `media_ref` = Telegram file_id
+
+## Domain Classification
+
+Every node gets exactly one primary `domain` field. Classify based on all available signals: text content, image analysis, tags, and media context.
+
+| Domain | Signals |
+|--------|---------|
+| wellness | sleep, rest, hydration, daily routine, balance, nature, breathing |
+| fitness | exercise, training, workout, movement, strength, cardio, flexibility |
+| health | nutrition, diet, supplements, medical, lab results, recipes, cooking |
+| mental-health | meditation, therapy, journaling, emotions, stress, anxiety, mindfulness |
+| cognitive | learning, reading, memory, focus, problem-solving, brain training |
+
+When ambiguous, prefer the most specific domain. "Morning run" = fitness, not wellness. "Meal prep for muscle gain" = health (nutrition), not fitness.
+
+## Energy Inference
+
+Energy is INFERRED from language. Never prompt the user.
+
+- Urgent, excited, emphatic language = 4-5
+- Neutral, declarative language = 3
+- Casual, offhand, low-effort language = 1-2
+- Default when ambiguous = 3
+
+For images: energy is inferred from the caption tone. No caption = 3.
+
+## Content Handling
+
+The `content` field is the raw thought. For text messages, this is the user's exact words, never edited by AI, never rewritten, cleaned up, or paraphrased.
+
+For media without captions, the Curator generates a brief factual description. The `media_type` field distinguishes these cases.
+
+The `content_enriched` field is written later by bodhi-enricher and used for clustering. It is never displayed to the user.
+
+## Classification
+
+Six types. Classify based on the language structure:
+
+| Type | Signal |
+|------|--------|
+| Idea | Default. Any standalone thought. |
+| Pattern | "I noticed...", "I keep...", "every time..." |
+| Practice | Commits to action. "I'm going to...", "starting tomorrow..." |
+| Decision | "I decided...", "I'm done with...", "going with..." |
+| Synthesis | Connects two or more previous ideas explicitly. |
+| Integration | Reports applying a previous idea in real life. "I tried X and..." |
+
+Image-only messages default to Idea unless the caption signals otherwise.
+
+## Tags
+
+2-5 tags per node. Lowercase, hyphenated. Always include at least one domain tag from: `wellness`, `fitness`, `health`, `mental-health`, `cognitive`.
+
+Special cases:
+- Questions captured as Idea with `question` tag added. Also answer the question.
+- URLs captured with `reference` tag added.
+- Images captured with `visual` tag added.
+- Voice notes captured with `voice` tag added.
+- Recipes get `recipe` + `nutrition` tags.
+
+## Execution
+
+```bash
+python -m bodhi_vault.write_cli "<content>" \
+  --type <type> \
+  --energy <1-5> \
+  --source telegram \
+  --tags <tags> \
+  --vault vault \
+  --schema vault/schema/nodes.json
 ```
 
----
+## Model
 
-## Output
+Claude (Sonnet/Opus) handles classification, tagging, energy inference, and image analysis. Small models are never used for this step.
 
-A vault node written to `vault/nodes/YYYY-MM/{uuid}.json` and indexed in ChromaDB.
+## Confirmation
 
-```typescript
-{
-  id: string,            // UUID v4
-  type: NodeType,        // one of 6
-  content: string,       // original message text
-  energy_level: number,  // 1-5, user-assigned
-  created_at: string,    // ISO 8601
-  source: "signal" | "whatsapp",
-  tags: string[]         // AI-generated
-}
-```
+Reply with "Captured." or a relevant 1-sentence observation. Nothing more. No summaries, no reformulations. If the thought was a question, answer it after confirming capture.
 
-An acknowledgment message sent back to the user via the same channel.
+For images: reply with "Captured." and optionally note what was recognized (e.g., "Captured. Looks like a solid post-workout meal.").
 
----
+## Rules
 
-## Classification Flow
-
-```
-Incoming message
-    ↓
-Complexity assessment (Claude Sonnet 4.6)
-    ↓
-Simple → classify type + generate tags → prompt energy → write node
-Complex → ask 2-3 clarifying questions → collect responses → classify → write node
-```
-
-**Simple message criteria:**
-- Single clear thought
-- One sentence or two closely related sentences
-- No embedded questions or contradictions
-
-**Complex message criteria:**
-- Multiple distinct ideas
-- Contains an emotional frame + an intellectual frame
-- Contradicts something the user said recently
-- Is a question (may route to general Claude response instead of filing)
-
----
-
-## Energy Level Protocol
-
-After classification, Curator sends:
-
-> "Energy level 1-5?"
-
-User replies with a single digit. If no reply within 30 minutes, defaults to 3.
-
-Energy levels:
-- **1** — low resonance, background thought
-- **2** — mild interest
-- **3** — moderate (default)
-- **4** — strong pull, worth revisiting
-- **5** — urgent or highly charged
-
----
-
-## Planned Implementation
-
-- [ ] Register with OpenClaw Gateway as `bodhi-curator` skill
-- [ ] Implement complexity classifier via Claude Sonnet 4.6
-- [ ] Implement tag generator (2-5 tags, lowercase, hyphenated)
-- [ ] Implement energy level conversation handler
-- [ ] Implement vault write module (JSON + ChromaDB)
-- [ ] Implement acknowledgment response formatter
-- [ ] Handle URL-only messages (store as `reference` tag, skip energy prompt)
-- [ ] Handle question messages (route to general Claude, do not file)
-- [ ] Tests for each handler path
+- Never ask clarifying questions for simple thoughts
+- Never prompt for energy level
+- Never edit the user's words in the content field (text messages)
+- Never skip domain classification
+- Never skip domain tags
+- 2-second target for text, 4-second target for media
+- One primary domain per node, always set

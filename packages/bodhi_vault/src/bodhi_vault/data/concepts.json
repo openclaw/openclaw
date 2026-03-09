@@ -1,0 +1,200 @@
+{
+  "domains": ["wellness", "fitness", "health", "mental-health", "cognitive"],
+  "concepts": [
+    {
+      "id": "self-organized-criticality",
+      "label": "Self-Organized Criticality",
+      "domain": ["cognitive"],
+      "citation": "Bak, Tang & Wiesenfeld (1987). Self-organized criticality: An explanation of 1/f noise. Physical Review Letters, 59(4), 381.",
+      "url": "https://doi.org/10.1103/PhysRevLett.59.381",
+      "scholar": "https://scholar.google.com/scholar?q=self-organized+criticality+bak+1987",
+      "related": [
+        "criticality", "power law", "sandpile", "avalanche", "threshold",
+        "edge of chaos", "1/f noise", "scale invariance", "cascade",
+        "tipping point", "sudden insight", "breakthrough", "bak"
+      ]
+    },
+    {
+      "id": "neural-criticality",
+      "label": "Neuronal Avalanches and Brain Criticality",
+      "domain": ["cognitive", "health"],
+      "citation": "Beggs & Plenz (2003). Neuronal avalanches in neocortical circuits. Journal of Neuroscience, 23(35), 11167.",
+      "url": "https://doi.org/10.1523/JNEUROSCI.23-35-11167.2003",
+      "scholar": "https://scholar.google.com/scholar?q=neuronal+avalanches+beggs+plenz+2003",
+      "related": [
+        "brain criticality", "neural avalanche", "cortical", "neocortex",
+        "cognitive readiness", "mental state", "brain state", "flow",
+        "optimal cognition", "peak performance", "neural", "neuroscience"
+      ]
+    },
+    {
+      "id": "spaced-repetition",
+      "label": "Spaced Repetition and the Forgetting Curve",
+      "domain": ["cognitive"],
+      "citation": "Ebbinghaus, H. (1885). Uber das Gedachtnis. Duncker & Humblot.",
+      "url": "https://doi.org/10.1037/10011-000",
+      "scholar": "https://scholar.google.com/scholar?q=ebbinghaus+forgetting+curve+spaced+repetition",
+      "related": [
+        "spaced repetition", "forgetting curve", "memory", "recall",
+        "review interval", "anki", "supermemo", "retention", "spacing effect",
+        "review", "resurface", "remember", "learning", "ebbinghaus"
+      ]
+    },
+    {
+      "id": "flow-state",
+      "label": "Flow: Optimal Experience",
+      "domain": ["cognitive", "wellness"],
+      "citation": "Csikszentmihalyi, M. (1990). Flow: The Psychology of Optimal Experience. Harper & Row.",
+      "url": "https://scholar.google.com/scholar?q=csikszentmihalyi+flow+optimal+experience+1990",
+      "scholar": "https://scholar.google.com/scholar?q=flow+state+csikszentmihalyi",
+      "related": [
+        "flow", "flow state", "deep work", "focus", "immersion", "in the zone",
+        "peak performance", "engagement", "absorption", "effortless",
+        "challenge skill balance", "csikszentmihalyi", "autotelic"
+      ]
+    },
+    {
+      "id": "cognitive-load",
+      "label": "Cognitive Load Theory",
+      "domain": ["cognitive", "mental-health"],
+      "citation": "Sweller, J. (1988). Cognitive load during problem solving. Cognitive Science, 12(2), 257.",
+      "url": "https://doi.org/10.1207/s15516709cog1202_4",
+      "scholar": "https://scholar.google.com/scholar?q=cognitive+load+theory+sweller+1988",
+      "related": [
+        "cognitive load", "working memory", "mental overhead", "overwhelm",
+        "too much information", "information overload", "clarity", "simplify",
+        "decision fatigue", "bandwidth", "mental capacity", "sweller"
+      ]
+    },
+    {
+      "id": "psychological-recovery",
+      "label": "Psychological Recovery and Detachment",
+      "domain": ["mental-health", "wellness"],
+      "citation": "Sonnentag & Fritz (2007). The Recovery Experience Questionnaire. Journal of Occupational Health Psychology, 12(3), 204.",
+      "url": "https://doi.org/10.1037/1076-8998.12.3.204",
+      "scholar": "https://scholar.google.com/scholar?q=psychological+recovery+detachment+sonnentag+fritz",
+      "related": [
+        "recovery", "rest", "detachment", "burnout", "recharge", "restoration",
+        "exhaustion", "stress", "wellbeing", "downtime", "switch off",
+        "work life balance", "recuperate", "sonnentag"
+      ]
+    },
+    {
+      "id": "intrinsic-motivation",
+      "label": "Self-Determination Theory",
+      "domain": ["mental-health", "wellness"],
+      "citation": "Deci & Ryan (1985). Intrinsic Motivation and Self-Determination in Human Behavior. Springer.",
+      "url": "https://doi.org/10.1007/978-1-4899-2271-7",
+      "scholar": "https://scholar.google.com/scholar?q=self+determination+theory+deci+ryan+1985",
+      "related": [
+        "intrinsic motivation", "autonomy", "purpose", "meaning", "why",
+        "self-determination", "drive", "passion", "internal reward",
+        "extrinsic motivation", "dopamine", "reward", "deci", "ryan"
+      ]
+    },
+    {
+      "id": "metacognition",
+      "label": "Metacognition and Thinking About Thinking",
+      "domain": ["cognitive", "mental-health"],
+      "citation": "Flavell, J.H. (1979). Metacognition and cognitive monitoring. American Psychologist, 34(10), 906.",
+      "url": "https://doi.org/10.1037/0003-066X.34.10.906",
+      "scholar": "https://scholar.google.com/scholar?q=metacognition+flavell+1979",
+      "related": [
+        "metacognition", "self-awareness", "thinking about thinking",
+        "reflection", "introspection", "self-monitoring", "awareness",
+        "big picture", "zoom out", "observer", "meta", "flavell"
+      ]
+    },
+    {
+      "id": "default-mode-network",
+      "label": "Default Mode Network and Mind Wandering",
+      "domain": ["cognitive", "mental-health"],
+      "citation": "Raichle et al. (2001). A default mode of brain function. PNAS, 98(2), 676.",
+      "url": "https://doi.org/10.1073/pnas.98.2.676",
+      "scholar": "https://scholar.google.com/scholar?q=default+mode+network+raichle+2001",
+      "related": [
+        "mind wandering", "daydreaming", "default mode", "resting state",
+        "shower thought", "background processing", "unconscious", "idle",
+        "diffuse thinking", "incubation", "spontaneous thought", "raichle"
+      ]
+    },
+    {
+      "id": "behavioral-activation",
+      "label": "Behavioral Activation and Action",
+      "domain": ["mental-health"],
+      "citation": "Martell et al. (2001). Cognitive-Behavioral Analysis System of Psychotherapy. Guilford Press.",
+      "url": "https://scholar.google.com/scholar?q=behavioral+activation+depression+martell",
+      "scholar": "https://scholar.google.com/scholar?q=behavioral+activation+therapy+action",
+      "related": [
+        "action", "activation", "doing", "start", "begin", "momentum",
+        "stuck", "procrastination", "avoidance", "inertia", "just do it",
+        "first step", "initiate", "activation energy"
+      ]
+    },
+    {
+      "id": "insight-incubation",
+      "label": "Insight and the Aha Moment",
+      "domain": ["cognitive"],
+      "citation": "Kounios & Beeman (2014). The cognitive neuroscience of insight. Annual Review of Psychology, 65, 71.",
+      "url": "https://doi.org/10.1146/annurev-psych-010213-115154",
+      "scholar": "https://scholar.google.com/scholar?q=kounios+beeman+insight+aha+moment+2014",
+      "related": [
+        "aha moment", "insight", "eureka", "sudden realization", "click",
+        "it all makes sense", "connection", "pattern", "incubation",
+        "unconscious processing", "gamma burst", "right hemisphere", "kounios"
+      ]
+    },
+    {
+      "id": "sleep-memory-consolidation",
+      "label": "Sleep and Memory Consolidation",
+      "domain": ["health", "cognitive"],
+      "citation": "Walker, M. (2017). Why We Sleep. Scribner.",
+      "url": "https://scholar.google.com/scholar?q=sleep+memory+consolidation+walker",
+      "scholar": "https://scholar.google.com/scholar?q=sleep+memory+learning+consolidation",
+      "related": [
+        "sleep", "rest", "memory consolidation", "REM", "deep sleep",
+        "overnight", "dreams", "sleep on it", "tired", "fatigue",
+        "insomnia", "circadian", "walker"
+      ]
+    },
+    {
+      "id": "neuroplasticity",
+      "label": "Neuroplasticity and Brain Change",
+      "domain": ["health", "cognitive"],
+      "citation": "Merzenich, M. (2013). Soft-Wired. Parnassus Publishing.",
+      "url": "https://scholar.google.com/scholar?q=neuroplasticity+merzenich+brain+change",
+      "scholar": "https://scholar.google.com/scholar?q=neuroplasticity+habit+learning",
+      "related": [
+        "neuroplasticity", "brain change", "habit", "rewire", "new pattern",
+        "learn", "unlearn", "adapt", "grow", "change", "practice",
+        "repetition", "neural pathway", "merzenich"
+      ]
+    },
+    {
+      "id": "hdbscan-clustering",
+      "label": "HDBSCAN: Hierarchical Density-Based Clustering",
+      "domain": ["cognitive"],
+      "citation": "Campello et al. (2013). Density-based clustering based on hierarchical density estimates. ECML PKDD, 160.",
+      "url": "https://doi.org/10.1007/978-3-642-37456-2_14",
+      "scholar": "https://scholar.google.com/scholar?q=hdbscan+campello+2013+density+clustering",
+      "related": [
+        "cluster", "clustering", "pattern detection", "grouping", "similar",
+        "related ideas", "theme", "topic", "hdbscan", "semantic similarity",
+        "embedding", "vector", "density", "campello"
+      ]
+    },
+    {
+      "id": "calm-technology",
+      "label": "Calm Technology and Minimal Intervention",
+      "domain": ["wellness"],
+      "citation": "Weiser, M. (1991). The Computer for the 21st Century. Scientific American, 265(3), 94.",
+      "url": "https://doi.org/10.1038/scientificamerican0991-94",
+      "scholar": "https://scholar.google.com/scholar?q=calm+technology+weiser+1991",
+      "related": [
+        "minimal intervention", "ambient", "calm", "unobtrusive", "quiet",
+        "notification", "attention", "peripheral", "distraction", "nudge",
+        "gentle", "background", "weiser", "ubiquitous computing"
+      ]
+    }
+  ]
+}

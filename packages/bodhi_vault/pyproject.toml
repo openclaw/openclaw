@@ -1,0 +1,32 @@
+[project]
+name = "bodhi-vault"
+version = "0.1.0"
+description = "Vault I/O module for OpenBodhi — validated, integrity-checked, enrichable with local AI"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "jsonschema>=4.23.0",
+    "httpx>=0.27.0",
+]
+
+[project.scripts]
+bodhi-write = "bodhi_vault.write_cli:main"
+bodhi-enrich = "bodhi_vault.enrich_cli:main"
+
+[dependency-groups]
+dev = [
+    "pytest>=8.3.0",
+    "pytest-asyncio>=0.24.0",
+]
+
+[build-system]
+requires = ["uv_build>=0.10.9,<0.11.0"]
+build-backend = "uv_build"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+
+[tool.ruff]
+target-version = "py311"
+line-length = 100
