@@ -114,6 +114,11 @@ export function createEventHandlers(context: EventHandlerContext) {
       setActivityStatus(params.status);
     }
     void refreshSessionInfo?.();
+    // Schedule a follow-up refresh after the live-usage freshness guard
+    // expires so authoritative persisted data replaces live values.
+    if (params.wasActiveRun && state.liveUsageUpdatedAt > 0) {
+      setTimeout(() => void refreshSessionInfo?.(), 6_000);
+    }
   };
 
   const terminateRun = (params: {
@@ -128,6 +133,11 @@ export function createEventHandlers(context: EventHandlerContext) {
       setActivityStatus(params.status);
     }
     void refreshSessionInfo?.();
+    // Schedule a follow-up refresh after the live-usage freshness guard
+    // expires so authoritative persisted data replaces live values.
+    if (params.wasActiveRun && state.liveUsageUpdatedAt > 0) {
+      setTimeout(() => void refreshSessionInfo?.(), 6_000);
+    }
   };
 
   const hasConcurrentActiveRun = (runId: string) => {

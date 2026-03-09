@@ -821,19 +821,26 @@ export async function runTui(opts: TuiOptions) {
     forgetLocalRunId,
     clearLocalRunIds,
     onUsageUpdate: (data) => {
+      let updated = false;
       if (typeof data.totalTokens === "number") {
         sessionInfo.totalTokens = data.totalTokens;
+        updated = true;
       }
       if (typeof data.contextTokens === "number") {
         sessionInfo.contextTokens = data.contextTokens;
+        updated = true;
       }
       if (typeof data.inputTokens === "number") {
         sessionInfo.inputTokens = data.inputTokens;
+        updated = true;
       }
       if (typeof data.outputTokens === "number") {
         sessionInfo.outputTokens = data.outputTokens;
+        updated = true;
       }
-      liveUsageUpdatedAt = Date.now();
+      if (updated) {
+        liveUsageUpdatedAt = Date.now();
+      }
       updateFooter();
     },
   });
