@@ -1,5 +1,6 @@
 {
   "logging": { "level": "info" },
+  "gateway": { "mode": "local" },
 
   "agents": {
     "defaults": {
