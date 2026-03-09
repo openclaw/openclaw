@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { NativeCommandSpec } from "../../auto-reply/commands-registry.js";
 import * as dispatcherModule from "../../auto-reply/reply/provider-dispatcher.js";
 import type { OpenClawConfig } from "../../config/config.js";
+import type { DiscordAccountConfig } from "../../config/types.discord.js";
 import * as pluginCommandsModule from "../../plugins/commands.js";
 import { createDiscordNativeCommand } from "./native-command.js";
 import {
@@ -49,7 +50,7 @@ function createConfig(): OpenClawConfig {
   } as OpenClawConfig;
 }
 
-function createCommand(cfg: OpenClawConfig) {
+function createCommand(cfg: OpenClawConfig, discordConfig?: DiscordAccountConfig) {
   const commandSpec: NativeCommandSpec = {
     name: "status",
     description: "Status",
@@ -58,7 +59,7 @@ function createCommand(cfg: OpenClawConfig) {
   return createDiscordNativeCommand({
     command: commandSpec,
     cfg,
-    discordConfig: cfg.channels?.discord ?? {},
+    discordConfig: discordConfig ?? cfg.channels?.discord ?? {},
     accountId: "default",
     sessionPrefix: "discord:slash",
     ephemeralDefault: true,
@@ -79,10 +80,11 @@ function createDispatchSpy() {
 async function runGuildSlashCommand(params?: {
   userId?: string;
   mutateConfig?: (cfg: OpenClawConfig) => void;
+  runtimeDiscordConfig?: DiscordAccountConfig;
 }) {
   const cfg = createConfig();
   params?.mutateConfig?.(cfg);
-  const command = createCommand(cfg);
+  const command = createCommand(cfg, params?.runtimeDiscordConfig);
   const interaction = createInteraction({ userId: params?.userId });
   vi.spyOn(pluginCommandsModule, "matchPluginCommand").mockReturnValue(null);
   const dispatchSpy = createDispatchSpy();
@@ -163,5 +165,42 @@ describe("Discord native slash commands with commands.allowFrom", () => {
     });
     expect(dispatchSpy).not.toHaveBeenCalled();
     expectUnauthorizedReply(interaction);
+  });
+
+  it("uses the root discord maxLinesPerMessage when runtime discordConfig omits it", async () => {
+    const longReply = Array.from({ length: 20 }, (_value, index) => `Line ${index + 1}`).join("\n");
+    const { interaction } = await runGuildSlashCommand({
+      mutateConfig: (cfg) => {
+        cfg.channels = {
+          ...cfg.channels,
+          discord: {
+            ...cfg.channels?.discord,
+            maxLinesPerMessage: 120,
+          },
+        };
+      },
+      runtimeDiscordConfig: {
+        groupPolicy: "allowlist",
+        guilds: {
+          "345678901234567890": {
+            channels: {
+              "234567890123456789": {
+                allow: true,
+                requireMention: false,
+              },
+            },
+          },
+        },
+      },
+    });
+
+    const dispatchCall = vi.mocked(dispatcherModule.dispatchReplyWithDispatcher).mock
+      .calls[0]?.[0] as
+      | Parameters<typeof dispatcherModule.dispatchReplyWithDispatcher>[0]
+      | undefined;
+    await dispatchCall?.dispatcherOptions.deliver({ text: longReply }, { kind: "final" });
+
+    expect(interaction.reply).toHaveBeenCalledWith(expect.objectContaining({ content: longReply }));
+    expect(interaction.followUp).not.toHaveBeenCalled();
   });
 });

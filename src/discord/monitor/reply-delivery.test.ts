@@ -256,6 +256,29 @@ describe("deliverDiscordReply", () => {
     expect(sendDiscordTextMock.mock.calls[1]?.[1]).toBe("789");
   });
 
+  it("passes maxLinesPerMessage and chunkMode through the fast path", async () => {
+    const fakeRest = {} as import("@buape/carbon").RequestClient;
+
+    await deliverDiscordReply({
+      replies: [{ text: Array.from({ length: 18 }, (_, index) => `line ${index + 1}`).join("\n") }],
+      target: "channel:789",
+      token: "token",
+      rest: fakeRest,
+      runtime,
+      textLimit: 2000,
+      maxLinesPerMessage: 120,
+      chunkMode: "newline",
+    });
+
+    expect(sendMessageDiscordMock).not.toHaveBeenCalled();
+    expect(sendDiscordTextMock).toHaveBeenCalledTimes(1);
+    const firstSendDiscordTextCall = sendDiscordTextMock.mock.calls[0];
+    const [, , , , , maxLinesPerMessageArg, , , chunkModeArg] = firstSendDiscordTextCall ?? [];
+
+    expect(maxLinesPerMessageArg).toBe(120);
+    expect(chunkModeArg).toBe("newline");
+  });
+
   it("falls back to sendMessageDiscord when rest is not provided", async () => {
     await deliverDiscordReply({
       replies: [{ text: "single chunk" }],
