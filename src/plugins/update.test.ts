@@ -1,3 +1,4 @@
+import fs from "node:fs/promises";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const installPluginFromNpmSpecMock = vi.fn();
@@ -16,9 +17,10 @@ vi.mock("./bundled-sources.js", () => ({
 }));
 
 describe("updateNpmInstalledPlugins", () => {
-  beforeEach(() => {
+  beforeEach(async () => {
     installPluginFromNpmSpecMock.mockReset();
     resolveBundledPluginSourcesMock.mockReset();
+    await fs.rm("/tmp/opik-openclaw", { recursive: true, force: true });
   });
 
   it("skips integrity drift checks for unpinned npm specs during dry-run updates", async () => {
@@ -153,6 +155,51 @@ describe("updateNpmInstalledPlugins", () => {
         pluginId: "bad",
         status: "error",
         message: "Failed to check bad: unsupported npm spec: github:evil/evil",
+      },
+    ]);
+  });
+
+  it("skips reinstalling plugins that are already up to date", async () => {
+    await fs.mkdir("/tmp/opik-openclaw", { recursive: true });
+    await fs.writeFile(
+      "/tmp/opik-openclaw/package.json",
+      JSON.stringify({ name: "@opik/opik-openclaw", version: "0.2.6" }),
+      "utf-8",
+    );
+
+    installPluginFromNpmSpecMock.mockResolvedValue({
+      ok: true,
+      pluginId: "opik-openclaw",
+      targetDir: "/tmp/opik-openclaw",
+      version: "0.2.6",
+      extensions: ["index.ts"],
+    });
+
+    const { updateNpmInstalledPlugins } = await import("./update.js");
+    const result = await updateNpmInstalledPlugins({
+      config: {
+        plugins: {
+          installs: {
+            "opik-openclaw": {
+              source: "npm",
+              spec: "@opik/opik-openclaw",
+              installPath: "/tmp/opik-openclaw",
+            },
+          },
+        },
+      },
+      pluginIds: ["opik-openclaw"],
+    });
+
+    expect(installPluginFromNpmSpecMock).toHaveBeenCalledTimes(1);
+    expect(result.changed).toBe(false);
+    expect(result.outcomes).toEqual([
+      {
+        pluginId: "opik-openclaw",
+        status: "unchanged",
+        currentVersion: "0.2.6",
+        nextVersion: "0.2.6",
+        message: "opik-openclaw already at 0.2.6.",
       },
     ]);
   });

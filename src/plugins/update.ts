@@ -260,64 +260,67 @@ export async function updateNpmInstalledPlugins(params: {
     }
     const currentVersion = await readInstalledPackageVersion(installPath);
 
-    if (params.dryRun) {
-      let probe: Awaited<ReturnType<typeof installPluginFromNpmSpec>>;
-      try {
-        probe = await installPluginFromNpmSpec({
-          spec: record.spec,
-          mode: "update",
+    let probe: Awaited<ReturnType<typeof installPluginFromNpmSpec>>;
+    try {
+      probe = await installPluginFromNpmSpec({
+        spec: record.spec,
+        mode: "update",
+        dryRun: true,
+        expectedPluginId: pluginId,
+        expectedIntegrity: expectedIntegrityForUpdate(record.spec, record.integrity),
+        onIntegrityDrift: createPluginUpdateIntegrityDriftHandler({
+          pluginId,
           dryRun: true,
-          expectedPluginId: pluginId,
-          expectedIntegrity: expectedIntegrityForUpdate(record.spec, record.integrity),
-          onIntegrityDrift: createPluginUpdateIntegrityDriftHandler({
-            pluginId,
-            dryRun: true,
-            logger,
-            onIntegrityDrift: params.onIntegrityDrift,
-          }),
           logger,
-        });
-      } catch (err) {
-        outcomes.push({
+          onIntegrityDrift: params.onIntegrityDrift,
+        }),
+        logger,
+      });
+    } catch (err) {
+      outcomes.push({
+        pluginId,
+        status: "error",
+        message: `Failed to check ${pluginId}: ${String(err)}`,
+      });
+      continue;
+    }
+    if (!probe.ok) {
+      outcomes.push({
+        pluginId,
+        status: "error",
+        message: formatNpmInstallFailure({
           pluginId,
-          status: "error",
-          message: `Failed to check ${pluginId}: ${String(err)}`,
-        });
-        continue;
-      }
-      if (!probe.ok) {
-        outcomes.push({
-          pluginId,
-          status: "error",
-          message: formatNpmInstallFailure({
-            pluginId,
-            spec: record.spec,
-            phase: "check",
-            result: probe,
-          }),
-        });
-        continue;
-      }
+          spec: record.spec,
+          phase: "check",
+          result: probe,
+        }),
+      });
+      continue;
+    }
 
-      const nextVersion = probe.version ?? "unknown";
-      const currentLabel = currentVersion ?? "unknown";
-      if (currentVersion && probe.version && currentVersion === probe.version) {
-        outcomes.push({
-          pluginId,
-          status: "unchanged",
-          currentVersion: currentVersion ?? undefined,
-          nextVersion: probe.version ?? undefined,
-          message: `${pluginId} is up to date (${currentLabel}).`,
-        });
-      } else {
-        outcomes.push({
-          pluginId,
-          status: "updated",
-          currentVersion: currentVersion ?? undefined,
-          nextVersion: probe.version ?? undefined,
-          message: `Would update ${pluginId}: ${currentLabel} -> ${nextVersion}.`,
-        });
-      }
+    const probedVersion = probe.version ?? "unknown";
+    const currentLabel = currentVersion ?? "unknown";
+    if (currentVersion && probe.version && currentVersion === probe.version) {
+      outcomes.push({
+        pluginId,
+        status: "unchanged",
+        currentVersion: currentVersion ?? undefined,
+        nextVersion: probe.version ?? undefined,
+        message: params.dryRun
+          ? `${pluginId} is up to date (${currentLabel}).`
+          : `${pluginId} already at ${currentLabel}.`,
+      });
+      continue;
+    }
+
+    if (params.dryRun) {
+      outcomes.push({
+        pluginId,
+        status: "updated",
+        currentVersion: currentVersion ?? undefined,
+        nextVersion: probe.version ?? undefined,
+        message: `Would update ${pluginId}: ${currentLabel} -> ${probedVersion}.`,
+      });
       continue;
     }
 
@@ -369,7 +372,6 @@ export async function updateNpmInstalledPlugins(params: {
     });
     changed = true;
 
-    const currentLabel = currentVersion ?? "unknown";
     const nextLabel = nextVersion ?? "unknown";
     if (currentVersion && nextVersion && currentVersion === nextVersion) {
       outcomes.push({
