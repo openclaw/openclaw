@@ -852,3 +852,185 @@ describe("binding evaluation cache scalability", () => {
     }
   });
 });
+
+describe("peer.id wildcard (binding.peer.kind)", () => {
+  test("peer.id '*' matches any direct chat", () => {
+    const cfg: OpenClawConfig = {
+      bindings: [
+        {
+          agentId: "dm-agent",
+          match: { channel: "feishu", peer: { kind: "direct", id: "*" } },
+        },
+      ],
+    };
+    const route = resolveAgentRoute({
+      cfg,
+      channel: "feishu",
+      accountId: null,
+      peer: { kind: "direct", id: "user-123" },
+    });
+    expect(route.agentId).toBe("dm-agent");
+    expect(route.matchedBy).toBe("binding.peer.kind");
+  });
+
+  test("peer.id '*' matches any group chat", () => {
+    const cfg: OpenClawConfig = {
+      bindings: [
+        {
+          agentId: "group-agent",
+          match: { channel: "feishu", peer: { kind: "group", id: "*" } },
+        },
+      ],
+    };
+    const route = resolveAgentRoute({
+      cfg,
+      channel: "feishu",
+      accountId: null,
+      peer: { kind: "group", id: "group-456" },
+    });
+    expect(route.agentId).toBe("group-agent");
+    expect(route.matchedBy).toBe("binding.peer.kind");
+  });
+
+  test("exact peer.id takes priority over wildcard", () => {
+    const cfg: OpenClawConfig = {
+      bindings: [
+        {
+          agentId: "wildcard-agent",
+          match: { channel: "feishu", peer: { kind: "direct", id: "*" } },
+        },
+        {
+          agentId: "exact-agent",
+          match: { channel: "feishu", peer: { kind: "direct", id: "wood-id" } },
+        },
+      ],
+    };
+    const exactRoute = resolveAgentRoute({
+      cfg,
+      channel: "feishu",
+      accountId: null,
+      peer: { kind: "direct", id: "wood-id" },
+    });
+    expect(exactRoute.agentId).toBe("exact-agent");
+    expect(exactRoute.matchedBy).toBe("binding.peer");
+
+    const otherRoute = resolveAgentRoute({
+      cfg,
+      channel: "feishu",
+      accountId: null,
+      peer: { kind: "direct", id: "other-user" },
+    });
+    expect(otherRoute.agentId).toBe("wildcard-agent");
+    expect(otherRoute.matchedBy).toBe("binding.peer.kind");
+  });
+
+  test("wildcard peer.kind takes priority over binding.channel", () => {
+    const cfg: OpenClawConfig = {
+      bindings: [
+        {
+          agentId: "channel-agent",
+          match: { channel: "feishu" },
+        },
+        {
+          agentId: "kind-agent",
+          match: { channel: "feishu", peer: { kind: "direct", id: "*" } },
+        },
+      ],
+    };
+    const route = resolveAgentRoute({
+      cfg,
+      channel: "feishu",
+      accountId: null,
+      peer: { kind: "direct", id: "someone" },
+    });
+    expect(route.agentId).toBe("kind-agent");
+    expect(route.matchedBy).toBe("binding.peer.kind");
+  });
+
+  test("wildcard group binding matches runtime channel peer kind", () => {
+    const cfg: OpenClawConfig = {
+      bindings: [
+        {
+          agentId: "group-agent",
+          match: { channel: "slack", peer: { kind: "group", id: "*" } },
+        },
+      ],
+    };
+    const route = resolveAgentRoute({
+      cfg,
+      channel: "slack",
+      accountId: null,
+      peer: { kind: "channel", id: "C999" },
+    });
+    expect(route.agentId).toBe("group-agent");
+    expect(route.matchedBy).toBe("binding.peer.kind");
+  });
+
+  test("wildcard direct does not match group peer", () => {
+    const cfg: OpenClawConfig = {
+      bindings: [
+        {
+          agentId: "dm-agent",
+          match: { channel: "feishu", peer: { kind: "direct", id: "*" } },
+        },
+      ],
+    };
+    const route = resolveAgentRoute({
+      cfg,
+      channel: "feishu",
+      accountId: null,
+      peer: { kind: "group", id: "group-1" },
+    });
+    expect(route.agentId).toBe("main");
+    expect(route.matchedBy).toBe("default");
+  });
+
+  test("full scenario: wood DM + other DMs + all groups", () => {
+    const cfg: OpenClawConfig = {
+      agents: {
+        list: [{ id: "dm" }, { id: "main" }, { id: "group" }],
+      },
+      bindings: [
+        {
+          agentId: "dm",
+          match: { channel: "feishu", peer: { kind: "direct", id: "wood-uid" } },
+        },
+        {
+          agentId: "main",
+          match: { channel: "feishu", peer: { kind: "direct", id: "*" } },
+        },
+        {
+          agentId: "group",
+          match: { channel: "feishu", peer: { kind: "group", id: "*" } },
+        },
+      ],
+    };
+
+    const woodRoute = resolveAgentRoute({
+      cfg,
+      channel: "feishu",
+      accountId: null,
+      peer: { kind: "direct", id: "wood-uid" },
+    });
+    expect(woodRoute.agentId).toBe("dm");
+    expect(woodRoute.matchedBy).toBe("binding.peer");
+
+    const otherDmRoute = resolveAgentRoute({
+      cfg,
+      channel: "feishu",
+      accountId: null,
+      peer: { kind: "direct", id: "someone-else" },
+    });
+    expect(otherDmRoute.agentId).toBe("main");
+    expect(otherDmRoute.matchedBy).toBe("binding.peer.kind");
+
+    const groupRoute = resolveAgentRoute({
+      cfg,
+      channel: "feishu",
+      accountId: null,
+      peer: { kind: "group", id: "any-group-id" },
+    });
+    expect(groupRoute.agentId).toBe("group");
+    expect(groupRoute.matchedBy).toBe("binding.peer.kind");
+  });
+});

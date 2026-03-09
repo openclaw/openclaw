@@ -50,6 +50,7 @@ export type ResolvedAgentRoute = {
   matchedBy:
     | "binding.peer"
     | "binding.peer.parent"
+    | "binding.peer.kind"
     | "binding.guild+roles"
     | "binding.guild"
     | "binding.team"
@@ -168,6 +169,7 @@ export function pickFirstExistingAgentId(cfg: OpenClawConfig, agentId: string): 
 type NormalizedPeerConstraint =
   | { state: "none" }
   | { state: "invalid" }
+  | { state: "wildcard"; kind: ChatType }
   | { state: "valid"; kind: ChatType; id: string };
 
 type NormalizedBindingMatch = {
@@ -213,6 +215,7 @@ const MAX_RESOLVED_ROUTE_CACHE_KEYS = 4000;
 
 type EvaluatedBindingsIndex = {
   byPeer: Map<string, EvaluatedBinding[]>;
+  byPeerKind: Map<string, EvaluatedBinding[]>;
   byGuildWithRoles: Map<string, EvaluatedBinding[]>;
   byGuild: Map<string, EvaluatedBinding[]>;
   byTeam: Map<string, EvaluatedBinding[]>;
@@ -366,8 +369,41 @@ function collectPeerIndexedBindings(
   return out;
 }
 
+function peerKindLookupKeys(kind: ChatType): string[] {
+  if (kind === "group" || kind === "channel") {
+    return ["group", "channel"];
+  }
+  return [kind];
+}
+
+function collectPeerKindBindings(
+  index: EvaluatedBindingsIndex,
+  peer: RoutePeer | null,
+): EvaluatedBinding[] {
+  if (!peer) {
+    return [];
+  }
+  const out: EvaluatedBinding[] = [];
+  const seen = new Set<EvaluatedBinding>();
+  for (const key of peerKindLookupKeys(peer.kind)) {
+    const matches = index.byPeerKind.get(key);
+    if (!matches) {
+      continue;
+    }
+    for (const match of matches) {
+      if (seen.has(match)) {
+        continue;
+      }
+      seen.add(match);
+      out.push(match);
+    }
+  }
+  return out;
+}
+
 function buildEvaluatedBindingsIndex(bindings: EvaluatedBinding[]): EvaluatedBindingsIndex {
   const byPeer = new Map<string, EvaluatedBinding[]>();
+  const byPeerKind = new Map<string, EvaluatedBinding[]>();
   const byGuildWithRoles = new Map<string, EvaluatedBinding[]>();
   const byGuild = new Map<string, EvaluatedBinding[]>();
   const byTeam = new Map<string, EvaluatedBinding[]>();
@@ -375,6 +411,12 @@ function buildEvaluatedBindingsIndex(bindings: EvaluatedBinding[]): EvaluatedBin
   const byChannel: EvaluatedBinding[] = [];
 
   for (const binding of bindings) {
+    if (binding.match.peer.state === "wildcard") {
+      for (const key of peerKindLookupKeys(binding.match.peer.kind)) {
+        pushToIndexMap(byPeerKind, key, binding);
+      }
+      continue;
+    }
     if (binding.match.peer.state === "valid") {
       for (const key of peerLookupKeys(binding.match.peer.kind, binding.match.peer.id)) {
         pushToIndexMap(byPeer, key, binding);
@@ -402,6 +444,7 @@ function buildEvaluatedBindingsIndex(bindings: EvaluatedBinding[]): EvaluatedBin
 
   return {
     byPeer,
+    byPeerKind,
     byGuildWithRoles,
     byGuild,
     byTeam,
@@ -480,6 +523,9 @@ function normalizePeerConstraint(
   const id = normalizeId(peer.id);
   if (!kind || !id) {
     return { state: "invalid" };
+  }
+  if (id === "*") {
+    return { state: "wildcard", kind };
   }
   return { state: "valid", kind, id };
 }
@@ -584,6 +630,11 @@ function peerKindMatches(bindingKind: ChatType, scopeKind: ChatType): boolean {
 function matchesBindingScope(match: NormalizedBindingMatch, scope: BindingScope): boolean {
   if (match.peer.state === "invalid") {
     return false;
+  }
+  if (match.peer.state === "wildcard") {
+    if (!scope.peer || !peerKindMatches(match.peer.kind, scope.peer.kind)) {
+      return false;
+    }
   }
   if (match.peer.state === "valid") {
     if (
@@ -700,6 +751,9 @@ export function resolveAgentRoute(input: ResolveAgentRouteInput): ResolvedAgentR
     if (value.state === "invalid") {
       return "invalid";
     }
+    if (value.state === "wildcard") {
+      return `${value.kind}:*`;
+    }
     return `${value.kind}:${value.id}`;
   };
 
@@ -740,6 +794,13 @@ export function resolveAgentRoute(input: ResolveAgentRouteInput): ResolvedAgentR
       scopePeer: parentPeer && parentPeer.id ? parentPeer : null,
       candidates: collectPeerIndexedBindings(bindingsIndex, parentPeer),
       predicate: (candidate) => candidate.match.peer.state === "valid",
+    },
+    {
+      matchedBy: "binding.peer.kind",
+      enabled: Boolean(peer),
+      scopePeer: peer,
+      candidates: collectPeerKindBindings(bindingsIndex, peer),
+      predicate: (candidate) => candidate.match.peer.state === "wildcard",
     },
     {
       matchedBy: "binding.guild+roles",
