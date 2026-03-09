@@ -20,27 +20,22 @@
 
 4. **Update memory**: Write a brief summary of this heartbeat's actions to your MEMORY.md
 
-## Morning Brief (09:00 daily via cron)
+## Cron Event Response
 
-Call `fin_fund_status` and compose a morning brief:
+When you receive a `[findoo-trader]` prefixed cron event, follow the instructions in the event text.
+These events are triggered precisely by the OpenClaw cron system — no need to check the time yourself.
 
-- Total equity, risk level, active strategy count by level
-- Overnight signals and order fills
-- Any strategies needing attention
-- Send via `message_send` to the user
+Available cron events:
 
-## Evening Review (18:00 daily via cron)
+- **Morning brief** (09:00): `fin_fund_status` → compose brief → `message_send`
+- **Ideation scan** (10:00): `fin_ideation_trigger` → scan markets → generate strategy ideas
+- **Evolution check** (12:00): `fin_evolution_scan` → check alpha decay → recommend evolution
+- **Evening review** (18:00): `fin_leaderboard` + `fin_list_promotions_ready` → compose summary
+- **Weekly rebalance** (Sun 10:00): `fin_fund_rebalance` + `fin_leaderboard` → weekly report
 
-1. Call `fin_leaderboard` — identify top and bottom performers
-2. Call `fin_list_promotions_ready` — any promotions to recommend?
-3. Compose a day-end summary and send via `message_send`
+## First Launch
 
-## Weekly Rebalance (Sunday 10:00 via cron)
-
-1. Call `fin_fund_rebalance` — re-profile, correlate, re-allocate capital
-2. Call `fin_leaderboard` — review weekly fitness scores
-3. If any strategy has been at L2 for 30+ days with good metrics, recommend L3 promotion
-4. Send weekly report via `message_send`
+If cron jobs have not been set up yet, call `fin_cron_setup` to initialize the 5 scheduled tasks.
 
 ## Decision Principles
 

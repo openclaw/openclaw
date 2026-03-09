@@ -50,24 +50,17 @@ describe("IdeationScheduler", () => {
     vi.restoreAllMocks();
   });
 
-  it("start/stop controls the timer", () => {
+  it("start/stop are no-ops (cron-managed), running reflects config.enabled", () => {
     const { scheduler } = createScheduler();
 
-    expect(scheduler.getStats().running).toBe(false);
+    // enabled=true → running is true (cron-managed)
+    expect(scheduler.getStats().running).toBe(true);
 
     scheduler.start();
     expect(scheduler.getStats().running).toBe(true);
 
     scheduler.stop();
-    expect(scheduler.getStats().running).toBe(false);
-  });
-
-  it("start is idempotent", () => {
-    const { scheduler } = createScheduler();
-    scheduler.start();
-    scheduler.start(); // should not create second timer
-    expect(scheduler.getStats().running).toBe(true);
-    scheduler.stop();
+    expect(scheduler.getStats().running).toBe(true); // still true, cron-managed
   });
 
   it("runCycle scans and triggers ideation", async () => {
@@ -127,9 +120,8 @@ describe("IdeationScheduler", () => {
     expect(config.maxStrategiesPerCycle).toBe(3);
   });
 
-  it("does not start when disabled", () => {
+  it("running reflects enabled config (disabled scheduler)", () => {
     const { scheduler } = createScheduler();
-    // Access private config via getConfig to verify
     expect(scheduler.getConfig().enabled).toBe(true);
 
     // Create a disabled scheduler
@@ -143,7 +135,7 @@ describe("IdeationScheduler", () => {
       { enabled: false },
     );
 
-    disabledScheduler.start();
     expect(disabledScheduler.getStats().running).toBe(false);
+    expect(disabledScheduler.getStats().enabled).toBe(false);
   });
 });

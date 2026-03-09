@@ -14,31 +14,17 @@ describe("EvolutionScheduler", () => {
   beforeEach(() => vi.useFakeTimers());
   afterEach(() => vi.useRealTimers());
 
-  it("starts and stops timer", () => {
+  it("start/stop are no-ops (cron-managed)", () => {
     const scheduler = new EvolutionScheduler({
       strategyRegistry: { list: () => [] },
       evolutionEngineResolver: () => undefined,
     });
 
     scheduler.start();
-    expect(scheduler.getStats().running).toBe(true);
+    expect(scheduler.getStats().running).toBe(true); // always true, cron-managed
 
     scheduler.stop();
-    expect(scheduler.getStats().running).toBe(false);
-  });
-
-  it("start is idempotent", () => {
-    const log = { append: vi.fn() };
-    const scheduler = new EvolutionScheduler({
-      strategyRegistry: { list: () => [] },
-      evolutionEngineResolver: () => undefined,
-      activityLog: log,
-    });
-
-    scheduler.start();
-    scheduler.start();
-    expect(log.append).toHaveBeenCalledTimes(1);
-    scheduler.stop();
+    expect(scheduler.getStats().running).toBe(true); // still true, cron-managed
   });
 
   it("runCycle returns zeros when no evolution engine", async () => {

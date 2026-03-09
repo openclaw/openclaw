@@ -39,7 +39,6 @@ export type DailyBriefSchedulerConfig = {
 };
 
 export class DailyBriefScheduler {
-  private timer: ReturnType<typeof setInterval> | null = null;
   private briefCount = 0;
   private lastBriefAt: number | null = null;
   private lastBrief: DailyBrief | null = null;
@@ -53,22 +52,15 @@ export class DailyBriefScheduler {
     return this._deps;
   }
 
-  start(): void {
-    if (this.timer) return;
-    const ms = this._deps.intervalMs ?? 86_400_000;
-    this.timer = setInterval(() => void this.generateBrief(), ms);
-  }
+  // Timer removed — DailyBrief now triggered by OpenClaw cron (findoo:daily-brief, 0 9 * * *)
+  // generateBrief() remains callable by fin_fund_status and HTTP route
+  start(): void {}
 
-  stop(): void {
-    if (this.timer) {
-      clearInterval(this.timer);
-      this.timer = null;
-    }
-  }
+  stop(): void {}
 
   getStats(): { running: boolean; briefCount: number; lastBriefAt: number | null } {
     return {
-      running: this.timer !== null,
+      running: true, // cron-managed, always "running"
       briefCount: this.briefCount,
       lastBriefAt: this.lastBriefAt,
     };

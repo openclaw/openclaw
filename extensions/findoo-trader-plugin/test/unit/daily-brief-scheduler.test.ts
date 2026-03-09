@@ -40,20 +40,13 @@ describe("DailyBriefScheduler", () => {
     vi.restoreAllMocks();
   });
 
-  it("start() sets interval timer", () => {
+  it("start/stop are no-ops (cron-managed)", () => {
     const deps = makeMockDeps();
     const scheduler = new DailyBriefScheduler({ ...deps, intervalMs: 5000 });
     scheduler.start();
-    expect(scheduler.getStats().running).toBe(true);
+    expect(scheduler.getStats().running).toBe(true); // always true, cron-managed
     scheduler.stop();
-  });
-
-  it("stop() clears interval timer", () => {
-    const deps = makeMockDeps();
-    const scheduler = new DailyBriefScheduler({ ...deps, intervalMs: 5000 });
-    scheduler.start();
-    scheduler.stop();
-    expect(scheduler.getStats().running).toBe(false);
+    expect(scheduler.getStats().running).toBe(true); // still true, cron-managed
   });
 
   it("generateBrief() returns complete DailyBrief structure", async () => {

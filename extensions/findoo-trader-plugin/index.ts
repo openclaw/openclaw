@@ -617,7 +617,7 @@ const findooTraderPlugin = {
       liveExecutor,
       intervalMs: 86_400_000, // 24 hours
     });
-    briefScheduler.start();
+    // DailyBrief timer removed — now triggered by OpenClaw cron (findoo:daily-brief)
 
     // ── Strategy Ideation Scheduler (market scan → LLM → auto-create strategies) ──
 
@@ -691,7 +691,7 @@ const findooTraderPlugin = {
       },
       ideationConfig,
     );
-    ideationScheduler.start();
+    // Ideation timer removed — now triggered by OpenClaw cron (findoo:ideation-scan)
     ideationRef.scheduler = ideationScheduler;
 
     // ── Cold-Start Seeder (seeds 10 strategies on first launch) ──
@@ -803,6 +803,181 @@ const findooTraderPlugin = {
         return { text: JSON.stringify(alphaFactory.getStats(), null, 2) };
       },
     } as Parameters<typeof api.registerTool>[0]);
+
+    // ── Cron Integration (replaces setInterval for day-level schedulers) ──
+
+    // Shared cron job definitions for findoo day-level tasks
+    type CronJobDef = {
+      name: string;
+      schedule: { kind: "cron"; expr: string; tz?: string };
+      payload: { kind: "systemEvent"; text: string };
+    };
+
+    const cronJobDefs: CronJobDef[] = [
+      {
+        name: "findoo:daily-brief",
+        schedule: { kind: "cron", expr: "0 9 * * *" },
+        payload: {
+          kind: "systemEvent",
+          text: "[findoo-trader] Morning brief time. Call fin_fund_status to get portfolio data, compose a brief summary, and send to user via message_send.",
+        },
+      },
+      {
+        name: "findoo:ideation-scan",
+        schedule: { kind: "cron", expr: "0 10 * * *" },
+        payload: {
+          kind: "systemEvent",
+          text: "[findoo-trader] Ideation scan time. Call fin_ideation_trigger to scan markets and generate strategy ideas.",
+        },
+      },
+      {
+        name: "findoo:evolution-check",
+        schedule: { kind: "cron", expr: "0 12 * * *" },
+        payload: {
+          kind: "systemEvent",
+          text: "[findoo-trader] Alpha decay check time. Call fin_evolution_scan to check for decaying strategies and decide on evolution.",
+        },
+      },
+      {
+        name: "findoo:evening-review",
+        schedule: { kind: "cron", expr: "0 18 * * *" },
+        payload: {
+          kind: "systemEvent",
+          text: "[findoo-trader] Evening review time. Call fin_leaderboard and fin_list_promotions_ready, compose summary report.",
+        },
+      },
+      {
+        name: "findoo:weekly-rebalance",
+        schedule: { kind: "cron", expr: "0 10 * * 0" },
+        payload: {
+          kind: "systemEvent",
+          text: "[findoo-trader] Weekly rebalance time. Call fin_fund_rebalance to review 30-day L2 strategies, then fin_leaderboard for weekly report.",
+        },
+      },
+    ];
+
+    // Store cron reference for tools and HTTP routes
+    let cronRef:
+      | {
+          list: (...args: unknown[]) => Promise<unknown[]>;
+          add: (input: unknown) => Promise<unknown>;
+        }
+      | undefined;
+
+    // Helper: idempotently create findoo cron jobs
+    async function setupFindooCronJobs(cron: typeof cronRef): Promise<{
+      ok: boolean;
+      created: number;
+      existing: number;
+    }> {
+      if (!cron) return { ok: false, created: 0, existing: 0 };
+      const allJobs = (await cron.list()) as Array<{ name: string }>;
+      const findooJobs = allJobs.filter((j) => j.name.startsWith("findoo:"));
+      let created = 0;
+      for (const def of cronJobDefs) {
+        if (!findooJobs.some((j) => j.name === def.name)) {
+          await cron.add({
+            ...def,
+            enabled: true,
+            sessionTarget: "main",
+            wakeMode: "now",
+            delivery: { mode: "none" },
+          });
+          created++;
+        }
+      }
+      return { ok: true, created, existing: findooJobs.length };
+    }
+
+    // Gateway method: access CronService via context.cron
+    api.registerGatewayMethod("findoo-trader.cron.setup", async ({ context, respond }) => {
+      cronRef = context.cron;
+      const result = await setupFindooCronJobs(cronRef);
+      respond(true, result);
+    });
+
+    // Cron AI tools
+    api.registerTool({
+      name: "fin_cron_setup",
+      description:
+        "Initialize or check findoo cron jobs (daily brief, ideation, evolution, evening review, weekly rebalance)",
+      parameters: { type: "object" as const, properties: {} },
+      handler: async () => {
+        if (!cronRef) {
+          return {
+            text: JSON.stringify({
+              error:
+                "Cron service not available yet. The gateway method has not been called. Try again after the first heartbeat.",
+            }),
+          };
+        }
+        const result = await setupFindooCronJobs(cronRef);
+        return { text: JSON.stringify(result, null, 2) };
+      },
+    } as Parameters<typeof api.registerTool>[0]);
+
+    api.registerTool({
+      name: "fin_ideation_trigger",
+      description: "Trigger market ideation scan to discover new strategy opportunities",
+      parameters: { type: "object" as const, properties: {} },
+      handler: async () => {
+        const result = await ideationScheduler.runCycle();
+        return {
+          text: JSON.stringify(
+            {
+              triggered: true,
+              symbolsScanned: result.snapshot.symbols.length,
+              created: result.created.length,
+              skippedDuplicates: result.skippedDuplicates.length,
+            },
+            null,
+            2,
+          ),
+        };
+      },
+    } as Parameters<typeof api.registerTool>[0]);
+
+    api.registerTool({
+      name: "fin_evolution_scan",
+      description: "Scan L2/L3 strategies for alpha decay and recommend evolution",
+      parameters: { type: "object" as const, properties: {} },
+      handler: async () => {
+        const result = await evolutionScheduler.runCycle();
+        return {
+          text: JSON.stringify({ scanned: true, ...result }, null, 2),
+        };
+      },
+    } as Parameters<typeof api.registerTool>[0]);
+
+    // Cron HTTP routes for Dashboard
+    api.registerHttpRoute({
+      auth: "gateway",
+      method: "POST",
+      path: "/api/v1/finance/cron/setup",
+      handler: async (_req: unknown, res: unknown) => {
+        const httpRes = res as import("./src/types-http.js").HttpRes;
+        const result = await setupFindooCronJobs(cronRef);
+        httpRes.writeHead(200, { "Content-Type": "application/json" });
+        httpRes.end(JSON.stringify(result));
+      },
+    });
+
+    api.registerHttpRoute({
+      auth: "gateway",
+      path: "/api/v1/finance/cron/status",
+      handler: async (_req: unknown, res: unknown) => {
+        const httpRes = res as import("./src/types-http.js").HttpRes;
+        if (!cronRef) {
+          httpRes.writeHead(200, { "Content-Type": "application/json" });
+          httpRes.end(JSON.stringify({ initialized: false, jobs: [] }));
+          return;
+        }
+        const allJobs = (await cronRef.list()) as Array<{ name: string }>;
+        const findooJobs = allJobs.filter((j) => j.name.startsWith("findoo:"));
+        httpRes.writeHead(200, { "Content-Type": "application/json" });
+        httpRes.end(JSON.stringify({ initialized: true, jobs: findooJobs }));
+      },
+    });
 
     // Alpha Factory HTTP routes
     api.registerHttpRoute({

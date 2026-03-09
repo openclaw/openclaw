@@ -43,7 +43,6 @@ export interface EvolutionSchedulerDeps {
 }
 
 export class EvolutionScheduler {
-  private timer: ReturnType<typeof setInterval> | null = null;
   private cycleCount = 0;
   private lastCycleAt = 0;
   private evolvedCount = 0;
@@ -54,22 +53,11 @@ export class EvolutionScheduler {
     private intervalMs = 86_400_000,
   ) {}
 
-  start(): void {
-    if (this.timer) return;
-    this.timer = setInterval(() => void this.runCycle(), this.intervalMs);
-    this.deps.activityLog?.append({
-      category: "heartbeat",
-      action: "evolution_scheduler_started",
-      detail: `Evolution scheduler started (interval=${Math.round(this.intervalMs / 1000)}s)`,
-    });
-  }
+  // Timer removed — Evolution now triggered by OpenClaw cron (findoo:evolution-check, 0 12 * * *)
+  // runCycle() remains callable by fin_evolution_scan tool
+  start(): void {}
 
-  stop(): void {
-    if (this.timer) {
-      clearInterval(this.timer);
-      this.timer = null;
-    }
-  }
+  stop(): void {}
 
   getStats(): {
     running: boolean;
@@ -79,7 +67,7 @@ export class EvolutionScheduler {
     skippedCount: number;
   } {
     return {
-      running: this.timer !== null,
+      running: true, // cron-managed, always "running"
       cycleCount: this.cycleCount,
       lastCycleAt: this.lastCycleAt,
       evolvedCount: this.evolvedCount,
