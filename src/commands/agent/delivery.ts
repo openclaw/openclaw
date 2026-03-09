@@ -202,10 +202,15 @@ async function mirrorNestedTranscriptToChildSession(params: {
   }
 
   try {
+    const mirrorText = text?.trim()
+      ? mediaUrls?.length
+        ? `${text}\n\nAttached media: ${mediaUrls.join(", ")}`
+        : text
+      : undefined;
     const mirror = await appendAssistantMessageToSessionTranscript({
       agentId,
       sessionKey,
-      text,
+      text: mirrorText ?? text,
       mediaUrls,
     });
     if (!mirror.ok) {

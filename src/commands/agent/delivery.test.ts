@@ -168,8 +168,52 @@ describe("deliverAgentCommandResult – transcript mirror", () => {
     expect(mockAppendTranscript).toHaveBeenCalledOnce();
     expect(mockAppendTranscript).toHaveBeenCalledWith({
       sessionKey: "session-media",
-      text: "pic",
+      text: "pic\n\nAttached media: https://example.com/img.png",
       mediaUrls: ["https://example.com/img.png"],
+      agentId: undefined,
+    });
+  });
+
+  it("preserves assistant text when mediaUrls are also present", async () => {
+    mockAppendTranscript.mockClear();
+    mockAppendTranscript.mockResolvedValue({ ok: true, sessionFile: "/tmp/test.jsonl" });
+    const runtime = makeRuntime();
+
+    await deliverAgentCommandResult({
+      cfg: makeCfg(),
+      deps: makeDeps(),
+      runtime,
+      opts: {
+        message: "test",
+        deliver: false,
+        lane: AGENT_LANE_NESTED,
+        sessionKey: "session-text-media",
+        inputProvenance: { kind: "inter_session" },
+      },
+      outboundSession: undefined,
+      sessionEntry: undefined,
+      result: {
+        payloads: [
+          {
+            text: "Here is the chart summary",
+            mediaUrls: ["https://example.com/chart.png", "https://example.com/report.pdf"],
+          },
+        ],
+        meta: {} as never,
+      },
+      payloads: [
+        {
+          text: "Here is the chart summary",
+          mediaUrls: ["https://example.com/chart.png", "https://example.com/report.pdf"],
+        },
+      ],
+    });
+
+    expect(mockAppendTranscript).toHaveBeenCalledOnce();
+    expect(mockAppendTranscript).toHaveBeenCalledWith({
+      sessionKey: "session-text-media",
+      text: "Here is the chart summary\n\nAttached media: https://example.com/chart.png, https://example.com/report.pdf",
+      mediaUrls: ["https://example.com/chart.png", "https://example.com/report.pdf"],
       agentId: undefined,
     });
   });
@@ -207,7 +251,9 @@ describe("deliverAgentCommandResult – transcript mirror", () => {
     expect(mockAppendTranscript).toHaveBeenCalledWith({
       agentId: undefined,
       sessionKey: "session-capped",
-      text: `${"x".repeat(MAX_NESTED_TRANSCRIPT_TEXT_CHARS - "\n\n[truncated]".length)}\n\n[truncated]`,
+      text: `${"x".repeat(MAX_NESTED_TRANSCRIPT_TEXT_CHARS - "\n\n[truncated]".length)}\n\n[truncated]\n\nAttached media: ${mediaUrls
+        .slice(0, MAX_NESTED_TRANSCRIPT_MEDIA_URLS)
+        .join(", ")}`,
       mediaUrls: mediaUrls.slice(0, MAX_NESTED_TRANSCRIPT_MEDIA_URLS),
     });
   });
