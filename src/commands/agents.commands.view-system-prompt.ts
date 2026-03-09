@@ -6,6 +6,10 @@ import {
   resolveDefaultAgentId,
 } from "../agents/agent-scope.js";
 import { resolveBootstrapContextForRun } from "../agents/bootstrap-files.js";
+import {
+  listChannelSupportedActions,
+  resolveChannelMessageToolHints,
+} from "../agents/channel-tools.js";
 import { resolveOpenClawDocsPath } from "../agents/docs-path.js";
 import { buildModelAliasLines } from "../agents/model-alias-lines.js";
 import { resolveDefaultModelForAgent } from "../agents/model-selection.js";
@@ -19,11 +23,13 @@ import {
 } from "../agents/skills/workspace.js";
 import { buildSystemPromptParams } from "../agents/system-prompt-params.js";
 import { resolveHeartbeatPrompt } from "../auto-reply/heartbeat.js";
+import { resolveChannelCapabilities } from "../config/channel-capabilities.js";
 import { getMachineDisplayName } from "../infra/machine-name.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { defaultRuntime } from "../runtime.js";
 import { buildTtsSystemPromptHint } from "../tts/tts.js";
+import { isReasoningTagProvider } from "../utils/provider-utils.js";
 import { requireValidConfig } from "./agents.command-shared.js";
 
 export async function agentsViewSystemPromptCommand(
@@ -64,6 +70,17 @@ export async function agentsViewSystemPromptCommand(
   const defaultModelRef = resolveDefaultModelForAgent({ cfg, agentId });
   const defaultModelLabel = `${defaultModelRef.provider}/${defaultModelRef.model}`;
   const modelLabel = opts.model ?? defaultModelLabel;
+  const provider = modelLabel.split("/")[0];
+
+  const runtimeCapabilities = opts.channel
+    ? (resolveChannelCapabilities({ cfg, channel: opts.channel }) ?? [])
+    : undefined;
+  const channelActions = opts.channel
+    ? listChannelSupportedActions({ cfg, channel: opts.channel })
+    : undefined;
+  const messageToolHints = opts.channel
+    ? resolveChannelMessageToolHints({ cfg, channel: opts.channel })
+    : undefined;
 
   const { runtimeInfo, userTimezone, userTime, userTimeFormat } = buildSystemPromptParams({
     config: cfg,
@@ -79,6 +96,8 @@ export async function agentsViewSystemPromptCommand(
       defaultModel: defaultModelLabel,
       shell: detectRuntimeShell(),
       channel: opts.channel,
+      capabilities: runtimeCapabilities,
+      channelActions,
     },
   });
 
@@ -105,7 +124,7 @@ export async function agentsViewSystemPromptCommand(
 
   const prompt = buildEmbeddedSystemPrompt({
     workspaceDir,
-    reasoningTagHint: false,
+    reasoningTagHint: isReasoningTagProvider(provider),
     heartbeatPrompt,
     skillsPrompt,
     docsPath: docsPath ?? undefined,
@@ -120,6 +139,7 @@ export async function agentsViewSystemPromptCommand(
     userTime,
     userTimeFormat,
     contextFiles,
+    messageToolHints,
     ownerDisplay: ownerDisplay.ownerDisplay,
     ownerDisplaySecret: ownerDisplay.ownerDisplaySecret,
   });
