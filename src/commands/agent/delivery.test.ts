@@ -1,6 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
 import { AGENT_LANE_NESTED } from "../../agents/lanes.js";
 
+const MAX_NESTED_TRANSCRIPT_TEXT_CHARS = 8_000;
+const MAX_NESTED_TRANSCRIPT_MEDIA_URLS = 16;
 const mockAppendTranscript = vi
   .fn()
   .mockResolvedValue({ ok: true, sessionFile: "/tmp/test.jsonl" });
@@ -59,6 +61,7 @@ function makeCfg() {
 describe("deliverAgentCommandResult – transcript mirror", () => {
   it("writes to child session transcript when deliver=false and lane=nested", async () => {
     mockAppendTranscript.mockClear();
+    mockAppendTranscript.mockResolvedValue({ ok: true, sessionFile: "/tmp/test.jsonl" });
     const runtime = makeRuntime();
     await deliverAgentCommandResult({
       cfg: makeCfg(),
@@ -86,6 +89,7 @@ describe("deliverAgentCommandResult – transcript mirror", () => {
 
   it("does NOT call appendAssistantMessageToSessionTranscript when deliver=true", async () => {
     mockAppendTranscript.mockClear();
+    mockAppendTranscript.mockResolvedValue({ ok: true, sessionFile: "/tmp/test.jsonl" });
     const runtime = makeRuntime();
     // deliver=true but with internal channel → will throw; wrap to catch.
     try {
@@ -113,6 +117,7 @@ describe("deliverAgentCommandResult – transcript mirror", () => {
 
   it("does NOT call appendAssistantMessageToSessionTranscript when lane is not nested", async () => {
     mockAppendTranscript.mockClear();
+    mockAppendTranscript.mockResolvedValue({ ok: true, sessionFile: "/tmp/test.jsonl" });
     const runtime = makeRuntime();
     await deliverAgentCommandResult({
       cfg: makeCfg(),
@@ -135,6 +140,7 @@ describe("deliverAgentCommandResult – transcript mirror", () => {
 
   it("includes mediaUrls when present", async () => {
     mockAppendTranscript.mockClear();
+    mockAppendTranscript.mockResolvedValue({ ok: true, sessionFile: "/tmp/test.jsonl" });
     const runtime = makeRuntime();
     await deliverAgentCommandResult({
       cfg: makeCfg(),
@@ -161,5 +167,177 @@ describe("deliverAgentCommandResult – transcript mirror", () => {
       text: "pic",
       mediaUrls: ["https://example.com/img.png"],
     });
+  });
+
+  it("caps mirrored text and media urls before appending transcript", async () => {
+    mockAppendTranscript.mockClear();
+    mockAppendTranscript.mockResolvedValue({ ok: true, sessionFile: "/tmp/test.jsonl" });
+    const runtime = makeRuntime();
+    const oversizedText = "x".repeat(MAX_NESTED_TRANSCRIPT_TEXT_CHARS + 50);
+    const mediaUrls = Array.from({ length: MAX_NESTED_TRANSCRIPT_MEDIA_URLS + 5 }, (_, index) => {
+      return `https://example.com/media-${index}.png`;
+    });
+
+    await deliverAgentCommandResult({
+      cfg: makeCfg(),
+      deps: makeDeps(),
+      runtime,
+      opts: {
+        message: "test",
+        deliver: false,
+        lane: AGENT_LANE_NESTED,
+        sessionKey: "session-capped",
+      },
+      outboundSession: undefined,
+      sessionEntry: undefined,
+      result: {
+        payloads: [{ text: oversizedText, mediaUrls }],
+        meta: {} as never,
+      },
+      payloads: [{ text: oversizedText, mediaUrls }],
+    });
+
+    expect(mockAppendTranscript).toHaveBeenCalledOnce();
+    expect(mockAppendTranscript).toHaveBeenCalledWith({
+      agentId: undefined,
+      sessionKey: "session-capped",
+      text: `${"x".repeat(MAX_NESTED_TRANSCRIPT_TEXT_CHARS - "\n\n[truncated]".length)}\n\n[truncated]`,
+      mediaUrls: mediaUrls.slice(0, MAX_NESTED_TRANSCRIPT_MEDIA_URLS),
+    });
+  });
+
+  it("does not abort nested run when transcript append rejects", async () => {
+    mockAppendTranscript.mockClear();
+    mockAppendTranscript.mockRejectedValue(new Error("sensitive transcript path leaked"));
+    const runtime = makeRuntime();
+
+    await expect(
+      deliverAgentCommandResult({
+        cfg: makeCfg(),
+        deps: makeDeps(),
+        runtime,
+        opts: {
+          message: "test",
+          deliver: false,
+          lane: AGENT_LANE_NESTED,
+          sessionKey: "child-session-abc",
+        },
+        outboundSession: undefined,
+        sessionEntry: undefined,
+        result: { payloads: [{ text: "Hello from agent", mediaUrls: [] }], meta: {} as never },
+        payloads: [{ text: "Hello from agent", mediaUrls: [] }],
+      }),
+    ).resolves.toEqual({
+      payloads: [
+        { text: "Hello from agent", mediaUrl: null, mediaUrls: undefined, channelData: undefined },
+      ],
+      meta: {},
+    });
+
+    expect(runtime.error).toHaveBeenCalledWith(
+      expect.stringContaining("transcript mirror skipped (unexpected transcript error)"),
+    );
+    expect(runtime.error).not.toHaveBeenCalledWith(
+      expect.stringContaining("sensitive transcript path leaked"),
+    );
+  });
+
+  it("mirrors nested transcript before json-mode early return", async () => {
+    mockAppendTranscript.mockClear();
+    mockAppendTranscript.mockResolvedValue({ ok: true, sessionFile: "/tmp/test.jsonl" });
+    const runtime = makeRuntime();
+
+    await deliverAgentCommandResult({
+      cfg: makeCfg(),
+      deps: makeDeps(),
+      runtime,
+      opts: {
+        message: "test",
+        deliver: false,
+        json: true,
+        lane: AGENT_LANE_NESTED,
+        sessionKey: "json-session",
+      },
+      outboundSession: undefined,
+      sessionEntry: undefined,
+      result: { payloads: [{ text: "json reply", mediaUrls: [] }], meta: {} as never },
+      payloads: [{ text: "json reply", mediaUrls: [] }],
+    });
+
+    expect(mockAppendTranscript).toHaveBeenCalledOnce();
+    expect(mockAppendTranscript).toHaveBeenCalledWith({
+      agentId: undefined,
+      sessionKey: "json-session",
+      text: "json reply",
+      mediaUrls: undefined,
+    });
+    expect(runtime.log).toHaveBeenCalledTimes(1);
+  });
+
+  it("passes agentId to transcript append for non-default agent stores", async () => {
+    mockAppendTranscript.mockClear();
+    mockAppendTranscript.mockResolvedValue({ ok: true, sessionFile: "/tmp/test.jsonl" });
+    const runtime = makeRuntime();
+
+    await deliverAgentCommandResult({
+      cfg: makeCfg(),
+      deps: makeDeps(),
+      runtime,
+      opts: {
+        message: "test",
+        agentId: "research",
+        deliver: false,
+        lane: AGENT_LANE_NESTED,
+        sessionKey: "agent-session",
+      },
+      outboundSession: undefined,
+      sessionEntry: undefined,
+      result: { payloads: [{ text: "agent reply", mediaUrls: [] }], meta: {} as never },
+      payloads: [{ text: "agent reply", mediaUrls: [] }],
+    });
+
+    expect(mockAppendTranscript).toHaveBeenCalledWith({
+      agentId: "research",
+      sessionKey: "agent-session",
+      text: "agent reply",
+      mediaUrls: undefined,
+    });
+  });
+
+  it("logs sanitized append failures returned by transcript helper", async () => {
+    mockAppendTranscript.mockClear();
+    mockAppendTranscript.mockResolvedValue({
+      ok: false,
+      reason: "unknown sessionKey: super-secret-session",
+    });
+    const runtime = makeRuntime();
+
+    await expect(
+      deliverAgentCommandResult({
+        cfg: makeCfg(),
+        deps: makeDeps(),
+        runtime,
+        opts: {
+          message: "test",
+          deliver: false,
+          lane: AGENT_LANE_NESTED,
+          sessionKey: "child-session-abc",
+        },
+        outboundSession: undefined,
+        sessionEntry: undefined,
+        result: { payloads: [{ text: "Hello from agent", mediaUrls: [] }], meta: {} as never },
+        payloads: [{ text: "Hello from agent", mediaUrls: [] }],
+      }),
+    ).resolves.toEqual({
+      payloads: [
+        { text: "Hello from agent", mediaUrl: null, mediaUrls: undefined, channelData: undefined },
+      ],
+      meta: {},
+    });
+
+    expect(runtime.error).toHaveBeenCalledWith(
+      expect.stringContaining("transcript mirror skipped (transcript unavailable)"),
+    );
+    expect(runtime.error).not.toHaveBeenCalledWith(expect.stringContaining("super-secret-session"));
   });
 });

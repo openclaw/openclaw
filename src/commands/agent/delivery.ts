@@ -27,6 +27,8 @@ type RunResult = Awaited<
 >;
 
 const NESTED_LOG_PREFIX = "[agent:nested]";
+const MAX_NESTED_TRANSCRIPT_TEXT_CHARS = 8_000;
+const MAX_NESTED_TRANSCRIPT_MEDIA_URLS = 16;
 
 function formatNestedLogPrefix(opts: AgentCommandOpts, sessionKey?: string): string {
   const parts = [NESTED_LOG_PREFIX];
@@ -62,6 +64,77 @@ function logNestedOutput(
       continue;
     }
     runtime.log(`${prefix} ${line}`);
+  }
+}
+
+function truncateNestedTranscriptText(text: string): string | undefined {
+  const trimmed = text.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+  if (trimmed.length <= MAX_NESTED_TRANSCRIPT_TEXT_CHARS) {
+    return trimmed;
+  }
+  const suffix = "\n\n[truncated]";
+  return `${trimmed.slice(0, MAX_NESTED_TRANSCRIPT_TEXT_CHARS - suffix.length)}${suffix}`;
+}
+
+function classifyNestedTranscriptMirrorFailure(reason?: string): string {
+  switch (reason) {
+    case "missing sessionKey":
+      return "missing session";
+    case "empty text":
+      return "empty mirror";
+    default:
+      return "transcript unavailable";
+  }
+}
+
+async function mirrorNestedTranscriptToChildSession(params: {
+  runtime: RuntimeEnv;
+  opts: AgentCommandOpts;
+  sessionKey?: string;
+  payloads: NormalizedOutboundPayload[];
+}) {
+  const { runtime, opts, payloads, sessionKey } = params;
+  if (!sessionKey || payloads.length === 0) {
+    return;
+  }
+
+  const combinedText = payloads
+    .map((payload) => payload.text)
+    .filter(Boolean)
+    .join("\n\n");
+  const text = truncateNestedTranscriptText(combinedText);
+  const mediaUrls = payloads
+    .flatMap((payload) => payload.mediaUrls ?? [])
+    .filter((url): url is string => Boolean(url))
+    .slice(0, MAX_NESTED_TRANSCRIPT_MEDIA_URLS);
+
+  if (!text && mediaUrls.length === 0) {
+    return;
+  }
+
+  try {
+    const mirror = await appendAssistantMessageToSessionTranscript({
+      agentId: opts.agentId,
+      sessionKey,
+      text,
+      mediaUrls: mediaUrls.length > 0 ? mediaUrls : undefined,
+    });
+    if (!mirror.ok) {
+      const message = `${formatNestedLogPrefix(opts, sessionKey)} transcript mirror skipped (${classifyNestedTranscriptMirrorFailure(mirror.reason)})`;
+      runtime.error?.(message);
+      if (!runtime.error) {
+        runtime.log(message);
+      }
+    }
+  } catch {
+    const message = `${formatNestedLogPrefix(opts, sessionKey)} transcript mirror skipped (unexpected transcript error)`;
+    runtime.error?.(message);
+    if (!runtime.error) {
+      runtime.log(message);
+    }
   }
 }
 
@@ -177,6 +250,15 @@ export async function deliverAgentCommandResult(params: {
   }
 
   const normalizedPayloads = normalizeOutboundPayloadsForJson(payloads ?? []);
+  const deliveryPayloads = payloads?.length ? normalizeOutboundPayloads(payloads) : [];
+  if (!deliver && opts.lane === AGENT_LANE_NESTED) {
+    await mirrorNestedTranscriptToChildSession({
+      runtime,
+      opts,
+      sessionKey: effectiveSessionKey,
+      payloads: deliveryPayloads,
+    });
+  }
   if (opts.json) {
     runtime.log(
       JSON.stringify(
@@ -198,7 +280,6 @@ export async function deliverAgentCommandResult(params: {
     return { payloads: [], meta: result.meta };
   }
 
-  const deliveryPayloads = normalizeOutboundPayloads(payloads);
   const logPayload = (payload: NormalizedOutboundPayload) => {
     if (opts.json) {
       return;
@@ -216,26 +297,6 @@ export async function deliverAgentCommandResult(params: {
   if (!deliver) {
     for (const payload of deliveryPayloads) {
       logPayload(payload);
-    }
-  }
-  // Mirror nested agent output to child session transcript so sessions_history reflects the result.
-  if (
-    !deliver &&
-    opts.lane === AGENT_LANE_NESTED &&
-    effectiveSessionKey &&
-    deliveryPayloads.length > 0
-  ) {
-    const combinedText = deliveryPayloads
-      .map((p) => p.text)
-      .filter(Boolean)
-      .join("\n\n");
-    const mediaUrls = deliveryPayloads.flatMap((p) => p.mediaUrls ?? []).filter(Boolean);
-    if (combinedText.trim() || mediaUrls.length > 0) {
-      await appendAssistantMessageToSessionTranscript({
-        sessionKey: effectiveSessionKey,
-        text: combinedText || undefined,
-        mediaUrls: mediaUrls.length > 0 ? mediaUrls : undefined,
-      });
     }
   }
   if (deliver && deliveryChannel && !isInternalMessageChannel(deliveryChannel)) {
