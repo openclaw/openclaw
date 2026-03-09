@@ -59,7 +59,16 @@ function setControlUiBasePath(value: string | undefined) {
 
 function expectedGatewayUrl(basePath: string): string {
   const proto = location.protocol === "https:" ? "wss" : "ws";
-  return `${proto}://${location.host}${basePath}`;
+  const hostname =
+    location.hostname ||
+    (location.host.startsWith("[")
+      ? location.host.slice(1, location.host.indexOf("]"))
+      : location.host.split(":")[0]);
+  const host =
+    hostname === "localhost"
+      ? location.host.replace(/^localhost(?=[:]|$)/, "127.0.0.1")
+      : location.host;
+  return `${proto}://${host}${basePath}`;
 }
 
 describe("loadSettings default gateway URL derivation", () => {
@@ -100,6 +109,17 @@ describe("loadSettings default gateway URL derivation", () => {
 
     const { loadSettings } = await import("./storage.ts");
     expect(loadSettings().gatewayUrl).toBe(expectedGatewayUrl("/apps/openclaw"));
+  });
+
+  it("prefers 127.0.0.1 when the page is served from localhost", async () => {
+    setTestLocation({
+      protocol: "http:",
+      host: "localhost:18789",
+      pathname: "/",
+    });
+
+    const { loadSettings } = await import("./storage.ts");
+    expect(loadSettings().gatewayUrl).toBe("ws://127.0.0.1:18789");
   });
 
   it("ignores and scrubs legacy persisted tokens", async () => {
@@ -204,6 +224,38 @@ describe("loadSettings default gateway URL derivation", () => {
     expect(loadSettings()).toMatchObject({
       gatewayUrl: "wss://other-gateway.example:8443/openclaw",
       token: "",
+    });
+  });
+
+  it("migrates stored localhost defaults to 127.0.0.1 and keeps the session token", async () => {
+    setTestLocation({
+      protocol: "http:",
+      host: "localhost:18789",
+      pathname: "/ui/overview",
+    });
+    sessionStorage.setItem("openclaw.control.token.v1:ws://localhost:18789/ui", "loopback-token");
+    localStorage.setItem(
+      "openclaw.control.settings.v1",
+      JSON.stringify({
+        gatewayUrl: "ws://localhost:18789/ui",
+        sessionKey: "main",
+        lastActiveSessionKey: "main",
+        theme: "system",
+        chatFocusMode: false,
+        chatShowThinking: true,
+        splitRatio: 0.6,
+        navCollapsed: false,
+        navGroupsCollapsed: {},
+      }),
+    );
+
+    const { loadSettings } = await import("./storage.ts");
+    expect(loadSettings()).toMatchObject({
+      gatewayUrl: "ws://127.0.0.1:18789/ui",
+      token: "loopback-token",
+    });
+    expect(JSON.parse(localStorage.getItem("openclaw.control.settings.v1") ?? "{}")).toMatchObject({
+      gatewayUrl: "ws://127.0.0.1:18789/ui",
     });
   });
 
