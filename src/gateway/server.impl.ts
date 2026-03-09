@@ -1211,6 +1211,10 @@ export async function startGatewayServer(
             cronState = nextState.cronState;
             cron = cronState.cron;
             cronStorePath = cronState.storePath;
+            // Keep the shared fallback context live for non-request-scoped
+            // plugin subagent dispatch after hot reload swaps cron state.
+            gatewayRequestContext.cron = cron;
+            gatewayRequestContext.cronStorePath = cronStorePath;
             browserControl = nextState.browserControl;
             channelHealthMonitor = nextState.channelHealthMonitor;
           },

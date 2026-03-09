@@ -1,6 +1,9 @@
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import type { PluginRegistry } from "../plugins/registry.js";
-import type { PluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
+import {
+  withPluginRuntimeGatewayRequestScope,
+  type PluginRuntimeGatewayRequestScope,
+} from "../plugins/runtime/gateway-request-scope.js";
 import type { PluginRuntime } from "../plugins/runtime/types.js";
 import type { PluginDiagnostic } from "../plugins/types.js";
 import type { GatewayRequestContext, GatewayRequestOptions } from "./server-methods/types.js";
@@ -82,6 +85,10 @@ function getLastDispatchedClientScopes(): string[] {
   const call = handleGatewayRequest.mock.calls.at(-1)?.[0];
   const scopes = call?.client?.connect?.scopes;
   return Array.isArray(scopes) ? scopes : [];
+}
+
+function getLastDispatchCall(): HandleGatewayRequestOptions | undefined {
+  return handleGatewayRequest.mock.calls.at(-1)?.[0];
 }
 
 async function importServerPluginsModule(): Promise<ServerPluginsModule> {
@@ -557,20 +564,58 @@ describe("loadGatewayPlugins", () => {
     expect(getLastDispatchedContext()).toBe(secondContext);
   });
 
-  test("reflects fallback context object mutation at dispatch time", async () => {
+  test("reflects fallback context field replacement at dispatch time", async () => {
     const serverPlugins = await importServerPluginsModule();
     const runtime = await createSubagentRuntime(serverPlugins);
-    const context = { marker: "before-mutation" } as GatewayRequestContext & {
-      marker: string;
+    const beforeReloadCron = { id: "before-reload" } as unknown as GatewayRequestContext["cron"] & {
+      id: string;
+    };
+    const afterReloadCron = { id: "after-reload" } as unknown as GatewayRequestContext["cron"] & {
+      id: string;
+    };
+    const context = {
+      cron: beforeReloadCron,
+      cronStorePath: "/tmp/before-reload.json",
+    } as GatewayRequestContext & {
+      cron: { id: string };
+      cronStorePath: string;
     };
 
     serverPlugins.setFallbackGatewayContext(context);
-    context.marker = "after-mutation";
+    context.cron = afterReloadCron;
+    context.cronStorePath = "/tmp/after-reload.json";
 
     await runtime.run({ sessionKey: "s-3", message: "mutated context" });
     const dispatched = getLastDispatchedContext() as
-      | (GatewayRequestContext & { marker: string })
+      | (GatewayRequestContext & {
+          cron: { id: string };
+          cronStorePath: string;
+        })
       | undefined;
-    expect(dispatched?.marker).toBe("after-mutation");
+    expect(dispatched?.cron).toBe(afterReloadCron);
+    expect(dispatched?.cronStorePath).toBe("/tmp/after-reload.json");
+  });
+
+  test("prefers request-scoped context over the fallback context", async () => {
+    const serverPlugins = await importServerPluginsModule();
+    const runtime = await createSubagentRuntime(serverPlugins);
+    const fallbackContext = createTestContext("fallback");
+    const requestScopedContext = createTestContext("request-scope");
+    const requestScopedIsWebchatConnect = vi.fn(() => true);
+
+    serverPlugins.setFallbackGatewayContext(fallbackContext);
+
+    await withPluginRuntimeGatewayRequestScope(
+      {
+        context: requestScopedContext,
+        isWebchatConnect: requestScopedIsWebchatConnect,
+      },
+      async () => {
+        await runtime.run({ sessionKey: "s-4", message: "request scoped context" });
+      },
+    );
+
+    expect(getLastDispatchedContext()).toBe(requestScopedContext);
+    expect(getLastDispatchCall()?.isWebchatConnect).toBe(requestScopedIsWebchatConnect);
   });
 });
