@@ -125,7 +125,7 @@ async function ensureSecureDirectory(targetPath: string): Promise<void> {
       await fs.chmod(targetPath, tightenedMode);
     }
   } catch {
-    // Best effort: keep install working even if chmod/stat is unavailable.
+    return;
   }
 }
 

@@ -286,8 +286,9 @@ describe("launchd install", () => {
 
   it("tightens writable bits on launch agent dirs and plist", async () => {
     const env = createDefaultLaunchdEnv();
-    state.dirs.add(env.HOME!);
-    state.dirModes.set(env.HOME!, 0o777);
+    const homeDir = env.HOME ?? "/Users/test";
+    state.dirs.add(homeDir);
+    state.dirModes.set(homeDir, 0o777);
     state.dirs.add("/Users/test/Library");
     state.dirModes.set("/Users/test/Library", 0o777);
 
@@ -298,7 +299,7 @@ describe("launchd install", () => {
     });
 
     const plistPath = resolveLaunchAgentPlistPath(env);
-    expect(state.dirModes.get(env.HOME!)).toBe(0o755);
+    expect(state.dirModes.get(homeDir)).toBe(0o755);
     expect(state.dirModes.get("/Users/test/Library")).toBe(0o755);
     expect(state.dirModes.get("/Users/test/Library/LaunchAgents")).toBe(0o755);
     expect(state.fileModes.get(plistPath)).toBe(0o644);
