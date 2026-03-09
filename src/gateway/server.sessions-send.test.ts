@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterAll, beforeAll, describe, expect, it, type Mock } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, type Mock } from "vitest";
 import { resolveSessionTranscriptPath } from "../config/sessions.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
 import { captureEnv } from "../test-utils/env.js";
@@ -101,6 +101,12 @@ beforeAll(async () => {
 afterAll(async () => {
   await server.close();
   envSnapshot.restore();
+});
+
+beforeEach(() => {
+  testState.gatewayAuth = { mode: "token", token: gatewayToken };
+  process.env.OPENCLAW_GATEWAY_TOKEN = gatewayToken;
+  process.env.OPENCLAW_GATEWAY_PORT = String(gatewayPort);
 });
 
 describe("sessions_send gateway loopback", () => {
