@@ -140,7 +140,12 @@ async function createSignaledLoopHarness(exitCallOrder?: string[]) {
   return { close, start, runtime, exited, loopPromise };
 }
 
-describe("runGatewayLoop", () => {
+const isBun = typeof process.versions.bun === "string";
+
+// SIGUSR1 signal emission via process.emit() does not reliably propagate
+// through Bun's event loop, causing these tests to hang with 120s timeouts.
+// Skip the entire suite under Bun until Bun stabilises process signal compat.
+describe.skipIf(isBun)("runGatewayLoop", () => {
   it("exits 0 on SIGTERM after graceful close", async () => {
     vi.clearAllMocks();
 
