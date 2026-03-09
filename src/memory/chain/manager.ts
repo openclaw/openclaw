@@ -55,15 +55,27 @@ export class ChainMemoryManager implements MemorySearchManager {
     });
 
     // 设置队列处理器
+    // TODO: Async write queue needs redesign
+    // The current MemorySearchManager interface doesn't have add/update/delete methods
+    // We need to either:
+    // 1. Extend the interface with write methods
+    // 2. Use sync() with appropriate parameters
+    // 3. Implement a different approach for dual-write
     this.asyncQueue.setProcessor(async (task) => {
       const provider = this.providers.get(task.providerName);
       if (!provider) {
         throw new Error(`Provider ${task.providerName} not found`);
       }
 
-      // 执行写入操作（这里需要扩展 MemorySearchManager 接口）
-      // 暂时使用搜索操作作为占位符
-      await provider.search(task.data);
+      // TODO: Implement proper write operations
+      // Currently disabled to prevent runtime errors
+      log.warn(
+        `Async write operation '${task.operation}' for provider '${task.providerName}' is not yet implemented. ` +
+          `Task ID: ${task.id}`,
+      );
+
+      // Placeholder: no actual operation performed
+      // This prevents the queue from crashing while we redesign the async write feature
     });
 
     // 初始化健康监控

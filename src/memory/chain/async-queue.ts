@@ -230,13 +230,28 @@ export class AsyncWriteQueue {
 
   /**
    * 等待所有任务完成
+   * @param timeoutMs - 超时时间（毫秒），默认 30 秒。设置为 0 表示无限等待
    */
-  async drain(): Promise<void> {
-    return new Promise((resolve) => {
+  async drain(timeoutMs: number = 30000): Promise<void> {
+    return new Promise((resolve, reject) => {
+      const startTime = Date.now();
       const checkInterval = setInterval(() => {
+        // 检查队列是否清空
         if (this.queue.length === 0 && this.processing.size === 0) {
           clearInterval(checkInterval);
           resolve();
+          return;
+        }
+
+        // 检查是否超时
+        if (timeoutMs > 0 && Date.now() - startTime > timeoutMs) {
+          clearInterval(checkInterval);
+          reject(
+            new Error(
+              `Drain timeout exceeded after ${timeoutMs}ms. ` +
+                `Remaining: ${this.queue.length} queued, ${this.processing.size} processing`,
+            ),
+          );
         }
       }, 100);
     });
