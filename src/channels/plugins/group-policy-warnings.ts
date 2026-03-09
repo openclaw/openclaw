@@ -155,7 +155,7 @@ export function buildOpenGroupPolicyConfigureRouteAllowlistWarning(params: {
 
 export function collectOpenGroupPolicyRestrictSendersWarnings(
   params: Parameters<typeof buildOpenGroupPolicyRestrictSendersWarning>[0] & {
-    groupPolicy: "open" | "allowlist" | "disabled";
+    groupPolicy: GroupPolicy;
   },
 ): string[] {
   if (params.groupPolicy !== "open") {
