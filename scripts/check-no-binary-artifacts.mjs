@@ -18,12 +18,11 @@ if (!base) {
 
 const diff = execFileSync(
   "git",
-  ["diff", "--name-only", "--diff-filter=ACMRT", `${base}...${head}`],
+  ["diff", "--name-only", "-z", "--diff-filter=ACMRT", `${base}...${head}`],
   { encoding: "utf8" },
 )
-  .split("\n")
-  .map((s) => s.trim())
-  .filter(Boolean);
+  .split("\0")
+  .filter((s) => s.length > 0);
 
 const blocked = [];
 const binaryExt = /\.(tgz|zip|7z|rar|dmg|exe|msi|bin)$/i;

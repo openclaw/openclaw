@@ -81,8 +81,16 @@ jobs:
         run: |
           set -euo pipefail
           BASE_SHA="${{ github.event.pull_request.base.sha }}"
-          git show "$BASE_SHA":scripts/check-no-binary-artifacts.mjs > /tmp/check-no-binary-artifacts.mjs
-          node /tmp/check-no-binary-artifacts.mjs --base "$BASE_SHA" --head HEAD
+          CHECKER_PATH="scripts/check-no-binary-artifacts.mjs"
+          OUT="${RUNNER_TEMP}/check-no-binary-artifacts.mjs"
+
+          if ! git cat-file -e "$BASE_SHA:$CHECKER_PATH" 2>/dev/null; then
+            echo "::error::Base commit ($BASE_SHA) does not contain $CHECKER_PATH. Merge the checker to the base branch first."
+            exit 1
+          fi
+
+          git show "$BASE_SHA:$CHECKER_PATH" > "$OUT"
+          node "$OUT" --base "$BASE_SHA" --head HEAD
 
   # Build dist once for Node-relevant changes and share it with downstream jobs.
   build-artifacts:
