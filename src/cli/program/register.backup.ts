@@ -26,6 +26,13 @@ export function registerBackupCommand(program: Command) {
     .option("--verify", "Verify the archive after writing it", false)
     .option("--only-config", "Back up only the active JSON config file", false)
     .option("--no-include-workspace", "Exclude workspace directories from the backup")
+    .option(
+      "--exclude <pattern>",
+      "Exclude files matching a .gitignore-style pattern (repeatable)",
+      (val: string, prev: string[]) => [...prev, val],
+      [] as string[],
+    )
+    .option("--exclude-file <path>", "Read exclude patterns from a file (one pattern per line)")
     .addHelpText(
       "after",
       () =>
@@ -48,6 +55,14 @@ export function registerBackupCommand(program: Command) {
             "Back up state/config without agent workspace files.",
           ],
           ["openclaw backup create --only-config", "Back up only the active JSON config file."],
+          [
+            'openclaw backup create --exclude "node_modules" --exclude "*.log"',
+            "Exclude node_modules directories and log files from the backup.",
+          ],
+          [
+            "openclaw backup create --exclude-file .openclawignore",
+            "Read exclude patterns from a file.",
+          ],
         ])}`,
     )
     .action(async (opts) => {
@@ -59,6 +74,8 @@ export function registerBackupCommand(program: Command) {
           verify: Boolean(opts.verify),
           onlyConfig: Boolean(opts.onlyConfig),
           includeWorkspace: opts.includeWorkspace as boolean,
+          exclude: opts.exclude as string[],
+          excludeFile: opts.excludeFile as string | undefined,
         });
       });
     });
