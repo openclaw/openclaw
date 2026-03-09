@@ -1,7 +1,10 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "openclaw/plugin-sdk";
 
-import { listBoundAccountIds, resolveDefaultAgentBoundAccountId } from "../../../src/routing/bindings.js";
+// Binding helpers are not available in the plugin runtime image (src/ is excluded).
+// We don't use agent bindings — inline no-ops that match the function signatures.
+const listBoundAccountIds = (_cfg: unknown, _channelId: string): string[] => [];
+const resolveDefaultAgentBoundAccountId = (_cfg: unknown, _channelId: string): string | null => null;
 
 import type { CommonlyConfig } from "./config-schema.js";
 
