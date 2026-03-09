@@ -1071,9 +1071,13 @@ describe("Cron issue regressions", () => {
 
     expect(resetCommandLanes).toHaveBeenCalledTimes(1);
     const job = state.store?.jobs.find((entry) => entry.id === cronJob.id);
-    expect(job?.state.lastError).toContain("Isolated runner may be degraded");
+    expect(job?.state.lastError).toBe(
+      "The AI service is temporarily overloaded. Please try again in a moment.",
+    );
     const finished = events.find((evt) => evt.action === "finished" && evt.jobId === cronJob.id);
-    expect(finished?.error).toContain("Isolated runner may be degraded");
+    expect(finished?.error).toBe(
+      "The AI service is temporarily overloaded. Please try again in a moment.",
+    );
   });
 
   it("does not time out agentTurn jobs at the default 10-minute safety window", async () => {

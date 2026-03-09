@@ -235,6 +235,28 @@ export function clearCommandLane(lane: string = CommandLane.Main) {
 }
 
 /**
+ * Reset one lane runtime state to idle without mutating other lanes.
+ *
+ * Unlike `resetAllLanes()`, this does not touch global gateway draining state
+ * and only clears execution bookkeeping for the requested lane.
+ */
+export function resetLane(lane: string): void {
+  const cleaned = lane.trim() || CommandLane.Main;
+  const state = lanes.get(cleaned);
+  if (!state) {
+    return;
+  }
+
+  state.generation += 1;
+  state.activeTaskIds.clear();
+  state.draining = false;
+
+  if (state.queue.length > 0) {
+    drainLane(cleaned);
+  }
+}
+
+/**
  * Reset all lane runtime state to idle. Used after SIGUSR1 in-process
  * restarts where interrupted tasks' finally blocks may not run, leaving
  * stale active task IDs that permanently block new work from draining.
