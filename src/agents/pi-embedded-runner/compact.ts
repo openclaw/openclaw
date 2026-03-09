@@ -795,18 +795,36 @@ export async function compactEmbeddedPiSessionDirect(
         const messageCountCompactionInput = messageCountOriginal;
 
         // Attempt compaction; if it times out, truncate oversized tool results and retry once.
+        // NOTE: session.compact() has no AbortSignal seam, so a timed-out first compaction
+        // keeps running in the background and may call agent.replaceMessages() with stale
+        // messages after the retry below overwrites session state. We suppress its rejection
+        // to prevent an unhandled-rejection crash and log the race risk, but full serialization
+        // requires upstream cancellation support in session.compact(). (TODO: remove this note
+        // when @mariozechner/pi-coding-agent exposes an AbortSignal on compact().)
         let result: Awaited<ReturnType<typeof session.compact>>;
         let retried = false;
+        // Track the raw compact promise so we can suppress its dangling rejection on timeout.
+        let backgroundCompact: Promise<unknown> | undefined;
         try {
-          result = await compactWithSafetyTimeout(() => session.compact(params.customInstructions));
+          result = await compactWithSafetyTimeout(() => {
+            backgroundCompact = session.compact(params.customInstructions);
+            return backgroundCompact as ReturnType<typeof session.compact>;
+          });
+          backgroundCompact = undefined; // settled cleanly — no longer background
         } catch (firstErr) {
           const isTimeout =
             firstErr instanceof Error &&
             (firstErr.message.toLowerCase().includes("timed out") ||
               firstErr.message.toLowerCase().includes("timeout"));
           if (!isTimeout) {
+            backgroundCompact = undefined;
             throw firstErr;
           }
+          // Suppress the dangling first-compact promise so it does not become an unhandled
+          // rejection. Its eventual agent.replaceMessages() call may still race with the
+          // retry below; that is an inherent limitation of the current session API.
+          backgroundCompact?.catch(() => {});
+          backgroundCompact = undefined;
           // Timeout: truncate oversized tool results (large DOM responses) to reduce context,
           // then retry with a shorter safety timeout.
           log.warn(
