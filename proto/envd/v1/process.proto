@@ -1,0 +1,86 @@
+syntax = "proto3";
+
+package envd.v1;
+
+option go_package = "github.com/openclaw/vm-runner/gen/go/envd/v1;envdv1";
+
+// ProcessService manages command execution inside the MicroVM.
+service ProcessService {
+  // Start executes a command and streams stdout/stderr back.
+  rpc Start(StartRequest) returns (stream StartResponse);
+
+  // SendInput writes data to a running process's stdin.
+  rpc SendInput(SendInputRequest) returns (SendInputResponse);
+
+  // SendSignal sends a signal to a running process group.
+  rpc SendSignal(SendSignalRequest) returns (SendSignalResponse);
+
+  // List returns all currently tracked processes.
+  rpc List(ListRequest) returns (ListResponse);
+}
+
+message StartRequest {
+  // Shell command to execute via sh -lc.
+  string command = 1;
+
+  // Working directory (default: /workspace).
+  string workdir = 2;
+
+  // Environment variables to set.
+  map<string, string> env = 3;
+
+  // Execution timeout in seconds (0 = no timeout).
+  uint32 timeout_sec = 4;
+}
+
+message StartResponse {
+  // Tagged output data.
+  oneof output {
+    bytes stdout = 1;
+    bytes stderr = 2;
+  }
+
+  // True when the process has exited and all output has been sent.
+  bool eof = 3;
+
+  // Process exit code, set only when eof=true.
+  int32 exit_code = 4;
+
+  // Server-assigned process identifier, set in the first response message.
+  string process_id = 5;
+
+  // True if the process was killed due to timeout, set only when eof=true.
+  bool timed_out = 6;
+}
+
+message SendInputRequest {
+  // Target process identifier.
+  string process_id = 1;
+
+  // Data to write to the process stdin.
+  bytes data = 2;
+}
+
+message SendInputResponse {}
+
+message SendSignalRequest {
+  // Target process identifier.
+  string process_id = 1;
+
+  // Signal number to send (e.g. 15 for SIGTERM, 9 for SIGKILL).
+  int32 signal = 2;
+}
+
+message SendSignalResponse {}
+
+message ListRequest {}
+
+message ListResponse {
+  repeated ProcessInfo processes = 1;
+}
+
+message ProcessInfo {
+  string process_id = 1;
+  string command = 2;
+  bool running = 3;
+}

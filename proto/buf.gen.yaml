@@ -1,0 +1,27 @@
+version: v2
+managed:
+  enabled: true
+plugins:
+  # TypeScript (ts-proto for nice-grpc)
+  - local:
+      - node_modules/.bin/protoc-gen-ts_proto
+    out: src/agents/sandbox/proto
+    opt:
+      - outputServices=generic-definitions
+      - outputPartialMethods=true
+      - esModuleInterop=true
+      - useOptionals=messages
+      - useExactTypes=false
+      - snakeToCamel=true
+      - env=node
+  # Go protobuf messages
+  - remote: buf.build/protocolbuffers/go
+    out: openclaw-vm-runner/gen/go
+    opt:
+      - paths=source_relative
+  # Go gRPC services
+  - remote: buf.build/grpc/go
+    out: openclaw-vm-runner/gen/go
+    opt:
+      - paths=source_relative
+      - require_unimplemented_servers=false

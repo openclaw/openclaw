@@ -1,0 +1,76 @@
+syntax = "proto3";
+
+package openclaw.sandbox.v1;
+
+import "google/protobuf/timestamp.proto";
+
+option go_package = "github.com/openclaw/vm-runner/gen/go/openclaw/sandbox/v1;sandboxv1";
+
+// SandboxService manages Firecracker MicroVM sandbox lifecycle.
+service SandboxService {
+  // Create a new Firecracker MicroVM sandbox.
+  rpc CreateSandbox(CreateSandboxRequest) returns (CreateSandboxResponse);
+
+  // Destroy a running sandbox.
+  rpc DestroySandbox(DestroySandboxRequest) returns (DestroySandboxResponse);
+
+  // Get the status of a sandbox.
+  rpc SandboxStatus(SandboxStatusRequest) returns (SandboxStatusResponse);
+
+  // List all sandboxes managed by this runner.
+  rpc ListSandboxes(ListSandboxesRequest) returns (ListSandboxesResponse);
+}
+
+// SandboxState represents the lifecycle state of a sandbox.
+enum SandboxState {
+  SANDBOX_STATE_UNSPECIFIED = 0;
+  SANDBOX_STATE_CREATING = 1;
+  SANDBOX_STATE_RUNNING = 2;
+  SANDBOX_STATE_STOPPED = 3;
+  SANDBOX_STATE_ERROR = 4;
+}
+
+message CreateSandboxRequest {
+  string sandbox_id = 1;
+  uint32 vcpu_count = 2;
+  uint32 mem_size_mib = 3;
+  string kernel_image_path = 4;
+  string rootfs_path = 5;
+}
+
+message CreateSandboxResponse {
+  string sandbox_id = 1;
+  google.protobuf.Timestamp created_at = 2;
+  SandboxState state = 3;
+  // boot_method indicates how the sandbox was created: "cold" or "snapshot".
+  string boot_method = 4;
+}
+
+message DestroySandboxRequest {
+  string sandbox_id = 1;
+  bool force = 2;
+}
+
+message DestroySandboxResponse {}
+
+message SandboxStatusRequest {
+  string sandbox_id = 1;
+}
+
+message SandboxStatusResponse {
+  string sandbox_id = 1;
+  SandboxState state = 2;
+  google.protobuf.Timestamp created_at = 3;
+}
+
+message ListSandboxesRequest {}
+
+message ListSandboxesResponse {
+  repeated SandboxInfo sandboxes = 1;
+}
+
+message SandboxInfo {
+  string sandbox_id = 1;
+  SandboxState state = 2;
+  google.protobuf.Timestamp created_at = 3;
+}

@@ -1,0 +1,204 @@
+syntax = "proto3";
+
+package openclaw.sandbox.v1;
+
+option go_package = "github.com/openclaw/vm-runner/gen/go/openclaw/sandbox/v1;sandboxv1";
+
+// BrowserService provides browser automation inside sandboxes.
+// Each request includes a sandbox_id for routing to the correct VM.
+service BrowserService {
+  // Launch starts a new browser session in a sandbox.
+  rpc Launch(LaunchRequest) returns (LaunchResponse);
+
+  // Navigate loads a URL in the browser.
+  rpc Navigate(NavigateRequest) returns (NavigateResponse);
+
+  // Click clicks an element matching a CSS selector.
+  rpc Click(ClickRequest) returns (ClickResponse);
+
+  // Type types text into an element matching a CSS selector.
+  rpc Type(TypeRequest) returns (TypeResponse);
+
+  // Screenshot captures the current page as a streamed image.
+  rpc Screenshot(ScreenshotRequest) returns (stream ScreenshotResponse);
+
+  // EvaluateJS executes a JavaScript expression and returns the result.
+  rpc EvaluateJS(EvaluateJSRequest) returns (EvaluateJSResponse);
+
+  // ExtractContent extracts text and HTML from an element.
+  rpc ExtractContent(ExtractContentRequest) returns (ExtractContentResponse);
+
+  // WaitForSelector waits for an element to appear in the DOM.
+  rpc WaitForSelector(WaitForSelectorRequest) returns (WaitForSelectorResponse);
+
+  // GetPageInfo returns the current page title and URL.
+  rpc GetPageInfo(GetPageInfoRequest) returns (GetPageInfoResponse);
+
+  // Close terminates a browser session.
+  rpc Close(CloseRequest) returns (CloseResponse);
+
+  // GetVNCInfo returns VNC connection details for a sandbox's desktop environment.
+  rpc GetVNCInfo(GetVNCInfoRequest) returns (GetVNCInfoResponse);
+}
+
+message LaunchRequest {
+  string sandbox_id = 1;
+
+  // Whether to run in headless mode (default true).
+  bool headless = 2;
+
+  // Viewport width in pixels (default 1280).
+  uint32 viewport_width = 3;
+
+  // Viewport height in pixels (default 720).
+  uint32 viewport_height = 4;
+}
+
+message LaunchResponse {
+  // Unique identifier for the browser session.
+  string session_id = 1;
+
+  // VNC info populated when headless=false and desktop environment is available.
+  VNCInfo vnc_info = 2;
+
+  // WebSocket URL for noVNC access (populated by host-side proxy).
+  string vnc_websocket_url = 3;
+}
+
+message NavigateRequest {
+  string sandbox_id = 1;
+  string session_id = 2;
+  string url = 3;
+
+  // Navigation timeout in milliseconds (0 = default).
+  uint32 timeout_ms = 4;
+}
+
+message NavigateResponse {
+  string url = 1;
+  string title = 2;
+}
+
+message ClickRequest {
+  string sandbox_id = 1;
+  string session_id = 2;
+
+  // CSS selector for the element to click.
+  string selector = 3;
+}
+
+message ClickResponse {}
+
+message TypeRequest {
+  string sandbox_id = 1;
+  string session_id = 2;
+
+  // CSS selector for the element to type into.
+  string selector = 3;
+
+  // Text to type.
+  string text = 4;
+}
+
+message TypeResponse {}
+
+message ScreenshotRequest {
+  string sandbox_id = 1;
+  string session_id = 2;
+
+  // Capture the full scrollable page (default false, viewport only).
+  bool full_page = 3;
+
+  // JPEG quality 1-100. 0 means PNG format.
+  uint32 quality = 4;
+}
+
+message ScreenshotResponse {
+  // Image data chunk.
+  bytes data = 1;
+
+  // True when this is the final chunk.
+  bool eof = 2;
+}
+
+message EvaluateJSRequest {
+  string sandbox_id = 1;
+  string session_id = 2;
+
+  // JavaScript expression to evaluate.
+  string expression = 3;
+}
+
+message EvaluateJSResponse {
+  // JSON-serialized result of the expression.
+  string result = 1;
+}
+
+message ExtractContentRequest {
+  string sandbox_id = 1;
+  string session_id = 2;
+
+  // CSS selector for the element to extract content from.
+  string selector = 3;
+}
+
+message ExtractContentResponse {
+  // Text content of the element.
+  string text = 1;
+
+  // Inner HTML of the element.
+  string html = 2;
+}
+
+message WaitForSelectorRequest {
+  string sandbox_id = 1;
+  string session_id = 2;
+
+  // CSS selector to wait for.
+  string selector = 3;
+
+  // Timeout in milliseconds (0 = default).
+  uint32 timeout_ms = 4;
+}
+
+message WaitForSelectorResponse {
+  // Whether the selector was found before timeout.
+  bool found = 1;
+}
+
+message GetPageInfoRequest {
+  string sandbox_id = 1;
+  string session_id = 2;
+}
+
+message GetPageInfoResponse {
+  string title = 1;
+  string url = 2;
+}
+
+message CloseRequest {
+  string sandbox_id = 1;
+  string session_id = 2;
+}
+
+message CloseResponse {}
+
+// VNCInfo contains VNC connection details for desktop environments.
+message VNCInfo {
+  // VNC password for authentication.
+  string password = 1;
+
+  // X display number (e.g., 99 for :99).
+  uint32 display = 2;
+
+  // Whether the desktop environment is available.
+  bool available = 3;
+}
+
+message GetVNCInfoRequest {
+  string sandbox_id = 1;
+}
+
+message GetVNCInfoResponse {
+  VNCInfo vnc_info = 1;
+}
