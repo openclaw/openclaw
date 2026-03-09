@@ -28,9 +28,31 @@ export type ActiveWebListener = {
   close?: () => Promise<void>;
 };
 
-let _currentListener: ActiveWebListener | null = null;
+// Use Symbol keys to prevent build-time token rewrites and ensure isolation across bundled chunks
+const ACTIVE_WEB_LISTENERS_KEY = Symbol.for("openclaw.activeWebListeners");
+const ACTIVE_WEB_CURRENT_LISTENER_KEY = Symbol.for("openclaw.activeWebCurrentListener");
 
-const listeners = new Map<string, ActiveWebListener>();
+type ActiveWebListenerGlobalState = typeof globalThis & {
+  [ACTIVE_WEB_LISTENERS_KEY]?: Map<string, ActiveWebListener>;
+  [ACTIVE_WEB_CURRENT_LISTENER_KEY]?: ActiveWebListener | null;
+};
+
+function getSharedListenersMap(): Map<string, ActiveWebListener> {
+  const state = globalThis as ActiveWebListenerGlobalState;
+  const existing = state[ACTIVE_WEB_LISTENERS_KEY];
+  if (existing) {
+    return existing;
+  }
+  const created = new Map<string, ActiveWebListener>();
+  state[ACTIVE_WEB_LISTENERS_KEY] = created;
+  return created;
+}
+
+const listeners = getSharedListenersMap();
+let _currentListener: ActiveWebListener | null =
+  (globalThis as ActiveWebListenerGlobalState)[ACTIVE_WEB_CURRENT_LISTENER_KEY] ??
+  listeners.get(DEFAULT_ACCOUNT_ID) ??
+  null;
 
 export function resolveWebAccountId(accountId?: string | null): string {
   return (accountId ?? "").trim() || DEFAULT_ACCOUNT_ID;
@@ -75,6 +97,7 @@ export function setActiveWebListener(
   }
   if (id === DEFAULT_ACCOUNT_ID) {
     _currentListener = listener;
+    (globalThis as ActiveWebListenerGlobalState)[ACTIVE_WEB_CURRENT_LISTENER_KEY] = listener;
   }
 }
 
