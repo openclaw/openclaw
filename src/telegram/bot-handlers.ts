@@ -17,6 +17,7 @@ import { shouldDebounceTextInbound } from "../channels/inbound-debounce-policy.j
 import { resolveChannelConfigWrites } from "../channels/plugins/config-writes.js";
 import { loadConfig } from "../config/config.js";
 import { writeConfigFile } from "../config/io.js";
+import { resolveStateDir } from "../config/paths.js";
 import {
   loadSessionStore,
   resolveSessionStoreEntry,
@@ -30,9 +31,11 @@ import type {
   TelegramTopicConfig,
 } from "../config/types.js";
 import { danger, logVerbose, warn } from "../globals.js";
+import { writePendingInbound } from "../infra/pending-inbound-store.js";
 import { enqueueSystemEvent } from "../infra/system-events.js";
 import { MediaFetchError } from "../media/fetch.js";
 import { readChannelAllowFromStore } from "../pairing/pairing-store.js";
+import { isGatewayDraining } from "../process/command-queue.js";
 import { resolveAgentRoute } from "../routing/resolve-route.js";
 import { resolveThreadSessionKeys } from "../routing/session-key.js";
 import { applyModelOverrideToSessionEntry } from "../sessions/model-overrides.js";
@@ -1523,6 +1526,24 @@ export const registerTelegramHandlers = ({
     try {
       if (shouldSkipUpdate(event.ctxForDedupe)) {
         return;
+      }
+      if (isGatewayDraining()) {
+        const stateDir = resolveStateDir(process.env);
+        await writePendingInbound(stateDir, {
+          channel: "telegram",
+          id: String(event.msg.message_id ?? Date.now()),
+          payload: {
+            chatId: event.chatId,
+            messageId: event.msg.message_id,
+            text: event.msg.text ?? event.msg.caption ?? "",
+            senderId: event.senderId,
+            senderUsername: event.senderUsername,
+            isGroup: event.isGroup,
+            date: event.msg.date,
+          },
+          capturedAt: Date.now(),
+        });
+        return; // provider already got 200, no retry needed
       }
       const eventAuthContext = await resolveTelegramEventAuthorizationContext({
         chatId: event.chatId,

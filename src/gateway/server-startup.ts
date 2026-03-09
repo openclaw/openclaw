@@ -20,6 +20,8 @@ import {
 } from "../hooks/internal-hooks.js";
 import { loadInternalHooks } from "../hooks/loader.js";
 import { isTruthyEnvValue } from "../infra/env.js";
+import { clearPendingInbound, readPendingInbound } from "../infra/pending-inbound-store.js";
+import { enqueueSystemEvent } from "../infra/system-events.js";
 import type { loadOpenClawPlugins } from "../plugins/loader.js";
 import { type PluginServicesHandle, startPluginServices } from "../plugins/services.js";
 import { startBrowserControlServerIfEnabled } from "./server-browser.js";
@@ -137,6 +139,52 @@ export async function startGatewaySidecars(params: {
     params.logChannels.info(
       "skipping channel start (OPENCLAW_SKIP_CHANNELS=1 or OPENCLAW_SKIP_PROVIDERS=1)",
     );
+  }
+
+  // Replay inbound messages captured during the previous drain.
+  try {
+    const stateDir = resolveStateDir(process.env);
+    const pending = await readPendingInbound(stateDir);
+    if (pending.length > 0) {
+      params.log.warn(`replaying ${pending.length} inbound message(s) captured during drain`);
+      // Consume-then-process: clear first to prevent infinite retry on crash.
+      await clearPendingInbound(stateDir);
+      for (const entry of pending) {
+        try {
+          const payload = entry.payload as {
+            chatId?: number | string;
+            channelId?: string;
+            senderId?: string;
+            senderName?: string;
+            senderUsername?: string;
+            text?: string;
+          };
+          const senderLabel =
+            payload.senderName ?? payload.senderUsername ?? payload.senderId ?? "unknown";
+          const textPreview = (payload.text ?? "").slice(0, 200).replace(/\n/g, "\\n");
+          const sessionKey =
+            entry.channel === "telegram"
+              ? `telegram:${payload.chatId ?? "unknown"}`
+              : entry.channel === "discord"
+                ? `discord:channel:${payload.channelId ?? "unknown"}`
+                : `${entry.channel}:unknown`;
+          const eventText = `[pending-inbound] Missed message during restart from ${senderLabel}: "${textPreview || "(no text)"}"`;
+          enqueueSystemEvent(eventText, {
+            sessionKey,
+            contextKey: `pending-inbound:${entry.channel}:${entry.id}`,
+          });
+          params.log.warn(
+            `pending-inbound: replayed ${entry.channel}:${entry.id} → session ${sessionKey}`,
+          );
+        } catch (err) {
+          params.log.warn(
+            `pending-inbound: replay failed for ${entry.channel}:${entry.id}: ${String(err)}`,
+          );
+        }
+      }
+    }
+  } catch (err) {
+    params.log.warn(`pending-inbound: replay startup failed: ${String(err)}`);
   }
 
   if (params.cfg.hooks?.internal?.enabled) {

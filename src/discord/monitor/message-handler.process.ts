@@ -24,10 +24,13 @@ import { createTypingCallbacks } from "../../channels/typing.js";
 import { isDangerousNameMatchingEnabled } from "../../config/dangerous-name-matching.js";
 import { resolveDiscordPreviewStreamMode } from "../../config/discord-preview-streaming.js";
 import { resolveMarkdownTableMode } from "../../config/markdown-tables.js";
+import { resolveStateDir } from "../../config/paths.js";
 import { readSessionUpdatedAt, resolveStorePath } from "../../config/sessions.js";
 import { danger, logVerbose, shouldLogVerbose } from "../../globals.js";
+import { writePendingInbound } from "../../infra/pending-inbound-store.js";
 import { convertMarkdownTables } from "../../markdown/tables.js";
 import { getAgentScopedMediaLocalRoots } from "../../media/local-roots.js";
+import { isGatewayDraining } from "../../process/command-queue.js";
 import { buildAgentSessionKey } from "../../routing/resolve-route.js";
 import { resolveThreadSessionKeys } from "../../routing/session-key.js";
 import { stripReasoningTagsFromText } from "../../shared/text/reasoning-tags.js";
@@ -113,6 +116,25 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
     abortSignal,
   } = ctx;
   if (isProcessAborted(abortSignal)) {
+    return;
+  }
+
+  if (isGatewayDraining()) {
+    const stateDir = resolveStateDir(process.env);
+    await writePendingInbound(stateDir, {
+      channel: "discord",
+      id: String(message.id ?? Date.now()),
+      payload: {
+        channelId: messageChannelId,
+        messageId: message.id,
+        text: baseText ?? "",
+        senderId: sender.id,
+        senderName: sender.name ?? author.username,
+        isGuild: isGuildMessage,
+        isDirect: isDirectMessage,
+      },
+      capturedAt: Date.now(),
+    });
     return;
   }
 
