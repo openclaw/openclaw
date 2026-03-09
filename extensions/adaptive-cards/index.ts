@@ -114,9 +114,10 @@ export default function register(api: OpenClawPluginApi) {
     },
   });
 
-  // Command: /card for quick manual card testing
+  // Command: /acard for quick manual card testing
+  // Named "acard" (not "card") to avoid collision with LINE extension's /card command.
   api.registerCommand({
-    name: "card",
+    name: "acard",
     description: "Send a test Adaptive Card to verify rendering.",
     acceptsArgs: true,
     handler: async (ctx) => {
@@ -159,10 +160,10 @@ export default function register(api: OpenClawPluginApi) {
       } catch {
         return {
           text: [
-            "Usage: /card [test | <card-json>]",
+            "Usage: /acard [test | <card-json>]",
             "",
-            "/card test   - Send a test card to verify rendering",
-            "/card {...}  - Send a custom Adaptive Card JSON",
+            "/acard test   - Send a test card to verify rendering",
+            "/acard {...}  - Send a custom Adaptive Card JSON",
           ].join("\n"),
         };
       }
