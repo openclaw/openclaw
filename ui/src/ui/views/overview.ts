@@ -35,7 +35,8 @@ export function renderOverview(props: OverviewProps) {
         authMode?: "none" | "token" | "password" | "trusted-proxy";
       }
     | undefined;
-  const currentLocale = props.settings.locale ?? i18n.getLocale();
+  const activeLocale = i18n.getLocale(); 
+  const currentLocale = activeLocale || props.settings.locale;
   const uptime = snapshot?.uptimeMs ? formatDurationHuman(snapshot.uptimeMs) : t("common.na");
   const tick = snapshot?.policy?.tickIntervalMs
     ? `${snapshot.policy.tickIntervalMs}ms`
