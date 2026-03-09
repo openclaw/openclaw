@@ -96,6 +96,21 @@ function normalizeAuthToken(value: string | undefined | null): string | undefine
 // 4008 = application-defined code (browser rejects 1008 "Policy Violation")
 const CONNECT_FAILED_CLOSE_CODE = 4008;
 
+function isNonRecoverableAuthError(error: GatewayErrorInfo | undefined): boolean {
+  if (!error) {
+    return false;
+  }
+  if (error.code === "AUTH_TOKEN_MISSING") {
+    return true;
+  }
+  const detailCode = resolveGatewayErrorDetailCode(error);
+  return (
+    detailCode === "AUTH_PASSWORD_MISMATCH" ||
+    detailCode === "AUTH_RATE_LIMITED" ||
+    detailCode === "AUTH_TOKEN_MISSING"
+  );
+}
+
 export class GatewayBrowserClient {
   private ws: WebSocket | null = null;
   private pending = new Map<string, Pending>();
@@ -143,7 +158,9 @@ export class GatewayBrowserClient {
       this.ws = null;
       this.flushPending(new Error(`gateway closed (${ev.code}): ${reason}`));
       this.opts.onClose?.({ code: ev.code, reason, error: connectError });
-      this.scheduleReconnect();
+      if (!isNonRecoverableAuthError(connectError)) {
+        this.scheduleReconnect();
+      }
     });
     this.ws.addEventListener("error", () => {
       // ignored; close handler will fire
@@ -252,7 +269,7 @@ export class GatewayBrowserClient {
       role,
       scopes,
       device,
-      caps: [],
+      caps: ["tool-events"],
       auth,
       userAgent: navigator.userAgent,
       locale: navigator.language,
