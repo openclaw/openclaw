@@ -2,13 +2,13 @@ import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { runAcpRuntimeAdapterContract } from "../../../src/acp/runtime/adapter-contract.testkit.js";
+import { AcpxRuntime, decodeAcpxRuntimeHandleState } from "./runtime.js";
 import {
   cleanupMockRuntimeFixtures,
   createMockRuntimeFixture,
   NOOP_LOGGER,
   readMockRuntimeLogEntries,
-} from "./runtime-internals/test-fixtures.js";
-import { AcpxRuntime, decodeAcpxRuntimeHandleState } from "./runtime.js";
+} from "./test-utils/runtime-fixtures.js";
 
 let sharedFixture: Awaited<ReturnType<typeof createMockRuntimeFixture>> | null = null;
 let missingCommandRuntime: AcpxRuntime | null = null;
@@ -125,6 +125,39 @@ describe("AcpxRuntime", () => {
     expect(promptArgs).toContain("--ttl");
     expect(promptArgs).toContain("180");
     expect(promptArgs).toContain("--approve-all");
+  });
+
+  it("serializes text plus image attachments into ACP prompt blocks", async () => {
+    const { runtime, logPath } = await createMockRuntimeFixture();
+
+    const handle = await runtime.ensureSession({
+      sessionKey: "agent:codex:acp:with-image",
+      agent: "codex",
+      mode: "persistent",
+    });
+
+    for await (const _event of runtime.runTurn({
+      handle,
+      text: "describe this image",
+      attachments: [{ mediaType: "image/png", data: "aW1hZ2UtYnl0ZXM=" }],
+      mode: "prompt",
+      requestId: "req-image",
+    })) {
+      // Consume stream to completion so prompt logging is finalized.
+    }
+
+    const logs = await readMockRuntimeLogEntries(logPath);
+    const prompt = logs.find(
+      (entry) =>
+        entry.kind === "prompt" && String(entry.sessionName ?? "") === "agent:codex:acp:with-image",
+    );
+    expect(prompt).toBeDefined();
+
+    const stdinBlocks = JSON.parse(String(prompt?.stdinText ?? ""));
+    expect(stdinBlocks).toEqual([
+      { type: "text", text: "describe this image" },
+      { type: "image", mimeType: "image/png", data: "aW1hZ2UtYnl0ZXM=" },
+    ]);
   });
 
   it("preserves leading spaces across streamed text deltas", async () => {
