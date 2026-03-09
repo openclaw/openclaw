@@ -207,15 +207,21 @@ export function collectSystemdExecStartValues(contents: string): string[] {
   for (const line of logicalLines) {
     const sectionMatch = line.match(/^\[([^\]]+)\]$/);
     if (sectionMatch) {
-      inServiceSection = sectionMatch[1]?.trim().toLowerCase() === "service";
+      inServiceSection = sectionMatch[1]?.trim() === "Service";
       continue;
     }
     if (!inServiceSection) {
       continue;
     }
-    const match = line.match(/^execstart\s*=(.*)$/i);
+    const match = line.match(/^ExecStart\s*=(.*)$/);
     if (match) {
-      values.push(match[1]?.trim() ?? "");
+      const value = match[1]?.trim() ?? "";
+      if (value === "") {
+        // systemd treats bare `ExecStart=` as a reset of all prior entries.
+        values.length = 0;
+      } else {
+        values.push(value);
+      }
     }
   }
   return values;

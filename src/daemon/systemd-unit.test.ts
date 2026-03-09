@@ -83,6 +83,48 @@ describe("collectSystemdExecStartValues", () => {
       "/usr/local/bin/helper --mode openclaw",
     ]);
   });
+
+  it("ignores lowercase [service] section (systemd is case-sensitive)", () => {
+    const content = [
+      "[service]",
+      "ExecStart=/snap/bin/chromium --headless --remote-debugging-port=18800",
+      "[Service]",
+      "ExecStart=/usr/local/bin/helper --mode openclaw",
+    ].join("\n");
+    expect(collectSystemdExecStartValues(content)).toEqual([
+      "/usr/local/bin/helper --mode openclaw",
+    ]);
+  });
+
+  it("ignores lowercase execstart key (systemd keys are case-sensitive)", () => {
+    const content = [
+      "[Service]",
+      "execstart=/snap/bin/chromium --headless --remote-debugging-port=18800",
+      "ExecStart=/usr/local/bin/helper --mode openclaw",
+    ].join("\n");
+    expect(collectSystemdExecStartValues(content)).toEqual([
+      "/usr/local/bin/helper --mode openclaw",
+    ]);
+  });
+
+  it("treats bare ExecStart= as a reset of prior entries", () => {
+    const content = [
+      "[Service]",
+      "ExecStart=/bin/echo chromium --remote-debugging-port=18800",
+      "ExecStart=",
+      "ExecStart=/usr/local/bin/helper --mode openclaw",
+    ].join("\n");
+    expect(collectSystemdExecStartValues(content)).toEqual([
+      "/usr/local/bin/helper --mode openclaw",
+    ]);
+  });
+
+  it("treats ExecStart with only whitespace after = as a reset", () => {
+    const content = ["[Service]", "ExecStart=/snap/bin/chromium --headless", "ExecStart=   "].join(
+      "\n",
+    );
+    expect(collectSystemdExecStartValues(content)).toEqual([]);
+  });
 });
 
 describe("extractSystemdExecStartCommandToken", () => {
