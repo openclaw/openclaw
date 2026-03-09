@@ -11,6 +11,7 @@ import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.j
 import { createReplyPrefixOptions } from "../../channels/reply-prefix.js";
 import { resolveSessionFilePath } from "../../config/sessions.js";
 import { jsonUtf8Bytes } from "../../infra/json-utf8-bytes.js";
+import { normalizeInputProvenance, type InputProvenance } from "../../sessions/input-provenance.js";
 import { resolveSendPolicy } from "../../sessions/send-policy.js";
 import { parseAgentSessionKey } from "../../sessions/session-key-utils.js";
 import {
@@ -32,7 +33,12 @@ import {
 } from "../chat-abort.js";
 import { type ChatImageContent, parseMessageWithAttachments } from "../chat-attachments.js";
 import { stripEnvelopeFromMessage, stripEnvelopeFromMessages } from "../chat-sanitize.js";
-import { GATEWAY_CLIENT_CAPS, hasGatewayClientCap } from "../protocol/client-info.js";
+import {
+  GATEWAY_CLIENT_CAPS,
+  GATEWAY_CLIENT_MODES,
+  GATEWAY_CLIENT_NAMES,
+  hasGatewayClientCap,
+} from "../protocol/client-info.js";
 import {
   ErrorCodes,
   errorShape,
@@ -55,7 +61,11 @@ import { injectTimestamp, timestampOptsFromConfig } from "./agent-timestamp.js";
 import { setGatewayDedupeEntry } from "./agent-wait-dedupe.js";
 import { normalizeRpcAttachmentsToChatAttachments } from "./attachment-normalize.js";
 import { appendInjectedAssistantMessageToTranscript } from "./chat-transcript-inject.js";
-import type { GatewayRequestContext, GatewayRequestHandlers } from "./types.js";
+import type {
+  GatewayRequestContext,
+  GatewayRequestHandlerOptions,
+  GatewayRequestHandlers,
+} from "./types.js";
 
 type TranscriptAppendResult = {
   ok: boolean;
@@ -223,6 +233,33 @@ export function sanitizeChatSendMessageInput(
     return { ok: false, error: "message must not contain null bytes" };
   }
   return { ok: true, message: stripDisallowedChatControlChars(normalized) };
+}
+
+function normalizeOptionalChatSystemReceipt(
+  value: unknown,
+): { ok: true; receipt?: string } | { ok: false; error: string } {
+  if (value == null) {
+    return { ok: true };
+  }
+  if (typeof value !== "string") {
+    return { ok: false, error: "systemProvenanceReceipt must be a string" };
+  }
+  const sanitized = sanitizeChatSendMessageInput(value);
+  if (!sanitized.ok) {
+    return sanitized;
+  }
+  const receipt = sanitized.message.trim();
+  return { ok: true, receipt: receipt || undefined };
+}
+
+function isAcpBridgeClient(client: GatewayRequestHandlerOptions["client"]): boolean {
+  const info = client?.connect?.client;
+  return (
+    info?.id === GATEWAY_CLIENT_NAMES.CLI &&
+    info?.mode === GATEWAY_CLIENT_MODES.CLI &&
+    info?.displayName === "ACP" &&
+    info?.version === "acp"
+  );
 }
 
 function truncateChatHistoryText(text: string): { text: string; truncated: boolean } {
@@ -860,8 +897,21 @@ export const chatHandlers: GatewayRequestHandlers = {
         content?: unknown;
       }>;
       timeoutMs?: number;
+      systemInputProvenance?: InputProvenance;
+      systemProvenanceReceipt?: string;
       idempotencyKey: string;
     };
+    if ((p.systemInputProvenance || p.systemProvenanceReceipt) && !isAcpBridgeClient(client)) {
+      respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          "system provenance fields are reserved for the ACP bridge",
+        ),
+      );
+      return;
+    }
     const sanitizedMessageResult = sanitizeChatSendMessageInput(p.message);
     if (!sanitizedMessageResult.ok) {
       respond(
@@ -871,7 +921,14 @@ export const chatHandlers: GatewayRequestHandlers = {
       );
       return;
     }
+    const systemReceiptResult = normalizeOptionalChatSystemReceipt(p.systemProvenanceReceipt);
+    if (!systemReceiptResult.ok) {
+      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, systemReceiptResult.error));
+      return;
+    }
     const inboundMessage = sanitizedMessageResult.message;
+    const systemInputProvenance = normalizeInputProvenance(p.systemInputProvenance);
+    const systemProvenanceReceipt = systemReceiptResult.receipt;
     const stopCommand = isChatStopCommandText(inboundMessage);
     const normalizedAttachments = normalizeRpcAttachmentsToChatAttachments(p.attachments);
     const rawMessage = inboundMessage.trim();
@@ -972,6 +1029,9 @@ export const chatHandlers: GatewayRequestHandlers = {
         p.thinking && trimmedMessage && !trimmedMessage.startsWith("/"),
       );
       const commandBody = injectThinking ? `/think ${p.thinking} ${parsedMessage}` : parsedMessage;
+      const messageForAgent = systemProvenanceReceipt
+        ? [systemProvenanceReceipt, parsedMessage].filter(Boolean).join("\n\n")
+        : parsedMessage;
       const clientInfo = client?.connect?.client;
       const {
         originatingChannel,
@@ -990,14 +1050,15 @@ export const chatHandlers: GatewayRequestHandlers = {
       // Inject timestamp so agents know the current date/time.
       // Only BodyForAgent gets the timestamp — Body stays raw for UI display.
       // See: https://github.com/moltbot/moltbot/issues/3658
-      const stampedMessage = injectTimestamp(parsedMessage, timestampOptsFromConfig(cfg));
+      const stampedMessage = injectTimestamp(messageForAgent, timestampOptsFromConfig(cfg));
 
       const ctx: MsgContext = {
-        Body: parsedMessage,
+        Body: messageForAgent,
         BodyForAgent: stampedMessage,
         BodyForCommands: commandBody,
         RawBody: parsedMessage,
         CommandBody: commandBody,
+        InputProvenance: systemInputProvenance,
         SessionKey: sessionKey,
         Provider: INTERNAL_MESSAGE_CHANNEL,
         Surface: INTERNAL_MESSAGE_CHANNEL,
