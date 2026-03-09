@@ -20,7 +20,7 @@ import {
 } from "./dedup.js";
 import { isMentionForwardRequest } from "./mention.js";
 import { fetchBotIdentityForMonitor } from "./monitor.startup.js";
-import { botNames, botOpenIds } from "./monitor.state.js";
+import { botNames, botOpenIds, botUnionIds } from "./monitor.state.js";
 import { monitorWebhook, monitorWebSocket } from "./monitor.transport.js";
 import { getFeishuRuntime } from "./runtime.js";
 import { getMessageFeishu } from "./send.js";
@@ -248,6 +248,7 @@ function registerEventHandlers(
         event,
         botOpenId: botOpenIds.get(accountId),
         botName: botNames.get(accountId),
+        botUnionId: botUnionIds.get(accountId),
         runtime,
         chatHistories,
         accountId,
@@ -432,6 +433,7 @@ function registerEventHandlers(
           event: syntheticEvent,
           botOpenId: myBotId,
           botName: botNames.get(accountId),
+          botUnionId: botUnionIds.get(accountId),
           runtime,
           chatHistories,
           accountId,
@@ -486,7 +488,7 @@ function registerEventHandlers(
 }
 
 export type BotOpenIdSource =
-  | { kind: "prefetched"; botOpenId?: string; botName?: string }
+  | { kind: "prefetched"; botOpenId?: string; botName?: string; botUnionId?: string }
   | { kind: "fetch" };
 
 export type MonitorSingleAccountParams = {
@@ -505,17 +507,23 @@ export async function monitorSingleAccount(params: MonitorSingleAccountParams): 
   const botOpenIdSource = params.botOpenIdSource ?? { kind: "fetch" };
   const botIdentity =
     botOpenIdSource.kind === "prefetched"
-      ? { botOpenId: botOpenIdSource.botOpenId, botName: botOpenIdSource.botName }
+      ? { botOpenId: botOpenIdSource.botOpenId, botName: botOpenIdSource.botName, botUnionId: botOpenIdSource.botUnionId }
       : await fetchBotIdentityForMonitor(account, { runtime, abortSignal });
   const botOpenId = botIdentity.botOpenId;
   const botName = botIdentity.botName?.trim();
+  const botUnionId = botIdentity.botUnionId?.trim();
   botOpenIds.set(accountId, botOpenId ?? "");
   if (botName) {
     botNames.set(accountId, botName);
   } else {
     botNames.delete(accountId);
   }
-  log(`feishu[${accountId}]: bot open_id resolved: ${botOpenId ?? "unknown"}`);
+  if (botUnionId) {
+    botUnionIds.set(accountId, botUnionId);
+  } else {
+    botUnionIds.delete(accountId);
+  }
+  log(`feishu[${accountId}]: bot open_id resolved: ${botOpenId ?? "unknown"}${botUnionId ? ` (union_id: ${botUnionId})` : ""}`);
 
   const connectionMode = account.config.connectionMode ?? "websocket";
   if (connectionMode === "webhook" && !account.verificationToken?.trim()) {

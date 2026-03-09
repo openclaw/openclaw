@@ -134,6 +134,7 @@ export async function probeFeishu(
         appId: creds.appId,
         botName: bot?.bot_name,
         botOpenId: bot?.open_id,
+        botUnionId: bot?.union_id,
       },
       PROBE_SUCCESS_TTL_MS,
     );
