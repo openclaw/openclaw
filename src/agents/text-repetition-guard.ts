@@ -10,6 +10,7 @@
  * text chunk is appended to the delta buffer.
  */
 
+import type { TextRepetitionGuardConfig } from "../config/types.tools.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 
 const log = createSubsystemLogger("agents/text-repetition-guard");
@@ -18,25 +19,12 @@ const log = createSubsystemLogger("agents/text-repetition-guard");
 // Config
 // ---------------------------------------------------------------------------
 
-export interface TextRepetitionGuardConfig {
-  /** Master switch. When false the guard is a no-op. */
-  enabled: boolean;
-  /** Only analyse the last `windowSize` characters of the buffer. */
-  windowSize: number;
-  /** N-gram length (characters) for frequency analysis. */
-  ngramSize: number;
-  /** An n-gram appearing this many times triggers detection. */
-  maxNgramRepetitions: number;
-  /** Consecutive identical non-empty lines triggering detection. */
-  maxIdenticalLines: number;
-  /** Minimum / maximum pattern length for suffix-cycle detection. */
-  minCyclePatternLength: number;
-  maxCyclePatternLength: number;
-  /** How many consecutive suffix repeats trigger detection. */
-  minCycleRepeats: number;
-}
+export type { TextRepetitionGuardConfig } from "../config/types.tools.js";
 
-export const DEFAULT_TEXT_REPETITION_GUARD_CONFIG: TextRepetitionGuardConfig = {
+/** Fully resolved (all-required) internal config. */
+type ResolvedTextRepetitionGuardConfig = Required<TextRepetitionGuardConfig>;
+
+export const DEFAULT_TEXT_REPETITION_GUARD_CONFIG: ResolvedTextRepetitionGuardConfig = {
   enabled: true,
   windowSize: 2000,
   ngramSize: 30,
@@ -72,8 +60,8 @@ export type TextRepetitionResult =
 // ---------------------------------------------------------------------------
 
 function resolveConfig(
-  partial?: Partial<TextRepetitionGuardConfig>,
-): TextRepetitionGuardConfig {
+  partial?: TextRepetitionGuardConfig,
+): ResolvedTextRepetitionGuardConfig {
   return { ...DEFAULT_TEXT_REPETITION_GUARD_CONFIG, ...partial };
 }
 
@@ -96,7 +84,7 @@ function isDegenerate(s: string, minDensity = 0.3): boolean {
 
 export function detectTextRepetition(
   buffer: string,
-  config?: Partial<TextRepetitionGuardConfig>,
+  config?: TextRepetitionGuardConfig,
 ): TextRepetitionResult {
   const cfg = resolveConfig(config);
   if (!cfg.enabled) return { looping: false };

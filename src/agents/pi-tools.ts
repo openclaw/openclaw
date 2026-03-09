@@ -1,6 +1,6 @@
 import { codingTools, createReadTool, readTool } from "@mariozechner/pi-coding-agent";
 import type { OpenClawConfig } from "../config/config.js";
-import type { ToolLoopDetectionConfig } from "../config/types.tools.js";
+import type { TextRepetitionGuardConfig, ToolLoopDetectionConfig } from "../config/types.tools.js";
 import { resolveMergedSafeBinProfileFixtures } from "../infra/exec-safe-bin-runtime-policy.js";
 import { logWarn } from "../logger.js";
 import { getPluginToolMeta } from "../plugins/tools.js";
@@ -183,6 +183,29 @@ export function resolveToolLoopDetectionConfig(params: {
       ...global.detectors,
       ...agent.detectors,
     },
+  };
+}
+
+export function resolveTextRepetitionGuardConfig(params: {
+  cfg?: OpenClawConfig;
+  agentId?: string;
+}): TextRepetitionGuardConfig | undefined {
+  const global = params.cfg?.tools?.textRepetitionGuard;
+  const agent =
+    params.agentId && params.cfg
+      ? resolveAgentConfig(params.cfg, params.agentId)?.tools?.textRepetitionGuard
+      : undefined;
+
+  if (!agent) {
+    return global;
+  }
+  if (!global) {
+    return agent;
+  }
+
+  return {
+    ...global,
+    ...agent,
   };
 }
 
