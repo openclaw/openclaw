@@ -552,6 +552,13 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
         for (const id of ids) {
           recordMSTeamsSentMessage(conversationId, id);
         }
+        // Also record the thread root message ID so that subsequent thread
+        // replies are detected as implicit mentions. The conversation.id
+        // ;messageid= suffix points to the thread root (the user's original
+        // message), not the bot's reply, so we need to cache it separately.
+        if (conversationMessageId) {
+          recordMSTeamsSentMessage(conversationId, conversationMessageId);
+        }
       },
       tokenProvider,
       sharePointSiteId,
@@ -680,10 +687,9 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
     const replyToId = activity.replyToId ?? undefined;
     const threadRootId = extractMSTeamsConversationMessageId(rawConversationId);
     const implicitMention = Boolean(
-      conversationId && (
-        (replyToId && wasMSTeamsMessageSent(conversationId, replyToId)) ||
-        (threadRootId && wasMSTeamsMessageSent(conversationId, threadRootId))
-      ),
+      conversationId &&
+      ((replyToId && wasMSTeamsMessageSent(conversationId, replyToId)) ||
+        (threadRootId && wasMSTeamsMessageSent(conversationId, threadRootId))),
     );
 
     await inboundDebouncer.enqueue({
