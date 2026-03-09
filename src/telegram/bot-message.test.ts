@@ -263,6 +263,40 @@ describe("telegram bot message processor", () => {
     vi.useRealTimers();
   });
 
+  it("keeps short-message history within learned very-dense window", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-03-06T00:00:00.000Z"));
+    buildTelegramMessageContext.mockResolvedValue({ route: { sessionKey: "agent:main:main" } });
+
+    const processMessage = createTelegramMessageProcessor({
+      ...baseDeps,
+      telegramCfg: {
+        replyAdaptive: {
+          learning: {
+            enabled: true,
+            shortMessageWeight: 1,
+            baseMinMs: 10_000,
+            baseMaxMs: 60_000,
+            denseMultiplier: 1,
+            veryDenseMultiplier: 4,
+          },
+        },
+      },
+    } as unknown as Parameters<typeof createTelegramMessageProcessor>[0]);
+
+    await processSampleMessage(processMessage, { messageId: 700, text: "a" });
+    vi.setSystemTime(new Date("2026-03-06T00:00:10.000Z"));
+    await processSampleMessage(processMessage, { messageId: 701, text: "b" });
+    vi.setSystemTime(new Date("2026-03-06T00:00:20.000Z"));
+    await processSampleMessage(processMessage, { messageId: 702, text: "c" });
+    vi.setSystemTime(new Date("2026-03-06T00:00:45.000Z"));
+    await processSampleMessage(processMessage, { messageId: 703, text: "long long long long" });
+
+    const fourth = dispatchTelegramMessage.mock.calls[3]?.[0] as { replyToMode?: string };
+    expect(fourth.replyToMode).toBe("first");
+    vi.useRealTimers();
+  });
+
   it("skips dispatch when no context is produced", async () => {
     buildTelegramMessageContext.mockResolvedValue(null);
     const processMessage = createTelegramMessageProcessor(baseDeps);

@@ -174,16 +174,11 @@ function resolveAdaptiveReplyToMode(params: {
   const messageTextLength = resolveMessageTextLength(params.ctx);
   const shortMessage =
     messageTextLength > 0 && messageTextLength <= params.adaptiveConfig.shortMessageMaxChars;
-  const recentShortMessageAt = (previous?.recentShortMessageAt ?? []).filter(
-    (ts) => now - ts <= params.adaptiveConfig.veryDenseWindowMs,
-  );
-  if (shortMessage) {
-    recentShortMessageAt.push(now);
-  }
 
   let baseWindowMs = params.adaptiveConfig.baseWindowMs;
   let denseWindowMs = params.adaptiveConfig.denseWindowMs;
   let veryDenseWindowMs = params.adaptiveConfig.veryDenseWindowMs;
+  const recentShortMessageAt = [...(previous?.recentShortMessageAt ?? [])];
   let emaGapMs = previous?.emaGapMs ?? params.adaptiveConfig.baseWindowMs;
   let emaShortRatio = previous?.emaShortRatio ?? (shortMessage ? 1 : 0);
 
@@ -204,7 +199,14 @@ function resolveAdaptiveReplyToMode(params: {
     veryDenseWindowMs = baseWindowMs * params.adaptiveConfig.learning.veryDenseMultiplier;
   }
 
-  const shortCount = recentShortMessageAt.length;
+  const filteredRecentShortMessageAt = recentShortMessageAt.filter(
+    (ts) => now - ts <= veryDenseWindowMs,
+  );
+  if (shortMessage) {
+    filteredRecentShortMessageAt.push(now);
+  }
+
+  const shortCount = filteredRecentShortMessageAt.length;
   const burstWindowMs =
     shortCount >= params.adaptiveConfig.veryDenseShortMinCount
       ? veryDenseWindowMs
@@ -217,7 +219,7 @@ function resolveAdaptiveReplyToMode(params: {
   params.burstState.set(key, {
     lastInboundAt: now,
     streak,
-    recentShortMessageAt,
+    recentShortMessageAt: filteredRecentShortMessageAt,
     emaGapMs,
     emaShortRatio,
     ttlMs: Math.max(veryDenseWindowMs, params.adaptiveConfig.veryDenseWindowMs),
