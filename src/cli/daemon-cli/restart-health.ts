@@ -1,5 +1,6 @@
 import type { GatewayServiceRuntime } from "../../daemon/service-runtime.js";
 import type { GatewayService } from "../../daemon/service.js";
+import { probeGateway } from "../../gateway/probe.js";
 import {
   classifyPortListener,
   formatPortDiagnostics,
@@ -27,6 +28,31 @@ function listenerOwnedByRuntimePid(params: {
   runtimePid: number;
 }): boolean {
   return params.listener.pid === params.runtimePid || params.listener.ppid === params.runtimePid;
+}
+
+function looksLikeAuthClose(code: number | undefined, reason: string | undefined): boolean {
+  if (code !== 1008) {
+    return false;
+  }
+  const normalized = (reason ?? "").toLowerCase();
+  return (
+    normalized.includes("auth") ||
+    normalized.includes("token") ||
+    normalized.includes("password") ||
+    normalized.includes("scope") ||
+    normalized.includes("role")
+  );
+}
+
+async function confirmGatewayReachable(port: number): Promise<boolean> {
+  const token = process.env.OPENCLAW_GATEWAY_TOKEN?.trim() || undefined;
+  const password = process.env.OPENCLAW_GATEWAY_PASSWORD?.trim() || undefined;
+  const probe = await probeGateway({
+    url: `ws://127.0.0.1:${port}`,
+    auth: token || password ? { token, password } : undefined,
+    timeoutMs: 1_000,
+  });
+  return probe.ok || looksLikeAuthClose(probe.close?.code, probe.close?.reason);
 }
 
 export async function inspectGatewayRestart(params: {
@@ -79,7 +105,14 @@ export async function inspectGatewayRestart(params: {
       ? portUsage.listeners.some((listener) => listenerOwnedByRuntimePid({ listener, runtimePid }))
       : gatewayListeners.length > 0 ||
         (portUsage.status === "busy" && portUsage.listeners.length === 0);
-  const healthy = running && ownsPort;
+  let healthy = running && ownsPort;
+  if (!healthy && running && portUsage.status === "busy") {
+    try {
+      healthy = await confirmGatewayReachable(params.port);
+    } catch {
+      // best-effort probe
+    }
+  }
   const staleGatewayPids = Array.from(
     new Set([
       ...gatewayListeners

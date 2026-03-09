@@ -281,9 +281,28 @@ export async function runOnboardingWizard(
 
   const localPort = resolveGatewayPort(baseConfig);
   const localUrl = `ws://127.0.0.1:${localPort}`;
+  let localGatewayToken = process.env.OPENCLAW_GATEWAY_TOKEN ?? process.env.CLAWDBOT_GATEWAY_TOKEN;
+  try {
+    const resolvedGatewayToken = await resolveOnboardingSecretInputString({
+      config: baseConfig,
+      value: baseConfig.gateway?.auth?.token,
+      path: "gateway.auth.token",
+      env: process.env,
+    });
+    if (resolvedGatewayToken) {
+      localGatewayToken = resolvedGatewayToken;
+    }
+  } catch (error) {
+    await prompter.note(
+      [
+        "Could not resolve gateway.auth.token SecretRef for onboarding probe.",
+        error instanceof Error ? error.message : String(error),
+      ].join("\n"),
+      "Gateway auth",
+    );
+  }
   let localGatewayPassword =
-    process.env.OPENCLAW_GATEWAY_PASSWORD ??
-    normalizeSecretInputString(baseConfig.gateway?.auth?.password);
+    process.env.OPENCLAW_GATEWAY_PASSWORD ?? process.env.CLAWDBOT_GATEWAY_PASSWORD;
   try {
     const resolvedGatewayPassword = await resolveOnboardingSecretInputString({
       config: baseConfig,
@@ -306,14 +325,34 @@ export async function runOnboardingWizard(
 
   const localProbe = await onboardHelpers.probeGatewayReachable({
     url: localUrl,
-    token: baseConfig.gateway?.auth?.token ?? process.env.OPENCLAW_GATEWAY_TOKEN,
+    token: localGatewayToken,
     password: localGatewayPassword,
   });
   const remoteUrl = baseConfig.gateway?.remote?.url?.trim() ?? "";
+  let remoteGatewayToken = normalizeSecretInputString(baseConfig.gateway?.remote?.token);
+  try {
+    const resolvedRemoteGatewayToken = await resolveOnboardingSecretInputString({
+      config: baseConfig,
+      value: baseConfig.gateway?.remote?.token,
+      path: "gateway.remote.token",
+      env: process.env,
+    });
+    if (resolvedRemoteGatewayToken) {
+      remoteGatewayToken = resolvedRemoteGatewayToken;
+    }
+  } catch (error) {
+    await prompter.note(
+      [
+        "Could not resolve gateway.remote.token SecretRef for onboarding probe.",
+        error instanceof Error ? error.message : String(error),
+      ].join("\n"),
+      "Gateway auth",
+    );
+  }
   const remoteProbe = remoteUrl
     ? await onboardHelpers.probeGatewayReachable({
         url: remoteUrl,
-        token: normalizeSecretInputString(baseConfig.gateway?.remote?.token),
+        token: remoteGatewayToken,
       })
     : null;
 
@@ -472,6 +511,16 @@ export async function runOnboardingWizard(
   await onboardHelpers.ensureWorkspaceAndSessions(workspaceDir, runtime, {
     skipBootstrap: Boolean(nextConfig.agents?.defaults?.skipBootstrap),
   });
+
+  if (opts.skipSearch) {
+    await prompter.note("Skipping search setup.", "Search");
+  } else {
+    const { setupSearch } = await import("../commands/onboard-search.js");
+    nextConfig = await setupSearch(nextConfig, runtime, prompter, {
+      quickstartDefaults: flow === "quickstart",
+      secretInputMode: opts.secretInputMode,
+    });
+  }
 
   if (opts.skipSkills) {
     await prompter.note("Skipping skills setup.", "Skills");

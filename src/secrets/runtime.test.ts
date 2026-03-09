@@ -652,6 +652,71 @@ describe("secrets runtime snapshot", () => {
     expect(snapshot.warnings.map((warning) => warning.path)).not.toContain("gateway.auth.password");
   });
 
+  it("treats gateway.auth.token ref as active when token mode is explicit", async () => {
+    const snapshot = await prepareSecretsRuntimeSnapshot({
+      config: asConfig({
+        gateway: {
+          auth: {
+            mode: "token",
+            token: { source: "env", provider: "default", id: "GATEWAY_TOKEN_REF" },
+          },
+        },
+      }),
+      env: {
+        GATEWAY_TOKEN_REF: "resolved-gateway-token",
+      },
+      agentDirs: ["/tmp/openclaw-agent-main"],
+      loadAuthStore: () => ({ version: 1, profiles: {} }),
+    });
+
+    expect(snapshot.config.gateway?.auth?.token).toBe("resolved-gateway-token");
+    expect(snapshot.warnings.map((warning) => warning.path)).not.toContain("gateway.auth.token");
+  });
+
+  it("treats gateway.auth.token ref as inactive when password mode is explicit", async () => {
+    const snapshot = await prepareSecretsRuntimeSnapshot({
+      config: asConfig({
+        gateway: {
+          auth: {
+            mode: "password",
+            token: { source: "env", provider: "default", id: "GATEWAY_TOKEN_REF" },
+            password: "password-123",
+          },
+        },
+      }),
+      env: {
+        GATEWAY_TOKEN_REF: "resolved-gateway-token",
+      },
+      agentDirs: ["/tmp/openclaw-agent-main"],
+      loadAuthStore: () => ({ version: 1, profiles: {} }),
+    });
+
+    expect(snapshot.config.gateway?.auth?.token).toEqual({
+      source: "env",
+      provider: "default",
+      id: "GATEWAY_TOKEN_REF",
+    });
+    expect(snapshot.warnings.map((warning) => warning.path)).toContain("gateway.auth.token");
+  });
+
+  it("fails when gateway.auth.token ref is active and unresolved", async () => {
+    await expect(
+      prepareSecretsRuntimeSnapshot({
+        config: asConfig({
+          gateway: {
+            auth: {
+              mode: "token",
+              token: { source: "env", provider: "default", id: "MISSING_GATEWAY_TOKEN_REF" },
+            },
+          },
+        }),
+        env: {},
+        agentDirs: ["/tmp/openclaw-agent-main"],
+        loadAuthStore: () => ({ version: 1, profiles: {} }),
+      }),
+    ).rejects.toThrow(/MISSING_GATEWAY_TOKEN_REF/i);
+  });
+
   it("treats gateway.auth.password ref as inactive when auth mode is trusted-proxy", async () => {
     const snapshot = await prepareSecretsRuntimeSnapshot({
       config: asConfig({

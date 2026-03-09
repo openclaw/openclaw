@@ -560,6 +560,17 @@ const SECRET_TARGET_REGISTRY: SecretTargetRegistryEntry[] = [
     includeInAudit: true,
   },
   {
+    id: "gateway.auth.token",
+    targetType: "gateway.auth.token",
+    configFile: "openclaw.json",
+    pathPattern: "gateway.auth.token",
+    secretShape: "secret_input",
+    expectedResolvedValue: "string",
+    includeInPlan: true,
+    includeInConfigure: true,
+    includeInAudit: true,
+  },
+  {
     id: "gateway.auth.password",
     targetType: "gateway.auth.password",
     configFile: "openclaw.json",

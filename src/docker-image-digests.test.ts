@@ -42,7 +42,7 @@ describe("docker base image pinning", () => {
         .find((line) => line.trimStart().startsWith("FROM "));
       expect(fromLine, `${dockerfilePath} should define a FROM line`).toBeDefined();
       expect(fromLine, `${dockerfilePath} FROM must be digest-pinned`).toMatch(
-        /^FROM\s+\S+@sha256:[a-f0-9]{64}$/,
+        /^FROM\s+\S+@sha256:[a-f0-9]{64}(?:\s+AS\s+\S+)?$/,
       );
     }
   });

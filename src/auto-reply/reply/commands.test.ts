@@ -104,6 +104,27 @@ vi.mock("../../gateway/call.js", () => ({
   callGateway: (opts: unknown) => callGatewayMock(opts),
 }));
 
+type ResetAcpSessionInPlaceResult = { ok: true } | { ok: false; skipped?: boolean; error?: string };
+
+const resetAcpSessionInPlaceMock = vi.hoisted(() =>
+  vi.fn(
+    async (_params: unknown): Promise<ResetAcpSessionInPlaceResult> => ({
+      ok: false,
+      skipped: true,
+    }),
+  ),
+);
+vi.mock("../../acp/persistent-bindings.js", async () => {
+  const actual = await vi.importActual<typeof import("../../acp/persistent-bindings.js")>(
+    "../../acp/persistent-bindings.js",
+  );
+  return {
+    ...actual,
+    resetAcpSessionInPlace: (params: unknown) => resetAcpSessionInPlaceMock(params),
+  };
+});
+
+import { buildConfiguredAcpSessionKey } from "../../acp/persistent-bindings.js";
 import type { HandleCommandsParams } from "./commands-types.js";
 import { buildCommandContext, handleCommands } from "./commands.js";
 
@@ -135,6 +156,11 @@ afterAll(async () => {
 function buildParams(commandBody: string, cfg: OpenClawConfig, ctxOverrides?: Partial<MsgContext>) {
   return buildCommandTestParams(commandBody, cfg, ctxOverrides, { workspaceDir: testWorkspaceDir });
 }
+
+beforeEach(() => {
+  resetAcpSessionInPlaceMock.mockReset();
+  resetAcpSessionInPlaceMock.mockResolvedValue({ ok: false, skipped: true } as const);
+});
 
 describe("handleCommands gating", () => {
   it("blocks gated commands when disabled or not elevated-allowlisted", async () => {
@@ -973,6 +999,226 @@ describe("handleCommands hooks", () => {
   });
 });
 
+describe("handleCommands ACP-bound /new and /reset", () => {
+  const discordChannelId = "1478836151241412759";
+  const buildDiscordBoundConfig = (): OpenClawConfig =>
+    ({
+      commands: { text: true },
+      bindings: [
+        {
+          type: "acp",
+          agentId: "codex",
+          match: {
+            channel: "discord",
+            accountId: "default",
+            peer: {
+              kind: "channel",
+              id: discordChannelId,
+            },
+          },
+          acp: {
+            mode: "persistent",
+          },
+        },
+      ],
+      channels: {
+        discord: {
+          allowFrom: ["*"],
+          guilds: { "1459246755253325866": { channels: { [discordChannelId]: {} } } },
+        },
+      },
+    }) as OpenClawConfig;
+
+  const buildDiscordBoundParams = (body: string) => {
+    const params = buildParams(body, buildDiscordBoundConfig(), {
+      Provider: "discord",
+      Surface: "discord",
+      OriginatingChannel: "discord",
+      AccountId: "default",
+      SenderId: "12345",
+      From: "discord:12345",
+      To: discordChannelId,
+      OriginatingTo: discordChannelId,
+      SessionKey: "agent:main:acp:binding:discord:default:feedface",
+    });
+    params.sessionKey = "agent:main:acp:binding:discord:default:feedface";
+    return params;
+  };
+
+  it("handles /new as ACP in-place reset for bound conversations", async () => {
+    resetAcpSessionInPlaceMock.mockResolvedValue({ ok: true } as const);
+    const result = await handleCommands(buildDiscordBoundParams("/new"));
+
+    expect(result.shouldContinue).toBe(false);
+    expect(result.reply?.text).toContain("ACP session reset in place");
+    expect(resetAcpSessionInPlaceMock).toHaveBeenCalledTimes(1);
+    expect(resetAcpSessionInPlaceMock.mock.calls[0]?.[0]).toMatchObject({
+      reason: "new",
+    });
+  });
+
+  it("continues with trailing prompt text after successful ACP-bound /new", async () => {
+    resetAcpSessionInPlaceMock.mockResolvedValue({ ok: true } as const);
+    const params = buildDiscordBoundParams("/new continue with deployment");
+    const result = await handleCommands(params);
+
+    expect(result.shouldContinue).toBe(false);
+    expect(result.reply).toBeUndefined();
+    const mutableCtx = params.ctx as Record<string, unknown>;
+    expect(mutableCtx.BodyStripped).toBe("continue with deployment");
+    expect(mutableCtx.CommandBody).toBe("continue with deployment");
+    expect(mutableCtx.AcpDispatchTailAfterReset).toBe(true);
+    expect(resetAcpSessionInPlaceMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("handles /reset failures without falling back to normal session reset flow", async () => {
+    resetAcpSessionInPlaceMock.mockResolvedValue({ ok: false, error: "backend unavailable" });
+    const result = await handleCommands(buildDiscordBoundParams("/reset"));
+
+    expect(result.shouldContinue).toBe(false);
+    expect(result.reply?.text).toContain("ACP session reset failed");
+    expect(resetAcpSessionInPlaceMock).toHaveBeenCalledTimes(1);
+    expect(resetAcpSessionInPlaceMock.mock.calls[0]?.[0]).toMatchObject({
+      reason: "reset",
+    });
+  });
+
+  it("does not emit reset hooks when ACP reset fails", async () => {
+    resetAcpSessionInPlaceMock.mockResolvedValue({ ok: false, error: "backend unavailable" });
+    const spy = vi.spyOn(internalHooks, "triggerInternalHook").mockResolvedValue();
+
+    const result = await handleCommands(buildDiscordBoundParams("/reset"));
+
+    expect(result.shouldContinue).toBe(false);
+    expect(spy).not.toHaveBeenCalled();
+    spy.mockRestore();
+  });
+
+  it("keeps existing /new behavior for non-ACP sessions", async () => {
+    const cfg = {
+      commands: { text: true },
+      channels: { whatsapp: { allowFrom: ["*"] } },
+    } as OpenClawConfig;
+    const result = await handleCommands(buildParams("/new", cfg));
+
+    expect(result.shouldContinue).toBe(true);
+    expect(resetAcpSessionInPlaceMock).not.toHaveBeenCalled();
+  });
+
+  it("still targets configured ACP binding when runtime routing falls back to a non-ACP session", async () => {
+    const fallbackSessionKey = `agent:main:discord:channel:${discordChannelId}`;
+    const configuredAcpSessionKey = buildConfiguredAcpSessionKey({
+      channel: "discord",
+      accountId: "default",
+      conversationId: discordChannelId,
+      agentId: "codex",
+      mode: "persistent",
+    });
+    const params = buildDiscordBoundParams("/new");
+    params.sessionKey = fallbackSessionKey;
+    params.ctx.SessionKey = fallbackSessionKey;
+    params.ctx.CommandTargetSessionKey = fallbackSessionKey;
+
+    const result = await handleCommands(params);
+
+    expect(result.shouldContinue).toBe(false);
+    expect(result.reply?.text).toContain("ACP session reset unavailable");
+    expect(resetAcpSessionInPlaceMock).toHaveBeenCalledTimes(1);
+    expect(resetAcpSessionInPlaceMock.mock.calls[0]?.[0]).toMatchObject({
+      sessionKey: configuredAcpSessionKey,
+      reason: "new",
+    });
+  });
+
+  it("emits reset hooks for the ACP session key when routing falls back to non-ACP session", async () => {
+    resetAcpSessionInPlaceMock.mockResolvedValue({ ok: true } as const);
+    const hookSpy = vi.spyOn(internalHooks, "triggerInternalHook").mockResolvedValue();
+    const fallbackSessionKey = `agent:main:discord:channel:${discordChannelId}`;
+    const configuredAcpSessionKey = buildConfiguredAcpSessionKey({
+      channel: "discord",
+      accountId: "default",
+      conversationId: discordChannelId,
+      agentId: "codex",
+      mode: "persistent",
+    });
+    const fallbackEntry = {
+      sessionId: "fallback-session-id",
+      sessionFile: "/tmp/fallback-session.jsonl",
+    } as SessionEntry;
+    const configuredEntry = {
+      sessionId: "configured-acp-session-id",
+      sessionFile: "/tmp/configured-acp-session.jsonl",
+    } as SessionEntry;
+    const params = buildDiscordBoundParams("/new");
+    params.sessionKey = fallbackSessionKey;
+    params.ctx.SessionKey = fallbackSessionKey;
+    params.ctx.CommandTargetSessionKey = fallbackSessionKey;
+    params.sessionEntry = fallbackEntry;
+    params.previousSessionEntry = fallbackEntry;
+    params.sessionStore = {
+      [fallbackSessionKey]: fallbackEntry,
+      [configuredAcpSessionKey]: configuredEntry,
+    };
+
+    const result = await handleCommands(params);
+
+    expect(result.shouldContinue).toBe(false);
+    expect(result.reply?.text).toContain("ACP session reset in place");
+    expect(hookSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "command",
+        action: "new",
+        sessionKey: configuredAcpSessionKey,
+        context: expect.objectContaining({
+          sessionEntry: configuredEntry,
+          previousSessionEntry: configuredEntry,
+        }),
+      }),
+    );
+    hookSpy.mockRestore();
+  });
+
+  it("uses active ACP command target when conversation binding context is missing", async () => {
+    resetAcpSessionInPlaceMock.mockResolvedValue({ ok: true } as const);
+    const activeAcpTarget = "agent:codex:acp:binding:discord:default:feedface";
+    const params = buildParams(
+      "/new",
+      {
+        commands: { text: true },
+        channels: {
+          discord: {
+            allowFrom: ["*"],
+          },
+        },
+      } as OpenClawConfig,
+      {
+        Provider: "discord",
+        Surface: "discord",
+        OriginatingChannel: "discord",
+        AccountId: "default",
+        SenderId: "12345",
+        From: "discord:12345",
+      },
+    );
+    params.sessionKey = "discord:slash:12345";
+    params.ctx.SessionKey = "discord:slash:12345";
+    params.ctx.CommandSource = "native";
+    params.ctx.CommandTargetSessionKey = activeAcpTarget;
+    params.ctx.To = "user:12345";
+    params.ctx.OriginatingTo = "user:12345";
+
+    const result = await handleCommands(params);
+
+    expect(result.shouldContinue).toBe(false);
+    expect(result.reply?.text).toContain("ACP session reset in place");
+    expect(resetAcpSessionInPlaceMock).toHaveBeenCalledTimes(1);
+    expect(resetAcpSessionInPlaceMock.mock.calls[0]?.[0]).toMatchObject({
+      sessionKey: activeAcpTarget,
+      reason: "new",
+    });
+  });
+});
+
 describe("handleCommands context", () => {
   it("returns expected details for /context commands", async () => {
     const cfg = {
@@ -1050,23 +1296,23 @@ describe("handleCommands subagents", () => {
     expect(result.reply?.text).not.toContain("after a short hard cutoff.");
   });
 
-  it("lists subagents for the current command session over the target session", async () => {
+  it("lists subagents for the command target session for native /subagents", async () => {
     addSubagentRunForTests({
-      runId: "run-1",
-      childSessionKey: "agent:main:subagent:abc",
-      requesterSessionKey: "agent:main:slack:slash:u1",
-      requesterDisplayKey: "agent:main:slack:slash:u1",
-      task: "do thing",
+      runId: "run-target",
+      childSessionKey: "agent:main:subagent:target",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "agent:main:main",
+      task: "target run",
       cleanup: "keep",
       createdAt: 1000,
       startedAt: 1000,
     });
     addSubagentRunForTests({
-      runId: "run-2",
-      childSessionKey: "agent:main:subagent:def",
+      runId: "run-slash",
+      childSessionKey: "agent:main:subagent:slash",
       requesterSessionKey: "agent:main:slack:slash:u1",
       requesterDisplayKey: "agent:main:slack:slash:u1",
-      task: "another thing",
+      task: "slash run",
       cleanup: "keep",
       createdAt: 2000,
       startedAt: 2000,
@@ -1083,8 +1329,47 @@ describe("handleCommands subagents", () => {
     const result = await handleCommands(params);
     expect(result.shouldContinue).toBe(false);
     expect(result.reply?.text).toContain("active subagents:");
-    expect(result.reply?.text).toContain("do thing");
-    expect(result.reply?.text).not.toContain("\n\n2.");
+    expect(result.reply?.text).toContain("target run");
+    expect(result.reply?.text).not.toContain("slash run");
+  });
+
+  it("keeps ended orchestrators in active list while descendants are pending", async () => {
+    const now = Date.now();
+    addSubagentRunForTests({
+      runId: "run-orchestrator-ended",
+      childSessionKey: "agent:main:subagent:orchestrator-ended",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "orchestrate child workers",
+      cleanup: "keep",
+      createdAt: now - 120_000,
+      startedAt: now - 120_000,
+      endedAt: now - 60_000,
+      outcome: { status: "ok" },
+    });
+    addSubagentRunForTests({
+      runId: "run-orchestrator-child-active",
+      childSessionKey: "agent:main:subagent:orchestrator-ended:subagent:child",
+      requesterSessionKey: "agent:main:subagent:orchestrator-ended",
+      requesterDisplayKey: "subagent:orchestrator-ended",
+      task: "child worker still running",
+      cleanup: "keep",
+      createdAt: now - 30_000,
+      startedAt: now - 30_000,
+    });
+
+    const cfg = {
+      commands: { text: true },
+      channels: { whatsapp: { allowFrom: ["*"] } },
+    } as OpenClawConfig;
+    const params = buildParams("/subagents list", cfg);
+    const result = await handleCommands(params);
+
+    expect(result.shouldContinue).toBe(false);
+    expect(result.reply?.text).toContain("active (waiting on 1 child)");
+    expect(result.reply?.text).not.toContain(
+      "recent subagents (last 30m):\n-----\n1. orchestrate child workers",
+    );
   });
 
   it("formats subagent usage with io and prompt/cache breakdown", async () => {

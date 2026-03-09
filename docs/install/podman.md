@@ -32,6 +32,11 @@ By default the container is **not** installed as a systemd service, you start it
 
 (Or set `OPENCLAW_PODMAN_QUADLET=1`; use `--container` to install only the container and launch script.)
 
+Optional build-time env vars (set before running `setup-podman.sh`):
+
+- `OPENCLAW_DOCKER_APT_PACKAGES` — install extra apt packages during image build
+- `OPENCLAW_EXTENSIONS` — pre-install extension dependencies (space-separated extension names, e.g. `diagnostics-otel matrix`)
+
 **2. Start gateway** (manual, for quick smoke testing):
 
 ```bash

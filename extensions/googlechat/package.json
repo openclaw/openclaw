@@ -1,6 +1,6 @@
 {
   "name": "@openclaw/googlechat",
-  "version": "2026.3.2",
+  "version": "2026.3.3",
   "private": true,
   "description": "OpenClaw Google Chat channel plugin",
   "type": "module",
@@ -12,6 +12,11 @@
   },
   "peerDependencies": {
     "openclaw": ">=2026.3.2"
+  },
+  "peerDependenciesMeta": {
+    "openclaw": {
+      "optional": true
+    }
   },
   "openclaw": {
     "extensions": [

@@ -223,6 +223,7 @@ describe("registerSlackInteractionEvents", () => {
     expect(resolveSessionKey).toHaveBeenCalledWith({
       channelId: "C1",
       channelType: "channel",
+      senderId: "U123",
     });
     expect(app.client.chat.update).toHaveBeenCalledTimes(1);
   });
@@ -554,6 +555,7 @@ describe("registerSlackInteractionEvents", () => {
     expect(resolveSessionKey).toHaveBeenCalledWith({
       channelId: "C222",
       channelType: "channel",
+      senderId: "U111",
     });
     expect(enqueueSystemEventMock).toHaveBeenCalledTimes(1);
     const [eventText] = enqueueSystemEventMock.mock.calls[0] as [string];
@@ -952,6 +954,7 @@ describe("registerSlackInteractionEvents", () => {
     expect(resolveSessionKey).toHaveBeenCalledWith({
       channelId: "D123",
       channelType: "im",
+      senderId: "U777",
     });
     expect(enqueueSystemEventMock).toHaveBeenCalledTimes(1);
     const [eventText] = enqueueSystemEventMock.mock.calls[0] as [string];
