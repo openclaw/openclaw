@@ -346,6 +346,33 @@ describe("web_search kimi config resolution", () => {
   });
 });
 
+describe("web_search provider apiKey SecretRef handling", () => {
+  // Unresolved SecretRef objects must fail fast, not silently drop the key
+  const secretRef = { source: "exec", provider: "vault", id: "test-key" };
+
+  it("throws on unresolved SecretRef for Perplexity apiKey", () => {
+    expect(() => resolvePerplexityApiKey({ apiKey: secretRef as unknown as string })).toThrow(
+      /unresolved SecretRef/,
+    );
+  });
+
+  it("throws on unresolved SecretRef for Grok apiKey", () => {
+    withEnv({ XAI_API_KEY: undefined }, () => {
+      expect(() => resolveGrokApiKey({ apiKey: secretRef as unknown as string })).toThrow(
+        /unresolved SecretRef/,
+      );
+    });
+  });
+
+  it("throws on unresolved SecretRef for Kimi apiKey", () => {
+    withEnv({ KIMI_API_KEY: undefined, MOONSHOT_API_KEY: undefined }, () => {
+      expect(() => resolveKimiApiKey({ apiKey: secretRef as unknown as string })).toThrow(
+        /unresolved SecretRef/,
+      );
+    });
+  });
+});
+
 describe("extractKimiCitations", () => {
   it("collects unique URLs from search_results and tool arguments", () => {
     expect(

@@ -629,26 +629,26 @@ function resolvePerplexityApiKey(perplexity?: PerplexityConfig): {
   apiKey?: string;
   source: PerplexityApiKeySource;
 } {
-  const fromConfig = normalizeApiKey(perplexity?.apiKey);
+  const fromConfigRaw = normalizeResolvedSecretInputString({
+    value: perplexity?.apiKey,
+    path: "tools.web.search.perplexity.apiKey",
+  });
+  const fromConfig = normalizeSecretInput(fromConfigRaw);
   if (fromConfig) {
     return { apiKey: fromConfig, source: "config" };
   }
 
-  const fromEnvPerplexity = normalizeApiKey(process.env.PERPLEXITY_API_KEY);
+  const fromEnvPerplexity = normalizeSecretInput(process.env.PERPLEXITY_API_KEY);
   if (fromEnvPerplexity) {
     return { apiKey: fromEnvPerplexity, source: "perplexity_env" };
   }
 
-  const fromEnvOpenRouter = normalizeApiKey(process.env.OPENROUTER_API_KEY);
+  const fromEnvOpenRouter = normalizeSecretInput(process.env.OPENROUTER_API_KEY);
   if (fromEnvOpenRouter) {
     return { apiKey: fromEnvOpenRouter, source: "openrouter_env" };
   }
 
   return { apiKey: undefined, source: "none" };
-}
-
-function normalizeApiKey(key: unknown): string {
-  return normalizeSecretInput(key);
 }
 
 function inferPerplexityBaseUrlFromApiKey(apiKey?: string): PerplexityBaseUrlHint | undefined {
@@ -755,11 +755,15 @@ function resolveGrokConfig(search?: WebSearchConfig): GrokConfig {
 }
 
 function resolveGrokApiKey(grok?: GrokConfig): string | undefined {
-  const fromConfig = normalizeApiKey(grok?.apiKey);
+  const fromConfigRaw = normalizeResolvedSecretInputString({
+    value: grok?.apiKey,
+    path: "tools.web.search.grok.apiKey",
+  });
+  const fromConfig = normalizeSecretInput(fromConfigRaw);
   if (fromConfig) {
     return fromConfig;
   }
-  const fromEnv = normalizeApiKey(process.env.XAI_API_KEY);
+  const fromEnv = normalizeSecretInput(process.env.XAI_API_KEY);
   return fromEnv || undefined;
 }
 
@@ -785,15 +789,19 @@ function resolveKimiConfig(search?: WebSearchConfig): KimiConfig {
 }
 
 function resolveKimiApiKey(kimi?: KimiConfig): string | undefined {
-  const fromConfig = normalizeApiKey(kimi?.apiKey);
+  const fromConfigRaw = normalizeResolvedSecretInputString({
+    value: kimi?.apiKey,
+    path: "tools.web.search.kimi.apiKey",
+  });
+  const fromConfig = normalizeSecretInput(fromConfigRaw);
   if (fromConfig) {
     return fromConfig;
   }
-  const fromEnvKimi = normalizeApiKey(process.env.KIMI_API_KEY);
+  const fromEnvKimi = normalizeSecretInput(process.env.KIMI_API_KEY);
   if (fromEnvKimi) {
     return fromEnvKimi;
   }
-  const fromEnvMoonshot = normalizeApiKey(process.env.MOONSHOT_API_KEY);
+  const fromEnvMoonshot = normalizeSecretInput(process.env.MOONSHOT_API_KEY);
   return fromEnvMoonshot || undefined;
 }
 
@@ -821,11 +829,15 @@ function resolveGeminiConfig(search?: WebSearchConfig): GeminiConfig {
 }
 
 function resolveGeminiApiKey(gemini?: GeminiConfig): string | undefined {
-  const fromConfig = normalizeApiKey(gemini?.apiKey);
+  const fromConfigRaw = normalizeResolvedSecretInputString({
+    value: gemini?.apiKey,
+    path: "tools.web.search.gemini.apiKey",
+  });
+  const fromConfig = normalizeSecretInput(fromConfigRaw);
   if (fromConfig) {
     return fromConfig;
   }
-  const fromEnv = normalizeApiKey(process.env.GEMINI_API_KEY);
+  const fromEnv = normalizeSecretInput(process.env.GEMINI_API_KEY);
   return fromEnv || undefined;
 }
 
