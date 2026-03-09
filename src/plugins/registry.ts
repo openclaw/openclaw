@@ -2,13 +2,13 @@ import path from "node:path";
 import type { AnyAgentTool } from "../agents/tools/common.js";
 import type { ChannelPlugin } from "../channels/plugins/types.js";
 import { registerContextEngineForOwner } from "../context-engine/registry.js";
-import { registerMemoryPromptSection } from "../memory/prompt-section.js";
 import type {
   GatewayRequestHandler,
   GatewayRequestHandlers,
 } from "../gateway/server-methods/types.js";
 import { registerInternalHook } from "../hooks/internal-hooks.js";
 import type { HookEntry } from "../hooks/types.js";
+import { registerMemoryPromptSection } from "../memory/prompt-section.js";
 import { resolveUserPath } from "../utils.js";
 import { registerPluginCommand, validatePluginCommandDefinition } from "./commands.js";
 import { normalizePluginHttpPath } from "./http-path.js";
