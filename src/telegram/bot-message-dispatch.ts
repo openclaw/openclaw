@@ -814,6 +814,7 @@ export const dispatchTelegramMessage = async ({
         message,
       };
       ctx.broadcast("chat", payload);
+      ctx.nodeSendToSession(sessionKey, "chat", payload);
       ctx.agentRunSeq.delete(runId);
     } catch (err) {
       runtime.error?.(`telegram broadcast failed: ${String(err)}`);
