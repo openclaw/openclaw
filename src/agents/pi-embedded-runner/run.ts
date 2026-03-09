@@ -1227,6 +1227,7 @@ export async function runEmbeddedPiAgent(
               reason: promptProfileFailureReason,
             });
             const promptFailoverFailure = isFailoverErrorMessage(errorText);
+            // Capture the failing profile before auth-profile rotation mutates `lastProfileId`.
             const failedPromptProfileId = lastProfileId;
             const logPromptFailoverDecision = createFailoverDecisionLogger({
               stage: "prompt",
@@ -1274,7 +1275,7 @@ export async function runEmbeddedPiAgent(
                 status,
               });
             }
-            if (promptFailoverFailure || promptFailoverReason || promptError) {
+            if (promptFailoverFailure || promptFailoverReason) {
               logPromptFailoverDecision("surface_error");
             }
             throw promptError;
@@ -1301,6 +1302,7 @@ export async function runEmbeddedPiAgent(
             resolveAuthProfileFailureReason(assistantFailoverReason);
           const cloudCodeAssistFormatError = attempt.cloudCodeAssistFormatError;
           const imageDimensionError = parseImageDimensionError(lastAssistant?.errorMessage ?? "");
+          // Capture the failing profile before auth-profile rotation mutates `lastProfileId`.
           const failedAssistantProfileId = lastProfileId;
           const logAssistantFailoverDecision = createFailoverDecisionLogger({
             stage: "assistant",

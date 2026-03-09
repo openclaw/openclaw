@@ -768,10 +768,11 @@ describe("runEmbeddedPiAgent auth profile rotation", () => {
       model: "mock-1",
       profileId: "openai:p1",
       providerErrorType: "overloaded_error",
-      providerErrorMessage: "Overloaded",
-      requestId: "req_overload",
-      rawError:
-        '{"type":"error","error":{"type":"overloaded_error","message":"Overloaded"},"request_id":"req_overload"}',
+      providerErrorMessagePreview: "Overloaded",
+      requestIdHash: expect.stringMatching(/^sha256:/),
+      rawErrorPreview: expect.stringContaining('"request_id":"sha256:'),
+      rawErrorHash: expect.stringMatching(/^sha256:/),
+      rawErrorFingerprint: expect.stringMatching(/^sha256:/),
     });
   });
 

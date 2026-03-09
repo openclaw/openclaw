@@ -13,6 +13,8 @@ export function logAuthProfileFailureStateChange(params: {
     params.reason === "billing" || params.reason === "auth_permanent" ? "disabled" : "cooldown";
   const previousCooldownUntil = params.previous?.cooldownUntil;
   const previousDisabledUntil = params.previous?.disabledUntil;
+  // Active cooldown/disable windows are intentionally immutable; log whether this
+  // update reused the existing window instead of extending it.
   const windowReused =
     windowType === "disabled"
       ? typeof previousDisabledUntil === "number" &&

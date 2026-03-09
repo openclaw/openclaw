@@ -61,7 +61,8 @@ describe("handleAgentEnd", () => {
       runId: "run-1",
       isError: true,
       error: "connection refused",
-      rawError: "connection refused",
+      rawErrorPreview: "connection refused",
+      rawErrorHash: expect.stringMatching(/^sha256:/),
       failoverReason: null,
       consoleMessage: "embedded run agent end: runId=run-1 isError=true error=connection refused",
     });
@@ -95,10 +96,15 @@ describe("handleAgentEnd", () => {
       runId: "run-1",
       isError: true,
       error: "The AI service is temporarily overloaded. Please try again in a moment.",
-      rawError: '{"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}',
+      rawErrorPreview:
+        '{"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}',
+      rawErrorHash: expect.stringMatching(/^sha256:/),
+      rawErrorFingerprint: expect.stringMatching(/^sha256:/),
       failoverReason: "overloaded",
       provider: "anthropic",
       model: "claude-test",
+      providerErrorType: "overloaded_error",
+      providerErrorMessagePreview: "Overloaded",
       consoleMessage:
         "embedded run agent end: runId=run-1 isError=true error=The AI service is temporarily overloaded. Please try again in a moment.",
     });

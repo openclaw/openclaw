@@ -1,5 +1,6 @@
 import { emitAgentEvent } from "../infra/agent-events.js";
 import { createInlineCodeState } from "../markdown/code-spans.js";
+import { buildApiErrorObservationFields } from "./pi-embedded-error-observation.js";
 import { classifyFailoverReason, formatAssistantErrorText } from "./pi-embedded-helpers.js";
 import type { EmbeddedPiSubscribeContext } from "./pi-embedded-subscribe.handlers.types.js";
 import { isAssistantMessage } from "./pi-embedded-utils.js";
@@ -39,16 +40,17 @@ export function handleAgentEnd(ctx: EmbeddedPiSubscribeContext) {
     const rawError = lastAssistant.errorMessage?.trim();
     const failoverReason = classifyFailoverReason(rawError ?? "");
     const errorText = (friendlyError || rawError || "LLM request failed.").trim();
+    const observedError = buildApiErrorObservationFields(rawError);
     ctx.log.warn("embedded run agent end", {
       event: "embedded_run_agent_end",
       tags: ["error_handling", "lifecycle", "agent_end", "assistant_error"],
       runId: ctx.params.runId,
       isError: true,
       error: errorText,
-      rawError,
       failoverReason,
       provider: lastAssistant.provider,
       model: lastAssistant.model,
+      ...observedError,
       consoleMessage: `embedded run agent end: runId=${ctx.params.runId} isError=true error=${errorText}`,
     });
     emitAgentEvent({
