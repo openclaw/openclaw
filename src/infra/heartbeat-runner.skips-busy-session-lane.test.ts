@@ -10,10 +10,18 @@ vi.mock("jiti", () => ({ createJiti: () => () => ({}) }));
 
 let previousRegistry: ReturnType<typeof getActivePluginRegistry> | null = null;
 
+const noopOutbound = {
+  deliveryMode: "direct" as const,
+  sendText: async () => ({ channel: "telegram" as const, messageId: "1", chatId: "1" }),
+  sendMedia: async () => ({ channel: "telegram" as const, messageId: "1", chatId: "1" }),
+};
+
 beforeAll(() => {
   previousRegistry = getActivePluginRegistry();
-  const telegramPlugin = createOutboundTestPlugin({ id: "telegram" });
-  const registry = createTestRegistry({ telegram: telegramPlugin });
+  const telegramPlugin = createOutboundTestPlugin({ id: "telegram", outbound: noopOutbound });
+  const registry = createTestRegistry([
+    { pluginId: "telegram", plugin: telegramPlugin, source: "test" },
+  ]);
   setActivePluginRegistry(registry);
 });
 
@@ -73,7 +81,9 @@ describe("heartbeat runner skips when target session lane is busy", () => {
       });
 
       expect(result.status).toBe("skipped");
-      expect(result.reason).toBe("requests-in-flight");
+      if (result.status === "skipped") {
+        expect(result.reason).toBe("requests-in-flight");
+      }
       expect(replySpy).not.toHaveBeenCalled();
     });
   });
