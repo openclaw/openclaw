@@ -96,7 +96,7 @@ export function mapGrpcError(err: unknown, operation: string): SandboxProviderEr
 
   // Map nice-grpc ClientError using status code
   if (err instanceof ClientError) {
-    const clientErr: { code: number; message: string } = err;
+    const clientErr = err as { code: number; message: string };
     const mapping = STATUS_MAP[clientErr.code];
     if (mapping) {
       return new SandboxProviderError(`${operation}: ${mapping.message} - ${clientErr.message}`, {
