@@ -170,9 +170,7 @@ export class AcpGatewayAgent implements Agent {
   }
 
   async newSession(params: NewSessionRequest): Promise<NewSessionResponse> {
-    if (params.mcpServers.length > 0) {
-      this.log(`ignoring ${params.mcpServers.length} MCP servers`);
-    }
+    this.assertSupportedSessionSetup(params.mcpServers);
     this.enforceSessionCreateRateLimit("newSession");
 
     const sessionId = randomUUID();
@@ -193,9 +191,7 @@ export class AcpGatewayAgent implements Agent {
   }
 
   async loadSession(params: LoadSessionRequest): Promise<LoadSessionResponse> {
-    if (params.mcpServers.length > 0) {
-      this.log(`ignoring ${params.mcpServers.length} MCP servers`);
-    }
+    this.assertSupportedSessionSetup(params.mcpServers);
     if (!this.sessionStore.hasSession(params.sessionId)) {
       this.enforceSessionCreateRateLimit("loadSession");
     }
@@ -256,7 +252,7 @@ export class AcpGatewayAgent implements Agent {
       this.log(`setSessionMode: ${session.sessionId} -> ${params.modeId}`);
     } catch (err) {
       this.log(`setSessionMode error: ${String(err)}`);
-      throw err;
+      throw err instanceof Error ? err : new Error(String(err));
     }
     return {};
   }
@@ -534,6 +530,15 @@ export class AcpGatewayAgent implements Agent {
         availableCommands: getAvailableCommands(),
       },
     });
+  }
+
+  private assertSupportedSessionSetup(mcpServers: ReadonlyArray<unknown>): void {
+    if (mcpServers.length === 0) {
+      return;
+    }
+    throw new Error(
+      "ACP bridge mode does not support per-session MCP servers. Configure MCP on the OpenClaw gateway or agent instead.",
+    );
   }
 
   private enforceSessionCreateRateLimit(method: "newSession" | "loadSession"): void {
