@@ -497,9 +497,14 @@ export async function runPreparedReply(
       }),
       // Resolve true origin platform — OriginatingChannel carries the real source
       // in relayed/cross-channel scenarios (e.g. Provider="webchat" but origin is "telegram").
+      // Extract the platform token only (first segment before ':' if present)
+      // to ensure exact-match checks in security plugins work correctly even
+      // if a full channel key like "telegram:group:123" is ever propagated.
       sourceProvider:
-        (ctx.OriginatingChannel ?? ctx.Provider ?? sessionCtx.Provider)?.trim().toLowerCase() ||
-        undefined,
+        (
+          (ctx.OriginatingChannel ?? ctx.Provider ?? sessionCtx.Provider)?.trim().toLowerCase() ||
+          ""
+        ).split(":")[0] || undefined,
       agentAccountId: sessionCtx.AccountId,
       groupId: resolveGroupSessionKey(sessionCtx)?.id ?? undefined,
       groupChannel: sessionCtx.GroupChannel?.trim() ?? sessionCtx.GroupSubject?.trim(),
@@ -509,7 +514,7 @@ export async function runPreparedReply(
       senderUsername: sessionCtx.SenderUsername?.trim() || undefined,
       senderE164: sessionCtx.SenderE164?.trim() || undefined,
       senderIsOwner: command.senderIsOwner,
-      spawnedBy: sessionEntry?.spawnedBy ?? undefined,
+      spawnedBy: sessionEntry?.spawnedBy ?? null,
       sessionFile,
       workspaceDir,
       config: cfg,
