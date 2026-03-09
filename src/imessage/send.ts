@@ -35,7 +35,7 @@ export type IMessageSendResult = {
 };
 
 const LEADING_REPLY_TAG_RE = /^\s*\[\[\s*reply_to\s*:\s*([^\]\n]+)\s*\]\]\s*/i;
-const REPLY_TAG_RE = /\[\[\s*reply_to(_current)?\s*:\s*[^\]\n]+\s*\]\]/gi;
+const REPLY_TAG_RE = /\[\[\s*reply_to(_current)?(\s*:\s*[^\]\n]+)?\s*\]\]/gi;
 const MAX_REPLY_TO_ID_LENGTH = 256;
 
 /**
@@ -159,7 +159,6 @@ export async function sendMessageIMessage(
   }
   // iMessage doesn't support native reply threading, so strip all reply tags
   message = stripReplyTags(message);
-  message = prependReplyTagIfNeeded(message, opts.replyToId);
 
   const params: Record<string, unknown> = {
     text: message,
