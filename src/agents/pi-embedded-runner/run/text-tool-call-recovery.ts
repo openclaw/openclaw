@@ -239,6 +239,8 @@ function findMarkdownCodeRanges(text: string): TextRange[] {
         closeMarkerLength += 1;
       }
       if (closeMarkerLength === markerLength) {
+        // Match the exact delimiter width so spans like ``code `inside` code``
+        // are treated as a single inline-code range.
         closeIndex = nextTick;
         break;
       }
