@@ -134,6 +134,7 @@ import {
 } from "./compaction-timeout.js";
 import { pruneProcessedHistoryImages } from "./history-image-prune.js";
 import { detectAndLoadPromptImages } from "./images.js";
+import { isToolCallBlockType, normalizeToolCallIdsInMessage } from "./normalize-tool-call-ids.js";
 import type { EmbeddedRunAttemptParams, EmbeddedRunAttemptResult } from "./types.js";
 
 type PromptBuildHookRunner = {
@@ -631,64 +632,6 @@ function normalizeToolCallNameForDispatch(
   }
 
   return resolveStructuredAllowedToolName(trimmed, allowedToolNames) ?? trimmed;
-}
-
-function isToolCallBlockType(type: unknown): boolean {
-  return type === "toolCall" || type === "toolUse" || type === "functionCall";
-}
-
-function normalizeToolCallIdsInMessage(message: unknown): void {
-  if (!message || typeof message !== "object") {
-    return;
-  }
-  const content = (message as { content?: unknown }).content;
-  if (!Array.isArray(content)) {
-    return;
-  }
-
-  const usedIds = new Set<string>();
-  for (const block of content) {
-    if (!block || typeof block !== "object") {
-      continue;
-    }
-    const typedBlock = block as { type?: unknown; id?: unknown };
-    if (!isToolCallBlockType(typedBlock.type) || typeof typedBlock.id !== "string") {
-      continue;
-    }
-    const trimmedId = typedBlock.id.trim();
-    if (!trimmedId) {
-      continue;
-    }
-    usedIds.add(trimmedId);
-  }
-
-  let fallbackIndex = 1;
-  for (const block of content) {
-    if (!block || typeof block !== "object") {
-      continue;
-    }
-    const typedBlock = block as { type?: unknown; id?: unknown };
-    if (!isToolCallBlockType(typedBlock.type)) {
-      continue;
-    }
-    if (typeof typedBlock.id === "string") {
-      const trimmedId = typedBlock.id.trim();
-      if (trimmedId) {
-        if (typedBlock.id !== trimmedId) {
-          typedBlock.id = trimmedId;
-        }
-        usedIds.add(trimmedId);
-        continue;
-      }
-    }
-
-    let fallbackId = "";
-    while (!fallbackId || usedIds.has(fallbackId)) {
-      fallbackId = `call_auto_${fallbackIndex++}`;
-    }
-    typedBlock.id = fallbackId;
-    usedIds.add(fallbackId);
-  }
 }
 
 function trimWhitespaceFromToolCallNamesInMessage(
