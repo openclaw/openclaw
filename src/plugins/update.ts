@@ -2,6 +2,7 @@ import fsSync from "node:fs";
 import path from "node:path";
 import type { OpenClawConfig } from "../config/config.js";
 import { openBoundaryFileSync } from "../infra/boundary-file-read.js";
+import { resolveNpmSpecMetadata, type NpmSpecResolution } from "../infra/install-source-utils.js";
 import type { UpdateChannel } from "../infra/update-channels.js";
 import { resolveUserPath } from "../utils.js";
 import { resolveBundledPluginSources } from "./bundled-sources.js";
@@ -100,6 +101,63 @@ function expectedIntegrityForUpdate(
     return undefined;
   }
   return integrity;
+}
+
+function hasIntegrityDrift(params: {
+  expectedIntegrity?: string;
+  expectedShasum?: string;
+  metadata: NpmSpecResolution;
+}): boolean {
+  if (params.expectedIntegrity) {
+    if (!params.metadata.integrity) {
+      return true;
+    }
+    return params.expectedIntegrity !== params.metadata.integrity;
+  }
+  if (params.expectedShasum) {
+    if (!params.metadata.shasum) {
+      return true;
+    }
+    return params.expectedShasum !== params.metadata.shasum;
+  }
+  return false;
+}
+
+async function probeNpmUpdateTarget(params: {
+  spec: string;
+  currentVersion?: string;
+  expectedIntegrity?: string;
+  expectedShasum?: string;
+}): Promise<
+  { ok: true; unchanged: boolean; metadata: NpmSpecResolution } | { ok: false; error: string }
+> {
+  const probe = await resolveNpmSpecMetadata({
+    spec: params.spec,
+    timeoutMs: 120_000,
+  });
+  if (!probe.ok) {
+    return probe;
+  }
+
+  const sameVersion =
+    !!params.currentVersion &&
+    !!probe.metadata.version &&
+    params.currentVersion === probe.metadata.version;
+  if (!sameVersion) {
+    return { ok: true, unchanged: false, metadata: probe.metadata };
+  }
+
+  if (
+    hasIntegrityDrift({
+      expectedIntegrity: params.expectedIntegrity,
+      expectedShasum: params.expectedShasum,
+      metadata: probe.metadata,
+    })
+  ) {
+    return { ok: true, unchanged: false, metadata: probe.metadata };
+  }
+
+  return { ok: true, unchanged: true, metadata: probe.metadata };
 }
 
 async function readInstalledPackageVersion(dir: string): Promise<string | undefined> {
@@ -259,6 +317,24 @@ export async function updateNpmInstalledPlugins(params: {
       continue;
     }
     const currentVersion = await readInstalledPackageVersion(installPath);
+    const expectedIntegrity = expectedIntegrityForUpdate(record.spec, record.integrity);
+    const versionProbe = await probeNpmUpdateTarget({
+      spec: record.spec,
+      currentVersion,
+      expectedIntegrity,
+      expectedShasum: record.shasum,
+    });
+    if (versionProbe.ok && versionProbe.unchanged) {
+      const version = versionProbe.metadata.version ?? currentVersion ?? "unknown";
+      outcomes.push({
+        pluginId,
+        status: "unchanged",
+        currentVersion: currentVersion ?? undefined,
+        nextVersion: versionProbe.metadata.version ?? undefined,
+        message: `${pluginId} already at ${version}.`,
+      });
+      continue;
+    }
 
     if (params.dryRun) {
       let probe: Awaited<ReturnType<typeof installPluginFromNpmSpec>>;
@@ -268,7 +344,7 @@ export async function updateNpmInstalledPlugins(params: {
           mode: "update",
           dryRun: true,
           expectedPluginId: pluginId,
-          expectedIntegrity: expectedIntegrityForUpdate(record.spec, record.integrity),
+          expectedIntegrity,
           onIntegrityDrift: createPluginUpdateIntegrityDriftHandler({
             pluginId,
             dryRun: true,
@@ -327,7 +403,7 @@ export async function updateNpmInstalledPlugins(params: {
         spec: record.spec,
         mode: "update",
         expectedPluginId: pluginId,
-        expectedIntegrity: expectedIntegrityForUpdate(record.spec, record.integrity),
+        expectedIntegrity,
         onIntegrityDrift: createPluginUpdateIntegrityDriftHandler({
           pluginId,
           dryRun: false,
