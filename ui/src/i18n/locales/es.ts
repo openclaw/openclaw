@@ -58,7 +58,7 @@ export const es: TranslationMap = {
       subtitle: "Dónde se conecta el panel y cómo se autentica.",
       wsUrl: "URL de WebSocket",
       token: "Token de la puerta de enlace",
-      password: "Contraseña (no se guarda)",
+      password: "Contraseña (no se guarda)", // pragma: allowlist secret
       sessionKey: "Clave de sesión predeterminada",
       language: "Idioma",
       connectHint: "Haz clic en Conectar para aplicar los cambios de conexión.",
