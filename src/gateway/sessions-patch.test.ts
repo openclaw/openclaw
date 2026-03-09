@@ -259,6 +259,26 @@ describe("gateway sessions patch", () => {
     expectPatchError(result, "spawnDepth is only supported");
   });
 
+  test("sets spawnDepth for ACP sessions", async () => {
+    const entry = expectPatchOk(
+      await runPatch({
+        storeKey: "agent:main:acp:run-123",
+        patch: { key: "agent:main:acp:run-123", spawnDepth: 1 },
+      }),
+    );
+    expect(entry.spawnDepth).toBe(1);
+  });
+
+  test("sets spawnedBy for ACP sessions", async () => {
+    const entry = expectPatchOk(
+      await runPatch({
+        storeKey: "agent:main:acp:run-456",
+        patch: { key: "agent:main:acp:run-456", spawnedBy: "agent:main" },
+      }),
+    );
+    expect(entry.spawnedBy).toBe("agent:main");
+  });
+
   test("normalizes exec/send/group patches", async () => {
     const entry = expectPatchOk(
       await runPatch({
