@@ -1425,6 +1425,21 @@ describe("applyExtraParamsToAgent", () => {
     });
   });
 
+  it("preserves OAuth betas when context1m is configured via model headers", () => {
+    const headers = runAnthropicHeaderCase({
+      cfg: {},
+      modelId: "claude-sonnet-4-6",
+      options: {
+        apiKey: "sk-ant-oat01-test-oauth-token", // pragma: allowlist secret
+        headers: { "anthropic-beta": "context-1m-2025-08-07" },
+      },
+    });
+
+    expect(headers?.["anthropic-beta"]).toContain("oauth-2025-04-20");
+    expect(headers?.["anthropic-beta"]).toContain("claude-code-20250219");
+    expect(headers?.["anthropic-beta"]).toContain("context-1m-2025-08-07");
+  });
+
   it("ignores context1m for non-Opus/Sonnet Anthropic models", () => {
     const cfg = buildAnthropicModelConfig("anthropic/claude-haiku-3-5", { context1m: true });
     const headers = runAnthropicHeaderCase({

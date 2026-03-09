@@ -358,11 +358,13 @@ export function applyExtraParamsToAgent(
     agent.streamFn = wrappedStreamFn;
   }
 
-  const anthropicBetas = resolveAnthropicBetas(merged, provider, modelId);
-  if (anthropicBetas?.length) {
-    log.debug(
-      `applying Anthropic beta header for ${provider}/${modelId}: ${anthropicBetas.join(",")}`,
-    );
+  const anthropicBetas = resolveAnthropicBetas(merged, provider, modelId) ?? [];
+  if (provider === "anthropic") {
+    if (anthropicBetas.length) {
+      log.debug(
+        `applying Anthropic beta header for ${provider}/${modelId}: ${anthropicBetas.join(",")}`,
+      );
+    }
     agent.streamFn = createAnthropicBetaHeadersWrapper(agent.streamFn, anthropicBetas);
   }
 
