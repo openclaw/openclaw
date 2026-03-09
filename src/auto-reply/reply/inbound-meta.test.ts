@@ -214,7 +214,7 @@ describe("buildInboundUserContextPrefix", () => {
     } as TemplateContext);
 
     const conversationInfo = parseConversationInfoPayload(text);
-    expect(conversationInfo["timestamp"]).toEqual(expect.any(String));
+    expect(conversationInfo["timestamp"]).toBe("Sun 2026-02-15T13:35Z");
   });
 
   it("omits invalid timestamps instead of throwing", () => {
