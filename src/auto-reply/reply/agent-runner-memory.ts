@@ -511,8 +511,8 @@ export async function runMemoryFlushIfNeeded(params: {
           // [lilac-start] augment prompt for daily checkpoint
           prompt: resolveMemoryFlushPromptForRun({
             prompt: dailyCheckpointNeeded
-              ? `<openclaw:daily-checkpoint>Daily memory checkpoint. Only store NEW memories from today — previous days' content was already saved to earlier date-stamped files.</openclaw:daily-checkpoint>\n${memoryFlushSettings.prompt}`
-              : memoryFlushSettings.prompt,
+              ? `<openclaw:daily-checkpoint>${memoryFlushSettings.prompt}</openclaw:daily-checkpoint>`
+              : `<openclaw:pre-compaction>${memoryFlushSettings.prompt}</openclaw:pre-compaction>`,
             cfg: params.cfg,
           }),
           // [lilac-end]
