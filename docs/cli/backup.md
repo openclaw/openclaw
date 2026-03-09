@@ -18,18 +18,25 @@ openclaw backup create --verify
 openclaw backup create --no-include-workspace
 openclaw backup create --only-config
 openclaw backup verify ./2026-03-09T00-00-00.000Z-openclaw-backup.tar.gz
+openclaw backup schedule add
+openclaw backup schedule add --cron "0 3 * * *" --tz America/Los_Angeles
+openclaw backup schedule list
+openclaw backup schedule remove <job-id>
 ```
 
 ## Notes
 
 - The archive includes a `manifest.json` file with the resolved source paths and archive layout.
 - Default output is a timestamped `.tar.gz` archive in the current working directory.
+- Scheduled backups default to writing timestamped archives into `~/Backups/`.
 - If the current working directory is inside a backed-up source tree, OpenClaw falls back to your home directory for the default archive location.
 - Existing archive files are never overwritten.
 - Output paths inside the source state/workspace trees are rejected to avoid self-inclusion.
 - `openclaw backup verify <archive>` validates that the archive contains exactly one root manifest, rejects traversal-style archive paths, and checks that every manifest-declared payload exists in the tarball.
 - `openclaw backup create --verify` runs that validation immediately after writing the archive.
 - `openclaw backup create --only-config` backs up just the active JSON config file.
+- `openclaw backup schedule ...` stores jobs in the Gateway cron scheduler, so scheduled runs happen on the machine running the Gateway and require `cron.enabled: true`.
+- `openclaw backup schedule add` defaults to `--every 24h` when you do not pass `--at`, `--every`, or `--cron`.
 
 ## What gets backed up
 
@@ -59,6 +66,26 @@ openclaw backup create --no-include-workspace
 That keeps state, config, and credentials in scope while skipping workspace discovery entirely.
 
 If you only need a copy of the config file itself, `--only-config` also works when the config is malformed because it does not rely on parsing the config for workspace discovery.
+
+## Scheduled backups
+
+Use scheduled backups when you want OpenClaw to create archives automatically through the Gateway cron scheduler instead of running `openclaw backup create` manually.
+
+```bash
+openclaw backup schedule add
+openclaw backup schedule add --cron "0 3 * * *" --tz America/Los_Angeles --verify
+openclaw backup schedule add --every 12h --no-include-workspace
+openclaw backup schedule list
+openclaw backup schedule remove <job-id>
+```
+
+Notes:
+
+- Scheduled backups are backed by cron jobs, so they share the same scheduler lifecycle and run logs as `openclaw cron`.
+- `backup schedule add` lets you set `--at`, `--every`, or `--cron`. If you omit all three, OpenClaw defaults to `--every 24h`.
+- The scheduled payload reuses the same backup engine and options as `backup create`, including `--output`, `--verify`, `--only-config`, and `--no-include-workspace`.
+- One-shot schedules created with `--at` delete themselves after a successful run.
+- `backup schedule list` only shows backup jobs, even if the scheduler also contains other cron jobs.
 
 ## Size and performance
 

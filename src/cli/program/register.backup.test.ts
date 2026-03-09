@@ -3,6 +3,7 @@ import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const backupCreateCommand = vi.fn();
 const backupVerifyCommand = vi.fn();
+const callGatewayFromCli = vi.fn();
 
 const runtime = {
   log: vi.fn(),
@@ -22,6 +23,11 @@ vi.mock("../../runtime.js", () => ({
   defaultRuntime: runtime,
 }));
 
+vi.mock("../gateway-rpc.js", () => ({
+  addGatewayClientOptions: (cmd: Command) => cmd,
+  callGatewayFromCli: (...args: unknown[]) => callGatewayFromCli(...args),
+}));
+
 let registerBackupCommand: typeof import("./register.backup.js").registerBackupCommand;
 
 beforeAll(async () => {
@@ -39,6 +45,7 @@ describe("registerBackupCommand", () => {
     vi.clearAllMocks();
     backupCreateCommand.mockResolvedValue(undefined);
     backupVerifyCommand.mockResolvedValue(undefined);
+    callGatewayFromCli.mockResolvedValue({});
   });
 
   it("runs backup create with forwarded options", async () => {
@@ -100,5 +107,83 @@ describe("registerBackupCommand", () => {
         json: true,
       }),
     );
+  });
+
+  it("creates scheduled backup jobs through cron.add", async () => {
+    await runCli(["backup", "schedule", "add", "--every", "24h", "--verify"]);
+
+    expect(callGatewayFromCli).toHaveBeenCalledWith(
+      "cron.add",
+      expect.objectContaining({
+        every: "24h",
+        verify: true,
+      }),
+      expect.objectContaining({
+        name: "Scheduled backup",
+        sessionTarget: "main",
+        wakeMode: "now",
+        schedule: {
+          kind: "every",
+          everyMs: 86_400_000,
+        },
+        payload: expect.objectContaining({
+          kind: "backupCreate",
+          output: "~/Backups/",
+          verify: true,
+          includeWorkspace: true,
+        }),
+      }),
+    );
+  });
+
+  it("defaults scheduled backups to every 24h when no schedule flag is provided", async () => {
+    await runCli(["backup", "schedule", "add"]);
+
+    expect(callGatewayFromCli).toHaveBeenCalledWith(
+      "cron.add",
+      expect.any(Object),
+      expect.objectContaining({
+        schedule: {
+          kind: "every",
+          everyMs: 86_400_000,
+        },
+      }),
+    );
+  });
+
+  it("lists only scheduled backup jobs", async () => {
+    callGatewayFromCli.mockResolvedValueOnce({
+      jobs: [
+        {
+          id: "backup-job",
+          name: "Scheduled backup",
+          enabled: true,
+          createdAtMs: Date.now(),
+          updatedAtMs: Date.now(),
+          schedule: { kind: "every", everyMs: 60_000 },
+          sessionTarget: "main",
+          wakeMode: "now",
+          payload: { kind: "backupCreate" },
+          state: {},
+        },
+        {
+          id: "non-backup-job",
+          name: "Other job",
+          enabled: true,
+          createdAtMs: Date.now(),
+          updatedAtMs: Date.now(),
+          schedule: { kind: "every", everyMs: 60_000 },
+          sessionTarget: "main",
+          wakeMode: "now",
+          payload: { kind: "systemEvent", text: "tick" },
+          state: {},
+        },
+      ],
+    });
+
+    await runCli(["backup", "schedule", "list", "--json"]);
+
+    expect(runtime.log).toHaveBeenCalledWith(expect.stringContaining('"id": "backup-job"'));
+    expect(runtime.log).not.toHaveBeenCalledWith(expect.stringContaining('"id": "non-backup-job"'));
   });
 });

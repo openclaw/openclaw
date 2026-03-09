@@ -13,13 +13,25 @@ export const DEFAULT_JOB_TIMEOUT_MS = 10 * 60_000; // 10 minutes
  */
 export const AGENT_TURN_SAFETY_TIMEOUT_MS = 60 * 60_000; // 60 minutes
 
+/**
+ * Backup archives can legitimately take a while to walk and compress large
+ * workspaces, so scheduled backups get the same wider safety ceiling.
+ */
+export const BACKUP_JOB_SAFETY_TIMEOUT_MS = 60 * 60_000; // 60 minutes
+
 export function resolveCronJobTimeoutMs(job: CronJob): number | undefined {
   const configuredTimeoutMs =
     job.payload.kind === "agentTurn" && typeof job.payload.timeoutSeconds === "number"
       ? Math.floor(job.payload.timeoutSeconds * 1_000)
       : undefined;
   if (configuredTimeoutMs === undefined) {
-    return job.payload.kind === "agentTurn" ? AGENT_TURN_SAFETY_TIMEOUT_MS : DEFAULT_JOB_TIMEOUT_MS;
+    if (job.payload.kind === "agentTurn") {
+      return AGENT_TURN_SAFETY_TIMEOUT_MS;
+    }
+    if (job.payload.kind === "backupCreate") {
+      return BACKUP_JOB_SAFETY_TIMEOUT_MS;
+    }
+    return DEFAULT_JOB_TIMEOUT_MS;
   }
   return configuredTimeoutMs <= 0 ? undefined : configuredTimeoutMs;
 }

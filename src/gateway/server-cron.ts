@@ -1,6 +1,7 @@
 import { resolveDefaultAgentId } from "../agents/agent-scope.js";
 import type { CliDeps } from "../cli/deps.js";
 import { createOutboundSendDeps } from "../cli/outbound-send-deps.js";
+import { backupCreateCommand } from "../commands/backup.js";
 import { loadConfig } from "../config/config.js";
 import {
   canonicalizeMainSessionAlias,
@@ -294,6 +295,37 @@ export function buildGatewayCronService(params: {
         sessionKey: `cron:${job.id}`,
         lane: "cron",
       });
+    },
+    runBackupJob: async ({ job }) => {
+      if (job.payload.kind !== "backupCreate") {
+        return { status: "error", error: 'cron backup jobs require payload.kind="backupCreate"' };
+      }
+
+      const result = await backupCreateCommand(
+        {
+          log: () => {},
+          error: () => {},
+          exit: (code: number) => {
+            throw new Error(`backup runtime exited with code ${code}`);
+          },
+        },
+        {
+          output: job.payload.output,
+          includeWorkspace: job.payload.includeWorkspace,
+          onlyConfig: job.payload.onlyConfig,
+          verify: job.payload.verify,
+        },
+      );
+
+      const scope = result.onlyConfig
+        ? "config backup"
+        : result.includeWorkspace
+          ? "backup"
+          : "backup (no workspace)";
+      return {
+        status: "ok",
+        summary: `${scope} created: ${result.archivePath}${result.verified ? " (verified)" : ""}`,
+      };
     },
     sendCronFailureAlert: async ({ job, text, channel, to, mode, accountId }) => {
       const { agentId, cfg: runtimeConfig } = resolveCronAgent(job.agentId);

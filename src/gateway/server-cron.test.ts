@@ -9,6 +9,7 @@ const enqueueSystemEventMock = vi.fn();
 const requestHeartbeatNowMock = vi.fn();
 const loadConfigMock = vi.fn();
 const fetchWithSsrFGuardMock = vi.fn();
+const backupCreateCommandMock = vi.fn();
 
 vi.mock("../infra/system-events.js", () => ({
   enqueueSystemEvent: (...args: unknown[]) => enqueueSystemEventMock(...args),
@@ -30,6 +31,10 @@ vi.mock("../infra/net/fetch-guard.js", () => ({
   fetchWithSsrFGuard: (...args: unknown[]) => fetchWithSsrFGuardMock(...args),
 }));
 
+vi.mock("../commands/backup.js", () => ({
+  backupCreateCommand: (...args: unknown[]) => backupCreateCommandMock(...args),
+}));
+
 import { buildGatewayCronService } from "./server-cron.js";
 
 describe("buildGatewayCronService", () => {
@@ -38,6 +43,13 @@ describe("buildGatewayCronService", () => {
     requestHeartbeatNowMock.mockClear();
     loadConfigMock.mockClear();
     fetchWithSsrFGuardMock.mockClear();
+    backupCreateCommandMock.mockClear();
+    backupCreateCommandMock.mockResolvedValue({
+      archivePath: "/tmp/openclaw-backup.tar.gz",
+      includeWorkspace: true,
+      onlyConfig: false,
+      verified: false,
+    });
   });
 
   it("routes main-target jobs to the scoped session for enqueue + wake", async () => {
@@ -135,6 +147,58 @@ describe("buildGatewayCronService", () => {
           signal: expect.any(AbortSignal),
         },
       });
+    } finally {
+      state.cron.stop();
+    }
+  });
+
+  it("runs scheduled backup jobs through backupCreateCommand", async () => {
+    const tmpDir = path.join(os.tmpdir(), `server-cron-backup-${Date.now()}`);
+    const cfg = {
+      session: {
+        mainKey: "main",
+      },
+      cron: {
+        store: path.join(tmpDir, "cron.json"),
+      },
+    } as OpenClawConfig;
+    loadConfigMock.mockReturnValue(cfg);
+
+    const state = buildGatewayCronService({
+      cfg,
+      deps: {} as CliDeps,
+      broadcast: () => {},
+    });
+    try {
+      const job = await state.cron.add({
+        name: "scheduled-backup",
+        enabled: true,
+        schedule: { kind: "at", at: new Date(1).toISOString() },
+        sessionTarget: "main",
+        wakeMode: "now",
+        payload: {
+          kind: "backupCreate",
+          output: "~/Backups/",
+          includeWorkspace: false,
+          verify: true,
+        },
+      });
+
+      await state.cron.run(job.id, "force");
+
+      expect(backupCreateCommandMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          log: expect.any(Function),
+          error: expect.any(Function),
+          exit: expect.any(Function),
+        }),
+        expect.objectContaining({
+          output: "~/Backups/",
+          includeWorkspace: false,
+          verify: true,
+        }),
+      );
+      expect(enqueueSystemEventMock).not.toHaveBeenCalled();
     } finally {
       state.cron.stop();
     }

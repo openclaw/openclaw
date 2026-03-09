@@ -1,5 +1,6 @@
 import crypto from "node:crypto";
 import { normalizeAgentId } from "../../routing/session-key.js";
+import { CRON_BACKUP_CREATE_KIND } from "../backup-payload.js";
 import { parseAbsoluteTimeMs } from "../parse.js";
 import {
   coerceFiniteScheduleNumber,
@@ -132,8 +133,12 @@ function resolveEveryAnchorMs(params: {
 }
 
 export function assertSupportedJobSpec(job: Pick<CronJob, "sessionTarget" | "payload">) {
-  if (job.sessionTarget === "main" && job.payload.kind !== "systemEvent") {
-    throw new Error('main cron jobs require payload.kind="systemEvent"');
+  if (
+    job.sessionTarget === "main" &&
+    job.payload.kind !== "systemEvent" &&
+    job.payload.kind !== CRON_BACKUP_CREATE_KIND
+  ) {
+    throw new Error('main cron jobs require payload.kind="systemEvent" or "backupCreate"');
   }
   if (job.sessionTarget === "isolated" && job.payload.kind !== "agentTurn") {
     throw new Error('isolated cron jobs require payload.kind="agentTurn"');
@@ -660,6 +665,26 @@ function mergeCronPayload(existing: CronPayload, patch: CronPayloadPatch): CronP
     return { kind: "systemEvent", text };
   }
 
+  if (patch.kind === CRON_BACKUP_CREATE_KIND) {
+    if (existing.kind !== CRON_BACKUP_CREATE_KIND) {
+      return buildPayloadFromPatch(patch);
+    }
+    const next: Extract<CronPayload, { kind: typeof CRON_BACKUP_CREATE_KIND }> = { ...existing };
+    if ("output" in patch) {
+      next.output = patch.output;
+    }
+    if ("includeWorkspace" in patch) {
+      next.includeWorkspace = patch.includeWorkspace;
+    }
+    if ("onlyConfig" in patch) {
+      next.onlyConfig = patch.onlyConfig;
+    }
+    if ("verify" in patch) {
+      next.verify = patch.verify;
+    }
+    return next;
+  }
+
   if (existing.kind !== "agentTurn") {
     return buildPayloadFromPatch(patch);
   }
@@ -745,6 +770,16 @@ function buildPayloadFromPatch(patch: CronPayloadPatch): CronPayload {
       throw new Error('cron.update payload.kind="systemEvent" requires text');
     }
     return { kind: "systemEvent", text: patch.text };
+  }
+
+  if (patch.kind === CRON_BACKUP_CREATE_KIND) {
+    return {
+      kind: CRON_BACKUP_CREATE_KIND,
+      output: patch.output,
+      includeWorkspace: patch.includeWorkspace,
+      onlyConfig: patch.onlyConfig,
+      verify: patch.verify,
+    };
   }
 
   if (typeof patch.message !== "string" || patch.message.length === 0) {

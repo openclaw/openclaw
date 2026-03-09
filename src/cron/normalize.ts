@@ -1,5 +1,6 @@
 import { sanitizeAgentId } from "../routing/session-key.js";
 import { isRecord } from "../utils.js";
+import { CRON_BACKUP_CREATE_KIND } from "./backup-payload.js";
 import { normalizeLegacyDeliveryInput } from "./legacy-delivery.js";
 import { parseAbsoluteTimeMs } from "./parse.js";
 import { migrateLegacyCronPayload } from "./payload-migration.js";
@@ -89,6 +90,8 @@ function coercePayload(payload: UnknownRecord) {
     next.kind = "agentTurn";
   } else if (kindRaw === "systemevent") {
     next.kind = "systemEvent";
+  } else if (kindRaw === CRON_BACKUP_CREATE_KIND.toLowerCase()) {
+    next.kind = CRON_BACKUP_CREATE_KIND;
   } else if (kindRaw) {
     next.kind = kindRaw;
   }
@@ -119,6 +122,18 @@ function coercePayload(payload: UnknownRecord) {
     const trimmed = next.text.trim();
     if (trimmed) {
       next.text = trimmed;
+    }
+  }
+  if ("output" in next) {
+    if (typeof next.output === "string") {
+      const trimmed = next.output.trim();
+      if (trimmed) {
+        next.output = trimmed;
+      } else {
+        delete next.output;
+      }
+    } else {
+      delete next.output;
     }
   }
   if ("model" in next) {
@@ -157,6 +172,15 @@ function coercePayload(payload: UnknownRecord) {
     typeof next.allowUnsafeExternalContent !== "boolean"
   ) {
     delete next.allowUnsafeExternalContent;
+  }
+  if ("includeWorkspace" in next && typeof next.includeWorkspace !== "boolean") {
+    delete next.includeWorkspace;
+  }
+  if ("onlyConfig" in next && typeof next.onlyConfig !== "boolean") {
+    delete next.onlyConfig;
+  }
+  if ("verify" in next && typeof next.verify !== "boolean") {
+    delete next.verify;
   }
   return next;
 }
@@ -432,6 +456,9 @@ export function normalizeCronJobInput(
     if (!next.sessionTarget && isRecord(next.payload)) {
       const kind = typeof next.payload.kind === "string" ? next.payload.kind : "";
       if (kind === "systemEvent") {
+        next.sessionTarget = "main";
+      }
+      if (kind === CRON_BACKUP_CREATE_KIND) {
         next.sessionTarget = "main";
       }
       if (kind === "agentTurn") {

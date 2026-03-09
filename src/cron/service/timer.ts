@@ -2,6 +2,7 @@ import { resolveFailoverReasonFromError } from "../../agents/failover-error.js";
 import type { CronConfig, CronRetryOn } from "../../config/types.cron.js";
 import type { HeartbeatRunResult } from "../../infra/heartbeat-wake.js";
 import { DEFAULT_AGENT_ID } from "../../routing/session-key.js";
+import { isCronBackupCreatePayload } from "../backup-payload.js";
 import { resolveCronDeliveryPlan } from "../delivery.js";
 import { sweepCronRunSessions } from "../session-reaper.js";
 import type {
@@ -1037,6 +1038,12 @@ export async function executeJobCore(
 
   if (abortSignal?.aborted) {
     return resolveAbortError();
+  }
+  if (isCronBackupCreatePayload(job.payload)) {
+    if (!state.deps.runBackupJob) {
+      return { status: "error", error: "cron backup job handler is not configured" };
+    }
+    return await state.deps.runBackupJob({ job, abortSignal });
   }
   if (job.sessionTarget === "main") {
     const text = resolveJobPayloadTextForMain(job);

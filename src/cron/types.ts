@@ -1,5 +1,6 @@
 import type { FailoverReason } from "../agents/pi-embedded-helpers.js";
 import type { ChannelId } from "../channels/plugins/types.js";
+import type { CronBackupCreatePayload, CronBackupCreatePayloadPatch } from "./backup-payload.js";
 import type { CronJobBase } from "./types-shared.js";
 
 export type CronSchedule =
@@ -78,9 +79,15 @@ export type CronFailureAlert = {
   accountId?: string;
 };
 
-export type CronPayload = { kind: "systemEvent"; text: string } | CronAgentTurnPayload;
+export type CronPayload =
+  | { kind: "systemEvent"; text: string }
+  | CronAgentTurnPayload
+  | CronBackupCreatePayload;
 
-export type CronPayloadPatch = { kind: "systemEvent"; text?: string } | CronAgentTurnPayloadPatch;
+export type CronPayloadPatch =
+  | { kind: "systemEvent"; text?: string }
+  | CronAgentTurnPayloadPatch
+  | CronBackupCreatePayloadPatch;
 
 type CronAgentTurnPayloadFields = {
   message: string;

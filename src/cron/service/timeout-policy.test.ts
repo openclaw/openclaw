@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { CronJob } from "../types.js";
 import {
   AGENT_TURN_SAFETY_TIMEOUT_MS,
+  BACKUP_JOB_SAFETY_TIMEOUT_MS,
   DEFAULT_JOB_TIMEOUT_MS,
   resolveCronJobTimeoutMs,
 } from "./timeout-policy.js";
@@ -31,6 +32,11 @@ describe("timeout-policy", () => {
   it("uses expanded safety timeout for agentTurn jobs without explicit timeout", () => {
     const timeout = resolveCronJobTimeoutMs(makeJob({ kind: "agentTurn", message: "hi" }));
     expect(timeout).toBe(AGENT_TURN_SAFETY_TIMEOUT_MS);
+  });
+
+  it("uses expanded safety timeout for backupCreate jobs", () => {
+    const timeout = resolveCronJobTimeoutMs(makeJob({ kind: "backupCreate" }));
+    expect(timeout).toBe(BACKUP_JOB_SAFETY_TIMEOUT_MS);
   });
 
   it("disables timeout when timeoutSeconds <= 0", () => {
