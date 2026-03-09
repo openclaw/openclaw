@@ -198,6 +198,7 @@ export const ModelCompatSchema = z
     requiresAssistantAfterToolResult: z.boolean().optional(),
     requiresThinkingAsText: z.boolean().optional(),
     requiresMistralToolIds: z.boolean().optional(),
+    requiresOpenAiAnthropicToolPayload: z.boolean().optional(),
   })
   .strict()
   .optional();
@@ -234,7 +235,7 @@ export const ModelProviderSchema = z
       .optional(),
     api: ModelApiSchema.optional(),
     injectNumCtxForOpenAICompat: z.boolean().optional(),
-    headers: z.record(z.string(), z.string()).optional(),
+    headers: z.record(z.string(), SecretInputSchema.register(sensitive)).optional(),
     authHeader: z.boolean().optional(),
     models: z.array(ModelDefinitionSchema),
   })

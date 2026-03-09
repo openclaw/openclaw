@@ -141,6 +141,7 @@ Notes:
 - `api.registerHttpHandler(...)` is obsolete. Use `api.registerHttpRoute(...)`.
 - Plugin routes must declare `auth` explicitly.
 - Exact `path + match` conflicts are rejected unless `replaceExisting: true`, and one plugin cannot replace another plugin's route.
+- Overlapping routes with different `auth` levels are rejected. Keep `exact`/`prefix` fallthrough chains on the same auth level only.
 
 ## Plugin SDK import paths
 
@@ -862,6 +863,7 @@ Command handler context:
 Command options:
 
 - `name`: Command name (without the leading `/`)
+- `nativeNames`: Optional native-command aliases for slash/menu surfaces. Use `default` for all native providers, or provider-specific keys like `discord`
 - `description`: Help text shown in command lists
 - `acceptsArgs`: Whether the command accepts arguments (default: false). If false and arguments are provided, the command won't match and the message falls through to other handlers
 - `requireAuth`: Whether to require authorized sender (default: true)

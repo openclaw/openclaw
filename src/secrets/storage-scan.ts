@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { listAgentIds, resolveAgentDir } from "../agents/agent-scope.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveUserPath } from "../utils.js";
 import { listAuthProfileStorePaths as listAuthProfileStorePathsFromAuthStorePaths } from "./auth-store-paths.js";
@@ -29,6 +30,32 @@ export function listLegacyAuthJsonPaths(stateDir: string): string[] {
     }
   }
   return out;
+}
+
+export function listAgentModelsJsonPaths(config: OpenClawConfig, stateDir: string): string[] {
+  const paths = new Set<string>();
+  paths.add(path.join(resolveUserPath(stateDir), "agents", "main", "agent", "models.json"));
+
+  const agentsRoot = path.join(resolveUserPath(stateDir), "agents");
+  if (fs.existsSync(agentsRoot)) {
+    for (const entry of fs.readdirSync(agentsRoot, { withFileTypes: true })) {
+      if (!entry.isDirectory()) {
+        continue;
+      }
+      paths.add(path.join(agentsRoot, entry.name, "agent", "models.json"));
+    }
+  }
+
+  for (const agentId of listAgentIds(config)) {
+    if (agentId === "main") {
+      paths.add(path.join(resolveUserPath(stateDir), "agents", "main", "agent", "models.json"));
+      continue;
+    }
+    const agentDir = resolveAgentDir(config, agentId);
+    paths.add(path.join(resolveUserPath(agentDir), "models.json"));
+  }
+
+  return [...paths];
 }
 
 export function readJsonObjectIfExists(filePath: string): {

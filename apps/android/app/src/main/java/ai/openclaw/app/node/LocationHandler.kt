@@ -5,7 +5,6 @@ import android.content.Context
 import android.content.pm.PackageManager
 import android.location.LocationManager
 import androidx.core.content.ContextCompat
-import ai.openclaw.app.LocationMode
 import ai.openclaw.app.gateway.GatewaySession
 import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.serialization.json.Json
@@ -17,7 +16,6 @@ class LocationHandler(
   private val location: LocationCaptureManager,
   private val json: Json,
   private val isForeground: () -> Boolean,
-  private val locationMode: () -> LocationMode,
   private val locationPreciseEnabled: () -> Boolean,
 ) {
   fun hasFineLocationPermission(): Boolean {
@@ -34,31 +32,17 @@ class LocationHandler(
       )
   }
 
-  fun hasBackgroundLocationPermission(): Boolean {
-    return (
-      ContextCompat.checkSelfPermission(appContext, Manifest.permission.ACCESS_BACKGROUND_LOCATION) ==
-        PackageManager.PERMISSION_GRANTED
-      )
-  }
-
   suspend fun handleLocationGet(paramsJson: String?): GatewaySession.InvokeResult {
-    val mode = locationMode()
-    if (!isForeground() && mode != LocationMode.Always) {
+    if (!isForeground()) {
       return GatewaySession.InvokeResult.error(
         code = "LOCATION_BACKGROUND_UNAVAILABLE",
-        message = "LOCATION_BACKGROUND_UNAVAILABLE: background location requires Always",
+        message = "LOCATION_BACKGROUND_UNAVAILABLE: location requires OpenClaw to stay open",
       )
     }
     if (!hasFineLocationPermission() && !hasCoarseLocationPermission()) {
       return GatewaySession.InvokeResult.error(
         code = "LOCATION_PERMISSION_REQUIRED",
         message = "LOCATION_PERMISSION_REQUIRED: grant Location permission",
-      )
-    }
-    if (!isForeground() && mode == LocationMode.Always && !hasBackgroundLocationPermission()) {
-      return GatewaySession.InvokeResult.error(
-        code = "LOCATION_PERMISSION_REQUIRED",
-        message = "LOCATION_PERMISSION_REQUIRED: enable Always in system Settings",
       )
     }
     val (maxAgeMs, timeoutMs, desiredAccuracy) = parseLocationParams(paramsJson)

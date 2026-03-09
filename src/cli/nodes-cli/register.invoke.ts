@@ -7,6 +7,7 @@ import {
   type ExecApprovalsFile,
   type ExecAsk,
   type ExecSecurity,
+  loadExecApprovals,
   maxAsk,
   minSecurity,
   normalizeExecAsk,
@@ -96,7 +97,9 @@ function resolveNodesRunPolicy(opts: NodesRunOpts, execDefaults: ExecDefaults | 
   if (opts.security && !requestedSecurity) {
     throw new Error("invalid --security (use deny|allowlist|full)");
   }
-  const configuredAsk = normalizeExecAsk(execDefaults?.ask) ?? "on-miss";
+  // Keep local exec defaults in sync with exec-approvals.json when tools.exec.ask is unset.
+  const configuredAsk =
+    normalizeExecAsk(execDefaults?.ask) ?? loadExecApprovals().defaults?.ask ?? "on-miss";
   const requestedAsk = normalizeExecAsk(opts.ask);
   if (opts.ask && !requestedAsk) {
     throw new Error("invalid --ask (use off|on-miss|always)");

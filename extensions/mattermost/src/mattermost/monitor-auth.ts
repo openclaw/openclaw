@@ -1,5 +1,6 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/mattermost";
 import {
+  evaluateSenderGroupAccessForPolicy,
   isDangerousNameMatchingEnabled,
   resolveAllowlistMatchSimple,
   resolveControlCommandGate,
@@ -231,7 +232,20 @@ export function authorizeMattermostCommandInvocation(params: {
       };
     }
   } else {
-    if (groupPolicy === "disabled") {
+    const senderGroupAccess = evaluateSenderGroupAccessForPolicy({
+      groupPolicy,
+      groupAllowFrom: effectiveGroupAllowFrom,
+      senderId,
+      isSenderAllowed: (_senderId, allowFrom) =>
+        isMattermostSenderAllowed({
+          senderId,
+          senderName,
+          allowFrom,
+          allowNameMatching,
+        }),
+    });
+
+    if (!senderGroupAccess.allowed && senderGroupAccess.reason === "disabled") {
       return {
         ok: false,
         denyReason: "channels-disabled",
@@ -245,33 +259,32 @@ export function authorizeMattermostCommandInvocation(params: {
       };
     }
 
-    if (groupPolicy === "allowlist") {
-      if (effectiveGroupAllowFrom.length === 0) {
-        return {
-          ok: false,
-          denyReason: "channel-no-allowlist",
-          commandAuthorized: false,
-          channelInfo,
-          kind,
-          chatType,
-          channelName,
-          channelDisplay,
-          roomLabel,
-        };
-      }
-      if (!groupAllowedForCommands) {
-        return {
-          ok: false,
-          denyReason: "unauthorized",
-          commandAuthorized: false,
-          channelInfo,
-          kind,
-          chatType,
-          channelName,
-          channelDisplay,
-          roomLabel,
-        };
-      }
+    if (!senderGroupAccess.allowed && senderGroupAccess.reason === "empty_allowlist") {
+      return {
+        ok: false,
+        denyReason: "channel-no-allowlist",
+        commandAuthorized: false,
+        channelInfo,
+        kind,
+        chatType,
+        channelName,
+        channelDisplay,
+        roomLabel,
+      };
+    }
+
+    if (!senderGroupAccess.allowed && senderGroupAccess.reason === "sender_not_allowlisted") {
+      return {
+        ok: false,
+        denyReason: "unauthorized",
+        commandAuthorized: false,
+        channelInfo,
+        kind,
+        chatType,
+        channelName,
+        channelDisplay,
+        roomLabel,
+      };
     }
 
     if (commandGate.shouldBlock) {

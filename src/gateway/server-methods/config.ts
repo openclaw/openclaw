@@ -1,7 +1,7 @@
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import { listChannelPlugins } from "../../channels/plugins/index.js";
 import {
-  CONFIG_PATH,
+  createConfigIO,
   loadConfig,
   parseConfigJson5,
   readConfigFileSnapshot,
@@ -207,6 +207,7 @@ function buildConfigRestartSentinelPayload(params: {
   threadId: ReturnType<typeof extractDeliveryInfo>["threadId"];
   note: string | undefined;
 }): RestartSentinelPayload {
+  const configPath = createConfigIO().configPath;
   return {
     kind: params.kind,
     status: "ok",
@@ -218,7 +219,7 @@ function buildConfigRestartSentinelPayload(params: {
     doctorHint: formatDoctorNonInteractiveHint(),
     stats: {
       mode: params.mode,
-      root: CONFIG_PATH,
+      root: configPath,
     },
   };
 }
@@ -333,7 +334,7 @@ export const configHandlers: GatewayRequestHandlers = {
       true,
       {
         ok: true,
-        path: CONFIG_PATH,
+        path: createConfigIO().configPath,
         config: redactConfigObject(parsed.config, parsed.schema.uiHints),
       },
       undefined,
@@ -450,7 +451,7 @@ export const configHandlers: GatewayRequestHandlers = {
       true,
       {
         ok: true,
-        path: CONFIG_PATH,
+        path: createConfigIO().configPath,
         config: redactConfigObject(validated.config, schemaPatch.uiHints),
         restart,
         sentinel: {
@@ -510,7 +511,7 @@ export const configHandlers: GatewayRequestHandlers = {
       true,
       {
         ok: true,
-        path: CONFIG_PATH,
+        path: createConfigIO().configPath,
         config: redactConfigObject(parsed.config, parsed.schema.uiHints),
         restart,
         sentinel: {
