@@ -114,6 +114,7 @@ export async function sendMessageNextcloudTalk(
       "X-Nextcloud-Talk-Bot-Signature": signature,
     },
     body: bodyStr,
+    signal: AbortSignal.timeout(30_000),
   });
 
   if (!response.ok) {
@@ -205,6 +206,7 @@ export async function sendReactionNextcloudTalk(
       "X-Nextcloud-Talk-Bot-Signature": signature,
     },
     body,
+    signal: AbortSignal.timeout(30_000),
   });
 
   if (!response.ok) {
