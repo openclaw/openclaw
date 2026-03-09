@@ -14,28 +14,28 @@
       "name": "morning-brief"
     },
     {
+      "schedule": "0 10 * * *",
+      "prompt": "Ideation scan: Call fin_ideation_trigger to scan markets for new strategy opportunities. Report any promising ideas found.",
+      "model": "sonnet",
+      "name": "ideation-scan"
+    },
+    {
+      "schedule": "0 12 * * *",
+      "prompt": "Evolution check: Call fin_evolution_scan to detect alpha decay in active strategies. Recommend evolution or retirement for degrading alphas.",
+      "model": "sonnet",
+      "name": "evolution-check"
+    },
+    {
       "schedule": "0 18 * * *",
       "prompt": "Evening review: Call fin_leaderboard and fin_list_promotions_ready. Analyze top/bottom performers, recommend promotions. Send summary via message_send.",
       "model": "sonnet",
-      "name": "ranking-promotion"
+      "name": "evening-review"
     },
     {
-      "schedule": "0 */6 * * *",
-      "prompt": "Evolution sweep: Call fin_evolve_trigger to run RDAVD evolution on eligible strategies. Report results.",
-      "model": "sonnet",
-      "name": "evolution-sweep"
-    },
-    {
-      "schedule": "0 10 * * 1",
-      "prompt": "Weekly report: Call fin_fund_status, fin_leaderboard, fin_fund_rebalance. Compile a comprehensive weekly performance report covering returns, risk metrics, strategy lifecycle changes, and capital allocation. Send via message_send.",
+      "schedule": "0 10 * * 0",
+      "prompt": "Weekly rebalance: Call fin_fund_status, fin_leaderboard, fin_fund_rebalance. Compile a comprehensive weekly performance report covering returns, risk metrics, strategy lifecycle changes, and capital allocation. Send via message_send.",
       "model": "opus",
-      "name": "weekly-report"
-    },
-    {
-      "schedule": "0 20 * * *",
-      "prompt": "Daily rebalance: Call fin_fund_rebalance to re-profile strategies, compute correlations, and re-allocate capital. Report any changes.",
-      "model": "sonnet",
-      "name": "daily-rebalance"
+      "name": "weekly-rebalance"
     }
   ]
 }
