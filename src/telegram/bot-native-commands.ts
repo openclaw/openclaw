@@ -520,6 +520,7 @@ export const registerTelegramNativeCommands = ({
     threadSpec: ReturnType<typeof resolveTelegramThreadSpec>;
     tableMode: ReturnType<typeof resolveMarkdownTableMode>;
     chunkMode: ReturnType<typeof resolveChunkMode>;
+    replyToModeOverride?: ReplyToMode;
   }) => ({
     chatId: String(params.chatId),
     accountId: params.accountId,
@@ -527,7 +528,7 @@ export const registerTelegramNativeCommands = ({
     runtime,
     bot,
     mediaLocalRoots: params.mediaLocalRoots,
-    replyToMode,
+    replyToMode: params.replyToModeOverride ?? replyToMode,
     textLimit,
     thread: params.threadSpec,
     tableMode: params.tableMode,
@@ -589,6 +590,11 @@ export const registerTelegramNativeCommands = ({
             return;
           }
           const { threadSpec, route, mediaLocalRoots, tableMode, chunkMode } = runtimeContext;
+          // Telegram can render the first assistant reply after native /new or /reset in DMs
+          // as replying to a command placeholder that disappears, which shows up as
+          // “Deleted message”. Prefer a plain message for those direct-chat resets.
+          const suppressDirectChatReplyTarget =
+            !isGroup && (normalizedCommandName === "new" || normalizedCommandName === "reset");
           const deliveryBaseOptions = buildCommandDeliveryBaseOptions({
             chatId,
             accountId: route.accountId,
@@ -596,6 +602,7 @@ export const registerTelegramNativeCommands = ({
             threadSpec,
             tableMode,
             chunkMode,
+            replyToModeOverride: suppressDirectChatReplyTarget ? "off" : undefined,
           });
           const threadParams = buildTelegramThreadParams(threadSpec) ?? {};
 
