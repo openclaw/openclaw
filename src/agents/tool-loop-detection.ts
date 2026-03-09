@@ -375,10 +375,13 @@ function canonicalPairKey(signatureA: string, signatureB: string): string {
  * stale entries never influence loop decisions regardless of call ordering.
  */
 function effectiveHistory(
-  history: NonNullable<SessionState["toolCallHistory"]>,
+  state: SessionState,
 ): NonNullable<SessionState["toolCallHistory"]> {
-  const lastEntry = history.at(-1);
-  if (lastEntry && Date.now() - lastEntry.timestamp > STALE_HISTORY_GAP_MS) {
+  const history = state.toolCallHistory ?? [];
+  if (history.length > 0 && history.some((h) => h.resultHash === undefined)) {
+    return history;
+  }
+  if (state.lastToolCallAt && Date.now() - state.lastToolCallAt > STALE_HISTORY_GAP_MS) {
     return [];
   }
   return history;
@@ -400,7 +403,10 @@ export function detectToolCallLoop(
   }
   // Use staleness-aware view so stale history from a previous heartbeat
   // cycle never causes false-positive warnings (#40144).
-  const history = effectiveHistory(state.toolCallHistory ?? []);
+  state.toolCallHistory = effectiveHistory(state);
+  state.lastToolCallAt = Date.now();
+
+  const history = state.toolCallHistory;
   const currentHash = hashToolCall(toolName, params);
   const noProgress = getNoProgressStreak(history, toolName, currentHash);
   const noProgressStreak = noProgress.count;
@@ -533,7 +539,8 @@ export function recordToolCall(
 
   // Clear stale history when there's a significant time gap (e.g. between
   // heartbeat cycles) to prevent false positive loop detection (#40144).
-  state.toolCallHistory = effectiveHistory(state.toolCallHistory);
+  state.toolCallHistory = effectiveHistory(state);
+  state.lastToolCallAt = Date.now();
 
   state.toolCallHistory.push({
     toolName,
@@ -572,9 +579,10 @@ export function recordToolCallOutcome(
     return;
   }
 
-  if (!state.toolCallHistory) {
-    state.toolCallHistory = [];
-  }
+  // Record outcome also respects staleness to prevent late-arriving results
+  // from reviving a stale history context.
+  state.toolCallHistory = effectiveHistory(state);
+  state.lastToolCallAt = Date.now();
 
   const argsHash = hashToolCall(params.toolName, params.toolParams);
   let matched = false;

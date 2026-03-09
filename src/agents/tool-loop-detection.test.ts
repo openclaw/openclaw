@@ -601,11 +601,13 @@ describe("tool-loop-detection", () => {
         recordToolCall(state, "read", { path: "/a.txt" }, `hb1-${i}`);
       }
       expect(state.toolCallHistory?.length).toBe(5);
-
-      // Simulate time gap > STALE_HISTORY_GAP_MS by backdating all entries
+      // Mark as finished so they can be cleared
       for (const entry of state.toolCallHistory ?? []) {
-        entry.timestamp = Date.now() - STALE_HISTORY_GAP_MS - 1000;
+        entry.resultHash = "finished";
       }
+
+      // Simulate time gap > STALE_HISTORY_GAP_MS by backdating lastToolCallAt
+      state.lastToolCallAt = Date.now() - STALE_HISTORY_GAP_MS - 1000;
 
       // Next heartbeat cycle records a tool call — stale history should be cleared first
       recordToolCall(state, "read", { path: "/a.txt" }, "hb2-0");
@@ -634,13 +636,16 @@ describe("tool-loop-detection", () => {
       for (let i = 0; i < WARNING_THRESHOLD - 2; i += 1) {
         recordToolCall(state, "message", { text: "status" }, `hb1-${i}`, config);
       }
+      // Mark as finished so they can be cleared
+      for (const entry of state.toolCallHistory ?? []) {
+        entry.resultHash = "finished";
+      }
+
       const firstResult = detectToolCallLoop(state, "message", { text: "status" }, config);
       expect(firstResult.stuck).toBe(false);
 
-      // Backdate all entries to simulate time passing between heartbeat cycles
-      for (const entry of state.toolCallHistory ?? []) {
-        entry.timestamp = Date.now() - STALE_HISTORY_GAP_MS - 1000;
-      }
+      // Backdate lastToolCallAt to simulate time passing between heartbeat cycles
+      state.lastToolCallAt = Date.now() - STALE_HISTORY_GAP_MS - 1000;
 
       // Second heartbeat: same tool calls should NOT accumulate with first cycle
       for (let i = 0; i < WARNING_THRESHOLD - 2; i += 1) {
@@ -661,12 +666,13 @@ describe("tool-loop-detection", () => {
       for (let i = 0; i < WARNING_THRESHOLD; i += 1) {
         detectToolCallLoop(state, "message", { text: "status" }, config);
         recordToolCall(state, "message", { text: "status" }, `hb1-${i}`, config);
+        // Mark as finished so they can be cleared
+        const last = state.toolCallHistory?.at(-1);
+        if (last) last.resultHash = "finished";
       }
 
-      // Backdate all entries to simulate time passing between heartbeat cycles
-      for (const entry of state.toolCallHistory ?? []) {
-        entry.timestamp = Date.now() - STALE_HISTORY_GAP_MS - 1000;
-      }
+      // Backdate lastToolCallAt to simulate time passing between heartbeat cycles
+      state.lastToolCallAt = Date.now() - STALE_HISTORY_GAP_MS - 1000;
 
       // Second heartbeat: the FIRST detectToolCallLoop call must not see the
       // stale WARNING_THRESHOLD entries — this is the exact scenario that was
@@ -677,6 +683,59 @@ describe("tool-loop-detection", () => {
       // After detection, record the call to mirror real ordering.
       recordToolCall(state, "message", { text: "status" }, "hb2-0", config);
       expect(state.toolCallHistory?.length).toBe(1);
+    });
+
+    it("does not reset history for a long-running tool if subsequent call is recent", () => {
+      const state = createState();
+      const config = enabledLoopDetectionConfig;
+
+      // Start a tool call at T=0
+      recordToolCall(state, "slow-tool", { id: 1 }, "call-1", config);
+      
+      // Simulate the tool running for 65s (exceeding STALE_HISTORY_GAP_MS)
+      // but the outcome AND the next call happen immediately after it finishes.
+      state.lastToolCallAt = Date.now() - STALE_HISTORY_GAP_MS - 5000;
+
+      // Outcome arrives at T=65s
+      recordToolCallOutcome(state, {
+        toolName: "slow-tool",
+        toolParams: { id: 1 },
+        toolCallId: "call-1",
+        result: "done",
+        config
+      });
+
+      // Now lastToolCallAt is updated to Now.
+      // Next call arrives at T=65.1s
+      const result = detectToolCallLoop(state, "slow-tool", { id: 1 }, config);
+      
+      // History should NOT have been cleared because recordToolCallOutcome refreshed lastToolCallAt
+      const stats = getToolCallStats(state);
+      expect(stats.totalCalls).toBe(1);
+    });
+
+    it("recordToolCallOutcome respects staleness guard", () => {
+      const state = createState();
+      recordToolCall(state, "tool", { id: 1 }, "call-1");
+      expect(state.toolCallHistory?.length).toBe(1);
+      const last = state.toolCallHistory?.at(-1);
+      if (last) last.resultHash = "finished";
+
+      // Backdate lastToolCallAt to make history stale
+      state.lastToolCallAt = Date.now() - STALE_HISTORY_GAP_MS - 1000;
+
+      // Late-arriving outcome from the previous stale cycle
+      recordToolCallOutcome(state, {
+        toolName: "tool",
+        toolParams: { id: 1 },
+        toolCallId: "call-1",
+        result: "late"
+      });
+
+      // History should have been cleared by state.toolCallHistory = effectiveHistory(state)
+      // and then since no match was found (history was empty), it should have pushed the outcome.
+      expect(state.toolCallHistory?.length).toBe(1);
+      expect(state.toolCallHistory?.[0]?.resultHash).toBeDefined();
     });
   });
 });
