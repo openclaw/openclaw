@@ -385,6 +385,7 @@ const TARGET_KEYS = [
   "agents.defaults.compaction.qualityGuard.maxRetries",
   "agents.defaults.compaction.postCompactionSections",
   "agents.defaults.compaction.model",
+  "agents.defaults.compaction.truncateAfterCompaction",
   "agents.defaults.compaction.memoryFlush",
   "agents.defaults.compaction.memoryFlush.enabled",
   "agents.defaults.compaction.memoryFlush.softThresholdTokens",
