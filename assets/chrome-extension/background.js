@@ -282,6 +282,10 @@ function scheduleReconnect() {
       if (!isRetryableReconnectError(err)) {
         return
       }
+      if (tabs.size === 0) {
+        cancelReconnect()
+        return
+      }
       scheduleReconnect()
     }
   }, delay)
