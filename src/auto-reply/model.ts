@@ -1,5 +1,6 @@
 import { splitTrailingAuthProfile } from "../agents/model-ref-profile.js";
 import { escapeRegExp } from "../utils.js";
+import { INLINE_DIRECTIVE_BOT_SUFFIX_PATTERN } from "./reply/directive-parsing.js";
 
 export function extractModelDirective(
   body?: string,
@@ -15,7 +16,10 @@ export function extractModelDirective(
   }
 
   const modelMatch = body.match(
-    /(?:^|\s)\/model(?=$|\s|:)\s*:?\s*([A-Za-z0-9_.:@-]+(?:\/[A-Za-z0-9_.:@-]+)*)?/i,
+    new RegExp(
+      String.raw`(?:^|\s)\/model${INLINE_DIRECTIVE_BOT_SUFFIX_PATTERN}(?=$|\s|:)\s*:?\s*([A-Za-z0-9_.:@-]+(?:\/[A-Za-z0-9_.:@-]+)*)?`,
+      "i",
+    ),
   );
 
   const aliases = (options?.aliases ?? []).map((alias) => alias.trim()).filter(Boolean);
@@ -24,7 +28,7 @@ export function extractModelDirective(
       ? null
       : body.match(
           new RegExp(
-            `(?:^|\\s)\\/(${aliases.map(escapeRegExp).join("|")})(?=$|\\s|:)(?:\\s*:\\s*)?`,
+            `(?:^|\\s)\\/(${aliases.map(escapeRegExp).join("|")})${INLINE_DIRECTIVE_BOT_SUFFIX_PATTERN}(?=$|\\s|:)(?:\\s*:\\s*)?`,
             "i",
           ),
         );

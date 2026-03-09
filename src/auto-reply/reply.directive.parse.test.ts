@@ -43,6 +43,13 @@ describe("directive parsing", () => {
     expect(res.reasoningLevel).toBe("on");
   });
 
+  it("accepts Telegram bot username suffixes on think directives", () => {
+    const res = extractThinkDirective("/think@CiwardMacBot high please");
+    expect(res.hasDirective).toBe(true);
+    expect(res.thinkLevel).toBe("high");
+    expect(res.cleaned).toBe("please");
+  });
+
   it("matches reasoning stream directive", () => {
     const res = extractReasoningDirective("/reasoning stream please");
     expect(res.hasDirective).toBe(true);
@@ -134,6 +141,13 @@ describe("directive parsing", () => {
     expect(res.cleaned).toBe("please now");
   });
 
+  it("accepts Telegram bot username suffixes on exec directives", () => {
+    const res = extractExecDirective("/exec@CiwardMacBot host=gateway");
+    expect(res.hasDirective).toBe(true);
+    expect(res.execHost).toBe("gateway");
+    expect(res.cleaned).toBe("");
+  });
+
   it("captures invalid exec host values", () => {
     const res = extractExecDirective("/exec host=spaceship");
     expect(res.hasDirective).toBe(true);
@@ -148,6 +162,13 @@ describe("directive parsing", () => {
     expect(res.queueMode).toBe("interrupt");
     expect(res.queueReset).toBe(false);
     expect(res.cleaned).toBe("please now");
+  });
+
+  it("accepts Telegram bot username suffixes on queue directives", () => {
+    const res = extractQueueDirective("/queue@CiwardMacBot interrupt");
+    expect(res.hasDirective).toBe(true);
+    expect(res.queueMode).toBe("interrupt");
+    expect(res.cleaned).toBe("");
   });
 
   it("preserves spacing when stripping think directives before paths", () => {
@@ -178,6 +199,12 @@ describe("directive parsing", () => {
     const res = extractStatusDirective("thats not /usage:/tmp/hello");
     expect(res.hasDirective).toBe(false);
     expect(res.cleaned).toBe("thats not /usage:/tmp/hello");
+  });
+
+  it("accepts Telegram bot username suffixes on status directives", () => {
+    const res = extractStatusDirective("/status@CiwardMacBot");
+    expect(res.hasDirective).toBe(true);
+    expect(res.cleaned).toBe("");
   });
 
   it("parses queue options and modes", () => {

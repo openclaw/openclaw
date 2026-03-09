@@ -1,5 +1,9 @@
 import { parseDurationMs } from "../../../cli/parse-duration.js";
-import { skipDirectiveArgPrefix, takeDirectiveToken } from "../directive-parsing.js";
+import {
+  INLINE_DIRECTIVE_BOT_SUFFIX_PATTERN,
+  skipDirectiveArgPrefix,
+  takeDirectiveToken,
+} from "../directive-parsing.js";
 import { normalizeQueueDropPolicy, normalizeQueueMode } from "./normalize.js";
 import type { QueueDropPolicy, QueueMode } from "./types.js";
 
@@ -143,7 +147,7 @@ export function extractQueueDirective(body?: string): {
       hasOptions: false,
     };
   }
-  const re = /(?:^|\s)\/queue(?=$|\s|:)/i;
+  const re = new RegExp(`(?:^|\\s)\\/queue${INLINE_DIRECTIVE_BOT_SUFFIX_PATTERN}(?=$|\\s|:)`, "i");
   const match = re.exec(body);
   if (!match) {
     return {
@@ -154,7 +158,7 @@ export function extractQueueDirective(body?: string): {
     };
   }
   const start = match.index + match[0].indexOf("/queue");
-  const argsStart = start + "/queue".length;
+  const argsStart = match.index + match[0].length;
   const args = body.slice(argsStart);
   const parsed = parseQueueDirectiveArgs(args);
   const cleanedRaw = `${body.slice(0, start)} ${body.slice(argsStart + parsed.consumed)}`;
