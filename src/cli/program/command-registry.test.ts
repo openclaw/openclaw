@@ -8,6 +8,7 @@ vi.mock("./register.agent.js", () => ({
   registerAgentCommands: (program: Command) => {
     program.command("agent");
     program.command("agents");
+    program.command("apps");
   },
 }));
 
@@ -56,10 +57,11 @@ describe("command-registry", () => {
     }
   };
 
-  it("includes both agent and agents in core CLI command names", () => {
+  it("includes agent, agents, and apps in core CLI command names", () => {
     const names = getCoreCliCommandNames();
     expect(names).toContain("agent");
     expect(names).toContain("agents");
+    expect(names).toContain("apps");
   });
 
   it("returns only commands that support subcommands", () => {
@@ -67,6 +69,7 @@ describe("command-registry", () => {
     expect(names).toContain("config");
     expect(names).toContain("memory");
     expect(names).toContain("agents");
+    expect(names).toContain("apps");
     expect(names).toContain("browser");
     expect(names).toContain("sessions");
     expect(names).not.toContain("agent");
@@ -74,13 +77,14 @@ describe("command-registry", () => {
     expect(names).not.toContain("doctor");
   });
 
-  it("registerCoreCliByName resolves agents to the agent entry", async () => {
+  it("registerCoreCliByName resolves apps to the shared agent entry", async () => {
     const program = createProgram();
-    const found = await registerCoreCliByName(program, testProgramContext, "agents");
+    const found = await registerCoreCliByName(program, testProgramContext, "apps");
     expect(found).toBe(true);
+    const appsCmd = program.commands.find((c) => c.name() === "apps");
+    expect(appsCmd).toBeDefined();
     const agentsCmd = program.commands.find((c) => c.name() === "agents");
     expect(agentsCmd).toBeDefined();
-    // The registrar also installs the singular "agent" command from the same entry.
     const agentCmd = program.commands.find((c) => c.name() === "agent");
     expect(agentCmd).toBeDefined();
   });
