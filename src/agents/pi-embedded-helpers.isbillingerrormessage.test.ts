@@ -443,6 +443,7 @@ describe("isLikelyContextOverflowError", () => {
 
 describe("isTransientHttpError", () => {
   it("returns true for retryable 5xx status codes", () => {
+    expect(isTransientHttpError("499 Client Closed Request")).toBe(true);
     expect(isTransientHttpError("500 Internal Server Error")).toBe(true);
     expect(isTransientHttpError("502 Bad Gateway")).toBe(true);
     expect(isTransientHttpError("503 Service Unavailable")).toBe(true);
@@ -454,6 +455,19 @@ describe("isTransientHttpError", () => {
   it("returns false for non-retryable or non-http text", () => {
     expect(isTransientHttpError("429 Too Many Requests")).toBe(false);
     expect(isTransientHttpError("network timeout")).toBe(false);
+  });
+});
+
+describe("classifyFailoverReasonFromHttpStatus", () => {
+  it("treats HTTP 499 as transient for structured errors", () => {
+    expect(classifyFailoverReasonFromHttpStatus(499)).toBe("timeout");
+    expect(classifyFailoverReasonFromHttpStatus(499, "499 Client Closed Request")).toBe("timeout");
+    expect(
+      classifyFailoverReasonFromHttpStatus(
+        499,
+        '{"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}',
+      ),
+    ).toBe("overloaded");
   });
 });
 
