@@ -50,10 +50,12 @@ export async function getMemorySearchManager(params: {
   const resolved = resolveMemoryBackendConfig(params);
   if (resolved.backend === "chain") {
     const { ChainMemoryManager } = await import("./chain/manager.js");
-    const manager = await ChainMemoryManager.create({
-      cfg: params.cfg,
-      agentId: params.agentId,
-      chain: resolved.chain,
+    const manager = new ChainMemoryManager({
+      config: resolved.chain,
+      getBackendManager: async (backend: string, _config?: unknown) => {
+        // TODO: Implement backend manager factory
+        throw new Error(`Backend ${backend} not implemented yet`);
+      },
     });
     return { manager };
   }

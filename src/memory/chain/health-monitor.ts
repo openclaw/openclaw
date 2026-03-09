@@ -137,7 +137,7 @@ export class HealthMonitor {
    */
   private calculateHealth(stats: ProviderWrapper["stats"], _responseTime: number): HealthStatus {
     // 如果熔断器打开，标记为 unhealthy
-    if (provider.stats.circuitBreakerState === "OPEN") {
+    if (stats.circuitBreakerState === "OPEN") {
       return "unhealthy";
     }
 

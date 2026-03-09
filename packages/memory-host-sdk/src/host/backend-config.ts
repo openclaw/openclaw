@@ -23,6 +23,41 @@ export type ResolvedMemoryBackendConfig = {
   chain?: ResolvedChainConfig;
 };
 
+// Chain Memory Backend 配置
+export type ResolvedChainConfig = {
+  providers: ResolvedChainProvider[];
+  global?: {
+    defaultTimeout: number;
+    enableAsyncWrite: boolean;
+    enableFallback: boolean;
+    healthCheckInterval: number;
+  };
+};
+
+export type ResolvedChainProvider = {
+  name: string;
+  priority: "primary" | "secondary" | "fallback";
+  backend?: string;
+  plugin?: string;
+  enabled: boolean;
+  writeMode: "sync" | "async";
+  timeout: {
+    add: number;
+    search: number;
+    update: number;
+    delete: number;
+  };
+  retry: {
+    maxAttempts: number;
+    backoffMs: number;
+  };
+  circuitBreaker: {
+    failureThreshold: number;
+    resetTimeoutMs: number;
+  };
+  [key: string]: unknown;
+};
+
 export type ResolvedQmdCollection = {
   name: string;
   path: string;
