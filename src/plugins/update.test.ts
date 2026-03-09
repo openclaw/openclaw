@@ -249,6 +249,74 @@ describe("updateNpmInstalledPlugins", () => {
     expect(installPluginFromNpmSpecMock).toHaveBeenCalledTimes(1);
   });
 
+  it("falls back to the installed manifest version when the installer omits version metadata", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-plugin-update-manifest-"));
+    tempDirs.push(root);
+    const installPath = path.join(root, "plugin");
+    await fs.mkdir(installPath, { recursive: true });
+    await fs.writeFile(
+      path.join(installPath, "package.json"),
+      JSON.stringify({ name: "@openclaw/test-plugin", version: "0.2.6" }),
+    );
+    resolveNpmSpecMetadataMock.mockResolvedValueOnce({
+      ok: true,
+      metadata: {
+        name: "@openclaw/test-plugin",
+        version: "0.2.7",
+        resolvedSpec: "@openclaw/test-plugin@0.2.7",
+        integrity: "sha512-registry",
+        shasum: "registry-shasum",
+      },
+    });
+    installPluginFromNpmSpecMock.mockImplementationOnce(async () => {
+      await fs.writeFile(
+        path.join(installPath, "package.json"),
+        JSON.stringify({ name: "@openclaw/test-plugin", version: "0.2.7" }),
+      );
+      return {
+        ok: true,
+        pluginId: "test",
+        targetDir: installPath,
+        version: undefined,
+        extensions: ["index.ts"],
+        npmResolution: {
+          name: "@openclaw/test-plugin",
+          version: "0.2.7",
+          resolvedSpec: "@openclaw/test-plugin@0.2.7",
+          integrity: "sha512-registry",
+          shasum: "registry-shasum",
+          resolvedAt: "2026-03-09T00:00:00.000Z",
+        },
+      };
+    });
+
+    const { updateNpmInstalledPlugins } = await import("./update.js");
+    const result = await updateNpmInstalledPlugins({
+      config: {
+        plugins: {
+          installs: {
+            test: {
+              source: "npm",
+              spec: "@openclaw/test-plugin",
+              installPath,
+            },
+          },
+        },
+      },
+      pluginIds: ["test"],
+    });
+
+    expect(result.outcomes).toEqual([
+      {
+        pluginId: "test",
+        status: "updated",
+        currentVersion: "0.2.6",
+        nextVersion: "0.2.7",
+        message: "Updated test: 0.2.6 -> 0.2.7.",
+      },
+    ]);
+  });
+
   it("skips integrity drift checks for unpinned npm specs during dry-run updates", async () => {
     installPluginFromNpmSpecMock.mockResolvedValue({
       ok: true,

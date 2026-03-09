@@ -505,7 +505,8 @@ export async function updateNpmInstalledPlugins(params: {
       continue;
     }
 
-    const nextVersion = result.version ?? (await readInstalledPackageVersion(result.targetDir));
+    const nextVersion =
+      result.version ?? (await readInstalledPackageManifest(result.targetDir)).version ?? null;
     next = recordPluginInstall(next, {
       pluginId,
       source: "npm",
