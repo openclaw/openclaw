@@ -338,6 +338,57 @@ describe("subagent announce formatting", () => {
     expect(requestHeartbeatNowMock).not.toHaveBeenCalled();
   });
 
+  it("does not wake the parent session when completion delivery is queued", async () => {
+    embeddedRunMock.isEmbeddedPiRunActive.mockReturnValue(true);
+    embeddedRunMock.isEmbeddedPiRunStreaming.mockReturnValue(false);
+    sessionStore = {
+      "agent:main:main": {
+        sessionId: "session-wake-queued",
+        lastChannel: "telegram",
+        lastTo: "123",
+        queueMode: "collect",
+        queueDebounceMs: 0,
+      },
+    };
+
+    await runSubagentAnnounceFlow({
+      childSessionKey: "agent:main:subagent:wake-test-queued",
+      childRunId: "run-wake-queued",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      ...defaultOutcomeAnnounce,
+      wakeParentOnCompletion: true,
+    });
+
+    expect(enqueueSystemEventMock).not.toHaveBeenCalled();
+    expect(requestHeartbeatNowMock).not.toHaveBeenCalled();
+  });
+
+  it("does not wake the parent session when completion delivery is steered", async () => {
+    embeddedRunMock.queueEmbeddedPiMessage.mockReturnValue(true);
+    sessionStore = {
+      "agent:main:main": {
+        sessionId: "session-wake-steered",
+        lastChannel: "telegram",
+        lastTo: "123",
+        queueMode: "steer",
+        queueDebounceMs: 0,
+      },
+    };
+
+    await runSubagentAnnounceFlow({
+      childSessionKey: "agent:main:subagent:wake-test-steered",
+      childRunId: "run-wake-steered",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      ...defaultOutcomeAnnounce,
+      wakeParentOnCompletion: true,
+    });
+
+    expect(enqueueSystemEventMock).not.toHaveBeenCalled();
+    expect(requestHeartbeatNowMock).not.toHaveBeenCalled();
+  });
+
   it("includes success status when outcome is ok", async () => {
     // Use waitForCompletion: false so it uses the provided outcome instead of calling agent.wait
     await runSubagentAnnounceFlow({
