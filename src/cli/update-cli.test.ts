@@ -121,9 +121,9 @@ vi.mock("./update-cli/restart-helper.js", () => ({
 }));
 
 vi.mock("./daemon-cli/restart-health.js", () => ({
-  waitForGatewayHealthyRestart: (...args: unknown[]) => waitForGatewayHealthyRestart(...args),
-  terminateStaleGatewayPids: (...args: unknown[]) => terminateStaleGatewayPids(...args),
-  renderRestartDiagnostics: (...args: unknown[]) => renderRestartDiagnostics(...args),
+  waitForGatewayHealthyRestart,
+  terminateStaleGatewayPids,
+  renderRestartDiagnostics,
 }));
 
 // Mock doctor (heavy module; should not run in unit tests)
