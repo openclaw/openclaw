@@ -9,6 +9,16 @@ import { resolveCliNoOutputTimeoutMs } from "./cli-runner/helpers.js";
 const supervisorSpawnMock = vi.fn();
 const enqueueSystemEventMock = vi.fn();
 const requestHeartbeatNowMock = vi.fn();
+const ensureMcpConfigFileMock = vi.hoisted(() => vi.fn(() => "/tmp/openclaw-mcp.json"));
+const resolveMcpLoopbackTokenMock = vi.hoisted(() => vi.fn(() => "test-mcp-token-hex"));
+
+vi.mock("../gateway/mcp-http.js", () => ({
+  MCP_PORT_OFFSET: 1,
+  ensureMcpConfigFile: (...args: Parameters<typeof ensureMcpConfigFileMock>) =>
+    ensureMcpConfigFileMock(...args),
+  resolveMcpLoopbackToken: (...args: Parameters<typeof resolveMcpLoopbackTokenMock>) =>
+    resolveMcpLoopbackTokenMock(...args),
+}));
 
 vi.mock("../process/supervisor/index.js", () => ({
   getProcessSupervisor: () => ({
@@ -61,6 +71,10 @@ describe("runCliAgent with process supervisor", () => {
     supervisorSpawnMock.mockClear();
     enqueueSystemEventMock.mockClear();
     requestHeartbeatNowMock.mockClear();
+    ensureMcpConfigFileMock.mockClear();
+    ensureMcpConfigFileMock.mockReturnValue("/tmp/openclaw-mcp.json");
+    resolveMcpLoopbackTokenMock.mockClear();
+    resolveMcpLoopbackTokenMock.mockReturnValue("test-mcp-token-hex");
   });
 
   it("runs CLI through supervisor and returns payload", async () => {
@@ -105,6 +119,51 @@ describe("runCliAgent with process supervisor", () => {
     expect(input.noOutputTimeoutMs).toBeGreaterThanOrEqual(1_000);
     expect(input.replaceExistingScope).toBe(true);
     expect(input.scopeKey).toContain("thread-123");
+    expect(ensureMcpConfigFileMock).not.toHaveBeenCalled();
+  });
+
+  it("adds strict MCP config flags for claude-cli", async () => {
+    supervisorSpawnMock.mockResolvedValueOnce(
+      createManagedRun({
+        reason: "exit",
+        exitCode: 0,
+        exitSignal: null,
+        durationMs: 50,
+        stdout: '{"content":[{"type":"text","text":"ok"}]}',
+        stderr: "",
+        timedOut: false,
+        noOutputTimedOut: false,
+      }),
+    );
+
+    await runCliAgent({
+      sessionId: "s1",
+      sessionKey: "agent:main:main",
+      sessionFile: "/tmp/session.jsonl",
+      workspaceDir: "/tmp",
+      config: {
+        gateway: {
+          port: 19000,
+        },
+      } as OpenClawConfig,
+      prompt: "hi",
+      provider: "claude-cli",
+      model: "sonnet",
+      timeoutMs: 1_000,
+      runId: "run-claude-mcp",
+    });
+
+    expect(ensureMcpConfigFileMock).toHaveBeenCalledTimes(1);
+    expect(ensureMcpConfigFileMock).toHaveBeenCalledWith(
+      path.join(os.homedir(), ".openclaw"),
+      19001,
+    );
+    const input = supervisorSpawnMock.mock.calls[0]?.[0] as { argv?: string[] };
+    expect(input.argv).toContain("--strict-mcp-config");
+    expect(input.argv).toContain("--mcp-config");
+    const mcpConfigIndex = input.argv?.indexOf("--mcp-config") ?? -1;
+    expect(mcpConfigIndex).toBeGreaterThanOrEqual(0);
+    expect(input.argv?.[mcpConfigIndex + 1]).toBe("/tmp/openclaw-mcp.json");
   });
 
   it("fails with timeout when no-output watchdog trips", async () => {
@@ -293,6 +352,88 @@ describe("runCliAgent with process supervisor", () => {
 
     const input = supervisorSpawnMock.mock.calls[0]?.[0] as { cwd?: string };
     expect(input.cwd).toBe(path.resolve(fallbackWorkspace));
+  });
+});
+
+describe("runCliAgent MCP hardening", () => {
+  beforeEach(() => {
+    supervisorSpawnMock.mockClear();
+    ensureMcpConfigFileMock.mockClear();
+    ensureMcpConfigFileMock.mockReturnValue("/tmp/openclaw-mcp.json");
+    resolveMcpLoopbackTokenMock.mockClear();
+    resolveMcpLoopbackTokenMock.mockReturnValue("test-mcp-token-hex");
+  });
+
+  it("sets OPENCLAW_MCP_TOKEN in env when mcpConfigPath is set", async () => {
+    supervisorSpawnMock.mockResolvedValueOnce(
+      createManagedRun({
+        reason: "exit",
+        exitCode: 0,
+        exitSignal: null,
+        durationMs: 50,
+        stdout: '{"content":[{"type":"text","text":"ok"}]}',
+        stderr: "",
+        timedOut: false,
+        noOutputTimedOut: false,
+      }),
+    );
+
+    await runCliAgent({
+      sessionId: "s1",
+      sessionKey: "agent:main:main",
+      sessionFile: "/tmp/session.jsonl",
+      workspaceDir: "/tmp",
+      config: { gateway: { port: 19000 } } as OpenClawConfig,
+      prompt: "hi",
+      provider: "claude-cli",
+      model: "sonnet",
+      timeoutMs: 1_000,
+      runId: "run-mcp-token",
+    });
+
+    const input = supervisorSpawnMock.mock.calls[0]?.[0] as { env?: Record<string, string> };
+    expect(input.env?.OPENCLAW_MCP_TOKEN).toBe("test-mcp-token-hex");
+    expect(resolveMcpLoopbackTokenMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not include --mcp-config but appends tools-disabled hint when MCP setup fails for claude-cli", async () => {
+    ensureMcpConfigFileMock.mockImplementationOnce(() => {
+      throw new Error("mcp config setup failed");
+    });
+    supervisorSpawnMock.mockResolvedValueOnce(
+      createManagedRun({
+        reason: "exit",
+        exitCode: 0,
+        exitSignal: null,
+        durationMs: 50,
+        stdout: '{"content":[{"type":"text","text":"ok"}]}',
+        stderr: "",
+        timedOut: false,
+        noOutputTimedOut: false,
+      }),
+    );
+
+    await runCliAgent({
+      sessionId: "s1",
+      sessionKey: "agent:main:main",
+      sessionFile: "/tmp/session.jsonl",
+      workspaceDir: "/tmp",
+      config: { gateway: { port: 19000 } } as OpenClawConfig,
+      prompt: "hi",
+      provider: "claude-cli",
+      model: "sonnet",
+      timeoutMs: 1_000,
+      runId: "run-fail-closed",
+    });
+
+    const input = supervisorSpawnMock.mock.calls[0]?.[0] as {
+      argv?: string[];
+      env?: Record<string, string>;
+    };
+    // No MCP config flag when setup failed.
+    expect(input.argv).not.toContain("--mcp-config");
+    // Token should not be set when mcpConfigPath is undefined.
+    expect(input.env?.OPENCLAW_MCP_TOKEN).toBeUndefined();
   });
 });
 
