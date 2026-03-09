@@ -5,7 +5,13 @@ import { registerSkillsChangeListener } from "../agents/skills/refresh.js";
 import { initSubagentRegistry } from "../agents/subagent-registry.js";
 import { getTotalPendingReplies } from "../auto-reply/reply/dispatcher-registry.js";
 import type { CanvasHostServer } from "../canvas-host/server.js";
-import { type ChannelId, listChannelPlugins } from "../channels/plugins/index.js";
+import { resolveChannelDefaultAccountId } from "../channels/plugins/helpers.js";
+import {
+  getChannelPlugin,
+  listChannelPlugins,
+  normalizeChannelId,
+  type ChannelId,
+} from "../channels/plugins/index.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import { createDefaultDeps } from "../cli/deps.js";
 import { isRestartEnabled } from "../config/commands.js";
@@ -75,7 +81,7 @@ import {
 import { ExecApprovalManager } from "./exec-approval-manager.js";
 import { NodeRegistry } from "./node-registry.js";
 import type { startBrowserControlServerIfEnabled } from "./server-browser.js";
-import { createChannelManager } from "./server-channels.js";
+import { createChannelManager, type ChannelManager } from "./server-channels.js";
 import { createAgentEventHandler } from "./server-chat.js";
 import { createGatewayCloseHandler } from "./server-close.js";
 import { buildGatewayCronService } from "./server-cron.js";
@@ -206,6 +212,165 @@ function applyGatewayAuthOverridesForStartupPreflight(
       tailscale: mergeGatewayTailscaleConfig(config.gateway?.tailscale, overrides.tailscale),
     },
   };
+}
+
+type PendingDeliveryRecoveryTarget = {
+  channel: ChannelId;
+  accountId: string;
+};
+
+function createAbortError(message: string): Error {
+  const err = new Error(message);
+  err.name = "AbortError";
+  return err;
+}
+
+function throwIfAborted(signal?: AbortSignal): void {
+  if (signal?.aborted) {
+    throw createAbortError("Delivery recovery preflight aborted");
+  }
+}
+
+async function sleepWithAbort(ms: number, signal?: AbortSignal): Promise<void> {
+  if (ms <= 0) {
+    throwIfAborted(signal);
+    return;
+  }
+  if (!signal) {
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, ms);
+    });
+    return;
+  }
+  await new Promise<void>((resolve, reject) => {
+    const onAbort = () => {
+      clearTimeout(timer);
+      signal.removeEventListener("abort", onAbort);
+      reject(createAbortError("Delivery recovery preflight aborted"));
+    };
+    const timer = setTimeout(() => {
+      signal.removeEventListener("abort", onAbort);
+      resolve();
+    }, ms);
+    if (signal.aborted) {
+      onAbort();
+      return;
+    }
+    signal.addEventListener("abort", onAbort, { once: true });
+  });
+}
+
+function resolvePendingDeliveryRecoveryTargets(params: {
+  pending: Array<{ channel?: unknown; accountId?: unknown }>;
+  cfg: OpenClawConfig;
+}): PendingDeliveryRecoveryTarget[] {
+  const targets = new Map<string, PendingDeliveryRecoveryTarget>();
+
+  for (const entry of params.pending) {
+    const channelRaw = typeof entry.channel === "string" ? entry.channel : null;
+    const channel = normalizeChannelId(channelRaw);
+    if (!channel) {
+      continue;
+    }
+    const plugin = getChannelPlugin(channel);
+    if (!plugin) {
+      continue;
+    }
+    const accountIdRaw = typeof entry.accountId === "string" ? entry.accountId.trim() : "";
+    const accountId =
+      accountIdRaw ||
+      resolveChannelDefaultAccountId({
+        plugin,
+        cfg: params.cfg,
+      });
+    const key = `${channel}:${accountId}`;
+    if (!targets.has(key)) {
+      targets.set(key, { channel, accountId });
+    }
+  }
+
+  return [...targets.values()];
+}
+
+function shouldRequireConnectedForRecovery(channel: ChannelId): boolean {
+  // Some channels (e.g. Discord) can send outbound over REST even when runtime
+  // reports connected=false. Restrict the connected gate to channels where
+  // listener/socket readiness is required for outbound delivery.
+  return channel === "whatsapp";
+}
+
+function formatRecoveryTarget(target: PendingDeliveryRecoveryTarget): string {
+  return `${target.channel}:${target.accountId}`;
+}
+
+async function waitForPendingDeliveryChannelReadiness(params: {
+  channelManager: ChannelManager;
+  targets: PendingDeliveryRecoveryTarget[];
+  log: { info: (msg: string) => void; warn: (msg: string) => void };
+  timeoutMs?: number;
+  pollMs?: number;
+  signal?: AbortSignal;
+}): Promise<void> {
+  const targets = [...params.targets].filter(
+    (target, index, arr) =>
+      index ===
+      arr.findIndex(
+        (item) => item.channel === target.channel && item.accountId === target.accountId,
+      ),
+  );
+  if (targets.length === 0) {
+    return;
+  }
+
+  const timeoutMs = params.timeoutMs ?? 15_000;
+  const pollMs = Math.max(50, params.pollMs ?? 250);
+  const deadline = Date.now() + timeoutMs;
+  const targetLabel = targets.map((target) => formatRecoveryTarget(target)).join(", ");
+
+  params.log.info(
+    `Recovery preflight: waiting for runtime readiness (${targetLabel}), timeout ${timeoutMs}ms`,
+  );
+
+  while (true) {
+    throwIfAborted(params.signal);
+
+    const snapshot = params.channelManager.getRuntimeSnapshot();
+    const waiting: string[] = [];
+
+    for (const target of targets) {
+      const accountMap = snapshot.channelAccounts[target.channel];
+      const account = accountMap?.[target.accountId];
+      if (!account) {
+        waiting.push(formatRecoveryTarget(target));
+        continue;
+      }
+      if (account.enabled === false || account.configured === false) {
+        continue;
+      }
+      if (account.running !== true) {
+        waiting.push(formatRecoveryTarget(target));
+        continue;
+      }
+      if (shouldRequireConnectedForRecovery(target.channel) && account.connected !== true) {
+        waiting.push(formatRecoveryTarget(target));
+      }
+    }
+
+    if (waiting.length === 0) {
+      params.log.info(`Recovery preflight complete: runtime ready for ${targetLabel}`);
+      return;
+    }
+
+    const now = Date.now();
+    if (now >= deadline) {
+      params.log.warn(
+        `Recovery preflight timeout after ${timeoutMs}ms; continuing while waiting on: ${waiting.join(", ")}`,
+      );
+      return;
+    }
+
+    await sleepWithAbort(Math.min(pollMs, Math.max(1, deadline - now)), params.signal);
+  }
 }
 
 export type GatewayServer = {
@@ -765,20 +930,6 @@ export async function startGatewayServer(
     void cron.start().catch((err) => logCron.error(`failed to start: ${String(err)}`));
   }
 
-  // Recover pending outbound deliveries from previous crash/restart.
-  if (!minimalTestGateway) {
-    void (async () => {
-      const { recoverPendingDeliveries } = await import("../infra/outbound/delivery-queue.js");
-      const { deliverOutboundPayloads } = await import("../infra/outbound/deliver.js");
-      const logRecovery = log.child("delivery-recovery");
-      await recoverPendingDeliveries({
-        deliver: deliverOutboundPayloads,
-        log: logRecovery,
-        cfg: cfgAtStart,
-      });
-    })().catch((err) => log.error(`Delivery recovery failed: ${String(err)}`));
-  }
-
   const execApprovalManager = new ExecApprovalManager();
   const execApprovalForwarder = createExecApprovalForwarder();
   const execApprovalHandlers = createExecApprovalHandlers(execApprovalManager, {
@@ -936,6 +1087,50 @@ export async function startGatewayServer(
     }));
   }
 
+  const deliveryRecoveryAbort = new AbortController();
+
+  // Recover pending outbound deliveries from previous crash/restart.
+  // Run this after sidecars/channels start to avoid racing channel bootstrap
+  // (e.g., WhatsApp listener registration) during startup.
+  if (!minimalTestGateway) {
+    void (async () => {
+      const { loadPendingDeliveries, recoverPendingDeliveries } =
+        await import("../infra/outbound/delivery-queue.js");
+      const { deliverOutboundPayloads } = await import("../infra/outbound/deliver.js");
+      const logRecovery = log.child("delivery-recovery");
+      const pending = await loadPendingDeliveries();
+      if (pending.length === 0) {
+        return;
+      }
+
+      const targets = resolvePendingDeliveryRecoveryTargets({ pending, cfg: cfgAtStart });
+      if (targets.length > 0) {
+        await waitForPendingDeliveryChannelReadiness({
+          channelManager,
+          targets,
+          log: logRecovery,
+          signal: deliveryRecoveryAbort.signal,
+        });
+      }
+      if (deliveryRecoveryAbort.signal.aborted) {
+        logRecovery.info("Delivery recovery skipped: gateway shutdown in progress.");
+        return;
+      }
+
+      await recoverPendingDeliveries({
+        deliver: deliverOutboundPayloads,
+        log: logRecovery,
+        cfg: cfgAtStart,
+      });
+    })().catch((err) => {
+      if (err instanceof Error && err.name === "AbortError") {
+        log.info("Delivery recovery aborted: gateway shutdown in progress.");
+        return;
+      }
+      log.error(`Delivery recovery failed: ${String(err)}`);
+    });
+  }
+
   // Run gateway_start plugin hook (fire-and-forget)
   if (!minimalTestGateway) {
     const hookRunner = getGlobalHookRunner();
@@ -1041,6 +1236,7 @@ export async function startGatewayServer(
 
   return {
     close: async (opts) => {
+      deliveryRecoveryAbort.abort();
       // Run gateway_stop plugin hook before shutdown
       await runGlobalGatewayStopSafely({
         event: { reason: opts?.reason ?? "gateway stopping" },
