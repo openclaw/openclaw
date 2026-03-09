@@ -120,7 +120,13 @@ export default function register(api: OpenClawPluginApi) {
 
       if (action === "list") {
         const limit = Number.parseInt(tokens[1] ?? "12", 10);
-        const voices = await listVoices(apiKey);
+        let voices: ElevenLabsVoice[];
+        try {
+          voices = await listVoices(apiKey);
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          return { text: `Failed to fetch ElevenLabs voices: ${msg}` };
+        }
         return { text: formatVoiceList(voices, Number.isFinite(limit) ? limit : 12) };
       }
 
@@ -129,7 +135,13 @@ export default function register(api: OpenClawPluginApi) {
         if (!query) {
           return { text: `Usage: ${commandLabel} set <voiceId|name>` };
         }
-        const voices = await listVoices(apiKey);
+        let voices: ElevenLabsVoice[];
+        try {
+          voices = await listVoices(apiKey);
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          return { text: `Failed to fetch ElevenLabs voices: ${msg}` };
+        }
         const chosen = findVoice(voices, query);
         if (!chosen) {
           const hint = isLikelyVoiceId(query) ? query : `"${query}"`;
