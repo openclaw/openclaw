@@ -184,7 +184,7 @@ function reconcileOrphanedRun(params: {
   runId: string;
   entry: SubagentRunRecord;
   reason: SubagentRunOrphanReason;
-  source: "restore" | "resume";
+  source: "restore" | "resume" | "sweep";
 }) {
   const now = Date.now();
   let changed = false;
@@ -710,13 +710,78 @@ function stopSweeper() {
   sweeper = null;
 }
 
+/**
+ * Maximum age for orphaned subagent runs before forced cleanup.
+ * Orphaned runs are entries whose child session no longer exists.
+ */
+const ORPHANED_RUN_MAX_AGE_MS = 30 * 60_000; // 30 minutes
+
 async function sweepSubagentRuns() {
   const now = Date.now();
   let mutated = false;
+  
+  // Build session cache for orphan detection (single pass optimization)
+  const storeCache = new Map<string, Record<string, SessionEntry>>();
+  
   for (const [runId, entry] of subagentRuns.entries()) {
-    if (!entry.archiveAtMs || entry.archiveAtMs > now) {
+    // Check 1: Normal archive cleanup
+    if (entry.archiveAtMs && entry.archiveAtMs <= now) {
+      clearPendingLifecycleError(runId);
+      subagentRuns.delete(runId);
+      mutated = true;
+      await safeRemoveAttachmentsDir(entry);
+      try {
+        await callGateway({
+          method: "sessions.delete",
+          params: {
+            key: entry.childSessionKey,
+            deleteTranscript: true,
+            emitLifecycleHooks: false,
+          },
+          timeoutMs: 10_000,
+        });
+      } catch {
+        // ignore
+      }
       continue;
     }
+    
+    // Check 2: Orphaned run cleanup (H2 fix)
+    // Only check runs that have ended and are not session-mode
+    if (
+      entry.spawnMode !== "session" &&
+      typeof entry.endedAt === "number" &&
+      !entry.cleanupCompletedAt
+    ) {
+      const ageMs = now - entry.endedAt;
+      if (ageMs > ORPHANED_RUN_MAX_AGE_MS) {
+        const orphanReason = resolveSubagentRunOrphanReason({
+          entry,
+          storeCache,
+        });
+        
+        if (orphanReason) {
+          defaultRuntime.log(
+            `[warn] Subagent orphaned run detected during sweep run=${runId} child=${entry.childSessionKey} reason=${orphanReason} age=${Math.round(ageMs / 1000)}s`,
+          );
+          
+          // Force cleanup the orphaned run
+          if (
+            reconcileOrphanedRun({
+              runId,
+              entry,
+              reason: orphanReason,
+              source: "sweep",
+            })
+          ) {
+            mutated = true;
+          }
+          continue;
+        }
+      }
+    }
+    
+    // Standard archive cleanup
     clearPendingLifecycleError(runId);
     void notifyContextEngineSubagentEnded({
       childSessionKey: entry.childSessionKey,
@@ -741,6 +806,7 @@ async function sweepSubagentRuns() {
       // ignore
     }
   }
+  
   if (mutated) {
     persistSubagentRuns();
   }
