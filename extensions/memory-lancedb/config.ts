@@ -14,6 +14,7 @@ export type MemoryConfig = {
   autoCapture?: boolean;
   autoRecall?: boolean;
   captureMaxChars?: number;
+  agentScoping?: boolean;
 };
 
 export const MEMORY_CATEGORIES = ["preference", "fact", "decision", "entity", "other"] as const;
@@ -97,7 +98,7 @@ export const memoryConfigSchema = {
     const cfg = value as Record<string, unknown>;
     assertAllowedKeys(
       cfg,
-      ["embedding", "dbPath", "autoCapture", "autoRecall", "captureMaxChars"],
+      ["embedding", "dbPath", "autoCapture", "autoRecall", "captureMaxChars", "agentScoping"],
       "memory config",
     );
 
@@ -131,6 +132,7 @@ export const memoryConfigSchema = {
       autoCapture: cfg.autoCapture === true,
       autoRecall: cfg.autoRecall !== false,
       captureMaxChars: captureMaxChars ?? DEFAULT_CAPTURE_MAX_CHARS,
+      agentScoping: cfg.agentScoping === true,
     };
   },
   uiHints: {
@@ -175,6 +177,11 @@ export const memoryConfigSchema = {
       help: "Maximum message length eligible for auto-capture",
       advanced: true,
       placeholder: String(DEFAULT_CAPTURE_MAX_CHARS),
+    },
+    agentScoping: {
+      label: "Agent Scoping",
+      help: "Isolate memories per agent. When enabled, each agent only reads and writes its own memories. Requires agentId to be available in hook context.",
+      advanced: true,
     },
   },
 };
