@@ -665,28 +665,31 @@ function buildAnnounceQueueKey(sessionKey: string, origin?: DeliveryContext): st
 }
 
 function resolveInvalidCallbackModelRef(entry: unknown): string | null {
-  const candidates = [
-    entry?.modelOverride,
-    entry?.selectedModel,
-    entry?.fallbackNoticeSelectedModel,
-  ];
+  if (typeof entry !== "object" || entry === null) {
+    return null;
+  }
+
+  const e = entry as Record<string, unknown>;
+
+  const candidates = [e["modelOverride"], e["model"], e["fallbackNoticeSelectedModel"]];
 
   for (const candidate of candidates) {
     if (typeof candidate !== "string") {
       continue;
     }
+
     const normalized = candidate.trim();
     if (!normalized) {
       continue;
     }
-    if (!normalized.includes("/")) {
+
+    if (normalized === "undefined" || normalized === "null") {
       return normalized;
     }
   }
 
   return null;
 }
-
 async function maybeQueueSubagentAnnounce(params: {
   requesterSessionKey: string;
   announceId?: string;
