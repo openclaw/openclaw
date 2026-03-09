@@ -348,6 +348,11 @@ function resolveProbeThrottleKey(provider: string, agentDir?: string): string {
   return scope ? `${scope}${PROBE_SCOPE_DELIMITER}${provider}` : provider;
 }
 
+function isProbeThrottleOpen(now: number, throttleKey: string): boolean {
+  const lastProbe = lastProbeAttempt.get(throttleKey) ?? 0;
+  return now - lastProbe >= MIN_PROBE_INTERVAL_MS;
+}
+
 function shouldProbePrimaryDuringCooldown(params: {
   isPrimary: boolean;
   hasFallbackCandidates: boolean;
@@ -360,8 +365,7 @@ function shouldProbePrimaryDuringCooldown(params: {
     return false;
   }
 
-  const lastProbe = lastProbeAttempt.get(params.throttleKey) ?? 0;
-  if (params.now - lastProbe < MIN_PROBE_INTERVAL_MS) {
+  if (!isProbeThrottleOpen(params.now, params.throttleKey)) {
     return false;
   }
 
@@ -429,11 +433,15 @@ function resolveCooldownDecision(params: {
   }
 
   // Billing is semi-persistent: the user may fix their balance, or a transient
-  // 402 might have been misclassified. Probe the primary only when fallbacks
-  // exist; otherwise repeated single-provider probes just churn the disabled
-  // auth state without opening any recovery path.
+  // 402 might have been misclassified. Probe single-provider setups on the
+  // standard throttle so they can recover without a restart; when fallbacks
+  // exist, only probe near cooldown expiry so the fallback chain stays preferred.
   if (inferredReason === "billing") {
-    if (params.isPrimary && params.hasFallbackCandidates && shouldProbe) {
+    const shouldProbeSingleProviderBilling =
+      params.isPrimary &&
+      !params.hasFallbackCandidates &&
+      isProbeThrottleOpen(params.now, params.probeThrottleKey);
+    if (params.isPrimary && (shouldProbe || shouldProbeSingleProviderBilling)) {
       return { type: "attempt", reason: inferredReason, markProbe: true };
     }
     return {

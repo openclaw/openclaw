@@ -346,7 +346,7 @@ describe("runWithModelFallback – probe logic", () => {
     });
   });
 
-  it("skips billing-cooldowned primary when no fallback candidates exist", async () => {
+  it("probes billing-cooldowned primary when no fallback candidates exist", async () => {
     const cfg = makeCfg({
       agents: {
         defaults: {
@@ -358,20 +358,28 @@ describe("runWithModelFallback – probe logic", () => {
       },
     } as Partial<OpenClawConfig>);
 
-    // Billing cooldown far from expiry — would normally be skipped
+    // Single-provider setups need periodic probes even when the billing
+    // cooldown is far from expiry, otherwise topping up credits never recovers
+    // without a restart.
     const expiresIn30Min = NOW + 30 * 60 * 1000;
     mockedGetSoonestCooldownExpiry.mockReturnValue(expiresIn30Min);
     mockedResolveProfilesUnavailableReason.mockReturnValue("billing");
 
-    await expect(
-      runWithModelFallback({
-        cfg,
-        provider: "openai",
-        model: "gpt-4.1-mini",
-        fallbacksOverride: [],
-        run: vi.fn().mockResolvedValue("billing-recovered"),
-      }),
-    ).rejects.toThrow("All models failed");
+    const run = vi.fn().mockResolvedValue("billing-recovered");
+
+    const result = await runWithModelFallback({
+      cfg,
+      provider: "openai",
+      model: "gpt-4.1-mini",
+      fallbacksOverride: [],
+      run,
+    });
+
+    expect(result.result).toBe("billing-recovered");
+    expect(run).toHaveBeenCalledTimes(1);
+    expect(run).toHaveBeenCalledWith("openai", "gpt-4.1-mini", {
+      allowTransientCooldownProbe: true,
+    });
   });
 
   it("probes billing-cooldowned primary with fallbacks when near cooldown expiry", async () => {
