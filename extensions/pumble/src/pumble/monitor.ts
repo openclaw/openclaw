@@ -202,7 +202,7 @@ export async function monitorPumbleProvider(opts: MonitorPumbleOpts = {}): Promi
   };
 
   // Channel info cache with TTL (5 minutes).
-  type ChannelInfo = { channelType?: string; memberCount?: number };
+  type ChannelInfo = { channelType?: string; memberCount?: number; channelName?: string };
   const channelInfoCache = new Map<string, { value: ChannelInfo; expiresAt: number }>();
 
   const resolveChannelInfo = async (channelId: string): Promise<ChannelInfo> => {
@@ -222,9 +222,10 @@ export async function monitorPumbleProvider(opts: MonitorPumbleOpts = {}): Promi
       const info: ChannelInfo = {
         channelType: ch.channelType ?? ch.type,
         memberCount: ch.memberCount,
+        channelName: ch.name,
       };
       logVerboseMessage(
-        `pumble: channelInfo fetched for ${channelId}: type=${info.channelType}, members=${info.memberCount}`,
+        `pumble: channelInfo fetched for ${channelId}: type=${info.channelType}, members=${info.memberCount}, name=${info.channelName}`,
       );
       channelInfoCache.set(channelId, {
         value: info,
@@ -394,6 +395,7 @@ export async function monitorPumbleProvider(opts: MonitorPumbleOpts = {}): Promi
         await handlePumbleMessage({
           messageId: body.mId,
           channelId: body.cId,
+          channelName: chInfo.channelName,
           channelType: chInfo.channelType,
           memberCount: chInfo.memberCount,
           senderId: body.aId,

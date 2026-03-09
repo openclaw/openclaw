@@ -100,6 +100,7 @@ export function createHandlePumbleMessage(deps: HandlePumbleMessageDeps) {
   return async (evt: {
     messageId: string;
     channelId: string;
+    channelName?: string;
     channelType?: string;
     memberCount?: number;
     senderId: string;
@@ -139,10 +140,16 @@ export function createHandlePumbleMessage(deps: HandlePumbleMessageDeps) {
     const channelId = evt.channelId;
     const threadRootId = evt.threadRootId?.trim() || undefined;
 
-    // Channel allowlist check
+    // Channel allowlist check — matches against channel ID or name (like Slack)
     if (normalizedChannelAllowlist.length > 0 && kind !== "direct") {
-      if (!normalizedChannelAllowlist.includes(channelId.toLowerCase())) {
-        logVerboseMessage(`pumble: drop message (channel ${channelId} not in allowlist)`);
+      const candidates = [channelId.toLowerCase()];
+      if (evt.channelName) {
+        candidates.push(evt.channelName.toLowerCase());
+      }
+      if (!candidates.some((c) => normalizedChannelAllowlist.includes(c))) {
+        logVerboseMessage(
+          `pumble: drop message (channel ${channelId}${evt.channelName ? ` / ${evt.channelName}` : ""} not in allowlist)`,
+        );
         return;
       }
     }
