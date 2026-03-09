@@ -13,6 +13,7 @@ import {
   DEFAULT_USER_FILENAME,
   ensureAgentWorkspace,
   filterBootstrapFilesForSession,
+  loadExtraBootstrapFilesWithDiagnostics,
   loadWorkspaceBootstrapFiles,
   resolveDefaultAgentWorkspaceDir,
   type WorkspaceBootstrapFile,
@@ -273,6 +274,36 @@ describe("loadWorkspaceBootstrapFiles", () => {
       const agents = files.find((file) => file.name === DEFAULT_AGENTS_FILENAME);
       expect(agents?.missing).toBe(true);
       expect(agents?.content).toBeUndefined();
+    } finally {
+      await fs.rm(rootDir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("loadExtraBootstrapFilesWithDiagnostics", () => {
+  it("rejects symlinked extra bootstrap files", async () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    const rootDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-workspace-extra-symlink-"));
+    try {
+      const workspaceDir = path.join(rootDir, "workspace");
+      const outsideDir = path.join(rootDir, "outside");
+      const subDir = path.join(workspaceDir, "sub");
+      await fs.mkdir(subDir, { recursive: true });
+      await fs.mkdir(outsideDir, { recursive: true });
+      const outsideFile = path.join(outsideDir, DEFAULT_AGENTS_FILENAME);
+      await fs.writeFile(outsideFile, "extra symlinked content", "utf-8");
+      await fs.symlink(outsideFile, path.join(subDir, DEFAULT_AGENTS_FILENAME));
+
+      const { files, diagnostics } = await loadExtraBootstrapFilesWithDiagnostics(workspaceDir, [
+        `sub/${DEFAULT_AGENTS_FILENAME}`,
+      ]);
+      // The symlink fallback is NOT enabled for extra bootstrap files,
+      // so the file should be rejected with a security diagnostic.
+      expect(files).toHaveLength(0);
+      expect(diagnostics).toHaveLength(1);
+      expect(diagnostics[0]?.reason).toBe("security");
     } finally {
       await fs.rm(rootDir, { recursive: true, force: true });
     }
