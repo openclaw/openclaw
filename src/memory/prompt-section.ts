@@ -23,7 +23,10 @@ export function buildMemoryPromptSection(params: {
   return _builder?.(params) ?? [];
 }
 
-/** Reset state (for tests). */
-export function _resetMemoryPromptSection(): void {
+/** Clear the registered builder (called on plugin reload and in tests). */
+export function clearMemoryPromptSection(): void {
   _builder = undefined;
 }
+
+/** @deprecated Use {@link clearMemoryPromptSection}. */
+export const _resetMemoryPromptSection = clearMemoryPromptSection;
