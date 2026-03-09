@@ -112,7 +112,7 @@ STORE="$HOME/.openclaw/agents/github-scout/sessions/sessions.json"
 cp "$STORE" "$STORE.bak"
 node -e '
 const fs = require("fs");
-const [storePath, sessionKey] = process.argv.slice(1);
+const [storePath, sessionKey] = process.argv.slice(2);
 const data = JSON.parse(fs.readFileSync(storePath, "utf8"));
 delete data[sessionKey];
 fs.writeFileSync(storePath, JSON.stringify(data, null, 2) + "\n");

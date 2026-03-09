@@ -158,6 +158,8 @@ Key fields (not exhaustive):
 
 The store is safe to edit, but the Gateway is the authority: it may rewrite or rehydrate entries as sessions run.
 
+---
+
 ## Targeted recovery on a self-hosted gateway
 
 If one auxiliary agent gets wedged with stale token counts or an obviously oversized transcript, use the built-in maintenance path first:
@@ -177,7 +179,7 @@ STORE="$HOME/.openclaw/agents/github-scout/sessions/sessions.json"
 cp "$STORE" "$STORE.bak"
 node -e '
 const fs = require("fs");
-const [storePath, sessionKey] = process.argv.slice(1);
+const [storePath, sessionKey] = process.argv.slice(2);
 const data = JSON.parse(fs.readFileSync(storePath, "utf8"));
 delete data[sessionKey];
 fs.writeFileSync(storePath, JSON.stringify(data, null, 2) + "\n");
