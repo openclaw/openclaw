@@ -175,6 +175,25 @@ describe("pending-inbound-store", () => {
     expect(result).toEqual([]);
   });
 
+  it("scheduler session keys are stored and readable (filtering is in server-startup.ts)", async () => {
+    // Scheduler isolated sessions use keys like "scheduler:jobid:runid".
+    // The store saves them normally — server-startup.ts filters them out
+    // during active-turn recovery (the scheduler's own drain-retry handles them).
+    const turn: ActiveTurnEntry = {
+      sessionId: "sess-sched-001",
+      sessionKey: "scheduler:abc123:run456",
+      channel: "system",
+      startedAt: 1700000000000,
+    };
+
+    await writeActiveTurn(stateDir, turn);
+    const result = await readStaleActiveTurns(stateDir);
+
+    expect(result).toHaveLength(1);
+    expect(result[0]).toEqual(turn);
+    expect(result[0].sessionKey).toMatch(/^scheduler:/);
+  });
+
   it("active turns and pending inbound entries coexist without collision", async () => {
     // Write a pending inbound entry
     await writePendingInbound(stateDir, {
