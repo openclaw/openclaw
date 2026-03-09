@@ -1,6 +1,7 @@
 import {
   resolveAgentDir,
   resolveAgentWorkspaceDir,
+  resolveRunModelFallbacksOverride,
   resolveSessionAgentId,
   resolveAgentSkillsFilter,
 } from "../../agents/agent-scope.js";
@@ -9,6 +10,7 @@ import { resolveAgentTimeoutMs } from "../../agents/timeout.js";
 import { DEFAULT_AGENT_WORKSPACE_DIR, ensureAgentWorkspace } from "../../agents/workspace.js";
 import { resolveChannelModelOverride } from "../../channels/model-overrides.js";
 import { type OpenClawConfig, loadConfig } from "../../config/config.js";
+import { resolveAgentModelFallbackValues } from "../../config/model-input.js";
 import { applyLinkUnderstanding } from "../../link-understanding/apply.js";
 import { applyMediaUnderstanding } from "../../media-understanding/apply.js";
 import { defaultRuntime } from "../../runtime.js";
@@ -52,6 +54,34 @@ function mergeSkillFilters(channelFilter?: string[], agentFilter?: string[]): st
   }
   const agentSet = new Set(agent);
   return channel.filter((name) => agentSet.has(name));
+}
+
+// Keep typing alive long enough for multi-attempt runs, but cap it to avoid
+// indefinite typing loops when timeouts are very large or disabled.
+const MIN_TYPING_TTL_MS = 2 * 60_000;
+const MAX_TYPING_TTL_MS = 120 * 60_000;
+const TRANSIENT_RETRY_CYCLES = 2;
+const TYPING_TTL_BUFFER_MS = 15_000;
+
+function resolveTypingTtlMs(params: {
+  cfg: OpenClawConfig;
+  agentId: string;
+  sessionKey?: string;
+  timeoutMs: number;
+}): number {
+  const fallbackOverrides = resolveRunModelFallbacksOverride({
+    cfg: params.cfg,
+    agentId: params.agentId,
+    sessionKey: params.sessionKey,
+  });
+  const configuredFallbacks = resolveAgentModelFallbackValues(params.cfg.agents?.defaults?.model);
+  const fallbackCount = Math.max(0, (fallbackOverrides ?? configuredFallbacks).length);
+  const projectedAttemptCount = Math.max(1, 1 + fallbackCount);
+  // One transient HTTP retry can replay the full model chain; keep typing alive
+  // long enough to cover both cycles so users do not see false "dead" runs.
+  const projectedTtlMs =
+    params.timeoutMs * projectedAttemptCount * TRANSIENT_RETRY_CYCLES + TYPING_TTL_BUFFER_MS;
+  return Math.max(MIN_TYPING_TTL_MS, Math.min(projectedTtlMs, MAX_TYPING_TTL_MS));
 }
 
 export async function getReplyFromConfig(
@@ -114,10 +144,17 @@ export async function getReplyFromConfig(
     agentCfg?.typingIntervalSeconds ?? sessionCfg?.typingIntervalSeconds;
   const typingIntervalSeconds =
     typeof configuredTypingSeconds === "number" ? configuredTypingSeconds : 6;
+  const typingTtlMs = resolveTypingTtlMs({
+    cfg,
+    agentId,
+    sessionKey: agentSessionKey,
+    timeoutMs,
+  });
   const typing = createTypingController({
     onReplyStart: opts?.onReplyStart,
     onCleanup: opts?.onTypingCleanup,
     typingIntervalSeconds,
+    typingTtlMs,
     silentToken: SILENT_REPLY_TOKEN,
     log: defaultRuntime.log,
   });

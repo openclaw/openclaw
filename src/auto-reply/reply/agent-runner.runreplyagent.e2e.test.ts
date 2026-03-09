@@ -1387,6 +1387,40 @@ describe("runReplyAgent typing (heartbeat)", () => {
     });
   });
 
+  it("surfaces explicit timeout guidance when the run times out", async () => {
+    await withTempStateDir(async (stateDir) => {
+      const sessionId = "session-timeout";
+      const storePath = path.join(stateDir, "sessions", "sessions.json");
+      const sessionEntry: SessionEntry = {
+        sessionId,
+        updatedAt: Date.now(),
+      };
+      const sessionStore = { main: sessionEntry };
+
+      await fs.mkdir(path.dirname(storePath), { recursive: true });
+      await fs.writeFile(storePath, JSON.stringify(sessionStore), "utf-8");
+
+      state.runEmbeddedPiAgentMock.mockImplementationOnce(async () => {
+        throw new Error("Request timed out");
+      });
+
+      const { run } = createMinimalRun({
+        sessionEntry,
+        sessionStore,
+        sessionKey: "main",
+        storePath,
+      });
+      const res = await run();
+
+      expect(res).toMatchObject({
+        text: expect.stringContaining("timed out before reply"),
+      });
+      expect(res).toMatchObject({
+        text: expect.stringContaining("run has ended"),
+      });
+    });
+  });
+
   it("still replies even if session reset fails to persist", async () => {
     await withTempStateDir(async (stateDir) => {
       const saveSpy = vi
