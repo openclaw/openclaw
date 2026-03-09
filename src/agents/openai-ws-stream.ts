@@ -569,7 +569,7 @@ export function createOpenAIWebSocketStreamFn(
       if (streamOpts?.temperature !== undefined) {
         extraParams.temperature = streamOpts.temperature;
       }
-      if (streamOpts?.maxTokens) {
+      if (streamOpts?.maxTokens !== undefined) {
         extraParams.max_output_tokens = streamOpts.maxTokens;
       }
       if (streamOpts?.topP !== undefined) {
@@ -589,17 +589,22 @@ export function createOpenAIWebSocketStreamFn(
         extraParams.reasoning = reasoning;
       }
 
+      // Respect compat.supportsStore — providers like Gemini reject unknown
+      // fields such as `store` with a 400 error.  Fixes #39086.
+      const supportsStore = (model as { compat?: { supportsStore?: boolean } }).compat
+        ?.supportsStore;
+
       const payload: Record<string, unknown> = {
         type: "response.create",
         model: model.id,
-        store: false,
+        ...(supportsStore !== false ? { store: false } : {}),
         input: inputItems,
         instructions: context.systemPrompt ?? undefined,
         tools: tools.length > 0 ? tools : undefined,
         ...(prevResponseId ? { previous_response_id: prevResponseId } : {}),
         ...extraParams,
       };
-      options?.onPayload?.(payload);
+      options?.onPayload?.(payload, model);
 
       try {
         session.manager.send(payload as Parameters<OpenAIWebSocketManager["send"]>[0]);
