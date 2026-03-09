@@ -220,6 +220,10 @@ export function buildInboundUserContextPrefix(ctx: TemplateContext): string {
             sender: entry.sender,
             timestamp_ms: entry.timestamp,
             body: entry.body,
+            media_count:
+              entry.mediaPaths && entry.mediaPaths.length > 0
+                ? entry.mediaPaths.length
+                : undefined,
           })),
           null,
           2,

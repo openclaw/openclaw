@@ -264,6 +264,10 @@ export async function resolveTelegramInboundBody(params: {
             body: rawBody,
             timestamp: msg.date ? msg.date * 1000 : undefined,
             messageId: typeof msg.message_id === "number" ? String(msg.message_id) : undefined,
+            mediaPaths: allMedia.length > 0 ? allMedia.map((m) => m.path) : undefined,
+            mediaTypes: allMedia.length > 0
+              ? (allMedia.map((m) => m.contentType).filter(Boolean) as string[])
+              : undefined,
           }
         : null,
     });

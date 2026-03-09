@@ -343,6 +343,14 @@ export async function saveMediaSource(
   }
 }
 
+/** Refresh mtime on media files so they survive the 2-minute TTL cleanup. */
+export async function touchMediaFiles(paths: string[]): Promise<void> {
+  const now = new Date();
+  await Promise.allSettled(
+    paths.map((p) => fs.utimes(p, now, now).catch(() => {})),
+  );
+}
+
 export async function saveMediaBuffer(
   buffer: Buffer,
   contentType?: string,

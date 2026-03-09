@@ -173,16 +173,35 @@ export async function buildTelegramInboundContextPayload(params: {
   const commandBody = normalizeCommandBody(rawBody, {
     botUsername: primaryCtx.me?.username?.toLowerCase(),
   });
-  const inboundHistory =
+  const historyEntries =
     isGroup && historyKey && historyLimit > 0
-      ? (groupHistories.get(historyKey) ?? []).map((entry) => ({
+      ? (groupHistories.get(historyKey) ?? [])
+      : [];
+  const inboundHistory =
+    historyEntries.length > 0
+      ? historyEntries.map((entry) => ({
           sender: entry.sender,
           body: entry.body,
           timestamp: entry.timestamp,
+          mediaPaths: entry.mediaPaths,
+          mediaTypes: entry.mediaTypes,
         }))
       : undefined;
+  // Touch history media files so they survive the 2-minute TTL cleanup
+  const historyMediaPaths = historyEntries.flatMap((e) => e.mediaPaths ?? []);
+  if (historyMediaPaths.length > 0) {
+    const { touchMediaFiles } = await import("../media/store.js");
+    await touchMediaFiles(historyMediaPaths);
+  }
   const currentMediaForContext = stickerCacheHit ? [] : allMedia;
-  const contextMedia = [...currentMediaForContext, ...replyMedia];
+  // Merge history media into context so the media-understanding pipeline processes them
+  const historyMediaRefs: TelegramMediaRef[] = historyEntries.flatMap((e) =>
+    (e.mediaPaths ?? []).map((p, i) => ({
+      path: p,
+      contentType: e.mediaTypes?.[i],
+    })),
+  );
+  const contextMedia = [...currentMediaForContext, ...replyMedia, ...historyMediaRefs];
   const ctxPayload = finalizeInboundContext({
     Body: combinedBody,
     BodyForAgent: bodyText,
