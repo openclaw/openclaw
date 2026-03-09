@@ -207,6 +207,27 @@ describe("sessions_spawn tool", () => {
     expect(hoisted.spawnSubagentDirectMock).not.toHaveBeenCalled();
   });
 
+  it("rejects legacy delivery-target params before attempting any spawn", async () => {
+    const tool = createSessionsSpawnTool({
+      agentSessionKey: "agent:main:main",
+      agentChannel: "telegram",
+      agentTo: "telegram:chat:123",
+      agentThreadId: "99",
+    });
+
+    await expect(
+      tool.execute("call-legacy", {
+        task: "investigate",
+        to: "telegram:chat:456",
+      }),
+    ).rejects.toThrow(
+      'sessions_spawn does not support "to". Use "message" or "sessions_send" for channel delivery.',
+    );
+
+    expect(hoisted.spawnSubagentDirectMock).not.toHaveBeenCalled();
+    expect(hoisted.spawnAcpDirectMock).not.toHaveBeenCalled();
+  });
+
   it("keeps attachment content schema unconstrained for llama.cpp grammar safety", () => {
     const tool = createSessionsSpawnTool();
     const schema = tool.parameters as {

@@ -174,6 +174,11 @@ export function onToolStart(
   if (!scope) {
     return;
   }
+  // Some runtime paths emit a secondary, UI-oriented tool start event without args.
+  // Those are not real executions and would create empty duplicate spans.
+  if (args === null || args === undefined) {
+    return;
+  }
   const handle = scope.trace.span({
     name: `tool.${toolName}`,
     input: redactPayload(args),
@@ -196,6 +201,11 @@ export function onToolResult(
   result: unknown,
   isError: boolean,
 ): void {
+  // Some runtime paths emit a secondary, UI-oriented tool result event without payload.
+  // Ignore those to avoid empty duplicate/error spans.
+  if (result === undefined) {
+    return;
+  }
   const spans = openToolSpansByRun.get(runId);
   if (!spans) {
     return;
