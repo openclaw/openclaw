@@ -142,6 +142,38 @@ describe("config io write", () => {
     });
   });
 
+  it("preserves file provider allowInsecurePath on write", async () => {
+    await withSuiteHome(async (home) => {
+      const { configPath, io, snapshot } = await writeConfigAndCreateIo({
+        home,
+        initialConfig: {
+          secrets: {
+            providers: {
+              default: {
+                source: "file",
+                path: "/tmp/openclaw-secrets.json",
+                mode: "json",
+                allowInsecurePath: true,
+              },
+            },
+          },
+        },
+      });
+
+      const persisted = await writeTokenAuthAndReadConfig({ io, snapshot, configPath });
+      expect(persisted.secrets).toEqual({
+        providers: {
+          default: {
+            source: "file",
+            path: "/tmp/openclaw-secrets.json",
+            mode: "json",
+            allowInsecurePath: true,
+          },
+        },
+      });
+    });
+  });
+
   it('shows actionable guidance for dmPolicy="open" without wildcard allowFrom', async () => {
     await withSuiteHome(async (home) => {
       const io = createConfigIO({
