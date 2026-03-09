@@ -4,6 +4,7 @@ import {
   extractAssistantText,
   formatReasoningMessage,
   promoteThinkingTagsToBlocks,
+  stripInternalToolTranscriptFromText,
   stripDowngradedToolCallText,
 } from "./pi-embedded-utils.js";
 
@@ -420,6 +421,28 @@ File contents here`,
     expect(result).toBe("Here's what I found:\nDone checking.");
   });
 
+  it("strips raw tool transcript blocks while keeping surrounding answer text", () => {
+    const msg = makeAssistantMessage({
+      role: "assistant",
+      content: [
+        {
+          type: "text",
+          text: `I started a helper.
+<tool_call>
+{"name":"subagents","arguments":{"task":"Check the repo"}}
+</tool_call>
+<tool_result>
+Spawned sub-agent coding
+</tool_result>
+Here is the actual answer.`,
+        },
+      ],
+      timestamp: Date.now(),
+    });
+
+    expect(extractAssistantText(msg)).toBe("I started a helper.\n\nHere is the actual answer.");
+  });
+
   it("strips reasoning/thinking tag variants", () => {
     const cases = [
       {
@@ -472,6 +495,32 @@ File contents here`,
       });
       expect(extractAssistantText(msg), testCase.name).toBe(testCase.expected);
     }
+  });
+});
+
+describe("stripInternalToolTranscriptFromText", () => {
+  it("strips leaked tool transcript blocks outside code spans", () => {
+    const input = `Before
+<tool_call>
+{"name":"subagents"}
+</tool_call>
+<tool_result>
+Spawned sub-agent
+</tool_result>
+After`;
+
+    expect(stripInternalToolTranscriptFromText(input)).toBe("Before\n\nAfter");
+  });
+
+  it("preserves literal tool transcript tags inside fenced code blocks", () => {
+    const input = `Example:
+\`\`\`xml
+<tool_call>
+{"name":"subagents"}
+</tool_call>
+\`\`\``;
+
+    expect(stripInternalToolTranscriptFromText(input)).toBe(input);
   });
 });
 

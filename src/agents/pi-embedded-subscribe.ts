@@ -23,6 +23,7 @@ import { hasNonzeroUsage, normalizeUsage, type UsageLike } from "./usage.js";
 
 const THINKING_TAG_SCAN_RE = /<\s*(\/?)\s*(?:think(?:ing)?|thought|antthinking)\s*>/gi;
 const FINAL_TAG_SCAN_RE = /<\s*(\/?)\s*final\s*>/gi;
+const TOOL_TRANSCRIPT_TAG_SCAN_RE = /<\s*(\/?)\s*(?:tool_call|tool_result)\b[^<>]*>/gi;
 const log = createSubsystemLogger("agent/embedded");
 
 export type {
@@ -49,8 +50,18 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     deltaBuffer: "",
     blockBuffer: "",
     // Track if a streamed chunk opened a <think> block (stateful across chunks).
-    blockState: { thinking: false, final: false, inlineCode: createInlineCodeState() },
-    partialBlockState: { thinking: false, final: false, inlineCode: createInlineCodeState() },
+    blockState: {
+      thinking: false,
+      final: false,
+      toolTranscriptDepth: 0,
+      inlineCode: createInlineCodeState(),
+    },
+    partialBlockState: {
+      thinking: false,
+      final: false,
+      toolTranscriptDepth: 0,
+      inlineCode: createInlineCodeState(),
+    },
     lastStreamedAssistant: undefined,
     lastStreamedAssistantCleaned: undefined,
     emittedAssistantUpdate: false,
@@ -121,9 +132,11 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     partialReplyDirectiveAccumulator.reset();
     state.blockState.thinking = false;
     state.blockState.final = false;
+    state.blockState.toolTranscriptDepth = 0;
     state.blockState.inlineCode = createInlineCodeState();
     state.partialBlockState.thinking = false;
     state.partialBlockState.final = false;
+    state.partialBlockState.toolTranscriptDepth = 0;
     state.partialBlockState.inlineCode = createInlineCodeState();
     state.lastStreamedAssistant = undefined;
     state.lastStreamedAssistantCleaned = undefined;
@@ -366,7 +379,12 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
 
   const stripBlockTags = (
     text: string,
-    state: { thinking: boolean; final: boolean; inlineCode?: InlineCodeState },
+    state: {
+      thinking: boolean;
+      final: boolean;
+      toolTranscriptDepth?: number;
+      inlineCode?: InlineCodeState;
+    },
   ): string => {
     if (!text) {
       return text;
@@ -397,7 +415,33 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     }
     state.thinking = inThinking;
 
-    // 2. Handle <final> blocks (stateful, strip content OUTSIDE)
+    // 2. Handle raw <tool_call>/<tool_result> transcript blocks (stateful, strip content inside)
+    const toolCodeSpans = buildCodeSpanIndex(processed, inlineStateStart);
+    let withoutToolTranscript = "";
+    TOOL_TRANSCRIPT_TAG_SCAN_RE.lastIndex = 0;
+    let lastToolIndex = 0;
+    let toolTranscriptDepth = state.toolTranscriptDepth ?? 0;
+    for (const match of processed.matchAll(TOOL_TRANSCRIPT_TAG_SCAN_RE)) {
+      const idx = match.index ?? 0;
+      if (toolCodeSpans.isInside(idx)) {
+        continue;
+      }
+      if (toolTranscriptDepth === 0) {
+        withoutToolTranscript += processed.slice(lastToolIndex, idx);
+      }
+      const isClose = match[1] === "/";
+      toolTranscriptDepth = isClose
+        ? Math.max(0, toolTranscriptDepth - 1)
+        : toolTranscriptDepth + 1;
+      lastToolIndex = idx + match[0].length;
+    }
+    if (toolTranscriptDepth === 0) {
+      withoutToolTranscript += processed.slice(lastToolIndex);
+    }
+    processed = withoutToolTranscript.replace(/\n{3,}/g, "\n\n");
+    state.toolTranscriptDepth = toolTranscriptDepth;
+
+    // 3. Handle <final> blocks (stateful, strip content OUTSIDE)
     // If enforcement is disabled, we still strip the tags themselves to prevent
     // hallucinations (e.g. Minimax copying the style) from leaking, but we
     // do not enforce buffering/extraction logic.

@@ -1,5 +1,6 @@
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import type { AssistantMessage } from "@mariozechner/pi-ai";
+import { buildCodeSpanIndex, createInlineCodeState } from "../markdown/code-spans.js";
 import { extractTextFromChatContent } from "../shared/chat-content.js";
 import { stripReasoningTagsFromText } from "../shared/text/reasoning-tags.js";
 import { sanitizeUserFacingText } from "./pi-embedded-helpers.js";
@@ -198,6 +199,47 @@ export function stripDowngradedToolCallText(text: string): string {
   return cleaned.trim();
 }
 
+const INTERNAL_TOOL_TRANSCRIPT_TAG_RE = /<\s*(\/?)\s*(?:tool_call|tool_result)\b[^<>]*>/gi;
+
+/**
+ * Strip raw tool transcript blocks that some providers leak into user-facing text.
+ * The tags are removed only outside inline/fenced code so literal examples survive.
+ */
+export function stripInternalToolTranscriptFromText(text: string): string {
+  if (!text) {
+    return text;
+  }
+  if (!INTERNAL_TOOL_TRANSCRIPT_TAG_RE.test(text)) {
+    INTERNAL_TOOL_TRANSCRIPT_TAG_RE.lastIndex = 0;
+    return text;
+  }
+  INTERNAL_TOOL_TRANSCRIPT_TAG_RE.lastIndex = 0;
+
+  const codeSpans = buildCodeSpanIndex(text, createInlineCodeState());
+  let cleaned = "";
+  let lastIndex = 0;
+  let hiddenDepth = 0;
+
+  for (const match of text.matchAll(INTERNAL_TOOL_TRANSCRIPT_TAG_RE)) {
+    const idx = match.index ?? 0;
+    if (codeSpans.isInside(idx)) {
+      continue;
+    }
+    if (hiddenDepth === 0) {
+      cleaned += text.slice(lastIndex, idx);
+    }
+    const isClose = match[1] === "/";
+    hiddenDepth = isClose ? Math.max(0, hiddenDepth - 1) : hiddenDepth + 1;
+    lastIndex = idx + match[0].length;
+  }
+
+  if (hiddenDepth === 0) {
+    cleaned += text.slice(lastIndex);
+  }
+  INTERNAL_TOOL_TRANSCRIPT_TAG_RE.lastIndex = 0;
+  return cleaned.replace(/\n{3,}/g, "\n\n");
+}
+
 /**
  * Strip thinking tags and their content from text.
  * This is a safety net for cases where the model outputs <think> tags
@@ -212,7 +254,9 @@ export function extractAssistantText(msg: AssistantMessage): string {
     extractTextFromChatContent(msg.content, {
       sanitizeText: (text) =>
         stripThinkingTagsFromText(
-          stripDowngradedToolCallText(stripMinimaxToolCallXml(text)),
+          stripDowngradedToolCallText(
+            stripInternalToolTranscriptFromText(stripMinimaxToolCallXml(text)),
+          ),
         ).trim(),
       joinWith: "\n",
       normalizeText: (text) => text.trim(),

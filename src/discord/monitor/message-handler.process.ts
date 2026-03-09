@@ -1,6 +1,7 @@
 import { ChannelType, type RequestClient } from "@buape/carbon";
 import { resolveAckReaction, resolveHumanDelayConfig } from "../../agents/identity.js";
 import { EmbeddedBlockChunker } from "../../agents/pi-embedded-block-chunker.js";
+import { stripInternalToolTranscriptFromText } from "../../agents/pi-embedded-utils.js";
 import { resolveChunkMode } from "../../auto-reply/chunk.js";
 import { dispatchInboundMessage } from "../../auto-reply/dispatch.js";
 import { formatInboundEnvelope, resolveEnvelopeFormatOptions } from "../../auto-reply/envelope.js";
@@ -477,11 +478,28 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
   let hasStreamedMessage = false;
   let finalizedViaPreviewMessage = false;
 
-  const resolvePreviewFinalText = (text?: string) => {
+  const sanitizeDiscordReplyText = (text?: string) => {
     if (typeof text !== "string") {
+      return text;
+    }
+    return stripInternalToolTranscriptFromText(text);
+  };
+
+  const sanitizeDiscordPreviewText = (text?: string) => {
+    const sanitized = sanitizeDiscordReplyText(text);
+    if (typeof sanitized !== "string") {
       return undefined;
     }
-    const formatted = convertMarkdownTables(text, tableMode);
+    const cleaned = stripReasoningTagsFromText(sanitized, { mode: "strict", trim: "both" });
+    return cleaned || undefined;
+  };
+
+  const resolvePreviewFinalText = (text?: string) => {
+    const sanitized = sanitizeDiscordPreviewText(text);
+    if (typeof sanitized !== "string") {
+      return undefined;
+    }
+    const formatted = convertMarkdownTables(sanitized, tableMode);
     const chunks = chunkDiscordTextWithMode(formatted, {
       maxChars: draftMaxChars,
       maxLines: discordConfig?.maxLinesPerMessage,
@@ -512,8 +530,8 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
     if (!draftStream || !text) {
       return;
     }
-    // Strip reasoning/thinking tags that may leak through the stream.
-    const cleaned = stripReasoningTagsFromText(text, { mode: "strict", trim: "both" });
+    // Strip reasoning tags and any leaked raw tool transcript before previewing.
+    const cleaned = sanitizeDiscordPreviewText(text);
     // Skip pure-reasoning messages (e.g. "Reasoning:\n…") that contain no answer text.
     if (!cleaned || cleaned.startsWith("Reasoning:\n")) {
       return;
@@ -595,6 +613,10 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
           return;
         }
         const isFinal = info.kind === "final";
+        const sanitizedPayload =
+          typeof payload.text === "string"
+            ? { ...payload, text: sanitizeDiscordReplyText(payload.text) }
+            : payload;
         if (payload.isReasoning) {
           // Reasoning/thinking payloads should not be delivered to Discord.
           return;
@@ -602,7 +624,7 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
         if (draftStream && isFinal) {
           await flushDraft();
           const hasMedia = Boolean(payload.mediaUrl) || (payload.mediaUrls?.length ?? 0) > 0;
-          const finalText = payload.text;
+          const finalText = sanitizedPayload.text;
           const previewFinalText = resolvePreviewFinalText(finalText);
           const previewMessageId = draftStream.messageId();
 
@@ -678,7 +700,7 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
 
         const replyToId = replyReference.use();
         await deliverDiscordReply({
-          replies: [payload],
+          replies: [sanitizedPayload],
           target: deliverTarget,
           token,
           accountId,
