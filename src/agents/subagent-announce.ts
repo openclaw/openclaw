@@ -302,6 +302,87 @@ async function readLatestSubagentOutput(sessionKey: string): Promise<string | un
   return undefined;
 }
 
+/**
+ * Collect partial progress from a timed-out subagent session.
+ *
+ * Unlike `readLatestSubagentOutput` which returns only the last message,
+ * this function scans the full history to build a progress summary from
+ * all assistant messages. This is critical for timeout scenarios where
+ * the subagent may have produced intermediate results across multiple
+ * tool-call rounds but no final summary.
+ *
+ * @see https://github.com/openclaw/openclaw/issues/33827
+ */
+async function readSubagentPartialProgress(sessionKey: string): Promise<string | undefined> {
+  let history: { messages?: Array<unknown> } | undefined;
+  try {
+    history = await callGateway<{ messages?: Array<unknown> }>({
+      method: "chat.history",
+      params: { sessionKey, limit: 100 },
+    });
+  } catch {
+    return undefined;
+  }
+  const messages = Array.isArray(history?.messages) ? history.messages : [];
+  if (messages.length === 0) {
+    return undefined;
+  }
+
+  // Collect all assistant text fragments (partial results from each turn).
+  const assistantFragments: string[] = [];
+  let toolCallCount = 0;
+
+  for (const msg of messages) {
+    if (!msg || typeof msg !== "object") {
+      continue;
+    }
+    const role = (msg as { role?: unknown }).role;
+    if (role === "assistant") {
+      const text = extractSubagentOutputText(msg);
+      if (text?.trim()) {
+        assistantFragments.push(text.trim());
+      }
+      // Count tool calls to report progress depth.
+      const content = (msg as { content?: unknown }).content;
+      if (Array.isArray(content)) {
+        for (const block of content) {
+          if (
+            block &&
+            typeof block === "object" &&
+            ((block as { type?: string }).type === "toolCall" ||
+              (block as { type?: string }).type === "tool_use")
+          ) {
+            toolCallCount += 1;
+          }
+        }
+      }
+    }
+  }
+
+  if (assistantFragments.length === 0 && toolCallCount === 0) {
+    return undefined;
+  }
+
+  const parts: string[] = [];
+  if (toolCallCount > 0) {
+    parts.push(`[Partial progress: ${toolCallCount} tool call(s) executed before timeout]`);
+  }
+  if (assistantFragments.length > 0) {
+    // Return the last (most recent) assistant fragment as the primary result,
+    // but include earlier fragments if the last one is short.
+    const lastFragment = assistantFragments[assistantFragments.length - 1];
+    if (assistantFragments.length > 1 && lastFragment.length < 200) {
+      // Include up to 3 most recent fragments for context.
+      const recentFragments = assistantFragments.slice(-3);
+      parts.push(recentFragments.join("\n\n---\n\n"));
+    } else {
+      parts.push(lastFragment);
+    }
+  }
+
+  return parts.join("\n\n") || undefined;
+}
+
 async function readLatestSubagentOutputWithRetry(params: {
   sessionKey: string;
   maxWaitMs: number;
@@ -1306,6 +1387,18 @@ export async function runSubagentAnnounceFlow(params: {
           sessionKey: params.childSessionKey,
           maxWaitMs: params.timeoutMs,
         });
+      }
+
+      // For timed-out runs, attempt to collect partial progress from the full
+      // session history.  The subagent may have produced useful intermediate
+      // results across multiple tool-call rounds even though no final assistant
+      // reply was generated before the timeout.  Use the richer partial progress
+      // when it contains more context than the simple last-message extraction.
+      if (outcome.status === "timeout") {
+        const partialProgress = await readSubagentPartialProgress(params.childSessionKey);
+        if (partialProgress?.trim() && (!reply?.trim() || partialProgress.length > reply.length)) {
+          reply = partialProgress;
+        }
       }
 
       if (!reply?.trim() && fallbackReply && !fallbackIsSilent) {
