@@ -18,6 +18,8 @@ const {
   mockDownloadMessageResourceFeishu,
   mockCreateFeishuClient,
   mockResolveAgentRoute,
+  mockResolveStorePath,
+  mockRecordInboundSession,
 } = vi.hoisted(() => ({
   mockCreateFeishuReplyDispatcher: vi.fn(() => ({
     dispatcher: vi.fn(),
@@ -40,6 +42,8 @@ const {
     mainSessionKey: "agent:main:main",
     matchedBy: "default",
   })),
+  mockResolveStorePath: vi.fn(() => "/tmp/openclaw-feishu-session-store.json"),
+  mockRecordInboundSession: vi.fn().mockResolvedValue(undefined),
 }));
 
 vi.mock("./reply-dispatcher.js", () => ({
@@ -139,6 +143,8 @@ describe("handleFeishuMessage command authorization", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    mockResolveStorePath.mockReturnValue("/tmp/openclaw-feishu-session-store.json");
+    mockRecordInboundSession.mockResolvedValue(undefined);
     mockShouldComputeCommandAuthorized.mockReset().mockReturnValue(true);
     mockResolveAgentRoute.mockReturnValue({
       agentId: "main",
@@ -189,6 +195,12 @@ describe("handleFeishuMessage command authorization", () => {
             readAllowFromStore: mockReadAllowFromStore,
             upsertPairingRequest: mockUpsertPairingRequest,
             buildPairingReply: mockBuildPairingReply,
+          },
+          session: {
+            resolveStorePath:
+              mockResolveStorePath as unknown as PluginRuntime["channel"]["session"]["resolveStorePath"],
+            recordInboundSession:
+              mockRecordInboundSession as unknown as PluginRuntime["channel"]["session"]["recordInboundSession"],
           },
         },
         media: {
@@ -1704,6 +1716,321 @@ describe("handleFeishuMessage command authorization", () => {
         threadReply: true,
       }),
     );
+  });
+
+  it("pins main-session lastRoute to Feishu for direct messages", async () => {
+    mockShouldComputeCommandAuthorized.mockReturnValue(false);
+
+    const cfg: ClawdbotConfig = {
+      channels: {
+        feishu: {
+          dmPolicy: "open",
+          allowFrom: ["ou-dm-last-route"],
+        },
+      },
+      session: {
+        dmScope: "main",
+      },
+    } as ClawdbotConfig;
+
+    const event: FeishuMessageEvent = {
+      sender: { sender_id: { open_id: "ou-dm-last-route" } },
+      message: {
+        message_id: "msg-dm-last-route",
+        chat_id: "oc-dm-last-route",
+        chat_type: "p2p",
+        message_type: "text",
+        content: JSON.stringify({ text: "hello" }),
+      },
+    };
+
+    mockResolveAgentRoute.mockReturnValue({
+      agentId: "main",
+      channel: "feishu",
+      accountId: "default",
+      sessionKey: "agent:main:main",
+      mainSessionKey: "agent:main:main",
+      matchedBy: "default",
+    });
+
+    await dispatchMessage({ cfg, event });
+
+    expect(mockResolveStorePath).toHaveBeenCalledWith(cfg.session?.store, {
+      agentId: "main",
+    });
+    expect(mockRecordInboundSession).toHaveBeenCalledWith({
+      storePath: "/tmp/openclaw-feishu-session-store.json",
+      sessionKey: "agent:main:main",
+      ctx: expect.objectContaining({
+        SessionKey: "agent:main:main",
+        AccountId: "default",
+        OriginatingChannel: "feishu",
+        OriginatingTo: "user:ou-dm-last-route",
+      }),
+      updateLastRoute: {
+        sessionKey: "agent:main:main",
+        channel: "feishu",
+        to: "user:ou-dm-last-route",
+        accountId: "default",
+        mainDmOwnerPin: {
+          ownerRecipient: "ou-dm-last-route",
+          senderRecipient: "ou-dm-last-route",
+          onSkip: expect.any(Function),
+        },
+      },
+      onRecordError: expect.any(Function),
+    });
+  });
+
+  it("does not let paired Feishu users overwrite a pinned main-session owner route", async () => {
+    mockShouldComputeCommandAuthorized.mockReturnValue(false);
+
+    const cfg: ClawdbotConfig = {
+      channels: {
+        feishu: {
+          dmPolicy: "open",
+          allowFrom: ["ou-main-owner"],
+        },
+      },
+      session: {
+        dmScope: "main",
+      },
+    } as ClawdbotConfig;
+
+    const event: FeishuMessageEvent = {
+      sender: { sender_id: { open_id: "ou-paired-user" } },
+      message: {
+        message_id: "msg-dm-paired-user",
+        chat_id: "oc-dm-paired-user",
+        chat_type: "p2p",
+        message_type: "text",
+        content: JSON.stringify({ text: "hello from paired user" }),
+      },
+    };
+
+    mockResolveAgentRoute.mockReturnValue({
+      agentId: "main",
+      channel: "feishu",
+      accountId: "default",
+      sessionKey: "agent:main:main",
+      mainSessionKey: "agent:main:main",
+      matchedBy: "default",
+    });
+
+    await dispatchMessage({ cfg, event });
+
+    expect(mockResolveStorePath).toHaveBeenCalledWith(cfg.session?.store, {
+      agentId: "main",
+    });
+    expect(mockRecordInboundSession).toHaveBeenCalledWith({
+      storePath: "/tmp/openclaw-feishu-session-store.json",
+      sessionKey: "agent:main:main",
+      ctx: expect.objectContaining({
+        SessionKey: "agent:main:main",
+        AccountId: "default",
+        OriginatingChannel: "feishu",
+        OriginatingTo: "user:ou-paired-user",
+      }),
+      updateLastRoute: {
+        sessionKey: "agent:main:main",
+        channel: "feishu",
+        to: "user:ou-paired-user",
+        accountId: "default",
+        mainDmOwnerPin: {
+          ownerRecipient: "ou-main-owner",
+          senderRecipient: "ou-paired-user",
+          onSkip: expect.any(Function),
+        },
+      },
+      onRecordError: expect.any(Function),
+    });
+  });
+
+  it("uses the owner-matching user_id for main-session pinning when allowFrom is not open_id", async () => {
+    mockShouldComputeCommandAuthorized.mockReturnValue(false);
+
+    const cfg: ClawdbotConfig = {
+      channels: {
+        feishu: {
+          dmPolicy: "open",
+          allowFrom: ["user:cli-owner"],
+        },
+      },
+      session: {
+        dmScope: "main",
+      },
+    } as ClawdbotConfig;
+
+    const event: FeishuMessageEvent = {
+      sender: {
+        sender_id: {
+          open_id: "ou-owner-open-id",
+          user_id: "cli-owner",
+        },
+      },
+      message: {
+        message_id: "msg-dm-user-id-owner",
+        chat_id: "oc-dm-user-id-owner",
+        chat_type: "p2p",
+        message_type: "text",
+        content: JSON.stringify({ text: "hello from owner via user id" }),
+      },
+    };
+
+    mockResolveAgentRoute.mockReturnValue({
+      agentId: "main",
+      channel: "feishu",
+      accountId: "default",
+      sessionKey: "agent:main:main",
+      mainSessionKey: "agent:main:main",
+      matchedBy: "default",
+    });
+
+    await dispatchMessage({ cfg, event });
+
+    expect(mockRecordInboundSession).toHaveBeenCalledWith({
+      storePath: "/tmp/openclaw-feishu-session-store.json",
+      sessionKey: "agent:main:main",
+      ctx: expect.objectContaining({
+        SessionKey: "agent:main:main",
+        OriginatingTo: "user:ou-owner-open-id",
+      }),
+      updateLastRoute: {
+        sessionKey: "agent:main:main",
+        channel: "feishu",
+        to: "user:ou-owner-open-id",
+        accountId: "default",
+        mainDmOwnerPin: {
+          ownerRecipient: "cli-owner",
+          senderRecipient: "cli-owner",
+          onSkip: expect.any(Function),
+        },
+      },
+      onRecordError: expect.any(Function),
+    });
+  });
+
+  it("does not pin a wildcard allowFrom entry as a fake owner", async () => {
+    mockShouldComputeCommandAuthorized.mockReturnValue(false);
+
+    const cfg: ClawdbotConfig = {
+      channels: {
+        feishu: {
+          dmPolicy: "open",
+          allowFrom: ["feishu:*"],
+        },
+      },
+      session: {
+        dmScope: "main",
+      },
+    } as ClawdbotConfig;
+
+    const event: FeishuMessageEvent = {
+      sender: {
+        sender_id: {
+          open_id: "ou-wildcard-owner",
+        },
+      },
+      message: {
+        message_id: "msg-dm-wildcard-owner",
+        chat_id: "oc-dm-wildcard-owner",
+        chat_type: "p2p",
+        message_type: "text",
+        content: JSON.stringify({ text: "hello from wildcard sender" }),
+      },
+    };
+
+    mockResolveAgentRoute.mockReturnValue({
+      agentId: "main",
+      channel: "feishu",
+      accountId: "default",
+      sessionKey: "agent:main:main",
+      mainSessionKey: "agent:main:main",
+      matchedBy: "default",
+    });
+
+    await dispatchMessage({ cfg, event });
+
+    expect(mockRecordInboundSession).toHaveBeenCalledWith({
+      storePath: "/tmp/openclaw-feishu-session-store.json",
+      sessionKey: "agent:main:main",
+      ctx: expect.objectContaining({
+        SessionKey: "agent:main:main",
+        OriginatingTo: "user:ou-wildcard-owner",
+      }),
+      updateLastRoute: {
+        sessionKey: "agent:main:main",
+        channel: "feishu",
+        to: "user:ou-wildcard-owner",
+        accountId: "default",
+        mainDmOwnerPin: undefined,
+      },
+      onRecordError: expect.any(Function),
+    });
+  });
+
+  it("waits for recordInboundSession before dispatching the reply", async () => {
+    mockShouldComputeCommandAuthorized.mockReturnValue(false);
+    mockResolveAgentRoute.mockReturnValue({
+      agentId: "main",
+      channel: "feishu",
+      accountId: "default",
+      sessionKey: "agent:main:main",
+      mainSessionKey: "agent:main:main",
+      matchedBy: "default",
+    });
+
+    let resolveRecordInboundSession: (() => void) | undefined;
+    mockRecordInboundSession.mockImplementationOnce(
+      () =>
+        new Promise<void>((resolve) => {
+          resolveRecordInboundSession = resolve;
+        }),
+    );
+
+    const cfg: ClawdbotConfig = {
+      channels: {
+        feishu: {
+          dmPolicy: "open",
+          allowFrom: ["ou-dm-owner"],
+        },
+      },
+      session: {
+        dmScope: "main",
+      },
+    } as ClawdbotConfig;
+
+    const event: FeishuMessageEvent = {
+      sender: { sender_id: { open_id: "ou-dm-owner" } },
+      message: {
+        message_id: "msg-dm-await-record",
+        chat_id: "oc-dm-await-record",
+        chat_type: "p2p",
+        message_type: "text",
+        content: JSON.stringify({ text: "hello" }),
+      },
+    };
+
+    let dispatchCompleted = false;
+    const pendingDispatch = dispatchMessage({ cfg, event }).then(() => {
+      dispatchCompleted = true;
+    });
+
+    try {
+      await vi.waitFor(() => {
+        expect(mockRecordInboundSession).toHaveBeenCalledTimes(1);
+      });
+      expect(dispatchCompleted).toBe(false);
+      expect(mockDispatchReplyFromConfig).not.toHaveBeenCalled();
+
+      resolveRecordInboundSession?.();
+      await pendingDispatch;
+
+      expect(mockDispatchReplyFromConfig).toHaveBeenCalledTimes(1);
+    } finally {
+      resolveRecordInboundSession?.();
+      await pendingDispatch;
+    }
   });
 
   it("does not dispatch twice for the same image message_id (concurrent dedupe)", async () => {
