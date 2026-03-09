@@ -31,6 +31,7 @@ import {
   isRecoverableTelegramNetworkError,
   isSafeToRetrySendError,
   isTelegramServerError,
+  EMPTY_TEXT_ERR_RE,
 } from "./network-errors.js";
 import { makeProxyFetch } from "./proxy.js";
 import { recordSentMessage } from "./sent-message-cache.js";
@@ -362,8 +363,6 @@ function removeMessageThreadIdParam(
   delete next.message_thread_id;
   return Object.keys(next).length > 0 ? next : undefined;
 }
-
-const EMPTY_TEXT_ERR_RE = /message text is empty|text must be non-empty/i;
 
 function isTelegramHtmlParseError(err: unknown): boolean {
   return PARSE_ERR_RE.test(formatErrorMessage(err));
