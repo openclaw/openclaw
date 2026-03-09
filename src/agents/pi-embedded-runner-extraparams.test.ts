@@ -1926,4 +1926,85 @@ describe("applyExtraParamsToAgent", () => {
       expect(run().store).toBe(false);
     },
   );
+
+  it("keeps plain chat turns unchanged when no tools are available", () => {
+    const { calls, agent } = createOptionsCaptureAgent();
+
+    applyExtraParamsToAgent(agent, undefined, "anthropic", "claude-sonnet-4-6");
+
+    const model = {
+      api: "anthropic-messages",
+      provider: "anthropic",
+      id: "claude-sonnet-4-6",
+    } as Model<"anthropic-messages">;
+    const context: Context = { messages: [] };
+
+    void agent.streamFn?.(model, context, {});
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.temperature).toBeUndefined();
+  });
+
+  it("applies a low default temperature for tool-enabled turns", () => {
+    const { calls, agent } = createOptionsCaptureAgent();
+
+    applyExtraParamsToAgent(agent, undefined, "anthropic", "claude-sonnet-4-6", {
+      availableToolNames: new Set(["web_search"]),
+    });
+
+    const model = {
+      api: "anthropic-messages",
+      provider: "anthropic",
+      id: "claude-sonnet-4-6",
+    } as Model<"anthropic-messages">;
+    const context: Context = { messages: [] };
+
+    void agent.streamFn?.(model, context, {});
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.temperature).toBe(0.3);
+  });
+
+  it("applies a stricter default temperature for shell-like turns", () => {
+    const { calls, agent } = createOptionsCaptureAgent();
+
+    applyExtraParamsToAgent(agent, undefined, "anthropic", "claude-sonnet-4-6", {
+      availableToolNames: new Set(["exec", "web_search"]),
+    });
+
+    const model = {
+      api: "anthropic-messages",
+      provider: "anthropic",
+      id: "claude-sonnet-4-6",
+    } as Model<"anthropic-messages">;
+    const context: Context = { messages: [] };
+
+    void agent.streamFn?.(model, context, {});
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.temperature).toBe(0.2);
+  });
+
+  it("preserves explicit configured temperatures over dynamic tool defaults", () => {
+    const { calls, agent } = createOptionsCaptureAgent();
+    const cfg = buildAnthropicModelConfig("anthropic/claude-sonnet-4-6", {
+      temperature: 0.5,
+    });
+
+    applyExtraParamsToAgent(agent, cfg, "anthropic", "claude-sonnet-4-6", {
+      availableToolNames: new Set(["exec"]),
+    });
+
+    const model = {
+      api: "anthropic-messages",
+      provider: "anthropic",
+      id: "claude-sonnet-4-6",
+    } as Model<"anthropic-messages">;
+    const context: Context = { messages: [] };
+
+    void agent.streamFn?.(model, context, {});
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.temperature).toBe(0.5);
+  });
 });

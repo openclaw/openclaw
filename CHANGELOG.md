@@ -74,6 +74,9 @@ Docs: https://docs.openclaw.ai
 - MS Teams/authz: keep `groupPolicy: "allowlist"` enforcing sender allowlists even when a team/channel route allowlist is configured, so route matches no longer widen group access to every sender in that route. Thanks @zpbrent.
 - Security/system.run: bind approved `bun` and `deno run` script operands to on-disk file snapshots so post-approval script rewrites are denied before execution.
 - Skills/download installs: pin the validated per-skill tools root before writing downloaded archives, so rebinding the lexical tools path cannot redirect download writes outside the intended tools directory. Thanks @tdjackey.
+- Telegram/DM routing: dedupe inbound Telegram DMs per agent instead of per session key so the same DM cannot trigger duplicate replies when both `agent:main:main` and `agent:main:telegram:direct:<id>` resolve for one agent. Fixes #40005. Supersedes #40116. (#40519) thanks @obviyus.
+- Matrix/DM routing: add safer fallback detection for broken `m.direct` homeservers, honor explicit room bindings over DM classification, and preserve room-bound agent selection for Matrix DM rooms. (#19736) Thanks @derbronko.
+- Agents/tools: apply low default temperatures for tool-enabled turns, with stricter defaults for shell-like tools, while leaving plain chat turns on the existing provider-default behavior.
 
 ## 2026.3.7
 

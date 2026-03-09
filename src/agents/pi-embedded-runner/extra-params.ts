@@ -32,6 +32,18 @@ import {
   isProxyReasoningUnsupported,
 } from "./proxy-stream-wrappers.js";
 
+const DEFAULT_TOOL_TEMPERATURE = 0.3;
+const DEFAULT_EXECUTION_TOOL_TEMPERATURE = 0.2;
+const EXECUTION_TOOL_NAMES = new Set([
+  "apply_patch",
+  "bash",
+  "edit",
+  "exec",
+  "exec_command",
+  "process",
+  "write",
+]);
+
 /**
  * Resolve provider-specific extra params from model config.
  * Used to pass through stream params like temperature/maxTokens.
@@ -291,6 +303,37 @@ function resolveAliasedParamValue(
   return seen ? resolved : undefined;
 }
 
+function normalizeToolNames(value: unknown): string[] {
+  const source =
+    value instanceof Set
+      ? Array.from(value)
+      : Array.isArray(value)
+        ? value
+        : value && typeof value === "object" && Symbol.iterator in value
+          ? Array.from(value as Iterable<unknown>)
+          : [];
+  return source
+    .filter((entry): entry is string => typeof entry === "string")
+    .map((entry) => entry.trim())
+    .filter(Boolean);
+}
+
+function resolveDynamicTemperature(params: {
+  merged: Record<string, unknown>;
+  override?: Record<string, unknown>;
+}): number | undefined {
+  if (typeof params.merged.temperature === "number") {
+    return undefined;
+  }
+  const toolNames = normalizeToolNames(params.override?.availableToolNames);
+  if (toolNames.length === 0) {
+    return undefined;
+  }
+  return toolNames.some((name) => EXECUTION_TOOL_NAMES.has(name))
+    ? DEFAULT_EXECUTION_TOOL_TEMPERATURE
+    : DEFAULT_TOOL_TEMPERATURE;
+}
+
 function createParallelToolCallsWrapper(
   baseStreamFn: StreamFn | undefined,
   enabled: boolean,
@@ -351,6 +394,13 @@ export function applyExtraParamsToAgent(
         )
       : undefined;
   const merged = Object.assign({}, resolvedExtraParams, override);
+  const dynamicTemperature = resolveDynamicTemperature({ merged, override });
+  if (dynamicTemperature !== undefined) {
+    merged.temperature = dynamicTemperature;
+    log.debug(
+      `applying dynamic temperature=${dynamicTemperature} for ${provider}/${modelId} based on available tools`,
+    );
+  }
   const wrappedStreamFn = createStreamFnWithExtraParams(agent.streamFn, merged, provider);
 
   if (wrappedStreamFn) {

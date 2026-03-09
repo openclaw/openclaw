@@ -1278,7 +1278,10 @@ export async function runEmbeddedAttempt(
         params.config,
         params.provider,
         params.modelId,
-        params.streamParams,
+        {
+          ...params.streamParams,
+          availableToolNames: allowedToolNames,
+        },
         params.thinkLevel,
         sessionAgentId,
       );
