@@ -19,7 +19,7 @@ import type {
   PluginHookBeforeAgentStartResult,
   PluginHookBeforePromptBuildResult,
 } from "../../../plugins/types.js";
-import { isSubagentSessionKey } from "../../../routing/session-key.js";
+import { isCronSessionKey, isSubagentSessionKey } from "../../../routing/session-key.js";
 import { joinPresentTextSegments } from "../../../shared/text/join-segments.js";
 import { resolveSignalReactionLevel } from "../../../signal/reaction-level.js";
 import { resolveTelegramInlineButtonsScope } from "../../../telegram/inline-buttons.js";
@@ -227,17 +227,16 @@ export function wrapOllamaCompatNumCtx(baseFn: StreamFn | undefined, numCtx: num
   return (model, context, options) =>
     streamFn(model, context, {
       ...options,
-      onPayload: (payload: unknown) => {
+      onPayload: (payload: unknown, payloadModel) => {
         if (!payload || typeof payload !== "object") {
-          options?.onPayload?.(payload);
-          return;
+          return options?.onPayload?.(payload, payloadModel);
         }
         const payloadRecord = payload as Record<string, unknown>;
         if (!payloadRecord.options || typeof payloadRecord.options !== "object") {
           payloadRecord.options = {};
         }
         (payloadRecord.options as Record<string, unknown>).num_ctx = numCtx;
-        options?.onPayload?.(payload);
+        return options?.onPayload?.(payload, payloadModel);
       },
     });
 }
@@ -613,7 +612,7 @@ export function resolvePromptModeForSession(sessionKey?: string): "minimal" | "f
   if (!sessionKey) {
     return "full";
   }
-  return isSubagentSessionKey(sessionKey) ? "minimal" : "full";
+  return isSubagentSessionKey(sessionKey) || isCronSessionKey(sessionKey) ? "minimal" : "full";
 }
 
 export function resolveAttemptFsWorkspaceOnly(params: {
@@ -636,8 +635,8 @@ export function prependSystemPromptAddition(params: {
   return `${params.systemPromptAddition}\n\n${params.systemPrompt}`;
 }
 
-/** Build legacy compaction params passed into context-engine afterTurn hooks. */
-export function buildAfterTurnLegacyCompactionParams(params: {
+/** Build runtime context passed into context-engine afterTurn hooks. */
+export function buildAfterTurnRuntimeContext(params: {
   attempt: Pick<
     EmbeddedRunAttemptParams,
     | "sessionKey"
@@ -1884,7 +1883,7 @@ export async function runEmbeddedAttempt(
 
         // Let the active context engine run its post-turn lifecycle.
         if (params.contextEngine) {
-          const afterTurnLegacyCompactionParams = buildAfterTurnLegacyCompactionParams({
+          const afterTurnRuntimeContext = buildAfterTurnRuntimeContext({
             attempt: params,
             workspaceDir: effectiveWorkspace,
             agentDir,
@@ -1898,7 +1897,7 @@ export async function runEmbeddedAttempt(
                 messages: messagesSnapshot,
                 prePromptMessageCount,
                 tokenBudget: params.contextTokenBudget,
-                legacyCompactionParams: afterTurnLegacyCompactionParams,
+                runtimeContext: afterTurnRuntimeContext,
               });
             } catch (afterTurnErr) {
               log.warn(`context engine afterTurn failed: ${String(afterTurnErr)}`);
