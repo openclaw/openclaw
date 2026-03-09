@@ -15,11 +15,11 @@ import {
   deleteAccountFromConfigSection,
   normalizeAccountId,
   setAccountEnabledInConfigSection,
+  waitForAbortSignal,
   type ChannelPlugin,
   type OpenClawConfig,
   type ChannelSetupInput,
 } from "openclaw/plugin-sdk/nextcloud-talk";
-import { waitForAbortSignal } from "../../../src/infra/abort-signal.js";
 import {
   listNextcloudTalkAccountIds,
   resolveDefaultNextcloudTalkAccountId,

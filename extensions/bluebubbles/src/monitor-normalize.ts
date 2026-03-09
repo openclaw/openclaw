@@ -1,4 +1,4 @@
-import { parseFiniteNumber } from "../../../src/infra/parse-finite-number.js";
+import { parseFiniteNumber } from "openclaw/plugin-sdk/bluebubbles";
 import { extractHandleFromChatGuid, normalizeBlueBubblesHandle } from "./targets.js";
 import type { BlueBubblesAttachment } from "./types.js";
 

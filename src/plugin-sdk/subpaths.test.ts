@@ -105,4 +105,19 @@ describe("plugin-sdk subpath exports", () => {
       expect(mod, `subpath ${id} should resolve`).toBeTruthy();
     }
   });
+
+  it("keeps the newly added bundled plugin-sdk contracts available", async () => {
+    const bluebubbles = await import("openclaw/plugin-sdk/bluebubbles");
+    expect(typeof bluebubbles.parseFiniteNumber).toBe("function");
+
+    const mattermost = await import("openclaw/plugin-sdk/mattermost");
+    expect(typeof mattermost.parseStrictPositiveInteger).toBe("function");
+
+    const nextcloudTalk = await import("openclaw/plugin-sdk/nextcloud-talk");
+    expect(typeof nextcloudTalk.waitForAbortSignal).toBe("function");
+
+    const twitch = await import("openclaw/plugin-sdk/twitch");
+    expect(typeof twitch.DEFAULT_ACCOUNT_ID).toBe("string");
+    expect(typeof twitch.normalizeAccountId).toBe("function");
+  });
 });
