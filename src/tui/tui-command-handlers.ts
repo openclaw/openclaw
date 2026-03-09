@@ -6,7 +6,10 @@ import {
   resolveResponseUsageMode,
 } from "../auto-reply/thinking.js";
 import type { SessionsPatchResult } from "../gateway/protocol/index.js";
-import { formatRelativeTimestamp } from "../infra/format-time/format-relative.ts";
+import {
+  formatRelativeTimestamp,
+  getTemporalBucket,
+} from "../infra/format-time/format-relative.ts";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { helpText, parseCommand } from "./commands.js";
 import type { ChatLog } from "./components/chat-log.js";
@@ -185,8 +188,30 @@ export function createCommandHandlers(context: CommandHandlerContext) {
             .join(" "),
         };
       });
-      const selector = createFilterableSelectList(items, 9);
+      // Group items by temporal bucket with separator headers
+      const groupedItems: typeof items = [];
+      let lastBucket = "";
+      for (const item of items) {
+        const session = result.sessions.find((s) => s.key === item.value);
+        const bucket = session?.updatedAt ? getTemporalBucket(session.updatedAt) : "Unknown";
+        if (bucket !== lastBucket) {
+          groupedItems.push({
+            value: `__separator__${bucket}`,
+            label: `── ${bucket} ──`,
+            description: "",
+            searchText: "",
+          });
+          lastBucket = bucket;
+        }
+        groupedItems.push(item);
+      }
+
+      const selector = createFilterableSelectList(groupedItems, 9);
       openSelector(selector, async (value) => {
+        // Skip separator items
+        if (value.startsWith("__separator__")) {
+          return;
+        }
         await setSession(value);
       });
     } catch (err) {

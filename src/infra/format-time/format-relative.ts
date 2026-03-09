@@ -101,12 +101,100 @@ export function formatRelativeTimestamp(
 
   // Fall back to short date display for old timestamps
   try {
+    const tsDate = new Date(timestampMs);
+    const nowDate = new Date();
+    const includeYear = tsDate.getFullYear() !== nowDate.getFullYear();
     return new Intl.DateTimeFormat("en-US", {
       month: "short",
       day: "numeric",
+      ...(includeYear ? { year: "numeric" } : {}),
       ...(options.timezone ? { timeZone: options.timezone } : {}),
-    }).format(new Date(timestampMs));
+    }).format(tsDate);
   } catch {
     return `${day}d ago`;
+  }
+}
+
+export type TemporalBucketOptions = {
+  /** IANA timezone for date comparison. Uses system default if omitted. */
+  timezone?: string;
+  /** Override "now" for testing */
+  now?: number;
+};
+
+/**
+ * Categorize a timestamp into a temporal bucket for grouping.
+ *
+ * Returns one of:
+ * - "Today"
+ * - "Yesterday"
+ * - "Last 7 days"
+ * - "Last 30 days"
+ * - "February 2026" (month + year for older in current year)
+ * - "2025" (just year for previous years)
+ */
+export function getTemporalBucket(
+  timestampMs: number | null | undefined,
+  options?: TemporalBucketOptions,
+): string {
+  if (timestampMs == null || !Number.isFinite(timestampMs)) {
+    return "Unknown";
+  }
+
+  const now = options?.now ?? Date.now();
+  const tz = options?.timezone;
+
+  // Get calendar dates in the target timezone
+  const formatOpts: Intl.DateTimeFormatOptions = {
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    ...(tz ? { timeZone: tz } : {}),
+  };
+  const fmt = new Intl.DateTimeFormat("en-CA", formatOpts); // en-CA gives YYYY-MM-DD
+  const nowDateStr = fmt.format(new Date(now));
+  const tsDateStr = fmt.format(new Date(timestampMs));
+
+  // Same calendar day = Today
+  if (tsDateStr === nowDateStr) {
+    return "Today";
+  }
+
+  // Yesterday: subtract 1 day from now
+  const yesterdayMs = now - 86400000;
+  const yesterdayStr = fmt.format(new Date(yesterdayMs));
+  if (tsDateStr === yesterdayStr) {
+    return "Yesterday";
+  }
+
+  const diffDays = Math.floor((now - timestampMs) / 86400000);
+
+  if (diffDays < 7) {
+    return "Last 7 days";
+  }
+
+  if (diffDays < 30) {
+    return "Last 30 days";
+  }
+
+  // Older: group by month+year or just year
+  const tsDate = new Date(timestampMs);
+
+  const tsYear = parseInt(tsDateStr.slice(0, 4), 10);
+  const nowYear = parseInt(nowDateStr.slice(0, 4), 10);
+
+  if (tsYear !== nowYear) {
+    return String(tsYear);
+  }
+
+  // Same year but >30 days: show month + year
+  try {
+    return new Intl.DateTimeFormat("en-US", {
+      month: "long",
+      year: "numeric",
+      ...(tz ? { timeZone: tz } : {}),
+    }).format(tsDate);
+  } catch {
+    return String(tsYear);
   }
 }

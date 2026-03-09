@@ -6,7 +6,7 @@ import {
   formatDurationPrecise,
   formatDurationSeconds,
 } from "./format-duration.js";
-import { formatTimeAgo, formatRelativeTimestamp } from "./format-relative.js";
+import { formatTimeAgo, formatRelativeTimestamp, getTemporalBucket } from "./format-relative.js";
 
 describe("format-duration", () => {
   describe("formatDurationCompact", () => {
@@ -212,6 +212,69 @@ describe("format-relative", () => {
       const result = formatRelativeTimestamp(oldDate, { dateFallback: true });
       // Should be a short date like "Jan 9" not "30d ago"
       expect(result).toMatch(/[A-Z][a-z]{2} \d{1,2}/);
+    });
+
+    it("includes year for cross-year dates with dateFallback", () => {
+      // A date in a different year
+      const lastYear = new Date();
+      lastYear.setFullYear(lastYear.getFullYear() - 1);
+      lastYear.setMonth(11); // December
+      lastYear.setDate(31);
+      const result = formatRelativeTimestamp(lastYear.getTime(), { dateFallback: true });
+      // Should include the year, e.g. "Dec 31, 2025"
+      expect(result).toMatch(/\d{4}/);
+    });
+  });
+
+  describe("getTemporalBucket", () => {
+    // Use a fixed "now" for deterministic tests: 2026-03-09T12:00:00Z
+    const now = new Date("2026-03-09T12:00:00Z").getTime();
+
+    it("returns 'Unknown' for invalid input", () => {
+      expect(getTemporalBucket(null)).toBe("Unknown");
+      expect(getTemporalBucket(undefined)).toBe("Unknown");
+      expect(getTemporalBucket(NaN)).toBe("Unknown");
+    });
+
+    it("returns 'Today' for timestamps from the same calendar day", () => {
+      // 2 hours ago
+      expect(getTemporalBucket(now - 2 * 3600000, { now, timezone: "UTC" })).toBe("Today");
+      // 1 minute ago
+      expect(getTemporalBucket(now - 60000, { now, timezone: "UTC" })).toBe("Today");
+    });
+
+    it("returns 'Yesterday' for timestamps from the previous calendar day", () => {
+      // 26 hours ago (yesterday in UTC)
+      expect(getTemporalBucket(now - 26 * 3600000, { now, timezone: "UTC" })).toBe("Yesterday");
+    });
+
+    it("returns 'Last 7 days' for timestamps 2-6 days ago", () => {
+      // 3 days ago
+      expect(getTemporalBucket(now - 3 * 86400000, { now, timezone: "UTC" })).toBe("Last 7 days");
+      // 5 days ago
+      expect(getTemporalBucket(now - 5 * 86400000, { now, timezone: "UTC" })).toBe("Last 7 days");
+    });
+
+    it("returns 'Last 30 days' for timestamps 7-29 days ago", () => {
+      // 10 days ago
+      expect(getTemporalBucket(now - 10 * 86400000, { now, timezone: "UTC" })).toBe("Last 30 days");
+      // 25 days ago
+      expect(getTemporalBucket(now - 25 * 86400000, { now, timezone: "UTC" })).toBe("Last 30 days");
+    });
+
+    it("returns month + year for older timestamps in the same year", () => {
+      // January 15, 2026
+      const jan15 = new Date("2026-01-15T12:00:00Z").getTime();
+      expect(getTemporalBucket(jan15, { now, timezone: "UTC" })).toBe("January 2026");
+    });
+
+    it("returns just year for timestamps from a different year", () => {
+      // December 25, 2025
+      const dec25 = new Date("2025-12-25T12:00:00Z").getTime();
+      expect(getTemporalBucket(dec25, { now, timezone: "UTC" })).toBe("2025");
+      // 2024
+      const old = new Date("2024-06-15T12:00:00Z").getTime();
+      expect(getTemporalBucket(old, { now, timezone: "UTC" })).toBe("2024");
     });
   });
 });
