@@ -23,8 +23,8 @@ vi.mock("@mariozechner/pi-ai", async () => {
     ...actual,
     getOAuthApiKey: getOAuthApiKeyMock,
     getOAuthProviders: () => [
-      { id: "openai-codex", envApiKey: "OPENAI_API_KEY", oauthTokenEnv: "OPENAI_OAUTH_TOKEN" },
-      { id: "anthropic", envApiKey: "ANTHROPIC_API_KEY", oauthTokenEnv: "ANTHROPIC_OAUTH_TOKEN" },
+      { id: "openai-codex", envApiKey: "OPENAI_API_KEY", oauthTokenEnv: "OPENAI_OAUTH_TOKEN" }, // pragma: allowlist secret
+      { id: "anthropic", envApiKey: "ANTHROPIC_API_KEY", oauthTokenEnv: "ANTHROPIC_OAUTH_TOKEN" }, // pragma: allowlist secret
     ],
   };
 });
@@ -91,7 +91,7 @@ describe("resolveApiKeyForProfile openai-codex refresh fallback", () => {
     });
 
     expect(result).toEqual({
-      apiKey: "cached-access-token",
+      apiKey: "cached-access-token", // pragma: allowlist secret
       provider: "openai-codex",
       email: undefined,
     });

@@ -30,10 +30,14 @@ vi.mock("./send.js", () => ({
   editMessageTelegram,
 }));
 
-vi.mock("../config/sessions.js", async () => ({
-  loadSessionStore,
-  resolveStorePath,
-}));
+vi.mock("../config/sessions.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../config/sessions.js")>();
+  return {
+    ...actual,
+    loadSessionStore,
+    resolveStorePath,
+  };
+});
 
 vi.mock("./sticker-cache.js", () => ({
   cacheSticker: vi.fn(),
@@ -1167,7 +1171,7 @@ describe("dispatchTelegramMessage draft streaming", () => {
     },
   );
 
-  it("uses message preview transport for DM reasoning lane when answer preview lane is active", async () => {
+  it("uses message preview transport for all DM lanes when streaming is active", async () => {
     setupDraftStreams({ answerMessageId: 999, reasoningMessageId: 111 });
     dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
       async ({ dispatcherOptions, replyOptions }) => {
@@ -1186,7 +1190,7 @@ describe("dispatchTelegramMessage draft streaming", () => {
     expect(createTelegramDraftStream.mock.calls[0]?.[0]).toEqual(
       expect.objectContaining({
         thread: { id: 777, scope: "dm" },
-        previewTransport: "auto",
+        previewTransport: "message",
       }),
     );
     expect(createTelegramDraftStream.mock.calls[1]?.[0]).toEqual(
@@ -1194,6 +1198,39 @@ describe("dispatchTelegramMessage draft streaming", () => {
         thread: { id: 777, scope: "dm" },
         previewTransport: "message",
       }),
+    );
+  });
+
+  it("finalizes DM answer preview in place without materializing or sending a duplicate", async () => {
+    const answerDraftStream = createDraftStream(321);
+    const reasoningDraftStream = createDraftStream(111);
+    createTelegramDraftStream
+      .mockImplementationOnce(() => answerDraftStream)
+      .mockImplementationOnce(() => reasoningDraftStream);
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
+      async ({ dispatcherOptions, replyOptions }) => {
+        await replyOptions?.onPartialReply?.({ text: "Checking the directory..." });
+        await dispatcherOptions.deliver({ text: "Checking the directory..." }, { kind: "final" });
+        return { queuedFinal: true };
+      },
+    );
+    deliverReplies.mockResolvedValue({ delivered: true });
+
+    await dispatchWithContext({ context: createContext(), streamMode: "partial" });
+
+    expect(createTelegramDraftStream.mock.calls[0]?.[0]).toEqual(
+      expect.objectContaining({
+        thread: { id: 777, scope: "dm" },
+        previewTransport: "message",
+      }),
+    );
+    expect(answerDraftStream.materialize).not.toHaveBeenCalled();
+    expect(deliverReplies).not.toHaveBeenCalled();
+    expect(editMessageTelegram).toHaveBeenCalledWith(
+      123,
+      321,
+      "Checking the directory...",
+      expect.any(Object),
     );
   });
 
@@ -1771,18 +1808,25 @@ describe("dispatchTelegramMessage draft streaming", () => {
     expect(draftStream.clear).toHaveBeenCalledTimes(1);
   });
 
-  it("clears preview when dispatcher throws before fallback phase", async () => {
+  it("sends error fallback and clears preview when dispatcher throws", async () => {
     const draftStream = createDraftStream(999);
     createTelegramDraftStream.mockReturnValue(draftStream);
     dispatchReplyWithBufferedBlockDispatcher.mockRejectedValue(new Error("dispatcher exploded"));
+    deliverReplies.mockResolvedValue({ delivered: true });
 
-    await expect(dispatchWithContext({ context: createContext() })).rejects.toThrow(
-      "dispatcher exploded",
-    );
+    await dispatchWithContext({ context: createContext() });
 
     expect(draftStream.stop).toHaveBeenCalledTimes(1);
     expect(draftStream.clear).toHaveBeenCalledTimes(1);
-    expect(deliverReplies).not.toHaveBeenCalled();
+    // Error fallback message should be delivered to the user instead of silent failure
+    expect(deliverReplies).toHaveBeenCalledTimes(1);
+    expect(deliverReplies).toHaveBeenCalledWith(
+      expect.objectContaining({
+        replies: [
+          { text: "Something went wrong while processing your request. Please try again." },
+        ],
+      }),
+    );
   });
 
   it("supports concurrent dispatches with independent previews", async () => {

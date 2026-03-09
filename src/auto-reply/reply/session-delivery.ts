@@ -1,6 +1,6 @@
 import type { SessionEntry } from "../../config/sessions.js";
 import { buildAgentMainSessionKey } from "../../routing/session-key.js";
-import { deriveSessionChatType, parseAgentSessionKey } from "../../sessions/session-key-utils.js";
+import { parseAgentSessionKey } from "../../sessions/session-key-utils.js";
 import {
   deliveryContextFromSession,
   deliveryContextKey,
@@ -38,8 +38,44 @@ function isMainSessionKey(sessionKey?: string): boolean {
   return parsed.rest.trim().toLowerCase() === "main";
 }
 
+const DIRECT_SESSION_MARKERS = new Set(["direct", "dm"]);
+const THREAD_SESSION_MARKERS = new Set(["thread", "topic"]);
+
+function hasStrictDirectSessionTail(parts: string[], markerIndex: number): boolean {
+  const peerId = parts[markerIndex + 1]?.trim();
+  if (!peerId) {
+    return false;
+  }
+  const tail = parts.slice(markerIndex + 2);
+  if (tail.length === 0) {
+    return true;
+  }
+  return tail.length === 2 && THREAD_SESSION_MARKERS.has(tail[0] ?? "") && Boolean(tail[1]?.trim());
+}
+
 function isDirectSessionKey(sessionKey?: string): boolean {
-  return deriveSessionChatType(sessionKey) === "direct";
+  const raw = (sessionKey ?? "").trim().toLowerCase();
+  if (!raw) {
+    return false;
+  }
+  const scoped = parseAgentSessionKey(raw)?.rest ?? raw;
+  const parts = scoped.split(":").filter(Boolean);
+  if (parts.length < 2) {
+    return false;
+  }
+  if (DIRECT_SESSION_MARKERS.has(parts[0] ?? "")) {
+    return hasStrictDirectSessionTail(parts, 0);
+  }
+  const channel = normalizeMessageChannel(parts[0]);
+  if (!channel || !isDeliverableMessageChannel(channel)) {
+    return false;
+  }
+  if (DIRECT_SESSION_MARKERS.has(parts[1] ?? "")) {
+    return hasStrictDirectSessionTail(parts, 1);
+  }
+  return Boolean(parts[1]?.trim()) && DIRECT_SESSION_MARKERS.has(parts[2] ?? "")
+    ? hasStrictDirectSessionTail(parts, 2)
+    : false;
 }
 
 function isExternalRoutingChannel(channel?: string): channel is string {

@@ -12,6 +12,10 @@ type TelegramUpdateOffsetState = {
   botId: string | null;
 };
 
+function isValidUpdateId(value: unknown): value is number {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
+}
+
 function normalizeAccountId(accountId?: string) {
   const trimmed = accountId?.trim();
   if (!trimmed) {
@@ -51,7 +55,7 @@ function safeParseState(raw: string): TelegramUpdateOffsetState | null {
     if (parsed?.version !== STORE_VERSION && parsed?.version !== 1) {
       return null;
     }
-    if (parsed.lastUpdateId !== null && typeof parsed.lastUpdateId !== "number") {
+    if (parsed.lastUpdateId !== null && !isValidUpdateId(parsed.lastUpdateId)) {
       return null;
     }
     if (
@@ -103,6 +107,9 @@ export async function writeTelegramUpdateOffset(params: {
   botToken?: string;
   env?: NodeJS.ProcessEnv;
 }): Promise<void> {
+  if (!isValidUpdateId(params.updateId)) {
+    throw new Error("Telegram update offset must be a non-negative safe integer.");
+  }
   const filePath = resolveTelegramUpdateOffsetPath(params.accountId, params.env);
   const payload: TelegramUpdateOffsetState = {
     version: STORE_VERSION,
