@@ -5,7 +5,12 @@ import { openBoundaryFileSync } from "../infra/boundary-file-read.js";
 import type { UpdateChannel } from "../infra/update-channels.js";
 import { resolveUserPath } from "../utils.js";
 import { resolveBundledPluginSources } from "./bundled-sources.js";
-import { installPluginFromNpmSpec, resolvePluginInstallDir } from "./install.js";
+import {
+  installPluginFromNpmSpec,
+  PLUGIN_INSTALL_ERROR_CODE,
+  type InstallPluginResult,
+  resolvePluginInstallDir,
+} from "./install.js";
 import { buildNpmResolutionInstallFields, recordPluginInstall } from "./installs.js";
 
 export type PluginUpdateLogger = {
@@ -53,6 +58,18 @@ export type PluginChannelSyncResult = {
   summary: PluginChannelSyncSummary;
 };
 
+function formatNpmInstallFailure(params: {
+  pluginId: string;
+  spec: string;
+  phase: "check" | "update";
+  result: Extract<InstallPluginResult, { ok: false }>;
+}): string {
+  if (params.result.code === PLUGIN_INSTALL_ERROR_CODE.NPM_PACKAGE_NOT_FOUND) {
+    return `Failed to ${params.phase} ${params.pluginId}: npm package not found for ${params.spec}.`;
+  }
+  return `Failed to ${params.phase} ${params.pluginId}: ${params.result.error}`;
+}
+
 type InstallIntegrityDrift = {
   spec: string;
   expectedIntegrity: string;
@@ -62,6 +79,28 @@ type InstallIntegrityDrift = {
     version?: string;
   };
 };
+
+function expectedIntegrityForUpdate(
+  spec: string | undefined,
+  integrity: string | undefined,
+): string | undefined {
+  if (!integrity || !spec) {
+    return undefined;
+  }
+  const value = spec.trim();
+  if (!value) {
+    return undefined;
+  }
+  const at = value.lastIndexOf("@");
+  if (at <= 0 || at >= value.length - 1) {
+    return undefined;
+  }
+  const version = value.slice(at + 1).trim();
+  if (!/^v?\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/.test(version)) {
+    return undefined;
+  }
+  return integrity;
+}
 
 async function readInstalledPackageVersion(dir: string): Promise<string | undefined> {
   const manifestPath = path.join(dir, "package.json");
@@ -229,7 +268,7 @@ export async function updateNpmInstalledPlugins(params: {
           mode: "update",
           dryRun: true,
           expectedPluginId: pluginId,
-          expectedIntegrity: record.integrity,
+          expectedIntegrity: expectedIntegrityForUpdate(record.spec, record.integrity),
           onIntegrityDrift: createPluginUpdateIntegrityDriftHandler({
             pluginId,
             dryRun: true,
@@ -250,7 +289,12 @@ export async function updateNpmInstalledPlugins(params: {
         outcomes.push({
           pluginId,
           status: "error",
-          message: `Failed to check ${pluginId}: ${probe.error}`,
+          message: formatNpmInstallFailure({
+            pluginId,
+            spec: record.spec,
+            phase: "check",
+            result: probe,
+          }),
         });
         continue;
       }
@@ -283,7 +327,7 @@ export async function updateNpmInstalledPlugins(params: {
         spec: record.spec,
         mode: "update",
         expectedPluginId: pluginId,
-        expectedIntegrity: record.integrity,
+        expectedIntegrity: expectedIntegrityForUpdate(record.spec, record.integrity),
         onIntegrityDrift: createPluginUpdateIntegrityDriftHandler({
           pluginId,
           dryRun: false,
@@ -304,7 +348,12 @@ export async function updateNpmInstalledPlugins(params: {
       outcomes.push({
         pluginId,
         status: "error",
-        message: `Failed to update ${pluginId}: ${result.error}`,
+        message: formatNpmInstallFailure({
+          pluginId,
+          spec: record.spec,
+          phase: "update",
+          result: result,
+        }),
       });
       continue;
     }
@@ -410,42 +459,26 @@ export async function syncPluginsForUpdateChannel(params: {
       if (!pathsEqual(record.sourcePath, bundledInfo.localPath)) {
         continue;
       }
-
-      const spec = record.spec ?? bundledInfo.npmSpec;
-      if (!spec) {
-        summary.warnings.push(`Missing npm spec for ${pluginId}; keeping local path.`);
-        continue;
-      }
-
-      let result: Awaited<ReturnType<typeof installPluginFromNpmSpec>>;
-      try {
-        result = await installPluginFromNpmSpec({
-          spec,
-          mode: "update",
-          expectedPluginId: pluginId,
-          logger: params.logger,
-        });
-      } catch (err) {
-        summary.errors.push(`Failed to install ${pluginId}: ${String(err)}`);
-        continue;
-      }
-      if (!result.ok) {
-        summary.errors.push(`Failed to install ${pluginId}: ${result.error}`);
+      // Keep explicit bundled installs on release channels. Replacing them with
+      // npm installs can reintroduce duplicate-id shadowing and packaging drift.
+      loadHelpers.addPath(bundledInfo.localPath);
+      const alreadyBundled =
+        record.source === "path" &&
+        pathsEqual(record.sourcePath, bundledInfo.localPath) &&
+        pathsEqual(record.installPath, bundledInfo.localPath);
+      if (alreadyBundled) {
         continue;
       }
 
       next = recordPluginInstall(next, {
         pluginId,
-        source: "npm",
-        spec,
-        installPath: result.targetDir,
-        version: result.version,
-        ...buildNpmResolutionInstallFields(result.npmResolution),
-        sourcePath: undefined,
+        source: "path",
+        sourcePath: bundledInfo.localPath,
+        installPath: bundledInfo.localPath,
+        spec: record.spec ?? bundledInfo.npmSpec,
+        version: record.version,
       });
-      summary.switchedToNpm.push(pluginId);
       changed = true;
-      loadHelpers.removePath(bundledInfo.localPath);
     }
   }
 

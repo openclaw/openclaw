@@ -50,6 +50,8 @@ export type SlackActionContext = {
   replyToMode?: "off" | "first" | "all";
   /** Mutable ref to track if a reply was sent (for "first" mode). */
   hasRepliedRef?: { value: boolean };
+  /** Allowed local media directories for file uploads. */
+  mediaLocalRoots?: readonly string[];
 };
 
 /**
@@ -209,6 +211,7 @@ export async function handleSlackAction(
         const result = await sendSlackMessage(to, content ?? "", {
           ...writeOpts,
           mediaUrl: mediaUrl ?? undefined,
+          mediaLocalRoots: context?.mediaLocalRoots,
           threadTs: threadTs ?? undefined,
           blocks,
         });
@@ -290,12 +293,17 @@ export async function handleSlackAction(
       }
       case "downloadFile": {
         const fileId = readStringParam(params, "fileId", { required: true });
+        const channelTarget = readStringParam(params, "channelId") ?? readStringParam(params, "to");
+        const channelId = channelTarget ? resolveSlackChannelId(channelTarget) : undefined;
+        const threadId = readStringParam(params, "threadId") ?? readStringParam(params, "replyTo");
         const maxBytes = account.config?.mediaMaxMb
           ? account.config.mediaMaxMb * 1024 * 1024
           : 20 * 1024 * 1024;
         const downloaded = await downloadSlackFile(fileId, {
           ...readOpts,
           maxBytes,
+          channelId,
+          threadId: threadId ?? undefined,
         });
         if (!downloaded) {
           return jsonResult({

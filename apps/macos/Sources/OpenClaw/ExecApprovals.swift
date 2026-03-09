@@ -84,13 +84,13 @@ enum ExecAsk: String, CaseIterable, Codable, Identifiable {
     }
 }
 
-enum ExecApprovalDecision: String, Codable, Sendable {
+enum ExecApprovalDecision: String, Codable {
     case allowOnce = "allow-once"
     case allowAlways = "allow-always"
     case deny
 }
 
-enum ExecAllowlistPatternValidationReason: String, Codable, Sendable, Equatable {
+enum ExecAllowlistPatternValidationReason: String, Codable, Equatable {
     case empty
     case missingPathComponent
 
@@ -104,12 +104,12 @@ enum ExecAllowlistPatternValidationReason: String, Codable, Sendable, Equatable 
     }
 }
 
-enum ExecAllowlistPatternValidation: Sendable, Equatable {
+enum ExecAllowlistPatternValidation: Equatable {
     case valid(String)
     case invalid(ExecAllowlistPatternValidationReason)
 }
 
-struct ExecAllowlistRejectedEntry: Sendable, Equatable {
+struct ExecAllowlistRejectedEntry: Equatable {
     let id: UUID
     let pattern: String
     let reason: ExecAllowlistPatternValidationReason
@@ -535,9 +535,11 @@ enum ExecApprovalsStore {
                 [.posixPermissions: self.secureStateDirPermissions],
                 ofItemAtPath: url.path)
         } catch {
+            let message =
+                "exec approvals state dir permission hardening failed: \(error.localizedDescription)"
             self.logger
                 .warning(
-                    "exec approvals state dir permission hardening failed: \(error.localizedDescription, privacy: .public)")
+                    "\(message, privacy: .public)")
         }
     }
 
@@ -751,7 +753,7 @@ enum ExecApprovalHelpers {
     }
 }
 
-struct ExecEventPayload: Codable, Sendable {
+struct ExecEventPayload: Codable {
     var sessionKey: String
     var runId: String
     var host: String

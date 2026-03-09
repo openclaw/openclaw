@@ -49,7 +49,9 @@ import {
   normalizeAcpErrorCode,
   normalizeActorKey,
   normalizeSessionKey,
+  requireReadySessionMeta,
   resolveAcpAgentFromSessionKey,
+  resolveAcpSessionResolutionError,
   resolveMissingMetaError,
   resolveRuntimeIdleTtlMs,
 } from "./manager.utils.js";
@@ -316,70 +318,77 @@ export class AcpSessionManager {
   async getSessionStatus(params: {
     cfg: OpenClawConfig;
     sessionKey: string;
+    signal?: AbortSignal;
   }): Promise<AcpSessionStatus> {
     const sessionKey = normalizeSessionKey(params.sessionKey);
     if (!sessionKey) {
       throw new AcpRuntimeError("ACP_SESSION_INIT_FAILED", "ACP session key is required.");
     }
+    this.throwIfAborted(params.signal);
     await this.evictIdleRuntimeHandles({ cfg: params.cfg });
-    return await this.withSessionActor(sessionKey, async () => {
-      const resolution = this.resolveSession({
-        cfg: params.cfg,
-        sessionKey,
-      });
-      if (resolution.kind === "none") {
-        throw new AcpRuntimeError(
-          "ACP_SESSION_INIT_FAILED",
-          `Session is not ACP-enabled: ${sessionKey}`,
-        );
-      }
-      if (resolution.kind === "stale") {
-        throw resolution.error;
-      }
-      const {
-        runtime,
-        handle: ensuredHandle,
-        meta: ensuredMeta,
-      } = await this.ensureRuntimeHandle({
-        cfg: params.cfg,
-        sessionKey,
-        meta: resolution.meta,
-      });
-      let handle = ensuredHandle;
-      let meta = ensuredMeta;
-      const capabilities = await this.resolveRuntimeCapabilities({ runtime, handle });
-      let runtimeStatus: AcpRuntimeStatus | undefined;
-      if (runtime.getStatus) {
-        runtimeStatus = await withAcpRuntimeErrorBoundary({
-          run: async () => await runtime.getStatus!({ handle }),
-          fallbackCode: "ACP_TURN_FAILED",
-          fallbackMessage: "Could not read ACP runtime status.",
+    return await this.withSessionActor(
+      sessionKey,
+      async () => {
+        this.throwIfAborted(params.signal);
+        const resolution = this.resolveSession({
+          cfg: params.cfg,
+          sessionKey,
         });
-      }
-      ({ handle, meta, runtimeStatus } = await this.reconcileRuntimeSessionIdentifiers({
-        cfg: params.cfg,
-        sessionKey,
-        runtime,
-        handle,
-        meta,
-        runtimeStatus,
-        failOnStatusError: true,
-      }));
-      const identity = resolveSessionIdentityFromMeta(meta);
-      return {
-        sessionKey,
-        backend: handle.backend || meta.backend,
-        agent: meta.agent,
-        ...(identity ? { identity } : {}),
-        state: meta.state,
-        mode: meta.mode,
-        runtimeOptions: resolveRuntimeOptionsFromMeta(meta),
-        capabilities,
-        runtimeStatus,
-        lastActivityAt: meta.lastActivityAt,
-        lastError: meta.lastError,
-      };
-    });
+        const resolvedMeta = requireReadySessionMeta(resolution);
+        const {
+          runtime,
+          handle: ensuredHandle,
+          meta: ensuredMeta,
+        } = await this.ensureRuntimeHandle({
+          cfg: params.cfg,
+          sessionKey,
+          meta: resolvedMeta,
+        });
+        let handle = ensuredHandle;
+        let meta = ensuredMeta;
+        const capabilities = await this.resolveRuntimeCapabilities({ runtime, handle });
+        let runtimeStatus: AcpRuntimeStatus | undefined;
+        if (runtime.getStatus) {
+          runtimeStatus = await withAcpRuntimeErrorBoundary({
+            run: async () => {
+              this.throwIfAborted(params.signal);
+              const status = await runtime.getStatus!({
+                handle,
+                ...(params.signal ? { signal: params.signal } : {}),
+              });
+              this.throwIfAborted(params.signal);
+              return status;
+            },
+            fallbackCode: "ACP_TURN_FAILED",
+            fallbackMessage: "Could not read ACP runtime status.",
+          });
+        }
+        ({ handle, meta, runtimeStatus } = await this.reconcileRuntimeSessionIdentifiers({
+          cfg: params.cfg,
+          sessionKey,
+          runtime,
+          handle,
+          meta,
+          runtimeStatus,
+          failOnStatusError: true,
+        }));
+        const identity = resolveSessionIdentityFromMeta(meta);
+        return {
+          sessionKey,
+          backend: handle.backend || meta.backend,
+          agent: meta.agent,
+          ...(identity ? { identity } : {}),
+          state: meta.state,
+          mode: meta.mode,
+          runtimeOptions: resolveRuntimeOptionsFromMeta(meta),
+          capabilities,
+          runtimeStatus,
+          lastActivityAt: meta.lastActivityAt,
+          lastError: meta.lastError,
+        };
+      },
+      params.signal,
+    );
   }
 
   async setSessionRuntimeMode(params: {
@@ -399,19 +408,11 @@ export class AcpSessionManager {
         cfg: params.cfg,
         sessionKey,
       });
-      if (resolution.kind === "none") {
-        throw new AcpRuntimeError(
-          "ACP_SESSION_INIT_FAILED",
-          `Session is not ACP-enabled: ${sessionKey}`,
-        );
-      }
-      if (resolution.kind === "stale") {
-        throw resolution.error;
-      }
+      const resolvedMeta = requireReadySessionMeta(resolution);
       const { runtime, handle, meta } = await this.ensureRuntimeHandle({
         cfg: params.cfg,
         sessionKey,
-        meta: resolution.meta,
+        meta: resolvedMeta,
       });
       const capabilities = await this.resolveRuntimeCapabilities({ runtime, handle });
       if (!capabilities.controls.includes("session/set_mode") || !runtime.setMode) {
@@ -464,19 +465,11 @@ export class AcpSessionManager {
         cfg: params.cfg,
         sessionKey,
       });
-      if (resolution.kind === "none") {
-        throw new AcpRuntimeError(
-          "ACP_SESSION_INIT_FAILED",
-          `Session is not ACP-enabled: ${sessionKey}`,
-        );
-      }
-      if (resolution.kind === "stale") {
-        throw resolution.error;
-      }
+      const resolvedMeta = requireReadySessionMeta(resolution);
       const { runtime, handle, meta } = await this.ensureRuntimeHandle({
         cfg: params.cfg,
         sessionKey,
-        meta: resolution.meta,
+        meta: resolvedMeta,
       });
       const inferredPatch = inferRuntimeOptionPatchFromConfigOption(key, value);
       const capabilities = await this.resolveRuntimeCapabilities({ runtime, handle });
@@ -543,17 +536,9 @@ export class AcpSessionManager {
         cfg: params.cfg,
         sessionKey,
       });
-      if (resolution.kind === "none") {
-        throw new AcpRuntimeError(
-          "ACP_SESSION_INIT_FAILED",
-          `Session is not ACP-enabled: ${sessionKey}`,
-        );
-      }
-      if (resolution.kind === "stale") {
-        throw resolution.error;
-      }
+      const resolvedMeta = requireReadySessionMeta(resolution);
       const nextOptions = mergeRuntimeOptions({
-        current: resolveRuntimeOptionsFromMeta(resolution.meta),
+        current: resolveRuntimeOptionsFromMeta(resolvedMeta),
         patch: validatedPatch,
       });
       await this.persistRuntimeOptions({
@@ -579,19 +564,11 @@ export class AcpSessionManager {
         cfg: params.cfg,
         sessionKey,
       });
-      if (resolution.kind === "none") {
-        throw new AcpRuntimeError(
-          "ACP_SESSION_INIT_FAILED",
-          `Session is not ACP-enabled: ${sessionKey}`,
-        );
-      }
-      if (resolution.kind === "stale") {
-        throw resolution.error;
-      }
+      const resolvedMeta = requireReadySessionMeta(resolution);
       const { runtime, handle } = await this.ensureRuntimeHandle({
         cfg: params.cfg,
         sessionKey,
-        meta: resolution.meta,
+        meta: resolvedMeta,
       });
       await withAcpRuntimeErrorBoundary({
         run: async () =>
@@ -623,15 +600,7 @@ export class AcpSessionManager {
         cfg: input.cfg,
         sessionKey,
       });
-      if (resolution.kind === "none") {
-        throw new AcpRuntimeError(
-          "ACP_SESSION_INIT_FAILED",
-          `Session is not ACP-enabled: ${sessionKey}`,
-        );
-      }
-      if (resolution.kind === "stale") {
-        throw resolution.error;
-      }
+      const resolvedMeta = requireReadySessionMeta(resolution);
 
       const {
         runtime,
@@ -640,7 +609,7 @@ export class AcpSessionManager {
       } = await this.ensureRuntimeHandle({
         cfg: input.cfg,
         sessionKey,
-        meta: resolution.meta,
+        meta: resolvedMeta,
       });
       let handle = ensuredHandle;
       const meta = ensuredMeta;
@@ -686,6 +655,7 @@ export class AcpSessionManager {
         for await (const event of runtime.runTurn({
           handle,
           text: input.text,
+          attachments: input.attachments,
           mode: input.mode,
           requestId: input.requestId,
           signal: combinedSignal,
@@ -795,19 +765,11 @@ export class AcpSessionManager {
         cfg: params.cfg,
         sessionKey,
       });
-      if (resolution.kind === "none") {
-        throw new AcpRuntimeError(
-          "ACP_SESSION_INIT_FAILED",
-          `Session is not ACP-enabled: ${sessionKey}`,
-        );
-      }
-      if (resolution.kind === "stale") {
-        throw resolution.error;
-      }
+      const resolvedMeta = requireReadySessionMeta(resolution);
       const { runtime, handle } = await this.ensureRuntimeHandle({
         cfg: params.cfg,
         sessionKey,
-        meta: resolution.meta,
+        meta: resolvedMeta,
       });
       try {
         await withAcpRuntimeErrorBoundary({
@@ -853,27 +815,17 @@ export class AcpSessionManager {
         cfg: input.cfg,
         sessionKey,
       });
-      if (resolution.kind === "none") {
+      const resolutionError = resolveAcpSessionResolutionError(resolution);
+      if (resolutionError) {
         if (input.requireAcpSession ?? true) {
-          throw new AcpRuntimeError(
-            "ACP_SESSION_INIT_FAILED",
-            `Session is not ACP-enabled: ${sessionKey}`,
-          );
+          throw resolutionError;
         }
         return {
           runtimeClosed: false,
           metaCleared: false,
         };
       }
-      if (resolution.kind === "stale") {
-        if (input.requireAcpSession ?? true) {
-          throw resolution.error;
-        }
-        return {
-          runtimeClosed: false,
-          metaCleared: false,
-        };
-      }
+      const meta = requireReadySessionMeta(resolution);
 
       let runtimeClosed = false;
       let runtimeNotice: string | undefined;
@@ -881,7 +833,7 @@ export class AcpSessionManager {
         const { runtime, handle } = await this.ensureRuntimeHandle({
           cfg: input.cfg,
           sessionKey,
-          meta: resolution.meta,
+          meta,
         });
         await withAcpRuntimeErrorBoundary({
           run: async () =>
@@ -1295,9 +1247,23 @@ export class AcpSessionManager {
     }
   }
 
-  private async withSessionActor<T>(sessionKey: string, op: () => Promise<T>): Promise<T> {
+  private async withSessionActor<T>(
+    sessionKey: string,
+    op: () => Promise<T>,
+    signal?: AbortSignal,
+  ): Promise<T> {
     const actorKey = normalizeActorKey(sessionKey);
-    return await this.actorQueue.run(actorKey, op);
+    return await this.actorQueue.run(actorKey, async () => {
+      this.throwIfAborted(signal);
+      return await op();
+    });
+  }
+
+  private throwIfAborted(signal?: AbortSignal): void {
+    if (!signal?.aborted) {
+      return;
+    }
+    throw new AcpRuntimeError("ACP_TURN_FAILED", "ACP operation aborted.");
   }
 
   private getCachedRuntimeState(sessionKey: string): CachedRuntimeState | null {

@@ -156,8 +156,8 @@ pnpm openclaw gateway --port 18789 --verbose
 3) Approve pairing (on the gateway machine):
 
 ```bash
-openclaw nodes pending
-openclaw nodes approve <requestId>
+openclaw devices list
+openclaw devices approve <requestId>
 ```
 
 More details: `docs/platforms/android.md`.
@@ -211,7 +211,7 @@ What it does:
 - Reads `node.describe` command list from the selected Android node.
 - Invokes advertised non-interactive commands.
 - Skips `screen.record` in this suite (Android requires interactive per-invocation screen-capture consent).
-- Asserts command contracts (success or expected deterministic error for safe-invalid calls like `sms.send`, `notifications.actions`, `app.update`).
+- Asserts command contracts (success or expected deterministic error for safe-invalid calls like `sms.send` and `notifications.actions`).
 
 Common failure quick-fixes:
 

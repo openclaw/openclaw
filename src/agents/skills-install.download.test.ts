@@ -48,7 +48,7 @@ const ZIP_SLIP_BUFFER = Buffer.from(
 );
 const TAR_GZ_TRAVERSAL_BUFFER = Buffer.from(
   // Prebuilt archive containing ../outside-write/pwned.txt.
-  "H4sIAK4xm2kAA+2VvU7DMBDH3UoIUWaYLXbcS5PYZegQEKhBRUBbIT4GZBpXCqJNSFySlSdgZed1eCgcUvFRaMsQgVD9k05nW3eWz8nfR0g1GMnY98RmEvlSVMllmAyFR2QqUUEAALUsnHlG7VcPtXwO+djEhm1YlJpAbYrBYAYDhKGoA8xiFEseqaPEUvihkGJanArr92fsk5eC3/x/YWl9GZUROuA9fNjBp3hMtoZWlNWU3SrL5k8/29LpdtvjYZbxqGx1IqT0vr7WCwaEh+GNIGEU3IkhH/YEKpXRxv3FQznsPxdQpGYaZFL/RzxtCu6JqFrYOzBX/wZ81n8NmEERTosocB4Lrn8T8ED6A9EwmHp0Wd1idQK2ZVIAm1ZshlvuttPeabonuyTlUkbkO7k2nGPXcYO9q+tkPzmPk4q1hTsqqXU2K+mDxit/fQ+Lyhf9F9795+tf/WoT/Z8yi+n+/xuoz+1p8Wk0Gs3i8QJSs3VlABAAAA==",
+  "H4sIAK4xm2kAA+2VvU7DMBDH3UoIUWaYLXbcS5PYZegQEKhBRUBbIT4GZBpXCqJNSFySlSdgZed1eCgcUvFRaMsQgVD9k05nW3eWz8nfR0g1GMnY98RmEvlSVMllmAyFR2QqUUEAALUsnHlG7VcPtXwO+djEhm1YlJpAbYrBYAYDhKGoA8xiFEseqaPEUvihkGJanArr92fsk5eC3/x/YWl9GZUROuA9fNjBp3hMtoZWlNWU3SrL5k8/29LpdtvjYZbxqGx1IqT0vr7WCwaEh+GNIGEU3IkhH/YEKpXRxv3FQznsPxdQpGYaZFL/RzxtCu6JqFrYOzBX/wZ81n8NmEERTosocB4Lrn8T8ED6A9EwmHp0Wd1idQK2ZVIAm1ZshlvuttPeabonuyTlUkbkO7k2nGPXcYO9q+tkPzmPk4q1hTsqqXU2K+mDxit/fQ+Lyhf9F9795+tf/WoT/Z8yi+n+/xuoz+1p8Wk0Gs3i8QJSs3VlABAAAA==", // pragma: allowlist secret
   "base64",
 );
 
@@ -251,6 +251,47 @@ describe("installDownloadSpec extraction safety", () => {
       ),
     ).toBe("hi");
   });
+
+  it.runIf(process.platform !== "win32")(
+    "fails closed when the lexical tools root is rebound before the final copy",
+    async () => {
+      const entry = buildEntry("base-rebind");
+      const safeRoot = resolveSkillToolsRootDir(entry);
+      const outsideRoot = path.join(workspaceDir, "outside-root");
+      await fs.mkdir(outsideRoot, { recursive: true });
+
+      fetchWithSsrFGuardMock.mockResolvedValue({
+        response: new Response(
+          new ReadableStream({
+            async start(controller) {
+              controller.enqueue(new Uint8Array(Buffer.from("payload")));
+              const reboundRoot = `${safeRoot}-rebound`;
+              await fs.rename(safeRoot, reboundRoot);
+              await fs.symlink(outsideRoot, safeRoot);
+              controller.close();
+            },
+          }),
+          { status: 200 },
+        ),
+        release: async () => undefined,
+      });
+
+      const result = await installDownloadSpec({
+        entry,
+        spec: {
+          kind: "download",
+          id: "dl",
+          url: "https://example.invalid/payload.bin",
+          extract: false,
+          targetDir: "runtime",
+        },
+        timeoutMs: 30_000,
+      });
+
+      expect(result.ok).toBe(false);
+      expect(await fileExists(path.join(outsideRoot, "runtime", "payload.bin"))).toBe(false);
+    },
+  );
 });
 
 describe("installDownloadSpec extraction safety (tar.bz2)", () => {
@@ -260,12 +301,34 @@ describe("installDownloadSpec extraction safety (tar.bz2)", () => {
         label: "rejects archives containing symlinks",
         name: "tbz2-symlink",
         url: "https://example.invalid/evil.tbz2",
-        listOutput: "link\nlink/pwned.txt\n",
+        listOutput: "link\n",
         verboseListOutput: "lrwxr-xr-x  0 0 0 0 Jan  1 00:00 link -> ../outside\n",
         extract: "reject" as const,
         expectedOk: false,
         expectedExtract: false,
         expectedStderrSubstring: "link",
+      },
+      {
+        label: "rejects archives containing FIFO entries",
+        name: "tbz2-fifo",
+        url: "https://example.invalid/evil.tbz2",
+        listOutput: "evil-fifo\n",
+        verboseListOutput: "prw-r--r--  0 0 0 0 Jan  1 00:00 evil-fifo\n",
+        extract: "reject" as const,
+        expectedOk: false,
+        expectedExtract: false,
+        expectedStderrSubstring: "link",
+      },
+      {
+        label: "rejects oversized extracted entries",
+        name: "tbz2-oversized",
+        url: "https://example.invalid/oversized.tbz2",
+        listOutput: "big.bin\n",
+        verboseListOutput: "-rw-r--r--  0 0 0 314572800 Jan  1 00:00 big.bin\n",
+        extract: "reject" as const,
+        expectedOk: false,
+        expectedExtract: false,
+        expectedStderrSubstring: "archive entry extracted size exceeds limit",
       },
       {
         label: "extracts safe archives with stripComponents",
@@ -321,5 +384,45 @@ describe("installDownloadSpec extraction safety (tar.bz2)", () => {
         );
       }
     }
+  });
+
+  it("rejects tar.bz2 archives that change after preflight", async () => {
+    const entry = buildEntry("tbz2-preflight-change");
+    const targetDir = path.join(resolveSkillToolsRootDir(entry), "target");
+    const commandCallCount = runCommandWithTimeoutMock.mock.calls.length;
+
+    mockArchiveResponse(new Uint8Array([1, 2, 3]));
+
+    runCommandWithTimeoutMock.mockImplementation(async (...argv: unknown[]) => {
+      const cmd = (argv[0] ?? []) as string[];
+      if (cmd[0] === "tar" && cmd[1] === "tf") {
+        return runCommandResult({ stdout: "package/hello.txt\n" });
+      }
+      if (cmd[0] === "tar" && cmd[1] === "tvf") {
+        const archivePath = String(cmd[2] ?? "");
+        if (archivePath) {
+          await fs.appendFile(archivePath, "mutated");
+        }
+        return runCommandResult({ stdout: "-rw-r--r--  0 0 0 0 Jan  1 00:00 package/hello.txt\n" });
+      }
+      if (cmd[0] === "tar" && cmd[1] === "xf") {
+        throw new Error("should not extract");
+      }
+      return runCommandResult();
+    });
+
+    const result = await installDownloadSkill({
+      name: "tbz2-preflight-change",
+      url: "https://example.invalid/change.tbz2",
+      archive: "tar.bz2",
+      targetDir,
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.stderr).toContain("changed during safety preflight");
+    const extractionAttempted = runCommandWithTimeoutMock.mock.calls
+      .slice(commandCallCount)
+      .some((call) => (call[0] as string[])[1] === "xf");
+    expect(extractionAttempted).toBe(false);
   });
 });

@@ -15,14 +15,7 @@ final class ContactsService: ContactsServicing {
     }
 
     func search(params: OpenClawContactsSearchParams) async throws -> OpenClawContactsSearchPayload {
-        let store = CNContactStore()
-        let status = CNContactStore.authorizationStatus(for: .contacts)
-        let authorized = await Self.ensureAuthorization(store: store, status: status)
-        guard authorized else {
-            throw NSError(domain: "Contacts", code: 1, userInfo: [
-                NSLocalizedDescriptionKey: "CONTACTS_PERMISSION_REQUIRED: grant Contacts permission",
-            ])
-        }
+        let store = try await Self.authorizedStore()
 
         let limit = max(1, min(params.limit ?? 25, 200))
 
@@ -47,14 +40,7 @@ final class ContactsService: ContactsServicing {
     }
 
     func add(params: OpenClawContactsAddParams) async throws -> OpenClawContactsAddPayload {
-        let store = CNContactStore()
-        let status = CNContactStore.authorizationStatus(for: .contacts)
-        let authorized = await Self.ensureAuthorization(store: store, status: status)
-        guard authorized else {
-            throw NSError(domain: "Contacts", code: 1, userInfo: [
-                NSLocalizedDescriptionKey: "CONTACTS_PERMISSION_REQUIRED: grant Contacts permission",
-            ])
-        }
+        let store = try await Self.authorizedStore()
 
         let givenName = params.givenName?.trimmingCharacters(in: .whitespacesAndNewlines)
         let familyName = params.familyName?.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -125,6 +111,18 @@ final class ContactsService: ContactsServicing {
         @unknown default:
             return false
         }
+    }
+
+    private static func authorizedStore() async throws -> CNContactStore {
+        let store = CNContactStore()
+        let status = CNContactStore.authorizationStatus(for: .contacts)
+        let authorized = await Self.ensureAuthorization(store: store, status: status)
+        guard authorized else {
+            throw NSError(domain: "Contacts", code: 1, userInfo: [
+                NSLocalizedDescriptionKey: "CONTACTS_PERMISSION_REQUIRED: grant Contacts permission",
+            ])
+        }
+        return store
     }
 
     private static func normalizeStrings(_ values: [String]?, lowercased: Bool = false) -> [String] {

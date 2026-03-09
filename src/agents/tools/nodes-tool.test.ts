@@ -7,7 +7,7 @@ const gatewayMocks = vi.hoisted(() => ({
 
 const nodeUtilsMocks = vi.hoisted(() => ({
   resolveNodeId: vi.fn(async () => "node-1"),
-  listNodes: vi.fn(async () => []),
+  listNodes: vi.fn(async () => [] as Array<{ nodeId: string; commands?: string[] }>),
   resolveNodeIdFromList: vi.fn(() => "node-1"),
 }));
 
@@ -25,20 +25,20 @@ const screenMocks = vi.hoisted(() => ({
 }));
 
 vi.mock("./gateway.js", () => ({
-  callGatewayTool: (...args: unknown[]) => gatewayMocks.callGatewayTool(...args),
-  readGatewayCallOptions: (...args: unknown[]) => gatewayMocks.readGatewayCallOptions(...args),
+  callGatewayTool: gatewayMocks.callGatewayTool,
+  readGatewayCallOptions: gatewayMocks.readGatewayCallOptions,
 }));
 
 vi.mock("./nodes-utils.js", () => ({
-  resolveNodeId: (...args: unknown[]) => nodeUtilsMocks.resolveNodeId(...args),
-  listNodes: (...args: unknown[]) => nodeUtilsMocks.listNodes(...args),
-  resolveNodeIdFromList: (...args: unknown[]) => nodeUtilsMocks.resolveNodeIdFromList(...args),
+  resolveNodeId: nodeUtilsMocks.resolveNodeId,
+  listNodes: nodeUtilsMocks.listNodes,
+  resolveNodeIdFromList: nodeUtilsMocks.resolveNodeIdFromList,
 }));
 
 vi.mock("../../cli/nodes-screen.js", () => ({
-  parseScreenRecordPayload: (...args: unknown[]) => screenMocks.parseScreenRecordPayload(...args),
-  screenRecordTempPath: (...args: unknown[]) => screenMocks.screenRecordTempPath(...args),
-  writeScreenRecordToFile: (...args: unknown[]) => screenMocks.writeScreenRecordToFile(...args),
+  parseScreenRecordPayload: screenMocks.parseScreenRecordPayload,
+  screenRecordTempPath: screenMocks.screenRecordTempPath,
+  writeScreenRecordToFile: screenMocks.writeScreenRecordToFile,
 }));
 
 import { createNodesTool } from "./nodes-tool.js";
@@ -84,5 +84,51 @@ describe("createNodesTool screen_record duration guardrails", () => {
         }),
       }),
     );
+  });
+
+  it("omits rawCommand when preparing wrapped argv execution", async () => {
+    nodeUtilsMocks.listNodes.mockResolvedValue([
+      {
+        nodeId: "node-1",
+        commands: ["system.run"],
+      },
+    ]);
+    gatewayMocks.callGatewayTool.mockImplementation(async (_method, _opts, payload) => {
+      if (payload?.command === "system.run.prepare") {
+        return {
+          payload: {
+            cmdText: "echo hi",
+            plan: {
+              argv: ["bash", "-lc", "echo hi"],
+              cwd: null,
+              rawCommand: null,
+              agentId: null,
+              sessionKey: null,
+            },
+          },
+        };
+      }
+      if (payload?.command === "system.run") {
+        return { payload: { ok: true } };
+      }
+      throw new Error(`unexpected command: ${String(payload?.command)}`);
+    });
+    const tool = createNodesTool();
+
+    await tool.execute("call-1", {
+      action: "run",
+      node: "macbook",
+      command: ["bash", "-lc", "echo hi"],
+    });
+
+    const prepareCall = gatewayMocks.callGatewayTool.mock.calls.find(
+      (call) => call[2]?.command === "system.run.prepare",
+    )?.[2];
+    expect(prepareCall).toBeTruthy();
+    expect(prepareCall?.params).toMatchObject({
+      command: ["bash", "-lc", "echo hi"],
+      agentId: "main",
+    });
+    expect(prepareCall?.params).not.toHaveProperty("rawCommand");
   });
 });

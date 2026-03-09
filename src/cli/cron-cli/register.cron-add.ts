@@ -1,6 +1,5 @@
 import type { Command } from "commander";
 import type { CronJob } from "../../cron/types.js";
-import { danger } from "../../globals.js";
 import { sanitizeAgentId } from "../../routing/session-key.js";
 import { defaultRuntime } from "../../runtime.js";
 import type { GatewayRpcOpts } from "../gateway-rpc.js";
@@ -8,8 +7,11 @@ import { addGatewayClientOptions, callGatewayFromCli } from "../gateway-rpc.js";
 import { parsePositiveIntOrUndefined } from "../program/helpers.js";
 import {
   getCronChannelOptions,
+  handleCronCliError,
   parseAt,
+  parseCronStaggerMs,
   parseDurationMs,
+  printCronJson,
   printCronList,
   warnIfCronSchedulerDisabled,
 } from "./shared.js";
@@ -23,10 +25,9 @@ export function registerCronStatusCommand(cron: Command) {
       .action(async (opts) => {
         try {
           const res = await callGatewayFromCli("cron.status", opts, {});
-          defaultRuntime.log(JSON.stringify(res, null, 2));
+          printCronJson(res);
         } catch (err) {
-          defaultRuntime.error(danger(String(err)));
-          defaultRuntime.exit(1);
+          handleCronCliError(err);
         }
       }),
   );
@@ -45,14 +46,13 @@ export function registerCronListCommand(cron: Command) {
             includeDisabled: Boolean(opts.all),
           });
           if (opts.json) {
-            defaultRuntime.log(JSON.stringify(res, null, 2));
+            printCronJson(res);
             return;
           }
           const jobs = (res as { jobs?: CronJob[] } | null)?.jobs ?? [];
           printCronList(jobs, defaultRuntime);
         } catch (err) {
-          defaultRuntime.error(danger(String(err)));
-          defaultRuntime.exit(1);
+          handleCronCliError(err);
         }
       }),
   );
@@ -129,19 +129,7 @@ export function registerCronAddCommand(cron: Command) {
               }
               return { kind: "every" as const, everyMs };
             }
-            const staggerMs = (() => {
-              if (useExact) {
-                return 0;
-              }
-              if (!staggerRaw) {
-                return undefined;
-              }
-              const parsed = parseDurationMs(staggerRaw);
-              if (!parsed) {
-                throw new Error("Invalid --stagger; use e.g. 30s, 1m, 5m");
-              }
-              return parsed;
-            })();
+            const staggerMs = parseCronStaggerMs({ staggerRaw, useExact });
             return {
               kind: "cron" as const,
               expr: cronExpr,
@@ -284,11 +272,10 @@ export function registerCronAddCommand(cron: Command) {
           };
 
           const res = await callGatewayFromCli("cron.add", opts, params);
-          defaultRuntime.log(JSON.stringify(res, null, 2));
+          printCronJson(res);
           await warnIfCronSchedulerDisabled(opts);
         } catch (err) {
-          defaultRuntime.error(danger(String(err)));
-          defaultRuntime.exit(1);
+          handleCronCliError(err);
         }
       }),
   );

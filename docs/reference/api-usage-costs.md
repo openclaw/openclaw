@@ -68,24 +68,27 @@ Semantic memory search uses **embedding APIs** when configured for remote provid
 - `memorySearch.provider = "gemini"` → Gemini embeddings
 - `memorySearch.provider = "voyage"` → Voyage embeddings
 - `memorySearch.provider = "mistral"` → Mistral embeddings
+- `memorySearch.provider = "ollama"` → Ollama embeddings (local/self-hosted; typically no hosted API billing)
 - Optional fallback to a remote provider if local embeddings fail
 
 You can keep it local with `memorySearch.provider = "local"` (no API usage).
 
 See [Memory](/concepts/memory).
 
-### 4) Web search tool (Brave / Perplexity via OpenRouter)
+### 4) Web search tool
 
-`web_search` uses API keys and may incur usage charges:
+`web_search` uses API keys and may incur usage charges depending on your provider:
 
 - **Brave Search API**: `BRAVE_API_KEY` or `tools.web.search.apiKey`
-- **Perplexity** (via OpenRouter): `PERPLEXITY_API_KEY` or `OPENROUTER_API_KEY`
+- **Gemini (Google Search)**: `GEMINI_API_KEY`
+- **Grok (xAI)**: `XAI_API_KEY`
+- **Kimi (Moonshot)**: `KIMI_API_KEY` or `MOONSHOT_API_KEY`
+- **Perplexity Search API**: `PERPLEXITY_API_KEY`
 
-**Brave free tier (generous):**
-
-- **2,000 requests/month**
-- **1 request/second**
-- **Credit card required** for verification (no charge unless you upgrade)
+**Brave Search free credit:** Each Brave plan includes $5/month in renewing
+free credit. The Search plan costs $5 per 1,000 requests, so the credit covers
+1,000 requests/month at no charge. Set your usage limit in the Brave dashboard
+to avoid unexpected charges.
 
 See [Web tools](/tools/web).
 

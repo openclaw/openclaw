@@ -1,6 +1,11 @@
+import {
+  hasConfiguredUnavailableCredentialStatus,
+  hasResolvedCredentialValue,
+} from "../channels/account-snapshot-fields.js";
 import { resolveChannelDefaultAccountId } from "../channels/plugins/helpers.js";
 import type { listChannelPlugins } from "../channels/plugins/index.js";
 import type { ChannelId } from "../channels/plugins/types.js";
+import { inspectReadOnlyChannelAccount } from "../channels/read-only-account-inspect.js";
 import {
   isNumericTelegramUserId,
   normalizeTelegramAllowFromEntry,
@@ -36,6 +41,24 @@ function addDiscordNameBasedEntries(params: {
       continue;
     }
     params.target.add(`${params.source}:${text}`);
+  }
+}
+
+function collectInvalidTelegramAllowFromEntries(params: {
+  entries: unknown;
+  target: Set<string>;
+}): void {
+  if (!Array.isArray(params.entries)) {
+    return;
+  }
+  for (const entry of params.entries) {
+    const normalized = normalizeTelegramAllowFromEntry(entry);
+    if (!normalized || normalized === "*") {
+      continue;
+    }
+    if (!isNumericTelegramUserId(normalized)) {
+      params.target.add(normalized);
+    }
   }
 }
 
@@ -90,14 +113,77 @@ function hasExplicitProviderAccountConfig(
   if (!accounts || typeof accounts !== "object") {
     return false;
   }
-  return accountId in accounts;
+  return Object.hasOwn(accounts, accountId);
 }
 
 export async function collectChannelSecurityFindings(params: {
   cfg: OpenClawConfig;
+  sourceConfig?: OpenClawConfig;
   plugins: ReturnType<typeof listChannelPlugins>;
 }): Promise<SecurityAuditFinding[]> {
   const findings: SecurityAuditFinding[] = [];
+  const sourceConfig = params.sourceConfig ?? params.cfg;
+
+  const inspectChannelAccount = (
+    plugin: (typeof params.plugins)[number],
+    cfg: OpenClawConfig,
+    accountId: string,
+  ) =>
+    plugin.config.inspectAccount?.(cfg, accountId) ??
+    inspectReadOnlyChannelAccount({
+      channelId: plugin.id,
+      cfg,
+      accountId,
+    });
+
+  const asAccountRecord = (value: unknown): Record<string, unknown> | null =>
+    value && typeof value === "object" && !Array.isArray(value)
+      ? (value as Record<string, unknown>)
+      : null;
+
+  const resolveChannelAuditAccount = async (
+    plugin: (typeof params.plugins)[number],
+    accountId: string,
+  ) => {
+    const sourceInspectedAccount = inspectChannelAccount(plugin, sourceConfig, accountId);
+    const resolvedInspectedAccount = inspectChannelAccount(plugin, params.cfg, accountId);
+    const sourceInspection = sourceInspectedAccount as {
+      enabled?: boolean;
+      configured?: boolean;
+    } | null;
+    const resolvedInspection = resolvedInspectedAccount as {
+      enabled?: boolean;
+      configured?: boolean;
+    } | null;
+    const resolvedAccount =
+      resolvedInspectedAccount ?? plugin.config.resolveAccount(params.cfg, accountId);
+    const useSourceUnavailableAccount = Boolean(
+      sourceInspectedAccount &&
+      hasConfiguredUnavailableCredentialStatus(sourceInspectedAccount) &&
+      (!hasResolvedCredentialValue(resolvedAccount) ||
+        (sourceInspection?.configured === true && resolvedInspection?.configured === false)),
+    );
+    const account = useSourceUnavailableAccount ? sourceInspectedAccount : resolvedAccount;
+    const selectedInspection = useSourceUnavailableAccount ? sourceInspection : resolvedInspection;
+    const accountRecord = asAccountRecord(account);
+    const enabled =
+      typeof selectedInspection?.enabled === "boolean"
+        ? selectedInspection.enabled
+        : typeof accountRecord?.enabled === "boolean"
+          ? accountRecord.enabled
+          : plugin.config.isEnabled
+            ? plugin.config.isEnabled(account, params.cfg)
+            : true;
+    const configured =
+      typeof selectedInspection?.configured === "boolean"
+        ? selectedInspection.configured
+        : typeof accountRecord?.configured === "boolean"
+          ? accountRecord.configured
+          : plugin.config.isConfigured
+            ? await plugin.config.isConfigured(account, params.cfg)
+            : true;
+    return { account, enabled, configured };
+  };
 
   const coerceNativeSetting = (value: unknown): boolean | "auto" | undefined => {
     if (value === true) {
@@ -179,28 +265,24 @@ export async function collectChannelSecurityFindings(params: {
     if (!plugin.security) {
       continue;
     }
-    const accountIds = plugin.config.listAccountIds(params.cfg);
+    const accountIds = plugin.config.listAccountIds(sourceConfig);
     const defaultAccountId = resolveChannelDefaultAccountId({
       plugin,
-      cfg: params.cfg,
+      cfg: sourceConfig,
       accountIds,
     });
     const orderedAccountIds = Array.from(new Set([defaultAccountId, ...accountIds]));
 
     for (const accountId of orderedAccountIds) {
       const hasExplicitAccountPath = hasExplicitProviderAccountConfig(
-        params.cfg,
+        sourceConfig,
         plugin.id,
         accountId,
       );
-      const account = plugin.config.resolveAccount(params.cfg, accountId);
-      const enabled = plugin.config.isEnabled ? plugin.config.isEnabled(account, params.cfg) : true;
+      const { account, enabled, configured } = await resolveChannelAuditAccount(plugin, accountId);
       if (!enabled) {
         continue;
       }
-      const configured = plugin.config.isConfigured
-        ? await plugin.config.isConfigured(account, params.cfg)
-        : true;
       if (!configured) {
         continue;
       }
@@ -531,38 +613,23 @@ export async function collectChannelSecurityFindings(params: {
       ).catch(() => []);
       const storeHasWildcard = storeAllowFrom.some((v) => String(v).trim() === "*");
       const invalidTelegramAllowFromEntries = new Set<string>();
-      for (const entry of storeAllowFrom) {
-        const normalized = normalizeTelegramAllowFromEntry(entry);
-        if (!normalized || normalized === "*") {
-          continue;
-        }
-        if (!isNumericTelegramUserId(normalized)) {
-          invalidTelegramAllowFromEntries.add(normalized);
-        }
-      }
+      collectInvalidTelegramAllowFromEntries({
+        entries: storeAllowFrom,
+        target: invalidTelegramAllowFromEntries,
+      });
       const groupAllowFrom = Array.isArray(telegramCfg.groupAllowFrom)
         ? telegramCfg.groupAllowFrom
         : [];
       const groupAllowFromHasWildcard = groupAllowFrom.some((v) => String(v).trim() === "*");
-      for (const entry of groupAllowFrom) {
-        const normalized = normalizeTelegramAllowFromEntry(entry);
-        if (!normalized || normalized === "*") {
-          continue;
-        }
-        if (!isNumericTelegramUserId(normalized)) {
-          invalidTelegramAllowFromEntries.add(normalized);
-        }
-      }
+      collectInvalidTelegramAllowFromEntries({
+        entries: groupAllowFrom,
+        target: invalidTelegramAllowFromEntries,
+      });
       const dmAllowFrom = Array.isArray(telegramCfg.allowFrom) ? telegramCfg.allowFrom : [];
-      for (const entry of dmAllowFrom) {
-        const normalized = normalizeTelegramAllowFromEntry(entry);
-        if (!normalized || normalized === "*") {
-          continue;
-        }
-        if (!isNumericTelegramUserId(normalized)) {
-          invalidTelegramAllowFromEntries.add(normalized);
-        }
-      }
+      collectInvalidTelegramAllowFromEntries({
+        entries: dmAllowFrom,
+        target: invalidTelegramAllowFromEntries,
+      });
       const anyGroupOverride = Boolean(
         groups &&
         Object.values(groups).some((value) => {
@@ -572,15 +639,10 @@ export async function collectChannelSecurityFindings(params: {
           const group = value as Record<string, unknown>;
           const allowFrom = Array.isArray(group.allowFrom) ? group.allowFrom : [];
           if (allowFrom.length > 0) {
-            for (const entry of allowFrom) {
-              const normalized = normalizeTelegramAllowFromEntry(entry);
-              if (!normalized || normalized === "*") {
-                continue;
-              }
-              if (!isNumericTelegramUserId(normalized)) {
-                invalidTelegramAllowFromEntries.add(normalized);
-              }
-            }
+            collectInvalidTelegramAllowFromEntries({
+              entries: allowFrom,
+              target: invalidTelegramAllowFromEntries,
+            });
             return true;
           }
           const topics = group.topics;
@@ -593,15 +655,10 @@ export async function collectChannelSecurityFindings(params: {
             }
             const topic = topicValue as Record<string, unknown>;
             const topicAllow = Array.isArray(topic.allowFrom) ? topic.allowFrom : [];
-            for (const entry of topicAllow) {
-              const normalized = normalizeTelegramAllowFromEntry(entry);
-              if (!normalized || normalized === "*") {
-                continue;
-              }
-              if (!isNumericTelegramUserId(normalized)) {
-                invalidTelegramAllowFromEntries.add(normalized);
-              }
-            }
+            collectInvalidTelegramAllowFromEntries({
+              entries: topicAllow,
+              target: invalidTelegramAllowFromEntries,
+            });
             return topicAllow.length > 0;
           });
         }),

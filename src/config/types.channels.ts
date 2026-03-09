@@ -35,6 +35,8 @@ export type ExtensionChannelConfig = {
   allowFrom?: string | string[];
   /** Default delivery target for CLI --deliver when no explicit --reply-to is provided. */
   defaultTo?: string;
+  /** Optional default account id when multiple accounts are configured. */
+  defaultAccount?: string;
   dmPolicy?: string;
   groupPolicy?: GroupPolicy;
   accounts?: Record<string, unknown>;

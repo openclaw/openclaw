@@ -20,15 +20,16 @@ private struct SystemRunCommandContractExpected: Decodable {
 }
 
 struct ExecSystemRunCommandValidatorTests {
-    @Test func matchesSharedSystemRunCommandContractFixture() throws {
+    @Test func `matches shared system run command contract fixture`() throws {
         for entry in try Self.loadContractCases() {
             let result = ExecSystemRunCommandValidator.resolve(command: entry.command, rawCommand: entry.rawCommand)
 
             if !entry.expected.valid {
                 switch result {
-                case .ok(let resolved):
-                    Issue.record("\(entry.name): expected invalid result, got displayCommand=\(resolved.displayCommand)")
-                case .invalid(let message):
+                case let .ok(resolved):
+                    Issue
+                        .record("\(entry.name): expected invalid result, got displayCommand=\(resolved.displayCommand)")
+                case let .invalid(message):
                     if let expected = entry.expected.errorContains {
                         #expect(
                             message.contains(expected),
@@ -39,11 +40,11 @@ struct ExecSystemRunCommandValidatorTests {
             }
 
             switch result {
-            case .ok(let resolved):
+            case let .ok(resolved):
                 #expect(
                     resolved.displayCommand == entry.expected.displayCommand,
                     "\(entry.name): unexpected display command")
-            case .invalid(let message):
+            case let .invalid(message):
                 Issue.record("\(entry.name): unexpected invalid result: \(message)")
             }
         }

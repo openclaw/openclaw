@@ -6,6 +6,7 @@ import { clearBootstrapSnapshot } from "../../agents/bootstrap-cache.js";
 import { abortEmbeddedPiRun, waitForEmbeddedPiRunEnd } from "../../agents/pi-embedded.js";
 import { stopSubagentsForRequester } from "../../auto-reply/reply/abort.js";
 import { clearSessionQueues } from "../../auto-reply/reply/queue.js";
+import { closeTrackedBrowserTabsForSessions } from "../../browser/session-tab-registry.js";
 import { loadConfig } from "../../config/config.js";
 import {
   loadSessionStore,
@@ -49,6 +50,7 @@ import {
   type SessionsPatchResult,
   type SessionsPreviewEntry,
   type SessionsPreviewResult,
+  readSessionMessages,
 } from "../session-utils.js";
 import { applySessionsPatchToStore } from "../sessions-patch.js";
 import { resolveSessionKeyFromResolveParams } from "../sessions-resolve.js";
@@ -186,20 +188,36 @@ async function ensureSessionRuntimeCleanup(params: {
   target: ReturnType<typeof resolveGatewaySessionStoreTarget>;
   sessionId?: string;
 }) {
+  const closeTrackedBrowserTabs = async () => {
+    const closeKeys = new Set<string>([
+      params.key,
+      params.target.canonicalKey,
+      ...params.target.storeKeys,
+      params.sessionId ?? "",
+    ]);
+    return await closeTrackedBrowserTabsForSessions({
+      sessionKeys: [...closeKeys],
+      onWarn: (message) => logVerbose(message),
+    });
+  };
+
   const queueKeys = new Set<string>(params.target.storeKeys);
   queueKeys.add(params.target.canonicalKey);
   if (params.sessionId) {
     queueKeys.add(params.sessionId);
   }
   clearSessionQueues([...queueKeys]);
-  clearBootstrapSnapshot(params.target.canonicalKey);
   stopSubagentsForRequester({ cfg: params.cfg, requesterSessionKey: params.target.canonicalKey });
   if (!params.sessionId) {
+    clearBootstrapSnapshot(params.target.canonicalKey);
+    await closeTrackedBrowserTabs();
     return undefined;
   }
   abortEmbeddedPiRun(params.sessionId);
   const ended = await waitForEmbeddedPiRunEnd(params.sessionId, 15_000);
+  clearBootstrapSnapshot(params.target.canonicalKey);
   if (ended) {
+    await closeTrackedBrowserTabs();
     return undefined;
   }
   return errorShape(
@@ -282,6 +300,32 @@ async function closeAcpRuntimeForSession(params: {
     );
   }
   return undefined;
+}
+
+async function cleanupSessionBeforeMutation(params: {
+  cfg: ReturnType<typeof loadConfig>;
+  key: string;
+  target: ReturnType<typeof resolveGatewaySessionStoreTarget>;
+  entry: SessionEntry | undefined;
+  legacyKey?: string;
+  canonicalKey?: string;
+  reason: "session-reset" | "session-delete";
+}) {
+  const cleanupError = await ensureSessionRuntimeCleanup({
+    cfg: params.cfg,
+    key: params.key,
+    target: params.target,
+    sessionId: params.entry?.sessionId,
+  });
+  if (cleanupError) {
+    return cleanupError;
+  }
+  return await closeAcpRuntimeForSession({
+    cfg: params.cfg,
+    sessionKey: params.legacyKey ?? params.canonicalKey ?? params.target.canonicalKey ?? params.key,
+    entry: params.entry,
+    reason: params.reason,
+  });
 }
 
 export const sessionsHandlers: GatewayRequestHandlers = {
@@ -445,20 +489,17 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       },
     );
     await triggerInternalHook(hookEvent);
-    const sessionId = entry?.sessionId;
-    const cleanupError = await ensureSessionRuntimeCleanup({ cfg, key, target, sessionId });
-    if (cleanupError) {
-      respond(false, undefined, cleanupError);
-      return;
-    }
-    const acpCleanupError = await closeAcpRuntimeForSession({
+    const mutationCleanupError = await cleanupSessionBeforeMutation({
       cfg,
-      sessionKey: legacyKey ?? canonicalKey ?? target.canonicalKey ?? key,
+      key,
+      target,
       entry,
+      legacyKey,
+      canonicalKey,
       reason: "session-reset",
     });
-    if (acpCleanupError) {
-      respond(false, undefined, acpCleanupError);
+    if (mutationCleanupError) {
+      respond(false, undefined, mutationCleanupError);
       return;
     }
     let oldSessionId: string | undefined;
@@ -542,22 +583,20 @@ export const sessionsHandlers: GatewayRequestHandlers = {
     const deleteTranscript = typeof p.deleteTranscript === "boolean" ? p.deleteTranscript : true;
 
     const { entry, legacyKey, canonicalKey } = loadSessionEntry(key);
-    const sessionId = entry?.sessionId;
-    const cleanupError = await ensureSessionRuntimeCleanup({ cfg, key, target, sessionId });
-    if (cleanupError) {
-      respond(false, undefined, cleanupError);
-      return;
-    }
-    const acpCleanupError = await closeAcpRuntimeForSession({
+    const mutationCleanupError = await cleanupSessionBeforeMutation({
       cfg,
-      sessionKey: legacyKey ?? canonicalKey ?? target.canonicalKey ?? key,
+      key,
+      target,
       entry,
+      legacyKey,
+      canonicalKey,
       reason: "session-delete",
     });
-    if (acpCleanupError) {
-      respond(false, undefined, acpCleanupError);
+    if (mutationCleanupError) {
+      respond(false, undefined, mutationCleanupError);
       return;
     }
+    const sessionId = entry?.sessionId;
     const deleted = await updateSessionStore(storePath, (store) => {
       const { primaryKey } = migrateAndPruneSessionStoreKey({ cfg, key, store });
       const hadEntry = Boolean(store[primaryKey]);
@@ -587,6 +626,28 @@ export const sessionsHandlers: GatewayRequestHandlers = {
     }
 
     respond(true, { ok: true, key: target.canonicalKey, deleted, archived }, undefined);
+  },
+  "sessions.get": ({ params, respond }) => {
+    const p = params;
+    const key = requireSessionKey(p.key ?? p.sessionKey, respond);
+    if (!key) {
+      return;
+    }
+    const limit =
+      typeof p.limit === "number" && Number.isFinite(p.limit)
+        ? Math.max(1, Math.floor(p.limit))
+        : 200;
+
+    const { target, storePath } = resolveGatewaySessionTargetFromKey(key);
+    const store = loadSessionStore(storePath);
+    const entry = target.storeKeys.map((k) => store[k]).find(Boolean);
+    if (!entry?.sessionId) {
+      respond(true, { messages: [] }, undefined);
+      return;
+    }
+    const allMessages = readSessionMessages(entry.sessionId, storePath, entry.sessionFile);
+    const messages = limit < allMessages.length ? allMessages.slice(-limit) : allMessages;
+    respond(true, { messages }, undefined);
   },
   "sessions.compact": async ({ params, respond }) => {
     if (!assertValidParams(params, validateSessionsCompactParams, "sessions.compact", respond)) {

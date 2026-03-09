@@ -1,3 +1,6 @@
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { AcpRuntimeError } from "../../acp/runtime/errors.js";
 import type { AcpSessionStoreEntry } from "../../acp/runtime/session-meta.js";
@@ -85,6 +88,7 @@ vi.mock("../../infra/outbound/session-binding-service.js", () => ({
 }));
 
 const { tryDispatchAcpReply } = await import("./dispatch-acp.js");
+const sessionKey = "agent:codex-acp:session-1";
 
 function createDispatcher(): {
   dispatcher: ReplyDispatcher;
@@ -105,7 +109,7 @@ function createDispatcher(): {
 function setReadyAcpResolution() {
   managerMocks.resolveSession.mockReturnValue({
     kind: "ready",
-    sessionKey: "agent:codex-acp:session-1",
+    sessionKey,
     meta: createAcpSessionMeta(),
   });
 }
@@ -121,6 +125,86 @@ function createAcpConfigWithVisibleToolTags(): OpenClawConfig {
         },
       },
     },
+  });
+}
+
+async function runDispatch(params: {
+  bodyForAgent: string;
+  cfg?: OpenClawConfig;
+  dispatcher?: ReplyDispatcher;
+  shouldRouteToOriginating?: boolean;
+  onReplyStart?: () => void;
+  ctxOverrides?: Record<string, unknown>;
+}) {
+  return tryDispatchAcpReply({
+    ctx: buildTestCtx({
+      Provider: "discord",
+      Surface: "discord",
+      SessionKey: sessionKey,
+      BodyForAgent: params.bodyForAgent,
+      ...params.ctxOverrides,
+    }),
+    cfg: params.cfg ?? createAcpTestConfig(),
+    dispatcher: params.dispatcher ?? createDispatcher().dispatcher,
+    sessionKey,
+    inboundAudio: false,
+    shouldRouteToOriginating: params.shouldRouteToOriginating ?? false,
+    ...(params.shouldRouteToOriginating
+      ? { originatingChannel: "telegram", originatingTo: "telegram:thread-1" }
+      : {}),
+    shouldSendToolSummaries: true,
+    bypassForCommand: false,
+    ...(params.onReplyStart ? { onReplyStart: params.onReplyStart } : {}),
+    recordProcessed: vi.fn(),
+    markIdle: vi.fn(),
+  });
+}
+
+async function emitToolLifecycleEvents(
+  onEvent: (event: unknown) => Promise<void>,
+  toolCallId: string,
+) {
+  await onEvent({
+    type: "tool_call",
+    tag: "tool_call",
+    toolCallId,
+    status: "in_progress",
+    title: "Run command",
+    text: "Run command (in_progress)",
+  });
+  await onEvent({
+    type: "tool_call",
+    tag: "tool_call_update",
+    toolCallId,
+    status: "completed",
+    title: "Run command",
+    text: "Run command (completed)",
+  });
+  await onEvent({ type: "done" });
+}
+
+function mockToolLifecycleTurn(toolCallId: string) {
+  managerMocks.runTurn.mockImplementation(
+    async ({ onEvent }: { onEvent: (event: unknown) => Promise<void> }) => {
+      await emitToolLifecycleEvents(onEvent, toolCallId);
+    },
+  );
+}
+
+function mockVisibleTextTurn(text = "visible") {
+  managerMocks.runTurn.mockImplementationOnce(
+    async ({ onEvent }: { onEvent: (event: unknown) => Promise<void> }) => {
+      await onEvent({ type: "text_delta", text, tag: "agent_message_chunk" });
+      await onEvent({ type: "done" });
+    },
+  );
+}
+
+async function dispatchVisibleTurn(onReplyStart: () => void) {
+  await runDispatch({
+    bodyForAgent: "visible",
+    dispatcher: createDispatcher().dispatcher,
+    onReplyStart,
   });
 }
 
@@ -160,24 +244,10 @@ describe("tryDispatchAcpReply", () => {
     );
 
     const { dispatcher } = createDispatcher();
-    const result = await tryDispatchAcpReply({
-      ctx: buildTestCtx({
-        Provider: "discord",
-        Surface: "discord",
-        SessionKey: "agent:codex-acp:session-1",
-        BodyForAgent: "reply",
-      }),
-      cfg: createAcpTestConfig(),
+    const result = await runDispatch({
+      bodyForAgent: "reply",
       dispatcher,
-      sessionKey: "agent:codex-acp:session-1",
-      inboundAudio: false,
       shouldRouteToOriginating: true,
-      originatingChannel: "telegram",
-      originatingTo: "telegram:thread-1",
-      shouldSendToolSummaries: true,
-      bypassForCommand: false,
-      recordProcessed: vi.fn(),
-      markIdle: vi.fn(),
     });
 
     expect(result?.counts.block).toBe(1);
@@ -192,48 +262,15 @@ describe("tryDispatchAcpReply", () => {
 
   it("edits ACP tool lifecycle updates in place when supported", async () => {
     setReadyAcpResolution();
-    managerMocks.runTurn.mockImplementation(
-      async ({ onEvent }: { onEvent: (event: unknown) => Promise<void> }) => {
-        await onEvent({
-          type: "tool_call",
-          tag: "tool_call",
-          toolCallId: "call-1",
-          status: "in_progress",
-          title: "Run command",
-          text: "Run command (in_progress)",
-        });
-        await onEvent({
-          type: "tool_call",
-          tag: "tool_call_update",
-          toolCallId: "call-1",
-          status: "completed",
-          title: "Run command",
-          text: "Run command (completed)",
-        });
-        await onEvent({ type: "done" });
-      },
-    );
+    mockToolLifecycleTurn("call-1");
     routeMocks.routeReply.mockResolvedValueOnce({ ok: true, messageId: "tool-msg-1" });
 
     const { dispatcher } = createDispatcher();
-    await tryDispatchAcpReply({
-      ctx: buildTestCtx({
-        Provider: "discord",
-        Surface: "discord",
-        SessionKey: "agent:codex-acp:session-1",
-        BodyForAgent: "run tool",
-      }),
+    await runDispatch({
+      bodyForAgent: "run tool",
       cfg: createAcpConfigWithVisibleToolTags(),
       dispatcher,
-      sessionKey: "agent:codex-acp:session-1",
-      inboundAudio: false,
       shouldRouteToOriginating: true,
-      originatingChannel: "telegram",
-      originatingTo: "telegram:thread-1",
-      shouldSendToolSummaries: true,
-      bypassForCommand: false,
-      recordProcessed: vi.fn(),
-      markIdle: vi.fn(),
     });
 
     expect(routeMocks.routeReply).toHaveBeenCalledTimes(1);
@@ -249,51 +286,18 @@ describe("tryDispatchAcpReply", () => {
 
   it("falls back to new tool message when edit fails", async () => {
     setReadyAcpResolution();
-    managerMocks.runTurn.mockImplementation(
-      async ({ onEvent }: { onEvent: (event: unknown) => Promise<void> }) => {
-        await onEvent({
-          type: "tool_call",
-          tag: "tool_call",
-          toolCallId: "call-2",
-          status: "in_progress",
-          title: "Run command",
-          text: "Run command (in_progress)",
-        });
-        await onEvent({
-          type: "tool_call",
-          tag: "tool_call_update",
-          toolCallId: "call-2",
-          status: "completed",
-          title: "Run command",
-          text: "Run command (completed)",
-        });
-        await onEvent({ type: "done" });
-      },
-    );
+    mockToolLifecycleTurn("call-2");
     routeMocks.routeReply
       .mockResolvedValueOnce({ ok: true, messageId: "tool-msg-2" })
       .mockResolvedValueOnce({ ok: true, messageId: "tool-msg-2-fallback" });
     messageActionMocks.runMessageAction.mockRejectedValueOnce(new Error("edit unsupported"));
 
     const { dispatcher } = createDispatcher();
-    await tryDispatchAcpReply({
-      ctx: buildTestCtx({
-        Provider: "discord",
-        Surface: "discord",
-        SessionKey: "agent:codex-acp:session-1",
-        BodyForAgent: "run tool",
-      }),
+    await runDispatch({
+      bodyForAgent: "run tool",
       cfg: createAcpConfigWithVisibleToolTags(),
       dispatcher,
-      sessionKey: "agent:codex-acp:session-1",
-      inboundAudio: false,
       shouldRouteToOriginating: true,
-      originatingChannel: "telegram",
-      originatingTo: "telegram:thread-1",
-      shouldSendToolSummaries: true,
-      bypassForCommand: false,
-      recordProcessed: vi.fn(),
-      markIdle: vi.fn(),
     });
 
     expect(messageActionMocks.runMessageAction).toHaveBeenCalledTimes(1);
@@ -317,50 +321,15 @@ describe("tryDispatchAcpReply", () => {
         await onEvent({ type: "done" });
       },
     );
-    await tryDispatchAcpReply({
-      ctx: buildTestCtx({
-        Provider: "discord",
-        Surface: "discord",
-        SessionKey: "agent:codex-acp:session-1",
-        BodyForAgent: "hidden",
-      }),
-      cfg: createAcpTestConfig(),
+    await runDispatch({
+      bodyForAgent: "hidden",
       dispatcher,
-      sessionKey: "agent:codex-acp:session-1",
-      inboundAudio: false,
-      shouldRouteToOriginating: false,
-      shouldSendToolSummaries: true,
-      bypassForCommand: false,
       onReplyStart,
-      recordProcessed: vi.fn(),
-      markIdle: vi.fn(),
     });
     expect(onReplyStart).toHaveBeenCalledTimes(1);
 
-    managerMocks.runTurn.mockImplementationOnce(
-      async ({ onEvent }: { onEvent: (event: unknown) => Promise<void> }) => {
-        await onEvent({ type: "text_delta", text: "visible", tag: "agent_message_chunk" });
-        await onEvent({ type: "done" });
-      },
-    );
-    await tryDispatchAcpReply({
-      ctx: buildTestCtx({
-        Provider: "discord",
-        Surface: "discord",
-        SessionKey: "agent:codex-acp:session-1",
-        BodyForAgent: "visible",
-      }),
-      cfg: createAcpTestConfig(),
-      dispatcher: createDispatcher().dispatcher,
-      sessionKey: "agent:codex-acp:session-1",
-      inboundAudio: false,
-      shouldRouteToOriginating: false,
-      shouldSendToolSummaries: true,
-      bypassForCommand: false,
-      onReplyStart,
-      recordProcessed: vi.fn(),
-      markIdle: vi.fn(),
-    });
+    mockVisibleTextTurn();
+    await dispatchVisibleTurn(onReplyStart);
     expect(onReplyStart).toHaveBeenCalledTimes(2);
   });
 
@@ -368,31 +337,8 @@ describe("tryDispatchAcpReply", () => {
     setReadyAcpResolution();
     const onReplyStart = vi.fn();
 
-    managerMocks.runTurn.mockImplementationOnce(
-      async ({ onEvent }: { onEvent: (event: unknown) => Promise<void> }) => {
-        await onEvent({ type: "text_delta", text: "visible", tag: "agent_message_chunk" });
-        await onEvent({ type: "done" });
-      },
-    );
-
-    await tryDispatchAcpReply({
-      ctx: buildTestCtx({
-        Provider: "discord",
-        Surface: "discord",
-        SessionKey: "agent:codex-acp:session-1",
-        BodyForAgent: "visible",
-      }),
-      cfg: createAcpTestConfig(),
-      dispatcher: createDispatcher().dispatcher,
-      sessionKey: "agent:codex-acp:session-1",
-      inboundAudio: false,
-      shouldRouteToOriginating: false,
-      shouldSendToolSummaries: true,
-      bypassForCommand: false,
-      onReplyStart,
-      recordProcessed: vi.fn(),
-      markIdle: vi.fn(),
-    });
+    mockVisibleTextTurn();
+    await dispatchVisibleTurn(onReplyStart);
 
     expect(onReplyStart).toHaveBeenCalledTimes(1);
   });
@@ -402,27 +348,72 @@ describe("tryDispatchAcpReply", () => {
     const onReplyStart = vi.fn();
     const { dispatcher } = createDispatcher();
 
-    await tryDispatchAcpReply({
-      ctx: buildTestCtx({
-        Provider: "discord",
-        Surface: "discord",
-        SessionKey: "agent:codex-acp:session-1",
-        BodyForAgent: "   ",
-      }),
-      cfg: createAcpTestConfig(),
+    await runDispatch({
+      bodyForAgent: "   ",
       dispatcher,
-      sessionKey: "agent:codex-acp:session-1",
-      inboundAudio: false,
-      shouldRouteToOriginating: false,
-      shouldSendToolSummaries: true,
-      bypassForCommand: false,
       onReplyStart,
-      recordProcessed: vi.fn(),
-      markIdle: vi.fn(),
     });
 
     expect(managerMocks.runTurn).not.toHaveBeenCalled();
     expect(onReplyStart).not.toHaveBeenCalled();
+  });
+
+  it("forwards normalized image attachments into ACP turns", async () => {
+    setReadyAcpResolution();
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "dispatch-acp-"));
+    const imagePath = path.join(tempDir, "inbound.png");
+    try {
+      await fs.writeFile(imagePath, "image-bytes");
+      managerMocks.runTurn.mockResolvedValue(undefined);
+
+      await runDispatch({
+        bodyForAgent: "   ",
+        ctxOverrides: {
+          MediaPath: imagePath,
+          MediaType: "image/png",
+        },
+      });
+
+      expect(managerMocks.runTurn).toHaveBeenCalledWith(
+        expect.objectContaining({
+          text: "",
+          attachments: [
+            {
+              mediaType: "image/png",
+              data: Buffer.from("image-bytes").toString("base64"),
+            },
+          ],
+        }),
+      );
+    } finally {
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("skips ACP turns for non-image attachments when there is no text prompt", async () => {
+    setReadyAcpResolution();
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "dispatch-acp-"));
+    const docPath = path.join(tempDir, "inbound.pdf");
+    const { dispatcher } = createDispatcher();
+    const onReplyStart = vi.fn();
+    try {
+      await fs.writeFile(docPath, "pdf-bytes");
+
+      await runDispatch({
+        bodyForAgent: "   ",
+        dispatcher,
+        onReplyStart,
+        ctxOverrides: {
+          MediaPath: docPath,
+          MediaType: "application/pdf",
+        },
+      });
+
+      expect(managerMocks.runTurn).not.toHaveBeenCalled();
+      expect(onReplyStart).not.toHaveBeenCalled();
+    } finally {
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
   });
 
   it("surfaces ACP policy errors as final error replies", async () => {
@@ -432,22 +423,9 @@ describe("tryDispatchAcpReply", () => {
     );
     const { dispatcher } = createDispatcher();
 
-    await tryDispatchAcpReply({
-      ctx: buildTestCtx({
-        Provider: "discord",
-        Surface: "discord",
-        SessionKey: "agent:codex-acp:session-1",
-        BodyForAgent: "test",
-      }),
-      cfg: createAcpTestConfig(),
+    await runDispatch({
+      bodyForAgent: "test",
       dispatcher,
-      sessionKey: "agent:codex-acp:session-1",
-      inboundAudio: false,
-      shouldRouteToOriginating: false,
-      shouldSendToolSummaries: true,
-      bypassForCommand: false,
-      recordProcessed: vi.fn(),
-      markIdle: vi.fn(),
     });
 
     expect(managerMocks.runTurn).not.toHaveBeenCalled();
