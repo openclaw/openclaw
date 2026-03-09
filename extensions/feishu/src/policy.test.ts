@@ -3,8 +3,9 @@ import {
   isFeishuGroupAllowed,
   resolveFeishuAllowlistMatch,
   resolveFeishuGroupConfig,
+  resolveFeishuReplyPolicy,
 } from "./policy.js";
-import type { FeishuConfig } from "./types.js";
+import type { FeishuConfig, FeishuGroupConfig } from "./types.js";
 
 describe("feishu policy", () => {
   describe("resolveFeishuGroupConfig", () => {
@@ -97,6 +98,79 @@ describe("feishu policy", () => {
           senderName: victimOpenId,
         }),
       ).toEqual({ allowed: false });
+    });
+  });
+
+  describe("resolveFeishuReplyPolicy", () => {
+    it("does not require mention for DMs", () => {
+      expect(resolveFeishuReplyPolicy({ isDirectMessage: true })).toEqual({
+        requireMention: false,
+      });
+    });
+
+    it("requires mention in group by default", () => {
+      expect(resolveFeishuReplyPolicy({ isDirectMessage: false })).toEqual({
+        requireMention: true,
+      });
+    });
+
+    it("respects group-level requireMention override", () => {
+      expect(
+        resolveFeishuReplyPolicy({
+          isDirectMessage: false,
+          groupConfig: { requireMention: false } as FeishuGroupConfig,
+        }),
+      ).toEqual({ requireMention: false });
+    });
+
+    it("still requires mention for thread replies when no thread override is set", () => {
+      expect(
+        resolveFeishuReplyPolicy({
+          isDirectMessage: false,
+          isThreadReply: true,
+        }),
+      ).toEqual({ requireMention: true });
+    });
+
+    it("skips mention for thread replies when requireMentionInThread is false (global)", () => {
+      expect(
+        resolveFeishuReplyPolicy({
+          isDirectMessage: false,
+          isThreadReply: true,
+          globalConfig: { requireMentionInThread: false } as FeishuConfig,
+        }),
+      ).toEqual({ requireMention: false });
+    });
+
+    it("skips mention for thread replies when requireMentionInThread is false (group)", () => {
+      expect(
+        resolveFeishuReplyPolicy({
+          isDirectMessage: false,
+          isThreadReply: true,
+          groupConfig: { requireMentionInThread: false } as FeishuGroupConfig,
+        }),
+      ).toEqual({ requireMention: false });
+    });
+
+    it("group-level requireMentionInThread overrides global", () => {
+      expect(
+        resolveFeishuReplyPolicy({
+          isDirectMessage: false,
+          isThreadReply: true,
+          globalConfig: { requireMentionInThread: false } as FeishuConfig,
+          groupConfig: { requireMentionInThread: true } as FeishuGroupConfig,
+        }),
+      ).toEqual({ requireMention: true });
+    });
+
+    it("does not apply thread override for non-thread messages", () => {
+      expect(
+        resolveFeishuReplyPolicy({
+          isDirectMessage: false,
+          isThreadReply: false,
+          globalConfig: { requireMentionInThread: false } as FeishuConfig,
+        }),
+      ).toEqual({ requireMention: true });
     });
   });
 
