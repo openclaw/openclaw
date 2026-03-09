@@ -28,6 +28,9 @@ import { getMachineDisplayName } from "../infra/machine-name.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { defaultRuntime } from "../runtime.js";
+import { resolveSignalReactionLevel } from "../signal/reaction-level.js";
+import { resolveTelegramInlineButtonsScope } from "../telegram/inline-buttons.js";
+import { resolveTelegramReactionLevel } from "../telegram/reaction-level.js";
 import { buildTtsSystemPromptHint } from "../tts/tts.js";
 import { isReasoningTagProvider } from "../utils/provider-utils.js";
 import { requireValidConfig } from "./agents.command-shared.js";
@@ -72,9 +75,22 @@ export async function agentsViewSystemPromptCommand(
   const modelLabel = opts.model ?? defaultModelLabel;
   const provider = modelLabel.split("/")[0];
 
-  const runtimeCapabilities = opts.channel
+  let runtimeCapabilities = opts.channel
     ? (resolveChannelCapabilities({ cfg, channel: opts.channel }) ?? [])
     : undefined;
+  if (opts.channel === "telegram") {
+    const inlineButtonsScope = resolveTelegramInlineButtonsScope({ cfg });
+    if (inlineButtonsScope !== "off") {
+      if (!runtimeCapabilities) {
+        runtimeCapabilities = [];
+      }
+      if (
+        !runtimeCapabilities.some((cap) => String(cap).trim().toLowerCase() === "inlinebuttons")
+      ) {
+        runtimeCapabilities.push("inlineButtons");
+      }
+    }
+  }
   const channelActions = opts.channel
     ? listChannelSupportedActions({ cfg, channel: opts.channel })
     : undefined;
@@ -117,6 +133,23 @@ export async function agentsViewSystemPromptCommand(
       ? [`Loaded context files: ${bootstrapFileNames.join(", ")}`]
       : undefined;
 
+  const reactionGuidance =
+    opts.channel === "telegram"
+      ? (() => {
+          const resolved = resolveTelegramReactionLevel({ cfg });
+          return resolved.agentReactionGuidance
+            ? { level: resolved.agentReactionGuidance, channel: "Telegram" }
+            : undefined;
+        })()
+      : opts.channel === "signal"
+        ? (() => {
+            const resolved = resolveSignalReactionLevel({ cfg });
+            return resolved.agentReactionGuidance
+              ? { level: resolved.agentReactionGuidance, channel: "Signal" }
+              : undefined;
+          })()
+        : undefined;
+
   const isDefaultAgent = agentId === normalizeAgentId(resolveDefaultAgentId(cfg));
   const heartbeatPrompt = isDefaultAgent
     ? resolveHeartbeatPrompt(cfg.agents?.defaults?.heartbeat?.prompt)
@@ -140,6 +173,8 @@ export async function agentsViewSystemPromptCommand(
     userTimeFormat,
     contextFiles,
     messageToolHints,
+    reactionGuidance,
+    memoryCitationsMode: cfg.memory?.citations,
     ownerDisplay: ownerDisplay.ownerDisplay,
     ownerDisplaySecret: ownerDisplay.ownerDisplaySecret,
   });
