@@ -81,8 +81,7 @@ export async function probeGateway(opts: {
         // Otherwise, we still check for the explicit parse error close.
         if (
           sawParseError ||
-          (code === GATEWAY_PARSE_ERROR_CLOSE_CODE &&
-            reason === GATEWAY_PARSE_ERROR_CLOSE_REASON)
+          (code === GATEWAY_PARSE_ERROR_CLOSE_CODE && reason === GATEWAY_PARSE_ERROR_CLOSE_REASON)
         ) {
           settle({
             ok: false,

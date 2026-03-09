@@ -12,7 +12,9 @@ class MockGatewayClient {
   constructor(opts: Record<string, unknown>) {
     this.opts = opts;
     gatewayClientState.options = opts;
-    gatewayClientState.triggerOnClose = opts.onClose as ((code: number, reason: string) => void) | null;
+    gatewayClientState.triggerOnClose = opts.onClose as
+      | ((code: number, reason: string) => void)
+      | null;
     gatewayClientState.triggerOnConnectError = opts.onConnectError as ((err: Error) => void) | null;
   }
 
@@ -71,7 +73,7 @@ describe("probeGateway", () => {
 
   it("fails immediately on parse error close instead of waiting for timeout", async () => {
     const startedAt = Date.now();
-    
+
     // Start the probe
     const probePromise = probeGateway({
       url: "ws://127.0.0.1:18789",
@@ -83,15 +85,17 @@ describe("probeGateway", () => {
     // 1. First, onConnectError with parse error
     setTimeout(() => {
       gatewayClientState.triggerOnConnectError?.(
-        new Error("Failed to parse JSON message from gateway: SyntaxError; raw (truncated): not-json")
+        new Error(
+          "Failed to parse JSON message from gateway: SyntaxError; raw (truncated): not-json",
+        ),
       );
     }, 10);
-    
+
     // 2. Then, onClose with parse error close
     setTimeout(() => {
       gatewayClientState.triggerOnClose?.(
         GATEWAY_PARSE_ERROR_CLOSE_CODE,
-        GATEWAY_PARSE_ERROR_CLOSE_REASON
+        GATEWAY_PARSE_ERROR_CLOSE_REASON,
       );
     }, 50);
 
@@ -101,7 +105,7 @@ describe("probeGateway", () => {
     // Should fail explicitly with parse error message
     expect(result.ok).toBe(false);
     expect(result.error).toContain("Failed to parse JSON message from gateway");
-    
+
     // Should fail quickly, not wait for the 5000ms timeout
     expect(elapsed).toBeLessThan(1000);
   });
@@ -120,7 +124,9 @@ describe("probeGateway", () => {
     // 1. First, onConnectError with parse error
     setTimeout(() => {
       gatewayClientState.triggerOnConnectError?.(
-        new Error("Failed to parse JSON message from gateway: SyntaxError; raw (truncated): not-json")
+        new Error(
+          "Failed to parse JSON message from gateway: SyntaxError; raw (truncated): not-json",
+        ),
       );
     }, 10);
 

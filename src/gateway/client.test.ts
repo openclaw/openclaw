@@ -113,7 +113,8 @@ vi.mock("../logger.js", async (importOriginal) => {
 });
 
 // Import after mocks to avoid circular dependency
-const { GatewayClient, GATEWAY_PARSE_ERROR_CLOSE_CODE, GATEWAY_PARSE_ERROR_CLOSE_REASON } = await import("./client.js");
+const { GatewayClient, GATEWAY_PARSE_ERROR_CLOSE_CODE, GATEWAY_PARSE_ERROR_CLOSE_REASON } =
+  await import("./client.js");
 
 function getLatestWs(): MockWebSocket {
   const ws = wsInstances.at(-1);
@@ -551,9 +552,7 @@ describe("GatewayClient handleMessage parse errors", () => {
     expect(logDebugMock).toHaveBeenCalledWith(
       expect.stringContaining("gateway client parse error"),
     );
-    expect(logDebugMock).toHaveBeenCalledWith(
-      expect.stringContaining("not valid json"),
-    );
+    expect(logDebugMock).toHaveBeenCalledWith(expect.stringContaining("not valid json"));
     client.stop();
   });
 
@@ -572,9 +571,7 @@ describe("GatewayClient handleMessage parse errors", () => {
       expect.stringContaining("gateway client parse error"),
     );
     // Should be truncated to 300 chars + "..."
-    expect(logDebugMock).toHaveBeenCalledWith(
-      expect.stringContaining("xxx..."),
-    );
+    expect(logDebugMock).toHaveBeenCalledWith(expect.stringContaining("xxx..."));
     client.stop();
   });
 
@@ -593,7 +590,7 @@ describe("GatewayClient handleMessage parse errors", () => {
     // First, complete the handshake so we're in a state where messages are processed
     ws.emitOpen();
     emitConnectChallenge(ws);
-    
+
     // Now send invalid JSON
     ws.emitMessage("not valid json");
 
@@ -609,7 +606,10 @@ describe("GatewayClient handleMessage parse errors", () => {
       }),
     );
     // Should close the connection with parse error code
-    expect(onClose).toHaveBeenCalledWith(GATEWAY_PARSE_ERROR_CLOSE_CODE, GATEWAY_PARSE_ERROR_CLOSE_REASON);
+    expect(onClose).toHaveBeenCalledWith(
+      GATEWAY_PARSE_ERROR_CLOSE_CODE,
+      GATEWAY_PARSE_ERROR_CLOSE_REASON,
+    );
     client.stop();
   });
 
@@ -630,27 +630,30 @@ describe("GatewayClient handleMessage parse errors", () => {
       const ws = getLatestWs();
       ws.emitOpen();
       emitConnectChallenge(ws);
-      
+
       // Trigger parse error
       ws.emitMessage("not valid json");
-      
+
       // Verify close was called
-      expect(onClose).toHaveBeenCalledWith(GATEWAY_PARSE_ERROR_CLOSE_CODE, GATEWAY_PARSE_ERROR_CLOSE_REASON);
-      
+      expect(onClose).toHaveBeenCalledWith(
+        GATEWAY_PARSE_ERROR_CLOSE_CODE,
+        GATEWAY_PARSE_ERROR_CLOSE_REASON,
+      );
+
       // The client should be marked as closed, preventing reconnection
       // We verify this by checking that no new WebSocket instances are created
       // after the parse error (scheduleReconnect would create a new one)
       const afterParseErrorWsCount = wsInstances.length;
-      
+
       // Wait a bit to see if reconnection would happen
       vi.advanceTimersByTime(2000);
-      
+
       const afterTimeoutWsCount = wsInstances.length;
-      
+
       // Should not have created new WebSocket instances
       expect(afterTimeoutWsCount).toBe(initialWsCount);
       expect(afterParseErrorWsCount).toBe(initialWsCount);
-      
+
       client.stop();
     } finally {
       vi.useRealTimers();
@@ -672,7 +675,7 @@ describe("GatewayClient handleMessage parse errors", () => {
     // First, complete the handshake
     ws.emitOpen();
     emitConnectChallenge(ws);
-    
+
     // Simulate the actual issue: box-drawing characters from doctor output
     const boxDrawingMessage = "│ Config invalid";
     ws.emitMessage(boxDrawingMessage);
@@ -682,7 +685,10 @@ describe("GatewayClient handleMessage parse errors", () => {
         message: expect.stringContaining("│ Config invalid"),
       }),
     );
-    expect(onClose).toHaveBeenCalledWith(GATEWAY_PARSE_ERROR_CLOSE_CODE, GATEWAY_PARSE_ERROR_CLOSE_REASON);
+    expect(onClose).toHaveBeenCalledWith(
+      GATEWAY_PARSE_ERROR_CLOSE_CODE,
+      GATEWAY_PARSE_ERROR_CLOSE_REASON,
+    );
     client.stop();
   });
 
@@ -700,17 +706,20 @@ describe("GatewayClient handleMessage parse errors", () => {
     const ws = getLatestWs();
     ws.emitOpen();
     emitConnectChallenge(ws);
-    
+
     // Make a request that will be pending
     const requestPromise = client.request("health");
-    
+
     // Trigger parse error before response
     ws.emitMessage("not valid json");
-    
+
     // The pending request should be rejected with the parse error
     await expect(requestPromise).rejects.toThrow("Failed to parse JSON message from gateway");
-    
-    expect(onClose).toHaveBeenCalledWith(GATEWAY_PARSE_ERROR_CLOSE_CODE, GATEWAY_PARSE_ERROR_CLOSE_REASON);
+
+    expect(onClose).toHaveBeenCalledWith(
+      GATEWAY_PARSE_ERROR_CLOSE_CODE,
+      GATEWAY_PARSE_ERROR_CLOSE_REASON,
+    );
     client.stop();
   });
 });
