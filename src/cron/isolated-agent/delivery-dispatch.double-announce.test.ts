@@ -304,4 +304,59 @@ describe("dispatchCronDelivery — double-announce guard", () => {
     expect(deliverOutboundPayloads).not.toHaveBeenCalled();
     expect(state.deliveryAttempted).toBe(false);
   });
+
+  it("direct delivery passes skipQueue=true to avoid duplicate queue entries on transient retry", async () => {
+    vi.mocked(countActiveDescendantRuns).mockReturnValue(0);
+    vi.mocked(isLikelyInterimCronMessage).mockReturnValue(false);
+    vi.mocked(deliverOutboundPayloads).mockResolvedValue([{ ok: true } as never]);
+
+    const params = makeBaseParams({ synthesizedText: "Daily digest ready." });
+    const state = await dispatchCronDelivery(params);
+
+    expect(state.delivered).toBe(true);
+    expect(state.deliveryAttempted).toBe(true);
+    expect(deliverOutboundPayloads).toHaveBeenCalledTimes(1);
+
+    // The call must include skipQueue: true so transient retries inside
+    // retryTransientDirectCronDelivery do not enqueue additional write-ahead
+    // entries that would cause duplicate sends.
+    // See: https://github.com/openclaw/openclaw/issues/40545
+    expect(deliverOutboundPayloads).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: "telegram",
+        to: "123456",
+        skipQueue: true,
+        payloads: [{ text: "Daily digest ready." }],
+      }),
+    );
+  });
+
+  it("transient retry delivers exactly once after initial transient failure", async () => {
+    vi.mocked(countActiveDescendantRuns).mockReturnValue(0);
+    vi.mocked(isLikelyInterimCronMessage).mockReturnValue(false);
+
+    // First call throws a transient error, second call succeeds.
+    vi.mocked(deliverOutboundPayloads)
+      .mockRejectedValueOnce(new Error("gateway timeout"))
+      .mockResolvedValueOnce([{ ok: true } as never]);
+
+    // Enable fast retries for test speed.
+    process.env.OPENCLAW_TEST_FAST = "1";
+    try {
+      const params = makeBaseParams({ synthesizedText: "Retry test." });
+      const state = await dispatchCronDelivery(params);
+
+      expect(state.delivered).toBe(true);
+      expect(state.deliveryAttempted).toBe(true);
+      // Two calls total: first failed transiently, second succeeded.
+      expect(deliverOutboundPayloads).toHaveBeenCalledTimes(2);
+
+      // Both calls must use skipQueue to prevent duplicate queue entries.
+      for (const call of vi.mocked(deliverOutboundPayloads).mock.calls) {
+        expect(call[0]).toEqual(expect.objectContaining({ skipQueue: true }));
+      }
+    } finally {
+      delete process.env.OPENCLAW_TEST_FAST;
+    }
+  });
 });

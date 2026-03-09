@@ -256,6 +256,13 @@ export async function dispatchCronDelivery(
           bestEffort: params.deliveryBestEffort,
           deps: createOutboundSendDeps(params.deps),
           abortSignal: params.abortSignal,
+          // Skip the write-ahead delivery queue for cron direct delivery.
+          // retryTransientDirectCronDelivery already handles transient retries;
+          // without skipQueue each retry attempt enqueues a *new* queue entry,
+          // causing duplicate sends when the first attempt actually succeeded
+          // but threw a transient error (e.g. gateway timeout / econnreset).
+          // See: https://github.com/openclaw/openclaw/issues/40545
+          skipQueue: true,
         });
       const deliveryResults = options?.retryTransient
         ? await retryTransientDirectCronDelivery({
