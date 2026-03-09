@@ -178,4 +178,37 @@ describe("extractModelDirective", () => {
       expect(result.hasDirective).toBe(false);
     });
   });
+
+  describe("Telegram @bot mention suffix", () => {
+    it("strips @BotName from /model directive", () => {
+      const result = extractModelDirective("/model@MyBot gpt-5");
+      expect(result.hasDirective).toBe(true);
+      expect(result.rawModel).toBe("gpt-5");
+      expect(result.cleaned).toBe("");
+    });
+
+    it("strips @BotName from /model with no argument", () => {
+      const result = extractModelDirective("/model@MyBot");
+      expect(result.hasDirective).toBe(true);
+      expect(result.rawModel).toBeUndefined();
+    });
+
+    it("strips @BotName from /model with colon separator", () => {
+      const result = extractModelDirective("/model@MyBot: claude-opus-4-5");
+      expect(result.hasDirective).toBe(true);
+      expect(result.rawModel).toBe("claude-opus-4-5");
+    });
+
+    it("strips @BotName from /model inline in message", () => {
+      const result = extractModelDirective("please use /model@MyBot gpt-5 for this");
+      expect(result.hasDirective).toBe(true);
+      expect(result.rawModel).toBe("gpt-5");
+      expect(result.cleaned).toBe("please use for this");
+    });
+
+    it("strips @BotName from alias directive", () => {
+      const result = extractModelDirective("/gpt@MyBot", { aliases: ["gpt"] });
+      expect(result.hasDirective).toBe(true);
+    });
+  });
 });
