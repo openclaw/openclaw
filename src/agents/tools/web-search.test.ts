@@ -387,6 +387,8 @@ describe("web_search Bocha freshness mapping", () => {
 
   it("returns undefined for empty input", () => {
     expect(mapFreshnessToBocha(undefined)).toBeUndefined();
+  });
+});
 
 describe("resolveBraveMode", () => {
   it("defaults to 'web' when no config is provided", () => {

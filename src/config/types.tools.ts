@@ -495,6 +495,7 @@ export type ToolsConfig = {
         model?: string;
         /** Request summarized answers when supported (default: true). */
         summary?: boolean;
+      };
       /** Brave-specific configuration (used when provider="brave"). */
       brave?: {
         /** Brave Search mode: "web" (standard results) or "llm-context" (pre-extracted page content). Default: "web". */

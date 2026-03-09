@@ -1593,6 +1593,7 @@ async function runBochaSearch(params: {
     tookMs: 0,
     results: mapped,
   };
+};
 
 async function runBraveLlmContextSearch(params: {
   query: string;
