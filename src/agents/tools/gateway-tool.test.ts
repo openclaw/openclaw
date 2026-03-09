@@ -170,6 +170,33 @@ describe("createGatewayTool – live delivery context guard", () => {
     expect(sentinelPayload?.deliveryContext?.to).toBe("123456789");
   });
 
+  it("does not forward live RPC delivery context when gateway.mode=remote is configured (no URL override)", async () => {
+    // When gateway.mode=remote is set in config, callGatewayTool() routes to
+    // gateway.remote.url without an explicit gatewayUrl param.  resolveGatewayTarget
+    // must return "remote" in this case so deliveryContext is suppressed, preventing
+    // the remote sentinel from being stamped with the local chat route.
+    mocks.callGatewayTool.mockClear();
+    // No gatewayUrl override — config-based remote mode
+    mocks.readGatewayCallOptions.mockReturnValueOnce({});
+    mocks.resolveGatewayTarget.mockReturnValueOnce("remote");
+    const tool = createGatewayTool({
+      agentSessionKey: "agent:main:main",
+      agentChannel: "discord",
+      agentTo: "123456789",
+    });
+
+    await execTool(tool, {
+      action: "config.patch",
+      raw: '{"key":"value"}',
+      baseHash: "abc123",
+      sessionKey: "agent:main:main",
+      note: "config-remote patch (no URL override)",
+    });
+
+    const forwardedParams = getCallArg<Record<string, unknown>>(mocks.callGatewayTool, 0, 2);
+    expect(forwardedParams?.deliveryContext).toBeUndefined();
+  });
+
   it("does not forward live RPC delivery context when gatewayUrl targets a remote gateway", async () => {
     // A remote gateway has its own extractDeliveryInfo(sessionKey) — forwarding
     // the local agent's deliveryContext would write a sentinel with the wrong

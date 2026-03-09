@@ -115,15 +115,21 @@ function resolveGatewayOverrideToken(params: {
 
 /**
  * Resolves whether a GatewayCallOptions points to a local or remote gateway.
- * Returns undefined when no gatewayUrl override is present (default local gateway).
- * Local loopback overrides (127.0.0.1, localhost, [::1]) return "local";
- * all other URL overrides return "remote".
+ * Returns "remote" when a remote gatewayUrl override is present, OR when
+ * gateway.mode=remote is configured and no override is provided (config-based remote).
+ * Returns "local" for explicit loopback URL overrides (127.0.0.1, localhost, [::1]).
+ * Returns undefined only when no override is present and gateway.mode is not "remote"
+ * (i.e. the default local gateway).
  */
 export function resolveGatewayTarget(opts?: GatewayCallOptions): GatewayOverrideTarget | undefined {
-  if (trimToUndefined(opts?.gatewayUrl) === undefined) {
-    return undefined;
-  }
   const cfg = loadConfig();
+  if (trimToUndefined(opts?.gatewayUrl) === undefined) {
+    // No explicit URL override — fall back to config-based mode.
+    // When gateway.mode=remote, callGatewayTool() routes to the configured
+    // gateway.remote.url, so this is effectively a remote target even without
+    // an explicit gatewayUrl param.
+    return cfg.gateway?.mode === "remote" ? "remote" : undefined;
+  }
   return validateGatewayUrlOverrideForAgentTools({
     cfg,
     urlOverride: String(opts?.gatewayUrl),
