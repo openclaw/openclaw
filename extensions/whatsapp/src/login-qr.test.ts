@@ -51,7 +51,8 @@ describe("login-qr", () => {
 
   it("restarts login once on status 515 and completes", async () => {
     waitForWaConnectionMock
-      .mockRejectedValueOnce({ output: { statusCode: 515 } })
+      // Baileys v7 wraps the error: { error: BoomError(515) }
+      .mockRejectedValueOnce({ error: { output: { statusCode: 515 } } })
       .mockResolvedValueOnce(undefined);
 
     const start = await startWebLoginWithQr({ timeoutMs: 5000 });
