@@ -1,0 +1,10 @@
+[Unit]
+Description=Run the OpenClaw rescue watchdog every 5 minutes
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=5min
+Persistent=true
+
+[Install]
+WantedBy=timers.target
