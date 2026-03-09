@@ -145,7 +145,6 @@ export function createComputerUseTool(api: OpenClawPluginApi) {
       sessionId: Type.Optional(Type.String({ description: "Optional stable session id." })),
       provider: Type.Optional(Type.String({ description: "Model provider override." })),
       model: Type.Optional(Type.String({ description: "Model id override." })),
-      executorBaseUrl: Type.Optional(Type.String({ description: "Executor base URL override." })),
       executorAuthToken: Type.Optional(
         Type.String({ description: "Executor bearer token override." }),
       ),
@@ -162,27 +161,13 @@ export function createComputerUseTool(api: OpenClawPluginApi) {
 
     async execute(_id: string, params: Record<string, unknown>) {
       const pluginCfg = (api.pluginConfig ?? {}) as PluginCfg;
-      const overrideBaseUrl = readString(params.executorBaseUrl);
-      const configuredBaseUrl = readString(pluginCfg.executorBaseUrl);
-      const baseUrlRaw = overrideBaseUrl ?? configuredBaseUrl;
+      const baseUrlRaw = readString(pluginCfg.executorBaseUrl);
       if (!baseUrlRaw) {
         throw new Error("computer-use plugin requires executorBaseUrl");
       }
       const baseUrl = normalizeBaseUrl(baseUrlRaw);
-      const overrideAuthToken = readString(params.executorAuthToken);
-      const configuredAuthToken = readString(pluginCfg.executorAuthToken);
-      if (
-        overrideBaseUrl &&
-        configuredBaseUrl &&
-        normalizeBaseUrl(overrideBaseUrl) !== normalizeBaseUrl(configuredBaseUrl) &&
-        configuredAuthToken &&
-        !overrideAuthToken
-      ) {
-        throw new Error(
-          "executorBaseUrl override requires an explicit executorAuthToken when plugin executorAuthToken is configured",
-        );
-      }
-      const authToken = overrideAuthToken ?? configuredAuthToken;
+      const authToken =
+        readString(params.executorAuthToken) ?? readString(pluginCfg.executorAuthToken);
       const action = ensureAction(params);
 
       let response: unknown;

@@ -7,6 +7,7 @@ This plugin is intentionally narrow:
 - OpenClaw exposes a `computer-use` tool
 - the plugin forwards requests to an external executor service
 - the executor owns screenshots, action execution, confirmation, and isolation
+- the executor endpoint is fixed by plugin config rather than tool-call params
 
 ## Why this shape
 

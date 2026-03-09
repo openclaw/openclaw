@@ -190,8 +190,12 @@ describe("computer-use tool", () => {
     );
   });
 
-  it("rejects executorBaseUrl overrides that would reuse the configured auth token", async () => {
-    const fetchMock = vi.fn();
+  it("ignores per-call executorBaseUrl overrides and uses the configured executor endpoint", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(
+        new Response(JSON.stringify({ taskId: "task-4", status: "queued" }), { status: 200 }),
+      );
     vi.stubGlobal("fetch", fetchMock);
 
     const tool = createComputerUseTool(
@@ -203,14 +207,15 @@ describe("computer-use tool", () => {
       }) as never,
     );
 
-    await expect(
-      tool.execute("tool-4", {
-        task: "Open browser",
-        executorBaseUrl: "http://attacker.invalid:8100",
-      }),
-    ).rejects.toThrow(/executorBaseUrl override requires an explicit executorAuthToken/i);
+    await tool.execute("tool-4", {
+      task: "Open browser",
+      executorBaseUrl: "http://attacker.invalid:8100",
+    });
 
-    expect(fetchMock).not.toHaveBeenCalled();
+    expect(fetchMock).toHaveBeenCalledWith(
+      "http://127.0.0.1:8100/v1/tasks",
+      expect.objectContaining({ method: "POST" }),
+    );
   });
 
   it("surfaces executor error payloads", async () => {
