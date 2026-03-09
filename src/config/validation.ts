@@ -412,6 +412,13 @@ function validateGatewayTailscaleBind(config: OpenClawConfig): ConfigValidationI
   ];
 }
 
+function getLegacyValidationIssues(raw: unknown): ConfigValidationIssue[] {
+  return findLegacyConfigIssues(raw).map((iss) => ({
+    path: iss.path,
+    message: iss.message,
+  }));
+}
+
 /**
  * Validates config without applying runtime defaults.
  * Use this when you need the raw validated config (e.g., for writing back to file).
@@ -419,14 +426,11 @@ function validateGatewayTailscaleBind(config: OpenClawConfig): ConfigValidationI
 export function validateConfigObjectRaw(
   raw: unknown,
 ): { ok: true; config: OpenClawConfig } | { ok: false; issues: ConfigValidationIssue[] } {
-  const legacyIssues = findLegacyConfigIssues(raw);
+  const legacyIssues = getLegacyValidationIssues(raw);
   if (legacyIssues.length > 0) {
     return {
       ok: false,
-      issues: legacyIssues.map((iss) => ({
-        path: iss.path,
-        message: iss.message,
-      })),
+      issues: legacyIssues,
     };
   }
   const validated = OpenClawSchema.safeParse(raw);
@@ -505,14 +509,14 @@ function validateConfigObjectWithPluginsBase(
   raw: unknown,
   opts: { applyDefaults: boolean; preserveUnknownKeys: boolean },
 ): ValidateConfigWithPluginsResult {
-  const legacyIssues = findLegacyConfigIssues(raw);
+  // Must run on the original payload. If we strip unknown keys first, legacy
+  // keys that are outside OpenClawSchema can be deleted before fail-closed
+  // migration checks run.
+  const legacyIssues = getLegacyValidationIssues(raw);
   if (legacyIssues.length > 0) {
     return {
       ok: false,
-      issues: legacyIssues.map((iss) => ({
-        path: iss.path,
-        message: iss.message,
-      })),
+      issues: legacyIssues,
       warnings: [],
     };
   }
