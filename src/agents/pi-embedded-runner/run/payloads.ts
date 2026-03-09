@@ -103,10 +103,7 @@ function resolveToolErrorWarningPolicy(params: {
     // Only suppress the raw warning when the assistant reply actually
     // acknowledges the failure.  A generic "Done." reply must not hide
     // a mutating-tool error from the user (#39631).
-    if (
-      params.hasUserFacingReply &&
-      replyAcknowledgesFailure(params.replyTexts)
-    ) {
+    if (params.hasUserFacingReply && replyAcknowledgesFailure(params.replyTexts)) {
       return { showWarning: false, includeDetails };
     }
     return { showWarning: true, includeDetails };
