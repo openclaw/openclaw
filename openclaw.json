@@ -16,11 +16,7 @@
   "plugins": {
     "entries": {
       "fin-backtest-remote": {
-        "enabled": true,
-        "config": {
-          "baseUrl": "http://150.109.16.195:8000",
-          "apiKey": "bt-sk-6a25ef85cd8f51b26131da2ee55fe4b2"
-        }
+        "enabled": true
       }
     }
   }
