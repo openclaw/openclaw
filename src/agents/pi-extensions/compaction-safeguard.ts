@@ -698,7 +698,9 @@ async function readWorkspaceContextForSummary(): Promise<string> {
 export default function compactionSafeguardExtension(api: ExtensionAPI): void {
   api.on("session_before_compact", async (event, ctx) => {
     const { preparation, customInstructions, signal } = event;
-    if (!preparation.messagesToSummarize.some(isRealConversationMessage)) {
+    const turnPrefixMessages = preparation.turnPrefixMessages ?? [];
+    const candidateMessages = [...preparation.messagesToSummarize, ...turnPrefixMessages];
+    if (!candidateMessages.some(isRealConversationMessage)) {
       log.warn(
         "Compaction safeguard: cancelling compaction with no real conversation messages to summarize.",
       );
@@ -706,10 +708,7 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
     }
     const { readFiles, modifiedFiles } = computeFileLists(preparation.fileOps);
     const fileOpsSummary = formatFileOperations(readFiles, modifiedFiles);
-    const toolFailures = collectToolFailures([
-      ...preparation.messagesToSummarize,
-      ...preparation.turnPrefixMessages,
-    ]);
+    const toolFailures = collectToolFailures(candidateMessages);
     const toolFailureSection = formatToolFailuresSection(toolFailures);
 
     // Model resolution: ctx.model is undefined in compact.ts workflow (extensionRunner.initialize() is never called).
@@ -746,7 +745,6 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
     try {
       const modelContextWindow = resolveContextWindowTokens(model);
       const contextWindowTokens = runtime?.contextWindowTokens ?? modelContextWindow;
-      const turnPrefixMessages = preparation.turnPrefixMessages ?? [];
       let messagesToSummarize = preparation.messagesToSummarize;
       const recentTurnsPreserve = resolveRecentTurnsPreserve(runtime?.recentTurnsPreserve);
       const qualityGuardEnabled = runtime?.qualityGuardEnabled ?? false;
