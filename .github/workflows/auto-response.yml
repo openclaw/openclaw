@@ -19,15 +19,23 @@ jobs:
     steps:
       - uses: actions/create-github-app-token@d72941d797fd3113feb6b93fd0dec494b13a2547 # v1
         id: app-token
+        continue-on-error: true
         with:
           app-id: "2729701"
           private-key: ${{ secrets.GH_APP_PRIVATE_KEY }}
+      - uses: actions/create-github-app-token@d72941d797fd3113feb6b93fd0dec494b13a2547 # v1
+        id: app-token-fallback
+        if: steps.app-token.outcome == 'failure'
+        with:
+          app-id: "2971289"
+          private-key: ${{ secrets.GH_APP_PRIVATE_KEY_FALLBACK }}
       - name: Handle labeled items
         uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7
         with:
-          github-token: ${{ steps.app-token.outputs.token }}
+          github-token: ${{ steps.app-token.outputs.token || steps.app-token-fallback.outputs.token }}
           script: |
             // Labels prefixed with "r:" are auto-response triggers.
+            const activePrLimit = 10;
             const rules = [
               {
                 label: "r: skill",
@@ -40,6 +48,20 @@ jobs:
                 close: true,
                 message:
                   "Please use [our support server](https://discord.gg/clawd) and ask in #help or #users-helping-users to resolve this, or follow the stuck FAQ at https://docs.openclaw.ai/help/faq#im-stuck-whats-the-fastest-way-to-get-unstuck.",
+              },
+              {
+                label: "r: no-ci-pr",
+                message:
+                  "Please don't make PRs for test failures on main.\n\n" +
+                  "The team is aware of those and will handle them directly on the codebase, not only fixing the tests but also investigating what the root cause is. Having to sift through test-fix-PRs (including some that have been out of date for weeks...) on top of that doesn't help. There are already way too many PRs for humans to manage; please don't make the flood worse.\n\n" +
+                  "Thank you.",
+              },
+              {
+                label: "r: too-many-prs",
+                close: true,
+                message:
+                  `Closing this PR because the author has more than ${activePrLimit} active PRs in this repo. ` +
+                  "Please reduce the active PR queue and reopen or resubmit once it is back under the limit. You can close your own PRs to get back under the limit.",
               },
               {
                 label: "r: testflight",
@@ -70,6 +92,116 @@ jobs:
             const mentionRegex = /@([A-Za-z0-9-]+)/g;
             const maintainerCache = new Map();
             const normalizeLogin = (login) => login.toLowerCase();
+            const bugSubtypeLabelSpecs = {
+              regression: {
+                color: "D93F0B",
+                description: "Behavior that previously worked and now fails",
+              },
+              "bug:crash": {
+                color: "B60205",
+                description: "Process/app exits unexpectedly or hangs",
+              },
+              "bug:behavior": {
+                color: "D73A4A",
+                description: "Incorrect behavior without a crash",
+              },
+            };
+            const bugTypeToLabel = {
+              "Regression (worked before, now fails)": "regression",
+              "Crash (process/app exits or hangs)": "bug:crash",
+              "Behavior bug (incorrect output/state without crash)": "bug:behavior",
+            };
+            const bugSubtypeLabels = Object.keys(bugSubtypeLabelSpecs);
+
+            const extractIssueFormValue = (body, field) => {
+              if (!body) {
+                return "";
+              }
+              const escapedField = field.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+              const regex = new RegExp(
+                `(?:^|\\n)###\\s+${escapedField}\\s*\\n([\\s\\S]*?)(?=\\n###\\s+|$)`,
+                "i",
+              );
+              const match = body.match(regex);
+              if (!match) {
+                return "";
+              }
+              for (const line of match[1].split("\n")) {
+                const trimmed = line.trim();
+                if (trimmed) {
+                  return trimmed;
+                }
+              }
+              return "";
+            };
+
+            const ensureLabelExists = async (name, color, description) => {
+              try {
+                await github.rest.issues.getLabel({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  name,
+                });
+              } catch (error) {
+                if (error?.status !== 404) {
+                  throw error;
+                }
+                await github.rest.issues.createLabel({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  name,
+                  color,
+                  description,
+                });
+              }
+            };
+
+            const syncBugSubtypeLabel = async (issue, labelSet) => {
+              if (!labelSet.has("bug")) {
+                return;
+              }
+
+              const selectedBugType = extractIssueFormValue(issue.body ?? "", "Bug type");
+              const targetLabel = bugTypeToLabel[selectedBugType];
+              if (!targetLabel) {
+                return;
+              }
+
+              const targetSpec = bugSubtypeLabelSpecs[targetLabel];
+              await ensureLabelExists(targetLabel, targetSpec.color, targetSpec.description);
+
+              for (const subtypeLabel of bugSubtypeLabels) {
+                if (subtypeLabel === targetLabel) {
+                  continue;
+                }
+                if (!labelSet.has(subtypeLabel)) {
+                  continue;
+                }
+                try {
+                  await github.rest.issues.removeLabel({
+                    owner: context.repo.owner,
+                    repo: context.repo.repo,
+                    issue_number: issue.number,
+                    name: subtypeLabel,
+                  });
+                  labelSet.delete(subtypeLabel);
+                } catch (error) {
+                  if (error?.status !== 404) {
+                    throw error;
+                  }
+                }
+              }
+
+              if (!labelSet.has(targetLabel)) {
+                await github.rest.issues.addLabels({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: issue.number,
+                  labels: [targetLabel],
+                });
+                labelSet.add(targetLabel);
+              }
+            };
 
             const isMaintainer = async (login) => {
               if (!login) {
@@ -129,6 +261,8 @@ jobs:
             };
 
             const triggerLabel = "trigger-response";
+            const activePrLimitLabel = "r: too-many-prs";
+            const activePrLimitOverrideLabel = "r: too-many-prs-override";
             const target = context.payload.issue ?? context.payload.pull_request;
             if (!target) {
               return;
@@ -194,6 +328,8 @@ jobs:
                     body: pingWarningMessage,
                   });
                 }
+
+                await syncBugSubtypeLabel(issue, labelSet);
               }
             }
 
@@ -312,6 +448,10 @@ jobs:
                 state_reason: "not_planned",
               });
               return;
+            }
+
+            if (pullRequest && labelSet.has(activePrLimitOverrideLabel)) {
+              labelSet.delete(activePrLimitLabel);
             }
 
             const rule = rules.find((item) => labelSet.has(item.label));

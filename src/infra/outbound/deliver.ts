@@ -18,7 +18,14 @@ import {
   resolveMirroredTranscriptText,
 } from "../../config/sessions.js";
 import type { sendMessageDiscord } from "../../discord/send.js";
+import { fireAndForgetHook } from "../../hooks/fire-and-forget.js";
 import { createInternalHookEvent, triggerInternalHook } from "../../hooks/internal-hooks.js";
+import {
+  buildCanonicalSentMessageHookContext,
+  toInternalMessageSentContext,
+  toPluginMessageContext,
+  toPluginMessageSentEvent,
+} from "../../hooks/message-hook-mappers.js";
 import type { sendMessageIMessage } from "../../imessage/send.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { getAgentScopedMediaLocalRoots } from "../../media/local-roots.js";
@@ -33,6 +40,7 @@ import { ackDelivery, enqueueDelivery, failDelivery } from "./delivery-queue.js"
 import type { OutboundIdentity } from "./identity.js";
 import type { NormalizedOutboundPayload } from "./payloads.js";
 import { normalizeReplyPayloadsForDelivery } from "./payloads.js";
+import { isPlainTextSurface, sanitizeForPlainText } from "./sanitize-text.js";
 import type { OutboundSessionContext } from "./session-context.js";
 import type { OutboundChannel } from "./targets.js";
 
@@ -45,7 +53,13 @@ const TELEGRAM_TEXT_LIMIT = 4096;
 type SendMatrixMessage = (
   to: string,
   text: string,
-  opts?: { mediaUrl?: string; replyToId?: string; threadId?: string; timeoutMs?: number },
+  opts?: {
+    cfg?: OpenClawConfig;
+    mediaUrl?: string;
+    replyToId?: string;
+    threadId?: string;
+    timeoutMs?: number;
+  },
 ) => Promise<{ messageId: string; roomId: string }>;
 
 export type OutboundSendDeps = {
@@ -59,7 +73,7 @@ export type OutboundSendDeps = {
   sendMSTeams?: (
     to: string,
     text: string,
-    opts?: { mediaUrl?: string },
+    opts?: { mediaUrl?: string; mediaLocalRoots?: readonly string[] },
   ) => Promise<{ messageId: string; conversationId: string }>;
 };
 
@@ -83,6 +97,7 @@ type ChannelHandler = {
   chunker: Chunker | null;
   chunkerMode?: "text" | "markdown";
   textChunkLimit?: number;
+  supportsMedia: boolean;
   sendPayload?: (
     payload: ReplyPayload,
     overrides?: {
@@ -135,7 +150,7 @@ function createPluginHandler(
   params: ChannelHandlerParams & { outbound?: ChannelOutboundAdapter },
 ): ChannelHandler | null {
   const outbound = params.outbound;
-  if (!outbound?.sendText || !outbound?.sendMedia) {
+  if (!outbound?.sendText) {
     return null;
   }
   const baseCtx = createChannelOutboundContextBase(params);
@@ -155,6 +170,7 @@ function createPluginHandler(
     chunker,
     chunkerMode,
     textChunkLimit: outbound.textChunkLimit,
+    supportsMedia: Boolean(sendMedia),
     sendPayload: outbound.sendPayload
       ? async (payload, overrides) =>
           outbound.sendPayload!({
@@ -169,12 +185,19 @@ function createPluginHandler(
         ...resolveCtx(overrides),
         text,
       }),
-    sendMedia: async (caption, mediaUrl, overrides) =>
-      sendMedia({
+    sendMedia: async (caption, mediaUrl, overrides) => {
+      if (sendMedia) {
+        return sendMedia({
+          ...resolveCtx(overrides),
+          text: caption,
+          mediaUrl,
+        });
+      }
+      return sendText({
         ...resolveCtx(overrides),
         text: caption,
-        mediaUrl,
-      }),
+      });
+    },
   };
 }
 
@@ -219,6 +242,10 @@ type DeliverOutboundPayloadsCoreParams = {
     agentId?: string;
     text?: string;
     mediaUrls?: string[];
+    /** Whether this message is being sent in a group/channel context */
+    isGroup?: boolean;
+    /** Group or channel identifier for correlation with received events */
+    groupId?: string;
   };
   silent?: boolean;
 };
@@ -227,6 +254,212 @@ type DeliverOutboundPayloadsParams = DeliverOutboundPayloadsCoreParams & {
   /** @internal Skip write-ahead queue (used by crash-recovery to avoid re-enqueueing). */
   skipQueue?: boolean;
 };
+
+type MessageSentEvent = {
+  success: boolean;
+  content: string;
+  error?: string;
+  messageId?: string;
+};
+
+function hasMediaPayload(payload: ReplyPayload): boolean {
+  return Boolean(payload.mediaUrl) || (payload.mediaUrls?.length ?? 0) > 0;
+}
+
+function hasChannelDataPayload(payload: ReplyPayload): boolean {
+  return Boolean(payload.channelData && Object.keys(payload.channelData).length > 0);
+}
+
+function normalizePayloadForChannelDelivery(
+  payload: ReplyPayload,
+  channelId: string,
+): ReplyPayload | null {
+  const hasMedia = hasMediaPayload(payload);
+  const hasChannelData = hasChannelDataPayload(payload);
+  const rawText = typeof payload.text === "string" ? payload.text : "";
+  const normalizedText =
+    channelId === "whatsapp" ? rawText.replace(/^(?:[ \t]*\r?\n)+/, "") : rawText;
+  if (!normalizedText.trim()) {
+    if (!hasMedia && !hasChannelData) {
+      return null;
+    }
+    return {
+      ...payload,
+      text: "",
+    };
+  }
+  if (normalizedText === rawText) {
+    return payload;
+  }
+  return {
+    ...payload,
+    text: normalizedText,
+  };
+}
+
+function normalizePayloadsForChannelDelivery(
+  payloads: ReplyPayload[],
+  channel: Exclude<OutboundChannel, "none">,
+): ReplyPayload[] {
+  const normalizedPayloads: ReplyPayload[] = [];
+  for (const payload of normalizeReplyPayloadsForDelivery(payloads)) {
+    let sanitizedPayload = payload;
+    // Strip HTML tags for plain-text surfaces (WhatsApp, Signal, etc.)
+    // Models occasionally produce <br>, <b>, etc. that render as literal text.
+    // See https://github.com/openclaw/openclaw/issues/31884
+    if (isPlainTextSurface(channel) && payload.text) {
+      // Telegram sendPayload uses textMode:"html". Preserve raw HTML in this path.
+      if (!(channel === "telegram" && payload.channelData)) {
+        sanitizedPayload = { ...payload, text: sanitizeForPlainText(payload.text) };
+      }
+    }
+    const normalized = normalizePayloadForChannelDelivery(sanitizedPayload, channel);
+    if (normalized) {
+      normalizedPayloads.push(normalized);
+    }
+  }
+  return normalizedPayloads;
+}
+
+function buildPayloadSummary(payload: ReplyPayload): NormalizedOutboundPayload {
+  return {
+    text: payload.text ?? "",
+    mediaUrls: payload.mediaUrls ?? (payload.mediaUrl ? [payload.mediaUrl] : []),
+    channelData: payload.channelData,
+  };
+}
+
+function createMessageSentEmitter(params: {
+  hookRunner: ReturnType<typeof getGlobalHookRunner>;
+  channel: Exclude<OutboundChannel, "none">;
+  to: string;
+  accountId?: string;
+  sessionKeyForInternalHooks?: string;
+  mirrorIsGroup?: boolean;
+  mirrorGroupId?: string;
+}): { emitMessageSent: (event: MessageSentEvent) => void; hasMessageSentHooks: boolean } {
+  const hasMessageSentHooks = params.hookRunner?.hasHooks("message_sent") ?? false;
+  const canEmitInternalHook = Boolean(params.sessionKeyForInternalHooks);
+  const emitMessageSent = (event: MessageSentEvent) => {
+    if (!hasMessageSentHooks && !canEmitInternalHook) {
+      return;
+    }
+    const canonical = buildCanonicalSentMessageHookContext({
+      to: params.to,
+      content: event.content,
+      success: event.success,
+      error: event.error,
+      channelId: params.channel,
+      accountId: params.accountId ?? undefined,
+      conversationId: params.to,
+      messageId: event.messageId,
+      isGroup: params.mirrorIsGroup,
+      groupId: params.mirrorGroupId,
+    });
+    if (hasMessageSentHooks) {
+      fireAndForgetHook(
+        params.hookRunner!.runMessageSent(
+          toPluginMessageSentEvent(canonical),
+          toPluginMessageContext(canonical),
+        ),
+        "deliverOutboundPayloads: message_sent plugin hook failed",
+        (message) => {
+          log.warn(message);
+        },
+      );
+    }
+    if (!canEmitInternalHook) {
+      return;
+    }
+    fireAndForgetHook(
+      triggerInternalHook(
+        createInternalHookEvent(
+          "message",
+          "sent",
+          params.sessionKeyForInternalHooks!,
+          toInternalMessageSentContext(canonical),
+        ),
+      ),
+      "deliverOutboundPayloads: message:sent internal hook failed",
+      (message) => {
+        log.warn(message);
+      },
+    );
+  };
+  return { emitMessageSent, hasMessageSentHooks };
+}
+
+async function applyMessageSendingHook(params: {
+  hookRunner: ReturnType<typeof getGlobalHookRunner>;
+  enabled: boolean;
+  payload: ReplyPayload;
+  payloadSummary: NormalizedOutboundPayload;
+  to: string;
+  channel: Exclude<OutboundChannel, "none">;
+  accountId?: string;
+}): Promise<{
+  cancelled: boolean;
+  payload: ReplyPayload;
+  payloadSummary: NormalizedOutboundPayload;
+}> {
+  if (!params.enabled) {
+    return {
+      cancelled: false,
+      payload: params.payload,
+      payloadSummary: params.payloadSummary,
+    };
+  }
+  try {
+    const sendingResult = await params.hookRunner!.runMessageSending(
+      {
+        to: params.to,
+        content: params.payloadSummary.text,
+        metadata: {
+          channel: params.channel,
+          accountId: params.accountId,
+          mediaUrls: params.payloadSummary.mediaUrls,
+        },
+      },
+      {
+        channelId: params.channel,
+        accountId: params.accountId ?? undefined,
+      },
+    );
+    if (sendingResult?.cancel) {
+      return {
+        cancelled: true,
+        payload: params.payload,
+        payloadSummary: params.payloadSummary,
+      };
+    }
+    if (sendingResult?.content == null) {
+      return {
+        cancelled: false,
+        payload: params.payload,
+        payloadSummary: params.payloadSummary,
+      };
+    }
+    const payload = {
+      ...params.payload,
+      text: sendingResult.content,
+    };
+    return {
+      cancelled: false,
+      payload,
+      payloadSummary: {
+        ...params.payloadSummary,
+        text: sendingResult.content,
+      },
+    };
+  } catch {
+    // Don't block delivery on hook failure.
+    return {
+      cancelled: false,
+      payload: params.payload,
+      payloadSummary: params.payloadSummary,
+    };
+  }
+}
 
 export async function deliverOutboundPayloads(
   params: DeliverOutboundPayloadsParams,
@@ -382,6 +615,7 @@ async function deliverOutboundPayloadsCore(
     return {
       channel: "signal" as const,
       ...(await sendSignal(to, text, {
+        cfg,
         maxBytes: signalMaxBytes,
         accountId: accountId ?? undefined,
         textMode: "plain",
@@ -418,6 +652,7 @@ async function deliverOutboundPayloadsCore(
     return {
       channel: "signal" as const,
       ...(await sendSignal(to, formatted.text, {
+        cfg,
         mediaUrl,
         maxBytes: signalMaxBytes,
         accountId: accountId ?? undefined,
@@ -427,38 +662,22 @@ async function deliverOutboundPayloadsCore(
       })),
     };
   };
-  const normalizeWhatsAppPayload = (payload: ReplyPayload): ReplyPayload | null => {
-    const hasMedia = Boolean(payload.mediaUrl) || (payload.mediaUrls?.length ?? 0) > 0;
-    const rawText = typeof payload.text === "string" ? payload.text : "";
-    const normalizedText = rawText.replace(/^(?:[ \t]*\r?\n)+/, "");
-    if (!normalizedText.trim()) {
-      if (!hasMedia) {
-        return null;
-      }
-      return {
-        ...payload,
-        text: "",
-      };
-    }
-    return {
-      ...payload,
-      text: normalizedText,
-    };
-  };
-  const normalizedPayloads = normalizeReplyPayloadsForDelivery(payloads).flatMap((payload) => {
-    if (channel !== "whatsapp") {
-      return [payload];
-    }
-    const normalized = normalizeWhatsAppPayload(payload);
-    return normalized ? [normalized] : [];
-  });
+  const normalizedPayloads = normalizePayloadsForChannelDelivery(payloads, channel);
   const hookRunner = getGlobalHookRunner();
   const sessionKeyForInternalHooks = params.mirror?.sessionKey ?? params.session?.key;
-  if (
-    hookRunner?.hasHooks("message_sent") &&
-    params.session?.agentId &&
-    !sessionKeyForInternalHooks
-  ) {
+  const mirrorIsGroup = params.mirror?.isGroup;
+  const mirrorGroupId = params.mirror?.groupId;
+  const { emitMessageSent, hasMessageSentHooks } = createMessageSentEmitter({
+    hookRunner,
+    channel,
+    to,
+    accountId,
+    sessionKeyForInternalHooks,
+    mirrorIsGroup,
+    mirrorGroupId,
+  });
+  const hasMessageSendingHooks = hookRunner?.hasHooks("message_sending") ?? false;
+  if (hasMessageSentHooks && params.session?.agentId && !sessionKeyForInternalHooks) {
     log.warn(
       "deliverOutboundPayloads: session.agentId present without session key; internal message:sent hook will be skipped",
       {
@@ -469,79 +688,25 @@ async function deliverOutboundPayloadsCore(
     );
   }
   for (const payload of normalizedPayloads) {
-    const payloadSummary: NormalizedOutboundPayload = {
-      text: payload.text ?? "",
-      mediaUrls: payload.mediaUrls ?? (payload.mediaUrl ? [payload.mediaUrl] : []),
-      channelData: payload.channelData,
-    };
-    const emitMessageSent = (params: {
-      success: boolean;
-      content: string;
-      error?: string;
-      messageId?: string;
-    }) => {
-      if (hookRunner?.hasHooks("message_sent")) {
-        void hookRunner
-          .runMessageSent(
-            {
-              to,
-              content: params.content,
-              success: params.success,
-              ...(params.error ? { error: params.error } : {}),
-            },
-            {
-              channelId: channel,
-              accountId: accountId ?? undefined,
-              conversationId: to,
-            },
-          )
-          .catch(() => {});
-      }
-      if (!sessionKeyForInternalHooks) {
-        return;
-      }
-      void triggerInternalHook(
-        createInternalHookEvent("message", "sent", sessionKeyForInternalHooks, {
-          to,
-          content: params.content,
-          success: params.success,
-          ...(params.error ? { error: params.error } : {}),
-          channelId: channel,
-          accountId: accountId ?? undefined,
-          conversationId: to,
-          messageId: params.messageId,
-        }),
-      ).catch(() => {});
-    };
+    let payloadSummary = buildPayloadSummary(payload);
     try {
       throwIfAborted(abortSignal);
 
       // Run message_sending plugin hook (may modify content or cancel)
-      let effectivePayload = payload;
-      if (hookRunner?.hasHooks("message_sending")) {
-        try {
-          const sendingResult = await hookRunner.runMessageSending(
-            {
-              to,
-              content: payloadSummary.text,
-              metadata: { channel, accountId, mediaUrls: payloadSummary.mediaUrls },
-            },
-            {
-              channelId: channel,
-              accountId: accountId ?? undefined,
-            },
-          );
-          if (sendingResult?.cancel) {
-            continue;
-          }
-          if (sendingResult?.content != null) {
-            effectivePayload = { ...payload, text: sendingResult.content };
-            payloadSummary.text = sendingResult.content;
-          }
-        } catch {
-          // Don't block delivery on hook failure
-        }
+      const hookResult = await applyMessageSendingHook({
+        hookRunner,
+        enabled: hasMessageSendingHooks,
+        payload,
+        payloadSummary,
+        to,
+        channel,
+        accountId,
+      });
+      if (hookResult.cancelled) {
+        continue;
       }
+      const effectivePayload = hookResult.payload;
+      payloadSummary = hookResult.payloadSummary;
 
       params.onPayload?.(payloadSummary);
       const sendOverrides = {
@@ -565,6 +730,32 @@ async function deliverOutboundPayloadsCore(
         } else {
           await sendTextChunks(payloadSummary.text, sendOverrides);
         }
+        const messageId = results.at(-1)?.messageId;
+        emitMessageSent({
+          success: results.length > beforeCount,
+          content: payloadSummary.text,
+          messageId,
+        });
+        continue;
+      }
+
+      if (!handler.supportsMedia) {
+        log.warn(
+          "Plugin outbound adapter does not implement sendMedia; media URLs will be dropped and text fallback will be used",
+          {
+            channel,
+            to,
+            mediaCount: payloadSummary.mediaUrls.length,
+          },
+        );
+        const fallbackText = payloadSummary.text.trim();
+        if (!fallbackText) {
+          throw new Error(
+            "Plugin outbound adapter does not implement sendMedia and no text fallback is available for media payload",
+          );
+        }
+        const beforeCount = results.length;
+        await sendTextChunks(fallbackText, sendOverrides);
         const messageId = results.at(-1)?.messageId;
         emitMessageSent({
           success: results.length > beforeCount,

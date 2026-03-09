@@ -24,11 +24,19 @@ describe("FeishuConfigSchema webhook validation", () => {
     expect(result.accounts?.main?.requireMention).toBeUndefined();
   });
 
+  it("normalizes legacy groupPolicy allowall to open", () => {
+    const result = FeishuConfigSchema.parse({
+      groupPolicy: "allowall",
+    });
+
+    expect(result.groupPolicy).toBe("open");
+  });
+
   it("rejects top-level webhook mode without verificationToken", () => {
     const result = FeishuConfigSchema.safeParse({
       connectionMode: "webhook",
       appId: "cli_top",
-      appSecret: "secret_top",
+      appSecret: "secret_top", // pragma: allowlist secret
     });
 
     expect(result.success).toBe(false);
@@ -44,7 +52,7 @@ describe("FeishuConfigSchema webhook validation", () => {
       connectionMode: "webhook",
       verificationToken: "token_top",
       appId: "cli_top",
-      appSecret: "secret_top",
+      appSecret: "secret_top", // pragma: allowlist secret
     });
 
     expect(result.success).toBe(true);
@@ -56,7 +64,7 @@ describe("FeishuConfigSchema webhook validation", () => {
         main: {
           connectionMode: "webhook",
           appId: "cli_main",
-          appSecret: "secret_main",
+          appSecret: "secret_main", // pragma: allowlist secret
         },
       },
     });
@@ -78,8 +86,27 @@ describe("FeishuConfigSchema webhook validation", () => {
         main: {
           connectionMode: "webhook",
           appId: "cli_main",
-          appSecret: "secret_main",
+          appSecret: "secret_main", // pragma: allowlist secret
         },
+      },
+    });
+
+    expect(result.success).toBe(true);
+  });
+
+  it("accepts SecretRef verificationToken in webhook mode", () => {
+    const result = FeishuConfigSchema.safeParse({
+      connectionMode: "webhook",
+      verificationToken: {
+        source: "env",
+        provider: "default",
+        id: "FEISHU_VERIFICATION_TOKEN",
+      },
+      appId: "cli_top",
+      appSecret: {
+        source: "env",
+        provider: "default",
+        id: "FEISHU_APP_SECRET",
       },
     });
 
@@ -115,5 +142,55 @@ describe("FeishuConfigSchema replyInThread", () => {
       },
     });
     expect(result.accounts?.main?.replyInThread).toBe("enabled");
+  });
+});
+
+describe("FeishuConfigSchema optimization flags", () => {
+  it("defaults top-level typingIndicator and resolveSenderNames to true", () => {
+    const result = FeishuConfigSchema.parse({});
+    expect(result.typingIndicator).toBe(true);
+    expect(result.resolveSenderNames).toBe(true);
+  });
+
+  it("accepts account-level optimization flags", () => {
+    const result = FeishuConfigSchema.parse({
+      accounts: {
+        main: {
+          typingIndicator: false,
+          resolveSenderNames: false,
+        },
+      },
+    });
+    expect(result.accounts?.main?.typingIndicator).toBe(false);
+    expect(result.accounts?.main?.resolveSenderNames).toBe(false);
+  });
+});
+
+describe("FeishuConfigSchema defaultAccount", () => {
+  it("accepts defaultAccount when it matches an account key", () => {
+    const result = FeishuConfigSchema.safeParse({
+      defaultAccount: "router-d",
+      accounts: {
+        "router-d": { appId: "cli_router", appSecret: "secret_router" }, // pragma: allowlist secret
+      },
+    });
+
+    expect(result.success).toBe(true);
+  });
+
+  it("rejects defaultAccount when it does not match an account key", () => {
+    const result = FeishuConfigSchema.safeParse({
+      defaultAccount: "router-d",
+      accounts: {
+        backup: { appId: "cli_backup", appSecret: "secret_backup" }, // pragma: allowlist secret
+      },
+    });
+
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error.issues.some((issue) => issue.path.join(".") === "defaultAccount")).toBe(
+        true,
+      );
+    }
   });
 });

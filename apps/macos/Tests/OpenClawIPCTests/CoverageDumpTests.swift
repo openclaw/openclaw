@@ -4,7 +4,7 @@ import Testing
 
 @Suite(.serialized)
 struct CoverageDumpTests {
-    @Test func periodicallyFlushCoverage() async {
+    @Test func `periodically flush coverage`() async {
         guard ProcessInfo.processInfo.environment["LLVM_PROFILE_FILE"] != nil else { return }
         guard let writeProfile = resolveProfileWriteFile() else { return }
         let deadline = Date().addingTimeInterval(4)

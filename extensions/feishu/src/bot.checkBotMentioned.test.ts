@@ -3,7 +3,7 @@ import { parseFeishuMessageEvent } from "./bot.js";
 
 // Helper to build a minimal FeishuMessageEvent for testing
 function makeEvent(
-  chatType: "p2p" | "group",
+  chatType: "p2p" | "group" | "private",
   mentions?: Array<{ key: string; name: string; id: { open_id?: string } }>,
   text = "hello",
 ) {
@@ -59,11 +59,28 @@ describe("parseFeishuMessageEvent – mentionedBot", () => {
     expect(ctx.mentionedBot).toBe(false);
   });
 
+  it("falls back to sender user_id when open_id is missing", () => {
+    const event = makeEvent("p2p", []);
+    (event as any).sender.sender_id = { user_id: "u_mobile_only" };
+
+    const ctx = parseFeishuMessageEvent(event as any, BOT_OPEN_ID);
+    expect(ctx.senderOpenId).toBe("u_mobile_only");
+    expect(ctx.senderId).toBe("u_mobile_only");
+  });
+
   it("returns mentionedBot=true when bot is mentioned", () => {
     const event = makeEvent("group", [
       { key: "@_user_1", name: "Bot", id: { open_id: BOT_OPEN_ID } },
     ]);
     const ctx = parseFeishuMessageEvent(event as any, BOT_OPEN_ID);
+    expect(ctx.mentionedBot).toBe(true);
+  });
+
+  it("returns mentionedBot=true when bot mention name differs from configured botName", () => {
+    const event = makeEvent("group", [
+      { key: "@_user_1", name: "OpenClaw Bot (Alias)", id: { open_id: BOT_OPEN_ID } },
+    ]);
+    const ctx = parseFeishuMessageEvent(event as any, BOT_OPEN_ID, "OpenClaw Bot");
     expect(ctx.mentionedBot).toBe(true);
   });
 

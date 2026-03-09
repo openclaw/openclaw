@@ -1,8 +1,8 @@
-export function normalizeStringEntries(list?: Array<string | number>) {
+export function normalizeStringEntries(list?: ReadonlyArray<unknown>) {
   return (list ?? []).map((entry) => String(entry).trim()).filter(Boolean);
 }
 
-export function normalizeStringEntriesLower(list?: Array<string | number>) {
+export function normalizeStringEntriesLower(list?: ReadonlyArray<unknown>) {
   return normalizeStringEntries(list).map((entry) => entry.toLowerCase());
 }
 
