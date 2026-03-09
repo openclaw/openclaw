@@ -1,6 +1,6 @@
 ---
 name: openhue
-description: Control Philips Hue lights and scenes via the OpenHue CLI.
+description: "Control Philips Hue lights and scenes via the OpenHue CLI. Use when turning lights on/off, adjusting brightness/color, activating scenes, or managing Hue rooms and groups. Trigger phrases: 'turn on the lights', 'dim', 'set color', 'activate scene', 'turn off Hue'. NOT for: non-Hue smart lights (use Hubitat or other home automation skills)."
 homepage: https://www.openhue.io/cli
 metadata:
   {

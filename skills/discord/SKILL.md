@@ -1,6 +1,6 @@
 ---
 name: discord
-description: "Discord ops via the message tool (channel=discord)."
+description: "Discord ops via the message tool (channel=discord). Use when sending messages, reacting, managing channels, threads, polls, roles, or events on Discord. Trigger phrases: 'post to Discord', 'send in #channel', 'react to message', 'create thread', 'pin this'. NOT for: Telegram, Slack, or other messaging platforms (use their respective skills)."
 metadata: { "openclaw": { "emoji": "🎮", "requires": { "config": ["channels.discord.token"] } } }
 allowed-tools: ["message"]
 ---

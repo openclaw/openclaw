@@ -1,6 +1,6 @@
 ---
 name: video-frames
-description: Extract frames or short clips from videos using ffmpeg.
+description: "Extract frames or short clips from videos using ffmpeg. Use when capturing screenshots from video, creating frame grids, or trimming clips. Trigger phrases: 'extract frame', 'screenshot from video', 'grab a clip', 'capture at timestamp', 'make a thumbnail from video'. NOT for: full video transcription (use summarize skill), audio extraction only, or downloading online videos."
 homepage: https://ffmpeg.org
 metadata:
   {
