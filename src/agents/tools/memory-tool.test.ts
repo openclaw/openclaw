@@ -241,6 +241,45 @@ describe("memory write tools", () => {
     expect(content).toBe("- [key:favorite-food] sushi\n- [key:other] tacos\n");
   });
 
+  it("memory_upsert preserves unrelated top-level markdown blocks", async () => {
+    const workspace = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-memory-upsert-blocks-"));
+    await fs.writeFile(
+      path.join(workspace, "MEMORY.md"),
+      [
+        "- [key:favorite-food] pizza",
+        "## preferences",
+        "* spicy",
+        "plain note",
+        "- [key:other] tacos",
+      ].join("\n") + "\n",
+      "utf-8",
+    );
+    const cfg = configWithWorkspace(workspace);
+    const tool = createMemoryUpsertTool({ config: cfg });
+    expect(tool).not.toBeNull();
+    if (!tool) {
+      throw new Error("tool missing");
+    }
+
+    await tool.execute("call_upsert_blocks", {
+      key: "favorite-food",
+      text: "sushi",
+      target: "longterm",
+    });
+
+    const content = await fs.readFile(path.join(workspace, "MEMORY.md"), "utf-8");
+    expect(content).toBe(
+      [
+        "- [key:favorite-food] sushi",
+        "## preferences",
+        "* spicy",
+        "plain note",
+        "- [key:other] tacos",
+        "",
+      ].join("\n"),
+    );
+  });
+
   it("memory_upsert preserves all concurrent keyed writes to the same file", async () => {
     const workspace = await fs.mkdtemp(
       path.join(os.tmpdir(), "openclaw-memory-upsert-concurrent-"),
@@ -268,6 +307,42 @@ describe("memory write tools", () => {
       expect(content).toContain(`[key:pref-${index}]`);
       expect(content).toContain(`value-${index}`);
     }
+  });
+
+  it("memory_upsert propagates non-missing read errors without rewriting", async () => {
+    const workspace = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-memory-upsert-readerr-"));
+    const memoryPath = path.join(workspace, "MEMORY.md");
+    await fs.writeFile(memoryPath, "- [key:favorite-food] pizza\n- [key:other] tacos\n", "utf-8");
+    const cfg = configWithWorkspace(workspace);
+    const tool = createMemoryUpsertTool({ config: cfg });
+    expect(tool).not.toBeNull();
+    if (!tool) {
+      throw new Error("tool missing");
+    }
+
+    const originalReadFile = fs.readFile.bind(fs);
+    const readFileSpy = vi.spyOn(fs, "readFile");
+    readFileSpy.mockImplementationOnce(async (target, options) => {
+      if (target === memoryPath && options === "utf-8") {
+        const error = new Error("permission denied") as NodeJS.ErrnoException;
+        error.code = "EACCES";
+        throw error;
+      }
+      // oxlint-disable-next-line typescript/no-explicit-any
+      return originalReadFile(target as any, options as any);
+    });
+
+    await expect(
+      tool.execute("call_upsert_readerr", {
+        key: "favorite-food",
+        text: "sushi",
+        target: "longterm",
+      }),
+    ).rejects.toMatchObject({ message: "permission denied" });
+
+    readFileSpy.mockRestore();
+    const content = await fs.readFile(memoryPath, "utf-8");
+    expect(content).toBe("- [key:favorite-food] pizza\n- [key:other] tacos\n");
   });
 
   it("memory_write normalizes metadata into a single delimiter-safe line", async () => {
@@ -353,6 +428,48 @@ describe("memory write tools", () => {
     expect(legacyContent).toContain("existing note");
     expect(legacyContent).toContain("remember this too");
     await expect(fs.access(path.join(workspace, "MEMORY.md"))).rejects.toThrow();
+  });
+
+  it("rejects symlinked longterm memory targets", async () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    const workspace = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-memory-symlink-"));
+    const externalPath = path.join(os.tmpdir(), `openclaw-memory-external-${Date.now()}.md`);
+    await fs.writeFile(externalPath, "- external note\n", "utf-8");
+    await fs.symlink(externalPath, path.join(workspace, "MEMORY.md"));
+
+    const cfg = configWithWorkspace(workspace);
+    const writeTool = createMemoryWriteTool({ config: cfg });
+    const upsertTool = createMemoryUpsertTool({ config: cfg });
+    expect(writeTool).not.toBeNull();
+    expect(upsertTool).not.toBeNull();
+    if (!writeTool || !upsertTool) {
+      throw new Error("tool missing");
+    }
+
+    await expect(
+      writeTool.execute("call_write_symlink", {
+        text: "remember this",
+        target: "longterm",
+      }),
+    ).rejects.toMatchObject({
+      name: "ToolInputError",
+      message: "memory path cannot use symlinks",
+    } satisfies Partial<ToolInputError>);
+
+    await expect(
+      upsertTool.execute("call_upsert_symlink", {
+        key: "favorite-food",
+        text: "sushi",
+        target: "longterm",
+      }),
+    ).rejects.toMatchObject({
+      name: "ToolInputError",
+      message: "memory path cannot use symlinks",
+    } satisfies Partial<ToolInputError>);
+
+    expect(await fs.readFile(externalPath, "utf-8")).toBe("- external note\n");
   });
 
   it("memory_write surfaces invalid target/date as ToolInputError", async () => {
