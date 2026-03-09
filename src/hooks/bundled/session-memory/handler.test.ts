@@ -659,11 +659,14 @@ describe("session-memory hook", () => {
       content: createMockSessionContent([{ role: "user", content: "first session" }]),
     });
 
-    // Pin Math.random to force deterministic slug — both handler calls
-    // produce the same fallback filename, exercising the slug-collision
-    // restoration path (preExistingContent !== null).
+    // Pin Math.random AND timestamp to force deterministic slug — both
+    // handler calls produce the same fallback filename, exercising the
+    // slug-collision restoration path (preExistingContent !== null).
+    // Without pinning the clock, a wall-clock second boundary between
+    // event1 and event2 would produce different HHMMSS prefixes → no collision.
     const origRandom = Math.random;
     Math.random = () => 0.5;
+    const fixedTimestamp = new Date("2024-01-15T12:34:56.000Z");
 
     try {
       // First handler: creates memory file with deterministic slug.
@@ -671,6 +674,7 @@ describe("session-memory hook", () => {
         cfg: { agents: { defaults: { workspace: tempDir } } } satisfies OpenClawConfig,
         previousSessionEntry: { sessionId: "s1", sessionFile },
       });
+      event1.timestamp = fixedTimestamp;
       await handler(event1);
       await drainPostHookActions(event1);
 
@@ -692,6 +696,7 @@ describe("session-memory hook", () => {
         cfg: { agents: { defaults: { workspace: tempDir } } } satisfies OpenClawConfig,
         previousSessionEntry: { sessionId: "s2", sessionFile: sessionFile2 },
       });
+      event2.timestamp = fixedTimestamp;
       await handler(event2);
 
       // Verify the file was overwritten by second handler.

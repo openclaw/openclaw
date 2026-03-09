@@ -354,6 +354,8 @@ const saveSessionToMemory: HookHandler = async (event) => {
 
     // Use custom content from upstream hook if available, otherwise build entry.
     // hasCustomContent (set above) already gates session loading + slug generation.
+    // When blockPreSet is true, skip entry construction entirely — the inline
+    // write won't happen and the value would be discarded.
     let entry: string;
     if (hasCustomContent) {
       // An empty string is a valid redaction signal — hooks may intentionally
@@ -362,7 +364,7 @@ const saveSessionToMemory: HookHandler = async (event) => {
       log.debug("Using custom session content from upstream hook", {
         length: entry.length,
       });
-    } else {
+    } else if (!blockPreSet) {
       const entryParts = [
         `# Session: ${dateStr} ${timeStr} UTC`,
         "",
@@ -377,6 +379,8 @@ const saveSessionToMemory: HookHandler = async (event) => {
       }
 
       entry = entryParts.join("\n");
+    } else {
+      entry = ""; // Block pre-set — writtenEntry will be null regardless.
     }
 
     // Write inline (fail-safe: if postHookActions never drains, the file
@@ -387,7 +391,7 @@ const saveSessionToMemory: HookHandler = async (event) => {
     // retraction can restore it instead of deleting — preventing accidental
     // erasure of prior memory files when LLM slugs collide on the same day.
     let preExistingContent: string | null = null;
-    if (context.blockSessionSave === true) {
+    if (blockPreSet) {
       log.debug("Session save blocked by upstream hook (inline check)");
     } else {
       await fs.mkdir(memoryDir, { recursive: true });
