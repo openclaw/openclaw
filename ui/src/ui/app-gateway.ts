@@ -318,7 +318,7 @@ function handleChatGatewayEvent(host: GatewayHost, payload: ChatEventPayload | u
   }
   const state = handleChatEvent(host as unknown as OpenClawApp, payload);
   const historyReloaded = handleTerminalChatEvent(host, payload, state);
-  if (state === "final") {
+  if (state === "final" || state === "error" || state === "aborted") {
     stopChatPoll(host as unknown as import("./app-chat.ts").ChatHost);
   }
   if (state === "final" && !historyReloaded && shouldReloadHistoryForFinalEvent(payload)) {
