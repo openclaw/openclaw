@@ -1,5 +1,11 @@
 {
   "$schema": "https://raw.githubusercontent.com/openclaw/openclaw/main/docs/schema.json",
+  "browser": {
+    "enabled": true,
+    "headless": true,
+    "noSandbox": true,
+    "executablePath": "/opt/google/chrome/chrome"
+  },
   "agents": {
     "defaults": {
       "model": "openai/${OPENAI_MODEL}",
