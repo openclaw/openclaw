@@ -272,8 +272,11 @@ describe("deliverDiscordReply", () => {
 
     expect(sendMessageDiscordMock).not.toHaveBeenCalled();
     expect(sendDiscordTextMock).toHaveBeenCalledTimes(1);
-    expect(sendDiscordTextMock.mock.calls[0]?.[5]).toBe(120);
-    expect(sendDiscordTextMock.mock.calls[0]?.[8]).toBe("newline");
+    const firstSendDiscordTextCall = sendDiscordTextMock.mock.calls[0];
+    const [, , , , , maxLinesPerMessageArg, , , chunkModeArg] = firstSendDiscordTextCall ?? [];
+
+    expect(maxLinesPerMessageArg).toBe(120);
+    expect(chunkModeArg).toBe("newline");
   });
 
   it("falls back to sendMessageDiscord when rest is not provided", async () => {
