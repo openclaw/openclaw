@@ -424,6 +424,9 @@ export const TtsConfigSchema = z
       .strict()
       .optional(),
     prefsPath: z.string().optional(),
+    stripCodeBlocks: z.boolean().optional(),
+    stripTables: z.boolean().optional(),
+    processTtsTags: z.boolean().optional(),
     maxTextLength: z.number().int().min(1).optional(),
     timeoutMs: z.number().int().min(1000).max(120000).optional(),
   })

@@ -17,6 +17,62 @@ import type {
   TtsDirectiveParseResult,
 } from "./tts.js";
 
+export type TtsPreprocessOptions = {
+  stripCodeBlocks?: boolean;
+  stripTables?: boolean;
+  processTtsTags?: boolean;
+};
+
+/**
+ * Preprocess text for TTS output, producing two variants:
+ * - spokenText: cleaned for speech synthesis (code/tables stripped, <tts> tags replaced with content)
+ * - visibleText: cleaned for chat display (<tts> tags removed entirely, everything else kept)
+ *
+ * Note: `parseTtsDirectives` runs *before* this function in the pipeline,
+ * so [[tts:…]] directives inside <tts> tags ARE still processed (they get
+ * stripped from `cleanedText` before we ever see it). This is intentional —
+ * it means directives work regardless of where they appear in the reply.
+ */
+export function preprocessTtsText(
+  text: string,
+  options?: TtsPreprocessOptions,
+): { visibleText: string; spokenText: string } {
+  const stripCode = options?.stripCodeBlocks ?? true;
+  const stripTables = options?.stripTables ?? true;
+  const processTtsTags = options?.processTtsTags ?? true;
+
+  let visibleText = text;
+  let spokenText = text;
+
+  if (processTtsTags) {
+    // spokenText: replace <tts>content</tts> with the inner content
+    spokenText = spokenText.replace(/<tts>([\s\S]*?)<\/tts>/gi, "$1");
+    // visibleText: remove <tts>...</tts> entirely
+    visibleText = visibleText.replace(/<tts>[\s\S]*?<\/tts>/gi, "");
+  }
+
+  if (stripCode) {
+    // Remove fenced code blocks (``` ... ```) from spoken text.
+    // Allows optional leading whitespace so indented fences (e.g. inside
+    // blockquotes or list items) are matched too.
+    // Limitation: an unclosed fence (opening ``` with no closing ```) is not
+    // stripped — the regex requires a matching pair.
+    spokenText = spokenText.replace(/^\s*```[^\n]*\n[\s\S]*?^\s*```\s*$/gm, "");
+  }
+
+  if (stripTables) {
+    // Remove markdown table lines — require `|` at both start and end of
+    // line to avoid false positives on shell pipes, OR operators, and math.
+    spokenText = spokenText.replace(/^\|.*\|$/gm, "");
+  }
+
+  // Clean up excessive blank lines in both outputs
+  visibleText = visibleText.replace(/\n{3,}/g, "\n\n").trim();
+  spokenText = spokenText.replace(/\n{3,}/g, "\n\n").trim();
+
+  return { visibleText, spokenText };
+}
+
 const DEFAULT_ELEVENLABS_BASE_URL = "https://api.elevenlabs.io";
 export const DEFAULT_OPENAI_BASE_URL = "https://api.openai.com/v1";
 const TEMP_FILE_CLEANUP_DELAY_MS = 5 * 60 * 1000; // 5 minutes

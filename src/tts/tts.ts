@@ -39,6 +39,7 @@ import {
   OPENAI_TTS_VOICES,
   openaiTTS,
   parseTtsDirectives,
+  preprocessTtsText,
   scheduleCleanup,
   summarizeText,
 } from "./tts-core.js";
@@ -835,19 +836,38 @@ export async function maybeApplyTtsToPayload(params: {
   }
 
   const cleanedText = directives.cleanedText;
-  const trimmedCleaned = cleanedText.trim();
-  const visibleText = trimmedCleaned.length > 0 ? trimmedCleaned : "";
-  const ttsText = directives.ttsText?.trim() || visibleText;
 
+  // Stage 1 of text cleanup: structural preprocessing.
+  // `preprocessTtsText` handles block-level constructs — fenced code blocks,
+  // markdown tables, and <tts> alternative-text tags. It produces separate
+  // spokenText (for the TTS engine) and visibleText (for chat display).
+  // Stage 2 (`stripMarkdown`, below at ~line 919) handles inline formatting
+  // (bold/italic markers, heading hashes, etc.) on the final audio text only.
+  // Both stages are complementary: block-level first, then inline cleanup.
+  const preprocessOpts = {
+    stripCodeBlocks: params.cfg.messages?.tts?.stripCodeBlocks,
+    stripTables: params.cfg.messages?.tts?.stripTables,
+    processTtsTags: params.cfg.messages?.tts?.processTtsTags,
+  };
+  const preprocessed = preprocessTtsText(cleanedText, preprocessOpts);
+
+  const visibleText = preprocessed.visibleText ?? "";
+  const ttsText = directives.ttsText?.trim() || preprocessed.spokenText || "";
+
+  // Compare against cleanedText (directives already stripped) — not the
+  // original text, which may still contain <tts> tags that visibleText lacks.
   const nextPayload =
-    visibleText === text.trim()
+    visibleText === cleanedText.trim()
       ? params.payload
       : {
           ...params.payload,
           text: visibleText.length > 0 ? visibleText : undefined,
         };
 
-  if (autoMode === "tagged" && !directives.hasDirective) {
+  // <tts> tags count as a directive for "tagged" auto-mode: the author
+  // explicitly marked speech-alternative content, so audio should fire.
+  const hasTtsTags = /<tts>/i.test(cleanedText);
+  if (autoMode === "tagged" && !directives.hasDirective && !hasTtsTags) {
     return nextPayload;
   }
   if (autoMode === "inbound" && params.inboundAudio !== true) {
@@ -907,7 +927,9 @@ export async function maybeApplyTtsToPayload(params: {
     }
   }
 
-  textForAudio = stripMarkdown(textForAudio).trim(); // strip markdown for TTS (### → "hashtag" etc.)
+  // Stage 2: strip inline markdown (### → "hashtag", **bold** → "bold", etc.)
+  // after block-level constructs were already removed by preprocessTtsText.
+  textForAudio = stripMarkdown(textForAudio).trim();
   if (textForAudio.length < 10) {
     return nextPayload;
   }
