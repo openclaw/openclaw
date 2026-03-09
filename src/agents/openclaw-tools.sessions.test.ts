@@ -617,8 +617,18 @@ describe("sessions tools", () => {
       expect(call.params).toMatchObject({
         lane: "nested",
         channel: "webchat",
-        inputProvenance: { kind: "inter_session" },
+        inputProvenance: { kind: "inter_session", sourceTool: "sessions_send" },
       });
+    }
+    const messageContextPrompts = agentCalls
+      .map((call) => (call.params as { extraSystemPrompt?: string })?.extraSystemPrompt)
+      .filter(
+        (prompt): prompt is string =>
+          typeof prompt === "string" && prompt.includes("Agent-to-agent message context"),
+      );
+    expect(messageContextPrompts.length).toBeGreaterThan(0);
+    for (const prompt of messageContextPrompts) {
+      expect(prompt).not.toContain(`Agent 1 (requester) session: ${requesterKey}.`);
     }
     expect(
       agentCalls.some(

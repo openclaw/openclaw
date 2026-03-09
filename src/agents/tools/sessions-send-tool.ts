@@ -213,7 +213,6 @@ export function createSessionsSendTool(opts?: {
       }
 
       const agentMessageContext = buildAgentToAgentMessageContext({
-        requesterSessionKey: opts?.agentSessionKey,
         requesterChannel: opts?.agentChannel,
         targetSessionKey: displayKey,
       });

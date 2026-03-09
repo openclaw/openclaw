@@ -69,7 +69,6 @@ export async function runSessionsSendA2AFlow(params: {
         const currentRole =
           currentSessionKey === params.requesterSessionKey ? "requester" : "target";
         const replyPrompt = buildAgentToAgentReplyContext({
-          requesterSessionKey: params.requesterSessionKey,
           requesterChannel: params.requesterChannel,
           targetSessionKey: params.displayKey,
           targetChannel,
@@ -100,7 +99,6 @@ export async function runSessionsSendA2AFlow(params: {
     }
 
     const announcePrompt = buildAgentToAgentAnnounceContext({
-      requesterSessionKey: params.requesterSessionKey,
       requesterChannel: params.requesterChannel,
       targetSessionKey: params.displayKey,
       targetChannel,
