@@ -19,6 +19,7 @@ import {
 } from "./cdp.helpers.js";
 import { normalizeCdpWsUrl } from "./cdp.js";
 import { getChromeWebSocketUrl } from "./chrome.js";
+import { BrowserTabNotFoundError } from "./errors.js";
 import {
   assertBrowserNavigationAllowed,
   assertBrowserNavigationResultAllowed,
@@ -495,7 +496,7 @@ async function resolvePageByTargetIdOrThrow(opts: {
   const { browser } = await connectBrowser(opts.cdpUrl);
   const page = await findPageByTargetId(browser, opts.targetId, opts.cdpUrl);
   if (!page) {
-    throw new Error("tab not found");
+    throw new BrowserTabNotFoundError();
   }
   return page;
 }
@@ -521,7 +522,7 @@ export async function getPageForTargetId(opts: {
     if (pages.length === 1) {
       return first;
     }
-    throw new Error("tab not found");
+    throw new BrowserTabNotFoundError();
   }
   return found;
 }

@@ -1,11 +1,6 @@
 import path from "node:path";
 import { ensureMediaDir, saveMediaBuffer } from "../../media/store.js";
 import { captureScreenshot, snapshotAria } from "../cdp.js";
-import {
-  DEFAULT_AI_SNAPSHOT_EFFICIENT_DEPTH,
-  DEFAULT_AI_SNAPSHOT_EFFICIENT_MAX_CHARS,
-  DEFAULT_AI_SNAPSHOT_MAX_CHARS,
-} from "../constants.js";
 import { withBrowserNavigationPolicy } from "../navigation-guard.js";
 import {
   DEFAULT_BROWSER_SCREENSHOT_MAX_BYTES,
@@ -22,8 +17,13 @@ import {
   withPlaywrightRouteContext,
   withRouteTabContext,
 } from "./agent.shared.js";
+import {
+  resolveSnapshotPlan,
+  shouldUsePlaywrightForAriaSnapshot,
+  shouldUsePlaywrightForScreenshot,
+} from "./agent.snapshot.plan.js";
 import type { BrowserResponse, BrowserRouteRegistrar } from "./types.js";
-import { jsonError, toBoolean, toNumber, toStringOrEmpty } from "./utils.js";
+import { jsonError, toBoolean, toStringOrEmpty } from "./utils.js";
 
 async function saveBrowserMediaResponse(params: {
   res: BrowserResponse;
@@ -56,26 +56,28 @@ export async function resolveTargetIdAfterNavigate(opts: {
 }): Promise<string> {
   let currentTargetId = opts.oldTargetId;
   try {
-    const refreshed = await opts.listTabs();
-    if (!refreshed.some((t) => t.targetId === opts.oldTargetId)) {
-      // Renderer swap: old target gone, resolve the replacement.
-      // Prefer a URL match whose targetId differs from the old one
-      // to avoid picking a pre-existing tab when multiple share the URL.
-      const byUrl = refreshed.filter((t) => t.url === opts.navigatedUrl);
-      const replaced = byUrl.find((t) => t.targetId !== opts.oldTargetId) ?? byUrl[0];
-      if (replaced) {
-        currentTargetId = replaced.targetId;
-      } else {
-        await new Promise((r) => setTimeout(r, 800));
-        const retried = await opts.listTabs();
-        const match =
-          retried.find((t) => t.url === opts.navigatedUrl && t.targetId !== opts.oldTargetId) ??
-          retried.find((t) => t.url === opts.navigatedUrl) ??
-          (retried.length === 1 ? retried[0] : null);
-        if (match) {
-          currentTargetId = match.targetId;
-        }
+    const pickReplacement = (tabs: Array<{ targetId: string; url: string }>) => {
+      if (tabs.some((tab) => tab.targetId === opts.oldTargetId)) {
+        return opts.oldTargetId;
       }
+      const byUrl = tabs.filter((tab) => tab.url === opts.navigatedUrl);
+      if (byUrl.length === 1) {
+        return byUrl[0]?.targetId ?? opts.oldTargetId;
+      }
+      const uniqueReplacement = byUrl.filter((tab) => tab.targetId !== opts.oldTargetId);
+      if (uniqueReplacement.length === 1) {
+        return uniqueReplacement[0]?.targetId ?? opts.oldTargetId;
+      }
+      if (tabs.length === 1) {
+        return tabs[0]?.targetId ?? opts.oldTargetId;
+      }
+      return opts.oldTargetId;
+    };
+
+    currentTargetId = pickReplacement(await opts.listTabs());
+    if (currentTargetId === opts.oldTargetId) {
+      await new Promise((r) => setTimeout(r, 800));
+      currentTargetId = pickReplacement(await opts.listTabs());
     }
   } catch {
     // Best-effort: fall back to pre-navigation targetId
@@ -162,11 +164,12 @@ export function registerBrowserAgentSnapshotRoutes(
       targetId,
       run: async ({ profileCtx, tab, cdpUrl }) => {
         let buffer: Buffer;
-        const shouldUsePlaywright =
-          profileCtx.profile.driver === "extension" ||
-          !tab.wsUrl ||
-          Boolean(ref) ||
-          Boolean(element);
+        const shouldUsePlaywright = shouldUsePlaywrightForScreenshot({
+          profile: profileCtx.profile,
+          wsUrl: tab.wsUrl,
+          ref,
+          element,
+        });
         if (shouldUsePlaywright) {
           const pw = await requirePwAi(res, "screenshot");
           if (!pw) {
@@ -212,81 +215,45 @@ export function registerBrowserAgentSnapshotRoutes(
       return;
     }
     const targetId = typeof req.query.targetId === "string" ? req.query.targetId.trim() : "";
-    const mode = req.query.mode === "efficient" ? "efficient" : undefined;
-    const labels = toBoolean(req.query.labels) ?? undefined;
-    const explicitFormat =
-      req.query.format === "aria" ? "aria" : req.query.format === "ai" ? "ai" : undefined;
-    const format = explicitFormat ?? (mode ? "ai" : (await getPwAiModule()) ? "ai" : "aria");
-    const limitRaw = typeof req.query.limit === "string" ? Number(req.query.limit) : undefined;
-    const hasMaxChars = Object.hasOwn(req.query, "maxChars");
-    const maxCharsRaw =
-      typeof req.query.maxChars === "string" ? Number(req.query.maxChars) : undefined;
-    const limit = Number.isFinite(limitRaw) ? limitRaw : undefined;
-    const maxChars =
-      typeof maxCharsRaw === "number" && Number.isFinite(maxCharsRaw) && maxCharsRaw > 0
-        ? Math.floor(maxCharsRaw)
-        : undefined;
-    const resolvedMaxChars =
-      format === "ai"
-        ? hasMaxChars
-          ? maxChars
-          : mode === "efficient"
-            ? DEFAULT_AI_SNAPSHOT_EFFICIENT_MAX_CHARS
-            : DEFAULT_AI_SNAPSHOT_MAX_CHARS
-        : undefined;
-    const interactiveRaw = toBoolean(req.query.interactive);
-    const compactRaw = toBoolean(req.query.compact);
-    const depthRaw = toNumber(req.query.depth);
-    const refsModeRaw = toStringOrEmpty(req.query.refs).trim();
-    const refsMode: "aria" | "role" | undefined =
-      refsModeRaw === "aria" ? "aria" : refsModeRaw === "role" ? "role" : undefined;
-    const interactive = interactiveRaw ?? (mode === "efficient" ? true : undefined);
-    const compact = compactRaw ?? (mode === "efficient" ? true : undefined);
-    const depth =
-      depthRaw ?? (mode === "efficient" ? DEFAULT_AI_SNAPSHOT_EFFICIENT_DEPTH : undefined);
-    const selector = toStringOrEmpty(req.query.selector);
-    const frameSelector = toStringOrEmpty(req.query.frame);
-    const selectorValue = selector.trim() || undefined;
-    const frameSelectorValue = frameSelector.trim() || undefined;
+    const hasPlaywright = Boolean(await getPwAiModule());
+    const plan = resolveSnapshotPlan({
+      profile: profileCtx.profile,
+      query: req.query,
+      hasPlaywright,
+    });
 
     try {
       const tab = await profileCtx.ensureTabAvailable(targetId || undefined);
-      if ((labels || mode === "efficient") && format === "aria") {
+      if ((plan.labels || plan.mode === "efficient") && plan.format === "aria") {
         return jsonError(res, 400, "labels/mode=efficient require format=ai");
       }
-      if (format === "ai") {
+      if (plan.format === "ai") {
         const pw = await requirePwAi(res, "ai snapshot");
         if (!pw) {
           return;
         }
-        const wantsRoleSnapshot =
-          labels === true ||
-          mode === "efficient" ||
-          interactive === true ||
-          compact === true ||
-          depth !== undefined ||
-          Boolean(selectorValue) ||
-          Boolean(frameSelectorValue);
         const roleSnapshotArgs = {
           cdpUrl: profileCtx.profile.cdpUrl,
           targetId: tab.targetId,
-          selector: selectorValue,
-          frameSelector: frameSelectorValue,
-          refsMode,
+          selector: plan.selectorValue,
+          frameSelector: plan.frameSelectorValue,
+          refsMode: plan.refsMode,
           options: {
-            interactive: interactive ?? undefined,
-            compact: compact ?? undefined,
-            maxDepth: depth ?? undefined,
+            interactive: plan.interactive ?? undefined,
+            compact: plan.compact ?? undefined,
+            maxDepth: plan.depth ?? undefined,
           },
         };
 
-        const snap = wantsRoleSnapshot
+        const snap = plan.wantsRoleSnapshot
           ? await pw.snapshotRoleViaPlaywright(roleSnapshotArgs)
           : await pw
               .snapshotAiViaPlaywright({
                 cdpUrl: profileCtx.profile.cdpUrl,
                 targetId: tab.targetId,
-                ...(typeof resolvedMaxChars === "number" ? { maxChars: resolvedMaxChars } : {}),
+                ...(typeof plan.resolvedMaxChars === "number"
+                  ? { maxChars: plan.resolvedMaxChars }
+                  : {}),
               })
               .catch(async (err) => {
                 // Public-API fallback when Playwright's private _snapshotForAI is missing.
@@ -295,7 +262,7 @@ export function registerBrowserAgentSnapshotRoutes(
                 }
                 throw err;
               });
-        if (labels) {
+        if (plan.labels) {
           const labeled = await pw.screenshotWithLabelsViaPlaywright({
             cdpUrl: profileCtx.profile.cdpUrl,
             targetId: tab.targetId,
@@ -316,7 +283,7 @@ export function registerBrowserAgentSnapshotRoutes(
           const imageType = normalized.contentType?.includes("jpeg") ? "jpeg" : "png";
           return res.json({
             ok: true,
-            format,
+            format: plan.format,
             targetId: tab.targetId,
             url: tab.url,
             labels: true,
@@ -330,30 +297,32 @@ export function registerBrowserAgentSnapshotRoutes(
 
         return res.json({
           ok: true,
-          format,
+          format: plan.format,
           targetId: tab.targetId,
           url: tab.url,
           ...snap,
         });
       }
 
-      const snap =
-        profileCtx.profile.driver === "extension" || !tab.wsUrl
-          ? (() => {
-              // Extension relay doesn't expose per-page WS URLs; run AX snapshot via Playwright CDP session.
-              // Also covers cases where wsUrl is missing/unusable.
-              return requirePwAi(res, "aria snapshot").then(async (pw) => {
-                if (!pw) {
-                  return null;
-                }
-                return await pw.snapshotAriaViaPlaywright({
-                  cdpUrl: profileCtx.profile.cdpUrl,
-                  targetId: tab.targetId,
-                  limit,
-                });
+      const snap = shouldUsePlaywrightForAriaSnapshot({
+        profile: profileCtx.profile,
+        wsUrl: tab.wsUrl,
+      })
+        ? (() => {
+            // Extension relay doesn't expose per-page WS URLs; run AX snapshot via Playwright CDP session.
+            // Also covers cases where wsUrl is missing/unusable.
+            return requirePwAi(res, "aria snapshot").then(async (pw) => {
+              if (!pw) {
+                return null;
+              }
+              return await pw.snapshotAriaViaPlaywright({
+                cdpUrl: profileCtx.profile.cdpUrl,
+                targetId: tab.targetId,
+                limit: plan.limit,
               });
-            })()
-          : snapshotAria({ wsUrl: tab.wsUrl ?? "", limit });
+            });
+          })()
+        : snapshotAria({ wsUrl: tab.wsUrl ?? "", limit: plan.limit });
 
       const resolved = await Promise.resolve(snap);
       if (!resolved) {
@@ -361,7 +330,7 @@ export function registerBrowserAgentSnapshotRoutes(
       }
       return res.json({
         ok: true,
-        format,
+        format: plan.format,
         targetId: tab.targetId,
         url: tab.url,
         ...resolved,
