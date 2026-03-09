@@ -270,7 +270,7 @@ export async function launchOpenClawChrome(
       "--disable-sync",
       "--disable-background-networking",
       "--disable-component-update",
-      "--disable-features=Translate,MediaRouter",
+      "--disable-features=Translate,MediaRouter,OptimizationGuideModelDownloading,OptimizationHintsFetching,OptimizationGuideOnDeviceModel,ChromeWasmTtsEngine",
       "--disable-session-crashed-bubble",
       "--hide-crash-restore-bubble",
       "--password-store=basic",

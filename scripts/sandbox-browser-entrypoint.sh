@@ -59,7 +59,7 @@ CHROME_ARGS+=(
   "--no-default-browser-check"
   "--disable-dev-shm-usage"
   "--disable-background-networking"
-  "--disable-features=TranslateUI"
+  "--disable-features=TranslateUI,OptimizationGuideModelDownloading,OptimizationHintsFetching,OptimizationGuideOnDeviceModel,ChromeWasmTtsEngine"
   "--disable-breakpad"
   "--disable-crash-reporter"
   "--no-zygote"
