@@ -223,6 +223,18 @@ function hashToolOutcome(
     }
   }
 
+  // Exec tool results contain volatile fields (durationMs, pid, startedAt,
+  // sessionId) that change on every invocation.  Hash only the stable
+  // fields so that repeated identical commands are correctly detected as
+  // a loop.  See https://github.com/nicepkg/openclaw/issues/34574.
+  if (toolName === "exec") {
+    return digestStable({
+      status: details.status,
+      exitCode: details.exitCode ?? null,
+      text,
+    });
+  }
+
   return digestStable({
     details,
     text,

@@ -543,6 +543,132 @@ describe("tool-loop-detection", () => {
       const result = detectToolCallLoop(state, "tool", { arg: 1 }, enabledLoopDetectionConfig);
       expect(result.stuck).toBe(false);
     });
+
+    it("detects repeated exec calls with volatile details fields (#34574)", () => {
+      const state = createState();
+      const execParams = { command: "echo hello", cwd: "/workspace" };
+
+      for (let i = 0; i < WARNING_THRESHOLD; i += 1) {
+        const toolCallId = `exec-${i}`;
+        recordToolCall(state, "exec", execParams, toolCallId);
+        recordToolCallOutcome(state, {
+          toolName: "exec",
+          toolParams: execParams,
+          toolCallId,
+          result: {
+            content: [{ type: "text", text: "hello" }],
+            details: {
+              status: "completed",
+              exitCode: 0,
+              durationMs: 100 + i * 7,
+              aggregated: "hello",
+              cwd: "/workspace",
+            },
+          },
+        });
+      }
+
+      const loopResult = detectToolCallLoop(state, "exec", execParams, enabledLoopDetectionConfig);
+      expect(loopResult.stuck).toBe(true);
+      if (loopResult.stuck) {
+        expect(loopResult.level).toBe("warning");
+      }
+    });
+
+    it("does not flag exec calls with different commands", () => {
+      const state = createState();
+
+      for (let i = 0; i < WARNING_THRESHOLD + 5; i += 1) {
+        const execParams = { command: `cmd-${i}`, cwd: "/workspace" };
+        const toolCallId = `exec-${i}`;
+        recordToolCall(state, "exec", execParams, toolCallId);
+        recordToolCallOutcome(state, {
+          toolName: "exec",
+          toolParams: execParams,
+          toolCallId,
+          result: {
+            content: [{ type: "text", text: `output ${i}` }],
+            details: {
+              status: "completed",
+              exitCode: 0,
+              durationMs: 50 + i,
+              aggregated: `output ${i}`,
+              cwd: "/workspace",
+            },
+          },
+        });
+      }
+
+      const loopResult = detectToolCallLoop(
+        state,
+        "exec",
+        { command: "cmd-new", cwd: "/workspace" },
+        enabledLoopDetectionConfig,
+      );
+      expect(loopResult.stuck).toBe(false);
+    });
+
+    it("blocks repeated exec calls at critical threshold (#34574)", () => {
+      const state = createState();
+      const execParams = { command: "cat /tmp/status", cwd: "/workspace" };
+
+      for (let i = 0; i < CRITICAL_THRESHOLD; i += 1) {
+        const toolCallId = `exec-crit-${i}`;
+        recordToolCall(state, "exec", execParams, toolCallId);
+        recordToolCallOutcome(state, {
+          toolName: "exec",
+          toolParams: execParams,
+          toolCallId,
+          result: {
+            content: [{ type: "text", text: "same output" }],
+            details: {
+              status: "completed",
+              exitCode: 0,
+              durationMs: 200 + i * 3,
+              aggregated: "same output",
+              cwd: "/workspace",
+            },
+          },
+        });
+      }
+
+      const loopResult = detectToolCallLoop(state, "exec", execParams, enabledLoopDetectionConfig);
+      expect(loopResult.stuck).toBe(true);
+      if (loopResult.stuck) {
+        expect(loopResult.level).toBe("warning");
+      }
+    });
+
+    it("detects exec loop even with varying pid and startedAt (#34574)", () => {
+      const state = createState();
+      const execParams = { command: "sleep 1 &", cwd: "/workspace" };
+
+      for (let i = 0; i < WARNING_THRESHOLD; i += 1) {
+        const toolCallId = `exec-bg-${i}`;
+        recordToolCall(state, "exec", execParams, toolCallId);
+        recordToolCallOutcome(state, {
+          toolName: "exec",
+          toolParams: execParams,
+          toolCallId,
+          result: {
+            content: [{ type: "text", text: "Command still running" }],
+            details: {
+              status: "running",
+              sessionId: `sess-${1000 + i}`,
+              pid: 40000 + i,
+              startedAt: Date.now() + i * 1000,
+              cwd: "/workspace",
+            },
+          },
+        });
+      }
+
+      const loopResult = detectToolCallLoop(state, "exec", execParams, enabledLoopDetectionConfig);
+      expect(loopResult.stuck).toBe(true);
+      if (loopResult.stuck) {
+        expect(loopResult.level).toBe("warning");
+      }
+    });
   });
 
   describe("getToolCallStats", () => {
