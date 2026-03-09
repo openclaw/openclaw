@@ -159,9 +159,9 @@ function sortBlocksByFirstLevel(blocks: any[], firstLevelIds: string[]): any[] {
     .sort((a, b) => (originalOrder.get(a.block_id) ?? 0) - (originalOrder.get(b.block_id) ?? 0))
     .map((block) => block.block_id);
 
-  const rootIds = (firstLevelIds && firstLevelIds.length > 0 ? firstLevelIds : inferredTopLevelIds).filter(
-    (id, index, arr) => typeof id === "string" && byId.has(id) && arr.indexOf(id) === index,
-  );
+  const rootIds = (
+    firstLevelIds && firstLevelIds.length > 0 ? firstLevelIds : inferredTopLevelIds
+  ).filter((id, index, arr) => typeof id === "string" && byId.has(id) && arr.indexOf(id) === index);
 
   const ordered: any[] = [];
   const visited = new Set<string>();
