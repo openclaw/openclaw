@@ -26,7 +26,6 @@ export interface IdeationSchedulerDeps {
 export class IdeationScheduler {
   private deps: IdeationSchedulerDeps;
   private config: IdeationConfig;
-  private timer: ReturnType<typeof setInterval> | null = null;
   private cycleCount = 0;
   private lastCycleAt: number | null = null;
   private lastResult: IdeationResult | null = null;
@@ -36,17 +35,11 @@ export class IdeationScheduler {
     this.config = { ...DEFAULT_IDEATION_CONFIG, ...config };
   }
 
-  start(): void {
-    if (this.timer || !this.config.enabled) return;
-    this.timer = setInterval(() => void this.runCycle(), this.config.intervalMs);
-  }
+  // Timer removed — Ideation now triggered by OpenClaw cron (findoo:ideation-scan, 0 10 * * *)
+  // runCycle() remains callable by fin_ideation_trigger tool
+  start(): void {}
 
-  stop(): void {
-    if (this.timer) {
-      clearInterval(this.timer);
-      this.timer = null;
-    }
-  }
+  stop(): void {}
 
   getStats(): {
     running: boolean;
@@ -56,7 +49,7 @@ export class IdeationScheduler {
     intervalMs: number;
   } {
     return {
-      running: this.timer !== null,
+      running: this.config.enabled, // cron-managed, reflects config.enabled
       cycleCount: this.cycleCount,
       lastCycleAt: this.lastCycleAt,
       enabled: this.config.enabled,

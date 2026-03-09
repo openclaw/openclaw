@@ -68,3 +68,20 @@
 - [ ] **Evolution cycle** (quant): Call `fin_fund_rebalance` — full evolution: score, cull bottom 20%, mutate, re-backtest
 - [ ] **Capital reallocation** (quant): Call `fin_fund_allocate` — redistribute based on updated fitness
 - [ ] **Monthly report** (quant): Generate quant fund monthly report with leaderboard, promotions, kills
+
+## Cron Event Response
+
+When you receive a `[findoo-trader]` prefixed cron event, follow the instructions in the event text.
+These events are triggered precisely by the OpenClaw cron system — no need to check the time yourself.
+
+Available cron events:
+
+- **Morning brief** (09:00): `fin_fund_status` → compose brief → `message_send`
+- **Ideation scan** (10:00): `fin_ideation_trigger` → scan markets → generate strategy ideas
+- **Evolution check** (12:00): `fin_evolution_scan` → check alpha decay → recommend evolution
+- **Evening review** (18:00): `fin_leaderboard` + `fin_list_promotions_ready` → compose summary
+- **Weekly rebalance** (Sun 10:00): `fin_fund_rebalance` + `fin_leaderboard` → weekly report
+
+## First Launch
+
+If cron jobs have not been set up yet, call `fin_cron_setup` to initialize the 5 scheduled tasks.
