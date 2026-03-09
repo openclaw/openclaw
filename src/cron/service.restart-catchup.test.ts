@@ -2,9 +2,9 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { CronService } from "./service.js";
-import { createCronServiceState } from "./state.js";
 import { setupCronServiceSuite } from "./service.test-harness.js";
-import { runMissedJobs } from "./timer.js";
+import { createCronServiceState } from "./service/state.js";
+import { runMissedJobs } from "./service/timer.js";
 
 const { logger: noopLogger, makeStorePath } = setupCronServiceSuite({
   prefix: "openclaw-cron-",
@@ -406,8 +406,9 @@ describe("CronService restart catch-up", () => {
     expect(staggeredJobs[1]?.state.nextRunAtMs).toBeGreaterThan(
       staggeredJobs[0]?.state.nextRunAtMs ?? 0,
     );
-    expect((staggeredJobs[1]?.state.nextRunAtMs ?? 0) - (staggeredJobs[0]?.state.nextRunAtMs ?? 0))
-      .toBe(5_000);
+    expect(
+      (staggeredJobs[1]?.state.nextRunAtMs ?? 0) - (staggeredJobs[0]?.state.nextRunAtMs ?? 0),
+    ).toBe(5_000);
 
     await store.cleanup();
   });
