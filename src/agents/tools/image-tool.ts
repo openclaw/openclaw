@@ -242,9 +242,13 @@ async function runImagePrompt(params: {
       }
 
       const context = buildImageContext(params.prompt, params.images);
+      const isOpenAICodex =
+        model.provider === "openai-codex" ||
+        (model.provider === "openai" && /codex/i.test(model.id));
       const message = await complete(model, context, {
         apiKey,
         maxTokens: resolveImageToolMaxTokens(model.maxTokens),
+        ...(isOpenAICodex ? { systemPrompt: params.prompt } : {}),
       });
       const text = coerceImageAssistantText({
         message,

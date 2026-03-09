@@ -217,7 +217,12 @@ export function resolveIMessageInboundDecision(params: {
 
   // Echo detection: check if the received message matches a recently sent message.
   // Scope by conversation so same text in different chats is not conflated.
-  const inboundMessageId = params.message.id != null ? String(params.message.id) : undefined;
+  const inboundMessageId =
+    typeof params.message.guid === "string" && params.message.guid.trim()
+      ? params.message.guid.trim()
+      : params.message.id != null
+        ? String(params.message.id)
+        : undefined;
   if (params.echoCache && (messageText || inboundMessageId)) {
     const echoScope = buildIMessageEchoScope({
       accountId: params.accountId,
