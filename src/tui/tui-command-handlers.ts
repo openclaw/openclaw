@@ -5,6 +5,9 @@ import {
   normalizeUsageDisplay,
   resolveResponseUsageMode,
 } from "../auto-reply/thinking.js";
+import { createProviderAuthChecker } from "../commands/model-picker.js";
+import { formatTokenK } from "../commands/models/shared.js";
+import { loadConfig } from "../config/config.js";
 import type { SessionsPatchResult } from "../gateway/protocol/index.js";
 import { formatRelativeTimestamp } from "../infra/format-time/format-relative.ts";
 import { normalizeAgentId } from "../routing/session-key.js";
@@ -16,9 +19,6 @@ import {
   createSettingsList,
 } from "./components/selectors.js";
 import type { GatewayChatClient } from "./gateway-chat.js";
-import { loadConfig } from "../config/config.js";
-import { createProviderAuthChecker } from "../commands/model-picker.js";
-import { formatTokenK } from "../commands/models/shared.js";
 import { sanitizeRenderableText } from "./tui-formatters.js";
 import { formatStatusSummary } from "./tui-status-summary.js";
 import type {
@@ -111,6 +111,8 @@ export function createCommandHandlers(context: CommandHandlerContext) {
       }
 
       // Partition models: show configured/authenticated providers first
+      // Note: agentDir not passed — agent-scoped auth credentials are not checked.
+      // CommandHandlerContext doesn't expose agentDir yet; thread it through when available.
       const hasAuth = createProviderAuthChecker({ cfg: loadConfig() });
       const items = partitionModelItems(models, hasAuth);
 
@@ -525,7 +527,13 @@ export function createCommandHandlers(context: CommandHandlerContext) {
 
 /** Build select items from model list, partitioned by auth status. */
 export function partitionModelItems(
-  models: { id: string; provider: string; name?: string; contextWindow?: number; reasoning?: boolean }[],
+  models: {
+    id: string;
+    provider: string;
+    name?: string;
+    contextWindow?: number;
+    reasoning?: boolean;
+  }[],
   hasAuth: (provider: string) => boolean,
 ): SelectItem[] {
   const configuredItems: SelectItem[] = [];
@@ -534,9 +542,15 @@ export function partitionModelItems(
   for (const model of models) {
     const value = `${model.provider}/${model.id}`;
     const descParts: string[] = [];
-    if (model.name && model.name !== model.id) descParts.push(model.name);
-    if (model.contextWindow) descParts.push(`ctx ${formatTokenK(model.contextWindow)}`);
-    if (model.reasoning) descParts.push("reasoning");
+    if (model.name && model.name !== model.id) {
+      descParts.push(model.name);
+    }
+    if (model.contextWindow) {
+      descParts.push(`ctx ${formatTokenK(model.contextWindow)}`);
+    }
+    if (model.reasoning) {
+      descParts.push("reasoning");
+    }
 
     const item: SelectItem = {
       value,

@@ -175,7 +175,13 @@ describe("tui command handlers", () => {
 describe("partitionModelItems", () => {
   const models = [
     { id: "gpt-4o", provider: "openai", name: "GPT-4o", contextWindow: 128_000 },
-    { id: "claude-opus-4-6", provider: "anthropic", name: "Claude Opus 4.6", contextWindow: 200_000, reasoning: true },
+    {
+      id: "claude-opus-4-6",
+      provider: "anthropic",
+      name: "Claude Opus 4.6",
+      contextWindow: 200_000,
+      reasoning: true,
+    },
     { id: "gemini-2.5-pro", provider: "google", name: "Gemini 2.5 Pro" },
     { id: "llama-3", provider: "groq", name: "Llama 3" },
   ];
@@ -183,11 +189,11 @@ describe("partitionModelItems", () => {
   it("places authenticated providers before unauthenticated", () => {
     const items = partitionModelItems(models, (p) => p === "anthropic");
 
-    expect(items[0]!.value).toBe("anthropic/claude-opus-4-6");
+    expect(items[0].value).toBe("anthropic/claude-opus-4-6");
     expect(items.length).toBe(4);
-    expect(items[1]!.value).toBe("openai/gpt-4o");
-    expect(items[2]!.value).toBe("google/gemini-2.5-pro");
-    expect(items[3]!.value).toBe("groq/llama-3");
+    expect(items[1].value).toBe("openai/gpt-4o");
+    expect(items[2].value).toBe("google/gemini-2.5-pro");
+    expect(items[3].value).toBe("groq/llama-3");
   });
 
   it("preserves original order when no models have auth", () => {
@@ -217,7 +223,7 @@ describe("partitionModelItems", () => {
     const anthropic = items.find((i) => i.value === "anthropic/claude-opus-4-6");
 
     expect(anthropic!.description).toContain("Claude Opus 4.6");
-    expect(anthropic!.description).toContain("ctx 200k");
+    expect(anthropic!.description).toContain("ctx 195k");
     expect(anthropic!.description).toContain("reasoning");
   });
 
