@@ -197,6 +197,18 @@ describe("resolveTelegramFetch", () => {
     expect(EnvHttpProxyAgentCtor).not.toHaveBeenCalled();
   });
 
+  it("refreshes an existing EnvHttpProxyAgent to apply connect options", async () => {
+    getGlobalDispatcherState.value = {
+      constructor: { name: "EnvHttpProxyAgent" },
+    };
+    globalThis.fetch = vi.fn(async () => ({})) as unknown as typeof fetch;
+
+    resolveTelegramFetch(undefined, { network: { autoSelectFamily: true } });
+
+    expect(setGlobalDispatcher).toHaveBeenCalledTimes(1);
+    expectEnvProxyAgentConstructorCall({ nth: 1, autoSelectFamily: true });
+  });
+
   it("updates proxy-like dispatcher when proxy env is configured", async () => {
     vi.stubEnv("HTTPS_PROXY", "http://127.0.0.1:7890");
     getGlobalDispatcherState.value = {
@@ -294,6 +306,34 @@ describe("resolveTelegramFetch", () => {
     expect(fetchMock.mock.calls[2]?.[1]).toMatchObject({
       dispatcher: firstFallbackDispatcher,
     });
+  });
+
+  it("does not override caller-provided dispatcher during fallback retry", async () => {
+    const timeoutErr = Object.assign(new Error("connect ETIMEDOUT 149.154.166.110:443"), {
+      code: "ETIMEDOUT",
+    });
+    const fetchError = Object.assign(new TypeError("fetch failed"), {
+      cause: timeoutErr,
+    });
+    const fetchMock = vi
+      .fn()
+      .mockRejectedValueOnce(fetchError)
+      .mockResolvedValueOnce({ ok: true } as Response);
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+
+    const resolved = resolveTelegramFetchOrThrow();
+    const customDispatcher = { name: "custom-dispatcher" };
+
+    await resolved("https://api.telegram.org/botx/sendMessage", {
+      dispatcher: customDispatcher,
+    } as RequestInit & { dispatcher: unknown });
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(fetchMock.mock.calls[1]?.[1]).toMatchObject({
+      dispatcher: customDispatcher,
+    });
+    // global dispatcher only; no fallback dispatcher instance is created
+    expect(EnvHttpProxyAgentCtor).toHaveBeenCalledTimes(1);
   });
 
   it("does not retry when fetch fails without fallback network error codes", async () => {

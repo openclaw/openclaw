@@ -13,11 +13,22 @@ import {
 let appliedAutoSelectFamily: boolean | null = null;
 let appliedDnsResultOrder: string | null = null;
 let appliedGlobalDispatcherAutoSelectFamily: boolean | null = null;
-let stickyIpv4FallbackEnabled = false;
 const log = createSubsystemLogger("telegram/network");
-function isProxyLikeDispatcher(dispatcher: unknown): boolean {
+
+type GlobalDispatcherKind = "env-proxy" | "proxy" | "other";
+
+function resolveGlobalDispatcherKind(dispatcher: unknown): GlobalDispatcherKind {
   const ctorName = (dispatcher as { constructor?: { name?: string } })?.constructor?.name;
-  return typeof ctorName === "string" && ctorName.includes("ProxyAgent");
+  if (typeof ctorName !== "string") {
+    return "other";
+  }
+  if (ctorName.includes("EnvHttpProxyAgent")) {
+    return "env-proxy";
+  }
+  if (ctorName.includes("ProxyAgent")) {
+    return "proxy";
+  }
+  return "other";
 }
 
 const FALLBACK_RETRY_ERROR_CODES = [
@@ -86,8 +97,8 @@ function applyTelegramNetworkWorkarounds(network?: TelegramNetworkConfig): void 
     autoSelectDecision.value !== appliedGlobalDispatcherAutoSelectFamily
   ) {
     const existingGlobalDispatcher = getGlobalDispatcher();
-    const shouldPreserveExistingProxy =
-      isProxyLikeDispatcher(existingGlobalDispatcher) && !hasProxyEnvConfigured();
+    const dispatcherKind = resolveGlobalDispatcherKind(existingGlobalDispatcher);
+    const shouldPreserveExistingProxy = dispatcherKind === "proxy" && !hasProxyEnvConfigured();
     if (!shouldPreserveExistingProxy) {
       try {
         setGlobalDispatcher(
@@ -195,6 +206,10 @@ function resolveIpv4FallbackDispatcher(): EnvHttpProxyAgent {
 
 function buildIpv4FallbackInit(init?: RequestInit): RequestInit {
   const fallbackInit: RequestInitWithDispatcher = init ? { ...init } : {};
+  // Respect explicit per-request dispatchers (custom proxy/routes) instead of overriding them.
+  if (fallbackInit.dispatcher) {
+    return fallbackInit;
+  }
   fallbackInit.dispatcher = resolveIpv4FallbackDispatcher();
   return fallbackInit;
 }
@@ -209,11 +224,12 @@ export function resolveTelegramFetch(
   if (!sourceFetch) {
     throw new Error("fetch is not available; set channels.telegram.proxy in config");
   }
-  // When Telegram media fetch hits dual-stack edge cases (ENETUNREACH/ETIMEDOUT),
+  // When Telegram API fetch hits dual-stack edge cases (ENETUNREACH/ETIMEDOUT),
   // switch to IPv4-safe network mode and retry once.
   if (proxyFetch) {
     return sourceFetch;
   }
+  let stickyIpv4FallbackEnabled = false;
   return (async (input: RequestInfo | URL, init?: RequestInit) => {
     const requestInit = stickyIpv4FallbackEnabled ? buildIpv4FallbackInit(init) : init;
     try {
@@ -240,5 +256,4 @@ export function resetTelegramFetchStateForTests(): void {
   appliedDnsResultOrder = null;
   appliedGlobalDispatcherAutoSelectFamily = null;
   ipv4FallbackDispatcher = null;
-  stickyIpv4FallbackEnabled = false;
 }
