@@ -261,7 +261,7 @@ Search the web using Perplexity, Brave, Gemini, Grok, or Kimi.
 Core parameters:
 
 - `query` (required)
-- `count` (1–10; default from `tools.web.search.maxResults`)
+- `count` (1–20; default from `tools.web.search.maxResults`)
 
 Notes:
 

@@ -169,7 +169,7 @@ Perplexity Sonar 模型具有内置的网络搜索功能，并返回带有引用
 ### 工具参数
 
 - `query`（必需）
-- `count`（1–10；默认来自配置）
+- `count`（1–20；默认来自配置）
 - `country`（可选）：用于特定地区结果的 2 字母国家代码（例如"DE"、"US"、"ALL"）。如果省略，Brave 选择其默认地区。
 - `search_lang`（可选）：搜索结果的 ISO 语言代码（例如"de"、"en"、"fr"）
 - `ui_lang`（可选）：UI 元素的 ISO 语言代码

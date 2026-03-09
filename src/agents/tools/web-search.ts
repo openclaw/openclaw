@@ -23,7 +23,7 @@ import {
 
 const SEARCH_PROVIDERS = ["brave", "gemini", "grok", "kimi", "perplexity"] as const;
 const DEFAULT_SEARCH_COUNT = 5;
-const MAX_SEARCH_COUNT = 10;
+const MAX_SEARCH_COUNT = 20;
 
 const BRAVE_SEARCH_ENDPOINT = "https://api.search.brave.com/res/v1/web/search";
 const BRAVE_LLM_CONTEXT_ENDPOINT = "https://api.search.brave.com/res/v1/llm/context";
@@ -157,7 +157,7 @@ function createWebSearchSchema(params: {
     query: Type.String({ description: "Search query string." }),
     count: Type.Optional(
       Type.Number({
-        description: "Number of results to return (1-10).",
+        description: "Number of results to return (1-20).",
         minimum: 1,
         maximum: MAX_SEARCH_COUNT,
       }),

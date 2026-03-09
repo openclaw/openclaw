@@ -445,7 +445,7 @@ export type ToolsConfig = {
       provider?: "brave" | "gemini" | "grok" | "kimi" | "perplexity";
       /** Brave Search API key (optional; defaults to BRAVE_API_KEY env var). */
       apiKey?: SecretInput;
-      /** Default search results count (1-10). */
+      /** Default search results count (1-20). */
       maxResults?: number;
       /** Timeout in seconds for search requests. */
       timeoutSeconds?: number;

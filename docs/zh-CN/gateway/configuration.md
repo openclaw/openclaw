@@ -2001,7 +2001,7 @@ Z.AI 模型可通过 `zai/<model>` 使用（例如 `zai/glm-4.7`），需要环�
 
 - `tools.web.search.enabled`（默认：有密钥时为 true）
 - `tools.web.search.apiKey`（推荐：通过 `openclaw configure --section web` 设置，或使用 `BRAVE_API_KEY` 环境变量）
-- `tools.web.search.maxResults`（1–10，默认 5）
+- `tools.web.search.maxResults`（1–20，默认 5）
 - `tools.web.search.timeoutSeconds`（默认 30）
 - `tools.web.search.cacheTtlMinutes`（默认 15）
 - `tools.web.fetch.enabled`（默认 true）
