@@ -22,6 +22,7 @@ const {
   resolveKimiModel,
   resolveKimiBaseUrl,
   extractKimiCitations,
+  resolveGeminiApiKey,
   resolveBraveMode,
 } = __testing;
 
@@ -367,6 +368,14 @@ describe("web_search provider apiKey SecretRef handling", () => {
   it("throws on unresolved SecretRef for Kimi apiKey", () => {
     withEnv({ KIMI_API_KEY: undefined, MOONSHOT_API_KEY: undefined }, () => {
       expect(() => resolveKimiApiKey({ apiKey: secretRef as unknown as string })).toThrow(
+        /unresolved SecretRef/,
+      );
+    });
+  });
+
+  it("throws on unresolved SecretRef for Gemini apiKey", () => {
+    withEnv({ GEMINI_API_KEY: undefined }, () => {
+      expect(() => resolveGeminiApiKey({ apiKey: secretRef as unknown as string })).toThrow(
         /unresolved SecretRef/,
       );
     });

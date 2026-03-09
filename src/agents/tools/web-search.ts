@@ -2132,6 +2132,7 @@ export const __testing = {
   resolveKimiModel,
   resolveKimiBaseUrl,
   extractKimiCitations,
+  resolveGeminiApiKey,
   resolveRedirectUrl: resolveCitationRedirectUrl,
   resolveBraveMode,
 } as const;
