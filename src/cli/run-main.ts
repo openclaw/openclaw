@@ -135,6 +135,10 @@ export async function runCli(argv: string[] = process.argv) {
   }
 
   await program.parseAsync(parseArgv);
+
+  // Clean up memory managers on exit to prevent FSWatcher handles from keeping process alive
+  const { closeAllMemoryManagers } = await import("../memory/index.js");
+  await closeAllMemoryManagers();
 }
 
 export function isCliMainModule(): boolean {
