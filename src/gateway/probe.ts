@@ -74,13 +74,15 @@ export async function probeGateway(opts: {
       },
       onClose: (code, reason) => {
         close = { code, reason };
-        // In PROBE mode, a close with code 1008 and reason "parse error" (or after seeing
-        // a parse-error connectError) is a fatal protocol error that should immediately
-        // fail the probe, not wait for timeout.
-        // This handles the case where the gateway sends non-JSON content.
+        // In PROBE mode, if we've already seen a parse error via onConnectError,
+        // any subsequent close should immediately fail the probe, regardless of
+        // the close code or reason. This handles cases where the connection closes
+        // with code 1006 (abnormal closure) or empty reason after the parse error.
+        // Otherwise, we still check for the explicit parse error close.
         if (
-          code === GATEWAY_PARSE_ERROR_CLOSE_CODE &&
-          (reason === GATEWAY_PARSE_ERROR_CLOSE_REASON || sawParseError)
+          sawParseError ||
+          (code === GATEWAY_PARSE_ERROR_CLOSE_CODE &&
+            reason === GATEWAY_PARSE_ERROR_CLOSE_REASON)
         ) {
           settle({
             ok: false,

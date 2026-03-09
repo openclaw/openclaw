@@ -105,4 +105,39 @@ describe("probeGateway", () => {
     // Should fail quickly, not wait for the 5000ms timeout
     expect(elapsed).toBeLessThan(1000);
   });
+
+  it("fails immediately on any close after parse error, even with code 1006", async () => {
+    const startedAt = Date.now();
+
+    // Start the probe
+    const probePromise = probeGateway({
+      url: "ws://127.0.0.1:18789",
+      auth: { token: "secret" },
+      timeoutMs: 5000, // Long timeout to prove we don't wait
+    });
+
+    // Simulate the real production order:
+    // 1. First, onConnectError with parse error
+    setTimeout(() => {
+      gatewayClientState.triggerOnConnectError?.(
+        new Error("Failed to parse JSON message from gateway: SyntaxError; raw (truncated): not-json")
+      );
+    }, 10);
+
+    // 2. Then, onClose with abnormal close (1006) and empty reason
+    // This tests that sawParseError triggers fast-fail regardless of close code
+    setTimeout(() => {
+      gatewayClientState.triggerOnClose?.(1006, "");
+    }, 50);
+
+    const result = await probePromise;
+    const elapsed = Date.now() - startedAt;
+
+    // Should fail explicitly with parse error message
+    expect(result.ok).toBe(false);
+    expect(result.error).toContain("Failed to parse JSON message from gateway");
+
+    // Should fail quickly, not wait for the 5000ms timeout
+    expect(elapsed).toBeLessThan(1000);
+  });
 });
