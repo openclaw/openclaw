@@ -59,7 +59,6 @@ export async function resolveDiscordPreflightAudioMentionContext(params: {
         return {
           hasAudioAttachment,
           hasTypedText,
-          transcriptionTriggered: true,
         };
       }
       const audioUrls = audioAttachments
