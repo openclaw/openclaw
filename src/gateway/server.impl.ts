@@ -312,7 +312,7 @@ export async function startGatewayServer(
         ? formatConfigIssueLines(configSnapshot.issues, "", { normalizeRoot: true }).join("\n")
         : "Unknown validation issue.";
     throw new Error(
-      `Invalid config at ${configSnapshot.path}.\n${issues}\nRun "${formatCliCommand("openclaw doctor")}" to repair, then retry.`,
+      `Invalid config at ${configSnapshot.path}.\n${issues}\nRun "${formatCliCommand("openclaw doctor --fix")}" to repair, then retry.\nIf the issue persists, restore from the backup: cp ${configSnapshot.path}.bak ${configSnapshot.path}`,
     );
   }
 
