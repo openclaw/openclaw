@@ -240,6 +240,28 @@ export class ChainMemoryManager implements MemorySearchManager {
   }
 
   /**
+   * 探测 embedding 可用性
+   * 委托给 primary provider
+   */
+  async probeEmbeddingAvailability(): Promise<MemoryEmbeddingProbeResult> {
+    if (!this.primary) {
+      return { available: false, reason: "No primary provider configured" };
+    }
+    return this.primary.probeEmbeddingAvailability();
+  }
+
+  /**
+   * 探测 vector 可用性
+   * 委托给 primary provider
+   */
+  async probeVectorAvailability(): Promise<boolean> {
+    if (!this.primary) {
+      return false;
+    }
+    return this.primary.probeVectorAvailability();
+  }
+
+  /**
    * 获取详细状态
    */
   getStatus(): ChainManagerStatus {
