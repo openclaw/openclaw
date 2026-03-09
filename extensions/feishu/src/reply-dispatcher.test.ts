@@ -77,7 +77,7 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     resolveFeishuAccountMock.mockReturnValue({
       accountId: "main",
       appId: "app_id",
-      appSecret: "app_secret",
+      appSecret: "app_secret", // pragma: allowlist secret
       domain: "feishu",
       config: {
         renderMode: "auto",
@@ -116,7 +116,7 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     resolveFeishuAccountMock.mockReturnValue({
       accountId: "main",
       appId: "app_id",
-      appSecret: "app_secret",
+      appSecret: "app_secret", // pragma: allowlist secret
       domain: "feishu",
       config: {
         renderMode: "auto",
@@ -138,7 +138,7 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     resolveFeishuAccountMock.mockReturnValue({
       accountId: "main",
       appId: "app_id",
-      appSecret: "app_secret",
+      appSecret: "app_secret", // pragma: allowlist secret
       domain: "feishu",
       config: {
         renderMode: "auto",
@@ -381,7 +381,7 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     resolveFeishuAccountMock.mockReturnValue({
       accountId: "main",
       appId: "app_id",
-      appSecret: "app_secret",
+      appSecret: "app_secret", // pragma: allowlist secret
       domain: "feishu",
       config: {
         renderMode: "card",
@@ -542,7 +542,7 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     resolveFeishuAccountMock.mockReturnValue({
       accountId: "main",
       appId: "app_id",
-      appSecret: "app_secret",
+      appSecret: "app_secret", // pragma: allowlist secret
       domain: "feishu",
       config: {
         renderMode: "card",
