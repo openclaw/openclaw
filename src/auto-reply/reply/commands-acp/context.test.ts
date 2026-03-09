@@ -90,6 +90,25 @@ describe("commands-acp context", () => {
     expect(isAcpCommandDiscordChannel(params)).toBe(false);
   });
 
+  it("keeps Slack thread conversation ids thread-scoped when NativeChannelId is present", () => {
+    const params = buildCommandTestParams("/acp spawn codex --thread here", baseCfg, {
+      Provider: "slack",
+      Surface: "slack",
+      OriginatingChannel: "slack",
+      OriginatingTo: "channel:C1234567890",
+      NativeChannelId: "C1234567890",
+      MessageThreadId: "1741512345.678900",
+    });
+
+    expect(resolveAcpCommandBindingContext(params)).toEqual({
+      channel: "slack",
+      accountId: "default",
+      threadId: "1741512345.678900",
+      conversationId: "1741512345.678900",
+    });
+    expect(resolveAcpCommandConversationId(params)).toBe("1741512345.678900");
+  });
+
   it("builds canonical telegram topic conversation ids from originating chat + thread", () => {
     const params = buildCommandTestParams("/acp status", baseCfg, {
       Provider: "telegram",
@@ -171,14 +190,14 @@ describe("commands-acp context", () => {
     expect(resolveAcpCommandConversationId(params)).toBe("oc_dm_chat");
   });
 
-  it("synthesizes a Feishu thread conversation when root_id is absent", () => {
+  it("uses a plugin-provided Feishu thread-scoped NativeChannelId when root_id is absent", () => {
     const params = buildCommandTestParams("/acp spawn codex --thread here", baseCfg, {
       Provider: "feishu",
       Surface: "feishu",
       OriginatingChannel: "feishu",
       OriginatingTo: "chat:oc_thread_chat",
       AccountId: "work",
-      NativeChannelId: "oc_thread_chat",
+      NativeChannelId: "oc_thread_chat:thread:om_followup_99",
       ThreadParentId: "oc_thread_chat",
       MessageSid: "om_followup_99",
     });

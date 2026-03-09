@@ -1981,6 +1981,41 @@ describe("handleFeishuMessage command authorization", () => {
     expect(rehydrateSpy).toHaveBeenCalledTimes(1);
   });
 
+  it("synthesizes a thread-scoped NativeChannelId for rootless follow-ups before alias recovery", async () => {
+    mockShouldComputeCommandAuthorized.mockReturnValue(false);
+
+    const cfg: ClawdbotConfig = {
+      channels: {
+        feishu: {
+          dmPolicy: "open",
+        },
+      },
+    } as ClawdbotConfig;
+
+    const event: FeishuMessageEvent = {
+      sender: { sender_id: { open_id: "ou-dm-thread" } },
+      message: {
+        message_id: "msg-dm-thread-rootless",
+        chat_id: "oc-dm-thread",
+        chat_type: "p2p",
+        thread_id: "omt_dm_topic_2",
+        parent_id: "om_reply_1",
+        message_type: "text",
+        content: JSON.stringify({ text: "继续但还没恢复 alias" }),
+      },
+    };
+
+    await dispatchMessage({ cfg, event });
+
+    expect(mockFinalizeInboundContext).toHaveBeenCalledWith(
+      expect.objectContaining({
+        MessageThreadId: undefined,
+        RootMessageId: undefined,
+        NativeChannelId: "oc-dm-thread:thread:msg-dm-thread-rootless",
+      }),
+    );
+  });
+
   it("uses the topic root message id for group topic roots when only thread_id is present", async () => {
     mockShouldComputeCommandAuthorized.mockReturnValue(false);
 

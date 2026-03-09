@@ -86,6 +86,7 @@ function resolveFeishuNativeConversationId(params: {
   chatId: string;
   threadRootMessageId?: string;
   threadBindingConversationId?: string;
+  fallbackThreadMessageId?: string;
 }): string {
   const boundConversationId = params.threadBindingConversationId?.trim();
   if (boundConversationId) {
@@ -94,7 +95,7 @@ function resolveFeishuNativeConversationId(params: {
   return (
     buildFeishuThreadConversationId({
       chatId: params.chatId,
-      rootMessageId: params.threadRootMessageId,
+      rootMessageId: params.threadRootMessageId ?? params.fallbackThreadMessageId,
     }) ?? params.chatId
   );
 }
@@ -1429,6 +1430,12 @@ export async function handleFeishuMessage(params: {
         chatId: ctx.chatId,
         threadRootMessageId,
         threadBindingConversationId: threadBinding?.conversation.conversationId,
+        // Feishu follow-up events can omit root_id while still remaining inside
+        // the current topic. Expose a temporary thread-scoped conversation id
+        // so core ACP binding logic can stay channel-agnostic until the plugin
+        // records the native thread alias.
+        fallbackThreadMessageId:
+          !threadRootMessageId && (ctx.rootId || ctx.threadId) ? ctx.messageId : undefined,
       });
       return core.channel.reply.finalizeInboundContext({
         Body: combinedBody,

@@ -375,7 +375,7 @@ function createFeishuRootlessThreadParams(commandBody: string, cfg: OpenClawConf
     OriginatingChannel: "feishu",
     OriginatingTo: "chat:oc_thread_chat",
     AccountId: "default",
-    NativeChannelId: "oc_thread_chat",
+    NativeChannelId: "oc_thread_chat:thread:om_followup_99",
     ThreadParentId: "oc_thread_chat",
     MessageSid: "om_followup_99",
   });
