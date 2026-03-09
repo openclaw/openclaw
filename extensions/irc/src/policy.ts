@@ -1,4 +1,4 @@
-import { normalizeNonTelegramGroupPolicy } from "openclaw/plugin-sdk";
+import { normalizeNonTelegramGroupPolicy } from "openclaw/plugin-sdk/irc";
 import { normalizeIrcAllowlist, resolveIrcAllowlistMatch } from "./normalize.js";
 import type { IrcAccountConfig, IrcChannelConfig } from "./types.js";
 import type { IrcInboundMessage } from "./types.js";
