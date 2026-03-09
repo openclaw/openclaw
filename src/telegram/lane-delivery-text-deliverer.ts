@@ -78,6 +78,7 @@ type TryUpdatePreviewParams = {
   context: "final" | "update";
   previewMessageId?: number;
   previewTextSnapshot?: string;
+  allowStopToCreateFirstPreview?: boolean;
 };
 
 type ConsumeArchivedAnswerPreviewParams = {
@@ -96,6 +97,7 @@ type ResolvePreviewTargetParams = {
   previewMessageIdOverride?: number;
   stopBeforeEdit: boolean;
   context: PreviewUpdateContext;
+  allowStopToCreateFirstPreview?: boolean;
 };
 
 type PreviewTargetResolution = {
@@ -133,7 +135,10 @@ function resolvePreviewTarget(params: ResolvePreviewTargetParams): PreviewTarget
     hadPreviewMessage,
     previewMessageId: typeof previewMessageId === "number" ? previewMessageId : undefined,
     stopCreatesFirstPreview:
-      params.stopBeforeEdit && !hadPreviewMessage && params.context === "final",
+      params.allowStopToCreateFirstPreview !== false &&
+      params.stopBeforeEdit &&
+      !hadPreviewMessage &&
+      params.context === "final",
   };
 }
 
@@ -232,6 +237,7 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams) {
     context,
     previewMessageId: previewMessageIdOverride,
     previewTextSnapshot,
+    allowStopToCreateFirstPreview,
   }: TryUpdatePreviewParams): Promise<boolean> => {
     const editPreview = (messageId: number, treatEditFailureAsDelivered: boolean) =>
       tryEditPreviewMessage({
@@ -270,6 +276,7 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams) {
       previewMessageIdOverride,
       stopBeforeEdit,
       context,
+      allowStopToCreateFirstPreview,
     });
     if (previewTargetBeforeStop.stopCreatesFirstPreview) {
       // Final stop() can create the first visible preview message.
@@ -294,6 +301,7 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams) {
       previewMessageIdOverride,
       stopBeforeEdit: false,
       context,
+      allowStopToCreateFirstPreview,
     });
     if (typeof previewTargetAfterStop.previewMessageId !== "number") {
       return false;
@@ -408,6 +416,7 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams) {
           stopBeforeEdit: true,
           skipRegressive: "existingOnly",
           context: "final",
+          allowStopToCreateFirstPreview: laneName !== "answer" || lane.hasStreamedMessage,
         });
         if (finalized) {
           params.finalizedPreviewByLane[laneName] = true;
