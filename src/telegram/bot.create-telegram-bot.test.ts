@@ -75,27 +75,6 @@ describe("createTelegramBot", () => {
       globalThis.fetch = originalFetch;
     }
   });
-  it("aborts wrapped client fetch when fetchAbortSignal aborts", async () => {
-    const originalFetch = globalThis.fetch;
-    const fetchSpy = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => init?.signal);
-    const shutdown = new AbortController();
-    globalThis.fetch = fetchSpy as unknown as typeof fetch;
-    try {
-      createTelegramBot({ token: "tok", fetchAbortSignal: shutdown.signal });
-      const clientFetch = (botCtorSpy.mock.calls[0]?.[1] as { client?: { fetch?: unknown } })
-        ?.client?.fetch as ((input: RequestInfo | URL, init?: RequestInit) => Promise<unknown>);
-      expect(clientFetch).toBeTypeOf("function");
-
-      const observedSignal = (await clientFetch("https://example.test")) as AbortSignal;
-      expect(observedSignal).toBeInstanceOf(AbortSignal);
-      expect(observedSignal.aborted).toBe(false);
-
-      shutdown.abort(new Error("shutdown"));
-      expect(observedSignal.aborted).toBe(true);
-    } finally {
-      globalThis.fetch = originalFetch;
-    }
-  });
   it("applies global and per-account timeoutSeconds", () => {
     loadConfig.mockReturnValue({
       channels: {

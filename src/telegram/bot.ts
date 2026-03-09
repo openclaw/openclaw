@@ -110,8 +110,7 @@ export function createTelegramBot(opts: TelegramBotOptions) {
   // (especially long-polling getUpdates) aborts immediately on shutdown. Without this,
   // the in-flight getUpdates hangs for up to 30s, and a new gateway instance starting
   // its own poll triggers a 409 Conflict from Telegram.
-  let finalFetch: NonNullable<ApiClientOptions["fetch"]> | undefined =
-    shouldProvideFetch && fetchImpl ? fetchForClient : undefined;
+  let finalFetch = shouldProvideFetch && fetchImpl ? fetchForClient : undefined;
   if (opts.fetchAbortSignal) {
     const baseFetch =
       finalFetch ?? (globalThis.fetch as unknown as NonNullable<ApiClientOptions["fetch"]>);
