@@ -137,12 +137,10 @@ export async function geminiAnalyzePdf(params: {
   }
   parts.push({ text: params.prompt });
 
-  // Normalize baseUrl: strip trailing slashes and any API version path suffix.
-  // Some callers may pass a baseUrl that already includes /v1beta or /v1, which would
-  // cause duplication when we construct the full URL below.
-  let baseUrl = (params.baseUrl ?? "https://generativelanguage.googleapis.com").replace(/\/+$/, "");
-  // Strip API version paths if present (e.g., /v1beta, /v1)
-  baseUrl = baseUrl.replace(/\/v\d+(?:beta)?$/, "");
+  const baseUrl = (params.baseUrl ?? "https://generativelanguage.googleapis.com").replace(
+    /\/+$/,
+    "",
+  );
 
   // Strip provider prefix if present (e.g., "google/gemini-2.0-flash" -> "gemini-2.0-flash").
   // We only strip "google/" specifically to avoid mangling nested model IDs like "tunedModels/my-model"
