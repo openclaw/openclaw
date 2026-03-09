@@ -5,6 +5,7 @@ import { readBestEffortConfig, resolveGatewayPort } from "../../config/config.js
 import { parseCmdScriptCommandLine } from "../../daemon/cmd-argv.js";
 import { resolveGatewayService } from "../../daemon/service.js";
 import { probeGateway } from "../../gateway/probe.js";
+import { isGatewayArgv, parseProcCmdline } from "../../infra/gateway-process-argv.js";
 import { findGatewayPidsOnPortSync } from "../../infra/restart.js";
 import { defaultRuntime } from "../../runtime.js";
 import { theme } from "../../terminal/theme.js";
@@ -42,17 +43,6 @@ async function resolveGatewayLifecyclePort(service = resolveGatewayService()) {
   return portFromArgs ?? resolveGatewayPort(await readBestEffortConfig(), mergedEnv);
 }
 
-function normalizeProcArg(arg: string): string {
-  return arg.replaceAll("\\", "/").toLowerCase();
-}
-
-function parseProcCmdline(raw: string): string[] {
-  return raw
-    .split("\0")
-    .map((entry) => entry.trim())
-    .filter(Boolean);
-}
-
 function extractWindowsCommandLine(raw: string): string | null {
   const lines = raw
     .split(/\r?\n/)
@@ -66,31 +56,6 @@ function extractWindowsCommandLine(raw: string): string | null {
     return value || null;
   }
   return lines.find((line) => line.toLowerCase() !== "commandline") ?? null;
-}
-
-function stripExecutableExtension(value: string): string {
-  return value.replace(/\.(bat|cmd|exe)$/i, "");
-}
-
-function isGatewayArgv(args: string[]): boolean {
-  const normalized = args.map(normalizeProcArg);
-  if (!normalized.includes("gateway")) {
-    return false;
-  }
-
-  const entryCandidates = [
-    "dist/index.js",
-    "dist/entry.js",
-    "openclaw.mjs",
-    "scripts/run-node.mjs",
-    "src/index.ts",
-  ];
-  if (normalized.some((arg) => entryCandidates.some((entry) => arg.endsWith(entry)))) {
-    return true;
-  }
-
-  const exe = stripExecutableExtension(normalized[0] ?? "");
-  return exe.endsWith("/openclaw") || exe === "openclaw" || exe.endsWith("/openclaw-gateway");
 }
 
 function readGatewayProcessArgsSync(pid: number): string[] | null {
@@ -135,7 +100,7 @@ function resolveGatewayListenerPids(port: number): number[] {
     .filter((pid): pid is number => Number.isFinite(pid) && pid > 0)
     .filter((pid) => {
       const args = readGatewayProcessArgsSync(pid);
-      return args != null && isGatewayArgv(args);
+      return args != null && isGatewayArgv(args, { allowGatewayBinary: true });
     });
 }
 
@@ -147,7 +112,7 @@ function resolveGatewayPortFallback(): Promise<number> {
 
 function signalGatewayPid(pid: number, signal: "SIGTERM" | "SIGUSR1") {
   const args = readGatewayProcessArgsSync(pid);
-  if (!args || !isGatewayArgv(args)) {
+  if (!args || !isGatewayArgv(args, { allowGatewayBinary: true })) {
     throw new Error(`refusing to signal non-gateway process pid ${pid}`);
   }
   process.kill(pid, signal);
