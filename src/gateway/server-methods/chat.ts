@@ -1670,13 +1670,14 @@ export const chatHandlers: GatewayRequestHandlers = {
       provider: resolvedSessionModel.provider,
       localMessages,
     });
+    const visibleMessages = rawMessages.filter((msg) => !isDeliveryMirrorMessage(msg));
     const hardMax = 1000;
     const defaultLimit = 200;
     const requested = typeof limit === "number" ? limit : defaultLimit;
     const max = Math.min(hardMax, requested);
     const effectiveMaxChars = resolveEffectiveChatHistoryMaxChars(cfg, maxChars);
     const normalized = augmentChatHistoryWithCanvasBlocks(
-      projectRecentChatDisplayMessages(rawMessages, {
+      projectRecentChatDisplayMessages(visibleMessages, {
         maxChars: effectiveMaxChars,
         maxMessages: max,
       }),
@@ -1718,11 +1719,10 @@ export const chatHandlers: GatewayRequestHandlers = {
       });
     }
     const verboseLevel = entry?.verboseLevel ?? cfg.agents?.defaults?.verboseDefault;
-    const visibleMessages = bounded.messages.filter((msg) => !isDeliveryMirrorMessage(msg));
     respond(true, {
       sessionKey,
       sessionId,
-      messages: visibleMessages,
+      messages: bounded.messages,
       thinkingLevel,
       fastMode: entry?.fastMode,
       verboseLevel,
