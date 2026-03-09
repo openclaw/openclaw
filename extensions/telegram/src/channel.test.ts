@@ -149,6 +149,38 @@ describe("telegramPlugin duplicate token guard", () => {
     );
   });
 
+  it("passes account proxy and network settings into Telegram probes", async () => {
+    const { probeTelegram } = installGatewayRuntime({
+      probeOk: true,
+      botUsername: "opsbot",
+    });
+
+    const cfg = createCfg();
+    cfg.channels!.telegram!.accounts!.ops = {
+      ...cfg.channels!.telegram!.accounts!.ops,
+      proxy: "http://127.0.0.1:8888",
+      network: {
+        autoSelectFamily: false,
+        dnsResultOrder: "ipv4first",
+      },
+    };
+    const account = telegramPlugin.config.resolveAccount(cfg, "ops");
+
+    await telegramPlugin.status!.probeAccount!({
+      account,
+      timeoutMs: 5000,
+      cfg,
+    });
+
+    expect(probeTelegram).toHaveBeenCalledWith("token-ops", 5000, {
+      proxyUrl: "http://127.0.0.1:8888",
+      network: {
+        autoSelectFamily: false,
+        dnsResultOrder: "ipv4first",
+      },
+    });
+  });
+
   it("forwards mediaLocalRoots to sendMessageTelegram for outbound media sends", async () => {
     const sendMessageTelegram = vi.fn(async () => ({ messageId: "tg-1" }));
     setTelegramRuntime({

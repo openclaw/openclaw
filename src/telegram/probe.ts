@@ -1,5 +1,7 @@
 import type { BaseProbeResult } from "../channels/plugins/types.js";
+import type { TelegramNetworkConfig } from "../config/types.telegram.js";
 import { fetchWithTimeout } from "../utils/fetch-timeout.js";
+import { resolveTelegramFetch } from "./fetch.js";
 import { makeProxyFetch } from "./proxy.js";
 
 const TELEGRAM_API_BASE = "https://api.telegram.org";
@@ -17,13 +19,35 @@ export type TelegramProbe = BaseProbeResult & {
   webhook?: { url?: string | null; hasCustomCert?: boolean | null };
 };
 
+export type TelegramProbeOptions = {
+  proxyUrl?: string;
+  network?: TelegramNetworkConfig;
+};
+
+function resolveProbeOptions(
+  proxyOrOptions?: string | TelegramProbeOptions,
+): TelegramProbeOptions | undefined {
+  if (!proxyOrOptions) {
+    return undefined;
+  }
+  if (typeof proxyOrOptions === "string") {
+    return { proxyUrl: proxyOrOptions };
+  }
+  return proxyOrOptions;
+}
+
 export async function probeTelegram(
   token: string,
   timeoutMs: number,
-  proxyUrl?: string,
+  proxyOrOptions?: string | TelegramProbeOptions,
 ): Promise<TelegramProbe> {
   const started = Date.now();
-  const fetcher = proxyUrl ? makeProxyFetch(proxyUrl) : fetch;
+  const options = resolveProbeOptions(proxyOrOptions);
+  const proxyFetch = options?.proxyUrl ? makeProxyFetch(options.proxyUrl) : undefined;
+  const fetcher = resolveTelegramFetch(proxyFetch, { network: options?.network });
+  if (!fetcher) {
+    throw new Error("fetch is not available");
+  }
   const base = `${TELEGRAM_API_BASE}/bot${token}`;
   const retryDelayMs = Math.max(50, Math.min(1000, timeoutMs));
 

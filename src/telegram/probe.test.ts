@@ -1,14 +1,28 @@
-import { type Mock, describe, expect, it, vi } from "vitest";
+import { afterEach, type Mock, describe, expect, it, vi } from "vitest";
 import { withFetchPreconnect } from "../test-utils/fetch-mock.js";
 import { probeTelegram } from "./probe.js";
+
+const resolveTelegramFetch = vi.hoisted(() => vi.fn());
+const makeProxyFetch = vi.hoisted(() => vi.fn());
+
+vi.mock("./fetch.js", () => ({
+  resolveTelegramFetch,
+}));
+
+vi.mock("./proxy.js", () => ({
+  makeProxyFetch,
+}));
 
 describe("probeTelegram retry logic", () => {
   const token = "test-token";
   const timeoutMs = 5000;
+  const originalFetch = global.fetch;
 
   const installFetchMock = (): Mock => {
     const fetchMock = vi.fn();
     global.fetch = withFetchPreconnect(fetchMock);
+    resolveTelegramFetch.mockImplementation((proxyFetch?: typeof fetch) => proxyFetch ?? fetch);
+    makeProxyFetch.mockImplementation(() => fetchMock as unknown as typeof fetch);
     return fetchMock;
   };
 
@@ -40,6 +54,17 @@ describe("probeTelegram retry logic", () => {
     expect(fetchMock).toHaveBeenCalledTimes(expectedCalls);
     expect(result.bot?.username).toBe("test_bot");
   }
+
+  afterEach(() => {
+    resolveTelegramFetch.mockReset();
+    makeProxyFetch.mockReset();
+    vi.clearAllMocks();
+    if (originalFetch) {
+      global.fetch = originalFetch;
+    } else {
+      delete (globalThis as { fetch?: typeof fetch }).fetch;
+    }
+  });
 
   it.each([
     {
@@ -113,5 +138,27 @@ describe("probeTelegram retry logic", () => {
     expect(result.status).toBe(401);
     expect(result.error).toBe("Unauthorized");
     expect(fetchMock).toHaveBeenCalledTimes(1); // Should not retry
+  });
+
+  it("uses resolver-scoped Telegram fetch with probe network options", async () => {
+    const fetchMock = installFetchMock();
+    mockGetMeSuccess(fetchMock);
+    mockGetWebhookInfoSuccess(fetchMock);
+
+    await probeTelegram(token, timeoutMs, {
+      proxyUrl: "http://127.0.0.1:8888",
+      network: {
+        autoSelectFamily: false,
+        dnsResultOrder: "ipv4first",
+      },
+    });
+
+    expect(makeProxyFetch).toHaveBeenCalledWith("http://127.0.0.1:8888");
+    expect(resolveTelegramFetch).toHaveBeenCalledWith(fetchMock, {
+      network: {
+        autoSelectFamily: false,
+        dnsResultOrder: "ipv4first",
+      },
+    });
   });
 });
