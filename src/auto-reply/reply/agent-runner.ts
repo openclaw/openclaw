@@ -377,6 +377,7 @@ export async function runReplyAgent(params: {
       directlySentBlockKeys,
     } = runOutcome;
     let { didLogHeartbeatStrip, autoCompactionCompleted } = runOutcome;
+    const { wasTruncated } = runOutcome;
 
     if (
       shouldInjectGroupIntro &&
@@ -691,6 +692,16 @@ export async function runReplyAgent(params: {
     }
     if (verboseNotices.length > 0) {
       finalPayloads = [...verboseNotices, ...finalPayloads];
+    }
+    // Always surface truncation — the response was cut off at the output token limit
+    // and the user needs to know they can ask for continuation.
+    if (wasTruncated) {
+      finalPayloads = [
+        ...finalPayloads,
+        {
+          text: "⚠️ Response was cut off at the output token limit. You can ask me to continue from where I left off.",
+        },
+      ];
     }
     if (responseUsageLine) {
       finalPayloads = appendUsageLine(finalPayloads, responseUsageLine);

@@ -67,6 +67,8 @@ export type AgentRunLoopResult =
       fallbackAttempts: RuntimeFallbackAttempt[];
       didLogHeartbeatStrip: boolean;
       autoCompactionCompleted: boolean;
+      /** True when the run ended due to output token limit (stopReason "length"/"max_tokens"). */
+      wasTruncated: boolean;
       /** Payload keys sent directly (not via pipeline) during tool flush. */
       directlySentBlockKeys?: Set<string>;
     }
@@ -103,6 +105,7 @@ export async function runAgentTurnWithFallback(params: {
   const TRANSIENT_HTTP_RETRY_DELAY_MS = 2_500;
   let didLogHeartbeatStrip = false;
   let autoCompactionCompleted = false;
+  let wasTruncated = false;
   // Track payloads sent directly (not via pipeline) during tool flush to avoid duplicates.
   const directlySentBlockKeys = new Set<string>();
 
@@ -397,6 +400,13 @@ export async function runAgentTurnWithFallback(params: {
                     autoCompactionCompleted = true;
                   }
                 }
+                // Track truncation due to output token limit
+                if (evt.stream === "lifecycle") {
+                  const phase = typeof evt.data.phase === "string" ? evt.data.phase : "";
+                  if (phase === "truncated") {
+                    wasTruncated = true;
+                  }
+                }
               },
               // Always pass onBlockReply so flushBlockReplyBuffer works before tool execution,
               // even when regular block streaming is disabled. The handler sends directly
@@ -649,6 +659,7 @@ export async function runAgentTurnWithFallback(params: {
     fallbackAttempts,
     didLogHeartbeatStrip,
     autoCompactionCompleted,
+    wasTruncated,
     directlySentBlockKeys: directlySentBlockKeys.size > 0 ? directlySentBlockKeys : undefined,
   };
 }
