@@ -4,6 +4,7 @@ import type { SessionState } from "../logging/diagnostic-session-state.js";
 import {
   CRITICAL_THRESHOLD,
   GLOBAL_CIRCUIT_BREAKER_THRESHOLD,
+  STALE_HISTORY_GAP_MS,
   TOOL_CALL_HISTORY_SIZE,
   WARNING_THRESHOLD,
   detectToolCallLoop,
@@ -589,6 +590,66 @@ describe("tool-loop-detection", () => {
       const stats = getToolCallStats(state);
       expect(stats.mostFrequent?.toolName).toBe("read");
       expect(stats.mostFrequent?.count).toBe(7);
+    });
+  });
+
+  describe("stale history cleanup (regression #40144)", () => {
+    it("clears stale tool call history when time gap exceeds threshold", () => {
+      const state = createState();
+      // Simulate a heartbeat cycle: record some tool calls
+      for (let i = 0; i < 5; i += 1) {
+        recordToolCall(state, "read", { path: "/a.txt" }, `hb1-${i}`);
+      }
+      expect(state.toolCallHistory?.length).toBe(5);
+
+      // Simulate time gap > STALE_HISTORY_GAP_MS by backdating all entries
+      for (const entry of state.toolCallHistory ?? []) {
+        entry.timestamp = Date.now() - STALE_HISTORY_GAP_MS - 1000;
+      }
+
+      // Next heartbeat cycle records a tool call — stale history should be cleared first
+      recordToolCall(state, "read", { path: "/a.txt" }, "hb2-0");
+
+      // History should only contain the new call, not the stale ones
+      expect(state.toolCallHistory?.length).toBe(1);
+    });
+
+    it("does not clear history when calls are within the time window", () => {
+      const state = createState();
+      for (let i = 0; i < 5; i += 1) {
+        recordToolCall(state, "read", { path: "/a.txt" }, `call-${i}`);
+      }
+      expect(state.toolCallHistory?.length).toBe(5);
+
+      // Record another call immediately — history should not be cleared
+      recordToolCall(state, "read", { path: "/a.txt" }, "call-5");
+      expect(state.toolCallHistory?.length).toBe(6);
+    });
+
+    it("prevents false positive loop detection across separate heartbeat cycles", () => {
+      const state = createState();
+      const config = enabledLoopDetectionConfig;
+
+      // First heartbeat: record identical tool calls (below warning threshold)
+      for (let i = 0; i < WARNING_THRESHOLD - 2; i += 1) {
+        recordToolCall(state, "message", { text: "status" }, `hb1-${i}`, config);
+      }
+      const firstResult = detectToolCallLoop(state, "message", { text: "status" }, config);
+      expect(firstResult.stuck).toBe(false);
+
+      // Backdate all entries to simulate time passing between heartbeat cycles
+      for (const entry of state.toolCallHistory ?? []) {
+        entry.timestamp = Date.now() - STALE_HISTORY_GAP_MS - 1000;
+      }
+
+      // Second heartbeat: same tool calls should NOT accumulate with first cycle
+      for (let i = 0; i < WARNING_THRESHOLD - 2; i += 1) {
+        recordToolCall(state, "message", { text: "status" }, `hb2-${i}`, config);
+      }
+      const secondResult = detectToolCallLoop(state, "message", { text: "status" }, config);
+      // Without the fix, this would be a false positive warning because
+      // history from both cycles would be combined
+      expect(secondResult.stuck).toBe(false);
     });
   });
 });

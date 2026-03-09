@@ -28,6 +28,8 @@ export const TOOL_CALL_HISTORY_SIZE = 30;
 export const WARNING_THRESHOLD = 10;
 export const CRITICAL_THRESHOLD = 20;
 export const GLOBAL_CIRCUIT_BREAKER_THRESHOLD = 30;
+/** If the most recent tool call is older than this, consider the history stale and reset. */
+export const STALE_HISTORY_GAP_MS = 60_000;
 const DEFAULT_LOOP_DETECTION_CONFIG = {
   enabled: false,
   historySize: TOOL_CALL_HISTORY_SIZE,
@@ -507,6 +509,13 @@ export function recordToolCall(
 ): void {
   const resolvedConfig = resolveLoopDetectionConfig(config);
   if (!state.toolCallHistory) {
+    state.toolCallHistory = [];
+  }
+
+  // Clear stale history when there's a significant time gap (e.g. between
+  // heartbeat cycles) to prevent false positive loop detection (#40144).
+  const lastEntry = state.toolCallHistory.at(-1);
+  if (lastEntry && Date.now() - lastEntry.timestamp > STALE_HISTORY_GAP_MS) {
     state.toolCallHistory = [];
   }
 
