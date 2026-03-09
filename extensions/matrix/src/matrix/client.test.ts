@@ -95,7 +95,7 @@ describe("resolveMatrixAuth", () => {
         matrix: {
           homeserver: "https://matrix.cloud-city.dev",
           userId: "@clio:cloud-city.dev",
-          password: "clio-password",
+          password: "clio-password", // pragma: allowlist secret
         },
       },
     } as CoreConfig;
