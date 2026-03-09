@@ -23,6 +23,14 @@ const EnvHttpProxyAgentCtor = vi.hoisted(() =>
     this.options = options;
   }),
 );
+const ProxyAgentCtor = vi.hoisted(() =>
+  vi.fn(function MockProxyAgent(
+    this: { options?: Record<string, unknown> | string },
+    options?: Record<string, unknown> | string,
+  ) {
+    this.options = options;
+  }),
+);
 
 vi.mock("node:dns", async () => {
   const actual = await vi.importActual<typeof import("node:dns")>("node:dns");
@@ -43,6 +51,7 @@ vi.mock("node:net", async () => {
 vi.mock("undici", () => ({
   Agent: AgentCtor,
   EnvHttpProxyAgent: EnvHttpProxyAgentCtor,
+  ProxyAgent: ProxyAgentCtor,
   fetch: undiciFetch,
   setGlobalDispatcher,
 }));
@@ -87,6 +96,7 @@ afterEach(() => {
   setGlobalDispatcher.mockReset();
   AgentCtor.mockClear();
   EnvHttpProxyAgentCtor.mockClear();
+  ProxyAgentCtor.mockClear();
   setDefaultResultOrder.mockReset();
   setDefaultAutoSelectFamily.mockReset();
   vi.unstubAllEnvs();
@@ -161,6 +171,37 @@ describe("resolveTelegramFetch", () => {
       expect.objectContaining({
         autoSelectFamily: false,
         autoSelectFamilyAttemptTimeout: 300,
+      }),
+    );
+  });
+
+  it("keeps resolver-scoped transport policy for OpenClaw proxy fetches", async () => {
+    const { makeProxyFetch } = await import("./proxy.js");
+    const proxyFetch = makeProxyFetch("http://127.0.0.1:7890");
+    ProxyAgentCtor.mockClear();
+    undiciFetch.mockResolvedValue({ ok: true } as Response);
+
+    const resolved = resolveTelegramFetchOrThrow(proxyFetch, {
+      network: {
+        autoSelectFamily: false,
+        dnsResultOrder: "ipv4first",
+      },
+    });
+
+    await resolved("https://api.telegram.org/botx/getMe");
+
+    expect(ProxyAgentCtor).toHaveBeenCalledTimes(1);
+    expect(EnvHttpProxyAgentCtor).not.toHaveBeenCalled();
+    expect(AgentCtor).not.toHaveBeenCalled();
+    const dispatcher = getDispatcherFromUndiciCall(1);
+    expect(dispatcher?.options).toEqual(
+      expect.objectContaining({
+        uri: "http://127.0.0.1:7890",
+      }),
+    );
+    expect(dispatcher?.options?.connect).toEqual(
+      expect.objectContaining({
+        autoSelectFamily: false,
       }),
     );
   });

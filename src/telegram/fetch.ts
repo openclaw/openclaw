@@ -1,5 +1,5 @@
 import * as dns from "node:dns";
-import { Agent, EnvHttpProxyAgent, fetch as undiciFetch } from "undici";
+import { Agent, EnvHttpProxyAgent, ProxyAgent, fetch as undiciFetch } from "undici";
 import type { TelegramNetworkConfig } from "../config/types.telegram.js";
 import { resolveFetch } from "../infra/fetch.js";
 import { hasProxyEnvConfigured } from "../infra/net/proxy-env.js";
@@ -8,6 +8,7 @@ import {
   resolveTelegramAutoSelectFamilyDecision,
   resolveTelegramDnsResultOrderDecision,
 } from "./network-config.js";
+import { getProxyUrlFromFetch } from "./proxy.js";
 
 const log = createSubsystemLogger("telegram/network");
 
@@ -136,12 +137,31 @@ function createTelegramDispatcher(params: {
   dnsResultOrder: TelegramDnsResultOrder | null;
   useEnvProxy: boolean;
   forceIpv4: boolean;
-}): Agent | EnvHttpProxyAgent {
+  proxyUrl?: string;
+}): Agent | EnvHttpProxyAgent | ProxyAgent {
   const connect = buildTelegramConnectOptions({
     autoSelectFamily: params.autoSelectFamily,
     dnsResultOrder: params.dnsResultOrder,
     forceIpv4: params.forceIpv4,
   });
+  const explicitProxyUrl = params.proxyUrl?.trim();
+  if (explicitProxyUrl) {
+    const proxyOptions = connect
+      ? ({
+          uri: explicitProxyUrl,
+          connect,
+        } satisfies ConstructorParameters<typeof ProxyAgent>[0])
+      : explicitProxyUrl;
+    try {
+      return new ProxyAgent(proxyOptions);
+    } catch (err) {
+      log.warn(
+        `proxy dispatcher init failed; falling back to direct dispatcher: ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+      );
+    }
+  }
   if (params.useEnvProxy) {
     const proxyOptions = connect
       ? ({
@@ -168,7 +188,7 @@ function createTelegramDispatcher(params: {
 
 function withDispatcherIfMissing(
   init: RequestInit | undefined,
-  dispatcher: Agent | EnvHttpProxyAgent,
+  dispatcher: Agent | EnvHttpProxyAgent | ProxyAgent,
 ): RequestInitWithDispatcher {
   const withDispatcher = init as RequestInitWithDispatcher | undefined;
   if (withDispatcher?.dispatcher) {
@@ -262,28 +282,34 @@ export function resolveTelegramFetch(
     dnsDecision,
   });
 
-  const sourceFetch = proxyFetch
-    ? resolveFetch(proxyFetch)
-    : resolveFetch(undiciFetch as unknown as typeof fetch);
+  const explicitProxyUrl = proxyFetch ? getProxyUrlFromFetch(proxyFetch) : undefined;
+  const sourceFetch = explicitProxyUrl
+    ? resolveFetch(undiciFetch as unknown as typeof fetch)
+    : proxyFetch
+      ? resolveFetch(proxyFetch)
+      : resolveFetch(undiciFetch as unknown as typeof fetch);
   if (!sourceFetch) {
     throw new Error("fetch is not available; set channels.telegram.proxy in config");
   }
 
-  if (proxyFetch) {
+  // Preserve fully caller-owned custom fetch implementations.
+  // OpenClaw proxy fetches are metadata-tagged and continue into resolver-scoped policy.
+  if (proxyFetch && !explicitProxyUrl) {
     return sourceFetch;
   }
 
   const dnsResultOrder = normalizeDnsResultOrder(dnsDecision.value);
-  const useEnvProxy = hasProxyEnvConfigured();
+  const useEnvProxy = !explicitProxyUrl && hasProxyEnvConfigured();
   const defaultDispatcher = createTelegramDispatcher({
     autoSelectFamily: autoSelectDecision.value,
     dnsResultOrder,
     useEnvProxy,
     forceIpv4: false,
+    proxyUrl: explicitProxyUrl,
   });
 
   let stickyIpv4FallbackEnabled = false;
-  let stickyIpv4Dispatcher: Agent | EnvHttpProxyAgent | null = null;
+  let stickyIpv4Dispatcher: Agent | EnvHttpProxyAgent | ProxyAgent | null = null;
   const resolveStickyIpv4Dispatcher = () => {
     if (!stickyIpv4Dispatcher) {
       stickyIpv4Dispatcher = createTelegramDispatcher({
@@ -291,6 +317,7 @@ export function resolveTelegramFetch(
         dnsResultOrder: "ipv4first",
         useEnvProxy,
         forceIpv4: true,
+        proxyUrl: explicitProxyUrl,
       });
     }
     return stickyIpv4Dispatcher;

@@ -1,6 +1,11 @@
 import { EnvHttpProxyAgent, ProxyAgent, fetch as undiciFetch } from "undici";
 import { logWarn } from "../../logger.js";
 
+export const PROXY_FETCH_PROXY_URL = Symbol.for("openclaw.proxyFetch.proxyUrl");
+type ProxyFetchWithMetadata = typeof fetch & {
+  [PROXY_FETCH_PROXY_URL]?: string;
+};
+
 /**
  * Create a fetch function that routes requests through the given HTTP proxy.
  * Uses undici's ProxyAgent under the hood.
@@ -9,11 +14,27 @@ export function makeProxyFetch(proxyUrl: string): typeof fetch {
   const agent = new ProxyAgent(proxyUrl);
   // undici's fetch is runtime-compatible with global fetch but the types diverge
   // on stream/body internals. Single cast at the boundary keeps the rest type-safe.
-  return ((input: RequestInfo | URL, init?: RequestInit) =>
+  const proxyFetch = ((input: RequestInfo | URL, init?: RequestInit) =>
     undiciFetch(input as string | URL, {
       ...(init as Record<string, unknown>),
       dispatcher: agent,
-    }) as unknown as Promise<Response>) as typeof fetch;
+    }) as unknown as Promise<Response>) as ProxyFetchWithMetadata;
+  Object.defineProperty(proxyFetch, PROXY_FETCH_PROXY_URL, {
+    value: proxyUrl,
+    enumerable: false,
+    configurable: false,
+    writable: false,
+  });
+  return proxyFetch;
+}
+
+export function getProxyUrlFromFetch(fetchImpl?: typeof fetch): string | undefined {
+  const proxyUrl = (fetchImpl as ProxyFetchWithMetadata | undefined)?.[PROXY_FETCH_PROXY_URL];
+  if (typeof proxyUrl !== "string") {
+    return undefined;
+  }
+  const trimmed = proxyUrl.trim();
+  return trimmed ? trimmed : undefined;
 }
 
 /**
