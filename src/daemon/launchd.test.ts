@@ -602,8 +602,7 @@ describe("launchd install", () => {
 
     const plistPath = resolveLaunchAgentPlistPath(env);
     expect(state.dirModes.get(env.HOME!)).toBe(0o755);
-    const expectedLibraryMode = process.platform === "win32" ? 0o777 : 0o755;
-    expect(state.dirModes.get("/Users/test/Library")).toBe(expectedLibraryMode);
+    expect(state.dirModes.get("/Users/test/Library")).toBe(0o755);
     expect(state.dirModes.get("/Users/test/Library/LaunchAgents")).toBe(0o755);
     expect(state.fileModes.get(plistPath)).toBe(0o600);
   });
