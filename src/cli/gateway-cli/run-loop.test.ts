@@ -47,10 +47,10 @@ vi.mock("../../logging/subsystem.js", () => ({
   createSubsystemLogger: () => gatewayLog,
 }));
 
-function removeNewSignalListeners(
-  signal: NodeJS.Signals,
-  existing: Set<(...args: unknown[]) => void>,
-) {
+const LOOP_SIGNALS = ["SIGTERM", "SIGINT", "SIGUSR1"] as const;
+type LoopSignal = (typeof LOOP_SIGNALS)[number];
+
+function removeNewSignalListeners(signal: LoopSignal, existing: Set<(...args: unknown[]) => void>) {
   for (const listener of process.listeners(signal)) {
     const fn = listener as (...args: unknown[]) => void;
     if (!existing.has(fn)) {
@@ -60,7 +60,7 @@ function removeNewSignalListeners(
 }
 
 function addedSignalListener(
-  signal: NodeJS.Signals,
+  signal: LoopSignal,
   existing: Set<(...args: unknown[]) => void>,
 ): (() => void) | null {
   const listeners = process.listeners(signal) as Array<(...args: unknown[]) => void>;
@@ -74,14 +74,15 @@ function addedSignalListener(
 }
 
 async function withIsolatedSignals(
-  run: (helpers: { captureSignal: (signal: NodeJS.Signals) => () => void }) => Promise<void>,
+  run: (helpers: { captureSignal: (signal: LoopSignal) => () => void }) => Promise<void>,
 ) {
-  const existingListeners = {
-    SIGTERM: new Set(process.listeners("SIGTERM") as Array<(...args: unknown[]) => void>),
-    SIGINT: new Set(process.listeners("SIGINT") as Array<(...args: unknown[]) => void>),
-    SIGUSR1: new Set(process.listeners("SIGUSR1") as Array<(...args: unknown[]) => void>),
-  } satisfies Record<NodeJS.Signals, Set<(...args: unknown[]) => void>>;
-  const captureSignal = (signal: NodeJS.Signals) => {
+  const existingListeners = Object.fromEntries(
+    LOOP_SIGNALS.map((signal) => [
+      signal,
+      new Set(process.listeners(signal) as Array<(...args: unknown[]) => void>),
+    ]),
+  ) as Record<LoopSignal, Set<(...args: unknown[]) => void>>;
+  const captureSignal = (signal: LoopSignal) => {
     const listener = addedSignalListener(signal, existingListeners[signal]);
     if (!listener) {
       throw new Error(`expected new ${signal} listener`);
@@ -91,9 +92,9 @@ async function withIsolatedSignals(
   try {
     await run({ captureSignal });
   } finally {
-    removeNewSignalListeners("SIGTERM", existingListeners.SIGTERM);
-    removeNewSignalListeners("SIGINT", existingListeners.SIGINT);
-    removeNewSignalListeners("SIGUSR1", existingListeners.SIGUSR1);
+    for (const signal of LOOP_SIGNALS) {
+      removeNewSignalListeners(signal, existingListeners[signal]);
+    }
   }
 }
 
