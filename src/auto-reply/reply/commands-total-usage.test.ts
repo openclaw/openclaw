@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 
 const loadCostUsageSummaryMock = vi.hoisted(() =>
-  vi.fn(async () => ({
+  vi.fn(async (_params: unknown) => ({
     updatedAt: Date.now(),
     days: 1,
     daily: [],
