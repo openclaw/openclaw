@@ -67,7 +67,7 @@ export function inferUpdateFailureHints(result: UpdateRunResult): string[] {
 
   // Windows: a running process (gateway or the CLI itself) locks node_modules/openclaw,
   // blocking the npm rename that global installs require.
-  if (failedStep.name.startsWith("global update") && stderr.includes("ebusy")) {
+  if (failedStep.name.startsWith("global update") && stderr.includes("ebusy") && stderr.includes("rename")) {
     hints.push(
       "Detected directory lock (EBUSY). On Windows a running process (typically the gateway) holds a lock on the install directory.",
     );
