@@ -83,6 +83,10 @@ export function describeGatewayCloseCode(code: number): string | undefined {
   return GATEWAY_CLOSE_CODE_HINTS[code];
 }
 
+// Shared constants for parse error handling between client.ts and probe.ts
+export const GATEWAY_PARSE_ERROR_CLOSE_CODE = 1008;
+export const GATEWAY_PARSE_ERROR_CLOSE_REASON = "parse error" as const;
+
 export class GatewayClient {
   private ws: WebSocket | null = null;
   private opts: GatewayClientOptions;
@@ -430,7 +434,7 @@ export class GatewayClient {
         this.flushPendingErrors(parseError);
         // Notify and close the connection
         this.opts.onConnectError?.(parseError);
-        this.ws?.close(1008, "parse error");
+        this.ws?.close(GATEWAY_PARSE_ERROR_CLOSE_CODE, GATEWAY_PARSE_ERROR_CLOSE_REASON);
         return;
       }
       logDebug(`gateway client parse error: ${String(err)}; raw (truncated): ${truncatedRaw}`);

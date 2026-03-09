@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const gatewayClientState = vi.hoisted(() => ({
   options: null as Record<string, unknown> | null,
   triggerOnClose: null as ((code: number, reason: string) => void) | null,
+  triggerOnConnectError: null as ((err: Error) => void) | null,
 }));
 
 class MockGatewayClient {
@@ -12,6 +13,7 @@ class MockGatewayClient {
     this.opts = opts;
     gatewayClientState.options = opts;
     gatewayClientState.triggerOnClose = opts.onClose as ((code: number, reason: string) => void) | null;
+    gatewayClientState.triggerOnConnectError = opts.onConnectError as ((err: Error) => void) | null;
   }
 
   start(): void {
@@ -31,14 +33,21 @@ class MockGatewayClient {
 
 vi.mock("./client.js", () => ({
   GatewayClient: MockGatewayClient,
+  GATEWAY_PARSE_ERROR_CLOSE_CODE: 1008,
+  GATEWAY_PARSE_ERROR_CLOSE_REASON: "parse error",
 }));
 
 const { probeGateway } = await import("./probe.js");
+
+// Use constants from the mock (same values as client.ts exports)
+const GATEWAY_PARSE_ERROR_CLOSE_CODE = 1008;
+const GATEWAY_PARSE_ERROR_CLOSE_REASON = "parse error";
 
 describe("probeGateway", () => {
   beforeEach(() => {
     gatewayClientState.options = null;
     gatewayClientState.triggerOnClose = null;
+    gatewayClientState.triggerOnConnectError = null;
   });
 
   it("connects with operator.read scope", async () => {
@@ -70,19 +79,28 @@ describe("probeGateway", () => {
       timeoutMs: 5000, // Long timeout to prove we don't wait
     });
 
-    // Simulate a parse error close from the gateway after a short delay
-    // This simulates what happens when gateway sends non-JSON content
+    // Simulate the real production order:
+    // 1. First, onConnectError with parse error
     setTimeout(() => {
-      gatewayClientState.triggerOnClose?.(1008, "parse error");
+      gatewayClientState.triggerOnConnectError?.(
+        new Error("Failed to parse JSON message from gateway: SyntaxError; raw (truncated): not-json")
+      );
+    }, 10);
+    
+    // 2. Then, onClose with parse error close
+    setTimeout(() => {
+      gatewayClientState.triggerOnClose?.(
+        GATEWAY_PARSE_ERROR_CLOSE_CODE,
+        GATEWAY_PARSE_ERROR_CLOSE_REASON
+      );
     }, 50);
 
     const result = await probePromise;
     const elapsed = Date.now() - startedAt;
 
-    // Should fail explicitly
+    // Should fail explicitly with parse error message
     expect(result.ok).toBe(false);
-    expect(result.error).toContain("gateway protocol error");
-    expect(result.error).toContain("parse error");
+    expect(result.error).toContain("Failed to parse JSON message from gateway");
     
     // Should fail quickly, not wait for the 5000ms timeout
     expect(elapsed).toBeLessThan(1000);

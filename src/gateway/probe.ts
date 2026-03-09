@@ -2,7 +2,11 @@ import { randomUUID } from "node:crypto";
 import { formatErrorMessage } from "../infra/errors.js";
 import type { SystemPresence } from "../infra/system-presence.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
-import { GatewayClient } from "./client.js";
+import {
+  GATEWAY_PARSE_ERROR_CLOSE_CODE,
+  GATEWAY_PARSE_ERROR_CLOSE_REASON,
+  GatewayClient,
+} from "./client.js";
 import { READ_SCOPE } from "./method-scopes.js";
 
 export type GatewayProbeAuth = {
@@ -38,6 +42,7 @@ export async function probeGateway(opts: {
   let connectLatencyMs: number | null = null;
   let connectError: string | null = null;
   let close: GatewayProbeClose | null = null;
+  let sawParseError = false;
 
   return await new Promise<GatewayProbeResult>((resolve) => {
     let settled = false;
@@ -62,13 +67,21 @@ export async function probeGateway(opts: {
       instanceId,
       onConnectError: (err) => {
         connectError = formatErrorMessage(err);
+        // Track if we've seen a parse error to enable fast-fail on close
+        if (err.message.includes("Failed to parse JSON message from gateway")) {
+          sawParseError = true;
+        }
       },
       onClose: (code, reason) => {
         close = { code, reason };
-        // In PROBE mode, a close with code 1008 and reason "parse error" is a fatal
-        // protocol error that should immediately fail the probe, not wait for timeout.
+        // In PROBE mode, a close with code 1008 and reason "parse error" (or after seeing
+        // a parse-error connectError) is a fatal protocol error that should immediately
+        // fail the probe, not wait for timeout.
         // This handles the case where the gateway sends non-JSON content.
-        if (code === 1008 && reason === "parse error") {
+        if (
+          code === GATEWAY_PARSE_ERROR_CLOSE_CODE &&
+          (reason === GATEWAY_PARSE_ERROR_CLOSE_REASON || sawParseError)
+        ) {
           settle({
             ok: false,
             connectLatencyMs,

@@ -112,7 +112,8 @@ vi.mock("../logger.js", async (importOriginal) => {
   };
 });
 
-const { GatewayClient } = await import("./client.js");
+// Import after mocks to avoid circular dependency
+const { GatewayClient, GATEWAY_PARSE_ERROR_CLOSE_CODE, GATEWAY_PARSE_ERROR_CLOSE_REASON } = await import("./client.js");
 
 function getLatestWs(): MockWebSocket {
   const ws = wsInstances.at(-1);
@@ -608,7 +609,7 @@ describe("GatewayClient handleMessage parse errors", () => {
       }),
     );
     // Should close the connection with parse error code
-    expect(onClose).toHaveBeenCalledWith(1008, "parse error");
+    expect(onClose).toHaveBeenCalledWith(GATEWAY_PARSE_ERROR_CLOSE_CODE, GATEWAY_PARSE_ERROR_CLOSE_REASON);
     client.stop();
   });
 
@@ -634,7 +635,7 @@ describe("GatewayClient handleMessage parse errors", () => {
       ws.emitMessage("not valid json");
       
       // Verify close was called
-      expect(onClose).toHaveBeenCalledWith(1008, "parse error");
+      expect(onClose).toHaveBeenCalledWith(GATEWAY_PARSE_ERROR_CLOSE_CODE, GATEWAY_PARSE_ERROR_CLOSE_REASON);
       
       // The client should be marked as closed, preventing reconnection
       // We verify this by checking that no new WebSocket instances are created
@@ -681,7 +682,7 @@ describe("GatewayClient handleMessage parse errors", () => {
         message: expect.stringContaining("│ Config invalid"),
       }),
     );
-    expect(onClose).toHaveBeenCalledWith(1008, "parse error");
+    expect(onClose).toHaveBeenCalledWith(GATEWAY_PARSE_ERROR_CLOSE_CODE, GATEWAY_PARSE_ERROR_CLOSE_REASON);
     client.stop();
   });
 
@@ -709,7 +710,7 @@ describe("GatewayClient handleMessage parse errors", () => {
     // The pending request should be rejected with the parse error
     await expect(requestPromise).rejects.toThrow("Failed to parse JSON message from gateway");
     
-    expect(onClose).toHaveBeenCalledWith(1008, "parse error");
+    expect(onClose).toHaveBeenCalledWith(GATEWAY_PARSE_ERROR_CLOSE_CODE, GATEWAY_PARSE_ERROR_CLOSE_REASON);
     client.stop();
   });
 });
