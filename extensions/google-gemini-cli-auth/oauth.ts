@@ -81,7 +81,6 @@ export function extractGeminiCliCredentials(): { clientId: string; clientSecret:
     const resolvedPath = realpathSync(geminiPath);
     const geminiCliDirs = resolveGeminiCliDirs(geminiPath, resolvedPath);
 
-    let content: string | null = null;
     for (const geminiCliDir of geminiCliDirs) {
       const searchPaths = [
         join(
@@ -105,30 +104,33 @@ export function extractGeminiCliCredentials(): { clientId: string; clientSecret:
         ),
       ];
 
+      let content: string | null = null;
       for (const p of searchPaths) {
         if (existsSync(p)) {
           content = readFileSync(p, "utf8");
           break;
         }
       }
-      if (content) {
-        break;
+      if (!content) {
+        const found = findFile(geminiCliDir, "oauth2.js", 10);
+        if (found) {
+          content = readFileSync(found, "utf8");
+        }
       }
-      const found = findFile(geminiCliDir, "oauth2.js", 10);
-      if (found) {
-        content = readFileSync(found, "utf8");
-        break;
+      if (!content) {
+        continue;
       }
-    }
-    if (!content) {
-      return null;
-    }
 
-    const idMatch = content.match(/(\d+-[a-z0-9]+\.apps\.googleusercontent\.com)/);
-    const secretMatch = content.match(/(GOCSPX-[A-Za-z0-9_-]+)/);
-    if (idMatch && secretMatch) {
-      cachedGeminiCliCredentials = { clientId: idMatch[1], clientSecret: secretMatch[1] };
-      return cachedGeminiCliCredentials;
+      // Validate that this oauth2.js actually contains Google OAuth credentials.
+      // The `findFile` fallback searches broadly (depth 10) and may pick up an
+      // unrelated oauth2.js (e.g. discord-api-types) when the candidate dir
+      // happens to be a large ancestor directory like the nvm root.
+      const idMatch = content.match(/(\d+-[a-z0-9]+\.apps\.googleusercontent\.com)/);
+      const secretMatch = content.match(/(GOCSPX-[A-Za-z0-9_-]+)/);
+      if (idMatch && secretMatch) {
+        cachedGeminiCliCredentials = { clientId: idMatch[1], clientSecret: secretMatch[1] };
+        return cachedGeminiCliCredentials;
+      }
     }
   } catch {
     // Gemini CLI not installed or extraction failed
@@ -155,18 +157,7 @@ function resolveGeminiCliDirs(geminiPath: string, resolvedPath: string): string[
       continue;
     }
     seen.add(key);
-    // Only include candidates that actually look like a gemini-cli package dir
-    // or a parent that contains gemini-cli-core.  Without this guard the first
-    // candidate (`dirname(dirname(resolvedPath))`) can resolve to an unrelated
-    // ancestor (e.g. the nvm root on Windows) and `findFile` may then pick up
-    // an `oauth2.js` from a completely different package (e.g. discord-api-types),
-    // causing credential extraction to silently fail.
-    if (
-      existsSync(join(candidate, "package.json")) ||
-      existsSync(join(candidate, "node_modules", "@google", "gemini-cli-core"))
-    ) {
-      deduped.push(candidate);
-    }
+    deduped.push(candidate);
   }
   return deduped;
 }

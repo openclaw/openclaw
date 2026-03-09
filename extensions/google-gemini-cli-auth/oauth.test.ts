@@ -88,23 +88,9 @@ describe("extractGeminiCliCredentials", () => {
     const layout = makeFakeLayout();
     process.env.PATH = layout.binDir;
 
-    // resolveGeminiCliDirs checks package.json to validate candidate directories
-    const geminiCliDir = join(
-      rootDir,
-      "fake",
-      "lib",
-      "node_modules",
-      "@google",
-      "gemini-cli",
-    );
-    const packageJsonPath = normalizePath(join(geminiCliDir, "package.json"));
-
     mockExistsSync.mockImplementation((p: string) => {
       const normalized = normalizePath(p);
       if (normalized === normalizePath(layout.geminiPath)) {
-        return true;
-      }
-      if (normalized === packageJsonPath) {
         return true;
       }
       if (params.oauth2Exists && normalized === normalizePath(layout.oauth2Path)) {
@@ -127,9 +113,11 @@ describe("extractGeminiCliCredentials", () => {
     const binDir = join(rootDir, "fake", "npm-bin");
     const geminiPath = join(binDir, "gemini");
     const resolvedPath = geminiPath;
-    const geminiCliDir = join(binDir, "node_modules", "@google", "gemini-cli");
     const oauth2Path = join(
-      geminiCliDir,
+      binDir,
+      "node_modules",
+      "@google",
+      "gemini-cli",
       "node_modules",
       "@google",
       "gemini-cli-core",
@@ -138,15 +126,11 @@ describe("extractGeminiCliCredentials", () => {
       "code_assist",
       "oauth2.js",
     );
-    const packageJsonPath = normalizePath(join(geminiCliDir, "package.json"));
     process.env.PATH = binDir;
 
     mockExistsSync.mockImplementation((p: string) => {
       const normalized = normalizePath(p);
       if (normalized === normalizePath(geminiPath)) {
-        return true;
-      }
-      if (normalized === packageJsonPath) {
         return true;
       }
       if (params.oauth2Exists && normalized === normalizePath(oauth2Path)) {
