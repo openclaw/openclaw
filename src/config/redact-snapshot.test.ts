@@ -5,6 +5,7 @@ import {
   redactConfigSnapshot,
   restoreRedactedValues as restoreRedactedValues_orig,
 } from "./redact-snapshot.js";
+import { replaceSensitiveValuesInRaw } from "./redact-snapshot.raw.js";
 import { __test__ } from "./schema.hints.js";
 import type { ConfigUiHints } from "./schema.js";
 import type { ConfigFileSnapshot } from "./types.openclaw.js";
@@ -1093,6 +1094,37 @@ describe("restoreRedactedValues", () => {
     const result = restoreRedactedValues(incoming, original, hints) as typeof incoming;
     expect(result.channels.slack.accounts[0].botToken).toBe("original-token-first-account");
     expect(result.channels.slack.accounts[1].botToken).toBe("user-provided-new-token-value");
+  });
+});
+
+describe("replaceSensitiveValuesInRaw", () => {
+  it("does not throw RangeError when sensitiveValues contains an empty string", () => {
+    // Regression for #40818: config.get crashed with RangeError: Invalid string
+    // length when a sensitive field (e.g. talk.apiKey) was set to "". The empty
+    // string caused replaceAll("", sentinel) to insert the sentinel between every
+    // character of the raw config, ballooning a ~1KB string into hundreds of MB.
+    const raw = '{"talk":{"apiKey":""}}';
+    expect(() =>
+      replaceSensitiveValuesInRaw({
+        raw,
+        sensitiveValues: ["", ""],
+        redactedSentinel: REDACTED_SENTINEL,
+      }),
+    ).not.toThrow();
+    // Empty strings must be skipped — no mutation of the raw text.
+    const result = replaceSensitiveValuesInRaw({
+      raw,
+      sensitiveValues: ["", "real-secret"],
+      redactedSentinel: REDACTED_SENTINEL,
+    });
+    expect(result).not.toContain("real-secret");
+    expect(result).toBe(raw.replaceAll("real-secret", REDACTED_SENTINEL));
+  });
+
+  it("redactConfigSnapshot does not throw when a sensitive field is an empty string", () => {
+    const config = { talk: { apiKey: "" } };
+    const snapshot = makeSnapshot(config);
+    expect(() => redactConfigSnapshot(snapshot, mainSchemaHints)).not.toThrow();
   });
 });
 
