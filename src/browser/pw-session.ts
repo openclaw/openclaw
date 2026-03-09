@@ -19,8 +19,10 @@ import {
 } from "./cdp.helpers.js";
 import { normalizeCdpWsUrl } from "./cdp.js";
 import { getChromeWebSocketUrl } from "./chrome.js";
+import { BrowserTabNotFoundError } from "./errors.js";
 import {
   assertBrowserNavigationAllowed,
+  assertBrowserNavigationRedirectChainAllowed,
   assertBrowserNavigationResultAllowed,
   withBrowserNavigationPolicy,
 } from "./navigation-guard.js";
@@ -495,7 +497,7 @@ async function resolvePageByTargetIdOrThrow(opts: {
   const { browser } = await connectBrowser(opts.cdpUrl);
   const page = await findPageByTargetId(browser, opts.targetId, opts.cdpUrl);
   if (!page) {
-    throw new Error("tab not found");
+    throw new BrowserTabNotFoundError();
   }
   return page;
 }
@@ -521,7 +523,7 @@ export async function getPageForTargetId(opts: {
     if (pages.length === 1) {
       return first;
     }
-    throw new Error("tab not found");
+    throw new BrowserTabNotFoundError();
   }
   return found;
 }
@@ -786,8 +788,13 @@ export async function createPageViaPlaywright(opts: {
       url: targetUrl,
       ...navigationPolicy,
     });
-    await page.goto(targetUrl, { timeout: 30_000 }).catch(() => {
+    const response = await page.goto(targetUrl, { timeout: 30_000 }).catch(() => {
       // Navigation might fail for some URLs, but page is still created
+      return null;
+    });
+    await assertBrowserNavigationRedirectChainAllowed({
+      request: response?.request(),
+      ...navigationPolicy,
     });
     await assertBrowserNavigationResultAllowed({
       url: page.url(),
