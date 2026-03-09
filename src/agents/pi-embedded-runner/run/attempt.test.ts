@@ -621,8 +621,19 @@ describe("decodeHtmlEntitiesInObject", () => {
 
     const wrapped = wrapStreamFnDecodeXaiToolCallArguments(baseFn as unknown as StreamFn);
     const stream = wrapped(
-      { provider: "xai", api: "openai-responses", id: "grok" },
-      { prompt: "", messages: [] },
+      {
+        provider: "xai",
+        api: "openai-responses",
+        id: "grok",
+        name: "Grok",
+        baseUrl: "https://example.invalid/v1",
+        reasoning: false,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 1,
+        maxTokens: 1,
+      },
+      { messages: [] },
       {},
     ) as ReturnType<typeof streamSimple>;
 
