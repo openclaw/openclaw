@@ -66,8 +66,13 @@ if (!child.stdin || !child.stdout) {
 }
 
 process.stdin.pipe(child.stdin);
-child.stdin.on("error", () => {
+child.stdin.on("error", (error) => {
   // Ignore EPIPE when the child exits before stdin flush completes.
+  if (error?.code === "EPIPE") {
+    return;
+  }
+  process.stderr.write(`${error instanceof Error ? error.message : String(error)}
+`);
 });
 child.stdout.pipe(process.stdout);
 
