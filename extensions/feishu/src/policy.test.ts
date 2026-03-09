@@ -163,6 +163,17 @@ describe("feishu policy", () => {
       ).toEqual({ requireMention: true });
     });
 
+    it("requireMentionInThread tightens when base requireMention is false", () => {
+      expect(
+        resolveFeishuReplyPolicy({
+          isDirectMessage: false,
+          isThreadReply: true,
+          globalConfig: { requireMention: false } as FeishuConfig,
+          groupConfig: { requireMentionInThread: true } as FeishuGroupConfig,
+        }),
+      ).toEqual({ requireMention: true });
+    });
+
     it("does not apply thread override for non-thread messages", () => {
       expect(
         resolveFeishuReplyPolicy({
