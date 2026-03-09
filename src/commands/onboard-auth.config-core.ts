@@ -352,7 +352,8 @@ export function applyChutesConfig(cfg: OpenClawConfig): OpenClawConfig {
         },
         imageModel: {
           primary: "chutes/chutesai/Mistral-Small-3.2-24B-Instruct-2506",
-          fallbacks: ["chutes/Qwen/Qwen3-32B"],
+          // Mistral-Small-3.1 supports text+image; Qwen3-32B is text-only so cannot be an image fallback
+          fallbacks: ["chutes/chutesai/Mistral-Small-3.1-24B-Instruct-2503"],
         },
       },
     },

@@ -545,10 +545,24 @@ const PROFILE_IMPLICIT_PROVIDER_LOADERS: ImplicitProviderLoader[] = [
     apiKey: QWEN_OAUTH_MARKER,
   })),
   withProfilePresence("openai-codex", async () => buildOpenAICodexProvider()),
-  withProfilePresence("chutes", async () => ({
-    ...(await buildChutesProvider()),
-    apiKey: CHUTES_OAUTH_MARKER,
-  })),
+  // Only fire for OAuth profiles — api_key profiles are handled by the SIMPLE
+  // loader above. Triggering on api_key profiles would overwrite the real API
+  // key with CHUTES_OAUTH_MARKER (PROFILE loaders run after SIMPLE loaders and
+  // mergeImplicitProviderSet unconditionally overwrites).
+  async (ctx) => {
+    const hasOAuthProfile = listProfilesForProvider(ctx.authStore, "chutes").some(
+      (id) => ctx.authStore.profiles[id]?.type === "oauth",
+    );
+    if (!hasOAuthProfile) {
+      return undefined;
+    }
+    return {
+      chutes: {
+        ...(await buildChutesProvider()),
+        apiKey: CHUTES_OAUTH_MARKER,
+      },
+    };
+  },
 ];
 
 const PAIRED_IMPLICIT_PROVIDER_LOADERS: ImplicitProviderLoader[] = [

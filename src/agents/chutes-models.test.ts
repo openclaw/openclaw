@@ -136,4 +136,80 @@ describe("chutes-models", () => {
       vi.unstubAllGlobals();
     }
   });
+
+  it("caches fallback static catalog for non-OK responses", async () => {
+    const oldNodeEnv = process.env.NODE_ENV;
+    const oldVitest = process.env.VITEST;
+    delete process.env.NODE_ENV;
+    delete process.env.VITEST;
+
+    const mockFetch = vi.fn().mockResolvedValue({
+      ok: false,
+      status: 503,
+    });
+    vi.stubGlobal("fetch", mockFetch);
+
+    try {
+      const first = await discoverChutesModels("chutes-fallback-token");
+      const second = await discoverChutesModels("chutes-fallback-token");
+      expect(first.map((m) => m.id)).toEqual(CHUTES_MODEL_CATALOG.map((m) => m.id));
+      expect(second.map((m) => m.id)).toEqual(CHUTES_MODEL_CATALOG.map((m) => m.id));
+      expect(mockFetch).toHaveBeenCalledTimes(1);
+    } finally {
+      process.env.NODE_ENV = oldNodeEnv;
+      process.env.VITEST = oldVitest;
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("scopes discovery cache by access token", async () => {
+    const oldNodeEnv = process.env.NODE_ENV;
+    const oldVitest = process.env.VITEST;
+    delete process.env.NODE_ENV;
+    delete process.env.VITEST;
+
+    const mockFetch = vi
+      .fn()
+      .mockImplementation((_url, init?: { headers?: Record<string, string> }) => {
+        const auth = init?.headers?.Authorization;
+        if (auth === "Bearer chutes-token-a") {
+          return Promise.resolve({
+            ok: true,
+            json: async () => ({
+              data: [{ id: "private/model-a" }],
+            }),
+          });
+        }
+        if (auth === "Bearer chutes-token-b") {
+          return Promise.resolve({
+            ok: true,
+            json: async () => ({
+              data: [{ id: "private/model-b" }],
+            }),
+          });
+        }
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            data: [{ id: "public/model" }],
+          }),
+        });
+      });
+    vi.stubGlobal("fetch", mockFetch);
+
+    try {
+      const modelsA = await discoverChutesModels("chutes-token-a");
+      const modelsB = await discoverChutesModels("chutes-token-b");
+      const modelsASecond = await discoverChutesModels("chutes-token-a");
+      expect(modelsA[0]?.id).toBe("private/model-a");
+      expect(modelsB[0]?.id).toBe("private/model-b");
+      expect(modelsASecond[0]?.id).toBe("private/model-a");
+      // One request per token, then cache hit for the repeated token-a call.
+      expect(mockFetch).toHaveBeenCalledTimes(2);
+    } finally {
+      process.env.NODE_ENV = oldNodeEnv;
+      process.env.VITEST = oldVitest;
+      vi.unstubAllGlobals();
+    }
+  });
 });

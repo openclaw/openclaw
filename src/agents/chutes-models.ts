@@ -481,14 +481,30 @@ interface OpenAIListModelsResponse {
   data?: ChutesModelEntry[];
 }
 
-let cachedModels: ModelDefinitionConfig[] | null = null;
-let lastDiscoveryTime = 0;
 const CACHE_TTL = 5 * 60 * 1000; // 5 minutes
+
+interface CacheEntry {
+  models: ModelDefinitionConfig[];
+  time: number;
+}
+
+// Keyed by trimmed access token (empty string = unauthenticated).
+// Prevents a public unauthenticated result from suppressing authenticated
+// discovery for users with token-scoped private models.
+const modelCache = new Map<string, CacheEntry>();
 
 /** @internal - For testing only */
 export function clearChutesModelCache() {
-  cachedModels = null;
-  lastDiscoveryTime = 0;
+  modelCache.clear();
+}
+
+/** Cache the result for the given token key and return it. */
+function cacheAndReturn(
+  tokenKey: string,
+  models: ModelDefinitionConfig[],
+): ModelDefinitionConfig[] {
+  modelCache.set(tokenKey, { models, time: Date.now() });
+  return models;
 }
 
 /**
@@ -496,10 +512,12 @@ export function clearChutesModelCache() {
  * Mimics the logic in Chutes init script.
  */
 export async function discoverChutesModels(accessToken?: string): Promise<ModelDefinitionConfig[]> {
-  // Return cached models if still valid
-  const now = Date.now();
-  if (cachedModels && now - lastDiscoveryTime < CACHE_TTL) {
-    return cachedModels;
+  const trimmedKey = accessToken?.trim() ?? "";
+
+  // Return cached result for this token if still within TTL
+  const cached = modelCache.get(trimmedKey);
+  if (cached && Date.now() - cached.time < CACHE_TTL) {
+    return cached.models;
   }
 
   // Skip API discovery in test environment
@@ -507,7 +525,12 @@ export async function discoverChutesModels(accessToken?: string): Promise<ModelD
     return CHUTES_MODEL_CATALOG.map(buildChutesModelDefinition);
   }
 
-  const trimmedKey = accessToken?.trim();
+  // If auth fails the result comes from the public endpoint — cache it under ""
+  // so the original token key stays uncached and retries cleanly next TTL window.
+  let effectiveKey = trimmedKey;
+  const staticCatalog = () =>
+    cacheAndReturn(effectiveKey, CHUTES_MODEL_CATALOG.map(buildChutesModelDefinition));
+
   const headers: Record<string, string> = {};
   if (trimmedKey) {
     headers.Authorization = `Bearer ${trimmedKey}`;
@@ -520,7 +543,10 @@ export async function discoverChutesModels(accessToken?: string): Promise<ModelD
     });
 
     if (response.status === 401 && trimmedKey) {
-      // If auth failed, try again without auth (endpoint is public)
+      // Auth failed — fall back to the public (unauthenticated) endpoint.
+      // Cache the result under "" so the bad token stays uncached and can
+      // be retried with a refreshed credential after the TTL expires.
+      effectiveKey = "";
       response = await fetch(`${CHUTES_BASE_URL}/models`, {
         signal: AbortSignal.timeout(10_000),
       });
@@ -531,14 +557,14 @@ export async function discoverChutesModels(accessToken?: string): Promise<ModelD
       if (response.status !== 401 && response.status !== 503) {
         log.warn(`GET /v1/models failed: HTTP ${response.status}, using static catalog`);
       }
-      return CHUTES_MODEL_CATALOG.map(buildChutesModelDefinition);
+      return staticCatalog();
     }
 
     const body = (await response.json()) as OpenAIListModelsResponse;
     const data = body?.data;
     if (!Array.isArray(data) || data.length === 0) {
       log.warn("No models in response, using static catalog");
-      return CHUTES_MODEL_CATALOG.map(buildChutesModelDefinition);
+      return staticCatalog();
     }
 
     const seen = new Set<string>();
@@ -581,13 +607,12 @@ export async function discoverChutesModels(accessToken?: string): Promise<ModelD
       });
     }
 
-    const result =
-      models.length > 0 ? models : CHUTES_MODEL_CATALOG.map(buildChutesModelDefinition);
-    cachedModels = result;
-    lastDiscoveryTime = Date.now();
-    return result;
+    return cacheAndReturn(
+      effectiveKey,
+      models.length > 0 ? models : CHUTES_MODEL_CATALOG.map(buildChutesModelDefinition),
+    );
   } catch (error) {
     log.warn(`Discovery failed: ${String(error)}, using static catalog`);
-    return CHUTES_MODEL_CATALOG.map(buildChutesModelDefinition);
+    return staticCatalog();
   }
 }
