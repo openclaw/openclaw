@@ -49,5 +49,4 @@ All models run at FP16 or FP16/FP8 precision:
 - Base URL: `https://api.sambanova.ai/v1`
 - OpenAI-compatible API (drop-in replacement)
 - Model refs use `SAMBANOVA/<model>` format
-- Get API key at: https://cloud.sambanova.ai/apis
 - For more model options, see [/concepts/model-providers](/concepts/model-providers)
