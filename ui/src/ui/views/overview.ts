@@ -30,12 +30,12 @@ export type OverviewProps = {
 export function renderOverview(props: OverviewProps) {
   const snapshot = props.hello?.snapshot as
     | {
-        uptimeMs?: number;
-        policy?: { tickIntervalMs?: number };
-        authMode?: "none" | "token" | "password" | "trusted-proxy";
-      }
+      uptimeMs?: number;
+      policy?: { tickIntervalMs?: number };
+      authMode?: "none" | "token" | "password" | "trusted-proxy";
+    }
     | undefined;
-  const activeLocale = i18n.getLocale(); 
+  const activeLocale = i18n.getLocale();
   const currentLocale = activeLocale || props.settings.locale;
   const uptime = snapshot?.uptimeMs ? formatDurationHuman(snapshot.uptimeMs) : t("common.na");
   const tick = snapshot?.policy?.tickIntervalMs
@@ -203,24 +203,23 @@ export function renderOverview(props: OverviewProps) {
             <input
               .value=${props.settings.gatewayUrl}
               @input=${(e: Event) => {
-                const v = (e.target as HTMLInputElement).value;
-                props.onSettingsChange({ ...props.settings, gatewayUrl: v });
-              }}
+      const v = (e.target as HTMLInputElement).value;
+      props.onSettingsChange({ ...props.settings, gatewayUrl: v });
+    }}
               placeholder="ws://100.x.y.z:18789"
             />
           </label>
-          ${
-            isTrustedProxy
-              ? ""
-              : html`
+          ${isTrustedProxy
+      ? ""
+      : html`
                 <label class="field">
                   <span>${t("overview.access.token")}</span>
                   <input
                     .value=${props.settings.token}
                     @input=${(e: Event) => {
-                      const v = (e.target as HTMLInputElement).value;
-                      props.onSettingsChange({ ...props.settings, token: v });
-                    }}
+          const v = (e.target as HTMLInputElement).value;
+          props.onSettingsChange({ ...props.settings, token: v });
+        }}
                     placeholder="OPENCLAW_GATEWAY_TOKEN"
                   />
                 </label>
@@ -230,22 +229,22 @@ export function renderOverview(props: OverviewProps) {
                     type="password"
                     .value=${props.password}
                     @input=${(e: Event) => {
-                      const v = (e.target as HTMLInputElement).value;
-                      props.onPasswordChange(v);
-                    }}
+          const v = (e.target as HTMLInputElement).value;
+          props.onPasswordChange(v);
+        }}
                     placeholder="system or shared password"
                   />
                 </label>
               `
-          }
+    }
           <label class="field">
             <span>${t("overview.access.sessionKey")}</span>
             <input
               .value=${props.settings.sessionKey}
               @input=${(e: Event) => {
-                const v = (e.target as HTMLInputElement).value;
-                props.onSessionKeyChange(v);
-              }}
+      const v = (e.target as HTMLInputElement).value;
+      props.onSessionKeyChange(v);
+    }}
             />
           </label>
           <label class="field">
@@ -253,24 +252,23 @@ export function renderOverview(props: OverviewProps) {
             <select
               value=${currentLocale}
               @change=${(e: Event) => {
-                const v = (e.target as HTMLSelectElement).value as Locale;
-                void i18n.setLocale(v);
-                props.onSettingsChange({ ...props.settings, locale: v });
-              }}
+      const v = (e.target as HTMLSelectElement).value as Locale;
+      void i18n.setLocale(v);
+      props.onSettingsChange({ ...props.settings, locale: v });
+    }}
             >
               ${SUPPORTED_LOCALES.map((loc) => {
-                const key = loc.replace(/-([a-zA-Z])/g, (_, c) => c.toUpperCase());
-                return html`<option value=${loc} ?selected=${loc === currentLocale}>${t(`languages.${key}`)}</option>`;
-              })}
+      const key = loc.replace(/-([a-zA-Z])/g, (_, c) => c.toUpperCase());
+      return html`<option value=${loc} ?selected=${loc === currentLocale}>${t(`languages.${key}`)}</option>`;
+    })}
             </select>
           </label>
         </div>
         <div class="row" style="margin-top: 14px;">
           <button class="btn" @click=${() => props.onConnect()}>${t("common.connect")}</button>
           <button class="btn" @click=${() => props.onRefresh()}>${t("common.refresh")}</button>
-          <span class="muted">${
-            isTrustedProxy ? t("overview.access.trustedProxy") : t("overview.access.connectHint")
-          }</span>
+          <span class="muted">${isTrustedProxy ? t("overview.access.trustedProxy") : t("overview.access.connectHint")
+    }</span>
         </div>
       </div>
 
@@ -299,20 +297,19 @@ export function renderOverview(props: OverviewProps) {
             </div>
           </div>
         </div>
-        ${
-          props.lastError
-            ? html`<div class="callout danger" style="margin-top: 14px;">
+        ${props.lastError
+      ? html`<div class="callout danger" style="margin-top: 14px;">
               <div>${props.lastError}</div>
               ${pairingHint ?? ""}
               ${authHint ?? ""}
               ${insecureContextHint ?? ""}
             </div>`
-            : html`
+      : html`
                 <div class="callout" style="margin-top: 14px">
                   ${t("overview.snapshot.channelsHint")}
                 </div>
               `
-        }
+    }
       </div>
     </section>
 
