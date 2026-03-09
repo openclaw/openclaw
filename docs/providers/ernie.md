@@ -44,7 +44,7 @@ Set the `ERNIE_API_KEY` environment variable:
 
 ```bash
 # Bash/Zsh
-export ERNIE_API_KEY="bce-v3/ALTAK-your-api-key-here"
+export ERNIE_API_KEY="bce-v3/ALTAK-your-api-key-here"  # pragma: allowlist secret
 
 # Fish
 set -gx ERNIE_API_KEY "bce-v3/ALTAK-your-api-key-here"

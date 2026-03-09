@@ -8,7 +8,7 @@ describe("ERNIE provider", () => {
   it("should include ernie when ERNIE_API_KEY is configured", async () => {
     const agentDir = mkdtempSync(join(tmpdir(), "openclaw-test-"));
     const previous = process.env.ERNIE_API_KEY;
-    process.env.ERNIE_API_KEY = "test-key";
+    process.env.ERNIE_API_KEY = "test-key"; // pragma: allowlist secret
 
     try {
       const providers = await resolveImplicitProviders({ agentDir });

@@ -123,7 +123,7 @@ describe("resolveApiKeyForProvider", () => {
     const previous = process.env.ERNIE_API_KEY;
 
     try {
-      process.env.ERNIE_API_KEY = "ernie-test-key";
+      process.env.ERNIE_API_KEY = "ernie-test-key"; // pragma: allowlist secret
 
       vi.resetModules();
       const { resolveApiKeyForProvider } = await import("./model-auth.js");
