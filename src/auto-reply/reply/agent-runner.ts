@@ -740,7 +740,7 @@ export async function runReplyAgent(params: {
           workspaceDir,
           cfg,
           undefined,
-          sessionKey ? resolveAgentIdFromSessionKey(sessionKey) : undefined,
+          resolveAgentIdFromSessionKey(sessionKey),
         )
           .then((contextContent) => {
             if (contextContent) {
