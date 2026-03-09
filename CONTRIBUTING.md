@@ -65,7 +65,7 @@ Welcome to the lobster tank! 🦞
 - **Radek Sienkiewicz** - Control UI + WebChat correctness
   - GitHub [@velvet-shark](https://github.com/velvet-shark) · X: [@velvet_shark](https://twitter.com/velvet_shark)
 
-- **Muhammed Mukhthar** - Compaction, Tlon/Urbit subsystem
+- **Muhammed Mukhthar** - Mattermost, CLI
   - GitHub [@mukhtharcm](https://github.com/mukhtharcm) · X: [@mukhtharcm](https://x.com/mukhtharcm)
 
 - **Altay** - Agents, CLI, error handling
