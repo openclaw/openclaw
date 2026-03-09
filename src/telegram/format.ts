@@ -523,13 +523,42 @@ function splitMarkdownIRPreserveWhitespace(ir: MarkdownIR, limit: number): Markd
   const chunks: MarkdownIR[] = [];
   let cursor = 0;
   while (cursor < ir.text.length) {
-    const end = Math.min(ir.text.length, cursor + normalizedLimit);
-    chunks.push({
-      text: ir.text.slice(cursor, end),
-      styles: sliceStyleSpans(ir.styles, cursor, end),
-      links: sliceLinkSpans(ir.links, cursor, end),
-    });
+    let end = Math.min(ir.text.length, cursor + normalizedLimit);
+    if (end >= ir.text.length) {
+      chunks.push({
+        text: ir.text.slice(cursor),
+        styles: sliceStyleSpans(ir.styles, cursor, ir.text.length),
+        links: sliceLinkSpans(ir.links, cursor, ir.text.length),
+      });
+      break;
+    }
+
+    // Mirror the generic text chunker: prefer the last whitespace inside the
+    // retry window so Telegram HTML overflow doesn't force mid-word splits.
+    for (let i = end - 1; i > cursor; i -= 1) {
+      if (/\s/.test(ir.text[i] ?? "")) {
+        end = i;
+        break;
+      }
+    }
+
+    let chunkEnd = end;
+    while (chunkEnd > cursor && /\s/.test(ir.text[chunkEnd - 1] ?? "")) {
+      chunkEnd -= 1;
+    }
+
+    if (chunkEnd > cursor) {
+      chunks.push({
+        text: ir.text.slice(cursor, chunkEnd),
+        styles: sliceStyleSpans(ir.styles, cursor, chunkEnd),
+        links: sliceLinkSpans(ir.links, cursor, chunkEnd),
+      });
+    }
+
     cursor = end;
+    while (cursor < ir.text.length && /\s/.test(ir.text[cursor] ?? "")) {
+      cursor += 1;
+    }
   }
   return chunks;
 }
