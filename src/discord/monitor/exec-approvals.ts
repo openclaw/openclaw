@@ -768,9 +768,9 @@ export class ExecApprovalButton extends Button {
     const parsed = parseExecApprovalData(data);
     if (!parsed) {
       try {
-        await interaction.update({
+        await interaction.reply({
           content: "This approval is no longer valid.",
-          components: [],
+          ephemeral: true,
         });
       } catch {
         // Interaction may have expired
@@ -800,12 +800,11 @@ export class ExecApprovalButton extends Button {
           ? "Allowed (always)"
           : "Denied";
 
-    // Update the message immediately to show the decision
+    // Acknowledge immediately so Discord does not fail the interaction while
+    // the gateway resolve roundtrip completes. The resolved event will update
+    // the approval card in-place with the final state.
     try {
-      await interaction.update({
-        content: `Submitting decision: **${decisionLabel}**...`,
-        components: [], // Remove buttons
-      });
+      await interaction.acknowledge();
     } catch {
       // Interaction may have expired, try to continue anyway
     }
@@ -815,8 +814,7 @@ export class ExecApprovalButton extends Button {
     if (!ok) {
       try {
         await interaction.followUp({
-          content:
-            "Failed to submit approval decision. The request may have expired or already been resolved.",
+          content: `Failed to submit approval decision for **${decisionLabel}**. The request may have expired or already been resolved.`,
           ephemeral: true,
         });
       } catch {

@@ -470,15 +470,15 @@ describe("ExecApprovalButton", () => {
 
   function createMockInteraction(userId: string) {
     const reply = vi.fn().mockResolvedValue(undefined);
-    const update = vi.fn().mockResolvedValue(undefined);
+    const acknowledge = vi.fn().mockResolvedValue(undefined);
     const followUp = vi.fn().mockResolvedValue(undefined);
     const interaction = {
       userId,
       reply,
-      update,
+      acknowledge,
       followUp,
     } as unknown as ButtonInteraction;
-    return { interaction, reply, update, followUp };
+    return { interaction, reply, acknowledge, followUp };
   }
 
   it("denies unauthorized users with ephemeral message", async () => {
@@ -486,7 +486,7 @@ describe("ExecApprovalButton", () => {
     const ctx: ExecApprovalButtonContext = { handler };
     const button = new ExecApprovalButton(ctx);
 
-    const { interaction, reply, update } = createMockInteraction("999");
+    const { interaction, reply, acknowledge } = createMockInteraction("999");
     const data: ComponentData = { id: "test-approval", action: "allow-once" };
 
     await button.run(interaction, data);
@@ -495,7 +495,7 @@ describe("ExecApprovalButton", () => {
       content: "⛔ You are not authorized to approve exec requests.",
       ephemeral: true,
     });
-    expect(update).not.toHaveBeenCalled();
+    expect(acknowledge).not.toHaveBeenCalled();
     // oxlint-disable-next-line typescript/unbound-method -- vi.fn() mock
     expect(handler.resolveApproval).not.toHaveBeenCalled();
   });
@@ -505,50 +505,45 @@ describe("ExecApprovalButton", () => {
     const ctx: ExecApprovalButtonContext = { handler };
     const button = new ExecApprovalButton(ctx);
 
-    const { interaction, reply, update } = createMockInteraction("222");
+    const { interaction, reply, acknowledge } = createMockInteraction("222");
     const data: ComponentData = { id: "test-approval", action: "allow-once" };
 
     await button.run(interaction, data);
 
     expect(reply).not.toHaveBeenCalled();
-    expect(update).toHaveBeenCalledWith({
-      content: "Submitting decision: **Allowed (once)**...",
-      components: [],
-    });
+    expect(acknowledge).toHaveBeenCalledTimes(1);
     // oxlint-disable-next-line typescript/unbound-method -- vi.fn() mock
     expect(handler.resolveApproval).toHaveBeenCalledWith("test-approval", "allow-once");
   });
 
-  it("shows correct label for allow-always", async () => {
+  it("acknowledges allow-always interactions before resolving", async () => {
     const handler = createMockHandler(["111"]);
     const ctx: ExecApprovalButtonContext = { handler };
     const button = new ExecApprovalButton(ctx);
 
-    const { interaction, update } = createMockInteraction("111");
+    const { interaction, acknowledge } = createMockInteraction("111");
     const data: ComponentData = { id: "test-approval", action: "allow-always" };
 
     await button.run(interaction, data);
 
-    expect(update).toHaveBeenCalledWith({
-      content: "Submitting decision: **Allowed (always)**...",
-      components: [],
-    });
+    expect(acknowledge).toHaveBeenCalledTimes(1);
+    // oxlint-disable-next-line typescript/unbound-method -- vi.fn() mock
+    expect(handler.resolveApproval).toHaveBeenCalledWith("test-approval", "allow-always");
   });
 
-  it("shows correct label for deny", async () => {
+  it("acknowledges deny interactions before resolving", async () => {
     const handler = createMockHandler(["111"]);
     const ctx: ExecApprovalButtonContext = { handler };
     const button = new ExecApprovalButton(ctx);
 
-    const { interaction, update } = createMockInteraction("111");
+    const { interaction, acknowledge } = createMockInteraction("111");
     const data: ComponentData = { id: "test-approval", action: "deny" };
 
     await button.run(interaction, data);
 
-    expect(update).toHaveBeenCalledWith({
-      content: "Submitting decision: **Denied**...",
-      components: [],
-    });
+    expect(acknowledge).toHaveBeenCalledTimes(1);
+    // oxlint-disable-next-line typescript/unbound-method -- vi.fn() mock
+    expect(handler.resolveApproval).toHaveBeenCalledWith("test-approval", "deny");
   });
 
   it("handles invalid data gracefully", async () => {
@@ -556,18 +551,20 @@ describe("ExecApprovalButton", () => {
     const ctx: ExecApprovalButtonContext = { handler };
     const button = new ExecApprovalButton(ctx);
 
-    const { interaction, update } = createMockInteraction("111");
+    const { interaction, acknowledge, reply } = createMockInteraction("111");
     const data: ComponentData = { id: "", action: "invalid" };
 
     await button.run(interaction, data);
 
-    expect(update).toHaveBeenCalledWith({
+    expect(reply).toHaveBeenCalledWith({
       content: "This approval is no longer valid.",
-      components: [],
+      ephemeral: true,
     });
+    expect(acknowledge).not.toHaveBeenCalled();
     // oxlint-disable-next-line typescript/unbound-method -- vi.fn() mock
     expect(handler.resolveApproval).not.toHaveBeenCalled();
   });
+
   it("follows up with error when resolve fails", async () => {
     const handler = createMockHandler(["111"]);
     handler.resolveApproval = vi.fn().mockResolvedValue(false);
@@ -581,7 +578,7 @@ describe("ExecApprovalButton", () => {
 
     expect(followUp).toHaveBeenCalledWith({
       content:
-        "Failed to submit approval decision. The request may have expired or already been resolved.",
+        "Failed to submit approval decision for **Allowed (once)**. The request may have expired or already been resolved.",
       ephemeral: true,
     });
   });
@@ -596,14 +593,14 @@ describe("ExecApprovalButton", () => {
     const ctx: ExecApprovalButtonContext = { handler };
     const button = new ExecApprovalButton(ctx);
 
-    const { interaction, update, reply } = createMockInteraction("111");
+    const { interaction, acknowledge, reply } = createMockInteraction("111");
     const data: ComponentData = { id: "test-approval", action: "allow-once" };
 
     await button.run(interaction, data);
 
     // Should match because getApprovers returns [111] and button does String(id) === userId
     expect(reply).not.toHaveBeenCalled();
-    expect(update).toHaveBeenCalled();
+    expect(acknowledge).toHaveBeenCalled();
   });
 });
 

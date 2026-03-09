@@ -195,4 +195,23 @@ describe("agent-runner-utils", () => {
       currentMessageId: "2284",
     });
   });
+
+  it("uses OriginatingTo for threading tool context on discord native commands", () => {
+    const context = buildThreadingToolContext({
+      sessionCtx: {
+        Provider: "discord",
+        To: "slash:1177378744822943744",
+        OriginatingChannel: "discord",
+        OriginatingTo: "channel:123456789012345678",
+        MessageSid: "msg-9",
+      },
+      config: {},
+      hasRepliedRef: undefined,
+    });
+
+    expect(context).toMatchObject({
+      currentChannelId: "channel:123456789012345678",
+      currentMessageId: "msg-9",
+    });
+  });
 });
