@@ -215,6 +215,16 @@ export async function deliverAgentCommandResult(params: {
       runtime.log("No reply from agent.");
       return { payloads: normalizedPayloads, meta: result.meta };
     }
+    // Treat upstream-suppressed empty runs as intentional silence when the run
+    // succeeded but simply had no deliverable output (e.g., tool-only success or
+    // messaging-tool delivered the response directly).
+    const meta = result.meta;
+    const succeededWithoutDeliverableOutput =
+      !meta.aborted && !meta.error && (meta.agentMeta?.usage?.total ?? 0) > 0;
+    if (succeededWithoutDeliverableOutput) {
+      runtime.log("No reply from agent.");
+      return { payloads: normalizedPayloads, meta: result.meta };
+    }
     const fallbackPayloads = normalizeOutboundPayloads([{ text: NORMALIZED_EMPTY_FALLBACK_TEXT }]);
     const fallbackPayloadsJson = normalizeOutboundPayloadsForJson([
       { text: NORMALIZED_EMPTY_FALLBACK_TEXT },

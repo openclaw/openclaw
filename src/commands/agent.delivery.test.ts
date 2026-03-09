@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { EmbeddedPiRunResult } from "../agents/pi-embedded.js";
 import type { CliDeps } from "../cli/deps.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { SessionEntry } from "../config/sessions.js";
@@ -39,10 +40,22 @@ describe("deliverAgentCommandResult", () => {
     } as unknown as RuntimeEnv;
   }
 
-  function createResult(text = "hi") {
+  function createResult(text = "hi", usageTotal?: number): EmbeddedPiRunResult {
     return {
-      payloads: [{ text }],
-      meta: { durationMs: 1 },
+      payloads: text ? [{ text }] : [],
+      meta: {
+        durationMs: 1,
+        ...(usageTotal !== undefined
+          ? {
+              agentMeta: {
+                sessionId: "test-session",
+                provider: "test",
+                model: "test-model",
+                usage: { total: usageTotal },
+              },
+            }
+          : {}),
+      },
     };
   }
 
@@ -52,11 +65,12 @@ describe("deliverAgentCommandResult", () => {
     sessionEntry?: SessionEntry;
     runtime?: RuntimeEnv;
     resultText?: string;
+    usageTotal?: number;
   }) {
     const cfg = {} as OpenClawConfig;
     const deps = {} as CliDeps;
     const runtime = params.runtime ?? createRuntime();
-    const result = createResult(params.resultText);
+    const result = createResult(params.resultText, params.usageTotal);
 
     await deliverAgentCommandResult({
       cfg,
@@ -303,6 +317,24 @@ describe("deliverAgentCommandResult", () => {
     await runDelivery({
       runtime,
       resultText: "NO_REPLY [[reply_to_current]]",
+      opts: {
+        message: "hello",
+        deliver: true,
+        channel: "whatsapp",
+        to: "+15551234567",
+      },
+    });
+
+    expect(mocks.deliverOutboundPayloads).not.toHaveBeenCalled();
+    expect(runtime.log).toHaveBeenCalledWith("No reply from agent.");
+  });
+
+  it("does not send hiccup fallback when run succeeded but had no deliverable output", async () => {
+    const runtime = createRuntime();
+    await runDelivery({
+      runtime,
+      resultText: "",
+      usageTotal: 150,
       opts: {
         message: "hello",
         deliver: true,
