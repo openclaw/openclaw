@@ -84,6 +84,12 @@ export interface TaskFile {
   milestoneItemId?: string; // Linked milestone item ID in Task Hub
   harnessProjectSlug?: string; // Harness project slug for spec tracking
   harnessItemId?: string; // Harness item ID for verification reporting
+  palTier?: "frugal" | "standard" | "frontier"; // PAL Router model tier
+  ouroborosHistory?: {
+    outputHashes: string[];
+    driftScores: number[];
+    appliedPersonas: string[];
+  };
   reassignCount?: number; // Zombie recovery: number of times task was auto-reassigned
   createdBySessionKey?: string; // Session key that created this task (for enforcement scope)
   steps?: TaskStep[];
@@ -246,8 +252,14 @@ export function formatTaskFileMd(task: TaskFile): string {
       harnessProjectSlug: task.harnessProjectSlug,
       harnessItemId: task.harnessItemId,
       reassignCount: task.reassignCount,
+      palTier: task.palTier,
     };
     lines.push("## Backlog", "```json", JSON.stringify(backlogData), "```", "");
+  }
+
+  // Serialize ouroboros history if present
+  if (task.ouroborosHistory) {
+    lines.push("## Ouroboros", "```json", JSON.stringify(task.ouroborosHistory), "```", "");
   }
 
   // Serialize outcome if present
@@ -309,6 +321,8 @@ export function parseTaskFileMd(content: string, filename: string): TaskFile | n
   let harnessProjectSlug: string | undefined;
   let harnessItemId: string | undefined;
   let reassignCount: number | undefined;
+  let palTier: TaskFile["palTier"];
+  let ouroborosHistory: TaskFile["ouroborosHistory"];
   let createdBySessionKey: string | undefined;
   let simple: boolean | undefined;
   let outcome: TaskOutcome | undefined;
@@ -443,6 +457,28 @@ export function parseTaskFileMd(content: string, filename: string): TaskFile | n
           if (typeof backlogData.reassignCount === "number") {
             reassignCount = backlogData.reassignCount;
           }
+          if (
+            backlogData.palTier === "frugal" ||
+            backlogData.palTier === "standard" ||
+            backlogData.palTier === "frontier"
+          ) {
+            palTier = backlogData.palTier;
+          }
+        } catch {
+          // Ignore malformed JSON
+        }
+      }
+    } else if (currentSection === "ouroboros") {
+      if (trimmed.startsWith("{") && trimmed.endsWith("}")) {
+        try {
+          const oData = JSON.parse(trimmed);
+          if (Array.isArray(oData.outputHashes)) {
+            ouroborosHistory = {
+              outputHashes: oData.outputHashes,
+              driftScores: Array.isArray(oData.driftScores) ? oData.driftScores : [],
+              appliedPersonas: Array.isArray(oData.appliedPersonas) ? oData.appliedPersonas : [],
+            };
+          }
         } catch {
           // Ignore malformed JSON
         }
@@ -514,6 +550,8 @@ export function parseTaskFileMd(content: string, filename: string): TaskFile | n
     milestoneItemId,
     harnessProjectSlug,
     harnessItemId,
+    palTier,
+    ouroborosHistory,
     reassignCount,
     createdBySessionKey,
     outcome,

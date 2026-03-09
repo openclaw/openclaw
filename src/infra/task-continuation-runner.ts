@@ -29,6 +29,12 @@ import { resolveAgentBoundAccountId } from "../routing/bindings.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { emit } from "./events/bus.js";
 import { EVENT_TYPES } from "./events/schemas.js";
+import {
+  checkResilience,
+  recordOutput,
+  createEmptyHistory,
+  arePersonasExhausted,
+} from "./ouroboros-resilience.js";
 import { acquireTaskLock } from "./task-lock.js";
 import { updateAgentEntry, readTeamState, findLeadAgent } from "./team-state.js";
 
@@ -439,6 +445,19 @@ function formatBacklogPickupPrompt(task: TaskFile): string {
     lines.push(`**Context:** ${task.context}`);
   }
 
+  // PAL Router tier hint
+  if (task.palTier) {
+    const tierLabels: Record<string, string> = {
+      frugal: "simple task — use efficient approach, minimize token usage",
+      standard: "moderate complexity — balanced approach",
+      frontier: "complex task — deep analysis allowed, use full capabilities",
+    };
+    lines.push(``);
+    lines.push(
+      `**Complexity Tier:** ${task.palTier} (${tierLabels[task.palTier] || task.palTier})`,
+    );
+  }
+
   // Harness protocol injection
   if (task.harnessProjectSlug) {
     lines.push(``);
@@ -694,7 +713,33 @@ async function checkAgentForContinuation(
     }
 
     const pendingTasks = await findPendingTasks(workspaceDir);
-    const prompt = formatContinuationPrompt(activeTask, pendingTasks.length);
+    let prompt = formatContinuationPrompt(activeTask, pendingTasks.length);
+
+    // Ouroboros Resilience: record current task state and check for stagnation
+    const history = activeTask.ouroborosHistory ?? createEmptyHistory();
+    // Use task progress + lastActivity as output fingerprint for drift detection
+    const outputSnapshot = `${activeTask.lastActivity}|${activeTask.progress.slice(-3).join("|")}`;
+    recordOutput(history, outputSnapshot);
+    activeTask.ouroborosHistory = history;
+    const resilience = checkResilience(history);
+    if (resilience) {
+      prompt += `\n\n${resilience.prompt}`;
+      history.appliedPersonas.push(resilience.persona);
+      activeTask.ouroborosHistory = history;
+      await writeTask(workspaceDir, activeTask);
+      log.info("Ouroboros persona injected into continuation", {
+        agentId,
+        taskId: activeTask.id,
+        pattern: resilience.detection.pattern,
+        persona: resilience.persona,
+        confidence: resilience.detection.confidence,
+      });
+    } else if (arePersonasExhausted(history.appliedPersonas)) {
+      log.info("Ouroboros: all personas exhausted, using existing escalation", {
+        agentId,
+        taskId: activeTask.id,
+      });
+    }
 
     log.info("Sending task continuation prompt", {
       agentId,
