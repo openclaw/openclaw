@@ -240,6 +240,35 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).toContain("sessions_send");
   });
 
+  it("includes memory write guidance when only write tools are available", () => {
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      toolNames: ["memory_write"],
+    });
+
+    expect(prompt).toContain("## Memory Recall");
+    expect(prompt).toContain(
+      "When the user explicitly asks to remember/update something, use memory_write (append) so durable memory is saved to disk.",
+    );
+    expect(prompt).not.toContain(
+      "Before answering anything about prior work, decisions, dates, people, preferences, or todos: run memory_search on MEMORY.md + memory/*.md; then use memory_get to pull only the needed lines. If low confidence after search, say you checked.",
+    );
+    expect(prompt).not.toContain("memory_upsert (keyed update)");
+  });
+
+  it("includes memory upsert guidance when only upsert is available", () => {
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      toolNames: ["memory_upsert"],
+    });
+
+    expect(prompt).toContain("## Memory Recall");
+    expect(prompt).toContain(
+      "When the user explicitly asks to remember/update something, use memory_upsert (keyed update) so durable memory is saved to disk.",
+    );
+    expect(prompt).not.toContain("memory_write (append)");
+  });
+
   it("documents ACP sessions_spawn agent targeting requirements", () => {
     const prompt = buildAgentSystemPrompt({
       workspaceDir: "/tmp/openclaw",
@@ -310,7 +339,6 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).toContain('`runtime: "acp"`');
     expect(prompt).toContain('Use `runtime: "subagent"` instead.');
   });
-
   it("preserves tool casing in the prompt", () => {
     const prompt = buildAgentSystemPrompt({
       workspaceDir: "/tmp/openclaw",
