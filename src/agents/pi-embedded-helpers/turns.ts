@@ -184,17 +184,113 @@ export function mergeConsecutiveUserTurns(
 }
 
 /**
+ * Strips orphaned tool_result blocks from user messages when the preceding
+ * assistant message does not contain a matching tool_use block.
+ * This fixes the "No tool call found for function call output" error that
+ * occurs during cross-provider fallback when tool_use blocks are stripped
+ * but their corresponding tool_result blocks are left behind.
+ * See: https://github.com/openclaw/openclaw/issues/40433
+ */
+function stripOrphanedToolResults(messages: AgentMessage[]): AgentMessage[] {
+  const result: AgentMessage[] = [];
+
+  for (let i = 0; i < messages.length; i++) {
+    const msg = messages[i];
+    if (!msg || typeof msg !== "object") {
+      result.push(msg);
+      continue;
+    }
+
+    const msgRole = (msg as { role?: unknown }).role as string | undefined;
+    if (msgRole !== "user") {
+      result.push(msg);
+      continue;
+    }
+
+    const userMsg = msg as { content?: AnthropicContentBlock[] };
+    if (!Array.isArray(userMsg.content)) {
+      result.push(msg);
+      continue;
+    }
+
+    // Collect tool_use IDs from the preceding assistant message
+    const prevMsg = i > 0 ? messages[i - 1] : null;
+    const prevRole =
+      prevMsg && typeof prevMsg === "object"
+        ? ((prevMsg as { role?: unknown }).role as string | undefined)
+        : undefined;
+
+    const validToolUseIds = new Set<string>();
+    if (prevRole === "assistant") {
+      const assistantContent = (prevMsg as { content?: AnthropicContentBlock[] }).content;
+      if (Array.isArray(assistantContent)) {
+        for (const block of assistantContent) {
+          if (
+            block &&
+            (block.type === "toolUse" || block.type === ("toolCall" as string) || block.type === ("functionCall" as string)) &&
+            block.id
+          ) {
+            validToolUseIds.add(block.id);
+          }
+        }
+      }
+    }
+
+    // Filter out tool_result blocks whose toolUseId is not in the valid set
+    const filteredContent = userMsg.content.filter((block) => {
+      if (!block) {
+        return false;
+      }
+      if (block.type !== "toolResult") {
+        return true;
+      }
+      // If no preceding assistant message, drop all tool_result blocks
+      if (prevRole !== "assistant") {
+        return false;
+      }
+      // Keep tool_result if its toolUseId matches a retained tool_use
+      return validToolUseIds.has(block.toolUseId || "");
+    });
+
+    if (filteredContent.length === userMsg.content.length) {
+      result.push(msg);
+    } else if (filteredContent.length === 0) {
+      // If all content was tool_result blocks, keep a minimal text block
+      result.push({
+        ...msg,
+        content: [{ type: "text", text: "[tool results omitted]" }],
+      } as AgentMessage);
+    } else {
+      result.push({
+        ...msg,
+        content: filteredContent,
+      } as AgentMessage);
+    }
+  }
+
+  return result;
+}
+
+/**
  * Validates and fixes conversation turn sequences for Anthropic API.
  * Anthropic requires strict alternating user→assistant pattern.
  * Merges consecutive user messages together.
- * Also strips dangling tool_use blocks that lack corresponding tool_result blocks.
+ * Also strips dangling tool_use blocks that lack corresponding tool_result blocks,
+ * and strips orphaned tool_result blocks that lack corresponding tool_use blocks.
  */
 export function validateAnthropicTurns(messages: AgentMessage[]): AgentMessage[] {
   // First, strip dangling tool_use blocks from assistant messages
   const stripped = stripDanglingAnthropicToolUses(messages);
 
+  // Then strip orphaned tool_result blocks from user messages.
+  // This handles the case where tool_use blocks were stripped (e.g. during
+  // cross-provider fallback sanitization) but tool_result blocks were left
+  // behind, causing "No tool call found for function call output" errors.
+  // See: https://github.com/openclaw/openclaw/issues/40433
+  const withoutOrphans = stripOrphanedToolResults(stripped);
+
   return validateTurnsWithConsecutiveMerge({
-    messages: stripped,
+    messages: withoutOrphans,
     role: "user",
     merge: mergeConsecutiveUserTurns,
   });
