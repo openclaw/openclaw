@@ -101,8 +101,8 @@ describe("dashboardCommand", () => {
       customBindHost: undefined,
       basePath: undefined,
     });
-    expect(copyToClipboardMock).toHaveBeenCalledWith("http://127.0.0.1:18789/#token=abc123");
-    expect(openUrlMock).toHaveBeenCalledWith("http://127.0.0.1:18789/#token=abc123");
+    expect(copyToClipboardMock).toHaveBeenCalledWith("http://127.0.0.1:18789/");
+    expect(openUrlMock).toHaveBeenCalledWith("http://127.0.0.1:18789/");
     expect(runtime.log).toHaveBeenCalledWith(
       "Opened in your browser. Keep that tab to control OpenClaw.",
     );
@@ -118,9 +118,7 @@ describe("dashboardCommand", () => {
 
     await dashboardCommand(runtime, { noOpen: true });
 
-    expect(copyToClipboardMock).toHaveBeenCalledWith(
-      "http://127.0.0.1:18789/#token=service-token",
-    );
+    expect(copyToClipboardMock).toHaveBeenCalledWith("http://127.0.0.1:18789/");
   });
 
   it("prints SSH hint when browser cannot open", async () => {

@@ -98,14 +98,16 @@ export async function dashboardCommand(
     customBindHost,
     basePath,
   });
-  // Avoid embedding externally managed SecretRef tokens in terminal/clipboard/browser args.
-  const includeTokenInUrl = token.length > 0 && !resolvedToken.tokenSecretRefConfigured;
-  // Prefer URL fragment to avoid leaking auth tokens via query params.
-  const dashboardUrl = includeTokenInUrl
-    ? `${links.httpUrl}#token=${encodeURIComponent(token)}`
-    : links.httpUrl;
+  // Never embed auth tokens in CLI output, clipboard payloads, or browser-open arguments.
+  // This prevents credential leaks via shell logs and process inspection tooling.
+  const dashboardUrl = links.httpUrl;
 
   runtime.log(`Dashboard URL: ${dashboardUrl}`);
+  if (token && !resolvedToken.tokenSecretRefConfigured) {
+    runtime.log(
+      "Token auto-auth is disabled for dashboard links to avoid exposing credentials in logs and process arguments.",
+    );
+  }
   if (resolvedToken.tokenSecretRefConfigured && token) {
     runtime.log(
       "Token auto-auth is disabled for SecretRef-managed gateway.auth.token; use your external token source if prompted.",
@@ -132,7 +134,7 @@ export async function dashboardCommand(
       hint = formatControlUiSshHint({
         port,
         basePath,
-        token: includeTokenInUrl ? token || undefined : undefined,
+        token: undefined,
       });
     }
   } else {
