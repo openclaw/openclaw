@@ -45,6 +45,7 @@ type SyntheticCatalogFallback = {
   provider: string;
   id: string;
   templateIds: readonly string[];
+  contextWindow?: number;
 };
 
 const SYNTHETIC_CATALOG_FALLBACKS: readonly SyntheticCatalogFallback[] = [
@@ -52,16 +53,19 @@ const SYNTHETIC_CATALOG_FALLBACKS: readonly SyntheticCatalogFallback[] = [
     provider: OPENAI_PROVIDER,
     id: OPENAI_GPT54_MODEL_ID,
     templateIds: ["gpt-5.2"],
+    contextWindow: 1_050_000,
   },
   {
     provider: OPENAI_PROVIDER,
     id: OPENAI_GPT54_PRO_MODEL_ID,
     templateIds: ["gpt-5.2-pro", "gpt-5.2"],
+    contextWindow: 1_050_000,
   },
   {
     provider: CODEX_PROVIDER,
     id: OPENAI_CODEX_GPT54_MODEL_ID,
     templateIds: ["gpt-5.3-codex", "gpt-5.2-codex"],
+    contextWindow: 1_050_000,
   },
   {
     provider: CODEX_PROVIDER,
@@ -92,6 +96,7 @@ function applySyntheticCatalogFallbacks(models: ModelCatalogEntry[]): void {
       ...template,
       id: fallback.id,
       name: fallback.id,
+      ...(fallback.contextWindow != null ? { contextWindow: fallback.contextWindow } : {}),
     });
   }
 }
