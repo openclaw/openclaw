@@ -74,4 +74,33 @@ describe("config validation allowed-values metadata", () => {
       expect(issue?.message).not.toContain("(allowed:");
     }
   });
+
+  it("surfaces specific sub-issue for invalid_union bindings errors instead of generic 'Invalid input'", () => {
+    const result = validateConfigObjectRaw({
+      bindings: [
+        {
+          type: "acp",
+          agentId: "test",
+          match: { channel: "discord", peer: { kind: "direct", id: "123" } },
+          acp: { agent: "claude" },
+        },
+      ],
+    });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      // Should NOT produce the opaque "Invalid input" message
+      const genericIssue = result.issues.find(
+        (entry) => entry.path === "bindings.0" && entry.message === "Invalid input",
+      );
+      expect(genericIssue).toBeUndefined();
+
+      // Should produce a specific error mentioning the unrecognized key
+      const specificIssue = result.issues.find(
+        (entry) => entry.path.startsWith("bindings.0") && entry.message.includes("Unrecognized"),
+      );
+      expect(specificIssue).toBeDefined();
+      expect(specificIssue?.message).toContain("agent");
+    }
+  });
 });

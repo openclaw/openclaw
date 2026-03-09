@@ -114,6 +114,87 @@ function collectAllowedValuesFromUnknownIssue(issue: unknown): unknown[] {
   return collection.values;
 }
 
+/**
+ * For `invalid_union` issues, Zod wraps branch errors behind a generic
+ * "Invalid input" message.  Walk the branch errors and pick the most
+ * informative sub-issue so the user sees, e.g.:
+ *
+ *   bindings.2.acp: Unrecognized key(s) in object: 'agent'
+ *
+ * instead of the opaque:
+ *
+ *   bindings.2: Invalid input
+ */
+function extractBestUnionSubIssue(
+  record: UnknownIssueRecord,
+  parentPath: string,
+): ConfigValidationIssue | null {
+  const code = typeof record.code === "string" ? record.code : "";
+  if (code !== "invalid_union") {
+    return null;
+  }
+
+  // Zod stores per-branch errors in `unionErrors` (ZodError[]), each with
+  // an `issues` array.  Older Zod versions used a flat `errors` array.
+  const branches: unknown[] = [];
+  if (Array.isArray(record.unionErrors)) {
+    for (const zodError of record.unionErrors) {
+      const err = toIssueRecord(zodError);
+      if (err && Array.isArray(err.issues)) {
+        branches.push(...err.issues);
+      }
+    }
+  }
+  if (Array.isArray(record.errors)) {
+    for (const errGroup of record.errors) {
+      if (Array.isArray(errGroup)) {
+        branches.push(...errGroup);
+      }
+    }
+  }
+  if (branches.length === 0) {
+    return null;
+  }
+
+  // Prefer the sub-issue with the longest (most specific) path.
+  // Among equal-length paths, prefer `unrecognized_keys` since it names
+  // the offending field directly.
+  let best: UnknownIssueRecord | null = null;
+  let bestPathLen = -1;
+  let bestIsUnrecognized = false;
+  for (const raw of branches) {
+    const sub = toIssueRecord(raw);
+    if (!sub) {
+      continue;
+    }
+    const subPath = Array.isArray(sub.path) ? sub.path : [];
+    const subCode = typeof sub.code === "string" ? sub.code : "";
+    const isUnrecognized = subCode === "unrecognized_keys";
+    const pathLen = subPath.length;
+
+    const isBetter =
+      pathLen > bestPathLen || (pathLen === bestPathLen && isUnrecognized && !bestIsUnrecognized);
+
+    if (isBetter) {
+      best = sub;
+      bestPathLen = pathLen;
+      bestIsUnrecognized = isUnrecognized;
+    }
+  }
+  if (!best) {
+    return null;
+  }
+
+  const subPathSegments = Array.isArray(best.path)
+    ? (best.path as unknown[])
+        .filter((s): s is string | number => typeof s === "string" || typeof s === "number")
+        .join(".")
+    : "";
+  const fullPath = subPathSegments ? `${parentPath}.${subPathSegments}` : parentPath;
+  const subMessage = typeof best.message === "string" ? best.message : "Invalid input";
+  return { path: fullPath, message: subMessage };
+}
+
 function mapZodIssueToConfigIssue(issue: unknown): ConfigValidationIssue {
   const record = toIssueRecord(issue);
   const path = Array.isArray(record?.path)
@@ -125,7 +206,22 @@ function mapZodIssueToConfigIssue(issue: unknown): ConfigValidationIssue {
         .join(".")
     : "";
   const message = typeof record?.message === "string" ? record.message : "Invalid input";
+
   const allowedValuesSummary = summarizeAllowedValues(collectAllowedValuesFromUnknownIssue(issue));
+
+  // For union errors where we could NOT extract useful allowed-values,
+  // try to surface the most specific sub-issue instead of generic "Invalid input".
+  if (
+    record &&
+    typeof record.code === "string" &&
+    record.code === "invalid_union" &&
+    !allowedValuesSummary
+  ) {
+    const betterIssue = extractBestUnionSubIssue(record, path);
+    if (betterIssue) {
+      return betterIssue;
+    }
+  }
 
   if (!allowedValuesSummary) {
     return { path, message };
