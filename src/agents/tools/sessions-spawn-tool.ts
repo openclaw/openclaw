@@ -65,7 +65,9 @@ export function createSessionsSpawnTool(
     agentChannel?: GatewayMessageChannel;
     agentAccountId?: string;
     agentTo?: string;
+    agentConversationId?: string;
     agentThreadId?: string | number;
+    agentCurrentMessageId?: string | number;
     sandboxed?: boolean;
     /** Explicit agent ID override for cron/hook sessions where session key parsing may not work. */
     requesterAgentIdOverride?: string;
@@ -75,7 +77,7 @@ export function createSessionsSpawnTool(
     label: "Sessions",
     name: "sessions_spawn",
     description:
-      'Spawn an isolated session (runtime="subagent" or runtime="acp"). mode="run" is one-shot and mode="session" is persistent/thread-bound. Subagents inherit the parent workspace directory automatically.',
+      'Spawn an isolated session (runtime="subagent" or runtime="acp"). mode="run" is one-shot and mode="session" is persistent/thread-bound. Subagents inherit the parent workspace directory automatically. With `thread: true`, thread-capable channels bind the current thread or create/bind a child thread/topic when supported.',
     parameters: SessionsSpawnToolSchema,
     execute: async (_toolCallId, args) => {
       const params = args as Record<string, unknown>;
@@ -151,7 +153,9 @@ export function createSessionsSpawnTool(
             agentChannel: opts?.agentChannel,
             agentAccountId: opts?.agentAccountId,
             agentTo: opts?.agentTo,
+            agentConversationId: opts?.agentConversationId,
             agentThreadId: opts?.agentThreadId,
+            agentCurrentMessageId: opts?.agentCurrentMessageId,
             sandboxed: opts?.sandboxed,
           },
         );

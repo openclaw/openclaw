@@ -246,8 +246,6 @@ export async function dispatchReplyFromConfig(params: {
     abortSignal?: AbortSignal,
     mirror?: boolean,
   ): Promise<void> => {
-    // TypeScript doesn't narrow these from the shouldRouteToOriginating check,
-    // but they're guaranteed non-null when this function is called.
     if (!originatingChannel || !originatingTo) {
       return;
     }
@@ -512,7 +510,6 @@ export async function dispatchReplyFromConfig(params: {
         ttsAuto: sessionTtsAuto,
       });
       if (shouldRouteToOriginating && originatingChannel && originatingTo) {
-        // Route final reply to originating channel.
         const result = await routeReply({
           payload: ttsReply,
           channel: originatingChannel,

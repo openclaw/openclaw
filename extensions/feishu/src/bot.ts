@@ -7,6 +7,7 @@ import {
   DEFAULT_GROUP_HISTORY_LIMIT,
   type HistoryEntry,
   issuePairingChallenge,
+  getSessionBindingService,
   normalizeAgentId,
   recordPendingHistoryEntryIfEnabled,
   resolveOpenProviderRuntimeGroupPolicy,
@@ -15,6 +16,7 @@ import {
 } from "openclaw/plugin-sdk/feishu";
 import { resolveFeishuAccount } from "./accounts.js";
 import { createFeishuClient } from "./client.js";
+import { buildFeishuThreadConversationId } from "./conversation-id.js";
 import { tryRecordMessage, tryRecordMessagePersistent } from "./dedup.js";
 import { maybeCreateDynamicAgent } from "./dynamic-agent.js";
 import { normalizeFeishuExternalKey } from "./external-keys.js";
@@ -30,6 +32,12 @@ import { parsePostContent } from "./post.js";
 import { createFeishuReplyDispatcher } from "./reply-dispatcher.js";
 import { getFeishuRuntime } from "./runtime.js";
 import { getMessageFeishu, sendMessageFeishu } from "./send.js";
+import {
+  ensureFeishuThreadBindingManagerForAccount,
+  recordFeishuNativeThreadBinding,
+  resolveFeishuThreadBindingByNativeThread,
+  stopFeishuThreadBindingManager,
+} from "./thread-bindings.js";
 import type { FeishuMessageContext, FeishuMediaInfo, ResolvedFeishuAccount } from "./types.js";
 import type { DynamicAgentCreationConfig } from "./types.js";
 
@@ -49,6 +57,16 @@ const IGNORED_PERMISSION_SCOPE_TOKENS = ["contact:contact.base:readonly"];
 const FEISHU_SCOPE_CORRECTIONS: Record<string, string> = {
   "contact:contact.base:readonly": "contact:user.base:readonly",
 };
+
+function resolveFeishuThreadRootMessageId(ctx: FeishuMessageContext): string | undefined {
+  if (ctx.rootId?.trim()) {
+    return ctx.rootId.trim();
+  }
+  if (ctx.threadId?.trim()) {
+    return ctx.messageId.trim();
+  }
+  return undefined;
+}
 
 function correctFeishuScopeInUrl(url: string): string {
   let corrected = url;
@@ -872,6 +890,10 @@ export async function handleFeishuMessage(params: {
 
   // Resolve account with merged config
   const account = resolveFeishuAccount({ cfg, accountId });
+  ensureFeishuThreadBindingManagerForAccount({
+    cfg,
+    accountId: account.accountId,
+  });
   const feishuCfg = account.config;
 
   const log = runtime?.log ?? console.log;
@@ -1175,6 +1197,67 @@ export async function handleFeishuMessage(params: {
       },
       parentPeer,
     });
+    const threadRootMessageId = resolveFeishuThreadRootMessageId(ctx);
+    const threadConversationId = buildFeishuThreadConversationId({
+      chatId: ctx.chatId,
+      rootMessageId: threadRootMessageId,
+    });
+    if (threadConversationId) {
+      const resolveThreadBinding = () =>
+        getSessionBindingService().resolveByConversation({
+          channel: "feishu",
+          accountId: account.accountId,
+          conversationId: threadConversationId,
+        }) ??
+        (ctx.threadId?.trim()
+          ? resolveFeishuThreadBindingByNativeThread({
+              accountId: account.accountId,
+              chatId: ctx.chatId,
+              nativeThreadId: ctx.threadId,
+            })
+          : null);
+      let threadBinding = resolveThreadBinding();
+      if (!threadBinding) {
+        // ACP thread binding can be created by a different module instance than the
+        // Feishu monitor. Rehydrate the local manager from disk once before giving up.
+        stopFeishuThreadBindingManager(account.accountId);
+        ensureFeishuThreadBindingManagerForAccount({
+          cfg,
+          accountId: account.accountId,
+        });
+        threadBinding = resolveThreadBinding();
+      }
+      const boundSessionKey = threadBinding?.targetSessionKey?.trim();
+      if (threadBinding && boundSessionKey) {
+        if (
+          ctx.threadId?.trim() &&
+          threadBinding.conversation.conversationId === threadConversationId &&
+          threadRootMessageId
+        ) {
+          recordFeishuNativeThreadBinding({
+            accountId: account.accountId,
+            chatId: ctx.chatId,
+            rootMessageId: threadRootMessageId,
+            nativeThreadId: ctx.threadId,
+          });
+        }
+        const boundAgentId =
+          typeof threadBinding.metadata?.agentId === "string" &&
+          threadBinding.metadata.agentId.trim()
+            ? threadBinding.metadata.agentId.trim()
+            : route.agentId;
+        route = {
+          ...route,
+          sessionKey: boundSessionKey,
+          agentId: boundAgentId,
+          matchedBy: "binding.channel",
+        };
+        getSessionBindingService().touch(threadBinding.bindingId);
+        log(
+          `feishu[${account.accountId}]: routed via bound conversation ${threadConversationId} -> ${boundSessionKey}`,
+        );
+      }
+    }
 
     // Dynamic agent creation for DM users
     // When enabled, creates a unique agent instance with its own workspace for each DM user.
@@ -1305,13 +1388,21 @@ export async function handleFeishuMessage(params: {
       agentSessionKey: string,
       agentAccountId: string,
       wasMentioned: boolean,
-    ) =>
-      core.channel.reply.finalizeInboundContext({
+    ) => {
+      const nativeConversationId =
+        buildFeishuThreadConversationId({
+          chatId: ctx.chatId,
+          rootMessageId: threadRootMessageId,
+        }) ?? ctx.chatId;
+      return core.channel.reply.finalizeInboundContext({
         Body: combinedBody,
         BodyForAgent: messageBody,
         InboundHistory: inboundHistory,
         ReplyToId: ctx.parentId,
-        RootMessageId: ctx.rootId,
+        MessageThreadId: threadRootMessageId,
+        RootMessageId: threadRootMessageId,
+        NativeChannelId: nativeConversationId,
+        ThreadParentId: ctx.rootId || ctx.threadId ? ctx.chatId : undefined,
         RawBody: ctx.content,
         CommandBody: ctx.content,
         From: feishuFrom,
@@ -1334,6 +1425,7 @@ export async function handleFeishuMessage(params: {
         GroupSystemPrompt: isGroup ? groupConfig?.systemPrompt?.trim() || undefined : undefined,
         ...mediaPayload,
       });
+    };
 
     // Parse message create_time (Feishu uses millisecond epoch string).
     const messageCreateTimeMs = event.message.create_time
@@ -1354,9 +1446,11 @@ export async function handleFeishuMessage(params: {
     const configReplyInThread =
       isGroup &&
       (groupConfig?.replyInThread ?? feishuCfg?.replyInThread ?? "disabled") === "enabled";
+    const inThreadConversation = Boolean(ctx.rootId ?? ctx.threadId);
     const replyTargetMessageId =
       isTopicSession || configReplyInThread ? (ctx.rootId ?? ctx.messageId) : ctx.messageId;
-    const threadReply = isGroup ? (groupSession?.threadReply ?? false) : false;
+    const threadReply = isGroup ? (groupSession?.threadReply ?? false) : inThreadConversation;
+    const skipReplyToInMessages = !isGroup && !inThreadConversation;
 
     if (broadcastAgents) {
       // Cross-account dedup: in multi-account setups, Feishu delivers the same
@@ -1407,7 +1501,7 @@ export async function handleFeishuMessage(params: {
             runtime: runtime as RuntimeEnv,
             chatId: ctx.chatId,
             replyToMessageId: replyTargetMessageId,
-            skipReplyToInMessages: !isGroup,
+            skipReplyToInMessages,
             replyInThread,
             rootId: ctx.rootId,
             threadReply,
@@ -1505,7 +1599,7 @@ export async function handleFeishuMessage(params: {
         runtime: runtime as RuntimeEnv,
         chatId: ctx.chatId,
         replyToMessageId: replyTargetMessageId,
-        skipReplyToInMessages: !isGroup,
+        skipReplyToInMessages,
         replyInThread,
         rootId: ctx.rootId,
         threadReply,

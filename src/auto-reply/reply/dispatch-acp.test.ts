@@ -343,6 +343,42 @@ describe("tryDispatchAcpReply", () => {
     expect(onReplyStart).toHaveBeenCalledTimes(1);
   });
 
+  it("forces final-only ACP output when the context requests final-only projection", async () => {
+    setReadyAcpResolution();
+    mockVisibleTextTurn("hello from codex");
+    const { dispatcher } = createDispatcher();
+    const cfg = createAcpTestConfig({
+      acp: {
+        enabled: true,
+        stream: {
+          deliveryMode: "live",
+        },
+      },
+    });
+
+    await tryDispatchAcpReply({
+      ctx: buildTestCtx({
+        Provider: "discord",
+        Surface: "discord",
+        SessionKey: sessionKey,
+        BodyForAgent: "visible",
+        AcpProjectionMode: "final_only",
+      }),
+      cfg,
+      dispatcher,
+      sessionKey,
+      inboundAudio: false,
+      shouldRouteToOriginating: false,
+      shouldSendToolSummaries: true,
+      bypassForCommand: false,
+      recordProcessed: vi.fn(),
+      markIdle: vi.fn(),
+    });
+
+    expect(dispatcher.sendFinalReply).toHaveBeenCalled();
+    expect(dispatcher.sendBlockReply).not.toHaveBeenCalled();
+  });
+
   it("does not start reply lifecycle for empty ACP prompt", async () => {
     setReadyAcpResolution();
     const onReplyStart = vi.fn();

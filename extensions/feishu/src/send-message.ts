@@ -27,7 +27,7 @@ export async function sendFeishuMessageWithOptionalReply(params: {
   replyErrorPrefix: string;
   fallbackSendErrorPrefix?: string;
   shouldFallbackFromReply?: (response: { code?: number; msg?: string }) => boolean;
-}): Promise<{ messageId: string; chatId: string }> {
+}): Promise<{ messageId: string; chatId: string; nativeThreadId?: string }> {
   const data = {
     content: params.content,
     msg_type: params.msgType,

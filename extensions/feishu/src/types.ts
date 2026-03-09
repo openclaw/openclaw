@@ -58,6 +58,7 @@ export type FeishuMessageContext = {
 export type FeishuSendResult = {
   messageId: string;
   chatId: string;
+  nativeThreadId?: string;
 };
 
 export type FeishuProbeResult = BaseProbeResult<string> & {

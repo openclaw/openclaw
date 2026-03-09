@@ -1,4 +1,5 @@
 import type { ClawdbotConfig } from "openclaw/plugin-sdk/feishu";
+import { getSessionBindingService } from "openclaw/plugin-sdk/feishu";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { monitorFeishuProvider, stopFeishuMonitor } from "./monitor.js";
 
@@ -57,6 +58,42 @@ afterEach(() => {
 });
 
 describe("Feishu monitor startup preflight", () => {
+  it("registers the Feishu thread binding adapter during startup", async () => {
+    probeFeishuMock.mockResolvedValue({ ok: true, botOpenId: "bot_default" });
+
+    const abortController = new AbortController();
+    const monitorPromise = monitorFeishuProvider({
+      config: {
+        channels: {
+          feishu: {
+            enabled: true,
+            appId: "cli_default",
+            appSecret: "secret_default",
+            connectionMode: "websocket",
+          },
+        },
+      } as ClawdbotConfig,
+      abortSignal: abortController.signal,
+    });
+
+    try {
+      await Promise.resolve();
+      expect(
+        getSessionBindingService().getCapabilities({
+          channel: "feishu",
+          accountId: "default",
+        }),
+      ).toMatchObject({
+        adapterAvailable: true,
+        bindSupported: true,
+        placements: ["current", "child"],
+      });
+    } finally {
+      abortController.abort();
+      await monitorPromise;
+    }
+  });
+
   it("starts account probes sequentially to avoid startup bursts", async () => {
     let inFlight = 0;
     let maxInFlight = 0;

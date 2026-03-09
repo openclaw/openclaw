@@ -166,6 +166,46 @@ describe("FeishuConfigSchema optimization flags", () => {
   });
 });
 
+describe("FeishuConfigSchema threadBindings", () => {
+  it("accepts top-level thread binding overrides", () => {
+    const result = FeishuConfigSchema.parse({
+      threadBindings: {
+        enabled: true,
+        idleHours: 12,
+        maxAgeHours: 48,
+        spawnSubagentSessions: true,
+        spawnAcpSessions: false,
+      },
+    });
+
+    expect(result.threadBindings).toEqual({
+      enabled: true,
+      idleHours: 12,
+      maxAgeHours: 48,
+      spawnSubagentSessions: true,
+      spawnAcpSessions: false,
+    });
+  });
+
+  it("accepts account-level thread binding overrides", () => {
+    const result = FeishuConfigSchema.parse({
+      accounts: {
+        main: {
+          threadBindings: {
+            enabled: false,
+            spawnAcpSessions: true,
+          },
+        },
+      },
+    });
+
+    expect(result.accounts?.main?.threadBindings).toEqual({
+      enabled: false,
+      spawnAcpSessions: true,
+    });
+  });
+});
+
 describe("FeishuConfigSchema defaultAccount", () => {
   it("accepts defaultAccount when it matches an account key", () => {
     const result = FeishuConfigSchema.safeParse({

@@ -218,6 +218,10 @@ export function buildEmbeddedContextFromTemplate(params: {
       originatingTo: params.sessionCtx.OriginatingTo,
       to: params.sessionCtx.To,
     }),
+    messageConversationId:
+      typeof params.sessionCtx.NativeChannelId === "string"
+        ? params.sessionCtx.NativeChannelId
+        : undefined,
     messageThreadId: params.sessionCtx.MessageThreadId ?? undefined,
     // Provider threading context for tool auto-injection
     ...buildThreadingToolContext({

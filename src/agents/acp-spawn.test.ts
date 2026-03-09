@@ -330,7 +330,6 @@ describe("spawnAcpDirect", () => {
         agentChannel: "discord",
         agentAccountId: "default",
         agentTo: "channel:parent-channel",
-        agentThreadId: "requester-thread",
       },
     );
 
@@ -358,7 +357,7 @@ describe("spawnAcpDirect", () => {
       .find((request) => request.method === "agent");
     expect(agentCall?.params?.sessionKey).toMatch(/^agent:codex:acp:/);
     expect(agentCall?.params?.to).toBe("channel:child-thread");
-    expect(agentCall?.params?.threadId).toBe("child-thread");
+    expect(agentCall?.params?.threadId).toBeUndefined();
     expect(agentCall?.params?.deliver).toBe(true);
     expect(hoisted.initializeSessionMock).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -460,6 +459,167 @@ describe("spawnAcpDirect", () => {
         }),
       }),
     );
+  });
+
+  it("binds Feishu ACP sessions to the current thread", async () => {
+    hoisted.sessionBindingCapabilitiesMock.mockReturnValue({
+      adapterAvailable: true,
+      bindSupported: true,
+      unbindSupported: true,
+      placements: ["current"] as const,
+    });
+    hoisted.sessionBindingBindMock.mockImplementation(
+      async (input: {
+        targetSessionKey: string;
+        conversation: { accountId: string; conversationId: string };
+        metadata?: Record<string, unknown>;
+      }) =>
+        createSessionBinding({
+          targetSessionKey: input.targetSessionKey,
+          conversation: {
+            channel: "feishu",
+            accountId: input.conversation.accountId,
+            conversationId: input.conversation.conversationId,
+          },
+          metadata: {
+            boundBy:
+              typeof input.metadata?.boundBy === "string" ? input.metadata.boundBy : "system",
+            agentId: "codex",
+          },
+        }),
+    );
+
+    const result = await spawnAcpDirect(
+      {
+        task: "Investigate Feishu thread binding",
+        agentId: "codex",
+        mode: "session",
+        thread: true,
+      },
+      {
+        agentSessionKey: "agent:main:main",
+        agentChannel: "feishu",
+        agentAccountId: "default",
+        agentTo: "user:ou_requester",
+        agentConversationId: "oc_thread_chat:thread:om_root_42",
+        agentThreadId: "om_root_42",
+      },
+    );
+
+    expect(result.status).toBe("accepted");
+    expect(hoisted.sessionBindingBindMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        placement: "current",
+        conversation: expect.objectContaining({
+          channel: "feishu",
+          accountId: "default",
+          conversationId: "oc_thread_chat:thread:om_root_42",
+        }),
+      }),
+    );
+
+    const agentCall = hoisted.callGatewayMock.mock.calls
+      .map((call: unknown[]) => call[0] as { method?: string; params?: Record<string, unknown> })
+      .find((request) => request.method === "agent");
+    expect(agentCall?.params?.to).toBe("user:ou_requester");
+    expect(agentCall?.params?.threadId).toBe("om_root_42");
+  });
+
+  it("binds Feishu ACP sessions to a child topic using the triggering message as root", async () => {
+    hoisted.sessionBindingCapabilitiesMock.mockReturnValue({
+      adapterAvailable: true,
+      bindSupported: true,
+      unbindSupported: true,
+      placements: ["current", "child"] as const,
+    });
+    hoisted.sessionBindingBindMock.mockImplementation(
+      async (input: {
+        targetSessionKey: string;
+        conversation: { accountId: string; conversationId: string };
+        metadata?: Record<string, unknown>;
+      }) =>
+        createSessionBinding({
+          targetSessionKey: input.targetSessionKey,
+          conversation: {
+            channel: "feishu",
+            accountId: input.conversation.accountId,
+            conversationId: "oc_dm_chat:thread:om_seed_52",
+          },
+          metadata: input.metadata,
+        }),
+    );
+
+    const result = await spawnAcpDirect(
+      {
+        task: "Retry Feishu binding",
+        agentId: "codex",
+        mode: "session",
+        thread: true,
+      },
+      {
+        agentSessionKey: "agent:main:main",
+        agentChannel: "feishu",
+        agentAccountId: "default",
+        agentTo: "user:ou_requester",
+        agentConversationId: "oc_dm_chat",
+        agentCurrentMessageId: "om_seed_52",
+      },
+    );
+
+    expect(result.status).toBe("accepted");
+    expect(hoisted.sessionBindingBindMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        placement: "child",
+        conversation: expect.objectContaining({
+          channel: "feishu",
+          conversationId: "oc_dm_chat",
+        }),
+        metadata: expect.objectContaining({
+          sourceMessageId: "om_seed_52",
+        }),
+      }),
+    );
+
+    const agentCall = hoisted.callGatewayMock.mock.calls
+      .map((call: unknown[]) => call[0] as { method?: string; params?: Record<string, unknown> })
+      .find((request) => request.method === "agent");
+    expect(agentCall?.params?.to).toBe("channel:oc_dm_chat:thread:om_seed_52");
+    expect(agentCall?.params?.threadId).toBeUndefined();
+  });
+
+  it("rejects thread-bound Feishu ACP spawn when spawnAcpSessions is disabled", async () => {
+    hoisted.state.cfg = {
+      ...hoisted.state.cfg,
+      channels: {
+        ...hoisted.state.cfg.channels,
+        feishu: {
+          threadBindings: {
+            enabled: true,
+            spawnAcpSessions: false,
+          },
+        },
+      },
+    };
+
+    const result = await spawnAcpDirect(
+      {
+        task: "Investigate Feishu spawn policy",
+        agentId: "codex",
+        mode: "session",
+        thread: true,
+      },
+      {
+        agentSessionKey: "agent:main:main",
+        agentChannel: "feishu",
+        agentAccountId: "default",
+        agentTo: "user:ou_requester",
+        agentConversationId: "oc_dm_chat",
+        agentCurrentMessageId: "om_seed_53",
+      },
+    );
+
+    expect(result.status).toBe("error");
+    expect(result.error).toContain("disabled for feishu");
   });
 
   it("rejects disallowed ACP agents", async () => {

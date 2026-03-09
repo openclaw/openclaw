@@ -3,6 +3,7 @@ export type FeishuMessageApiResponse = {
   msg?: string;
   data?: {
     message_id?: string;
+    thread_id?: string;
   };
 };
 
@@ -21,9 +22,14 @@ export function toFeishuSendResult(
 ): {
   messageId: string;
   chatId: string;
+  nativeThreadId?: string;
 } {
   return {
     messageId: response.data?.message_id ?? "unknown",
     chatId,
+    nativeThreadId:
+      typeof response.data?.thread_id === "string" && response.data.thread_id.trim()
+        ? response.data.thread_id.trim()
+        : undefined,
   };
 }

@@ -26,6 +26,7 @@ const hoisted = vi.hoisted(() => {
   const setModeMock = vi.fn();
   const setConfigOptionMock = vi.fn();
   const doctorMock = vi.fn();
+  const routeReplyMock = vi.fn(async () => ({ ok: true, messageId: "mock" }));
   return {
     callGatewayMock,
     requireAcpRuntimeBackendMock,
@@ -49,6 +50,7 @@ const hoisted = vi.hoisted(() => {
     setModeMock,
     setConfigOptionMock,
     doctorMock,
+    routeReplyMock,
   };
 });
 
@@ -109,6 +111,10 @@ vi.mock("../../discord/monitor/gateway-plugin.js", () => ({
   createDiscordGatewayPlugin: () => ({}),
 }));
 
+vi.mock("./route-reply.js", () => ({
+  routeReply: (...args: unknown[]) => hoisted.routeReplyMock(...args),
+}));
+
 const { handleAcpCommand } = await import("./commands-acp.js");
 const { buildCommandTestParams } = await import("./commands-spawn.test-harness.js");
 const { __testing: acpManagerTesting } = await import("../../acp/control-plane/manager.js");
@@ -118,7 +124,7 @@ type FakeBinding = {
   targetSessionKey: string;
   targetKind: "subagent" | "session";
   conversation: {
-    channel: "discord" | "telegram";
+    channel: "discord" | "telegram" | "feishu";
     accountId: string;
     conversationId: string;
     parentConversationId?: string;
@@ -243,7 +249,7 @@ function createSessionBindingCapabilities() {
 type AcpBindInput = {
   targetSessionKey: string;
   conversation: {
-    channel?: "discord" | "telegram";
+    channel?: "discord" | "telegram" | "feishu";
     accountId: string;
     conversationId: string;
   };
@@ -252,10 +258,16 @@ type AcpBindInput = {
 };
 
 function createAcpThreadBinding(input: AcpBindInput): FakeBinding {
-  const nextConversationId =
-    input.placement === "child" ? "thread-created" : input.conversation.conversationId;
   const boundBy = typeof input.metadata?.boundBy === "string" ? input.metadata.boundBy : "user-1";
   const channel = input.conversation.channel ?? "discord";
+  const sourceMessageId =
+    typeof input.metadata?.sourceMessageId === "string" ? input.metadata.sourceMessageId : "";
+  const nextConversationId =
+    input.placement === "child"
+      ? channel === "feishu" && sourceMessageId
+        ? `${input.conversation.conversationId}:thread:${sourceMessageId}`
+        : "thread-created"
+      : input.conversation.conversationId;
   return createSessionBinding({
     targetSessionKey: input.targetSessionKey,
     conversation:
@@ -266,11 +278,17 @@ function createAcpThreadBinding(input: AcpBindInput): FakeBinding {
             conversationId: nextConversationId,
             parentConversationId: "parent-1",
           }
-        : {
-            channel: "telegram",
-            accountId: input.conversation.accountId,
-            conversationId: nextConversationId,
-          },
+        : channel === "telegram"
+          ? {
+              channel: "telegram",
+              accountId: input.conversation.accountId,
+              conversationId: nextConversationId,
+            }
+          : {
+              channel: "feishu",
+              accountId: input.conversation.accountId,
+              conversationId: nextConversationId,
+            },
     metadata: { boundBy, webhookId: "wh-1" },
   });
 }
@@ -334,6 +352,36 @@ function createTelegramDmParams(commandBody: string, cfg: OpenClawConfig = baseC
   return params;
 }
 
+function createFeishuThreadParams(commandBody: string, cfg: OpenClawConfig = baseCfg) {
+  const params = buildCommandTestParams(commandBody, cfg, {
+    Provider: "feishu",
+    Surface: "feishu",
+    OriginatingChannel: "feishu",
+    OriginatingTo: "chat:oc_thread_chat",
+    AccountId: "default",
+    NativeChannelId: "oc_thread_chat:thread:om_root_498",
+    MessageThreadId: "om_root_498",
+    RootMessageId: "om_root_498",
+    ThreadParentId: "oc_thread_chat",
+  });
+  params.command.senderId = "user-1";
+  return params;
+}
+
+function createFeishuDmParams(commandBody: string, cfg: OpenClawConfig = baseCfg) {
+  const params = buildCommandTestParams(commandBody, cfg, {
+    Provider: "feishu",
+    Surface: "feishu",
+    OriginatingChannel: "feishu",
+    OriginatingTo: "user:ou_requester",
+    AccountId: "default",
+    NativeChannelId: "oc_dm_chat",
+    MessageSid: "om_seed_42",
+  });
+  params.command.senderId = "user-1";
+  return params;
+}
+
 async function runDiscordAcpCommand(commandBody: string, cfg: OpenClawConfig = baseCfg) {
   return handleAcpCommand(createDiscordParams(commandBody, cfg), true);
 }
@@ -350,9 +398,18 @@ async function runTelegramDmAcpCommand(commandBody: string, cfg: OpenClawConfig 
   return handleAcpCommand(createTelegramDmParams(commandBody, cfg), true);
 }
 
+async function runFeishuAcpCommand(commandBody: string, cfg: OpenClawConfig = baseCfg) {
+  return handleAcpCommand(createFeishuThreadParams(commandBody, cfg), true);
+}
+
+async function runFeishuDmAcpCommand(commandBody: string, cfg: OpenClawConfig = baseCfg) {
+  return handleAcpCommand(createFeishuDmParams(commandBody, cfg), true);
+}
+
 describe("/acp command", () => {
   beforeEach(() => {
     acpManagerTesting.resetAcpSessionManagerForTests();
+    hoisted.routeReplyMock.mockReset().mockResolvedValue({ ok: true, messageId: "mock" });
     hoisted.listAcpSessionEntriesMock.mockReset().mockResolvedValue([]);
     hoisted.callGatewayMock.mockReset().mockResolvedValue({ ok: true });
     hoisted.readAcpSessionEntryMock.mockReset().mockReturnValue(null);
@@ -449,8 +506,17 @@ describe("/acp command", () => {
 
     const result = await runDiscordAcpCommand("/acp spawn codex --cwd /home/bob/clawd");
 
-    expect(result?.reply?.text).toContain("Spawned ACP session agent:codex:acp:");
-    expect(result?.reply?.text).toContain("Created thread thread-created and bound it");
+    expect(result?.reply).toBeUndefined();
+    expect(hoisted.routeReplyMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: "discord",
+        to: "channel:thread-created",
+        accountId: "default",
+        payload: expect.objectContaining({
+          text: expect.stringContaining("Created thread thread-created and bound it"),
+        }),
+      }),
+    );
     expect(hoisted.requireAcpRuntimeBackendMock).toHaveBeenCalledWith("acpx");
     expect(hoisted.ensureSessionMock).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -548,6 +614,52 @@ describe("/acp command", () => {
           channel: "telegram",
           accountId: "default",
           conversationId: "123456789",
+        }),
+      }),
+    );
+  });
+
+  it("binds Feishu thread ACP spawns to the current thread conversation", async () => {
+    const result = await runFeishuAcpCommand("/acp spawn codex --thread here");
+
+    expect(result?.reply?.text).toContain("Spawned ACP session agent:codex:acp:");
+    expect(result?.reply?.text).toContain("Bound this thread to");
+    expect(hoisted.sessionBindingBindMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        placement: "current",
+        conversation: expect.objectContaining({
+          channel: "feishu",
+          accountId: "default",
+          conversationId: "oc_thread_chat:thread:om_root_498",
+        }),
+      }),
+    );
+  });
+
+  it("routes Feishu child ACP spawn notices into the new thread conversation", async () => {
+    const result = await runFeishuDmAcpCommand("/acp spawn codex --thread auto");
+
+    expect(result?.reply).toBeUndefined();
+    expect(hoisted.routeReplyMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: "feishu",
+        to: "channel:oc_dm_chat:thread:om_seed_42",
+        accountId: "default",
+        payload: expect.objectContaining({
+          text: expect.stringContaining("Created thread oc_dm_chat:thread:om_seed_42"),
+        }),
+      }),
+    );
+    expect(hoisted.sessionBindingBindMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        placement: "child",
+        conversation: expect.objectContaining({
+          channel: "feishu",
+          accountId: "default",
+          conversationId: "oc_dm_chat",
+        }),
+        metadata: expect.objectContaining({
+          sourceMessageId: "om_seed_42",
         }),
       }),
     );

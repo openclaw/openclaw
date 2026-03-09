@@ -50,13 +50,25 @@ export {
   normalizeSecretInputString,
 } from "../config/types.secrets.js";
 export { buildSecretInputSchema } from "./secret-input-schema.js";
+export {
+  type BindingTargetKind,
+  getSessionBindingService,
+  registerSessionBindingAdapter,
+  type SessionBindingRecord,
+  unregisterSessionBindingAdapter,
+} from "../infra/outbound/session-binding-service.js";
 export { createDedupeCache } from "../infra/dedupe.js";
 export { installRequestBodyLimitGuard } from "../infra/http-body.js";
 export { fetchWithSsrFGuard } from "../infra/net/fetch-guard.js";
 export { emptyPluginConfigSchema } from "../plugins/config-schema.js";
 export type { PluginRuntime } from "../plugins/runtime/types.js";
 export type { AnyAgentTool, OpenClawPluginApi } from "../plugins/types.js";
-export { DEFAULT_ACCOUNT_ID, normalizeAgentId } from "../routing/session-key.js";
+export { resolveStateDir } from "../config/paths.js";
+export {
+  DEFAULT_ACCOUNT_ID,
+  normalizeAccountId,
+  normalizeAgentId,
+} from "../routing/session-key.js";
 export type { RuntimeEnv } from "../runtime.js";
 export { formatDocsLink } from "../terminal/links.js";
 export { evaluateSenderGroupAccessForPolicy } from "./group-access.js";
@@ -66,6 +78,11 @@ export { readJsonFileWithFallback } from "./json-store.js";
 export { createScopedPairingAccess } from "./pairing-access.js";
 export { issuePairingChallenge } from "../pairing/pairing-challenge.js";
 export { createPersistentDedupe } from "./persistent-dedupe.js";
+export {
+  resolveThreadBindingIdleTimeoutMsForChannel,
+  resolveThreadBindingMaxAgeMsForChannel,
+  resolveThreadBindingSpawnPolicy,
+} from "../channels/thread-bindings-policy.js";
 export {
   buildBaseChannelStatusSummary,
   buildProbeChannelStatusSummary,

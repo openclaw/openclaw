@@ -35,6 +35,7 @@ import {
   type SessionBindingRecord,
 } from "../../../infra/outbound/session-binding-service.js";
 import type { CommandHandlerResult, HandleCommandsParams } from "../commands-types.js";
+import { routeReply } from "../route-reply.js";
 import {
   resolveAcpCommandAccountId,
   resolveAcpCommandBindingContext,
@@ -137,14 +138,18 @@ async function bindSpawnedAcpSessionToThread(params: {
     };
   }
 
-  const placement = channel === "telegram" ? "current" : currentThreadId ? "current" : "child";
+  const placement: "current" | "child" =
+    threadMode === "here" || currentThreadId || !capabilities.placements.includes("child")
+      ? "current"
+      : "child";
   if (!capabilities.placements.includes(placement)) {
     return {
       ok: false,
       error: `Thread bindings do not support ${placement} placement for ${channel}.`,
     };
   }
-  if (!currentConversationId) {
+  const bindingConversationId = currentConversationId || bindingContext.parentConversationId || "";
+  if (!bindingConversationId) {
     return {
       ok: false,
       error: `Could not resolve a ${channel} conversation for ACP thread spawn.`,
@@ -171,8 +176,6 @@ async function bindSpawnedAcpSessionToThread(params: {
   }
 
   const label = params.label || params.agentId;
-  const conversationId = currentConversationId;
-
   try {
     const binding = await bindingService.bind({
       targetSessionKey: params.sessionKey,
@@ -180,7 +183,8 @@ async function bindSpawnedAcpSessionToThread(params: {
       conversation: {
         channel: spawnPolicy.channel,
         accountId: spawnPolicy.accountId,
-        conversationId,
+        conversationId: bindingConversationId,
+        parentConversationId: bindingContext.parentConversationId,
       },
       placement,
       metadata: {
@@ -191,6 +195,7 @@ async function bindSpawnedAcpSessionToThread(params: {
         agentId: params.agentId,
         label,
         boundBy: senderId || "unknown",
+        sourceMessageId: bindingContext.currentMessageId,
         introText: resolveThreadBindingIntroText({
           agentId: params.agentId,
           label,
@@ -238,6 +243,27 @@ async function cleanupFailedSpawn(params: {
     deleteTranscript: false,
     runtimeCloseHandle: params.initializedRuntime,
   });
+}
+
+async function sendAcpSpawnReplyToBoundConversation(params: {
+  commandParams: HandleCommandsParams;
+  binding: SessionBindingRecord;
+  text: string;
+  pin?: boolean;
+}): Promise<boolean> {
+  const result = await routeReply({
+    payload: {
+      text: params.text,
+      ...(params.pin ? { channelData: { telegram: { pin: true } } } : {}),
+    },
+    channel: params.binding.conversation.channel,
+    to: `channel:${params.binding.conversation.conversationId}`,
+    sessionKey: params.commandParams.sessionKey,
+    accountId: params.binding.conversation.accountId,
+    cfg: params.commandParams.cfg,
+    isGroup: params.commandParams.isGroup,
+  });
+  return result.ok;
 }
 
 export async function handleAcpSpawnAction(
@@ -347,9 +373,9 @@ export async function handleAcpSpawnAction(
   const parts = [
     `✅ Spawned ACP session ${sessionKey} (${spawn.mode}, backend ${initializedBackend}).`,
   ];
+  const currentConversationId = resolveAcpCommandConversationId(params)?.trim() || "";
+  const boundConversationId = binding?.conversation.conversationId.trim() || "";
   if (binding) {
-    const currentConversationId = resolveAcpCommandConversationId(params)?.trim() || "";
-    const boundConversationId = binding.conversation.conversationId.trim();
     const placementLabel = binding.conversation.channel === "telegram" ? "conversation" : "thread";
     if (currentConversationId && boundConversationId === currentConversationId) {
       parts.push(`Bound this ${placementLabel} to ${sessionKey}.`);
@@ -368,17 +394,39 @@ export async function handleAcpSpawnAction(
   const shouldPinBindingNotice =
     binding?.conversation.channel === "telegram" &&
     binding.conversation.conversationId.includes(":topic:");
+  const shouldRouteBindingNotice =
+    binding && boundConversationId && boundConversationId !== currentConversationId;
+  const replyText = parts.join(" ");
+  if (shouldRouteBindingNotice && binding) {
+    const routed = await sendAcpSpawnReplyToBoundConversation({
+      commandParams: params,
+      binding,
+      text: replyText,
+      pin: shouldPinBindingNotice,
+    });
+    if (routed) {
+      return {
+        shouldContinue: false,
+      };
+    }
+  }
+
   if (shouldPinBindingNotice) {
     return {
       shouldContinue: false,
       reply: {
-        text: parts.join(" "),
+        text: replyText,
         channelData: { telegram: { pin: true } },
       },
     };
   }
 
-  return stopWithText(parts.join(" "));
+  return {
+    shouldContinue: false,
+    reply: {
+      text: replyText,
+    },
+  };
 }
 
 function resolveAcpSessionForCommandOrStop(params: {

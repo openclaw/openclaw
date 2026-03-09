@@ -855,6 +855,7 @@ export async function runEmbeddedPiAgent(
             messageProvider: params.messageProvider,
             agentAccountId: params.agentAccountId,
             messageTo: params.messageTo,
+            messageConversationId: params.messageConversationId,
             messageThreadId: params.messageThreadId,
             groupId: params.groupId,
             groupChannel: params.groupChannel,

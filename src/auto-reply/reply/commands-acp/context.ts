@@ -38,6 +38,23 @@ export function resolveAcpCommandThreadId(params: HandleCommandsParams): string 
   return threadId || undefined;
 }
 
+export function resolveAcpCommandCurrentMessageId(
+  params: HandleCommandsParams,
+): string | undefined {
+  return (
+    normalizeString(params.ctx.MessageSidFull) ||
+    normalizeString(params.ctx.MessageSid) ||
+    normalizeString(params.ctx.MessageSidFirst) ||
+    normalizeString(params.ctx.MessageSidLast) ||
+    undefined
+  );
+}
+
+function resolveNativeConversationId(params: HandleCommandsParams): string | undefined {
+  const nativeConversationId = normalizeString(params.ctx.NativeChannelId);
+  return nativeConversationId || undefined;
+}
+
 export function resolveAcpCommandConversationId(params: HandleCommandsParams): string | undefined {
   const channel = resolveAcpCommandChannel(params);
   if (channel === "telegram") {
@@ -64,6 +81,10 @@ export function resolveAcpCommandConversationId(params: HandleCommandsParams): s
         }) ?? threadId
       );
     }
+  }
+  const nativeConversationId = resolveNativeConversationId(params);
+  if (nativeConversationId) {
+    return nativeConversationId;
   }
   return resolveConversationIdFromTargets({
     threadId: params.ctx.MessageThreadId,
@@ -136,6 +157,7 @@ export function resolveAcpCommandBindingContext(params: HandleCommandsParams): {
   threadId?: string;
   conversationId?: string;
   parentConversationId?: string;
+  currentMessageId?: string;
 } {
   const parentConversationId = resolveAcpCommandParentConversationId(params);
   return {
@@ -144,5 +166,8 @@ export function resolveAcpCommandBindingContext(params: HandleCommandsParams): {
     threadId: resolveAcpCommandThreadId(params),
     conversationId: resolveAcpCommandConversationId(params),
     ...(parentConversationId ? { parentConversationId } : {}),
+    ...(resolveAcpCommandCurrentMessageId(params)
+      ? { currentMessageId: resolveAcpCommandCurrentMessageId(params) }
+      : {}),
   };
 }

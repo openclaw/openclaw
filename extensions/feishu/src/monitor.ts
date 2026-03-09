@@ -1,4 +1,5 @@
 import type { ClawdbotConfig, RuntimeEnv } from "openclaw/plugin-sdk/feishu";
+import { resolveThreadBindingSpawnPolicy } from "openclaw/plugin-sdk/feishu";
 import { listEnabledFeishuAccounts, resolveFeishuAccount } from "./accounts.js";
 import {
   monitorSingleAccount,
@@ -12,6 +13,10 @@ import {
   isWebhookRateLimitedForTest,
   stopFeishuMonitorState,
 } from "./monitor.state.js";
+import {
+  ensureFeishuThreadBindingManagerForAccount,
+  stopFeishuThreadBindingManager,
+} from "./thread-bindings.js";
 
 export type MonitorFeishuOpts = {
   config?: ClawdbotConfig;
@@ -41,6 +46,10 @@ export async function monitorFeishuProvider(opts: MonitorFeishuOpts = {}): Promi
     if (!account.enabled || !account.configured) {
       throw new Error(`Feishu account "${opts.accountId}" not configured or disabled`);
     }
+    ensureFeishuThreadBindings({
+      cfg,
+      accountId: account.accountId,
+    });
     return monitorSingleAccount({
       cfg,
       account,
@@ -64,6 +73,11 @@ export async function monitorFeishuProvider(opts: MonitorFeishuOpts = {}): Promi
       log("feishu: abort signal received during startup preflight; stopping startup");
       break;
     }
+
+    ensureFeishuThreadBindings({
+      cfg,
+      accountId: account.accountId,
+    });
 
     // Probe sequentially so large multi-account startups do not burst Feishu's bot-info endpoint.
     const { botOpenId, botName } = await fetchBotIdentityForMonitor(account, {
@@ -91,5 +105,29 @@ export async function monitorFeishuProvider(opts: MonitorFeishuOpts = {}): Promi
 }
 
 export function stopFeishuMonitor(accountId?: string): void {
+  stopFeishuThreadBindingManager(accountId);
   stopFeishuMonitorState(accountId);
+}
+
+function ensureFeishuThreadBindings(params: { cfg: ClawdbotConfig; accountId: string }) {
+  const subagentPolicy = resolveThreadBindingSpawnPolicy({
+    cfg: params.cfg,
+    channel: "feishu",
+    accountId: params.accountId,
+    kind: "subagent",
+  });
+  const acpPolicy = resolveThreadBindingSpawnPolicy({
+    cfg: params.cfg,
+    channel: "feishu",
+    accountId: params.accountId,
+    kind: "acp",
+  });
+  if (!subagentPolicy.enabled && !acpPolicy.enabled) {
+    stopFeishuThreadBindingManager(params.accountId);
+    return;
+  }
+  ensureFeishuThreadBindingManagerForAccount({
+    cfg: params.cfg,
+    accountId: params.accountId,
+  });
 }

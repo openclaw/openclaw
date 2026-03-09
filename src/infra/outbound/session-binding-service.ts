@@ -145,7 +145,26 @@ function resolveAdapterCapabilities(
   };
 }
 
-const ADAPTERS_BY_CHANNEL_ACCOUNT = new Map<string, SessionBindingAdapter>();
+const SESSION_BINDING_ADAPTERS_KEY = Symbol.for("openclaw.sessionBindingAdapters");
+
+function resolveSharedAdapterRegistry(): Map<string, SessionBindingAdapter> {
+  // Plugin channels can register adapters through a different module graph than
+  // the core ACP spawn path (for example jiti-loaded extension code vs bundled
+  // core imports). Keep the registry on globalThis so both sides observe the
+  // same adapter set instead of silently diverging into per-module Maps.
+  const globalRegistry = globalThis as typeof globalThis & {
+    [SESSION_BINDING_ADAPTERS_KEY]?: Map<string, SessionBindingAdapter>;
+  };
+  const existing = globalRegistry[SESSION_BINDING_ADAPTERS_KEY];
+  if (existing) {
+    return existing;
+  }
+  const created = new Map<string, SessionBindingAdapter>();
+  globalRegistry[SESSION_BINDING_ADAPTERS_KEY] = created;
+  return created;
+}
+
+const ADAPTERS_BY_CHANNEL_ACCOUNT = resolveSharedAdapterRegistry();
 
 export function registerSessionBindingAdapter(adapter: SessionBindingAdapter): void {
   const key = toAdapterKey({

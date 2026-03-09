@@ -175,6 +175,12 @@ export type MsgContext = {
    */
   ThreadParentId?: string;
   /**
+   * Optional ACP reply projection override supplied by the channel/plugin.
+   * Use "final_only" when a provider/thread surface should buffer ACP output
+   * and deliver only final replies instead of block streaming.
+   */
+  AcpProjectionMode?: "live" | "final_only";
+  /**
    * Messages from hooks to be included in the response.
    * Used for hook confirmation messages like "Session context saved to memory".
    */

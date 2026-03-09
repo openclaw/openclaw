@@ -126,4 +126,48 @@ describe("commands-acp context", () => {
     });
     expect(resolveAcpCommandConversationId(params)).toBe("123456789");
   });
+
+  it("builds canonical Feishu thread conversation ids from chat + root message", () => {
+    const params = buildCommandTestParams("/acp status", baseCfg, {
+      Provider: "feishu",
+      Surface: "feishu",
+      OriginatingChannel: "feishu",
+      OriginatingTo: "chat:oc_thread_chat",
+      AccountId: "work",
+      NativeChannelId: "oc_thread_chat:thread:om_root_42",
+      MessageThreadId: "om_root_42",
+      ThreadParentId: "oc_thread_chat",
+      RootMessageId: "om_root_42",
+    });
+
+    expect(resolveAcpCommandBindingContext(params)).toEqual({
+      channel: "feishu",
+      accountId: "work",
+      threadId: "om_root_42",
+      conversationId: "oc_thread_chat:thread:om_root_42",
+      parentConversationId: undefined,
+    });
+    expect(resolveAcpCommandConversationId(params)).toBe("oc_thread_chat:thread:om_root_42");
+  });
+
+  it("uses NativeChannelId as the canonical Feishu conversation outside an active thread", () => {
+    const params = buildCommandTestParams("/acp spawn codex --thread auto", baseCfg, {
+      Provider: "feishu",
+      Surface: "feishu",
+      OriginatingChannel: "feishu",
+      OriginatingTo: "user:ou_requester",
+      AccountId: "work",
+      NativeChannelId: "oc_dm_chat",
+      MessageSid: "om_seed_42",
+    });
+
+    expect(resolveAcpCommandBindingContext(params)).toEqual({
+      channel: "feishu",
+      accountId: "work",
+      threadId: undefined,
+      conversationId: "oc_dm_chat",
+      currentMessageId: "om_seed_42",
+    });
+    expect(resolveAcpCommandConversationId(params)).toBe("oc_dm_chat");
+  });
 });

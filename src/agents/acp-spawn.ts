@@ -68,7 +68,9 @@ export type SpawnAcpContext = {
   agentChannel?: string;
   agentAccountId?: string;
   agentTo?: string;
+  agentConversationId?: string;
   agentThreadId?: string | number;
+  agentCurrentMessageId?: string | number;
   sandboxed?: boolean;
 };
 
@@ -112,6 +114,7 @@ type PreparedAcpThreadBinding = {
   channel: string;
   accountId: string;
   conversationId: string;
+  placement: "current" | "child";
 };
 
 function resolveSpawnMode(params: {
@@ -213,9 +216,15 @@ async function persistAcpSpawnSessionFileBestEffort(params: {
 }
 
 function resolveConversationIdForThreadBinding(params: {
+  conversationId?: string;
   to?: string;
   threadId?: string | number;
 }): string | undefined {
+  const explicitConversationId = params.conversationId?.trim();
+  if (explicitConversationId) {
+    return explicitConversationId;
+  }
+
   return resolveConversationIdFromTargets({
     threadId: params.threadId,
     targets: [params.to],
@@ -226,6 +235,7 @@ function prepareAcpThreadBinding(params: {
   cfg: OpenClawConfig;
   channel?: string;
   accountId?: string;
+  conversationId?: string;
   to?: string;
   threadId?: string | number;
 }): { ok: true; binding: PreparedAcpThreadBinding } | { ok: false; error: string } {
@@ -275,16 +285,25 @@ function prepareAcpThreadBinding(params: {
       error: `Thread bindings are unavailable for ${policy.channel}.`,
     };
   }
-  if (!capabilities.bindSupported || !capabilities.placements.includes("child")) {
+  if (!capabilities.bindSupported) {
     return {
       ok: false,
       error: `Thread bindings do not support ACP thread spawn for ${policy.channel}.`,
     };
   }
   const conversationId = resolveConversationIdForThreadBinding({
+    conversationId: params.conversationId,
     to: params.to,
     threadId: params.threadId,
   });
+  const placement: "current" | "child" =
+    params.threadId != null || !capabilities.placements.includes("child") ? "current" : "child";
+  if (!capabilities.placements.includes(placement)) {
+    return {
+      ok: false,
+      error: `Thread bindings do not support ${placement} placement for ${policy.channel}.`,
+    };
+  }
   if (!conversationId) {
     return {
       ok: false,
@@ -298,6 +317,7 @@ function prepareAcpThreadBinding(params: {
       channel: policy.channel,
       accountId: policy.accountId,
       conversationId,
+      placement,
     },
   };
 }
@@ -378,6 +398,7 @@ export async function spawnAcpDirect(
       cfg,
       channel: ctx.agentChannel,
       accountId: ctx.agentAccountId,
+      conversationId: ctx.agentConversationId,
       to: ctx.agentTo,
       threadId: ctx.agentThreadId,
     });
@@ -443,7 +464,7 @@ export async function spawnAcpDirect(
           accountId: preparedBinding.accountId,
           conversationId: preparedBinding.conversationId,
         },
-        placement: "child",
+        placement: preparedBinding.placement,
         metadata: {
           threadName: resolveThreadBindingThreadName({
             agentId: targetAgentId,
@@ -452,6 +473,8 @@ export async function spawnAcpDirect(
           agentId: targetAgentId,
           label: params.label || undefined,
           boundBy: "system",
+          sourceMessageId:
+            ctx.agentCurrentMessageId != null ? String(ctx.agentCurrentMessageId) : undefined,
           introText: resolveThreadBindingIntroText({
             agentId: targetAgentId,
             label: params.label || undefined,
@@ -514,15 +537,19 @@ export async function spawnAcpDirect(
     to: ctx.agentTo,
     threadId: ctx.agentThreadId,
   });
-  // For thread-bound ACP spawns, force bootstrap delivery to the new child thread.
-  const boundThreadIdRaw = binding?.conversation.conversationId;
-  const boundThreadId = boundThreadIdRaw ? String(boundThreadIdRaw).trim() || undefined : undefined;
+  // Child placement creates a new conversation target. Current placement should
+  // keep bootstrap delivery on the caller's existing thread.
+  const boundConversationIdRaw =
+    preparedBinding?.placement === "child" ? binding?.conversation.conversationId : undefined;
+  const boundConversationId = boundConversationIdRaw
+    ? String(boundConversationIdRaw).trim() || undefined
+    : undefined;
   const fallbackThreadIdRaw = requesterOrigin?.threadId;
   const fallbackThreadId =
     fallbackThreadIdRaw != null ? String(fallbackThreadIdRaw).trim() || undefined : undefined;
-  const deliveryThreadId = boundThreadId ?? fallbackThreadId;
-  const inferredDeliveryTo = boundThreadId
-    ? `channel:${boundThreadId}`
+  const deliveryThreadId = boundConversationId ? undefined : fallbackThreadId;
+  const inferredDeliveryTo = boundConversationId
+    ? `channel:${boundConversationId}`
     : requesterOrigin?.to?.trim() || (deliveryThreadId ? `channel:${deliveryThreadId}` : undefined);
   const hasDeliveryTarget = Boolean(requesterOrigin?.channel && inferredDeliveryTo);
   // Fresh one-shot ACP runs should bootstrap the worker first, then let higher layers

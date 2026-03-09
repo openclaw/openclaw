@@ -1,4 +1,5 @@
 import type { ClawdbotConfig, PluginRuntime, RuntimeEnv } from "openclaw/plugin-sdk/feishu";
+import { getSessionBindingService } from "openclaw/plugin-sdk/feishu";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createPluginRuntimeMock } from "../../test-utils/plugin-runtime-mock.js";
 import type { FeishuMessageEvent } from "./bot.js";
@@ -10,6 +11,10 @@ import {
   toMessageResourceType,
 } from "./bot.js";
 import { setFeishuRuntime } from "./runtime.js";
+import {
+  ensureFeishuThreadBindingManagerForAccount,
+  stopFeishuThreadBindingManager,
+} from "./thread-bindings.js";
 
 const {
   mockCreateFeishuReplyDispatcher,
@@ -139,6 +144,7 @@ describe("handleFeishuMessage command authorization", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    stopFeishuThreadBindingManager("default");
     mockShouldComputeCommandAuthorized.mockReset().mockReturnValue(true);
     mockResolveAgentRoute.mockReturnValue({
       agentId: "main",
@@ -1705,6 +1711,195 @@ describe("handleFeishuMessage command authorization", () => {
       expect.objectContaining({
         replyInThread: true,
         threadReply: true,
+      }),
+    );
+  });
+
+  it("keeps DM topic replies in-thread when inbound message contains root_id", async () => {
+    mockShouldComputeCommandAuthorized.mockReturnValue(false);
+
+    const cfg: ClawdbotConfig = {
+      channels: {
+        feishu: {
+          dmPolicy: "open",
+        },
+      },
+    } as ClawdbotConfig;
+
+    const event: FeishuMessageEvent = {
+      sender: { sender_id: { open_id: "ou-dm-thread" } },
+      message: {
+        message_id: "msg-dm-thread-reply",
+        chat_id: "oc-dm-thread",
+        chat_type: "p2p",
+        root_id: "om_dm_topic_root",
+        message_type: "text",
+        content: JSON.stringify({ text: "dm topic reply" }),
+      },
+    };
+
+    await dispatchMessage({ cfg, event });
+
+    expect(mockCreateFeishuReplyDispatcher).toHaveBeenCalledWith(
+      expect.objectContaining({
+        replyToMessageId: "msg-dm-thread-reply",
+        skipReplyToInMessages: false,
+        rootId: "om_dm_topic_root",
+        threadReply: true,
+      }),
+    );
+  });
+
+  it("routes Feishu DM topic follow-ups via the bound conversation session", async () => {
+    mockShouldComputeCommandAuthorized.mockReturnValue(false);
+
+    const cfg: ClawdbotConfig = {
+      channels: {
+        feishu: {
+          dmPolicy: "open",
+        },
+      },
+    } as ClawdbotConfig;
+
+    ensureFeishuThreadBindingManagerForAccount({
+      cfg,
+      accountId: "default",
+      persist: false,
+      enableSweeper: false,
+    });
+    await getSessionBindingService().bind({
+      targetSessionKey: "agent:codex:acp:test-bound-session",
+      targetKind: "session",
+      conversation: {
+        channel: "feishu",
+        accountId: "default",
+        conversationId: "oc-dm-thread:thread:om_dm_topic_root",
+      },
+      placement: "current",
+      metadata: {
+        agentId: "codex",
+      },
+    });
+
+    const event: FeishuMessageEvent = {
+      sender: { sender_id: { open_id: "ou-dm-thread" } },
+      message: {
+        message_id: "msg-dm-thread-followup",
+        chat_id: "oc-dm-thread",
+        chat_type: "p2p",
+        root_id: "om_dm_topic_root",
+        message_type: "text",
+        content: JSON.stringify({ text: "继续" }),
+      },
+    };
+
+    await dispatchMessage({ cfg, event });
+
+    expect(mockFinalizeInboundContext).toHaveBeenCalledWith(
+      expect.objectContaining({
+        SessionKey: "agent:codex:acp:test-bound-session",
+      }),
+    );
+    expect(mockCreateFeishuReplyDispatcher).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agentId: "codex",
+      }),
+    );
+  });
+
+  it("routes Feishu thread-only follow-ups via the stored native thread id alias", async () => {
+    mockShouldComputeCommandAuthorized.mockReturnValue(false);
+
+    const cfg: ClawdbotConfig = {
+      channels: {
+        feishu: {
+          dmPolicy: "open",
+        },
+      },
+    } as ClawdbotConfig;
+
+    ensureFeishuThreadBindingManagerForAccount({
+      cfg,
+      accountId: "default",
+      persist: false,
+      enableSweeper: false,
+    });
+    await getSessionBindingService().bind({
+      targetSessionKey: "agent:codex:acp:test-bound-session",
+      targetKind: "session",
+      conversation: {
+        channel: "feishu",
+        accountId: "default",
+        conversationId: "oc-dm-thread:thread:om_dm_topic_root",
+      },
+      placement: "current",
+      metadata: {
+        agentId: "codex",
+        nativeThreadId: "omt_dm_topic_1",
+      },
+    });
+
+    const event: FeishuMessageEvent = {
+      sender: { sender_id: { open_id: "ou-dm-thread" } },
+      message: {
+        message_id: "msg-dm-thread-followup-2",
+        chat_id: "oc-dm-thread",
+        chat_type: "p2p",
+        thread_id: "omt_dm_topic_1",
+        message_type: "text",
+        content: JSON.stringify({ text: "继续第二条" }),
+      },
+    };
+
+    await dispatchMessage({ cfg, event });
+
+    expect(mockFinalizeInboundContext).toHaveBeenCalledWith(
+      expect.objectContaining({
+        SessionKey: "agent:codex:acp:test-bound-session",
+      }),
+    );
+    expect(mockCreateFeishuReplyDispatcher).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agentId: "codex",
+      }),
+    );
+  });
+
+  it("uses the topic root message id for group topic roots when only thread_id is present", async () => {
+    mockShouldComputeCommandAuthorized.mockReturnValue(false);
+
+    const cfg: ClawdbotConfig = {
+      channels: {
+        feishu: {
+          groups: {
+            "oc-group": {
+              requireMention: false,
+              groupSessionScope: "group",
+            },
+          },
+        },
+      },
+    } as ClawdbotConfig;
+
+    const event: FeishuMessageEvent = {
+      sender: { sender_id: { open_id: "ou-group-topic-root" } },
+      message: {
+        message_id: "om_group_topic_root",
+        chat_id: "oc-group",
+        chat_type: "group",
+        thread_id: "omt_group_topic_1",
+        message_type: "text",
+        content: JSON.stringify({ text: "start topic-bound codex session" }),
+      },
+    };
+
+    await dispatchMessage({ cfg, event });
+
+    expect(mockFinalizeInboundContext).toHaveBeenCalledWith(
+      expect.objectContaining({
+        MessageThreadId: "om_group_topic_root",
+        RootMessageId: "om_group_topic_root",
+        NativeChannelId: "oc-group:thread:om_group_topic_root",
       }),
     );
   });

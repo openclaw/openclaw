@@ -255,6 +255,7 @@ export async function tryDispatchAcpReply(params: {
     deliver: delivery.deliver,
     provider: params.ctx.Surface ?? params.ctx.Provider,
     accountId: params.ctx.AccountId,
+    deliveryModeOverride: params.ctx.AcpProjectionMode,
   });
 
   const acpDispatchStartedAt = Date.now();

@@ -166,6 +166,7 @@ export type UploadFileResult = {
 export type SendMediaResult = {
   messageId: string;
   chatId: string;
+  nativeThreadId?: string;
 };
 
 /**

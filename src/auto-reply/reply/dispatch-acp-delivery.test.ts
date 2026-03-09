@@ -72,4 +72,25 @@ describe("createAcpDispatchDeliveryCoordinator", () => {
 
     expect(onReplyStart).not.toHaveBeenCalled();
   });
+
+  it("promotes block replies to final replies when the context requests final-only ACP projection", async () => {
+    const dispatcher = createDispatcher();
+    const coordinator = createAcpDispatchDeliveryCoordinator({
+      cfg: createAcpTestConfig(),
+      ctx: buildTestCtx({
+        Provider: "discord",
+        Surface: "discord",
+        SessionKey: "agent:codex-acp:session-1",
+        AcpProjectionMode: "final_only",
+      }),
+      dispatcher,
+      inboundAudio: false,
+      shouldRouteToOriginating: false,
+    });
+
+    await coordinator.deliver("block", { text: "hello from block" });
+
+    expect(dispatcher.sendFinalReply).toHaveBeenCalledWith({ text: "hello from block" });
+    expect(dispatcher.sendBlockReply).not.toHaveBeenCalled();
+  });
 });

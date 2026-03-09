@@ -15,6 +15,8 @@ import { getFeishuRuntime } from "./runtime.js";
 import { sendMarkdownCardFeishu, sendMessageFeishu } from "./send.js";
 import { FeishuStreamingSession, mergeStreamingText } from "./streaming-card.js";
 import { resolveReceiveIdType } from "./targets.js";
+import { recordFeishuNativeThreadBinding } from "./thread-bindings.js";
+import type { FeishuSendResult } from "./types.js";
 import { addTypingIndicator, removeTypingIndicator, type TypingIndicatorState } from "./typing.js";
 
 /** Detect if text contains markdown elements that benefit from card rendering */
@@ -34,6 +36,13 @@ function normalizeEpochMs(timestamp: number | undefined): number | undefined {
   // Defensive normalization: some payloads use seconds, others milliseconds.
   // Values below 1e12 are treated as epoch-seconds.
   return timestamp < MS_EPOCH_MIN ? timestamp * 1000 : timestamp;
+}
+
+function shouldRenderAsCard(
+  renderMode: "auto" | "card" | "raw" | undefined,
+  text: string,
+): boolean {
+  return renderMode === "card" || (renderMode === "auto" && shouldUseCard(text));
 }
 
 export type CreateFeishuReplyDispatcherParams = {
@@ -136,17 +145,28 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
   const chunkMode = core.channel.text.resolveChunkMode(cfg, "feishu");
   const tableMode = core.channel.text.resolveMarkdownTableMode({ cfg, channel: "feishu" });
   const renderMode = account.config?.renderMode ?? "auto";
-  // Card streaming may miss thread affinity in topic contexts; use direct replies there.
-  const streamingEnabled =
-    !threadReplyMode && account.config?.streaming !== false && renderMode !== "raw";
+  const streamingEnabled = account.config?.streaming !== false && renderMode !== "raw";
 
   let streaming: FeishuStreamingSession | null = null;
   let streamText = "";
   let lastPartial = "";
+  let bufferedThreadText = "";
   const deliveredFinalTexts = new Set<string>();
   let partialUpdateQueue: Promise<void> = Promise.resolve();
   let streamingStartPromise: Promise<void> | null = null;
   type StreamTextUpdateMode = "snapshot" | "delta";
+
+  const maybeRecordNativeThreadBinding = (sendResult: FeishuSendResult | null | undefined) => {
+    if (!effectiveReplyInThread || !sendReplyToMessageId || !sendResult?.nativeThreadId) {
+      return;
+    }
+    recordFeishuNativeThreadBinding({
+      accountId,
+      chatId,
+      rootMessageId: sendReplyToMessageId,
+      nativeThreadId: sendResult.nativeThreadId,
+    });
+  };
 
   const queueStreamingUpdate = (
     nextText: string,
@@ -175,6 +195,21 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
         await streaming.update(streamText);
       }
     });
+  };
+
+  const seedStreamingFromThreadBuffer = () => {
+    if (!bufferedThreadText) {
+      return;
+    }
+    streamText = mergeStreamingText(bufferedThreadText, streamText);
+    bufferedThreadText = "";
+  };
+
+  const bufferThreadText = (nextText: string, mode: StreamTextUpdateMode = "delta") => {
+    bufferedThreadText =
+      mode === "delta"
+        ? `${bufferedThreadText}${nextText}`
+        : mergeStreamingText(bufferedThreadText, nextText);
   };
 
   const startStreaming = () => {
@@ -224,6 +259,53 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
     lastPartial = "";
   };
 
+  const sendRenderedText = async (text: string, useCard: boolean) => {
+    let first = true;
+    if (useCard) {
+      for (const chunk of core.channel.text.chunkTextWithMode(text, textChunkLimit, chunkMode)) {
+        maybeRecordNativeThreadBinding(
+          await sendMarkdownCardFeishu({
+            cfg,
+            to: chatId,
+            text: chunk,
+            replyToMessageId: sendReplyToMessageId,
+            replyInThread: effectiveReplyInThread,
+            mentions: first ? mentionTargets : undefined,
+            accountId,
+          }),
+        );
+        first = false;
+      }
+      return;
+    }
+
+    const converted = core.channel.text.convertMarkdownTables(text, tableMode);
+    for (const chunk of core.channel.text.chunkTextWithMode(converted, textChunkLimit, chunkMode)) {
+      maybeRecordNativeThreadBinding(
+        await sendMessageFeishu({
+          cfg,
+          to: chatId,
+          text: chunk,
+          replyToMessageId: sendReplyToMessageId,
+          replyInThread: effectiveReplyInThread,
+          mentions: first ? mentionTargets : undefined,
+          accountId,
+        }),
+      );
+      first = false;
+    }
+  };
+
+  const flushBufferedThreadText = async () => {
+    const text = bufferedThreadText;
+    bufferedThreadText = "";
+    if (!text.trim()) {
+      return;
+    }
+    await sendRenderedText(text, false);
+    deliveredFinalTexts.add(text);
+  };
+
   const { dispatcher, replyOptions, markDispatchIdle } =
     core.channel.reply.createReplyDispatcherWithTyping({
       responsePrefix: prefixContext.responsePrefix,
@@ -255,9 +337,13 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
         }
 
         if (shouldDeliverText) {
-          const useCard = renderMode === "card" || (renderMode === "auto" && shouldUseCard(text));
+          const useCard = shouldRenderAsCard(renderMode, text);
 
           if (info?.kind === "block") {
+            if (threadReplyMode && !useCard) {
+              bufferThreadText(text, "delta");
+              return;
+            }
             // Drop internal block chunks unless we can safely consume them as
             // streaming-card fallback content.
             if (!(streamingEnabled && useCard)) {
@@ -277,6 +363,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
           }
 
           if (streaming?.isActive()) {
+            seedStreamingFromThreadBuffer();
             if (info?.kind === "block") {
               // Some runtimes emit block payloads without onPartial/final callbacks.
               // Mirror block text into streamText so onIdle close still sends content.
@@ -290,74 +377,44 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
             // Send media even when streaming handled the text
             if (hasMedia) {
               for (const mediaUrl of mediaList) {
-                await sendMediaFeishu({
-                  cfg,
-                  to: chatId,
-                  mediaUrl,
-                  replyToMessageId: sendReplyToMessageId,
-                  replyInThread: effectiveReplyInThread,
-                  accountId,
-                });
+                maybeRecordNativeThreadBinding(
+                  await sendMediaFeishu({
+                    cfg,
+                    to: chatId,
+                    mediaUrl,
+                    replyToMessageId: sendReplyToMessageId,
+                    replyInThread: effectiveReplyInThread,
+                    accountId,
+                  }),
+                );
               }
             }
             return;
           }
 
-          let first = true;
-          if (useCard) {
-            for (const chunk of core.channel.text.chunkTextWithMode(
-              text,
-              textChunkLimit,
-              chunkMode,
-            )) {
-              await sendMarkdownCardFeishu({
-                cfg,
-                to: chatId,
-                text: chunk,
-                replyToMessageId: sendReplyToMessageId,
-                replyInThread: effectiveReplyInThread,
-                mentions: first ? mentionTargets : undefined,
-                accountId,
-              });
-              first = false;
-            }
-            if (info?.kind === "final") {
-              deliveredFinalTexts.add(text);
-            }
-          } else {
-            const converted = core.channel.text.convertMarkdownTables(text, tableMode);
-            for (const chunk of core.channel.text.chunkTextWithMode(
-              converted,
-              textChunkLimit,
-              chunkMode,
-            )) {
-              await sendMessageFeishu({
-                cfg,
-                to: chatId,
-                text: chunk,
-                replyToMessageId: sendReplyToMessageId,
-                replyInThread: effectiveReplyInThread,
-                mentions: first ? mentionTargets : undefined,
-                accountId,
-              });
-              first = false;
-            }
-            if (info?.kind === "final") {
-              deliveredFinalTexts.add(text);
-            }
+          const resolvedText =
+            threadReplyMode && !useCard ? mergeStreamingText(bufferedThreadText, text) : text;
+          if (threadReplyMode && !useCard) {
+            bufferedThreadText = "";
+          }
+          await sendRenderedText(resolvedText, useCard);
+          if (info?.kind === "final") {
+            deliveredFinalTexts.add(resolvedText);
           }
         }
 
         if (hasMedia) {
           for (const mediaUrl of mediaList) {
-            await sendMediaFeishu({
-              cfg,
-              to: chatId,
-              mediaUrl,
-              replyToMessageId: sendReplyToMessageId,
-              replyInThread: effectiveReplyInThread,
-              accountId,
-            });
+            maybeRecordNativeThreadBinding(
+              await sendMediaFeishu({
+                cfg,
+                to: chatId,
+                mediaUrl,
+                replyToMessageId: sendReplyToMessageId,
+                replyInThread: effectiveReplyInThread,
+                accountId,
+              }),
+            );
           }
         }
       },
@@ -370,6 +427,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
       },
       onIdle: async () => {
         await closeStreaming();
+        await flushBufferedThreadText();
         typingCallbacks.onIdle?.();
       },
       onCleanup: () => {
@@ -386,6 +444,9 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
       onPartialReply: streamingEnabled
         ? (payload: ReplyPayload) => {
             if (!payload.text) {
+              return;
+            }
+            if (!shouldRenderAsCard(renderMode, payload.text)) {
               return;
             }
             queueStreamingUpdate(payload.text, {

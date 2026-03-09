@@ -33,6 +33,8 @@ export type RunEmbeddedPiAgentParams = {
   memoryFlushWritePath?: string;
   /** Delivery target (e.g. telegram:group:123:topic:456) for topic/thread routing. */
   messageTo?: string;
+  /** Canonical current conversation id when the channel plugin can provide one. */
+  messageConversationId?: string;
   /** Thread/topic identifier for routing replies to the originating thread. */
   messageThreadId?: string | number;
   /** Group id for channel-level tool policy resolution. */
