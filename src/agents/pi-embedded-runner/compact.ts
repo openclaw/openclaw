@@ -936,6 +936,40 @@ export async function compactEmbeddedPiSession(
           modelContextWindow: ceModel?.contextWindow,
           defaultTokens: DEFAULT_CONTEXT_TOKENS,
         });
+        // When the context engine owns compaction, its compact() implementation
+        // bypasses compactEmbeddedPiSessionDirect (which fires the hooks internally).
+        // Fire before_compaction / after_compaction hooks here so plugin subscribers
+        // are notified regardless of which engine is active.
+        const engineOwnsCompaction = contextEngine.info.ownsCompaction === true;
+        const hookRunner = engineOwnsCompaction ? getGlobalHookRunner() : null;
+        const hookSessionKey = params.sessionKey?.trim() || params.sessionId;
+        const { sessionAgentId } = resolveSessionAgentIds({
+          sessionKey: params.sessionKey,
+          config: params.config,
+        });
+        const resolvedMessageProvider = params.messageChannel ?? params.messageProvider;
+        const hookCtx = {
+          sessionId: params.sessionId,
+          agentId: sessionAgentId,
+          sessionKey: hookSessionKey,
+          workspaceDir: params.workspaceDir,
+          messageProvider: resolvedMessageProvider,
+        };
+        if (hookRunner?.hasHooks("before_compaction")) {
+          try {
+            await hookRunner.runBeforeCompaction(
+              {
+                messageCount: 0,
+                sessionFile: params.sessionFile,
+              },
+              hookCtx,
+            );
+          } catch (err) {
+            log.warn("before_compaction hook failed", {
+              errorMessage: err instanceof Error ? err.message : String(err),
+            });
+          }
+        }
         const result = await contextEngine.compact({
           sessionId: params.sessionId,
           sessionFile: params.sessionFile,
@@ -944,6 +978,23 @@ export async function compactEmbeddedPiSession(
           force: params.trigger === "manual",
           runtimeContext: params as Record<string, unknown>,
         });
+        if (hookRunner?.hasHooks("after_compaction")) {
+          try {
+            await hookRunner.runAfterCompaction(
+              {
+                messageCount: 0,
+                compactedCount: 0,
+                tokenCount: result.result?.tokensAfter,
+                sessionFile: params.sessionFile,
+              },
+              hookCtx,
+            );
+          } catch (err) {
+            log.warn("after_compaction hook failed", {
+              errorMessage: err instanceof Error ? err.message : String(err),
+            });
+          }
+        }
         return {
           ok: result.ok,
           compacted: result.compacted,

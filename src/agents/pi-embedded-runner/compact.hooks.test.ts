@@ -160,7 +160,7 @@ vi.mock("../transcript-policy.js", () => ({
 }));
 
 vi.mock("./extensions.js", () => ({
-  buildEmbeddedExtensionFactories: vi.fn(() => []),
+  buildEmbeddedExtensionFactories: vi.fn(() => ({ factories: [] })),
 }));
 
 vi.mock("./history.js", () => ({
