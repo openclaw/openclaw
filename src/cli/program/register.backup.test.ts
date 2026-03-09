@@ -90,6 +90,35 @@ describe("registerBackupCommand", () => {
     );
   });
 
+  it("forwards --exclude patterns to backup create", async () => {
+    await runCli([
+      "backup",
+      "create",
+      "--exclude",
+      "node_modules",
+      "--exclude",
+      "*.log",
+    ]);
+
+    expect(backupCreateCommand).toHaveBeenCalledWith(
+      runtime,
+      expect.objectContaining({
+        exclude: ["node_modules", "*.log"],
+      }),
+    );
+  });
+
+  it("forwards --exclude-file to backup create", async () => {
+    await runCli(["backup", "create", "--exclude-file", ".openclawignore"]);
+
+    expect(backupCreateCommand).toHaveBeenCalledWith(
+      runtime,
+      expect.objectContaining({
+        excludeFile: ".openclawignore",
+      }),
+    );
+  });
+
   it("runs backup verify with forwarded options", async () => {
     await runCli(["backup", "verify", "/tmp/openclaw-backup.tar.gz", "--json"]);
 

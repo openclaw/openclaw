@@ -4,6 +4,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import * as tar from "tar";
+import { minimatch } from "minimatch";
 import type { RuntimeEnv } from "../runtime.js";
 import { resolveHomeDir, resolveUserPath } from "../utils.js";
 import { resolveRuntimeServiceVersion } from "../version.js";
@@ -25,6 +26,8 @@ export type BackupCreateOptions = {
   verify?: boolean;
   json?: boolean;
   nowMs?: number;
+  exclude?: string[];
+  excludeFile?: string;
 };
 
 type BackupManifestAsset = {
@@ -43,6 +46,7 @@ type BackupManifest = {
   options: {
     includeWorkspace: boolean;
     onlyConfig?: boolean;
+    excludePatterns?: string[];
   };
   paths: {
     stateDir: string;
@@ -67,6 +71,7 @@ export type BackupCreateResult = {
   includeWorkspace: boolean;
   onlyConfig: boolean;
   verified: boolean;
+  excludePatterns: string[];
   assets: BackupAsset[];
   skipped: Array<{
     kind: string;
@@ -194,6 +199,7 @@ function buildManifest(params: {
   archiveRoot: string;
   includeWorkspace: boolean;
   onlyConfig: boolean;
+  excludePatterns: string[];
   assets: BackupAsset[];
   skipped: BackupCreateResult["skipped"];
   stateDir: string;
@@ -211,6 +217,7 @@ function buildManifest(params: {
     options: {
       includeWorkspace: params.includeWorkspace,
       onlyConfig: params.onlyConfig,
+      ...(params.excludePatterns.length > 0 && { excludePatterns: params.excludePatterns }),
     },
     paths: {
       stateDir: params.stateDir,
@@ -271,6 +278,58 @@ function remapArchiveEntryPath(params: {
   return buildBackupArchivePath(params.archiveRoot, normalizedEntry);
 }
 
+async function loadExcludeFile(filePath: string): Promise<string[]> {
+  const content = await fs.readFile(resolveUserPath(filePath), "utf8");
+  return content
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0 && !line.startsWith("#"));
+}
+
+function matchesExcludePattern(relativePath: string, patterns: string[]): boolean {
+  const normalized = relativePath.replaceAll("\\", "/");
+  for (const raw of patterns) {
+    const stripped = raw.endsWith("/") ? raw.slice(0, -1) : raw;
+    const isAnchored = stripped.startsWith("/");
+    const glob = isAnchored
+      ? stripped.slice(1)
+      : stripped.includes("/")
+        ? stripped
+        : `**/${stripped}`;
+    if (minimatch(normalized, glob, { dot: true, nonegate: true })) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function buildExcludeFilter(params: {
+  manifestPath: string;
+  assets: BackupAsset[];
+  patterns: string[];
+}): (entryPath: string) => boolean {
+  if (params.patterns.length === 0) {
+    return () => true;
+  }
+  return (entryPath: string) => {
+    const normalized = path.resolve(entryPath);
+    if (normalized === params.manifestPath) {
+      return true;
+    }
+    const asset = params.assets.find(
+      (a) => normalized === a.sourcePath || normalized.startsWith(a.sourcePath + path.sep),
+    );
+    if (!asset) {
+      return true;
+    }
+    const relative = normalized.slice(asset.sourcePath.length).replace(/^[/\\]/, "");
+    if (!relative) {
+      return true;
+    }
+    return !matchesExcludePattern(relative, params.patterns);
+  };
+}
+
 export async function backupCreateCommand(
   runtime: RuntimeEnv,
   opts: BackupCreateOptions = {},
@@ -280,6 +339,9 @@ export async function backupCreateCommand(
   const onlyConfig = Boolean(opts.onlyConfig);
   const includeWorkspace = onlyConfig ? false : (opts.includeWorkspace ?? true);
   const plan = await resolveBackupPlanFromDisk({ includeWorkspace, onlyConfig, nowMs });
+
+  const filePatterns = opts.excludeFile ? await loadExcludeFile(opts.excludeFile) : [];
+  const excludePatterns = [...(opts.exclude ?? []), ...filePatterns];
   const outputPath = await resolveOutputPath({
     output: opts.output,
     nowMs,
@@ -318,6 +380,7 @@ export async function backupCreateCommand(
     includeWorkspace,
     onlyConfig,
     verified: false,
+    excludePatterns,
     assets: plan.included,
     skipped: plan.skipped,
   };
@@ -333,6 +396,7 @@ export async function backupCreateCommand(
         archiveRoot,
         includeWorkspace,
         onlyConfig,
+        excludePatterns,
         assets: result.assets,
         skipped: result.skipped,
         stateDir: plan.stateDir,
@@ -342,12 +406,19 @@ export async function backupCreateCommand(
       });
       await fs.writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, "utf8");
 
+      const excludeFilter = buildExcludeFilter({
+        manifestPath,
+        assets: result.assets,
+        patterns: excludePatterns,
+      });
+
       await tar.c(
         {
           file: tempArchivePath,
           gzip: true,
           portable: true,
           preservePaths: true,
+          filter: excludeFilter,
           onWriteEntry: (entry) => {
             entry.path = remapArchiveEntryPath({
               entryPath: entry.path,

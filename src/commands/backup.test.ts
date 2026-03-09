@@ -408,6 +408,111 @@ describe("backup commands", () => {
     expect(result.assets[0]?.kind).toBe("config");
   });
 
+  it("excludes files matching --exclude patterns from the archive", async () => {
+    const stateDir = path.join(tempHome.home, ".openclaw");
+    const externalWorkspace = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-workspace-excl-"));
+    const backupDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-backups-excl-"));
+    try {
+      await fs.writeFile(
+        path.join(stateDir, "openclaw.json"),
+        JSON.stringify({ agents: { defaults: { workspace: externalWorkspace } } }),
+        "utf8",
+      );
+      await fs.writeFile(path.join(stateDir, "state.txt"), "state\n", "utf8");
+      await fs.mkdir(path.join(externalWorkspace, "node_modules", "pkg"), { recursive: true });
+      await fs.writeFile(path.join(externalWorkspace, "node_modules", "pkg", "index.js"), "// pkg\n", "utf8");
+      await fs.writeFile(path.join(externalWorkspace, "SOUL.md"), "# soul\n", "utf8");
+      await fs.writeFile(path.join(externalWorkspace, "debug.log"), "log\n", "utf8");
+
+      const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+      const result = await backupCreateCommand(runtime, {
+        output: backupDir,
+        includeWorkspace: true,
+        exclude: ["node_modules", "*.log"],
+        nowMs: Date.UTC(2026, 2, 9, 12, 0, 0),
+      });
+
+      expect(result.excludePatterns).toEqual(["node_modules", "*.log"]);
+
+      const extractDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-backup-extract-excl-"));
+      try {
+        await tar.x({ file: result.archivePath, cwd: extractDir, gzip: true });
+        const archiveRoot = path.join(extractDir, result.archiveRoot);
+
+        const workspaceAsset = result.assets.find((a) => a.kind === "workspace");
+        expect(workspaceAsset).toBeDefined();
+        const encodedWorkspace = path.join(
+          archiveRoot,
+          "payload",
+          encodeAbsolutePathForBackupArchive(workspaceAsset!.sourcePath),
+        );
+
+        // SOUL.md should be present
+        await expect(fs.access(path.join(encodedWorkspace, "SOUL.md"))).resolves.toBeUndefined();
+        // node_modules and *.log should be excluded
+        await expect(fs.access(path.join(encodedWorkspace, "node_modules"))).rejects.toThrow();
+        await expect(fs.access(path.join(encodedWorkspace, "debug.log"))).rejects.toThrow();
+      } finally {
+        await fs.rm(extractDir, { recursive: true, force: true });
+      }
+    } finally {
+      await fs.rm(externalWorkspace, { recursive: true, force: true });
+      await fs.rm(backupDir, { recursive: true, force: true });
+    }
+  });
+
+  it("reads exclude patterns from --exclude-file", async () => {
+    const stateDir = path.join(tempHome.home, ".openclaw");
+    const externalWorkspace = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-workspace-efile-"));
+    const backupDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-backups-efile-"));
+    const excludeFile = path.join(tempHome.home, ".openclawignore");
+    try {
+      await fs.writeFile(excludeFile, "# comment\n*.log\n!keep.txt\n\n.env\n", "utf8");
+      await fs.writeFile(
+        path.join(stateDir, "openclaw.json"),
+        JSON.stringify({ agents: { defaults: { workspace: externalWorkspace } } }),
+        "utf8",
+      );
+      await fs.writeFile(path.join(externalWorkspace, "SOUL.md"), "# soul\n", "utf8");
+      await fs.writeFile(path.join(externalWorkspace, "keep.txt"), "keep\n", "utf8");
+      await fs.writeFile(path.join(externalWorkspace, "app.log"), "log\n", "utf8");
+      await fs.writeFile(path.join(externalWorkspace, ".env"), "SECRET=1\n", "utf8");
+
+      const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+      const result = await backupCreateCommand(runtime, {
+        output: backupDir,
+        includeWorkspace: true,
+        excludeFile,
+        nowMs: Date.UTC(2026, 2, 9, 13, 0, 0),
+      });
+
+      expect(result.excludePatterns).toEqual(["*.log", "!keep.txt", ".env"]);
+
+      const extractDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-backup-extract-efile-"));
+      try {
+        await tar.x({ file: result.archivePath, cwd: extractDir, gzip: true });
+        const archiveRoot = path.join(extractDir, result.archiveRoot);
+        const workspaceAsset = result.assets.find((a) => a.kind === "workspace");
+        expect(workspaceAsset).toBeDefined();
+        const encodedWorkspace = path.join(
+          archiveRoot,
+          "payload",
+          encodeAbsolutePathForBackupArchive(workspaceAsset!.sourcePath),
+        );
+
+        await expect(fs.access(path.join(encodedWorkspace, "SOUL.md"))).resolves.toBeUndefined();
+        await expect(fs.access(path.join(encodedWorkspace, "keep.txt"))).resolves.toBeUndefined();
+        await expect(fs.access(path.join(encodedWorkspace, "app.log"))).rejects.toThrow();
+        await expect(fs.access(path.join(encodedWorkspace, ".env"))).rejects.toThrow();
+      } finally {
+        await fs.rm(extractDir, { recursive: true, force: true });
+      }
+    } finally {
+      await fs.rm(externalWorkspace, { recursive: true, force: true });
+      await fs.rm(backupDir, { recursive: true, force: true });
+    }
+  });
+
   it("allows config-only backups even when the config file is invalid", async () => {
     const configPath = path.join(tempHome.home, "custom-config.json");
     process.env.OPENCLAW_CONFIG_PATH = configPath;
