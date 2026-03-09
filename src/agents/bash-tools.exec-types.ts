@@ -27,6 +27,12 @@ export type ExecToolDefaults = {
   notifyOnExit?: boolean;
   notifyOnExitEmptySuccess?: boolean;
   cwd?: string;
+  commandSecurity?: {
+    enabled?: boolean;
+    failOpen?: boolean;
+    timeoutMs?: number;
+    tirithPath?: string;
+  };
 };
 
 export type ExecElevatedDefaults = {

@@ -257,6 +257,13 @@ export type ExecToolConfig = {
    * Default false to reduce context noise.
    */
   notifyOnExitEmptySuccess?: boolean;
+  /** Pre-exec command security scanning via tirith. */
+  commandSecurity?: {
+    enabled?: boolean;
+    failOpen?: boolean;
+    timeoutMs?: number;
+    tirithPath?: string;
+  };
   /** apply_patch subtool configuration (experimental). */
   applyPatch?: {
     /** Enable apply_patch for OpenAI models (default: false). */

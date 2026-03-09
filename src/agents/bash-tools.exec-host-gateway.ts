@@ -57,6 +57,7 @@ export type ProcessGatewayAllowlistParams = {
   maxOutput: number;
   pendingMaxOutput: number;
   trustedSafeBinDirs?: ReadonlySet<string>;
+  securityWarning?: boolean;
 };
 
 export type ProcessGatewayAllowlistResult = {
@@ -130,7 +131,8 @@ export async function processGatewayAllowlist(
       allowlistSatisfied,
     }) ||
     requiresHeredocApproval ||
-    obfuscation.detected;
+    obfuscation.detected ||
+    params.securityWarning === true;
   if (requiresHeredocApproval) {
     params.warnings.push(
       "Warning: heredoc execution requires explicit approval in allowlist mode.",
