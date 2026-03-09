@@ -182,6 +182,8 @@ export type TextRepetitionGuardConfig = {
   maxCyclePatternLength?: number;
   /** How many consecutive suffix repeats trigger detection. */
   minCycleRepeats?: number;
+  /** How many characters of new content between repetition checks (default: 200). */
+  checkIntervalChars?: number;
 };
 
 export type SessionsToolsVisibility = "self" | "tree" | "agent" | "all";

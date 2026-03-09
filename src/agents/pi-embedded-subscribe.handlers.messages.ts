@@ -73,7 +73,12 @@ export function handleMessageStart(
   // may deliver late text_end updates after message_end, which would otherwise
   // re-trigger block replies.
   ctx.resetAssistantMessageState(ctx.state.assistantTexts.length);
-  // Use assistant message_start as the earliest "writing" signal for typing.
+  // Resolve text-repetition-guard config once per message to avoid re-parsing on every tick.
+  ctx.state.resolvedTextRepetitionGuardConfig = resolveTextRepetitionGuardConfig({
+    cfg: ctx.params.config,
+    agentId: ctx.params.agentId,
+  });
+  // Use assistant message_start as the earliest “writing” signal for typing.
   void ctx.params.onAssistantMessageStart?.();
 }
 
@@ -172,17 +177,11 @@ export function handleMessageUpdate(
       ctx.state.blockBuffer += chunk;
     }
 
-    // Text repetition guard: throttle checks to every ~200 chars of new content.
-    const TEXT_REPETITION_CHECK_INTERVAL = 200;
-    if (
-      ctx.state.deltaBuffer.length - ctx.state.textRepetitionLastCheckedLen >=
-      TEXT_REPETITION_CHECK_INTERVAL
-    ) {
+    // Text repetition guard: throttle checks to every N chars of new content.
+    const guardConfig = ctx.state.resolvedTextRepetitionGuardConfig;
+    const checkInterval = guardConfig?.checkIntervalChars ?? 200;
+    if (ctx.state.deltaBuffer.length - ctx.state.textRepetitionLastCheckedLen >= checkInterval) {
       ctx.state.textRepetitionLastCheckedLen = ctx.state.deltaBuffer.length;
-      const guardConfig = resolveTextRepetitionGuardConfig({
-        cfg: ctx.params.config,
-        agentId: ctx.params.agentId,
-      });
       // Guard defaults to enabled when no config is present.
       if (guardConfig?.enabled !== false) {
         const result = detectTextRepetition(ctx.state.deltaBuffer, guardConfig);
@@ -453,6 +452,7 @@ export function handleMessageEnd(
 
   ctx.state.deltaBuffer = "";
   ctx.state.textRepetitionLastCheckedLen = 0;
+  ctx.state.resolvedTextRepetitionGuardConfig = undefined;
   ctx.state.blockBuffer = "";
   ctx.blockChunker?.reset();
   ctx.state.blockState.thinking = false;
