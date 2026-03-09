@@ -23,6 +23,7 @@ import { applyAgentDefaults, applyModelDefaults, applySessionDefaults } from "./
 import { findLegacyConfigIssues } from "./legacy.js";
 import type { OpenClawConfig, ConfigValidationIssue } from "./types.js";
 import { OpenClawSchema } from "./zod-schema.js";
+import type { ZodIssue } from "zod";
 
 const LEGACY_REMOVED_PLUGIN_IDS = new Set(["google-antigravity-auth"]);
 
@@ -114,6 +115,16 @@ function collectAllowedValuesFromUnknownIssue(issue: unknown): unknown[] {
   return collection.values;
 }
 
+type UnrecognizedKeysIssue = ZodIssue & {
+  code: "unrecognized_keys";
+  keys: PropertyKey[];
+};
+
+function isUnrecognizedKeysIssue(issue: unknown): issue is UnrecognizedKeysIssue {
+  const record = toIssueRecord(issue);
+  return record?.code === "unrecognized_keys" && Array.isArray(record?.keys);
+}
+
 function mapZodIssueToConfigIssue(issue: unknown): ConfigValidationIssue {
   const record = toIssueRecord(issue);
   const path = Array.isArray(record?.path)
@@ -124,6 +135,19 @@ function mapZodIssueToConfigIssue(issue: unknown): ConfigValidationIssue {
         })
         .join(".")
     : "";
+
+  // Improve error message for unrecognized_keys (strict() validation errors)
+  if (isUnrecognizedKeysIssue(issue)) {
+    const keys = issue.keys
+      .filter((key): key is string => typeof key === "string")
+      .map((key) => `'${key}'`)
+      .join(", ");
+    const message = keys
+      ? `Unrecognized key(s) in object: ${keys}`
+      : "Unrecognized key(s) in object";
+    return { path, message };
+  }
+
   const message = typeof record?.message === "string" ? record.message : "Invalid input";
   const allowedValuesSummary = summarizeAllowedValues(collectAllowedValuesFromUnknownIssue(issue));
 
