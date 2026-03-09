@@ -481,11 +481,12 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
     }
   }
 
-  const hasProgressWithoutFinal = hasStreamedMessage || (counts.tool ?? 0) > 0;
+  const hasUnfinalizedPreviewOnly =
+    hasStreamedMessage && (counts.block ?? 0) === 0 && (counts.tool ?? 0) === 0;
   const shouldSendNoFinalFallback =
     !queuedFinal &&
     (counts.final ?? 0) === 0 &&
-    hasProgressWithoutFinal &&
+    hasUnfinalizedPreviewOnly &&
     !sawIntentionalSilentFinalSkip;
   let sentEmptyFallback = false;
   if (shouldSendNoFinalFallback) {

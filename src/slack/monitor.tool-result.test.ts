@@ -394,14 +394,24 @@ describe("monitorSlackProvider tool results", () => {
     });
   });
 
-  it("sends an in-thread fallback when tool progress was emitted without final reply", async () => {
+  it("sends an in-thread fallback when preview partials were emitted without any delivered reply", async () => {
     setDirectMessageReplyMode("all");
+    slackTestState.config = {
+      ...slackTestState.config,
+      channels: {
+        ...(slackTestState.config.channels as Record<string, unknown>),
+        slack: {
+          ...(slackTestState.config.channels as { slack?: Record<string, unknown> })?.slack,
+          streaming: "progress",
+        },
+      },
+    };
     const sleepSpy = vi.spyOn(utils, "sleep").mockResolvedValue(undefined);
     replyMock.mockImplementation(async (...args: unknown[]) => {
       const opts = (args[1] ?? {}) as {
-        onToolResult?: (payload: { text?: string }) => Promise<void> | void;
+        onPartialReply?: (payload: { text?: string }) => Promise<void> | void;
       };
-      await opts.onToolResult?.({ text: "working..." });
+      await opts.onPartialReply?.({ text: "drafting..." });
       return undefined;
     });
 
@@ -414,15 +424,77 @@ describe("monitorSlackProvider tool results", () => {
     const statusText =
       "Status update: still waiting on a complete final reply for this turn. Please retry your last message if it does not arrive shortly.";
     const fallbackCall = sendMock.mock.calls.find(
-      (call) => typeof call[1] === "string" && call[1] === fallbackText,
+      (call) => typeof call[1] === "string" && call[1].includes(fallbackText),
     );
     const delayedStatusCall = sendMock.mock.calls.find(
-      (call) => typeof call[1] === "string" && call[1] === statusText,
+      (call) => typeof call[1] === "string" && call[1].includes(statusText),
     );
     expect(fallbackCall).toBeDefined();
     expect(delayedStatusCall).toBeDefined();
     expect(fallbackCall?.[2]).toMatchObject({ threadTs: "123" });
     expect(delayedStatusCall?.[2]).toMatchObject({ threadTs: "123" });
+    sleepSpy.mockRestore();
+  });
+
+  it("does not send no-final fallback for tool-only progress when no final is intentionally absent", async () => {
+    setDirectMessageReplyMode("all");
+    const sleepSpy = vi.spyOn(utils, "sleep").mockResolvedValue(undefined);
+    replyMock.mockImplementation(async (...args: unknown[]) => {
+      const opts = (args[1] ?? {}) as {
+        onPartialReply?: (payload: { text?: string }) => Promise<void> | void;
+      };
+      await opts.onPartialReply?.({ text: "drafting..." });
+      return undefined;
+    });
+
+    await runSlackMessageOnce(monitorSlackProvider, {
+      event: makeSlackMessageEvent(),
+    });
+
+    const keepaliveText =
+      "I am still here. I could not complete that reply yet; retrying now in this same thread.";
+    const statusText =
+      "Status update: still waiting on a complete final reply for this turn. Please retry your last message if it does not arrive shortly.";
+    const keepaliveCall = sendMock.mock.calls.find(
+      (call) => typeof call[1] === "string" && call[1] === keepaliveText,
+    );
+    const statusCall = sendMock.mock.calls.find(
+      (call) => typeof call[1] === "string" && call[1] === statusText,
+    );
+    expect(keepaliveCall).toBeUndefined();
+    expect(statusCall).toBeUndefined();
+    sleepSpy.mockRestore();
+  });
+
+  it("does not send no-final fallback when block streaming partials were followed by block replies", async () => {
+    setDirectMessageReplyMode("all");
+    const sleepSpy = vi.spyOn(utils, "sleep").mockResolvedValue(undefined);
+    replyMock.mockImplementation(async (...args: unknown[]) => {
+      const opts = (args[1] ?? {}) as {
+        onPartialReply?: (payload: { text?: string }) => Promise<void> | void;
+        onBlockReply?: (payload: { text?: string }) => Promise<void> | void;
+      };
+      await opts.onPartialReply?.({ text: "drafting..." });
+      await opts.onBlockReply?.({ text: "final streamed block" });
+      return undefined;
+    });
+
+    await runSlackMessageOnce(monitorSlackProvider, {
+      event: makeSlackMessageEvent(),
+    });
+
+    const keepaliveText =
+      "I am still here. I could not complete that reply yet; retrying now in this same thread.";
+    const statusText =
+      "Status update: still waiting on a complete final reply for this turn. Please retry your last message if it does not arrive shortly.";
+    const keepaliveCall = sendMock.mock.calls.find(
+      (call) => typeof call[1] === "string" && call[1] === keepaliveText,
+    );
+    const statusCall = sendMock.mock.calls.find(
+      (call) => typeof call[1] === "string" && call[1] === statusText,
+    );
+    expect(keepaliveCall).toBeUndefined();
+    expect(statusCall).toBeUndefined();
     sleepSpy.mockRestore();
   });
 
@@ -453,38 +525,6 @@ describe("monitorSlackProvider tool results", () => {
     );
     expect(keepaliveCall).toBeUndefined();
     expect(statusCall).toBeUndefined();
-    sleepSpy.mockRestore();
-  });
-
-  it("keeps delayed no-final status in the same first-reply thread", async () => {
-    setDirectMessageReplyMode("first");
-    const sleepSpy = vi.spyOn(utils, "sleep").mockResolvedValue(undefined);
-    replyMock.mockImplementation(async (...args: unknown[]) => {
-      const opts = (args[1] ?? {}) as {
-        onToolResult?: (payload: { text?: string }) => Promise<void> | void;
-      };
-      await opts.onToolResult?.({ text: "working..." });
-      return undefined;
-    });
-
-    await runSlackMessageOnce(monitorSlackProvider, {
-      event: makeSlackMessageEvent(),
-    });
-
-    const fallbackText =
-      "I am still here. I could not complete that reply yet; retrying now in this same thread.";
-    const statusText =
-      "Status update: still waiting on a complete final reply for this turn. Please retry your last message if it does not arrive shortly.";
-    const fallbackCall = sendMock.mock.calls.find(
-      (call) => typeof call[1] === "string" && call[1] === fallbackText,
-    );
-    const delayedStatusCall = sendMock.mock.calls.find(
-      (call) => typeof call[1] === "string" && call[1] === statusText,
-    );
-    expect(fallbackCall).toBeDefined();
-    expect(delayedStatusCall).toBeDefined();
-    expect(fallbackCall?.[2]).toMatchObject({ threadTs: "123" });
-    expect(delayedStatusCall?.[2]).toMatchObject({ threadTs: "123" });
     sleepSpy.mockRestore();
   });
 
