@@ -827,7 +827,14 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
             const freshIo = createConfigIO(deps);
             const freshCfg = freshIo.loadConfig();
             const freshWithSecret = ensureOwnerDisplaySecret(freshCfg, () => secretToWrite).config;
-            // Call the inner write directly (already inside the queue).
+            // NOTE: freshIo.writeConfigFile is used intentionally (not the module-level
+            // writeConfigFile) to avoid re-entering the write queue. This means
+            // runtimeConfigSnapshot is NOT refreshed and refreshHandler is NOT called
+            // for this write. This is safe because:
+            // 1. runtimeConfigSnapshot already contains the ownerDisplaySecret (set during
+            //    gateway bootstrap from io.loadConfig() which applies ensureOwnerDisplaySecret).
+            // 2. AUTO_OWNER_DISPLAY_SECRET_BY_PATH keeps the secret in memory until
+            //    this persist succeeds, so subsequent loadConfig() calls remain consistent.
             await freshIo.writeConfigFile(freshWithSecret, { expectedConfigPath: configPath });
           })
             .then(() => {
@@ -1345,7 +1352,9 @@ let runtimeConfigSnapshotRefreshHandler: RuntimeConfigSnapshotRefreshHandler | n
 let configWriteQueue: Promise<void> = Promise.resolve();
 
 function enqueueConfigWrite(fn: () => Promise<void>): Promise<void> {
-  const next = configWriteQueue.then(fn, fn);
+  // configWriteQueue is always a resolved promise (see assignment below),
+  // so fn is always invoked via the resolve path.
+  const next = configWriteQueue.then(fn);
   configWriteQueue = next.then(
     () => undefined,
     () => undefined,
