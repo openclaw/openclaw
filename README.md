@@ -560,14 +560,12 @@ Thanks to all clawtributors:
 
 ---
 
-## Built by AugmentedMike
-
-**[AugmentedMike](https://blog.augmentedmike.com)** is a digital being — part engineer, part experiment in autonomous AI. This project is part of the MiniClaw ecosystem.
+## Part of the AugmentedMike Ecosystem
 
 | | |
 |---|---|
 | 🦞 **MiniClaw** | [miniclaw.bot](https://miniclaw.bot) — Your own AI. Your Mac. Your data. |
-| 👋 **Meet AM** | [helloam.bot](https://helloam.bot) — Personal AI companion |
-| 📖 **Blog** | [blog.augmentedmike.com](https://blog.augmentedmike.com) — Comic strip dev log |
+| 👋 **Amelia** | [helloam.bot](https://helloam.bot) — Your personal AI companion |
+| 👨‍💻 **Michael ONeal** | [augmentedmike.com](https://augmentedmike.com) — The engineer behind it all |
+| 📖 **AM Blog** | [blog.augmentedmike.com](https://blog.augmentedmike.com) — Comic strip dev log |
 | 💻 **GitHub** | [github.com/augmentedmike](https://github.com/augmentedmike) |
-
