@@ -404,6 +404,11 @@ export class AcpxRuntime implements AcpRuntime {
         }
         if (parsed.type === "error") {
           sawError = true;
+          yield parsed;
+          // Mirror done: a terminal error event should also break the readline
+          // loop so the process can be shut down via waitForPromptExit instead
+          // of blocking indefinitely on stdout if the harness keeps it open.
+          break;
         }
         yield parsed;
       }
