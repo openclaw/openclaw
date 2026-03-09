@@ -742,6 +742,16 @@ function resolvePerplexityTransport(perplexity?: PerplexityConfig): {
   };
 }
 
+function resolvePerplexitySchemaTransportHint(
+  perplexity?: PerplexityConfig,
+): PerplexityTransport | undefined {
+  const hasLegacyOverride = Boolean(
+    (perplexity?.baseUrl && perplexity.baseUrl.trim()) ||
+    (perplexity?.model && perplexity.model.trim()),
+  );
+  return hasLegacyOverride ? "chat_completions" : undefined;
+}
+
 function resolveGrokConfig(search?: WebSearchConfig): GrokConfig {
   if (!search || typeof search !== "object") {
     return {};
@@ -1817,7 +1827,7 @@ export function createWebSearchTool(options?: {
 
   const provider = resolveSearchProvider(search);
   const perplexityConfig = resolvePerplexityConfig(search);
-  const perplexityTransport = resolvePerplexityTransport(perplexityConfig);
+  const perplexitySchemaTransportHint = resolvePerplexitySchemaTransportHint(perplexityConfig);
   const grokConfig = resolveGrokConfig(search);
   const geminiConfig = resolveGeminiConfig(search);
   const kimiConfig = resolveKimiConfig(search);
@@ -1826,9 +1836,9 @@ export function createWebSearchTool(options?: {
 
   const description =
     provider === "perplexity"
-      ? perplexityTransport.transport === "chat_completions"
+      ? perplexitySchemaTransportHint === "chat_completions"
         ? "Search the web using Perplexity Sonar via Perplexity/OpenRouter chat completions. Returns AI-synthesized answers with citations from web-grounded search."
-        : "Search the web using the Perplexity Search API. Returns structured results (title, URL, snippet) for fast research. Supports domain, region, language, and freshness filtering."
+        : "Search the web using Perplexity. Runtime routing decides between native Search API and Sonar chat-completions compatibility. Structured filters are available on the native Search API path."
       : provider === "grok"
         ? "Search the web using xAI Grok. Returns AI-synthesized answers with citations from real-time web search."
         : provider === "kimi"
@@ -1845,10 +1855,13 @@ export function createWebSearchTool(options?: {
     description,
     parameters: createWebSearchSchema({
       provider,
-      perplexityTransport: provider === "perplexity" ? perplexityTransport.transport : undefined,
+      perplexityTransport: provider === "perplexity" ? perplexitySchemaTransportHint : undefined,
     }),
     execute: async (_toolCallId, args) => {
-      const perplexityRuntime = provider === "perplexity" ? perplexityTransport : undefined;
+      // Resolve Perplexity auth/transport lazily at execution time so unrelated providers
+      // do not touch Perplexity-only credential surfaces during tool construction.
+      const perplexityRuntime =
+        provider === "perplexity" ? resolvePerplexityTransport(perplexityConfig) : undefined;
       const apiKey =
         provider === "perplexity"
           ? perplexityRuntime?.apiKey

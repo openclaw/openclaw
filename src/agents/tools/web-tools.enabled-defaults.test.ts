@@ -489,20 +489,20 @@ describe("web_search perplexity OpenRouter compatibility", () => {
     expect(result?.details).toMatchObject({ error: "unsupported_domain_filter" });
   });
 
-  it("hides Search API-only schema params on the compatibility path", () => {
+  it("keeps Search API schema params visible before runtime auth routing", () => {
     vi.stubEnv("OPENROUTER_API_KEY", "sk-or-v1-test"); // pragma: allowlist secret
     const tool = createPerplexitySearchTool();
     const properties = (tool?.parameters as { properties?: Record<string, unknown> } | undefined)
       ?.properties;
 
     expect(properties?.freshness).toBeDefined();
-    expect(properties?.country).toBeUndefined();
-    expect(properties?.language).toBeUndefined();
-    expect(properties?.date_after).toBeUndefined();
-    expect(properties?.date_before).toBeUndefined();
-    expect(properties?.domain_filter).toBeUndefined();
-    expect(properties?.max_tokens).toBeUndefined();
-    expect(properties?.max_tokens_per_page).toBeUndefined();
+    expect(properties?.country).toBeDefined();
+    expect(properties?.language).toBeDefined();
+    expect(properties?.date_after).toBeDefined();
+    expect(properties?.date_before).toBeDefined();
+    expect(properties?.domain_filter).toBeDefined();
+    expect(properties?.max_tokens).toBeDefined();
+    expect(properties?.max_tokens_per_page).toBeDefined();
   });
 
   it("keeps structured schema params on the native Search API path", () => {
@@ -519,6 +519,61 @@ describe("web_search perplexity OpenRouter compatibility", () => {
     expect(properties?.domain_filter).toBeDefined();
     expect(properties?.max_tokens).toBeDefined();
     expect(properties?.max_tokens_per_page).toBeDefined();
+  });
+});
+
+describe("web_search Perplexity lazy resolution", () => {
+  const priorFetch = global.fetch;
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    global.fetch = priorFetch;
+  });
+
+  it("does not read Perplexity credentials while creating non-Perplexity tools", () => {
+    const perplexityConfig: Record<string, unknown> = {};
+    Object.defineProperty(perplexityConfig, "apiKey", {
+      enumerable: true,
+      get() {
+        throw new Error("perplexity-apiKey-getter-called");
+      },
+    });
+
+    const tool = createWebSearchTool({
+      config: {
+        tools: {
+          web: {
+            search: {
+              provider: "gemini",
+              gemini: { apiKey: "gemini-config-test" },
+              perplexity: perplexityConfig as { apiKey?: string; baseUrl?: string; model?: string },
+            },
+          },
+        },
+      },
+      sandboxed: true,
+    });
+
+    expect(tool?.name).toBe("web_search");
+  });
+
+  it("defers Perplexity credential reads until execute", async () => {
+    const perplexityConfig: Record<string, unknown> = {};
+    Object.defineProperty(perplexityConfig, "apiKey", {
+      enumerable: true,
+      get() {
+        throw new Error("perplexity-apiKey-getter-called");
+      },
+    });
+
+    const tool = createPerplexitySearchTool(
+      perplexityConfig as { apiKey?: string; baseUrl?: string; model?: string },
+    );
+
+    expect(tool?.name).toBe("web_search");
+    await expect(tool?.execute?.("call-1", { query: "test" })).rejects.toThrow(
+      /perplexity-apiKey-getter-called/,
+    );
   });
 });
 
