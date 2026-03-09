@@ -1,4 +1,5 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { captureFullEnv } from "../../test-utils/env.js";
 import type { DaemonActionResponse } from "./response.js";
 
 const loadConfigMock = vi.hoisted(() => vi.fn());
@@ -51,6 +52,7 @@ const service = vi.hoisted(() => ({
 
 vi.mock("../../config/config.js", () => ({
   loadConfig: loadConfigMock,
+  readBestEffortConfig: loadConfigMock,
   readConfigFileSnapshot: readConfigFileSnapshotMock,
   resolveGatewayPort: resolveGatewayPortMock,
   writeConfigFile: writeConfigFileMock,
@@ -117,7 +119,15 @@ vi.mock("../../runtime.js", () => ({
   },
 }));
 
+function expectFirstInstallPlanCallOmitsToken() {
+  const [firstArg] =
+    (buildGatewayInstallPlanMock.mock.calls.at(0) as [Record<string, unknown>] | undefined) ?? [];
+  expect(firstArg).toBeDefined();
+  expect(firstArg && "token" in firstArg).toBe(false);
+}
+
 const { runDaemonInstall } = await import("./install.js");
+const envSnapshot = captureFullEnv();
 
 describe("runDaemonInstall", () => {
   beforeEach(() => {
@@ -162,6 +172,12 @@ describe("runDaemonInstall", () => {
     isGatewayDaemonRuntimeMock.mockReturnValue(true);
     installDaemonServiceAndEmitMock.mockResolvedValue(undefined);
     service.isLoaded.mockResolvedValue(false);
+    delete process.env.OPENCLAW_GATEWAY_TOKEN;
+    delete process.env.CLAWDBOT_GATEWAY_TOKEN;
+  });
+
+  afterEach(() => {
+    envSnapshot.restore();
   });
 
   it("fails install when token auth requires an unresolved token SecretRef", async () => {
@@ -189,11 +205,8 @@ describe("runDaemonInstall", () => {
     await runDaemonInstall({ json: true });
 
     expect(actionState.failed).toEqual([]);
-    expect(buildGatewayInstallPlanMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        token: undefined,
-      }),
-    );
+    expect(buildGatewayInstallPlanMock).toHaveBeenCalledTimes(1);
+    expectFirstInstallPlanCallOmitsToken();
     expect(writeConfigFileMock).not.toHaveBeenCalled();
     expect(
       actionState.warnings.some((warning) =>
@@ -217,11 +230,8 @@ describe("runDaemonInstall", () => {
 
     expect(actionState.failed).toEqual([]);
     expect(resolveSecretRefValuesMock).toHaveBeenCalledTimes(1);
-    expect(buildGatewayInstallPlanMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        token: undefined,
-      }),
-    );
+    expect(buildGatewayInstallPlanMock).toHaveBeenCalledTimes(1);
+    expectFirstInstallPlanCallOmitsToken();
   });
 
   it("auto-mints and persists token when no source exists", async () => {
@@ -241,9 +251,33 @@ describe("runDaemonInstall", () => {
     };
     expect(writtenConfig.gateway?.auth?.token).toBe("minted-token");
     expect(buildGatewayInstallPlanMock).toHaveBeenCalledWith(
-      expect.objectContaining({ token: "minted-token", port: 18789 }),
+      expect.objectContaining({ port: 18789 }),
     );
+    expectFirstInstallPlanCallOmitsToken();
     expect(installDaemonServiceAndEmitMock).toHaveBeenCalledTimes(1);
     expect(actionState.warnings.some((warning) => warning.includes("Auto-generated"))).toBe(true);
+  });
+
+  it("continues Linux install when service probe hits a non-fatal systemd bus failure", async () => {
+    service.isLoaded.mockRejectedValueOnce(
+      new Error("systemctl is-enabled unavailable: Failed to connect to bus"),
+    );
+
+    await runDaemonInstall({ json: true });
+
+    expect(actionState.failed).toEqual([]);
+    expect(installDaemonServiceAndEmitMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("fails install when service probe reports an unrelated error", async () => {
+    service.isLoaded.mockRejectedValueOnce(
+      new Error("systemctl is-enabled unavailable: read-only file system"),
+    );
+
+    await runDaemonInstall({ json: true });
+
+    expect(actionState.failed[0]?.message).toContain("Gateway service check failed");
+    expect(actionState.failed[0]?.message).toContain("read-only file system");
+    expect(installDaemonServiceAndEmitMock).not.toHaveBeenCalled();
   });
 });

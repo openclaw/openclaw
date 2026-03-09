@@ -122,7 +122,7 @@ describe("ensureGatewayStartupAuth", () => {
         },
       },
       env: {
-        GW_PASSWORD: "resolved-password",
+        GW_PASSWORD: "resolved-password", // pragma: allowlist secret
       } as NodeJS.ProcessEnv,
       persist: true,
     });
@@ -252,7 +252,7 @@ describe("ensureGatewayStartupAuth", () => {
           gateway: {
             auth: {
               token: "configured-token",
-              password: "configured-password",
+              password: "configured-password", // pragma: allowlist secret
             },
           },
         },
@@ -279,7 +279,7 @@ describe("ensureGatewayStartupAuth", () => {
         },
       },
       env: {
-        OPENCLAW_GATEWAY_PASSWORD: "password-from-env",
+        OPENCLAW_GATEWAY_PASSWORD: "password-from-env", // pragma: allowlist secret
       } as NodeJS.ProcessEnv,
       persist: true,
     });
@@ -390,7 +390,7 @@ describe("ensureGatewayStartupAuth", () => {
     await expectEphemeralGeneratedTokenWhenOverridden({
       gateway: {
         auth: {
-          password: "configured-password",
+          password: "configured-password", // pragma: allowlist secret
         },
       },
     });
@@ -445,7 +445,7 @@ describe("assertHooksTokenSeparateFromGatewayAuth", () => {
         auth: {
           mode: "password",
           modeSource: "config",
-          password: "pw",
+          password: "pw", // pragma: allowlist secret
           allowTailscale: false,
         },
       }),
