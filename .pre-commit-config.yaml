@@ -71,6 +71,8 @@ repos:
           - 'ap[i]Key: "A[I]za\.\.\.",'
           - --exclude-lines
           - '"ap[i]Key": "(resolved|normalized|legacy)-key"(,)?'
+          - --exclude-lines
+          - 'sparkle:edSignature="[A-Za-z0-9+/=]+"'
   # Shell script linting
   - repo: https://github.com/koalaman/shellcheck-precommit
     rev: v0.11.0
