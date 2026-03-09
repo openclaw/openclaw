@@ -22,7 +22,18 @@ export type GHLWebhookPayload = {
   email?: string;
   phone?: string;
   event_type?: string;
-  location?: { id?: string; name?: string };
+  tags?: string;
+  country?: string;
+  date_created?: string;
+  contact_source?: string;
+  contact_type?: string;
+  location?: { id?: string; name?: string; address?: string; city?: string; state?: string };
+  /** Nested message object from GHL Workflow triggers. */
+  message?: { type?: number; body?: string };
+  /** Workflow metadata injected by GHL. */
+  workflow?: { id?: string; name?: string };
+  /** Custom data fields configured in the GHL Workflow webhook action. */
+  customData?: { event_type?: string; body?: string; [key: string]: unknown };
 };
 
 export type GHLAttachment = {

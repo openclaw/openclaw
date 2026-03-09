@@ -146,22 +146,43 @@ export async function handleGoHighLevelWebhookRequest(
  * Normalize a GHL Workflow "Customer Replied" payload into the standard
  * InboundMessage shape so the rest of the pipeline can handle it uniformly.
  *
- * Workflow payloads are contact-centric (snake_case fields, no `direction`,
- * no `conversationId`). We map them to the canonical format and default
- * `direction` to `"inbound"` when the event_type signals a customer reply.
+ * Real GHL Workflow payloads nest the message under `message.body` and
+ * the configured custom data under `customData`. The top-level `body` field
+ * is NOT populated by GHL — we must extract it from the nested objects.
+ *
+ * Typical Workflow payload shape:
+ * {
+ *   contact_id, first_name, last_name, phone, email, tags, location: {...},
+ *   message: { type: 2, body: "actual text" },
+ *   workflow: { id, name },
+ *   customData: { event_type: "customer.replied", body: "actual text" }
+ * }
  */
 function normalizeWorkflowPayload(payload: GHLWebhookPayload): void {
-  // Already in standard format
+  // Already in standard format (direct API webhook, not Workflow)
   if (payload.type === "InboundMessage" || payload.direction === "inbound") {
     return;
   }
 
-  // Detect Workflow payload by presence of snake_case fields or event_type
+  // Detect Workflow payload: has workflow metadata, customData, or snake_case contact fields
   const isWorkflow =
-    payload.event_type === "customer.replied" || (payload.contact_id && !payload.contactId);
+    payload.workflow != null ||
+    payload.customData != null ||
+    payload.event_type === "customer.replied" ||
+    (payload.contact_id && !payload.contactId);
 
   if (!isWorkflow) {
     return;
+  }
+
+  // Extract body from nested message object or customData (GHL doesn't populate top-level body)
+  if (!payload.body) {
+    payload.body = payload.message?.body ?? payload.customData?.body ?? undefined;
+  }
+
+  // Extract event_type from customData if not at top level
+  if (!payload.event_type && payload.customData?.event_type) {
+    payload.event_type = payload.customData.event_type;
   }
 
   // Map snake_case → camelCase
