@@ -3,6 +3,7 @@ package main
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -72,6 +73,50 @@ func TestLocalizeBodyLinks(t *testing.T) {
 			want: "```md\n[Config](/gateway/configuration)\n```\n\n" +
 				"See [Config](/zh-CN/gateway/configuration).",
 		},
+		{
+			name: "inline code does not swallow later paragraphs",
+			input: strings.Join([]string{
+				"Use `channels.matrix.accounts` and `name`.",
+				"",
+				"See [Config](/gateway/configuration).",
+				"",
+				"Then review [Troubleshooting](/channels/troubleshooting).",
+			}, "\n"),
+			want: strings.Join([]string{
+				"Use `channels.matrix.accounts` and `name`.",
+				"",
+				"See [Config](/zh-CN/gateway/configuration).",
+				"",
+				"Then review [Troubleshooting](/zh-CN/channels/troubleshooting).",
+			}, "\n"),
+		},
+		{
+			name: "indented fenced code block does not swallow later paragraphs",
+			input: strings.Join([]string{
+				"1. Setup:",
+				"",
+				"   ```bash",
+				"   echo hi",
+				"   ```",
+				"",
+				"Use `channels.matrix.accounts` and `name`.",
+				"",
+				"For triage: [/channels/troubleshooting](/channels/troubleshooting).",
+				"See [Config](/gateway/configuration).",
+			}, "\n"),
+			want: strings.Join([]string{
+				"1. Setup:",
+				"",
+				"   ```bash",
+				"   echo hi",
+				"   ```",
+				"",
+				"Use `channels.matrix.accounts` and `name`.",
+				"",
+				"For triage: [/channels/troubleshooting](/zh-CN/channels/troubleshooting).",
+				"See [Config](/zh-CN/gateway/configuration).",
+			}, "\n"),
+		},
 	}
 
 	for _, tt := range tests {
@@ -96,11 +141,13 @@ func setupDocsTree(t *testing.T) string {
 
 	files := map[string]string{
 		"index.md":                              "# Home\n",
+		"channels/troubleshooting.md":           "# Troubleshooting\n",
 		"gateway/configuration.md":              "# Config\n",
 		"gateway/sandboxing.md":                 "# Sandboxing\n",
 		"security/formal-verification.md":       "---\npermalink: /security/formal-verification/\n---\n\n# Formal verification\n",
 		"help/faq.md":                           "# FAQ\n",
 		"zh-CN/index.md":                        "# 首页\n",
+		"zh-CN/channels/troubleshooting.md":     "# 故障排除\n",
 		"zh-CN/gateway/configuration.md":        "# 配置\n",
 		"zh-CN/gateway/sandboxing.md":           "# 沙箱\n",
 		"zh-CN/security/formal-verification.md": "---\npermalink: /security/formal-verification/\n---\n\n# 形式化验证\n",
