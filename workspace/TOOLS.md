@@ -55,6 +55,16 @@ exec node skills/twitter-openclaw/bin/twclaw.js read <tweet-url>                
 Requires `TWITTER_BEARER_TOKEN` and `TWITTER_USER_ID`.
 All write actions need `--yes` flag. ALL interactions require Gilberts approval first.
 
+### Token Refresh
+
+If you get a 401 Unauthorized error, refresh the token first:
+
+```bash
+exec node scripts/twitter-refresh-token.mjs
+```
+
+Then retry the original command. If refresh also fails, tell Gilberts to re-authorize.
+
 ### API Budget (CRITICAL)
 
 - **1 search/day** (`"ERC-8004"`, `-n 10`). No weekend searches

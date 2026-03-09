@@ -13,8 +13,27 @@ import fs from "node:fs";
 
 const TOKEN_FILE = process.env.TWITTER_TOKEN_FILE || "/tmp/twitter-tokens.env";
 
+function readTokenFile() {
+  try {
+    const content = fs.readFileSync(TOKEN_FILE, "utf-8");
+    const tokens = {};
+    for (const line of content.split("\n")) {
+      const match = line.match(/^(\w+)=(.+)$/);
+      if (match) {
+        tokens[match[1]] = match[2].trim();
+      }
+    }
+    return tokens;
+  } catch {
+    return {};
+  }
+}
+
 async function refreshToken() {
-  const refreshToken = process.env.TWITTER_REFRESH_TOKEN?.trim();
+  const fileTokens = readTokenFile();
+  // Prefer file tokens (they have the latest refresh token) over env vars
+  const refreshToken =
+    fileTokens.TWITTER_REFRESH_TOKEN || process.env.TWITTER_REFRESH_TOKEN?.trim();
   const clientId = process.env.TWITTER_CLIENT_ID?.trim();
   const clientSecret = process.env.TWITTER_CLIENT_SECRET?.trim();
 

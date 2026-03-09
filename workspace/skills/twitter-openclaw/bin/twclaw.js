@@ -200,6 +200,16 @@ function parseArgs(argv) {
 }
 
 function bearerToken() {
+  // Check refreshed token file first (written by twitter-refresh-token.mjs)
+  const tokenFile = process.env.TWITTER_TOKEN_FILE || "/tmp/twitter-tokens.env";
+  try {
+    const content = fs.readFileSync(tokenFile, "utf-8");
+    const match = content.match(/^TWITTER_BEARER_TOKEN=(.+)$/m);
+    if (match && match[1].trim()) {
+      return match[1].trim();
+    }
+  } catch {}
+  // Fall back to environment variable
   const token = process.env.TWITTER_BEARER_TOKEN?.trim() || "";
   if (!token) {
     throw new CliError(
