@@ -7,17 +7,12 @@ describe("listAccountIds", () => {
     expect(listAccountIds({ channels: {} })).toEqual([]);
   });
 
-  it("returns default when accessToken is set", () => {
-    const cfg = { channels: { inboxapi: { accessToken: "tok" } } };
+  it("returns default when channel section exists", () => {
+    const cfg = { channels: { inboxapi: {} } };
     expect(listAccountIds(cfg)).toEqual(["default"]);
   });
 
-  it("returns default when domain is set", () => {
-    const cfg = { channels: { inboxapi: { domain: "example.inboxapi.ai" } } };
-    expect(listAccountIds(cfg)).toEqual(["default"]);
-  });
-
-  it("returns named accounts", () => {
+  it("returns default + named accounts", () => {
     const cfg = {
       channels: {
         inboxapi: {
@@ -25,21 +20,10 @@ describe("listAccountIds", () => {
         },
       },
     };
-    expect(listAccountIds(cfg)).toEqual(["prod", "staging"]);
-  });
-
-  it("returns default + named accounts", () => {
-    const cfg = {
-      channels: {
-        inboxapi: {
-          accessToken: "base",
-          accounts: { prod: { accessToken: "tok1" } },
-        },
-      },
-    };
     const ids = listAccountIds(cfg);
     expect(ids).toContain("default");
     expect(ids).toContain("prod");
+    expect(ids).toContain("staging");
   });
 });
 

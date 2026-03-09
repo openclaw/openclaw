@@ -28,23 +28,16 @@ function parseAllowFrom(raw: string | string[] | undefined): string[] {
 
 /**
  * List all configured account IDs for this channel.
- * Returns ["default"] if there's a base config with credentials, plus any named accounts.
+ * Always includes "default" when the channel section exists, because
+ * resolveAccount falls back to the default credentials file path
+ * (~/.local/inboxapi/credentials.json) even without explicit config fields.
+ * Also includes any named accounts under channels.inboxapi.accounts.
  */
 export function listAccountIds(cfg: any): string[] {
   const channelCfg = getChannelConfig(cfg);
   if (!channelCfg) return [];
 
-  const ids = new Set<string>();
-
-  // If base config has an access token or env var, there's a "default" account
-  const hasBaseCreds =
-    channelCfg.accessToken ||
-    process.env.INBOXAPI_ACCESS_TOKEN ||
-    channelCfg.credentialsPath ||
-    channelCfg.domain;
-  if (hasBaseCreds) {
-    ids.add("default");
-  }
+  const ids = new Set<string>(["default"]);
 
   // Named accounts
   if (channelCfg.accounts) {

@@ -112,6 +112,27 @@ describe("startPolling", () => {
     expect(log.warn).toHaveBeenCalledWith(expect.stringContaining("no access token"));
   });
 
+  it("stops polling when high-water mark bootstrap fails", async () => {
+    vi.mocked(whoami).mockResolvedValue({
+      accountName: "test",
+      email: "test@inboxapi.ai",
+      domain: "inboxapi.ai",
+    });
+    vi.mocked(getLastEmail).mockRejectedValue(new Error("API timeout"));
+
+    const deliver = vi.fn();
+    const log = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
+    await startPolling({
+      account: makeAccount(),
+      deliver,
+      log,
+    });
+
+    expect(log.error).toHaveBeenCalledWith(expect.stringContaining("refusing to poll"));
+    expect(deliver).not.toHaveBeenCalled();
+    expect(getEmails).not.toHaveBeenCalled();
+  });
+
   it("delivers new emails", async () => {
     const controller = new AbortController();
     const deliver = vi.fn();

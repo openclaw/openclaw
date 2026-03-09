@@ -60,7 +60,9 @@ export async function startPolling(deps: MonitorDeps): Promise<void> {
     return;
   }
 
-  // Establish high-water mark from most recent email
+  // Establish high-water mark from most recent email.
+  // Fail closed: if we can't establish the mark, stop polling to avoid
+  // replaying old inbox messages into the agent.
   let lastSeenDate: string | undefined;
   let seenMessageIds = new Set<string>();
 
@@ -74,7 +76,10 @@ export async function startPolling(deps: MonitorDeps): Promise<void> {
       log?.info?.("InboxAPI: no existing emails, starting fresh");
     }
   } catch (err: any) {
-    log?.warn?.(`InboxAPI: failed to get last email for high-water mark: ${err.message}`);
+    log?.error?.(
+      `InboxAPI: failed to establish high-water mark, refusing to poll to avoid replaying old messages: ${err.message}`,
+    );
+    return;
   }
 
   // Polling loop
