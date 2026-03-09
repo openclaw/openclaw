@@ -47,6 +47,10 @@ const reattachPending = new Set()
 let reconnectAttempt = 0
 let reconnectTimer = null
 
+function hasLiveAttachmentDemand() {
+  return tabs.size > 0 || reattachPending.size > 0
+}
+
 const TAB_VALIDATION_ATTEMPTS = 2
 const TAB_VALIDATION_RETRY_DELAY_MS = 1000
 
@@ -250,7 +254,7 @@ function onRelayClosed(reason) {
     }
   }
 
-  if (tabs.size === 0) {
+  if (!hasLiveAttachmentDemand()) {
     cancelReconnect()
     return
   }
@@ -282,7 +286,7 @@ function scheduleReconnect() {
       if (!isRetryableReconnectError(err)) {
         return
       }
-      if (tabs.size === 0) {
+      if (!hasLiveAttachmentDemand()) {
         cancelReconnect()
         return
       }
@@ -300,7 +304,7 @@ function cancelReconnect() {
 }
 
 function releaseRelayIfIdle(reason = 'idle') {
-  if (tabs.size > 0) return
+  if (hasLiveAttachmentDemand()) return
 
   cancelReconnect()
   relayConnectRequestId = null
