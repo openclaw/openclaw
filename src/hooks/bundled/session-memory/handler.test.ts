@@ -60,11 +60,23 @@ function createMockSessionContent(
     .join("\n");
 }
 
+async function readFirstFileFromDir(
+  rootDir: string,
+  relativeDir: string,
+): Promise<{ files: string[]; fileContent: string }> {
+  const targetDir = path.join(rootDir, relativeDir);
+  const files = await fs.readdir(targetDir);
+  const fileContent =
+    files.length > 0 ? await fs.readFile(path.join(targetDir, files[0]), "utf-8") : "";
+  return { files, fileContent };
+}
+
 async function runNewWithPreviousSessionEntry(params: {
   tempDir: string;
   previousSessionEntry: { sessionId: string; sessionFile?: string };
   cfg?: OpenClawConfig;
   action?: "new" | "reset";
+  outputDir?: string;
 }): Promise<{ files: string[]; memoryContent: string }> {
   const event = createHookEvent("command", params.action ?? "new", "agent:main:main", {
     cfg:
@@ -77,10 +89,11 @@ async function runNewWithPreviousSessionEntry(params: {
 
   await handler(event);
 
-  const memoryDir = path.join(params.tempDir, "memory");
-  const files = await fs.readdir(memoryDir);
-  const memoryContent =
-    files.length > 0 ? await fs.readFile(path.join(memoryDir, files[0]), "utf-8") : "";
+  const { files, fileContent } = await readFirstFileFromDir(
+    params.tempDir,
+    params.outputDir ?? "memory",
+  );
+  const memoryContent = fileContent;
   return { files, memoryContent };
 }
 
@@ -88,6 +101,7 @@ async function runNewWithPreviousSession(params: {
   sessionContent: string;
   cfg?: (tempDir: string) => OpenClawConfig;
   action?: "new" | "reset";
+  outputDir?: string;
 }): Promise<{ tempDir: string; files: string[]; memoryContent: string }> {
   const tempDir = await createCaseWorkspace("workspace");
   const sessionsDir = path.join(tempDir, "sessions");
@@ -109,6 +123,7 @@ async function runNewWithPreviousSession(params: {
     tempDir,
     cfg,
     action: params.action,
+    outputDir: params.outputDir,
     previousSessionEntry: {
       sessionId: "test-123",
       sessionFile,
@@ -117,15 +132,26 @@ async function runNewWithPreviousSession(params: {
   return { tempDir, files, memoryContent };
 }
 
-function makeSessionMemoryConfig(tempDir: string, messages?: number): OpenClawConfig {
+function makeSessionMemoryConfig(
+  tempDir: string,
+  options?: { messages?: number; outputDir?: string },
+): OpenClawConfig {
+  const entryConfig: Record<string, unknown> = { enabled: true };
+  if (typeof options?.messages === "number") {
+    entryConfig.messages = options.messages;
+  }
+  if (typeof options?.outputDir === "string") {
+    entryConfig.outputDir = options.outputDir;
+  }
+
   return {
     agents: { defaults: { workspace: tempDir } },
-    ...(typeof messages === "number"
+    ...(options
       ? {
           hooks: {
             internal: {
               entries: {
-                "session-memory": { enabled: true, messages },
+                "session-memory": entryConfig,
               },
             },
           },
@@ -315,7 +341,7 @@ describe("session-memory hook", () => {
     const sessionContent = createMockSessionContent(entries);
     const { memoryContent } = await runNewWithPreviousSession({
       sessionContent,
-      cfg: (tempDir) => makeSessionMemoryConfig(tempDir, 3),
+      cfg: (tempDir) => makeSessionMemoryConfig(tempDir, { messages: 3 }),
     });
 
     // Only last 3 messages should be present
@@ -344,7 +370,7 @@ describe("session-memory hook", () => {
     const sessionContent = createMockSessionContent(entries);
     const { memoryContent } = await runNewWithPreviousSession({
       sessionContent,
-      cfg: (tempDir) => makeSessionMemoryConfig(tempDir, 3),
+      cfg: (tempDir) => makeSessionMemoryConfig(tempDir, { messages: 3 }),
     });
 
     // Should have exactly 3 user/assistant messages (the last 3)
@@ -525,5 +551,43 @@ describe("session-memory hook", () => {
     // Both messages should be included
     expect(memoryContent).toContain("user: Only message 1");
     expect(memoryContent).toContain("assistant: Only message 2");
+  });
+
+  it("writes session snapshots to a custom workspace-relative output directory", async () => {
+    const sessionContent = createMockSessionContent([
+      { role: "user", content: "Archive this elsewhere" },
+      { role: "assistant", content: "Stored outside active memory" },
+    ]);
+
+    const { tempDir } = await runNewWithPreviousSession({
+      sessionContent,
+      cfg: (workspaceDir) =>
+        makeSessionMemoryConfig(workspaceDir, { outputDir: "session-archive" }),
+      outputDir: "session-archive",
+    });
+
+    await expect(fs.access(path.join(tempDir, "memory"))).rejects.toThrow();
+
+    const archive = await readFirstFileFromDir(tempDir, "session-archive");
+    expect(archive.files.length).toBe(1);
+    expect(archive.fileContent).toContain("user: Archive this elsewhere");
+    expect(archive.fileContent).toContain("assistant: Stored outside active memory");
+  });
+
+  it("falls back to the default memory directory when outputDir escapes workspace", async () => {
+    const sessionContent = createMockSessionContent([
+      { role: "user", content: "Keep this safe" },
+      { role: "assistant", content: "Invalid outputDir should not break hook" },
+    ]);
+
+    const { tempDir, files, memoryContent } = await runNewWithPreviousSession({
+      sessionContent,
+      cfg: (workspaceDir) => makeSessionMemoryConfig(workspaceDir, { outputDir: "../outside" }),
+    });
+
+    expect(files.length).toBe(1);
+    expect(memoryContent).toContain("user: Keep this safe");
+    expect(memoryContent).toContain("assistant: Invalid outputDir should not break hook");
+    await expect(fs.access(path.join(tempDir, "..", "outside"))).rejects.toThrow();
   });
 });

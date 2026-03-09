@@ -25,8 +25,8 @@ When you run `/new` or `/reset` to start a fresh session:
 1. **Finds the previous session** - Uses the pre-reset session entry to locate the correct transcript
 2. **Extracts conversation** - Reads the last N user/assistant messages from the session (default: 15, configurable)
 3. **Generates descriptive slug** - Uses LLM to create a meaningful filename slug based on conversation content
-4. **Saves to memory** - Creates a new file at `<workspace>/memory/YYYY-MM-DD-slug.md`
-5. **Sends confirmation** - Notifies you with the file path
+4. **Saves to workspace notes** - Creates a new file at `<workspace>/memory/YYYY-MM-DD-slug.md` by default, or another workspace-relative directory if configured
+5. **Records completion** - Logs the saved file path for debugging and audit trails
 
 ## Output Format
 
@@ -59,9 +59,10 @@ The hook uses your configured LLM provider to generate slugs, so it works with a
 
 The hook supports optional configuration:
 
-| Option     | Type   | Default | Description                                                     |
-| ---------- | ------ | ------- | --------------------------------------------------------------- |
-| `messages` | number | 15      | Number of user/assistant messages to include in the memory file |
+| Option      | Type   | Default  | Description                                        |
+| ----------- | ------ | -------- | -------------------------------------------------- |
+| `messages`  | number | 15       | Number of user/assistant messages to include       |
+| `outputDir` | string | `memory` | Workspace-relative directory for session snapshots |
 
 Example configuration:
 
@@ -72,7 +73,8 @@ Example configuration:
       "entries": {
         "session-memory": {
           "enabled": true,
-          "messages": 25
+          "messages": 25,
+          "outputDir": "session-archive"
         }
       }
     }
@@ -83,6 +85,7 @@ Example configuration:
 The hook automatically:
 
 - Uses your workspace directory (`~/.openclaw/workspace` by default)
+- Restricts `outputDir` to a workspace-relative path
 - Uses your configured LLM for slug generation
 - Falls back to timestamp slugs if LLM is unavailable
 

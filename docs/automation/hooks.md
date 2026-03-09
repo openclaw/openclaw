@@ -43,7 +43,7 @@ The hooks system allows you to:
 
 OpenClaw ships with four bundled hooks that are automatically discovered:
 
-- **💾 session-memory**: Saves session context to your agent workspace (default `~/.openclaw/workspace/memory/`) when you issue `/new`
+- **💾 session-memory**: Saves session context to your agent workspace (default `~/.openclaw/workspace/memory/`) when you issue `/new` or `/reset`
 - **📎 bootstrap-extra-files**: Injects additional workspace bootstrap files from configured glob/path patterns during `agent:bootstrap`
 - **📝 command-logger**: Logs all command events to `~/.openclaw/logs/commands.log`
 - **🚀 boot-md**: Runs `BOOT.md` when the gateway starts (requires internal hooks enabled)
@@ -551,20 +551,40 @@ openclaw hooks disable command-logger
 
 ### session-memory
 
-Saves session context to memory when you issue `/new`.
+Saves session context to workspace notes when you issue `/new` or `/reset`.
 
-**Events**: `command:new`
+**Events**: `command:new`, `command:reset`
 
 **Requirements**: `workspace.dir` must be configured
 
-**Output**: `<workspace>/memory/YYYY-MM-DD-slug.md` (defaults to `~/.openclaw/workspace`)
+**Output**: `<workspace>/memory/YYYY-MM-DD-slug.md` by default, configurable to another workspace-relative directory such as `<workspace>/session-archive/YYYY-MM-DD-slug.md`
 
 **What it does**:
 
 1. Uses the pre-reset session entry to locate the correct transcript
-2. Extracts the last 15 lines of conversation
+2. Extracts the last 15 user/assistant messages from the conversation
 3. Uses LLM to generate a descriptive filename slug
-4. Saves session metadata to a dated memory file
+4. Saves session metadata to a dated Markdown file under the configured workspace directory
+
+**Config**:
+
+```json
+{
+  "hooks": {
+    "internal": {
+      "entries": {
+        "session-memory": {
+          "enabled": true,
+          "messages": 25,
+          "outputDir": "session-archive"
+        }
+      }
+    }
+  }
+}
+```
+
+`outputDir` must stay relative to the workspace root. Invalid values fall back to `memory`.
 
 **Example output**:
 

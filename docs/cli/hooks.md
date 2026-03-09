@@ -38,7 +38,7 @@ Ready:
   🚀 boot-md ✓ - Run BOOT.md on gateway startup
   📎 bootstrap-extra-files ✓ - Inject extra workspace bootstrap files during agent bootstrap
   📝 command-logger ✓ - Log all command events to a centralized audit file
-  💾 session-memory ✓ - Save session context to memory when /new command is issued
+  💾 session-memory ✓ - Save session context to workspace notes when /new or /reset command is issued
 ```
 
 **Example (verbose):**
@@ -84,14 +84,14 @@ openclaw hooks info session-memory
 ```
 💾 session-memory ✓ Ready
 
-Save session context to memory when /new command is issued
+Save session context to workspace notes when /new or /reset command is issued
 
 Details:
   Source: openclaw-bundled
   Path: /path/to/openclaw/hooks/bundled/session-memory/HOOK.md
   Handler: /path/to/openclaw/hooks/bundled/session-memory/handler.ts
   Homepage: https://docs.openclaw.ai/automation/hooks#session-memory
-  Events: command:new
+  Events: command:new, command:reset
 
 Requirements:
   Config: ✓ workspace.dir
@@ -247,7 +247,7 @@ global `--yes` to bypass prompts in CI/non-interactive runs.
 
 ### session-memory
 
-Saves session context to memory when you issue `/new`.
+Saves session context to workspace notes when you issue `/new` or `/reset`.
 
 **Enable:**
 
@@ -255,7 +255,7 @@ Saves session context to memory when you issue `/new`.
 openclaw hooks enable session-memory
 ```
 
-**Output:** `~/.openclaw/workspace/memory/YYYY-MM-DD-slug.md`
+**Output:** `~/.openclaw/workspace/memory/YYYY-MM-DD-slug.md` by default, or another workspace-relative directory if configured
 
 **See:** [session-memory documentation](/automation/hooks#session-memory)
 

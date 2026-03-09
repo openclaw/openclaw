@@ -20,6 +20,7 @@ import type { HookHandler } from "../../hooks.js";
 import { generateSlugViaLLM } from "../../llm-slug-generator.js";
 
 const log = createSubsystemLogger("hooks/session-memory");
+const DEFAULT_OUTPUT_DIR = "memory";
 
 /**
  * Read recent messages from session file for slug generation
@@ -113,6 +114,26 @@ function stripResetSuffix(fileName: string): string {
   return resetIndex === -1 ? fileName : fileName.slice(0, resetIndex);
 }
 
+function resolveOutputDir(hookConfig: Record<string, unknown> | undefined): string {
+  const raw =
+    typeof hookConfig?.outputDir === "string" ? hookConfig.outputDir.trim() : DEFAULT_OUTPUT_DIR;
+  if (!raw) {
+    return DEFAULT_OUTPUT_DIR;
+  }
+
+  const normalized = path.normalize(raw);
+  const segments = normalized.split(path.sep).filter(Boolean);
+  const hasTraversal = segments.some((segment) => segment === "." || segment === "..");
+  if (path.isAbsolute(normalized) || segments.length === 0 || hasTraversal) {
+    log.warn("Ignoring invalid session-memory outputDir; falling back to memory", {
+      outputDir: raw,
+    });
+    return DEFAULT_OUTPUT_DIR;
+  }
+
+  return path.join(...segments);
+}
+
 async function findPreviousSessionFile(params: {
   sessionsDir: string;
   currentSessionFile?: string;
@@ -186,8 +207,10 @@ const saveSessionToMemory: HookHandler = async (event) => {
     const workspaceDir = cfg
       ? resolveAgentWorkspaceDir(cfg, agentId)
       : path.join(resolveStateDir(process.env, os.homedir), "workspace");
-    const memoryDir = path.join(workspaceDir, "memory");
-    await fs.mkdir(memoryDir, { recursive: true });
+    const hookConfig = resolveHookConfig(cfg, "session-memory");
+    const outputDir = resolveOutputDir(hookConfig);
+    const outputRoot = path.join(workspaceDir, outputDir);
+    await fs.mkdir(outputRoot, { recursive: true });
 
     // Get today's date for filename
     const now = new Date(event.timestamp);
@@ -234,7 +257,6 @@ const saveSessionToMemory: HookHandler = async (event) => {
     const sessionFile = currentSessionFile || undefined;
 
     // Read message count from hook config (default: 15)
-    const hookConfig = resolveHookConfig(cfg, "session-memory");
     const messageCount =
       typeof hookConfig?.messages === "number" && hookConfig.messages > 0
         ? hookConfig.messages
@@ -276,7 +298,8 @@ const saveSessionToMemory: HookHandler = async (event) => {
 
     // Create filename with date and slug
     const filename = `${dateStr}-${slug}.md`;
-    const memoryFilePath = path.join(memoryDir, filename);
+    const relativePath = path.join(outputDir, filename);
+    const memoryFilePath = path.join(workspaceDir, relativePath);
     log.debug("Memory file path resolved", {
       filename,
       path: memoryFilePath.replace(os.homedir(), "~"),
@@ -308,8 +331,8 @@ const saveSessionToMemory: HookHandler = async (event) => {
 
     // Write under memory root with alias-safe file validation.
     await writeFileWithinRoot({
-      rootDir: memoryDir,
-      relativePath: filename,
+      rootDir: workspaceDir,
+      relativePath,
       data: entry,
       encoding: "utf-8",
     });

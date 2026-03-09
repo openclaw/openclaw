@@ -44,7 +44,7 @@ Hooks (3/3 ready)
 Ready:
   🚀 boot-md ✓ - Run BOOT.md on gateway startup
   📝 command-logger ✓ - Log all command events to a centralized audit file
-  💾 session-memory ✓ - Save session context to memory when /new command is issued
+  💾 session-memory ✓ - Save session context to workspace notes when /new or /reset command is issued
 ```
 
 **示例（详细模式）：**
@@ -90,14 +90,14 @@ openclaw hooks info session-memory
 ```
 💾 session-memory ✓ Ready
 
-Save session context to memory when /new command is issued
+Save session context to workspace notes when /new or /reset command is issued
 
 Details:
   Source: openclaw-bundled
   Path: /path/to/openclaw/hooks/bundled/session-memory/HOOK.md
   Handler: /path/to/openclaw/hooks/bundled/session-memory/handler.ts
   Homepage: https://docs.openclaw.ai/automation/hooks#session-memory
-  Events: command:new
+  Events: command:new, command:reset
 
 Requirements:
   Config: ✓ workspace.dir
@@ -244,7 +244,7 @@ openclaw hooks update --all
 
 ### session-memory
 
-在你执行 `/new` 时将会话上下文保存到记忆中。
+在你执行 `/new` 或 `/reset` 时将会话上下文保存到工作区笔记中。
 
 **启用：**
 
@@ -252,7 +252,7 @@ openclaw hooks update --all
 openclaw hooks enable session-memory
 ```
 
-**输出：** `~/.openclaw/workspace/memory/YYYY-MM-DD-slug.md`
+**输出：** 默认 `~/.openclaw/workspace/memory/YYYY-MM-DD-slug.md`，也可以通过配置改到其他工作区内相对目录
 
 **参见：** [session-memory 文档](/automation/hooks#session-memory)
 
