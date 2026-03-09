@@ -158,13 +158,15 @@ function scheduleAnnounceDrain(key: string) {
           if (!last) {
             break;
           }
-          const requesterMessageIds = new Set(
-            items
-              .map((item) => item.requesterMessageId?.trim())
-              .filter((value): value is string => Boolean(value)),
+          const requesterMessageIds = items.map((item) => item.requesterMessageId?.trim());
+          const hasUnboundItem = requesterMessageIds.some((value) => !value);
+          const nonEmptyRequesterMessageIds = new Set(
+            requesterMessageIds.filter((value): value is string => Boolean(value)),
           );
           const aggregateRequesterMessageId =
-            requesterMessageIds.size === 1 ? requesterMessageIds.values().next().value : undefined;
+            !hasUnboundItem && nonEmptyRequesterMessageIds.size === 1
+              ? nonEmptyRequesterMessageIds.values().next().value
+              : undefined;
           await queue.send({
             ...last,
             prompt,
