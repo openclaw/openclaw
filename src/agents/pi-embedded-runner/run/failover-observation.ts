@@ -4,7 +4,7 @@ import { buildApiErrorObservationFields } from "../../pi-embedded-error-observat
 import type { FailoverReason } from "../../pi-embedded-helpers.js";
 import { log } from "../logger.js";
 
-export type FailoverDecisionObservation = {
+export type FailoverDecisionLoggerInput = {
   stage: "prompt" | "assistant";
   decision: "rotate_profile" | "fallback_model" | "surface_error";
   runId?: string;
@@ -20,11 +20,11 @@ export type FailoverDecisionObservation = {
   status?: number;
 };
 
-export type FailoverDecisionBase = Omit<FailoverDecisionObservation, "decision" | "status">;
+export type FailoverDecisionLoggerBase = Omit<FailoverDecisionLoggerInput, "decision" | "status">;
 
 export function normalizeFailoverDecisionObservationBase(
-  base: FailoverDecisionBase,
-): FailoverDecisionBase {
+  base: FailoverDecisionLoggerBase,
+): FailoverDecisionLoggerBase {
   return {
     ...base,
     failoverReason: base.failoverReason ?? (base.timedOut ? "timeout" : null),
@@ -33,10 +33,10 @@ export function normalizeFailoverDecisionObservationBase(
 }
 
 export function createFailoverDecisionLogger(
-  base: FailoverDecisionBase,
+  base: FailoverDecisionLoggerBase,
 ): (
-  decision: FailoverDecisionObservation["decision"],
-  extra?: Pick<FailoverDecisionObservation, "status">,
+  decision: FailoverDecisionLoggerInput["decision"],
+  extra?: Pick<FailoverDecisionLoggerInput, "status">,
 ) => void {
   const normalizedBase = normalizeFailoverDecisionObservationBase(base);
   const safeProfileId = normalizedBase.profileId
