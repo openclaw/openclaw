@@ -364,7 +364,7 @@ export function createOpenClawCodingTools(options?: {
             : sandboxed,
         ];
       }
-      const freshReadTool = createReadTool(workspaceRoot);
+      const freshReadTool = createReadTool(workspaceRoot, { autoResizeImages: false });
       const wrapped = createOpenClawReadTool(freshReadTool, {
         modelContextWindowTokens: options?.modelContextWindowTokens,
         imageSanitization,

@@ -444,6 +444,7 @@ type SandboxToolParams = {
 export function createSandboxedReadTool(params: SandboxToolParams) {
   const base = createReadTool(params.root, {
     operations: createSandboxReadOperations(params),
+    autoResizeImages: false,
   }) as unknown as AnyAgentTool;
   return createOpenClawReadTool(base, {
     modelContextWindowTokens: params.modelContextWindowTokens,
