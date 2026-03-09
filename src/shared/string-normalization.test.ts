@@ -9,6 +9,11 @@ import {
 describe("shared/string-normalization", () => {
   it("normalizes mixed allow-list entries", () => {
     expect(normalizeStringEntries([" a ", 42, "", "  ", "z"])).toEqual(["a", "42", "z"]);
+    expect(normalizeStringEntries([" ok ", null, { toString: () => " obj " }])).toEqual([
+      "ok",
+      "null",
+      "obj",
+    ]);
     expect(normalizeStringEntries(undefined)).toEqual([]);
   });
 
