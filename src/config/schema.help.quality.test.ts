@@ -534,6 +534,7 @@ const FINAL_BACKLOG_TARGET_KEYS = [
   "browser.ssrfPolicy",
   "browser.ssrfPolicy.allowPrivateNetwork",
   "browser.ssrfPolicy.dangerouslyAllowPrivateNetwork",
+  "browser.ssrfPolicy.allowRfc2544BenchmarkRange",
   "browser.ssrfPolicy.allowedHostnames",
   "browser.ssrfPolicy.hostnameAllowlist",
   "diagnostics.enabled",

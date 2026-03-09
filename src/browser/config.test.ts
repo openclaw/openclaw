@@ -251,12 +251,14 @@ describe("browser config", () => {
     const resolved = resolveBrowserConfig({
       ssrfPolicy: {
         allowPrivateNetwork: true,
+        allowRfc2544BenchmarkRange: true,
         allowedHostnames: [" localhost ", ""],
         hostnameAllowlist: [" *.trusted.example ", " "],
       },
     });
     expect(resolved.ssrfPolicy).toEqual({
       dangerouslyAllowPrivateNetwork: true,
+      allowRfc2544BenchmarkRange: true,
       allowedHostnames: ["localhost"],
       hostnameAllowlist: ["*.trusted.example"],
     });
