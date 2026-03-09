@@ -69,8 +69,31 @@ const OUTBOUND_CIRCUIT_MAX_CONSECUTIVE_DUPLICATES = 3;
 
 const outboundCircuitBreaker = new Map<string, OutboundSendWindow>();
 
+const OUTBOUND_CIRCUIT_EVICT_AFTER_MS = OUTBOUND_CIRCUIT_WINDOW_MS * 2;
+const OUTBOUND_CIRCUIT_SWEEP_EVERY_N_CALLS = 100;
+let outboundCircuitBreakerSweepBudget = 0;
+
 export function __resetOutboundCircuitBreakerForTest() {
   outboundCircuitBreaker.clear();
+  outboundCircuitBreakerSweepBudget = 0;
+}
+
+function maybeSweepOutboundCircuitBreaker(now: number) {
+  outboundCircuitBreakerSweepBudget += 1;
+  if (outboundCircuitBreakerSweepBudget < OUTBOUND_CIRCUIT_SWEEP_EVERY_N_CALLS) {
+    return;
+  }
+  outboundCircuitBreakerSweepBudget = 0;
+
+  for (const [key, value] of outboundCircuitBreaker.entries()) {
+    if (!value.lastSentAt) {
+      outboundCircuitBreaker.delete(key);
+      continue;
+    }
+    if (now - value.lastSentAt > OUTBOUND_CIRCUIT_EVICT_AFTER_MS) {
+      outboundCircuitBreaker.delete(key);
+    }
+  }
 }
 
 function fingerprintOutboundSend(params: {
@@ -91,21 +114,48 @@ function maybeTripOutboundCircuitBreaker(params: {
   fingerprint: string;
   now: number;
 }): void {
+  maybeSweepOutboundCircuitBreaker(params.now);
+
   const existing = outboundCircuitBreaker.get(params.key);
-  const next: OutboundSendWindow = existing
-    ? { ...existing }
+
+  // Evict stale entries eagerly to prevent unbounded growth.
+  if (existing?.lastSentAt && params.now - existing.lastSentAt > OUTBOUND_CIRCUIT_EVICT_AFTER_MS) {
+    outboundCircuitBreaker.delete(params.key);
+  }
+
+  const base = outboundCircuitBreaker.get(params.key);
+  const next: OutboundSendWindow = base
+    ? { ...base }
     : {
         windowStartedAt: params.now,
         sentCount: 0,
         consecutiveDuplicateCount: 0,
       };
 
+  // Reset state when leaving the active window.
   if (params.now - next.windowStartedAt >= OUTBOUND_CIRCUIT_WINDOW_MS) {
     next.windowStartedAt = params.now;
     next.sentCount = 0;
     next.lastFingerprint = undefined;
     next.lastSentAt = undefined;
     next.consecutiveDuplicateCount = 0;
+  }
+
+  // If already tripped within the active window, fail fast without inflating counts.
+  if (next.sentCount > OUTBOUND_CIRCUIT_MAX_SENT_PER_WINDOW) {
+    throw new OutboundCircuitBreakerError(
+      `Outbound circuit breaker tripped: sent ${next.sentCount} messages within ${
+        OUTBOUND_CIRCUIT_WINDOW_MS / 1000
+      }s for key ${params.key}`,
+    );
+  }
+
+  if (next.consecutiveDuplicateCount > OUTBOUND_CIRCUIT_MAX_CONSECUTIVE_DUPLICATES) {
+    throw new OutboundCircuitBreakerError(
+      `Outbound circuit breaker tripped: detected ${next.consecutiveDuplicateCount} consecutive duplicate messages within ${
+        OUTBOUND_CIRCUIT_WINDOW_MS / 1000
+      }s for key ${params.key}`,
+    );
   }
 
   next.sentCount += 1;
