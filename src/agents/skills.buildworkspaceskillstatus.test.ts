@@ -1,5 +1,9 @@
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { withEnv } from "../test-utils/env.js";
+import { withEnv, withEnvAsync } from "../test-utils/env.js";
+import { writeSkill } from "./skills.e2e-test-helpers.js";
 import { buildWorkspaceSkillStatus } from "./skills-status.js";
 import type { SkillEntry } from "./skills/types.js";
 
@@ -106,6 +110,30 @@ describe("buildWorkspaceSkillStatus", () => {
     expect(skill?.blockedByAllowlist).toBe(true);
     expect(skill?.eligible).toBe(false);
     expect(skill?.bundled).toBe(true);
+  });
+
+  it("keeps workspace overrides of bundled skills out of the bundled group", async () => {
+    const bundledDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-bundled-status-"));
+    await writeSkill({
+      dir: path.join(bundledDir, "peekaboo"),
+      name: "peekaboo",
+      description: "bundled override target",
+    });
+    const entry = makeEntry({
+      name: "peekaboo",
+      source: "openclaw-workspace",
+    });
+
+    const report = await withEnvAsync({ OPENCLAW_BUNDLED_SKILLS_DIR: bundledDir }, async () =>
+      buildWorkspaceSkillStatus("/tmp/ws", {
+        entries: [entry],
+      }),
+    );
+    const skill = report.skills.find((reportEntry) => reportEntry.name === "peekaboo");
+
+    expect(skill).toBeDefined();
+    expect(skill?.source).toBe("openclaw-workspace");
+    expect(skill?.bundled).toBe(false);
   });
 
   it("filters install options by OS", async () => {
