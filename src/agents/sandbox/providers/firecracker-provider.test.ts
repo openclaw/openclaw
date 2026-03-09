@@ -33,6 +33,7 @@ vi.mock("../grpc/errors.js", async () => {
 });
 
 import { SandboxProviderError } from "../grpc/errors.js";
+import type { SandboxConfig } from "../types.js";
 import { FirecrackerProvider } from "./firecracker-provider.js";
 
 // SandboxState enum values matching proto
@@ -95,7 +96,7 @@ describe("FirecrackerProvider", () => {
         sessionKey: "session-1",
         workspaceDir: "/workspace",
         agentWorkspaceDir: "/agent-workspace",
-        cfg: {} as unknown,
+        cfg: {} as unknown as SandboxConfig,
       });
 
       expect(result).toBe("vm-abc123");
@@ -118,7 +119,7 @@ describe("FirecrackerProvider", () => {
           sessionKey: "session-1",
           workspaceDir: "/workspace",
           agentWorkspaceDir: "/agent-workspace",
-          cfg: {} as unknown,
+          cfg: {} as unknown as SandboxConfig,
         }),
       ).rejects.toThrow(SandboxProviderError);
     });

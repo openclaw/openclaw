@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import type { ISandboxProvider, EnsureSandboxParams } from "../provider.js";
 import { isBrowserCapable } from "../provider.js";
+import type { SandboxConfig, SandboxBrowserConfig } from "../types.js";
 import { DockerProvider } from "./docker-provider.js";
 import { GVisorProvider } from "./gvisor-provider.js";
 
@@ -43,7 +44,7 @@ function makeSandboxParams(overrides?: Partial<EnsureSandboxParams>): EnsureSand
       tools: { allow: ["*"], deny: [] },
       prune: { idleHours: 24, maxAgeDays: 7 },
       backend: "gvisor" as const,
-    } as unknown,
+    } as unknown as SandboxConfig,
     ...overrides,
   };
 }
@@ -485,7 +486,9 @@ describe("GVisorProvider", () => {
       const mockLaunch = vi.fn().mockResolvedValue({ sessionId: "exec-123" });
       vi.spyOn(ExecBrowserHelper.prototype, "launchBrowser").mockImplementation(mockLaunch);
 
-      const result = await provider.launchBrowser("container-1", { enabled: true } as unknown);
+      const result = await provider.launchBrowser("container-1", {
+        enabled: true,
+      } as unknown as SandboxBrowserConfig);
 
       expect(result).toEqual({ sessionId: "exec-123" });
       expect(mockLaunch).toHaveBeenCalledWith("container-1", { enabled: true });

@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import type { ISandboxProvider } from "../provider.js";
 import { isBrowserCapable } from "../provider.js";
+import type { SandboxConfig, SandboxBrowserConfig } from "../types.js";
 import { DockerProvider } from "./docker-provider.js";
 
 vi.mock("../docker.js", () => ({
@@ -90,7 +91,7 @@ describe("DockerProvider", () => {
       tools: { allow: ["*"], deny: [] },
       prune: { idleHours: 24, maxAgeDays: 7 },
       backend: "docker" as const,
-    } as unknown;
+    } as unknown as SandboxConfig;
 
     const baseParams = {
       sessionKey: "sess-abc",
@@ -367,7 +368,9 @@ describe("DockerProvider", () => {
       const mockLaunch = vi.fn().mockResolvedValue({ sessionId: "exec-123" });
       vi.spyOn(ExecBrowserHelper.prototype, "launchBrowser").mockImplementation(mockLaunch);
 
-      const result = await provider.launchBrowser("container-1", { enabled: true } as unknown);
+      const result = await provider.launchBrowser("container-1", {
+        enabled: true,
+      } as unknown as SandboxBrowserConfig);
 
       expect(result).toEqual({ sessionId: "exec-123" });
       expect(mockLaunch).toHaveBeenCalledWith("container-1", { enabled: true });
