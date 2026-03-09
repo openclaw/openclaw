@@ -399,7 +399,15 @@ const ENUM_EXPECTATIONS: Record<string, string[]> = {
   "hooks.mappings[].action": ['"wake"', '"agent"'],
   "hooks.mappings[].wakeMode": ['"now"', '"next-heartbeat"'],
   "hooks.gmail.tailscale.mode": ['"off"', '"serve"', '"funnel"'],
-  "hooks.gmail.thinking": ['"off"', '"minimal"', '"low"', '"medium"', '"high"'],
+  "hooks.gmail.thinking": [
+    '"off"',
+    '"minimal"',
+    '"low"',
+    '"medium"',
+    '"high"',
+    '"xhigh"',
+    '"adaptive"',
+  ],
   "messages.queue.mode": [
     '"steer"',
     '"followup"',

@@ -50,7 +50,7 @@ describe("applyAuthChoiceOpenAI", () => {
     });
     const defaultModel = result?.config.agents?.defaults?.model;
     const primaryModel = typeof defaultModel === "string" ? defaultModel : defaultModel?.primary;
-    expect(primaryModel).toBe("openai/gpt-5.1-codex");
+    expect(primaryModel).toBe("openai/gpt-5.4");
     expect(text).not.toHaveBeenCalled();
 
     const parsed = await readAuthProfilesForAgent<{

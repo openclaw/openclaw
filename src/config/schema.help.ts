@@ -1284,7 +1284,7 @@ export const FIELD_HELP: Record<string, string> = {
   "hooks.gmail.model":
     "Optional model override for Gmail-triggered runs when mailbox automations should use dedicated model behavior. Keep unset to inherit agent defaults unless mailbox tasks need specialization.",
   "hooks.gmail.thinking":
-    'Thinking effort override for Gmail-driven agent runs: "off", "minimal", "low", "medium", or "high". Keep modest defaults for routine inbox automations to control cost and latency.',
+    'Thinking effort override for Gmail-driven agent runs: "off", "minimal", "low", "medium", "high", "xhigh", or "adaptive". Use "adaptive" for provider-managed reasoning (for example Anthropic Claude 4.6); "xhigh" is available on supported OpenAI/Codex GPT-5.x models. Keep modest defaults for routine inbox automations to control cost and latency.',
   "hooks.internal":
     "Internal hook runtime settings for bundled/custom event handlers loaded from module paths. Use this for trusted in-process automations and keep handler loading tightly scoped.",
   "hooks.internal.enabled":
