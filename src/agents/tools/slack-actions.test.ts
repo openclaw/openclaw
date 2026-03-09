@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import { ToolInputError } from "./common.js";
+import type { SlackActionContext } from "./slack-actions.js";
 import { handleSlackAction } from "./slack-actions.js";
 
 const deleteSlackMessage = vi.fn(async (..._args: unknown[]) => ({}));
@@ -648,6 +649,25 @@ describe("handleSlackAction", () => {
     await expect(
       handleSlackAction({ action: "react", emoji: "thumbsup", messageId: "ts-1" }, cfg, undefined),
     ).rejects.toThrow(ToolInputError);
+  });
+
+  it("throws ToolInputError when accountId is set but channelId is not explicit", async () => {
+    const cfg = {
+      channels: {
+        slack: {
+          botToken: "tok-default",
+          accounts: [{ accountId: "workspace-b", botToken: "tok-b" }],
+        },
+      },
+    } as unknown as OpenClawConfig;
+    const context = { currentChannelId: "C-from-workspace-a" } as SlackActionContext;
+    await expect(
+      handleSlackAction(
+        { action: "react", emoji: "thumbsup", messageId: "ts-1", accountId: "workspace-b" },
+        cfg,
+        context,
+      ),
+    ).rejects.toThrow(/channelId is required when accountId is specified/);
   });
 
   it("applies limit to emoji-list results", async () => {

@@ -108,8 +108,20 @@ export async function handleSlackAction(
   cfg: OpenClawConfig,
   context?: SlackActionContext,
 ): Promise<AgentToolResult<unknown>> {
+  const action = readStringParam(params, "action", { required: true });
+  const accountId = readStringParam(params, "accountId");
+
   const resolveChannelId = () => {
     const explicit = readStringParam(params, "channelId");
+    // When accountId overrides the workspace, do not fall back to the current
+    // channel context — it belongs to the original workspace and using it with
+    // a different workspace's credentials would target the wrong channel or
+    // produce channel_not_found errors.
+    if (!explicit && accountId) {
+      throw new ToolInputError(
+        "channelId is required when accountId is specified (context channel belongs to a different workspace)",
+      );
+    }
     const raw = explicit || context?.currentChannelId;
     if (!raw) {
       throw new ToolInputError(
@@ -118,8 +130,6 @@ export async function handleSlackAction(
     }
     return resolveSlackChannelId(raw);
   };
-  const action = readStringParam(params, "action", { required: true });
-  const accountId = readStringParam(params, "accountId");
   const account = resolveSlackAccount({ cfg, accountId });
   const actionConfig = account.actions ?? cfg.channels?.slack?.actions;
   const isActionEnabled = createActionGate(actionConfig);
