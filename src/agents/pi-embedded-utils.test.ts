@@ -315,6 +315,48 @@ Arguments: { "command": "git status", "timeout": 120000 }`,
     expect(result).toBe("");
   });
 
+  it("strips XML-style function_calls payloads from assistant text", () => {
+    const msg = makeAssistantMessage({
+      role: "assistant",
+      content: [
+        {
+          type: "text",
+          text: `<function_calls>
+<invoke name="exec">
+<parameter name="command">which himalaya && himalaya --version</parameter>
+</invoke>
+</function_calls>`,
+        },
+      ],
+      timestamp: Date.now(),
+    });
+
+    const result = extractAssistantText(msg);
+    expect(result).toBe("");
+  });
+
+  it("preserves surrounding text while stripping function_calls payloads", () => {
+    const msg = makeAssistantMessage({
+      role: "assistant",
+      content: [
+        {
+          type: "text",
+          text: `Checking now.
+<function_calls>
+<invoke name="exec">
+<parameter name="command">ls -la ~/.openclaw/workspace/skills/himalaya</parameter>
+</invoke>
+</function_calls>
+Done.`,
+        },
+      ],
+      timestamp: Date.now(),
+    });
+
+    const result = extractAssistantText(msg);
+    expect(result).toBe("Checking now.\nDone.");
+  });
+
   it("strips multiple downgraded tool calls", () => {
     const msg = makeAssistantMessage({
       role: "assistant",
@@ -536,6 +578,17 @@ describe("stripDowngradedToolCallText", () => {
         name: "mixed tool call and historical context",
         text: `Intro.\n[Tool Call: exec (ID: toolu_1)]\nArguments: { "command": "ls" }\n[Historical context: a different model called tool "read"]`,
         expected: "Intro.",
+      },
+      {
+        name: "xml function_calls block",
+        text: `Before
+<function_calls>
+<invoke name="exec">
+<parameter name="command">cat ~/.config/himalaya/config.toml</parameter>
+</invoke>
+</function_calls>
+After`,
+        expected: "Before\nAfter",
       },
       {
         name: "no markers",

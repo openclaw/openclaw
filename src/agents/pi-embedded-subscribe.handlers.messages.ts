@@ -16,6 +16,7 @@ import {
   extractThinkingFromTaggedText,
   formatReasoningMessage,
   promoteThinkingTagsToBlocks,
+  stripDowngradedToolCallText,
 } from "./pi-embedded-utils.js";
 
 const stripTrailingDirective = (text: string): string => {
@@ -173,16 +174,18 @@ export function handleMessageUpdate(
     ctx.emitReasoningStream(extractThinkingFromTaggedStream(ctx.state.deltaBuffer));
   }
 
-  const next = ctx
-    .stripBlockTags(ctx.state.deltaBuffer, {
+  const next = stripDowngradedToolCallText(
+    ctx.stripBlockTags(ctx.state.deltaBuffer, {
       thinking: false,
       final: false,
       inlineCode: createInlineCodeState(),
-    })
-    .trim();
+    }),
+  ).trim();
   if (next) {
     const wasThinking = ctx.state.partialBlockState.thinking;
-    const visibleDelta = chunk ? ctx.stripBlockTags(chunk, ctx.state.partialBlockState) : "";
+    const visibleDelta = chunk
+      ? stripDowngradedToolCallText(ctx.stripBlockTags(chunk, ctx.state.partialBlockState))
+      : "";
     if (!wasThinking && ctx.state.partialBlockState.thinking) {
       ctx.state.reasoningStreamOpen = true;
     }

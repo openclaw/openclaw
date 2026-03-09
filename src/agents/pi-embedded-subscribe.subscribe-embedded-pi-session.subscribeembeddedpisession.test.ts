@@ -279,6 +279,35 @@ describe("subscribeEmbeddedPiSession", () => {
     expect(payloads[1]?.delta).toBe(" world");
   });
 
+  it("suppresses leaked XML function_calls blocks in streaming agent events", () => {
+    const { emit, onAgentEvent } = createAgentEventHarness();
+
+    emit({ type: "message_start", message: { role: "assistant" } });
+    emitAssistantTextDelta(
+      emit,
+      `<function_calls>
+<invoke name="exec">
+<parameter name="command">which himalaya && himalaya --version</parameter>`,
+    );
+    emitAssistantTextDelta(
+      emit,
+      `</invoke>
+</function_calls>
+Done.`,
+    );
+
+    const payloads = extractAgentEventPayloads(onAgentEvent.mock.calls);
+    expect(payloads).toHaveLength(1);
+    expect(payloads[0]?.text).toBe("Done.");
+    expect(payloads[0]?.delta).toBe("Done.");
+    const streamedText = payloads[0]?.text;
+    expect(typeof streamedText).toBe("string");
+    if (typeof streamedText === "string") {
+      expect(streamedText).not.toContain("himalaya");
+      expect(streamedText).not.toContain("function_calls");
+    }
+  });
+
   it("emits agent events on message_end for non-streaming assistant text", () => {
     const { session, emit } = createStubSessionHarness();
 

@@ -43,7 +43,11 @@ export function stripDowngradedToolCallText(text: string): string {
   if (!text) {
     return text;
   }
-  if (!/\[Tool (?:Call|Result)/i.test(text) && !/\[Historical context/i.test(text)) {
+  if (
+    !/\[Tool (?:Call|Result)/i.test(text) &&
+    !/\[Historical context/i.test(text) &&
+    !/<\/?\s*function_calls?\b/i.test(text)
+  ) {
     return text;
   }
 
@@ -194,6 +198,33 @@ export function stripDowngradedToolCallText(text: string): string {
 
   // Remove [Historical context: ...] markers (self-contained within brackets).
   cleaned = cleaned.replace(/\[Historical context:[^\]]*\]\n?/gi, "");
+
+  // Strip OpenAI-compatible XML-style function call wrappers that can leak in plain text.
+  // Keep this scoped to explicit function_call markers to avoid clobbering normal XML snippets.
+  const hasFunctionCallXml = /<\/?\s*function_calls?\b/i.test(cleaned);
+  const hasFunctionCallPayload = /<\s*invoke\b|<\s*parameter\b|<\/?\s*function_call\b/i.test(
+    cleaned,
+  );
+  if (hasFunctionCallXml && hasFunctionCallPayload) {
+    // Remove complete function call wrapper blocks first.
+    cleaned = cleaned.replace(
+      /<\s*function_calls?\b[^>]*>[\s\S]*?<\s*\/\s*function_calls?\s*>/gi,
+      "",
+    );
+    // Remove complete single-call blocks used by some providers.
+    cleaned = cleaned.replace(/<\s*function_call\b[^>]*>[\s\S]*?<\s*\/\s*function_call\s*>/gi, "");
+    // Hide incomplete streamed call blocks until they are fully closed.
+    cleaned = cleaned.replace(/<\s*function_calls?\b[^>]*>[\s\S]*$/gi, "");
+    cleaned = cleaned.replace(/<\s*function_call\b[^>]*>[\s\S]*$/gi, "");
+    // Safety net for leaked invoke/parameter payloads in function_call contexts.
+    cleaned = cleaned.replace(/<\s*invoke\b[^>]*>[\s\S]*?<\s*\/\s*invoke\s*>/gi, "");
+    cleaned = cleaned.replace(/<\s*invoke\b[^>]*>[\s\S]*$/gi, "");
+    cleaned = cleaned.replace(/<\s*parameter\b[^>]*>[\s\S]*?<\s*\/\s*parameter\s*>/gi, "");
+    // Remove any remaining wrapper tags.
+    cleaned = cleaned.replace(/<\s*\/?\s*function_calls?\b[^>]*>/gi, "");
+    cleaned = cleaned.replace(/<\s*\/?\s*function_call\b[^>]*>/gi, "");
+    cleaned = cleaned.replace(/[ \t]*\n(?:[ \t]*\n)+/g, "\n");
+  }
 
   return cleaned.trim();
 }
