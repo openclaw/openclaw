@@ -281,12 +281,12 @@ function matchesExcludePattern(filePath: string, pattern: string): boolean {
   // Simple glob matching for common patterns
   const normalizedPath = filePath.replace(/\\/g, "/");
   
-  // Handle wildcards - escape regex special chars first
+  // Handle wildcards (both * and ? work independently now)
   if (pattern.includes("*") || pattern.includes("?")) {
     // Escape regex special characters except * and ?
     const escaped = pattern.replace(/[.+^${}()|[\]\\]/g, "\\$&");
     const regex = new RegExp("^" + escaped.replace(/\*/g, ".*").replace(/\?/g, ".") + "$");
-    return regex.test(normalizedPath) || regex.test(path.basename(filePath));
+    return regex.test(normalizedPath) || regex.test(path.basename(normalizedPath));
   }
   
   // Handle directory patterns (ending with /)
@@ -295,8 +295,8 @@ function matchesExcludePattern(filePath: string, pattern: string): boolean {
     return normalizedPath.includes(dirPattern + "/") || normalizedPath.includes(dirPattern + "\\");
   }
   
-  // Exact match or contains
-  return normalizedPath.includes(pattern) || path.basename(filePath) === pattern;
+  // Exact match or basename match (not substring to avoid false positives)
+  return normalizedPath === pattern || path.basename(normalizedPath) === pattern;
 }
 
 function filterExcludedAssets(assets: BackupAsset[], excludePatterns: string[]): { included: BackupAsset[]; excluded: BackupAsset[] } {
@@ -346,9 +346,12 @@ async function loadIgnoreFilesFromWorkspaces(workspaceDirs: string[]): Promise<s
         const stats = await fs.stat(filePath);
         if (stats.isFile()) {
           const filePatterns = await loadExcludePatternsFromFile(filePath);
-          // Add prefix to avoid conflicts with main workspace
+          // Normalize workspace path and add prefix to avoid conflicts
+          const normalizedWorkspace = workspaceDir.replace(/\\/g, "/").replace(/\/+$/, "");
           for (const pattern of filePatterns) {
-            patterns.push(`${workspaceDir}/${pattern}`);
+            // Normalize the pattern too
+            const normalizedPattern = pattern.replace(/\\/g, "/").replace(/^\/+/, "");
+            patterns.push(`${normalizedWorkspace}/${normalizedPattern}`);
           }
         }
       } catch {
@@ -466,12 +469,21 @@ export async function backupCreateCommand(
       });
       await fs.writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, "utf8");
 
+      // Filter function to exclude individual entries within archived directories
+      const filterFn = (entryPath: string): boolean => {
+        // Always include manifest
+        if (entryPath === manifestPath) return true;
+        // Check against exclude patterns
+        return !excludePatterns.some(pattern => matchesExcludePattern(entryPath, pattern));
+      };
+
       await tar.c(
         {
           file: tempArchivePath,
           gzip: true,
           portable: true,
           preservePaths: true,
+          filter: filterFn,
           onWriteEntry: (entry) => {
             entry.path = remapArchiveEntryPath({
               entryPath: entry.path,
