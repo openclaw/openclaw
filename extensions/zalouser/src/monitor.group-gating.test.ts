@@ -83,7 +83,9 @@ function installRuntime(params: {
     };
   });
   const readAllowFromStore = vi.fn(async () => []);
-  const readSessionUpdatedAt = vi.fn(() => undefined);
+  const readSessionUpdatedAt = vi.fn(
+    (_params?: { storePath: string; sessionKey: string }): number | undefined => undefined,
+  );
   const buildAgentSessionKey = vi.fn(
     (input: {
       agentId: string;
@@ -452,8 +454,8 @@ describe("zalouser monitor group mention gating", () => {
     const { dispatchReplyWithBufferedBlockDispatcher, readSessionUpdatedAt } = installRuntime({
       commandAuthorized: false,
     });
-    readSessionUpdatedAt.mockImplementation(({ sessionKey }: { sessionKey: string }) =>
-      sessionKey === "agent:main:zalouser:group:321" ? 123 : undefined,
+    readSessionUpdatedAt.mockImplementation((input?: { storePath: string; sessionKey: string }) =>
+      input?.sessionKey === "agent:main:zalouser:group:321" ? 123 : undefined,
     );
     const account = createAccount();
     await __testing.processMessage({

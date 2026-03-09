@@ -56,7 +56,7 @@ final class PeekabooBridgeHostCoordinator {
     private func startIfNeeded() async {
         guard self.host == nil else { return }
 
-        var allowlistedTeamIDs: Set<String> = ["Y5PE65HELJ"]
+        var allowlistedTeamIDs: Set = ["Y5PE65HELJ"]
         if let teamID = Self.currentTeamID() {
             allowlistedTeamIDs.insert(teamID)
         }

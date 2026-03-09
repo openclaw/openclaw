@@ -14,6 +14,36 @@ class TalkModeConfigParsingTest {
   private val json = Json { ignoreUnknownKeys = true }
 
   @Test
+  fun prefersCanonicalResolvedTalkProviderPayload() {
+    val talk =
+      json.parseToJsonElement(
+          """
+          {
+            "resolved": {
+              "provider": "elevenlabs",
+              "config": {
+                "voiceId": "voice-resolved"
+              }
+            },
+            "provider": "elevenlabs",
+            "providers": {
+              "elevenlabs": {
+                "voiceId": "voice-normalized"
+              }
+            }
+          }
+          """.trimIndent(),
+        )
+        .jsonObject
+
+    val selection = TalkModeGatewayConfigParser.selectTalkProviderConfig(talk)
+    assertNotNull(selection)
+    assertEquals("elevenlabs", selection?.provider)
+    assertTrue(selection?.normalizedPayload == true)
+    assertEquals("voice-resolved", selection?.config?.get("voiceId")?.jsonPrimitive?.content)
+  }
+
+  @Test
   fun prefersNormalizedTalkProviderPayload() {
     val talk =
       json.parseToJsonElement(
@@ -31,11 +61,52 @@ class TalkModeConfigParsingTest {
         )
         .jsonObject
 
-    val selection = TalkModeManager.selectTalkProviderConfig(talk)
-    assertNotNull(selection)
-    assertEquals("elevenlabs", selection?.provider)
-    assertTrue(selection?.normalizedPayload == true)
-    assertEquals("voice-normalized", selection?.config?.get("voiceId")?.jsonPrimitive?.content)
+    val selection = TalkModeGatewayConfigParser.selectTalkProviderConfig(talk)
+    assertEquals(null, selection)
+  }
+
+  @Test
+  fun rejectsNormalizedTalkProviderPayloadWhenProviderMissingFromProviders() {
+    val talk =
+      json.parseToJsonElement(
+          """
+          {
+            "provider": "acme",
+            "providers": {
+              "elevenlabs": {
+                "voiceId": "voice-normalized"
+              }
+            }
+          }
+          """.trimIndent(),
+        )
+        .jsonObject
+
+    val selection = TalkModeGatewayConfigParser.selectTalkProviderConfig(talk)
+    assertEquals(null, selection)
+  }
+
+  @Test
+  fun rejectsNormalizedTalkProviderPayloadWhenProviderIsAmbiguous() {
+    val talk =
+      json.parseToJsonElement(
+          """
+          {
+            "providers": {
+              "acme": {
+                "voiceId": "voice-acme"
+              },
+              "elevenlabs": {
+                "voiceId": "voice-normalized"
+              }
+            }
+          }
+          """.trimIndent(),
+        )
+        .jsonObject
+
+    val selection = TalkModeGatewayConfigParser.selectTalkProviderConfig(talk)
+    assertEquals(null, selection)
   }
 
   @Test
@@ -47,11 +118,46 @@ class TalkModeConfigParsingTest {
         put("apiKey", legacyApiKey) // pragma: allowlist secret
       }
 
-    val selection = TalkModeManager.selectTalkProviderConfig(talk)
+    val selection = TalkModeGatewayConfigParser.selectTalkProviderConfig(talk)
     assertNotNull(selection)
     assertEquals("elevenlabs", selection?.provider)
     assertTrue(selection?.normalizedPayload == false)
     assertEquals("voice-legacy", selection?.config?.get("voiceId")?.jsonPrimitive?.content)
     assertEquals("legacy-key", selection?.config?.get("apiKey")?.jsonPrimitive?.content)
+  }
+
+  @Test
+  fun readsConfiguredSilenceTimeoutMs() {
+    val talk = buildJsonObject { put("silenceTimeoutMs", 1500) }
+
+    assertEquals(1500L, TalkModeGatewayConfigParser.resolvedSilenceTimeoutMs(talk))
+  }
+
+  @Test
+  fun defaultsSilenceTimeoutMsWhenMissing() {
+    assertEquals(
+      TalkDefaults.defaultSilenceTimeoutMs,
+      TalkModeGatewayConfigParser.resolvedSilenceTimeoutMs(null),
+    )
+  }
+
+  @Test
+  fun defaultsSilenceTimeoutMsWhenInvalid() {
+    val talk = buildJsonObject { put("silenceTimeoutMs", 0) }
+
+    assertEquals(
+      TalkDefaults.defaultSilenceTimeoutMs,
+      TalkModeGatewayConfigParser.resolvedSilenceTimeoutMs(talk),
+    )
+  }
+
+  @Test
+  fun defaultsSilenceTimeoutMsWhenString() {
+    val talk = buildJsonObject { put("silenceTimeoutMs", "1500") }
+
+    assertEquals(
+      TalkDefaults.defaultSilenceTimeoutMs,
+      TalkModeGatewayConfigParser.resolvedSilenceTimeoutMs(talk),
+    )
   }
 }
