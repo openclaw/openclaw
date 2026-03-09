@@ -30,9 +30,13 @@ async function createTempDir(): Promise<string> {
 
 async function writeCodexAuthFile(params: { homeDir: string; authMode: string }) {
   const codexDir = path.join(params.homeDir, ".codex");
-  await mkdir(codexDir, { recursive: true });
+  await writeCodexAuthFileAt({ codexDir, authMode: params.authMode });
+}
+
+async function writeCodexAuthFileAt(params: { codexDir: string; authMode: string }) {
+  await mkdir(params.codexDir, { recursive: true });
   await writeFile(
-    path.join(codexDir, "auth.json"),
+    path.join(params.codexDir, "auth.json"),
     JSON.stringify({ auth_mode: params.authMode }, null, 2),
     "utf8",
   );
@@ -122,6 +126,50 @@ describe("resolveAcpxSpawnEnv", () => {
 
     expect(env.OPENCLAW_SHELL).toBe("acp");
     expect(env.OPENAI_API_KEY).toBeUndefined();
+  });
+
+  it("prefers CODEX_HOME over HOME when locating auth.json", async () => {
+    const homeDir = await createTempDir();
+    const codexHome = await createTempDir();
+    await writeCodexAuthFile({ homeDir, authMode: "apikey" });
+    await writeCodexAuthFileAt({ codexDir: codexHome, authMode: "chatgpt" });
+
+    const env = resolveAcpxSpawnEnv(
+      {
+        HOME: homeDir,
+        CODEX_HOME: codexHome,
+        OPENAI_API_KEY: "test-openai-key", // pragma: allowlist secret
+      },
+      { agent: "codex" },
+    );
+
+    expect(env.OPENAI_API_KEY).toBeUndefined();
+  });
+
+  it("re-reads auth mode when the Codex auth file changes", async () => {
+    const homeDir = await createTempDir();
+    await writeCodexAuthFile({ homeDir, authMode: "apikey" });
+
+    const firstEnv = resolveAcpxSpawnEnv(
+      {
+        HOME: homeDir,
+        OPENAI_API_KEY: "test-openai-key", // pragma: allowlist secret
+      },
+      { agent: "codex" },
+    );
+    expect(firstEnv.OPENAI_API_KEY).toBe("test-openai-key");
+
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    await writeCodexAuthFile({ homeDir, authMode: "chatgpt" });
+
+    const secondEnv = resolveAcpxSpawnEnv(
+      {
+        HOME: homeDir,
+        OPENAI_API_KEY: "test-openai-key", // pragma: allowlist secret
+      },
+      { agent: "codex" },
+    );
+    expect(secondEnv.OPENAI_API_KEY).toBeUndefined();
   });
 });
 

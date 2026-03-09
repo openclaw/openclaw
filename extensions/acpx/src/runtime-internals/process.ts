@@ -1,5 +1,5 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import path from "node:path";
 import type {
@@ -69,7 +69,12 @@ const CODEX_API_AUTH_ENV_KEYS = [
   "ACPX_AUTH_CODEX_API_KEY",
 ] as const;
 
-const codexAuthModeCache = new Map<string, string | null>();
+type CodexAuthModeCacheEntry = {
+  mtimeMs: number;
+  mode: string | null;
+};
+
+const codexAuthModeCache = new Map<string, CodexAuthModeCacheEntry>();
 
 type CodexAuthFile = {
   auth_mode?: string;
@@ -84,23 +89,34 @@ function resolveHomeDir(baseEnv: NodeJS.ProcessEnv, override?: string): string {
   return envHome || homedir();
 }
 
+function resolveCodexAuthPath(params: { baseEnv: NodeJS.ProcessEnv; homeDir?: string }): string {
+  const codexHome = params.baseEnv.CODEX_HOME?.trim();
+  if (codexHome) {
+    return path.join(codexHome, "auth.json");
+  }
+  const home = resolveHomeDir(params.baseEnv, params.homeDir);
+  return path.join(home, ".codex", "auth.json");
+}
+
 function resolveCodexAuthMode(params: {
   baseEnv: NodeJS.ProcessEnv;
   homeDir?: string;
 }): string | null {
   try {
-    const home = resolveHomeDir(params.baseEnv, params.homeDir);
-    const authPath = path.join(home, ".codex", "auth.json");
-    if (codexAuthModeCache.has(authPath)) {
-      return codexAuthModeCache.get(authPath) ?? null;
-    }
+    const authPath = resolveCodexAuthPath(params);
     if (!existsSync(authPath)) {
+      codexAuthModeCache.delete(authPath);
       return null;
+    }
+    const stat = statSync(authPath);
+    const cached = codexAuthModeCache.get(authPath);
+    if (cached && cached.mtimeMs === stat.mtimeMs) {
+      return cached.mode;
     }
     const parsed = JSON.parse(readFileSync(authPath, "utf8")) as CodexAuthFile;
     const mode =
       typeof parsed.auth_mode === "string" ? parsed.auth_mode.trim().toLowerCase() : null;
-    codexAuthModeCache.set(authPath, mode);
+    codexAuthModeCache.set(authPath, { mtimeMs: stat.mtimeMs, mode });
     return mode;
   } catch {
     return null;
