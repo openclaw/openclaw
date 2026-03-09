@@ -573,3 +573,101 @@ export function applyQianfanConfig(cfg: OpenClawConfig): OpenClawConfig {
   const next = applyQianfanProviderConfig(cfg);
   return applyAgentDefaultModelPrimary(next, QIANFAN_DEFAULT_MODEL_REF);
 }
+
+// Alibaba Cloud Model Studio (Bailian) Coding Plan
+import {
+  BAILIAN_CN_BASE_URL,
+  BAILIAN_GLOBAL_BASE_URL,
+  BAILIAN_DEFAULT_MODEL_REF,
+  buildBailianModelDefinition,
+} from "./onboard-auth.models.js";
+
+function applyBailianProviderConfigWithBaseUrl(
+  cfg: OpenClawConfig,
+  baseUrl: string,
+): OpenClawConfig {
+  const models = { ...cfg.agents?.defaults?.models };
+
+  const bailianModelIds = [
+    "qwen3.5-plus",
+    "qwen3-max-2026-01-23",
+    "qwen3-coder-next",
+    "qwen3-coder-plus",
+    "MiniMax-M2.5",
+    "glm-5",
+    "glm-4.7",
+    "kimi-k2.5",
+  ];
+  for (const modelId of bailianModelIds) {
+    const modelRef = `bailian/${modelId}`;
+    if (!models[modelRef]) {
+      models[modelRef] = {};
+    }
+  }
+  models[BAILIAN_DEFAULT_MODEL_REF] = {
+    ...models[BAILIAN_DEFAULT_MODEL_REF],
+    alias: models[BAILIAN_DEFAULT_MODEL_REF]?.alias ?? "Qwen",
+  };
+
+  const providers = { ...cfg.models?.providers };
+  const existingProvider = providers.bailian;
+  const existingModels = Array.isArray(existingProvider?.models) ? existingProvider.models : [];
+
+  const defaultModels = [
+    buildBailianModelDefinition({ id: "qwen3.5-plus" }),
+    buildBailianModelDefinition({ id: "qwen3-max-2026-01-23" }),
+    buildBailianModelDefinition({ id: "qwen3-coder-next" }),
+    buildBailianModelDefinition({ id: "qwen3-coder-plus" }),
+    buildBailianModelDefinition({ id: "MiniMax-M2.5" }),
+    buildBailianModelDefinition({ id: "glm-5" }),
+    buildBailianModelDefinition({ id: "glm-4.7" }),
+    buildBailianModelDefinition({ id: "kimi-k2.5" }),
+  ];
+
+  const mergedModels = [...existingModels];
+  const seen = new Set(existingModels.map((m) => m.id));
+  for (const model of defaultModels) {
+    if (!seen.has(model.id)) {
+      mergedModels.push(model);
+      seen.add(model.id);
+    }
+  }
+
+  const { apiKey: existingApiKey, ...existingProviderRest } = (existingProvider ?? {}) as Record<
+    string,
+    unknown
+  > as { apiKey?: string };
+  const resolvedApiKey = typeof existingApiKey === "string" ? existingApiKey : undefined;
+  const normalizedApiKey = resolvedApiKey?.trim();
+
+  providers.bailian = {
+    ...existingProviderRest,
+    baseUrl,
+    api: "openai-completions",
+    ...(normalizedApiKey ? { apiKey: normalizedApiKey } : {}),
+    models: mergedModels.length > 0 ? mergedModels : defaultModels,
+  };
+
+  return applyOnboardAuthAgentModelsAndProviders(cfg, { agentModels: models, providers });
+}
+
+export function applyBailianProviderConfig(cfg: OpenClawConfig): OpenClawConfig {
+  const existingBaseUrl = cfg.models?.providers?.bailian?.baseUrl;
+  const resolvedBaseUrl =
+    typeof existingBaseUrl === "string" ? existingBaseUrl : BAILIAN_GLOBAL_BASE_URL;
+  return applyBailianProviderConfigWithBaseUrl(cfg, resolvedBaseUrl);
+}
+
+export function applyBailianProviderConfigCn(cfg: OpenClawConfig): OpenClawConfig {
+  return applyBailianProviderConfigWithBaseUrl(cfg, BAILIAN_CN_BASE_URL);
+}
+
+export function applyBailianConfig(cfg: OpenClawConfig): OpenClawConfig {
+  const next = applyBailianProviderConfig(cfg);
+  return applyAgentDefaultModelPrimary(next, BAILIAN_DEFAULT_MODEL_REF);
+}
+
+export function applyBailianConfigCn(cfg: OpenClawConfig): OpenClawConfig {
+  const next = applyBailianProviderConfigCn(cfg);
+  return applyAgentDefaultModelPrimary(next, BAILIAN_DEFAULT_MODEL_REF);
+}
