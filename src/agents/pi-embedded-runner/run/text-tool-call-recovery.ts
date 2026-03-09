@@ -153,10 +153,26 @@ function resolveRecoveredToolCallName(
 function findMarkdownCodeRanges(text: string): TextRange[] {
   const ranges: TextRange[] = [];
 
-  const fencedCodeRe = /```[\s\S]*?```/g;
-  for (const match of text.matchAll(fencedCodeRe)) {
-    const start = match.index ?? 0;
-    ranges.push({ start, end: start + match[0].length });
+  const fenceMarker = "```";
+  let searchFrom = 0;
+  let openFenceStart: number | null = null;
+  while (searchFrom < text.length) {
+    const markerIndex = text.indexOf(fenceMarker, searchFrom);
+    if (markerIndex === -1) {
+      break;
+    }
+    if (openFenceStart === null) {
+      openFenceStart = markerIndex;
+    } else {
+      ranges.push({ start: openFenceStart, end: markerIndex + fenceMarker.length });
+      openFenceStart = null;
+    }
+    searchFrom = markerIndex + fenceMarker.length;
+  }
+  if (openFenceStart !== null) {
+    // Treat unterminated fences as code through end-of-text so streamed
+    // partials cannot execute tool-call examples before the fence closes.
+    ranges.push({ start: openFenceStart, end: text.length });
   }
 
   const inlineCodeRe = /`[^`\r\n]*`/g;
@@ -169,8 +185,7 @@ function findMarkdownCodeRanges(text: string): TextRange[] {
     }
   }
 
-  ranges.sort((a, b) => a.start - b.start || a.end - b.end);
-  return ranges;
+  return ranges.toSorted((a, b) => a.start - b.start || a.end - b.end);
 }
 
 function isIndexInsideRange(index: number, ranges: TextRange[]): boolean {
@@ -251,9 +266,12 @@ function findBareTextToolCalls(
   }
 
   const recovered: RecoveredTextToolCall[] = [];
-  TEXT_TOOL_CALL_START_RE.lastIndex = 0;
+  const textToolCallStartRe = new RegExp(
+    TEXT_TOOL_CALL_START_RE.source,
+    TEXT_TOOL_CALL_START_RE.flags,
+  );
   let match: RegExpExecArray | null;
-  while ((match = TEXT_TOOL_CALL_START_RE.exec(text))) {
+  while ((match = textToolCallStartRe.exec(text))) {
     const prefix = match[1] ?? "";
     const rawName = (match[2] ?? "").trim();
     if (!rawName) {
@@ -290,7 +308,7 @@ function findBareTextToolCalls(
     }
 
     recovered.push({ start: nameStart, end, name: normalizedName, arguments: args });
-    TEXT_TOOL_CALL_START_RE.lastIndex = end;
+    textToolCallStartRe.lastIndex = end;
   }
 
   return recovered;
