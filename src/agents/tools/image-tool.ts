@@ -114,6 +114,8 @@ export function resolveImageModelConfigForTool(params: {
     preferred = `${primary.provider}/MiniMax-VL-01`;
   } else if (providerOk && providerVisionFromConfig) {
     preferred = providerVisionFromConfig;
+  } else if (primary.provider === "google" && providerOk) {
+    preferred = "google/gemini-3-flash-preview";
   } else if (primary.provider === "zai" && providerOk) {
     preferred = "zai/glm-4.6v";
   } else if (primary.provider === "openai" && openaiOk) {

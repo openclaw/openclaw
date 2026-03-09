@@ -299,6 +299,21 @@ describe("image tool implicit imageModel config", () => {
     });
   });
 
+  it("pairs google primary with gemini-3-flash-preview (and fallbacks) when auth exists (regression #41210)", async () => {
+    await withTempAgentDir(async (agentDir) => {
+      vi.stubEnv("GEMINI_API_KEY", "gemini-test");
+      vi.stubEnv("OPENAI_API_KEY", "openai-test");
+      vi.stubEnv("ANTHROPIC_API_KEY", "anthropic-test");
+      const cfg: OpenClawConfig = {
+        agents: { defaults: { model: { primary: "google/gemini-3-pro" } } },
+      };
+      expect(resolveImageModelConfigForTool({ cfg, agentDir })).toEqual(
+        createDefaultImageFallbackExpectation("google/gemini-3-flash-preview"),
+      );
+      expect(createImageTool({ config: cfg, agentDir })).not.toBeNull();
+    });
+  });
+
   it("pairs zai primary with glm-4.6v (and fallbacks) when auth exists", async () => {
     await withTempAgentDir(async (agentDir) => {
       vi.stubEnv("ZAI_API_KEY", "zai-test");
