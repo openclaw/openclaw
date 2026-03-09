@@ -30,27 +30,6 @@ function createOpenAiFileModelsConfig(): NonNullable<OpenClawConfig["models"]> {
   };
 }
 
-function withoutRuntimeOnlyFileProviderConfig(config: OpenClawConfig): OpenClawConfig {
-  const nextConfig = structuredClone(config);
-  const providers = nextConfig.secrets?.providers;
-  if (!providers) {
-    return nextConfig;
-  }
-
-  for (const providerConfig of Object.values(providers)) {
-    if (
-      providerConfig &&
-      typeof providerConfig === "object" &&
-      "source" in providerConfig &&
-      providerConfig.source === "file"
-    ) {
-      delete (providerConfig as { allowInsecurePath?: boolean }).allowInsecurePath;
-    }
-  }
-
-  return nextConfig;
-}
-
 function loadAuthStoreWithProfiles(profiles: AuthProfileStore["profiles"]): AuthProfileStore {
   return {
     version: 1,
@@ -623,7 +602,7 @@ describe("secrets runtime snapshot", () => {
       });
 
       await writeConfigFile({
-        ...withoutRuntimeOnlyFileProviderConfig(loadConfig()),
+        ...loadConfig(),
         gateway: { auth: { mode: "token" } },
       });
 
@@ -718,7 +697,7 @@ describe("secrets runtime snapshot", () => {
 
       await expect(
         writeConfigFile({
-          ...withoutRuntimeOnlyFileProviderConfig(loadConfig()),
+          ...loadConfig(),
           gateway: { auth: { mode: "token" } },
         }),
       ).rejects.toThrow(

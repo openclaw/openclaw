@@ -94,6 +94,7 @@ const SecretsFileProviderSchema = z
     source: z.literal("file"),
     path: z.string().min(1),
     mode: z.union([z.literal("singleValue"), z.literal("json")]).optional(),
+    allowInsecurePath: z.boolean().optional(),
     timeoutMs: z.number().int().positive().max(120000).optional(),
     maxBytes: z
       .number()
