@@ -70,4 +70,55 @@ describe("config validation allowed-values metadata", () => {
       expect(issue?.message).not.toContain("(allowed:");
     }
   });
+
+  it("surfaces specific sub-issue for invalid_union bindings errors instead of generic 'Invalid input'", () => {
+    const result = validateConfigObjectRaw({
+      bindings: [
+        {
+          type: "acp",
+          agentId: "test",
+          match: { channel: "discord", peer: { kind: "direct", id: "123" } },
+          acp: { agent: "claude" },
+        },
+      ],
+    });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.issues).not.toContainEqual({
+        path: "bindings.0",
+        message: "Invalid input",
+      });
+      expect(result.issues).toContainEqual({
+        path: "bindings.0.acp",
+        message: 'Unrecognized key: "agent"',
+      });
+    }
+  });
+
+  it("prefers the matching union branch for top-level unexpected keys", () => {
+    const result = validateConfigObjectRaw({
+      bindings: [
+        {
+          type: "acp",
+          agentId: "test",
+          match: { channel: "discord", peer: { kind: "direct", id: "123" } },
+          acp: { mode: "persistent" },
+          extraTopLevel: true,
+        },
+      ],
+    });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.issues).not.toContainEqual({
+        path: "bindings.0.type",
+        message: 'Invalid input: expected "route"',
+      });
+      expect(result.issues).toContainEqual({
+        path: "bindings.0",
+        message: 'Unrecognized key: "extraTopLevel"',
+      });
+    }
+  });
 });

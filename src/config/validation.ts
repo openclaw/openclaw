@@ -262,6 +262,124 @@ function collectAllowedValuesFromUnknownIssue(issue: unknown): unknown[] {
   return collection.values;
 }
 
+/**
+ * For `invalid_union` issues, Zod wraps branch errors behind a generic
+ * "Invalid input" message. Walk the branch errors and pick the most
+ * informative sub-issue so the user sees, e.g.:
+ *
+ *   bindings.2.acp: Unrecognized key: "agent"
+ *
+ * instead of the opaque:
+ *
+ *   bindings.2: Invalid input
+ *
+ * We prefer issues from branches whose `type` discriminator already matches
+ * the user input, so a non-matching branch's deeper path does not outrank the
+ * real unexpected-key error on the matching branch.
+ */
+function extractBestUnionSubIssue(
+  record: UnknownIssueRecord,
+  parentPath: string,
+): ConfigValidationIssue | null {
+  const code = typeof record.code === "string" ? record.code : "";
+  if (code !== "invalid_union") {
+    return null;
+  }
+
+  const branchGroups: UnknownIssueRecord[][] = [];
+  if (Array.isArray(record.unionErrors)) {
+    for (const zodError of record.unionErrors) {
+      const err = toIssueRecord(zodError);
+      if (!err || !Array.isArray(err.issues)) {
+        continue;
+      }
+      branchGroups.push(err.issues.map((issue) => toIssueRecord(issue)).filter(Boolean) as UnknownIssueRecord[]);
+    }
+  }
+  if (Array.isArray(record.errors)) {
+    for (const errGroup of record.errors) {
+      if (!Array.isArray(errGroup)) {
+        continue;
+      }
+      branchGroups.push(
+        errGroup.map((issue) => toIssueRecord(issue)).filter(Boolean) as UnknownIssueRecord[],
+      );
+    }
+  }
+  if (branchGroups.length === 0) {
+    return null;
+  }
+
+  let bestIssue: UnknownIssueRecord | null = null;
+  let bestBranchMatchesDiscriminator = false;
+  let bestIssueIsUnrecognized = false;
+  let bestIssuePathLen = -1;
+
+  for (const branch of branchGroups) {
+    let branchMatchesDiscriminator = true;
+    let branchBestIssue: UnknownIssueRecord | null = null;
+    let branchBestIsUnrecognized = false;
+    let branchBestPathLen = -1;
+
+    for (const issue of branch) {
+      const issuePath = toConfigPathSegments(issue.path);
+      const issueCode = typeof issue.code === "string" ? issue.code : "";
+      const issueIsUnrecognized = issueCode === "unrecognized_keys";
+      const issueIsTypeMismatch =
+        issueCode === "invalid_value" &&
+        issuePath.length === 1 &&
+        issuePath[0] === "type";
+
+      if (issueIsTypeMismatch) {
+        branchMatchesDiscriminator = false;
+      }
+
+      const issuePathLen = issuePath.length;
+      const issueIsBetter =
+        issueIsUnrecognized && !branchBestIsUnrecognized
+          ? true
+          : issueIsUnrecognized === branchBestIsUnrecognized && issuePathLen > branchBestPathLen;
+
+      if (issueIsBetter) {
+        branchBestIssue = issue;
+        branchBestIsUnrecognized = issueIsUnrecognized;
+        branchBestPathLen = issuePathLen;
+      }
+    }
+
+    if (!branchBestIssue) {
+      continue;
+    }
+
+    const branchIsBetter =
+      branchMatchesDiscriminator && !bestBranchMatchesDiscriminator
+        ? true
+        : branchMatchesDiscriminator === bestBranchMatchesDiscriminator &&
+            branchBestIsUnrecognized &&
+            !bestIssueIsUnrecognized
+          ? true
+          : branchMatchesDiscriminator === bestBranchMatchesDiscriminator &&
+              branchBestIsUnrecognized === bestIssueIsUnrecognized &&
+              branchBestPathLen > bestIssuePathLen;
+
+    if (branchIsBetter) {
+      bestIssue = branchBestIssue;
+      bestBranchMatchesDiscriminator = branchMatchesDiscriminator;
+      bestIssueIsUnrecognized = branchBestIsUnrecognized;
+      bestIssuePathLen = branchBestPathLen;
+    }
+  }
+
+  if (!bestIssue) {
+    return null;
+  }
+
+  const subPath = formatConfigPath(toConfigPathSegments(bestIssue.path));
+  const fullPath = parentPath && subPath ? `${parentPath}.${subPath}` : parentPath || subPath;
+  const subMessage = typeof bestIssue.message === "string" ? bestIssue.message : "Invalid input";
+  return { path: fullPath, message: subMessage };
+}
+
 function isObjectSecretRefCandidate(value: unknown): boolean {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     return false;
@@ -354,7 +472,22 @@ function mapZodIssueToConfigIssue(issue: unknown): ConfigValidationIssue {
   const record = toIssueRecord(issue);
   const path = formatConfigPath(toConfigPathSegments(record?.path));
   const message = typeof record?.message === "string" ? record.message : "Invalid input";
+
   const allowedValuesSummary = summarizeAllowedValues(collectAllowedValuesFromUnknownIssue(issue));
+
+  // For union errors where we could NOT extract useful allowed-values,
+  // try to surface the most specific sub-issue instead of generic "Invalid input".
+  if (
+    record &&
+    typeof record.code === "string" &&
+    record.code === "invalid_union" &&
+    !allowedValuesSummary
+  ) {
+    const betterIssue = extractBestUnionSubIssue(record, path);
+    if (betterIssue) {
+      return betterIssue;
+    }
+  }
 
   if (!allowedValuesSummary) {
     return { path, message };
