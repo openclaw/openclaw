@@ -262,33 +262,72 @@ describe("spawnAcpDirect", () => {
       };
     });
 
-    hoisted.sessionBindingCapabilitiesMock
-      .mockReset()
-      .mockReturnValue(createSessionBindingCapabilities());
-    hoisted.sessionBindingBindMock
-      .mockReset()
-      .mockImplementation(
-        async (input: {
-          targetSessionKey: string;
-          conversation: { accountId: string };
-          metadata?: Record<string, unknown>;
-        }) =>
-          createSessionBinding({
+    hoisted.sessionBindingCapabilitiesMock.mockReset().mockImplementation((params: unknown) => {
+      const channel = (params as { channel?: string } | undefined)?.channel;
+      if (channel === "telegram") {
+        return {
+          ...createSessionBindingCapabilities(),
+          placements: ["current"] as const,
+        };
+      }
+      return createSessionBindingCapabilities();
+    });
+    hoisted.sessionBindingBindMock.mockReset().mockImplementation(
+      async (input: {
+        targetSessionKey: string;
+        placement?: "current" | "child";
+        conversation: {
+          channel: string;
+          accountId: string;
+          conversationId: string;
+        };
+        metadata?: Record<string, unknown>;
+      }) => {
+        const metadata = {
+          boundBy: typeof input.metadata?.boundBy === "string" ? input.metadata.boundBy : "system",
+          agentId: "codex",
+          webhookId: "wh-1",
+        };
+        if (input.conversation.channel === "telegram") {
+          return createSessionBinding({
+            bindingId: `${input.conversation.accountId}:${input.conversation.conversationId}`,
+            targetSessionKey: input.targetSessionKey,
+            conversation: {
+              channel: "telegram",
+              accountId: input.conversation.accountId,
+              conversationId: input.conversation.conversationId,
+            },
+            metadata,
+          });
+        }
+        if (input.placement === "current") {
+          const conversationId = input.conversation.conversationId;
+          return createSessionBinding({
+            bindingId: `${input.conversation.accountId}:${conversationId}`,
             targetSessionKey: input.targetSessionKey,
             conversation: {
               channel: "discord",
               accountId: input.conversation.accountId,
-              conversationId: "child-thread",
-              parentConversationId: "parent-channel",
+              conversationId,
+              parentConversationId: conversationId.startsWith("dm-")
+                ? conversationId
+                : "parent-channel",
             },
-            metadata: {
-              boundBy:
-                typeof input.metadata?.boundBy === "string" ? input.metadata.boundBy : "system",
-              agentId: "codex",
-              webhookId: "wh-1",
-            },
-          }),
-      );
+            metadata,
+          });
+        }
+        return createSessionBinding({
+          targetSessionKey: input.targetSessionKey,
+          conversation: {
+            channel: "discord",
+            accountId: input.conversation.accountId,
+            conversationId: "child-thread",
+            parentConversationId: "parent-channel",
+          },
+          metadata,
+        });
+      },
+    );
     hoisted.sessionBindingResolveByConversationMock.mockReset().mockReturnValue(null);
     hoisted.sessionBindingListBySessionMock.mockReset().mockReturnValue([]);
     hoisted.sessionBindingUnbindMock.mockReset().mockResolvedValue([]);
@@ -328,7 +367,7 @@ describe("spawnAcpDirect", () => {
       });
   });
 
-  it("spawns ACP session, binds a new thread, and dispatches initial task", async () => {
+  it("reuses the current Discord thread for native ACP session spawns", async () => {
     const result = await spawnAcpDirect(
       {
         task: "Investigate flaky tests",
@@ -359,7 +398,7 @@ describe("spawnAcpDirect", () => {
     expect(hoisted.sessionBindingBindMock).toHaveBeenCalledWith(
       expect.objectContaining({
         targetKind: "session",
-        placement: "child",
+        placement: "current",
       }),
     );
     expectResolvedIntroTextInBindMetadata();
@@ -368,8 +407,8 @@ describe("spawnAcpDirect", () => {
       .map((call: unknown[]) => call[0] as { method?: string; params?: Record<string, unknown> })
       .find((request) => request.method === "agent");
     expect(agentCall?.params?.sessionKey).toMatch(/^agent:codex:acp:/);
-    expect(agentCall?.params?.to).toBe("channel:child-thread");
-    expect(agentCall?.params?.threadId).toBe("child-thread");
+    expect(agentCall?.params?.to).toBe("channel:parent-channel");
+    expect(agentCall?.params?.threadId).toBe("requester-thread");
     expect(agentCall?.params?.deliver).toBe(true);
     expect(hoisted.initializeSessionMock).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -383,7 +422,37 @@ describe("spawnAcpDirect", () => {
     );
     expect(transcriptCalls).toHaveLength(2);
     expect(transcriptCalls[0]?.threadId).toBeUndefined();
-    expect(transcriptCalls[1]?.threadId).toBe("child-thread");
+    expect(transcriptCalls[1]?.threadId).toBe("requester-thread");
+  });
+
+  it("creates a Discord child thread when spawning from a parent channel", async () => {
+    const result = await spawnAcpDirect(
+      {
+        task: "Investigate flaky tests",
+        agentId: "codex",
+        mode: "session",
+        thread: true,
+      },
+      {
+        agentSessionKey: "agent:main:discord:channel:parent-channel",
+        agentChannel: "discord",
+        agentAccountId: "default",
+        agentTo: "channel:parent-channel",
+      },
+    );
+
+    expect(result.status).toBe("accepted");
+    expect(hoisted.sessionBindingBindMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        targetKind: "session",
+        placement: "child",
+      }),
+    );
+    const agentCall = hoisted.callGatewayMock.mock.calls
+      .map((call: unknown[]) => call[0] as { method?: string; params?: Record<string, unknown> })
+      .find((request) => request.method === "agent");
+    expect(agentCall?.params?.to).toBe("channel:parent-channel");
+    expect(agentCall?.params?.threadId).toBe("child-thread");
   });
 
   it("does not inline delivery for fresh oneshot ACP runs", async () => {
@@ -981,11 +1050,92 @@ describe("spawnAcpDirect", () => {
 
     expect(result.status).toBe("accepted");
     expect(result.mode).toBe("session");
+    expect(hoisted.sessionBindingBindMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        placement: "current",
+        conversation: expect.objectContaining({
+          channel: "telegram",
+          conversationId: "-1003342490704:topic:2",
+        }),
+      }),
+    );
     const agentCall = hoisted.callGatewayMock.mock.calls
       .map((call: unknown[]) => call[0] as { method?: string; params?: Record<string, unknown> })
       .find((request) => request.method === "agent");
     expect(agentCall?.params?.deliver).toBe(true);
     expect(agentCall?.params?.channel).toBe("telegram");
+    expect(agentCall?.params?.to).toBe("telegram:-1003342490704");
+    expect(agentCall?.params?.threadId).toBe("2");
+  });
+
+  it("binds non-topic Telegram groups to the current conversation", async () => {
+    const result = await spawnAcpDirect(
+      {
+        task: "Investigate flaky tests",
+        agentId: "codex",
+        mode: "session",
+        thread: true,
+      },
+      {
+        agentSessionKey: "agent:main:telegram:group:-1003342490704",
+        agentChannel: "telegram",
+        agentAccountId: "default",
+        agentTo: "telegram:-1003342490704",
+      },
+    );
+
+    expect(result.status).toBe("accepted");
+    expect(hoisted.sessionBindingBindMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        placement: "current",
+        conversation: expect.objectContaining({
+          channel: "telegram",
+          conversationId: "-1003342490704",
+        }),
+      }),
+    );
+    const agentCall = hoisted.callGatewayMock.mock.calls
+      .map((call: unknown[]) => call[0] as { method?: string; params?: Record<string, unknown> })
+      .find((request) => request.method === "agent");
+    expect(agentCall?.params?.deliver).toBe(true);
+    expect(agentCall?.params?.channel).toBe("telegram");
+    expect(agentCall?.params?.to).toBe("telegram:-1003342490704");
+    expect(agentCall?.params?.threadId).toBeUndefined();
+  });
+
+  it("binds Discord DMs to the current conversation instead of attempting a child thread", async () => {
+    const result = await spawnAcpDirect(
+      {
+        task: "Investigate flaky tests",
+        agentId: "codex",
+        mode: "session",
+        thread: true,
+      },
+      {
+        agentSessionKey: "agent:main:discord:direct:dm-1",
+        agentChannel: "discord",
+        agentAccountId: "default",
+        agentTo: "channel:dm-1",
+      },
+    );
+
+    expect(result.status).toBe("accepted");
+    expect(hoisted.sessionBindingBindMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        placement: "current",
+        conversation: expect.objectContaining({
+          channel: "discord",
+          conversationId: "dm-1",
+        }),
+      }),
+    );
+    const agentCall = hoisted.callGatewayMock.mock.calls
+      .map((call: unknown[]) => call[0] as { method?: string; params?: Record<string, unknown> })
+      .find((request) => request.method === "agent");
+    expect(agentCall?.params?.deliver).toBe(true);
+    expect(agentCall?.params?.channel).toBe("discord");
+    expect(agentCall?.params?.to).toBe("channel:dm-1");
+    expect(agentCall?.params?.threadId).toBeUndefined();
   });
 
   it("disposes pre-registered parent relay when initial ACP dispatch fails", async () => {
