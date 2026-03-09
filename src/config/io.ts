@@ -825,8 +825,10 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
           // after any prior writes (e.g., auth token bootstrap) complete.
           // Previously, the stale config captured at startup time was written
           // directly, which caused the merge-patch to undo concurrent changes.
+          // We capture the ConfigIO instance ahead of the queue so that if the environment
+          // shifts (e.g. testing) while waiting, the path remains anchored.
+          const freshIo = createConfigIO(deps);
           void enqueueConfigWrite(async () => {
-            const freshIo = createConfigIO(deps);
             const { snapshot: freshSnapshot } = await freshIo.readConfigFileSnapshotForWrite();
             if (!freshSnapshot.valid) {
               return; // Do not persist auto-secrets into an invalid/corrupted config file
