@@ -29,7 +29,7 @@ import { resolveUserPath } from "../../../utils.js";
 import { normalizeMessageChannel } from "../../../utils/message-channel.js";
 import { isReasoningTagProvider } from "../../../utils/provider-utils.js";
 import { resolveOpenClawAgentDir } from "../../agent-paths.js";
-import { resolveSessionAgentIds } from "../../agent-scope.js";
+import { hasConfiguredModelFallbacks, resolveSessionAgentIds } from "../../agent-scope.js";
 import { createAnthropicPayloadLogger } from "../../anthropic-payload-log.js";
 import {
   analyzeBootstrapBudget,
@@ -1122,6 +1122,22 @@ export async function runEmbeddedAttempt(
         contextEngineInfo: params.contextEngine?.info,
       });
 
+      // When model fallback is configured, disable pi-coding-agent's built-in
+      // auto-retry for rate-limit / overloaded errors.  That retry layer adds
+      // up to 3 extra round-trips with exponential backoff (2 s, 4 s, 8 s) on
+      // top of the provider's own HTTP-level retries, delaying the outer
+      // fallback loop by ~60 s.  Disabling it lets FailoverError propagate
+      // immediately so the next candidate model is tried without wasted time.
+      if (
+        hasConfiguredModelFallbacks({
+          cfg: params.config,
+          agentId: params.agentId,
+          sessionKey: params.sessionKey,
+        })
+      ) {
+        settingsManager.applyOverrides({ retry: { enabled: false } });
+      }
+
       // Sets compaction/pruning runtime state and returns extension factories
       // that must be passed to the resource loader for the safeguard to be active.
       const extensionFactories = buildEmbeddedExtensionFactories({
@@ -1383,6 +1399,24 @@ export async function runEmbeddedAttempt(
         activeSession.agent.streamFn = anthropicPayloadLogger.wrapStreamFn(
           activeSession.agent.streamFn,
         );
+      }
+
+      // When model fallback is configured, cap the provider-level retry delay
+      // to 1 ms so the stream function bails on the first server-requested
+      // back-off (typically 10-20 s for Gemini 429s).  This lets the outer
+      // fallback loop switch to the next candidate almost immediately instead
+      // of burning ~60-90 s on internal retries that will all hit the same
+      // rate-limit window.
+      if (
+        hasConfiguredModelFallbacks({
+          cfg: params.config,
+          agentId: params.agentId,
+          sessionKey: params.sessionKey,
+        })
+      ) {
+        const inner = activeSession.agent.streamFn;
+        activeSession.agent.streamFn = (model, context, options) =>
+          inner(model, context, { ...options, maxRetryDelayMs: 1 });
       }
 
       try {
