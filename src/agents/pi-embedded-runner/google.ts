@@ -560,9 +560,11 @@ export function stripConsecutiveAssistantErrors(messages: AgentMessage[]): Agent
     }
     // Keep only the last entry of the run (most recent error detail).
     out.push(messages[runEnd - 1]);
-    if (runEnd - i > 1) {
+    const strippedCount = runEnd - i - 1;
+    if (strippedCount > 0) {
+      const entryLabel = strippedCount === 1 ? "entry" : "entries";
       log.warn(
-        `stripped ${runEnd - i - 1} consecutive assistant error entries from session history`,
+        `stripped ${strippedCount} consecutive assistant error ${entryLabel} from session history`,
       );
     }
     i = runEnd;

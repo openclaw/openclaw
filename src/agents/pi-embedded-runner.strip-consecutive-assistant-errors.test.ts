@@ -1,5 +1,16 @@
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+
+vi.mock("./pi-embedded-runner/logger.js", () => ({
+  log: {
+    debug: vi.fn(),
+    info: vi.fn(),
+    warn: vi.fn(),
+    error: vi.fn(),
+  },
+}));
+
 import { stripConsecutiveAssistantErrors } from "./pi-embedded-runner/google.js";
+import { log } from "./pi-embedded-runner/logger.js";
 import {
   castAgentMessages,
   makeAgentAssistantMessage,
@@ -7,6 +18,10 @@ import {
 } from "./test-helpers/agent-message-fixtures.js";
 
 describe("stripConsecutiveAssistantErrors", () => {
+  beforeEach(() => {
+    vi.mocked(log.warn).mockReset();
+  });
+
   const makeErrorAssistant = (errorMessage = "Connection error.") =>
     makeAgentAssistantMessage({
       content: [],
@@ -49,6 +64,9 @@ describe("stripConsecutiveAssistantErrors", () => {
     expect(result).toHaveLength(2);
     expect(result[0]).toBe(msgs[0]); // user message preserved
     expect(result[1]).toBe(msgs[2]); // last error kept
+    expect(log.warn).toHaveBeenCalledWith(
+      "stripped 1 consecutive assistant error entry from session history",
+    );
   });
 
   it("collapses three consecutive error entries into the last one", () => {
@@ -59,6 +77,9 @@ describe("stripConsecutiveAssistantErrors", () => {
     const result = stripConsecutiveAssistantErrors(msgs);
     expect(result).toHaveLength(2);
     expect(result[1]).toBe(msgs[3]); // last error kept
+    expect(log.warn).toHaveBeenCalledWith(
+      "stripped 2 consecutive assistant error entries from session history",
+    );
   });
 
   it("preserves non-error assistant between error runs", () => {
