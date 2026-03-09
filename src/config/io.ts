@@ -84,6 +84,7 @@ const OPEN_DM_POLICY_ALLOW_FROM_RE =
 
 const CONFIG_AUDIT_LOG_FILENAME = "config-audit.jsonl";
 const loggedInvalidConfigs = new Set<string>();
+const loggedConfigWarningFingerprints = new Map<string, string>();
 
 type ConfigWriteAuditResult = "rename" | "copy-fallback" | "failed";
 
@@ -766,7 +767,14 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
               `- ${sanitizeTerminalText(iss.path || "<root>")}: ${sanitizeTerminalText(iss.message)}`,
           )
           .join("\n");
-        deps.logger.warn(`Config warnings:\\n${details}`);
+        const rawHash = hashConfigRaw(raw);
+        const fingerprint = hashConfigRaw(`${rawHash}\n${details}`);
+        if (loggedConfigWarningFingerprints.get(configPath) !== fingerprint) {
+          loggedConfigWarningFingerprints.set(configPath, fingerprint);
+          deps.logger.warn(`Config warnings:\\n${details}`);
+        }
+      } else {
+        loggedConfigWarningFingerprints.delete(configPath);
       }
       warnIfConfigFromFuture(validated.config, deps.logger);
       const cfg = applyTalkConfigNormalization(
