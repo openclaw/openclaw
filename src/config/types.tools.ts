@@ -134,6 +134,11 @@ export type MediaToolsConfig = {
   models?: MediaUnderstandingModelConfig[];
   /** Max concurrent media understanding runs. */
   concurrency?: number;
+  /**
+   * Global media staging/store byte cap applied before modality-specific limits.
+   * Default: 5 MB.
+   */
+  maxBytes?: number;
   image?: MediaUnderstandingConfig;
   audio?: MediaUnderstandingConfig;
   video?: MediaUnderstandingConfig;

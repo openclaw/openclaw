@@ -5,6 +5,8 @@ import { request as httpRequest } from "node:http";
 import { request as httpsRequest } from "node:https";
 import path from "node:path";
 import { pipeline } from "node:stream/promises";
+import type { OpenClawConfig } from "../config/config.js";
+import { loadConfig } from "../config/config.js";
 import { SafeOpenError, readLocalFileSafely } from "../infra/fs-safe.js";
 import { resolvePinnedHostname } from "../infra/net/ssrf.js";
 import { resolveConfigDir } from "../utils.js";
@@ -12,7 +14,6 @@ import { detectMime, extensionForMime } from "./mime.js";
 
 const resolveMediaDir = () => path.join(resolveConfigDir(), "media");
 export const MEDIA_MAX_BYTES = 5 * 1024 * 1024; // 5MB default
-const MAX_BYTES = MEDIA_MAX_BYTES;
 const DEFAULT_TTL_MS = 2 * 60 * 1000; // 2 minutes
 // Files are intentionally readable by non-owner UIDs so Docker sandbox containers can access
 // inbound media. The containing state/media directories remain 0o700, which is the trust boundary.
@@ -84,6 +85,30 @@ export function extractOriginalFilename(filePath: string): string {
 
 export function getMediaDir() {
   return resolveMediaDir();
+}
+
+export function resolveMediaMaxBytes(config?: OpenClawConfig): number {
+  const configured = config?.tools?.media?.maxBytes;
+  if (typeof configured === "number" && Number.isFinite(configured) && configured > 0) {
+    return configured;
+  }
+  if (config) {
+    return MEDIA_MAX_BYTES;
+  }
+  try {
+    const loadedConfig = loadConfig();
+    const loadedMaxBytes = loadedConfig.tools?.media?.maxBytes;
+    if (
+      typeof loadedMaxBytes === "number" &&
+      Number.isFinite(loadedMaxBytes) &&
+      loadedMaxBytes > 0
+    ) {
+      return loadedMaxBytes;
+    }
+  } catch {
+    // Fall back to the built-in default when config is unavailable or invalid.
+  }
+  return MEDIA_MAX_BYTES;
 }
 
 export async function ensureMediaDir() {
@@ -182,6 +207,7 @@ async function downloadToFile(
   dest: string,
   headers?: Record<string, string>,
   maxRedirects = 5,
+  maxBytes = resolveMediaMaxBytes(),
 ): Promise<{ headerMime?: string; sniffBuffer: Buffer; size: number }> {
   return await new Promise((resolve, reject) => {
     let parsedUrl: URL;
@@ -207,7 +233,7 @@ async function downloadToFile(
               return;
             }
             const redirectUrl = new URL(location, url).href;
-            resolve(downloadToFile(redirectUrl, dest, headers, maxRedirects - 1));
+            resolve(downloadToFile(redirectUrl, dest, headers, maxRedirects - 1, maxBytes));
             return;
           }
           if (!res.statusCode || res.statusCode >= 400) {
@@ -224,8 +250,10 @@ async function downloadToFile(
               sniffChunks.push(chunk);
               sniffLen += chunk.length;
             }
-            if (total > MAX_BYTES) {
-              req.destroy(new Error("Media exceeds 5MB limit"));
+            if (total > maxBytes) {
+              req.destroy(
+                new Error(`Media exceeds ${(maxBytes / (1024 * 1024)).toFixed(0)}MB limit`),
+              );
             }
           });
           pipeline(res, out)
@@ -272,7 +300,7 @@ export class SaveMediaSourceError extends Error {
   }
 }
 
-function toSaveMediaSourceError(err: SafeOpenError): SaveMediaSourceError {
+function toSaveMediaSourceError(err: SafeOpenError, maxBytes: number): SaveMediaSourceError {
   switch (err.code) {
     case "symlink":
       return new SaveMediaSourceError("invalid-path", "Media path must not be a symlink", {
@@ -285,7 +313,11 @@ function toSaveMediaSourceError(err: SafeOpenError): SaveMediaSourceError {
         cause: err,
       });
     case "too-large":
-      return new SaveMediaSourceError("too-large", "Media exceeds 5MB limit", { cause: err });
+      return new SaveMediaSourceError(
+        "too-large",
+        `Media exceeds ${(maxBytes / (1024 * 1024)).toFixed(0)}MB limit`,
+        { cause: err },
+      );
     case "not-found":
       return new SaveMediaSourceError("not-found", "Media path does not exist", { cause: err });
     case "outside-workspace":
@@ -304,6 +336,7 @@ export async function saveMediaSource(
   source: string,
   headers?: Record<string, string>,
   subdir = "",
+  maxBytes = resolveMediaMaxBytes(),
 ): Promise<SavedMedia> {
   const baseDir = resolveMediaDir();
   const dir = subdir ? path.join(baseDir, subdir) : baseDir;
@@ -313,7 +346,7 @@ export async function saveMediaSource(
   if (looksLikeUrl(source)) {
     const tempDest = path.join(dir, `${baseId}.tmp`);
     const { headerMime, sniffBuffer, size } = await retryAfterRecreatingDir(dir, () =>
-      downloadToFile(source, tempDest, headers),
+      downloadToFile(source, tempDest, headers, 5, maxBytes),
     );
     const mime = await detectMime({
       buffer: sniffBuffer,
@@ -328,7 +361,7 @@ export async function saveMediaSource(
   }
   // local path
   try {
-    const { buffer, stat } = await readLocalFileSafely({ filePath: source, maxBytes: MAX_BYTES });
+    const { buffer, stat } = await readLocalFileSafely({ filePath: source, maxBytes });
     const mime = await detectMime({ buffer, filePath: source });
     const ext = extensionForMime(mime) ?? path.extname(source);
     const id = ext ? `${baseId}${ext}` : baseId;
@@ -337,7 +370,7 @@ export async function saveMediaSource(
     return { id, path: dest, size: stat.size, contentType: mime };
   } catch (err) {
     if (err instanceof SafeOpenError) {
-      throw toSaveMediaSourceError(err);
+      throw toSaveMediaSourceError(err, maxBytes);
     }
     throw err;
   }
@@ -347,7 +380,7 @@ export async function saveMediaBuffer(
   buffer: Buffer,
   contentType?: string,
   subdir = "inbound",
-  maxBytes = MAX_BYTES,
+  maxBytes = resolveMediaMaxBytes(),
   originalFilename?: string,
 ): Promise<SavedMedia> {
   if (buffer.byteLength > maxBytes) {

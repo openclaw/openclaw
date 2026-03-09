@@ -4,6 +4,11 @@ import JSZip from "jszip";
 import sharp from "sharp";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { isPathWithinBase } from "../../test/helpers/paths.js";
+import {
+  clearConfigCache,
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../config/config.js";
 import { createTempHomeEnv, type TempHomeEnv } from "../test-utils/temp-home.js";
 
 describe("media store", () => {
@@ -27,6 +32,8 @@ describe("media store", () => {
 
   afterEach(() => {
     vi.restoreAllMocks();
+    clearRuntimeConfigSnapshot();
+    clearConfigCache();
   });
 
   async function withTempStore<T>(
@@ -65,6 +72,26 @@ describe("media store", () => {
 
       const huge = Buffer.alloc(5 * 1024 * 1024 + 1);
       await expect(store.saveMediaBuffer(huge)).rejects.toThrow("Media exceeds 5MB limit");
+    });
+  });
+
+  it("honors tools.media.maxBytes from runtime config for default saves", async () => {
+    await withTempStore(async (store) => {
+      const configuredMaxBytes = store.MEDIA_MAX_BYTES + 1024;
+      setRuntimeConfigSnapshot({
+        tools: {
+          media: {
+            maxBytes: configuredMaxBytes,
+          },
+        },
+      });
+
+      const saved = await store.saveMediaBuffer(
+        Buffer.alloc(store.MEDIA_MAX_BYTES + 1),
+        "application/pdf",
+      );
+      const savedStat = await fs.stat(saved.path);
+      expect(savedStat.size).toBe(store.MEDIA_MAX_BYTES + 1);
     });
   });
 

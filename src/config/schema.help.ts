@@ -571,6 +571,8 @@ export const FIELD_HELP: Record<string, string> = {
     "Shared fallback model list used by media understanding tools when modality-specific model lists are not set. Keep this aligned with available multimodal providers to avoid runtime fallback churn.",
   "tools.media.concurrency":
     "Maximum number of concurrent media understanding operations per turn across image, audio, and video tasks. Lower this in resource-constrained deployments to prevent CPU/network saturation.",
+  "tools.media.maxBytes":
+    "Global media staging and temporary-store byte cap applied before modality-specific media limits. Increase this when sandboxed sessions need to receive larger PDFs, slide decks, or images, but keep it bounded to avoid oversized temporary file churn.",
   "tools.media.image.enabled":
     "Enable image understanding so attached or referenced images can be interpreted into textual context. Disable if you need text-only operation or want to avoid image-processing cost.",
   "tools.media.image.maxBytes":

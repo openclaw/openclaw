@@ -471,6 +471,7 @@ const TOOLS_HOOKS_TARGET_KEYS = [
   "tools.links.timeoutSeconds",
   ...MEDIA_AUDIO_FIELD_KEYS,
   "tools.media.concurrency",
+  "tools.media.maxBytes",
   "tools.media.image.attachments",
   "tools.media.image.enabled",
   "tools.media.image.maxBytes",
