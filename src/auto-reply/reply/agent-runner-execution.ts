@@ -26,6 +26,7 @@ import {
   isMarkdownCapableMessageChannel,
   resolveMessageChannel,
 } from "../../utils/message-channel.js";
+import { isInternalMessageChannel } from "../../utils/message-channel.js";
 import { stripHeartbeatToken } from "../heartbeat.js";
 import type { TemplateContext } from "../templating.js";
 import type { VerboseLevel } from "../thinking.js";
@@ -44,6 +45,7 @@ import {
 import { type BlockReplyPipeline } from "./block-reply-pipeline.js";
 import type { FollowupRun } from "./queue.js";
 import { createBlockReplyDeliveryHandler } from "./reply-delivery.js";
+import { createReplyMediaPathNormalizer } from "./reply-media-paths.js";
 import type { TypingSignaler } from "./typing-mode.js";
 
 export type RuntimeFallbackAttempt = {
@@ -105,6 +107,11 @@ export async function runAgentTurnWithFallback(params: {
   const directlySentBlockKeys = new Set<string>();
 
   const runId = params.opts?.runId ?? crypto.randomUUID();
+  const normalizeReplyMediaPaths = createReplyMediaPathNormalizer({
+    cfg: params.followupRun.run.config,
+    sessionKey: params.sessionKey,
+    workspaceDir: params.followupRun.run.workspaceDir,
+  });
   let didNotifyAgentRunStart = false;
   const notifyAgentRunStart = () => {
     if (didNotifyAgentRunStart) {
@@ -113,11 +120,17 @@ export async function runAgentTurnWithFallback(params: {
     didNotifyAgentRunStart = true;
     params.opts?.onAgentRunStart?.(runId);
   };
+  const shouldSurfaceToControlUi = isInternalMessageChannel(
+    params.followupRun.run.messageProvider ??
+      params.sessionCtx.Surface ??
+      params.sessionCtx.Provider,
+  );
   if (params.sessionKey) {
     registerAgentRunContext(runId, {
       sessionKey: params.sessionKey,
       verboseLevel: params.resolvedVerboseLevel,
       isHeartbeat: params.isHeartbeat,
+      isControlUiVisible: shouldSurfaceToControlUi,
     });
   }
   let runResult: Awaited<ReturnType<typeof runEmbeddedPiAgent>>;
@@ -304,7 +317,7 @@ export async function runAgentTurnWithFallback(params: {
             model,
             runId,
             authProfile,
-            allowRateLimitCooldownProbe: runOptions?.allowRateLimitCooldownProbe,
+            allowTransientCooldownProbe: runOptions?.allowTransientCooldownProbe,
           });
           return (async () => {
             const result = await runEmbeddedPiAgent({
@@ -395,6 +408,7 @@ export async function runAgentTurnWithFallback(params: {
                       params.sessionCtx.MessageSidFull ?? params.sessionCtx.MessageSid,
                     normalizeStreamingText,
                     applyReplyToMode: params.applyReplyToMode,
+                    normalizeMediaPaths: normalizeReplyMediaPaths,
                     typingSignals: params.typingSignals,
                     blockStreamingEnabled: params.blockStreamingEnabled,
                     blockReplyPipeline,

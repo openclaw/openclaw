@@ -2,6 +2,7 @@ import { EventEmitter } from "node:events";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import type { DatabaseSync } from "node:sqlite";
 import type { Mock } from "vitest";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -88,6 +89,7 @@ import { spawn as mockedSpawn } from "node:child_process";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveMemoryBackendConfig } from "./backend-config.js";
 import { QmdMemoryManager } from "./qmd-manager.js";
+import { requireNodeSqlite } from "./sqlite.js";
 
 const spawnMock = mockedSpawn as unknown as Mock;
 
@@ -1624,6 +1626,73 @@ describe("QmdMemoryManager", () => {
     }
   });
 
+  it("retries mcporter search with bare command on Windows EINVAL cmd-shim failures", async () => {
+    const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+    const previousPath = process.env.PATH;
+    try {
+      const shimDir = await fs.mkdtemp(path.join(tmpRoot, "mcporter-shim-"));
+      await fs.writeFile(path.join(shimDir, "mcporter.cmd"), "@echo off\n");
+      process.env.PATH = `${shimDir};${previousPath ?? ""}`;
+
+      cfg = {
+        ...cfg,
+        memory: {
+          backend: "qmd",
+          qmd: {
+            includeDefaultMemory: false,
+            update: { interval: "0s", debounceMs: 60_000, onBoot: false },
+            paths: [{ path: workspaceDir, pattern: "**/*.md", name: "workspace" }],
+            mcporter: { enabled: true, serverName: "qmd", startDaemon: false },
+          },
+        },
+      } as OpenClawConfig;
+
+      let sawRetry = false;
+      let firstCallCommand: string | null = null;
+      spawnMock.mockImplementation((cmd: string, args: string[]) => {
+        if (args[0] === "call" && firstCallCommand === null) {
+          firstCallCommand = cmd;
+        }
+        if (args[0] === "call" && typeof cmd === "string" && cmd.toLowerCase().endsWith(".cmd")) {
+          const child = createMockChild({ autoClose: false });
+          queueMicrotask(() => {
+            const err = Object.assign(new Error("spawn EINVAL"), { code: "EINVAL" });
+            child.emit("error", err);
+          });
+          return child;
+        }
+        if (args[0] === "call" && cmd === "mcporter") {
+          sawRetry = true;
+          const child = createMockChild({ autoClose: false });
+          emitAndClose(child, "stdout", JSON.stringify({ results: [] }));
+          return child;
+        }
+        const child = createMockChild({ autoClose: false });
+        emitAndClose(child, "stdout", "[]");
+        return child;
+      });
+
+      const { manager } = await createManager();
+      await expect(
+        manager.search("hello", { sessionKey: "agent:main:slack:dm:u123" }),
+      ).resolves.toEqual([]);
+      const attemptedCmdShim = (firstCallCommand ?? "").toLowerCase().endsWith(".cmd");
+      if (attemptedCmdShim) {
+        expect(sawRetry).toBe(true);
+        expect(logWarnMock).toHaveBeenCalledWith(
+          expect.stringContaining("retrying with bare mcporter"),
+        );
+      } else {
+        // When wrapper resolution upgrades to a direct node/exe entrypoint, cmd-shim retry is unnecessary.
+        expect(sawRetry).toBe(false);
+      }
+      await manager.close();
+    } finally {
+      platformSpy.mockRestore();
+      process.env.PATH = previousPath;
+    }
+  });
+
   it("passes manager-scoped XDG env to mcporter commands", async () => {
     cfg = {
       ...cfg,
@@ -2577,6 +2646,24 @@ describe("QmdMemoryManager", () => {
     ).rejects.toThrow(/qmd query returned invalid JSON/);
     await manager.close();
   });
+
+  it("sets busy_timeout on qmd sqlite connections", async () => {
+    const { manager } = await createManager();
+    const indexPath = (manager as unknown as { indexPath: string }).indexPath;
+    await fs.mkdir(path.dirname(indexPath), { recursive: true });
+    const { DatabaseSync } = requireNodeSqlite();
+    const seedDb = new DatabaseSync(indexPath);
+    seedDb.close();
+
+    const db = (manager as unknown as { ensureDb: () => DatabaseSync }).ensureDb();
+    const row = db.prepare("PRAGMA busy_timeout").get() as
+      | { busy_timeout?: number; timeout?: number }
+      | undefined;
+    const busyTimeout = row?.busy_timeout ?? row?.timeout;
+    expect(busyTimeout).toBe(1000);
+    await manager.close();
+  });
+
   describe("model cache symlink", () => {
     let defaultModelsDir: string;
     let customModelsDir: string;

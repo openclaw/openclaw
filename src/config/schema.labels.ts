@@ -118,6 +118,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "browser.attachOnly": "Browser Attach-only Mode",
   "browser.cdpPortRangeStart": "Browser CDP Port Range Start",
   "browser.defaultProfile": "Browser Default Profile",
+  "browser.relayBindHost": "Browser Relay Bind Address",
   "browser.profiles": "Browser Profiles",
   "browser.profiles.*.cdpPort": "Browser Profile CDP Port",
   "browser.profiles.*.cdpUrl": "Browser Profile CDP URL",
@@ -217,16 +218,17 @@ export const FIELD_LABELS: Record<string, string> = {
   "tools.web.search.maxResults": "Web Search Max Results",
   "tools.web.search.timeoutSeconds": "Web Search Timeout (sec)",
   "tools.web.search.cacheTtlMinutes": "Web Search Cache TTL (min)",
-  "tools.web.search.perplexity.apiKey": "Perplexity API Key",
-  "tools.web.search.perplexity.baseUrl": "Perplexity Base URL",
-  "tools.web.search.perplexity.model": "Perplexity Model",
-  "tools.web.search.gemini.apiKey": "Gemini Search API Key",
+  "tools.web.search.brave.mode": "Brave Search Mode",
+  "tools.web.search.gemini.apiKey": "Gemini Search API Key", // pragma: allowlist secret
   "tools.web.search.gemini.model": "Gemini Search Model",
-  "tools.web.search.grok.apiKey": "Grok Search API Key",
+  "tools.web.search.grok.apiKey": "Grok Search API Key", // pragma: allowlist secret
   "tools.web.search.grok.model": "Grok Search Model",
-  "tools.web.search.kimi.apiKey": "Kimi Search API Key",
+  "tools.web.search.kimi.apiKey": "Kimi Search API Key", // pragma: allowlist secret
   "tools.web.search.kimi.baseUrl": "Kimi Search Base URL",
   "tools.web.search.kimi.model": "Kimi Search Model",
+  "tools.web.search.perplexity.apiKey": "Perplexity API Key", // pragma: allowlist secret
+  "tools.web.search.perplexity.baseUrl": "Perplexity Base URL",
+  "tools.web.search.perplexity.model": "Perplexity Model",
   "tools.web.fetch.enabled": "Enable Web Fetch Tool",
   "tools.web.fetch.maxChars": "Web Fetch Max Chars",
   "tools.web.fetch.maxCharsCap": "Web Fetch Hard Max Chars",
@@ -236,7 +238,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "tools.web.fetch.userAgent": "Web Fetch User-Agent",
   "tools.web.fetch.readability": "Web Fetch Readability Extraction",
   "tools.web.fetch.firecrawl.enabled": "Enable Firecrawl Fallback",
-  "tools.web.fetch.firecrawl.apiKey": "Firecrawl API Key",
+  "tools.web.fetch.firecrawl.apiKey": "Firecrawl API Key", // pragma: allowlist secret
   "tools.web.fetch.firecrawl.baseUrl": "Firecrawl Base URL",
   "tools.web.fetch.firecrawl.onlyMainContent": "Firecrawl Main Content Only",
   "tools.web.fetch.firecrawl.maxAgeMs": "Firecrawl Cache Max Age (ms)",
@@ -249,6 +251,23 @@ export const FIELD_LABELS: Record<string, string> = {
   "gateway.controlUi.allowInsecureAuth": "Insecure Control UI Auth Toggle",
   "gateway.controlUi.dangerouslyDisableDeviceAuth": "Dangerously Disable Control UI Device Auth",
   "gateway.http.endpoints.chatCompletions.enabled": "OpenAI Chat Completions Endpoint",
+  "gateway.http.endpoints.chatCompletions.maxBodyBytes": "OpenAI Chat Completions Max Body Bytes",
+  "gateway.http.endpoints.chatCompletions.maxImageParts": "OpenAI Chat Completions Max Image Parts",
+  "gateway.http.endpoints.chatCompletions.maxTotalImageBytes":
+    "OpenAI Chat Completions Max Total Image Bytes",
+  "gateway.http.endpoints.chatCompletions.images": "OpenAI Chat Completions Image Limits",
+  "gateway.http.endpoints.chatCompletions.images.allowUrl":
+    "OpenAI Chat Completions Allow Image URLs",
+  "gateway.http.endpoints.chatCompletions.images.urlAllowlist":
+    "OpenAI Chat Completions Image URL Allowlist",
+  "gateway.http.endpoints.chatCompletions.images.allowedMimes":
+    "OpenAI Chat Completions Image MIME Allowlist",
+  "gateway.http.endpoints.chatCompletions.images.maxBytes":
+    "OpenAI Chat Completions Image Max Bytes",
+  "gateway.http.endpoints.chatCompletions.images.maxRedirects":
+    "OpenAI Chat Completions Image Max Redirects",
+  "gateway.http.endpoints.chatCompletions.images.timeoutMs":
+    "OpenAI Chat Completions Image Timeout (ms)",
   "gateway.reload.mode": "Config Reload Mode",
   "gateway.reload.debounceMs": "Config Reload Debounce (ms)",
   "gateway.nodes.browser.mode": "Gateway Node Browser Mode",
@@ -261,6 +280,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "nodeHost.browserProxy.allowProfiles": "Node Browser Proxy Allowed Profiles",
   media: "Media",
   "media.preserveFilenames": "Preserve Media Filenames",
+  "media.ttlHours": "Media Retention TTL (hours)",
   audio: "Audio",
   "audio.transcription": "Audio Transcription",
   "audio.transcription.command": "Audio Transcription Command",
@@ -394,7 +414,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "models.mode": "Model Catalog Mode",
   "models.providers": "Model Providers",
   "models.providers.*.baseUrl": "Model Provider Base URL",
-  "models.providers.*.apiKey": "Model Provider API Key",
+  "models.providers.*.apiKey": "Model Provider API Key", // pragma: allowlist secret
   "models.providers.*.auth": "Model Provider Auth Mode",
   "models.providers.*.api": "Model Provider API Adapter",
   "models.providers.*.injectNumCtxForOpenAICompat": "Model Provider Inject num_ctx (OpenAI Compat)",
@@ -434,9 +454,12 @@ export const FIELD_LABELS: Record<string, string> = {
   "agents.defaults.compaction.maxHistoryShare": "Compaction Max History Share",
   "agents.defaults.compaction.identifierPolicy": "Compaction Identifier Policy",
   "agents.defaults.compaction.identifierInstructions": "Compaction Identifier Instructions",
+  "agents.defaults.compaction.recentTurnsPreserve": "Compaction Preserve Recent Turns",
   "agents.defaults.compaction.qualityGuard": "Compaction Quality Guard",
   "agents.defaults.compaction.qualityGuard.enabled": "Compaction Quality Guard Enabled",
   "agents.defaults.compaction.qualityGuard.maxRetries": "Compaction Quality Guard Max Retries",
+  "agents.defaults.compaction.postCompactionSections": "Post-Compaction Context Sections",
+  "agents.defaults.compaction.model": "Compaction Model Override",
   "agents.defaults.compaction.memoryFlush": "Compaction Memory Flush",
   "agents.defaults.compaction.memoryFlush.enabled": "Compaction Memory Flush Enabled",
   "agents.defaults.compaction.memoryFlush.softThresholdTokens":
@@ -466,7 +489,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "commands.useAccessGroups": "Use Access Groups",
   "commands.ownerAllowFrom": "Command Owners",
   "commands.ownerDisplay": "Owner ID Display",
-  "commands.ownerDisplaySecret": "Owner ID Hash Secret",
+  "commands.ownerDisplaySecret": "Owner ID Hash Secret", // pragma: allowlist secret
   "commands.allowFrom": "Command Elevated Access Rules",
   ui: "UI",
   "ui.seamColor": "Accent Color",
@@ -630,6 +653,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "talk.modelId": "Talk Model ID",
   "talk.outputFormat": "Talk Output Format",
   "talk.interruptOnSpeech": "Talk Interrupt on Speech",
+  "talk.silenceTimeoutMs": "Talk Silence Timeout (ms)",
   messages: "Messages",
   "messages.messagePrefix": "Inbound Message Prefix",
   "messages.responsePrefix": "Outbound Response Prefix",
@@ -661,8 +685,8 @@ export const FIELD_LABELS: Record<string, string> = {
   "talk.providers.*.voiceAliases": "Talk Provider Voice Aliases",
   "talk.providers.*.modelId": "Talk Provider Model ID",
   "talk.providers.*.outputFormat": "Talk Provider Output Format",
-  "talk.providers.*.apiKey": "Talk Provider API Key",
-  "talk.apiKey": "Talk API Key",
+  "talk.providers.*.apiKey": "Talk Provider API Key", // pragma: allowlist secret
+  "talk.apiKey": "Talk API Key", // pragma: allowlist secret
   channels: "Channels",
   "channels.defaults": "Channel Defaults",
   "channels.defaults.groupPolicy": "Default Group Policy",
@@ -800,11 +824,12 @@ export const FIELD_LABELS: Record<string, string> = {
   "plugins.load.paths": "Plugin Load Paths",
   "plugins.slots": "Plugin Slots",
   "plugins.slots.memory": "Memory Plugin",
+  "plugins.slots.contextEngine": "Context Engine Plugin",
   "plugins.entries": "Plugin Entries",
   "plugins.entries.*.enabled": "Plugin Enabled",
   "plugins.entries.*.hooks": "Plugin Hook Policy",
   "plugins.entries.*.hooks.allowPromptInjection": "Allow Prompt Injection Hooks",
-  "plugins.entries.*.apiKey": "Plugin API Key",
+  "plugins.entries.*.apiKey": "Plugin API Key", // pragma: allowlist secret
   "plugins.entries.*.env": "Plugin Environment Variables",
   "plugins.entries.*.config": "Plugin Config",
   "plugins.installs": "Plugin Install Records",

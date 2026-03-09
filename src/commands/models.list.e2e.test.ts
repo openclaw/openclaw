@@ -5,6 +5,11 @@ let loadModelRegistry: typeof import("./models/list.registry.js").loadModelRegis
 let toModelRow: typeof import("./models/list.registry.js").toModelRow;
 
 const loadConfig = vi.fn();
+const readConfigFileSnapshotForWrite = vi.fn().mockResolvedValue({
+  snapshot: { valid: false, resolved: {} },
+  writeOptions: {},
+});
+const setRuntimeConfigSnapshot = vi.fn();
 const ensureOpenClawModelsJson = vi.fn().mockResolvedValue(undefined);
 const resolveOpenClawAgentDir = vi.fn().mockReturnValue("/tmp/openclaw-agent");
 const ensureAuthProfileStore = vi.fn().mockReturnValue({ version: 1, profiles: {} });
@@ -29,6 +34,8 @@ vi.mock("../config/config.js", () => ({
   CONFIG_PATH: "/tmp/openclaw.json",
   STATE_DIR: "/tmp/openclaw-state",
   loadConfig,
+  readConfigFileSnapshotForWrite,
+  setRuntimeConfigSnapshot,
 }));
 
 vi.mock("../agents/models-config.js", () => ({
@@ -84,8 +91,16 @@ vi.mock("../agents/pi-model-discovery.js", () => {
 });
 
 vi.mock("../agents/pi-embedded-runner/model.js", () => ({
-  resolveModel: () => {
-    throw new Error("resolveModel should not be called from models.list tests");
+  resolveModelWithRegistry: ({
+    provider,
+    modelId,
+    modelRegistry,
+  }: {
+    provider: string;
+    modelId: string;
+    modelRegistry: { find: (provider: string, id: string) => unknown };
+  }) => {
+    return modelRegistry.find(provider, modelId);
   },
 }));
 
@@ -114,6 +129,13 @@ beforeEach(() => {
   modelRegistryState.getAllError = undefined;
   modelRegistryState.getAvailableError = undefined;
   listProfilesForProvider.mockReturnValue([]);
+  ensureOpenClawModelsJson.mockClear();
+  readConfigFileSnapshotForWrite.mockClear();
+  readConfigFileSnapshotForWrite.mockResolvedValue({
+    snapshot: { valid: false, resolved: {} },
+    writeOptions: {},
+  });
+  setRuntimeConfigSnapshot.mockClear();
 });
 
 afterEach(() => {
@@ -300,6 +322,40 @@ describe("models list/status", () => {
     ];
 
     await expect(loadModelRegistry({})).rejects.toThrow("model discovery unavailable");
+  });
+
+  it("loadModelRegistry does not persist models.json as a side effect", async () => {
+    modelRegistryState.models = [OPENAI_MODEL];
+    modelRegistryState.available = [OPENAI_MODEL];
+    const resolvedConfig = {
+      models: { providers: { openai: { apiKey: "sk-resolved-runtime-value" } } }, // pragma: allowlist secret
+    };
+
+    await loadModelRegistry(resolvedConfig as never);
+
+    expect(ensureOpenClawModelsJson).not.toHaveBeenCalled();
+  });
+
+  it("modelsListCommand persists using the write snapshot config when provided", async () => {
+    modelRegistryState.models = [OPENAI_MODEL];
+    modelRegistryState.available = [OPENAI_MODEL];
+    const sourceConfig = {
+      models: { providers: { openai: { apiKey: "$OPENAI_API_KEY" } } }, // pragma: allowlist secret
+    };
+    const resolvedConfig = {
+      models: { providers: { openai: { apiKey: "sk-resolved-runtime-value" } } }, // pragma: allowlist secret
+    };
+    readConfigFileSnapshotForWrite.mockResolvedValue({
+      snapshot: { valid: true, resolved: resolvedConfig, source: sourceConfig },
+      writeOptions: {},
+    });
+    setDefaultModel("openai/gpt-4.1-mini");
+    const runtime = makeRuntime();
+
+    await modelsListCommand({ all: true, json: true }, runtime);
+
+    expect(ensureOpenClawModelsJson).toHaveBeenCalled();
+    expect(ensureOpenClawModelsJson.mock.calls[0]?.[0]).toEqual(resolvedConfig);
   });
 
   it("toModelRow does not crash without cfg/authStore when availability is undefined", async () => {
