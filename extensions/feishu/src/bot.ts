@@ -1049,6 +1049,11 @@ export async function handleFeishuMessage(params: {
       groupConfig,
     }));
 
+    // Debug: log requireMention policy resolution for troubleshooting #40766
+    log(
+      `feishu[${account.accountId}]: group ${ctx.chatId} requireMention=${requireMention} (groupConfig=${groupConfig?.requireMention ?? "unset"}, globalConfig=${feishuCfg?.requireMention ?? "unset"})`,
+    );
+
     if (requireMention && !ctx.mentionedBot) {
       log(`feishu[${account.accountId}]: message in group ${ctx.chatId} did not mention bot`);
       // Record to pending history for non-broadcast groups only. For broadcast groups,
