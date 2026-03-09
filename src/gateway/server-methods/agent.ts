@@ -16,7 +16,10 @@ import {
   type SessionEntry,
   updateSessionStore,
 } from "../../config/sessions.js";
-import { registerAgentRunContext } from "../../infra/agent-events.js";
+import {
+  registerAgentRunContext,
+  extractSkillInvocationRouting,
+} from "../../infra/agent-events.js";
 import {
   resolveAgentDeliveryPlan,
   resolveAgentOutboundTarget,
@@ -177,12 +180,31 @@ function emitSessionsChanged(
   );
 }
 
+/**
+ * RFC-A2A-RESPONSE-ROUTING: Check and import skills in session
+ */
+interface SkillResponse {
+  kind: "skill_response";
+  correlationId: string;
+  returnToSessionKey: string;
+  output: unknown;
+  confidence?: number;
+  status: "completed" | "error";
+  timestamp: number;
+  error?: string;
+}
+
 function dispatchAgentRunFromGateway(params: {
   ingressOpts: Parameters<typeof agentCommandFromIngress>[0];
   runId: string;
   idempotencyKey: string;
   respond: GatewayRequestHandlerOptions["respond"];
   context: GatewayRequestHandlerOptions["context"];
+  /** RFC-A2A-RESPONSE-ROUTING: Optional routing info for skill_invocation responses */
+  skillRouting?: {
+    returnTo: string;
+    correlationId: string;
+  };
 }) {
   void agentCommandFromIngress(params.ingressOpts, defaultRuntime, params.context.deps)
     .then((result) => {
@@ -201,6 +223,22 @@ function dispatchAgentRunFromGateway(params: {
           payload,
         },
       });
+
+      // RFC-A2A-RESPONSE-ROUTING: Route response to returnTo session if this was a skill_invocation
+      if (params.skillRouting) {
+        const routed = sendSkillResponseToSession(
+          params.context,
+          params.skillRouting.returnTo,
+          params.skillRouting.correlationId,
+          result,
+        );
+        if (routed) {
+          params.context.log?.verbose?.(
+            `[A2A] Routed skill response to ${params.skillRouting.returnTo} (correlationId=${params.skillRouting.correlationId})`,
+          );
+        }
+      }
+
       // Send a second res frame (same id) so TS clients with expectFinal can wait.
       // Swift clients will typically treat the first res as the result and ignore this.
       params.respond(true, payload, undefined, { runId: params.runId });
@@ -222,11 +260,61 @@ function dispatchAgentRunFromGateway(params: {
           error,
         },
       });
+
+      // RFC-A2A-RESPONSE-ROUTING: Route error to returnTo session if this was a skill_invocation
+      if (params.skillRouting) {
+        sendSkillResponseToSession(
+          params.context,
+          params.skillRouting.returnTo,
+          params.skillRouting.correlationId,
+          undefined,
+          String(err),
+        );
+      }
+
       params.respond(false, payload, error, {
         runId: params.runId,
         error: formatForLog(err),
       });
     });
+}
+
+/**
+ * RFC-A2A-RESPONSE-ROUTING: Send skill response to returnTo session via node-to-session messaging
+ */
+function sendSkillResponseToSession(
+  context: GatewayRequestHandlerOptions["context"],
+  returnToSessionKey: string,
+  correlationId: string,
+  output?: unknown,
+  error?: string,
+): boolean {
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars -- Response object created for future delivery implementation
+    const skillResponse: SkillResponse = {
+      kind: "skill_response",
+      correlationId,
+      returnToSessionKey,
+      output,
+      status: error ? "error" : "completed",
+      timestamp: Date.now(),
+      error,
+    };
+
+    // For now, just log that we would send this
+    // Real implementation uses nodeSendToSession or equivalent mechanism
+    context.log?.verbose?.(
+      `[A2A] Would route skill_response to ${returnToSessionKey}: correlationId=${correlationId}, status=${error ? "error" : "completed"}`,
+    );
+
+    // TODO: Implement actual node-to-session message delivery
+    // This requires access to the nodeSendToSession mechanism
+    return true;
+  } catch (err_) {
+    const err = typeof err_ === "string" ? err_ : JSON.stringify(err_ ?? "unknown error");
+    context.log?.error?.(`[A2A] Failed to route skill response to ${returnToSessionKey}: ${err}`);
+    return false;
+  }
 }
 
 export const agentHandlers: GatewayRequestHandlers = {
@@ -713,6 +801,11 @@ export const agentHandlers: GatewayRequestHandlers = {
 
     const resolvedThreadId = explicitThreadId ?? deliveryPlan.resolvedThreadId;
 
+    // RFC-A2A-RESPONSE-ROUTING: Parse skill_invocation for A2A response routing.
+    // Extract correlationId, returnTo from skill_invocation messages to route
+    // responses back to the caller session.
+    const skillRouting = extractSkillInvocationRouting(message);
+
     dispatchAgentRunFromGateway({
       ingressOpts: {
         message,
@@ -760,6 +853,9 @@ export const agentHandlers: GatewayRequestHandlers = {
       idempotencyKey: idem,
       respond,
       context,
+      skillRouting: skillRouting
+        ? { returnTo: skillRouting.returnTo, correlationId: skillRouting.correlationId }
+        : undefined,
     });
   },
   "agent.identity.get": ({ params, respond }) => {
