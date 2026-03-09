@@ -913,6 +913,28 @@ describe("telegramMessageActions", () => {
     expect(handleTelegramAction).not.toHaveBeenCalled();
   });
 
+  it("rejects non-integer topic-delete ids before telegram-actions", async () => {
+    const cfg = telegramCfg();
+    const handleAction = telegramMessageActions.handleAction;
+    if (!handleAction) {
+      throw new Error("telegram handleAction unavailable");
+    }
+
+    await expect(
+      handleAction({
+        channel: "telegram",
+        action: "topic-delete",
+        params: {
+          to: "-1001234567890",
+          topicId: "271abc",
+        },
+        cfg,
+      }),
+    ).rejects.toThrow(/threadId\/topicId is required for action=topic-delete/i);
+
+    expect(handleTelegramAction).not.toHaveBeenCalled();
+  });
+
   it("forwards trusted mediaLocalRoots for send", async () => {
     const cfg = telegramCfg();
     await telegramMessageActions.handleAction?.({
