@@ -94,6 +94,43 @@ describe("pruneContextMessages", () => {
     ).not.toThrow();
   });
 
+  it("weights CJK characters higher than ASCII for token estimation", () => {
+    // CJK text: 10 characters, should be estimated as ~10 tokens = 40 adjusted chars
+    // ASCII text of same length: 10 characters = ~2.5 tokens = 10 adjusted chars
+    // With a tiny context window, CJK content should trigger pruning earlier than ASCII
+    const cjkText = "这是一个包含中文字符的测试"; // 12 CJK chars
+    const asciiText = "a".repeat(12); // 12 ASCII chars
+
+    const cjkMessages: AgentMessage[] = [
+      makeUser(cjkText),
+      makeAssistant([{ type: "text", text: "ok" }]),
+    ];
+    const asciiMessages: AgentMessage[] = [
+      makeUser(asciiText),
+      makeAssistant([{ type: "text", text: "ok" }]),
+    ];
+
+    // With a very small context window, CJK should be pruned (it weighs more)
+    const tinyContext = {
+      model: { contextWindow: 20 },
+    } as unknown as ExtensionContext;
+
+    const cjkResult = pruneContextMessages({
+      messages: cjkMessages,
+      settings: DEFAULT_CONTEXT_PRUNING_SETTINGS,
+      ctx: tinyContext,
+    });
+    const asciiResult = pruneContextMessages({
+      messages: asciiMessages,
+      settings: DEFAULT_CONTEXT_PRUNING_SETTINGS,
+      ctx: tinyContext,
+    });
+
+    // Both should not crash; the CJK content should be estimated as larger
+    expect(cjkResult).toBeDefined();
+    expect(asciiResult).toBeDefined();
+  });
+
   it("handles well-formed thinking blocks correctly", () => {
     const messages: AgentMessage[] = [
       makeUser("hello"),

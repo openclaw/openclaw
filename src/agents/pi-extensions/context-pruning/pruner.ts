@@ -9,6 +9,21 @@ const CHARS_PER_TOKEN_ESTIMATE = 4;
 // we start trimming prunable tool results earlier when image-heavy context is consuming the window.
 const IMAGE_CHAR_ESTIMATE = 8_000;
 
+/** Estimate char count with CJK/non-Latin weighting for token estimation.
+ * Non-ASCII characters (CJK, Hangul, Kana, Arabic, etc.) are roughly
+ * 1 token each, so we weight them as CHARS_PER_TOKEN_ESTIMATE to keep
+ * the chars-to-tokens ratio consistent. */
+function estimateWeightedCharLength(text: string): number {
+  let nonAsciiCount = 0;
+  for (let i = 0; i < text.length; i++) {
+    if (text.charCodeAt(i) > 127) {
+      nonAsciiCount++;
+    }
+  }
+  const asciiCount = text.length - nonAsciiCount;
+  return asciiCount + nonAsciiCount * CHARS_PER_TOKEN_ESTIMATE;
+}
+
 function asText(text: string): TextContent {
   return { type: "text", text };
 }
@@ -100,7 +115,7 @@ function estimateTextAndImageChars(content: ReadonlyArray<TextContent | ImageCon
   let chars = 0;
   for (const block of content) {
     if (block.type === "text") {
-      chars += block.text.length;
+      chars += estimateWeightedCharLength(block.text);
     }
     if (block.type === "image") {
       chars += IMAGE_CHAR_ESTIMATE;
@@ -113,7 +128,7 @@ function estimateMessageChars(message: AgentMessage): number {
   if (message.role === "user") {
     const content = message.content;
     if (typeof content === "string") {
-      return content.length;
+      return estimateWeightedCharLength(content);
     }
     return estimateTextAndImageChars(content);
   }
@@ -125,10 +140,10 @@ function estimateMessageChars(message: AgentMessage): number {
         continue;
       }
       if (b.type === "text" && typeof b.text === "string") {
-        chars += b.text.length;
+        chars += estimateWeightedCharLength(b.text);
       }
       if (b.type === "thinking" && typeof b.thinking === "string") {
-        chars += b.thinking.length;
+        chars += estimateWeightedCharLength(b.thinking);
       }
       if (b.type === "toolCall") {
         try {
