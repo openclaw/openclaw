@@ -6,6 +6,8 @@ Docs: https://docs.openclaw.ai
 
 ### Changes
 
+- Docs/heartbeat: clarify `heartbeat.model` fallback behavior: the fallback chain is skipped only when `heartbeat.model` uses a different provider than the primary and is not itself listed in the configured fallbacks; same-provider overrides and no-override runs follow the standard fallback chain. (#40875)
+
 ### Breaking
 
 ### Fixes
