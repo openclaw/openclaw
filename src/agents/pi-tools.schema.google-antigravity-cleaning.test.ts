@@ -106,7 +106,10 @@ describe("normalizeToolParameters – google-antigravity schema cleaning", () =>
       modelId: "claude-opus-4-6",
     });
     const valueSchema = (
-      (result.parameters as Record<string, unknown>).properties as Record<string, Record<string, unknown>>
+      (result.parameters as Record<string, unknown>).properties as Record<
+        string,
+        Record<string, unknown>
+      >
     )?.value;
     // Gemini does not support exclusiveMinimum / exclusiveMaximum
     expect(valueSchema?.exclusiveMinimum).toBeUndefined();
