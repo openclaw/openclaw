@@ -43,4 +43,15 @@ describe("gateway-rpc timeout validation", () => {
       }),
     );
   });
+
+  it("uses the CLI default timeout when timeout is omitted", async () => {
+    await callGatewayFromCli("health", { json: true });
+
+    expect(callGateway).toHaveBeenCalledWith(
+      expect.objectContaining({
+        method: "health",
+        timeoutMs: 30_000,
+      }),
+    );
+  });
 });
