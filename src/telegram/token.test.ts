@@ -3,7 +3,9 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
+import { withStateDirEnv } from "../test-helpers/state-dir-env.js";
 import { resolveTelegramToken } from "./token.js";
+import { readTelegramUpdateOffset, writeTelegramUpdateOffset } from "./update-offset-store.js";
 
 function withTempDir(): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-telegram-token-"));
@@ -85,5 +87,72 @@ describe("resolveTelegramToken", () => {
     const res = resolveTelegramToken(cfg, { accountId: "careynotifications" });
     expect(res.token).toBe("acct-token");
     expect(res.source).toBe("config");
+  });
+
+  it("falls back to top-level token for non-default accounts without account token", () => {
+    const cfg = {
+      channels: {
+        telegram: {
+          botToken: "top-level-token",
+          accounts: {
+            work: {},
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    const res = resolveTelegramToken(cfg, { accountId: "work" });
+    expect(res.token).toBe("top-level-token");
+    expect(res.source).toBe("config");
+  });
+
+  it("falls back to top-level tokenFile for non-default accounts", () => {
+    const dir = withTempDir();
+    const tokenFile = path.join(dir, "token.txt");
+    fs.writeFileSync(tokenFile, "file-token\n", "utf-8");
+    const cfg = {
+      channels: {
+        telegram: {
+          tokenFile,
+          accounts: {
+            work: {},
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    const res = resolveTelegramToken(cfg, { accountId: "work" });
+    expect(res.token).toBe("file-token");
+    expect(res.source).toBe("tokenFile");
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("throws when botToken is an unresolved SecretRef object", () => {
+    const cfg = {
+      channels: {
+        telegram: {
+          botToken: { source: "env", provider: "default", id: "TELEGRAM_BOT_TOKEN" },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    expect(() => resolveTelegramToken(cfg)).toThrow(
+      /channels\.telegram\.botToken: unresolved SecretRef/i,
+    );
+  });
+});
+
+describe("telegram update offset store", () => {
+  it("persists and reloads the last update id", async () => {
+    await withStateDirEnv("openclaw-telegram-", async () => {
+      expect(await readTelegramUpdateOffset({ accountId: "primary" })).toBeNull();
+
+      await writeTelegramUpdateOffset({
+        accountId: "primary",
+        updateId: 421,
+      });
+
+      expect(await readTelegramUpdateOffset({ accountId: "primary" })).toBe(421);
+    });
   });
 });

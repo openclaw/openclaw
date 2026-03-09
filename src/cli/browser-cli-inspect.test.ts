@@ -1,5 +1,5 @@
 import { Command } from "commander";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 
 const gatewayMocks = vi.hoisted(() => ({
   callGatewayFromCli: vi.fn(async () => ({
@@ -56,56 +56,98 @@ vi.mock("../runtime.js", () => ({
   defaultRuntime: runtime,
 }));
 
+let registerBrowserInspectCommands: typeof import("./browser-cli-inspect.js").registerBrowserInspectCommands;
+
+type SnapshotDefaultsCase = {
+  label: string;
+  args: string[];
+  expectMode: "efficient" | undefined;
+};
+
 describe("browser cli snapshot defaults", () => {
+  const runBrowserInspect = async (args: string[], withJson = false) => {
+    const program = new Command();
+    const browser = program.command("browser").option("--json", "JSON output", false);
+    registerBrowserInspectCommands(browser, () => ({}));
+    await program.parseAsync(withJson ? ["browser", "--json", ...args] : ["browser", ...args], {
+      from: "user",
+    });
+
+    const [, params] = sharedMocks.callBrowserRequest.mock.calls.at(-1) ?? [];
+    return params as { path?: string; query?: Record<string, unknown> } | undefined;
+  };
+
+  const runSnapshot = async (args: string[]) => await runBrowserInspect(["snapshot", ...args]);
+
+  beforeAll(async () => {
+    ({ registerBrowserInspectCommands } = await import("./browser-cli-inspect.js"));
+  });
+
   afterEach(() => {
     vi.clearAllMocks();
     configMocks.loadConfig.mockReturnValue({ browser: {} });
   });
 
-  it("uses config snapshot defaults when mode is not provided", async () => {
+  it.each<SnapshotDefaultsCase>([
+    {
+      label: "uses config snapshot defaults when mode is not provided",
+      args: [],
+      expectMode: "efficient",
+    },
+    {
+      label: "does not apply config snapshot defaults to aria snapshots",
+      args: ["--format", "aria"],
+      expectMode: undefined,
+    },
+  ])("$label", async ({ args, expectMode }) => {
     configMocks.loadConfig.mockReturnValue({
       browser: { snapshotDefaults: { mode: "efficient" } },
     });
 
-    const { registerBrowserInspectCommands } = await import("./browser-cli-inspect.js");
-    const program = new Command();
-    const browser = program.command("browser").option("--json", false);
-    registerBrowserInspectCommands(browser, () => ({}));
+    if (args.includes("--format")) {
+      gatewayMocks.callGatewayFromCli.mockResolvedValueOnce({
+        ok: true,
+        format: "aria",
+        targetId: "t1",
+        url: "https://example.com",
+        snapshot: "ok",
+      });
+    }
 
-    await program.parseAsync(["browser", "snapshot"], { from: "user" });
-
-    expect(sharedMocks.callBrowserRequest).toHaveBeenCalled();
-    const [, params] = sharedMocks.callBrowserRequest.mock.calls.at(-1) ?? [];
+    const params = await runSnapshot(args);
     expect(params?.path).toBe("/snapshot");
+    if (expectMode === undefined) {
+      expect((params?.query as { mode?: unknown } | undefined)?.mode).toBeUndefined();
+    } else {
+      expect(params?.query).toMatchObject({
+        format: "ai",
+        mode: expectMode,
+      });
+    }
+  });
+
+  it("does not set mode when config defaults are absent", async () => {
+    configMocks.loadConfig.mockReturnValue({ browser: {} });
+    const params = await runSnapshot([]);
+    expect((params?.query as { mode?: unknown } | undefined)?.mode).toBeUndefined();
+  });
+
+  it("applies explicit efficient mode without config defaults", async () => {
+    configMocks.loadConfig.mockReturnValue({ browser: {} });
+    const params = await runSnapshot(["--efficient"]);
     expect(params?.query).toMatchObject({
       format: "ai",
       mode: "efficient",
     });
   });
 
-  it("does not apply config snapshot defaults to aria snapshots", async () => {
-    configMocks.loadConfig.mockReturnValue({
-      browser: { snapshotDefaults: { mode: "efficient" } },
+  it("sends screenshot request with trimmed target id and jpeg type", async () => {
+    const params = await runBrowserInspect(["screenshot", " tab-1 ", "--type", "jpeg"], true);
+    expect(params?.path).toBe("/screenshot");
+    expect((params as { body?: Record<string, unknown> } | undefined)?.body).toMatchObject({
+      targetId: "tab-1",
+      type: "jpeg",
+      fullPage: false,
     });
-
-    gatewayMocks.callGatewayFromCli.mockResolvedValueOnce({
-      ok: true,
-      format: "aria",
-      targetId: "t1",
-      url: "https://example.com",
-      nodes: [],
-    });
-
-    const { registerBrowserInspectCommands } = await import("./browser-cli-inspect.js");
-    const program = new Command();
-    const browser = program.command("browser").option("--json", false);
-    registerBrowserInspectCommands(browser, () => ({}));
-
-    await program.parseAsync(["browser", "snapshot", "--format", "aria"], { from: "user" });
-
-    expect(sharedMocks.callBrowserRequest).toHaveBeenCalled();
-    const [, params] = sharedMocks.callBrowserRequest.mock.calls.at(-1) ?? [];
-    expect(params?.path).toBe("/snapshot");
-    expect((params?.query as { mode?: unknown } | undefined)?.mode).toBeUndefined();
   });
 });

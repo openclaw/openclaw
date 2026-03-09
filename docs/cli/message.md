@@ -64,10 +64,11 @@ Name lookup:
   - WhatsApp only: `--gif-playback`
 
 - `poll`
-  - Channels: WhatsApp/Discord/MS Teams
+  - Channels: WhatsApp/Telegram/Discord/Matrix/MS Teams
   - Required: `--target`, `--poll-question`, `--poll-option` (repeat)
   - Optional: `--poll-multi`
-  - Discord only: `--poll-duration-hours`, `--message`
+  - Discord only: `--poll-duration-hours`, `--silent`, `--message`
+  - Telegram only: `--poll-duration-seconds` (5-600), `--silent`, `--poll-anonymous` / `--poll-public`, `--thread-id`
 
 - `react`
   - Channels: Discord/Google Chat/Slack/Telegram/WhatsApp/Signal
@@ -190,6 +191,16 @@ openclaw message send --channel discord \
   --target channel:123 --message "hi" --reply-to 456
 ```
 
+Send a Discord message with components:
+
+```
+openclaw message send --channel discord \
+  --target channel:123 --message "Choose:" \
+  --components '{"text":"Choose a path","blocks":[{"type":"actions","buttons":[{"label":"Approve","style":"success"},{"label":"Decline","style":"danger"}]}]}'
+```
+
+See [Discord components](/channels/discord#interactive-components) for the full schema.
+
 Create a Discord poll:
 
 ```
@@ -198,6 +209,16 @@ openclaw message poll --channel discord \
   --poll-question "Snack?" \
   --poll-option Pizza --poll-option Sushi \
   --poll-multi --poll-duration-hours 48
+```
+
+Create a Telegram poll (auto-close in 2 minutes):
+
+```
+openclaw message poll --channel telegram \
+  --target @mychat \
+  --poll-question "Lunch?" \
+  --poll-option Pizza --poll-option Sushi \
+  --poll-duration-seconds 120 --silent
 ```
 
 Send a Teams proactive message:

@@ -18,198 +18,170 @@ function buildModel(): Model<"openai-responses"> {
   };
 }
 
-function installFailingFetchCapture() {
-  const originalFetch = globalThis.fetch;
-  let lastBody: unknown;
+function extractInput(payload: Record<string, unknown> | undefined) {
+  return Array.isArray(payload?.input) ? payload.input : [];
+}
 
-  const fetchImpl: typeof fetch = async (_input, init) => {
-    const rawBody = init?.body;
-    const bodyText = (() => {
-      if (!rawBody) {
-        return "";
-      }
-      if (typeof rawBody === "string") {
-        return rawBody;
-      }
-      if (rawBody instanceof Uint8Array) {
-        return Buffer.from(rawBody).toString("utf8");
-      }
-      if (rawBody instanceof ArrayBuffer) {
-        return Buffer.from(new Uint8Array(rawBody)).toString("utf8");
-      }
-      return null;
-    })();
-    lastBody = bodyText ? (JSON.parse(bodyText) as unknown) : undefined;
-    throw new Error("intentional fetch abort (test)");
-  };
+function extractInputTypes(input: unknown[]) {
+  return input
+    .map((item) =>
+      item && typeof item === "object" ? (item as Record<string, unknown>).type : undefined,
+    )
+    .filter((t): t is string => typeof t === "string");
+}
 
-  globalThis.fetch = fetchImpl;
+const ZERO_USAGE = {
+  input: 0,
+  output: 0,
+  cacheRead: 0,
+  cacheWrite: 0,
+  totalTokens: 0,
+  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+} as const;
 
+function buildReasoningPart(id = "rs_test") {
   return {
-    getLastBody: () => lastBody as Record<string, unknown> | undefined,
-    restore: () => {
-      globalThis.fetch = originalFetch;
+    type: "thinking" as const,
+    thinking: "internal",
+    thinkingSignature: JSON.stringify({
+      type: "reasoning",
+      id,
+      summary: [],
+    }),
+  };
+}
+
+function buildAssistantMessage(params: {
+  stopReason: AssistantMessage["stopReason"];
+  content: AssistantMessage["content"];
+}): AssistantMessage {
+  return {
+    role: "assistant",
+    api: "openai-responses",
+    provider: "openai",
+    model: "gpt-5.2",
+    usage: ZERO_USAGE,
+    stopReason: params.stopReason,
+    timestamp: Date.now(),
+    content: params.content,
+  };
+}
+
+async function runAbortedOpenAIResponsesStream(params: {
+  messages: Array<
+    AssistantMessage | ToolResultMessage | { role: "user"; content: string; timestamp: number }
+  >;
+  tools?: Array<{
+    name: string;
+    description: string;
+    parameters: ReturnType<typeof Type.Object>;
+  }>;
+}) {
+  const controller = new AbortController();
+  controller.abort();
+  let payload: Record<string, unknown> | undefined;
+
+  const stream = streamOpenAIResponses(
+    buildModel(),
+    {
+      systemPrompt: "system",
+      messages: params.messages,
+      ...(params.tools ? { tools: params.tools } : {}),
     },
+    {
+      apiKey: "test",
+      signal: controller.signal,
+      onPayload: (nextPayload) => {
+        payload = nextPayload as Record<string, unknown>;
+      },
+    },
+  );
+
+  await stream.result();
+  const input = extractInput(payload);
+  return {
+    input,
+    types: extractInputTypes(input),
   };
 }
 
 describe("openai-responses reasoning replay", () => {
   it("replays reasoning for tool-call-only turns (OpenAI requires it)", async () => {
-    const cap = installFailingFetchCapture();
-    try {
-      const model = buildModel();
-
-      const assistantToolOnly: AssistantMessage = {
-        role: "assistant",
-        api: "openai-responses",
-        provider: "openai",
-        model: "gpt-5.2",
-        usage: {
-          input: 0,
-          output: 0,
-          cacheRead: 0,
-          cacheWrite: 0,
-          totalTokens: 0,
-          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-        },
-        stopReason: "toolUse",
-        timestamp: Date.now(),
-        content: [
-          {
-            type: "thinking",
-            thinking: "internal",
-            thinkingSignature: JSON.stringify({
-              type: "reasoning",
-              id: "rs_test",
-              summary: [],
-            }),
-          },
-          {
-            type: "toolCall",
-            id: "call_123|fc_123",
-            name: "noop",
-            arguments: {},
-          },
-        ],
-      };
-
-      const toolResult: ToolResultMessage = {
-        role: "toolResult",
-        toolCallId: "call_123|fc_123",
-        toolName: "noop",
-        content: [{ type: "text", text: "ok" }],
-        isError: false,
-        timestamp: Date.now(),
-      };
-
-      const stream = streamOpenAIResponses(
-        model,
+    const assistantToolOnly = buildAssistantMessage({
+      stopReason: "toolUse",
+      content: [
+        buildReasoningPart(),
         {
-          systemPrompt: "system",
-          messages: [
-            {
-              role: "user",
-              content: "Call noop.",
-              timestamp: Date.now(),
-            },
-            assistantToolOnly,
-            toolResult,
-            {
-              role: "user",
-              content: "Now reply with ok.",
-              timestamp: Date.now(),
-            },
-          ],
-          tools: [
-            {
-              name: "noop",
-              description: "no-op",
-              parameters: Type.Object({}, { additionalProperties: false }),
-            },
-          ],
+          type: "toolCall",
+          id: "call_123|fc_123",
+          name: "noop",
+          arguments: {},
         },
-        { apiKey: "test" },
-      );
+      ],
+    });
 
-      await stream.result();
+    const toolResult: ToolResultMessage = {
+      role: "toolResult",
+      toolCallId: "call_123|fc_123",
+      toolName: "noop",
+      content: [{ type: "text", text: "ok" }],
+      isError: false,
+      timestamp: Date.now(),
+    };
 
-      const body = cap.getLastBody();
-      const input = Array.isArray(body?.input) ? body?.input : [];
-      const types = input
-        .map((item) =>
-          item && typeof item === "object" ? (item as Record<string, unknown>).type : undefined,
-        )
-        .filter((t): t is string => typeof t === "string");
+    const { input, types } = await runAbortedOpenAIResponsesStream({
+      messages: [
+        {
+          role: "user",
+          content: "Call noop.",
+          timestamp: Date.now(),
+        },
+        assistantToolOnly,
+        toolResult,
+        {
+          role: "user",
+          content: "Now reply with ok.",
+          timestamp: Date.now(),
+        },
+      ],
+      tools: [
+        {
+          name: "noop",
+          description: "no-op",
+          parameters: Type.Object({}, { additionalProperties: false }),
+        },
+      ],
+    });
 
-      expect(types).toContain("reasoning");
-      expect(types).toContain("function_call");
-      expect(types.indexOf("reasoning")).toBeLessThan(types.indexOf("function_call"));
-    } finally {
-      cap.restore();
-    }
+    expect(types).toContain("reasoning");
+    expect(types).toContain("function_call");
+    expect(types.indexOf("reasoning")).toBeLessThan(types.indexOf("function_call"));
+
+    const functionCall = input.find(
+      (item) =>
+        item &&
+        typeof item === "object" &&
+        (item as Record<string, unknown>).type === "function_call",
+    ) as Record<string, unknown> | undefined;
+    expect(functionCall?.call_id).toBe("call_123");
+    expect(functionCall?.id).toBe("fc_123");
   });
 
   it("still replays reasoning when paired with an assistant message", async () => {
-    const cap = installFailingFetchCapture();
-    try {
-      const model = buildModel();
+    const assistantWithText = buildAssistantMessage({
+      stopReason: "stop",
+      content: [buildReasoningPart(), { type: "text", text: "hello", textSignature: "msg_test" }],
+    });
 
-      const assistantWithText: AssistantMessage = {
-        role: "assistant",
-        api: "openai-responses",
-        provider: "openai",
-        model: "gpt-5.2",
-        usage: {
-          input: 0,
-          output: 0,
-          cacheRead: 0,
-          cacheWrite: 0,
-          totalTokens: 0,
-          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-        },
-        stopReason: "stop",
-        timestamp: Date.now(),
-        content: [
-          {
-            type: "thinking",
-            thinking: "internal",
-            thinkingSignature: JSON.stringify({
-              type: "reasoning",
-              id: "rs_test",
-              summary: [],
-            }),
-          },
-          { type: "text", text: "hello", textSignature: "msg_test" },
-        ],
-      };
+    const { types } = await runAbortedOpenAIResponsesStream({
+      messages: [
+        { role: "user", content: "Hi", timestamp: Date.now() },
+        assistantWithText,
+        { role: "user", content: "Ok", timestamp: Date.now() },
+      ],
+    });
 
-      const stream = streamOpenAIResponses(
-        model,
-        {
-          systemPrompt: "system",
-          messages: [
-            { role: "user", content: "Hi", timestamp: Date.now() },
-            assistantWithText,
-            { role: "user", content: "Ok", timestamp: Date.now() },
-          ],
-        },
-        { apiKey: "test" },
-      );
-
-      await stream.result();
-
-      const body = cap.getLastBody();
-      const input = Array.isArray(body?.input) ? body?.input : [];
-      const types = input
-        .map((item) =>
-          item && typeof item === "object" ? (item as Record<string, unknown>).type : undefined,
-        )
-        .filter((t): t is string => typeof t === "string");
-
-      expect(types).toContain("reasoning");
-      expect(types).toContain("message");
-    } finally {
-      cap.restore();
-    }
+    expect(types).toContain("reasoning");
+    expect(types).toContain("message");
   });
 });

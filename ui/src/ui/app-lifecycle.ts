@@ -1,4 +1,3 @@
-import type { Tab } from "./navigation.ts";
 import { connectGateway } from "./app-gateway.ts";
 import {
   startLogsPolling,
@@ -17,10 +16,19 @@ import {
   syncTabWithLocation,
   syncThemeWithSettings,
 } from "./app-settings.ts";
+import { loadControlUiBootstrapConfig } from "./controllers/control-ui-bootstrap.ts";
+import type { Tab } from "./navigation.ts";
 
 type LifecycleHost = {
   basePath: string;
+  client?: { stop: () => void } | null;
+  connectGeneration: number;
+  connected?: boolean;
   tab: Tab;
+  assistantName: string;
+  assistantAvatar: string | null;
+  assistantAgentId: string | null;
+  serverVersion: string | null;
   chatHasAutoScrolled: boolean;
   chatManualRefreshInFlight: boolean;
   chatLoading: boolean;
@@ -35,13 +43,20 @@ type LifecycleHost = {
 };
 
 export function handleConnected(host: LifecycleHost) {
+  const connectGeneration = ++host.connectGeneration;
   host.basePath = inferBasePath();
   applySettingsFromUrl(host as unknown as Parameters<typeof applySettingsFromUrl>[0]);
+  const bootstrapReady = loadControlUiBootstrapConfig(host);
   syncTabWithLocation(host as unknown as Parameters<typeof syncTabWithLocation>[0], true);
   syncThemeWithSettings(host as unknown as Parameters<typeof syncThemeWithSettings>[0]);
   attachThemeListener(host as unknown as Parameters<typeof attachThemeListener>[0]);
   window.addEventListener("popstate", host.popStateHandler);
-  connectGateway(host as unknown as Parameters<typeof connectGateway>[0]);
+  void bootstrapReady.finally(() => {
+    if (host.connectGeneration !== connectGeneration) {
+      return;
+    }
+    connectGateway(host as unknown as Parameters<typeof connectGateway>[0]);
+  });
   startNodesPolling(host as unknown as Parameters<typeof startNodesPolling>[0]);
   if (host.tab === "logs") {
     startLogsPolling(host as unknown as Parameters<typeof startLogsPolling>[0]);
@@ -56,10 +71,14 @@ export function handleFirstUpdated(host: LifecycleHost) {
 }
 
 export function handleDisconnected(host: LifecycleHost) {
+  host.connectGeneration += 1;
   window.removeEventListener("popstate", host.popStateHandler);
   stopNodesPolling(host as unknown as Parameters<typeof stopNodesPolling>[0]);
   stopLogsPolling(host as unknown as Parameters<typeof stopLogsPolling>[0]);
   stopDebugPolling(host as unknown as Parameters<typeof stopDebugPolling>[0]);
+  host.client?.stop();
+  host.client = null;
+  host.connected = false;
   detachThemeListener(host as unknown as Parameters<typeof detachThemeListener>[0]);
   host.topbarObserver?.disconnect();
   host.topbarObserver = null;

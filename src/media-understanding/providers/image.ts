@@ -1,21 +1,33 @@
 import type { Api, Context, Model } from "@mariozechner/pi-ai";
 import { complete } from "@mariozechner/pi-ai";
-import type { ImageDescriptionRequest, ImageDescriptionResult } from "../types.js";
-import { minimaxUnderstandImage } from "../../agents/minimax-vlm.js";
+import { isMinimaxVlmModel, minimaxUnderstandImage } from "../../agents/minimax-vlm.js";
 import { getApiKeyForModel, requireApiKey } from "../../agents/model-auth.js";
+import { normalizeModelRef } from "../../agents/model-selection.js";
 import { ensureOpenClawModelsJson } from "../../agents/models-config.js";
-import { discoverAuthStorage, discoverModels } from "../../agents/pi-model-discovery.js";
 import { coerceImageAssistantText } from "../../agents/tools/image-tool.helpers.js";
+import type { ImageDescriptionRequest, ImageDescriptionResult } from "../types.js";
+
+let piModelDiscoveryRuntimePromise: Promise<
+  typeof import("../../agents/pi-model-discovery-runtime.js")
+> | null = null;
+
+function loadPiModelDiscoveryRuntime() {
+  piModelDiscoveryRuntimePromise ??= import("../../agents/pi-model-discovery-runtime.js");
+  return piModelDiscoveryRuntimePromise;
+}
 
 export async function describeImageWithModel(
   params: ImageDescriptionRequest,
 ): Promise<ImageDescriptionResult> {
   await ensureOpenClawModelsJson(params.cfg, params.agentDir);
+  const { discoverAuthStorage, discoverModels } = await loadPiModelDiscoveryRuntime();
   const authStorage = discoverAuthStorage(params.agentDir);
   const modelRegistry = discoverModels(authStorage, params.agentDir);
-  const model = modelRegistry.find(params.provider, params.model) as Model<Api> | null;
+  // Keep direct media config entries compatible with deprecated provider model aliases.
+  const resolvedRef = normalizeModelRef(params.provider, params.model);
+  const model = modelRegistry.find(resolvedRef.provider, resolvedRef.model) as Model<Api> | null;
   if (!model) {
-    throw new Error(`Unknown model: ${params.provider}/${params.model}`);
+    throw new Error(`Unknown model: ${resolvedRef.provider}/${resolvedRef.model}`);
   }
   if (!model.input?.includes("image")) {
     throw new Error(`Model does not support images: ${params.provider}/${params.model}`);
@@ -31,7 +43,7 @@ export async function describeImageWithModel(
   authStorage.setRuntimeApiKey(model.provider, apiKey);
 
   const base64 = params.buffer.toString("base64");
-  if (model.provider === "minimax") {
+  if (isMinimaxVlmModel(model.provider, model.id)) {
     const text = await minimaxUnderstandImage({
       apiKey,
       prompt: params.prompt ?? "Describe the image.",

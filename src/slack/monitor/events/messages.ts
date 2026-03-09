@@ -1,15 +1,12 @@
 import type { SlackEventMiddlewareArgs } from "@slack/bolt";
-import type { SlackAppMentionEvent, SlackMessageEvent } from "../../types.js";
-import type { SlackMonitorContext } from "../context.js";
-import type { SlackMessageHandler } from "../message-handler.js";
-import type {
-  SlackMessageChangedEvent,
-  SlackMessageDeletedEvent,
-  SlackThreadBroadcastEvent,
-} from "../types.js";
 import { danger } from "../../../globals.js";
 import { enqueueSystemEvent } from "../../../infra/system-events.js";
-import { resolveSlackChannelLabel } from "../channel-config.js";
+import type { SlackAppMentionEvent, SlackMessageEvent } from "../../types.js";
+import { normalizeSlackChannelType } from "../channel-type.js";
+import type { SlackMonitorContext } from "../context.js";
+import type { SlackMessageHandler } from "../message-handler.js";
+import { resolveSlackMessageSubtypeHandler } from "./message-subtype-handlers.js";
+import { authorizeAndResolveSlackSystemEventContext } from "./system-event-context.js";
 
 export function registerSlackMessageEvents(params: {
   ctx: SlackMonitorContext;
@@ -17,96 +14,29 @@ export function registerSlackMessageEvents(params: {
 }) {
   const { ctx, handleSlackMessage } = params;
 
-  ctx.app.event("message", async ({ event, body }: SlackEventMiddlewareArgs<"message">) => {
+  const handleIncomingMessageEvent = async ({ event, body }: { event: unknown; body: unknown }) => {
     try {
       if (ctx.shouldDropMismatchedSlackEvent(body)) {
         return;
       }
 
       const message = event as SlackMessageEvent;
-      if (message.subtype === "message_changed") {
-        const changed = event as SlackMessageChangedEvent;
-        const channelId = changed.channel;
-        const channelInfo = channelId ? await ctx.resolveChannelName(channelId) : {};
-        const channelType = channelInfo?.type;
-        if (
-          !ctx.isChannelAllowed({
-            channelId,
-            channelName: channelInfo?.name,
-            channelType,
-          })
-        ) {
+      const subtypeHandler = resolveSlackMessageSubtypeHandler(message);
+      if (subtypeHandler) {
+        const channelId = subtypeHandler.resolveChannelId(message);
+        const ingressContext = await authorizeAndResolveSlackSystemEventContext({
+          ctx,
+          senderId: subtypeHandler.resolveSenderId(message),
+          channelId,
+          channelType: subtypeHandler.resolveChannelType(message),
+          eventKind: subtypeHandler.eventKind,
+        });
+        if (!ingressContext) {
           return;
         }
-        const messageId = changed.message?.ts ?? changed.previous_message?.ts;
-        const label = resolveSlackChannelLabel({
-          channelId,
-          channelName: channelInfo?.name,
-        });
-        const sessionKey = ctx.resolveSlackSystemEventSessionKey({
-          channelId,
-          channelType,
-        });
-        enqueueSystemEvent(`Slack message edited in ${label}.`, {
-          sessionKey,
-          contextKey: `slack:message:changed:${channelId ?? "unknown"}:${messageId ?? changed.event_ts ?? "unknown"}`,
-        });
-        return;
-      }
-      if (message.subtype === "message_deleted") {
-        const deleted = event as SlackMessageDeletedEvent;
-        const channelId = deleted.channel;
-        const channelInfo = channelId ? await ctx.resolveChannelName(channelId) : {};
-        const channelType = channelInfo?.type;
-        if (
-          !ctx.isChannelAllowed({
-            channelId,
-            channelName: channelInfo?.name,
-            channelType,
-          })
-        ) {
-          return;
-        }
-        const label = resolveSlackChannelLabel({
-          channelId,
-          channelName: channelInfo?.name,
-        });
-        const sessionKey = ctx.resolveSlackSystemEventSessionKey({
-          channelId,
-          channelType,
-        });
-        enqueueSystemEvent(`Slack message deleted in ${label}.`, {
-          sessionKey,
-          contextKey: `slack:message:deleted:${channelId ?? "unknown"}:${deleted.deleted_ts ?? deleted.event_ts ?? "unknown"}`,
-        });
-        return;
-      }
-      if (message.subtype === "thread_broadcast") {
-        const thread = event as SlackThreadBroadcastEvent;
-        const channelId = thread.channel;
-        const channelInfo = channelId ? await ctx.resolveChannelName(channelId) : {};
-        const channelType = channelInfo?.type;
-        if (
-          !ctx.isChannelAllowed({
-            channelId,
-            channelName: channelInfo?.name,
-            channelType,
-          })
-        ) {
-          return;
-        }
-        const label = resolveSlackChannelLabel({
-          channelId,
-          channelName: channelInfo?.name,
-        });
-        const messageId = thread.message?.ts ?? thread.event_ts;
-        const sessionKey = ctx.resolveSlackSystemEventSessionKey({
-          channelId,
-          channelType,
-        });
-        enqueueSystemEvent(`Slack thread reply broadcast in ${label}.`, {
-          sessionKey,
-          contextKey: `slack:thread:broadcast:${channelId ?? "unknown"}:${messageId ?? "unknown"}`,
+        enqueueSystemEvent(subtypeHandler.describe(ingressContext.channelLabel), {
+          sessionKey: ingressContext.sessionKey,
+          contextKey: subtypeHandler.contextKey(message),
         });
         return;
       }
@@ -115,6 +45,16 @@ export function registerSlackMessageEvents(params: {
     } catch (err) {
       ctx.runtime.error?.(danger(`slack handler failed: ${String(err)}`));
     }
+  };
+
+  // NOTE: Slack Event Subscriptions use names like "message.channels" and
+  // "message.groups" to control *which* message events are delivered, but the
+  // actual event payload always arrives with `type: "message"`.  The
+  // `channel_type` field ("channel" | "group" | "im" | "mpim") distinguishes
+  // the source.  Bolt rejects `app.event("message.channels")` since v4.6
+  // because it is a subscription label, not a valid event type.
+  ctx.app.event("message", async ({ event, body }: SlackEventMiddlewareArgs<"message">) => {
+    await handleIncomingMessageEvent({ event, body });
   });
 
   ctx.app.event("app_mention", async ({ event, body }: SlackEventMiddlewareArgs<"app_mention">) => {
@@ -124,6 +64,14 @@ export function registerSlackMessageEvents(params: {
       }
 
       const mention = event as SlackAppMentionEvent;
+
+      // Skip app_mention for DMs - they're already handled by message.im event
+      // This prevents duplicate processing when both message and app_mention fire for DMs
+      const channelType = normalizeSlackChannelType(mention.channel_type, mention.channel);
+      if (channelType === "im" || channelType === "mpim") {
+        return;
+      }
+
       await handleSlackMessage(mention as unknown as SlackMessageEvent, {
         source: "app_mention",
         wasMentioned: true,

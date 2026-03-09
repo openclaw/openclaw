@@ -1,3 +1,5 @@
+import { randomUUID } from "node:crypto";
+import fsSync from "node:fs";
 import {
   DisconnectReason,
   fetchLatestBaileysVersion,
@@ -5,8 +7,6 @@ import {
   makeWASocket,
   useMultiFileAuthState,
 } from "@whiskeysockets/baileys";
-import { randomUUID } from "node:crypto";
-import fsSync from "node:fs";
 import qrcode from "qrcode-terminal";
 import { formatCliCommand } from "../cli/command-format.js";
 import { danger, success } from "../globals.js";
@@ -15,6 +15,7 @@ import { ensureDir, resolveUserPath } from "../utils.js";
 import { VERSION } from "../version.js";
 import {
   maybeRestoreCredsFromBackup,
+  readCredsJsonRaw,
   resolveDefaultWebAuthDir,
   resolveWebCredsBackupPath,
   resolveWebCredsPath,
@@ -43,21 +44,6 @@ function enqueueSaveCreds(
     });
 }
 
-function readCredsJsonRaw(filePath: string): string | null {
-  try {
-    if (!fsSync.existsSync(filePath)) {
-      return null;
-    }
-    const stats = fsSync.statSync(filePath);
-    if (!stats.isFile() || stats.size <= 1) {
-      return null;
-    }
-    return fsSync.readFileSync(filePath, "utf-8");
-  } catch {
-    return null;
-  }
-}
-
 async function safeSaveCreds(
   authDir: string,
   saveCreds: () => Promise<void> | void,
@@ -73,6 +59,11 @@ async function safeSaveCreds(
       try {
         JSON.parse(raw);
         fsSync.copyFileSync(credsPath, backupPath);
+        try {
+          fsSync.chmodSync(backupPath, 0o600);
+        } catch {
+          // best-effort on platforms that support it
+        }
       } catch {
         // keep existing backup
       }
@@ -82,6 +73,11 @@ async function safeSaveCreds(
   }
   try {
     await Promise.resolve(saveCreds());
+    try {
+      fsSync.chmodSync(resolveWebCredsPath(authDir), 0o600);
+    } catch {
+      // best-effort on platforms that support it
+    }
   } catch (err) {
     logger.warn({ error: String(err) }, "failed saving WhatsApp creds");
   }

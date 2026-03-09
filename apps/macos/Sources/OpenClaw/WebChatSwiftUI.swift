@@ -1,8 +1,8 @@
 import AppKit
+import Foundation
 import OpenClawChatUI
 import OpenClawKit
 import OpenClawProtocol
-import Foundation
 import OSLog
 import QuartzCore
 import SwiftUI
@@ -16,7 +16,7 @@ private enum WebChatSwiftUILayout {
     static let anchorPadding: CGFloat = 8
 }
 
-struct MacGatewayChatTransport: OpenClawChatTransport, Sendable {
+struct MacGatewayChatTransport: OpenClawChatTransport {
     func requestHistory(sessionKey: String) async throws -> OpenClawChatHistoryPayload {
         try await GatewayConnection.shared.chatHistory(sessionKey: sessionKey)
     }
@@ -251,10 +251,7 @@ final class WebChatSwiftUIWindowController {
     }
 
     private func removeDismissMonitor() {
-        if let monitor = self.dismissMonitor {
-            NSEvent.removeMonitor(monitor)
-            self.dismissMonitor = nil
-        }
+        OverlayPanelFactory.clearGlobalEventMonitor(&self.dismissMonitor)
     }
 
     private static func makeWindow(
@@ -316,7 +313,12 @@ final class WebChatSwiftUIWindowController {
         let controller = NSViewController()
         let effectView = NSVisualEffectView()
         effectView.material = .sidebar
-        effectView.blendingMode = .behindWindow
+        effectView.blendingMode = switch presentation {
+        case .panel:
+            .withinWindow
+        case .window:
+            .behindWindow
+        }
         effectView.state = .active
         effectView.wantsLayer = true
         effectView.layer?.cornerCurve = .continuous
@@ -328,6 +330,7 @@ final class WebChatSwiftUIWindowController {
         }
         effectView.layer?.cornerRadius = cornerRadius
         effectView.layer?.masksToBounds = true
+        effectView.layer?.backgroundColor = NSColor.clear.cgColor
 
         effectView.translatesAutoresizingMaskIntoConstraints = true
         effectView.autoresizingMask = [.width, .height]
@@ -335,6 +338,9 @@ final class WebChatSwiftUIWindowController {
 
         hosting.view.translatesAutoresizingMaskIntoConstraints = false
         hosting.view.wantsLayer = true
+        hosting.view.layer?.cornerCurve = .continuous
+        hosting.view.layer?.cornerRadius = cornerRadius
+        hosting.view.layer?.masksToBounds = true
         hosting.view.layer?.backgroundColor = NSColor.clear.cgColor
 
         controller.addChild(hosting)
@@ -362,13 +368,6 @@ final class WebChatSwiftUIWindowController {
     }
 
     private static func color(fromHex raw: String?) -> Color? {
-        let trimmed = (raw ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return nil }
-        let hex = trimmed.hasPrefix("#") ? String(trimmed.dropFirst()) : trimmed
-        guard hex.count == 6, let value = Int(hex, radix: 16) else { return nil }
-        let r = Double((value >> 16) & 0xFF) / 255.0
-        let g = Double((value >> 8) & 0xFF) / 255.0
-        let b = Double(value & 0xFF) / 255.0
-        return Color(red: r, green: g, blue: b)
+        ColorHexSupport.color(fromHex: raw)
     }
 }

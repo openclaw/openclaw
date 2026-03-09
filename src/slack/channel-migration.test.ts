@@ -1,17 +1,38 @@
 import { describe, expect, it } from "vitest";
-import { migrateSlackChannelConfig } from "./channel-migration.js";
+import { migrateSlackChannelConfig, migrateSlackChannelsInPlace } from "./channel-migration.js";
 
-describe("migrateSlackChannelConfig", () => {
-  it("migrates global channel ids", () => {
-    const cfg = {
-      channels: {
-        slack: {
-          channels: {
-            C123: { requireMention: false },
+function createSlackGlobalChannelConfig(channels: Record<string, Record<string, unknown>>) {
+  return {
+    channels: {
+      slack: {
+        channels,
+      },
+    },
+  };
+}
+
+function createSlackAccountChannelConfig(
+  accountId: string,
+  channels: Record<string, Record<string, unknown>>,
+) {
+  return {
+    channels: {
+      slack: {
+        accounts: {
+          [accountId]: {
+            channels,
           },
         },
       },
-    };
+    },
+  };
+}
+
+describe("migrateSlackChannelConfig", () => {
+  it("migrates global channel ids", () => {
+    const cfg = createSlackGlobalChannelConfig({
+      C123: { requireMention: false },
+    });
 
     const result = migrateSlackChannelConfig({
       cfg,
@@ -27,19 +48,9 @@ describe("migrateSlackChannelConfig", () => {
   });
 
   it("migrates account-scoped channels", () => {
-    const cfg = {
-      channels: {
-        slack: {
-          accounts: {
-            primary: {
-              channels: {
-                C123: { requireMention: true },
-              },
-            },
-          },
-        },
-      },
-    };
+    const cfg = createSlackAccountChannelConfig("primary", {
+      C123: { requireMention: true },
+    });
 
     const result = migrateSlackChannelConfig({
       cfg,
@@ -56,19 +67,9 @@ describe("migrateSlackChannelConfig", () => {
   });
 
   it("matches account ids case-insensitively", () => {
-    const cfg = {
-      channels: {
-        slack: {
-          accounts: {
-            Primary: {
-              channels: {
-                C123: {},
-              },
-            },
-          },
-        },
-      },
-    };
+    const cfg = createSlackAccountChannelConfig("Primary", {
+      C123: {},
+    });
 
     const result = migrateSlackChannelConfig({
       cfg,
@@ -84,16 +85,10 @@ describe("migrateSlackChannelConfig", () => {
   });
 
   it("skips migration when new id already exists", () => {
-    const cfg = {
-      channels: {
-        slack: {
-          channels: {
-            C123: { requireMention: true },
-            C999: { requireMention: false },
-          },
-        },
-      },
-    };
+    const cfg = createSlackGlobalChannelConfig({
+      C123: { requireMention: true },
+      C999: { requireMention: false },
+    });
 
     const result = migrateSlackChannelConfig({
       cfg,
@@ -107,6 +102,17 @@ describe("migrateSlackChannelConfig", () => {
     expect(cfg.channels.slack.channels).toEqual({
       C123: { requireMention: true },
       C999: { requireMention: false },
+    });
+  });
+
+  it("no-ops when old and new channel ids are the same", () => {
+    const channels = {
+      C123: { requireMention: true },
+    };
+    const result = migrateSlackChannelsInPlace(channels, "C123", "C123");
+    expect(result).toEqual({ migrated: false, skippedExisting: false });
+    expect(channels).toEqual({
+      C123: { requireMention: true },
     });
   });
 });

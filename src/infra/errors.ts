@@ -1,3 +1,5 @@
+import { redactSensitiveText } from "../logging/redact.js";
+
 export function extractErrorCode(err: unknown): string | undefined {
   if (!err || typeof err !== "object") {
     return undefined;
@@ -10,6 +12,43 @@ export function extractErrorCode(err: unknown): string | undefined {
     return String(code);
   }
   return undefined;
+}
+
+export function readErrorName(err: unknown): string {
+  if (!err || typeof err !== "object") {
+    return "";
+  }
+  const name = (err as { name?: unknown }).name;
+  return typeof name === "string" ? name : "";
+}
+
+export function collectErrorGraphCandidates(
+  err: unknown,
+  resolveNested?: (current: Record<string, unknown>) => Iterable<unknown>,
+): unknown[] {
+  const queue: unknown[] = [err];
+  const seen = new Set<unknown>();
+  const candidates: unknown[] = [];
+
+  while (queue.length > 0) {
+    const current = queue.shift();
+    if (current == null || seen.has(current)) {
+      continue;
+    }
+    seen.add(current);
+    candidates.push(current);
+
+    if (!current || typeof current !== "object" || !resolveNested) {
+      continue;
+    }
+    for (const nested of resolveNested(current as Record<string, unknown>)) {
+      if (nested != null && !seen.has(nested)) {
+        queue.push(nested);
+      }
+    }
+  }
+
+  return candidates;
 }
 
 /**
@@ -27,20 +66,22 @@ export function hasErrnoCode(err: unknown, code: string): boolean {
 }
 
 export function formatErrorMessage(err: unknown): string {
+  let formatted: string;
   if (err instanceof Error) {
-    return err.message || err.name || "Error";
+    formatted = err.message || err.name || "Error";
+  } else if (typeof err === "string") {
+    formatted = err;
+  } else if (typeof err === "number" || typeof err === "boolean" || typeof err === "bigint") {
+    formatted = String(err);
+  } else {
+    try {
+      formatted = JSON.stringify(err);
+    } catch {
+      formatted = Object.prototype.toString.call(err);
+    }
   }
-  if (typeof err === "string") {
-    return err;
-  }
-  if (typeof err === "number" || typeof err === "boolean" || typeof err === "bigint") {
-    return String(err);
-  }
-  try {
-    return JSON.stringify(err);
-  } catch {
-    return Object.prototype.toString.call(err);
-  }
+  // Security: best-effort token redaction before returning/logging.
+  return redactSensitiveText(formatted);
 }
 
 export function formatUncaughtError(err: unknown): string {
@@ -48,7 +89,8 @@ export function formatUncaughtError(err: unknown): string {
     return formatErrorMessage(err);
   }
   if (err instanceof Error) {
-    return err.stack ?? err.message ?? err.name;
+    const stack = err.stack ?? err.message ?? err.name;
+    return redactSensitiveText(stack);
   }
   return formatErrorMessage(err);
 }

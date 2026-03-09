@@ -6,7 +6,22 @@ export type EmbeddedPiAgentMeta = {
   provider: string;
   model: string;
   compactionCount?: number;
+  promptTokens?: number;
   usage?: {
+    input?: number;
+    output?: number;
+    cacheRead?: number;
+    cacheWrite?: number;
+    total?: number;
+  };
+  /**
+   * Usage from the last individual API call (not accumulated across tool-use
+   * loops or compaction retries). Used for context-window utilization display
+   * (`totalTokens` in sessions.json) because the accumulated `usage.input`
+   * sums input tokens from every API call in the run, which overstates the
+   * actual context size.
+   */
+  lastCallUsage?: {
     input?: number;
     output?: number;
     cacheRead?: number;
@@ -21,7 +36,12 @@ export type EmbeddedPiRunMeta = {
   aborted?: boolean;
   systemPromptReport?: SessionSystemPromptReport;
   error?: {
-    kind: "context_overflow" | "compaction_failure" | "role_ordering" | "image_size";
+    kind:
+      | "context_overflow"
+      | "compaction_failure"
+      | "role_ordering"
+      | "image_size"
+      | "retry_limit";
     message: string;
   };
   /** Stop reason for the agent run (e.g., "completed", "tool_calls"). */
@@ -48,8 +68,12 @@ export type EmbeddedPiRunResult = {
   didSendViaMessagingTool?: boolean;
   // Texts successfully sent via messaging tools during the run.
   messagingToolSentTexts?: string[];
+  // Media URLs successfully sent via messaging tools during the run.
+  messagingToolSentMediaUrls?: string[];
   // Messaging tool targets that successfully sent a message during the run.
   messagingToolSentTargets?: MessagingToolSend[];
+  // Count of successful cron.add tool calls in this run.
+  successfulCronAdds?: number;
 };
 
 export type EmbeddedPiCompactResult = {
@@ -68,6 +92,7 @@ export type EmbeddedPiCompactResult = {
 export type EmbeddedSandboxInfo = {
   enabled: boolean;
   workspaceDir?: string;
+  containerWorkspaceDir?: string;
   workspaceAccess?: "none" | "ro" | "rw";
   agentWorkspaceMount?: string;
   browserBridgeUrl?: string;

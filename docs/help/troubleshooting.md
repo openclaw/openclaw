@@ -34,6 +34,37 @@ Good output in one line:
 - `openclaw channels status --probe` → channels report `connected` or `ready`.
 - `openclaw logs --follow` → steady activity, no repeating fatal errors.
 
+## Anthropic long context 429
+
+If you see:
+`HTTP 429: rate_limit_error: Extra usage is required for long context requests`,
+go to [/gateway/troubleshooting#anthropic-429-extra-usage-required-for-long-context](/gateway/troubleshooting#anthropic-429-extra-usage-required-for-long-context).
+
+## Plugin install fails with missing openclaw extensions
+
+If install fails with `package.json missing openclaw.extensions`, the plugin package
+is using an old shape that OpenClaw no longer accepts.
+
+Fix in the plugin package:
+
+1. Add `openclaw.extensions` to `package.json`.
+2. Point entries at built runtime files (usually `./dist/index.js`).
+3. Republish the plugin and run `openclaw plugins install <npm-spec>` again.
+
+Example:
+
+```json
+{
+  "name": "@openclaw/my-plugin",
+  "version": "1.2.3",
+  "openclaw": {
+    "extensions": ["./dist/index.js"]
+  }
+}
+```
+
+Reference: [/tools/plugin#distribution-npm](/tools/plugin#distribution-npm)
+
 ## Decision tree
 
 ```mermaid
@@ -62,7 +93,7 @@ flowchart TD
     openclaw status
     openclaw gateway status
     openclaw channels status --probe
-    openclaw pairing list <channel>
+    openclaw pairing list --channel <channel> [--account <id>]
     openclaw logs --follow
     ```
 
@@ -259,6 +290,7 @@ flowchart TD
 
     - [/gateway/troubleshooting#browser-tool-fails](/gateway/troubleshooting#browser-tool-fails)
     - [/tools/browser-linux-troubleshooting](/tools/browser-linux-troubleshooting)
+    - [/tools/browser-wsl2-windows-remote-cdp-troubleshooting](/tools/browser-wsl2-windows-remote-cdp-troubleshooting)
     - [/tools/chrome-extension](/tools/chrome-extension)
 
   </Accordion>

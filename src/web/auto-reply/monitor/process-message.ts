@@ -1,37 +1,40 @@
-import type { getReplyFromConfig } from "../../../auto-reply/reply.js";
-import type { ReplyPayload } from "../../../auto-reply/types.js";
-import type { loadConfig } from "../../../config/config.js";
-import type { getChildLogger } from "../../../logging.js";
-import type { resolveAgentRoute } from "../../../routing/resolve-route.js";
-import type { WebInboundMsg } from "../types.js";
 import { resolveIdentityNamePrefix } from "../../../agents/identity.js";
 import { resolveChunkMode, resolveTextChunkLimit } from "../../../auto-reply/chunk.js";
 import { shouldComputeCommandAuthorized } from "../../../auto-reply/command-detection.js";
-import {
-  formatInboundEnvelope,
-  resolveEnvelopeFormatOptions,
-} from "../../../auto-reply/envelope.js";
+import { formatInboundEnvelope } from "../../../auto-reply/envelope.js";
+import type { getReplyFromConfig } from "../../../auto-reply/reply.js";
 import {
   buildHistoryContextFromEntries,
   type HistoryEntry,
 } from "../../../auto-reply/reply/history.js";
 import { finalizeInboundContext } from "../../../auto-reply/reply/inbound-context.js";
 import { dispatchReplyWithBufferedBlockDispatcher } from "../../../auto-reply/reply/provider-dispatcher.js";
+import type { ReplyPayload } from "../../../auto-reply/types.js";
 import { toLocationContext } from "../../../channels/location.js";
 import { createReplyPrefixOptions } from "../../../channels/reply-prefix.js";
+import { resolveInboundSessionEnvelopeContext } from "../../../channels/session-envelope.js";
+import type { loadConfig } from "../../../config/config.js";
 import { resolveMarkdownTableMode } from "../../../config/markdown-tables.js";
-import {
-  readSessionUpdatedAt,
-  recordSessionMetaFromInbound,
-  resolveStorePath,
-} from "../../../config/sessions.js";
+import { recordSessionMetaFromInbound } from "../../../config/sessions.js";
 import { logVerbose, shouldLogVerbose } from "../../../globals.js";
-import { readChannelAllowFromStore } from "../../../pairing/pairing-store.js";
+import type { getChildLogger } from "../../../logging.js";
+import { getAgentScopedMediaLocalRoots } from "../../../media/local-roots.js";
+import {
+  resolveInboundLastRouteSessionKey,
+  type resolveAgentRoute,
+} from "../../../routing/resolve-route.js";
+import {
+  readStoreAllowFromForDmPolicy,
+  resolvePinnedMainDmOwnerFromAllowlist,
+  resolveDmGroupAccessWithCommandGate,
+} from "../../../security/dm-policy-shared.js";
 import { jidToE164, normalizeE164 } from "../../../utils.js";
+import { resolveWhatsAppAccount } from "../../accounts.js";
 import { newConnectionId } from "../../reconnect.js";
 import { formatError } from "../../session.js";
 import { deliverWebReply } from "../deliver-reply.js";
 import { whatsappInboundLog, whatsappOutboundLog } from "../loggers.js";
+import type { WebInboundMsg } from "../types.js";
 import { elide } from "../util.js";
 import { maybeSendAckReaction } from "./ack-reaction.js";
 import { formatGroupMembers } from "./group-members.js";
@@ -45,15 +48,6 @@ export type GroupHistoryEntry = {
   id?: string;
   senderJid?: string;
 };
-
-function normalizeAllowFromE164(values: Array<string | number> | undefined): string[] {
-  const list = Array.isArray(values) ? values : [];
-  return list
-    .map((entry) => String(entry).trim())
-    .filter((entry) => entry && entry !== "*")
-    .map((entry) => normalizeE164(entry))
-    .filter((entry): entry is string => Boolean(entry));
-}
 
 async function resolveWhatsAppCommandAuthorized(params: {
   cfg: ReturnType<typeof loadConfig>;
@@ -72,35 +66,61 @@ async function resolveWhatsAppCommandAuthorized(params: {
     return false;
   }
 
-  const configuredAllowFrom = params.cfg.channels?.whatsapp?.allowFrom ?? [];
+  const account = resolveWhatsAppAccount({ cfg: params.cfg, accountId: params.msg.accountId });
+  const dmPolicy = account.dmPolicy ?? "pairing";
+  const groupPolicy = account.groupPolicy ?? "allowlist";
+  const configuredAllowFrom = account.allowFrom ?? [];
   const configuredGroupAllowFrom =
-    params.cfg.channels?.whatsapp?.groupAllowFrom ??
-    (configuredAllowFrom.length > 0 ? configuredAllowFrom : undefined);
+    account.groupAllowFrom ?? (configuredAllowFrom.length > 0 ? configuredAllowFrom : undefined);
 
-  if (isGroup) {
-    if (!configuredGroupAllowFrom || configuredGroupAllowFrom.length === 0) {
-      return false;
-    }
-    if (configuredGroupAllowFrom.some((v) => String(v).trim() === "*")) {
-      return true;
-    }
-    return normalizeAllowFromE164(configuredGroupAllowFrom).includes(senderE164);
-  }
-
-  const storeAllowFrom = await readChannelAllowFromStore("whatsapp").catch(() => []);
-  const combinedAllowFrom = Array.from(
-    new Set([...(configuredAllowFrom ?? []), ...storeAllowFrom]),
-  );
-  const allowFrom =
-    combinedAllowFrom.length > 0
-      ? combinedAllowFrom
+  const storeAllowFrom = isGroup
+    ? []
+    : await readStoreAllowFromForDmPolicy({
+        provider: "whatsapp",
+        accountId: params.msg.accountId,
+        dmPolicy,
+      });
+  const dmAllowFrom =
+    configuredAllowFrom.length > 0
+      ? configuredAllowFrom
       : params.msg.selfE164
         ? [params.msg.selfE164]
         : [];
-  if (allowFrom.some((v) => String(v).trim() === "*")) {
-    return true;
-  }
-  return normalizeAllowFromE164(allowFrom).includes(senderE164);
+  const access = resolveDmGroupAccessWithCommandGate({
+    isGroup,
+    dmPolicy,
+    groupPolicy,
+    allowFrom: dmAllowFrom,
+    groupAllowFrom: configuredGroupAllowFrom,
+    storeAllowFrom,
+    isSenderAllowed: (allowEntries) => {
+      if (allowEntries.includes("*")) {
+        return true;
+      }
+      const normalizedEntries = allowEntries
+        .map((entry) => normalizeE164(String(entry)))
+        .filter((entry): entry is string => Boolean(entry));
+      return normalizedEntries.includes(senderE164);
+    },
+    command: {
+      useAccessGroups,
+      allowTextCommands: true,
+      hasControlCommand: true,
+    },
+  });
+  return access.commandAuthorized;
+}
+
+function resolvePinnedMainDmRecipient(params: {
+  cfg: ReturnType<typeof loadConfig>;
+  msg: WebInboundMsg;
+}): string | null {
+  const account = resolveWhatsAppAccount({ cfg: params.cfg, accountId: params.msg.accountId });
+  return resolvePinnedMainDmOwnerFromAllowlist({
+    dmScope: params.cfg.session?.dmScope,
+    allowFrom: account.allowFrom,
+    normalizeEntry: (entry) => normalizeE164(entry),
+  });
 }
 
 export async function processMessage(params: {
@@ -132,12 +152,9 @@ export async function processMessage(params: {
   suppressGroupHistoryClear?: boolean;
 }) {
   const conversationId = params.msg.conversationId ?? params.msg.from;
-  const storePath = resolveStorePath(params.cfg.session?.store, {
+  const { storePath, envelopeOptions, previousTimestamp } = resolveInboundSessionEnvelopeContext({
+    cfg: params.cfg,
     agentId: params.route.agentId,
-  });
-  const envelopeOptions = resolveEnvelopeFormatOptions(params.cfg);
-  const previousTimestamp = readSessionUpdatedAt({
-    storePath,
     sessionKey: params.route.sessionKey,
   });
   let combinedBody = buildInboundLine({
@@ -245,6 +262,7 @@ export async function processMessage(params: {
     channel: "whatsapp",
     accountId: params.route.accountId,
   });
+  const mediaLocalRoots = getAgentScopedMediaLocalRoots(params.cfg, params.route.agentId);
   let didLogHeartbeatStrip = false;
   let didSendReply = false;
   const commandAuthorized = shouldComputeCommandAuthorized(params.msg.body, params.cfg)
@@ -264,7 +282,7 @@ export async function processMessage(params: {
   const responsePrefix =
     prefixOptions.responsePrefix ??
     (configuredResponsePrefix === undefined && isSelfChat
-      ? (resolveIdentityNamePrefix(params.cfg, params.route.agentId) ?? "[openclaw]")
+      ? resolveIdentityNamePrefix(params.cfg, params.route.agentId)
       : undefined);
 
   const inboundHistory =
@@ -315,7 +333,24 @@ export async function processMessage(params: {
     OriginatingTo: params.msg.from,
   });
 
-  if (dmRouteTarget) {
+  // Only update main session's lastRoute when DM actually IS the main session.
+  // When dmScope="per-channel-peer", the DM uses an isolated sessionKey,
+  // and updating mainSessionKey would corrupt routing for the session owner.
+  const pinnedMainDmRecipient = resolvePinnedMainDmRecipient({
+    cfg: params.cfg,
+    msg: params.msg,
+  });
+  const shouldUpdateMainLastRoute =
+    !pinnedMainDmRecipient || pinnedMainDmRecipient === dmRouteTarget;
+  const inboundLastRouteSessionKey = resolveInboundLastRouteSessionKey({
+    route: params.route,
+    sessionKey: params.route.sessionKey,
+  });
+  if (
+    dmRouteTarget &&
+    inboundLastRouteSessionKey === params.route.mainSessionKey &&
+    shouldUpdateMainLastRoute
+  ) {
     updateLastRouteInBackground({
       cfg: params.cfg,
       backgroundTasks: params.backgroundTasks,
@@ -327,6 +362,14 @@ export async function processMessage(params: {
       ctx: ctxPayload,
       warn: params.replyLogger.warn.bind(params.replyLogger),
     });
+  } else if (
+    dmRouteTarget &&
+    inboundLastRouteSessionKey === params.route.mainSessionKey &&
+    pinnedMainDmRecipient
+  ) {
+    logVerbose(
+      `Skipping main-session last route update for ${dmRouteTarget} (pinned owner ${pinnedMainDmRecipient})`,
+    );
   }
 
   const metaTask = recordSessionMetaFromInbound({
@@ -359,38 +402,38 @@ export async function processMessage(params: {
         }
       },
       deliver: async (payload: ReplyPayload, info) => {
+        if (info.kind !== "final") {
+          // Only deliver final replies to external messaging channels (WhatsApp).
+          // Block (reasoning/thinking) and tool updates are meant for the internal
+          // web UI only; sending them here leaks chain-of-thought to end users.
+          return;
+        }
         await deliverWebReply({
           replyResult: payload,
           msg: params.msg,
+          mediaLocalRoots,
           maxMediaBytes: params.maxMediaBytes,
           textLimit,
           chunkMode,
           replyLogger: params.replyLogger,
           connectionId: params.connectionId,
-          // Tool + block updates are noisy; skip their log lines.
-          skipLog: info.kind !== "final",
+          skipLog: false,
           tableMode,
         });
         didSendReply = true;
-        if (info.kind === "tool") {
-          params.rememberSentText(payload.text, {});
-          return;
-        }
-        const shouldLog = info.kind === "final" && payload.text ? true : undefined;
+        const shouldLog = payload.text ? true : undefined;
         params.rememberSentText(payload.text, {
           combinedBody,
           combinedBodySessionKey: params.route.sessionKey,
           logVerboseMessage: shouldLog,
         });
-        if (info.kind === "final") {
-          const fromDisplay =
-            params.msg.chatType === "group" ? conversationId : (params.msg.from ?? "unknown");
-          const hasMedia = Boolean(payload.mediaUrl || payload.mediaUrls?.length);
-          whatsappOutboundLog.info(`Auto-replied to ${fromDisplay}${hasMedia ? " (media)" : ""}`);
-          if (shouldLogVerbose()) {
-            const preview = payload.text != null ? elide(payload.text, 400) : "<media>";
-            whatsappOutboundLog.debug(`Reply body: ${preview}${hasMedia ? " (media)" : ""}`);
-          }
+        const fromDisplay =
+          params.msg.chatType === "group" ? conversationId : (params.msg.from ?? "unknown");
+        const hasMedia = Boolean(payload.mediaUrl || payload.mediaUrls?.length);
+        whatsappOutboundLog.info(`Auto-replied to ${fromDisplay}${hasMedia ? " (media)" : ""}`);
+        if (shouldLogVerbose()) {
+          const preview = payload.text != null ? elide(payload.text, 400) : "<media>";
+          whatsappOutboundLog.debug(`Reply body: ${preview}${hasMedia ? " (media)" : ""}`);
         }
       },
       onError: (err, info) => {
@@ -407,10 +450,9 @@ export async function processMessage(params: {
       onReplyStart: params.msg.sendComposing,
     },
     replyOptions: {
-      disableBlockStreaming:
-        typeof params.cfg.channels?.whatsapp?.blockStreaming === "boolean"
-          ? !params.cfg.channels.whatsapp.blockStreaming
-          : undefined,
+      // WhatsApp delivery intentionally suppresses non-final payloads.
+      // Keep block streaming disabled so final replies are still produced.
+      disableBlockStreaming: true,
       onModelSelected,
     },
   });

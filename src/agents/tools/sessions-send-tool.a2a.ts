@@ -1,8 +1,8 @@
 import crypto from "node:crypto";
-import type { GatewayMessageChannel } from "../../utils/message-channel.js";
 import { callGateway } from "../../gateway/call.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+import type { GatewayMessageChannel } from "../../utils/message-channel.js";
 import { AGENT_LANE_NESTED } from "../lanes.js";
 import { readLatestAssistantReply, runAgentStep } from "./agent-step.js";
 import { resolveAnnounceTarget } from "./sessions-announce-target.js";
@@ -83,6 +83,10 @@ export async function runSessionsSendA2AFlow(params: {
           extraSystemPrompt: replyPrompt,
           timeoutMs: params.announceTimeoutMs,
           lane: AGENT_LANE_NESTED,
+          sourceSessionKey: nextSessionKey,
+          sourceChannel:
+            nextSessionKey === params.requesterSessionKey ? params.requesterChannel : targetChannel,
+          sourceTool: "sessions_send",
         });
         if (!replyText || isReplySkip(replyText)) {
           break;
@@ -110,6 +114,9 @@ export async function runSessionsSendA2AFlow(params: {
       extraSystemPrompt: announcePrompt,
       timeoutMs: params.announceTimeoutMs,
       lane: AGENT_LANE_NESTED,
+      sourceSessionKey: params.requesterSessionKey,
+      sourceChannel: params.requesterChannel,
+      sourceTool: "sessions_send",
     });
     if (announceTarget && announceReply && announceReply.trim() && !isAnnounceSkip(announceReply)) {
       try {

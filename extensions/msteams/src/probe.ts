@@ -1,11 +1,14 @@
-import type { MSTeamsConfig } from "openclaw/plugin-sdk";
+import {
+  normalizeStringEntries,
+  type BaseProbeResult,
+  type MSTeamsConfig,
+} from "openclaw/plugin-sdk/msteams";
 import { formatUnknownError } from "./errors.js";
 import { loadMSTeamsSdkWithAuth } from "./sdk.js";
+import { readAccessToken } from "./token-response.js";
 import { resolveMSTeamsCredentials } from "./token.js";
 
-export type ProbeMSTeamsResult = {
-  ok: boolean;
-  error?: string;
+export type ProbeMSTeamsResult = BaseProbeResult<string> & {
   appId?: string;
   graph?: {
     ok: boolean;
@@ -14,18 +17,6 @@ export type ProbeMSTeamsResult = {
     scopes?: string[];
   };
 };
-
-function readAccessToken(value: unknown): string | null {
-  if (typeof value === "string") {
-    return value;
-  }
-  if (value && typeof value === "object") {
-    const token =
-      (value as { accessToken?: unknown }).accessToken ?? (value as { token?: unknown }).token;
-    return typeof token === "string" ? token : null;
-  }
-  return null;
-}
 
 function decodeJwtPayload(token: string): Record<string, unknown> | null {
   const parts = token.split(".");
@@ -48,7 +39,7 @@ function readStringArray(value: unknown): string[] | undefined {
   if (!Array.isArray(value)) {
     return undefined;
   }
-  const out = value.map((entry) => String(entry).trim()).filter(Boolean);
+  const out = normalizeStringEntries(value);
   return out.length > 0 ? out : undefined;
 }
 

@@ -70,6 +70,7 @@ that up as `<workspace>/skills` on the next session.
 
 - Treat third-party skills as **untrusted code**. Read them before enabling.
 - Prefer sandboxed runs for untrusted inputs and risky tools. See [Sandboxing](/gateway/sandboxing).
+- Workspace and extra-dir skill discovery only accepts skill roots and `SKILL.md` files whose resolved realpath stays inside the configured root.
 - `skills.entries.*.env` and `skills.entries.*.apiKey` inject secrets into the **host** process
   for that agent turn (not the sandbox). Keep secrets out of prompts and logs.
 - For a broader threat model and checklists, see [Security](/gateway/security).
@@ -195,7 +196,7 @@ Bundled/managed skills can be toggled and supplied with env values:
     entries: {
       "nano-banana-pro": {
         enabled: true,
-        apiKey: "GEMINI_KEY_HERE",
+        apiKey: { source: "env", provider: "default", id: "GEMINI_API_KEY" }, // or plaintext string
         env: {
           GEMINI_API_KEY: "GEMINI_KEY_HERE",
         },
@@ -221,6 +222,7 @@ Rules:
 - `enabled: false` disables the skill even if it’s bundled/installed.
 - `env`: injected **only if** the variable isn’t already set in the process.
 - `apiKey`: convenience for skills that declare `metadata.openclaw.primaryEnv`.
+  Supports plaintext string or SecretRef object (`{ source, provider, id }`).
 - `config`: optional bag for custom per-skill fields; custom keys must live here.
 - `allowBundled`: optional allowlist for **bundled** skills only. If set, only
   bundled skills in the list are eligible (managed/workspace skills unaffected).

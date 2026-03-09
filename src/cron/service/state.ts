@@ -1,19 +1,32 @@
 import type { CronConfig } from "../../config/types.cron.js";
 import type { HeartbeatRunResult } from "../../infra/heartbeat-wake.js";
-import type { CronJob, CronJobCreate, CronJobPatch, CronStoreFile } from "../types.js";
+import type {
+  CronDeliveryStatus,
+  CronJob,
+  CronJobCreate,
+  CronJobPatch,
+  CronMessageChannel,
+  CronRunOutcome,
+  CronRunStatus,
+  CronRunTelemetry,
+  CronStoreFile,
+} from "../types.js";
 
 export type CronEvent = {
   jobId: string;
   action: "added" | "updated" | "removed" | "started" | "finished";
   runAtMs?: number;
   durationMs?: number;
-  status?: "ok" | "error" | "skipped";
+  status?: CronRunStatus;
   error?: string;
   summary?: string;
+  delivered?: boolean;
+  deliveryStatus?: CronDeliveryStatus;
+  deliveryError?: string;
   sessionId?: string;
   sessionKey?: string;
   nextRunAtMs?: number;
-};
+} & CronRunTelemetry;
 
 export type Logger = {
   debug: (obj: unknown, msg?: string) => void;
@@ -35,18 +48,69 @@ export type CronServiceDeps = {
   resolveSessionStorePath?: (agentId?: string) => string;
   /** Path to the session store (sessions.json) for reaper use. */
   sessionStorePath?: string;
-  enqueueSystemEvent: (text: string, opts?: { agentId?: string }) => void;
-  requestHeartbeatNow: (opts?: { reason?: string }) => void;
-  runHeartbeatOnce?: (opts?: { reason?: string }) => Promise<HeartbeatRunResult>;
-  runIsolatedAgentJob: (params: { job: CronJob; message: string }) => Promise<{
-    status: "ok" | "error" | "skipped";
-    summary?: string;
-    /** Last non-empty agent text output (not truncated). */
-    outputText?: string;
-    error?: string;
-    sessionId?: string;
+  /**
+   * Delay in ms between missed job executions on startup.
+   * Prevents overwhelming the gateway when many jobs are overdue.
+   * See: https://github.com/openclaw/openclaw/issues/18892
+   */
+  missedJobStaggerMs?: number;
+  /**
+   * Maximum number of missed jobs to run immediately on startup.
+   * Additional missed jobs will be rescheduled to fire gradually.
+   * See: https://github.com/openclaw/openclaw/issues/18892
+   */
+  maxMissedJobsPerRestart?: number;
+  enqueueSystemEvent: (
+    text: string,
+    opts?: { agentId?: string; sessionKey?: string; contextKey?: string },
+  ) => void;
+  requestHeartbeatNow: (opts?: { reason?: string; agentId?: string; sessionKey?: string }) => void;
+  runHeartbeatOnce?: (opts?: {
+    reason?: string;
+    agentId?: string;
     sessionKey?: string;
-  }>;
+    /** Optional heartbeat config override (e.g. target: "last" for cron-triggered heartbeats). */
+    heartbeat?: { target?: string };
+  }) => Promise<HeartbeatRunResult>;
+  /**
+   * WakeMode=now: max time to wait for runHeartbeatOnce to stop returning
+   * { status:"skipped", reason:"requests-in-flight" } before falling back to
+   * requestHeartbeatNow.
+   */
+  wakeNowHeartbeatBusyMaxWaitMs?: number;
+  /** WakeMode=now: delay between runHeartbeatOnce retries while busy. */
+  wakeNowHeartbeatBusyRetryDelayMs?: number;
+  runIsolatedAgentJob: (params: {
+    job: CronJob;
+    message: string;
+    abortSignal?: AbortSignal;
+  }) => Promise<
+    {
+      summary?: string;
+      /** Last non-empty agent text output (not truncated). */
+      outputText?: string;
+      /**
+       * `true` when the isolated run already delivered its output to the target
+       * channel (including matching messaging-tool sends). See:
+       * https://github.com/openclaw/openclaw/issues/15692
+       */
+      delivered?: boolean;
+      /**
+       * `true` when announce/direct delivery was attempted for this run, even
+       * if the final per-message ack status is uncertain.
+       */
+      deliveryAttempted?: boolean;
+    } & CronRunOutcome &
+      CronRunTelemetry
+  >;
+  sendCronFailureAlert?: (params: {
+    job: CronJob;
+    text: string;
+    channel: CronMessageChannel;
+    to?: string;
+    mode?: "announce" | "webhook";
+    accountId?: string;
+  }) => Promise<void>;
   onEvent?: (evt: CronEvent) => void;
 };
 
@@ -90,6 +154,7 @@ export type CronStatusSummary = {
 
 export type CronRunResult =
   | { ok: true; ran: true }
+  | { ok: true; enqueued: true; runId: string }
   | { ok: true; ran: false; reason: "not-due" }
   | { ok: true; ran: false; reason: "already-running" }
   | { ok: false };

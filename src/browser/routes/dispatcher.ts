@@ -1,7 +1,7 @@
-import type { BrowserRouteContext } from "../server-context.js";
-import type { BrowserRequest, BrowserResponse, BrowserRouteRegistrar } from "./types.js";
 import { escapeRegExp } from "../../utils.js";
+import type { BrowserRouteContext } from "../server-context.js";
 import { registerBrowserRoutes } from "./index.js";
+import type { BrowserRequest, BrowserResponse, BrowserRouteRegistrar } from "./types.js";
 
 type BrowserDispatchRequest = {
   method: "GET" | "POST" | "DELETE";
@@ -87,7 +87,14 @@ export function createBrowserRouteDispatcher(ctx: BrowserRouteContext) {
         for (const [idx, name] of match.paramNames.entries()) {
           const value = exec[idx + 1];
           if (typeof value === "string") {
-            params[name] = decodeURIComponent(value);
+            try {
+              params[name] = decodeURIComponent(value);
+            } catch {
+              return {
+                status: 400,
+                body: { error: `invalid path parameter encoding: ${name}` },
+              };
+            }
           }
         }
       }

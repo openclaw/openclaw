@@ -1,6 +1,4 @@
 import type { Command } from "commander";
-import type { NodesRpcOpts } from "./types.js";
-import { randomIdempotencyKey } from "../../gateway/call.js";
 import { defaultRuntime } from "../../runtime.js";
 import { shortenHomePath } from "../../utils.js";
 import {
@@ -10,7 +8,8 @@ import {
 } from "../nodes-screen.js";
 import { parseDurationMs } from "../parse-duration.js";
 import { runNodesCommand } from "./cli-utils.js";
-import { callGatewayCli, nodesCallOpts, resolveNodeId } from "./rpc.js";
+import { buildNodeInvokeParams, callGatewayCli, nodesCallOpts, resolveNodeId } from "./rpc.js";
+import type { NodesRpcOpts } from "./types.js";
 
 export function registerNodesScreenCommands(nodes: Command) {
   const screen = nodes
@@ -38,7 +37,7 @@ export function registerNodesScreenCommands(nodes: Command) {
             ? Number.parseInt(String(opts.invokeTimeout), 10)
             : undefined;
 
-          const invokeParams: Record<string, unknown> = {
+          const invokeParams = buildNodeInvokeParams({
             nodeId,
             command: "screen.record",
             params: {
@@ -48,11 +47,8 @@ export function registerNodesScreenCommands(nodes: Command) {
               format: "mp4",
               includeAudio: opts.audio !== false,
             },
-            idempotencyKey: randomIdempotencyKey(),
-          };
-          if (typeof timeoutMs === "number" && Number.isFinite(timeoutMs)) {
-            invokeParams.timeoutMs = timeoutMs;
-          }
+            timeoutMs,
+          });
 
           const raw = await callGatewayCli("node.invoke", opts, invokeParams);
           const res = typeof raw === "object" && raw !== null ? (raw as { payload?: unknown }) : {};
