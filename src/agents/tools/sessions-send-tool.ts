@@ -5,6 +5,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { callGateway } from "../../gateway/call.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { normalizeAgentId, resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
+import { hasInterSessionUserProvenance } from "../../sessions/input-provenance.js";
 import { SESSION_LABEL_MAX_LENGTH } from "../../sessions/session-label.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import {
@@ -349,6 +350,36 @@ export function createSessionsSendTool(opts?: {
             sessionKey: displayKey,
             ingressEcho,
           });
+        }
+      }
+
+      const allowNestedSessionsSend =
+        cfg.session?.agentToAgent?.guard?.allowNestedSessionsSend === true;
+      if (!allowNestedSessionsSend && opts?.agentSessionKey) {
+        try {
+          const currentHistory = await callGateway<{ messages?: Array<Record<string, unknown>> }>({
+            method: "chat.history",
+            params: { sessionKey: opts.agentSessionKey, limit: 20 },
+            timeoutMs: 10_000,
+          });
+          const messages = Array.isArray(currentHistory?.messages) ? currentHistory.messages : [];
+          const latestUser = [...messages].toReversed().find((entry) => entry?.role === "user");
+          const provenance = latestUser?.provenance as Record<string, unknown> | undefined;
+          if (
+            hasInterSessionUserProvenance(latestUser as { role?: unknown; provenance?: unknown }) &&
+            provenance?.sourceTool === "sessions_send"
+          ) {
+            return jsonResult({
+              runId: crypto.randomUUID(),
+              status: "forbidden",
+              error:
+                "Nested sessions_send relay blocked by session.agentToAgent.guard.allowNestedSessionsSend=false.",
+              sessionKey: displayKey,
+              ingressEcho,
+            });
+          }
+        } catch {
+          // Best effort guard; if current session history is unavailable, preserve prior behavior.
         }
       }
 

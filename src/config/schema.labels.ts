@@ -704,6 +704,8 @@ export const FIELD_LABELS: Record<string, string> = {
   "session.agentToAgent.ingressEcho.enabled": "Agent-to-Agent Ingress Echo Enabled",
   "session.agentToAgent.ingressEcho.requireDelivery":
     "Agent-to-Agent Ingress Echo Require Delivery",
+  "session.agentToAgent.guard": "Agent-to-Agent Guard",
+  "session.agentToAgent.guard.allowNestedSessionsSend": "Allow Nested sessions_send",
   "session.threadBindings": "Session Thread Bindings",
   "session.threadBindings.enabled": "Thread Binding Enabled",
   "session.threadBindings.idleHours": "Thread Binding Idle Timeout (hours)",

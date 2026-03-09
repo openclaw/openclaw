@@ -370,6 +370,8 @@ Add at least one loopback test covering:
 
 ## Workstream F — Follow-up guardrails (separate PR)
 
+Status update (2026-03-09): nested relay guard has now been started after the ingress-echo MVP landed and the e2e harness issue was fixed.
+
 This should be a **second PR**, not mixed into the ingress-echo implementation unless required for safety.
 
 ### F1. Nested relay guard

@@ -66,6 +66,12 @@ export const SessionSchema = z
           })
           .strict()
           .optional(),
+        guard: z
+          .object({
+            allowNestedSessionsSend: z.boolean().optional(),
+          })
+          .strict()
+          .optional(),
       })
       .strict()
       .optional(),
