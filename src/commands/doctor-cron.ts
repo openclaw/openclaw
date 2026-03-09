@@ -96,7 +96,7 @@ function migrateLegacyNotifyFallback(params: {
       raw.delivery = {
         ...delivery,
         mode: "webhook",
-        to: to ?? params.legacyWebhook,
+        to: mode === "none" ? params.legacyWebhook : (to ?? params.legacyWebhook),
       };
       delete raw.notify;
       changed = true;
@@ -152,13 +152,10 @@ export async function maybeRepairLegacyCronStore(params: {
     "Cron",
   );
 
-  const shouldRepair =
-    params.options.nonInteractive === true
-      ? true
-      : await params.prompter.confirm({
-          message: "Repair legacy cron jobs now?",
-          initialValue: true,
-        });
+  const shouldRepair = await params.prompter.confirm({
+    message: "Repair legacy cron jobs now?",
+    initialValue: true,
+  });
   if (!shouldRepair) {
     return;
   }

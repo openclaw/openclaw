@@ -155,4 +155,115 @@ describe("maybeRepairLegacyCronStore", () => {
       "Doctor warnings",
     );
   });
+
+  it("does not auto-repair in non-interactive mode without explicit repair approval", async () => {
+    const storePath = await makeTempStorePath();
+    await fs.mkdir(path.dirname(storePath), { recursive: true });
+    await fs.writeFile(
+      storePath,
+      JSON.stringify(
+        {
+          version: 1,
+          jobs: [
+            {
+              jobId: "legacy-job",
+              name: "Legacy job",
+              notify: true,
+              createdAtMs: Date.parse("2026-02-01T00:00:00.000Z"),
+              updatedAtMs: Date.parse("2026-02-02T00:00:00.000Z"),
+              schedule: { kind: "cron", cron: "0 7 * * *", tz: "UTC" },
+              payload: {
+                kind: "systemEvent",
+                text: "Morning brief",
+              },
+              state: {},
+            },
+          ],
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+
+    const noteSpy = vi.spyOn(noteModule, "note").mockImplementation(() => {});
+    const prompter = makePrompter(false);
+
+    await maybeRepairLegacyCronStore({
+      cfg: {
+        cron: {
+          store: storePath,
+          webhook: "https://example.invalid/cron-finished",
+        },
+      },
+      options: { nonInteractive: true },
+      prompter,
+    });
+
+    const persisted = JSON.parse(await fs.readFile(storePath, "utf-8")) as {
+      jobs: Array<Record<string, unknown>>;
+    };
+    expect(prompter.confirm).toHaveBeenCalledWith({
+      message: "Repair legacy cron jobs now?",
+      initialValue: true,
+    });
+    expect(persisted.jobs[0]?.jobId).toBe("legacy-job");
+    expect(persisted.jobs[0]?.notify).toBe(true);
+    expect(noteSpy).not.toHaveBeenCalledWith(
+      expect.stringContaining("Cron store normalized"),
+      "Doctor changes",
+    );
+  });
+
+  it("migrates notify fallback none delivery jobs to cron.webhook", async () => {
+    const storePath = await makeTempStorePath();
+    await fs.mkdir(path.dirname(storePath), { recursive: true });
+    await fs.writeFile(
+      storePath,
+      JSON.stringify(
+        {
+          version: 1,
+          jobs: [
+            {
+              id: "notify-none",
+              name: "Notify none",
+              notify: true,
+              createdAtMs: Date.parse("2026-02-01T00:00:00.000Z"),
+              updatedAtMs: Date.parse("2026-02-02T00:00:00.000Z"),
+              schedule: { kind: "every", everyMs: 60_000 },
+              payload: {
+                kind: "systemEvent",
+                text: "Status",
+              },
+              delivery: { mode: "none", to: "123456789" },
+              state: {},
+            },
+          ],
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+
+    await maybeRepairLegacyCronStore({
+      cfg: {
+        cron: {
+          store: storePath,
+          webhook: "https://example.invalid/cron-finished",
+        },
+      },
+      options: {},
+      prompter: makePrompter(true),
+    });
+
+    const persisted = JSON.parse(await fs.readFile(storePath, "utf-8")) as {
+      jobs: Array<Record<string, unknown>>;
+    };
+    expect(persisted.jobs[0]?.notify).toBeUndefined();
+    expect(persisted.jobs[0]?.delivery).toMatchObject({
+      mode: "webhook",
+      to: "https://example.invalid/cron-finished",
+    });
+  });
 });
