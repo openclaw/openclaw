@@ -133,6 +133,40 @@ describe("config schema regressions", () => {
     expect(res.ok).toBe(true);
   });
 
+  it("accepts legacy anthropic tool payload compat overrides", () => {
+    const res = validateConfigObject({
+      models: {
+        providers: {
+          openrouter: {
+            baseUrl: "https://openrouter.ai/api/v1",
+            apiKey: "env:OPENROUTER_API_KEY",
+            models: [
+              {
+                id: "openrouter/test-model",
+                name: "OpenRouter Test Model",
+                reasoning: true,
+                input: ["text"],
+                cost: {
+                  input: 0,
+                  output: 0,
+                  cacheRead: 0,
+                  cacheWrite: 0,
+                },
+                contextWindow: 200000,
+                maxTokens: 64000,
+                compat: {
+                  requiresOpenAiAnthropicToolPayload: true,
+                },
+              },
+            ],
+          },
+        },
+      },
+    });
+
+    expect(res.ok).toBe(true);
+  });
+
   it("rejects non-positive pdf limits", () => {
     const res = validateConfigObject({
       agents: {
