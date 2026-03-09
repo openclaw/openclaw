@@ -76,17 +76,19 @@ describe("pw-session getPageForTargetId", () => {
       }),
     } as unknown as import("playwright-core").BrowserContext;
 
+    const pageAEmulateMedia = vi.fn(async () => {});
+    const pageBEmulateMedia = vi.fn(async () => {});
     const pageA = {
       on: pageOn,
       context: () => context,
       url: () => "https://alpha.example",
-      emulateMedia: vi.fn(async () => {}),
+      emulateMedia: pageAEmulateMedia,
     } as unknown as import("playwright-core").Page;
     const pageB = {
       on: pageOn,
       context: () => context,
       url: () => "https://beta.example",
-      emulateMedia: vi.fn(async () => {}),
+      emulateMedia: pageBEmulateMedia,
     } as unknown as import("playwright-core").Page;
 
     (context as unknown as { pages: () => unknown[] }).pages = () => [pageA, pageB];
@@ -138,17 +140,19 @@ describe("pw-session getPageForTargetId", () => {
       newCDPSession,
     } as unknown as import("playwright-core").BrowserContext;
 
+    const pageAEmulateMedia = vi.fn(async () => {});
+    const pageBEmulateMedia = vi.fn(async () => {});
     const pageA = {
       on: pageOn,
       context: () => context,
       url: () => "https://alpha.example",
-      emulateMedia: vi.fn(async () => {}),
+      emulateMedia: pageAEmulateMedia,
     } as unknown as import("playwright-core").Page;
     const pageB = {
       on: pageOn,
       context: () => context,
       url: () => "https://beta.example",
-      emulateMedia: vi.fn(async () => {}),
+      emulateMedia: pageBEmulateMedia,
     } as unknown as import("playwright-core").Page;
 
     (context as unknown as { pages: () => unknown[] }).pages = () => [pageA, pageB];
@@ -183,8 +187,8 @@ describe("pw-session getPageForTargetId", () => {
       });
       expect(resolved).toBe(pageB);
       expect(newCDPSession).not.toHaveBeenCalled();
-      expect(pageA.emulateMedia).toHaveBeenCalledWith({ colorScheme: null });
-      expect(pageB.emulateMedia).toHaveBeenCalledWith({ colorScheme: null });
+      expect(pageAEmulateMedia).toHaveBeenCalledWith({ colorScheme: null });
+      expect(pageBEmulateMedia).toHaveBeenCalledWith({ colorScheme: null });
     } finally {
       fetchSpy.mockRestore();
     }
