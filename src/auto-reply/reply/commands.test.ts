@@ -8,6 +8,7 @@ import {
   listSubagentRunsForRequester,
   resetSubagentRegistryForTests,
 } from "../../agents/subagent-registry.js";
+import type { ChannelId } from "../../channels/plugins/types.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { updateSessionStore, type SessionEntry } from "../../config/sessions.js";
 import * as internalHooks from "../../hooks/internal-hooks.js";
@@ -877,10 +878,13 @@ describe("handleCommands /allowlist", () => {
       GatewayClientScopes: ["operator.write"],
     });
     params.command.channel = INTERNAL_MESSAGE_CHANNEL;
+    // Set channelId so channel resolution succeeds after the scope guard passes
+    params.command.channelId = "telegram" as ChannelId;
     const result = await handleCommands(params);
     expect(result.shouldContinue).toBe(false);
-    // list should succeed (no admin required for reads)
+    // list should succeed and show channel info (no admin required for reads)
     expect(result.reply?.text).not.toContain("requires operator.admin");
+    expect(result.reply?.text).toContain("Channel: telegram");
   });
 
   it("removes DM allowlist entries from canonical allowFrom and deletes legacy dm.allowFrom", async () => {
