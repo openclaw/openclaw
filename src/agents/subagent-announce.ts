@@ -819,7 +819,7 @@ async function sendSubagentAnnounceDirectly(params: {
     // When direct delivery succeeds for group topic sessions, still inject a
     // lightweight trigger into the requester session so the main agent is aware
     // of the sub-agent completion (fixes #40605).
-    if (shouldDeliverExternally && !params.requesterIsSubagent) {
+    if (shouldDeliverExternally) {
       try {
         await callGateway({
           method: "agent",
