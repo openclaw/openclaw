@@ -77,6 +77,10 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
 
   let typingState: TypingIndicatorState | null = null;
   const typingCallbacks = createTypingCallbacks({
+    // Feishu uses emoji reactions as typing indicators (no native typing API).
+    // Unlike Telegram/Discord, reactions are persistent and don't auto-expire,
+    // so keepalive re-sends are unnecessary and cause repeated notifications.
+    keepaliveIntervalMs: 0,
     start: async () => {
       // Check if typing indicator is enabled (default: true)
       if (!(account.config.typingIndicator ?? true)) {
@@ -163,10 +167,14 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
     }
     if (options?.dedupeWithLastPartial) {
       lastPartial = nextText;
+      // Partial replies are cumulative — each payload contains the full text so far.
+      // Directly replace streamText to avoid the merge fallback appending duplicates.
+      streamText = nextText;
+    } else {
+      const mode = options?.mode ?? "snapshot";
+      streamText =
+        mode === "delta" ? `${streamText}${nextText}` : mergeStreamingText(streamText, nextText);
     }
-    const mode = options?.mode ?? "snapshot";
-    streamText =
-      mode === "delta" ? `${streamText}${nextText}` : mergeStreamingText(streamText, nextText);
     partialUpdateQueue = partialUpdateQueue.then(async () => {
       if (streamingStartPromise) {
         await streamingStartPromise;
@@ -278,14 +286,24 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
 
           if (streaming?.isActive()) {
             if (info?.kind === "block") {
-              // Some runtimes emit block payloads without onPartial/final callbacks.
-              // Mirror block text into streamText so onIdle close still sends content.
-              queueStreamingUpdate(text, { mode: "delta" });
+              // Narration: replace card content so each step overwrites the previous one.
+              // Users see the latest status, not a growing log of all narration.
+              streamText = text;
+              partialUpdateQueue = partialUpdateQueue.then(async () => {
+                if (streaming?.isActive()) {
+                  await streaming.update(streamText);
+                }
+              });
             }
             if (info?.kind === "final") {
-              streamText = mergeStreamingText(streamText, text);
-              await closeStreaming();
-              deliveredFinalTexts.add(text);
+              // Replace card content with final text. Don't close here — there may be
+              // multiple final payloads; let onIdle close with the last one.
+              streamText = text;
+              partialUpdateQueue = partialUpdateQueue.then(async () => {
+                if (streaming?.isActive()) {
+                  await streaming.update(streamText);
+                }
+              });
             }
             // Send media even when streaming handled the text
             if (hasMedia) {

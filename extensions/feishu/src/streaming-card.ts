@@ -294,15 +294,15 @@ export class FeishuStreamingSession {
     if (!this.state || this.closed) {
       return;
     }
-    const mergedInput = mergeStreamingText(this.pendingText ?? this.state.currentText, text);
-    if (!mergedInput || mergedInput === this.state.currentText) {
+    // Use text as-is — the caller (reply-dispatcher) controls merge/replace semantics.
+    if (!text || text === this.state.currentText) {
       return;
     }
 
     // Throttle: skip if updated recently, but remember pending text
     const now = Date.now();
     if (now - this.lastUpdateTime < this.updateThrottleMs) {
-      this.pendingText = mergedInput;
+      this.pendingText = text;
       return;
     }
     this.pendingText = null;
@@ -312,12 +312,14 @@ export class FeishuStreamingSession {
       if (!this.state || this.closed) {
         return;
       }
-      const mergedText = mergeStreamingText(this.state.currentText, mergedInput);
-      if (!mergedText || mergedText === this.state.currentText) {
+      // Use pendingText if a newer update arrived while queued, otherwise use text.
+      const finalText = this.pendingText ?? text;
+      this.pendingText = null;
+      if (!finalText || finalText === this.state.currentText) {
         return;
       }
-      this.state.currentText = mergedText;
-      await this.updateCardContent(mergedText, (e) => this.log?.(`Update failed: ${String(e)}`));
+      this.state.currentText = finalText;
+      await this.updateCardContent(finalText, (e) => this.log?.(`Update failed: ${String(e)}`));
     });
     await this.queue;
   }
