@@ -183,11 +183,13 @@ describe("startNgrokTunnel() — error paths", () => {
     const proc = makeProc();
     const tunnelPromise = startNgrokTunnel({ port: 3334, path: "/hook" });
 
+    const assertPromise = expect(tunnelPromise).rejects.toThrow("ngrok startup timed out (30s)");
+
     // The setTimeout in startNgrokTunnel is registered synchronously after spawn(),
     // so advancing timers immediately is safe here.
     await vi.runAllTimersAsync();
 
-    await expect(tunnelPromise).rejects.toThrow("ngrok startup timed out (30s)");
+    await assertPromise;
     expect(proc.killed).toBe(true);
     expect(proc.killedWith).toBe("SIGTERM");
   });
@@ -262,8 +264,12 @@ describe("startNgrokTunnel() — auth token and domain flags", () => {
     // Resolve the config command first.
     configProc.close(0);
 
+    // Wait for the async function to proceed to the next spawn.
+    while (mocks.spawn.mock.calls.length < 2) {
+      await new Promise((resolve) => setImmediate(resolve));
+    }
+
     // Then emit the tunnel URL.
-    await Promise.resolve();
     emitNgrokLog(tunnelProc, { msg: "started tunnel", url: "https://auth.ngrok.io" });
 
     await tunnelPromise;
@@ -396,9 +402,11 @@ describe("startTailscaleTunnel()", () => {
     // getTailscaleDnsName is async — we must flush the microtask queue first
     // so that the spawn() and its setTimeout are registered before we advance time.
     await Promise.resolve();
+
+    const assertPromise = expect(tunnelPromise).rejects.toThrow("Tailscale serve timed out");
     await vi.runAllTimersAsync();
 
-    await expect(tunnelPromise).rejects.toThrow("Tailscale serve timed out");
+    await assertPromise;
     expect(proc.killed).toBe(true);
   });
 
