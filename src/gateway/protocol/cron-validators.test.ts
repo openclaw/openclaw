@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { normalizeCronJobCreate } from "../../cron/normalize.js";
 import {
   validateCronAddParams,
   validateCronListParams,
@@ -24,6 +25,14 @@ describe("cron protocol validators", () => {
   it("rejects add params when required scheduling fields are missing", () => {
     const { wakeMode: _wakeMode, ...withoutWakeMode } = minimalAddParams;
     expect(validateCronAddParams(withoutWakeMode)).toBe(false);
+  });
+
+  it("accepts add params with padded id after normalize (gateway trims id before validation)", () => {
+    const raw = { id: "  stable-id  ", ...minimalAddParams };
+    const normalized = normalizeCronJobCreate(raw);
+    expect(normalized).not.toBeNull();
+    expect(normalized!.id).toBe("stable-id");
+    expect(validateCronAddParams(normalized)).toBe(true);
   });
 
   it("accepts update params for id and jobId selectors", () => {
