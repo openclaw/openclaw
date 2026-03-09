@@ -588,6 +588,9 @@ export async function runCronIsolatedAgentTurn(params: {
             sessionKey: agentSessionKey,
             agentId,
             trigger: "cron",
+            // Cron jobs are trusted local automation, so isolated runs should
+            // inherit owner-only tooling like local `openclaw agent` runs.
+            senderIsOwner: true,
             messageChannel,
             agentAccountId: resolvedDelivery.accountId,
             sessionFile,
