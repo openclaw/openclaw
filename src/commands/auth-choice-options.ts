@@ -120,10 +120,10 @@ const AUTH_CHOICE_GROUP_DEFS: {
     choices: ["qianfan-api-key"],
   },
   {
-    value: "bailian",
-    label: "Alibaba Bailian",
+    value: "modelstudio",
+    label: "Alibaba Cloud Model Studio",
     hint: "Coding Plan API key (CN / Global)",
-    choices: ["bailian-api-key-cn", "bailian-api-key"],
+    choices: ["modelstudio-api-key-cn", "modelstudio-api-key"],
   },
   {
     value: "copilot",
@@ -305,12 +305,12 @@ const BASE_AUTH_CHOICE_OPTIONS: ReadonlyArray<AuthChoiceOption> = [
   },
   { value: "qianfan-api-key", label: "Qianfan API key" },
   {
-    value: "bailian-api-key-cn",
+    value: "modelstudio-api-key-cn",
     label: "Coding Plan API Key for China (subscription)",
     hint: "Endpoint: coding.dashscope.aliyuncs.com",
   },
   {
-    value: "bailian-api-key",
+    value: "modelstudio-api-key",
     label: "Coding Plan API Key for Global/Intl (subscription)",
     hint: "Endpoint: coding-intl.dashscope.aliyuncs.com",
   },

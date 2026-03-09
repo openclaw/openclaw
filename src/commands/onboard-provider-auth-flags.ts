@@ -23,8 +23,8 @@ type OnboardProviderAuthOptionKey = keyof Pick<
   | "xaiApiKey"
   | "litellmApiKey"
   | "qianfanApiKey"
-  | "bailianApiKeyCn"
-  | "bailianApiKey"
+  | "modelstudioApiKeyCn"
+  | "modelstudioApiKey"
   | "volcengineApiKey"
   | "byteplusApiKey"
 >;
@@ -187,18 +187,18 @@ export const ONBOARD_PROVIDER_AUTH_FLAGS: ReadonlyArray<OnboardProviderAuthFlag>
     description: "QIANFAN API key",
   },
   {
-    optionKey: "bailianApiKeyCn",
-    authChoice: "bailian-api-key-cn",
-    cliFlag: "--bailian-api-key-cn",
-    cliOption: "--bailian-api-key-cn <key>",
-    description: "Alibaba Bailian Coding Plan API key (China)",
+    optionKey: "modelstudioApiKeyCn",
+    authChoice: "modelstudio-api-key-cn",
+    cliFlag: "--modelstudio-api-key-cn",
+    cliOption: "--modelstudio-api-key-cn <key>",
+    description: "Alibaba Cloud Model Studio Coding Plan API key (China)",
   },
   {
-    optionKey: "bailianApiKey",
-    authChoice: "bailian-api-key",
-    cliFlag: "--bailian-api-key",
-    cliOption: "--bailian-api-key <key>",
-    description: "Alibaba Bailian Coding Plan API key (Global/Intl)",
+    optionKey: "modelstudioApiKey",
+    authChoice: "modelstudio-api-key",
+    cliFlag: "--modelstudio-api-key",
+    cliOption: "--modelstudio-api-key <key>",
+    description: "Alibaba Cloud Model Studio Coding Plan API key (Global/Intl)",
   },
   {
     optionKey: "volcengineApiKey",
