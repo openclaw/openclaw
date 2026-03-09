@@ -617,7 +617,7 @@ describe("secrets runtime snapshot", () => {
       });
       await fs.writeFile(
         secretFile,
-        `${JSON.stringify({ providers: { openai: { apiKey: "sk-file-runtime" } } }, null, 2)}\n`,
+        `${JSON.stringify({ providers: { openai: { apiKey: "sk-file-runtime" } } }, null, 2)}\n`, // pragma: allowlist secret
         { encoding: "utf8", mode: 0o600 },
       );
       await fs.writeFile(
