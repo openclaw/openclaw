@@ -748,7 +748,7 @@ export async function writeTranscriptTurnToSessionMemory(params: {
   });
 
   // Emit context_profile_loaded once per session (minimal tier — always emitted when audit enabled)
-  const profileSessionKey = `${params.agentId}:${params.sessionId}`;
+  const profileSessionKey = buildAgentSessionKey(params.agentId, params.sessionId);
   if (!profileLoadedSessions.has(profileSessionKey)) {
     profileLoadedSessions.add(profileSessionKey);
     await gatedAudit(
