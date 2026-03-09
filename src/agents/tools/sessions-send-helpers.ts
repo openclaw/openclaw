@@ -21,6 +21,13 @@ export type IngressEchoPolicy = {
   requireDelivery: boolean;
 };
 
+export type RelayPolicy = {
+  enabled: boolean;
+  mode: "target-only" | "dual-channel";
+  mirrorTurns: "round1" | "all";
+  requireDelivery: boolean;
+};
+
 export type AnnounceTarget = {
   channel: string;
   to: string;
@@ -143,6 +150,16 @@ export function resolveIngressEchoPolicy(cfg?: OpenClawConfig): IngressEchoPolic
   };
 }
 
+export function resolveRelayPolicy(cfg?: OpenClawConfig): RelayPolicy {
+  const raw = cfg?.session?.agentToAgent?.relay;
+  return {
+    enabled: raw?.enabled === true,
+    mode: raw?.mode === "dual-channel" ? "dual-channel" : "target-only",
+    mirrorTurns: raw?.mirrorTurns === "all" ? "all" : "round1",
+    requireDelivery: raw?.requireDelivery === true,
+  };
+}
+
 export function buildAgentToAgentIngressEchoText(params: {
   requesterSessionKey?: string;
   requesterChannel?: string;
@@ -158,4 +175,13 @@ export function buildAgentToAgentIngressEchoText(params: {
   }
   headerParts.push(`to ${params.targetSessionKey}`);
   return `${headerParts.join(" ")}\n\n${params.message}`.trim();
+}
+
+export function buildAgentToAgentRelayText(params: {
+  handoffId: string;
+  fromAgent: string;
+  toAgent: string;
+  text: string;
+}) {
+  return `[A2A handoff:${params.handoffId}] ${params.fromAgent} -> ${params.toAgent}\n${params.text}`.trim();
 }

@@ -1417,6 +1417,16 @@ export const FIELD_HELP: Record<string, string> = {
     "Loop/cost guardrails for agent-to-agent relays. Use this to block nested sessions_send hops when an agent is already responding to an inter-session sessions_send input.",
   "session.agentToAgent.guard.allowNestedSessionsSend":
     "When true, allows an agent handling an inter-session sessions_send input to call sessions_send again. Default: false, which blocks nested relay chains to prevent runaway A↔B cascades.",
+  "session.agentToAgent.relay":
+    "Controls optional human-chat-style channel mirroring for agent-to-agent sessions_send flows. Use this to mirror request/reply turns into the target channel only or both requester and target channels.",
+  "session.agentToAgent.relay.enabled":
+    "When true, OpenClaw mirrors agent-to-agent sessions_send conversation turns to channel targets instead of keeping them only in internal tool results. Default: false.",
+  "session.agentToAgent.relay.mode":
+    "Relay mode: target-only mirrors only the target channel, while dual-channel mirrors both requester and target channels. Default: target-only.",
+  "session.agentToAgent.relay.mirrorTurns":
+    "Controls which turns are mirrored: round1 mirrors the initial request and first reply, while all mirrors ping-pong turns too. Default: round1.",
+  "session.agentToAgent.relay.requireDelivery":
+    "When true, relay delivery becomes strict: required relay delivery failures can block or abort the flow instead of continuing best-effort. Default: false.",
   "session.threadBindings":
     "Shared defaults for thread-bound session routing behavior across providers that support thread focus workflows. Configure global defaults here and override per channel only when behavior differs.",
   "session.threadBindings.enabled":

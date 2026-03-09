@@ -38,6 +38,7 @@ import {
   buildAgentToAgentMessageContext,
   resolveIngressEchoPolicy,
   resolvePingPongTurns,
+  resolveRelayPolicy,
 } from "./sessions-send-helpers.js";
 import { runSessionsSendA2AFlow } from "./sessions-send-tool.a2a.js";
 
@@ -405,6 +406,22 @@ export function createSessionsSendTool(opts?: {
       };
       const requesterSessionKey = opts?.agentSessionKey;
       const requesterChannel = opts?.agentChannel;
+      const relayPolicy = resolveRelayPolicy(cfg);
+      const requesterAgentId = requesterSessionKey
+        ? (resolveAgentIdFromSessionKey(requesterSessionKey) ?? "requester")
+        : "requester";
+      const targetAgentId = resolveAgentIdFromSessionKey(resolvedKey) ?? "target";
+      const sourceRelayTarget =
+        requesterSessionKey && requesterSessionKey !== resolvedKey
+          ? await resolveAnnounceTarget({
+              sessionKey: requesterSessionKey,
+              displayKey: requesterSessionKey,
+            })
+          : null;
+      const targetRelayTarget = await resolveAnnounceTarget({
+        sessionKey: resolvedKey,
+        displayKey,
+      });
       const maxPingPongTurns = resolvePingPongTurns(cfg);
 
       // Skip the A2A ping-pong + announce flow when the current caller is the
@@ -433,7 +450,11 @@ export function createSessionsSendTool(opts?: {
       const delivery = skipA2AFlow
         ? ({ status: "skipped", mode: "announce" } as const)
         : ({ status: "pending", mode: "announce" } as const);
-
+      const relay = {
+        status: skipA2AFlow ? "skipped" : relayPolicy.enabled ? "pending" : "disabled",
+        mode: relayPolicy.mode,
+        mirrorTurns: relayPolicy.mirrorTurns,
+      };
       const startA2AFlow = (roundOneReply?: string, waitRunId?: string) => {
         if (skipA2AFlow) {
           return;
@@ -448,6 +469,11 @@ export function createSessionsSendTool(opts?: {
           requesterChannel,
           roundOneReply,
           waitRunId,
+          relayPolicy,
+          sourceRelayTarget,
+          targetRelayTarget,
+          requesterAgentId,
+          targetAgentId,
         });
       };
 
@@ -457,7 +483,7 @@ export function createSessionsSendTool(opts?: {
           runId,
           sendParams,
           sessionKey: displayKey,
-          errorDetails: { ingressEcho },
+          errorDetails: { ingressEcho, relay },
         });
         if (!start.ok) {
           return start.result;
@@ -470,6 +496,7 @@ export function createSessionsSendTool(opts?: {
           sessionKey: displayKey,
           delivery,
           ingressEcho,
+          relay,
         });
       }
 
@@ -478,7 +505,7 @@ export function createSessionsSendTool(opts?: {
         runId,
         sendParams,
         sessionKey: displayKey,
-        errorDetails: { ingressEcho },
+        errorDetails: { ingressEcho, relay },
       });
       if (!start.ok) {
         return start.result;
@@ -521,6 +548,7 @@ export function createSessionsSendTool(opts?: {
         sessionKey: displayKey,
         delivery,
         ingressEcho,
+        relay,
       });
     },
   };
