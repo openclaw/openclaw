@@ -7,6 +7,7 @@ describe("resolveGroupPolicyFor", () => {
     const cfg: OpenClawConfig = {
       channels: {
         whatsapp: {
+          groupPolicy: "allowlist",
           groupAllowFrom: ["+1111111111"],
           accounts: {
             work: { groupAllowFrom: ["+2222222222"] },
@@ -14,9 +15,10 @@ describe("resolveGroupPolicyFor", () => {
         },
       },
     };
-    // Account "work" has its own groupAllowFrom, so hasGroupAllowFrom should
-    // be true based on the account-level list, not root.
+    // Account "work" has its own groupAllowFrom, so hasGroupAllowFrom resolves
+    // from the account-level list. senderFilterBypass allows the group through.
     const result = resolveGroupPolicyFor(cfg, "group@g.us", "work");
+    expect(result.allowlistEnabled).toBe(true);
     expect(result.allowed).toBe(true);
   });
 
@@ -24,6 +26,7 @@ describe("resolveGroupPolicyFor", () => {
     const cfg: OpenClawConfig = {
       channels: {
         whatsapp: {
+          groupPolicy: "allowlist",
           groupAllowFrom: ["+1111111111"],
           accounts: {
             work: {},
@@ -31,7 +34,10 @@ describe("resolveGroupPolicyFor", () => {
         },
       },
     };
+    // Account "work" has no override, so hasGroupAllowFrom falls back to the
+    // root-level groupAllowFrom. senderFilterBypass allows the group through.
     const result = resolveGroupPolicyFor(cfg, "group@g.us", "work");
+    expect(result.allowlistEnabled).toBe(true);
     expect(result.allowed).toBe(true);
   });
 
