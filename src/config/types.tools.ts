@@ -227,7 +227,7 @@ export type GroupToolPolicyBySenderConfig = Record<string, GroupToolPolicyConfig
 
 export type ExecToolConfig = {
   /** Exec host routing (default: sandbox). */
-  host?: "sandbox" | "gateway" | "node";
+  host?: "sandbox" | "gateway" | "node" | "cloud";
   /** Exec security mode (default: deny). */
   security?: "deny" | "allowlist" | "full";
   /** Exec ask mode (default: on-miss). */

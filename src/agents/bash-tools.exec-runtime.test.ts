@@ -10,7 +10,11 @@ vi.mock("../infra/system-events.js", () => ({
 
 import { requestHeartbeatNow } from "../infra/heartbeat-wake.js";
 import { enqueueSystemEvent } from "../infra/system-events.js";
-import { emitExecSystemEvent } from "./bash-tools.exec-runtime.js";
+import {
+  emitExecSystemEvent,
+  normalizeExecHost,
+  renderExecHostLabel,
+} from "./bash-tools.exec-runtime.js";
 
 const requestHeartbeatNowMock = vi.mocked(requestHeartbeatNow);
 const enqueueSystemEventMock = vi.mocked(enqueueSystemEvent);
@@ -60,5 +64,42 @@ describe("emitExecSystemEvent", () => {
 
     expect(enqueueSystemEventMock).not.toHaveBeenCalled();
     expect(requestHeartbeatNowMock).not.toHaveBeenCalled();
+  });
+});
+
+describe("normalizeExecHost", () => {
+  it("parses cloud host", () => {
+    expect(normalizeExecHost("cloud")).toBe("cloud");
+  });
+
+  it("parses cloud host case-insensitively", () => {
+    expect(normalizeExecHost("Cloud")).toBe("cloud");
+    expect(normalizeExecHost("CLOUD")).toBe("cloud");
+  });
+
+  it("trims whitespace", () => {
+    expect(normalizeExecHost("  cloud  ")).toBe("cloud");
+  });
+
+  it("returns null for unknown hosts", () => {
+    expect(normalizeExecHost("docker")).toBeNull();
+  });
+
+  it("parses existing hosts", () => {
+    expect(normalizeExecHost("sandbox")).toBe("sandbox");
+    expect(normalizeExecHost("gateway")).toBe("gateway");
+    expect(normalizeExecHost("node")).toBe("node");
+  });
+});
+
+describe("renderExecHostLabel", () => {
+  it("returns cloud for cloud host", () => {
+    expect(renderExecHostLabel("cloud")).toBe("cloud");
+  });
+
+  it("returns correct labels for other hosts", () => {
+    expect(renderExecHostLabel("sandbox")).toBe("sandbox");
+    expect(renderExecHostLabel("gateway")).toBe("gateway");
+    expect(renderExecHostLabel("node")).toBe("node");
   });
 });

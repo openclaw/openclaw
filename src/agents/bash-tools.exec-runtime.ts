@@ -162,7 +162,13 @@ export type ExecProcessHandle = {
 };
 
 export function renderExecHostLabel(host: ExecHost) {
-  return host === "sandbox" ? "sandbox" : host === "gateway" ? "gateway" : "node";
+  return host === "sandbox"
+    ? "sandbox"
+    : host === "gateway"
+      ? "gateway"
+      : host === "cloud"
+        ? "cloud"
+        : "node";
 }
 
 export function normalizeNotifyOutput(value: string) {

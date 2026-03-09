@@ -546,13 +546,30 @@ export function createProcessTool(
           }
           const canceled = cancelManagedSession(scopedSession.id);
           if (!canceled) {
-            const terminated = terminateSessionFallback(scopedSession);
-            if (!terminated) {
-              return failText(
-                `Unable to terminate session ${params.sessionId}: no active supervisor run or process id.`,
-              );
+            // Try the session's custom kill handler (e.g. cloud sandbox provider).
+            if (scopedSession.onKill) {
+              let killError: string | undefined;
+              try {
+                await scopedSession.onKill();
+              } catch (err) {
+                killError = err instanceof Error ? err.message : String(err);
+              }
+              markExited(scopedSession, null, "SIGKILL", killError ? "failed" : "killed");
+              if (killError) {
+                resetPollRetrySuggestion(params.sessionId);
+                return failText(
+                  `Kill request for session ${params.sessionId} failed: ${killError}`,
+                );
+              }
+            } else {
+              const terminated = terminateSessionFallback(scopedSession);
+              if (!terminated) {
+                return failText(
+                  `Unable to terminate session ${params.sessionId}: no active supervisor run or process id.`,
+                );
+              }
+              markExited(scopedSession, null, "SIGKILL", "failed");
             }
-            markExited(scopedSession, null, "SIGKILL", "failed");
           }
           resetPollRetrySuggestion(params.sessionId);
           return {
