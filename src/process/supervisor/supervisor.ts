@@ -31,6 +31,33 @@ function isTimeoutReason(reason: TerminationReason) {
   return reason === "overall-timeout" || reason === "no-output-timeout";
 }
 
+async function waitForManagedRuns(params: {
+  runs: ManagedRun[];
+  timeoutMs?: number;
+}): Promise<void> {
+  if (params.runs.length === 0) {
+    return;
+  }
+  const waits = Promise.allSettled(params.runs.map((run) => run.wait())).then(() => undefined);
+  const timeoutMs =
+    typeof params.timeoutMs === "number" &&
+    Number.isFinite(params.timeoutMs) &&
+    params.timeoutMs > 0
+      ? Math.floor(params.timeoutMs)
+      : undefined;
+  if (!timeoutMs) {
+    await waits;
+    return;
+  }
+  await Promise.race([
+    waits,
+    new Promise<void>((resolve) => {
+      const timer = setTimeout(resolve, timeoutMs);
+      timer.unref();
+    }),
+  ]);
+}
+
 export function createProcessSupervisor(): ProcessSupervisor {
   const registry = createRunRegistry();
   const active = new Map<string, ActiveRun>();
@@ -56,6 +83,18 @@ export function createProcessSupervisor(): ProcessSupervisor {
       }
       cancel(runId, reason);
     }
+  };
+
+  const terminateAll = async (opts?: {
+    reason?: TerminationReason;
+    timeoutMs?: number;
+  }): Promise<void> => {
+    const reason = opts?.reason ?? "manual-cancel";
+    const runs = [...active.values()].map((entry) => entry.run);
+    for (const run of runs) {
+      run.cancel(reason);
+    }
+    await waitForManagedRuns({ runs, timeoutMs: opts?.timeoutMs });
   };
 
   const spawn = async (input: SpawnInput): Promise<ManagedRun> => {
@@ -273,6 +312,8 @@ export function createProcessSupervisor(): ProcessSupervisor {
     spawn,
     cancel,
     cancelScope,
+    terminateAll,
+    getActiveCount: () => active.size,
     reconcileOrphans: async () => {
       // Deliberate no-op: this supervisor uses in-memory ownership only.
       // Active runs are not recovered after process restart in the current model.
