@@ -1,3 +1,4 @@
+import { isEmbeddedPiRunActive } from "../agents/pi-embedded-runner/runs.js";
 import { resolveAnnounceTargetFromKey } from "../agents/tools/sessions-send-helpers.js";
 import { normalizeChannelId } from "../channels/plugins/index.js";
 import type { CliDeps } from "../cli/deps.js";
@@ -34,6 +35,15 @@ export async function recoverInterruptedTurns(_params: { deps: CliDeps }): Promi
 
   let recovered = 0;
   for (const marker of markers) {
+    // Skip markers for runs that are currently active — a message received
+    // during the startup delay may have already created a live run. Removing
+    // its marker would make the active turn invisible to crash recovery and
+    // the stuck-turn watchdog.
+    if (isEmbeddedPiRunActive(marker.sessionId)) {
+      log.info(`skipping live run: sessionId=${marker.sessionId}`);
+      continue;
+    }
+
     // Always clear the marker first (consume-then-process pattern) to prevent
     // infinite retry loops if the gateway crashes again during recovery.
     await removeActiveTurnMarker(marker.sessionId);

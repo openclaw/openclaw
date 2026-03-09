@@ -189,15 +189,21 @@ export async function startGatewaySidecars(params: {
 
   // Recover interrupted turns left behind by a previous crash or unclean restart.
   // Runs after sentinel wake (750ms) to avoid duplicate notifications.
+  // The watchdog starts unconditionally via .finally() so it runs even if
+  // recovery rejects unexpectedly.
   if (!process.env.VITEST && process.env.NODE_ENV !== "test") {
     setTimeout(() => {
-      void import("./server-active-turn-recovery.js").then(({ recoverInterruptedTurns }) => {
-        void recoverInterruptedTurns({ deps: params.deps }).then(() => {
+      void import("./server-active-turn-recovery.js")
+        .then(({ recoverInterruptedTurns }) => recoverInterruptedTurns({ deps: params.deps }))
+        .catch((err) => {
+          // eslint-disable-next-line no-console
+          console.warn(`[active-turn-recovery] startup recovery failed: ${String(err)}`);
+        })
+        .finally(() => {
           void import("../infra/stuck-turn-watchdog.js").then(({ startStuckTurnWatchdog }) => {
             startStuckTurnWatchdog({ deps: params.deps });
           });
         });
-      });
     }, 1500);
   }
 

@@ -149,7 +149,28 @@ describe("active-turns crash scenarios", () => {
     expect(markers.length).toBe(0);
   });
 
-  it("Scenario 8: marker file has valid JSON but missing fields", async () => {
+  it("Scenario 8: clear from old turn does not delete new turn marker", async () => {
+    const { env, stateDir } = makeTempEnv();
+    cleanup = stateDir;
+
+    // Turn A starts.
+    writeActiveTurn("sess-race", "key-A", env);
+    await new Promise((r) => setTimeout(r, 200));
+
+    // Turn A ends — clearActiveTurn fires (fire-and-forget).
+    clearActiveTurn("sess-race", env);
+
+    // Turn B starts immediately for the same session before clear runs.
+    writeActiveTurn("sess-race", "key-B", env);
+    await new Promise((r) => setTimeout(r, 400));
+
+    // Turn B's marker should survive — not deleted by turn A's clear.
+    const markers = await loadActiveTurnMarkers(env);
+    expect(markers.length).toBe(1);
+    expect(markers[0].sessionKey).toBe("key-B");
+  });
+
+  it("Scenario 9: marker file has valid JSON but missing fields", async () => {
     const { env, stateDir } = makeTempEnv();
     cleanup = stateDir;
 

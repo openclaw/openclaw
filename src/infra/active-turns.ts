@@ -11,6 +11,16 @@ const ACTIVE_TURNS_DIRNAME = "active-turns";
  */
 const pendingWrites = new Map<string, Promise<void>>();
 
+/**
+ * Monotonically increasing write generation per session. Each writeActiveTurn
+ * call bumps the generation so that a stale clearActiveTurn (from a previous
+ * turn) can detect that a newer write happened and skip the unlink.
+ */
+const writeGenerations = new Map<string, number>();
+
+/** Monotonic counter for unique temp file names within a single process. */
+let tmpCounter = 0;
+
 export type ActiveTurnMarker = {
   sessionId: string;
   sessionKey: string;
@@ -41,10 +51,16 @@ export function writeActiveTurn(
   }
   const marker: ActiveTurnMarker = { sessionId, sessionKey, startedAt: Date.now() };
   const filePath = resolveMarkerPath(sessionId, env);
+  // Bump write generation so stale clears from a previous turn can detect
+  // that a newer write happened and skip the unlink.
+  const gen = (writeGenerations.get(sessionId) ?? 0) + 1;
+  writeGenerations.set(sessionId, gen);
   const writePromise = (async () => {
     const dir = path.dirname(filePath);
     await fs.promises.mkdir(dir, { recursive: true, mode: 0o700 });
-    const tmp = `${filePath}.${process.pid}.tmp`;
+    // Use a unique temp path per write to avoid races when two rapid writes
+    // for the same session share the same tmp file.
+    const tmp = `${filePath}.${process.pid}.${tmpCounter++}.tmp`;
     await fs.promises.writeFile(tmp, JSON.stringify(marker, null, 2), {
       encoding: "utf-8",
       mode: 0o600,
@@ -73,7 +89,19 @@ export function clearActiveTurn(sessionId: string, env?: NodeJS.ProcessEnv): voi
   }
   const filePath = resolveMarkerPath(sessionId, env);
   const pending = pendingWrites.get(sessionId);
-  const doUnlink = () => fs.promises.unlink(filePath).catch(() => {});
+  // Capture the current write generation. If a newer writeActiveTurn fires
+  // between now and when the unlink runs, the generation will have changed
+  // and we must skip the unlink to avoid deleting the newer marker.
+  const genAtClear = writeGenerations.get(sessionId) ?? 0;
+  const doUnlink = () => {
+    const currentGen = writeGenerations.get(sessionId) ?? 0;
+    if (currentGen !== genAtClear) {
+      // A newer write started after this clear was issued — do not delete
+      // the marker that belongs to the new run.
+      return Promise.resolve();
+    }
+    return fs.promises.unlink(filePath).catch(() => {});
+  };
   if (pending) {
     void pending.then(doUnlink);
   } else {
