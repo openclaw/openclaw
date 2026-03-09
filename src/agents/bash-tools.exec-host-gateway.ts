@@ -64,6 +64,11 @@ export type ProcessGatewayAllowlistResult = {
   pendingResult?: AgentToolResult<ExecToolDetails>;
 };
 
+const APPROVAL_TIMEOUT_HINT =
+  "Hint: run openclaw sandbox explain to inspect sandbox/runtime approval routing.";
+const APPROVAL_PENDING_HINT =
+  "If approvals keep timing out, run openclaw sandbox explain to inspect sandbox/runtime approval routing.";
+
 export async function processGatewayAllowlist(
   params: ProcessGatewayAllowlistParams,
 ): Promise<ProcessGatewayAllowlistResult> {
@@ -230,8 +235,11 @@ export async function processGatewayAllowlist(
       }
 
       if (deniedReason) {
+        const timeoutHint = deniedReason.startsWith("approval-timeout")
+          ? `\n${APPROVAL_TIMEOUT_HINT}`
+          : "";
         emitExecSystemEvent(
-          `Exec denied (gateway id=${approvalId}, ${deniedReason}): ${params.command}`,
+          `Exec denied (gateway id=${approvalId}, ${deniedReason}): ${params.command}${timeoutHint}`,
           {
             sessionKey: params.notifySessionKey,
             contextKey,
@@ -305,7 +313,7 @@ export async function processGatewayAllowlist(
             type: "text",
             text:
               `${warningText}Approval required (id ${approvalSlug}). ` +
-              "Approve to run; updates will arrive after completion.",
+              `Approve to run; updates will arrive after completion. ${APPROVAL_PENDING_HINT}`,
           },
         ],
         details: {
