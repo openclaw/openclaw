@@ -191,6 +191,18 @@ export const AgentDefaultsSchema = z
       .strict()
       .optional(),
     sandbox: AgentSandboxSchema,
+    executionHealth: z
+      .object({
+        enabled: z.boolean().optional(),
+        fileBurstThreshold: z.number().int().positive().optional(),
+        fileBurstWindowMs: z.number().int().positive().optional(),
+        toolRepeatThreshold: z.number().int().positive().optional(),
+        toolRepeatWindowMs: z.number().int().positive().optional(),
+        noEffectLoopThreshold: z.number().int().positive().optional(),
+        errorCascadeThreshold: z.number().int().positive().optional(),
+      })
+      .strict()
+      .optional(),
   })
   .strict()
   .optional();
