@@ -1879,12 +1879,14 @@ export async function runAgentTurnWithFallback(params: {
         ? sanitizeUserFacingText(message, { errorContext: true })
         : message;
       const trimmedMessage = safeMessage.replace(/\.\s*$/, "");
+      const isExplicitTimeoutFailure = /\b(?:timed?\s*out|timeout)\b/i.test(safeMessage);
       const externalRunFailureReply =
         !isBilling &&
         !(isRateLimit && !isOverloadedErrorMessage(message)) &&
         !rateLimitOrOverloadedCopy &&
         !isContextOverflow &&
         !isRoleOrderingError &&
+        !isExplicitTimeoutFailure &&
         !shouldSurfaceToControlUi
           ? buildExternalRunFailureReply(message, {
               includeDetails: isVerboseFailureDetailEnabled(params.resolvedVerboseLevel),
@@ -1900,9 +1902,11 @@ export async function runAgentTurnWithFallback(params: {
               ? "⚠️ Context overflow — prompt too large for this model. Try a shorter message or a larger-context model."
               : isRoleOrderingError
                 ? "⚠️ Message ordering conflict - please try again. If this persists, use /new to start a fresh session."
-                : shouldSurfaceToControlUi
-                  ? `⚠️ Agent failed before reply: ${trimmedMessage}.\nLogs: openclaw logs --follow`
-                  : (externalRunFailureReply?.text ?? GENERIC_EXTERNAL_RUN_FAILURE_TEXT);
+                : isExplicitTimeoutFailure
+                  ? "⚠️ Model run timed out before reply. This run has ended and will not continue in the background.\nSend a new message (or /retry) to start a fresh run.\nLogs: openclaw logs --follow"
+                  : shouldSurfaceToControlUi
+                    ? `⚠️ Agent failed before reply: ${trimmedMessage}.\nLogs: openclaw logs --follow`
+                    : (externalRunFailureReply?.text ?? GENERIC_EXTERNAL_RUN_FAILURE_TEXT);
       const userVisibleFallbackText = resolveExternalRunFailureTextForConversation({
         text: fallbackText,
         sessionCtx: params.sessionCtx,

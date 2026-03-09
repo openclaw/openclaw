@@ -2,14 +2,19 @@ import fs from "node:fs/promises";
 import {
   resolveAgentDir,
   resolveAgentWorkspaceDir,
+  resolveRunModelFallbacksOverride,
   resolveSessionAgentId,
   resolveAgentSkillsFilter,
 } from "../../agents/agent-scope.js";
-import { resolveModelRefFromString } from "../../agents/model-selection.js";
+import { resolveModelRefFromString, type ModelAliasIndex } from "../../agents/model-selection.js";
 import { resolveAgentTimeoutMs } from "../../agents/timeout.js";
 import { DEFAULT_AGENT_WORKSPACE_DIR, ensureAgentWorkspace } from "../../agents/workspace.js";
 import { resolveChannelModelOverride } from "../../channels/model-overrides.js";
 import { type OpenClawConfig, getRuntimeConfig } from "../../config/config.js";
+import {
+  resolveAgentModelFallbackValues,
+  resolveAgentModelPrimaryValue,
+} from "../../config/model-input.js";
 import { logVerbose } from "../../globals.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { defaultRuntime } from "../../runtime.js";
@@ -172,6 +177,124 @@ async function applyLinkUnderstandingIfNeeded(params: {
   }
 }
 
+// Keep typing alive long enough for multi-attempt runs, but cap it to avoid
+// indefinite typing loops when timeouts are very large or disabled.
+const MIN_TYPING_TTL_MS = 2 * 60_000;
+const MAX_TYPING_TTL_MS = 120 * 60_000;
+const TRANSIENT_RETRY_CYCLES = 2;
+const TYPING_TTL_BUFFER_MS = 15_000;
+
+function modelCandidateKey(candidate: { provider: string; model: string }): string {
+  return `${candidate.provider.trim().toLowerCase()}/${candidate.model.trim()}`;
+}
+
+function resolveTypingAttemptCount(params: {
+  cfg: OpenClawConfig;
+  agentId: string;
+  sessionKey?: string;
+  provider: string;
+  model: string;
+  defaultProvider: string;
+  aliasIndex: ModelAliasIndex;
+}): number {
+  const candidates = new Set<string>();
+  const activeProvider = params.provider.trim() || params.defaultProvider;
+  const activeModel = params.model.trim();
+  if (activeProvider && activeModel) {
+    candidates.add(modelCandidateKey({ provider: activeProvider, model: activeModel }));
+  }
+
+  const fallbackOverrides = resolveRunModelFallbacksOverride({
+    cfg: params.cfg,
+    agentId: params.agentId,
+    sessionKey: params.sessionKey,
+  });
+  const configuredFallbacks = resolveAgentModelFallbackValues(params.cfg.agents?.defaults?.model);
+  const configuredPrimaryRaw = resolveAgentModelPrimaryValue(params.cfg.agents?.defaults?.model);
+  const configuredPrimary = configuredPrimaryRaw
+    ? resolveModelRefFromString({
+        cfg: params.cfg,
+        raw: configuredPrimaryRaw,
+        defaultProvider: params.defaultProvider,
+        aliasIndex: params.aliasIndex,
+      })?.ref
+    : undefined;
+  const normalizedConfiguredPrimary = configuredPrimary
+    ? modelCandidateKey(configuredPrimary)
+    : undefined;
+  const normalizedActivePrimary =
+    activeProvider && activeModel
+      ? modelCandidateKey({ provider: activeProvider, model: activeModel })
+      : undefined;
+
+  const fallbackValues = (() => {
+    if (fallbackOverrides !== undefined) {
+      return fallbackOverrides;
+    }
+    if (
+      configuredPrimary &&
+      normalizedActivePrimary &&
+      activeProvider.toLowerCase() !== configuredPrimary.provider.trim().toLowerCase()
+    ) {
+      const isConfiguredFallback = configuredFallbacks.some((raw) => {
+        const resolved = resolveModelRefFromString({
+          cfg: params.cfg,
+          raw,
+          defaultProvider: params.defaultProvider,
+          aliasIndex: params.aliasIndex,
+        })?.ref;
+        return resolved ? modelCandidateKey(resolved) === normalizedActivePrimary : false;
+      });
+      return isConfiguredFallback ? configuredFallbacks : [];
+    }
+    return configuredFallbacks;
+  })();
+
+  for (const raw of fallbackValues) {
+    const resolved = resolveModelRefFromString({
+      cfg: params.cfg,
+      raw,
+      defaultProvider: params.defaultProvider,
+      aliasIndex: params.aliasIndex,
+    })?.ref;
+    if (resolved) {
+      candidates.add(modelCandidateKey(resolved));
+    }
+  }
+
+  if (fallbackOverrides === undefined && normalizedConfiguredPrimary) {
+    candidates.add(normalizedConfiguredPrimary);
+  }
+
+  return Math.max(1, candidates.size);
+}
+
+function resolveTypingTtlMs(params: {
+  cfg: OpenClawConfig;
+  agentId: string;
+  sessionKey?: string;
+  timeoutMs: number;
+  provider: string;
+  model: string;
+  defaultProvider: string;
+  aliasIndex: ModelAliasIndex;
+}): number {
+  const projectedAttemptCount = resolveTypingAttemptCount({
+    cfg: params.cfg,
+    agentId: params.agentId,
+    sessionKey: params.sessionKey,
+    provider: params.provider,
+    model: params.model,
+    defaultProvider: params.defaultProvider,
+    aliasIndex: params.aliasIndex,
+  });
+  // One transient HTTP retry can replay the full model chain; keep typing alive
+  // long enough to cover both cycles so users do not see false "dead" runs.
+  const projectedTtlMs =
+    params.timeoutMs * projectedAttemptCount * TRANSIENT_RETRY_CYCLES + TYPING_TTL_BUFFER_MS;
+  return Math.max(MIN_TYPING_TTL_MS, Math.min(projectedTtlMs, MAX_TYPING_TTL_MS));
+}
+
 export async function getReplyFromConfig(
   ctx: MsgContext,
   opts?: GetReplyOptions,
@@ -250,10 +373,21 @@ export async function getReplyFromConfig(
     agentCfg?.typingIntervalSeconds ?? sessionCfg?.typingIntervalSeconds;
   const typingIntervalSeconds =
     typeof configuredTypingSeconds === "number" ? configuredTypingSeconds : 6;
+  const typingTtlMs = resolveTypingTtlMs({
+    cfg,
+    agentId,
+    sessionKey: agentSessionKey,
+    timeoutMs,
+    provider,
+    model,
+    defaultProvider,
+    aliasIndex,
+  });
   const typing = createTypingController({
     onReplyStart: opts?.onReplyStart,
     onCleanup: opts?.onTypingCleanup,
     typingIntervalSeconds,
+    typingTtlMs,
     silentToken: SILENT_REPLY_TOKEN,
     log: defaultRuntime.log,
   });
