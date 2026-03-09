@@ -829,7 +829,7 @@ export async function compactEmbeddedPiSessionDirect(
             `[compaction] initial compaction timed out after ${EMBEDDED_COMPACTION_TIMEOUT_MS / 1000}s; ` +
               `truncating oversized tool results and retrying (diagId=${diagId})`,
           );
-          const contextWindowTokens = model.contextWindow ?? DEFAULT_CONTEXT_TOKENS;
+          const contextWindowTokens = ctxInfo.tokens;
           const { messages: reducedMessages, truncatedCount } =
             truncateOversizedToolResultsInMessages(session.messages, contextWindowTokens);
           if (truncatedCount > 0) {
