@@ -1423,6 +1423,9 @@
               ],
               "type": "string"
             },
+            "originSessionId": {
+              "type": "string"
+            },
             "sourceSessionKey": {
               "type": "string"
             },
@@ -1444,6 +1447,9 @@
           "type": "string"
         },
         "spawnedBy": {
+          "type": "string"
+        },
+        "workspaceDir": {
           "type": "string"
         }
       }
@@ -1662,6 +1668,23 @@
       "additionalProperties": false,
       "type": "object",
       "properties": {}
+    },
+    "NodePendingAckParams": {
+      "additionalProperties": false,
+      "type": "object",
+      "required": [
+        "ids"
+      ],
+      "properties": {
+        "ids": {
+          "minItems": 1,
+          "type": "array",
+          "items": {
+            "minLength": 1,
+            "type": "string"
+          }
+        }
+      }
     },
     "NodeDescribeParams": {
       "additionalProperties": false,
@@ -2451,7 +2474,7 @@
         "path": {
           "minLength": 1,
           "maxLength": 1024,
-          "pattern": "^[A-Za-z0-9_.\\[\\]\\-*]+$",
+          "pattern": "^[A-Za-z0-9_./\\[\\]\\-*]+$",
           "type": "string"
         }
       }
@@ -3141,67 +3164,306 @@
           "type": "object",
           "properties": {
             "talk": {
-              "additionalProperties": false,
-              "type": "object",
-              "properties": {
-                "provider": {
-                  "type": "string"
-                },
-                "providers": {
+              "anyOf": [
+                {
+                  "additionalProperties": false,
                   "type": "object",
-                  "patternProperties": {
-                    "^(.*)$": {
-                      "additionalProperties": true,
+                  "properties": {
+                    "voiceId": {
+                      "type": "string"
+                    },
+                    "voiceAliases": {
                       "type": "object",
-                      "properties": {
-                        "voiceId": {
-                          "type": "string"
-                        },
-                        "voiceAliases": {
-                          "type": "object",
-                          "patternProperties": {
-                            "^(.*)$": {
-                              "type": "string"
-                            }
-                          }
-                        },
-                        "modelId": {
-                          "type": "string"
-                        },
-                        "outputFormat": {
-                          "type": "string"
-                        },
-                        "apiKey": {
+                      "patternProperties": {
+                        "^(.*)$": {
                           "type": "string"
                         }
                       }
-                    }
-                  }
-                },
-                "voiceId": {
-                  "type": "string"
-                },
-                "voiceAliases": {
-                  "type": "object",
-                  "patternProperties": {
-                    "^(.*)$": {
+                    },
+                    "modelId": {
                       "type": "string"
+                    },
+                    "outputFormat": {
+                      "type": "string"
+                    },
+                    "apiKey": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "additionalProperties": false,
+                          "type": "object",
+                          "required": [
+                            "source",
+                            "provider",
+                            "id"
+                          ],
+                          "properties": {
+                            "source": {
+                              "anyOf": [
+                                {
+                                  "const": "env",
+                                  "type": "string"
+                                },
+                                {
+                                  "const": "file",
+                                  "type": "string"
+                                },
+                                {
+                                  "const": "exec",
+                                  "type": "string"
+                                }
+                              ]
+                            },
+                            "provider": {
+                              "minLength": 1,
+                              "type": "string"
+                            },
+                            "id": {
+                              "minLength": 1,
+                              "type": "string"
+                            }
+                          }
+                        }
+                      ]
+                    },
+                    "interruptOnSpeech": {
+                      "type": "boolean"
+                    },
+                    "silenceTimeoutMs": {
+                      "minimum": 1,
+                      "type": "integer"
                     }
                   }
                 },
-                "modelId": {
-                  "type": "string"
-                },
-                "outputFormat": {
-                  "type": "string"
-                },
-                "apiKey": {
-                  "type": "string"
-                },
-                "interruptOnSpeech": {
-                  "type": "boolean"
+                {
+                  "additionalProperties": false,
+                  "type": "object",
+                  "required": [
+                    "resolved"
+                  ],
+                  "properties": {
+                    "provider": {
+                      "type": "string"
+                    },
+                    "providers": {
+                      "type": "object",
+                      "patternProperties": {
+                        "^(.*)$": {
+                          "additionalProperties": true,
+                          "type": "object",
+                          "properties": {
+                            "voiceId": {
+                              "type": "string"
+                            },
+                            "voiceAliases": {
+                              "type": "object",
+                              "patternProperties": {
+                                "^(.*)$": {
+                                  "type": "string"
+                                }
+                              }
+                            },
+                            "modelId": {
+                              "type": "string"
+                            },
+                            "outputFormat": {
+                              "type": "string"
+                            },
+                            "apiKey": {
+                              "anyOf": [
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "additionalProperties": false,
+                                  "type": "object",
+                                  "required": [
+                                    "source",
+                                    "provider",
+                                    "id"
+                                  ],
+                                  "properties": {
+                                    "source": {
+                                      "anyOf": [
+                                        {
+                                          "const": "env",
+                                          "type": "string"
+                                        },
+                                        {
+                                          "const": "file",
+                                          "type": "string"
+                                        },
+                                        {
+                                          "const": "exec",
+                                          "type": "string"
+                                        }
+                                      ]
+                                    },
+                                    "provider": {
+                                      "minLength": 1,
+                                      "type": "string"
+                                    },
+                                    "id": {
+                                      "minLength": 1,
+                                      "type": "string"
+                                    }
+                                  }
+                                }
+                              ]
+                            }
+                          }
+                        }
+                      }
+                    },
+                    "resolved": {
+                      "additionalProperties": false,
+                      "type": "object",
+                      "required": [
+                        "provider",
+                        "config"
+                      ],
+                      "properties": {
+                        "provider": {
+                          "type": "string"
+                        },
+                        "config": {
+                          "additionalProperties": true,
+                          "type": "object",
+                          "properties": {
+                            "voiceId": {
+                              "type": "string"
+                            },
+                            "voiceAliases": {
+                              "type": "object",
+                              "patternProperties": {
+                                "^(.*)$": {
+                                  "type": "string"
+                                }
+                              }
+                            },
+                            "modelId": {
+                              "type": "string"
+                            },
+                            "outputFormat": {
+                              "type": "string"
+                            },
+                            "apiKey": {
+                              "anyOf": [
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "additionalProperties": false,
+                                  "type": "object",
+                                  "required": [
+                                    "source",
+                                    "provider",
+                                    "id"
+                                  ],
+                                  "properties": {
+                                    "source": {
+                                      "anyOf": [
+                                        {
+                                          "const": "env",
+                                          "type": "string"
+                                        },
+                                        {
+                                          "const": "file",
+                                          "type": "string"
+                                        },
+                                        {
+                                          "const": "exec",
+                                          "type": "string"
+                                        }
+                                      ]
+                                    },
+                                    "provider": {
+                                      "minLength": 1,
+                                      "type": "string"
+                                    },
+                                    "id": {
+                                      "minLength": 1,
+                                      "type": "string"
+                                    }
+                                  }
+                                }
+                              ]
+                            }
+                          }
+                        }
+                      }
+                    },
+                    "voiceId": {
+                      "type": "string"
+                    },
+                    "voiceAliases": {
+                      "type": "object",
+                      "patternProperties": {
+                        "^(.*)$": {
+                          "type": "string"
+                        }
+                      }
+                    },
+                    "modelId": {
+                      "type": "string"
+                    },
+                    "outputFormat": {
+                      "type": "string"
+                    },
+                    "apiKey": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "additionalProperties": false,
+                          "type": "object",
+                          "required": [
+                            "source",
+                            "provider",
+                            "id"
+                          ],
+                          "properties": {
+                            "source": {
+                              "anyOf": [
+                                {
+                                  "const": "env",
+                                  "type": "string"
+                                },
+                                {
+                                  "const": "file",
+                                  "type": "string"
+                                },
+                                {
+                                  "const": "exec",
+                                  "type": "string"
+                                }
+                              ]
+                            },
+                            "provider": {
+                              "minLength": 1,
+                              "type": "string"
+                            },
+                            "id": {
+                              "minLength": 1,
+                              "type": "string"
+                            }
+                          }
+                        }
+                      ]
+                    },
+                    "interruptOnSpeech": {
+                      "type": "boolean"
+                    },
+                    "silenceTimeoutMs": {
+                      "minimum": 1,
+                      "type": "integer"
+                    }
+                  }
                 }
-              }
+              ]
             },
             "session": {
               "additionalProperties": false,
@@ -7443,6 +7705,34 @@
                   "type": "null"
                 }
               ]
+            },
+            "mutableFileOperand": {
+              "anyOf": [
+                {
+                  "additionalProperties": false,
+                  "type": "object",
+                  "required": [
+                    "argvIndex",
+                    "path",
+                    "sha256"
+                  ],
+                  "properties": {
+                    "argvIndex": {
+                      "minimum": 0,
+                      "type": "integer"
+                    },
+                    "path": {
+                      "type": "string"
+                    },
+                    "sha256": {
+                      "type": "string"
+                    }
+                  }
+                },
+                {
+                  "type": "null"
+                }
+              ]
             }
           }
         },
@@ -7825,6 +8115,7 @@
       "properties": {
         "sessionKey": {
           "minLength": 1,
+          "maxLength": 512,
           "type": "string"
         },
         "message": {
@@ -7843,6 +8134,38 @@
         "timeoutMs": {
           "minimum": 0,
           "type": "integer"
+        },
+        "systemInputProvenance": {
+          "additionalProperties": false,
+          "type": "object",
+          "required": [
+            "kind"
+          ],
+          "properties": {
+            "kind": {
+              "enum": [
+                "external_user",
+                "inter_session",
+                "internal_system"
+              ],
+              "type": "string"
+            },
+            "originSessionId": {
+              "type": "string"
+            },
+            "sourceSessionKey": {
+              "type": "string"
+            },
+            "sourceChannel": {
+              "type": "string"
+            },
+            "sourceTool": {
+              "type": "string"
+            }
+          }
+        },
+        "systemProvenanceReceipt": {
+          "type": "string"
         },
         "idempotencyKey": {
           "minLength": 1,
