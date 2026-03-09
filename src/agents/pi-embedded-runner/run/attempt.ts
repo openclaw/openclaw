@@ -111,7 +111,10 @@ import {
 } from "../runs.js";
 import { buildEmbeddedSandboxInfo } from "../sandbox-info.js";
 import { prewarmSessionFile, trackSessionManagerAccess } from "../session-manager-cache.js";
-import { prepareSessionManagerForRun } from "../session-manager-init.js";
+import {
+  prepareSessionManagerForRun,
+  shouldInjectBootstrapContext,
+} from "../session-manager-init.js";
 import { resolveEmbeddedRunSkillEntries } from "../skills-runtime.js";
 import {
   applySystemPromptOverrideToSession,
@@ -796,16 +799,18 @@ export async function runEmbeddedAttempt(
     });
 
     const sessionLabel = params.sessionKey ?? params.sessionId;
-    const { bootstrapFiles: hookAdjustedBootstrapFiles, contextFiles } =
-      await resolveBootstrapContextForRun({
-        workspaceDir: effectiveWorkspace,
-        config: params.config,
-        sessionKey: params.sessionKey,
-        sessionId: params.sessionId,
-        warn: makeBootstrapWarn({ sessionLabel, warn: (message) => log.warn(message) }),
-        contextMode: params.bootstrapContextMode,
-        runKind: params.bootstrapContextRunKind,
-      });
+    const injectBootstrapContext = await shouldInjectBootstrapContext(params.sessionFile);
+    const { bootstrapFiles: hookAdjustedBootstrapFiles, contextFiles } = injectBootstrapContext
+      ? await resolveBootstrapContextForRun({
+          workspaceDir: effectiveWorkspace,
+          config: params.config,
+          sessionKey: params.sessionKey,
+          sessionId: params.sessionId,
+          warn: makeBootstrapWarn({ sessionLabel, warn: (message) => log.warn(message) }),
+          contextMode: params.bootstrapContextMode,
+          runKind: params.bootstrapContextRunKind,
+        })
+      : { bootstrapFiles: [], contextFiles: [] };
     const bootstrapMaxChars = resolveBootstrapMaxChars(params.config);
     const bootstrapTotalMaxChars = resolveBootstrapTotalMaxChars(params.config);
     const bootstrapAnalysis = analyzeBootstrapBudget({
