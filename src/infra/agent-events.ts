@@ -2,6 +2,8 @@ import type { VerboseLevel } from "../auto-reply/thinking.js";
 
 export type AgentEventStream = "lifecycle" | "tool" | "assistant" | "error" | (string & {});
 
+export type AgentRunActivitySource = "chat" | "heartbeat" | "cron" | (string & {});
+
 export type AgentEventPayload = {
   runId: string;
   seq: number;
@@ -15,6 +17,7 @@ export type AgentRunContext = {
   sessionKey?: string;
   verboseLevel?: VerboseLevel;
   isHeartbeat?: boolean;
+  activitySource?: AgentRunActivitySource;
   /** Whether control UI clients should receive chat/agent updates for this run. */
   isControlUiVisible?: boolean;
 };
@@ -44,6 +47,9 @@ export function registerAgentRunContext(runId: string, context: AgentRunContext)
   }
   if (context.isHeartbeat !== undefined && existing.isHeartbeat !== context.isHeartbeat) {
     existing.isHeartbeat = context.isHeartbeat;
+  }
+  if (context.activitySource && existing.activitySource !== context.activitySource) {
+    existing.activitySource = context.activitySource;
   }
 }
 

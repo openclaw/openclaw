@@ -537,6 +537,7 @@ export async function runCronIsolatedAgentTurn(params: {
     registerAgentRunContext(cronSession.sessionEntry.sessionId, {
       sessionKey: agentSessionKey,
       verboseLevel: resolvedVerboseLevel,
+      activitySource: "cron",
     });
     const messageChannel = resolvedDelivery.channel;
     // Per-job payload.fallbacks takes priority over agent-level fallbacks.

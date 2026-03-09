@@ -1,6 +1,7 @@
 import AjvPkg, { type ErrorObject } from "ajv";
 import type { SessionsPatchResult } from "../session-utils.types.js";
 import {
+  type SessionActivityParams,
   type AgentEvent,
   AgentEventSchema,
   type AgentIdentityParams,
@@ -255,6 +256,9 @@ export const validateEventFrame = ajv.compile<EventFrame>(EventFrameSchema);
 export const validateSendParams = ajv.compile(SendParamsSchema);
 export const validatePollParams = ajv.compile<PollParams>(PollParamsSchema);
 export const validateAgentParams = ajv.compile(AgentParamsSchema);
+export const validateSessionActivityParams = ajv.compile<SessionActivityParams>(
+  ProtocolSchemas.SessionActivityParams,
+);
 export const validateAgentIdentityParams =
   ajv.compile<AgentIdentityParams>(AgentIdentityParamsSchema);
 export const validateAgentWaitParams = ajv.compile<AgentWaitParams>(AgentWaitParamsSchema);
@@ -621,6 +625,7 @@ export type {
   NodeInvokeParams,
   NodeInvokeResultParams,
   NodeEventParams,
+  SessionActivityParams,
   SessionsListParams,
   SessionsPreviewParams,
   SessionsResolveParams,
