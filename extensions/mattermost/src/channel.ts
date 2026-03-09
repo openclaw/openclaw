@@ -254,6 +254,16 @@ export const mattermostPlugin: ChannelPlugin<ResolvedMattermostAccount> = {
   streaming: {
     blockStreamingCoalesceDefaults: { minChars: 1500, idleMs: 1000 },
   },
+  threading: {
+    resolveReplyToMode: ({ cfg }) => {
+      const mm = cfg.channels?.mattermost as Record<string, unknown> | undefined;
+      const mode = mm?.replyToMode;
+      if (mode === "off" || mode === "first") {
+        return mode;
+      }
+      return "all";
+    },
+  },
   reload: { configPrefixes: ["channels.mattermost"] },
   configSchema: buildChannelConfigSchema(MattermostConfigSchema),
   config: {

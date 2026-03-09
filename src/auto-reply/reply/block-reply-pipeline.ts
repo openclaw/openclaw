@@ -41,11 +41,11 @@ export function createBlockReplyPayloadKey(payload: ReplyPayload): string {
     : payload.mediaUrl
       ? [payload.mediaUrl]
       : [];
-  return JSON.stringify({
-    text,
-    mediaList,
-    replyToId: payload.replyToId ?? null,
-  });
+  // replyToId is intentionally excluded: threading is a delivery concern, not
+  // content identity. Including it caused dedup failures when block-streaming
+  // and final-payload paths resolved different replyToId values (e.g. Mattermost
+  // threaded replies producing a duplicate top-level message).
+  return JSON.stringify({ text, mediaList });
 }
 
 const withTimeout = async <T>(
