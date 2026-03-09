@@ -63,7 +63,38 @@ function toIssuePathLabel(issue: unknown): string {
   return toIssuePathSegments(issue).join(".");
 }
 
-function toUnknownKeyIssue(issue: unknown): UnknownKeyIssue | null {
+function pathStartsWith(path: Array<string | number>, prefix: Array<string | number>): boolean {
+  if (prefix.length > path.length) {
+    return false;
+  }
+  for (let i = 0; i < prefix.length; i += 1) {
+    if (path[i] !== prefix[i]) {
+      return false;
+    }
+  }
+  return true;
+}
+
+function combineIssuePathSegments(
+  basePath: Array<string | number>,
+  issuePath: Array<string | number>,
+): Array<string | number> {
+  if (basePath.length === 0) {
+    return issuePath;
+  }
+  if (issuePath.length === 0) {
+    return basePath;
+  }
+  if (pathStartsWith(issuePath, basePath)) {
+    return issuePath;
+  }
+  return [...basePath, ...issuePath];
+}
+
+function toUnknownKeyIssue(
+  issue: unknown,
+  pathSegments: Array<string | number> = toIssuePathSegments(issue),
+): UnknownKeyIssue | null {
   const record = toIssueRecord(issue);
   if (record?.code !== "unrecognized_keys") {
     return null;
@@ -75,7 +106,6 @@ function toUnknownKeyIssue(issue: unknown): UnknownKeyIssue | null {
   if (keys.length === 0) {
     return null;
   }
-  const pathSegments = toIssuePathSegments(issue);
   return {
     path: pathSegments.join("."),
     pathSegments,
@@ -86,13 +116,43 @@ function toUnknownKeyIssue(issue: unknown): UnknownKeyIssue | null {
 function collectUnknownKeyIssues(issues: ReadonlyArray<unknown>): UnknownKeyIssue[] {
   const collected: UnknownKeyIssue[] = [];
   for (const issue of issues) {
-    const unknownKeyIssue = toUnknownKeyIssue(issue);
-    if (!unknownKeyIssue) {
-      continue;
-    }
-    collected.push(unknownKeyIssue);
+    collectUnknownKeyIssuesFromIssue(issue, collected, []);
   }
   return collected;
+}
+
+function collectUnknownKeyIssuesFromIssue(
+  issue: unknown,
+  collected: UnknownKeyIssue[],
+  basePathSegments: Array<string | number>,
+): void {
+  const effectivePathSegments = combineIssuePathSegments(
+    basePathSegments,
+    toIssuePathSegments(issue),
+  );
+  const unknownKeyIssue = toUnknownKeyIssue(issue, effectivePathSegments);
+  if (unknownKeyIssue) {
+    collected.push(unknownKeyIssue);
+  }
+
+  const record = toIssueRecord(issue);
+  if (!record || record.code !== "invalid_union") {
+    return;
+  }
+
+  const nested = record.errors;
+  if (!Array.isArray(nested) || nested.length === 0) {
+    return;
+  }
+
+  for (const branch of nested) {
+    if (!Array.isArray(branch) || branch.length === 0) {
+      continue;
+    }
+    for (const nestedIssue of branch) {
+      collectUnknownKeyIssuesFromIssue(nestedIssue, collected, effectivePathSegments);
+    }
+  }
 }
 
 function resolveIssuePathObject(
