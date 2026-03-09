@@ -16,6 +16,7 @@ import { useSimulation } from "@/lib/simulation";
 import { useUIStore } from "@/store/uiStore";
 
 // Lazy-loaded pages
+const OkoPage = lazy(() => import("@/pages/OkoPage"));
 const OfficePage = lazy(() => import("@/pages/OfficePage"));
 const TasksPage = lazy(() => import("@/pages/TasksPage"));
 const ControlsPage = lazy(() => import("@/pages/ControlsPage"));
@@ -71,7 +72,8 @@ function AppContent() {
       <main className="fixed top-14 bottom-14 md:bottom-16 left-0 md:left-16 right-0 overflow-y-auto scrollbar-thin p-3 sm:p-4 md:p-6">
         <Suspense fallback={<PageLoader />}>
           <Routes>
-            <Route path="/" element={<Navigate to="/office" replace />} />
+            <Route path="/" element={<Navigate to="/oko" replace />} />
+            <Route path="/oko" element={<OkoPage />} />
             <Route path="/office" element={<OfficePage />} />
             <Route path="/tasks" element={<TasksPage />} />
             <Route path="/controls" element={<ControlsPage />} />

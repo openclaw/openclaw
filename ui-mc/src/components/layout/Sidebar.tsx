@@ -18,7 +18,10 @@ import {
 } from "lucide-react";
 import { useNavigate, useLocation } from "react-router-dom";
 
+import { Cpu } from "lucide-react";
+
 const NAV_ITEMS = [
+  { icon: Cpu, label: "Mission Control", path: "/oko" },
   { icon: Building2, label: "Office", path: "/office" },
   { icon: BriefcaseBusiness, label: "Agency", path: "/agency" },
   { icon: BookOpen, label: "Playbooks", path: "/playbooks" },

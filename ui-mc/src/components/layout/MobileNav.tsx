@@ -1,5 +1,6 @@
 import { motion, AnimatePresence } from "framer-motion";
 import {
+  Cpu,
   Building2,
   CheckSquare,
   Calendar,
@@ -20,6 +21,7 @@ import { useState } from "react";
 import { useNavigate, useLocation } from "react-router-dom";
 
 const MOBILE_NAV = [
+  { icon: Cpu, label: "Control", path: "/oko" },
   { icon: Building2, label: "Office", path: "/office" },
   { icon: CheckSquare, label: "Tasks", path: "/tasks" },
   { icon: Calendar, label: "Calendar", path: "/calendar" },
