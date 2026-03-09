@@ -13,6 +13,8 @@ vi.mock("../gateway/call.js", () => ({
   }),
 }));
 
+import { callGateway } from "../gateway/call.js";
+
 vi.mock("../infra/agent-events.js", () => ({
   onAgentEvent: vi.fn((_handler: unknown) => noop),
 }));
@@ -90,5 +92,38 @@ describe("subagent registry archive behavior", () => {
       .find((entry) => entry.runId === "run-new");
     expect(run?.spawnMode).toBe("session");
     expect(run?.archiveAtMs).toBeUndefined();
+  });
+
+  it("preserves transcripts when sweep archives expired runs", async () => {
+    const gatewayMock = vi.mocked(callGateway);
+    gatewayMock.mockClear();
+
+    mod.addSubagentRunForTests({
+      runId: "run-archive-1",
+      childSessionKey: "agent:main:subagent:session-archive-1",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "archive-me",
+      cleanup: "keep",
+      expectsCompletionMessage: false,
+      spawnMode: "run",
+      createdAt: Date.now() - 120_000,
+      startedAt: Date.now() - 120_000,
+      archiveAtMs: Date.now() - 1,
+      cleanupHandled: false,
+    });
+
+    await mod.sweepSubagentRunsForTests();
+
+    expect(gatewayMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        method: "sessions.delete",
+        params: expect.objectContaining({
+          key: "agent:main:subagent:session-archive-1",
+          deleteTranscript: false,
+          emitLifecycleHooks: false,
+        }),
+      }),
+    );
   });
 });
