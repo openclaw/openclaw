@@ -6,7 +6,13 @@ export function replaceSensitiveValuesInRaw(params: {
   sensitiveValues: string[];
   redactedSentinel: string;
 }): string {
-  const values = [...params.sensitiveValues].toSorted((a, b) => b.length - a.length);
+  // Empty strings carry no redaction information, but String#replaceAll("", x)
+  // inserts the replacement between every character and can blow up the raw
+  // config payload into an invalid-length string. Deduplicate while filtering
+  // them out so repeated empty/duplicate secrets stay cheap and safe.
+  const values = [...new Set(params.sensitiveValues.filter((value) => value.length > 0))].toSorted(
+    (a, b) => b.length - a.length,
+  );
   let result = params.raw;
   for (const value of values) {
     result = result.replaceAll(value, params.redactedSentinel);
