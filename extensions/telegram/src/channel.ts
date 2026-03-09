@@ -1,8 +1,8 @@
-import { createScopedChannelConfigBase } from "openclaw/plugin-sdk";
 import {
   collectAllowlistProviderGroupPolicyWarnings,
   buildAccountScopedDmSecurityPolicy,
   collectOpenGroupPolicyRouteAllowlistWarnings,
+  createScopedChannelConfigBase,
   createScopedAccountConfigAccessors,
   formatAllowFromLowercase,
 } from "openclaw/plugin-sdk/compat";
