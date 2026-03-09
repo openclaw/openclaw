@@ -325,7 +325,7 @@ describe("registerTelegramNativeCommands — session metadata", () => {
     expect(replyMocks.dispatchReplyWithBufferedBlockDispatcher).toHaveBeenCalledTimes(1);
   });
 
-  it("injects canonical approval buttons for native command replies", async () => {
+  it("does not inject approval buttons for native command replies once the monitor owns approvals", async () => {
     replyMocks.dispatchReplyWithBufferedBlockDispatcher.mockImplementationOnce(
       async ({ dispatcherOptions }: DispatchReplyWithBufferedBlockDispatcherParams) => {
         await dispatcherOptions.deliver(
@@ -358,17 +358,8 @@ describe("registerTelegramNativeCommands — session metadata", () => {
       | undefined;
     const deliveredPayload = deliveredCall?.replies?.[0];
     expect(deliveredPayload).toBeTruthy();
-    expect(deliveredPayload?.["channelData"]).toEqual({
-      telegram: {
-        buttons: [
-          [
-            { text: "Allow Once", callback_data: "/approve 7f423fdc allow-once" },
-            { text: "Allow Always", callback_data: "/approve 7f423fdc allow-always" },
-          ],
-          [{ text: "Deny", callback_data: "/approve 7f423fdc deny" }],
-        ],
-      },
-    });
+    expect(deliveredPayload?.["text"]).toContain("/approve 7f423fdc allow-once");
+    expect(deliveredPayload?.["channelData"]).toBeUndefined();
   });
 
   it("suppresses local structured exec approval replies for native commands", async () => {

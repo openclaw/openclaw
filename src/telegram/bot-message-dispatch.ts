@@ -24,17 +24,13 @@ import type { OpenClawConfig, ReplyToMode, TelegramAccountConfig } from "../conf
 import { danger, logVerbose } from "../globals.js";
 import { getAgentScopedMediaLocalRoots } from "../media/local-roots.js";
 import type { RuntimeEnv } from "../runtime.js";
-import { injectTelegramApprovalButtons } from "./approval-buttons.js";
 import type { TelegramMessageContext } from "./bot-message-context.js";
 import type { TelegramBotOptions } from "./bot.js";
 import { deliverReplies } from "./bot/delivery.js";
 import type { TelegramStreamMode } from "./bot/types.js";
 import type { TelegramInlineButtons } from "./button-types.js";
 import { createTelegramDraftStream } from "./draft-stream.js";
-import {
-  shouldEnableTelegramExecApprovalButtons,
-  shouldSuppressLocalTelegramExecApprovalPrompt,
-} from "./exec-approvals.js";
+import { shouldSuppressLocalTelegramExecApprovalPrompt } from "./exec-approvals.js";
 import { renderTelegramHtmlText } from "./format.js";
 import {
   type ArchivedPreview,
@@ -172,11 +168,6 @@ export const dispatchTelegramMessage = async ({
     cfg,
     channel: "telegram",
     accountId: route.accountId,
-  });
-  const autoApprovalButtonsEnabled = shouldEnableTelegramExecApprovalButtons({
-    cfg,
-    accountId: route.accountId,
-    to: String(chatId),
   });
   const renderDraftPreview = (text: string) => ({
     text: renderTelegramHtmlText(text, { tableMode }),
@@ -546,19 +537,12 @@ export const dispatchTelegramMessage = async ({
             queuedFinal = true;
             return;
           }
-          const payloadWithApprovalButtons = autoApprovalButtonsEnabled
-            ? injectTelegramApprovalButtons(payload)
-            : payload;
           const previewButtons = (
-            payloadWithApprovalButtons.channelData?.telegram as
-              | { buttons?: TelegramInlineButtons }
-              | undefined
+            payload.channelData?.telegram as { buttons?: TelegramInlineButtons } | undefined
           )?.buttons;
-          const split = splitTextIntoLaneSegments(payloadWithApprovalButtons.text);
+          const split = splitTextIntoLaneSegments(payload.text);
           const segments = split.segments;
-          const hasMedia =
-            Boolean(payloadWithApprovalButtons.mediaUrl) ||
-            (payloadWithApprovalButtons.mediaUrls?.length ?? 0) > 0;
+          const hasMedia = Boolean(payload.mediaUrl) || (payload.mediaUrls?.length ?? 0) > 0;
 
           const flushBufferedFinalAnswer = async () => {
             const buffered = reasoningStepState.takeBufferedFinalAnswer();
@@ -587,7 +571,7 @@ export const dispatchTelegramMessage = async ({
               reasoningStepState.shouldBufferFinalAnswer()
             ) {
               reasoningStepState.bufferFinalAnswer({
-                payload: payloadWithApprovalButtons,
+                payload,
                 text: segment.text,
               });
               continue;
@@ -598,7 +582,7 @@ export const dispatchTelegramMessage = async ({
             const result = await deliverLaneText({
               laneName: segment.lane,
               text: segment.text,
-              payload: payloadWithApprovalButtons,
+              payload,
               infoKind: info.kind,
               previewButtons,
               allowPreviewUpdateForNonFinal: segment.lane === "reasoning",
@@ -623,9 +607,7 @@ export const dispatchTelegramMessage = async ({
           if (split.suppressedReasoningOnly) {
             if (hasMedia) {
               const payloadWithoutSuppressedReasoning =
-                typeof payloadWithApprovalButtons.text === "string"
-                  ? { ...payloadWithApprovalButtons, text: "" }
-                  : payloadWithApprovalButtons;
+                typeof payload.text === "string" ? { ...payload, text: "" } : payload;
               await sendPayload(payloadWithoutSuppressedReasoning);
             }
             if (info.kind === "final") {
@@ -640,16 +622,14 @@ export const dispatchTelegramMessage = async ({
             reasoningStepState.resetForNextStep();
           }
           const canSendAsIs =
-            hasMedia ||
-            (typeof payloadWithApprovalButtons.text === "string" &&
-              payloadWithApprovalButtons.text.length > 0);
+            hasMedia || (typeof payload.text === "string" && payload.text.length > 0);
           if (!canSendAsIs) {
             if (info.kind === "final") {
               await flushBufferedFinalAnswer();
             }
             return;
           }
-          await sendPayload(payloadWithApprovalButtons);
+          await sendPayload(payload);
           if (info.kind === "final") {
             await flushBufferedFinalAnswer();
           }

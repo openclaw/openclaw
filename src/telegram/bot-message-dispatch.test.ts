@@ -212,7 +212,7 @@ describe("dispatchTelegramMessage draft streaming", () => {
     expect(draftStream.clear).toHaveBeenCalledTimes(1);
   });
 
-  it("injects canonical approval buttons for exec approval prompts", async () => {
+  it("does not inject approval buttons in local dispatch once the monitor owns approvals", async () => {
     dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
       await dispatcherOptions.deliver(
         {
@@ -244,21 +244,14 @@ describe("dispatchTelegramMessage draft streaming", () => {
       expect.objectContaining({
         replies: [
           expect.objectContaining({
-            channelData: {
-              telegram: {
-                buttons: [
-                  [
-                    { text: "Allow Once", callback_data: "/approve 117ba06d allow-once" },
-                    { text: "Allow Always", callback_data: "/approve 117ba06d allow-always" },
-                  ],
-                  [{ text: "Deny", callback_data: "/approve 117ba06d deny" }],
-                ],
-              },
-            },
+            text: "Mode: foreground\nRun: /approve 117ba06d allow-once (or allow-always / deny).",
           }),
         ],
       }),
     );
+    const deliveredPayload = (deliverReplies.mock.calls[0]?.[0] as { replies?: Array<unknown> })
+      ?.replies?.[0] as { channelData?: unknown } | undefined;
+    expect(deliveredPayload?.channelData).toBeUndefined();
   });
 
   it("uses 30-char preview debounce for legacy block stream mode", async () => {

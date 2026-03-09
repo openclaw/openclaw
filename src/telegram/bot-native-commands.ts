@@ -45,7 +45,6 @@ import { resolveAgentRoute } from "../routing/resolve-route.js";
 import { resolveThreadSessionKeys } from "../routing/session-key.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { withTelegramApiErrorLogging } from "./api-logging.js";
-import { injectTelegramApprovalButtons } from "./approval-buttons.js";
 import { isSenderAllowed, normalizeDmAllowFromWithStore } from "./bot-access.js";
 import type { TelegramMediaRef } from "./bot-message-context.js";
 import {
@@ -65,10 +64,7 @@ import {
 } from "./bot/helpers.js";
 import type { TelegramContext } from "./bot/types.js";
 import { resolveTelegramConversationRoute } from "./conversation-route.js";
-import {
-  shouldEnableTelegramExecApprovalButtons,
-  shouldSuppressLocalTelegramExecApprovalPrompt,
-} from "./exec-approvals.js";
+import { shouldSuppressLocalTelegramExecApprovalPrompt } from "./exec-approvals.js";
 import {
   evaluateTelegramGroupBaseAccess,
   evaluateTelegramGroupPolicyAccess,
@@ -599,11 +595,6 @@ export const registerTelegramNativeCommands = ({
             return;
           }
           const { threadSpec, route, mediaLocalRoots, tableMode, chunkMode } = runtimeContext;
-          const autoApprovalButtonsEnabled = shouldEnableTelegramExecApprovalButtons({
-            cfg,
-            accountId: route.accountId,
-            to: String(chatId),
-          });
           const threadParams = buildTelegramThreadParams(threadSpec) ?? {};
 
           const commandDefinition = findCommandByNativeName(command.name, "telegram");
@@ -770,11 +761,8 @@ export const registerTelegramNativeCommands = ({
                   deliveryState.delivered = true;
                   return;
                 }
-                const payloadWithApprovalButtons = autoApprovalButtonsEnabled
-                  ? injectTelegramApprovalButtons(payload)
-                  : payload;
                 const result = await deliverReplies({
-                  replies: [payloadWithApprovalButtons],
+                  replies: [payload],
                   ...deliveryBaseOptions,
                 });
                 if (result.delivered) {
@@ -866,11 +854,6 @@ export const registerTelegramNativeCommands = ({
             tableMode,
             chunkMode,
           });
-          const autoApprovalButtonsEnabled = shouldEnableTelegramExecApprovalButtons({
-            cfg,
-            accountId: route.accountId,
-            to: String(chatId),
-          });
           const from = isGroup
             ? buildTelegramGroupFrom(chatId, threadSpec.id)
             : `telegram:${chatId}`;
@@ -898,9 +881,7 @@ export const registerTelegramNativeCommands = ({
             })
           ) {
             await deliverReplies({
-              replies: [
-                autoApprovalButtonsEnabled ? injectTelegramApprovalButtons(result) : result,
-              ],
+              replies: [result],
               ...deliveryBaseOptions,
             });
           }

@@ -5,10 +5,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { telegramOutbound } from "../channels/plugins/outbound/telegram.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
-import * as telegramSend from "../telegram/send.js";
 import { createOutboundTestPlugin, createTestRegistry } from "../test-utils/channel-plugins.js";
 import { createExecApprovalForwarder } from "./exec-approval-forwarder.js";
-import { deliverOutboundPayloads } from "./outbound/deliver.js";
 
 const baseRequest = {
   id: "req-1",
@@ -47,7 +45,7 @@ const TARGETS_CFG = {
     exec: {
       enabled: true,
       mode: "targets",
-      targets: [{ channel: "telegram", to: "123" }],
+      targets: [{ channel: "slack", to: "U123" }],
     },
   },
 } as OpenClawConfig;
@@ -182,234 +180,22 @@ describe("exec approval forwarder", () => {
     const { deliver, forwarder } = createForwarder({ cfg: TARGETS_CFG });
 
     await expect(forwarder.handleRequested(baseRequest)).resolves.toBe(true);
+    await Promise.resolve();
     expect(deliver).toHaveBeenCalledTimes(1);
 
     await vi.runAllTimersAsync();
     expect(deliver).toHaveBeenCalledTimes(2);
   });
 
-  it("forwards telegram approvals to approver dms when telegram exec approvals are enabled", async () => {
+  it("skips telegram forwarding when telegram exec approvals handler is enabled", async () => {
     vi.useFakeTimers();
     const cfg = {
-      channels: {
-        telegram: {
-          execApprovals: {
-            enabled: true,
-            approvers: ["123", "456"],
-            target: "dm",
-          },
+      approvals: {
+        exec: {
+          enabled: true,
+          mode: "session",
         },
       },
-    } as OpenClawConfig;
-
-    const { deliver, forwarder } = createForwarder({
-      cfg,
-      resolveSessionTarget: () => ({ channel: "telegram", to: "-100999", threadId: 77 }),
-    });
-
-    await expect(
-      forwarder.handleRequested({
-        ...baseRequest,
-        request: {
-          ...baseRequest.request,
-          turnSourceChannel: "telegram",
-          turnSourceTo: "-100999",
-        },
-      }),
-    ).resolves.toBe(true);
-
-    expect(deliver).toHaveBeenCalledTimes(2);
-    expect(deliver.mock.calls.map((call) => call[0]?.to)).toEqual(["123", "456"]);
-  });
-
-  it("attaches Telegram approval buttons and uses the full approval id in Telegram prompts", async () => {
-    vi.useFakeTimers();
-    const request = {
-      ...baseRequest,
-      id: "9f1c7d5d-b1fb-46ef-ac45-662723b65bb7",
-      request: {
-        ...baseRequest.request,
-        turnSourceChannel: "telegram",
-        turnSourceTo: "123",
-      },
-    };
-    const cfg = {
-      channels: {
-        telegram: {
-          execApprovals: {
-            enabled: true,
-            approvers: ["123"],
-            target: "dm",
-          },
-        },
-      },
-    } as OpenClawConfig;
-
-    const { deliver, forwarder } = createForwarder({
-      cfg,
-      resolveSessionTarget: () => ({ channel: "telegram", to: "123" }),
-    });
-
-    await expect(forwarder.handleRequested(request)).resolves.toBe(true);
-
-    const firstCall = deliver.mock.calls[0]?.[0] as
-      | { payloads?: Array<{ text?: string; channelData?: Record<string, unknown> }> }
-      | undefined;
-    const payload = firstCall?.payloads?.[0];
-    expect(payload?.text).toContain(
-      "```txt\n/approve 9f1c7d5d-b1fb-46ef-ac45-662723b65bb7 allow-once\n```",
-    );
-    expect(payload?.channelData).toMatchObject({
-      execApproval: {
-        approvalId: "9f1c7d5d-b1fb-46ef-ac45-662723b65bb7",
-        approvalSlug: "9f1c7d5d",
-      },
-      telegram: {
-        buttons: [
-          [
-            {
-              text: "Allow Once",
-              callback_data: "/approve 9f1c7d5d-b1fb-46ef-ac45-662723b65bb7 allow-once",
-            },
-            {
-              text: "Allow Always",
-              callback_data: "/approve 9f1c7d5d-b1fb-46ef-ac45-662723b65bb7 allow-always",
-            },
-          ],
-          [
-            {
-              text: "Deny",
-              callback_data: "/approve 9f1c7d5d-b1fb-46ef-ac45-662723b65bb7 deny",
-            },
-          ],
-        ],
-      },
-    });
-  });
-
-  it("delivers forwarded Telegram approval prompts with inline buttons", async () => {
-    vi.useFakeTimers();
-    const sendTelegram = vi.fn().mockResolvedValue({ messageId: "m1", chatId: "123" });
-    const cfg = {
-      channels: {
-        telegram: {
-          botToken: "tok-1",
-          execApprovals: {
-            enabled: true,
-            approvers: ["123"],
-            target: "dm",
-          },
-        },
-      },
-    } as OpenClawConfig;
-
-    const { forwarder } = createForwarder({
-      cfg,
-      deliver: ((params) =>
-        deliverOutboundPayloads({
-          ...params,
-          deps: { sendTelegram },
-          skipQueue: true,
-        })) as ReturnType<typeof vi.fn>,
-      resolveSessionTarget: () => ({ channel: "telegram", to: "123" }),
-    });
-
-    await expect(
-      forwarder.handleRequested({
-        ...baseRequest,
-        id: "9f1c7d5d-b1fb-46ef-ac45-662723b65bb7",
-        request: {
-          ...baseRequest.request,
-          command: "npm view diver name version description",
-          turnSourceChannel: "telegram",
-          turnSourceTo: "123",
-        },
-      }),
-    ).resolves.toBe(true);
-    await vi.runAllTimersAsync();
-
-    expect(sendTelegram).toHaveBeenCalledWith(
-      "123",
-      expect.stringContaining("/approve 9f1c7d5d-b1fb-46ef-ac45-662723b65bb7 allow-once"),
-      expect.objectContaining({
-        buttons: [
-          [
-            {
-              text: "Allow Once",
-              callback_data: "/approve 9f1c7d5d-b1fb-46ef-ac45-662723b65bb7 allow-once",
-            },
-            {
-              text: "Allow Always",
-              callback_data: "/approve 9f1c7d5d-b1fb-46ef-ac45-662723b65bb7 allow-always",
-            },
-          ],
-          [
-            {
-              text: "Deny",
-              callback_data: "/approve 9f1c7d5d-b1fb-46ef-ac45-662723b65bb7 deny",
-            },
-          ],
-        ],
-      }),
-    );
-  });
-
-  it("sends a Telegram typing cue before a forwarded approval prompt", async () => {
-    vi.useFakeTimers();
-    const sendTypingSpy = vi
-      .spyOn(telegramSend, "sendTypingTelegram")
-      .mockResolvedValue({ ok: true });
-    const sendTelegram = vi.fn().mockResolvedValue({ messageId: "m1", chatId: "123" });
-    const cfg = {
-      channels: {
-        telegram: {
-          botToken: "tok-1",
-          execApprovals: {
-            enabled: true,
-            approvers: ["123"],
-            target: "channel",
-          },
-        },
-      },
-    } as OpenClawConfig;
-
-    const { forwarder } = createForwarder({
-      cfg,
-      deliver: ((params) =>
-        deliverOutboundPayloads({
-          ...params,
-          deps: { sendTelegram },
-          skipQueue: true,
-        })) as ReturnType<typeof vi.fn>,
-      resolveSessionTarget: () => ({ channel: "telegram", to: "-100999", threadId: 77 }),
-    });
-
-    await expect(
-      forwarder.handleRequested({
-        ...baseRequest,
-        id: "typing-req-1",
-        request: {
-          ...baseRequest.request,
-          command: "npm view diver name version description",
-          turnSourceChannel: "telegram",
-          turnSourceTo: "-100999",
-          turnSourceThreadId: "77",
-        },
-      }),
-    ).resolves.toBe(true);
-
-    expect(sendTypingSpy).toHaveBeenCalledWith(
-      "-100999",
-      expect.objectContaining({
-        cfg,
-        messageThreadId: 77,
-      }),
-    );
-  });
-
-  it("forwards telegram approvals to the originating topic when target=channel", async () => {
-    vi.useFakeTimers();
-    const cfg = {
       channels: {
         telegram: {
           execApprovals: {
@@ -434,18 +220,12 @@ describe("exec approval forwarder", () => {
           turnSourceChannel: "telegram",
           turnSourceTo: "-100999",
           turnSourceThreadId: "77",
+          turnSourceAccountId: "default",
         },
       }),
-    ).resolves.toBe(true);
+    ).resolves.toBe(false);
 
-    expect(deliver).toHaveBeenCalledTimes(1);
-    expect(deliver).toHaveBeenCalledWith(
-      expect.objectContaining({
-        channel: "telegram",
-        to: "-100999",
-        threadId: 77,
-      }),
-    );
+    expect(deliver).not.toHaveBeenCalled();
   });
 
   it("formats single-line commands as inline code", async () => {
@@ -453,13 +233,13 @@ describe("exec approval forwarder", () => {
     const { deliver, forwarder } = createForwarder({ cfg: TARGETS_CFG });
 
     await expect(forwarder.handleRequested(baseRequest)).resolves.toBe(true);
+    await Promise.resolve();
 
     const text = getFirstDeliveryText(deliver);
-    expect(text).toContain("Approval required.");
-    expect(text).toContain("```txt\n/approve req-1 allow-once\n```");
-    expect(text).toContain("```sh\necho hello\n```");
+    expect(text).toContain("🔒 Exec approval required");
+    expect(text).toContain("Command: `echo hello`");
     expect(text).toContain("Expires in: 5s");
-    expect(text).toContain("Full id: `req-1`");
+    expect(text).toContain("Reply with: /approve <id> allow-once|allow-always|deny");
   });
 
   it("formats complex commands as fenced code blocks", async () => {
@@ -475,8 +255,9 @@ describe("exec approval forwarder", () => {
         },
       }),
     ).resolves.toBe(true);
+    await Promise.resolve();
 
-    expect(getFirstDeliveryText(deliver)).toContain("```sh\necho `uname`\necho done\n```");
+    expect(getFirstDeliveryText(deliver)).toContain("```\necho `uname`\necho done\n```");
   });
 
   it("returns false when forwarding is disabled", async () => {
@@ -622,7 +403,8 @@ describe("exec approval forwarder", () => {
         },
       }),
     ).resolves.toBe(true);
+    await Promise.resolve();
 
-    expect(getFirstDeliveryText(deliver)).toContain("````sh\necho ```danger```\n````");
+    expect(getFirstDeliveryText(deliver)).toContain("````\necho ```danger```\n````");
   });
 });

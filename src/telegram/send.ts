@@ -916,6 +916,61 @@ type TelegramEditOpts = {
   cfg?: ReturnType<typeof loadConfig>;
 };
 
+type TelegramEditReplyMarkupOpts = {
+  token?: string;
+  accountId?: string;
+  verbose?: boolean;
+  api?: TelegramApiOverride;
+  retry?: RetryConfig;
+  /** Inline keyboard buttons (reply markup). Pass empty array to remove buttons. */
+  buttons?: TelegramInlineButtons;
+  /** Optional config injection to avoid global loadConfig() (improves testability). */
+  cfg?: ReturnType<typeof loadConfig>;
+};
+
+export async function editMessageReplyMarkupTelegram(
+  chatIdInput: string | number,
+  messageIdInput: string | number,
+  buttons: TelegramInlineButtons,
+  opts: TelegramEditReplyMarkupOpts = {},
+): Promise<{ ok: true; messageId: string; chatId: string }> {
+  const { cfg, account, api } = resolveTelegramApiContext({
+    ...opts,
+    cfg: opts.cfg,
+  });
+  const rawTarget = String(chatIdInput);
+  const chatId = await resolveAndPersistChatId({
+    cfg,
+    api,
+    lookupTarget: rawTarget,
+    persistTarget: rawTarget,
+    verbose: opts.verbose,
+  });
+  const messageId = normalizeMessageId(messageIdInput);
+  const requestWithDiag = createTelegramRequestWithDiag({
+    cfg,
+    account,
+    retry: opts.retry,
+    verbose: opts.verbose,
+  });
+  const replyMarkup = buildInlineKeyboard(buttons) ?? { inline_keyboard: [] };
+  try {
+    await requestWithDiag(
+      () => api.editMessageReplyMarkup(chatId, messageId, { reply_markup: replyMarkup }),
+      "editMessageReplyMarkup",
+      {
+        shouldLog: (err) => !isTelegramMessageNotModifiedError(err),
+      },
+    );
+  } catch (err) {
+    if (!isTelegramMessageNotModifiedError(err)) {
+      throw err;
+    }
+  }
+  logVerbose(`[telegram] Edited reply markup for message ${messageId} in chat ${chatId}`);
+  return { ok: true, messageId: String(messageId), chatId };
+}
+
 export async function editMessageTelegram(
   chatIdInput: string | number,
   messageIdInput: string | number,
