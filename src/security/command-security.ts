@@ -58,7 +58,9 @@ export async function checkCommandSecurity(
     // Spawn error (ENOENT, etc.)
     if (typeof e.code === "string") {
       const action = cfg.failOpen ? "allow" : "block";
-      const summary = cfg.failOpen ? "" : `tirith not found at "${tirithPath}"`;
+      const summary = cfg.failOpen
+        ? ""
+        : `tirith could not be started at "${tirithPath}" (${e.code})`;
       return { action, findings: [], summary };
     }
 

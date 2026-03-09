@@ -540,9 +540,11 @@ describe("exec approvals", () => {
 
     it("does not block when tirith returns block but enabled=false", async () => {
       vi.mocked(checkCommandSecurity).mockResolvedValue({
-        action: "allow",
-        findings: [],
-        summary: "",
+        action: "block",
+        findings: [
+          { rule_id: "pipe_to_shell", severity: "high", title: "Pipe to shell", description: "d" },
+        ],
+        summary: "[high] Pipe to shell",
       });
 
       vi.mocked(callGatewayTool).mockImplementation(async () => ({ ok: true }));
@@ -557,6 +559,7 @@ describe("exec approvals", () => {
 
       const result = await tool.execute("sec-disabled", { command: "echo ok" });
       expect(result.details.status).toBe("completed");
+      expect(checkCommandSecurity).not.toHaveBeenCalled();
     });
 
     it("throws on block from tirith for node host (post-dispatch path)", async () => {

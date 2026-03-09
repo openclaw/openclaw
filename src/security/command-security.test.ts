@@ -118,7 +118,7 @@ describe("checkCommandSecurity", () => {
     simulateError({ code: "ENOENT" });
     const result = await checkCommandSecurity("ls", { failOpen: false });
     expect(result.action).toBe("block");
-    expect(result.summary).toContain("not found");
+    expect(result.summary).toContain("ENOENT");
   });
 
   it("returns allow on timeout with failOpen=true", async () => {
