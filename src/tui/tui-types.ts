@@ -24,6 +24,12 @@ export type AgentEvent = {
   data?: Record<string, unknown>;
 };
 
+export type SessionEvent = {
+  type: "reset";
+  sessionKey: string;
+  reason?: string;
+};
+
 export type ResponseUsageMode = "on" | "off" | "tokens" | "full";
 
 export type SessionInfo = {

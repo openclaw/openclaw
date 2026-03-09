@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { createEventHandlers } from "./tui-event-handlers.js";
-import type { AgentEvent, ChatEvent, TuiStateAccess } from "./tui-types.js";
+import type { AgentEvent, ChatEvent, SessionEvent, TuiStateAccess } from "./tui-types.js";
 
 type MockFn = ReturnType<typeof vi.fn>;
 type HandlerChatLog = {
@@ -499,5 +499,170 @@ describe("tui-event-handlers: handleAgentEvent", () => {
     });
 
     expect(loadHistory).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("tui-event-handlers: handleSessionEvent", () => {
+  const makeState = (overrides?: Partial<TuiStateAccess>): TuiStateAccess => ({
+    agentDefaultId: "main",
+    sessionMainKey: "agent:main:main",
+    sessionScope: "global",
+    agents: [],
+    currentAgentId: "main",
+    currentSessionKey: "agent:main:main",
+    currentSessionId: "session-1",
+    activeChatRunId: "run-1",
+    historyLoaded: true,
+    sessionInfo: { verboseLevel: "on" },
+    initialSessionApplied: true,
+    isConnected: true,
+    autoMessageSent: false,
+    toolsExpanded: false,
+    showThinking: false,
+    connectionStatus: "connected",
+    activityStatus: "idle",
+    statusTimeout: null,
+    lastCtrlCAt: 0,
+    ...overrides,
+  });
+
+  const makeContext = (state: TuiStateAccess) => {
+    const chatLog = createMockChatLog();
+    const tui = { requestRender: vi.fn() } as unknown as MockTui & HandlerTui;
+    const setActivityStatus = vi.fn();
+    const loadHistory = vi.fn();
+    const refreshSessionInfo = vi.fn();
+    const localRunIds = new Set<string>();
+    const noteLocalRunId = (runId: string) => {
+      localRunIds.add(runId);
+    };
+    const forgetLocalRunId = localRunIds.delete.bind(localRunIds);
+    const isLocalRunId = localRunIds.has.bind(localRunIds);
+    const clearLocalRunIds = vi.fn(() => localRunIds.clear());
+
+    return {
+      chatLog,
+      tui,
+      state,
+      setActivityStatus,
+      loadHistory,
+      refreshSessionInfo,
+      noteLocalRunId,
+      forgetLocalRunId,
+      isLocalRunId,
+      clearLocalRunIds,
+    };
+  };
+
+  const createSessionHarness = (params?: { state?: Partial<TuiStateAccess> }) => {
+    const state = makeState(params?.state);
+    const context = makeContext(state);
+    const handlers = createEventHandlers({
+      chatLog: context.chatLog,
+      tui: context.tui,
+      state,
+      setActivityStatus: context.setActivityStatus,
+      loadHistory: context.loadHistory,
+      refreshSessionInfo: context.refreshSessionInfo,
+      isLocalRunId: context.isLocalRunId,
+      forgetLocalRunId: context.forgetLocalRunId,
+      clearLocalRunIds: context.clearLocalRunIds,
+    });
+    return {
+      ...context,
+      state,
+      ...handlers,
+    };
+  };
+
+  it("refreshes history on current-session external reset event", () => {
+    const { state, loadHistory, refreshSessionInfo, setActivityStatus, clearLocalRunIds, tui, handleSessionEvent } =
+      createSessionHarness({
+        state: { activeChatRunId: "run-active", historyLoaded: true },
+      });
+
+    const sessionEvt: SessionEvent = {
+      type: "reset",
+      sessionKey: state.currentSessionKey,
+      reason: "reset",
+    };
+
+    handleSessionEvent(sessionEvt);
+
+    expect(state.activeChatRunId).toBeNull();
+    expect(clearLocalRunIds).toHaveBeenCalledTimes(1);
+    expect(setActivityStatus).toHaveBeenCalledWith("idle");
+    expect(loadHistory).toHaveBeenCalledTimes(1);
+    expect(refreshSessionInfo).toHaveBeenCalledTimes(1);
+    expect(tui.requestRender).toHaveBeenCalledTimes(1);
+  });
+
+  it("ignores reset event for a different session", () => {
+    const { state, loadHistory, refreshSessionInfo, setActivityStatus, clearLocalRunIds, tui, handleSessionEvent } =
+      createSessionHarness({
+        state: { activeChatRunId: "run-active", currentSessionKey: "agent:main:main" },
+      });
+
+    const sessionEvt: SessionEvent = {
+      type: "reset",
+      sessionKey: "agent:other:other",
+      reason: "reset",
+    };
+
+    handleSessionEvent(sessionEvt);
+
+    expect(state.activeChatRunId).toBe("run-active");
+    expect(clearLocalRunIds).not.toHaveBeenCalled();
+    expect(setActivityStatus).not.toHaveBeenCalled();
+    expect(loadHistory).not.toHaveBeenCalled();
+    expect(refreshSessionInfo).not.toHaveBeenCalled();
+    expect(tui.requestRender).not.toHaveBeenCalled();
+  });
+
+  it("ignores stale tool events from old runs after external reset", () => {
+    const { state, chatLog, tui, handleChatEvent, handleSessionEvent, handleAgentEvent } =
+      createSessionHarness({
+        state: { activeChatRunId: null, currentSessionKey: "agent:main:main" },
+      });
+
+    // Step 1: Create a current-session run that becomes known to TUI state
+    const oldRunId = "run-old";
+    handleChatEvent({
+      runId: oldRunId,
+      sessionKey: state.currentSessionKey,
+      state: "delta",
+      message: { role: "assistant", content: [{ type: "text", text: "hello" }] },
+    });
+
+    // Verify the run is tracked
+    expect(state.activeChatRunId).toBe(oldRunId);
+
+    // Step 2: Send a current-session session reset event
+    const sessionEvt: SessionEvent = {
+      type: "reset",
+      sessionKey: state.currentSessionKey,
+      reason: "reset",
+    };
+    handleSessionEvent(sessionEvt);
+
+    // Verify reset cleared state
+    expect(state.activeChatRunId).toBeNull();
+
+    // Capture requestRender call count after reset
+    const requestRenderCallsAfterReset = tui.requestRender.mock.calls.length;
+
+    // Step 3: Send a stale agent tool event for the old runId
+    const staleToolEvt: AgentEvent = {
+      runId: oldRunId,
+      stream: "tool",
+      data: { phase: "start", toolCallId: "tc-stale", name: "exec", args: { command: "echo stale" } },
+    };
+    handleAgentEvent(staleToolEvt);
+
+    // Step 4: Assert that the stale tool event is ignored after reset
+    // startTool should not be called for the stale event
+    expect(chatLog.startTool).not.toHaveBeenCalled();
+    // requestRender should not be called again after reset (only from initial delta and reset)
+    expect(tui.requestRender.mock.calls.length).toBe(requestRenderCallsAfterReset);
   });
 });

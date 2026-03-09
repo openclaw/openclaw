@@ -1,7 +1,7 @@
 import { parseAgentSessionKey } from "../sessions/session-key-utils.js";
 import { asString, extractTextFromMessage, isCommandMessage } from "./tui-formatters.js";
 import { TuiStreamAssembler } from "./tui-stream-assembler.js";
-import type { AgentEvent, ChatEvent, TuiStateAccess } from "./tui-types.js";
+import type { AgentEvent, ChatEvent, SessionEvent, TuiStateAccess } from "./tui-types.js";
 
 type EventHandlerChatLog = {
   startTool: (toolCallId: string, toolName: string, args: unknown) => void;
@@ -335,5 +335,28 @@ export function createEventHandlers(context: EventHandlerContext) {
     }
   };
 
-  return { handleChatEvent, handleAgentEvent };
+  const handleSessionEvent = (payload: unknown) => {
+    if (!payload || typeof payload !== "object") {
+      return;
+    }
+    const evt = payload as SessionEvent;
+    syncSessionKey();
+    if (evt.type !== "reset") {
+      return;
+    }
+    if (!isSameSessionKey(evt.sessionKey, state.currentSessionKey)) {
+      return;
+    }
+    state.activeChatRunId = null;
+    finalizedRuns.clear();
+    sessionRuns.clear();
+    streamAssembler = new TuiStreamAssembler();
+    clearLocalRunIds?.();
+    setActivityStatus("idle");
+    void loadHistory?.();
+    void refreshSessionInfo?.();
+    tui.requestRender();
+  };
+
+  return { handleChatEvent, handleAgentEvent, handleSessionEvent };
 }
