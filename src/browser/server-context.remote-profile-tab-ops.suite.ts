@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import "./server-context.chrome-test-harness.js";
 import * as chromeModule from "./chrome.js";
+import { InvalidBrowserNavigationUrlError } from "./navigation-guard.js";
 import * as pwAiModule from "./pw-ai-module.js";
 import { createBrowserRouteContext } from "./server-context.js";
 import {
@@ -228,6 +229,17 @@ describe("browser server-context remote profile tab operations", () => {
 
     const tabs = await remote.listTabs();
     expect(tabs.map((t) => t.targetId)).toEqual(["T1"]);
+  });
+
+  it("fails closed for remote tab opens in strict mode without Playwright", async () => {
+    vi.spyOn(pwAiModule, "getPwAiModule").mockResolvedValue(null);
+    const { state, remote, fetchMock } = createRemoteRouteHarness();
+    state.resolved.ssrfPolicy = {};
+
+    await expect(remote.openTab("https://example.com")).rejects.toBeInstanceOf(
+      InvalidBrowserNavigationUrlError,
+    );
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 
   it("does not enforce managed tab cap for remote openclaw profiles", async () => {

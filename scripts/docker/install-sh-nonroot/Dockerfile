@@ -1,6 +1,10 @@
+# syntax=docker/dockerfile:1.7
+
 FROM ubuntu:24.04@sha256:cd1dba651b3080c3686ecf4e3c4220f026b521fb76978881737d24f200828b2b
 
-RUN set -eux; \
+RUN --mount=type=cache,id=openclaw-install-sh-nonroot-apt-cache,target=/var/cache/apt,sharing=locked \
+  --mount=type=cache,id=openclaw-install-sh-nonroot-apt-lists,target=/var/lib/apt,sharing=locked \
+  set -eux; \
   for attempt in 1 2 3; do \
     if apt-get update -o Acquire::Retries=3; then break; fi; \
     echo "apt-get update failed (attempt ${attempt})" >&2; \
@@ -14,8 +18,7 @@ RUN set -eux; \
     g++ \
     make \
     python3 \
-    sudo \
-  && rm -rf /var/lib/apt/lists/*
+    sudo
 
 RUN useradd -m -s /bin/bash app \
   && echo "app ALL=(ALL) NOPASSWD:ALL" > /etc/sudoers.d/app
