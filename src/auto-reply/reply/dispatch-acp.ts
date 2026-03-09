@@ -1,4 +1,6 @@
+import fs from "node:fs/promises";
 import { getAcpSessionManager } from "../../acp/control-plane/manager.js";
+import type { AcpTurnAttachment } from "../../acp/control-plane/manager.types.js";
 import { resolveAcpAgentPolicyError, resolveAcpDispatchPolicyError } from "../../acp/policy.js";
 import { formatAcpRuntimeErrorText } from "../../acp/runtime/error-text.js";
 import { toAcpRuntimeError } from "../../acp/runtime/errors.js";
@@ -55,6 +57,29 @@ function resolveAcpPromptText(ctx: FinalizedMsgContext): string {
     "RawBody",
     "Body",
   ]).trim();
+}
+
+async function resolveAcpAttachments(ctx: FinalizedMsgContext): Promise<AcpTurnAttachment[]> {
+  const paths = ctx.MediaPaths;
+  const types = ctx.MediaTypes;
+  if (!Array.isArray(paths) || paths.length === 0) {
+    return [];
+  }
+  const results: AcpTurnAttachment[] = [];
+  for (let i = 0; i < paths.length; i++) {
+    const filePath = paths[i];
+    const mediaType = Array.isArray(types) ? (types[i] ?? "application/octet-stream") : "application/octet-stream";
+    if (typeof filePath !== "string" || !filePath.trim()) {
+      continue;
+    }
+    try {
+      const buf = await fs.readFile(filePath);
+      results.push({ mediaType, data: buf.toString("base64") });
+    } catch {
+      // Skip unreadable files — do not block the text turn.
+    }
+  }
+  return results;
 }
 
 function resolveCommandCandidateText(ctx: FinalizedMsgContext): string {
@@ -189,7 +214,8 @@ export async function tryDispatchAcpReply(params: {
   });
 
   const promptText = resolveAcpPromptText(params.ctx);
-  if (!promptText) {
+  const attachments = await resolveAcpAttachments(params.ctx);
+  if (!promptText && attachments.length === 0) {
     const counts = params.dispatcher.getQueuedCounts();
     delivery.applyRoutedCounts(counts);
     params.recordProcessed("completed", { reason: "acp_empty_prompt" });
@@ -251,6 +277,7 @@ export async function tryDispatchAcpReply(params: {
       cfg: params.cfg,
       sessionKey,
       text: promptText,
+      attachments: attachments.length > 0 ? attachments : undefined,
       mode: "prompt",
       requestId: resolveAcpRequestId(params.ctx),
       onEvent: async (event) => await projector.onEvent(event),

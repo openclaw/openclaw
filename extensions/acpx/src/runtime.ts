@@ -310,7 +310,15 @@ export class AcpxRuntime implements AcpRuntime {
       // Ignore EPIPE when the child exits before stdin flush completes.
     });
 
-    child.stdin.end(input.text);
+    if (input.attachments && input.attachments.length > 0) {
+      const blocks: unknown[] = [{ type: "text", text: input.text }];
+      for (const attachment of input.attachments) {
+        blocks.push({ type: "image", mimeType: attachment.mediaType, data: attachment.data });
+      }
+      child.stdin.end(JSON.stringify(blocks));
+    } else {
+      child.stdin.end(input.text);
+    }
 
     let stderr = "";
     child.stderr.on("data", (chunk) => {
