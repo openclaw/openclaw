@@ -9,9 +9,12 @@ import {
 } from "../agents/model-selection.js";
 import { resolveAgentSessionDirs } from "../agents/session-dirs.js";
 import { cleanStaleLockFiles } from "../agents/session-write-lock.js";
+import { resolveAnnounceTargetFromKey } from "../agents/tools/sessions-send-helpers.js";
+import { normalizeChannelId } from "../channels/plugins/index.js";
 import type { CliDeps } from "../cli/deps.js";
 import type { loadConfig } from "../config/config.js";
 import { resolveStateDir } from "../config/paths.js";
+import { parseSessionThreadInfo } from "../config/sessions/delivery-info.js";
 import { startGmailWatcherWithLogs } from "../hooks/gmail-watcher-lifecycle.js";
 import {
   clearInternalHooks,
@@ -29,12 +32,14 @@ import {
 import { enqueueSystemEvent } from "../infra/system-events.js";
 import type { loadOpenClawPlugins } from "../plugins/loader.js";
 import { type PluginServicesHandle, startPluginServices } from "../plugins/services.js";
+import { deliveryContextFromSession, mergeDeliveryContext } from "../utils/delivery-context.js";
 import { startBrowserControlServerIfEnabled } from "./server-browser.js";
 import {
   scheduleRestartSentinelWake,
   shouldWakeFromRestartSentinel,
 } from "./server-restart-sentinel.js";
 import { startGatewayMemoryBackend } from "./server-startup-memory.js";
+import { loadSessionEntry } from "./session-utils.js";
 
 const SESSION_LOCK_STALE_MS = 30 * 60 * 1000;
 
@@ -210,10 +215,22 @@ export async function startGatewaySidecars(params: {
           continue;
         }
 
-        // Skip scheduler isolated sessions — the scheduler's drain-retry handles these
-        // (retries the job ~90s after a drain error). Sending a recovery system event
-        // to a dead scheduler session is pointless and creates noise.
-        if (turn.sessionKey?.startsWith("scheduler:")) {
+        // Attempt to resolve a delivery target for the session. Sessions without
+        // a resolvable channel target (isolated scheduler sessions, orphaned sessions,
+        // or any session with no channel mapping) are skipped — the originating system
+        // (e.g. a scheduler's drain-retry) handles recovery for those.
+        const { baseSessionKey } = parseSessionThreadInfo(turn.sessionKey);
+        const parsedTarget = resolveAnnounceTargetFromKey(baseSessionKey ?? turn.sessionKey ?? "");
+        const { entry: turnEntry } = loadSessionEntry(turn.sessionKey ?? "");
+        let deliveryCtx = deliveryContextFromSession(turnEntry);
+        if (!deliveryCtx && baseSessionKey && baseSessionKey !== turn.sessionKey) {
+          const { entry: baseEntry } = loadSessionEntry(baseSessionKey);
+          deliveryCtx = deliveryContextFromSession(baseEntry);
+        }
+        const origin = mergeDeliveryContext(deliveryCtx, parsedTarget ?? undefined);
+        const resolvedChannel = origin?.channel ? normalizeChannelId(origin.channel) : null;
+        const resolvedTo = origin?.to;
+        if (!resolvedChannel || !resolvedTo) {
           continue;
         }
 
