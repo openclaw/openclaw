@@ -451,6 +451,7 @@ describe("compactEmbeddedPiSessionDirect hooks", () => {
         messageCount: 1,
         tokenCount: 10,
         compactedCount: 1,
+        sessionFile: "/tmp/session.jsonl",
       },
       expect.objectContaining({ sessionKey: "agent:main:session-1", messageProvider: "telegram" }),
     );
