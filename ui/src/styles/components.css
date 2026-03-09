@@ -2131,11 +2131,20 @@
 
 .exec-approval-card {
   width: min(540px, 100%);
+  max-height: min(80vh, 600px);
   background: var(--card);
   border: 1px solid var(--border);
   border-radius: var(--radius-lg);
   padding: 20px;
   animation: scale-in 0.2s var(--ease-out);
+  display: flex;
+  flex-direction: column;
+}
+
+.exec-approval-body {
+  flex: 1 1 auto;
+  overflow-y: auto;
+  min-height: 0;
 }
 
 .exec-approval-header {
@@ -2175,6 +2184,8 @@
   white-space: pre-wrap;
   font-family: var(--mono);
   font-size: 13px;
+  max-height: 40vh;
+  overflow-y: auto;
 }
 
 .exec-approval-meta {
