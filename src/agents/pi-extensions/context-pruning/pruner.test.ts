@@ -119,27 +119,45 @@ describe("estimateStringChars", () => {
   it("counts CJK characters with extra weight", () => {
     // Each CJK char should count as 4 chars (CHARS_PER_TOKEN_ESTIMATE) so that
     // the downstream chars/4 token estimate yields ~1 token per CJK char.
-    // 3 CJK chars: .length=3, adjusted = 3 + 3*(4-1) = 12
+    // 3 BMP CJK chars: .length=3, adjusted = 3 - 3 + 3*4 = 12
     expect(estimateStringChars("你好世")).toBe(12);
   });
 
   it("handles mixed ASCII and CJK text", () => {
-    // "hi你好" has 2 ASCII + 2 CJK chars
-    // .length=4, adjusted = 4 + 2*(4-1) = 10
+    // "hi你好" has 2 ASCII + 2 BMP CJK chars
+    // .length=4, adjusted = 4 - 2 + 2*4 = 10
     expect(estimateStringChars("hi你好")).toBe(10);
   });
 
   it("handles Japanese hiragana and katakana", () => {
-    // "こんにちは" = 5 hiragana chars, adjusted = 5 + 5*3 = 20
+    // "こんにちは" = 5 hiragana chars, adjusted = 5 - 5 + 5*4 = 20
     expect(estimateStringChars("こんにちは")).toBe(20);
   });
 
   it("handles Korean hangul", () => {
-    // "안녕" = 2 hangul chars, adjusted = 2 + 2*3 = 8
+    // "안녕" = 2 hangul chars, adjusted = 2 - 2 + 2*4 = 8
     expect(estimateStringChars("안녕")).toBe(8);
   });
 
   it("returns 0 for empty string", () => {
     expect(estimateStringChars("")).toBe(0);
+  });
+
+  it("handles astral-plane CJK characters (surrogate pairs)", () => {
+    // U+20000 (𠀀) is a CJK Extension B character — a surrogate pair in JS
+    // with String.length of 2. Should still count as 4 (one code point).
+    expect(estimateStringChars("\u{20000}")).toBe(4);
+  });
+
+  it("handles mixed BMP and astral CJK characters", () => {
+    // "你𠀀" = 1 BMP CJK (length 1) + 1 astral CJK (length 2) = text.length 3
+    // 2 CJK code points → 2 * 4 = 8
+    expect(estimateStringChars("你\u{20000}")).toBe(8);
+  });
+
+  it("handles mixed ASCII and astral CJK characters", () => {
+    // "hi𠀀" = 2 ASCII (length 2) + 1 astral CJK (length 2) = text.length 4
+    // adjusted = 4 - 2 + 1*4 = 6 (2 for ASCII + 4 for the CJK code point)
+    expect(estimateStringChars("hi\u{20000}")).toBe(6);
   });
 });

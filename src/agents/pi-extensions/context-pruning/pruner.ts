@@ -21,9 +21,15 @@ const NON_LATIN_RE = /[\u2E80-\u9FFF\uA000-\uA4FF\uAC00-\uD7AF\uF900-\uFAFF\u{20
  * downstream `chars / CHARS_PER_TOKEN_ESTIMATE` token estimate remains accurate.
  */
 export function estimateStringChars(text: string): number {
-  const nonLatinCount = (text.match(NON_LATIN_RE) ?? []).length;
-  // Non-Latin chars already contribute 1 to text.length, so add the extra weight.
-  return text.length + nonLatinCount * (CHARS_PER_TOKEN_ESTIMATE - 1);
+  const matches = text.match(NON_LATIN_RE) ?? [];
+  // Astral-plane characters (e.g. CJK Extension B, U+20000+) are surrogate pairs
+  // in JS strings, so each match may contribute 1 or 2 to text.length. Subtract
+  // each match's actual string length and add the target weight instead.
+  let stringUnits = 0;
+  for (const m of matches) {
+    stringUnits += m.length;
+  }
+  return text.length - stringUnits + matches.length * CHARS_PER_TOKEN_ESTIMATE;
 }
 
 function asText(text: string): TextContent {
