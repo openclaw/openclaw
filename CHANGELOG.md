@@ -6,6 +6,8 @@ Docs: https://docs.openclaw.ai
 
 ### Changes
 
+- Slack/Home Tab: auto-publish a Block Kit Home tab view on `app_home_opened` with agent status, version, model, uptime, channels, and getting-started guidance. Configurable via `channels.slack.homeTab` (enabled/showCommands/customBlocks). Agent tool actions `updateHomeTab`/`resetHomeTab` allow dynamic customization with version-cached dedup and multi-account state isolation. (#23268)
+
 ### Breaking
 
 ### Fixes
