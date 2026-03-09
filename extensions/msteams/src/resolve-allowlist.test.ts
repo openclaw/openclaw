@@ -54,10 +54,12 @@ describe("resolveMSTeamsUserAllowlist", () => {
 
 describe("resolveMSTeamsChannelAllowlist", () => {
   it("resolves team/channel by team name + channel display name", async () => {
-    listTeamsByName.mockResolvedValueOnce([{ id: "team-1", displayName: "Product Team" }]);
+    // After the fix, listChannelsForTeam is called once and reused for both
+    // General channel resolution and channel matching.
+    listTeamsByName.mockResolvedValueOnce([{ id: "team-guid-1", displayName: "Product Team" }]);
     listChannelsForTeam.mockResolvedValueOnce([
-      { id: "channel-1", displayName: "General" },
-      { id: "channel-2", displayName: "Roadmap" },
+      { id: "19:general-conv-id@thread.tacv2", displayName: "General" },
+      { id: "19:roadmap-conv-id@thread.tacv2", displayName: "Roadmap" },
     ]);
 
     const [result] = await resolveMSTeamsChannelAllowlist({
@@ -65,14 +67,60 @@ describe("resolveMSTeamsChannelAllowlist", () => {
       entries: ["Product Team/Roadmap"],
     });
 
+    // teamId is now the General channel's conversation ID — not the Graph GUID —
+    // because that's what Bot Framework sends as channelData.team.id at runtime.
     expect(result).toEqual({
       input: "Product Team/Roadmap",
       resolved: true,
-      teamId: "team-1",
+      teamId: "19:general-conv-id@thread.tacv2",
       teamName: "Product Team",
-      channelId: "channel-2",
+      channelId: "19:roadmap-conv-id@thread.tacv2",
       channelName: "Roadmap",
       note: "multiple channels; chose first",
+    });
+  });
+
+  it("uses General channel conversation ID as team key for team-only entry", async () => {
+    // When no channel is specified we still resolve the General channel so the
+    // stored key matches what Bot Framework sends as channelData.team.id.
+    listTeamsByName.mockResolvedValueOnce([{ id: "guid-engineering", displayName: "Engineering" }]);
+    listChannelsForTeam.mockResolvedValueOnce([
+      { id: "19:eng-general@thread.tacv2", displayName: "General" },
+      { id: "19:eng-standups@thread.tacv2", displayName: "Standups" },
+    ]);
+
+    const [result] = await resolveMSTeamsChannelAllowlist({
+      cfg: {},
+      entries: ["Engineering"],
+    });
+
+    expect(result).toEqual({
+      input: "Engineering",
+      resolved: true,
+      teamId: "19:eng-general@thread.tacv2",
+      teamName: "Engineering",
+    });
+  });
+
+  it("falls back to Graph GUID when General channel is not found", async () => {
+    // Edge case: General channel was renamed or deleted. We fall back to the
+    // Graph GUID so resolution still succeeds rather than silently breaking.
+    listTeamsByName.mockResolvedValueOnce([{ id: "guid-ops", displayName: "Operations" }]);
+    listChannelsForTeam.mockResolvedValueOnce([
+      { id: "19:ops-announce@thread.tacv2", displayName: "Announcements" },
+      { id: "19:ops-random@thread.tacv2", displayName: "Random" },
+    ]);
+
+    const [result] = await resolveMSTeamsChannelAllowlist({
+      cfg: {},
+      entries: ["Operations"],
+    });
+
+    expect(result).toEqual({
+      input: "Operations",
+      resolved: true,
+      teamId: "guid-ops",
+      teamName: "Operations",
     });
   });
 });
