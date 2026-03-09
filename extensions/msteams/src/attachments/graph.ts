@@ -1,3 +1,4 @@
+import { readResponseWithLimit } from "openclaw/plugin-sdk/media-runtime";
 import { fetchWithSsrFGuard, type SsrFPolicy } from "openclaw/plugin-sdk/ssrf-runtime";
 import {
   normalizeLowercaseStringOrEmpty,
@@ -194,8 +195,9 @@ async function downloadGraphHostedContent(params: {
 
   const out: MSTeamsInboundMedia[] = [];
   for (const item of hosted.items) {
+    let buffer: Buffer | undefined;
+    let itemContentType = item.contentType ?? undefined;
     const contentBytes = typeof item.contentBytes === "string" ? item.contentBytes : "";
-    let buffer: Buffer;
     if (contentBytes) {
       if (estimateBase64DecodedBytes(contentBytes) > params.maxBytes) {
         continue;
@@ -209,53 +211,57 @@ async function downloadGraphHostedContent(params: {
         continue;
       }
     } else if (item.id) {
-      // contentBytes not inline — fetch from the individual $value endpoint.
+      // Graph API does not inline contentBytes in the collection response.
+      // Fetch the actual bytes via the /$value endpoint instead.
+      const valueUrl = `${params.messageUrl}/hostedContents/${encodeURIComponent(item.id)}/$value`;
+      const fetchFn = params.fetchFn ?? fetch;
+      let valRelease: (() => Promise<void>) | undefined;
       try {
-        const valueUrl = `${params.messageUrl}/hostedContents/${encodeURIComponent(item.id)}/$value`;
-        const { response: valRes, release } = await fetchWithSsrFGuard({
+        const { response: valResp, release } = await fetchWithSsrFGuard({
           url: valueUrl,
-          fetchImpl: params.fetchFn ?? fetch,
+          fetchImpl: fetchFn,
           init: {
             headers: ensureUserAgentHeader({ Authorization: `Bearer ${params.accessToken}` }),
           },
           policy: params.ssrfPolicy,
-          auditContext: "msteams.graph.hostedContent.value",
+          auditContext: "msteams.graph.hostedcontent.value",
         });
-        try {
-          if (!valRes.ok) {
-            continue;
-          }
-          // Check Content-Length before buffering to avoid RSS spikes on large files.
-          const cl = valRes.headers.get("content-length");
-          if (cl && Number(cl) > params.maxBytes) {
-            continue;
-          }
-          const ab = await valRes.arrayBuffer();
-          buffer = Buffer.from(ab);
-        } finally {
-          await release();
+        valRelease = release;
+        if (!valResp.ok) {
+          continue;
         }
+        const ct = normalizeContentType(valResp.headers.get("content-type"));
+        if (ct) {
+          itemContentType = ct;
+        }
+        const contentLength = Number(valResp.headers.get("content-length") ?? "0");
+        if (contentLength > 0 && contentLength > params.maxBytes) {
+          continue;
+        }
+        buffer = await readResponseWithLimit(valResp, params.maxBytes);
       } catch (err) {
         params.logger?.warn?.("msteams graph hostedContent value fetch failed", {
           error: err instanceof Error ? err.message : String(err),
         });
         continue;
+      } finally {
+        await valRelease?.();
       }
     } else {
       continue;
     }
-    if (buffer.byteLength > params.maxBytes) {
+    if (!buffer || buffer.byteLength > params.maxBytes) {
       continue;
     }
     const mime = await getMSTeamsRuntime().media.detectMime({
       buffer,
-      headerMime: item.contentType ?? undefined,
+      headerMime: itemContentType,
     });
     // Download any file type, not just images
     try {
       const saved = await getMSTeamsRuntime().channel.media.saveMediaBuffer(
         buffer,
-        mime ?? item.contentType ?? undefined,
+        mime ?? itemContentType ?? undefined,
         "inbound",
         params.maxBytes,
       );
