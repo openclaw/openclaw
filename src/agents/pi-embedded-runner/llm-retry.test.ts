@@ -212,4 +212,19 @@ describe("extractRetryAfterMs", () => {
     expect(extractRetryAfterMs({ message: "retry in  5  seconds" })).toBe(5000);
     expect(extractRetryAfterMs({ message: "reset after  10  ms" })).toBe(10);
   });
+
+  it("handles messages without explicit unit (defaults to seconds)", () => {
+    expect(extractRetryAfterMs({ message: "retry in 5" })).toBe(5000);
+    expect(extractRetryAfterMs({ message: "reset after 10" })).toBe(10000);
+    expect(extractRetryAfterMs({ message: "retry in 2.5" })).toBe(2500);
+  });
+
+  it("handles optional unit in regex correctly", () => {
+    // When unit is omitted, default to seconds (multiply by 1000)
+    expect(extractRetryAfterMs({ message: "retry in 3" })).toBe(3000);
+    // When unit is "ms", don't multiply
+    expect(extractRetryAfterMs({ message: "retry in 3ms" })).toBe(3);
+    // When unit is "s", multiply by 1000
+    expect(extractRetryAfterMs({ message: "retry in 3s" })).toBe(3000);
+  });
 });

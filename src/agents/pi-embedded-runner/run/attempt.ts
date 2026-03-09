@@ -1382,18 +1382,16 @@ export async function runEmbeddedAttempt(
       }
 
       // Wrap prompt method with LLM retry logic
-      // Use type-safe wrapper to preserve the original signature
       const originalPrompt = activeSession.prompt.bind(activeSession);
-      const promptWrapper: typeof activeSession.prompt = (prompt, options) => {
-        return withLlmRetry(() => originalPrompt(prompt, options), {
+      activeSession.prompt = (async (...args: Parameters<typeof originalPrompt>) => {
+        return withLlmRetry(() => originalPrompt(...args), {
           attempts: 8,
           minDelayMs: 1000,
           maxDelayMs: 32000,
           jitter: 0.1,
           signal: runAbortController.signal,
         });
-      };
-      activeSession.prompt = promptWrapper;
+      }) as typeof originalPrompt;
 
       try {
         const prior = await sanitizeSessionHistory({

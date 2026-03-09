@@ -37,6 +37,19 @@ const DEFAULT_RETRY_CONFIG = {
 
 /**
  * Check if an error is retryable for LLM calls.
+ *
+ * @remarks
+ * This function checks the error's HTTP status code, error code, and message to determine
+ * whether it should be retried. The logic is:
+ * - Do not retry on client errors (4xx) except 429 (rate limit)
+ * - Do not retry on billing errors (402)
+ * - Retry on rate limit (429)
+ * - Retry on server errors (5xx)
+ * - Retry on network errors (ETIMEDOUT, ESOCKETTIMEDOUT, ECONNRESET, ECONNABORTED)
+ * - Retry on timeout errors (only when not a 4xx status code)
+ *
+ * @param err - The error to check, which may be an object with status, statusCode, code, or message properties.
+ * @returns `true` if the error is retryable, `false` otherwise.
  */
 export function isRetryableLlmError(err: unknown): boolean {
   if (!err) {
@@ -46,6 +59,17 @@ export function isRetryableLlmError(err: unknown): boolean {
   const errorObj = err as { status?: number; statusCode?: number; code?: string; message?: string };
   const status = errorObj.status ?? errorObj.statusCode;
   const message = errorObj.message ?? "";
+
+  // Check status codes first (more reliable than message parsing)
+  // Do not retry on client errors (400, 401, 403, 404, 408)
+  if (status === 400 || status === 401 || status === 403 || status === 404 || status === 408) {
+    return false;
+  }
+
+  // Do not retry on billing errors (402)
+  if (status === 402) {
+    return false;
+  }
 
   // Retry on rate limit (429)
   if (status === 429) {
@@ -57,25 +81,20 @@ export function isRetryableLlmError(err: unknown): boolean {
     return true;
   }
 
-  // Retry on network errors
-  const code = (errorObj.code ?? "").toUpperCase();
-  if (["ETIMEDOUT", "ESOCKETTIMEDOUT", "ECONNRESET", "ECONNABORTED"].includes(code)) {
-    return true;
-  }
+  // Only check timeout message if there's no 4xx status code
+  // (timeout messages in 4xx responses indicate client-side timeouts that shouldn't be retried)
+  const is4xx = status !== undefined && status >= 400 && status < 500;
+  if (!is4xx) {
+    // Retry on timeout errors (only for non-4xx status codes)
+    if (/timeout|timed out|deadline exceeded|deadline_exceeded/i.test(message)) {
+      return true;
+    }
 
-  // Retry on timeout errors
-  if (/timeout|timed out|deadline exceeded|deadline_exceeded/i.test(message)) {
-    return true;
-  }
-
-  // Do not retry on client errors (400, 401, 403, 404)
-  if (status === 400 || status === 401 || status === 403 || status === 404) {
-    return false;
-  }
-
-  // Do not retry on billing errors (402)
-  if (status === 402) {
-    return false;
+    // Retry on network errors
+    const code = (errorObj.code ?? "").toUpperCase();
+    if (["ETIMEDOUT", "ESOCKETTIMEDOUT", "ECONNRESET", "ECONNABORTED"].includes(code)) {
+      return true;
+    }
   }
 
   // Default: do not retry unknown errors
@@ -84,6 +103,16 @@ export function isRetryableLlmError(err: unknown): boolean {
 
 /**
  * Extract retry-after delay from error response headers or body.
+ *
+ * @remarks
+ * This function checks the error's headers and message for retry delay hints:
+ * - `Retry-After` header (RFC 7231, in seconds)
+ * - `x-ratelimit-reset` header (Unix timestamp, converted to relative ms)
+ * - `x-ratelimit-reset-after` header (seconds)
+ * - Message patterns like "retry in 5s" or "reset after 100ms"
+ *
+ * @param err - The error to check, which may have headers and/or message properties.
+ * @returns The retry delay in milliseconds, or `undefined` if no delay is found.
  */
 export function extractRetryAfterMs(err: unknown): number | undefined {
   if (!err || typeof err !== "object") {
@@ -127,7 +156,7 @@ export function extractRetryAfterMs(err: unknown): number | undefined {
   // Check error message for retry delay hints
   const message = errorObj.message ?? "";
   const retryInMatch = message.match(
-    /retry\s+in\s+([0-9.]+)\s*(ms|milliseconds?|seconds?|secs?|s)/i,
+    /retry\s+in\s+([0-9.]+)\s*(ms|milliseconds?|seconds?|secs?|s)?/i,
   );
   if (retryInMatch?.[1]) {
     const value = parseFloat(retryInMatch[1]);
@@ -138,7 +167,7 @@ export function extractRetryAfterMs(err: unknown): number | undefined {
   }
 
   const resetAfterMatch = message.match(
-    /reset\s+after\s+([0-9.]+)\s*(ms|milliseconds?|seconds?|secs?|s)/i,
+    /reset\s+after\s+([0-9.]+)\s*(ms|milliseconds?|seconds?|secs?|s)?/i,
   );
   if (resetAfterMatch?.[1]) {
     const value = parseFloat(resetAfterMatch[1]);
