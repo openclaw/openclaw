@@ -242,6 +242,73 @@ export function wrapOllamaCompatNumCtx(baseFn: StreamFn | undefined, numCtx: num
     });
 }
 
+type OpenAICompatAssistantPayloadMessage = {
+  role?: unknown;
+  content?: unknown;
+  tool_calls?: unknown;
+};
+
+function normalizeOpenAICompletionsAssistantToolHistoryPayload(payload: unknown): void {
+  if (!payload || typeof payload !== "object") {
+    return;
+  }
+  const messages = (payload as { messages?: unknown }).messages;
+  if (!Array.isArray(messages)) {
+    return;
+  }
+
+  for (const entry of messages) {
+    if (!entry || typeof entry !== "object") {
+      continue;
+    }
+    const message = entry as OpenAICompatAssistantPayloadMessage;
+    if (
+      message.role !== "assistant" ||
+      !Array.isArray(message.tool_calls) ||
+      message.tool_calls.length === 0 ||
+      !Array.isArray(message.content)
+    ) {
+      continue;
+    }
+
+    const textParts: string[] = [];
+    let unsupportedContent = false;
+    for (const part of message.content) {
+      if (!part || typeof part !== "object") {
+        unsupportedContent = true;
+        break;
+      }
+      const record = part as { type?: unknown; text?: unknown };
+      if (record.type !== "text" || typeof record.text !== "string") {
+        unsupportedContent = true;
+        break;
+      }
+      textParts.push(record.text);
+    }
+
+    if (unsupportedContent) {
+      continue;
+    }
+
+    message.content =
+      joinPresentTextSegments(textParts, {
+        separator: "",
+      }) ?? null;
+  }
+}
+
+export function wrapOpenAICompletionsToolHistoryPayload(baseFn: StreamFn | undefined): StreamFn {
+  const streamFn = baseFn ?? streamSimple;
+  return (model, context, options) =>
+    streamFn(model, context, {
+      ...options,
+      onPayload: (payload: unknown, payloadModel) => {
+        normalizeOpenAICompletionsAssistantToolHistoryPayload(payload);
+        return options?.onPayload?.(payload, payloadModel);
+      },
+    });
+}
+
 function normalizeToolCallNameForDispatch(rawName: string, allowedToolNames?: Set<string>): string {
   const trimmed = rawName.trim();
   if (!trimmed) {
@@ -1272,6 +1339,12 @@ export async function runEmbeddedAttempt(
           ),
         );
         activeSession.agent.streamFn = wrapOllamaCompatNumCtx(activeSession.agent.streamFn, numCtx);
+      }
+
+      if (params.model.api === "openai-completions") {
+        activeSession.agent.streamFn = wrapOpenAICompletionsToolHistoryPayload(
+          activeSession.agent.streamFn,
+        );
       }
 
       applyExtraParamsToAgent(

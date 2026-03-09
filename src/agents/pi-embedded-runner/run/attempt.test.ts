@@ -13,6 +13,7 @@ import {
   shouldInjectOllamaCompatNumCtx,
   decodeHtmlEntitiesInObject,
   wrapOllamaCompatNumCtx,
+  wrapOpenAICompletionsToolHistoryPayload,
   wrapStreamFnTrimToolCallNames,
 } from "./attempt.js";
 
@@ -584,6 +585,64 @@ describe("shouldInjectOllamaCompatNumCtx", () => {
         providerId: "ollama",
       }),
     ).toBe(false);
+  });
+});
+
+describe("wrapOpenAICompletionsToolHistoryPayload", () => {
+  it("rewrites assistant tool-call history content arrays to strings", () => {
+    let payloadSeen: Record<string, unknown> | undefined;
+    const baseFn = vi.fn((_model, _context, options) => {
+      const payload: Record<string, unknown> = {
+        messages: [
+          {
+            role: "assistant",
+            content: [{ type: "text", text: "I'll run the command..." }],
+            tool_calls: [{ id: "call_1", type: "function" }],
+          },
+          {
+            role: "assistant",
+            content: [{ type: "text", text: "plain reply" }],
+          },
+        ],
+      };
+      options?.onPayload?.(payload, _model);
+      payloadSeen = payload;
+      return {} as never;
+    });
+    const downstream = vi.fn();
+
+    const wrapped = wrapOpenAICompletionsToolHistoryPayload(baseFn as never);
+    void wrapped({} as never, {} as never, { onPayload: downstream } as never);
+
+    expect(baseFn).toHaveBeenCalledTimes(1);
+    const messages = payloadSeen?.messages as Array<Record<string, unknown>>;
+    expect(messages[0]?.content).toBe("I'll run the command...");
+    expect(messages[1]?.content).toEqual([{ type: "text", text: "plain reply" }]);
+    expect(downstream).toHaveBeenCalledTimes(1);
+  });
+
+  it("preserves unsupported assistant content shapes", () => {
+    let payloadSeen: Record<string, unknown> | undefined;
+    const baseFn = vi.fn((_model, _context, options) => {
+      const payload: Record<string, unknown> = {
+        messages: [
+          {
+            role: "assistant",
+            content: [{ type: "input_text", text: "unsupported" }],
+            tool_calls: [{ id: "call_1", type: "function" }],
+          },
+        ],
+      };
+      options?.onPayload?.(payload, _model);
+      payloadSeen = payload;
+      return {} as never;
+    });
+
+    const wrapped = wrapOpenAICompletionsToolHistoryPayload(baseFn as never);
+    void wrapped({} as never, {} as never);
+
+    const messages = (payloadSeen?.messages ?? []) as Array<Record<string, unknown>>;
+    expect(messages[0]?.content).toEqual([{ type: "input_text", text: "unsupported" }]);
   });
 });
 
