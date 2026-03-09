@@ -42,6 +42,16 @@ describe("inferUpdateFailureHints", () => {
     expect(hints.join("\n")).toContain("--omit=optional");
   });
 
+  it("returns EBUSY hint when Windows directory lock blocks npm rename", () => {
+    const result = makeResult(
+      "global update (omit optional)",
+      "npm error code EBUSY\nnpm error syscall rename\nnpm error path C:\\node_modules\\openclaw\nnpm error errno -4082",
+    );
+    const hints = inferUpdateFailureHints(result);
+    expect(hints.join("\n")).toContain("EBUSY");
+    expect(hints.join("\n")).toContain("openclaw gateway stop");
+  });
+
   it("does not return npm hints for non-npm install modes", () => {
     const result = makeResult(
       "global update",
