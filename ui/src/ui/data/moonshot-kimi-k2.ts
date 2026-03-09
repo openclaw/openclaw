@@ -1,4 +1,4 @@
-export const MOONSHOT_KIMI_K2_DEFAULT_ID = "kimi-k2-0905-preview";
+export const MOONSHOT_KIMI_K2_DEFAULT_ID = "kimi-k2.5";
 export const MOONSHOT_KIMI_K2_CONTEXT_WINDOW = 256000;
 export const MOONSHOT_KIMI_K2_MAX_TOKENS = 8192;
 export const MOONSHOT_KIMI_K2_INPUT = ["text"] as const;
@@ -10,6 +10,12 @@ export const MOONSHOT_KIMI_K2_COST = {
 } as const;
 
 export const MOONSHOT_KIMI_K2_MODELS = [
+  {
+    id: "kimi-k2.5",
+    name: "Kimi K2.5",
+    alias: "Kimi K2.5",
+    reasoning: false,
+  },
   {
     id: "kimi-k2-0905-preview",
     name: "Kimi K2 0905 Preview",

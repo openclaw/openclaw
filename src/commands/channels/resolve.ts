@@ -1,9 +1,11 @@
-import type { ChannelResolveKind, ChannelResolveResult } from "../../channels/plugins/types.js";
-import type { RuntimeEnv } from "../../runtime.js";
 import { getChannelPlugin } from "../../channels/plugins/index.js";
+import type { ChannelResolveKind, ChannelResolveResult } from "../../channels/plugins/types.js";
+import { resolveCommandSecretRefsViaGateway } from "../../cli/command-secret-gateway.js";
+import { getChannelsCommandSecretTargetIds } from "../../cli/command-secret-targets.js";
 import { loadConfig } from "../../config/config.js";
 import { danger } from "../../globals.js";
 import { resolveMessageChannelSelection } from "../../infra/outbound/channel-selection.js";
+import type { RuntimeEnv } from "../../runtime.js";
 
 export type ChannelsResolveOptions = {
   channel?: string;
@@ -68,7 +70,16 @@ function formatResolveResult(result: ResolveResult): string {
 }
 
 export async function channelsResolveCommand(opts: ChannelsResolveOptions, runtime: RuntimeEnv) {
-  const cfg = loadConfig();
+  const loadedRaw = loadConfig();
+  const { resolvedConfig: cfg, diagnostics } = await resolveCommandSecretRefsViaGateway({
+    config: loadedRaw,
+    commandName: "channels resolve",
+    targetIds: getChannelsCommandSecretTargetIds(),
+    mode: "operational_readonly",
+  });
+  for (const entry of diagnostics) {
+    runtime.log(`[secrets] ${entry}`);
+  }
   const entries = (opts.entries ?? []).map((entry) => entry.trim()).filter(Boolean);
   if (entries.length === 0) {
     throw new Error("At least one entry is required.");

@@ -37,6 +37,17 @@ describe("config view", () => {
     onSubsectionChange: vi.fn(),
   });
 
+  function findActionButtons(container: HTMLElement): {
+    saveButton?: HTMLButtonElement;
+    applyButton?: HTMLButtonElement;
+  } {
+    const buttons = Array.from(container.querySelectorAll("button"));
+    return {
+      saveButton: buttons.find((btn) => btn.textContent?.trim() === "Save"),
+      applyButton: buttons.find((btn) => btn.textContent?.trim() === "Apply"),
+    };
+  }
+
   it("allows save when form is unsafe", () => {
     const container = document.createElement("div");
     render(
@@ -97,12 +108,7 @@ describe("config view", () => {
       container,
     );
 
-    const saveButton = Array.from(container.querySelectorAll("button")).find(
-      (btn) => btn.textContent?.trim() === "Save",
-    );
-    const applyButton = Array.from(container.querySelectorAll("button")).find(
-      (btn) => btn.textContent?.trim() === "Apply",
-    );
+    const { saveButton, applyButton } = findActionButtons(container);
     expect(saveButton).not.toBeUndefined();
     expect(applyButton).not.toBeUndefined();
     expect(saveButton?.disabled).toBe(true);
@@ -121,12 +127,7 @@ describe("config view", () => {
       container,
     );
 
-    const saveButton = Array.from(container.querySelectorAll("button")).find(
-      (btn) => btn.textContent?.trim() === "Save",
-    );
-    const applyButton = Array.from(container.querySelectorAll("button")).find(
-      (btn) => btn.textContent?.trim() === "Apply",
-    );
+    const { saveButton, applyButton } = findActionButtons(container);
     expect(saveButton).not.toBeUndefined();
     expect(applyButton).not.toBeUndefined();
     expect(saveButton?.disabled).toBe(false);
@@ -197,5 +198,36 @@ describe("config view", () => {
     (input as HTMLInputElement).value = "gateway";
     input.dispatchEvent(new Event("input", { bubbles: true }));
     expect(onSearchChange).toHaveBeenCalledWith("gateway");
+  });
+
+  it("shows all tag options in compact tag picker", () => {
+    const container = document.createElement("div");
+    render(renderConfig(baseProps()), container);
+
+    const options = Array.from(container.querySelectorAll(".config-search__tag-option")).map(
+      (option) => option.textContent?.trim(),
+    );
+    expect(options).toContain("tag:security");
+    expect(options).toContain("tag:advanced");
+    expect(options).toHaveLength(15);
+  });
+
+  it("updates search query when toggling a tag option", () => {
+    const container = document.createElement("div");
+    const onSearchChange = vi.fn();
+    render(
+      renderConfig({
+        ...baseProps(),
+        onSearchChange,
+      }),
+      container,
+    );
+
+    const option = container.querySelector<HTMLButtonElement>(
+      '.config-search__tag-option[data-tag="security"]',
+    );
+    expect(option).toBeTruthy();
+    option?.click();
+    expect(onSearchChange).toHaveBeenCalledWith("tag:security");
   });
 });

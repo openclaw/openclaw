@@ -11,20 +11,31 @@
  */
 
 import { describe, expect, it } from "vitest";
-import type { ChannelAccountSnapshot } from "./types.js";
 import { collectTwitchStatusIssues } from "./status.js";
+import type { ChannelAccountSnapshot } from "./types.js";
+
+function createSnapshot(overrides: Partial<ChannelAccountSnapshot> = {}): ChannelAccountSnapshot {
+  return {
+    accountId: "default",
+    configured: true,
+    enabled: true,
+    running: false,
+    ...overrides,
+  };
+}
+
+function createSimpleTwitchConfig(overrides: Record<string, unknown>) {
+  return {
+    channels: {
+      twitch: overrides,
+    },
+  };
+}
 
 describe("status", () => {
   describe("collectTwitchStatusIssues", () => {
     it("should detect unconfigured accounts", () => {
-      const snapshots: ChannelAccountSnapshot[] = [
-        {
-          accountId: "default",
-          configured: false,
-          enabled: true,
-          running: false,
-        },
-      ];
+      const snapshots: ChannelAccountSnapshot[] = [createSnapshot({ configured: false })];
 
       const issues = collectTwitchStatusIssues(snapshots);
 
@@ -34,14 +45,7 @@ describe("status", () => {
     });
 
     it("should detect disabled accounts", () => {
-      const snapshots: ChannelAccountSnapshot[] = [
-        {
-          accountId: "default",
-          configured: true,
-          enabled: false,
-          running: false,
-        },
-      ];
+      const snapshots: ChannelAccountSnapshot[] = [createSnapshot({ enabled: false })];
 
       const issues = collectTwitchStatusIssues(snapshots);
 
@@ -51,24 +55,12 @@ describe("status", () => {
     });
 
     it("should detect missing clientId when account configured (simplified config)", () => {
-      const snapshots: ChannelAccountSnapshot[] = [
-        {
-          accountId: "default",
-          configured: true,
-          enabled: true,
-          running: false,
-        },
-      ];
-
-      const mockCfg = {
-        channels: {
-          twitch: {
-            username: "testbot",
-            accessToken: "oauth:test123",
-            // clientId missing
-          },
-        },
-      };
+      const snapshots: ChannelAccountSnapshot[] = [createSnapshot()];
+      const mockCfg = createSimpleTwitchConfig({
+        username: "testbot",
+        accessToken: "oauth:test123",
+        // clientId missing
+      });
 
       const issues = collectTwitchStatusIssues(snapshots, () => mockCfg as never);
 
@@ -77,24 +69,12 @@ describe("status", () => {
     });
 
     it("should warn about oauth: prefix in token (simplified config)", () => {
-      const snapshots: ChannelAccountSnapshot[] = [
-        {
-          accountId: "default",
-          configured: true,
-          enabled: true,
-          running: false,
-        },
-      ];
-
-      const mockCfg = {
-        channels: {
-          twitch: {
-            username: "testbot",
-            accessToken: "oauth:test123", // has prefix
-            clientId: "test-id",
-          },
-        },
-      };
+      const snapshots: ChannelAccountSnapshot[] = [createSnapshot()];
+      const mockCfg = createSimpleTwitchConfig({
+        username: "testbot",
+        accessToken: "oauth:test123", // has prefix
+        clientId: "test-id",
+      });
 
       const issues = collectTwitchStatusIssues(snapshots, () => mockCfg as never);
 
@@ -104,26 +84,14 @@ describe("status", () => {
     });
 
     it("should detect clientSecret without refreshToken (simplified config)", () => {
-      const snapshots: ChannelAccountSnapshot[] = [
-        {
-          accountId: "default",
-          configured: true,
-          enabled: true,
-          running: false,
-        },
-      ];
-
-      const mockCfg = {
-        channels: {
-          twitch: {
-            username: "testbot",
-            accessToken: "oauth:test123",
-            clientId: "test-id",
-            clientSecret: "secret123",
-            // refreshToken missing
-          },
-        },
-      };
+      const snapshots: ChannelAccountSnapshot[] = [createSnapshot()];
+      const mockCfg = createSimpleTwitchConfig({
+        username: "testbot",
+        accessToken: "oauth:test123",
+        clientId: "test-id",
+        clientSecret: "secret123",
+        // refreshToken missing
+      });
 
       const issues = collectTwitchStatusIssues(snapshots, () => mockCfg as never);
 
@@ -132,25 +100,13 @@ describe("status", () => {
     });
 
     it("should detect empty allowFrom array (simplified config)", () => {
-      const snapshots: ChannelAccountSnapshot[] = [
-        {
-          accountId: "default",
-          configured: true,
-          enabled: true,
-          running: false,
-        },
-      ];
-
-      const mockCfg = {
-        channels: {
-          twitch: {
-            username: "testbot",
-            accessToken: "test123",
-            clientId: "test-id",
-            allowFrom: [], // empty array
-          },
-        },
-      };
+      const snapshots: ChannelAccountSnapshot[] = [createSnapshot()];
+      const mockCfg = createSimpleTwitchConfig({
+        username: "testbot",
+        accessToken: "test123",
+        clientId: "test-id",
+        allowFrom: [], // empty array
+      });
 
       const issues = collectTwitchStatusIssues(snapshots, () => mockCfg as never);
 
@@ -159,26 +115,14 @@ describe("status", () => {
     });
 
     it("should detect allowedRoles 'all' with allowFrom conflict (simplified config)", () => {
-      const snapshots: ChannelAccountSnapshot[] = [
-        {
-          accountId: "default",
-          configured: true,
-          enabled: true,
-          running: false,
-        },
-      ];
-
-      const mockCfg = {
-        channels: {
-          twitch: {
-            username: "testbot",
-            accessToken: "test123",
-            clientId: "test-id",
-            allowedRoles: ["all"],
-            allowFrom: ["123456"], // conflict!
-          },
-        },
-      };
+      const snapshots: ChannelAccountSnapshot[] = [createSnapshot()];
+      const mockCfg = createSimpleTwitchConfig({
+        username: "testbot",
+        accessToken: "test123",
+        clientId: "test-id",
+        allowedRoles: ["all"],
+        allowFrom: ["123456"], // conflict!
+      });
 
       const issues = collectTwitchStatusIssues(snapshots, () => mockCfg as never);
 
@@ -189,13 +133,7 @@ describe("status", () => {
 
     it("should detect runtime errors", () => {
       const snapshots: ChannelAccountSnapshot[] = [
-        {
-          accountId: "default",
-          configured: true,
-          enabled: true,
-          running: false,
-          lastError: "Connection timeout",
-        },
+        createSnapshot({ lastError: "Connection timeout" }),
       ];
 
       const issues = collectTwitchStatusIssues(snapshots);
@@ -207,15 +145,11 @@ describe("status", () => {
 
     it("should detect accounts that never connected", () => {
       const snapshots: ChannelAccountSnapshot[] = [
-        {
-          accountId: "default",
-          configured: true,
-          enabled: true,
-          running: false,
+        createSnapshot({
           lastStartAt: undefined,
           lastInboundAt: undefined,
           lastOutboundAt: undefined,
-        },
+        }),
       ];
 
       const issues = collectTwitchStatusIssues(snapshots);
@@ -230,13 +164,10 @@ describe("status", () => {
       const oldDate = Date.now() - 8 * 24 * 60 * 60 * 1000; // 8 days ago
 
       const snapshots: ChannelAccountSnapshot[] = [
-        {
-          accountId: "default",
-          configured: true,
-          enabled: true,
+        createSnapshot({
           running: true,
           lastStartAt: oldDate,
-        },
+        }),
       ];
 
       const issues = collectTwitchStatusIssues(snapshots);
@@ -254,7 +185,7 @@ describe("status", () => {
     it("should skip non-Twitch accounts gracefully", () => {
       const snapshots: ChannelAccountSnapshot[] = [
         {
-          accountId: undefined,
+          accountId: "unknown",
           configured: false,
           enabled: true,
           running: false,

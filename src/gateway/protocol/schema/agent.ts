@@ -1,5 +1,23 @@
 import { Type } from "@sinclair/typebox";
+import { INPUT_PROVENANCE_KIND_VALUES } from "../../../sessions/input-provenance.js";
 import { NonEmptyString, SessionLabelString } from "./primitives.js";
+
+export const AgentInternalEventSchema = Type.Object(
+  {
+    type: Type.Literal("task_completion"),
+    source: Type.String({ enum: ["subagent", "cron"] }),
+    childSessionKey: Type.String(),
+    childSessionId: Type.Optional(Type.String()),
+    announceType: Type.String(),
+    taskLabel: Type.String(),
+    status: Type.String({ enum: ["ok", "timeout", "error", "unknown"] }),
+    statusLabel: Type.String(),
+    result: Type.String(),
+    statsLine: Type.Optional(Type.String()),
+    replyInstruction: Type.String(),
+  },
+  { additionalProperties: false },
+);
 
 export const AgentEventSchema = Type.Object(
   {
@@ -15,12 +33,16 @@ export const AgentEventSchema = Type.Object(
 export const SendParamsSchema = Type.Object(
   {
     to: NonEmptyString,
-    message: NonEmptyString,
+    message: Type.Optional(Type.String()),
     mediaUrl: Type.Optional(Type.String()),
     mediaUrls: Type.Optional(Type.Array(Type.String())),
     gifPlayback: Type.Optional(Type.Boolean()),
     channel: Type.Optional(Type.String()),
     accountId: Type.Optional(Type.String()),
+    /** Optional agent id for per-agent media root resolution on gateway sends. */
+    agentId: Type.Optional(Type.String()),
+    /** Thread id (channel-specific meaning, e.g. Telegram forum topic id). */
+    threadId: Type.Optional(Type.String()),
     /** Optional session key for mirroring delivered output back into the transcript. */
     sessionKey: Type.Optional(Type.String()),
     idempotencyKey: NonEmptyString,
@@ -34,7 +56,15 @@ export const PollParamsSchema = Type.Object(
     question: NonEmptyString,
     options: Type.Array(NonEmptyString, { minItems: 2, maxItems: 12 }),
     maxSelections: Type.Optional(Type.Integer({ minimum: 1, maximum: 12 })),
+    /** Poll duration in seconds (channel-specific limits may apply). */
+    durationSeconds: Type.Optional(Type.Integer({ minimum: 1, maximum: 604_800 })),
     durationHours: Type.Optional(Type.Integer({ minimum: 1 })),
+    /** Send silently (no notification) where supported. */
+    silent: Type.Optional(Type.Boolean()),
+    /** Poll anonymity where supported (e.g. Telegram polls default to anonymous). */
+    isAnonymous: Type.Optional(Type.Boolean()),
+    /** Thread id (channel-specific meaning, e.g. Telegram forum topic id). */
+    threadId: Type.Optional(Type.String()),
     channel: Type.Optional(Type.String()),
     accountId: Type.Optional(Type.String()),
     idempotencyKey: NonEmptyString,
@@ -62,11 +92,26 @@ export const AgentParamsSchema = Type.Object(
     groupChannel: Type.Optional(Type.String()),
     groupSpace: Type.Optional(Type.String()),
     timeout: Type.Optional(Type.Integer({ minimum: 0 })),
+    bestEffortDeliver: Type.Optional(Type.Boolean()),
     lane: Type.Optional(Type.String()),
     extraSystemPrompt: Type.Optional(Type.String()),
+    internalEvents: Type.Optional(Type.Array(AgentInternalEventSchema)),
+    inputProvenance: Type.Optional(
+      Type.Object(
+        {
+          kind: Type.String({ enum: [...INPUT_PROVENANCE_KIND_VALUES] }),
+          originSessionId: Type.Optional(Type.String()),
+          sourceSessionKey: Type.Optional(Type.String()),
+          sourceChannel: Type.Optional(Type.String()),
+          sourceTool: Type.Optional(Type.String()),
+        },
+        { additionalProperties: false },
+      ),
+    ),
     idempotencyKey: NonEmptyString,
     label: Type.Optional(SessionLabelString),
     spawnedBy: Type.Optional(Type.String()),
+    workspaceDir: Type.Optional(Type.String()),
   },
   { additionalProperties: false },
 );

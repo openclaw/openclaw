@@ -55,4 +55,17 @@ describe("resolveSendPolicy", () => {
     } as OpenClawConfig;
     expect(resolveSendPolicy({ cfg, sessionKey: "cron:job-1" })).toBe("deny");
   });
+
+  it("rule match by rawKeyPrefix", () => {
+    const cfg = {
+      session: {
+        sendPolicy: {
+          default: "allow",
+          rules: [{ action: "deny", match: { rawKeyPrefix: "agent:main:discord:" } }],
+        },
+      },
+    } as OpenClawConfig;
+    expect(resolveSendPolicy({ cfg, sessionKey: "agent:main:discord:group:dev" })).toBe("deny");
+    expect(resolveSendPolicy({ cfg, sessionKey: "agent:main:slack:group:dev" })).toBe("allow");
+  });
 });

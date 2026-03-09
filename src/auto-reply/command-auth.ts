@@ -1,9 +1,15 @@
 import type { ChannelDock } from "../channels/dock.js";
-import type { ChannelId } from "../channels/plugins/types.js";
-import type { OpenClawConfig } from "../config/config.js";
-import type { MsgContext } from "./templating.js";
 import { getChannelDock, listChannelDocks } from "../channels/dock.js";
+import type { ChannelId } from "../channels/plugins/types.js";
 import { normalizeAnyChannelId } from "../channels/registry.js";
+import type { OpenClawConfig } from "../config/config.js";
+import { normalizeStringEntries } from "../shared/string-normalization.js";
+import {
+  INTERNAL_MESSAGE_CHANNEL,
+  isInternalMessageChannel,
+  normalizeMessageChannel,
+} from "../utils/message-channel.js";
+import type { MsgContext } from "./templating.js";
 
 export type CommandAuthorization = {
   providerId?: ChannelId;
@@ -16,7 +22,15 @@ export type CommandAuthorization = {
 };
 
 function resolveProviderFromContext(ctx: MsgContext, cfg: OpenClawConfig): ChannelId | undefined {
+  const explicitMessageChannel =
+    normalizeMessageChannel(ctx.Provider) ??
+    normalizeMessageChannel(ctx.Surface) ??
+    normalizeMessageChannel(ctx.OriginatingChannel);
+  if (explicitMessageChannel === INTERNAL_MESSAGE_CHANNEL) {
+    return undefined;
+  }
   const direct =
+    normalizeAnyChannelId(explicitMessageChannel ?? undefined) ??
     normalizeAnyChannelId(ctx.Provider) ??
     normalizeAnyChannelId(ctx.Surface) ??
     normalizeAnyChannelId(ctx.OriginatingChannel);
@@ -27,7 +41,13 @@ function resolveProviderFromContext(ctx: MsgContext, cfg: OpenClawConfig): Chann
     .filter((value): value is string => Boolean(value?.trim()))
     .flatMap((value) => value.split(":").map((part) => part.trim()));
   for (const candidate of candidates) {
-    const normalized = normalizeAnyChannelId(candidate);
+    const normalizedCandidateChannel = normalizeMessageChannel(candidate);
+    if (normalizedCandidateChannel === INTERNAL_MESSAGE_CHANNEL) {
+      return undefined;
+    }
+    const normalized =
+      normalizeAnyChannelId(normalizedCandidateChannel ?? undefined) ??
+      normalizeAnyChannelId(candidate);
     if (normalized) {
       return normalized;
     }
@@ -66,7 +86,7 @@ function formatAllowFromList(params: {
   if (dock?.config?.formatAllowFrom) {
     return dock.config.formatAllowFrom({ cfg, accountId, allowFrom });
   }
-  return allowFrom.map((entry) => String(entry).trim()).filter(Boolean);
+  return normalizeStringEntries(allowFrom);
 }
 
 function normalizeAllowFromEntry(params: {
@@ -126,6 +146,70 @@ function resolveOwnerAllowFromList(params: {
   });
 }
 
+/**
+ * Resolves the commands.allowFrom list for a given provider.
+ * Returns the provider-specific list if defined, otherwise the "*" global list.
+ * Returns null if commands.allowFrom is not configured at all (fall back to channel allowFrom).
+ */
+function resolveCommandsAllowFromList(params: {
+  dock?: ChannelDock;
+  cfg: OpenClawConfig;
+  accountId?: string | null;
+  providerId?: ChannelId;
+}): string[] | null {
+  const { dock, cfg, accountId, providerId } = params;
+  const commandsAllowFrom = cfg.commands?.allowFrom;
+  if (!commandsAllowFrom || typeof commandsAllowFrom !== "object") {
+    return null; // Not configured, fall back to channel allowFrom
+  }
+
+  // Check provider-specific list first, then fall back to global "*"
+  const providerKey = providerId ?? "";
+  const providerList = commandsAllowFrom[providerKey];
+  const globalList = commandsAllowFrom["*"];
+
+  const rawList = Array.isArray(providerList) ? providerList : globalList;
+  if (!Array.isArray(rawList)) {
+    return null; // No applicable list found
+  }
+
+  return formatAllowFromList({
+    dock,
+    cfg,
+    accountId,
+    allowFrom: rawList,
+  });
+}
+
+function isConversationLikeIdentity(value: string): boolean {
+  const normalized = value.trim().toLowerCase();
+  if (!normalized) {
+    return false;
+  }
+  if (normalized.includes("@g.us")) {
+    return true;
+  }
+  if (normalized.startsWith("chat_id:")) {
+    return true;
+  }
+  return /(^|:)(channel|group|thread|topic|room|space|spaces):/.test(normalized);
+}
+
+function shouldUseFromAsSenderFallback(params: {
+  from?: string | null;
+  chatType?: string | null;
+}): boolean {
+  const from = (params.from ?? "").trim();
+  if (!from) {
+    return false;
+  }
+  const chatType = (params.chatType ?? "").trim().toLowerCase();
+  if (chatType && chatType !== "direct") {
+    return false;
+  }
+  return !isConversationLikeIdentity(from);
+}
+
 function resolveSenderCandidates(params: {
   dock?: ChannelDock;
   providerId?: ChannelId;
@@ -134,6 +218,7 @@ function resolveSenderCandidates(params: {
   senderId?: string | null;
   senderE164?: string | null;
   from?: string | null;
+  chatType?: string | null;
 }): string[] {
   const { dock, cfg, accountId } = params;
   const candidates: string[] = [];
@@ -151,7 +236,12 @@ function resolveSenderCandidates(params: {
     pushCandidate(params.senderId);
     pushCandidate(params.senderE164);
   }
-  pushCandidate(params.from);
+  if (
+    candidates.length === 0 &&
+    shouldUseFromAsSenderFallback({ from: params.from, chatType: params.chatType })
+  ) {
+    pushCandidate(params.from);
+  }
 
   const normalized: string[] = [];
   for (const sender of candidates) {
@@ -175,6 +265,15 @@ export function resolveCommandAuthorization(params: {
   const dock = providerId ? getChannelDock(providerId) : undefined;
   const from = (ctx.From ?? "").trim();
   const to = (ctx.To ?? "").trim();
+
+  // Check if commands.allowFrom is configured (separate command authorization)
+  const commandsAllowFromList = resolveCommandsAllowFromList({
+    dock,
+    cfg,
+    accountId: ctx.AccountId,
+    providerId,
+  });
+
   const allowFromRaw = dock?.config?.resolveAllowFrom
     ? dock.config.resolveAllowFrom({ cfg, accountId: ctx.AccountId })
     : [];
@@ -236,6 +335,7 @@ export function resolveCommandAuthorization(params: {
     senderId: ctx.SenderId,
     senderE164: ctx.SenderE164,
     from,
+    chatType: ctx.ChatType,
   });
   const matchedSender = ownerList.length
     ? senderCandidates.find((candidate) => ownerList.includes(candidate))
@@ -246,8 +346,13 @@ export function resolveCommandAuthorization(params: {
   const senderId = matchedSender ?? senderCandidates[0];
 
   const enforceOwner = Boolean(dock?.commands?.enforceOwnerForCommands);
-  const senderIsOwner = Boolean(matchedSender);
+  const senderIsOwnerByIdentity = Boolean(matchedSender);
+  const senderIsOwnerByScope =
+    isInternalMessageChannel(ctx.Provider) &&
+    Array.isArray(ctx.GatewayClientScopes) &&
+    ctx.GatewayClientScopes.includes("operator.admin");
   const ownerAllowlistConfigured = ownerAllowAll || explicitOwners.length > 0;
+  const senderIsOwner = senderIsOwnerByIdentity || senderIsOwnerByScope || ownerAllowAll;
   const requireOwner = enforceOwner || ownerAllowlistConfigured;
   const isOwnerForCommands = !requireOwner
     ? true
@@ -256,7 +361,21 @@ export function resolveCommandAuthorization(params: {
       : ownerAllowlistConfigured
         ? senderIsOwner
         : allowAll || ownerCandidatesForCommands.length === 0 || Boolean(matchedCommandOwner);
-  const isAuthorizedSender = commandAuthorized && isOwnerForCommands;
+
+  // If commands.allowFrom is configured, use it for command authorization
+  // Otherwise, fall back to existing behavior (channel allowFrom + owner checks)
+  let isAuthorizedSender: boolean;
+  if (commandsAllowFromList !== null) {
+    // commands.allowFrom is configured - use it for authorization
+    const commandsAllowAll = commandsAllowFromList.some((entry) => entry.trim() === "*");
+    const matchedCommandsAllowFrom = commandsAllowFromList.length
+      ? senderCandidates.find((candidate) => commandsAllowFromList.includes(candidate))
+      : undefined;
+    isAuthorizedSender = commandsAllowAll || Boolean(matchedCommandsAllowFrom);
+  } else {
+    // Fall back to existing behavior
+    isAuthorizedSender = commandAuthorized && isOwnerForCommands;
+  }
 
   return {
     providerId,

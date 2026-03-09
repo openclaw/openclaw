@@ -1,6 +1,6 @@
-import type { OpenClawPluginApi, OpenClawPluginService } from "openclaw/plugin-sdk";
 import fs from "node:fs/promises";
 import path from "node:path";
+import type { OpenClawPluginApi, OpenClawPluginService } from "openclaw/plugin-sdk/phone-control";
 
 type ArmGroup = "camera" | "screen" | "writes" | "all";
 
@@ -29,7 +29,7 @@ const STATE_REL_PATH = ["plugins", "phone-control", "armed.json"] as const;
 const GROUP_COMMANDS: Record<Exclude<ArmGroup, "all">, string[]> = {
   camera: ["camera.snap", "camera.clip"],
   screen: ["screen.record"],
-  writes: ["calendar.add", "contacts.add", "reminders.add"],
+  writes: ["calendar.add", "contacts.add", "reminders.add", "sms.send"],
 };
 
 function uniqSorted(values: string[]): string[] {
@@ -92,7 +92,8 @@ function resolveStatePath(stateDir: string): string {
 async function readArmState(statePath: string): Promise<ArmStateFile | null> {
   try {
     const raw = await fs.readFile(statePath, "utf8");
-    const parsed = JSON.parse(raw) as Partial<ArmStateFile>;
+    // Type as unknown record first to allow property access during validation
+    const parsed = JSON.parse(raw) as Record<string, unknown>;
     if (parsed.version !== 1 && parsed.version !== 2) {
       return null;
     }
@@ -106,11 +107,11 @@ async function readArmState(statePath: string): Promise<ArmStateFile | null> {
     if (parsed.version === 1) {
       if (
         !Array.isArray(parsed.removedFromDeny) ||
-        !parsed.removedFromDeny.every((v) => typeof v === "string")
+        !parsed.removedFromDeny.every((v: unknown) => typeof v === "string")
       ) {
         return null;
       }
-      return parsed as ArmStateFile;
+      return parsed as unknown as ArmStateFile;
     }
 
     const group = typeof parsed.group === "string" ? parsed.group : "";
@@ -119,23 +120,23 @@ async function readArmState(statePath: string): Promise<ArmStateFile | null> {
     }
     if (
       !Array.isArray(parsed.armedCommands) ||
-      !parsed.armedCommands.every((v) => typeof v === "string")
+      !parsed.armedCommands.every((v: unknown) => typeof v === "string")
     ) {
       return null;
     }
     if (
       !Array.isArray(parsed.addedToAllow) ||
-      !parsed.addedToAllow.every((v) => typeof v === "string")
+      !parsed.addedToAllow.every((v: unknown) => typeof v === "string")
     ) {
       return null;
     }
     if (
       !Array.isArray(parsed.removedFromDeny) ||
-      !parsed.removedFromDeny.every((v) => typeof v === "string")
+      !parsed.removedFromDeny.every((v: unknown) => typeof v === "string")
     ) {
       return null;
     }
-    return parsed as ArmStateFile;
+    return parsed as unknown as ArmStateFile;
   } catch {
     return null;
   }

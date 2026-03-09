@@ -1,6 +1,15 @@
 import type { Chat, Message, MessageOrigin, User } from "@grammyjs/types";
-import type { TelegramStreamMode } from "./types.js";
 import { formatLocationText, type NormalizedLocation } from "../../channels/location.js";
+import { resolveTelegramPreviewStreamMode } from "../../config/discord-preview-streaming.js";
+import type {
+  TelegramDirectConfig,
+  TelegramGroupConfig,
+  TelegramTopicConfig,
+} from "../../config/types.js";
+import { readChannelAllowFromStore } from "../../pairing/pairing-store.js";
+import { normalizeAccountId } from "../../routing/session-key.js";
+import { firstDefined, normalizeAllowFrom, type NormalizedAllowFrom } from "../bot-access.js";
+import type { TelegramStreamMode } from "./types.js";
 
 const TELEGRAM_GENERAL_TOPIC_ID = 1;
 
@@ -8,6 +17,64 @@ export type TelegramThreadSpec = {
   id?: number;
   scope: "dm" | "forum" | "none";
 };
+
+export async function resolveTelegramGroupAllowFromContext(params: {
+  chatId: string | number;
+  accountId?: string;
+  isGroup?: boolean;
+  isForum?: boolean;
+  messageThreadId?: number | null;
+  groupAllowFrom?: Array<string | number>;
+  resolveTelegramGroupConfig: (
+    chatId: string | number,
+    messageThreadId?: number,
+  ) => {
+    groupConfig?: TelegramGroupConfig | TelegramDirectConfig;
+    topicConfig?: TelegramTopicConfig;
+  };
+}): Promise<{
+  resolvedThreadId?: number;
+  dmThreadId?: number;
+  storeAllowFrom: string[];
+  groupConfig?: TelegramGroupConfig | TelegramDirectConfig;
+  topicConfig?: TelegramTopicConfig;
+  groupAllowOverride?: Array<string | number>;
+  effectiveGroupAllow: NormalizedAllowFrom;
+  hasGroupAllowOverride: boolean;
+}> {
+  const accountId = normalizeAccountId(params.accountId);
+  // Use resolveTelegramThreadSpec to handle both forum groups AND DM topics
+  const threadSpec = resolveTelegramThreadSpec({
+    isGroup: params.isGroup ?? false,
+    isForum: params.isForum,
+    messageThreadId: params.messageThreadId,
+  });
+  const resolvedThreadId = threadSpec.scope === "forum" ? threadSpec.id : undefined;
+  const dmThreadId = threadSpec.scope === "dm" ? threadSpec.id : undefined;
+  const threadIdForConfig = resolvedThreadId ?? dmThreadId;
+  const storeAllowFrom = await readChannelAllowFromStore("telegram", process.env, accountId).catch(
+    () => [],
+  );
+  const { groupConfig, topicConfig } = params.resolveTelegramGroupConfig(
+    params.chatId,
+    threadIdForConfig,
+  );
+  const groupAllowOverride = firstDefined(topicConfig?.allowFrom, groupConfig?.allowFrom);
+  // Group sender access must remain explicit (groupAllowFrom/per-group allowFrom only).
+  // DM pairing store entries are not a group authorization source.
+  const effectiveGroupAllow = normalizeAllowFrom(groupAllowOverride ?? params.groupAllowFrom);
+  const hasGroupAllowOverride = typeof groupAllowOverride !== "undefined";
+  return {
+    resolvedThreadId,
+    dmThreadId,
+    storeAllowFrom,
+    groupConfig,
+    topicConfig,
+    groupAllowOverride,
+    effectiveGroupAllow,
+    hasGroupAllowOverride,
+  };
+}
 
 /**
  * Resolve the thread ID for Telegram forum topics.
@@ -56,17 +123,33 @@ export function resolveTelegramThreadSpec(params: {
 
 /**
  * Build thread params for Telegram API calls (messages, media).
+ *
+ * IMPORTANT: Thread IDs behave differently based on chat type:
+ * - DMs (private chats): Include message_thread_id when present (DM topics)
+ * - Forum topics: Skip thread_id=1 (General topic), include others
+ * - Regular groups: Thread IDs are ignored by Telegram
+ *
  * General forum topic (id=1) must be treated like a regular supergroup send:
  * Telegram rejects sendMessage/sendMedia with message_thread_id=1 ("thread not found").
+ *
+ * @param thread - Thread specification with ID and scope
+ * @returns API params object or undefined if thread_id should be omitted
  */
 export function buildTelegramThreadParams(thread?: TelegramThreadSpec | null) {
-  if (!thread?.id) {
+  if (thread?.id == null) {
     return undefined;
   }
   const normalized = Math.trunc(thread.id);
-  if (normalized === TELEGRAM_GENERAL_TOPIC_ID && thread.scope === "forum") {
+
+  if (thread.scope === "dm") {
+    return normalized > 0 ? { message_thread_id: normalized } : undefined;
+  }
+
+  // Telegram rejects message_thread_id=1 for General forum topic
+  if (normalized === TELEGRAM_GENERAL_TOPIC_ID) {
     return undefined;
   }
+
   return { message_thread_id: normalized };
 }
 
@@ -82,17 +165,32 @@ export function buildTypingThreadParams(messageThreadId?: number) {
 }
 
 export function resolveTelegramStreamMode(telegramCfg?: {
-  streamMode?: TelegramStreamMode;
+  streaming?: unknown;
+  streamMode?: unknown;
 }): TelegramStreamMode {
-  const raw = telegramCfg?.streamMode?.trim().toLowerCase();
-  if (raw === "off" || raw === "partial" || raw === "block") {
-    return raw;
-  }
-  return "partial";
+  return resolveTelegramPreviewStreamMode(telegramCfg);
 }
 
 export function buildTelegramGroupPeerId(chatId: number | string, messageThreadId?: number) {
   return messageThreadId != null ? `${chatId}:topic:${messageThreadId}` : String(chatId);
+}
+
+/**
+ * Resolve the direct-message peer identifier for Telegram routing/session keys.
+ *
+ * In some Telegram DM deliveries (for example certain business/chat bridge flows),
+ * `chat.id` can differ from the actual sender user id. Prefer sender id when present
+ * so per-peer DM scopes isolate users correctly.
+ */
+export function resolveTelegramDirectPeerId(params: {
+  chatId: number | string;
+  senderId?: number | string | null;
+}) {
+  const senderId = params.senderId != null ? String(params.senderId).trim() : "";
+  if (senderId) {
+    return senderId;
+  }
+  return String(params.chatId);
 }
 
 export function buildTelegramGroupFrom(chatId: number | string, messageThreadId?: number) {
@@ -122,6 +220,33 @@ export function buildSenderName(msg: Message) {
     [msg.from?.first_name, msg.from?.last_name].filter(Boolean).join(" ").trim() ||
     msg.from?.username;
   return name || undefined;
+}
+
+export function resolveTelegramMediaPlaceholder(
+  msg:
+    | Pick<Message, "photo" | "video" | "video_note" | "audio" | "voice" | "document" | "sticker">
+    | undefined
+    | null,
+): string | undefined {
+  if (!msg) {
+    return undefined;
+  }
+  if (msg.photo) {
+    return "<media:image>";
+  }
+  if (msg.video || msg.video_note) {
+    return "<media:video>";
+  }
+  if (msg.audio || msg.voice) {
+    return "<media:audio>";
+  }
+  if (msg.document) {
+    return "<media:document>";
+  }
+  if (msg.sticker) {
+    return "<media:sticker>";
+  }
+  return undefined;
 }
 
 export function buildSenderLabel(msg: Message, senderId?: number | string) {
@@ -155,18 +280,52 @@ export function buildGroupLabel(msg: Message, chatId: number | string, messageTh
   return `group:${chatId}${topicSuffix}`;
 }
 
+export type TelegramTextEntity = NonNullable<Message["entities"]>[number];
+
+export function getTelegramTextParts(
+  msg: Pick<Message, "text" | "caption" | "entities" | "caption_entities">,
+): {
+  text: string;
+  entities: TelegramTextEntity[];
+} {
+  const text = msg.text ?? msg.caption ?? "";
+  const entities = msg.entities ?? msg.caption_entities ?? [];
+  return { text, entities };
+}
+
+function isTelegramMentionWordChar(char: string | undefined): boolean {
+  return char != null && /[a-z0-9_]/i.test(char);
+}
+
+function hasStandaloneTelegramMention(text: string, mention: string): boolean {
+  let startIndex = 0;
+  while (startIndex < text.length) {
+    const idx = text.indexOf(mention, startIndex);
+    if (idx === -1) {
+      return false;
+    }
+    const prev = idx > 0 ? text[idx - 1] : undefined;
+    const next = text[idx + mention.length];
+    if (!isTelegramMentionWordChar(prev) && !isTelegramMentionWordChar(next)) {
+      return true;
+    }
+    startIndex = idx + 1;
+  }
+  return false;
+}
+
 export function hasBotMention(msg: Message, botUsername: string) {
-  const text = (msg.text ?? msg.caption ?? "").toLowerCase();
-  if (text.includes(`@${botUsername}`)) {
+  const { text, entities } = getTelegramTextParts(msg);
+  const mention = `@${botUsername}`.toLowerCase();
+  if (hasStandaloneTelegramMention(text.toLowerCase(), mention)) {
     return true;
   }
-  const entities = msg.entities ?? msg.caption_entities ?? [];
   for (const ent of entities) {
     if (ent.type !== "mention") {
       continue;
     }
-    const slice = (msg.text ?? msg.caption ?? "").slice(ent.offset, ent.offset + ent.length);
-    if (slice.toLowerCase() === `@${botUsername}`) {
+    const slice = text.slice(ent.offset, ent.offset + ent.length);
+    if (slice.toLowerCase() === mention) {
       return true;
     }
   }
@@ -222,35 +381,34 @@ export type TelegramReplyTarget = {
   sender: string;
   body: string;
   kind: "reply" | "quote";
+  /** Forward context if the reply target was itself a forwarded message (issue #9619). */
+  forwardedFrom?: TelegramForwardedContext;
 };
 
 export function describeReplyTarget(msg: Message): TelegramReplyTarget | null {
   const reply = msg.reply_to_message;
-  const quote = msg.quote;
+  const externalReply = (msg as Message & { external_reply?: Message }).external_reply;
+  const quoteText =
+    msg.quote?.text ??
+    (externalReply as (Message & { quote?: { text?: string } }) | undefined)?.quote?.text;
   let body = "";
   let kind: TelegramReplyTarget["kind"] = "reply";
 
-  if (quote?.text) {
-    body = quote.text.trim();
+  if (typeof quoteText === "string") {
+    body = quoteText.trim();
     if (body) {
       kind = "quote";
     }
   }
 
-  if (!body && reply) {
-    const replyBody = (reply.text ?? reply.caption ?? "").trim();
+  const replyLike = reply ?? externalReply;
+  if (!body && replyLike) {
+    const replyBody = (replyLike.text ?? replyLike.caption ?? "").trim();
     body = replyBody;
     if (!body) {
-      if (reply.photo) {
-        body = "<media:image>";
-      } else if (reply.video) {
-        body = "<media:video>";
-      } else if (reply.audio || reply.voice) {
-        body = "<media:audio>";
-      } else if (reply.document) {
-        body = "<media:document>";
-      } else {
-        const locationData = extractTelegramLocation(reply);
+      body = resolveTelegramMediaPlaceholder(replyLike) ?? "";
+      if (!body) {
+        const locationData = extractTelegramLocation(replyLike);
         if (locationData) {
           body = formatLocationText(locationData);
         }
@@ -260,14 +418,20 @@ export function describeReplyTarget(msg: Message): TelegramReplyTarget | null {
   if (!body) {
     return null;
   }
-  const sender = reply ? buildSenderName(reply) : undefined;
+  const sender = replyLike ? buildSenderName(replyLike) : undefined;
   const senderLabel = sender ?? "unknown sender";
 
+  // Extract forward context from the resolved reply target (reply_to_message or external_reply).
+  const forwardedFrom = replyLike?.forward_origin
+    ? (resolveForwardOrigin(replyLike.forward_origin) ?? undefined)
+    : undefined;
+
   return {
-    id: reply?.message_id ? String(reply.message_id) : undefined,
+    id: replyLike?.message_id ? String(replyLike.message_id) : undefined,
     sender: senderLabel,
     body,
     kind,
+    forwardedFrom,
   };
 }
 

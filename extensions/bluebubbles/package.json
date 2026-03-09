@@ -1,10 +1,10 @@
 {
   "name": "@openclaw/bluebubbles",
-  "version": "2026.2.6-3",
+  "version": "2026.3.9",
   "description": "OpenClaw BlueBubbles channel plugin",
   "type": "module",
-  "devDependencies": {
-    "openclaw": "workspace:*"
+  "dependencies": {
+    "zod": "^4.3.6"
   },
   "openclaw": {
     "extensions": [

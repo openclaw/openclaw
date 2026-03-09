@@ -1,6 +1,6 @@
-import OpenClawKit
 import CoreLocation
 import Foundation
+import OpenClawKit
 
 @MainActor
 protocol MacNodeRuntimeMainActorServices: Sendable {

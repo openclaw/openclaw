@@ -1,6 +1,9 @@
-import type { RuntimeEnv } from "../runtime.js";
 import { readConfigFileSnapshot, resolveGatewayPort } from "../config/config.js";
+import type { OpenClawConfig } from "../config/types.js";
+import { readGatewayTokenEnv } from "../gateway/credentials.js";
+import { resolveConfiguredSecretInputWithFallback } from "../gateway/resolve-configured-secret-input-string.js";
 import { copyToClipboard } from "../infra/clipboard.js";
+import type { RuntimeEnv } from "../runtime.js";
 import { defaultRuntime } from "../runtime.js";
 import {
   detectBrowserOpenSupport,
@@ -13,6 +16,37 @@ type DashboardOptions = {
   noOpen?: boolean;
 };
 
+async function resolveDashboardToken(
+  cfg: OpenClawConfig,
+  env: NodeJS.ProcessEnv = process.env,
+): Promise<{
+  token?: string;
+  source?: "config" | "env" | "secretRef";
+  unresolvedRefReason?: string;
+  tokenSecretRefConfigured: boolean;
+}> {
+  const resolved = await resolveConfiguredSecretInputWithFallback({
+    config: cfg,
+    env,
+    value: cfg.gateway?.auth?.token,
+    path: "gateway.auth.token",
+    readFallback: () => readGatewayTokenEnv(env),
+  });
+  return {
+    token: resolved.value,
+    source:
+      resolved.source === "config"
+        ? "config"
+        : resolved.source === "secretRef"
+          ? "secretRef"
+          : resolved.source === "fallback"
+            ? "env"
+            : undefined,
+    unresolvedRefReason: resolved.unresolvedRefReason,
+    tokenSecretRefConfigured: resolved.secretRefConfigured,
+  };
+}
+
 export async function dashboardCommand(
   runtime: RuntimeEnv = defaultRuntime,
   options: DashboardOptions = {},
@@ -23,20 +57,36 @@ export async function dashboardCommand(
   const bind = cfg.gateway?.bind ?? "loopback";
   const basePath = cfg.gateway?.controlUi?.basePath;
   const customBindHost = cfg.gateway?.customBindHost;
-  const token = cfg.gateway?.auth?.token ?? process.env.OPENCLAW_GATEWAY_TOKEN ?? "";
+  const resolvedToken = await resolveDashboardToken(cfg, process.env);
+  const token = resolvedToken.token ?? "";
 
+  // LAN URLs fail secure-context checks in browsers.
+  // Coerce only lan->loopback and preserve other bind modes.
   const links = resolveControlUiLinks({
     port,
-    bind,
+    bind: bind === "lan" ? "loopback" : bind,
     customBindHost,
     basePath,
   });
+  // Avoid embedding externally managed SecretRef tokens in terminal/clipboard/browser args.
+  const includeTokenInUrl = token.length > 0 && !resolvedToken.tokenSecretRefConfigured;
   // Prefer URL fragment to avoid leaking auth tokens via query params.
-  const dashboardUrl = token
+  const dashboardUrl = includeTokenInUrl
     ? `${links.httpUrl}#token=${encodeURIComponent(token)}`
     : links.httpUrl;
 
   runtime.log(`Dashboard URL: ${dashboardUrl}`);
+  if (resolvedToken.tokenSecretRefConfigured && token) {
+    runtime.log(
+      "Token auto-auth is disabled for SecretRef-managed gateway.auth.token; use your external token source if prompted.",
+    );
+  }
+  if (resolvedToken.unresolvedRefReason) {
+    runtime.log(`Token auto-auth unavailable: ${resolvedToken.unresolvedRefReason}`);
+    runtime.log(
+      "Set OPENCLAW_GATEWAY_TOKEN in this shell or resolve your secret provider, then rerun `openclaw dashboard`.",
+    );
+  }
 
   const copied = await copyToClipboard(dashboardUrl).catch(() => false);
   runtime.log(copied ? "Copied to clipboard." : "Copy to clipboard unavailable.");
@@ -52,7 +102,7 @@ export async function dashboardCommand(
       hint = formatControlUiSshHint({
         port,
         basePath,
-        token: token || undefined,
+        token: includeTokenInUrl ? token || undefined : undefined,
       });
     }
   } else {
