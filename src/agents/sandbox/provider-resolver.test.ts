@@ -51,9 +51,9 @@ describe("Provider Resolver", () => {
       expect(dockerHealthSpy).toHaveBeenCalled();
 
       // Order verification via call ordering
-      const firecrackerOrder = firecrackerHealthSpy.mock.invocationCallOrder[0]!;
-      const gvisorOrder = gvisorHealthSpy.mock.invocationCallOrder[0]!;
-      const dockerOrder = dockerHealthSpy.mock.invocationCallOrder[0]!;
+      const firecrackerOrder = firecrackerHealthSpy.mock.invocationCallOrder[0];
+      const gvisorOrder = gvisorHealthSpy.mock.invocationCallOrder[0];
+      const dockerOrder = dockerHealthSpy.mock.invocationCallOrder[0];
 
       expect(firecrackerOrder).toBeLessThan(gvisorOrder);
       expect(gvisorOrder).toBeLessThan(dockerOrder);

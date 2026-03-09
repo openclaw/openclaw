@@ -43,7 +43,7 @@ function makeSandboxParams(overrides?: Partial<EnsureSandboxParams>): EnsureSand
       tools: { allow: ["*"], deny: [] },
       prune: { idleHours: 24, maxAgeDays: 7 },
       backend: "gvisor" as const,
-    } as any,
+    } as unknown,
     ...overrides,
   };
 }
@@ -485,7 +485,7 @@ describe("GVisorProvider", () => {
       const mockLaunch = vi.fn().mockResolvedValue({ sessionId: "exec-123" });
       vi.spyOn(ExecBrowserHelper.prototype, "launchBrowser").mockImplementation(mockLaunch);
 
-      const result = await provider.launchBrowser("container-1", { enabled: true } as any);
+      const result = await provider.launchBrowser("container-1", { enabled: true } as unknown);
 
       expect(result).toEqual({ sessionId: "exec-123" });
       expect(mockLaunch).toHaveBeenCalledWith("container-1", { enabled: true });
@@ -528,7 +528,7 @@ describe("GVisorProvider", () => {
 
       // Access the private browserHelper field to verify single instance
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const helper1 = (provider as any).browserHelper;
+      const helper1 = (provider as unknown as { browserHelper: unknown }).browserHelper;
       expect(helper1).toBeDefined();
       expect(helper1).not.toBeNull();
 

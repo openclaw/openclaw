@@ -2,9 +2,9 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 
 // Use vi.hoisted to create mocks that are available in vi.mock factories
 const {
-  mockSandboxClient,
-  mockExecClient,
-  mockHealthClient,
+  mockSandboxClient: _mockSandboxClient,
+  mockExecClient: _mockExecClient,
+  mockHealthClient: _mockHealthClient,
   mockChannel,
   mockCreate,
   mockUse,
@@ -23,7 +23,7 @@ const {
   const mockHealthClient = { check: vi.fn() };
   const mockChannel = { close: vi.fn() };
   const mockCreate = vi.fn(() => mockSandboxClient);
-  const mockUse = vi.fn(() => ({ use: mockUse, create: mockCreate })) as any;
+  const mockUse = vi.fn(() => ({ use: mockUse, create: mockCreate })) as unknown;
   const mockCreateClientFactory = vi.fn(() => ({ use: mockUse }));
   const mockFileClient = {
     readFile: vi.fn(),
@@ -33,9 +33,13 @@ const {
     makeDir: vi.fn(),
     remove: vi.fn(),
   };
-  const mockCreateClient = vi.fn((def: any) => {
-    if (def.name === "ExecService") return mockExecClient;
-    if (def.name === "FileService") return mockFileClient;
+  const mockCreateClient = vi.fn((def: unknown) => {
+    if ((def as { name: string }).name === "ExecService") {
+      return mockExecClient;
+    }
+    if ((def as { name: string }).name === "FileService") {
+      return mockFileClient;
+    }
     return mockHealthClient;
   });
 
@@ -107,7 +111,7 @@ describe("createSandboxClient", () => {
   it("creates client with the SandboxService definition and channel", () => {
     createSandboxClient();
     expect(mockCreate).toHaveBeenCalledTimes(1);
-    const createArgs = mockCreate.mock.calls[0] as any[];
+    const createArgs = mockCreate.mock.calls[0] as unknown[];
     expect(createArgs[0]).toHaveProperty("name", "SandboxService");
     expect(createArgs[1]).toBe(mockChannel);
   });
@@ -122,7 +126,7 @@ describe("createExecClient", () => {
     const client = createExecClient();
     expect(client).toBeDefined();
     expect(mockCreateClient).toHaveBeenCalled();
-    const createArgs = mockCreateClient.mock.calls[0] as any[];
+    const createArgs = mockCreateClient.mock.calls[0] as unknown[];
     expect(createArgs[0]).toHaveProperty("name", "ExecService");
   });
 
@@ -154,7 +158,7 @@ describe("createFileClient", () => {
     const client = createFileClient();
     expect(client).toBeDefined();
     expect(mockCreateClient).toHaveBeenCalled();
-    const createArgs = mockCreateClient.mock.calls[0] as any[];
+    const createArgs = mockCreateClient.mock.calls[0] as unknown[];
     expect(createArgs[0]).toHaveProperty("name", "FileService");
   });
 
@@ -166,7 +170,7 @@ describe("createFileClient", () => {
 
   it("passes the channel from getOrCreateChannel", () => {
     createFileClient();
-    const createArgs = mockCreateClient.mock.calls[0] as any[];
+    const createArgs = mockCreateClient.mock.calls[0] as unknown[];
     expect(createArgs[1]).toBe(mockChannel);
   });
 

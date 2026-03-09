@@ -90,7 +90,7 @@ describe("DockerProvider", () => {
       tools: { allow: ["*"], deny: [] },
       prune: { idleHours: 24, maxAgeDays: 7 },
       backend: "docker" as const,
-    } as any;
+    } as unknown;
 
     const baseParams = {
       sessionKey: "sess-abc",
@@ -144,7 +144,7 @@ describe("DockerProvider", () => {
       await provider.ensureSandbox(params);
 
       // Find the create call (first execDocker call)
-      const createCall = mockExecDocker.mock.calls[0]![0] as string[];
+      const createCall = mockExecDocker.mock.calls[0][0];
       expect(createCall).toContain("--cpus=2");
       expect(createCall).toContain("--memory=1024m");
       expect(createCall).toContain("--pids-limit=512");
@@ -153,7 +153,7 @@ describe("DockerProvider", () => {
     it("uses DEFAULT_RESOURCE_LIMITS when cfg.resourceLimits is undefined", async () => {
       await provider.ensureSandbox(baseParams);
 
-      const createCall = mockExecDocker.mock.calls[0]![0] as string[];
+      const createCall = mockExecDocker.mock.calls[0][0];
       expect(createCall).toContain("--cpus=1");
       expect(createCall).toContain("--memory=512m");
       expect(createCall).toContain("--pids-limit=256");
@@ -170,14 +170,14 @@ describe("DockerProvider", () => {
 
       await provider.ensureSandbox(params);
 
-      const createCall = mockExecDocker.mock.calls[0]![0] as string[];
+      const createCall = mockExecDocker.mock.calls[0][0];
       expect(createCall).toContain("--network=none");
     });
 
     it("uses DEFAULT_NETWORK_MODE when cfg.networkMode is undefined", async () => {
       await provider.ensureSandbox(baseParams);
 
-      const createCall = mockExecDocker.mock.calls[0]![0] as string[];
+      const createCall = mockExecDocker.mock.calls[0][0];
       expect(createCall).toContain("--network=bridge");
     });
 
@@ -197,7 +197,7 @@ describe("DockerProvider", () => {
 
       await provider.ensureSandbox(params);
 
-      const createCall = mockExecDocker.mock.calls[0]![0] as string[];
+      const createCall = mockExecDocker.mock.calls[0][0];
       // Safe vars should be present
       expect(createCall).toContain("--env");
       const envArgs = createCall.filter(
@@ -214,7 +214,7 @@ describe("DockerProvider", () => {
     it("includes docker image in create args", async () => {
       await provider.ensureSandbox(baseParams);
 
-      const createCall = mockExecDocker.mock.calls[0]![0] as string[];
+      const createCall = mockExecDocker.mock.calls[0][0];
       expect(createCall).toContain("node:20");
     });
 
@@ -223,7 +223,7 @@ describe("DockerProvider", () => {
 
       // Should have two calls: create then start
       expect(mockExecDocker).toHaveBeenCalledTimes(2);
-      const startCall = mockExecDocker.mock.calls[1]![0] as string[];
+      const startCall = mockExecDocker.mock.calls[1][0];
       expect(startCall).toContain("start");
       expect(startCall).toContain("openclaw-sandbox-sess-abc");
     });
@@ -367,7 +367,7 @@ describe("DockerProvider", () => {
       const mockLaunch = vi.fn().mockResolvedValue({ sessionId: "exec-123" });
       vi.spyOn(ExecBrowserHelper.prototype, "launchBrowser").mockImplementation(mockLaunch);
 
-      const result = await provider.launchBrowser("container-1", { enabled: true } as any);
+      const result = await provider.launchBrowser("container-1", { enabled: true } as unknown);
 
       expect(result).toEqual({ sessionId: "exec-123" });
       expect(mockLaunch).toHaveBeenCalledWith("container-1", { enabled: true });
@@ -410,7 +410,7 @@ describe("DockerProvider", () => {
 
       // Access the private browserHelper field to verify single instance
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const helper1 = (provider as any).browserHelper;
+      const helper1 = (provider as unknown as { browserHelper: unknown }).browserHelper;
       expect(helper1).toBeDefined();
       expect(helper1).not.toBeNull();
 

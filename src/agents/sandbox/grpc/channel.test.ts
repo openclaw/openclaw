@@ -64,11 +64,11 @@ describe("channel", () => {
   });
 
   it("closeChannel resets the cached channel so next getOrCreateChannel creates a new one", () => {
-    const channel1 = getOrCreateChannel();
+    const _channel1 = getOrCreateChannel();
     closeChannel();
     expect(mockChannel.close).toHaveBeenCalledTimes(1);
 
-    const channel2 = getOrCreateChannel();
+    const _channel2 = getOrCreateChannel();
     expect(mockCreateChannel).toHaveBeenCalledTimes(2);
     // channel2 is a new mock instance (same mock, but createChannel called again)
   });

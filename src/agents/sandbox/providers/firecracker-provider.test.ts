@@ -95,7 +95,7 @@ describe("FirecrackerProvider", () => {
         sessionKey: "session-1",
         workspaceDir: "/workspace",
         agentWorkspaceDir: "/agent-workspace",
-        cfg: {} as any,
+        cfg: {} as unknown,
       });
 
       expect(result).toBe("vm-abc123");
@@ -118,7 +118,7 @@ describe("FirecrackerProvider", () => {
           sessionKey: "session-1",
           workspaceDir: "/workspace",
           agentWorkspaceDir: "/agent-workspace",
-          cfg: {} as any,
+          cfg: {} as unknown,
         }),
       ).rejects.toThrow(SandboxProviderError);
     });
@@ -155,12 +155,12 @@ describe("FirecrackerProvider", () => {
       expect(mockExecClient.exec).toHaveBeenCalledTimes(1);
       const requestStream = mockExecClient.exec.mock.calls[0][0];
       // Consume the request stream to verify its contents
-      const requests: any[] = [];
+      const requests: unknown[] = [];
       for await (const req of requestStream) {
         requests.push(req);
       }
       expect(requests).toHaveLength(1);
-      expect(requests[0].start).toEqual(
+      expect((requests[0] as { start: unknown }).start).toEqual(
         expect.objectContaining({
           sandboxId: "vm-abc123",
           command: ["ls", "-la"],

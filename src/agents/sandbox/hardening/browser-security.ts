@@ -29,23 +29,33 @@ const PRIVATE_PREFIXES = ["127.", "10.", "0."];
  */
 function isPrivateIP(hostname: string): boolean {
   for (const prefix of PRIVATE_PREFIXES) {
-    if (hostname.startsWith(prefix)) return true;
+    if (hostname.startsWith(prefix)) {
+      return true;
+    }
   }
 
   // Check 192.168.0.0/16
-  if (hostname.startsWith("192.168.")) return true;
+  if (hostname.startsWith("192.168.")) {
+    return true;
+  }
 
   // Check 172.16.0.0/12 range (172.16.x.x through 172.31.x.x)
   if (hostname.startsWith("172.")) {
     const second = parseInt(hostname.split(".")[1], 10);
-    if (!isNaN(second) && second >= 16 && second <= 31) return true;
+    if (!isNaN(second) && second >= 16 && second <= 31) {
+      return true;
+    }
   }
 
   // Check 169.254.0.0/16 (link-local / cloud metadata)
-  if (hostname.startsWith("169.254.")) return true;
+  if (hostname.startsWith("169.254.")) {
+    return true;
+  }
 
   // Check IPv6 loopback
-  if (hostname === "::1" || hostname === "[::1]") return true;
+  if (hostname === "::1" || hostname === "[::1]") {
+    return true;
+  }
 
   return false;
 }
