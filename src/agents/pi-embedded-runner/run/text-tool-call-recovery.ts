@@ -1,5 +1,6 @@
 import type { StreamFn } from "@mariozechner/pi-agent-core";
 import { streamSimple } from "@mariozechner/pi-ai";
+import { isBlockedObjectKey } from "../../../infra/prototype-keys.js";
 import { normalizeToolName } from "../../tool-policy.js";
 
 type RecoveredTextToolCall = {
@@ -25,6 +26,8 @@ const XML_INVOKE_RE =
   /<invoke\b[^>]*\bname=(?:"([^"]+)"|'([^']+)')[^>]*>([\s\S]*?)<\/invoke>(?:\s*<\/[a-z0-9:_-]+>)?/gi;
 const XML_PARAMETER_RE =
   /<parameter\b[^>]*\bname=(?:"([^"]+)"|'([^']+)')[^>]*>([\s\S]*?)<\/parameter>/gi;
+const RECOVERABLE_XML_CONTAINER_SEGMENT_RE =
+  /^\s*(?:<\/?(?:(?:[a-z0-9_-]+:)?(?:function_calls|tool_calls|tool_call))\s*>\s*)*$/i;
 const TEXT_TOOL_CALL_START_RE = /(^|[\s([{"',;:])([A-Za-z][A-Za-z0-9_./-]*)\s*\(/g;
 
 function countOccurrences(text: string, needle: string, maxCount: number): number {
@@ -181,6 +184,10 @@ function resolveRecoveredToolCallName(
   return canonicalMatch;
 }
 
+function isRecoverableOuterText(text: string): boolean {
+  return !text.trim() || RECOVERABLE_XML_CONTAINER_SEGMENT_RE.test(text);
+}
+
 function findMarkdownCodeRanges(text: string): TextRange[] {
   const ranges: TextRange[] = [];
 
@@ -231,17 +238,44 @@ function findMarkdownCodeRanges(text: string): TextRange[] {
     ranges.push({ start: openFence.start, end: text.length });
   }
 
+  const fencedRanges = ranges.toSorted((a, b) => a.start - b.start || a.end - b.end);
+  let fencedRangeIndex = 0;
+  let currentIndentedBlock: TextRange | null = null;
   for (const lineRange of lineRanges) {
     const lineText = text.slice(lineRange.start, lineRange.end).replace(/\r?\n$/, "");
-    if (!lineText || !/^(\t| {4})/.test(lineText)) {
+
+    while (true) {
+      const fencedRange = fencedRanges[fencedRangeIndex];
+      if (!fencedRange || fencedRange.end > lineRange.start) {
+        break;
+      }
+      fencedRangeIndex += 1;
+    }
+
+    const activeFenceRange = fencedRanges[fencedRangeIndex];
+    const overlapsFence = Boolean(
+      activeFenceRange &&
+      lineRange.start < activeFenceRange.end &&
+      activeFenceRange.start < lineRange.end,
+    );
+    const isIndentedCodeLine = Boolean(lineText) && /^(\t| {4})/.test(lineText);
+    if (!isIndentedCodeLine || overlapsFence) {
+      if (currentIndentedBlock) {
+        ranges.push(currentIndentedBlock);
+        currentIndentedBlock = null;
+      }
       continue;
     }
-    const overlapsExisting = ranges.some(
-      (range) => lineRange.start < range.end && range.start < lineRange.end,
-    );
-    if (!overlapsExisting) {
-      ranges.push({ start: lineRange.start, end: lineRange.end });
+
+    if (!currentIndentedBlock) {
+      currentIndentedBlock = { start: lineRange.start, end: lineRange.end };
+      continue;
     }
+    currentIndentedBlock.end = lineRange.end;
+  }
+
+  if (currentIndentedBlock) {
+    ranges.push(currentIndentedBlock);
   }
 
   // Support inline spans delimited by one or more backticks (e.g. `code`,
@@ -343,7 +377,7 @@ function findXmlTextToolCalls(
     }
 
     const body = match[3] ?? "";
-    const args: Record<string, unknown> = {};
+    const args = Object.create(null) as Record<string, unknown>;
     if (
       countOccurrences(body.toLowerCase(), "<parameter", MAX_XML_PARAMETER_CANDIDATES) >
       MAX_XML_PARAMETER_CANDIDATES
@@ -359,7 +393,7 @@ function findXmlTextToolCalls(
         break;
       }
       const paramName = (paramMatch[1] ?? paramMatch[2] ?? "").trim();
-      if (!paramName) {
+      if (!paramName || isBlockedObjectKey(paramName)) {
         continue;
       }
       const rawValue = decodeBasicXmlEntities((paramMatch[3] ?? "").trim());
@@ -370,7 +404,12 @@ function findXmlTextToolCalls(
     if (Object.keys(args).length === 0) {
       const parsedBodyArgs = parseObjectToolArguments(decodeBasicXmlEntities(body));
       if (parsedBodyArgs) {
-        Object.assign(args, parsedBodyArgs);
+        for (const [key, value] of Object.entries(parsedBodyArgs)) {
+          if (isBlockedObjectKey(key)) {
+            continue;
+          }
+          args[key] = value;
+        }
       }
     }
 
@@ -479,13 +518,13 @@ function splitTextBlockIntoRecoveredToolCalls(
 
   let cursor = 0;
   for (const toolCall of nonOverlapping) {
-    if (text.slice(cursor, toolCall.start).trim()) {
+    if (!isRecoverableOuterText(text.slice(cursor, toolCall.start))) {
       return null;
     }
     cursor = toolCall.end;
   }
 
-  if (text.slice(cursor).trim()) {
+  if (!isRecoverableOuterText(text.slice(cursor))) {
     return null;
   }
 

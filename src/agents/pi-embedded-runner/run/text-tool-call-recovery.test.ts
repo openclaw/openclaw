@@ -171,6 +171,87 @@ describe("wrapStreamFnRecoverTextToolCalls", () => {
     });
   });
 
+  it("recovers XML invoke blocks wrapped in known container tags", async () => {
+    const finalMessage = {
+      role: "assistant",
+      content: [
+        {
+          type: "text",
+          text: `<function_calls>
+<invoke name="Read"><parameter name="path">/tmp/demo.txt</parameter></invoke>
+</function_calls>`,
+        },
+      ],
+    };
+    const baseFn = vi.fn(() => createFakeStream({ events: [], resultMessage: finalMessage }));
+
+    const stream = await invokeRecoveredStream(baseFn, new Set(["read"]));
+    const result = await stream.result();
+
+    expect(result).toEqual({
+      role: "assistant",
+      content: [
+        {
+          type: "toolCall",
+          name: "read",
+          arguments: { path: "/tmp/demo.txt" },
+        },
+      ],
+    });
+  });
+
+  it("blocks prototype-polluting XML parameter keys", async () => {
+    const finalMessage = {
+      role: "assistant",
+      content: [
+        {
+          type: "text",
+          text: `<invoke name="exec"><parameter name="__proto__">{"command":"pwd"}</parameter></invoke>`,
+        },
+      ],
+    };
+    const baseFn = vi.fn(() => createFakeStream({ events: [], resultMessage: finalMessage }));
+
+    const stream = await invokeRecoveredStream(baseFn, new Set(["exec"]));
+    const result = (await stream.result()) as {
+      content: Array<{ type: string; arguments?: Record<string, unknown> }>;
+    };
+
+    expect(result.content).toHaveLength(1);
+    expect(result.content[0]).toMatchObject({
+      type: "toolCall",
+      name: "exec",
+    });
+    expect(result.content[0]?.arguments).toEqual({});
+    expect(Object.getPrototypeOf(result.content[0]?.arguments)).toBeNull();
+  });
+
+  it("blocks prototype-polluting XML body object keys", async () => {
+    const finalMessage = {
+      role: "assistant",
+      content: [
+        {
+          type: "text",
+          text: `<invoke name="exec">{"__proto__":{"command":"pwd"},"timeout":1}</invoke>`,
+        },
+      ],
+    };
+    const baseFn = vi.fn(() => createFakeStream({ events: [], resultMessage: finalMessage }));
+
+    const stream = await invokeRecoveredStream(baseFn, new Set(["exec"]));
+    const result = (await stream.result()) as {
+      content: Array<{ type: string; arguments?: Record<string, unknown> }>;
+    };
+
+    expect(result.content[0]).toMatchObject({
+      type: "toolCall",
+      name: "exec",
+      arguments: { timeout: 1 },
+    });
+    expect(Object.getPrototypeOf(result.content[0]?.arguments)).toBeNull();
+    expect(result.content[0]?.arguments?.command).toBeUndefined();
+  });
+
   it("does not recover tool calls when surrounding prose is present", async () => {
     const finalMessage = {
       role: "assistant",
@@ -267,6 +348,23 @@ exec({"command":"pwd"})
   it("does not recover tool-call examples inside indented markdown code blocks", async () => {
     const text = `Try this:
     exec({"command":"pwd"})`;
+    const finalMessage = {
+      role: "assistant",
+      content: [{ type: "text", text }],
+    };
+    const baseFn = vi.fn(() => createFakeStream({ events: [], resultMessage: finalMessage }));
+
+    const stream = await invokeRecoveredStream(baseFn, new Set(["exec"]));
+    const result = await stream.result();
+
+    expect(result).toEqual({
+      role: "assistant",
+      content: [{ type: "text", text }],
+    });
+  });
+
+  it("handles many indented markdown code lines without recovering them", async () => {
+    const text = "    x\n".repeat(5_000);
     const finalMessage = {
       role: "assistant",
       content: [{ type: "text", text }],
