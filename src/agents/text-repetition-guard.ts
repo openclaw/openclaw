@@ -81,7 +81,12 @@ function resolveConfig(
 function isDegenerate(s: string, minDensity = 0.3): boolean {
   const stripped = s.replace(/\s/g, "");
   if (stripped.length < s.length * minDensity) return true;
-  if (new Set(stripped).size <= 2) return true;
+  // A pattern made of ≤2 distinct chars (after whitespace removal) is trivial
+  // noise — but only skip it when it's too short to carry real signal.
+  // Short strings (≤ ngramSize default) with 2 unique chars are degenerate;
+  // longer strings with exactly 2 unique chars may still be a real repetition.
+  if (stripped.length <= 30 && new Set(stripped).size <= 2) return true;
+  if (new Set(stripped).size <= 1) return true;
   return false;
 }
 
