@@ -59,12 +59,41 @@ export class TelegramPollingSession {
         continue;
       }
 
-      const cleanupState = await this.#ensureWebhookCleanup(bot);
+      // Cast the native AbortSignal to the grammY-compatible type.
+      // grammY re-exports AbortSignal from the `abort-controller` polyfill,
+      // which is structurally identical but nominally incompatible with the
+      // built-in AbortSignal. This mirrors the pattern used in webhook.ts.
+      const grammySignal = this.opts.abortSignal as Parameters<(typeof bot)["init"]>[0];
+
+      const cleanupState = await this.#ensureWebhookCleanup(bot, grammySignal);
       if (cleanupState === "retry") {
         continue;
       }
       if (cleanupState === "exit") {
         return;
+      }
+
+      // Pre-initialize the bot with abort signal support before handing it
+      // to the grammY runner. The runner calls bot.init() internally but
+      // does not forward the abort signal, so a hanging getMe() would
+      // block indefinitely. Initializing here ensures the runner skips
+      // its own init() call (bot is already initialized) and allows the
+      // abort signal to cancel a stuck getMe() request.
+      try {
+        await withTelegramApiErrorLogging({
+          operation: "getMe",
+          runtime: this.opts.runtime,
+          fn: () => bot.init(grammySignal),
+        });
+      } catch (err) {
+        const shouldRetry = await this.#waitBeforeRetryOnRecoverableSetupError(
+          err,
+          "Telegram bot init failed",
+        );
+        if (!shouldRetry) {
+          return;
+        }
+        continue;
       }
 
       const state = await this.#runPollingCycle(bot);
@@ -127,7 +156,10 @@ export class TelegramPollingSession {
     }
   }
 
-  async #ensureWebhookCleanup(bot: TelegramBot): Promise<"ready" | "retry" | "exit"> {
+  async #ensureWebhookCleanup(
+    bot: TelegramBot,
+    signal?: Parameters<(typeof bot)["init"]>[0],
+  ): Promise<"ready" | "retry" | "exit"> {
     if (this.#webhookCleared) {
       return "ready";
     }
@@ -135,7 +167,7 @@ export class TelegramPollingSession {
       await withTelegramApiErrorLogging({
         operation: "deleteWebhook",
         runtime: this.opts.runtime,
-        fn: () => bot.api.deleteWebhook({ drop_pending_updates: false }),
+        fn: () => bot.api.deleteWebhook({ drop_pending_updates: false }, signal),
       });
       this.#webhookCleared = true;
       return "ready";
