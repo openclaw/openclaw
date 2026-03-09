@@ -208,7 +208,6 @@ export function renderOverview(props: OverviewProps) {
                 props.onSettingsChange({
                   ...props.settings,
                   gatewayUrl: v,
-                  token: v.trim() === props.settings.gatewayUrl.trim() ? props.settings.token : "",
                 });
               }}
               placeholder="ws://100.x.y.z:18789"
