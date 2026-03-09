@@ -227,10 +227,9 @@ describe("createDiscordMessageHandler queue behavior", () => {
           replies: [
             expect.objectContaining({
               isError: true,
-              text: expect.stringContaining("timed out before a response was generated"),
+              text: expect.stringContaining("Discord inbound worker timed out"),
             }),
           ],
-        }),
       );
     } finally {
       vi.useRealTimers();
