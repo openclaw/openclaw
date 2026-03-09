@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { createCommandHandlers } from "./tui-command-handlers.js";
+import { createCommandHandlers, partitionModelItems } from "./tui-command-handlers.js";
 
 type LoadHistoryMock = ReturnType<typeof vi.fn> & (() => Promise<void>);
 type SetActivityStatusMock = ReturnType<typeof vi.fn> & ((text: string) => void);
@@ -169,5 +169,71 @@ describe("tui command handlers", () => {
     expect(addUser).not.toHaveBeenCalled();
     expect(addSystem).toHaveBeenCalledWith("not connected to gateway — message not sent");
     expect(setActivityStatus).toHaveBeenLastCalledWith("disconnected");
+  });
+});
+
+describe("partitionModelItems", () => {
+  const models = [
+    { id: "gpt-4o", provider: "openai", name: "GPT-4o", contextWindow: 128_000 },
+    { id: "claude-opus-4-6", provider: "anthropic", name: "Claude Opus 4.6", contextWindow: 200_000, reasoning: true },
+    { id: "gemini-2.5-pro", provider: "google", name: "Gemini 2.5 Pro" },
+    { id: "llama-3", provider: "groq", name: "Llama 3" },
+  ];
+
+  it("places authenticated providers before unauthenticated", () => {
+    const items = partitionModelItems(models, (p) => p === "anthropic");
+
+    expect(items[0]!.value).toBe("anthropic/claude-opus-4-6");
+    expect(items.length).toBe(4);
+    expect(items[1]!.value).toBe("openai/gpt-4o");
+    expect(items[2]!.value).toBe("google/gemini-2.5-pro");
+    expect(items[3]!.value).toBe("groq/llama-3");
+  });
+
+  it("preserves original order when no models have auth", () => {
+    const items = partitionModelItems(models, () => false);
+
+    expect(items.map((i) => i.value)).toEqual([
+      "openai/gpt-4o",
+      "anthropic/claude-opus-4-6",
+      "google/gemini-2.5-pro",
+      "groq/llama-3",
+    ]);
+  });
+
+  it("preserves original order when all models have auth", () => {
+    const items = partitionModelItems(models, () => true);
+
+    expect(items.map((i) => i.value)).toEqual([
+      "openai/gpt-4o",
+      "anthropic/claude-opus-4-6",
+      "google/gemini-2.5-pro",
+      "groq/llama-3",
+    ]);
+  });
+
+  it("includes context window and reasoning in description", () => {
+    const items = partitionModelItems(models, () => true);
+    const anthropic = items.find((i) => i.value === "anthropic/claude-opus-4-6");
+
+    expect(anthropic!.description).toContain("Claude Opus 4.6");
+    expect(anthropic!.description).toContain("ctx 200k");
+    expect(anthropic!.description).toContain("reasoning");
+  });
+
+  it("handles multiple authenticated providers", () => {
+    const authed = new Set(["openai", "google"]);
+    const items = partitionModelItems(models, (p) => authed.has(p));
+
+    expect(items.map((i) => i.value)).toEqual([
+      "openai/gpt-4o",
+      "google/gemini-2.5-pro",
+      "anthropic/claude-opus-4-6",
+      "groq/llama-3",
+    ]);
+  });
+
+  it("returns empty array for empty models list", () => {
+    expect(partitionModelItems([], () => true)).toEqual([]);
   });
 });
