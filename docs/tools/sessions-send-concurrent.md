@@ -1,6 +1,6 @@
 # sessions_send_concurrent Tool
 
-Concurrently send messages to multiple agent sessions with streaming responses and real-time progress updates. Fully inherits all core functionality from `sessions_send` and adds concurrent processing capabilities.
+Concurrently send messages to multiple agent sessions with streaming responses and real-time progress updates. Behavior is **identical to `sessions_send`** for agent-to-agent communication (ping-pong and announce), with the added benefit of concurrent processing.
 
 ## Features
 
@@ -9,7 +9,7 @@ Concurrently send messages to multiple agent sessions with streaming responses a
 - **Real-time progress**: Provide real-time progress updates via `onUpdate` callback
 - **Flexible configuration**: Identify target sessions by sessionKey or label
 - **Independent timeouts**: Set independent timeout for each target
-- **Agent-to-Agent messaging**: Full support for A2A message context and permission control
+- **Agent-to-Agent messaging**: Full support for A2A message context, ping-pong, and announce (same as `sessions_send`)
 - **Error isolation**: Single target failure doesn't affect other targets
 - **Complete permission control**: Inherits all permission checking mechanisms from `sessions_send`
 - **Sandboxed mode**: Support for sandboxed mode, limiting access to sessions created by current agent
@@ -295,17 +295,166 @@ Determine accessible sessions based on `tools.sessions.visibility` config:
 4. **Streaming updates**: Real-time progress feedback improves user experience
 5. **Async mode**: Returns immediately when `timeoutSeconds: 0`, doesn't wait for response
 6. **Concurrent execution**: Uses `CommandLane.Nested` channel, all targets execute truly concurrently
+7. **A2A flow overhead**: Ping-pong and announce add ~2-5 seconds per target, but still 3-5x faster than serial `sessions_send`
+
+## Agent-to-Agent Communication
+
+### Behavior Consistency with sessions_send
+
+The `sessions_send_concurrent` tool follows the **exact same behavior** as `sessions_send` for agent-to-agent communication:
+
+- **Ping-pong**: Automatically enabled based on `session.agentToAgent.maxPingPongTurns` config
+- **Announce step**: Always executes after primary run (unless agent replies `ANNOUNCE_SKIP`)
+- **Fire-and-forget**: `timeoutSeconds: 0` triggers async A2A flow in background
+- **No additional parameters needed**: Uses the same configuration as `sessions_send`
+
+### Ping-Pong Configuration
+
+Ping-pong is controlled by the **same configuration** as `sessions_send`:
+
+```json
+{
+  "session": {
+    "agentToAgent": {
+      "maxPingPongTurns": 5
+    }
+  }
+}
+```
+
+**Default**: 5 rounds (if not configured)
+
+**No per-target override**: All targets use the same global config.
+
+### When Ping-Pong Runs
+
+Ping-pong runs **automatically** when ALL of these conditions are met:
+
+1. ✅ `session.agentToAgent.maxPingPongTurns > 0` (from config)
+2. ✅ `requesterSessionKey` exists (not `undefined`)
+3. ✅ `requesterSessionKey !== targetSessionKey` (not self-to-self)
+
+**Same as `sessions_send`**: These are the exact same conditions used by `sessions_send`.
+
+### When Announce Runs
+
+Announce step runs **automatically** after the primary run (and ping-pong, if enabled):
+
+1. ✅ Primary run completed successfully
+2. ✅ Reply content exists
+3. ✅ Valid announce target exists
+4. ✅ Agent did NOT reply `ANNOUNCE_SKIP`
+
+**Same as `sessions_send`**: These are the exact same conditions used by `sessions_send`.
+
+### Fire-and-Forget Mode
+
+When `timeoutSeconds: 0`:
+
+- Returns immediately with `status: "accepted"`
+- A2A flow (ping-pong + announce) runs **asynchronously in background**
+- Same behavior as `sessions_send`
+
+### Result Format with Delivery Info
+
+Each result includes a `delivery` field:
+
+```json
+{
+  "sessionKey": "agent:coder:main",
+  "displayKey": "agent:coder:main",
+  "status": "ok",
+  "reply": "Agent response",
+  "runId": "uuid",
+  "completedAt": 1234567890,
+  "delivery": {
+    "status": "pending",
+    "mode": "announce"
+  }
+}
+```
+
+### Example: Default Behavior
+
+```typescript
+// Config
+{
+  "session": {
+    "agentToAgent": {
+      "maxPingPongTurns": 3
+    }
+  }
+}
+
+// Call
+await sessions_send_concurrent({
+  targets: [
+    { sessionKey: "agent:coder:main", message: "Task 1" },
+    { sessionKey: "agent:reviewer:main", message: "Task 2" }
+  ],
+  timeoutSeconds: 60
+});
+
+// Execution:
+// ✅ Primary runs (concurrent)
+// ✅ Ping-pong (3 rounds, concurrent)
+// ✅ Announce steps (concurrent)
+```
+
+### Example: Fire-and-Forget
+
+```typescript
+await sessions_send_concurrent({
+  targets: [
+    { sessionKey: "agent:coder:main", message: "Task 1" },
+    { sessionKey: "agent:reviewer:main", message: "Task 2" },
+  ],
+  timeoutSeconds: 0,
+});
+
+// Returns immediately with status: "accepted"
+// A2A flows run asynchronously in background
+```
+
+### Example: Disable Ping-Pong
+
+```typescript
+// Config
+{
+  "session": {
+    "agentToAgent": {
+      "maxPingPongTurns": 0
+    }
+  }
+}
+
+// Call
+await sessions_send_concurrent({
+  targets: [
+    { sessionKey: "agent:coder:main", message: "Task 1" }
+  ],
+  timeoutSeconds: 60
+});
+
+// Execution:
+// ✅ Primary run
+// ❌ No ping-pong (disabled by config)
+// ✅ Announce step
+```
 
 ## Comparison with sessions_send
 
-| Feature              | sessions_send                  | sessions_send_concurrent            |
-| -------------------- | ------------------------------ | ----------------------------------- |
-| Target count         | 1                              | 1-20                                |
-| Response mode        | Wait for completion            | Streaming, return as each completes |
-| Independent timeout  | Not supported                  | Supported                           |
-| Progress feedback    | None                           | Real-time progress updates          |
-| Concurrent execution | Not supported                  | Supported (uses CommandLane.Nested) |
-| Use case             | Single interaction, multi-turn | Batch tasks, parallel processing    |
+| Feature              | sessions_send                           | sessions_send_concurrent            |
+| -------------------- | --------------------------------------- | ----------------------------------- |
+| Target count         | 1                                       | 1-20                                |
+| Response mode        | Wait for completion                     | Streaming, return as each completes |
+| Independent timeout  | Not supported                           | Supported                           |
+| Progress feedback    | None                                    | Real-time progress updates          |
+| Concurrent execution | Not supported                           | Supported (uses CommandLane.Nested) |
+| Ping-pong control    | `session.agentToAgent.maxPingPongTurns` | Same config                         |
+| Announce step        | Always runs (unless skipped)            | Always runs (unless skipped)        |
+| Fire-and-forget      | `timeoutSeconds: 0`                     | Same behavior                       |
+| Use case             | Single interaction, multi-turn          | Batch tasks, parallel processing    |
 
 ## Best Practices
 
@@ -410,9 +559,11 @@ for (const target of targets) {
 2. **Timeout settings**: Set reasonable timeout based on task complexity
 3. **Error handling**: Check status field of each target in results array to determine execution result
 4. **Resource usage**: Concurrent calls consume more resources, adjust target count based on system performance
-5. **No Ping-Pong rounds**: For multi-turn agent dialogue, use `sessions_send`
-6. **Sandboxed mode**: In Sandboxed mode, can only access sessions created by current agent
-7. **Concurrency configuration**: Ensure `agents.defaults.maxConcurrent` is configured high enough to support required concurrency
+5. **Ping-pong behavior**: Automatically enabled based on `session.agentToAgent.maxPingPongTurns` config (same as `sessions_send`)
+6. **Announce behavior**: Always runs after primary run unless agent replies `ANNOUNCE_SKIP` (same as `sessions_send`)
+7. **Sandboxed mode**: In Sandboxed mode, can only access sessions created by current agent
+8. **Concurrency configuration**: Ensure `agents.defaults.maxConcurrent` is configured high enough to support required concurrency
+9. **A2A flow**: Ping-pong and announce run asynchronously after tool returns, check `delivery` field for status
 
 ## Related Tools
 
