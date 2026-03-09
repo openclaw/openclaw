@@ -2,18 +2,15 @@ import "./test-helpers.js";
 import fs from "node:fs/promises";
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../../src/config/config.js";
-import { installWebAutoReplyUnitTestHooks, makeSessionStore } from "./auto-reply.test-harness.js";
+import {
+  installWebAutoReplyUnitTestHooks,
+  makeSessionStore,
+  setLoadConfigMock,
+} from "./auto-reply.test-harness.js";
 import { buildMentionConfig } from "./auto-reply/mentions.js";
 import { createEchoTracker } from "./auto-reply/monitor/echo.js";
 import { awaitBackgroundTasks } from "./auto-reply/monitor/last-route.js";
 import { createWebOnMessageHandler } from "./auto-reply/monitor/on-message.js";
-
-let mockCfg: OpenClawConfig;
-
-vi.mock("../config/config.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../config/config.js")>();
-  return { ...actual, loadConfig: () => mockCfg };
-});
 
 function makeCfg(storePath: string): OpenClawConfig {
   return {
@@ -56,7 +53,7 @@ function createHandlerForTest(opts: { cfg: OpenClawConfig; replyResolver: unknow
 function createLastRouteHarness(storePath: string) {
   const replyResolver = vi.fn().mockResolvedValue(undefined);
   const cfg = makeCfg(storePath);
-  mockCfg = cfg;
+  setLoadConfigMock(cfg);
   return createHandlerForTest({ cfg, replyResolver });
 }
 
@@ -103,57 +100,73 @@ async function readStoredRoutes(storePath: string) {
 describe("web auto-reply dynamic config", () => {
   installWebAutoReplyUnitTestHooks();
 
-  it("uses fresh config per message so runtime changes take effect", async () => {
+  it("picks up runtime config changes for group gating (requireMention toggle)", async () => {
     const now = Date.now();
+    const groupId = "testgroup@g.us";
+    const groupSessionKey = `agent:main:whatsapp:group:${groupId}`;
     const store = await makeSessionStore({
-      "agent:main:main": { sessionId: "sid", updatedAt: now - 1 },
+      [groupSessionKey]: { sessionId: "sid", updatedAt: now - 1 },
     });
     const replyResolver = vi.fn().mockResolvedValue(undefined);
 
-    // Config A: allowFrom includes +1000
+    // Config A: group listed with requireMention: false — message passes without mention.
     const cfgA: OpenClawConfig = {
-      channels: { whatsapp: { allowFrom: ["+1000"] } },
+      channels: {
+        whatsapp: {
+          allowFrom: ["*"],
+          groups: { [groupId]: { requireMention: false } },
+        },
+      },
       session: { store: store.storePath },
     };
-    mockCfg = cfgA;
+    setLoadConfigMock(cfgA);
     const { handler } = createHandlerForTest({ cfg: cfgA, replyResolver });
 
     await handler(
       buildInboundMessage({
-        id: "m1",
-        from: "+1000",
-        conversationId: "+1000",
-        chatType: "direct",
-        chatId: "direct:+1000",
+        id: "g1",
+        from: groupId,
+        conversationId: groupId,
+        chatType: "group",
+        chatId: groupId,
         timestamp: now,
+        senderE164: "+1000",
+        senderName: "Alice",
+        selfE164: "+2000",
       }),
     );
     expect(replyResolver).toHaveBeenCalledTimes(1);
 
-    // Config B: change allowFrom to a different number at runtime.
+    // Config B: toggle requireMention to true at runtime.
     // Because loadConfig() is called per-message (not captured at handler
-    // creation), the handler sees the updated config.
+    // creation), the handler sees the updated config and blocks the message.
     const cfgB: OpenClawConfig = {
-      channels: { whatsapp: { allowFrom: ["+9999"] } },
+      channels: {
+        whatsapp: {
+          allowFrom: ["*"],
+          groups: { [groupId]: { requireMention: true } },
+        },
+      },
       session: { store: store.storePath },
     };
-    mockCfg = cfgB;
+    setLoadConfigMock(cfgB);
 
     replyResolver.mockClear();
     await handler(
       buildInboundMessage({
-        id: "m2",
-        from: "+1000",
-        conversationId: "+1000",
-        chatType: "direct",
-        chatId: "direct:+1000",
+        id: "g2",
+        from: groupId,
+        conversationId: groupId,
+        chatType: "group",
+        chatId: groupId,
         timestamp: now + 1,
+        senderE164: "+1000",
+        senderName: "Alice",
+        selfE164: "+2000",
       }),
     );
-    // Message is still processed (DMs don't gate on allowFrom), but the
-    // handler used cfgB, not the stale cfgA. Verify by checking that
-    // replyResolver was still invoked (handler didn't crash with new config).
-    expect(replyResolver).toHaveBeenCalledTimes(1);
+    // Group message without mention is now blocked by the updated config.
+    expect(replyResolver).not.toHaveBeenCalled();
 
     await store.cleanup();
   });
