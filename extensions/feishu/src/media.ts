@@ -264,12 +264,10 @@ export async function uploadFileFeishu(params: {
   // See: https://github.com/larksuite/node-sdk/issues/121
   const fileData = typeof file === "string" ? fs.createReadStream(file) : file;
 
-  const safeFileName = sanitizeFileNameForUpload(fileName);
-
   const response = await client.im.file.create({
     data: {
       file_type: fileType,
-      file_name: safeFileName,
+      file_name: fileName,
       // eslint-disable-next-line @typescript-eslint/no-explicit-any -- SDK accepts Buffer or ReadStream
       file: fileData as any,
       ...(duration !== undefined && { duration }),

@@ -11,6 +11,7 @@ Docs: https://docs.openclaw.ai
 ### Fixes
 
 - macOS/LaunchAgent install: tighten LaunchAgent directory and plist permissions during install so launchd bootstrap does not fail when the target home path or generated plist inherited group/world-writable modes.
+- Feishu/file upload: pass the original filename directly to the Feishu API instead of URL-encoding it, so Chinese and other non-ASCII filenames are displayed correctly in Feishu instead of as percent-encoded strings. Fixes #40770.
 
 ## 2026.3.8
 

@@ -381,7 +381,7 @@ describe("sendMediaFeishu msg_type routing", () => {
     expect(messageResourceGetMock).not.toHaveBeenCalled();
   });
 
-  it("encodes Chinese filenames for file uploads", async () => {
+  it("passes Chinese filenames as-is to file uploads (#40770)", async () => {
     await sendMediaFeishu({
       cfg: {} as any,
       to: "user:ou_target",
@@ -390,8 +390,7 @@ describe("sendMediaFeishu msg_type routing", () => {
     });
 
     const createCall = fileCreateMock.mock.calls[0][0];
-    expect(createCall.data.file_name).not.toBe("测试文档.pdf");
-    expect(createCall.data.file_name).toBe(encodeURIComponent("测试文档") + ".pdf");
+    expect(createCall.data.file_name).toBe("测试文档.pdf");
   });
 
   it("preserves ASCII filenames unchanged for file uploads", async () => {
@@ -406,7 +405,7 @@ describe("sendMediaFeishu msg_type routing", () => {
     expect(createCall.data.file_name).toBe("report-2026.pdf");
   });
 
-  it("encodes special characters (em-dash, full-width brackets) in filenames", async () => {
+  it("passes filenames with special characters as-is to file uploads (#40770)", async () => {
     await sendMediaFeishu({
       cfg: {} as any,
       to: "user:ou_target",
@@ -415,9 +414,7 @@ describe("sendMediaFeishu msg_type routing", () => {
     });
 
     const createCall = fileCreateMock.mock.calls[0][0];
-    expect(createCall.data.file_name).toMatch(/\.md$/);
-    expect(createCall.data.file_name).not.toContain("—");
-    expect(createCall.data.file_name).not.toContain("（");
+    expect(createCall.data.file_name).toBe("报告—详情（2026）.md");
   });
 });
 
