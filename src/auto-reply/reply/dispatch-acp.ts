@@ -1,6 +1,10 @@
 import fs from "node:fs/promises";
 import { getAcpSessionManager } from "../../acp/control-plane/manager.js";
 import type { AcpTurnAttachment } from "../../acp/control-plane/manager.types.js";
+import {
+  normalizeAttachmentPath,
+  normalizeAttachments,
+} from "../../media-understanding/attachments.normalize.js";
 import { resolveAcpAgentPolicyError, resolveAcpDispatchPolicyError } from "../../acp/policy.js";
 import { formatAcpRuntimeErrorText } from "../../acp/runtime/error-text.js";
 import { toAcpRuntimeError } from "../../acp/runtime/errors.js";
@@ -60,21 +64,16 @@ function resolveAcpPromptText(ctx: FinalizedMsgContext): string {
 }
 
 async function resolveAcpAttachments(ctx: FinalizedMsgContext): Promise<AcpTurnAttachment[]> {
-  const paths = ctx.MediaPaths;
-  const types = ctx.MediaTypes;
-  if (!Array.isArray(paths) || paths.length === 0) {
-    return [];
-  }
+  const mediaAttachments = normalizeAttachments(ctx);
   const results: AcpTurnAttachment[] = [];
-  for (let i = 0; i < paths.length; i++) {
-    const filePath = paths[i];
-    const mediaType = Array.isArray(types) ? (types[i] ?? "application/octet-stream") : "application/octet-stream";
-    if (typeof filePath !== "string" || !filePath.trim()) {
+  for (const attachment of mediaAttachments) {
+    const filePath = normalizeAttachmentPath(attachment.path);
+    if (!filePath) {
       continue;
     }
     try {
       const buf = await fs.readFile(filePath);
-      results.push({ mediaType, data: buf.toString("base64") });
+      results.push({ mediaType: attachment.mime ?? "application/octet-stream", data: buf.toString("base64") });
     } catch {
       // Skip unreadable files — do not block the text turn.
     }
