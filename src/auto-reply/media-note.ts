@@ -4,6 +4,9 @@ function formatMediaAttachedLine(params: {
   path: string;
   url?: string;
   type?: string;
+  caption?: string;
+  width?: number;
+  height?: number;
   index?: number;
   total?: number;
 }): string {
@@ -11,7 +14,26 @@ function formatMediaAttachedLine(params: {
     typeof params.index === "number" && typeof params.total === "number"
       ? `[media attached ${params.index}/${params.total}: `
       : "[media attached: ";
-  const typePart = params.type?.trim() ? ` (${params.type.trim()})` : "";
+  const details: string[] = [];
+  const type = params.type?.trim();
+  if (type) {
+    details.push(type);
+  }
+  if (
+    typeof params.width === "number" &&
+    Number.isFinite(params.width) &&
+    params.width > 0 &&
+    typeof params.height === "number" &&
+    Number.isFinite(params.height) &&
+    params.height > 0
+  ) {
+    details.push(`${Math.round(params.width)}x${Math.round(params.height)}`);
+  }
+  const caption = params.caption?.trim();
+  if (caption) {
+    details.push(JSON.stringify(caption));
+  }
+  const typePart = details.length > 0 ? ` (${details.join(", ")})` : "";
   const urlRaw = params.url?.trim();
   const urlPart = urlRaw ? ` | ${urlRaw}` : "";
   return `${prefix}${params.path}${typePart}${urlPart}]`;
@@ -92,6 +114,14 @@ export function buildInboundMediaNote(ctx: MsgContext): string | undefined {
     Array.isArray(ctx.MediaTypes) && ctx.MediaTypes.length === paths.length
       ? ctx.MediaTypes
       : undefined;
+  const captions =
+    Array.isArray(ctx.MediaCaptions) && ctx.MediaCaptions.length === paths.length
+      ? ctx.MediaCaptions
+      : undefined;
+  const dimensions =
+    Array.isArray(ctx.MediaDimensions) && ctx.MediaDimensions.length === paths.length
+      ? ctx.MediaDimensions
+      : undefined;
   const hasTranscript = Boolean(ctx.Transcript?.trim());
   // Transcript alone does not identify an attachment index; only use it as a fallback
   // when there is a single attachment to avoid stripping unrelated audio files.
@@ -101,7 +131,10 @@ export function buildInboundMediaNote(ctx: MsgContext): string | undefined {
     .map((entry, index) => ({
       path: entry ?? "",
       type: types?.[index] ?? ctx.MediaType,
+      caption: captions?.[index] ?? (index === 0 ? ctx.MediaCaption : undefined),
       url: urls?.[index] ?? ctx.MediaUrl,
+      width: dimensions?.[index]?.width ?? (index === 0 ? ctx.MediaDimension?.width : undefined),
+      height: dimensions?.[index]?.height ?? (index === 0 ? ctx.MediaDimension?.height : undefined),
       index,
     }))
     .filter((entry) => {
@@ -133,7 +166,10 @@ export function buildInboundMediaNote(ctx: MsgContext): string | undefined {
     return formatMediaAttachedLine({
       path: entries[0]?.path ?? "",
       type: entries[0]?.type,
+      caption: entries[0]?.caption,
       url: entries[0]?.url,
+      width: entries[0]?.width,
+      height: entries[0]?.height,
     });
   }
 
@@ -146,7 +182,10 @@ export function buildInboundMediaNote(ctx: MsgContext): string | undefined {
         index: idx + 1,
         total: count,
         type: entry.type,
+        caption: entry.caption,
         url: entry.url,
+        width: entry.width,
+        height: entry.height,
       }),
     );
   }
