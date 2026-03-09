@@ -1,6 +1,5 @@
 import * as dns from "node:dns";
-import * as net from "node:net";
-import { EnvHttpProxyAgent, getGlobalDispatcher, setGlobalDispatcher } from "undici";
+import { Agent, EnvHttpProxyAgent, fetch as undiciFetch } from "undici";
 import type { TelegramNetworkConfig } from "../config/types.telegram.js";
 import { resolveFetch } from "../infra/fetch.js";
 import { hasProxyEnvConfigured } from "../infra/net/proxy-env.js";
@@ -10,14 +9,30 @@ import {
   resolveTelegramDnsResultOrderDecision,
 } from "./network-config.js";
 
-let appliedAutoSelectFamily: boolean | null = null;
-let appliedDnsResultOrder: string | null = null;
-let appliedGlobalDispatcherAutoSelectFamily: boolean | null = null;
 const log = createSubsystemLogger("telegram/network");
-function isProxyLikeDispatcher(dispatcher: unknown): boolean {
-  const ctorName = (dispatcher as { constructor?: { name?: string } })?.constructor?.name;
-  return typeof ctorName === "string" && ctorName.includes("ProxyAgent");
-}
+
+const TELEGRAM_AUTO_SELECT_FAMILY_ATTEMPT_TIMEOUT_MS = 300;
+
+type RequestInitWithDispatcher = RequestInit & {
+  dispatcher?: unknown;
+};
+
+type TelegramDnsResultOrder = "ipv4first" | "verbatim";
+
+type LookupCallback =
+  | ((err: NodeJS.ErrnoException | null, address: string, family: number) => void)
+  | ((err: NodeJS.ErrnoException | null, addresses: dns.LookupAddress[]) => void);
+
+type LookupOptions = (dns.LookupOneOptions | dns.LookupAllOptions) & {
+  order?: TelegramDnsResultOrder;
+  verbatim?: boolean;
+};
+
+type LookupFunction = (
+  hostname: string,
+  options: number | dns.LookupOneOptions | dns.LookupAllOptions | undefined,
+  callback: LookupCallback,
+) => void;
 
 const FALLBACK_RETRY_ERROR_CODES = [
   "ETIMEDOUT",
@@ -48,72 +63,133 @@ const IPV4_FALLBACK_RULES: readonly Ipv4FallbackRule[] = [
   },
 ];
 
-// Node 22 workaround: enable autoSelectFamily to allow IPv4 fallback on broken IPv6 networks.
-// Many networks have IPv6 configured but not routed, causing "Network is unreachable" errors.
-// See: https://github.com/nodejs/node/issues/54359
-function applyTelegramNetworkWorkarounds(network?: TelegramNetworkConfig): void {
-  // Apply autoSelectFamily workaround
-  const autoSelectDecision = resolveTelegramAutoSelectFamilyDecision({ network });
-  if (autoSelectDecision.value !== null && autoSelectDecision.value !== appliedAutoSelectFamily) {
-    if (typeof net.setDefaultAutoSelectFamily === "function") {
-      try {
-        net.setDefaultAutoSelectFamily(autoSelectDecision.value);
-        appliedAutoSelectFamily = autoSelectDecision.value;
-        const label = autoSelectDecision.source ? ` (${autoSelectDecision.source})` : "";
-        log.info(`autoSelectFamily=${autoSelectDecision.value}${label}`);
-      } catch {
-        // ignore if unsupported by the runtime
-      }
-    }
+function normalizeDnsResultOrder(value: string | null): TelegramDnsResultOrder | null {
+  if (value === "ipv4first" || value === "verbatim") {
+    return value;
+  }
+  return null;
+}
+
+function createDnsResultOrderLookup(
+  order: TelegramDnsResultOrder | null,
+): LookupFunction | undefined {
+  if (!order) {
+    return undefined;
+  }
+  const lookup = dns.lookup as unknown as (
+    hostname: string,
+    options: LookupOptions,
+    callback: LookupCallback,
+  ) => void;
+  return (hostname, options, callback) => {
+    const baseOptions: LookupOptions =
+      typeof options === "number"
+        ? { family: options }
+        : options
+          ? { ...(options as LookupOptions) }
+          : {};
+    const lookupOptions: LookupOptions = {
+      ...baseOptions,
+      order,
+      // Keep `verbatim` for compatibility with Node runtimes that ignore `order`.
+      verbatim: order === "verbatim",
+    };
+    lookup(hostname, lookupOptions, callback);
+  };
+}
+
+function buildTelegramConnectOptions(params: {
+  autoSelectFamily: boolean | null;
+  dnsResultOrder: TelegramDnsResultOrder | null;
+  forceIpv4: boolean;
+}): {
+  autoSelectFamily?: boolean;
+  autoSelectFamilyAttemptTimeout?: number;
+  family?: number;
+  lookup?: LookupFunction;
+} | null {
+  const connect: {
+    autoSelectFamily?: boolean;
+    autoSelectFamilyAttemptTimeout?: number;
+    family?: number;
+    lookup?: LookupFunction;
+  } = {};
+
+  if (params.forceIpv4) {
+    connect.family = 4;
+    connect.autoSelectFamily = false;
+  } else if (typeof params.autoSelectFamily === "boolean") {
+    connect.autoSelectFamily = params.autoSelectFamily;
+    connect.autoSelectFamilyAttemptTimeout = TELEGRAM_AUTO_SELECT_FAMILY_ATTEMPT_TIMEOUT_MS;
   }
 
-  // Node 22's built-in globalThis.fetch uses undici's internal Agent whose
-  // connect options are frozen at construction time. Calling
-  // net.setDefaultAutoSelectFamily() after that agent is created has no
-  // effect on it. Replace the global dispatcher with one that carries the
-  // current autoSelectFamily setting so subsequent globalThis.fetch calls
-  // inherit the same decision.
-  // See: https://github.com/openclaw/openclaw/issues/25676
-  if (
-    autoSelectDecision.value !== null &&
-    autoSelectDecision.value !== appliedGlobalDispatcherAutoSelectFamily
-  ) {
-    const existingGlobalDispatcher = getGlobalDispatcher();
-    const shouldPreserveExistingProxy =
-      isProxyLikeDispatcher(existingGlobalDispatcher) && !hasProxyEnvConfigured();
-    if (!shouldPreserveExistingProxy) {
-      try {
-        setGlobalDispatcher(
-          new EnvHttpProxyAgent({
-            connect: {
-              autoSelectFamily: autoSelectDecision.value,
-              autoSelectFamilyAttemptTimeout: 300,
-            },
-          }),
-        );
-        appliedGlobalDispatcherAutoSelectFamily = autoSelectDecision.value;
-        log.info(`global undici dispatcher autoSelectFamily=${autoSelectDecision.value}`);
-      } catch {
-        // ignore if setGlobalDispatcher is unavailable
-      }
-    }
+  const lookup = createDnsResultOrderLookup(params.dnsResultOrder);
+  if (lookup) {
+    connect.lookup = lookup;
   }
 
-  // Apply DNS result order workaround for IPv4/IPv6 issues.
-  // Some APIs (including Telegram) may fail with IPv6 on certain networks.
-  // See: https://github.com/openclaw/openclaw/issues/5311
-  const dnsDecision = resolveTelegramDnsResultOrderDecision({ network });
-  if (dnsDecision.value !== null && dnsDecision.value !== appliedDnsResultOrder) {
-    if (typeof dns.setDefaultResultOrder === "function") {
-      try {
-        dns.setDefaultResultOrder(dnsDecision.value as "ipv4first" | "verbatim");
-        appliedDnsResultOrder = dnsDecision.value;
-        const label = dnsDecision.source ? ` (${dnsDecision.source})` : "";
-        log.info(`dnsResultOrder=${dnsDecision.value}${label}`);
-      } catch {
-        // ignore if unsupported by the runtime
-      }
+  return Object.keys(connect).length > 0 ? connect : null;
+}
+
+function createTelegramDispatcher(params: {
+  autoSelectFamily: boolean | null;
+  dnsResultOrder: TelegramDnsResultOrder | null;
+  useEnvProxy: boolean;
+  forceIpv4: boolean;
+}): Agent | EnvHttpProxyAgent {
+  const connect = buildTelegramConnectOptions({
+    autoSelectFamily: params.autoSelectFamily,
+    dnsResultOrder: params.dnsResultOrder,
+    forceIpv4: params.forceIpv4,
+  });
+  if (params.useEnvProxy) {
+    const proxyOptions = connect
+      ? ({
+          connect,
+        } satisfies ConstructorParameters<typeof EnvHttpProxyAgent>[0])
+      : undefined;
+    try {
+      return new EnvHttpProxyAgent(proxyOptions);
+    } catch (err) {
+      log.warn(
+        `env proxy dispatcher init failed; falling back to direct dispatcher: ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+      );
     }
+  }
+  const agentOptions = connect
+    ? ({
+        connect,
+      } satisfies ConstructorParameters<typeof Agent>[0])
+    : undefined;
+  return new Agent(agentOptions);
+}
+
+function withDispatcherIfMissing(
+  init: RequestInit | undefined,
+  dispatcher: Agent | EnvHttpProxyAgent,
+): RequestInitWithDispatcher {
+  const withDispatcher = init as RequestInitWithDispatcher | undefined;
+  if (withDispatcher?.dispatcher) {
+    return init ?? {};
+  }
+  return init ? { ...init, dispatcher } : { dispatcher };
+}
+
+function logResolverNetworkDecisions(params: {
+  autoSelectDecision: ReturnType<typeof resolveTelegramAutoSelectFamilyDecision>;
+  dnsDecision: ReturnType<typeof resolveTelegramDnsResultOrderDecision>;
+}): void {
+  if (params.autoSelectDecision.value !== null) {
+    const sourceLabel = params.autoSelectDecision.source
+      ? ` (${params.autoSelectDecision.source})`
+      : "";
+    log.info(`autoSelectFamily=${params.autoSelectDecision.value}${sourceLabel}`);
+  }
+  if (params.dnsDecision.value !== null) {
+    const sourceLabel = params.dnsDecision.source ? ` (${params.dnsDecision.source})` : "";
+    log.info(`dnsResultOrder=${params.dnsDecision.value}${sourceLabel}`);
   }
 }
 
@@ -151,6 +227,11 @@ function collectErrorCodes(err: unknown): Set<string> {
   return codes;
 }
 
+function formatErrorCodes(err: unknown): string {
+  const codes = [...collectErrorCodes(err)];
+  return codes.length > 0 ? codes.join(",") : "none";
+}
+
 function shouldRetryWithIpv4Fallback(err: unknown): boolean {
   const ctx: Ipv4FallbackContext = {
     message:
@@ -165,36 +246,72 @@ function shouldRetryWithIpv4Fallback(err: unknown): boolean {
   return true;
 }
 
-function applyTelegramIpv4Fallback(): void {
-  applyTelegramNetworkWorkarounds({
-    autoSelectFamily: false,
-    dnsResultOrder: "ipv4first",
-  });
-  log.warn("fetch fallback: forcing autoSelectFamily=false + dnsResultOrder=ipv4first");
-}
-
 // Prefer wrapped fetch when available to normalize AbortSignal across runtimes.
 export function resolveTelegramFetch(
   proxyFetch?: typeof fetch,
   options?: { network?: TelegramNetworkConfig },
 ): typeof fetch | undefined {
-  applyTelegramNetworkWorkarounds(options?.network);
-  const sourceFetch = proxyFetch ? resolveFetch(proxyFetch) : resolveFetch();
+  const autoSelectDecision = resolveTelegramAutoSelectFamilyDecision({
+    network: options?.network,
+  });
+  const dnsDecision = resolveTelegramDnsResultOrderDecision({
+    network: options?.network,
+  });
+  logResolverNetworkDecisions({
+    autoSelectDecision,
+    dnsDecision,
+  });
+
+  const sourceFetch = proxyFetch
+    ? resolveFetch(proxyFetch)
+    : resolveFetch(undiciFetch as unknown as typeof fetch);
   if (!sourceFetch) {
     throw new Error("fetch is not available; set channels.telegram.proxy in config");
   }
-  // When Telegram media fetch hits dual-stack edge cases (ENETUNREACH/ETIMEDOUT),
-  // switch to IPv4-safe network mode and retry once.
+
   if (proxyFetch) {
     return sourceFetch;
   }
+
+  const dnsResultOrder = normalizeDnsResultOrder(dnsDecision.value);
+  const useEnvProxy = hasProxyEnvConfigured();
+  const defaultDispatcher = createTelegramDispatcher({
+    autoSelectFamily: autoSelectDecision.value,
+    dnsResultOrder,
+    useEnvProxy,
+    forceIpv4: false,
+  });
+
+  let stickyIpv4FallbackEnabled = false;
+  let stickyIpv4Dispatcher: Agent | EnvHttpProxyAgent | null = null;
+  const resolveStickyIpv4Dispatcher = () => {
+    if (!stickyIpv4Dispatcher) {
+      stickyIpv4Dispatcher = createTelegramDispatcher({
+        autoSelectFamily: false,
+        dnsResultOrder: "ipv4first",
+        useEnvProxy,
+        forceIpv4: true,
+      });
+    }
+    return stickyIpv4Dispatcher;
+  };
+
   return (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const initialInit = withDispatcherIfMissing(
+      init,
+      stickyIpv4FallbackEnabled ? resolveStickyIpv4Dispatcher() : defaultDispatcher,
+    );
     try {
-      return await sourceFetch(input, init);
+      return await sourceFetch(input, initialInit);
     } catch (err) {
       if (shouldRetryWithIpv4Fallback(err)) {
-        applyTelegramIpv4Fallback();
-        return sourceFetch(input, init);
+        if (!stickyIpv4FallbackEnabled) {
+          stickyIpv4FallbackEnabled = true;
+          log.warn(
+            `fetch fallback: enabling sticky IPv4-only dispatcher (codes=${formatErrorCodes(err)})`,
+          );
+        }
+        return sourceFetch(input, withDispatcherIfMissing(init, resolveStickyIpv4Dispatcher()));
       }
       throw err;
     }
@@ -202,7 +319,6 @@ export function resolveTelegramFetch(
 }
 
 export function resetTelegramFetchStateForTests(): void {
-  appliedAutoSelectFamily = null;
-  appliedDnsResultOrder = null;
-  appliedGlobalDispatcherAutoSelectFamily = null;
+  // Resolver-scoped dispatcher state is created inside resolveTelegramFetch().
+  // This hook remains for tests that already call it.
 }
