@@ -1845,6 +1845,16 @@ async function runWebSearch(params: {
   return payload;
 }
 
+function sanitizeUrl(url: string): string | undefined {
+  try {
+    const parsed = new URL(url);
+    if (parsed.protocol === "http:" || parsed.protocol === "https:") {
+      return parsed.href;
+    }
+  } catch {}
+  return undefined;
+}
+
 function createPluginSearchTool(
   pluginProvider: SearchProviderPlugin,
   search: WebSearchConfig | undefined,
@@ -1903,20 +1913,28 @@ function createPluginSearchTool(
             wrapped: true,
           },
           ...(result.results && {
-            results: result.results.map((r) => ({
-              title: wrapWebContent(r.title),
-              url: r.url,
-              description: r.description ? wrapWebContent(r.description) : undefined,
-              published: r.published,
-            })),
+            results: result.results
+              .filter((r) => sanitizeUrl(r.url))
+              .map((r) => ({
+                title: wrapWebContent(r.title),
+                url: sanitizeUrl(r.url)!,
+                description: r.description ? wrapWebContent(r.description) : undefined,
+                published: r.published,
+              })),
           }),
           ...(result.content && { content: wrapWebContent(result.content) }),
           ...(result.citations && {
-            citations: result.citations.map((c) =>
-              typeof c === "string"
-                ? c
-                : { ...c, title: c.title ? wrapWebContent(c.title) : undefined },
-            ),
+            citations: result.citations
+              .map((c) => {
+                if (typeof c === "string") {
+                  return sanitizeUrl(c);
+                }
+                const url = sanitizeUrl(c.url);
+                return url
+                  ? { ...c, url, title: c.title ? wrapWebContent(c.title) : undefined }
+                  : undefined;
+              })
+              .filter(Boolean),
           }),
         };
         writeCache(SEARCH_CACHE, cacheKey, payload, cacheTtlMs);

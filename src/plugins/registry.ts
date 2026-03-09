@@ -467,7 +467,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
   };
 
   const registerSearchProvider = (record: PluginRecord, provider: SearchProviderPlugin) => {
-    const id = typeof provider?.id === "string" ? provider.id.trim() : "";
+    const id = typeof provider?.id === "string" ? provider.id.trim().toLowerCase() : "";
     if (!id) {
       pushDiagnostic({
         level: "error",
@@ -490,7 +490,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
     record.searchProviderIds.push(id);
     registry.searchProviders.push({
       pluginId: record.id,
-      provider,
+      provider: { ...provider, id },
       source: record.source,
     });
   };
