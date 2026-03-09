@@ -802,6 +802,20 @@ export const OpenClawSchema = z
               .optional(),
             allowCommands: z.array(z.string()).optional(),
             denyCommands: z.array(z.string()).optional(),
+            overrides: z
+              .record(
+                z.string().regex(/^[A-Za-z0-9._:-]+$/, {
+                  message:
+                    "gateway.nodes.overrides keys must be nodeId or nodeId prefix tokens (letters, numbers, ., _, :, -)",
+                }),
+                z
+                  .object({
+                    allowCommands: z.array(z.string()).optional(),
+                    denyCommands: z.array(z.string()).optional(),
+                  })
+                  .strict(),
+              )
+              .optional(),
           })
           .strict()
           .optional(),
