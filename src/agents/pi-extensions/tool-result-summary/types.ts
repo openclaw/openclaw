@@ -204,4 +204,6 @@ export type ToolResultSummaryRuntimeValue = ToolResultSummaryRuntime & {
   resolvedDbPath?: string;
   /** OpenClaw config for embedding provider creation */
   openClawConfig?: unknown;
+  /** Agent ID for resolving memory search config */
+  agentId?: string;
 };

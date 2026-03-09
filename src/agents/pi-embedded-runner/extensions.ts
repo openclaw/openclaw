@@ -64,6 +64,7 @@ function buildContextPruningFactory(params: {
 function buildToolResultSummaryFactory(params: {
   cfg: OpenClawConfig | undefined;
   sessionManager: SessionManager;
+  agentId: string;
 }): ExtensionFactory | undefined {
   // Get config from agent defaults
   const raw = params.cfg?.agents?.defaults?.toolResultSummary as unknown;
@@ -84,6 +85,7 @@ function buildToolResultSummaryFactory(params: {
     compactionOccurred: false,
     config,
     openClawConfig: params.cfg,
+    agentId: params.agentId,
   };
   setToolResultSummaryRuntime(params.sessionManager, runtimeValue);
 
@@ -100,6 +102,7 @@ export function buildEmbeddedExtensionFactories(params: {
   provider: string;
   modelId: string;
   model: Model<Api> | undefined;
+  agentId: string;
 }): ExtensionFactory[] {
   const factories: ExtensionFactory[] = [];
   if (resolveCompactionMode(params.cfg) === "safeguard") {

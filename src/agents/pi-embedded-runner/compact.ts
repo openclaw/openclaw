@@ -552,6 +552,7 @@ export async function compactEmbeddedPiSessionDirect(
         provider,
         modelId,
         model,
+        agentId: sessionAgentId,
       });
       // Only create an explicit resource loader when there are extension factories
       // to register; otherwise let createAgentSession use its built-in default.

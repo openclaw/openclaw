@@ -19,7 +19,7 @@ export type MemoryConfig = {
 export const MEMORY_CATEGORIES = ["preference", "fact", "decision", "entity", "other"] as const;
 export type MemoryCategory = (typeof MEMORY_CATEGORIES)[number];
 
-const DEFAULT_MODEL = "text-embedding-3-small";
+const DEFAULT_MODEL = "Qwen3-Embedding-4B";
 export const DEFAULT_CAPTURE_MAX_CHARS = 500;
 const LEGACY_STATE_DIRS: string[] = [];
 
@@ -51,8 +51,18 @@ function resolveDefaultDbPath(): string {
 const DEFAULT_DB_PATH = resolveDefaultDbPath();
 
 const EMBEDDING_DIMENSIONS: Record<string, number> = {
+  // OpenAI
   "text-embedding-3-small": 1536,
   "text-embedding-3-large": 3072,
+  "text-embedding-ada-002": 1536,
+  // Qwen
+  "Qwen3-Embedding-4B": 2560,
+  "Qwen3-Embedding-8B": 4096,
+  "qwen-embedding": 1024,
+  // Other common models
+  "nomic-embed-text": 768,
+  "all-MiniLM-L6-v2": 384,
+  "all-mpnet-base-v2": 768,
 };
 
 function assertAllowedKeys(value: Record<string, unknown>, allowed: string[], label: string) {
@@ -66,7 +76,9 @@ function assertAllowedKeys(value: Record<string, unknown>, allowed: string[], la
 export function vectorDimsForModel(model: string): number {
   const dims = EMBEDDING_DIMENSIONS[model];
   if (!dims) {
-    throw new Error(`Unsupported embedding model: ${model}`);
+    throw new Error(
+      `Unknown embedding model "${model}". Set 'embedding.dimensions' explicitly for custom models. Known models: ${Object.keys(EMBEDDING_DIMENSIONS).join(", ")}`,
+    );
   }
   return dims;
 }

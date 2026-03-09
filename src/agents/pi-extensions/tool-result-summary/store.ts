@@ -68,6 +68,11 @@ export class ToolResultSummaryStore {
 
   private async doInitialize(): Promise<void> {
     const lancedb = await this.loadLanceDB();
+    if (!lancedb) {
+      throw new Error(
+        "LanceDB not available. Install @lancedb/lancedb to use tool result summary.",
+      );
+    }
     this.db = await lancedb.connect(this.resolvedDbPath);
 
     const tables = await this.db.tableNames();
@@ -95,16 +100,16 @@ export class ToolResultSummaryStore {
     this.entryCount = await this.table.countRows();
   }
 
-  private async loadLanceDB(): Promise<{ connect: (path: string) => Promise<LanceDBConnection> }> {
+  private async loadLanceDB(): Promise<{
+    connect: (path: string) => Promise<LanceDBConnection>;
+  } | null> {
     try {
       // Dynamic import - cast to expected type since lancedb is optional
       const module = await import("@lancedb/lancedb");
       return module as { connect: (path: string) => Promise<LanceDBConnection> };
-    } catch (err) {
-      throw new Error(
-        `Failed to load LanceDB. Ensure @lancedb/lancedb is installed. Error: ${String(err)}`,
-        { cause: err },
-      );
+    } catch {
+      // LanceDB is an optional dependency - return null if not installed
+      return null;
     }
   }
 

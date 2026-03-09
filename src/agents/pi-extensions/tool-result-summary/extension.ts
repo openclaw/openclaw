@@ -20,6 +20,8 @@ import type {
 import type { OpenClawConfig } from "../../../config/config.js";
 import type { EmbeddingProvider } from "../../../memory/embeddings.js";
 import { createEmbeddingProvider } from "../../../memory/embeddings.js";
+import { resolveAgentDir } from "../../agent-scope.js";
+import { resolveMemorySearchConfig } from "../../memory-search.js";
 import { createRetriever, buildSearchQuery, formatResultsForContext } from "./retriever.js";
 import { getToolResultSummaryRuntime, updateToolResultSummaryRuntime } from "./runtime.js";
 import { cacheStore } from "./store-cache.js";
@@ -59,13 +61,23 @@ async function ensureServices(runtime: ToolResultSummaryRuntimeValue): Promise<{
   try {
     const config = runtime.config;
 
-    // Create embeddings provider using memory system
+    // Create embeddings provider using memory system config
     const openClawConfig = runtime.openClawConfig as OpenClawConfig | undefined;
+    const agentId = runtime.agentId;
+
+    // Resolve embedding settings from memory search config
+    const memorySettings = agentId
+      ? resolveMemorySearchConfig(openClawConfig ?? {}, agentId)
+      : null;
+
     const embeddingResult = await createEmbeddingProvider({
       config: openClawConfig ?? {},
-      provider: "auto",
-      model: "text-embedding-3-small",
-      fallback: "none",
+      agentDir: agentId ? resolveAgentDir(openClawConfig ?? {}, agentId) : undefined,
+      provider: memorySettings?.provider ?? "auto",
+      remote: memorySettings?.remote,
+      model: memorySettings?.model ?? "text-embedding-3-small",
+      fallback: memorySettings?.fallback ?? "none",
+      local: memorySettings?.local,
     });
     const embeddings = embeddingResult.provider;
 
@@ -97,7 +109,13 @@ async function ensureServices(runtime: ToolResultSummaryRuntimeValue): Promise<{
 
     return result;
   } catch (err) {
-    console.error(`tool-result-summary: service initialization failed: ${String(err)}`);
+    // Check if this is a missing LanceDB error - handle silently
+    const errorMessage = String(err);
+    if (errorMessage.includes("LanceDB not available")) {
+      // LanceDB is an optional dependency - skip this feature silently
+      return null;
+    }
+    console.error(`tool-result-summary: service initialization failed: ${errorMessage}`);
     return null;
   }
 }
