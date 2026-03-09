@@ -63,7 +63,7 @@ async function processDiscordInboundJob(params: {
     },
     timeoutMs,
     abortSignals: [params.job.runtime.abortSignal, params.lifecycleSignal],
-    onTimeout: (resolvedTimeoutMs) => {
+    onTimeout: async (resolvedTimeoutMs) => {
       params.runtime.error?.(
         danger(
           `discord inbound worker timed out after ${formatDurationSeconds(resolvedTimeoutMs, {
@@ -75,7 +75,7 @@ async function processDiscordInboundJob(params: {
       if (finalReplyStarted) {
         return;
       }
-      void sendDiscordInboundWorkerTimeoutReply({
+      await sendDiscordInboundWorkerTimeoutReply({
         job: params.job,
         runtime: params.runtime,
         contextSuffix,

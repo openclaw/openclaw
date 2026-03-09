@@ -253,6 +253,60 @@ describe("createDiscordMessageHandler queue behavior", () => {
     }
   });
 
+  it("waits for the timeout fallback reply before starting the next queued run", async () => {
+    vi.useFakeTimers();
+    try {
+      preflightDiscordMessageMock.mockReset();
+      processDiscordMessageMock.mockReset();
+      deliverDiscordReplyMock.mockReset();
+
+      const deliverTimeoutReply = createDeferred();
+      deliverDiscordReplyMock.mockImplementationOnce(async () => {
+        await deliverTimeoutReply.promise;
+      });
+      processDiscordMessageMock
+        .mockImplementationOnce(async (ctx: { abortSignal?: AbortSignal }) => {
+          await new Promise<void>((resolve) => {
+            if (ctx.abortSignal?.aborted) {
+              resolve();
+              return;
+            }
+            ctx.abortSignal?.addEventListener("abort", () => resolve(), { once: true });
+          });
+        })
+        .mockImplementationOnce(async () => undefined);
+      preflightDiscordMessageMock.mockImplementation(
+        async (preflightParams: { data: { channel_id: string } }) =>
+          createPreflightContext(preflightParams.data.channel_id),
+      );
+
+      const handler = createDiscordMessageHandler(createDiscordHandlerParams({ workerRunTimeoutMs: 50 }));
+
+      await expect(
+        handler(createMessageData("m-1") as never, {} as never),
+      ).resolves.toBeUndefined();
+      await expect(
+        handler(createMessageData("m-2") as never, {} as never),
+      ).resolves.toBeUndefined();
+
+      await vi.advanceTimersByTimeAsync(60);
+      await vi.waitFor(() => {
+        expect(deliverDiscordReplyMock).toHaveBeenCalledTimes(1);
+      });
+
+      expect(processDiscordMessageMock).toHaveBeenCalledTimes(1);
+
+      deliverTimeoutReply.resolve();
+      await deliverTimeoutReply.promise;
+
+      await vi.waitFor(() => {
+        expect(processDiscordMessageMock).toHaveBeenCalledTimes(2);
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("does not send the timeout fallback when a final reply already went out", async () => {
     vi.useFakeTimers();
     try {
