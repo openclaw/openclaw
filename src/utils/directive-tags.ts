@@ -17,11 +17,11 @@ type InlineDirectiveParseOptions = {
 const AUDIO_TAG_RE = /\[\[\s*audio_as_voice\s*\]\]/gi;
 const REPLY_TAG_RE = /\[\[\s*(?:reply_to_current|reply_to\s*:\s*([^\]\n]+))\s*\]\]/gi;
 
-function normalizeDirectiveWhitespace(text: string): string {
-  return text
-    .replace(/[ \t]+/g, " ")
-    .replace(/[ \t]*\n[ \t]*/g, "\n")
-    .trim();
+function collapseSingleLineDirectiveWhitespace(text: string): string {
+  if (text.includes("\n")) {
+    return text;
+  }
+  return text.replace(/[^\S\n]+/g, " ");
 }
 
 type StripInlineDirectiveTagsResult = {
@@ -98,7 +98,7 @@ export function parseInlineDirectives(
   }
   if (!text.includes("[[")) {
     return {
-      text: normalizeDirectiveWhitespace(text),
+      text,
       audioAsVoice: false,
       replyToCurrent: false,
       hasAudioTag: false,
@@ -132,7 +132,7 @@ export function parseInlineDirectives(
     return stripReplyTags ? " " : match;
   });
 
-  cleaned = normalizeDirectiveWhitespace(cleaned);
+  cleaned = collapseSingleLineDirectiveWhitespace(cleaned.trim());
 
   const replyToId =
     lastExplicitId ?? (sawCurrent ? currentMessageId?.trim() || undefined : undefined);

@@ -215,30 +215,22 @@ export function splitMediaFromOutput(raw: string): {
 
     pieces.push(line.slice(cursor));
 
-    const cleanedLine = pieces
-      .join("")
-      .replace(/[ \t]{2,}/g, " ")
-      .trim();
+    const cleanedLine = pieces.join("");
 
     // If the line becomes empty, drop it.
-    if (cleanedLine) {
+    if (cleanedLine.trim()) {
       keptLines.push(cleanedLine);
     }
     lineOffset += line.length + 1; // +1 for newline
   }
 
-  let cleanedText = keptLines
-    .join("\n")
-    .replace(/[ \t]+\n/g, "\n")
-    .replace(/[ \t]{2,}/g, " ")
-    .replace(/\n{2,}/g, "\n")
-    .trim();
+  let cleanedText = keptLines.join("\n");
 
   // Detect and strip [[audio_as_voice]] tag
   const audioTagResult = parseAudioTag(cleanedText);
   const hasAudioAsVoice = audioTagResult.audioAsVoice;
   if (audioTagResult.hadTag) {
-    cleanedText = audioTagResult.text.replace(/\n{2,}/g, "\n").trim();
+    cleanedText = audioTagResult.text.trim();
   }
 
   if (media.length === 0) {
