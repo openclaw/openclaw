@@ -304,8 +304,29 @@ async function cleanupNewBitable(
   });
 
   if (recordsRes.code === 0 && recordsRes.data?.items) {
+    const isEmptyValue = (v: unknown): boolean => {
+      if (v === null || v === undefined || v === "") return true;
+      if (Array.isArray(v)) {
+        return v.length === 0 || v.every((item) => isEmptyValue(item));
+      }
+      if (typeof v === "object") {
+        const obj = v as Record<string, unknown>;
+        // Rich text fields: [{type:'text', text:''}]
+        if ("text" in obj && Object.keys(obj).length <= 2) {
+          return obj.text === "" || obj.text === null || obj.text === undefined;
+        }
+        return Object.values(obj).every((val) => isEmptyValue(val));
+      }
+      return false;
+    };
+
     const emptyRecordIds = recordsRes.data.items
-      .filter((r) => !r.fields || Object.keys(r.fields).length === 0)
+      .filter((r) => {
+        if (!r.fields) return true;
+        const keys = Object.keys(r.fields);
+        if (keys.length === 0) return true;
+        return Object.values(r.fields).every((v) => isEmptyValue(v));
+      })
       .map((r) => r.record_id)
       .filter((id): id is string => Boolean(id));
 
@@ -354,7 +375,7 @@ async function createApp(
     throw new Error("Failed to create Bitable: no app_token returned");
   }
 
-  const log: CleanupLogger = logger ?? { debug: () => {}, warn: () => {} };
+  const log: CleanupLogger = logger ?? { debug: () => { }, warn: () => { } };
   let tableId: string | undefined;
   let cleanedRows = 0;
   let cleanedFields = 0;
