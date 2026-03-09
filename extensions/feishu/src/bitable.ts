@@ -354,7 +354,7 @@ async function createApp(
     throw new Error("Failed to create Bitable: no app_token returned");
   }
 
-  const log: CleanupLogger = logger ?? { debug: () => {}, warn: () => {} };
+  const log: CleanupLogger = logger ?? { debug: () => { }, warn: () => { } };
   let tableId: string | undefined;
   let cleanedRows = 0;
   let cleanedFields = 0;
@@ -435,6 +435,62 @@ async function updateRecord(
 
   return {
     record: res.data?.record,
+  };
+}
+
+async function deleteRecord(
+  client: Lark.Client,
+  appToken: string,
+  tableId: string,
+  recordId: string,
+) {
+  const res = await client.bitable.appTableRecord.delete({
+    path: { app_token: appToken, table_id: tableId, record_id: recordId },
+  });
+  ensureLarkSuccess(res, "bitable.appTableRecord.delete", { appToken, tableId, recordId });
+
+  return {
+    deleted: true,
+    record_id: recordId,
+  };
+}
+
+async function batchDeleteRecords(
+  client: Lark.Client,
+  appToken: string,
+  tableId: string,
+  recordIds: string[],
+) {
+  const res = await client.bitable.appTableRecord.batchDelete({
+    path: { app_token: appToken, table_id: tableId },
+    data: { records: recordIds },
+  });
+  ensureLarkSuccess(res, "bitable.appTableRecord.batchDelete", {
+    appToken,
+    tableId,
+    count: recordIds.length,
+  });
+
+  return {
+    deleted: true,
+    count: recordIds.length,
+  };
+}
+
+async function deleteField(
+  client: Lark.Client,
+  appToken: string,
+  tableId: string,
+  fieldId: string,
+) {
+  const res = await client.bitable.appTableField.delete({
+    path: { app_token: appToken, table_id: tableId, field_id: fieldId },
+  });
+  ensureLarkSuccess(res, "bitable.appTableField.delete", { appToken, tableId, fieldId });
+
+  return {
+    deleted: true,
+    field_id: fieldId,
   };
 }
 
@@ -527,6 +583,37 @@ const UpdateRecordSchema = Type.Object({
   record_id: Type.String({ description: "Record ID to update" }),
   fields: Type.Record(Type.String(), Type.Any(), {
     description: "Field values to update (same format as create_record)",
+  }),
+});
+
+const DeleteRecordSchema = Type.Object({
+  app_token: Type.String({
+    description: "Bitable app token",
+  }),
+  table_id: Type.String({ description: "Table ID" }),
+  record_id: Type.String({ description: "Record ID to delete" }),
+});
+
+const BatchDeleteRecordsSchema = Type.Object({
+  app_token: Type.String({
+    description: "Bitable app token",
+  }),
+  table_id: Type.String({ description: "Table ID" }),
+  record_ids: Type.Array(Type.String(), {
+    description: "Array of record IDs to delete (max 500)",
+    minItems: 1,
+    maxItems: 500,
+  }),
+});
+
+const DeleteFieldSchema = Type.Object({
+  app_token: Type.String({
+    description: "Bitable app token",
+  }),
+  table_id: Type.String({ description: "Table ID" }),
+  field_id: Type.String({
+    description:
+      "Field ID to delete (use feishu_bitable_list_fields to get field IDs). Primary field cannot be deleted.",
   }),
 });
 
@@ -717,6 +804,68 @@ export function registerFeishuBitableTools(api: OpenClawPluginApi) {
         params.field_name,
         params.field_type,
         params.property,
+      );
+    },
+  });
+
+  registerBitableTool<{
+    app_token: string;
+    table_id: string;
+    record_id: string;
+    accountId?: string;
+  }>({
+    name: "feishu_bitable_delete_record",
+    label: "Feishu Bitable Delete Record",
+    description: "Delete a single record (row) from a Bitable table",
+    parameters: DeleteRecordSchema,
+    async execute({ params, defaultAccountId }) {
+      return deleteRecord(
+        getClient(params, defaultAccountId),
+        params.app_token,
+        params.table_id,
+        params.record_id,
+      );
+    },
+  });
+
+  registerBitableTool<{
+    app_token: string;
+    table_id: string;
+    record_ids: string[];
+    accountId?: string;
+  }>({
+    name: "feishu_bitable_batch_delete_records",
+    label: "Feishu Bitable Batch Delete Records",
+    description:
+      "Delete multiple records (rows) from a Bitable table at once (max 500)",
+    parameters: BatchDeleteRecordsSchema,
+    async execute({ params, defaultAccountId }) {
+      return batchDeleteRecords(
+        getClient(params, defaultAccountId),
+        params.app_token,
+        params.table_id,
+        params.record_ids,
+      );
+    },
+  });
+
+  registerBitableTool<{
+    app_token: string;
+    table_id: string;
+    field_id: string;
+    accountId?: string;
+  }>({
+    name: "feishu_bitable_delete_field",
+    label: "Feishu Bitable Delete Field",
+    description:
+      "Delete a field (column) from a Bitable table. Primary field cannot be deleted. Use feishu_bitable_list_fields to get field IDs.",
+    parameters: DeleteFieldSchema,
+    async execute({ params, defaultAccountId }) {
+      return deleteField(
+        getClient(params, defaultAccountId),
+        params.app_token,
+        params.table_id,
+        params.field_id,
       );
     },
   });
