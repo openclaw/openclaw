@@ -38,17 +38,23 @@ function warnInvalidAllowFromEntries(entries: string[]) {
   }
 }
 
+/**
+ * Regex that matches a numeric Telegram ID (positive user/bot IDs and
+ * negative group/supergroup/channel IDs like `-1001234567890`).
+ */
+const NUMERIC_TG_ID = /^-?\d+$/;
+
 export const normalizeAllowFrom = (list?: Array<string | number>): NormalizedAllowFrom => {
   const entries = (list ?? []).map((value) => String(value).trim()).filter(Boolean);
   const hasWildcard = entries.includes("*");
   const normalized = entries
     .filter((value) => value !== "*")
     .map((value) => value.replace(/^(telegram|tg):/i, ""));
-  const invalidEntries = normalized.filter((value) => !/^\d+$/.test(value));
+  const invalidEntries = normalized.filter((value) => !NUMERIC_TG_ID.test(value));
   if (invalidEntries.length > 0) {
     warnInvalidAllowFromEntries([...new Set(invalidEntries)]);
   }
-  const ids = normalized.filter((value) => /^\d+$/.test(value));
+  const ids = normalized.filter((value) => NUMERIC_TG_ID.test(value));
   return {
     entries: ids,
     hasWildcard,
