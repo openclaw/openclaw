@@ -138,6 +138,9 @@ describe("applyConfigSnapshot", () => {
     expect(state.configRaw).toBe(
       '{ "agents": { "defaults": { "model": "ollama/qwen3-coder:30b-64k" } } }',
     );
+    expect(state.configRawOriginal).toBe(
+      '{ "agents": { "defaults": { "model": "ollama/qwen3-coder:30b-64k" } } }',
+    );
     expect(state.configFormOriginal).toEqual({
       agents: { defaults: { model: "ollama/qwen3-coder:30b-64k" } },
     });

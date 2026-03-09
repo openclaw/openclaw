@@ -26,6 +26,7 @@ export async function handleWhatsAppLogout(host: OpenClawApp) {
 
 export async function handleChannelConfigSave(host: OpenClawApp) {
   await saveConfig(host);
+  await loadConfig(host);
   await loadChannels(host, true);
 }
 
