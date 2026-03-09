@@ -1,8 +1,12 @@
+import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   collectAppcastSparkleVersionErrors,
   collectBundledExtensionManifestErrors,
   collectBundledExtensionRootDependencyGapErrors,
+  collectSkillShellScriptExecutableErrors,
 } from "../scripts/release-check.ts";
 
 function makeItem(shortVersion: string, sparkleVersion: string): string {
@@ -148,5 +152,37 @@ describe("collectBundledExtensionManifestErrors", () => {
     ).toEqual([
       "bundled extension 'broken' manifest invalid | openclaw.releaseChecks.rootDependencyMirrorAllowlist must contain only non-empty strings",
     ]);
+  });
+});
+
+describe("collectSkillShellScriptExecutableErrors", () => {
+  it("flags non-executable shell scripts under skills/*/scripts", () => {
+    const root = mkdtempSync(join(tmpdir(), "openclaw-release-check-"));
+    const scriptPath = join(root, "skills", "openai-whisper-api", "scripts", "transcribe.sh");
+    mkdirSync(join(root, "skills", "openai-whisper-api", "scripts"), { recursive: true });
+    writeFileSync(scriptPath, "#!/usr/bin/env bash\necho test\n", "utf8");
+    chmodSync(scriptPath, 0o644);
+
+    try {
+      expect(collectSkillShellScriptExecutableErrors(root)).toEqual([
+        "skill shell script is not executable: skills/openai-whisper-api/scripts/transcribe.sh",
+      ]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("accepts executable shell scripts", () => {
+    const root = mkdtempSync(join(tmpdir(), "openclaw-release-check-"));
+    const scriptPath = join(root, "skills", "openai-whisper-api", "scripts", "transcribe.sh");
+    mkdirSync(join(root, "skills", "openai-whisper-api", "scripts"), { recursive: true });
+    writeFileSync(scriptPath, "#!/usr/bin/env bash\necho test\n", "utf8");
+    chmodSync(scriptPath, 0o755);
+
+    try {
+      expect(collectSkillShellScriptExecutableErrors(root)).toEqual([]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 });
