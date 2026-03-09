@@ -924,6 +924,7 @@ export async function runEmbeddedPiAgent(
             promptError,
             timedOut,
             timedOutDuringCompaction,
+            timedOutDuringToolExecution,
             sessionIdUsed,
             lastAssistant,
           } = attempt;
@@ -1349,10 +1350,15 @@ export async function runEmbeddedPiAgent(
             );
           }
 
-          // Rotate on timeout to try another account/model path in this turn,
-          // but exclude post-prompt compaction timeouts (model succeeded; no profile issue).
+          // Treat timeout as potential rate limit (Antigravity hangs on rate limit).
+          // However, exclude post-prompt compaction timeouts and tool execution timeouts
+          // because in those cases the model succeeded - the timeout was caused by
+          // infrastructure issues (slow compaction or slow tool), not provider issues.
+          // Penalizing auth profiles for infrastructure timeouts would incorrectly rotate
+          // away from working credentials.
           const shouldRotate =
-            (!aborted && failoverFailure) || (timedOut && !timedOutDuringCompaction);
+            (!aborted && failoverFailure) ||
+            (timedOut && !timedOutDuringCompaction && !timedOutDuringToolExecution);
 
           if (shouldRotate) {
             if (lastProfileId) {

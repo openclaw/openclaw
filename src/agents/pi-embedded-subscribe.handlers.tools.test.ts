@@ -45,6 +45,13 @@ function createTestContext(): {
       messagingToolSentMediaUrls: [],
       messagingToolSentTargets: [],
       successfulCronAdds: 0,
+      toolStartData: new Map<string, { startTime: number; args: unknown }>(),
+      toolExecutionCount: 0,
+      toolExecutionInFlight: false,
+      activeToolName: undefined,
+      activeToolCallId: undefined,
+      activeToolStartTime: undefined,
+      unsubscribed: false,
     },
     shouldEmitToolResult: () => false,
     shouldEmitToolOutput: () => false,
@@ -330,5 +337,153 @@ describe("messaging tool media URL tracking", () => {
 
     expect(ctx.state.messagingToolSentMediaUrls).toHaveLength(0);
     expect(ctx.state.pendingMessagingMediaUrls.has("tool-m3")).toBe(false);
+  });
+});
+
+describe("handleToolExecutionEnd late event after unsubscribe", () => {
+  it("commits pending messaging text when tool-end arrives after unsubscribe", async () => {
+    const { ctx } = createTestContext();
+
+    await handleToolExecutionStart(ctx, {
+      type: "tool_execution_start",
+      toolName: "message",
+      toolCallId: "tool-late-text",
+      args: { action: "send", to: "channel:123", content: "hello" },
+    } as never);
+
+    ctx.state.unsubscribed = true;
+
+    await handleToolExecutionEnd(ctx, {
+      type: "tool_execution_end",
+      toolName: "message",
+      toolCallId: "tool-late-text",
+      isError: false,
+      result: { ok: true },
+    } as never);
+
+    expect(ctx.state.messagingToolSentTexts).toContain("hello");
+    expect(ctx.state.pendingMessagingTexts.has("tool-late-text")).toBe(false);
+  });
+
+  it("does not push to toolMetas when tool-end arrives after unsubscribe", async () => {
+    const { ctx } = createTestContext();
+
+    await handleToolExecutionStart(ctx, {
+      type: "tool_execution_start",
+      toolName: "exec",
+      toolCallId: "tool-late-meta",
+      args: { command: "echo hi" },
+    } as never);
+
+    ctx.state.unsubscribed = true;
+    const toolMetasBefore = ctx.state.toolMetas.length;
+
+    await handleToolExecutionEnd(ctx, {
+      type: "tool_execution_end",
+      toolName: "exec",
+      toolCallId: "tool-late-meta",
+      isError: false,
+      result: { output: "hi" },
+    } as never);
+
+    expect(ctx.state.toolMetas.length).toBe(toolMetasBefore);
+  });
+
+  it("does not clear lastToolError when a successful late tool-end arrives after unsubscribe", async () => {
+    const { ctx } = createTestContext();
+
+    ctx.state.lastToolError = {
+      toolName: "message",
+      meta: undefined,
+      error: "previous error",
+      mutatingAction: false,
+      actionFingerprint: undefined,
+    };
+
+    await handleToolExecutionStart(ctx, {
+      type: "tool_execution_start",
+      toolName: "exec",
+      toolCallId: "tool-late-success",
+      args: { command: "echo hi" },
+    } as never);
+
+    ctx.state.unsubscribed = true;
+
+    await handleToolExecutionEnd(ctx, {
+      type: "tool_execution_end",
+      toolName: "exec",
+      toolCallId: "tool-late-success",
+      isError: false,
+      result: { output: "hi" },
+    } as never);
+
+    expect(ctx.state.lastToolError?.error).toBe("previous error");
+  });
+
+  it("does not set lastToolError when a failed late tool-end arrives after unsubscribe", async () => {
+    const { ctx } = createTestContext();
+
+    await handleToolExecutionStart(ctx, {
+      type: "tool_execution_start",
+      toolName: "exec",
+      toolCallId: "tool-late-fail",
+      args: { command: "echo hi" },
+    } as never);
+
+    ctx.state.unsubscribed = true;
+
+    await handleToolExecutionEnd(ctx, {
+      type: "tool_execution_end",
+      toolName: "exec",
+      toolCallId: "tool-late-fail",
+      isError: true,
+      result: "Error: failed",
+    } as never);
+
+    expect(ctx.state.lastToolError).toBeUndefined();
+  });
+});
+
+describe("handleToolExecutionStart pending state on post-flush unsubscribe", () => {
+  it("preserves pending messaging maps when unsubscribed fires during onBlockReplyFlush", async () => {
+    const { ctx, onBlockReplyFlush } = createTestContext();
+
+    let releaseFlush: (() => void) | undefined;
+    onBlockReplyFlush.mockImplementation(
+      () =>
+        new Promise<void>((resolve) => {
+          releaseFlush = resolve;
+        }),
+    );
+
+    const pending = handleToolExecutionStart(ctx, {
+      type: "tool_execution_start",
+      toolName: "message",
+      toolCallId: "tool-check2",
+      args: { action: "send", to: "channel:456", content: "check2 text" },
+    } as never);
+
+    // Let the function reach the awaited flush.
+    await Promise.resolve();
+
+    // Simulate unsubscribe firing while flush is still pending.
+    ctx.state.unsubscribed = true;
+    releaseFlush?.();
+    await pending;
+
+    // Pending maps must be populated so a late tool_execution_end can commit them.
+    expect(ctx.state.pendingMessagingTexts.get("tool-check2")).toBe("check2 text");
+
+    // Confirm the late end handler commits to messagingToolSentTexts.
+    await handleToolExecutionEnd(ctx, {
+      type: "tool_execution_end",
+      toolName: "message",
+      toolCallId: "tool-check2",
+      isError: false,
+      result: { ok: true },
+    } as never);
+
+    expect(ctx.state.messagingToolSentTexts).toContain("check2 text");
+    expect(ctx.state.pendingMessagingTexts.has("tool-check2")).toBe(false);
   });
 });

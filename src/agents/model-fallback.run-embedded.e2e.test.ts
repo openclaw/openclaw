@@ -79,6 +79,7 @@ const makeAttempt = (overrides: Partial<EmbeddedRunAttemptResult>): EmbeddedRunA
   aborted: false,
   timedOut: false,
   timedOutDuringCompaction: false,
+  timedOutDuringToolExecution: false,
   promptError: null,
   sessionIdUsed: "session:test",
   systemPromptReport: undefined,

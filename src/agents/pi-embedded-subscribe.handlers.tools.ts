@@ -22,18 +22,6 @@ import { consumeAdjustedParamsForToolCall } from "./pi-tools.before-tool-call.js
 import { buildToolMutationState, isSameToolMutationAction } from "./tool-mutation.js";
 import { normalizeToolName } from "./tool-policy.js";
 
-type ToolStartRecord = {
-  startTime: number;
-  args: unknown;
-};
-
-/** Track tool execution start data for after_tool_call hook. */
-const toolStartData = new Map<string, ToolStartRecord>();
-
-function buildToolStartKey(runId: string, toolCallId: string): string {
-  return `${runId}:${toolCallId}`;
-}
-
 function isCronAddAction(args: unknown): boolean {
   if (!args || typeof args !== "object") {
     return false;
@@ -41,7 +29,6 @@ function isCronAddAction(args: unknown): boolean {
   const action = (args as Record<string, unknown>).action;
   return typeof action === "string" && action.trim().toLowerCase() === "add";
 }
-
 function buildToolCallSummary(toolName: string, args: unknown, meta?: string): ToolCallSummary {
   const mutation = buildToolMutationState(toolName, args, meta);
   return {
@@ -139,62 +126,78 @@ function collectMessagingMediaUrlsFromToolResult(result: unknown): string[] {
   return urls;
 }
 
-function emitToolResultOutput(params: {
-  ctx: ToolHandlerContext;
-  toolName: string;
-  meta?: string;
-  isToolError: boolean;
-  result: unknown;
-  sanitizedResult: unknown;
-}) {
-  const { ctx, toolName, meta, isToolError, result, sanitizedResult } = params;
-  if (!ctx.params.onToolResult) {
-    return;
-  }
-
-  if (ctx.shouldEmitToolOutput()) {
-    const outputText = extractToolResultText(sanitizedResult);
-    if (outputText) {
-      ctx.emitToolOutput(toolName, meta, outputText);
-    }
-    return;
-  }
-
-  if (isToolError) {
-    return;
-  }
-
-  // emitToolOutput() already handles MEDIA: directives when enabled; this path
-  // only sends raw media URLs for non-verbose delivery mode.
-  const mediaPaths = filterToolResultMediaUrls(toolName, extractToolResultMediaPaths(result));
-  if (mediaPaths.length === 0) {
-    return;
-  }
-  try {
-    void ctx.params.onToolResult({ mediaUrls: mediaPaths });
-  } catch {
-    // ignore delivery failures
-  }
-}
-
 export async function handleToolExecutionStart(
   ctx: ToolHandlerContext,
   evt: AgentEvent & { toolName: string; toolCallId: string; args: unknown },
 ) {
-  // Flush pending block replies to preserve message boundaries before tool execution.
-  ctx.flushBlockReplyBuffer();
-  if (ctx.params.onBlockReplyFlush) {
-    await ctx.params.onBlockReplyFlush();
+  // Early return FIRST if run was already unsubscribed (aborted), before touching any state.
+  // This prevents race where timeout/unsubscribe happens after event fires but before
+  // we set state, which would leave dirty state that never gets cleaned up.
+  if (ctx.state.unsubscribed) {
+    ctx.log.debug(`tool_execution_start skipped (unsubscribed): tool=${String(evt.toolName)}`);
+    return;
   }
 
   const rawToolName = String(evt.toolName);
   const toolName = normalizeToolName(rawToolName);
   const toolCallId = String(evt.toolCallId);
   const args = evt.args;
-  const runId = ctx.params.runId;
 
-  // Track start time and args for after_tool_call hook
-  toolStartData.set(buildToolStartKey(runId, toolCallId), { startTime: Date.now(), args });
+  // Capture start time once for consistent timestamps across state and hook tracking.
+  const startTime = Date.now();
+
+  // CRITICAL: Set up ALL tracking state SYNCHRONOUSLY before any async operations.
+  // This prevents a race where handleToolExecutionEnd runs before we've recorded
+  // the start, which would leave toolExecutionCount permanently > 0.
+  // Track tool execution with reference counting to properly handle concurrent tools.
+  // toolExecutionCount tracks all active tools, while activeToolName/CallId/StartTime
+  // track only the most recent (used for timeout snapshots).
+  ctx.state.toolExecutionCount++;
+  ctx.state.toolExecutionInFlight = ctx.state.toolExecutionCount > 0;
+  ctx.state.activeToolName = toolName;
+  ctx.state.activeToolCallId = toolCallId;
+  ctx.state.activeToolStartTime = startTime;
+
+  // Track start time and args for after_tool_call hook.
+  ctx.state.toolStartData.set(toolCallId, { startTime, args });
+
+  // Flush pending block replies to preserve message boundaries before tool execution.
+  ctx.flushBlockReplyBuffer();
+  if (ctx.params.onBlockReplyFlush) {
+    await ctx.params.onBlockReplyFlush();
+  }
+
+  // Populate pending messaging maps BEFORE the check-2 exit point so that a late
+  // tool_execution_end event (arriving after unsubscribe) can still commit them.
+  // The end handler reads from these maps regardless of unsubscribed state.
+  if (isMessagingTool(toolName)) {
+    const argsRecord = args && typeof args === "object" ? (args as Record<string, unknown>) : {};
+    const isMessagingSend = isMessagingToolSendAction(toolName, argsRecord);
+    if (isMessagingSend) {
+      const sendTarget = extractMessagingToolSend(toolName, argsRecord);
+      if (sendTarget) {
+        ctx.state.pendingMessagingTargets.set(toolCallId, sendTarget);
+      }
+      // Field names vary by tool: Discord/Slack use "content", sessions_send uses "message"
+      const text = (argsRecord.content as string) ?? (argsRecord.message as string);
+      if (text && typeof text === "string") {
+        ctx.state.pendingMessagingTexts.set(toolCallId, text);
+        ctx.log.debug(`Tracking pending messaging text: tool=${toolName} len=${text.length}`);
+      }
+      const mediaUrls = collectMessagingMediaUrlsFromRecord(argsRecord);
+      if (mediaUrls.length > 0) {
+        ctx.state.pendingMessagingMediaUrls.set(toolCallId, mediaUrls);
+      }
+    }
+  }
+
+  // Check unsubscribed again after async operations (flushBlockReplyBuffer) to prevent
+  // race where timeout/unsubscribe happens during those operations, which would leave state dirty.
+  // Pending messaging maps are already populated above so a late tool_execution_end can commit them.
+  if (ctx.state.unsubscribed) {
+    ctx.log.debug(`tool_execution_start skipped (unsubscribed after flush): tool=${toolName}`);
+    return;
+  }
 
   if (toolName === "read") {
     const record = args && typeof args === "object" ? (args as Record<string, unknown>) : {};
@@ -245,27 +248,24 @@ export async function handleToolExecutionStart(
     ctx.emitToolSummary(toolName, meta);
   }
 
-  // Track messaging tool sends (pending until confirmed in tool_execution_end).
-  if (isMessagingTool(toolName)) {
-    const argsRecord = args && typeof args === "object" ? (args as Record<string, unknown>) : {};
-    const isMessagingSend = isMessagingToolSendAction(toolName, argsRecord);
-    if (isMessagingSend) {
-      const sendTarget = extractMessagingToolSend(toolName, argsRecord);
-      if (sendTarget) {
-        ctx.state.pendingMessagingTargets.set(toolCallId, sendTarget);
-      }
-      // Field names vary by tool: Discord/Slack use "content", sessions_send uses "message"
-      const text = (argsRecord.content as string) ?? (argsRecord.message as string);
-      if (text && typeof text === "string") {
-        ctx.state.pendingMessagingTexts.set(toolCallId, text);
-        ctx.log.debug(`Tracking pending messaging text: tool=${toolName} len=${text.length}`);
-      }
-      // Track media URLs from messaging tool args (pending until tool_execution_end).
-      const mediaUrls = collectMessagingMediaUrlsFromRecord(argsRecord);
-      if (mediaUrls.length > 0) {
-        ctx.state.pendingMessagingMediaUrls.set(toolCallId, mediaUrls);
-      }
+  // Final check after all async operations to prevent dirty state on late unsubscribe.
+  // If unsubscribe happened after we set state above, clean up before returning.
+  if (ctx.state.unsubscribed) {
+    ctx.log.debug(`tool_execution_start cleanup (unsubscribed after flush): tool=${toolName}`);
+    ctx.state.toolExecutionCount = Math.max(0, ctx.state.toolExecutionCount - 1);
+    ctx.state.toolExecutionInFlight = ctx.state.toolExecutionCount > 0;
+    if (ctx.state.activeToolCallId === toolCallId) {
+      ctx.state.activeToolName = undefined;
+      ctx.state.activeToolCallId = undefined;
+      ctx.state.activeToolStartTime = undefined;
     }
+    ctx.state.toolStartData.delete(toolCallId);
+    ctx.state.toolMetaById.delete(toolCallId);
+    ctx.state.toolSummaryById.delete(toolCallId);
+    ctx.state.pendingMessagingTexts.delete(toolCallId);
+    ctx.state.pendingMessagingTargets.delete(toolCallId);
+    ctx.state.pendingMessagingMediaUrls.delete(toolCallId);
+    return;
   }
 }
 
@@ -315,144 +315,215 @@ export async function handleToolExecutionEnd(
   const runId = ctx.params.runId;
   const isError = Boolean(evt.isError);
   const result = evt.result;
-  const isToolError = isError || isToolResultError(result);
-  const sanitizedResult = sanitizeToolResult(result);
-  const toolStartKey = buildToolStartKey(runId, toolCallId);
-  const startData = toolStartData.get(toolStartKey);
-  toolStartData.delete(toolStartKey);
-  const callSummary = ctx.state.toolMetaById.get(toolCallId);
-  const meta = callSummary?.meta;
-  ctx.state.toolMetas.push({ toolName, meta });
-  ctx.state.toolMetaById.delete(toolCallId);
-  ctx.state.toolSummaryById.delete(toolCallId);
-  if (isToolError) {
-    const errorMessage = extractToolErrorMessage(sanitizedResult);
-    ctx.state.lastToolError = {
-      toolName,
-      meta,
-      error: errorMessage,
-      mutatingAction: callSummary?.mutatingAction,
-      actionFingerprint: callSummary?.actionFingerprint,
-    };
-  } else if (ctx.state.lastToolError) {
-    // Keep unresolved mutating failures until the same action succeeds.
-    if (ctx.state.lastToolError.mutatingAction) {
-      if (
-        isSameToolMutationAction(ctx.state.lastToolError, {
+  const wasUnsubscribedAtStart = ctx.state.unsubscribed;
+  // Capture wasTracked here before any state can be cleared (e.g. by a concurrent unsubscribe
+  // firing during an await in the try body). Consistent with wasUnsubscribedAtStart snapshot.
+  const wasTracked = ctx.state.toolStartData.has(toolCallId);
+
+  try {
+    // Process late tool-end events even after unsubscribe. The tool may have completed
+    // and sent a message before/while unsubscribe was happening. We must commit pending
+    // messaging data to maintain accurate didSendViaMessagingTool state and prevent
+    // downstream duplicate sends. Skip event emission to avoid closed subscriptions.
+
+    const isToolError = isError || isToolResultError(result);
+    const sanitizedResult = sanitizeToolResult(result);
+    const callSummary = ctx.state.toolMetaById.get(toolCallId);
+    const meta = callSummary?.meta;
+    // Always clean up per-toolCallId lookup maps regardless of unsubscribed state.
+    ctx.state.toolMetaById.delete(toolCallId);
+    ctx.state.toolSummaryById.delete(toolCallId);
+    // Only update attempt-result state for live (non-late) events. Late events
+    // (wasUnsubscribedAtStart=true) must not mutate toolMetas or lastToolError because
+    // the attempt result builder reads those after unsubscribe and any post-unsubscribe
+    // mutation would corrupt the result with stale or phantom data.
+    if (!wasUnsubscribedAtStart) {
+      ctx.state.toolMetas.push({ toolName, meta });
+      if (isToolError) {
+        const errorMessage = extractToolErrorMessage(sanitizedResult);
+        ctx.state.lastToolError = {
           toolName,
           meta,
+          error: errorMessage,
+          mutatingAction: callSummary?.mutatingAction,
           actionFingerprint: callSummary?.actionFingerprint,
-        })
-      ) {
-        ctx.state.lastToolError = undefined;
+        };
+      } else if (ctx.state.lastToolError) {
+        // Keep unresolved mutating failures until the same action succeeds.
+        if (ctx.state.lastToolError.mutatingAction) {
+          if (
+            isSameToolMutationAction(ctx.state.lastToolError, {
+              toolName,
+              meta,
+              actionFingerprint: callSummary?.actionFingerprint,
+            })
+          ) {
+            ctx.state.lastToolError = undefined;
+          }
+        } else {
+          ctx.state.lastToolError = undefined;
+        }
       }
-    } else {
-      ctx.state.lastToolError = undefined;
     }
-  }
 
-  // Commit messaging tool text on success, discard on error.
-  const pendingText = ctx.state.pendingMessagingTexts.get(toolCallId);
-  const pendingTarget = ctx.state.pendingMessagingTargets.get(toolCallId);
-  if (pendingText) {
-    ctx.state.pendingMessagingTexts.delete(toolCallId);
-    if (!isToolError) {
-      ctx.state.messagingToolSentTexts.push(pendingText);
-      ctx.state.messagingToolSentTextsNormalized.push(normalizeTextForComparison(pendingText));
-      ctx.log.debug(`Committed messaging text: tool=${toolName} len=${pendingText.length}`);
-      ctx.trimMessagingToolSent();
+    // Commit messaging tool text on success, discard on error.
+    const pendingText = ctx.state.pendingMessagingTexts.get(toolCallId);
+    const pendingTarget = ctx.state.pendingMessagingTargets.get(toolCallId);
+    if (pendingText) {
+      ctx.state.pendingMessagingTexts.delete(toolCallId);
+      if (!isToolError) {
+        ctx.state.messagingToolSentTexts.push(pendingText);
+        ctx.state.messagingToolSentTextsNormalized.push(normalizeTextForComparison(pendingText));
+        ctx.log.debug(`Committed messaging text: tool=${toolName} len=${pendingText.length}`);
+        ctx.trimMessagingToolSent();
+      }
     }
-  }
-  if (pendingTarget) {
-    ctx.state.pendingMessagingTargets.delete(toolCallId);
-    if (!isToolError) {
-      ctx.state.messagingToolSentTargets.push(pendingTarget);
-      ctx.trimMessagingToolSent();
+    if (pendingTarget) {
+      ctx.state.pendingMessagingTargets.delete(toolCallId);
+      if (!isToolError) {
+        ctx.state.messagingToolSentTargets.push(pendingTarget);
+        ctx.trimMessagingToolSent();
+      }
     }
-  }
-  const pendingMediaUrls = ctx.state.pendingMessagingMediaUrls.get(toolCallId) ?? [];
-  ctx.state.pendingMessagingMediaUrls.delete(toolCallId);
-  const startArgs =
-    startData?.args && typeof startData.args === "object"
-      ? (startData.args as Record<string, unknown>)
-      : {};
-  const adjustedArgs = consumeAdjustedParamsForToolCall(toolCallId, runId);
-  const afterToolCallArgs =
-    adjustedArgs && typeof adjustedArgs === "object"
-      ? (adjustedArgs as Record<string, unknown>)
-      : startArgs;
-  const isMessagingSend =
-    pendingMediaUrls.length > 0 ||
-    (isMessagingTool(toolName) && isMessagingToolSendAction(toolName, startArgs));
-  if (!isToolError && isMessagingSend) {
-    const committedMediaUrls = [
-      ...pendingMediaUrls,
-      ...collectMessagingMediaUrlsFromToolResult(result),
-    ];
-    if (committedMediaUrls.length > 0) {
-      ctx.state.messagingToolSentMediaUrls.push(...committedMediaUrls);
-      ctx.trimMessagingToolSent();
+
+    const pendingMediaUrls = ctx.state.pendingMessagingMediaUrls.get(toolCallId) ?? [];
+    ctx.state.pendingMessagingMediaUrls.delete(toolCallId);
+    const startData = ctx.state.toolStartData.get(toolCallId);
+    const startArgs =
+      startData?.args && typeof startData.args === "object"
+        ? (startData.args as Record<string, unknown>)
+        : {};
+    const adjustedArgs = consumeAdjustedParamsForToolCall(toolCallId, runId);
+    const afterToolCallArgs =
+      adjustedArgs && typeof adjustedArgs === "object"
+        ? (adjustedArgs as Record<string, unknown>)
+        : startArgs;
+    const isMessagingSend =
+      pendingMediaUrls.length > 0 ||
+      (isMessagingTool(toolName) && isMessagingToolSendAction(toolName, startArgs));
+    if (!isToolError && isMessagingSend) {
+      const committedMediaUrls = [
+        ...pendingMediaUrls,
+        ...collectMessagingMediaUrlsFromToolResult(result),
+      ];
+      if (committedMediaUrls.length > 0) {
+        ctx.state.messagingToolSentMediaUrls.push(...committedMediaUrls);
+        ctx.trimMessagingToolSent();
+      }
     }
-  }
 
-  // Track committed reminders only when cron.add completed successfully.
-  if (!isToolError && toolName === "cron" && isCronAddAction(startData?.args)) {
-    ctx.state.successfulCronAdds += 1;
-  }
+    // Track committed reminders for successful cron.add, including late post-timeout completions.
+    // Consistent with messaging state: user-visible scheduling state should be committed
+    // unconditionally so a cron.add that completes just after timeout isn't misreported as
+    // unscheduled. Note: events processed after the attempt result is captured (in the
+    // flushPendingToolResultsAfterIdle finally block) won't be reflected regardless.
+    if (!isToolError && toolName === "cron" && isCronAddAction(startData?.args)) {
+      ctx.state.successfulCronAdds += 1;
+    }
 
-  emitAgentEvent({
-    runId: ctx.params.runId,
-    stream: "tool",
-    data: {
-      phase: "result",
-      name: toolName,
-      toolCallId,
-      meta,
-      isError: isToolError,
-      result: sanitizedResult,
-    },
-  });
-  void ctx.params.onAgentEvent?.({
-    stream: "tool",
-    data: {
-      phase: "result",
-      name: toolName,
-      toolCallId,
-      meta,
-      isError: isToolError,
-    },
-  });
-
-  ctx.log.debug(
-    `embedded run tool end: runId=${ctx.params.runId} tool=${toolName} toolCallId=${toolCallId}`,
-  );
-
-  emitToolResultOutput({ ctx, toolName, meta, isToolError, result, sanitizedResult });
-
-  // Run after_tool_call plugin hook (fire-and-forget)
-  const hookRunnerAfter = ctx.hookRunner ?? getGlobalHookRunner();
-  if (hookRunnerAfter?.hasHooks("after_tool_call")) {
-    const durationMs = startData?.startTime != null ? Date.now() - startData.startTime : undefined;
-    const hookEvent: PluginHookAfterToolCallEvent = {
-      toolName,
-      params: afterToolCallArgs,
-      runId,
-      toolCallId,
-      result: sanitizedResult,
-      error: isToolError ? extractToolErrorMessage(sanitizedResult) : undefined,
-      durationMs,
-    };
-    void hookRunnerAfter
-      .runAfterToolCall(hookEvent, {
-        toolName,
-        agentId: ctx.params.agentId,
-        sessionKey: ctx.params.sessionKey,
-        sessionId: ctx.params.sessionId,
-        runId,
-        toolCallId,
-      })
-      .catch((err) => {
-        ctx.log.warn(`after_tool_call hook failed: tool=${toolName} error=${String(err)}`);
+    // Skip event emission if unsubscribed to avoid closed subscriptions,
+    // but still commit pending messaging data above for accurate delivery tracking.
+    if (!wasUnsubscribedAtStart) {
+      emitAgentEvent({
+        runId: ctx.params.runId,
+        stream: "tool",
+        data: {
+          phase: "result",
+          name: toolName,
+          toolCallId,
+          meta,
+          isError: isToolError,
+          result: sanitizedResult,
+        },
       });
+      void ctx.params.onAgentEvent?.({
+        stream: "tool",
+        data: {
+          phase: "result",
+          name: toolName,
+          toolCallId,
+          meta,
+          isError: isToolError,
+        },
+      });
+    }
+
+    ctx.log.debug(
+      `embedded run tool end${wasUnsubscribedAtStart ? " (late/post-unsubscribe)" : ""}: runId=${ctx.params.runId} tool=${toolName} toolCallId=${toolCallId}`,
+    );
+
+    // Skip onToolResult callbacks if unsubscribed to avoid closed subscriptions.
+    if (!wasUnsubscribedAtStart && ctx.params.onToolResult) {
+      if (ctx.shouldEmitToolOutput()) {
+        const outputText = extractToolResultText(sanitizedResult);
+        if (outputText) {
+          ctx.emitToolOutput(toolName, meta, outputText);
+        }
+      }
+
+      // Deliver media from tool results when the verbose emitToolOutput path is off.
+      // When shouldEmitToolOutput() is true, emitToolOutput already delivers media
+      // via parseReplyDirectives (MEDIA: text extraction), so skip to avoid duplicates.
+      if (!isToolError && !ctx.shouldEmitToolOutput()) {
+        const mediaPaths = filterToolResultMediaUrls(toolName, extractToolResultMediaPaths(result));
+        if (mediaPaths.length > 0) {
+          try {
+            void ctx.params.onToolResult({ mediaUrls: mediaPaths });
+          } catch {
+            // ignore delivery failures
+          }
+        }
+      }
+    }
+
+    // Run after_tool_call plugin hook (fire-and-forget) only if not unsubscribed.
+    if (!wasUnsubscribedAtStart) {
+      const hookRunnerAfter = ctx.hookRunner ?? getGlobalHookRunner();
+      if (hookRunnerAfter?.hasHooks("after_tool_call")) {
+        const durationMs =
+          startData?.startTime != null ? Date.now() - startData.startTime : undefined;
+        const hookEvent: PluginHookAfterToolCallEvent = {
+          toolName,
+          params: afterToolCallArgs,
+          runId,
+          toolCallId,
+          result: sanitizedResult,
+          error: isToolError ? extractToolErrorMessage(sanitizedResult) : undefined,
+          durationMs,
+        };
+        void hookRunnerAfter
+          .runAfterToolCall(hookEvent, {
+            toolName,
+            agentId: ctx.params.agentId,
+            sessionKey: ctx.params.sessionKey,
+            sessionId: ctx.params.sessionId,
+            runId,
+            toolCallId,
+          })
+          .catch((err) => {
+            ctx.log.warn(`after_tool_call hook failed: tool=${toolName} error=${String(err)}`);
+          });
+      }
+    }
+  } finally {
+    // Skip all state updates if unsubscribed to prevent interfering with
+    // concurrent tools or stale state after subscription cleanup.
+    // Use entry-time snapshots (wasUnsubscribedAtStart, wasTracked) rather than live state
+    // so that a concurrent unsubscribe() firing during an await in the try body cannot
+    // cause the counter decrement to be skipped for a tool that was legitimately tracked.
+    if (!wasUnsubscribedAtStart && wasTracked) {
+      ctx.state.toolExecutionCount = Math.max(0, ctx.state.toolExecutionCount - 1);
+      ctx.state.toolExecutionInFlight = ctx.state.toolExecutionCount > 0;
+
+      // Only clear snapshot state if it still points to THIS tool.
+      // For concurrent tools, activeToolName/CallId/StartTime track only the most recent.
+      if (ctx.state.activeToolCallId === toolCallId) {
+        ctx.state.activeToolName = undefined;
+        ctx.state.activeToolCallId = undefined;
+        ctx.state.activeToolStartTime = undefined;
+      }
+    }
+    // Always clean up per-tool tracking map to prevent memory leaks
+    ctx.state.toolStartData.delete(toolCallId);
   }
 }

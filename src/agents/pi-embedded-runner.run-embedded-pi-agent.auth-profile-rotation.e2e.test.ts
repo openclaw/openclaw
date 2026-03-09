@@ -99,6 +99,7 @@ const makeAttempt = (overrides: Partial<EmbeddedRunAttemptResult>): EmbeddedRunA
   aborted: false,
   timedOut: false,
   timedOutDuringCompaction: false,
+  timedOutDuringToolExecution: false,
   promptError: null,
   sessionIdUsed: "session:test",
   systemPromptReport: undefined,
@@ -860,6 +861,46 @@ describe("runEmbeddedPiAgent auth profile rotation", () => {
         authProfileIdSource: "auto",
         timeoutMs: 5_000,
         runId: "run:compaction-timeout",
+      });
+
+      expect(runEmbeddedAttemptMock).toHaveBeenCalledTimes(1);
+      expect(result.meta.aborted).toBe(true);
+
+      await expectProfileP2UsageUnchanged(agentDir);
+    });
+  });
+
+  it("does not rotate for tool execution timeouts", async () => {
+    await withAgentWorkspace(async ({ agentDir, workspaceDir }) => {
+      await writeAuthStore(agentDir);
+
+      runEmbeddedAttemptMock.mockResolvedValueOnce(
+        makeAttempt({
+          aborted: true,
+          timedOut: true,
+          timedOutDuringToolExecution: true,
+          assistantTexts: ["partial"],
+          lastAssistant: buildAssistant({
+            stopReason: "stop",
+            content: [{ type: "text", text: "partial" }],
+          }),
+        }),
+      );
+
+      const result = await runEmbeddedPiAgent({
+        sessionId: "session:test",
+        sessionKey: "agent:test:tool-execution-timeout",
+        sessionFile: path.join(workspaceDir, "session.jsonl"),
+        workspaceDir,
+        agentDir,
+        config: makeConfig(),
+        prompt: "hello",
+        provider: "openai",
+        model: "mock-1",
+        authProfileId: "openai:p1",
+        authProfileIdSource: "auto",
+        timeoutMs: 5_000,
+        runId: "run:tool-execution-timeout",
       });
 
       expect(runEmbeddedAttemptMock).toHaveBeenCalledTimes(1);
