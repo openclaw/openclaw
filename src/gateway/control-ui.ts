@@ -208,7 +208,8 @@ export function handleControlUiAvatarRequest(
   if (resolved.kind === "data") {
     // Decode data URL and serve the bytes directly (#41201).
     // Accept parameterized data URLs (e.g. data:image/png;charset=utf-8;base64,...).
-    const match = resolved.url.match(/^data:([^,]*);base64,(.+)$/);
+    // Case-insensitive scheme to match avatar resolution (isAvatarDataUrl uses /^data:/i).
+    const match = resolved.url.match(/^data:([^,]*);base64,(.+)$/i);
     if (!match) {
       respondControlUiNotFound(res);
       return true;
@@ -218,6 +219,12 @@ export function handleControlUiAvatarRequest(
       (mediaTypeAndParams?.split(";", 1)[0] || "").trim() || "application/octet-stream";
     // Defence-in-depth: only serve image MIME types from the avatar endpoint.
     if (!mimeType.startsWith("image/")) {
+      respondControlUiNotFound(res);
+      return true;
+    }
+    // Reject base64 payloads containing invalid characters (Buffer.from silently
+    // skips them, which would serve corrupt data as a valid avatar).
+    if (!/^[A-Za-z0-9+/]*={0,2}$/.test(b64)) {
       respondControlUiNotFound(res);
       return true;
     }

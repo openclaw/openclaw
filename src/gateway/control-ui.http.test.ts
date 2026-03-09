@@ -289,6 +289,30 @@ describe("handleControlUiHttpRequest", () => {
     expectNotFoundResponse({ handled, res, end });
   });
 
+  it("returns 404 for base64 with trailing invalid characters", () => {
+    const { res, end, handled } = runAvatarRequest({
+      url: "/avatar/main",
+      method: "GET",
+      resolveAvatar: () => ({ kind: "data", url: "data:image/png;base64,Zm9v!!!!" }),
+    });
+    expectNotFoundResponse({ handled, res, end });
+  });
+
+  it("serves data URL avatar with case-insensitive scheme", () => {
+    const b64 = Buffer.from("case-test").toString("base64");
+    const dataUrl = `DATA:image/png;base64,${b64}`;
+    const { res, setHeader, end, handled } = runAvatarRequest({
+      url: "/avatar/main",
+      method: "GET",
+      resolveAvatar: () => ({ kind: "data", url: dataUrl }),
+    });
+    expect(handled).toBe(true);
+    expect(res.statusCode).toBe(200);
+    expect(setHeader).toHaveBeenCalledWith("Content-Type", "image/png");
+    const body = end.mock.calls[0]?.[0] as Buffer | undefined;
+    expect(body?.toString()).toBe("case-test");
+  });
+
   it("handles HEAD request for data URL avatar without sending body", () => {
     const b64 = Buffer.from("head-test-bytes").toString("base64");
     const dataUrl = `data:image/png;base64,${b64}`;
