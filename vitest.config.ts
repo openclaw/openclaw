@@ -27,6 +27,7 @@ const pluginSdkSubpaths = [
   "diagnostics-otel",
   "diffs",
   "feishu",
+  "gohighlevel",
   "google-gemini-cli-auth",
   "googlechat",
   "irc",

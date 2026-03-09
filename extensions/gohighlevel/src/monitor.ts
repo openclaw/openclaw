@@ -1,16 +1,16 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
-import type { OpenClawConfig } from "openclaw/plugin-sdk";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/gohighlevel";
 import {
   createScopedPairingAccess,
   createReplyPrefixOptions,
   readRequestBodyWithLimit,
-  registerWebhookTarget,
+  registerWebhookTargetWithPluginRoute,
   rejectNonPostWebhookRequest,
   resolveWebhookPath,
   resolveWebhookTargets,
   requestBodyErrorToText,
   isRequestBodyLimitError,
-} from "openclaw/plugin-sdk";
+} from "openclaw/plugin-sdk/gohighlevel";
 import type { ResolvedGoHighLevelAccount } from "./accounts.js";
 import { addGHLContactTag, sendGHLMessage } from "./api.js";
 import { verifyGHLSignature } from "./auth.js";
@@ -52,7 +52,14 @@ function logVerbose(core: GoHighLevelCoreRuntime, runtime: GoHighLevelRuntimeEnv
 }
 
 export function registerGoHighLevelWebhookTarget(target: WebhookTarget): () => void {
-  return registerWebhookTarget(webhookTargets, target).unregister;
+  return registerWebhookTargetWithPluginRoute({
+    targetsByPath: webhookTargets,
+    target,
+    route: {
+      handler: handleGoHighLevelWebhookRequest,
+      auth: "plugin",
+    },
+  }).unregister;
 }
 
 export async function handleGoHighLevelWebhookRequest(

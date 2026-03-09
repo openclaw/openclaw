@@ -1,4 +1,4 @@
-import type { OpenClawConfig, DmPolicy } from "openclaw/plugin-sdk";
+import type { OpenClawConfig, DmPolicy } from "openclaw/plugin-sdk/gohighlevel";
 import {
   addWildcardAllowFrom,
   formatDocsLink,
@@ -9,7 +9,7 @@ import {
   type WizardPrompter,
   DEFAULT_ACCOUNT_ID,
   normalizeAccountId,
-} from "openclaw/plugin-sdk";
+} from "openclaw/plugin-sdk/gohighlevel";
 import {
   listGoHighLevelAccountIds,
   resolveDefaultGoHighLevelAccountId,

@@ -1,4 +1,4 @@
-import { fetchWithSsrFGuard } from "openclaw/plugin-sdk";
+import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/gohighlevel";
 import type { ResolvedGoHighLevelAccount } from "./accounts.js";
 import type { GHLContact, GHLConversation, GHLSendMessageResponse } from "./types.js";
 

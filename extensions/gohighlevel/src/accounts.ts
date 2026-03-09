@@ -1,5 +1,5 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "openclaw/plugin-sdk/account-id";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/gohighlevel";
 import type { GoHighLevelAccountConfig } from "./config-schema.js";
 
 export type GoHighLevelCredentialSource = "env" | "inline" | "none";

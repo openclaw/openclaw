@@ -3,7 +3,7 @@ import type {
   ChannelPlugin,
   ChannelStatusIssue,
   OpenClawConfig,
-} from "openclaw/plugin-sdk";
+} from "openclaw/plugin-sdk/gohighlevel";
 import {
   buildChannelConfigSchema,
   DEFAULT_ACCOUNT_ID,
@@ -15,7 +15,7 @@ import {
   applyAccountNameToChannelSection,
   migrateBaseNameToDefaultAccount,
   normalizeAccountId,
-} from "openclaw/plugin-sdk";
+} from "openclaw/plugin-sdk/gohighlevel";
 import {
   listGoHighLevelAccountIds,
   resolveDefaultGoHighLevelAccountId,

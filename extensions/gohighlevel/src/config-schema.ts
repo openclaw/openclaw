@@ -4,7 +4,7 @@ import {
   MarkdownConfigSchema,
   ReplyRuntimeConfigSchemaShape,
   requireOpenAllowFrom,
-} from "openclaw/plugin-sdk";
+} from "openclaw/plugin-sdk/gohighlevel";
 import { z } from "zod";
 
 /** DM config specific to GoHighLevel (policy + allowFrom). */

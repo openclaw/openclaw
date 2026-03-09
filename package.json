@@ -112,6 +112,10 @@
       "types": "./dist/plugin-sdk/google-gemini-cli-auth.d.ts",
       "default": "./dist/plugin-sdk/google-gemini-cli-auth.js"
     },
+    "./plugin-sdk/gohighlevel": {
+      "types": "./dist/plugin-sdk/gohighlevel.d.ts",
+      "default": "./dist/plugin-sdk/gohighlevel.js"
+    },
     "./plugin-sdk/googlechat": {
       "types": "./dist/plugin-sdk/googlechat.d.ts",
       "default": "./dist/plugin-sdk/googlechat.js"

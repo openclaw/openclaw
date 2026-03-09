@@ -1,4 +1,4 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/gohighlevel";
 import { describe, expect, it, vi, afterEach } from "vitest";
 import { resolveGoHighLevelAccount, listGoHighLevelAccountIds } from "./accounts.js";
 
