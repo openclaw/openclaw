@@ -183,6 +183,7 @@ function normalizePrimitiveObjectUnion(
   remaining: JsonSchema[],
   nullable: boolean,
 ): ConfigSchemaAnalysis | null {
+  // Need at least one primitive AND one object (so at least 2 entries in remaining).
   if (remaining.length < 2) {
     return null;
   }
