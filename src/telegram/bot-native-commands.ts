@@ -543,8 +543,15 @@ export const registerTelegramNativeCommands = ({
     if (typeof (bot as unknown as { command?: unknown }).command !== "function") {
       logVerbose("telegram: bot.command unavailable; skipping native handlers");
     } else {
+      // Commands with dedicated handlers below (e.g. /settings) are skipped
+      // in the generic loop to avoid registering two bot.command() handlers
+      // for the same trigger.
+      const dedicatedHandlers = new Set(["settings"]);
       for (const command of nativeCommands) {
         const normalizedCommandName = normalizeTelegramCommandName(command.name);
+        if (dedicatedHandlers.has(normalizedCommandName)) {
+          continue;
+        }
         bot.command(normalizedCommandName, async (ctx: TelegramNativeCommandContext) => {
           const msg = ctx.message;
           if (!msg) {

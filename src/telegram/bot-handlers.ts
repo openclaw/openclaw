@@ -1332,12 +1332,17 @@ export const registerTelegramHandlers = ({
         if (isGroup) {
           return;
         } // DM-only
+        // Load fresh config *before* the auth re-check so that changes to
+        // allowFrom / dmPolicy made since handler registration are respected.
+        const freshCfg = loadConfig();
+        const freshTelegramCfg = resolveTelegramAccount({ cfg: freshCfg, accountId }).config;
+        const freshAllowFrom = freshTelegramCfg.allowFrom ?? allowFrom;
         // Re-check sender auth at command level (stricter than callback-scope)
         // since settings callbacks mutate config.
         const settingsDmAllow = normalizeDmAllowFromWithStore({
-          allowFrom: allowFrom,
+          allowFrom: freshAllowFrom,
           storeAllowFrom,
-          dmPolicy: telegramCfg.dmPolicy ?? "pairing",
+          dmPolicy: freshTelegramCfg.dmPolicy ?? "pairing",
         });
         if (
           settingsDmAllow.hasEntries &&
@@ -1345,12 +1350,10 @@ export const registerTelegramHandlers = ({
         ) {
           return;
         }
-        if (!resolveChannelConfigWrites({ cfg, channelId: "telegram", accountId })) {
+        if (!resolveChannelConfigWrites({ cfg: freshCfg, channelId: "telegram", accountId })) {
           await replyToCallbackChat("Config writes are disabled for this account.");
           return;
         }
-        const freshCfg = loadConfig();
-        const freshTelegramCfg = resolveTelegramAccount({ cfg: freshCfg, accountId }).config;
         await handleSettingsCallback({
           parsed: settingsCallback,
           cfg: freshCfg,
