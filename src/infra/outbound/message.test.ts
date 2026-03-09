@@ -10,6 +10,7 @@ vi.mock("../../channels/plugins/index.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../channels/plugins/index.js")>();
   return {
     ...actual,
+    normalizeChannelId: (channel?: string) => channel?.trim().toLowerCase() ?? undefined,
     getChannelPlugin: mocks.getChannelPlugin,
   };
 });
@@ -42,14 +43,14 @@ describe("sendMessage", () => {
       outbound: { deliveryMode: "direct" },
     });
     mocks.resolveOutboundTarget.mockImplementation(({ to }: { to: string }) => ({ ok: true, to }));
-    mocks.deliverOutboundPayloads.mockResolvedValue([{ channel: "telegram", messageId: "m1" }]);
+    mocks.deliverOutboundPayloads.mockResolvedValue([{ channel: "mattermost", messageId: "m1" }]);
   });
 
   it("passes explicit agentId to outbound delivery for scoped media roots", async () => {
     await sendMessage({
       cfg: {},
-      channel: "telegram",
-      to: "123456",
+      channel: "mattermost",
+      to: "channel:town-square",
       content: "hi",
       agentId: "work",
     });
@@ -57,8 +58,8 @@ describe("sendMessage", () => {
     expect(mocks.deliverOutboundPayloads).toHaveBeenCalledWith(
       expect.objectContaining({
         agentId: "work",
-        channel: "telegram",
-        to: "123456",
+        channel: "mattermost",
+        to: "channel:town-square",
       }),
     );
   });
