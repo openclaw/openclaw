@@ -144,7 +144,7 @@ describe("web search provider auto-detection", () => {
   });
 
   it("auto-detects bocha when only BOCHA_API_KEY is set", () => {
-    process.env.BOCHA_API_KEY = "test-bocha-key";
+    process.env.BOCHA_API_KEY = "test-bocha-key"; // pragma: allowlist secret
     expect(resolveSearchProvider({})).toBe("bocha");
   });
 

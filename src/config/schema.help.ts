@@ -659,7 +659,7 @@ export const FIELD_HELP: Record<string, string> = {
   "tools.web.search.gemini.model": 'Gemini model override (default: "gemini-2.5-flash").',
   "tools.web.search.grok.apiKey": "Grok (xAI) API key (fallback: XAI_API_KEY env var).", // pragma: allowlist secret
   "tools.web.search.grok.model": 'Grok model override (default: "grok-4-1-fast").',
-  "tools.web.search.bocha.apiKey": "Bocha API key (fallback: BOCHA_API_KEY env var).",
+  "tools.web.search.bocha.apiKey": "Bocha API key (fallback: BOCHA_API_KEY env var).", // pragma: allowlist secret
   "tools.web.search.bocha.baseUrl": 'Bocha base URL override (default: "https://api.bocha.cn/v1").',
   "tools.web.search.bocha.model": 'Bocha model override (default: "web-search").',
   "tools.web.search.bocha.summary":

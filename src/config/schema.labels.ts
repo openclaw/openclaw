@@ -229,7 +229,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "tools.web.search.kimi.apiKey": "Kimi Search API Key", // pragma: allowlist secret
   "tools.web.search.kimi.baseUrl": "Kimi Search Base URL",
   "tools.web.search.kimi.model": "Kimi Search Model",
-  "tools.web.search.bocha.apiKey": "Bocha Search API Key",
+  "tools.web.search.bocha.apiKey": "Bocha Search API Key", // pragma: allowlist secret
   "tools.web.search.bocha.baseUrl": "Bocha Search Base URL",
   "tools.web.search.bocha.model": "Bocha Search Model",
   "tools.web.search.bocha.summary": "Bocha Search Summary",

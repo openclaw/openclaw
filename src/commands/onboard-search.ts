@@ -6,6 +6,7 @@ import {
   hasConfiguredSecretInput,
   normalizeSecretInputString,
 } from "../config/types.secrets.js";
+import type { ToolsConfig } from "../config/types.tools.js";
 import type { RuntimeEnv } from "../runtime.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
 import type { SecretInputMode } from "./onboard-types.js";
@@ -132,12 +133,18 @@ function resolveSearchSecretInput(
   return key;
 }
 
+type WebSearchConfig = NonNullable<NonNullable<ToolsConfig["web"]>["search"]>;
+
 export function applySearchKey(
   config: OpenClawConfig,
   provider: SearchProvider,
   key: SecretInput,
 ): OpenClawConfig {
-  const search = { ...config.tools?.web?.search, provider, enabled: true };
+  const search: WebSearchConfig & { provider: SearchProvider; enabled: true } = {
+    ...config.tools?.web?.search,
+    provider,
+    enabled: true,
+  };
   switch (provider) {
     case "brave":
       search.apiKey = key;
