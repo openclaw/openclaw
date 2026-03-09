@@ -15,7 +15,10 @@ type NodeInvokeCall = {
 };
 
 let lastNodeInvokeCall: NodeInvokeCall | null = null;
+let nodeInvokeCalls: NodeInvokeCall[] = [];
 let lastApprovalRequestCall: { params?: Record<string, unknown> } | null = null;
+let denyNextSystemRunForApproval = false;
+let nextSystemRunErrorMessage: string | null = null;
 let localExecApprovalsFile: ExecApprovalsFile = { version: 1, agents: {} };
 let nodeExecApprovalsFile: ExecApprovalsFile = {
   version: 1,
@@ -44,6 +47,7 @@ const callGateway = vi.fn(async (opts: NodeInvokeCall) => {
   }
   if (opts.method === "node.invoke") {
     lastNodeInvokeCall = opts;
+    nodeInvokeCalls.push(opts);
     const command = opts.params?.command;
     if (command === "system.run.prepare") {
       const params = (opts.params?.params ?? {}) as {
@@ -53,6 +57,15 @@ const callGateway = vi.fn(async (opts: NodeInvokeCall) => {
         agentId?: unknown;
       };
       return buildSystemRunPreparePayload(params);
+    }
+    if (command === "system.run" && nextSystemRunErrorMessage) {
+      const message = nextSystemRunErrorMessage;
+      nextSystemRunErrorMessage = null;
+      throw new Error(message);
+    }
+    if (command === "system.run" && denyNextSystemRunForApproval) {
+      denyNextSystemRunForApproval = false;
+      throw new Error("SYSTEM_RUN_DENIED: approval required");
     }
     return {
       payload: {
@@ -81,7 +94,7 @@ const callGateway = vi.fn(async (opts: NodeInvokeCall) => {
 
 const randomIdempotencyKey = vi.fn(() => "rk_test");
 
-const { defaultRuntime, resetRuntimeCapture } = createCliRuntimeCapture();
+const { defaultRuntime, resetRuntimeCapture, runtimeErrors } = createCliRuntimeCapture();
 
 vi.mock("../gateway/call.js", () => ({
   callGateway: (opts: unknown) => callGateway(opts as NodeInvokeCall),
@@ -137,7 +150,10 @@ describe("nodes-cli coverage", () => {
     callGateway.mockClear();
     randomIdempotencyKey.mockClear();
     lastNodeInvokeCall = null;
+    nodeInvokeCalls = [];
     lastApprovalRequestCall = null;
+    denyNextSystemRunForApproval = false;
+    nextSystemRunErrorMessage = null;
     localExecApprovalsFile = { version: 1, agents: {} };
     nodeExecApprovalsFile = {
       version: 1,
@@ -150,7 +166,7 @@ describe("nodes-cli coverage", () => {
     };
   });
 
-  it("invokes system.run with parsed params", async () => {
+  it("invokes system.run with parsed params without pre-asking on ask=on-miss", async () => {
     const invoke = await runNodesCommand([
       "nodes",
       "run",
@@ -180,20 +196,10 @@ describe("nodes-cli coverage", () => {
       timeoutMs: 1200,
       needsScreenRecording: true,
       agentId: "main",
-      approved: true,
-      approvalDecision: "allow-once",
-      runId: expect.any(String),
+      approved: false,
     });
     expect(invoke?.params?.timeoutMs).toBe(5000);
-    const approval = getApprovalRequestCall();
-    expect(approval?.params?.["commandArgv"]).toEqual(["echo", "hi"]);
-    expect(approval?.params?.["systemRunPlan"]).toEqual({
-      argv: ["echo", "hi"],
-      cwd: "/tmp",
-      rawCommand: null,
-      agentId: "main",
-      sessionKey: null,
-    });
+    expect(getApprovalRequestCall()).toBeNull();
   });
 
   it("invokes system.run with raw command", async () => {
@@ -215,19 +221,87 @@ describe("nodes-cli coverage", () => {
       command: ["/bin/sh", "-lc", "echo hi"],
       rawCommand: "echo hi",
       agentId: "main",
+      approved: false,
+    });
+    expect(getApprovalRequestCall()).toBeNull();
+  });
+
+  it("requests approval on-miss only after node reports approval required", async () => {
+    denyNextSystemRunForApproval = true;
+
+    const invoke = await runNodesCommand(["nodes", "run", "--node", "mac-1", "echo", "hi"]);
+
+    expect(invoke).toBeTruthy();
+    expect(invoke?.params?.command).toBe("system.run");
+
+    const systemRunCalls = nodeInvokeCalls.filter((call) => call.params?.command === "system.run");
+    expect(systemRunCalls).toHaveLength(2);
+    expect(systemRunCalls[0]?.params?.params).toMatchObject({
+      command: ["echo", "hi"],
+      approved: false,
+    });
+    expect(systemRunCalls[1]?.params?.params).toMatchObject({
+      command: ["echo", "hi"],
       approved: true,
       approvalDecision: "allow-once",
       runId: expect.any(String),
     });
+
     const approval = getApprovalRequestCall();
-    expect(approval?.params?.["commandArgv"]).toEqual(["/bin/sh", "-lc", "echo hi"]);
+    expect(approval?.params?.["commandArgv"]).toEqual(["echo", "hi"]);
     expect(approval?.params?.["systemRunPlan"]).toEqual({
-      argv: ["/bin/sh", "-lc", "echo hi"],
+      argv: ["echo", "hi"],
       cwd: null,
-      rawCommand: "echo hi",
+      rawCommand: null,
       agentId: "main",
       sessionKey: null,
     });
+  });
+
+  it("pre-prompts when ask=always before the first system.run", async () => {
+    nodeExecApprovalsFile = {
+      version: 1,
+      defaults: {
+        security: "allowlist",
+        ask: "always",
+        askFallback: "deny",
+      },
+      agents: {},
+    };
+
+    const invoke = await runNodesCommand(["nodes", "run", "--node", "mac-1", "echo", "hi"]);
+
+    expect(invoke).toBeTruthy();
+    expect(invoke?.params?.command).toBe("system.run");
+    expect(nodeInvokeCalls.filter((call) => call.params?.command === "system.run")).toHaveLength(1);
+
+    const approval = getApprovalRequestCall();
+    expect(approval?.params?.["commandArgv"]).toEqual(["echo", "hi"]);
+    expect(approval?.params?.["systemRunPlan"]).toEqual({
+      argv: ["echo", "hi"],
+      cwd: null,
+      rawCommand: null,
+      agentId: "main",
+      sessionKey: null,
+    });
+    expect(invoke?.params?.params).toMatchObject({
+      command: ["echo", "hi"],
+      approved: true,
+      approvalDecision: "allow-once",
+      runId: expect.any(String),
+    });
+  });
+
+  it("does not request approval for non-approval denials", async () => {
+    nextSystemRunErrorMessage = "SYSTEM_RUN_DENIED: allowlist miss";
+
+    await expect(
+      runNodesCommand(["nodes", "run", "--node", "mac-1", "echo", "hi"]),
+    ).rejects.toThrow("__exit__:1");
+
+    expect(nodeInvokeCalls.filter((call) => call.params?.command === "system.run")).toHaveLength(1);
+    expect(getApprovalRequestCall()).toBeNull();
+    expect(runtimeErrors.join("\n")).toContain("SYSTEM_RUN_DENIED: allowlist miss");
   });
 
   it("inherits ask=off from local exec approvals when tools.exec.ask is unset", async () => {
