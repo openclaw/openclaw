@@ -5,6 +5,7 @@ import {
 } from "../../channels/inbound-debounce-policy.js";
 import { resolveOpenProviderRuntimeGroupPolicy } from "../../config/runtime-group-policy.js";
 import { danger } from "../../globals.js";
+import { createDedupeCache } from "../../infra/dedupe.js";
 import { buildDiscordInboundJob } from "./inbound-job.js";
 import { createDiscordInboundWorker } from "./inbound-worker.js";
 import type { DiscordMessageEvent, DiscordMessageHandler } from "./listeners.js";
@@ -29,6 +30,37 @@ type DiscordMessageHandlerParams = Omit<
 export type DiscordMessageHandlerWithLifecycle = DiscordMessageHandler & {
   deactivate: () => void;
 };
+
+const discordInboundMessageDedupe = createDedupeCache({
+  ttlMs: 2 * 60_000,
+  maxSize: 10_000,
+});
+
+export function resetDiscordInboundMessageDedupe(): void {
+  discordInboundMessageDedupe.clear();
+}
+
+function buildDiscordInboundMessageDedupeKey(params: {
+  accountId?: string;
+  data: DiscordMessageEvent;
+}): string | null {
+  const messageId = params.data.message?.id?.trim() || params.data.id?.trim();
+  const authorId = params.data.message?.author?.id ?? params.data.author?.id;
+  const channelId = resolveDiscordMessageChannelId({
+    message: params.data.message,
+    eventChannelId: params.data.channel_id,
+  });
+  if (!messageId || !channelId) {
+    return null;
+  }
+  return JSON.stringify([
+    "discord-inbound",
+    params.accountId ?? "",
+    channelId,
+    authorId ?? "",
+    messageId,
+  ]);
+}
 
 export function createDiscordMessageHandler(
   params: DiscordMessageHandlerParams,
@@ -172,6 +204,17 @@ export function createDiscordMessageHandler(
       const msgAuthorId = data.message?.author?.id ?? data.author?.id;
       if (params.botUserId && msgAuthorId === params.botUserId) {
         return;
+      }
+
+      const dedupeKey = buildDiscordInboundMessageDedupeKey({
+        accountId: params.accountId,
+        data,
+      });
+      if (dedupeKey && discordInboundMessageDedupe.peek(dedupeKey)) {
+        return;
+      }
+      if (dedupeKey) {
+        discordInboundMessageDedupe.check(dedupeKey);
       }
 
       await debouncer.enqueue({ data, client, abortSignal: options?.abortSignal });

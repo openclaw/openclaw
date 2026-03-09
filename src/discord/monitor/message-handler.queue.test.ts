@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   createDiscordHandlerParams,
   createDiscordPreflightContext,
@@ -17,7 +17,7 @@ vi.mock("./message-handler.process.js", () => ({
   processDiscordMessage: processDiscordMessageMock,
 }));
 
-const { createDiscordMessageHandler } = await import("./message-handler.js");
+const { createDiscordMessageHandler, resetDiscordInboundMessageDedupe } = await import("./message-handler.js");
 
 function createDeferred<T = void>() {
   let resolve: (value: T | PromiseLike<T>) => void = () => {};
@@ -83,6 +83,10 @@ async function createLifecycleStopScenario(params: {
 }
 
 describe("createDiscordMessageHandler queue behavior", () => {
+  beforeEach(() => {
+    resetDiscordInboundMessageDedupe();
+  });
+
   it("resets busy counters when the handler is created", () => {
     preflightDiscordMessageMock.mockReset();
     processDiscordMessageMock.mockReset();
@@ -96,6 +100,30 @@ describe("createDiscordMessageHandler queue behavior", () => {
         busy: false,
       }),
     );
+  });
+
+  it("drops duplicate inbound Discord messages with the same message id", async () => {
+    preflightDiscordMessageMock.mockReset();
+    processDiscordMessageMock.mockReset();
+
+    preflightDiscordMessageMock.mockImplementation(
+      async (params: { data: { channel_id: string } }) =>
+        createPreflightContext(params.data.channel_id),
+    );
+    processDiscordMessageMock.mockResolvedValue(undefined);
+
+    const handler = createDiscordMessageHandler(createDiscordHandlerParams());
+
+    await expect(handler(createMessageData("dup-1") as never, {} as never)).resolves.toBeUndefined();
+    await vi.waitFor(() => {
+      expect(processDiscordMessageMock).toHaveBeenCalledTimes(1);
+    });
+
+    await expect(handler(createMessageData("dup-1") as never, {} as never)).resolves.toBeUndefined();
+    await Promise.resolve();
+
+    expect(preflightDiscordMessageMock).toHaveBeenCalledTimes(1);
+    expect(processDiscordMessageMock).toHaveBeenCalledTimes(1);
   });
 
   it("returns immediately and tracks busy status while queued runs execute", async () => {
