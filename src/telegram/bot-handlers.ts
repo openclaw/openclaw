@@ -1,6 +1,5 @@
 import type { Message, ReactionTypeEmoji } from "@grammyjs/types";
 import { resolveAgentDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
-import { resolveCommandAuthorization } from "../auto-reply/command-auth.js";
 import {
   createInboundDebouncer,
   resolveInboundDebounceMs,
@@ -13,7 +12,6 @@ import {
 import { resolveStoredModelOverride } from "../auto-reply/reply/model-selection.js";
 import { listSkillCommandsForAgents } from "../auto-reply/skill-commands.js";
 import { buildCommandsMessagePaginated } from "../auto-reply/status.js";
-import { resolveCommandAuthorizedFromAuthorizers } from "../channels/command-gating.js";
 import { shouldDebounceTextInbound } from "../channels/inbound-debounce-policy.js";
 import { resolveChannelConfigWrites } from "../channels/plugins/config-writes.js";
 import { loadConfig } from "../config/config.js";
@@ -77,6 +75,7 @@ import {
 } from "./model-buttons.js";
 import { buildInlineKeyboard } from "./send.js";
 import { wasSentByBot } from "./sent-message-cache.js";
+import { resolveSettingsAuthDecision } from "./settings-auth.js";
 import { parseSettingsCallbackData } from "./settings-buttons.js";
 import { handleSettingsCallback } from "./settings-panel.js";
 
@@ -1106,8 +1105,8 @@ export const registerTelegramHandlers = ({
 
       // Settings panel callback handler (cfg_menu, cfg_s_*, cfg_v_*)
       // Must run before the inlineButtonsScope gates — settings callbacks are
-      // DM-only and have their own auth (fresh config + resolveCommandAuthorization),
-      // so they should not be blocked by inlineButtonsScope=off or scope=group.
+      // DM-only and have their own auth, so they should not be blocked by
+      // inlineButtonsScope=off or scope=group.
       const settingsCallback = parseSettingsCallbackData(data);
       if (settingsCallback) {
         const settingsChatId = callbackMessage.chat.id;
@@ -1118,79 +1117,41 @@ export const registerTelegramHandlers = ({
         } // DM-only
         const settingsSenderId = callback.from?.id ? String(callback.from.id) : "";
         const settingsSenderUsername = callback.from?.username ?? "";
+        // Derive isForum / messageThreadId from the actual callback message so
+        // that topic-specific auth (requireTopic, per-topic allowFrom/dmPolicy
+        // overrides) is enforced identically to the /settings command path.
+        const settingsIsForum = callbackMessage.chat.is_forum === true;
+        const settingsMessageThreadId = callbackMessage.message_thread_id;
         // Load fresh config so changes to allowFrom/dmPolicy since handler
         // registration are respected.
         const freshCfg = loadConfig();
         const freshTelegramCfg = resolveTelegramAccount({ cfg: freshCfg, accountId }).config;
         const freshAllowFrom = freshTelegramCfg.allowFrom ?? allowFrom;
-        // Resolve storeAllowFrom via event auth context for DM.
+        // Resolve full event auth context from the real callback message,
+        // including groupConfig, topicConfig, dmThreadId, groupAllowOverride,
+        // so per-DM/topic overrides are enforced.
         const settingsEventAuth = await resolveTelegramEventAuthorizationContext({
           chatId: settingsChatId,
           isGroup: false,
-          isForum: false,
-          messageThreadId: undefined,
+          isForum: settingsIsForum,
+          messageThreadId: settingsMessageThreadId,
         });
-        const settingsStoreAllowFrom = settingsEventAuth.storeAllowFrom;
-        const settingsDmAllow = normalizeDmAllowFromWithStore({
-          allowFrom: freshAllowFrom,
-          storeAllowFrom: settingsStoreAllowFrom,
-          dmPolicy: freshTelegramCfg.dmPolicy ?? "pairing",
-        });
-        const settingsDmSenderAllowed = isSenderAllowed({
-          allow: settingsDmAllow,
+        // Use shared auth decision (same function the /settings command path
+        // should use) so command and callback auth are structurally identical.
+        const settingsAuth = resolveSettingsAuthDecision({
+          chatId: settingsChatId,
+          accountId,
           senderId: settingsSenderId,
           senderUsername: settingsSenderUsername,
-        });
-        // Mirror /settings command handler auth: use resolveCommandAuthorizedFromAuthorizers
-        // so that when no allowlist is configured and access groups are off,
-        // commandAuthorized=true (open access), matching the command handler behavior.
-        const commandsAllowFrom = freshCfg.commands?.allowFrom;
-        const commandsAllowFromConfigured =
-          commandsAllowFrom != null &&
-          typeof commandsAllowFrom === "object" &&
-          (Array.isArray(commandsAllowFrom.telegram) || Array.isArray(commandsAllowFrom["*"]));
-        const useAccessGroups = freshCfg.commands?.useAccessGroups !== false;
-        const settingsCommandAuthorized = commandsAllowFromConfigured
-          ? Boolean(
-              resolveCommandAuthorization({
-                ctx: {
-                  Provider: "telegram",
-                  Surface: "telegram",
-                  OriginatingChannel: "telegram",
-                  AccountId: accountId,
-                  ChatType: "direct",
-                  From: `telegram:${settingsChatId}`,
-                  SenderId: settingsSenderId || undefined,
-                  SenderUsername: settingsSenderUsername || undefined,
-                },
-                cfg: freshCfg,
-                commandAuthorized: false,
-              })?.isAuthorizedSender,
-            )
-          : resolveCommandAuthorizedFromAuthorizers({
-              useAccessGroups,
-              authorizers: [
-                { configured: settingsDmAllow.hasEntries, allowed: settingsDmSenderAllowed },
-              ],
-              modeWhenAccessGroupsOff: "configured",
-            });
-        // Use resolveCommandAuthorization to enforce both commands.allowFrom
-        // and commands.ownerAllowFrom in a single check.
-        const commandsAuth = resolveCommandAuthorization({
-          ctx: {
-            Provider: "telegram",
-            Surface: "telegram",
-            OriginatingChannel: "telegram",
-            AccountId: accountId,
-            ChatType: "direct",
-            From: `telegram:${settingsChatId}`,
-            SenderId: settingsSenderId || undefined,
-            SenderUsername: settingsSenderUsername || undefined,
-          },
           cfg: freshCfg,
-          commandAuthorized: settingsCommandAuthorized,
+          allowFrom: freshAllowFrom,
+          effectiveDmPolicy: settingsEventAuth.dmPolicy,
+          storeAllowFrom: settingsEventAuth.storeAllowFrom,
+          dmThreadId: settingsEventAuth.dmThreadId,
+          groupConfig: settingsEventAuth.groupConfig,
+          groupAllowOverride: settingsEventAuth.groupAllowOverride,
         });
-        if (!commandsAuth.isAuthorizedSender) {
+        if (!settingsAuth.authorized) {
           return;
         }
         if (!resolveChannelConfigWrites({ cfg: freshCfg, channelId: "telegram", accountId })) {
