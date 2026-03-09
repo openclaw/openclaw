@@ -49,6 +49,23 @@ describe("config secret refs schema", () => {
     expect(result.ok).toBe(true);
   });
 
+  it("accepts allowInsecurePath on file secret providers", () => {
+    const result = validateConfigObjectRaw({
+      secrets: {
+        providers: {
+          filemain: {
+            source: "file",
+            path: "~/.openclaw/secrets.json",
+            mode: "json",
+            allowInsecurePath: true,
+          },
+        },
+      },
+    });
+
+    expect(result.ok).toBe(true);
+  });
+
   it("accepts openai-codex-responses as a model api value", () => {
     const result = validateConfigObjectRaw({
       models: {
