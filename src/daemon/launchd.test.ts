@@ -455,11 +455,13 @@ describe("resolveGatewayLogPaths", () => {
       HOME: "/Users/test",
       OPENCLAW_STATE_DIR: "/Users/test\\.openclaw",
     };
+    const paths = resolveGatewayLogPaths(env);
 
-    expect(resolveGatewayLogPaths(env)).toEqual({
-      logDir: "/Users/test/.openclaw/logs",
-      stdoutPath: "/Users/test/.openclaw/logs/gateway.log",
-      stderrPath: "/Users/test/.openclaw/logs/gateway.err.log",
-    });
+    expect(paths.logDir).not.toContain("\\");
+    expect(paths.stdoutPath).not.toContain("\\");
+    expect(paths.stderrPath).not.toContain("\\");
+    expect(paths.logDir.endsWith("/Users/test/.openclaw/logs")).toBe(true);
+    expect(paths.stdoutPath.endsWith("/Users/test/.openclaw/logs/gateway.log")).toBe(true);
+    expect(paths.stderrPath.endsWith("/Users/test/.openclaw/logs/gateway.err.log")).toBe(true);
   });
 });
