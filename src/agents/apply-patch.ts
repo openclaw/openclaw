@@ -274,7 +274,16 @@ function resolvePatchFileOps(options: ApplyPatchOptions): PatchFileOps {
     remove: async (filePath) => {
       if (workspaceOnly) {
         // Re-verify realpath at deletion time to close TOCTOU window
-        const real = await fs.realpath(filePath).catch(() => filePath);
+        let real: string;
+        try {
+          real = await fs.realpath(filePath);
+        } catch (err: unknown) {
+          if ((err as NodeJS.ErrnoException).code === "ENOENT") {
+            // File already gone – nothing to remove
+            return;
+          }
+          throw err;
+        }
         if (!isPathInside(options.cwd, real)) {
           throw new Error(`remove blocked: resolved path ${real} is outside workspace root`);
         }
@@ -283,8 +292,18 @@ function resolvePatchFileOps(options: ApplyPatchOptions): PatchFileOps {
     },
     mkdirp: async (dir) => {
       if (workspaceOnly) {
-        // Verify the target directory stays within the workspace root
-        const resolved = path.resolve(dir);
+        // Resolve symlinks to verify the real target stays within workspace root
+        let resolved: string;
+        try {
+          resolved = await fs.realpath(dir);
+        } catch (err: unknown) {
+          if ((err as NodeJS.ErrnoException).code === "ENOENT") {
+            // Directory doesn't exist yet – fall back to logical resolution
+            resolved = path.resolve(dir);
+          } else {
+            throw err;
+          }
+        }
         if (!isPathInside(options.cwd, resolved)) {
           throw new Error(`mkdirp blocked: path ${resolved} is outside workspace root`);
         }
