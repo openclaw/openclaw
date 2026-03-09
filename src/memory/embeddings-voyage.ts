@@ -14,6 +14,7 @@ export type VoyageEmbeddingClient = {
 export const DEFAULT_VOYAGE_EMBEDDING_MODEL = "voyage-4-large";
 const DEFAULT_VOYAGE_BASE_URL = "https://api.voyageai.com/v1";
 const VOYAGE_MAX_INPUT_TOKENS: Record<string, number> = {
+  "voyage-4-large": 32000,
   "voyage-3": 32000,
   "voyage-3-lite": 16000,
   "voyage-code-3": 32000,
