@@ -142,6 +142,40 @@ describe("backupRestoreCommand", () => {
     }
   });
 
+  it("surfaces restore conflicts during dry-run", async () => {
+    const sourceStateDir = path.join(sourceHome.home, ".openclaw");
+    const archiveDir = await fs.mkdtemp(
+      path.join(os.tmpdir(), "openclaw-backup-restore-dry-conflict-"),
+    );
+
+    try {
+      await fs.writeFile(path.join(sourceStateDir, "openclaw.json"), JSON.stringify({}), "utf8");
+      await fs.writeFile(path.join(sourceStateDir, "state.txt"), "state\n", "utf8");
+
+      const runtime = {
+        log: vi.fn(),
+        error: vi.fn(),
+        exit: vi.fn(),
+      };
+      const created = await backupCreateCommand(runtime, {
+        output: archiveDir,
+      });
+
+      const targetHome = await createExtraHome("openclaw-backup-restore-dry-conflict-target-");
+      setActiveHome(targetHome);
+      await fs.writeFile(path.join(targetHome, ".openclaw", "existing.txt"), "existing\n", "utf8");
+
+      await expect(
+        backupRestoreCommand(runtime, {
+          archive: created.archivePath,
+          dryRun: true,
+        }),
+      ).rejects.toThrow(/rerun with --force/i);
+    } finally {
+      await fs.rm(archiveDir, { recursive: true, force: true });
+    }
+  });
+
   it("refuses to overwrite existing restore targets without --force", async () => {
     const sourceStateDir = path.join(sourceHome.home, ".openclaw");
     const archiveDir = await fs.mkdtemp(
@@ -270,6 +304,84 @@ describe("backupRestoreCommand", () => {
       expect(await fs.readFile(targetConfigPath, "utf8")).toContain("old-workspace");
     } finally {
       cpSpy.mockRestore();
+      await fs.rm(archiveDir, { recursive: true, force: true });
+    }
+  });
+
+  it("fails closed when multiple workspace targets are ambiguous", async () => {
+    const sourceStateDir = path.join(sourceHome.home, ".openclaw");
+    const sourceConfigPath = path.join(sourceHome.home, "custom-config.json");
+    const sourceWorkspaceA = await fs.mkdtemp(
+      path.join(os.tmpdir(), "openclaw-restore-workspace-a-"),
+    );
+    const sourceWorkspaceB = await fs.mkdtemp(
+      path.join(os.tmpdir(), "openclaw-restore-workspace-b-"),
+    );
+    const archiveDir = await fs.mkdtemp(
+      path.join(os.tmpdir(), "openclaw-backup-restore-ambiguous-"),
+    );
+    let targetWorkspaceA: string | null = null;
+    let targetWorkspaceB: string | null = null;
+
+    try {
+      setActiveHome(sourceHome.home, sourceConfigPath);
+      await fs.writeFile(
+        sourceConfigPath,
+        JSON.stringify({
+          agents: {
+            defaults: {
+              workspace: sourceWorkspaceA,
+            },
+            list: [{ id: "second", workspace: sourceWorkspaceB }],
+          },
+        }),
+        "utf8",
+      );
+      await fs.writeFile(path.join(sourceStateDir, "state.txt"), "state\n", "utf8");
+      await fs.writeFile(path.join(sourceWorkspaceA, "A.txt"), "a\n", "utf8");
+      await fs.writeFile(path.join(sourceWorkspaceB, "B.txt"), "b\n", "utf8");
+
+      const runtime = {
+        log: vi.fn(),
+        error: vi.fn(),
+        exit: vi.fn(),
+      };
+      const created = await backupCreateCommand(runtime, {
+        output: archiveDir,
+      });
+
+      const targetHome = await createExtraHome("openclaw-backup-restore-ambiguous-target-");
+      const targetConfigPath = path.join(targetHome, "target-config.json");
+      targetWorkspaceB = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-restore-target-b-"));
+      targetWorkspaceA = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-restore-target-a-"));
+      setActiveHome(targetHome, targetConfigPath);
+      await fs.writeFile(
+        targetConfigPath,
+        JSON.stringify({
+          agents: {
+            defaults: {
+              workspace: targetWorkspaceB,
+            },
+            list: [{ id: "second", workspace: targetWorkspaceA }],
+          },
+        }),
+        "utf8",
+      );
+
+      await expect(
+        backupRestoreCommand(runtime, {
+          archive: created.archivePath,
+        }),
+      ).rejects.toThrow(/cannot determine restore targets/i);
+    } finally {
+      await fs.rm(sourceWorkspaceA, { recursive: true, force: true });
+      await fs.rm(sourceWorkspaceB, { recursive: true, force: true });
+      if (targetWorkspaceA) {
+        await fs.rm(targetWorkspaceA, { recursive: true, force: true });
+      }
+      if (targetWorkspaceB) {
+        await fs.rm(targetWorkspaceB, { recursive: true, force: true });
+      }
       await fs.rm(archiveDir, { recursive: true, force: true });
     }
   });

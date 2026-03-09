@@ -223,11 +223,22 @@ async function resolveWorkspaceRestoreTargets(params: {
       ? collectWorkspaceDirs(currentSnapshot.config)
       : [];
 
-  if (currentWorkspaceDirs.length === orderedAssets.length) {
+  const currentWorkspaceByPath = new Map(
+    currentWorkspaceDirs.map((workspaceDir) => [
+      path.resolve(workspaceDir),
+      path.resolve(workspaceDir),
+    ]),
+  );
+  const exactCurrentWorkspaceTargets = orderedAssets.map((asset) =>
+    currentWorkspaceByPath.get(path.resolve(asset.sourcePath)),
+  );
+  if (
+    exactCurrentWorkspaceTargets.every((targetPath): targetPath is string => Boolean(targetPath))
+  ) {
     return new Map(
       orderedAssets.map((asset, index) => [
         path.resolve(asset.sourcePath),
-        path.resolve(currentWorkspaceDirs[index] ?? resolveDefaultAgentWorkspaceDir()),
+        path.resolve(exactCurrentWorkspaceTargets[index] ?? resolveDefaultAgentWorkspaceDir()),
       ]),
     );
   }
@@ -343,14 +354,13 @@ async function assertRestoreTargetsReady(params: {
   archivePath: string;
   items: BackupRestoreItem[];
   force: boolean;
-  dryRun: boolean;
 }): Promise<void> {
   const archiveRealPath = await canonicalizePath(params.archivePath);
   const conflicts: string[] = [];
 
   for (const item of params.items) {
     const targetExists = await pathExists(item.targetPath);
-    if (targetExists && !params.force && !params.dryRun) {
+    if (targetExists && !params.force) {
       const isEmptyDirectory =
         item.targetType === "directory" &&
         (await fs
@@ -395,6 +405,11 @@ async function extractAssetToStage(params: {
     gzip: true,
     cwd: params.stageRoot,
     strip,
+    onentry: (entry) => {
+      if (entry.type === "Link" || entry.type === "SymbolicLink") {
+        throw new Error(`Restore archive contains unsupported link entry: ${entry.path}`);
+      }
+    },
     filter: (entryPath) => matchesArchivePath(entryPath, params.assetArchivePath),
   });
   return path.join(params.stageRoot, path.posix.basename(params.assetArchivePath));
@@ -643,7 +658,6 @@ export async function backupRestoreCommand(
     archivePath,
     items: restorePlan.items,
     force: Boolean(opts.force),
-    dryRun: Boolean(opts.dryRun),
   });
 
   const result: BackupRestoreResult = {

@@ -392,4 +392,164 @@ describe("backupVerifyCommand", () => {
       await fs.rm(tempDir, { recursive: true, force: true });
     }
   });
+
+  it("fails when the archive contains symlink payload entries", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-backup-symlink-entry-"));
+    const archivePath = path.join(tempDir, "broken.tar.gz");
+    try {
+      const rootName = "2026-03-09T00-00-00.000Z-openclaw-backup";
+      const root = path.join(tempDir, rootName);
+      const payloadDir = path.join(root, "payload", "posix", "tmp");
+      await fs.mkdir(payloadDir, { recursive: true });
+      await fs.symlink("../../../../outside", path.join(payloadDir, ".openclaw"));
+      const manifest = {
+        schemaVersion: 1,
+        createdAt: "2026-03-09T00:00:00.000Z",
+        archiveRoot: rootName,
+        runtimeVersion: "test",
+        platform: process.platform,
+        nodeVersion: process.version,
+        assets: [
+          {
+            kind: "state",
+            sourcePath: "/tmp/.openclaw",
+            archivePath: `${rootName}/payload/posix/tmp/.openclaw`,
+          },
+        ],
+      };
+      await fs.writeFile(
+        path.join(root, "manifest.json"),
+        `${JSON.stringify(manifest, null, 2)}\n`,
+      );
+      await tar.c({ file: archivePath, gzip: true, cwd: tempDir }, [rootName]);
+
+      const runtime = {
+        log: vi.fn(),
+        error: vi.fn(),
+        exit: vi.fn(),
+      };
+
+      await expect(backupVerifyCommand(runtime, { archive: archivePath })).rejects.toThrow(
+        /unsupported entry type symboliclink/i,
+      );
+    } finally {
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("fails when the manifest is unreasonably large", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-backup-large-manifest-"));
+    const archivePath = path.join(tempDir, "broken.tar.gz");
+    const manifestPath = path.join(tempDir, "manifest.json");
+    try {
+      const rootName = "2026-03-09T00-00-00.000Z-openclaw-backup";
+      const manifest = {
+        schemaVersion: 1,
+        createdAt: "2026-03-09T00:00:00.000Z",
+        archiveRoot: rootName,
+        runtimeVersion: "test",
+        platform: process.platform,
+        nodeVersion: process.version,
+        padding: "x".repeat(1_200_000),
+        assets: [],
+      };
+      await fs.writeFile(manifestPath, `${JSON.stringify(manifest)}\n`, "utf8");
+      await tar.c(
+        {
+          file: archivePath,
+          gzip: true,
+          portable: true,
+          preservePaths: true,
+          onWriteEntry: (entry) => {
+            if (entry.path === manifestPath) {
+              entry.path = `${rootName}/manifest.json`;
+            }
+          },
+        },
+        [manifestPath],
+      );
+
+      const runtime = {
+        log: vi.fn(),
+        error: vi.fn(),
+        exit: vi.fn(),
+      };
+
+      await expect(backupVerifyCommand(runtime, { archive: archivePath })).rejects.toThrow(
+        /manifest exceeds/i,
+      );
+    } finally {
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("fails when archive entries collide on case-insensitive filesystems", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-backup-case-collision-"));
+    const archivePath = path.join(tempDir, "broken.tar.gz");
+    const manifestPath = path.join(tempDir, "manifest.json");
+    const payloadPathA = path.join(tempDir, "payload-a.txt");
+    const payloadPathB = path.join(tempDir, "payload-b.txt");
+    try {
+      const rootName = "2026-03-09T00-00-00.000Z-openclaw-backup";
+      const archivePathA = `${rootName}/payload/posix/tmp/.openclaw/Foo.txt`;
+      const archivePathB = `${rootName}/payload/posix/tmp/.openclaw/foo.txt`;
+      const manifest = {
+        schemaVersion: 1,
+        createdAt: "2026-03-09T00:00:00.000Z",
+        archiveRoot: rootName,
+        runtimeVersion: "test",
+        platform: process.platform,
+        nodeVersion: process.version,
+        assets: [
+          {
+            kind: "state",
+            sourcePath: "/tmp/.openclaw/Foo.txt",
+            archivePath: archivePathA,
+          },
+          {
+            kind: "state",
+            sourcePath: "/tmp/.openclaw/foo.txt",
+            archivePath: archivePathB,
+          },
+        ],
+      };
+      await fs.writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, "utf8");
+      await fs.writeFile(payloadPathA, "payload-a\n", "utf8");
+      await fs.writeFile(payloadPathB, "payload-b\n", "utf8");
+      await tar.c(
+        {
+          file: archivePath,
+          gzip: true,
+          portable: true,
+          preservePaths: true,
+          onWriteEntry: (entry) => {
+            if (entry.path === manifestPath) {
+              entry.path = `${rootName}/manifest.json`;
+              return;
+            }
+            if (entry.path === payloadPathA) {
+              entry.path = archivePathA;
+              return;
+            }
+            if (entry.path === payloadPathB) {
+              entry.path = archivePathB;
+            }
+          },
+        },
+        [manifestPath, payloadPathA, payloadPathB],
+      );
+
+      const runtime = {
+        log: vi.fn(),
+        error: vi.fn(),
+        exit: vi.fn(),
+      };
+
+      await expect(backupVerifyCommand(runtime, { archive: archivePath })).rejects.toThrow(
+        /collide on common filesystems/i,
+      );
+    } finally {
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  });
 });

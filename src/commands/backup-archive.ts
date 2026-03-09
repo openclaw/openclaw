@@ -2,6 +2,14 @@ import path from "node:path";
 import * as tar from "tar";
 
 const WINDOWS_ABSOLUTE_ARCHIVE_PATH_RE = /^[A-Za-z]:[\\/]/;
+const MAX_BACKUP_ARCHIVE_ENTRIES = 200_000;
+const MAX_BACKUP_MANIFEST_BYTES = 1_000_000;
+
+type ArchiveEntryRecord = {
+  raw: string;
+  normalized: string;
+  type: string;
+};
 
 export type BackupManifestAsset = {
   kind: string;
@@ -83,6 +91,29 @@ function isArchivePathWithin(child: string, parent: string): boolean {
   return relative === "" || (!relative.startsWith("../") && relative !== "..");
 }
 
+function collisionKey(entryPath: string): string {
+  return entryPath
+    .normalize("NFKC")
+    .split("/")
+    .map((segment) => segment.trimEnd().replace(/\.+$/u, "").toLowerCase())
+    .join("/");
+}
+
+function isAllowedArchiveEntryType(type: string): boolean {
+  return (
+    type === "File" ||
+    type === "OldFile" ||
+    type === "Directory" ||
+    type === "ContiguousFile" ||
+    type === "ExtendedHeader" ||
+    type === "GlobalExtendedHeader" ||
+    type === "NextFileHasLongLinkpath" ||
+    type === "NextFileHasLongPath" ||
+    type === "OldGnuLongPath" ||
+    type === "OldExtendedHeader"
+  );
+}
+
 function parseManifest(raw: string): BackupManifest {
   let parsed: unknown;
   try {
@@ -159,49 +190,89 @@ function parseManifest(raw: string): BackupManifest {
   };
 }
 
-async function listArchiveEntries(archivePath: string): Promise<string[]> {
-  const entries: string[] = [];
-  await tar.t({
-    file: archivePath,
-    gzip: true,
-    onentry: (entry) => {
-      entries.push(entry.path);
-    },
-  });
-  return entries;
-}
-
-async function extractManifest(params: {
-  archivePath: string;
-  manifestEntryPath: string;
-}): Promise<string> {
-  let manifestContentPromise: Promise<string> | undefined;
+async function scanArchive(params: { archivePath: string }): Promise<{
+  entries: ArchiveEntryRecord[];
+  manifestRawByPath: Map<string, string>;
+}> {
+  const entries: ArchiveEntryRecord[] = [];
+  const manifestRawByPath = new Map<string, string>();
+  let scanError: Error | null = null;
+  let manifestTooLargeError: Error | null = null;
   await tar.t({
     file: params.archivePath,
     gzip: true,
     onentry: (entry) => {
-      if (entry.path !== params.manifestEntryPath) {
+      if (scanError) {
+        entry.resume();
+        return;
+      }
+      let normalized: string;
+      try {
+        normalized = normalizeArchivePath(entry.path, "Archive entry");
+      } catch (err) {
+        scanError = err instanceof Error ? err : new Error(String(err));
+        entry.resume();
+        return;
+      }
+      if (entries.length >= MAX_BACKUP_ARCHIVE_ENTRIES) {
+        scanError = new Error(
+          `Backup archive has too many entries (> ${MAX_BACKUP_ARCHIVE_ENTRIES}).`,
+        );
+        entry.resume();
+        return;
+      }
+      if (!isAllowedArchiveEntryType(entry.type)) {
+        scanError = new Error(
+          `Archive contains unsupported entry type ${entry.type}: ${entry.path}`,
+        );
         entry.resume();
         return;
       }
 
-      manifestContentPromise = new Promise<string>((resolve, reject) => {
-        const chunks: Buffer[] = [];
-        entry.on("data", (chunk: Buffer | string) => {
-          chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
-        });
-        entry.on("error", reject);
-        entry.on("end", () => {
-          resolve(Buffer.concat(chunks).toString("utf8"));
-        });
+      entries.push({
+        raw: entry.path,
+        normalized,
+        type: entry.type,
+      });
+
+      if (!isRootManifestEntry(normalized)) {
+        entry.resume();
+        return;
+      }
+
+      const manifestPath = entry.path;
+      const chunks: Buffer[] = [];
+      let totalBytes = 0;
+      entry.on("data", (chunk: Buffer | string) => {
+        if (manifestTooLargeError) {
+          return;
+        }
+        const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+        totalBytes += buffer.length;
+        if (totalBytes > MAX_BACKUP_MANIFEST_BYTES) {
+          manifestTooLargeError = new Error(
+            `Backup manifest exceeds ${MAX_BACKUP_MANIFEST_BYTES} bytes.`,
+          );
+          entry.resume();
+          return;
+        }
+        chunks.push(buffer);
+      });
+      entry.on("end", () => {
+        if (manifestTooLargeError) {
+          return;
+        }
+        manifestRawByPath.set(manifestPath, Buffer.concat(chunks).toString("utf8"));
       });
     },
   });
-
-  if (!manifestContentPromise) {
-    throw new Error(`Archive is missing manifest entry: ${params.manifestEntryPath}`);
+  if (scanError) {
+    throw scanError;
   }
-  return await manifestContentPromise;
+  if (manifestTooLargeError) {
+    throw manifestTooLargeError;
+  }
+  return { entries, manifestRawByPath };
 }
 
 function isRootManifestEntry(entryPath: string): boolean {
@@ -254,18 +325,28 @@ function findDuplicateNormalizedEntryPath(
   return undefined;
 }
 
+function findCaseInsensitiveCollision(
+  entries: Array<{ normalized: string }>,
+): { prior: string; next: string } | undefined {
+  const seen = new Map<string, string>();
+  for (const entry of entries) {
+    const key = collisionKey(entry.normalized);
+    const prior = seen.get(key);
+    if (prior && prior !== entry.normalized) {
+      return { prior, next: entry.normalized };
+    }
+    seen.set(key, entry.normalized);
+  }
+  return undefined;
+}
+
 export async function readVerifiedBackupArchive(
   archivePath: string,
 ): Promise<VerifiedBackupArchive> {
-  const rawEntries = await listArchiveEntries(archivePath);
-  if (rawEntries.length === 0) {
+  const { entries, manifestRawByPath } = await scanArchive({ archivePath });
+  if (entries.length === 0) {
     throw new Error("Backup archive is empty.");
   }
-
-  const entries = rawEntries.map((entry) => ({
-    raw: entry,
-    normalized: normalizeArchivePath(entry, "Archive entry"),
-  }));
   const normalizedEntrySet = new Set(entries.map((entry) => entry.normalized));
 
   const manifestMatches = entries.filter((entry) => isRootManifestEntry(entry.normalized));
@@ -278,18 +359,28 @@ export async function readVerifiedBackupArchive(
     throw new Error(`Archive contains duplicate entry path: ${duplicateEntryPath}`);
   }
 
+  const collision = findCaseInsensitiveCollision(entries);
+  if (collision) {
+    throw new Error(
+      `Archive contains paths that collide on common filesystems: ${collision.prior} vs ${collision.next}`,
+    );
+  }
+
   const manifestEntryPath = manifestMatches[0]?.raw;
   if (!manifestEntryPath) {
     throw new Error("Backup archive manifest entry could not be resolved.");
   }
 
-  const manifestRaw = await extractManifest({ archivePath, manifestEntryPath });
+  const manifestRaw = manifestRawByPath.get(manifestEntryPath);
+  if (!manifestRaw) {
+    throw new Error(`Archive is missing manifest entry: ${manifestEntryPath}`);
+  }
   const manifest = parseManifest(manifestRaw);
   verifyManifestAgainstEntries(manifest, normalizedEntrySet);
 
   return {
     archivePath,
     manifest,
-    entryCount: rawEntries.length,
+    entryCount: entries.length,
   };
 }
