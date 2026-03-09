@@ -22,6 +22,15 @@ type RestartParams = {
   postRestartCheck?: (ctx: RestartPostCheckContext) => Promise<void>;
 };
 
+type ProbeGatewayFn = (opts: {
+  url: string;
+  auth?: { token?: string; password?: string };
+  timeoutMs: number;
+}) => Promise<{
+  ok: boolean;
+  configSnapshot: unknown;
+}>;
+
 const service = {
   readCommand: vi.fn(),
   restart: vi.fn(),
@@ -36,16 +45,7 @@ const renderGatewayPortHealthDiagnostics = vi.fn(() => ["diag: unhealthy port"])
 const renderRestartDiagnostics = vi.fn(() => ["diag: unhealthy runtime"]);
 const resolveGatewayPort = vi.fn(() => 18789);
 const findGatewayPidsOnPortSync = vi.fn<(port: number) => number[]>(() => []);
-const probeGateway = vi.fn<
-  (opts: {
-    url: string;
-    auth?: { token?: string; password?: string };
-    timeoutMs: number;
-  }) => Promise<{
-    ok: boolean;
-    configSnapshot: unknown;
-  }>
->();
+const probeGateway = vi.fn<ProbeGatewayFn>();
 const isRestartEnabled = vi.fn<(config?: { commands?: unknown }) => boolean>(() => true);
 const loadConfig = vi.fn(() => ({}));
 
