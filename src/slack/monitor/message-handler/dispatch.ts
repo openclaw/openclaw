@@ -96,6 +96,13 @@ export function resolveSlackStreamingThreadHint(params: {
   });
 }
 
+export function shouldForceSlackDraftBoundary(params: {
+  hasStreamedMessage: boolean;
+  draftMode: "replace" | "status_final" | "append";
+}): boolean {
+  return params.hasStreamedMessage && params.draftMode !== "status_final";
+}
+
 function shouldUseStreaming(params: {
   streamingEnabled: boolean;
   threadTs: string | undefined;
@@ -525,7 +532,12 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
     useStreaming || !previewStreamingEnabled
       ? undefined
       : async () => {
-          if (hasStreamedMessage) {
+          if (
+            shouldForceSlackDraftBoundary({
+              hasStreamedMessage,
+              draftMode: streamMode,
+            })
+          ) {
             draftStream.forceNewMessage();
             hasStreamedMessage = false;
             appendRenderedText = "";

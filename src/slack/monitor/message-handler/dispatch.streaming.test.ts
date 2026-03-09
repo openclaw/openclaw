@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { isSlackStreamingEnabled, resolveSlackStreamingThreadHint } from "./dispatch.js";
+import {
+  isSlackStreamingEnabled,
+  resolveSlackStreamingThreadHint,
+  shouldForceSlackDraftBoundary,
+} from "./dispatch.js";
 
 describe("slack native streaming defaults", () => {
   it("is enabled for partial mode when native streaming is on", () => {
@@ -43,5 +47,31 @@ describe("slack native streaming thread hint", () => {
         messageTs: "1000.3",
       }),
     ).toBe("2000.1");
+  });
+});
+
+describe("slack draft boundary rotation", () => {
+  it("does not rotate status_final previews into new draft messages", () => {
+    expect(
+      shouldForceSlackDraftBoundary({
+        hasStreamedMessage: true,
+        draftMode: "status_final",
+      }),
+    ).toBe(false);
+  });
+
+  it("rotates replace and append previews when a streamed message exists", () => {
+    expect(
+      shouldForceSlackDraftBoundary({
+        hasStreamedMessage: true,
+        draftMode: "replace",
+      }),
+    ).toBe(true);
+    expect(
+      shouldForceSlackDraftBoundary({
+        hasStreamedMessage: true,
+        draftMode: "append",
+      }),
+    ).toBe(true);
   });
 });

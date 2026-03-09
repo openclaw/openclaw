@@ -1,5 +1,5 @@
 import type { App } from "@slack/bolt";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { RuntimeEnv } from "../../runtime.js";
 import { createSlackMonitorContext } from "./context.js";
@@ -79,5 +79,68 @@ describe("createSlackMonitorContext shouldDropMismatchedSlackEvent", () => {
         team: { id: "T_EXPECTED" },
       }),
     ).toBe(false);
+  });
+});
+
+describe("createSlackMonitorContext setSlackThreadStatus", () => {
+  it("suppresses duplicate status writes for the same thread within the dedupe window", async () => {
+    vi.useFakeTimers();
+    try {
+      const setStatus = vi.fn(async () => undefined);
+      const ctx = createSlackMonitorContext({
+        cfg: {
+          channels: { slack: { enabled: true } },
+          session: { dmScope: "main" },
+        } as OpenClawConfig,
+        accountId: "default",
+        botToken: "xoxb-test",
+        app: { client: { assistant: { threads: { setStatus } } } } as unknown as App,
+        runtime: {} as RuntimeEnv,
+        botUserId: "U_BOT",
+        teamId: "T_EXPECTED",
+        apiAppId: "A_EXPECTED",
+        historyLimit: 0,
+        sessionScope: "per-sender",
+        mainKey: "main",
+        dmEnabled: true,
+        dmPolicy: "open",
+        allowFrom: [],
+        allowNameMatching: false,
+        groupDmEnabled: false,
+        groupDmChannels: [],
+        defaultRequireMention: true,
+        groupPolicy: "allowlist",
+        useAccessGroups: true,
+        reactionMode: "off",
+        reactionAllowlist: [],
+        replyToMode: "off",
+        threadHistoryScope: "thread",
+        threadInheritParent: false,
+        slashCommand: {
+          enabled: true,
+          name: "openclaw",
+          ephemeral: true,
+          sessionPrefix: "slack:slash",
+        },
+        textLimit: 4000,
+        typingReaction: "",
+        ackReactionScope: "group-mentions",
+        mediaMaxBytes: 20 * 1024 * 1024,
+        removeAckAfterReply: false,
+      });
+
+      await ctx.setSlackThreadStatus({ channelId: "C1", threadTs: "123", status: "is typing..." });
+      await ctx.setSlackThreadStatus({ channelId: "C1", threadTs: "123", status: "is typing..." });
+      expect(setStatus).toHaveBeenCalledTimes(1);
+
+      vi.advanceTimersByTime(5_001);
+      await ctx.setSlackThreadStatus({ channelId: "C1", threadTs: "123", status: "is typing..." });
+      expect(setStatus).toHaveBeenCalledTimes(2);
+
+      await ctx.setSlackThreadStatus({ channelId: "C1", threadTs: "123", status: "" });
+      expect(setStatus).toHaveBeenCalledTimes(3);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

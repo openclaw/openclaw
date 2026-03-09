@@ -18,6 +18,7 @@ import {
 import { logVerbose } from "../../globals.js";
 import { clearCommandLane, getQueueSize } from "../../process/command-queue.js";
 import { normalizeMainKey } from "../../routing/session-key.js";
+import { buildSreRuntimeGuardrailContext } from "../../sre/runtime-guardrails.js";
 import { isReasoningTagProvider } from "../../utils/provider-utils.js";
 import { hasControlCommand } from "../command-detection.js";
 import { buildInboundMediaNote } from "../media-note.js";
@@ -364,6 +365,12 @@ export async function runPreparedReply(
     : threadStarterBody
       ? `[Thread starter - for context]\n${threadStarterBody}`
       : undefined;
+  const sessionIdFinal = sessionId ?? crypto.randomUUID();
+  const sessionFile = resolveSessionFilePath(
+    sessionIdFinal,
+    sessionEntry,
+    resolveSessionFilePathOptions({ agentId, storePath }),
+  );
   const skillResult = await ensureSkillSnapshot({
     sessionEntry,
     sessionStore,
@@ -383,9 +390,17 @@ export async function runPreparedReply(
   const mediaReplyHint = mediaNote
     ? "To send a file/image back, prefer the message tool (media/path/filePath). If you must inline, use MEDIA:https://example.com/file.jpg (spaces ok, quote if needed) or a safe relative path like MEDIA:./report.csv. Paths outside allowed roots are blocked for security. Keep caption in the text body."
     : undefined;
+  const runtimeGuardrailContext = await buildSreRuntimeGuardrailContext({
+    agentId,
+    prompt: prefixedBody,
+    sessionFile,
+  });
   let prefixedCommandBody = mediaNote
-    ? [mediaNote, mediaReplyHint, prefixedBody ?? ""].filter(Boolean).join("\n").trim()
-    : prefixedBody;
+    ? [runtimeGuardrailContext, mediaNote, mediaReplyHint, prefixedBody ?? ""]
+        .filter(Boolean)
+        .join("\n")
+        .trim()
+    : [runtimeGuardrailContext, prefixedBody].filter(Boolean).join("\n\n");
   if (!resolvedThinkLevel) {
     resolvedThinkLevel = await modelState.resolveDefaultThinkingLevel();
   }
@@ -423,18 +438,15 @@ export async function runPreparedReply(
       defaultModel,
     });
   }
-  const sessionIdFinal = sessionId ?? crypto.randomUUID();
-  const sessionFile = resolveSessionFilePath(
-    sessionIdFinal,
-    sessionEntry,
-    resolveSessionFilePathOptions({ agentId, storePath }),
-  );
   // Use bodyWithEvents (events prepended, but no session hints / untrusted context) so
   // deferred turns receive system events while keeping the same scope as effectiveBaseBody did.
   const queueBodyBase = [threadContextNote, bodyWithEvents].filter(Boolean).join("\n\n");
   const queuedBody = mediaNote
-    ? [mediaNote, mediaReplyHint, queueBodyBase].filter(Boolean).join("\n").trim()
-    : queueBodyBase;
+    ? [runtimeGuardrailContext, mediaNote, mediaReplyHint, queueBodyBase]
+        .filter(Boolean)
+        .join("\n")
+        .trim()
+    : [runtimeGuardrailContext, queueBodyBase].filter(Boolean).join("\n\n");
   const resolvedQueue = resolveQueueSettings({
     cfg,
     channel: sessionCtx.Provider,

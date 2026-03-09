@@ -18,6 +18,8 @@ import { isSlackChannelAllowedByPolicy } from "./policy.js";
 
 export { inferSlackChannelType, normalizeSlackChannelType } from "./channel-type.js";
 
+const SLACK_THREAD_STATUS_DEDUPE_MS = 5_000;
+
 export type SlackMonitorContext = {
   cfg: OpenClawConfig;
   accountId: string;
@@ -135,6 +137,7 @@ export function createSlackMonitorContext(params: {
   >();
   const userCache = new Map<string, { name?: string }>();
   const seenMessages = createDedupeCache({ ttlMs: 60_000, maxSize: 500 });
+  const threadStatusCache = new Map<string, { status: string; sentAt: number }>();
 
   const allowFrom = normalizeAllowList(params.allowFrom);
   const groupDmChannels = normalizeAllowList(params.groupDmChannels);
@@ -256,6 +259,17 @@ export function createSlackMonitorContext(params: {
     if (!p.threadTs) {
       return;
     }
+    const cacheKey = `${p.channelId}:${p.threadTs}`;
+    const normalizedStatus = p.status.trim();
+    const cached = threadStatusCache.get(cacheKey);
+    const now = Date.now();
+    if (
+      cached &&
+      cached.status === normalizedStatus &&
+      now - cached.sentAt < SLACK_THREAD_STATUS_DEDUPE_MS
+    ) {
+      return;
+    }
     const payload = {
       token: params.botToken,
       channel_id: p.channelId,
@@ -273,10 +287,12 @@ export function createSlackMonitorContext(params: {
     try {
       if (client.assistant?.threads?.setStatus) {
         await client.assistant.threads.setStatus(payload);
+        threadStatusCache.set(cacheKey, { status: normalizedStatus, sentAt: now });
         return;
       }
       if (typeof client.apiCall === "function") {
         await client.apiCall("assistant.threads.setStatus", payload);
+        threadStatusCache.set(cacheKey, { status: normalizedStatus, sentAt: now });
       }
     } catch (err) {
       logVerbose(`slack status update failed for channel ${p.channelId}: ${String(err)}`);
