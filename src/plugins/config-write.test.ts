@@ -50,7 +50,7 @@ async function withConfigPath<T>(configPath: string, run: () => Promise<T>): Pro
     {
       OPENCLAW_CONFIG_PATH: configPath,
       OPENCLAW_DISABLE_CONFIG_CACHE: "1",
-      OPENAI_API_KEY: "sk-test",
+      OPENAI_API_KEY: "sk-test", // pragma: allowlist secret
       OPENCLAW_GATEWAY_TOKEN: "gateway-token-live",
     },
     run,
