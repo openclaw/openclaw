@@ -875,41 +875,47 @@ async function insertDoc(
   client: Lark.Client,
   docToken: string,
   markdown: string,
-  afterBlockId: string,
+  afterBlockId: string | undefined,
   maxBytes: number,
   logger?: Logger,
+  index?: number,
 ) {
-  const blockInfo = await client.docx.documentBlock.get({
-    path: { document_id: docToken, block_id: afterBlockId },
-  });
-  if (blockInfo.code !== 0) throw new Error(blockInfo.msg);
+  let parentId = docToken;
+  let insertIndex = index ?? 0;
 
-  const parentId = blockInfo.data?.block?.parent_id ?? docToken;
-
-  // Paginate through all children to reliably locate after_block_id.
-  // documentBlockChildren.get returns up to 200 children per page; large
-  // parents require multiple requests.
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- SDK block type
-  const items: any[] = [];
-  let pageToken: string | undefined;
-  do {
-    const childrenRes = await client.docx.documentBlockChildren.get({
-      path: { document_id: docToken, block_id: parentId },
-      params: pageToken ? { page_token: pageToken } : {},
+  if (afterBlockId) {
+    const blockInfo = await client.docx.documentBlock.get({
+      path: { document_id: docToken, block_id: afterBlockId },
     });
-    if (childrenRes.code !== 0) throw new Error(childrenRes.msg);
-    items.push(...(childrenRes.data?.items ?? []));
-    pageToken = childrenRes.data?.page_token ?? undefined;
-  } while (pageToken);
+    if (blockInfo.code !== 0) throw new Error(blockInfo.msg);
 
-  const blockIndex = items.findIndex((item) => item.block_id === afterBlockId);
-  if (blockIndex === -1) {
-    throw new Error(
-      `after_block_id "${afterBlockId}" was not found among the children of parent block "${parentId}". ` +
-        `Use list_blocks to verify the block ID.`,
-    );
+    parentId = blockInfo.data?.block?.parent_id ?? docToken;
+
+    // Paginate through all children to reliably locate after_block_id.
+    // documentBlockChildren.get returns up to 200 children per page; large
+    // parents require multiple requests.
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any -- SDK block type
+    const items: any[] = [];
+    let pageToken: string | undefined;
+    do {
+      const childrenRes = await client.docx.documentBlockChildren.get({
+        path: { document_id: docToken, block_id: parentId },
+        params: pageToken ? { page_token: pageToken } : {},
+      });
+      if (childrenRes.code !== 0) throw new Error(childrenRes.msg);
+      items.push(...(childrenRes.data?.items ?? []));
+      pageToken = childrenRes.data?.page_token ?? undefined;
+    } while (pageToken);
+
+    const blockIndex = items.findIndex((item) => item.block_id === afterBlockId);
+    if (blockIndex === -1) {
+      throw new Error(
+        `after_block_id "${afterBlockId}" was not found among the children of parent block "${parentId}". ` +
+          `Use list_blocks to verify the block ID.`,
+      );
+    }
+    insertIndex = blockIndex + 1;
   }
-  const insertIndex = blockIndex + 1;
 
   logger?.info?.("feishu_doc: Converting markdown...");
   const { blocks, firstLevelBlockIds } = await chunkedConvertMarkdown(client, markdown);
@@ -1306,6 +1312,7 @@ export function registerFeishuDocTools(api: OpenClawPluginApi) {
                       p.after_block_id,
                       getMediaMaxBytes(p, defaultAccountId),
                       api.logger,
+                      p.index,
                     ),
                   );
                 case "create":
