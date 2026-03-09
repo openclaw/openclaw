@@ -237,6 +237,17 @@ describe("normalizeModelCompat", () => {
     });
   });
 
+  it("forces supportsStrictMode off for z.ai models", () => {
+    expectSupportsStrictModeForcedOff();
+  });
+
+  it("forces supportsStrictMode off for custom openai-completions provider", () => {
+    expectSupportsStrictModeForcedOff({
+      provider: "custom-cpa",
+      baseUrl: "https://cpa.example.com/v1",
+    });
+  });
+
   it("forces supportsDeveloperRole off for Qwen proxy via openai-completions", () => {
     expectSupportsDeveloperRoleForcedOff({
       provider: "qwen-proxy",
@@ -294,6 +305,17 @@ describe("normalizeModelCompat", () => {
     const normalized = normalizeModelCompat(model);
     expect(supportsDeveloperRole(normalized)).toBe(false);
     expect(supportsUsageInStreaming(normalized)).toBe(false);
+  });
+
+  it("overrides explicit supportsStrictMode true on non-native endpoints", () => {
+    const model = {
+      ...baseModel(),
+      provider: "custom-cpa",
+      baseUrl: "https://proxy.example.com/v1",
+      compat: { supportsStrictMode: true },
+    };
+    const normalized = normalizeModelCompat(model);
+    expect(supportsStrictMode(normalized)).toBe(false);
   });
 
   it("does not mutate caller model when forcing supportsDeveloperRole off", () => {
