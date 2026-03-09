@@ -344,15 +344,15 @@ export async function runAgentTurnWithFallback(params: {
                 ...embeddedContext,
                 allowGatewaySubagentBinding: true,
                 trigger: params.isHeartbeat ? "heartbeat" : "user",
-                // Use stored run values for all identity fields — ensures hooks
-                // see the same trust context as the originating message, even if
-                // the live sessionCtx has drifted (e.g. group metadata updated).
+                ...senderContext,
+                ...runBaseParams,
+                // Override live senderContext and runBaseParams with stored run
+                // values to prevent trust-context drift (matches
+                // agent-runner-memory.ts pattern). Must come AFTER the spreads
+                // so explicit values win over the spread properties.
                 groupId: params.followupRun.run.groupId,
                 groupChannel: params.followupRun.run.groupChannel,
                 groupSpace: params.followupRun.run.groupSpace,
-                ...senderContext,
-                // Override live senderContext with stored run values to prevent
-                // trust-context drift (matches agent-runner-memory.ts pattern).
                 senderId: params.followupRun.run.senderId,
                 senderName: params.followupRun.run.senderName,
                 senderUsername: params.followupRun.run.senderUsername,
@@ -360,7 +360,6 @@ export async function runAgentTurnWithFallback(params: {
                 senderIsOwner: params.followupRun.run.senderIsOwner,
                 sourceProvider: params.followupRun.run.sourceProvider,
                 spawnedBy: params.followupRun.run.spawnedBy,
-                ...runBaseParams,
                 prompt: params.commandBody,
                 extraSystemPrompt: params.followupRun.run.extraSystemPrompt,
                 toolResultFormat: (() => {
