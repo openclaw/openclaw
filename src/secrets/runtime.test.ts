@@ -42,6 +42,8 @@ describe("secrets runtime snapshot", () => {
     clearSecretsRuntimeSnapshot();
   });
 
+  const allowInsecureTempSecretFile = process.platform === "win32";
+
   it("resolves env refs for config and auth profiles", async () => {
     const config = asConfig({
       agents: {
@@ -531,6 +533,9 @@ describe("secrets runtime snapshot", () => {
   });
 
   it("keeps active secrets runtime snapshots resolved after config writes", async () => {
+    if (os.platform() === "win32") {
+      return;
+    }
     await withTempHome("openclaw-secrets-runtime-write-", async (home) => {
       const configDir = path.join(home, ".openclaw");
       const secretFile = path.join(configDir, "secrets.json");
@@ -568,7 +573,12 @@ describe("secrets runtime snapshot", () => {
         config: asConfig({
           secrets: {
             providers: {
-              default: { source: "file", path: secretFile, mode: "json" },
+              default: {
+                source: "file",
+                path: secretFile,
+                mode: "json",
+                ...(allowInsecureTempSecretFile ? { allowInsecurePath: true } : {}),
+              },
             },
           },
           models: {
@@ -608,6 +618,9 @@ describe("secrets runtime snapshot", () => {
   });
 
   it("clears active secrets runtime state and throws when refresh fails after a write", async () => {
+    if (os.platform() === "win32") {
+      return;
+    }
     await withTempHome("openclaw-secrets-runtime-refresh-fail-", async (home) => {
       const configDir = path.join(home, ".openclaw");
       const secretFile = path.join(configDir, "secrets.json");
@@ -660,7 +673,12 @@ describe("secrets runtime snapshot", () => {
         config: asConfig({
           secrets: {
             providers: {
-              default: { source: "file", path: secretFile, mode: "json" },
+              default: {
+                source: "file",
+                path: secretFile,
+                mode: "json",
+                ...(allowInsecureTempSecretFile ? { allowInsecurePath: true } : {}),
+              },
             },
           },
           models: {

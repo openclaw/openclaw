@@ -91,6 +91,8 @@ repos:
           - '^src/agents/models-config\.merge\.test\.ts$'
           - --exclude-files
           - '^test-fixtures/talk-config-contract\.json$'
+          - --exclude-lines
+          - 'sparkle:edSignature="[A-Za-z0-9+/=]+"'
   # Shell script linting
   - repo: https://github.com/koalaman/shellcheck-precommit
     rev: v0.11.0
