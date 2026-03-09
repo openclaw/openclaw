@@ -105,17 +105,24 @@ export async function sendMessageNextcloudTalk(
 
   const url = `${baseUrl}/ocs/v2.php/apps/spreed/api/v1/bot/${roomToken}/message`;
 
-  const response = await fetch(url, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "OCS-APIRequest": "true",
-      "X-Nextcloud-Talk-Bot-Random": random,
-      "X-Nextcloud-Talk-Bot-Signature": signature,
-    },
-    body: bodyStr,
-    signal: AbortSignal.timeout(30_000),
-  });
+  let response: Response;
+  try {
+    response = await fetch(url, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "OCS-APIRequest": "true",
+        "X-Nextcloud-Talk-Bot-Random": random,
+        "X-Nextcloud-Talk-Bot-Signature": signature,
+      },
+      body: bodyStr,
+      signal: AbortSignal.timeout(30_000),
+    });
+  } catch (err) {
+    throw new Error(
+      `Nextcloud Talk send failed: ${err instanceof Error ? err.message : String(err)}`,
+    );
+  }
 
   if (!response.ok) {
     const errorBody = await response.text().catch(() => "");
@@ -197,17 +204,24 @@ export async function sendReactionNextcloudTalk(
 
   const url = `${baseUrl}/ocs/v2.php/apps/spreed/api/v1/bot/${normalizedToken}/reaction/${messageId}`;
 
-  const response = await fetch(url, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "OCS-APIRequest": "true",
-      "X-Nextcloud-Talk-Bot-Random": random,
-      "X-Nextcloud-Talk-Bot-Signature": signature,
-    },
-    body,
-    signal: AbortSignal.timeout(30_000),
-  });
+  let response: Response;
+  try {
+    response = await fetch(url, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "OCS-APIRequest": "true",
+        "X-Nextcloud-Talk-Bot-Random": random,
+        "X-Nextcloud-Talk-Bot-Signature": signature,
+      },
+      body,
+      signal: AbortSignal.timeout(30_000),
+    });
+  } catch (err) {
+    throw new Error(
+      `Nextcloud Talk reaction failed: ${err instanceof Error ? err.message : String(err)}`,
+    );
+  }
 
   if (!response.ok) {
     const errorBody = await response.text().catch(() => "");
