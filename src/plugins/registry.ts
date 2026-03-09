@@ -625,7 +625,6 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
         }
         registerMemoryPromptSection(builder);
       },
-      },
       resolvePath: (input: string) => resolveUserPath(input),
       on: (hookName, handler, opts) =>
         registerTypedHook(record, hookName, handler, opts, params.hookPolicy),
