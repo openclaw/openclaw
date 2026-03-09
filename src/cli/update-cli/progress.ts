@@ -65,10 +65,11 @@ export function inferUpdateFailureHints(result: UpdateRunResult): string[] {
     hints.push("If it still fails: npm i -g openclaw@latest --omit=optional");
   }
 
-  // Windows: the running process locks node_modules/openclaw, blocking npm rename
+  // Windows: a running process (gateway or the CLI itself) locks node_modules/openclaw,
+  // blocking the npm rename that global installs require.
   if (failedStep.name.startsWith("global update") && stderr.includes("ebusy")) {
     hints.push(
-      "Detected directory lock (EBUSY). On Windows the running gateway holds a lock on the install directory.",
+      "Detected directory lock (EBUSY). On Windows a running process (typically the gateway) holds a lock on the install directory.",
     );
     hints.push("Stop the gateway first: openclaw gateway stop");
     hints.push("Then update manually: npm i -g openclaw@latest");
