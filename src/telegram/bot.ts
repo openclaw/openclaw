@@ -6,6 +6,11 @@ import { resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { resolveTextChunkLimit } from "../auto-reply/chunk.js";
 import { DEFAULT_GROUP_HISTORY_LIMIT, type HistoryEntry } from "../auto-reply/reply/history.js";
 import {
+  resolveThreadBindingIdleTimeoutMsForChannel,
+  resolveThreadBindingMaxAgeMsForChannel,
+  resolveThreadBindingSpawnPolicy,
+} from "../channels/thread-bindings-policy.js";
+import {
   isNativeCommandsExplicitlyDisabled,
   resolveNativeCommandsEnabled,
   resolveNativeSkillsEnabled,
@@ -36,6 +41,7 @@ import { buildTelegramGroupPeerId, resolveTelegramStreamMode } from "./bot/helpe
 import { resolveTelegramFetch } from "./fetch.js";
 import { createTelegramSendChatActionHandler } from "./sendchataction-401-backoff.js";
 import { getTelegramSequentialKey } from "./sequential-key.js";
+import { createTelegramThreadBindingManager } from "./thread-bindings.js";
 
 export type TelegramBotOptions = {
   token: string;
@@ -48,6 +54,8 @@ export type TelegramBotOptions = {
   replyToMode?: ReplyToMode;
   proxyFetch?: typeof fetch;
   config?: OpenClawConfig;
+  /** Signal to abort in-flight Telegram API fetch requests (e.g. getUpdates) on shutdown. */
+  fetchAbortSignal?: AbortSignal;
   updateOffset?: {
     lastUpdateId?: number | null;
     onUpdateId?: (updateId: number) => void | Promise<void>;
@@ -67,6 +75,27 @@ export function createTelegramBot(opts: TelegramBotOptions) {
     cfg,
     accountId: opts.accountId,
   });
+  const threadBindingPolicy = resolveThreadBindingSpawnPolicy({
+    cfg,
+    channel: "telegram",
+    accountId: account.accountId,
+    kind: "subagent",
+  });
+  const threadBindingManager = threadBindingPolicy.enabled
+    ? createTelegramThreadBindingManager({
+        accountId: account.accountId,
+        idleTimeoutMs: resolveThreadBindingIdleTimeoutMsForChannel({
+          cfg,
+          channel: "telegram",
+          accountId: account.accountId,
+        }),
+        maxAgeMs: resolveThreadBindingMaxAgeMsForChannel({
+          cfg,
+          channel: "telegram",
+          accountId: account.accountId,
+        }),
+      })
+    : null;
   const telegramCfg = account.config;
 
   const fetchImpl = resolveTelegramFetch(opts.proxyFetch, {
@@ -76,14 +105,57 @@ export function createTelegramBot(opts: TelegramBotOptions) {
   // grammY's ApiClientOptions types still track `node-fetch` types; Node 22+ global fetch
   // (undici) is structurally compatible at runtime but not assignable in TS.
   const fetchForClient = fetchImpl as unknown as NonNullable<ApiClientOptions["fetch"]>;
+
+  // When a shutdown abort signal is provided, wrap fetch so every Telegram API request
+  // (especially long-polling getUpdates) aborts immediately on shutdown. Without this,
+  // the in-flight getUpdates hangs for up to 30s, and a new gateway instance starting
+  // its own poll triggers a 409 Conflict from Telegram.
+  let finalFetch = shouldProvideFetch && fetchImpl ? fetchForClient : undefined;
+  if (opts.fetchAbortSignal) {
+    const baseFetch =
+      finalFetch ?? (globalThis.fetch as unknown as NonNullable<ApiClientOptions["fetch"]>);
+    const shutdownSignal = opts.fetchAbortSignal;
+    // Cast baseFetch to global fetch to avoid node-fetch ↔ global-fetch type divergence;
+    // they are runtime-compatible (the codebase already casts at every fetch boundary).
+    const callFetch = baseFetch as unknown as typeof globalThis.fetch;
+    // Use manual event forwarding instead of AbortSignal.any() to avoid the cross-realm
+    // AbortSignal issue in Node.js (grammY's signal may come from a different module context,
+    // causing "signals[0] must be an instance of AbortSignal" errors).
+    finalFetch = ((input: RequestInfo | URL, init?: RequestInit) => {
+      const controller = new AbortController();
+      const abortWith = (signal: AbortSignal) => controller.abort(signal.reason);
+      const onShutdown = () => abortWith(shutdownSignal);
+      let onRequestAbort: (() => void) | undefined;
+      if (shutdownSignal.aborted) {
+        abortWith(shutdownSignal);
+      } else {
+        shutdownSignal.addEventListener("abort", onShutdown, { once: true });
+      }
+      if (init?.signal) {
+        if (init.signal.aborted) {
+          abortWith(init.signal);
+        } else {
+          onRequestAbort = () => abortWith(init.signal as AbortSignal);
+          init.signal.addEventListener("abort", onRequestAbort, { once: true });
+        }
+      }
+      return callFetch(input, { ...init, signal: controller.signal }).finally(() => {
+        shutdownSignal.removeEventListener("abort", onShutdown);
+        if (init?.signal && onRequestAbort) {
+          init.signal.removeEventListener("abort", onRequestAbort);
+        }
+      });
+    }) as unknown as NonNullable<ApiClientOptions["fetch"]>;
+  }
+
   const timeoutSeconds =
     typeof telegramCfg?.timeoutSeconds === "number" && Number.isFinite(telegramCfg.timeoutSeconds)
       ? Math.max(1, Math.floor(telegramCfg.timeoutSeconds))
       : undefined;
   const client: ApiClientOptions | undefined =
-    shouldProvideFetch || timeoutSeconds
+    finalFetch || timeoutSeconds
       ? {
-          ...(shouldProvideFetch && fetchImpl ? { fetch: fetchForClient } : {}),
+          ...(finalFetch ? { fetch: finalFetch } : {}),
           ...(timeoutSeconds ? { timeoutSeconds } : {}),
         }
       : undefined;
@@ -235,7 +307,7 @@ export function createTelegramBot(opts: TelegramBotOptions) {
   });
   const useAccessGroups = cfg.commands?.useAccessGroups !== false;
   const ackReactionScope = cfg.messages?.ackReactionScope ?? "group-mentions";
-  const mediaMaxBytes = (opts.mediaMaxMb ?? telegramCfg.mediaMaxMb ?? 5) * 1024 * 1024;
+  const mediaMaxBytes = (opts.mediaMaxMb ?? telegramCfg.mediaMaxMb ?? 100) * 1024 * 1024;
   const logger = getChildLogger({ module: "telegram-auto-reply" });
   const streamMode = resolveTelegramStreamMode(telegramCfg);
   const resolveGroupPolicy = (chatId: string | number) =>
@@ -378,6 +450,12 @@ export function createTelegramBot(opts: TelegramBotOptions) {
     processMessage,
     logger,
   });
+
+  const originalStop = bot.stop.bind(bot);
+  bot.stop = ((...args: Parameters<typeof originalStop>) => {
+    threadBindingManager?.stop();
+    return originalStop(...args);
+  }) as typeof bot.stop;
 
   return bot;
 }

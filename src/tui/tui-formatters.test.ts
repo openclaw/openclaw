@@ -249,6 +249,20 @@ describe("sanitizeRenderableText", () => {
     expect(sanitized).toBe(input);
   });
 
+  it("preserves long credential-like mixed alnum tokens for copy safety", () => {
+    const input = "e3b19c3b87bcf364b23eebb2c276e96ec478956ba1d84c93"; // pragma: allowlist secret
+    const sanitized = sanitizeRenderableText(input);
+
+    expect(sanitized).toBe(input);
+  });
+
+  it("preserves quoted credential-like mixed alnum tokens for copy safety", () => {
+    const input = "'e3b19c3b87bcf364b23eebb2c276e96ec478956ba1d84c93'"; // pragma: allowlist secret
+    const sanitized = sanitizeRenderableText(input);
+
+    expect(sanitized).toBe(input);
+  });
+
   it("wraps rtl lines with directional isolation marks", () => {
     const input = "مرحبا بالعالم";
     const sanitized = sanitizeRenderableText(input);

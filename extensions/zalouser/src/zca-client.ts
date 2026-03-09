@@ -126,6 +126,20 @@ export type Listener = {
   stop(): void;
 };
 
+type DeliveryEventMessage = {
+  msgId: string;
+  cliMsgId: string;
+  uidFrom: string;
+  idTo: string;
+  msgType: string;
+  st: number;
+  at: number;
+  cmd: number;
+  ts: string | number;
+};
+
+type DeliveryEventMessages = DeliveryEventMessage | DeliveryEventMessage[];
+
 export type API = {
   listener: Listener;
   getContext(): {
@@ -138,7 +152,7 @@ export type API = {
       cookies: unknown[];
     };
   };
-  fetchAccountInfo(): Promise<{ profile: User } | User>;
+  fetchAccountInfo(): Promise<User | { profile: User }>;
   getAllFriends(): Promise<User[]>;
   getOwnId(): string;
   getAllGroups(): Promise<{
@@ -163,9 +177,53 @@ export type API = {
     threadId: string,
     type?: number,
   ): Promise<{
+    msgId?: string | number;
     message?: { msgId?: string | number } | null;
     attachment?: Array<{ msgId?: string | number }>;
   }>;
+  uploadAttachment(
+    sources:
+      | string
+      | {
+          data: Buffer;
+          filename: `${string}.${string}`;
+          metadata: {
+            totalSize: number;
+            width?: number;
+            height?: number;
+          };
+        }
+      | Array<
+          | string
+          | {
+              data: Buffer;
+              filename: `${string}.${string}`;
+              metadata: {
+                totalSize: number;
+                width?: number;
+                height?: number;
+              };
+            }
+        >,
+    threadId: string,
+    type?: number,
+  ): Promise<
+    Array<{
+      fileType: "image" | "video" | "others";
+      fileUrl?: string;
+      msgId?: string | number;
+      fileId?: string;
+      fileName?: string;
+    }>
+  >;
+  sendVoice(
+    options: {
+      voiceUrl: string;
+      ttl?: number;
+    },
+    threadId: string,
+    type?: number,
+  ): Promise<{ msgId?: string | number }>;
   sendLink(
     payload: { link: string; msg?: string },
     threadId: string,
@@ -185,57 +243,10 @@ export type API = {
   ): Promise<unknown>;
   sendDeliveredEvent(
     isSeen: boolean,
-    messages:
-      | {
-          msgId: string;
-          cliMsgId: string;
-          uidFrom: string;
-          idTo: string;
-          msgType: string;
-          st: number;
-          at: number;
-          cmd: number;
-          ts: string | number;
-        }
-      | Array<{
-          msgId: string;
-          cliMsgId: string;
-          uidFrom: string;
-          idTo: string;
-          msgType: string;
-          st: number;
-          at: number;
-          cmd: number;
-          ts: string | number;
-        }>,
+    messages: DeliveryEventMessages,
     type?: number,
   ): Promise<unknown>;
-  sendSeenEvent(
-    messages:
-      | {
-          msgId: string;
-          cliMsgId: string;
-          uidFrom: string;
-          idTo: string;
-          msgType: string;
-          st: number;
-          at: number;
-          cmd: number;
-          ts: string | number;
-        }
-      | Array<{
-          msgId: string;
-          cliMsgId: string;
-          uidFrom: string;
-          idTo: string;
-          msgType: string;
-          st: number;
-          at: number;
-          cmd: number;
-          ts: string | number;
-        }>,
-    type?: number,
-  ): Promise<unknown>;
+  sendSeenEvent(messages: DeliveryEventMessages, type?: number): Promise<unknown>;
 };
 
 type ZaloCtor = new (options?: { logging?: boolean; selfListen?: boolean }) => {

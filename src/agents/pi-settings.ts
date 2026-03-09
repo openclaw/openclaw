@@ -1,4 +1,5 @@
 import type { OpenClawConfig } from "../config/config.js";
+import type { ContextEngineInfo } from "../context-engine/types.js";
 
 export const DEFAULT_PI_COMPACTION_RESERVE_TOKENS_FLOOR = 20_000;
 
@@ -11,6 +12,7 @@ type PiSettingsManagerLike = {
       keepRecentTokens?: number;
     };
   }) => void;
+  setCompactionEnabled?: (enabled: boolean) => void;
 };
 
 export function ensurePiCompactionReserveTokens(params: {
@@ -94,4 +96,27 @@ export function applyPiCompactionSettingsFromConfig(params: {
       keepRecentTokens: targetKeepRecentTokens,
     },
   };
+}
+
+/** Decide whether Pi's internal auto-compaction should be disabled for this run. */
+export function shouldDisablePiAutoCompaction(params: {
+  contextEngineInfo?: ContextEngineInfo;
+}): boolean {
+  return params.contextEngineInfo?.ownsCompaction === true;
+}
+
+/** Disable Pi auto-compaction via settings when a context engine owns compaction. */
+export function applyPiAutoCompactionGuard(params: {
+  settingsManager: PiSettingsManagerLike;
+  contextEngineInfo?: ContextEngineInfo;
+}): { supported: boolean; disabled: boolean } {
+  const disable = shouldDisablePiAutoCompaction({
+    contextEngineInfo: params.contextEngineInfo,
+  });
+  const hasMethod = typeof params.settingsManager.setCompactionEnabled === "function";
+  if (!disable || !hasMethod) {
+    return { supported: hasMethod, disabled: false };
+  }
+  params.settingsManager.setCompactionEnabled!(false);
+  return { supported: true, disabled: true };
 }

@@ -36,12 +36,14 @@ import {
   resolveDefaultGroupPolicy,
   warnMissingProviderGroupPolicyFallbackOnce,
 } from "../../config/runtime-group-policy.js";
+import { createConnectedChannelStatusPatch } from "../../gateway/channel-status-patches.js";
 import { danger, logVerbose, shouldLogVerbose, warn } from "../../globals.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { createDiscordRetryRunner } from "../../infra/retry-policy.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { getPluginCommandSpecs } from "../../plugins/commands.js";
 import { createNonExitingRuntime, type RuntimeEnv } from "../../runtime.js";
+import { summarizeStringEntries } from "../../shared/string-sample.js";
 import { resolveDiscordAccount } from "../accounts.js";
 import { fetchDiscordApplicationId } from "../probe.js";
 import { normalizeDiscordToken } from "../token.js";
@@ -102,25 +104,6 @@ export type MonitorDiscordOpts = {
   setStatus?: DiscordMonitorStatusSink;
 };
 
-function summarizeAllowList(list?: string[]) {
-  if (!list || list.length === 0) {
-    return "any";
-  }
-  const sample = list.slice(0, 4).map((entry) => String(entry));
-  const suffix = list.length > sample.length ? ` (+${list.length - sample.length})` : "";
-  return `${sample.join(", ")}${suffix}`;
-}
-
-function summarizeGuilds(entries?: Record<string, unknown>) {
-  if (!entries || Object.keys(entries).length === 0) {
-    return "any";
-  }
-  const keys = Object.keys(entries);
-  const sample = keys.slice(0, 4);
-  const suffix = keys.length > sample.length ? ` (+${keys.length - sample.length})` : "";
-  return `${sample.join(", ")}${suffix}`;
-}
-
 function formatThreadBindingDurationForConfigLabel(durationMs: number): string {
   const label = formatThreadBindingDurationLabel(durationMs);
   return label === "disabled" ? "off" : label;
@@ -134,7 +117,7 @@ function appendPluginCommandSpecs(params: {
   const existingNames = new Set(
     merged.map((spec) => spec.name.trim().toLowerCase()).filter(Boolean),
   );
-  for (const pluginCommand of getPluginCommandSpecs()) {
+  for (const pluginCommand of getPluginCommandSpecs("discord")) {
     const normalizedName = pluginCommand.name.trim().toLowerCase();
     if (!normalizedName) {
       continue;
@@ -401,8 +384,23 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
   allowFrom = allowlistResolved.allowFrom;
 
   if (shouldLogVerbose()) {
+    const allowFromSummary = summarizeStringEntries({
+      entries: allowFrom ?? [],
+      limit: 4,
+      emptyText: "any",
+    });
+    const groupDmChannelSummary = summarizeStringEntries({
+      entries: groupDmChannels ?? [],
+      limit: 4,
+      emptyText: "any",
+    });
+    const guildSummary = summarizeStringEntries({
+      entries: Object.keys(guildEntries ?? {}),
+      limit: 4,
+      emptyText: "any",
+    });
     logVerbose(
-      `discord: config dm=${dmEnabled ? "on" : "off"} dmPolicy=${dmPolicy} allowFrom=${summarizeAllowList(allowFrom)} groupDm=${groupDmEnabled ? "on" : "off"} groupDmChannels=${summarizeAllowList(groupDmChannels)} groupPolicy=${groupPolicy} guilds=${summarizeGuilds(guildEntries)} historyLimit=${historyLimit} mediaMaxMb=${Math.round(mediaMaxBytes / (1024 * 1024))} native=${nativeEnabled ? "on" : "off"} nativeSkills=${nativeSkillsEnabled ? "on" : "off"} accessGroups=${useAccessGroups ? "on" : "off"} threadBindings=${threadBindingsEnabled ? "on" : "off"} threadIdleTimeout=${formatThreadBindingDurationForConfigLabel(threadBindingIdleTimeoutMs)} threadMaxAge=${formatThreadBindingDurationForConfigLabel(threadBindingMaxAgeMs)}`,
+      `discord: config dm=${dmEnabled ? "on" : "off"} dmPolicy=${dmPolicy} allowFrom=${allowFromSummary} groupDm=${groupDmEnabled ? "on" : "off"} groupDmChannels=${groupDmChannelSummary} groupPolicy=${groupPolicy} guilds=${guildSummary} historyLimit=${historyLimit} mediaMaxMb=${Math.round(mediaMaxBytes / (1024 * 1024))} native=${nativeEnabled ? "on" : "off"} nativeSkills=${nativeSkillsEnabled ? "on" : "off"} accessGroups=${useAccessGroups ? "on" : "off"} threadBindings=${threadBindingsEnabled ? "on" : "off"} threadIdleTimeout=${formatThreadBindingDurationForConfigLabel(threadBindingIdleTimeoutMs)} threadMaxAge=${formatThreadBindingDurationForConfigLabel(threadBindingMaxAgeMs)}`,
     );
   }
 
@@ -600,8 +598,9 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
     if (voiceEnabled) {
       clientPlugins.push(new VoicePlugin());
     }
-    // Pass eventQueue config to Carbon so the listener timeout can be tuned.
-    // Default listenerTimeout is 120s (Carbon defaults to 30s which is too short for LLM calls).
+    // Pass eventQueue config to Carbon so the gateway listener budget can be tuned.
+    // Default listenerTimeout is 120s (Carbon defaults to 30s, which is too short for some
+    // Discord normalization/enqueue work).
     const eventQueueOpts = {
       listenerTimeout: 120_000,
       ...discordCfg.eventQueue,
@@ -683,7 +682,7 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
       runtime,
       setStatus: opts.setStatus,
       abortSignal: opts.abortSignal,
-      listenerTimeoutMs: eventQueueOpts.listenerTimeout,
+      workerRunTimeoutMs: discordCfg.inboundWorker?.runTimeoutMs,
       botUserId,
       guildHistories,
       historyLimit,
@@ -751,7 +750,7 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
       botUserId && botUserName ? `${botUserId} (${botUserName})` : (botUserId ?? botUserName ?? "");
     runtime.log?.(`logged in to discord${botIdentity ? ` as ${botIdentity}` : ""}`);
     if (lifecycleGateway?.isConnected) {
-      opts.setStatus?.({ connected: true });
+      opts.setStatus?.(createConnectedChannelStatusPatch());
     }
 
     lifecycleStarted = true;
