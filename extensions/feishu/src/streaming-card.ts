@@ -362,19 +362,14 @@ export class FeishuStreamingSession {
           type: "append",
           elements: [
             {
-              tag: "action",
-              actions: [
-                {
-                  tag: "button",
-                  text: { tag: "plain_text", content: "\u{1F4CB} \u67E5\u770B\u5B8C\u6574\u56DE\u590D" },
-                  type: "default",
-                  size: "small",
-                  value: {
-                    command: "__show_full_text__",
-                    message_id: this.state.messageId,
-                  },
-                },
-              ],
+              tag: "button",
+              text: { tag: "plain_text", content: "\u{1F4CB} \u67E5\u770B\u5B8C\u6574\u56DE\u590D" },
+              type: "default",
+              size: "small",
+              value: {
+                command: "__show_full_text__",
+                message_id: this.state.messageId,
+              },
               element_id: "show_full_btn",
             },
           ],
