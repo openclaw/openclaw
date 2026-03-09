@@ -732,7 +732,7 @@ describe("applyExtraParamsToAgent", () => {
     expect(payloads[0]?.thinking).toEqual({ type: "disabled" });
   });
 
-  it("normalizes kimi-coding anthropic tools to OpenAI function format", () => {
+  it("preserves native Anthropic tool format for kimi-coding (regression #40552)", () => {
     const payloads: Record<string, unknown>[] = [];
     const baseStreamFn: StreamFn = (_model, _context, options) => {
       const payload: Record<string, unknown> = {
@@ -744,14 +744,6 @@ describe("applyExtraParamsToAgent", () => {
               type: "object",
               properties: { path: { type: "string" } },
               required: ["path"],
-            },
-          },
-          {
-            type: "function",
-            function: {
-              name: "exec",
-              description: "Run command",
-              parameters: { type: "object", properties: {} },
             },
           },
         ],
@@ -775,71 +767,63 @@ describe("applyExtraParamsToAgent", () => {
     void agent.streamFn?.(model, context, {});
 
     expect(payloads).toHaveLength(1);
+    // tools must stay in native Anthropic format — NOT converted to OpenAI function format
     expect(payloads[0]?.tools).toEqual([
       {
-        type: "function",
-        function: {
-          name: "read",
-          description: "Read file",
-          parameters: {
-            type: "object",
-            properties: { path: { type: "string" } },
-            required: ["path"],
-          },
-        },
-      },
-      {
-        type: "function",
-        function: {
-          name: "exec",
-          description: "Run command",
-          parameters: { type: "object", properties: {} },
+        name: "read",
+        description: "Read file",
+        input_schema: {
+          type: "object",
+          properties: { path: { type: "string" } },
+          required: ["path"],
         },
       },
     ]);
-    expect(payloads[0]?.tool_choice).toEqual({
-      type: "function",
-      function: { name: "read" },
-    });
+    // tool_choice must stay in native Anthropic format
+    expect(payloads[0]?.tool_choice).toEqual({ type: "tool", name: "read" });
   });
 
   it.each([
-    { input: { type: "auto" }, expected: "auto" },
-    { input: { type: "none" }, expected: "none" },
-    { input: { type: "required" }, expected: "required" },
-  ])("normalizes anthropic tool_choice %j for kimi-coding endpoints", ({ input, expected }) => {
-    const payloads: Record<string, unknown>[] = [];
-    const baseStreamFn: StreamFn = (_model, _context, options) => {
-      const payload: Record<string, unknown> = {
-        tools: [
-          {
-            name: "read",
-            description: "Read file",
-            input_schema: { type: "object", properties: {} },
-          },
-        ],
-        tool_choice: input,
+    { input: { type: "auto" } },
+    { input: { type: "none" } },
+    { input: { type: "required" } },
+  ])(
+    "preserves native anthropic tool_choice %j for kimi-coding (regression #40552)",
+    ({ input }) => {
+      const payloads: Record<string, unknown>[] = [];
+      const baseStreamFn: StreamFn = (_model, _context, options) => {
+        const payload: Record<string, unknown> = {
+          tools: [
+            {
+              name: "read",
+              description: "Read file",
+              input_schema: { type: "object", properties: {} },
+            },
+          ],
+          tool_choice: input,
+        };
+        options?.onPayload?.(payload);
+        payloads.push(payload);
+        return {} as ReturnType<StreamFn>;
       };
-      options?.onPayload?.(payload);
-      payloads.push(payload);
-      return {} as ReturnType<StreamFn>;
-    };
-    const agent = { streamFn: baseStreamFn };
+      const agent = { streamFn: baseStreamFn };
 
-    applyExtraParamsToAgent(agent, undefined, "kimi-coding", "k2p5", undefined, "low");
+      applyExtraParamsToAgent(agent, undefined, "kimi-coding", "k2p5", undefined, "low");
 
-    const model = {
-      api: "anthropic-messages",
-      provider: "kimi-coding",
-      id: "k2p5",
-      baseUrl: "https://api.kimi.com/coding/",
-    } as Model<"anthropic-messages">;
-    const context: Context = { messages: [] };
-    void agent.streamFn?.(model, context, {});
+      const model = {
+        api: "anthropic-messages",
+        provider: "kimi-coding",
+        id: "k2p5",
+        baseUrl: "https://api.kimi.com/coding/",
+      } as Model<"anthropic-messages">;
+      const context: Context = { messages: [] };
+      void agent.streamFn?.(model, context, {});
 
-    expect(payloads).toHaveLength(1);
-    expect(payloads[0]?.tool_choice).toBe(expected);
-  });
+      expect(payloads).toHaveLength(1);
+      // tool_choice must remain in native Anthropic object format, not converted to string
+      expect(payloads[0]?.tool_choice).toEqual(input);
+    },
+  );
 
   it("does not rewrite anthropic tool schema for non-kimi endpoints", () => {
     const payloads: Record<string, unknown>[] = [];

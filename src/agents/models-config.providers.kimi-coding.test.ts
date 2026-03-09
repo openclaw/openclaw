@@ -31,6 +31,17 @@ describe("kimi-coding implicit provider (#22409)", () => {
     expect(provider.models[0].id).toBe("k2p5");
   });
 
+  it("should NOT set requiresOpenAiAnthropicToolPayload on kimi-coding models (regression #40552)", () => {
+    const provider = buildKimiCodingProvider();
+    for (const model of provider.models) {
+      const compat = model.compat as Record<string, unknown> | undefined;
+      expect(
+        compat?.requiresOpenAiAnthropicToolPayload,
+        `model ${model.id} must use native Anthropic tool format, not OpenAI function format`,
+      ).toBeFalsy();
+    }
+  });
+
   it("should not include kimi-coding when no API key is configured", async () => {
     const agentDir = mkdtempSync(join(tmpdir(), "openclaw-test-"));
     const envSnapshot = captureEnv(["KIMI_API_KEY"]);
