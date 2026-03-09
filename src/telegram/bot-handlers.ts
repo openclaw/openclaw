@@ -124,6 +124,8 @@ export const registerTelegramHandlers = ({
   resolveGroupPolicy,
   resolveTelegramGroupConfig,
   shouldSkipUpdate,
+  holdDeferredUpdateId,
+  releaseDeferredUpdateId,
   processMessage,
   logger,
 }: RegisterTelegramHandlerParams) => {
@@ -395,7 +397,7 @@ export const registerTelegramHandlers = ({
           .filter((updateId): updateId is number => typeof updateId === "number"),
       );
       for (const updateId of updateIds) {
-        opts.releaseDeferredUpdateId?.(updateId);
+        releaseDeferredUpdateId?.(updateId);
       }
     }
   };
@@ -873,6 +875,7 @@ export const registerTelegramHandlers = ({
     chatId: number;
     resolvedThreadId?: number;
     dmThreadId?: number;
+    deferredUpdateId?: number;
     storeAllowFrom: string[];
     sendOversizeWarning: boolean;
     oversizeLogMessage: string;
@@ -883,6 +886,7 @@ export const registerTelegramHandlers = ({
       chatId,
       resolvedThreadId,
       dmThreadId,
+      deferredUpdateId,
       storeAllowFrom,
       sendOversizeWarning,
       oversizeLogMessage,
@@ -955,9 +959,11 @@ export const registerTelegramHandlers = ({
     // Media group handling - buffer multi-image messages
     const mediaGroupId = msg.media_group_id;
     if (mediaGroupId) {
-      const updateId = resolveTelegramUpdateId(ctx);
+      // buildSyntheticContext(...) drops the raw update envelope, so media-group offset
+      // tracking must use the original update_id captured before we normalized the ctx.
+      const updateId = deferredUpdateId;
       if (typeof updateId === "number") {
-        opts.holdDeferredUpdateId?.(updateId);
+        holdDeferredUpdateId?.(updateId);
       }
       const existing = mediaGroupBuffer.get(mediaGroupId);
       if (existing) {
@@ -1493,6 +1499,7 @@ export const registerTelegramHandlers = ({
         chatId: event.chatId,
         resolvedThreadId,
         dmThreadId,
+        deferredUpdateId: resolveTelegramUpdateId(event.ctxForDedupe),
         storeAllowFrom,
         sendOversizeWarning: event.sendOversizeWarning,
         oversizeLogMessage: event.oversizeLogMessage,
