@@ -31,6 +31,10 @@ export function resolveHeartbeatReasonKind(reason?: string): HeartbeatReasonKind
   if (trimmed === "exec-event") {
     return "exec-event";
   }
+  // exec:<sessionId>:exit — emitted by maybeNotifyOnExit for backgrounded commands
+  if (trimmed.startsWith("exec:")) {
+    return "exec-event";
+  }
   if (trimmed === "wake") {
     return "wake";
   }
