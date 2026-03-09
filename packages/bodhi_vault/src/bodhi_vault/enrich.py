@@ -68,12 +68,13 @@ def enrich_node_concepts(
     vault_path: Path,
     schema_path: Path,
     concepts_path: Path,
+    force: bool = False,
 ) -> bool:
     """
     Match concepts for a node and write related_papers to it. Idempotent.
 
     Returns True if enrichment was applied, False if already enriched or
-    node not found.
+    node not found. Pass force=True to re-enrich even if already enriched.
     """
     from bodhi_vault.read import get_node
 
@@ -81,8 +82,8 @@ def enrich_node_concepts(
     if node is None:
         return False
 
-    # Idempotent: skip if already has related_papers
-    if node.get("related_papers") is not None:
+    # Idempotent: skip if already has related_papers (unless forced)
+    if not force and node.get("related_papers") is not None:
         return False
 
     text = node.get("content_enriched") or node.get("content", "")

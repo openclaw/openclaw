@@ -72,3 +72,32 @@ def test_write_node_creates_year_month_dir(vault_path, sample_node, schema_path)
     write_node(sample_node, vault_path, schema_path)
     year_month = sample_node["created_at"][:7]
     assert (vault_path / "nodes" / year_month).is_dir()
+
+
+def test_write_node_with_image_and_domain(vault_path, sample_node, schema_path):
+    sample_node["media_type"] = "image"
+    sample_node["media_ref"] = "AgACAgIAAxkBAAI"
+    sample_node["domain"] = "health"
+    node_id = write_node(sample_node, vault_path, schema_path)
+    year_month = sample_node["created_at"][:7]
+    written = json.loads((vault_path / "nodes" / year_month / f"{node_id}.json").read_text())
+    assert written["media_type"] == "image"
+    assert written["media_ref"] == "AgACAgIAAxkBAAI"
+    assert written["domain"] == "health"
+
+
+def test_write_node_with_voice_and_domain(vault_path, sample_node, schema_path):
+    sample_node["media_type"] = "voice"
+    sample_node["media_ref"] = "AwACAgIAAxkBAAI"
+    sample_node["domain"] = "mental-health"
+    node_id = write_node(sample_node, vault_path, schema_path)
+    year_month = sample_node["created_at"][:7]
+    written = json.loads((vault_path / "nodes" / year_month / f"{node_id}.json").read_text())
+    assert written["media_type"] == "voice"
+    assert written["domain"] == "mental-health"
+
+
+def test_write_node_invalid_domain_raises(vault_path, sample_node, schema_path):
+    sample_node["domain"] = "productivity"
+    with pytest.raises(ValidationError):
+        write_node(sample_node, vault_path, schema_path)

@@ -23,6 +23,8 @@ def main() -> None:
     parser.add_argument("--vault", required=True, help="Path to vault root directory")
     parser.add_argument("--schema", required=True, help="Path to nodes.json schema file")
     parser.add_argument("--concepts", required=True, help="Path to concepts.json file")
+    parser.add_argument("--force", action="store_true", default=False,
+                        help="Re-enrich even if node already has related_papers")
 
     args = parser.parse_args()
 
@@ -34,6 +36,7 @@ def main() -> None:
             vault_path=Path(args.vault),
             schema_path=Path(args.schema),
             concepts_path=Path(args.concepts),
+            force=args.force,
         )
         print(json.dumps({"enriched": updated}))
         sys.exit(0)

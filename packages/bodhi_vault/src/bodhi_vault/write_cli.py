@@ -34,7 +34,7 @@ def main() -> None:
     parser.add_argument("--source", default="telegram",
                         choices=["telegram", "signal", "whatsapp", "manual", "surveyor", "distiller"])
     parser.add_argument("--tags", default="", help="Comma-separated tags (lowercase, hyphenated)")
-    parser.add_argument("--media-type", dest="media_type", default=None,
+    parser.add_argument("--media-type", dest="media_type", default="text",
                         choices=["text", "image", "voice", "document", "link", "video", "location"])
     parser.add_argument("--media-ref", dest="media_ref", default=None,
                         help="Telegram file_id or URL referencing the source media")
@@ -59,8 +59,7 @@ def main() -> None:
         "created_by": "curator",
     }
 
-    if args.media_type:
-        node["media_type"] = args.media_type
+    node["media_type"] = args.media_type  # always set, defaults to "text"
     if args.media_ref:
         node["media_ref"] = args.media_ref
     if args.domain:

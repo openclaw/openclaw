@@ -72,3 +72,15 @@ def test_enrich_node_idempotent(vault_path, sample_node, schema_path, concepts_p
     # Second call should return False (already enriched)
     result = enrich_node_concepts(sample_node["id"], vault_path, schema_path, concepts_path)
     assert result is False
+
+
+def test_enrich_node_force_overrides_idempotency(vault_path, sample_node, schema_path, concepts_path):
+    from bodhi_vault.enrich import enrich_node_concepts
+    write_node(sample_node, vault_path, schema_path)
+    enrich_node_concepts(sample_node["id"], vault_path, schema_path, concepts_path)
+
+    # Force should re-enrich even though already enriched
+    result = enrich_node_concepts(
+        sample_node["id"], vault_path, schema_path, concepts_path, force=True,
+    )
+    assert result is True
