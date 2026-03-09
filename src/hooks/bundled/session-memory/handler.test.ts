@@ -578,7 +578,11 @@ describe("session-memory hook", () => {
   async function drainPostHookActions(event: {
     postHookActions: Array<() => Promise<void> | void>;
   }) {
-    for (const action of event.postHookActions) {
+    // Snapshot before draining — matches triggerInternalHook's production
+    // semantics (prevents self-scheduling actions from executing in the
+    // same drain cycle).
+    const pending = [...event.postHookActions];
+    for (const action of pending) {
       try {
         await action();
       } catch {
