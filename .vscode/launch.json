@@ -1,0 +1,79 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Gateway (tsx)",
+            "type": "node",
+            "request": "launch",
+            "runtimeExecutable": "node",
+            "runtimeArgs": [
+                "--import",
+                "tsx",
+                "src/entry.ts",
+                "gateway",
+                "--verbose",
+                "--allow-unconfigured"
+            ],
+            "console": "integratedTerminal",
+            "skipFiles": [
+                "<node_internals>/**"
+            ],
+            "env": {
+                "NODE_ENV": "development",
+                "OPENCLAW_SKIP_CHANNELS": "0",
+                "OPENCLAW_SKIP_PROVIDERS": "0"
+            }
+        },
+        {
+            "name": "CLI Entry",
+            "type": "node",
+            "request": "launch",
+            "runtimeExecutable": "node",
+            "runtimeArgs": [
+                "--import",
+                "tsx",
+                "src/index.ts"
+            ],
+            "console": "integratedTerminal",
+            "skipFiles": [
+                "<node_internals>/**"
+            ],
+            "env": {
+                "NODE_ENV": "development"
+            }
+        },
+        {
+            "name": "Gateway (built)",
+            "type": "node",
+            "request": "launch",
+            "runtimeExecutable": "node",
+            "runtimeArgs": [
+                "dist/entry.js",
+                "gateway",
+                "--verbose",
+                "--allow-unconfigured"
+            ],
+            "console": "integratedTerminal",
+            "skipFiles": [
+                "<node_internals>/**",
+                "node_modules/**"
+            ],
+            "env": {
+                "NODE_ENV": "development",
+                "OPENCLAW_SKIP_CHANNELS": "0",
+                "OPENCLAW_SKIP_PROVIDERS": "0"
+            },
+            "preLaunchTask": "Build"
+        },
+        {
+            "name": "Attach to Gateway",
+            "type": "node",
+            "request": "attach",
+            "port": 18789,
+            "skipFiles": [
+                "<node_internals>/**",
+                "node_modules/**"
+            ]
+        }
+    ]
+}

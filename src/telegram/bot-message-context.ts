@@ -30,6 +30,7 @@ import {
 import type { OpenClawConfig } from "../config/config.js";
 import { loadConfig } from "../config/config.js";
 import { readSessionUpdatedAt, resolveStorePath } from "../config/sessions.js";
+import { appendUserMessageToSessionTranscript } from "../config/sessions/transcript.js";
 import type {
   DmPolicy,
   TelegramDirectConfig,
@@ -288,24 +289,7 @@ export const buildTelegramMessageContext = async ({
     enforceAllowOverride: true,
     requireSenderForAllowOverride: false,
   });
-  if (!baseAccess.allowed) {
-    if (baseAccess.reason === "group-disabled") {
-      logVerbose(`Blocked telegram group ${chatId} (group disabled)`);
-      return null;
-    }
-    if (baseAccess.reason === "topic-disabled") {
-      logVerbose(
-        `Blocked telegram topic ${chatId} (${resolvedThreadId ?? "unknown"}) (topic disabled)`,
-      );
-      return null;
-    }
-    logVerbose(
-      isGroup
-        ? `Blocked telegram group sender ${senderId || "unknown"} (group allowFrom override)`
-        : `Blocked telegram DM sender ${senderId || "unknown"} (DM allowFrom override)`,
-    );
-    return null;
-  }
+  
 
   // Compute requireMention early for preflight transcription gating
   const activationOverride = resolveGroupActivation({
@@ -533,25 +517,6 @@ export const buildTelegramMessageContext = async ({
     commandAuthorized,
   });
   const effectiveWasMentioned = mentionGate.effectiveWasMentioned;
-  if (isGroup && requireMention && canDetectMention) {
-    if (mentionGate.shouldSkip) {
-      logger.info({ chatId, reason: "no-mention" }, "skipping group message");
-      recordPendingHistoryEntryIfEnabled({
-        historyMap: groupHistories,
-        historyKey: historyKey ?? "",
-        limit: historyLimit,
-        entry: historyKey
-          ? {
-              sender: buildSenderLabel(msg, senderId || chatId),
-              body: rawBody,
-              timestamp: msg.date ? msg.date * 1000 : undefined,
-              messageId: typeof msg.message_id === "number" ? String(msg.message_id) : undefined,
-            }
-          : null,
-      });
-      return null;
-    }
-  }
 
   // ACK reactions
   const ackReaction = resolveAckReaction(cfg, route.agentId, {
@@ -827,28 +792,7 @@ export const buildTelegramMessageContext = async ({
     storePath,
     sessionKey: ctxPayload.SessionKey ?? sessionKey,
     ctx: ctxPayload,
-    updateLastRoute: !isGroup
-      ? {
-          sessionKey: route.mainSessionKey,
-          channel: "telegram",
-          to: `telegram:${chatId}`,
-          accountId: route.accountId,
-          // Preserve DM topic threadId for replies (fixes #8891)
-          threadId: dmThreadId != null ? String(dmThreadId) : undefined,
-          mainDmOwnerPin:
-            pinnedMainDmOwner && senderId
-              ? {
-                  ownerRecipient: pinnedMainDmOwner,
-                  senderRecipient: senderId,
-                  onSkip: ({ ownerRecipient, senderRecipient }) => {
-                    logVerbose(
-                      `telegram: skip main-session last route for ${senderRecipient} (pinned owner ${ownerRecipient})`,
-                    );
-                  },
-                }
-              : undefined,
-        }
-      : undefined,
+    updateLastRoute: undefined,
     onRecordError: (err) => {
       logVerbose(`telegram: failed updating session meta: ${String(err)}`);
     },
@@ -875,7 +819,58 @@ export const buildTelegramMessageContext = async ({
       `telegram inbound: chatId=${chatId} from=${ctxPayload.From} len=${body.length}${mediaInfo}${topicInfo} preview="${preview}"`,
     );
   }
-
+  if (!baseAccess.allowed) {
+    // Write user message to session transcript
+    await appendUserMessageToSessionTranscript({
+      storePath,
+      sessionKey: ctxPayload.SessionKey ?? sessionKey,
+      text: body,
+    }).catch((err) => {
+      logVerbose(`telegram: failed to write user message to transcript: ${String(err)}`);
+    });
+    if (baseAccess.reason === "group-disabled") {
+      logVerbose(`Blocked telegram group ${chatId} (group disabled)`);
+      return null;
+    }
+    if (baseAccess.reason === "topic-disabled") {
+      logVerbose(
+        `Blocked telegram topic ${chatId} (${resolvedThreadId ?? "unknown"}) (topic disabled)`,
+      );
+      return null;
+    }
+    logVerbose(
+      isGroup
+        ? `Blocked telegram group sender ${senderId || "unknown"} (group allowFrom override)`
+        : `Blocked telegram DM sender ${senderId || "unknown"} (DM allowFrom override)`,
+    );
+    return null;
+  }
+  if (isGroup && requireMention && canDetectMention) {
+    await appendUserMessageToSessionTranscript({
+      storePath,
+      sessionKey: ctxPayload.SessionKey ?? sessionKey,
+      text: body,
+    }).catch((err) => {
+      logVerbose(`telegram: failed to write user message to transcript: ${String(err)}`);
+    });
+    if (mentionGate.shouldSkip) {
+      logger.info({ chatId, reason: "no-mention" }, "skipping group message");
+      recordPendingHistoryEntryIfEnabled({
+        historyMap: groupHistories,
+        historyKey: historyKey ?? "",
+        limit: historyLimit,
+        entry: historyKey
+          ? {
+              sender: buildSenderLabel(msg, senderId || chatId),
+              body: rawBody,
+              timestamp: msg.date ? msg.date * 1000 : undefined,
+              messageId: typeof msg.message_id === "number" ? String(msg.message_id) : undefined,
+            }
+          : null,
+      });
+      return null;
+    }
+  }
   return {
     ctxPayload,
     primaryCtx,

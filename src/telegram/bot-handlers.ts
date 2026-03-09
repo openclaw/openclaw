@@ -519,22 +519,22 @@ export const registerTelegramHandlers = ({
       enforceAllowOverride: true,
       requireSenderForAllowOverride: true,
     });
-    if (!baseAccess.allowed) {
-      if (baseAccess.reason === "group-disabled") {
-        logVerbose(`Blocked telegram group ${chatId} (group disabled)`);
-        return true;
-      }
-      if (baseAccess.reason === "topic-disabled") {
-        logVerbose(
-          `Blocked telegram topic ${chatId} (${resolvedThreadId ?? "unknown"}) (topic disabled)`,
-        );
-        return true;
-      }
-      logVerbose(
-        `Blocked telegram group sender ${senderId || "unknown"} (group allowFrom override)`,
-      );
-      return true;
-    }
+    // if (!baseAccess.allowed) {
+    //   if (baseAccess.reason === "group-disabled") {
+    //     logVerbose(`Blocked telegram group ${chatId} (group disabled)`);
+    //     return true;
+    //   }
+    //   if (baseAccess.reason === "topic-disabled") {
+    //     logVerbose(
+    //       `Blocked telegram topic ${chatId} (${resolvedThreadId ?? "unknown"}) (topic disabled)`,
+    //     );
+    //     return true;
+    //   }
+    //   logVerbose(
+    //     `Blocked telegram group sender ${senderId || "unknown"} (group allowFrom override)`,
+    //   );
+    //   return true;
+    // }
     if (!isGroup) {
       return false;
     }
@@ -556,28 +556,28 @@ export const registerTelegramHandlers = ({
       requireSenderForAllowlistAuthorization: true,
       checkChatAllowlist: true,
     });
-    if (!policyAccess.allowed) {
-      if (policyAccess.reason === "group-policy-disabled") {
-        logVerbose("Blocked telegram group message (groupPolicy: disabled)");
-        return true;
-      }
-      if (policyAccess.reason === "group-policy-allowlist-no-sender") {
-        logVerbose("Blocked telegram group message (no sender ID, groupPolicy: allowlist)");
-        return true;
-      }
-      if (policyAccess.reason === "group-policy-allowlist-empty") {
-        logVerbose(
-          "Blocked telegram group message (groupPolicy: allowlist, no group allowlist entries)",
-        );
-        return true;
-      }
-      if (policyAccess.reason === "group-policy-allowlist-unauthorized") {
-        logVerbose(`Blocked telegram group message from ${senderId} (groupPolicy: allowlist)`);
-        return true;
-      }
-      logger.info({ chatId, title: chatTitle, reason: "not-allowed" }, "skipping group message");
-      return true;
-    }
+    // if (!policyAccess.allowed) {
+    //   if (policyAccess.reason === "group-policy-disabled") {
+    //     logVerbose("Blocked telegram group message (groupPolicy: disabled)");
+    //     return true;
+    //   }
+    //   if (policyAccess.reason === "group-policy-allowlist-no-sender") {
+    //     logVerbose("Blocked telegram group message (no sender ID, groupPolicy: allowlist)");
+    //     return true;
+    //   }
+    //   if (policyAccess.reason === "group-policy-allowlist-empty") {
+    //     logVerbose(
+    //       "Blocked telegram group message (groupPolicy: allowlist, no group allowlist entries)",
+    //     );
+    //     return true;
+    //   }
+    //   if (policyAccess.reason === "group-policy-allowlist-unauthorized") {
+    //     logVerbose(`Blocked telegram group message from ${senderId} (groupPolicy: allowlist)`);
+    //     return true;
+    //   }
+    //   logger.info({ chatId, title: chatTitle, reason: "not-allowed" }, "skipping group message");
+    //   return true;
+    // }
     return false;
   };
 
