@@ -1138,6 +1138,80 @@ describe("spawnAcpDirect", () => {
     expect(agentCall?.params?.threadId).toBeUndefined();
   });
 
+  it("binds Discord DMs to current placement for dmScope=main session keys", async () => {
+    hoisted.loadSessionStoreMock.mockImplementation(() => {
+      const store: Record<
+        string,
+        {
+          sessionId: string;
+          updatedAt: number;
+          deliveryContext?: {
+            channel?: string;
+            to?: string;
+            accountId?: string;
+          };
+        }
+      > = {
+        "agent:main:main": {
+          sessionId: "sess-main",
+          updatedAt: Date.now(),
+          deliveryContext: {
+            channel: "discord",
+            to: "user:dm-user-1",
+            accountId: "default",
+          },
+        },
+      };
+      return new Proxy(store, {
+        get(target, prop) {
+          if (typeof prop === "string") {
+            const direct = target[prop];
+            if (direct) {
+              return direct;
+            }
+            if (prop.startsWith("agent:codex:acp:")) {
+              return { sessionId: "sess-123", updatedAt: Date.now() };
+            }
+          }
+          return undefined;
+        },
+      });
+    });
+
+    const result = await spawnAcpDirect(
+      {
+        task: "Investigate flaky tests",
+        agentId: "codex",
+        mode: "session",
+        thread: true,
+      },
+      {
+        agentSessionKey: "agent:main:main",
+        agentChannel: "discord",
+        agentAccountId: "default",
+        agentTo: "channel:dm-1",
+      },
+    );
+
+    expect(result.status).toBe("accepted");
+    expect(hoisted.sessionBindingBindMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        placement: "current",
+        conversation: expect.objectContaining({
+          channel: "discord",
+          conversationId: "dm-1",
+        }),
+      }),
+    );
+    const agentCall = hoisted.callGatewayMock.mock.calls
+      .map((call: unknown[]) => call[0] as { method?: string; params?: Record<string, unknown> })
+      .find((request) => request.method === "agent");
+    expect(agentCall?.params?.deliver).toBe(true);
+    expect(agentCall?.params?.channel).toBe("discord");
+    expect(agentCall?.params?.to).toBe("channel:dm-1");
+    expect(agentCall?.params?.threadId).toBeUndefined();
+  });
+
   it("disposes pre-registered parent relay when initial ACP dispatch fails", async () => {
     const relayHandle = createRelayHandle();
     hoisted.startAcpSpawnParentStreamRelayMock.mockReturnValueOnce(relayHandle);

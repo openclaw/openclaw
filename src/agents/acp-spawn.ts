@@ -31,6 +31,7 @@ import { loadConfig } from "../config/config.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { loadSessionStore, resolveStorePath, type SessionEntry } from "../config/sessions.js";
 import { resolveSessionTranscriptFile } from "../config/sessions/transcript.js";
+import { parseDiscordTarget } from "../discord/targets.js";
 import { callGateway } from "../gateway/call.js";
 import { areHeartbeatsEnabled } from "../infra/heartbeat-wake.js";
 import { resolveConversationIdFromTargets } from "../infra/outbound/conversation-id.js";
@@ -45,6 +46,7 @@ import {
   isSubagentSessionKey,
   normalizeAgentId,
   parseAgentSessionKey,
+  resolveAgentIdFromSessionKey,
 } from "../routing/session-key.js";
 import { deriveSessionChatType } from "../sessions/session-key-utils.js";
 import { parseTelegramTarget } from "../telegram/targets.js";
@@ -357,9 +359,50 @@ function resolveConversationIdForThreadBinding(params: {
   });
 }
 
+function isDiscordDirectTarget(rawTarget: string | undefined): boolean {
+  const trimmed = rawTarget?.trim() || "";
+  if (!trimmed) {
+    return false;
+  }
+  try {
+    return parseDiscordTarget(trimmed)?.kind === "user";
+  } catch {
+    return false;
+  }
+}
+
+function isDiscordDirectContext(params: {
+  requesterSessionKey?: string;
+  requesterTo?: string;
+  requesterFallbackTo?: string;
+}): boolean {
+  if (deriveSessionChatType(params.requesterSessionKey) === "direct") {
+    return true;
+  }
+  return (
+    isDiscordDirectTarget(params.requesterTo) || isDiscordDirectTarget(params.requesterFallbackTo)
+  );
+}
+
+function resolveStoredRequesterDeliveryContext(params: {
+  cfg: OpenClawConfig;
+  requesterSessionKey?: string;
+}) {
+  const requesterSessionKey = params.requesterSessionKey?.trim();
+  if (!requesterSessionKey) {
+    return undefined;
+  }
+  const requesterAgentId = resolveAgentIdFromSessionKey(requesterSessionKey);
+  const storePath = resolveStorePath(params.cfg.session?.store, { agentId: requesterAgentId });
+  const sessionStore = loadSessionStore(storePath);
+  return deliveryContextFromSession(sessionStore[requesterSessionKey]);
+}
+
 function resolveAcpThreadBindingPlacement(params: {
   channel: string;
   requesterSessionKey?: string;
+  requesterTo?: string;
+  requesterFallbackTo?: string;
   threadId?: string | number;
 }): SessionBindingPlacement {
   if (params.channel === "telegram") {
@@ -371,7 +414,13 @@ function resolveAcpThreadBindingPlacement(params: {
     if (threadId) {
       return "current";
     }
-    if (deriveSessionChatType(params.requesterSessionKey) === "direct") {
+    if (
+      isDiscordDirectContext({
+        requesterSessionKey: params.requesterSessionKey,
+        requesterTo: params.requesterTo,
+        requesterFallbackTo: params.requesterFallbackTo,
+      })
+    ) {
       return "current";
     }
   }
@@ -386,6 +435,7 @@ function resolveAcpInlineDeliveryTarget(params: {
     threadId?: string | number;
   };
   requesterSessionKey?: string;
+  requesterFallbackTo?: string;
 }): { to?: string; threadId?: string } {
   const requesterTo = params.requesterOrigin?.to?.trim() || undefined;
   const requesterThreadId =
@@ -420,9 +470,15 @@ function resolveAcpInlineDeliveryTarget(params: {
   }
 
   if (channel === "discord") {
-    if (deriveSessionChatType(params.requesterSessionKey) === "direct") {
+    if (
+      isDiscordDirectContext({
+        requesterSessionKey: params.requesterSessionKey,
+        requesterTo,
+        requesterFallbackTo: params.requesterFallbackTo,
+      })
+    ) {
       return {
-        to: requesterTo || `channel:${conversationId}`,
+        to: requesterTo || params.requesterFallbackTo || `channel:${conversationId}`,
       };
     }
     const parentConversationId = params.binding?.conversation.parentConversationId?.trim() || "";
@@ -447,6 +503,7 @@ function prepareAcpThreadBinding(params: {
   to?: string;
   threadId?: string | number;
   requesterSessionKey?: string;
+  requesterFallbackTo?: string;
 }): { ok: true; binding: PreparedAcpThreadBinding } | { ok: false; error: string } {
   const channel = params.channel?.trim().toLowerCase();
   if (!channel) {
@@ -514,6 +571,8 @@ function prepareAcpThreadBinding(params: {
   const placement = resolveAcpThreadBindingPlacement({
     channel: policy.channel,
     requesterSessionKey: params.requesterSessionKey,
+    requesterTo: params.to,
+    requesterFallbackTo: params.requesterFallbackTo,
     threadId: params.threadId,
   });
   if (!capabilities.placements.includes(placement)) {
@@ -650,6 +709,10 @@ export async function spawnAcpDirect(
 
   const sessionKey = `agent:${targetAgentId}:acp:${crypto.randomUUID()}`;
   const runtimeMode = resolveAcpSessionMode(spawnMode);
+  const requesterStoredOrigin = resolveStoredRequesterDeliveryContext({
+    cfg,
+    requesterSessionKey: requesterInternalKey,
+  });
 
   let preparedBinding: PreparedAcpThreadBinding | null = null;
   if (requestThreadBinding) {
@@ -660,6 +723,7 @@ export async function spawnAcpDirect(
       to: ctx.agentTo,
       threadId: ctx.agentThreadId,
       requesterSessionKey: ctx.agentSessionKey,
+      requesterFallbackTo: requesterStoredOrigin?.to,
     });
     if (!prepared.ok) {
       return {
@@ -800,6 +864,7 @@ export async function spawnAcpDirect(
     binding,
     requesterOrigin,
     requesterSessionKey: ctx.agentSessionKey,
+    requesterFallbackTo: requesterStoredOrigin?.to,
   });
   const deliveryThreadId = inlineDeliveryTarget.threadId;
   const inferredDeliveryTo = inlineDeliveryTarget.to;
