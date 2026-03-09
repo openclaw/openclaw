@@ -66,6 +66,9 @@ const DEFAULT_CLAUDE_BACKEND: CliBackendConfig = {
   sessionIdFields: ["session_id", "sessionId", "conversation_id", "conversationId"],
   systemPromptArg: "--append-system-prompt",
   systemPromptMode: "append",
+  // "always" (changed from "first") ensures the system prompt is injected on
+  // every CLI run including resumes, which is required for stream-json mode
+  // where each run starts a fresh subprocess with no prior context.
   systemPromptWhen: "always",
   clearEnv: ["ANTHROPIC_API_KEY", "ANTHROPIC_API_KEY_OLD"],
   reliability: {

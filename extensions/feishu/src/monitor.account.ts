@@ -139,6 +139,13 @@ export async function resolveReactionSyntheticEvent(
   };
 }
 
+/** Duck-typed accessor for hook runner methods that may not yet exist in the
+ * base type system. Returns the hook runner cast to a loose record type so
+ * callers can safely check for and call individual methods at runtime. */
+function getDuckTypedHookRunner(): Record<string, (...args: unknown[]) => unknown> | null {
+  return getGlobalHookRunner() as Record<string, (...args: unknown[]) => unknown> | null;
+}
+
 function asNonEmptyString(value: unknown): string | undefined {
   if (typeof value !== "string") {
     return undefined;
@@ -507,13 +514,7 @@ function registerEventHandlers(
         const event = data as unknown as FeishuBotAddedEvent;
         log(`feishu[${accountId}]: bot added to chat ${event.chat_id}`);
         if (!event.chat_id) return;
-        // chat_member_* hooks are defined by the feishu streaming pipeline and
-        // may not be present in the base plugin hook type system yet. Use
-        // runtime-safe duck-typed dispatch to avoid coupling to unmerged types.
-        const hookRunner = getGlobalHookRunner() as Record<
-          string,
-          (...args: unknown[]) => unknown
-        > | null;
+        const hookRunner = getDuckTypedHookRunner();
         if (hookRunner && typeof hookRunner.runChatMemberBotAdded === "function") {
           void hookRunner.runChatMemberBotAdded(
             { chatId: event.chat_id },
@@ -529,10 +530,7 @@ function registerEventHandlers(
         const event = data as unknown as { chat_id: string };
         log(`feishu[${accountId}]: bot removed from chat ${event.chat_id}`);
         if (!event.chat_id) return;
-        const hookRunner = getGlobalHookRunner() as Record<
-          string,
-          (...args: unknown[]) => unknown
-        > | null;
+        const hookRunner = getDuckTypedHookRunner();
         if (hookRunner && typeof hookRunner.runChatMemberBotDeleted === "function") {
           void hookRunner.runChatMemberBotDeleted(
             { chatId: event.chat_id },
@@ -554,10 +552,7 @@ function registerEventHandlers(
         };
         log(`feishu[${accountId}]: users added to chat ${event.chat_id}`);
         if (!event.chat_id) return;
-        const hookRunner = getGlobalHookRunner() as Record<
-          string,
-          (...args: unknown[]) => unknown
-        > | null;
+        const hookRunner = getDuckTypedHookRunner();
         if (hookRunner && typeof hookRunner.runChatMemberUserAdded === "function") {
           const users = (event.users ?? [])
             .filter((u) => !!u.user_id?.open_id)
@@ -586,10 +581,7 @@ function registerEventHandlers(
         };
         log(`feishu[${accountId}]: users deleted from chat ${event.chat_id}`);
         if (!event.chat_id) return;
-        const hookRunner = getGlobalHookRunner() as Record<
-          string,
-          (...args: unknown[]) => unknown
-        > | null;
+        const hookRunner = getDuckTypedHookRunner();
         if (hookRunner && typeof hookRunner.runChatMemberUserDeleted === "function") {
           const users = (event.users ?? [])
             .filter((u) => !!u.user_id?.open_id)
@@ -618,10 +610,7 @@ function registerEventHandlers(
         };
         log(`feishu[${accountId}]: users withdrawn from chat ${event.chat_id}`);
         if (!event.chat_id) return;
-        const hookRunner = getGlobalHookRunner() as Record<
-          string,
-          (...args: unknown[]) => unknown
-        > | null;
+        const hookRunner = getDuckTypedHookRunner();
         if (hookRunner && typeof hookRunner.runChatMemberUserWithdrawn === "function") {
           const users = (event.users ?? [])
             .filter((u) => !!u.user_id?.open_id)
