@@ -3,7 +3,7 @@ import fs from "node:fs/promises";
 import { createRequire } from "node:module";
 import path from "node:path";
 import type { Readable } from "node:stream";
-import { ChannelType, type Client, ReadyListener } from "@buape/carbon";
+import { ChannelType, type Client, ReadyListener, ResumedListener } from "@buape/carbon";
 import type { VoicePlugin } from "@buape/carbon/voice";
 import {
   AudioPlayerStatus,
@@ -12,6 +12,7 @@ import {
   createAudioPlayer,
   createAudioResource,
   entersState,
+  getVoiceConnection,
   joinVoiceChannel,
   type AudioPlayer,
   type VoiceConnection,
@@ -403,6 +404,21 @@ export class DiscordVoiceManager {
         decryptionFailureTolerance ?? "default"
       }`,
     );
+
+    // Proactively destroy any stale VoiceConnection left in @discordjs/voice's global registry
+    // for this guild. This can happen after a health-monitor account-level restart: the old
+    // DiscordVoiceManager is torn down but the VoiceConnection object stays in the global Map.
+    // joinVoiceChannel would then return the stale connection (possibly already destroyed),
+    // causing "Cannot destroy VoiceConnection - it has already been destroyed" errors and
+    // preventing the bot from ever rejoining the channel.
+    const staleConnection = getVoiceConnection(guildId);
+    if (staleConnection && staleConnection.state.status !== VoiceConnectionStatus.Destroyed) {
+      logVoiceVerbose(
+        `join: destroying stale voice connection for guild ${guildId} (status: ${staleConnection.state.status})`,
+      );
+      staleConnection.destroy();
+    }
+
     const connection = joinVoiceChannel({
       channelId,
       guildId,
@@ -888,6 +904,25 @@ export class DiscordVoiceManager {
 }
 
 export class DiscordVoiceReadyListener extends ReadyListener {
+  constructor(private manager: DiscordVoiceManager) {
+    super();
+  }
+
+  async handle() {
+    await this.manager.autoJoin();
+  }
+}
+
+/**
+ * Triggers autoJoin on RESUMED events.
+ *
+ * When the health-monitor performs an account-level restart, @buape/carbon reconnects
+ * to Discord using RESUME rather than a fresh IDENTIFY. This means Discord sends a
+ * RESUMED event (not READY), so DiscordVoiceReadyListener never fires and the bot
+ * stays disconnected from its configured voice channels. This listener ensures
+ * autoJoin is called whenever a session is resumed as well.
+ */
+export class DiscordVoiceResumedListener extends ResumedListener {
   constructor(private manager: DiscordVoiceManager) {
     super();
   }

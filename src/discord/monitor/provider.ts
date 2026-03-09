@@ -48,7 +48,11 @@ import { resolveDiscordAccount } from "../accounts.js";
 import { fetchDiscordApplicationId } from "../probe.js";
 import { normalizeDiscordToken } from "../token.js";
 import { createDiscordVoiceCommand } from "../voice/command.js";
-import { DiscordVoiceManager, DiscordVoiceReadyListener } from "../voice/manager.js";
+import {
+  DiscordVoiceManager,
+  DiscordVoiceReadyListener,
+  DiscordVoiceResumedListener,
+} from "../voice/manager.js";
 import {
   createAgentComponentButton,
   createAgentSelectMenu,
@@ -673,6 +677,7 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
       });
       voiceManagerRef.current = voiceManager;
       registerDiscordListener(client.listeners, new DiscordVoiceReadyListener(voiceManager));
+      registerDiscordListener(client.listeners, new DiscordVoiceResumedListener(voiceManager));
     }
 
     const messageHandler = createDiscordMessageHandler({
