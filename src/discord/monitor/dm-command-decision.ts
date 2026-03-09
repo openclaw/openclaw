@@ -1,3 +1,4 @@
+import { issuePairingChallenge } from "../../pairing/pairing-challenge.js";
 import { upsertChannelPairingRequest } from "../../pairing/pairing-store.js";
 import type { DiscordDmCommandAccess } from "./dm-command-auth.js";
 
@@ -19,17 +20,25 @@ export async function handleDiscordDmCommandDecision(params: {
 
   if (params.dmAccess.decision === "pairing") {
     const upsertPairingRequest = params.upsertPairingRequest ?? upsertChannelPairingRequest;
-    const { code, created } = await upsertPairingRequest({
+    const result = await issuePairingChallenge({
       channel: "discord",
-      id: params.sender.id,
-      accountId: params.accountId,
+      senderId: params.sender.id,
+      senderIdLine: `Your Discord user id: ${params.sender.id}`,
       meta: {
         tag: params.sender.tag,
         name: params.sender.name,
       },
+      upsertPairingRequest: async ({ id, meta }) =>
+        await upsertPairingRequest({
+          channel: "discord",
+          id,
+          accountId: params.accountId,
+          meta,
+        }),
+      sendPairingReply: async () => {},
     });
-    if (created) {
-      await params.onPairingCreated(code);
+    if (result.created && result.code) {
+      await params.onPairingCreated(result.code);
     }
     return false;
   }

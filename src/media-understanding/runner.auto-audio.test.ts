@@ -140,7 +140,7 @@ describe("runCapability auto audio entries", () => {
           models: {
             providers: {
               mistral: {
-                apiKey: "mistral-test-key",
+                apiKey: "mistral-test-key", // pragma: allowlist secret
                 models: [],
               },
             },

@@ -4,6 +4,12 @@ import {
 } from "../config/group-policy.js";
 import { inspectDiscordAccount } from "../discord/account-inspect.js";
 import {
+  formatAllowFromLowercase,
+  formatNormalizedAllowFromEntries,
+} from "../plugin-sdk/allow-from.js";
+import {
+  mapAllowFromEntries,
+  resolveOptionalConfigString,
   formatTrimmedAllowFromEntries,
   formatWhatsAppConfigAllowFromEntries,
   resolveIMessageConfigAllowFrom,
@@ -26,6 +32,8 @@ import {
   resolveGoogleChatGroupToolPolicy,
   resolveIMessageGroupRequireMention,
   resolveIMessageGroupToolPolicy,
+  resolveLineGroupRequireMention,
+  resolveLineGroupToolPolicy,
   resolveSlackGroupRequireMention,
   resolveSlackGroupToolPolicy,
   resolveTelegramGroupRequireMention,
@@ -80,18 +88,6 @@ type ChannelDockStreaming = {
   };
 };
 
-const formatLower = (allowFrom: Array<string | number>) =>
-  allowFrom
-    .map((entry) => String(entry).trim())
-    .filter(Boolean)
-    .map((entry) => entry.toLowerCase());
-
-const stringifyAllowFrom = (allowFrom: Array<string | number>) =>
-  allowFrom.map((entry) => String(entry));
-
-const trimAllowFromEntries = (allowFrom: Array<string | number>) =>
-  allowFrom.map((entry) => String(entry).trim()).filter(Boolean);
-
 const DEFAULT_OUTBOUND_TEXT_CHUNK_LIMIT_4000 = { textChunkLimit: 4000 };
 
 const DEFAULT_BLOCK_STREAMING_COALESCE = {
@@ -102,12 +98,15 @@ function formatAllowFromWithReplacements(
   allowFrom: Array<string | number>,
   replacements: RegExp[],
 ): string[] {
-  return trimAllowFromEntries(allowFrom).map((entry) => {
-    let normalized = entry;
-    for (const replacement of replacements) {
-      normalized = normalized.replace(replacement, "");
-    }
-    return normalized.toLowerCase();
+  return formatNormalizedAllowFromEntries({
+    allowFrom,
+    normalizeEntry: (entry) => {
+      let normalized = entry;
+      for (const replacement of replacements) {
+        normalized = normalized.replace(replacement, "");
+      }
+      return normalized.toLowerCase();
+    },
   });
 }
 
@@ -247,15 +246,14 @@ const DOCKS: Record<ChatChannelId, ChannelDock> = {
     outbound: DEFAULT_OUTBOUND_TEXT_CHUNK_LIMIT_4000,
     config: {
       resolveAllowFrom: ({ cfg, accountId }) =>
-        stringifyAllowFrom(inspectTelegramAccount({ cfg, accountId }).config.allowFrom ?? []),
+        mapAllowFromEntries(inspectTelegramAccount({ cfg, accountId }).config.allowFrom),
       formatAllowFrom: ({ allowFrom }) =>
-        trimAllowFromEntries(allowFrom)
-          .map((entry) => entry.replace(/^(telegram|tg):/i, ""))
-          .map((entry) => entry.toLowerCase()),
-      resolveDefaultTo: ({ cfg, accountId }) => {
-        const val = inspectTelegramAccount({ cfg, accountId }).config.defaultTo;
-        return val != null ? String(val) : undefined;
-      },
+        formatAllowFromLowercase({
+          allowFrom,
+          stripPrefixRe: /^(telegram|tg):/i,
+        }),
+      resolveDefaultTo: ({ cfg, accountId }) =>
+        resolveOptionalConfigString(inspectTelegramAccount({ cfg, accountId }).config.defaultTo),
     },
     groups: {
       resolveRequireMention: resolveTelegramGroupRequireMention,
@@ -337,13 +335,11 @@ const DOCKS: Record<ChatChannelId, ChannelDock> = {
     config: {
       resolveAllowFrom: ({ cfg, accountId }) => {
         const account = inspectDiscordAccount({ cfg, accountId });
-        return (account.config.allowFrom ?? account.config.dm?.allowFrom ?? []).map((entry) =>
-          String(entry),
-        );
+        return mapAllowFromEntries(account.config.allowFrom ?? account.config.dm?.allowFrom);
       },
       formatAllowFrom: ({ allowFrom }) => formatDiscordAllowFrom(allowFrom),
       resolveDefaultTo: ({ cfg, accountId }) =>
-        inspectDiscordAccount({ cfg, accountId }).config.defaultTo?.trim() || undefined,
+        resolveOptionalConfigString(inspectDiscordAccount({ cfg, accountId }).config.defaultTo),
     },
     groups: {
       resolveRequireMention: resolveDiscordGroupRequireMention,
@@ -376,7 +372,7 @@ const DOCKS: Record<ChatChannelId, ChannelDock> = {
       resolveAllowFrom: ({ cfg, accountId }) => {
         const channel = cfg.channels?.irc;
         const account = resolveCaseInsensitiveAccount(channel?.accounts, accountId);
-        return (account?.allowFrom ?? channel?.allowFrom ?? []).map((entry) => String(entry));
+        return mapAllowFromEntries(account?.allowFrom ?? channel?.allowFrom);
       },
       formatAllowFrom: ({ allowFrom }) =>
         formatAllowFromWithReplacements(allowFrom, [/^irc:/i, /^user:/i]),
@@ -438,9 +434,7 @@ const DOCKS: Record<ChatChannelId, ChannelDock> = {
             }
           | undefined;
         const account = resolveCaseInsensitiveAccount(channel?.accounts, accountId);
-        return (account?.dm?.allowFrom ?? channel?.dm?.allowFrom ?? []).map((entry) =>
-          String(entry),
-        );
+        return mapAllowFromEntries(account?.dm?.allowFrom ?? channel?.dm?.allowFrom);
       },
       formatAllowFrom: ({ allowFrom }) =>
         formatAllowFromWithReplacements(allowFrom, [
@@ -479,13 +473,11 @@ const DOCKS: Record<ChatChannelId, ChannelDock> = {
     config: {
       resolveAllowFrom: ({ cfg, accountId }) => {
         const account = inspectSlackAccount({ cfg, accountId });
-        return (account.config.allowFrom ?? account.dm?.allowFrom ?? []).map((entry) =>
-          String(entry),
-        );
+        return mapAllowFromEntries(account.config.allowFrom ?? account.dm?.allowFrom);
       },
-      formatAllowFrom: ({ allowFrom }) => formatLower(allowFrom),
+      formatAllowFrom: ({ allowFrom }) => formatAllowFromLowercase({ allowFrom }),
       resolveDefaultTo: ({ cfg, accountId }) =>
-        inspectSlackAccount({ cfg, accountId }).config.defaultTo?.trim() || undefined,
+        resolveOptionalConfigString(inspectSlackAccount({ cfg, accountId }).config.defaultTo),
     },
     groups: {
       resolveRequireMention: resolveSlackGroupRequireMention,
@@ -512,13 +504,15 @@ const DOCKS: Record<ChatChannelId, ChannelDock> = {
     streaming: DEFAULT_BLOCK_STREAMING_COALESCE,
     config: {
       resolveAllowFrom: ({ cfg, accountId }) =>
-        stringifyAllowFrom(resolveSignalAccount({ cfg, accountId }).config.allowFrom ?? []),
+        mapAllowFromEntries(resolveSignalAccount({ cfg, accountId }).config.allowFrom),
       formatAllowFrom: ({ allowFrom }) =>
-        trimAllowFromEntries(allowFrom)
-          .map((entry) => (entry === "*" ? "*" : normalizeE164(entry.replace(/^signal:/i, ""))))
-          .filter(Boolean),
+        formatNormalizedAllowFromEntries({
+          allowFrom,
+          normalizeEntry: (entry) =>
+            entry === "*" ? "*" : normalizeE164(entry.replace(/^signal:/i, "")),
+        }),
       resolveDefaultTo: ({ cfg, accountId }) =>
-        resolveSignalAccount({ cfg, accountId }).config.defaultTo?.trim() || undefined,
+        resolveOptionalConfigString(resolveSignalAccount({ cfg, accountId }).config.defaultTo),
     },
     threading: {
       buildToolContext: ({ context, hasRepliedRef }) =>
@@ -545,6 +539,18 @@ const DOCKS: Record<ChatChannelId, ChannelDock> = {
     threading: {
       buildToolContext: ({ context, hasRepliedRef }) =>
         buildIMessageThreadToolContext({ context, hasRepliedRef }),
+    },
+  },
+  line: {
+    id: "line",
+    capabilities: {
+      chatTypes: ["direct", "group"],
+      media: true,
+    },
+    outbound: { textChunkLimit: 5000 },
+    groups: {
+      resolveRequireMention: resolveLineGroupRequireMention,
+      resolveToolPolicy: resolveLineGroupToolPolicy,
     },
   },
 };

@@ -1,12 +1,18 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+// vi.hoisted runs before module imports, ensuring FAST_TEST_MODE is picked up.
+vi.hoisted(() => {
+  process.env.OPENCLAW_TEST_FAST = "1";
+});
+
 import {
   expectsSubagentFollowup,
   isLikelyInterimCronMessage,
   readDescendantSubagentFallbackReply,
+  waitForDescendantSubagentSummary,
 } from "./subagent-followup.js";
 
 vi.mock("../../agents/subagent-registry.js", () => ({
-  countActiveDescendantRuns: vi.fn().mockReturnValue(0),
   listDescendantRunsForRequester: vi.fn().mockReturnValue([]),
 }));
 
@@ -14,8 +20,18 @@ vi.mock("../../agents/tools/agent-step.js", () => ({
   readLatestAssistantReply: vi.fn().mockResolvedValue(undefined),
 }));
 
+vi.mock("../../gateway/call.js", () => ({
+  callGateway: vi.fn().mockResolvedValue({ status: "ok" }),
+}));
+
 const { listDescendantRunsForRequester } = await import("../../agents/subagent-registry.js");
 const { readLatestAssistantReply } = await import("../../agents/tools/agent-step.js");
+const { callGateway } = await import("../../gateway/call.js");
+
+async function resolveAfterAdvancingTimers<T>(promise: Promise<T>, advanceMs = 100): Promise<T> {
+  await vi.advanceTimersByTimeAsync(advanceMs);
+  return promise;
+}
 
 describe("isLikelyInterimCronMessage", () => {
   it("detects 'on it' as interim", () => {
@@ -240,6 +256,249 @@ describe("readDescendantSubagentFallbackReply", () => {
       sessionKey: "test-session",
       runStartedAt,
     });
+    expect(result).toBeUndefined();
+  });
+});
+
+describe("waitForDescendantSubagentSummary", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.useRealTimers();
+    vi.mocked(listDescendantRunsForRequester).mockReturnValue([]);
+    vi.mocked(readLatestAssistantReply).mockResolvedValue(undefined);
+    vi.mocked(callGateway).mockResolvedValue({ status: "ok" });
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("returns initialReply immediately when no active descendants and observedActiveDescendants=false", async () => {
+    vi.mocked(listDescendantRunsForRequester).mockReturnValue([]);
+    const result = await waitForDescendantSubagentSummary({
+      sessionKey: "cron-session",
+      initialReply: "on it",
+      timeoutMs: 100,
+      observedActiveDescendants: false,
+    });
+    expect(result).toBe("on it");
+    expect(callGateway).not.toHaveBeenCalled();
+  });
+
+  it("awaits active descendants via agent.wait and returns synthesis after grace period", async () => {
+    // First call: active run; second call (after agent.wait resolves): no active runs
+    vi.mocked(listDescendantRunsForRequester)
+      .mockReturnValueOnce([
+        {
+          runId: "run-abc",
+          childSessionKey: "child-session",
+          requesterSessionKey: "cron-session",
+          requesterDisplayKey: "cron-session",
+          task: "morning briefing",
+          cleanup: "keep",
+          createdAt: 1000,
+          // no endedAt → active
+        },
+      ])
+      .mockReturnValue([]); // subsequent calls: all done
+
+    vi.mocked(callGateway).mockResolvedValue({ status: "ok" });
+    vi.mocked(readLatestAssistantReply).mockResolvedValue("Morning briefing complete!");
+
+    const result = await waitForDescendantSubagentSummary({
+      sessionKey: "cron-session",
+      initialReply: "on it",
+      timeoutMs: 30_000,
+      observedActiveDescendants: true,
+    });
+
+    expect(result).toBe("Morning briefing complete!");
+    // agent.wait should have been called with the active run's ID
+    expect(callGateway).toHaveBeenCalledWith(
+      expect.objectContaining({
+        method: "agent.wait",
+        params: expect.objectContaining({ runId: "run-abc" }),
+      }),
+    );
+  });
+
+  it("returns undefined when descendants finish but only interim text remains after grace period", async () => {
+    vi.useFakeTimers();
+    // No active runs at call time, but observedActiveDescendants=true (saw them before)
+    vi.mocked(listDescendantRunsForRequester).mockReturnValue([]);
+    // readLatestAssistantReply keeps returning interim text
+    vi.mocked(readLatestAssistantReply).mockResolvedValue("on it");
+
+    const resultPromise = waitForDescendantSubagentSummary({
+      sessionKey: "cron-session",
+      initialReply: "on it",
+      timeoutMs: 100,
+      observedActiveDescendants: true,
+    });
+
+    const result = await resolveAfterAdvancingTimers(resultPromise);
+
+    expect(result).toBeUndefined();
+  });
+
+  it("returns synthesis even if initial reply was undefined", async () => {
+    vi.mocked(listDescendantRunsForRequester)
+      .mockReturnValueOnce([
+        {
+          runId: "run-xyz",
+          childSessionKey: "child-2",
+          requesterSessionKey: "cron-session",
+          requesterDisplayKey: "cron-session",
+          task: "report",
+          cleanup: "keep",
+          createdAt: 1000,
+        },
+      ])
+      .mockReturnValue([]);
+
+    vi.mocked(callGateway).mockResolvedValue({ status: "ok" });
+    vi.mocked(readLatestAssistantReply).mockResolvedValue("Report generated successfully.");
+
+    const result = await waitForDescendantSubagentSummary({
+      sessionKey: "cron-session",
+      initialReply: undefined,
+      timeoutMs: 30_000,
+      observedActiveDescendants: true,
+    });
+
+    expect(result).toBe("Report generated successfully.");
+  });
+
+  it("uses agent.wait for each active run when multiple descendants exist", async () => {
+    vi.mocked(listDescendantRunsForRequester)
+      .mockReturnValueOnce([
+        {
+          runId: "run-1",
+          childSessionKey: "child-1",
+          requesterSessionKey: "cron-session",
+          requesterDisplayKey: "cron-session",
+          task: "task-1",
+          cleanup: "keep",
+          createdAt: 1000,
+        },
+        {
+          runId: "run-2",
+          childSessionKey: "child-2",
+          requesterSessionKey: "cron-session",
+          requesterDisplayKey: "cron-session",
+          task: "task-2",
+          cleanup: "keep",
+          createdAt: 1000,
+        },
+      ])
+      .mockReturnValue([]);
+
+    vi.mocked(callGateway).mockResolvedValue({ status: "ok" });
+    vi.mocked(readLatestAssistantReply).mockResolvedValue("All tasks complete.");
+
+    await waitForDescendantSubagentSummary({
+      sessionKey: "cron-session",
+      initialReply: "spawned a subagent",
+      timeoutMs: 30_000,
+      observedActiveDescendants: true,
+    });
+
+    // agent.wait called once for each active run
+    const waitCalls = vi
+      .mocked(callGateway)
+      .mock.calls.filter((c) => (c[0] as { method?: string }).method === "agent.wait");
+    expect(waitCalls).toHaveLength(2);
+    const runIds = waitCalls.map((c) => (c[0] as { params: { runId: string } }).params.runId);
+    expect(runIds).toContain("run-1");
+    expect(runIds).toContain("run-2");
+  });
+
+  it("waits for newly discovered active descendants after the first wait round", async () => {
+    vi.mocked(listDescendantRunsForRequester)
+      .mockReturnValueOnce([
+        {
+          runId: "run-1",
+          childSessionKey: "child-1",
+          requesterSessionKey: "cron-session",
+          requesterDisplayKey: "cron-session",
+          task: "task-1",
+          cleanup: "keep",
+          createdAt: 1000,
+        },
+      ])
+      .mockReturnValueOnce([
+        {
+          runId: "run-2",
+          childSessionKey: "child-2",
+          requesterSessionKey: "cron-session",
+          requesterDisplayKey: "cron-session",
+          task: "task-2",
+          cleanup: "keep",
+          createdAt: 1001,
+        },
+      ])
+      .mockReturnValue([]);
+
+    vi.mocked(callGateway).mockResolvedValue({ status: "ok" });
+    vi.mocked(readLatestAssistantReply).mockResolvedValue("Nested descendant work complete.");
+
+    const result = await waitForDescendantSubagentSummary({
+      sessionKey: "cron-session",
+      initialReply: "spawned a subagent",
+      timeoutMs: 30_000,
+      observedActiveDescendants: true,
+    });
+
+    expect(result).toBe("Nested descendant work complete.");
+    const waitedRunIds = vi
+      .mocked(callGateway)
+      .mock.calls.filter((c) => (c[0] as { method?: string }).method === "agent.wait")
+      .map((c) => (c[0] as { params: { runId: string } }).params.runId);
+    expect(waitedRunIds).toEqual(["run-1", "run-2"]);
+  });
+
+  it("handles agent.wait errors gracefully and still reads the synthesis", async () => {
+    vi.mocked(listDescendantRunsForRequester)
+      .mockReturnValueOnce([
+        {
+          runId: "run-err",
+          childSessionKey: "child-err",
+          requesterSessionKey: "cron-session",
+          requesterDisplayKey: "cron-session",
+          task: "task-err",
+          cleanup: "keep",
+          createdAt: 1000,
+        },
+      ])
+      .mockReturnValue([]);
+
+    vi.mocked(callGateway).mockRejectedValue(new Error("gateway unavailable"));
+    vi.mocked(readLatestAssistantReply).mockResolvedValue("Completed despite gateway error.");
+
+    const result = await waitForDescendantSubagentSummary({
+      sessionKey: "cron-session",
+      initialReply: "on it",
+      timeoutMs: 30_000,
+      observedActiveDescendants: true,
+    });
+
+    expect(result).toBe("Completed despite gateway error.");
+  });
+
+  it("skips NO_REPLY synthesis and returns undefined", async () => {
+    vi.useFakeTimers();
+    vi.mocked(listDescendantRunsForRequester).mockReturnValue([]);
+    vi.mocked(readLatestAssistantReply).mockResolvedValue("NO_REPLY");
+
+    const resultPromise = waitForDescendantSubagentSummary({
+      sessionKey: "cron-session",
+      initialReply: "on it",
+      timeoutMs: 100,
+      observedActiveDescendants: true,
+    });
+
+    const result = await resolveAfterAdvancingTimers(resultPromise);
+
     expect(result).toBeUndefined();
   });
 });
