@@ -53,6 +53,7 @@ vi.mock("../globals.js", () => ({
 
 vi.mock("../runtime.js", () => ({
   defaultRuntime,
+  createGatewayRuntime: () => defaultRuntime,
 }));
 
 vi.mock("./ports.js", () => ({

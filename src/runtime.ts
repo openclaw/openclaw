@@ -43,6 +43,26 @@ export const defaultRuntime: RuntimeEnv = {
   },
 };
 
+/**
+ * Runtime that uses process.reallyExit() to skip JS 'exit' event listeners
+ * and C++ atexit handlers.
+ * Prevents GGML Metal assertion crashes during gateway shutdown where
+ * ggml_metal_rsets_free races with a background init thread → ggml_abort.
+ * Safe because the gateway completes all cleanup (server close, lock
+ * release, signal removal) before calling exit.
+ */
+export function createGatewayRuntime(): RuntimeEnv {
+  return {
+    ...createRuntimeIo(),
+    exit: (code) => {
+      restoreTerminalState("gateway exit", { resumeStdinIfPaused: false });
+      // reallyExit is an undocumented Node internal that bypasses JS 'exit'
+      // listeners and C++ atexit handlers — available since Node 0.x.
+      (process as unknown as { reallyExit: (code: number) => never }).reallyExit(code);
+    },
+  };
+}
+
 export function createNonExitingRuntime(): RuntimeEnv {
   return {
     ...createRuntimeIo(),
