@@ -315,6 +315,9 @@ export const ToolsWebSearchSchema = z
         baseUrl: z.string().optional(),
         model: z.string().optional(),
         summary: z.boolean().optional(),
+      })
+      .strict()
+      .optional(),
     brave: z
       .object({
         mode: z.union([z.literal("web"), z.literal("llm-context")]).optional(),

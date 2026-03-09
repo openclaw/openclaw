@@ -938,6 +938,7 @@ function mapFreshnessToBocha(braveFreshness: string | undefined): string | undef
     return braveFreshness.replace(/to/gi, "..");
   }
   return braveFreshness;
+};
 
 async function withTrustedWebSearchEndpoint<T>(
   params: {
@@ -2362,13 +2363,12 @@ export const __testing = {
   resolveKimiModel,
   resolveKimiBaseUrl,
   extractKimiCitations,
-  resolveRedirectUrl,
   resolveBochaApiKey,
   resolveBochaModel,
   resolveBochaBaseUrl,
   resolveBochaSummary,
   mapFreshnessToBocha,
   runBochaSearch,
-  resolveRedirectUrl: resolveCitationRedirectUrl,
+  resolveCitationRedirectUrl,
   resolveBraveMode,
 } as const;
