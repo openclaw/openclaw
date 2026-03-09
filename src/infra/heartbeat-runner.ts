@@ -1052,7 +1052,10 @@ export function startHeartbeatRunner(opts: {
     if (!Number.isFinite(nextDue)) {
       return;
     }
-    const delay = Math.max(0, nextDue - now);
+    // Node.js setTimeout uses a 32-bit signed integer; values above 2^31-1
+    // overflow to 1ms, causing a tight loop and massive log spam.
+    const MAX_TIMEOUT_MS = 2_147_483_647;
+    const delay = Math.min(Math.max(0, nextDue - now), MAX_TIMEOUT_MS);
     state.timer = setTimeout(() => {
       state.timer = null;
       requestHeartbeatNow({ reason: "interval", coalesceMs: 0 });

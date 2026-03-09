@@ -245,6 +245,32 @@ describe("startHeartbeatRunner", () => {
     runner.stop();
   });
 
+  it("clamps setTimeout delay to avoid 32-bit overflow with large intervals", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(0));
+
+    const warnSpy = vi.spyOn(process, "emitWarning").mockImplementation(() => {});
+
+    const runSpy = vi.fn().mockResolvedValue({ status: "ran", durationMs: 1 });
+
+    // 30 days in ms (2,592,000,000) exceeds 2^31-1 (2,147,483,647)
+    const runner = startHeartbeatRunner({
+      cfg: {
+        agents: { defaults: { heartbeat: { every: "30d" } } },
+      } as OpenClawConfig,
+      runOnce: runSpy,
+    });
+
+    // Should not have emitted a TimeoutOverflowWarning
+    const overflowWarnings = warnSpy.mock.calls.filter(
+      (call) => typeof call[0] === "string" && call[0].includes("does not fit into a 32-bit"),
+    );
+    expect(overflowWarnings).toHaveLength(0);
+
+    warnSpy.mockRestore();
+    runner.stop();
+  });
+
   it("does not fan out to unrelated agents for session-scoped exec wakes", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date(0));
