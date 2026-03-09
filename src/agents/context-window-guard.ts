@@ -35,9 +35,7 @@ export function resolveContextWindowInfo(params: {
     const match = models.find((m) => m?.id === params.modelId);
     return normalizePositiveInt(match?.contextWindow);
   })();
-
   const fromModel = normalizePositiveInt(params.modelContextWindow);
-
   const baseInfo = (() => {
     if (fromModelsConfig) {
       return { tokens: fromModelsConfig, source: "modelsConfig" as const };

@@ -8,7 +8,7 @@ import { consumeRootOptionToken, FLAG_TERMINATOR } from "../infra/cli-root-optio
 import { resolveOpenClawAgentDir } from "./agent-paths.js";
 import { ensureOpenClawModelsJson } from "./models-config.js";
 
-type ModelEntry = { id: string; provider: string; contextWindow?: number };
+type ModelEntry = { id: string; contextWindow?: number };
 type ModelRegistryLike = {
   getAvailable?: () => ModelEntry[];
   getAll: () => ModelEntry[];
@@ -22,13 +22,18 @@ const ANTHROPIC_1M_MODEL_PREFIXES = ["claude-opus-4", "claude-sonnet-4"] as cons
 export const ANTHROPIC_CONTEXT_1M_TOKENS = 1_048_576;
 
 function normalizeModelId(modelId: string): string {
-  const normalized = modelId.toLowerCase().trim();
+  return modelId.toLowerCase().trim();
+}
+
+function getBareModelId(modelId: string): string {
+  const normalized = normalizeModelId(modelId);
   const slashIndex = normalized.indexOf("/");
   if (slashIndex >= 0) {
     return normalized.slice(slashIndex + 1);
   }
   return normalized;
 }
+
 const CONFIG_LOAD_RETRY_POLICY: BackoffPolicy = {
   initialMs: 1_000,
   maxMs: 60_000,
@@ -36,12 +41,14 @@ const CONFIG_LOAD_RETRY_POLICY: BackoffPolicy = {
   jitter: 0,
 };
 
+const CONFIG_DERIVED_KEYS = new Set<string>();
+
 export function applyDiscoveredContextWindows(params: {
   cache: Map<string, number>;
   models: ModelEntry[];
 }) {
   for (const model of params.models) {
-    if (!model?.id || !model?.provider) {
+    if (!model?.id) {
       continue;
     }
     const contextWindow =
@@ -50,20 +57,28 @@ export function applyDiscoveredContextWindows(params: {
       continue;
     }
 
+    const provider = (model as any).provider;
     const normalizedModelId = normalizeModelId(model.id);
+    const bareModelId = getBareModelId(model.id);
 
     // 1. Scoped lookup (highest precedence)
-    const scopedKey = `${model.provider.toLowerCase().trim()}::${normalizedModelId}`;
-    const existingScoped = params.cache.get(scopedKey);
-    if (existingScoped === undefined || contextWindow < existingScoped) {
-      params.cache.set(scopedKey, contextWindow);
+    if (provider) {
+      const scopedKey = `${provider.toLowerCase().trim()}::${normalizedModelId}`;
+      if (!CONFIG_DERIVED_KEYS.has(scopedKey)) {
+        const existingScoped = params.cache.get(scopedKey);
+        if (existingScoped === undefined || contextWindow < existingScoped) {
+          params.cache.set(scopedKey, contextWindow);
+        }
+      }
     }
 
     // 2. Bare modelId lookup (legacy/fallback precedence)
-    const existingBare = params.cache.get(normalizedModelId);
-    // For the global bare-id cache, prefer the largest window to avoid proxy poisoning (V4.2)
-    if (existingBare === undefined || contextWindow > existingBare) {
-      params.cache.set(normalizedModelId, contextWindow);
+    if (!CONFIG_DERIVED_KEYS.has(bareModelId)) {
+      const existingBare = params.cache.get(bareModelId);
+      // For the global bare-id cache, prefer the largest window to avoid proxy poisoning (V4.2)
+      if (existingBare === undefined || contextWindow > existingBare) {
+        params.cache.set(bareModelId, contextWindow);
+      }
     }
   }
 }
@@ -90,15 +105,16 @@ export function applyConfiguredContextWindows(params: {
 
       const normalizedProvider = providerId.toLowerCase().trim();
       const normalizedModelId = normalizeModelId(modelId);
+      const bareModelId = getBareModelId(modelId);
 
       // Set scoped key (Config overrides discovery)
-      params.cache.set(`${normalizedProvider}::${normalizedModelId}`, contextWindow);
+      const scopedKey = `${normalizedProvider}::${normalizedModelId}`;
+      params.cache.set(scopedKey, contextWindow);
+      CONFIG_DERIVED_KEYS.add(scopedKey);
 
-      // Set bare key (Largest wins globally to avoid proxy poisoning)
-      const existingBare = params.cache.get(normalizedModelId);
-      if (existingBare === undefined || contextWindow > existingBare) {
-        params.cache.set(normalizedModelId, contextWindow);
-      }
+      // Set bare key (Config overrides discovery)
+      params.cache.set(bareModelId, contextWindow);
+      CONFIG_DERIVED_KEYS.add(bareModelId);
     }
   }
 }
@@ -226,8 +242,8 @@ export function lookupContextTokens(modelId?: string, provider?: string): number
   }
 
   // Fallback to legacy behavior where we check for a bare modelId match.
-  // This supports cases where the provider is not yet known or for generic aliases.
-  return MODEL_CACHE.get(normalizedModelId);
+  const bareModelId = getBareModelId(normalizedModelId);
+  return MODEL_CACHE.get(bareModelId);
 }
 
 if (!shouldSkipEagerContextWindowWarmup()) {
