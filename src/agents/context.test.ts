@@ -57,6 +57,30 @@ describe("applyConfiguredContextWindows", () => {
     expect(cache.get("anthropic/claude-opus-4-6")).toBe(200_000);
   });
 
+  it("stores provider-qualified key so config overrides beat qualified discovery entries", () => {
+    // Scenario from reviewer: discovery emits provider-qualified IDs but config
+    // uses bare IDs — without the qualified key in cache, resolveContextTokensForModel
+    // would return the discovered value and bypass the explicit config override.
+    const cache = new Map<string, number>();
+    // Simulate discovery storing a qualified entry.
+    cache.set("google-gemini-cli/gemini-3.1-pro-preview", 1_048_576);
+    // Config override stored under bare key AND qualified key.
+    applyConfiguredContextWindows({
+      cache,
+      modelsConfig: {
+        providers: {
+          "google-gemini-cli": {
+            models: [{ id: "gemini-3.1-pro-preview", contextWindow: 200_000 }],
+          },
+        },
+      },
+    });
+
+    // Both bare and qualified keys must reflect the configured override.
+    expect(cache.get("gemini-3.1-pro-preview")).toBe(200_000);
+    expect(cache.get("google-gemini-cli/gemini-3.1-pro-preview")).toBe(200_000);
+  });
+
   it("adds config-only model context windows and ignores invalid entries", () => {
     const cache = new Map<string, number>();
     applyConfiguredContextWindows({

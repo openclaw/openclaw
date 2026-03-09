@@ -61,7 +61,7 @@ export function applyConfiguredContextWindows(params: {
   if (!providers || typeof providers !== "object") {
     return;
   }
-  for (const provider of Object.values(providers)) {
+  for (const [providerId, provider] of Object.entries(providers)) {
     if (!Array.isArray(provider?.models)) {
       continue;
     }
@@ -73,6 +73,12 @@ export function applyConfiguredContextWindows(params: {
         continue;
       }
       params.cache.set(modelId, contextWindow);
+      // When the model id is bare (no provider prefix), also store under the
+      // provider-qualified key so that qualified lookups in resolveContextTokensForModel
+      // respect explicit config overrides over discovered values.
+      if (!modelId.includes("/")) {
+        params.cache.set(`${providerId}/${modelId}`, contextWindow);
+      }
     }
   }
 }
