@@ -6,6 +6,14 @@ Docs: https://docs.openclaw.ai
 
 ### Changes
 
+### Breaking
+
+### Fixes
+
+## 2026.3.8
+
+### Changes
+
 - CLI/backup: add `openclaw backup create` and `openclaw backup verify` for local state archives, including `--only-config`, `--no-include-workspace`, manifest/payload validation, and backup guidance in destructive flows. (#40163) thanks @shichangs.
 - macOS/onboarding: add a remote gateway token field for remote mode, preserve existing non-plaintext `gateway.remote.token` config values until explicitly replaced, and warn when the loaded token shape cannot be used directly from the macOS app. (#40187, supersedes #34614) Thanks @cgdusek.
 - Talk mode: add top-level `talk.silenceTimeoutMs` config so Talk waits a configurable amount of silence before auto-sending the current transcript, while keeping each platform's existing default pause window when unset. (#39607) Thanks @danodoesdesign. Fixes #17147.
@@ -18,10 +26,9 @@ Docs: https://docs.openclaw.ai
 - Docs/Web search: restore $5/month free-credit details, replace defunct "Data for Search"/"Data for AI" plan names with current "Search" plan, and note legacy subscription validity in Brave setup docs. Follows up on #26860. (#40111) Thanks @remusao.
 - Extensions/ACPX tests: move the shared runtime fixture helper from `src/runtime-internals/` to `src/test-utils/` so the test-only helper no longer looks like shipped runtime code.
 
-### Breaking
-
 ### Fixes
 
+- Update/macOS launchd restart: re-enable disabled LaunchAgent services before updater bootstrap so `openclaw update` can recover from a disabled gateway service instead of leaving the restart step stuck.
 - macOS app/chat UI: route browser proxy through the local node browser service, preserve plain-text paste semantics, strip completed assistant trace/debug wrapper noise from transcripts, refresh permission state after returning from System Settings, and tolerate malformed cron rows in the macOS tab. (#39516) Thanks @Imhermes1.
 - Android/Play distribution: remove self-update, background location, `screen.record`, and background mic capture from the Android app, narrow the foreground service to `dataSync` only, and clean up the legacy `location.enabledMode=always` preference migration. (#39660) Thanks @obviyus.
 - Telegram/DM routing: dedupe inbound Telegram DMs per agent instead of per session key so the same DM cannot trigger duplicate replies when both `agent:main:main` and `agent:main:telegram:direct:<id>` resolve for one agent. Fixes #40005. Supersedes #40116. (#40519) thanks @obviyus.
