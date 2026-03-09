@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
-import { collectAttackSurfaceSummaryFindings } from "./audit-extra.sync.js";
+import {
+  collectAttackSurfaceSummaryFindings,
+  collectSmallModelRiskFindings,
+} from "./audit-extra.sync.js";
 import { safeEqualSecret } from "./secret-equal.js";
 
 describe("collectAttackSurfaceSummaryFindings", () => {
@@ -31,6 +34,34 @@ describe("collectAttackSurfaceSummaryFindings", () => {
     const [finding] = collectAttackSurfaceSummaryFindings(cfg);
     expect(finding.detail).toContain("hooks.webhooks: disabled");
     expect(finding.detail).toContain("hooks.internal: disabled");
+  });
+});
+
+describe("collectSmallModelRiskFindings", () => {
+  it("treats gemini search credentials as enabling web_search exposure", () => {
+    const findings = collectSmallModelRiskFindings({
+      cfg: {
+        agents: {
+          defaults: {
+            model: "qwen2.5-7b-instruct",
+          },
+        },
+        tools: {
+          web: {
+            search: {
+              gemini: {
+                apiKey: "gemini-key",
+              },
+            },
+          },
+        },
+      } satisfies OpenClawConfig,
+      env: {},
+    });
+
+    expect(findings).toHaveLength(1);
+    expect(findings[0]?.detail).toContain("web_search");
+    expect(findings[0]?.detail).not.toContain("web=[off]");
   });
 });
 
