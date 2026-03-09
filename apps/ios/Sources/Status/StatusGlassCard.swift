@@ -4,6 +4,13 @@ import SwiftUI
 
 /// Applies Liquid Glass on iOS 26+ or a manual material/stroke/shadow on iOS 18–25.
 /// Kept separate so the padding in `StatusGlassCardModifier` is written exactly once.
+///
+/// Note: `glassEffect(_:in:)` is available in the iOS 26 SDK (Xcode 26+). The
+/// `#available(iOS 26, *)` check is a *runtime* gate; at compile time the symbol must
+/// exist in the SDK being used. This file builds correctly when the project is built
+/// with Xcode 26+ (which ships the iOS 26 SDK). Building with Xcode 16 / iOS 18 SDK
+/// would require removing or wrapping the iOS 26 branch — document this as a
+/// minimum toolchain requirement for this feature.
 private struct StatusGlassBackgroundModifier: ViewModifier {
     @Environment(\.colorSchemeContrast) private var contrast
     let brighten: Bool

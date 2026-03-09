@@ -2,6 +2,9 @@ import SwiftUI
 
 // MARK: - Status Capsule
 
+/// Applies Liquid Glass (iOS 26+) or a manual dark capsule (iOS 18–25).
+/// Note: `glassEffect` requires building with Xcode 26+ (iOS 26 SDK).
+/// `#available(iOS 26, *)` is a runtime gate only — the symbol must exist at compile time.
 private struct TalkStatusCapsuleModifier: ViewModifier {
     let seam: Color
 
