@@ -52,10 +52,7 @@ You can make the order explicit:
 {
   "auth": {
     "order": {
-      "openai-codex": [
-        "openai-codex:work@example.com",
-        "openai-codex:personal@example.com"
-      ]
+      "openai-codex": ["openai-codex:work@example.com", "openai-codex:personal@example.com"]
     }
   }
 }
