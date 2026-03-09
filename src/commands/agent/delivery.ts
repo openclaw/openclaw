@@ -70,6 +70,33 @@ function logNestedOutput(
   }
 }
 
+function logNestedTranscriptMirrorWarning(
+  runtime: RuntimeEnv,
+  opts: AgentCommandOpts,
+  message: string,
+) {
+  if (opts.json) {
+    runtime.error(message);
+    return;
+  }
+  runtime.log(message);
+}
+
+function logNestedTranscriptMirrorError(
+  runtime: RuntimeEnv,
+  opts: AgentCommandOpts,
+  message: string,
+) {
+  if (opts.json) {
+    runtime.error(message);
+    return;
+  }
+  runtime.error?.(message);
+  if (!runtime.error) {
+    runtime.log(message);
+  }
+}
+
 function resolveNestedTranscriptAgentId(params: {
   cfg: OpenClawConfig;
   outboundSession: OutboundSessionContext | undefined;
@@ -185,7 +212,7 @@ async function mirrorNestedTranscriptToChildSession(params: {
   }
   if (!isInterSessionInputProvenance(opts.inputProvenance)) {
     const message = `${formatNestedLogPrefix(opts, sessionKey)} transcript mirror skipped (unauthorized nested mirror)`;
-    runtime.log(message);
+    logNestedTranscriptMirrorWarning(runtime, opts, message);
     return;
   }
 
@@ -215,17 +242,11 @@ async function mirrorNestedTranscriptToChildSession(params: {
     });
     if (!mirror.ok) {
       const message = `${formatNestedLogPrefix(opts, sessionKey)} transcript mirror skipped (${classifyNestedTranscriptMirrorFailure(mirror.reason)})`;
-      runtime.error?.(message);
-      if (!runtime.error) {
-        runtime.log(message);
-      }
+      logNestedTranscriptMirrorError(runtime, opts, message);
     }
   } catch {
     const message = `${formatNestedLogPrefix(opts, sessionKey)} transcript mirror skipped (unexpected transcript error)`;
-    runtime.error?.(message);
-    if (!runtime.error) {
-      runtime.log(message);
-    }
+    logNestedTranscriptMirrorError(runtime, opts, message);
   }
 }
 

@@ -369,6 +369,43 @@ describe("deliverAgentCommandResult – transcript mirror", () => {
     );
   });
 
+  it("keeps unauthorized nested mirror warnings off json stdout", async () => {
+    mockAppendTranscript.mockClear();
+    const runtime = makeRuntime();
+
+    await expect(
+      deliverAgentCommandResult({
+        cfg: makeCfg(),
+        deps: makeDeps(),
+        runtime,
+        opts: {
+          message: "test",
+          deliver: false,
+          json: true,
+          lane: AGENT_LANE_NESTED,
+          sessionKey: "child-session-abc",
+        },
+        outboundSession: undefined,
+        sessionEntry: undefined,
+        result: { payloads: [{ text: "blocked", mediaUrls: [] }], meta: {} as never },
+        payloads: [{ text: "blocked", mediaUrls: [] }],
+      }),
+    ).resolves.toEqual({
+      payloads: [{ text: "blocked", mediaUrl: null, mediaUrls: undefined, channelData: undefined }],
+      meta: {},
+    });
+
+    expect(mockAppendTranscript).not.toHaveBeenCalled();
+    expect(runtime.error).toHaveBeenCalledWith(
+      expect.stringContaining("transcript mirror skipped (unauthorized nested mirror)"),
+    );
+    expect(runtime.log).toHaveBeenCalledTimes(1);
+    expect(runtime.log).not.toHaveBeenCalledWith(
+      expect.stringContaining("transcript mirror skipped (unauthorized nested mirror)"),
+    );
+    expect(runtime.log.mock.calls[0]?.[0]).toContain('"text": "blocked"');
+  });
+
   it("mirrors nested transcript when provenance is inter_session", async () => {
     mockAppendTranscript.mockClear();
     mockAppendTranscript.mockResolvedValue({ ok: true, sessionFile: "/tmp/test.jsonl" });
@@ -531,5 +568,48 @@ describe("deliverAgentCommandResult – transcript mirror", () => {
       expect.stringContaining("transcript mirror skipped (transcript unavailable)"),
     );
     expect(runtime.error).not.toHaveBeenCalledWith(expect.stringContaining("super-secret-session"));
+  });
+
+  it("keeps transcript append failures off json stdout", async () => {
+    mockAppendTranscript.mockClear();
+    mockAppendTranscript.mockResolvedValue({
+      ok: false,
+      reason: "unknown sessionKey: super-secret-session",
+    });
+    const runtime = makeRuntime();
+
+    await expect(
+      deliverAgentCommandResult({
+        cfg: makeCfg(),
+        deps: makeDeps(),
+        runtime,
+        opts: {
+          message: "test",
+          deliver: false,
+          json: true,
+          lane: AGENT_LANE_NESTED,
+          sessionKey: "child-session-abc",
+          inputProvenance: { kind: "inter_session" },
+        },
+        outboundSession: undefined,
+        sessionEntry: undefined,
+        result: { payloads: [{ text: "Hello from agent", mediaUrls: [] }], meta: {} as never },
+        payloads: [{ text: "Hello from agent", mediaUrls: [] }],
+      }),
+    ).resolves.toEqual({
+      payloads: [
+        { text: "Hello from agent", mediaUrl: null, mediaUrls: undefined, channelData: undefined },
+      ],
+      meta: {},
+    });
+
+    expect(runtime.error).toHaveBeenCalledWith(
+      expect.stringContaining("transcript mirror skipped (transcript unavailable)"),
+    );
+    expect(runtime.log).toHaveBeenCalledTimes(1);
+    expect(runtime.log).not.toHaveBeenCalledWith(
+      expect.stringContaining("transcript mirror skipped (transcript unavailable)"),
+    );
+    expect(runtime.log.mock.calls[0]?.[0]).toContain('"text": "Hello from agent"');
   });
 });
