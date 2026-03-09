@@ -1469,8 +1469,8 @@ export async function writeConfigFile(
   cfg: OpenClawConfig,
   options: ConfigWriteOptions = {},
 ): Promise<void> {
+  const io = createConfigIO();
   return enqueueConfigWrite(async () => {
-    const io = createConfigIO();
     let nextCfg = cfg;
     const hadRuntimeSnapshot = Boolean(runtimeConfigSnapshot);
     const hadBothSnapshots = Boolean(runtimeConfigSnapshot && runtimeConfigSourceSnapshot);
