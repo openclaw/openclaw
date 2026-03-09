@@ -18,7 +18,7 @@ export { CLOUDFLARE_AI_GATEWAY_DEFAULT_MODEL_REF } from "../agents/cloudflare-ai
 export {
   MISTRAL_DEFAULT_MODEL_REF,
   XAI_DEFAULT_MODEL_REF,
-  BAILIAN_DEFAULT_MODEL_REF,
+  MODELSTUDIO_DEFAULT_MODEL_REF,
 } from "./onboard-auth.models.js";
 export { KILOCODE_DEFAULT_MODEL_REF };
 
@@ -476,14 +476,14 @@ export function setQianfanApiKey(
   });
 }
 
-export function setBailianApiKey(
+export function setModelStudioApiKey(
   key: SecretInput,
   agentDir?: string,
   options?: ApiKeyStorageOptions,
 ) {
   upsertAuthProfile({
-    profileId: "bailian:default",
-    credential: buildApiKeyCredential("bailian", key, undefined, options),
+    profileId: "modelstudio:default",
+    credential: buildApiKeyCredential("modelstudio", key, undefined, options),
     agentDir: resolveAuthAgentDir(agentDir),
   });
 }
