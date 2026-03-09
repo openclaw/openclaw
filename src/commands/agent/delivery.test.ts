@@ -72,6 +72,7 @@ describe("deliverAgentCommandResult – transcript mirror", () => {
         deliver: false,
         lane: AGENT_LANE_NESTED,
         sessionKey: "child-session-abc",
+        inputProvenance: { kind: "inter_session" },
       },
       outboundSession: undefined,
       sessionEntry: undefined,
@@ -84,6 +85,7 @@ describe("deliverAgentCommandResult – transcript mirror", () => {
       sessionKey: "child-session-abc",
       text: "Hello from agent",
       mediaUrls: undefined,
+      agentId: undefined,
     });
   });
 
@@ -102,6 +104,7 @@ describe("deliverAgentCommandResult – transcript mirror", () => {
           deliver: true,
           lane: AGENT_LANE_NESTED,
           sessionKey: "child-session-abc",
+          inputProvenance: { kind: "inter_session" },
         },
         outboundSession: undefined,
         sessionEntry: undefined,
@@ -151,6 +154,7 @@ describe("deliverAgentCommandResult – transcript mirror", () => {
         deliver: false,
         lane: AGENT_LANE_NESTED,
         sessionKey: "session-media",
+        inputProvenance: { kind: "inter_session" },
       },
       outboundSession: undefined,
       sessionEntry: undefined,
@@ -166,6 +170,7 @@ describe("deliverAgentCommandResult – transcript mirror", () => {
       sessionKey: "session-media",
       text: "pic",
       mediaUrls: ["https://example.com/img.png"],
+      agentId: undefined,
     });
   });
 
@@ -187,6 +192,7 @@ describe("deliverAgentCommandResult – transcript mirror", () => {
         deliver: false,
         lane: AGENT_LANE_NESTED,
         sessionKey: "session-capped",
+        inputProvenance: { kind: "inter_session" },
       },
       outboundSession: undefined,
       sessionEntry: undefined,
@@ -206,6 +212,142 @@ describe("deliverAgentCommandResult – transcript mirror", () => {
     });
   });
 
+  it("resolves mirror agentId from outbound session context before opts.agentId", async () => {
+    mockAppendTranscript.mockClear();
+    mockAppendTranscript.mockResolvedValue({ ok: true, sessionFile: "/tmp/test.jsonl" });
+    const runtime = makeRuntime();
+
+    await deliverAgentCommandResult({
+      cfg: makeCfg(),
+      deps: makeDeps(),
+      runtime,
+      opts: {
+        message: "test",
+        agentId: "wrong-fallback",
+        deliver: false,
+        lane: AGENT_LANE_NESTED,
+        sessionKey: "agent:main:child-session",
+        inputProvenance: { kind: "inter_session" },
+      },
+      outboundSession: {
+        key: "agent:ops:child-session",
+        agentId: "ops",
+      },
+      sessionEntry: undefined,
+      result: { payloads: [{ text: "agent reply", mediaUrls: [] }], meta: {} as never },
+      payloads: [{ text: "agent reply", mediaUrls: [] }],
+    });
+
+    expect(mockAppendTranscript).toHaveBeenCalledWith({
+      agentId: "ops",
+      sessionKey: "agent:ops:child-session",
+      text: "agent reply",
+      mediaUrls: undefined,
+    });
+  });
+
+  it("resolves mirror agentId from session key when outbound session agentId is missing", async () => {
+    mockAppendTranscript.mockClear();
+    mockAppendTranscript.mockResolvedValue({ ok: true, sessionFile: "/tmp/test.jsonl" });
+    const runtime = makeRuntime();
+
+    await deliverAgentCommandResult({
+      cfg: makeCfg(),
+      deps: makeDeps(),
+      runtime,
+      opts: {
+        message: "test",
+        deliver: false,
+        lane: AGENT_LANE_NESTED,
+        sessionKey: "agent:research:thread:123",
+        inputProvenance: { kind: "inter_session" },
+      },
+      outboundSession: undefined,
+      sessionEntry: undefined,
+      result: { payloads: [{ text: "agent reply", mediaUrls: [] }], meta: {} as never },
+      payloads: [{ text: "agent reply", mediaUrls: [] }],
+    });
+
+    expect(mockAppendTranscript).toHaveBeenCalledWith({
+      agentId: "research",
+      sessionKey: "agent:research:thread:123",
+      text: "agent reply",
+      mediaUrls: undefined,
+    });
+  });
+
+  it("skips nested transcript mirror when provenance is missing or not inter_session", async () => {
+    mockAppendTranscript.mockClear();
+    const runtimeMissing = makeRuntime();
+    const runtimeWrong = makeRuntime();
+
+    await deliverAgentCommandResult({
+      cfg: makeCfg(),
+      deps: makeDeps(),
+      runtime: runtimeMissing,
+      opts: {
+        message: "test",
+        deliver: false,
+        lane: AGENT_LANE_NESTED,
+        sessionKey: "child-session-abc",
+      },
+      outboundSession: undefined,
+      sessionEntry: undefined,
+      result: { payloads: [{ text: "blocked", mediaUrls: [] }], meta: {} as never },
+      payloads: [{ text: "blocked", mediaUrls: [] }],
+    });
+
+    await deliverAgentCommandResult({
+      cfg: makeCfg(),
+      deps: makeDeps(),
+      runtime: runtimeWrong,
+      opts: {
+        message: "test",
+        deliver: false,
+        lane: AGENT_LANE_NESTED,
+        sessionKey: "child-session-abc",
+        inputProvenance: { kind: "external_user" },
+      },
+      outboundSession: undefined,
+      sessionEntry: undefined,
+      result: { payloads: [{ text: "blocked", mediaUrls: [] }], meta: {} as never },
+      payloads: [{ text: "blocked", mediaUrls: [] }],
+    });
+
+    expect(mockAppendTranscript).not.toHaveBeenCalled();
+    expect(runtimeMissing.log).toHaveBeenCalledWith(
+      expect.stringContaining("transcript mirror skipped (unauthorized nested mirror)"),
+    );
+    expect(runtimeWrong.log).toHaveBeenCalledWith(
+      expect.stringContaining("transcript mirror skipped (unauthorized nested mirror)"),
+    );
+  });
+
+  it("mirrors nested transcript when provenance is inter_session", async () => {
+    mockAppendTranscript.mockClear();
+    mockAppendTranscript.mockResolvedValue({ ok: true, sessionFile: "/tmp/test.jsonl" });
+    const runtime = makeRuntime();
+
+    await deliverAgentCommandResult({
+      cfg: makeCfg(),
+      deps: makeDeps(),
+      runtime,
+      opts: {
+        message: "test",
+        deliver: false,
+        lane: AGENT_LANE_NESTED,
+        sessionKey: "child-session-abc",
+        inputProvenance: { kind: "inter_session" },
+      },
+      outboundSession: undefined,
+      sessionEntry: undefined,
+      result: { payloads: [{ text: "allowed", mediaUrls: [] }], meta: {} as never },
+      payloads: [{ text: "allowed", mediaUrls: [] }],
+    });
+
+    expect(mockAppendTranscript).toHaveBeenCalledOnce();
+  });
+
   it("does not abort nested run when transcript append rejects", async () => {
     mockAppendTranscript.mockClear();
     mockAppendTranscript.mockRejectedValue(new Error("sensitive transcript path leaked"));
@@ -221,6 +363,7 @@ describe("deliverAgentCommandResult – transcript mirror", () => {
           deliver: false,
           lane: AGENT_LANE_NESTED,
           sessionKey: "child-session-abc",
+          inputProvenance: { kind: "inter_session" },
         },
         outboundSession: undefined,
         sessionEntry: undefined,
@@ -257,6 +400,7 @@ describe("deliverAgentCommandResult – transcript mirror", () => {
         json: true,
         lane: AGENT_LANE_NESTED,
         sessionKey: "json-session",
+        inputProvenance: { kind: "inter_session" },
       },
       outboundSession: undefined,
       sessionEntry: undefined,
@@ -274,7 +418,7 @@ describe("deliverAgentCommandResult – transcript mirror", () => {
     expect(runtime.log).toHaveBeenCalledTimes(1);
   });
 
-  it("passes agentId to transcript append for non-default agent stores", async () => {
+  it("falls back to opts.agentId when no session context is available", async () => {
     mockAppendTranscript.mockClear();
     mockAppendTranscript.mockResolvedValue({ ok: true, sessionFile: "/tmp/test.jsonl" });
     const runtime = makeRuntime();
@@ -289,6 +433,7 @@ describe("deliverAgentCommandResult – transcript mirror", () => {
         deliver: false,
         lane: AGENT_LANE_NESTED,
         sessionKey: "agent-session",
+        inputProvenance: { kind: "inter_session" },
       },
       outboundSession: undefined,
       sessionEntry: undefined,
@@ -322,6 +467,7 @@ describe("deliverAgentCommandResult – transcript mirror", () => {
           deliver: false,
           lane: AGENT_LANE_NESTED,
           sessionKey: "child-session-abc",
+          inputProvenance: { kind: "inter_session" },
         },
         outboundSession: undefined,
         sessionEntry: undefined,

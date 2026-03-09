@@ -1,3 +1,4 @@
+import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { AGENT_LANE_NESTED } from "../../agents/lanes.js";
 import { getChannelPlugin, normalizeChannelId } from "../../channels/plugins/index.js";
 import { createOutboundSendDeps, type CliDeps } from "../../cli/outbound-send-deps.js";
@@ -18,7 +19,9 @@ import {
   normalizeOutboundPayloadsForJson,
 } from "../../infra/outbound/payloads.js";
 import type { OutboundSessionContext } from "../../infra/outbound/session-context.js";
+import { classifySessionKeyShape } from "../../routing/session-key.js";
 import type { RuntimeEnv } from "../../runtime.js";
+import { isInterSessionInputProvenance } from "../../sessions/input-provenance.js";
 import { isInternalMessageChannel } from "../../utils/message-channel.js";
 import type { AgentCommandOpts } from "./types.js";
 
@@ -67,16 +70,94 @@ function logNestedOutput(
   }
 }
 
-function truncateNestedTranscriptText(text: string): string | undefined {
-  const trimmed = text.trim();
-  if (!trimmed) {
-    return undefined;
+function resolveNestedTranscriptAgentId(params: {
+  cfg: OpenClawConfig;
+  outboundSession: OutboundSessionContext | undefined;
+  sessionKey?: string;
+  opts: AgentCommandOpts;
+}): string | undefined {
+  const sessionKey = params.sessionKey?.trim();
+  if (params.outboundSession?.agentId?.trim()) {
+    return params.outboundSession.agentId;
   }
-  if (trimmed.length <= MAX_NESTED_TRANSCRIPT_TEXT_CHARS) {
-    return trimmed;
+  if (sessionKey && classifySessionKeyShape(sessionKey) !== "legacy_or_alias") {
+    return resolveSessionAgentId({ config: params.cfg, sessionKey });
   }
-  const suffix = "\n\n[truncated]";
-  return `${trimmed.slice(0, MAX_NESTED_TRANSCRIPT_TEXT_CHARS - suffix.length)}${suffix}`;
+  return params.opts.agentId;
+}
+
+function buildNestedTranscriptMirror(payloads: NormalizedOutboundPayload[]): {
+  text?: string;
+  mediaUrls?: string[];
+} {
+  const textLimit = MAX_NESTED_TRANSCRIPT_TEXT_CHARS - "\n\n[truncated]".length;
+  const textParts: string[] = [];
+  const mediaUrls: string[] = [];
+  let textChars = 0;
+  let hasMoreText = false;
+  let hasText = false;
+
+  for (const payload of payloads) {
+    if (mediaUrls.length < MAX_NESTED_TRANSCRIPT_MEDIA_URLS && payload.mediaUrls?.length) {
+      for (const url of payload.mediaUrls) {
+        if (!url) {
+          continue;
+        }
+        mediaUrls.push(url);
+        if (mediaUrls.length >= MAX_NESTED_TRANSCRIPT_MEDIA_URLS) {
+          break;
+        }
+      }
+    }
+
+    if (hasMoreText) {
+      continue;
+    }
+    const chunk = payload.text;
+    if (!chunk) {
+      continue;
+    }
+    if (hasText) {
+      if (textChars >= textLimit) {
+        hasMoreText = true;
+        continue;
+      }
+      const separator = "\n\n";
+      const separatorSlice = separator.slice(0, textLimit - textChars);
+      textParts.push(separatorSlice);
+      textChars += separatorSlice.length;
+      if (separatorSlice.length < separator.length) {
+        hasMoreText = true;
+        continue;
+      }
+    }
+    hasText = true;
+    if (textChars >= textLimit) {
+      hasMoreText = true;
+      continue;
+    }
+    const available = textLimit - textChars;
+    if (chunk.length <= available) {
+      textParts.push(chunk);
+      textChars += chunk.length;
+      continue;
+    }
+    textParts.push(chunk.slice(0, available));
+    textChars += available;
+    hasMoreText = true;
+  }
+
+  const baseText = textParts.join("");
+  const text = baseText.trim()
+    ? hasMoreText
+      ? `${baseText.trim()}\n\n[truncated]`
+      : baseText.trim()
+    : undefined;
+
+  return {
+    ...(text ? { text } : {}),
+    ...(mediaUrls.length > 0 ? { mediaUrls } : {}),
+  };
 }
 
 function classifyNestedTranscriptMirrorFailure(reason?: string): string {
@@ -91,36 +172,41 @@ function classifyNestedTranscriptMirrorFailure(reason?: string): string {
 }
 
 async function mirrorNestedTranscriptToChildSession(params: {
+  cfg: OpenClawConfig;
   runtime: RuntimeEnv;
   opts: AgentCommandOpts;
+  outboundSession: OutboundSessionContext | undefined;
   sessionKey?: string;
   payloads: NormalizedOutboundPayload[];
 }) {
-  const { runtime, opts, payloads, sessionKey } = params;
+  const { cfg, runtime, opts, outboundSession, payloads, sessionKey } = params;
   if (!sessionKey || payloads.length === 0) {
     return;
   }
+  if (!isInterSessionInputProvenance(opts.inputProvenance)) {
+    const message = `${formatNestedLogPrefix(opts, sessionKey)} transcript mirror skipped (unauthorized nested mirror)`;
+    runtime.log(message);
+    return;
+  }
 
-  const combinedText = payloads
-    .map((payload) => payload.text)
-    .filter(Boolean)
-    .join("\n\n");
-  const text = truncateNestedTranscriptText(combinedText);
-  const mediaUrls = payloads
-    .flatMap((payload) => payload.mediaUrls ?? [])
-    .filter((url): url is string => Boolean(url))
-    .slice(0, MAX_NESTED_TRANSCRIPT_MEDIA_URLS);
+  const { text, mediaUrls } = buildNestedTranscriptMirror(payloads);
+  const agentId = resolveNestedTranscriptAgentId({
+    cfg,
+    outboundSession,
+    sessionKey,
+    opts,
+  });
 
-  if (!text && mediaUrls.length === 0) {
+  if (!text && !mediaUrls) {
     return;
   }
 
   try {
     const mirror = await appendAssistantMessageToSessionTranscript({
-      agentId: opts.agentId,
+      agentId,
       sessionKey,
       text,
-      mediaUrls: mediaUrls.length > 0 ? mediaUrls : undefined,
+      mediaUrls,
     });
     if (!mirror.ok) {
       const message = `${formatNestedLogPrefix(opts, sessionKey)} transcript mirror skipped (${classifyNestedTranscriptMirrorFailure(mirror.reason)})`;
@@ -253,8 +339,10 @@ export async function deliverAgentCommandResult(params: {
   const deliveryPayloads = payloads?.length ? normalizeOutboundPayloads(payloads) : [];
   if (!deliver && opts.lane === AGENT_LANE_NESTED) {
     await mirrorNestedTranscriptToChildSession({
+      cfg,
       runtime,
       opts,
+      outboundSession,
       sessionKey: effectiveSessionKey,
       payloads: deliveryPayloads,
     });
