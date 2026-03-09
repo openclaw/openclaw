@@ -18,6 +18,7 @@ export type ResolvedMemoryBackendConfig = {
   backend: MemoryBackend;
   citations: MemoryCitationsMode;
   qmd?: ResolvedQmdConfig;
+  chain?: ResolvedChainConfig;
 };
 
 export type ResolvedQmdCollection = {
@@ -300,7 +301,19 @@ export function resolveMemoryBackendConfig(params: {
 }): ResolvedMemoryBackendConfig {
   const backend = params.cfg.memory?.backend ?? DEFAULT_BACKEND;
   const citations = params.cfg.memory?.citations ?? DEFAULT_CITATIONS;
-  if (backend !== "qmd") {
+  if (backend === "chain") {
+    const chainConfig = params.cfg.memory?.chain;
+    if (!chainConfig) {
+      throw new Error("chain backend requires memory.chain config");
+    }
+    return {
+      backend: "chain",
+      citations,
+      chain: chainConfig,
+    };
+  }
+
+  if (backend !== "qmd" && backend !== "chain") {
     return { backend: "builtin", citations };
   }
 
