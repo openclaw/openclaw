@@ -19,6 +19,7 @@ import {
   storeRoleRefsForTarget,
   type WithSnapshotForAI,
 } from "./pw-session.js";
+import { withPageScopedCdpClient } from "./pw-session.page-cdp.js";
 
 export async function snapshotAriaViaPlaywright(opts: {
   cdpUrl: string;
@@ -31,17 +32,21 @@ export async function snapshotAriaViaPlaywright(opts: {
     targetId: opts.targetId,
   });
   ensurePageState(page);
-  const session = await page.context().newCDPSession(page);
-  try {
-    await session.send("Accessibility.enable").catch(() => {});
-    const res = (await session.send("Accessibility.getFullAXTree")) as {
-      nodes?: RawAXNode[];
-    };
-    const nodes = Array.isArray(res?.nodes) ? res.nodes : [];
-    return { nodes: formatAriaSnapshot(nodes, limit) };
-  } finally {
-    await session.detach().catch(() => {});
-  }
+  const res = (await withPageScopedCdpClient({
+    cdpUrl: opts.cdpUrl,
+    page,
+    targetId: opts.targetId,
+    fn: async (send) => {
+      await send("Accessibility.enable").catch(() => {});
+      return (await send("Accessibility.getFullAXTree")) as {
+        nodes?: RawAXNode[];
+      };
+    },
+  })) as {
+    nodes?: RawAXNode[];
+  };
+  const nodes = Array.isArray(res?.nodes) ? res.nodes : [];
+  return { nodes: formatAriaSnapshot(nodes, limit) };
 }
 
 export async function snapshotAiViaPlaywright(opts: {

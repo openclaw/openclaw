@@ -54,6 +54,22 @@ describe("runEmbeddedPiAgent overflow compaction trigger routing", () => {
     );
   });
 
+  it("passes resolved auth profile into run attempts for context-engine afterTurn propagation", async () => {
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(makeAttemptResult({ promptError: null }));
+
+    await runEmbeddedPiAgent({
+      ...overflowBaseRunParams,
+      runId: "run-auth-profile-passthrough",
+    });
+
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledWith(
+      expect.objectContaining({
+        authProfileId: "test-profile",
+        authProfileIdSource: "auto",
+      }),
+    );
+  });
+
   it("passes trigger=overflow when retrying compaction after context overflow", async () => {
     mockOverflowRetrySuccess({
       runEmbeddedAttempt: mockedRunEmbeddedAttempt,
