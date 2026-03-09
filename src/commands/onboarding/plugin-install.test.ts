@@ -49,12 +49,21 @@ vi.mock("../../plugins/loader.js", () => ({
   loadOpenClawPlugins: vi.fn(),
 }));
 
+const clearPluginDiscoveryCache = vi.fn();
+vi.mock("../../plugins/discovery.js", () => ({
+  clearPluginDiscoveryCache: () => clearPluginDiscoveryCache(),
+}));
+
 import fs from "node:fs";
 import type { ChannelPluginCatalogEntry } from "../../channels/plugins/catalog.js";
 import type { OpenClawConfig } from "../../config/config.js";
+import { loadOpenClawPlugins } from "../../plugins/loader.js";
 import type { WizardPrompter } from "../../wizard/prompts.js";
 import { makePrompter, makeRuntime } from "./__tests__/test-utils.js";
-import { ensureOnboardingPluginInstalled } from "./plugin-install.js";
+import {
+  ensureOnboardingPluginInstalled,
+  reloadOnboardingPluginRegistry,
+} from "./plugin-install.js";
 
 const baseEntry: ChannelPluginCatalogEntry = {
   id: "zalo",
@@ -235,5 +244,28 @@ describe("ensureOnboardingPluginInstalled", () => {
     expectPluginLoadedFromLocalPath(result);
     expect(note).toHaveBeenCalled();
     expect(runtime.error).not.toHaveBeenCalled();
+  });
+
+  it("clears discovery cache before reloading the onboarding plugin registry", () => {
+    const runtime = makeRuntime();
+    const cfg: OpenClawConfig = {};
+
+    reloadOnboardingPluginRegistry({
+      cfg,
+      runtime,
+      workspaceDir: "/tmp/openclaw-workspace",
+    });
+
+    expect(clearPluginDiscoveryCache).toHaveBeenCalledTimes(1);
+    expect(loadOpenClawPlugins).toHaveBeenCalledWith(
+      expect.objectContaining({
+        config: cfg,
+        workspaceDir: "/tmp/openclaw-workspace",
+        cache: false,
+      }),
+    );
+    expect(clearPluginDiscoveryCache.mock.invocationCallOrder[0]).toBeLessThan(
+      vi.mocked(loadOpenClawPlugins).mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
+    );
   });
 });
