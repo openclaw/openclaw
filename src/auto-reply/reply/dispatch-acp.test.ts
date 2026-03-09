@@ -362,58 +362,28 @@ describe("tryDispatchAcpReply", () => {
     setReadyAcpResolution();
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "dispatch-acp-"));
     const imagePath = path.join(tempDir, "inbound.png");
-    try {
-      await fs.writeFile(imagePath, "image-bytes");
-      managerMocks.runTurn.mockResolvedValue(undefined);
+    await fs.writeFile(imagePath, "image-bytes");
+    managerMocks.runTurn.mockResolvedValue(undefined);
 
-      await runDispatch({
-        bodyForAgent: "   ",
-        ctxOverrides: {
-          MediaPath: imagePath,
-          MediaType: "image/png",
-        },
-      });
+    await runDispatch({
+      bodyForAgent: "   ",
+      ctxOverrides: {
+        MediaPath: imagePath,
+        MediaType: "image/png",
+      },
+    });
 
-      expect(managerMocks.runTurn).toHaveBeenCalledWith(
-        expect.objectContaining({
-          text: "",
-          attachments: [
-            {
-              mediaType: "image/png",
-              data: Buffer.from("image-bytes").toString("base64"),
-            },
-          ],
-        }),
-      );
-    } finally {
-      await fs.rm(tempDir, { recursive: true, force: true });
-    }
-  });
-
-  it("skips ACP turns for non-image attachments when there is no text prompt", async () => {
-    setReadyAcpResolution();
-    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "dispatch-acp-"));
-    const docPath = path.join(tempDir, "inbound.pdf");
-    const { dispatcher } = createDispatcher();
-    const onReplyStart = vi.fn();
-    try {
-      await fs.writeFile(docPath, "pdf-bytes");
-
-      await runDispatch({
-        bodyForAgent: "   ",
-        dispatcher,
-        onReplyStart,
-        ctxOverrides: {
-          MediaPath: docPath,
-          MediaType: "application/pdf",
-        },
-      });
-
-      expect(managerMocks.runTurn).not.toHaveBeenCalled();
-      expect(onReplyStart).not.toHaveBeenCalled();
-    } finally {
-      await fs.rm(tempDir, { recursive: true, force: true });
-    }
+    expect(managerMocks.runTurn).toHaveBeenCalledWith(
+      expect.objectContaining({
+        text: "",
+        attachments: [
+          {
+            mediaType: "image/png",
+            data: Buffer.from("image-bytes").toString("base64"),
+          },
+        ],
+      }),
+    );
   });
 
   it("surfaces ACP policy errors as final error replies", async () => {

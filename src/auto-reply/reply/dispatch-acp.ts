@@ -16,7 +16,6 @@ import { logVerbose } from "../../globals.js";
 import { getSessionBindingService } from "../../infra/outbound/session-binding-service.js";
 import { generateSecureUuid } from "../../infra/secure-random.js";
 import { prefixSystemMessage } from "../../infra/system-message.js";
-import { applyMediaUnderstanding } from "../../media-understanding/apply.js";
 import {
   normalizeAttachmentPath,
   normalizeAttachments,
@@ -70,10 +69,6 @@ async function resolveAcpAttachments(ctx: FinalizedMsgContext): Promise<AcpTurnA
   const mediaAttachments = normalizeAttachments(ctx);
   const results: AcpTurnAttachment[] = [];
   for (const attachment of mediaAttachments) {
-    const mediaType = attachment.mime ?? "application/octet-stream";
-    if (!mediaType.startsWith("image/")) {
-      continue;
-    }
     const filePath = normalizeAttachmentPath(attachment.path);
     if (!filePath) {
       continue;
@@ -88,7 +83,7 @@ async function resolveAcpAttachments(ctx: FinalizedMsgContext): Promise<AcpTurnA
       }
       const buf = await fs.readFile(filePath);
       results.push({
-        mediaType,
+        mediaType: attachment.mime ?? "application/octet-stream",
         data: buf.toString("base64"),
       });
     } catch {
@@ -229,6 +224,16 @@ export async function tryDispatchAcpReply(params: {
     onReplyStart: params.onReplyStart,
   });
 
+  const promptText = resolveAcpPromptText(params.ctx);
+  const attachments = await resolveAcpAttachments(params.ctx);
+  if (!promptText && attachments.length === 0) {
+    const counts = params.dispatcher.getQueuedCounts();
+    delivery.applyRoutedCounts(counts);
+    params.recordProcessed("completed", { reason: "acp_empty_prompt" });
+    params.markIdle("message_completed");
+    return { queuedFinal: false, counts };
+  }
+
   const identityPendingBeforeTurn = isSessionIdentityPending(
     resolveSessionIdentityFromMeta(acpResolution.kind === "ready" ? acpResolution.meta : undefined),
   );
@@ -269,28 +274,6 @@ export async function tryDispatchAcpReply(params: {
     const agentPolicyError = resolveAcpAgentPolicyError(params.cfg, resolvedAcpAgent);
     if (agentPolicyError) {
       throw agentPolicyError;
-    }
-    if (!params.ctx.MediaUnderstanding?.length) {
-      try {
-        await applyMediaUnderstanding({
-          ctx: params.ctx,
-          cfg: params.cfg,
-        });
-      } catch (err) {
-        logVerbose(
-          `dispatch-acp: media understanding failed, proceeding with raw content: ${err instanceof Error ? err.message : String(err)}`,
-        );
-      }
-    }
-
-    const promptText = resolveAcpPromptText(params.ctx);
-    const attachments = await resolveAcpAttachments(params.ctx);
-    if (!promptText && attachments.length === 0) {
-      const counts = params.dispatcher.getQueuedCounts();
-      delivery.applyRoutedCounts(counts);
-      params.recordProcessed("completed", { reason: "acp_empty_prompt" });
-      params.markIdle("message_completed");
-      return { queuedFinal: false, counts };
     }
 
     try {
