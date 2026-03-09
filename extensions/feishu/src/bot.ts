@@ -1158,14 +1158,30 @@ export async function handleFeishuMessage(params: {
     // Using a group-scoped From causes the agent to treat different users as the same person.
     const feishuFrom = `feishu:${ctx.senderOpenId}`;
     const feishuTo = isGroup ? `chat:${ctx.chatId}` : `user:${ctx.senderOpenId}`;
-    const peerId = isGroup ? (groupSession?.peerId ?? ctx.chatId) : ctx.senderOpenId;
-    const parentPeer = isGroup ? (groupSession?.parentPeer ?? null) : null;
-    const replyInThread = isGroup ? (groupSession?.replyInThread ?? false) : false;
+    // P2P topic isolation: when a p2p message carries root_id/thread_id (user
+    // replied inside a topic thread), scope the session to that topic so each
+    // topic gets its own conversation — matching the user's mental model of
+    // "topic = new session".
+    const p2pTopicScope = !isGroup ? ctx.rootId?.trim() || ctx.threadId?.trim() || null : null;
+    const peerId = isGroup
+      ? (groupSession?.peerId ?? ctx.chatId)
+      : p2pTopicScope
+        ? `${ctx.senderOpenId}:topic:${p2pTopicScope}`
+        : ctx.senderOpenId;
+    const parentPeer = isGroup
+      ? (groupSession?.parentPeer ?? null)
+      : p2pTopicScope
+        ? { kind: "direct" as const, id: ctx.senderOpenId }
+        : null;
+    const replyInThread = isGroup ? (groupSession?.replyInThread ?? false) : Boolean(p2pTopicScope);
 
     if (isGroup && groupSession) {
       log(
         `feishu[${account.accountId}]: group session scope=${groupSession.groupSessionScope}, peer=${peerId}`,
       );
+    }
+    if (!isGroup && p2pTopicScope) {
+      log(`feishu[${account.accountId}]: p2p topic scope=${p2pTopicScope}, peer=${peerId}`);
     }
 
     let route = core.channel.routing.resolveAgentRoute({
@@ -1359,8 +1375,10 @@ export async function handleFeishuMessage(params: {
       isGroup &&
       (groupConfig?.replyInThread ?? feishuCfg?.replyInThread ?? "disabled") === "enabled";
     const replyTargetMessageId =
-      isTopicSession || configReplyInThread ? (ctx.rootId ?? ctx.messageId) : ctx.messageId;
-    const threadReply = isGroup ? (groupSession?.threadReply ?? false) : false;
+      isTopicSession || configReplyInThread || p2pTopicScope
+        ? (ctx.rootId ?? ctx.messageId)
+        : ctx.messageId;
+    const threadReply = isGroup ? (groupSession?.threadReply ?? false) : Boolean(p2pTopicScope);
 
     if (broadcastAgents) {
       // Cross-account dedup: in multi-account setups, Feishu delivers the same

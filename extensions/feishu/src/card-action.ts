@@ -1,6 +1,8 @@
 import type { ClawdbotConfig, RuntimeEnv } from "openclaw/plugin-sdk/feishu";
 import { resolveFeishuAccount } from "./accounts.js";
 import { handleFeishuMessage, type FeishuMessageEvent } from "./bot.js";
+import { sendMessageFeishu } from "./send.js";
+import { getStreamingText } from "./streaming-text-cache.js";
 
 export type FeishuCardActionEvent = {
   operator: {
@@ -44,6 +46,35 @@ export async function handleFeishuCardAction(params: {
     }
   } else {
     content = String(actionValue);
+  }
+
+  // Handle "Show full text" button: re-send cached streaming card content as
+  // a plain message instead of dispatching to the agent session.
+  if (content === "__show_full_text__") {
+    const messageId =
+      typeof actionValue === "object" && actionValue !== null
+        ? (actionValue.message_id as string | undefined)
+        : undefined;
+    const to = event.context.chat_id
+      ? `chat:${event.context.chat_id}`
+      : `user:${event.operator.open_id}`;
+    log(
+      `feishu[${account.accountId}]: show-full-text requested by ${event.operator.open_id} for message=${messageId ?? "unknown"}`,
+    );
+    if (messageId) {
+      const fullText = getStreamingText(messageId);
+      if (fullText) {
+        await sendMessageFeishu({ cfg, to, text: fullText, accountId });
+      } else {
+        await sendMessageFeishu({
+          cfg,
+          to,
+          text: "\u26A0\uFE0F \u7F13\u5B58\u5DF2\u8FC7\u671F\uFF0C\u8BF7\u91CD\u65B0\u63D0\u95EE\u3002",
+          accountId,
+        });
+      }
+    }
+    return;
   }
 
   // Construct a synthetic message event

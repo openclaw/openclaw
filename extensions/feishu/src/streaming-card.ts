@@ -324,7 +324,7 @@ export class FeishuStreamingSession {
     await this.queue;
   }
 
-  async close(finalText?: string): Promise<void> {
+  async close(finalText?: string, options?: { addShowFullTextButton?: boolean }): Promise<void> {
     if (!this.state || this.closed) {
       return;
     }
@@ -367,10 +367,58 @@ export class FeishuStreamingSession {
       })
       .catch((e) => this.log?.(`Close failed: ${String(e)}`));
 
+    // Append "Show full text" button when the response included intermediate
+    // steps (tool calls / block narration) that may not have rendered fully.
+    if (options?.addShowFullTextButton && this.state) {
+      this.state.sequence += 1;
+      const buttonElement = {
+        tag: "action",
+        actions: [
+          {
+            tag: "button",
+            text: { tag: "plain_text", content: "\u{1F4CB} \u67E5\u770B\u5B8C\u6574\u56DE\u590D" },
+            type: "default",
+            size: "small",
+            value: {
+              command: "__show_full_text__",
+              message_id: this.state.messageId,
+            },
+          },
+        ],
+        element_id: "show_full_btn",
+      };
+      await fetchWithSsrFGuard({
+        url: `${apiBase}/cardkit/v1/cards/${this.state.cardId}/elements`,
+        init: {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${await getToken(this.creds)}`,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            elements: JSON.stringify(buttonElement),
+            action: "append",
+            sequence: this.state.sequence,
+            uuid: `btn_${this.state.cardId}_${this.state.sequence}`,
+          }),
+        },
+        policy: { allowedHostnames: resolveAllowedHostnames(this.creds.domain) },
+        auditContext: "feishu.streaming-card.add-button",
+      })
+        .then(async ({ release }) => {
+          await release();
+        })
+        .catch((e) => this.log?.(`Add show-full-text button failed: ${String(e)}`));
+    }
+
     this.log?.(`Closed streaming: cardId=${this.state.cardId}`);
   }
 
   isActive(): boolean {
     return this.state !== null && !this.closed;
+  }
+
+  getMessageId(): string | undefined {
+    return this.state?.messageId;
   }
 }
