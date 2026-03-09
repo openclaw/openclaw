@@ -25,9 +25,11 @@ import type { ParsedMessage, SessionTranscriptSummary } from "./transcript-reade
 const log = createSubsystemLogger("hooks/llm-memory-helpers");
 
 // -- Token boundary constants ------------------------------------------------
+// Budgets sized for ~30K / ~15K tokens (assuming ~4 chars/token).
+// A single session can be 100K+ tokens, so these must accommodate multi-session windows.
 
-export const MAX_DIGEST_PROMPT_CHARS = 24_000;
-export const MAX_IMPORTANCE_PROMPT_CHARS = 16_000;
+export const MAX_DIGEST_PROMPT_CHARS = 120_000;
+export const MAX_IMPORTANCE_PROMPT_CHARS = 60_000;
 const MAX_DIGEST_OUTPUT_CHARS = 8192;
 const MAX_FALLBACK_OUTPUT_CHARS = 4096;
 
@@ -85,27 +87,82 @@ function pruneProcessedSessions(): void {
 }
 
 /**
- * Returns true if this session should be processed by memory hooks.
+ * Returns true if this session should be processed by the given hook.
  * Returns false if it was already processed within the dedup TTL window
  * (prevents double-processing when /new triggers both command:new and session:end).
+ *
+ * Each hook passes its own namespace so different hooks don't interfere
+ * with each other's dedup state.
  */
-export function shouldProcessSession(sessionId: string): boolean {
+export function shouldProcessSession(sessionId: string, hookName?: string): boolean {
   pruneProcessedSessions();
-  const lastProcessed = processedSessions.get(sessionId);
+  const key = hookName ? `${hookName}:${sessionId}` : sessionId;
+  const lastProcessed = processedSessions.get(key);
   if (lastProcessed !== undefined && Date.now() - lastProcessed < DEDUP_TTL_MS) {
     return false;
   }
   return true;
 }
 
-export function markSessionProcessed(sessionId: string): void {
-  processedSessions.set(sessionId, Date.now());
+export function markSessionProcessed(sessionId: string, hookName?: string): void {
+  const key = hookName ? `${hookName}:${sessionId}` : sessionId;
+  processedSessions.set(key, Date.now());
   pruneProcessedSessions();
 }
 
 /** Visible for testing only. */
 export function _clearProcessedSessions(): void {
   processedSessions.clear();
+}
+
+// -- Digest header parsing ---------------------------------------------------
+
+export type DigestHeader = {
+  lastUpdated: number; // epoch ms
+  sessionsCovered: number;
+  windowDays: number;
+};
+
+/**
+ * Extract metadata from an existing context-digest.md header.
+ * Returns null if the file is missing, empty, or unparseable.
+ */
+export function parseDigestHeader(content: string): DigestHeader | null {
+  if (!content) {
+    return null;
+  }
+  const lastUpdatedMatch = content.match(/^Last updated:\s*(.+)$/m);
+  const sessionsCoveredMatch = content.match(/^Sessions covered:\s*(\d+)$/m);
+  const windowMatch = content.match(/^Window:\s*(\d+)\s*days?$/m);
+
+  if (!lastUpdatedMatch) {
+    return null;
+  }
+
+  const ts = new Date(lastUpdatedMatch[1].trim()).getTime();
+  if (!Number.isFinite(ts)) {
+    return null;
+  }
+
+  return {
+    lastUpdated: ts,
+    sessionsCovered: sessionsCoveredMatch ? Number.parseInt(sessionsCoveredMatch[1], 10) : 0,
+    windowDays: windowMatch ? Number.parseInt(windowMatch[1], 10) : 7,
+  };
+}
+
+// -- Adaptive timeout --------------------------------------------------------
+
+const BASE_TIMEOUT_MS = 30_000;
+const CHARS_PER_MS = 3; // ~3 chars processed per millisecond of LLM wall time
+const MAX_TIMEOUT_MS = 300_000; // 5 minutes hard ceiling
+
+/**
+ * Compute an adaptive LLM timeout based on prompt size.
+ * Small prompts (~2K chars) get ~31s. Large prompts (~120K chars) get ~70s.
+ */
+export function computeAdaptiveTimeout(promptChars: number): number {
+  return Math.min(BASE_TIMEOUT_MS + Math.ceil(promptChars / CHARS_PER_MS), MAX_TIMEOUT_MS);
 }
 
 // -- Token boundary guard ----------------------------------------------------
@@ -177,13 +234,29 @@ async function runOneShotLLM(params: {
       prompt: params.prompt,
       provider,
       model,
-      timeoutMs: params.timeoutMs ?? 20_000,
+      timeoutMs: params.timeoutMs ?? computeAdaptiveTimeout(params.prompt.length),
       runId: `${params.purpose}-${Date.now()}`,
     });
 
     if (result.payloads && result.payloads.length > 0) {
-      const text = result.payloads[0]?.text;
-      return text?.trim() || null;
+      const text = result.payloads[0]?.text?.trim();
+      if (!text) {
+        return null;
+      }
+      // Guard: embedded agent returns error/timeout messages as payload text.
+      // These are not valid LLM output — return null so the caller falls back.
+      if (
+        text.startsWith("Request timed out") ||
+        text.startsWith("Error:") ||
+        text.startsWith("Sorry, I") ||
+        /^(An? )?error occurred/i.test(text)
+      ) {
+        log.warn(`LLM returned error-like payload (${params.purpose}), falling back`, {
+          preview: text.slice(0, 120),
+        });
+        return null;
+      }
+      return text;
     }
     return null;
   } catch (err) {
@@ -253,6 +326,72 @@ export async function generateDigestViaLLM(params: {
   }
 
   // Enforce output cap
+  if (result.length > maxOutput) {
+    return result.slice(0, maxOutput) + "\n\n... [content truncated for size]";
+  }
+  return result;
+}
+
+// -- Incremental digest merge ------------------------------------------------
+
+const INCREMENTAL_DIGEST_PROMPT = `You are a concise summarizer. You have an existing context digest and one or more NEW sessions to integrate.
+
+Merge the new session content into the existing digest, preserving all prior information. Add new topics, decisions, action items, and context from the new session. Remove or mark completed action items if the new session resolves them.
+
+Keep the SAME section structure:
+## Topics Discussed
+## Key Decisions
+## Open Items / Action Items
+## Important Context
+
+Existing digest:
+---
+{existingDigest}
+---
+
+New session transcript to integrate:
+---
+{newTranscript}
+---
+
+Output ONLY the updated digest body (no header/metadata).`;
+
+/**
+ * Incremental digest: merge new sessions into an existing digest via LLM.
+ * Much cheaper than a full rebuild — sends only the old digest + new sessions.
+ * Returns the merged digest body, or null on failure (caller falls back to full).
+ */
+export async function generateDigestIncremental(params: {
+  existingDigest: string;
+  newTranscripts: Map<string, SessionTranscriptSummary>;
+  cfg: OpenClawConfig;
+  maxOutputChars?: number;
+}): Promise<string | null> {
+  const maxOutput = params.maxOutputChars ?? MAX_DIGEST_OUTPUT_CHARS;
+  const newText = truncateTranscriptsForPrompt(params.newTranscripts, MAX_DIGEST_PROMPT_CHARS / 2);
+
+  if (!newText.trim()) {
+    return null;
+  }
+
+  // Cap existing digest to leave room for the new transcript
+  const existingTruncated = params.existingDigest.slice(0, MAX_DIGEST_PROMPT_CHARS / 2);
+
+  const prompt = INCREMENTAL_DIGEST_PROMPT.replace("{existingDigest}", existingTruncated).replace(
+    "{newTranscript}",
+    newText,
+  );
+
+  const result = await runOneShotLLM({
+    cfg: params.cfg,
+    prompt,
+    purpose: "context-digest-incremental",
+  });
+
+  if (!result) {
+    return null;
+  }
+
   if (result.length > maxOutput) {
     return result.slice(0, maxOutput) + "\n\n... [content truncated for size]";
   }

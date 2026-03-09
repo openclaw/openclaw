@@ -56,6 +56,7 @@ export async function emitResetCommandHooks(params: {
   sessionKey?: string;
   sessionEntry?: HandleCommandsParams["sessionEntry"];
   previousSessionEntry?: HandleCommandsParams["previousSessionEntry"];
+  storePath?: string;
   workspaceDir: string;
 }): Promise<void> {
   const hookEvent = createInternalHookEvent("command", params.action, params.sessionKey ?? "", {
@@ -63,6 +64,7 @@ export async function emitResetCommandHooks(params: {
     previousSessionEntry: params.previousSessionEntry,
     commandSource: params.command.surface,
     senderId: params.command.senderId,
+    storePath: params.storePath,
     cfg: params.cfg, // Pass config for LLM slug generation
   });
   await triggerInternalHook(hookEvent);
@@ -246,6 +248,7 @@ export async function handleCommands(params: HandleCommandsParams): Promise<Comm
           sessionKey: boundAcpKey,
           sessionEntry: hookSessionEntry,
           previousSessionEntry: hookPreviousSessionEntry,
+          storePath: params.storePath,
           workspaceDir: params.workspaceDir,
         });
         if (resetTail) {
@@ -285,6 +288,7 @@ export async function handleCommands(params: HandleCommandsParams): Promise<Comm
       sessionKey: params.sessionKey,
       sessionEntry: params.sessionEntry,
       previousSessionEntry: params.previousSessionEntry,
+      storePath: params.storePath,
       workspaceDir: params.workspaceDir,
     });
   }

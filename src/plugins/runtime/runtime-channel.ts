@@ -121,6 +121,7 @@ import {
   resolveXAccount,
 } from "../../x/accounts.js";
 import { removeClientManager as removeXClientManager } from "../../x/client.js";
+import { monitorXProvider } from "../../x/monitor.js";
 import { probeX } from "../../x/probe.js";
 import { chunkTextForX, sendMessageX } from "../../x/send.js";
 import { createRuntimeWhatsApp } from "./runtime-whatsapp.js";
@@ -280,6 +281,7 @@ export function createRuntimeChannel(): PluginRuntime["channel"] {
       sendMessageX,
       probeX,
       removeClientManager: removeXClientManager,
+      monitorXProvider,
     },
   };
 }

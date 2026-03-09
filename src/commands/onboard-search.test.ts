@@ -283,9 +283,91 @@ describe("setupSearch", () => {
     expect(result.tools?.web?.search?.apiKey).toBe("BSA-plain");
   });
 
-  it("exports all 5 providers in SEARCH_PROVIDER_OPTIONS", () => {
-    expect(SEARCH_PROVIDER_OPTIONS).toHaveLength(5);
+  it("exports all 6 providers in SEARCH_PROVIDER_OPTIONS", () => {
+    expect(SEARCH_PROVIDER_OPTIONS).toHaveLength(6);
     const values = SEARCH_PROVIDER_OPTIONS.map((e) => e.value);
-    expect(values).toEqual(["perplexity", "brave", "gemini", "grok", "kimi"]);
+    expect(values).toEqual(["qveris", "perplexity", "brave", "gemini", "grok", "kimi"]);
+  });
+
+  it("sets provider for qveris and stores key", async () => {
+    const orig = process.env.QVERIS_API_KEY;
+    delete process.env.QVERIS_API_KEY;
+    try {
+      const cfg: OpenClawConfig = {};
+      const { prompter } = createPrompter({
+        selectValue: "qveris",
+        textValue: "qv_test_key",
+      });
+      const result = await setupSearch(cfg, runtime, prompter);
+      expect(result.tools?.web?.search?.provider).toBe("qveris");
+      expect(result.tools?.web?.search?.enabled).toBe(true);
+      expect(result.tools?.web?.search?.qveris?.apiKey).toBe("qv_test_key");
+    } finally {
+      if (orig === undefined) {
+        delete process.env.QVERIS_API_KEY;
+      } else {
+        process.env.QVERIS_API_KEY = orig;
+      }
+    }
+  });
+
+  it("qveris skips key prompt when global qveris apiKey exists", async () => {
+    const cfg: OpenClawConfig = {
+      tools: {
+        qveris: { enabled: true, apiKey: "qv_global_key" },
+      },
+    };
+    const { prompter, notes } = createPrompter({ selectValue: "qveris" });
+    const result = await setupSearch(cfg, runtime, prompter);
+    expect(result.tools?.web?.search?.provider).toBe("qveris");
+    expect(result.tools?.web?.search?.enabled).toBe(true);
+    expect(result.tools?.web?.search?.qveris?.apiKey).toBeUndefined();
+    expect(prompter.text).not.toHaveBeenCalled();
+    const qverisNote = notes.find((n) => n.message.includes("same API key"));
+    expect(qverisNote).toBeDefined();
+  });
+
+  it("qveris skips key prompt when QVERIS_API_KEY env is set", async () => {
+    const orig = process.env.QVERIS_API_KEY;
+    process.env.QVERIS_API_KEY = "qv_env_key";
+    try {
+      const cfg: OpenClawConfig = {};
+      const { prompter, notes } = createPrompter({ selectValue: "qveris" });
+      const result = await setupSearch(cfg, runtime, prompter);
+      expect(result.tools?.web?.search?.provider).toBe("qveris");
+      expect(result.tools?.web?.search?.enabled).toBe(true);
+      expect(prompter.text).not.toHaveBeenCalled();
+      const qverisNote = notes.find((n) => n.message.includes("QVERIS_API_KEY"));
+      expect(qverisNote).toBeDefined();
+    } finally {
+      if (orig === undefined) {
+        delete process.env.QVERIS_API_KEY;
+      } else {
+        process.env.QVERIS_API_KEY = orig;
+      }
+    }
+  });
+
+  it("qveris falls through to key prompt when no key available", async () => {
+    const orig = process.env.QVERIS_API_KEY;
+    delete process.env.QVERIS_API_KEY;
+    try {
+      const cfg: OpenClawConfig = {};
+      const { prompter, notes } = createPrompter({
+        selectValue: "qveris",
+        textValue: "",
+      });
+      const result = await setupSearch(cfg, runtime, prompter);
+      expect(prompter.text).toHaveBeenCalled();
+      expect(result.tools?.web?.search?.provider).toBe("qveris");
+      const missingNote = notes.find((n) => n.message.includes("No API key stored"));
+      expect(missingNote).toBeDefined();
+    } finally {
+      if (orig === undefined) {
+        delete process.env.QVERIS_API_KEY;
+      } else {
+        process.env.QVERIS_API_KEY = orig;
+      }
+    }
   });
 });

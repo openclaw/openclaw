@@ -485,6 +485,7 @@ export const sessionsHandlers: GatewayRequestHandlers = {
         sessionEntry: entry,
         previousSessionEntry: entry,
         commandSource: "gateway:sessions.reset",
+        storePath,
         cfg,
       },
     );
@@ -553,6 +554,20 @@ export const sessionsHandlers: GatewayRequestHandlers = {
         targetSessionKey: target.canonicalKey ?? key,
         reason: "session-reset",
       });
+    }
+    // Fire session:end after rotation so memory hooks (context-digest, session-importance)
+    // can process the completed session even without an explicit /new command.
+    if (oldSessionId) {
+      void triggerInternalHook(
+        createInternalHookEvent("session", "end", target.canonicalKey ?? key, {
+          sessionId: oldSessionId,
+          sessionFile: oldSessionFile,
+          storePath,
+          previousSessionEntry: entry,
+          cfg,
+          commandSource: "gateway:sessions.reset",
+        }),
+      );
     }
     respond(true, { ok: true, key: target.canonicalKey, entry: next }, undefined);
   },

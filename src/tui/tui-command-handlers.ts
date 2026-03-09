@@ -431,6 +431,10 @@ export function createCommandHandlers(context: CommandHandlerContext) {
           state.sessionInfo.totalTokens = null;
           tui.requestRender();
 
+          // Notify gateway about old session ending so hooks (context-digest,
+          // session-importance) can process the completed session.
+          await client.resetSession(state.currentSessionKey, "new");
+
           // Generate unique session key to isolate this TUI client (#39217)
           // This ensures /new creates a fresh session that doesn't broadcast
           // to other connected TUI clients sharing the original session key.

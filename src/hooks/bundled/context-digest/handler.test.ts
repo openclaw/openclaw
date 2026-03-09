@@ -296,4 +296,64 @@ describe("context-digest handler", () => {
     const content = await fs.readFile(digestPath, "utf-8");
     expect(content).toContain("# Context Digest (auto-generated)");
   });
+
+  it("should skip digest when no sessions changed since last update (staleness check)", async () => {
+    const workDir = await createCaseWorkspace();
+    const sessionsDir = path.join(workDir, "sessions");
+    await fs.mkdir(sessionsDir, { recursive: true });
+
+    const sessionFile = path.join(sessionsDir, "stale.jsonl");
+    await fs.writeFile(
+      sessionFile,
+      createMockSessionJsonl([
+        { role: "user", content: "Tell me about staleness" },
+        { role: "assistant", content: "Here you go..." },
+      ]),
+      "utf-8",
+    );
+
+    const oldUpdatedAt = Date.now() - 60_000;
+    const storePath = path.join(sessionsDir, "sessions.json");
+    await writeSessionStore(storePath, {
+      "agent:main:main": {
+        sessionId: "stale-1",
+        updatedAt: oldUpdatedAt,
+        sessionFile,
+      },
+    });
+
+    // First run — creates the digest
+    const event1 = createHookEvent("command", "new", "agent:main:main", {
+      cfg: { agents: { defaults: { workspace: workDir } } },
+      storePath,
+      previousSessionEntry: { sessionId: "stale-trigger-1" },
+    });
+    await handler(event1);
+
+    const digestPath = path.join(workDir, "memory", "context-digest.md");
+    const content1 = await fs.readFile(digestPath, "utf-8");
+    expect(content1).toContain("Sessions covered: 1");
+
+    // Overwrite content to detect re-write
+    await fs.writeFile(
+      digestPath,
+      content1.replace("Sessions covered: 1", "Sessions covered: 1") + "\nMARKER",
+      "utf-8",
+    );
+    const markerContent = await fs.readFile(digestPath, "utf-8");
+
+    // Clear dedup so the handler doesn't skip due to session dedup
+    _clearProcessedSessions();
+
+    // Second run — no sessions changed, should skip and leave MARKER intact
+    const event2 = createHookEvent("command", "new", "agent:main:main", {
+      cfg: { agents: { defaults: { workspace: workDir } } },
+      storePath,
+      previousSessionEntry: { sessionId: "stale-trigger-2" },
+    });
+    await handler(event2);
+
+    const content2 = await fs.readFile(digestPath, "utf-8");
+    expect(content2).toBe(markerContent);
+  });
 });

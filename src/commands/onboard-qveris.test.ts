@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
-import { DEFAULT_QVERIS_WEB_SEARCH_TOOL_ID, promptQverisConfig } from "./onboard-qveris.js";
+import { promptQverisConfig } from "./onboard-qveris.js";
 
 function createPrompter(params: {
   confirmValue: boolean;
@@ -26,7 +26,7 @@ describe("promptQverisConfig", () => {
     vi.unstubAllEnvs();
   });
 
-  it("enables qveris and configures web_search provider defaults", async () => {
+  it("enables qveris tool search without touching web search config", async () => {
     const prompter = createPrompter({
       confirmValue: true,
       textValue: "qv_test_key",
@@ -36,9 +36,7 @@ describe("promptQverisConfig", () => {
 
     expect(next.tools?.qveris?.enabled).toBe(true);
     expect(next.tools?.qveris?.apiKey).toBe("qv_test_key");
-    expect(next.tools?.web?.search?.enabled).toBe(true);
-    expect(next.tools?.web?.search?.provider).toBe("qveris");
-    expect(next.tools?.web?.search?.qveris?.toolId).toBe(DEFAULT_QVERIS_WEB_SEARCH_TOOL_ID);
+    expect(next.tools?.web?.search?.provider).toBeUndefined();
   });
 
   it("disables qveris when user opts out", async () => {
@@ -64,7 +62,7 @@ describe("promptQverisConfig", () => {
     expect(next.tools?.web?.search?.provider).toBeUndefined();
   });
 
-  it("accepts env key and still defaults web_search to qveris", async () => {
+  it("accepts env key without storing it in config", async () => {
     vi.stubEnv("QVERIS_API_KEY", "qv_env_key");
     const note = vi.fn(async () => {});
     const prompter = createPrompter({
@@ -77,7 +75,27 @@ describe("promptQverisConfig", () => {
 
     expect(next.tools?.qveris?.enabled).toBe(true);
     expect(next.tools?.qveris?.apiKey).toBeUndefined();
-    expect(next.tools?.web?.search?.provider).toBe("qveris");
+    expect(next.tools?.web?.search?.provider).toBeUndefined();
     expect(note).toHaveBeenCalled();
+  });
+
+  it("preserves existing web search config when enabling qveris", async () => {
+    const prompter = createPrompter({
+      confirmValue: true,
+      textValue: "qv_test_key",
+    });
+
+    const next = await promptQverisConfig(
+      {
+        tools: {
+          web: { search: { provider: "brave", apiKey: "BSA-existing" } },
+        },
+      } as OpenClawConfig,
+      prompter,
+    );
+
+    expect(next.tools?.qveris?.enabled).toBe(true);
+    expect(next.tools?.web?.search?.provider).toBe("brave");
+    expect(next.tools?.web?.search?.apiKey).toBe("BSA-existing");
   });
 });

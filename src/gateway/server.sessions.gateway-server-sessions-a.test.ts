@@ -1160,7 +1160,8 @@ describe("gateway server sessions", () => {
       reason: "new",
     });
     expect(reset.ok).toBe(true);
-    expect(sessionHookMocks.triggerInternalHook).toHaveBeenCalledTimes(1);
+    // First call: command:new hook, second call: session:end lifecycle event
+    expect(sessionHookMocks.triggerInternalHook).toHaveBeenCalledTimes(2);
     const event = (
       sessionHookMocks.triggerInternalHook.mock.calls as unknown as Array<[unknown]>
     )[0]?.[0] as { context?: { previousSessionEntry?: unknown } } | undefined;
@@ -1176,6 +1177,18 @@ describe("gateway server sessions", () => {
       },
     });
     expect(event.context?.previousSessionEntry).toMatchObject({ sessionId: "sess-main" });
+    const endEvent = (
+      sessionHookMocks.triggerInternalHook.mock.calls as unknown as Array<[unknown]>
+    )[1]?.[0] as { type?: string; action?: string; context?: { sessionId?: string } } | undefined;
+    expect(endEvent).toMatchObject({
+      type: "session",
+      action: "end",
+      sessionKey: "agent:main:main",
+      context: {
+        sessionId: "sess-main",
+        commandSource: "gateway:sessions.reset",
+      },
+    });
     ws.close();
   });
 
