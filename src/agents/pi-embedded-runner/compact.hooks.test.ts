@@ -242,6 +242,7 @@ vi.mock("../agent-paths.js", () => ({
 
 vi.mock("../agent-scope.js", () => ({
   resolveSessionAgentId: resolveSessionAgentIdMock,
+  resolveAgentUserTimezone: vi.fn(() => "UTC"),
   resolveSessionAgentIds: vi.fn(() => ({ defaultAgentId: "main", sessionAgentId: "main" })),
 }));
 
