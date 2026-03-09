@@ -4,6 +4,8 @@ import { getDefaultRedactPatterns, redactSensitiveText } from "../logging/redact
 import { getApiErrorPayloadFingerprint, parseApiErrorInfo } from "./pi-embedded-helpers.js";
 import { stableStringify } from "./stable-stringify.js";
 
+const MAX_OBSERVATION_INPUT_CHARS = 64_000;
+const MAX_FINGERPRINT_MESSAGE_CHARS = 8_000;
 const RAW_ERROR_PREVIEW_MAX_CHARS = 400;
 const PROVIDER_ERROR_PREVIEW_MAX_CHARS = 200;
 const REQUEST_ID_RE = /\brequest[_ ]?id\b\s*[:=]\s*["'()]*([A-Za-z0-9._:-]+)/i;
@@ -27,6 +29,40 @@ function truncateForObservation(text: string | undefined, maxChars: number): str
     return undefined;
   }
   return trimmed.length > maxChars ? `${trimmed.slice(0, maxChars)}…` : trimmed;
+}
+
+function boundObservationInput(text: string | undefined): string | undefined {
+  const trimmed = text?.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+  return trimmed.length > MAX_OBSERVATION_INPUT_CHARS
+    ? trimmed.slice(0, MAX_OBSERVATION_INPUT_CHARS)
+    : trimmed;
+}
+
+export function sanitizeForConsole(text: string | undefined, maxChars = 200): string | undefined {
+  const trimmed = text?.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+  const withoutControlChars = Array.from(trimmed)
+    .filter((char) => {
+      const code = char.charCodeAt(0);
+      return !(
+        code <= 0x08 ||
+        code === 0x0b ||
+        code === 0x0c ||
+        (code >= 0x0e && code <= 0x1f) ||
+        code === 0x7f
+      );
+    })
+    .join("");
+  const sanitized = withoutControlChars
+    .replace(/[\r\n\t]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  return sanitized.length > maxChars ? `${sanitized.slice(0, maxChars)}…` : sanitized;
 }
 
 function replaceRequestIdPreview(
@@ -71,12 +107,16 @@ function buildObservationFingerprint(params: {
   type?: string;
   message?: string;
 }): string | null {
+  const boundedMessage =
+    params.message && params.message.length > MAX_FINGERPRINT_MESSAGE_CHARS
+      ? params.message.slice(0, MAX_FINGERPRINT_MESSAGE_CHARS)
+      : params.message;
   const structured =
-    params.httpCode || params.type || params.message
+    params.httpCode || params.type || boundedMessage
       ? stableStringify({
           httpCode: params.httpCode,
           type: params.type,
-          message: params.message,
+          message: boundedMessage,
         })
       : null;
   if (structured) {
@@ -97,7 +137,7 @@ export function buildApiErrorObservationFields(rawError?: string): {
   providerErrorMessagePreview?: string;
   requestIdHash?: string;
 } {
-  const trimmed = rawError?.trim();
+  const trimmed = boundObservationInput(rawError);
   if (!trimmed) {
     return {};
   }

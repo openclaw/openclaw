@@ -1,6 +1,9 @@
 import { redactIdentifier } from "../../../logging/redact-identifier.js";
 import type { AuthProfileFailureReason } from "../../auth-profiles.js";
-import { buildApiErrorObservationFields } from "../../pi-embedded-error-observation.js";
+import {
+  buildApiErrorObservationFields,
+  sanitizeForConsole,
+} from "../../pi-embedded-error-observation.js";
 import type { FailoverReason } from "../../pi-embedded-helpers.js";
 import { log } from "../logger.js";
 
@@ -42,6 +45,9 @@ export function createFailoverDecisionLogger(
   const safeProfileId = normalizedBase.profileId
     ? redactIdentifier(normalizedBase.profileId, { len: 12 })
     : undefined;
+  const safeRunId = sanitizeForConsole(normalizedBase.runId) ?? "-";
+  const safeProvider = sanitizeForConsole(normalizedBase.provider) ?? "-";
+  const safeModel = sanitizeForConsole(normalizedBase.model) ?? "-";
   const profileText = safeProfileId ?? "-";
   const reasonText = normalizedBase.failoverReason ?? "none";
   return (decision, extra) => {
@@ -63,8 +69,8 @@ export function createFailoverDecisionLogger(
       status: extra?.status,
       ...observedError,
       consoleMessage:
-        `embedded run failover decision: runId=${normalizedBase.runId ?? "-"} stage=${normalizedBase.stage} decision=${decision} ` +
-        `reason=${reasonText} provider=${normalizedBase.provider}/${normalizedBase.model} profile=${profileText}`,
+        `embedded run failover decision: runId=${safeRunId} stage=${normalizedBase.stage} decision=${decision} ` +
+        `reason=${reasonText} provider=${safeProvider}/${safeModel} profile=${profileText}`,
     });
   };
 }

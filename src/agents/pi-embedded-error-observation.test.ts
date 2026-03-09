@@ -3,6 +3,7 @@ import * as loggingConfigModule from "../logging/config.js";
 import {
   buildApiErrorObservationFields,
   buildTextObservationFields,
+  sanitizeForConsole,
 } from "./pi-embedded-error-observation.js";
 
 afterEach(() => {
@@ -110,6 +111,16 @@ describe("buildApiErrorObservationFields", () => {
     expect(observed.providerErrorMessagePreview?.endsWith("…")).toBe(true);
   });
 
+  it("caps oversized raw inputs before hashing and fingerprinting", () => {
+    const oversized = "X".repeat(70_000);
+    const bounded = "X".repeat(64_000);
+
+    expect(buildApiErrorObservationFields(oversized)).toMatchObject({
+      rawErrorHash: buildApiErrorObservationFields(bounded).rawErrorHash,
+      rawErrorFingerprint: buildApiErrorObservationFields(bounded).rawErrorFingerprint,
+    });
+  });
+
   it("returns empty observation fields for empty input", () => {
     expect(buildApiErrorObservationFields(undefined)).toEqual({});
     expect(buildApiErrorObservationFields("")).toEqual({});
@@ -161,5 +172,11 @@ describe("buildApiErrorObservationFields", () => {
 
     expect(observed.rawErrorPreview).not.toContain("custom-secret-abc123");
     expect(observed.rawErrorPreview).toContain("custom");
+  });
+});
+
+describe("sanitizeForConsole", () => {
+  it("strips control characters from console-facing values", () => {
+    expect(sanitizeForConsole("run-1\nprovider\tmodel\rtest")).toBe("run-1 provider model test");
   });
 });

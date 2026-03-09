@@ -94,7 +94,7 @@ describe("handleAgentEnd", () => {
     });
   });
 
-  it("redacts logged error text while keeping lifecycle events unchanged", () => {
+  it("redacts logged error text before emitting lifecycle events", () => {
     const onAgentEvent = vi.fn();
     const ctx = createContext(
       {
@@ -118,7 +118,7 @@ describe("handleAgentEnd", () => {
       stream: "lifecycle",
       data: {
         phase: "error",
-        error: "x-api-key: sk-abcdefghijklmnopqrstuvwxyz123456",
+        error: "x-api-key: ***",
       },
     });
   });
