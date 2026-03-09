@@ -1,4 +1,5 @@
 import type { CronJob, CronJobCreate, CronJobPatch } from "../types.js";
+import { normalizeCronCreateDeliveryInput } from "./initial-delivery.js";
 import {
   applyJobPatch,
   computeJobNextRunAtMs,
@@ -234,7 +235,8 @@ export async function add(state: CronServiceState, input: CronJobCreate) {
   return await locked(state, async () => {
     warnIfDisabled(state, "add");
     await ensureLoaded(state);
-    const job = createJob(state, input);
+    const normalizedInput = normalizeCronCreateDeliveryInput(input);
+    const job = createJob(state, normalizedInput);
     state.store?.jobs.push(job);
 
     // Defensive: recompute all next-run times to ensure consistency
@@ -398,13 +400,18 @@ export async function run(state: CronServiceState, id: string, mode?: "due" | "f
       return;
     }
 
-    const shouldDelete = applyJobResult(state, job, {
-      status: coreResult.status,
-      error: coreResult.error,
-      delivered: coreResult.delivered,
-      startedAt,
-      endedAt,
-    });
+    const shouldDelete = applyJobResult(
+      state,
+      job,
+      {
+        status: coreResult.status,
+        error: coreResult.error,
+        delivered: coreResult.delivered,
+        startedAt,
+        endedAt,
+      },
+      { preserveSchedule: mode === "force" },
+    );
 
     emit(state, {
       jobId: job.id,
@@ -450,7 +457,7 @@ export async function run(state: CronServiceState, id: string, mode?: "due" | "f
       snapshot: postRunSnapshot,
       removed: postRunRemoved,
     });
-    recomputeNextRunsForMaintenance(state);
+    recomputeNextRunsForMaintenance(state, { recomputeExpired: true });
     await persist(state);
     armTimer(state);
   });

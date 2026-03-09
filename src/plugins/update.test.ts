@@ -15,6 +15,76 @@ describe("updateNpmInstalledPlugins", () => {
     installPluginFromNpmSpecMock.mockReset();
   });
 
+  it("skips integrity drift checks for unpinned npm specs during dry-run updates", async () => {
+    installPluginFromNpmSpecMock.mockResolvedValue({
+      ok: true,
+      pluginId: "opik-openclaw",
+      targetDir: "/tmp/opik-openclaw",
+      version: "0.2.6",
+      extensions: ["index.ts"],
+    });
+
+    const { updateNpmInstalledPlugins } = await import("./update.js");
+    await updateNpmInstalledPlugins({
+      config: {
+        plugins: {
+          installs: {
+            "opik-openclaw": {
+              source: "npm",
+              spec: "@opik/opik-openclaw",
+              integrity: "sha512-old",
+              installPath: "/tmp/opik-openclaw",
+            },
+          },
+        },
+      },
+      pluginIds: ["opik-openclaw"],
+      dryRun: true,
+    });
+
+    expect(installPluginFromNpmSpecMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        spec: "@opik/opik-openclaw",
+        expectedIntegrity: undefined,
+      }),
+    );
+  });
+
+  it("keeps integrity drift checks for exact-version npm specs during dry-run updates", async () => {
+    installPluginFromNpmSpecMock.mockResolvedValue({
+      ok: true,
+      pluginId: "opik-openclaw",
+      targetDir: "/tmp/opik-openclaw",
+      version: "0.2.6",
+      extensions: ["index.ts"],
+    });
+
+    const { updateNpmInstalledPlugins } = await import("./update.js");
+    await updateNpmInstalledPlugins({
+      config: {
+        plugins: {
+          installs: {
+            "opik-openclaw": {
+              source: "npm",
+              spec: "@opik/opik-openclaw@0.2.5",
+              integrity: "sha512-old",
+              installPath: "/tmp/opik-openclaw",
+            },
+          },
+        },
+      },
+      pluginIds: ["opik-openclaw"],
+      dryRun: true,
+    });
+
+    expect(installPluginFromNpmSpecMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        spec: "@opik/opik-openclaw@0.2.5",
+        expectedIntegrity: "sha512-old",
+      }),
+    );
+  });
+
   it("formats package-not-found updates with a stable message", async () => {
     installPluginFromNpmSpecMock.mockResolvedValue({
       ok: false,

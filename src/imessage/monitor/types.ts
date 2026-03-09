@@ -25,6 +25,12 @@ export type IMessagePayload = {
   is_group?: boolean | null;
 };
 
+export type MonitorIMessageStatusUpdate = {
+  connected?: boolean;
+  lastEventAt?: number;
+  lastInboundAt?: number;
+};
+
 export type MonitorIMessageOpts = {
   runtime?: RuntimeEnv;
   abortSignal?: AbortSignal;
@@ -37,4 +43,6 @@ export type MonitorIMessageOpts = {
   includeAttachments?: boolean;
   mediaMaxMb?: number;
   requireMention?: boolean;
+  /** Callback to update the channel account status snapshot (e.g. connected, lastEventAt). */
+  onStatus?: (update: MonitorIMessageStatusUpdate) => void;
 };

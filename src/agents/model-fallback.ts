@@ -3,6 +3,8 @@ import {
   resolveAgentModelFallbackValues,
   resolveAgentModelPrimaryValue,
 } from "../config/model-input.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
+import { sanitizeForLog } from "../terminal/ansi.js";
 import {
   ensureAuthProfileStore,
   getSoonestCooldownExpiry,
@@ -28,10 +30,22 @@ import {
 import type { FailoverReason } from "./pi-embedded-helpers.js";
 import { isLikelyContextOverflowError } from "./pi-embedded-helpers.js";
 
+const log = createSubsystemLogger("model-fallback");
+
 type ModelCandidate = {
   provider: string;
   model: string;
 };
+
+export type ModelFallbackRunOptions = {
+  allowTransientCooldownProbe?: boolean;
+};
+
+type ModelFallbackRunFn<T> = (
+  provider: string,
+  model: string,
+  options?: ModelFallbackRunOptions,
+) => Promise<T>;
 
 type FallbackAttempt = {
   provider: string;
@@ -124,14 +138,18 @@ function buildFallbackSuccess<T>(params: {
 }
 
 async function runFallbackCandidate<T>(params: {
-  run: (provider: string, model: string) => Promise<T>;
+  run: ModelFallbackRunFn<T>;
   provider: string;
   model: string;
+  options?: ModelFallbackRunOptions;
 }): Promise<{ ok: true; result: T } | { ok: false; error: unknown }> {
   try {
+    const result = params.options
+      ? await params.run(params.provider, params.model, params.options)
+      : await params.run(params.provider, params.model);
     return {
       ok: true,
-      result: await params.run(params.provider, params.model),
+      result,
     };
   } catch (err) {
     if (shouldRethrowAbort(err)) {
@@ -142,15 +160,17 @@ async function runFallbackCandidate<T>(params: {
 }
 
 async function runFallbackAttempt<T>(params: {
-  run: (provider: string, model: string) => Promise<T>;
+  run: ModelFallbackRunFn<T>;
   provider: string;
   model: string;
   attempts: FallbackAttempt[];
+  options?: ModelFallbackRunOptions;
 }): Promise<{ success: ModelFallbackRunResult<T> } | { error: unknown }> {
   const runResult = await runFallbackCandidate({
     run: params.run,
     provider: params.provider,
     model: params.model,
+    options: params.options,
   });
   if (runResult.ok) {
     return {
@@ -515,11 +535,23 @@ function resolveCooldownDecision(params: {
       profileIds: params.profileIds,
       now: params.now,
     }) ?? "rate_limit";
-  const isPersistentIssue =
-    inferredReason === "auth" ||
-    inferredReason === "auth_permanent" ||
-    inferredReason === "billing";
-  if (isPersistentIssue) {
+  const isPersistentAuthIssue = inferredReason === "auth" || inferredReason === "auth_permanent";
+  if (isPersistentAuthIssue) {
+    return {
+      type: "skip",
+      reason: inferredReason,
+      error: `Provider ${params.candidate.provider} has ${inferredReason} issue (skipping all models)`,
+    };
+  }
+
+  // Billing is semi-persistent: the user may fix their balance, or a transient
+  // 402 might have been misclassified. Probe the primary only when fallbacks
+  // exist; otherwise repeated single-provider probes just churn the disabled
+  // auth state without opening any recovery path.
+  if (inferredReason === "billing") {
+    if (params.isPrimary && params.hasFallbackCandidates && shouldProbe) {
+      return { type: "attempt", reason: inferredReason, markProbe: true };
+    }
     return {
       type: "skip",
       reason: inferredReason,
@@ -528,12 +560,14 @@ function resolveCooldownDecision(params: {
   }
 
   // For primary: try when requested model or when probe allows.
-  // For same-provider fallbacks: relax cooldown on rate_limit (commonly
-  // model-scoped) and model_not_found (model-specific, not provider-wide).
+  // For same-provider fallbacks: relax cooldown on model-scoped/transient
+  // failures where a sibling model can still succeed.
   const shouldAttemptDespiteCooldown =
     (params.isPrimary && (!params.requestedModel || shouldProbe)) ||
     (!params.isPrimary &&
-      (inferredReason === "rate_limit" || inferredReason === "model_not_found"));
+      (inferredReason === "rate_limit" ||
+        inferredReason === "overloaded" ||
+        inferredReason === "model_not_found"));
   if (!shouldAttemptDespiteCooldown) {
     return {
       type: "skip",
@@ -556,7 +590,7 @@ export async function runWithModelFallback<T>(params: {
   agentDir?: string;
   /** Optional explicit fallbacks list; when provided (even empty), replaces agents.defaults.model.fallbacks. */
   fallbacksOverride?: string[];
-  run: (provider: string, model: string) => Promise<T>;
+  run: ModelFallbackRunFn<T>;
   onError?: ModelFallbackErrorHandler;
 }): Promise<ModelFallbackRunResult<T>> {
   const candidates = resolveFallbackCandidates({
@@ -575,6 +609,7 @@ export async function runWithModelFallback<T>(params: {
 
   for (let i = 0; i < candidates.length; i += 1) {
     const candidate = candidates[i];
+    let runOptions: ModelFallbackRunOptions | undefined;
     if (authStore) {
       const profileIds = resolveAuthProfileOrder({
         cfg: params.cfg,
@@ -614,11 +649,30 @@ export async function runWithModelFallback<T>(params: {
         if (decision.markProbe) {
           lastProbeAttempt.set(probeThrottleKey, now);
         }
+        if (
+          decision.reason === "rate_limit" ||
+          decision.reason === "overloaded" ||
+          decision.reason === "billing"
+        ) {
+          runOptions = { allowTransientCooldownProbe: true };
+        }
       }
     }
 
-    const attemptRun = await runFallbackAttempt({ run: params.run, ...candidate, attempts });
+    const attemptRun = await runFallbackAttempt({
+      run: params.run,
+      ...candidate,
+      attempts,
+      options: runOptions,
+    });
     if ("success" in attemptRun) {
+      const notFoundAttempt =
+        i > 0 ? attempts.find((a) => a.reason === "model_not_found") : undefined;
+      if (notFoundAttempt) {
+        log.warn(
+          `Model "${sanitizeForLog(notFoundAttempt.provider)}/${sanitizeForLog(notFoundAttempt.model)}" not found. Fell back to "${sanitizeForLog(candidate.provider)}/${sanitizeForLog(candidate.model)}".`,
+        );
+      }
       return attemptRun.success;
     }
     const err = attemptRun.error;

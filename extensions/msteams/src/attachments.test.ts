@@ -727,7 +727,7 @@ describe("msteams attachments", () => {
             redirect: "manual",
             dispatcher: {},
           } as RequestInit);
-          if (REDIRECT_STATUS_CODES.includes(res.status)) {
+          if (REDIRECT_STATUS_CODES.has(res.status)) {
             const location = res.headers.get("location");
             if (!location) {
               throw new Error("redirect missing location");

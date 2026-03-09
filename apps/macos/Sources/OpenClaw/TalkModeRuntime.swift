@@ -12,6 +12,7 @@ actor TalkModeRuntime {
     private let ttsLogger = Logger(subsystem: "ai.openclaw", category: "talk.tts")
     private static let defaultModelIdFallback = "eleven_v3"
     private static let defaultTalkProvider = "elevenlabs"
+    private static let defaultSilenceTimeoutMs = TalkDefaults.silenceTimeoutMs
 
     private final class RMSMeter: @unchecked Sendable {
         private let lock = NSLock()
@@ -66,9 +67,14 @@ actor TalkModeRuntime {
     private var fallbackVoiceId: String?
     private var lastPlaybackWasPCM: Bool = false
 
-    private let silenceWindow: TimeInterval = 0.7
+    private var silenceWindow: TimeInterval = .init(TalkModeRuntime.defaultSilenceTimeoutMs) / 1000
     private let minSpeechRMS: Double = 1e-3
     private let speechBoostFactor: Double = 6.0
+
+    static func configureRecognitionRequest(_ request: SFSpeechAudioBufferRecognitionRequest) {
+        request.shouldReportPartialResults = true
+        request.taskHint = .dictation
+    }
 
     // MARK: - Lifecycle
 
@@ -176,9 +182,9 @@ actor TalkModeRuntime {
             return
         }
 
-        self.recognitionRequest = SFSpeechAudioBufferRecognitionRequest()
-        self.recognitionRequest?.shouldReportPartialResults = true
-        guard let request = self.recognitionRequest else { return }
+        let request = SFSpeechAudioBufferRecognitionRequest()
+        Self.configureRecognitionRequest(request)
+        self.recognitionRequest = request
 
         if self.audioEngine == nil {
             self.audioEngine = AVAudioEngine()
@@ -778,6 +784,7 @@ extension TalkModeRuntime {
         }
         self.defaultOutputFormat = cfg.outputFormat
         self.interruptOnSpeech = cfg.interruptOnSpeech
+        self.silenceWindow = TimeInterval(cfg.silenceTimeoutMs) / 1000
         self.apiKey = cfg.apiKey
         let hasApiKey = (cfg.apiKey?.isEmpty == false)
         let voiceLabel = (cfg.voiceId?.isEmpty == false) ? cfg.voiceId! : "none"
@@ -787,7 +794,8 @@ extension TalkModeRuntime {
                 "talk config voiceId=\(voiceLabel, privacy: .public) " +
                     "modelId=\(modelLabel, privacy: .public) " +
                     "apiKey=\(hasApiKey, privacy: .public) " +
-                    "interrupt=\(cfg.interruptOnSpeech, privacy: .public)")
+                    "interrupt=\(cfg.interruptOnSpeech, privacy: .public) " +
+                    "silenceTimeoutMs=\(cfg.silenceTimeoutMs, privacy: .public)")
     }
 
     private struct TalkRuntimeConfig {
@@ -796,83 +804,18 @@ extension TalkModeRuntime {
         let modelId: String?
         let outputFormat: String?
         let interruptOnSpeech: Bool
+        let silenceTimeoutMs: Int
         let apiKey: String?
-    }
-
-    struct TalkProviderConfigSelection {
-        let provider: String
-        let config: [String: AnyCodable]
-        let normalizedPayload: Bool
-    }
-
-    private static func normalizedTalkProviderID(_ raw: String?) -> String? {
-        let trimmed = raw?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() ?? ""
-        return trimmed.isEmpty ? nil : trimmed
-    }
-
-    private static func normalizedTalkProviderConfig(_ value: AnyCodable) -> [String: AnyCodable]? {
-        if let typed = value.value as? [String: AnyCodable] {
-            return typed
-        }
-        if let foundation = value.value as? [String: Any] {
-            return foundation.mapValues(AnyCodable.init)
-        }
-        if let nsDict = value.value as? NSDictionary {
-            var converted: [String: AnyCodable] = [:]
-            for case let (key as String, raw) in nsDict {
-                converted[key] = AnyCodable(raw)
-            }
-            return converted
-        }
-        return nil
-    }
-
-    private static func normalizedTalkProviders(_ raw: AnyCodable?) -> [String: [String: AnyCodable]] {
-        guard let raw else { return [:] }
-        var providerMap: [String: AnyCodable] = [:]
-        if let typed = raw.value as? [String: AnyCodable] {
-            providerMap = typed
-        } else if let foundation = raw.value as? [String: Any] {
-            providerMap = foundation.mapValues(AnyCodable.init)
-        } else if let nsDict = raw.value as? NSDictionary {
-            for case let (key as String, value) in nsDict {
-                providerMap[key] = AnyCodable(value)
-            }
-        } else {
-            return [:]
-        }
-
-        return providerMap.reduce(into: [String: [String: AnyCodable]]()) { acc, entry in
-            guard
-                let providerID = Self.normalizedTalkProviderID(entry.key),
-                let providerConfig = Self.normalizedTalkProviderConfig(entry.value)
-            else { return }
-            acc[providerID] = providerConfig
-        }
     }
 
     static func selectTalkProviderConfig(
         _ talk: [String: AnyCodable]?) -> TalkProviderConfigSelection?
     {
-        guard let talk else { return nil }
-        let rawProvider = talk["provider"]?.stringValue
-        let rawProviders = talk["providers"]
-        let hasNormalizedPayload = rawProvider != nil || rawProviders != nil
-        if hasNormalizedPayload {
-            let normalizedProviders = Self.normalizedTalkProviders(rawProviders)
-            let providerID =
-                Self.normalizedTalkProviderID(rawProvider) ??
-                normalizedProviders.keys.min() ??
-                Self.defaultTalkProvider
-            return TalkProviderConfigSelection(
-                provider: providerID,
-                config: normalizedProviders[providerID] ?? [:],
-                normalizedPayload: true)
-        }
-        return TalkProviderConfigSelection(
-            provider: Self.defaultTalkProvider,
-            config: talk,
-            normalizedPayload: false)
+        TalkConfigParsing.selectProviderConfig(talk, defaultProvider: self.defaultTalkProvider)
+    }
+
+    static func resolvedSilenceTimeoutMs(_ talk: [String: AnyCodable]?) -> Int {
+        TalkConfigParsing.resolvedSilenceTimeoutMs(talk, fallback: self.defaultSilenceTimeoutMs)
     }
 
     private func fetchTalkConfig() async -> TalkRuntimeConfig {
@@ -890,6 +833,7 @@ extension TalkModeRuntime {
             let selection = Self.selectTalkProviderConfig(talk)
             let activeProvider = selection?.provider ?? Self.defaultTalkProvider
             let activeConfig = selection?.config
+            let silenceTimeoutMs = Self.resolvedSilenceTimeoutMs(talk)
             let ui = snap.config?["ui"]?.dictionaryValue
             let rawSeam = ui?["seamColor"]?.stringValue?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
             await MainActor.run {
@@ -934,6 +878,7 @@ extension TalkModeRuntime {
                 modelId: resolvedModel,
                 outputFormat: outputFormat,
                 interruptOnSpeech: interrupt ?? true,
+                silenceTimeoutMs: silenceTimeoutMs,
                 apiKey: resolvedApiKey)
         } catch {
             let resolvedVoice =
@@ -946,6 +891,7 @@ extension TalkModeRuntime {
                 modelId: Self.defaultModelIdFallback,
                 outputFormat: nil,
                 interruptOnSpeech: true,
+                silenceTimeoutMs: Self.defaultSilenceTimeoutMs,
                 apiKey: resolvedApiKey)
         }
     }

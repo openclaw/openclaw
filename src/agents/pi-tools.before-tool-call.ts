@@ -24,6 +24,14 @@ const adjustedParamsByToolCallId = new Map<string, unknown>();
 const MAX_TRACKED_ADJUSTED_PARAMS = 1024;
 const LOOP_WARNING_BUCKET_SIZE = 10;
 const MAX_LOOP_WARNING_KEYS = 256;
+let beforeToolCallRuntimePromise: Promise<
+  typeof import("./pi-tools.before-tool-call.runtime.js")
+> | null = null;
+
+function loadBeforeToolCallRuntime() {
+  beforeToolCallRuntimePromise ??= import("./pi-tools.before-tool-call.runtime.js");
+  return beforeToolCallRuntimePromise;
+}
 
 function buildAdjustedParamsKey(params: { runId?: string; toolCallId: string }): string {
   if (params.runId && params.runId.trim()) {
@@ -63,8 +71,7 @@ async function recordLoopOutcome(args: {
     return;
   }
   try {
-    const { getDiagnosticSessionState } = await import("../logging/diagnostic-session-state.js");
-    const { recordToolCallOutcome } = await import("./tool-loop-detection.js");
+    const { getDiagnosticSessionState, recordToolCallOutcome } = await loadBeforeToolCallRuntime();
     const sessionState = getDiagnosticSessionState({
       sessionKey: args.ctx.sessionKey,
       sessionId: args.ctx?.agentId,
@@ -103,10 +110,8 @@ export async function runBeforeToolCallHook(args: {
   }
 
   if (args.ctx?.sessionKey) {
-    const { getDiagnosticSessionState } = await import("../logging/diagnostic-session-state.js");
-    const { logToolLoopAction } = await import("../logging/diagnostic.js");
-    const { detectToolCallLoop, recordToolCall } = await import("./tool-loop-detection.js");
-
+    const { getDiagnosticSessionState, logToolLoopAction, detectToolCallLoop, recordToolCall } =
+      await loadBeforeToolCallRuntime();
     const sessionState = getDiagnosticSessionState({
       sessionKey: args.ctx.sessionKey,
       sessionId: args.ctx?.agentId,

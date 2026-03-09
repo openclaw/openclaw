@@ -34,7 +34,6 @@ export type IMessageSendResult = {
   messageId: string;
 };
 
-const LEADING_REPLY_TAG_RE = /^\s*\[\[\s*reply_to\s*:\s*([^\]\n]+)\s*\]\]\s*/i;
 const MAX_REPLY_TO_ID_LENGTH = 256;
 
 function stripUnsafeReplyTagChars(value: string): string {
@@ -62,21 +61,6 @@ function sanitizeReplyToId(rawReplyToId?: string): string | undefined {
     return sanitized.slice(0, MAX_REPLY_TO_ID_LENGTH);
   }
   return sanitized;
-}
-
-function prependReplyTagIfNeeded(message: string, replyToId?: string): string {
-  const resolvedReplyToId = sanitizeReplyToId(replyToId);
-  if (!resolvedReplyToId) {
-    return message;
-  }
-  const replyTag = `[[reply_to:${resolvedReplyToId}]]`;
-  const existingLeadingTag = message.match(LEADING_REPLY_TAG_RE);
-  if (existingLeadingTag) {
-    const remainder = message.slice(existingLeadingTag[0].length).trimStart();
-    return remainder ? `${replyTag} ${remainder}` : replyTag;
-  }
-  const trimmedMessage = message.trimStart();
-  return trimmedMessage ? `${replyTag} ${trimmedMessage}` : replyTag;
 }
 
 function resolveMessageId(result: Record<string, unknown> | null | undefined): string | null {
@@ -147,13 +131,15 @@ export async function sendMessageIMessage(
     });
     message = convertMarkdownTables(message, tableMode);
   }
-  message = prependReplyTagIfNeeded(message, opts.replyToId);
-
   const params: Record<string, unknown> = {
     text: message,
     service: service || "auto",
     region,
   };
+  const resolvedReplyToId = sanitizeReplyToId(opts.replyToId);
+  if (resolvedReplyToId) {
+    params.reply_to = resolvedReplyToId;
+  }
   if (filePath) {
     params.file = filePath;
   }

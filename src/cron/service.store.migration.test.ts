@@ -133,6 +133,28 @@ describe("cron store migration", () => {
     expect(schedule.at).toBe(new Date(atMs).toISOString());
   });
 
+  it("converts isolated systemEvent payloads into agentTurn payloads", async () => {
+    const migrated = await migrateLegacyJob(
+      makeLegacyJob({
+        id: "job-isolated-system-event",
+        name: "Legacy isolated maintenance",
+        schedule: { kind: "at", atMs: 1_700_000_000_000 },
+        sessionTarget: "isolated",
+        payload: {
+          kind: "systemEvent",
+          text: "dispatch maintenance",
+        },
+      }),
+    );
+
+    expect(migrated.sessionTarget).toBe("isolated");
+    expect(migrated.delivery).toEqual({ mode: "announce" });
+    expect(migrated.payload).toEqual({
+      kind: "agentTurn",
+      message: "dispatch maintenance",
+    });
+  });
+
   it("adds anchorMs to legacy every schedules", async () => {
     const createdAtMs = 1_700_000_000_000;
     const migrated = await migrateLegacyJob(

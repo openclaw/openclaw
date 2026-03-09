@@ -1,6 +1,7 @@
 import type { ChatType } from "../channels/chat-type.js";
 import type { SafeBinProfileFixture } from "../infra/exec-safe-bin-policy.js";
 import type { AgentElevatedAllowFromConfig, SessionSendPolicyAction } from "./types.base.js";
+import type { SecretInput } from "./types.secrets.js";
 
 export type MediaUnderstandingScopeMatch = {
   channel?: string;
@@ -328,19 +329,21 @@ export type MemorySearchConfig = {
   /** Enable vector memory search (default: true). */
   enabled?: boolean;
   /** Sources to index and search (default: ["memory"]). */
-  sources?: Array<"memory" | "sessions">;
+  sources?: Array<"memory" | "sessions" | "tasks">;
   /** Extra paths to include in memory search (directories or .md files). */
   extraPaths?: string[];
   /** Experimental memory search settings. */
   experimental?: {
     /** Enable session transcript indexing (experimental, default: false). */
     sessionMemory?: boolean;
+    /** Enable task event indexing from memory/tasks/*.md (experimental, default: false). */
+    taskMemory?: boolean;
   };
   /** Embedding provider mode. */
   provider?: "openai" | "gemini" | "local" | "voyage" | "mistral" | "ollama";
   remote?: {
     baseUrl?: string;
-    apiKey?: string;
+    apiKey?: SecretInput;
     headers?: Record<string, string>;
     batch?: {
       /** Enable batch API for embedding indexing (OpenAI/Gemini; default: true). */
@@ -458,7 +461,7 @@ export type ToolsConfig = {
       /** Search provider ("brave", "perplexity", "grok", "gemini", or "kimi"). */
       provider?: "brave" | "perplexity" | "grok" | "gemini" | "kimi";
       /** Brave Search API key (optional; defaults to BRAVE_API_KEY env var). */
-      apiKey?: string;
+      apiKey?: SecretInput;
       /** Default search results count (1-10). */
       maxResults?: number;
       /** Timeout in seconds for search requests. */
@@ -467,17 +470,17 @@ export type ToolsConfig = {
       cacheTtlMinutes?: number;
       /** Perplexity-specific configuration (used when provider="perplexity"). */
       perplexity?: {
-        /** API key for Perplexity or OpenRouter (defaults to PERPLEXITY_API_KEY or OPENROUTER_API_KEY env var). */
-        apiKey?: string;
-        /** Base URL for API requests (defaults to OpenRouter: https://openrouter.ai/api/v1). */
+        /** API key for Perplexity (defaults to PERPLEXITY_API_KEY env var). */
+        apiKey?: SecretInput;
+        /** @deprecated Legacy Sonar/OpenRouter field. Ignored by Search API. */
         baseUrl?: string;
-        /** Model to use (defaults to "perplexity/sonar-pro"). */
+        /** @deprecated Legacy Sonar/OpenRouter field. Ignored by Search API. */
         model?: string;
       };
       /** Grok-specific configuration (used when provider="grok"). */
       grok?: {
         /** API key for xAI (defaults to XAI_API_KEY env var). */
-        apiKey?: string;
+        apiKey?: SecretInput;
         /** Model to use (defaults to "grok-4-1-fast"). */
         model?: string;
         /** Include inline citations in response text as markdown links (default: false). */
@@ -486,34 +489,39 @@ export type ToolsConfig = {
       /** Gemini-specific configuration (used when provider="gemini"). */
       gemini?: {
         /** Gemini API key (defaults to GEMINI_API_KEY env var). */
-        apiKey?: string;
+        apiKey?: SecretInput;
         /** Model to use for grounded search (defaults to "gemini-2.5-flash"). */
         model?: string;
       };
       /** Kimi-specific configuration (used when provider="kimi"). */
       kimi?: {
         /** Moonshot/Kimi API key (defaults to KIMI_API_KEY or MOONSHOT_API_KEY env var). */
-        apiKey?: string;
+        apiKey?: SecretInput;
         /** Base URL for API requests (defaults to "https://api.moonshot.ai/v1"). */
         baseUrl?: string;
         /** Model to use (defaults to "moonshot-v1-128k"). */
         model?: string;
       };
-      /** Brave LLM Context API configuration (web_search_context tool). */
+      /** Brave-specific configuration (used when provider="brave"). */
+      brave?: {
+        /** Brave Search mode: "web" (standard results) or "llm-context" (pre-extracted page content). Default: "web". */
+        mode?: "web" | "llm-context";
+      };
+      /** Brave LLM context extraction settings (used for grounded page-content responses). */
       context?: {
-        /** Enable web_search_context tool (default: true when provider=brave + key present). */
+        /** Enable the Brave context path when supported by the caller. */
         enabled?: boolean;
-        /** Default maximum total tokens for context response (1024-32768, default: 8192). */
+        /** Maximum total extracted tokens returned across all source pages. */
         maxTokens?: number;
-        /** Default maximum source URLs (1-50, default: 20). */
+        /** Maximum number of source URLs included in the context response. */
         maxUrls?: number;
-        /** Default maximum tokens per source URL (512-8192, default: 4096). */
+        /** Maximum extracted tokens per source URL. */
         maxTokensPerUrl?: number;
-        /** Relevance threshold mode (default: "balanced"). */
+        /** Relevance threshold mode for Brave context extraction. */
         thresholdMode?: "strict" | "balanced" | "lenient" | "disabled";
-        /** Timeout in seconds for context requests (inherits from search). */
+        /** Timeout in seconds for context extraction requests. */
         timeoutSeconds?: number;
-        /** Cache TTL in minutes for context results (inherits from search). */
+        /** Cache TTL in minutes for context extraction responses. */
         cacheTtlMinutes?: number;
       };
     };

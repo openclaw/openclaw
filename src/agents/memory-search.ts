@@ -5,9 +5,11 @@ import { resolveStateDir } from "../config/paths.js";
 import { clampInt, clampNumber, resolveUserPath } from "../utils.js";
 import { resolveAgentConfig } from "./agent-scope.js";
 
+type MemorySearchSource = "memory" | "sessions" | "tasks";
+
 export type ResolvedMemorySearchConfig = {
   enabled: boolean;
-  sources: Array<"memory" | "sessions">;
+  sources: MemorySearchSource[];
   extraPaths: string[];
   provider: "openai" | "local" | "gemini" | "voyage" | "mistral" | "ollama" | "auto";
   remote?: {
@@ -24,6 +26,7 @@ export type ResolvedMemorySearchConfig = {
   };
   experimental: {
     sessionMemory: boolean;
+    taskMemory: boolean;
   };
   fallback: "openai" | "gemini" | "local" | "voyage" | "mistral" | "ollama" | "none";
   model: string;
@@ -99,13 +102,14 @@ const DEFAULT_MMR_LAMBDA = 0.7;
 const DEFAULT_TEMPORAL_DECAY_ENABLED = true;
 const DEFAULT_TEMPORAL_DECAY_HALF_LIFE_DAYS = 14;
 const DEFAULT_CACHE_ENABLED = true;
-const DEFAULT_SOURCES: Array<"memory" | "sessions"> = ["memory"];
+const DEFAULT_SOURCES: MemorySearchSource[] = ["memory"];
 
 function normalizeSources(
-  sources: Array<"memory" | "sessions"> | undefined,
+  sources: MemorySearchSource[] | undefined,
   sessionMemoryEnabled: boolean,
-): Array<"memory" | "sessions"> {
-  const normalized = new Set<"memory" | "sessions">();
+  taskMemoryEnabled: boolean,
+): MemorySearchSource[] {
+  const normalized = new Set<MemorySearchSource>();
   const input = sources?.length ? sources : DEFAULT_SOURCES;
   for (const source of input) {
     if (source === "memory") {
@@ -113,6 +117,9 @@ function normalizeSources(
     }
     if (source === "sessions" && sessionMemoryEnabled) {
       normalized.add("sessions");
+    }
+    if (source === "tasks" && taskMemoryEnabled) {
+      normalized.add("tasks");
     }
   }
   if (normalized.size === 0) {
@@ -139,6 +146,8 @@ function mergeConfig(
   const enabled = overrides?.enabled ?? defaults?.enabled ?? true;
   const sessionMemory =
     overrides?.experimental?.sessionMemory ?? defaults?.experimental?.sessionMemory ?? false;
+  const taskMemory =
+    overrides?.experimental?.taskMemory ?? defaults?.experimental?.taskMemory ?? false;
   const provider = overrides?.provider ?? defaults?.provider ?? "auto";
   const defaultRemote = defaults?.remote;
   const overrideRemote = overrides?.remote;
@@ -196,7 +205,11 @@ function mergeConfig(
     modelPath: overrides?.local?.modelPath ?? defaults?.local?.modelPath,
     modelCacheDir: overrides?.local?.modelCacheDir ?? defaults?.local?.modelCacheDir,
   };
-  const sources = normalizeSources(overrides?.sources ?? defaults?.sources, sessionMemory);
+  const sources = normalizeSources(
+    overrides?.sources ?? defaults?.sources,
+    sessionMemory,
+    taskMemory,
+  );
   const rawPaths = [...(defaults?.extraPaths ?? []), ...(overrides?.extraPaths ?? [])]
     .map((value) => value.trim())
     .filter(Boolean);
@@ -308,6 +321,7 @@ function mergeConfig(
     remote,
     experimental: {
       sessionMemory,
+      taskMemory,
     },
     fallback,
     model,

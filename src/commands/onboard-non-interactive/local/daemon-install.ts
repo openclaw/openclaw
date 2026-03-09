@@ -4,6 +4,7 @@ import { isSystemdUserServiceAvailable } from "../../../daemon/systemd.js";
 import type { RuntimeEnv } from "../../../runtime.js";
 import { buildGatewayInstallPlan, gatewayInstallErrorHint } from "../../daemon-install-helpers.js";
 import { DEFAULT_GATEWAY_DAEMON_RUNTIME, isGatewayDaemonRuntime } from "../../daemon-runtime.js";
+import { resolveGatewayInstallToken } from "../../gateway-install-token.js";
 import type { OnboardOptions } from "../../onboard-types.js";
 import { ensureSystemdUserLingerNonInteractive } from "../../systemd-linger.js";
 
@@ -12,9 +13,8 @@ export async function installGatewayDaemonNonInteractive(params: {
   opts: OnboardOptions;
   runtime: RuntimeEnv;
   port: number;
-  gatewayToken?: string;
 }) {
-  const { opts, runtime, port, gatewayToken } = params;
+  const { opts, runtime, port } = params;
   if (!opts.installDaemon) {
     return;
   }
@@ -34,10 +34,27 @@ export async function installGatewayDaemonNonInteractive(params: {
   }
 
   const service = resolveGatewayService();
+  const tokenResolution = await resolveGatewayInstallToken({
+    config: params.nextConfig,
+    env: process.env,
+  });
+  for (const warning of tokenResolution.warnings) {
+    runtime.log(warning);
+  }
+  if (tokenResolution.unavailableReason) {
+    runtime.error(
+      [
+        "Gateway install blocked:",
+        tokenResolution.unavailableReason,
+        "Fix gateway auth config/token input and rerun onboarding.",
+      ].join(" "),
+    );
+    runtime.exit(1);
+    return;
+  }
   const { programArguments, workingDirectory, environment } = await buildGatewayInstallPlan({
     env: process.env,
     port,
-    token: gatewayToken,
     runtime: daemonRuntimeRaw,
     warn: (message) => runtime.log(message),
     config: params.nextConfig,

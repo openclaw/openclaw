@@ -278,6 +278,8 @@ export const ToolsWebSearchSchema = z
     perplexity: z
       .object({
         apiKey: SecretInputSchema.optional().register(sensitive),
+        // Legacy Sonar/OpenRouter compatibility fields.
+        // Setting either opts Perplexity back into the chat-completions path.
         baseUrl: z.string().optional(),
         model: z.string().optional(),
       })
@@ -303,6 +305,31 @@ export const ToolsWebSearchSchema = z
         apiKey: SecretInputSchema.optional().register(sensitive),
         baseUrl: z.string().optional(),
         model: z.string().optional(),
+      })
+      .strict()
+      .optional(),
+    brave: z
+      .object({
+        mode: z.union([z.literal("web"), z.literal("llm-context")]).optional(),
+      })
+      .strict()
+      .optional(),
+    context: z
+      .object({
+        enabled: z.boolean().optional(),
+        maxTokens: z.number().int().positive().optional(),
+        maxUrls: z.number().int().positive().optional(),
+        maxTokensPerUrl: z.number().int().positive().optional(),
+        thresholdMode: z
+          .union([
+            z.literal("strict"),
+            z.literal("balanced"),
+            z.literal("lenient"),
+            z.literal("disabled"),
+          ])
+          .optional(),
+        timeoutSeconds: z.number().int().positive().optional(),
+        cacheTtlMinutes: z.number().nonnegative().optional(),
       })
       .strict()
       .optional(),
@@ -605,11 +632,14 @@ export const AgentToolsSchema = z
 export const MemorySearchSchema = z
   .object({
     enabled: z.boolean().optional(),
-    sources: z.array(z.union([z.literal("memory"), z.literal("sessions")])).optional(),
+    sources: z
+      .array(z.union([z.literal("memory"), z.literal("sessions"), z.literal("tasks")]))
+      .optional(),
     extraPaths: z.array(z.string()).optional(),
     experimental: z
       .object({
         sessionMemory: z.boolean().optional(),
+        taskMemory: z.boolean().optional(),
       })
       .strict()
       .optional(),
@@ -739,6 +769,33 @@ export const MemorySearchSchema = z
   .strict()
   .optional();
 export { AgentModelSchema };
+
+const AgentRuntimeAcpSchema = z
+  .object({
+    agent: z.string().optional(),
+    backend: z.string().optional(),
+    mode: z.enum(["persistent", "oneshot"]).optional(),
+    cwd: z.string().optional(),
+  })
+  .strict()
+  .optional();
+
+const AgentRuntimeSchema = z
+  .union([
+    z
+      .object({
+        type: z.literal("embedded"),
+      })
+      .strict(),
+    z
+      .object({
+        type: z.literal("acp"),
+        acp: AgentRuntimeAcpSchema,
+      })
+      .strict(),
+  ])
+  .optional();
+
 export const AgentEntrySchema = z
   .object({
     id: z.string(),
@@ -774,6 +831,7 @@ export const AgentEntrySchema = z
     sandbox: AgentSandboxSchema,
     tools: AgentToolsSchema,
     workflowLane: WorkflowLaneSchema,
+    runtime: AgentRuntimeSchema,
   })
   .strict();
 

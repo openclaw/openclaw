@@ -11,10 +11,13 @@ const resolveReceiveIdTypeMock = vi.hoisted(() => vi.fn());
 const loadWebMediaMock = vi.hoisted(() => vi.fn());
 
 const fileCreateMock = vi.hoisted(() => vi.fn());
+const imageCreateMock = vi.hoisted(() => vi.fn());
 const imageGetMock = vi.hoisted(() => vi.fn());
 const messageCreateMock = vi.hoisted(() => vi.fn());
 const messageResourceGetMock = vi.hoisted(() => vi.fn());
 const messageReplyMock = vi.hoisted(() => vi.fn());
+
+const FEISHU_MEDIA_HTTP_TIMEOUT_MS = 120_000;
 
 vi.mock("./client.js", () => ({
   createFeishuClient: createFeishuClientMock,
@@ -56,6 +59,14 @@ function expectPathIsolatedToTmpRoot(pathValue: string, key: string): void {
 
 const TEST_CFG = {} as OpenClawConfig;
 
+function expectMediaTimeoutClientConfigured(): void {
+  expect(createFeishuClientMock).toHaveBeenCalledWith(
+    expect.objectContaining({
+      httpTimeoutMs: FEISHU_MEDIA_HTTP_TIMEOUT_MS,
+    }),
+  );
+}
+
 describe("sendMediaFeishu msg_type routing", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -78,6 +89,7 @@ describe("sendMediaFeishu msg_type routing", () => {
           create: fileCreateMock,
         },
         image: {
+          create: imageCreateMock,
           get: imageGetMock,
         },
         message: {
@@ -93,6 +105,10 @@ describe("sendMediaFeishu msg_type routing", () => {
     fileCreateMock.mockResolvedValue({
       code: 0,
       data: { file_key: "file_key_1" },
+    });
+    imageCreateMock.mockResolvedValue({
+      code: 0,
+      data: { image_key: "image_key_1" },
     });
 
     messageCreateMock.mockResolvedValue({
@@ -116,7 +132,7 @@ describe("sendMediaFeishu msg_type routing", () => {
     messageResourceGetMock.mockResolvedValue(Buffer.from("resource-bytes"));
   });
 
-  it("uses msg_type=file for mp4", async () => {
+  it("uses msg_type=media for mp4 video", async () => {
     await sendMediaFeishu({
       cfg: TEST_CFG,
       to: "user:ou_target",
@@ -132,7 +148,7 @@ describe("sendMediaFeishu msg_type routing", () => {
 
     expect(messageCreateMock).toHaveBeenCalledWith(
       expect.objectContaining({
-        data: expect.objectContaining({ msg_type: "file" }),
+        data: expect.objectContaining({ msg_type: "media" }),
       }),
     );
   });
@@ -179,7 +195,23 @@ describe("sendMediaFeishu msg_type routing", () => {
     );
   });
 
-  it("uses msg_type=file when replying with mp4", async () => {
+  it("configures the media client timeout for image uploads", async () => {
+    await sendMediaFeishu({
+      cfg: {} as any,
+      to: "user:ou_target",
+      mediaBuffer: Buffer.from("image"),
+      fileName: "photo.png",
+    });
+
+    expectMediaTimeoutClientConfigured();
+    expect(messageCreateMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ msg_type: "image" }),
+      }),
+    );
+  });
+
+  it("uses msg_type=media when replying with mp4", async () => {
     await sendMediaFeishu({
       cfg: TEST_CFG,
       to: "user:ou_target",
@@ -191,7 +223,7 @@ describe("sendMediaFeishu msg_type routing", () => {
     expect(messageReplyMock).toHaveBeenCalledWith(
       expect.objectContaining({
         path: { message_id: "om_parent" },
-        data: expect.objectContaining({ msg_type: "file" }),
+        data: expect.objectContaining({ msg_type: "media" }),
       }),
     );
 
@@ -211,7 +243,10 @@ describe("sendMediaFeishu msg_type routing", () => {
     expect(messageReplyMock).toHaveBeenCalledWith(
       expect.objectContaining({
         path: { message_id: "om_parent" },
-        data: expect.objectContaining({ msg_type: "file", reply_in_thread: true }),
+        data: expect.objectContaining({
+          msg_type: "media",
+          reply_in_thread: true,
+        }),
       }),
     );
   });
@@ -291,6 +326,12 @@ describe("sendMediaFeishu msg_type routing", () => {
       imageKey,
     });
 
+    expect(imageGetMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        path: { image_key: imageKey },
+      }),
+    );
+    expectMediaTimeoutClientConfigured();
     expect(result.buffer).toEqual(Buffer.from("image-data"));
     expect(capturedPath).toBeDefined();
     expectPathIsolatedToTmpRoot(capturedPath as string, imageKey);
@@ -476,10 +517,13 @@ describe("downloadMessageResourceFeishu", () => {
       type: "file",
     });
 
-    expect(messageResourceGetMock).toHaveBeenCalledWith({
-      path: { message_id: "om_audio_msg", file_key: "file_key_audio" },
-      params: { type: "file" },
-    });
+    expect(messageResourceGetMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        path: { message_id: "om_audio_msg", file_key: "file_key_audio" },
+        params: { type: "file" },
+      }),
+    );
+    expectMediaTimeoutClientConfigured();
     expect(result.buffer).toBeInstanceOf(Buffer);
   });
 
@@ -493,10 +537,13 @@ describe("downloadMessageResourceFeishu", () => {
       type: "image",
     });
 
-    expect(messageResourceGetMock).toHaveBeenCalledWith({
-      path: { message_id: "om_img_msg", file_key: "img_key_1" },
-      params: { type: "image" },
-    });
+    expect(messageResourceGetMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        path: { message_id: "om_img_msg", file_key: "img_key_1" },
+        params: { type: "image" },
+      }),
+    );
+    expectMediaTimeoutClientConfigured();
     expect(result.buffer).toBeInstanceOf(Buffer);
   });
 });

@@ -486,7 +486,7 @@ export async function ensureLoaded(
       mutated = true;
     }
 
-    const payloadKind =
+    let payloadKind =
       payloadRecord && typeof payloadRecord.kind === "string" ? payloadRecord.kind : "";
     const normalizedSessionTarget =
       typeof raw.sessionTarget === "string" ? raw.sessionTarget.trim().toLowerCase() : "";
@@ -505,6 +505,16 @@ export async function ensureLoaded(
 
     const sessionTarget =
       typeof raw.sessionTarget === "string" ? raw.sessionTarget.trim().toLowerCase() : "";
+    if (sessionTarget === "isolated" && payloadRecord && payloadKind === "systemEvent") {
+      const text = typeof payloadRecord.text === "string" ? payloadRecord.text.trim() : "";
+      if (text) {
+        payloadRecord.kind = "agentTurn";
+        payloadRecord.message = text;
+        delete payloadRecord.text;
+        payloadKind = "agentTurn";
+        mutated = true;
+      }
+    }
     const isIsolatedAgentTurn =
       sessionTarget === "isolated" || (sessionTarget === "" && payloadKind === "agentTurn");
     const hasDelivery = delivery && typeof delivery === "object" && !Array.isArray(delivery);

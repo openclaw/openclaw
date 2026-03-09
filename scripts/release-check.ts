@@ -8,23 +8,116 @@ import { sparkleBuildFloorsFromShortVersion, type SparkleBuildFloors } from "./s
 
 type PackFile = { path: string };
 type PackResult = { files?: PackFile[] };
+type PackageJson = {
+  name?: string;
+  version?: string;
+  dependencies?: Record<string, string>;
+  optionalDependencies?: Record<string, string>;
+  openclaw?: {
+    install?: {
+      npmSpec?: string;
+    };
+  };
+};
 
 const requiredPathGroups = [
   ["dist/index.js", "dist/index.mjs"],
   ["dist/entry.js", "dist/entry.mjs"],
   "dist/plugin-sdk/index.js",
   "dist/plugin-sdk/index.d.ts",
+  "dist/plugin-sdk/core.js",
+  "dist/plugin-sdk/core.d.ts",
+  "dist/plugin-sdk/root-alias.cjs",
+  "dist/plugin-sdk/compat.js",
+  "dist/plugin-sdk/compat.d.ts",
+  "dist/plugin-sdk/telegram.js",
+  "dist/plugin-sdk/telegram.d.ts",
+  "dist/plugin-sdk/discord.js",
+  "dist/plugin-sdk/discord.d.ts",
+  "dist/plugin-sdk/slack.js",
+  "dist/plugin-sdk/slack.d.ts",
+  "dist/plugin-sdk/signal.js",
+  "dist/plugin-sdk/signal.d.ts",
+  "dist/plugin-sdk/imessage.js",
+  "dist/plugin-sdk/imessage.d.ts",
+  "dist/plugin-sdk/whatsapp.js",
+  "dist/plugin-sdk/whatsapp.d.ts",
+  "dist/plugin-sdk/line.js",
+  "dist/plugin-sdk/line.d.ts",
+  "dist/plugin-sdk/msteams.js",
+  "dist/plugin-sdk/msteams.d.ts",
+  "dist/plugin-sdk/acpx.js",
+  "dist/plugin-sdk/acpx.d.ts",
+  "dist/plugin-sdk/bluebubbles.js",
+  "dist/plugin-sdk/bluebubbles.d.ts",
+  "dist/plugin-sdk/copilot-proxy.js",
+  "dist/plugin-sdk/copilot-proxy.d.ts",
+  "dist/plugin-sdk/device-pair.js",
+  "dist/plugin-sdk/device-pair.d.ts",
+  "dist/plugin-sdk/diagnostics-otel.js",
+  "dist/plugin-sdk/diagnostics-otel.d.ts",
+  "dist/plugin-sdk/diffs.js",
+  "dist/plugin-sdk/diffs.d.ts",
+  "dist/plugin-sdk/feishu.js",
+  "dist/plugin-sdk/feishu.d.ts",
+  "dist/plugin-sdk/google-gemini-cli-auth.js",
+  "dist/plugin-sdk/google-gemini-cli-auth.d.ts",
+  "dist/plugin-sdk/googlechat.js",
+  "dist/plugin-sdk/googlechat.d.ts",
+  "dist/plugin-sdk/irc.js",
+  "dist/plugin-sdk/irc.d.ts",
+  "dist/plugin-sdk/llm-task.js",
+  "dist/plugin-sdk/llm-task.d.ts",
+  "dist/plugin-sdk/lobster.js",
+  "dist/plugin-sdk/lobster.d.ts",
+  "dist/plugin-sdk/matrix.js",
+  "dist/plugin-sdk/matrix.d.ts",
+  "dist/plugin-sdk/mattermost.js",
+  "dist/plugin-sdk/mattermost.d.ts",
+  "dist/plugin-sdk/memory-core.js",
+  "dist/plugin-sdk/memory-core.d.ts",
+  "dist/plugin-sdk/memory-lancedb.js",
+  "dist/plugin-sdk/memory-lancedb.d.ts",
+  "dist/plugin-sdk/minimax-portal-auth.js",
+  "dist/plugin-sdk/minimax-portal-auth.d.ts",
+  "dist/plugin-sdk/nextcloud-talk.js",
+  "dist/plugin-sdk/nextcloud-talk.d.ts",
+  "dist/plugin-sdk/nostr.js",
+  "dist/plugin-sdk/nostr.d.ts",
+  "dist/plugin-sdk/open-prose.js",
+  "dist/plugin-sdk/open-prose.d.ts",
+  "dist/plugin-sdk/phone-control.js",
+  "dist/plugin-sdk/phone-control.d.ts",
+  "dist/plugin-sdk/qwen-portal-auth.js",
+  "dist/plugin-sdk/qwen-portal-auth.d.ts",
+  "dist/plugin-sdk/synology-chat.js",
+  "dist/plugin-sdk/synology-chat.d.ts",
+  "dist/plugin-sdk/talk-voice.js",
+  "dist/plugin-sdk/talk-voice.d.ts",
+  "dist/plugin-sdk/test-utils.js",
+  "dist/plugin-sdk/test-utils.d.ts",
+  "dist/plugin-sdk/thread-ownership.js",
+  "dist/plugin-sdk/thread-ownership.d.ts",
+  "dist/plugin-sdk/tlon.js",
+  "dist/plugin-sdk/tlon.d.ts",
+  "dist/plugin-sdk/twitch.js",
+  "dist/plugin-sdk/twitch.d.ts",
+  "dist/plugin-sdk/voice-call.js",
+  "dist/plugin-sdk/voice-call.d.ts",
+  "dist/plugin-sdk/zalo.js",
+  "dist/plugin-sdk/zalo.d.ts",
+  "dist/plugin-sdk/zalouser.js",
+  "dist/plugin-sdk/zalouser.d.ts",
+  "dist/plugin-sdk/account-id.js",
+  "dist/plugin-sdk/account-id.d.ts",
+  "dist/plugin-sdk/keyed-async-queue.js",
+  "dist/plugin-sdk/keyed-async-queue.d.ts",
   "dist/build-info.json",
 ];
 const forbiddenPrefixes = ["dist/OpenClaw.app/"];
 const appcastPath = resolve("appcast.xml");
 const laneBuildMin = 1_000_000_000;
 const laneFloorAdoptionDateKey = 20260227;
-
-type PackageJson = {
-  name?: string;
-  version?: string;
-};
 
 function normalizePluginSyncVersion(version: string): string {
   const normalized = version.trim().replace(/^v/, "");
@@ -33,6 +126,92 @@ function normalizePluginSyncVersion(version: string): string {
     return base;
   }
   return normalized.replace(/[-+].*$/, "");
+}
+
+const ALLOWLISTED_BUNDLED_EXTENSION_ROOT_DEP_GAPS: Record<string, string[]> = {
+  googlechat: ["google-auth-library"],
+  matrix: ["@matrix-org/matrix-sdk-crypto-nodejs", "@vector-im/matrix-bot-sdk", "music-metadata"],
+  msteams: ["@microsoft/agents-hosting"],
+  nostr: ["nostr-tools"],
+  tlon: ["@tloncorp/api", "@tloncorp/tlon-skill", "@urbit/aura"],
+  zalouser: ["zca-js"],
+};
+
+export function collectBundledExtensionRootDependencyGapErrors(params: {
+  rootPackage: PackageJson;
+  extensions: Array<{ id: string; packageJson: PackageJson }>;
+}): string[] {
+  const rootDeps = {
+    ...params.rootPackage.dependencies,
+    ...params.rootPackage.optionalDependencies,
+  };
+  const errors: string[] = [];
+
+  for (const extension of params.extensions) {
+    if (!extension.packageJson.openclaw?.install?.npmSpec) {
+      continue;
+    }
+
+    const missing = Object.keys(extension.packageJson.dependencies ?? {})
+      .filter((dep) => dep !== "openclaw" && !rootDeps[dep])
+      .toSorted();
+    const allowlisted = [
+      ...(ALLOWLISTED_BUNDLED_EXTENSION_ROOT_DEP_GAPS[extension.id] ?? []),
+    ].toSorted();
+    if (missing.join("\n") !== allowlisted.join("\n")) {
+      const unexpected = missing.filter((dep) => !allowlisted.includes(dep));
+      const resolved = allowlisted.filter((dep) => !missing.includes(dep));
+      const parts = [
+        `bundled extension '${extension.id}' root dependency mirror drift`,
+        `missing in root package: ${missing.length > 0 ? missing.join(", ") : "(none)"}`,
+      ];
+      if (unexpected.length > 0) {
+        parts.push(`new gaps: ${unexpected.join(", ")}`);
+      }
+      if (resolved.length > 0) {
+        parts.push(`remove stale allowlist entries: ${resolved.join(", ")}`);
+      }
+      errors.push(parts.join(" | "));
+    }
+  }
+
+  return errors;
+}
+
+function collectBundledExtensions(): Array<{ id: string; packageJson: PackageJson }> {
+  const extensionsDir = resolve("extensions");
+  const entries = readdirSync(extensionsDir, { withFileTypes: true }).filter((entry) =>
+    entry.isDirectory(),
+  );
+
+  return entries.flatMap((entry) => {
+    const packagePath = join(extensionsDir, entry.name, "package.json");
+    try {
+      return [
+        {
+          id: entry.name,
+          packageJson: JSON.parse(readFileSync(packagePath, "utf8")) as PackageJson,
+        },
+      ];
+    } catch {
+      return [];
+    }
+  });
+}
+
+function checkBundledExtensionRootDependencyMirrors() {
+  const rootPackage = JSON.parse(readFileSync(resolve("package.json"), "utf8")) as PackageJson;
+  const errors = collectBundledExtensionRootDependencyGapErrors({
+    rootPackage,
+    extensions: collectBundledExtensions(),
+  });
+  if (errors.length > 0) {
+    console.error("release-check: bundled extension root dependency mirror validation failed:");
+    for (const error of errors) {
+      console.error(`  - ${error}`);
+    }
+    process.exit(1);
+  }
 }
 
 function runPackDry(): PackResult[] {
@@ -234,6 +413,7 @@ function main() {
   checkPluginVersions();
   checkAppcastSparkleVersions();
   checkPluginSdkExports();
+  checkBundledExtensionRootDependencyMirrors();
 
   const results = runPackDry();
   const files = results.flatMap((entry) => entry.files ?? []);

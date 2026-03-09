@@ -1,6 +1,7 @@
 import { readErrorName } from "../infra/errors.js";
 import {
   classifyFailoverReason,
+  classifyFailoverReasonFromHttpStatus,
   isAuthPermanentErrorMessage,
   isTimeoutErrorMessage,
   type FailoverReason,
@@ -85,6 +86,8 @@ export function resolveFailoverStatus(reason: FailoverReason): number | undefine
       return 402;
     case "rate_limit":
       return 429;
+    case "overloaded":
+      return 503;
     case "auth":
       return 401;
     case "auth_permanent":
@@ -228,30 +231,9 @@ export function resolveFailoverReasonFromError(err: unknown): FailoverReason | n
   const message = getErrorMessage(err);
   const code = getErrorCode(err);
   const status = getStatusCode(err);
-
-  if (status === 402) {
-    return "billing";
-  }
-  if (status === 429) {
-    return "rate_limit";
-  }
-  if (status === 401 || status === 403) {
-    if (message && isAuthPermanentErrorMessage(message)) {
-      return "auth_permanent";
-    }
-    return "auth";
-  }
-  if (status === 408) {
-    return "timeout";
-  }
-  if (status === 502 || status === 503 || status === 504) {
-    return "timeout";
-  }
-  if (status === 529) {
-    return "rate_limit";
-  }
-  if (status === 400) {
-    return "format";
+  const statusReason = classifyFailoverReasonFromHttpStatus(status, message);
+  if (statusReason) {
+    return statusReason;
   }
 
   const upperCode = (code ?? "").toUpperCase();
@@ -310,7 +292,6 @@ export function resolveFailoverReasonFromError(err: unknown): FailoverReason | n
   if (isTimeoutError(err)) {
     return "timeout";
   }
-
   if (!message) {
     return null;
   }
