@@ -86,6 +86,15 @@ export function handleMessageUpdate(
 
   ctx.noteLastAssistant(msg);
 
+  // If a cross-turn separator is pending, mark it for later use.
+  // We can't prepend it to deltaBuffer here because .trim() would remove it.
+  // Instead, we'll add it when calculating the cleaned text for emission.
+  // This ensures proper separation between tool-call cycles when block
+  // streaming is enabled (issue #35308).
+  // IMPORTANT: Don't clear the flag yet! We only clear it after we've
+  // actually emitted text, to handle cases where the first event is thinking_*.
+  const needsCrossTurnSeparator = ctx.state.pendingCrossTurnSeparator;
+
   const assistantEvent = evt.assistantMessageEvent;
   const assistantRecord =
     assistantEvent && typeof assistantEvent === "object"
@@ -192,11 +201,21 @@ export function handleMessageUpdate(
     }
     const parsedDelta = visibleDelta ? ctx.consumePartialReplyDirectives(visibleDelta) : null;
     const parsedFull = parseReplyDirectives(stripTrailingDirective(next));
-    const cleanedText = parsedFull.text;
+    let cleanedText = parsedFull.text;
     const mediaUrls = parsedDelta?.mediaUrls;
     const hasMedia = Boolean(mediaUrls && mediaUrls.length > 0);
     const hasAudio = Boolean(parsedDelta?.audioAsVoice);
     const previousCleaned = ctx.state.lastStreamedAssistantCleaned ?? "";
+
+    // If this is the first chunk after a cross-turn boundary, prepend the separator.
+    // We need to add it to cleanedText so both data.text and data.delta include it.
+    // IMPORTANT: Don't modify previousCleaned here - we need the actual delta content
+    // including the separator, not an empty baseline.
+    if (needsCrossTurnSeparator && !previousCleaned && cleanedText) {
+      cleanedText = "\n\n" + cleanedText;
+      // Mark that we've consumed the separator
+      ctx.state.pendingCrossTurnSeparator = false;
+    }
 
     let shouldEmit = false;
     let deltaText = "";
@@ -301,20 +320,30 @@ export function handleMessageEnd(
   }
 
   if (!ctx.state.emittedAssistantUpdate && (cleanedText || hasMedia)) {
+    // If this is a non-streamed turn and a cross-turn separator is pending,
+    // prepend it to the text. This handles turns that emit only via this
+    // fallback path (no text_* events), which would otherwise never consume
+    // the separator in handleMessageUpdate.
+    let finalText = cleanedText;
+    if (ctx.state.pendingCrossTurnSeparator && finalText) {
+      finalText = "\n\n" + finalText;
+      ctx.state.pendingCrossTurnSeparator = false;
+    }
+
     emitAgentEvent({
       runId: ctx.params.runId,
       stream: "assistant",
       data: {
-        text: cleanedText,
-        delta: cleanedText,
+        text: finalText,
+        delta: finalText,
         mediaUrls: hasMedia ? mediaUrls : undefined,
       },
     });
     void ctx.params.onAgentEvent?.({
       stream: "assistant",
       data: {
-        text: cleanedText,
-        delta: cleanedText,
+        text: finalText,
+        delta: finalText,
         mediaUrls: hasMedia ? mediaUrls : undefined,
       },
     });
@@ -422,6 +451,19 @@ export function handleMessageEnd(
     emitSplitResultAsBlockReply(ctx.consumeReplyDirectives("", { final: true }));
   }
 
+  // When block streaming is active and this turn emitted visible assistant text,
+  // mark that a cross-turn separator should be prepended to the next chunk.
+  // This prevents text from separate tool-call cycles from being concatenated
+  // together in the streaming UI (issue #35308).
+  //
+  // We only check emittedAssistantUpdate because:
+  // - deltaBuffer may contain hidden/trimmed content (e.g., <thinking> tags, whitespace)
+  // - emittedAssistantUpdate is only set when visible text actually reaches the client
+  // - This ensures separator is armed only when real content was emitted, not when
+  //   deltaBuffer has tag-only or whitespace-only chunks that get stripped/trimmed
+  const thisTurnEmittedVisibleContent = !!ctx.blockChunking && ctx.state.emittedAssistantUpdate;
+  const shouldInsertCrossTurnSeparator = thisTurnEmittedVisibleContent;
+
   ctx.state.deltaBuffer = "";
   ctx.state.blockBuffer = "";
   ctx.blockChunker?.reset();
@@ -431,4 +473,7 @@ export function handleMessageEnd(
   ctx.state.lastStreamedAssistant = undefined;
   ctx.state.lastStreamedAssistantCleaned = undefined;
   ctx.state.reasoningStreamOpen = false;
+  // Use ||= to preserve the flag across duplicate message_end events.
+  // Once set to true by the first message_end, duplicate events won't reset it.
+  ctx.state.pendingCrossTurnSeparator ||= shouldInsertCrossTurnSeparator;
 }
