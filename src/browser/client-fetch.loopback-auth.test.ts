@@ -135,6 +135,30 @@ describe("fetchBrowserJson loopback auth", () => {
     }
     expect(thrown.message).toContain("Chrome CDP handshake timeout");
     expect(thrown.message).toContain("Do NOT retry the browser tool");
+    expect(thrown.message).toContain("Restart the OpenClaw gateway");
+    expect(thrown.message).not.toContain("Can't reach the OpenClaw browser control service");
+  });
+
+  it("avoids restart-gateway guidance for attachOnly profile timeout", async () => {
+    mocks.loadConfig.mockReturnValue({
+      browser: {
+        attachOnly: true,
+      },
+    });
+    mocks.dispatch.mockRejectedValueOnce(new Error("timed out"));
+
+    const thrown = await fetchBrowserJson<{ ok: boolean }>("/tabs?profile=openclaw").catch(
+      (err: unknown) => err,
+    );
+
+    expect(thrown).toBeInstanceOf(Error);
+    if (!(thrown instanceof Error)) {
+      throw new Error(`Expected Error, got ${String(thrown)}`);
+    }
+    expect(thrown.message).toContain("Browser CDP is not reachable for attachOnly profiles");
+    expect(thrown.message).toContain("Restarting the OpenClaw gateway will not help");
+    expect(thrown.message).not.toContain("Restart the OpenClaw gateway");
+    expect(thrown.message).toContain("Do NOT retry the browser tool");
     expect(thrown.message).not.toContain("Can't reach the OpenClaw browser control service");
   });
 
