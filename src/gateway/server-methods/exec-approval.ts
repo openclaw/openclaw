@@ -15,6 +15,15 @@ import {
 } from "../protocol/index.js";
 import type { GatewayRequestHandlers } from "./types.js";
 
+// Max character budget for each potentially-large field in the broadcast payload.
+// Oversized fields are omitted (set to null) and a companion *Truncated flag is
+// set so GUI clients can show a "command too long to display" placeholder instead
+// of silently missing the approval event.  The full data is always kept in the
+// manager for audit/forwarder use.
+const MAX_BROADCAST_COMMAND_CHARS = 4096;
+const MAX_BROADCAST_ARGV_CHARS = 4096; // total chars across all argv elements
+const MAX_BROADCAST_PLAN_CHARS = 8192; // JSON-serialised plan
+
 export function createExecApprovalHandlers(
   manager: ExecApprovalManager,
   opts?: { forwarder?: ExecApprovalForwarder },
@@ -168,11 +177,41 @@ export function createExecApprovalHandlers(
         );
         return;
       }
+      // Truncate or omit large fields in the broadcast payload so the WebSocket
+      // frame stays under the `dropIfSlow` backpressure threshold.
+      // Each oversized field is replaced with null and a *Truncated companion
+      // flag is set; GUI clients should show a placeholder when they see it.
+      const broadcastCommand = record.request.command ?? "";
+      const commandTruncated = broadcastCommand.length > MAX_BROADCAST_COMMAND_CHARS;
+
+      const broadcastArgv = record.request.commandArgv;
+      const argvCharCount = broadcastArgv?.reduce((n, s) => n + s.length, 0) ?? 0;
+      const argvTruncated = argvCharCount > MAX_BROADCAST_ARGV_CHARS;
+
+      const broadcastPlan = record.request.systemRunPlanV2;
+      const planTruncated =
+        broadcastPlan !== undefined &&
+        JSON.stringify(broadcastPlan).length > MAX_BROADCAST_PLAN_CHARS;
+
+      const anyTruncated = commandTruncated || argvTruncated || planTruncated;
+      const broadcastRequest = anyTruncated
+        ? {
+            ...record.request,
+            ...(commandTruncated
+              ? {
+                  command: broadcastCommand.slice(0, MAX_BROADCAST_COMMAND_CHARS),
+                  commandTruncated: true,
+                }
+              : {}),
+            ...(argvTruncated ? { commandArgv: null, commandArgvTruncated: true } : {}),
+            ...(planTruncated ? { systemRunPlanV2: null, systemRunPlanV2Truncated: true } : {}),
+          }
+        : record.request;
       context.broadcast(
         "exec.approval.requested",
         {
           id: record.id,
-          request: record.request,
+          request: broadcastRequest,
           createdAtMs: record.createdAtMs,
           expiresAtMs: record.expiresAtMs,
         },
@@ -275,21 +314,28 @@ export function createExecApprovalHandlers(
         respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "invalid decision"));
         return;
       }
-      const snapshot = manager.getSnapshot(p.id);
+      // Support 8-char slugs shown in notifications (e.g. "/approve 7083ec31 allow-once").
+      // resolveIdByPrefix does an exact match first, then a prefix scan for unambiguous slugs.
+      const resolvedId = manager.resolveIdByPrefix(p.id);
+      if (!resolvedId) {
+        respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "unknown approval id"));
+        return;
+      }
+      const snapshot = manager.getSnapshot(resolvedId);
       const resolvedBy = client?.connect?.client?.displayName ?? client?.connect?.client?.id;
-      const ok = manager.resolve(p.id, decision, resolvedBy ?? null);
+      const ok = manager.resolve(resolvedId, decision, resolvedBy ?? null);
       if (!ok) {
         respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "unknown approval id"));
         return;
       }
       context.broadcast(
         "exec.approval.resolved",
-        { id: p.id, decision, resolvedBy, ts: Date.now(), request: snapshot?.request },
+        { id: resolvedId, decision, resolvedBy, ts: Date.now(), request: snapshot?.request },
         { dropIfSlow: true },
       );
       void opts?.forwarder
         ?.handleResolved({
-          id: p.id,
+          id: resolvedId,
           decision,
           resolvedBy,
           ts: Date.now(),

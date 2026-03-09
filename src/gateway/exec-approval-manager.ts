@@ -170,4 +170,38 @@ export class ExecApprovalManager {
     const entry = this.pending.get(recordId);
     return entry?.promise ?? null;
   }
+
+  /**
+   * Resolve a full ID or a short slug/prefix to the canonical pending ID.
+   * Exact match is tried first (O(1)). Falls back to a prefix scan so that
+   * 8-char slugs shown in "/approve <slug>" notifications work correctly.
+   * Returns the full ID when exactly one match is found, null otherwise
+   * (not found, or ambiguous when multiple pending entries share the prefix).
+   */
+  resolveIdByPrefix(idOrPrefix: string): string | null {
+    const trimmed = idOrPrefix.trim();
+    if (!trimmed) {
+      return null;
+    }
+    // Fast path: exact match (full UUID or explicitly-provided ID)
+    if (this.pending.has(trimmed)) {
+      return trimmed;
+    }
+    // Prefix scan: supports short slugs (e.g. first 8 chars of UUID).
+    // Skip entries that are already resolved but still in the map during the
+    // RESOLVED_ENTRY_GRACE_MS window — they are no longer actionable and must
+    // not be counted, otherwise a new pending approval with the same slug
+    // prefix would look ambiguous during that grace period.
+    const matches: string[] = [];
+    for (const [key, entry] of this.pending.entries()) {
+      if (entry.record.resolvedAtMs !== undefined) {
+        continue;
+      }
+      if (key.startsWith(trimmed)) {
+        matches.push(key);
+      }
+    }
+    // Only resolve when unambiguous
+    return matches.length === 1 ? matches[0] : null;
+  }
 }
