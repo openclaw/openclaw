@@ -433,14 +433,15 @@
       "tough-cookie": "4.1.3"
     },
     "onlyBuiltDependencies": [
+      "@discordjs/opus",
       "@lydell/node-pty",
       "@matrix-org/matrix-sdk-crypto-nodejs",
       "@napi-rs/canvas",
       "@tloncorp/api",
+      "@tloncorp/tlon-skill",
       "@whiskeysockets/baileys",
       "authenticate-pam",
       "esbuild",
-      "koffi",
       "node-llama-cpp",
       "protobufjs",
       "sharp"
