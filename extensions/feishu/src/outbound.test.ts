@@ -223,6 +223,28 @@ describe("feishuOutbound.sendText local-image auto-convert", () => {
       nativeThreadId: "omt_thread_3",
     });
   });
+
+  it("records native thread aliases for explicit threadId sends", async () => {
+    sendMessageFeishuMock.mockResolvedValue({
+      messageId: "text_msg",
+      nativeThreadId: "omt_thread_explicit",
+    });
+
+    await sendText({
+      cfg: {} as any,
+      to: "chat:oc_thread_chat",
+      threadId: "om_root_explicit",
+      text: "hello",
+      accountId: "main",
+    } as any);
+
+    expect(recordFeishuNativeThreadBindingMock).toHaveBeenCalledWith({
+      accountId: "main",
+      chatId: "oc_thread_chat",
+      rootMessageId: "om_root_explicit",
+      nativeThreadId: "omt_thread_explicit",
+    });
+  });
 });
 
 describe("feishuOutbound.sendText replyToId forwarding", () => {
@@ -405,5 +427,28 @@ describe("feishuOutbound.sendMedia renderMode", () => {
         accountId: "main",
       }),
     );
+  });
+
+  it("records native thread aliases for explicit threadId media sends", async () => {
+    sendMediaFeishuMock.mockResolvedValue({
+      messageId: "media_msg",
+      nativeThreadId: "omt_thread_media",
+    });
+
+    await feishuOutbound.sendMedia?.({
+      cfg: {} as any,
+      to: "chat:oc_thread_chat",
+      text: "",
+      mediaUrl: "https://example.com/image.png",
+      threadId: "om_root_media",
+      accountId: "main",
+    });
+
+    expect(recordFeishuNativeThreadBindingMock).toHaveBeenCalledWith({
+      accountId: "main",
+      chatId: "oc_thread_chat",
+      rootMessageId: "om_root_media",
+      nativeThreadId: "omt_thread_media",
+    });
   });
 });

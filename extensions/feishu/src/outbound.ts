@@ -83,12 +83,15 @@ function resolveFeishuBoundThreadAliasTarget(params: {
   threadId?: string | number | null;
 }): { chatId: string; rootMessageId: string } | null {
   const parsed = parseFeishuConversationTarget(params.to);
-  if (!parsed.chatId || !parsed.rootMessageId || params.threadId != null) {
+  const explicitThreadId =
+    params.threadId != null ? String(params.threadId).trim() || undefined : undefined;
+  const rootMessageId = explicitThreadId ?? parsed.rootMessageId;
+  if (!parsed.chatId || !rootMessageId) {
     return null;
   }
   return {
     chatId: parsed.chatId,
-    rootMessageId: parsed.rootMessageId,
+    rootMessageId,
   };
 }
 
