@@ -274,14 +274,18 @@ export function createStreamingThinkingFilter(): StreamingThinkingFilter {
     const wasInFence = insideCodeFence;
     processCodeFences(input);
 
-    // If we were already inside a code fence, pass through unfiltered.
-    if (wasInFence && !insideBlock) {
+    // If we are inside a code fence (entered before or during this chunk),
+    // pass through unfiltered. This handles fence openers that are split
+    // across chunks (e.g. "```html" without trailing newline in chunk 1,
+    // then "\n<think>literal</think>" in chunk 2 — the newline completes
+    // the fence opener line in processCodeFences).
+    if ((wasInFence || insideCodeFence) && !insideBlock) {
       return input;
     }
 
     // Check if this chunk contains inline fence regions that need protection.
     // This handles the case where a fence opens and closes within a single chunk.
-    if (!wasInFence) {
+    if (!wasInFence && !insideCodeFence) {
       const protected_ = protectInlineFencedRegions(input);
       if (protected_ !== null) {
         return protected_;

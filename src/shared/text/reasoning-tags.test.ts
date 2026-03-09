@@ -371,6 +371,17 @@ describe("createStreamingThinkingFilter", () => {
       expect(f.filter("<think>hidden</think>visible")).toBe("visible");
     });
 
+    it("handles fence opener split across chunks (no trailing newline)", () => {
+      const f = createStreamingThinkingFilter();
+      // Fence opener arrives WITHOUT trailing newline — stays in lineBuffer
+      expect(f.filter("```html")).toBe("```html");
+      // Newline arrives in next chunk, completing the fence opener line.
+      // Think tags inside the fence must be preserved.
+      expect(f.filter("\n<think>literal</think>\nmore code")).toBe(
+        "\n<think>literal</think>\nmore code",
+      );
+    });
+
     it("resets code fence state on reset()", () => {
       const f = createStreamingThinkingFilter();
       f.filter("```\n");

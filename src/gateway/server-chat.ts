@@ -360,7 +360,7 @@ export function createAgentEventHandler({
     // content from leaking to TUI/webchat when models emit tags in text output.
     const cleanedText = stripReasoningTagsFromText(stripInlineDirectiveTagsForDisplay(text).text, {
       mode: "strict",
-      trim: "both",
+      trim: "start",
     });
     // Strip inline directives but NOT reasoning tags from the delta — the
     // stateful streaming filter needs to see raw <think>/<thinking> tag
