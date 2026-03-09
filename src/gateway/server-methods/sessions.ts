@@ -15,6 +15,7 @@ import {
   type SessionEntry,
   updateSessionStore,
 } from "../../config/sessions.js";
+import { isDeliveryMirrorMessage } from "../../config/sessions/transcript.js";
 import { unbindThreadBindingsBySessionKey } from "../../discord/monitor/thread-bindings.js";
 import { logVerbose } from "../../globals.js";
 import { createInternalHookEvent, triggerInternalHook } from "../../hooks/internal-hooks.js";
@@ -646,7 +647,8 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       return;
     }
     const allMessages = readSessionMessages(entry.sessionId, storePath, entry.sessionFile);
-    const messages = limit < allMessages.length ? allMessages.slice(-limit) : allMessages;
+    const filtered = allMessages.filter((msg) => !isDeliveryMirrorMessage(msg));
+    const messages = limit < filtered.length ? filtered.slice(-limit) : filtered;
     respond(true, { messages }, undefined);
   },
   "sessions.compact": async ({ params, respond }) => {

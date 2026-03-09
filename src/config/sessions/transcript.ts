@@ -130,6 +130,29 @@ export async function resolveSessionTranscriptFile(params: {
   };
 }
 
+/**
+ * Returns true when a transcript message is an internal delivery-mirror entry
+ * written by {@link appendAssistantMessageToSessionTranscript} for cross-channel
+ * delivery auditing.  These must be excluded from LLM context and API responses
+ * to prevent duplicate-message artifacts.
+ *
+ * Refs: #33263, #38061, #39469
+ */
+export function isDeliveryMirrorMessage(msg: unknown): boolean {
+  if (!msg || typeof msg !== "object") {
+    return false;
+  }
+  if (!("role" in msg) || !("provider" in msg) || !("model" in msg)) {
+    return false;
+  }
+  return (
+    typeof msg.role === "string" &&
+    msg.role.toLowerCase() === "assistant" &&
+    msg.provider === "openclaw" &&
+    msg.model === "delivery-mirror"
+  );
+}
+
 export async function appendAssistantMessageToSessionTranscript(params: {
   agentId?: string;
   sessionKey: string;

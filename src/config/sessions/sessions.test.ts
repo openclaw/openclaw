@@ -19,7 +19,10 @@ import {
   validateSessionId,
 } from "./paths.js";
 import { resolveSessionResetPolicy } from "./reset.js";
-import { appendAssistantMessageToSessionTranscript } from "./transcript.js";
+import {
+  appendAssistantMessageToSessionTranscript,
+  isDeliveryMirrorMessage,
+} from "./transcript.js";
 import type { SessionEntry } from "./types.js";
 
 function useTempSessionsFixture(prefix: string) {
@@ -380,5 +383,54 @@ describe("resolveAndPersistSessionFile", () => {
     expect(result.sessionEntry.sessionId).toBe(sessionId);
     const saved = loadSessionStore(fixture.storePath(), { skipCache: true });
     expect(saved[sessionKey]?.sessionFile).toBe(fallbackSessionFile);
+  });
+});
+
+describe("isDeliveryMirrorMessage", () => {
+  it("returns true for delivery-mirror messages", () => {
+    expect(
+      isDeliveryMirrorMessage({
+        role: "assistant",
+        provider: "openclaw",
+        model: "delivery-mirror",
+        content: [{ type: "text", text: "hello" }],
+      }),
+    ).toBe(true);
+  });
+
+  it("returns false for regular assistant messages", () => {
+    expect(
+      isDeliveryMirrorMessage({
+        role: "assistant",
+        provider: "anthropic",
+        model: "claude-3",
+        content: [{ type: "text", text: "hello" }],
+      }),
+    ).toBe(false);
+  });
+
+  it("returns false for user messages", () => {
+    expect(
+      isDeliveryMirrorMessage({
+        role: "user",
+        content: [{ type: "text", text: "hello" }],
+      }),
+    ).toBe(false);
+  });
+
+  it("returns false for null/undefined/non-object", () => {
+    expect(isDeliveryMirrorMessage(null)).toBe(false);
+    expect(isDeliveryMirrorMessage(undefined)).toBe(false);
+    expect(isDeliveryMirrorMessage("string")).toBe(false);
+  });
+
+  it("returns false when provider matches but model does not", () => {
+    expect(
+      isDeliveryMirrorMessage({
+        role: "assistant",
+        provider: "openclaw",
+        model: "gpt-4",
+      }),
+    ).toBe(false);
   });
 });
