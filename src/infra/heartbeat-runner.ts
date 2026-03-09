@@ -255,6 +255,7 @@ function resolveHeartbeatSession(
   agentId?: string,
   heartbeat?: HeartbeatConfig,
   forcedSessionKey?: string,
+  opts?: { preferConfiguredOverForcedMain?: boolean },
 ) {
   const sessionCfg = cfg.session;
   const scope = sessionCfg?.scope ?? "per-sender";
@@ -272,6 +273,49 @@ function resolveHeartbeatSession(
     return { sessionKey: mainSessionKey, storePath, store, entry: mainEntry };
   }
 
+  const trimmed = heartbeat?.session?.trim() ?? "";
+  let configuredSession:
+    | {
+        sessionKey: string;
+        storePath: string;
+        store: typeof store;
+        entry: typeof mainEntry;
+      }
+    | undefined;
+  if (trimmed) {
+    const normalized = trimmed.toLowerCase();
+    if (normalized === "main" || normalized === "global") {
+      configuredSession = {
+        sessionKey: mainSessionKey,
+        storePath,
+        store,
+        entry: mainEntry,
+      };
+    } else {
+      const configuredCandidate = toAgentStoreSessionKey({
+        agentId: resolvedAgentId,
+        requestKey: trimmed,
+        mainKey: cfg.session?.mainKey,
+      });
+      const configuredCanonical = canonicalizeMainSessionAlias({
+        cfg,
+        agentId: resolvedAgentId,
+        sessionKey: configuredCandidate,
+      });
+      if (configuredCanonical !== "global") {
+        const sessionAgentId = resolveAgentIdFromSessionKey(configuredCanonical);
+        if (sessionAgentId === normalizeAgentId(resolvedAgentId)) {
+          configuredSession = {
+            sessionKey: configuredCanonical,
+            storePath,
+            store,
+            entry: store[configuredCanonical],
+          };
+        }
+      }
+    }
+  }
+
   const forced = forcedSessionKey?.trim();
   if (forced) {
     const forcedCandidate = toAgentStoreSessionKey({
@@ -287,6 +331,14 @@ function resolveHeartbeatSession(
     if (forcedCanonical !== "global") {
       const sessionAgentId = resolveAgentIdFromSessionKey(forcedCanonical);
       if (sessionAgentId === normalizeAgentId(resolvedAgentId)) {
+        if (
+          opts?.preferConfiguredOverForcedMain === true &&
+          forcedCanonical === mainSessionKey &&
+          configuredSession &&
+          configuredSession.sessionKey !== mainSessionKey
+        ) {
+          return configuredSession;
+        }
         return {
           sessionKey: forcedCanonical,
           storePath,
@@ -297,36 +349,11 @@ function resolveHeartbeatSession(
     }
   }
 
-  const trimmed = heartbeat?.session?.trim() ?? "";
   if (!trimmed) {
     return { sessionKey: mainSessionKey, storePath, store, entry: mainEntry };
   }
-
-  const normalized = trimmed.toLowerCase();
-  if (normalized === "main" || normalized === "global") {
-    return { sessionKey: mainSessionKey, storePath, store, entry: mainEntry };
-  }
-
-  const candidate = toAgentStoreSessionKey({
-    agentId: resolvedAgentId,
-    requestKey: trimmed,
-    mainKey: cfg.session?.mainKey,
-  });
-  const canonical = canonicalizeMainSessionAlias({
-    cfg,
-    agentId: resolvedAgentId,
-    sessionKey: candidate,
-  });
-  if (canonical !== "global") {
-    const sessionAgentId = resolveAgentIdFromSessionKey(canonical);
-    if (sessionAgentId === normalizeAgentId(resolvedAgentId)) {
-      return {
-        sessionKey: canonical,
-        storePath,
-        store,
-        entry: store[canonical],
-      };
-    }
+  if (configuredSession) {
+    return configuredSession;
   }
 
   return { sessionKey: mainSessionKey, storePath, store, entry: mainEntry };
@@ -479,6 +506,7 @@ type HeartbeatSkipReason = "empty-heartbeat-file";
 
 type HeartbeatPreflight = HeartbeatReasonFlags & {
   session: ReturnType<typeof resolveHeartbeatSession>;
+  sourceSession: ReturnType<typeof resolveHeartbeatSession>;
   pendingEventEntries: ReturnType<typeof peekSystemEventEntries>;
   hasTaggedCronEvents: boolean;
   shouldInspectPendingEvents: boolean;
@@ -502,13 +530,20 @@ async function resolveHeartbeatPreflight(params: {
   reason?: string;
 }): Promise<HeartbeatPreflight> {
   const reasonFlags = resolveHeartbeatReasonFlags(params.reason);
-  const session = resolveHeartbeatSession(
+  const sourceSession = resolveHeartbeatSession(
     params.cfg,
     params.agentId,
     params.heartbeat,
     params.forcedSessionKey,
   );
-  const pendingEventEntries = peekSystemEventEntries(session.sessionKey);
+  const session = resolveHeartbeatSession(
+    params.cfg,
+    params.agentId,
+    params.heartbeat,
+    params.forcedSessionKey,
+    { preferConfiguredOverForcedMain: true },
+  );
+  const pendingEventEntries = peekSystemEventEntries(sourceSession.sessionKey);
   const hasTaggedCronEvents = pendingEventEntries.some((event) =>
     event.contextKey?.startsWith("cron:"),
   );
@@ -522,6 +557,7 @@ async function resolveHeartbeatPreflight(params: {
   const basePreflight = {
     ...reasonFlags,
     session,
+    sourceSession,
     pendingEventEntries,
     hasTaggedCronEvents,
     shouldInspectPendingEvents,
@@ -650,8 +686,9 @@ export async function runHeartbeatOnce(opts: {
     return { status: "skipped", reason: preflight.skipReason };
   }
   const { entry, sessionKey, storePath } = preflight.session;
+  const sourceEntry = preflight.sourceSession.entry ?? entry;
   const previousUpdatedAt = entry?.updatedAt;
-  const delivery = resolveHeartbeatDeliveryTarget({ cfg, entry, heartbeat });
+  const delivery = resolveHeartbeatDeliveryTarget({ cfg, entry: sourceEntry, heartbeat });
   const heartbeatAccountId = heartbeat?.accountId?.trim();
   if (delivery.reason === "unknown-account") {
     log.warn("heartbeat: unknown accountId", {
@@ -673,7 +710,7 @@ export async function runHeartbeatOnce(opts: {
           accountId: delivery.accountId,
         })
       : { showOk: false, showAlerts: true, useIndicator: true };
-  const { sender } = resolveHeartbeatSenderContext({ cfg, entry, delivery });
+  const { sender } = resolveHeartbeatSenderContext({ cfg, entry: sourceEntry, delivery });
   const responsePrefix = resolveEffectiveMessagesConfig(cfg, agentId, {
     channel: delivery.channel !== "none" ? delivery.channel : undefined,
     accountId: delivery.accountId,
@@ -842,9 +879,11 @@ export async function runHeartbeatOnce(opts: {
     // Suppress duplicate heartbeats (same payload) within a short window.
     // This prevents "nagging" when nothing changed but the model repeats the same items.
     const prevHeartbeatText =
-      typeof entry?.lastHeartbeatText === "string" ? entry.lastHeartbeatText : "";
+      typeof sourceEntry?.lastHeartbeatText === "string" ? sourceEntry.lastHeartbeatText : "";
     const prevHeartbeatAt =
-      typeof entry?.lastHeartbeatSentAt === "number" ? entry.lastHeartbeatSentAt : undefined;
+      typeof sourceEntry?.lastHeartbeatSentAt === "number"
+        ? sourceEntry.lastHeartbeatSentAt
+        : undefined;
     const isDuplicateMain =
       !shouldSkipMain &&
       !mediaUrls.length &&
@@ -961,15 +1000,17 @@ export async function runHeartbeatOnce(opts: {
 
     // Record last delivered heartbeat payload for dedupe.
     if (!shouldSkipMain && normalized.text.trim()) {
-      const store = loadSessionStore(storePath);
-      const current = store[sessionKey];
+      const dedupeStorePath = preflight.sourceSession.storePath;
+      const dedupeSessionKey = preflight.sourceSession.sessionKey;
+      const store = loadSessionStore(dedupeStorePath);
+      const current = store[dedupeSessionKey];
       if (current) {
-        store[sessionKey] = {
+        store[dedupeSessionKey] = {
           ...current,
           lastHeartbeatText: normalized.text,
           lastHeartbeatSentAt: startedAt,
         };
-        await saveSessionStore(storePath, store);
+        await saveSessionStore(dedupeStorePath, store);
       }
     }
 

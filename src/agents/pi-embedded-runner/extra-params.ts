@@ -548,7 +548,10 @@ function createOpenAIResponsesContextManagementWrapper(
             }
 
             payloadObj.input = sanitizeSub2apiCodexInput(payloadObj.input, instructionParts);
-            const mergedInstructions = instructionParts.join("\n\n").trim();
+            const mergedInstructions = [...new Set(instructionParts.map((part) => part.trim()))]
+              .filter((part) => part.length > 0)
+              .join("\n\n")
+              .trim();
             payloadObj.instructions = mergedInstructions || "You are a helpful assistant.";
           }
 
@@ -966,6 +969,43 @@ function normalizeMessagesToResponsesInput(
   return { input: normalized, lossless };
 }
 
+function createUserTextResponsesInput(text: string): OpenAIResponsesInputItem[] {
+  return [
+    {
+      type: "message",
+      role: "user",
+      content: [{ type: "input_text", text }],
+    },
+  ];
+}
+
+function extractInstructionsFromResponsesInput(input: unknown): string | undefined {
+  if (!Array.isArray(input)) {
+    return undefined;
+  }
+  const instructionParts: string[] = [];
+  for (const rawEntry of input) {
+    if (!rawEntry || typeof rawEntry !== "object") {
+      continue;
+    }
+    const entry = rawEntry as { role?: unknown; content?: unknown };
+    const role = typeof entry.role === "string" ? entry.role.toLowerCase() : "";
+    if (role !== "developer" && role !== "system") {
+      continue;
+    }
+    if (typeof entry.content === "string" && entry.content.trim()) {
+      instructionParts.push(entry.content.trim());
+      continue;
+    }
+    const blocks = extractTextFromContentBlocks(entry.content);
+    if (blocks.length > 0) {
+      instructionParts.push(blocks.join("\n"));
+    }
+  }
+  const merged = instructionParts.join("\n\n").trim();
+  return merged || undefined;
+}
+
 function normalizeSub2apiGpt52Payload(payloadObj: Record<string, unknown>): void {
   // sub2api gpt-5.x rejects these fields on /v1/responses.
   delete payloadObj.previous_response_id;
@@ -989,6 +1029,10 @@ function normalizeSub2apiGpt52Payload(payloadObj: Record<string, unknown>): void
       .join("\n\n")
       .trim();
     payloadObj.instructions = instructionText || "You are a helpful assistant.";
+  }
+
+  if (typeof payloadObj.input === "string") {
+    payloadObj.input = createUserTextResponsesInput(payloadObj.input);
   }
 
   if (!Array.isArray(payloadObj.input) && messages) {
@@ -1047,8 +1091,10 @@ function createSub2apiGpt52PayloadCompatWrapper(baseStreamFn: StreamFn | undefin
             const contextSystemPrompt = (context as { systemPrompt?: unknown }).systemPrompt;
             if (typeof contextSystemPrompt === "string" && contextSystemPrompt.trim()) {
               payloadObj.instructions = contextSystemPrompt;
-            } else if (!Array.isArray(payloadObj.input)) {
-              payloadObj.instructions = "You are a helpful assistant.";
+            } else {
+              payloadObj.instructions =
+                extractInstructionsFromResponsesInput(payloadObj.input) ??
+                "You are a helpful assistant.";
             }
           }
         }

@@ -2017,7 +2017,7 @@ describe("applyExtraParamsToAgent", () => {
     expect(payload.stream).toBe(true);
   });
 
-  it("preserves scalar input for sub2api gpt-5.2 compat when context has messages", () => {
+  it("converts scalar input to responses input for sub2api gpt-5.2 compat when context has messages", () => {
     const payload = runResponsesPayloadMutationCase({
       applyProvider: "sub2api",
       applyModelId: "gpt-5.2",
@@ -2036,7 +2036,13 @@ describe("applyExtraParamsToAgent", () => {
       },
     });
 
-    expect(payload.input).toBe("caller-provided scalar input");
+    expect(payload.input).toEqual([
+      {
+        type: "message",
+        role: "user",
+        content: [{ type: "input_text", text: "caller-provided scalar input" }],
+      },
+    ]);
     expect(payload.stream).toBe(true);
   });
 
@@ -2084,7 +2090,13 @@ describe("applyExtraParamsToAgent", () => {
       },
     });
 
-    expect(payload.input).toBe("hello");
+    expect(payload.input).toEqual([
+      {
+        type: "message",
+        role: "user",
+        content: [{ type: "input_text", text: "hello" }],
+      },
+    ]);
     expect(payload.instructions).toBe("You are a helpful assistant.");
     expect(payload.stream).toBe(true);
   });
