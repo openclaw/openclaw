@@ -109,6 +109,8 @@ jobs:
           labels: ${{ steps.labels.outputs.value }}
           provenance: false
           push: true
+          cache-from: type=gha,scope=docker-release-amd64
+          cache-to: type=gha,mode=max,scope=docker-release-amd64
 
       - name: Build and push amd64 slim image
         id: build-slim
@@ -122,6 +124,8 @@ jobs:
           labels: ${{ steps.labels.outputs.value }}
           provenance: false
           push: true
+          cache-from: type=gha,scope=docker-release-amd64
+          cache-to: type=gha,mode=max,scope=docker-release-amd64
 
   # Build arm64 images (default + slim share the build stage cache)
   build-arm64:
@@ -210,6 +214,8 @@ jobs:
           labels: ${{ steps.labels.outputs.value }}
           provenance: false
           push: true
+          cache-from: type=gha,scope=docker-release-arm64
+          cache-to: type=gha,mode=max,scope=docker-release-arm64
 
       - name: Build and push arm64 slim image
         id: build-slim
@@ -223,6 +229,8 @@ jobs:
           labels: ${{ steps.labels.outputs.value }}
           provenance: false
           push: true
+          cache-from: type=gha,scope=docker-release-arm64
+          cache-to: type=gha,mode=max,scope=docker-release-arm64
 
   # Create multi-platform manifests
   create-manifest:
