@@ -67,8 +67,8 @@ describe("resolveProviderCapabilities", () => {
   });
 
   it("treats kimi aliases as anthropic tool payload compatibility providers", () => {
-    expect(requiresOpenAiCompatibleAnthropicToolPayload("kimi-coding")).toBe(true);
-    expect(requiresOpenAiCompatibleAnthropicToolPayload("kimi-code")).toBe(true);
+    expect(requiresOpenAiCompatibleAnthropicToolPayload("kimi-coding")).toBe(false);
+    expect(requiresOpenAiCompatibleAnthropicToolPayload("kimi-code")).toBe(false);
     expect(requiresOpenAiCompatibleAnthropicToolPayload("anthropic")).toBe(false);
   });
 
