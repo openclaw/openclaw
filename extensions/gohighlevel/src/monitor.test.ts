@@ -242,4 +242,34 @@ describe("handleGoHighLevelWebhookRequest", () => {
     expect(handled).toBe(true);
     expect(res._status).toBe(400);
   });
+
+  it("accepts real GHL Workflow payload with nested message.body", async () => {
+    // Real GHL Workflow payloads nest the body under `message.body` and
+    // include `customData` with configured fields — top-level `body` is NOT set.
+    const workflowPayload = {
+      contact_id: "dbSKd404POvJ6ZSyRSlX",
+      first_name: "Rakesh",
+      last_name: "Parikatil",
+      full_name: "Rakesh Parikatil",
+      phone: "+13238287989",
+      email: "rparikatil@yahoo.com",
+      tags: "lead-type-adult,junior-advanced",
+      contact_type: "lead",
+      location: { name: "LBTA", id: "loc-123" },
+      message: { type: 2, body: "Yes" },
+      workflow: { id: "d64c0407", name: "Customer Replied Webhook" },
+      customData: { event_type: "customer.replied", body: "Yes" },
+    };
+    const body = JSON.stringify(workflowPayload);
+    const signature = createHmac("sha256", "test-secret").update(body).digest("hex");
+    const req = createMockReq({
+      body,
+      headers: { "x-ghl-signature": signature },
+    });
+    const res = createMockRes();
+    const handled = await handleGoHighLevelWebhookRequest(req, res);
+    expect(handled).toBe(true);
+    expect(res._status).toBe(200);
+    expect(res._body).toBe("{}");
+  });
 });
