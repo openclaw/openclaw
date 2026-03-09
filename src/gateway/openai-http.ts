@@ -484,20 +484,27 @@ export async function handleOpenAiHttpRequest(
 
       const content = resolveAgentResponseText(result);
 
-      sendJson(res, 200, {
-        id: runId,
-        object: "chat.completion",
-        created: Math.floor(Date.now() / 1000),
-        model,
-        choices: [
-          {
-            index: 0,
-            message: { role: "assistant", content },
-            finish_reason: "stop",
-          },
-        ],
-        usage: { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 },
-      });
+      const usage = result?.meta?.agentMeta?.usage;
+sendJson(res, 200, {
+  id: runId,
+  object: "chat.completion",
+  created: Math.floor(Date.now() / 1000),
+  model,
+  choices: [
+    {
+      index: 0,
+      message: { role: "assistant", content },
+      finish_reason: "stop",
+    },
+  ],
+  usage: usage
+    ? {
+        prompt_tokens: usage.input ?? 0,
+        completion_tokens: usage.output ?? 0,
+        total_tokens: usage.totalTokens ?? (usage.input ?? 0) + (usage.output ?? 0),
+      }
+    : { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 },
+});
     } catch (err) {
       logWarn(`openai-compat: chat completion failed: ${String(err)}`);
       sendJson(res, 500, {
