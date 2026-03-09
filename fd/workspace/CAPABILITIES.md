@@ -1,12 +1,20 @@
 # OpenClaw Capabilities — CUTMV & Full Digital
 
-## Overview
+OpenClaw is the prompt-first operating system that automates growth,
+operations, research, and decision support for Full Digital and CUTMV across
+a local multi-node cluster.
 
-OpenClaw is a **strategic operating system** for both brands — an autonomous
-operations layer run by DA (Don Anthony Tyson Jr.) on a 3-node local cluster.
-It functions as a research assistant, automation operator, decision support
-engine, workflow orchestrator, opportunity scout, memory system, and product
-growth engine.
+---
+
+## Prompt-First Operating Model
+
+OpenClaw is designed as a prompt-first system. It is usable through plain
+English prompts across Telegram, the Command Center UI, and Notion-linked
+interfaces. Users ask questions, request actions, generate workflows, and
+receive step-by-step plans without needing terminal commands or manual shell
+execution. OpenClaw interprets intent, maps prompts to the correct agent and
+workflow, applies safety controls, requests approval when needed, and
+summarizes outcomes in human language.
 
 ---
 
@@ -20,6 +28,17 @@ growth engine.
 
 Local inference via **Ollama (Qwen 3.5)** with **Claude (Anthropic)** as
 escalation for complex analysis.
+
+---
+
+## Storage and Execution Model
+
+- Repo code runs locally on each machine under `~/openclaw`.
+- Shared cluster workspace lives on M4 at `/Users/fdclaw-m4/cluster` and is
+  mounted over SMB to other nodes as `~/cluster`.
+- The shared workspace is used for jobs, logs, results, and artifacts.
+- The repo itself, virtual environments, local databases, and secrets are not
+  stored in the shared cluster directory.
 
 ---
 
@@ -160,6 +179,44 @@ API (programmatic).
 
 Daily grant scans, pipeline health checks, cluster monitoring, watchdog
 alerts, scheduled campaign tasks.
+
+---
+
+## Non-Goals and Boundaries
+
+- OpenClaw does not replace CUTMV's production render runtime.
+- OpenClaw does not auto-send outreach, launch campaigns, spend money,
+  publish content, or submit grants without approval.
+- OpenClaw does not require terminal-first operation for normal use.
+- OpenClaw does not store code, secrets, or local databases in the shared
+  SMB cluster directory.
+- OpenClaw exists to grow, operate, optimize, and coordinate the
+  businesses — not to become the businesses' primary runtime.
+
+---
+
+## Current State vs Target State
+
+### Current
+
+- Multi-node local cluster architecture
+- Agent routing across Full Digital and CUTMV
+- Prompt-first design direction
+- Telegram as primary control channel
+- Command center architecture
+- Safety controls and approval philosophy
+- Event-driven orchestration model
+
+### Target
+
+- Fully operational prompt engine
+- Live command center with contextual guide layer
+- Grant discovery and drafting inside Finance
+- Marketing automation with approval-safe scaling
+- Retainer conversion funnel
+- VSL retention optimization
+- Team calendar and schedule aggregation
+- Cross-node autonomous workflow execution with human oversight
 
 ---
 
