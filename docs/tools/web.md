@@ -43,9 +43,9 @@ The table above is alphabetical. If no `provider` is explicitly set, runtime aut
 
 1. **Brave** — `BRAVE_API_KEY` env var or `tools.web.search.apiKey` config
 2. **Gemini** — `GEMINI_API_KEY` env var or `tools.web.search.gemini.apiKey` config
-3. **Kimi** — `KIMI_API_KEY` / `MOONSHOT_API_KEY` env var or `tools.web.search.kimi.apiKey` config
-4. **Perplexity** — `PERPLEXITY_API_KEY`, `OPENROUTER_API_KEY`, or `tools.web.search.perplexity.apiKey` config
-5. **Grok** — `XAI_API_KEY` env var or `tools.web.search.grok.apiKey` config
+3. **Grok** — `XAI_API_KEY` env var or `tools.web.search.grok.apiKey` config
+4. **Kimi** — `KIMI_API_KEY` / `MOONSHOT_API_KEY` env var or `tools.web.search.kimi.apiKey` config
+5. **Perplexity** — `PERPLEXITY_API_KEY`, `OPENROUTER_API_KEY`, or `tools.web.search.perplexity.apiKey` config
 
 If no keys are found, it falls back to Brave (you'll get a missing-key error prompting you to configure one).
 
@@ -56,10 +56,14 @@ Use `openclaw configure --section web` to set up your API key and choose a provi
 ### Brave Search
 
 1. Create a Brave Search API account at [brave.com/search/api](https://brave.com/search/api/)
-2. In the dashboard, choose the **Data for Search** plan (not "Data for AI") and generate an API key.
+2. In the dashboard, choose the **Search** plan and generate an API key.
 3. Run `openclaw configure --section web` to store the key in config, or set `BRAVE_API_KEY` in your environment.
 
-Brave provides paid plans; check the Brave API portal for the current limits and pricing.
+Each Brave plan includes **$5/month in free credit** (renewing). The Search
+plan costs $5 per 1,000 requests, so the credit covers 1,000 queries/month. Set
+your usage limit in the Brave dashboard to avoid unexpected charges. See the
+[Brave API portal](https://brave.com/search/api/) for current plans and
+pricing.
 
 ### Perplexity Search
 
@@ -146,7 +150,7 @@ In this mode, `country` and `language` / `search_lang` still work, but `ui_lang`
         enabled: true,
         provider: "perplexity",
         perplexity: {
-          apiKey: "sk-or-v1-...", // optional if OPENROUTER_API_KEY is set
+          apiKey: "<openrouter-api-key>", // optional if OPENROUTER_API_KEY is set
           baseUrl: "https://openrouter.ai/api/v1",
           model: "perplexity/sonar-pro",
         },
@@ -208,10 +212,10 @@ Search the web using your configured provider.
 - `tools.web.search.enabled` must not be `false` (default: enabled)
 - API key for your chosen provider:
   - **Brave**: `BRAVE_API_KEY` or `tools.web.search.apiKey`
-  - **Perplexity**: `PERPLEXITY_API_KEY`, `OPENROUTER_API_KEY`, or `tools.web.search.perplexity.apiKey`
   - **Gemini**: `GEMINI_API_KEY` or `tools.web.search.gemini.apiKey`
   - **Grok**: `XAI_API_KEY` or `tools.web.search.grok.apiKey`
   - **Kimi**: `KIMI_API_KEY`, `MOONSHOT_API_KEY`, or `tools.web.search.kimi.apiKey`
+  - **Perplexity**: `PERPLEXITY_API_KEY`, `OPENROUTER_API_KEY`, or `tools.web.search.perplexity.apiKey`
 
 ### Config
 

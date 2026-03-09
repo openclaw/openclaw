@@ -100,6 +100,7 @@ export const AgentParamsSchema = Type.Object(
       Type.Object(
         {
           kind: Type.String({ enum: [...INPUT_PROVENANCE_KIND_VALUES] }),
+          originSessionId: Type.Optional(Type.String()),
           sourceSessionKey: Type.Optional(Type.String()),
           sourceChannel: Type.Optional(Type.String()),
           sourceTool: Type.Optional(Type.String()),
