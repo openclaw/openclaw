@@ -81,7 +81,8 @@ jobs:
         run: |
           set -euo pipefail
           BASE_SHA="${{ github.event.pull_request.base.sha }}"
-          node scripts/check-no-binary-artifacts.mjs --base "$BASE_SHA" --head HEAD
+          git show "$BASE_SHA":scripts/check-no-binary-artifacts.mjs > /tmp/check-no-binary-artifacts.mjs
+          node /tmp/check-no-binary-artifacts.mjs --base "$BASE_SHA" --head HEAD
 
   # Build dist once for Node-relevant changes and share it with downstream jobs.
   build-artifacts:
@@ -325,8 +326,18 @@ jobs:
           python -m pip install pre-commit detect-secrets==1.5.0
 
       - name: Detect secrets
+        shell: bash
         run: |
-          if ! detect-secrets scan --baseline .secrets.baseline; then
+          set -euo pipefail
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            BASE_SHA="${{ github.event.pull_request.base.sha }}"
+            git show "$BASE_SHA":.secrets.baseline > /tmp/.secrets.baseline.base
+            BASELINE=/tmp/.secrets.baseline.base
+          else
+            BASELINE=.secrets.baseline
+          fi
+
+          if ! detect-secrets scan --baseline "$BASELINE"; then
             echo "::error::Secret scanning failed. See docs/gateway/security.md#secret-scanning-detect-secrets"
             exit 1
           fi
