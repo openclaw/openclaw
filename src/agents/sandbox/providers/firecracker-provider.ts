@@ -37,10 +37,10 @@ const MAX_OUTPUT_BYTES = 10 * 1024 * 1024; // 10 MiB
 export class FirecrackerProvider implements ISandboxProvider, IBrowserCapable {
   readonly name = "firecracker" as const;
 
-  private sandboxClient: SandboxClient | null = null;
-  private execClient: ExecClient | null = null;
-  private healthClient: HealthClient | null = null;
-  private browserClient: BrowserClient | null = null;
+  private sandboxClient: SandboxClient = null as unknown as SandboxClient;
+  private execClient: ExecClient = null as unknown as ExecClient;
+  private healthClient: HealthClient = null as unknown as HealthClient;
+  private browserClient: BrowserClient = null as unknown as BrowserClient;
 
   private getSandboxClient(): SandboxClient {
     if (this.sandboxClient === null) {
@@ -60,7 +60,7 @@ export class FirecrackerProvider implements ISandboxProvider, IBrowserCapable {
     if (this.healthClient === null) {
       this.healthClient = createHealthClient();
     }
-    return this.healthClient!;
+    return this.healthClient;
   }
 
   private getBrowserClient(): BrowserClient {
@@ -282,7 +282,9 @@ export class FirecrackerProvider implements ISandboxProvider, IBrowserCapable {
         if (chunk.data && chunk.data.length > 0) {
           chunks.push(Buffer.from(chunk.data));
         }
-        if (chunk.eof) break;
+        if (chunk.eof) {
+          break;
+        }
       }
       return { data: Buffer.concat(chunks) };
     } catch (err) {

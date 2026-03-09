@@ -96,24 +96,22 @@ export function mapGrpcError(err: unknown, operation: string): SandboxProviderEr
 
   // Map nice-grpc ClientError using status code
   if (err instanceof ClientError) {
-    const mapping = STATUS_MAP[(err as any).code];
+    const clientErr: { code: number; message: string } = err;
+    const mapping = STATUS_MAP[clientErr.code];
     if (mapping) {
-      return new SandboxProviderError(
-        `${operation}: ${mapping.message} - ${(err as any).message}`,
-        {
-          operation,
-          grpcCode: (err as any).code,
-          isRetryable: mapping.isRetryable,
-        },
-      );
+      return new SandboxProviderError(`${operation}: ${mapping.message} - ${clientErr.message}`, {
+        operation,
+        grpcCode: clientErr.code,
+        isRetryable: mapping.isRetryable,
+      });
     }
 
     // Unknown gRPC status code
     return new SandboxProviderError(
-      `${operation}: gRPC error (code ${(err as any).code}) - ${(err as any).message}`,
+      `${operation}: gRPC error (code ${clientErr.code}) - ${clientErr.message}`,
       {
         operation,
-        grpcCode: (err as any).code,
+        grpcCode: clientErr.code,
         isRetryable: false,
       },
     );

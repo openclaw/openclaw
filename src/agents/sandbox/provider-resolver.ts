@@ -21,7 +21,8 @@ function createProvider(backend: Exclude<SandboxBackend, "auto">): ISandboxProvi
       return new FirecrackerProvider();
     default: {
       const _exhaustive: never = backend;
-      throw new Error(`Unknown sandbox backend: ${_exhaustive}`);
+      void _exhaustive;
+      throw new Error("Unknown sandbox backend");
     }
   }
 }
