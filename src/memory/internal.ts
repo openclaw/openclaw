@@ -21,9 +21,7 @@ export type MemoryChunk = {
 };
 
 export function ensureDir(dir: string): string {
-  try {
-    fsSync.mkdirSync(dir, { recursive: true });
-  } catch {}
+  fsSync.mkdirSync(dir, { recursive: true });
   return dir;
 }
 
