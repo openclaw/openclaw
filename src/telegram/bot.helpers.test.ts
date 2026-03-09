@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { resolveTelegramStreamMode } from "./bot/helpers.js";
+import {
+  resolveTelegramEffectiveReplyToMode,
+  resolveTelegramEffectiveStreamMode,
+  resolveTelegramStreamMode,
+} from "./bot/helpers.js";
 
 describe("resolveTelegramStreamMode", () => {
   it("defaults to partial when telegram streaming is unset", () => {
@@ -20,5 +24,41 @@ describe("resolveTelegramStreamMode", () => {
 
   it("maps unified progress mode to partial on Telegram", () => {
     expect(resolveTelegramStreamMode({ streaming: "progress" })).toBe("partial");
+  });
+});
+
+describe("resolveTelegramEffectiveReplyToMode", () => {
+  it("prefers topic over group/direct over account defaults", () => {
+    expect(
+      resolveTelegramEffectiveReplyToMode(
+        { replyToMode: "all" },
+        { replyToMode: "first" },
+        { replyToMode: "off" },
+      ),
+    ).toBe("all");
+  });
+
+  it("falls back to off when no override is configured", () => {
+    expect(resolveTelegramEffectiveReplyToMode(undefined, undefined, undefined)).toBe("off");
+  });
+});
+
+describe("resolveTelegramEffectiveStreamMode", () => {
+  it("prefers topic over group/direct over account defaults", () => {
+    expect(
+      resolveTelegramEffectiveStreamMode(
+        { streaming: "off" },
+        { streaming: "block" },
+        { streaming: "partial" },
+      ),
+    ).toBe("off");
+  });
+
+  it("supports legacy streamMode overrides in scoped configs", () => {
+    expect(resolveTelegramEffectiveStreamMode({ streamMode: "block" }, undefined)).toBe("block");
+  });
+
+  it("defaults to partial when no scoped override is configured", () => {
+    expect(resolveTelegramEffectiveStreamMode(undefined, undefined, undefined)).toBe("partial");
   });
 });

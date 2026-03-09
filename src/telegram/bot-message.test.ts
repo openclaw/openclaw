@@ -35,7 +35,7 @@ describe("telegram bot message processor", () => {
     resolveGroupRequireMention: () => false,
     resolveTelegramGroupConfig: () => ({}),
     runtime: {},
-    replyToMode: "auto",
+    replyToMode: "off",
     streamMode: "partial",
     textLimit: 4096,
     opts: {},
@@ -43,12 +43,14 @@ describe("telegram bot message processor", () => {
 
   async function processSampleMessage(
     processMessage: ReturnType<typeof createTelegramMessageProcessor>,
+    message?: Record<string, unknown>,
   ) {
     await processMessage(
       {
         message: {
           chat: { id: 123, type: "private", title: "chat" },
           message_id: 456,
+          ...message,
         },
       } as unknown as Parameters<typeof processMessage>[0],
       [],
@@ -64,6 +66,52 @@ describe("telegram bot message processor", () => {
     await processSampleMessage(processMessage);
 
     expect(dispatchTelegramMessage).toHaveBeenCalledTimes(1);
+  });
+
+  it("applies direct-scoped reply and streaming overrides before dispatch", async () => {
+    buildTelegramMessageContext.mockResolvedValue({ route: { sessionKey: "agent:main:main" } });
+
+    const processMessage = createTelegramMessageProcessor({
+      ...baseDeps,
+      resolveTelegramGroupConfig: () => ({
+        groupConfig: { replyToMode: "all", streaming: "off" },
+      }),
+    } as unknown as Parameters<typeof createTelegramMessageProcessor>[0]);
+
+    await processSampleMessage(processMessage);
+
+    expect(dispatchTelegramMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        replyToMode: "all",
+        streamMode: "off",
+      }),
+    );
+  });
+
+  it("applies topic overrides above group defaults before dispatch", async () => {
+    buildTelegramMessageContext.mockResolvedValue({ route: { sessionKey: "agent:main:main" } });
+
+    const processMessage = createTelegramMessageProcessor({
+      ...baseDeps,
+      replyToMode: "first",
+      streamMode: "partial",
+      resolveTelegramGroupConfig: () => ({
+        groupConfig: { replyToMode: "off", streaming: "block" },
+        topicConfig: { replyToMode: "all", streaming: "off" },
+      }),
+    } as unknown as Parameters<typeof createTelegramMessageProcessor>[0]);
+
+    await processSampleMessage(processMessage, {
+      chat: { id: -100123, type: "supergroup", title: "ops", is_forum: true },
+      message_thread_id: 99,
+    });
+
+    expect(dispatchTelegramMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        replyToMode: "all",
+        streamMode: "off",
+      }),
+    );
   });
 
   it("skips dispatch when no context is produced", async () => {
