@@ -210,6 +210,13 @@ export async function startGatewaySidecars(params: {
           continue;
         }
 
+        // Skip scheduler isolated sessions — the scheduler's drain-retry handles these
+        // (retries the job ~90s after a drain error). Sending a recovery system event
+        // to a dead scheduler session is pointless and creates noise.
+        if (turn.sessionKey?.startsWith("scheduler:")) {
+          continue;
+        }
+
         try {
           const recoveryMessage =
             "⚠️ I was restarted mid-conversation. Please resend your last message.";
