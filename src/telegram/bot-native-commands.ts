@@ -16,6 +16,7 @@ import { dispatchReplyWithBufferedBlockDispatcher } from "../auto-reply/reply/pr
 import { listSkillCommandsForAgents } from "../auto-reply/skill-commands.js";
 import { resolveCommandAuthorizedFromAuthorizers } from "../channels/command-gating.js";
 import { resolveNativeCommandSessionTargets } from "../channels/native-command-session-targets.js";
+import { resolveChannelConfigWrites } from "../channels/plugins/config-writes.js";
 import { createReplyPrefixOptions } from "../channels/reply-prefix.js";
 import { recordInboundSessionMetaSafe } from "../channels/session-meta.js";
 import type { OpenClawConfig } from "../config/config.js";
@@ -70,6 +71,7 @@ import {
 } from "./group-access.js";
 import { resolveTelegramGroupPromptSettings } from "./group-config-helpers.js";
 import { buildInlineKeyboard } from "./send.js";
+import { buildSettingsCommandResponse } from "./settings-panel.js";
 
 const EMPTY_RESPONSE_FALLBACK = "No response generated. Please try again.";
 
@@ -773,6 +775,90 @@ export const registerTelegramNativeCommands = ({
           }
         });
       }
+
+      // /settings — standalone handler that sends an inline keyboard control panel
+      bot.command("settings", async (ctx: TelegramNativeCommandContext) => {
+        const msg = ctx.message;
+        if (!msg) {
+          return;
+        }
+        if (shouldSkipUpdate(ctx)) {
+          return;
+        }
+        const auth = await resolveTelegramCommandAuth({
+          msg,
+          bot,
+          cfg,
+          accountId,
+          telegramCfg,
+          allowFrom,
+          groupAllowFrom,
+          useAccessGroups,
+          resolveGroupPolicy,
+          resolveTelegramGroupConfig,
+          requireAuth: true,
+        });
+        if (!auth) {
+          return;
+        }
+        if (auth.isGroup) {
+          const threadParams =
+            buildTelegramThreadParams(
+              resolveTelegramThreadSpec({
+                isGroup: true,
+                isForum: auth.isForum,
+                messageThreadId: (msg as { message_thread_id?: number }).message_thread_id,
+              }),
+            ) ?? {};
+          await withTelegramApiErrorLogging({
+            operation: "sendMessage",
+            runtime,
+            fn: () =>
+              bot.api.sendMessage(auth.chatId, "Settings is only available in DMs.", threadParams),
+          });
+          return;
+        }
+        if (!resolveChannelConfigWrites({ cfg, channelId: "telegram", accountId })) {
+          const threadParams =
+            buildTelegramThreadParams(
+              resolveTelegramThreadSpec({
+                isGroup: false,
+                isForum: auth.isForum,
+                messageThreadId: (msg as { message_thread_id?: number }).message_thread_id,
+              }),
+            ) ?? {};
+          await withTelegramApiErrorLogging({
+            operation: "sendMessage",
+            runtime,
+            fn: () =>
+              bot.api.sendMessage(
+                auth.chatId,
+                "Config writes are disabled for this account.",
+                threadParams,
+              ),
+          });
+          return;
+        }
+        const { text, buttons } = buildSettingsCommandResponse(telegramCfg);
+        const keyboard = buildInlineKeyboard(buttons);
+        const threadParams =
+          buildTelegramThreadParams(
+            resolveTelegramThreadSpec({
+              isGroup: false,
+              isForum: auth.isForum,
+              messageThreadId: (msg as { message_thread_id?: number }).message_thread_id,
+            }),
+          ) ?? {};
+        await withTelegramApiErrorLogging({
+          operation: "sendMessage",
+          runtime,
+          fn: () =>
+            bot.api.sendMessage(auth.chatId, text, {
+              ...(keyboard ? { reply_markup: keyboard } : {}),
+              ...threadParams,
+            }),
+        });
+      });
 
       for (const pluginCommand of pluginCatalog.commands) {
         bot.command(pluginCommand.command, async (ctx: TelegramNativeCommandContext) => {

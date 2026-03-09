@@ -535,6 +535,13 @@ function buildChatCommands(): ChatCommandDefinition[] {
       argsMenu: "auto",
     }),
     defineChatCommand({
+      key: "settings",
+      nativeName: "settings",
+      description: "Open the settings control panel.",
+      scope: "native",
+      category: "management",
+    }),
+    defineChatCommand({
       key: "reset",
       nativeName: "reset",
       description: "Reset the current session.",

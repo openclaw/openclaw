@@ -33,6 +33,7 @@ import { MediaFetchError } from "../media/fetch.js";
 import { readChannelAllowFromStore } from "../pairing/pairing-store.js";
 import { resolveAgentRoute } from "../routing/resolve-route.js";
 import { resolveThreadSessionKeys } from "../routing/session-key.js";
+import { resolveTelegramAccount } from "./accounts.js";
 import { withTelegramApiErrorLogging } from "./api-logging.js";
 import {
   isSenderAllowed,
@@ -74,6 +75,8 @@ import {
 } from "./model-buttons.js";
 import { buildInlineKeyboard } from "./send.js";
 import { wasSentByBot } from "./sent-message-cache.js";
+import { parseSettingsCallbackData } from "./settings-buttons.js";
+import { handleSettingsCallback } from "./settings-panel.js";
 
 function isMediaSizeLimitError(err: unknown): boolean {
   const errMsg = String(err);
@@ -1320,6 +1323,44 @@ export const registerTelegramHandlers = ({
           return;
         }
 
+        return;
+      }
+
+      // Settings panel callback handler (cfg_menu, cfg_s_*, cfg_v_*)
+      const settingsCallback = parseSettingsCallbackData(data);
+      if (settingsCallback) {
+        if (isGroup) {
+          return;
+        } // DM-only
+        if (!resolveChannelConfigWrites({ cfg, channelId: "telegram", accountId })) {
+          await replyToCallbackChat("Config writes are disabled for this account.");
+          return;
+        }
+        const freshCfg = loadConfig();
+        const freshTelegramCfg = resolveTelegramAccount({ cfg: freshCfg, accountId }).config;
+        await handleSettingsCallback({
+          parsed: settingsCallback,
+          cfg: freshCfg,
+          accountId,
+          telegramCfg: freshTelegramCfg,
+          editMessage: async (text, buttons) => {
+            const keyboard = buildInlineKeyboard(buttons);
+            try {
+              await editCallbackMessage(text, keyboard ? { reply_markup: keyboard } : undefined);
+            } catch (editErr) {
+              const errStr = String(editErr);
+              if (!errStr.includes("message is not modified")) {
+                throw editErr;
+              }
+            }
+          },
+          answerCallback: async (text) => {
+            // Use a follow-up toast via sendMessage since answerCallbackQuery was
+            // already called at the top of the handler. Telegram allows only one
+            // answer per callback query, so we reply inline instead.
+            await replyToCallbackChat(text);
+          },
+        });
         return;
       }
 
