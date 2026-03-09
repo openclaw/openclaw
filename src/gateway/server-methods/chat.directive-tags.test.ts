@@ -158,6 +158,8 @@ async function runNonStreamingChatSend(params: {
   deliver?: boolean;
   client?: unknown;
   expectBroadcast?: boolean;
+  requestParams?: Record<string, unknown>;
+  waitForCompletion?: boolean;
 }) {
   const sendParams: {
     sessionKey: string;
@@ -173,7 +175,10 @@ async function runNonStreamingChatSend(params: {
     sendParams.deliver = params.deliver;
   }
   await chatHandlers["chat.send"]({
-    params: sendParams,
+    params: {
+      ...sendParams,
+      ...params.requestParams,
+    },
     respond: params.respond as unknown as Parameters<
       (typeof chatHandlers)["chat.send"]
     >[0]["respond"],
@@ -185,6 +190,9 @@ async function runNonStreamingChatSend(params: {
 
   const shouldExpectBroadcast = params.expectBroadcast ?? true;
   if (!shouldExpectBroadcast) {
+    if (params.waitForCompletion === false) {
+      return undefined;
+    }
     await vi.waitFor(() => {
       expect(params.context.dedupe.has(`chat:${params.idempotencyKey}`)).toBe(true);
     }, FAST_WAIT_OPTS);
@@ -884,5 +892,78 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
         AccountId: "default",
       }),
     );
+  });
+
+  it("rejects reserved system provenance fields for non-ACP clients", async () => {
+    createTranscriptFixture("openclaw-chat-send-system-provenance-reject-");
+    mockState.finalText = "ok";
+    const respond = vi.fn();
+    const context = createChatContext();
+
+    await runNonStreamingChatSend({
+      context,
+      respond,
+      idempotencyKey: "idem-system-provenance-reject",
+      requestParams: {
+        systemInputProvenance: { kind: "external_user", sourceChannel: "acp" },
+        systemProvenanceReceipt: "[Source Receipt]\nbridge=openclaw-acp\n[/Source Receipt]",
+      },
+      expectBroadcast: false,
+      waitForCompletion: false,
+    });
+
+    const [ok, _payload, error] = respond.mock.calls.at(-1) ?? [];
+    expect(ok).toBe(false);
+    expect(error).toMatchObject({
+      message: "system provenance fields are reserved for the ACP bridge",
+    });
+    expect(mockState.lastDispatchCtx).toBeUndefined();
+  });
+
+  it("injects ACP system provenance into the agent-visible body", async () => {
+    createTranscriptFixture("openclaw-chat-send-system-provenance-acp-");
+    mockState.finalText = "ok";
+    const respond = vi.fn();
+    const context = createChatContext();
+
+    await runNonStreamingChatSend({
+      context,
+      respond,
+      idempotencyKey: "idem-system-provenance-acp",
+      message: "bench update",
+      client: {
+        connect: {
+          client: {
+            id: "cli",
+            mode: "cli",
+            displayName: "ACP",
+            version: "acp",
+          },
+        },
+      },
+      requestParams: {
+        systemInputProvenance: {
+          kind: "external_user",
+          originSessionId: "acp-session-1",
+          sourceChannel: "acp",
+          sourceTool: "openclaw_acp",
+        },
+        systemProvenanceReceipt:
+          "[Source Receipt]\nbridge=openclaw-acp\noriginSessionId=acp-session-1\n[/Source Receipt]",
+      },
+      expectBroadcast: false,
+    });
+
+    expect(mockState.lastDispatchCtx?.InputProvenance).toEqual({
+      kind: "external_user",
+      originSessionId: "acp-session-1",
+      sourceChannel: "acp",
+      sourceTool: "openclaw_acp",
+    });
+    expect(mockState.lastDispatchCtx?.Body).toBe(
+      "[Source Receipt]\nbridge=openclaw-acp\noriginSessionId=acp-session-1\n[/Source Receipt]\n\nbench update",
+    );
+    expect(mockState.lastDispatchCtx?.RawBody).toBe("bench update");
+    expect(mockState.lastDispatchCtx?.CommandBody).toBe("bench update");
   });
 });
