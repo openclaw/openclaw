@@ -7,7 +7,7 @@ import {
 
 export const MAX_DISPATCH_WRAPPER_DEPTH = 4;
 
-const WINDOWS_EXE_SUFFIX = ".exe";
+const WINDOWS_EXECUTABLE_SUFFIXES = [".exe", ".cmd", ".bat", ".com"] as const;
 
 const POSIX_SHELL_WRAPPER_NAMES = ["ash", "bash", "dash", "fish", "ksh", "sh", "zsh"] as const;
 const WINDOWS_CMD_WRAPPER_NAMES = ["cmd"] as const;
@@ -31,13 +31,18 @@ function withWindowsExeAliases(names: readonly string[]): string[] {
   const expanded = new Set<string>();
   for (const name of names) {
     expanded.add(name);
-    expanded.add(`${name}${WINDOWS_EXE_SUFFIX}`);
+    expanded.add(`${name}.exe`);
   }
   return Array.from(expanded);
 }
 
 function stripWindowsExeSuffix(value: string): string {
-  return value.endsWith(WINDOWS_EXE_SUFFIX) ? value.slice(0, -WINDOWS_EXE_SUFFIX.length) : value;
+  for (const suffix of WINDOWS_EXECUTABLE_SUFFIXES) {
+    if (value.endsWith(suffix)) {
+      return value.slice(0, -suffix.length);
+    }
+  }
+  return value;
 }
 
 export const POSIX_SHELL_WRAPPERS = new Set(POSIX_SHELL_WRAPPER_NAMES);
