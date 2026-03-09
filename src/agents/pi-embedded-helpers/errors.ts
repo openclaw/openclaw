@@ -157,8 +157,7 @@ const ERROR_PAYLOAD_PREFIX_RE =
 const FINAL_TAG_RE = /<\s*\/?\s*final\s*>/gi;
 // Only strip complete Cortex tag pairs (<tag>content</tag>), not standalone
 // tags like <ref> that may appear in user-facing command examples or code.
-const CORTEX_TAG_RE =
-  /<(mem|file|correction|ref|ctx)(?:\s[^>]*)?>[\s\S]*?<\/\1\s*>\s*/gi;
+const CORTEX_TAG_RE = /<(mem|file|correction|ref|ctx)(?:\s[^>]*)?>[\s\S]*?<\/\1\s*>\s*/gi;
 const ERROR_PREFIX_RE =
   /^(?:error|api\s*error|openai\s*error|anthropic\s*error|gateway\s*error|request failed|failed|exception)[:\s-]+/i;
 const CONTEXT_OVERFLOW_ERROR_HEAD_RE =
