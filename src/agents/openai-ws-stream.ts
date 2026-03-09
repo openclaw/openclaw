@@ -56,6 +56,8 @@ interface WsSession {
   manager: OpenAIWebSocketManager;
   /** Number of messages that were in context.messages at the END of the last streamFn call. */
   lastContextLength: number;
+  /** Stable snapshot of the boundary message at lastContextLength-1. */
+  lastContextBoundaryKey: string | null;
   /** True if the connection has been established at least once. */
   everConnected: boolean;
   /** True once a best-effort warm-up attempt has run for this session. */
@@ -451,6 +453,7 @@ export function createOpenAIWebSocketStreamFn(
         session = {
           manager,
           lastContextLength: 0,
+          lastContextBoundaryKey: null,
           everConnected: false,
           warmUpAttempted: false,
           broken: false,
@@ -524,32 +527,68 @@ export function createOpenAIWebSocketStreamFn(
       }
 
       // ── 3. Compute incremental vs full input ─────────────────────────────
-      const prevResponseId = session.manager.previousResponseId;
+      let prevResponseId = session.manager.previousResponseId;
       let inputItems: InputItem[];
 
+      // Validate replay boundary before attempting incremental send.
       if (prevResponseId && session.lastContextLength > 0) {
-        // Subsequent turn: only send new messages (tool results) since last call
-        const newMessages = context.messages.slice(session.lastContextLength);
-        // Filter to only tool results — the assistant message is already in server context
-        const toolResults = newMessages.filter((m) => (m as AnyMessage).role === "toolResult");
-        if (toolResults.length === 0) {
-          // Shouldn't happen in a well-formed turn, but fall back to full context
-          log.debug(
-            `[ws-stream] session=${sessionId}: no new tool results found; sending full context`,
+        const boundaryIndex = session.lastContextLength - 1;
+        const boundaryMessage = boundaryIndex >= 0 ? context.messages[boundaryIndex] : null;
+        const boundaryKey = boundaryMessage ? JSON.stringify(boundaryMessage) : null;
+        if (
+          session.lastContextBoundaryKey != null &&
+          boundaryKey !== session.lastContextBoundaryKey
+        ) {
+          log.warn(
+            `[ws-stream] session=${sessionId}: context boundary drift detected; clearing previous_response_id and replay cursor`,
           );
-          inputItems = buildFullInput(context);
-        } else {
-          inputItems = convertMessagesToInputItems(toolResults);
+          session.manager.previousResponseId = null;
+          prevResponseId = null;
+          session.lastContextLength = 0;
+          session.lastContextBoundaryKey = null;
         }
+      }
+
+      if (prevResponseId && session.lastContextLength > 0) {
+        const incrementalMessages = context.messages.slice(session.lastContextLength);
+        inputItems =
+          incrementalMessages.length === 0
+            ? buildFullInput(context)
+            : convertMessagesToInputItems(incrementalMessages);
+
+        // Validate that replay window has matching function_call items for outputs.
+        const knownCalls = new Set(
+          inputItems
+            .filter((i) => i?.type === "function_call" && typeof i.call_id === "string")
+            .map((i) => i.call_id as string),
+        );
+        const outputIds = Array.from(
+          new Set(
+            inputItems
+              .filter((i) => i?.type === "function_call_output" && typeof i.call_id === "string")
+              .map((i) => i.call_id as string),
+          ),
+        );
+        const unknownOutputs = outputIds.filter((id) => !knownCalls.has(id));
+
+        if (unknownOutputs.length > 0) {
+          log.warn(
+            `[ws-stream] session=${sessionId}: replay window missing matching function_call items; unknown=${unknownOutputs.join(",")}; clearing previous_response_id and replay cursor`,
+          );
+          session.manager.previousResponseId = null;
+          prevResponseId = null;
+          session.lastContextLength = 0;
+          session.lastContextBoundaryKey = null;
+          inputItems = buildFullInput(context);
+        }
+
         log.debug(
-          `[ws-stream] session=${sessionId}: incremental send (${inputItems.length} tool results) previous_response_id=${prevResponseId}`,
+          `[ws-stream] session=${sessionId}: incremental send (${inputItems.length} items) previous_response_id=${prevResponseId}`,
         );
       } else {
-        // First turn: send full context
+        // First turn or replay-state reset: send full context
         inputItems = buildFullInput(context);
-        log.debug(
-          `[ws-stream] session=${sessionId}: full context send (${inputItems.length} items)`,
-        );
+        log.debug(`[ws-stream] session=${sessionId}: full context send (${inputItems.length} items)`);
       }
 
       // ── 4. Build & send response.create ──────────────────────────────────
@@ -674,6 +713,9 @@ export function createOpenAIWebSocketStreamFn(
             cleanup();
             // Update session state
             session.lastContextLength = capturedContextLength;
+            const boundaryIndex = capturedContextLength - 1;
+            const boundaryMessage = boundaryIndex >= 0 ? context.messages[boundaryIndex] : null;
+            session.lastContextBoundaryKey = boundaryMessage ? JSON.stringify(boundaryMessage) : null;
             // Build and emit the assistant message
             const assistantMsg = buildAssistantMessageFromResponse(event.response, {
               api: model.api,
