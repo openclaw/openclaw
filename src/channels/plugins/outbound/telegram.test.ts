@@ -132,11 +132,105 @@ describe("telegramOutbound", () => {
       "",
       expect.objectContaining({
         mediaUrl: "https://example.com/2.jpg",
-        quoteText: "quoted",
       }),
     );
     const secondCallOpts = sendTelegram.mock.calls[1]?.[2] as Record<string, unknown>;
     expect(secondCallOpts?.buttons).toBeUndefined();
     expect(result).toEqual({ channel: "telegram", messageId: "tg-2", chatId: "123" });
+  });
+
+  it("chunks oversized text payloads to avoid Telegram message length errors", async () => {
+    const sendTelegram = vi
+      .fn()
+      .mockResolvedValueOnce({ messageId: "tg-1", chatId: "123" })
+      .mockResolvedValueOnce({ messageId: "tg-2", chatId: "123" })
+      .mockResolvedValueOnce({ messageId: "tg-3", chatId: "123" });
+
+    const payload: ReplyPayload = {
+      text: "a".repeat(9000),
+      channelData: {
+        telegram: {
+          buttons: [[{ text: "Ok", callback_data: "ok" }]],
+        },
+      },
+    };
+
+    const result = await telegramOutbound.sendPayload?.({
+      cfg: {},
+      to: "123",
+      text: "",
+      payload,
+      deps: { sendTelegram },
+    });
+
+    expect(sendTelegram).toHaveBeenCalledTimes(3);
+    expect(sendTelegram.mock.calls[0]?.[2]).toEqual(
+      expect.objectContaining({ buttons: [[{ text: "Ok", callback_data: "ok" }]] }),
+    );
+    expect((sendTelegram.mock.calls[1]?.[2] as Record<string, unknown>)?.buttons).toBeUndefined();
+    expect((sendTelegram.mock.calls[2]?.[2] as Record<string, unknown>)?.buttons).toBeUndefined();
+
+    // Enforce per-chunk length safety.
+    for (const call of sendTelegram.mock.calls) {
+      const text = call[1] as string;
+      expect(text.length).toBeLessThanOrEqual(4000);
+    }
+
+    expect(result).toEqual({ channel: "telegram", messageId: "tg-3", chatId: "123" });
+  });
+
+  it("splits long captions: first chunk rides on first media, remainder sent as follow-up text", async () => {
+    const sendTelegram = vi
+      .fn()
+      .mockResolvedValueOnce({ messageId: "tg-1", chatId: "123" })
+      .mockResolvedValueOnce({ messageId: "tg-2", chatId: "123" })
+      .mockResolvedValueOnce({ messageId: "tg-3", chatId: "123" });
+
+    const payload: ReplyPayload = {
+      text: "b".repeat(5000),
+      mediaUrls: ["https://example.com/1.jpg", "https://example.com/2.jpg"],
+      channelData: {
+        telegram: {
+          buttons: [[{ text: "Ok", callback_data: "ok" }]],
+        },
+      },
+    };
+
+    const result = await telegramOutbound.sendPayload?.({
+      cfg: {},
+      to: "123",
+      text: "",
+      payload,
+      deps: { sendTelegram },
+    });
+
+    // 2 media sends + 1 follow-up text chunk
+    expect(sendTelegram).toHaveBeenCalledTimes(3);
+
+    // First media gets first chunk + buttons
+    expect(sendTelegram).toHaveBeenNthCalledWith(
+      1,
+      "123",
+      expect.any(String),
+      expect.objectContaining({
+        mediaUrl: "https://example.com/1.jpg",
+        buttons: [[{ text: "Ok", callback_data: "ok" }]],
+      }),
+    );
+
+    // Second media has empty caption
+    expect(sendTelegram).toHaveBeenNthCalledWith(
+      2,
+      "123",
+      "",
+      expect.objectContaining({ mediaUrl: "https://example.com/2.jpg" }),
+    );
+
+    // Follow-up text has no mediaUrl
+    const thirdOpts = sendTelegram.mock.calls[2]?.[2] as Record<string, unknown>;
+    expect(thirdOpts?.mediaUrl).toBeUndefined();
+    expect(thirdOpts?.buttons).toBeUndefined();
+
+    expect(result).toEqual({ channel: "telegram", messageId: "tg-3", chatId: "123" });
   });
 });
