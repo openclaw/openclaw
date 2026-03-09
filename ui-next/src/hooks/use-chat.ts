@@ -339,8 +339,22 @@ export function useChat(sendRpc: SendRpc) {
       queueTimerRef.current = setTimeout(trySendNextQueued, 500);
     });
 
+    // Fallback: poll every 3s to catch stuck queue states.
+    // The subscriber can miss transitions due to batched state updates or
+    // race conditions between finalizeStream and removeFromQueue.
+    const fallbackInterval = setInterval(() => {
+      const s = useChatStore.getState();
+      if (!s.isQueueRunning || s.messageQueue.length === 0) {
+        return;
+      }
+      if (!s.isStreaming && !s.isSendPending) {
+        trySendNextQueued();
+      }
+    }, 3000);
+
     return () => {
       unsub();
+      clearInterval(fallbackInterval);
       if (queueTimerRef.current) {
         clearTimeout(queueTimerRef.current);
       }
