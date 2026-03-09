@@ -94,6 +94,8 @@ export type ChatState = {
   streamContent: string;
   /** Timestamp (ms) of last stream event — used to detect stuck streams */
   lastStreamEventAt: number;
+  /** True when polling detected new messages (agent working in background) */
+  isAgentActive: boolean;
 
   // Pause-display: UI pauses rendering deltas while backend continues
   isPaused: boolean;
@@ -249,6 +251,7 @@ const initialState = {
   streamRunId: null as string | null,
   streamContent: "",
   lastStreamEventAt: 0,
+  isAgentActive: false,
   isPaused: false,
   pauseBuffer: "",
   isSendPending: false,
@@ -295,9 +298,32 @@ export const useChatStore = create<ChatState>((set, get) => ({
       }
       deduped.push(m);
     }
+    const next = deduped.map((m, i) => ensureId({ ...m, seq: i + 1 }));
+    // Skip update if message count and last message content are identical
+    // (avoids unnecessary re-renders during live-polling).
+    const prev = get().messages;
+    if (
+      prev.length === next.length &&
+      prev.length > 0 &&
+      prev[prev.length - 1].content === next[next.length - 1].content &&
+      prev[prev.length - 1].role === next[next.length - 1].role
+    ) {
+      return;
+    }
+    // Detect agent activity: if polling brought new messages beyond what
+    // we had, the agent is working in the background.
+    const grewFromPoll = prev.length > 0 && next.length > prev.length;
+    const lastRole = next[next.length - 1]?.role;
+    // Agent is active if new messages arrived and last message is from
+    // assistant or a tool (not user — user messages come from our UI).
+    const agentActive = grewFromPoll && lastRole !== "user";
     set({
-      messages: deduped.map((m, i) => ensureId({ ...m, seq: i + 1 })),
+      messages: next,
       isSendPending: false,
+      // Only set isAgentActive when NOT already streaming (avoid conflict)
+      ...(agentActive && !get().isStreaming ? { isAgentActive: true } : {}),
+      // Clear if last message is a final assistant reply (no more tool calls expected)
+      ...(!agentActive && get().isAgentActive ? { isAgentActive: false } : {}),
     });
   },
   setMessagesLoading: (loading) => set({ messagesLoading: loading }),

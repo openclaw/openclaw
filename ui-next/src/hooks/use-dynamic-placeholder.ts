@@ -24,12 +24,17 @@ export function useDynamicPlaceholder(agentLabel?: string): string {
   const isPaused = useChatStore((s: ChatState) => s.isPaused);
   const isQueueRunning = useChatStore((s: ChatState) => s.isQueueRunning);
   const messageQueue = useChatStore((s: ChatState) => s.messageQueue);
+  const isAgentActive = useChatStore((s: ChatState) => s.isAgentActive);
 
   const [idleIndex, setIdleIndex] = useState(0);
 
   // Determine whether we are in the idle state
   const isIdle =
-    connectionStatus === "connected" && !isSendPending && !isStreaming && !isQueueRunning;
+    connectionStatus === "connected" &&
+    !isSendPending &&
+    !isStreaming &&
+    !isQueueRunning &&
+    !isAgentActive;
 
   // Rotate idle suggestions every 5 seconds; reset index when entering idle
   useEffect(() => {
@@ -60,6 +65,10 @@ export function useDynamicPlaceholder(agentLabel?: string): string {
 
   if (isStreaming && !isPaused) {
     return agentLabel ? `${agentLabel} is thinking...` : "AI is generating a response...";
+  }
+
+  if (isAgentActive) {
+    return agentLabel ? `${agentLabel} is working...` : "Agent is working in the background...";
   }
 
   if (isQueueRunning && messageQueue.length > 0) {

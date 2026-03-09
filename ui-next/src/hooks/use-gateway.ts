@@ -210,7 +210,13 @@ type ChatEventPayload = {
     role?: string;
     content?: Array<{ type: string; text?: string }>;
     timestamp?: number;
-    usage?: { input?: number; output?: number; cacheRead?: number; cacheWrite?: number; totalTokens?: number };
+    usage?: {
+      input?: number;
+      output?: number;
+      cacheRead?: number;
+      cacheWrite?: number;
+      totalTokens?: number;
+    };
   };
   errorMessage?: string;
 };
@@ -273,10 +279,16 @@ function handleChatEvent(payload: unknown) {
   // Ignore events for other sessions.
   // The gateway sends canonical keys (e.g. "agent:main:main") while the UI
   // may still hold the short alias ("main") until loadSessions normalizes it.
-  // Accept events where either key is a suffix of the other.
+  // Accept events where either key is a suffix/segment match of the other.
   if (sessionKey && sessionKey !== chatStore.activeSessionKey) {
     const ak = chatStore.activeSessionKey;
-    if (!sessionKey.endsWith(`:${ak}`) && !ak.endsWith(`:${sessionKey}`)) {
+    // Suffix check (handles prefix differences like "agent:main:key" vs "key")
+    const suffixMatch = sessionKey.endsWith(`:${ak}`) || ak.endsWith(`:${sessionKey}`);
+    // Segment match: compare last colon-separated segment (the actual session ID)
+    const eventSegment = sessionKey.split(":").pop() ?? sessionKey;
+    const activeSegment = ak.split(":").pop() ?? ak;
+    const segmentMatch = eventSegment === activeSegment && eventSegment.length > 0;
+    if (!suffixMatch && !segmentMatch) {
       return;
     }
   }

@@ -19,16 +19,16 @@ import {
 import type { ContextPanelContent } from "@/components/chat/context-panel";
 import { parseAgentSystemEvent, type AgentEventPayload } from "@/components/chat/system-events";
 import { extractToolCards, type ToolDisplayMode } from "@/components/chat/tool-call-card";
+import { Button } from "@/components/ui/button";
 import { ChatContainer } from "@/components/ui/custom/prompt/chat-container";
 import { TextShimmerLoader } from "@/components/ui/custom/prompt/loader";
 import { PromptScrollButton } from "@/components/ui/custom/prompt/scroll-button";
-import { Button } from "@/components/ui/button";
-import { cn } from "@/lib/utils";
 import { type ModelEntry } from "@/components/ui/custom/status/model-selector";
 import { useToast } from "@/components/ui/custom/toast";
 import { useChat } from "@/hooks/use-chat";
 import { useDynamicPlaceholder } from "@/hooks/use-dynamic-placeholder";
 import { useGateway, onAgentPushEvent } from "@/hooks/use-gateway";
+import { cn } from "@/lib/utils";
 import { useChatStore, getMessageText, type ChatMessage } from "@/store/chat-store";
 import { useGatewayStore } from "@/store/gateway-store";
 
@@ -49,7 +49,10 @@ export function ChatPage() {
 
   const messages = useChatStore((s) => s.messages);
   const messagesLoading = useChatStore((s) => s.messagesLoading);
-  const isStreaming = useChatStore((s) => s.isStreaming);
+  const isStreamingRaw = useChatStore((s) => s.isStreaming);
+  const isAgentActive = useChatStore((s) => s.isAgentActive);
+  // Treat background agent activity the same as streaming for UI indicators
+  const isStreaming = isStreamingRaw || isAgentActive;
   const isPaused = useChatStore((s) => s.isPaused);
   const isSendPending = useChatStore((s) => s.isSendPending);
   const streamContent = useChatStore((s) => s.streamContent);
@@ -512,4 +515,3 @@ export function ChatPage() {
     </>
   );
 }
-

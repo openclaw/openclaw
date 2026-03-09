@@ -436,6 +436,25 @@ export function useChat(sendRpc: SendRpc) {
     void loadHistory();
   }, [loadHistory]);
 
+  // Live-poll: periodically reload history while viewing a session.
+  // The gateway only pushes text deltas as "chat" events — tool calls,
+  // web fetches, and other intermediate steps don't generate events
+  // visible to the UI. Polling at a low frequency ensures background
+  // activity shows up without needing a manual page refresh.
+  // Poll faster (3s) when streaming is active, slower (8s) otherwise.
+  const isStreaming = useChatStore((s) => s.isStreaming);
+  const isSendPending = useChatStore((s) => s.isSendPending);
+  useEffect(() => {
+    if (!isConnected || !activeSessionKey) {
+      return;
+    }
+    const intervalMs = isStreaming || isSendPending ? 3000 : 8000;
+    const poll = setInterval(() => {
+      void loadHistory();
+    }, intervalMs);
+    return () => clearInterval(poll);
+  }, [isStreaming, isSendPending, isConnected, activeSessionKey, loadHistory]);
+
   return {
     sendMessage,
     abortRun,
