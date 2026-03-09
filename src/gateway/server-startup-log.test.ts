@@ -103,7 +103,7 @@ describe("gateway startup log", () => {
         models: {
           providers: {
             openai: {
-              apiKey: "sk-test-key-12345",
+              apiKey: "sk-test-key-12345", // pragma: allowlist secret
               models: [{ id: "gpt-5.4", name: "GPT 5.4" }],
             },
           },
