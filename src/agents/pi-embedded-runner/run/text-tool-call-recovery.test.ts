@@ -189,7 +189,10 @@ describe("wrapStreamFnRecoverTextToolCalls", () => {
   });
 
   it("does not recover tool-call examples inside markdown code fences or inline code", async () => {
-    const text = 'Use `exec({"command":"pwd"})` to inspect.\\n```ts\\nexec({"command":"ls"})\\n```';
+    const text = `Use \`exec({"command":"pwd"})\` to inspect.
+\`\`\`ts
+exec({"command":"ls"})
+\`\`\``;
     const finalMessage = {
       role: "assistant",
       content: [{ type: "text", text }],
