@@ -6,21 +6,27 @@ import { note } from "../terminal/note.js";
 import { detectLegacyWorkspaceDirs, formatLegacyWorkspaceWarning } from "./doctor-workspace.js";
 
 export function noteWorkspaceStatus(cfg: OpenClawConfig) {
-  const workspaceDir = resolveAgentWorkspaceDir(cfg, resolveDefaultAgentId(cfg));
+  const defaultAgentId = resolveDefaultAgentId(cfg);
+  const workspaceDir = resolveAgentWorkspaceDir(cfg, defaultAgentId);
   const legacyWorkspace = detectLegacyWorkspaceDirs({ workspaceDir });
   if (legacyWorkspace.legacyDirs.length > 0) {
     note(formatLegacyWorkspaceWarning(legacyWorkspace), "Extra workspace");
   }
 
-  const skillsReport = buildWorkspaceSkillStatus(workspaceDir, { config: cfg });
+  const skillsReport = buildWorkspaceSkillStatus(workspaceDir, {
+    config: cfg,
+    agentId: defaultAgentId,
+  });
   note(
     [
       `Eligible: ${skillsReport.skills.filter((s) => s.eligible).length}`,
       `Missing requirements: ${
-        skillsReport.skills.filter((s) => !s.eligible && !s.disabled && !s.blockedByAllowlist)
-          .length
+        skillsReport.skills.filter(
+          (s) => !s.eligible && !s.disabled && !s.blockedByAllowlist && !s.blockedByToolPolicy,
+        ).length
       }`,
       `Blocked by allowlist: ${skillsReport.skills.filter((s) => s.blockedByAllowlist).length}`,
+      `Blocked by tool policy: ${skillsReport.skills.filter((s) => s.blockedByToolPolicy).length}`,
     ].join("\n"),
     "Skills status",
   );

@@ -19,9 +19,13 @@ type SkillStatusReport = Awaited<
 
 async function loadSkillsStatusReport(): Promise<SkillStatusReport> {
   const config = loadConfig();
-  const workspaceDir = resolveAgentWorkspaceDir(config, resolveDefaultAgentId(config));
+  const defaultAgentId = resolveDefaultAgentId(config);
+  const workspaceDir = resolveAgentWorkspaceDir(config, defaultAgentId);
   const { buildWorkspaceSkillStatus } = await import("../agents/skills-status.js");
-  return buildWorkspaceSkillStatus(workspaceDir, { config });
+  return buildWorkspaceSkillStatus(workspaceDir, {
+    config,
+    agentId: defaultAgentId,
+  });
 }
 
 async function runSkillsAction(render: (report: SkillStatusReport) => string): Promise<void> {

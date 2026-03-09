@@ -35,6 +35,9 @@ function formatSkillStatus(skill: SkillStatusEntry): string {
   if (skill.blockedByAllowlist) {
     return theme.warn("🚫 blocked");
   }
+  if (skill.blockedByToolPolicy) {
+    return theme.warn("🚫 tool policy");
+  }
   return theme.error("✗ missing");
 }
 
@@ -60,6 +63,9 @@ function formatSkillMissingSummary(skill: SkillStatusEntry): string {
   if (skill.missing.os.length > 0) {
     missing.push(`os: ${skill.missing.os.join(", ")}`);
   }
+  if (skill.blockedByToolPolicy && skill.blockedTools.length > 0) {
+    missing.push(`tools: ${skill.blockedTools.join(", ")}`);
+  }
   return missing.join("; ");
 }
 
@@ -77,6 +83,9 @@ export function formatSkillsList(report: SkillStatusReport, opts: SkillsListOpti
         eligible: s.eligible,
         disabled: s.disabled,
         blockedByAllowlist: s.blockedByAllowlist,
+        blockedByToolPolicy: s.blockedByToolPolicy,
+        allowedTools: s.allowedTools,
+        blockedTools: s.blockedTools,
         source: s.source,
         bundled: s.bundled,
         primaryEnv: s.primaryEnv,
@@ -161,7 +170,9 @@ export function formatSkillInfo(
       ? theme.warn("⏸ Disabled")
       : skill.blockedByAllowlist
         ? theme.warn("🚫 Blocked by allowlist")
-        : theme.error("✗ Missing requirements");
+        : skill.blockedByToolPolicy
+          ? theme.warn("🚫 Blocked by tool policy")
+          : theme.error("✗ Missing requirements");
 
   lines.push(`${emoji} ${theme.heading(skill.name)} ${status}`);
   lines.push("");
@@ -176,6 +187,14 @@ export function formatSkillInfo(
   }
   if (skill.primaryEnv) {
     lines.push(`${theme.muted("  Primary env:")} ${skill.primaryEnv}`);
+  }
+  if (skill.allowedTools.length > 0) {
+    lines.push(`${theme.muted("  Allowed tools:")} ${skill.allowedTools.join(", ")}`);
+  }
+  if (skill.blockedByToolPolicy && skill.blockedTools.length > 0) {
+    lines.push(
+      `${theme.muted("  Tool policy blocked:")} ${theme.warn(skill.blockedTools.join(", "))}`,
+    );
   }
 
   const hasRequirements =
@@ -240,9 +259,16 @@ export function formatSkillInfo(
 export function formatSkillsCheck(report: SkillStatusReport, opts: SkillsCheckOptions): string {
   const eligible = report.skills.filter((s) => s.eligible);
   const disabled = report.skills.filter((s) => s.disabled);
-  const blocked = report.skills.filter((s) => s.blockedByAllowlist && !s.disabled);
+  const blockedByAllowlist = report.skills.filter((s) => s.blockedByAllowlist && !s.disabled);
+  const blockedByToolPolicy = report.skills.filter(
+    (s) => s.blockedByToolPolicy && !s.disabled && !s.blockedByAllowlist,
+  );
   const missingReqs = report.skills.filter(
-    (s) => !s.eligible && !s.disabled && !s.blockedByAllowlist,
+    (s) =>
+      !s.eligible &&
+      !s.disabled &&
+      !s.blockedByAllowlist &&
+      !s.blockedByToolPolicy,
   );
 
   if (opts.json) {
@@ -252,12 +278,18 @@ export function formatSkillsCheck(report: SkillStatusReport, opts: SkillsCheckOp
           total: report.skills.length,
           eligible: eligible.length,
           disabled: disabled.length,
-          blocked: blocked.length,
+          blockedByAllowlist: blockedByAllowlist.length,
+          blockedByToolPolicy: blockedByToolPolicy.length,
           missingRequirements: missingReqs.length,
         },
         eligible: eligible.map((s) => s.name),
         disabled: disabled.map((s) => s.name),
-        blocked: blocked.map((s) => s.name),
+        blockedByAllowlist: blockedByAllowlist.map((s) => s.name),
+        blockedByToolPolicy: blockedByToolPolicy.map((s) => ({
+          name: s.name,
+          blockedTools: s.blockedTools,
+          allowedTools: s.allowedTools,
+        })),
         missingRequirements: missingReqs.map((s) => ({
           name: s.name,
           missing: s.missing,
@@ -275,7 +307,12 @@ export function formatSkillsCheck(report: SkillStatusReport, opts: SkillsCheckOp
   lines.push(`${theme.muted("Total:")} ${report.skills.length}`);
   lines.push(`${theme.success("✓")} ${theme.muted("Eligible:")} ${eligible.length}`);
   lines.push(`${theme.warn("⏸")} ${theme.muted("Disabled:")} ${disabled.length}`);
-  lines.push(`${theme.warn("🚫")} ${theme.muted("Blocked by allowlist:")} ${blocked.length}`);
+  lines.push(
+    `${theme.warn("🚫")} ${theme.muted("Blocked by allowlist:")} ${blockedByAllowlist.length}`,
+  );
+  lines.push(
+    `${theme.warn("🚫")} ${theme.muted("Blocked by tool policy:")} ${blockedByToolPolicy.length}`,
+  );
   lines.push(`${theme.error("✗")} ${theme.muted("Missing requirements:")} ${missingReqs.length}`);
 
   if (eligible.length > 0) {

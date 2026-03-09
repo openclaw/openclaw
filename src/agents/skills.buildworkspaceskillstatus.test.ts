@@ -6,6 +6,7 @@ import type { SkillEntry } from "./skills/types.js";
 function makeEntry(params: {
   name: string;
   source?: string;
+  frontmatter?: Record<string, string>;
   os?: string[];
   requires?: { bins?: string[]; env?: string[]; config?: string[] };
   install?: Array<{
@@ -27,7 +28,7 @@ function makeEntry(params: {
       baseDir: `/tmp/${params.name}`,
       disableModelInvocation: false,
     },
-    frontmatter: {},
+    frontmatter: params.frontmatter ?? {},
     metadata: {
       ...(params.os ? { os: params.os } : {}),
       ...(params.requires ? { requires: params.requires } : {}),
@@ -106,6 +107,26 @@ describe("buildWorkspaceSkillStatus", () => {
     expect(skill?.blockedByAllowlist).toBe(true);
     expect(skill?.eligible).toBe(false);
     expect(skill?.bundled).toBe(true);
+  });
+
+  it("marks skills blocked by tool policy when all allowed-tools are unavailable", async () => {
+    const entry = makeEntry({
+      name: "terminal-command-execution",
+      frontmatter: {
+        "allowed-tools": '["exec", "process"]',
+      },
+    });
+
+    const report = buildWorkspaceSkillStatus("/tmp/ws", {
+      entries: [entry],
+      config: { tools: { profile: "messaging" } },
+    });
+    const skill = report.skills.find((reportEntry) => reportEntry.name === "terminal-command-execution");
+
+    expect(skill).toBeDefined();
+    expect(skill?.blockedByToolPolicy).toBe(true);
+    expect(skill?.blockedTools).toEqual(["exec", "process"]);
+    expect(skill?.eligible).toBe(false);
   });
 
   it("filters install options by OS", async () => {

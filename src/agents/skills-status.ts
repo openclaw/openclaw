@@ -1,8 +1,20 @@
 import path from "node:path";
+import { resolveDefaultAgentId } from "./agent-scope.js";
 import type { OpenClawConfig } from "../config/config.js";
+import { buildAgentMainSessionKey } from "../routing/session-key.js";
 import { evaluateEntryRequirementsForCurrentPlatform } from "../shared/entry-status.js";
+import { normalizeStringList } from "../shared/frontmatter.js";
 import type { RequirementConfigCheck, Requirements } from "../shared/requirements.js";
 import { CONFIG_DIR } from "../utils.js";
+import {
+  isToolAllowedByPolicies,
+  resolveEffectiveToolPolicy,
+} from "./pi-tools.policy.js";
+import {
+  mergeAlsoAllowPolicy,
+  normalizeToolName,
+  resolveToolProfilePolicy,
+} from "./tool-policy.js";
 import {
   hasBinary,
   isBundledSkillAllowed,
@@ -41,6 +53,9 @@ export type SkillStatusEntry = {
   always: boolean;
   disabled: boolean;
   blockedByAllowlist: boolean;
+  blockedByToolPolicy: boolean;
+  allowedTools: string[];
+  blockedTools: string[];
   eligible: boolean;
   requirements: Requirements;
   missing: Requirements;
@@ -166,12 +181,95 @@ function normalizeInstallOptions(
   return [toOption(preferred.spec, preferred.index)];
 }
 
+type SkillToolPolicyContext = {
+  isAllowed: (toolName: string) => boolean;
+};
+
+function parseAllowedTools(entry: SkillEntry): string[] {
+  const raw =
+    entry.frontmatter["allowed-tools"] ??
+    entry.frontmatter["allowed_tools"] ??
+    entry.frontmatter.allowedTools;
+  if (typeof raw !== "string" || !raw.trim()) {
+    return [];
+  }
+
+  const normalizeTools = (value: unknown): string[] =>
+    Array.isArray(value)
+      ? value
+          .map((tool) => normalizeToolName(String(tool)))
+          .filter(Boolean)
+      : [];
+
+  const trimmed = raw.trim();
+  if (trimmed.startsWith("[") && trimmed.endsWith("]")) {
+    try {
+      const parsed = JSON.parse(trimmed) as unknown;
+      const normalized = normalizeTools(parsed);
+      if (normalized.length > 0) {
+        return Array.from(new Set(normalized));
+      }
+    } catch {
+      // Fallback to comma-separated parsing below.
+    }
+  }
+
+  return Array.from(new Set(normalizeStringList(trimmed).map((tool) => normalizeToolName(tool))));
+}
+
+function resolveSkillToolPolicyContext(params: {
+  config?: OpenClawConfig;
+  agentId: string;
+}): SkillToolPolicyContext {
+  if (!params.config) {
+    return { isAllowed: () => true };
+  }
+
+  const sessionKey = buildAgentMainSessionKey({ agentId: params.agentId });
+  const {
+    profile,
+    providerProfile,
+    profileAlsoAllow,
+    providerProfileAlsoAllow,
+    globalPolicy,
+    globalProviderPolicy,
+    agentPolicy,
+    agentProviderPolicy,
+  } = resolveEffectiveToolPolicy({
+    config: params.config,
+    sessionKey,
+  });
+
+  const profilePolicyWithAlsoAllow = mergeAlsoAllowPolicy(
+    resolveToolProfilePolicy(profile),
+    profileAlsoAllow,
+  );
+  const providerProfilePolicyWithAlsoAllow = mergeAlsoAllowPolicy(
+    resolveToolProfilePolicy(providerProfile),
+    providerProfileAlsoAllow,
+  );
+
+  const policies = [
+    profilePolicyWithAlsoAllow,
+    providerProfilePolicyWithAlsoAllow,
+    globalPolicy,
+    globalProviderPolicy,
+    agentPolicy,
+    agentProviderPolicy,
+  ];
+
+  return {
+    isAllowed: (toolName: string) => isToolAllowedByPolicies(normalizeToolName(toolName), policies),
+  };
+}
+
 function buildSkillStatus(
   entry: SkillEntry,
   config?: OpenClawConfig,
   prefs?: SkillsInstallPreferences,
   eligibility?: SkillEligibilityContext,
   bundledNames?: Set<string>,
+  toolPolicy?: SkillToolPolicyContext,
 ): SkillStatusEntry {
   const skillKey = resolveSkillKey(entry);
   const skillConfig = resolveSkillConfig(config, skillKey);
@@ -200,7 +298,13 @@ function buildSkillStatus(
       isEnvSatisfied,
       isConfigSatisfied,
     });
-  const eligible = !disabled && !blockedByAllowlist && requirementsSatisfied;
+
+  const allowedTools = parseAllowedTools(entry);
+  const blockedTools = allowedTools.filter((toolName) => !(toolPolicy?.isAllowed(toolName) ?? true));
+  const blockedByToolPolicy = allowedTools.length > 0 && blockedTools.length === allowedTools.length;
+
+  const eligible =
+    !disabled && !blockedByAllowlist && !blockedByToolPolicy && requirementsSatisfied;
 
   return {
     name: entry.skill.name,
@@ -216,6 +320,9 @@ function buildSkillStatus(
     always,
     disabled,
     blockedByAllowlist,
+    blockedByToolPolicy,
+    allowedTools,
+    blockedTools,
     eligible,
     requirements: required,
     missing,
@@ -231,6 +338,7 @@ export function buildWorkspaceSkillStatus(
     managedSkillsDir?: string;
     entries?: SkillEntry[];
     eligibility?: SkillEligibilityContext;
+    agentId?: string;
   },
 ): SkillStatusReport {
   const managedSkillsDir = opts?.managedSkillsDir ?? path.join(CONFIG_DIR, "skills");
@@ -243,11 +351,21 @@ export function buildWorkspaceSkillStatus(
       bundledSkillsDir: bundledContext.dir,
     });
   const prefs = resolveSkillsInstallPreferences(opts?.config);
+  const agentId = opts?.agentId?.trim() || resolveDefaultAgentId(opts?.config ?? {});
+  const toolPolicy = resolveSkillToolPolicyContext({ config: opts?.config, agentId });
+
   return {
     workspaceDir,
     managedSkillsDir,
     skills: skillEntries.map((entry) =>
-      buildSkillStatus(entry, opts?.config, prefs, opts?.eligibility, bundledContext.names),
+      buildSkillStatus(
+        entry,
+        opts?.config,
+        prefs,
+        opts?.eligibility,
+        bundledContext.names,
+        toolPolicy,
+      ),
     ),
   };
 }

@@ -73,6 +73,7 @@ describe("registerSkillsCli", () => {
 
     expect(buildWorkspaceSkillStatusMock).toHaveBeenCalledWith("/tmp/workspace", {
       config: { gateway: {} },
+      agentId: "main",
     });
     expect(formatSkillsListMock).toHaveBeenCalledWith(
       report,
