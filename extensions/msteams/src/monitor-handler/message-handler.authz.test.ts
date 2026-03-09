@@ -96,4 +96,110 @@ describe("msteams monitor handler authz", () => {
     });
     expect(conversationStore.upsert).not.toHaveBeenCalled();
   });
+
+  it("passes teamId into route resolution for channel messages", async () => {
+    const routeError = new Error("route-called");
+    const resolveAgentRoute = vi.fn(() => {
+      throw routeError;
+    });
+
+    setMSTeamsRuntime({
+      logging: { shouldLogVerbose: () => false },
+      channel: {
+        debounce: {
+          resolveInboundDebounceMs: () => 0,
+          createInboundDebouncer: <T>(params: {
+            onFlush: (entries: T[]) => Promise<void>;
+          }): { enqueue: (entry: T) => Promise<void> } => ({
+            enqueue: async (entry: T) => {
+              await params.onFlush([entry]);
+            },
+          }),
+        },
+        pairing: {
+          readAllowFromStore: vi.fn(async () => []),
+          upsertPairingRequest: vi.fn(async () => null),
+        },
+        text: {
+          hasControlCommand: () => false,
+        },
+        routing: {
+          resolveAgentRoute,
+        },
+      },
+    } as unknown as PluginRuntime);
+
+    const deps: MSTeamsMessageHandlerDeps = {
+      cfg: {
+        channels: {
+          msteams: {
+            groupPolicy: "open",
+          },
+        },
+      } as OpenClawConfig,
+      runtime: { error: vi.fn() } as unknown as RuntimeEnv,
+      appId: "test-app",
+      adapter: {} as MSTeamsMessageHandlerDeps["adapter"],
+      tokenProvider: {
+        getAccessToken: vi.fn(async () => "token"),
+      },
+      textLimit: 4000,
+      mediaMaxBytes: 1024 * 1024,
+      conversationStore: {
+        upsert: vi.fn(async () => undefined),
+      } as unknown as MSTeamsMessageHandlerDeps["conversationStore"],
+      pollStore: {
+        recordVote: vi.fn(async () => null),
+      } as unknown as MSTeamsMessageHandlerDeps["pollStore"],
+      log: {
+        info: vi.fn(),
+        debug: vi.fn(),
+        error: vi.fn(),
+      } as unknown as MSTeamsMessageHandlerDeps["log"],
+    };
+
+    const handler = createMSTeamsMessageHandler(deps);
+
+    await expect(
+      handler({
+        activity: {
+          id: "msg-channel-1",
+          type: "message",
+          text: "hello from team channel",
+          from: {
+            id: "sender-id",
+            aadObjectId: "sender-aad",
+            name: "Sender",
+          },
+          recipient: {
+            id: "bot-id",
+            name: "Bot",
+          },
+          conversation: {
+            id: "19:channel@thread.tacv2",
+            conversationType: "channel",
+          },
+          channelData: {
+            team: {
+              id: "team-123",
+              name: "Android Team",
+            },
+          },
+          attachments: [],
+        },
+        sendActivity: vi.fn(async () => undefined),
+      } as unknown as Parameters<typeof handler>[0]),
+    ).rejects.toThrow(routeError);
+
+    expect(resolveAgentRoute).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: "msteams",
+        teamId: "team-123",
+        peer: {
+          kind: "channel",
+          id: "19:channel@thread.tacv2",
+        },
+      }),
+    );
+  });
 });
