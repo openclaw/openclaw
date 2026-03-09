@@ -7,6 +7,10 @@ import {
 } from "./message-extract.ts";
 
 describe("extractTextCached", () => {
+  const SESSION_RECAP_BLOCK = `<session-recap>
+<summary>Found 10 recent items across 3 categories</summary>
+</session-recap>`;
+
   it("matches extractText output", () => {
     const message = {
       role: "assistant",
@@ -41,6 +45,16 @@ describe("extractTextCached", () => {
     };
     expect(extractText(message)).toBe("Final user answer");
     expect(extractTextCached(message)).toBe("Final user answer");
+  });
+
+  it("strips a leading session recap block from user messages", () => {
+    const message = {
+      role: "user",
+      content: `${SESSION_RECAP_BLOCK}\n\nVisible user text`,
+    };
+
+    expect(extractText(message)).toBe("Visible user text");
+    expect(extractTextCached(message)).toBe("Visible user text");
   });
 });
 

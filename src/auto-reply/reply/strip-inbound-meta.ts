@@ -150,18 +150,11 @@ function stripLeadingSessionRecapBlock(lines: string[]): { lines: string[]; stri
  * (fast path — zero allocation).
  */
 export function stripInboundMetadata(text: string): string {
-  const hasSentinel = !!text && SENTINEL_FAST_RE.test(text);
-  const hasSessionRecap = !!text && SESSION_RECAP_QUICK_RE.test(text);
-  if (!text || (!hasSentinel && !hasSessionRecap)) {
+  if (!text || !SENTINEL_FAST_RE.test(text)) {
     return text;
   }
 
-  const recap = stripLeadingSessionRecapBlock(text.split("\n"));
-  if (!hasSentinel && !recap.stripped) {
-    return text;
-  }
-
-  const lines = recap.lines;
+  const lines = text.split("\n");
   const result: string[] = [];
   let inMetaBlock = false;
   let inFencedJson = false;

@@ -1,4 +1,4 @@
-import { stripInboundMetadata } from "../../../../src/auto-reply/reply/strip-inbound-meta.js";
+import { stripLeadingInboundMetadata } from "../../../../src/auto-reply/reply/strip-inbound-meta.js";
 import { stripEnvelope } from "../../../../src/shared/chat-envelope.js";
 import { stripThinkingTags } from "../format.ts";
 
@@ -11,7 +11,7 @@ function processMessageText(text: string, role: string): string {
     return stripThinkingTags(text);
   }
   return shouldStripInboundMetadata
-    ? stripInboundMetadata(stripEnvelope(text))
+    ? stripLeadingInboundMetadata(stripEnvelope(text))
     : stripEnvelope(text);
 }
 

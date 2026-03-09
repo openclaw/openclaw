@@ -132,9 +132,9 @@ Hello from user`;
     expect(stripInboundMetadata(input)).toBe(input);
   });
 
-  it("strips a leading session recap block", () => {
+  it("preserves a leading session recap block", () => {
     const input = `${SESSION_RECAP_BLOCK}\n\nActual user message`;
-    expect(stripInboundMetadata(input)).toBe("Actual user message");
+    expect(stripInboundMetadata(input)).toBe(input);
   });
 
   it("does not strip session recap text that appears mid-message", () => {
