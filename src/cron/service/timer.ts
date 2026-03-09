@@ -858,7 +858,9 @@ export async function runMissedJobs(
         startupCandidates: [] as Array<{ jobId: string; job: CronJob }>,
       };
     }
-    const sorted = missed.toSorted((a, b) => (a.state.nextRunAtMs ?? 0) - (b.state.nextRunAtMs ?? 0));
+    const sorted = missed.toSorted(
+      (a, b) => (a.state.nextRunAtMs ?? 0) - (b.state.nextRunAtMs ?? 0),
+    );
     const startupCandidates = sorted.slice(0, maxImmediate);
     const deferred = sorted.slice(maxImmediate);
     if (deferred.length > 0) {
