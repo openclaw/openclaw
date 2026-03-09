@@ -72,4 +72,17 @@ describe("parseInlineDirectives", () => {
     expect(result.replyToCurrent).toBe(true);
     expect(result.hasReplyTag).toBe(true);
   });
+
+  test("does not add artificial leading spaces when stripping directives on later lines", () => {
+    const input = "first line\n[[reply_to_current]]second line\n[[audio_as_voice]]third line";
+    const result = parseInlineDirectives(input, {
+      currentMessageId: "msg-1",
+      stripReplyTags: true,
+      stripAudioTag: true,
+    });
+
+    expect(result.text).toBe("first line\nsecond line\nthird line");
+    expect(result.replyToId).toBe("msg-1");
+    expect(result.audioAsVoice).toBe(true);
+  });
 });
