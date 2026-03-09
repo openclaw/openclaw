@@ -77,6 +77,7 @@ Text + native (when enabled):
 - `/approve <id> allow-once|allow-always|deny` (resolve exec approval prompts)
 - `/context [list|detail|json]` (explain “context”; `detail` shows per-file + per-tool + per-skill + system prompt size)
 - `/export-session [path]` (alias: `/export`) (export current session to HTML with full system prompt)
+- `/detect <url>` (detect deepfakes in media URLs or attachments using Resemble AI)
 - `/whoami` (show your sender id; alias: `/id`)
 - `/session idle <duration|off>` (manage inactivity auto-unfocus for focused thread bindings)
 - `/session max-age <duration|off>` (manage hard max-age auto-unfocus for focused thread bindings)
