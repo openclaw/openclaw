@@ -179,11 +179,10 @@ export function handleMessageUpdate(
 
     // Text repetition guard: throttle checks to every N chars of new content.
     const guardConfig = ctx.state.resolvedTextRepetitionGuardConfig;
-    const checkInterval = guardConfig?.checkIntervalChars ?? 200;
-    if (ctx.state.deltaBuffer.length - ctx.state.textRepetitionLastCheckedLen >= checkInterval) {
-      ctx.state.textRepetitionLastCheckedLen = ctx.state.deltaBuffer.length;
-      // Guard defaults to enabled when no config is present.
-      if (guardConfig?.enabled !== false) {
+    if (guardConfig && guardConfig.enabled) {
+      const checkInterval = guardConfig.checkIntervalChars;
+      if (ctx.state.deltaBuffer.length - ctx.state.textRepetitionLastCheckedLen >= checkInterval) {
+        ctx.state.textRepetitionLastCheckedLen = ctx.state.deltaBuffer.length;
         const result = detectTextRepetition(ctx.state.deltaBuffer, guardConfig);
         if (result.looping) {
           void ctx.params.session.abort();

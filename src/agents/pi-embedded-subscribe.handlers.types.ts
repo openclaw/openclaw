@@ -1,7 +1,6 @@
 import type { AgentEvent, AgentMessage } from "@mariozechner/pi-agent-core";
 import type { ReplyDirectiveParseResult } from "../auto-reply/reply/reply-directives.js";
 import type { ReasoningLevel } from "../auto-reply/thinking.js";
-import type { TextRepetitionGuardConfig } from "../config/types.tools.js";
 import type { InlineCodeState } from "../markdown/code-spans.js";
 import type { HookRunner } from "../plugins/hooks.js";
 import type { EmbeddedBlockChunker } from "./pi-embedded-block-chunker.js";
@@ -10,6 +9,7 @@ import type {
   BlockReplyChunking,
   SubscribeEmbeddedPiSessionParams,
 } from "./pi-embedded-subscribe.types.js";
+import type { ResolvedTextRepetitionGuardConfig } from "./text-repetition-guard.js";
 import type { NormalizedUsage } from "./usage.js";
 
 export type EmbeddedSubscribeLogger = {
@@ -65,7 +65,7 @@ export type EmbeddedPiSubscribeState = {
   /** deltaBuffer length at last text-repetition-guard check (throttle). */
   textRepetitionLastCheckedLen: number;
   /** Resolved text-repetition-guard config, cached at message start. */
-  resolvedTextRepetitionGuardConfig?: TextRepetitionGuardConfig;
+  resolvedTextRepetitionGuardConfig?: ResolvedTextRepetitionGuardConfig;
 
   compactionInFlight: boolean;
   pendingCompactionRetry: number;

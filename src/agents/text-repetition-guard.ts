@@ -21,8 +21,8 @@ const log = createSubsystemLogger("agents/text-repetition-guard");
 
 export type { TextRepetitionGuardConfig } from "../config/types.tools.js";
 
-/** Fully resolved (all-required) internal config. */
-type ResolvedTextRepetitionGuardConfig = Required<TextRepetitionGuardConfig>;
+/** Fully resolved (all-required) config. */
+export type ResolvedTextRepetitionGuardConfig = Required<TextRepetitionGuardConfig>;
 
 export const DEFAULT_TEXT_REPETITION_GUARD_CONFIG: ResolvedTextRepetitionGuardConfig = {
   enabled: true,
@@ -60,7 +60,9 @@ export type TextRepetitionResult =
 // Helpers
 // ---------------------------------------------------------------------------
 
-function resolveConfig(partial?: TextRepetitionGuardConfig): ResolvedTextRepetitionGuardConfig {
+export function resolveConfig(
+  partial?: TextRepetitionGuardConfig,
+): ResolvedTextRepetitionGuardConfig {
   const merged = { ...DEFAULT_TEXT_REPETITION_GUARD_CONFIG, ...partial };
   // Sanitize numeric config to prevent infinite loops / nonsensical values.
   merged.minCyclePatternLength = Math.max(1, merged.minCyclePatternLength);
@@ -75,6 +77,20 @@ function resolveConfig(partial?: TextRepetitionGuardConfig): ResolvedTextRepetit
   merged.maxIdenticalLines = Math.max(1, merged.maxIdenticalLines);
   merged.minCycleRepeats = Math.max(2, merged.minCycleRepeats);
   return merged;
+}
+
+function isFullyResolved(c: TextRepetitionGuardConfig): c is ResolvedTextRepetitionGuardConfig {
+  return (
+    c.enabled !== undefined &&
+    c.windowSize !== undefined &&
+    c.ngramSize !== undefined &&
+    c.maxNgramRepetitions !== undefined &&
+    c.maxIdenticalLines !== undefined &&
+    c.minCyclePatternLength !== undefined &&
+    c.maxCyclePatternLength !== undefined &&
+    c.minCycleRepeats !== undefined &&
+    c.checkIntervalChars !== undefined
+  );
 }
 
 /** True when a string is mostly whitespace or a single repeated character. */
@@ -102,9 +118,10 @@ function isDegenerate(s: string, minDensity = 0.3): boolean {
 
 export function detectTextRepetition(
   buffer: string,
-  config?: TextRepetitionGuardConfig,
+  config?: TextRepetitionGuardConfig | ResolvedTextRepetitionGuardConfig,
 ): TextRepetitionResult {
-  const cfg = resolveConfig(config);
+  // Skip re-resolving when caller already passed a fully resolved config.
+  const cfg = config && isFullyResolved(config) ? config : resolveConfig(config);
   if (!cfg.enabled) {
     return { looping: false };
   }
@@ -210,7 +227,7 @@ export function detectTextRepetition(
   // --- Strategy 3: Suffix cycle ---
   {
     const tail = window.slice(-600);
-    const maxP = Math.min(cfg.maxCyclePatternLength, Math.floor(tail.length / 3));
+    const maxP = Math.min(cfg.maxCyclePatternLength, Math.floor(tail.length / cfg.minCycleRepeats));
     for (let pLen = cfg.minCyclePatternLength; pLen <= maxP; pLen++) {
       const pat = tail.slice(-pLen);
       if (isDegenerate(pat)) {
@@ -249,6 +266,10 @@ export function detectTextRepetition(
     if (nonEmpty.length >= minLinesNeeded) {
       for (let groupSize = 2; groupSize <= 5; groupSize++) {
         const lastGroup = nonEmpty.slice(-groupSize);
+        // Skip groups where every line is too short to carry real signal.
+        if (lastGroup.every((l) => l.trim().length <= 5)) {
+          continue;
+        }
         let groupRepeats = 0;
         for (let i = nonEmpty.length - groupSize; i >= 0; i -= groupSize) {
           const block = nonEmpty.slice(i, i + groupSize);
