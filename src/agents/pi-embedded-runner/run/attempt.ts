@@ -2878,8 +2878,12 @@ export async function runEmbeddedAttempt(
           // Use attemptIndex to distinguish initial (0) from retries (1+).
           // Use loop_iteration_start for per-turn tracking within an attempt.
           if (hookRunner?.hasHooks("context_assembled")) {
-            // Snapshot messages array to avoid mutation during async hook handling.
-            const contextMessagesSnapshot = activeSession.messages.slice();
+            // Deep-copy messages to prevent hook handlers from mutating live
+            // session context.  slice() only copies the array; structuredClone
+            // copies the AgentMessage objects themselves, so redaction/logging
+            // plugins can freely mutate event.messages without affecting the
+            // model input passed to activeSession.prompt().
+            const contextMessagesSnapshot = structuredClone(activeSession.messages);
             hookRunner
               .runContextAssembled(
                 {
