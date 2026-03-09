@@ -1,9 +1,10 @@
 ---
-summary: "Debugging tools: watch mode, raw model streams, and tracing reasoning leakage"
+summary: "Debugging tools: watch mode, raw model streams, tracing reasoning leakage, and emergency config recovery"
 read_when:
   - You need to inspect raw model output for reasoning leakage
   - You want to run the Gateway in watch mode while iterating
   - You need a repeatable debugging workflow
+  - OpenClaw refuses to start due to invalid or corrupt config
 title: "Debugging"
 ---
 
@@ -154,6 +155,38 @@ Default file:
 
 > Note: this is only emitted by processes using pi-mono’s
 > `openai-completions` provider.
+
+## Emergency recovery from invalid config
+
+If OpenClaw refuses to start because `openclaw.json` is corrupt or contains
+invalid values, follow these steps:
+
+1. **Run the built-in doctor fix.** This validates your config and repairs
+   common problems automatically:
+
+   ```bash
+   openclaw doctor --fix
+   ```
+
+   Then retry starting the gateway as usual.
+
+2. **Restore from a backup.** If `doctor --fix` does not resolve the issue,
+   replace your config with the most recent known-good backup:
+
+   ```bash
+   cp ~/.openclaw/openclaw.json.bak ~/.openclaw/openclaw.json
+   ```
+
+   Then start OpenClaw again. If that backup is also bad, try an older one from
+   the backup ring (`.bak.1`, `.bak.2`, etc.):
+
+   ```bash
+   cp ~/.openclaw/openclaw.json.bak.1 ~/.openclaw/openclaw.json
+   ```
+
+> OpenClaw keeps a rotating backup ring of previous configs (`.bak`,
+> `.bak.1`, `.bak.2`, ...) so you can always roll back to an earlier
+> known-good state.
 
 ## Safety notes
 
