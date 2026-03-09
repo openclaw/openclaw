@@ -43,6 +43,12 @@ export type AgentEvent = {
   data?: Record<string, unknown>;
 };
 
+export type SessionsChangedEvent = {
+  sessionKey?: string;
+  reason?: string;
+  ts?: number;
+};
+
 export type ResponseUsageMode = "on" | "off" | "tokens" | "full";
 
 export type SessionInfo = {

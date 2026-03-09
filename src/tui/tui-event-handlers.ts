@@ -3,7 +3,13 @@ import { parseAgentSessionKey } from "../sessions/session-key-utils.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import { asString, extractTextFromMessage, isCommandMessage } from "./tui-formatters.js";
 import { TuiStreamAssembler } from "./tui-stream-assembler.js";
-import type { AgentEvent, BtwEvent, ChatEvent, TuiStateAccess } from "./tui-types.js";
+import type {
+  AgentEvent,
+  BtwEvent,
+  ChatEvent,
+  SessionsChangedEvent,
+  TuiStateAccess,
+} from "./tui-types.js";
 
 type EventHandlerChatLog = {
   startTool: (toolCallId: string, toolName: string, args: unknown) => void;
@@ -514,9 +520,35 @@ export function createEventHandlers(context: EventHandlerContext) {
     tui.requestRender();
   };
 
+  const handleSessionsChangedEvent = (payload: unknown) => {
+    if (!payload || typeof payload !== "object") {
+      return;
+    }
+    const evt = payload as SessionsChangedEvent;
+    syncSessionKey();
+    if (evt.reason !== "new" && evt.reason !== "reset") {
+      return;
+    }
+    if (!isSameSessionKey(evt.sessionKey, state.currentSessionKey)) {
+      return;
+    }
+    state.activeChatRunId = null;
+    state.pendingOptimisticUserMessage = false;
+    pendingHistoryRefresh = false;
+    finalizedRuns.clear();
+    sessionRuns.clear();
+    streamAssembler = new TuiStreamAssembler();
+    clearLocalRunIds?.();
+    clearLocalBtwRunIds?.();
+    clearStreamingWatchdog();
+    setActivityStatus("idle");
+    void loadHistory?.();
+    tui.requestRender();
+  };
+
   const dispose = () => {
     clearStreamingWatchdog();
   };
 
-  return { handleChatEvent, handleAgentEvent, handleBtwEvent, dispose };
+  return { handleChatEvent, handleAgentEvent, handleBtwEvent, handleSessionsChangedEvent, dispose };
 }
