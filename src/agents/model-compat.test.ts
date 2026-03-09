@@ -337,7 +337,11 @@ describe("normalizeModelCompat", () => {
 
   it("does not override explicit compat false", () => {
     const model = baseModel();
-    model.compat = { supportsDeveloperRole: false, supportsUsageInStreaming: false, supportsStrictMode: false };
+    model.compat = {
+      supportsDeveloperRole: false,
+      supportsUsageInStreaming: false,
+      supportsStrictMode: false,
+    };
     const normalized = normalizeModelCompat(model);
     expect(supportsDeveloperRole(normalized)).toBe(false);
     expect(supportsUsageInStreaming(normalized)).toBe(false);
