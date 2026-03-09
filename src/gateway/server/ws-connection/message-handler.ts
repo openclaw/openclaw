@@ -631,8 +631,10 @@ export function attachGatewayWsMessageHandler(params: {
           }
 
           if (decision.kind === "reject-control-ui-insecure-auth") {
-            const errorMessage =
-              "control ui requires device identity (use HTTPS or localhost secure context)";
+            const insecureHint = controlUiAuthPolicy.allowInsecureAuthConfigured
+              ? ""
+              : " To allow HTTP connections, set gateway.controlUi.allowInsecureAuth: true in openclaw.json (only for trusted networks).";
+            const errorMessage = `Control UI requires device identity (use HTTPS or localhost).${insecureHint}`;
             markHandshakeFailure("control-ui-insecure-auth", {
               insecureAuthConfigured: controlUiAuthPolicy.allowInsecureAuthConfigured,
             });
