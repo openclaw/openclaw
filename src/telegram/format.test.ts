@@ -145,8 +145,20 @@ describe("markdownToTelegramChunks", () => {
     const chunks = markdownToTelegramChunks("**beta** zeta", 13);
 
     expect(chunks).toEqual([
-      { html: "<b>beta</b>", text: "beta" },
+      { html: "<b>beta</b> ", text: "beta " },
       { html: "zeta", text: "zeta" },
     ]);
+    expect(chunks.map((chunk) => chunk.text).join("")).toBe("beta zeta");
+  });
+
+  it("preserves separator whitespace when escaping forces a retry split", () => {
+    const chunks = markdownToTelegramChunks("a < b", 5);
+
+    expect(chunks).toEqual([
+      { html: "a ", text: "a " },
+      { html: "&lt; ", text: "< " },
+      { html: "b", text: "b" },
+    ]);
+    expect(chunks.map((chunk) => chunk.text).join("")).toBe("a < b");
   });
 });

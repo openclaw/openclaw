@@ -533,32 +533,22 @@ function splitMarkdownIRPreserveWhitespace(ir: MarkdownIR, limit: number): Markd
       break;
     }
 
-    // Mirror the generic text chunker: prefer the last whitespace inside the
-    // retry window so Telegram HTML overflow doesn't force mid-word splits.
+    // Prefer the last whitespace inside the retry window so Telegram HTML
+    // overflow doesn't force mid-word splits, but keep the separator text in
+    // the emitted chunks so recombining chunk.text still matches the source.
     for (let i = end - 1; i > cursor; i -= 1) {
       if (/\s/.test(ir.text[i] ?? "")) {
-        end = i;
+        end = i + 1;
         break;
       }
     }
 
-    let chunkEnd = end;
-    while (chunkEnd > cursor && /\s/.test(ir.text[chunkEnd - 1] ?? "")) {
-      chunkEnd -= 1;
-    }
-
-    if (chunkEnd > cursor) {
-      chunks.push({
-        text: ir.text.slice(cursor, chunkEnd),
-        styles: sliceStyleSpans(ir.styles, cursor, chunkEnd),
-        links: sliceLinkSpans(ir.links, cursor, chunkEnd),
-      });
-    }
-
+    chunks.push({
+      text: ir.text.slice(cursor, end),
+      styles: sliceStyleSpans(ir.styles, cursor, end),
+      links: sliceLinkSpans(ir.links, cursor, end),
+    });
     cursor = end;
-    while (cursor < ir.text.length && /\s/.test(ir.text[cursor] ?? "")) {
-      cursor += 1;
-    }
   }
   return chunks;
 }
