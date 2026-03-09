@@ -40,6 +40,10 @@ let alphaPngFile = "";
 let fallbackPngBuffer: Buffer;
 let fallbackPngFile = "";
 let fallbackPngCap = 0;
+let staticWebpBuffer: Buffer;
+let staticWebpFile = "";
+let animatedWebpBuffer: Buffer;
+let animatedWebpFile = "";
 let stateDirSnapshot: ReturnType<typeof captureEnv>;
 
 async function writeTempFile(buffer: Buffer, ext: string): Promise<string> {
@@ -115,6 +119,41 @@ beforeAll(async () => {
       `JPEG fallback did not shrink below PNG (jpeg=${jpegOptimized.buffer.length}, png=${smallestPng.optimizedSize})`,
     );
   }
+  staticWebpBuffer = await sharp({
+    create: {
+      width: 48,
+      height: 48,
+      channels: 3,
+      background: "#3366ff",
+    },
+  })
+    .webp({ quality: 100 })
+    .toBuffer();
+  staticWebpFile = await writeTempFile(staticWebpBuffer, ".webp");
+  animatedWebpBuffer = await sharp(
+    [
+      {
+        create: {
+          width: 2,
+          height: 2,
+          channels: 4,
+          background: { r: 255, g: 0, b: 0, alpha: 1 },
+        },
+      },
+      {
+        create: {
+          width: 2,
+          height: 2,
+          channels: 4,
+          background: { r: 0, g: 255, b: 0, alpha: 1 },
+        },
+      },
+    ],
+    { join: { animated: true } },
+  )
+    .webp({ loop: 0, delay: [100, 100] })
+    .toBuffer();
+  animatedWebpFile = await writeTempFile(animatedWebpBuffer, ".webp");
 });
 
 afterAll(async () => {
@@ -326,6 +365,25 @@ describe("web media loading", () => {
     expect(result.buffer.slice(0, 3).toString()).toBe("GIF");
 
     fetchMock.mockRestore();
+  });
+
+  it("preserves WebP images without JPEG optimization", async () => {
+    const result = await loadWebMedia(staticWebpFile, 1024 * 1024);
+
+    expect(result.kind).toBe("image");
+    expect(result.contentType).toBe("image/webp");
+    expect(result.buffer.equals(staticWebpBuffer)).toBe(true);
+  });
+
+  it("preserves animated WebP frames without optimization", async () => {
+    const result = await loadWebMedia(animatedWebpFile, 1024 * 1024);
+
+    expect(result.kind).toBe("image");
+    expect(result.contentType).toBe("image/webp");
+    expect(result.buffer.equals(animatedWebpBuffer)).toBe(true);
+    const meta = await sharp(result.buffer, { animated: true }).metadata();
+    expect(meta.pages).toBe(2);
+    expect(meta.pageHeight).toBe(2);
   });
 
   it("preserves PNG alpha when under the cap", async () => {

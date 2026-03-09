@@ -139,6 +139,8 @@ async function assertLocalMediaAllowed(
 
 const HEIC_MIME_RE = /^image\/hei[cf]$/i;
 const HEIC_EXT_RE = /\.(heic|heif)$/i;
+const WEBP_MIME_RE = /^image\/webp$/i;
+const WEBP_EXT_RE = /\.webp$/i;
 const MB = 1024 * 1024;
 
 function formatMb(bytes: number, digits = 2): string {
@@ -158,6 +160,16 @@ function isHeicSource(opts: { contentType?: string; fileName?: string }): boolea
     return true;
   }
   if (opts.fileName && HEIC_EXT_RE.test(opts.fileName.trim())) {
+    return true;
+  }
+  return false;
+}
+
+function isWebpSource(opts: { contentType?: string; fileName?: string }): boolean {
+  if (opts.contentType && WEBP_MIME_RE.test(opts.contentType.trim())) {
+    return true;
+  }
+  if (opts.fileName && WEBP_EXT_RE.test(opts.fileName.trim())) {
     return true;
   }
   return false;
@@ -292,9 +304,15 @@ async function loadWebMediaInternal(
     const cap = maxBytes !== undefined ? maxBytes : maxBytesForKind(params.kind ?? "document");
     if (params.kind === "image") {
       const isGif = params.contentType === "image/gif";
-      if (isGif || !optimizeImages) {
+      const isWebp = isWebpSource({
+        contentType: params.contentType,
+        fileName: params.fileName,
+      });
+      if (isGif || isWebp || !optimizeImages) {
         if (params.buffer.length > cap) {
-          throw new Error(formatCapLimit(isGif ? "GIF" : "Media", cap, params.buffer.length));
+          throw new Error(
+            formatCapLimit(isGif ? "GIF" : isWebp ? "WebP" : "Media", cap, params.buffer.length),
+          );
         }
         return {
           buffer: params.buffer,
