@@ -78,6 +78,12 @@ export type TtsConfig = {
   };
   /** Optional path for local TTS user preferences JSON. */
   prefsPath?: string;
+  /** Strip fenced code blocks from TTS spoken text (default: true). */
+  stripCodeBlocks?: boolean;
+  /** Strip markdown tables from TTS spoken text (default: true). */
+  stripTables?: boolean;
+  /** Process <tts>…</tts> alternative text tags for speech/display splitting (default: true). */
+  processTtsTags?: boolean;
   /** Hard cap for text sent to TTS (chars). */
   maxTextLength?: number;
   /** API request timeout (ms). */

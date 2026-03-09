@@ -391,6 +391,63 @@ The `tts` tool converts text to speech and returns a `MEDIA:` path. When the
 result is Telegram-compatible, the tool includes `[[audio_as_voice]]` so
 Telegram sends a voice bubble.
 
+## Text preprocessing
+
+Before text is sent to TTS engines, OpenClaw applies preprocessing to produce
+cleaner speech output. This is purely algorithmic (no AI) and only runs when
+TTS is active.
+
+### What gets filtered (spoken text only)
+
+- **Fenced code blocks** (` ``` `) are removed — code is visual, not spoken.
+- **Markdown tables** (lines starting and ending with `|`) are removed.
+- **Excessive blank lines** are collapsed.
+
+Code blocks and tables remain visible in the chat message; they are only
+stripped from the audio input.
+
+### `<tts>` alternative text tags
+
+Use `<tts>` tags to provide spoken alternatives for content that reads
+poorly aloud (code snippets, symbols, abbreviations). The tag content is
+**additive** — it is inserted into the speech stream alongside the
+surrounding text, so place it where it makes sense as a replacement:
+
+```
+Call <tts>the map method</tts>`.map()` on the array.
+```
+
+- **Chat display**: "Call `.map()` on the array." (tag + content removed)
+- **Spoken audio**: "Call the map method `.map()` on the array."
+
+The `<tts>` tag text is spliced in at the tag position. Surrounding
+content (like inline code) is not removed from speech — use tags to
+_add_ a natural phrasing, not to _replace_ adjacent tokens.
+
+Tags are case-insensitive and can span multiple lines. They work with all
+TTS providers (ElevenLabs, OpenAI, Edge).
+
+> **Note**: `[[tts:text]]…[[/tts:text]]` directives take priority over
+> `<tts>` tags. When a `[[tts:text]]` block is present, its content
+> becomes the entire spoken text and `<tts>` tags are not used.
+
+### Config options
+
+All preprocessing is **on by default**. Disable individual filters in
+`messages.tts`:
+
+```json5
+{
+  messages: {
+    tts: {
+      stripCodeBlocks: false, // keep code blocks in spoken text
+      stripTables: false, // keep tables in spoken text
+      processTtsTags: false, // don't process <tts> tags (leave them as-is)
+    },
+  },
+}
+```
+
 ## Gateway RPC
 
 Gateway methods:
