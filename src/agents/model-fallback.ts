@@ -342,10 +342,49 @@ const lastProbeAttempt = new Map<string, number>();
 const MIN_PROBE_INTERVAL_MS = 30_000; // 30 seconds between probes per key
 const PROBE_MARGIN_MS = 2 * 60 * 1000;
 const PROBE_SCOPE_DELIMITER = "::";
+const PROBE_STATE_TTL_MS = 24 * 60 * 60 * 1000;
+const MAX_PROBE_KEYS = 256;
 
 function resolveProbeThrottleKey(provider: string, agentDir?: string): string {
   const scope = String(agentDir ?? "").trim();
   return scope ? `${scope}${PROBE_SCOPE_DELIMITER}${provider}` : provider;
+}
+
+function pruneProbeState(now: number): void {
+  for (const [key, ts] of lastProbeAttempt) {
+    if (!Number.isFinite(ts) || ts <= 0 || now - ts > PROBE_STATE_TTL_MS) {
+      lastProbeAttempt.delete(key);
+    }
+  }
+}
+
+function enforceProbeStateCap(): void {
+  while (lastProbeAttempt.size > MAX_PROBE_KEYS) {
+    let oldestKey: string | null = null;
+    let oldestTs = Number.POSITIVE_INFINITY;
+    for (const [key, ts] of lastProbeAttempt) {
+      if (ts < oldestTs) {
+        oldestKey = key;
+        oldestTs = ts;
+      }
+    }
+    if (!oldestKey) {
+      break;
+    }
+    lastProbeAttempt.delete(oldestKey);
+  }
+}
+
+function isProbeThrottleOpen(now: number, throttleKey: string): boolean {
+  pruneProbeState(now);
+  const lastProbe = lastProbeAttempt.get(throttleKey) ?? 0;
+  return now - lastProbe >= MIN_PROBE_INTERVAL_MS;
+}
+
+function markProbeAttempt(now: number, throttleKey: string): void {
+  pruneProbeState(now);
+  lastProbeAttempt.set(throttleKey, now);
+  enforceProbeStateCap();
 }
 
 function shouldProbePrimaryDuringCooldown(params: {
@@ -360,8 +399,7 @@ function shouldProbePrimaryDuringCooldown(params: {
     return false;
   }
 
-  const lastProbe = lastProbeAttempt.get(params.throttleKey) ?? 0;
-  if (params.now - lastProbe < MIN_PROBE_INTERVAL_MS) {
+  if (!isProbeThrottleOpen(params.now, params.throttleKey)) {
     return false;
   }
 
@@ -379,7 +417,12 @@ export const _probeThrottleInternals = {
   lastProbeAttempt,
   MIN_PROBE_INTERVAL_MS,
   PROBE_MARGIN_MS,
+  PROBE_STATE_TTL_MS,
+  MAX_PROBE_KEYS,
   resolveProbeThrottleKey,
+  isProbeThrottleOpen,
+  pruneProbeState,
+  markProbeAttempt,
 } as const;
 
 type CooldownDecision =
@@ -429,11 +472,15 @@ function resolveCooldownDecision(params: {
   }
 
   // Billing is semi-persistent: the user may fix their balance, or a transient
-  // 402 might have been misclassified. Probe the primary only when fallbacks
-  // exist; otherwise repeated single-provider probes just churn the disabled
-  // auth state without opening any recovery path.
+  // 402 might have been misclassified. Probe single-provider setups on the
+  // standard throttle so they can recover without a restart; when fallbacks
+  // exist, only probe near cooldown expiry so the fallback chain stays preferred.
   if (inferredReason === "billing") {
-    if (params.isPrimary && params.hasFallbackCandidates && shouldProbe) {
+    const shouldProbeSingleProviderBilling =
+      params.isPrimary &&
+      !params.hasFallbackCandidates &&
+      isProbeThrottleOpen(params.now, params.probeThrottleKey);
+    if (params.isPrimary && (shouldProbe || shouldProbeSingleProviderBilling)) {
       return { type: "attempt", reason: inferredReason, markProbe: true };
     }
     return {
@@ -528,7 +575,7 @@ export async function runWithModelFallback<T>(params: {
         }
 
         if (decision.markProbe) {
-          lastProbeAttempt.set(probeThrottleKey, now);
+          markProbeAttempt(now, probeThrottleKey);
         }
         if (
           decision.reason === "rate_limit" ||
