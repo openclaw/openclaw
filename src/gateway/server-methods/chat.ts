@@ -10,6 +10,7 @@ import type { MsgContext } from "../../auto-reply/templating.js";
 import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.js";
 import { createReplyPrefixOptions } from "../../channels/reply-prefix.js";
 import { resolveSessionFilePath } from "../../config/sessions.js";
+import { isDeliveryMirrorMessage } from "../../config/sessions/transcript.js";
 import { jsonUtf8Bytes } from "../../infra/json-utf8-bytes.js";
 import { normalizeInputProvenance, type InputProvenance } from "../../sessions/input-provenance.js";
 import { resolveSendPolicy } from "../../sessions/send-policy.js";
@@ -794,10 +795,11 @@ export const chatHandlers: GatewayRequestHandlers = {
       });
     }
     const verboseLevel = entry?.verboseLevel ?? cfg.agents?.defaults?.verboseDefault;
+    const visibleMessages = bounded.messages.filter((msg) => !isDeliveryMirrorMessage(msg));
     respond(true, {
       sessionKey,
       sessionId,
-      messages: bounded.messages,
+      messages: visibleMessages,
       thinkingLevel,
       verboseLevel,
     });
