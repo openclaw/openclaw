@@ -109,6 +109,30 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
     };
   }
 
+  function createNamedInterpreterScriptFixture(
+    tmp: string,
+    interpreterName: string,
+  ): {
+    command: string[];
+    scriptPath: string;
+    initialBody: string;
+    changedBody: string;
+  } {
+    const ext = process.platform === "win32" ? ".exe" : "";
+    const fakeInterpreter = path.join(tmp, `${interpreterName}${ext}`);
+    fs.writeFileSync(fakeInterpreter, "");
+    if (process.platform !== "win32") {
+      fs.chmodSync(fakeInterpreter, 0o755);
+    }
+    const scriptPath = path.join(tmp, "run.js");
+    return {
+      command: [fakeInterpreter, "./run.js"],
+      scriptPath,
+      initialBody: 'console.log("SAFE");\n',
+      changedBody: 'console.log("PWNED");\n',
+    };
+  }
+
   function buildNestedEnvShellCommand(params: { depth: number; payload: string }): string[] {
     return [...Array(params.depth).fill("/usr/bin/env"), "/bin/sh", "-c", params.payload];
   }
@@ -787,6 +811,80 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
       fs.rmSync(tmp, { recursive: true, force: true });
     }
   });
+
+  for (const interpreterName of ["bun", "deno"] as const) {
+    it(`denies approval-based execution when a ${interpreterName} script operand changes after approval`, async () => {
+      const tmp = fs.mkdtempSync(
+        path.join(os.tmpdir(), `openclaw-approval-${interpreterName}-drift-`),
+      );
+      const fixture = createNamedInterpreterScriptFixture(tmp, interpreterName);
+      fs.writeFileSync(fixture.scriptPath, fixture.initialBody);
+      try {
+        const prepared = buildSystemRunApprovalPlan({
+          command: fixture.command,
+          cwd: tmp,
+        });
+        expect(prepared.ok).toBe(true);
+        if (!prepared.ok) {
+          throw new Error("unreachable");
+        }
+
+        fs.writeFileSync(fixture.scriptPath, fixture.changedBody);
+        const { runCommand, sendInvokeResult } = await runSystemInvoke({
+          preferMacAppExecHost: false,
+          command: prepared.plan.argv,
+          rawCommand: prepared.plan.rawCommand,
+          systemRunPlan: prepared.plan,
+          cwd: prepared.plan.cwd ?? tmp,
+          approved: true,
+          security: "full",
+          ask: "off",
+        });
+
+        expect(runCommand).not.toHaveBeenCalled();
+        expectInvokeErrorMessage(sendInvokeResult, {
+          message: "SYSTEM_RUN_DENIED: approval script operand changed before execution",
+          exact: true,
+        });
+      } finally {
+        fs.rmSync(tmp, { recursive: true, force: true });
+      }
+    });
+
+    it(`keeps approved ${interpreterName} script execution working when the script is unchanged`, async () => {
+      const tmp = fs.mkdtempSync(
+        path.join(os.tmpdir(), `openclaw-approval-${interpreterName}-stable-`),
+      );
+      const fixture = createNamedInterpreterScriptFixture(tmp, interpreterName);
+      fs.writeFileSync(fixture.scriptPath, fixture.initialBody);
+      try {
+        const prepared = buildSystemRunApprovalPlan({
+          command: fixture.command,
+          cwd: tmp,
+        });
+        expect(prepared.ok).toBe(true);
+        if (!prepared.ok) {
+          throw new Error("unreachable");
+        }
+
+        const { runCommand, sendInvokeResult } = await runSystemInvoke({
+          preferMacAppExecHost: false,
+          command: prepared.plan.argv,
+          rawCommand: prepared.plan.rawCommand,
+          systemRunPlan: prepared.plan,
+          cwd: prepared.plan.cwd ?? tmp,
+          approved: true,
+          security: "full",
+          ask: "off",
+        });
+
+        expect(runCommand).toHaveBeenCalledTimes(1);
+        expectInvokeOk(sendInvokeResult);
+      } finally {
+        fs.rmSync(tmp, { recursive: true, force: true });
+      }
+    });
+  }
 
   it("denies ./sh wrapper spoof in allowlist on-miss mode before execution", async () => {
     const marker = path.join(os.tmpdir(), `openclaw-wrapper-spoof-${process.pid}-${Date.now()}`);

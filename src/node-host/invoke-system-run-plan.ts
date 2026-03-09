@@ -26,6 +26,8 @@ export type ApprovedCwdSnapshot = {
 
 const MUTABLE_ARGV1_INTERPRETER_PATTERNS = [
   /^(?:node|nodejs)$/,
+  /^bun$/,
+  /^deno$/,
   /^perl$/,
   /^php$/,
   /^python(?:\d+(?:\.\d+)*)?$/,

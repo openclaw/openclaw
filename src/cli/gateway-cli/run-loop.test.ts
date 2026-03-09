@@ -158,175 +158,187 @@ describe("runGatewayLoop", () => {
     });
   });
 
-  it("restarts after SIGUSR1 even when drain times out, and resets lanes for the new iteration", async () => {
-    vi.clearAllMocks();
+  it.runIf(process.platform !== "win32")(
+    "restarts after SIGUSR1 even when drain times out, and resets lanes for the new iteration",
+    async () => {
+      vi.clearAllMocks();
 
-    await withIsolatedSignals(async () => {
-      getActiveTaskCount.mockReturnValueOnce(2).mockReturnValueOnce(0);
-      waitForActiveTasks.mockResolvedValueOnce({ drained: false });
+      await withIsolatedSignals(async () => {
+        getActiveTaskCount.mockReturnValueOnce(2).mockReturnValueOnce(0);
+        waitForActiveTasks.mockResolvedValueOnce({ drained: false });
 
-      type StartServer = () => Promise<{
-        close: (opts: { reason: string; restartExpectedMs: number | null }) => Promise<void>;
-      }>;
+        type StartServer = () => Promise<{
+          close: (opts: { reason: string; restartExpectedMs: number | null }) => Promise<void>;
+        }>;
 
-      const closeFirst = vi.fn(async () => {});
-      const closeSecond = vi.fn(async () => {});
+        const closeFirst = vi.fn(async () => {});
+        const closeSecond = vi.fn(async () => {});
 
-      const start = vi.fn<StartServer>();
-      let resolveFirst: (() => void) | null = null;
-      const startedFirst = new Promise<void>((resolve) => {
-        resolveFirst = resolve;
+        const start = vi.fn<StartServer>();
+        let resolveFirst: (() => void) | null = null;
+        const startedFirst = new Promise<void>((resolve) => {
+          resolveFirst = resolve;
+        });
+        start.mockImplementationOnce(async () => {
+          resolveFirst?.();
+          return { close: closeFirst };
+        });
+
+        let resolveSecond: (() => void) | null = null;
+        const startedSecond = new Promise<void>((resolve) => {
+          resolveSecond = resolve;
+        });
+        start.mockImplementationOnce(async () => {
+          resolveSecond?.();
+          return { close: closeSecond };
+        });
+
+        start.mockRejectedValueOnce(new Error("stop-loop"));
+
+        const { runGatewayLoop } = await import("./run-loop.js");
+        const runtime = {
+          log: vi.fn(),
+          error: vi.fn(),
+          exit: vi.fn(),
+        };
+        const loopPromise = runGatewayLoop({
+          start: start as unknown as Parameters<typeof runGatewayLoop>[0]["start"],
+          runtime: runtime as unknown as Parameters<typeof runGatewayLoop>[0]["runtime"],
+        });
+
+        await startedFirst;
+        expect(start).toHaveBeenCalledTimes(1);
+        await new Promise<void>((resolve) => setImmediate(resolve));
+
+        process.emit("SIGUSR1");
+
+        await startedSecond;
+        expect(start).toHaveBeenCalledTimes(2);
+        await new Promise<void>((resolve) => setImmediate(resolve));
+
+        expect(waitForActiveTasks).toHaveBeenCalledWith(30_000);
+        expect(markGatewayDraining).toHaveBeenCalledTimes(1);
+        expect(gatewayLog.warn).toHaveBeenCalledWith(DRAIN_TIMEOUT_LOG);
+        expect(closeFirst).toHaveBeenCalledWith({
+          reason: "gateway restarting",
+          restartExpectedMs: 1500,
+        });
+        expect(markGatewaySigusr1RestartHandled).toHaveBeenCalledTimes(1);
+        expect(resetAllLanes).toHaveBeenCalledTimes(1);
+
+        process.emit("SIGUSR1");
+
+        await expect(loopPromise).rejects.toThrow("stop-loop");
+        expect(closeSecond).toHaveBeenCalledWith({
+          reason: "gateway restarting",
+          restartExpectedMs: 1500,
+        });
+        expect(markGatewaySigusr1RestartHandled).toHaveBeenCalledTimes(2);
+        expect(markGatewayDraining).toHaveBeenCalledTimes(2);
+        expect(resetAllLanes).toHaveBeenCalledTimes(2);
+        expect(acquireGatewayLock).toHaveBeenCalledTimes(3);
       });
-      start.mockImplementationOnce(async () => {
-        resolveFirst?.();
-        return { close: closeFirst };
-      });
+    },
+  );
 
-      let resolveSecond: (() => void) | null = null;
-      const startedSecond = new Promise<void>((resolve) => {
-        resolveSecond = resolve;
-      });
-      start.mockImplementationOnce(async () => {
-        resolveSecond?.();
-        return { close: closeSecond };
-      });
+  it.runIf(process.platform !== "win32")(
+    "releases the lock before exiting on spawned restart",
+    async () => {
+      vi.clearAllMocks();
 
-      start.mockRejectedValueOnce(new Error("stop-loop"));
-
-      const { runGatewayLoop } = await import("./run-loop.js");
-      const runtime = {
-        log: vi.fn(),
-        error: vi.fn(),
-        exit: vi.fn(),
-      };
-      const loopPromise = runGatewayLoop({
-        start: start as unknown as Parameters<typeof runGatewayLoop>[0]["start"],
-        runtime: runtime as unknown as Parameters<typeof runGatewayLoop>[0]["runtime"],
-      });
-
-      await startedFirst;
-      expect(start).toHaveBeenCalledTimes(1);
-      await new Promise<void>((resolve) => setImmediate(resolve));
-
-      process.emit("SIGUSR1");
-
-      await startedSecond;
-      expect(start).toHaveBeenCalledTimes(2);
-      await new Promise<void>((resolve) => setImmediate(resolve));
-
-      expect(waitForActiveTasks).toHaveBeenCalledWith(30_000);
-      expect(markGatewayDraining).toHaveBeenCalledTimes(1);
-      expect(gatewayLog.warn).toHaveBeenCalledWith(DRAIN_TIMEOUT_LOG);
-      expect(closeFirst).toHaveBeenCalledWith({
-        reason: "gateway restarting",
-        restartExpectedMs: 1500,
-      });
-      expect(markGatewaySigusr1RestartHandled).toHaveBeenCalledTimes(1);
-      expect(resetAllLanes).toHaveBeenCalledTimes(1);
-
-      process.emit("SIGUSR1");
-
-      await expect(loopPromise).rejects.toThrow("stop-loop");
-      expect(closeSecond).toHaveBeenCalledWith({
-        reason: "gateway restarting",
-        restartExpectedMs: 1500,
-      });
-      expect(markGatewaySigusr1RestartHandled).toHaveBeenCalledTimes(2);
-      expect(markGatewayDraining).toHaveBeenCalledTimes(2);
-      expect(resetAllLanes).toHaveBeenCalledTimes(2);
-      expect(acquireGatewayLock).toHaveBeenCalledTimes(3);
-    });
-  });
-
-  it("releases the lock before exiting on spawned restart", async () => {
-    vi.clearAllMocks();
-
-    await withIsolatedSignals(async () => {
-      const lockRelease = vi.fn(async () => {});
-      acquireGatewayLock.mockResolvedValueOnce({
-        release: lockRelease,
-      });
-
-      // Override process-respawn to return "spawned" mode
-      restartGatewayProcessWithFreshPid.mockReturnValueOnce({
-        mode: "spawned",
-        pid: 9999,
-      });
-
-      const exitCallOrder: string[] = [];
-      const { runtime, exited } = await createSignaledLoopHarness(exitCallOrder);
-      lockRelease.mockImplementation(async () => {
-        exitCallOrder.push("lockRelease");
-      });
-
-      process.emit("SIGUSR1");
-
-      await exited;
-      expect(lockRelease).toHaveBeenCalled();
-      expect(runtime.exit).toHaveBeenCalledWith(0);
-      expect(exitCallOrder).toEqual(["lockRelease", "exit"]);
-    });
-  });
-
-  it("forwards lockPort to initial and restart lock acquisitions", async () => {
-    vi.clearAllMocks();
-
-    await withIsolatedSignals(async () => {
-      const closeFirst = vi.fn(async () => {});
-      const closeSecond = vi.fn(async () => {});
-      restartGatewayProcessWithFreshPid.mockReturnValueOnce({ mode: "disabled" });
-
-      const start = vi
-        .fn()
-        .mockResolvedValueOnce({ close: closeFirst })
-        .mockResolvedValueOnce({ close: closeSecond })
-        .mockRejectedValueOnce(new Error("stop-loop"));
-      const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
-      const { runGatewayLoop } = await import("./run-loop.js");
-      const loopPromise = runGatewayLoop({
-        start: start as unknown as Parameters<typeof runGatewayLoop>[0]["start"],
-        runtime: runtime as unknown as Parameters<typeof runGatewayLoop>[0]["runtime"],
-        lockPort: 18789,
-      });
-
-      await new Promise<void>((resolve) => setImmediate(resolve));
-      process.emit("SIGUSR1");
-      await new Promise<void>((resolve) => setImmediate(resolve));
-      process.emit("SIGUSR1");
-
-      await expect(loopPromise).rejects.toThrow("stop-loop");
-      expect(acquireGatewayLock).toHaveBeenNthCalledWith(1, { port: 18789 });
-      expect(acquireGatewayLock).toHaveBeenNthCalledWith(2, { port: 18789 });
-      expect(acquireGatewayLock).toHaveBeenNthCalledWith(3, { port: 18789 });
-    });
-  });
-
-  it("exits when lock reacquire fails during in-process restart fallback", async () => {
-    vi.clearAllMocks();
-
-    await withIsolatedSignals(async () => {
-      const lockRelease = vi.fn(async () => {});
-      acquireGatewayLock
-        .mockResolvedValueOnce({
+      await withIsolatedSignals(async () => {
+        const lockRelease = vi.fn(async () => {});
+        acquireGatewayLock.mockResolvedValueOnce({
           release: lockRelease,
-        })
-        .mockRejectedValueOnce(new Error("lock timeout"));
+        });
 
-      restartGatewayProcessWithFreshPid.mockReturnValueOnce({
-        mode: "disabled",
+        // Override process-respawn to return "spawned" mode
+        restartGatewayProcessWithFreshPid.mockReturnValueOnce({
+          mode: "spawned",
+          pid: 9999,
+        });
+
+        const exitCallOrder: string[] = [];
+        const { runtime, exited } = await createSignaledLoopHarness(exitCallOrder);
+        lockRelease.mockImplementation(async () => {
+          exitCallOrder.push("lockRelease");
+        });
+
+        process.emit("SIGUSR1");
+
+        await exited;
+        expect(lockRelease).toHaveBeenCalled();
+        expect(runtime.exit).toHaveBeenCalledWith(0);
+        expect(exitCallOrder).toEqual(["lockRelease", "exit"]);
       });
+    },
+  );
 
-      const { start, exited } = await createSignaledLoopHarness();
-      process.emit("SIGUSR1");
+  it.runIf(process.platform !== "win32")(
+    "forwards lockPort to initial and restart lock acquisitions",
+    async () => {
+      vi.clearAllMocks();
 
-      await expect(exited).resolves.toBe(1);
-      expect(acquireGatewayLock).toHaveBeenCalledTimes(2);
-      expect(start).toHaveBeenCalledTimes(1);
-      expect(gatewayLog.error).toHaveBeenCalledWith(
-        expect.stringContaining("failed to reacquire gateway lock for in-process restart"),
-      );
-    });
-  });
+      await withIsolatedSignals(async () => {
+        const closeFirst = vi.fn(async () => {});
+        const closeSecond = vi.fn(async () => {});
+        restartGatewayProcessWithFreshPid.mockReturnValueOnce({ mode: "disabled" });
+
+        const start = vi
+          .fn()
+          .mockResolvedValueOnce({ close: closeFirst })
+          .mockResolvedValueOnce({ close: closeSecond })
+          .mockRejectedValueOnce(new Error("stop-loop"));
+        const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+        const { runGatewayLoop } = await import("./run-loop.js");
+        const loopPromise = runGatewayLoop({
+          start: start as unknown as Parameters<typeof runGatewayLoop>[0]["start"],
+          runtime: runtime as unknown as Parameters<typeof runGatewayLoop>[0]["runtime"],
+          lockPort: 18789,
+        });
+
+        await new Promise<void>((resolve) => setImmediate(resolve));
+        process.emit("SIGUSR1");
+        await new Promise<void>((resolve) => setImmediate(resolve));
+        process.emit("SIGUSR1");
+
+        await expect(loopPromise).rejects.toThrow("stop-loop");
+        expect(acquireGatewayLock).toHaveBeenNthCalledWith(1, { port: 18789 });
+        expect(acquireGatewayLock).toHaveBeenNthCalledWith(2, { port: 18789 });
+        expect(acquireGatewayLock).toHaveBeenNthCalledWith(3, { port: 18789 });
+      });
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "exits when lock reacquire fails during in-process restart fallback",
+    async () => {
+      vi.clearAllMocks();
+
+      await withIsolatedSignals(async () => {
+        const lockRelease = vi.fn(async () => {});
+        acquireGatewayLock
+          .mockResolvedValueOnce({
+            release: lockRelease,
+          })
+          .mockRejectedValueOnce(new Error("lock timeout"));
+
+        restartGatewayProcessWithFreshPid.mockReturnValueOnce({
+          mode: "disabled",
+        });
+
+        const { start, exited } = await createSignaledLoopHarness();
+        process.emit("SIGUSR1");
+
+        await expect(exited).resolves.toBe(1);
+        expect(acquireGatewayLock).toHaveBeenCalledTimes(2);
+        expect(start).toHaveBeenCalledTimes(1);
+        expect(gatewayLog.error).toHaveBeenCalledWith(
+          expect.stringContaining("failed to reacquire gateway lock for in-process restart"),
+        );
+      });
+    },
+  );
 });
 
 describe("gateway discover routing helpers", () => {
