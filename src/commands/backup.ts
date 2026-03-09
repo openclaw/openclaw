@@ -25,6 +25,8 @@ export type BackupCreateOptions = {
   verify?: boolean;
   json?: boolean;
   nowMs?: number;
+  exclude?: string[];
+  excludeFile?: string;
 };
 
 type BackupManifestAsset = {
@@ -43,6 +45,7 @@ type BackupManifest = {
   options: {
     includeWorkspace: boolean;
     onlyConfig?: boolean;
+    excludePatterns?: string[];
   };
   paths: {
     stateDir: string;
@@ -67,6 +70,7 @@ export type BackupCreateResult = {
   includeWorkspace: boolean;
   onlyConfig: boolean;
   verified: boolean;
+  excludePatterns?: string[];
   assets: BackupAsset[];
   skipped: Array<{
     kind: string;
@@ -194,6 +198,7 @@ function buildManifest(params: {
   archiveRoot: string;
   includeWorkspace: boolean;
   onlyConfig: boolean;
+  excludePatterns?: string[];
   assets: BackupAsset[];
   skipped: BackupCreateResult["skipped"];
   stateDir: string;
@@ -211,6 +216,7 @@ function buildManifest(params: {
     options: {
       includeWorkspace: params.includeWorkspace,
       onlyConfig: params.onlyConfig,
+      excludePatterns: params.excludePatterns,
     },
     paths: {
       stateDir: params.stateDir,
@@ -271,6 +277,59 @@ function remapArchiveEntryPath(params: {
   return buildBackupArchivePath(params.archiveRoot, normalizedEntry);
 }
 
+function matchesExcludePattern(filePath: string, pattern: string): boolean {
+  // Simple glob matching for common patterns
+  const normalizedPath = filePath.replace(/\\/g, "/");
+  
+  // Handle wildcards
+  if (pattern.includes("*")) {
+    const regex = new RegExp("^" + pattern.replace(/\*/g, ".*").replace(/\?/g, ".") + "$");
+    return regex.test(normalizedPath) || regex.test(path.basename(filePath));
+  }
+  
+  // Handle directory patterns (ending with /)
+  if (pattern.endsWith("/")) {
+    const dirPattern = pattern.slice(0, -1);
+    return normalizedPath.includes(dirPattern + "/") || normalizedPath.includes(dirPattern + "\\");
+  }
+  
+  // Exact match or contains
+  return normalizedPath.includes(pattern) || path.basename(filePath) === pattern;
+}
+
+function filterExcludedAssets(assets: BackupAsset[], excludePatterns: string[]): { included: BackupAsset[]; excluded: BackupAsset[] } {
+  if (!excludePatterns || excludePatterns.length === 0) {
+    return { included: assets, excluded: [] };
+  }
+  
+  const included: BackupAsset[] = [];
+  const excluded: BackupAsset[] = [];
+  
+  for (const asset of assets) {
+    const isExcluded = excludePatterns.some(pattern => matchesExcludePattern(asset.sourcePath, pattern));
+    if (isExcluded) {
+      excluded.push(asset);
+    } else {
+      included.push(asset);
+    }
+  }
+  
+  return { included, excluded };
+}
+
+async function loadExcludePatternsFromFile(filePath: string): Promise<string[]> {
+  try {
+    const content = await fs.readFile(filePath, "utf8");
+    // Filter out empty lines and comments
+    return content
+      .split("\n")
+      .map(line => line.trim())
+      .filter(line => line && !line.startsWith("#"));
+  } catch {
+    return [];
+  }
+}
+
 export async function backupCreateCommand(
   runtime: RuntimeEnv,
   opts: BackupCreateOptions = {},
@@ -280,6 +339,23 @@ export async function backupCreateCommand(
   const onlyConfig = Boolean(opts.onlyConfig);
   const includeWorkspace = onlyConfig ? false : (opts.includeWorkspace ?? true);
   const plan = await resolveBackupPlanFromDisk({ includeWorkspace, onlyConfig, nowMs });
+
+  // Load exclude patterns
+  let excludePatterns = opts.exclude ?? [];
+  if (opts.excludeFile) {
+    const filePatterns = await loadExcludePatternsFromFile(opts.excludeFile);
+    excludePatterns = [...excludePatterns, ...filePatterns];
+  }
+
+  // Filter excluded assets
+  const { included: filteredAssets, excluded: excludedAssets } = filterExcludedAssets(
+    plan.included,
+    excludePatterns,
+  );
+
+  // Update plan with filtered assets
+  plan.included = filteredAssets;
+
   const outputPath = await resolveOutputPath({
     output: opts.output,
     nowMs,
@@ -310,6 +386,16 @@ export async function backupCreateCommand(
   }
 
   const createdAt = new Date(nowMs).toISOString();
+  
+  // Add excluded assets to skipped list
+  const skippedFromExclude = excludedAssets.map(asset => ({
+    kind: asset.kind,
+    sourcePath: asset.sourcePath,
+    displayPath: asset.displayPath,
+    reason: "excluded",
+    coveredBy: undefined as string | undefined,
+  }));
+  
   const result: BackupCreateResult = {
     createdAt,
     archiveRoot,
@@ -318,8 +404,9 @@ export async function backupCreateCommand(
     includeWorkspace,
     onlyConfig,
     verified: false,
+    excludePatterns,
     assets: plan.included,
-    skipped: plan.skipped,
+    skipped: [...plan.skipped, ...skippedFromExclude],
   };
 
   if (!opts.dryRun) {
@@ -333,6 +420,7 @@ export async function backupCreateCommand(
         archiveRoot,
         includeWorkspace,
         onlyConfig,
+        excludePatterns,
         assets: result.assets,
         skipped: result.skipped,
         stateDir: plan.stateDir,
