@@ -28,6 +28,9 @@ export const TOOL_CALL_HISTORY_SIZE = 30;
 export const WARNING_THRESHOLD = 10;
 export const CRITICAL_THRESHOLD = 20;
 export const GLOBAL_CIRCUIT_BREAKER_THRESHOLD = 30;
+// 60s is a safe independent default: well below the default heartbeat interval
+// (30 min) yet long enough to tolerate minor scheduling jitter within a single
+// heartbeat cycle.  Users can override via tools.loopDetection.staleThresholdMs.
 const STALE_THRESHOLD_MS_DEFAULT = 60_000;
 
 const DEFAULT_LOOP_DETECTION_CONFIG = {
