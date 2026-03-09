@@ -10,6 +10,8 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- macOS/LaunchAgent install: tighten LaunchAgent directory and plist permissions during install so launchd bootstrap does not fail when the target home path or generated plist inherited group/world-writable modes.
+
 ## 2026.3.8
 
 ### Changes
