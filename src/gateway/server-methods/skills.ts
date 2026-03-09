@@ -1,4 +1,3 @@
-import fs from "node:fs";
 import {
   listAgentIds,
   resolveAgentWorkspaceDir,
@@ -6,12 +5,7 @@ import {
 } from "../../agents/agent-scope.js";
 import { installSkill } from "../../agents/skills-install.js";
 import { buildWorkspaceSkillStatus } from "../../agents/skills-status.js";
-import {
-  buildWorkspaceSkillCommandSpecs,
-  filterWorkspaceSkillEntries,
-  loadWorkspaceSkillEntries,
-  type SkillEntry,
-} from "../../agents/skills.js";
+import { loadWorkspaceSkillEntries, type SkillEntry } from "../../agents/skills.js";
 import { listAgentWorkspaceDirs } from "../../agents/workspace-dirs.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { loadConfig, writeConfigFile } from "../../config/config.js";
@@ -24,12 +18,9 @@ import {
   formatValidationErrors,
   validateSkillsBinsParams,
   validateSkillsInstallParams,
-  validateSkillsInvokeParams,
-  validateSkillsListParams,
   validateSkillsStatusParams,
   validateSkillsUpdateParams,
 } from "../protocol/index.js";
-import { resolveClawHubPaths } from "./clawhub.js";
 import type { GatewayRequestHandlers } from "./types.js";
 
 function collectSkillBins(entries: SkillEntry[]): string[] {
@@ -209,158 +200,5 @@ export const skillsHandlers: GatewayRequestHandlers = {
     };
     await writeConfigFile(nextConfig);
     respond(true, { ok: true, skillKey: p.skillKey, config: current }, undefined);
-  },
-  "skills.list": ({ params, respond }) => {
-    if (!validateSkillsListParams(params)) {
-      respond(
-        false,
-        undefined,
-        errorShape(
-          ErrorCodes.INVALID_REQUEST,
-          `invalid skills.list params: ${formatValidationErrors(validateSkillsListParams.errors)}`,
-        ),
-      );
-      return;
-    }
-    const cfg = loadConfig();
-    const agentIdRaw = typeof params?.agentId === "string" ? params.agentId.trim() : "";
-    const agentId = agentIdRaw ? normalizeAgentId(agentIdRaw) : resolveDefaultAgentId(cfg);
-    if (agentIdRaw) {
-      const knownAgents = listAgentIds(cfg);
-      if (!knownAgents.includes(agentId)) {
-        respond(
-          false,
-          undefined,
-          errorShape(ErrorCodes.INVALID_REQUEST, `unknown agent id "${agentIdRaw}"`),
-        );
-        return;
-      }
-    }
-    const workspaceDir = resolveAgentWorkspaceDir(cfg, agentId);
-    const eligibility = { remote: getRemoteSkillEligibility() };
-
-    // Collect locally installed skills
-    const entries = loadWorkspaceSkillEntries(workspaceDir, { config: cfg });
-    const eligible = filterWorkspaceSkillEntries(entries, cfg);
-    const commandSpecs = buildWorkspaceSkillCommandSpecs(workspaceDir, {
-      config: cfg,
-      entries,
-      eligibility,
-    });
-    const commandSpecsBySkillName = new Map(commandSpecs.map((s) => [s.skillName, s]));
-
-    const installedSkills = eligible.map((entry) => ({
-      name: entry.skill.name,
-      description: entry.skill.description?.trim() || entry.skill.name,
-      installed: true,
-      version: undefined as string | undefined,
-      command: commandSpecsBySkillName.get(entry.skill.name)?.name,
-    }));
-    const installedNames = new Set(installedSkills.map((s) => s.name));
-
-    // Merge with ClawHub catalog skills (if catalog is available)
-    const catalogSkills: Array<{
-      name: string;
-      description: string;
-      installed: boolean;
-      version?: string;
-      command?: string;
-    }> = [];
-    const paths = resolveClawHubPaths(workspaceDir);
-    if (fs.existsSync(paths.catalogPath)) {
-      try {
-        const catalog = JSON.parse(fs.readFileSync(paths.catalogPath, "utf8")) as {
-          skills?: Array<{
-            slug?: string;
-            displayName?: string;
-            summary?: string;
-            latestVersion?: { version?: string };
-          }>;
-        };
-        for (const skill of catalog.skills ?? []) {
-          const slug = typeof skill.slug === "string" ? skill.slug : "";
-          if (!slug || installedNames.has(slug)) {
-            continue;
-          }
-          catalogSkills.push({
-            name: slug,
-            description:
-              (typeof skill.summary === "string" ? skill.summary.trim() : "") ||
-              (typeof skill.displayName === "string" ? skill.displayName.trim() : "") ||
-              slug,
-            installed: false,
-            version: skill.latestVersion?.version,
-          });
-        }
-      } catch {
-        // ignore catalog read errors
-      }
-    }
-
-    respond(true, { skills: [...installedSkills, ...catalogSkills] }, undefined);
-  },
-  "skills.invoke": ({ params, respond }) => {
-    if (!validateSkillsInvokeParams(params)) {
-      respond(
-        false,
-        undefined,
-        errorShape(
-          ErrorCodes.INVALID_REQUEST,
-          `invalid skills.invoke params: ${formatValidationErrors(validateSkillsInvokeParams.errors)}`,
-        ),
-      );
-      return;
-    }
-    const p = params as {
-      skillName: string;
-      args?: string;
-      sessionKey?: string;
-    };
-    const cfg = loadConfig();
-    const agentId = resolveDefaultAgentId(cfg);
-    const workspaceDir = resolveAgentWorkspaceDir(cfg, agentId);
-
-    // Find the skill among loaded entries
-    const entries = loadWorkspaceSkillEntries(workspaceDir, { config: cfg });
-    const eligible = filterWorkspaceSkillEntries(entries, cfg);
-    const match = eligible.find(
-      (entry) => entry.skill.name.toLowerCase() === p.skillName.toLowerCase(),
-    );
-    if (!match) {
-      respond(
-        false,
-        undefined,
-        errorShape(
-          ErrorCodes.INVALID_REQUEST,
-          `skill not found: "${p.skillName}". Use skills.list to see available skills.`,
-        ),
-      );
-      return;
-    }
-
-    // Read the skill content for the response
-    let content = "";
-    try {
-      content = fs.readFileSync(match.skill.filePath, "utf-8");
-    } catch {
-      respond(
-        false,
-        undefined,
-        errorShape(ErrorCodes.UNAVAILABLE, `failed to read skill file: ${match.skill.filePath}`),
-      );
-      return;
-    }
-
-    respond(
-      true,
-      {
-        ok: true,
-        skillName: match.skill.name,
-        description: match.skill.description?.trim() || match.skill.name,
-        args: p.args ?? "",
-        content,
-      },
-      undefined,
-    );
   },
 };

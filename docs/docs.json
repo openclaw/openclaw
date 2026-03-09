@@ -1013,7 +1013,8 @@
                   "tools/browser",
                   "tools/browser-login",
                   "tools/chrome-extension",
-                  "tools/browser-linux-troubleshooting"
+                  "tools/browser-linux-troubleshooting",
+                  "tools/browser-wsl2-windows-remote-cdp-troubleshooting"
                 ]
               },
               {
@@ -1182,6 +1183,7 @@
                       "gateway/configuration-reference",
                       "gateway/configuration-examples",
                       "gateway/authentication",
+                      "auth-credential-semantics",
                       "gateway/secrets",
                       "gateway/secrets-plan-contract",
                       "gateway/trusted-proxy-auth",
@@ -1405,41 +1407,6 @@
               {
                 "group": "Docs meta",
                 "pages": ["start/hubs", "start/docs-directory"]
-              }
-            ]
-          },
-          {
-            "tab": "Operator1",
-            "groups": [
-              {
-                "group": "Overview",
-                "pages": ["operator1/index"]
-              },
-              {
-                "group": "Architecture",
-                "pages": [
-                  "operator1/architecture",
-                  "operator1/agent-hierarchy",
-                  "operator1/delegation",
-                  "operator1/gateway-patterns"
-                ]
-              },
-              {
-                "group": "Configuration",
-                "pages": [
-                  "operator1/configuration",
-                  "operator1/agent-configs",
-                  "operator1/memory-system"
-                ]
-              },
-              {
-                "group": "Operations",
-                "pages": [
-                  "operator1/rpc",
-                  "operator1/deployment",
-                  "operator1/channels",
-                  "operator1/spawning"
-                ]
               }
             ]
           }

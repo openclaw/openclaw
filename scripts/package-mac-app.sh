@@ -16,7 +16,14 @@ GIT_BUILD_NUMBER=$(cd "$ROOT_DIR" && git rev-list --count HEAD 2>/dev/null || ec
 APP_VERSION="${APP_VERSION:-$PKG_VERSION}"
 APP_BUILD="${APP_BUILD:-}"
 BUILD_CONFIG="${BUILD_CONFIG:-debug}"
-BUILD_ARCHS_VALUE="${BUILD_ARCHS:-$(uname -m)}"
+if [[ -n "${BUILD_ARCHS:-}" ]]; then
+  BUILD_ARCHS_VALUE="${BUILD_ARCHS}"
+elif [[ "$BUILD_CONFIG" == "release" ]]; then
+  # Release packaging should be universal unless explicitly overridden.
+  BUILD_ARCHS_VALUE="all"
+else
+  BUILD_ARCHS_VALUE="$(uname -m)"
+fi
 if [[ "${BUILD_ARCHS_VALUE}" == "all" ]]; then
   BUILD_ARCHS_VALUE="arm64 x86_64"
 fi
@@ -138,8 +145,6 @@ fi
 if [[ "${SKIP_UI_BUILD:-0}" != "1" ]]; then
   echo "🖥  Building Control UI (ui:build)"
   (cd "$ROOT_DIR" && node scripts/ui.js build)
-  echo "🖥  Building Control UI Next (ui-next:build)"
-  (cd "$ROOT_DIR" && pnpm ui-next:build)
 else
   echo "🖥  Skipping Control UI build (SKIP_UI_BUILD=1)"
 fi

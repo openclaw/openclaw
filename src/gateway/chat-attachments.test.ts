@@ -88,7 +88,7 @@ describe("parseMessageWithAttachments", () => {
     ]);
     expect(parsed.images).toHaveLength(0);
     expect(logs).toHaveLength(1);
-    expect(logs[0]).toMatch(/unsupported type/i);
+    expect(logs[0]).toMatch(/non-image/i);
   });
 
   it("prefers sniffed mime type and logs mismatch", async () => {
@@ -113,7 +113,7 @@ describe("parseMessageWithAttachments", () => {
     ]);
     expect(parsed.images).toHaveLength(0);
     expect(logs).toHaveLength(1);
-    expect(logs[0]).toMatch(/unsupported type/i);
+    expect(logs[0]).toMatch(/unable to detect image mime type/i);
   });
 
   it("keeps valid images and drops invalid ones", async () => {
@@ -135,7 +135,7 @@ describe("parseMessageWithAttachments", () => {
     expect(parsed.images).toHaveLength(1);
     expect(parsed.images[0]?.mimeType).toBe("image/png");
     expect(parsed.images[0]?.data).toBe(PNG_1x1);
-    expect(logs.some((l) => /unsupported type/i.test(l))).toBe(true);
+    expect(logs.some((l) => /non-image/i.test(l))).toBe(true);
   });
 });
 

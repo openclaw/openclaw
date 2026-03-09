@@ -1,12 +1,12 @@
 import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import { getAcpSessionManager } from "../../acp/control-plane/manager.js";
-import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../../agents/agent-scope.js";
+import { resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import { clearBootstrapSnapshot } from "../../agents/bootstrap-cache.js";
-import { compactEmbeddedPiSessionDirect } from "../../agents/pi-embedded-runner/compact.js";
 import { abortEmbeddedPiRun, waitForEmbeddedPiRunEnd } from "../../agents/pi-embedded.js";
 import { stopSubagentsForRequester } from "../../auto-reply/reply/abort.js";
 import { clearSessionQueues } from "../../auto-reply/reply/queue.js";
+import { closeTrackedBrowserTabsForSessions } from "../../browser/session-tab-registry.js";
 import { loadConfig } from "../../config/config.js";
 import {
   loadSessionStore,
@@ -28,9 +28,7 @@ import { GATEWAY_CLIENT_IDS } from "../protocol/client-info.js";
 import {
   ErrorCodes,
   errorShape,
-  validateSessionsArchiveParams,
   validateSessionsCompactParams,
-  validateSessionsCompactSmartParams,
   validateSessionsDeleteParams,
   validateSessionsListParams,
   validateSessionsPatchParams,
@@ -52,6 +50,7 @@ import {
   type SessionsPatchResult,
   type SessionsPreviewEntry,
   type SessionsPreviewResult,
+  readSessionMessages,
 } from "../session-utils.js";
 import { applySessionsPatchToStore } from "../sessions-patch.js";
 import { resolveSessionKeyFromResolveParams } from "../sessions-resolve.js";
@@ -189,20 +188,36 @@ async function ensureSessionRuntimeCleanup(params: {
   target: ReturnType<typeof resolveGatewaySessionStoreTarget>;
   sessionId?: string;
 }) {
+  const closeTrackedBrowserTabs = async () => {
+    const closeKeys = new Set<string>([
+      params.key,
+      params.target.canonicalKey,
+      ...params.target.storeKeys,
+      params.sessionId ?? "",
+    ]);
+    return await closeTrackedBrowserTabsForSessions({
+      sessionKeys: [...closeKeys],
+      onWarn: (message) => logVerbose(message),
+    });
+  };
+
   const queueKeys = new Set<string>(params.target.storeKeys);
   queueKeys.add(params.target.canonicalKey);
   if (params.sessionId) {
     queueKeys.add(params.sessionId);
   }
   clearSessionQueues([...queueKeys]);
-  clearBootstrapSnapshot(params.target.canonicalKey);
   stopSubagentsForRequester({ cfg: params.cfg, requesterSessionKey: params.target.canonicalKey });
   if (!params.sessionId) {
+    clearBootstrapSnapshot(params.target.canonicalKey);
+    await closeTrackedBrowserTabs();
     return undefined;
   }
   abortEmbeddedPiRun(params.sessionId);
   const ended = await waitForEmbeddedPiRunEnd(params.sessionId, 15_000);
+  clearBootstrapSnapshot(params.target.canonicalKey);
   if (ended) {
+    await closeTrackedBrowserTabs();
     return undefined;
   }
   return errorShape(
@@ -612,6 +627,28 @@ export const sessionsHandlers: GatewayRequestHandlers = {
 
     respond(true, { ok: true, key: target.canonicalKey, deleted, archived }, undefined);
   },
+  "sessions.get": ({ params, respond }) => {
+    const p = params;
+    const key = requireSessionKey(p.key ?? p.sessionKey, respond);
+    if (!key) {
+      return;
+    }
+    const limit =
+      typeof p.limit === "number" && Number.isFinite(p.limit)
+        ? Math.max(1, Math.floor(p.limit))
+        : 200;
+
+    const { target, storePath } = resolveGatewaySessionTargetFromKey(key);
+    const store = loadSessionStore(storePath);
+    const entry = target.storeKeys.map((k) => store[k]).find(Boolean);
+    if (!entry?.sessionId) {
+      respond(true, { messages: [] }, undefined);
+      return;
+    }
+    const allMessages = readSessionMessages(entry.sessionId, storePath, entry.sessionFile);
+    const messages = limit < allMessages.length ? allMessages.slice(-limit) : allMessages;
+    respond(true, { messages }, undefined);
+  },
   "sessions.compact": async ({ params, respond }) => {
     if (!assertValidParams(params, validateSessionsCompactParams, "sessions.compact", respond)) {
       return;
@@ -710,142 +747,6 @@ export const sessionsHandlers: GatewayRequestHandlers = {
         compacted: true,
         archived,
         kept: keptLines.length,
-      },
-      undefined,
-    );
-  },
-
-  /**
-   * Archive (or unarchive) a session.
-   * Archived sessions are hidden from the active list but the transcript
-   * file stays on disk so memory/QMD search continues to work.
-   */
-  "sessions.archive": async ({ params, respond }) => {
-    if (!assertValidParams(params, validateSessionsArchiveParams, "sessions.archive", respond)) {
-      return;
-    }
-    const p = params;
-    const key = requireSessionKey(p.key, respond);
-    if (!key) {
-      return;
-    }
-
-    const { cfg, target, storePath } = resolveGatewaySessionTargetFromKey(key);
-    const archive = p.archived !== false; // default true
-
-    let found = false;
-    await updateSessionStore(storePath, (store) => {
-      let { entry, primaryKey } = migrateAndPruneSessionStoreKey({ cfg, key, store });
-      // The combined session list returns canonical keys like "agent:op:sh:1234" but the
-      // individual agent store may hold the entry under the raw key "sh:1234". Fall back
-      // to the unprefixed rest portion so archive always finds the right entry.
-      if (!entry) {
-        const parsed = parseAgentSessionKey(key);
-        const rawKey = parsed?.rest;
-        if (rawKey && store[rawKey]) {
-          entry = store[rawKey];
-          primaryKey = rawKey;
-        }
-      }
-      if (!entry) {
-        return;
-      }
-      if (archive) {
-        entry.archived = true;
-      } else {
-        delete entry.archived;
-      }
-      entry.updatedAt = Date.now();
-      store[primaryKey] = entry;
-      found = true;
-    });
-
-    if (!found) {
-      respond(false, undefined, errorShape(ErrorCodes.NOT_FOUND, `session not found: ${key}`));
-      return;
-    }
-    respond(true, { ok: true, key: target.canonicalKey, archived: archive }, undefined);
-  },
-
-  /**
-   * Smart compaction — summarizes old messages via the LLM instead of
-   * discarding them.  Uses the same path as automatic overflow compaction.
-   */
-  "sessions.compactSmart": async ({ params, respond }) => {
-    if (
-      !assertValidParams(
-        params,
-        validateSessionsCompactSmartParams,
-        "sessions.compactSmart",
-        respond,
-      )
-    ) {
-      return;
-    }
-    const p = params;
-    const key = requireSessionKey(p.key, respond);
-    if (!key) {
-      return;
-    }
-
-    const { cfg, target, storePath } = resolveGatewaySessionTargetFromKey(key);
-    const storeResult = await updateSessionStore(storePath, (store) => {
-      const { entry, primaryKey } = migrateAndPruneSessionStoreKey({ cfg, key, store });
-      return { entry, primaryKey };
-    });
-
-    const entry = storeResult.entry;
-    const sessionId = entry?.sessionId;
-    if (!sessionId) {
-      respond(true, { ok: true, compacted: false, reason: "no sessionId" }, undefined);
-      return;
-    }
-
-    const filePath = resolveSessionTranscriptCandidates(
-      sessionId,
-      storePath,
-      entry?.sessionFile,
-      target.agentId,
-    ).find((candidate) => fs.existsSync(candidate));
-    if (!filePath) {
-      respond(true, { ok: true, compacted: false, reason: "no transcript" }, undefined);
-      return;
-    }
-
-    const agentId = target.agentId ?? resolveDefaultAgentId(cfg);
-    const workspaceDir = resolveAgentWorkspaceDir(cfg, agentId);
-    const { provider, model } = resolveSessionModelRef(cfg, entry, agentId);
-
-    const result = await compactEmbeddedPiSessionDirect({
-      sessionId,
-      sessionKey: target.canonicalKey ?? key,
-      sessionFile: filePath,
-      workspaceDir,
-      config: cfg,
-      provider,
-      model,
-      trigger: "manual",
-    });
-
-    if (!result.ok || !result.compacted) {
-      respond(
-        true,
-        { ok: true, compacted: false, reason: result.reason ?? "compaction returned no result" },
-        undefined,
-      );
-      return;
-    }
-
-    respond(
-      true,
-      {
-        ok: true,
-        compacted: true,
-        tokensBefore: result.result?.tokensBefore,
-        tokensAfter: result.result?.tokensAfter,
-        summary: result.result?.summary
-          ? result.result.summary.slice(0, 200) + (result.result.summary.length > 200 ? "…" : "")
-          : undefined,
       },
       undefined,
     );

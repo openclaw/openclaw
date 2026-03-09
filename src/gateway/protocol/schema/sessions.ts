@@ -21,10 +21,6 @@ export const SessionsListParamsSchema = Type.Object(
     spawnedBy: Type.Optional(NonEmptyString),
     agentId: Type.Optional(NonEmptyString),
     search: Type.Optional(Type.String()),
-    /** When true, include archived sessions. Defaults to false (active only). */
-    includeArchived: Type.Optional(Type.Boolean()),
-    /** When true, return ONLY archived sessions. */
-    archivedOnly: Type.Optional(Type.Boolean()),
   },
   { additionalProperties: false },
 );
@@ -82,17 +78,6 @@ export const SessionsPatchParamsSchema = Type.Object(
     groupActivation: Type.Optional(
       Type.Union([Type.Literal("mention"), Type.Literal("always"), Type.Null()]),
     ),
-    teamRunId: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
-    archived: Type.Optional(Type.Union([Type.Boolean(), Type.Null()])),
-  },
-  { additionalProperties: false },
-);
-
-export const SessionsArchiveParamsSchema = Type.Object(
-  {
-    key: NonEmptyString,
-    /** Pass false to unarchive. Defaults to true. */
-    archived: Type.Optional(Type.Boolean()),
   },
   { additionalProperties: false },
 );
@@ -119,14 +104,6 @@ export const SessionsCompactParamsSchema = Type.Object(
   {
     key: NonEmptyString,
     maxLines: Type.Optional(Type.Integer({ minimum: 1 })),
-  },
-  { additionalProperties: false },
-);
-
-/** Smart compaction: summarizes old messages via LLM instead of truncating. */
-export const SessionsCompactSmartParamsSchema = Type.Object(
-  {
-    key: NonEmptyString,
   },
   { additionalProperties: false },
 );

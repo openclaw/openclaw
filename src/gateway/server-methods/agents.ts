@@ -88,10 +88,7 @@ function resolveAgentWorkspaceFileOrRespondError(
   const name = (
     typeof rawName === "string" || typeof rawName === "number" ? String(rawName) : ""
   ).trim();
-  const isAllowed =
-    ALLOWED_FILE_NAMES.has(name) ||
-    (name.startsWith("memory/") && name.endsWith(".md") && !name.includes(".."));
-  if (!isAllowed) {
+  if (!ALLOWED_FILE_NAMES.has(name)) {
     respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, `unsupported file "${name}"`));
     return null;
   }
@@ -348,31 +345,6 @@ async function listAgentFiles(workspaceDir: string, options?: { hideBootstrap?: 
     }
   }
 
-  // Scan memory/ subdirectory for additional .md files
-  try {
-    const memorySubdir = path.join(workspaceDir, "memory");
-    const entries = await fs.readdir(memorySubdir, { withFileTypes: true });
-    for (const entry of entries) {
-      if (!entry.isFile() || entry.isSymbolicLink() || !entry.name.endsWith(".md")) {
-        continue;
-      }
-      const name = `memory/${entry.name}`;
-      const filePath = path.join(workspaceDir, name);
-      const meta = await statFileSafely(filePath);
-      if (meta) {
-        files.push({
-          name,
-          path: filePath,
-          missing: false,
-          size: meta.size,
-          updatedAtMs: meta.updatedAtMs,
-        });
-      }
-    }
-  } catch {
-    // memory/ subdirectory may not exist — that's fine
-  }
-
   return files;
 }
 
@@ -552,34 +524,24 @@ export const agentsHandlers: GatewayRequestHandlers = {
     // Ensure workspace & transcripts exist BEFORE writing config so a failure
     // here does not leave a broken config entry behind.
     const skipBootstrap = Boolean(nextConfig.agents?.defaults?.skipBootstrap);
-    await ensureAgentWorkspace({
-      dir: workspaceDir,
-      ensureBootstrapFiles: !skipBootstrap,
-      agentId,
-    });
+    await ensureAgentWorkspace({ dir: workspaceDir, ensureBootstrapFiles: !skipBootstrap });
     await fs.mkdir(resolveSessionTranscriptsDirForAgent(agentId), { recursive: true });
 
     await writeConfigFile(nextConfig);
 
-    // Append Name/emoji/avatar to IDENTITY.md only when using the generic template.
-    // Agent-specific templates (e.g. matrix/neo/) already include identity content.
+    // Always write Name to IDENTITY.md; optionally include emoji/avatar.
+    const safeName = sanitizeIdentityLine(rawName);
+    const emoji = resolveOptionalStringParam(params.emoji);
+    const avatar = resolveOptionalStringParam(params.avatar);
     const identityPath = path.join(workspaceDir, DEFAULT_IDENTITY_FILENAME);
-    const identityContent = await fs.readFile(identityPath, "utf-8").catch(() => "");
-    const hasAgentIdentity =
-      identityContent.includes("- **Name:**") || identityContent.includes(`- Name: ${rawName}`);
-    if (!hasAgentIdentity) {
-      const safeName = sanitizeIdentityLine(rawName);
-      const emoji = resolveOptionalStringParam(params.emoji);
-      const avatar = resolveOptionalStringParam(params.avatar);
-      const lines = [
-        "",
-        `- Name: ${safeName}`,
-        ...(emoji ? [`- Emoji: ${sanitizeIdentityLine(emoji)}`] : []),
-        ...(avatar ? [`- Avatar: ${sanitizeIdentityLine(avatar)}`] : []),
-        "",
-      ];
-      await fs.appendFile(identityPath, lines.join("\n"), "utf-8");
-    }
+    const lines = [
+      "",
+      `- Name: ${safeName}`,
+      ...(emoji ? [`- Emoji: ${sanitizeIdentityLine(emoji)}`] : []),
+      ...(avatar ? [`- Avatar: ${sanitizeIdentityLine(avatar)}`] : []),
+      "",
+    ];
+    await fs.appendFile(identityPath, lines.join("\n"), "utf-8");
 
     respond(true, { ok: true, agentId, name: rawName, workspace: workspaceDir }, undefined);
   },
@@ -617,11 +579,7 @@ export const agentsHandlers: GatewayRequestHandlers = {
 
     if (workspaceDir) {
       const skipBootstrap = Boolean(nextConfig.agents?.defaults?.skipBootstrap);
-      await ensureAgentWorkspace({
-        dir: workspaceDir,
-        ensureBootstrapFiles: !skipBootstrap,
-        agentId,
-      });
+      await ensureAgentWorkspace({ dir: workspaceDir, ensureBootstrapFiles: !skipBootstrap });
     }
 
     if (avatar) {
@@ -774,10 +732,19 @@ export const agentsHandlers: GatewayRequestHandlers = {
       return;
     }
     const content = String(params.content ?? "");
+    const relativeWritePath = path.relative(resolvedPath.workspaceReal, resolvedPath.ioPath);
+    if (
+      !relativeWritePath ||
+      relativeWritePath.startsWith("..") ||
+      path.isAbsolute(relativeWritePath)
+    ) {
+      respondWorkspaceFileUnsafe(respond, name);
+      return;
+    }
     try {
       await writeFileWithinRoot({
-        rootDir: workspaceDir,
-        relativePath: name,
+        rootDir: resolvedPath.workspaceReal,
+        relativePath: relativeWritePath,
         data: content,
         encoding: "utf8",
       });

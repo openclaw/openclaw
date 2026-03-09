@@ -49,10 +49,7 @@ export type GatewaySessionRow = {
   lastAccountId?: string;
 };
 
-export type GatewayAgentRow = SharedGatewayAgentRow & {
-  role?: string;
-  department?: string;
-};
+export type GatewayAgentRow = SharedGatewayAgentRow;
 
 export type SessionPreviewItem = {
   role: "user" | "assistant" | "tool" | "system" | "other";

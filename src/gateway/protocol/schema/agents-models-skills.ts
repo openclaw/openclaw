@@ -16,8 +16,6 @@ export const AgentSummarySchema = Type.Object(
   {
     id: NonEmptyString,
     name: Type.Optional(NonEmptyString),
-    role: Type.Optional(NonEmptyString),
-    department: Type.Optional(NonEmptyString),
     identity: Type.Optional(
       Type.Object(
         {
@@ -206,22 +204,6 @@ export const SkillsUpdateParamsSchema = Type.Object(
     enabled: Type.Optional(Type.Boolean()),
     apiKey: Type.Optional(Type.String()),
     env: Type.Optional(Type.Record(NonEmptyString, Type.String())),
-  },
-  { additionalProperties: false },
-);
-
-export const SkillsListParamsSchema = Type.Object(
-  {
-    agentId: Type.Optional(NonEmptyString),
-  },
-  { additionalProperties: false },
-);
-
-export const SkillsInvokeParamsSchema = Type.Object(
-  {
-    skillName: NonEmptyString,
-    args: Type.Optional(Type.String()),
-    sessionKey: Type.Optional(NonEmptyString),
   },
   { additionalProperties: false },
 );

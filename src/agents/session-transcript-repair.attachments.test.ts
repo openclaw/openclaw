@@ -29,7 +29,7 @@ function mkSessionsSpawnToolCall(content: string): AgentMessage {
 
 describe("sanitizeToolCallInputs redacts sessions_spawn attachments", () => {
   it("replaces attachments[].content with __OPENCLAW_REDACTED__", () => {
-    const secret = "SUPER_SECRET_SHOULD_NOT_PERSIST";
+    const secret = "SUPER_SECRET_SHOULD_NOT_PERSIST"; // pragma: allowlist secret
     const input = [mkSessionsSpawnToolCall(secret)];
     const out = sanitizeToolCallInputs(input);
     expect(out).toHaveLength(1);
@@ -44,7 +44,7 @@ describe("sanitizeToolCallInputs redacts sessions_spawn attachments", () => {
   });
 
   it("redacts attachments content from tool input payloads too", () => {
-    const secret = "INPUT_SECRET_SHOULD_NOT_PERSIST";
+    const secret = "INPUT_SECRET_SHOULD_NOT_PERSIST"; // pragma: allowlist secret
     const input = castAgentMessages([
       {
         role: "assistant",

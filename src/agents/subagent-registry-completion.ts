@@ -32,14 +32,11 @@ export function runOutcomesEqual(
 export function resolveLifecycleOutcomeFromRunOutcome(
   outcome: SubagentRunOutcome | undefined,
 ): SubagentLifecycleEndedOutcome {
-  if (outcome?.status === "error" || outcome?.status === "aborted") {
+  if (outcome?.status === "error") {
     return SUBAGENT_ENDED_OUTCOME_ERROR;
   }
   if (outcome?.status === "timeout") {
     return SUBAGENT_ENDED_OUTCOME_TIMEOUT;
-  }
-  if (outcome?.status === "interrupted") {
-    return SUBAGENT_ENDED_OUTCOME_ERROR;
   }
   return SUBAGENT_ENDED_OUTCOME_OK;
 }

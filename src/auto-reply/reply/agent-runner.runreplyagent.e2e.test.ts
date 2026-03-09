@@ -28,6 +28,8 @@ type AgentRunParams = {
 type EmbeddedRunParams = {
   prompt?: string;
   extraSystemPrompt?: string;
+  bootstrapPromptWarningSignaturesSeen?: string[];
+  bootstrapPromptWarningSignature?: string;
   onAgentEvent?: (evt: { stream?: string; data?: { phase?: string; willRetry?: boolean } }) => void;
 };
 
@@ -410,7 +412,7 @@ describe("runReplyAgent typing (heartbeat)", () => {
         shouldType: false,
       },
       {
-        partials: ["NO_", "NO_RE", "NO_REPLY"],
+        partials: ["NO", "NO_", "NO_RE", "NO_REPLY"],
         finalText: "NO_REPLY",
         expectedForwarded: [] as string[],
         shouldType: false,
@@ -1053,6 +1055,11 @@ describe("runReplyAgent typing (heartbeat)", () => {
         expectedReason: "rate limit",
       },
       {
+        existingReason: undefined,
+        reportedReason: "overloaded",
+        expectedReason: "overloaded",
+      },
+      {
         existingReason: "rate limit",
         reportedReason: "timeout",
         expectedReason: "timeout",
@@ -1114,7 +1121,7 @@ describe("runReplyAgent typing (heartbeat)", () => {
       const sessionId = "session";
       const storePath = path.join(stateDir, "sessions", "sessions.json");
       const transcriptPath = sessions.resolveSessionTranscriptPath(sessionId);
-      const sessionEntry = {
+      const sessionEntry: SessionEntry = {
         sessionId,
         updatedAt: Date.now(),
         sessionFile: transcriptPath,
@@ -1478,7 +1485,7 @@ describe("runReplyAgent memory flush", () => {
   it("skips memory flush for CLI providers", async () => {
     await withTempStore(async (storePath) => {
       const sessionKey = "main";
-      const sessionEntry = {
+      const sessionEntry: SessionEntry = {
         sessionId: "session",
         updatedAt: Date.now(),
         totalTokens: 80_000,
@@ -1574,6 +1581,77 @@ describe("runReplyAgent memory flush", () => {
       expect(flushCall?.extraSystemPrompt).toContain("Flush memory now.");
       expect(flushCall?.extraSystemPrompt).toContain("NO_REPLY");
       expect(calls[1]?.prompt).toBe("hello");
+    });
+  });
+
+  it("passes stored bootstrap warning signatures to memory flush runs", async () => {
+    await withTempStore(async (storePath) => {
+      const sessionKey = "main";
+      const sessionEntry: SessionEntry = {
+        sessionId: "session",
+        updatedAt: Date.now(),
+        totalTokens: 80_000,
+        compactionCount: 1,
+        systemPromptReport: {
+          source: "run",
+          generatedAt: Date.now(),
+          systemPrompt: {
+            chars: 1,
+            projectContextChars: 0,
+            nonProjectContextChars: 1,
+          },
+          injectedWorkspaceFiles: [],
+          skills: {
+            promptChars: 0,
+            entries: [],
+          },
+          tools: {
+            listChars: 0,
+            schemaChars: 0,
+            entries: [],
+          },
+          bootstrapTruncation: {
+            warningMode: "once",
+            warningShown: true,
+            promptWarningSignature: "sig-b",
+            warningSignaturesSeen: ["sig-a", "sig-b"],
+            truncatedFiles: 1,
+            nearLimitFiles: 0,
+            totalNearLimit: false,
+          },
+        },
+      };
+
+      await seedSessionStore({ storePath, sessionKey, entry: sessionEntry });
+
+      const calls: Array<EmbeddedRunParams> = [];
+      state.runEmbeddedPiAgentMock.mockImplementation(async (params: EmbeddedRunParams) => {
+        calls.push(params);
+        if (params.prompt?.includes("Pre-compaction memory flush.")) {
+          return { payloads: [], meta: {} };
+        }
+        return {
+          payloads: [{ text: "ok" }],
+          meta: { agentMeta: { usage: { input: 1, output: 1 } } },
+        };
+      });
+
+      const baseRun = createBaseRun({
+        storePath,
+        sessionEntry,
+      });
+
+      await runReplyAgentWithBase({
+        baseRun,
+        storePath,
+        sessionKey,
+        sessionEntry,
+        commandBody: "hello",
+      });
+
+      expect(calls).toHaveLength(2);
+      expect(calls[0]?.bootstrapPromptWarningSignaturesSeen).toEqual(["sig-a", "sig-b"]);
+      expect(calls[0]?.bootstrapPromptWarningSignature).toBe("sig-b");
     });
   });
 

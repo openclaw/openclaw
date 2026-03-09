@@ -101,27 +101,14 @@ function stripFrontMatter(content: string): string {
   return trimmed;
 }
 
-async function loadTemplate(name: string, agentId?: string): Promise<string> {
-  const cacheKey = agentId ? `${agentId}/${name}` : name;
-  const cached = workspaceTemplateCache.get(cacheKey);
+async function loadTemplate(name: string): Promise<string> {
+  const cached = workspaceTemplateCache.get(name);
   if (cached) {
     return cached;
   }
 
   const pending = (async () => {
     const templateDir = await resolveWorkspaceTemplateDir();
-
-    // Try agent-specific template first (e.g. matrix/neo/SOUL.md)
-    if (agentId) {
-      const agentTemplatePath = path.join(templateDir, "matrix", agentId, name);
-      try {
-        const content = await fs.readFile(agentTemplatePath, "utf-8");
-        return stripFrontMatter(content);
-      } catch {
-        // Fall through to generic template
-      }
-    }
-
     const templatePath = path.join(templateDir, name);
     try {
       const content = await fs.readFile(templatePath, "utf-8");
@@ -133,11 +120,11 @@ async function loadTemplate(name: string, agentId?: string): Promise<string> {
     }
   })();
 
-  workspaceTemplateCache.set(cacheKey, pending);
+  workspaceTemplateCache.set(name, pending);
   try {
     return await pending;
   } catch (error) {
-    workspaceTemplateCache.delete(cacheKey);
+    workspaceTemplateCache.delete(name);
     throw error;
   }
 }
@@ -334,7 +321,6 @@ async function ensureGitRepo(dir: string, isBrandNewWorkspace: boolean) {
 export async function ensureAgentWorkspace(params?: {
   dir?: string;
   ensureBootstrapFiles?: boolean;
-  agentId?: string;
 }): Promise<{
   dir: string;
   agentsPath?: string;
@@ -383,27 +369,18 @@ export async function ensureAgentWorkspace(params?: {
     return existing.every((v) => !v);
   })();
 
-  const agentId = params?.agentId;
-  const agentsTemplate = await loadTemplate(DEFAULT_AGENTS_FILENAME, agentId);
-  const soulTemplate = await loadTemplate(DEFAULT_SOUL_FILENAME, agentId);
-  const toolsTemplate = await loadTemplate(DEFAULT_TOOLS_FILENAME, agentId);
-  const identityTemplate = await loadTemplate(DEFAULT_IDENTITY_FILENAME, agentId);
-  const userTemplate = await loadTemplate(DEFAULT_USER_FILENAME, agentId);
-  const heartbeatTemplate = await loadTemplate(DEFAULT_HEARTBEAT_FILENAME, agentId);
+  const agentsTemplate = await loadTemplate(DEFAULT_AGENTS_FILENAME);
+  const soulTemplate = await loadTemplate(DEFAULT_SOUL_FILENAME);
+  const toolsTemplate = await loadTemplate(DEFAULT_TOOLS_FILENAME);
+  const identityTemplate = await loadTemplate(DEFAULT_IDENTITY_FILENAME);
+  const userTemplate = await loadTemplate(DEFAULT_USER_FILENAME);
+  const heartbeatTemplate = await loadTemplate(DEFAULT_HEARTBEAT_FILENAME);
   await writeFileIfMissing(agentsPath, agentsTemplate);
   await writeFileIfMissing(soulPath, soulTemplate);
   await writeFileIfMissing(toolsPath, toolsTemplate);
   await writeFileIfMissing(identityPath, identityTemplate);
   await writeFileIfMissing(userPath, userTemplate);
   await writeFileIfMissing(heartbeatPath, heartbeatTemplate);
-
-  // Seed MEMORY.md if an agent-specific template exists (department heads only)
-  try {
-    const memoryTemplate = await loadTemplate(DEFAULT_MEMORY_FILENAME, agentId);
-    await writeFileIfMissing(path.join(dir, DEFAULT_MEMORY_FILENAME), memoryTemplate);
-  } catch {
-    // No MEMORY.md template for this agent — skip silently (tier-3 workers, etc.)
-  }
 
   let state = await readWorkspaceOnboardingState(statePath);
   let stateDirty = false;
@@ -451,7 +428,7 @@ export async function ensureAgentWorkspace(params?: {
     if (legacyOnboardingCompleted) {
       markState({ onboardingCompletedAt: nowIso() });
     } else {
-      const bootstrapTemplate = await loadTemplate(DEFAULT_BOOTSTRAP_FILENAME, agentId);
+      const bootstrapTemplate = await loadTemplate(DEFAULT_BOOTSTRAP_FILENAME);
       const wroteBootstrap = await writeFileIfMissing(bootstrapPath, bootstrapTemplate);
       if (!wroteBootstrap) {
         bootstrapExists = await fileExists(bootstrapPath);

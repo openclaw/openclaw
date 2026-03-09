@@ -4,12 +4,14 @@ import path from "node:path";
 import { describe, expect, test } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import type { SessionEntry } from "../config/sessions.js";
+import { withStateDirEnv } from "../test-helpers/state-dir-env.js";
 import {
   capArrayByJsonBytes,
   classifySessionKey,
   deriveSessionTitle,
   listAgentsForGateway,
   listSessionsFromStore,
+  loadCombinedSessionStoreForGateway,
   parseGroupKey,
   pruneLegacyStoreKeys,
   resolveGatewaySessionStoreTarget,
@@ -310,6 +312,21 @@ describe("gateway session utils", () => {
       `data:image/png;base64,${Buffer.from("avatar").toString("base64")}`,
     );
   });
+
+  test("listAgentsForGateway keeps explicit agents.list scope over disk-only agents (scope boundary)", async () => {
+    await withStateDirEnv("openclaw-agent-list-scope-", async ({ stateDir }) => {
+      fs.mkdirSync(path.join(stateDir, "agents", "main"), { recursive: true });
+      fs.mkdirSync(path.join(stateDir, "agents", "codex"), { recursive: true });
+
+      const cfg = {
+        session: { mainKey: "main" },
+        agents: { list: [{ id: "main", default: true }] },
+      } as OpenClawConfig;
+
+      const { agents } = listAgentsForGateway(cfg);
+      expect(agents.map((agent) => agent.id)).toEqual(["main"]);
+    });
+  });
 });
 
 describe("resolveSessionModelRef", () => {
@@ -513,11 +530,10 @@ describe("deriveSessionTitle", () => {
       sessionId: "abc123",
       updatedAt: Date.now(),
     } as SessionEntry;
-    // The auto-label heuristic strips the "hello," greeting prefix
-    expect(deriveSessionTitle(entry, "Hello, how are you?")).toBe("How are you?");
+    expect(deriveSessionTitle(entry, "Hello, how are you?")).toBe("Hello, how are you?");
   });
 
-  test("truncates long first user message to max length", () => {
+  test("truncates long first user message to 60 chars with ellipsis", () => {
     const entry = {
       sessionId: "abc123",
       updatedAt: Date.now(),
@@ -526,8 +542,8 @@ describe("deriveSessionTitle", () => {
       "This is a very long message that exceeds sixty characters and should be truncated appropriately";
     const result = deriveSessionTitle(entry, longMsg);
     expect(result).toBeDefined();
-    // Auto-label heuristic uses 50-char limit
-    expect(result!.length).toBeLessThanOrEqual(50);
+    expect(result!.length).toBeLessThanOrEqual(60);
+    expect(result!.endsWith("…")).toBe(true);
   });
 
   test("truncates at word boundary when possible", () => {
@@ -538,7 +554,7 @@ describe("deriveSessionTitle", () => {
     const longMsg = "This message has many words and should be truncated at a word boundary nicely";
     const result = deriveSessionTitle(entry, longMsg);
     expect(result).toBeDefined();
-    expect(result!.length).toBeLessThanOrEqual(50);
+    expect(result!.endsWith("…")).toBe(true);
     expect(result!.includes("  ")).toBe(false);
   });
 
@@ -745,5 +761,47 @@ describe("listSessionsFromStore search", () => {
     expect(stale?.totalTokensFresh).toBe(false);
     expect(missing?.totalTokens).toBeUndefined();
     expect(missing?.totalTokensFresh).toBe(false);
+  });
+});
+
+describe("loadCombinedSessionStoreForGateway includes disk-only agents (#32804)", () => {
+  test("ACP agent sessions are visible even when agents.list is configured", async () => {
+    await withStateDirEnv("openclaw-acp-vis-", async ({ stateDir }) => {
+      const agentsDir = path.join(stateDir, "agents");
+      const mainDir = path.join(agentsDir, "main", "sessions");
+      const codexDir = path.join(agentsDir, "codex", "sessions");
+      fs.mkdirSync(mainDir, { recursive: true });
+      fs.mkdirSync(codexDir, { recursive: true });
+
+      fs.writeFileSync(
+        path.join(mainDir, "sessions.json"),
+        JSON.stringify({
+          "agent:main:main": { sessionId: "s-main", updatedAt: 100 },
+        }),
+        "utf8",
+      );
+
+      fs.writeFileSync(
+        path.join(codexDir, "sessions.json"),
+        JSON.stringify({
+          "agent:codex:acp-task": { sessionId: "s-codex", updatedAt: 200 },
+        }),
+        "utf8",
+      );
+
+      const cfg = {
+        session: {
+          mainKey: "main",
+          store: path.join(stateDir, "agents", "{agentId}", "sessions", "sessions.json"),
+        },
+        agents: {
+          list: [{ id: "main", default: true }],
+        },
+      } as OpenClawConfig;
+
+      const { store } = loadCombinedSessionStoreForGateway(cfg);
+      expect(store["agent:main:main"]).toBeDefined();
+      expect(store["agent:codex:acp-task"]).toBeDefined();
+    });
   });
 });

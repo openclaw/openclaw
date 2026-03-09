@@ -149,10 +149,6 @@ export type SessionEntry = {
   cliSessionIds?: Record<string, string>;
   claudeCliSessionId?: string;
   label?: string;
-  /** When true, the label was auto-generated (not user-set) and can be overwritten. */
-  autoLabel?: boolean;
-  /** When true, session is hidden from the active list but kept on disk for memory/QMD search. */
-  archived?: boolean;
   displayName?: string;
   channel?: string;
   groupId?: string;
@@ -168,9 +164,9 @@ export type SessionEntry = {
   skillsSnapshot?: SessionSkillSnapshot;
   systemPromptReport?: SessionSystemPromptReport;
   acp?: SessionAcpMeta;
-  /** Team run ID this session belongs to (persisted for gateway restart resilience). */
+  /** Team run ID for coordinated multi-agent tasks (operator1-specific). */
   teamRunId?: string;
-  /** Bound project ID from PROJECTS.md registry. */
+  /** Bound project ID for this session (operator1-specific). */
   projectId?: string;
 };
 
@@ -336,6 +332,15 @@ export type SessionSystemPromptReport = {
   workspaceDir?: string;
   bootstrapMaxChars?: number;
   bootstrapTotalMaxChars?: number;
+  bootstrapTruncation?: {
+    warningMode?: "off" | "once" | "always";
+    warningShown?: boolean;
+    promptWarningSignature?: string;
+    warningSignaturesSeen?: string[];
+    truncatedFiles?: number;
+    nearLimitFiles?: number;
+    totalNearLimit?: boolean;
+  };
   sandbox?: {
     mode?: string;
     sandboxed?: boolean;

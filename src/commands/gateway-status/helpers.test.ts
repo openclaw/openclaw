@@ -75,7 +75,7 @@ describe("resolveAuthForTarget", () => {
         LOCAL_GATEWAY_TOKEN: "resolved-local-token",
       },
       async () => {
-        const auth = resolveAuthForTarget(
+        const auth = await resolveAuthForTarget(
           {
             secrets: {
               providers: {
@@ -108,7 +108,7 @@ describe("resolveAuthForTarget", () => {
         REMOTE_GATEWAY_TOKEN: "resolved-remote-token",
       },
       async () => {
-        const auth = resolveAuthForTarget(
+        const auth = await resolveAuthForTarget(
           {
             secrets: {
               providers: {
@@ -141,7 +141,7 @@ describe("resolveAuthForTarget", () => {
         REMOTE_GATEWAY_TOKEN: "resolved-remote-token",
       },
       async () => {
-        const auth = resolveAuthForTarget(
+        const auth = await resolveAuthForTarget(
           {
             secrets: {
               providers: {
@@ -172,7 +172,7 @@ describe("resolveAuthForTarget", () => {
   });
 
   it("does not force remote auth type from local auth mode", async () => {
-    const auth = resolveAuthForTarget(
+    const auth = await resolveAuthForTarget(
       {
         gateway: {
           auth: {
@@ -202,7 +202,7 @@ describe("resolveAuthForTarget", () => {
         MISSING_GATEWAY_TOKEN: undefined,
       },
       async () => {
-        const auth = resolveAuthForTarget(
+        const auth = await resolveAuthForTarget(
           {
             secrets: {
               providers: {

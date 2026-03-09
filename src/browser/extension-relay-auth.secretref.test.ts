@@ -41,7 +41,7 @@ describe("extension-relay-auth SecretRef handling", () => {
     });
     process.env.CUSTOM_GATEWAY_TOKEN = "resolved-gateway-token";
 
-    const tokens = resolveRelayAcceptedTokensForPort(18790);
+    const tokens = await resolveRelayAcceptedTokensForPort(18790);
 
     expect(tokens).toContain("resolved-gateway-token");
     expect(tokens[0]).not.toBe("resolved-gateway-token");
@@ -78,7 +78,7 @@ describe("extension-relay-auth SecretRef handling", () => {
     });
 
     try {
-      const tokens = resolveRelayAcceptedTokensForPort(18790);
+      const tokens = await resolveRelayAcceptedTokensForPort(18790);
       expect(tokens.length).toBeGreaterThan(0);
       expect(tokens).toContain("resolved-file-relay-token");
     } finally {
@@ -110,7 +110,7 @@ describe("extension-relay-auth SecretRef handling", () => {
       },
     });
 
-    const tokens = resolveRelayAcceptedTokensForPort(18790);
+    const tokens = await resolveRelayAcceptedTokensForPort(18790);
     expect(tokens.length).toBeGreaterThan(0);
     expect(tokens).toContain("resolved-exec-relay-token");
   });

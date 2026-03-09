@@ -66,6 +66,10 @@ import {
   ConfigGetParamsSchema,
   type ConfigPatchParams,
   ConfigPatchParamsSchema,
+  type ConfigSchemaLookupParams,
+  ConfigSchemaLookupParamsSchema,
+  type ConfigSchemaLookupResult,
+  ConfigSchemaLookupResultSchema,
   type ConfigSchemaParams,
   ConfigSchemaParamsSchema,
   type ConfigSchemaResponse,
@@ -142,6 +146,8 @@ import {
   NodeInvokeResultParamsSchema,
   type NodeListParams,
   NodeListParamsSchema,
+  type NodePendingAckParams,
+  NodePendingAckParamsSchema,
   type NodePairApproveParams,
   NodePairApproveParamsSchema,
   type NodePairListParams,
@@ -174,10 +180,6 @@ import {
   SecretsResolveResultSchema,
   type SessionsCompactParams,
   SessionsCompactParamsSchema,
-  type SessionsCompactSmartParams,
-  SessionsCompactSmartParamsSchema,
-  type SessionsArchiveParams,
-  SessionsArchiveParamsSchema,
   type SessionsDeleteParams,
   SessionsDeleteParamsSchema,
   type SessionsListParams,
@@ -193,44 +195,12 @@ import {
   type SessionsUsageParams,
   SessionsUsageParamsSchema,
   type ShutdownEvent,
-  type TeamRunsCreateParams,
-  TeamRunsCreateParamsSchema,
-  type TeamRunsListParams,
-  TeamRunsListParamsSchema,
-  type TeamRunsGetParams,
-  TeamRunsGetParamsSchema,
-  type TeamRunsCompleteParams,
-  TeamRunsCompleteParamsSchema,
-  type TeamRunsDeleteParams,
-  TeamRunsDeleteParamsSchema,
-  type TeamRunsAddMemberParams,
-  TeamRunsAddMemberParamsSchema,
-  type TeamRunsUpdateMemberParams,
-  TeamRunsUpdateMemberParamsSchema,
-  type TeamTasksCreateParams,
-  TeamTasksCreateParamsSchema,
-  type TeamTasksListParams,
-  TeamTasksListParamsSchema,
-  type TeamTasksUpdateParams,
-  TeamTasksUpdateParamsSchema,
-  type TeamTasksDeleteParams,
-  TeamTasksDeleteParamsSchema,
-  type TeamMessagesSendParams,
-  TeamMessagesSendParamsSchema,
-  type TeamMessagesMarkReadParams,
-  TeamMessagesMarkReadParamsSchema,
-  type TeamMessagesListParams,
-  TeamMessagesListParamsSchema,
   ShutdownEventSchema,
   type SkillsBinsParams,
   SkillsBinsParamsSchema,
   type SkillsBinsResult,
   type SkillsInstallParams,
   SkillsInstallParamsSchema,
-  type SkillsInvokeParams,
-  SkillsInvokeParamsSchema,
-  type SkillsListParams,
-  SkillsListParamsSchema,
   type SkillsStatusParams,
   SkillsStatusParamsSchema,
   type SkillsUpdateParams,
@@ -317,6 +287,9 @@ export const validateNodePairVerifyParams = ajv.compile<NodePairVerifyParams>(
 );
 export const validateNodeRenameParams = ajv.compile<NodeRenameParams>(NodeRenameParamsSchema);
 export const validateNodeListParams = ajv.compile<NodeListParams>(NodeListParamsSchema);
+export const validateNodePendingAckParams = ajv.compile<NodePendingAckParams>(
+  NodePendingAckParamsSchema,
+);
 export const validateNodeDescribeParams = ajv.compile<NodeDescribeParams>(NodeDescribeParamsSchema);
 export const validateNodeInvokeParams = ajv.compile<NodeInvokeParams>(NodeInvokeParamsSchema);
 export const validateNodeInvokeResultParams = ajv.compile<NodeInvokeResultParams>(
@@ -347,12 +320,6 @@ export const validateSessionsDeleteParams = ajv.compile<SessionsDeleteParams>(
 export const validateSessionsCompactParams = ajv.compile<SessionsCompactParams>(
   SessionsCompactParamsSchema,
 );
-export const validateSessionsCompactSmartParams = ajv.compile<SessionsCompactSmartParams>(
-  SessionsCompactSmartParamsSchema,
-);
-export const validateSessionsArchiveParams = ajv.compile<SessionsArchiveParams>(
-  SessionsArchiveParamsSchema,
-);
 export const validateSessionsUsageParams =
   ajv.compile<SessionsUsageParams>(SessionsUsageParamsSchema);
 export const validateConfigGetParams = ajv.compile<ConfigGetParams>(ConfigGetParamsSchema);
@@ -360,12 +327,19 @@ export const validateConfigSetParams = ajv.compile<ConfigSetParams>(ConfigSetPar
 export const validateConfigApplyParams = ajv.compile<ConfigApplyParams>(ConfigApplyParamsSchema);
 export const validateConfigPatchParams = ajv.compile<ConfigPatchParams>(ConfigPatchParamsSchema);
 export const validateConfigSchemaParams = ajv.compile<ConfigSchemaParams>(ConfigSchemaParamsSchema);
+export const validateConfigSchemaLookupParams = ajv.compile<ConfigSchemaLookupParams>(
+  ConfigSchemaLookupParamsSchema,
+);
+export const validateConfigSchemaLookupResult = ajv.compile<ConfigSchemaLookupResult>(
+  ConfigSchemaLookupResultSchema,
+);
 export const validateWizardStartParams = ajv.compile<WizardStartParams>(WizardStartParamsSchema);
 export const validateWizardNextParams = ajv.compile<WizardNextParams>(WizardNextParamsSchema);
 export const validateWizardCancelParams = ajv.compile<WizardCancelParams>(WizardCancelParamsSchema);
 export const validateWizardStatusParams = ajv.compile<WizardStatusParams>(WizardStatusParamsSchema);
 export const validateTalkModeParams = ajv.compile<TalkModeParams>(TalkModeParamsSchema);
 export const validateTalkConfigParams = ajv.compile<TalkConfigParams>(TalkConfigParamsSchema);
+export const validateTalkConfigResult = ajv.compile<TalkConfigResult>(TalkConfigResultSchema);
 export const validateChannelsStatusParams = ajv.compile<ChannelsStatusParams>(
   ChannelsStatusParamsSchema,
 );
@@ -378,8 +352,6 @@ export const validateToolsCatalogParams = ajv.compile<ToolsCatalogParams>(ToolsC
 export const validateSkillsBinsParams = ajv.compile<SkillsBinsParams>(SkillsBinsParamsSchema);
 export const validateSkillsInstallParams =
   ajv.compile<SkillsInstallParams>(SkillsInstallParamsSchema);
-export const validateSkillsInvokeParams = ajv.compile<SkillsInvokeParams>(SkillsInvokeParamsSchema);
-export const validateSkillsListParams = ajv.compile<SkillsListParams>(SkillsListParamsSchema);
 export const validateSkillsUpdateParams = ajv.compile<SkillsUpdateParams>(SkillsUpdateParamsSchema);
 export const validateCronListParams = ajv.compile<CronListParams>(CronListParamsSchema);
 export const validateCronStatusParams = ajv.compile<CronStatusParams>(CronStatusParamsSchema);
@@ -434,43 +406,6 @@ export const validateUpdateRunParams = ajv.compile<UpdateRunParams>(UpdateRunPar
 export const validateWebLoginStartParams =
   ajv.compile<WebLoginStartParams>(WebLoginStartParamsSchema);
 export const validateWebLoginWaitParams = ajv.compile<WebLoginWaitParams>(WebLoginWaitParamsSchema);
-export const validateTeamRunsCreateParams = ajv.compile<TeamRunsCreateParams>(
-  TeamRunsCreateParamsSchema,
-);
-export const validateTeamRunsListParams = ajv.compile<TeamRunsListParams>(TeamRunsListParamsSchema);
-export const validateTeamRunsGetParams = ajv.compile<TeamRunsGetParams>(TeamRunsGetParamsSchema);
-export const validateTeamRunsCompleteParams = ajv.compile<TeamRunsCompleteParams>(
-  TeamRunsCompleteParamsSchema,
-);
-export const validateTeamRunsDeleteParams = ajv.compile<TeamRunsDeleteParams>(
-  TeamRunsDeleteParamsSchema,
-);
-export const validateTeamRunsAddMemberParams = ajv.compile<TeamRunsAddMemberParams>(
-  TeamRunsAddMemberParamsSchema,
-);
-export const validateTeamRunsUpdateMemberParams = ajv.compile<TeamRunsUpdateMemberParams>(
-  TeamRunsUpdateMemberParamsSchema,
-);
-export const validateTeamTasksCreateParams = ajv.compile<TeamTasksCreateParams>(
-  TeamTasksCreateParamsSchema,
-);
-export const validateTeamTasksListParams =
-  ajv.compile<TeamTasksListParams>(TeamTasksListParamsSchema);
-export const validateTeamTasksUpdateParams = ajv.compile<TeamTasksUpdateParams>(
-  TeamTasksUpdateParamsSchema,
-);
-export const validateTeamTasksDeleteParams = ajv.compile<TeamTasksDeleteParams>(
-  TeamTasksDeleteParamsSchema,
-);
-export const validateTeamMessagesSendParams = ajv.compile<TeamMessagesSendParams>(
-  TeamMessagesSendParamsSchema,
-);
-export const validateTeamMessagesMarkReadParams = ajv.compile<TeamMessagesMarkReadParams>(
-  TeamMessagesMarkReadParamsSchema,
-);
-export const validateTeamMessagesListParams = ajv.compile<TeamMessagesListParams>(
-  TeamMessagesListParamsSchema,
-);
 
 export function formatValidationErrors(errors: ErrorObject[] | null | undefined) {
   if (!errors?.length) {
@@ -535,6 +470,7 @@ export {
   NodePairRejectParamsSchema,
   NodePairVerifyParamsSchema,
   NodeListParamsSchema,
+  NodePendingAckParamsSchema,
   NodeInvokeParamsSchema,
   SessionsListParamsSchema,
   SessionsPreviewParamsSchema,
@@ -548,7 +484,9 @@ export {
   ConfigApplyParamsSchema,
   ConfigPatchParamsSchema,
   ConfigSchemaParamsSchema,
+  ConfigSchemaLookupParamsSchema,
   ConfigSchemaResponseSchema,
+  ConfigSchemaLookupResultSchema,
   WizardStartParamsSchema,
   WizardNextParamsSchema,
   WizardCancelParamsSchema,
@@ -584,8 +522,6 @@ export {
   SkillsStatusParamsSchema,
   ToolsCatalogParamsSchema,
   SkillsInstallParamsSchema,
-  SkillsInvokeParamsSchema,
-  SkillsListParamsSchema,
   SkillsUpdateParamsSchema,
   CronJobSchema,
   CronListParamsSchema,
@@ -678,8 +614,6 @@ export type {
   SkillsBinsParams,
   SkillsBinsResult,
   SkillsInstallParams,
-  SkillsInvokeParams,
-  SkillsListParams,
   SkillsUpdateParams,
   NodePairRejectParams,
   NodePairVerifyParams,
@@ -695,8 +629,6 @@ export type {
   SessionsResetParams,
   SessionsDeleteParams,
   SessionsCompactParams,
-  SessionsCompactSmartParams,
-  SessionsArchiveParams,
   SessionsUsageParams,
   CronJob,
   CronListParams,
@@ -715,18 +647,4 @@ export type {
   PollParams,
   UpdateRunParams,
   ChatInjectParams,
-  TeamRunsCreateParams,
-  TeamRunsListParams,
-  TeamRunsGetParams,
-  TeamRunsCompleteParams,
-  TeamRunsDeleteParams,
-  TeamRunsAddMemberParams,
-  TeamRunsUpdateMemberParams,
-  TeamTasksCreateParams,
-  TeamTasksListParams,
-  TeamTasksUpdateParams,
-  TeamTasksDeleteParams,
-  TeamMessagesSendParams,
-  TeamMessagesMarkReadParams,
-  TeamMessagesListParams,
 };

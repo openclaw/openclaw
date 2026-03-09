@@ -21,21 +21,14 @@ export function resolveSubagentMaxConcurrent(cfg?: OpenClawConfig): number {
   return DEFAULT_SUBAGENT_MAX_CONCURRENT;
 }
 
-export const DEFAULT_SUBAGENT_RETRY_ON_NETWORK_ERROR = true;
-export const DEFAULT_SUBAGENT_MAX_RETRIES = 1;
-
-export function resolveSubagentRetryOnNetworkError(cfg?: OpenClawConfig): boolean {
-  const raw = cfg?.agents?.defaults?.subagents?.retryOnNetworkError;
-  if (typeof raw === "boolean") {
-    return raw;
-  }
-  return DEFAULT_SUBAGENT_RETRY_ON_NETWORK_ERROR;
-}
-
 export function resolveSubagentMaxRetries(cfg?: OpenClawConfig): number {
   const raw = cfg?.agents?.defaults?.subagents?.maxRetries;
   if (typeof raw === "number" && Number.isFinite(raw)) {
     return Math.max(0, Math.floor(raw));
   }
-  return DEFAULT_SUBAGENT_MAX_RETRIES;
+  return 1;
+}
+
+export function resolveSubagentRetryOnNetworkError(cfg?: OpenClawConfig): boolean {
+  return cfg?.agents?.defaults?.subagents?.retryOnNetworkError ?? true;
 }

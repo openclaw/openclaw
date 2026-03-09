@@ -282,9 +282,8 @@ function resolveDefaultCollections(
     return [];
   }
   const entries: Array<{ path: string; pattern: string; base: string }> = [
-    // All *.md at workspace root — covers MEMORY.md, AGENTS.md, SOUL.md,
-    // IDENTITY.md, TOOLS.md, USER.md, HEARTBEAT.md, BOOTSTRAP.md, etc.
-    { path: workspaceDir, pattern: "*.md", base: "workspace-root" },
+    { path: workspaceDir, pattern: "MEMORY.md", base: "memory-root" },
+    { path: workspaceDir, pattern: "memory.md", base: "memory-alt" },
     { path: path.join(workspaceDir, "memory"), pattern: "**/*.md", base: "memory-dir" },
   ];
   return entries.map((entry) => ({

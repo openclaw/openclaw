@@ -2,10 +2,9 @@ import { randomUUID } from "node:crypto";
 import { resolveDefaultAgentId } from "../agents/agent-scope.js";
 import type { ModelCatalogEntry } from "../agents/model-catalog.js";
 import {
-  buildModelAliasIndex,
-  modelKey,
-  resolveModelRefFromString,
+  resolveAllowedModelRef,
   resolveDefaultModelForAgent,
+  resolveSubagentConfiguredModelSelection,
 } from "../agents/model-selection.js";
 import { normalizeGroupActivation } from "../auto-reply/group-activation.js";
 import {
@@ -75,6 +74,10 @@ export async function applySessionsPatchToStore(params: {
   const parsedAgent = parseAgentSessionKey(storeKey);
   const sessionAgentId = normalizeAgentId(parsedAgent?.agentId ?? resolveDefaultAgentId(cfg));
   const resolvedDefault = resolveDefaultModelForAgent({ cfg, agentId: sessionAgentId });
+  const subagentModelHint = isSubagentSessionKey(storeKey)
+    ? resolveSubagentConfiguredModelSelection({ cfg, agentId: sessionAgentId })
+    : undefined;
+
   const existing = store[storeKey];
   const next: SessionEntry = existing
     ? {
@@ -130,7 +133,6 @@ export async function applySessionsPatchToStore(params: {
     const raw = patch.label;
     if (raw === null) {
       delete next.label;
-      delete next.autoLabel;
     } else if (raw !== undefined) {
       const parsed = parseSessionLabel(raw);
       if (!parsed.ok) {
@@ -145,9 +147,6 @@ export async function applySessionsPatchToStore(params: {
         }
       }
       next.label = parsed.label;
-      // Clear autoLabel flag — this is now a user-set label that should not
-      // be overwritten by the auto-labeling heuristic.
-      delete next.autoLabel;
     }
   }
 
@@ -299,22 +298,15 @@ export async function applySessionsPatchToStore(params: {
         };
       }
       const catalog = await params.loadGatewayModelCatalog();
-      // Resolve the model ref (supports aliases and provider/model syntax)
-      // but skip the config allowlist — allow any model that exists in the catalog.
-      const aliasIndex = buildModelAliasIndex({ cfg, defaultProvider: resolvedDefault.provider });
-      const resolved = resolveModelRefFromString({
+      const resolved = resolveAllowedModelRef({
+        cfg,
+        catalog,
         raw: trimmed,
         defaultProvider: resolvedDefault.provider,
-        aliasIndex,
+        defaultModel: subagentModelHint ?? resolvedDefault.model,
       });
-      if (!resolved) {
-        return invalid(`invalid model: ${trimmed}`);
-      }
-      // Verify the model exists in the catalog
-      const key = modelKey(resolved.ref.provider, resolved.ref.model);
-      const inCatalog = catalog.some((entry) => modelKey(entry.provider, entry.id) === key);
-      if (!inCatalog) {
-        return invalid(`model not found in catalog: ${key}`);
+      if ("error" in resolved) {
+        return invalid(resolved.error);
       }
       const isDefault =
         resolved.ref.provider === resolvedDefault.provider &&
@@ -364,41 +356,6 @@ export async function applySessionsPatchToStore(params: {
         return invalid('invalid groupActivation (use "mention"|"always")');
       }
       next.groupActivation = normalized;
-    }
-  }
-
-  if ("teamRunId" in patch) {
-    const raw = patch.teamRunId;
-    if (raw === null) {
-      delete next.teamRunId;
-    } else if (raw !== undefined) {
-      const trimmed = String(raw).trim();
-      if (!trimmed) {
-        return invalid("invalid teamRunId: empty");
-      }
-      next.teamRunId = trimmed;
-    }
-  }
-
-  if ("archived" in patch) {
-    const raw = patch.archived;
-    if (raw === null || raw === false) {
-      delete next.archived;
-    } else if (raw === true) {
-      next.archived = true;
-    }
-  }
-
-  if ("projectId" in patch) {
-    const raw = patch.projectId;
-    if (raw === null) {
-      delete next.projectId;
-    } else if (raw !== undefined) {
-      const trimmed = String(raw).trim();
-      if (!trimmed) {
-        return invalid("invalid projectId: empty");
-      }
-      next.projectId = trimmed;
     }
   }
 

@@ -14,6 +14,7 @@ import type { ConversationRef } from "../infra/outbound/session-binding-service.
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import { normalizeAccountId, normalizeMainKey } from "../routing/session-key.js";
 import { defaultRuntime } from "../runtime.js";
+import { isCronSessionKey } from "../sessions/session-key-utils.js";
 import { extractTextFromChatContent } from "../shared/chat-content.js";
 import { getTeamRun } from "../teams/team-store.js";
 import {
@@ -110,6 +111,10 @@ function buildCompletionDeliveryMessage(params: {
     return header;
   }
   return `${header}\n\n${findingsText}`;
+}
+
+function isInternalAnnounceRequesterSession(sessionKey: string | undefined): boolean {
+  return getSubagentDepthFromSessionStore(sessionKey) >= 1 || isCronSessionKey(sessionKey);
 }
 
 function summarizeDeliveryError(error: unknown): string {
@@ -594,8 +599,7 @@ async function resolveSubagentCompletionOrigin(params: {
 async function sendAnnounce(item: AnnounceQueueItem) {
   const cfg = loadConfig();
   const announceTimeoutMs = resolveSubagentAnnounceTimeoutMs(cfg);
-  const requesterDepth = getSubagentDepthFromSessionStore(item.sessionKey);
-  const requesterIsSubagent = requesterDepth >= 1;
+  const requesterIsSubagent = isInternalAnnounceRequesterSession(item.sessionKey);
   const origin = item.origin;
   const threadId =
     origin?.threadId != null && origin.threadId !== "" ? String(origin.threadId) : undefined;
@@ -1159,6 +1163,24 @@ export type SubagentRunOutcome = {
 
 export type SubagentAnnounceType = "subagent task" | "cron job";
 
+/**
+ * Capture and return the latest assistant reply text for a subagent session,
+ * suitable for freezing as a completion result.
+ */
+export async function captureSubagentCompletionReply(
+  childSessionKey: string,
+): Promise<string | undefined> {
+  try {
+    const reply = await readLatestAssistantReply({ sessionKey: childSessionKey });
+    if (reply && typeof reply === "string" && reply.trim()) {
+      return reply.trim();
+    }
+  } catch {
+    // Best-effort capture.
+  }
+  return undefined;
+}
+
 function buildAnnounceReplyInstruction(params: {
   remainingActiveSubagentRuns: number;
   requesterIsSubagent: boolean;
@@ -1206,6 +1228,10 @@ export async function runSubagentAnnounceFlow(params: {
   spawnMode?: SpawnSubagentMode;
   signal?: AbortSignal;
   bestEffortDeliver?: boolean;
+  /** Fallback reply text from a prior frozen result, used when primary reply is empty/NO_REPLY. */
+  fallbackReply?: string;
+  /** When true, the run ended while descendants were still active and may be re-invoked later. */
+  wakeOnDescendantSettle?: boolean;
 }): Promise<boolean> {
   let didAnnounce = false;
   const expectsCompletionMessage = params.expectsCompletionMessage === true;
@@ -1306,6 +1332,8 @@ export async function runSubagentAnnounceFlow(params: {
     }
 
     let requesterDepth = getSubagentDepthFromSessionStore(targetRequesterSessionKey);
+    const requesterIsInternalSession = () =>
+      requesterDepth >= 1 || isCronSessionKey(targetRequesterSessionKey);
 
     let pendingChildDescendantRuns = 0;
     try {
@@ -1358,7 +1386,7 @@ export async function runSubagentAnnounceFlow(params: {
     let steerMessage = "";
     let internalEvents: AgentInternalEvent[] = [];
 
-    let requesterIsSubagent = requesterDepth >= 1;
+    let requesterIsSubagent = requesterIsInternalSession();
     // If the requester subagent has already finished, bubble the announce to its
     // requester (typically main) so descendant completion is not silently lost.
     // BUT: only fallback if the parent SESSION is deleted, not just if the current
@@ -1390,7 +1418,7 @@ export async function runSubagentAnnounceFlow(params: {
           targetRequesterOrigin =
             normalizeDeliveryContext(fallback.requesterOrigin) ?? targetRequesterOrigin;
           requesterDepth = getSubagentDepthFromSessionStore(targetRequesterSessionKey);
-          requesterIsSubagent = requesterDepth >= 1;
+          requesterIsSubagent = requesterIsInternalSession();
         }
         // If parent session is alive (just has no active run), continue with parent
         // as target. Injecting the announce will start a new agent turn for processing.

@@ -28,7 +28,7 @@ import {
   normalizeMainKey,
   parseAgentSessionKey,
 } from "../routing/session-key.js";
-import { isCronSessionKey } from "../sessions/session-key-utils.js";
+import { isCronRunSessionKey } from "../sessions/session-key-utils.js";
 import {
   AVATAR_MAX_BYTES,
   isAvatarDataUrl,
@@ -38,7 +38,6 @@ import {
   resolveAvatarMime,
 } from "../shared/avatar-policy.js";
 import { normalizeSessionDeliveryFields } from "../utils/delivery-context.js";
-import { generateAutoLabel } from "./session-auto-label.js";
 import { readSessionTitleFieldsFromTranscript } from "./session-utils.fs.js";
 import type {
   GatewayAgentRow,
@@ -165,12 +164,6 @@ export function deriveSessionTitle(
   }
 
   if (firstUserMessage?.trim()) {
-    // Try the smart heuristic first for a cleaner title
-    const autoLabel = generateAutoLabel(firstUserMessage);
-    if (autoLabel) {
-      return autoLabel;
-    }
-    // Fall back to simple truncation
     const normalized = firstUserMessage.replace(/\s+/g, " ").trim();
     return truncateTitle(normalized, DERIVED_TITLE_MAX_LEN);
   }
@@ -317,35 +310,25 @@ function listExistingAgentIdsFromDisk(): string[] {
 }
 
 function listConfiguredAgentIds(cfg: OpenClawConfig): string[] {
-  const agents = cfg.agents?.list ?? [];
-  if (agents.length > 0) {
-    const ids = new Set<string>();
-    for (const entry of agents) {
-      if (entry?.id) {
-        ids.add(normalizeAgentId(entry.id));
-      }
-    }
-    const defaultId = normalizeAgentId(resolveDefaultAgentId(cfg));
-    ids.add(defaultId);
-    const sorted = Array.from(ids).filter(Boolean);
-    sorted.sort((a, b) => a.localeCompare(b));
-    return sorted.includes(defaultId)
-      ? [defaultId, ...sorted.filter((id) => id !== defaultId)]
-      : sorted;
-  }
-
   const ids = new Set<string>();
   const defaultId = normalizeAgentId(resolveDefaultAgentId(cfg));
   ids.add(defaultId);
+
+  for (const entry of cfg.agents?.list ?? []) {
+    if (entry?.id) {
+      ids.add(normalizeAgentId(entry.id));
+    }
+  }
+
   for (const id of listExistingAgentIdsFromDisk()) {
     ids.add(id);
   }
+
   const sorted = Array.from(ids).filter(Boolean);
   sorted.sort((a, b) => a.localeCompare(b));
-  if (sorted.includes(defaultId)) {
-    return [defaultId, ...sorted.filter((id) => id !== defaultId)];
-  }
-  return sorted;
+  return sorted.includes(defaultId)
+    ? [defaultId, ...sorted.filter((id) => id !== defaultId)]
+    : sorted;
 }
 
 export function listAgentsForGateway(cfg: OpenClawConfig): {
@@ -359,7 +342,7 @@ export function listAgentsForGateway(cfg: OpenClawConfig): {
   const scope = cfg.session?.scope ?? "per-sender";
   const configuredById = new Map<
     string,
-    { name?: string; role?: string; department?: string; identity?: GatewayAgentRow["identity"] }
+    { name?: string; identity?: GatewayAgentRow["identity"] }
   >();
   for (const entry of cfg.agents?.list ?? []) {
     if (!entry?.id) {
@@ -380,11 +363,6 @@ export function listAgentsForGateway(cfg: OpenClawConfig): {
       : undefined;
     configuredById.set(normalizeAgentId(entry.id), {
       name: typeof entry.name === "string" && entry.name.trim() ? entry.name.trim() : undefined,
-      role: typeof entry.role === "string" && entry.role.trim() ? entry.role.trim() : undefined,
-      department:
-        typeof entry.department === "string" && entry.department.trim()
-          ? entry.department.trim()
-          : undefined,
       identity,
     });
   }
@@ -405,8 +383,6 @@ export function listAgentsForGateway(cfg: OpenClawConfig): {
     return {
       id,
       name: meta?.name,
-      role: meta?.role,
-      department: meta?.department,
       identity: meta?.identity,
     };
   });
@@ -760,12 +736,10 @@ export function listSessionsFromStore(params: {
     typeof opts.activeMinutes === "number" && Number.isFinite(opts.activeMinutes)
       ? Math.max(1, Math.floor(opts.activeMinutes))
       : undefined;
-  const includeArchived = opts.includeArchived === true;
-  const archivedOnly = opts.archivedOnly === true;
 
   let sessions = Object.entries(store)
     .filter(([key]) => {
-      if (isCronSessionKey(key)) {
+      if (isCronRunSessionKey(key)) {
         return false;
       }
       if (!includeGlobal && key === "global") {
@@ -800,17 +774,6 @@ export function listSessionsFromStore(params: {
         return true;
       }
       return entry?.label === label;
-    })
-    .filter(([, entry]) => {
-      const isArchived = entry?.archived === true;
-      if (archivedOnly) {
-        return isArchived;
-      }
-      if (includeArchived) {
-        return true;
-      }
-      // Default: exclude archived sessions from active list
-      return !isArchived;
     })
     .map(([key, entry]) => {
       const updatedAt = entry?.updatedAt ?? null;

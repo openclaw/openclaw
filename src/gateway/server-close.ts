@@ -21,9 +21,9 @@ export function createGatewayCloseHandler(params: {
   tickInterval: ReturnType<typeof setInterval>;
   healthInterval: ReturnType<typeof setInterval>;
   dedupeCleanup: ReturnType<typeof setInterval>;
+  mediaCleanup: ReturnType<typeof setInterval> | null;
   agentUnsub: (() => void) | null;
   heartbeatUnsub: (() => void) | null;
-  teamEventUnsub: (() => void) | null;
   chatRunState: { clear: () => void };
   clients: Set<{ socket: { close: (code: number, reason: string) => void } }>;
   configReloader: { stop: () => Promise<void> };
@@ -88,6 +88,9 @@ export function createGatewayCloseHandler(params: {
     clearInterval(params.tickInterval);
     clearInterval(params.healthInterval);
     clearInterval(params.dedupeCleanup);
+    if (params.mediaCleanup) {
+      clearInterval(params.mediaCleanup);
+    }
     if (params.agentUnsub) {
       try {
         params.agentUnsub();
@@ -98,13 +101,6 @@ export function createGatewayCloseHandler(params: {
     if (params.heartbeatUnsub) {
       try {
         params.heartbeatUnsub();
-      } catch {
-        /* ignore */
-      }
-    }
-    if (params.teamEventUnsub) {
-      try {
-        params.teamEventUnsub();
       } catch {
         /* ignore */
       }
