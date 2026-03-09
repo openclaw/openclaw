@@ -316,17 +316,18 @@ jobs:
           fi
 
           # Note: github.event.pull_request.base.sha can be stale if the base branch advanced.
-          # For secret scanning we want the current merge base used by the PR merge ref.
+          # For secret scanning we want the merge base between the PR head and base branch,
+          # not the current base-branch tip itself.
           BASE=""
           BASE_BRANCH="${PR_BASE_REF:-}"
           if [ -n "$BASE_BRANCH" ]; then
             git fetch --no-tags --depth=50 origin "$BASE_BRANCH" || true
             if git rev-parse --verify "FETCH_HEAD^{commit}" >/dev/null 2>&1; then
-              BASE="$(git rev-parse FETCH_HEAD)"
+              BASE="$(git merge-base HEAD FETCH_HEAD)"
             fi
           fi
           if [ -z "$BASE" ] && [ -n "${PR_BASE_SHA:-}" ] && git rev-parse --verify "${PR_BASE_SHA}^{commit}" >/dev/null 2>&1; then
-            BASE="$PR_BASE_SHA"
+            BASE="$(git merge-base HEAD "$PR_BASE_SHA")"
           fi
 
           changed_files=()

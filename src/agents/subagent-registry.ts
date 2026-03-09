@@ -14,7 +14,7 @@ import type { SubagentEndReason } from "../context-engine/types.js";
 import { callGateway } from "../gateway/call.js";
 import { onAgentEvent } from "../infra/agent-events.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import { parseAgentSessionKey } from "../routing/session-key.js";
+import { isCronSessionKey, isSubagentSessionKey } from "../routing/session-key.js";
 import { defaultRuntime } from "../runtime.js";
 import { type DeliveryContext, normalizeDeliveryContext } from "../utils/delivery-context.js";
 import { ensureRuntimePluginsLoaded } from "./runtime-plugins.js";
@@ -531,8 +531,8 @@ async function completeSubagentRun(params: {
 
 function resolveWakeParentOnCompletion(entry: SubagentRunRecord): boolean {
   return (
-    parseAgentSessionKey(entry.requesterSessionKey) != null &&
-    entry.expectsCompletionMessage !== true
+    entry.expectsCompletionMessage !== true &&
+    (isSubagentSessionKey(entry.requesterSessionKey) || isCronSessionKey(entry.requesterSessionKey))
   );
 }
 

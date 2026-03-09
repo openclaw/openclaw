@@ -73,15 +73,17 @@ function addedSignalListener(
   return null;
 }
 
+type IsolatedTestSignal = "SIGTERM" | "SIGINT" | "SIGUSR1";
+
 async function withIsolatedSignals(
-  run: (helpers: { captureSignal: (signal: NodeJS.Signals) => () => void }) => Promise<void>,
+  run: (helpers: { captureSignal: (signal: IsolatedTestSignal) => () => void }) => Promise<void>,
 ) {
-  const existingListeners = {
+  const existingListeners: Record<IsolatedTestSignal, Set<(...args: unknown[]) => void>> = {
     SIGTERM: new Set(process.listeners("SIGTERM") as Array<(...args: unknown[]) => void>),
     SIGINT: new Set(process.listeners("SIGINT") as Array<(...args: unknown[]) => void>),
     SIGUSR1: new Set(process.listeners("SIGUSR1") as Array<(...args: unknown[]) => void>),
-  } satisfies Record<NodeJS.Signals, Set<(...args: unknown[]) => void>>;
-  const captureSignal = (signal: NodeJS.Signals) => {
+  };
+  const captureSignal = (signal: IsolatedTestSignal) => {
     const listener = addedSignalListener(signal, existingListeners[signal]);
     if (!listener) {
       throw new Error(`expected new ${signal} listener`);
