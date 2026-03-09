@@ -43,8 +43,8 @@ import type { createModelSelectionState } from "./model-selection.js";
 import { resolveOriginMessageProvider } from "./origin-routing.js";
 import { resolveQueueSettings } from "./queue.js";
 import { routeReply } from "./route-reply.js";
-import { BARE_SESSION_RESET_PROMPT } from "./session-reset-prompt.js";
-import { ensureSkillSnapshot, prependSystemEvents } from "./session-updates.js";
+import { buildBareSessionResetPrompt } from "./session-reset-prompt.js";
+import { drainFormattedSystemEvents, ensureSkillSnapshot } from "./session-updates.js";
 import { resolveTypingMode } from "./typing-mode.js";
 import { resolveRunTypingPolicy } from "./typing-policy.js";
 import type { TypingController } from "./typing.js";
@@ -267,9 +267,12 @@ export async function runPreparedReply(
   const inboundMetaPrompt = buildInboundMetaSystemPrompt(
     isNewSession ? sessionCtx : { ...sessionCtx, ThreadStarterBody: undefined },
   );
-  const extraSystemPrompt = [inboundMetaPrompt, groupChatContext, groupIntro, groupSystemPrompt]
-    .filter(Boolean)
-    .join("\n\n");
+  const extraSystemPromptParts = [
+    inboundMetaPrompt,
+    groupChatContext,
+    groupIntro,
+    groupSystemPrompt,
+  ].filter(Boolean);
   const baseBody = sessionCtx.BodyStripped ?? sessionCtx.Body ?? "";
   // Use CommandBody/RawBody for bare reset detection (clean message without structural context).
   const rawBodyTrimmed = (ctx.CommandBody ?? ctx.RawBody ?? ctx.Body ?? "").trim();
@@ -287,7 +290,7 @@ export async function runPreparedReply(
   const isBareSessionReset =
     isNewSession &&
     ((baseBodyTrimmedRaw.length === 0 && rawBodyTrimmed.length > 0) || isBareNewOrReset);
-  const baseBodyFinal = isBareSessionReset ? BARE_SESSION_RESET_PROMPT : baseBody;
+  const baseBodyFinal = isBareSessionReset ? buildBareSessionResetPrompt(cfg) : baseBody;
   const inboundUserContext = buildInboundUserContextPrefix(
     isNewSession
       ? {
@@ -329,13 +332,30 @@ export async function runPreparedReply(
   });
   const isGroupSession = sessionEntry?.chatType === "group" || sessionEntry?.chatType === "channel";
   const isMainSession = !isGroupSession && sessionKey === normalizeMainKey(sessionCfg?.mainKey);
-  prefixedBodyBase = await prependSystemEvents({
+  // Extract first-token think hint from the user body BEFORE prepending system events.
+  // If done after, the System: prefix becomes parts[0] and silently shadows any
+  // low|medium|high shorthand the user typed.
+  if (!resolvedThinkLevel && prefixedBodyBase) {
+    const parts = prefixedBodyBase.split(/\s+/);
+    const maybeLevel = normalizeThinkLevel(parts[0]);
+    if (maybeLevel && (maybeLevel !== "xhigh" || supportsXHighThinking(provider, model))) {
+      resolvedThinkLevel = maybeLevel;
+      prefixedBodyBase = parts.slice(1).join(" ").trim();
+    }
+  }
+  // Drain system events once, then prepend to each path's body independently.
+  // The queue/steer path uses effectiveBaseBody (unstripped, no session hints) to match
+  // main's pre-PR behavior; the immediate-run path uses prefixedBodyBase (post-hints,
+  // post-think-hint-strip) so the run sees the cleaned-up body.
+  const eventsBlock = await drainFormattedSystemEvents({
     cfg,
     sessionKey,
     isMainSession,
     isNewSession,
-    prefixedBodyBase,
   });
+  const prependEvents = (body: string) => (eventsBlock ? `${eventsBlock}\n\n${body}` : body);
+  const bodyWithEvents = prependEvents(effectiveBaseBody);
+  prefixedBodyBase = prependEvents(prefixedBodyBase);
   prefixedBodyBase = appendUntrustedContext(prefixedBodyBase, sessionCtx.UntrustedContext);
   const threadStarterBody = ctx.ThreadStarterBody?.trim();
   const threadHistoryBody = ctx.ThreadHistoryBody?.trim();
@@ -366,14 +386,6 @@ export async function runPreparedReply(
   let prefixedCommandBody = mediaNote
     ? [mediaNote, mediaReplyHint, prefixedBody ?? ""].filter(Boolean).join("\n").trim()
     : prefixedBody;
-  if (!resolvedThinkLevel && prefixedCommandBody) {
-    const parts = prefixedCommandBody.split(/\s+/);
-    const maybeLevel = normalizeThinkLevel(parts[0]);
-    if (maybeLevel && (maybeLevel !== "xhigh" || supportsXHighThinking(provider, model))) {
-      resolvedThinkLevel = maybeLevel;
-      prefixedCommandBody = parts.slice(1).join(" ").trim();
-    }
-  }
   if (!resolvedThinkLevel) {
     resolvedThinkLevel = await modelState.resolveDefaultThinkingLevel();
   }
@@ -417,7 +429,9 @@ export async function runPreparedReply(
     sessionEntry,
     resolveSessionFilePathOptions({ agentId, storePath }),
   );
-  const queueBodyBase = [threadContextNote, effectiveBaseBody].filter(Boolean).join("\n\n");
+  // Use bodyWithEvents (events prepended, but no session hints / untrusted context) so
+  // deferred turns receive system events while keeping the same scope as effectiveBaseBody did.
+  const queueBodyBase = [threadContextNote, bodyWithEvents].filter(Boolean).join("\n\n");
   const queuedBody = mediaNote
     ? [mediaNote, mediaReplyHint, queueBodyBase].filter(Boolean).join("\n").trim()
     : queueBodyBase;
@@ -472,7 +486,10 @@ export async function runPreparedReply(
       sessionKey,
       messageProvider: resolveOriginMessageProvider({
         originatingChannel: ctx.OriginatingChannel ?? sessionCtx.OriginatingChannel,
-        provider: ctx.Surface ?? ctx.Provider ?? sessionCtx.Provider,
+        // Prefer Provider over Surface for fallback channel identity.
+        // Surface can carry relayed metadata (for example "webchat") while Provider
+        // still reflects the active channel that should own tool routing.
+        provider: ctx.Provider ?? ctx.Surface ?? sessionCtx.Provider,
       }),
       agentAccountId: sessionCtx.AccountId,
       groupId: resolveGroupSessionKey(sessionCtx)?.id ?? undefined,
@@ -504,7 +521,8 @@ export async function runPreparedReply(
       timeoutMs,
       blockReplyBreak: resolvedBlockStreamingBreak,
       ownerNumbers: command.ownerList.length > 0 ? command.ownerList : undefined,
-      extraSystemPrompt: extraSystemPrompt || undefined,
+      inputProvenance: ctx.InputProvenance ?? sessionCtx.InputProvenance,
+      extraSystemPrompt: extraSystemPromptParts.join("\n\n") || undefined,
       ...(isReasoningTagProvider(provider) ? { enforceFinalTag: true } : {}),
     },
   };

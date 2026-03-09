@@ -14,7 +14,7 @@ struct ControlHeartbeatEvent: Codable {
     let reason: String?
 }
 
-struct ControlAgentEvent: Codable, Sendable, Identifiable {
+struct ControlAgentEvent: Codable, Identifiable {
     var id: String {
         "\(self.runId)-\(self.seq)"
     }
@@ -336,16 +336,8 @@ final class ControlChannel {
     }
 
     private func startEventStream() {
-        self.eventTask?.cancel()
-        self.eventTask = Task { [weak self] in
-            guard let self else { return }
-            let stream = await GatewayConnection.shared.subscribe()
-            for await push in stream {
-                if Task.isCancelled { return }
-                await MainActor.run { [weak self] in
-                    self?.handle(push: push)
-                }
-            }
+        GatewayPushSubscription.restartTask(task: &self.eventTask) { [weak self] push in
+            self?.handle(push: push)
         }
     }
 

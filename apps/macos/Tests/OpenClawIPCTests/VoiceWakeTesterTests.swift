@@ -3,9 +3,9 @@ import SwabbleKit
 import Testing
 
 struct VoiceWakeTesterTests {
-    @Test func matchRespectsGapRequirement() {
+    @Test func `match respects gap requirement`() {
         let transcript = "hey claude do thing"
-        let segments = makeSegments(
+        let segments = makeWakeWordSegments(
             transcript: transcript,
             words: [
                 ("hey", 0.0, 0.1),
@@ -17,9 +17,9 @@ struct VoiceWakeTesterTests {
         #expect(WakeWordGate.match(transcript: transcript, segments: segments, config: config) == nil)
     }
 
-    @Test func matchReturnsCommandAfterGap() {
+    @Test func `match returns command after gap`() {
         let transcript = "hey claude do thing"
-        let segments = makeSegments(
+        let segments = makeWakeWordSegments(
             transcript: transcript,
             words: [
                 ("hey", 0.0, 0.1),
@@ -30,18 +30,4 @@ struct VoiceWakeTesterTests {
         let config = WakeWordGateConfig(triggers: ["claude"], minPostTriggerGap: 0.3)
         #expect(WakeWordGate.match(transcript: transcript, segments: segments, config: config)?.command == "do thing")
     }
-}
-
-private func makeSegments(
-    transcript: String,
-    words: [(String, TimeInterval, TimeInterval)])
--> [WakeWordSegment] {
-    var searchStart = transcript.startIndex
-    var output: [WakeWordSegment] = []
-    for (word, start, duration) in words {
-        let range = transcript.range(of: word, range: searchStart..<transcript.endIndex)
-        output.append(WakeWordSegment(text: word, start: start, duration: duration, range: range))
-        if let range { searchStart = range.upperBound }
-    }
-    return output
 }

@@ -1,4 +1,4 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/zalo";
 import { resolveZaloAccount } from "./accounts.js";
 import type { ZaloFetch } from "./api.js";
 import { sendMessage, sendPhoto } from "./api.js";
@@ -40,37 +40,47 @@ function resolveSendContext(options: ZaloSendOptions): {
   return { token, fetcher: resolveZaloProxyFetch(proxy) };
 }
 
+function resolveValidatedSendContext(
+  chatId: string,
+  options: ZaloSendOptions,
+): { ok: true; chatId: string; token: string; fetcher?: ZaloFetch } | { ok: false; error: string } {
+  const { token, fetcher } = resolveSendContext(options);
+  if (!token) {
+    return { ok: false, error: "No Zalo bot token configured" };
+  }
+  const trimmedChatId = chatId?.trim();
+  if (!trimmedChatId) {
+    return { ok: false, error: "No chat_id provided" };
+  }
+  return { ok: true, chatId: trimmedChatId, token, fetcher };
+}
+
 export async function sendMessageZalo(
   chatId: string,
   text: string,
   options: ZaloSendOptions = {},
 ): Promise<ZaloSendResult> {
-  const { token, fetcher } = resolveSendContext(options);
-
-  if (!token) {
-    return { ok: false, error: "No Zalo bot token configured" };
-  }
-
-  if (!chatId?.trim()) {
-    return { ok: false, error: "No chat_id provided" };
+  const context = resolveValidatedSendContext(chatId, options);
+  if (!context.ok) {
+    return { ok: false, error: context.error };
   }
 
   if (options.mediaUrl) {
-    return sendPhotoZalo(chatId, options.mediaUrl, {
+    return sendPhotoZalo(context.chatId, options.mediaUrl, {
       ...options,
-      token,
+      token: context.token,
       caption: text || options.caption,
     });
   }
 
   try {
     const response = await sendMessage(
-      token,
+      context.token,
       {
-        chat_id: chatId.trim(),
+        chat_id: context.chatId,
         text: text.slice(0, 2000),
       },
-      fetcher,
+      context.fetcher,
     );
 
     if (response.ok && response.result) {
@@ -88,14 +98,9 @@ export async function sendPhotoZalo(
   photoUrl: string,
   options: ZaloSendOptions = {},
 ): Promise<ZaloSendResult> {
-  const { token, fetcher } = resolveSendContext(options);
-
-  if (!token) {
-    return { ok: false, error: "No Zalo bot token configured" };
-  }
-
-  if (!chatId?.trim()) {
-    return { ok: false, error: "No chat_id provided" };
+  const context = resolveValidatedSendContext(chatId, options);
+  if (!context.ok) {
+    return { ok: false, error: context.error };
   }
 
   if (!photoUrl?.trim()) {
@@ -104,13 +109,13 @@ export async function sendPhotoZalo(
 
   try {
     const response = await sendPhoto(
-      token,
+      context.token,
       {
-        chat_id: chatId.trim(),
+        chat_id: context.chatId,
         photo: photoUrl.trim(),
         caption: options.caption?.slice(0, 2000),
       },
-      fetcher,
+      context.fetcher,
     );
 
     if (response.ok && response.result) {

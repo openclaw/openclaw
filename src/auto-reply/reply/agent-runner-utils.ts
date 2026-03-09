@@ -58,6 +58,7 @@ export function buildThreadingToolContext(params: {
         ReplyToId: sessionCtx.ReplyToId,
         ThreadLabel: sessionCtx.ThreadLabel,
         MessageThreadId: sessionCtx.MessageThreadId,
+        NativeChannelId: sessionCtx.NativeChannelId,
       },
       hasRepliedRef,
     }) ?? {};
@@ -165,6 +166,7 @@ export function buildEmbeddedRunBaseParams(params: {
   model: string;
   runId: string;
   authProfile: ReturnType<typeof resolveProviderScopedAuthProfile>;
+  allowTransientCooldownProbe?: boolean;
 }) {
   return {
     sessionFile: params.run.sessionFile,
@@ -173,6 +175,7 @@ export function buildEmbeddedRunBaseParams(params: {
     config: params.run.config,
     skillsSnapshot: params.run.skillsSnapshot,
     ownerNumbers: params.run.ownerNumbers,
+    inputProvenance: params.run.inputProvenance,
     senderIsOwner: params.run.senderIsOwner,
     enforceFinalTag: resolveEnforceFinalTag(params.run, params.provider),
     provider: params.provider,
@@ -185,6 +188,7 @@ export function buildEmbeddedRunBaseParams(params: {
     bashElevated: params.run.bashElevated,
     timeoutMs: params.run.timeoutMs,
     runId: params.runId,
+    allowTransientCooldownProbe: params.allowTransientCooldownProbe,
   };
 }
 
