@@ -775,7 +775,13 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
             warnOnConfigMiskeys(bakResolved, deps.logger);
             const bakValidated = validateConfigObjectWithPlugins(bakResolved);
             if (bakValidated.ok) {
-              // Merge env changes only after validation succeeds
+              // Fully restore env: remove stale keys injected by invalid
+              // primary config before applying the backup's env entries.
+              for (const key of Object.keys(deps.env)) {
+                if (!(key in bakEnv)) {
+                  delete deps.env[key];
+                }
+              }
               Object.assign(deps.env, bakEnv);
               deps.logger.warn(
                 `Loaded fallback config from ${bakPath} (primary config was invalid)`,
