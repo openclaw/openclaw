@@ -87,7 +87,7 @@ export type NodeManagerChoice = "npm" | "pnpm" | "bun";
 export type ChannelChoice = ChannelId;
 // Legacy alias (pre-rename).
 export type ProviderChoice = ChannelChoice;
-export type SecretInputMode = "plaintext" | "ref";
+export type SecretInputMode = "plaintext" | "ref"; // pragma: allowlist secret
 
 export type OnboardOptions = {
   mode?: OnboardMode;

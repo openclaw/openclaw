@@ -275,7 +275,7 @@ describe("noteMemorySearchHealth", () => {
     resolveApiKeyForProvider.mockImplementation(async ({ provider }: { provider: string }) => {
       if (provider === "ollama") {
         return {
-          apiKey: "ollama-local",
+          apiKey: "ollama-local", // pragma: allowlist secret
           source: "env: OLLAMA_API_KEY",
           mode: "api-key",
         };
