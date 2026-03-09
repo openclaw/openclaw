@@ -65,7 +65,7 @@ function expectedGatewayUrl(basePath: string): string {
       ? location.host.slice(1, location.host.indexOf("]"))
       : location.host.split(":")[0]);
   const host =
-    hostname === "localhost"
+    proto === "ws" && hostname === "localhost"
       ? location.host.replace(/^localhost(?=[:]|$)/, "127.0.0.1")
       : location.host;
   return `${proto}://${host}${basePath}`;
@@ -120,6 +120,17 @@ describe("loadSettings default gateway URL derivation", () => {
 
     const { loadSettings } = await import("./storage.ts");
     expect(loadSettings().gatewayUrl).toBe("ws://127.0.0.1:18789");
+  });
+
+  it("keeps localhost for secure-context localhost defaults", async () => {
+    setTestLocation({
+      protocol: "https:",
+      host: "localhost:18789",
+      pathname: "/",
+    });
+
+    const { loadSettings } = await import("./storage.ts");
+    expect(loadSettings().gatewayUrl).toBe("wss://localhost:18789");
   });
 
   it("ignores and scrubs legacy persisted tokens", async () => {
@@ -254,6 +265,10 @@ describe("loadSettings default gateway URL derivation", () => {
       gatewayUrl: "ws://127.0.0.1:18789/ui",
       token: "loopback-token",
     });
+    expect(sessionStorage.getItem("openclaw.control.token.v1:ws://localhost:18789/ui")).toBeNull();
+    expect(sessionStorage.getItem("openclaw.control.token.v1:ws://127.0.0.1:18789/ui")).toBe(
+      "loopback-token",
+    );
     expect(JSON.parse(localStorage.getItem("openclaw.control.settings.v1") ?? "{}")).toMatchObject({
       gatewayUrl: "ws://127.0.0.1:18789/ui",
     });

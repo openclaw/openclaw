@@ -88,6 +88,18 @@ function persistSessionToken(gatewayUrl: string, token: string) {
   }
 }
 
+function removeSessionToken(gatewayUrl: string) {
+  try {
+    const storage = getSessionStorage();
+    if (!storage) {
+      return;
+    }
+    storage.removeItem(tokenSessionKeyForGateway(gatewayUrl));
+  } catch {
+    // best-effort
+  }
+}
+
 function resolveDefaultGatewayBasePath(): string {
   const configured =
     typeof window !== "undefined" &&
@@ -119,7 +131,8 @@ function normalizeDefaultGatewayHost(host: string, hostname: string): string {
 function buildDefaultGatewayUrl(opts?: { preferIpv4LoopbackLocalhost?: boolean }): string {
   const proto = location.protocol === "https:" ? "wss" : "ws";
   const basePath = resolveDefaultGatewayBasePath();
-  const host = opts?.preferIpv4LoopbackLocalhost
+  const shouldPreferIpv4Loopback = opts?.preferIpv4LoopbackLocalhost && proto === "ws";
+  const host = shouldPreferIpv4Loopback
     ? normalizeDefaultGatewayHost(location.host, location.hostname)
     : location.host;
   return `${proto}://${host}${basePath}`;
@@ -160,6 +173,9 @@ export function loadSettings(): UiSettings {
     const sessionToken =
       loadSessionToken(migratedGatewayUrl) ||
       (migratedGatewayUrl !== storedGatewayUrl ? loadSessionToken(storedGatewayUrl) : "");
+    if (migratedGatewayUrl !== storedGatewayUrl) {
+      removeSessionToken(storedGatewayUrl);
+    }
     const settings = {
       gatewayUrl: migratedGatewayUrl,
       // Gateway auth is intentionally in-memory only; scrub any legacy persisted token on load.
