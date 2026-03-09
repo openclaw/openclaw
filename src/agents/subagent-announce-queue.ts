@@ -158,9 +158,17 @@ function scheduleAnnounceDrain(key: string) {
           if (!last) {
             break;
           }
+          const requesterMessageIds = new Set(
+            items
+              .map((item) => item.requesterMessageId?.trim())
+              .filter((value): value is string => Boolean(value)),
+          );
+          const aggregateRequesterMessageId =
+            requesterMessageIds.size === 1 ? requesterMessageIds.values().next().value : undefined;
           await queue.send({
             ...last,
             prompt,
+            requesterMessageId: aggregateRequesterMessageId,
             internalEvents: internalEvents.length > 0 ? internalEvents : last.internalEvents,
           });
           queue.items.splice(0, items.length);
