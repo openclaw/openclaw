@@ -469,9 +469,9 @@ describe("extractObservedOverflowTokenCount", () => {
         '400 {"type":"error","error":{"message":"prompt is too long: 277403 tokens > 200000 maximum"}}',
       ),
     ).toBe(277403);
-    expect(extractObservedOverflowTokenCount("Context window exceeded: requested 12000 tokens")).toBe(
-      12000,
-    );
+    expect(
+      extractObservedOverflowTokenCount("Context window exceeded: requested 12000 tokens"),
+    ).toBe(12000);
     expect(
       extractObservedOverflowTokenCount(
         "This model's maximum context length is 128000 tokens. However, your messages resulted in 145000 tokens.",

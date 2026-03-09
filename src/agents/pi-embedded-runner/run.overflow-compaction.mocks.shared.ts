@@ -110,9 +110,7 @@ vi.mock("../pi-embedded-helpers.js", () => ({
   formatBillingErrorMessage: vi.fn(() => ""),
   classifyFailoverReason: vi.fn(() => null),
   extractObservedOverflowTokenCount: vi.fn((msg?: string) => {
-    const match = msg?.match(
-      /prompt is too long:\s*([\d,]+)\s+tokens\s*>\s*[\d,]+\s+maximum/i,
-    );
+    const match = msg?.match(/prompt is too long:\s*([\d,]+)\s+tokens\s*>\s*[\d,]+\s+maximum/i);
     return match?.[1] ? Number(match[1].replaceAll(",", "")) : undefined;
   }),
   formatAssistantErrorText: vi.fn(() => ""),
