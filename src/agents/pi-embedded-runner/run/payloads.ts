@@ -42,6 +42,29 @@ const RECOVERABLE_TOOL_ERROR_KEYWORDS = [
   "needs",
   "requires",
 ] as const;
+/** Keywords that indicate the assistant reply acknowledges a tool failure. */
+const FAILURE_ACKNOWLEDGEMENT_KEYWORDS = [
+  "fail",
+  "error",
+  "could not",
+  "couldn't",
+  "unable",
+  "did not",
+  "didn't",
+  "not found",
+  "not possible",
+  "problem",
+  "issue",
+  "sorry",
+  "unfortunately",
+] as const;
+
+function replyAcknowledgesFailure(replyTexts: readonly string[]): boolean {
+  return replyTexts.some((text) => {
+    const lower = text.toLowerCase();
+    return FAILURE_ACKNOWLEDGEMENT_KEYWORDS.some((kw) => lower.includes(kw));
+  });
+}
 
 function isRecoverableToolError(error: string | undefined): boolean {
   const errorLower = (error ?? "").toLowerCase();
@@ -55,6 +78,7 @@ function isVerboseToolDetailEnabled(level?: VerboseLevel): boolean {
 function resolveToolErrorWarningPolicy(params: {
   lastToolError: LastToolError;
   hasUserFacingReply: boolean;
+  replyTexts: readonly string[];
   suppressToolErrors: boolean;
   suppressToolErrorWarnings?: boolean;
   verboseLevel?: VerboseLevel;
@@ -76,10 +100,13 @@ function resolveToolErrorWarningPolicy(params: {
   const isMutatingToolError =
     params.lastToolError.mutatingAction ?? isLikelyMutatingToolName(params.lastToolError.toolName);
   if (isMutatingToolError) {
-    // When the assistant already replied, it will explain the failure in its own
-    // words.  Suppress the raw internal warning to avoid leaking implementation
-    // details (paths, char counts, tool names) into user-facing chat (#39631).
-    if (params.hasUserFacingReply) {
+    // Only suppress the raw warning when the assistant reply actually
+    // acknowledges the failure.  A generic "Done." reply must not hide
+    // a mutating-tool error from the user (#39631).
+    if (
+      params.hasUserFacingReply &&
+      replyAcknowledgesFailure(params.replyTexts)
+    ) {
       return { showWarning: false, includeDetails };
     }
     return { showWarning: true, includeDetails };
@@ -285,6 +312,7 @@ export function buildEmbeddedRunPayloads(params: {
     const warningPolicy = resolveToolErrorWarningPolicy({
       lastToolError: params.lastToolError,
       hasUserFacingReply: hasUserFacingAssistantReply,
+      replyTexts: answerTexts,
       suppressToolErrors: Boolean(params.config?.messages?.suppressToolErrors),
       suppressToolErrorWarnings: params.suppressToolErrorWarnings,
       verboseLevel: params.verboseLevel,

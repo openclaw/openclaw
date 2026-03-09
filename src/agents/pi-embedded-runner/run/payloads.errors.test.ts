@@ -325,6 +325,20 @@ describe("buildEmbeddedRunPayloads", () => {
     expect(payloads[0]?.isError).toBeUndefined();
   });
 
+  it("shows mutating tool errors when assistant reply does not acknowledge failure", () => {
+    const payloads = buildPayloads({
+      assistantTexts: ["Done."],
+      lastAssistant: { stopReason: "end_turn" } as unknown as AssistantMessage,
+      lastToolError: { toolName: "write", error: "connection timeout" },
+    });
+
+    // The reply "Done." does not acknowledge the failure, so the warning
+    // must still be shown to the user.
+    const warningPayload = payloads.find((p) => p.isError);
+    expect(warningPayload).toBeDefined();
+    expect(warningPayload?.text).toContain("Write");
+  });
+
   it("still shows mutating tool errors when no assistant reply exists", () => {
     const payloads = buildPayloads({
       lastToolError: { toolName: "write", error: "connection timeout" },
