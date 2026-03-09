@@ -21,9 +21,9 @@ struct OpenTalkModeIntent: AppIntent {
     static let openAppWhenRun: Bool = true
 
     /// Shared `UserDefaults` key used to signal a pending Talk Mode navigation.
-    /// Follows the app's dot-separated camelCase key convention (e.g. "gateway.preferredStableID").
+    /// Follows the app's dot-separated lowercase key convention (e.g. "talk.enabled").
     /// Referenced by `RootCanvas` via `OpenTalkModeIntent.pendingTalkModeKey`.
-    static let pendingTalkModeKey = "talk.pendingTalkMode"
+    static let pendingTalkModeKey = "talk.pending-talk-mode"
 
     func perform() async throws -> some IntentResult {
         // Signal the app to navigate to Talk Mode.
