@@ -149,8 +149,7 @@ describe("AcpxRuntime", () => {
     const logs = await readMockRuntimeLogEntries(logPath);
     const prompt = logs.find(
       (entry) =>
-        entry.kind === "prompt" &&
-        String(entry.sessionName ?? "") === "agent:codex:acp:with-image",
+        entry.kind === "prompt" && String(entry.sessionName ?? "") === "agent:codex:acp:with-image",
     );
     expect(prompt).toBeDefined();
 
