@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { acquireWorkspaceLock, withWorkspaceLock } from "./workspace-lock-manager.js";
 
 let fixtureRoot = "";
@@ -189,5 +189,43 @@ describe("workspace lock manager", () => {
     expect(relative.startsWith("..") || path.isAbsolute(relative)).toBe(false);
 
     await lock.release();
+  });
+
+  it("backs off when stale lock deletion fails", async () => {
+    const dir = await makeCaseDir();
+    const target = path.join(dir, "busy.txt");
+    const lockPath = await expectedLockPath(target, "file");
+
+    await fs.mkdir(path.dirname(lockPath), { recursive: true });
+    await fs.writeFile(
+      lockPath,
+      JSON.stringify({
+        token: "stale-token",
+        pid: 999_999,
+        createdAt: new Date(Date.now() - 60_000).toISOString(),
+        expiresAt: new Date(Date.now() - 30_000).toISOString(),
+        targetPath: target,
+        kind: "file",
+      }),
+      "utf8",
+    );
+
+    const rmSpy = vi.spyOn(fs, "rm").mockRejectedValue(new Error("EACCES"));
+    const started = Date.now();
+    await expect(
+      acquireWorkspaceLock(target, {
+        kind: "file",
+        timeoutMs: 30,
+        pollIntervalMs: 20,
+        ttlMs: 1,
+      }),
+    ).rejects.toThrow(/workspace lock timeout/);
+    const elapsed = Date.now() - started;
+
+    expect(rmSpy).toHaveBeenCalled();
+    expect(elapsed).toBeGreaterThanOrEqual(20);
+
+    rmSpy.mockRestore();
+    await fs.rm(lockPath, { force: true });
   });
 });

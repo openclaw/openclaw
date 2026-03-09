@@ -166,6 +166,10 @@ export async function acquireWorkspaceLock(
   }
 
   const startedAt = Date.now();
+  const sleep = async (ms: number): Promise<void> => {
+    await new Promise((resolve) => setTimeout(resolve, ms));
+  };
+
   while (Date.now() - startedAt <= timeoutMs) {
     try {
       const handle = await fs.open(lockPath, "wx");
@@ -192,14 +196,19 @@ export async function acquireWorkspaceLock(
       }
 
       if (await isStaleLock(lockPath, ttlMs)) {
-        await fs.rm(lockPath, { force: true }).catch(() => undefined);
-        continue;
+        const removed = await fs
+          .rm(lockPath, { force: true })
+          .then(() => true)
+          .catch(() => false);
+        if (removed) {
+          continue;
+        }
       }
 
       if (Date.now() - startedAt >= timeoutMs) {
         break;
       }
-      await new Promise((resolve) => setTimeout(resolve, pollIntervalMs));
+      await sleep(pollIntervalMs);
     }
   }
 
