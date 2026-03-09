@@ -320,6 +320,29 @@ exec({"command":"pwd"})`;
     expect(event.partial.content).toEqual([{ type: "text", text }]);
   });
 
+  it("does not recover tool-call examples inside unterminated inline code in partial streams", async () => {
+    const text = '`exec({"command":"pwd"})';
+    const event = {
+      type: "toolcall_delta",
+      partial: {
+        role: "assistant",
+        content: [{ type: "text", text }],
+      },
+    };
+    const finalMessage = {
+      role: "assistant",
+      content: [{ type: "text", text: "Done." }],
+    };
+    const baseFn = vi.fn(() => createFakeStream({ events: [event], resultMessage: finalMessage }));
+
+    const stream = await invokeRecoveredStream(baseFn, new Set(["exec"]));
+    for await (const _item of stream) {
+      // drain
+    }
+
+    expect(event.partial.content).toEqual([{ type: "text", text }]);
+  });
+
   it("recovers tool calls in streamed partial events", async () => {
     const event = {
       type: "toolcall_delta",

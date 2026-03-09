@@ -257,6 +257,12 @@ function findMarkdownCodeRanges(text: string): TextRange[] {
       continue;
     }
 
+    // Treat unterminated inline spans as code through end-of-text so streamed
+    // partials cannot execute tool-call examples before the closing backticks arrive.
+    const overlapsExisting = ranges.some((range) => start < range.end && range.start < text.length);
+    if (!overlapsExisting) {
+      ranges.push({ start, end: text.length });
+    }
     index = start + markerLength;
   }
 
