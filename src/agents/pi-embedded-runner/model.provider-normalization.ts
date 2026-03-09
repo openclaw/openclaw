@@ -2,7 +2,7 @@ import type { Api, Model } from "@mariozechner/pi-ai";
 import { normalizeModelCompat } from "../model-compat.js";
 import { normalizeProviderId } from "../model-selection.js";
 
-const OPENAI_CODEX_BASE_URL = "https://chatgpt.com/backend-api";
+const OPENAI_CODEX_BASE_URL = "https://chatgpt.com/backend-api/codex";
 
 function isOpenAIApiBaseUrl(baseUrl?: string): boolean {
   const trimmed = baseUrl?.trim();
@@ -12,12 +12,46 @@ function isOpenAIApiBaseUrl(baseUrl?: string): boolean {
   return /^https?:\/\/api\.openai\.com(?:\/v1)?\/?$/i.test(trimmed);
 }
 
-function isOpenAICodexBaseUrl(baseUrl?: string): boolean {
+function isLegacyOpenAICodexBaseUrl(baseUrl?: string): boolean {
   const trimmed = baseUrl?.trim();
   if (!trimmed) {
     return false;
   }
   return /^https?:\/\/chatgpt\.com\/backend-api\/?$/i.test(trimmed);
+}
+
+function isOpenAICodexBaseUrl(baseUrl?: string): boolean {
+  const trimmed = baseUrl?.trim();
+  if (!trimmed) {
+    return false;
+  }
+  return /^https?:\/\/chatgpt\.com\/backend-api\/codex\/?$/i.test(trimmed);
+}
+
+function isOpenAICodexResponsesUrl(baseUrl?: string): boolean {
+  const trimmed = baseUrl?.trim();
+  if (!trimmed) {
+    return false;
+  }
+  return /^https?:\/\/chatgpt\.com\/backend-api\/codex\/responses\/?$/i.test(trimmed);
+}
+
+function normalizeOpenAICodexBaseUrl(baseUrl?: string): string | undefined {
+  const trimmed = baseUrl?.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+
+  if (
+    isOpenAIApiBaseUrl(trimmed) ||
+    isLegacyOpenAICodexBaseUrl(trimmed) ||
+    isOpenAICodexBaseUrl(trimmed) ||
+    isOpenAICodexResponsesUrl(trimmed)
+  ) {
+    return OPENAI_CODEX_BASE_URL;
+  }
+
+  return trimmed;
 }
 
 function normalizeOpenAICodexTransport(params: {
@@ -31,16 +65,18 @@ function normalizeOpenAICodexTransport(params: {
   const useCodexTransport =
     !params.model.baseUrl ||
     isOpenAIApiBaseUrl(params.model.baseUrl) ||
-    isOpenAICodexBaseUrl(params.model.baseUrl);
+    isLegacyOpenAICodexBaseUrl(params.model.baseUrl) ||
+    isOpenAICodexBaseUrl(params.model.baseUrl) ||
+    isOpenAICodexResponsesUrl(params.model.baseUrl);
 
   const nextApi =
     useCodexTransport && params.model.api === "openai-responses"
       ? ("openai-codex-responses" as const)
       : params.model.api;
+  const normalizedBaseUrl = normalizeOpenAICodexBaseUrl(params.model.baseUrl);
   const nextBaseUrl =
-    nextApi === "openai-codex-responses" &&
-    (!params.model.baseUrl || isOpenAIApiBaseUrl(params.model.baseUrl))
-      ? OPENAI_CODEX_BASE_URL
+    nextApi === "openai-codex-responses"
+      ? normalizedBaseUrl ?? params.model.baseUrl ?? OPENAI_CODEX_BASE_URL
       : params.model.baseUrl;
 
   if (nextApi === params.model.api && nextBaseUrl === params.model.baseUrl) {

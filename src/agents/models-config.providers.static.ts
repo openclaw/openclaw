@@ -148,7 +148,7 @@ const NVIDIA_DEFAULT_COST = {
   cacheWrite: 0,
 };
 
-const OPENAI_CODEX_BASE_URL = "https://chatgpt.com/backend-api";
+const OPENAI_CODEX_BASE_URL = "https://chatgpt.com/backend-api/codex";
 
 export function buildMinimaxProvider(): ProviderConfig {
   return {

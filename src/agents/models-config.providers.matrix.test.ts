@@ -106,7 +106,7 @@ const MATRIX_CASES: MatrixCase[] = [
     },
     assertProviders(providers) {
       expect(providers?.["openai-codex"]).toMatchObject({
-        baseUrl: "https://chatgpt.com/backend-api",
+        baseUrl: "https://chatgpt.com/backend-api/codex",
         api: "openai-codex-responses",
         models: [],
       });

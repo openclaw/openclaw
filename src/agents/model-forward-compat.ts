@@ -162,7 +162,7 @@ function resolveOpenAICodexForwardCompatModel(
     name: trimmedModelId,
     api: "openai-codex-responses",
     provider: normalizedProvider,
-    baseUrl: "https://chatgpt.com/backend-api",
+    baseUrl: "https://chatgpt.com/backend-api/codex",
     reasoning: true,
     input: ["text", "image"],
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
