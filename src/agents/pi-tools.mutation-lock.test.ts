@@ -155,4 +155,44 @@ describe("wrapToolMutationLock", () => {
       "end:same.txt",
     ]);
   });
+
+  it("normalizes file:// container paths into shared lock keys", async () => {
+    const gate = deferred();
+    const events: string[] = [];
+
+    const base: AnyAgentTool = {
+      name: "write",
+      label: "write",
+      description: "test write",
+      parameters: {},
+      execute: async (_toolCallId, params) => {
+        const record = params as Record<string, unknown>;
+        const filePath = typeof record.path === "string" ? record.path : "";
+        events.push(`start:${filePath}`);
+        if (filePath === "file:///agent/same.txt") {
+          await gate.promise;
+        }
+        events.push(`end:${filePath}`);
+        return textResult(filePath);
+      },
+    };
+
+    const wrapped = wrapToolMutationLock(base, process.cwd(), { containerWorkdir: "/agent" });
+
+    const p1 = wrapped.execute("call-1", { path: "file:///agent/same.txt", content: "one" });
+    const p2 = wrapped.execute("call-2", { path: "same.txt", content: "two" });
+
+    await waitUntil(() => {
+      expect(events).toEqual(["start:file:///agent/same.txt"]);
+    });
+
+    gate.resolve();
+    await Promise.all([p1, p2]);
+    expect(events).toEqual([
+      "start:file:///agent/same.txt",
+      "end:file:///agent/same.txt",
+      "start:same.txt",
+      "end:same.txt",
+    ]);
+  });
 });

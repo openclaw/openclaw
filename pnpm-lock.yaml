@@ -117,15 +117,9 @@ importers:
       file-type:
         specifier: ^21.3.0
         version: 21.3.0
-      gaxios:
-        specifier: 7.1.3
-        version: 7.1.3
       grammy:
         specifier: ^1.41.1
         version: 1.41.1
-      hono:
-        specifier: 4.12.5
-        version: 4.12.5
       https-proxy-agent:
         specifier: ^7.0.6
         version: 7.0.6
@@ -177,9 +171,6 @@ importers:
       sqlite-vec:
         specifier: 0.1.7-alpha.2
         version: 0.1.7-alpha.2
-      strip-ansi:
-        specifier: ^7.2.0
-        version: 7.2.0
       tar:
         specifier: 7.5.10
         version: 7.5.10
@@ -11951,7 +11942,8 @@ snapshots:
 
   highlight.js@10.7.3: {}
 
-  hono@4.12.5: {}
+  hono@4.12.5:
+    optional: true
 
   hookable@6.0.1: {}
 
