@@ -80,6 +80,7 @@ export function createPluginRuntime(_options: CreatePluginRuntimeOptions = {}): 
           provider: params.provider,
           cfg: params.cfg,
           profileId: params.profileId,
+          preferredProfile: params.preferredProfile,
         }),
     },
   } satisfies PluginRuntime;
