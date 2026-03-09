@@ -1385,6 +1385,55 @@ ensure_node22_active_shell() {
     return 1
 }
 
+# Detect multiple Node.js environments and warn users
+# This helps prevent confusion when multiple openclaw installations exist
+warn_multiple_node_environments() {
+    local envs_found=()
+    local active_node=""
+    active_node="$(command -v node 2>/dev/null || true)"
+
+    # Check for nvm
+    if [[ -n "${NVM_DIR:-}" ]] || [[ -d "$HOME/.nvm" ]]; then
+        envs_found+=("nvm (~/.nvm)")
+    fi
+
+    # Check for fnm
+    if [[ -n "${FNM_DIR:-}" ]] || [[ -d "$HOME/.local/share/fnm" ]] || [[ -d "$HOME/.fnm" ]] || command -v fnm &>/dev/null; then
+        envs_found+=("fnm")
+    fi
+
+    # Check for volta
+    if [[ -n "${VOLTA_HOME:-}" ]] || [[ -d "$HOME/.volta" ]] || command -v volta &>/dev/null; then
+        envs_found+=("volta (~/.volta)")
+    fi
+
+    # Check for Homebrew node (macOS)
+    if [[ -x "/opt/homebrew/bin/node" ]] || [[ -x "/usr/local/bin/node" ]]; then
+        if [[ "$active_node" != "/opt/homebrew/bin/node" && "$active_node" != "/usr/local/bin/node" ]]; then
+            envs_found+=("homebrew")
+        fi
+    fi
+
+    # Check for system node
+    if [[ -x "/usr/bin/node" ]]; then
+        if [[ "$active_node" != "/usr/bin/node" ]]; then
+            envs_found+=("system (/usr/bin/node)")
+        fi
+    fi
+
+    # Warn if multiple environments detected
+    if [[ ${#envs_found[@]} -gt 1 ]]; then
+        ui_warn "Multiple Node.js environments detected: ${envs_found[*]}"
+        echo ""
+        echo "  ${INFO}This can cause confusion if openclaw is installed in different locations.${NC}"
+        echo "  ${INFO}Current active node: ${active_node:-none}${NC}"
+        echo ""
+        echo "  ${MUTED}Recommendation: Use one Node version manager consistently.${NC}"
+        echo "  ${MUTED}After installing, verify with: which openclaw${NC}"
+        echo ""
+    fi
+}
+
 check_node() {
     if command -v node &> /dev/null; then
         NODE_VERSION="$(node_major_version || true)"
@@ -2259,6 +2308,9 @@ main() {
     local skip_onboard=false
 
     ui_stage "Preparing environment"
+
+    # Warn about multiple Node environments
+    warn_multiple_node_environments
 
     # Step 1: Homebrew (macOS only)
     install_homebrew
