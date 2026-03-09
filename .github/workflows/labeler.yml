@@ -341,17 +341,25 @@ jobs:
             }
 
             let openPrCount = 0;
+            let openPrCountKnown = false;
             try {
               const result = await github.rest.search.issuesAndPullRequests({
                 q: `repo:${context.repo.owner}/${context.repo.repo} is:pr is:open author:${authorLogin}`,
                 per_page: 1,
               });
               openPrCount = result?.data?.total_count ?? 0;
+              openPrCountKnown = true;
             } catch (error) {
               if (error?.status !== 422 && !isSearchRateLimit(error)) {
                 throw error;
               }
-              core.warning(`Skipping open PR count for ${authorLogin}; treating as 0 due to ${isSearchRateLimit(error) ? "search rate limit" : `status ${error?.status ?? "unknown"}`}.`);
+              core.warning(
+                `Skipping open PR count for ${authorLogin}; preserving existing too-many-prs label state due to ${isSearchRateLimit(error) ? "search rate limit" : `status ${error?.status ?? "unknown"}`}.`,
+              );
+            }
+
+            if (!openPrCountKnown) {
+              return;
             }
 
             if (openPrCount > activePrLimit) {
