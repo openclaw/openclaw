@@ -134,7 +134,11 @@ function expandSystemdSpecifier(input: string, env: GatewayServiceEnv): string {
 }
 
 function parseEnvironmentFileSpecs(raw: string): string[] {
-  return splitArgsPreservingQuotes(raw, { escapeMode: "backslash" })
+  // Use backslash-quote-only so that apostrophes in file paths (e.g.
+  // %h/.openclaw/O'Neil.env) are treated as literal characters.  systemd
+  // only recognises double-quote wrapping for EnvironmentFile values, not
+  // single-quote grouping.
+  return splitArgsPreservingQuotes(raw, { escapeMode: "backslash-quote-only" })
     .map((entry) => entry.trim())
     .filter(Boolean);
 }

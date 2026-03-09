@@ -618,6 +618,26 @@ describe("readSystemdServiceExecStart", () => {
       OPENCLAW_GATEWAY_PASSWORD: "file", // pragma: allowlist secret
     });
   });
+
+  it("preserves apostrophes in EnvironmentFile paths", async () => {
+    vi.spyOn(fs, "readFile").mockImplementation(async (pathname) => {
+      const pathValue = pathLikeToString(pathname);
+      if (pathValue.endsWith("/openclaw-gateway.service")) {
+        return [
+          "[Service]",
+          "ExecStart=/usr/bin/openclaw gateway run",
+          "EnvironmentFile=%h/.openclaw/O'Neil.env",
+        ].join("\n");
+      }
+      if (pathValue === "/home/test/.openclaw/O'Neil.env") {
+        return "OPENCLAW_GATEWAY_TOKEN=apostrophe-token\n"; // pragma: allowlist secret
+      }
+      throw new Error(`unexpected readFile path: ${pathValue}`);
+    });
+
+    const command = await readSystemdServiceExecStart({ HOME: "/home/test" });
+    expect(command?.environment?.OPENCLAW_GATEWAY_TOKEN).toBe("apostrophe-token");
+  });
 });
 
 describe("systemd service control", () => {
