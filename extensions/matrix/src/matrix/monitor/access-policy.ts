@@ -3,7 +3,8 @@ import {
   issuePairingChallenge,
   readStoreAllowFromForDmPolicy,
   resolveDmGroupAccessWithLists,
-} from "openclaw/plugin-sdk";
+  resolveSenderScopedGroupPolicy,
+} from "openclaw/plugin-sdk/matrix";
 import {
   normalizeMatrixAllowList,
   resolveMatrixAllowListMatch,
@@ -32,12 +33,10 @@ export async function resolveMatrixAccessState(params: {
       })
     : [];
   const normalizedGroupAllowFrom = normalizeMatrixAllowList(params.groupAllowFrom);
-  const senderGroupPolicy =
-    params.groupPolicy === "disabled"
-      ? "disabled"
-      : normalizedGroupAllowFrom.length > 0
-        ? "allowlist"
-        : "open";
+  const senderGroupPolicy = resolveSenderScopedGroupPolicy({
+    groupPolicy: params.groupPolicy,
+    groupAllowFrom: normalizedGroupAllowFrom,
+  });
   const access = resolveDmGroupAccessWithLists({
     isGroup: !params.isDirectMessage,
     dmPolicy: params.dmPolicy,

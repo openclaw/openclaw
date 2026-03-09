@@ -1,7 +1,7 @@
-import type { WizardPrompter } from "openclaw/plugin-sdk";
+import type { WizardPrompter } from "openclaw/plugin-sdk/bluebubbles";
 import { describe, expect, it, vi } from "vitest";
 
-vi.mock("openclaw/plugin-sdk", () => ({
+vi.mock("openclaw/plugin-sdk/bluebubbles", () => ({
   DEFAULT_ACCOUNT_ID: "default",
   addWildcardAllowFrom: vi.fn(),
   formatDocsLink: (_url: string, fallback: string) => fallback,
@@ -23,6 +23,10 @@ vi.mock("openclaw/plugin-sdk", () => ({
     );
   },
   mergeAllowFromEntries: (_existing: unknown, entries: string[]) => entries,
+  createAccountListHelpers: () => ({
+    listAccountIds: () => ["default"],
+    resolveDefaultAccountId: () => "default",
+  }),
   normalizeSecretInputString: (value: unknown) => {
     if (typeof value !== "string") {
       return undefined;
@@ -33,6 +37,10 @@ vi.mock("openclaw/plugin-sdk", () => ({
   normalizeAccountId: (value?: string | null) =>
     value && value.trim().length > 0 ? value : "default",
   promptAccountId: vi.fn(),
+  resolveAccountIdForConfigure: async (params: {
+    accountOverride?: string;
+    defaultAccountId: string;
+  }) => params.accountOverride?.trim() || params.defaultAccountId,
 }));
 
 describe("bluebubbles onboarding SecretInput", () => {
