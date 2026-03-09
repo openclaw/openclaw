@@ -28,6 +28,7 @@ import {
   type SpawnCommandCache,
   type SpawnCommandOptions,
   type SpawnResolutionEvent,
+  resolveAcpxSpawnEnv,
   spawnAndCollect,
   spawnWithResolvedCommand,
   waitForExit,
@@ -212,6 +213,7 @@ export class AcpxRuntime implements AcpRuntime {
     let events = await this.runControlCommand({
       args: ensureCommand,
       cwd,
+      agent,
       fallbackCode: "ACP_SESSION_INIT_FAILED",
     });
     let ensuredEvent = events.find(
@@ -230,6 +232,7 @@ export class AcpxRuntime implements AcpRuntime {
       events = await this.runControlCommand({
         args: newCommand,
         cwd,
+        agent,
         fallbackCode: "ACP_SESSION_INIT_FAILED",
       });
       ensuredEvent = events.find(
@@ -303,6 +306,7 @@ export class AcpxRuntime implements AcpRuntime {
         command: this.config.command,
         args,
         cwd: state.cwd,
+        env: resolveAcpxSpawnEnv(process.env, { agent: state.agent }),
       },
       this.spawnCommandOptions,
     );
@@ -398,6 +402,7 @@ export class AcpxRuntime implements AcpRuntime {
     const events = await this.runControlCommand({
       args,
       cwd: state.cwd,
+      agent: state.agent,
       fallbackCode: "ACP_TURN_FAILED",
       ignoreNoSession: true,
       signal: input.signal,
@@ -444,6 +449,7 @@ export class AcpxRuntime implements AcpRuntime {
     await this.runControlCommand({
       args,
       cwd: state.cwd,
+      agent: state.agent,
       fallbackCode: "ACP_TURN_FAILED",
     });
   }
@@ -467,6 +473,7 @@ export class AcpxRuntime implements AcpRuntime {
     await this.runControlCommand({
       args,
       cwd: state.cwd,
+      agent: state.agent,
       fallbackCode: "ACP_TURN_FAILED",
     });
   }
@@ -562,6 +569,7 @@ export class AcpxRuntime implements AcpRuntime {
     await this.runControlCommand({
       args,
       cwd: state.cwd,
+      agent: state.agent,
       fallbackCode: "ACP_TURN_FAILED",
       ignoreNoSession: true,
     });
@@ -577,6 +585,7 @@ export class AcpxRuntime implements AcpRuntime {
     await this.runControlCommand({
       args,
       cwd: state.cwd,
+      agent: state.agent,
       fallbackCode: "ACP_TURN_FAILED",
       ignoreNoSession: true,
     });
@@ -677,6 +686,7 @@ export class AcpxRuntime implements AcpRuntime {
   private async runControlCommand(params: {
     args: string[];
     cwd: string;
+    agent?: string;
     fallbackCode: AcpRuntimeErrorCode;
     ignoreNoSession?: boolean;
     signal?: AbortSignal;
@@ -686,6 +696,7 @@ export class AcpxRuntime implements AcpRuntime {
         command: this.config.command,
         args: params.args,
         cwd: params.cwd,
+        env: resolveAcpxSpawnEnv(process.env, { agent: params.agent }),
       },
       this.spawnCommandOptions,
       {

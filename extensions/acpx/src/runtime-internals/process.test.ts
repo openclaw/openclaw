@@ -1,10 +1,12 @@
 import { spawn } from "node:child_process";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { homedir } from "node:os";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { createWindowsCmdShimFixture } from "../../../shared/windows-cmd-shim-test-fixtures.js";
 import {
+  resolveAcpxSpawnEnv,
   resolveSpawnCommand,
   spawnAndCollect,
   type SpawnCommandCache,
@@ -27,6 +29,16 @@ async function createTempDir(): Promise<string> {
   return dir;
 }
 
+async function writeCodexAuthFile(params: { homeDir: string; authMode: string }) {
+  const codexDir = path.join(params.homeDir, ".codex");
+  await mkdir(codexDir, { recursive: true });
+  await writeFile(
+    path.join(codexDir, "auth.json"),
+    JSON.stringify({ auth_mode: params.authMode }, null, 2),
+    "utf8",
+  );
+}
+
 afterEach(async () => {
   while (tempDirs.length > 0) {
     const dir = tempDirs.pop();
@@ -40,6 +52,67 @@ afterEach(async () => {
       retryDelay: 8,
     });
   }
+});
+
+describe("resolveAcpxSpawnEnv", () => {
+  it("strips Codex API-key env vars when Codex auth mode is chatgpt", async () => {
+    const homeDir = await createTempDir();
+    await writeCodexAuthFile({ homeDir, authMode: "chatgpt" });
+
+    const env = resolveAcpxSpawnEnv(
+      {
+        HOME: homeDir,
+        OPENAI_API_KEY: "test-openai-key", // pragma: allowlist secret
+        CODEX_API_KEY: "test-codex-key", // pragma: allowlist secret
+        ACPX_AUTH_OPENAI_API_KEY: "test-acpx-openai-key", // pragma: allowlist secret
+        ACPX_AUTH_CODEX_API_KEY: "test-acpx-codex-key", // pragma: allowlist secret
+      },
+      { agent: "codex" },
+    );
+
+    expect(env.OPENCLAW_SHELL).toBe("acp");
+    expect(env.OPENAI_API_KEY).toBeUndefined();
+    expect(env.CODEX_API_KEY).toBeUndefined();
+    expect(env.ACPX_AUTH_OPENAI_API_KEY).toBeUndefined();
+    expect(env.ACPX_AUTH_CODEX_API_KEY).toBeUndefined();
+  });
+
+  it("preserves API-key env vars when Codex auth mode is apikey", async () => {
+    const homeDir = await createTempDir();
+    await writeCodexAuthFile({ homeDir, authMode: "apikey" });
+
+    const env = resolveAcpxSpawnEnv(
+      {
+        HOME: homeDir,
+        OPENAI_API_KEY: "test-openai-key", // pragma: allowlist secret
+        CODEX_API_KEY: "test-codex-key", // pragma: allowlist secret
+      },
+      { agent: "codex" },
+    );
+
+    expect(env.OPENAI_API_KEY).toBe("sk-openai");
+    expect(env.CODEX_API_KEY).toBe("sk-codex");
+  });
+
+  it("preserves non-Codex agent env even when ChatGPT auth file exists", async () => {
+    const homeDir = await createTempDir();
+    await writeCodexAuthFile({ homeDir, authMode: "chatgpt" });
+
+    const env = resolveAcpxSpawnEnv(
+      {
+        HOME: homeDir,
+        OPENAI_API_KEY: "sk-openai",
+      },
+      { agent: "claude-code" },
+    );
+
+    expect(env.OPENAI_API_KEY).toBe("sk-openai");
+  });
+
+  it("falls back to the current home directory when HOME is absent", async () => {
+    const env = resolveAcpxSpawnEnv({}, { agent: "codex", homeDir: homedir() });
+    expect(env.OPENCLAW_SHELL).toBe("acp");
+  });
 });
 
 describe("resolveSpawnCommand", () => {
