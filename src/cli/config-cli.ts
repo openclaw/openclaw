@@ -5,7 +5,7 @@ import { formatConfigIssueLines, normalizeConfigIssues } from "../config/issue-f
 import { CONFIG_PATH } from "../config/paths.js";
 import { isBlockedObjectKey } from "../config/prototype-keys.js";
 import { redactConfigObject } from "../config/redact-snapshot.js";
-import { danger, info, success } from "../globals.js";
+import { danger, info, success, warn } from "../globals.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { defaultRuntime } from "../runtime.js";
 import { formatDocsLink } from "../terminal/links.js";
@@ -392,6 +392,48 @@ export async function runConfigValidate(opts: { json?: boolean; runtime?: Runtim
   }
 }
 
+type AgentModelOverrideInfo = {
+  id: string;
+  name?: string;
+  model: string;
+};
+
+function detectAgentModelOverrides(config: Record<string, unknown>): AgentModelOverrideInfo[] {
+  const agents = config.agents as { list?: unknown[] } | undefined;
+  if (!agents?.list || !Array.isArray(agents.list)) {
+    return [];
+  }
+  const overrides: AgentModelOverrideInfo[] = [];
+  for (const entry of agents.list) {
+    if (!entry || typeof entry !== "object") {
+      continue;
+    }
+    const agent = entry as { id?: string; name?: string; model?: unknown };
+    if (!agent.model) {
+      continue;
+    }
+    const modelStr =
+      typeof agent.model === "string"
+        ? agent.model
+        : typeof agent.model === "object" && agent.model !== null
+          ? ((agent.model as { primary?: string }).primary ?? "")
+          : "";
+    if (modelStr) {
+      overrides.push({
+        id: agent.id ?? "unknown",
+        name: agent.name,
+        model: modelStr,
+      });
+    }
+  }
+  return overrides;
+}
+
+function isDefaultModelPath(path: string): boolean {
+  const normalized = path.toLowerCase();
+  return normalized === "agents.defaults.model" || normalized === "agents.defaults.model.primary";
+}
+
 export function registerConfigCli(program: Command) {
   const cmd = program
     .command("config")
@@ -445,6 +487,28 @@ export function registerConfigCli(program: Command) {
         setAtPath(next, parsedPath, parsedValue);
         await writeConfigFile(next);
         defaultRuntime.log(info(`Updated ${path}. Restart the gateway to apply.`));
+
+        if (isDefaultModelPath(path)) {
+          const overrides = detectAgentModelOverrides(next);
+          if (overrides.length > 0) {
+            defaultRuntime.log("");
+            defaultRuntime.log(
+              warn(
+                `${overrides.length} agent${overrides.length === 1 ? "" : "s"} ha${overrides.length === 1 ? "s" : "ve"} explicit model overrides that take priority over defaults:`,
+              ),
+            );
+            for (const entry of overrides) {
+              const label = entry.name ? `${entry.name} (id: ${entry.id})` : entry.id;
+              defaultRuntime.log(warn(`  - ${label}: ${entry.model}`));
+            }
+            defaultRuntime.log("");
+            defaultRuntime.log(
+              info(
+                "To update all agents, set each agent's model individually or remove agent-level overrides.",
+              ),
+            );
+          }
+        }
       } catch (err) {
         defaultRuntime.error(danger(String(err)));
         defaultRuntime.exit(1);
