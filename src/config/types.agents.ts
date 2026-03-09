@@ -44,6 +44,7 @@ export type AgentsConfig = {
 };
 
 export type AgentBinding = {
+  type?: "route" | "acp";
   agentId: string;
   comment?: string;
   match: {
@@ -56,3 +57,7 @@ export type AgentBinding = {
     roles?: string[];
   };
 };
+
+export type AgentRouteBinding = AgentBinding & { type?: "route" };
+
+export type AgentAcpBinding = AgentBinding & { type: "acp" };
