@@ -9,7 +9,6 @@ import {
 } from "../gateway/gateway-config-prompts.shared.js";
 import { findTailscaleBinary, getTailnetHostname } from "../infra/tailscale.js";
 import type { RuntimeEnv } from "../runtime.js";
-import { defaultRuntime } from "../runtime.js";
 import { resolveDefaultSecretProviderAlias } from "../secrets/ref-contract.js";
 import { validateIPv4AddressInput } from "../shared/net/ipv4.js";
 import { note } from "../terminal/note.js";
@@ -333,7 +332,9 @@ export async function promptGatewayConfig(
     try {
       const tailnetHostname = await getTailnetHostname();
       const tailscaleOrigin = `https://${tailnetHostname}`;
-      if (!allowedOrigins.includes(tailscaleOrigin)) {
+      // Compare case-insensitively to avoid duplicates with different casing
+      const normalizedOrigins = allowedOrigins.map((o) => o.toLowerCase());
+      if (!normalizedOrigins.includes(tailscaleOrigin.toLowerCase())) {
         allowedOrigins = [...allowedOrigins, tailscaleOrigin];
         runtime.log(`Added Tailscale origin to allowedOrigins: ${tailscaleOrigin}`);
       }
