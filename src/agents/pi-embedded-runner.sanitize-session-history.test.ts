@@ -2,6 +2,8 @@ import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import type { AssistantMessage, UserMessage, Usage } from "@mariozechner/pi-ai";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  expectOpenAIResponsesStrictSanitizeCall,
+  expectGoogleModelApiFullSanitizeCall,
   loadSanitizeSessionHistoryWithCleanMocks,
   makeMockSessionManager,
   makeInMemorySessionManager,
@@ -247,7 +249,24 @@ describe("sanitizeSessionHistory", () => {
     expect(result).toEqual(mockMessages);
   });
 
-  it("passes simple user-only history through for openai-completions", async () => {
+  it("sanitizes tool call ids for OpenAI-compatible responses providers", async () => {
+    setNonGoogleModelApi();
+
+    await sanitizeSessionHistory({
+      messages: mockMessages,
+      modelApi: "openai-responses",
+      provider: "custom",
+      sessionManager: mockSessionManager,
+      sessionId: TEST_SESSION_ID,
+    });
+
+    expectOpenAIResponsesStrictSanitizeCall(
+      mockedHelpers.sanitizeSessionMessagesImages,
+      mockMessages,
+    );
+  });
+
+  it("sanitizes tool call ids for openai-completions", async () => {
     setNonGoogleModelApi();
 
     const result = await sanitizeSessionHistory({
