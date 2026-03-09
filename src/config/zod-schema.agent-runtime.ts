@@ -746,6 +746,12 @@ export const AgentEntrySchema = z
       .optional(),
     sandbox: AgentSandboxSchema,
     tools: AgentToolsSchema,
+    executionGate: z
+      .object({
+        mode: z.union([z.literal("off"), z.literal("warn"), z.literal("enforce")]).optional(),
+      })
+      .strict()
+      .optional(),
     runtime: AgentRuntimeSchema,
   })
   .strict();

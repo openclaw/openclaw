@@ -28,6 +28,10 @@ import {
   resolveContextWindowInfo,
 } from "../context-window-guard.js";
 import { DEFAULT_CONTEXT_TOKENS, DEFAULT_MODEL, DEFAULT_PROVIDER } from "../defaults.js";
+import {
+  detectExecutionIntentSignals,
+  resolveExecutionGateMode,
+} from "../execution-intent-gate.js";
 import { FailoverError, resolveFailoverStatus } from "../failover-error.js";
 import {
   ensureAuthProfileStore,
@@ -741,6 +745,14 @@ export async function runEmbeddedPiAgent(
       let bootstrapPromptWarningSignaturesSeen =
         params.bootstrapPromptWarningSignaturesSeen ??
         (params.bootstrapPromptWarningSignature ? [params.bootstrapPromptWarningSignature] : []);
+      const executionGateMode = resolveExecutionGateMode({
+        cfg: params.config,
+        agentId: workspaceResolution.agentId,
+      });
+      const telemetryEntryPoint =
+        params.messageProvider ?? params.messageChannel ?? params.trigger ?? "unknown";
+      let ackWithoutExecutionTotal = 0;
+      let pseudoToolCallTextTotal = 0;
       const usageAccumulator = createUsageAccumulator();
       let lastRunPromptUsage: ReturnType<typeof normalizeUsage> | undefined;
       let autoCompactionCount = 0;
@@ -1378,6 +1390,103 @@ export async function runEmbeddedPiAgent(
                 profileId: lastProfileId,
                 status,
               });
+            }
+          }
+
+          if (executionGateMode !== "off") {
+            const executionSignals = detectExecutionIntentSignals({
+              userPrompt: params.prompt,
+              assistantTexts: attempt.assistantTexts,
+              hasToolMetas: attempt.toolMetas.length > 0,
+              hasClientToolCall: !!attempt.clientToolCall,
+              hasToolError: !!attempt.lastToolError,
+              didSendViaMessagingTool: attempt.didSendViaMessagingTool,
+              successfulCronAdds: attempt.successfulCronAdds,
+            });
+
+            if (executionSignals.pseudoToolCallTextCount > 0) {
+              pseudoToolCallTextTotal += executionSignals.pseudoToolCallTextCount;
+              void params.onAgentEvent?.({
+                stream: "telemetry",
+                data: {
+                  metric: "pseudo_tool_call_text_total",
+                  delta: executionSignals.pseudoToolCallTextCount,
+                  total: pseudoToolCallTextTotal,
+                  mode: executionGateMode,
+                  provider: activeErrorContext.provider,
+                  model: activeErrorContext.model,
+                  trigger: params.trigger ?? "user",
+                  entrypoint: telemetryEntryPoint,
+                  samples: executionSignals.pseudoToolCallSamples,
+                },
+              });
+              log.warn(
+                `[execution-gate] pseudo_tool_call_text_total delta=${executionSignals.pseudoToolCallTextCount} ` +
+                  `total=${pseudoToolCallTextTotal} mode=${executionGateMode} provider=${activeErrorContext.provider} ` +
+                  `model=${activeErrorContext.model} entrypoint=${telemetryEntryPoint}`,
+              );
+            }
+
+            if (executionSignals.ackWithoutExecution) {
+              ackWithoutExecutionTotal += 1;
+              void params.onAgentEvent?.({
+                stream: "telemetry",
+                data: {
+                  metric: "ack_without_execution",
+                  delta: 1,
+                  total: ackWithoutExecutionTotal,
+                  mode: executionGateMode,
+                  provider: activeErrorContext.provider,
+                  model: activeErrorContext.model,
+                  trigger: params.trigger ?? "user",
+                  entrypoint: telemetryEntryPoint,
+                  commitmentSample: executionSignals.commitmentSample,
+                },
+              });
+              log.warn(
+                `[execution-gate] ack_without_execution total=${ackWithoutExecutionTotal} mode=${executionGateMode} ` +
+                  `provider=${activeErrorContext.provider} model=${activeErrorContext.model} entrypoint=${telemetryEntryPoint}`,
+              );
+              if (executionGateMode === "enforce") {
+                const usage = toNormalizedUsage(usageAccumulator);
+                if (usage && lastTurnTotal && lastTurnTotal > 0) {
+                  usage.total = lastTurnTotal;
+                }
+                const lastCallUsage = normalizeUsage(lastAssistant?.usage as UsageLike);
+                const promptTokens = derivePromptTokens(lastRunPromptUsage);
+                const agentMeta: EmbeddedPiAgentMeta = {
+                  sessionId: sessionIdUsed,
+                  provider: lastAssistant?.provider ?? provider,
+                  model: lastAssistant?.model ?? model.id,
+                  usage,
+                  lastCallUsage: lastCallUsage ?? undefined,
+                  promptTokens,
+                  compactionCount: autoCompactionCount > 0 ? autoCompactionCount : undefined,
+                };
+                return {
+                  payloads: [
+                    {
+                      text:
+                        "Execution gate blocked this turn: assistant acknowledged action intent, " +
+                        "but no tool execution event was emitted. Retry the request or run with " +
+                        "`executionGate.mode=warn` to inspect telemetry only.",
+                      isError: true,
+                    },
+                  ],
+                  meta: {
+                    durationMs: Date.now() - started,
+                    agentMeta,
+                    aborted,
+                    systemPromptReport: attempt.systemPromptReport,
+                    stopReason: "blocked",
+                  },
+                  didSendViaMessagingTool: attempt.didSendViaMessagingTool,
+                  messagingToolSentTexts: attempt.messagingToolSentTexts,
+                  messagingToolSentMediaUrls: attempt.messagingToolSentMediaUrls,
+                  messagingToolSentTargets: attempt.messagingToolSentTargets,
+                  successfulCronAdds: attempt.successfulCronAdds,
+                };
+              }
             }
           }
 
