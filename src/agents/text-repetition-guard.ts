@@ -61,7 +61,16 @@ export type TextRepetitionResult =
 // ---------------------------------------------------------------------------
 
 function resolveConfig(partial?: TextRepetitionGuardConfig): ResolvedTextRepetitionGuardConfig {
-  return { ...DEFAULT_TEXT_REPETITION_GUARD_CONFIG, ...partial };
+  const merged = { ...DEFAULT_TEXT_REPETITION_GUARD_CONFIG, ...partial };
+  // Sanitize numeric config to prevent infinite loops / nonsensical values.
+  merged.minCyclePatternLength = Math.max(1, merged.minCyclePatternLength);
+  merged.maxCyclePatternLength = Math.max(
+    merged.minCyclePatternLength,
+    merged.maxCyclePatternLength,
+  );
+  merged.ngramSize = Math.max(1, merged.ngramSize);
+  merged.checkIntervalChars = Math.max(1, merged.checkIntervalChars);
+  return merged;
 }
 
 /** True when a string is mostly whitespace or a single repeated character. */
