@@ -861,6 +861,7 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
         message,
       };
       gatewayCtx.broadcast("chat", payload);
+      gatewayCtx.agentRunSeq.delete(runId);
     } catch (err) {
       logVerbose(`discord broadcast failed: ${String(err)}`);
     }
