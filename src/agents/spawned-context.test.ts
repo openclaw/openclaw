@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { resolveAgentWorkspaceDir } from "./agent-scope.js";
 import {
   mapToolContextToSpawnedRunMetadata,
   normalizeSpawnedRunMetadata,
@@ -60,6 +61,62 @@ describe("resolveSpawnedWorkspaceInheritance", () => {
       explicitWorkspaceDir: undefined,
     });
     expect(resolved).toBeUndefined();
+  });
+
+  it("uses target agent workspace when main spawns ai-data-engineer (#40869)", () => {
+    const cfg = {
+      agents: {
+        defaults: { workspace: "/Users/tengyilong/.openclaw/workspace" },
+        list: [
+          {
+            id: "main",
+            subagents: { allowAgents: ["ai-data-engineer"] },
+          },
+          {
+            id: "ai-data-engineer",
+            name: "ai-data-engineer",
+            workspace: "/Users/tengyilong/.openclaw/workspace-ai-data-engineer",
+          },
+        ],
+      },
+    };
+
+    const targetAgentId = "ai-data-engineer";
+    const resolved = resolveSpawnedWorkspaceInheritance({
+      config: cfg,
+      requesterSessionKey: "agent:main:subagent:parent",
+      explicitWorkspaceDir: resolveAgentWorkspaceDir(cfg, targetAgentId),
+    });
+    expect(resolved).toBe("/Users/tengyilong/.openclaw/workspace-ai-data-engineer");
+  });
+
+  it("preserves requester workspace when no target agentId is specified (#40869 regression)", () => {
+    const cfg = {
+      agents: {
+        defaults: { workspace: "/Users/tengyilong/.openclaw/workspace" },
+        list: [
+          {
+            id: "main",
+            subagents: { allowAgents: ["ai-data-engineer"] },
+          },
+          {
+            id: "ai-data-engineer",
+            name: "ai-data-engineer",
+            workspace: "/Users/tengyilong/.openclaw/workspace-ai-data-engineer",
+          },
+        ],
+      },
+    };
+
+    // When no agentId is provided, targetAgentId defaults to requesterAgentId
+    const requesterAgentId = "main";
+    const targetAgentId = requesterAgentId;
+    const resolved = resolveSpawnedWorkspaceInheritance({
+      config: cfg,
+      requesterSessionKey: "agent:main:subagent:parent",
+      explicitWorkspaceDir: resolveAgentWorkspaceDir(cfg, targetAgentId),
+    });
+    expect(resolved).toBe("/Users/tengyilong/.openclaw/workspace");
   });
 });
 

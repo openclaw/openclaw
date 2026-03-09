@@ -12,7 +12,7 @@ import {
   parseAgentSessionKey,
 } from "../routing/session-key.js";
 import { normalizeDeliveryContext } from "../utils/delivery-context.js";
-import { resolveAgentConfig } from "./agent-scope.js";
+import { resolveAgentConfig, resolveAgentWorkspaceDir } from "./agent-scope.js";
 import { AGENT_LANE_SUBAGENT } from "./lanes.js";
 import { resolveSubagentSpawnModelSelection } from "./model-selection.js";
 import { resolveSandboxRuntimeStatus } from "./sandbox/runtime-status.js";
@@ -549,7 +549,7 @@ export async function spawnSubagentDirect(
     workspaceDir: resolveSpawnedWorkspaceInheritance({
       config: cfg,
       requesterSessionKey: requesterInternalKey,
-      explicitWorkspaceDir: toolSpawnMetadata.workspaceDir,
+      explicitWorkspaceDir: resolveAgentWorkspaceDir(cfg, targetAgentId),
     }),
   });
 
