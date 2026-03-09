@@ -1,6 +1,6 @@
 name: Labeler
 
-on:
+on: # zizmor: ignore[dangerous-triggers] needs privileged label writes on fork PRs; workflow does not run PR code
   pull_request_target:
     types: [opened, synchronize, reopened]
   issues:
