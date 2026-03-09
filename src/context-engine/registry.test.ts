@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   getContextEngineFactory,
   listContextEngineIds,
@@ -9,21 +9,12 @@ import {
 import type { ContextEngine } from "./types.js";
 
 describe("context-engine/registry", () => {
-  // Store initial state to restore after tests
-  let initialEngines: string[];
-
-  beforeEach(() => {
-    initialEngines = listContextEngineIds();
-  });
-
   afterEach(() => {
-    // Clean up test engines
-    const currentEngines = listContextEngineIds();
-    const testEngines = currentEngines.filter((id) => !initialEngines.includes(id));
-    testEngines.forEach((_id) => {
-      // Note: We can't delete from the Map directly without exposing it,
-      // but we can at least document what we registered
-    });
+    // Clean up test engines to prevent state leakage
+    const testEngines = [...(globalThis.__openclawContextEngines?.keys() ?? [])].filter(
+      (id) => id.startsWith("test-") || id.startsWith("cross-module-"),
+    );
+    testEngines.forEach((id) => globalThis.__openclawContextEngines.delete(id));
   });
 
   describe("singleton pattern via globalThis", () => {
@@ -83,6 +74,56 @@ describe("context-engine/registry", () => {
           globalThis as unknown as { __openclawContextEngines: Map<string, unknown> }
         ).__openclawContextEngines.has(testId),
       ).toBe(true);
+    });
+  });
+
+  describe("cross-module singleton persistence", () => {
+    it("persists registrations after module re-evaluation via vi.resetModules", async () => {
+      // 1. First import - register an engine
+      const { registerContextEngine, getContextEngineFactory } = await import("./registry.js");
+
+      const testId = `cross-module-test-${Date.now()}`;
+      const mockFactory = vi.fn().mockResolvedValue({ assemble: vi.fn() });
+
+      registerContextEngine(testId, mockFactory);
+
+      // Verify it's registered
+      expect(getContextEngineFactory(testId)).toBe(mockFactory);
+
+      // 2. Reset modules to simulate fresh chunk loading
+      vi.resetModules();
+
+      // 3. Re-import the module (simulates another bundled chunk)
+      const registry2 = await import("./registry.js");
+
+      // 4. The engine should STILL be accessible because globalThis persists
+      expect(registry2.getContextEngineFactory(testId)).toBe(mockFactory);
+
+      // 5. Verify it's using the same Map instance
+      expect(globalThis.__openclawContextEngines.get(testId)).toBe(mockFactory);
+
+      // Cleanup
+      globalThis.__openclawContextEngines.delete(testId);
+    });
+
+    it("new registrations after module reset are visible to both imports", async () => {
+      const testId = `cross-module-new-${Date.now()}`;
+
+      // Import, reset, re-import
+      await import("./registry.js");
+      vi.resetModules();
+      const { registerContextEngine, getContextEngineFactory } = await import("./registry.js");
+
+      // Register in "second" import
+      const mockFactory = vi.fn().mockResolvedValue({ assemble: vi.fn() });
+      registerContextEngine(testId, mockFactory);
+
+      // Should be accessible
+      expect(getContextEngineFactory(testId)).toBe(mockFactory);
+      expect(globalThis.__openclawContextEngines.get(testId)).toBe(mockFactory);
+
+      // Cleanup
+      globalThis.__openclawContextEngines.delete(testId);
     });
   });
 
