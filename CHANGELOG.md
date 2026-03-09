@@ -65,6 +65,8 @@ Docs: https://docs.openclaw.ai
 - Matrix/DM routing: add safer fallback detection for broken `m.direct` homeservers, honor explicit room bindings over DM classification, and preserve room-bound agent selection for Matrix DM rooms. (#19736) Thanks @derbronko.
 - Cron/Telegram announce delivery: route text-only announce jobs through the real outbound adapters after finalizing descendant output so plain Telegram targets no longer report `delivered: true` when no message actually reached Telegram. (#40575) thanks @obviyus.
 - Gateway/restart timeout recovery: exit non-zero when restart-triggered shutdown drains time out so launchd/systemd restart the gateway instead of treating the failed restart as a clean stop. Landed from contributor PR #40380 by @dsantoreis. Thanks @dsantoreis.
+- Gateway/config restart guard: validate config before service start/restart and keep post-SIGUSR1 startup failures from crashing the gateway process, reducing invalid-config restart loops and macOS permission loss. Landed from contributor PR #38699 by @lml2468. Thanks @lml2468.
+- Gateway/launchd respawn detection: treat `XPC_SERVICE_NAME` as a launchd supervision hint so macOS restarts exit cleanly under launchd instead of attempting detached self-respawn. Landed from contributor PR #20555 by @dimat. Thanks @dimat.
 - Cron/owner-only tools: pass trusted isolated cron runs into the embedded agent with owner context so `cron`/`gateway` tooling remains available after the owner-auth hardening narrowed direct-message ownership inference.
 
 ## 2026.3.7
