@@ -1,6 +1,18 @@
-import { parseFiniteNumber } from "../../../src/infra/parse-finite-number.js";
 import { extractHandleFromChatGuid, normalizeBlueBubblesHandle } from "./targets.js";
 import type { BlueBubblesAttachment } from "./types.js";
+
+function parseFiniteNumber(value: unknown): number | undefined {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return value;
+  }
+  if (typeof value === "string") {
+    const parsed = Number.parseFloat(value);
+    if (Number.isFinite(parsed)) {
+      return parsed;
+    }
+  }
+  return undefined;
+}
 
 function asRecord(value: unknown): Record<string, unknown> | null {
   return value && typeof value === "object" && !Array.isArray(value)

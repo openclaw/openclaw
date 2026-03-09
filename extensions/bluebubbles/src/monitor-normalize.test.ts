@@ -1,7 +1,14 @@
+import fs from "node:fs";
 import { describe, expect, it } from "vitest";
 import { normalizeWebhookMessage, normalizeWebhookReaction } from "./monitor-normalize.js";
 
 describe("normalizeWebhookMessage", () => {
+  it("keeps the normalizer self-contained for packaged plugin loads", () => {
+    const source = fs.readFileSync(new URL("./monitor-normalize.ts", import.meta.url), "utf8");
+
+    expect(source).not.toContain("../../../src/");
+  });
+
   it("falls back to DM chatGuid handle when sender handle is missing", () => {
     const result = normalizeWebhookMessage({
       type: "new-message",
