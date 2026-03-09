@@ -383,6 +383,58 @@ describe("preflightDiscordMessage", () => {
     expect(result?.shouldRequireMention).toBe(false);
   });
 
+  it("drops all bot messages when allowBots=false (off)", async () => {
+    const channelId = "channel-bots-off";
+    const guildId = "guild-bots-off";
+    const message = createMessage({
+      id: "m-bots-off",
+      channelId,
+      content: "hello from a bot",
+      author: {
+        id: "some-bot",
+        bot: true,
+        username: "SomeBot",
+      },
+    });
+
+    const result = await runGuildPreflight({
+      channelId,
+      guildId,
+      message,
+      discordConfig: {
+        allowBots: false,
+      } as DiscordConfig,
+    });
+
+    expect(result).toBeNull();
+  });
+
+  it("drops own messages from the bot user (self-loop guard)", async () => {
+    const channelId = "channel-self-loop";
+    const guildId = "guild-self-loop";
+    const message = createMessage({
+      id: "m-self-1",
+      channelId,
+      content: "hello i am the bot",
+      author: {
+        id: "openclaw-bot",
+        bot: true,
+        username: "OpenClaw",
+      },
+    });
+
+    const result = await runGuildPreflight({
+      channelId,
+      guildId,
+      message,
+      discordConfig: {
+        allowBots: true,
+      } as DiscordConfig,
+    });
+
+    expect(result).toBeNull();
+  });
+
   it("drops bot messages without mention when allowBots=mentions", async () => {
     const channelId = "channel-bot-mentions-off";
     const guildId = "guild-bot-mentions-off";

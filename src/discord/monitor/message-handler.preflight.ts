@@ -159,6 +159,7 @@ export async function preflightDiscordMessage(
     allowBotsSetting === "mentions" ? "mentions" : allowBotsSetting === true ? "all" : "off";
   if (params.botUserId && author.id === params.botUserId) {
     // Always ignore own messages to prevent self-reply loops
+    logVerbose("discord: drop own message (self-loop guard)");
     return null;
   }
 
@@ -187,6 +188,7 @@ export async function preflightDiscordMessage(
 
   if (author.bot) {
     if (allowBotsMode === "off" && !sender.isPluralKit) {
+      logDebug(`[discord-preflight] drop: bot message (allowBots=false) from ${author.id}`);
       logVerbose("discord: drop bot message (allowBots=false)");
       return null;
     }
