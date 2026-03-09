@@ -25,7 +25,7 @@ export async function shouldInjectBootstrapContext(sessionFile: string): Promise
         return false;
       }
     } catch {
-      // Fall back to injecting bootstrap context if the transcript cannot be parsed cleanly yet.
+      // Fall back to injecting bootstrap context if the transcript cannot be parsed cleanly.
       return true;
     }
   }
