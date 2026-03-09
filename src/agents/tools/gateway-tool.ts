@@ -268,7 +268,15 @@ export function createGatewayTool(opts?: {
           explicitSessionKey != null &&
           rpcCanonicalizeTarget(explicitSessionKey) !==
             (rpcOwnKey ? rpcCanonicalizeOwn(rpcOwnKey) : undefined);
-        const deliveryContext = isTargetingOtherSession ? undefined : liveDeliveryContextForRpc;
+        // Also omit when the call targets a remote gateway. The remote server's
+        // extractDeliveryInfo(sessionKey) is the authoritative source for that
+        // session's delivery route. Forwarding the local agent run's deliveryContext
+        // would write a sentinel with the wrong chat destination on the remote host,
+        // causing post-restart wake messages to be sent to the caller's chat instead
+        // of the session on the remote gateway. See #18612.
+        const isRemoteGateway = Boolean(gatewayOpts.gatewayUrl?.trim());
+        const deliveryContext =
+          isTargetingOtherSession || isRemoteGateway ? undefined : liveDeliveryContextForRpc;
         return { sessionKey, note, restartDelayMs, deliveryContext };
       };
 
