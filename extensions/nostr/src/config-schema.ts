@@ -4,7 +4,14 @@ import { z } from "zod";
 const allowFromEntry = z.union([z.string(), z.number()]);
 
 /**
- * Validates Nostr relay WebSocket URLs (wss:// or ws://).
+ * Hostnames where plaintext ws:// is permitted (local development only).
+ */
+const LOCAL_WS_HOSTS = new Set(["localhost", "127.0.0.1", "[::1]"]);
+
+/**
+ * Validates Nostr relay WebSocket URLs.
+ * wss:// is accepted for any host; ws:// is restricted to localhost/loopback
+ * to prevent accidental cleartext connections to remote relays.
  * Rejects http(s), javascript, data, file, and other non-WebSocket protocols.
  */
 const safeRelayUrlSchema = z
@@ -14,12 +21,16 @@ const safeRelayUrlSchema = z
     (url) => {
       try {
         const parsed = new URL(url);
-        return parsed.protocol === "wss:" || parsed.protocol === "ws:";
+        if (parsed.protocol === "wss:") return true;
+        if (parsed.protocol === "ws:") {
+          return LOCAL_WS_HOSTS.has(parsed.hostname);
+        }
+        return false;
       } catch {
         return false;
       }
     },
-    { message: "Relay URL must use wss:// or ws:// protocol" },
+    { message: "Relay URL must use wss://, or ws:// for localhost only" },
   );
 
 /**

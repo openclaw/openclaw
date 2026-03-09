@@ -183,11 +183,23 @@ describe("NostrConfigSchema relay URL validation", () => {
     expect(result.success).toBe(true);
   });
 
-  it("accepts ws:// relay URLs", () => {
+  it("accepts ws:// relay URLs for localhost only", () => {
+    expect(
+      NostrConfigSchema.safeParse({ relays: ["ws://localhost:7777"] }).success,
+    ).toBe(true);
+    expect(
+      NostrConfigSchema.safeParse({ relays: ["ws://127.0.0.1:7777"] }).success,
+    ).toBe(true);
+    expect(
+      NostrConfigSchema.safeParse({ relays: ["ws://[::1]:7777"] }).success,
+    ).toBe(true);
+  });
+
+  it("rejects ws:// relay URLs for non-localhost hosts", () => {
     const result = NostrConfigSchema.safeParse({
-      relays: ["ws://localhost:7777"],
+      relays: ["ws://remote-relay.com:7777"],
     });
-    expect(result.success).toBe(true);
+    expect(result.success).toBe(false);
   });
 
   it("rejects https:// relay URLs", () => {
