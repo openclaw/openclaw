@@ -148,7 +148,7 @@ function unwrapUnionIssue(issue: unknown): unknown {
         continue;
       }
       // Prefer unrecognized_keys (most actionable), then deeper paths
-      const score = innerPath.length * 10 + (innerRecord.code === "unrecognized_keys" ? 5 : 0);
+      const score = innerPath.length * 10 + (innerRecord.code === "unrecognized_keys" ? 20 : 0);
       if (score > bestScore) {
         bestScore = score;
         // Merge absolute outer path with relative inner path

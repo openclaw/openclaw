@@ -98,10 +98,10 @@ describe("config validation allowed-values metadata", () => {
       // Should surface a specific issue mentioning the unrecognized key "agent",
       // not just a generic "Invalid input" at bindings.0
       const issues = result.issues;
-      const hasFieldName = issues.some(
-        (entry) => entry.message.includes("agent") && entry.message.includes("nrecognized"),
-      );
-      expect(hasFieldName).toBe(true);
+      const issue = issues.find((entry) => entry.path === "bindings.0.acp");
+      expect(issue).toBeDefined();
+      expect(issue?.path).toBe("bindings.0.acp");
+      expect(issue?.message).toContain("agent");
     }
   });
 });
