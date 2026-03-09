@@ -60,10 +60,23 @@ export function resolveSpawnedWorkspaceInheritance(params: {
   config: OpenClawConfig;
   requesterSessionKey?: string;
   explicitWorkspaceDir?: string | null;
+  /** Target agent ID for sessions_spawn(agentId=...). When set, use its configured workspace if available. */
+  targetAgentId?: string;
 }): string | undefined {
   const explicit = normalizeOptionalText(params.explicitWorkspaceDir);
   if (explicit) {
     return explicit;
+  }
+  // If spawning to a specific target agent with a configured workspace, use that.
+  // This fixes #40825: sessions_spawn(agentId) should respect agent's configured workspace.
+  if (params.targetAgentId) {
+    const targetWorkspace = resolveAgentWorkspaceDir(
+      params.config,
+      normalizeAgentId(params.targetAgentId),
+    );
+    if (targetWorkspace) {
+      return targetWorkspace;
+    }
   }
   const requesterAgentId = params.requesterSessionKey
     ? parseAgentSessionKey(params.requesterSessionKey)?.agentId

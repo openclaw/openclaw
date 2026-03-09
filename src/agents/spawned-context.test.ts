@@ -61,6 +61,62 @@ describe("resolveSpawnedWorkspaceInheritance", () => {
     });
     expect(resolved).toBeUndefined();
   });
+
+  it("uses target agent's configured workspace when targetAgentId is set", () => {
+    const config = {
+      agents: {
+        list: [
+          { id: "main", workspace: "/home/user/main-ws" },
+          { id: "ct-manager", workspace: "/home/user/ct-manager-ws" },
+        ],
+      },
+    };
+    const resolved = resolveSpawnedWorkspaceInheritance({
+      config,
+      requesterSessionKey: "agent:main:subagent:parent",
+      explicitWorkspaceDir: undefined,
+      targetAgentId: "ct-manager",
+    });
+    expect(resolved).toBe("/home/user/ct-manager-ws");
+  });
+
+  it("prefers explicit workspace over target agent's workspace", () => {
+    const config = {
+      agents: {
+        list: [
+          { id: "main", workspace: "/home/user/main-ws" },
+          { id: "ct-manager", workspace: "/home/user/ct-manager-ws" },
+        ],
+      },
+    };
+    const resolved = resolveSpawnedWorkspaceInheritance({
+      config,
+      requesterSessionKey: "agent:main:subagent:parent",
+      explicitWorkspaceDir: "/tmp/explicit",
+      targetAgentId: "ct-manager",
+    });
+    expect(resolved).toBe("/tmp/explicit");
+  });
+
+  it("falls back to default workspace when target agent has no configured workspace", () => {
+    const config = {
+      agents: {
+        list: [
+          { id: "main", workspace: "/home/user/main-ws" },
+          { id: "ct-manager" }, // no workspace configured
+        ],
+      },
+    };
+    const resolved = resolveSpawnedWorkspaceInheritance({
+      config,
+      requesterSessionKey: "agent:main:subagent:parent",
+      explicitWorkspaceDir: undefined,
+      targetAgentId: "ct-manager",
+    });
+    // Falls back to default workspace for ct-manager since it has no workspace configured
+    // Note: This will be a state dir path like ~/.openclaw/workspace-ct-manager
+    expect(resolved).toMatch(/workspace-ct-manager$/);
+  });
 });
 
 describe("resolveIngressWorkspaceOverrideForSpawnedRun", () => {
