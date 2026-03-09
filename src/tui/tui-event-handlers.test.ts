@@ -576,10 +576,17 @@ describe("tui-event-handlers: handleSessionEvent", () => {
   };
 
   it("refreshes history on current-session external reset event", () => {
-    const { state, loadHistory, refreshSessionInfo, setActivityStatus, clearLocalRunIds, tui, handleSessionEvent } =
-      createSessionHarness({
-        state: { activeChatRunId: "run-active", historyLoaded: true },
-      });
+    const {
+      state,
+      loadHistory,
+      refreshSessionInfo,
+      setActivityStatus,
+      clearLocalRunIds,
+      tui,
+      handleSessionEvent,
+    } = createSessionHarness({
+      state: { activeChatRunId: "run-active", historyLoaded: true },
+    });
 
     const sessionEvt: SessionEvent = {
       type: "reset",
@@ -598,10 +605,17 @@ describe("tui-event-handlers: handleSessionEvent", () => {
   });
 
   it("ignores reset event for a different session", () => {
-    const { state, loadHistory, refreshSessionInfo, setActivityStatus, clearLocalRunIds, tui, handleSessionEvent } =
-      createSessionHarness({
-        state: { activeChatRunId: "run-active", currentSessionKey: "agent:main:main" },
-      });
+    const {
+      state,
+      loadHistory,
+      refreshSessionInfo,
+      setActivityStatus,
+      clearLocalRunIds,
+      tui,
+      handleSessionEvent,
+    } = createSessionHarness({
+      state: { activeChatRunId: "run-active", currentSessionKey: "agent:main:main" },
+    });
 
     const sessionEvt: SessionEvent = {
       type: "reset",
@@ -655,7 +669,12 @@ describe("tui-event-handlers: handleSessionEvent", () => {
     const staleToolEvt: AgentEvent = {
       runId: oldRunId,
       stream: "tool",
-      data: { phase: "start", toolCallId: "tc-stale", name: "exec", args: { command: "echo stale" } },
+      data: {
+        phase: "start",
+        toolCallId: "tc-stale",
+        name: "exec",
+        args: { command: "echo stale" },
+      },
     };
     handleAgentEvent(staleToolEvt);
 
