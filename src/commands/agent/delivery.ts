@@ -270,6 +270,20 @@ export async function deliverAgentCommandResult(params: {
         },
         deps: createOutboundSendDeps(deps),
       });
+      // Emit JSON envelope reflecting the fallback that was actually delivered
+      // so stdout matches the delivered content for machine consumers.
+      if (opts.json) {
+        runtime.log(
+          JSON.stringify(
+            buildOutboundResultEnvelope({
+              payloads: fallbackPayloadsJson,
+              meta: result.meta,
+            }),
+            null,
+            2,
+          ),
+        );
+      }
       return { payloads: fallbackPayloadsJson, meta: result.meta };
     }
     runtime.log(NORMALIZED_EMPTY_FALLBACK_TEXT);

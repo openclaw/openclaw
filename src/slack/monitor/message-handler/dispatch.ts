@@ -517,6 +517,12 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
     }
   }
 
+  // Clear draft preview before sending no-final fallback to avoid leaving stale
+  // partial content visible alongside the fallback status message.
+  if (sentEmptyFallback) {
+    await draftStream.clear();
+  }
+
   const anyReplyDelivered =
     queuedFinal || (counts.block ?? 0) > 0 || (counts.final ?? 0) > 0 || sentEmptyFallback;
 
