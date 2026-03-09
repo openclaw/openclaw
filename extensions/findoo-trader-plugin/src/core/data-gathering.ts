@@ -387,7 +387,12 @@ export function gatherStrategyLabData(deps: DataGatheringDeps) {
 // ── New gather functions for V2 dashboard tabs ──
 
 /** Gather Setting Tab data (exchanges, health, risk config, agent config, gates, notifications). */
-export function gatherSettingData(deps: DataGatheringDeps & { healthStore?: ExchangeHealthStore }) {
+export function gatherSettingData(
+  deps: DataGatheringDeps & {
+    healthStore?: ExchangeHealthStore;
+    pluginConfig?: Record<string, unknown>;
+  },
+) {
   const { registry, riskConfig, runtime, pluginEntries, healthStore } = deps;
 
   const exchanges = registry.listExchanges();
@@ -415,11 +420,23 @@ export function gatherSettingData(deps: DataGatheringDeps & { healthStore?: Exch
     l2l3: { minDays: 30, minSharpe: 1.5, maxDrawdown: -0.1, minWinRate: 0.5, minTrades: 50 },
   };
 
-  // Notification config (placeholder — no built-in notification service yet)
+  // Read real notification config from pluginConfig (falls back to env vars)
+  const nc = (deps.pluginConfig as Record<string, unknown> | undefined)?.notifications as
+    | Record<string, unknown>
+    | undefined;
+  const mask = (v?: string) => (v && v.length > 8 ? v.slice(0, 8) + "***" : v);
+  const tgChatId =
+    (nc?.telegramChatId as string | undefined) ?? process.env.FINDOO_TELEGRAM_CHAT_ID;
+  const tgBotToken =
+    (nc?.telegramBotToken as string | undefined) ??
+    process.env.FINDOO_TELEGRAM_BOT_TOKEN ??
+    process.env.TELEGRAM_BOT_TOKEN;
+  const dcWebhook = nc?.discordWebhookUrl as string | undefined;
+  const emailAddr = nc?.emailTo as string | undefined;
   const notifications: NotificationConfig = {
-    telegram: { enabled: false },
-    discord: { enabled: false },
-    email: { enabled: false },
+    telegram: { enabled: !!tgChatId, chatId: mask(tgChatId) },
+    discord: { enabled: !!dcWebhook, webhookUrl: mask(dcWebhook) },
+    email: { enabled: !!emailAddr, address: emailAddr },
   };
 
   const plugins = FINANCIAL_PLUGIN_IDS.map((id) => ({

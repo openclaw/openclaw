@@ -260,11 +260,13 @@
         <div class="panel-card fade-up d4" style="flex: 1; display: flex; flex-direction: column; min-height: 0">
           <div class="panel-card__head">
             <div class="panel-card__title">Backtest Results</div>
+            <button class="bt-compare-btn" id="btCompareBtn" style="display:none" onclick="ST.openCompare()">Compare Selected (<span id="btCompareCount">0</span>)</button>
           </div>
           <div style="flex: 1; overflow-y: auto; margin: 0 -12px; padding: 0 12px">
             <table class="fin-table">
               <thead>
                 <tr>
+                  <th style="width:28px"></th>
                   <th>Strategy</th>
                   <th style="text-align: right">Return</th>
                   <th style="text-align: right">Sharpe</th>
@@ -311,6 +313,25 @@
       <div class="botbar__sse" id="botSse"></div>
       <span class="botbar__ver">v0.4.0</span>
     </footer>
+
+    <!-- BACKTEST COMPARISON PANEL -->
+    <div class="modal-bg" id="btCompareModal">
+      <div class="bt-compare-panel">
+        <div class="bt-compare-panel__head">
+          <span class="bt-compare-panel__title">Backtest Comparison</span>
+          <button class="slideover__close" onclick="ST.closeCompare()">&times;</button>
+        </div>
+        <div class="bt-compare-panel__body">
+          <div class="bt-compare-panel__metrics">
+            <table class="fin-table" id="btCompareTable"></table>
+          </div>
+          <div class="bt-compare-panel__chart">
+            <div class="bt-compare-panel__chart-label">Equity Curves</div>
+            <canvas id="btCompareCanvas"></canvas>
+          </div>
+        </div>
+      </div>
+    </div>
 
     <!-- TOAST CONTAINER -->
     <div class="toast-container" id="toastContainer"></div>
@@ -385,6 +406,45 @@
       th.sort-desc::after { content: " \25BC"; font-size: 8px; opacity: 0.7; }
       .kc-meta { display: flex; align-items: center; gap: 4px; margin: 2px 0; }
       .kc-tf { font-size: 9px; }
+
+      /* ── Backtest Compare ── */
+      .bt-compare-btn {
+        background: var(--accent, #6c5ce7); color: #fff; border: none; border-radius: 4px;
+        padding: 4px 10px; font-size: 10px; font-weight: 600; cursor: pointer;
+        font-family: inherit; transition: opacity .15s;
+      }
+      .bt-compare-btn:hover { opacity: .85; }
+      .bt-cb { width: 14px; height: 14px; accent-color: var(--accent, #6c5ce7); cursor: pointer; margin: 0; vertical-align: middle; }
+      .bt-cb:disabled { opacity: .35; cursor: not-allowed; }
+
+      .bt-compare-panel {
+        background: var(--card, #1a1a2e); border: 1px solid var(--border, #2a2a4a);
+        border-radius: 10px; width: 92vw; max-width: 960px; max-height: 82vh;
+        display: flex; flex-direction: column; overflow: hidden;
+        box-shadow: 0 8px 32px rgba(0,0,0,.5);
+      }
+      .bt-compare-panel__head {
+        display: flex; justify-content: space-between; align-items: center;
+        padding: 14px 18px; border-bottom: 1px solid var(--border, #2a2a4a);
+      }
+      .bt-compare-panel__title { font-weight: 600; font-size: 13px; color: var(--text-hi, #e0e0e0); }
+      .bt-compare-panel__body {
+        display: flex; gap: 16px; padding: 16px 18px; overflow-y: auto; flex: 1; min-height: 0;
+      }
+      .bt-compare-panel__metrics { flex: 1; min-width: 0; overflow-x: auto; }
+      .bt-compare-panel__metrics .fin-table th,
+      .bt-compare-panel__metrics .fin-table td { font-size: 10px; padding: 5px 8px; white-space: nowrap; }
+      .bt-compare-panel__chart { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+      .bt-compare-panel__chart-label {
+        font-size: 10px; font-weight: 600; color: var(--text-dim, #888); margin-bottom: 6px; text-transform: uppercase; letter-spacing: .5px;
+      }
+      .bt-compare-panel__chart canvas { flex: 1; width: 100% !important; }
+
+      @media (max-width: 700px) {
+        .bt-compare-panel { width: 98vw; max-height: 90vh; }
+        .bt-compare-panel__body { flex-direction: column; }
+        .bt-compare-panel__metrics, .bt-compare-panel__chart { flex: none; width: 100%; }
+      }
     </style>
 
     <!-- JAVASCRIPT -->
@@ -484,6 +544,7 @@
           levelFilter: "all",
           sortCol: null,
           sortDir: "desc",
+          btSelected: [], // selected backtest indices for comparison (max 4)
         };
 
         // ── Performance: RAF debounce (Step 6) ──
@@ -985,20 +1046,26 @@
           var body = $("btBody");
           if (!backtests || !backtests.length) {
             body.innerHTML =
-              '<tr><td colspan="7" style="text-align:center;color:var(--text-dim);padding:16px">No backtest results</td></tr>';
+              '<tr><td colspan="8" style="text-align:center;color:var(--text-dim);padding:16px">No backtest results</td></tr>';
+            updateBtCompareBtn();
             return;
           }
+          var sel = state.btSelected;
           var html = "";
-          backtests.forEach(function (b) {
+          backtests.forEach(function (b, i) {
             var ret = b.totalReturn || b.returnPct || 0;
             var sharpe = b.sharpe || 0;
             var dd = b.maxDrawdown || 0;
             var win = b.winRate || 0;
             var pf = b.profitFactor || 0;
             var trades = b.totalTrades || b.tradeCount || 0;
+            var checked = sel.indexOf(i) !== -1;
+            var disabled = !checked && sel.length >= 4;
 
             html +=
               "<tr>" +
+              '<td style="text-align:center"><input type="checkbox" class="bt-cb" data-bt-idx="' + i + '"' +
+              (checked ? " checked" : "") + (disabled ? " disabled" : "") + ' /></td>' +
               '<td style="color:var(--text-hi)">' + esc(b.strategyName || b.strategyId || b.name || "") + "</td>" +
               '<td class="' + pnlClass(ret) + ' num" style="text-align:right;font-weight:600">' + fmtPct(ret) + "</td>" +
               '<td class="num" style="text-align:right">' + sharpe.toFixed(2) + "</td>" +
@@ -1009,6 +1076,14 @@
               "</tr>";
           });
           body.innerHTML = html;
+          updateBtCompareBtn();
+        }
+
+        function updateBtCompareBtn() {
+          var n = state.btSelected.length;
+          var btn = $("btCompareBtn");
+          $("btCompareCount").textContent = n;
+          btn.style.display = n >= 2 ? "" : "none";
         }
 
         // ── Render: Fitness Decay Monitor ──
@@ -1213,7 +1288,7 @@
         function onStrategyData(data) {
           if (data.pipeline) state.pipeline = data.pipeline;
           if (data.strategies) state.strategies = data.strategies;
-          if (data.backtests) state.backtests = data.backtests;
+          if (data.backtests) { state.backtests = data.backtests; state.btSelected = []; }
           if (data.decayData) state.decayData = data.decayData;
           if (data.events) state.events = data.events;
           scheduleRender();
@@ -1338,6 +1413,98 @@
                 toast("Approval failed: " + e.message, "error");
               });
           },
+          openCompare: function () {
+            var sel = state.btSelected;
+            if (sel.length < 2) return;
+            var items = sel.map(function (i) { return state.backtests[i]; }).filter(Boolean);
+            if (items.length < 2) return;
+
+            // Build metrics comparison table
+            var metricRows = [
+              { key: "totalReturn", label: "Total Return", fmt: function (v) { return fmtPct(v); }, cls: function (v) { return pnlClass(v); } },
+              { key: "sharpe", label: "Sharpe Ratio", fmt: function (v) { return v != null ? v.toFixed(2) : "--"; }, cls: function () { return "num"; } },
+              { key: "maxDrawdown", label: "Max Drawdown", fmt: function (v) { return fmtPct(v); }, cls: function () { return "loss num"; } },
+              { key: "winRate", label: "Win Rate", fmt: function (v) { return v != null ? v.toFixed(1) + "%" : "--"; }, cls: function () { return "num"; } },
+              { key: "totalTrades", label: "Total Trades", fmt: function (v) { return v != null ? String(v) : "--"; }, cls: function () { return "num"; } },
+              { key: "profitFactor", label: "Profit Factor", fmt: function (v) { return v != null ? v.toFixed(2) : "--"; }, cls: function () { return "num"; } },
+              { key: "sortino", label: "Sortino", fmt: function (v) { return v != null ? v.toFixed(2) : "--"; }, cls: function () { return "num"; } },
+            ];
+            var tbl = "<thead><tr><th>Metric</th>";
+            items.forEach(function (b) {
+              tbl += "<th>" + esc(b.strategyName || b.strategyId || b.name || "") + "</th>";
+            });
+            tbl += "</tr></thead><tbody>";
+            metricRows.forEach(function (m) {
+              // Find best value for highlighting
+              var vals = items.map(function (b) { return b[m.key] || b[m.key.replace("totalReturn", "returnPct")] || 0; });
+              var bestIdx = m.key === "maxDrawdown"
+                ? vals.reduce(function (bi, v, i) { return v > vals[bi] ? i : bi; }, 0)
+                : vals.reduce(function (bi, v, i) { return v > vals[bi] ? i : bi; }, 0);
+              tbl += "<tr><td style=\"color:var(--text-dim);font-weight:500\">" + m.label + "</td>";
+              items.forEach(function (b, i) {
+                var raw = b[m.key] != null ? b[m.key] : (b[m.key.replace("totalReturn", "returnPct")] || 0);
+                var best = i === bestIdx ? "font-weight:700;" : "";
+                tbl += '<td class="' + m.cls(raw) + '" style="text-align:right;' + best + '">' + m.fmt(raw) + "</td>";
+              });
+              tbl += "</tr>";
+            });
+            tbl += "</tbody>";
+            $("btCompareTable").innerHTML = tbl;
+
+            // Draw equity curve chart
+            var chartColors = ["#6c5ce7", "#00cec9", "#fdcb6e", "#e17055"];
+            var canvas = $("btCompareCanvas");
+            if (window._btCompareChart) { window._btCompareChart.destroy(); window._btCompareChart = null; }
+
+            var maxLen = 0;
+            items.forEach(function (b) {
+              var curve = b.equityCurve || [];
+              if (curve.length > maxLen) maxLen = curve.length;
+            });
+            var labels = [];
+            for (var d = 0; d < maxLen; d++) labels.push("D" + (d + 1));
+
+            var datasets = items.map(function (b, i) {
+              var curve = b.equityCurve || [];
+              // Normalize to percentage return from initial
+              var initial = curve[0] || 1;
+              var normalized = curve.map(function (v) { return ((v - initial) / initial) * 100; });
+              return {
+                label: b.strategyName || b.strategyId || b.name || "BT" + (i + 1),
+                data: normalized,
+                borderColor: chartColors[i % chartColors.length],
+                backgroundColor: "transparent",
+                borderWidth: 1.5,
+                pointRadius: 0,
+                tension: 0.3,
+              };
+            });
+
+            window._btCompareChart = new Chart(canvas, {
+              type: "line",
+              data: { labels: labels, datasets: datasets },
+              options: {
+                responsive: true, maintainAspectRatio: false,
+                plugins: {
+                  legend: { position: "bottom", labels: { color: "rgba(255,255,255,.6)", font: { size: 10 }, boxWidth: 12 } },
+                  tooltip: { mode: "index", intersect: false, callbacks: {
+                    label: function (ctx) { return ctx.dataset.label + ": " + ctx.parsed.y.toFixed(2) + "%"; }
+                  }},
+                },
+                scales: {
+                  x: { display: true, ticks: { color: "rgba(255,255,255,.3)", font: { size: 8 }, maxTicksLimit: 10 }, grid: { color: "rgba(255,255,255,.05)" } },
+                  y: { display: true, ticks: { color: "rgba(255,255,255,.3)", font: { size: 8 }, callback: function (v) { return v.toFixed(0) + "%"; } }, grid: { color: "rgba(255,255,255,.05)" } },
+                },
+                interaction: { mode: "nearest", axis: "x", intersect: false },
+              },
+            });
+
+            $("btCompareModal").classList.add("open");
+          },
+          closeCompare: function () {
+            $("btCompareModal").classList.remove("open");
+            if (window._btCompareChart) { window._btCompareChart.destroy(); window._btCompareChart = null; }
+          },
         };
 
         // ── Filter chips: Strategy Events ──
@@ -1445,11 +1612,33 @@
           }
         });
 
+        // ── Backtest checkbox delegation ──
+        document.addEventListener("change", function (e) {
+          if (!e.target.classList.contains("bt-cb")) return;
+          var idx = parseInt(e.target.dataset.btIdx, 10);
+          if (isNaN(idx)) return;
+          var sel = state.btSelected;
+          var pos = sel.indexOf(idx);
+          if (e.target.checked && pos === -1) {
+            if (sel.length >= 4) { e.target.checked = false; return; }
+            sel.push(idx);
+          } else if (!e.target.checked && pos !== -1) {
+            sel.splice(pos, 1);
+          }
+          // Re-render checkboxes to update disabled state
+          renderBacktests(state.backtests);
+        });
+
         // ── Slide-over backdrop close ──
         document.querySelectorAll(".slideover-backdrop").forEach(function (bg) {
           bg.addEventListener("click", function (e) {
             if (e.target === bg) bg.classList.remove("open");
           });
+        });
+
+        // ── Compare modal backdrop close ──
+        $("btCompareModal").addEventListener("click", function (e) {
+          if (e.target === $("btCompareModal")) ST.closeCompare();
         });
 
         // ── Emergency stop button ──

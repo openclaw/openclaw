@@ -80,6 +80,7 @@ export type RouteHandlerDeps = {
 
 export function registerHttpRoutes(deps: RouteHandlerDeps): void {
   const { api, gatherDeps, eventStore, healthStore, riskController, runtime, templates } = deps;
+  const pluginConfig = (api as { pluginConfig?: Record<string, unknown> }).pluginConfig;
 
   // ── Config JSON endpoint ──
   api.registerHttpRoute({
@@ -678,7 +679,7 @@ export function registerHttpRoutes(deps: RouteHandlerDeps): void {
     auth: "plugin",
     path: "/plugins/findoo-trader/dashboard/setting",
     handler: async (_req: unknown, res: HttpRes) => {
-      const data = gatherSettingData({ ...gatherDeps, healthStore });
+      const data = gatherSettingData({ ...gatherDeps, healthStore, pluginConfig });
       const html = renderUnifiedDashboard(templates.setting, data);
       if (!html) {
         jsonResponse(res, 200, data);
@@ -716,7 +717,7 @@ export function registerHttpRoutes(deps: RouteHandlerDeps): void {
 
     path: "/api/v1/finance/dashboard/setting",
     handler: async (_req: unknown, res: HttpRes) => {
-      jsonResponse(res, 200, gatherSettingData({ ...gatherDeps, healthStore }));
+      jsonResponse(res, 200, gatherSettingData({ ...gatherDeps, healthStore, pluginConfig }));
     },
   });
 
