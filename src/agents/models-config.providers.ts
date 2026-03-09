@@ -550,6 +550,13 @@ const PROFILE_IMPLICIT_PROVIDER_LOADERS: ImplicitProviderLoader[] = [
   // key with CHUTES_OAUTH_MARKER (PROFILE loaders run after SIMPLE loaders and
   // mergeImplicitProviderSet unconditionally overwrites).
   async (ctx) => {
+    // Preserve API-key precedence in mixed-profile stores: if any API-key-like
+    // source currently resolves for Chutes, keep the SIMPLE loader output and
+    // skip the OAuth marker path.
+    if (ctx.resolveProviderApiKey("chutes").apiKey) {
+      return undefined;
+    }
+
     const hasOAuthProfile = listProfilesForProvider(ctx.authStore, "chutes").some(
       (id) => ctx.authStore.profiles[id]?.type === "oauth",
     );

@@ -482,6 +482,7 @@ interface OpenAIListModelsResponse {
 }
 
 const CACHE_TTL = 5 * 60 * 1000; // 5 minutes
+const CACHE_MAX_ENTRIES = 100;
 
 interface CacheEntry {
   models: ModelDefinitionConfig[];
@@ -498,12 +499,30 @@ export function clearChutesModelCache() {
   modelCache.clear();
 }
 
+function pruneExpiredCacheEntries(now: number = Date.now()): void {
+  for (const [key, entry] of modelCache.entries()) {
+    if (now - entry.time >= CACHE_TTL) {
+      modelCache.delete(key);
+    }
+  }
+}
+
 /** Cache the result for the given token key and return it. */
 function cacheAndReturn(
   tokenKey: string,
   models: ModelDefinitionConfig[],
 ): ModelDefinitionConfig[] {
-  modelCache.set(tokenKey, { models, time: Date.now() });
+  const now = Date.now();
+  pruneExpiredCacheEntries(now);
+
+  if (!modelCache.has(tokenKey) && modelCache.size >= CACHE_MAX_ENTRIES) {
+    const oldest = modelCache.keys().next();
+    if (!oldest.done) {
+      modelCache.delete(oldest.value);
+    }
+  }
+
+  modelCache.set(tokenKey, { models, time: now });
   return models;
 }
 
@@ -515,8 +534,10 @@ export async function discoverChutesModels(accessToken?: string): Promise<ModelD
   const trimmedKey = accessToken?.trim() ?? "";
 
   // Return cached result for this token if still within TTL
+  const now = Date.now();
+  pruneExpiredCacheEntries(now);
   const cached = modelCache.get(trimmedKey);
-  if (cached && Date.now() - cached.time < CACHE_TTL) {
+  if (cached) {
     return cached.models;
   }
 

@@ -212,4 +212,109 @@ describe("chutes-models", () => {
       vi.unstubAllGlobals();
     }
   });
+
+  it("evicts oldest token entries when cache reaches max size", async () => {
+    const oldNodeEnv = process.env.NODE_ENV;
+    const oldVitest = process.env.VITEST;
+    delete process.env.NODE_ENV;
+    delete process.env.VITEST;
+
+    const mockFetch = vi
+      .fn()
+      .mockImplementation((_url, init?: { headers?: Record<string, string> }) => {
+        const auth = init?.headers?.Authorization ?? "";
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            data: [{ id: auth ? `${auth}-model` : "public-model" }],
+          }),
+        });
+      });
+    vi.stubGlobal("fetch", mockFetch);
+
+    try {
+      for (let i = 0; i < 150; i += 1) {
+        await discoverChutesModels(`cache-token-${i}`);
+      }
+
+      // The oldest key should have been evicted once we exceed the cap.
+      await discoverChutesModels("cache-token-0");
+      expect(mockFetch).toHaveBeenCalledTimes(151);
+    } finally {
+      process.env.NODE_ENV = oldNodeEnv;
+      process.env.VITEST = oldVitest;
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("prunes expired token cache entries during subsequent discovery", async () => {
+    const oldNodeEnv = process.env.NODE_ENV;
+    const oldVitest = process.env.VITEST;
+    delete process.env.NODE_ENV;
+    delete process.env.VITEST;
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-03-01T00:00:00.000Z"));
+
+    const mockFetch = vi
+      .fn()
+      .mockImplementation((_url, init?: { headers?: Record<string, string> }) => {
+        const auth = init?.headers?.Authorization ?? "";
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            data: [{ id: auth ? `${auth}-model` : "public-model" }],
+          }),
+        });
+      });
+    vi.stubGlobal("fetch", mockFetch);
+
+    try {
+      await discoverChutesModels("token-a");
+      vi.advanceTimersByTime(5 * 60 * 1000 + 1);
+      await discoverChutesModels("token-b");
+      await discoverChutesModels("token-a");
+      expect(mockFetch).toHaveBeenCalledTimes(3);
+    } finally {
+      process.env.NODE_ENV = oldNodeEnv;
+      process.env.VITEST = oldVitest;
+      vi.unstubAllGlobals();
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not cache 401 fallback under the failed token key", async () => {
+    const oldNodeEnv = process.env.NODE_ENV;
+    const oldVitest = process.env.VITEST;
+    delete process.env.NODE_ENV;
+    delete process.env.VITEST;
+
+    const mockFetch = vi
+      .fn()
+      .mockImplementation((_url, init?: { headers?: Record<string, string> }) => {
+        if (init?.headers?.Authorization === "Bearer failed-token") {
+          return Promise.resolve({
+            ok: false,
+            status: 401,
+          });
+        }
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            data: [{ id: "public/model" }],
+          }),
+        });
+      });
+    vi.stubGlobal("fetch", mockFetch);
+
+    try {
+      await discoverChutesModels("failed-token");
+      await discoverChutesModels("failed-token");
+      // Two calls each perform: authenticated attempt (401) + public fallback.
+      expect(mockFetch).toHaveBeenCalledTimes(4);
+    } finally {
+      process.env.NODE_ENV = oldNodeEnv;
+      process.env.VITEST = oldVitest;
+      vi.unstubAllGlobals();
+    }
+  });
 });
