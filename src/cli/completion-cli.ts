@@ -80,7 +80,8 @@ function escapeZshDoubleQuoted(value: string): string {
 }
 
 function escapeZshSingleQuotedValue(value: string): string {
-  return escapeZshDoubleQuoted(value).replace(/'/g, "\\'");
+  // In zsh single-quoted strings, apostrophes must be encoded as: '\''.
+  return escapeZshDoubleQuoted(value).replace(/'/g, "'\\''");
 }
 
 function buildZshOptionSpec(flag: string, exclusiveFlags: string[], desc: string): string {

@@ -43,6 +43,16 @@ describe("generateZshCompletion", () => {
     expect(script).not.toContain("{--safe,-s}");
   });
 
+  it("escapes apostrophes in zsh single-quoted subcommand specs", () => {
+    const program = new Command();
+    program.name("openclaw");
+    program.command("browser").description("Manage OpenClaw's browser sessions");
+
+    const script = generateZshCompletion(program);
+
+    expect(script).toContain("'browser[Manage OpenClaw'\\''s browser sessions]'");
+  });
+
   it("rejects unsafe option flags before emitting zsh code", () => {
     const program = new Command();
     program.name("openclaw");
