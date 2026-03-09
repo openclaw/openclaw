@@ -193,28 +193,54 @@ async function downloadGraphHostedContent(params: {
 
   const out: MSTeamsInboundMedia[] = [];
   for (const item of hosted.items) {
+    let buffer: Buffer | undefined;
+    let itemContentType = item.contentType ?? undefined;
     const contentBytes = typeof item.contentBytes === "string" ? item.contentBytes : "";
-    if (!contentBytes) {
+    if (contentBytes) {
+      try {
+        buffer = Buffer.from(contentBytes, "base64");
+      } catch {
+        continue;
+      }
+    } else if (item.id) {
+      // Graph API does not inline contentBytes in the collection response.
+      // Fetch the actual bytes via the /$value endpoint instead.
+      const valueUrl = `${params.messageUrl}/hostedContents/${encodeURIComponent(item.id)}/$value`;
+      const fetchFn = params.fetchFn ?? fetch;
+      const { response: valResp, release: valRelease } = await fetchWithSsrFGuard({
+        url: valueUrl,
+        fetchImpl: fetchFn,
+        init: { headers: { Authorization: `Bearer ${params.accessToken}` } },
+        policy: params.ssrfPolicy,
+        auditContext: "msteams.graph.hostedcontent.value",
+      });
+      try {
+        if (!valResp.ok) {
+          continue;
+        }
+        const ct = valResp.headers.get("content-type");
+        if (ct) itemContentType = ct;
+        buffer = Buffer.from(await valResp.arrayBuffer());
+      } catch {
+        continue;
+      } finally {
+        await valRelease();
+      }
+    } else {
       continue;
     }
-    let buffer: Buffer;
-    try {
-      buffer = Buffer.from(contentBytes, "base64");
-    } catch {
-      continue;
-    }
-    if (buffer.byteLength > params.maxBytes) {
+    if (!buffer || buffer.byteLength > params.maxBytes) {
       continue;
     }
     const mime = await getMSTeamsRuntime().media.detectMime({
       buffer,
-      headerMime: item.contentType ?? undefined,
+      headerMime: itemContentType,
     });
     // Download any file type, not just images
     try {
       const saved = await getMSTeamsRuntime().channel.media.saveMediaBuffer(
         buffer,
-        mime ?? item.contentType ?? undefined,
+        mime ?? itemContentType ?? undefined,
         "inbound",
         params.maxBytes,
       );
