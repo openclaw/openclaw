@@ -443,14 +443,15 @@ function loadSkillEntries(
   };
 
   const managedSkillsDir = opts?.managedSkillsDir ?? path.join(CONFIG_DIR, "skills");
-  const workspaceSkillsDir = path.resolve(workspaceDir, "skills");
+  const resolvedWorkspaceDir = resolveUserPath(workspaceDir);
+  const workspaceSkillsDir = path.resolve(resolvedWorkspaceDir, "skills");
   const bundledSkillsDir = opts?.bundledSkillsDir ?? resolveBundledSkillsDir();
   const extraDirsRaw = opts?.config?.skills?.load?.extraDirs ?? [];
   const extraDirs = extraDirsRaw
     .map((d) => (typeof d === "string" ? d.trim() : ""))
     .filter(Boolean);
   const pluginSkillDirs = resolvePluginSkillDirs({
-    workspaceDir,
+    workspaceDir: resolvedWorkspaceDir,
     config: opts?.config,
   });
   const mergedExtraDirs = [...extraDirs, ...pluginSkillDirs];
@@ -477,7 +478,7 @@ function loadSkillEntries(
     dir: personalAgentsSkillsDir,
     source: "agents-skills-personal",
   });
-  const projectAgentsSkillsDir = path.resolve(workspaceDir, ".agents", "skills");
+  const projectAgentsSkillsDir = path.resolve(resolvedWorkspaceDir, ".agents", "skills");
   const projectAgentsSkills = loadSkills({
     dir: projectAgentsSkillsDir,
     source: "agents-skills-project",
