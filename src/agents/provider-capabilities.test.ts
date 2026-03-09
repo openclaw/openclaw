@@ -31,8 +31,8 @@ describe("resolveProviderCapabilities", () => {
       resolveProviderCapabilities("kimi-code"),
     );
     expect(resolveProviderCapabilities("kimi-code")).toEqual({
-      anthropicToolSchemaMode: "openai-functions",
-      anthropicToolChoiceMode: "openai-string-modes",
+      anthropicToolSchemaMode: "native",
+      anthropicToolChoiceMode: "native",
       providerFamily: "default",
       preserveAnthropicThinkingSignatures: false,
       openAiCompatTurnValidation: true,
@@ -66,9 +66,9 @@ describe("resolveProviderCapabilities", () => {
     expect(resolveTranscriptToolCallIdMode("mistral", "mistral-large-latest")).toBe("strict9");
   });
 
-  it("treats kimi aliases as anthropic tool payload compatibility providers", () => {
-    expect(requiresOpenAiCompatibleAnthropicToolPayload("kimi-coding")).toBe(true);
-    expect(requiresOpenAiCompatibleAnthropicToolPayload("kimi-code")).toBe(true);
+  it("treats kimi aliases as native anthropic tool payload providers", () => {
+    expect(requiresOpenAiCompatibleAnthropicToolPayload("kimi-coding")).toBe(false);
+    expect(requiresOpenAiCompatibleAnthropicToolPayload("kimi-code")).toBe(false);
     expect(requiresOpenAiCompatibleAnthropicToolPayload("anthropic")).toBe(false);
   });
 
