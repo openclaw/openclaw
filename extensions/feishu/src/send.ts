@@ -258,14 +258,21 @@ export async function sendMessageFeishu(
   const { content, msgType } = buildFeishuPostMessagePayload({ messageText });
 
   if (replyToMessageId) {
-    const response = await client.im.message.reply({
-      path: { message_id: replyToMessageId },
-      data: {
-        content,
-        msg_type: msgType,
-        ...(replyInThread ? { reply_in_thread: true } : {}),
-      },
-    });
+    let response;
+    try {
+      response = await client.im.message.reply({
+        path: { message_id: replyToMessageId },
+        data: {
+          content,
+          msg_type: msgType,
+          ...(replyInThread ? { reply_in_thread: true } : {}),
+        },
+      });
+    } catch (err) {
+      if (isCrossAppError(err)) throwCrossAppError(receiveId);
+      throw err;
+    }
+    if (isCrossAppResponse(response)) throwCrossAppError(receiveId);
     if (shouldFallbackFromReplyTarget(response)) {
       let fallback;
       try {
@@ -324,14 +331,21 @@ export async function sendCardFeishu(params: SendFeishuCardParams): Promise<Feis
   const content = JSON.stringify(card);
 
   if (replyToMessageId) {
-    const response = await client.im.message.reply({
-      path: { message_id: replyToMessageId },
-      data: {
-        content,
-        msg_type: "interactive",
-        ...(replyInThread ? { reply_in_thread: true } : {}),
-      },
-    });
+    let response;
+    try {
+      response = await client.im.message.reply({
+        path: { message_id: replyToMessageId },
+        data: {
+          content,
+          msg_type: "interactive",
+          ...(replyInThread ? { reply_in_thread: true } : {}),
+        },
+      });
+    } catch (err) {
+      if (isCrossAppError(err)) throwCrossAppError(receiveId);
+      throw err;
+    }
+    if (isCrossAppResponse(response)) throwCrossAppError(receiveId);
     if (shouldFallbackFromReplyTarget(response)) {
       let fallback;
       try {

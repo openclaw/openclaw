@@ -47,7 +47,7 @@ export function isCrossAppError(error: unknown): boolean {
 
   if (error instanceof Error) {
     const msg = error.message ?? "";
-    if (msg.includes("cross app") || msg.includes("99992361")) {
+    if (msg.includes("open_id cross app") || msg.includes("99992361")) {
       return true;
     }
   }
