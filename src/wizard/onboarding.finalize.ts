@@ -184,7 +184,6 @@ export async function finalizeOnboardingWizard(
             {
               env: process.env,
               port: settings.port,
-              token: tokenResolution.token,
               runtime: daemonRuntime,
               warn: (message, title) => prompter.note(message, title),
               config: nextConfig,
@@ -351,7 +350,7 @@ export async function finalizeOnboardingWizard(
         "Stored in: ~/.openclaw/openclaw.json (gateway.auth.token) or OPENCLAW_GATEWAY_TOKEN.",
         `View token: ${formatCliCommand("openclaw config get gateway.auth.token")}`,
         `Generate token: ${formatCliCommand("openclaw doctor --generate-gateway-token")}`,
-        "Web UI stores a copy in this browser's localStorage (openclaw.control.settings.v1).",
+        "Web UI keeps dashboard URL tokens in memory for the current tab and strips them from the URL after load.",
         `Open the dashboard anytime: ${formatCliCommand("openclaw dashboard --no-open")}`,
         "If prompted: paste the token into Control UI settings (or use the tokenized dashboard URL).",
       ].join("\n"),

@@ -9,6 +9,7 @@ const FAILURE_REASON_PRIORITY: AuthProfileFailureReason[] = [
   "billing",
   "format",
   "model_not_found",
+  "overloaded",
   "timeout",
   "rate_limit",
   "unknown",
@@ -19,7 +20,8 @@ const FAILURE_REASON_ORDER = new Map<AuthProfileFailureReason, number>(
 );
 
 function isAuthCooldownBypassedForProvider(provider: string | undefined): boolean {
-  return normalizeProviderId(provider ?? "") === "openrouter";
+  const normalized = normalizeProviderId(provider ?? "");
+  return normalized === "openrouter" || normalized === "kilocode";
 }
 
 export function resolveProfileUnusableUntil(
@@ -35,7 +37,7 @@ export function resolveProfileUnusableUntil(
 }
 
 /**
- * Check if a profile is currently in cooldown (due to rate limiting or errors).
+ * Check if a profile is currently in cooldown (due to rate limits, overload, or other transient failures).
  */
 export function isProfileInCooldown(
   store: AuthProfileStore,
@@ -398,9 +400,19 @@ function computeNextProfileUsageStats(params: {
     params.existing.lastFailureAt > 0 &&
     params.now - params.existing.lastFailureAt > windowMs;
 
-  const baseErrorCount = windowExpired ? 0 : (params.existing.errorCount ?? 0);
+  // If the previous cooldown has already expired, reset error counters so the
+  // profile gets a fresh backoff window. clearExpiredCooldowns() does this
+  // in-memory during profile ordering, but the on-disk state may still carry
+  // the old counters when the lock-based updater reads a fresh store. Without
+  // this check, stale error counts from an expired cooldown cause the next
+  // failure to escalate to a much longer cooldown (e.g. 1 min → 25 min).
+  const unusableUntil = resolveProfileUnusableUntil(params.existing);
+  const previousCooldownExpired = typeof unusableUntil === "number" && params.now >= unusableUntil;
+
+  const shouldResetCounters = windowExpired || previousCooldownExpired;
+  const baseErrorCount = shouldResetCounters ? 0 : (params.existing.errorCount ?? 0);
   const nextErrorCount = baseErrorCount + 1;
-  const failureCounts = windowExpired ? {} : { ...params.existing.failureCounts };
+  const failureCounts = shouldResetCounters ? {} : { ...params.existing.failureCounts };
   failureCounts[params.reason] = (failureCounts[params.reason] ?? 0) + 1;
 
   const updatedStats: ProfileUsageStats = {
@@ -508,7 +520,7 @@ export async function markAuthProfileFailure(params: {
 }
 
 /**
- * Mark a profile as failed/rate-limited. Applies exponential backoff cooldown.
+ * Mark a profile as transiently failed. Applies exponential backoff cooldown.
  * Cooldown times: 1min, 5min, 25min, max 1 hour.
  * Uses store lock to avoid overwriting concurrent usage updates.
  */

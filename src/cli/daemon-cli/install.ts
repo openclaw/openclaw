@@ -4,9 +4,10 @@ import {
   isGatewayDaemonRuntime,
 } from "../../commands/daemon-runtime.js";
 import { resolveGatewayInstallToken } from "../../commands/gateway-install-token.js";
-import { loadConfig, resolveGatewayPort } from "../../config/config.js";
+import { readBestEffortConfig, resolveGatewayPort } from "../../config/config.js";
 import { resolveIsNixMode } from "../../config/paths.js";
 import { resolveGatewayService } from "../../daemon/service.js";
+import { isNonFatalSystemdInstallProbeError } from "../../daemon/systemd.js";
 import { defaultRuntime } from "../../runtime.js";
 import { formatCliCommand } from "../command-format.js";
 import {
@@ -26,7 +27,7 @@ export async function runDaemonInstall(opts: DaemonInstallOptions) {
     return;
   }
 
-  const cfg = loadConfig();
+  const cfg = await readBestEffortConfig();
   const portOverride = parsePort(opts.port);
   if (opts.port !== undefined && portOverride === null) {
     fail("Invalid port");
@@ -48,8 +49,12 @@ export async function runDaemonInstall(opts: DaemonInstallOptions) {
   try {
     loaded = await service.isLoaded({ env: process.env });
   } catch (err) {
-    fail(`Gateway service check failed: ${String(err)}`);
-    return;
+    if (isNonFatalSystemdInstallProbeError(err)) {
+      loaded = false;
+    } else {
+      fail(`Gateway service check failed: ${String(err)}`);
+      return;
+    }
   }
   if (loaded) {
     if (!opts.force) {
@@ -91,7 +96,6 @@ export async function runDaemonInstall(opts: DaemonInstallOptions) {
   const { programArguments, workingDirectory, environment } = await buildGatewayInstallPlan({
     env: process.env,
     port,
-    token: tokenResolution.token,
     runtime: runtimeRaw,
     warn: (message) => {
       if (json) {

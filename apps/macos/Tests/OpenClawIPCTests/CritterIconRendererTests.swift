@@ -2,10 +2,9 @@ import AppKit
 import Testing
 @testable import OpenClaw
 
-@Suite
 @MainActor
 struct CritterIconRendererTests {
-    @Test func makeIconRendersExpectedSize() {
+    @Test func `make icon renders expected size`() {
         let image = CritterIconRenderer.makeIcon(
             blink: 0.25,
             legWiggle: 0.5,
@@ -19,7 +18,7 @@ struct CritterIconRendererTests {
         #expect(image.tiffRepresentation != nil)
     }
 
-    @Test func makeIconRendersWithBadge() {
+    @Test func `make icon renders with badge`() {
         let image = CritterIconRenderer.makeIcon(
             blink: 0,
             legWiggle: 0,
@@ -31,7 +30,7 @@ struct CritterIconRendererTests {
         #expect(image.tiffRepresentation != nil)
     }
 
-    @Test func critterStatusLabelExercisesHelpers() async {
+    @Test func `critter status label exercises helpers`() async {
         await CritterStatusLabel.exerciseForTesting()
     }
 }

@@ -140,7 +140,7 @@ function createConfig(port: number): OpenClawConfig {
       msteams: {
         enabled: true,
         appId: "app-id",
-        appPassword: "app-password",
+        appPassword: "app-password", // pragma: allowlist secret
         tenantId: "tenant-id",
         webhook: {
           port,

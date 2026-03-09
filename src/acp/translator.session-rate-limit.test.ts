@@ -2,6 +2,7 @@ import type {
   LoadSessionRequest,
   NewSessionRequest,
   PromptRequest,
+  SetSessionModeRequest,
 } from "@agentclientprotocol/sdk";
 import { describe, expect, it, vi } from "vitest";
 import type { GatewayClient } from "../gateway/client.js";
@@ -36,6 +37,14 @@ function createPromptRequest(
     prompt: [{ type: "text", text }],
     _meta: meta,
   } as unknown as PromptRequest;
+}
+
+function createSetSessionModeRequest(sessionId: string, modeId: string): SetSessionModeRequest {
+  return {
+    sessionId,
+    modeId,
+    _meta: {},
+  } as unknown as SetSessionModeRequest;
 }
 
 async function expectOversizedPromptRejected(params: { sessionId: string; text: string }) {
@@ -92,6 +101,71 @@ describe("acp session creation rate limit", () => {
     await expect(agent.loadSession(createLoadSessionRequest("new-session"))).rejects.toThrow(
       /session creation rate limit exceeded/i,
     );
+
+    sessionStore.clearAllSessionsForTest();
+  });
+});
+
+describe("acp unsupported bridge session setup", () => {
+  it("rejects per-session MCP servers on newSession", async () => {
+    const sessionStore = createInMemorySessionStore();
+    const connection = createAcpConnection();
+    const sessionUpdate = vi.spyOn(connection, "sessionUpdate");
+    const agent = new AcpGatewayAgent(connection, createAcpGateway(), {
+      sessionStore,
+    });
+
+    await expect(
+      agent.newSession({
+        ...createNewSessionRequest(),
+        mcpServers: [{ name: "docs", command: "mcp-docs" }] as never[],
+      }),
+    ).rejects.toThrow(/does not support per-session MCP servers/i);
+
+    expect(sessionStore.hasSession("docs-session")).toBe(false);
+    expect(sessionUpdate).not.toHaveBeenCalled();
+    sessionStore.clearAllSessionsForTest();
+  });
+
+  it("rejects per-session MCP servers on loadSession", async () => {
+    const sessionStore = createInMemorySessionStore();
+    const connection = createAcpConnection();
+    const sessionUpdate = vi.spyOn(connection, "sessionUpdate");
+    const agent = new AcpGatewayAgent(connection, createAcpGateway(), {
+      sessionStore,
+    });
+
+    await expect(
+      agent.loadSession({
+        ...createLoadSessionRequest("docs-session"),
+        mcpServers: [{ name: "docs", command: "mcp-docs" }] as never[],
+      }),
+    ).rejects.toThrow(/does not support per-session MCP servers/i);
+
+    expect(sessionStore.hasSession("docs-session")).toBe(false);
+    expect(sessionUpdate).not.toHaveBeenCalled();
+    sessionStore.clearAllSessionsForTest();
+  });
+});
+
+describe("acp setSessionMode bridge behavior", () => {
+  it("surfaces gateway mode patch failures instead of succeeding silently", async () => {
+    const sessionStore = createInMemorySessionStore();
+    const request = vi.fn(async (method: string) => {
+      if (method === "sessions.patch") {
+        throw new Error("gateway rejected mode");
+      }
+      return { ok: true };
+    }) as GatewayClient["request"];
+    const agent = new AcpGatewayAgent(createAcpConnection(), createAcpGateway(request), {
+      sessionStore,
+    });
+
+    await agent.loadSession(createLoadSessionRequest("mode-session"));
+
+    await expect(
+      agent.setSessionMode(createSetSessionModeRequest("mode-session", "high")),
+    ).rejects.toThrow(/gateway rejected mode/i);
 
     sessionStore.clearAllSessionsForTest();
   });
