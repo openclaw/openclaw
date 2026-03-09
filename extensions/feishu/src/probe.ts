@@ -20,8 +20,8 @@ export type ProbeFeishuOptions = {
 type FeishuBotInfoResponse = {
   code: number;
   msg?: string;
-  bot?: { bot_name?: string; open_id?: string };
-  data?: { bot?: { bot_name?: string; open_id?: string } };
+  bot?: { bot_name?: string; open_id?: string; union_id?: string };
+  data?: { bot?: { bot_name?: string; open_id?: string; union_id?: string } };
 };
 
 function setCachedProbeResult(
