@@ -649,7 +649,7 @@ export async function startGatewayServer(
     channelRuntime: createPluginRuntime().channel,
     onInboundMessage: createEmitInboundUserMessage(broadcast),
   });
-  const getReadiness = createReadinessChecker({
+  const _getReadiness = createReadinessChecker({
     channelManager,
     startedAt: serverStartedAt,
   });

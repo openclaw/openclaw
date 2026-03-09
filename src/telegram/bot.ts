@@ -43,6 +43,7 @@ import { createTelegramSendChatActionHandler } from "./sendchataction-401-backof
 import { getTelegramSequentialKey } from "./sequential-key.js";
 import { createTelegramThreadBindingManager } from "./thread-bindings.js";
 
+export type { Bot as TelegramBot } from "grammy";
 export type TelegramBotOptions = {
   token: string;
   accountId?: string;

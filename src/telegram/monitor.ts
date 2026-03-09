@@ -15,7 +15,6 @@ import { resolveTelegramAllowedUpdates } from "./allowed-updates.js";
 import { withTelegramApiErrorLogging } from "./api-logging.js";
 import { createTelegramBot } from "./bot.js";
 import { isRecoverableTelegramNetworkError } from "./network-errors.js";
-import { TelegramPollingSession } from "./polling-session.js";
 import { TELEGRAM_POLL_RESTART_POLICY, isGetUpdatesConflict } from "./polling-session.js";
 import { makeProxyFetch } from "./proxy.js";
 import { readTelegramUpdateOffset, writeTelegramUpdateOffset } from "./update-offset-store.js";
@@ -85,7 +84,6 @@ const isGrammyHttpError = (err: unknown): boolean => {
 
 export async function monitorTelegramProvider(opts: MonitorTelegramOpts = {}) {
   const log = opts.runtime?.error ?? console.error;
-  let pollingSession: TelegramPollingSession | undefined;
   let activeRunner: ReturnType<typeof run> | undefined;
   let forceRestarted = false;
 
@@ -96,10 +94,8 @@ export async function monitorTelegramProvider(opts: MonitorTelegramOpts = {}) {
       return true;
     }
 
-    const activeRunner = pollingSession?.activeRunner;
     if (isNetworkError && activeRunner && activeRunner.isRunning()) {
-      pollingSession?.markForceRestarted();
-      pollingSession?.abortActiveFetch();
+      forceRestarted = true;
       void activeRunner.stop().catch(() => {});
       log(
         `[telegram] Restarting polling after unhandled network error: ${formatErrorMessage(err)}`,
