@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import os from "node:os";
 import type {
   Agent,
   AgentSideConnection,
@@ -60,6 +61,32 @@ type AcpGatewayAgentOptions = AcpServerOptions & {
 
 const SESSION_CREATE_RATE_LIMIT_DEFAULT_MAX_REQUESTS = 120;
 const SESSION_CREATE_RATE_LIMIT_DEFAULT_WINDOW_MS = 10_000;
+
+function buildSystemInputProvenance(originSessionId: string) {
+  return {
+    kind: "external_user" as const,
+    originSessionId,
+    sourceChannel: "acp",
+    sourceTool: "openclaw_acp",
+  };
+}
+
+function buildSystemProvenanceReceipt(params: {
+  cwd: string;
+  sessionId: string;
+  sessionKey: string;
+}) {
+  return [
+    "[Source Receipt]",
+    "bridge=openclaw-acp",
+    `originHost=${os.hostname()}`,
+    `originCwd=${shortenHomePath(params.cwd)}`,
+    `acpSessionId=${params.sessionId}`,
+    `originSessionId=${params.sessionId}`,
+    `targetSession=${params.sessionKey}`,
+    "[/Source Receipt]",
+  ].join("\n");
+}
 
 export class AcpGatewayAgent implements Agent {
   private connection: AgentSideConnection;
@@ -229,6 +256,7 @@ export class AcpGatewayAgent implements Agent {
       this.log(`setSessionMode: ${session.sessionId} -> ${params.modeId}`);
     } catch (err) {
       this.log(`setSessionMode error: ${String(err)}`);
+      throw err;
     }
     return {};
   }
@@ -251,6 +279,17 @@ export class AcpGatewayAgent implements Agent {
     const prefixCwd = meta.prefixCwd ?? this.opts.prefixCwd ?? true;
     const displayCwd = shortenHomePath(session.cwd);
     const message = prefixCwd ? `[Working directory: ${displayCwd}]\n\n${userText}` : userText;
+    const provenanceMode = this.opts.provenanceMode ?? "off";
+    const systemInputProvenance =
+      provenanceMode === "off" ? undefined : buildSystemInputProvenance(params.sessionId);
+    const systemProvenanceReceipt =
+      provenanceMode === "meta+receipt"
+        ? buildSystemProvenanceReceipt({
+            cwd: session.cwd,
+            sessionId: params.sessionId,
+            sessionKey: session.sessionKey,
+          })
+        : undefined;
 
     // Defense-in-depth: also check the final assembled message (includes cwd prefix)
     if (Buffer.byteLength(message, "utf-8") > MAX_PROMPT_BYTES) {
@@ -281,6 +320,8 @@ export class AcpGatewayAgent implements Agent {
             thinking: readString(params._meta, ["thinking", "thinkingLevel"]),
             deliver: readBool(params._meta, ["deliver"]),
             timeoutMs: readNumber(params._meta, ["timeoutMs"]),
+            systemInputProvenance,
+            systemProvenanceReceipt,
           },
           { expectFinal: true },
         )
@@ -433,7 +474,11 @@ export class AcpGatewayAgent implements Agent {
       return;
     }
     if (state === "error") {
-      this.finishPrompt(pending.sessionId, pending, "refusal");
+      // ACP has no explicit "server_error" stop reason.  Use "end_turn" so clients
+      // do not treat transient backend errors (timeouts, rate-limits) as deliberate
+      // refusals.  TODO: when ChatEventSchema gains a structured errorKind field
+      // (e.g. "refusal" | "timeout" | "rate_limit"), use it to distinguish here.
+      this.finishPrompt(pending.sessionId, pending, "end_turn");
     }
   }
 

@@ -3,6 +3,11 @@ import { SESSION_LABEL_MAX_LENGTH } from "../../../sessions/session-label.js";
 import { GATEWAY_CLIENT_IDS, GATEWAY_CLIENT_MODES } from "../client-info.js";
 
 export const NonEmptyString = Type.String({ minLength: 1 });
+export const CHAT_SEND_SESSION_KEY_MAX_LENGTH = 512;
+export const ChatSendSessionKeyString = Type.String({
+  minLength: 1,
+  maxLength: CHAT_SEND_SESSION_KEY_MAX_LENGTH,
+});
 export const SessionLabelString = Type.String({
   minLength: 1,
   maxLength: SESSION_LABEL_MAX_LENGTH,
@@ -15,3 +20,20 @@ export const GatewayClientIdSchema = Type.Union(
 export const GatewayClientModeSchema = Type.Union(
   Object.values(GATEWAY_CLIENT_MODES).map((value) => Type.Literal(value)),
 );
+
+export const SecretRefSourceSchema = Type.Union([
+  Type.Literal("env"),
+  Type.Literal("file"),
+  Type.Literal("exec"),
+]);
+
+export const SecretRefSchema = Type.Object(
+  {
+    source: SecretRefSourceSchema,
+    provider: NonEmptyString,
+    id: NonEmptyString,
+  },
+  { additionalProperties: false },
+);
+
+export const SecretInputSchema = Type.Union([Type.String(), SecretRefSchema]);

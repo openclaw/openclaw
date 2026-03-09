@@ -5,10 +5,15 @@ import type {
   OpenClawConfig,
 } from "../config/config.js";
 import { writeConfigFile } from "../config/config.js";
-import { resolveSecretInputRef } from "../config/types.secrets.js";
-import { secretRefKey } from "../secrets/ref-contract.js";
-import { resolveSecretRefValues } from "../secrets/resolve.js";
+import { hasConfiguredSecretInput } from "../config/types.secrets.js";
+import { assertExplicitGatewayAuthModeWhenBothConfigured } from "./auth-mode-policy.js";
 import { resolveGatewayAuth, type ResolvedGatewayAuth } from "./auth.js";
+import {
+  hasGatewayPasswordEnvCandidate,
+  hasGatewayTokenEnvCandidate,
+  readGatewayTokenEnv,
+} from "./credentials.js";
+import { resolveRequiredConfiguredSecretRefInputString } from "./resolve-configured-secret-input-string.js";
 
 export function mergeGatewayAuthConfig(
   base?: GatewayAuthConfig,
@@ -96,8 +101,7 @@ function hasGatewayTokenCandidate(params: {
   env: NodeJS.ProcessEnv;
   authOverride?: GatewayAuthConfig;
 }): boolean {
-  const envToken =
-    params.env.OPENCLAW_GATEWAY_TOKEN?.trim() || params.env.CLAWDBOT_GATEWAY_TOKEN?.trim();
+  const envToken = readGatewayTokenEnv(params.env);
   if (envToken) {
     return true;
   }
@@ -107,14 +111,13 @@ function hasGatewayTokenCandidate(params: {
   ) {
     return true;
   }
-  return (
-    typeof params.cfg.gateway?.auth?.token === "string" &&
-    params.cfg.gateway.auth.token.trim().length > 0
-  );
+  return hasConfiguredSecretInput(params.cfg.gateway?.auth?.token, params.cfg.secrets?.defaults);
 }
 
-function hasGatewayPasswordEnvCandidate(env: NodeJS.ProcessEnv): boolean {
-  return Boolean(env.OPENCLAW_GATEWAY_PASSWORD?.trim() || env.CLAWDBOT_GATEWAY_PASSWORD?.trim());
+function hasGatewayTokenOverrideCandidate(params: { authOverride?: GatewayAuthConfig }): boolean {
+  return Boolean(
+    typeof params.authOverride?.token === "string" && params.authOverride.token.trim().length > 0,
+  );
 }
 
 function hasGatewayPasswordOverrideCandidate(params: {
@@ -128,6 +131,50 @@ function hasGatewayPasswordOverrideCandidate(params: {
     typeof params.authOverride?.password === "string" &&
     params.authOverride.password.trim().length > 0,
   );
+}
+
+function shouldResolveGatewayTokenSecretRef(params: {
+  cfg: OpenClawConfig;
+  env: NodeJS.ProcessEnv;
+  authOverride?: GatewayAuthConfig;
+}): boolean {
+  if (hasGatewayTokenOverrideCandidate({ authOverride: params.authOverride })) {
+    return false;
+  }
+  if (hasGatewayTokenEnvCandidate(params.env)) {
+    return false;
+  }
+  const explicitMode = params.authOverride?.mode ?? params.cfg.gateway?.auth?.mode;
+  if (explicitMode === "token") {
+    return true;
+  }
+  if (explicitMode === "password" || explicitMode === "none" || explicitMode === "trusted-proxy") {
+    return false;
+  }
+
+  if (hasGatewayPasswordOverrideCandidate(params)) {
+    return false;
+  }
+  return !hasConfiguredSecretInput(
+    params.cfg.gateway?.auth?.password,
+    params.cfg.secrets?.defaults,
+  );
+}
+
+async function resolveGatewayTokenSecretRef(
+  cfg: OpenClawConfig,
+  env: NodeJS.ProcessEnv,
+  authOverride?: GatewayAuthConfig,
+): Promise<string | undefined> {
+  if (!shouldResolveGatewayTokenSecretRef({ cfg, env, authOverride })) {
+    return undefined;
+  }
+  return await resolveRequiredConfiguredSecretRefInputString({
+    config: cfg,
+    env,
+    value: cfg.gateway?.auth?.token,
+    path: "gateway.auth.token",
+  });
 }
 
 function shouldResolveGatewayPasswordSecretRef(params: {
@@ -156,36 +203,16 @@ async function resolveGatewayPasswordSecretRef(
   cfg: OpenClawConfig,
   env: NodeJS.ProcessEnv,
   authOverride?: GatewayAuthConfig,
-): Promise<OpenClawConfig> {
-  const authPassword = cfg.gateway?.auth?.password;
-  const { ref } = resolveSecretInputRef({
-    value: authPassword,
-    defaults: cfg.secrets?.defaults,
-  });
-  if (!ref) {
-    return cfg;
-  }
+): Promise<string | undefined> {
   if (!shouldResolveGatewayPasswordSecretRef({ cfg, env, authOverride })) {
-    return cfg;
+    return undefined;
   }
-  const resolved = await resolveSecretRefValues([ref], {
+  return await resolveRequiredConfiguredSecretRefInputString({
     config: cfg,
     env,
+    value: cfg.gateway?.auth?.password,
+    path: "gateway.auth.password",
   });
-  const value = resolved.get(secretRefKey(ref));
-  if (typeof value !== "string" || value.trim().length === 0) {
-    throw new Error("gateway.auth.password resolved to an empty or non-string value.");
-  }
-  return {
-    ...cfg,
-    gateway: {
-      ...cfg.gateway,
-      auth: {
-        ...cfg.gateway?.auth,
-        password: value.trim(),
-      },
-    },
-  };
 }
 
 export async function ensureGatewayStartupAuth(params: {
@@ -200,27 +227,39 @@ export async function ensureGatewayStartupAuth(params: {
   generatedToken?: string;
   persistedGeneratedToken: boolean;
 }> {
+  assertExplicitGatewayAuthModeWhenBothConfigured(params.cfg);
   const env = params.env ?? process.env;
   const persistRequested = params.persist === true;
-  const cfgForAuth = await resolveGatewayPasswordSecretRef(params.cfg, env, params.authOverride);
+  const [resolvedTokenRefValue, resolvedPasswordRefValue] = await Promise.all([
+    resolveGatewayTokenSecretRef(params.cfg, env, params.authOverride),
+    resolveGatewayPasswordSecretRef(params.cfg, env, params.authOverride),
+  ]);
+  const authOverride: GatewayAuthConfig | undefined =
+    params.authOverride || resolvedTokenRefValue || resolvedPasswordRefValue
+      ? {
+          ...params.authOverride,
+          ...(resolvedTokenRefValue ? { token: resolvedTokenRefValue } : {}),
+          ...(resolvedPasswordRefValue ? { password: resolvedPasswordRefValue } : {}),
+        }
+      : undefined;
   const resolved = resolveGatewayAuthFromConfig({
-    cfg: cfgForAuth,
+    cfg: params.cfg,
     env,
-    authOverride: params.authOverride,
+    authOverride,
     tailscaleOverride: params.tailscaleOverride,
   });
   if (resolved.mode !== "token" || (resolved.token?.trim().length ?? 0) > 0) {
-    assertHooksTokenSeparateFromGatewayAuth({ cfg: cfgForAuth, auth: resolved });
-    return { cfg: cfgForAuth, auth: resolved, persistedGeneratedToken: false };
+    assertHooksTokenSeparateFromGatewayAuth({ cfg: params.cfg, auth: resolved });
+    return { cfg: params.cfg, auth: resolved, persistedGeneratedToken: false };
   }
 
   const generatedToken = crypto.randomBytes(24).toString("hex");
   const nextCfg: OpenClawConfig = {
-    ...cfgForAuth,
+    ...params.cfg,
     gateway: {
-      ...cfgForAuth.gateway,
+      ...params.cfg.gateway,
       auth: {
-        ...cfgForAuth.gateway?.auth,
+        ...params.cfg.gateway?.auth,
         mode: "token",
         token: generatedToken,
       },
