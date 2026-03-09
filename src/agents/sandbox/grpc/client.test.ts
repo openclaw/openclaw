@@ -23,7 +23,7 @@ const {
   const mockHealthClient = { check: vi.fn() };
   const mockChannel = { close: vi.fn() };
   const mockCreate = vi.fn(() => mockSandboxClient);
-  const mockUse = vi.fn(() => ({ use: mockUse, create: mockCreate })) as unknown;
+  const mockUse = vi.fn(() => ({ use: mockUse, create: mockCreate })) as ReturnType<typeof vi.fn>;
   const mockCreateClientFactory = vi.fn(() => ({ use: mockUse }));
   const mockFileClient = {
     readFile: vi.fn(),

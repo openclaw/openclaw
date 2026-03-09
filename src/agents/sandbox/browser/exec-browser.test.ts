@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import type { ExecResult } from "../provider.js";
+import type { SandboxBrowserConfig } from "../types.js";
 import { ExecBrowserHelper } from "./exec-browser.js";
 import type { ExecFn } from "./exec-browser.js";
 
@@ -51,7 +52,7 @@ describe("ExecBrowserHelper", () => {
       const result = await helper.launchBrowser("test-container", {
         enabled: true,
         headless: true,
-      } as unknown);
+      } as unknown as SandboxBrowserConfig);
 
       expect(result).toEqual({ sessionId: "exec-12345" });
       expect(execFn).toHaveBeenCalledTimes(2);
@@ -74,7 +75,7 @@ describe("ExecBrowserHelper", () => {
         makeExecResult({ wsEndpoint: "ws://127.0.0.1:9222/devtools/browser/abc", pid: 99 }),
       );
 
-      await helper.launchBrowser("c1", { enabled: true } as unknown);
+      await helper.launchBrowser("c1", { enabled: true } as unknown as SandboxBrowserConfig);
 
       // Check the second call (cat session) has timeout >= 30000
       const secondCall = execFn.mock.calls[1];

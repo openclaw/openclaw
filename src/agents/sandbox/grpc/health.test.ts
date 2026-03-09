@@ -13,6 +13,7 @@ vi.mock("./channel.js", () => ({
 }));
 
 import { checkFirecrackerHealth } from "./health.js";
+import type { HealthClient } from "./health.js";
 
 describe("checkFirecrackerHealth", () => {
   let mockHealthClient: { check: ReturnType<typeof vi.fn> };
@@ -25,7 +26,7 @@ describe("checkFirecrackerHealth", () => {
   it("returns unavailable when /dev/kvm is not accessible", async () => {
     mockAccess.mockRejectedValueOnce(new Error("ENOENT"));
 
-    const result = await checkFirecrackerHealth(mockHealthClient as unknown);
+    const result = await checkFirecrackerHealth(mockHealthClient as unknown as HealthClient);
 
     expect(result.available).toBe(false);
     expect(result.message).toContain("/dev/kvm");
@@ -39,7 +40,7 @@ describe("checkFirecrackerHealth", () => {
     // socket check fails
     mockAccess.mockRejectedValueOnce(new Error("ENOENT"));
 
-    const result = await checkFirecrackerHealth(mockHealthClient as unknown);
+    const result = await checkFirecrackerHealth(mockHealthClient as unknown as HealthClient);
 
     expect(result.available).toBe(false);
     expect(result.message).toContain("vm-runner socket not found");
@@ -54,7 +55,7 @@ describe("checkFirecrackerHealth", () => {
     // gRPC health check fails
     mockHealthClient.check.mockRejectedValueOnce(new Error("Connection refused"));
 
-    const result = await checkFirecrackerHealth(mockHealthClient as unknown);
+    const result = await checkFirecrackerHealth(mockHealthClient as unknown as HealthClient);
 
     expect(result.available).toBe(false);
     expect(result.message).toContain("vm-runner health check failed");
@@ -68,7 +69,7 @@ describe("checkFirecrackerHealth", () => {
     // gRPC health check succeeds
     mockHealthClient.check.mockResolvedValueOnce({ status: 1 });
 
-    const result = await checkFirecrackerHealth(mockHealthClient as unknown);
+    const result = await checkFirecrackerHealth(mockHealthClient as unknown as HealthClient);
 
     expect(result.available).toBe(true);
     expect(result.message).toBe("Firecracker vm-runner is healthy");
@@ -90,7 +91,7 @@ describe("checkFirecrackerHealth", () => {
       return { status: 1 };
     });
 
-    await checkFirecrackerHealth(mockHealthClient as unknown);
+    await checkFirecrackerHealth(mockHealthClient as unknown as HealthClient);
 
     expect(callOrder).toEqual(["kvm", "socket", "grpc"]);
   });
