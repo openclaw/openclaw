@@ -3,9 +3,16 @@ import path from "node:path";
 import type { BrowserProfileConfig, OpenClawConfig } from "../config/config.js";
 import { loadConfig, writeConfigFile } from "../config/config.js";
 import { deriveDefaultBrowserCdpPortRange } from "../config/port-defaults.js";
+import { isLoopbackHost } from "../gateway/net.js";
 import { resolveOpenClawUserDataDir } from "./chrome.js";
 import { parseHttpUrl, resolveProfile } from "./config.js";
 import { DEFAULT_BROWSER_DEFAULT_PROFILE_NAME } from "./constants.js";
+import {
+  BrowserConflictError,
+  BrowserProfileNotFoundError,
+  BrowserResourceExhaustedError,
+  BrowserValidationError,
+} from "./errors.js";
 import {
   allocateCdpPort,
   allocateColor,
@@ -75,19 +82,21 @@ export function createBrowserProfilesService(ctx: BrowserRouteContext) {
     const driver = params.driver === "extension" ? "extension" : undefined;
 
     if (!isValidProfileName(name)) {
-      throw new Error("invalid profile name: use lowercase letters, numbers, and hyphens only");
+      throw new BrowserValidationError(
+        "invalid profile name: use lowercase letters, numbers, and hyphens only",
+      );
     }
 
     const state = ctx.state();
     const resolvedProfiles = state.resolved.profiles;
     if (name in resolvedProfiles) {
-      throw new Error(`profile "${name}" already exists`);
+      throw new BrowserConflictError(`profile "${name}" already exists`);
     }
 
     const cfg = loadConfig();
     const rawProfiles = cfg.browser?.profiles ?? {};
     if (name in rawProfiles) {
-      throw new Error(`profile "${name}" already exists`);
+      throw new BrowserConflictError(`profile "${name}" already exists`);
     }
 
     const usedColors = getUsedColors(resolvedProfiles);
@@ -97,17 +106,32 @@ export function createBrowserProfilesService(ctx: BrowserRouteContext) {
     let profileConfig: BrowserProfileConfig;
     if (rawCdpUrl) {
       const parsed = parseHttpUrl(rawCdpUrl, "browser.profiles.cdpUrl");
+      if (driver === "extension") {
+        if (!isLoopbackHost(parsed.parsed.hostname)) {
+          throw new BrowserValidationError(
+            `driver=extension requires a loopback cdpUrl host, got: ${parsed.parsed.hostname}`,
+          );
+        }
+        if (parsed.parsed.protocol !== "http:" && parsed.parsed.protocol !== "https:") {
+          throw new BrowserValidationError(
+            `driver=extension requires an http(s) cdpUrl, got: ${parsed.parsed.protocol.replace(":", "")}`,
+          );
+        }
+      }
       profileConfig = {
         cdpUrl: parsed.normalized,
         ...(driver ? { driver } : {}),
         color: profileColor,
       };
     } else {
+      if (driver === "extension") {
+        throw new BrowserValidationError("driver=extension requires an explicit loopback cdpUrl");
+      }
       const usedPorts = getUsedPorts(resolvedProfiles);
       const range = cdpPortRange(state.resolved);
       const cdpPort = allocateCdpPort(usedPorts, range);
       if (cdpPort === null) {
-        throw new Error("no available CDP ports in range");
+        throw new BrowserResourceExhaustedError("no available CDP ports in range");
       }
       profileConfig = {
         cdpPort,
@@ -132,7 +156,7 @@ export function createBrowserProfilesService(ctx: BrowserRouteContext) {
     state.resolved.profiles[name] = profileConfig;
     const resolved = resolveProfile(state.resolved, name);
     if (!resolved) {
-      throw new Error(`profile "${name}" not found after creation`);
+      throw new BrowserProfileNotFoundError(`profile "${name}" not found after creation`);
     }
 
     return {
@@ -148,21 +172,21 @@ export function createBrowserProfilesService(ctx: BrowserRouteContext) {
   const deleteProfile = async (nameRaw: string): Promise<DeleteProfileResult> => {
     const name = nameRaw.trim();
     if (!name) {
-      throw new Error("profile name is required");
+      throw new BrowserValidationError("profile name is required");
     }
     if (!isValidProfileName(name)) {
-      throw new Error("invalid profile name");
+      throw new BrowserValidationError("invalid profile name");
     }
 
     const cfg = loadConfig();
     const profiles = cfg.browser?.profiles ?? {};
     if (!(name in profiles)) {
-      throw new Error(`profile "${name}" not found`);
+      throw new BrowserProfileNotFoundError(`profile "${name}" not found`);
     }
 
     const defaultProfile = cfg.browser?.defaultProfile ?? DEFAULT_BROWSER_DEFAULT_PROFILE_NAME;
     if (name === defaultProfile) {
-      throw new Error(
+      throw new BrowserValidationError(
         `cannot delete the default profile "${name}"; change browser.defaultProfile first`,
       );
     }

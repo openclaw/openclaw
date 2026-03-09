@@ -2,8 +2,10 @@ import { spawnSync } from "node:child_process";
 import fsSync from "node:fs";
 import { isRestartEnabled } from "../../config/commands.js";
 import { readBestEffortConfig, resolveGatewayPort } from "../../config/config.js";
+import { parseCmdScriptCommandLine } from "../../daemon/cmd-argv.js";
 import { resolveGatewayService } from "../../daemon/service.js";
 import { probeGateway } from "../../gateway/probe.js";
+import { isGatewayArgv, parseProcCmdline } from "../../infra/gateway-process-argv.js";
 import { findGatewayPidsOnPortSync } from "../../infra/restart.js";
 import { defaultRuntime } from "../../runtime.js";
 import { theme } from "../../terminal/theme.js";
@@ -41,36 +43,19 @@ async function resolveGatewayLifecyclePort(service = resolveGatewayService()) {
   return portFromArgs ?? resolveGatewayPort(await readBestEffortConfig(), mergedEnv);
 }
 
-function normalizeProcArg(arg: string): string {
-  return arg.replaceAll("\\", "/").toLowerCase();
-}
-
-function parseProcCmdline(raw: string): string[] {
-  return raw
-    .split("\0")
-    .map((entry) => entry.trim())
+function extractWindowsCommandLine(raw: string): string | null {
+  const lines = raw
+    .split(/\r?\n/)
+    .map((line) => line.trim())
     .filter(Boolean);
-}
-
-function isGatewayArgv(args: string[]): boolean {
-  const normalized = args.map(normalizeProcArg);
-  if (!normalized.includes("gateway")) {
-    return false;
+  for (const line of lines) {
+    if (!line.toLowerCase().startsWith("commandline=")) {
+      continue;
+    }
+    const value = line.slice("commandline=".length).trim();
+    return value || null;
   }
-
-  const entryCandidates = [
-    "dist/index.js",
-    "dist/entry.js",
-    "openclaw.mjs",
-    "scripts/run-node.mjs",
-    "src/index.ts",
-  ];
-  if (normalized.some((arg) => entryCandidates.some((entry) => arg.endsWith(entry)))) {
-    return true;
-  }
-
-  const exe = normalized[0] ?? "";
-  return exe.endsWith("/openclaw") || exe === "openclaw" || exe.endsWith("/openclaw-gateway");
+  return lines.find((line) => line.toLowerCase() !== "commandline") ?? null;
 }
 
 function readGatewayProcessArgsSync(pid: number): string[] | null {
@@ -92,6 +77,21 @@ function readGatewayProcessArgsSync(pid: number): string[] | null {
     const command = ps.stdout.trim();
     return command ? command.split(/\s+/) : null;
   }
+  if (process.platform === "win32") {
+    const wmic = spawnSync(
+      "wmic",
+      ["process", "where", `ProcessId=${pid}`, "get", "CommandLine", "/value"],
+      {
+        encoding: "utf8",
+        timeout: 1000,
+      },
+    );
+    if (wmic.error || wmic.status !== 0) {
+      return null;
+    }
+    const command = extractWindowsCommandLine(wmic.stdout);
+    return command ? parseCmdScriptCommandLine(command) : null;
+  }
   return null;
 }
 
@@ -100,7 +100,7 @@ function resolveGatewayListenerPids(port: number): number[] {
     .filter((pid): pid is number => Number.isFinite(pid) && pid > 0)
     .filter((pid) => {
       const args = readGatewayProcessArgsSync(pid);
-      return args != null && isGatewayArgv(args);
+      return args != null && isGatewayArgv(args, { allowGatewayBinary: true });
     });
 }
 
@@ -112,7 +112,7 @@ function resolveGatewayPortFallback(): Promise<number> {
 
 function signalGatewayPid(pid: number, signal: "SIGTERM" | "SIGUSR1") {
   const args = readGatewayProcessArgsSync(pid);
-  if (!args || !isGatewayArgv(args)) {
+  if (!args || !isGatewayArgv(args, { allowGatewayBinary: true })) {
     throw new Error(`refusing to signal non-gateway process pid ${pid}`);
   }
   process.kill(pid, signal);

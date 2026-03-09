@@ -4,7 +4,7 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { withEnvAsync } from "../test-utils/env.js";
 import { createConfigIO } from "./io.js";
-import { normalizeTalkSection } from "./talk.js";
+import { buildTalkConfigResponse, normalizeTalkSection } from "./talk.js";
 
 const envVar = (...parts: string[]) => parts.join("_");
 const elevenLabsApiKeyEnv = ["ELEVENLABS_API", "KEY"].join("_");
@@ -32,6 +32,7 @@ describe("talk normalization", () => {
       outputFormat: "pcm_44100",
       apiKey: "secret-key", // pragma: allowlist secret
       interruptOnSpeech: false,
+      silenceTimeoutMs: 1500,
     });
 
     expect(normalized).toEqual({
@@ -51,6 +52,7 @@ describe("talk normalization", () => {
       outputFormat: "pcm_44100",
       apiKey: "secret-key", // pragma: allowlist secret
       interruptOnSpeech: false,
+      silenceTimeoutMs: 1500,
     });
   });
 
@@ -76,6 +78,40 @@ describe("talk normalization", () => {
         },
       },
       voiceId: "legacy-voice",
+      interruptOnSpeech: true,
+    });
+  });
+
+  it("builds a canonical resolved talk payload for clients", () => {
+    const payload = buildTalkConfigResponse({
+      provider: "acme",
+      providers: {
+        acme: {
+          voiceId: "acme-voice",
+          modelId: "acme-model",
+        },
+      },
+      voiceId: "legacy-voice",
+      interruptOnSpeech: true,
+    });
+
+    expect(payload).toEqual({
+      provider: "acme",
+      providers: {
+        acme: {
+          voiceId: "acme-voice",
+          modelId: "acme-model",
+        },
+      },
+      resolved: {
+        provider: "acme",
+        config: {
+          voiceId: "acme-voice",
+          modelId: "acme-model",
+        },
+      },
+      voiceId: "acme-voice",
+      modelId: "acme-model",
       interruptOnSpeech: true,
     });
   });
