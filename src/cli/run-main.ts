@@ -6,12 +6,14 @@ import { isMainModule } from "../infra/is-main.js";
 import { ensureOpenClawCliOnPath } from "../infra/path-env.js";
 import { assertSupportedRuntime } from "../infra/runtime-guard.js";
 import { enableConsoleCapture } from "../logging.js";
+import { VERSION } from "../version.js";
 import {
   getCommandPathWithRootOptions,
   getPrimaryCommand,
   hasHelpOrVersion,
   isRootHelpInvocation,
 } from "./argv.js";
+import { emitCliBanner } from "./banner.js";
 import { loadCliDotEnv } from "./dotenv.js";
 import { applyCliProfileEnv, parseCliProfileArgs } from "./profile.js";
 import { tryRouteCli } from "./route.js";
@@ -101,6 +103,9 @@ export async function runCli(argv: string[] = process.argv) {
 
   try {
     if (shouldUseRootHelpFastPath(normalizedArgv)) {
+      // Prime the script tagline cache so formatCliBannerLine in the help output
+      // can render it even though preaction hooks don't run on this fast path.
+      await emitCliBanner(VERSION);
       const { outputRootHelp } = await import("./program/root-help.js");
       outputRootHelp();
       return;

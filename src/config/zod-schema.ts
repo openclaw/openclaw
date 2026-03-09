@@ -327,8 +327,14 @@ export const OpenClawSchema = z
         banner: z
           .object({
             taglineMode: z
-              .union([z.literal("random"), z.literal("default"), z.literal("off")])
+              .union([
+                z.literal("random"),
+                z.literal("default"),
+                z.literal("off"),
+                z.literal("script"),
+              ])
               .optional(),
+            taglineScriptFile: z.string().optional(),
           })
           .strict()
           .optional(),
