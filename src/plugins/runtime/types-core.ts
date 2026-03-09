@@ -52,4 +52,8 @@ export type PluginRuntimeCore = {
   state: {
     resolveStateDir: typeof import("../../config/paths.js").resolveStateDir;
   };
+  modelAuth: {
+    getApiKeyForModel: typeof import("../../agents/model-auth.js").getApiKeyForModel;
+    resolveApiKeyForProvider: typeof import("../../agents/model-auth.js").resolveApiKeyForProvider;
+  };
 };

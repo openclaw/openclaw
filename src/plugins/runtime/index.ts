@@ -1,4 +1,5 @@
 import { createRequire } from "node:module";
+import { getApiKeyForModel, resolveApiKeyForProvider } from "../../agents/model-auth.js";
 import { resolveStateDir } from "../../config/paths.js";
 import { transcribeAudioFile } from "../../media-understanding/transcribe-audio.js";
 import { textToSpeechTelephony } from "../../tts/tts.js";
@@ -59,6 +60,7 @@ export function createPluginRuntime(_options: CreatePluginRuntimeOptions = {}): 
     events: createRuntimeEvents(),
     logging: createRuntimeLogging(),
     state: { resolveStateDir },
+    modelAuth: { getApiKeyForModel, resolveApiKeyForProvider },
   } satisfies PluginRuntime;
 
   return runtime;

@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { getApiKeyForModel, resolveApiKeyForProvider } from "../../agents/model-auth.js";
 import { onAgentEvent } from "../../infra/agent-events.js";
 import { requestHeartbeatNow } from "../../infra/heartbeat-wake.js";
 import { onSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
@@ -52,5 +53,12 @@ describe("plugin runtime command execution", () => {
   it("exposes runtime.system.requestHeartbeatNow", () => {
     const runtime = createPluginRuntime();
     expect(runtime.system.requestHeartbeatNow).toBe(requestHeartbeatNow);
+  });
+
+  it("exposes runtime.modelAuth with getApiKeyForModel and resolveApiKeyForProvider", () => {
+    const runtime = createPluginRuntime();
+    expect(runtime.modelAuth).toBeDefined();
+    expect(runtime.modelAuth.getApiKeyForModel).toBe(getApiKeyForModel);
+    expect(runtime.modelAuth.resolveApiKeyForProvider).toBe(resolveApiKeyForProvider);
   });
 });
