@@ -78,12 +78,15 @@ ${theme.muted("Docs:")} ${formatDocsLink("/cli/agent", "docs.openclaw.ai/cli/age
       setVerbose(verboseLevel === "on");
       // Build default deps (keeps parity with other commands; future-proofing).
       const deps = createDefaultDeps();
-      await runCommandWithRuntime(defaultRuntime, async () => {
-        await agentCliCommand(opts, defaultRuntime, deps);
-      });
-      // Release any cached memory manager FSWatcher handles so the one-shot
-      // CLI process exits cleanly without lingering I/O references.
-      await MemoryIndexManager.closeAll();
+      try {
+        await runCommandWithRuntime(defaultRuntime, async () => {
+          await agentCliCommand(opts, defaultRuntime, deps);
+        });
+      } finally {
+        // Release any cached memory manager FSWatcher handles so the one-shot
+        // CLI process exits cleanly without lingering I/O references.
+        await MemoryIndexManager.closeAll();
+      }
     });
 
   const agents = program
