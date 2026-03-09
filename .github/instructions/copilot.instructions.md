@@ -1,3 +1,4 @@
+
 # OpenClaw Codebase Patterns
 
 **Always reuse existing code - no redundancy!**
