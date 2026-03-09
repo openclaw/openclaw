@@ -157,13 +157,20 @@ async function gatedAudit(
     });
   }
   if (alertDeps && alertingEnabled) {
-    notifyAlerting({
-      entry: params.entry,
-      agentId: params.agentId,
-      sessionId: params.sessionId,
-      cfg: alertDeps.cfg,
-      now: alertDeps.now,
-    });
+    try {
+      notifyAlerting({
+        entry: params.entry,
+        agentId: params.agentId,
+        sessionId: params.sessionId,
+        cfg: alertDeps.cfg,
+        now: alertDeps.now,
+      });
+    } catch (alertErr) {
+      log.warn("alerting notify error — continuing", {
+        event: params.entry.event,
+        error: alertErr instanceof Error ? alertErr.message : String(alertErr),
+      });
+    }
   }
 }
 
