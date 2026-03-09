@@ -2,7 +2,11 @@ import type * as Lark from "@larksuiteoapi/node-sdk";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/feishu";
 import { listEnabledFeishuAccounts } from "./accounts.js";
 import { FeishuDriveSchema, type FeishuDriveParams } from "./drive-schema.js";
-import { createFeishuToolClient, resolveAnyEnabledFeishuToolsConfig } from "./tool-account.js";
+import {
+  createFeishuToolClient,
+  resolveFeishuToolDefaultAccountId,
+  resolveAnyEnabledFeishuToolsConfig,
+} from "./tool-account.js";
 import {
   jsonToolResult,
   toolExecutionErrorResult,
@@ -185,7 +189,7 @@ export function registerFeishuDriveTools(api: OpenClawPluginApi) {
 
   api.registerTool(
     (ctx) => {
-      const defaultAccountId = ctx.agentAccountId;
+      const defaultAccountId = resolveFeishuToolDefaultAccountId(ctx, accounts);
       return {
         name: "feishu_drive",
         label: "Feishu Drive",

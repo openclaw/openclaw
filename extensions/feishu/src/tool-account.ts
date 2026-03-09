@@ -1,5 +1,5 @@
 import type * as Lark from "@larksuiteoapi/node-sdk";
-import type { OpenClawPluginApi } from "openclaw/plugin-sdk/feishu";
+import type { OpenClawPluginApi, OpenClawPluginToolContext } from "openclaw/plugin-sdk/feishu";
 import { resolveFeishuAccount } from "./accounts.js";
 import { createFeishuClient } from "./client.js";
 import { resolveToolsConfig } from "./tools-config.js";
@@ -67,4 +67,17 @@ export function resolveAnyEnabledFeishuToolsConfig(
     merged.scopes = merged.scopes || cfg.scopes;
   }
   return merged;
+}
+
+export function resolveFeishuToolDefaultAccountId(
+  ctx: Pick<OpenClawPluginToolContext, "agentAccountId" | "messageChannel">,
+  accounts: ResolvedFeishuAccount[],
+): string | undefined {
+  if (ctx.agentAccountId && accounts.some((a) => a.accountId === ctx.agentAccountId)) {
+    return ctx.agentAccountId;
+  }
+  if (ctx.messageChannel && accounts.some((a) => a.accountId === ctx.messageChannel)) {
+    return ctx.messageChannel;
+  }
+  return undefined;
 }

@@ -20,6 +20,7 @@ import {
 import { getFeishuRuntime } from "./runtime.js";
 import {
   createFeishuToolClient,
+  resolveFeishuToolDefaultAccountId,
   resolveAnyEnabledFeishuToolsConfig,
   resolveFeishuToolAccount,
 } from "./tool-account.js";
@@ -1261,7 +1262,7 @@ export function registerFeishuDocTools(api: OpenClawPluginApi) {
   if (toolsCfg.doc) {
     api.registerTool(
       (ctx) => {
-        const defaultAccountId = ctx.agentAccountId;
+        const defaultAccountId = resolveFeishuToolDefaultAccountId(ctx, accounts);
         const trustedRequesterOpenId =
           ctx.messageChannel === "feishu" ? ctx.requesterSenderId?.trim() || undefined : undefined;
         return {
