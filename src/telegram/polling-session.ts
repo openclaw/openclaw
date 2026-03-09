@@ -1,4 +1,5 @@
 import { type RunOptions, run } from "@grammyjs/runner";
+import { logVerbose } from "../globals.js";
 import { computeBackoff, sleepWithAbort } from "../infra/backoff.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { formatDurationPrecise } from "../infra/format-time/format-duration.ts";
@@ -15,6 +16,14 @@ const TELEGRAM_POLL_RESTART_POLICY = {
 
 const POLL_STALL_THRESHOLD_MS = 90_000;
 const POLL_WATCHDOG_INTERVAL_MS = 30_000;
+
+/**
+ * Health check interval: how often to ping Telegram API to detect stale connections.
+ * After inactivity, NAT/firewalls may silently drop TCP connections, causing the
+ * long-polling socket to hang indefinitely. This watchdog detects and recovers from that.
+ */
+const HEALTH_CHECK_INTERVAL_MS = 2 * 60 * 1000; // 2 minutes
+const HEALTH_CHECK_TIMEOUT_MS = 10 * 1000; // 10 seconds
 
 type TelegramBot = ReturnType<typeof createTelegramBot>;
 
@@ -176,6 +185,7 @@ export class TelegramPollingSession {
     const fetchAbortController = this.#activeFetchAbort;
     let stopPromise: Promise<void> | undefined;
     let stalledRestart = false;
+    let staleConnectionDetected = false;
     const stopRunner = () => {
       fetchAbortController?.abort();
       stopPromise ??= Promise.resolve(runner.stop())
@@ -212,11 +222,96 @@ export class TelegramPollingSession {
       }
     }, POLL_WATCHDOG_INTERVAL_MS);
 
+    // Health check watchdog: periodically ping Telegram API to detect stale connections.
+    // If the connection is dead (NAT timeout, firewall drop), the health check will fail
+    // and we'll restart the runner.
+    // Uses a self-scheduling loop instead of setInterval to prevent overlapping checks
+    // when a health check takes longer than the interval period.
+    // healthCheckStopped guards against a concurrent in-flight check scheduling a new
+    // timer after stopHealthCheck() has been called (e.g., during runner teardown).
+    let healthCheckStopped = false;
+    let healthCheckTimer: ReturnType<typeof setTimeout> | undefined;
+    let healthCheckTimeoutHandle: ReturnType<typeof setTimeout> | undefined;
+    const startHealthCheck = () => {
+      const scheduleNext = () => {
+        healthCheckTimer = setTimeout(async () => {
+          if (healthCheckStopped || this.opts.abortSignal?.aborted) {
+            return;
+          }
+          try {
+            const timeoutPromise = new Promise<never>((_, reject) => {
+              healthCheckTimeoutHandle = setTimeout(
+                () => reject(new Error("Health check timeout")),
+                HEALTH_CHECK_TIMEOUT_MS,
+              );
+            });
+            try {
+              await Promise.race([bot.api.getMe(), timeoutPromise]);
+            } finally {
+              if (healthCheckTimeoutHandle) {
+                clearTimeout(healthCheckTimeoutHandle);
+                healthCheckTimeoutHandle = undefined;
+              }
+            }
+            logVerbose("[telegram] Health check passed");
+          } catch (err) {
+            if (healthCheckStopped || this.opts.abortSignal?.aborted) {
+              return;
+            }
+            // Distinguish connection/network errors from transient API errors (429, 5xx).
+            // Only restart polling for actual stale connections; for transient errors,
+            // log a warning and let the next scheduled check retry.
+            if (isRecoverableTelegramNetworkError(err, { context: "polling" })) {
+              staleConnectionDetected = true;
+              this.opts.log(
+                `[telegram] Health check failed (stale connection detected): ${formatErrorMessage(err)}; restarting polling...`,
+              );
+              void stopRunner();
+              return; // Don't schedule next check; runner restart will create a new watchdog
+            }
+            // Transient API error (e.g. 429 rate-limit, 5xx server error, or timeout) --
+            // log and reschedule; no restart needed.
+            this.opts.log(
+              `[telegram] Health check transient error: ${formatErrorMessage(err)}; will retry at next interval.`,
+            );
+          }
+          // Only reschedule if watchdog is still active (not torn down mid-check).
+          if (!healthCheckStopped) {
+            scheduleNext();
+          }
+        }, HEALTH_CHECK_INTERVAL_MS);
+      };
+      scheduleNext();
+    };
+
+    const stopHealthCheck = () => {
+      healthCheckStopped = true;
+      if (healthCheckTimer) {
+        clearTimeout(healthCheckTimer);
+        healthCheckTimer = undefined;
+      }
+      // Clear the inner timeout handle to avoid keeping the event loop alive
+      // for up to HEALTH_CHECK_TIMEOUT_MS after teardown.
+      if (healthCheckTimeoutHandle) {
+        clearTimeout(healthCheckTimeoutHandle);
+        healthCheckTimeoutHandle = undefined;
+      }
+    };
+
     this.opts.abortSignal?.addEventListener("abort", stopOnAbort, { once: true });
+    startHealthCheck();
     try {
       await runner.task();
+      // Abort takes highest priority -- always exit cleanly when signaled.
       if (this.opts.abortSignal?.aborted) {
         return "exit";
+      }
+      if (staleConnectionDetected) {
+        // Runner was stopped due to health check failure; continue to restart
+        // without backoff since this is a controlled recovery restart.
+        this.#forceRestarted = false;
+        this.#restartAttempts = 0;
+        return "continue";
       }
       const reason = stalledRestart
         ? "polling stall detected"
@@ -249,6 +344,7 @@ export class TelegramPollingSession {
       return shouldRestart ? "continue" : "exit";
     } finally {
       clearInterval(watchdog);
+      stopHealthCheck();
       this.opts.abortSignal?.removeEventListener("abort", stopOnAbort);
       await stopRunner();
       await stopBot();
