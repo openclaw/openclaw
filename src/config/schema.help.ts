@@ -1437,6 +1437,8 @@ export const FIELD_HELP: Record<string, string> = {
     "Allow subagent spawns with thread=true to auto-create and bind Discord threads (default: false; opt-in). Set true to enable thread-bound subagent spawns for this account/channel.",
   "channels.discord.threadBindings.spawnAcpSessions":
     "Allow /acp spawn to auto-create and bind Discord threads for ACP sessions (default: false; opt-in). Set true to enable thread-bound ACP spawns for this account/channel.",
+  "channels.discord.agentComponents.enabled":
+    "Enable agent-controlled interactive Discord components such as buttons and select menus (default: true). Set per account via channels.discord.accounts.<id>.agentComponents.enabled.",
   "channels.discord.ui.components.accentColor":
     "Accent color for Discord component containers (hex). Set per account via channels.discord.accounts.<id>.ui.components.accentColor.",
   "channels.discord.voice.enabled":
