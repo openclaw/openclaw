@@ -21,6 +21,10 @@ import {
 import { formatConfigIssueLines } from "../config/issue-format.js";
 import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
 import { resolveMainSessionKey } from "../config/sessions.js";
+import {
+  markStable as markDiscordStable,
+  requestCleanRestart as requestDiscordCleanRestart,
+} from "../discord/monitor/provider.lifecycle.js";
 import { clearAgentRunContext, onAgentEvent } from "../infra/agent-events.js";
 import {
   ensureControlUiAssetsBuilt,
@@ -65,7 +69,10 @@ import {
 } from "../secrets/runtime.js";
 import { runOnboardingWizard } from "../wizard/onboarding.js";
 import { createAuthRateLimiter, type AuthRateLimiter } from "./auth-rate-limit.js";
-import { startChannelHealthMonitor } from "./channel-health-monitor.js";
+import {
+  startChannelHealthMonitor,
+  type ChannelHealthMonitorDeps,
+} from "./channel-health-monitor.js";
 import { startGatewayConfigReloader } from "./config-reload.js";
 import type { ControlUiRootState } from "./control-ui.js";
 import {
@@ -757,11 +764,35 @@ export async function startGatewayServer(
 
   const healthCheckMinutes = cfgAtStart.gateway?.channelHealthCheckMinutes;
   const healthCheckDisabled = healthCheckMinutes === 0;
+  const healthMonitorBeforeRestart: ChannelHealthMonitorDeps["onBeforeRestart"] = ({
+    channelId,
+    accountId,
+    consecutiveRestarts,
+  }) => {
+    if (channelId === "discord") {
+      log.info(
+        `health-monitor: ${consecutiveRestarts} consecutive restart(s) for discord:${accountId}, requesting clean restart`,
+      );
+      requestDiscordCleanRestart(accountId);
+    }
+  };
+
+  const healthMonitorChannelStable: ChannelHealthMonitorDeps["onChannelStable"] = ({
+    channelId,
+    accountId,
+  }) => {
+    if (channelId === "discord") {
+      markDiscordStable(accountId);
+    }
+  };
+
   let channelHealthMonitor = healthCheckDisabled
     ? null
     : startChannelHealthMonitor({
         channelManager,
         checkIntervalMs: (healthCheckMinutes ?? 5) * 60_000,
+        onBeforeRestart: healthMonitorBeforeRestart,
+        onChannelStable: healthMonitorChannelStable,
       });
 
   if (!minimalTestGateway) {
@@ -981,7 +1012,12 @@ export async function startGatewayServer(
           logCron,
           logReload,
           createHealthMonitor: (checkIntervalMs: number) =>
-            startChannelHealthMonitor({ channelManager, checkIntervalMs }),
+            startChannelHealthMonitor({
+              channelManager,
+              checkIntervalMs,
+              onBeforeRestart: healthMonitorBeforeRestart,
+              onChannelStable: healthMonitorChannelStable,
+            }),
         });
 
         return startGatewayConfigReloader({
