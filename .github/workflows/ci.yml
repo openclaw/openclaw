@@ -32,7 +32,6 @@ jobs:
   # Push to main keeps broad coverage.
   changed-scope:
     needs: [docs-scope]
-    if: github.event_name == 'pull_request'
     runs-on: blacksmith-16vcpu-ubuntu-2404
     outputs:
       run_node: ${{ steps.scope.outputs.run_node }}
@@ -63,16 +62,21 @@ jobs:
   artifact-hygiene:
     name: artifact-hygiene
     needs: [docs-scope]
-    if: github.event_name == 'pull_request'
     runs-on: blacksmith-16vcpu-ubuntu-2404
     steps:
+      - name: Skip artifact hygiene on push
+        if: github.event_name == 'push'
+        run: echo "artifact-hygiene is PR-only; skipping on push."
+
       - name: Checkout
+        if: github.event_name == 'pull_request'
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
           submodules: false
 
       - name: Verify PR contains no blocked release/binary artifacts
+        if: github.event_name == 'pull_request'
         shell: bash
         run: |
           set -euo pipefail
@@ -149,6 +153,9 @@ jobs:
           - runtime: bun
             task: test
             command: pnpm canvas:a2ui:bundle && bunx vitest run --config vitest.unit.config.ts
+          - runtime: node
+            task: extensions
+            command: pnpm test:extensions
     steps:
       - name: Skip bun lane on push
         if: github.event_name == 'push' && matrix.runtime == 'bun'
