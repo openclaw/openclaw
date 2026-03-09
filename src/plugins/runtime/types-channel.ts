@@ -172,5 +172,6 @@ export type PluginRuntimeChannel = {
     sendMessageX: typeof import("../../x/send.js").sendMessageX;
     probeX: typeof import("../../x/probe.js").probeX;
     removeClientManager: typeof import("../../x/client.js").removeClientManager;
+    monitorXProvider: typeof import("../../x/monitor.js").monitorXProvider;
   };
 };

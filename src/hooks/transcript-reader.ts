@@ -152,8 +152,8 @@ export async function collectRecentSessionTranscripts(params: {
   maxTotalChars?: number;
 }): Promise<Map<string, SessionTranscriptSummary>> {
   const { storePath, days, now } = params;
-  const maxMessagesPerSession = params.maxMessagesPerSession ?? 20;
-  const maxTotalChars = params.maxTotalChars ?? 24_000;
+  const maxMessagesPerSession = params.maxMessagesPerSession ?? 50;
+  const maxTotalChars = params.maxTotalChars ?? 120_000;
   const cutoff = now.getTime() - days * 24 * 60 * 60 * 1000;
 
   const store = await loadSessionStoreAsync(storePath);
@@ -217,6 +217,82 @@ export async function collectRecentSessionTranscripts(params: {
     sessions: result.size,
     totalChars,
     days,
+  });
+
+  return result;
+}
+
+/**
+ * Collect sessions updated after a given timestamp (for incremental digest).
+ *
+ * Same logic as collectRecentSessionTranscripts but filters by
+ * `updatedAt > sinceTimestamp` instead of a day-based window.
+ */
+export async function collectNewSessionsSince(params: {
+  storePath: string;
+  sinceTimestamp: number;
+  maxMessagesPerSession?: number;
+  maxTotalChars?: number;
+}): Promise<Map<string, SessionTranscriptSummary>> {
+  const { storePath, sinceTimestamp } = params;
+  const maxMessagesPerSession = params.maxMessagesPerSession ?? 50;
+  const maxTotalChars = params.maxTotalChars ?? 120_000;
+
+  const store = await loadSessionStoreAsync(storePath);
+  const result = new Map<string, SessionTranscriptSummary>();
+
+  const entries = Object.entries(store)
+    .filter(([, entry]) => {
+      if (!entry || typeof entry !== "object") {
+        return false;
+      }
+      if (!entry.updatedAt || entry.updatedAt <= sinceTimestamp) {
+        return false;
+      }
+      if (!entry.sessionFile) {
+        return false;
+      }
+      return true;
+    })
+    .toSorted(([, a], [, b]) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0));
+
+  let totalChars = 0;
+
+  for (const [sessionKey, entry] of entries) {
+    if (totalChars >= maxTotalChars) {
+      break;
+    }
+
+    const sessionFile = entry.sessionFile!;
+    try {
+      await fs.access(sessionFile);
+    } catch {
+      continue;
+    }
+
+    const messages = await parseTranscriptMessages(sessionFile, {
+      maxMessages: maxMessagesPerSession,
+    });
+
+    if (messages.length === 0) {
+      continue;
+    }
+
+    const sessionChars = messages.reduce((sum, m) => sum + m.text.length, 0);
+    totalChars += sessionChars;
+
+    result.set(sessionKey, {
+      sessionKey,
+      sessionId: entry.sessionId ?? "unknown",
+      updatedAt: entry.updatedAt ?? 0,
+      messages,
+    });
+  }
+
+  log.debug("Collected new sessions since timestamp", {
+    sessions: result.size,
+    totalChars,
+    sinceTimestamp: new Date(sinceTimestamp).toISOString(),
   });
 
   return result;

@@ -100,6 +100,9 @@ describe("session-importance handler", () => {
       createMockSessionJsonl([
         { role: "user", content: "Please remember this: the server IP is 192.168.1.1" },
         { role: "assistant", content: "I'll remember that the server IP is 192.168.1.1" },
+        { role: "user", content: "And the port is 8080" },
+        { role: "assistant", content: "Got it, port 8080." },
+        { role: "user", content: "Also note the hostname is prod-server-01" },
       ]),
       "utf-8",
     );
@@ -132,6 +135,8 @@ describe("session-importance handler", () => {
         { role: "user", content: "The milestone for the next phase is to deploy by end of month" },
         { role: "assistant", content: "I'll track the deployment milestone." },
         { role: "user", content: "What's the progress on the release?" },
+        { role: "assistant", content: "The release is on track for deployment." },
+        { role: "user", content: "Good, let's finalize the roadmap" },
       ]),
       "utf-8",
     );
@@ -160,6 +165,8 @@ describe("session-importance handler", () => {
         { role: "user", content: "I need to make a decision about the architecture design" },
         { role: "assistant", content: "Let me compare the options..." },
         { role: "user", content: "What are the trade-off considerations?" },
+        { role: "assistant", content: "Here are the pros and cons of each approach." },
+        { role: "user", content: "Let's choose option B for the architecture" },
       ]),
       "utf-8",
     );
@@ -187,6 +194,9 @@ describe("session-importance handler", () => {
       createMockSessionJsonl([
         { role: "user", content: "请记住这个重要的信息" },
         { role: "assistant", content: "好的，我已经记录下来了" },
+        { role: "user", content: "还有一个重要的项目进度更新" },
+        { role: "assistant", content: "收到，我会记录这个项目进度" },
+        { role: "user", content: "别忘了明天的部署计划" },
       ]),
       "utf-8",
     );
@@ -207,13 +217,15 @@ describe("session-importance handler", () => {
     const sessionsDir = path.join(workDir, "sessions");
     await fs.mkdir(sessionsDir, { recursive: true });
 
-    // Create the first session
     const sessionFile1 = path.join(sessionsDir, "sess1.jsonl");
     await fs.writeFile(
       sessionFile1,
       createMockSessionJsonl([
         { role: "user", content: "Remember that the API key is abc123" },
         { role: "assistant", content: "Noted." },
+        { role: "user", content: "Also note the endpoint URL for the important service" },
+        { role: "assistant", content: "Got it." },
+        { role: "user", content: "And the database connection string too" },
       ]),
       "utf-8",
     );
@@ -228,21 +240,20 @@ describe("session-importance handler", () => {
     const files1 = await fs.readdir(importantDir);
     expect(files1.length).toBe(1);
 
-    // Read the slug from the filename
     const firstFilename = files1[0];
     const _firstContent = await fs.readFile(path.join(importantDir, firstFilename), "utf-8");
 
-    // Clear dedup filter to allow second session
     _clearProcessedSessions();
 
-    // Create a second session with the same topic slug
-    // We manually create a file that would match the slug for testing purposes
     const sessionFile2 = path.join(sessionsDir, "sess2.jsonl");
     await fs.writeFile(
       sessionFile2,
       createMockSessionJsonl([
         { role: "user", content: "Remember that the API key is now xyz789" },
         { role: "assistant", content: "Updated." },
+        { role: "user", content: "The new endpoint URL is also different" },
+        { role: "assistant", content: "Got it." },
+        { role: "user", content: "Keep this important change noted" },
       ]),
       "utf-8",
     );
@@ -254,9 +265,6 @@ describe("session-importance handler", () => {
     await handler(event2);
 
     const files2 = await fs.readdir(importantDir);
-    // Depending on whether slugs match, we'll either have 1 or 2 files
-    // In fallback mode, slugs are derived from first user message, so they might differ
-    // The key test: no errors thrown, files written successfully
     expect(files2.length).toBeGreaterThanOrEqual(1);
   });
 
@@ -283,6 +291,9 @@ describe("session-importance handler", () => {
       createMockSessionJsonl([
         { role: "user", content: "Remember to deploy tomorrow" },
         { role: "assistant", content: "I will remind you." },
+        { role: "user", content: "Also the important release milestone" },
+        { role: "assistant", content: "Noted." },
+        { role: "user", content: "And the roadmap for next sprint" },
       ]),
       "utf-8",
     );
@@ -322,6 +333,9 @@ describe("session-importance handler", () => {
       createMockSessionJsonl([
         { role: "user", content: "Save this: important project decision about architecture" },
         { role: "assistant", content: "Saved." },
+        { role: "user", content: "The milestone for deploy is next week" },
+        { role: "assistant", content: "I'll track that." },
+        { role: "user", content: "Also note the release roadmap changes" },
       ]),
       "utf-8",
     );
@@ -360,6 +374,16 @@ describe("session-importance handler", () => {
           role: "user",
           content:
             "Makes sense. What about the test?\n```typescript\ndescribe('Foo', () => {\n  it('calls bar', () => {});\n});\n```",
+        },
+        {
+          role: "assistant",
+          content:
+            "Good test. You might also add:\n```typescript\nit('inherits from Base', () => {\n  expect(new Foo()).toBeInstanceOf(Base);\n});\n```",
+        },
+        {
+          role: "user",
+          content:
+            "Great, let me also add error handling:\n```typescript\ntry { foo.bar(); } catch (e) { console.error(e); }\n```",
         },
       ]),
       "utf-8",

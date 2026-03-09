@@ -119,14 +119,15 @@ describe("tui command handlers", () => {
     await handleCommand("/new");
     await handleCommand("/reset");
 
-    // /new creates a unique session key (isolates TUI client) (#39217)
+    // /new notifies gateway about old session then creates a unique key (#39217)
+    expect(resetSession).toHaveBeenCalledTimes(2);
+    expect(resetSession).toHaveBeenNthCalledWith(1, "agent:main:main", "new");
     expect(setSessionMock).toHaveBeenCalledTimes(1);
     expect(setSessionMock).toHaveBeenCalledWith(
       expect.stringMatching(/^tui-[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/),
     );
     // /reset still resets the shared session
-    expect(resetSession).toHaveBeenCalledTimes(1);
-    expect(resetSession).toHaveBeenCalledWith("agent:main:main", "reset");
+    expect(resetSession).toHaveBeenNthCalledWith(2, "agent:main:main", "reset");
     expect(loadHistory).toHaveBeenCalledTimes(1); // /reset calls loadHistory directly; /new does so indirectly via setSession
   });
 
