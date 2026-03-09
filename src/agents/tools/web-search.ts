@@ -5,6 +5,7 @@ import { normalizeResolvedSecretInputString } from "../../config/types.secrets.j
 import { logVerbose } from "../../globals.js";
 import { wrapWebContent } from "../../security/external-content.js";
 import { normalizeSecretInput } from "../../utils/normalize-secret-input.js";
+import { defaultRuntime } from "../runtime.js";
 import type { AnyAgentTool } from "./common.js";
 import { jsonResult, readNumberParam, readStringArrayParam, readStringParam } from "./common.js";
 import { withTrustedWebToolsEndpoint } from "./web-guarded-fetch.js";
@@ -18,10 +19,11 @@ import {
   readResponseText,
   resolveCacheTtlMs,
   resolveTimeoutSeconds,
+  withTimeout,
   writeCache,
 } from "./web-shared.js";
 
-const SEARCH_PROVIDERS = ["brave", "perplexity", "grok", "gemini", "kimi"] as const;
+const SEARCH_PROVIDERS = ["brave", "perplexity", "grok", "gemini", "kimi", "bocha"] as const;
 const DEFAULT_SEARCH_COUNT = 5;
 const MAX_SEARCH_COUNT = 10;
 
@@ -42,6 +44,8 @@ const KIMI_WEB_SEARCH_TOOL = {
   type: "builtin_function",
   function: { name: "$web_search" },
 } as const;
+const DEFAULT_BOCHA_BASE_URL = "https://api.bocha.cn/v1";
+const DEFAULT_BOCHA_MODEL = "web-search";
 
 const SEARCH_CACHE = new Map<string, CacheEntry<Record<string, unknown>>>();
 const BRAVE_FRESHNESS_SHORTCUTS = new Set(["pd", "pw", "pm", "py"]);
@@ -386,6 +390,32 @@ type PerplexitySearchApiResponse = {
   id?: string;
 };
 
+type BochaConfig = {
+  apiKey?: string;
+  baseUrl?: string;
+  model?: string;
+  summary?: boolean;
+};
+
+type BochaWebPageValue = {
+  name?: string;
+  url?: string;
+  snippet?: string;
+  summary?: string;
+  siteName?: string;
+  datePublished?: string;
+  dateLastCrawled?: string;
+};
+
+type BochaSearchResponse = {
+  code?: number;
+  data?: {
+    webPages?: {
+      value?: BochaWebPageValue[];
+    };
+  };
+};
+
 function extractGrokContent(data: GrokSearchResponse): {
   text: string | undefined;
   annotationCitations: string[];
@@ -524,6 +554,13 @@ function missingSearchKeyPayload(provider: (typeof SEARCH_PROVIDERS)[number]) {
       docs: "https://docs.openclaw.ai/tools/web",
     };
   }
+  if (provider === "bocha") {
+    return {
+      error: "missing_bocha_api_key",
+      message: `web_search (bocha) needs a Bocha API key. Set BOCHA_API_KEY in the Gateway environment, or configure tools.web.search.bocha.apiKey. Get a key at https://open.bocha.cn`,
+      docs: "https://docs.openclaw.ai/tools/web",
+    };
+  }
   return {
     error: "missing_brave_api_key",
     message: `web_search needs a Brave Search API key. Run \`${formatCliCommand("openclaw configure --section web")}\` to store it, or set BRAVE_API_KEY in the Gateway environment.`,
@@ -547,6 +584,9 @@ function resolveSearchProvider(search?: WebSearchConfig): (typeof SEARCH_PROVIDE
   }
   if (raw === "kimi") {
     return "kimi";
+  }
+  if (raw === "bocha") {
+    return "bocha";
   }
   if (raw === "brave") {
     return "brave";
@@ -593,6 +633,14 @@ function resolveSearchProvider(search?: WebSearchConfig): (typeof SEARCH_PROVIDE
         'web_search: no provider configured, auto-detected "grok" from available API keys',
       );
       return "grok";
+    }
+    // 6. Bocha
+    const bochaConfig = resolveBochaConfig(search);
+    if (resolveBochaApiKey(bochaConfig)) {
+      defaultRuntime.log(
+        'web_search: no provider configured, auto-detected "bocha" from available API keys',
+      );
+      return "bocha";
     }
   }
 
@@ -833,6 +881,64 @@ function resolveGeminiModel(gemini?: GeminiConfig): string {
   const fromConfig =
     gemini && "model" in gemini && typeof gemini.model === "string" ? gemini.model.trim() : "";
   return fromConfig || DEFAULT_GEMINI_MODEL;
+}
+
+function resolveBochaConfig(search?: WebSearchConfig): BochaConfig {
+  if (!search || typeof search !== "object") {
+    return {};
+  }
+  const bocha = "bocha" in search ? search.bocha : undefined;
+  if (!bocha || typeof bocha !== "object") {
+    return {};
+  }
+  return bocha as BochaConfig;
+}
+
+function resolveBochaApiKey(bocha?: BochaConfig): string | undefined {
+  const fromConfig = bocha && typeof bocha.apiKey === "string" ? bocha.apiKey.trim() : "";
+  const fromEnv = (process.env.BOCHA_API_KEY ?? "").trim();
+  return fromConfig || fromEnv || undefined;
+}
+
+function resolveBochaBaseUrl(bocha?: BochaConfig): string {
+  const fromConfig = bocha && typeof bocha.baseUrl === "string" ? bocha.baseUrl.trim() : "";
+  return fromConfig || DEFAULT_BOCHA_BASE_URL;
+}
+
+function resolveBochaModel(bocha?: BochaConfig): string {
+  const fromConfig = bocha && typeof bocha.model === "string" ? bocha.model.trim() : "";
+  return fromConfig || DEFAULT_BOCHA_MODEL;
+}
+
+function resolveBochaSummary(bocha?: BochaConfig): boolean {
+  if (bocha && typeof bocha.summary === "boolean") {
+    return bocha.summary;
+  }
+  return true;
+}
+
+/** Map Brave-style freshness to Bocha API values (oneDay, oneWeek, oneMonth, oneYear, or date range). */
+function mapFreshnessToBocha(braveFreshness: string | undefined): string | undefined {
+  if (!braveFreshness) {
+    return undefined;
+  }
+  const lower = braveFreshness.toLowerCase();
+  if (lower === "pd") {
+    return "oneDay";
+  }
+  if (lower === "pw") {
+    return "oneWeek";
+  }
+  if (lower === "pm") {
+    return "oneMonth";
+  }
+  if (lower === "py") {
+    return "oneYear";
+  }
+  if (braveFreshness.includes("to")) {
+    return braveFreshness.replace(/to/gi, "..");
+  }
+  return braveFreshness;
 }
 
 async function withTrustedWebSearchEndpoint<T>(
@@ -1429,6 +1535,68 @@ async function runKimiSearch(params: {
   };
 }
 
+async function runBochaSearch(params: {
+  query: string;
+  count: number;
+  apiKey: string;
+  baseUrl: string;
+  model: string;
+  timeoutSeconds: number;
+  freshness?: string;
+  summary?: boolean;
+}): Promise<Record<string, unknown>> {
+  const endpoint = `${params.baseUrl.replace(/\/$/, "")}/${params.model}`;
+  const body: Record<string, unknown> = {
+    query: params.query,
+    count: Math.min(50, Math.max(1, params.count)),
+    summary: params.summary ?? true,
+  };
+  if (params.freshness) {
+    body.freshness = params.freshness;
+  }
+
+  const res = await fetch(endpoint, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${params.apiKey}`,
+    },
+    body: JSON.stringify(body),
+    signal: withTimeout(undefined, params.timeoutSeconds * 1000),
+  });
+
+  const textResult = await readResponseText(res);
+  if (!res.ok) {
+    throw new Error(
+      `Bocha Web Search API error (${res.status}): ${textResult.text || res.statusText}`,
+    );
+  }
+
+  const data = JSON.parse(textResult.text || "{}") as BochaSearchResponse;
+  if (data.code !== undefined && data.code !== 200) {
+    throw new Error(
+      `Bocha Web Search API error (code ${data.code}): ${(data as { msg?: string }).msg ?? textResult.text}`,
+    );
+  }
+
+  const items = data.data?.webPages?.value ?? [];
+  const mapped = items.map((entry) => ({
+    title: entry.name ?? "",
+    url: entry.url ?? "",
+    description: entry.summary ?? entry.snippet ?? "",
+    published: entry.datePublished ?? entry.dateLastCrawled ?? undefined,
+    siteName: entry.siteName ?? resolveSiteName(entry.url ?? ""),
+  }));
+
+  return {
+    query: params.query,
+    provider: "bocha",
+    count: mapped.length,
+    tookMs: 0,
+    results: mapped,
+  };
+}
+
 async function runBraveLlmContextSearch(params: {
   query: string;
   apiKey: string;
@@ -1515,6 +1683,9 @@ async function runWebSearch(params: {
   geminiModel?: string;
   kimiBaseUrl?: string;
   kimiModel?: string;
+  bochaModel?: string;
+  bochaBaseUrl?: string;
+  bochaSummary?: boolean;
   braveMode?: "web" | "llm-context";
 }): Promise<Record<string, unknown>> {
   const effectiveBraveMode = params.braveMode ?? "web";
@@ -1527,7 +1698,9 @@ async function runWebSearch(params: {
           ? (params.geminiModel ?? DEFAULT_GEMINI_MODEL)
           : params.provider === "kimi"
             ? `${params.kimiBaseUrl ?? DEFAULT_KIMI_BASE_URL}:${params.kimiModel ?? DEFAULT_KIMI_MODEL}`
-            : "";
+            : params.provider === "bocha"
+              ? `${params.bochaModel ?? DEFAULT_BOCHA_MODEL}:${params.bochaBaseUrl ?? DEFAULT_BOCHA_BASE_URL}:${params.freshness || "default"}:${String(params.bochaSummary ?? true)}`
+              : "";
   const cacheKey = normalizeCacheKey(
     params.provider === "brave" && effectiveBraveMode === "llm-context"
       ? `${params.provider}:llm-context:${params.query}:${params.country || "default"}:${params.search_lang || params.language || "default"}:${params.freshness || "default"}`
@@ -1682,6 +1855,64 @@ async function runWebSearch(params: {
     return payload;
   }
 
+  if (params.provider === "bocha") {
+    const bochaResult = await runBochaSearch({
+      query: params.query,
+      count: params.count,
+      apiKey: params.apiKey,
+      baseUrl: params.bochaBaseUrl ?? DEFAULT_BOCHA_BASE_URL,
+      model: params.bochaModel ?? DEFAULT_BOCHA_MODEL,
+      timeoutSeconds: params.timeoutSeconds,
+      freshness: params.freshness ? mapFreshnessToBocha(params.freshness) : undefined,
+      summary: params.bochaSummary ?? true,
+    });
+
+    const mapped = (
+      (bochaResult.results as Array<{
+        title?: string;
+        url?: string;
+        description?: string;
+        published?: string;
+        siteName?: string;
+      }>) ?? []
+    ).map((entry) => ({
+      title: (entry.title ?? "") ? wrapWebContent(entry.title ?? "", "web_search") : "",
+      url: entry.url ?? "",
+      description:
+        (entry.description ?? "") ? wrapWebContent(entry.description ?? "", "web_search") : "",
+      published: entry.published,
+      siteName: entry.siteName,
+    }));
+
+    const content =
+      mapped.length === 0
+        ? "No results found."
+        : mapped
+            .map(
+              (r, i) =>
+                `${i + 1}. **${r.title || "Untitled"}** — ${r.url}\n${r.description ? `${r.description}\n` : ""}`,
+            )
+            .join("\n\n");
+    const citations = mapped.map((r) => ({ url: r.url, title: r.title || undefined }));
+
+    const payload = {
+      query: params.query,
+      provider: params.provider,
+      model: params.bochaModel ?? DEFAULT_BOCHA_MODEL,
+      tookMs: Date.now() - start,
+      externalContent: {
+        untrusted: true,
+        source: "web_search",
+        provider: params.provider,
+        wrapped: true,
+      },
+      content: wrapWebContent(content),
+      citations,
+    };
+    writeCache(SEARCH_CACHE, cacheKey, payload, params.cacheTtlMs);
+    return payload;
+  }
+
   if (params.provider !== "brave") {
     throw new Error("Unsupported web search provider.");
   }
@@ -1816,6 +2047,7 @@ export function createWebSearchTool(options?: {
   const grokConfig = resolveGrokConfig(search);
   const geminiConfig = resolveGeminiConfig(search);
   const kimiConfig = resolveKimiConfig(search);
+  const bochaConfig = resolveBochaConfig(search);
   const braveConfig = resolveBraveConfig(search);
   const braveMode = resolveBraveMode(braveConfig);
 
@@ -1830,9 +2062,11 @@ export function createWebSearchTool(options?: {
           ? "Search the web using Kimi by Moonshot. Returns AI-synthesized answers with citations from native $web_search."
           : provider === "gemini"
             ? "Search the web using Gemini with Google Search grounding. Returns AI-synthesized answers with citations from Google Search."
-            : braveMode === "llm-context"
-              ? "Search the web using Brave Search LLM Context API. Returns pre-extracted page content (text chunks, tables, code blocks) optimized for LLM grounding."
-              : "Search the web using Brave Search API. Supports region-specific and localized search via country and language parameters. Returns titles, URLs, and snippets for fast research.";
+            : provider === "bocha"
+              ? "Search the web using Bocha. Supports time-range (freshness) and original web contents. Returns titles, URLs, and snippets; response format is Bing-compatible."
+              : braveMode === "llm-context"
+                ? "Search the web using Brave Search LLM Context API. Returns pre-extracted page content (text chunks, tables, code blocks) optimized for LLM grounding."
+                : "Search the web using Brave Search API. Supports region-specific and localized search via country and language parameters. Returns titles, URLs, and snippets for fast research.";
 
   return {
     label: "Web Search",
@@ -1853,7 +2087,9 @@ export function createWebSearchTool(options?: {
               ? resolveKimiApiKey(kimiConfig)
               : provider === "gemini"
                 ? resolveGeminiApiKey(geminiConfig)
-                : resolveSearchApiKey(search);
+                : provider === "bocha"
+                  ? resolveBochaApiKey(bochaConfig)
+                  : resolveSearchApiKey(search);
 
       if (!apiKey) {
         return jsonResult(missingSearchKeyPayload(provider));
@@ -1935,7 +2171,12 @@ export function createWebSearchTool(options?: {
         });
       }
       const rawFreshness = readStringParam(params, "freshness");
-      if (rawFreshness && provider !== "brave" && provider !== "perplexity") {
+      if (
+        rawFreshness &&
+        provider !== "brave" &&
+        provider !== "perplexity" &&
+        provider !== "bocha"
+      ) {
         return jsonResult({
           error: "unsupported_freshness",
           message: `freshness filtering is not supported by the ${provider} provider. Only Brave and Perplexity support freshness.`,
@@ -2089,6 +2330,9 @@ export function createWebSearchTool(options?: {
         geminiModel: resolveGeminiModel(geminiConfig),
         kimiBaseUrl: resolveKimiBaseUrl(kimiConfig),
         kimiModel: resolveKimiModel(kimiConfig),
+        bochaModel: resolveBochaModel(bochaConfig),
+        bochaBaseUrl: resolveBochaBaseUrl(bochaConfig),
+        bochaSummary: resolveBochaSummary(bochaConfig),
         braveMode,
       });
       return jsonResult(result);
@@ -2120,6 +2364,12 @@ export const __testing = {
   resolveKimiModel,
   resolveKimiBaseUrl,
   extractKimiCitations,
-  resolveRedirectUrl: resolveCitationRedirectUrl,
+  resolveBochaApiKey,
+  resolveBochaModel,
+  resolveBochaBaseUrl,
+  resolveBochaSummary,
+  mapFreshnessToBocha,
+  runBochaSearch,
+  resolveCitationRedirectUrl,
   resolveBraveMode,
 } as const;

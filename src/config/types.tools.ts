@@ -442,7 +442,7 @@ export type ToolsConfig = {
       /** Enable web search tool (default: true when API key is present). */
       enabled?: boolean;
       /** Search provider ("brave", "perplexity", "grok", "gemini", or "kimi"). */
-      provider?: "brave" | "perplexity" | "grok" | "gemini" | "kimi";
+      provider?: "brave" | "perplexity" | "grok" | "gemini" | "kimi" | "bocha";
       /** Brave Search API key (optional; defaults to BRAVE_API_KEY env var). */
       apiKey?: SecretInput;
       /** Default search results count (1-10). */
@@ -484,6 +484,17 @@ export type ToolsConfig = {
         baseUrl?: string;
         /** Model to use (defaults to "moonshot-v1-128k"). */
         model?: string;
+      };
+      /** Bocha-specific configuration (used when provider="bocha"). */
+      bocha?: {
+        /** Bocha API key (defaults to BOCHA_API_KEY env var). */
+        apiKey?: SecretInput;
+        /** Base URL for API requests (defaults to "https://api.bocha.cn/v1"). */
+        baseUrl?: string;
+        /** Model to use (defaults to "web-search"). */
+        model?: string;
+        /** Request summarized answers when supported (default: true). */
+        summary?: boolean;
       };
       /** Brave-specific configuration (used when provider="brave"). */
       brave?: {

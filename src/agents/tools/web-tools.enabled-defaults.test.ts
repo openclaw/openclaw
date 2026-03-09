@@ -202,7 +202,13 @@ describe("web_search country and language parameters", () => {
     { key: "ui_lang", value: "de-DE" },
     { key: "freshness", value: "pw" },
   ])("passes $key parameter to Brave API", async ({ key, value }) => {
-    const url = await runBraveSearchAndGetUrl({ [key]: value });
+    const mockFetch = installMockFetch({ web: { results: [] } });
+    const tool = createWebSearchTool({ config: undefined, sandboxed: true });
+    expect(tool).not.toBeNull();
+    const query = `test-${key}-${value}`;
+    await tool?.execute?.("call-1", { query, [key]: value });
+    expect(mockFetch).toHaveBeenCalled();
+    const url = new URL(mockFetch.mock.calls[0][0] as string);
     expect(url.searchParams.get(key)).toBe(value);
   });
 

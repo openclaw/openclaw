@@ -22,6 +22,7 @@ const {
   resolveKimiModel,
   resolveKimiBaseUrl,
   extractKimiCitations,
+  mapFreshnessToBocha,
   resolveBraveMode,
 } = __testing;
 
@@ -369,6 +370,23 @@ describe("extractKimiCitations", () => {
         ],
       }).toSorted(),
     ).toEqual(["https://example.com/a", "https://example.com/b", "https://example.com/c"]);
+  });
+});
+
+describe("web_search Bocha freshness mapping", () => {
+  it("maps Brave shortcuts to Bocha values", () => {
+    expect(mapFreshnessToBocha("pd")).toBe("oneDay");
+    expect(mapFreshnessToBocha("pw")).toBe("oneWeek");
+    expect(mapFreshnessToBocha("pm")).toBe("oneMonth");
+    expect(mapFreshnessToBocha("py")).toBe("oneYear");
+  });
+
+  it("maps date range to Bocha format (to -> ..)", () => {
+    expect(mapFreshnessToBocha("2024-01-01to2024-01-31")).toBe("2024-01-01..2024-01-31");
+  });
+
+  it("returns undefined for empty input", () => {
+    expect(mapFreshnessToBocha(undefined)).toBeUndefined();
   });
 });
 

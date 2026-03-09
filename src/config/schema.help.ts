@@ -649,7 +649,7 @@ export const FIELD_HELP: Record<string, string> = {
   "tools.message.broadcast.enabled": "Enable broadcast action (default: true).",
   "tools.web.search.enabled": "Enable the web_search tool (requires a provider API key).",
   "tools.web.search.provider":
-    'Search provider ("brave", "perplexity", "grok", "gemini", or "kimi"). Auto-detected from available API keys if omitted.',
+    'Search provider ("brave", "perplexity", "grok", "gemini", "kimi" or "bocha"). Auto-detected from available API keys if omitted.',
   "tools.web.search.apiKey": "Brave Search API key (fallback: BRAVE_API_KEY env var).",
   "tools.web.search.maxResults": "Default number of results to return (1-10).",
   "tools.web.search.timeoutSeconds": "Timeout in seconds for web_search requests.",
@@ -659,6 +659,11 @@ export const FIELD_HELP: Record<string, string> = {
   "tools.web.search.gemini.model": 'Gemini model override (default: "gemini-2.5-flash").',
   "tools.web.search.grok.apiKey": "Grok (xAI) API key (fallback: XAI_API_KEY env var).", // pragma: allowlist secret
   "tools.web.search.grok.model": 'Grok model override (default: "grok-4-1-fast").',
+  "tools.web.search.bocha.apiKey": "Bocha API key (fallback: BOCHA_API_KEY env var).", // pragma: allowlist secret
+  "tools.web.search.bocha.baseUrl": 'Bocha base URL override (default: "https://api.bocha.cn/v1").',
+  "tools.web.search.bocha.model": 'Bocha model override (default: "web-search").',
+  "tools.web.search.bocha.summary":
+    "Request summarized answers from Bocha when supported (default: true).",
   "tools.web.search.kimi.apiKey":
     "Moonshot/Kimi API key (fallback: KIMI_API_KEY or MOONSHOT_API_KEY env var).",
   "tools.web.search.kimi.baseUrl":

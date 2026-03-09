@@ -11,7 +11,7 @@ vi.mock("../../infra/net/fetch-guard.js", () => ({
 import { __testing } from "./web-search.js";
 
 describe("web_search redirect resolution hardening", () => {
-  const { resolveRedirectUrl } = __testing;
+  const { resolveCitationRedirectUrl } = __testing;
 
   beforeEach(() => {
     fetchWithSsrFGuardMock.mockReset();
@@ -25,7 +25,7 @@ describe("web_search redirect resolution hardening", () => {
       release,
     });
 
-    const resolved = await resolveRedirectUrl("https://example.com/start");
+    const resolved = await resolveCitationRedirectUrl("https://example.com/start");
     expect(resolved).toBe("https://example.com/final");
     expect(fetchWithSsrFGuardMock).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -41,7 +41,7 @@ describe("web_search redirect resolution hardening", () => {
 
   it("falls back to the original URL when guarded resolution fails", async () => {
     fetchWithSsrFGuardMock.mockRejectedValue(new Error("blocked"));
-    await expect(resolveRedirectUrl("https://example.com/start")).resolves.toBe(
+    await expect(resolveCitationRedirectUrl("https://example.com/start")).resolves.toBe(
       "https://example.com/start",
     );
   });

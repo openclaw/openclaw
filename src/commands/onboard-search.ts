@@ -6,11 +6,12 @@ import {
   hasConfiguredSecretInput,
   normalizeSecretInputString,
 } from "../config/types.secrets.js";
+import type { ToolsConfig } from "../config/types.tools.js";
 import type { RuntimeEnv } from "../runtime.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
 import type { SecretInputMode } from "./onboard-types.js";
 
-export type SearchProvider = "perplexity" | "brave" | "gemini" | "grok" | "kimi";
+export type SearchProvider = "perplexity" | "brave" | "gemini" | "grok" | "kimi" | "bocha";
 
 type SearchProviderEntry = {
   value: SearchProvider;
@@ -62,6 +63,14 @@ export const SEARCH_PROVIDER_OPTIONS: readonly SearchProviderEntry[] = [
     placeholder: "pplx-...",
     signupUrl: "https://www.perplexity.ai/settings/api",
   },
+  {
+    value: "bocha",
+    label: "Bocha Search",
+    hint: "Bocha web search API",
+    envKeys: ["BOCHA_API_KEY"],
+    placeholder: "Bocha API key",
+    signupUrl: "https://api.bocha.cn/",
+  },
 ] as const;
 
 export function hasKeyInEnv(entry: SearchProviderEntry): boolean {
@@ -81,6 +90,8 @@ function rawKeyValue(config: OpenClawConfig, provider: SearchProvider): unknown 
       return search?.grok?.apiKey;
     case "kimi":
       return search?.kimi?.apiKey;
+    case "bocha":
+      return search?.bocha?.apiKey;
   }
 }
 
@@ -122,12 +133,18 @@ function resolveSearchSecretInput(
   return key;
 }
 
+type WebSearchConfig = NonNullable<NonNullable<ToolsConfig["web"]>["search"]>;
+
 export function applySearchKey(
   config: OpenClawConfig,
   provider: SearchProvider,
   key: SecretInput,
 ): OpenClawConfig {
-  const search = { ...config.tools?.web?.search, provider, enabled: true };
+  const search: WebSearchConfig & { provider: SearchProvider; enabled: true } = {
+    ...config.tools?.web?.search,
+    provider,
+    enabled: true,
+  };
   switch (provider) {
     case "brave":
       search.apiKey = key;
@@ -143,6 +160,9 @@ export function applySearchKey(
       break;
     case "kimi":
       search.kimi = { ...search.kimi, apiKey: key };
+      break;
+    case "bocha":
+      search.bocha = { ...search.bocha, apiKey: key };
       break;
   }
   return {
