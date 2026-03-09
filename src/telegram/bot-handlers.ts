@@ -23,6 +23,7 @@ import { danger, logVerbose, warn } from "../globals.js";
 import { enqueueSystemEvent } from "../infra/system-events.js";
 import { MediaFetchError } from "../media/fetch.js";
 import { readChannelAllowFromStore } from "../pairing/pairing-store.js";
+import { matchPluginCommand } from "../plugins/commands.js";
 import { resolveAgentRoute } from "../routing/resolve-route.js";
 import { resolveThreadSessionKeys } from "../routing/session-key.js";
 import { withTelegramApiErrorLogging } from "./api-logging.js";
@@ -53,7 +54,6 @@ import {
 } from "./group-access.js";
 import { migrateTelegramGroupConfig } from "./group-migration.js";
 import { resolveTelegramInlineButtonsScope } from "./inline-buttons.js";
-import { matchPluginCommand } from "../plugins/commands.js";
 import {
   buildModelsKeyboard,
   buildProviderKeyboard,
