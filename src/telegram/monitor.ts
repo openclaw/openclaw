@@ -379,11 +379,15 @@ export async function monitorTelegramProvider(opts: MonitorTelegramOpts = {}) {
           webhookCleared = false;
         }
         const isRecoverable = isRecoverableTelegramNetworkError(err, { context: "polling" });
-        if (!isConflict && !isRecoverable) {
-          throw err;
-        }
-        const reason = isConflict ? "getUpdates conflict" : "network error";
+        const reason = isConflict
+          ? "getUpdates conflict"
+          : isRecoverable
+            ? "network error"
+            : "message processing error";
         const errMsg = formatErrorMessage(err);
+        if (!isConflict && !isRecoverable) {
+          log(`[telegram] Non-recoverable error in polling cycle: ${errMsg}; restarting runner.`);
+        }
         const shouldRestart = await waitBeforeRestart(
           (delay) => `Telegram ${reason}: ${errMsg}; retrying in ${delay}.`,
         );
