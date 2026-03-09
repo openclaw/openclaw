@@ -34,7 +34,6 @@ function makeReplyLogger() {
 function createHandlerForTest(opts: { cfg: OpenClawConfig; replyResolver: unknown }) {
   const backgroundTasks = new Set<Promise<unknown>>();
   const handler = createWebOnMessageHandler({
-    cfg: opts.cfg,
     verbose: false,
     connectionId: "test",
     maxMediaBytes: 1024,

@@ -16,7 +16,6 @@ import { resolvePeerId } from "./peer.js";
 import { processMessage } from "./process-message.js";
 
 export function createWebOnMessageHandler(params: {
-  cfg: ReturnType<typeof loadConfig>;
   verbose: boolean;
   connectionId: string;
   maxMediaBytes: number;
