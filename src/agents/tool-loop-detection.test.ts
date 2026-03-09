@@ -608,7 +608,7 @@ describe("tool-loop-detection", () => {
       expect(loopResult.stuck).toBe(false);
     });
 
-    it("blocks repeated exec calls at critical threshold (#34574)", () => {
+    it("warns for exec calls repeated past warning threshold (#34574)", () => {
       const state = createState();
       const execParams = { command: "cat /tmp/status", cwd: "/workspace" };
 
@@ -636,6 +636,38 @@ describe("tool-loop-detection", () => {
       expect(loopResult.stuck).toBe(true);
       if (loopResult.stuck) {
         expect(loopResult.level).toBe("warning");
+      }
+    });
+
+    it("triggers global circuit breaker for exec at 30 repetitions (#34574)", () => {
+      const state = createState();
+      const execParams = { command: "cat /tmp/status", cwd: "/workspace" };
+
+      for (let i = 0; i < GLOBAL_CIRCUIT_BREAKER_THRESHOLD; i += 1) {
+        const toolCallId = `exec-gcb-${i}`;
+        recordToolCall(state, "exec", execParams, toolCallId);
+        recordToolCallOutcome(state, {
+          toolName: "exec",
+          toolParams: execParams,
+          toolCallId,
+          result: {
+            content: [{ type: "text", text: "same output" }],
+            details: {
+              status: "completed",
+              exitCode: 0,
+              durationMs: 300 + i * 5,
+              aggregated: "same output",
+              cwd: "/workspace",
+            },
+          },
+        });
+      }
+
+      const loopResult = detectToolCallLoop(state, "exec", execParams, enabledLoopDetectionConfig);
+      expect(loopResult.stuck).toBe(true);
+      if (loopResult.stuck) {
+        expect(loopResult.level).toBe("critical");
+        expect(loopResult.detector).toBe("global_circuit_breaker");
       }
     });
 
