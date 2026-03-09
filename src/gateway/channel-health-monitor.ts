@@ -42,15 +42,42 @@ export type ChannelHealthMonitorDeps = {
   cooldownCycles?: number;
   maxRestartsPerHour?: number;
   abortSignal?: AbortSignal;
+  /**
+   * Called before restarting a channel that has failed multiple consecutive
+   * health-monitor restarts without becoming stable.  The callback receives
+   * the channel/account identifiers and the number of consecutive restarts
+   * so far, allowing channel-specific escalation (e.g. clearing Discord
+   * resume state to force a fresh IDENTIFY).
+   */
+  onBeforeRestart?: (params: {
+    channelId: ChannelId;
+    accountId: string;
+    consecutiveRestarts: number;
+  }) => void;
+  /** Called when a previously-restarted channel has been healthy long enough
+   *  to be considered stable.  Useful for resetting channel-specific persistent
+   *  state (e.g. Discord hello-stall counters). */
+  onChannelStable?: (params: { channelId: ChannelId; accountId: string }) => void;
 };
 
 export type ChannelHealthMonitor = {
   stop: () => void;
 };
 
+/** How long a channel must stay healthy after a restart before we consider it stable. */
+const STABLE_THRESHOLD_MS = 5 * 60_000;
+/** After this many consecutive restarts without stability, escalate (e.g. fresh IDENTIFY). */
+const ESCALATION_THRESHOLD = 3;
+/** Max backoff multiplier exponent for exponential cooldown. */
+const MAX_BACKOFF_EXPONENT = 3;
+/** Hard cap on exponential cooldown (60 minutes). */
+const MAX_COOLDOWN_MS = 60 * 60_000;
+
 type RestartRecord = {
   lastRestartAt: number;
   restartsThisHour: { at: number }[];
+  /** Number of health-monitor restarts without the channel becoming stable. */
+  consecutiveRestarts: number;
 };
 
 function resolveTimingPolicy(
@@ -80,6 +107,8 @@ export function startChannelHealthMonitor(deps: ChannelHealthMonitorDeps): Chann
     cooldownCycles = DEFAULT_COOLDOWN_CYCLES,
     maxRestartsPerHour = DEFAULT_MAX_RESTARTS_PER_HOUR,
     abortSignal,
+    onBeforeRestart,
+    onChannelStable,
   } = deps;
   const timing = resolveTimingPolicy(deps);
 
@@ -131,17 +160,37 @@ export function startChannelHealthMonitor(deps: ChannelHealthMonitorDeps): Chann
             channelConnectGraceMs: timing.channelConnectGraceMs,
           };
           const health = evaluateChannelHealth(status, healthPolicy);
-          if (health.healthy) {
-            continue;
-          }
 
           const key = rKey(channelId, accountId);
           const record = restartRecords.get(key) ?? {
             lastRestartAt: 0,
             restartsThisHour: [],
+            consecutiveRestarts: 0,
           };
 
-          if (now - record.lastRestartAt <= cooldownMs) {
+          // Stability check: if the channel is healthy and has been up long
+          // enough since the last restart, reset the consecutive counter.
+          if (health.healthy) {
+            if (
+              record.consecutiveRestarts > 0 &&
+              record.lastRestartAt > 0 &&
+              now - record.lastRestartAt >= STABLE_THRESHOLD_MS
+            ) {
+              log.info?.(
+                `[${channelId}:${accountId}] health-monitor: channel stable after ${record.consecutiveRestarts} restart(s), resetting counter`,
+              );
+              record.consecutiveRestarts = 0;
+              restartRecords.set(key, record);
+              onChannelStable?.({ channelId: channelId as ChannelId, accountId });
+            }
+            continue;
+          }
+
+          // Apply exponential backoff: base cooldown × 2^min(consecutiveRestarts, cap)
+          const backoffExponent = Math.min(record.consecutiveRestarts, MAX_BACKOFF_EXPONENT);
+          const effectiveCooldownMs = Math.min(cooldownMs * 2 ** backoffExponent, MAX_COOLDOWN_MS);
+
+          if (now - record.lastRestartAt <= effectiveCooldownMs) {
             continue;
           }
 
@@ -154,8 +203,22 @@ export function startChannelHealthMonitor(deps: ChannelHealthMonitorDeps): Chann
           }
 
           const reason = resolveChannelRestartReason(status, health);
+          const nextConsecutive = record.consecutiveRestarts + 1;
 
-          log.info?.(`[${channelId}:${accountId}] health-monitor: restarting (reason: ${reason})`);
+          log.info?.(
+            `[${channelId}:${accountId}] health-monitor: restarting (reason: ${reason}, consecutive: ${nextConsecutive})`,
+          );
+
+          // Escalation: after N consecutive restarts without stability, notify
+          // the caller so it can take channel-specific recovery action (e.g.
+          // clearing Discord resume state to force a fresh IDENTIFY).
+          if (nextConsecutive >= ESCALATION_THRESHOLD && onBeforeRestart) {
+            onBeforeRestart({
+              channelId: channelId as ChannelId,
+              accountId,
+              consecutiveRestarts: nextConsecutive,
+            });
+          }
 
           try {
             if (status.running) {
@@ -165,6 +228,7 @@ export function startChannelHealthMonitor(deps: ChannelHealthMonitorDeps): Chann
             await channelManager.startChannel(channelId as ChannelId, accountId);
             record.lastRestartAt = now;
             record.restartsThisHour.push({ at: now });
+            record.consecutiveRestarts = nextConsecutive;
             restartRecords.set(key, record);
           } catch (err) {
             log.error?.(

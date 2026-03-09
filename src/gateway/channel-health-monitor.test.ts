@@ -410,6 +410,12 @@ describe("channel-health-monitor", () => {
     });
     const monitor = await startAndRunCheck(manager);
     expect(manager.startChannel).toHaveBeenCalledTimes(1);
+    // Base cooldown = 2 × 5000 = 10000ms. After 1st restart (consecutive=1),
+    // exponential backoff doubles it to 20000ms = 4 check intervals.
+    await vi.advanceTimersByTimeAsync(DEFAULT_CHECK_INTERVAL_MS);
+    expect(manager.startChannel).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(DEFAULT_CHECK_INTERVAL_MS);
+    expect(manager.startChannel).toHaveBeenCalledTimes(1);
     await vi.advanceTimersByTimeAsync(DEFAULT_CHECK_INTERVAL_MS);
     expect(manager.startChannel).toHaveBeenCalledTimes(1);
     await vi.advanceTimersByTimeAsync(DEFAULT_CHECK_INTERVAL_MS);
@@ -430,9 +436,14 @@ describe("channel-health-monitor", () => {
       cooldownCycles: 1,
       maxRestartsPerHour: 3,
     });
-    await vi.advanceTimersByTimeAsync(5_001);
+    // With exponential backoff (cooldownCycles=1, base=1000ms):
+    // 1st: at ~1000ms (base cooldown, consecutive 0→1)
+    // 2nd: ~1000 + 2000 backoff → ~4000ms (consecutive 1→2)
+    // 3rd: ~4000 + 4000 backoff → ~9000ms (consecutive 2→3)
+    await vi.advanceTimersByTimeAsync(10_001);
     expect(manager.startChannel).toHaveBeenCalledTimes(3);
-    await vi.advanceTimersByTimeAsync(1_001);
+    // Subsequent restarts should be blocked by the per-hour limit
+    await vi.advanceTimersByTimeAsync(20_001);
     expect(manager.startChannel).toHaveBeenCalledTimes(3);
     monitor.stop();
   });
@@ -571,6 +582,116 @@ describe("channel-health-monitor", () => {
       });
       expect(manager.stopChannel).toHaveBeenCalledWith("slack", "default");
       expect(manager.startChannel).toHaveBeenCalledWith("slack", "default");
+      monitor.stop();
+    });
+  });
+
+  describe("consecutive restart tracking and escalation", () => {
+    it("tracks consecutive restarts and calls onBeforeRestart after threshold", async () => {
+      const onBeforeRestart = vi.fn();
+      const manager = createSnapshotManager({
+        discord: {
+          default: managedStoppedAccount("keeps crashing"),
+        },
+      });
+      // Use short intervals; cooldownCycles=1 means base cooldown=1000ms
+      const monitor = startDefaultMonitor(manager, {
+        checkIntervalMs: 1_000,
+        cooldownCycles: 1,
+        maxRestartsPerHour: 10,
+        onBeforeRestart,
+      });
+
+      // 1st restart: at ~1001ms (base cooldown 1000ms, backoff=2^0=1x)
+      await vi.advanceTimersByTimeAsync(1_001);
+      expect(manager.startChannel).toHaveBeenCalledTimes(1);
+      expect(onBeforeRestart).not.toHaveBeenCalled();
+
+      // 2nd restart: consecutive=1 → backoff=2^1=2x → cooldown=2000ms
+      await vi.advanceTimersByTimeAsync(3_001);
+      expect(manager.startChannel).toHaveBeenCalledTimes(2);
+      expect(onBeforeRestart).not.toHaveBeenCalled();
+
+      // 3rd restart: consecutive=2 → backoff=2^2=4x → cooldown=4000ms
+      await vi.advanceTimersByTimeAsync(5_001);
+      expect(manager.startChannel).toHaveBeenCalledTimes(3);
+      expect(onBeforeRestart).toHaveBeenCalledTimes(1);
+      expect(onBeforeRestart).toHaveBeenCalledWith({
+        channelId: "discord",
+        accountId: "default",
+        consecutiveRestarts: 3,
+      });
+
+      monitor.stop();
+    });
+
+    it("resets consecutive restart counter when channel becomes stable", async () => {
+      const onChannelStable = vi.fn();
+      let currentStatus: Partial<ChannelAccountSnapshot> = managedStoppedAccount("crashed");
+
+      const manager = createMockChannelManager({
+        getRuntimeSnapshot: vi.fn(() => snapshotWith({ discord: { default: currentStatus } })),
+      });
+
+      const monitor = startDefaultMonitor(manager, {
+        checkIntervalMs: 1_000,
+        cooldownCycles: 1,
+        onChannelStable,
+      });
+
+      // Trigger a restart
+      await vi.advanceTimersByTimeAsync(2_001);
+      expect(manager.startChannel).toHaveBeenCalledTimes(1);
+
+      // Channel comes back healthy
+      currentStatus = {
+        running: true,
+        connected: true,
+        enabled: true,
+        configured: true,
+      };
+
+      // After 5+ minutes of stability, counter should reset
+      await vi.advanceTimersByTimeAsync(5 * 60_000 + 1_001);
+      expect(onChannelStable).toHaveBeenCalledWith({
+        channelId: "discord",
+        accountId: "default",
+      });
+
+      monitor.stop();
+    });
+
+    it("applies exponential backoff to cooldown after consecutive restarts", async () => {
+      const manager = createSnapshotManager({
+        discord: {
+          default: managedStoppedAccount("keeps crashing"),
+        },
+      });
+
+      // Base cooldown = 2 cycles × 5000ms = 10000ms
+      const monitor = startDefaultMonitor(manager, {
+        checkIntervalMs: DEFAULT_CHECK_INTERVAL_MS,
+        cooldownCycles: 2,
+        maxRestartsPerHour: 20,
+      });
+
+      // 1st restart: backoff=2^0=1x, effectiveCooldown=10000ms
+      await vi.advanceTimersByTimeAsync(DEFAULT_CHECK_INTERVAL_MS + 1);
+      expect(manager.startChannel).toHaveBeenCalledTimes(1);
+
+      // After 1st: consecutive=1, backoff=2^1=2x, effectiveCooldown=20000ms
+      // 2 intervals = 10000ms: still in cooldown
+      await vi.advanceTimersByTimeAsync(DEFAULT_CHECK_INTERVAL_MS * 2);
+      expect(manager.startChannel).toHaveBeenCalledTimes(1);
+
+      // 3 intervals = 15000ms: still in cooldown (need >20000ms)
+      await vi.advanceTimersByTimeAsync(DEFAULT_CHECK_INTERVAL_MS);
+      expect(manager.startChannel).toHaveBeenCalledTimes(1);
+
+      // 5 intervals = 25000ms total from 1st restart: past 20000ms backoff
+      await vi.advanceTimersByTimeAsync(DEFAULT_CHECK_INTERVAL_MS * 2 + 1);
+      expect(manager.startChannel).toHaveBeenCalledTimes(2);
+
       monitor.stop();
     });
   });

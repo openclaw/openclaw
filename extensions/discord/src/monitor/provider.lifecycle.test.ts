@@ -3,6 +3,11 @@ import type { Client } from "@buape/carbon";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { RuntimeEnv } from "../../../../src/runtime.js";
 import type { WaitForDiscordGatewayStopParams } from "../monitor.gateway.js";
+import {
+  getOrCreatePersistentState,
+  markStable,
+  requestCleanRestart,
+} from "./provider.lifecycle.js";
 
 const {
   attachDiscordGatewayLoggingMock,
@@ -39,6 +44,41 @@ vi.mock("./gateway-registry.js", () => ({
   registerGateway: registerGatewayMock,
   unregisterGateway: unregisterGatewayMock,
 }));
+
+describe("DiscordLifecyclePersistentState", () => {
+  it("creates default state for new accounts", () => {
+    const state = getOrCreatePersistentState("test-new-account");
+    expect(state.consecutiveHelloStalls).toBe(0);
+    expect(state.forceCleanRestart).toBe(false);
+  });
+
+  it("returns the same state object for the same account", () => {
+    const s1 = getOrCreatePersistentState("test-same-account");
+    const s2 = getOrCreatePersistentState("test-same-account");
+    expect(s1).toBe(s2);
+  });
+
+  it("requestCleanRestart sets forceCleanRestart flag", () => {
+    const state = getOrCreatePersistentState("test-request-clean");
+    expect(state.forceCleanRestart).toBe(false);
+    requestCleanRestart("test-request-clean");
+    expect(state.forceCleanRestart).toBe(true);
+  });
+
+  it("markStable resets counters", () => {
+    const state = getOrCreatePersistentState("test-mark-stable");
+    state.consecutiveHelloStalls = 5;
+    state.forceCleanRestart = true;
+    markStable("test-mark-stable");
+    expect(state.consecutiveHelloStalls).toBe(0);
+    expect(state.forceCleanRestart).toBe(false);
+  });
+
+  it("markStable is a no-op for unknown accounts", () => {
+    // Should not throw
+    markStable("test-unknown-account-xyz");
+  });
+});
 
 describe("runDiscordGatewayLifecycle", () => {
   beforeEach(() => {
@@ -445,5 +485,104 @@ describe("runDiscordGatewayLifecycle", () => {
     // guarded by !lifecycleStopping to avoid contradicting the abort.
     const connectedTrue = statusUpdates.find((s) => s.connected === true);
     expect(connectedTrue).toBeUndefined();
+  });
+
+  it("persists consecutiveHelloStalls across lifecycle restarts", async () => {
+    vi.useFakeTimers();
+    try {
+      const { runDiscordGatewayLifecycle, getOrCreatePersistentState } =
+        await import("./provider.lifecycle.js");
+
+      // First lifecycle: 2 hello stalls (not enough to force fresh identify)
+      const { emitter: emitter1, gateway: gateway1 } = createGatewayHarness({
+        state: {
+          sessionId: "session-persist",
+          resumeGatewayUrl: "wss://gateway.discord.gg",
+          sequence: 100,
+        },
+        sequence: 100,
+      });
+      getDiscordGatewayEmitterMock.mockReturnValueOnce(emitter1);
+      waitForDiscordGatewayStopMock.mockImplementationOnce(async () => {
+        await emitGatewayOpenAndWait(emitter1);
+        await emitGatewayOpenAndWait(emitter1);
+      });
+
+      const { lifecycleParams: params1 } = createLifecycleHarness({
+        accountId: "persist-test",
+        gateway: gateway1,
+      });
+      await runDiscordGatewayLifecycle(params1);
+
+      // Verify counter persisted
+      const state = getOrCreatePersistentState("persist-test");
+      expect(state.consecutiveHelloStalls).toBe(2);
+
+      // Second lifecycle: 1 more stall should trigger fresh identify (total=3)
+      const { emitter: emitter2, gateway: gateway2 } = createGatewayHarness({
+        state: {
+          sessionId: "session-persist-2",
+          resumeGatewayUrl: "wss://gateway.discord.gg",
+          sequence: 200,
+        },
+        sequence: 200,
+      });
+      getDiscordGatewayEmitterMock.mockReturnValueOnce(emitter2);
+      waitForDiscordGatewayStopMock.mockImplementationOnce(async () => {
+        await emitGatewayOpenAndWait(emitter2);
+      });
+
+      const { lifecycleParams: params2 } = createLifecycleHarness({
+        accountId: "persist-test",
+        gateway: gateway2,
+      });
+      await runDiscordGatewayLifecycle(params2);
+
+      // After fresh identify the counter resets
+      expect(state.consecutiveHelloStalls).toBe(0);
+      // Resume state was cleared
+      expect(gateway2.state?.sessionId).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("clears resume state on lifecycle start when forceCleanRestart is set", async () => {
+    const { runDiscordGatewayLifecycle, getOrCreatePersistentState } =
+      await import("./provider.lifecycle.js");
+
+    const { emitter, gateway } = createGatewayHarness({
+      state: {
+        sessionId: "session-force",
+        resumeGatewayUrl: "wss://gateway.discord.gg",
+        sequence: 50,
+      },
+      sequence: 50,
+    });
+    getDiscordGatewayEmitterMock.mockReturnValueOnce(emitter);
+
+    // Set the forceCleanRestart flag (as the health monitor would)
+    const state = getOrCreatePersistentState("force-clean-test");
+    state.forceCleanRestart = true;
+
+    const { lifecycleParams, runtimeLog } = createLifecycleHarness({
+      accountId: "force-clean-test",
+      gateway,
+    });
+    await runDiscordGatewayLifecycle(lifecycleParams);
+
+    // Resume state should have been cleared
+    expect(gateway.state?.sessionId).toBeNull();
+    expect(gateway.state?.resumeGatewayUrl).toBeNull();
+    expect(gateway.state?.sequence).toBeNull();
+    expect(gateway.sequence).toBeNull();
+
+    // Flag should be reset
+    expect(state.forceCleanRestart).toBe(false);
+
+    // Log message about the clean restart
+    expect(runtimeLog).toHaveBeenCalledWith(
+      expect.stringContaining("health-monitor requested clean restart"),
+    );
   });
 });
