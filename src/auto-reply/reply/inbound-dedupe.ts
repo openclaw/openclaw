@@ -12,9 +12,41 @@ const inboundDedupeCache = createDedupeCache({
 });
 
 const normalizeProvider = (value?: string | null) => value?.trim().toLowerCase() || "";
+const normalizeValue = (value?: string | null) => value?.trim() || "";
 
-const resolveInboundPeerId = (ctx: MsgContext) =>
-  ctx.OriginatingTo ?? ctx.To ?? ctx.From ?? ctx.SessionKey;
+function resolveDiscordInboundPeerId(ctx: MsgContext): string {
+  if (ctx.ChatType === "direct") {
+    const senderId = normalizeValue(ctx.SenderId);
+    if (senderId) {
+      return `dm:${senderId}`;
+    }
+  }
+  const groupSpace = normalizeValue(ctx.GroupSpace);
+  const groupChannel = normalizeValue(ctx.GroupChannel);
+  if (groupSpace || groupChannel) {
+    return `guild:${groupSpace}|channel:${groupChannel}`;
+  }
+  return "";
+}
+
+function resolveInboundPeerId(ctx: MsgContext, provider: string): string | undefined {
+  if (provider === "discord") {
+    const discordPeerId = resolveDiscordInboundPeerId(ctx);
+    if (discordPeerId) {
+      return discordPeerId;
+    }
+  }
+  return ctx.OriginatingTo ?? ctx.To ?? ctx.From ?? ctx.SessionKey;
+}
+
+function resolveInboundThreadScope(ctx: MsgContext, provider: string): string {
+  if (provider === "discord") {
+    return "";
+  }
+  return ctx.MessageThreadId !== undefined && ctx.MessageThreadId !== null
+    ? String(ctx.MessageThreadId)
+    : "";
+}
 
 function resolveInboundDedupeSessionScope(ctx: MsgContext): string {
   const sessionKey =
@@ -39,16 +71,13 @@ export function buildInboundDedupeKey(ctx: MsgContext): string | null {
   if (!provider || !messageId) {
     return null;
   }
-  const peerId = resolveInboundPeerId(ctx);
+  const peerId = resolveInboundPeerId(ctx, provider);
   if (!peerId) {
     return null;
   }
   const sessionScope = resolveInboundDedupeSessionScope(ctx);
   const accountId = ctx.AccountId?.trim() ?? "";
-  const threadId =
-    ctx.MessageThreadId !== undefined && ctx.MessageThreadId !== null
-      ? String(ctx.MessageThreadId)
-      : "";
+  const threadId = resolveInboundThreadScope(ctx, provider);
   return [provider, accountId, sessionScope, peerId, threadId, messageId].filter(Boolean).join("|");
 }
 

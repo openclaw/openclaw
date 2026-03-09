@@ -278,6 +278,53 @@ describe("inbound dedupe", () => {
       ),
     ).toBe(true);
   });
+
+  it("dedupes discord replays even when auto-thread routing changes the target", () => {
+    resetInboundDedupe();
+    const first: MsgContext = {
+      Provider: "discord",
+      OriginatingChannel: "discord",
+      OriginatingTo: "channel:parent-1",
+      To: "channel:parent-1",
+      From: "discord:channel:parent-1",
+      GroupSpace: "guild-1",
+      GroupChannel: "#general",
+      MessageSid: "1480599840105959566",
+      SessionKey: "agent:main:main",
+    };
+    const replay: MsgContext = {
+      ...first,
+      OriginatingTo: "channel:thread-99",
+      To: "channel:thread-99",
+      From: "discord:channel:thread-99",
+      MessageThreadId: "thread-99",
+    };
+    expect(shouldSkipDuplicateInbound(first, { now: 100 })).toBe(false);
+    expect(shouldSkipDuplicateInbound(replay, { now: 200 })).toBe(true);
+  });
+
+  it("does not dedupe discord messages from different source channels", () => {
+    resetInboundDedupe();
+    const base: MsgContext = {
+      Provider: "discord",
+      OriginatingChannel: "discord",
+      MessageSid: "1480599840105959566",
+      SessionKey: "agent:main:main",
+      GroupSpace: "guild-1",
+    };
+    expect(
+      shouldSkipDuplicateInbound(
+        { ...base, GroupChannel: "#general", OriginatingTo: "channel:1" },
+        { now: 100 },
+      ),
+    ).toBe(false);
+    expect(
+      shouldSkipDuplicateInbound(
+        { ...base, GroupChannel: "#random", OriginatingTo: "channel:2" },
+        { now: 200 },
+      ),
+    ).toBe(false);
+  });
 });
 
 describe("createInboundDebouncer", () => {
