@@ -104,9 +104,11 @@ export async function downloadImageFeishu(params: {
     httpTimeoutMs: FEISHU_MEDIA_HTTP_TIMEOUT_MS,
   });
 
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- Feishu SDK accepts timeout at request level; types omit it
   const response = await client.im.image.get({
     path: { image_key: normalizedImageKey },
-  });
+    timeout: FEISHU_MEDIA_HTTP_TIMEOUT_MS,
+  } as any);
 
   const buffer = await readFeishuResponseBuffer({
     response,
@@ -142,10 +144,12 @@ export async function downloadMessageResourceFeishu(params: {
     httpTimeoutMs: FEISHU_MEDIA_HTTP_TIMEOUT_MS,
   });
 
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- Feishu SDK accepts timeout at request level; types omit it
   const response = await client.im.messageResource.get({
     path: { message_id: messageId, file_key: normalizedFileKey },
     params: { type },
-  });
+    timeout: FEISHU_MEDIA_HTTP_TIMEOUT_MS,
+  } as any);
 
   const buffer = await readFeishuResponseBuffer({
     response,
@@ -194,13 +198,15 @@ export async function uploadImageFeishu(params: {
   // See: https://github.com/larksuite/node-sdk/issues/121
   const imageData = typeof image === "string" ? fs.createReadStream(image) : image;
 
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- Feishu SDK accepts timeout at request level; types omit it
   const response = await client.im.image.create({
     data: {
       image_type: imageType,
       // eslint-disable-next-line @typescript-eslint/no-explicit-any -- SDK accepts Buffer or ReadStream
       image: imageData as any,
     },
-  });
+    timeout: FEISHU_MEDIA_HTTP_TIMEOUT_MS,
+  } as any);
 
   // SDK v1.30+ returns data directly without code wrapper on success
   // On error, it throws or returns { code, msg }

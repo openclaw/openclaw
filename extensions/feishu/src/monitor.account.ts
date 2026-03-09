@@ -129,6 +129,8 @@ export async function resolveReactionSyntheticEvent(
 type RegisterEventHandlersContext = {
   cfg: ClawdbotConfig;
   accountId: string;
+  /** Bot open ID for this account — used as fallback when the global botOpenIds map is not yet populated. */
+  botOpenId?: string;
   runtime?: RuntimeEnv;
   chatHistories: Map<string, HistoryEntry[]>;
   fireAndForget?: boolean;
@@ -240,14 +242,24 @@ function registerEventHandlers(
   const log = runtime?.log ?? console.log;
   const error = runtime?.error ?? console.error;
   const enqueue = createChatQueue();
+  const resolveBotOpenIdsByAccount = (): Record<string, string | undefined> => {
+    const fromMap = Object.fromEntries(botOpenIds);
+    // Defensive: if the global map is empty (startup race), seed it with at least
+    // the current account's bot open ID so self-message detection still works.
+    if (Object.keys(fromMap).length === 0 && context.botOpenId) {
+      return { [accountId]: context.botOpenId };
+    }
+    return fromMap;
+  };
   const dispatchFeishuMessage = async (event: FeishuMessageEvent) => {
     const chatId = event.message.chat_id?.trim() || "unknown";
     const task = () =>
       handleFeishuMessage({
         cfg,
         event,
-        botOpenId: botOpenIds.get(accountId),
+        botOpenId: botOpenIds.get(accountId) ?? context.botOpenId,
         botName: botNames.get(accountId),
+        botOpenIdsByAccount: resolveBotOpenIdsByAccount(),
         runtime,
         chatHistories,
         accountId,
@@ -416,7 +428,7 @@ function registerEventHandlers(
     "im.message.reaction.created_v1": async (data) => {
       const processReaction = async () => {
         const event = data as FeishuReactionCreatedEvent;
-        const myBotId = botOpenIds.get(accountId);
+        const myBotId = botOpenIds.get(accountId) ?? context.botOpenId;
         const syntheticEvent = await resolveReactionSyntheticEvent({
           cfg,
           accountId,
@@ -432,6 +444,7 @@ function registerEventHandlers(
           event: syntheticEvent,
           botOpenId: myBotId,
           botName: botNames.get(accountId),
+          botOpenIdsByAccount: resolveBotOpenIdsByAccount(),
           runtime,
           chatHistories,
           accountId,
@@ -467,7 +480,8 @@ function registerEventHandlers(
         const promise = handleFeishuCardAction({
           cfg,
           event,
-          botOpenId: botOpenIds.get(accountId),
+          botOpenId: botOpenIds.get(accountId) ?? context.botOpenId,
+          botOpenIdsByAccount: resolveBotOpenIdsByAccount(),
           runtime,
           accountId,
         });
@@ -533,6 +547,7 @@ export async function monitorSingleAccount(params: MonitorSingleAccountParams): 
   registerEventHandlers(eventDispatcher, {
     cfg,
     accountId,
+    botOpenId: botOpenId ?? undefined,
     runtime,
     chatHistories,
     fireAndForget: true,

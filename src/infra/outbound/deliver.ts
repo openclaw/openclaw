@@ -260,6 +260,8 @@ type MessageSentEvent = {
   content: string;
   error?: string;
   messageId?: string;
+  metadata?: Record<string, unknown>;
+  channelData?: Record<string, unknown>;
 };
 
 function hasMediaPayload(payload: ReplyPayload): boolean {
@@ -353,6 +355,8 @@ function createMessageSentEmitter(params: {
       accountId: params.accountId ?? undefined,
       conversationId: params.to,
       messageId: event.messageId,
+      metadata: event.metadata,
+      channelData: event.channelData,
       isGroup: params.mirrorIsGroup,
       groupId: params.mirrorGroupId,
     });
@@ -651,6 +655,7 @@ async function deliverOutboundPayloadsCore(
     };
     return {
       channel: "signal" as const,
+      meta: undefined as Record<string, unknown> | undefined,
       ...(await sendSignal(to, formatted.text, {
         cfg,
         mediaUrl,
@@ -720,6 +725,8 @@ async function deliverOutboundPayloadsCore(
           success: true,
           content: payloadSummary.text,
           messageId: delivery.messageId,
+          metadata: delivery.meta,
+          channelData: effectivePayload.channelData,
         });
         continue;
       }
@@ -730,11 +737,13 @@ async function deliverOutboundPayloadsCore(
         } else {
           await sendTextChunks(payloadSummary.text, sendOverrides);
         }
-        const messageId = results.at(-1)?.messageId;
+        const currentResults = results.slice(beforeCount);
+        const lastResult = currentResults.at(-1);
         emitMessageSent({
-          success: results.length > beforeCount,
+          success: currentResults.length > 0,
           content: payloadSummary.text,
-          messageId,
+          messageId: lastResult?.messageId,
+          metadata: lastResult?.meta,
         });
         continue;
       }
@@ -756,17 +765,20 @@ async function deliverOutboundPayloadsCore(
         }
         const beforeCount = results.length;
         await sendTextChunks(fallbackText, sendOverrides);
-        const messageId = results.at(-1)?.messageId;
+        const currentResults = results.slice(beforeCount);
+        const lastResult = currentResults.at(-1);
         emitMessageSent({
-          success: results.length > beforeCount,
+          success: currentResults.length > 0,
           content: payloadSummary.text,
-          messageId,
+          messageId: lastResult?.messageId,
+          metadata: lastResult?.meta,
         });
         continue;
       }
 
       let first = true;
       let lastMessageId: string | undefined;
+      let lastMeta: Record<string, unknown> | undefined;
       for (const url of payloadSummary.mediaUrls) {
         throwIfAborted(abortSignal);
         const caption = first ? payloadSummary.text : "";
@@ -775,16 +787,19 @@ async function deliverOutboundPayloadsCore(
           const delivery = await sendSignalMedia(caption, url);
           results.push(delivery);
           lastMessageId = delivery.messageId;
+          lastMeta = delivery.meta;
         } else {
           const delivery = await handler.sendMedia(caption, url, sendOverrides);
           results.push(delivery);
           lastMessageId = delivery.messageId;
+          lastMeta = delivery.meta;
         }
       }
       emitMessageSent({
         success: true,
         content: payloadSummary.text,
         messageId: lastMessageId,
+        metadata: lastMeta,
       });
     } catch (err) {
       emitMessageSent({

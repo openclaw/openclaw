@@ -37,6 +37,7 @@ export type CanonicalInboundMessageHookContext = {
   originatingTo?: string;
   guildId?: string;
   channelName?: string;
+  channelData?: Record<string, unknown>;
   isGroup: boolean;
   groupId?: string;
 };
@@ -50,6 +51,8 @@ export type CanonicalSentMessageHookContext = {
   accountId?: string;
   conversationId?: string;
   messageId?: string;
+  metadata?: Record<string, unknown>;
+  channelData?: Record<string, unknown>;
   isGroup?: boolean;
   groupId?: string;
 };
@@ -106,6 +109,7 @@ export function deriveInboundMessageHookContext(
     originatingTo: ctx.OriginatingTo,
     guildId: ctx.GroupSpace,
     channelName: ctx.GroupChannel,
+    channelData: ctx.ChannelData,
     isGroup,
     groupId: isGroup ? conversationId : undefined,
   };
@@ -120,6 +124,8 @@ export function buildCanonicalSentMessageHookContext(params: {
   accountId?: string;
   conversationId?: string;
   messageId?: string;
+  metadata?: Record<string, unknown>;
+  channelData?: Record<string, unknown>;
   isGroup?: boolean;
   groupId?: string;
 }): CanonicalSentMessageHookContext {
@@ -132,6 +138,8 @@ export function buildCanonicalSentMessageHookContext(params: {
     accountId: params.accountId,
     conversationId: params.conversationId ?? params.to,
     messageId: params.messageId,
+    metadata: params.metadata,
+    channelData: params.channelData,
     isGroup: params.isGroup,
     groupId: params.groupId,
   };
@@ -168,6 +176,7 @@ export function toPluginMessageReceivedEvent(
       senderE164: canonical.senderE164,
       guildId: canonical.guildId,
       channelName: canonical.channelName,
+      ...(canonical.channelData ? { channelData: canonical.channelData } : {}),
     },
   };
 }
@@ -179,6 +188,13 @@ export function toPluginMessageSentEvent(
     to: canonical.to,
     content: canonical.content,
     success: canonical.success,
+    ...(canonical.messageId ? { messageId: canonical.messageId } : {}),
+    ...(canonical.metadata && Object.keys(canonical.metadata).length > 0
+      ? { metadata: canonical.metadata }
+      : {}),
+    ...(canonical.channelData && Object.keys(canonical.channelData).length > 0
+      ? { channelData: canonical.channelData }
+      : {}),
     ...(canonical.error ? { error: canonical.error } : {}),
   };
 }
