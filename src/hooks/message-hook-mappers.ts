@@ -25,6 +25,7 @@ export type CanonicalInboundMessageHookContext = {
   conversationId?: string;
   messageId?: string;
   senderId?: string;
+  senderManagedAccountId?: string;
   senderName?: string;
   senderUsername?: string;
   senderE164?: string;
@@ -97,6 +98,7 @@ export function deriveInboundMessageHookContext(
       ctx.MessageSidFirst ??
       ctx.MessageSidLast,
     senderId: ctx.SenderId,
+    senderManagedAccountId: ctx.SenderManagedAccountId,
     senderName: ctx.SenderName,
     senderUsername: ctx.SenderUsername,
     senderE164: ctx.SenderE164,
@@ -172,6 +174,7 @@ export function toPluginMessageReceivedEvent(
       originatingTo: canonical.originatingTo,
       messageId: canonical.messageId,
       senderId: canonical.senderId,
+      senderManagedAccountId: canonical.senderManagedAccountId,
       senderName: canonical.senderName,
       senderUsername: canonical.senderUsername,
       senderE164: canonical.senderE164,
@@ -220,6 +223,7 @@ export function toInternalMessageReceivedContext(
       surface: canonical.surface,
       threadId: canonical.threadId,
       senderId: canonical.senderId,
+      senderManagedAccountId: canonical.senderManagedAccountId,
       senderName: canonical.senderName,
       senderUsername: canonical.senderUsername,
       senderE164: canonical.senderE164,
@@ -265,8 +269,9 @@ function toInternalInboundMessageHookContextBase(canonical: CanonicalInboundMess
     channelId: canonical.channelId,
     conversationId: canonical.conversationId,
     messageId: canonical.messageId,
-    senderId: canonical.senderId,
-    senderName: canonical.senderName,
+      senderId: canonical.senderId,
+      senderManagedAccountId: canonical.senderManagedAccountId,
+      senderName: canonical.senderName,
     senderUsername: canonical.senderUsername,
     provider: canonical.provider,
     surface: canonical.surface,

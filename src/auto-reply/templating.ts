@@ -121,6 +121,8 @@ export type MsgContext = {
   OwnerAllowFrom?: Array<string | number>;
   SenderName?: string;
   SenderId?: string;
+  /** Managed provider account id when the sender is one of OpenClaw's own accounts. */
+  SenderManagedAccountId?: string;
   SenderUsername?: string;
   SenderTag?: string;
   SenderE164?: string;

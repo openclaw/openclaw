@@ -73,6 +73,10 @@ import {
   DiscordThreadUpdateListener,
   registerDiscordListener,
 } from "./listeners.js";
+import {
+  registerDiscordManagedSender,
+  unregisterDiscordManagedSender,
+} from "./managed-sender-registry.js";
 import { createDiscordMessageHandler } from "./message-handler.js";
 import {
   createDiscordCommandArgFallbackButton,
@@ -657,6 +661,10 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
       const botUser = await client.fetchUser("@me");
       botUserId = botUser?.id;
       botUserName = botUser?.username?.trim() || botUser?.globalName?.trim() || undefined;
+      registerDiscordManagedSender({
+        userId: botUserId,
+        accountId: account.accountId,
+      });
     } catch (err) {
       runtime.error?.(danger(`discord: failed to fetch bot identity: ${String(err)}`));
     }
@@ -769,6 +777,10 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
       releaseEarlyGatewayErrorGuard,
     });
   } finally {
+    unregisterDiscordManagedSender({
+      userId: botUserId,
+      accountId: account.accountId,
+    });
     deactivateMessageHandler?.();
     autoPresenceController?.stop();
     opts.setStatus?.({ connected: false });

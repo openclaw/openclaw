@@ -49,6 +49,7 @@ import {
 } from "./message-utils.js";
 import { buildDirectLabel, buildGuildLabel, resolveReplyContext } from "./reply-context.js";
 import { deliverDiscordReply } from "./reply-delivery.js";
+import { resolveDiscordManagedSenderAccountId } from "./managed-sender-registry.js";
 import { resolveDiscordAutoThreadReplyPlan, resolveDiscordThreadStarter } from "./threading.js";
 import { sendTyping } from "./typing.js";
 
@@ -360,6 +361,7 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
     ConversationLabel: fromLabel,
     SenderName: senderName,
     SenderId: sender.id,
+    SenderManagedAccountId: resolveDiscordManagedSenderAccountId(sender.id),
     SenderUsername: senderUsername,
     SenderTag: senderTag,
     GroupSubject: groupSubject,
