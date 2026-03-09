@@ -12,7 +12,7 @@ import {
 } from "../agents/channel-tools.js";
 import { resolveOpenClawDocsPath } from "../agents/docs-path.js";
 import { buildModelAliasLines } from "../agents/model-alias-lines.js";
-import { resolveDefaultModelForAgent } from "../agents/model-selection.js";
+import { resolveDefaultModelForAgent, resolveThinkingDefault } from "../agents/model-selection.js";
 import { resolveOwnerDisplaySetting } from "../agents/owner-display.js";
 import { buildEmbeddedSystemPrompt } from "../agents/pi-embedded-runner/system-prompt.js";
 import { createOpenClawCodingTools } from "../agents/pi-tools.js";
@@ -155,8 +155,15 @@ export async function agentsViewSystemPromptCommand(
     ? resolveHeartbeatPrompt(cfg.agents?.defaults?.heartbeat?.prompt)
     : undefined;
 
+  const defaultThinkLevel = resolveThinkingDefault({
+    cfg,
+    provider,
+    model: modelLabel.split("/").slice(1).join("/"),
+  });
+
   const prompt = buildEmbeddedSystemPrompt({
     workspaceDir,
+    defaultThinkLevel,
     reasoningTagHint: isReasoningTagProvider(provider),
     heartbeatPrompt,
     skillsPrompt,
