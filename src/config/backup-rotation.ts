@@ -148,8 +148,9 @@ export async function cleanOrphanBackups(
   // Keep only the CONFIG_BACKUP_COUNT - 1 most recent datetime backups.
   // The format is lexicographically sortable (YYYYMMDD-HHmmssSSS), so a
   // string sort gives chronological order without reading file metadata.
-  datetimeBackups.toSorted().reverse(); // descending: most recent first
-  const toDelete = datetimeBackups.slice(CONFIG_BACKUP_COUNT - 1);
+  // toSorted returns a new array; assign it so the slice below uses the sorted order
+  const sortedBackups = datetimeBackups.toSorted().toReversed(); // descending: most recent first
+  const toDelete = sortedBackups.slice(CONFIG_BACKUP_COUNT - 1);
   for (const entry of toDelete) {
     await ioFs.unlink(path.join(dir, entry)).catch(() => {
       // best-effort
