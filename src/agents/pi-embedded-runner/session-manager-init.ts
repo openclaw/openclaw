@@ -24,15 +24,18 @@ export async function shouldInjectBootstrapContext(sessionFile: string): Promise
   }
 
   const byteLimit = Math.min(stat.size, MAX_TRANSCRIPT_SCAN_BYTES);
-  const stream = fs.createReadStream(sessionFile, {
-    encoding: "utf-8",
-    end: Math.max(0, byteLimit - 1),
-  });
-  const rl = readline.createInterface({ input: stream, crlfDelay: Infinity });
+  let stream: fs.ReadStream | null = null;
+  let rl: readline.Interface | null = null;
 
   let scannedLines = 0;
   let scannedBytes = 0;
   try {
+    stream = fs.createReadStream(sessionFile, {
+      encoding: "utf-8",
+      end: Math.max(0, byteLimit - 1),
+    });
+    rl = readline.createInterface({ input: stream, crlfDelay: Infinity });
+
     for await (const rawLine of rl) {
       scannedLines += 1;
       scannedBytes += Buffer.byteLength(rawLine, "utf8");
@@ -56,9 +59,11 @@ export async function shouldInjectBootstrapContext(sessionFile: string): Promise
         return true;
       }
     }
+  } catch {
+    return true;
   } finally {
-    rl.close();
-    stream.destroy();
+    rl?.close();
+    stream?.destroy();
   }
 
   return true;

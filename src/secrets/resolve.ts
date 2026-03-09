@@ -245,9 +245,6 @@ async function assertSecurePath(params: {
     }
   }
   if (params.allowInsecurePath) {
-    if (process.platform !== "win32") {
-      throw new Error(`${params.label} allowInsecurePath is only supported on Windows.`);
-    }
     return effectivePath;
   }
 
@@ -291,6 +288,11 @@ async function readFileProviderPayload(params: {
 
   const filePath = resolveUserPath(params.providerConfig.path);
   const readPromise = (async () => {
+    if (params.providerConfig.allowInsecurePath && process.platform !== "win32") {
+      throw new Error(
+        `secrets.providers.${params.providerName}.path allowInsecurePath is only supported on Windows.`,
+      );
+    }
     const secureFilePath = await assertSecurePath({
       targetPath: filePath,
       label: `secrets.providers.${params.providerName}.path`,

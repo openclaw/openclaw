@@ -19,6 +19,12 @@ async function makeSessionFile(content?: string): Promise<string> {
   return sessionFile;
 }
 
+async function makeSessionDirectory(): Promise<string> {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-session-bootstrap-dir-"));
+  tempRoots.push(root);
+  return path.join(root, "session-dir");
+}
+
 afterEach(async () => {
   await Promise.all(
     tempRoots.splice(0).map((root) => fs.rm(root, { recursive: true, force: true })),
@@ -62,6 +68,13 @@ describe("shouldInjectBootstrapContext", () => {
   it("falls back to injecting bootstrap context when the transcript is malformed", async () => {
     const sessionFile = await makeSessionFile("{not-json}\n");
     expect(await shouldInjectBootstrapContext(sessionFile)).toBe(true);
+  });
+
+  it("falls back to injecting bootstrap context when transcript streaming fails", async () => {
+    const sessionDir = await makeSessionDirectory();
+    await fs.mkdir(sessionDir);
+
+    expect(await shouldInjectBootstrapContext(sessionDir)).toBe(true);
   });
 
   it("falls back to injecting bootstrap context when the first assistant entry is beyond the scan cap", async () => {

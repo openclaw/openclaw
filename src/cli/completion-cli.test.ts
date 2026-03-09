@@ -22,4 +22,32 @@ describe("generateZshCompletion", () => {
 
     expect(() => generateZshCompletion(program)).toThrow(/unsafe command name/i);
   });
+
+  it("escapes zsh descriptions and emits quoted specs per option flag", () => {
+    const program = new Command();
+    program
+      .name("openclaw")
+      .description("root")
+      .option("-s, --safe", 'danger $(touch /tmp/pwned) `whoami` [x] "quoted"');
+    program.command("status").description("show $(uname) `id` status");
+
+    const script = generateZshCompletion(program);
+
+    expect(script).toContain(
+      '"(--safe -s)--safe[danger \\$(touch /tmp/pwned) \\`whoami\\` \\[x\\] \\"quoted\\"]"',
+    );
+    expect(script).toContain(
+      '"(--safe -s)-s[danger \\$(touch /tmp/pwned) \\`whoami\\` \\[x\\] \\"quoted\\"]"',
+    );
+    expect(script).toContain("'status[show \\$(uname) \\`id\\` status]'");
+    expect(script).not.toContain("{--safe,-s}");
+  });
+
+  it("rejects unsafe option flags before emitting zsh code", () => {
+    const program = new Command();
+    program.name("openclaw");
+    program.addOption(new Command().createOption("--safe$(id)", "unsafe"));
+
+    expect(() => generateZshCompletion(program)).toThrow(/unsafe option flag/i);
+  });
 });

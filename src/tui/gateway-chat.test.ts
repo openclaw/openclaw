@@ -270,7 +270,6 @@ describe("resolveGatewayConnection", () => {
               source: "file",
               path: secretFile,
               mode: "json",
-              allowInsecurePath: true,
             },
           },
         },

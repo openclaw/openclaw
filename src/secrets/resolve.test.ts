@@ -229,6 +229,11 @@ describe("secret ref resolver", () => {
     expect(value).toBe("value:openai/api-key");
   });
 
+  itPosix("allows exec-provider allowInsecurePath outside Windows", async () => {
+    const value = await resolveExecSecret(execProtocolV1ScriptPath, { allowInsecurePath: true });
+    expect(value).toBe("value:openai/api-key");
+  });
+
   itPosix("uses timeoutMs as the default no-output timeout for exec providers", async () => {
     const root = await createCaseDir("exec-delay");
     const scriptPath = path.join(root, "resolver-delay.sh");

@@ -56,8 +56,35 @@ function sanitizeZshCommandName(value: string): string {
   return trimmed;
 }
 
+function sanitizeZshOptionFlag(value: string): string {
+  const trimmed = value.trim();
+  if (!/^--?[A-Za-z0-9][A-Za-z0-9._-]*$/.test(trimmed)) {
+    throw new Error(`Unsafe option flag for zsh completion: ${value}`);
+  }
+  return trimmed;
+}
+
 function toZshFunctionSegment(value: string): string {
   return sanitizeZshCommandName(value).replace(/[^A-Za-z0-9]/g, "_");
+}
+
+function escapeZshDoubleQuoted(value: string): string {
+  return value
+    .replace(/\\/g, "\\\\")
+    .replace(/"/g, '\\"')
+    .replace(/\$/g, "\\$")
+    .replace(/`/g, "\\`")
+    .replace(/!/g, "\\!")
+    .replace(/\[/g, "\\[")
+    .replace(/\]/g, "\\]");
+}
+
+function escapeZshSingleQuotedValue(value: string): string {
+  return escapeZshDoubleQuoted(value).replace(/'/g, "\\'");
+}
+
+function buildZshOptionSpec(flag: string, exclusiveFlags: string[], desc: string): string {
+  return `"(${exclusiveFlags.join(" ")})${flag}[${desc}]"`;
 }
 
 function resolveCompletionCacheDir(env: NodeJS.ProcessEnv = process.env): string {
@@ -434,18 +461,21 @@ function generateZshArgs(cmd: Command): string {
   return (cmd.options || [])
     .map((opt) => {
       const flags = opt.flags.split(/[ ,|]+/);
-      const name = flags.find((f) => f.startsWith("--")) || flags[0];
-      const short = flags.find((f) => f.startsWith("-") && !f.startsWith("--"));
-      const desc = opt.description
-        .replace(/\\/g, "\\\\")
-        .replace(/"/g, '\\"')
-        .replace(/'/g, "'\\''")
-        .replace(/\[/g, "\\[")
-        .replace(/\]/g, "\\]");
-      if (short) {
-        return `"(${name} ${short})"{${name},${short}}"[${desc}]"`;
+      const longFlag = flags.find((f) => f.startsWith("--"));
+      const shortFlag = flags.find((f) => f.startsWith("-") && !f.startsWith("--"));
+      const primaryFlag = sanitizeZshOptionFlag(longFlag || flags[0] || "");
+      const secondaryFlag = shortFlag ? sanitizeZshOptionFlag(shortFlag) : null;
+      const desc = escapeZshDoubleQuoted(opt.description);
+      const exclusiveFlags = [primaryFlag, secondaryFlag].filter((value): value is string =>
+        Boolean(value),
+      );
+      if (!secondaryFlag) {
+        return buildZshOptionSpec(primaryFlag, exclusiveFlags, desc);
       }
-      return `"${name}[${desc}]"`;
+      return [
+        buildZshOptionSpec(primaryFlag, exclusiveFlags, desc),
+        buildZshOptionSpec(secondaryFlag, exclusiveFlags, desc),
+      ].join(" \\\n    ");
     })
     .join(" \\\n    ");
 }
@@ -454,12 +484,7 @@ function generateZshSubcmdList(cmd: Command): string {
   const list = cmd.commands
     .map((c) => {
       const name = sanitizeZshCommandName(c.name());
-      const desc = c
-        .description()
-        .replace(/\\/g, "\\\\")
-        .replace(/'/g, "'\\''")
-        .replace(/\[/g, "\\[")
-        .replace(/\]/g, "\\]");
+      const desc = escapeZshSingleQuotedValue(c.description());
       return `'${name}[${desc}]'`;
     })
     .join(" ");
