@@ -1210,7 +1210,10 @@ export function startHeartbeatRunner(opts: {
     }
 
     scheduleNext();
-    // Propagate failure status so the wake layer's circuit breaker can track it.
+    // Propagate failure status so the wake layer's circuit breaker can track
+    // complete outages. If any agent succeeded (ran=true), we return "ran"
+    // even if others failed; the circuit breaker is designed to trip only on
+    // total failure, not partial degradation.
     if (lastFailedReason && !ran) {
       return { status: "failed", reason: lastFailedReason };
     }
