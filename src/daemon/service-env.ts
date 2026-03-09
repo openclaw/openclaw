@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import os from "node:os";
 import path from "node:path";
 import { VERSION } from "../version.js";
@@ -47,8 +48,34 @@ const SERVICE_PROXY_ENV_KEYS = [
   "all_proxy",
 ] as const;
 
+const SERVICE_PROXY_LAUNCHCTL_KEYS = [
+  "HTTP_PROXY",
+  "HTTPS_PROXY",
+  "NO_PROXY",
+  "ALL_PROXY",
+] as const;
+
+function readLaunchctlEnvironmentValue(
+  key: (typeof SERVICE_PROXY_LAUNCHCTL_KEYS)[number],
+  platform: NodeJS.Platform,
+): string | undefined {
+  if (platform !== "darwin") {
+    return undefined;
+  }
+  try {
+    const value = execFileSync("/bin/launchctl", ["getenv", key], {
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"],
+    }).trim();
+    return value || undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 function readServiceProxyEnvironment(
   env: Record<string, string | undefined>,
+  platform: NodeJS.Platform = process.platform,
 ): Record<string, string | undefined> {
   const out: Record<string, string | undefined> = {};
   for (const key of SERVICE_PROXY_ENV_KEYS) {
@@ -61,6 +88,16 @@ function readServiceProxyEnvironment(
       continue;
     }
     out[key] = trimmed;
+  }
+  for (const key of SERVICE_PROXY_LAUNCHCTL_KEYS) {
+    if (out[key]) {
+      continue;
+    }
+    const value = readLaunchctlEnvironmentValue(key, platform);
+    if (!value) {
+      continue;
+    }
+    out[key] = value;
   }
   return out;
 }
@@ -317,7 +354,7 @@ function resolveSharedServiceEnvironmentFields(
   const configPath = env.OPENCLAW_CONFIG_PATH;
   // Keep a usable temp directory for supervised services even when the host env omits TMPDIR.
   const tmpDir = env.TMPDIR?.trim() || os.tmpdir();
-  const proxyEnv = readServiceProxyEnvironment(env);
+  const proxyEnv = readServiceProxyEnvironment(env, platform);
   // On macOS, launchd services don't inherit the shell environment, so Node's undici/fetch
   // cannot locate the system CA bundle. Default to /etc/ssl/cert.pem so TLS verification
   // works correctly when running as a LaunchAgent without extra user configuration.

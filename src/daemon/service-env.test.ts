@@ -1,6 +1,6 @@
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveGatewayStateDir } from "./paths.js";
 import {
   buildMinimalServicePath,
@@ -9,6 +9,22 @@ import {
   getMinimalServicePathParts,
   getMinimalServicePathPartsFromEnv,
 } from "./service-env.js";
+
+const { execFileSyncMock } = vi.hoisted(() => ({
+  execFileSyncMock: vi.fn(),
+}));
+
+vi.mock("node:child_process", async () => {
+  const actual = await vi.importActual<typeof import("node:child_process")>("node:child_process");
+  return {
+    ...actual,
+    execFileSync: execFileSyncMock,
+  };
+});
+
+beforeEach(() => {
+  execFileSyncMock.mockReset();
+});
 
 describe("getMinimalServicePathParts - Linux user directories", () => {
   it("includes user bin directories when HOME is set on Linux", () => {
@@ -330,6 +346,60 @@ describe("buildServiceEnvironment", () => {
     expect(env.NO_PROXY).toBe("localhost,127.0.0.1");
     expect(env.http_proxy).toBe("http://proxy.local:7890");
     expect(env.all_proxy).toBe("socks5://proxy.local:1080");
+  });
+
+  it("falls back to launchctl proxy variables on darwin when shell env is empty", () => {
+    execFileSyncMock.mockImplementation((_command, args: string[]) => {
+      const key = args[1];
+      if (key === "HTTP_PROXY" || key === "HTTPS_PROXY" || key === "ALL_PROXY") {
+        return "http://127.0.0.1:6152\n";
+      }
+      return "\n";
+    });
+
+    const env = buildServiceEnvironment({
+      env: { HOME: "/Users/tester" },
+      port: 18789,
+      platform: "darwin",
+    });
+
+    expect(env.HTTP_PROXY).toBe("http://127.0.0.1:6152");
+    expect(env.HTTPS_PROXY).toBe("http://127.0.0.1:6152");
+    expect(env.ALL_PROXY).toBe("http://127.0.0.1:6152");
+    expect(env.NO_PROXY).toBeUndefined();
+  });
+
+  it("prefers explicit proxy env values over launchctl fallbacks", () => {
+    execFileSyncMock.mockImplementation(() => "http://127.0.0.1:9999\n");
+
+    const env = buildServiceEnvironment({
+      env: {
+        HOME: "/Users/tester",
+        HTTP_PROXY: "http://127.0.0.1:6152",
+        HTTPS_PROXY: "http://127.0.0.1:6152",
+        ALL_PROXY: "http://127.0.0.1:6152",
+      },
+      port: 18789,
+      platform: "darwin",
+    });
+
+    expect(env.HTTP_PROXY).toBe("http://127.0.0.1:6152");
+    expect(env.HTTPS_PROXY).toBe("http://127.0.0.1:6152");
+    expect(env.ALL_PROXY).toBe("http://127.0.0.1:6152");
+  });
+
+  it("does not query launchctl outside darwin", () => {
+    const env = buildServiceEnvironment({
+      env: { HOME: "/home/tester" },
+      port: 18789,
+      platform: "linux",
+    });
+
+    expect(execFileSyncMock).not.toHaveBeenCalled();
+    expect(env.HTTP_PROXY).toBeUndefined();
+    expect(env.HTTPS_PROXY).toBeUndefined();
+    expect(env.ALL_PROXY).toBeUndefined();
+    expect(env.NO_PROXY).toBeUndefined();
   });
 });
 
