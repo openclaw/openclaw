@@ -198,6 +198,19 @@ export async function resolveApiKeyForProvider(params: {
     return resolveAwsSdkAuthInfo();
   }
 
+  // When an explicit plain-string API key is set in openclaw.json under
+  // models.providers.<id>.apiKey, prefer it over stored auth-profile credentials.
+  // Profile keys may be stale (e.g. the user rotated their API key and updated
+  // openclaw.json but auth-profiles.json still holds the old key). The config
+  // file is the canonical source of truth for explicitly managed plain-text keys.
+  // SecretRef-based config keys are NOT affected (normalizeOptionalSecretInput
+  // returns undefined for objects), so secret-ref managed providers continue to
+  // use the profile/env lookup path unchanged.
+  const explicitConfigKey = getCustomProviderApiKey(cfg, provider);
+  if (explicitConfigKey) {
+    return { apiKey: explicitConfigKey, source: "models.json", mode: "api-key" };
+  }
+
   const order = resolveAuthProfileOrder({
     cfg,
     store,
@@ -231,11 +244,6 @@ export async function resolveApiKeyForProvider(params: {
       source: envResolved.source,
       mode: envResolved.source.includes("OAUTH_TOKEN") ? "oauth" : "api-key",
     };
-  }
-
-  const customKey = getCustomProviderApiKey(cfg, provider);
-  if (customKey) {
-    return { apiKey: customKey, source: "models.json", mode: "api-key" };
   }
 
   const syntheticLocalAuth = resolveSyntheticLocalProviderAuth({ cfg, provider });

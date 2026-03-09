@@ -1,6 +1,65 @@
 import { describe, expect, it } from "vitest";
 import type { AuthProfileStore } from "./auth-profiles.js";
-import { requireApiKey, resolveAwsSdkEnvVarName, resolveModelAuthMode } from "./model-auth.js";
+import {
+  requireApiKey,
+  resolveAwsSdkEnvVarName,
+  resolveApiKeyForProvider,
+  resolveModelAuthMode,
+} from "./model-auth.js";
+
+describe("resolveApiKeyForProvider — explicit config key precedence", () => {
+  it("uses models.json explicit plain-string apiKey before stale auth profiles", async () => {
+    // Simulate a user who rotated their API key in openclaw.json but whose
+    // auth-profiles.json still holds the old key. The config key should win.
+    const staleProfileStore: AuthProfileStore = {
+      version: 1,
+      profiles: {
+        "anthropic-1": {
+          type: "api_key",
+          provider: "anthropic",
+          key: "sk-ant-OLD-STALE-KEY",
+        },
+      },
+    };
+
+    const result = await resolveApiKeyForProvider({
+      provider: "anthropic",
+      cfg: {
+        models: {
+          providers: {
+            anthropic: { apiKey: "sk-ant-NEW-ROTATED-KEY" } as never,
+          },
+        },
+      } as never,
+      store: staleProfileStore,
+    });
+
+    expect(result.apiKey).toBe("sk-ant-NEW-ROTATED-KEY");
+    expect(result.source).toBe("models.json");
+  });
+
+  it("falls through to auth profiles when no explicit config key is set", async () => {
+    const store: AuthProfileStore = {
+      version: 1,
+      profiles: {
+        "anthropic-1": {
+          type: "api_key",
+          provider: "anthropic",
+          key: "sk-ant-PROFILE-KEY",
+        },
+      },
+    };
+
+    const result = await resolveApiKeyForProvider({
+      provider: "anthropic",
+      cfg: { models: { providers: { anthropic: {} } } } as never,
+      store,
+    });
+
+    expect(result.apiKey).toBe("sk-ant-PROFILE-KEY");
+    expect(result.source).toContain("profile:");
+  });
+});
 
 describe("resolveAwsSdkEnvVarName", () => {
   it("prefers bearer token over access keys and profile", () => {
