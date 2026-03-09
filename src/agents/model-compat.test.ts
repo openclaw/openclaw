@@ -363,7 +363,7 @@ describe("resolveForwardCompatModel", () => {
     expectResolvedForwardCompat(model, { provider: "openai-codex", id: "gpt-5.4" });
     expect(model?.api).toBe("openai-codex-responses");
     expect(model?.baseUrl).toBe("https://chatgpt.com/backend-api");
-    expect(model?.contextWindow).toBe(272_000);
+    expect(model?.contextWindow).toBe(1_050_000);
     expect(model?.maxTokens).toBe(128_000);
   });
 
