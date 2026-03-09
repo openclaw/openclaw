@@ -1305,7 +1305,10 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
   let shouldWriteConfig = false;
   const fixHints: string[] = [];
   if (snapshot.exists && !snapshot.valid && snapshot.legacyIssues.length === 0) {
-    note("Config invalid; doctor will run with best-effort config.", "Config");
+    note(
+      "Config invalid; gateway startup remains blocked until this is fixed. Doctor will run diagnostics with best-effort config.",
+      "Config",
+    );
     noteIncludeConfinementWarning(snapshot);
   }
   const warnings = snapshot.warnings ?? [];
