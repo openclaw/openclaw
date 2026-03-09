@@ -208,6 +208,13 @@ function resolveHeartbeatAgents(cfg: OpenClawConfig): HeartbeatAgent[] {
   return [{ agentId: fallbackId, heartbeat: resolveHeartbeatConfig(cfg, fallbackId) }];
 }
 
+/**
+ * Node.js `setTimeout` uses a 32-bit signed integer internally.
+ * Values above 2^31-1 (≈24.8 days) silently overflow to ~0 ms, causing the
+ * callback to fire immediately in a tight loop and flooding logs.
+ */
+const MAX_SAFE_TIMER_MS = 2_147_483_647;
+
 export function resolveHeartbeatIntervalMs(
   cfg: OpenClawConfig,
   overrideEvery?: string,
@@ -233,6 +240,14 @@ export function resolveHeartbeatIntervalMs(
   }
   if (ms <= 0) {
     return null;
+  }
+  if (ms > MAX_SAFE_TIMER_MS) {
+    log.warn("heartbeat: interval exceeds Node.js timer limit, clamping to ~24.8 days", {
+      requestedMs: ms,
+      clampedMs: MAX_SAFE_TIMER_MS,
+      raw: trimmed,
+    });
+    return MAX_SAFE_TIMER_MS;
   }
   return ms;
 }
@@ -1052,7 +1067,8 @@ export function startHeartbeatRunner(opts: {
     if (!Number.isFinite(nextDue)) {
       return;
     }
-    const delay = Math.max(0, nextDue - now);
+    // Clamp to MAX_SAFE_TIMER_MS to prevent Node.js 32-bit signed integer overflow.
+    const delay = Math.min(Math.max(0, nextDue - now), MAX_SAFE_TIMER_MS);
     state.timer = setTimeout(() => {
       state.timer = null;
       requestHeartbeatNow({ reason: "interval", coalesceMs: 0 });

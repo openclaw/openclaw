@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
-import { startHeartbeatRunner } from "./heartbeat-runner.js";
+import { HeartbeatSchema } from "../config/zod-schema.agent-runtime.js";
+import { resolveHeartbeatIntervalMs, startHeartbeatRunner } from "./heartbeat-runner.js";
 import { requestHeartbeatNow, resetHeartbeatWakeStateForTests } from "./heartbeat-wake.js";
 
 describe("startHeartbeatRunner", () => {
@@ -281,5 +282,73 @@ describe("startHeartbeatRunner", () => {
     expect(runSpy.mock.calls.some((call) => call[0]?.agentId === "finance")).toBe(false);
 
     runner.stop();
+  });
+
+  it("clamps intervals exceeding Node.js 32-bit timer limit instead of overflowing", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(0));
+
+    const runSpy = vi.fn().mockResolvedValue({ status: "ran", durationMs: 1 });
+
+    // "30d" = 2,592,000,000 ms which exceeds 2^31-1 (2,147,483,647 ms)
+    const runner = startHeartbeatRunner({
+      cfg: {
+        agents: { defaults: { heartbeat: { every: "30d" } } },
+      } as OpenClawConfig,
+      runOnce: runSpy,
+    });
+
+    // The interval should be clamped to MAX_SAFE_TIMER_MS (~24.8 days),
+    // not overflow to ~0 ms and fire immediately.
+    expect(runSpy).not.toHaveBeenCalled();
+
+    // Advance 1 minute — should NOT have fired (would fire immediately on overflow).
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(runSpy).not.toHaveBeenCalled();
+
+    runner.stop();
+  });
+});
+
+describe("resolveHeartbeatIntervalMs", () => {
+  it("returns parsed ms for normal durations", () => {
+    const ms = resolveHeartbeatIntervalMs({ agents: { defaults: {} } } as OpenClawConfig, "30m");
+    expect(ms).toBe(30 * 60_000);
+  });
+
+  it("clamps durations exceeding 2^31-1 ms to the timer-safe maximum", () => {
+    const ms = resolveHeartbeatIntervalMs({ agents: { defaults: {} } } as OpenClawConfig, "30d");
+    expect(ms).toBe(2_147_483_647);
+  });
+
+  it("returns null for invalid durations", () => {
+    const ms = resolveHeartbeatIntervalMs({ agents: { defaults: {} } } as OpenClawConfig, "bogus");
+    expect(ms).toBeNull();
+  });
+
+  it("returns null for zero or negative durations", () => {
+    expect(
+      resolveHeartbeatIntervalMs({ agents: { defaults: {} } } as OpenClawConfig, "0m"),
+    ).toBeNull();
+  });
+});
+
+describe("HeartbeatSchema validation", () => {
+  it("accepts normal heartbeat intervals", () => {
+    const result = HeartbeatSchema.safeParse({ every: "30m" });
+    expect(result.success).toBe(true);
+  });
+
+  it("rejects intervals exceeding Node.js 32-bit timer limit", () => {
+    const result = HeartbeatSchema.safeParse({ every: "30d" });
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error.issues[0]?.message).toMatch(/maximum/);
+    }
+  });
+
+  it("rejects invalid duration strings", () => {
+    const result = HeartbeatSchema.safeParse({ every: "not-a-duration" });
+    expect(result.success).toBe(false);
   });
 });
