@@ -801,12 +801,10 @@ export type {
 export { registerContextEngine } from "../context-engine/registry.js";
 export type { ContextEngineFactory } from "../context-engine/registry.js";
 
-// Model authentication for plugins (e.g. context-engine plugins that call LLM APIs)
-export {
-  getApiKeyForModel,
-  resolveApiKeyForProvider,
-  requireApiKey,
-} from "../agents/model-auth.js";
+// Model authentication types for plugins.
+// Plugins should use runtime.modelAuth (which strips unsafe overrides like
+// agentDir/store) rather than importing raw helpers directly.
+export { requireApiKey } from "../agents/model-auth.js";
 export type { ResolvedProviderAuth } from "../agents/model-auth.js";
 
 // Security utilities
