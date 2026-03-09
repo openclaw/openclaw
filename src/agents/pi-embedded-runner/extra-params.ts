@@ -326,10 +326,15 @@ function resolveDynamicTemperature(params: {
   if (typeof params.merged.temperature === "number") {
     return undefined;
   }
-  if (
-    params.merged.thinking ||
-    (params.thinkingLevel && params.thinkingLevel !== "off" && params.thinkingLevel !== "none")
-  ) {
+
+  const isThinkingEnabled =
+    (params.thinkingLevel && params.thinkingLevel !== "off") ||
+    (params.merged.thinking != null &&
+      params.merged.thinking !== "off" &&
+      params.merged.thinking !== "none" &&
+      params.merged.thinking !== false);
+
+  if (isThinkingEnabled) {
     return undefined;
   }
   const toolNames = normalizeToolNames(params.override?.availableToolNames);
