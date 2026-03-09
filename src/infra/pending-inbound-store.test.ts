@@ -175,10 +175,11 @@ describe("pending-inbound-store", () => {
     expect(result).toEqual([]);
   });
 
-  it("scheduler session keys are stored and readable (filtering is in server-startup.ts)", async () => {
+  it("scheduler session keys are stored and readable (delivery-target resolution skips them at recovery)", async () => {
     // Scheduler isolated sessions use keys like "scheduler:jobid:runid".
-    // The store saves them normally — server-startup.ts filters them out
-    // during active-turn recovery (the scheduler's own drain-retry handles them).
+    // The store saves them normally — server-startup.ts skips them during
+    // active-turn recovery because no delivery target resolves for these
+    // session keys (they have no channel mapping).
     const turn: ActiveTurnEntry = {
       sessionId: "sess-sched-001",
       sessionKey: "scheduler:abc123:run456",
