@@ -1,6 +1,6 @@
 import { applyLegacyMigrations } from "./legacy.js";
 import type { OpenClawConfig } from "./types.js";
-import { validateConfigObjectWithPlugins } from "./validation.js";
+import { validateConfigObjectWithPluginsInternal } from "./validation.js";
 
 export function migrateLegacyConfig(raw: unknown): {
   config: OpenClawConfig | null;
@@ -10,7 +10,9 @@ export function migrateLegacyConfig(raw: unknown): {
   if (!next) {
     return { config: null, changes: [] };
   }
-  const validated = validateConfigObjectWithPlugins(next);
+  // Keep unknown/future keys during migration validation so startup auto-migrate
+  // write-back does not drop forward-compatible config fields.
+  const validated = validateConfigObjectWithPluginsInternal(next, { preserveUnknownKeys: true });
   if (!validated.ok) {
     changes.push("Migration applied, but config still invalid; fix remaining issues manually.");
     return { config: null, changes };

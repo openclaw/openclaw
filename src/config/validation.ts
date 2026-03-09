@@ -769,9 +769,16 @@ type ValidateConfigWithPluginsResult =
     };
 
 export function validateConfigObjectWithPlugins(raw: unknown): ValidateConfigWithPluginsResult {
+  return validateConfigObjectWithPluginsInternal(raw, { preserveUnknownKeys: false });
+}
+
+export function validateConfigObjectWithPluginsInternal(
+  raw: unknown,
+  opts: { preserveUnknownKeys: boolean },
+): ValidateConfigWithPluginsResult {
   return validateConfigObjectWithPluginsBase(raw, {
     applyDefaults: true,
-    preserveUnknownKeys: false,
+    preserveUnknownKeys: opts.preserveUnknownKeys,
   });
 }
 
