@@ -122,6 +122,7 @@ export async function sendMessageIMessage(
         : 16 * 1024 * 1024;
   let message = text ?? "";
   let filePath: string | undefined;
+  let keepReplyTagOutOfText = false;
 
   if (opts.mediaUrl?.trim()) {
     const resolveAttachmentFn = opts.resolveAttachmentImpl ?? resolveOutboundAttachmentFromUrl;
@@ -133,6 +134,8 @@ export async function sendMessageIMessage(
       const kind = kindFromMime(resolved.contentType ?? undefined);
       if (kind && !(opts.audioAsVoice && kind === "audio")) {
         message = kind === "image" ? "<media:image>" : `<media:${kind}>`;
+      } else if (kind === "audio" && opts.audioAsVoice) {
+        keepReplyTagOutOfText = true;
       }
     }
   }
@@ -148,7 +151,9 @@ export async function sendMessageIMessage(
     });
     message = convertMarkdownTables(message, tableMode);
   }
-  message = prependReplyTagIfNeeded(message, opts.replyToId);
+  if (!keepReplyTagOutOfText || message.trim()) {
+    message = prependReplyTagIfNeeded(message, opts.replyToId);
+  }
 
   const params: Record<string, unknown> = {
     text: message,

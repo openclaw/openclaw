@@ -128,4 +128,27 @@ describe("imessageOutbound", () => {
     );
     expect(result).toEqual({ channel: "imessage", messageId: "extra-1" });
   });
+
+  it("does not send empty channelData-only payloads", async () => {
+    const sendIMessage = vi.fn().mockResolvedValue({ messageId: "unexpected" });
+    const sendPayload = imessageOutbound.sendPayload;
+    expect(sendPayload).toBeDefined();
+
+    const result = await sendPayload!({
+      cfg,
+      to: "chat_id:123",
+      text: "",
+      payload: {
+        text: "",
+        channelData: { mode: "noop" },
+      },
+      mediaLocalRoots: ["/tmp"],
+      accountId: "acct-1",
+      replyToId: "msg-empty",
+      deps: { sendIMessage },
+    });
+
+    expect(sendIMessage).not.toHaveBeenCalled();
+    expect(result).toEqual({ channel: "imessage", messageId: "" });
+  });
 });

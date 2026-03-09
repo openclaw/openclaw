@@ -55,6 +55,9 @@ export const imessageOutbound: ChannelOutboundAdapter = {
         ? [payload.mediaUrl]
         : [];
     const text = payload.text ?? "";
+    if (!text && mediaUrls.length === 0) {
+      return { channel: "imessage" as const, messageId: "" };
+    }
 
     if (!payload.audioAsVoice || mediaUrls.length === 0) {
       if (mediaUrls.length === 0) {

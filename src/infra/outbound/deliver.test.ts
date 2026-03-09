@@ -472,6 +472,21 @@ describe("deliverOutboundPayloads", () => {
     );
   });
 
+  it("preserves empty channelData-only payloads for imessage without sending", async () => {
+    const sendIMessage = vi.fn().mockResolvedValue({ messageId: "unexpected" });
+
+    const results = await deliverOutboundPayloads({
+      cfg: {},
+      channel: "imessage",
+      to: "chat_id:42",
+      payloads: [{ text: " \n\t ", channelData: { mode: "custom" } }],
+      deps: { sendIMessage },
+    });
+
+    expect(sendIMessage).not.toHaveBeenCalled();
+    expect(results).toEqual([{ channel: "imessage", messageId: "" }]);
+  });
+
   it("uses signal media maxBytes from config", async () => {
     const sendSignal = vi.fn().mockResolvedValue({ messageId: "s1", timestamp: 123 });
     const cfg: OpenClawConfig = { channels: { signal: { mediaMaxMb: 2 } } };
