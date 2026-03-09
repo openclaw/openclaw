@@ -1096,6 +1096,101 @@ describe("sessions tools", () => {
     );
   });
 
+  it("sessions_send reports not_applicable when ingress echo target cannot be resolved in best-effort mode", async () => {
+    testConfig.session.agentToAgent.ingressEcho.enabled = true;
+    callGatewayMock.mockImplementation(async (opts: unknown) => {
+      const request = opts as { method?: string; params?: unknown };
+      if (request.method === "agent") {
+        return { runId: "run-1", status: "accepted", acceptedAt: 7777 };
+      }
+      if (request.method === "agent.wait") {
+        return { runId: "run-1", status: "ok" };
+      }
+      if (request.method === "chat.history") {
+        const params = request.params as { sessionKey?: string } | undefined;
+        if (params?.sessionKey === "discord:group:target") {
+          return {
+            messages: [{ role: "assistant", content: [{ type: "text", text: "done" }] }],
+          };
+        }
+        return { messages: [] };
+      }
+      if (request.method === "sessions.list") {
+        return { sessions: [{ key: "something-else" }] };
+      }
+      return {};
+    });
+
+    const tool = createOpenClawTools({
+      agentSessionKey: "agent:main:main",
+      agentChannel: "discord",
+    }).find((candidate) => candidate.name === "sessions_send");
+    expect(tool).toBeDefined();
+    if (!tool) {
+      throw new Error("missing sessions_send tool");
+    }
+
+    const result = await tool.execute("call-ingress-no-target", {
+      sessionKey: "main",
+      message: "ping",
+      timeoutSeconds: 1,
+    });
+
+    expect(result.details).toMatchObject({
+      status: "ok",
+      ingressEcho: { status: "not_applicable" },
+    });
+  });
+
+  it("sessions_send includes ingressEcho on fire-and-forget accepted path", async () => {
+    testConfig.session.agentToAgent.ingressEcho.enabled = true;
+    callGatewayMock.mockImplementation(async (opts: unknown) => {
+      const request = opts as { method?: string; params?: unknown };
+      if (request.method === "send") {
+        const params = request.params as { message?: string } | undefined;
+        if ((params?.message ?? "").includes("A2A ingress echo:")) {
+          return { messageId: "m-ingress-fire" };
+        }
+        return { messageId: "m-announce" };
+      }
+      if (request.method === "agent") {
+        return { runId: "run-fire", status: "accepted", acceptedAt: 8888 };
+      }
+      if (request.method === "agent.wait") {
+        return { runId: "run-fire", status: "ok" };
+      }
+      if (request.method === "chat.history") {
+        return {
+          messages: [{ role: "assistant", content: [{ type: "text", text: "REPLY_SKIP" }] }],
+        };
+      }
+      return {};
+    });
+
+    const tool = createOpenClawTools({
+      agentSessionKey: "discord:group:req",
+      agentChannel: "discord",
+    }).find((candidate) => candidate.name === "sessions_send");
+    expect(tool).toBeDefined();
+    if (!tool) {
+      throw new Error("missing sessions_send tool");
+    }
+
+    const result = await tool.execute("call-ingress-fire", {
+      sessionKey: "discord:group:target",
+      message: "ping",
+      timeoutSeconds: 0,
+    });
+
+    expect(result.details).toMatchObject({
+      status: "accepted",
+      ingressEcho: {
+        status: "sent",
+        messageId: "m-ingress-fire",
+      },
+    });
+  });
+
   it("sessions_send blocks target run when strict ingress echo delivery fails", async () => {
     TEST_CONFIG.session.agentToAgent.ingressEcho.enabled = true;
     TEST_CONFIG.session.agentToAgent.ingressEcho.requireDelivery = true;
