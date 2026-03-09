@@ -831,7 +831,11 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
           void enqueueConfigWrite(async () => {
             const { snapshot: freshSnapshot } = await freshIo.readConfigFileSnapshotForWrite();
             if (!freshSnapshot.valid) {
-              return; // Do not persist auto-secrets into an invalid/corrupted config file
+              // Throwing an error ensures the .catch() block runs and retains
+              // AUTO_OWNER_DISPLAY_SECRET_BY_PATH so this secret write can be
+              // retried later, rather than silently dropping it and causing the
+              // secret identity to change on the next restart.
+              throw new Error("Cannot persist auto-secrets into an invalid/corrupted config file");
             }
             const freshWithSecret = ensureOwnerDisplaySecret(
               freshSnapshot.config,
