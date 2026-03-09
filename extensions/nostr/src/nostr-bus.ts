@@ -37,13 +37,13 @@ const STATE_PERSIST_DEBOUNCE_MS = 5000; // Debounce state writes
 /** @internal Exported for testing. */
 export const MAX_PLAINTEXT_LENGTH = 65536; // 64 KiB cap on decrypted messages
 /**
- * NIP-04 ciphertext is AES-CBC (padded to 16-byte blocks) then base64-encoded.
- * Worst-case expansion: ceil(plaintext/16)*16 bytes, then *4/3 for base64,
- * plus the IV suffix ("?iv=…"). 90 000 chars gives ~3 % headroom over the
- * theoretical max of ~87 382.
+ * Maximum ciphertext length: NIP-04 uses AES-CBC (padded to 16-byte blocks)
+ * then base64-encoded (4/3 expansion), plus the IV suffix ("?iv=…").
+ * Derived from MAX_PLAINTEXT_LENGTH so both constants stay in sync.
  * @internal Exported for testing.
  */
-export const MAX_CIPHERTEXT_LENGTH = 90_000;
+export const MAX_CIPHERTEXT_LENGTH =
+  Math.ceil(MAX_PLAINTEXT_LENGTH * (4 / 3)) + 128; // ~87 509 chars
 
 // Circuit breaker configuration
 const CIRCUIT_BREAKER_THRESHOLD = 5; // failures before opening
