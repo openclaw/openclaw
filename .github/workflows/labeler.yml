@@ -230,6 +230,14 @@ jobs:
               return;
             }
 
+            function isSearchRateLimit(error) {
+              const message = error?.response?.data?.message ?? error?.message ?? "";
+              return error?.status === 403 && (
+                error?.response?.headers?.["x-ratelimit-resource"] === "search"
+                || message.includes("API rate limit exceeded")
+              );
+            }
+
             const currentLabels = await github.paginate(github.rest.issues.listLabelsOnIssue, {
               owner: context.repo.owner,
               repo: context.repo.repo,
