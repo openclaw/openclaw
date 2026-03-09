@@ -401,8 +401,11 @@ export const TRANSCRIPT_ALLOWED_FIELDS = new Set([
 
 function validateIso8601(value: unknown, fieldName: string): string | null {
   if (typeof value !== "string") return `${fieldName} must be a string`;
-  const parsed = Date.parse(value);
-  if (!Number.isFinite(parsed)) return `${fieldName} must be a valid ISO 8601 date`;
+  // Accept only ISO 8601 / RFC 3339 — reject locale-specific or informal formats.
+  const ISO8601_RE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}:\d{2})$/;
+  if (!ISO8601_RE.test(value) || !Number.isFinite(Date.parse(value))) {
+    return `${fieldName} must be a valid ISO 8601 date`;
+  }
   return null;
 }
 
