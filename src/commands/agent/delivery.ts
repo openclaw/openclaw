@@ -3,7 +3,10 @@ import { AGENT_LANE_NESTED } from "../../agents/lanes.js";
 import { getChannelPlugin, normalizeChannelId } from "../../channels/plugins/index.js";
 import { createOutboundSendDeps, type CliDeps } from "../../cli/outbound-send-deps.js";
 import type { OpenClawConfig } from "../../config/config.js";
-import { appendAssistantMessageToSessionTranscript } from "../../config/sessions.js";
+import {
+  appendAssistantMessageToSessionTranscript,
+  resolveMirroredTranscriptText,
+} from "../../config/sessions.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import {
   resolveAgentDeliveryPlan,
@@ -230,9 +233,12 @@ async function mirrorNestedTranscriptToChildSession(params: {
 
   try {
     const hasMirrorText = Boolean(text?.trim());
+    const sanitizedMediaText = mediaUrls?.length
+      ? resolveMirroredTranscriptText({ mediaUrls })
+      : null;
     const mirrorText = hasMirrorText
-      ? mediaUrls?.length
-        ? `${text}\n\nAttached media: ${mediaUrls.join(", ")}`
+      ? sanitizedMediaText
+        ? `${text}\n\nAttached media: ${sanitizedMediaText}`
         : text
       : undefined;
     const mirror = await appendAssistantMessageToSessionTranscript({

@@ -179,7 +179,7 @@ describe("deliverAgentCommandResult – transcript mirror", () => {
     expect(mockAppendTranscript).toHaveBeenCalledOnce();
     expect(mockAppendTranscript).toHaveBeenCalledWith({
       sessionKey: "session-media",
-      text: "pic\n\nAttached media: https://example.com/img.png",
+      text: "pic\n\nAttached media: img.png",
       mediaUrls: undefined,
       agentId: undefined,
     });
@@ -223,10 +223,64 @@ describe("deliverAgentCommandResult – transcript mirror", () => {
     expect(mockAppendTranscript).toHaveBeenCalledOnce();
     expect(mockAppendTranscript).toHaveBeenCalledWith({
       sessionKey: "session-text-media",
-      text: "Here is the chart summary\n\nAttached media: https://example.com/chart.png, https://example.com/report.pdf",
+      text: "Here is the chart summary\n\nAttached media: chart.png, report.pdf",
       mediaUrls: undefined,
       agentId: undefined,
     });
+  });
+
+  it("does not persist querystring media tokens in mirrored transcript text", async () => {
+    mockAppendTranscript.mockClear();
+    mockAppendTranscript.mockResolvedValue({ ok: true, sessionFile: "/tmp/test.jsonl" });
+    const runtime = makeRuntime();
+
+    await deliverAgentCommandResult({
+      cfg: makeCfg(),
+      deps: makeDeps(),
+      runtime,
+      opts: {
+        message: "test",
+        deliver: false,
+        lane: AGENT_LANE_NESTED,
+        sessionKey: "session-tokenized-media",
+        inputProvenance: { kind: "inter_session" },
+      },
+      outboundSession: undefined,
+      sessionEntry: undefined,
+      result: {
+        payloads: [
+          {
+            text: "Shared files",
+            mediaUrls: [
+              "https://cdn.example.com/files/chart.png?token=secret&expires=9999",
+              "https://cdn.example.com/files/report.pdf?X-Amz-Signature=topsecret",
+            ],
+          },
+        ],
+        meta: {} as never,
+      },
+      payloads: [
+        {
+          text: "Shared files",
+          mediaUrls: [
+            "https://cdn.example.com/files/chart.png?token=secret&expires=9999",
+            "https://cdn.example.com/files/report.pdf?X-Amz-Signature=topsecret",
+          ],
+        },
+      ],
+    });
+
+    expect(mockAppendTranscript).toHaveBeenCalledOnce();
+    const appendCall = mockAppendTranscript.mock.calls[0]?.[0];
+    expect(appendCall).toMatchObject({
+      sessionKey: "session-tokenized-media",
+      text: "Shared files\n\nAttached media: chart.png, report.pdf",
+      mediaUrls: undefined,
+      agentId: undefined,
+    });
+    expect(appendCall?.text).not.toContain("token=");
+    expect(appendCall?.text).not.toContain("X-Amz-Signature=");
+    expect(appendCall?.text).not.toContain("https://");
   });
 
   it("caps mirrored text and media urls before appending transcript", async () => {
@@ -264,6 +318,7 @@ describe("deliverAgentCommandResult – transcript mirror", () => {
       sessionKey: "session-capped",
       text: `${"x".repeat(MAX_NESTED_TRANSCRIPT_TEXT_CHARS - "\n\n[truncated]".length)}\n\n[truncated]\n\nAttached media: ${mediaUrls
         .slice(0, MAX_NESTED_TRANSCRIPT_MEDIA_URLS)
+        .map((url) => url.split("/").pop())
         .join(", ")}`,
       mediaUrls: undefined,
     });
