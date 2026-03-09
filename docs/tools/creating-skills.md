@@ -57,14 +57,13 @@ Ask your agent to "refresh skills" or restart the gateway. OpenClaw will discove
 
 Once you've created a basic skill, you can enhance it with these advanced features:
 
-- **Conditional activation**: Use `requires.bins`, `requires.env`, or `requires.config` to gate your skill — [see Skills Reference](./skills.md#gating)
-- **API key injection**: Skills can receive API keys and environment variables via the `apiKey` field — [see Skills Reference](./skills.md#env-injection)
-- **Multi-command skills**: Use `command-dispatch` for skills with multiple subcommands — [see Skills Reference](./skills.md#command-dispatch)
-- **Template variables**: Use `{baseDir}` and other templating for portable paths — [see Skills Reference](./skills.md#template-variables)
-- **Invocation control**: Control when your skill can be invoked with `user-invocable` and `disable-model-invocation` flags — [see Skills Reference](./skills.md#invocation-control)
-- **Testing strategies**: Run `openclaw skill test <name>` to validate your skill locally — [see Skills Reference](./skills.md#testing)
+- **Conditional activation**: Use `requires.bins`, `requires.env`, or `requires.config` to gate your skill — [see Skills Reference](./skills.md#gating-load-time-filters)
+- **Environment injection**: Skills can receive API keys and environment variables via the `apiKey` field — [see Skills Reference](./skills.md#environment-injection-per-agent-run)
+- **Command dispatch**: Use `command-dispatch` for skills with multiple subcommands — [see Skills Reference](./skills.md#format-agentskills--pi-compatible)
+- **Template variables**: Use `{baseDir}` for portable paths — [see Skills Reference](./skills.md#format-agentskills--pi-compatible)
+- **Invocation control**: Control when your skill can be invoked with `user-invocable` and `disable-model-invocation` flags — [see Skills Reference](./skills.md#format-agentskills--pi-compatible)
 
-For a complete reference of all supported SKILL.md frontmatter fields, see the [Skills Reference](./skills.md#frontmatter-reference).
+For a complete reference of all supported SKILL.md frontmatter fields, see the [Skills Reference](./skills.md#format-agentskills--pi-compatible).
 
 ## Shared Skills
 
