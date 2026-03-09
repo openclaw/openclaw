@@ -42,6 +42,8 @@ describe("secrets runtime snapshot", () => {
     clearSecretsRuntimeSnapshot();
   });
 
+  const allowInsecureTempSecretFile = process.platform === "win32";
+
   it("resolves env refs for config and auth profiles", async () => {
     const config = asConfig({
       agents: {
@@ -567,7 +569,12 @@ describe("secrets runtime snapshot", () => {
         config: asConfig({
           secrets: {
             providers: {
-              default: { source: "file", path: secretFile, mode: "json" },
+              default: {
+                source: "file",
+                path: secretFile,
+                mode: "json",
+                ...(allowInsecureTempSecretFile ? { allowInsecurePath: true } : {}),
+              },
             },
           },
           models: {
@@ -658,7 +665,12 @@ describe("secrets runtime snapshot", () => {
         config: asConfig({
           secrets: {
             providers: {
-              default: { source: "file", path: secretFile, mode: "json" },
+              default: {
+                source: "file",
+                path: secretFile,
+                mode: "json",
+                ...(allowInsecureTempSecretFile ? { allowInsecurePath: true } : {}),
+              },
             },
           },
           models: {
