@@ -167,6 +167,15 @@ export function isApiKeyRateLimitError(message: string): boolean {
   if (lower.includes("too many requests")) {
     return true;
   }
+  if (lower.includes("too many tokens")) {
+    return true;
+  }
+  if (lower.includes("max tokens per day")) {
+    return true;
+  }
+  if (lower.includes("tokens per day")) {
+    return true;
+  }
   return false;
 }
 

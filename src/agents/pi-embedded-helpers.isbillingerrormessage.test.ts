@@ -661,9 +661,12 @@ describe("classifyFailoverReason", () => {
       "rate_limit",
     );
   });
-  it("classifies AWS Bedrock too-many-tokens-per-day errors as rate_limit", () => {
+  it("classifies AWS Bedrock token/day quota errors as rate_limit", () => {
     expect(
       classifyFailoverReason("AWS Bedrock: Too many tokens per day. Please try again tomorrow."),
+    ).toBe("rate_limit");
+    expect(
+      classifyFailoverReason("AWS Bedrock: Max tokens per day reached. Please try again tomorrow."),
     ).toBe("rate_limit");
   });
   it("classifies provider high-demand / service-unavailable messages as overloaded", () => {
