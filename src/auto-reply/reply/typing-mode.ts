@@ -128,7 +128,12 @@ export function createTypingSignaler(params: {
     if (disabled) {
       return;
     }
-    // Start typing as soon as tools begin executing, even before the first text delta.
+    // In message/thinking modes, don't light up typing on tool-only silent runs.
+    // We only start from tool events when typing is already active or mode is instant.
+    if (!shouldStartImmediately && !typing.isActive() && !hasRenderableText) {
+      return;
+    }
+    // Instant mode may need to start from tool execution even before text deltas.
     if (!typing.isActive()) {
       await typing.startTypingLoop();
       typing.refreshTypingTtl();

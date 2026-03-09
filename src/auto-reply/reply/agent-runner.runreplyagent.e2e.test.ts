@@ -594,6 +594,29 @@ describe("runReplyAgent typing (heartbeat)", () => {
     }
   });
 
+  it("does not start message-mode typing from tool events on silent runs", async () => {
+    state.runEmbeddedPiAgentMock.mockImplementationOnce(async (params: AgentRunParams) => {
+      params.onAgentEvent?.({
+        stream: "tool",
+        data: { phase: "start", name: "reaction" },
+      });
+      params.onAgentEvent?.({
+        stream: "tool",
+        data: { phase: "update", name: "reaction" },
+      });
+      return { payloads: [{ text: "NO_REPLY" }], meta: {} };
+    });
+
+    const { run, typing } = createMinimalRun({
+      typingMode: "message",
+    });
+    const result = await run();
+
+    expect(result).toBeUndefined();
+    expect(typing.startTypingLoop).not.toHaveBeenCalled();
+    expect(typing.refreshTypingTtl).not.toHaveBeenCalled();
+  });
+
   it("retries transient HTTP failures once with timer-driven backoff", async () => {
     vi.useFakeTimers();
     let calls = 0;

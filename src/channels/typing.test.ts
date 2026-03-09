@@ -164,6 +164,37 @@ describe("createTypingCallbacks", () => {
     });
   });
 
+  it("does not re-arm keepalive when idle fires during an in-flight start", async () => {
+    vi.useFakeTimers();
+    try {
+      let resolveStart: (() => void) | undefined;
+      const start = vi.fn().mockImplementation(
+        () =>
+          new Promise<void>((resolve) => {
+            resolveStart = resolve;
+          }),
+      );
+      const stop = vi.fn().mockResolvedValue(undefined);
+      const onStartError = vi.fn();
+      const callbacks = createTypingCallbacks({ start, stop, onStartError });
+
+      const inFlightStart = callbacks.onReplyStart();
+      expect(start).toHaveBeenCalledTimes(1);
+
+      callbacks.onIdle?.();
+      await flushMicrotasks();
+      expect(stop).toHaveBeenCalledTimes(1);
+
+      resolveStart?.();
+      await inFlightStart;
+
+      await vi.advanceTimersByTimeAsync(9_000);
+      expect(start).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("deduplicates stop across idle and cleanup", async () => {
     const { stop, callbacks } = createTypingHarness();
 

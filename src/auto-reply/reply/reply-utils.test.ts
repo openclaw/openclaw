@@ -517,7 +517,7 @@ describe("createTypingSignaler", () => {
     expect(typing.startTypingOnText).not.toHaveBeenCalled();
   });
 
-  it("handles tool-start typing before and after active text mode", async () => {
+  it("does not start typing from tool events before renderable text in message mode", async () => {
     const typing = createMockTypingController();
     const signaler = createTypingSignaler({
       typing,
@@ -527,16 +527,35 @@ describe("createTypingSignaler", () => {
 
     await signaler.signalToolStart();
 
-    expect(typing.startTypingLoop).toHaveBeenCalled();
-    expect(typing.refreshTypingTtl).toHaveBeenCalled();
+    expect(typing.startTypingLoop).not.toHaveBeenCalled();
+    expect(typing.refreshTypingTtl).not.toHaveBeenCalled();
     expect(typing.startTypingOnText).not.toHaveBeenCalled();
+
+    await signaler.signalTextDelta("hello");
+    expect(typing.startTypingOnText).toHaveBeenCalledWith("hello");
+
     (typing.isActive as ReturnType<typeof vi.fn>).mockReturnValue(true);
     (typing.startTypingLoop as ReturnType<typeof vi.fn>).mockClear();
     (typing.refreshTypingTtl as ReturnType<typeof vi.fn>).mockClear();
+
     await signaler.signalToolStart();
 
     expect(typing.refreshTypingTtl).toHaveBeenCalled();
     expect(typing.startTypingLoop).not.toHaveBeenCalled();
+  });
+
+  it("starts typing from tool events in instant mode", async () => {
+    const typing = createMockTypingController();
+    const signaler = createTypingSignaler({
+      typing,
+      mode: "instant",
+      isHeartbeat: false,
+    });
+
+    await signaler.signalToolStart();
+
+    expect(typing.startTypingLoop).toHaveBeenCalled();
+    expect(typing.refreshTypingTtl).toHaveBeenCalled();
   });
 
   it("suppresses typing when disabled", async () => {
