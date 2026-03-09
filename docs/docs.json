@@ -1014,7 +1014,8 @@
                   "tools/browser",
                   "tools/browser-login",
                   "tools/chrome-extension",
-                  "tools/browser-linux-troubleshooting"
+                  "tools/browser-linux-troubleshooting",
+                  "tools/browser-wsl2-windows-remote-cdp-troubleshooting"
                 ]
               },
               {
