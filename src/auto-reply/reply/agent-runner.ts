@@ -280,6 +280,7 @@ export async function runReplyAgent(params: {
       abortedLastRun: false,
       modelProvider: undefined,
       model: undefined,
+      contextTokens: undefined,
       systemPromptReport: undefined,
       fallbackNoticeSelectedModel: undefined,
       fallbackNoticeActiveModel: undefined,

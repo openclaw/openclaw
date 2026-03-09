@@ -136,6 +136,7 @@ function stripRuntimeModelState(entry?: SessionEntry): SessionEntry | undefined 
     ...entry,
     model: undefined,
     modelProvider: undefined,
+    contextTokens: undefined,
     systemPromptReport: undefined,
   };
 }
@@ -519,13 +520,10 @@ export const sessionsHandlers: GatewayRequestHandlers = {
     const next = await updateSessionStore(storePath, (store) => {
       const { primaryKey } = migrateAndPruneSessionStoreKey({ cfg, key, store });
       const entry = store[primaryKey];
+      const resetEntry = stripRuntimeModelState(entry);
       const parsed = parseAgentSessionKey(primaryKey);
       const sessionAgentId = normalizeAgentId(parsed?.agentId ?? resolveDefaultAgentId(cfg));
-      const resolvedModel = resolveSessionModelRef(
-        cfg,
-        stripRuntimeModelState(entry),
-        sessionAgentId,
-      );
+      const resolvedModel = resolveSessionModelRef(cfg, resetEntry, sessionAgentId);
       oldSessionId = entry?.sessionId;
       oldSessionFile = entry?.sessionFile;
       const now = Date.now();
@@ -540,7 +538,7 @@ export const sessionsHandlers: GatewayRequestHandlers = {
         responseUsage: entry?.responseUsage,
         model: resolvedModel.model,
         modelProvider: resolvedModel.provider,
-        contextTokens: entry?.contextTokens,
+        contextTokens: resetEntry?.contextTokens,
         sendPolicy: entry?.sendPolicy,
         label: entry?.label,
         origin: snapshotSessionOrigin(entry),

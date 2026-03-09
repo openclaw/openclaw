@@ -606,6 +606,7 @@ describe("gateway server sessions", () => {
           updatedAt: Date.now(),
           modelProvider: "qwencode",
           model: "qwen3.5-plus-2026-02-15",
+          contextTokens: 123456,
         },
       },
     });
@@ -614,7 +615,7 @@ describe("gateway server sessions", () => {
     const reset = await rpcReq<{
       ok: true;
       key: string;
-      entry: { sessionId: string; modelProvider?: string; model?: string };
+      entry: { sessionId: string; modelProvider?: string; model?: string; contextTokens?: number };
     }>(ws, "sessions.reset", { key: "main" });
 
     expect(reset.ok).toBe(true);
@@ -622,6 +623,7 @@ describe("gateway server sessions", () => {
     expect(reset.payload?.entry.sessionId).not.toBe("sess-stale-model");
     expect(reset.payload?.entry.modelProvider).toBe("openai");
     expect(reset.payload?.entry.model).toBe("gpt-test-a");
+    expect(reset.payload?.entry.contextTokens).toBeUndefined();
 
     ws.close();
   });

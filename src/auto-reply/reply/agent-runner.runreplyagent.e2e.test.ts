@@ -1266,6 +1266,7 @@ describe("runReplyAgent typing (heartbeat)", () => {
         sessionFile: transcriptPath,
         modelProvider: "qwencode",
         model: "qwen3.5-plus-2026-02-15",
+        contextTokens: 123456,
         systemPromptReport: {
           source: "run",
           generatedAt: Date.now(),
@@ -1316,11 +1317,13 @@ describe("runReplyAgent typing (heartbeat)", () => {
 
       expect(sessionStore.main.modelProvider).toBeUndefined();
       expect(sessionStore.main.model).toBeUndefined();
+      expect(sessionStore.main.contextTokens).toBeUndefined();
       expect(sessionStore.main.systemPromptReport).toBeUndefined();
 
       const persisted = JSON.parse(await fs.readFile(storePath, "utf-8"));
       expect(persisted.main.modelProvider).toBeUndefined();
       expect(persisted.main.model).toBeUndefined();
+      expect(persisted.main.contextTokens).toBeUndefined();
       expect(persisted.main.systemPromptReport).toBeUndefined();
     });
   });
