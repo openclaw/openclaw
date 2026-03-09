@@ -50,7 +50,7 @@ export function createFailoverDecisionLogger(
       status: extra?.status,
       ...observedError,
       consoleMessage:
-        `embedded run failover decision: stage=${base.stage} decision=${decision} ` +
+        `embedded run failover decision: runId=${base.runId ?? "-"} stage=${base.stage} decision=${decision} ` +
         `reason=${reasonText} provider=${base.provider}/${base.model} profile=${profileText}`,
     });
   };

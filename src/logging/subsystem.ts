@@ -250,6 +250,29 @@ function writeConsoleLine(level: LogLevel, line: string) {
   }
 }
 
+function shouldSuppressProbeConsoleLine(params: {
+  subsystem: string;
+  message: string;
+  meta?: Record<string, unknown>;
+}): boolean {
+  if (isVerbose()) {
+    return false;
+  }
+  if (params.subsystem !== "agent/embedded" && !params.subsystem.startsWith("agent/embedded/")) {
+    return false;
+  }
+  const runLikeId =
+    typeof params.meta?.runId === "string"
+      ? params.meta.runId
+      : typeof params.meta?.sessionId === "string"
+        ? params.meta.sessionId
+        : undefined;
+  if (runLikeId?.startsWith("probe-")) {
+    return true;
+  }
+  return /(sessionId|runId)=probe-/.test(params.message);
+}
+
 function logToFile(
   fileLogger: TsLogger<LogObj>,
   level: LogLevel,
@@ -308,11 +331,7 @@ export function createSubsystemLogger(subsystem: string): SubsystemLogger {
       return;
     }
     const consoleMessage = consoleMessageOverride ?? message;
-    if (
-      !isVerbose() &&
-      subsystem === "agent/embedded" &&
-      /(sessionId|runId)=probe-/.test(consoleMessage)
-    ) {
+    if (shouldSuppressProbeConsoleLine({ subsystem, message: consoleMessage, meta: fileMeta })) {
       return;
     }
     const line = formatConsoleLine({
@@ -355,11 +374,7 @@ export function createSubsystemLogger(subsystem: string): SubsystemLogger {
         logToFile(getFileLogger(), "info", message, { raw: true });
       }
       if (isConsoleEnabled("info")) {
-        if (
-          !isVerbose() &&
-          subsystem === "agent/embedded" &&
-          /(sessionId|runId)=probe-/.test(message)
-        ) {
+        if (shouldSuppressProbeConsoleLine({ subsystem, message })) {
           return;
         }
         writeConsoleLine("info", message);

@@ -1,6 +1,8 @@
 import { redactIdentifier } from "../../logging/redact-identifier.js";
-import { stateLog } from "./constants.js";
+import { createSubsystemLogger } from "../../logging/subsystem.js";
 import type { AuthProfileFailureReason, ProfileUsageStats } from "./types.js";
+
+const observationLog = createSubsystemLogger("agent/embedded");
 
 export function logAuthProfileFailureStateChange(params: {
   runId?: string;
@@ -29,7 +31,7 @@ export function logAuthProfileFailureStateChange(params: {
         previousCooldownUntil === params.next.cooldownUntil;
   const safeProfileId = redactIdentifier(params.profileId, { len: 12 });
 
-  stateLog.warn("auth profile failure state updated", {
+  observationLog.warn("auth profile failure state updated", {
     event: "auth_profile_failure_state_updated",
     tags: ["error_handling", "auth_profiles", windowType],
     runId: params.runId,
@@ -48,7 +50,7 @@ export function logAuthProfileFailureStateChange(params: {
     disabledReason: params.next.disabledReason,
     failureCounts: params.next.failureCounts,
     consoleMessage:
-      `auth profile failure state updated: profile=${safeProfileId} provider=${params.provider} ` +
+      `auth profile failure state updated: runId=${params.runId ?? "-"} profile=${safeProfileId} provider=${params.provider} ` +
       `reason=${params.reason} window=${windowType} reused=${String(windowReused)}`,
   });
 }

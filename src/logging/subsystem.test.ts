@@ -1,11 +1,13 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { setConsoleSubsystemFilter } from "./console.js";
 import { resetLogger, setLoggerOverride } from "./logger.js";
+import { loggingState } from "./state.js";
 import { createSubsystemLogger } from "./subsystem.js";
 
 afterEach(() => {
   setConsoleSubsystemFilter(null);
   setLoggerOverride(null);
+  loggingState.rawConsole = null;
   resetLogger();
 });
 
@@ -52,5 +54,43 @@ describe("createSubsystemLogger().isEnabled", () => {
 
     expect(log.isEnabled("info", "file")).toBe(true);
     expect(log.isEnabled("info")).toBe(true);
+  });
+
+  it("suppresses probe warnings for embedded subsystems based on structured run metadata", () => {
+    setLoggerOverride({ level: "silent", consoleLevel: "warn" });
+    const warn = vi.fn();
+    loggingState.rawConsole = {
+      log: vi.fn(),
+      info: vi.fn(),
+      warn,
+      error: vi.fn(),
+    };
+    const log = createSubsystemLogger("agent/embedded").child("failover");
+
+    log.warn("embedded run failover decision", {
+      runId: "probe-test-run",
+      consoleMessage: "embedded run failover decision",
+    });
+
+    expect(warn).not.toHaveBeenCalled();
+  });
+
+  it("still emits non-probe warnings for embedded subsystems", () => {
+    setLoggerOverride({ level: "silent", consoleLevel: "warn" });
+    const warn = vi.fn();
+    loggingState.rawConsole = {
+      log: vi.fn(),
+      info: vi.fn(),
+      warn,
+      error: vi.fn(),
+    };
+    const log = createSubsystemLogger("agent/embedded").child("auth-profiles");
+
+    log.warn("auth profile failure state updated", {
+      runId: "run-123",
+      consoleMessage: "auth profile failure state updated",
+    });
+
+    expect(warn).toHaveBeenCalledTimes(1);
   });
 });
