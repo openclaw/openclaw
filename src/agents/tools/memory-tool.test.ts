@@ -241,6 +241,32 @@ describe("memory write tools", () => {
     expect(content).toBe("- [key:favorite-food] sushi\n- [key:other] tacos\n");
   });
 
+  it("memory_upsert removes multiline keyed blocks with blank-line continuations", async () => {
+    const workspace = await fs.mkdtemp(
+      path.join(os.tmpdir(), "openclaw-memory-upsert-blank-continuation-"),
+    );
+    await fs.writeFile(
+      path.join(workspace, "MEMORY.md"),
+      "- [key:favorite-food] pizza\n\n  with extra context\n- [key:other] tacos\n",
+      "utf-8",
+    );
+    const cfg = configWithWorkspace(workspace);
+    const tool = createMemoryUpsertTool({ config: cfg });
+    expect(tool).not.toBeNull();
+    if (!tool) {
+      throw new Error("tool missing");
+    }
+
+    await tool.execute("call_upsert_blank_continuation", {
+      key: "favorite-food",
+      text: "sushi",
+      target: "longterm",
+    });
+
+    const content = await fs.readFile(path.join(workspace, "MEMORY.md"), "utf-8");
+    expect(content).toBe("- [key:favorite-food] sushi\n- [key:other] tacos\n");
+  });
+
   it("memory_upsert preserves unrelated top-level markdown blocks", async () => {
     const workspace = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-memory-upsert-blocks-"));
     await fs.writeFile(
@@ -470,6 +496,43 @@ describe("memory write tools", () => {
     } satisfies Partial<ToolInputError>);
 
     expect(await fs.readFile(externalPath, "utf-8")).toBe("- external note\n");
+  });
+
+  it("does not fall back to legacy memory.md on non-missing MEMORY.md stat errors", async () => {
+    const workspace = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-memory-primary-stat-"));
+    const legacyPath = path.join(workspace, "memory.md");
+    const primaryPath = path.join(workspace, "MEMORY.md");
+    await fs.writeFile(legacyPath, "- legacy note\n", "utf-8");
+
+    const cfg = configWithWorkspace(workspace);
+    const tool = createMemoryWriteTool({ config: cfg });
+    expect(tool).not.toBeNull();
+    if (!tool) {
+      throw new Error("tool missing");
+    }
+
+    const originalLstat = fs.lstat.bind(fs);
+    const lstatSpy = vi.spyOn(fs, "lstat");
+    lstatSpy.mockImplementation(async (target) => {
+      if (target === primaryPath) {
+        const error = new Error("permission denied") as NodeJS.ErrnoException;
+        error.code = "EACCES";
+        throw error;
+      }
+      // oxlint-disable-next-line typescript/no-explicit-any
+      return originalLstat(target as any);
+    });
+
+    await expect(
+      tool.execute("call_write_primary_stat_error", {
+        text: "remember this",
+        target: "longterm",
+      }),
+    ).rejects.toMatchObject({ message: "permission denied" });
+
+    lstatSpy.mockRestore();
+    expect(await fs.readFile(legacyPath, "utf-8")).toBe("- legacy note\n");
+    await expect(fs.access(primaryPath)).rejects.toThrow();
   });
 
   it("memory_write surfaces invalid target/date as ToolInputError", async () => {
