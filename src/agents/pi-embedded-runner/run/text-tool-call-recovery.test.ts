@@ -171,7 +171,7 @@ describe("wrapStreamFnRecoverTextToolCalls", () => {
     });
   });
 
-  it("preserves surrounding prose while recovering tool calls", async () => {
+  it("does not recover tool calls when surrounding prose is present", async () => {
     const finalMessage = {
       role: "assistant",
       content: [
@@ -188,19 +188,11 @@ describe("wrapStreamFnRecoverTextToolCalls", () => {
 
     expect(result).toEqual({
       role: "assistant",
-      content: [
-        { type: "text", text: "I'll check that." },
-        {
-          type: "toolCall",
-          name: "exec",
-          arguments: { command: "ls" },
-        },
-        { type: "text", text: "Done." },
-      ],
+      content: [{ type: "text", text: 'I\'ll check that. exec({"command":"ls"}) Done.' }],
     });
   });
 
-  it("maps provider-prefixed names to canonical allowed tools", async () => {
+  it("does not map provider-prefixed names to canonical allowed tools", async () => {
     const finalMessage = {
       role: "assistant",
       content: [{ type: "text", text: 'functions.read({"path":"/tmp/a"})' }],
@@ -212,13 +204,7 @@ describe("wrapStreamFnRecoverTextToolCalls", () => {
 
     expect(result).toEqual({
       role: "assistant",
-      content: [
-        {
-          type: "toolCall",
-          name: "read",
-          arguments: { path: "/tmp/a" },
-        },
-      ],
+      content: [{ type: "text", text: 'functions.read({"path":"/tmp/a"})' }],
     });
   });
 
@@ -343,17 +329,18 @@ exec({"command":"pwd"})`;
     expect(event.partial.content).toEqual([{ type: "text", text }]);
   });
 
-  it("recovers tool calls in streamed partial events", async () => {
+  it("does not mutate streamed partial events before the final result", async () => {
+    const text = 'exec({"command":"pwd"})';
     const event = {
       type: "toolcall_delta",
       partial: {
         role: "assistant",
-        content: [{ type: "text", text: 'exec({"command":"pwd"})' }],
+        content: [{ type: "text", text }],
       },
     };
     const finalMessage = {
       role: "assistant",
-      content: [{ type: "text", text: "Done." }],
+      content: [{ type: "text", text }],
     };
     const baseFn = vi.fn(() => createFakeStream({ events: [event], resultMessage: finalMessage }));
 
@@ -362,15 +349,38 @@ exec({"command":"pwd"})`;
     for await (const item of stream) {
       seenEvents.push(item);
     }
+    const result = await stream.result();
 
     expect(seenEvents).toHaveLength(1);
-    expect(event.partial.content).toEqual([
-      {
-        type: "toolCall",
-        name: "exec",
-        arguments: { command: "pwd" },
-      },
-    ]);
+    expect(event.partial.content).toEqual([{ type: "text", text }]);
+    expect(result).toEqual({
+      role: "assistant",
+      content: [
+        {
+          type: "toolCall",
+          name: "exec",
+          arguments: { command: "pwd" },
+        },
+      ],
+    });
+  });
+
+  it("does not recover oversized text blocks", async () => {
+    const finalMessage = {
+      role: "assistant",
+      content: [
+        {
+          type: "text",
+          text: `${" ".repeat(32_001)}exec({"command":"pwd"})`,
+        },
+      ],
+    };
+    const baseFn = vi.fn(() => createFakeStream({ events: [], resultMessage: finalMessage }));
+
+    const stream = await invokeRecoveredStream(baseFn, new Set(["exec"]));
+    const result = await stream.result();
+
+    expect(result).toEqual(finalMessage);
   });
 
   it("supports async stream functions that resolve to a stream", async () => {

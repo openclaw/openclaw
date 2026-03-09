@@ -9,14 +9,16 @@ type RecoveredTextToolCall = {
   arguments: Record<string, unknown>;
 };
 
-type RecoveredTextToolPart =
-  | { type: "text"; text: string }
-  | { type: "toolCall"; name: string; arguments: Record<string, unknown> };
-
 type TextRange = {
   start: number;
   end: number;
 };
+
+const MAX_RECOVERY_TEXT_CHARS = 32_000;
+const MAX_INLINE_BACKTICK_RUNS = 256;
+const MAX_XML_INVOKE_CANDIDATES = 8;
+const MAX_XML_PARAMETER_CANDIDATES = 64;
+const MAX_BARE_TEXT_TOOL_CALL_CANDIDATES = 8;
 
 const BASIC_XML_ENTITY_RE = /&(?:amp|lt|gt|quot|apos|#39);/i;
 const XML_INVOKE_RE =
@@ -24,6 +26,50 @@ const XML_INVOKE_RE =
 const XML_PARAMETER_RE =
   /<parameter\b[^>]*\bname=(?:"([^"]+)"|'([^']+)')[^>]*>([\s\S]*?)<\/parameter>/gi;
 const TEXT_TOOL_CALL_START_RE = /(^|[\s([{"',;:])([A-Za-z][A-Za-z0-9_./-]*)\s*\(/g;
+
+function countOccurrences(text: string, needle: string, maxCount: number): number {
+  let count = 0;
+  let searchIndex = 0;
+  while (searchIndex < text.length) {
+    const nextIndex = text.indexOf(needle, searchIndex);
+    if (nextIndex === -1) {
+      return count;
+    }
+    count += 1;
+    if (count > maxCount) {
+      return count;
+    }
+    searchIndex = nextIndex + needle.length;
+  }
+  return count;
+}
+
+function exceedsInlineBacktickRunBudget(text: string): boolean {
+  let runCount = 0;
+  for (let index = 0; index < text.length; index += 1) {
+    if (text[index] !== "`" || text[index - 1] === "`") {
+      continue;
+    }
+    runCount += 1;
+    if (runCount > MAX_INLINE_BACKTICK_RUNS) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function shouldSkipRecoveryForText(text: string): boolean {
+  if (!text || text.length > MAX_RECOVERY_TEXT_CHARS) {
+    return true;
+  }
+  if (exceedsInlineBacktickRunBudget(text)) {
+    return true;
+  }
+  return (
+    countOccurrences(text.toLowerCase(), "<invoke", MAX_XML_INVOKE_CANDIDATES) >
+    MAX_XML_INVOKE_CANDIDATES
+  );
+}
 
 function decodeBasicXmlEntities(text: string): string {
   if (!BASIC_XML_ENTITY_RE.test(text)) {
@@ -113,41 +159,26 @@ function resolveRecoveredToolCallName(
     return undefined;
   }
 
-  const normalizedDelimiter = trimmed.replace(/\//g, ".");
-  const segments = normalizedDelimiter
-    .split(".")
-    .map((segment) => segment.trim())
-    .filter(Boolean);
-
-  const candidates = new Set<string>([trimmed, normalizedDelimiter, normalizeToolName(trimmed)]);
-  if (segments.length > 1) {
-    for (let index = 1; index < segments.length; index += 1) {
-      const suffix = segments.slice(index).join(".");
-      candidates.add(suffix);
-      candidates.add(normalizeToolName(suffix));
-    }
-  }
-
   if (!allowedToolNames || allowedToolNames.size === 0) {
-    return [...candidates][0] ?? trimmed;
+    return normalizeToolName(trimmed);
   }
 
-  for (const candidate of candidates) {
-    if (allowedToolNames.has(candidate)) {
-      return candidate;
+  if (allowedToolNames.has(trimmed)) {
+    return trimmed;
+  }
+
+  const normalized = normalizeToolName(trimmed);
+  let canonicalMatch: string | undefined;
+  for (const allowedName of allowedToolNames) {
+    if (normalizeToolName(allowedName) !== normalized) {
+      continue;
     }
-  }
-
-  for (const candidate of candidates) {
-    const folded = candidate.toLowerCase();
-    for (const allowedName of allowedToolNames) {
-      if (allowedName.toLowerCase() === folded) {
-        return allowedName;
-      }
+    if (canonicalMatch && canonicalMatch !== allowedName) {
+      return undefined;
     }
+    canonicalMatch = allowedName;
   }
-
-  return undefined;
+  return canonicalMatch;
 }
 
 function findMarkdownCodeRanges(text: string): TextRange[] {
@@ -195,8 +226,8 @@ function findMarkdownCodeRanges(text: string): TextRange[] {
   }
 
   if (openFence) {
-    // Treat unterminated fences as code through end-of-text so streamed
-    // partials cannot execute tool-call examples before the fence closes.
+    // Treat unterminated fences as code through end-of-text so incomplete
+    // markdown examples are never recovered as executable tool calls.
     ranges.push({ start: openFence.start, end: text.length });
   }
 
@@ -257,8 +288,8 @@ function findMarkdownCodeRanges(text: string): TextRange[] {
       continue;
     }
 
-    // Treat unterminated inline spans as code through end-of-text so streamed
-    // partials cannot execute tool-call examples before the closing backticks arrive.
+    // Treat unterminated inline spans as code through end-of-text so incomplete
+    // markdown examples are never recovered as executable tool calls.
     const overlapsExisting = ranges.some((range) => start < range.end && range.start < text.length);
     if (!overlapsExisting) {
       ranges.push({ start, end: text.length });
@@ -288,8 +319,14 @@ function findXmlTextToolCalls(
 ): RecoveredTextToolCall[] {
   const recovered: RecoveredTextToolCall[] = [];
   XML_INVOKE_RE.lastIndex = 0;
+  let invokeCount = 0;
 
   for (const match of text.matchAll(XML_INVOKE_RE)) {
+    invokeCount += 1;
+    if (invokeCount > MAX_XML_INVOKE_CANDIDATES) {
+      return [];
+    }
+
     const start = match.index ?? 0;
     if (isIndexInsideRange(start, codeRanges)) {
       continue;
@@ -307,9 +344,20 @@ function findXmlTextToolCalls(
 
     const body = match[3] ?? "";
     const args: Record<string, unknown> = {};
+    if (
+      countOccurrences(body.toLowerCase(), "<parameter", MAX_XML_PARAMETER_CANDIDATES) >
+      MAX_XML_PARAMETER_CANDIDATES
+    ) {
+      continue;
+    }
 
     XML_PARAMETER_RE.lastIndex = 0;
+    let parameterCount = 0;
     for (const paramMatch of body.matchAll(XML_PARAMETER_RE)) {
+      parameterCount += 1;
+      if (parameterCount > MAX_XML_PARAMETER_CANDIDATES) {
+        break;
+      }
       const paramName = (paramMatch[1] ?? paramMatch[2] ?? "").trim();
       if (!paramName) {
         continue;
@@ -352,7 +400,13 @@ function findBareTextToolCalls(
     TEXT_TOOL_CALL_START_RE.flags,
   );
   let match: RegExpExecArray | null;
+  let candidateCount = 0;
   while ((match = textToolCallStartRe.exec(text))) {
+    candidateCount += 1;
+    if (candidateCount > MAX_BARE_TEXT_TOOL_CALL_CANDIDATES) {
+      return [];
+    }
+
     const prefix = match[1] ?? "";
     const rawName = (match[2] ?? "").trim();
     if (!rawName) {
@@ -398,7 +452,11 @@ function findBareTextToolCalls(
 function splitTextBlockIntoRecoveredToolCalls(
   text: string,
   allowedToolNames?: Set<string>,
-): RecoveredTextToolPart[] | null {
+): Array<Pick<RecoveredTextToolCall, "name" | "arguments">> | null {
+  if (shouldSkipRecoveryForText(text)) {
+    return null;
+  }
+
   const codeRanges = findMarkdownCodeRanges(text);
   const recovered = [
     ...findXmlTextToolCalls(text, allowedToolNames, codeRanges),
@@ -419,31 +477,22 @@ function splitTextBlockIntoRecoveredToolCalls(
     lastEnd = toolCall.end;
   }
 
-  const parts: RecoveredTextToolPart[] = [];
   let cursor = 0;
   for (const toolCall of nonOverlapping) {
-    if (toolCall.start > cursor) {
-      const textPart = text.slice(cursor, toolCall.start).trim();
-      if (textPart) {
-        parts.push({ type: "text", text: textPart });
-      }
+    if (text.slice(cursor, toolCall.start).trim()) {
+      return null;
     }
-    parts.push({
-      type: "toolCall",
-      name: toolCall.name,
-      arguments: toolCall.arguments,
-    });
     cursor = toolCall.end;
   }
 
-  if (cursor < text.length) {
-    const trailingText = text.slice(cursor).trim();
-    if (trailingText) {
-      parts.push({ type: "text", text: trailingText });
-    }
+  if (text.slice(cursor).trim()) {
+    return null;
   }
 
-  return parts.length > 0 ? parts : null;
+  return nonOverlapping.map((toolCall) => ({
+    name: toolCall.name,
+    arguments: toolCall.arguments,
+  }));
 }
 
 function isToolCallBlockType(type: unknown): boolean {
@@ -492,18 +541,17 @@ export function recoverTextToolCallsInMessage(
     }
 
     const textBlock = block as { text: string } & Record<string, unknown>;
-    const recoveredParts = splitTextBlockIntoRecoveredToolCalls(textBlock.text, allowedToolNames);
-    if (!recoveredParts) {
+    const recoveredToolCalls = splitTextBlockIntoRecoveredToolCalls(
+      textBlock.text,
+      allowedToolNames,
+    );
+    if (!recoveredToolCalls) {
       nextContent.push(block);
       continue;
     }
 
     recoveredAny = true;
-    for (const part of recoveredParts) {
-      if (part.type === "text") {
-        nextContent.push({ ...textBlock, text: part.text });
-        continue;
-      }
+    for (const part of recoveredToolCalls) {
       nextContent.push({
         type: "toolCall",
         name: part.name,
@@ -529,29 +577,6 @@ function wrapStreamRecoverTextToolCalls(
     recoverTextToolCallsInMessage(message, allowedToolNames);
     return message;
   };
-
-  const originalAsyncIterator = stream[Symbol.asyncIterator].bind(stream);
-  (stream as { [Symbol.asyncIterator]: typeof originalAsyncIterator })[Symbol.asyncIterator] =
-    function () {
-      const iterator = originalAsyncIterator();
-      return {
-        async next() {
-          const result = await iterator.next();
-          if (!result.done && result.value && typeof result.value === "object") {
-            const event = result.value as { partial?: unknown; message?: unknown };
-            recoverTextToolCallsInMessage(event.partial, allowedToolNames);
-            recoverTextToolCallsInMessage(event.message, allowedToolNames);
-          }
-          return result;
-        },
-        async return(value?: unknown) {
-          return iterator.return?.(value) ?? { done: true as const, value: undefined };
-        },
-        async throw(error?: unknown) {
-          return iterator.throw?.(error) ?? { done: true as const, value: undefined };
-        },
-      };
-    };
 
   return stream;
 }
