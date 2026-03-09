@@ -792,11 +792,25 @@ describe("telegramMessageActions", () => {
         },
       },
       {
-        name: "delete maps to deleteForumTopic when threadId is provided",
-        action: "delete" as const,
+        name: "topic-delete maps to deleteForumTopic when threadId is provided",
+        action: "topic-delete" as const,
         params: {
           to: "-1001234567890",
           threadId: 271,
+        },
+        expectedPayload: {
+          action: "deleteForumTopic",
+          chatId: "-1001234567890",
+          topicId: 271,
+          accountId: undefined,
+        },
+      },
+      {
+        name: "delete keeps backward compatibility for explicit topic ids",
+        action: "delete" as const,
+        params: {
+          to: "-1001234567890",
+          topicId: 271,
         },
         expectedPayload: {
           action: "deleteForumTopic",
@@ -834,7 +848,7 @@ describe("telegramMessageActions", () => {
     }
   });
 
-  it("rejects delete when neither messageId nor topic/thread id is provided", async () => {
+  it("rejects delete when messageId is not provided", async () => {
     const cfg = telegramCfg();
     const handleAction = telegramMessageActions.handleAction;
     if (!handleAction) {
@@ -850,7 +864,28 @@ describe("telegramMessageActions", () => {
         },
         cfg,
       }),
-    ).rejects.toThrow(/messageId or threadId\/topicId is required/i);
+    ).rejects.toThrow(/messageId is required for action=delete/i);
+
+    expect(handleTelegramAction).not.toHaveBeenCalled();
+  });
+
+  it("rejects topic-delete when threadId/topicId is missing", async () => {
+    const cfg = telegramCfg();
+    const handleAction = telegramMessageActions.handleAction;
+    if (!handleAction) {
+      throw new Error("telegram handleAction unavailable");
+    }
+
+    await expect(
+      handleAction({
+        channel: "telegram",
+        action: "topic-delete",
+        params: {
+          to: "-1001234567890",
+        },
+        cfg,
+      }),
+    ).rejects.toThrow(/threadId\/topicId is required for action=topic-delete/i);
 
     expect(handleTelegramAction).not.toHaveBeenCalled();
   });

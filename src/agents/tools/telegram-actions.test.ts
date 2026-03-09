@@ -617,10 +617,10 @@ describe("handleTelegramAction", () => {
     );
   });
 
-  it("respects createForumTopic gating for deleteForumTopic", async () => {
+  it("respects deleteMessage gating for deleteForumTopic", async () => {
     const cfg = {
       channels: {
-        telegram: { botToken: "tok", actions: { createForumTopic: false } },
+        telegram: { botToken: "tok", actions: { deleteMessage: false } },
       },
     } as OpenClawConfig;
     await expect(
@@ -632,7 +632,7 @@ describe("handleTelegramAction", () => {
         },
         cfg,
       ),
-    ).rejects.toThrow(/Telegram createForumTopic is disabled/);
+    ).rejects.toThrow(/Telegram forum topic deletion is disabled/);
   });
 
   it("respects deleteMessage gating", async () => {

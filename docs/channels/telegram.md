@@ -428,8 +428,10 @@ curl "https://api.telegram.org/bot<bot_token>/getUpdates"
     - `editMessage` (`chatId`, `messageId`, `content`)
     - `createForumTopic` (`chatId`, `name`, optional `iconColor`, `iconCustomEmojiId`)
 
-    Channel message actions expose ergonomic aliases (`send`, `react`, `delete`, `edit`, `sticker`, `sticker-search`, `topic-create`).
-    For `delete`, pass `messageId` to delete a message (existing behavior), or pass `threadId`/`topicId` to delete a forum topic.
+    Channel message actions expose ergonomic aliases (`send`, `react`, `delete`, `topic-delete`, `edit`, `sticker`, `sticker-search`, `topic-create`).
+    - `delete`: deletes a message and requires `messageId`.
+    - `topic-delete`: deletes a forum topic and requires explicit `threadId`/`topicId`.
+    Backward compatibility: `delete` with explicit `threadId`/`topicId` is still accepted for now.
 
     Gating controls:
 
@@ -971,7 +973,7 @@ Telegram-specific high-signal fields:
 - formatting/delivery: `textChunkLimit`, `chunkMode`, `linkPreview`, `responsePrefix`
 - media/network: `mediaMaxMb`, `timeoutSeconds`, `retry`, `network.autoSelectFamily`, `proxy`
 - webhook: `webhookUrl`, `webhookSecret`, `webhookPath`, `webhookHost`
-- actions/capabilities: `capabilities.inlineButtons`, `actions.sendMessage|editMessage|deleteMessage|reactions|sticker`
+- actions/capabilities: `capabilities.inlineButtons`, `actions.sendMessage|editMessage|deleteMessage|reactions|sticker` (both `delete` and `topic-delete` route through `actions.deleteMessage`)
 - reactions: `reactionNotifications`, `reactionLevel`
 - writes/history: `configWrites`, `historyLimit`, `dmHistoryLimit`, `dms.*.historyLimit`
 

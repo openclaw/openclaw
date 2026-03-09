@@ -343,8 +343,10 @@ export async function handleTelegramAction(
   }
 
   if (action === "deleteForumTopic") {
-    if (!isActionEnabled("createForumTopic")) {
-      throw new Error("Telegram createForumTopic is disabled.");
+    if (!isActionEnabled("deleteMessage")) {
+      throw new Error(
+        "Telegram forum topic deletion is disabled. Set channels.telegram.actions.deleteMessage to true.",
+      );
     }
     const chatId = readStringOrNumberParam(params, "chatId", {
       required: true,

@@ -353,7 +353,7 @@ describe("message tool description", () => {
       label: "Telegram",
       docsPath: "/channels/telegram",
       blurb: "Telegram test plugin.",
-      actions: ["send", "react", "delete", "edit", "topic-create"],
+      actions: ["send", "react", "delete", "edit", "topic-create", "topic-delete"],
     });
 
     setActivePluginRegistry(
@@ -372,7 +372,9 @@ describe("message tool description", () => {
     expect(tool.description).toContain("Current channel (signal) supports: react, send.");
     // Other configured channels are also listed
     expect(tool.description).toContain("Other configured channels:");
-    expect(tool.description).toContain("telegram (delete, edit, react, send, topic-create)");
+    expect(tool.description).toContain(
+      "telegram (delete, edit, react, send, topic-create, topic-delete)",
+    );
   });
 
   it("does not include 'Other configured channels' when only one channel is configured", () => {

@@ -24,7 +24,6 @@ import {
   resolveTelegramPollActionGateState,
 } from "./accounts.js";
 import { isTelegramInlineButtonsEnabled } from "./inline-buttons.js";
-import { parseTelegramTarget } from "./targets.js";
 
 const providerId = "telegram";
 
@@ -79,17 +78,10 @@ function readTelegramMessageIdParam(
 }
 
 function readTelegramTopicIdParam(params: Record<string, unknown>): number | undefined {
-  const explicitTopicId =
+  return (
     readNumberParam(params, "topicId", { integer: true }) ??
-    readNumberParam(params, "threadId", { integer: true });
-  if (typeof explicitTopicId === "number") {
-    return explicitTopicId;
-  }
-  const targetLike = readStringParam(params, "to") ?? readStringParam(params, "chatId");
-  if (!targetLike) {
-    return undefined;
-  }
-  return parseTelegramTarget(targetLike).messageThreadId;
+    readNumberParam(params, "threadId", { integer: true })
+  );
 }
 
 export const telegramMessageActions: ChannelMessageActionAdapter = {
@@ -123,6 +115,7 @@ export const telegramMessageActions: ChannelMessageActionAdapter = {
     }
     if (isEnabled("deleteMessage")) {
       actions.add("delete");
+      actions.add("topic-delete");
     }
     if (isEnabled("editMessage")) {
       actions.add("edit");
@@ -249,7 +242,25 @@ export const telegramMessageActions: ChannelMessageActionAdapter = {
         );
       }
 
-      throw new Error("messageId or threadId/topicId is required.");
+      throw new Error("messageId is required for action=delete.");
+    }
+
+    if (action === "topic-delete") {
+      const chatId = readTelegramChatIdParam(params);
+      const topicId = readTelegramTopicIdParam(params);
+      if (typeof topicId !== "number") {
+        throw new Error("threadId/topicId is required for action=topic-delete.");
+      }
+      return await handleTelegramAction(
+        {
+          action: "deleteForumTopic",
+          chatId,
+          topicId,
+          accountId: accountId ?? undefined,
+        },
+        cfg,
+        { mediaLocalRoots },
+      );
     }
 
     if (action === "edit") {
