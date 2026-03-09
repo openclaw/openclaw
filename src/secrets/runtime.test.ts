@@ -532,18 +532,9 @@ describe("secrets runtime snapshot", () => {
   it("keeps active secrets runtime snapshots resolved after config writes", async () => {
     await withTempHome("openclaw-secrets-runtime-write-", async (home) => {
       const configDir = path.join(home, ".openclaw");
-      const secretFile = path.join(configDir, "secrets.json");
       const agentDir = path.join(configDir, "agents", "main", "agent");
       const authStorePath = path.join(agentDir, "auth-profiles.json");
       await fs.mkdir(agentDir, { recursive: true });
-      await fs.chmod(configDir, 0o700).catch(() => {
-        // best-effort on tmp dirs that already have secure perms
-      });
-      await fs.writeFile(
-        secretFile,
-        `${JSON.stringify({ providers: { openai: { apiKey: "sk-file-runtime" } } }, null, 2)}\n`, // pragma: allowlist secret
-        { encoding: "utf8", mode: 0o600 },
-      );
       await fs.writeFile(
         authStorePath,
         `${JSON.stringify(
@@ -553,7 +544,7 @@ describe("secrets runtime snapshot", () => {
               "openai:default": {
                 type: "api_key",
                 provider: "openai",
-                keyRef: { source: "file", provider: "default", id: "/providers/openai/apiKey" },
+                keyRef: OPENAI_ENV_KEY_REF,
               },
             },
           },
@@ -565,21 +556,19 @@ describe("secrets runtime snapshot", () => {
 
       const prepared = await prepareSecretsRuntimeSnapshot({
         config: asConfig({
-          secrets: {
-            providers: {
-              default: { source: "file", path: secretFile, mode: "json" },
-            },
-          },
           models: {
             providers: {
               openai: {
                 baseUrl: "https://api.openai.com/v1",
-                apiKey: { source: "file", provider: "default", id: "/providers/openai/apiKey" },
+                apiKey: OPENAI_ENV_KEY_REF,
                 models: [],
               },
             },
           },
         }),
+        env: {
+          OPENAI_API_KEY: "sk-file-runtime", // pragma: allowlist secret
+        },
         agentDirs: [agentDir],
       });
 
@@ -608,18 +597,9 @@ describe("secrets runtime snapshot", () => {
   it("clears active secrets runtime state and throws when refresh fails after a write", async () => {
     await withTempHome("openclaw-secrets-runtime-refresh-fail-", async (home) => {
       const configDir = path.join(home, ".openclaw");
-      const secretFile = path.join(configDir, "secrets.json");
       const agentDir = path.join(configDir, "agents", "main", "agent");
       const authStorePath = path.join(agentDir, "auth-profiles.json");
       await fs.mkdir(agentDir, { recursive: true });
-      await fs.chmod(configDir, 0o700).catch(() => {
-        // best-effort on tmp dirs that already have secure perms
-      });
-      await fs.writeFile(
-        secretFile,
-        `${JSON.stringify({ providers: { openai: { apiKey: "sk-file-runtime" } } }, null, 2)}\n`,
-        { encoding: "utf8", mode: 0o600 },
-      );
       await fs.writeFile(
         authStorePath,
         `${JSON.stringify(
@@ -629,7 +609,7 @@ describe("secrets runtime snapshot", () => {
               "openai:default": {
                 type: "api_key",
                 provider: "openai",
-                keyRef: { source: "file", provider: "default", id: "/providers/openai/apiKey" },
+                keyRef: OPENAI_ENV_KEY_REF,
               },
             },
           },
@@ -649,28 +629,26 @@ describe("secrets runtime snapshot", () => {
           "openai:default": {
             type: "api_key",
             provider: "openai",
-            keyRef: { source: "file", provider: "default", id: "/providers/openai/apiKey" },
+            keyRef: OPENAI_ENV_KEY_REF,
           },
         });
       };
 
       const prepared = await prepareSecretsRuntimeSnapshot({
         config: asConfig({
-          secrets: {
-            providers: {
-              default: { source: "file", path: secretFile, mode: "json" },
-            },
-          },
           models: {
             providers: {
               openai: {
                 baseUrl: "https://api.openai.com/v1",
-                apiKey: { source: "file", provider: "default", id: "/providers/openai/apiKey" },
+                apiKey: OPENAI_ENV_KEY_REF,
                 models: [],
               },
             },
           },
         }),
+        env: {
+          OPENAI_API_KEY: "sk-file-runtime", // pragma: allowlist secret
+        },
         agentDirs: [agentDir],
         loadAuthStore,
       });
@@ -688,16 +666,12 @@ describe("secrets runtime snapshot", () => {
 
       expect(getActiveSecretsRuntimeSnapshot()).toBeNull();
       expect(loadConfig().gateway?.auth).toEqual({ mode: "token" });
-      expect(loadConfig().models?.providers?.openai?.apiKey).toEqual({
-        source: "file",
-        provider: "default",
-        id: "/providers/openai/apiKey",
-      });
+      expect(loadConfig().models?.providers?.openai?.apiKey).toEqual(OPENAI_ENV_KEY_REF);
 
       const persistedStore = ensureAuthProfileStore(agentDir).profiles["openai:default"];
       expect(persistedStore).toMatchObject({
         type: "api_key",
-        keyRef: { source: "file", provider: "default", id: "/providers/openai/apiKey" },
+        keyRef: OPENAI_ENV_KEY_REF,
       });
       expect("key" in persistedStore ? persistedStore.key : undefined).toBeUndefined();
     });

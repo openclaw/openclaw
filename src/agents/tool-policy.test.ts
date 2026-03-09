@@ -56,9 +56,17 @@ describe("tool-policy", () => {
   it("resolves known profiles and ignores unknown ones", () => {
     const coding = resolveToolProfilePolicy("coding");
     expect(coding?.allow).toContain("read");
-    expect(coding?.allow).toContain("cron");
+    expect(coding?.allow).toContain("memory_search");
+    expect(coding?.allow).toContain("memory_get");
+    expect(coding?.allow).not.toContain("memory_write");
+    expect(coding?.allow).not.toContain("memory_upsert");
     expect(coding?.allow).not.toContain("gateway");
     expect(resolveToolProfilePolicy("nope")).toBeUndefined();
+  });
+
+  it("keeps memory writes behind an explicit group", () => {
+    expect(TOOL_GROUPS["group:memory"]).toEqual(["memory_search", "memory_get"]);
+    expect(TOOL_GROUPS["group:memory-write"]).toEqual(["memory_write", "memory_upsert"]);
   });
 
   it("includes core tool groups in group:openclaw", () => {

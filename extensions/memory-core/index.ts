@@ -26,6 +26,24 @@ const memoryCorePlugin = {
       { names: ["memory_search", "memory_get"] },
     );
 
+    api.registerTool(
+      (ctx) => {
+        const memoryWriteTool = api.runtime.tools.createMemoryWriteTool({
+          config: ctx.config,
+          agentSessionKey: ctx.sessionKey,
+        });
+        const memoryUpsertTool = api.runtime.tools.createMemoryUpsertTool({
+          config: ctx.config,
+          agentSessionKey: ctx.sessionKey,
+        });
+        if (!memoryWriteTool || !memoryUpsertTool) {
+          return null;
+        }
+        return [memoryWriteTool, memoryUpsertTool];
+      },
+      { names: ["memory_write", "memory_upsert"] },
+    );
+
     api.registerCli(
       ({ program }) => {
         api.runtime.tools.registerMemoryCli(program);

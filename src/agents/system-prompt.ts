@@ -43,21 +43,40 @@ function buildMemorySection(params: {
   if (params.isMinimal) {
     return [];
   }
-  if (!params.availableTools.has("memory_search") && !params.availableTools.has("memory_get")) {
+  const canRecall =
+    params.availableTools.has("memory_search") || params.availableTools.has("memory_get");
+  const canWrite =
+    params.availableTools.has("memory_write") || params.availableTools.has("memory_upsert");
+  if (!canRecall && !canWrite) {
     return [];
   }
-  const lines = [
-    "## Memory Recall",
-    "Before answering anything about prior work, decisions, dates, people, preferences, or todos: run memory_search on MEMORY.md + memory/*.md; then use memory_get to pull only the needed lines. If low confidence after search, say you checked.",
-  ];
-  if (params.citationsMode === "off") {
+  const lines = [canRecall ? "## Memory Recall" : "## Memory"];
+  if (canRecall) {
     lines.push(
-      "Citations are disabled: do not mention file paths or line numbers in replies unless the user explicitly asks.",
+      "Before answering anything about prior work, decisions, dates, people, preferences, or todos: run memory_search on MEMORY.md + memory/*.md; then use memory_get to pull only the needed lines. If low confidence after search, say you checked.",
     );
-  } else {
+  }
+  if (canWrite) {
+    const writeGuidance = [
+      params.availableTools.has("memory_write") ? "memory_write (append)" : null,
+      params.availableTools.has("memory_upsert") ? "memory_upsert (keyed update)" : null,
+    ].filter(Boolean);
+    const writeTools =
+      writeGuidance.length === 2 ? `${writeGuidance[0]} or ${writeGuidance[1]}` : writeGuidance[0];
     lines.push(
-      "Citations: include Source: <path#line> when it helps the user verify memory snippets.",
+      `When the user explicitly asks to remember/update something, use ${writeTools} so durable memory is saved to disk.`,
     );
+  }
+  if (canRecall) {
+    if (params.citationsMode === "off") {
+      lines.push(
+        "Citations are disabled: do not mention file paths or line numbers in replies unless the user explicitly asks.",
+      );
+    } else {
+      lines.push(
+        "Citations: include Source: <path#line> when it helps the user verify memory snippets.",
+      );
+    }
   }
   lines.push("");
   return lines;
