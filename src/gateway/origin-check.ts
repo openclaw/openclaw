@@ -1,4 +1,4 @@
-import { isLoopbackHost, normalizeHostHeader } from "./net.js";
+import { isLoopbackHost, normalizeHostHeader, resolveHostName } from "./net.js";
 
 type OriginCheckResult =
   | {
@@ -50,10 +50,10 @@ export function checkBrowserOrigin(params: {
   const requestForwardedHost = normalizeHostHeader(params.requestForwardedHost);
   if (params.allowHostHeaderOriginFallback === true) {
     if (requestHost && parsedOrigin.host === requestHost) {
-      return { ok: true };
+      return { ok: true, matchedBy: "host-header-fallback" };
     }
     if (requestForwardedHost && parsedOrigin.host === requestForwardedHost) {
-      return { ok: true };
+      return { ok: true, matchedBy: "host-header-fallback" };
     }
   }
 
@@ -63,7 +63,7 @@ export function checkBrowserOrigin(params: {
     isLoopbackHost(parsedOrigin.hostname) &&
     (isLoopbackHost(requestHostname) || isLoopbackHost(requestForwardedHostname))
   ) {
-    return { ok: true };
+    return { ok: true, matchedBy: "local-loopback" };
   }
 
   return { ok: false, reason: "origin not allowed" };
