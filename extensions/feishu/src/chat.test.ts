@@ -228,4 +228,35 @@ describe("registerFeishuChatTools", () => {
       expect.objectContaining({ appId: "app_default", appSecret: "secret_default" }),
     );
   });
+
+  it("rejects execution when resolved account has chat tool disabled", async () => {
+    const { api, resolveTool } = createToolFactoryHarness({
+      channels: {
+        feishu: {
+          enabled: true,
+          accounts: {
+            default: {
+              appId: "app_default",
+              appSecret: "secret_default",
+              tools: { chat: true },
+            },
+            nochat: {
+              appId: "app_nochat",
+              appSecret: "secret_nochat",
+              tools: { chat: false },
+            },
+          },
+          tools: { chat: true },
+        },
+      },
+    } as any);
+
+    registerFeishuChatTools(api);
+    const tool = resolveTool("feishu_chat", { agentAccountId: "nochat" });
+
+    const result = (await tool.execute("tc_10", { action: "list" })) as any;
+    expect(result.details).toEqual({
+      error: expect.stringContaining("chat tool is disabled"),
+    });
+  });
 });
