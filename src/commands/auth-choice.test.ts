@@ -758,7 +758,7 @@ describe("applyAuthChoice", () => {
         envValue: "gateway-ref-key",
         profileId: "vercel-ai-gateway:default",
         provider: "vercel-ai-gateway",
-        opts: { secretInputMode: "ref" },
+        opts: { secretInputMode: "ref" }, // pragma: allowlist secret
         expectEnvPrompt: false,
         expectedTextCalls: 1,
         expectedKeyRef: { source: "env", provider: "default", id: "AI_GATEWAY_API_KEY" },
@@ -824,7 +824,7 @@ describe("applyAuthChoice", () => {
 
   it("retries ref setup when provider preflight fails and can switch to env ref", async () => {
     await setupTempState();
-    process.env.OPENAI_API_KEY = "sk-openai-env";
+    process.env.OPENAI_API_KEY = "sk-openai-env"; // pragma: allowlist secret
 
     const selectValues: Array<"provider" | "env" | "filemain"> = ["provider", "filemain", "env"];
     const select = vi.fn(async (params: Parameters<WizardPrompter["select"]>[0]) => {
@@ -865,7 +865,7 @@ describe("applyAuthChoice", () => {
       prompter,
       runtime,
       setDefaultModel: false,
-      opts: { secretInputMode: "ref" },
+      opts: { secretInputMode: "ref" }, // pragma: allowlist secret
     });
 
     expect(result.config.auth?.profiles?.["openai:default"]).toMatchObject({
@@ -1034,7 +1034,7 @@ describe("applyAuthChoice", () => {
 
   it("ignores legacy LiteLLM oauth profiles when selecting litellm-api-key", async () => {
     await setupTempState();
-    process.env.LITELLM_API_KEY = "sk-litellm-test";
+    process.env.LITELLM_API_KEY = "sk-litellm-test"; // pragma: allowlist secret
 
     const authProfilePath = authProfilePathForAgent(requireOpenClawAgentDir());
     await fs.writeFile(
@@ -1100,7 +1100,7 @@ describe("applyAuthChoice", () => {
       textValues: string[];
       confirmValue: boolean;
       opts?: {
-        secretInputMode?: "ref";
+        secretInputMode?: "ref"; // pragma: allowlist secret
         cloudflareAiGatewayAccountId?: string;
         cloudflareAiGatewayGatewayId?: string;
         cloudflareAiGatewayApiKey?: string;
@@ -1128,7 +1128,7 @@ describe("applyAuthChoice", () => {
         textValues: ["cf-account-id-ref", "cf-gateway-id-ref"],
         confirmValue: true,
         opts: {
-          secretInputMode: "ref",
+          secretInputMode: "ref", // pragma: allowlist secret
         },
         expectEnvPrompt: false,
         expectedTextCalls: 3,
@@ -1144,7 +1144,7 @@ describe("applyAuthChoice", () => {
         opts: {
           cloudflareAiGatewayAccountId: "acc-direct",
           cloudflareAiGatewayGatewayId: "gw-direct",
-          cloudflareAiGatewayApiKey: "cf-direct-key",
+          cloudflareAiGatewayApiKey: "cf-direct-key", // pragma: allowlist secret
         },
         expectEnvPrompt: false,
         expectedTextCalls: 0,
@@ -1301,7 +1301,7 @@ describe("applyAuthChoice", () => {
         baseUrl: "https://portal.qwen.ai/v1",
         api: "openai-completions",
         defaultModel: "qwen-portal/coder-model",
-        apiKey: "qwen-oauth",
+        apiKey: "qwen-oauth", // pragma: allowlist secret
       },
       {
         authChoice: "minimax-portal",
@@ -1313,7 +1313,7 @@ describe("applyAuthChoice", () => {
         baseUrl: "https://api.minimax.io/anthropic",
         api: "anthropic-messages",
         defaultModel: "minimax-portal/MiniMax-M2.5",
-        apiKey: "minimax-oauth",
+        apiKey: "minimax-oauth", // pragma: allowlist secret
         selectValue: "oauth",
       },
     ];

@@ -388,6 +388,38 @@ describe("security/dm-policy-shared", () => {
   });
 
   for (const channel of channels) {
+    it(`[${channel}] blocks groups when group allowlist is empty`, () => {
+      const decision = resolveDmGroupAccessDecision({
+        isGroup: true,
+        dmPolicy: "pairing",
+        groupPolicy: "allowlist",
+        effectiveAllowFrom: ["owner"],
+        effectiveGroupAllowFrom: [],
+        isSenderAllowed: () => false,
+      });
+      expect(decision).toEqual({
+        decision: "block",
+        reasonCode: DM_GROUP_ACCESS_REASON.GROUP_POLICY_EMPTY_ALLOWLIST,
+        reason: "groupPolicy=allowlist (empty allowlist)",
+      });
+    });
+
+    it(`[${channel}] allows groups when group policy is open`, () => {
+      const decision = resolveDmGroupAccessDecision({
+        isGroup: true,
+        dmPolicy: "pairing",
+        groupPolicy: "open",
+        effectiveAllowFrom: ["owner"],
+        effectiveGroupAllowFrom: [],
+        isSenderAllowed: () => false,
+      });
+      expect(decision).toEqual({
+        decision: "allow",
+        reasonCode: DM_GROUP_ACCESS_REASON.GROUP_POLICY_ALLOWED,
+        reason: "groupPolicy=open",
+      });
+    });
+
     it(`[${channel}] blocks DM allowlist mode when allowlist is empty`, () => {
       const decision = resolveDmGroupAccessDecision({
         isGroup: false,
