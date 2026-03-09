@@ -10,15 +10,7 @@ export function exportChatMarkdown(messages: unknown[], assistantName: string): 
   for (const msg of history) {
     const m = msg as Record<string, unknown>;
     const role = m.role === "user" ? "You" : m.role === "assistant" ? assistantName : "Tool";
-    const content =
-      typeof m.content === "string"
-        ? m.content
-        : Array.isArray(m.content)
-          ? (m.content as Array<{ type?: string; text?: string }>)
-              .filter((b) => b?.type === "text" && typeof b.text === "string")
-              .map((b) => b.text)
-              .join("")
-          : "";
+    const content = typeof m.content === "string" ? m.content : "";
     const ts = typeof m.timestamp === "number" ? new Date(m.timestamp).toISOString() : "";
     lines.push(`## ${role}${ts ? ` (${ts})` : ""}`, "", content, "");
   }
