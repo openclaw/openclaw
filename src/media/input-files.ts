@@ -2,6 +2,8 @@ import { fetchWithSsrFGuard } from "../infra/net/fetch-guard.js";
 import type { SsrFPolicy } from "../infra/net/ssrf.js";
 import { logWarn } from "../logger.js";
 import { canonicalizeBase64, estimateBase64DecodedBytes } from "./base64.js";
+import { convertHeicToJpeg } from "./image-ops.js";
+import { detectMime } from "./mime.js";
 import { extractPdfContent, type PdfExtractedImage } from "./pdf-extract.js";
 import { readResponseWithLimit } from "./read-response-with-limit.js";
 
@@ -53,20 +55,31 @@ export type InputImageLimits = {
   timeoutMs: number;
 };
 
-export type InputImageSource = {
-  type: "base64" | "url";
-  data?: string;
-  url?: string;
-  mediaType?: string;
-};
+export type InputImageSource =
+  | {
+      type: "base64";
+      data: string;
+      mediaType?: string;
+    }
+  | {
+      type: "url";
+      url: string;
+      mediaType?: string;
+    };
 
-export type InputFileSource = {
-  type: "base64" | "url";
-  data?: string;
-  url?: string;
-  mediaType?: string;
-  filename?: string;
-};
+export type InputFileSource =
+  | {
+      type: "base64";
+      data: string;
+      mediaType?: string;
+      filename?: string;
+    }
+  | {
+      type: "url";
+      url: string;
+      mediaType?: string;
+      filename?: string;
+    };
 
 export type InputFetchResult = {
   buffer: Buffer;
@@ -74,7 +87,14 @@ export type InputFetchResult = {
   contentType?: string;
 };
 
-export const DEFAULT_INPUT_IMAGE_MIMES = ["image/jpeg", "image/png", "image/gif", "image/webp"];
+export const DEFAULT_INPUT_IMAGE_MIMES = [
+  "image/jpeg",
+  "image/png",
+  "image/gif",
+  "image/webp",
+  "image/heic",
+  "image/heif",
+];
 export const DEFAULT_INPUT_FILE_MIMES = [
   "text/plain",
   "text/markdown",
@@ -91,6 +111,8 @@ export const DEFAULT_INPUT_TIMEOUT_MS = 10_000;
 export const DEFAULT_INPUT_PDF_MAX_PAGES = 4;
 export const DEFAULT_INPUT_PDF_MAX_PIXELS = 4_000_000;
 export const DEFAULT_INPUT_PDF_MIN_TEXT_CHARS = 200;
+const NORMALIZED_INPUT_IMAGE_MIME = "image/jpeg";
+const HEIC_INPUT_IMAGE_MIMES = new Set(["image/heic", "image/heif"]);
 
 function rejectOversizedBase64Payload(params: {
   data: string;
@@ -207,22 +229,57 @@ function clampText(text: string, maxChars: number): string {
   return text.slice(0, maxChars);
 }
 
+async function normalizeInputImage(params: {
+  buffer: Buffer;
+  mimeType?: string;
+  limits: InputImageLimits;
+}): Promise<InputImageContent> {
+  const declaredMime = normalizeMimeType(params.mimeType) ?? "application/octet-stream";
+  const detectedMime = normalizeMimeType(
+    await detectMime({ buffer: params.buffer, headerMime: params.mimeType }),
+  );
+  if (declaredMime.startsWith("image/") && detectedMime && !detectedMime.startsWith("image/")) {
+    throw new Error(`Unsupported image MIME type: ${detectedMime}`);
+  }
+  const sourceMime =
+    (detectedMime && HEIC_INPUT_IMAGE_MIMES.has(detectedMime)) ||
+    (HEIC_INPUT_IMAGE_MIMES.has(declaredMime) && !detectedMime)
+      ? (detectedMime ?? declaredMime)
+      : declaredMime;
+  if (!params.limits.allowedMimes.has(sourceMime)) {
+    throw new Error(`Unsupported image MIME type: ${sourceMime}`);
+  }
+
+  if (!HEIC_INPUT_IMAGE_MIMES.has(sourceMime)) {
+    return {
+      type: "image",
+      data: params.buffer.toString("base64"),
+      mimeType: sourceMime,
+    };
+  }
+
+  const normalizedBuffer = await convertHeicToJpeg(params.buffer);
+  if (normalizedBuffer.byteLength > params.limits.maxBytes) {
+    throw new Error(
+      `Image too large after HEIC conversion: ${normalizedBuffer.byteLength} bytes (limit: ${params.limits.maxBytes} bytes)`,
+    );
+  }
+  return {
+    type: "image",
+    data: normalizedBuffer.toString("base64"),
+    mimeType: NORMALIZED_INPUT_IMAGE_MIME,
+  };
+}
+
 export async function extractImageContentFromSource(
   source: InputImageSource,
   limits: InputImageLimits,
 ): Promise<InputImageContent> {
   if (source.type === "base64") {
-    if (!source.data) {
-      throw new Error("input_image base64 source missing 'data' field");
-    }
     rejectOversizedBase64Payload({ data: source.data, maxBytes: limits.maxBytes, label: "Image" });
     const canonicalData = canonicalizeBase64(source.data);
     if (!canonicalData) {
       throw new Error("input_image base64 source has invalid 'data' field");
-    }
-    const mimeType = normalizeMimeType(source.mediaType) ?? "image/png";
-    if (!limits.allowedMimes.has(mimeType)) {
-      throw new Error(`Unsupported image MIME type: ${mimeType}`);
     }
     const buffer = Buffer.from(canonicalData, "base64");
     if (buffer.byteLength > limits.maxBytes) {
@@ -230,10 +287,14 @@ export async function extractImageContentFromSource(
         `Image too large: ${buffer.byteLength} bytes (limit: ${limits.maxBytes} bytes)`,
       );
     }
-    return { type: "image", data: canonicalData, mimeType };
+    return await normalizeInputImage({
+      buffer,
+      mimeType: normalizeMimeType(source.mediaType) ?? "image/png",
+      limits,
+    });
   }
 
-  if (source.type === "url" && source.url) {
+  if (source.type === "url") {
     if (!limits.allowUrl) {
       throw new Error("input_image URL sources are disabled by config");
     }
@@ -248,13 +309,14 @@ export async function extractImageContentFromSource(
       },
       auditContext: "openresponses.input_image",
     });
-    if (!limits.allowedMimes.has(result.mimeType)) {
-      throw new Error(`Unsupported image MIME type from URL: ${result.mimeType}`);
-    }
-    return { type: "image", data: result.buffer.toString("base64"), mimeType: result.mimeType };
+    return await normalizeInputImage({
+      buffer: result.buffer,
+      mimeType: result.mimeType,
+      limits,
+    });
   }
 
-  throw new Error("input_image must have 'source.url' or 'source.data'");
+  throw new Error(`Unsupported input_image source type: ${(source as { type: string }).type}`);
 }
 
 export async function extractFileContentFromSource(params: {
@@ -269,9 +331,6 @@ export async function extractFileContentFromSource(params: {
   let charset: string | undefined;
 
   if (source.type === "base64") {
-    if (!source.data) {
-      throw new Error("input_file base64 source missing 'data' field");
-    }
     rejectOversizedBase64Payload({ data: source.data, maxBytes: limits.maxBytes, label: "File" });
     const canonicalData = canonicalizeBase64(source.data);
     if (!canonicalData) {
@@ -281,7 +340,7 @@ export async function extractFileContentFromSource(params: {
     mimeType = parsed.mimeType;
     charset = parsed.charset;
     buffer = Buffer.from(canonicalData, "base64");
-  } else if (source.type === "url" && source.url) {
+  } else {
     if (!limits.allowUrl) {
       throw new Error("input_file URL sources are disabled by config");
     }
@@ -300,8 +359,6 @@ export async function extractFileContentFromSource(params: {
     mimeType = parsed.mimeType ?? normalizeMimeType(result.mimeType);
     charset = parsed.charset;
     buffer = result.buffer;
-  } else {
-    throw new Error("input_file must have 'source.url' or 'source.data'");
   }
 
   if (buffer.byteLength > limits.maxBytes) {

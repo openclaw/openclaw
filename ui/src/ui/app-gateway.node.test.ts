@@ -1,10 +1,12 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { GATEWAY_EVENT_UPDATE_AVAILABLE } from "../../../src/gateway/events.js";
-import { connectGateway } from "./app-gateway.ts";
+import { ConnectErrorDetailCodes } from "../../../src/gateway/protocol/connect-error-details.js";
+import { connectGateway, resolveControlUiClientVersion } from "./app-gateway.ts";
 
 type GatewayClientMock = {
   start: ReturnType<typeof vi.fn>;
   stop: ReturnType<typeof vi.fn>;
+  options: { clientVersion?: string };
   emitClose: (info: {
     code: number;
     reason?: string;
@@ -34,6 +36,7 @@ vi.mock("./gateway.ts", () => {
 
     constructor(
       private opts: {
+        clientVersion?: string;
         onClose?: (info: {
           code: number;
           reason: string;
@@ -46,6 +49,7 @@ vi.mock("./gateway.ts", () => {
       gatewayClientInstances.push({
         start: this.start,
         stop: this.stop,
+        options: { clientVersion: this.opts.clientVersion },
         emitClose: (info) => {
           this.opts.onClose?.({
             code: info.code,
@@ -100,6 +104,7 @@ function createHost() {
     assistantName: "OpenClaw",
     assistantAvatar: null,
     assistantAgentId: null,
+    serverVersion: null,
     sessionKey: "main",
     chatRunId: null,
     refreshSessionsAfterChat: new Set<string>(),
@@ -205,6 +210,69 @@ describe("connectGateway", () => {
     expect(host.lastErrorCode).toBeNull();
   });
 
+  it("maps generic fetch-failed auth errors to actionable token mismatch message", () => {
+    const host = createHost();
+
+    connectGateway(host);
+    const client = gatewayClientInstances[0];
+    expect(client).toBeDefined();
+
+    client.emitClose({
+      code: 4008,
+      reason: "connect failed",
+      error: {
+        code: "INVALID_REQUEST",
+        message: "Fetch failed",
+        details: { code: ConnectErrorDetailCodes.AUTH_TOKEN_MISMATCH },
+      },
+    });
+
+    expect(host.lastErrorCode).toBe(ConnectErrorDetailCodes.AUTH_TOKEN_MISMATCH);
+    expect(host.lastError).toContain("gateway token mismatch");
+  });
+
+  it("maps TypeError fetch failures to actionable auth rate-limit guidance", () => {
+    const host = createHost();
+
+    connectGateway(host);
+    const client = gatewayClientInstances[0];
+    expect(client).toBeDefined();
+
+    client.emitClose({
+      code: 4008,
+      reason: "connect failed",
+      error: {
+        code: "INVALID_REQUEST",
+        message: "TypeError: Failed to fetch",
+        details: { code: ConnectErrorDetailCodes.AUTH_RATE_LIMITED },
+      },
+    });
+
+    expect(host.lastErrorCode).toBe(ConnectErrorDetailCodes.AUTH_RATE_LIMITED);
+    expect(host.lastError).toContain("too many failed authentication attempts");
+  });
+
+  it("preserves specific close errors even when auth detail codes are present", () => {
+    const host = createHost();
+
+    connectGateway(host);
+    const client = gatewayClientInstances[0];
+    expect(client).toBeDefined();
+
+    client.emitClose({
+      code: 4008,
+      reason: "connect failed",
+      error: {
+        code: "INVALID_REQUEST",
+        message: "Failed to fetch gateway metadata from ws://127.0.0.1:18789",
+        details: { code: ConnectErrorDetailCodes.AUTH_TOKEN_MISMATCH },
+      },
+    });
+
+    expect(host.lastErrorCode).toBe(ConnectErrorDetailCodes.AUTH_TOKEN_MISMATCH);
+    expect(host.lastError).toBe("Failed to fetch gateway metadata from ws://127.0.0.1:18789");
+  });
+
   it("prefers structured connect errors over close reason", () => {
     const host = createHost();
 
@@ -225,5 +293,47 @@ describe("connectGateway", () => {
 
     expect(host.lastError).toContain("gateway token mismatch");
     expect(host.lastErrorCode).toBe("AUTH_TOKEN_MISMATCH");
+  });
+});
+
+describe("resolveControlUiClientVersion", () => {
+  it("returns serverVersion for same-origin websocket targets", () => {
+    expect(
+      resolveControlUiClientVersion({
+        gatewayUrl: "ws://localhost:8787",
+        serverVersion: "2026.3.7",
+        pageUrl: "http://localhost:8787/openclaw/",
+      }),
+    ).toBe("2026.3.7");
+  });
+
+  it("returns serverVersion for same-origin relative targets", () => {
+    expect(
+      resolveControlUiClientVersion({
+        gatewayUrl: "/ws",
+        serverVersion: "2026.3.7",
+        pageUrl: "https://control.example.com/openclaw/",
+      }),
+    ).toBe("2026.3.7");
+  });
+
+  it("returns serverVersion for same-origin http targets", () => {
+    expect(
+      resolveControlUiClientVersion({
+        gatewayUrl: "https://control.example.com/ws",
+        serverVersion: "2026.3.7",
+        pageUrl: "https://control.example.com/openclaw/",
+      }),
+    ).toBe("2026.3.7");
+  });
+
+  it("omits serverVersion for cross-origin targets", () => {
+    expect(
+      resolveControlUiClientVersion({
+        gatewayUrl: "wss://gateway.example.com",
+        serverVersion: "2026.3.7",
+        pageUrl: "https://control.example.com/openclaw/",
+      }),
+    ).toBeUndefined();
   });
 });

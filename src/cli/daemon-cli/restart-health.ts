@@ -1,5 +1,6 @@
 import type { GatewayServiceRuntime } from "../../daemon/service-runtime.js";
 import type { GatewayService } from "../../daemon/service.js";
+import { probeGateway } from "../../gateway/probe.js";
 import {
   classifyPortListener,
   formatPortDiagnostics,
@@ -22,11 +23,77 @@ export type GatewayRestartSnapshot = {
   staleGatewayPids: number[];
 };
 
+export type GatewayPortHealthSnapshot = {
+  portUsage: PortUsage;
+  healthy: boolean;
+};
+
+function hasListenerAttributionGap(portUsage: PortUsage): boolean {
+  if (portUsage.status !== "busy" || portUsage.listeners.length > 0) {
+    return false;
+  }
+  if (portUsage.errors?.length) {
+    return true;
+  }
+  return portUsage.hints.some((hint) => hint.includes("process details are unavailable"));
+}
+
 function listenerOwnedByRuntimePid(params: {
   listener: PortUsage["listeners"][number];
   runtimePid: number;
 }): boolean {
   return params.listener.pid === params.runtimePid || params.listener.ppid === params.runtimePid;
+}
+
+function looksLikeAuthClose(code: number | undefined, reason: string | undefined): boolean {
+  if (code !== 1008) {
+    return false;
+  }
+  const normalized = (reason ?? "").toLowerCase();
+  return (
+    normalized.includes("auth") ||
+    normalized.includes("token") ||
+    normalized.includes("password") ||
+    normalized.includes("scope") ||
+    normalized.includes("role")
+  );
+}
+
+async function confirmGatewayReachable(port: number): Promise<boolean> {
+  const token = process.env.OPENCLAW_GATEWAY_TOKEN?.trim() || undefined;
+  const password = process.env.OPENCLAW_GATEWAY_PASSWORD?.trim() || undefined;
+  const probe = await probeGateway({
+    url: `ws://127.0.0.1:${port}`,
+    auth: token || password ? { token, password } : undefined,
+    timeoutMs: 1_000,
+  });
+  return probe.ok || looksLikeAuthClose(probe.close?.code, probe.close?.reason);
+}
+
+async function inspectGatewayPortHealth(port: number): Promise<GatewayPortHealthSnapshot> {
+  let portUsage: PortUsage;
+  try {
+    portUsage = await inspectPortUsage(port);
+  } catch (err) {
+    portUsage = {
+      port,
+      status: "unknown",
+      listeners: [],
+      hints: [],
+      errors: [String(err)],
+    };
+  }
+
+  let healthy = false;
+  if (portUsage.status === "busy") {
+    try {
+      healthy = await confirmGatewayReachable(port);
+    } catch {
+      // best-effort probe
+    }
+  }
+
+  return { portUsage, healthy };
 }
 
 export async function inspectGatewayRestart(params: {
@@ -74,12 +141,21 @@ export async function inspectGatewayRestart(params: {
       : [];
   const running = runtime.status === "running";
   const runtimePid = runtime.pid;
+  const listenerAttributionGap = hasListenerAttributionGap(portUsage);
   const ownsPort =
     runtimePid != null
-      ? portUsage.listeners.some((listener) => listenerOwnedByRuntimePid({ listener, runtimePid }))
-      : gatewayListeners.length > 0 ||
-        (portUsage.status === "busy" && portUsage.listeners.length === 0);
-  const healthy = running && ownsPort;
+      ? portUsage.listeners.some((listener) =>
+          listenerOwnedByRuntimePid({ listener, runtimePid }),
+        ) || listenerAttributionGap
+      : gatewayListeners.length > 0 || listenerAttributionGap;
+  let healthy = running && ownsPort;
+  if (!healthy && running && portUsage.status === "busy") {
+    try {
+      healthy = await confirmGatewayReachable(params.port);
+    } catch {
+      // best-effort probe
+    }
+  }
   const staleGatewayPids = Array.from(
     new Set([
       ...gatewayListeners
@@ -145,6 +221,43 @@ export async function waitForGatewayHealthyRestart(params: {
   return snapshot;
 }
 
+export async function waitForGatewayHealthyListener(params: {
+  port: number;
+  attempts?: number;
+  delayMs?: number;
+}): Promise<GatewayPortHealthSnapshot> {
+  const attempts = params.attempts ?? DEFAULT_RESTART_HEALTH_ATTEMPTS;
+  const delayMs = params.delayMs ?? DEFAULT_RESTART_HEALTH_DELAY_MS;
+
+  let snapshot = await inspectGatewayPortHealth(params.port);
+
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    if (snapshot.healthy) {
+      return snapshot;
+    }
+    await sleep(delayMs);
+    snapshot = await inspectGatewayPortHealth(params.port);
+  }
+
+  return snapshot;
+}
+
+function renderPortUsageDiagnostics(snapshot: GatewayPortHealthSnapshot): string[] {
+  const lines: string[] = [];
+
+  if (snapshot.portUsage.status === "busy") {
+    lines.push(...formatPortDiagnostics(snapshot.portUsage));
+  } else {
+    lines.push(`Gateway port ${snapshot.portUsage.port} status: ${snapshot.portUsage.status}.`);
+  }
+
+  if (snapshot.portUsage.errors?.length) {
+    lines.push(`Port diagnostics errors: ${snapshot.portUsage.errors.join("; ")}`);
+  }
+
+  return lines;
+}
+
 export function renderRestartDiagnostics(snapshot: GatewayRestartSnapshot): string[] {
   const lines: string[] = [];
   const runtimeSummary = [
@@ -160,17 +273,13 @@ export function renderRestartDiagnostics(snapshot: GatewayRestartSnapshot): stri
     lines.push(`Service runtime: ${runtimeSummary}`);
   }
 
-  if (snapshot.portUsage.status === "busy") {
-    lines.push(...formatPortDiagnostics(snapshot.portUsage));
-  } else {
-    lines.push(`Gateway port ${snapshot.portUsage.port} status: ${snapshot.portUsage.status}.`);
-  }
-
-  if (snapshot.portUsage.errors?.length) {
-    lines.push(`Port diagnostics errors: ${snapshot.portUsage.errors.join("; ")}`);
-  }
+  lines.push(...renderPortUsageDiagnostics(snapshot));
 
   return lines;
+}
+
+export function renderGatewayPortHealthDiagnostics(snapshot: GatewayPortHealthSnapshot): string[] {
+  return renderPortUsageDiagnostics(snapshot);
 }
 
 export async function terminateStaleGatewayPids(pids: number[]): Promise<number[]> {

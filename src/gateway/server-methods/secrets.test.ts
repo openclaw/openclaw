@@ -17,6 +17,27 @@ async function invokeSecretsReload(params: {
   });
 }
 
+async function invokeSecretsResolve(params: {
+  handlers: ReturnType<typeof createSecretsHandlers>;
+  respond: ReturnType<typeof vi.fn>;
+  commandName: unknown;
+  targetIds: unknown;
+}) {
+  await params.handlers["secrets.resolve"]({
+    req: { type: "req", id: "1", method: "secrets.resolve" },
+    params: {
+      commandName: params.commandName,
+      targetIds: params.targetIds,
+    },
+    client: null,
+    isWebchatConnect: () => false,
+    respond: params.respond as unknown as Parameters<
+      ReturnType<typeof createSecretsHandlers>["secrets.resolve"]
+    >[0]["respond"],
+    context: {} as never,
+  });
+}
+
 describe("secrets handlers", () => {
   function createHandlers(overrides?: {
     reloadSecrets?: () => Promise<{ warningCount: number }>;
@@ -73,13 +94,11 @@ describe("secrets handlers", () => {
     });
     const handlers = createHandlers({ resolveSecrets });
     const respond = vi.fn();
-    await handlers["secrets.resolve"]({
-      req: { type: "req", id: "1", method: "secrets.resolve" },
-      params: { commandName: "memory status", targetIds: ["talk.apiKey"] },
-      client: null,
-      isWebchatConnect: () => false,
+    await invokeSecretsResolve({
+      handlers,
       respond,
-      context: {} as never,
+      commandName: "memory status",
+      targetIds: ["talk.apiKey"],
     });
     expect(resolveSecrets).toHaveBeenCalledWith({
       commandName: "memory status",
@@ -96,13 +115,11 @@ describe("secrets handlers", () => {
   it("rejects invalid secrets.resolve params", async () => {
     const handlers = createHandlers();
     const respond = vi.fn();
-    await handlers["secrets.resolve"]({
-      req: { type: "req", id: "1", method: "secrets.resolve" },
-      params: { commandName: "", targetIds: "bad" },
-      client: null,
-      isWebchatConnect: () => false,
+    await invokeSecretsResolve({
+      handlers,
       respond,
-      context: {} as never,
+      commandName: "",
+      targetIds: "bad",
     });
     expect(respond).toHaveBeenCalledWith(
       false,
@@ -117,13 +134,11 @@ describe("secrets handlers", () => {
     const resolveSecrets = vi.fn();
     const handlers = createHandlers({ resolveSecrets });
     const respond = vi.fn();
-    await handlers["secrets.resolve"]({
-      req: { type: "req", id: "1", method: "secrets.resolve" },
-      params: { commandName: "memory status", targetIds: ["talk.apiKey", 12] },
-      client: null,
-      isWebchatConnect: () => false,
+    await invokeSecretsResolve({
+      handlers,
       respond,
-      context: {} as never,
+      commandName: "memory status",
+      targetIds: ["talk.apiKey", 12],
     });
     expect(resolveSecrets).not.toHaveBeenCalled();
     expect(respond).toHaveBeenCalledWith(
@@ -140,13 +155,11 @@ describe("secrets handlers", () => {
     const resolveSecrets = vi.fn();
     const handlers = createHandlers({ resolveSecrets });
     const respond = vi.fn();
-    await handlers["secrets.resolve"]({
-      req: { type: "req", id: "1", method: "secrets.resolve" },
-      params: { commandName: "memory status", targetIds: ["unknown.target"] },
-      client: null,
-      isWebchatConnect: () => false,
+    await invokeSecretsResolve({
+      handlers,
       respond,
-      context: {} as never,
+      commandName: "memory status",
+      targetIds: ["unknown.target"],
     });
     expect(resolveSecrets).not.toHaveBeenCalled();
     expect(respond).toHaveBeenCalledWith(
@@ -167,13 +180,11 @@ describe("secrets handlers", () => {
     });
     const handlers = createHandlers({ resolveSecrets });
     const respond = vi.fn();
-    await handlers["secrets.resolve"]({
-      req: { type: "req", id: "1", method: "secrets.resolve" },
-      params: { commandName: "memory status", targetIds: ["talk.apiKey"] },
-      client: null,
-      isWebchatConnect: () => false,
+    await invokeSecretsResolve({
+      handlers,
       respond,
-      context: {} as never,
+      commandName: "memory status",
+      targetIds: ["talk.apiKey"],
     });
     expect(respond).toHaveBeenCalledWith(
       false,

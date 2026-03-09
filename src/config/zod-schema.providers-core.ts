@@ -68,6 +68,7 @@ export const TelegramTopicSchema = z
     enabled: z.boolean().optional(),
     allowFrom: z.array(z.union([z.string(), z.number()])).optional(),
     systemPrompt: z.string().optional(),
+    agentId: z.string().optional(),
   })
   .strict();
 
@@ -220,12 +221,29 @@ export const TelegramAccountSchemaBase = z
       .describe(
         "Local bind port for the webhook listener. Defaults to 8787; set to 0 to let the OS assign an ephemeral port.",
       ),
+    webhookCertPath: z
+      .string()
+      .optional()
+      .describe(
+        "Path to the self-signed certificate (PEM) to upload to Telegram during webhook registration. Required for self-signed certs (direct IP or no domain).",
+      ),
     actions: z
       .object({
         reactions: z.boolean().optional(),
         sendMessage: z.boolean().optional(),
+        poll: z.boolean().optional(),
         deleteMessage: z.boolean().optional(),
         sticker: z.boolean().optional(),
+      })
+      .strict()
+      .optional(),
+    threadBindings: z
+      .object({
+        enabled: z.boolean().optional(),
+        idleHours: z.number().nonnegative().optional(),
+        maxAgeHours: z.number().nonnegative().optional(),
+        spawnSubagentSessions: z.boolean().optional(),
+        spawnAcpSessions: z.boolean().optional(),
       })
       .strict()
       .optional(),
@@ -473,6 +491,12 @@ export const DiscordAccountSchema = z
       })
       .strict()
       .optional(),
+    agentComponents: z
+      .object({
+        enabled: z.boolean().optional(),
+      })
+      .strict()
+      .optional(),
     ui: DiscordUiSchema,
     slashCommand: z
       .object({
@@ -527,6 +551,12 @@ export const DiscordAccountSchema = z
       .union([z.literal(0), z.literal(1), z.literal(2), z.literal(3), z.literal(4), z.literal(5)])
       .optional(),
     activityUrl: z.string().url().optional(),
+    inboundWorker: z
+      .object({
+        runTimeoutMs: z.number().int().nonnegative().optional(),
+      })
+      .strict()
+      .optional(),
     eventQueue: z
       .object({
         listenerTimeout: z.number().int().positive().optional(),
@@ -839,6 +869,7 @@ export const SlackAccountSchema = z
     heartbeat: ChannelHeartbeatVisibilitySchema,
     responsePrefix: z.string().optional(),
     ackReaction: z.string().optional(),
+    typingReaction: z.string().optional(),
   })
   .strict()
   .superRefine((value) => {

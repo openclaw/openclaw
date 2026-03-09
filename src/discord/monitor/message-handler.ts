@@ -5,24 +5,34 @@ import {
 } from "../../channels/inbound-debounce-policy.js";
 import { resolveOpenProviderRuntimeGroupPolicy } from "../../config/runtime-group-policy.js";
 import { danger } from "../../globals.js";
+import { buildDiscordInboundJob } from "./inbound-job.js";
+import { createDiscordInboundWorker } from "./inbound-worker.js";
 import type { DiscordMessageEvent, DiscordMessageHandler } from "./listeners.js";
 import { preflightDiscordMessage } from "./message-handler.preflight.js";
 import type { DiscordMessagePreflightParams } from "./message-handler.preflight.types.js";
-import { processDiscordMessage } from "./message-handler.process.js";
 import {
   hasDiscordMessageStickers,
   resolveDiscordMessageChannelId,
   resolveDiscordMessageText,
 } from "./message-utils.js";
+import type { DiscordMonitorStatusSink } from "./status.js";
 
 type DiscordMessageHandlerParams = Omit<
   DiscordMessagePreflightParams,
   "ackReactionScope" | "groupPolicy" | "data" | "client"
->;
+> & {
+  setStatus?: DiscordMonitorStatusSink;
+  abortSignal?: AbortSignal;
+  workerRunTimeoutMs?: number;
+};
+
+export type DiscordMessageHandlerWithLifecycle = DiscordMessageHandler & {
+  deactivate: () => void;
+};
 
 export function createDiscordMessageHandler(
   params: DiscordMessageHandlerParams,
-): DiscordMessageHandler {
+): DiscordMessageHandlerWithLifecycle {
   const { groupPolicy } = resolveOpenProviderRuntimeGroupPolicy({
     providerConfigPresent: params.cfg.channels?.discord !== undefined,
     groupPolicy: params.discordConfig?.groupPolicy,
@@ -32,9 +42,17 @@ export function createDiscordMessageHandler(
     params.discordConfig?.ackReactionScope ??
     params.cfg.messages?.ackReactionScope ??
     "group-mentions";
+  const inboundWorker = createDiscordInboundWorker({
+    runtime: params.runtime,
+    setStatus: params.setStatus,
+    abortSignal: params.abortSignal,
+    runTimeoutMs: params.workerRunTimeoutMs,
+  });
+
   const { debouncer } = createChannelInboundDebouncer<{
     data: DiscordMessageEvent;
     client: Client;
+    abortSignal?: AbortSignal;
   }>({
     cfg: params.cfg,
     channel: "discord",
@@ -73,20 +91,23 @@ export function createDiscordMessageHandler(
       if (!last) {
         return;
       }
+      const abortSignal = last.abortSignal;
+      if (abortSignal?.aborted) {
+        return;
+      }
       if (entries.length === 1) {
         const ctx = await preflightDiscordMessage({
           ...params,
           ackReactionScope,
           groupPolicy,
+          abortSignal,
           data: last.data,
           client: last.client,
         });
         if (!ctx) {
           return;
         }
-        void processDiscordMessage(ctx).catch((err) => {
-          params.runtime.error?.(danger(`discord process failed: ${String(err)}`));
-        });
+        inboundWorker.enqueue(buildDiscordInboundJob(ctx));
         return;
       }
       const combinedBaseText = entries
@@ -111,6 +132,7 @@ export function createDiscordMessageHandler(
         ...params,
         ackReactionScope,
         groupPolicy,
+        abortSignal,
         data: syntheticData,
         client: last.client,
       });
@@ -130,17 +152,18 @@ export function createDiscordMessageHandler(
           ctxBatch.MessageSidLast = ids[ids.length - 1];
         }
       }
-      void processDiscordMessage(ctx).catch((err) => {
-        params.runtime.error?.(danger(`discord process failed: ${String(err)}`));
-      });
+      inboundWorker.enqueue(buildDiscordInboundJob(ctx));
     },
     onError: (err) => {
       params.runtime.error?.(danger(`discord debounce flush failed: ${String(err)}`));
     },
   });
 
-  return async (data, client) => {
+  const handler: DiscordMessageHandlerWithLifecycle = async (data, client, options) => {
     try {
+      if (options?.abortSignal?.aborted) {
+        return;
+      }
       // Filter bot-own messages before they enter the debounce queue.
       // The same check exists in preflightDiscordMessage(), but by that point
       // the message has already consumed debounce capacity and blocked
@@ -151,9 +174,13 @@ export function createDiscordMessageHandler(
         return;
       }
 
-      await debouncer.enqueue({ data, client });
+      await debouncer.enqueue({ data, client, abortSignal: options?.abortSignal });
     } catch (err) {
       params.runtime.error?.(danger(`handler failed: ${String(err)}`));
     }
   };
+
+  handler.deactivate = inboundWorker.deactivate;
+
+  return handler;
 }
