@@ -410,4 +410,46 @@ describe("buildInboundUserContextPrefix - timezone handling", () => {
     const conversationInfo = parseConversationInfoPayload(text);
     expect(conversationInfo["timestamp"]).toBeUndefined();
   });
+
+  it("treats 'utc' envelopeTimezone as UTC", () => {
+    const cfg = {
+      agents: { defaults: { envelopeTimezone: "utc" } },
+    } as unknown as OpenClawConfig;
+    const text = buildInboundUserContextPrefix(baseCtx, cfg);
+    const conversationInfo = parseConversationInfoPayload(text);
+    const timestamp = conversationInfo["timestamp"] as string;
+    // 13:35 UTC stays 13:35 UTC
+    expect(timestamp).toContain("13:35");
+  });
+
+  it("treats 'gmt' envelopeTimezone as UTC", () => {
+    const cfg = {
+      agents: { defaults: { envelopeTimezone: "gmt" } },
+    } as unknown as OpenClawConfig;
+    const text = buildInboundUserContextPrefix(baseCtx, cfg);
+    const conversationInfo = parseConversationInfoPayload(text);
+    const timestamp = conversationInfo["timestamp"] as string;
+    // 13:35 UTC stays 13:35
+    expect(timestamp).toContain("13:35");
+  });
+
+  it("falls back to system timezone for invalid IANA string", () => {
+    const cfg = {
+      agents: { defaults: { envelopeTimezone: "Not/A_ValidZone" } },
+    } as unknown as OpenClawConfig;
+    const text = buildInboundUserContextPrefix(baseCtx, cfg);
+    const conversationInfo = parseConversationInfoPayload(text);
+    // Invalid IANA → resolveTimezone returns undefined → falls back to system timezone → timestamp still present
+    expect(conversationInfo["timestamp"]).toEqual(expect.any(String));
+  });
+
+  it("falls back to system timezone when userTimezone is invalid IANA string", () => {
+    const cfg = {
+      agents: { defaults: { envelopeTimezone: "user", userTimezone: "Not/A_ValidZone" } },
+    } as unknown as OpenClawConfig;
+    const text = buildInboundUserContextPrefix(baseCtx, cfg);
+    const conversationInfo = parseConversationInfoPayload(text);
+    // Invalid userTimezone → resolveTimezone returns undefined → system timezone used → timestamp still present
+    expect(conversationInfo["timestamp"]).toEqual(expect.any(String));
+  });
 });

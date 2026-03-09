@@ -1,6 +1,6 @@
 import { normalizeChatType } from "../../channels/chat-type.js";
 import { resolveSenderLabel } from "../../channels/sender-label.js";
-import { formatZonedTimestamp } from "../../infra/format-time/format-datetime.js";
+import { formatZonedTimestamp, resolveTimezone } from "../../infra/format-time/format-datetime.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { TemplateContext } from "../templating.js";
 
@@ -42,12 +42,16 @@ function resolveConversationTimezone(cfg?: OpenClawConfig): string | undefined {
     return undefined; // use system timezone
   }
 
-  if (envelopeTimezone.toLowerCase() === "user") {
-    return cfg?.agents?.defaults?.userTimezone?.trim();
+  if (envelopeTimezone.toLowerCase() === "utc" || envelopeTimezone.toLowerCase() === "gmt") {
+    return "UTC";
   }
 
-  // Assume IANA timezone string, return directly
-  return envelopeTimezone;
+  if (envelopeTimezone.toLowerCase() === "user") {
+    const userTz = cfg?.agents?.defaults?.userTimezone?.trim();
+    return userTz ? resolveTimezone(userTz) : undefined;
+  }
+
+  return resolveTimezone(envelopeTimezone);
 }
 
 function resolveInboundChannel(ctx: TemplateContext): string | undefined {
