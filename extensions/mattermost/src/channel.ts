@@ -164,6 +164,7 @@ const mattermostMessageActions: ChannelMessageActionAdapter = {
       typeof params.media === "string" ? params.media.trim() || undefined : undefined;
 
     const result = await sendMessageMattermost(to, message, {
+      cfg,
       accountId: resolvedAccountId,
       replyToId,
       buttons: Array.isArray(params.buttons) ? params.buttons : undefined,
