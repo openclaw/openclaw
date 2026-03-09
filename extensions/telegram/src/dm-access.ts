@@ -1,9 +1,10 @@
 import type { Message } from "@grammyjs/types";
 import type { Bot } from "grammy";
-import type { DmPolicy } from "../../../src/config/types.js";
-import { logVerbose } from "../../../src/globals.js";
-import { issuePairingChallenge } from "../../../src/pairing/pairing-challenge.js";
-import { upsertChannelPairingRequest } from "../../../src/pairing/pairing-store.js";
+import type { DmPolicy } from "../config/types.js";
+import { logVerbose } from "../globals.js";
+import { issuePairingChallenge } from "../pairing/pairing-challenge.js";
+import { buildPairingReply, type PairingMessageConfig } from "../pairing/pairing-messages.js";
+import { upsertChannelPairingRequest } from "../pairing/pairing-store.js";
 import { withTelegramApiErrorLogging } from "./api-logging.js";
 import { resolveSenderAllowMatch, type NormalizedAllowFrom } from "./bot-access.js";
 
@@ -40,8 +41,9 @@ export async function enforceTelegramDmAccess(params: {
   accountId: string;
   bot: Bot;
   logger: TelegramDmAccessLogger;
+  pairingMessage?: PairingMessageConfig;
 }): Promise<boolean> {
-  const { isGroup, dmPolicy, msg, chatId, effectiveDmAllow, accountId, bot, logger } = params;
+  const { isGroup, dmPolicy, msg, chatId, effectiveDmAllow, accountId, bot, logger, pairingMessage: pairingMessageCfg } = params;
   if (isGroup) {
     return true;
   }
@@ -73,7 +75,18 @@ export async function enforceTelegramDmAccess(params: {
       await issuePairingChallenge({
         channel: "telegram",
         senderId: telegramUserId,
-        senderIdLine: `Your Telegram user id: ${telegramUserId}`,
+        senderIdLine: pairingMessageCfg?.senderIdLabel
+          ? `${pairingMessageCfg.senderIdLabel} ${telegramUserId}`
+          : `Your Telegram user id: ${telegramUserId}`,
+        buildReplyText: pairingMessageCfg
+          ? ({ code, senderIdLine }) =>
+              buildPairingReply({
+                channel: "telegram",
+                idLine: senderIdLine,
+                code,
+                pairingMessage: pairingMessageCfg,
+              })
+          : undefined,
         meta: {
           username: sender.username || undefined,
           firstName: sender.firstName,

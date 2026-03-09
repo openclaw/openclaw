@@ -59,4 +59,60 @@ describe("buildPairingReply", () => {
       expect(text).toMatch(commandRe);
     });
   }
+
+  describe("pairingMessage config overrides", () => {
+    it("uses custom header when provided", () => {
+      const text = buildPairingReply({
+        channel: "imessage",
+        idLine: "Your iMessage sender id: +15550001111",
+        code: "ABC123",
+        pairingMessage: { header: "Verification required." },
+      });
+      expect(text).toContain("Verification required.");
+      expect(text).not.toContain("OpenClaw");
+    });
+
+    it("uses custom codeLabel when provided", () => {
+      const text = buildPairingReply({
+        channel: "imessage",
+        idLine: "Your iMessage sender id: +15550001111",
+        code: "ABC123",
+        pairingMessage: { codeLabel: "Your code:" },
+      });
+      expect(text).toContain("Your code: ABC123");
+      expect(text).not.toContain("Pairing code:");
+    });
+
+    it("suppresses CLI hint when showCliHint is false", () => {
+      const text = buildPairingReply({
+        channel: "imessage",
+        idLine: "Your iMessage sender id: +15550001111",
+        code: "ABC123",
+        pairingMessage: { showCliHint: false },
+      });
+      expect(text).not.toContain("openclaw");
+      expect(text).toContain("ABC123");
+    });
+
+    it("uses custom footer when provided", () => {
+      const text = buildPairingReply({
+        channel: "telegram",
+        idLine: "Your Telegram user id: 42",
+        code: "XYZ999",
+        pairingMessage: { footer: "Share this code with your contact." },
+      });
+      expect(text).toContain("Share this code with your contact.");
+      expect(text).not.toContain("bot owner");
+    });
+
+    it("applies no changes when pairingMessage is undefined (backward compat)", () => {
+      const text = buildPairingReply({
+        channel: "imessage",
+        idLine: "Your iMessage sender id: +15550001111",
+        code: "ABC123",
+      });
+      expect(text).toContain("OpenClaw: access not configured.");
+      expect(text).toContain("Pairing code: ABC123");
+    });
+  });
 });

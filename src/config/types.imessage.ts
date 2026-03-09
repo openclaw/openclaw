@@ -4,6 +4,7 @@ import type {
   GroupPolicy,
   MarkdownConfig,
 } from "./types.base.js";
+import type { PairingMessageConfig } from "../pairing/pairing-messages.js";
 import type {
   ChannelHealthMonitorConfig,
   ChannelHeartbeatVisibilityConfig,
@@ -84,6 +85,9 @@ export type IMessageAccountConfig = {
   healthMonitor?: ChannelHealthMonitorConfig;
   /** Outbound response prefix override for this channel/account. */
   responsePrefix?: string;
+  /** Optional pairing message text overrides. Allows white-label deployments to
+   *  customize or suppress OpenClaw branding in pairing challenge messages. */
+  pairingMessage?: PairingMessageConfig;
 };
 
 export type IMessageConfig = {

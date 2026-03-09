@@ -28,9 +28,10 @@ import {
   isInboundPathAllowed,
   resolveIMessageAttachmentRoots,
   resolveIMessageRemoteAttachmentRoots,
-} from "../../../../src/media/inbound-path-policy.js";
-import { kindFromMime } from "../../../../src/media/mime.js";
-import { issuePairingChallenge } from "../../../../src/pairing/pairing-challenge.js";
+} from "../../media/inbound-path-policy.js";
+import { kindFromMime } from "../../media/mime.js";
+import { issuePairingChallenge } from "../../pairing/pairing-challenge.js";
+import { buildPairingReply } from "../../pairing/pairing-messages.js";
 import {
   readChannelAllowFromStore,
   upsertChannelPairingRequest,
@@ -292,10 +293,22 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
       if (!sender) {
         return;
       }
+      const pairingMessageCfg = cfg.pairingMessage;
       await issuePairingChallenge({
         channel: "imessage",
         senderId: decision.senderId,
-        senderIdLine: `Your iMessage sender id: ${decision.senderId}`,
+        senderIdLine: pairingMessageCfg?.senderIdLabel
+          ? `${pairingMessageCfg.senderIdLabel} ${decision.senderId}`
+          : `Your iMessage sender id: ${decision.senderId}`,
+        buildReplyText: pairingMessageCfg
+          ? ({ code, senderIdLine }) =>
+              buildPairingReply({
+                channel: "imessage",
+                idLine: senderIdLine,
+                code,
+                pairingMessage: pairingMessageCfg,
+              })
+          : undefined,
         meta: {
           sender: decision.senderId,
           chatId: chatId ? String(chatId) : undefined,
