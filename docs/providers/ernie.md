@@ -94,7 +94,7 @@ Add to your `~/.openclaw/config.json`:
       "ernie": {
         "baseUrl": "https://qianfan.baidubce.com/v2",
         "api": "openai-completions",
-        "apiKey": "your-api-key-here",
+        "apiKey": "your-api-key-here", // pragma: allowlist secret
         "models": [
           {
             "id": "ernie-5.0-thinking-preview",
