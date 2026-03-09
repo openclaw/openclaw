@@ -11,13 +11,20 @@ function isOpenAiCompletionsModel(model: Model<Api>): model is Model<"openai-com
  * All other openai-completions backends (proxies, Qwen, GLM, DeepSeek, etc.)
  * only support the standard `system` role.
  */
-function isOpenAINativeEndpoint(baseUrl: string): boolean {
+function getHostname(baseUrl: string): string | null {
   try {
-    const host = new URL(baseUrl).hostname.toLowerCase();
-    return host === "api.openai.com";
+    return new URL(baseUrl).hostname.toLowerCase();
   } catch {
-    return false;
+    return null;
   }
+}
+
+function isOpenAINativeEndpoint(baseUrl: string): boolean {
+  return getHostname(baseUrl) === "api.openai.com";
+}
+
+function isMistralEndpoint(model: Model<Api>): boolean {
+  return model.provider === "mistral" || getHostname(model.baseUrl ?? "") === "api.mistral.ai";
 }
 
 function isAnthropicMessagesModel(model: Model<Api>): model is Model<"anthropic-messages"> {
@@ -69,11 +76,23 @@ export function normalizeModelCompat(model: Model<Api>): Model<Api> {
     return model;
   }
 
+  const normalizedCompat = compat
+    ? { ...compat, supportsDeveloperRole: false, supportsUsageInStreaming: false }
+    : { supportsDeveloperRole: false, supportsUsageInStreaming: false };
+
+  // Mistral's OpenAI-compatible /chat/completions endpoint is stricter than
+  // OpenAI-native backends: it rejects `store`, uses `max_tokens` instead of
+  // `max_completion_tokens`, and does not support OpenAI-style
+  // `reasoning_effort`.
+  if (isMistralEndpoint(model)) {
+    normalizedCompat.supportsStore = false;
+    normalizedCompat.supportsReasoningEffort = false;
+    normalizedCompat.maxTokensField = "max_tokens";
+  }
+
   // Return a new object — do not mutate the caller's model reference.
   return {
     ...model,
-    compat: compat
-      ? { ...compat, supportsDeveloperRole: false, supportsUsageInStreaming: false }
-      : { supportsDeveloperRole: false, supportsUsageInStreaming: false },
+    compat: normalizedCompat,
   } as typeof model;
 }
