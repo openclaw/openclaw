@@ -303,7 +303,9 @@ export async function runPreparedReply(
   );
   const baseBodyForPrompt = isBareSessionReset
     ? baseBodyFinal
-    : [inboundUserContext, baseBodyFinal].filter(Boolean).join("\n\n");
+    : inboundUserContext
+      ? `${inboundUserContext}\n\n---\n**User Message:**\n${baseBodyFinal}`
+      : baseBodyFinal;
   const baseBodyTrimmed = baseBodyForPrompt.trim();
   const hasMediaAttachment = Boolean(
     sessionCtx.MediaPath || (sessionCtx.MediaPaths && sessionCtx.MediaPaths.length > 0),

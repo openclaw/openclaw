@@ -221,6 +221,18 @@ export function stripLeadingInboundMetadata(text: string): string {
     }
   }
 
+  // Strip the user message separator if present.
+  // Expected format: "---" followed by "**User Message:**" then optional blank lines.
+  if (index < lines.length && lines[index]?.trim() === "---") {
+    index++;
+    if (index < lines.length && lines[index]?.trim() === "**User Message:**") {
+      index++;
+    }
+    while (index < lines.length && lines[index]?.trim() === "") {
+      index++;
+    }
+  }
+
   const strippedRemainder = stripTrailingUntrustedContextSuffix(lines.slice(index));
   return strippedRemainder.join("\n");
 }
