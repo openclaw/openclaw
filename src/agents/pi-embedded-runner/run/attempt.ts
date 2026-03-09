@@ -333,10 +333,20 @@ function normalizeToolCallIdsInMessage(message: unknown): void {
     if (typeof typedBlock.id === "string") {
       const trimmedId = typedBlock.id.trim();
       if (trimmedId) {
-        if (typedBlock.id !== trimmedId) {
-          typedBlock.id = trimmedId;
+        // Check for duplicate IDs - if already used, generate a new unique ID
+        if (usedIds.has(trimmedId)) {
+          let dedupedId = "";
+          while (!dedupedId || usedIds.has(dedupedId)) {
+            dedupedId = `${trimmedId}_dedup_${fallbackIndex++}`;
+          }
+          typedBlock.id = dedupedId;
+          usedIds.add(dedupedId);
+        } else {
+          if (typedBlock.id !== trimmedId) {
+            typedBlock.id = trimmedId;
+          }
+          usedIds.add(trimmedId);
         }
-        usedIds.add(trimmedId);
         continue;
       }
     }
