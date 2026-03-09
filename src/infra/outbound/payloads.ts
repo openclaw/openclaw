@@ -40,6 +40,19 @@ function mergeMediaUrls(...lists: Array<ReadonlyArray<string | undefined> | unde
   return merged;
 }
 
+const SANITIZE_PATTERNS = [/\[(?:trace|debug|internal):\s*[^\]]+\]/gi];
+
+function sanitizeOutboundText(text: string): string {
+  if (!text) {
+    return text;
+  }
+  let sanitized = text;
+  for (const pattern of SANITIZE_PATTERNS) {
+    sanitized = sanitized.replace(pattern, "");
+  }
+  return sanitized.replace(/\n{3,}/g, "\n\n").trim();
+}
+
 export function normalizeReplyPayloadsForDelivery(
   payloads: readonly ReplyPayload[],
 ): ReplyPayload[] {
@@ -57,9 +70,10 @@ export function normalizeReplyPayloadsForDelivery(
     );
     const hasMultipleMedia = (explicitMediaUrls?.length ?? 0) > 1;
     const resolvedMediaUrl = hasMultipleMedia ? undefined : explicitMediaUrl;
+
     const next: ReplyPayload = {
       ...payload,
-      text: parsed.text ?? "",
+      text: parsed.text ? sanitizeOutboundText(parsed.text) : "",
       mediaUrls: mergedMedia.length ? mergedMedia : undefined,
       mediaUrl: resolvedMediaUrl,
       replyToId: payload.replyToId ?? parsed.replyToId,
