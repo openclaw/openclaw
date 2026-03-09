@@ -382,10 +382,20 @@ const saveSessionToMemory: HookHandler = async (event) => {
     // Write inline (fail-safe: if postHookActions never drains, the file
     // is preserved on disk with the best content available at this point).
     // If blockSessionSave was already set by an upstream hook, skip the write.
+    //
+    // Before writing, snapshot any pre-existing file content so that late-block
+    // retraction can restore it instead of deleting — preventing accidental
+    // erasure of prior memory files when LLM slugs collide on the same day.
+    let preExistingContent: string | null = null;
     if (context.blockSessionSave === true) {
       log.debug("Session save blocked by upstream hook (inline check)");
     } else {
       await fs.mkdir(memoryDir, { recursive: true });
+      try {
+        preExistingContent = await fs.readFile(memoryFilePath, "utf-8");
+      } catch {
+        // File doesn't exist yet — normal case, nothing to preserve.
+      }
       await writeFileWithinRoot({
         rootDir: memoryDir,
         relativePath: filename,
@@ -407,10 +417,22 @@ const saveSessionToMemory: HookHandler = async (event) => {
     // and per-action isolation.
     event.postHookActions.push(async () => {
       // If a later hook blocked the save, retract the file we just wrote.
+      // If the file existed before our write (slug collision), restore the
+      // original content instead of deleting — avoids erasing prior history.
       if (event.context.blockSessionSave === true && writtenEntry !== null) {
         try {
-          await fs.unlink(memoryFilePath);
-          log.debug("Session save retracted by post-hook (blockSessionSave)");
+          if (preExistingContent !== null) {
+            await writeFileWithinRoot({
+              rootDir: memoryDir,
+              relativePath: filename,
+              data: preExistingContent,
+              encoding: "utf-8",
+            });
+            log.debug("Session save retracted by post-hook — pre-existing file restored");
+          } else {
+            await fs.unlink(memoryFilePath);
+            log.debug("Session save retracted by post-hook (blockSessionSave)");
+          }
         } catch (err) {
           // File may not exist if inline write also didn't happen — that's fine.
           if ((err as NodeJS.ErrnoException).code !== "ENOENT") {
