@@ -6,8 +6,10 @@ import type { OpenClawConfig } from "../config/config.js";
 import type { GatewayRequestHandler } from "../gateway/server-methods/types.js";
 import { openBoundaryFileSync } from "../infra/boundary-file-read.js";
 import { resolveOpenClawPackageRootSync } from "../infra/openclaw-root.js";
+import { normalizeUpdateChannel, resolveEffectiveUpdateChannel } from "../infra/update-channels.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { resolveUserPath } from "../utils.js";
+import { resolveBundledPluginsDir } from "./bundled-dir.js";
 import { clearPluginCommands } from "./commands.js";
 import {
   applyTestPluginDefaults,
@@ -444,6 +446,114 @@ function activatePluginRegistry(registry: PluginRegistry, cacheKey: string): voi
   initializeGlobalHookRunner(registry);
 }
 
+function resolveLoaderInstallKind(): "git" | "package" | "unknown" {
+  const root =
+    resolveOpenClawPackageRootSync({
+      moduleUrl: import.meta.url,
+      argv1: process.argv[1],
+      cwd: process.cwd(),
+    }) ?? null;
+  if (!root) {
+    return "unknown";
+  }
+  return fs.existsSync(path.join(root, ".git")) ? "git" : "package";
+}
+
+function readPluginPackageDependencies(rootDir: string): string[] {
+  const packagePath = path.join(rootDir, "package.json");
+  if (!fs.existsSync(packagePath)) {
+    return [];
+  }
+  try {
+    const raw = fs.readFileSync(packagePath, "utf8");
+    const parsed = JSON.parse(raw) as { dependencies?: Record<string, unknown> };
+    return Object.keys(parsed.dependencies ?? {});
+  } catch {
+    return [];
+  }
+}
+
+function collectDependencySearchRoots(params: { rootDir: string; ceilingDir: string }): string[] {
+  const roots: string[] = [];
+  let cursor = path.resolve(params.rootDir);
+  const ceiling = path.resolve(params.ceilingDir);
+  while (true) {
+    roots.push(cursor);
+    if (cursor === ceiling) {
+      break;
+    }
+    const parent = path.dirname(cursor);
+    if (parent === cursor) {
+      break;
+    }
+    cursor = parent;
+  }
+  return roots;
+}
+
+function hasResolvableDependency(params: {
+  dependency: string;
+  rootDir: string;
+  ceilingDir: string;
+}): boolean {
+  const dependencyParts = params.dependency.split("/");
+  for (const searchRoot of collectDependencySearchRoots({
+    rootDir: params.rootDir,
+    ceilingDir: params.ceilingDir,
+  })) {
+    const packageDir = path.join(searchRoot, "node_modules", ...dependencyParts);
+    if (fs.existsSync(packageDir)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function resolveBundledDependencyCeiling(rootDir: string): string {
+  const bundledDir = resolveBundledPluginsDir();
+  if (!bundledDir) {
+    return rootDir;
+  }
+  const resolvedBundledDir = path.resolve(bundledDir);
+  if (!isPathInside(resolvedBundledDir, rootDir) && resolvedBundledDir !== path.resolve(rootDir)) {
+    return rootDir;
+  }
+  if (path.basename(resolvedBundledDir) === "extensions") {
+    return path.dirname(resolvedBundledDir);
+  }
+  return resolvedBundledDir;
+}
+
+function resolveMissingPluginDependencies(rootDir: string): string[] {
+  const dependencies = readPluginPackageDependencies(rootDir);
+  if (dependencies.length === 0) {
+    return [];
+  }
+  const ceilingDir = resolveBundledDependencyCeiling(rootDir);
+  const missing: string[] = [];
+  for (const dependency of dependencies) {
+    if (!hasResolvableDependency({ dependency, rootDir, ceilingDir })) {
+      missing.push(dependency);
+    }
+  }
+  return missing;
+}
+
+function buildBundledInstallRequiredMessage(params: {
+  npmSpec: string;
+  channel: "stable" | "beta";
+  missingDependencies: string[];
+}): string {
+  const missing =
+    params.missingDependencies.length > 0
+      ? ` Missing runtime dependencies: ${params.missingDependencies.join(", ")}.`
+      : "";
+  return (
+    `plugin requires separate installation on ${params.channel}; ` +
+    `run \`openclaw plugins install ${params.npmSpec}\` and restart the gateway.${missing}`
+  );
+}
+
 export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegistry {
   // Test env: default-disable plugins unless explicitly configured.
   // This keeps unit/gateway suites fast and avoids loading heavyweight plugin deps by accident.
@@ -560,8 +670,13 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
   const manifestByRoot = new Map(
     manifestRegistry.plugins.map((record) => [record.rootDir, record]),
   );
+  const effectiveChannel = resolveEffectiveUpdateChannel({
+    configChannel: normalizeUpdateChannel(cfg.update?.channel),
+    installKind: resolveLoaderInstallKind(),
+  }).channel;
 
   const seenIds = new Map<string, PluginRecord["origin"]>();
+  const deferredBundledInstallRequired = new Map<string, PluginRecord>();
   const memorySlot = normalized.slots.memory;
   let selectedMemoryPluginId: string | null = null;
   let memorySlotMatched = false;
@@ -631,6 +746,25 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
       registry.plugins.push(record);
       seenIds.set(pluginId, candidate.origin);
       continue;
+    }
+
+    const bundledNpmSpec = candidate.packageManifest?.install?.npmSpec?.trim();
+    if (
+      candidate.origin === "bundled" &&
+      bundledNpmSpec &&
+      (effectiveChannel === "stable" || effectiveChannel === "beta")
+    ) {
+      const missingDependencies = resolveMissingPluginDependencies(candidate.rootDir);
+      if (missingDependencies.length > 0) {
+        record.status = "error";
+        record.error = buildBundledInstallRequiredMessage({
+          npmSpec: bundledNpmSpec,
+          channel: effectiveChannel,
+          missingDependencies,
+        });
+        deferredBundledInstallRequired.set(pluginId, record);
+        continue;
+      }
     }
 
     // Fast-path bundled memory plugins that are guaranteed disabled by slot policy.
@@ -797,6 +931,19 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
         diagnosticMessagePrefix: "plugin failed during register: ",
       });
     }
+  }
+
+  for (const [pluginId, record] of deferredBundledInstallRequired) {
+    if (seenIds.has(pluginId)) {
+      continue;
+    }
+    registry.plugins.push(record);
+    registry.diagnostics.push({
+      level: "error",
+      pluginId: record.id,
+      source: record.source,
+      message: record.error ?? "plugin requires separate installation",
+    });
   }
 
   if (typeof memorySlot === "string" && !memorySlotMatched) {
