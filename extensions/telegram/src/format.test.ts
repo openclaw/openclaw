@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { markdownToTelegramHtml, splitTelegramHtmlChunks } from "./format.js";
+import {
+  markdownToTelegramChunks,
+  markdownToTelegramHtml,
+  splitTelegramHtmlChunks,
+} from "./format.js";
 
 describe("markdownToTelegramHtml", () => {
   it("handles core markdown-to-telegram conversions", () => {
@@ -133,5 +137,17 @@ describe("markdownToTelegramHtml", () => {
 
   it("fails loudly when tag overhead leaves no room for text", () => {
     expect(() => splitTelegramHtmlChunks("<b><i><u>x</u></i></b>", 10)).toThrow(/tag overhead/i);
+  });
+});
+
+describe("markdownToTelegramChunks", () => {
+  it("backs up to a word boundary when HTML overflow forces a retry split", () => {
+    const chunks = markdownToTelegramChunks("**beta** zeta", 13);
+
+    expect(chunks).toEqual([
+      { html: "<b>beta</b> ", text: "beta " },
+      { html: "zeta", text: "zeta" },
+    ]);
+    expect(chunks.map((chunk) => chunk.text).join("")).toBe("beta zeta");
   });
 });
