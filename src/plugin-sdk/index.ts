@@ -75,7 +75,7 @@ export type {
   BaseTokenResolution,
 } from "../channels/plugins/types.js";
 export type { ChannelConfigSchema, ChannelPlugin } from "../channels/plugins/types.plugin.js";
-// ── Channel Adapters (Discord Thread Bindings) ───────────────
+// ── Thread Bindings (Discord) ─────────────────────────────────
 
 export type {
   ThreadBindingManager,
@@ -155,7 +155,7 @@ export type { OpenClawConfig } from "../config/config.js";
 export type { OpenClawConfig as ClawdbotConfig } from "../config/config.js";
 export { isDangerousNameMatchingEnabled } from "../config/dangerous-name-matching.js";
 
-// ── Platform Utilities ───────────────────────────────────────
+// ── SDK Utilities ────────────────────────────────────────────
 
 export type { FileLockHandle, FileLockOptions } from "./file-lock.js";
 export { acquireFileLock, withFileLock } from "./file-lock.js";
@@ -165,13 +165,16 @@ export {
   type BasicAllowlistResolutionEntry,
 } from "./allowlist-resolution.js";
 export { resolveRequestUrl } from "./request-url.js";
+export type { KeyedAsyncQueueHooks } from "./keyed-async-queue.js";
+export { enqueueKeyedTask, KeyedAsyncQueue } from "./keyed-async-queue.js";
+
+// ── Discord Send Helpers ─────────────────────────────────────
+
 export {
   buildDiscordSendMediaOptions,
   buildDiscordSendOptions,
   tagDiscordChannelResult,
 } from "./discord-send.js";
-export type { KeyedAsyncQueueHooks } from "./keyed-async-queue.js";
-export { enqueueKeyedTask, KeyedAsyncQueue } from "./keyed-async-queue.js";
 // ── Webhook Utilities ────────────────────────────────────────
 
 export { normalizeWebhookPath, resolveWebhookPath } from "./webhook-path.js";
@@ -641,7 +644,7 @@ export {
   readStringParam,
 } from "../agents/tools/common.js";
 export { formatDocsLink } from "../terminal/links.js";
-// ── Security ─────────────────────────────────────────────────
+// ── Security & DM Policy ─────────────────────────────────────
 
 export {
   DM_GROUP_ACCESS_REASON,
@@ -653,6 +656,9 @@ export {
   resolveEffectiveAllowFromLists,
 } from "../security/dm-policy-shared.js";
 export type { DmGroupAccessReasonCode } from "../security/dm-policy-shared.js";
+
+// ── General Utilities ────────────────────────────────────────
+
 export type { HookEntry } from "../hooks/types.js";
 export { clamp, escapeRegExp, normalizeE164, safeParseJson, sleep } from "../utils.js";
 export { stripAnsi } from "../terminal/ansi.js";

@@ -45,14 +45,17 @@ export function buildBaseChannelStatusSummary(snapshot: {
   };
 }
 
-export function buildProbeChannelStatusSummary<TExtra extends Record<string, unknown>>(
+export function buildProbeChannelStatusSummary<
+  TProbe = unknown,
+  TExtra extends Record<string, unknown> = Record<string, unknown>,
+>(
   snapshot: {
     configured?: boolean | null;
     running?: boolean | null;
     lastStartAt?: number | null;
     lastStopAt?: number | null;
     lastError?: string | null;
-    probe?: unknown;
+    probe?: TProbe;
     lastProbeAt?: number | null;
   },
   extra?: TExtra,

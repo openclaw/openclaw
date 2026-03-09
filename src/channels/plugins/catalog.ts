@@ -109,8 +109,15 @@ function loadExternalCatalogEntries(options: CatalogOptions): ExternalCatalogEnt
     if (!fs.existsSync(resolved)) {
       continue;
     }
+    let raw: string;
     try {
-      const payload = JSON.parse(fs.readFileSync(resolved, "utf-8")) as unknown;
+      raw = fs.readFileSync(resolved, "utf-8");
+    } catch (err) {
+      logWarn(`failed to read plugin catalog file: ${resolved} (${String(err)})`);
+      continue;
+    }
+    try {
+      const payload = JSON.parse(raw) as unknown;
       entries.push(...parseCatalogEntries(payload));
     } catch (err) {
       logWarn(`failed to parse plugin catalog file: ${resolved} (${String(err)})`);

@@ -90,7 +90,7 @@ export function sanitizeInput(text: string): string {
 }
 
 /**
- * Sliding window rate limiter per user ID.
+ * Fixed-window rate limiter per user ID.
  */
 export class RateLimiter {
   private readonly limiter: FixedWindowRateLimiter;

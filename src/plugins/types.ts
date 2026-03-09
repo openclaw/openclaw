@@ -5,7 +5,7 @@ import type { AuthProfileCredential, OAuthCredential } from "../agents/auth-prof
 import type { AnyAgentTool } from "../agents/tools/common.js";
 import type { ReplyPayload } from "../auto-reply/types.js";
 import type { ChannelDock } from "../channels/dock.js";
-import type { ChannelId, ChannelPlugin } from "../channels/plugins/types.js";
+import type { AnyChannelPlugin, ChannelId } from "../channels/plugins/types.js";
 import type { createVpsAwareOAuthHandlers } from "../commands/oauth-flow.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { ModelProviderConfig } from "../config/types.js";
@@ -241,7 +241,7 @@ export type OpenClawPluginService = {
 };
 
 export type OpenClawPluginChannelRegistration = {
-  plugin: ChannelPlugin;
+  plugin: AnyChannelPlugin;
   dock?: ChannelDock;
 };
 
@@ -280,7 +280,7 @@ export type OpenClawPluginApi = {
     opts?: OpenClawPluginHookOptions,
   ) => void;
   registerHttpRoute: (params: OpenClawPluginHttpRouteParams) => void;
-  registerChannel: (registration: OpenClawPluginChannelRegistration | ChannelPlugin) => void;
+  registerChannel: (registration: OpenClawPluginChannelRegistration | AnyChannelPlugin) => void;
   registerGatewayMethod: (method: string, handler: GatewayRequestHandler) => void;
   registerCli: (registrar: OpenClawPluginCliRegistrar, opts?: { commands?: string[] }) => void;
   registerService: (service: OpenClawPluginService) => void;

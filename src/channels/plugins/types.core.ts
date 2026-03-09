@@ -182,13 +182,7 @@ export type ChannelMeta = {
   preferOver?: string[];
 };
 
-export type ChannelAccountSnapshot<
-  TProbe = unknown,
-  TAudit = unknown,
-  TApplication = unknown,
-  TBot = unknown,
-  TProfile = unknown,
-> = {
+export type ChannelAccountSnapshot<TProbe = unknown, TAudit = unknown> = {
   accountId: string;
   name?: string;
   enabled?: boolean;
@@ -244,10 +238,10 @@ export type ChannelAccountSnapshot<
   probe?: TProbe;
   lastProbeAt?: number | null;
   audit?: TAudit;
-  application?: TApplication;
-  bot?: TBot;
+  application?: unknown;
+  bot?: unknown;
   publicKey?: string | null;
-  profile?: TProfile;
+  profile?: unknown;
   channelAccessToken?: string;
   channelSecret?: string;
 };

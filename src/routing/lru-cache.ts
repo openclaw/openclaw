@@ -1,7 +1,7 @@
 /**
  * Lightweight LRU cache backed by a Map.
- * Leverages Map insertion-order: on access, entries are moved to the end
- * (delete + re-insert). On overflow, the first (oldest) entry is evicted.
+ * Leverages Map insertion-order: on `get` and `set`, entries are moved to the
+ * end (delete + re-insert). On overflow, the first (oldest) entry is evicted.
  */
 export class LruMap<K, V> {
   private map = new Map<K, V>();
