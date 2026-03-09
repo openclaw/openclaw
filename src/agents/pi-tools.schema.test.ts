@@ -1,17 +1,24 @@
 import { describe, expect, it } from "vitest";
 import { normalizeToolParameters } from "./pi-tools.schema.js";
+import type { AnyAgentTool } from "./pi-tools.types.js";
+
+function makeTool(params?: Record<string, unknown>): AnyAgentTool {
+  return {
+    name: "test_tool",
+    description: "test",
+    label: "Test",
+    execute: () => Promise.resolve({ content: [], details: undefined }),
+    ...(params !== undefined ? { parameters: params } : {}),
+  } as AnyAgentTool;
+}
 
 describe("normalizeToolParameters", () => {
   it("strips top-level required: null", () => {
-    const tool = {
-      name: "test_tool",
-      description: "test",
-      parameters: {
-        type: "object",
-        properties: { foo: { type: "string" } },
-        required: null,
-      },
-    };
+    const tool = makeTool({
+      type: "object",
+      properties: { foo: { type: "string" } },
+      required: null,
+    });
     const result = normalizeToolParameters(tool);
     const params = result.parameters as Record<string, unknown>;
     expect(params).not.toHaveProperty("required");
@@ -20,52 +27,40 @@ describe("normalizeToolParameters", () => {
   });
 
   it("preserves valid required array", () => {
-    const tool = {
-      name: "test_tool",
-      description: "test",
-      parameters: {
-        type: "object",
-        properties: { foo: { type: "string" } },
-        required: ["foo"],
-      },
-    };
+    const tool = makeTool({
+      type: "object",
+      properties: { foo: { type: "string" } },
+      required: ["foo"],
+    });
     const result = normalizeToolParameters(tool);
     const params = result.parameters as Record<string, unknown>;
     expect(params.required).toEqual(["foo"]);
   });
 
   it("strips required: undefined-like values (non-array)", () => {
-    const tool = {
-      name: "test_tool",
-      description: "test",
-      parameters: {
-        type: "object",
-        properties: { bar: { type: "number" } },
-        required: "bar",
-      },
-    };
+    const tool = makeTool({
+      type: "object",
+      properties: { bar: { type: "number" } },
+      required: "bar",
+    });
     const result = normalizeToolParameters(tool);
     const params = result.parameters as Record<string, unknown>;
     expect(params).not.toHaveProperty("required");
   });
 
   it("handles required: null with Gemini provider", () => {
-    const tool = {
-      name: "test_tool",
-      description: "test",
-      parameters: {
-        type: "object",
-        properties: { foo: { type: "string" } },
-        required: null,
-      },
-    };
+    const tool = makeTool({
+      type: "object",
+      properties: { foo: { type: "string" } },
+      required: null,
+    });
     const result = normalizeToolParameters(tool, { modelProvider: "google" });
     const params = result.parameters as Record<string, unknown>;
     expect(params).not.toHaveProperty("required");
   });
 
   it("returns tool unchanged when parameters is absent", () => {
-    const tool = { name: "test_tool", description: "test" };
+    const tool = makeTool();
     const result = normalizeToolParameters(tool);
     expect(result).toEqual(tool);
   });
