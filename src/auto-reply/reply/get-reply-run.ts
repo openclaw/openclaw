@@ -510,7 +510,7 @@ export async function runPreparedReply(
             .toLowerCase() || ""
         ).split(":")[0] || undefined,
       agentAccountId: sessionCtx.AccountId,
-      groupId: resolveGroupSessionKey(sessionCtx)?.id ?? undefined,
+      groupId: resolveGroupSessionKey(sessionCtx)?.id ?? null,
       groupChannel: sessionCtx.GroupChannel?.trim() ?? sessionCtx.GroupSubject?.trim(),
       groupSpace: sessionCtx.GroupSpace?.trim() ?? undefined,
       senderId: sessionCtx.SenderId?.trim() || undefined,
