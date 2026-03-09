@@ -69,6 +69,7 @@ Docs: https://docs.openclaw.ai
 - Gateway/restart timeout recovery: exit non-zero when restart-triggered shutdown drains time out so launchd/systemd restart the gateway instead of treating the failed restart as a clean stop. Landed from contributor PR #40380 by @dsantoreis. Thanks @dsantoreis.
 - Gateway/config restart guard: validate config before service start/restart and keep post-SIGUSR1 startup failures from crashing the gateway process, reducing invalid-config restart loops and macOS permission loss. Landed from contributor PR #38699 by @lml2468. Thanks @lml2468.
 - Gateway/launchd respawn detection: treat `XPC_SERVICE_NAME` as a launchd supervision hint so macOS restarts exit cleanly under launchd instead of attempting detached self-respawn. Landed from contributor PR #20555 by @dimat. Thanks @dimat.
+- Telegram/poll restart cleanup: abort the in-flight Telegram API fetch when shutdown or forced polling restarts stop a runner, preventing stale `getUpdates` long polls from colliding with the replacement runner. Landed from contributor PR #23950 by @Gkinthecodeland. Thanks @Gkinthecodeland.
 - Cron/owner-only tools: pass trusted isolated cron runs into the embedded agent with owner context so `cron`/`gateway` tooling remains available after the owner-auth hardening narrowed direct-message ownership inference.
 
 ## 2026.3.7
