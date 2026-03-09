@@ -114,8 +114,56 @@ function collectAllowedValuesFromUnknownIssue(issue: unknown): unknown[] {
   return collection.values;
 }
 
-function mapZodIssueToConfigIssue(issue: unknown): ConfigValidationIssue {
+function unwrapUnionIssue(issue: unknown): unknown {
   const record = toIssueRecord(issue);
+  if (!record || record.code !== "invalid_union") {
+    return issue;
+  }
+  const errors = record.errors;
+  if (!Array.isArray(errors) || errors.length === 0) {
+    return issue;
+  }
+
+  // Inner branch issues have RELATIVE paths (relative to the union's own path).
+  // We only unwrap when an inner issue provides additional specificity (non-empty
+  // relative path), e.g. an unrecognized_keys error at bindings[0].acp vs the
+  // generic invalid_union error at bindings[0].
+  const outerPath = Array.isArray(record.path) ? record.path : [];
+
+  let bestIssue: unknown = null;
+  let bestScore = -1;
+
+  for (const branch of errors) {
+    if (!Array.isArray(branch)) {
+      continue;
+    }
+    for (const innerIssue of branch) {
+      const innerRecord = toIssueRecord(innerIssue);
+      if (!innerRecord) {
+        continue;
+      }
+      const innerPath = Array.isArray(innerRecord.path) ? innerRecord.path : [];
+      // Skip inner issues with no additional path depth — they add no specificity
+      if (innerPath.length === 0) {
+        continue;
+      }
+      // Prefer unrecognized_keys (most actionable), then deeper paths
+      const score = innerPath.length * 10 + (innerRecord.code === "unrecognized_keys" ? 5 : 0);
+      if (score > bestScore) {
+        bestScore = score;
+        // Merge absolute outer path with relative inner path
+        bestIssue = { ...innerRecord, path: [...outerPath, ...innerPath] };
+      }
+    }
+  }
+
+  // Only unwrap if we found a more-specific inner issue
+  return bestIssue ?? issue;
+}
+
+function mapZodIssueToConfigIssue(issue: unknown): ConfigValidationIssue {
+  const resolved = unwrapUnionIssue(issue);
+  const record = toIssueRecord(resolved);
   const path = Array.isArray(record?.path)
     ? record.path
         .filter((segment): segment is string | number => {
@@ -125,7 +173,9 @@ function mapZodIssueToConfigIssue(issue: unknown): ConfigValidationIssue {
         .join(".")
     : "";
   const message = typeof record?.message === "string" ? record.message : "Invalid input";
-  const allowedValuesSummary = summarizeAllowedValues(collectAllowedValuesFromUnknownIssue(issue));
+  const allowedValuesSummary = summarizeAllowedValues(
+    collectAllowedValuesFromUnknownIssue(resolved),
+  );
 
   if (!allowedValuesSummary) {
     return { path, message };
