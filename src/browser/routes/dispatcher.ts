@@ -1,13 +1,14 @@
-import type { BrowserRouteContext } from "../server-context.js";
-import type { BrowserRequest, BrowserResponse, BrowserRouteRegistrar } from "./types.js";
 import { escapeRegExp } from "../../utils.js";
+import type { BrowserRouteContext } from "../server-context.js";
 import { registerBrowserRoutes } from "./index.js";
+import type { BrowserRequest, BrowserResponse, BrowserRouteRegistrar } from "./types.js";
 
 type BrowserDispatchRequest = {
   method: "GET" | "POST" | "DELETE";
   path: string;
   query?: Record<string, unknown>;
   body?: unknown;
+  signal?: AbortSignal;
 };
 
 type BrowserDispatchResponse = {
@@ -68,6 +69,7 @@ export function createBrowserRouteDispatcher(ctx: BrowserRouteContext) {
       const path = normalizePath(req.path);
       const query = req.query ?? {};
       const body = req.body;
+      const signal = req.signal;
 
       const match = registry.routes.find((route) => {
         if (route.method !== method) {
@@ -85,7 +87,14 @@ export function createBrowserRouteDispatcher(ctx: BrowserRouteContext) {
         for (const [idx, name] of match.paramNames.entries()) {
           const value = exec[idx + 1];
           if (typeof value === "string") {
-            params[name] = decodeURIComponent(value);
+            try {
+              params[name] = decodeURIComponent(value);
+            } catch {
+              return {
+                status: 400,
+                body: { error: `invalid path parameter encoding: ${name}` },
+              };
+            }
           }
         }
       }
@@ -108,6 +117,7 @@ export function createBrowserRouteDispatcher(ctx: BrowserRouteContext) {
             params,
             query,
             body,
+            signal,
           },
           res,
         );

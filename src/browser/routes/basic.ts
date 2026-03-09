@@ -1,8 +1,31 @@
-import type { BrowserRouteContext } from "../server-context.js";
-import type { BrowserRouteRegistrar } from "./types.js";
 import { resolveBrowserExecutableForPlatform } from "../chrome.executables.js";
+import { toBrowserErrorResponse } from "../errors.js";
 import { createBrowserProfilesService } from "../profiles-service.js";
+import type { BrowserRouteContext, ProfileContext } from "../server-context.js";
+import { resolveProfileContext } from "./agent.shared.js";
+import type { BrowserRequest, BrowserResponse, BrowserRouteRegistrar } from "./types.js";
 import { getProfileContext, jsonError, toStringOrEmpty } from "./utils.js";
+
+async function withBasicProfileRoute(params: {
+  req: BrowserRequest;
+  res: BrowserResponse;
+  ctx: BrowserRouteContext;
+  run: (profileCtx: ProfileContext) => Promise<void>;
+}) {
+  const profileCtx = resolveProfileContext(params.req, params.res, params.ctx);
+  if (!profileCtx) {
+    return;
+  }
+  try {
+    await params.run(profileCtx);
+  } catch (err) {
+    const mapped = toBrowserErrorResponse(err);
+    if (mapped) {
+      return jsonError(params.res, mapped.status, mapped.message);
+    }
+    jsonError(params.res, 500, String(err));
+  }
+}
 
 export function registerBrowserBasicRoutes(app: BrowserRouteRegistrar, ctx: BrowserRouteContext) {
   // List all profiles with their status
@@ -68,57 +91,51 @@ export function registerBrowserBasicRoutes(app: BrowserRouteRegistrar, ctx: Brow
       headless: current.resolved.headless,
       noSandbox: current.resolved.noSandbox,
       executablePath: current.resolved.executablePath ?? null,
-      attachOnly: current.resolved.attachOnly,
+      attachOnly: profileCtx.profile.attachOnly,
     });
   });
 
   // Start browser (profile-aware)
   app.post("/start", async (req, res) => {
-    const profileCtx = getProfileContext(req, ctx);
-    if ("error" in profileCtx) {
-      return jsonError(res, profileCtx.status, profileCtx.error);
-    }
-
-    try {
-      await profileCtx.ensureBrowserAvailable();
-      res.json({ ok: true, profile: profileCtx.profile.name });
-    } catch (err) {
-      jsonError(res, 500, String(err));
-    }
+    await withBasicProfileRoute({
+      req,
+      res,
+      ctx,
+      run: async (profileCtx) => {
+        await profileCtx.ensureBrowserAvailable();
+        res.json({ ok: true, profile: profileCtx.profile.name });
+      },
+    });
   });
 
   // Stop browser (profile-aware)
   app.post("/stop", async (req, res) => {
-    const profileCtx = getProfileContext(req, ctx);
-    if ("error" in profileCtx) {
-      return jsonError(res, profileCtx.status, profileCtx.error);
-    }
-
-    try {
-      const result = await profileCtx.stopRunningBrowser();
-      res.json({
-        ok: true,
-        stopped: result.stopped,
-        profile: profileCtx.profile.name,
-      });
-    } catch (err) {
-      jsonError(res, 500, String(err));
-    }
+    await withBasicProfileRoute({
+      req,
+      res,
+      ctx,
+      run: async (profileCtx) => {
+        const result = await profileCtx.stopRunningBrowser();
+        res.json({
+          ok: true,
+          stopped: result.stopped,
+          profile: profileCtx.profile.name,
+        });
+      },
+    });
   });
 
   // Reset profile (profile-aware)
   app.post("/reset-profile", async (req, res) => {
-    const profileCtx = getProfileContext(req, ctx);
-    if ("error" in profileCtx) {
-      return jsonError(res, profileCtx.status, profileCtx.error);
-    }
-
-    try {
-      const result = await profileCtx.resetProfile();
-      res.json({ ok: true, profile: profileCtx.profile.name, ...result });
-    } catch (err) {
-      jsonError(res, 500, String(err));
-    }
+    await withBasicProfileRoute({
+      req,
+      res,
+      ctx,
+      run: async (profileCtx) => {
+        const result = await profileCtx.resetProfile();
+        res.json({ ok: true, profile: profileCtx.profile.name, ...result });
+      },
+    });
   });
 
   // Create a new profile
@@ -145,20 +162,11 @@ export function registerBrowserBasicRoutes(app: BrowserRouteRegistrar, ctx: Brow
       });
       res.json(result);
     } catch (err) {
-      const msg = String(err);
-      if (msg.includes("already exists")) {
-        return jsonError(res, 409, msg);
+      const mapped = toBrowserErrorResponse(err);
+      if (mapped) {
+        return jsonError(res, mapped.status, mapped.message);
       }
-      if (msg.includes("invalid profile name")) {
-        return jsonError(res, 400, msg);
-      }
-      if (msg.includes("no available CDP ports")) {
-        return jsonError(res, 507, msg);
-      }
-      if (msg.includes("cdpUrl")) {
-        return jsonError(res, 400, msg);
-      }
-      jsonError(res, 500, msg);
+      jsonError(res, 500, String(err));
     }
   });
 
@@ -174,17 +182,11 @@ export function registerBrowserBasicRoutes(app: BrowserRouteRegistrar, ctx: Brow
       const result = await service.deleteProfile(name);
       res.json(result);
     } catch (err) {
-      const msg = String(err);
-      if (msg.includes("invalid profile name")) {
-        return jsonError(res, 400, msg);
+      const mapped = toBrowserErrorResponse(err);
+      if (mapped) {
+        return jsonError(res, mapped.status, mapped.message);
       }
-      if (msg.includes("default profile")) {
-        return jsonError(res, 400, msg);
-      }
-      if (msg.includes("not found")) {
-        return jsonError(res, 404, msg);
-      }
-      jsonError(res, 500, msg);
+      jsonError(res, 500, String(err));
     }
   });
 }

@@ -1,20 +1,13 @@
+import { analyzeBootstrapBudget } from "../../agents/bootstrap-budget.js";
+import {
+  resolveBootstrapMaxChars,
+  resolveBootstrapTotalMaxChars,
+} from "../../agents/pi-embedded-helpers.js";
+import { buildSystemPromptReport } from "../../agents/system-prompt-report.js";
 import type { SessionSystemPromptReport } from "../../config/sessions/types.js";
 import type { ReplyPayload } from "../types.js";
+import { resolveCommandsSystemPromptBundle } from "./commands-system-prompt.js";
 import type { HandleCommandsParams } from "./commands-types.js";
-import { resolveSessionAgentIds } from "../../agents/agent-scope.js";
-import { resolveBootstrapContextForRun } from "../../agents/bootstrap-files.js";
-import { resolveDefaultModelForAgent } from "../../agents/model-selection.js";
-import { resolveBootstrapMaxChars } from "../../agents/pi-embedded-helpers.js";
-import { createOpenClawCodingTools } from "../../agents/pi-tools.js";
-import { resolveSandboxRuntimeStatus } from "../../agents/sandbox.js";
-import { buildWorkspaceSkillSnapshot } from "../../agents/skills.js";
-import { getSkillsSnapshotVersion } from "../../agents/skills/refresh.js";
-import { buildSystemPromptParams } from "../../agents/system-prompt-params.js";
-import { buildSystemPromptReport } from "../../agents/system-prompt-report.js";
-import { buildAgentSystemPrompt } from "../../agents/system-prompt.js";
-import { buildToolSummaryMap } from "../../agents/tool-summaries.js";
-import { getRemoteSkillEligibility } from "../../infra/skills-remote.js";
-import { buildTtsSystemPromptHint } from "../../tts/tts.js";
 
 function estimateTokensFromChars(chars: number): number {
   return Math.ceil(Math.max(0, chars) / 4);
@@ -57,108 +50,10 @@ async function resolveContextReport(
     return existing;
   }
 
-  const workspaceDir = params.workspaceDir;
   const bootstrapMaxChars = resolveBootstrapMaxChars(params.cfg);
-  const { bootstrapFiles, contextFiles: injectedFiles } = await resolveBootstrapContextForRun({
-    workspaceDir,
-    config: params.cfg,
-    sessionKey: params.sessionKey,
-    sessionId: params.sessionEntry?.sessionId,
-  });
-  const skillsSnapshot = (() => {
-    try {
-      return buildWorkspaceSkillSnapshot(workspaceDir, {
-        config: params.cfg,
-        eligibility: { remote: getRemoteSkillEligibility() },
-        snapshotVersion: getSkillsSnapshotVersion(workspaceDir),
-      });
-    } catch {
-      return { prompt: "", skills: [], resolvedSkills: [] };
-    }
-  })();
-  const skillsPrompt = skillsSnapshot.prompt ?? "";
-  const sandboxRuntime = resolveSandboxRuntimeStatus({
-    cfg: params.cfg,
-    sessionKey: params.ctx.SessionKey ?? params.sessionKey,
-  });
-  const tools = (() => {
-    try {
-      return createOpenClawCodingTools({
-        config: params.cfg,
-        workspaceDir,
-        sessionKey: params.sessionKey,
-        messageProvider: params.command.channel,
-        groupId: params.sessionEntry?.groupId ?? undefined,
-        groupChannel: params.sessionEntry?.groupChannel ?? undefined,
-        groupSpace: params.sessionEntry?.space ?? undefined,
-        spawnedBy: params.sessionEntry?.spawnedBy ?? undefined,
-        senderIsOwner: params.command.senderIsOwner,
-        modelProvider: params.provider,
-        modelId: params.model,
-      });
-    } catch {
-      return [];
-    }
-  })();
-  const toolSummaries = buildToolSummaryMap(tools);
-  const toolNames = tools.map((t) => t.name);
-  const { sessionAgentId } = resolveSessionAgentIds({
-    sessionKey: params.sessionKey,
-    config: params.cfg,
-  });
-  const defaultModelRef = resolveDefaultModelForAgent({
-    cfg: params.cfg,
-    agentId: sessionAgentId,
-  });
-  const defaultModelLabel = `${defaultModelRef.provider}/${defaultModelRef.model}`;
-  const { runtimeInfo, userTimezone, userTime, userTimeFormat } = buildSystemPromptParams({
-    config: params.cfg,
-    agentId: sessionAgentId,
-    workspaceDir,
-    cwd: process.cwd(),
-    runtime: {
-      host: "unknown",
-      os: "unknown",
-      arch: "unknown",
-      node: process.version,
-      model: `${params.provider}/${params.model}`,
-      defaultModel: defaultModelLabel,
-    },
-  });
-  const sandboxInfo = sandboxRuntime.sandboxed
-    ? {
-        enabled: true,
-        workspaceDir,
-        workspaceAccess: "rw" as const,
-        elevated: {
-          allowed: params.elevated.allowed,
-          defaultLevel: (params.resolvedElevatedLevel ?? "off") as "on" | "off" | "ask" | "full",
-        },
-      }
-    : { enabled: false };
-  const ttsHint = params.cfg ? buildTtsSystemPromptHint(params.cfg) : undefined;
-
-  const systemPrompt = buildAgentSystemPrompt({
-    workspaceDir,
-    defaultThinkLevel: params.resolvedThinkLevel,
-    reasoningLevel: params.resolvedReasoningLevel,
-    extraSystemPrompt: undefined,
-    ownerNumbers: undefined,
-    reasoningTagHint: false,
-    toolNames,
-    toolSummaries,
-    modelAliasLines: [],
-    userTimezone,
-    userTime,
-    userTimeFormat,
-    contextFiles: injectedFiles,
-    skillsPrompt,
-    heartbeatPrompt: undefined,
-    ttsHint,
-    runtimeInfo,
-    sandboxInfo,
-    memoryCitationsMode: params.cfg?.memory?.citations,
-  });
+  const bootstrapTotalMaxChars = resolveBootstrapTotalMaxChars(params.cfg);
+  const { systemPrompt, tools, skillsPrompt, bootstrapFiles, injectedFiles, sandboxRuntime } =
+    await resolveCommandsSystemPromptBundle(params);
 
   return buildSystemPromptReport({
     source: "estimate",
@@ -167,8 +62,9 @@ async function resolveContextReport(
     sessionKey: params.sessionKey,
     provider: params.provider,
     model: params.model,
-    workspaceDir,
+    workspaceDir: params.workspaceDir,
     bootstrapMaxChars,
+    bootstrapTotalMaxChars,
     sandbox: { mode: sandboxRuntime.mode, sandboxed: sandboxRuntime.sandboxed },
     systemPrompt,
     bootstrapFiles,
@@ -246,15 +142,72 @@ export async function buildContextReply(params: HandleCommandsParams): Promise<R
     : "Tools: (none)";
   const systemPromptLine = `System prompt (${report.source}): ${formatCharsAndTokens(report.systemPrompt.chars)} (Project Context ${formatCharsAndTokens(report.systemPrompt.projectContextChars)})`;
   const workspaceLabel = report.workspaceDir ?? params.workspaceDir;
-  const bootstrapMaxLabel =
-    typeof report.bootstrapMaxChars === "number"
-      ? `${formatInt(report.bootstrapMaxChars)} chars`
-      : "? chars";
+  const bootstrapMaxChars =
+    typeof report.bootstrapMaxChars === "number" &&
+    Number.isFinite(report.bootstrapMaxChars) &&
+    report.bootstrapMaxChars > 0
+      ? report.bootstrapMaxChars
+      : resolveBootstrapMaxChars(params.cfg);
+  const bootstrapTotalMaxChars =
+    typeof report.bootstrapTotalMaxChars === "number" &&
+    Number.isFinite(report.bootstrapTotalMaxChars) &&
+    report.bootstrapTotalMaxChars > 0
+      ? report.bootstrapTotalMaxChars
+      : resolveBootstrapTotalMaxChars(params.cfg);
+  const bootstrapMaxLabel = `${formatInt(bootstrapMaxChars)} chars`;
+  const bootstrapTotalLabel = `${formatInt(bootstrapTotalMaxChars)} chars`;
+  const bootstrapAnalysis = analyzeBootstrapBudget({
+    files: report.injectedWorkspaceFiles,
+    bootstrapMaxChars,
+    bootstrapTotalMaxChars,
+  });
+  const truncatedBootstrapFiles = bootstrapAnalysis.truncatedFiles;
+  const truncationCauseCounts = truncatedBootstrapFiles.reduce(
+    (acc, file) => {
+      for (const cause of file.causes) {
+        if (cause === "per-file-limit") {
+          acc.perFile += 1;
+        } else if (cause === "total-limit") {
+          acc.total += 1;
+        }
+      }
+      return acc;
+    },
+    { perFile: 0, total: 0 },
+  );
+  const truncationCauseParts = [
+    truncationCauseCounts.perFile > 0
+      ? `${truncationCauseCounts.perFile} file(s) exceeded max/file`
+      : null,
+    truncationCauseCounts.total > 0 ? `${truncationCauseCounts.total} file(s) hit max/total` : null,
+  ].filter(Boolean);
+  const bootstrapWarningLines =
+    truncatedBootstrapFiles.length > 0
+      ? [
+          `⚠ Bootstrap context is over configured limits: ${truncatedBootstrapFiles.length} file(s) truncated (${formatInt(bootstrapAnalysis.totals.rawChars)} raw chars -> ${formatInt(bootstrapAnalysis.totals.injectedChars)} injected chars).`,
+          ...(truncationCauseParts.length ? [`Causes: ${truncationCauseParts.join("; ")}.`] : []),
+          "Tip: increase `agents.defaults.bootstrapMaxChars` and/or `agents.defaults.bootstrapTotalMaxChars` if this truncation is not intentional.",
+        ]
+      : [];
 
   const totalsLine =
     session.totalTokens != null
       ? `Session tokens (cached): ${formatInt(session.totalTokens)} total / ctx=${session.contextTokens ?? "?"}`
       : `Session tokens (cached): unknown / ctx=${session.contextTokens ?? "?"}`;
+  const sharedContextLines = [
+    `Workspace: ${workspaceLabel}`,
+    `Bootstrap max/file: ${bootstrapMaxLabel}`,
+    `Bootstrap max/total: ${bootstrapTotalLabel}`,
+    sandboxLine,
+    systemPromptLine,
+    ...(bootstrapWarningLines.length ? ["", ...bootstrapWarningLines] : []),
+    "",
+    "Injected workspace files:",
+    ...fileLines,
+    "",
+    skillsLine,
+    skillsNamesLine,
+  ];
 
   if (sub === "detail" || sub === "deep") {
     const perSkill = formatListTop(
@@ -278,16 +231,7 @@ export async function buildContextReply(params: HandleCommandsParams): Promise<R
     return {
       text: [
         "🧠 Context breakdown (detailed)",
-        `Workspace: ${workspaceLabel}`,
-        `Bootstrap max/file: ${bootstrapMaxLabel}`,
-        sandboxLine,
-        systemPromptLine,
-        "",
-        "Injected workspace files:",
-        ...fileLines,
-        "",
-        skillsLine,
-        skillsNamesLine,
+        ...sharedContextLines,
         ...(perSkill.lines.length ? ["Top skills (prompt entry size):", ...perSkill.lines] : []),
         ...(perSkill.omitted ? [`… (+${perSkill.omitted} more skills)`] : []),
         "",
@@ -315,16 +259,7 @@ export async function buildContextReply(params: HandleCommandsParams): Promise<R
   return {
     text: [
       "🧠 Context breakdown",
-      `Workspace: ${workspaceLabel}`,
-      `Bootstrap max/file: ${bootstrapMaxLabel}`,
-      sandboxLine,
-      systemPromptLine,
-      "",
-      "Injected workspace files:",
-      ...fileLines,
-      "",
-      skillsLine,
-      skillsNamesLine,
+      ...sharedContextLines,
       toolListLine,
       toolSchemaLine,
       toolsNamesLine,

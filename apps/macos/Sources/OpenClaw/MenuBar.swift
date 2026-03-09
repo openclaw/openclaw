@@ -228,17 +228,7 @@ private final class StatusItemMouseHandlerView: NSView {
 
     override func updateTrackingAreas() {
         super.updateTrackingAreas()
-        if let tracking {
-            self.removeTrackingArea(tracking)
-        }
-        let options: NSTrackingArea.Options = [
-            .mouseEnteredAndExited,
-            .activeAlways,
-            .inVisibleRect,
-        ]
-        let area = NSTrackingArea(rect: self.bounds, options: options, owner: self, userInfo: nil)
-        self.addTrackingArea(area)
-        self.tracking = area
+        TrackingAreaSupport.resetMouseTracking(on: self, tracking: &self.tracking, owner: self)
     }
 
     override func mouseEntered(with event: NSEvent) {
@@ -345,7 +335,7 @@ protocol UpdaterProviding: AnyObject {
     func checkForUpdates(_ sender: Any?)
 }
 
-// No-op updater used for debug/dev runs to suppress Sparkle dialogs.
+/// No-op updater used for debug/dev runs to suppress Sparkle dialogs.
 final class DisabledUpdaterController: UpdaterProviding {
     var automaticallyChecksForUpdates: Bool = false
     var automaticallyDownloadsUpdates: Bool = false
@@ -394,7 +384,9 @@ final class SparkleUpdaterController: NSObject, UpdaterProviding {
         set { self.controller.updater.automaticallyDownloadsUpdates = newValue }
     }
 
-    var isAvailable: Bool { true }
+    var isAvailable: Bool {
+        true
+    }
 
     func checkForUpdates(_ sender: Any?) {
         self.controller.checkForUpdates(sender)
@@ -429,7 +421,7 @@ final class SparkleUpdaterController: NSObject, UpdaterProviding {
     }
 }
 
-extension SparkleUpdaterController: @preconcurrency SPUUpdaterDelegate {}
+extension SparkleUpdaterController: SPUUpdaterDelegate {}
 
 private func isDeveloperIDSigned(bundleURL: URL) -> Bool {
     var staticCode: SecStaticCode?

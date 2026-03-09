@@ -110,32 +110,26 @@ function parseGmailSetupOptions(raw: Record<string, unknown>): GmailSetupOptions
   if (!account) {
     throw new Error("--account is required");
   }
+  const common = parseGmailCommonOptions(raw);
   return {
     account,
     project: stringOption(raw.project),
-    topic: stringOption(raw.topic),
-    subscription: stringOption(raw.subscription),
-    label: stringOption(raw.label),
-    hookUrl: stringOption(raw.hookUrl),
-    hookToken: stringOption(raw.hookToken),
-    pushToken: stringOption(raw.pushToken),
-    bind: stringOption(raw.bind),
-    port: numberOption(raw.port),
-    path: stringOption(raw.path),
-    includeBody: booleanOption(raw.includeBody),
-    maxBytes: numberOption(raw.maxBytes),
-    renewEveryMinutes: numberOption(raw.renewMinutes),
-    tailscale: stringOption(raw.tailscale) as GmailSetupOptions["tailscale"],
-    tailscalePath: stringOption(raw.tailscalePath),
-    tailscaleTarget: stringOption(raw.tailscaleTarget),
+    ...gmailOptionsFromCommon(common),
     pushEndpoint: stringOption(raw.pushEndpoint),
     json: Boolean(raw.json),
   };
 }
 
 function parseGmailRunOptions(raw: Record<string, unknown>): GmailRunOptions {
+  const common = parseGmailCommonOptions(raw);
   return {
     account: stringOption(raw.account),
+    ...gmailOptionsFromCommon(common),
+  };
+}
+
+function parseGmailCommonOptions(raw: Record<string, unknown>) {
+  return {
     topic: stringOption(raw.topic),
     subscription: stringOption(raw.subscription),
     label: stringOption(raw.label),
@@ -148,9 +142,31 @@ function parseGmailRunOptions(raw: Record<string, unknown>): GmailRunOptions {
     includeBody: booleanOption(raw.includeBody),
     maxBytes: numberOption(raw.maxBytes),
     renewEveryMinutes: numberOption(raw.renewMinutes),
-    tailscale: stringOption(raw.tailscale) as GmailRunOptions["tailscale"],
+    tailscaleRaw: stringOption(raw.tailscale),
     tailscalePath: stringOption(raw.tailscalePath),
     tailscaleTarget: stringOption(raw.tailscaleTarget),
+  };
+}
+
+function gmailOptionsFromCommon(
+  common: ReturnType<typeof parseGmailCommonOptions>,
+): Omit<GmailRunOptions, "account"> {
+  return {
+    topic: common.topic,
+    subscription: common.subscription,
+    label: common.label,
+    hookUrl: common.hookUrl,
+    hookToken: common.hookToken,
+    pushToken: common.pushToken,
+    bind: common.bind,
+    port: common.port,
+    path: common.path,
+    includeBody: common.includeBody,
+    maxBytes: common.maxBytes,
+    renewEveryMinutes: common.renewEveryMinutes,
+    tailscale: common.tailscaleRaw as GmailRunOptions["tailscale"],
+    tailscalePath: common.tailscalePath,
+    tailscaleTarget: common.tailscaleTarget,
   };
 }
 

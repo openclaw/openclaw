@@ -1,14 +1,17 @@
 import {
   buildChannelConfigSchema,
+  collectStatusIssuesFromLastError,
+  createDefaultChannelRuntimeState,
   DEFAULT_ACCOUNT_ID,
   formatPairingApproveHint,
+  mapAllowFromEntries,
   type ChannelPlugin,
-} from "openclaw/plugin-sdk";
+} from "openclaw/plugin-sdk/nostr";
 import type { NostrProfile } from "./config-schema.js";
-import type { MetricEvent, MetricsSnapshot } from "./metrics.js";
-import type { ProfilePublishResult } from "./nostr-profile.js";
 import { NostrConfigSchema } from "./config-schema.js";
+import type { MetricEvent, MetricsSnapshot } from "./metrics.js";
 import { normalizePubkey, startNostrBus, type NostrBusHandle } from "./nostr-bus.js";
+import type { ProfilePublishResult } from "./nostr-profile.js";
 import { getNostrRuntime } from "./runtime.js";
 import {
   listNostrAccountIds,
@@ -54,9 +57,7 @@ export const nostrPlugin: ChannelPlugin<ResolvedNostrAccount> = {
       publicKey: account.publicKey,
     }),
     resolveAllowFrom: ({ cfg, accountId }) =>
-      (resolveNostrAccount({ cfg, accountId }).config.allowFrom ?? []).map((entry) =>
-        String(entry),
-      ),
+      mapAllowFromEntries(resolveNostrAccount({ cfg, accountId }).config.allowFrom),
     formatAllowFrom: ({ allowFrom }) =>
       allowFrom
         .map((entry) => String(entry).trim())
@@ -133,7 +134,7 @@ export const nostrPlugin: ChannelPlugin<ResolvedNostrAccount> = {
   outbound: {
     deliveryMode: "direct",
     textChunkLimit: 4000,
-    sendText: async ({ to, text, accountId }) => {
+    sendText: async ({ cfg, to, text, accountId }) => {
       const core = getNostrRuntime();
       const aid = accountId ?? DEFAULT_ACCOUNT_ID;
       const bus = activeBuses.get(aid);
@@ -141,7 +142,7 @@ export const nostrPlugin: ChannelPlugin<ResolvedNostrAccount> = {
         throw new Error(`Nostr bus not running for account ${aid}`);
       }
       const tableMode = core.channel.text.resolveMarkdownTableMode({
-        cfg: core.config.loadConfig(),
+        cfg,
         channel: "nostr",
         accountId: aid,
       });
@@ -157,28 +158,8 @@ export const nostrPlugin: ChannelPlugin<ResolvedNostrAccount> = {
   },
 
   status: {
-    defaultRuntime: {
-      accountId: DEFAULT_ACCOUNT_ID,
-      running: false,
-      lastStartAt: null,
-      lastStopAt: null,
-      lastError: null,
-    },
-    collectStatusIssues: (accounts) =>
-      accounts.flatMap((account) => {
-        const lastError = typeof account.lastError === "string" ? account.lastError.trim() : "";
-        if (!lastError) {
-          return [];
-        }
-        return [
-          {
-            channel: "nostr",
-            accountId: account.accountId,
-            kind: "runtime" as const,
-            message: `Channel error: ${lastError}`,
-          },
-        ];
-      }),
+    defaultRuntime: createDefaultChannelRuntimeState(DEFAULT_ACCOUNT_ID),
+    collectStatusIssues: (accounts) => collectStatusIssuesFromLastError("nostr", accounts),
     buildChannelSummary: ({ snapshot }) => ({
       configured: snapshot.configured ?? false,
       publicKey: snapshot.publicKey ?? null,
@@ -233,7 +214,6 @@ export const nostrPlugin: ChannelPlugin<ResolvedNostrAccount> = {
           );
 
           // Forward to OpenClaw's message pipeline
-          // TODO: Replace with proper dispatchReplyWithBufferedBlockDispatcher call
           await (
             runtime.channel.reply as { handleInboundMessage?: (params: unknown) => Promise<void> }
           ).handleInboundMessage?.({

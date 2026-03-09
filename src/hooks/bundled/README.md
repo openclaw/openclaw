@@ -6,9 +6,9 @@ This directory contains hooks that ship with OpenClaw. These hooks are automatic
 
 ### 💾 session-memory
 
-Automatically saves session context to memory when you issue `/new`.
+Automatically saves session context to memory when you issue `/new` or `/reset`.
 
-**Events**: `command:new`
+**Events**: `command:new`, `command:reset`
 **What it does**: Creates a dated memory file with LLM-generated slug based on conversation content.
 **Output**: `<workspace>/memory/YYYY-MM-DD-slug.md` (defaults to `~/.openclaw/workspace`)
 
@@ -16,6 +16,20 @@ Automatically saves session context to memory when you issue `/new`.
 
 ```bash
 openclaw hooks enable session-memory
+```
+
+### 📎 bootstrap-extra-files
+
+Injects extra bootstrap files (for example monorepo `AGENTS.md`/`TOOLS.md`) during prompt assembly.
+
+**Events**: `agent:bootstrap`
+**What it does**: Expands configured workspace glob/path patterns and appends matching bootstrap files to injected context.
+**Output**: No files written; context is modified in-memory only.
+
+**Enable**:
+
+```bash
+openclaw hooks enable bootstrap-extra-files
 ```
 
 ### 📝 command-logger
@@ -30,21 +44,6 @@ Logs all command events to a centralized audit file.
 
 ```bash
 openclaw hooks enable command-logger
-```
-
-### 😈 soul-evil
-
-Swaps injected `SOUL.md` content with `SOUL_EVIL.md` during a purge window or by random chance.
-
-**Events**: `agent:bootstrap`
-**What it does**: Overrides the injected SOUL content before the system prompt is built.
-**Output**: No files written; swaps happen in-memory only.
-**Docs**: https://docs.openclaw.ai/hooks/soul-evil
-
-**Enable**:
-
-```bash
-openclaw hooks enable soul-evil
 ```
 
 ### 🚀 boot-md
@@ -82,7 +81,7 @@ session-memory/
 ---
 name: my-hook
 description: "Short description"
-homepage: https://docs.openclaw.ai/hooks#my-hook
+homepage: https://docs.openclaw.ai/automation/hooks#my-hook
 metadata:
   { "openclaw": { "emoji": "🔗", "events": ["command:new"], "requires": { "bins": ["node"] } } }
 ---
@@ -221,4 +220,4 @@ Test your hooks by:
 
 ## Documentation
 
-Full documentation: https://docs.openclaw.ai/hooks
+Full documentation: https://docs.openclaw.ai/automation/hooks

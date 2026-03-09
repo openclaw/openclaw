@@ -37,6 +37,14 @@ type PendingRequest = {
   timer?: NodeJS.Timeout;
 };
 
+function isTestEnv(): boolean {
+  if (process.env.NODE_ENV === "test") {
+    return true;
+  }
+  const vitest = process.env.VITEST?.trim().toLowerCase();
+  return Boolean(vitest);
+}
+
 export class IMessageRpcClient {
   private readonly cliPath: string;
   private readonly dbPath?: string;
@@ -62,6 +70,9 @@ export class IMessageRpcClient {
   async start(): Promise<void> {
     if (this.child) {
       return;
+    }
+    if (isTestEnv()) {
+      throw new Error("Refusing to start imsg rpc in test environment; mock iMessage RPC client");
     }
     const args = ["rpc"];
     if (this.dbPath) {

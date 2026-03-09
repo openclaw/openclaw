@@ -1,14 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import type { OnboardOptions } from "../commands/onboard-types.js";
-import type { OpenClawConfig } from "../config/config.js";
-import type { RuntimeEnv } from "../runtime.js";
-import type { GatewayWizardSettings, WizardFlow } from "./onboarding.types.js";
-import type { WizardPrompter } from "./prompts.js";
 import { DEFAULT_BOOTSTRAP_FILENAME } from "../agents/workspace.js";
-import { resolveCliName } from "../cli/cli-name.js";
 import { formatCliCommand } from "../cli/command-format.js";
-import { installCompletion } from "../cli/completion-cli.js";
 import {
   buildGatewayInstallPlan,
   gatewayInstallErrorHint,
@@ -17,10 +10,7 @@ import {
   DEFAULT_GATEWAY_DAEMON_RUNTIME,
   GATEWAY_DAEMON_RUNTIME_OPTIONS,
 } from "../commands/daemon-runtime.js";
-import {
-  checkShellCompletionStatus,
-  ensureCompletionCacheExists,
-} from "../commands/doctor-completion.js";
+import { resolveGatewayInstallToken } from "../commands/gateway-install-token.js";
 import { formatHealthCheckFailure } from "../commands/health-format.js";
 import { healthCommand } from "../commands/health.js";
 import {
@@ -31,12 +21,19 @@ import {
   waitForGatewayReachable,
   resolveControlUiLinks,
 } from "../commands/onboard-helpers.js";
+import type { OnboardOptions } from "../commands/onboard-types.js";
+import type { OpenClawConfig } from "../config/config.js";
 import { resolveGatewayService } from "../daemon/service.js";
 import { isSystemdUserServiceAvailable } from "../daemon/systemd.js";
 import { ensureControlUiAssetsBuilt } from "../infra/control-ui-assets.js";
+import type { RuntimeEnv } from "../runtime.js";
 import { restoreTerminalState } from "../terminal/restore.js";
 import { runTui } from "../tui/tui.js";
 import { resolveUserPath } from "../utils.js";
+import { setupOnboardingShellCompletion } from "./onboarding.completion.js";
+import { resolveOnboardingSecretInputString } from "./onboarding.secret-input.js";
+import type { GatewayWizardSettings, WizardFlow } from "./onboarding.types.js";
+import type { WizardPrompter } from "./prompts.js";
 
 type FinalizeOnboardingOptions = {
   flow: WizardFlow;
@@ -169,23 +166,39 @@ export async function finalizeOnboardingWizard(
       let installError: string | null = null;
       try {
         progress.update("Preparing Gateway service…");
-        const { programArguments, workingDirectory, environment } = await buildGatewayInstallPlan({
-          env: process.env,
-          port: settings.port,
-          token: settings.gatewayToken,
-          runtime: daemonRuntime,
-          warn: (message, title) => prompter.note(message, title),
+        const tokenResolution = await resolveGatewayInstallToken({
           config: nextConfig,
-        });
-
-        progress.update("Installing Gateway service…");
-        await service.install({
           env: process.env,
-          stdout: process.stdout,
-          programArguments,
-          workingDirectory,
-          environment,
         });
+        for (const warning of tokenResolution.warnings) {
+          await prompter.note(warning, "Gateway service");
+        }
+        if (tokenResolution.unavailableReason) {
+          installError = [
+            "Gateway install blocked:",
+            tokenResolution.unavailableReason,
+            "Fix gateway auth config/token input and rerun onboarding.",
+          ].join(" ");
+        } else {
+          const { programArguments, workingDirectory, environment } = await buildGatewayInstallPlan(
+            {
+              env: process.env,
+              port: settings.port,
+              runtime: daemonRuntime,
+              warn: (message, title) => prompter.note(message, title),
+              config: nextConfig,
+            },
+          );
+
+          progress.update("Installing Gateway service…");
+          await service.install({
+            env: process.env,
+            stdout: process.stdout,
+            programArguments,
+            workingDirectory,
+            environment,
+          });
+        }
       } catch (err) {
         installError = err instanceof Error ? err.message : String(err);
       } finally {
@@ -259,10 +272,31 @@ export async function finalizeOnboardingWizard(
     settings.authMode === "token" && settings.gatewayToken
       ? `${links.httpUrl}#token=${encodeURIComponent(settings.gatewayToken)}`
       : links.httpUrl;
+  let resolvedGatewayPassword = "";
+  if (settings.authMode === "password") {
+    try {
+      resolvedGatewayPassword =
+        (await resolveOnboardingSecretInputString({
+          config: nextConfig,
+          value: nextConfig.gateway?.auth?.password,
+          path: "gateway.auth.password",
+          env: process.env,
+        })) ?? "";
+    } catch (error) {
+      await prompter.note(
+        [
+          "Could not resolve gateway.auth.password SecretRef for onboarding auth.",
+          error instanceof Error ? error.message : String(error),
+        ].join("\n"),
+        "Gateway auth",
+      );
+    }
+  }
+
   const gatewayProbe = await probeGatewayReachable({
     url: links.wsUrl,
     token: settings.authMode === "token" ? settings.gatewayToken : undefined,
-    password: settings.authMode === "password" ? nextConfig.gateway?.auth?.password : "",
+    password: settings.authMode === "password" ? resolvedGatewayPassword : "",
   });
   const gatewayStatusLine = gatewayProbe.ok
     ? "Gateway: reachable"
@@ -316,7 +350,7 @@ export async function finalizeOnboardingWizard(
         "Stored in: ~/.openclaw/openclaw.json (gateway.auth.token) or OPENCLAW_GATEWAY_TOKEN.",
         `View token: ${formatCliCommand("openclaw config get gateway.auth.token")}`,
         `Generate token: ${formatCliCommand("openclaw doctor --generate-gateway-token")}`,
-        "Web UI stores a copy in this browser's localStorage (openclaw.control.settings.v1).",
+        "Web UI keeps dashboard URL tokens in memory for the current tab and strips them from the URL after load.",
         `Open the dashboard anytime: ${formatCliCommand("openclaw dashboard --no-open")}`,
         "If prompted: paste the token into Control UI settings (or use the tokenized dashboard URL).",
       ].join("\n"),
@@ -334,11 +368,11 @@ export async function finalizeOnboardingWizard(
     });
 
     if (hatchChoice === "tui") {
-      restoreTerminalState("pre-onboarding tui");
+      restoreTerminalState("pre-onboarding tui", { resumeStdinIfPaused: true });
       await runTui({
         url: links.wsUrl,
         token: settings.authMode === "token" ? settings.gatewayToken : undefined,
-        password: settings.authMode === "password" ? nextConfig.gateway?.auth?.password : "",
+        password: settings.authMode === "password" ? resolvedGatewayPassword : "",
         // Safety: onboarding TUI should not auto-deliver to lastProvider/lastTo.
         deliver: false,
         message: hasBootstrap ? "Wake up, my friend!" : undefined,
@@ -397,50 +431,7 @@ export async function finalizeOnboardingWizard(
     "Security",
   );
 
-  // Shell completion setup
-  const cliName = resolveCliName();
-  const completionStatus = await checkShellCompletionStatus(cliName);
-
-  if (completionStatus.usesSlowPattern) {
-    // Case 1: Profile uses slow dynamic pattern - silently upgrade to cached version
-    const cacheGenerated = await ensureCompletionCacheExists(cliName);
-    if (cacheGenerated) {
-      await installCompletion(completionStatus.shell, true, cliName);
-    }
-  } else if (completionStatus.profileInstalled && !completionStatus.cacheExists) {
-    // Case 2: Profile has completion but no cache - auto-fix silently
-    await ensureCompletionCacheExists(cliName);
-  } else if (!completionStatus.profileInstalled) {
-    // Case 3: No completion at all - prompt to install
-    const installShellCompletion = await prompter.confirm({
-      message: `Enable ${completionStatus.shell} shell completion for ${cliName}?`,
-      initialValue: true,
-    });
-    if (installShellCompletion) {
-      // Generate cache first (required for fast shell startup)
-      const cacheGenerated = await ensureCompletionCacheExists(cliName);
-      if (cacheGenerated) {
-        // Install to shell profile
-        await installCompletion(completionStatus.shell, true, cliName);
-        const profileHint =
-          completionStatus.shell === "zsh"
-            ? "~/.zshrc"
-            : completionStatus.shell === "bash"
-              ? "~/.bashrc"
-              : "~/.config/fish/config.fish";
-        await prompter.note(
-          `Shell completion installed. Restart your shell or run: source ${profileHint}`,
-          "Shell completion",
-        );
-      } else {
-        await prompter.note(
-          `Failed to generate completion cache. Run \`${cliName} completion --install\` later.`,
-          "Shell completion",
-        );
-      }
-    }
-  }
-  // Case 4: Both profile and cache exist (using cached version) - all good, nothing to do
+  await setupOnboardingShellCompletion({ flow, prompter });
 
   const shouldOpenControlUi =
     !opts.skipUi &&
@@ -480,33 +471,86 @@ export async function finalizeOnboardingWizard(
     );
   }
 
-  const webSearchKey = (nextConfig.tools?.web?.search?.apiKey ?? "").trim();
-  const webSearchEnv = (process.env.BRAVE_API_KEY ?? "").trim();
-  const hasWebSearchKey = Boolean(webSearchKey || webSearchEnv);
-  await prompter.note(
-    hasWebSearchKey
-      ? [
+  const webSearchProvider = nextConfig.tools?.web?.search?.provider;
+  const webSearchEnabled = nextConfig.tools?.web?.search?.enabled;
+  if (webSearchProvider) {
+    const { SEARCH_PROVIDER_OPTIONS, resolveExistingKey, hasExistingKey, hasKeyInEnv } =
+      await import("../commands/onboard-search.js");
+    const entry = SEARCH_PROVIDER_OPTIONS.find((e) => e.value === webSearchProvider);
+    const label = entry?.label ?? webSearchProvider;
+    const storedKey = resolveExistingKey(nextConfig, webSearchProvider);
+    const keyConfigured = hasExistingKey(nextConfig, webSearchProvider);
+    const envAvailable = entry ? hasKeyInEnv(entry) : false;
+    const hasKey = keyConfigured || envAvailable;
+    const keySource = storedKey
+      ? "API key: stored in config."
+      : keyConfigured
+        ? "API key: configured via secret reference."
+        : envAvailable
+          ? `API key: provided via ${entry?.envKeys.join(" / ")} env var.`
+          : undefined;
+    if (webSearchEnabled !== false && hasKey) {
+      await prompter.note(
+        [
           "Web search is enabled, so your agent can look things up online when needed.",
           "",
-          webSearchKey
-            ? "API key: stored in config (tools.web.search.apiKey)."
-            : "API key: provided via BRAVE_API_KEY env var (Gateway environment).",
-          "Docs: https://docs.openclaw.ai/tools/web",
-        ].join("\n")
-      : [
-          "If you want your agent to be able to search the web, you’ll need an API key.",
-          "",
-          "OpenClaw uses Brave Search for the `web_search` tool. Without a Brave Search API key, web search won’t work.",
-          "",
-          "Set it up interactively:",
-          `- Run: ${formatCliCommand("openclaw configure --section web")}`,
-          "- Enable web_search and paste your Brave Search API key",
-          "",
-          "Alternative: set BRAVE_API_KEY in the Gateway environment (no config changes).",
+          `Provider: ${label}`,
+          ...(keySource ? [keySource] : []),
           "Docs: https://docs.openclaw.ai/tools/web",
         ].join("\n"),
-    "Web search (optional)",
-  );
+        "Web search",
+      );
+    } else if (!hasKey) {
+      await prompter.note(
+        [
+          `Provider ${label} is selected but no API key was found.`,
+          "web_search will not work until a key is added.",
+          `  ${formatCliCommand("openclaw configure --section web")}`,
+          "",
+          `Get your key at: ${entry?.signupUrl ?? "https://docs.openclaw.ai/tools/web"}`,
+          "Docs: https://docs.openclaw.ai/tools/web",
+        ].join("\n"),
+        "Web search",
+      );
+    } else {
+      await prompter.note(
+        [
+          `Web search (${label}) is configured but disabled.`,
+          `Re-enable: ${formatCliCommand("openclaw configure --section web")}`,
+          "",
+          "Docs: https://docs.openclaw.ai/tools/web",
+        ].join("\n"),
+        "Web search",
+      );
+    }
+  } else {
+    // Legacy configs may have a working key (e.g. apiKey or BRAVE_API_KEY) without
+    // an explicit provider. Runtime auto-detects these, so avoid saying "skipped".
+    const { SEARCH_PROVIDER_OPTIONS, hasExistingKey, hasKeyInEnv } =
+      await import("../commands/onboard-search.js");
+    const legacyDetected = SEARCH_PROVIDER_OPTIONS.find(
+      (e) => hasExistingKey(nextConfig, e.value) || hasKeyInEnv(e),
+    );
+    if (legacyDetected) {
+      await prompter.note(
+        [
+          `Web search is available via ${legacyDetected.label} (auto-detected).`,
+          "Docs: https://docs.openclaw.ai/tools/web",
+        ].join("\n"),
+        "Web search",
+      );
+    } else {
+      await prompter.note(
+        [
+          "Web search was skipped. You can enable it later:",
+          `  ${formatCliCommand("openclaw configure --section web")}`,
+          "",
+          "Docs: https://docs.openclaw.ai/tools/web",
+        ].join("\n"),
+        "Web search",
+      );
+    }
+  }
 
   await prompter.note(
     'What now: https://openclaw.ai/showcase ("What People Are Building").',
