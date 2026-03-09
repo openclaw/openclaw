@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
-import { buildNetworkFlag, type NetworkMode } from "./network-isolation.js";
+import type { NetworkMode } from "../types.js";
+import { buildNetworkFlag } from "./network-isolation.js";
 
 describe("network-isolation", () => {
   describe("buildNetworkFlag", () => {
@@ -11,8 +12,8 @@ describe("network-isolation", () => {
       expect(buildNetworkFlag("bridge")).toEqual(["--network=bridge"]);
     });
 
-    it("builds --network flag for custom network name", () => {
-      expect(buildNetworkFlag("my-custom-net")).toEqual(["--network=my-custom-net"]);
+    it('builds --network=host for "host" mode', () => {
+      expect(buildNetworkFlag("host")).toEqual(["--network=host"]);
     });
 
     it("accepts NetworkMode type values", () => {
