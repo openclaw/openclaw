@@ -40,10 +40,14 @@ describe("normalizeGoogleBaseUrl", () => {
   });
 
   it.each([
-    // custom proxy without googleapis domain – leave as-is
+    // custom proxy without googleapis domain – leave completely as-is,
+    // including any trailing slashes
     "https://my-proxy.example.com/gemini",
+    "https://my-proxy.example.com/gemini/",
     "https://openai.example.com/v1",
     "http://localhost:4000",
+    // look-alike domain must not be treated as canonical googleapis
+    "https://generativelanguage.googleapis.com.evil.com",
   ])("does not modify non-googleapis base URLs: %s", (url) => {
     expect(normalizeGoogleBaseUrl(url)).toBe(url);
   });
