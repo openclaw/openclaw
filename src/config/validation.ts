@@ -32,6 +32,11 @@ type AllowedValuesCollection = {
   incomplete: boolean;
   hasValues: boolean;
 };
+type IssueScore = {
+  hard: number;
+  unknown: number;
+  total: number;
+};
 
 type UnknownKeyIssue = {
   path: string;
@@ -145,14 +150,78 @@ function collectUnknownKeyIssuesFromIssue(
     return;
   }
 
+  // Evaluate only the most plausible union branch. Collecting unknown keys
+  // from every branch can strip fields that are valid in the intended branch
+  // (for example bindings[].acp when route/acp union branches both fail).
+  const selectedBranch = selectBestUnionIssueBranch(nested);
+  if (!selectedBranch) {
+    return;
+  }
+  for (const nestedIssue of selectedBranch) {
+    collectUnknownKeyIssuesFromIssue(nestedIssue, collected, effectivePathSegments);
+  }
+}
+
+function addIssueScore(left: IssueScore, right: IssueScore): IssueScore {
+  return {
+    hard: left.hard + right.hard,
+    unknown: left.unknown + right.unknown,
+    total: left.total + right.total,
+  };
+}
+
+function compareIssueScore(a: IssueScore, b: IssueScore): number {
+  if (a.hard !== b.hard) {
+    return a.hard - b.hard;
+  }
+  if (a.unknown !== b.unknown) {
+    return a.unknown - b.unknown;
+  }
+  return a.total - b.total;
+}
+
+function scoreIssueForUnknownKeyStripping(issue: unknown): IssueScore {
+  const record = toIssueRecord(issue);
+  const code = typeof record?.code === "string" ? record.code : "";
+  if (code === "unrecognized_keys") {
+    return { hard: 0, unknown: 1, total: 1 };
+  }
+  if (code === "invalid_union") {
+    const nested = record?.errors;
+    if (!Array.isArray(nested) || nested.length === 0) {
+      return { hard: 1, unknown: 0, total: 1 };
+    }
+    const selectedBranch = selectBestUnionIssueBranch(nested);
+    if (!selectedBranch) {
+      return { hard: 1, unknown: 0, total: 1 };
+    }
+    return scoreIssueListForUnknownKeyStripping(selectedBranch);
+  }
+  return { hard: 1, unknown: 0, total: 1 };
+}
+
+function scoreIssueListForUnknownKeyStripping(issues: ReadonlyArray<unknown>): IssueScore {
+  let score: IssueScore = { hard: 0, unknown: 0, total: 0 };
+  for (const issue of issues) {
+    score = addIssueScore(score, scoreIssueForUnknownKeyStripping(issue));
+  }
+  return score;
+}
+
+function selectBestUnionIssueBranch(nested: unknown[]): ReadonlyArray<unknown> | null {
+  let bestBranch: ReadonlyArray<unknown> | null = null;
+  let bestScore: IssueScore | null = null;
   for (const branch of nested) {
     if (!Array.isArray(branch) || branch.length === 0) {
       continue;
     }
-    for (const nestedIssue of branch) {
-      collectUnknownKeyIssuesFromIssue(nestedIssue, collected, effectivePathSegments);
+    const branchScore = scoreIssueListForUnknownKeyStripping(branch);
+    if (!bestScore || compareIssueScore(branchScore, bestScore) < 0) {
+      bestScore = branchScore;
+      bestBranch = branch;
     }
   }
+  return bestBranch;
 }
 
 function resolveIssuePathObject(

@@ -76,6 +76,42 @@ describe("config validation fail-closed behavior", () => {
     );
   });
 
+  it("does not strip valid keys from non-selected union branches", async () => {
+    await withTempHomeConfig(
+      {
+        agents: { list: [{ id: "main" }] },
+        bindings: [
+          {
+            type: "acp",
+            agentId: "main",
+            match: {
+              channel: "discord",
+              peer: { kind: "direct", id: "user-1" },
+            },
+            acp: {
+              mode: "persistent",
+            },
+            acpp: true,
+          },
+        ],
+      },
+      async () => {
+        const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+        const cfg = loadConfig();
+        const binding = cfg.bindings?.[0] as {
+          acp?: { mode?: string };
+          acpp?: unknown;
+        };
+        expect(binding?.acp?.mode).toBe("persistent");
+        expect(binding).not.toHaveProperty("acpp");
+        const warnedText = warnSpy.mock.calls.map((call) => String(call[0] ?? "")).join("\n");
+        expect(warnedText.toLowerCase()).toContain("unknown config key ignored");
+        expect(warnedText).toContain("bindings.0");
+        expect(warnedText).toContain('"acpp"');
+      },
+    );
+  });
+
   it("still throws INVALID_CONFIG for invalid known fields", async () => {
     await withTempHomeConfig(
       {
