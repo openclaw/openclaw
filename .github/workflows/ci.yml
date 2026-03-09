@@ -323,11 +323,17 @@ jobs:
           if [ -n "$BASE_BRANCH" ]; then
             git fetch --no-tags --depth=50 origin "$BASE_BRANCH" || true
             if git rev-parse --verify "FETCH_HEAD^{commit}" >/dev/null 2>&1; then
-              BASE="$(git merge-base HEAD FETCH_HEAD)"
+              MERGE_BASE="$(git merge-base HEAD FETCH_HEAD 2>/dev/null || true)"
+              if [ -n "$MERGE_BASE" ]; then
+                BASE="$MERGE_BASE"
+              fi
             fi
           fi
           if [ -z "$BASE" ] && [ -n "${PR_BASE_SHA:-}" ] && git rev-parse --verify "${PR_BASE_SHA}^{commit}" >/dev/null 2>&1; then
-            BASE="$(git merge-base HEAD "$PR_BASE_SHA")"
+            MERGE_BASE="$(git merge-base HEAD "$PR_BASE_SHA" 2>/dev/null || true)"
+            if [ -n "$MERGE_BASE" ]; then
+              BASE="$MERGE_BASE"
+            fi
           fi
 
           changed_files=()

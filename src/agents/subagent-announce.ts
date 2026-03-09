@@ -1461,7 +1461,12 @@ export async function runSubagentAnnounceFlow(params: {
       signal: params.signal,
     });
     didAnnounce = delivery.delivered;
-    if (params.wakeParentOnCompletion === true && didAnnounce && delivery.path === "direct") {
+    if (
+      params.wakeParentOnCompletion === true &&
+      requesterIsSubagent &&
+      didAnnounce &&
+      delivery.path === "direct"
+    ) {
       const wakeText = `Subagent completed: ${taskLabel} (${outcome.status})`;
       const queued = enqueueSystemEvent(wakeText, {
         sessionKey: targetRequesterSessionKey,

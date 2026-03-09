@@ -300,12 +300,12 @@ describe("subagent announce formatting", () => {
     expect(call?.params?.internalEvents?.[0]?.taskLabel).toBe("do thing");
   });
 
-  it("optionally wakes the parent session on settled completion", async () => {
+  it("optionally wakes an internal parent session on settled completion", async () => {
     await runSubagentAnnounceFlow({
       childSessionKey: "agent:main:subagent:wake-test",
       childRunId: "run-wake-1",
-      requesterSessionKey: "agent:main:main",
-      requesterDisplayKey: "main",
+      requesterSessionKey: "agent:main:subagent:orchestrator",
+      requesterDisplayKey: "agent:main:subagent:orchestrator",
       ...defaultOutcomeAnnounce,
       wakeParentOnCompletion: true,
     });
@@ -313,14 +313,14 @@ describe("subagent announce formatting", () => {
     expect(enqueueSystemEventMock).toHaveBeenCalledWith(
       "Subagent completed: do thing (ok)",
       expect.objectContaining({
-        sessionKey: "agent:main:main",
+        sessionKey: "agent:main:subagent:orchestrator",
         contextKey: expect.stringContaining("subagent-completion:"),
       }),
     );
     expect(requestHeartbeatNowMock).toHaveBeenCalledWith(
       expect.objectContaining({
         reason: "subagent:subagent-task:completion",
-        sessionKey: "agent:main:main",
+        sessionKey: "agent:main:subagent:orchestrator",
       }),
     );
   });
@@ -385,6 +385,32 @@ describe("subagent announce formatting", () => {
       wakeParentOnCompletion: true,
     });
 
+    expect(enqueueSystemEventMock).not.toHaveBeenCalled();
+    expect(requestHeartbeatNowMock).not.toHaveBeenCalled();
+  });
+
+  it("does not wake a fallback direct target after requester retargets out of internal orchestration", async () => {
+    subagentRegistryMock.isSubagentSessionRunActive.mockReturnValue(false);
+    subagentRegistryMock.resolveRequesterForChildSession.mockReturnValue({
+      requesterSessionKey: "agent:main:main",
+      requesterOrigin: { channel: "whatsapp", to: "+1555", accountId: "acct-main" },
+    });
+    sessionStore = {
+      "agent:main:subagent:orchestrator": undefined as unknown as Record<string, unknown>,
+    };
+
+    await runSubagentAnnounceFlow({
+      childSessionKey: "agent:main:subagent:wake-test-retargeted",
+      childRunId: "run-wake-retargeted",
+      requesterSessionKey: "agent:main:subagent:orchestrator",
+      requesterDisplayKey: "agent:main:subagent:orchestrator",
+      ...defaultOutcomeAnnounce,
+      wakeParentOnCompletion: true,
+    });
+
+    const call = agentSpy.mock.calls[0]?.[0] as { params?: Record<string, unknown> };
+    expect(call?.params?.sessionKey).toBe("agent:main:main");
+    expect(call?.params?.deliver).toBe(true);
     expect(enqueueSystemEventMock).not.toHaveBeenCalled();
     expect(requestHeartbeatNowMock).not.toHaveBeenCalled();
   });
