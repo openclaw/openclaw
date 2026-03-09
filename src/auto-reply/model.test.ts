@@ -178,4 +178,33 @@ describe("extractModelDirective", () => {
       expect(result.hasDirective).toBe(false);
     });
   });
+
+  describe("Telegram @BotUsername suffix", () => {
+    it("recognizes /model@BotName with argument", () => {
+      const result = extractModelDirective("/model@MyBot gpt-5");
+      expect(result.hasDirective).toBe(true);
+      expect(result.rawModel).toBe("gpt-5");
+      expect(result.cleaned).toBe("");
+    });
+
+    it("recognizes /model@BotName without argument", () => {
+      const result = extractModelDirective("/model@MyBot");
+      expect(result.hasDirective).toBe(true);
+      expect(result.cleaned).toBe("");
+    });
+
+    it("recognizes alias with @BotName suffix", () => {
+      const result = extractModelDirective("/opus@MyBot", {
+        aliases: ["opus"],
+      });
+      expect(result.hasDirective).toBe(true);
+      expect(result.rawModel).toBe("opus");
+    });
+
+    it("recognizes /model@BotName mid-message", () => {
+      const result = extractModelDirective("switch to /model@MyBot gpt-5 please");
+      expect(result.hasDirective).toBe(true);
+      expect(result.rawModel).toBe("gpt-5");
+    });
+  });
 });
