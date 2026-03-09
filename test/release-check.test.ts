@@ -155,7 +155,9 @@ describe("collectBundledExtensionManifestErrors", () => {
   });
 });
 
-describe("collectSkillShellScriptExecutableErrors", () => {
+// Windows doesn't support Unix permission bits — chmod 0o755 is a no-op and
+// statSync().mode never reports execute bits, so these tests are meaningless there.
+describe.skipIf(process.platform === "win32")("collectSkillShellScriptExecutableErrors", () => {
   it("flags non-executable shell scripts under skills/*/scripts", () => {
     const root = mkdtempSync(join(tmpdir(), "openclaw-release-check-"));
     const scriptPath = join(root, "skills", "openai-whisper-api", "scripts", "transcribe.sh");

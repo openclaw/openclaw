@@ -166,6 +166,11 @@ export function collectBundledExtensionRootDependencyGapErrors(params: {
 }
 
 export function collectSkillShellScriptExecutableErrors(rootDir = resolve(".")): string[] {
+  // Windows doesn't support Unix permission bits — chmod has no effect and
+  // statSync().mode & 0o111 is always 0.  Skip the check entirely on Windows.
+  if (process.platform === "win32") {
+    return [];
+  }
   const skillsDir = join(rootDir, "skills");
   const errors: string[] = [];
   let entries: Dirent[];
