@@ -18,6 +18,7 @@ import {
   loadWorkspaceSkillEntries,
 } from "../agents/skills/workspace.js";
 import { buildSystemPromptParams } from "../agents/system-prompt-params.js";
+import { resolveHeartbeatPrompt } from "../auto-reply/heartbeat.js";
 import { getMachineDisplayName } from "../infra/machine-name.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import type { RuntimeEnv } from "../runtime.js";
@@ -98,7 +99,7 @@ export async function agentsViewSystemPromptCommand(
 
   const isDefaultAgent = agentId === normalizeAgentId(resolveDefaultAgentId(cfg));
   const heartbeatPrompt = isDefaultAgent
-    ? (cfg.agents?.defaults?.heartbeat?.prompt ?? undefined)
+    ? resolveHeartbeatPrompt(cfg.agents?.defaults?.heartbeat?.prompt)
     : undefined;
 
   const prompt = buildEmbeddedSystemPrompt({
