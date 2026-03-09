@@ -60,6 +60,7 @@ export function checkBrowserOrigin(params: {
   const requestHostname = resolveHostName(requestHost);
   const requestForwardedHostname = resolveHostName(requestForwardedHost);
   if (
+    params.isLocalClient === true &&
     isLoopbackHost(parsedOrigin.hostname) &&
     (isLoopbackHost(requestHostname) || isLoopbackHost(requestForwardedHostname))
   ) {

@@ -432,6 +432,7 @@ export function attachGatewayWsMessageHandler(params: {
             allowHostHeaderOriginFallback:
               configSnapshot.gateway?.controlUi?.dangerouslyAllowHostHeaderOriginFallback ===
                 true || allowProxyHeaderOriginFallback,
+            isLocalClient,
           });
           if (!originCheck.ok) {
             const errorMessage =

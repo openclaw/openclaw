@@ -59,6 +59,16 @@ describe("checkBrowserOrigin", () => {
     expect(result.ok).toBe(false);
   });
 
+  it("rejects spoofed forwarded loopback hosts when request is not local", () => {
+    const result = checkBrowserOrigin({
+      requestHost: "gateway.example.com:18789",
+      requestForwardedHost: "127.0.0.1:18789",
+      origin: "http://localhost:5173",
+      isLocalClient: false,
+    });
+    expect(result.ok).toBe(false);
+  });
+
   it("accepts allowlisted origins", () => {
     const result = checkBrowserOrigin({
       requestHost: "gateway.example.com:18789",
