@@ -35,6 +35,9 @@ function mergeDeep<T>(base: T, overrides: DeepPartial<T>): T {
 export function createPluginRuntimeMock(overrides: DeepPartial<PluginRuntime> = {}): PluginRuntime {
   const base: PluginRuntime = {
     version: "1.0.0-test",
+    agents: {
+      runEmbeddedPiAgent: vi.fn() as unknown as PluginRuntime["agents"]["runEmbeddedPiAgent"],
+    },
     config: {
       loadConfig: vi.fn(() => ({})) as unknown as PluginRuntime["config"]["loadConfig"],
       writeConfigFile: vi.fn() as unknown as PluginRuntime["config"]["writeConfigFile"],
