@@ -795,22 +795,20 @@ export async function compactEmbeddedPiSessionDirect(
         const messageCountCompactionInput = messageCountOriginal;
 
         // Attempt compaction; if it times out, truncate oversized tool results and retry once.
-        // NOTE: session.compact() has no AbortSignal seam, so a timed-out first compaction
-        // keeps running in the background and may call agent.replaceMessages() with stale
-        // messages after the retry below overwrites session state. We suppress its rejection
-        // to prevent an unhandled-rejection crash and log the race risk, but full serialization
-        // requires upstream cancellation support in session.compact(). (TODO: remove this note
-        // when @mariozechner/pi-coding-agent exposes an AbortSignal on compact().)
+        // On timeout we call session.abortCompaction() so the dangling first compact skips its
+        // agent.replaceMessages() call (agent-session.js:1175 guards it behind an abort-signal
+        // check), preventing stale messages from corrupting session state after the retry below.
+        // We also suppress the resulting "Compaction cancelled" rejection via .catch() to avoid
+        // an unhandled-rejection crash. Requires @mariozechner/pi-coding-agent >=0.55.3.
         let result: Awaited<ReturnType<typeof session.compact>>;
         let retried = false;
-        // Track the raw compact promise so we can suppress its dangling rejection on timeout.
         let backgroundCompact: Promise<unknown> | undefined;
         try {
           result = await compactWithSafetyTimeout(() => {
             backgroundCompact = session.compact(params.customInstructions);
             return backgroundCompact as ReturnType<typeof session.compact>;
           });
-          backgroundCompact = undefined; // settled cleanly — no longer background
+          backgroundCompact = undefined; // settled cleanly
         } catch (firstErr) {
           const isTimeout =
             firstErr instanceof Error &&
@@ -820,9 +818,9 @@ export async function compactEmbeddedPiSessionDirect(
             backgroundCompact = undefined;
             throw firstErr;
           }
-          // Suppress the dangling first-compact promise so it does not become an unhandled
-          // rejection. Its eventual agent.replaceMessages() call may still race with the
-          // retry below; that is an inherent limitation of the current session API.
+          // Abort the timed-out first compact so it skips replaceMessages() (see comment above).
+          session.abortCompaction();
+          // Suppress the "Compaction cancelled" rejection to avoid an unhandled-rejection crash.
           backgroundCompact?.catch(() => {});
           backgroundCompact = undefined;
           // Timeout: truncate oversized tool results (large DOM responses) to reduce context,
