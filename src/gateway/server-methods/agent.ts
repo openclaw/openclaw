@@ -233,7 +233,7 @@ function dispatchAgentRunFromGateway(params: {
           result,
         );
         if (routed) {
-          params.context.log?.verbose?.(
+          params.context.logGateway.debug(
             `[A2A] Routed skill response to ${params.skillRouting.returnTo} (correlationId=${params.skillRouting.correlationId})`,
           );
         }
@@ -303,14 +303,16 @@ function sendSkillResponseToSession(
     // Deliver to the returnTo session via node-to-session messaging
     context.nodeSendToSession(returnToSessionKey, "skill_response", skillResponse);
 
-    context.log?.verbose?.(
+    context.logGateway.debug(
       `[A2A] Routed skill_response to ${returnToSessionKey}: correlationId=${correlationId}, status=${error ? "error" : "completed"}`,
     );
 
     return true;
   } catch (err_) {
     const err = typeof err_ === "string" ? err_ : JSON.stringify(err_ ?? "unknown error");
-    context.log?.error?.(`[A2A] Failed to route skill response to ${returnToSessionKey}: ${err}`);
+    context.logGateway.error(
+      `[A2A] Failed to route skill response to ${returnToSessionKey}: ${err}`,
+    );
     return false;
   }
 }
