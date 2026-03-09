@@ -26,7 +26,12 @@ export function registerBackupCommand(program: Command) {
     .option("--verify", "Verify the archive after writing it", false)
     .option("--only-config", "Back up only the active JSON config file", false)
     .option("--no-include-workspace", "Exclude workspace directories from the backup")
-    .option("--exclude <pattern>", "Exclude files matching pattern (can be repeated)", (val, arr) => arr.concat(val), [])
+    .option(
+      "--exclude <pattern>",
+      "Exclude files matching pattern (can be repeated)",
+      (val, arr) => arr.concat(val),
+      [],
+    )
     .option("--exclude-file <path>", "Read exclude patterns from file")
     .addHelpText(
       "after",

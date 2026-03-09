@@ -280,7 +280,7 @@ function remapArchiveEntryPath(params: {
 function matchesExcludePattern(filePath: string, pattern: string): boolean {
   // Simple glob matching for common patterns
   const normalizedPath = filePath.replace(/\\/g, "/");
-  
+
   // Handle wildcards (both * and ? work independently now)
   if (pattern.includes("*") || pattern.includes("?")) {
     // Escape regex special characters except * and ?
@@ -288,34 +288,39 @@ function matchesExcludePattern(filePath: string, pattern: string): boolean {
     const regex = new RegExp("^" + escaped.replace(/\*/g, ".*").replace(/\?/g, ".") + "$");
     return regex.test(normalizedPath) || regex.test(path.basename(normalizedPath));
   }
-  
+
   // Handle directory patterns (ending with /)
   if (pattern.endsWith("/")) {
     const dirPattern = pattern.slice(0, -1);
     return normalizedPath.includes(dirPattern + "/") || normalizedPath.includes(dirPattern + "\\");
   }
-  
+
   // Exact match or basename match (not substring to avoid false positives)
   return normalizedPath === pattern || path.basename(normalizedPath) === pattern;
 }
 
-function filterExcludedAssets(assets: BackupAsset[], excludePatterns: string[]): { included: BackupAsset[]; excluded: BackupAsset[] } {
+function filterExcludedAssets(
+  assets: BackupAsset[],
+  excludePatterns: string[],
+): { included: BackupAsset[]; excluded: BackupAsset[] } {
   if (!excludePatterns || excludePatterns.length === 0) {
     return { included: assets, excluded: [] };
   }
-  
+
   const included: BackupAsset[] = [];
   const excluded: BackupAsset[] = [];
-  
+
   for (const asset of assets) {
-    const isExcluded = excludePatterns.some(pattern => matchesExcludePattern(asset.sourcePath, pattern));
+    const isExcluded = excludePatterns.some((pattern) =>
+      matchesExcludePattern(asset.sourcePath, pattern),
+    );
     if (isExcluded) {
       excluded.push(asset);
     } else {
       included.push(asset);
     }
   }
-  
+
   return { included, excluded };
 }
 
@@ -325,8 +330,8 @@ async function loadExcludePatternsFromFile(filePath: string, required = false): 
     // Filter out empty lines and comments
     return content
       .split("\n")
-      .map(line => line.trim())
-      .filter(line => line && !line.startsWith("#"));
+      .map((line) => line.trim())
+      .filter((line) => line && !line.startsWith("#"));
   } catch (err) {
     if (required) {
       throw new Error(`Failed to load exclude file: ${filePath}`, { cause: err });
@@ -338,7 +343,7 @@ async function loadExcludePatternsFromFile(filePath: string, required = false): 
 async function loadIgnoreFilesFromWorkspaces(workspaceDirs: string[]): Promise<string[]> {
   const patterns: string[] = [];
   const ignoreFiles = [".gitignore", ".openclawignore"];
-  
+
   for (const workspaceDir of workspaceDirs) {
     for (const ignoreFile of ignoreFiles) {
       const filePath = path.join(workspaceDir, ignoreFile);
@@ -359,7 +364,7 @@ async function loadIgnoreFilesFromWorkspaces(workspaceDirs: string[]): Promise<s
       }
     }
   }
-  
+
   return patterns;
 }
 
@@ -375,13 +380,13 @@ export async function backupCreateCommand(
 
   // Load exclude patterns
   let excludePatterns = opts.exclude ?? [];
-  
+
   // Load from specified exclude file
   if (opts.excludeFile) {
     const filePatterns = await loadExcludePatternsFromFile(opts.excludeFile, true);
     excludePatterns = [...excludePatterns, ...filePatterns];
   }
-  
+
   // Auto-load .gitignore and .openclawignore from workspace directories
   const workspacePatterns = await loadIgnoreFilesFromWorkspaces(plan.workspaceDirs);
   excludePatterns = [...excludePatterns, ...workspacePatterns];
@@ -425,16 +430,16 @@ export async function backupCreateCommand(
   }
 
   const createdAt = new Date(nowMs).toISOString();
-  
+
   // Add excluded assets to skipped list
-  const skippedFromExclude = excludedAssets.map(asset => ({
+  const skippedFromExclude = excludedAssets.map((asset) => ({
     kind: asset.kind,
     sourcePath: asset.sourcePath,
     displayPath: asset.displayPath,
     reason: "excluded",
     coveredBy: undefined as string | undefined,
   }));
-  
+
   const result: BackupCreateResult = {
     createdAt,
     archiveRoot,
@@ -474,7 +479,7 @@ export async function backupCreateCommand(
         // Always include manifest
         if (entryPath === manifestPath) return true;
         // Check against exclude patterns
-        return !excludePatterns.some(pattern => matchesExcludePattern(entryPath, pattern));
+        return !excludePatterns.some((pattern) => matchesExcludePattern(entryPath, pattern));
       };
 
       await tar.c(
