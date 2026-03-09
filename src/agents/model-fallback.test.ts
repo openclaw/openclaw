@@ -536,7 +536,9 @@ describe("runWithModelFallback", () => {
       });
 
       expect(result.result).toBe("ok");
-      const warning = warnSpy.mock.calls[0]?.[0] as string;
+      const warning = warnSpy.mock.calls
+        .map((call) => call[0] as string)
+        .find((value) => value.includes('Model "openai/gpt-6spoof" not found'));
       expect(warning).toContain('Model "openai/gpt-6spoof" not found');
       expect(warning).not.toContain("\u001B");
       expect(warning).not.toContain("\n");

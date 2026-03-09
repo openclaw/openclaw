@@ -553,6 +553,7 @@ export async function runCronIsolatedAgentTurn(params: {
         cfg: cfgWithAgentDefaults,
         provider,
         model,
+        runId: cronSession.sessionEntry.sessionId,
         agentDir,
         fallbacksOverride:
           payloadFallbacks ?? resolveAgentModelFallbacksOverride(params.cfg, agentId),
