@@ -41,6 +41,7 @@ import type {
   PluginHookName,
   PluginHookHandlerMap,
   PluginHookRegistration as TypedPluginHookRegistration,
+  SearchProviderPlugin,
 } from "./types.js";
 
 export type PluginToolRegistration = {
@@ -99,6 +100,12 @@ export type PluginCommandRegistration = {
   source: string;
 };
 
+export type PluginSearchProviderRegistration = {
+  pluginId: string;
+  provider: SearchProviderPlugin;
+  source: string;
+};
+
 export type PluginRecord = {
   id: string;
   name: string;
@@ -119,6 +126,7 @@ export type PluginRecord = {
   cliCommands: string[];
   services: string[];
   commands: string[];
+  searchProviderIds: string[];
   httpRoutes: number;
   hookCount: number;
   configSchema: boolean;
@@ -138,6 +146,7 @@ export type PluginRegistry = {
   cliRegistrars: PluginCliRegistration[];
   services: PluginServiceRegistration[];
   commands: PluginCommandRegistration[];
+  searchProviders: PluginSearchProviderRegistration[];
   diagnostics: PluginDiagnostic[];
 };
 
@@ -178,6 +187,7 @@ export function createEmptyPluginRegistry(): PluginRegistry {
     cliRegistrars: [],
     services: [],
     commands: [],
+    searchProviders: [],
     diagnostics: [],
   };
 }
@@ -456,6 +466,35 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
     });
   };
 
+  const registerSearchProvider = (record: PluginRecord, provider: SearchProviderPlugin) => {
+    const id = typeof provider?.id === "string" ? provider.id.trim() : "";
+    if (!id) {
+      pushDiagnostic({
+        level: "error",
+        pluginId: record.id,
+        source: record.source,
+        message: "search provider registration missing id",
+      });
+      return;
+    }
+    const existing = registry.searchProviders.find((entry) => entry.provider.id === id);
+    if (existing) {
+      pushDiagnostic({
+        level: "error",
+        pluginId: record.id,
+        source: record.source,
+        message: `search provider already registered: ${id} (${existing.pluginId})`,
+      });
+      return;
+    }
+    record.searchProviderIds.push(id);
+    registry.searchProviders.push({
+      pluginId: record.id,
+      provider,
+      source: record.source,
+    });
+  };
+
   const registerCli = (
     record: PluginRecord,
     registrar: OpenClawPluginCliRegistrar,
@@ -596,6 +635,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       registerHttpRoute: (params) => registerHttpRoute(record, params),
       registerChannel: (registration) => registerChannel(record, registration),
       registerProvider: (provider) => registerProvider(record, provider),
+      registerSearchProvider: (provider) => registerSearchProvider(record, provider),
       registerGatewayMethod: (method, handler) => registerGatewayMethod(record, method, handler),
       registerCli: (registrar, opts) => registerCli(record, registrar, opts),
       registerService: (service) => registerService(record, service),
@@ -614,6 +654,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
     registerTool,
     registerChannel,
     registerProvider,
+    registerSearchProvider,
     registerGatewayMethod,
     registerCli,
     registerService,
