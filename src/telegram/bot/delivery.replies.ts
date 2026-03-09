@@ -178,7 +178,7 @@ async function sendPendingFollowUpText(params: {
   let sentAnyChunk = false;
   for (let i = 0; i < chunks.length; i += 1) {
     const chunk = chunks[i];
-    if (!chunk.html?.trim() && !chunk.text?.trim()) {
+    if (!chunk || (!chunk.html?.trim() && !chunk.text?.trim())) {
       logVerbose("telegram: skipping empty chunk in sendPendingFollowUpText");
       continue;
     }
@@ -240,11 +240,11 @@ async function sendTelegramVoiceFallbackText(opts: {
   let sentAnyChunk = false;
   for (let i = 0; i < chunks.length; i += 1) {
     const chunk = chunks[i];
-    if (!chunk.html?.trim() && !chunk.text?.trim()) {
+    if (!chunk || (!chunk.html?.trim() && !chunk.text?.trim())) {
       logVerbose("telegram: skipping empty chunk in sendTelegramVoiceFallbackText");
       continue;
     }
-    // Only apply reply reference, quote text, and buttons to the first sent chunk.
+    // Only apply reply reference and buttons to the first sent chunk.
     const replyToForChunk = !sentAnyChunk ? opts.replyToId : undefined;
     const messageId = await sendTelegramText(opts.bot, opts.chatId, chunk.html, opts.runtime, {
       replyToMessageId: replyToForChunk,

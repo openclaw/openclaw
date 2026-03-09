@@ -7,6 +7,8 @@ import {
 
 const TELEGRAM_NETWORK_ORIGIN = Symbol("openclaw.telegram.network-origin");
 
+export const EMPTY_TEXT_ERR_RE = /message text is empty|text must be non-empty/i;
+
 const RECOVERABLE_ERROR_CODES = new Set([
   "ECONNRESET",
   "ECONNREFUSED",
