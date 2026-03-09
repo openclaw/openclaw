@@ -55,7 +55,11 @@ import {
 } from "../../security/external-content.js";
 import { resolveCronDeliveryPlan } from "../delivery.js";
 import type { CronJob, CronRunOutcome, CronRunTelemetry } from "../types.js";
-import { dispatchCronDelivery, resolveCronDeliveryBestEffort } from "./delivery-dispatch.js";
+import {
+  dispatchCronDelivery,
+  matchesMessagingToolDeliveryTarget,
+  resolveCronDeliveryBestEffort,
+} from "./delivery-dispatch.js";
 import { resolveDeliveryTarget } from "./delivery-target.js";
 import {
   isHeartbeatOnlyResponse,
@@ -74,9 +78,10 @@ export type RunCronAgentTurnResult = {
   /** Last non-empty agent text output (not truncated). */
   outputText?: string;
   /**
-   * `true` when the cron runner already handled the run's delivery outcome.
-   * This now refers only to cron-owned delivery behavior, not ad hoc agent
-   * messaging. Callers can use it to distinguish delivered vs suppressed runs.
+   * `true` when the isolated runner already handled the run's user-visible
+   * delivery outcome. Cron-owned callers use this for cron delivery or
+   * explicit suppression; shared callers may also use it for a matching
+   * message-tool send that already reached the target.
    */
   delivered?: boolean;
   /**
@@ -138,18 +143,22 @@ function buildCronAgentDefaultsConfig(params: {
 
 type ResolvedCronDeliveryTarget = Awaited<ReturnType<typeof resolveDeliveryTarget>>;
 
+type IsolatedDeliveryContract = "cron-owned" | "shared";
+
 function resolveCronToolPolicy(params: {
   deliveryRequested: boolean;
   resolvedDelivery: ResolvedCronDeliveryTarget;
+  deliveryContract: IsolatedDeliveryContract;
 }) {
   return {
     // Only enforce an explicit message target when the cron delivery target
     // was successfully resolved. When resolution fails the agent should not
     // be blocked by a target it cannot satisfy (#27898).
     requireExplicitMessageTarget: params.deliveryRequested && params.resolvedDelivery.ok,
-    // Cron runs now always route user-facing delivery through the cron runner
-    // itself so jobs cannot silently bypass delivery policy with ad hoc sends.
-    disableMessageTool: true,
+    // Cron-owned runs always route user-facing delivery through the runner
+    // itself. Shared callers keep the previous behavior so non-cron paths do
+    // not silently lose the message tool when no explicit delivery is active.
+    disableMessageTool: params.deliveryContract === "cron-owned" ? true : params.deliveryRequested,
   };
 }
 
@@ -157,6 +166,7 @@ async function resolveCronDeliveryContext(params: {
   cfg: OpenClawConfig;
   job: CronJob;
   agentId: string;
+  deliveryContract: IsolatedDeliveryContract;
 }) {
   const deliveryPlan = resolveCronDeliveryPlan(params.job);
   const resolvedDelivery = await resolveDeliveryTarget(params.cfg, params.agentId, {
@@ -172,6 +182,7 @@ async function resolveCronDeliveryContext(params: {
     toolPolicy: resolveCronToolPolicy({
       deliveryRequested: deliveryPlan.requested,
       resolvedDelivery,
+      deliveryContract: params.deliveryContract,
     }),
   };
 }
@@ -196,6 +207,7 @@ export async function runCronIsolatedAgentTurn(params: {
   sessionKey: string;
   agentId?: string;
   lane?: string;
+  deliveryContract?: IsolatedDeliveryContract;
 }): Promise<RunCronAgentTurnResult> {
   const abortSignal = params.abortSignal ?? params.signal;
   const isAborted = () => abortSignal?.aborted === true;
@@ -206,6 +218,7 @@ export async function runCronIsolatedAgentTurn(params: {
       : "cron: job execution timed out";
   };
   const isFastTestEnv = process.env.OPENCLAW_TEST_FAST === "1";
+  const deliveryContract = params.deliveryContract ?? "cron-owned";
   const defaultAgentId = resolveDefaultAgentId(params.cfg);
   const requestedAgentId =
     typeof params.agentId === "string" && params.agentId.trim()
@@ -421,6 +434,7 @@ export async function runCronIsolatedAgentTurn(params: {
     cfg: cfgWithAgentDefaults,
     job: params.job,
     agentId,
+    deliveryContract,
   });
 
   const { formattedTime, timeLine } = resolveCronStyleNow(params.cfg, now);
@@ -802,6 +816,17 @@ export async function runCronIsolatedAgentTurn(params: {
   // Skip delivery for heartbeat-only responses (HEARTBEAT_OK with no real content).
   const ackMaxChars = resolveHeartbeatAckMaxChars(agentCfg);
   const skipHeartbeatDelivery = deliveryRequested && isHeartbeatOnlyResponse(payloads, ackMaxChars);
+  const skipMessagingToolDelivery =
+    deliveryContract === "shared" &&
+    deliveryRequested &&
+    finalRunResult.didSendViaMessagingTool === true &&
+    (finalRunResult.messagingToolSentTargets ?? []).some((target) =>
+      matchesMessagingToolDeliveryTarget(target, {
+        channel: resolvedDelivery.channel,
+        to: resolvedDelivery.to,
+        accountId: resolvedDelivery.accountId,
+      }),
+    );
   const deliveryResult = await dispatchCronDelivery({
     cfg: params.cfg,
     cfgWithAgentDefaults,
@@ -816,6 +841,7 @@ export async function runCronIsolatedAgentTurn(params: {
     resolvedDelivery,
     deliveryRequested,
     skipHeartbeatDelivery,
+    skipMessagingToolDelivery,
     deliveryBestEffort,
     deliveryPayloadHasStructuredContent,
     deliveryPayloads,
