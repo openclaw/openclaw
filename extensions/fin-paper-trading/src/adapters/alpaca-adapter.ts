@@ -131,7 +131,9 @@ export class AlpacaAdapter implements MarketAdapter {
     ]);
 
     if (!accountRes.ok) {
-      throw new Error(`Alpaca getAccountState failed: ${accountRes.status} ${await accountRes.text()}`);
+      throw new Error(
+        `Alpaca getAccountState failed: ${accountRes.status} ${await accountRes.text()}`,
+      );
     }
 
     const account = (await accountRes.json()) as {

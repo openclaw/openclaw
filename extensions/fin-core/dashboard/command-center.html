@@ -1125,7 +1125,7 @@
               '<div class="settings-section"><div class="settings-section__title">Exchange Connections</div>' +
               '<div id="exchangeList"></div>' +
               '<button type="button" class="exch-add-btn" onclick="addExchangeRow()">+ Add Exchange</button>' +
-              '</div>' +
+              "</div>" +
               '<div class="settings-section"><div class="settings-section__title">Risk Controls</div>' +
               '<div class="fg"><label class="fg__label">Trading Enabled</label>' +
               '<label class="toggle-switch"><input type="checkbox" name="enabled" id="s_enabled"><span class="toggle-slider"></span></label></div>' +
@@ -1202,15 +1202,27 @@
             return val === ex.exchange ? " selected" : "";
           };
           // Only OKX requires passphrase
-          var ppDisplay = ex.exchange === "okx" ? "" : " style=\"display:none\"";
+          var ppDisplay = ex.exchange === "okx" ? "" : ' style="display:none"';
           return (
-            '<div class="exch-row" id="exchRow' + idx + '">' +
+            '<div class="exch-row" id="exchRow' +
+            idx +
+            '">' +
             '<div class="exch-row__head">' +
-            '<select onchange="onExchTypeChange(' + idx + ',this.value)" style="width:100%">' +
-            '<option value="binance"' + sel("binance") + ">Binance</option>" +
-            '<option value="okx"' + sel("okx") + ">OKX</option>" +
-            '<option value="bybit"' + sel("bybit") + ">Bybit</option>" +
-            '<option value="hyperliquid"' + sel("hyperliquid") + ">Hyperliquid</option>" +
+            '<select onchange="onExchTypeChange(' +
+            idx +
+            ',this.value)" style="width:100%">' +
+            '<option value="binance"' +
+            sel("binance") +
+            ">Binance</option>" +
+            '<option value="okx"' +
+            sel("okx") +
+            ">OKX</option>" +
+            '<option value="bybit"' +
+            sel("bybit") +
+            ">Bybit</option>" +
+            '<option value="hyperliquid"' +
+            sel("hyperliquid") +
+            ">Hyperliquid</option>" +
             "</select>" +
             '<div class="exch-row__actions">' +
             '<button type="button" class="exch-row__btn exch-row__btn--test" onclick="testExchange(' +
@@ -1222,20 +1234,38 @@
             "</div></div>" +
             '<div class="exch-row__fields">' +
             '<div class="fg fg--full"><label class="fg__label">API Key</label>' +
-            '<input name="exchKey' + idx + '" value="' + _escAttr(ex.apiKey || "") +
+            '<input name="exchKey' +
+            idx +
+            '" value="' +
+            _escAttr(ex.apiKey || "") +
             '" placeholder="Enter API key" style="width:100%"></div>' +
             '<div class="fg fg--full"><label class="fg__label">Secret</label>' +
-            '<input name="exchSecret' + idx + '" type="password" value="' +
-            _escAttr(ex.secret || "") + '" placeholder="Enter secret" style="width:100%"></div>' +
-            '<div class="fg fg--full" id="exchPpWrap' + idx + '"' + ppDisplay + ">" +
+            '<input name="exchSecret' +
+            idx +
+            '" type="password" value="' +
+            _escAttr(ex.secret || "") +
+            '" placeholder="Enter secret" style="width:100%"></div>' +
+            '<div class="fg fg--full" id="exchPpWrap' +
+            idx +
+            '"' +
+            ppDisplay +
+            ">" +
             '<label class="fg__label">Passphrase (OKX only)</label>' +
-            '<input name="exchPp' + idx + '" type="password" value="' +
-            _escAttr(ex.passphrase || "") + '" placeholder="Passphrase" style="width:100%"></div>' +
+            '<input name="exchPp' +
+            idx +
+            '" type="password" value="' +
+            _escAttr(ex.passphrase || "") +
+            '" placeholder="Passphrase" style="width:100%"></div>' +
             "</div>" +
             '<label class="exch-row__testnet-label">' +
-            '<input type="checkbox" name="exchTestnet' + idx + '"' +
-            (ex.testnet ? " checked" : "") + "> Testnet / Sandbox</label>" +
-            '<div class="exch-row__status" id="exchStatus' + idx + '"></div>' +
+            '<input type="checkbox" name="exchTestnet' +
+            idx +
+            '"' +
+            (ex.testnet ? " checked" : "") +
+            "> Testnet / Sandbox</label>" +
+            '<div class="exch-row__status" id="exchStatus' +
+            idx +
+            '"></div>' +
             "</div>"
           );
         }

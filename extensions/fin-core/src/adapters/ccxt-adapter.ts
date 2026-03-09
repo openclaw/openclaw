@@ -66,7 +66,10 @@ export class CcxtAdapter implements UnifiedExchangeAdapter {
       status: mapCcxtStatus(String(raw.status ?? "open")),
       timestamp: Number(raw.timestamp ?? Date.now()),
       fee: raw.fee
-        ? { cost: Number((raw.fee as Record<string, unknown>).cost ?? 0), currency: String((raw.fee as Record<string, unknown>).currency ?? "USDT") }
+        ? {
+            cost: Number((raw.fee as Record<string, unknown>).cost ?? 0),
+            currency: String((raw.fee as Record<string, unknown>).currency ?? "USDT"),
+          }
         : undefined,
     };
   }

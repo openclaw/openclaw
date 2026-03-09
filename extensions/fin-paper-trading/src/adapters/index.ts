@@ -1,3 +1,7 @@
+import { AlpacaAdapter } from "./alpaca-adapter.js";
+import { CcxtAdapter } from "./ccxt-adapter.js";
+import { FutuAdapter } from "./futu-adapter.js";
+import { OpenCtpAdapter } from "./openctp-adapter.js";
 /**
  * Market adapter factory and re-exports.
  *
@@ -6,10 +10,6 @@
  * account state retrieval across crypto, US equity, HK equity, and CN A-share markets.
  */
 import type { MarketAdapter } from "./types.js";
-import { AlpacaAdapter } from "./alpaca-adapter.js";
-import { CcxtAdapter } from "./ccxt-adapter.js";
-import { FutuAdapter } from "./futu-adapter.js";
-import { OpenCtpAdapter } from "./openctp-adapter.js";
 
 export type {
   MarketAdapter,

@@ -1,18 +1,23 @@
 import { describe, expect, it, vi } from "vitest";
-import type { ExchangeConfig, RiskEvaluation } from "../types.js";
 import { ExchangeRegistry } from "../exchange-registry.js";
 import { RiskController } from "../risk-controller.js";
+import type { ExchangeConfig, RiskEvaluation } from "../types.js";
 import { registerTradingTools } from "./trading-tools.js";
 
 // ── Helpers ──
 
 /** Capture registered tools from api.registerTool calls. */
 function createToolCapture() {
-  const tools = new Map<string, { execute: (id: string, params: Record<string, unknown>) => Promise<unknown> }>();
+  const tools = new Map<
+    string,
+    { execute: (id: string, params: Record<string, unknown>) => Promise<unknown> }
+  >();
   const api = {
     runtime: { services: new Map() },
     registerTool: vi.fn((def: Record<string, unknown>, _opts: unknown) => {
-      tools.set(def.name as string, { execute: def.execute as (id: string, params: Record<string, unknown>) => Promise<unknown> });
+      tools.set(def.name as string, {
+        execute: def.execute as (id: string, params: Record<string, unknown>) => Promise<unknown>,
+      });
     }),
   };
   return { api, tools };
@@ -60,10 +65,7 @@ function riskDisabled(): RiskController {
 
 function exchangeConfigs(): Map<string, ExchangeConfig> {
   return new Map([
-    [
-      "binance-test",
-      { exchange: "binance" as const, apiKey: "k", secret: "s", testnet: true },
-    ],
+    ["binance-test", { exchange: "binance" as const, apiKey: "k", secret: "s", testnet: true }],
   ]);
 }
 
@@ -85,7 +87,14 @@ vi.mock("ccxt", () => {
 
       // fin_place_order calls fetchTicker + createOrder
       async fetchTicker() {
-        return { last: 50000, bid: 49990, ask: 50010, quoteVolume: 1e9, percentage: 1.2, timestamp: Date.now() };
+        return {
+          last: 50000,
+          bid: 49990,
+          ask: 50010,
+          quoteVolume: 1e9,
+          percentage: 1.2,
+          timestamp: Date.now(),
+        };
       }
 
       async createOrder(

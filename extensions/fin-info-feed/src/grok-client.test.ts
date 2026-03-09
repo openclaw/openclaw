@@ -124,19 +124,22 @@ describe("parseAnalysisResponse", () => {
   });
 
   it("extracts JSON array embedded in other text", () => {
-    const raw = 'Here are the results: [{"handle":"embedded","title":"Found","score":7}] and more text';
+    const raw =
+      'Here are the results: [{"handle":"embedded","title":"Found","score":7}] and more text';
     const items = parseAnalysisResponse(raw, [], "x_search");
     expect(items).toHaveLength(1);
     expect(items[0]!.handle).toBe("embedded");
   });
 
   it("truncates long title and summary", () => {
-    const raw = JSON.stringify([{
-      handle: "test",
-      title: "A".repeat(300),
-      summary: "B".repeat(600),
-      score: 5,
-    }]);
+    const raw = JSON.stringify([
+      {
+        handle: "test",
+        title: "A".repeat(300),
+        summary: "B".repeat(600),
+        score: 5,
+      },
+    ]);
     const items = parseAnalysisResponse(raw, [], "x_search");
     expect(items[0]!.title.length).toBeLessThanOrEqual(200);
     expect(items[0]!.summary.length).toBeLessThanOrEqual(500);
@@ -199,9 +202,9 @@ describe("searchKolBatch", () => {
 
   it("throws for more than 10 handles", async () => {
     const handles = Array.from({ length: 11 }, (_, i) => `user${i}`);
-    await expect(
-      searchKolBatch({ apiKey: "key", model: "m", handles }),
-    ).rejects.toThrow("max 10 handles");
+    await expect(searchKolBatch({ apiKey: "key", model: "m", handles })).rejects.toThrow(
+      "max 10 handles",
+    );
   });
 
   it("throws on API error response", async () => {
@@ -212,9 +215,9 @@ describe("searchKolBatch", () => {
     });
     vi.stubGlobal("fetch", fetchMock);
 
-    await expect(
-      searchKolBatch({ apiKey: "key", model: "m", handles: ["test"] }),
-    ).rejects.toThrow("xAI API error (429)");
+    await expect(searchKolBatch({ apiKey: "key", model: "m", handles: ["test"] })).rejects.toThrow(
+      "xAI API error (429)",
+    );
   });
 });
 
@@ -263,7 +266,10 @@ describe("scanAllKols", () => {
 
     // Should be 2 unique handles → 1 batch
     expect(fetchMock).toHaveBeenCalledTimes(1);
-    const body = JSON.parse((fetchMock.mock.calls[0]![1] as RequestInit).body as string) as Record<string, unknown>;
+    const body = JSON.parse((fetchMock.mock.calls[0]![1] as RequestInit).body as string) as Record<
+      string,
+      unknown
+    >;
     const tools = body.tools as Array<Record<string, unknown>>;
     expect(tools[0]!.allowed_x_handles).toEqual(["elonmusk", "other"]);
   });

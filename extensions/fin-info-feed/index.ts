@@ -125,9 +125,12 @@ function resolveConfig(api: OpenClawPluginApi): InfoFeedConfig {
       model: grokModel,
       defaultHandles: parseHandles(defaultHandlesRaw),
       scanTopic,
-      scanIntervalMs: Number.isFinite(interval) && interval >= 60_000 ? Math.floor(interval) : 900_000,
-      urgentThreshold: Number.isFinite(urgent) && urgent >= 1 && urgent <= 10 ? Math.floor(urgent) : 9,
-      digestMinScore: Number.isFinite(digestMin) && digestMin >= 1 && digestMin <= 10 ? Math.floor(digestMin) : 5,
+      scanIntervalMs:
+        Number.isFinite(interval) && interval >= 60_000 ? Math.floor(interval) : 900_000,
+      urgentThreshold:
+        Number.isFinite(urgent) && urgent >= 1 && urgent <= 10 ? Math.floor(urgent) : 9,
+      digestMinScore:
+        Number.isFinite(digestMin) && digestMin >= 1 && digestMin <= 10 ? Math.floor(digestMin) : 5,
       autoScan: parseBool(autoScanRaw, true),
       runOnStart: parseBool(runOnStartRaw, true),
     },
@@ -203,7 +206,11 @@ async function feedRequest(
 function createScannerService(
   config: InfoFeedConfig,
   store: NewsStore,
-  logger: { info(...args: unknown[]): void; warn(...args: unknown[]): void; error(...args: unknown[]): void },
+  logger: {
+    info(...args: unknown[]): void;
+    warn(...args: unknown[]): void;
+    error(...args: unknown[]): void;
+  },
 ) {
   let timer: ReturnType<typeof setInterval> | null = null;
   let scanning = false;
@@ -245,7 +252,9 @@ function createScannerService(
 
       const inserted = store.insertItems(result.items);
       store.completeScan(scanId, inserted);
-      logger.info(`[fin-info-feed] Scan complete: ${inserted} new items from ${result.totalHandles} handles`);
+      logger.info(
+        `[fin-info-feed] Scan complete: ${inserted} new items from ${result.totalHandles} handles`,
+      );
       return result;
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
@@ -473,7 +482,8 @@ const finInfoFeedPlugin = {
 
               const action = String(params.action ?? "list").trim();
               const handles = Array.isArray(params.handles) ? (params.handles as string[]) : [];
-              const priority = (params.priority as "low" | "medium" | "high" | "critical") ?? "medium";
+              const priority =
+                (params.priority as "low" | "medium" | "high" | "critical") ?? "medium";
 
               if (action === "add") {
                 if (handles.length === 0) throw new Error("handles required for add action");

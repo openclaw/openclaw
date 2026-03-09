@@ -154,4 +154,82 @@ describe("StrategyRegistry", () => {
     const reg2 = new StrategyRegistry(filePath);
     expect(reg2.list().length).toBe(2);
   });
+
+  it("increments version when definition changes", () => {
+    const reg = new StrategyRegistry(filePath);
+    const def = mockDefinition("s1");
+    reg.create(def);
+
+    const updatedDef: StrategyDefinition = {
+      id: "s1",
+      name: "Test Strategy",
+      version: "1.0",
+      markets: ["crypto"],
+      symbols: ["BTC/USDT"],
+      timeframes: ["1d"],
+      parameters: { fast: 15, slow: 30 },
+      async onBar() {
+        return null;
+      },
+    };
+    reg.updateDefinition("s1", updatedDef);
+
+    const record = reg.get("s1");
+    expect(record!.version).toBe("1.1");
+    expect(record!.definition.parameters.fast).toBe(15);
+  });
+
+  it("does not increment version when definition is identical", () => {
+    const reg = new StrategyRegistry(filePath);
+    reg.create(mockDefinition("s1"));
+
+    const sameDef: StrategyDefinition = {
+      ...mockDefinition("s1"),
+      async onBar() {
+        return null;
+      },
+    };
+    reg.updateDefinition("s1", sameDef);
+
+    const record = reg.get("s1");
+    expect(record!.version).toBe("1.0");
+  });
+
+  it("increments semver version correctly", () => {
+    const reg = new StrategyRegistry(filePath);
+    reg.create({
+      id: "s1",
+      name: "Test Strategy",
+      version: "1.0.0",
+      markets: ["crypto"],
+      symbols: ["BTC/USDT"],
+      timeframes: ["1d"],
+      parameters: { fast: 10, slow: 30 },
+      async onBar() {
+        return null;
+      },
+    });
+
+    const updatedDef: StrategyDefinition = {
+      id: "s1",
+      name: "Test Strategy",
+      version: "1.0.0",
+      markets: ["crypto"],
+      symbols: ["BTC/USDT"],
+      timeframes: ["1d"],
+      parameters: { fast: 15, slow: 30 },
+      async onBar() {
+        return null;
+      },
+    };
+    reg.updateDefinition("s1", updatedDef);
+
+    const record = reg.get("s1");
+    expect(record!.version).toBe("1.0.1");
+  });
+
+  it("throws when updating definition of nonexistent strategy", () => {
+    const reg = new StrategyRegistry(filePath);
+    expect(() => reg.updateDefinition("nonexistent", mockDefinition())).toThrow("not found");
+  });
 });

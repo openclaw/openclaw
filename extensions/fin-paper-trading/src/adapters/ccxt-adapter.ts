@@ -66,7 +66,9 @@ export class CcxtAdapter implements MarketAdapter {
       opts.password = String(config.passphrase);
     }
 
-    this.exchange = new (ExchangeClass as new (o: Record<string, unknown>) => Record<string, unknown>)(opts);
+    this.exchange = new (ExchangeClass as new (
+      o: Record<string, unknown>,
+    ) => Record<string, unknown>)(opts);
 
     // Enable testnet/sandbox if requested
     if (config.testnet === true && typeof this.ex().setSandboxMode === "function") {
@@ -75,7 +77,7 @@ export class CcxtAdapter implements MarketAdapter {
   }
 
   async getPrice(symbol: string): Promise<PriceQuote> {
-    const ticker = await this.call("fetchTicker", symbol) as {
+    const ticker = (await this.call("fetchTicker", symbol)) as {
       last?: number;
       bid?: number;
       ask?: number;
@@ -93,14 +95,14 @@ export class CcxtAdapter implements MarketAdapter {
 
   async submitOrder(order: AdapterOrderRequest): Promise<AdapterOrderResult> {
     try {
-      const result = await this.call(
+      const result = (await this.call(
         "createOrder",
         order.symbol,
         order.type,
         order.side,
         order.qty,
         order.type === "limit" ? order.limitPrice : undefined,
-      ) as {
+      )) as {
         id: string;
         status: string;
         filled?: number;
@@ -131,7 +133,7 @@ export class CcxtAdapter implements MarketAdapter {
   }
 
   async getAccountState(): Promise<AdapterAccountState> {
-    const balance = await this.call("fetchBalance") as {
+    const balance = (await this.call("fetchBalance")) as {
       total?: Record<string, number>;
       free?: Record<string, number>;
       info?: Record<string, unknown>;

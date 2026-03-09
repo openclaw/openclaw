@@ -90,7 +90,14 @@ describe("CcxtAdapter", () => {
         amount: 0.1,
       });
 
-      expect(mock.createOrder).toHaveBeenCalledWith("BTC/USDT", "market", "buy", 0.1, undefined, {});
+      expect(mock.createOrder).toHaveBeenCalledWith(
+        "BTC/USDT",
+        "market",
+        "buy",
+        0.1,
+        undefined,
+        {},
+      );
       expect(result.orderId).toBe("ord-1");
       expect(result.exchangeId).toBe("bn");
       expect(result.side).toBe("buy");

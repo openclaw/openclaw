@@ -78,7 +78,9 @@ export function registerPaperTools(api: OpenClawPluginApi): void {
             description: "Order type. Defaults to market.",
           }),
         ),
-        price: Type.Optional(Type.Number({ description: "Limit price (required for limit orders)" })),
+        price: Type.Optional(
+          Type.Number({ description: "Limit price (required for limit orders)" }),
+        ),
       }),
       async execute(_toolCallId: string, params: Record<string, unknown>) {
         try {

@@ -1,14 +1,36 @@
 {
   "name": "@openfinclaw/fin-strategy-engine",
-  "version": "2026.2.23",
-  "private": true,
+  "version": "0.0.1",
   "description": "Strategy engine — indicators, backtest, evolution",
+  "keywords": [
+    "backtest",
+    "financial",
+    "openclaw",
+    "openfinclaw",
+    "strategy"
+  ],
+  "homepage": "https://github.com/cryptoSUN2049/openFinclaw#readme",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/cryptoSUN2049/openFinclaw.git",
+    "directory": "extensions/fin-strategy-engine"
+  },
+  "files": [
+    "*.ts",
+    "src",
+    "openclaw.plugin.json"
+  ],
   "type": "module",
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org"
+  },
   "devDependencies": {
     "openfinclaw": "workspace:*"
   },
   "peerDependencies": {
-    "openfinclaw": ">=2026.2.23"
+    "openfinclaw": ">=0.0.1"
   },
   "openclaw": {
     "extensions": [

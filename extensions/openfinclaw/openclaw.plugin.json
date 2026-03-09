@@ -1,0 +1,35 @@
+{
+  "id": "openfinclaw",
+  "name": "OpenFinClaw",
+  "description": "Skill publishing and strategy validation tools. Publish strategy ZIPs to remote server with automatic backtest.",
+  "kind": "financial",
+  "skills": ["./skills"],
+  "configSchema": {
+    "type": "object",
+    "properties": {
+      "skillApiUrl": {
+        "type": "string",
+        "description": "Skill API base URL (e.g. https://hub.openfinclaw.ai). No trailing slash.",
+        "default": "https://hub.openfinclaw.ai"
+      },
+      "skillApiKey": {
+        "type": "string",
+        "description": "API key for skill server (fch_ prefix, 68 chars). Required for publishing."
+      },
+      "requestTimeoutMs": {
+        "type": "number",
+        "default": 60000,
+        "minimum": 5000,
+        "maximum": 300000,
+        "description": "HTTP request timeout in milliseconds"
+      }
+    }
+  },
+  "uiHints": {
+    "skillApiKey": { "label": "Skill API Key", "sensitive": true },
+    "skillApiUrl": {
+      "label": "Skill Server URL",
+      "placeholder": "https://hub.openfinclaw.ai"
+    }
+  }
+}

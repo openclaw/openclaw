@@ -82,9 +82,15 @@ describe("enum schemas", () => {
 
   it("AgentEventTypeSchema accepts all event types", () => {
     const types = [
-      "trade_executed", "trade_pending", "alert_triggered",
-      "strategy_promoted", "strategy_killed", "order_filled",
-      "order_cancelled", "emergency_stop", "system",
+      "trade_executed",
+      "trade_pending",
+      "alert_triggered",
+      "strategy_promoted",
+      "strategy_killed",
+      "order_filled",
+      "order_cancelled",
+      "emergency_stop",
+      "system",
     ];
     for (const t of types) {
       expect(AgentEventTypeSchema.safeParse(t).success).toBe(true);
@@ -435,9 +441,7 @@ describe("AiChatResponseSchema", () => {
   });
 
   it("rejects wrong role", () => {
-    expect(
-      AiChatResponseSchema.safeParse({ reply: "test", role: "user" }).success,
-    ).toBe(false);
+    expect(AiChatResponseSchema.safeParse({ reply: "test", role: "user" }).success).toBe(false);
   });
 });
 
@@ -551,23 +555,27 @@ describe("TradingStreamDataSchema", () => {
 
   it("parses full trading data", () => {
     const result = TradingStreamDataSchema.safeParse({
-      positions: [{
-        exchange: "binance",
-        symbol: "BTC/USDT",
-        side: "long",
-        size: 1,
-        entryPrice: 60000,
-        currentPrice: 65000,
-        unrealizedPnl: 5000,
-        leverage: 2,
-      }],
-      balances: [{
-        exchange: "binance",
-        currency: "USDT",
-        total: 5000,
-        free: 4000,
-        used: 1000,
-      }],
+      positions: [
+        {
+          exchange: "binance",
+          symbol: "BTC/USDT",
+          side: "long",
+          size: 1,
+          entryPrice: 60000,
+          currentPrice: 65000,
+          unrealizedPnl: 5000,
+          leverage: 2,
+        },
+      ],
+      balances: [
+        {
+          exchange: "binance",
+          currency: "USDT",
+          total: 5000,
+          free: 4000,
+          used: 1000,
+        },
+      ],
       openOrders: [],
       strategies: [],
     });
@@ -579,14 +587,16 @@ describe("EventStreamPayloadSchema", () => {
   it("parses initial event payload", () => {
     const result = EventStreamPayloadSchema.safeParse({
       type: "initial",
-      events: [{
-        id: "e1",
-        type: "system",
-        title: "Boot",
-        detail: "Started",
-        timestamp: 1700000000000,
-        status: "completed",
-      }],
+      events: [
+        {
+          id: "e1",
+          type: "system",
+          title: "Boot",
+          detail: "Started",
+          timestamp: 1700000000000,
+          status: "completed",
+        },
+      ],
       pendingCount: 0,
     });
     expect(result.success).toBe(true);

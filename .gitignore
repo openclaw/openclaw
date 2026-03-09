@@ -134,3 +134,6 @@ state/
 
 # Claude Code local artifacts
 .claude/review-loop*
+
+# Generated strategy files
+strategies/

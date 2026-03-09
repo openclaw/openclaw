@@ -1,9 +1,31 @@
 {
   "name": "@openfinclaw/fin-core",
-  "version": "2026.2.23",
-  "private": true,
+  "version": "0.0.1",
   "description": "OpenFinClaw core financial infrastructure — types, exchange registry, risk controller",
+  "keywords": [
+    "crypto",
+    "financial",
+    "openclaw",
+    "openfinclaw",
+    "trading"
+  ],
+  "homepage": "https://github.com/cryptoSUN2049/openFinclaw#readme",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/cryptoSUN2049/openFinclaw.git",
+    "directory": "extensions/fin-core"
+  },
+  "files": [
+    "*.ts",
+    "src",
+    "openclaw.plugin.json"
+  ],
   "type": "module",
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org"
+  },
   "dependencies": {
     "ccxt": "^4.4.0"
   },
@@ -11,7 +33,7 @@
     "openfinclaw": "workspace:*"
   },
   "peerDependencies": {
-    "openfinclaw": ">=2026.2.23"
+    "openfinclaw": ">=0.0.1"
   },
   "openclaw": {
     "extensions": [

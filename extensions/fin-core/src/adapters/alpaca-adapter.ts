@@ -157,9 +157,17 @@ export class AlpacaAdapter implements UnifiedExchangeAdapter {
     const start = Date.now();
     try {
       const res = await fetch(`${this.baseUrl}/v2/account`, { headers: this.headers });
-      return { ok: res.ok, latencyMs: Date.now() - start, error: res.ok ? undefined : `status ${res.status}` };
+      return {
+        ok: res.ok,
+        latencyMs: Date.now() - start,
+        error: res.ok ? undefined : `status ${res.status}`,
+      };
     } catch (err) {
-      return { ok: false, latencyMs: Date.now() - start, error: err instanceof Error ? err.message : String(err) };
+      return {
+        ok: false,
+        latencyMs: Date.now() - start,
+        error: err instanceof Error ? err.message : String(err),
+      };
     }
   }
 }

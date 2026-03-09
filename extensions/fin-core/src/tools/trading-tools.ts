@@ -5,8 +5,8 @@
  */
 import { Type } from "@sinclair/typebox";
 import type { OpenClawPluginApi } from "openfinclaw/plugin-sdk";
-import type { UnifiedExchangeAdapter } from "../adapters/adapter-interface.js";
 import { createAdapter } from "../adapters/adapter-factory.js";
+import type { UnifiedExchangeAdapter } from "../adapters/adapter-interface.js";
 import type { ExchangeRegistry } from "../exchange-registry.js";
 import type { RiskController } from "../risk-controller.js";
 import type { ExchangeConfig } from "../types.js";
@@ -55,7 +55,9 @@ export function registerTradingTools(
         "Subject to 3-tier risk control: auto-execute (<$100), confirm ($100-$900), block (>$900).",
       parameters: Type.Object({
         exchange: Type.Optional(
-          Type.String({ description: "Exchange ID (e.g. 'binance-test'). Defaults to first configured." }),
+          Type.String({
+            description: "Exchange ID (e.g. 'binance-test'). Defaults to first configured.",
+          }),
         ),
         symbol: Type.String({ description: "Trading pair (e.g. 'BTC/USDT', 'AAPL', '0700.HK')" }),
         side: Type.Unsafe<"buy" | "sell">({
@@ -66,11 +68,16 @@ export function registerTradingTools(
         type: Type.Unsafe<"market" | "limit">({
           type: "string",
           enum: ["market", "limit"],
-          description: "Order type. Market orders execute immediately; limit orders wait for price.",
+          description:
+            "Order type. Market orders execute immediately; limit orders wait for price.",
         }),
         amount: Type.Number({ description: "Order quantity (shares for stock, units for crypto)" }),
-        price: Type.Optional(Type.Number({ description: "Limit price. Required for limit orders." })),
-        leverage: Type.Optional(Type.Number({ description: "Leverage multiplier. Crypto futures only." })),
+        price: Type.Optional(
+          Type.Number({ description: "Limit price. Required for limit orders." }),
+        ),
+        leverage: Type.Optional(
+          Type.Number({ description: "Leverage multiplier. Crypto futures only." }),
+        ),
         stopLoss: Type.Optional(Type.Number({ description: "Stop loss trigger price." })),
         takeProfit: Type.Optional(Type.Number({ description: "Take profit trigger price." })),
       }),

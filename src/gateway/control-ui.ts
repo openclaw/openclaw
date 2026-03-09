@@ -236,7 +236,10 @@ function serveResolvedIndexHtml(
 ) {
   if (opts?.injectAuthToken) {
     // Escape for safe embedding in a JS string literal inside an inline <script>.
-    const safeToken = opts.injectAuthToken.replace(/[\\'"<>&]/g, (c) => `\\u${c.charCodeAt(0).toString(16).padStart(4, "0")}`);
+    const safeToken = opts.injectAuthToken.replace(
+      /[\\'"<>&]/g,
+      (c) => `\\u${c.charCodeAt(0).toString(16).padStart(4, "0")}`,
+    );
     const snippet = [
       "<script>",
       "try{",

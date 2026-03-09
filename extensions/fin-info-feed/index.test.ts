@@ -159,12 +159,24 @@ describe("fin-info-feed plugin", () => {
 
     it("fin_info_search calls grok API with handles", async () => {
       const mockItems = JSON.stringify([
-        { handle: "elonmusk", title: "BTC news", score: 8, category: "crypto", sentiment: "bullish", symbols: ["BTC"] },
+        {
+          handle: "elonmusk",
+          title: "BTC news",
+          score: 8,
+          category: "crypto",
+          sentiment: "bullish",
+          symbols: ["BTC"],
+        },
       ]);
       const fetchMock = vi.fn().mockResolvedValue({
         ok: true,
         json: async () => ({
-          output: [{ type: "message", content: [{ type: "output_text", text: mockItems, annotations: [] }] }],
+          output: [
+            {
+              type: "message",
+              content: [{ type: "output_text", text: mockItems, annotations: [] }],
+            },
+          ],
         }),
       });
       vi.stubGlobal("fetch", fetchMock);
@@ -255,13 +267,31 @@ describe("fin-info-feed plugin", () => {
     it("fin_info_digest returns urgent items in grok mode", async () => {
       // First insert some items via search
       const mockItems = JSON.stringify([
-        { handle: "whale", title: "URGENT: Market crash", score: 10, category: "breaking", sentiment: "bearish", symbols: ["SPY"] },
-        { handle: "analyst", title: "Routine update", score: 5, category: "opinion", sentiment: "neutral" },
+        {
+          handle: "whale",
+          title: "URGENT: Market crash",
+          score: 10,
+          category: "breaking",
+          sentiment: "bearish",
+          symbols: ["SPY"],
+        },
+        {
+          handle: "analyst",
+          title: "Routine update",
+          score: 5,
+          category: "opinion",
+          sentiment: "neutral",
+        },
       ]);
       const fetchMock = vi.fn().mockResolvedValue({
         ok: true,
         json: async () => ({
-          output: [{ type: "message", content: [{ type: "output_text", text: mockItems, annotations: [] }] }],
+          output: [
+            {
+              type: "message",
+              content: [{ type: "output_text", text: mockItems, annotations: [] }],
+            },
+          ],
         }),
       });
       vi.stubGlobal("fetch", fetchMock);
@@ -289,12 +319,24 @@ describe("fin-info-feed plugin", () => {
 
     it("fin_info_digest returns periodic digest with stats", async () => {
       const mockItems = JSON.stringify([
-        { handle: "kol1", title: "Morning insight", score: 7, category: "macro", sentiment: "bullish", symbols: ["AAPL"] },
+        {
+          handle: "kol1",
+          title: "Morning insight",
+          score: 7,
+          category: "macro",
+          sentiment: "bullish",
+          symbols: ["AAPL"],
+        },
       ]);
       const fetchMock = vi.fn().mockResolvedValue({
         ok: true,
         json: async () => ({
-          output: [{ type: "message", content: [{ type: "output_text", text: mockItems, annotations: [] }] }],
+          output: [
+            {
+              type: "message",
+              content: [{ type: "output_text", text: mockItems, annotations: [] }],
+            },
+          ],
         }),
       });
       vi.stubGlobal("fetch", fetchMock);

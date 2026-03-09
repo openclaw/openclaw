@@ -141,9 +141,7 @@ export class NewsStore {
   }
 
   getRecent(limit: number): KolNewsItem[] {
-    const stmt = this.db.prepare(
-      "SELECT * FROM news_items ORDER BY scanned_at DESC LIMIT ?",
-    );
+    const stmt = this.db.prepare("SELECT * FROM news_items ORDER BY scanned_at DESC LIMIT ?");
     const rows = stmt.all(limit) as Array<Record<string, unknown>>;
     return rows.map(rowToNewsItem);
   }

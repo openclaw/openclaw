@@ -37,15 +37,20 @@ export function registerStrategyTools(api: OpenClawPluginApi): void {
         "Create a new trading strategy definition. " +
         "The strategy starts at L0 (incubate) and can be promoted through backtest → paper → live.",
       parameters: Type.Object({
-        name: Type.String({ description: "Strategy name (e.g. 'SMA Crossover', 'Vol Adjusted Momentum')" }),
+        name: Type.String({
+          description: "Strategy name (e.g. 'SMA Crossover', 'Vol Adjusted Momentum')",
+        }),
         description: Type.Optional(Type.String({ description: "Strategy description" })),
         symbol: Type.String({ description: "Target trading pair (e.g. 'BTC/USDT', 'AAPL')" }),
         timeframe: Type.Optional(
-          Type.String({ description: "Candle timeframe (e.g. '1h', '4h', '1d'). Defaults to '1d'." }),
+          Type.String({
+            description: "Candle timeframe (e.g. '1h', '4h', '1d'). Defaults to '1d'.",
+          }),
         ),
         parameters: Type.Optional(
           Type.String({
-            description: "Strategy parameters as JSON string (e.g. '{\"fastPeriod\": 10, \"slowPeriod\": 30}')",
+            description:
+              'Strategy parameters as JSON string (e.g. \'{"fastPeriod": 10, "slowPeriod": 30}\')',
           }),
         ),
         rules: Type.Optional(

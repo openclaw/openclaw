@@ -81,7 +81,13 @@ describe("createAdapter", () => {
   // ── Futu (HK equity) ──
 
   it("returns FutuAdapter for futu", () => {
-    const config: ExchangeConfig = { exchange: "futu", apiKey: "k", secret: "s", host: "127.0.0.1", port: 11111 };
+    const config: ExchangeConfig = {
+      exchange: "futu",
+      apiKey: "k",
+      secret: "s",
+      host: "127.0.0.1",
+      port: 11111,
+    };
     const adapter = createAdapter("futu-main", config, mockRegistry());
     expect(adapter).toBeInstanceOf(FutuAdapter);
     expect(adapter.exchangeId).toBe("futu-main");
@@ -97,7 +103,11 @@ describe("createAdapter", () => {
   // ── Unsupported ──
 
   it("throws for unsupported exchange type", () => {
-    const config = { exchange: "interactive-brokers" as ExchangeConfig["exchange"], apiKey: "k", secret: "s" };
+    const config = {
+      exchange: "interactive-brokers" as ExchangeConfig["exchange"],
+      apiKey: "k",
+      secret: "s",
+    };
     expect(() => createAdapter("ib", config, mockRegistry())).toThrow(/Unsupported exchange/);
   });
 });

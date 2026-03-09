@@ -211,9 +211,7 @@ describe("strategy-tools", () => {
       registerStrategyTools(api as never);
 
       const exec = tools.get("fin_strategy_create")!.execute;
-      const result = parseResult(
-        await exec("s1", { name: "SMA Cross", symbol: "BTC/USDT" }),
-      );
+      const result = parseResult(await exec("s1", { name: "SMA Cross", symbol: "BTC/USDT" }));
 
       expect(result.success).toBe(false);
       expect(result.error).toContain("Strategy engine not available");

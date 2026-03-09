@@ -102,7 +102,10 @@ export function extractGrokContent(data: XaiResponse): {
       const rawAnnotations =
         "annotations" in output && Array.isArray(output.annotations) ? output.annotations : [];
       const urls = rawAnnotations
-        .filter((a: { type?: string; url?: string }) => a.type === "url_citation" && typeof a.url === "string")
+        .filter(
+          (a: { type?: string; url?: string }) =>
+            a.type === "url_citation" && typeof a.url === "string",
+        )
         .map((a: { type?: string; url?: string }) => a.url as string);
       return { text: output.text, citations: [...new Set(urls)] };
     }
@@ -149,7 +152,9 @@ export function parseAnalysisResponse(
   const now = new Date().toISOString();
 
   return items
-    .filter((item: unknown): item is Record<string, unknown> => item != null && typeof item === "object")
+    .filter(
+      (item: unknown): item is Record<string, unknown> => item != null && typeof item === "object",
+    )
     .map((item): KolNewsItem => {
       const score = Math.max(1, Math.min(10, Number(item.score) || 5));
       const handle = String(item.handle ?? item.author ?? "unknown");
@@ -161,12 +166,8 @@ export function parseAnalysisResponse(
       )
         ? (item.sentiment as "bullish" | "bearish" | "neutral")
         : "neutral";
-      const symbols = Array.isArray(item.symbols)
-        ? (item.symbols as unknown[]).map(String)
-        : [];
-      const itemUrls = Array.isArray(item.urls)
-        ? (item.urls as unknown[]).map(String)
-        : [];
+      const symbols = Array.isArray(item.symbols) ? (item.symbols as unknown[]).map(String) : [];
+      const itemUrls = Array.isArray(item.urls) ? (item.urls as unknown[]).map(String) : [];
 
       return {
         id: `grok-${handle}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
