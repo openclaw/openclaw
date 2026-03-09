@@ -141,7 +141,7 @@ export function spawnWithResolvedCommand(
     env: { ...process.env, OPENCLAW_SHELL: "acp" },
     stdio: ["pipe", "pipe", "pipe"],
     shell: resolved.shell,
-    windowsHide: resolved.windowsHide,
+    windowsHide: resolved.windowsHide ?? true,
   });
 }
 
