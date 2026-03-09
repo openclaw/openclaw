@@ -1,3 +1,4 @@
+import { createScopedChannelConfigBase } from "openclaw/plugin-sdk/compat";
 import {
   collectAllowlistProviderGroupPolicyWarnings,
   buildAccountScopedDmSecurityPolicy,
@@ -12,7 +13,6 @@ import {
   clearAccountEntryFields,
   collectTelegramStatusIssues,
   DEFAULT_ACCOUNT_ID,
-  deleteAccountFromConfigSection,
   getChatChannelMeta,
   inspectTelegramAccount,
   listTelegramAccountIds,
@@ -31,7 +31,6 @@ import {
   resolveTelegramAccount,
   resolveTelegramGroupRequireMention,
   resolveTelegramGroupToolPolicy,
-  setAccountEnabledInConfigSection,
   telegramOnboardingAdapter,
   TelegramConfigSchema,
   type ChannelMessageActionAdapter,
@@ -100,6 +99,15 @@ const telegramConfigAccessors = createScopedAccountConfigAccessors({
   resolveDefaultTo: (account: ResolvedTelegramAccount) => account.config.defaultTo,
 });
 
+const telegramConfigBase = createScopedChannelConfigBase<ResolvedTelegramAccount>({
+  sectionKey: "telegram",
+  listAccountIds: listTelegramAccountIds,
+  resolveAccount: (cfg, accountId) => resolveTelegramAccount({ cfg, accountId }),
+  inspectAccount: (cfg, accountId) => inspectTelegramAccount({ cfg, accountId }),
+  defaultAccountId: resolveDefaultTelegramAccountId,
+  clearBaseFields: ["botToken", "tokenFile", "name"],
+});
+
 export const telegramPlugin: ChannelPlugin<ResolvedTelegramAccount, TelegramProbe> = {
   id: "telegram",
   meta: {
@@ -136,25 +144,7 @@ export const telegramPlugin: ChannelPlugin<ResolvedTelegramAccount, TelegramProb
   reload: { configPrefixes: ["channels.telegram"] },
   configSchema: buildChannelConfigSchema(TelegramConfigSchema),
   config: {
-    listAccountIds: (cfg) => listTelegramAccountIds(cfg),
-    resolveAccount: (cfg, accountId) => resolveTelegramAccount({ cfg, accountId }),
-    inspectAccount: (cfg, accountId) => inspectTelegramAccount({ cfg, accountId }),
-    defaultAccountId: (cfg) => resolveDefaultTelegramAccountId(cfg),
-    setAccountEnabled: ({ cfg, accountId, enabled }) =>
-      setAccountEnabledInConfigSection({
-        cfg,
-        sectionKey: "telegram",
-        accountId,
-        enabled,
-        allowTopLevel: true,
-      }),
-    deleteAccount: ({ cfg, accountId }) =>
-      deleteAccountFromConfigSection({
-        cfg,
-        sectionKey: "telegram",
-        accountId,
-        clearBaseFields: ["botToken", "tokenFile", "name"],
-      }),
+    ...telegramConfigBase,
     isConfigured: (account, cfg) => {
       if (!account.token?.trim()) {
         return false;

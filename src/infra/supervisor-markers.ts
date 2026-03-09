@@ -1,22 +1,13 @@
-const LAUNCHD_SUPERVISOR_HINT_ENV_VARS = [
-  "LAUNCH_JOB_LABEL",
-  "LAUNCH_JOB_NAME",
-  "OPENCLAW_LAUNCHD_LABEL",
-] as const;
-
-const SYSTEMD_SUPERVISOR_HINT_ENV_VARS = [
-  "OPENCLAW_SYSTEMD_UNIT",
-  "INVOCATION_ID",
-  "SYSTEMD_EXEC_PID",
-  "JOURNAL_STREAM",
-] as const;
-
-const WINDOWS_TASK_SUPERVISOR_HINT_ENV_VARS = ["OPENCLAW_WINDOWS_TASK_NAME"] as const;
+const SUPERVISOR_HINTS = {
+  launchd: ["LAUNCH_JOB_LABEL", "LAUNCH_JOB_NAME", "XPC_SERVICE_NAME", "OPENCLAW_LAUNCHD_LABEL"],
+  systemd: ["OPENCLAW_SYSTEMD_UNIT", "INVOCATION_ID", "SYSTEMD_EXEC_PID", "JOURNAL_STREAM"],
+  schtasks: ["OPENCLAW_WINDOWS_TASK_NAME"],
+} as const;
 
 export const SUPERVISOR_HINT_ENV_VARS = [
-  ...LAUNCHD_SUPERVISOR_HINT_ENV_VARS,
-  ...SYSTEMD_SUPERVISOR_HINT_ENV_VARS,
-  ...WINDOWS_TASK_SUPERVISOR_HINT_ENV_VARS,
+  ...SUPERVISOR_HINTS.launchd,
+  ...SUPERVISOR_HINTS.systemd,
+  ...SUPERVISOR_HINTS.schtasks,
   "OPENCLAW_SERVICE_MARKER",
   "OPENCLAW_SERVICE_KIND",
 ] as const;
@@ -35,13 +26,13 @@ export function detectRespawnSupervisor(
   platform: NodeJS.Platform = process.platform,
 ): RespawnSupervisor | null {
   if (platform === "darwin") {
-    return hasAnyHint(env, LAUNCHD_SUPERVISOR_HINT_ENV_VARS) ? "launchd" : null;
+    return hasAnyHint(env, SUPERVISOR_HINTS.launchd) ? "launchd" : null;
   }
   if (platform === "linux") {
-    return hasAnyHint(env, SYSTEMD_SUPERVISOR_HINT_ENV_VARS) ? "systemd" : null;
+    return hasAnyHint(env, SUPERVISOR_HINTS.systemd) ? "systemd" : null;
   }
   if (platform === "win32") {
-    if (hasAnyHint(env, WINDOWS_TASK_SUPERVISOR_HINT_ENV_VARS)) {
+    if (hasAnyHint(env, SUPERVISOR_HINTS.schtasks)) {
       return "schtasks";
     }
     const marker = env.OPENCLAW_SERVICE_MARKER?.trim();
