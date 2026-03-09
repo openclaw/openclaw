@@ -370,11 +370,10 @@ export async function checkQmdBinaryAvailable(
 
   try {
     // Try to run `qmd --version` to verify the binary works
-    const { stdout } = await execFileAsync(resolvedCommand, ["--version"], {
+    await execFileAsync(resolvedCommand, ["--version"], {
       timeout: timeoutMs,
       encoding: "utf8",
     });
-    const version = stdout.trim().split("\n")[0];
     return { available: true, path: resolvedCommand };
   } catch (err) {
     const error = err instanceof Error ? err.message : String(err);

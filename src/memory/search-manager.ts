@@ -26,46 +26,50 @@ export async function getMemorySearchManager(params: {
     const statusOnly = params.purpose === "status";
     const cacheKey = buildQmdCacheKey(params.agentId, resolved.qmd);
 
-    // Check if QMD binary is available before attempting to create manager
-    const qmdCheck = await checkQmdBinaryAvailable(resolved.qmd.command);
-    if (!qmdCheck.available) {
-      log.warn(`QMD binary not available: ${qmdCheck.error}`);
-      log.warn("Falling back to builtin memory backend. To use QMD, install it and ensure it's on PATH.");
-    } else if (!statusOnly) {
+    // Check cache first (fast path) before probing binary
+    if (!statusOnly) {
       const cached = QMD_MANAGER_CACHE.get(cacheKey);
       if (cached) {
         return { manager: cached };
       }
     }
 
-    try {
-      const { QmdMemoryManager } = await import("./qmd-manager.js");
-      const primary = await QmdMemoryManager.create({
-        cfg: params.cfg,
-        agentId: params.agentId,
-        resolved,
-        mode: statusOnly ? "status" : "full",
-      });
-      if (primary) {
-        if (statusOnly) {
-          return { manager: primary };
-        }
-        const wrapper = new FallbackMemoryManager(
-          {
-            primary,
-            fallbackFactory: async () => {
-              const { MemoryIndexManager } = await import("./manager.js");
-              return await MemoryIndexManager.get(params);
+    // Check if QMD binary is available before attempting to create manager
+    const qmdCheck = await checkQmdBinaryAvailable(resolved.qmd.command);
+    if (!qmdCheck.available) {
+      log.warn(`QMD binary not available: ${qmdCheck.error}`);
+      log.warn("Falling back to builtin memory backend. To use QMD, install it and ensure it's on PATH.");
+      // Skip QMD creation and fall through to builtin backend
+    } else {
+      try {
+        const { QmdMemoryManager } = await import("./qmd-manager.js");
+        const primary = await QmdMemoryManager.create({
+          cfg: params.cfg,
+          agentId: params.agentId,
+          resolved,
+          mode: statusOnly ? "status" : "full",
+        });
+        if (primary) {
+          if (statusOnly) {
+            return { manager: primary };
+          }
+          const wrapper = new FallbackMemoryManager(
+            {
+              primary,
+              fallbackFactory: async () => {
+                const { MemoryIndexManager } = await import("./manager.js");
+                return await MemoryIndexManager.get(params);
+              },
             },
-          },
-          () => QMD_MANAGER_CACHE.delete(cacheKey),
-        );
-        QMD_MANAGER_CACHE.set(cacheKey, wrapper);
-        return { manager: wrapper };
+            () => QMD_MANAGER_CACHE.delete(cacheKey),
+          );
+          QMD_MANAGER_CACHE.set(cacheKey, wrapper);
+          return { manager: wrapper };
+        }
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        log.warn(`qmd memory unavailable; falling back to builtin: ${message}`);
       }
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      log.warn(`qmd memory unavailable; falling back to builtin: ${message}`);
     }
   }
 
