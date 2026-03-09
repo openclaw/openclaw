@@ -711,8 +711,13 @@ describe("presence-cache", () => {
 });
 
 describe("resolveDiscordPresenceUpdate", () => {
-  it("returns null when no presence config provided", () => {
-    expect(resolveDiscordPresenceUpdate({})).toBeNull();
+  it("returns default online presence when no presence config provided", () => {
+    expect(resolveDiscordPresenceUpdate({})).toEqual({
+      status: "online",
+      activities: [],
+      since: null,
+      afk: false,
+    });
   });
 
   it("returns status-only presence when activity is omitted", () => {

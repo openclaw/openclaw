@@ -1,7 +1,7 @@
 import Foundation
 import OpenClawKit
 
-struct WideAreaGatewayBeacon: Sendable, Equatable {
+struct WideAreaGatewayBeacon: Equatable {
     var instanceName: String
     var displayName: String
     var host: String
@@ -19,7 +19,7 @@ enum WideAreaGatewayDiscovery {
     private static let defaultTimeoutSeconds: TimeInterval = 0.2
     private static let nameserverProbeConcurrency = 6
 
-    struct DiscoveryContext: Sendable {
+    struct DiscoveryContext {
         var tailscaleStatus: @Sendable () -> String?
         var dig: @Sendable (_ args: [String], _ timeout: TimeInterval) -> String?
 
