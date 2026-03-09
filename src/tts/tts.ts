@@ -707,7 +707,7 @@ export async function textToSpeech(params: {
       } else if (provider === "resemble") {
         const voiceUuid = config.resemble.voiceUuid;
         if (!voiceUuid) {
-          lastError = "resemble: no voice_uuid configured";
+          errors.push("resemble: no voice_uuid configured");
           continue;
         }
         audioBuffer = await resembleTTS({
@@ -791,7 +791,7 @@ export async function textToSpeechTelephony(params: {
       }
 
       if (provider === "resemble") {
-        lastError = "resemble: unsupported for telephony";
+        errors.push("resemble: unsupported for telephony");
         continue;
       }
 

@@ -1633,7 +1633,7 @@ Batches rapid text-only messages from the same sender into a single agent turn. 
         voice: "alloy",
       },
       resemble: {
-        apiKey: "resemble_api_key",
+        apiKey: "resemble_api_key", // pragma: allowlist secret
         voiceUuid: "voice_uuid",
         sampleRate: 22050,
         outputFormat: "mp3",
