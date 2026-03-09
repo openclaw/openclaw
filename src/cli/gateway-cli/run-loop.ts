@@ -206,6 +206,11 @@ export async function runGatewayLoop(params: {
           throw err;
         }
         server = null;
+        // Release the gateway lock so that `daemon restart/stop` (which
+        // discovers PIDs via the gateway port) can still manage the process.
+        // Without this, the process holds the lock but is not listening,
+        // forcing manual cleanup. (#35862)
+        await releaseLockIfHeld();
         const errMsg = err instanceof Error ? err.message : String(err);
         const errStack = err instanceof Error && err.stack ? `\n${err.stack}` : "";
         gatewayLog.error(
