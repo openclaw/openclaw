@@ -71,6 +71,33 @@ describe("config validation fail-closed behavior", () => {
     );
   });
 
+  it("still throws INVALID_CONFIG for legacy keys before unknown-key stripping", async () => {
+    await withTempHomeConfig(
+      {
+        agents: { list: [{ id: "main" }] },
+        whatsapp: {
+          allowFrom: ["+1234567890"],
+        },
+      },
+      async () => {
+        const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+        const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+        let thrown: unknown;
+        try {
+          loadConfig();
+        } catch (err) {
+          thrown = err;
+        }
+
+        expect(thrown).toBeInstanceOf(Error);
+        expect((thrown as { code?: string } | undefined)?.code).toBe("INVALID_CONFIG");
+        expect(errorSpy).toHaveBeenCalled();
+        const warnedText = warnSpy.mock.calls.map((call) => String(call[0] ?? "")).join("\n");
+        expect(warnedText.toLowerCase()).not.toContain("unknown config key ignored");
+      },
+    );
+  });
+
   it("logs unknown-key warnings even when invalid known fields still fail closed", async () => {
     await withTempHomeConfig(
       {
