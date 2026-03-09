@@ -1,0 +1,11 @@
+{
+  "name": "@openclaw/acp-remote",
+  "version": "2026.3.9",
+  "description": "OpenClaw remote ACP runtime backend over HTTP",
+  "type": "module",
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ]
+  }
+}

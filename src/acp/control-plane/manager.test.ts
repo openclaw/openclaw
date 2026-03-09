@@ -1203,7 +1203,7 @@ describe("AcpSessionManager", () => {
     hoisted.requireAcpRuntimeBackendMock.mockImplementation(() => {
       throw new AcpRuntimeError(
         "ACP_BACKEND_MISSING",
-        "ACP runtime backend is not configured. Install and enable the acpx runtime plugin.",
+        "ACP runtime backend is not configured. Install and enable an ACP runtime plugin.",
       );
     });
 
@@ -1231,7 +1231,7 @@ describe("AcpSessionManager", () => {
     hoisted.requireAcpRuntimeBackendMock.mockImplementation(() => {
       throw new AcpRuntimeError(
         "ACP_BACKEND_MISSING",
-        "ACP runtime backend is not configured. Install and enable the acpx runtime plugin.",
+        "ACP runtime backend is not configured. Install and enable an ACP runtime plugin.",
       );
     });
     hoisted.upsertAcpSessionMetaMock.mockRejectedValueOnce(new Error("disk locked"));

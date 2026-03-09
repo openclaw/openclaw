@@ -1,0 +1,68 @@
+{
+  "id": "acp-remote",
+  "name": "ACP Remote Runtime",
+  "description": "ACP runtime backend that connects OpenClaw to a remote ACP gateway over newline-delimited JSON-RPC HTTP streams.",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "url": {
+        "type": "string"
+      },
+      "headers": {
+        "type": "object",
+        "additionalProperties": {
+          "type": "string"
+        }
+      },
+      "timeoutSeconds": {
+        "type": "number",
+        "minimum": 0.001
+      },
+      "retryDelayMs": {
+        "type": "number",
+        "minimum": 0
+      },
+      "requiredDraftRevision": {
+        "type": "string"
+      },
+      "protocolVersion": {
+        "type": "integer",
+        "minimum": 1,
+        "maximum": 65535
+      }
+    },
+    "required": ["url"]
+  },
+  "uiHints": {
+    "url": {
+      "label": "Gateway URL",
+      "help": "HTTP endpoint that accepts newline-delimited ACP JSON-RPC requests and streams newline-delimited responses."
+    },
+    "headers": {
+      "label": "HTTP Headers",
+      "help": "Optional static headers to include on each gateway request, for example Authorization.",
+      "advanced": true
+    },
+    "timeoutSeconds": {
+      "label": "Request Timeout Seconds",
+      "help": "Timeout applied to initialize, session setup, control, and prompt requests.",
+      "advanced": true
+    },
+    "retryDelayMs": {
+      "label": "Prompt Retry Delay Ms",
+      "help": "Delay before reissuing a dropped prompt request with the same OpenClaw request id.",
+      "advanced": true
+    },
+    "requiredDraftRevision": {
+      "label": "Required Draft Revision",
+      "help": "Compatibility revision that the remote gateway must echo during initialize.",
+      "advanced": true
+    },
+    "protocolVersion": {
+      "label": "ACP Protocol Version",
+      "help": "ACP protocol version to negotiate with the remote gateway.",
+      "advanced": true
+    }
+  }
+}

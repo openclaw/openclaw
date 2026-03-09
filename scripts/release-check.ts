@@ -43,6 +43,8 @@ const requiredPathGroups = [
   "dist/plugin-sdk/line.d.ts",
   "dist/plugin-sdk/msteams.js",
   "dist/plugin-sdk/msteams.d.ts",
+  "dist/plugin-sdk/acp.js",
+  "dist/plugin-sdk/acp.d.ts",
   "dist/plugin-sdk/acpx.js",
   "dist/plugin-sdk/acpx.d.ts",
   "dist/plugin-sdk/bluebubbles.js",

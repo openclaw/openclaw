@@ -50,6 +50,12 @@ const bundledExtensionSubpathLoaders = [
 ] as const;
 
 describe("plugin-sdk subpath exports", () => {
+  it("exports generic ACP helpers", async () => {
+    const acpSdk = await import("openclaw/plugin-sdk/acp");
+    expect(typeof acpSdk.AcpRuntimeError).toBe("function");
+    expect(typeof acpSdk.registerAcpRuntimeBackend).toBe("function");
+  });
+
   it("exports compat helpers", () => {
     expect(typeof compatSdk.emptyPluginConfigSchema).toBe("function");
     expect(typeof compatSdk.resolveControlCommandGate).toBe("function");

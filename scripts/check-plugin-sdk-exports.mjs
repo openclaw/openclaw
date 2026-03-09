@@ -52,6 +52,7 @@ const requiredSubpathEntries = [
   "whatsapp",
   "line",
   "msteams",
+  "acp",
   "acpx",
   "bluebubbles",
   "copilot-proxy",
