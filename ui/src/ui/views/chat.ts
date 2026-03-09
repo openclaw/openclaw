@@ -1,23 +1,34 @@
 import { html, nothing } from "lit";
 import { ref } from "lit/directives/ref.js";
 import { repeat } from "lit/directives/repeat.js";
-import type { SessionsListResult } from "../types";
-import type { ChatItem, MessageGroup } from "../types/chat-types";
-import type { ChatAttachment, ChatQueueItem } from "../ui-types";
 import {
   renderMessageGroup,
   renderReadingIndicatorGroup,
   renderStreamingGroup,
-} from "../chat/grouped-render";
-import { normalizeMessage, normalizeRoleForGrouping } from "../chat/message-normalizer";
-import { icons } from "../icons";
-import { renderMarkdownSidebar } from "./markdown-sidebar";
-import "../components/resizable-divider";
+} from "../chat/grouped-render.ts";
+import { normalizeMessage, normalizeRoleForGrouping } from "../chat/message-normalizer.ts";
+import { icons } from "../icons.ts";
+import { detectTextDirection } from "../text-direction.ts";
+import type { SessionsListResult } from "../types.ts";
+import type { ChatItem, MessageGroup } from "../types/chat-types.ts";
+import type { ChatAttachment, ChatQueueItem } from "../ui-types.ts";
+import { renderMarkdownSidebar } from "./markdown-sidebar.ts";
+import "../components/resizable-divider.ts";
 
 export type CompactionIndicatorStatus = {
   active: boolean;
   startedAt: number | null;
   completedAt: number | null;
+};
+
+export type FallbackIndicatorStatus = {
+  phase?: "active" | "cleared";
+  selected: string;
+  active: string;
+  previous?: string;
+  reason?: string;
+  attempts: string[];
+  occurredAt: number;
 };
 
 export type ChatProps = {
@@ -29,8 +40,10 @@ export type ChatProps = {
   sending: boolean;
   canAbort?: boolean;
   compactionStatus?: CompactionIndicatorStatus | null;
+  fallbackStatus?: FallbackIndicatorStatus | null;
   messages: unknown[];
   toolMessages: unknown[];
+  streamSegments: Array<{ text: string; ts: number }>;
   stream: string | null;
   streamStartedAt: number | null;
   assistantAvatarUrl?: string | null;
@@ -71,6 +84,7 @@ export type ChatProps = {
 };
 
 const COMPACTION_TOAST_DURATION_MS = 5000;
+const FALLBACK_TOAST_DURATION_MS = 8000;
 
 function adjustTextareaHeight(el: HTMLTextAreaElement) {
   el.style.height = "auto";
@@ -85,7 +99,7 @@ function renderCompactionIndicator(status: CompactionIndicatorStatus | null | un
   // Show "compacting..." while active
   if (status.active) {
     return html`
-      <div class="callout info compaction-indicator compaction-indicator--active">
+      <div class="compaction-indicator compaction-indicator--active" role="status" aria-live="polite">
         ${icons.loader} Compacting context...
       </div>
     `;
@@ -96,7 +110,7 @@ function renderCompactionIndicator(status: CompactionIndicatorStatus | null | un
     const elapsed = Date.now() - status.completedAt;
     if (elapsed < COMPACTION_TOAST_DURATION_MS) {
       return html`
-        <div class="callout success compaction-indicator compaction-indicator--complete">
+        <div class="compaction-indicator compaction-indicator--complete" role="status" aria-live="polite">
           ${icons.check} Context compacted
         </div>
       `;
@@ -104,6 +118,45 @@ function renderCompactionIndicator(status: CompactionIndicatorStatus | null | un
   }
 
   return nothing;
+}
+
+function renderFallbackIndicator(status: FallbackIndicatorStatus | null | undefined) {
+  if (!status) {
+    return nothing;
+  }
+  const phase = status.phase ?? "active";
+  const elapsed = Date.now() - status.occurredAt;
+  if (elapsed >= FALLBACK_TOAST_DURATION_MS) {
+    return nothing;
+  }
+  const details = [
+    `Selected: ${status.selected}`,
+    phase === "cleared" ? `Active: ${status.selected}` : `Active: ${status.active}`,
+    phase === "cleared" && status.previous ? `Previous fallback: ${status.previous}` : null,
+    status.reason ? `Reason: ${status.reason}` : null,
+    status.attempts.length > 0 ? `Attempts: ${status.attempts.slice(0, 3).join(" | ")}` : null,
+  ]
+    .filter(Boolean)
+    .join(" • ");
+  const message =
+    phase === "cleared"
+      ? `Fallback cleared: ${status.selected}`
+      : `Fallback active: ${status.active}`;
+  const className =
+    phase === "cleared"
+      ? "compaction-indicator compaction-indicator--fallback-cleared"
+      : "compaction-indicator compaction-indicator--fallback";
+  const icon = phase === "cleared" ? icons.check : icons.brain;
+  return html`
+    <div
+      class=${className}
+      role="status"
+      aria-live="polite"
+      title=${details}
+    >
+      ${icon} ${message}
+    </div>
+  `;
 }
 
 function generateAttachmentId(): string {
@@ -224,6 +277,16 @@ export function renderChat(props: ChatProps) {
         buildChatItems(props),
         (item) => item.key,
         (item) => {
+          if (item.kind === "divider") {
+            return html`
+              <div class="chat-divider" role="separator" data-ts=${String(item.timestamp)}>
+                <span class="chat-divider__line"></span>
+                <span class="chat-divider__label">${item.label}</span>
+                <span class="chat-divider__line"></span>
+              </div>
+            `;
+          }
+
           if (item.kind === "reading-indicator") {
             return renderReadingIndicatorGroup(assistantIdentity);
           }
@@ -257,8 +320,6 @@ export function renderChat(props: ChatProps) {
       ${props.disabledReason ? html`<div class="callout">${props.disabledReason}</div>` : nothing}
 
       ${props.error ? html`<div class="callout danger">${props.error}</div>` : nothing}
-
-      ${renderCompactionIndicator(props.compactionStatus)}
 
       ${
         props.focusMode
@@ -343,11 +404,14 @@ export function renderChat(props: ChatProps) {
           : nothing
       }
 
+      ${renderFallbackIndicator(props.fallbackStatus)}
+      ${renderCompactionIndicator(props.compactionStatus)}
+
       ${
         props.showNewMessages
           ? html`
             <button
-              class="chat-new-messages"
+              class="btn chat-new-messages"
               type="button"
               @click=${props.onScrollToBottom}
             >
@@ -365,6 +429,7 @@ export function renderChat(props: ChatProps) {
             <textarea
               ${ref((el) => el && adjustTextareaHeight(el as HTMLTextAreaElement))}
               .value=${props.draft}
+              dir=${detectTextDirection(props.draft)}
               ?disabled=${!props.connected}
               @keydown=${(e: KeyboardEvent) => {
                 if (e.key !== "Enter") {
@@ -433,9 +498,14 @@ function groupMessages(items: ChatItem[]): Array<ChatItem | MessageGroup> {
 
     const normalized = normalizeMessage(item.message);
     const role = normalizeRoleForGrouping(normalized.role);
+    const senderLabel = role.toLowerCase() === "user" ? (normalized.senderLabel ?? null) : null;
     const timestamp = normalized.timestamp || Date.now();
 
-    if (!currentGroup || currentGroup.role !== role) {
+    if (
+      !currentGroup ||
+      currentGroup.role !== role ||
+      (role.toLowerCase() === "user" && currentGroup.senderLabel !== senderLabel)
+    ) {
       if (currentGroup) {
         result.push(currentGroup);
       }
@@ -443,6 +513,7 @@ function groupMessages(items: ChatItem[]): Array<ChatItem | MessageGroup> {
         kind: "group",
         key: `group:${role}:${item.key}`,
         role,
+        senderLabel,
         messages: [{ message: item.message, key: item.key }],
         timestamp,
         isStreaming: false,
@@ -477,6 +548,20 @@ function buildChatItems(props: ChatProps): Array<ChatItem | MessageGroup> {
   for (let i = historyStart; i < history.length; i++) {
     const msg = history[i];
     const normalized = normalizeMessage(msg);
+    const raw = msg as Record<string, unknown>;
+    const marker = raw.__openclaw as Record<string, unknown> | undefined;
+    if (marker && marker.kind === "compaction") {
+      items.push({
+        kind: "divider",
+        key:
+          typeof marker.id === "string"
+            ? `divider:compaction:${marker.id}`
+            : `divider:compaction:${normalized.timestamp}:${i}`,
+        label: "Compaction",
+        timestamp: normalized.timestamp ?? Date.now(),
+      });
+      continue;
+    }
 
     if (!props.showThinking && normalized.role.toLowerCase() === "toolresult") {
       continue;
@@ -488,8 +573,21 @@ function buildChatItems(props: ChatProps): Array<ChatItem | MessageGroup> {
       message: msg,
     });
   }
-  if (props.showThinking) {
-    for (let i = 0; i < tools.length; i++) {
+  // Interleave stream segments and tool cards in order. Each segment
+  // contains text that was streaming before the corresponding tool started.
+  // This ensures correct visual ordering: text → tool → text → tool → ...
+  const segments = props.streamSegments ?? [];
+  const maxLen = Math.max(segments.length, tools.length);
+  for (let i = 0; i < maxLen; i++) {
+    if (i < segments.length && segments[i].text.trim().length > 0) {
+      items.push({
+        kind: "stream" as const,
+        key: `stream-seg:${props.sessionKey}:${i}`,
+        text: segments[i].text,
+        startedAt: segments[i].ts,
+      });
+    }
+    if (i < tools.length) {
       items.push({
         kind: "message",
         key: messageKey(tools[i], i + history.length),

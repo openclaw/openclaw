@@ -128,7 +128,7 @@ extension CronSettings {
                     .foregroundStyle(.orange)
                     .textSelection(.enabled)
             }
-            self.payloadSummary(job.payload)
+            self.payloadSummary(job)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(10)
@@ -205,8 +205,9 @@ extension CronSettings {
         .padding(.vertical, 4)
     }
 
-    func payloadSummary(_ payload: CronPayload) -> some View {
-        VStack(alignment: .leading, spacing: 6) {
+    func payloadSummary(_ job: CronJob) -> some View {
+        let payload = job.payload
+        return VStack(alignment: .leading, spacing: 6) {
             Text("Payload")
                 .font(.caption.weight(.semibold))
                 .foregroundStyle(.secondary)
@@ -215,7 +216,7 @@ extension CronSettings {
                 Text(text)
                     .font(.callout)
                     .textSelection(.enabled)
-            case let .agentTurn(message, thinking, timeoutSeconds, deliver, provider, to, _):
+            case let .agentTurn(message, thinking, timeoutSeconds, _, _, _, _):
                 VStack(alignment: .leading, spacing: 4) {
                     Text(message)
                         .font(.callout)
@@ -223,10 +224,19 @@ extension CronSettings {
                     HStack(spacing: 8) {
                         if let thinking, !thinking.isEmpty { StatusPill(text: "think \(thinking)", tint: .secondary) }
                         if let timeoutSeconds { StatusPill(text: "\(timeoutSeconds)s", tint: .secondary) }
-                        if deliver ?? false {
-                            StatusPill(text: "deliver", tint: .secondary)
-                            if let provider, !provider.isEmpty { StatusPill(text: provider, tint: .secondary) }
-                            if let to, !to.isEmpty { StatusPill(text: to, tint: .secondary) }
+                        if job.sessionTarget == .isolated {
+                            let delivery = job.delivery
+                            if let delivery {
+                                if delivery.mode == .announce {
+                                    StatusPill(text: "announce", tint: .secondary)
+                                    if let channel = delivery.channel, !channel.isEmpty {
+                                        StatusPill(text: channel, tint: .secondary)
+                                    }
+                                    if let to = delivery.to, !to.isEmpty { StatusPill(text: to, tint: .secondary) }
+                                } else {
+                                    StatusPill(text: "no delivery", tint: .secondary)
+                                }
+                            }
                         }
                     }
                 }

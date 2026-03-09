@@ -4,7 +4,7 @@ import type { MsgContext } from "../../auto-reply/templating.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { PollInput } from "../../polls.js";
 import type { GatewayClientMode, GatewayClientName } from "../../utils/message-channel.js";
-import type { NormalizedChatType } from "../chat-type.js";
+import type { ChatType } from "../chat-type.js";
 import type { ChatChannelId } from "../registry.js";
 import type { ChannelMessageActionName as ChannelMessageActionNameFromList } from "./message-action-names.js";
 
@@ -12,7 +12,9 @@ export type ChannelId = ChatChannelId | (string & {});
 
 export type ChannelOutboundTargetMode = "explicit" | "implicit" | "heartbeat";
 
-export type ChannelAgentTool = AgentTool<TSchema, unknown>;
+export type ChannelAgentTool = AgentTool<TSchema, unknown> & {
+  ownerOnly?: boolean;
+};
 
 export type ChannelAgentToolFactory = (params: { cfg?: OpenClawConfig }) => ChannelAgentTool[];
 
@@ -100,6 +102,7 @@ export type ChannelAccountSnapshot = {
   linked?: boolean;
   running?: boolean;
   connected?: boolean;
+  restartPending?: boolean;
   reconnectAttempts?: number;
   lastConnectedAt?: number | null;
   lastDisconnect?:
@@ -118,13 +121,23 @@ export type ChannelAccountSnapshot = {
   lastStopAt?: number | null;
   lastInboundAt?: number | null;
   lastOutboundAt?: number | null;
+  busy?: boolean;
+  activeRuns?: number;
+  lastRunActivityAt?: number | null;
   mode?: string;
   dmPolicy?: string;
   allowFrom?: string[];
   tokenSource?: string;
   botTokenSource?: string;
   appTokenSource?: string;
+  signingSecretSource?: string;
+  tokenStatus?: string;
+  botTokenStatus?: string;
+  appTokenStatus?: string;
+  signingSecretStatus?: string;
+  userTokenStatus?: string;
   credentialSource?: string;
+  secretSource?: string;
   audienceType?: string;
   audience?: string;
   webhookPath?: string;
@@ -139,6 +152,10 @@ export type ChannelAccountSnapshot = {
   audit?: unknown;
   application?: unknown;
   bot?: unknown;
+  publicKey?: string | null;
+  profile?: unknown;
+  channelAccessToken?: string;
+  channelSecret?: string;
 };
 
 export type ChannelLogSink = {
@@ -162,7 +179,7 @@ export type ChannelGroupContext = {
 };
 
 export type ChannelCapabilities = {
-  chatTypes: Array<NormalizedChatType | "thread">;
+  chatTypes: Array<ChatType | "thread">;
   polls?: boolean;
   reactions?: boolean;
   edit?: boolean;
@@ -218,6 +235,16 @@ export type ChannelThreadingAdapter = {
     accountId?: string | null;
     chatType?: string | null;
   }) => "off" | "first" | "all";
+  /**
+   * When replyToMode is "off", allow explicit reply tags/directives to keep replyToId.
+   *
+   * Default in shared reply flow: true for known providers; per-channel opt-out supported.
+   */
+  allowExplicitReplyTagsWhenOff?: boolean;
+  /**
+   * Deprecated alias for allowExplicitReplyTagsWhenOff.
+   * Kept for compatibility with older extensions/docks.
+   */
   allowTagsWhenOff?: boolean;
   buildToolContext?: (params: {
     cfg: OpenClawConfig;
@@ -232,16 +259,20 @@ export type ChannelThreadingContext = {
   From?: string;
   To?: string;
   ChatType?: string;
+  CurrentMessageId?: string | number;
   ReplyToId?: string;
   ReplyToIdFull?: string;
   ThreadLabel?: string;
   MessageThreadId?: string | number;
+  /** Platform-native channel/conversation id (e.g. Slack DM channel "D…" id). */
+  NativeChannelId?: string;
 };
 
 export type ChannelThreadingToolContext = {
   currentChannelId?: string;
   currentChannelProvider?: ChannelId;
   currentThreadTs?: string;
+  currentMessageId?: string | number;
   replyToMode?: "off" | "first" | "all";
   hasRepliedRef?: { value: boolean };
   /**
@@ -288,7 +319,13 @@ export type ChannelMessageActionContext = {
   action: ChannelMessageActionName;
   cfg: OpenClawConfig;
   params: Record<string, unknown>;
+  mediaLocalRoots?: readonly string[];
   accountId?: string | null;
+  /**
+   * Trusted sender id from inbound context. This is server-injected and must
+   * never be sourced from tool/model-controlled params.
+   */
+  requesterSenderId?: string | null;
   gateway?: {
     url?: string;
     token?: string;
@@ -304,9 +341,16 @@ export type ChannelMessageActionContext = {
 export type ChannelToolSend = {
   to: string;
   accountId?: string | null;
+  threadId?: string | null;
 };
 
 export type ChannelMessageActionAdapter = {
+  /**
+   * Advertise agent-discoverable actions for this channel.
+   * Keep this aligned with any gated capability checks. Poll discovery is
+   * not inferred from `outbound.sendPoll`, so channels that want agents to
+   * create polls should include `"poll"` here when enabled.
+   */
   listActions?: (params: { cfg: OpenClawConfig }) => ChannelMessageActionName[];
   supportsAction?: (params: { action: ChannelMessageActionName }) => boolean;
   supportsButtons?: (params: { cfg: OpenClawConfig }) => boolean;
@@ -328,4 +372,19 @@ export type ChannelPollContext = {
   to: string;
   poll: PollInput;
   accountId?: string | null;
+  threadId?: string | null;
+  silent?: boolean;
+  isAnonymous?: boolean;
+};
+
+/** Minimal base for all channel probe results. Channel-specific probes extend this. */
+export type BaseProbeResult<TError = string | null> = {
+  ok: boolean;
+  error?: TError;
+};
+
+/** Minimal base for token resolution results. */
+export type BaseTokenResolution = {
+  token: string;
+  source: string;
 };

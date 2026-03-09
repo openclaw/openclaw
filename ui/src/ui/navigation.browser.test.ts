@@ -1,15 +1,11 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { OpenClawApp } from "./app";
+import { describe, expect, it } from "vitest";
 import "../styles.css";
+import { mountApp as mountTestApp, registerAppMountHooks } from "./test-helpers/app-mount.ts";
 
-// oxlint-disable-next-line typescript/unbound-method
-const originalConnect = OpenClawApp.prototype.connect;
+registerAppMountHooks();
 
 function mountApp(pathname: string) {
-  window.history.replaceState({}, "", pathname);
-  const app = document.createElement("openclaw-app") as OpenClawApp;
-  document.body.append(app);
-  return app;
+  return mountTestApp(pathname);
 }
 
 function nextFrame() {
@@ -17,22 +13,6 @@ function nextFrame() {
     requestAnimationFrame(() => resolve());
   });
 }
-
-beforeEach(() => {
-  OpenClawApp.prototype.connect = () => {
-    // no-op: avoid real gateway WS connections in browser tests
-  };
-  window.__OPENCLAW_CONTROL_UI_BASE_PATH__ = undefined;
-  localStorage.clear();
-  document.body.innerHTML = "";
-});
-
-afterEach(() => {
-  OpenClawApp.prototype.connect = originalConnect;
-  window.__OPENCLAW_CONTROL_UI_BASE_PATH__ = undefined;
-  localStorage.clear();
-  document.body.innerHTML = "";
-});
 
 describe("control UI routing", () => {
   it("hydrates the tab from the location", async () => {
@@ -84,6 +64,21 @@ describe("control UI routing", () => {
     expect(window.location.pathname).toBe("/channels");
   });
 
+  it("resets to the main session when opening chat from sidebar navigation", async () => {
+    const app = mountApp("/sessions?session=agent:main:subagent:task-123");
+    await app.updateComplete;
+
+    const link = app.querySelector<HTMLAnchorElement>('a.nav-item[href="/chat"]');
+    expect(link).not.toBeNull();
+    link?.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, button: 0 }));
+
+    await app.updateComplete;
+    expect(app.tab).toBe("chat");
+    expect(app.sessionKey).toBe("main");
+    expect(window.location.pathname).toBe("/chat");
+    expect(window.location.search).toBe("?session=main");
+  });
+
   it("keeps chat and nav usable on narrow viewports", async () => {
     const app = mountApp("/chat");
     await app.updateComplete;
@@ -116,7 +111,7 @@ describe("control UI routing", () => {
     const app = mountApp("/chat");
     await app.updateComplete;
 
-    const initialContainer = app.querySelector(".chat-thread");
+    const initialContainer: HTMLElement | null = app.querySelector(".chat-thread");
     expect(initialContainer).not.toBeNull();
     if (!initialContainer) {
       return;
@@ -151,34 +146,107 @@ describe("control UI routing", () => {
     expect(container.scrollTop).toBe(maxScroll);
   });
 
-  it("hydrates token from URL params and strips it", async () => {
+  it("strips query token params without importing them", async () => {
     const app = mountApp("/ui/overview?token=abc123");
     await app.updateComplete;
 
-    expect(app.settings.token).toBe("abc123");
+    expect(app.settings.token).toBe("");
+    expect(JSON.parse(localStorage.getItem("openclaw.control.settings.v1") ?? "{}").token).toBe(
+      undefined,
+    );
     expect(window.location.pathname).toBe("/ui/overview");
     expect(window.location.search).toBe("");
   });
 
-  it("hydrates password from URL params and strips it", async () => {
+  it("strips password URL params without importing them", async () => {
     const app = mountApp("/ui/overview?password=sekret");
     await app.updateComplete;
 
-    expect(app.password).toBe("sekret");
+    expect(app.password).toBe("");
     expect(window.location.pathname).toBe("/ui/overview");
     expect(window.location.search).toBe("");
   });
 
-  it("hydrates token from URL params even when settings already set", async () => {
+  it("hydrates token from URL hash when settings already set", async () => {
     localStorage.setItem(
       "openclaw.control.settings.v1",
-      JSON.stringify({ token: "existing-token" }),
+      JSON.stringify({ token: "existing-token", gatewayUrl: "wss://gateway.example/openclaw" }),
     );
-    const app = mountApp("/ui/overview?token=abc123");
+    const app = mountApp("/ui/overview#token=abc123");
     await app.updateComplete;
 
     expect(app.settings.token).toBe("abc123");
+    expect(JSON.parse(localStorage.getItem("openclaw.control.settings.v1") ?? "{}")).toMatchObject({
+      gatewayUrl: "wss://gateway.example/openclaw",
+    });
+    expect(JSON.parse(localStorage.getItem("openclaw.control.settings.v1") ?? "{}").token).toBe(
+      undefined,
+    );
     expect(window.location.pathname).toBe("/ui/overview");
+    expect(window.location.hash).toBe("");
+  });
+
+  it("hydrates token from URL hash and strips it", async () => {
+    const app = mountApp("/ui/overview#token=abc123");
+    await app.updateComplete;
+
+    expect(app.settings.token).toBe("abc123");
+    expect(JSON.parse(localStorage.getItem("openclaw.control.settings.v1") ?? "{}").token).toBe(
+      undefined,
+    );
+    expect(window.location.pathname).toBe("/ui/overview");
+    expect(window.location.hash).toBe("");
+  });
+
+  it("clears the current token when the gateway URL changes", async () => {
+    const app = mountApp("/ui/overview#token=abc123");
+    await app.updateComplete;
+
+    const gatewayUrlInput = app.querySelector<HTMLInputElement>(
+      'input[placeholder="ws://100.x.y.z:18789"]',
+    );
+    expect(gatewayUrlInput).not.toBeNull();
+    gatewayUrlInput!.value = "wss://other-gateway.example/openclaw";
+    gatewayUrlInput!.dispatchEvent(new Event("input", { bubbles: true }));
+    await app.updateComplete;
+
+    expect(app.settings.gatewayUrl).toBe("wss://other-gateway.example/openclaw");
+    expect(app.settings.token).toBe("");
+  });
+
+  it("keeps a hash token pending until the gateway URL change is confirmed", async () => {
+    const app = mountApp(
+      "/ui/overview?gatewayUrl=wss://other-gateway.example/openclaw#token=abc123",
+    );
+    await app.updateComplete;
+
+    expect(app.settings.gatewayUrl).not.toBe("wss://other-gateway.example/openclaw");
+    expect(app.settings.token).toBe("");
+
+    const confirmButton = Array.from(app.querySelectorAll<HTMLButtonElement>("button")).find(
+      (button) => button.textContent?.trim() === "Confirm",
+    );
+    expect(confirmButton).not.toBeUndefined();
+    confirmButton?.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+    await app.updateComplete;
+
+    expect(app.settings.gatewayUrl).toBe("wss://other-gateway.example/openclaw");
+    expect(app.settings.token).toBe("abc123");
     expect(window.location.search).toBe("");
+    expect(window.location.hash).toBe("");
+  });
+
+  it("restores the token after a same-tab refresh", async () => {
+    const first = mountApp("/ui/overview#token=abc123");
+    await first.updateComplete;
+    first.remove();
+
+    const refreshed = mountApp("/ui/overview");
+    await refreshed.updateComplete;
+
+    expect(refreshed.settings.token).toBe("abc123");
+    expect(JSON.parse(localStorage.getItem("openclaw.control.settings.v1") ?? "{}").token).toBe(
+      undefined,
+    );
   });
 });

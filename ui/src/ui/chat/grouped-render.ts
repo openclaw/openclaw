@@ -1,16 +1,18 @@
 import { html, nothing } from "lit";
 import { unsafeHTML } from "lit/directives/unsafe-html.js";
-import type { AssistantIdentity } from "../assistant-identity";
-import type { MessageGroup } from "../types/chat-types";
-import { toSanitizedMarkdownHtml } from "../markdown";
-import { renderCopyAsMarkdownButton } from "./copy-as-markdown";
+import type { AssistantIdentity } from "../assistant-identity.ts";
+import { toSanitizedMarkdownHtml } from "../markdown.ts";
+import { openExternalUrlSafe } from "../open-external-url.ts";
+import { detectTextDirection } from "../text-direction.ts";
+import type { MessageGroup } from "../types/chat-types.ts";
+import { renderCopyAsMarkdownButton } from "./copy-as-markdown.ts";
 import {
   extractTextCached,
   extractThinkingCached,
   formatReasoningMarkdown,
-} from "./message-extract";
-import { isToolResultMessage, normalizeRoleForGrouping } from "./message-normalizer";
-import { extractToolCards, renderToolCardSidebar } from "./tool-cards";
+} from "./message-extract.ts";
+import { isToolResultMessage, normalizeRoleForGrouping } from "./message-normalizer.ts";
+import { extractToolCards, renderToolCardSidebar } from "./tool-cards.ts";
 
 type ImageBlock = {
   url: string;
@@ -114,9 +116,10 @@ export function renderMessageGroup(
 ) {
   const normalizedRole = normalizeRoleForGrouping(group.role);
   const assistantName = opts.assistantName ?? "Assistant";
+  const userLabel = group.senderLabel?.trim();
   const who =
     normalizedRole === "user"
-      ? "You"
+      ? (userLabel ?? "You")
       : normalizedRole === "assistant"
         ? assistantName
         : normalizedRole;
@@ -199,6 +202,10 @@ function renderMessageImages(images: ImageBlock[]) {
     return nothing;
   }
 
+  const openImage = (url: string) => {
+    openExternalUrlSafe(url, { allowDataImage: true });
+  };
+
   return html`
     <div class="chat-message-images">
       ${images.map(
@@ -207,7 +214,7 @@ function renderMessageImages(images: ImageBlock[]) {
             src=${img.url}
             alt=${img.alt ?? "Attached image"}
             class="chat-message-image"
-            @click=${() => window.open(img.url, "_blank")}
+            @click=${() => openImage(img.url)}
           />
         `,
       )}
@@ -272,7 +279,7 @@ function renderGroupedMessage(
       }
       ${
         markdown
-          ? html`<div class="chat-text">${unsafeHTML(toSanitizedMarkdownHtml(markdown))}</div>`
+          ? html`<div class="chat-text" dir="${detectTextDirection(markdown)}">${unsafeHTML(toSanitizedMarkdownHtml(markdown))}</div>`
           : nothing
       }
       ${toolCards.map((card) => renderToolCardSidebar(card, onOpenSidebar))}

@@ -1,6 +1,6 @@
 #!/usr/bin/env tsx
 /**
- * Copy HOOK.md files from src/hooks/bundled to dist/hooks/bundled
+ * Copy HOOK.md files from src/hooks/bundled to dist/bundled
  */
 
 import fs from "node:fs";
@@ -9,9 +9,10 @@ import { fileURLToPath } from "node:url";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const projectRoot = path.resolve(__dirname, "..");
+const verbose = process.env.OPENCLAW_BUILD_VERBOSE === "1";
 
 const srcBundled = path.join(projectRoot, "src", "hooks", "bundled");
-const distBundled = path.join(projectRoot, "dist", "hooks", "bundled");
+const distBundled = path.join(projectRoot, "dist", "bundled");
 
 function copyHookMetadata() {
   if (!fs.existsSync(srcBundled)) {
@@ -24,6 +25,7 @@ function copyHookMetadata() {
   }
 
   const entries = fs.readdirSync(srcBundled, { withFileTypes: true });
+  let copiedCount = 0;
 
   for (const entry of entries) {
     if (!entry.isDirectory()) {
@@ -46,10 +48,13 @@ function copyHookMetadata() {
     }
 
     fs.copyFileSync(srcHookMd, distHookMd);
-    console.log(`[copy-hook-metadata] Copied ${hookName}/HOOK.md`);
+    copiedCount += 1;
+    if (verbose) {
+      console.log(`[copy-hook-metadata] Copied ${hookName}/HOOK.md`);
+    }
   }
 
-  console.log("[copy-hook-metadata] Done");
+  console.log(`[copy-hook-metadata] Copied ${copiedCount} hook metadata files.`);
 }
 
 copyHookMetadata();

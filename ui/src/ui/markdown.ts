@@ -1,12 +1,6 @@
 import DOMPurify from "dompurify";
 import { marked } from "marked";
-import { truncateText } from "./format";
-
-marked.setOptions({
-  gfm: true,
-  breaks: true,
-  mangle: false,
-});
+import { truncateText } from "./format.ts";
 
 const allowedTags = [
   "a",
@@ -34,15 +28,22 @@ const allowedTags = [
   "thead",
   "tr",
   "ul",
+  "img",
 ];
 
-const allowedAttrs = ["class", "href", "rel", "target", "title", "start"];
+const allowedAttrs = ["class", "href", "rel", "target", "title", "start", "src", "alt"];
+const sanitizeOptions = {
+  ALLOWED_TAGS: allowedTags,
+  ALLOWED_ATTR: allowedAttrs,
+  ADD_DATA_URI_TAGS: ["img"],
+};
 
 let hooksInstalled = false;
 const MARKDOWN_CHAR_LIMIT = 140_000;
 const MARKDOWN_PARSE_LIMIT = 40_000;
 const MARKDOWN_CACHE_LIMIT = 200;
 const MARKDOWN_CACHE_MAX_CHARS = 50_000;
+const INLINE_DATA_IMAGE_RE = /^data:image\/[a-z0-9.+-]+;base64,/i;
 const markdownCache = new Map<string, string>();
 
 function getCachedMarkdown(key: string): string | null {
@@ -104,24 +105,51 @@ export function toSanitizedMarkdownHtml(markdown: string): string {
   if (truncated.text.length > MARKDOWN_PARSE_LIMIT) {
     const escaped = escapeHtml(`${truncated.text}${suffix}`);
     const html = `<pre class="code-block">${escaped}</pre>`;
-    const sanitized = DOMPurify.sanitize(html, {
-      ALLOWED_TAGS: allowedTags,
-      ALLOWED_ATTR: allowedAttrs,
-    });
+    const sanitized = DOMPurify.sanitize(html, sanitizeOptions);
     if (input.length <= MARKDOWN_CACHE_MAX_CHARS) {
       setCachedMarkdown(input, sanitized);
     }
     return sanitized;
   }
-  const rendered = marked.parse(`${truncated.text}${suffix}`) as string;
-  const sanitized = DOMPurify.sanitize(rendered, {
-    ALLOWED_TAGS: allowedTags,
-    ALLOWED_ATTR: allowedAttrs,
-  });
+  let rendered: string;
+  try {
+    rendered = marked.parse(`${truncated.text}${suffix}`, {
+      renderer: htmlEscapeRenderer,
+      gfm: true,
+      breaks: true,
+    }) as string;
+  } catch (err) {
+    // Fall back to escaped plain text when marked.parse() throws (e.g.
+    // infinite recursion on pathological markdown patterns — #36213).
+    console.warn("[markdown] marked.parse failed, falling back to plain text:", err);
+    const escaped = escapeHtml(`${truncated.text}${suffix}`);
+    rendered = `<pre class="code-block">${escaped}</pre>`;
+  }
+  const sanitized = DOMPurify.sanitize(rendered, sanitizeOptions);
   if (input.length <= MARKDOWN_CACHE_MAX_CHARS) {
     setCachedMarkdown(input, sanitized);
   }
   return sanitized;
+}
+
+// Prevent raw HTML in chat messages from being rendered as formatted HTML.
+// Display it as escaped text so users see the literal markup.
+// Security is handled by DOMPurify, but rendering pasted HTML (e.g. error
+// pages) as formatted output is confusing UX (#13937).
+const htmlEscapeRenderer = new marked.Renderer();
+htmlEscapeRenderer.html = ({ text }: { text: string }) => escapeHtml(text);
+htmlEscapeRenderer.image = (token: { href?: string | null; text?: string | null }) => {
+  const label = normalizeMarkdownImageLabel(token.text);
+  const href = token.href?.trim() ?? "";
+  if (!INLINE_DATA_IMAGE_RE.test(href)) {
+    return escapeHtml(label);
+  }
+  return `<img src="${escapeHtml(href)}" alt="${escapeHtml(label)}">`;
+};
+
+function normalizeMarkdownImageLabel(text?: string | null): string {
+  const trimmed = text?.trim();
+  return trimmed ? trimmed : "image";
 }
 
 function escapeHtml(value: string): string {

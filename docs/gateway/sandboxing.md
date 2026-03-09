@@ -22,6 +22,10 @@ and process access when the model does something dumb.
 - Optional sandboxed browser (`agents.defaults.sandbox.browser`).
   - By default, the sandbox browser auto-starts (ensures CDP is reachable) when the browser tool needs it.
     Configure via `agents.defaults.sandbox.browser.autoStart` and `agents.defaults.sandbox.browser.autoStartTimeoutMs`.
+  - By default, sandbox browser containers use a dedicated Docker network (`openclaw-sandbox-browser`) instead of the global `bridge` network.
+    Configure with `agents.defaults.sandbox.browser.network`.
+  - Optional `agents.defaults.sandbox.browser.cdpSourceRange` restricts container-edge CDP ingress with a CIDR allowlist (for example `172.21.0.1/32`).
+  - noVNC observer access is password-protected by default; OpenClaw emits a short-lived token URL that serves a local bootstrap page and opens noVNC with password in URL fragment (not query/header logs).
   - `agents.defaults.sandbox.browser.allowHostControl` lets sandboxed sessions target the host browser explicitly.
   - Optional allowlists gate `target: "custom"`: `allowedControlUrls`, `allowedControlHosts`, `allowedControlPorts`.
 
@@ -71,7 +75,12 @@ Format: `host:container:mode` (e.g., `"/home/user/source:/source:rw"`).
 
 Global and per-agent binds are **merged** (not replaced). Under `scope: "shared"`, per-agent binds are ignored.
 
-Example (read-only source + docker socket):
+`agents.defaults.sandbox.browser.binds` mounts additional host directories into the **sandbox browser** container only.
+
+- When set (including `[]`), it replaces `agents.defaults.sandbox.docker.binds` for the browser container.
+- When omitted, the browser container falls back to `agents.defaults.sandbox.docker.binds` (backwards compatible).
+
+Example (read-only source + an extra data directory):
 
 ```json5
 {
@@ -79,7 +88,7 @@ Example (read-only source + docker socket):
     defaults: {
       sandbox: {
         docker: {
-          binds: ["/home/user/source:/source:ro", "/var/run/docker.sock:/var/run/docker.sock"],
+          binds: ["/home/user/source:/source:ro", "/var/data/myapp:/data:ro"],
         },
       },
     },
@@ -100,7 +109,8 @@ Example (read-only source + docker socket):
 Security notes:
 
 - Binds bypass the sandbox filesystem: they expose host paths with whatever mode you set (`:ro` or `:rw`).
-- Sensitive mounts (e.g., `docker.sock`, secrets, SSH keys) should be `:ro` unless absolutely required.
+- OpenClaw blocks dangerous bind sources (for example: `docker.sock`, `/etc`, `/proc`, `/sys`, `/dev`, and parent mounts that would expose them).
+- Sensitive mounts (secrets, SSH keys, service credentials) should be `:ro` unless absolutely required.
 - Combine with `workspaceAccess: "ro"` if you only need read access to the workspace; bind modes stay independent.
 - See [Sandbox vs Tool Policy vs Elevated](/gateway/sandbox-vs-tool-policy-vs-elevated) for how binds interact with tool policy and elevated exec.
 
@@ -119,6 +129,16 @@ other runtimes), either bake a custom image or install via
 `sandbox.docker.setupCommand` (requires network egress + writable root +
 root user).
 
+If you want a more functional sandbox image with common tooling (for example
+`curl`, `jq`, `nodejs`, `python3`, `git`), build:
+
+```bash
+scripts/sandbox-common-setup.sh
+```
+
+Then set `agents.defaults.sandbox.docker.image` to
+`openclaw-sandbox-common:bookworm-slim`.
+
 Sandboxed browser image:
 
 ```bash
@@ -128,8 +148,53 @@ scripts/sandbox-browser-setup.sh
 By default, sandbox containers run with **no network**.
 Override with `agents.defaults.sandbox.docker.network`.
 
+The bundled sandbox browser image also applies conservative Chromium startup defaults
+for containerized workloads. Current container defaults include:
+
+- `--remote-debugging-address=127.0.0.1`
+- `--remote-debugging-port=<derived from OPENCLAW_BROWSER_CDP_PORT>`
+- `--user-data-dir=${HOME}/.chrome`
+- `--no-first-run`
+- `--no-default-browser-check`
+- `--disable-3d-apis`
+- `--disable-gpu`
+- `--disable-dev-shm-usage`
+- `--disable-background-networking`
+- `--disable-extensions`
+- `--disable-features=TranslateUI`
+- `--disable-breakpad`
+- `--disable-crash-reporter`
+- `--disable-software-rasterizer`
+- `--no-zygote`
+- `--metrics-recording-only`
+- `--renderer-process-limit=2`
+- `--no-sandbox` and `--disable-setuid-sandbox` when `noSandbox` is enabled.
+- The three graphics hardening flags (`--disable-3d-apis`,
+  `--disable-software-rasterizer`, `--disable-gpu`) are optional and are useful
+  when containers lack GPU support. Set `OPENCLAW_BROWSER_DISABLE_GRAPHICS_FLAGS=0`
+  if your workload requires WebGL or other 3D/browser features.
+- `--disable-extensions` is enabled by default and can be disabled with
+  `OPENCLAW_BROWSER_DISABLE_EXTENSIONS=0` for extension-reliant flows.
+- `--renderer-process-limit=2` is controlled by
+  `OPENCLAW_BROWSER_RENDERER_PROCESS_LIMIT=<N>`, where `0` keeps Chromium's default.
+
+If you need a different runtime profile, use a custom browser image and provide
+your own entrypoint. For local (non-container) Chromium profiles, use
+`browser.extraArgs` to append additional startup flags.
+
+Security defaults:
+
+- `network: "host"` is blocked.
+- `network: "container:<id>"` is blocked by default (namespace join bypass risk).
+- Break-glass override: `agents.defaults.sandbox.docker.dangerouslyAllowContainerNamespaceJoin: true`.
+
 Docker installs and the containerized gateway live here:
 [Docker](/install/docker)
+
+For Docker gateway deployments, `docker-setup.sh` can bootstrap sandbox config.
+Set `OPENCLAW_SANDBOX=1` (or `true`/`yes`/`on`) to enable that path. You can
+override socket location with `OPENCLAW_DOCKER_SOCKET`. Full setup and env
+reference: [Docker](/install/docker#enable-agent-sandbox-for-docker-gateway-opt-in).
 
 ## setupCommand (one-time container setup)
 
@@ -144,6 +209,7 @@ Paths:
 Common pitfalls:
 
 - Default `docker.network` is `"none"` (no egress), so package installs will fail.
+- `docker.network: "container:<id>"` requires `dangerouslyAllowContainerNamespaceJoin: true` and is break-glass only.
 - `readOnlyRoot: true` prevents writes; set `readOnlyRoot: false` or bake a custom image.
 - `user` must be root for package installs (omit `user` or set `user: "0:0"`).
 - Sandbox exec does **not** inherit host `process.env`. Use
@@ -168,7 +234,7 @@ Debugging:
 
 Each agent can override sandbox + tools:
 `agents.list[].sandbox` and `agents.list[].tools` (plus `agents.list[].tools.sandbox.tools` for sandbox tool policy).
-See [Multi-Agent Sandbox & Tools](/multi-agent-sandbox-tools) for precedence.
+See [Multi-Agent Sandbox & Tools](/tools/multi-agent-sandbox-tools) for precedence.
 
 ## Minimal enable example
 
@@ -189,5 +255,5 @@ See [Multi-Agent Sandbox & Tools](/multi-agent-sandbox-tools) for precedence.
 ## Related docs
 
 - [Sandbox Configuration](/gateway/configuration#agentsdefaults-sandbox)
-- [Multi-Agent Sandbox & Tools](/multi-agent-sandbox-tools)
+- [Multi-Agent Sandbox & Tools](/tools/multi-agent-sandbox-tools)
 - [Security](/gateway/security)

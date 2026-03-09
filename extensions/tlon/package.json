@@ -1,14 +1,13 @@
 {
   "name": "@openclaw/tlon",
-  "version": "2026.2.1",
+  "version": "2026.3.9",
   "description": "OpenClaw Tlon/Urbit channel plugin",
   "type": "module",
   "dependencies": {
+    "@tloncorp/api": "github:tloncorp/api-beta#7eede1c1a756977b09f96aa14a92e2b06318ae87",
+    "@tloncorp/tlon-skill": "0.2.2",
     "@urbit/aura": "^3.0.0",
-    "@urbit/http-api": "^3.0.0"
-  },
-  "devDependencies": {
-    "openclaw": "workspace:*"
+    "zod": "^4.3.6"
   },
   "openclaw": {
     "extensions": [
@@ -28,6 +27,13 @@
       "npmSpec": "@openclaw/tlon",
       "localPath": "extensions/tlon",
       "defaultChoice": "npm"
+    },
+    "releaseChecks": {
+      "rootDependencyMirrorAllowlist": [
+        "@tloncorp/api",
+        "@tloncorp/tlon-skill",
+        "@urbit/aura"
+      ]
     }
   }
 }

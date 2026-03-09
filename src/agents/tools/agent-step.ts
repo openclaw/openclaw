@@ -13,8 +13,21 @@ export async function readLatestAssistantReply(params: {
     params: { sessionKey: params.sessionKey, limit: params.limit ?? 50 },
   });
   const filtered = stripToolMessages(Array.isArray(history?.messages) ? history.messages : []);
-  const last = filtered.length > 0 ? filtered[filtered.length - 1] : undefined;
-  return last ? extractAssistantText(last) : undefined;
+  for (let i = filtered.length - 1; i >= 0; i -= 1) {
+    const candidate = filtered[i];
+    if (!candidate || typeof candidate !== "object") {
+      continue;
+    }
+    if ((candidate as { role?: unknown }).role !== "assistant") {
+      continue;
+    }
+    const text = extractAssistantText(candidate);
+    if (!text?.trim()) {
+      continue;
+    }
+    return text;
+  }
+  return undefined;
 }
 
 export async function runAgentStep(params: {
@@ -24,6 +37,9 @@ export async function runAgentStep(params: {
   timeoutMs: number;
   channel?: string;
   lane?: string;
+  sourceSessionKey?: string;
+  sourceChannel?: string;
+  sourceTool?: string;
 }): Promise<string | undefined> {
   const stepIdem = crypto.randomUUID();
   const response = await callGateway<{ runId?: string }>({
@@ -36,6 +52,12 @@ export async function runAgentStep(params: {
       channel: params.channel ?? INTERNAL_MESSAGE_CHANNEL,
       lane: params.lane ?? AGENT_LANE_NESTED,
       extraSystemPrompt: params.extraSystemPrompt,
+      inputProvenance: {
+        kind: "inter_session",
+        sourceSessionKey: params.sourceSessionKey,
+        sourceChannel: params.sourceChannel,
+        sourceTool: params.sourceTool ?? "sessions_send",
+      },
     },
     timeoutMs: 10_000,
   });

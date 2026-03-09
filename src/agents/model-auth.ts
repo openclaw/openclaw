@@ -1,9 +1,13 @@
-import { type Api, getEnvApiKey, type Model } from "@mariozechner/pi-ai";
 import path from "node:path";
+import { type Api, getEnvApiKey, type Model } from "@mariozechner/pi-ai";
+import { formatCliCommand } from "../cli/command-format.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { ModelProviderAuthMode, ModelProviderConfig } from "../config/types.js";
-import { formatCliCommand } from "../cli/command-format.js";
 import { getShellEnvAppliedKeys } from "../infra/shell-env.js";
+import {
+  normalizeOptionalSecretInput,
+  normalizeSecretInput,
+} from "../utils/normalize-secret-input.js";
 import {
   type AuthProfileStore,
   ensureAuthProfileStore,
@@ -12,6 +16,8 @@ import {
   resolveAuthProfileOrder,
   resolveAuthStorePathForDisplay,
 } from "./auth-profiles.js";
+import { PROVIDER_ENV_API_KEY_CANDIDATES } from "./model-auth-env-vars.js";
+import { OLLAMA_LOCAL_AUTH_MARKER } from "./model-auth-markers.js";
 import { normalizeProviderId } from "./model-selection.js";
 
 export { ensureAuthProfileStore, resolveAuthProfileOrder } from "./auth-profiles.js";
@@ -48,8 +54,7 @@ export function getCustomProviderApiKey(
   provider: string,
 ): string | undefined {
   const entry = resolveProviderConfig(cfg, provider);
-  const key = entry?.apiKey?.trim();
-  return key || undefined;
+  return normalizeOptionalSecretInput(entry?.apiKey);
 }
 
 function resolveProviderAuthOverride(
@@ -62,6 +67,35 @@ function resolveProviderAuthOverride(
     return auth;
   }
   return undefined;
+}
+
+function resolveSyntheticLocalProviderAuth(params: {
+  cfg: OpenClawConfig | undefined;
+  provider: string;
+}): ResolvedProviderAuth | null {
+  const normalizedProvider = normalizeProviderId(params.provider);
+  if (normalizedProvider !== "ollama") {
+    return null;
+  }
+
+  const providerConfig = resolveProviderConfig(params.cfg, params.provider);
+  if (!providerConfig) {
+    return null;
+  }
+
+  const hasApiConfig =
+    Boolean(providerConfig.api?.trim()) ||
+    Boolean(providerConfig.baseUrl?.trim()) ||
+    (Array.isArray(providerConfig.models) && providerConfig.models.length > 0);
+  if (!hasApiConfig) {
+    return null;
+  }
+
+  return {
+    apiKey: OLLAMA_LOCAL_AUTH_MARKER,
+    source: "models.providers.ollama (synthetic local key)",
+    mode: "api-key",
+  };
 }
 
 function resolveEnvSourceLabel(params: {
@@ -204,6 +238,11 @@ export async function resolveApiKeyForProvider(params: {
     return { apiKey: customKey, source: "models.json", mode: "api-key" };
   }
 
+  const syntheticLocalAuth = resolveSyntheticLocalProviderAuth({ cfg, provider });
+  if (syntheticLocalAuth) {
+    return syntheticLocalAuth;
+  }
+
   const normalized = normalizeProviderId(provider);
   if (authOverride === undefined && normalized === "amazon-bedrock") {
     return resolveAwsSdkAuthInfo();
@@ -213,7 +252,7 @@ export async function resolveApiKeyForProvider(params: {
     const hasCodex = listProfilesForProvider(store, "openai-codex").length > 0;
     if (hasCodex) {
       throw new Error(
-        'No API key found for provider "openai". You are authenticated with OpenAI Codex OAuth. Use openai-codex/gpt-5.2 (ChatGPT OAuth) or set OPENAI_API_KEY for openai/gpt-5.2.',
+        'No API key found for provider "openai". You are authenticated with OpenAI Codex OAuth. Use openai-codex/gpt-5.4 (OAuth) or set OPENAI_API_KEY to use openai/gpt-5.4.',
       );
     }
   }
@@ -232,11 +271,14 @@ export async function resolveApiKeyForProvider(params: {
 export type EnvApiKeyResult = { apiKey: string; source: string };
 export type ModelAuthMode = "api-key" | "oauth" | "token" | "mixed" | "aws-sdk" | "unknown";
 
-export function resolveEnvApiKey(provider: string): EnvApiKeyResult | null {
+export function resolveEnvApiKey(
+  provider: string,
+  env: NodeJS.ProcessEnv = process.env,
+): EnvApiKeyResult | null {
   const normalized = normalizeProviderId(provider);
   const applied = new Set(getShellEnvAppliedKeys());
   const pick = (envVar: string): EnvApiKeyResult | null => {
-    const value = process.env[envVar]?.trim();
+    const value = normalizeOptionalSecretInput(env[envVar]);
     if (!value) {
       return null;
     }
@@ -244,20 +286,14 @@ export function resolveEnvApiKey(provider: string): EnvApiKeyResult | null {
     return { apiKey: value, source };
   };
 
-  if (normalized === "github-copilot") {
-    return pick("COPILOT_GITHUB_TOKEN") ?? pick("GH_TOKEN") ?? pick("GITHUB_TOKEN");
-  }
-
-  if (normalized === "anthropic") {
-    return pick("ANTHROPIC_OAUTH_TOKEN") ?? pick("ANTHROPIC_API_KEY");
-  }
-
-  if (normalized === "chutes") {
-    return pick("CHUTES_OAUTH_TOKEN") ?? pick("CHUTES_API_KEY");
-  }
-
-  if (normalized === "zai") {
-    return pick("ZAI_API_KEY") ?? pick("Z_AI_API_KEY");
+  const candidates = PROVIDER_ENV_API_KEY_CANDIDATES[normalized];
+  if (candidates) {
+    for (const envVar of candidates) {
+      const resolved = pick(envVar);
+      if (resolved) {
+        return resolved;
+      }
+    }
   }
 
   if (normalized === "google-vertex") {
@@ -267,45 +303,7 @@ export function resolveEnvApiKey(provider: string): EnvApiKeyResult | null {
     }
     return { apiKey: envKey, source: "gcloud adc" };
   }
-
-  if (normalized === "opencode") {
-    return pick("OPENCODE_API_KEY") ?? pick("OPENCODE_ZEN_API_KEY");
-  }
-
-  if (normalized === "qwen-portal") {
-    return pick("QWEN_OAUTH_TOKEN") ?? pick("QWEN_PORTAL_API_KEY");
-  }
-
-  if (normalized === "minimax-portal") {
-    return pick("MINIMAX_OAUTH_TOKEN") ?? pick("MINIMAX_API_KEY");
-  }
-
-  if (normalized === "kimi-coding") {
-    return pick("KIMI_API_KEY") ?? pick("KIMICODE_API_KEY");
-  }
-
-  const envMap: Record<string, string> = {
-    openai: "OPENAI_API_KEY",
-    google: "GEMINI_API_KEY",
-    groq: "GROQ_API_KEY",
-    deepgram: "DEEPGRAM_API_KEY",
-    cerebras: "CEREBRAS_API_KEY",
-    xai: "XAI_API_KEY",
-    openrouter: "OPENROUTER_API_KEY",
-    "vercel-ai-gateway": "AI_GATEWAY_API_KEY",
-    moonshot: "MOONSHOT_API_KEY",
-    minimax: "MINIMAX_API_KEY",
-    xiaomi: "XIAOMI_API_KEY",
-    synthetic: "SYNTHETIC_API_KEY",
-    venice: "VENICE_API_KEY",
-    mistral: "MISTRAL_API_KEY",
-    opencode: "OPENCODE_API_KEY",
-  };
-  const envVar = envMap[normalized];
-  if (!envVar) {
-    return null;
-  }
-  return pick(envVar);
+  return null;
 }
 
 export function resolveModelAuthMode(
@@ -383,7 +381,7 @@ export async function getApiKeyForModel(params: {
 }
 
 export function requireApiKey(auth: ResolvedProviderAuth, provider: string): string {
-  const key = auth.apiKey?.trim();
+  const key = normalizeSecretInput(auth.apiKey);
   if (key) {
     return key;
   }

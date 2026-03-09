@@ -1,21 +1,62 @@
+import type { ChatType } from "../channels/chat-type.js";
 import type { AgentDefaultsConfig } from "./types.agent-defaults.js";
+import type { AgentModelConfig, AgentSandboxConfig } from "./types.agents-shared.js";
 import type { HumanDelayConfig, IdentityConfig } from "./types.base.js";
 import type { GroupChatConfig } from "./types.messages.js";
-import type {
-  SandboxBrowserSettings,
-  SandboxDockerSettings,
-  SandboxPruneSettings,
-} from "./types.sandbox.js";
 import type { AgentToolsConfig, MemorySearchConfig } from "./types.tools.js";
 
-export type AgentModelConfig =
-  | string
+export type AgentRuntimeAcpConfig = {
+  /** ACP harness adapter id (for example codex, claude). */
+  agent?: string;
+  /** Optional ACP backend override for this agent runtime. */
+  backend?: string;
+  /** Optional ACP session mode override. */
+  mode?: "persistent" | "oneshot";
+  /** Optional runtime working directory override. */
+  cwd?: string;
+};
+
+export type AgentRuntimeConfig =
   | {
-      /** Primary model (provider/model). */
-      primary?: string;
-      /** Per-agent model fallbacks (provider/model). */
-      fallbacks?: string[];
+      type: "embedded";
+    }
+  | {
+      type: "acp";
+      acp?: AgentRuntimeAcpConfig;
     };
+
+export type AgentBindingMatch = {
+  channel: string;
+  accountId?: string;
+  peer?: { kind: ChatType; id: string };
+  guildId?: string;
+  teamId?: string;
+  /** Discord role IDs used for role-based routing. */
+  roles?: string[];
+};
+
+export type AgentRouteBinding = {
+  /** Missing type is interpreted as route for backward compatibility. */
+  type?: "route";
+  agentId: string;
+  comment?: string;
+  match: AgentBindingMatch;
+};
+
+export type AgentAcpBinding = {
+  type: "acp";
+  agentId: string;
+  comment?: string;
+  match: AgentBindingMatch;
+  acp?: {
+    mode?: "persistent" | "oneshot";
+    label?: string;
+    cwd?: string;
+    backend?: string;
+  };
+};
+
+export type AgentBinding = AgentRouteBinding | AgentAcpBinding;
 
 export type AgentConfig = {
   id: string;
@@ -24,6 +65,8 @@ export type AgentConfig = {
   workspace?: string;
   agentDir?: string;
   model?: AgentModelConfig;
+  /** Optional allowlist of skills for this agent (omit = all skills; empty = none). */
+  skills?: string[];
   memorySearch?: MemorySearchConfig;
   /** Human-like delay between block replies for this agent. */
   humanDelay?: HumanDelayConfig;
@@ -35,45 +78,18 @@ export type AgentConfig = {
     /** Allow spawning sub-agents under other agent ids. Use "*" to allow any. */
     allowAgents?: string[];
     /** Per-agent default model for spawned sub-agents (string or {primary,fallbacks}). */
-    model?: string | { primary?: string; fallbacks?: string[] };
+    model?: AgentModelConfig;
   };
-  sandbox?: {
-    mode?: "off" | "non-main" | "all";
-    /** Agent workspace access inside the sandbox. */
-    workspaceAccess?: "none" | "ro" | "rw";
-    /**
-     * Session tools visibility for sandboxed sessions.
-     * - "spawned": only allow session tools to target sessions spawned from this session (default)
-     * - "all": allow session tools to target any session
-     */
-    sessionToolsVisibility?: "spawned" | "all";
-    /** Container/workspace scope for sandbox isolation. */
-    scope?: "session" | "agent" | "shared";
-    /** Legacy alias for scope ("session" when true, "shared" when false). */
-    perSession?: boolean;
-    workspaceRoot?: string;
-    /** Docker-specific sandbox overrides for this agent. */
-    docker?: SandboxDockerSettings;
-    /** Optional sandboxed browser overrides for this agent. */
-    browser?: SandboxBrowserSettings;
-    /** Auto-prune overrides for this agent. */
-    prune?: SandboxPruneSettings;
-  };
+  /** Optional per-agent sandbox overrides. */
+  sandbox?: AgentSandboxConfig;
+  /** Optional per-agent stream params (e.g. cacheRetention, temperature). */
+  params?: Record<string, unknown>;
   tools?: AgentToolsConfig;
+  /** Optional runtime descriptor for this agent. */
+  runtime?: AgentRuntimeConfig;
 };
 
 export type AgentsConfig = {
   defaults?: AgentDefaultsConfig;
   list?: AgentConfig[];
-};
-
-export type AgentBinding = {
-  agentId: string;
-  match: {
-    channel: string;
-    accountId?: string;
-    peer?: { kind: "dm" | "group" | "channel"; id: string };
-    guildId?: string;
-    teamId?: string;
-  };
 };

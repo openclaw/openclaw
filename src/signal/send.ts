@@ -1,17 +1,19 @@
-import { loadConfig } from "../config/config.js";
+import { loadConfig, type OpenClawConfig } from "../config/config.js";
 import { resolveMarkdownTableMode } from "../config/markdown-tables.js";
-import { mediaKindFromMime } from "../media/constants.js";
-import { saveMediaBuffer } from "../media/store.js";
-import { loadWebMedia } from "../web/media.js";
+import { kindFromMime } from "../media/mime.js";
+import { resolveOutboundAttachmentFromUrl } from "../media/outbound-attachment.js";
 import { resolveSignalAccount } from "./accounts.js";
 import { signalRpcRequest } from "./client.js";
 import { markdownToSignalText, type SignalTextStyleRange } from "./format.js";
+import { resolveSignalRpcContext } from "./rpc-context.js";
 
 export type SignalSendOpts = {
+  cfg?: OpenClawConfig;
   baseUrl?: string;
   account?: string;
   accountId?: string;
   mediaUrl?: string;
+  mediaLocalRoots?: readonly string[];
   maxBytes?: number;
   timeoutMs?: number;
   textMode?: "markdown" | "plain";
@@ -94,48 +96,12 @@ function buildTargetParams(
   return null;
 }
 
-function resolveSignalRpcContext(
-  opts: SignalRpcOpts,
-  accountInfo?: ReturnType<typeof resolveSignalAccount>,
-) {
-  const hasBaseUrl = Boolean(opts.baseUrl?.trim());
-  const hasAccount = Boolean(opts.account?.trim());
-  const resolvedAccount =
-    accountInfo ||
-    (!hasBaseUrl || !hasAccount
-      ? resolveSignalAccount({
-          cfg: loadConfig(),
-          accountId: opts.accountId,
-        })
-      : undefined);
-  const baseUrl = opts.baseUrl?.trim() || resolvedAccount?.baseUrl;
-  if (!baseUrl) {
-    throw new Error("Signal base URL is required");
-  }
-  const account = opts.account?.trim() || resolvedAccount?.config.account?.trim();
-  return { baseUrl, account };
-}
-
-async function resolveAttachment(
-  mediaUrl: string,
-  maxBytes: number,
-): Promise<{ path: string; contentType?: string }> {
-  const media = await loadWebMedia(mediaUrl, maxBytes);
-  const saved = await saveMediaBuffer(
-    media.buffer,
-    media.contentType ?? undefined,
-    "outbound",
-    maxBytes,
-  );
-  return { path: saved.path, contentType: saved.contentType };
-}
-
 export async function sendMessageSignal(
   to: string,
   text: string,
   opts: SignalSendOpts = {},
 ): Promise<SignalSendResult> {
-  const cfg = loadConfig();
+  const cfg = opts.cfg ?? loadConfig();
   const accountInfo = resolveSignalAccount({
     cfg,
     accountId: opts.accountId,
@@ -161,9 +127,11 @@ export async function sendMessageSignal(
 
   let attachments: string[] | undefined;
   if (opts.mediaUrl?.trim()) {
-    const resolved = await resolveAttachment(opts.mediaUrl.trim(), maxBytes);
+    const resolved = await resolveOutboundAttachmentFromUrl(opts.mediaUrl.trim(), maxBytes, {
+      localRoots: opts.mediaLocalRoots,
+    });
     attachments = [resolved.path];
-    const kind = mediaKindFromMime(resolved.contentType ?? undefined);
+    const kind = kindFromMime(resolved.contentType ?? undefined);
     if (!message && kind) {
       // Avoid sending an empty body when only attachments exist.
       message = kind === "image" ? "<media:image>" : `<media:${kind}>`;
