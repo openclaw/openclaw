@@ -161,6 +161,17 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount> = {
         chunkMode: { type: "string", enum: ["length", "newline"] },
         mediaMaxMb: { type: "number", minimum: 0 },
         renderMode: { type: "string", enum: ["auto", "raw", "card"] },
+        threadBindings: {
+          type: "object",
+          additionalProperties: false,
+          properties: {
+            enabled: { type: "boolean" },
+            idleHours: { type: "number", minimum: 0 },
+            maxAgeHours: { type: "number", minimum: 0 },
+            spawnSubagentSessions: { type: "boolean" },
+            spawnAcpSessions: { type: "boolean" },
+          },
+        },
         accounts: {
           type: "object",
           additionalProperties: {
@@ -352,12 +363,40 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount> = {
   gateway: {
     startAccount: async (ctx) => {
       const { monitorFeishuProvider } = await import("./monitor.js");
+      const { createFeishuThreadBindingManager } = await import("./thread-bindings.js");
+      const {
+        resolveThreadBindingSpawnPolicy,
+        resolveThreadBindingIdleTimeoutMsForChannel,
+        resolveThreadBindingMaxAgeMsForChannel,
+      } = await import("openclaw/plugin-sdk/feishu");
       const account = resolveFeishuAccount({ cfg: ctx.cfg, accountId: ctx.accountId });
       const port = account.config?.webhookPort ?? null;
       ctx.setStatus({ accountId: ctx.accountId, port });
       ctx.log?.info(
         `starting feishu[${ctx.accountId}] (mode: ${account.config?.connectionMode ?? "websocket"})`,
       );
+      // Initialize thread binding manager so /focus can bind sessions to Feishu conversations.
+      const threadBindingPolicy = resolveThreadBindingSpawnPolicy({
+        cfg: ctx.cfg,
+        channel: "feishu",
+        accountId: ctx.accountId,
+        kind: "subagent",
+      });
+      if (threadBindingPolicy.enabled) {
+        createFeishuThreadBindingManager({
+          accountId: ctx.accountId,
+          idleTimeoutMs: resolveThreadBindingIdleTimeoutMsForChannel({
+            cfg: ctx.cfg,
+            channel: "feishu",
+            accountId: ctx.accountId,
+          }),
+          maxAgeMs: resolveThreadBindingMaxAgeMsForChannel({
+            cfg: ctx.cfg,
+            channel: "feishu",
+            accountId: ctx.accountId,
+          }),
+        });
+      }
       return monitorFeishuProvider({
         config: ctx.cfg,
         runtime: ctx.runtime,

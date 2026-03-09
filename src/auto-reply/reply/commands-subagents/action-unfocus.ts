@@ -3,9 +3,11 @@ import type { CommandHandlerResult } from "../commands-types.js";
 import {
   type SubagentsCommandContext,
   isDiscordSurface,
+  isFeishuSurface,
   isTelegramSurface,
   resolveChannelAccountId,
   resolveCommandSurfaceChannel,
+  resolveFeishuConversationId,
   resolveTelegramConversationId,
   stopWithText,
 } from "./shared.js";
@@ -15,8 +17,8 @@ export async function handleSubagentsUnfocusAction(
 ): Promise<CommandHandlerResult> {
   const { params } = ctx;
   const channel = resolveCommandSurfaceChannel(params);
-  if (channel !== "discord" && channel !== "telegram") {
-    return stopWithText("⚠️ /unfocus is only available on Discord and Telegram.");
+  if (channel !== "discord" && channel !== "telegram" && channel !== "feishu") {
+    return stopWithText("⚠️ /unfocus is only available on Discord, Telegram, and Feishu.");
   }
 
   const accountId = resolveChannelAccountId(params);
@@ -30,12 +32,20 @@ export async function handleSubagentsUnfocusAction(
     if (isTelegramSurface(params)) {
       return resolveTelegramConversationId(params);
     }
+    if (isFeishuSurface(params)) {
+      return resolveFeishuConversationId(params);
+    }
     return undefined;
   })();
 
   if (!conversationId) {
     if (channel === "discord") {
       return stopWithText("⚠️ /unfocus must be run inside a Discord thread.");
+    }
+    if (channel === "feishu") {
+      return stopWithText(
+        "⚠️ /unfocus on Feishu requires a topic thread in groups, or a direct-message conversation.",
+      );
     }
     return stopWithText(
       "⚠️ /unfocus on Telegram requires a topic context in groups, or a direct-message conversation.",
