@@ -19,7 +19,7 @@ describe("runCronIsolatedAgentTurn forum topic delivery", () => {
     await withTempCronHome(async (home) => {
       const storePath = await writeSessionStore(home, { lastProvider: "webchat", lastTo: "" });
       const deps = createCliDeps();
-      mockAgentPayloads([{ text: "forum message" }]);
+      mockAgentPayloads([{ text: "forum " }, { text: "message" }]);
 
       const res = await runTelegramAnnounceTurn({
         home,
@@ -38,7 +38,7 @@ describe("runCronIsolatedAgentTurn forum topic delivery", () => {
       });
 
       vi.clearAllMocks();
-      mockAgentPayloads([{ text: "plain message" }]);
+      mockAgentPayloads([{ text: "plain " }, { text: "message" }]);
 
       const plainRes = await runTelegramAnnounceTurn({
         home,
@@ -53,6 +53,53 @@ describe("runCronIsolatedAgentTurn forum topic delivery", () => {
       expectDirectTelegramDelivery(deps, {
         chatId: "123",
         text: "plain message",
+      });
+    });
+  });
+
+  it("merges multi-chunk text payloads for forum topic delivery (#13812)", async () => {
+    await withTempCronHome(async (home) => {
+      const storePath = await writeSessionStore(home, { lastProvider: "webchat", lastTo: "" });
+      const deps = createCliDeps();
+      mockAgentPayloads([{ text: "Line 1\n" }, { text: "Line 2\n" }, { text: "Line 3" }]);
+
+      const res = await runTelegramAnnounceTurn({
+        home,
+        storePath,
+        deps,
+        delivery: { mode: "announce", channel: "telegram", to: "123:topic:42" },
+      });
+
+      expect(res.status).toBe("ok");
+      expect(res.delivered).toBe(true);
+      expect(runSubagentAnnounceFlow).not.toHaveBeenCalled();
+      expectDirectTelegramDelivery(deps, {
+        chatId: "123",
+        text: "Line 1\nLine 2\nLine 3",
+        messageThreadId: 42,
+      });
+    });
+  });
+
+  it("delivers merged text for plain announce targets with multi-chunk payloads", async () => {
+    await withTempCronHome(async (home) => {
+      const storePath = await writeSessionStore(home, { lastProvider: "webchat", lastTo: "" });
+      const deps = createCliDeps();
+      mockAgentPayloads([{ text: "chunk-a " }, { text: "chunk-b" }]);
+
+      const res = await runTelegramAnnounceTurn({
+        home,
+        storePath,
+        deps,
+        delivery: { mode: "announce", channel: "telegram", to: "456" },
+      });
+
+      expect(res.status).toBe("ok");
+      expect(res.delivered).toBe(true);
+      expect(runSubagentAnnounceFlow).not.toHaveBeenCalled();
+      expectDirectTelegramDelivery(deps, {
+        chatId: "456",
+        text: "chunk-a chunk-b",
       });
     });
   });
