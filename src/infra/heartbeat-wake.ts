@@ -44,11 +44,14 @@ let timerDueAt: number | null = null;
 let timerKind: WakeTimerKind | null = null;
 
 // Circuit breaker: track consecutive failures to prevent retry storms.
-// After MAX_CONSECUTIVE_FAILURES, stop retrying until a successful run or
-// a new handler registration resets the counter.
+// After MAX_CONSECUTIVE_FAILURES, stop retrying for BREAKER_COOLDOWN_MS.
+// The breaker auto-resets (half-open) after the cooldown so heartbeats
+// self-heal once dependencies recover, without requiring a lifecycle restart.
 let consecutiveFailures = 0;
+let breakerTrippedAt = 0;
 const MAX_CONSECUTIVE_FAILURES = 5;
 const MAX_RETRY_BACKOFF_MS = 60_000;
+const BREAKER_COOLDOWN_MS = 5 * 60_000; // 5 minutes
 
 const DEFAULT_COALESCE_MS = 250;
 const DEFAULT_RETRY_MS = 1_000;
@@ -166,11 +169,15 @@ function schedule(coalesceMs: number, kind: WakeTimerKind = "normal") {
     }
 
     // Circuit breaker: if too many consecutive failures, drop pending wakes
-    // instead of hammering the handler. The breaker resets on the next
-    // successful run or when a new handler is registered (lifecycle restart).
+    // unless the cooldown has elapsed (half-open probe).
     if (consecutiveFailures >= MAX_CONSECUTIVE_FAILURES) {
-      pendingWakes.clear();
-      return;
+      const elapsed = Date.now() - breakerTrippedAt;
+      if (elapsed < BREAKER_COOLDOWN_MS) {
+        pendingWakes.clear();
+        return;
+      }
+      // Half-open: allow one probe attempt after the cooldown
+      consecutiveFailures = MAX_CONSECUTIVE_FAILURES - 1;
     }
 
     const pendingBatch = Array.from(pendingWakes.values());
@@ -188,6 +195,7 @@ function schedule(coalesceMs: number, kind: WakeTimerKind = "normal") {
           consecutiveFailures += 1;
           if (consecutiveFailures >= MAX_CONSECUTIVE_FAILURES) {
             // Trip the breaker — stop retrying this batch.
+            breakerTrippedAt = Date.now();
             break;
           }
           const backoffMs = computeRetryBackoffMs(consecutiveFailures);
@@ -262,6 +270,7 @@ export function setHeartbeatWakeHandler(next: HeartbeatWakeHandler | null): () =
     scheduled = false;
     // Reset the circuit breaker so a fresh lifecycle starts clean.
     consecutiveFailures = 0;
+    breakerTrippedAt = 0;
   }
   if (handler && pendingWakes.size > 0) {
     schedule(DEFAULT_COALESCE_MS, "normal");
@@ -311,6 +320,7 @@ export function resetHeartbeatWakeStateForTests() {
   scheduled = false;
   running = false;
   consecutiveFailures = 0;
+  breakerTrippedAt = 0;
   handlerGeneration += 1;
   handler = null;
 }
