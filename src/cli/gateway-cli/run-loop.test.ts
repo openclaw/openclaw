@@ -78,10 +78,7 @@ async function withIsolatedSignals(
   run: (helpers: { captureSignal: (signal: LoopSignal) => () => void }) => Promise<void>,
 ) {
   const existingListeners = Object.fromEntries(
-    LOOP_SIGNALS.map((signal) => [
-      signal,
-      new Set(process.listeners(signal) as SignalListener[]),
-    ]),
+    LOOP_SIGNALS.map((signal) => [signal, new Set(process.listeners(signal) as SignalListener[])]),
   ) as Record<LoopSignal, Set<SignalListener>>;
   const captureSignal = (signal: LoopSignal) => {
     const listener = addedSignalListener(signal, existingListeners[signal]);
