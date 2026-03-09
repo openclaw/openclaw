@@ -34,6 +34,7 @@ import { setupOnboardingShellCompletion } from "./onboarding.completion.js";
 import { resolveOnboardingSecretInputString } from "./onboarding.secret-input.js";
 import type { GatewayWizardSettings, WizardFlow } from "./onboarding.types.js";
 import type { WizardPrompter } from "./prompts.js";
+import { t, detectLocale, setLocale } from "./i18n/index.js";
 
 type FinalizeOnboardingOptions = {
   flow: WizardFlow;
@@ -49,6 +50,7 @@ type FinalizeOnboardingOptions = {
 export async function finalizeOnboardingWizard(
   options: FinalizeOnboardingOptions,
 ): Promise<{ launchedTui: boolean }> {
+  setLocale(detectLocale());
   const { flow, opts, baseConfig, nextConfig, settings, prompter, runtime } = options;
 
   const withWizardProgress = async <T>(
@@ -335,34 +337,34 @@ export async function finalizeOnboardingWizard(
     if (hasBootstrap) {
       await prompter.note(
         [
-          "This is the defining action that makes your agent you.",
-          "Please take your time.",
-          "The more you tell it, the better the experience will be.",
-          'We will send: "Wake up, my friend!"',
+          t("hatchIntro.definingAction"),
+          t("hatchIntro.takeYourTime"),
+          t("hatchIntro.tellMore"),
+          t("hatchIntro.willSend"),
         ].join("\n"),
-        "Start TUI (best option!)",
+        t("hatchIntro.title"),
       );
     }
 
     await prompter.note(
       [
-        "Gateway token: shared auth for the Gateway + Control UI.",
-        "Stored in: ~/.openclaw/openclaw.json (gateway.auth.token) or OPENCLAW_GATEWAY_TOKEN.",
+        t("token.description"),
+        t("token.stored"),
         `View token: ${formatCliCommand("openclaw config get gateway.auth.token")}`,
         `Generate token: ${formatCliCommand("openclaw doctor --generate-gateway-token")}`,
-        "Web UI keeps dashboard URL tokens in memory for the current tab and strips them from the URL after load.",
+        t("token.webUiKeeps"),
         `Open the dashboard anytime: ${formatCliCommand("openclaw dashboard --no-open")}`,
-        "If prompted: paste the token into Control UI settings (or use the tokenized dashboard URL).",
+        t("token.ifPrompted"),
       ].join("\n"),
-      "Token",
+      t("token.title"),
     );
 
     hatchChoice = await prompter.select({
-      message: "How do you want to hatch your bot?",
+      message: t("hatchChoice.question"),
       options: [
-        { value: "tui", label: "Hatch in TUI (recommended)" },
-        { value: "web", label: "Open the Web UI" },
-        { value: "later", label: "Do this later" },
+        { value: "tui", label: t("hatchChoice.tuiOption") },
+        { value: "web", label: t("hatchChoice.webOption") },
+        { value: "later", label: t("hatchChoice.laterOption") },
       ],
       initialValue: "tui",
     });
@@ -375,7 +377,7 @@ export async function finalizeOnboardingWizard(
         password: settings.authMode === "password" ? resolvedGatewayPassword : "",
         // Safety: onboarding TUI should not auto-deliver to lastProvider/lastTo.
         deliver: false,
-        message: hasBootstrap ? "Wake up, my friend!" : undefined,
+        message: hasBootstrap ? t("wakeMessage") : undefined,
       });
       launchedTui = true;
     } else if (hatchChoice === "web") {
@@ -400,18 +402,18 @@ export async function finalizeOnboardingWizard(
         [
           `Dashboard link (with token): ${authedUrl}`,
           controlUiOpened
-            ? "Opened in your browser. Keep that tab to control OpenClaw."
-            : "Copy/paste this URL in a browser on this machine to control OpenClaw.",
+            ? t("dashboard.opened")
+            : t("dashboard.copyPaste"),
           controlUiOpenHint,
         ]
           .filter(Boolean)
           .join("\n"),
-        "Dashboard ready",
+        t("dashboard.title"),
       );
     } else {
       await prompter.note(
-        `When you're ready: ${formatCliCommand("openclaw dashboard --no-open")}`,
-        "Later",
+        t("later.whenReady", { command: formatCliCommand("openclaw dashboard --no-open") }),
+        t("later.title"),
       );
     }
   } else if (opts.skipUi) {
@@ -461,13 +463,13 @@ export async function finalizeOnboardingWizard(
       [
         `Dashboard link (with token): ${authedUrl}`,
         controlUiOpened
-          ? "Opened in your browser. Keep that tab to control OpenClaw."
-          : "Copy/paste this URL in a browser on this machine to control OpenClaw.",
+          ? t("dashboard.opened")
+          : t("dashboard.copyPaste"),
         controlUiOpenHint,
       ]
         .filter(Boolean)
         .join("\n"),
-      "Dashboard ready",
+      t("dashboard.title"),
     );
   }
 

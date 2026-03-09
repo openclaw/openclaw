@@ -2,6 +2,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { resolveOpenClawPackageRoot } from "../infra/openclaw-root.js";
 import { pathExists } from "../utils.js";
+import { getLocale } from "../wizard/i18n/index.js";
 
 const FALLBACK_TEMPLATE_DIR = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
@@ -15,6 +16,7 @@ export async function resolveWorkspaceTemplateDir(opts?: {
   cwd?: string;
   argv1?: string;
   moduleUrl?: string;
+  locale?: string;
 }): Promise<string> {
   if (cachedTemplateDir) {
     return cachedTemplateDir;
@@ -27,10 +29,14 @@ export async function resolveWorkspaceTemplateDir(opts?: {
     const moduleUrl = opts?.moduleUrl ?? import.meta.url;
     const argv1 = opts?.argv1 ?? process.argv[1];
     const cwd = opts?.cwd ?? process.cwd();
+    const locale = opts?.locale ?? getLocale();
 
     const packageRoot = await resolveOpenClawPackageRoot({ moduleUrl, argv1, cwd });
+    const baseDir = packageRoot ? path.join(packageRoot, "docs", "reference", "templates") : null;
+
     const candidates = [
-      packageRoot ? path.join(packageRoot, "docs", "reference", "templates") : null,
+      baseDir && locale !== "en" ? path.join(baseDir, locale) : null,
+      baseDir,
       cwd ? path.resolve(cwd, "docs", "reference", "templates") : null,
       FALLBACK_TEMPLATE_DIR,
     ].filter(Boolean) as string[];
