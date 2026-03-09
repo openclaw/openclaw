@@ -569,16 +569,7 @@ export async function startGatewayServer(
     throw new Error(gatewayTls.error ?? "gateway tls: failed to enable");
   }
   const serverStartedAt = Date.now();
-  const channelManager = createChannelManager({
-    loadConfig,
-    channelLogs,
-    channelRuntimeEnvs,
-    channelRuntime: createPluginRuntime().channel,
-  });
-  const getReadiness = createReadinessChecker({
-    channelManager,
-    startedAt: serverStartedAt,
-  });
+
   const {
     canvasHost,
     httpServer,
@@ -622,7 +613,6 @@ export async function startGatewayServer(
     log,
     logHooks,
     logPlugins,
-    getReadiness,
   });
   let bonjourStop: (() => Promise<void>) | null = null;
   const nodeRegistry = new NodeRegistry();
@@ -658,6 +648,10 @@ export async function startGatewayServer(
     channelRuntimeEnvs,
     channelRuntime: createPluginRuntime().channel,
     onInboundMessage: createEmitInboundUserMessage(broadcast),
+  });
+  const getReadiness = createReadinessChecker({
+    channelManager,
+    startedAt: serverStartedAt,
   });
   const { getRuntimeSnapshot, startChannels, startChannel, stopChannel, markChannelLoggedOut } =
     channelManager;
