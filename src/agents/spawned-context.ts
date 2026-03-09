@@ -1,6 +1,6 @@
 import type { OpenClawConfig } from "../config/config.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
-import { resolveAgentWorkspaceDir } from "./agent-scope.js";
+import { resolveAgentConfig, resolveAgentWorkspaceDir } from "./agent-scope.js";
 
 export type SpawnedRunMetadata = {
   spawnedBy?: string | null;
@@ -60,10 +60,20 @@ export function resolveSpawnedWorkspaceInheritance(params: {
   config: OpenClawConfig;
   requesterSessionKey?: string;
   explicitWorkspaceDir?: string | null;
+  targetAgentId?: string | null;
 }): string | undefined {
   const explicit = normalizeOptionalText(params.explicitWorkspaceDir);
   if (explicit) {
     return explicit;
+  }
+  const targetAgentId = normalizeOptionalText(params.targetAgentId);
+  const targetWorkspace = targetAgentId
+    ? normalizeOptionalText(
+        resolveAgentConfig(params.config, normalizeAgentId(targetAgentId))?.workspace,
+      )
+    : undefined;
+  if (targetWorkspace && targetAgentId) {
+    return resolveAgentWorkspaceDir(params.config, normalizeAgentId(targetAgentId));
   }
   const requesterAgentId = params.requesterSessionKey
     ? parseAgentSessionKey(params.requesterSessionKey)?.agentId

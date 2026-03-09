@@ -49,14 +49,47 @@ describe("resolveSpawnedWorkspaceInheritance", () => {
       config: {},
       requesterSessionKey: "agent:main:subagent:parent",
       explicitWorkspaceDir: " /tmp/explicit ",
+      targetAgentId: "ct-manager",
     });
     expect(resolved).toBe("/tmp/explicit");
+  });
+
+  it("prefers target agent explicit workspace over requester workspace", () => {
+    const resolved = resolveSpawnedWorkspaceInheritance({
+      config: {
+        agents: {
+          list: [
+            { id: "main", workspace: "/tmp/requester" },
+            { id: "ct-manager", workspace: "/tmp/target" },
+          ],
+        },
+      },
+      requesterSessionKey: "agent:main:subagent:parent",
+      targetAgentId: "ct-manager",
+      explicitWorkspaceDir: undefined,
+    });
+    expect(resolved).toBe("/tmp/target");
+  });
+
+  it("falls back to requester workspace when target agent has no explicit workspace", () => {
+    const resolved = resolveSpawnedWorkspaceInheritance({
+      config: {
+        agents: {
+          list: [{ id: "main", workspace: "/tmp/requester" }, { id: "ct-manager" }],
+        },
+      },
+      requesterSessionKey: "agent:main:subagent:parent",
+      targetAgentId: "ct-manager",
+      explicitWorkspaceDir: undefined,
+    });
+    expect(resolved).toBe("/tmp/requester");
   });
 
   it("returns undefined for missing requester context", () => {
     const resolved = resolveSpawnedWorkspaceInheritance({
       config: {},
       requesterSessionKey: undefined,
+      targetAgentId: undefined,
       explicitWorkspaceDir: undefined,
     });
     expect(resolved).toBeUndefined();
