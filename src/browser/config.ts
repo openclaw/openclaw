@@ -37,6 +37,7 @@ export type ResolvedBrowserConfig = {
   profiles: Record<string, BrowserProfileConfig>;
   ssrfPolicy?: SsrFPolicy;
   extraArgs: string[];
+  gpuEnabled: boolean;
 };
 
 export type ResolvedBrowserProfile = {
@@ -248,6 +249,7 @@ export function resolveBrowserConfig(
   }
 
   const headless = cfg?.headless === true;
+  const gpuEnabled = cfg?.gpuEnabled === true;
   const noSandbox = cfg?.noSandbox === true;
   const attachOnly = cfg?.attachOnly === true;
   const executablePath = cfg?.executablePath?.trim() || undefined;
@@ -300,6 +302,7 @@ export function resolveBrowserConfig(
     profiles,
     ssrfPolicy,
     extraArgs,
+    gpuEnabled,
   };
 }
 
