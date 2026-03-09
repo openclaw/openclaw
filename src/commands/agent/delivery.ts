@@ -229,7 +229,8 @@ async function mirrorNestedTranscriptToChildSession(params: {
   }
 
   try {
-    const mirrorText = text?.trim()
+    const hasMirrorText = Boolean(text?.trim());
+    const mirrorText = hasMirrorText
       ? mediaUrls?.length
         ? `${text}\n\nAttached media: ${mediaUrls.join(", ")}`
         : text
@@ -238,7 +239,7 @@ async function mirrorNestedTranscriptToChildSession(params: {
       agentId,
       sessionKey,
       text: mirrorText ?? text,
-      mediaUrls,
+      mediaUrls: hasMirrorText ? undefined : mediaUrls,
     });
     if (!mirror.ok) {
       const message = `${formatNestedLogPrefix(opts, sessionKey)} transcript mirror skipped (${classifyNestedTranscriptMirrorFailure(mirror.reason)})`;

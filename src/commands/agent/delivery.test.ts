@@ -1,5 +1,6 @@
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi, type Mock } from "vitest";
 import { AGENT_LANE_NESTED } from "../../agents/lanes.js";
+import type { RuntimeEnv } from "../../runtime.js";
 
 const MAX_NESTED_TRANSCRIPT_TEXT_CHARS = 8_000;
 const MAX_NESTED_TRANSCRIPT_MEDIA_URLS = 16;
@@ -7,7 +8,7 @@ const mockAppendTranscript = vi
   .fn()
   .mockResolvedValue({ ok: true, sessionFile: "/tmp/test.jsonl" });
 vi.mock("../../config/sessions.js", async (importOriginal) => {
-  const original = await importOriginal();
+  const original = await importOriginal<typeof import("../../config/sessions.js")>();
   return {
     ...original,
     appendAssistantMessageToSessionTranscript: (...args: unknown[]) =>
@@ -43,10 +44,20 @@ vi.mock("../../channels/plugins/index.js", () => ({
 
 import { deliverAgentCommandResult } from "./delivery.js";
 
-function makeRuntime() {
+type RuntimeMock = RuntimeEnv & {
+  log: Mock<(...args: unknown[]) => void>;
+  error: Mock<(...args: unknown[]) => void>;
+  exit: Mock<(code: number) => void>;
+};
+
+function makeRuntime(): RuntimeMock {
+  const log = vi.fn<(...args: unknown[]) => void>();
+  const error = vi.fn<(...args: unknown[]) => void>();
+  const exit = vi.fn<(code: number) => void>();
   return {
-    log: vi.fn(),
-    error: vi.fn(),
+    log,
+    error,
+    exit,
   };
 }
 
@@ -169,7 +180,7 @@ describe("deliverAgentCommandResult – transcript mirror", () => {
     expect(mockAppendTranscript).toHaveBeenCalledWith({
       sessionKey: "session-media",
       text: "pic\n\nAttached media: https://example.com/img.png",
-      mediaUrls: ["https://example.com/img.png"],
+      mediaUrls: undefined,
       agentId: undefined,
     });
   });
@@ -213,7 +224,7 @@ describe("deliverAgentCommandResult – transcript mirror", () => {
     expect(mockAppendTranscript).toHaveBeenCalledWith({
       sessionKey: "session-text-media",
       text: "Here is the chart summary\n\nAttached media: https://example.com/chart.png, https://example.com/report.pdf",
-      mediaUrls: ["https://example.com/chart.png", "https://example.com/report.pdf"],
+      mediaUrls: undefined,
       agentId: undefined,
     });
   });
@@ -254,7 +265,7 @@ describe("deliverAgentCommandResult – transcript mirror", () => {
       text: `${"x".repeat(MAX_NESTED_TRANSCRIPT_TEXT_CHARS - "\n\n[truncated]".length)}\n\n[truncated]\n\nAttached media: ${mediaUrls
         .slice(0, MAX_NESTED_TRANSCRIPT_MEDIA_URLS)
         .join(", ")}`,
-      mediaUrls: mediaUrls.slice(0, MAX_NESTED_TRANSCRIPT_MEDIA_URLS),
+      mediaUrls: undefined,
     });
   });
 

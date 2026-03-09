@@ -390,6 +390,7 @@ function startSubagentAnnounceCleanupFlow(runId: string, entry: SubagentRunRecor
         return;
       }
       current.cleanupHandled = false;
+      resumedRuns.delete(runId);
       persistSubagentRuns();
     });
   };
