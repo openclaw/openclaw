@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -20,7 +21,13 @@ vi.mock("openclaw/plugin-sdk/media-understanding-runtime", () => ({
   describeImageFileWithModel: vi.fn(),
 }));
 
-const TEST_CACHE_DIR = "/tmp/openclaw-test-sticker-cache/telegram";
+const TEST_STATE_DIR = path.join(os.tmpdir(), "openclaw-test-sticker-cache");
+
+vi.mock("openclaw/plugin-sdk/state-paths", () => ({
+  STATE_DIR: path.join(os.tmpdir(), "openclaw-test-sticker-cache"),
+}));
+
+const TEST_CACHE_DIR = path.join(TEST_STATE_DIR, "telegram");
 const TEST_CACHE_FILE = path.join(TEST_CACHE_DIR, "sticker-cache.json");
 
 type StickerCacheModule = typeof import("./sticker-cache.js");
@@ -29,15 +36,15 @@ let stickerCache: StickerCacheModule;
 
 describe("sticker-cache", () => {
   beforeEach(async () => {
-    process.env.OPENCLAW_STATE_DIR = "/tmp/openclaw-test-sticker-cache";
-    fs.rmSync("/tmp/openclaw-test-sticker-cache", { recursive: true, force: true });
+    process.env.OPENCLAW_STATE_DIR = TEST_STATE_DIR;
+    fs.rmSync(TEST_STATE_DIR, { recursive: true, force: true });
     fs.mkdirSync(TEST_CACHE_DIR, { recursive: true });
     vi.resetModules();
     stickerCache = await import("./sticker-cache.js");
   });
 
   afterEach(() => {
-    fs.rmSync("/tmp/openclaw-test-sticker-cache", { recursive: true, force: true });
+    fs.rmSync(TEST_STATE_DIR, { recursive: true, force: true });
     delete process.env.OPENCLAW_STATE_DIR;
   });
 
