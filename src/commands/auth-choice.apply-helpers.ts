@@ -20,7 +20,7 @@ import type { SecretInputMode } from "./onboard-types.js";
 
 const ENV_SOURCE_LABEL_RE = /(?:^|:\s)([A-Z][A-Z0-9_]*)$/;
 
-type SecretRefChoice = "env" | "provider";
+type SecretRefChoice = "env" | "provider"; // pragma: allowlist secret
 
 export type SecretInputModePromptCopy = {
   modeMessage?: string;
@@ -101,7 +101,7 @@ export async function promptSecretRefForOnboarding(params: {
   const defaultEnvVar =
     params.preferredEnvVar ?? resolveDefaultProviderEnvVar(params.provider) ?? "";
   const defaultFilePointer = resolveDefaultFilePointerId(params.provider);
-  let sourceChoice: SecretRefChoice = "env";
+  let sourceChoice: SecretRefChoice = "env"; // pragma: allowlist secret
 
   while (true) {
     const sourceRaw: SecretRefChoice = await params.prompter.select<SecretRefChoice>({

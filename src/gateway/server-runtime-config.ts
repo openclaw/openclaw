@@ -121,7 +121,7 @@ export async function resolveGatewayRuntimeConfig(params: {
   const dangerouslyAllowHostHeaderOriginFallback =
     params.cfg.gateway?.controlUi?.dangerouslyAllowHostHeaderOriginFallback === true;
 
-  assertGatewayAuthConfigured(resolvedAuth);
+  assertGatewayAuthConfigured(resolvedAuth, params.cfg.gateway?.auth);
   if (tailscaleMode === "funnel" && authMode !== "password") {
     throw new Error(
       "tailscale funnel requires gateway auth mode=password (set gateway.auth.password or OPENCLAW_GATEWAY_PASSWORD)",
