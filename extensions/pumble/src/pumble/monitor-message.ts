@@ -289,12 +289,16 @@ export function createHandlePumbleMessage(deps: HandlePumbleMessageDeps) {
     }
 
     const mentionRegexes = core.channel.mentions.buildMentionRegexes(cfg, route.agentId);
-    // Detect Pumble-native <<@userId>> mention format in addition to generic mention patterns
+    // Detect Pumble-native <<@userId>> mention format.
+    // When the bot user ID is known, rely exclusively on Pumble's native
+    // mention syntax (<<@userId>>). The generic regex patterns (derived from
+    // identity.name) match the bare name without a leading '@', which causes
+    // false positives when the bot name appears in normal conversation.
     const pumbleMentionDetected =
       kind !== "direct" && botId ? rawText.includes(`<<@${botId}>>`) : false;
-    const wasMentioned =
-      pumbleMentionDetected ||
-      (kind !== "direct" && core.channel.mentions.matchesMentionPatterns(rawText, mentionRegexes));
+    const wasMentioned = botId
+      ? pumbleMentionDetected
+      : kind !== "direct" && core.channel.mentions.matchesMentionPatterns(rawText, mentionRegexes);
 
     // Trigger prefix (onchar mode)
     const oncharEnabled = account.chatmode === "onchar" && kind !== "direct";
