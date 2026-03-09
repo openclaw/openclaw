@@ -264,7 +264,8 @@ export class GatewayBrowserClient {
           this.lastGoodAuthToken = authToken;
         }
         if (hello?.auth?.deviceToken && deviceIdentity) {
-          this.lastGoodAuthToken = normalizeAuthToken(hello.auth.deviceToken) ?? this.lastGoodAuthToken;
+          this.lastGoodAuthToken =
+            normalizeAuthToken(hello.auth.deviceToken) ?? this.lastGoodAuthToken;
           storeDeviceAuthToken({
             deviceId: deviceIdentity.deviceId,
             role: hello.auth.role ?? role,
