@@ -230,8 +230,10 @@ function hashToolOutcome(
   //
   // For "running" results the content text itself embeds volatile metadata
   // (session id, pid) so we omit it and hash only the status + tail output.
-  // For "completed" results the content text mirrors `aggregated` which is
-  // stable, so we include it.
+  // For "completed" results we use details.aggregated rather than content text
+  // because content.text may drop stderr/error (node-host uses short-circuit
+  // OR) or prepend warnings (gateway path), while aggregated always contains
+  // the full combined stdout+stderr+error output.
   if (toolName === "exec") {
     if (details.status === "running") {
       return digestStable({
@@ -242,7 +244,7 @@ function hashToolOutcome(
     return digestStable({
       status: details.status,
       exitCode: details.exitCode ?? null,
-      text,
+      aggregated: details.aggregated ?? text,
     });
   }
 
