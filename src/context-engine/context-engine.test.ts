@@ -348,3 +348,117 @@ describe("Initialization guard", () => {
     expect(ids).toContain("legacy");
   });
 });
+
+// ═══════════════════════════════════════════════════════════════════════════
+// 7. Bundle chunk isolation (#40096)
+//
+// Published builds may split the context-engine registry across multiple
+// output chunks.  The Symbol.for() keyed global ensures that a plugin
+// calling registerContextEngine() from chunk A is visible to
+// resolveContextEngine() imported from chunk B.
+//
+// These tests exercise the invariant that failed in 2026.3.7 when
+// lossless-claw registered successfully but resolution could not find it.
+// ═══════════════════════════════════════════════════════════════════════════
+
+describe("Bundle chunk isolation (#40096)", () => {
+  it("Symbol.for key is stable across independently loaded modules", async () => {
+    // Simulate two distinct bundle chunks by loading the registry module
+    // twice with different query strings (forces separate module instances
+    // in Vite/esbuild but shares globalThis).
+    const ts = Date.now().toString(36);
+    const registryUrl = new URL("./registry.ts", import.meta.url).href;
+
+    const chunkA = await import(/* @vite-ignore */ `${registryUrl}?chunk=a-${ts}`);
+    const chunkB = await import(/* @vite-ignore */ `${registryUrl}?chunk=b-${ts}`);
+
+    // Chunk A registers an engine
+    const engineId = `cross-chunk-${ts}`;
+    chunkA.registerContextEngine(engineId, () => new MockContextEngine());
+
+    // Chunk B must see it
+    expect(chunkB.getContextEngineFactory(engineId)).toBeDefined();
+    expect(chunkB.listContextEngineIds()).toContain(engineId);
+  });
+
+  it("resolveContextEngine from chunk B finds engine registered in chunk A", async () => {
+    const ts = Date.now().toString(36);
+    const registryUrl = new URL("./registry.ts", import.meta.url).href;
+
+    const chunkA = await import(/* @vite-ignore */ `${registryUrl}?chunk=resolve-a-${ts}`);
+    const chunkB = await import(/* @vite-ignore */ `${registryUrl}?chunk=resolve-b-${ts}`);
+
+    const engineId = `resolve-cross-${ts}`;
+    chunkA.registerContextEngine(engineId, () => ({
+      info: { id: engineId, name: "Cross-chunk Engine", version: "0.0.1" },
+      async ingest() {
+        return { ingested: true };
+      },
+      async assemble({ messages }: { messages: AgentMessage[] }) {
+        return { messages, estimatedTokens: 0 };
+      },
+      async compact() {
+        return { ok: true, compacted: false };
+      },
+    }));
+
+    // Resolve from chunk B using a config that points to this engine
+    const engine = await chunkB.resolveContextEngine(configWithSlot(engineId));
+    expect(engine.info.id).toBe(engineId);
+  });
+
+  it("plugin-sdk export path shares the same global registry", async () => {
+    // The plugin-sdk re-exports registerContextEngine.  Verify the
+    // re-export writes to the same global symbol as the direct import.
+    const ts = Date.now().toString(36);
+    const engineId = `sdk-path-${ts}`;
+
+    // Direct registry import
+    registerContextEngine(engineId, () => new MockContextEngine());
+
+    // Plugin-sdk import (different chunk path in the published bundle)
+    const sdkUrl = new URL("../plugin-sdk/index.ts", import.meta.url).href;
+    const sdk = await import(/* @vite-ignore */ `${sdkUrl}?sdk-${ts}`);
+
+    // The SDK export should see the engine we just registered
+    const factory = getContextEngineFactory(engineId);
+    expect(factory).toBeDefined();
+
+    // And registering from the SDK path should be visible from the direct path
+    const sdkEngineId = `sdk-registered-${ts}`;
+    sdk.registerContextEngine(sdkEngineId, () => new MockContextEngine());
+    expect(getContextEngineFactory(sdkEngineId)).toBeDefined();
+  });
+
+  it("concurrent registration from multiple chunks does not lose entries", async () => {
+    const ts = Date.now().toString(36);
+    const registryUrl = new URL("./registry.ts", import.meta.url).href;
+    let releaseRegistrations: (() => void) | undefined;
+    const registrationStart = new Promise<void>((resolve) => {
+      releaseRegistrations = resolve;
+    });
+
+    // Load 5 "chunks" in parallel
+    const chunks = await Promise.all(
+      Array.from(
+        { length: 5 },
+        (_, i) => import(/* @vite-ignore */ `${registryUrl}?concurrent-${ts}-${i}`),
+      ),
+    );
+
+    const ids = chunks.map((_, i) => `concurrent-${ts}-${i}`);
+    const registrationTasks = chunks.map(async (chunk, i) => {
+      const id = `concurrent-${ts}-${i}`;
+      await registrationStart;
+      chunk.registerContextEngine(id, () => new MockContextEngine());
+    });
+    releaseRegistrations?.();
+    await Promise.all(registrationTasks);
+
+    // All 5 engines must be visible from any chunk
+    const allIds = chunks[0].listContextEngineIds();
+    for (const id of ids) {
+      expect(allIds).toContain(id);
+    }
+  });
+});
