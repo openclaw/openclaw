@@ -5,17 +5,12 @@
 .chat-thinking {
   margin-bottom: 10px;
   padding: 10px 12px;
-  border-radius: 10px;
-  border: 1px dashed rgba(255, 255, 255, 0.18);
-  background: rgba(255, 255, 255, 0.04);
+  border-radius: var(--radius-md);
+  border: 1px dashed color-mix(in srgb, var(--border) 84%, transparent);
+  background: color-mix(in srgb, var(--secondary) 75%, transparent);
   color: var(--muted);
   font-size: 12px;
-  line-height: 1.4;
-}
-
-:root[data-theme="light"] .chat-thinking {
-  border-color: rgba(16, 24, 40, 0.25);
-  background: rgba(16, 24, 40, 0.04);
+  line-height: 1.45;
 }
 
 .chat-text {
@@ -51,22 +46,99 @@
   opacity: 0.8;
 }
 
+.chat-text :where(a.chat-link-tail-blur) {
+  filter: blur(4px);
+  transition: filter 120ms ease-out;
+}
+
+.chat-text :where(a.chat-link-tail-blur:hover, a.chat-link-tail-blur:focus-visible) {
+  filter: blur(0);
+}
+
 .chat-text :where(code) {
   font-family: var(--mono);
   font-size: 0.9em;
 }
 
 .chat-text :where(:not(pre) > code) {
-  background: rgba(0, 0, 0, 0.15);
-  padding: 0.15em 0.4em;
-  border-radius: 4px;
+  background: color-mix(in srgb, var(--bg-hover) 45%, transparent);
+  border: 1px solid color-mix(in srgb, var(--border) 72%, transparent);
+  padding: 0.15em 0.42em;
+  border-radius: 5px;
   overflow-wrap: normal;
   word-break: keep-all;
 }
 
+/* Code block wrapper with header + copy button */
+.code-block-wrapper {
+  position: relative;
+  border: 1px solid color-mix(in srgb, var(--border) 72%, transparent);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--bg-elevated) 86%, var(--panel));
+  overflow: hidden;
+}
+
+.code-block-wrapper pre {
+  background: none !important;
+  border: none !important;
+  border-radius: 0 !important;
+  margin: 0;
+}
+
+.code-block-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 4px 8px;
+  border-bottom: 1px solid color-mix(in srgb, var(--border) 64%, transparent);
+  background: color-mix(in srgb, var(--bg) 35%, transparent);
+  min-height: 28px;
+}
+
+.code-block-lang {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--muted);
+  text-transform: lowercase;
+}
+
+.code-block-copy {
+  margin-left: auto;
+  border: none;
+  background: transparent;
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: 11px;
+  cursor: pointer;
+  padding: 2px 8px;
+  border-radius: var(--radius-sm);
+  transition:
+    background 120ms ease-out,
+    color 120ms ease-out;
+}
+
+.code-block-copy:hover {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+
+.code-block-copy__done {
+  display: none;
+}
+
+.code-block-copy.copied .code-block-copy__idle {
+  display: none;
+}
+
+.code-block-copy.copied .code-block-copy__done {
+  display: inline;
+  color: var(--ok, #22c55e);
+}
+
 .chat-text :where(pre) {
-  background: rgba(0, 0, 0, 0.15);
-  border-radius: 6px;
+  background: color-mix(in srgb, var(--bg-elevated) 86%, var(--panel));
+  border: 1px solid color-mix(in srgb, var(--border) 72%, transparent);
+  border-radius: 10px;
   padding: 10px 12px;
   overflow-x: auto;
 }
@@ -76,12 +148,50 @@
   padding: 0;
 }
 
+/* Collapsed JSON code blocks */
+
+.chat-text :where(details.json-collapse) {
+  background: color-mix(in srgb, var(--secondary) 82%, transparent);
+  border: 1px solid color-mix(in srgb, var(--border) 84%, transparent);
+  border-radius: var(--radius-md);
+}
+
+.chat-text :where(details.json-collapse > summary) {
+  padding: 8px 12px;
+  cursor: pointer;
+  font-size: 12px;
+  color: var(--muted);
+  font-family: var(--mono);
+  user-select: none;
+  list-style: none;
+}
+
+.chat-text :where(details.json-collapse > summary::-webkit-details-marker) {
+  display: none;
+}
+
+.chat-text :where(details.json-collapse > summary::before) {
+  content: "▸ ";
+}
+
+.chat-text :where(details.json-collapse[open] > summary::before) {
+  content: "▾ ";
+}
+
+.chat-text :where(details.json-collapse > pre) {
+  background: none;
+  border: none;
+  border-top: 1px solid color-mix(in srgb, var(--border) 84%, transparent);
+  border-radius: 0;
+  margin: 0;
+}
+
 .chat-text :where(blockquote) {
-  border-left: 3px solid var(--border-strong);
+  border-left: 3px solid color-mix(in srgb, var(--border-strong) 88%, transparent);
   padding-left: 12px;
   margin-left: 0;
   color: var(--muted);
-  background: rgba(255, 255, 255, 0.02);
+  background: color-mix(in srgb, var(--secondary) 78%, transparent);
   padding: 8px 12px;
   border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
 }
@@ -89,34 +199,12 @@
 .chat-text :where(blockquote blockquote) {
   margin-top: 8px;
   border-left-color: var(--border-hover);
-  background: rgba(255, 255, 255, 0.03);
+  background: color-mix(in srgb, var(--secondary) 55%, transparent);
 }
 
 .chat-text :where(blockquote blockquote blockquote) {
   border-left-color: var(--muted-strong);
-  background: rgba(255, 255, 255, 0.04);
-}
-
-:root[data-theme="light"] .chat-text :where(blockquote) {
-  background: rgba(0, 0, 0, 0.03);
-}
-
-:root[data-theme="light"] .chat-text :where(blockquote blockquote) {
-  background: rgba(0, 0, 0, 0.05);
-}
-
-:root[data-theme="light"] .chat-text :where(blockquote blockquote blockquote) {
-  background: rgba(0, 0, 0, 0.04);
-}
-
-:root[data-theme="light"] .chat-text :where(:not(pre) > code) {
-  background: rgba(0, 0, 0, 0.08);
-  border: 1px solid rgba(0, 0, 0, 0.1);
-}
-
-:root[data-theme="light"] .chat-text :where(pre) {
-  background: rgba(0, 0, 0, 0.05);
-  border: 1px solid rgba(0, 0, 0, 0.1);
+  background: color-mix(in srgb, var(--secondary) 60%, transparent);
 }
 
 .chat-text :where(hr) {
