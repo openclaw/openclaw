@@ -10,7 +10,7 @@
  * returning so the timer correctly skips the system-event fallback.
  */
 
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 // --- Module mocks (must be hoisted before imports) ---
 
@@ -105,7 +105,6 @@ function makeBaseParams(overrides: { synthesizedText?: string; deliveryRequested
     resolvedDelivery,
     deliveryRequested: overrides.deliveryRequested ?? true,
     skipHeartbeatDelivery: false,
-    skipMessagingToolDelivery: false,
     deliveryBestEffort: false,
     deliveryPayloadHasStructuredContent: false,
     deliveryPayloads: overrides.synthesizedText ? [{ text: overrides.synthesizedText }] : [],
@@ -132,6 +131,10 @@ describe("dispatchCronDelivery — double-announce guard", () => {
     vi.mocked(isLikelyInterimCronMessage).mockReturnValue(false);
     vi.mocked(readDescendantSubagentFallbackReply).mockResolvedValue(undefined);
     vi.mocked(waitForDescendantSubagentSummary).mockResolvedValue(undefined);
+  });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
   });
 
   it("early return (active subagent) sets deliveryAttempted=true so timer skips enqueueSystemEvent", async () => {
@@ -253,6 +256,42 @@ describe("dispatchCronDelivery — double-announce guard", () => {
     expect(state.delivered).toBe(true);
 
     expect(deliverOutboundPayloads).toHaveBeenCalledTimes(1);
+  });
+
+  it("retries transient direct announce failures before succeeding", async () => {
+    vi.stubEnv("OPENCLAW_TEST_FAST", "1");
+    vi.mocked(countActiveDescendantRuns).mockReturnValue(0);
+    vi.mocked(isLikelyInterimCronMessage).mockReturnValue(false);
+    vi.mocked(deliverOutboundPayloads)
+      .mockRejectedValueOnce(new Error("ECONNRESET while sending"))
+      .mockResolvedValueOnce([{ ok: true } as never]);
+
+    const params = makeBaseParams({ synthesizedText: "Retry me once." });
+    const state = await dispatchCronDelivery(params);
+
+    expect(state.result).toBeUndefined();
+    expect(state.deliveryAttempted).toBe(true);
+    expect(state.delivered).toBe(true);
+    expect(deliverOutboundPayloads).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not retry permanent direct announce failures", async () => {
+    vi.stubEnv("OPENCLAW_TEST_FAST", "1");
+    vi.mocked(countActiveDescendantRuns).mockReturnValue(0);
+    vi.mocked(isLikelyInterimCronMessage).mockReturnValue(false);
+    vi.mocked(deliverOutboundPayloads).mockRejectedValue(new Error("chat not found"));
+
+    const params = makeBaseParams({ synthesizedText: "This should fail once." });
+    const state = await dispatchCronDelivery(params);
+
+    expect(deliverOutboundPayloads).toHaveBeenCalledTimes(1);
+    expect(state.result).toEqual(
+      expect.objectContaining({
+        status: "error",
+        error: "Error: chat not found",
+        deliveryAttempted: true,
+      }),
+    );
   });
 
   it("no delivery requested means deliveryAttempted stays false and no delivery is sent", async () => {
