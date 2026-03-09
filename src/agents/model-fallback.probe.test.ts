@@ -251,6 +251,36 @@ describe("runWithModelFallback – probe logic", () => {
     expectPrimaryProbeSuccess(result, run, "probed-ok");
   });
 
+  it("prunes stale probe throttle entries before checking eligibility", () => {
+    _probeThrottleInternals.lastProbeAttempt.set(
+      "stale",
+      NOW - _probeThrottleInternals.PROBE_STATE_TTL_MS - 1,
+    );
+    _probeThrottleInternals.lastProbeAttempt.set("fresh", NOW - 5_000);
+
+    expect(_probeThrottleInternals.lastProbeAttempt.has("stale")).toBe(true);
+
+    expect(_probeThrottleInternals.isProbeThrottleOpen(NOW, "fresh")).toBe(false);
+
+    expect(_probeThrottleInternals.lastProbeAttempt.has("stale")).toBe(false);
+    expect(_probeThrottleInternals.lastProbeAttempt.has("fresh")).toBe(true);
+  });
+
+  it("caps probe throttle state by evicting the oldest entries", () => {
+    for (let i = 0; i < _probeThrottleInternals.MAX_PROBE_KEYS; i += 1) {
+      _probeThrottleInternals.lastProbeAttempt.set(`key-${i}`, NOW - (i + 1));
+    }
+
+    _probeThrottleInternals.markProbeAttempt(NOW, "freshest");
+
+    expect(_probeThrottleInternals.lastProbeAttempt.size).toBe(
+      _probeThrottleInternals.MAX_PROBE_KEYS,
+    );
+    expect(_probeThrottleInternals.lastProbeAttempt.has("freshest")).toBe(true);
+    expect(_probeThrottleInternals.lastProbeAttempt.has("key-255")).toBe(false);
+    expect(_probeThrottleInternals.lastProbeAttempt.has("key-0")).toBe(true);
+  });
+
   it("handles non-finite soonest safely (treats as probe-worthy)", async () => {
     const cfg = makeCfg();
 
@@ -346,7 +376,7 @@ describe("runWithModelFallback – probe logic", () => {
     });
   });
 
-  it("skips billing-cooldowned primary when no fallback candidates exist", async () => {
+  it("probes billing-cooldowned primary when no fallback candidates exist", async () => {
     const cfg = makeCfg({
       agents: {
         defaults: {
@@ -358,20 +388,28 @@ describe("runWithModelFallback – probe logic", () => {
       },
     } as Partial<OpenClawConfig>);
 
-    // Billing cooldown far from expiry — would normally be skipped
+    // Single-provider setups need periodic probes even when the billing
+    // cooldown is far from expiry, otherwise topping up credits never recovers
+    // without a restart.
     const expiresIn30Min = NOW + 30 * 60 * 1000;
     mockedGetSoonestCooldownExpiry.mockReturnValue(expiresIn30Min);
     mockedResolveProfilesUnavailableReason.mockReturnValue("billing");
 
-    await expect(
-      runWithModelFallback({
-        cfg,
-        provider: "openai",
-        model: "gpt-4.1-mini",
-        fallbacksOverride: [],
-        run: vi.fn().mockResolvedValue("billing-recovered"),
-      }),
-    ).rejects.toThrow("All models failed");
+    const run = vi.fn().mockResolvedValue("billing-recovered");
+
+    const result = await runWithModelFallback({
+      cfg,
+      provider: "openai",
+      model: "gpt-4.1-mini",
+      fallbacksOverride: [],
+      run,
+    });
+
+    expect(result.result).toBe("billing-recovered");
+    expect(run).toHaveBeenCalledTimes(1);
+    expect(run).toHaveBeenCalledWith("openai", "gpt-4.1-mini", {
+      allowTransientCooldownProbe: true,
+    });
   });
 
   it("probes billing-cooldowned primary with fallbacks when near cooldown expiry", async () => {
