@@ -57,6 +57,8 @@ type TelegramSendOpts = {
   asVoice?: boolean;
   /** Send video as video note (voice bubble) instead of regular video. Defaults to false. */
   asVideoNote?: boolean;
+  /** Send media as document (preserves filename, no compression). Defaults to false. */
+  asDocument?: boolean;
   /** Send message silently (no notification). Defaults to false. */
   silent?: boolean;
   /** Message ID to reply to (for threading) */
@@ -640,6 +642,17 @@ export async function sendMessageTelegram(
       );
 
     const mediaSender = (() => {
+      if (opts.asDocument === true) {
+        return {
+          label: "document",
+          sender: (effectiveParams: Record<string, unknown> | undefined) =>
+            api.sendDocument(
+              chatId,
+              file,
+              effectiveParams as Parameters<typeof api.sendDocument>[2],
+            ) as Promise<TelegramMessageLike>,
+        };
+      }
       if (isGif) {
         return {
           label: "animation",

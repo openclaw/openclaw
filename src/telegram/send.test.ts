@@ -833,6 +833,32 @@ describe("sendMessageTelegram", () => {
     expect(res.messageId).toBe("9");
   });
 
+  it("routes media to sendDocument when asDocument is true", async () => {
+    mockLoadedMedia({ contentType: "image/png", fileName: "photo.png" });
+    const sendPhoto = vi.fn();
+    const sendDocument = vi.fn().mockResolvedValue({
+      message_id: 99,
+      chat: { id: "123" },
+    });
+    const api = { sendPhoto, sendDocument } as unknown as {
+      sendPhoto: typeof sendPhoto;
+      sendDocument: typeof sendDocument;
+    };
+
+    await sendMessageTelegram("123", "caption", {
+      token: "tok",
+      api,
+      mediaUrl: "https://example.com/photo.png",
+      asDocument: true,
+    });
+
+    expect(sendDocument).toHaveBeenCalledWith("123", expect.anything(), {
+      caption: "caption",
+      parse_mode: "HTML",
+    });
+    expect(sendPhoto).not.toHaveBeenCalled();
+  });
+
   it("routes audio media to sendAudio/sendVoice based on voice compatibility", async () => {
     const cases: Array<{
       name: string;
