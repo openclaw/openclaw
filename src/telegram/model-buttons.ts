@@ -60,7 +60,9 @@ export function parseModelCallbackData(data: string): ParsedModelCallback | null
   }
 
   // mdl_list_{provider}_{page}
-  const listMatch = trimmed.match(/^mdl_list_([a-z0-9_-]+)_(\d+)$/i);
+  // Note: Use (.+) to support Unicode provider IDs (e.g., "新加坡", "阿里云")
+  // The greedy match ensures we capture everything up to the last _{page}
+  const listMatch = trimmed.match(/^mdl_list_(.+)_(\d+)$/);
   if (listMatch) {
     const [, provider, pageStr] = listMatch;
     const page = Number.parseInt(pageStr ?? "1", 10);
