@@ -291,6 +291,30 @@ describe("normalizeModelCompat", () => {
     expect(maxTokensField(normalized)).toBe("max_tokens");
   });
 
+  it("still applies Mistral overrides when developer-role and usage flags are already false", () => {
+    const model = {
+      ...baseModel(),
+      id: "mistral-large-latest",
+      name: "Mistral Large",
+      provider: "mistral",
+      baseUrl: "https://api.mistral.ai/v1",
+      reasoning: false,
+      compat: {
+        supportsDeveloperRole: false,
+        supportsUsageInStreaming: false,
+        supportsStore: true,
+        supportsReasoningEffort: true,
+        maxTokensField: "max_completion_tokens" as const,
+      },
+    };
+    const normalized = normalizeModelCompat(model as Model<Api>);
+    expect(supportsDeveloperRole(normalized)).toBe(false);
+    expect(supportsUsageInStreaming(normalized)).toBe(false);
+    expect(supportsStore(normalized)).toBe(false);
+    expect(supportsReasoningEffort(normalized)).toBe(false);
+    expect(maxTokensField(normalized)).toBe("max_tokens");
+  });
+
   it("forces supportsDeveloperRole off for Qwen proxy via openai-completions", () => {
     expectSupportsDeveloperRoleForcedOff({
       provider: "qwen-proxy",

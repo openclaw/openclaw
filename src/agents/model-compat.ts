@@ -72,7 +72,11 @@ export function normalizeModelCompat(model: Model<Api>): Model<Api> {
   if (!needsForce) {
     return model;
   }
-  if (compat?.supportsDeveloperRole === false && compat?.supportsUsageInStreaming === false) {
+  if (
+    compat?.supportsDeveloperRole === false &&
+    compat?.supportsUsageInStreaming === false &&
+    !isMistralEndpoint(model)
+  ) {
     return model;
   }
 
