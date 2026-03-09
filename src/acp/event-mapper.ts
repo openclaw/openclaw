@@ -186,9 +186,10 @@ function collectLocationsFromTextMarkers(
 function collectToolLocations(
   value: unknown,
   locations: Map<string, ToolCallLocation>,
-  state: { visited: number; depth: number },
+  state: { visited: number },
+  depth: number,
 ): void {
-  if (state.visited >= TOOL_LOCATION_MAX_NODES || state.depth > TOOL_LOCATION_MAX_DEPTH) {
+  if (state.visited >= TOOL_LOCATION_MAX_NODES || depth > TOOL_LOCATION_MAX_DEPTH) {
     return;
   }
   state.visited += 1;
@@ -202,8 +203,7 @@ function collectToolLocations(
   }
   if (Array.isArray(value)) {
     for (const item of value) {
-      collectToolLocations(item, locations, { visited: state.visited, depth: state.depth + 1 });
-      state.visited += 1;
+      collectToolLocations(item, locations, state, depth + 1);
       if (state.visited >= TOOL_LOCATION_MAX_NODES) {
         return;
       }
@@ -230,9 +230,11 @@ function collectToolLocations(
     }
   }
 
-  for (const nested of Object.values(record)) {
-    collectToolLocations(nested, locations, { visited: state.visited, depth: state.depth + 1 });
-    state.visited += 1;
+  for (const [key, nested] of Object.entries(record)) {
+    if (key === "content") {
+      continue;
+    }
+    collectToolLocations(nested, locations, state, depth + 1);
     if (state.visited >= TOOL_LOCATION_MAX_NODES) {
       return;
     }
@@ -402,7 +404,7 @@ export function extractToolCallContent(value: unknown): ToolCallContent[] | unde
 export function extractToolCallLocations(...values: unknown[]): ToolCallLocation[] | undefined {
   const locations = new Map<string, ToolCallLocation>();
   for (const value of values) {
-    collectToolLocations(value, locations, { visited: 0, depth: 0 });
+    collectToolLocations(value, locations, { visited: 0 }, 0);
   }
   return locations.size > 0 ? [...locations.values()] : undefined;
 }
