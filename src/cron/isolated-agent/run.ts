@@ -8,7 +8,7 @@ import {
 import { resolveSessionAuthProfileOverride } from "../../agents/auth-profiles/session-override.js";
 import { resolveBootstrapWarningSignaturesSeen } from "../../agents/bootstrap-budget.js";
 import { runCliAgent } from "../../agents/cli-runner.js";
-import { getCliSessionId, setCliSessionId } from "../../agents/cli-session.js";
+import { setCliSessionId } from "../../agents/cli-session.js";
 import { lookupContextTokens } from "../../agents/context.js";
 import { resolveCronStyleNow } from "../../agents/current-time.js";
 import { DEFAULT_CONTEXT_TOKENS, DEFAULT_MODEL, DEFAULT_PROVIDER } from "../../agents/defaults.js";
@@ -474,14 +474,12 @@ export async function runCronIsolatedAgentTurn(params: {
         const bootstrapPromptWarningSignature =
           bootstrapPromptWarningSignaturesSeen[bootstrapPromptWarningSignaturesSeen.length - 1];
         if (isCliProvider(providerOverride, cfgWithAgentDefaults)) {
-          // Fresh isolated cron sessions must not reuse a stored CLI session ID.
-          // Passing an existing ID activates the resume watchdog profile
-          // (noOutputTimeoutRatio 0.3, maxMs 180 s) instead of the fresh profile
-          // (ratio 0.8, maxMs 600 s), causing jobs to time out at roughly 1/3 of
-          // the configured timeoutSeconds. See: https://github.com/openclaw/openclaw/issues/29774
-          const cliSessionId = cronSession.isNewSession
-            ? undefined
-            : getCliSessionId(cronSession.sessionEntry, providerOverride);
+          // Isolated cron runs should always start with a fresh CLI session profile.
+          // Reusing persisted CLI session IDs can reactivate the resume watchdog
+          // profile (noOutputTimeoutRatio 0.3, maxMs 180 s), which hard-caps long
+          // jobs at ~180s regardless of payload.timeoutSeconds (e.g. weekly synthesis).
+          // See: https://github.com/openclaw/openclaw/issues/29774
+          const cliSessionId = undefined;
           const result = await runCliAgent({
             sessionId: cronSession.sessionEntry.sessionId,
             sessionKey: agentSessionKey,

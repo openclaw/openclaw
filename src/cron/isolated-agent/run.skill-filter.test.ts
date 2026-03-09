@@ -286,7 +286,7 @@ describe("runCronIsolatedAgentTurn — skill filter", () => {
       expect(runCliAgentMock.mock.calls[0][0]).toHaveProperty("cliSessionId", undefined);
     });
 
-    it("reuses stored cliSessionId on continuation runs (isNewSession=false)", async () => {
+    it("does not reuse stored cliSessionId on continuation runs (isNewSession=false)", async () => {
       getCliSessionIdMock.mockReturnValue("existing-cli-session-def");
       isCliProviderMock.mockReturnValue(true);
       runCliAgentMock.mockResolvedValue({
@@ -313,11 +313,8 @@ describe("runCronIsolatedAgentTurn — skill filter", () => {
       await runCronIsolatedAgentTurn(makeSkillParams());
 
       expect(runCliAgentMock).toHaveBeenCalledOnce();
-      // Continuation: cliSessionId should be passed through for session resume.
-      expect(runCliAgentMock.mock.calls[0][0]).toHaveProperty(
-        "cliSessionId",
-        "existing-cli-session-def",
-      );
+      // Continuation runs must still use fresh CLI session profile to avoid 180s cap.
+      expect(runCliAgentMock.mock.calls[0][0]).toHaveProperty("cliSessionId", undefined);
     });
   });
 });
