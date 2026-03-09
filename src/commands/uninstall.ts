@@ -94,7 +94,7 @@ async function removeMacApp(runtime: RuntimeEnv, dryRun?: boolean) {
 }
 
 function logBackupRecommendation(runtime: RuntimeEnv) {
-  runtime.log(`Recommended first: ${formatCliCommand("openclaw backup create")}`);
+  runtime.log(`Recommended first: ${formatCliCommand("openclaw backup export")}`);
 }
 
 export async function uninstallCommand(runtime: RuntimeEnv, opts: UninstallOptions) {

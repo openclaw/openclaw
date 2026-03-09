@@ -5,13 +5,13 @@ import { resolveUserPath } from "../utils.js";
 
 const WINDOWS_ABSOLUTE_ARCHIVE_PATH_RE = /^[A-Za-z]:[\\/]/;
 
-type BackupManifestAsset = {
+export type BackupManifestAsset = {
   kind: string;
   sourcePath: string;
   archivePath: string;
 };
 
-type BackupManifest = {
+export type BackupManifest = {
   schemaVersion: number;
   createdAt: string;
   archiveRoot: string;
@@ -59,7 +59,7 @@ function stripTrailingSlashes(value: string): string {
   return value.replace(/\/+$/u, "");
 }
 
-function normalizeArchivePath(entryPath: string, label: string): string {
+export function normalizeArchivePath(entryPath: string, label: string): string {
   const trimmed = stripTrailingSlashes(entryPath.trim());
   if (!trimmed) {
     throw new Error(`${label} is empty.`);
@@ -81,7 +81,7 @@ function normalizeArchivePath(entryPath: string, label: string): string {
   return normalized;
 }
 
-function normalizeArchiveRoot(rootName: string): string {
+export function normalizeArchiveRoot(rootName: string): string {
   const normalized = normalizeArchivePath(rootName, "Backup manifest archiveRoot");
   if (normalized.includes("/")) {
     throw new Error(`Backup manifest archiveRoot must be a single path segment: ${rootName}`);
@@ -94,7 +94,7 @@ function isArchivePathWithin(child: string, parent: string): boolean {
   return relative === "" || (!relative.startsWith("../") && relative !== "..");
 }
 
-function parseManifest(raw: string): BackupManifest {
+export function parseBackupManifest(raw: string): BackupManifest {
   let parsed: unknown;
   try {
     parsed = JSON.parse(raw);
@@ -306,7 +306,7 @@ export async function backupVerifyCommand(
   }
 
   const manifestRaw = await extractManifest({ archivePath, manifestEntryPath });
-  const manifest = parseManifest(manifestRaw);
+  const manifest = parseBackupManifest(manifestRaw);
   verifyManifestAgainstEntries(manifest, normalizedEntrySet);
 
   const result: BackupVerifyResult = {
