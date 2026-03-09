@@ -392,11 +392,11 @@ export function classifyFailoverReasonFromHttpStatus(
   return null;
 }
 
-function stripFinalTagsFromText(text: string): string {
+function stripSpecialMarkupFromText(text: string): string {
   if (!text) {
     return text;
   }
-  return text.replace(FINAL_TAG_RE, "");
+  return text.replace(FINAL_TAG_RE, "").replace(MODEL_SPECIAL_TOKEN_RE, "");
 }
 
 function collapseConsecutiveDuplicateBlocks(text: string): string {
@@ -716,7 +716,7 @@ export function sanitizeUserFacingText(text: string, opts?: { errorContext?: boo
     return text;
   }
   const errorContext = opts?.errorContext ?? false;
-  const stripped = stripFinalTagsFromText(text);
+  const stripped = stripSpecialMarkupFromText(text);
   const trimmed = stripped.trim();
   if (!trimmed) {
     return "";

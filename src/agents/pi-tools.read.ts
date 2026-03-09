@@ -6,6 +6,7 @@ import { createEditTool, createReadTool, createWriteTool } from "@mariozechner/p
 import {
   SafeOpenError,
   openFileWithinRoot,
+  openWritableFileWithinRoot,
   readFileWithinRoot,
   writeFileWithinRoot,
 } from "../infra/fs-safe.js";
@@ -698,7 +699,7 @@ function createFsAccessError(code: string, filePath: string): NodeJS.ErrnoExcept
 function wrapWriteToolWithAppendMode(
   tool: AnyAgentTool,
   root: string,
-  options?: { workspaceOnly?: boolean },
+  _options?: { workspaceOnly?: boolean },
 ): AnyAgentTool {
   // Extend the parameters schema to advertise the `append` parameter.
   const baseParams = (tool.parameters ?? tool.schema) as Record<string, unknown> | undefined;
@@ -725,9 +726,11 @@ function wrapWriteToolWithAppendMode(
     parameters: extendedParams,
     schema: extendedParams,
     execute: async (toolCallId, params, signal, onUpdate) => {
-      const record =
-        params && typeof params === "object" ? (params as Record<string, unknown>) : undefined;
-      const shouldAppend = record?.append === true;
+      // Normalize params so structured content and file_path aliases are handled
+      // consistently with the non-append path (which already goes through
+      // wrapToolParamNormalization).
+      const normalized = normalizeToolParams(params);
+      const shouldAppend = normalized?.append === true;
 
       if (!shouldAppend) {
         // Normal write — delegate to the original tool.
@@ -735,8 +738,8 @@ function wrapWriteToolWithAppendMode(
       }
 
       // Append mode — handle directly.
-      const filePath = (record?.path ?? record?.file_path) as string | undefined;
-      const content = record?.content as string | undefined;
+      const filePath = normalized?.path as string | undefined;
+      const content = normalized?.content as string | undefined;
 
       if (!filePath) {
         return { content: [{ type: "text", text: "Error: path is required" }] };
@@ -746,21 +749,21 @@ function wrapWriteToolWithAppendMode(
       }
 
       try {
-        const workspaceOnly = options?.workspaceOnly ?? false;
-        let resolved: string;
+        // Use the same path-safety validation as writeFileWithinRoot to prevent
+        // symlink escapes and path traversal attacks.  openWritableFileWithinRoot
+        // resolves symlinks, checks the real path is inside the workspace root,
+        // and creates parent directories.
+        const relative = toRelativeWorkspacePath(root, filePath);
+        const target = await openWritableFileWithinRoot({
+          rootDir: root,
+          relativePath: relative,
+          mkdir: true,
+          truncateExisting: false,
+        });
+        const resolvedPath = target.openedRealPath;
+        await target.handle.close().catch(() => {});
 
-        if (workspaceOnly) {
-          const relative = toRelativeWorkspacePath(root, filePath);
-          resolved = path.resolve(root, relative);
-        } else {
-          // Resolve relative paths against the workspace root.
-          resolved = path.isAbsolute(filePath)
-            ? path.resolve(filePath)
-            : path.resolve(root, filePath);
-        }
-
-        await fs.mkdir(path.dirname(resolved), { recursive: true });
-        await fs.appendFile(resolved, content, "utf-8");
+        await fs.appendFile(resolvedPath, content, { encoding: "utf-8", signal });
 
         return {
           content: [{ type: "text", text: `Successfully appended to ${filePath}` }],
