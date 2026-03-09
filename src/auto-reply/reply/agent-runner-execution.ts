@@ -147,6 +147,8 @@ export async function runAgentTurnWithFallback(params: {
     params.getActiveSessionEntry()?.systemPromptReport,
   );
   let didEscalate = false;
+  let escalationProviderOverride: string | undefined;
+  let escalationModelOverride: string | undefined;
 
   /**
    * Check for a pending self-escalation and, if found, switch the run to the
@@ -184,8 +186,10 @@ export async function runAgentTurnWithFallback(params: {
         ? "Self-escalation triggered (from error path)"
         : "Self-escalation triggered";
     log.info(`${label}: reason="${pending.reason}" → ${resolved.provider}/${resolved.model}`);
-    params.followupRun.run.provider = resolved.provider;
-    params.followupRun.run.model = resolved.model;
+    // Use local overrides instead of mutating the shared followupRun object,
+    // so outer retry/requeue mechanisms still see the original primary model.
+    escalationProviderOverride = resolved.provider;
+    escalationModelOverride = resolved.model;
     didNotifyAgentRunStart = false;
     return true;
   };
@@ -251,6 +255,10 @@ export async function runAgentTurnWithFallback(params: {
       const onToolResult = params.opts?.onToolResult;
       const fallbackResult = await runWithModelFallback({
         ...resolveModelFallbackOptions(params.followupRun.run),
+        // When escalation is active, override provider/model without mutating the shared run object.
+        ...(escalationProviderOverride && escalationModelOverride
+          ? { provider: escalationProviderOverride, model: escalationModelOverride }
+          : {}),
         run: (provider, model, runOptions) => {
           // Notify that model selection is complete (including after fallback).
           // This allows responsePrefix template interpolation with the actual model.
@@ -571,6 +579,9 @@ export async function runAgentTurnWithFallback(params: {
     } catch (err) {
       // Defensive: check for pending escalation on error path too.
       if (tryHandleEscalation("error")) {
+        log.info(
+          `Primary model error before escalation: ${err instanceof Error ? err.message : String(err)}`,
+        );
         continue;
       }
 
