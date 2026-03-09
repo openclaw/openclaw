@@ -18,8 +18,8 @@ describe("commands.allowFrom legacy array", () => {
   it("rejects legacy array form when entries are not strings/numbers", () => {
     const res = validateConfigObject({
       commands: {
-        // @ts-expect-error test invalid shape
-        allowFrom: [{ bad: true }],
+        // Intentionally invalid at runtime (object), but asserted to satisfy TS.
+        allowFrom: [{ bad: true } as unknown as string],
       },
     });
 
