@@ -6,6 +6,7 @@ import { formatDocsLink } from "../../terminal/links.js";
 import { theme } from "../../terminal/theme.js";
 import { runCommandWithRuntime } from "../cli-utils.js";
 import { formatHelpExamples } from "../help-format.js";
+import { collectOption } from "./helpers.js";
 
 export function registerBackupCommand(program: Command) {
   const backup = program
@@ -26,12 +27,7 @@ export function registerBackupCommand(program: Command) {
     .option("--verify", "Verify the archive after writing it", false)
     .option("--only-config", "Back up only the active JSON config file", false)
     .option("--no-include-workspace", "Exclude workspace directories from the backup")
-    .option(
-      "--exclude <pattern>",
-      "Exclude files matching pattern (can be repeated)",
-      (val, arr) => arr.concat(val),
-      [],
-    )
+    .option("--exclude <pattern>", "Exclude files matching pattern (repeatable)", collectOption, [])
     .option("--exclude-file <path>", "Read exclude patterns from file")
     .addHelpText(
       "after",
