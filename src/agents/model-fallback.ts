@@ -44,6 +44,33 @@ type ModelFallbackRunFn<T> = (
   options?: ModelFallbackRunOptions,
 ) => Promise<T>;
 
+type FallbackAttempt = {
+  provider: string;
+  model: string;
+  error: string;
+  reason?: FailoverReason;
+  status?: number;
+  code?: string;
+};
+
+function hasApiLimitReason(attempts: FallbackAttempt[]): boolean {
+  const lastAttempt = attempts.at(-1);
+  return Boolean(
+    lastAttempt &&
+      (lastAttempt.reason === "rate_limit" || lastAttempt.reason === "billing"),
+  );
+}
+
+function buildApiLimitSwitchHint(attempts: FallbackAttempt[], label: string): string | null {
+  if (label !== "models" || !hasApiLimitReason(attempts)) {
+    return null;
+  }
+  return (
+    "API limit reached. Switch models with /model to pick another connected API/model " +
+    "(including local providers like ollama or lmstudio). " +
+    "CLI: openclaw models list --local, then openclaw models set <provider/model>."
+  );
+}
 /**
  * Fallback abort check. Only treats explicit AbortError names as user aborts.
  * Message-based checks (e.g., "aborted") can mask timeouts and skip fallback.
@@ -184,17 +211,21 @@ function throwFallbackFailureSummary(params: {
   label: string;
   formatAttempt: (attempt: FallbackAttempt) => string;
 }): never {
-  if (params.attempts.length <= 1 && params.lastError) {
+  const shouldWrapSingleAttempt =
+    params.attempts.length === 1 && hasApiLimitReason(params.attempts);
+  if (params.attempts.length <= 1 && params.lastError && !shouldWrapSingleAttempt) {
     throw params.lastError;
   }
   const summary =
     params.attempts.length > 0 ? params.attempts.map(params.formatAttempt).join(" | ") : "unknown";
-  throw new Error(
-    `All ${params.label} failed (${params.attempts.length || params.candidates.length}): ${summary}`,
-    {
-      cause: params.lastError instanceof Error ? params.lastError : undefined,
-    },
-  );
+  const baseMessage = `All ${params.label} failed (${
+    params.attempts.length || params.candidates.length
+  }): ${summary}`;
+  const apiLimitHint = buildApiLimitSwitchHint(params.attempts, params.label);
+  const message = apiLimitHint ? `${baseMessage}\n${apiLimitHint}` : baseMessage;
+  throw new Error(message, {
+    cause: params.lastError instanceof Error ? params.lastError : undefined,
+  });
 }
 
 function resolveImageFallbackCandidates(params: {

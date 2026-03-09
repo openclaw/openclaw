@@ -729,6 +729,34 @@ describe("runWithModelFallback", () => {
     expect(calls).toEqual([{ provider: "anthropic", model: "claude-opus-4-5" }]);
   });
 
+  it("adds model switch guidance when a single model hits API limits", async () => {
+    const cfg = makeCfg();
+    const run = vi
+      .fn()
+      .mockRejectedValueOnce(Object.assign(new Error("rate limited"), { status: 429 }));
+
+    let thrown: unknown;
+    try {
+      await runWithModelFallback({
+        cfg,
+        provider: "openai",
+        model: "gpt-4.1-mini",
+        fallbacksOverride: [],
+        run,
+      });
+    } catch (err) {
+      thrown = err;
+    }
+
+    expect(thrown).toBeInstanceOf(Error);
+    const message = (thrown as Error).message;
+    expect(message).toContain("All models failed (1):");
+    expect(message).toContain("API limit reached.");
+    expect(message).toContain("/model");
+    expect(message).toContain("openclaw models list --local");
+    expect(run).toHaveBeenCalledTimes(1);
+  });
+
   it("keeps explicit fallbacks reachable when models allowlist is present", async () => {
     const cfg = makeCfg({
       agents: {
