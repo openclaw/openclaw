@@ -135,6 +135,9 @@ importers:
       jszip:
         specifier: ^3.10.1
         version: 3.10.1
+      langfuse:
+        specifier: ^3.38.6
+        version: 3.38.6
       linkedom:
         specifier: ^0.18.12
         version: 0.18.12
@@ -4957,6 +4960,14 @@ packages:
   koffi@2.15.1:
     resolution: {integrity: sha512-mnc0C0crx/xMSljb5s9QbnLrlFHprioFO1hkXyuSuO/QtbpLDa0l/uM21944UfQunMKmp3/r789DTDxVyyH6aA==}
 
+  langfuse-core@3.38.6:
+    resolution: {integrity: sha512-EcZXa+DK9FJdi1I30+u19eKjuBJ04du6j2Nybk19KKCuraLczg/ppkTQcGvc4QOk//OAi3qUHrajUuV74RXsBQ==}
+    engines: {node: '>=18'}
+
+  langfuse@3.38.6:
+    resolution: {integrity: sha512-mtwfsNGIYvObRh+NYNGlJQJDiBN+Wr3Hnr++wN25mxuOpSTdXX+JQqVCyAqGL5GD2TAXRZ7COsN42Vmp9krYmg==}
+    engines: {node: '>=18'}
+
   leac@0.6.0:
     resolution: {integrity: sha512-y+SqErxb8h7nE/fiEX07jsbuhrpO9lL8eca7/Y1nuWV2moNlXhyd59iDGcRf6moVyDMbmTNzL40SUyrFU/yDpg==}
 
@@ -5308,6 +5319,10 @@ packages:
   music-metadata@11.12.1:
     resolution: {integrity: sha512-j++ltLxHDb5VCXET9FzQ8bnueiLHwQKgCO7vcbkRH/3F7fRjPkv6qncGEJ47yFhmemcYtgvsOAlcQ1dRBTkDjg==}
     engines: {node: '>=18'}
+
+  mustache@4.2.0:
+    resolution: {integrity: sha512-71ippSywq5Yb7/tVYyGbkBggbU8H3u5Rz56fH60jGFgr8uHwxs+aSKeqmluIVzM0m0kB7xQjKS6qPfd0b2ZoqQ==}
+    hasBin: true
 
   mz@2.7.0:
     resolution: {integrity: sha512-z81GNO7nnYMEhrGh9LeymoE4+Yr0Wn5McHIZMK5cfQCl+NDX08sCZgUc9/6MHni9IWuFLm1Z3HTCXu2z9fN62Q==}
@@ -12289,6 +12304,14 @@ snapshots:
 
   koffi@2.15.1: {}
 
+  langfuse-core@3.38.6:
+    dependencies:
+      mustache: 4.2.0
+
+  langfuse@3.38.6:
+    dependencies:
+      langfuse-core: 3.38.6
+
   leac@0.6.0: {}
 
   libphonenumber-js@1.12.38: {}
@@ -12606,6 +12629,8 @@ snapshots:
       win-guid: 0.2.1
     transitivePeerDependencies:
       - supports-color
+
+  mustache@4.2.0: {}
 
   mz@2.7.0:
     dependencies:

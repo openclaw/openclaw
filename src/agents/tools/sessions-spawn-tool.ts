@@ -1,4 +1,5 @@
 import { Type } from "@sinclair/typebox";
+import { endSubagentSpan, startSubagentSpan } from "../../observability/langfuse-agent-hooks.js";
 import type { GatewayMessageChannel } from "../../utils/message-channel.js";
 import { ACP_SPAWN_MODES, ACP_SPAWN_STREAM_TARGETS, spawnAcpDirect } from "../acp-spawn.js";
 import { optionalStringEnum } from "../schema/typebox.js";
@@ -127,24 +128,70 @@ export function createSessionsSpawnTool(
         });
       }
 
-      if (runtime === "acp") {
-        if (Array.isArray(attachments) && attachments.length > 0) {
-          return jsonResult({
-            status: "error",
-            error:
-              "attachments are currently unsupported for runtime=acp; use runtime=subagent or remove attachments",
+      const subagentSpan = startSubagentSpan({
+        agentId: requestedAgentId || undefined,
+        task,
+        model: modelOverride || undefined,
+      });
+
+      try {
+        if (runtime === "acp") {
+          if (Array.isArray(attachments) && attachments.length > 0) {
+            const errorResult = {
+              status: "error",
+              error:
+                "attachments are currently unsupported for runtime=acp; use runtime=subagent or remove attachments",
+            };
+            endSubagentSpan(subagentSpan, errorResult);
+            return jsonResult(errorResult);
+          }
+          const result = await spawnAcpDirect(
+            {
+              task,
+              label: label || undefined,
+              agentId: requestedAgentId,
+              cwd,
+              mode: mode && ACP_SPAWN_MODES.includes(mode) ? mode : undefined,
+              thread,
+              sandbox,
+              streamTo,
+            },
+            {
+              agentSessionKey: opts?.agentSessionKey,
+              agentChannel: opts?.agentChannel,
+              agentAccountId: opts?.agentAccountId,
+              agentTo: opts?.agentTo,
+              agentThreadId: opts?.agentThreadId,
+              sandboxed: opts?.sandboxed,
+            },
+          );
+          endSubagentSpan(subagentSpan, {
+            status: result.status,
+            childSessionKey: result.childSessionKey,
+            runId: result.runId,
+            error: result.error,
           });
+          return jsonResult(result);
         }
-        const result = await spawnAcpDirect(
+
+        const result = await spawnSubagentDirect(
           {
             task,
             label: label || undefined,
             agentId: requestedAgentId,
-            cwd,
-            mode: mode && ACP_SPAWN_MODES.includes(mode) ? mode : undefined,
+            model: modelOverride,
+            thinking: thinkingOverrideRaw,
+            runTimeoutSeconds,
             thread,
+            mode,
+            cleanup,
             sandbox,
-            streamTo,
+            expectsCompletionMessage: true,
+            attachments,
+            attachMountPath:
+              params.attachAs && typeof params.attachAs === "object"
+                ? readStringParam(params.attachAs as Record<string, unknown>, "mountPath")
+                : undefined,
           },
           {
             agentSessionKey: opts?.agentSessionKey,
@@ -152,46 +199,28 @@ export function createSessionsSpawnTool(
             agentAccountId: opts?.agentAccountId,
             agentTo: opts?.agentTo,
             agentThreadId: opts?.agentThreadId,
-            sandboxed: opts?.sandboxed,
+            agentGroupId: opts?.agentGroupId,
+            agentGroupChannel: opts?.agentGroupChannel,
+            agentGroupSpace: opts?.agentGroupSpace,
+            requesterAgentIdOverride: opts?.requesterAgentIdOverride,
+            workspaceDir: opts?.workspaceDir,
           },
         );
+
+        endSubagentSpan(subagentSpan, {
+          status: result.status,
+          childSessionKey: result.childSessionKey,
+          runId: result.runId,
+          error: result.error,
+        });
         return jsonResult(result);
+      } catch (error) {
+        endSubagentSpan(subagentSpan, {
+          status: "error",
+          error: error instanceof Error ? error.message : String(error),
+        });
+        throw error;
       }
-
-      const result = await spawnSubagentDirect(
-        {
-          task,
-          label: label || undefined,
-          agentId: requestedAgentId,
-          model: modelOverride,
-          thinking: thinkingOverrideRaw,
-          runTimeoutSeconds,
-          thread,
-          mode,
-          cleanup,
-          sandbox,
-          expectsCompletionMessage: true,
-          attachments,
-          attachMountPath:
-            params.attachAs && typeof params.attachAs === "object"
-              ? readStringParam(params.attachAs as Record<string, unknown>, "mountPath")
-              : undefined,
-        },
-        {
-          agentSessionKey: opts?.agentSessionKey,
-          agentChannel: opts?.agentChannel,
-          agentAccountId: opts?.agentAccountId,
-          agentTo: opts?.agentTo,
-          agentThreadId: opts?.agentThreadId,
-          agentGroupId: opts?.agentGroupId,
-          agentGroupChannel: opts?.agentGroupChannel,
-          agentGroupSpace: opts?.agentGroupSpace,
-          requesterAgentIdOverride: opts?.requesterAgentIdOverride,
-          workspaceDir: opts?.workspaceDir,
-        },
-      );
-
-      return jsonResult(result);
     },
   };
 }

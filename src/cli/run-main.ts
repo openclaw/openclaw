@@ -8,6 +8,7 @@ import { ensureOpenClawCliOnPath } from "../infra/path-env.js";
 import { assertSupportedRuntime } from "../infra/runtime-guard.js";
 import { installUnhandledRejectionHandler } from "../infra/unhandled-rejections.js";
 import { enableConsoleCapture } from "../logging.js";
+import { initializeLangfuse } from "../observability/langfuse.js";
 import { getCommandPathWithRootOptions, getPrimaryCommand, hasHelpOrVersion } from "./argv.js";
 import { applyCliProfileEnv, parseCliProfileArgs } from "./profile.js";
 import { tryRouteCli } from "./route.js";
@@ -75,6 +76,7 @@ export async function runCli(argv: string[] = process.argv) {
 
   loadDotEnv({ quiet: true });
   normalizeEnv();
+  await initializeLangfuse(process.env);
   if (shouldEnsureCliPath(normalizedArgv)) {
     ensureOpenClawCliOnPath();
   }

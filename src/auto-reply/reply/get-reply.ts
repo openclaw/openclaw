@@ -11,6 +11,9 @@ import { resolveChannelModelOverride } from "../../channels/model-overrides.js";
 import { type OpenClawConfig, loadConfig } from "../../config/config.js";
 import { applyLinkUnderstanding } from "../../link-understanding/apply.js";
 import { applyMediaUnderstanding } from "../../media-understanding/apply.js";
+import { redactPayload, truncateString } from "../../observability/langfuse-agent-hooks.js";
+import { withLangfuseRequestScope } from "../../observability/langfuse-request-scope.js";
+import { startLangfuseTrace } from "../../observability/langfuse.js";
 import { defaultRuntime } from "../../runtime.js";
 import { normalizeStringEntries } from "../../shared/string-normalization.js";
 import { resolveCommandAuthorization } from "../command-auth.js";
@@ -54,6 +57,31 @@ function mergeSkillFilters(channelFilter?: string[], agentFilter?: string[]): st
   return channel.filter((name) => agentSet.has(name));
 }
 
+function buildLangfuseRequestMetadata(ctx: MsgContext, agentId: string, isHeartbeat: boolean) {
+  const sessionKey = ctx.SessionKey?.trim() || undefined;
+  const messageId = ctx.MessageSidFull?.trim() || ctx.MessageSid?.trim() || undefined;
+  const senderId = ctx.SenderId?.trim() || ctx.From?.trim() || undefined;
+  const surface =
+    ctx.Surface?.trim() ||
+    ctx.OriginatingChannel?.toString().trim() ||
+    ctx.Provider?.trim() ||
+    undefined;
+  const chatType = ctx.ChatType?.trim() || undefined;
+  const metadata = {
+    sessionKey,
+    messageId,
+    senderId,
+    channel: ctx.Provider?.trim() || undefined,
+    surface,
+    chatType,
+    agentId,
+    accountId: ctx.AccountId?.trim() || undefined,
+    to: ctx.To?.trim() || undefined,
+    isHeartbeat,
+  } satisfies Record<string, unknown>;
+  return Object.fromEntries(Object.entries(metadata).filter(([, value]) => value != null));
+}
+
 export async function getReplyFromConfig(
   ctx: MsgContext,
   opts?: GetReplyOptions,
@@ -68,336 +96,389 @@ export async function getReplyFromConfig(
     sessionKey: agentSessionKey,
     config: cfg,
   });
-  const mergedSkillFilter = mergeSkillFilters(
-    opts?.skillFilter,
-    resolveAgentSkillsFilter(cfg, agentId),
-  );
-  const resolvedOpts =
-    mergedSkillFilter !== undefined ? { ...opts, skillFilter: mergedSkillFilter } : opts;
-  const agentCfg = cfg.agents?.defaults;
-  const sessionCfg = cfg.session;
-  const { defaultProvider, defaultModel, aliasIndex } = resolveDefaultModel({
-    cfg,
-    agentId,
+  const traceMetadata = buildLangfuseRequestMetadata(ctx, agentId, Boolean(opts?.isHeartbeat));
+  const traceName = opts?.isHeartbeat ? "heartbeat.request" : "inbound.request";
+  const inboundBody = ctx.BodyForAgent ?? ctx.Body ?? ctx.CommandBody ?? ctx.RawBody ?? "";
+  const redactedInboundBody = redactPayload(inboundBody);
+  const trace = await startLangfuseTrace({
+    name: traceName,
+    sessionId: traceMetadata.sessionKey,
+    userId: typeof traceMetadata.senderId === "string" ? traceMetadata.senderId : undefined,
+    input: {
+      body: truncateString(
+        typeof redactedInboundBody === "string"
+          ? redactedInboundBody
+          : JSON.stringify(redactedInboundBody ?? ""),
+        4_000,
+      ),
+    },
+    metadata: traceMetadata,
   });
-  let provider = defaultProvider;
-  let model = defaultModel;
-  let hasResolvedHeartbeatModelOverride = false;
-  if (opts?.isHeartbeat) {
-    // Prefer the resolved per-agent heartbeat model passed from the heartbeat runner,
-    // fall back to the global defaults heartbeat model for backward compatibility.
-    const heartbeatRaw =
-      opts.heartbeatModelOverride?.trim() ?? agentCfg?.heartbeat?.model?.trim() ?? "";
-    const heartbeatRef = heartbeatRaw
-      ? resolveModelRefFromString({
-          raw: heartbeatRaw,
+
+  return withLangfuseRequestScope(
+    {
+      trace,
+      requestName: traceName,
+      metadata: traceMetadata,
+    },
+    async () => {
+      const closeTrace = (output: ReplyPayload | ReplyPayload[] | undefined) => {
+        trace.end({
+          output: redactPayload(output),
+          metadata: {
+            ...traceMetadata,
+            replyKind: Array.isArray(output) ? "multi" : output ? "single" : "empty",
+          },
+        });
+        return output;
+      };
+      try {
+        const mergedSkillFilter = mergeSkillFilters(
+          opts?.skillFilter,
+          resolveAgentSkillsFilter(cfg, agentId),
+        );
+        const resolvedOpts =
+          mergedSkillFilter !== undefined ? { ...opts, skillFilter: mergedSkillFilter } : opts;
+        const agentCfg = cfg.agents?.defaults;
+        const sessionCfg = cfg.session;
+        const { defaultProvider, defaultModel, aliasIndex } = resolveDefaultModel({
+          cfg,
+          agentId,
+        });
+        let provider = defaultProvider;
+        let model = defaultModel;
+        let hasResolvedHeartbeatModelOverride = false;
+        if (opts?.isHeartbeat) {
+          // Prefer the resolved per-agent heartbeat model passed from the heartbeat runner,
+          // fall back to the global defaults heartbeat model for backward compatibility.
+          const heartbeatRaw =
+            opts.heartbeatModelOverride?.trim() ?? agentCfg?.heartbeat?.model?.trim() ?? "";
+          const heartbeatRef = heartbeatRaw
+            ? resolveModelRefFromString({
+                raw: heartbeatRaw,
+                defaultProvider,
+                aliasIndex,
+              })
+            : null;
+          if (heartbeatRef) {
+            provider = heartbeatRef.ref.provider;
+            model = heartbeatRef.ref.model;
+            hasResolvedHeartbeatModelOverride = true;
+          }
+        }
+
+        const workspaceDirRaw =
+          resolveAgentWorkspaceDir(cfg, agentId) ?? DEFAULT_AGENT_WORKSPACE_DIR;
+        const workspace = await ensureAgentWorkspace({
+          dir: workspaceDirRaw,
+          ensureBootstrapFiles: !agentCfg?.skipBootstrap && !isFastTestEnv,
+        });
+        const workspaceDir = workspace.dir;
+        const agentDir = resolveAgentDir(cfg, agentId);
+        const timeoutMs = resolveAgentTimeoutMs({
+          cfg,
+          overrideSeconds: opts?.timeoutOverrideSeconds,
+        });
+        const configuredTypingSeconds =
+          agentCfg?.typingIntervalSeconds ?? sessionCfg?.typingIntervalSeconds;
+        const typingIntervalSeconds =
+          typeof configuredTypingSeconds === "number" ? configuredTypingSeconds : 6;
+        const typing = createTypingController({
+          onReplyStart: opts?.onReplyStart,
+          onCleanup: opts?.onTypingCleanup,
+          typingIntervalSeconds,
+          silentToken: SILENT_REPLY_TOKEN,
+          log: defaultRuntime.log,
+        });
+        opts?.onTypingController?.(typing);
+
+        const finalized = finalizeInboundContext(ctx);
+
+        if (!isFastTestEnv) {
+          await applyMediaUnderstanding({
+            ctx: finalized,
+            cfg,
+            agentDir,
+            activeModel: { provider, model },
+          });
+          await applyLinkUnderstanding({
+            ctx: finalized,
+            cfg,
+          });
+        }
+        emitPreAgentMessageHooks({
+          ctx: finalized,
+          cfg,
+          isFastTestEnv,
+        });
+
+        const commandAuthorized = finalized.CommandAuthorized;
+        resolveCommandAuthorization({
+          ctx: finalized,
+          cfg,
+          commandAuthorized,
+        });
+        const sessionState = await initSessionState({
+          ctx: finalized,
+          cfg,
+          commandAuthorized,
+        });
+        let {
+          sessionCtx,
+          sessionEntry,
+          previousSessionEntry,
+          sessionStore,
+          sessionKey,
+          sessionId,
+          isNewSession,
+          resetTriggered,
+          systemSent,
+          abortedLastRun,
+          storePath,
+          sessionScope,
+          groupResolution,
+          isGroup,
+          triggerBodyNormalized,
+          bodyStripped,
+        } = sessionState;
+
+        await applyResetModelOverride({
+          cfg,
+          resetTriggered,
+          bodyStripped,
+          sessionCtx,
+          ctx: finalized,
+          sessionEntry,
+          sessionStore,
+          sessionKey,
+          storePath,
           defaultProvider,
+          defaultModel,
           aliasIndex,
-        })
-      : null;
-    if (heartbeatRef) {
-      provider = heartbeatRef.ref.provider;
-      model = heartbeatRef.ref.model;
-      hasResolvedHeartbeatModelOverride = true;
-    }
-  }
+        });
 
-  const workspaceDirRaw = resolveAgentWorkspaceDir(cfg, agentId) ?? DEFAULT_AGENT_WORKSPACE_DIR;
-  const workspace = await ensureAgentWorkspace({
-    dir: workspaceDirRaw,
-    ensureBootstrapFiles: !agentCfg?.skipBootstrap && !isFastTestEnv,
-  });
-  const workspaceDir = workspace.dir;
-  const agentDir = resolveAgentDir(cfg, agentId);
-  const timeoutMs = resolveAgentTimeoutMs({ cfg, overrideSeconds: opts?.timeoutOverrideSeconds });
-  const configuredTypingSeconds =
-    agentCfg?.typingIntervalSeconds ?? sessionCfg?.typingIntervalSeconds;
-  const typingIntervalSeconds =
-    typeof configuredTypingSeconds === "number" ? configuredTypingSeconds : 6;
-  const typing = createTypingController({
-    onReplyStart: opts?.onReplyStart,
-    onCleanup: opts?.onTypingCleanup,
-    typingIntervalSeconds,
-    silentToken: SILENT_REPLY_TOKEN,
-    log: defaultRuntime.log,
-  });
-  opts?.onTypingController?.(typing);
+        const channelModelOverride = resolveChannelModelOverride({
+          cfg,
+          channel:
+            groupResolution?.channel ??
+            sessionEntry.channel ??
+            sessionEntry.origin?.provider ??
+            (typeof finalized.OriginatingChannel === "string"
+              ? finalized.OriginatingChannel
+              : undefined) ??
+            finalized.Provider,
+          groupId: groupResolution?.id ?? sessionEntry.groupId,
+          groupChannel:
+            sessionEntry.groupChannel ?? sessionCtx.GroupChannel ?? finalized.GroupChannel,
+          groupSubject: sessionEntry.subject ?? sessionCtx.GroupSubject ?? finalized.GroupSubject,
+          parentSessionKey: sessionCtx.ParentSessionKey,
+        });
+        const hasSessionModelOverride = Boolean(
+          sessionEntry.modelOverride?.trim() || sessionEntry.providerOverride?.trim(),
+        );
+        if (
+          !hasResolvedHeartbeatModelOverride &&
+          !hasSessionModelOverride &&
+          channelModelOverride
+        ) {
+          const resolved = resolveModelRefFromString({
+            raw: channelModelOverride.model,
+            defaultProvider,
+            aliasIndex,
+          });
+          if (resolved) {
+            provider = resolved.ref.provider;
+            model = resolved.ref.model;
+          }
+        }
 
-  const finalized = finalizeInboundContext(ctx);
+        const directiveResult = await resolveReplyDirectives({
+          ctx: finalized,
+          cfg,
+          agentId,
+          agentDir,
+          workspaceDir,
+          agentCfg,
+          sessionCtx,
+          sessionEntry,
+          sessionStore,
+          sessionKey,
+          storePath,
+          sessionScope,
+          groupResolution,
+          isGroup,
+          triggerBodyNormalized,
+          commandAuthorized,
+          defaultProvider,
+          defaultModel,
+          aliasIndex,
+          provider,
+          model,
+          hasResolvedHeartbeatModelOverride,
+          typing,
+          opts: resolvedOpts,
+          skillFilter: mergedSkillFilter,
+        });
+        if (directiveResult.kind === "reply") {
+          return closeTrace(directiveResult.reply);
+        }
 
-  if (!isFastTestEnv) {
-    await applyMediaUnderstanding({
-      ctx: finalized,
-      cfg,
-      agentDir,
-      activeModel: { provider, model },
-    });
-    await applyLinkUnderstanding({
-      ctx: finalized,
-      cfg,
-    });
-  }
-  emitPreAgentMessageHooks({
-    ctx: finalized,
-    cfg,
-    isFastTestEnv,
-  });
+        let {
+          commandSource,
+          command,
+          allowTextCommands,
+          skillCommands,
+          directives,
+          cleanedBody,
+          elevatedEnabled,
+          elevatedAllowed,
+          elevatedFailures,
+          defaultActivation,
+          resolvedThinkLevel,
+          resolvedVerboseLevel,
+          resolvedReasoningLevel,
+          resolvedElevatedLevel,
+          execOverrides,
+          blockStreamingEnabled,
+          blockReplyChunking,
+          resolvedBlockStreamingBreak,
+          provider: resolvedProvider,
+          model: resolvedModel,
+          modelState,
+          contextTokens,
+          inlineStatusRequested,
+          directiveAck,
+          perMessageQueueMode,
+          perMessageQueueOptions,
+        } = directiveResult.result;
+        provider = resolvedProvider;
+        model = resolvedModel;
 
-  const commandAuthorized = finalized.CommandAuthorized;
-  resolveCommandAuthorization({
-    ctx: finalized,
-    cfg,
-    commandAuthorized,
-  });
-  const sessionState = await initSessionState({
-    ctx: finalized,
-    cfg,
-    commandAuthorized,
-  });
-  let {
-    sessionCtx,
-    sessionEntry,
-    previousSessionEntry,
-    sessionStore,
-    sessionKey,
-    sessionId,
-    isNewSession,
-    resetTriggered,
-    systemSent,
-    abortedLastRun,
-    storePath,
-    sessionScope,
-    groupResolution,
-    isGroup,
-    triggerBodyNormalized,
-    bodyStripped,
-  } = sessionState;
+        const maybeEmitMissingResetHooks = async () => {
+          if (!resetTriggered || !command.isAuthorizedSender || command.resetHookTriggered) {
+            return;
+          }
+          const resetMatch = command.commandBodyNormalized.match(/^\/(new|reset)(?:\s|$)/);
+          if (!resetMatch) {
+            return;
+          }
+          const action: ResetCommandAction = resetMatch[1] === "reset" ? "reset" : "new";
+          await emitResetCommandHooks({
+            action,
+            ctx,
+            cfg,
+            command,
+            sessionKey,
+            sessionEntry,
+            previousSessionEntry,
+            workspaceDir,
+          });
+        };
 
-  await applyResetModelOverride({
-    cfg,
-    resetTriggered,
-    bodyStripped,
-    sessionCtx,
-    ctx: finalized,
-    sessionEntry,
-    sessionStore,
-    sessionKey,
-    storePath,
-    defaultProvider,
-    defaultModel,
-    aliasIndex,
-  });
+        const inlineActionResult = await handleInlineActions({
+          ctx,
+          sessionCtx,
+          cfg,
+          agentId,
+          agentDir,
+          sessionEntry,
+          previousSessionEntry,
+          sessionStore,
+          sessionKey,
+          storePath,
+          sessionScope,
+          workspaceDir,
+          isGroup,
+          opts: resolvedOpts,
+          typing,
+          allowTextCommands,
+          inlineStatusRequested,
+          command,
+          skillCommands,
+          directives,
+          cleanedBody,
+          elevatedEnabled,
+          elevatedAllowed,
+          elevatedFailures,
+          defaultActivation: () => defaultActivation,
+          resolvedThinkLevel,
+          resolvedVerboseLevel,
+          resolvedReasoningLevel,
+          resolvedElevatedLevel,
+          resolveDefaultThinkingLevel: modelState.resolveDefaultThinkingLevel,
+          provider,
+          model,
+          contextTokens,
+          directiveAck,
+          abortedLastRun,
+          skillFilter: mergedSkillFilter,
+        });
+        if (inlineActionResult.kind === "reply") {
+          await maybeEmitMissingResetHooks();
+          return closeTrace(inlineActionResult.reply);
+        }
+        await maybeEmitMissingResetHooks();
+        directives = inlineActionResult.directives;
+        abortedLastRun = inlineActionResult.abortedLastRun ?? abortedLastRun;
 
-  const channelModelOverride = resolveChannelModelOverride({
-    cfg,
-    channel:
-      groupResolution?.channel ??
-      sessionEntry.channel ??
-      sessionEntry.origin?.provider ??
-      (typeof finalized.OriginatingChannel === "string"
-        ? finalized.OriginatingChannel
-        : undefined) ??
-      finalized.Provider,
-    groupId: groupResolution?.id ?? sessionEntry.groupId,
-    groupChannel: sessionEntry.groupChannel ?? sessionCtx.GroupChannel ?? finalized.GroupChannel,
-    groupSubject: sessionEntry.subject ?? sessionCtx.GroupSubject ?? finalized.GroupSubject,
-    parentSessionKey: sessionCtx.ParentSessionKey,
-  });
-  const hasSessionModelOverride = Boolean(
-    sessionEntry.modelOverride?.trim() || sessionEntry.providerOverride?.trim(),
+        await stageSandboxMedia({
+          ctx,
+          sessionCtx,
+          cfg,
+          sessionKey,
+          workspaceDir,
+        });
+
+        const reply = await runPreparedReply({
+          ctx,
+          sessionCtx,
+          cfg,
+          agentId,
+          agentDir,
+          agentCfg,
+          sessionCfg,
+          commandAuthorized,
+          command,
+          commandSource,
+          allowTextCommands,
+          directives,
+          defaultActivation,
+          resolvedThinkLevel,
+          resolvedVerboseLevel,
+          resolvedReasoningLevel,
+          resolvedElevatedLevel,
+          execOverrides,
+          elevatedEnabled,
+          elevatedAllowed,
+          blockStreamingEnabled,
+          blockReplyChunking,
+          resolvedBlockStreamingBreak,
+          modelState,
+          provider,
+          model,
+          perMessageQueueMode,
+          perMessageQueueOptions,
+          typing,
+          opts: resolvedOpts,
+          defaultProvider,
+          defaultModel,
+          timeoutMs,
+          isNewSession,
+          resetTriggered,
+          systemSent,
+          sessionEntry,
+          sessionStore,
+          sessionKey,
+          sessionId,
+          storePath,
+          workspaceDir,
+          abortedLastRun,
+        });
+        return closeTrace(reply);
+      } catch (error) {
+        trace.captureError(error, { metadata: traceMetadata });
+        throw error;
+      }
+    },
   );
-  if (!hasResolvedHeartbeatModelOverride && !hasSessionModelOverride && channelModelOverride) {
-    const resolved = resolveModelRefFromString({
-      raw: channelModelOverride.model,
-      defaultProvider,
-      aliasIndex,
-    });
-    if (resolved) {
-      provider = resolved.ref.provider;
-      model = resolved.ref.model;
-    }
-  }
-
-  const directiveResult = await resolveReplyDirectives({
-    ctx: finalized,
-    cfg,
-    agentId,
-    agentDir,
-    workspaceDir,
-    agentCfg,
-    sessionCtx,
-    sessionEntry,
-    sessionStore,
-    sessionKey,
-    storePath,
-    sessionScope,
-    groupResolution,
-    isGroup,
-    triggerBodyNormalized,
-    commandAuthorized,
-    defaultProvider,
-    defaultModel,
-    aliasIndex,
-    provider,
-    model,
-    hasResolvedHeartbeatModelOverride,
-    typing,
-    opts: resolvedOpts,
-    skillFilter: mergedSkillFilter,
-  });
-  if (directiveResult.kind === "reply") {
-    return directiveResult.reply;
-  }
-
-  let {
-    commandSource,
-    command,
-    allowTextCommands,
-    skillCommands,
-    directives,
-    cleanedBody,
-    elevatedEnabled,
-    elevatedAllowed,
-    elevatedFailures,
-    defaultActivation,
-    resolvedThinkLevel,
-    resolvedVerboseLevel,
-    resolvedReasoningLevel,
-    resolvedElevatedLevel,
-    execOverrides,
-    blockStreamingEnabled,
-    blockReplyChunking,
-    resolvedBlockStreamingBreak,
-    provider: resolvedProvider,
-    model: resolvedModel,
-    modelState,
-    contextTokens,
-    inlineStatusRequested,
-    directiveAck,
-    perMessageQueueMode,
-    perMessageQueueOptions,
-  } = directiveResult.result;
-  provider = resolvedProvider;
-  model = resolvedModel;
-
-  const maybeEmitMissingResetHooks = async () => {
-    if (!resetTriggered || !command.isAuthorizedSender || command.resetHookTriggered) {
-      return;
-    }
-    const resetMatch = command.commandBodyNormalized.match(/^\/(new|reset)(?:\s|$)/);
-    if (!resetMatch) {
-      return;
-    }
-    const action: ResetCommandAction = resetMatch[1] === "reset" ? "reset" : "new";
-    await emitResetCommandHooks({
-      action,
-      ctx,
-      cfg,
-      command,
-      sessionKey,
-      sessionEntry,
-      previousSessionEntry,
-      workspaceDir,
-    });
-  };
-
-  const inlineActionResult = await handleInlineActions({
-    ctx,
-    sessionCtx,
-    cfg,
-    agentId,
-    agentDir,
-    sessionEntry,
-    previousSessionEntry,
-    sessionStore,
-    sessionKey,
-    storePath,
-    sessionScope,
-    workspaceDir,
-    isGroup,
-    opts: resolvedOpts,
-    typing,
-    allowTextCommands,
-    inlineStatusRequested,
-    command,
-    skillCommands,
-    directives,
-    cleanedBody,
-    elevatedEnabled,
-    elevatedAllowed,
-    elevatedFailures,
-    defaultActivation: () => defaultActivation,
-    resolvedThinkLevel,
-    resolvedVerboseLevel,
-    resolvedReasoningLevel,
-    resolvedElevatedLevel,
-    resolveDefaultThinkingLevel: modelState.resolveDefaultThinkingLevel,
-    provider,
-    model,
-    contextTokens,
-    directiveAck,
-    abortedLastRun,
-    skillFilter: mergedSkillFilter,
-  });
-  if (inlineActionResult.kind === "reply") {
-    await maybeEmitMissingResetHooks();
-    return inlineActionResult.reply;
-  }
-  await maybeEmitMissingResetHooks();
-  directives = inlineActionResult.directives;
-  abortedLastRun = inlineActionResult.abortedLastRun ?? abortedLastRun;
-
-  await stageSandboxMedia({
-    ctx,
-    sessionCtx,
-    cfg,
-    sessionKey,
-    workspaceDir,
-  });
-
-  return runPreparedReply({
-    ctx,
-    sessionCtx,
-    cfg,
-    agentId,
-    agentDir,
-    agentCfg,
-    sessionCfg,
-    commandAuthorized,
-    command,
-    commandSource,
-    allowTextCommands,
-    directives,
-    defaultActivation,
-    resolvedThinkLevel,
-    resolvedVerboseLevel,
-    resolvedReasoningLevel,
-    resolvedElevatedLevel,
-    execOverrides,
-    elevatedEnabled,
-    elevatedAllowed,
-    blockStreamingEnabled,
-    blockReplyChunking,
-    resolvedBlockStreamingBreak,
-    modelState,
-    provider,
-    model,
-    perMessageQueueMode,
-    perMessageQueueOptions,
-    typing,
-    opts: resolvedOpts,
-    defaultProvider,
-    defaultModel,
-    timeoutMs,
-    isNewSession,
-    resetTriggered,
-    systemSent,
-    sessionEntry,
-    sessionStore,
-    sessionKey,
-    sessionId,
-    storePath,
-    workspaceDir,
-    abortedLastRun,
-  });
 }

@@ -21,6 +21,7 @@ import {
 } from "../../config/sessions.js";
 import { logVerbose } from "../../globals.js";
 import { emitAgentEvent, registerAgentRunContext } from "../../infra/agent-events.js";
+import { onToolResult, onToolStart } from "../../observability/langfuse-agent-hooks.js";
 import { defaultRuntime } from "../../runtime.js";
 import {
   isMarkdownCapableMessageChannel,
@@ -196,7 +197,7 @@ export async function runAgentTurnWithFallback(params: {
         return text;
       };
       const blockReplyPipeline = params.blockReplyPipeline;
-      const onToolResult = params.opts?.onToolResult;
+      const optsToolResult = params.opts?.onToolResult;
       const fallbackResult = await runWithModelFallback({
         ...resolveModelFallbackOptions(params.followupRun.run),
         run: (provider, model, runOptions) => {
@@ -389,6 +390,14 @@ export async function runAgentTurnWithFallback(params: {
                     await params.typingSignals.signalToolStart();
                     await params.opts?.onToolStart?.({ name, phase });
                   }
+                  // Stage 4: track tool spans in Langfuse.
+                  const toolCallId =
+                    typeof evt.data.toolCallId === "string" ? evt.data.toolCallId : undefined;
+                  if (phase === "start" && name && toolCallId) {
+                    onToolStart(runId, toolCallId, name, evt.data.args);
+                  } else if (phase === "result" && toolCallId) {
+                    onToolResult(runId, toolCallId, evt.data.result, Boolean(evt.data.isError));
+                  }
                 }
                 // Track auto-compaction completion
                 if (evt.stream === "compaction") {
@@ -428,7 +437,7 @@ export async function runAgentTurnWithFallback(params: {
                 bootstrapPromptWarningSignaturesSeen[
                   bootstrapPromptWarningSignaturesSeen.length - 1
                 ],
-              onToolResult: onToolResult
+              onToolResult: optsToolResult
                 ? (() => {
                     // Serialize tool result delivery to preserve message ordering.
                     // Without this, concurrent tool callbacks race through typing signals
@@ -443,7 +452,7 @@ export async function runAgentTurnWithFallback(params: {
                             return;
                           }
                           await params.typingSignals.signalTextDelta(text);
-                          await onToolResult({
+                          await optsToolResult({
                             text,
                             mediaUrls: payload.mediaUrls,
                           });

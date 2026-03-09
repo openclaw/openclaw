@@ -19,6 +19,13 @@ import { emitAgentEvent } from "../../infra/agent-events.js";
 import { emitDiagnosticEvent, isDiagnosticsEnabled } from "../../infra/diagnostic-events.js";
 import { generateSecureUuid } from "../../infra/secure-random.js";
 import { enqueueSystemEvent } from "../../infra/system-events.js";
+import {
+  clearRunToolSpans,
+  endModelGeneration,
+  errorModelGeneration,
+  startModelGeneration,
+} from "../../observability/langfuse-agent-hooks.js";
+import type { LangfuseHandle } from "../../observability/langfuse.js";
 import { defaultRuntime } from "../../runtime.js";
 import { estimateUsageCost, resolveModelCostConfig } from "../../utils/usage-format.js";
 import {
@@ -338,8 +345,17 @@ export async function runReplyAgent(params: {
         `Role ordering conflict (${reason}). Restarting session ${sessionKey} -> ${nextSessionId}.`,
       cleanupTranscripts: true,
     });
+  // Stage 3: declared outside try so catch/finally can access them.
+  let generationHandle: LangfuseHandle | null = null;
+  let activeRunId: string | undefined;
   try {
     const runStartedAt = Date.now();
+    // Stage 3: open a Langfuse generation in the active request scope.
+    generationHandle = startModelGeneration({
+      provider: followupRun.run.provider,
+      model: followupRun.run.model,
+      prompt: commandBody,
+    });
     const runOutcome = await runAgentTurnWithFallback({
       commandBody,
       followupRun,
@@ -365,6 +381,14 @@ export async function runReplyAgent(params: {
     });
 
     if (runOutcome.kind === "final") {
+      // Stage 3: close generation on the fast-exit path (no model usage data available).
+      endModelGeneration(generationHandle, {
+        outputText: runOutcome.payload.text,
+        provider: followupRun.run.provider,
+        model: followupRun.run.model,
+        durationMs: Date.now() - runStartedAt,
+      });
+      generationHandle = null;
       return finalizeWithFollowup(runOutcome.payload, queueKey, runFollowupTurn);
     }
 
@@ -377,6 +401,8 @@ export async function runReplyAgent(params: {
       directlySentBlockKeys,
     } = runOutcome;
     let { didLogHeartbeatStrip, autoCompactionCompleted } = runOutcome;
+    // Stage 4: track the runId so we can clear open tool spans in finally.
+    activeRunId = runId;
 
     if (
       shouldInjectGroupIntro &&
@@ -416,6 +442,24 @@ export async function runReplyAgent(params: {
     const modelUsed = runResult.meta?.agentMeta?.model ?? fallbackModel ?? defaultModel;
     const providerUsed =
       runResult.meta?.agentMeta?.provider ?? fallbackProvider ?? followupRun.run.provider;
+    // Stage 3: close the model generation now that we have actual model/provider/usage data.
+    endModelGeneration(generationHandle, {
+      outputText: runResult.payloads?.find((p) => p.text)?.text,
+      provider: providerUsed,
+      model: modelUsed,
+      durationMs: Date.now() - runStartedAt,
+      usage: usage
+        ? {
+            input: usage.input,
+            output: usage.output,
+            cacheRead: usage.cacheRead,
+            cacheWrite: usage.cacheWrite,
+            total: usage.total,
+          }
+        : undefined,
+      fallbackAttemptCount: fallbackAttempts.length,
+    });
+    generationHandle = null;
     const verboseEnabled = resolvedVerboseLevel !== "off";
     const selectedProvider = followupRun.run.provider;
     const selectedModel = followupRun.run.model;
@@ -702,11 +746,20 @@ export async function runReplyAgent(params: {
       runFollowupTurn,
     );
   } catch (error) {
+    // Stage 3: capture the error on the open generation (if not yet closed).
+    if (generationHandle) {
+      errorModelGeneration(generationHandle, error);
+      generationHandle = null;
+    }
     // Keep the followup queue moving even when an unexpected exception escapes
     // the run path; the caller still receives the original error.
     finalizeWithFollowup(undefined, queueKey, runFollowupTurn);
     throw error;
   } finally {
+    // Stage 4: clear any tool spans that were left open (e.g. on run abort).
+    if (activeRunId) {
+      clearRunToolSpans(activeRunId);
+    }
     blockReplyPipeline?.stop();
     typing.markRunComplete();
     // Safety net: the dispatcher's onIdle callback normally fires
