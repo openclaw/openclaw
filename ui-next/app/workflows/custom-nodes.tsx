@@ -106,11 +106,14 @@ export function ActionNode({ data }: { data: NodeData }) {
 }
 
 export function LogicNode({ data }: { data: NodeData }) {
+  const isIfElse = data.label === "If / Else";
+
   return (
     <div
       style={{
         ...styles.node,
         borderColor: "#f59e0b",
+        position: "relative",
       }}
     >
       <Handle type="target" position={Position.Left} style={styles.handle} isConnectable={true} />
@@ -127,7 +130,69 @@ export function LogicNode({ data }: { data: NodeData }) {
         <div style={styles.label}>{data.label}</div>
         {data.subline && <div style={styles.sub}>{data.subline}</div>}
       </div>
-      <Handle type="source" position={Position.Right} style={styles.handle} isConnectable={true} />
+
+      {/* If/Else has two output handles: TRUE (top-right) and FALSE (bottom-right) */}
+      {isIfElse ? (
+        <>
+          {/* TRUE branch handle - top right */}
+          <Handle
+            type="source"
+            position={Position.Right}
+            id="true"
+            style={{
+              ...styles.handle,
+              top: "25%",
+              background: "var(--ok)",
+            }}
+            isConnectable={true}
+          />
+          {/* FALSE branch handle - bottom right */}
+          <Handle
+            type="source"
+            position={Position.Right}
+            id="false"
+            style={{
+              ...styles.handle,
+              top: "75%",
+              background: "var(--danger)",
+            }}
+            isConnectable={true}
+          />
+          {/* Labels for handles */}
+          <div
+            style={{
+              position: "absolute",
+              right: "-35px",
+              top: "20%",
+              fontSize: 9,
+              fontWeight: 600,
+              color: "var(--ok)",
+            }}
+          >
+            TRUE
+          </div>
+          <div
+            style={{
+              position: "absolute",
+              right: "-40px",
+              top: "70%",
+              fontSize: 9,
+              fontWeight: 600,
+              color: "var(--danger)",
+            }}
+          >
+            FALSE
+          </div>
+        </>
+      ) : (
+        // Regular logic nodes have single output
+        <Handle
+          type="source"
+          position={Position.Right}
+          style={styles.handle}
+          isConnectable={true}
+        />
+      )}
     </div>
   );
 }

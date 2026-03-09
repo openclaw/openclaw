@@ -235,7 +235,6 @@ html.theme-transition::view-transition-new(theme) {
 }
 
 @media (prefers-reduced-motion: reduce) {
-
   html.theme-transition::view-transition-old(theme),
   html.theme-transition::view-transition-new(theme) {
     animation: none !important;
@@ -348,7 +347,6 @@ select {
 }
 
 @keyframes pulse-subtle {
-
   0%,
   100% {
     opacity: 1;
@@ -360,7 +358,6 @@ select {
 }
 
 @keyframes glow-pulse {
-
   0%,
   100% {
     opacity: 1;

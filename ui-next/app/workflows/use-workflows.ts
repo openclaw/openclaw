@@ -10,6 +10,21 @@ export interface WorkflowItem {
   edges: Edge[];
   updatedAt: string;
   cronJobIds?: string[];
+  triggerConfigs?: WorkflowTriggerConfig[];
+}
+
+// ============================================
+// Workflow Trigger Configuration
+// ============================================
+export interface WorkflowTriggerConfig {
+  type: "cron" | "chat";
+  triggerNodeId: string;
+  enabled: boolean;
+  // Cron-specific
+  cronExpr?: string;
+  // Chat-specific
+  sessionKey?: string;
+  matchKeyword?: string;
 }
 
 // ============================================
@@ -18,19 +33,26 @@ export interface WorkflowItem {
 // ============================================
 export interface WorkflowChainStep {
   nodeId: string;
-  actionType: string; // "agent-prompt" | "send-message" | "unknown"
+  actionType: string; // "agent-prompt" | "send-message" | "if-else" | "unknown"
   label: string;
   agentId?: string;
   prompt?: string; // Hỗ trợ {{input}} — backend replace bằng output bước trước
   body?: string; // Dùng cho "send-message"
+  // Extended fields for send-message
+  channel?: string;
+  recipientId?: string;
+  accountId?: string;
+  // Branching fields for If/Else
+  condition?: string;
+  trueChain?: WorkflowChainStep[];
+  falseChain?: WorkflowChainStep[];
 }
 
 const WF_CHAIN_PREFIX = "__wf_chain__:";
 
 /**
  * BFS từ triggerId, trả về danh sách action nodes theo thứ tự kết nối.
- * Logic nodes được traverse qua (để tiếp tục tìm action phía sau) nhưng
- * không thêm vào chain (chưa có runtime support).
+ * Hỗ trợ branching cho logic nodes (If/Else).
  */
 function extractChainFromTrigger(
   triggerId: string,
@@ -39,55 +61,154 @@ function extractChainFromTrigger(
 ): WorkflowChainStep[] {
   const chain: WorkflowChainStep[] = [];
   const visited = new Set<string>();
-  const queue: string[] = [];
 
-  // Seed BFS từ các edge xuất phát từ trigger
-  for (const e of edges) {
-    if (e.source === triggerId) {
-      queue.push(e.target);
-    }
-  }
+  // Find all edges from trigger
+  const outgoingEdges = edges.filter((e) => e.source === triggerId);
 
-  while (queue.length > 0) {
-    const nodeId = queue.shift()!;
-    if (visited.has(nodeId)) {
-      continue;
-    }
-    visited.add(nodeId);
-
-    const node = nodes.find((n) => n.id === nodeId);
-    if (!node) {
-      continue;
-    }
-
-    if (node.type === "action") {
-      const label = (node.data?.label as string) || "";
-      const rawActionType = node.data?.actionType as string | undefined;
-      const actionType =
-        rawActionType ||
-        (label === "AI Agent Prompt" ? "agent-prompt" : "") ||
-        (label === "Send Message" ? "send-message" : "") ||
-        "unknown";
-
-      chain.push({
-        nodeId,
-        actionType,
-        label,
-        agentId: (node.data?.agentId as string) || undefined,
-        prompt: (node.data?.prompt as string) || undefined,
-        body: (node.data?.body as string) || undefined,
-      });
-    }
-
-    // Tiếp tục BFS qua node tiếp theo (kể cả logic node)
-    for (const e of edges) {
-      if (e.source === nodeId && !visited.has(e.target)) {
-        queue.push(e.target);
-      }
+  for (const edge of outgoingEdges) {
+    const step = extractNodeChain(edge.target, nodes, edges, visited);
+    if (step) {
+      chain.push(step);
     }
   }
 
   return chain;
+}
+
+/**
+ * Recursively extract chain from a node, handling branches
+ */
+function extractNodeChain(
+  nodeId: string,
+  nodes: Node[],
+  edges: Edge[],
+  visited: Set<string>,
+): WorkflowChainStep | null {
+  if (visited.has(nodeId)) {
+    return null;
+  }
+  visited.add(nodeId);
+
+  const node = nodes.find((n) => n.id === nodeId);
+  if (!node) {
+    return null;
+  }
+
+  const label = (node.data?.label as string) || "";
+  const rawActionType = node.data?.actionType as string | undefined;
+
+  // Determine action type
+  let actionType =
+    rawActionType ||
+    (label === "AI Agent Prompt" ? "agent-prompt" : "") ||
+    (label === "Send Message" ? "send-message" : "") ||
+    (label === "If / Else" ? "if-else" : "") ||
+    "unknown";
+
+  // Build step config
+  const step: WorkflowChainStep = {
+    nodeId,
+    actionType,
+    label,
+    agentId: (node.data?.agentId as string) || undefined,
+    prompt: (node.data?.prompt as string) || undefined,
+    body: (node.data?.body as string) || undefined,
+    channel: (node.data?.channel as string) || undefined,
+    recipientId: (node.data?.recipientId as string) || undefined,
+    accountId: (node.data?.accountId as string) || undefined,
+    condition: (node.data?.condition as string) || undefined,
+  };
+
+  // If this is a logic node (If/Else), extract branches separately
+  if (actionType === "if-else") {
+    // Find all outgoing edges (true and false branches)
+    const outgoingEdges = edges.filter((e) => e.source === nodeId);
+
+    console.log("[WORKFLOW DEBUG] Processing If/Else node:", {
+      nodeId,
+      outgoingEdgesCount: outgoingEdges.length,
+      edges: outgoingEdges.map((e) => ({
+        target: e.target,
+        sourceHandle: e.sourceHandle,
+        label: e.data?.label || e.label,
+      })),
+    });
+
+    // Process each outgoing edge
+    for (const edge of outgoingEdges) {
+      // Use sourceHandle from React Flow (set by custom-nodes.tsx)
+      const sourceHandle = edge.sourceHandle as string | undefined; // "true" or "false"
+      const edgeLabel = (edge.data?.label as string) || (edge.label as string) || "";
+
+      // Determine branch type from handle ID or edge label
+      const isTrueBranch =
+        sourceHandle === "true" ||
+        edgeLabel.toLowerCase() === "true" ||
+        edgeLabel.toLowerCase() === "yes";
+      const isFalseBranch =
+        sourceHandle === "false" ||
+        edgeLabel.toLowerCase() === "false" ||
+        edgeLabel.toLowerCase() === "no";
+
+      console.log("[WORKFLOW DEBUG] Processing edge:", {
+        target: edge.target,
+        sourceHandle,
+        edgeLabel,
+        isTrueBranch,
+        isFalseBranch,
+      });
+
+      const branchStep = extractNodeChain(edge.target, nodes, edges, new Set(visited));
+
+      if (branchStep) {
+        if (isTrueBranch) {
+          // Explicitly labeled "true" → true branch
+          step.trueChain = step.trueChain || [];
+          step.trueChain.push(branchStep);
+          console.log("[WORKFLOW DEBUG] Added to TRUE branch:", branchStep.nodeId);
+        } else if (isFalseBranch) {
+          // Explicitly labeled "false" → false branch
+          step.falseChain = step.falseChain || [];
+          step.falseChain.push(branchStep);
+          console.log("[WORKFLOW DEBUG] Added to FALSE branch:", branchStep.nodeId);
+        } else {
+          // Fallback: first edge goes to trueChain
+          if (!step.trueChain) {
+            step.trueChain = [];
+          }
+          step.trueChain.push(branchStep);
+          console.log("[WORKFLOW DEBUG] Added to TRUE branch (fallback):", branchStep.nodeId);
+        }
+      }
+    }
+
+    // Log for debugging
+    console.log("[WORKFLOW DEBUG] Extracted If/Else node:", {
+      nodeId,
+      hasTrueBranch: step.trueChain !== undefined && step.trueChain.length > 0,
+      hasFalseBranch: step.falseChain !== undefined && step.falseChain.length > 0,
+      trueChainLength: step.trueChain?.length || 0,
+      falseChainLength: step.falseChain?.length || 0,
+    });
+  } else {
+    // For non-logic nodes, extract sequential next step
+    // Find the first outgoing edge (sequential flow)
+    const outgoingEdges = edges.filter((e) => e.source === nodeId);
+
+    // For sequential nodes, we expect only ONE outgoing edge
+    // If there are multiple, we take the first one (shouldn't happen in valid workflows)
+    if (outgoingEdges.length > 0) {
+      const nextEdge = outgoingEdges[0];
+      const nextStep = extractNodeChain(nextEdge.target, nodes, edges, visited);
+
+      if (nextStep) {
+        // Store as single next step in trueChain array (for compatibility)
+        step.trueChain = [nextStep];
+      }
+    }
+  }
+
+  return step;
 }
 
 export function useWorkflows() {
@@ -131,6 +252,86 @@ export function useWorkflows() {
       edgesCount: edges.length,
     });
 
+    // ============================================
+    // Validate workflow structure
+    // ============================================
+    const validationErrors: string[] = [];
+
+    // Check If/Else nodes have exactly 2 outgoing edges with labels
+    const ifElseNodes = nodes.filter((n) => n.data?.label === "If / Else");
+    for (const node of ifElseNodes) {
+      const outgoingEdges = edges.filter((e) => e.source === node.id);
+      const nodeLabel = typeof node.data?.label === "string" ? node.data.label : node.id;
+
+      if (outgoingEdges.length !== 2) {
+        validationErrors.push(
+          `If/Else node "${nodeLabel}" must have exactly 2 outgoing edges (has ${outgoingEdges.length})`,
+        );
+      } else {
+        // Check edge labels - can be in edge.data.label, edge.label, or inferred from sourceHandle
+        const labelSet = new Set<string>();
+        for (const edge of outgoingEdges) {
+          const dataLabel = (edge.data?.label as string) || (edge.label as string) || "";
+          const sourceHandle = edge.sourceHandle as string | undefined;
+
+          // Use sourceHandle if available (from If/Else custom handles)
+          if (sourceHandle === "true" || sourceHandle === "false") {
+            labelSet.add(sourceHandle);
+          } else if (dataLabel) {
+            // Otherwise use edge label
+            labelSet.add(dataLabel.toLowerCase());
+          }
+        }
+
+        const hasTrue = labelSet.has("true") || labelSet.has("yes");
+        const hasFalse = labelSet.has("false") || labelSet.has("no");
+
+        if (!hasTrue || !hasFalse) {
+          validationErrors.push(
+            `If/Else node "${nodeLabel}" edges must be labeled "true" and "false"`,
+          );
+        }
+      }
+    }
+
+    // Check for cycles
+    function hasCycle(startNodeId: string, visited: Set<string>, path: Set<string>): boolean {
+      if (path.has(startNodeId)) {
+        return true;
+      }
+      if (visited.has(startNodeId)) {
+        return false;
+      }
+
+      visited.add(startNodeId);
+      path.add(startNodeId);
+
+      const outgoingEdges = edges.filter((e) => e.source === startNodeId);
+      for (const edge of outgoingEdges) {
+        if (hasCycle(edge.target, visited, path)) {
+          return true;
+        }
+      }
+
+      path.delete(startNodeId);
+      return false;
+    }
+
+    const triggerNodes = nodes.filter((n) => n.type === "trigger");
+    for (const trigger of triggerNodes) {
+      if (hasCycle(trigger.id, new Set(), new Set())) {
+        validationErrors.push("Workflow contains cycles - please remove loops");
+        break;
+      }
+    }
+
+    if (validationErrors.length > 0) {
+      alert("Workflow validation failed:\n\n" + validationErrors.join("\n"));
+      throw new Error("Workflow validation failed: " + validationErrors.join(", "));
+    }
+
+    console.log("[WORKFLOW DEBUG] Validation passed");
+
     // 1. Xoá các cron jobs cũ của workflow này
     const existingWorkflow = workflows.find((w) => w.id === id);
     if (existingWorkflow?.cronJobIds) {
@@ -146,33 +347,35 @@ export function useWorkflows() {
     }
 
     const newCronJobIds: string[] = [];
+    const triggerConfigs: WorkflowTriggerConfig[] = [];
 
-    // 2. Với mỗi Schedule (Cron) trigger, BFS toàn bộ chain
-    const cronTriggers = nodes.filter(
-      (n) => n.type === "trigger" && n.data?.label === "Schedule (Cron)",
-    );
+    // 2. Process all triggers (Cron + Chat)
+    const allTriggers = nodes.filter((n) => n.type === "trigger");
 
-    console.log("[WORKFLOW DEBUG] Found cron triggers:", cronTriggers.length);
+    console.log("[WORKFLOW DEBUG] Found all triggers:", allTriggers.length);
 
-    for (const trigger of cronTriggers) {
-      const cronExpr = (trigger.data.cronExpr as string) || "*/5 * * * *"; // Default: every 5 minutes
+    for (const trigger of allTriggers) {
+      const triggerLabel = trigger.data?.label as string;
+      const isCronTrigger = triggerLabel === "Schedule (Cron)";
+      const isChatTrigger = triggerLabel === "Chat Message";
 
-      console.log("[WORKFLOW DEBUG] Processing trigger:", {
-        triggerId: trigger.id,
-        cronExpr,
-        triggerData: trigger.data,
-      });
+      if (!isCronTrigger && !isChatTrigger) {
+        console.log("[WORKFLOW DEBUG] Skipping unknown trigger type:", triggerLabel);
+        continue;
+      }
 
       // BFS lấy toàn bộ chuỗi action nodes từ trigger này
       const chain = extractChainFromTrigger(trigger.id, nodes, edges);
-      console.log("[WORKFLOW DEBUG] Extracted chain:", {
+      console.log("[WORKFLOW DEBUG] Extracted chain from trigger:", {
+        triggerId: trigger.id,
+        triggerLabel,
         chainLength: chain.length,
         steps: chain.map((s) => ({ nodeId: s.nodeId, actionType: s.actionType, label: s.label })),
       });
 
       if (chain.length === 0) {
-        console.log("[WORKFLOW DEBUG] Chain is empty, skipping");
-        continue;
+        console.log("[WORKFLOW DEBUG] Chain is empty for trigger:", trigger.id);
+        // Still register the trigger config even if chain is empty (user might add nodes later)
       }
 
       const firstStep = chain[0];
@@ -180,64 +383,136 @@ export function useWorkflows() {
       // Encode chain vào description (chỉ khi có nhiều hơn 1 bước)
       // Backend sẽ parse __wf_chain__:<json> để chạy sequential
       const description =
-        chain.length > 1
-          ? `${WF_CHAIN_PREFIX}${JSON.stringify(chain)}`
+        chain.length > 0
+          ? `${WF_CHAIN_PREFIX}${JSON.stringify(chain, null, 2)}`
           : `Generated from Workflow Editor (trigger: ${trigger.id})`;
 
-      console.log("[WORKFLOW DEBUG] Chain description:", description.substring(0, 500));
+      console.log("[WORKFLOW DEBUG] Chain description:", description.substring(0, 1000));
+      console.log("[WORKFLOW DEBUG] Full chain structure:", JSON.stringify(chain, null, 2));
 
       // agentId từ bước đầu tiên (nếu là agent-prompt)
       const agentId =
-        firstStep.actionType === "agent-prompt" ? firstStep.agentId || undefined : undefined;
+        firstStep?.actionType === "agent-prompt" ? firstStep.agentId || undefined : undefined;
 
-      // Payload cho cron job (dựa theo bước đầu tiên)
-      // Nếu có chain > 1, luôn dùng agentTurn để bước 1 có outputText truyền sang bước tiếp theo
-      let jobCreate: CronJobCreate;
+      if (isCronTrigger) {
+        // === CRON TRIGGER ===
+        const cronExpr = (trigger.data.cronExpr as string) || "*/5 * * * *";
 
-      if (firstStep.actionType === "agent-prompt" || chain.length > 1) {
-        const firstPrompt = firstStep.prompt || firstStep.body || "Ping from Workflow";
-        jobCreate = {
-          name: `Workflow: ${name}`,
+        console.log("[WORKFLOW DEBUG] Processing CRON trigger:", {
+          triggerId: trigger.id,
+          cronExpr,
+        });
+
+        if (chain.length === 0) {
+          continue; // Skip cron jobs without actions
+        }
+
+        // Payload cho cron job (dựa theo bước đầu tiên)
+        let jobCreate: CronJobCreate;
+
+        if (firstStep.actionType === "agent-prompt" || chain.length > 1) {
+          const firstPrompt = firstStep.prompt || firstStep.body || "Ping from Workflow";
+          jobCreate = {
+            name: `Workflow: ${name}`,
+            description,
+            enabled: true,
+            agentId,
+            schedule: { kind: "cron", expr: cronExpr },
+            sessionTarget: "isolated",
+            wakeMode: "now",
+            payload: { kind: "agentTurn", message: firstPrompt },
+          };
+        } else {
+          // Chain đơn, bước duy nhất là send-message
+          jobCreate = {
+            name: `Workflow: ${name}`,
+            description,
+            enabled: true,
+            schedule: { kind: "cron", expr: cronExpr },
+            sessionTarget: "isolated",
+            wakeMode: "now",
+            payload: { kind: "systemEvent", text: firstStep.body || "Hello from workflow!" },
+            delivery: { mode: "announce" },
+          };
+        }
+
+        console.log("[WORKFLOW DEBUG] Creating cron job:", {
+          name: jobCreate.name,
+          schedule: jobCreate.schedule,
+          payload: jobCreate.payload,
+          descriptionPreview: jobCreate.description?.substring(0, 200),
+        });
+
+        try {
+          const res = await request<{ id: string }>("cron.add", jobCreate);
+          console.log("[WORKFLOW DEBUG] Cron job created:", res.id);
+          newCronJobIds.push(res.id);
+
+          // Add to trigger configs
+          triggerConfigs.push({
+            type: "cron",
+            triggerNodeId: trigger.id,
+            enabled: true,
+            cronExpr,
+          });
+        } catch (e) {
+          console.error("[WORKFLOW DEBUG] Failed to add cron job for workflow chain", e);
+          throw e;
+        }
+      } else if (isChatTrigger) {
+        // === CHAT MESSAGE TRIGGER ===
+        const sessionKey = trigger.data?.targetSessionKey as string | undefined;
+        const matchKeyword = trigger.data?.matchKeyword as string | undefined;
+
+        console.log("[WORKFLOW DEBUG] Processing CHAT trigger:", {
+          triggerId: trigger.id,
+          sessionKey,
+          matchKeyword,
+        });
+
+        if (!sessionKey) {
+          console.warn("[WORKFLOW DEBUG] Chat trigger missing sessionKey, skipping");
+          continue;
+        }
+
+        // For chat triggers, we still create a cron job for execution
+        // but it will be triggered by events, not schedule
+        const jobCreate: CronJobCreate = {
+          name: `Workflow: ${name} (Chat Trigger)`,
           description,
           enabled: true,
           agentId,
-          schedule: { kind: "cron", expr: cronExpr },
+          schedule: { kind: "event", type: "chat-message" }, // Event-based schedule
           sessionTarget: "isolated",
           wakeMode: "now",
-          payload: { kind: "agentTurn", message: firstPrompt },
+          payload: {
+            kind: "agentTurn",
+            message: firstStep?.prompt || firstStep?.body || "Chat message received",
+          },
         };
-      } else {
-        // Chain đơn, bước duy nhất là send-message
-        jobCreate = {
-          name: `Workflow: ${name}`,
-          description,
-          enabled: true,
-          schedule: { kind: "cron", expr: cronExpr },
-          sessionTarget: "isolated",
-          wakeMode: "now",
-          payload: { kind: "systemEvent", text: firstStep.body || "Hello from workflow!" },
-          delivery: { mode: "announce" },
-        };
-      }
 
-      console.log("[WORKFLOW DEBUG] Creating cron job:", {
-        name: jobCreate.name,
-        schedule: jobCreate.schedule,
-        payload: jobCreate.payload,
-        descriptionPreview: jobCreate.description?.substring(0, 200),
-      });
+        try {
+          const res = await request<{ id: string }>("cron.add", jobCreate);
+          console.log("[WORKFLOW DEBUG] Chat trigger cron job created:", res.id);
+          newCronJobIds.push(res.id);
 
-      try {
-        const res = await request<{ id: string }>("cron.add", jobCreate);
-        console.log("[WORKFLOW DEBUG] Cron job created:", res.id);
-        newCronJobIds.push(res.id);
-      } catch (e) {
-        console.error("[WORKFLOW DEBUG] Failed to add cron job for workflow chain", e);
-        throw e; // Re-throw to let caller know save failed
+          // Add to trigger configs
+          triggerConfigs.push({
+            type: "chat",
+            triggerNodeId: trigger.id,
+            enabled: true,
+            sessionKey,
+            matchKeyword,
+          });
+        } catch (e) {
+          console.error("[WORKFLOW DEBUG] Failed to add chat trigger cron job", e);
+          throw e;
+        }
       }
     }
 
     console.log("[WORKFLOW DEBUG] New cron job IDs:", newCronJobIds);
+    console.log("[WORKFLOW DEBUG] Trigger configs:", triggerConfigs);
 
     setWorkflows((prev) => {
       const existing = prev.find((w) => w.id === id);
@@ -251,6 +526,7 @@ export function useWorkflows() {
                   edges,
                   updatedAt: new Date().toISOString(),
                   cronJobIds: newCronJobIds,
+                  triggerConfigs,
                 }
               : w,
           )
@@ -263,6 +539,7 @@ export function useWorkflows() {
               edges,
               updatedAt: new Date().toISOString(),
               cronJobIds: newCronJobIds,
+              triggerConfigs,
             },
           ];
 

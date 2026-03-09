@@ -1,0 +1,446 @@
+{
+  "workflows": [
+    {
+      "id": "wf-example-ifelse-1",
+      "name": "Customer Support Auto-Response",
+      "nodes": [
+        {
+          "id": "trigger-1",
+          "type": "trigger",
+          "position": { "x": 100, "y": 200 },
+          "data": {
+            "label": "Schedule (Cron)",
+            "subline": "Run periodically",
+            "icon": "⏱️",
+            "cronExpr": "*/5 * * * *"
+          }
+        },
+        {
+          "id": "agent-1",
+          "type": "action",
+          "position": { "x": 400, "y": 200 },
+          "data": {
+            "label": "AI Agent Prompt",
+            "subline": "Ask an AI Agent",
+            "icon": "🧠",
+            "actionType": "agent-prompt",
+            "prompt": "Analyze this customer message and classify it as either 'urgent' or 'normal'. Urgent messages contain words like 'emergency', 'broken', 'not working', 'critical'. Normal messages are general inquiries. Respond with just the word 'urgent' or 'normal'."
+          }
+        },
+        {
+          "id": "if-else-1",
+          "type": "logic",
+          "position": { "x": 700, "y": 200 },
+          "data": {
+            "label": "If / Else",
+            "subline": "Branch by condition",
+            "icon": "🔀",
+            "actionType": "if-else",
+            "condition": "input.toLowerCase().includes('urgent')",
+            "trueLabel": "Urgent",
+            "falseLabel": "Normal"
+          }
+        },
+        {
+          "id": "agent-2",
+          "type": "action",
+          "position": { "x": 1000, "y": 100 },
+          "data": {
+            "label": "AI Agent Prompt",
+            "subline": "Ask an AI Agent",
+            "icon": "🧠",
+            "actionType": "agent-prompt",
+            "prompt": "This is an URGENT customer issue. Draft an immediate response that:\n1. Acknowledges the urgency\n2. Apologizes for the inconvenience\n3. Assures them we're prioritizing this\n4. Provides a ticket number: URGENT-{{new Date().getTime()}}\n5. Says someone will contact them within 1 hour\n\nKeep it professional and empathetic."
+          }
+        },
+        {
+          "id": "agent-3",
+          "type": "action",
+          "position": { "x": 1000, "y": 300 },
+          "data": {
+            "label": "AI Agent Prompt",
+            "subline": "Ask an AI Agent",
+            "icon": "🧠",
+            "actionType": "agent-prompt",
+            "prompt": "This is a NORMAL customer inquiry. Draft a friendly response that:\n1. Thanks them for reaching out\n2. Addresses their question helpfully\n3. Offers additional assistance\n4. Provides reference number: NORM-{{new Date().getTime()}}\n\nKeep it warm and professional."
+          }
+        },
+        {
+          "id": "send-1",
+          "type": "action",
+          "position": { "x": 1300, "y": 200 },
+          "data": {
+            "label": "Send Message",
+            "subline": "Send via channel",
+            "icon": "📤",
+            "actionType": "send-message",
+            "channel": "slack",
+            "recipientId": "#customer-support",
+            "body": "📨 Customer Response Generated:\n\n{{input}}\n\n---\nPlease review and send to customer."
+          }
+        }
+      ],
+      "edges": [
+        {
+          "id": "edge-1",
+          "source": "trigger-1",
+          "target": "agent-1",
+          "type": "smoothstep"
+        },
+        {
+          "id": "edge-2",
+          "source": "agent-1",
+          "target": "if-else-1",
+          "type": "smoothstep"
+        },
+        {
+          "id": "edge-3",
+          "source": "if-else-1",
+          "target": "agent-2",
+          "sourceHandle": "true",
+          "data": {
+            "label": "true"
+          },
+          "type": "smoothstep",
+          "label": "true"
+        },
+        {
+          "id": "edge-4",
+          "source": "if-else-1",
+          "target": "agent-3",
+          "sourceHandle": "false",
+          "data": {
+            "label": "false"
+          },
+          "type": "smoothstep",
+          "label": "false"
+        },
+        {
+          "id": "edge-5",
+          "source": "agent-2",
+          "target": "send-1",
+          "type": "smoothstep"
+        },
+        {
+          "id": "edge-6",
+          "source": "agent-3",
+          "target": "send-1",
+          "type": "smoothstep"
+        }
+      ],
+      "updatedAt": "2026-03-09T10:30:00.000Z",
+      "triggerConfigs": [
+        {
+          "type": "cron",
+          "triggerNodeId": "trigger-1",
+          "enabled": true,
+          "cronExpr": "*/5 * * * *"
+        }
+      ]
+    },
+    {
+      "id": "wf-example-ifelse-2",
+      "name": "Smart Alert Router",
+      "nodes": [
+        {
+          "id": "trigger-1",
+          "type": "trigger",
+          "position": { "x": 100, "y": 200 },
+          "data": {
+            "label": "Schedule (Cron)",
+            "subline": "Run periodically",
+            "icon": "⏱️",
+            "cronExpr": "0 */2 * * *"
+          }
+        },
+        {
+          "id": "agent-1",
+          "type": "action",
+          "position": { "x": 400, "y": 200 },
+          "data": {
+            "label": "AI Agent Prompt",
+            "subline": "Ask an AI Agent",
+            "icon": "🧠",
+            "actionType": "agent-prompt",
+            "prompt": "Check the system status and generate a brief report. Include:\n1. Current system health (healthy/degraded/down)\n2. Any active incidents\n3. Response times\n4. Error rates\n\nFormat it clearly with emojis."
+          }
+        },
+        {
+          "id": "if-else-1",
+          "type": "logic",
+          "position": { "x": 700, "y": 200 },
+          "data": {
+            "label": "If / Else",
+            "subline": "Branch by condition",
+            "icon": "🔀",
+            "actionType": "if-else",
+            "condition": "input.toLowerCase().includes('down') || input.toLowerCase().includes('critical') || input.toLowerCase().includes('error')",
+            "trueLabel": "Alert Team",
+            "falseLabel": "Log Only"
+          }
+        },
+        {
+          "id": "agent-2",
+          "type": "action",
+          "position": { "x": 1000, "y": 100 },
+          "data": {
+            "label": "AI Agent Prompt",
+            "subline": "Ask an AI Agent",
+            "icon": "🧠",
+            "actionType": "agent-prompt",
+            "prompt": "🚨 CRITICAL ALERT! Based on this status report, create an urgent notification for the on-call team:\n\n1. Summarize the issue in 1 sentence\n2. List affected systems\n3. Suggest immediate actions\n4. Include timestamp\n\nMake it clear and actionable."
+          }
+        },
+        {
+          "id": "send-1",
+          "type": "action",
+          "position": { "x": 1300, "y": 100 },
+          "data": {
+            "label": "Send Message",
+            "subline": "Send via channel",
+            "icon": "📤",
+            "actionType": "send-message",
+            "channel": "slack",
+            "recipientId": "#oncall-alerts",
+            "body": "🚨 CRITICAL SYSTEM ALERT\n\n{{input}}\n\n@channel Please investigate immediately!"
+          }
+        },
+        {
+          "id": "agent-3",
+          "type": "action",
+          "position": { "x": 1000, "y": 300 },
+          "data": {
+            "label": "AI Agent Prompt",
+            "subline": "Ask an AI Agent",
+            "icon": "🧠",
+            "actionType": "agent-prompt",
+            "prompt": "System status is normal. Create a brief summary for the daily log:\n\n1. Overall health status\n2. Any minor issues noted\n3. Performance metrics\n\nKeep it concise."
+          }
+        },
+        {
+          "id": "send-2",
+          "type": "action",
+          "position": { "x": 1300, "y": 300 },
+          "data": {
+            "label": "Send Message",
+            "subline": "Send via channel",
+            "icon": "📤",
+            "actionType": "send-message",
+            "channel": "slack",
+            "recipientId": "#system-logs",
+            "body": "📋 System Status Log\n\n{{input}}\n\nAll systems operational."
+          }
+        }
+      ],
+      "edges": [
+        {
+          "id": "edge-1",
+          "source": "trigger-1",
+          "target": "agent-1",
+          "type": "smoothstep"
+        },
+        {
+          "id": "edge-2",
+          "source": "agent-1",
+          "target": "if-else-1",
+          "type": "smoothstep"
+        },
+        {
+          "id": "edge-3",
+          "source": "if-else-1",
+          "target": "agent-2",
+          "sourceHandle": "true",
+          "data": {
+            "label": "true"
+          },
+          "type": "smoothstep",
+          "label": "true"
+        },
+        {
+          "id": "edge-4",
+          "source": "if-else-1",
+          "target": "agent-3",
+          "sourceHandle": "false",
+          "data": {
+            "label": "false"
+          },
+          "type": "smoothstep",
+          "label": "false"
+        },
+        {
+          "id": "edge-5",
+          "source": "agent-2",
+          "target": "send-1",
+          "type": "smoothstep"
+        },
+        {
+          "id": "edge-6",
+          "source": "agent-3",
+          "target": "send-2",
+          "type": "smoothstep"
+        }
+      ],
+      "updatedAt": "2026-03-09T10:35:00.000Z",
+      "triggerConfigs": [
+        {
+          "type": "cron",
+          "triggerNodeId": "trigger-1",
+          "enabled": true,
+          "cronExpr": "0 */2 * * *"
+        }
+      ]
+    },
+    {
+      "id": "wf-example-ifelse-3",
+      "name": "Lead Qualification Bot",
+      "nodes": [
+        {
+          "id": "trigger-1",
+          "type": "trigger",
+          "position": { "x": 100, "y": 200 },
+          "data": {
+            "label": "Schedule (Cron)",
+            "subline": "Run periodically",
+            "icon": "⏱️",
+            "cronExpr": "0 9 * * 1-5"
+          }
+        },
+        {
+          "id": "agent-1",
+          "type": "action",
+          "position": { "x": 400, "y": 200 },
+          "data": {
+            "label": "AI Agent Prompt",
+            "subline": "Ask an AI Agent",
+            "icon": "🧠",
+            "actionType": "agent-prompt",
+            "prompt": "Review these new leads from last night and score each one:\n\nFor each lead, provide:\n1. Name and company\n2. Budget mentioned (if any)\n3. Timeline urgency\n4. Score: HOT (budget > $10k or urgent timeline), WARM (interested but no timeline), COLD (just browsing)\n\nFormat as a clear list."
+          }
+        },
+        {
+          "id": "if-else-1",
+          "type": "logic",
+          "position": { "x": 700, "y": 200 },
+          "data": {
+            "label": "If / Else",
+            "subline": "Branch by condition",
+            "icon": "🔀",
+            "actionType": "if-else",
+            "condition": "input.toUpperCase().includes('HOT')",
+            "trueLabel": "Hot Leads",
+            "falseLabel": "Other Leads"
+          }
+        },
+        {
+          "id": "agent-2",
+          "type": "action",
+          "position": { "x": 1000, "y": 100 },
+          "data": {
+            "label": "AI Agent Prompt",
+            "subline": "Ask an AI Agent",
+            "icon": "🧠",
+            "actionType": "agent-prompt",
+            "prompt": "Create a personalized outreach message for these HOT leads:\n\n1. Reference their specific needs\n2. Propose a call within 24 hours\n3. Include a calendar link placeholder\n4. Keep it warm but professional\n\nMake each message feel personalized."
+          }
+        },
+        {
+          "id": "send-1",
+          "type": "action",
+          "position": { "x": 1300, "y": 100 },
+          "data": {
+            "label": "Send Message",
+            "subline": "Send via channel",
+            "icon": "📤",
+            "actionType": "send-message",
+            "channel": "slack",
+            "recipientId": "#sales-hot-leads",
+            "body": "🔥 HOT LEADS - Contact Within 24 Hours!\n\n{{input}}\n\n@sales-team Drop everything and reach out to these leads NOW!"
+          }
+        },
+        {
+          "id": "agent-3",
+          "type": "action",
+          "position": { "x": 1000, "y": 300 },
+          "data": {
+            "label": "AI Agent Prompt",
+            "subline": "Ask an AI Agent",
+            "icon": "🧠",
+            "actionType": "agent-prompt",
+            "prompt": "Create a nurturing email template for WARM and COLD leads:\n\n1. Thank them for interest\n2. Provide helpful resources\n3. Invite them to webinar/newsletter\n4. Keep door open for future contact\n\nMake it friendly and non-pushy."
+          }
+        },
+        {
+          "id": "send-2",
+          "type": "action",
+          "position": { "x": 1300, "y": 300 },
+          "data": {
+            "label": "Send Message",
+            "subline": "Send via channel",
+            "icon": "📤",
+            "actionType": "send-message",
+            "channel": "slack",
+            "recipientId": "#sales-nurture",
+            "body": "🌱 Lead Nurturing Campaign\n\n{{input}}\n\nAdd these to the weekly nurture sequence."
+          }
+        }
+      ],
+      "edges": [
+        {
+          "id": "edge-1",
+          "source": "trigger-1",
+          "target": "agent-1",
+          "type": "smoothstep"
+        },
+        {
+          "id": "edge-2",
+          "source": "agent-1",
+          "target": "if-else-1",
+          "type": "smoothstep"
+        },
+        {
+          "id": "edge-3",
+          "source": "if-else-1",
+          "target": "agent-2",
+          "sourceHandle": "true",
+          "data": {
+            "label": "true"
+          },
+          "type": "smoothstep",
+          "label": "true"
+        },
+        {
+          "id": "edge-4",
+          "source": "if-else-1",
+          "target": "agent-3",
+          "sourceHandle": "false",
+          "data": {
+            "label": "false"
+          },
+          "type": "smoothstep",
+          "label": "false"
+        },
+        {
+          "id": "edge-5",
+          "source": "agent-2",
+          "target": "send-1",
+          "type": "smoothstep"
+        },
+        {
+          "id": "edge-6",
+          "source": "agent-3",
+          "target": "send-2",
+          "type": "smoothstep"
+        }
+      ],
+      "updatedAt": "2026-03-09T10:40:00.000Z",
+      "triggerConfigs": [
+        {
+          "type": "cron",
+          "triggerNodeId": "trigger-1",
+          "enabled": true,
+          "cronExpr": "0 9 * * 1-5"
+        }
+      ]
+    }
+  ]
+}

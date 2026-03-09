@@ -221,15 +221,167 @@ export function NodeConfigPanel({ node, onClose, onUpdateData }: NodeConfigPanel
         )}
 
         {data.label === "Send Message" && (
-          <div style={styles.field}>
-            <span style={styles.label}>Message Body</span>
-            <textarea
-              style={styles.textarea}
-              placeholder="Hello world!"
-              value={(data.body as string) || ""}
-              onChange={(e) => handleChange("body", e.target.value)}
-            />
-          </div>
+          <>
+            <div style={styles.field}>
+              <span style={styles.label}>Channel</span>
+              <select
+                style={styles.select}
+                value={(data.channel as string) || ""}
+                onChange={(e) => handleChange("channel", e.target.value)}
+              >
+                <option value="">-- Select channel --</option>
+                <option value="slack">Slack</option>
+                <option value="discord">Discord</option>
+                <option value="telegram">Telegram</option>
+                <option value="line">LINE</option>
+                <option value="whatsapp">WhatsApp</option>
+                <option value="facebook">Facebook Messenger</option>
+                <option value="sms">SMS</option>
+              </select>
+            </div>
+
+            <div style={styles.field}>
+              <span style={styles.label}>Recipient ID</span>
+              <input
+                style={styles.input}
+                placeholder="User ID, Channel ID, phone number, or @mention"
+                value={(data.recipientId as string) || ""}
+                onChange={(e) => handleChange("recipientId", e.target.value)}
+              />
+            </div>
+
+            <div style={styles.field}>
+              <span style={styles.label}>Account (Optional)</span>
+              <input
+                style={styles.input}
+                placeholder="Leave blank for default account"
+                value={(data.accountId as string) || ""}
+                onChange={(e) => handleChange("accountId", e.target.value)}
+              />
+            </div>
+
+            <div style={styles.field}>
+              <span style={styles.label}>Message Body</span>
+              <textarea
+                style={styles.textarea}
+                placeholder="Hello! Use {{input}} to include previous step's output"
+                value={(data.body as string) || ""}
+                onChange={(e) => handleChange("body", e.target.value)}
+              />
+            </div>
+
+            {(data.channel as string) && (data.recipientId as string) ? (
+              <div
+                style={{
+                  padding: "8px 12px",
+                  background: "var(--ok-subtle)",
+                  color: "var(--ok)",
+                  borderRadius: "var(--radius-md)",
+                  fontSize: 12,
+                  fontWeight: 500,
+                }}
+              >
+                ✅ Message will be sent to{" "}
+                {(data.channel as string).charAt(0).toUpperCase() +
+                  (data.channel as string).slice(1)}{" "}
+                → {(data.recipientId as string).substring(0, 30)}
+                {(data.recipientId as string).length > 30 ? "..." : ""}
+              </div>
+            ) : (
+              <div
+                style={{
+                  padding: "8px 12px",
+                  background: "var(--warning-subtle)",
+                  color: "var(--warning)",
+                  borderRadius: "var(--radius-md)",
+                  fontSize: 12,
+                  fontWeight: 500,
+                }}
+              >
+                ⚠️ Channel and Recipient ID required for delivery
+              </div>
+            )}
+          </>
+        )}
+        {data.label === "If / Else" && (
+          <>
+            <div style={styles.field}>
+              <span style={styles.label}>Condition Expression</span>
+              <textarea
+                style={styles.textarea}
+                placeholder="input.length > 100&#10;&#10;Supported helpers:&#10;- input.includes('text')&#10;- input.startsWith('...')&#10;- input.length > 50&#10;- variables.myVar === 'value'"
+                value={(data.condition as string) || ""}
+                onChange={(e) => handleChange("condition", e.target.value)}
+              />
+            </div>
+
+            <div
+              style={{
+                padding: "8px 12px",
+                background: "var(--info-subtle)",
+                color: "var(--info)",
+                borderRadius: "var(--radius-md)",
+                fontSize: 11,
+                lineHeight: 1.5,
+              }}
+            >
+              <strong>Available variables:</strong>
+              <br />• <code>input</code> - Output from previous step
+              <br />• <code>variables</code> - Custom workflow variables
+              <br />• Helpers: <code>includes()</code>, <code>startsWith()</code>,{" "}
+              <code>length()</code>
+            </div>
+
+            <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
+              <div style={{ flex: 1 }}>
+                <span style={styles.label}>True Branch Label</span>
+                <input
+                  style={styles.input}
+                  placeholder="Yes"
+                  value={(data.trueLabel as string) || ""}
+                  onChange={(e) => handleChange("trueLabel", e.target.value)}
+                />
+              </div>
+
+              <div style={{ flex: 1 }}>
+                <span style={styles.label}>False Branch Label</span>
+                <input
+                  style={styles.input}
+                  placeholder="No"
+                  value={(data.falseLabel as string) || ""}
+                  onChange={(e) => handleChange("falseLabel", e.target.value)}
+                />
+              </div>
+            </div>
+
+            {(data.condition as string) ? (
+              <div
+                style={{
+                  padding: "8px 12px",
+                  background: "var(--ok-subtle)",
+                  color: "var(--ok)",
+                  borderRadius: "var(--radius-md)",
+                  fontSize: 12,
+                  fontWeight: 500,
+                }}
+              >
+                ✅ Condition configured - workflow will branch based on evaluation
+              </div>
+            ) : (
+              <div
+                style={{
+                  padding: "8px 12px",
+                  background: "var(--warning-subtle)",
+                  color: "var(--warning)",
+                  borderRadius: "var(--radius-md)",
+                  fontSize: 12,
+                  fontWeight: 500,
+                }}
+              >
+                ⚠️ Condition expression required for branching
+              </div>
+            )}
+          </>
         )}
       </div>
     </aside>

@@ -109,7 +109,16 @@ function DnDFlow() {
   }, [rfInstance, saveWorkflow, currentId, workflowName]);
 
   const onConnect = useCallback(
-    (params: Connection | Edge) => setEdges((eds) => addEdge(params, eds)),
+    (params: Connection | Edge) => {
+      // Generate unique edge ID with handle information for If/Else nodes
+      const edgeId = `edge-${crypto.randomUUID()}`;
+      const newEdge: Edge = {
+        ...params,
+        id: edgeId,
+        type: "smoothstep",
+      };
+      setEdges((eds) => addEdge(newEdge, eds));
+    },
     [setEdges],
   );
 
@@ -157,6 +166,36 @@ function DnDFlow() {
   const onPaneClick = useCallback(() => {
     setSelectedNode(null);
   }, []);
+
+  const onEdgeClick = useCallback(
+    (_: React.MouseEvent, edge: Edge) => {
+      // Auto-detect label from handle ID if connected to If/Else node
+      const sourceNode = nodes.find((n) => n.id === edge.source);
+      const isIfElse = sourceNode?.data?.label === "If / Else";
+
+      let currentLabel = (edge.data?.label as string) || edge.label || "";
+
+      // If edge is from If/Else node, use handle ID to determine label
+      if (isIfElse) {
+        const handleId = edge.sourceHandle; // "true" or "false"
+        currentLabel = handleId === "true" ? "true" : handleId === "false" ? "false" : currentLabel;
+      }
+
+      const newLabel = prompt(
+        "Enter edge label:\n- 'true' or 'yes' for TRUE branch\n- 'false' or 'no' for FALSE branch",
+        currentLabel,
+      );
+
+      if (newLabel !== null) {
+        setEdges((eds) =>
+          eds.map((e) =>
+            e.id === edge.id ? { ...e, data: { label: newLabel }, label: newLabel } : e,
+          ),
+        );
+      }
+    },
+    [setEdges, nodes],
+  );
 
   const onUpdateNodeData = useCallback(
     (nodeId: string, newData: NodeData) => {
@@ -358,6 +397,7 @@ function DnDFlow() {
             onDrop={onDrop}
             onDragOver={onDragOver}
             onNodeClick={onNodeClick}
+            onEdgeClick={onEdgeClick}
             onPaneClick={onPaneClick}
             onInit={setRfInstance}
             nodeTypes={nodeTypes}
