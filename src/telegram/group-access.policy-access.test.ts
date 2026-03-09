@@ -235,6 +235,55 @@ describe("evaluateTelegramGroupPolicyAccess – chat allowlist vs sender allowli
     expect(result).toEqual({ allowed: true, groupPolicy: "allowlist" });
   });
 
+  it("allows group via groupAllowFrom chatId even with checkChatAllowlist enabled (#40444)", () => {
+    // Production path: checkChatAllowlist=true, no groups config → resolveGroupPolicy
+    // returns allowed:false.  The chatId in groupAllowFrom should still unblock.
+    const groupChatAllow = {
+      entries: ["-1003890514701"],
+      hasWildcard: false,
+      hasEntries: true,
+      invalidEntries: [],
+    };
+
+    const result = runAccess({
+      chatId: "-1003890514701",
+      effectiveGroupAllow: groupChatAllow,
+      senderId: "999",
+      resolveGroupPolicy: () => ({
+        allowlistEnabled: true,
+        allowed: false, // no groups config entry
+      }),
+      checkChatAllowlist: true,
+    });
+
+    expect(result).toEqual({ allowed: true, groupPolicy: "allowlist" });
+  });
+
+  it("allows group via groupAllowFrom chatId even without sender identity (#40444)", () => {
+    // Anonymous sender (e.g. admin messages, forwarded posts) should still be
+    // allowed when the group's chatId is explicitly listed in groupAllowFrom.
+    const groupChatAllow = {
+      entries: ["-1003890514701"],
+      hasWildcard: false,
+      hasEntries: true,
+      invalidEntries: [],
+    };
+
+    const result = runAccess({
+      chatId: "-1003890514701",
+      effectiveGroupAllow: groupChatAllow,
+      senderId: undefined,
+      senderUsername: undefined,
+      resolveGroupPolicy: () => ({
+        allowlistEnabled: true,
+        allowed: false,
+      }),
+      checkChatAllowlist: true,
+    });
+
+    expect(result).toEqual({ allowed: true, groupPolicy: "allowlist" });
+  });
+
   it("rejects group when its chat ID is NOT in groupAllowFrom", () => {
     const groupChatAllow = {
       entries: ["-1003890514701"],

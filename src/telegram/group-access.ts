@@ -161,9 +161,19 @@ export const evaluateTelegramGroupPolicyAccess = (params: {
   // Check chat-level allowlist first so that groups explicitly listed in the
   // `groups` config are not blocked by the sender-level "empty allowlist" guard.
   let chatExplicitlyAllowed = false;
+  // Check if the chat ID itself is listed in groupAllowFrom (negative Telegram
+  // supergroup/group IDs).  This lets users allowlist groups directly via
+  // groupAllowFrom without needing a separate `groups` config entry.
+  const chatIdAllowedByGroupAllowFrom = params.effectiveGroupAllow.entries.includes(
+    String(params.chatId),
+  );
   if (params.checkChatAllowlist) {
     const groupAllowlist = params.resolveGroupPolicy(params.chatId);
-    if (groupAllowlist.allowlistEnabled && !groupAllowlist.allowed) {
+    if (
+      groupAllowlist.allowlistEnabled &&
+      !groupAllowlist.allowed &&
+      !chatIdAllowedByGroupAllowFrom
+    ) {
       return { allowed: false, reason: "group-chat-not-allowed", groupPolicy };
     }
     // The chat is explicitly allowed when it has a dedicated entry in the groups
@@ -172,6 +182,14 @@ export const evaluateTelegramGroupPolicyAccess = (params: {
     if (groupAllowlist.allowlistEnabled && groupAllowlist.allowed && groupAllowlist.groupConfig) {
       chatExplicitlyAllowed = true;
     }
+    if (chatIdAllowedByGroupAllowFrom) {
+      chatExplicitlyAllowed = true;
+    }
+  }
+  // When the group chat ID is explicitly listed in groupAllowFrom, treat it as
+  // a group-level allowlist entry that bypasses sender-identity checks.
+  if (chatIdAllowedByGroupAllowFrom) {
+    return { allowed: true, groupPolicy };
   }
   if (groupPolicy === "allowlist" && params.enforceAllowlistAuthorization) {
     const senderId = params.senderId ?? "";
@@ -189,11 +207,7 @@ export const evaluateTelegramGroupPolicyAccess = (params: {
           allow: params.effectiveGroupAllow,
           senderId,
           senderUsername: params.senderUsername ?? "",
-        }) ||
-        // Allow if the chat ID itself is listed in groupAllowFrom (negative
-        // Telegram supergroup/group IDs).  This lets users allowlist groups
-        // directly via groupAllowFrom without needing a separate groups config.
-        params.effectiveGroupAllow.entries.includes(String(params.chatId)),
+        }),
     });
     if (!senderAuthorization.allowed && senderAuthorization.reason === "missing_match_input") {
       return { allowed: false, reason: "group-policy-allowlist-no-sender", groupPolicy };
