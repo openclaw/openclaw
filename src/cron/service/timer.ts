@@ -127,6 +127,74 @@ function errorBackoffMs(
   return scheduleMs[Math.max(0, idx)];
 }
 
+const ISOLATED_DEGRADED_HINT =
+  "Isolated runner may be degraded (possible stuck requests-in-flight after a network interruption); command lanes were reset for self-healing.";
+
+function looksLikeIsolatedDegradedError(errorText: string): boolean {
+  const raw = errorText.trim().toLowerCase();
+  if (!raw) {
+    return false;
+  }
+  return (
+    raw.includes(timeoutErrorMessage()) ||
+    raw.includes("request timed out before a response was generated") ||
+    raw.includes("ai service is temporarily overloaded")
+  );
+}
+
+function maybeRecoverIsolatedRunnerDegradedState(params: {
+  state: CronServiceState;
+  job: CronJob;
+  result: TimedCronRunOutcome;
+}): TimedCronRunOutcome {
+  const { state, job } = params;
+  const result = { ...params.result };
+
+  if (job.sessionTarget !== "isolated" || job.payload.kind !== "agentTurn") {
+    return result;
+  }
+  if (result.status !== "error") {
+    return result;
+  }
+  const errorText = result.error?.trim();
+  if (!errorText || !looksLikeIsolatedDegradedError(errorText)) {
+    return result;
+  }
+
+  // Only self-heal after at least one prior consecutive failure to avoid
+  // resetting lanes on one-off upstream provider incidents.
+  const priorConsecutiveErrors = job.state.consecutiveErrors ?? 0;
+  if (priorConsecutiveErrors < 1) {
+    return result;
+  }
+
+  try {
+    state.deps.resetCommandLanes?.();
+    state.deps.log.warn(
+      {
+        jobId: job.id,
+        jobName: job.name,
+        priorConsecutiveErrors,
+      },
+      "cron: detected degraded isolated runner; reset command lanes",
+    );
+  } catch (err) {
+    state.deps.log.warn(
+      {
+        jobId: job.id,
+        jobName: job.name,
+        err: String(err),
+      },
+      "cron: failed to reset command lanes during isolated runner recovery",
+    );
+  }
+
+  if (!errorText.includes(ISOLATED_DEGRADED_HINT)) {
+    result.error = `${errorText} ${ISOLATED_DEGRADED_HINT}`;
+  }
+  return result;
+}
+
 /** Default max retries for one-shot jobs on transient errors (#24355). */
 const DEFAULT_MAX_TRANSIENT_RETRIES = 3;
 
@@ -488,15 +556,21 @@ function applyOutcomeToStoredJob(state: CronServiceState, result: TimedCronRunOu
     return;
   }
 
-  const shouldDelete = applyJobResult(state, job, {
-    status: result.status,
-    error: result.error,
-    delivered: result.delivered,
-    startedAt: result.startedAt,
-    endedAt: result.endedAt,
+  const recovered = maybeRecoverIsolatedRunnerDegradedState({
+    state,
+    job,
+    result,
   });
 
-  emitJobFinished(state, job, result, result.startedAt);
+  const shouldDelete = applyJobResult(state, job, {
+    status: recovered.status,
+    error: recovered.error,
+    delivered: recovered.delivered,
+    startedAt: recovered.startedAt,
+    endedAt: recovered.endedAt,
+  });
+
+  emitJobFinished(state, job, recovered, recovered.startedAt);
 
   if (shouldDelete) {
     store.jobs = jobs.filter((entry) => entry.id !== job.id);

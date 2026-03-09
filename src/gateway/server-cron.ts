@@ -2,6 +2,7 @@ import { resolveDefaultAgentId } from "../agents/agent-scope.js";
 import type { CliDeps } from "../cli/deps.js";
 import { createOutboundSendDeps } from "../cli/outbound-send-deps.js";
 import { loadConfig } from "../config/config.js";
+import { resetAllLanes } from "../process/command-queue.js";
 import {
   canonicalizeMainSessionAlias,
   resolveAgentIdFromSessionKey,
@@ -294,6 +295,9 @@ export function buildGatewayCronService(params: {
         sessionKey: `cron:${job.id}`,
         lane: "cron",
       });
+    },
+    resetCommandLanes: () => {
+      resetAllLanes();
     },
     sendCronFailureAlert: async ({ job, text, channel, to, mode, accountId }) => {
       const { agentId, cfg: runtimeConfig } = resolveCronAgent(job.agentId);

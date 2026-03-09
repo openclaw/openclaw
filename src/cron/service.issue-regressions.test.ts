@@ -1033,6 +1033,49 @@ describe("Cron issue regressions", () => {
     expect(job?.state.lastStatus).toBe("ok");
   });
 
+  it("resets command lanes when isolated cron runs stay degraded across retries (#41423)", async () => {
+    const store = makeStorePath();
+    const scheduledAt = Date.parse("2026-02-15T13:00:00.000Z");
+
+    const cronJob = createIsolatedRegressionJob({
+      id: "degraded-41423",
+      name: "degraded isolated",
+      scheduledAt,
+      schedule: { kind: "cron", expr: "*/5 * * * * *", tz: "UTC" },
+      payload: { kind: "agentTurn", message: "run" },
+      state: { nextRunAtMs: scheduledAt, consecutiveErrors: 1 },
+    });
+    await writeCronJobs(store.storePath, [cronJob]);
+
+    let now = scheduledAt;
+    const events: CronEvent[] = [];
+    const resetCommandLanes = vi.fn();
+    const state = createCronServiceState({
+      cronEnabled: true,
+      storePath: store.storePath,
+      log: noopLogger,
+      nowMs: () => now,
+      enqueueSystemEvent: vi.fn(),
+      requestHeartbeatNow: vi.fn(),
+      resetCommandLanes,
+      onEvent: (evt) => {
+        events.push(evt);
+      },
+      runIsolatedAgentJob: vi.fn(async () => ({
+        status: "error" as const,
+        error: "The AI service is temporarily overloaded. Please try again in a moment.",
+      })),
+    });
+
+    await onTimer(state);
+
+    expect(resetCommandLanes).toHaveBeenCalledTimes(1);
+    const job = state.store?.jobs.find((entry) => entry.id === cronJob.id);
+    expect(job?.state.lastError).toContain("Isolated runner may be degraded");
+    const finished = events.find((evt) => evt.action === "finished" && evt.jobId === cronJob.id);
+    expect(finished?.error).toContain("Isolated runner may be degraded");
+  });
+
   it("does not time out agentTurn jobs at the default 10-minute safety window", async () => {
     const store = makeStorePath();
     const scheduledAt = Date.parse("2026-02-15T13:00:00.000Z");

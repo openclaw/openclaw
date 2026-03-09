@@ -103,6 +103,12 @@ export type CronServiceDeps = {
     } & CronRunOutcome &
       CronRunTelemetry
   >;
+  /**
+   * Optional self-healing hook for clearing/resetting in-process command lanes
+   * when isolated cron execution appears degraded (e.g. stuck requests-in-flight
+   * after network interruptions). Implementations should be idempotent.
+   */
+  resetCommandLanes?: () => void;
   sendCronFailureAlert?: (params: {
     job: CronJob;
     text: string;
