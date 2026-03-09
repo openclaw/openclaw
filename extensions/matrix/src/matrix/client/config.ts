@@ -1,14 +1,29 @@
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "openclaw/plugin-sdk/account-id";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/matrix";
 import { getMatrixRuntime } from "../../runtime.js";
-import {
-  normalizeResolvedSecretInputString,
-  normalizeSecretInputString,
-} from "../../secret-input.js";
+import { normalizeResolvedSecretInputString } from "../../secret-input.js";
 import type { CoreConfig } from "../../types.js";
 import { loadMatrixSdk } from "../sdk-runtime.js";
 import { ensureMatrixSdkLoggingConfigured } from "./logging.js";
 import type { MatrixAuth, MatrixResolvedConfig } from "./types.js";
+
+function buildMatrixHomeserverPolicy(
+  homeserver: string,
+): { allowedHostnames: string[] } | undefined {
+  const trimmed = homeserver.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+  try {
+    const parsed = new URL(trimmed);
+    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+      return undefined;
+    }
+    return { allowedHostnames: [parsed.hostname] };
+  } catch {
+    return undefined;
+  }
+}
 
 function clean(value: unknown, path: string): string {
   return normalizeResolvedSecretInputString({ value, path }) ?? "";
@@ -198,6 +213,7 @@ export async function resolveMatrixAuth(params?: {
         initial_device_display_name: resolved.deviceName ?? "OpenClaw Gateway",
       }),
     },
+    policy: buildMatrixHomeserverPolicy(resolved.homeserver),
     auditContext: "matrix.login",
   });
   const login = await (async () => {
