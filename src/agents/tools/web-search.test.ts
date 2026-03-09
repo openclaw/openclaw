@@ -103,6 +103,18 @@ describe("web_search perplexity compatibility routing", () => {
     });
   });
 
+  it("keeps configured OpenRouter-compatible proxy baseUrl on chat completions transport", () => {
+    expect(
+      resolvePerplexityTransport({
+        apiKey: openRouterPerplexityApiKey,
+        baseUrl: "https://openrouter-proxy.example/v1",
+      }),
+    ).toMatchObject({
+      baseUrl: "https://openrouter-proxy.example/v1",
+      transport: "chat_completions",
+    });
+  });
+
   it("normalizes direct Perplexity models for chat completions", () => {
     expect(isDirectPerplexityBaseUrl("https://api.perplexity.ai")).toBe(true);
     expect(isDirectPerplexityBaseUrl("https://openrouter.ai/api/v1")).toBe(false);
@@ -271,7 +283,7 @@ describe("web_search grok response parsing", () => {
                   url: "https://example.com/a",
                   start_index: 11,
                   end_index: 15,
-                }, // duplicate
+                },
               ],
             },
           ],
