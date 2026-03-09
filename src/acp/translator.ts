@@ -23,8 +23,6 @@ import type {
   SetSessionModeRequest,
   SetSessionModeResponse,
   StopReason,
-  ToolCallLocation,
-  ToolKind,
 } from "@agentclientprotocol/sdk";
 import { PROTOCOL_VERSION } from "@agentclientprotocol/sdk";
 import { listThinkingLevels } from "../auto-reply/thinking.js";
@@ -39,11 +37,8 @@ import { shortenHomePath } from "../utils.js";
 import { getAvailableCommands } from "./commands.js";
 import {
   extractAttachmentsFromPrompt,
-  extractToolCallContent,
-  extractToolCallLocations,
   extractTextFromPrompt,
   formatToolTitle,
-  inferToolKind,
 } from "./event-mapper.js";
 import { readBool, readNumber, readString } from "./meta.js";
 import { parseSessionMeta, resetSessionIfNeeded, resolveSessionKey } from "./session-mapper.js";
@@ -67,14 +62,7 @@ type PendingPrompt = {
   reject: (err: Error) => void;
   sentTextLength?: number;
   sentText?: string;
-  toolCalls?: Map<string, PendingToolCall>;
-};
-
-type PendingToolCall = {
-  kind: ToolKind;
-  locations?: ToolCallLocation[];
-  rawInput?: Record<string, unknown>;
-  title: string;
+  toolCalls?: Set<string>;
 };
 
 type AcpGatewayAgentOptions = AcpServerOptions & {
@@ -458,10 +446,7 @@ export class AcpGatewayAgent implements Agent {
     this.log(`loadSession: ${session.sessionId} -> ${session.sessionKey}`);
     const [sessionSnapshot, transcript] = await Promise.all([
       this.getSessionSnapshot(session.sessionKey),
-      this.getSessionTranscript(session.sessionKey).catch((err) => {
-        this.log(`session transcript fallback for ${session.sessionKey}: ${String(err)}`);
-        return [];
-      }),
+      this.getSessionTranscript(session.sessionKey),
     ]);
     await this.replaySessionTranscript(session.sessionId, transcript);
     await this.sendSessionSnapshotUpdate(session.sessionId, sessionSnapshot, {
@@ -633,6 +618,7 @@ export class AcpGatewayAgent implements Agent {
     if (!session) {
       return;
     }
+
     this.sessionStore.cancelActiveRun(params.sessionId);
     try {
       await this.gateway.request("chat.abort", { sessionKey: session.sessionKey });
@@ -695,48 +681,21 @@ export class AcpGatewayAgent implements Agent {
 
     if (phase === "start") {
       if (!pending.toolCalls) {
-        pending.toolCalls = new Map();
+        pending.toolCalls = new Set();
       }
       if (pending.toolCalls.has(toolCallId)) {
         return;
       }
+      pending.toolCalls.add(toolCallId);
       const args = data.args as Record<string, unknown> | undefined;
-      const title = formatToolTitle(name, args);
-      const kind = inferToolKind(name);
-      const locations = extractToolCallLocations(args);
-      pending.toolCalls.set(toolCallId, {
-        title,
-        kind,
-        rawInput: args,
-        locations,
-      });
       await this.connection.sessionUpdate({
         sessionId: pending.sessionId,
         update: {
           sessionUpdate: "tool_call",
           toolCallId,
-          title,
+          title: formatToolTitle(name, args),
           status: "in_progress",
           rawInput: args,
-          kind,
-          locations,
-        },
-      });
-      return;
-    }
-
-    if (phase === "update") {
-      const toolState = pending.toolCalls?.get(toolCallId);
-      const partialResult = data.partialResult;
-      await this.connection.sessionUpdate({
-        sessionId: pending.sessionId,
-        update: {
-          sessionUpdate: "tool_call_update",
-          toolCallId,
-          status: "in_progress",
-          rawOutput: partialResult,
-          content: extractToolCallContent(partialResult),
-          locations: extractToolCallLocations(toolState?.locations, partialResult),
         },
       });
       return;
@@ -744,7 +703,6 @@ export class AcpGatewayAgent implements Agent {
 
     if (phase === "result") {
       const isError = Boolean(data.isError);
-      const toolState = pending.toolCalls?.get(toolCallId);
       pending.toolCalls?.delete(toolCallId);
       await this.connection.sessionUpdate({
         sessionId: pending.sessionId,
@@ -753,8 +711,6 @@ export class AcpGatewayAgent implements Agent {
           toolCallId,
           status: isError ? "failed" : "completed",
           rawOutput: data.result,
-          content: extractToolCallContent(data.result),
-          locations: extractToolCallLocations(toolState?.locations, data.result),
         },
       });
     }
@@ -843,13 +799,9 @@ export class AcpGatewayAgent implements Agent {
     this.pendingPrompts.delete(sessionId);
     this.sessionStore.clearActiveRun(sessionId);
     const sessionSnapshot = await this.getSessionSnapshot(pending.sessionKey);
-    try {
-      await this.sendSessionSnapshotUpdate(sessionId, sessionSnapshot, {
-        includeControls: false,
-      });
-    } catch (err) {
-      this.log(`session snapshot update failed for ${sessionId}: ${String(err)}`);
-    }
+    await this.sendSessionSnapshotUpdate(sessionId, sessionSnapshot, {
+      includeControls: false,
+    });
     pending.resolve({ stopReason });
   }
 
