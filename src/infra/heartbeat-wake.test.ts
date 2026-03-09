@@ -319,4 +319,33 @@ describe("heartbeat-wake", () => {
       ]),
     );
   });
+
+  it("trips breaker after MAX_CONSECUTIVE_FAILURES thrown errors and respects cooldown", async () => {
+    vi.useFakeTimers();
+    const handler = vi.fn().mockRejectedValue(new Error("persistent failure"));
+    setHeartbeatWakeHandler(handler);
+
+    // Fire 5 wakes, each causing a thrown error — breaker should trip.
+    for (let i = 0; i < 5; i++) {
+      requestHeartbeatNow({ reason: "interval", coalesceMs: 0 });
+      await vi.advanceTimersByTimeAsync(1);
+      // Let backoff timers fire for retries (exponential up to 60s)
+      await vi.advanceTimersByTimeAsync(120_000);
+    }
+    const callsAtTrip = handler.mock.calls.length;
+    expect(callsAtTrip).toBeGreaterThanOrEqual(5);
+
+    // After breaker trips, new wake requests should be dropped (within cooldown).
+    handler.mockClear();
+    requestHeartbeatNow({ reason: "interval", coalesceMs: 0 });
+    await vi.advanceTimersByTimeAsync(1);
+    expect(handler).not.toHaveBeenCalled();
+
+    // After 5-minute cooldown, breaker half-opens and allows one probe.
+    handler.mockResolvedValueOnce({ status: "ran", durationMs: 1 });
+    await vi.advanceTimersByTimeAsync(5 * 60_000);
+    requestHeartbeatNow({ reason: "interval", coalesceMs: 0 });
+    await vi.advanceTimersByTimeAsync(1);
+    expect(handler).toHaveBeenCalledTimes(1);
+  });
 });

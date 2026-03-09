@@ -221,7 +221,10 @@ function schedule(coalesceMs: number, kind: WakeTimerKind = "normal") {
     } catch {
       // Error is already logged by the heartbeat runner; apply backoff.
       consecutiveFailures += 1;
-      if (consecutiveFailures < MAX_CONSECUTIVE_FAILURES) {
+      if (consecutiveFailures >= MAX_CONSECUTIVE_FAILURES) {
+        // Trip the breaker so the half-open cooldown is respected.
+        breakerTrippedAt = Date.now();
+      } else {
         const backoffMs = computeRetryBackoffMs(consecutiveFailures);
         for (const pendingWake of pendingBatch) {
           queuePendingWakeReason({
