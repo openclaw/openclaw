@@ -304,12 +304,13 @@ export async function processGatewayAllowlist(
         clearTimeout(runningTimer);
       }
       const exitLabel = outcome.timedOut ? "timeout" : `code ${outcome.exitCode ?? "?"}`;
+      const outputTruncatedToCap = run.session.totalOutputChars > run.session.aggregated.length;
       const summary = buildGatewayApprovalCompletionSummary({
         approvalId,
         sessionId: run.session.id,
         exitLabel,
         output: outcome.aggregated,
-        truncated: run.session.truncated,
+        truncated: outputTruncatedToCap,
       });
       emitExecSystemEvent(summary, { sessionKey: params.notifySessionKey, contextKey });
     })();
