@@ -819,14 +819,22 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
           AUTO_OWNER_DISPLAY_SECRET_PERSIST_IN_FLIGHT.add(configPath);
           const secretToWrite = ownerDisplaySecretResolution.generatedSecret;
           // Use enqueueConfigWrite directly to perform an atomic read-modify-write.
-          // The loadConfig() call MUST happen inside the queue so it sees the latest
-          // disk state after any prior writes (e.g., auth token bootstrap) complete.
-          // Previously, the stale config captured at loadConfig() time was written
+          // We use readConfigFileSnapshotForWrite() instead of loadConfig() to avoid
+          // baking ephemeral runtime overrides into the persistent file on disk.
+          // The read MUST happen inside the queue so it sees the latest disk state
+          // after any prior writes (e.g., auth token bootstrap) complete.
+          // Previously, the stale config captured at startup time was written
           // directly, which caused the merge-patch to undo concurrent changes.
           void enqueueConfigWrite(async () => {
             const freshIo = createConfigIO(deps);
-            const freshCfg = freshIo.loadConfig();
-            const freshWithSecret = ensureOwnerDisplaySecret(freshCfg, () => secretToWrite).config;
+            const { snapshot: freshSnapshot } = await freshIo.readConfigFileSnapshotForWrite();
+            if (!freshSnapshot.valid) {
+              return; // Do not persist auto-secrets into an invalid/corrupted config file
+            }
+            const freshWithSecret = ensureOwnerDisplaySecret(
+              freshSnapshot.config,
+              () => secretToWrite,
+            ).config;
             // NOTE: freshIo.writeConfigFile is used intentionally (not the module-level
             // writeConfigFile) to avoid re-entering the write queue. This means
             // runtimeConfigSnapshot is NOT refreshed and refreshHandler is NOT called
