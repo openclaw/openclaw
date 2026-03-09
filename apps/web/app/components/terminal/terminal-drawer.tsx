@@ -468,10 +468,11 @@ export default function TerminalDrawer({ onClose, cwd }: TerminalDrawerProps) {
   );
 
   const handleExited = useCallback(
-    (id: string) => {
-      closeTerminal(id);
+    (_id: string) => {
+      // Keep the drawer open so the user can see "[process exited]" and any
+      // error output. They can close manually with Cmd+J or the close button.
     },
-    [closeTerminal],
+    [],
   );
 
   const hasMultiple = terminals.length > 1;

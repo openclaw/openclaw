@@ -190,6 +190,73 @@ export function serializeUrlState(state: Partial<WorkspaceUrlState>): string {
   return params.toString();
 }
 
+// ---------------------------------------------------------------------------
+// Workspace URL sync param builder
+// ---------------------------------------------------------------------------
+
+const OBJECT_VIEW_PARAMS = ["viewType", "view", "filters", "search", "sort", "page", "pageSize", "cols"];
+
+export interface WorkspaceSyncState {
+  activePath: string | null;
+  activeSessionId: string | null;
+  activeSubagentKey: string | null;
+  fileChatSessionId: string | null;
+  browseDir: string | null;
+  showHidden: boolean;
+  previewPath: string | null;
+  terminalOpen: boolean;
+  cronView: CronDashboardView;
+  cronCalMode: CalendarMode;
+  cronDate: string | null;
+  cronRunFilter: CronRunStatusFilter;
+  cronRun: number | null;
+}
+
+/**
+ * Build the URL params that the workspace URL sync effect should push.
+ *
+ * Pure function: takes app state + the current URL params (for preserving
+ * object-view and entry params managed by other effects) and returns the
+ * complete URLSearchParams to write.
+ */
+export function buildWorkspaceSyncParams(
+  state: WorkspaceSyncState,
+  currentParams: URLSearchParams,
+): URLSearchParams {
+  const params = new URLSearchParams();
+
+  if (state.activePath) {
+    params.set("path", state.activePath);
+    const entry = currentParams.get("entry");
+    if (entry) params.set("entry", entry);
+    if (state.fileChatSessionId) params.set("fileChat", state.fileChatSessionId);
+
+    if (state.activePath === "~cron") {
+      if (state.cronView !== "overview") params.set("cronView", state.cronView);
+      if (state.cronView === "calendar" && state.cronCalMode !== "month") params.set("cronCalMode", state.cronCalMode);
+      if ((state.cronView === "calendar" || state.cronView === "timeline") && state.cronDate) params.set("cronDate", state.cronDate);
+    } else if (state.activePath.startsWith("~cron/")) {
+      if (state.cronRunFilter !== "all") params.set("cronRunFilter", state.cronRunFilter);
+      if (state.cronRun != null) params.set("cronRun", String(state.cronRun));
+    }
+
+    for (const k of OBJECT_VIEW_PARAMS) {
+      const v = currentParams.get(k);
+      if (v) params.set(k, v);
+    }
+  } else if (state.activeSessionId) {
+    params.set("chat", state.activeSessionId);
+    if (state.activeSubagentKey) params.set("subagent", state.activeSubagentKey);
+  }
+
+  if (state.browseDir) params.set("browse", state.browseDir);
+  if (state.showHidden) params.set("hidden", "1");
+  if (state.previewPath) params.set("preview", state.previewPath);
+  if (state.terminalOpen) params.set("terminal", "1");
+
+  return params;
+}
+
 /** Build a full root-route URL string from partial state. */
 export function buildUrl(state: Partial<WorkspaceUrlState>): string {
   const qs = serializeUrlState(state);

@@ -29,7 +29,7 @@ import { ReportViewer } from "../components/charts/report-viewer";
 import { ChatPanel, type ChatPanelHandle, type SubagentSpawnInfo } from "../components/chat-panel";
 import { EntryDetailModal } from "../components/workspace/entry-detail-modal";
 import { useSearchIndex } from "@/lib/search-index";
-import { parseWorkspaceLink, isWorkspaceLink, parseUrlState, buildUrl, type WorkspaceUrlState } from "@/lib/workspace-links";
+import { parseWorkspaceLink, isWorkspaceLink, parseUrlState, buildUrl, buildWorkspaceSyncParams, type WorkspaceUrlState } from "@/lib/workspace-links";
 import { isCodeFile } from "@/lib/report-utils";
 import { CronDashboard } from "../components/cron/cron-dashboard";
 import { CronJobDetail } from "../components/cron/cron-job-detail";
@@ -1341,8 +1341,6 @@ function WorkspacePageInner() {
   // This effect only manages shell-level params (path, chat, browse, etc.)
   // and preserves object-view params (viewType, filters, search, sort, etc.)
   // that are managed by ObjectView's own URL sync effect.
-  const OBJECT_VIEW_PARAMS = ["viewType", "view", "filters", "search", "sort", "page", "pageSize", "cols"];
-
   useEffect(() => {
     if (!initialPathHandled.current) return;
 
@@ -1354,38 +1352,21 @@ function WorkspacePageInner() {
     }
 
     const current = new URLSearchParams(window.location.search);
-    const params = new URLSearchParams();
-
-    if (activePath) {
-      params.set("path", activePath);
-      const entry = current.get("entry");
-      if (entry) params.set("entry", entry);
-      if (fileChatSessionId) params.set("fileChat", fileChatSessionId);
-
-      // Cron-specific URL params (only when on a cron path)
-      if (activePath === "~cron") {
-        if (cronView !== "overview") params.set("cronView", cronView);
-        if (cronView === "calendar" && cronCalMode !== "month") params.set("cronCalMode", cronCalMode);
-        if ((cronView === "calendar" || cronView === "timeline") && cronDate) params.set("cronDate", cronDate);
-      } else if (activePath.startsWith("~cron/")) {
-        if (cronRunFilter !== "all") params.set("cronRunFilter", cronRunFilter);
-        if (cronRun != null) params.set("cronRun", String(cronRun));
-      }
-
-      // Preserve object-view params managed by ObjectView's URL sync effect
-      for (const k of OBJECT_VIEW_PARAMS) {
-        const v = current.get(k);
-        if (v) params.set(k, v);
-      }
-    } else if (activeSessionId) {
-      params.set("chat", activeSessionId);
-      if (activeSubagentKey) params.set("subagent", activeSubagentKey);
-    }
-
-    if (browseDir) params.set("browse", browseDir);
-    if (showHidden) params.set("hidden", "1");
-    if (chatSidebarPreview) params.set("preview", chatSidebarPreview.path);
-    if (terminalOpen) params.set("terminal", "1");
+    const params = buildWorkspaceSyncParams({
+      activePath,
+      activeSessionId,
+      activeSubagentKey,
+      fileChatSessionId,
+      browseDir,
+      showHidden,
+      previewPath: chatSidebarPreview?.path ?? null,
+      terminalOpen,
+      cronView,
+      cronCalMode,
+      cronDate,
+      cronRunFilter,
+      cronRun,
+    }, current);
 
     const nextQs = params.toString();
     const currentQs = current.toString();
