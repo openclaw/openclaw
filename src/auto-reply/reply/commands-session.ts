@@ -329,7 +329,7 @@ export const handleTotalUsageCommand: CommandHandler = async (params, allowTextC
               ],
               [
                 { text: "🤖 By model (30d)", callback_data: "/total_usage by-model" },
-                { text: "🌐 All time (365d)", callback_data: "/total_usage all" },
+                { text: "🌐 All time", callback_data: "/total_usage all" },
               ],
             ],
           },
@@ -350,7 +350,7 @@ export const handleTotalUsageCommand: CommandHandler = async (params, allowTextC
   let label = "Last 30 days";
 
   if (rangeStr === "all") {
-    durationMs = 365 * 24 * 60 * 60 * 1000;
+    durationMs = 0;
     label = "All time";
   } else {
     const match = rangeStr.match(/^(\d+)([hd])?$/i);
@@ -368,7 +368,7 @@ export const handleTotalUsageCommand: CommandHandler = async (params, allowTextC
   }
 
   const nowMs = Date.now();
-  const startMs = nowMs - durationMs;
+  const startMs = rangeStr === "all" ? 0 : nowMs - durationMs;
   const summary = await loadCostUsageSummary({ startMs, endMs: nowMs, config: params.cfg });
 
   if (isByModel) {
