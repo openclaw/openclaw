@@ -5,7 +5,7 @@ const WILDCARD_SEGMENT = "*";
 const WINDOWS_DRIVE_ABS_RE = /^[A-Za-z]:\//;
 const WINDOWS_DRIVE_ROOT_RE = /^[A-Za-z]:$/;
 
-export const DEFAULT_IMESSAGE_ATTACHMENT_ROOTS = ["/Users/*/Library/Messages/Attachments"] as const;
+export const DEFAULT_IMESSAGE_ATTACHMENT_ROOTS = ["/var/tmp/openclaw/attachments"] as const;
 
 function normalizePosixAbsolutePath(value: string): string | undefined {
   const trimmed = value.trim();
