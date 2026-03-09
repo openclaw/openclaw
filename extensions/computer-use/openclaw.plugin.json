@@ -1,0 +1,39 @@
+{
+  "id": "computer-use",
+  "name": "Computer Use",
+  "description": "Optional GPT-5.4 computer-use orchestration plugin that delegates real execution to an external executor service.",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "executorBaseUrl": {
+        "type": "string",
+        "description": "Base URL for the external computer-use executor service."
+      },
+      "executorAuthToken": {
+        "type": "string",
+        "description": "Optional bearer token for the external executor."
+      },
+      "defaultProvider": {
+        "type": "string",
+        "default": "openai"
+      },
+      "defaultModel": {
+        "type": "string",
+        "default": "gpt-5.4"
+      },
+      "defaultRequireConfirmation": {
+        "type": "boolean",
+        "default": true
+      },
+      "defaultMaxSteps": {
+        "type": "number",
+        "minimum": 1
+      },
+      "defaultTimeoutMs": {
+        "type": "number",
+        "minimum": 1000
+      }
+    }
+  }
+}
