@@ -26,13 +26,6 @@ describe("warning filter", () => {
     expect(
       shouldIgnoreWarning({
         name: "DeprecationWarning",
-        code: "DEP0040",
-        message: "The punycode module is deprecated.",
-      }),
-    ).toBe(true);
-    expect(
-      shouldIgnoreWarning({
-        name: "DeprecationWarning",
         code: "DEP0060",
         message: "The `util._extend` API is deprecated.",
       }),

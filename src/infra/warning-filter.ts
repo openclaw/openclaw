@@ -11,9 +11,6 @@ type ProcessWarningInstallState = {
 };
 
 export function shouldIgnoreWarning(warning: ProcessWarning): boolean {
-  if (warning.code === "DEP0040" && warning.message?.includes("punycode")) {
-    return true;
-  }
   if (warning.code === "DEP0060" && warning.message?.includes("util._extend")) {
     return true;
   }
