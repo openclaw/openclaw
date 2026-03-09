@@ -7,6 +7,7 @@ ARG HELM_VERSION=v3.17.1
 ARG TERRAFORM_VERSION=1.14.5
 ARG OPENCLAW_VERSION=latest
 ARG OPENCLAW_LOCAL_TARBALL=openclaw-local.tgz
+ARG QMD_VERSION=1.1.5
 ARG VAULT_VERSION=v1.21.2
 ARG BOUNDARY_VERSION=v0.20.1
 ARG ARGOCD_VERSION=v3.3.2
@@ -36,6 +37,7 @@ RUN mkdir -p /Users/florian/morpho/openclaw-sre \
     else \
       npm install -g "openclaw@${OPENCLAW_VERSION}"; \
     fi \
+  && npm install -g "@tobilu/qmd@${QMD_VERSION}" \
   && rm -f /tmp/openclaw-local.tgz
 
 RUN set -eux; \

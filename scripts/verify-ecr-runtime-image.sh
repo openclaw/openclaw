@@ -16,6 +16,7 @@ REQUIRED_BINS=(
   boundary
   argocd
   openclaw
+  qmd
 )
 
 CHECK_SCRIPT='
@@ -40,6 +41,7 @@ vault --version >/dev/null
 boundary version >/dev/null
 argocd version --client >/dev/null
 openclaw --help >/dev/null
+qmd --version >/dev/null
 '
 
 docker run \
