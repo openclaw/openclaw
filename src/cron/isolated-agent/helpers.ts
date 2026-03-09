@@ -21,11 +21,11 @@ export function mergeNonErrorTextPayloads(payloads: DeliveryPayload[]): string |
     if (payload?.isError) {
       continue;
     }
-    const text = typeof payload?.text === "string" ? payload.text : "";
-    if (!text) {
+    const raw = typeof payload?.text === "string" ? payload.text : "";
+    if (!raw.trim()) {
       continue;
     }
-    merged += text;
+    merged += raw;
     sawText = true;
   }
   return sawText ? merged : undefined;

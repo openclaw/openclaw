@@ -773,7 +773,7 @@ export async function runCronIsolatedAgentTurn(params: {
     deliveryPayload !== undefined && deliveryPayloadHasStructuredContent
       ? [deliveryPayload]
       : mergedText
-        ? [{ text: mergedText }]
+        ? [{ ...deliveryPayload, text: mergedText }]
         : synthesizedText
           ? [{ text: synthesizedText }]
           : [];

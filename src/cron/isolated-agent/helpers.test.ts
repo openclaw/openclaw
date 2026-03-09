@@ -36,6 +36,12 @@ describe("mergeNonErrorTextPayloads", () => {
     expect(mergeNonErrorTextPayloads([{ text: "" }, { text: "" }])).toBeUndefined();
   });
 
+  it("returns undefined when all payloads have whitespace-only text", () => {
+    expect(
+      mergeNonErrorTextPayloads([{ text: "  " }, { text: "\n" }, { text: "\t" }]),
+    ).toBeUndefined();
+  });
+
   it("returns single payload text unchanged", () => {
     expect(mergeNonErrorTextPayloads([{ text: "solo" }])).toBe("solo");
   });
