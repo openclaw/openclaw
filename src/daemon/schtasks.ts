@@ -138,7 +138,7 @@ function findResultCodeFallback(entries: Record<string, string>): string | undef
   // numeric value (e.g. a port number appearing before the result code in a future
   // schtasks locale) doesn't silently shadow the real code.
   const matches = Object.values(entries).filter((v) => RESULT_CODE_RE.test(v.trim()));
-  return matches.length === 1 ? matches[0]!.trim() : undefined;
+  return matches.length === 1 ? matches[0].trim() : undefined;
 }
 
 export function parseSchtasksQuery(output: string): ScheduledTaskInfo {
