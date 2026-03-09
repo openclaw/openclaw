@@ -40,6 +40,7 @@ export async function loadConfig(state: ConfigState) {
   if (!state.client || !state.connected) {
     return;
   }
+  state.configFormDirty = false;
   state.configLoading = true;
   state.lastError = null;
   try {
