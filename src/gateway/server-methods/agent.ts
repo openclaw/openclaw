@@ -1,12 +1,13 @@
 import { randomUUID } from "node:crypto";
 import { listAgentIds } from "../../agents/agent-scope.js";
 import type { AgentInternalEvent } from "../../agents/internal-events.js";
+import { runAgent } from "../../agents/run/service.js";
+import type { AgentRunRequest } from "../../agents/run/types.js";
 import {
   normalizeSpawnedRunMetadata,
   resolveIngressWorkspaceOverrideForSpawnedRun,
 } from "../../agents/spawned-context.js";
 import { buildBareSessionResetPrompt } from "../../auto-reply/reply/session-reset-prompt.js";
-import { agentCommandFromIngress } from "../../commands/agent.js";
 import { loadConfig } from "../../config/config.js";
 import {
   mergeSessionEntry,
@@ -170,19 +171,22 @@ async function runSessionResetFromAgent(params: {
 }
 
 function dispatchAgentRunFromGateway(params: {
-  ingressOpts: Parameters<typeof agentCommandFromIngress>[0];
+  request: AgentRunRequest;
   runId: string;
   idempotencyKey: string;
   respond: GatewayRequestHandlerOptions["respond"];
   context: GatewayRequestHandlerOptions["context"];
 }) {
-  void agentCommandFromIngress(params.ingressOpts, defaultRuntime, params.context.deps)
+  void runAgent(params.request)
     .then((result) => {
       const payload = {
         runId: params.runId,
         status: "ok" as const,
         summary: "completed",
-        result,
+        result: {
+          payloads: result.payloads,
+          meta: result.meta,
+        },
       };
       setGatewayDedupeEntry({
         dedupe: params.context.dedupe,
@@ -672,44 +676,54 @@ export const agentHandlers: GatewayRequestHandlers = {
     const resolvedThreadId = explicitThreadId ?? deliveryPlan.resolvedThreadId;
 
     dispatchAgentRunFromGateway({
-      ingressOpts: {
-        message,
-        images,
-        to: resolvedTo,
-        sessionId: resolvedSessionId,
-        sessionKey: resolvedSessionKey,
-        thinking: request.thinking,
-        deliver,
-        deliveryTargetMode,
-        channel: resolvedChannel,
-        accountId: resolvedAccountId,
-        threadId: resolvedThreadId,
-        runContext: {
-          messageChannel: originMessageChannel,
+      request: {
+        source: "gateway",
+        identity: {
+          runId,
+          sessionKey: resolvedSessionKey,
+          idempotencyKey: idem,
+        },
+        runtime: defaultRuntime,
+        deps: context.deps,
+        opts: {
+          message,
+          images,
+          to: resolvedTo,
+          sessionId: resolvedSessionId,
+          sessionKey: resolvedSessionKey,
+          thinking: request.thinking,
+          deliver,
+          deliveryTargetMode,
+          channel: resolvedChannel,
           accountId: resolvedAccountId,
+          threadId: resolvedThreadId,
+          runContext: {
+            messageChannel: originMessageChannel,
+            accountId: resolvedAccountId,
+            groupId: resolvedGroupId,
+            groupChannel: resolvedGroupChannel,
+            groupSpace: resolvedGroupSpace,
+            currentThreadTs: resolvedThreadId != null ? String(resolvedThreadId) : undefined,
+          },
           groupId: resolvedGroupId,
           groupChannel: resolvedGroupChannel,
           groupSpace: resolvedGroupSpace,
-          currentThreadTs: resolvedThreadId != null ? String(resolvedThreadId) : undefined,
-        },
-        groupId: resolvedGroupId,
-        groupChannel: resolvedGroupChannel,
-        groupSpace: resolvedGroupSpace,
-        spawnedBy: spawnedByValue,
-        timeout: request.timeout?.toString(),
-        bestEffortDeliver,
-        messageChannel: originMessageChannel,
-        runId,
-        lane: request.lane,
-        extraSystemPrompt: request.extraSystemPrompt,
-        internalEvents: request.internalEvents,
-        inputProvenance,
-        // Internal-only: allow workspace override for spawned subagent runs.
-        workspaceDir: resolveIngressWorkspaceOverrideForSpawnedRun({
           spawnedBy: spawnedByValue,
-          workspaceDir: request.workspaceDir,
-        }),
-        senderIsOwner,
+          timeout: request.timeout?.toString(),
+          bestEffortDeliver,
+          messageChannel: originMessageChannel,
+          runId,
+          lane: request.lane,
+          extraSystemPrompt: request.extraSystemPrompt,
+          internalEvents: request.internalEvents,
+          inputProvenance,
+          // Internal-only: allow workspace override for spawned subagent runs.
+          workspaceDir: resolveIngressWorkspaceOverrideForSpawnedRun({
+            spawnedBy: spawnedByValue,
+            workspaceDir: request.workspaceDir,
+          }),
+          senderIsOwner,
+        },
       },
       runId,
       idempotencyKey: idem,

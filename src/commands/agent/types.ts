@@ -1,7 +1,9 @@
 import type { AgentInternalEvent } from "../../agents/internal-events.js";
 import type { ClientToolDefinition } from "../../agents/pi-embedded-runner/run/params.js";
+import type { EmbeddedPiRunMeta } from "../../agents/pi-embedded-runner/types.js";
 import type { SpawnedRunMetadata } from "../../agents/spawned-context.js";
 import type { ChannelOutboundTargetMode } from "../../channels/plugins/types.js";
+import type { OutboundPayloadJson } from "../../infra/outbound/payloads.js";
 import type { InputProvenance } from "../../sessions/input-provenance.js";
 
 /** Image content block for Claude API multimodal messages. */
@@ -85,4 +87,9 @@ export type AgentCommandOpts = {
 export type AgentCommandIngressOpts = Omit<AgentCommandOpts, "senderIsOwner"> & {
   /** Ingress callsites must always pass explicit owner authorization state. */
   senderIsOwner: boolean;
+};
+
+export type AgentCommandIngressResult = {
+  payloads: OutboundPayloadJson[];
+  meta: EmbeddedPiRunMeta;
 };

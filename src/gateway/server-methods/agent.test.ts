@@ -346,6 +346,28 @@ describe("gateway agent handler", () => {
     resetTimeConfig();
   });
 
+  it("preserves the completed gateway result shape", async () => {
+    primeMainAgentRun();
+
+    const respond = await runMainAgent("test", "test-completed-shape");
+
+    await vi.waitFor(() => expect(respond).toHaveBeenCalledTimes(2));
+    expect(respond).toHaveBeenLastCalledWith(
+      true,
+      {
+        runId: "test-completed-shape",
+        status: "ok",
+        summary: "completed",
+        result: {
+          payloads: [{ text: "ok" }],
+          meta: { durationMs: 100 },
+        },
+      },
+      undefined,
+      { runId: "test-completed-shape" },
+    );
+  });
+
   it.each([
     {
       name: "passes senderIsOwner=false for write-scoped gateway callers",
