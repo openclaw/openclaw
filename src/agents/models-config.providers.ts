@@ -41,6 +41,8 @@ import {
   buildXiaomiProvider,
   QIANFAN_BASE_URL,
   QIANFAN_DEFAULT_MODEL_ID,
+  ERNIE_BASE_URL,
+  ERNIE_DEFAULT_MODEL_ID,
   XIAOMI_DEFAULT_MODEL_ID,
 } from "./models-config.providers.static.js";
 export {
@@ -52,6 +54,8 @@ export {
   buildXiaomiProvider,
   QIANFAN_BASE_URL,
   QIANFAN_DEFAULT_MODEL_ID,
+  ERNIE_BASE_URL,
+  ERNIE_DEFAULT_MODEL_ID,
   XIAOMI_DEFAULT_MODEL_ID,
 } from "./models-config.providers.static.js";
 import {
