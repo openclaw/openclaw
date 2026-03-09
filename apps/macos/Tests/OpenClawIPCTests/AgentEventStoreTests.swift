@@ -3,11 +3,10 @@ import OpenClawProtocol
 import Testing
 @testable import OpenClaw
 
-@Suite
 @MainActor
 struct AgentEventStoreTests {
     @Test
-    func appendAndClear() {
+    func `append and clear`() {
         let store = AgentEventStore()
         #expect(store.events.isEmpty)
 
@@ -25,7 +24,7 @@ struct AgentEventStoreTests {
     }
 
     @Test
-    func trimsToMaxEvents() {
+    func `trims to max events`() {
         let store = AgentEventStore()
         for i in 1...401 {
             store.append(ControlAgentEvent(

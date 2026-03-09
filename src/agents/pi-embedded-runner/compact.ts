@@ -11,6 +11,10 @@ import { resolveHeartbeatPrompt } from "../../auto-reply/heartbeat.js";
 import type { ReasoningLevel, ThinkLevel } from "../../auto-reply/thinking.js";
 import { resolveChannelCapabilities } from "../../config/channel-capabilities.js";
 import type { OpenClawConfig } from "../../config/config.js";
+import {
+  ensureContextEnginesInitialized,
+  resolveContextEngine,
+} from "../../context-engine/index.js";
 import { createInternalHookEvent, triggerInternalHook } from "../../hooks/internal-hooks.js";
 import { getMachineDisplayName } from "../../infra/machine-name.js";
 import { generateSecureToken } from "../../infra/secure-random.js";
@@ -29,11 +33,15 @@ import { resolveSessionAgentIds } from "../agent-scope.js";
 import type { ExecElevatedDefaults } from "../bash-tools.js";
 import { makeBootstrapWarn, resolveBootstrapContextForRun } from "../bootstrap-files.js";
 import { listChannelSupportedActions, resolveChannelMessageToolHints } from "../channel-tools.js";
+import { resolveContextWindowInfo } from "../context-window-guard.js";
+import { ensureCustomApiRegistered } from "../custom-api-registry.js";
 import { formatUserTime, resolveUserTimeFormat, resolveUserTimezone } from "../date-time.js";
-import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../defaults.js";
+import { DEFAULT_CONTEXT_TOKENS, DEFAULT_MODEL, DEFAULT_PROVIDER } from "../defaults.js";
 import { resolveOpenClawDocsPath } from "../docs-path.js";
 import { getApiKeyForModel, resolveModelAuthMode } from "../model-auth.js";
+import { supportsModelTools } from "../model-tool-support.js";
 import { ensureOpenClawModelsJson } from "../models-config.js";
+import { createConfiguredOllamaStreamFn } from "../ollama-stream.js";
 import { resolveOwnerDisplaySetting } from "../owner-display.js";
 import {
   ensureSessionHeader,
@@ -42,6 +50,7 @@ import {
 } from "../pi-embedded-helpers.js";
 import { createPreparedEmbeddedPiSettingsManager } from "../pi-project-settings.js";
 import { createOpenClawCodingTools } from "../pi-tools.js";
+import { ensureRuntimePluginsLoaded } from "../runtime-plugins.js";
 import { resolveSandboxContext } from "../sandbox.js";
 import { repairSessionFileIfNeeded } from "../session-file-repair.js";
 import { guardSessionManager } from "../session-tool-result-guard-wrapper.js";
@@ -115,6 +124,8 @@ export type CompactEmbeddedPiSessionParams = {
   reasoningLevel?: ReasoningLevel;
   bashElevated?: ExecElevatedDefaults;
   customInstructions?: string;
+  tokenBudget?: number;
+  force?: boolean;
   trigger?: "overflow" | "manual";
   diagId?: string;
   attempt?: number;
@@ -259,10 +270,37 @@ export async function compactEmbeddedPiSessionDirect(
   const maxAttempts = params.maxAttempts ?? 1;
   const runId = params.runId ?? params.sessionId;
   const resolvedWorkspace = resolveUserPath(params.workspaceDir);
+  ensureRuntimePluginsLoaded({
+    config: params.config,
+    workspaceDir: resolvedWorkspace,
+  });
   const prevCwd = process.cwd();
 
-  const provider = (params.provider ?? DEFAULT_PROVIDER).trim() || DEFAULT_PROVIDER;
-  const modelId = (params.model ?? DEFAULT_MODEL).trim() || DEFAULT_MODEL;
+  // Resolve compaction model: prefer config override, then fall back to caller-supplied model
+  const compactionModelOverride = params.config?.agents?.defaults?.compaction?.model?.trim();
+  let provider: string;
+  let modelId: string;
+  // When switching provider via override, drop the primary auth profile to avoid
+  // sending the wrong credentials (e.g. OpenAI profile token to OpenRouter).
+  let authProfileId: string | undefined = params.authProfileId;
+  if (compactionModelOverride) {
+    const slashIdx = compactionModelOverride.indexOf("/");
+    if (slashIdx > 0) {
+      provider = compactionModelOverride.slice(0, slashIdx).trim();
+      modelId = compactionModelOverride.slice(slashIdx + 1).trim() || DEFAULT_MODEL;
+      // Provider changed — drop primary auth profile so getApiKeyForModel
+      // falls back to provider-based key resolution for the override model.
+      if (provider !== (params.provider ?? "").trim()) {
+        authProfileId = undefined;
+      }
+    } else {
+      provider = (params.provider ?? DEFAULT_PROVIDER).trim() || DEFAULT_PROVIDER;
+      modelId = compactionModelOverride;
+    }
+  } else {
+    provider = (params.provider ?? DEFAULT_PROVIDER).trim() || DEFAULT_PROVIDER;
+    modelId = (params.model ?? DEFAULT_MODEL).trim() || DEFAULT_MODEL;
+  }
   const fail = (reason: string): EmbeddedPiCompactResult => {
     log.warn(
       `[compaction-diag] end runId=${runId} sessionKey=${params.sessionKey ?? params.sessionId} ` +
@@ -292,7 +330,7 @@ export async function compactEmbeddedPiSessionDirect(
     const apiKeyInfo = await getApiKeyForModel({
       model,
       cfg: params.config,
-      profileId: params.authProfileId,
+      profileId: authProfileId,
       agentDir,
     });
 
@@ -368,6 +406,20 @@ export async function compactEmbeddedPiSessionDirect(
       sessionId: params.sessionId,
       warn: makeBootstrapWarn({ sessionLabel, warn: (message) => log.warn(message) }),
     });
+    // Apply contextTokens cap to model so pi-coding-agent's auto-compaction
+    // threshold uses the effective limit, not the native context window.
+    const ctxInfo = resolveContextWindowInfo({
+      cfg: params.config,
+      provider,
+      modelId,
+      modelContextWindow: model.contextWindow,
+      defaultTokens: DEFAULT_CONTEXT_TOKENS,
+    });
+    const effectiveModel =
+      ctxInfo.tokens < (model.contextWindow ?? Infinity)
+        ? { ...model, contextWindow: ctxInfo.tokens }
+        : model;
+
     const runAbortController = new AbortController();
     const toolsRaw = createOpenClawCodingTools({
       exec: {
@@ -390,10 +442,13 @@ export async function compactEmbeddedPiSessionDirect(
       abortSignal: runAbortController.signal,
       modelProvider: model.provider,
       modelId,
-      modelContextWindowTokens: model.contextWindow,
+      modelContextWindowTokens: ctxInfo.tokens,
       modelAuthMode: resolveModelAuthMode(model.provider, params.config),
     });
-    const tools = sanitizeToolsForGoogle({ tools: toolsRaw, provider });
+    const tools = sanitizeToolsForGoogle({
+      tools: supportsModelTools(model) ? toolsRaw : [],
+      provider,
+    });
     const allowedToolNames = collectAllowedToolNames({ tools });
     logToolSchemasForGoogle({ tools, provider });
     const machineName = await getMachineDisplayName();
@@ -583,7 +638,7 @@ export async function compactEmbeddedPiSessionDirect(
         agentDir,
         authStorage,
         modelRegistry,
-        model,
+        model: effectiveModel,
         thinkingLevel: mapThinkingLevel(params.thinkLevel),
         tools: builtInTools,
         customTools,
@@ -592,6 +647,19 @@ export async function compactEmbeddedPiSessionDirect(
         resourceLoader,
       });
       applySystemPromptOverrideToSession(session, systemPromptOverride());
+      if (model.api === "ollama") {
+        const providerBaseUrl =
+          typeof params.config?.models?.providers?.[model.provider]?.baseUrl === "string"
+            ? params.config.models.providers[model.provider]?.baseUrl
+            : undefined;
+        ensureCustomApiRegistered(
+          model.api,
+          createConfiguredOllamaStreamFn({
+            model,
+            providerBaseUrl,
+          }),
+        );
+      }
 
       try {
         const prior = await sanitizeSessionHistory({
@@ -846,6 +914,53 @@ export async function compactEmbeddedPiSession(
   const enqueueGlobal =
     params.enqueue ?? ((task, opts) => enqueueCommandInLane(globalLane, task, opts));
   return enqueueCommandInLane(sessionLane, () =>
-    enqueueGlobal(async () => compactEmbeddedPiSessionDirect(params)),
+    enqueueGlobal(async () => {
+      ensureRuntimePluginsLoaded({
+        config: params.config,
+        workspaceDir: params.workspaceDir,
+      });
+      ensureContextEnginesInitialized();
+      const contextEngine = await resolveContextEngine(params.config);
+      try {
+        // Resolve token budget from model context window so the context engine
+        // knows the compaction target.  The runner's afterTurn path passes this
+        // automatically, but the /compact command path needs to compute it here.
+        const ceProvider = (params.provider ?? DEFAULT_PROVIDER).trim() || DEFAULT_PROVIDER;
+        const ceModelId = (params.model ?? DEFAULT_MODEL).trim() || DEFAULT_MODEL;
+        const agentDir = params.agentDir ?? resolveOpenClawAgentDir();
+        const { model: ceModel } = resolveModel(ceProvider, ceModelId, agentDir, params.config);
+        const ceCtxInfo = resolveContextWindowInfo({
+          cfg: params.config,
+          provider: ceProvider,
+          modelId: ceModelId,
+          modelContextWindow: ceModel?.contextWindow,
+          defaultTokens: DEFAULT_CONTEXT_TOKENS,
+        });
+        const result = await contextEngine.compact({
+          sessionId: params.sessionId,
+          sessionFile: params.sessionFile,
+          tokenBudget: ceCtxInfo.tokens,
+          customInstructions: params.customInstructions,
+          force: params.trigger === "manual",
+          runtimeContext: params as Record<string, unknown>,
+        });
+        return {
+          ok: result.ok,
+          compacted: result.compacted,
+          reason: result.reason,
+          result: result.result
+            ? {
+                summary: result.result.summary ?? "",
+                firstKeptEntryId: result.result.firstKeptEntryId ?? "",
+                tokensBefore: result.result.tokensBefore,
+                tokensAfter: result.result.tokensAfter,
+                details: result.result.details,
+              }
+            : undefined,
+        };
+      } finally {
+        await contextEngine.dispose?.();
+      }
+    }),
   );
 }
