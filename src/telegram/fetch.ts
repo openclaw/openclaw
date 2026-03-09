@@ -317,8 +317,3 @@ export function resolveTelegramFetch(
     }
   }) as typeof fetch;
 }
-
-export function resetTelegramFetchStateForTests(): void {
-  // Resolver-scoped dispatcher state is created inside resolveTelegramFetch().
-  // This hook remains for tests that already call it.
-}

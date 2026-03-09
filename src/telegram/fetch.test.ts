@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { resolveFetch } from "../infra/fetch.js";
-import { resetTelegramFetchStateForTests, resolveTelegramFetch } from "./fetch.js";
+import { resolveTelegramFetch } from "./fetch.js";
 
 const setDefaultResultOrder = vi.hoisted(() => vi.fn());
 const setDefaultAutoSelectFamily = vi.hoisted(() => vi.fn());
@@ -83,7 +83,6 @@ function buildFetchFallbackError(code: string) {
 }
 
 afterEach(() => {
-  resetTelegramFetchStateForTests();
   undiciFetch.mockReset();
   setGlobalDispatcher.mockReset();
   AgentCtor.mockClear();
