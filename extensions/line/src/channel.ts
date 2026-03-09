@@ -569,7 +569,7 @@ export const linePlugin: ChannelPlugin<ResolvedLineAccount> = {
       const issues: ChannelStatusIssue[] = [];
       for (const account of accounts) {
         const accountId = account.accountId ?? DEFAULT_ACCOUNT_ID;
-        if (!account.channelAccessToken?.trim()) {
+        if (account.channelAccessTokenConfigured === false) {
           issues.push({
             channel: "line",
             accountId,
@@ -577,7 +577,7 @@ export const linePlugin: ChannelPlugin<ResolvedLineAccount> = {
             message: "LINE channel access token not configured",
           });
         }
-        if (!account.channelSecret?.trim()) {
+        if (account.channelSecretConfigured === false) {
           issues.push({
             channel: "line",
             accountId,
@@ -605,6 +605,8 @@ export const linePlugin: ChannelPlugin<ResolvedLineAccount> = {
       });
       return {
         ...base,
+        channelAccessTokenConfigured: Boolean(account.channelAccessToken?.trim()),
+        channelSecretConfigured: Boolean(account.channelSecret?.trim()),
         tokenSource: account.tokenSource,
         mode: "webhook",
       };
