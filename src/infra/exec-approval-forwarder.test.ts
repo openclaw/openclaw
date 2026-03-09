@@ -228,6 +228,58 @@ describe("exec approval forwarder", () => {
     expect(deliver).not.toHaveBeenCalled();
   });
 
+  it("attaches explicit telegram buttons in forwarded telegram fallback payloads", async () => {
+    vi.useFakeTimers();
+    const cfg = {
+      approvals: {
+        exec: {
+          enabled: true,
+          mode: "targets",
+          targets: [{ channel: "telegram", to: "123" }],
+        },
+      },
+    } as OpenClawConfig;
+
+    const { deliver, forwarder } = createForwarder({ cfg });
+
+    await expect(
+      forwarder.handleRequested({
+        ...baseRequest,
+        request: {
+          ...baseRequest.request,
+          turnSourceChannel: "discord",
+          turnSourceTo: "channel:123",
+        },
+      }),
+    ).resolves.toBe(true);
+
+    expect(deliver).toHaveBeenCalledTimes(1);
+    expect(deliver).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: "telegram",
+        to: "123",
+        payloads: [
+          expect.objectContaining({
+            channelData: {
+              execApproval: expect.objectContaining({
+                approvalId: "req-1",
+              }),
+              telegram: {
+                buttons: [
+                  [
+                    { text: "Allow Once", callback_data: "/approve req-1 allow-once" },
+                    { text: "Allow Always", callback_data: "/approve req-1 allow-always" },
+                  ],
+                  [{ text: "Deny", callback_data: "/approve req-1 deny" }],
+                ],
+              },
+            },
+          }),
+        ],
+      }),
+    );
+  });
+
   it("formats single-line commands as inline code", async () => {
     vi.useFakeTimers();
     const { deliver, forwarder } = createForwarder({ cfg: TARGETS_CFG });

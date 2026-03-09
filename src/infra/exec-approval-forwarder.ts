@@ -9,6 +9,7 @@ import type {
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { normalizeAccountId, parseAgentSessionKey } from "../routing/session-key.js";
 import { compileSafeRegex, testRegexWithBoundedInput } from "../security/safe-regex.js";
+import { buildTelegramExecApprovalButtons } from "../telegram/approval-buttons.js";
 import { sendTypingTelegram } from "../telegram/send.js";
 import {
   isDeliverableMessageChannel,
@@ -370,7 +371,7 @@ function buildRequestPayloadForTarget(
 ): ReplyPayload {
   const channel = normalizeMessageChannel(target.channel) ?? target.channel;
   if (channel === "telegram") {
-    return buildExecApprovalPendingReplyPayload({
+    const payload = buildExecApprovalPendingReplyPayload({
       approvalId: request.id,
       approvalSlug: request.id.slice(0, 8),
       approvalCommandId: request.id,
@@ -381,6 +382,19 @@ function buildRequestPayloadForTarget(
       expiresAtMs: request.expiresAtMs,
       nowMs: nowMsValue,
     });
+    const buttons = buildTelegramExecApprovalButtons(request.id);
+    if (!buttons) {
+      return payload;
+    }
+    return {
+      ...payload,
+      channelData: {
+        ...payload.channelData,
+        telegram: {
+          buttons,
+        },
+      },
+    };
   }
   return { text: buildRequestMessage(request, nowMsValue) };
 }

@@ -307,7 +307,7 @@ describe("deliverOutboundPayloads", () => {
     );
   });
 
-  it("injects canonical telegram approval buttons for /approve prompts", async () => {
+  it("does not inject telegram approval buttons from plain approval text", async () => {
     const sendTelegram = vi.fn().mockResolvedValue({ messageId: "m1", chatId: "c1" });
 
     await deliverTelegramPayload({
@@ -330,25 +330,18 @@ describe("deliverOutboundPayloads", () => {
     });
 
     const sendOpts = sendTelegram.mock.calls[0]?.[2] as { buttons?: unknown } | undefined;
-    expect(sendOpts?.buttons).toEqual([
-      [
-        { text: "Allow Once", callback_data: "/approve 117ba06d allow-once" },
-        { text: "Allow Always", callback_data: "/approve 117ba06d allow-always" },
-      ],
-      [{ text: "Deny", callback_data: "/approve 117ba06d deny" }],
-    ]);
+    expect(sendOpts?.buttons).toBeUndefined();
   });
 
-  it("does not inject approval buttons when telegram inline buttons scope is off", async () => {
+  it("preserves explicit telegram buttons when sender path provides them", async () => {
     const sendTelegram = vi.fn().mockResolvedValue({ messageId: "m1", chatId: "c1" });
     const cfg: OpenClawConfig = {
       channels: {
         telegram: {
-          accounts: {
-            default: {
-              botToken: "tok-1",
-              capabilities: { inlineButtons: "off" },
-            },
+          execApprovals: {
+            enabled: true,
+            approvers: ["123"],
+            target: "dm",
           },
         },
       },
@@ -357,14 +350,30 @@ describe("deliverOutboundPayloads", () => {
     await deliverTelegramPayload({
       sendTelegram,
       cfg,
-      accountId: "default",
       payload: {
-        text: "Mode: foreground\nRun: /approve 117ba06d allow-once (or allow-always / deny).",
+        text: "Approval required",
+        channelData: {
+          telegram: {
+            buttons: [
+              [
+                { text: "Allow Once", callback_data: "/approve 117ba06d allow-once" },
+                { text: "Allow Always", callback_data: "/approve 117ba06d allow-always" },
+              ],
+              [{ text: "Deny", callback_data: "/approve 117ba06d deny" }],
+            ],
+          },
+        },
       },
     });
 
     const sendOpts = sendTelegram.mock.calls[0]?.[2] as { buttons?: unknown } | undefined;
-    expect(sendOpts?.buttons).toBeUndefined();
+    expect(sendOpts?.buttons).toEqual([
+      [
+        { text: "Allow Once", callback_data: "/approve 117ba06d allow-once" },
+        { text: "Allow Always", callback_data: "/approve 117ba06d allow-always" },
+      ],
+      [{ text: "Deny", callback_data: "/approve 117ba06d deny" }],
+    ]);
   });
 
   it("scopes media local roots to the active agent workspace when agentId is provided", async () => {

@@ -33,8 +33,6 @@ import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { markdownToSignalTextChunks, type SignalTextStyleRange } from "../../signal/format.js";
 import { sendMessageSignal } from "../../signal/send.js";
 import type { sendMessageSlack } from "../../slack/send.js";
-import { injectTelegramApprovalButtons } from "../../telegram/approval-buttons.js";
-import { shouldEnableTelegramExecApprovalButtons } from "../../telegram/exec-approvals.js";
 import type { sendMessageTelegram } from "../../telegram/send.js";
 import type { sendMessageWhatsApp } from "../../web/outbound.js";
 import { throwIfAborted } from "./abort.js";
@@ -302,17 +300,13 @@ function normalizePayloadForChannelDelivery(
 function normalizePayloadsForChannelDelivery(
   payloads: ReplyPayload[],
   channel: Exclude<OutboundChannel, "none">,
-  cfg: OpenClawConfig,
-  to: string,
-  accountId?: string,
+  _cfg: OpenClawConfig,
+  _to: string,
+  _accountId?: string,
 ): ReplyPayload[] {
-  const canInjectTelegramButtons =
-    channel === "telegram" && shouldEnableTelegramExecApprovalButtons({ cfg, accountId, to });
   const normalizedPayloads: ReplyPayload[] = [];
   for (const payload of normalizeReplyPayloadsForDelivery(payloads)) {
-    let sanitizedPayload = canInjectTelegramButtons
-      ? injectTelegramApprovalButtons(payload)
-      : payload;
+    let sanitizedPayload = payload;
     // Strip HTML tags for plain-text surfaces (WhatsApp, Signal, etc.)
     // Models occasionally produce <br>, <b>, etc. that render as literal text.
     // See https://github.com/openclaw/openclaw/issues/31884
