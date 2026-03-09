@@ -1348,7 +1348,7 @@ describe("applyExtraParamsToAgent", () => {
     });
   });
 
-  it("does not add Anthropic 1M beta header when context1m is not enabled", () => {
+  it("injects pi-ai default betas even when context1m is not enabled", () => {
     const cfg = buildAnthropicModelConfig("anthropic/claude-opus-4-6", {
       temperature: 0.2,
     });
@@ -1358,7 +1358,29 @@ describe("applyExtraParamsToAgent", () => {
       options: { headers: { "X-Custom": "1" } },
     });
 
-    expect(headers).toEqual({ "X-Custom": "1" });
+    expect(headers).toEqual({
+      "X-Custom": "1",
+      "anthropic-beta": "fine-grained-tool-streaming-2025-05-14,interleaved-thinking-2025-05-14",
+    });
+  });
+
+  it("injects OAuth betas for sk-ant-oat tokens even without context1m", () => {
+    const cfg = buildAnthropicModelConfig("anthropic/claude-opus-4-6", {
+      temperature: 0.2,
+    });
+    const headers = runAnthropicHeaderCase({
+      cfg,
+      modelId: "claude-opus-4-6",
+      options: {
+        apiKey: "sk-ant-oat01-test-oauth-token", // pragma: allowlist secret
+        headers: { "X-Custom": "1" },
+      },
+    });
+
+    const betaHeader = headers?.["anthropic-beta"] as string;
+    expect(betaHeader).toContain("oauth-2025-04-20");
+    expect(betaHeader).toContain("claude-code-20250219");
+    expect(betaHeader).not.toContain("context-1m-2025-08-07");
   });
 
   it("skips context1m beta for OAuth tokens but preserves OAuth-required betas", () => {
@@ -1425,14 +1447,17 @@ describe("applyExtraParamsToAgent", () => {
     });
   });
 
-  it("ignores context1m for non-Opus/Sonnet Anthropic models", () => {
+  it("ignores context1m for non-Opus/Sonnet Anthropic models but still injects default betas", () => {
     const cfg = buildAnthropicModelConfig("anthropic/claude-haiku-3-5", { context1m: true });
     const headers = runAnthropicHeaderCase({
       cfg,
       modelId: "claude-haiku-3-5",
       options: { headers: { "X-Custom": "1" } },
     });
-    expect(headers).toEqual({ "X-Custom": "1" });
+    expect(headers).toEqual({
+      "X-Custom": "1",
+      "anthropic-beta": "fine-grained-tool-streaming-2025-05-14,interleaved-thinking-2025-05-14",
+    });
   });
 
   it("forces store=true for direct OpenAI Responses payloads", () => {
