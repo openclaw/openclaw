@@ -40,6 +40,7 @@ import {
   ConfigIncludeError,
   readConfigIncludeFileWithGuards,
   resolveConfigIncludes,
+  restoreIncludes,
 } from "./includes.js";
 import { findLegacyConfigIssues } from "./legacy.js";
 import { applyMergePatch } from "./merge-patch.js";
@@ -1131,6 +1132,16 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
       }
     } catch {
       // If reading the current file fails, write cfg as-is (no env restoration)
+    }
+
+    // Restore $include directives from the original parsed config.
+    // This preserves the modular config structure when writing back.
+    if (snapshot.valid && snapshot.exists && snapshot.parsed) {
+      try {
+        cfgToWrite = restoreIncludes(cfgToWrite, snapshot.parsed) as OpenClawConfig;
+      } catch {
+        // If restore fails, write cfg as-is
+      }
     }
 
     const dir = path.dirname(configPath);
