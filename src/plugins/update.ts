@@ -103,6 +103,39 @@ function expectedIntegrityForUpdate(
   return integrity;
 }
 
+function matchesPreviouslyValidatedArtifact(params: {
+  record: {
+    resolvedSpec?: string;
+    resolvedName?: string;
+    resolvedVersion?: string;
+    integrity?: string;
+    shasum?: string;
+  };
+  metadata: NpmSpecResolution;
+}): boolean {
+  if (params.record.resolvedSpec && params.metadata.resolvedSpec) {
+    return params.record.resolvedSpec === params.metadata.resolvedSpec;
+  }
+  if (
+    params.record.resolvedName &&
+    params.record.resolvedVersion &&
+    params.metadata.name &&
+    params.metadata.version
+  ) {
+    return (
+      params.record.resolvedName === params.metadata.name &&
+      params.record.resolvedVersion === params.metadata.version
+    );
+  }
+  if (params.record.integrity && params.metadata.integrity) {
+    return params.record.integrity === params.metadata.integrity;
+  }
+  if (params.record.shasum && params.metadata.shasum) {
+    return params.record.shasum === params.metadata.shasum;
+  }
+  return false;
+}
+
 function hasIntegrityDrift(params: {
   expectedIntegrity?: string;
   expectedShasum?: string;
@@ -128,6 +161,13 @@ async function probeNpmUpdateTarget(params: {
   currentVersion?: string;
   expectedIntegrity?: string;
   expectedShasum?: string;
+  validatedArtifact: {
+    resolvedSpec?: string;
+    resolvedName?: string;
+    resolvedVersion?: string;
+    integrity?: string;
+    shasum?: string;
+  };
 }): Promise<
   { ok: true; unchanged: boolean; metadata: NpmSpecResolution } | { ok: false; error: string }
 > {
@@ -148,6 +188,15 @@ async function probeNpmUpdateTarget(params: {
   }
 
   if (
+    !matchesPreviouslyValidatedArtifact({
+      record: params.validatedArtifact,
+      metadata: probe.metadata,
+    })
+  ) {
+    return { ok: true, unchanged: false, metadata: probe.metadata };
+  }
+
+  if (
     hasIntegrityDrift({
       expectedIntegrity: params.expectedIntegrity,
       expectedShasum: params.expectedShasum,
@@ -160,7 +209,10 @@ async function probeNpmUpdateTarget(params: {
   return { ok: true, unchanged: true, metadata: probe.metadata };
 }
 
-async function readInstalledPackageVersion(dir: string): Promise<string | undefined> {
+async function readInstalledPackageManifest(dir: string): Promise<{
+  name?: string;
+  version?: string;
+}> {
   const manifestPath = path.join(dir, "package.json");
   const opened = openBoundaryFileSync({
     absolutePath: manifestPath,
@@ -168,14 +220,17 @@ async function readInstalledPackageVersion(dir: string): Promise<string | undefi
     boundaryLabel: "installed plugin directory",
   });
   if (!opened.ok) {
-    return undefined;
+    return {};
   }
   try {
     const raw = fsSync.readFileSync(opened.fd, "utf-8");
-    const parsed = JSON.parse(raw) as { version?: unknown };
-    return typeof parsed.version === "string" ? parsed.version : undefined;
+    const parsed = JSON.parse(raw) as { name?: unknown; version?: unknown };
+    return {
+      name: typeof parsed.name === "string" ? parsed.name : undefined,
+      version: typeof parsed.version === "string" ? parsed.version : undefined,
+    };
   } catch {
-    return undefined;
+    return {};
   } finally {
     fsSync.closeSync(opened.fd);
   }
@@ -316,15 +371,31 @@ export async function updateNpmInstalledPlugins(params: {
       });
       continue;
     }
-    const currentVersion = await readInstalledPackageVersion(installPath);
+    const currentManifest = await readInstalledPackageManifest(installPath);
+    const currentVersion = currentManifest.version;
     const expectedIntegrity = expectedIntegrityForUpdate(record.spec, record.integrity);
-    const versionProbe = await probeNpmUpdateTarget({
-      spec: record.spec,
-      currentVersion,
-      expectedIntegrity,
-      expectedShasum: record.shasum,
-    });
-    if (versionProbe.ok && versionProbe.unchanged) {
+    let versionProbe: Awaited<ReturnType<typeof probeNpmUpdateTarget>> | null = null;
+    try {
+      versionProbe = await probeNpmUpdateTarget({
+        spec: record.spec,
+        currentVersion,
+        expectedIntegrity,
+        expectedShasum: record.shasum,
+        validatedArtifact: {
+          resolvedSpec: record.resolvedSpec,
+          resolvedName: record.resolvedName ?? currentManifest.name,
+          resolvedVersion: record.resolvedVersion ?? currentVersion,
+          integrity: record.integrity,
+          shasum: record.shasum,
+        },
+      });
+    } catch (err) {
+      logger.warn?.(`Skipping pre-check for "${pluginId}": ${String(err)}`);
+    }
+    if (versionProbe && !versionProbe.ok) {
+      logger.warn?.(`Skipping pre-check for "${pluginId}": ${versionProbe.error}`);
+    }
+    if (versionProbe?.ok && versionProbe.unchanged) {
       const version = versionProbe.metadata.version ?? currentVersion ?? "unknown";
       outcomes.push({
         pluginId,

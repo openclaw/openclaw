@@ -239,7 +239,7 @@ export async function resolveNpmSpecMetadata(params: {
   const res = await runCommandWithTimeout(
     ["npm", "view", params.spec, "version", "dist.integrity", "dist.shasum", "name", "--json"],
     {
-      timeoutMs: Math.max(params.timeoutMs, 60_000),
+      timeoutMs: Math.max(params.timeoutMs, 60_000), // keep registry metadata probes above flaky short timeouts
       cwd: params.cwd ?? os.tmpdir(),
       env: {
         COREPACK_ENABLE_DOWNLOAD_PROMPT: "0",

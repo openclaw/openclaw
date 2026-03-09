@@ -1,11 +1,12 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const installPluginFromNpmSpecMock = vi.fn();
 const resolveBundledPluginSourcesMock = vi.fn();
 const resolveNpmSpecMetadataMock = vi.fn();
+let tempDirs: string[] = [];
 
 vi.mock("./install.js", () => ({
   installPluginFromNpmSpec: (...args: unknown[]) => installPluginFromNpmSpecMock(...args),
@@ -28,6 +29,11 @@ vi.mock("../infra/install-source-utils.js", async (importOriginal) => {
 });
 
 describe("updateNpmInstalledPlugins", () => {
+  afterEach(async () => {
+    await Promise.all(tempDirs.map((dir) => fs.rm(dir, { recursive: true, force: true })));
+    tempDirs = [];
+  });
+
   beforeEach(() => {
     installPluginFromNpmSpecMock.mockReset();
     resolveBundledPluginSourcesMock.mockReset();
@@ -46,6 +52,7 @@ describe("updateNpmInstalledPlugins", () => {
 
   it("skips reinstalling already up-to-date plugins before download", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-plugin-update-"));
+    tempDirs.push(root);
     const installPath = path.join(root, "plugin");
     await fs.mkdir(installPath, { recursive: true });
     await fs.writeFile(
@@ -83,6 +90,7 @@ describe("updateNpmInstalledPlugins", () => {
 
   it("does not skip pinned installs when npm metadata shows integrity drift", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-plugin-update-drift-"));
+    tempDirs.push(root);
     const installPath = path.join(root, "plugin");
     await fs.mkdir(installPath, { recursive: true });
     await fs.writeFile(
@@ -133,6 +141,111 @@ describe("updateNpmInstalledPlugins", () => {
       pluginIds: ["test"],
     });
 
+    expect(installPluginFromNpmSpecMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("falls back to the installer when probe metadata no longer matches the last validated artifact", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-plugin-update-mismatch-"));
+    tempDirs.push(root);
+    const installPath = path.join(root, "plugin");
+    await fs.mkdir(installPath, { recursive: true });
+    await fs.writeFile(
+      path.join(installPath, "package.json"),
+      JSON.stringify({ name: "@openclaw/original-plugin", version: "0.2.6" }),
+    );
+    resolveNpmSpecMetadataMock.mockResolvedValueOnce({
+      ok: true,
+      metadata: {
+        name: "@openclaw/other-plugin",
+        version: "0.2.6",
+        resolvedSpec: "@openclaw/other-plugin@0.2.6",
+        integrity: "sha512-other",
+        shasum: "other-shasum",
+      },
+    });
+    installPluginFromNpmSpecMock.mockResolvedValueOnce({
+      ok: true,
+      pluginId: "test",
+      targetDir: installPath,
+      version: "0.2.6",
+      extensions: ["index.ts"],
+      npmResolution: {
+        name: "@openclaw/other-plugin",
+        version: "0.2.6",
+        resolvedSpec: "@openclaw/other-plugin@0.2.6",
+        integrity: "sha512-other",
+        shasum: "other-shasum",
+        resolvedAt: "2026-03-09T00:00:00.000Z",
+      },
+    });
+
+    const { updateNpmInstalledPlugins } = await import("./update.js");
+    await updateNpmInstalledPlugins({
+      config: {
+        plugins: {
+          installs: {
+            test: {
+              source: "npm",
+              spec: "@openclaw/other-plugin",
+              resolvedSpec: "@openclaw/original-plugin@0.2.6",
+              resolvedName: "@openclaw/original-plugin",
+              resolvedVersion: "0.2.6",
+              installPath,
+            },
+          },
+        },
+      },
+      pluginIds: ["test"],
+    });
+
+    expect(installPluginFromNpmSpecMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("falls back to the installer when the probe throws", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-plugin-update-probe-error-"));
+    tempDirs.push(root);
+    const installPath = path.join(root, "plugin");
+    await fs.mkdir(installPath, { recursive: true });
+    await fs.writeFile(
+      path.join(installPath, "package.json"),
+      JSON.stringify({ name: "@openclaw/test-plugin", version: "0.2.6" }),
+    );
+    resolveNpmSpecMetadataMock.mockRejectedValueOnce(new Error("spawn npm ENOENT"));
+    installPluginFromNpmSpecMock.mockResolvedValueOnce({
+      ok: true,
+      pluginId: "test",
+      targetDir: installPath,
+      version: "0.2.6",
+      extensions: ["index.ts"],
+      npmResolution: {
+        name: "@openclaw/test-plugin",
+        version: "0.2.6",
+        resolvedSpec: "@openclaw/test-plugin@0.2.6",
+        integrity: "sha512-registry",
+        shasum: "registry-shasum",
+        resolvedAt: "2026-03-09T00:00:00.000Z",
+      },
+    });
+    const warn = vi.fn();
+
+    const { updateNpmInstalledPlugins } = await import("./update.js");
+    await updateNpmInstalledPlugins({
+      logger: { warn },
+      config: {
+        plugins: {
+          installs: {
+            test: {
+              source: "npm",
+              spec: "@openclaw/test-plugin",
+              installPath,
+            },
+          },
+        },
+      },
+      pluginIds: ["test"],
+    });
+
+    expect(warn).toHaveBeenCalledWith('Skipping pre-check for "test": Error: spawn npm ENOENT');
     expect(installPluginFromNpmSpecMock).toHaveBeenCalledTimes(1);
   });
 
