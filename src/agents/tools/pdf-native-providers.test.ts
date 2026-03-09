@@ -5,7 +5,7 @@ describe("geminiAnalyzePdf", () => {
   let fetchSpy: ReturnType<typeof vi.spyOn>;
 
   beforeEach(() => {
-    // We cast to any because we only mock what we need
+    // We cast to unknown as Response because we only mock what we need
     fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue({
       json: () => Promise.resolve({ candidates: [{ content: { parts: [{ text: "success" }] } }] }),
       text: () => Promise.resolve(""),
