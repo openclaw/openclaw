@@ -1,5 +1,6 @@
 import { html, nothing } from "lit";
 import type { ConfigUiHints } from "../types.ts";
+import "../components/config-raw-editor.ts";
 import { hintForPath, humanize, schemaType, type JsonSchema } from "./config-form.shared.ts";
 import { analyzeConfigSchema, renderConfigForm, SECTION_META } from "./config-form.ts";
 import { getTagFilters, replaceTagFilters } from "./config-search.ts";
@@ -795,11 +796,13 @@ export function renderConfig(props: ConfigProps) {
               : html`
                 <label class="field config-raw-field">
                   <span>Raw JSON5</span>
-                  <textarea
-                    .value=${props.raw}
-                    @input=${(e: Event) =>
-                      props.onRawChange((e.target as HTMLTextAreaElement).value)}
-                  ></textarea>
+                  <div class="config-raw-shell">
+                    <config-raw-editor
+                      .value=${props.raw}
+                      @raw-change=${(e: Event) =>
+                        props.onRawChange((e as CustomEvent<{ value: string }>).detail.value)}
+                    ></config-raw-editor>
+                  </div>
                 </label>
               `
           }

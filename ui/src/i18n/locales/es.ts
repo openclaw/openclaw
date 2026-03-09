@@ -126,6 +126,15 @@ export const es: TranslationMap = {
     de: "Deutsch (Alemán)",
     es: "Español",
   },
+  config: {
+    rawEditor: {
+      lineCol: "Línea {line} Col {col}",
+      path: "Ruta",
+      root: "Raíz",
+      noSelection: "Sin selección",
+      selected: "{count} seleccionados",
+    },
+  },
   cron: {
     summary: {
       enabled: "Habilitado",

@@ -9,9 +9,13 @@
     "test": "vitest run --config vitest.config.ts"
   },
   "dependencies": {
+    "@codemirror/commands": "^6.10.0",
+    "@codemirror/state": "^6.5.2",
+    "@codemirror/view": "^6.38.6",
     "@lit-labs/signals": "^0.2.0",
     "@lit/context": "^1.1.6",
     "@noble/ed25519": "3.0.0",
+    "codemirror": "^6.0.2",
     "dompurify": "^3.3.2",
     "lit": "^3.3.2",
     "marked": "^17.0.4",

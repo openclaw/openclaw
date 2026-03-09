@@ -134,6 +134,20 @@ describe("config view", () => {
     expect(applyButton?.disabled).toBe(false);
   });
 
+  it("renders the enhanced raw editor in raw mode", () => {
+    const container = document.createElement("div");
+    render(
+      renderConfig({
+        ...baseProps(),
+        formMode: "raw",
+      }),
+      container,
+    );
+
+    expect(container.querySelector("config-raw-editor")).not.toBeNull();
+    expect(container.querySelector("textarea")).toBeNull();
+  });
+
   it("switches mode via the sidebar toggle", () => {
     const container = document.createElement("div");
     const onFormModeChange = vi.fn();
