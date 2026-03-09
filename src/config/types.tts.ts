@@ -1,10 +1,6 @@
-<<<<<<< HEAD
-export type TtsProvider = "elevenlabs" | "openai" | "edge" | "resemble";
-=======
 import type { SecretInput } from "./types.secrets.js";
 
-export type TtsProvider = "elevenlabs" | "openai" | "edge";
->>>>>>> origin/main
+export type TtsProvider = "elevenlabs" | "openai" | "edge" | "resemble";
 
 export type TtsMode = "final" | "all";
 
