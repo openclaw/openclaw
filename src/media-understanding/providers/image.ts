@@ -2,6 +2,7 @@ import type { Api, Context, Model } from "@mariozechner/pi-ai";
 import { complete } from "@mariozechner/pi-ai";
 import { isMinimaxVlmModel, minimaxUnderstandImage } from "../../agents/minimax-vlm.js";
 import { getApiKeyForModel, requireApiKey } from "../../agents/model-auth.js";
+import { normalizeResolvedProviderModel } from "../../agents/model.provider-normalization.js";
 import { normalizeModelRef } from "../../agents/model-selection.js";
 import { ensureOpenClawModelsJson } from "../../agents/models-config.js";
 import { coerceImageAssistantText } from "../../agents/tools/image-tool.helpers.js";
@@ -25,10 +26,17 @@ export async function describeImageWithModel(
   const modelRegistry = discoverModels(authStorage, params.agentDir);
   // Keep direct media config entries compatible with deprecated provider model aliases.
   const resolvedRef = normalizeModelRef(params.provider, params.model);
-  const model = modelRegistry.find(resolvedRef.provider, resolvedRef.model) as Model<Api> | null;
-  if (!model) {
+  const discoveredModel = modelRegistry.find(
+    resolvedRef.provider,
+    resolvedRef.model,
+  ) as Model<Api> | null;
+  if (!discoveredModel) {
     throw new Error(`Unknown model: ${resolvedRef.provider}/${resolvedRef.model}`);
   }
+  const model = normalizeResolvedProviderModel({
+    provider: resolvedRef.provider,
+    model: discoveredModel,
+  });
   if (!model.input?.includes("image")) {
     throw new Error(`Model does not support images: ${params.provider}/${params.model}`);
   }

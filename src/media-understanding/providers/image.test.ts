@@ -131,6 +131,58 @@ describe("describeImageWithModel", () => {
     expect(minimaxUnderstandImageMock).not.toHaveBeenCalled();
   });
 
+  it("normalizes openai-codex models before generic completion", async () => {
+    discoverModelsMock.mockReturnValue({
+      find: vi.fn(() => ({
+        provider: "openai-codex",
+        id: "gpt-5.4",
+        api: "openai-responses",
+        baseUrl: "https://api.openai.com/v1",
+        input: ["text", "image"],
+      })),
+    });
+    completeMock.mockResolvedValue({
+      role: "assistant",
+      api: "openai-codex-responses",
+      provider: "openai-codex",
+      model: "gpt-5.4",
+      stopReason: "stop",
+      timestamp: Date.now(),
+      content: [{ type: "text", text: "codex ok" }],
+    });
+
+    const { describeImageWithModel } = await import("./image.js");
+
+    const result = await describeImageWithModel({
+      cfg: {},
+      agentDir: "/tmp/openclaw-agent",
+      provider: "openai-codex",
+      model: "gpt-5.4",
+      buffer: Buffer.from("png-bytes"),
+      fileName: "image.png",
+      mime: "image/png",
+      prompt: "Describe the image.",
+      timeoutMs: 1000,
+    });
+
+    expect(result).toEqual({
+      text: "codex ok",
+      model: "gpt-5.4",
+    });
+    expect(setRuntimeApiKeyMock).toHaveBeenCalledWith("openai-codex", "oauth-test");
+    expect(completeMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        provider: "openai-codex",
+        api: "openai-codex-responses",
+        baseUrl: "https://chatgpt.com/backend-api",
+      }),
+      expect.any(Object),
+      expect.objectContaining({
+        apiKey: "oauth-test",
+      }),
+    );
+  });
+
   it("normalizes deprecated google flash ids before lookup and keeps profile auth selection", async () => {
     const findMock = vi.fn((provider: string, modelId: string) => {
       expect(provider).toBe("google");

@@ -5,7 +5,9 @@ import type {
   AuthStorage as PiAuthStorage,
   ModelRegistry as PiModelRegistry,
 } from "@mariozechner/pi-coding-agent";
+import type { Api, Model } from "@mariozechner/pi-ai";
 import { ensureAuthProfileStore } from "./auth-profiles.js";
+import { normalizeResolvedProviderModel } from "./model.provider-normalization.js";
 import { resolvePiCredentialMapFromStore, type PiCredentialMap } from "./pi-auth-credentials.js";
 
 const PiAuthStorageClass = PiCodingAgent.AuthStorage;
@@ -148,5 +150,42 @@ export function discoverAuthStorage(agentDir: string): PiAuthStorage {
 }
 
 export function discoverModels(authStorage: PiAuthStorage, agentDir: string): PiModelRegistry {
-  return new PiModelRegistryClass(authStorage, path.join(agentDir, "models.json"));
+  const registry = new PiModelRegistryClass(authStorage, path.join(agentDir, "models.json"));
+  return wrapModelRegistryWithProviderNormalization(registry);
+}
+
+function normalizeRegistryModel(model: unknown): unknown {
+  if (!model || typeof model !== "object") {
+    return model;
+  }
+  const provider = (model as { provider?: unknown }).provider;
+  if (typeof provider !== "string" || !provider.trim()) {
+    return model;
+  }
+  return normalizeResolvedProviderModel({
+    provider,
+    model: model as Model<Api>,
+  });
+}
+
+function wrapModelRegistryWithProviderNormalization(registry: PiModelRegistry): PiModelRegistry {
+  return new Proxy(registry, {
+    get(target, prop, receiver) {
+      const value = Reflect.get(target, prop, receiver);
+      if (typeof value !== "function" || prop === "constructor") {
+        return value;
+      }
+      if (prop === "find") {
+        return (provider: string, modelId: string) =>
+          normalizeRegistryModel(Reflect.apply(value, target, [provider, modelId]));
+      }
+      if (prop === "getAll" || prop === "getAvailable") {
+        return () => {
+          const result = Reflect.apply(value, target, []);
+          return Array.isArray(result) ? result.map((model) => normalizeRegistryModel(model)) : result;
+        };
+      }
+      return value.bind(target);
+    },
+  }) as PiModelRegistry;
 }
