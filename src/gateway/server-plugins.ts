@@ -45,6 +45,10 @@ export function setFallbackGatewayContext(ctx: GatewayRequestContext): void {
   fallbackGatewayContextState.context = ctx;
 }
 
+export function getFallbackGatewayContext(): GatewayRequestContext | undefined {
+  return fallbackGatewayContextState.context;
+}
+
 // ── Internal gateway dispatch for plugin runtime ────────────────────
 
 function createSyntheticOperatorClient(): GatewayRequestOptions["client"] {
