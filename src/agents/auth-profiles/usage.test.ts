@@ -1,11 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
 import type { AuthProfileStore, ProfileUsageStats } from "./types.js";
 import {
-  calculateAuthProfileCooldownMs,
   clearAuthProfileCooldown,
   clearExpiredCooldowns,
   isProfileInCooldown,
-  isProfileInCooldownForModel,
   markAuthProfileFailure,
   resolveProfilesUnavailableReason,
   resolveProfileUnusableUntil,
@@ -351,7 +349,7 @@ describe("clearExpiredCooldowns", () => {
     const stats = store.usageStats?.["anthropic:default"];
     // cooldownUntil cleared
     expect(stats?.cooldownUntil).toBeUndefined();
-    // disabledUntil still active — not touched
+    // disabledUntil still active ??not touched
     expect(stats?.disabledUntil).toBe(future);
     expect(stats?.disabledReason).toBe("billing");
     // errorCount NOT reset because profile still has an active unusable window
@@ -411,11 +409,11 @@ describe("clearExpiredCooldowns", () => {
 
     expect(clearExpiredCooldowns(store)).toBe(true);
 
-    // Anthropic: expired → cleared
+    // Anthropic: expired ??cleared
     expect(store.usageStats?.["anthropic:default"]?.cooldownUntil).toBeUndefined();
     expect(store.usageStats?.["anthropic:default"]?.errorCount).toBe(0);
 
-    // OpenAI: still active → untouched
+    // OpenAI: still active ??untouched
     expect(store.usageStats?.["openai:default"]?.cooldownUntil).toBeGreaterThan(Date.now());
     expect(store.usageStats?.["openai:default"]?.errorCount).toBe(2);
   });
@@ -443,7 +441,7 @@ describe("clearExpiredCooldowns", () => {
       },
     });
 
-    // ts >= cooldownUntil → should clear (cooldown "until" means the instant
+    // ts >= cooldownUntil ??should clear (cooldown "until" means the instant
     // at cooldownUntil the profile becomes available again).
     expect(clearExpiredCooldowns(store, fixedNow)).toBe(true);
     expect(store.usageStats?.["anthropic:default"]?.cooldownUntil).toBeUndefined();
@@ -480,178 +478,6 @@ describe("clearExpiredCooldowns", () => {
     });
 
     expect(clearExpiredCooldowns(store)).toBe(false);
-  });
-
-  it("clears expired model-level cooldowns", () => {
-    const fixedNow = 1_700_000_000_000;
-    const store = makeStore({
-      "anthropic:default": {
-        errorCount: 2,
-        modelCooldowns: {
-          "claude-opus-4-6": {
-            cooldownUntil: fixedNow - 1_000,
-            errorCount: 1,
-          },
-          "claude-sonnet-4-6": {
-            cooldownUntil: fixedNow + 60_000,
-            errorCount: 1,
-          },
-        },
-      },
-    });
-
-    expect(clearExpiredCooldowns(store, fixedNow)).toBe(true);
-
-    const stats = store.usageStats?.["anthropic:default"];
-    // Expired opus cooldown removed
-    expect(stats?.modelCooldowns?.["claude-opus-4-6"]).toBeUndefined();
-    // Active sonnet cooldown preserved
-    expect(stats?.modelCooldowns?.["claude-sonnet-4-6"]?.cooldownUntil).toBe(fixedNow + 60_000);
-  });
-
-  it("removes modelCooldowns map when all entries expire", () => {
-    const fixedNow = 1_700_000_000_000;
-    const store = makeStore({
-      "anthropic:default": {
-        errorCount: 1,
-        modelCooldowns: {
-          "claude-opus-4-6": {
-            cooldownUntil: fixedNow - 1_000,
-            errorCount: 1,
-          },
-        },
-      },
-    });
-
-    expect(clearExpiredCooldowns(store, fixedNow)).toBe(true);
-    expect(store.usageStats?.["anthropic:default"]?.modelCooldowns).toBeUndefined();
-  });
-});
-
-// ---------------------------------------------------------------------------
-// calculateAuthProfileCooldownMs — 2^n backoff
-// ---------------------------------------------------------------------------
-
-describe("calculateAuthProfileCooldownMs", () => {
-  it("returns ~60s for first error (non-timeout)", () => {
-    const ms = calculateAuthProfileCooldownMs(1, "rate_limit");
-    // Base is 60s, jitter adds 10-20%, so range is 66_000 – 72_000
-    expect(ms).toBeGreaterThanOrEqual(60_000);
-    expect(ms).toBeLessThanOrEqual(72_000);
-  });
-
-  it("follows 2^n progression for rate_limit (2min, 4min, 8min, 15min max)", () => {
-    // errorCount=2 → 60s * 2^1 = 120s base + jitter
-    const ms2 = calculateAuthProfileCooldownMs(2, "rate_limit");
-    expect(ms2).toBeGreaterThanOrEqual(120_000);
-    expect(ms2).toBeLessThanOrEqual(144_000);
-
-    // errorCount=3 → 60s * 2^2 = 240s base + jitter
-    const ms3 = calculateAuthProfileCooldownMs(3, "rate_limit");
-    expect(ms3).toBeGreaterThanOrEqual(240_000);
-    expect(ms3).toBeLessThanOrEqual(288_000);
-
-    // errorCount=4 → 60s * 2^3 = 480s base + jitter
-    const ms4 = calculateAuthProfileCooldownMs(4, "rate_limit");
-    expect(ms4).toBeGreaterThanOrEqual(480_000);
-    expect(ms4).toBeLessThanOrEqual(576_000);
-
-    // errorCount=5 → 60s * 2^4 = 960s = 16min → capped to 15min base + jitter
-    const ms5 = calculateAuthProfileCooldownMs(5, "rate_limit");
-    expect(ms5).toBeGreaterThanOrEqual(15 * 60 * 1000);
-    expect(ms5).toBeLessThanOrEqual(15 * 60 * 1000 * 1.2);
-  });
-
-  it("never exceeds 15 minutes for non-timeout", () => {
-    const ms = calculateAuthProfileCooldownMs(100, "rate_limit");
-    expect(ms).toBeLessThanOrEqual(15 * 60 * 1000 * 1.2); // 15min + jitter
-  });
-
-  it("returns shorter cooldowns for timeout", () => {
-    // errorCount=1 → 30s
-    expect(calculateAuthProfileCooldownMs(1, "timeout")).toBe(30_000);
-    // errorCount=2 → 60s
-    expect(calculateAuthProfileCooldownMs(2, "timeout")).toBe(60_000);
-    // errorCount=3 → 120s
-    expect(calculateAuthProfileCooldownMs(3, "timeout")).toBe(120_000);
-    // errorCount=4 → 240s
-    expect(calculateAuthProfileCooldownMs(4, "timeout")).toBe(240_000);
-    // errorCount=5 → 480s → capped at 300s (5min)
-    expect(calculateAuthProfileCooldownMs(5, "timeout")).toBe(5 * 60 * 1000);
-  });
-
-  it("never exceeds 5 minutes for timeout", () => {
-    expect(calculateAuthProfileCooldownMs(100, "timeout")).toBe(5 * 60 * 1000);
-  });
-});
-
-// ---------------------------------------------------------------------------
-// isProfileInCooldownForModel
-// ---------------------------------------------------------------------------
-
-describe("isProfileInCooldownForModel", () => {
-  it("returns false when profile has no usage stats", () => {
-    const store = makeStore(undefined);
-    expect(isProfileInCooldownForModel(store, "anthropic:default", "claude-opus-4-6")).toBe(false);
-  });
-
-  it("returns true when profile has a global disabledUntil (billing)", () => {
-    const store = makeStore({
-      "anthropic:default": { disabledUntil: Date.now() + 60_000, disabledReason: "billing" },
-    });
-    expect(isProfileInCooldownForModel(store, "anthropic:default", "claude-opus-4-6")).toBe(true);
-    expect(isProfileInCooldownForModel(store, "anthropic:default", "claude-sonnet-4-6")).toBe(true);
-  });
-
-  it("returns true for a specific model in cooldown", () => {
-    const store = makeStore({
-      "anthropic:default": {
-        modelCooldowns: {
-          "claude-opus-4-6": { cooldownUntil: Date.now() + 60_000, errorCount: 1 },
-        },
-      },
-    });
-    expect(isProfileInCooldownForModel(store, "anthropic:default", "claude-opus-4-6")).toBe(true);
-  });
-
-  it("returns true for model checks when legacy global cooldown is active", () => {
-    const store = makeStore({
-      "anthropic:default": { cooldownUntil: Date.now() + 60_000 },
-    });
-    expect(isProfileInCooldownForModel(store, "anthropic:default", "claude-opus-4-6")).toBe(true);
-  });
-
-  it("returns false for a different model when only one model is in cooldown", () => {
-    const store = makeStore({
-      "anthropic:default": {
-        modelCooldowns: {
-          "claude-opus-4-6": { cooldownUntil: Date.now() + 60_000, errorCount: 1 },
-        },
-      },
-    });
-    // sonnet is NOT in cooldown — only opus is
-    expect(isProfileInCooldownForModel(store, "anthropic:default", "claude-sonnet-4-6")).toBe(
-      false,
-    );
-  });
-
-  it("falls back to global cooldown check when no model is specified", () => {
-    const store = makeStore({
-      "anthropic:default": { cooldownUntil: Date.now() + 60_000 },
-    });
-    expect(isProfileInCooldownForModel(store, "anthropic:default")).toBe(true);
-    expect(isProfileInCooldownForModel(store, "anthropic:default", undefined)).toBe(true);
-  });
-
-  it("returns false for expired model cooldown", () => {
-    const store = makeStore({
-      "anthropic:default": {
-        modelCooldowns: {
-          "claude-opus-4-6": { cooldownUntil: Date.now() - 1_000, errorCount: 1 },
-        },
-      },
-    });
-    expect(isProfileInCooldownForModel(store, "anthropic:default", "claude-opus-4-6")).toBe(false);
   });
 });
 
@@ -703,7 +529,7 @@ describe("clearAuthProfileCooldown", () => {
   });
 });
 
-describe("markAuthProfileFailure — active windows do not extend on retry", () => {
+describe("markAuthProfileFailure ??active windows do not extend on retry", () => {
   // Regression for https://github.com/openclaw/openclaw/issues/23516
   // When all providers are at saturation backoff (60 min) and retries fire every 30 min,
   // each retry was resetting cooldownUntil to now+60m, preventing recovery.
