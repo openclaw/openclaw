@@ -1,5 +1,10 @@
 import { describe, it, expect } from "vitest";
-import { isSilentReplyPrefixText, isSilentReplyText, stripSilentToken } from "./tokens.js";
+import {
+  couldBeSilentTokenStart,
+  isSilentReplyPrefixText,
+  isSilentReplyText,
+  stripSilentToken,
+} from "./tokens.js";
 
 describe("isSilentReplyText", () => {
   it("returns true for exact token", () => {
@@ -100,5 +105,46 @@ describe("isSilentReplyPrefixText", () => {
     expect(isSilentReplyPrefixText("NO_X")).toBe(false);
     expect(isSilentReplyPrefixText("NO_REPLY more")).toBe(false);
     expect(isSilentReplyPrefixText("NO-")).toBe(false);
+  });
+});
+
+describe("couldBeSilentTokenStart", () => {
+  it("matches uppercase-only prefixes shorter than token", () => {
+    expect(couldBeSilentTokenStart("N")).toBe(true);
+    expect(couldBeSilentTokenStart("NO")).toBe(true);
+    expect(couldBeSilentTokenStart("NO_")).toBe(true);
+    expect(couldBeSilentTokenStart("NO_RE")).toBe(true);
+  });
+
+  it("returns false for exact full token (not a strict prefix)", () => {
+    expect(couldBeSilentTokenStart("NO_REPLY")).toBe(false);
+  });
+
+  it("rejects lowercase / mixed case", () => {
+    expect(couldBeSilentTokenStart("No")).toBe(false);
+    expect(couldBeSilentTokenStart("no")).toBe(false);
+    expect(couldBeSilentTokenStart("No_Reply")).toBe(false);
+  });
+
+  it("rejects non-prefix matches", () => {
+    expect(couldBeSilentTokenStart("NO_X")).toBe(false);
+    expect(couldBeSilentTokenStart("NX")).toBe(false);
+    expect(couldBeSilentTokenStart("HELLO")).toBe(false);
+  });
+
+  it("rejects text with non-token characters", () => {
+    expect(couldBeSilentTokenStart("NO ")).toBe(false);
+    expect(couldBeSilentTokenStart("NO:")).toBe(false);
+    expect(couldBeSilentTokenStart("NO_REPLY: reason")).toBe(false);
+  });
+
+  it("works with HEARTBEAT_OK token", () => {
+    expect(couldBeSilentTokenStart("HEART", "HEARTBEAT_OK")).toBe(true);
+    expect(couldBeSilentTokenStart("HEARTBEAT_OK", "HEARTBEAT_OK")).toBe(false);
+  });
+
+  it("handles undefined/empty", () => {
+    expect(couldBeSilentTokenStart(undefined)).toBe(false);
+    expect(couldBeSilentTokenStart("")).toBe(false);
   });
 });

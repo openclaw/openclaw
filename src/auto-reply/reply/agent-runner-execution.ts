@@ -31,6 +31,7 @@ import { stripHeartbeatToken } from "../heartbeat.js";
 import type { TemplateContext } from "../templating.js";
 import type { VerboseLevel } from "../thinking.js";
 import {
+  couldBeSilentTokenStart,
   HEARTBEAT_TOKEN,
   isSilentReplyPrefixText,
   isSilentReplyText,
@@ -184,11 +185,24 @@ export async function runAgentTurnWithFallback(params: {
         }
         return { text: sanitized, skip: false };
       };
+      // Buffer potential silent-token prefix from BPE-split streaming chunks (e.g. "NO" + "_REPLY").
+      // Only buffers SILENT_REPLY_TOKEN; HEARTBEAT_TOKEN is handled by normalizeStreamingText
+      // via string includes() which works on partial text without prefix-buffering.
+      let silentPrefixBuf = "";
       const handlePartialForTyping = async (payload: ReplyPayload): Promise<string | undefined> => {
-        if (isSilentReplyPrefixText(payload.text, SILENT_REPLY_TOKEN)) {
+        const combinedText = silentPrefixBuf + (payload.text ?? "");
+        silentPrefixBuf = "";
+        if (isSilentReplyText(combinedText, SILENT_REPLY_TOKEN)) {
           return undefined;
         }
-        const { text, skip } = normalizeStreamingText(payload);
+        if (isSilentReplyPrefixText(combinedText, SILENT_REPLY_TOKEN)) {
+          return undefined;
+        }
+        if (couldBeSilentTokenStart(combinedText, SILENT_REPLY_TOKEN)) {
+          silentPrefixBuf = combinedText;
+          return undefined;
+        }
+        const { text, skip } = normalizeStreamingText({ ...payload, text: combinedText });
         if (skip || !text) {
           return undefined;
         }
@@ -508,6 +522,20 @@ export async function runAgentTurnWithFallback(params: {
             },
           };
         }
+      }
+
+      // Flush any buffered silent-prefix remaining at end-of-stream.
+      // This handles the edge case where the stream ends mid-token
+      // (e.g. "NO" arrived but "_REPLY" never followed).
+      if (silentPrefixBuf) {
+        const isFull = isSilentReplyText(silentPrefixBuf, SILENT_REPLY_TOKEN);
+        if (!isFull) {
+          await params.typingSignals.signalTextDelta(silentPrefixBuf);
+          if (params.opts?.onPartialReply) {
+            await params.opts.onPartialReply({ text: silentPrefixBuf });
+          }
+        }
+        silentPrefixBuf = "";
       }
 
       break;

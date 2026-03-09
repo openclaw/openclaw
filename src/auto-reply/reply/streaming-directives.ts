@@ -1,6 +1,11 @@
 import { splitMediaFromOutput } from "../../media/parse.js";
 import { parseInlineDirectives } from "../../utils/directive-tags.js";
-import { isSilentReplyPrefixText, isSilentReplyText, SILENT_REPLY_TOKEN } from "../tokens.js";
+import {
+  couldBeSilentTokenStart,
+  isSilentReplyPrefixText,
+  isSilentReplyText,
+  SILENT_REPLY_TOKEN,
+} from "../tokens.js";
 import type { ReplyDirectiveParseResult } from "./reply-directives.js";
 
 type PendingReplyState = {
@@ -74,17 +79,21 @@ const hasRenderableContent = (parsed: ReplyDirectiveParseResult): boolean =>
 
 export function createStreamingDirectiveAccumulator() {
   let pendingTail = "";
+  let pendingSilent = "";
   let pendingReply: PendingReplyState = { sawCurrent: false, hasTag: false };
   let activeReply: PendingReplyState = { sawCurrent: false, hasTag: false };
 
   const reset = () => {
     pendingTail = "";
+    pendingSilent = "";
     pendingReply = { sawCurrent: false, hasTag: false };
     activeReply = { sawCurrent: false, hasTag: false };
   };
 
   const consume = (raw: string, options: ConsumeOptions = {}): ReplyDirectiveParseResult | null => {
-    let combined = `${pendingTail}${raw ?? ""}`;
+    const withSilent = `${pendingSilent}${raw ?? ""}`;
+    pendingSilent = "";
+    let combined = `${pendingTail}${withSilent}`;
     pendingTail = "";
 
     if (!options.final) {
@@ -98,6 +107,35 @@ export function createStreamingDirectiveAccumulator() {
     }
 
     const parsed = parseChunk(combined, { silentToken: options.silentToken });
+
+    // Buffer potential silent-token prefixes (e.g. "NO" from split "NO_REPLY").
+    // Wait for the next chunk to decide: if it completes to "NO_REPLY" → swallow;
+    // if it doesn't (e.g. "NOT really") → flush as normal text.
+    const silentToken = options.silentToken ?? SILENT_REPLY_TOKEN;
+    // isPrefixOnly: chunk like "NO" was recognised as isSilent=true but is not
+    // a complete silent token yet — buffer it so the next chunk can complete it.
+    const isPrefixOnly = parsed.isSilent && !isSilentReplyText(combined, silentToken);
+    const isLikelySplitToken =
+      (!parsed.isSilent && parsed.text && couldBeSilentTokenStart(parsed.text, silentToken)) ||
+      isPrefixOnly;
+    if (
+      !options.final &&
+      isLikelySplitToken &&
+      !parsed.mediaUrl &&
+      (parsed.mediaUrls?.length ?? 0) === 0 &&
+      !parsed.audioAsVoice
+    ) {
+      pendingSilent = combined;
+      return null;
+    }
+
+    // On a final flush with isPrefixOnly, restore the raw text so it renders
+    // rather than being silently dropped (the stream ended before completion).
+    if (isPrefixOnly && options.final) {
+      parsed.text = combined;
+      parsed.isSilent = false;
+    }
+
     const hasTag = activeReply.hasTag || pendingReply.hasTag || parsed.replyToTag;
     const sawCurrent = activeReply.sawCurrent || pendingReply.sawCurrent || parsed.replyToCurrent;
     const explicitId =
