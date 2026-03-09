@@ -191,6 +191,12 @@ const AVIAN_BASE_URL = "https://api.avian.io/v1";
 const AVIAN_DEFAULT_MODEL_ID = "deepseek/deepseek-v3.2";
 const AVIAN_DEFAULT_CONTEXT_WINDOW = 164000;
 const AVIAN_DEFAULT_MAX_TOKENS = 65536;
+const AVIAN_DEFAULT_COST = {
+  input: 0.26,
+  output: 0.38,
+  cacheRead: 0,
+  cacheWrite: 0,
+};
 
 const NVIDIA_BASE_URL = "https://integrate.api.nvidia.com/v1";
 const NVIDIA_DEFAULT_MODEL_ID = "nvidia/llama-3.1-nemotron-70b-instruct";
@@ -883,7 +889,7 @@ export function buildAvianProvider(): ProviderConfig {
         name: "DeepSeek V3.2",
         reasoning: false,
         input: ["text"],
-        cost: { input: 0.26, output: 0.38, cacheRead: 0, cacheWrite: 0 },
+        cost: AVIAN_DEFAULT_COST,
         contextWindow: AVIAN_DEFAULT_CONTEXT_WINDOW,
         maxTokens: AVIAN_DEFAULT_MAX_TOKENS,
       },
