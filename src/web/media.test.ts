@@ -503,3 +503,58 @@ describe("local media root guard", () => {
     );
   });
 });
+
+describe("animated image optimization skip", () => {
+  let gifFile = "";
+  let staticWebpFile = "";
+
+  beforeAll(async () => {
+    // Create a static GIF (single frame)
+    const staticGif = await sharp({
+      create: { width: 50, height: 50, channels: 3, background: "#ff0000" },
+    })
+      .gif()
+      .toBuffer();
+    gifFile = await writeTempFile(staticGif, ".gif");
+
+    // Create a static WebP
+    const staticWebp = await sharp({
+      create: { width: 50, height: 50, channels: 3, background: "#00ff00" },
+    })
+      .webp()
+      .toBuffer();
+    staticWebpFile = await writeTempFile(staticWebp, ".webp");
+  });
+
+  it("preserves GIF format without optimization", async () => {
+    const result = await loadWebMedia(gifFile, {
+      maxBytes: 1024 * 1024,
+      localRoots: [fixtureRoot],
+    });
+
+    // GIF should be preserved as-is, not converted to JPEG
+    expect(result.contentType).toBe("image/gif");
+  });
+
+  it("preserves static WebP format without converting to JPEG", async () => {
+    const result = await loadWebMedia(staticWebpFile, {
+      maxBytes: 1024 * 1024,
+      localRoots: [fixtureRoot],
+    });
+
+    // WebP should be preserved as-is, not converted to JPEG
+    // WebP is already an efficient format
+    expect(result.contentType).toBe("image/webp");
+  });
+
+  it("skips optimization when optimizeImages is false", async () => {
+    const result = await loadWebMedia(staticWebpFile, {
+      maxBytes: 1024 * 1024,
+      localRoots: [fixtureRoot],
+      optimizeImages: false,
+    });
+
+    // Should preserve original format when optimization is disabled
+    expect(result.contentType).toBe("image/webp");
+  });
+});

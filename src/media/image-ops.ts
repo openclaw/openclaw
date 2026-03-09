@@ -381,6 +381,21 @@ export async function hasAlphaChannel(buffer: Buffer): Promise<boolean> {
 }
 
 /**
+ * Detects if an image is animated (e.g., animated GIF, animated WebP, APNG).
+ * Uses sharp metadata to check for multiple frames/pages.
+ */
+export async function isAnimatedImage(buffer: Buffer): Promise<boolean> {
+  try {
+    const sharp = await loadSharp();
+    const meta = await sharp(buffer).metadata();
+    // 'pages' indicates number of frames in multi-frame formats (GIF, WebP, APNG)
+    return (meta.pages ?? 1) > 1;
+  } catch {
+    return false;
+  }
+}
+
+/**
  * Resizes an image to PNG format, preserving alpha channel (transparency).
  * Falls back to sharp only (no sips fallback for PNG with alpha).
  */
