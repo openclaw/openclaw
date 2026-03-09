@@ -264,6 +264,7 @@ describe("discordOutbound", () => {
     const result = await discordOutbound.sendPayload?.({
       cfg: {},
       to: "channel:parent-1",
+      text: "✅ ACP session closed and thread archived.",
       payload: {
         text: "✅ ACP session closed and thread archived.",
         channelData: {
@@ -297,6 +298,7 @@ describe("discordOutbound", () => {
 
   it("honors sendDiscord overrides for archive-after-reply payloads", async () => {
     const sendDiscordOverride = vi.fn().mockResolvedValue({
+      channel: "discord",
       messageId: "override-msg-1",
       channelId: "override-thread-1",
     });
@@ -304,6 +306,7 @@ describe("discordOutbound", () => {
     const result = await discordOutbound.sendPayload?.({
       cfg: {},
       to: "channel:parent-1",
+      text: "✅ ACP session closed and thread archived.",
       payload: {
         text: "✅ ACP session closed and thread archived.",
         channelData: {
@@ -347,6 +350,7 @@ describe("discordOutbound", () => {
     await discordOutbound.sendPayload?.({
       cfg: {},
       to: "channel:parent-1",
+      text: "✅ ACP session closed and thread archived.",
       payload: {
         text: "✅ ACP session closed and thread archived.",
         channelData: {
