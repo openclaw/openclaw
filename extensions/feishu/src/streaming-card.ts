@@ -387,28 +387,37 @@ export class FeishuStreamingSession {
         ],
         element_id: "show_full_btn",
       };
-      await fetchWithSsrFGuard({
-        url: `${apiBase}/cardkit/v1/cards/${this.state.cardId}/elements`,
-        init: {
-          method: "POST",
-          headers: {
-            Authorization: `Bearer ${await getToken(this.creds)}`,
-            "Content-Type": "application/json",
+      const btnBody = {
+        elements: JSON.stringify(buttonElement),
+        action: "append",
+        sequence: this.state.sequence,
+        uuid: `btn_${this.state.cardId}_${this.state.sequence}`,
+      };
+      this.log?.(
+        `Adding show-full-text button: cardId=${this.state.cardId}, seq=${this.state.sequence}`,
+      );
+      try {
+        const { response, release } = await fetchWithSsrFGuard({
+          url: `${apiBase}/cardkit/v1/cards/${this.state.cardId}/elements`,
+          init: {
+            method: "POST",
+            headers: {
+              Authorization: `Bearer ${await getToken(this.creds)}`,
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify(btnBody),
           },
-          body: JSON.stringify({
-            elements: JSON.stringify(buttonElement),
-            action: "append",
-            sequence: this.state.sequence,
-            uuid: `btn_${this.state.cardId}_${this.state.sequence}`,
-          }),
-        },
-        policy: { allowedHostnames: resolveAllowedHostnames(this.creds.domain) },
-        auditContext: "feishu.streaming-card.add-button",
-      })
-        .then(async ({ release }) => {
-          await release();
-        })
-        .catch((e) => this.log?.(`Add show-full-text button failed: ${String(e)}`));
+          policy: { allowedHostnames: resolveAllowedHostnames(this.creds.domain) },
+          auditContext: "feishu.streaming-card.add-button",
+        });
+        const respText = await response.text();
+        release();
+        this.log?.(
+          `Add button response: status=${response.status}, body=${respText.slice(0, 500)}`,
+        );
+      } catch (e) {
+        this.log?.(`Add show-full-text button failed: ${String(e)}`);
+      }
     }
 
     this.log?.(`Closed streaming: cardId=${this.state.cardId}`);
