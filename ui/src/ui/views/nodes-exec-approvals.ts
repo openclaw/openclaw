@@ -36,6 +36,7 @@ type ExecApprovalsState = {
   loading: boolean;
   saving: boolean;
   form: ExecApprovalsFile | null;
+  snapshotPath: string | null;
   defaults: ExecApprovalsResolvedDefaults;
   selectedScope: string;
   selectedAgent: Record<string, unknown> | null;
@@ -148,6 +149,10 @@ function resolveExecApprovalsScope(
 export function resolveExecApprovalsState(props: NodesProps): ExecApprovalsState {
   const form = props.execApprovalsForm ?? props.execApprovalsSnapshot?.file ?? null;
   const ready = Boolean(form);
+  const snapshotPath =
+    props.execApprovalsSnapshot && typeof props.execApprovalsSnapshot.path === "string"
+      ? props.execApprovalsSnapshot.path
+      : null;
   const defaults = resolveExecApprovalsDefaults(form);
   const agents = resolveExecApprovalsAgents(props.configForm, form);
   const targetNodes = resolveExecApprovalsNodes(props.nodes);
@@ -172,6 +177,7 @@ export function resolveExecApprovalsState(props: NodesProps): ExecApprovalsState
     loading: props.execApprovalsLoading,
     saving: props.execApprovalsSaving,
     form,
+    snapshotPath,
     defaults,
     selectedScope,
     selectedAgent,
@@ -213,6 +219,17 @@ export function renderExecApprovals(state: ExecApprovalsState) {
       ${renderExecApprovalsTarget(state)}
 
       ${
+        state.target === "gateway" && state.targetNodes.length > 0
+          ? html`
+              <div class="callout warn" style="margin-top: 12px">
+                You are editing <span class="mono">gateway</span> exec approvals, not a node file. Switch
+                <strong>Host</strong> to <strong>Node</strong> to persist changes on a paired node.
+              </div>
+            `
+          : nothing
+      }
+
+      ${
         !ready
           ? html`<div class="row" style="margin-top: 12px; gap: 12px;">
             <div class="muted">Load exec approvals to edit allowlists.</div>
@@ -244,6 +261,11 @@ function renderExecApprovalsTarget(state: ExecApprovalsState) {
           <div class="list-title">Target</div>
           <div class="list-sub">
             Gateway edits local approvals; node edits the selected node.
+            ${
+              state.snapshotPath
+                ? html`<br /><span class="mono">${clampText(state.snapshotPath, 96)}</span>`
+                : nothing
+            }
           </div>
         </div>
         <div class="list-meta">
