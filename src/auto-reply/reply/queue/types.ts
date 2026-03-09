@@ -50,7 +50,7 @@ export type FollowupRun = {
     messageProvider?: string;
     sourceProvider?: string;
     agentAccountId?: string;
-    groupId?: string;
+    groupId?: string | null;
     groupChannel?: string;
     groupSpace?: string;
     senderId?: string;

@@ -500,6 +500,11 @@ export async function runMemoryFlushIfNeeded(params: {
           ...embeddedContext,
           ...senderContext,
           ...runBaseParams,
+          // Thread identity context so hooks fired during memory flush
+          // see the same trust fields as the originating user turn.
+          sourceProvider: params.followupRun.run.sourceProvider,
+          spawnedBy: params.followupRun.run.spawnedBy,
+          groupId: params.followupRun.run.groupId,
           trigger: "memory",
           memoryFlushWritePath,
           prompt: resolveMemoryFlushPromptForRun({
