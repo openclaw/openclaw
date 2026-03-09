@@ -11,8 +11,28 @@ import { resolveConfigDir } from "../utils.js";
 import { detectMime, extensionForMime } from "./mime.js";
 
 const resolveMediaDir = () => path.join(resolveConfigDir(), "media");
-export const MEDIA_MAX_BYTES = 5 * 1024 * 1024; // 5MB default
-const MAX_BYTES = MEDIA_MAX_BYTES;
+export const MEDIA_MAX_BYTES_DEFAULT = 5 * 1024 * 1024; // 5MB default
+let mediaMaxBytes = MEDIA_MAX_BYTES_DEFAULT;
+
+/** Read the current effective media max-bytes limit. */
+export function getMediaMaxBytes(): number {
+  return mediaMaxBytes;
+}
+
+/** Override the media max-bytes limit (called from gateway boot after config load). */
+export function setMediaMaxBytes(bytes: number): void {
+  mediaMaxBytes = bytes;
+}
+
+/**
+ * @deprecated Use {@link getMediaMaxBytes} instead. Kept for backward compatibility.
+ */
+export const MEDIA_MAX_BYTES = MEDIA_MAX_BYTES_DEFAULT;
+
+function formatBytesAsMb(bytes: number): string {
+  return `${parseFloat((bytes / (1024 * 1024)).toFixed(2))}MB`;
+}
+
 const DEFAULT_TTL_MS = 2 * 60 * 1000; // 2 minutes
 // Files are intentionally readable by non-owner UIDs so Docker sandbox containers can access
 // inbound media. The containing state/media directories remain 0o700, which is the trust boundary.
@@ -224,8 +244,8 @@ async function downloadToFile(
               sniffChunks.push(chunk);
               sniffLen += chunk.length;
             }
-            if (total > MAX_BYTES) {
-              req.destroy(new Error("Media exceeds 5MB limit"));
+            if (total > mediaMaxBytes) {
+              req.destroy(new Error(`Media exceeds ${formatBytesAsMb(mediaMaxBytes)} limit`));
             }
           });
           pipeline(res, out)
@@ -285,7 +305,11 @@ function toSaveMediaSourceError(err: SafeOpenError): SaveMediaSourceError {
         cause: err,
       });
     case "too-large":
-      return new SaveMediaSourceError("too-large", "Media exceeds 5MB limit", { cause: err });
+      return new SaveMediaSourceError(
+        "too-large",
+        `Media exceeds ${formatBytesAsMb(mediaMaxBytes)} limit`,
+        { cause: err },
+      );
     case "not-found":
       return new SaveMediaSourceError("not-found", "Media path does not exist", { cause: err });
     case "outside-workspace":
@@ -328,7 +352,10 @@ export async function saveMediaSource(
   }
   // local path
   try {
-    const { buffer, stat } = await readLocalFileSafely({ filePath: source, maxBytes: MAX_BYTES });
+    const { buffer, stat } = await readLocalFileSafely({
+      filePath: source,
+      maxBytes: mediaMaxBytes,
+    });
     const mime = await detectMime({ buffer, filePath: source });
     const ext = extensionForMime(mime) ?? path.extname(source);
     const id = ext ? `${baseId}${ext}` : baseId;
@@ -347,11 +374,11 @@ export async function saveMediaBuffer(
   buffer: Buffer,
   contentType?: string,
   subdir = "inbound",
-  maxBytes = MAX_BYTES,
+  maxBytes = mediaMaxBytes,
   originalFilename?: string,
 ): Promise<SavedMedia> {
   if (buffer.byteLength > maxBytes) {
-    throw new Error(`Media exceeds ${(maxBytes / (1024 * 1024)).toFixed(0)}MB limit`);
+    throw new Error(`Media exceeds ${formatBytesAsMb(maxBytes)} limit`);
   }
   const dir = path.join(resolveMediaDir(), subdir);
   await fs.mkdir(dir, { recursive: true, mode: 0o700 });

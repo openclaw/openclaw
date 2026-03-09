@@ -180,6 +180,7 @@ const TARGET_KEYS = [
   "nodeHost.browserProxy.enabled",
   "nodeHost.browserProxy.allowProfiles",
   "media",
+  "media.maxBytes",
   "media.preserveFilenames",
   "audio",
   "audio.transcription",
