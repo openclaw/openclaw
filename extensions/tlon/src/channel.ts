@@ -16,7 +16,7 @@ import { tlonChannelConfigSchema } from "./config-schema.js";
 import { monitorTlonProvider } from "./monitor/index.js";
 import { tlonOnboardingAdapter } from "./onboarding.js";
 import { formatTargetHint, normalizeShip, parseTlonTarget } from "./targets.js";
-import { resolveTlonAccount, listTlonAccountIds } from "./types.js";
+import { type TlonResolvedAccount, resolveTlonAccount, listTlonAccountIds } from "./types.js";
 import { authenticate } from "./urbit/auth.js";
 import { ssrfPolicyFromAllowPrivateNetwork } from "./urbit/context.js";
 import { urbitFetch } from "./urbit/fetch.js";
@@ -274,7 +274,7 @@ const tlonOutbound: ChannelOutboundAdapter = {
   },
 };
 
-export const tlonPlugin: ChannelPlugin = {
+export const tlonPlugin: ChannelPlugin<TlonResolvedAccount> = {
   id: TLON_CHANNEL_ID,
   meta: {
     id: TLON_CHANNEL_ID,
@@ -361,14 +361,15 @@ export const tlonPlugin: ChannelPlugin = {
       } as OpenClawConfig;
     },
     isConfigured: (account) => account.configured,
-    describeAccount: (account) => ({
-      accountId: account.accountId,
-      name: account.name,
-      enabled: account.enabled,
-      configured: account.configured,
-      ship: account.ship,
-      url: account.url,
-    }),
+    describeAccount: (account) =>
+      ({
+        accountId: account.accountId,
+        name: account.name,
+        enabled: account.enabled,
+        configured: account.configured,
+        ship: account.ship,
+        url: account.url,
+      }) as import("openclaw/plugin-sdk/tlon").ChannelAccountSnapshot,
   },
   setup: {
     resolveAccountId: ({ accountId }) => normalizeAccountId(accountId),

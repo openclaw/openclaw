@@ -35,7 +35,7 @@ vi.mock("./server-plugins.js", async () => {
         gatewayMethods: params.baseMethods ?? [],
       };
     },
-    // server.impl.ts sets a fallback context before dispatch; tests only need the symbol to exist.
+    // server.impl.ts sets a fallback context getter before dispatch; tests only need the symbol to exist.
     setFallbackGatewayContext: vi.fn(),
   };
 });

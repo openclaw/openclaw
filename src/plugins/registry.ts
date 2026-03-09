@@ -1,7 +1,7 @@
 import path from "node:path";
 import type { AnyAgentTool } from "../agents/tools/common.js";
 import type { ChannelDock } from "../channels/dock.js";
-import type { ChannelPlugin } from "../channels/plugins/types.js";
+import type { AnyChannelPlugin } from "../channels/plugins/types.js";
 import { registerContextEngine } from "../context-engine/registry.js";
 import type {
   GatewayRequestHandler,
@@ -69,7 +69,7 @@ export type PluginHttpRouteRegistration = {
 
 export type PluginChannelRegistration = {
   pluginId: string;
-  plugin: ChannelPlugin;
+  plugin: AnyChannelPlugin;
   dock?: ChannelDock;
   source: string;
 };
@@ -401,12 +401,12 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
 
   const registerChannel = (
     record: PluginRecord,
-    registration: OpenClawPluginChannelRegistration | ChannelPlugin,
+    registration: OpenClawPluginChannelRegistration | AnyChannelPlugin,
   ) => {
     const normalized =
       typeof (registration as OpenClawPluginChannelRegistration).plugin === "object"
         ? (registration as OpenClawPluginChannelRegistration)
-        : { plugin: registration as ChannelPlugin };
+        : { plugin: registration as AnyChannelPlugin };
     const plugin = normalized.plugin;
     const id = typeof plugin?.id === "string" ? plugin.id.trim() : String(plugin?.id ?? "").trim();
     if (!id) {

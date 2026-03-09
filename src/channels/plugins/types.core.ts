@@ -18,6 +18,94 @@ export type ChannelAgentTool = AgentTool<TSchema, unknown> & {
 
 export type ChannelAgentToolFactory = (params: { cfg?: OpenClawConfig }) => ChannelAgentTool[];
 
+// ── Per-channel setup input types ────────────────────────────────────
+// Each channel declares its own fields; extensions may extend or cast
+// to channel-specific types for fields not listed here.
+
+export type ChannelSetupInputBase = {
+  name?: string;
+  useEnv?: boolean;
+};
+
+export type TelegramSetupInput = ChannelSetupInputBase & {
+  token?: string;
+  tokenFile?: string;
+  webhookUrl?: string;
+  webhookPath?: string;
+};
+
+export type DiscordSetupInput = ChannelSetupInputBase & {
+  token?: string;
+};
+
+export type SlackSetupInput = ChannelSetupInputBase & {
+  botToken?: string;
+  appToken?: string;
+};
+
+export type SignalSetupInput = ChannelSetupInputBase & {
+  signalNumber?: string;
+  cliPath?: string;
+  httpUrl?: string;
+  httpHost?: string;
+  httpPort?: string;
+};
+
+export type MatrixSetupInput = ChannelSetupInputBase & {
+  homeserver?: string;
+  userId?: string;
+  accessToken?: string;
+  password?: string;
+  deviceName?: string;
+  initialSyncLimit?: number;
+};
+
+export type IMessageSetupInput = ChannelSetupInputBase & {
+  cliPath?: string;
+  dbPath?: string;
+  service?: "imessage" | "sms" | "auto";
+  region?: string;
+};
+
+export type WhatsAppSetupInput = ChannelSetupInputBase & {
+  authDir?: string;
+};
+
+export type BlueBubblesSetupInput = ChannelSetupInputBase & {
+  httpUrl?: string;
+  password?: string;
+  webhookPath?: string;
+};
+
+export type GoogleChatSetupInput = ChannelSetupInputBase & {
+  token?: string;
+  tokenFile?: string;
+  audienceType?: string;
+  audience?: string;
+  webhookPath?: string;
+  webhookUrl?: string;
+};
+
+export type MattermostSetupInput = ChannelSetupInputBase & {
+  botToken?: string;
+  token?: string;
+  httpUrl?: string;
+};
+
+export type TlonSetupInput = ChannelSetupInputBase & {
+  ship?: string;
+  url?: string;
+  code?: string;
+  groupChannels?: string[];
+  dmAllowlist?: string[];
+  autoDiscoverChannels?: boolean;
+};
+
+/**
+ * Umbrella type accepted by the `ChannelSetupAdapter.applyAccountConfig` contract.
+ * Includes all known fields from built-in and extension channels.
+ * Per-channel types above provide narrower alternatives for channel-specific code.
+ */
 export type ChannelSetupInput = {
   name?: string;
   token?: string;
@@ -94,7 +182,7 @@ export type ChannelMeta = {
   preferOver?: string[];
 };
 
-export type ChannelAccountSnapshot = {
+export type ChannelAccountSnapshot<TProbe = unknown, TAudit = unknown> = {
   accountId: string;
   name?: string;
   enabled?: boolean;
@@ -147,9 +235,9 @@ export type ChannelAccountSnapshot = {
   cliPath?: string | null;
   dbPath?: string | null;
   port?: number | null;
-  probe?: unknown;
+  probe?: TProbe;
   lastProbeAt?: number | null;
-  audit?: unknown;
+  audit?: TAudit;
   application?: unknown;
   bot?: unknown;
   publicKey?: string | null;

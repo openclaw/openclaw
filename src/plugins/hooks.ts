@@ -300,8 +300,11 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
   }
 
   /**
-   * Run before_agent_start hook.
-   * Legacy compatibility hook that combines model resolve + prompt build phases.
+   * @deprecated Use the separate `before_model_resolve` and `before_prompt_build`
+   * hooks instead. Model/provider overrides (e.g. `modelOverride`) should move to
+   * `before_model_resolve`; prompt mutations (`prependContext`, `systemPromptSuffix`,
+   * etc.) should move to `before_prompt_build`. This legacy hook combines both
+   * phases and will be removed in a future major version.
    */
   async function runBeforeAgentStart(
     event: PluginHookBeforeAgentStartEvent,

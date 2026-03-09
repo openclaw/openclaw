@@ -52,6 +52,18 @@ export type {
   ChannelSecurityContext,
   ChannelSecurityDmPolicy,
   ChannelSetupInput,
+  ChannelSetupInputBase,
+  TelegramSetupInput,
+  DiscordSetupInput,
+  SlackSetupInput,
+  SignalSetupInput,
+  MatrixSetupInput,
+  IMessageSetupInput,
+  WhatsAppSetupInput,
+  BlueBubblesSetupInput,
+  GoogleChatSetupInput,
+  MattermostSetupInput,
+  TlonSetupInput,
   ChannelStatusIssue,
   ChannelStreamingAdapter,
   ChannelThreadingAdapter,
@@ -62,4 +74,4 @@ export type {
   BaseTokenResolution,
 } from "./types.core.js";
 
-export type { ChannelPlugin } from "./types.plugin.js";
+export type { AnyChannelPlugin, ChannelPlugin } from "./types.plugin.js";

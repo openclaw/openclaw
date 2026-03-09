@@ -45,8 +45,7 @@ export type ChannelConfigSchema = {
   uiHints?: Record<string, ChannelConfigUiHint>;
 };
 
-// oxlint-disable-next-line typescript/no-explicit-any
-export type ChannelPlugin<ResolvedAccount = any, Probe = unknown, Audit = unknown> = {
+export type ChannelPlugin<ResolvedAccount = unknown, Probe = unknown, Audit = unknown> = {
   id: ChannelId;
   meta: ChannelMeta;
   capabilities: ChannelCapabilities;
@@ -83,3 +82,13 @@ export type ChannelPlugin<ResolvedAccount = any, Probe = unknown, Audit = unknow
   // Channel-owned agent tools (login flows, etc.).
   agentTools?: ChannelAgentToolFactory | ChannelAgentTool[];
 };
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any -- intentional type erasure at registration boundaries
+type AnyAccount = any;
+
+/**
+ * Type-erased `ChannelPlugin` for registration boundaries where plugins of any
+ * `ResolvedAccount` type must be accepted. Prefer the narrower `ChannelPlugin<T>`
+ * in code that needs to access account-typed fields.
+ */
+export type AnyChannelPlugin = ChannelPlugin<AnyAccount, AnyAccount, AnyAccount>;

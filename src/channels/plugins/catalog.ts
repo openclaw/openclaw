@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { MANIFEST_KEY } from "../../compat/legacy-names.js";
+import { logWarn } from "../../logger.js";
 import { discoverOpenClawPlugins } from "../../plugins/discovery.js";
 import type { OpenClawPackageManifest } from "../../plugins/manifest.js";
 import type { PluginOrigin } from "../../plugins/types.js";
@@ -108,11 +109,18 @@ function loadExternalCatalogEntries(options: CatalogOptions): ExternalCatalogEnt
     if (!fs.existsSync(resolved)) {
       continue;
     }
+    let raw: string;
     try {
-      const payload = JSON.parse(fs.readFileSync(resolved, "utf-8")) as unknown;
+      raw = fs.readFileSync(resolved, "utf-8");
+    } catch (err) {
+      logWarn(`failed to read plugin catalog file: ${resolved} (${String(err)})`);
+      continue;
+    }
+    try {
+      const payload = JSON.parse(raw) as unknown;
       entries.push(...parseCatalogEntries(payload));
-    } catch {
-      // Ignore invalid catalog files.
+    } catch (err) {
+      logWarn(`failed to parse plugin catalog file: ${resolved} (${String(err)})`);
     }
   }
   return entries;

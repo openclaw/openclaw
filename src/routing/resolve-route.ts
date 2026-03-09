@@ -5,6 +5,7 @@ import type { OpenClawConfig } from "../config/config.js";
 import { shouldLogVerbose } from "../globals.js";
 import { logDebug } from "../logger.js";
 import { listBindings } from "./bindings.js";
+import { LruMap } from "./lru-cache.js";
 import {
   buildAgentMainSessionKey,
   buildAgentPeerSessionKey,
@@ -15,7 +16,10 @@ import {
   sanitizeAgentId,
 } from "./session-key.js";
 
-/** @deprecated Use ChatType from channels/chat-type.js */
+/**
+ * @deprecated Use `ChatType` from `channels/chat-type.js` instead.
+ * Will be removed in a future major version.
+ */
 export type RoutePeerKind = ChatType;
 
 export type RoutePeer = {
@@ -194,8 +198,8 @@ type BindingScope = {
 type EvaluatedBindingsCache = {
   bindingsRef: OpenClawConfig["bindings"];
   byChannel: Map<string, EvaluatedBindingsByChannel>;
-  byChannelAccount: Map<string, EvaluatedBinding[]>;
-  byChannelAccountIndex: Map<string, EvaluatedBindingsIndex>;
+  byChannelAccount: LruMap<string, EvaluatedBinding[]>;
+  byChannelAccountIndex: LruMap<string, EvaluatedBindingsIndex>;
 };
 
 const evaluatedBindingsCacheByCfg = new WeakMap<OpenClawConfig, EvaluatedBindingsCache>();
@@ -206,7 +210,7 @@ const resolvedRouteCacheByCfg = new WeakMap<
     bindingsRef: OpenClawConfig["bindings"];
     agentsRef: OpenClawConfig["agents"];
     sessionRef: OpenClawConfig["session"];
-    byKey: Map<string, ResolvedAgentRoute>;
+    byKey: LruMap<string, ResolvedAgentRoute>;
   }
 >();
 const MAX_RESOLVED_ROUTE_CACHE_KEYS = 4000;
@@ -423,8 +427,12 @@ function getEvaluatedBindingsForChannelAccount(
       : {
           bindingsRef,
           byChannel: buildEvaluatedBindingsByChannel(cfg),
-          byChannelAccount: new Map<string, EvaluatedBinding[]>(),
-          byChannelAccountIndex: new Map<string, EvaluatedBindingsIndex>(),
+          byChannelAccount: new LruMap<string, EvaluatedBinding[]>(
+            MAX_EVALUATED_BINDINGS_CACHE_KEYS,
+          ),
+          byChannelAccountIndex: new LruMap<string, EvaluatedBindingsIndex>(
+            MAX_EVALUATED_BINDINGS_CACHE_KEYS,
+          ),
         };
   if (cache !== existing) {
     evaluatedBindingsCacheByCfg.set(cfg, cache);
@@ -443,12 +451,6 @@ function getEvaluatedBindingsForChannelAccount(
 
   cache.byChannelAccount.set(cacheKey, evaluated);
   cache.byChannelAccountIndex.set(cacheKey, buildEvaluatedBindingsIndex(evaluated));
-  if (cache.byChannelAccount.size > MAX_EVALUATED_BINDINGS_CACHE_KEYS) {
-    cache.byChannelAccount.clear();
-    cache.byChannelAccountIndex.clear();
-    cache.byChannelAccount.set(cacheKey, evaluated);
-    cache.byChannelAccountIndex.set(cacheKey, buildEvaluatedBindingsIndex(evaluated));
-  }
 
   return evaluated;
 }
@@ -505,7 +507,7 @@ function normalizeBindingMatch(
   };
 }
 
-function resolveRouteCacheForConfig(cfg: OpenClawConfig): Map<string, ResolvedAgentRoute> {
+function resolveRouteCacheForConfig(cfg: OpenClawConfig): LruMap<string, ResolvedAgentRoute> {
   const existing = resolvedRouteCacheByCfg.get(cfg);
   if (
     existing &&
@@ -515,7 +517,7 @@ function resolveRouteCacheForConfig(cfg: OpenClawConfig): Map<string, ResolvedAg
   ) {
     return existing.byKey;
   }
-  const byKey = new Map<string, ResolvedAgentRoute>();
+  const byKey = new LruMap<string, ResolvedAgentRoute>(MAX_RESOLVED_ROUTE_CACHE_KEYS);
   resolvedRouteCacheByCfg.set(cfg, {
     bindingsRef: cfg.bindings,
     agentsRef: cfg.agents,
@@ -683,10 +685,6 @@ export function resolveAgentRoute(input: ResolveAgentRouteInput): ResolvedAgentR
     };
     if (routeCache && routeCacheKey) {
       routeCache.set(routeCacheKey, route);
-      if (routeCache.size > MAX_RESOLVED_ROUTE_CACHE_KEYS) {
-        routeCache.clear();
-        routeCache.set(routeCacheKey, route);
-      }
     }
     return route;
   };
