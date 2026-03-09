@@ -1389,6 +1389,8 @@ export const FIELD_HELP: Record<string, string> = {
   "channels.telegram.retry.jitter": "Jitter factor (0-1) applied to Telegram retry delays.",
   "channels.telegram.network.autoSelectFamily":
     "Override Node autoSelectFamily for Telegram (true=enable, false=disable).",
+  "channels.telegram.apiRoot":
+    "Custom Telegram Bot API root URL (e.g. https://my-proxy.example.com). Overrides the default https://api.telegram.org. Useful for self-hosted Bot API servers or API proxies.",
   "channels.telegram.timeoutSeconds":
     "Max seconds before Telegram API requests are aborted (default: 500 per grammY).",
   "channels.whatsapp.dmPolicy":

@@ -183,6 +183,13 @@ export const TelegramAccountSchemaBase = z
       })
       .strict()
       .optional(),
+    apiRoot: z
+      .string()
+      .url()
+      .optional()
+      .describe(
+        "Custom Telegram Bot API root URL. Overrides the default https://api.telegram.org. Useful for self-hosted Bot API servers or API proxies.",
+      ),
     proxy: z.string().optional(),
     webhookUrl: z
       .string()

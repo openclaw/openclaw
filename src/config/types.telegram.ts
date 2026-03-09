@@ -129,6 +129,8 @@ export type TelegramAccountConfig = {
   retry?: OutboundRetryConfig;
   /** Network transport overrides for Telegram. */
   network?: TelegramNetworkConfig;
+  /** Custom Telegram Bot API root URL. Overrides the default https://api.telegram.org. */
+  apiRoot?: string;
   proxy?: string;
   webhookUrl?: string;
   webhookSecret?: string;
