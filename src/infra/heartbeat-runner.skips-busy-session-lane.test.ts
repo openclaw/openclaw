@@ -1,14 +1,10 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import * as replyModule from "../auto-reply/reply.js";
+import type { OpenClawConfig } from "../config/config.js";
 import { getActivePluginRegistry, setActivePluginRegistry } from "../plugins/runtime.js";
 import { createOutboundTestPlugin, createTestRegistry } from "../test-utils/channel-plugins.js";
 import { type HeartbeatDeps, runHeartbeatOnce } from "./heartbeat-runner.js";
-import { resetSystemEventsForTest, enqueueSystemEvent } from "./system-events.js";
-import {
-  seedMainSessionStore,
-  withTempHeartbeatSandbox,
-} from "./heartbeat-runner.test-utils.js";
-import type { OpenClawConfig } from "../config/config.js";
+import { seedMainSessionStore, withTempHeartbeatSandbox } from "./heartbeat-runner.test-utils.js";
+import { enqueueSystemEvent, resetSystemEventsForTest } from "./system-events.js";
 
 vi.mock("jiti", () => ({ createJiti: () => () => ({}) }));
 
@@ -22,7 +18,9 @@ beforeAll(() => {
 });
 
 afterAll(() => {
-  if (previousRegistry) setActivePluginRegistry(previousRegistry);
+  if (previousRegistry) {
+    setActivePluginRegistry(previousRegistry);
+  }
 });
 
 beforeEach(() => {
@@ -32,7 +30,7 @@ beforeEach(() => {
 describe("heartbeat runner skips when target session lane is busy", () => {
   it("returns requests-in-flight when session lane has queued work", async () => {
     await withTempHeartbeatSandbox(async ({ storePath, replySpy }) => {
-      const cfg: OpenClawConfig = {
+      const cfg = {
         agents: {
           defaults: {
             heartbeat: { every: "30m" },
@@ -60,8 +58,12 @@ describe("heartbeat runner skips when target session lane is busy", () => {
 
       // main lane idle (0), session lane busy (1)
       const getQueueSize = vi.fn((lane?: string) => {
-        if (!lane || lane === "main") return 0;
-        if (lane.startsWith("session:")) return 1;
+        if (!lane || lane === "main") {
+          return 0;
+        }
+        if (lane.startsWith("session:")) {
+          return 1;
+        }
         return 0;
       });
 
@@ -78,7 +80,7 @@ describe("heartbeat runner skips when target session lane is busy", () => {
 
   it("proceeds normally when session lane is idle", async () => {
     await withTempHeartbeatSandbox(async ({ storePath, replySpy }) => {
-      const cfg: OpenClawConfig = {
+      const cfg = {
         agents: {
           defaults: {
             heartbeat: { every: "30m" },
@@ -106,7 +108,7 @@ describe("heartbeat runner skips when target session lane is busy", () => {
       replySpy.mockResolvedValue({
         text: "HEARTBEAT_OK",
         model: "test/model",
-      } as any);
+      } as unknown as Awaited<ReturnType<typeof replySpy>>);
 
       const result = await runHeartbeatOnce({
         cfg,
