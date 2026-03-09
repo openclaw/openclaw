@@ -2504,7 +2504,7 @@ Your gateway is running with auth enabled (`gateway.auth.*`), but the UI is not 
 
 Facts (from code):
 
-- The Control UI keeps the token in `sessionStorage` for the current browser tab session, so same-tab refreshes keep working without restoring long-lived localStorage token persistence.
+- The Control UI keeps the token in `sessionStorage` for the current browser tab session and selected gateway URL, so same-tab refreshes keep working without restoring long-lived localStorage token persistence.
 
 Fix:
 
