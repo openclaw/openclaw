@@ -303,7 +303,11 @@ export function resolveExecStartCommand(execStartValue: string): ResolvedExecSta
       continue;
     }
 
-    if (envToken.startsWith("-") || /^[A-Za-z_][A-Za-z0-9_]*=.*/.test(envToken)) {
+    // env(1) treats any NAME=VALUE token as a pre-command assignment where
+    // NAME can contain characters beyond shell-identifier syntax (e.g. hyphens).
+    // Skip env options (--flag) and anything with an `=` that doesn't look
+    // like a path (paths start with `/` or `.`).
+    if (envToken.startsWith("-") || /^[^/.].*=/.test(envToken)) {
       continue;
     }
 

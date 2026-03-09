@@ -212,6 +212,14 @@ describe("extractSystemdExecStartCommandToken", () => {
     ).toBe("/snap/bin/chromium");
   });
 
+  it("extracts executable token when env assignment uses non-shell-identifier name", () => {
+    expect(
+      extractSystemdExecStartCommandToken(
+        "/usr/bin/env CHROME-USER-DATA=/tmp/openclaw /snap/bin/chromium --headless",
+      ),
+    ).toBe("/snap/bin/chromium");
+  });
+
   it("extracts executable token when single-quoted env value contains spaces", () => {
     expect(
       extractSystemdExecStartCommandToken(
