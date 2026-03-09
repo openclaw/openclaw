@@ -269,7 +269,10 @@ export async function resolveMedia(
   } catch (err) {
     // Handle timeout and network errors gracefully (e.g., AbortError from timeout)
     // to prevent media group failures on transient issues
-    logVerbose(`telegram: media download failed: ${String(err)}`);
+    // Note: Log only error name to avoid leaking bot token in URL
+    logVerbose(
+      `telegram: media download failed: ${err instanceof Error ? err.name : "UnknownError"}`,
+    );
     return null;
   }
   const placeholder = resolveTelegramMediaPlaceholder(msg) ?? "<media:document>";
