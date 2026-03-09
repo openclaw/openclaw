@@ -44,6 +44,7 @@ const MARKDOWN_PARSE_LIMIT = 40_000;
 const MARKDOWN_CACHE_LIMIT = 200;
 const MARKDOWN_CACHE_MAX_CHARS = 50_000;
 const INLINE_DATA_IMAGE_RE = /^data:image\/[a-z0-9.+-]+;base64,/i;
+const SAFE_REMOTE_IMAGE_RE = /^https?:\/\//i;
 const markdownCache = new Map<string, string>();
 
 function getCachedMarkdown(key: string): string | null {
@@ -141,10 +142,17 @@ htmlEscapeRenderer.html = ({ text }: { text: string }) => escapeHtml(text);
 htmlEscapeRenderer.image = (token: { href?: string | null; text?: string | null }) => {
   const label = normalizeMarkdownImageLabel(token.text);
   const href = token.href?.trim() ?? "";
-  if (!INLINE_DATA_IMAGE_RE.test(href)) {
-    return escapeHtml(label);
+  // Render inline data URI images directly (already filtered by ADD_DATA_URI_TAGS).
+  if (INLINE_DATA_IMAGE_RE.test(href)) {
+    return `<img src="${escapeHtml(href)}" alt="${escapeHtml(label)}">`;
   }
-  return `<img src="${escapeHtml(href)}" alt="${escapeHtml(label)}">`;
+  // Render safe remote http/https image URLs; DOMPurify will sanitize the src.
+  if (SAFE_REMOTE_IMAGE_RE.test(href)) {
+    return `<img src="${escapeHtml(href)}" alt="${escapeHtml(label)}">`;
+  }
+  // All other schemes (javascript:, data:application/..., etc.) are flattened
+  // to alt text to prevent unsafe content from reaching the DOM.
+  return escapeHtml(label);
 };
 
 function normalizeMarkdownImageLabel(text?: string | null): string {
