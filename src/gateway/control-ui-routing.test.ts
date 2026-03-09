@@ -54,6 +54,36 @@ describe("classifyControlUiRequest", () => {
     expect(classified).toEqual({ kind: "redirect", location: "/openclaw/?foo=1" });
   });
 
+  it("returns redirect for gateway root when basePath is set", () => {
+    const classified = classifyControlUiRequest({
+      basePath: "/openclaw",
+      pathname: "/",
+      search: "",
+      method: "GET",
+    });
+    expect(classified).toEqual({ kind: "redirect", location: "/openclaw/" });
+  });
+
+  it("preserves search string when redirecting gateway root to basePath", () => {
+    const classified = classifyControlUiRequest({
+      basePath: "/openclaw",
+      pathname: "/",
+      search: "?ref=email",
+      method: "GET",
+    });
+    expect(classified).toEqual({ kind: "redirect", location: "/openclaw/?ref=email" });
+  });
+
+  it("falls through non-read gateway root requests when basePath is set", () => {
+    const classified = classifyControlUiRequest({
+      basePath: "/openclaw",
+      pathname: "/",
+      search: "",
+      method: "POST",
+    });
+    expect(classified).toEqual({ kind: "not-control-ui" });
+  });
+
   it("classifies basePath subroutes as control ui", () => {
     const classified = classifyControlUiRequest({
       basePath: "/openclaw",

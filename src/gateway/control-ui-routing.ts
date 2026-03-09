@@ -39,6 +39,15 @@ export function classifyControlUiRequest(params: {
   }
 
   if (!pathname.startsWith(`${basePath}/`) && pathname !== basePath) {
+    // For installs that mount the Control UI under a base path (e.g. /openclaw),
+    // redirect the gateway root to the UI mount to keep the “open
+    // http://127.0.0.1:18789/” experience discoverable.
+    if (pathname === "/") {
+      if (!isReadHttpMethod(method)) {
+        return { kind: "not-control-ui" };
+      }
+      return { kind: "redirect", location: `${basePath}/${search}` };
+    }
     return { kind: "not-control-ui" };
   }
   if (!isReadHttpMethod(method)) {
