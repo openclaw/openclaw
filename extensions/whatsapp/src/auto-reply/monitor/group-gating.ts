@@ -4,6 +4,7 @@ import { recordPendingHistoryEntryIfEnabled } from "../../../../../src/auto-repl
 import { resolveMentionGating } from "../../../../../src/channels/mention-gating.js";
 import type { loadConfig } from "../../../../../src/config/config.js";
 import { normalizeE164 } from "../../../../../src/utils.js";
+import { resolveWhatsAppAccount } from "../../accounts.js";
 import type { MentionConfig } from "../mentions.js";
 import { buildMentionConfig, debugMention, resolveOwnerList } from "../mentions.js";
 import type { WebInboundMsg } from "../types.js";
@@ -94,7 +95,11 @@ export function applyGroupGating(params: ApplyGroupGatingParams) {
     params.msg.senderName,
   );
 
+  // Resolve account-level allowFrom so mention config reflects per-account
+  // settings (e.g. self-chat detection) rather than only root-level config.
+  const account = resolveWhatsAppAccount({ cfg: params.cfg, accountId: params.accountId });
   const mentionConfig = buildMentionConfig(params.cfg, params.agentId);
+  mentionConfig.allowFrom = account.allowFrom;
   const commandBody = stripMentionsForCommand(
     params.msg.body,
     mentionConfig.mentionRegexes,
