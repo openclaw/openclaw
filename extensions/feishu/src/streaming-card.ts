@@ -389,7 +389,7 @@ export class FeishuStreamingSession {
       };
       const btnBody = {
         elements: JSON.stringify(buttonElement),
-        action: "append",
+        type: "append",
         sequence: this.state.sequence,
         uuid: `btn_${this.state.cardId}_${this.state.sequence}`,
       };
