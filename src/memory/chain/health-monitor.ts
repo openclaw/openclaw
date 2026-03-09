@@ -1,7 +1,7 @@
 /**
- * Chain Memory Backend - 健康监控
+ * Chain Memory Backend - Health Monitor
  *
- * 定期检查 provider 的健康状态
+ * Periodically check provider healthHealth status
  *
  * @module health-monitor
  * @author Tutu
@@ -11,16 +11,16 @@
 import type { HealthStatus, ProviderWrapper } from "./types";
 
 /**
- * 健康监控配置
+ * Health Monitor Configuration
  */
 export interface HealthMonitorConfig {
-  checkIntervalMs: number; // 健康检查间隔，默认 30000ms
-  timeoutMs: number; // 检查超时，默认 5000ms
-  degradationThreshold: number; // 降级阈值（失败率），默认 0.3
+  checkIntervalMs: number; // Health check interval, default 30000ms
+  timeoutMs: number; // Check timeout, default 5000ms
+  degradationThreshold: number; // Degradation threshold, default 0.3
 }
 
 /**
- * 健康监控器
+ * Health MonitorMonitor
  */
 export class HealthMonitor {
   private config: HealthMonitorConfig;
@@ -37,21 +37,21 @@ export class HealthMonitor {
   }
 
   /**
-   * 注册 provider
+   * Register provider
    */
   registerProvider(provider: ProviderWrapper): void {
     this.providers.set(provider.config.name, provider);
   }
 
   /**
-   * 注销 provider
+   * Unregister provider
    */
   unregisterProvider(name: string): void {
     this.providers.delete(name);
   }
 
   /**
-   * 启动健康监控
+   * Start Health Monitor
    */
   start(): void {
     if (this.isRunning) {
@@ -63,7 +63,7 @@ export class HealthMonitor {
   }
 
   /**
-   * 停止健康监控
+   * Stop Health Monitor
    */
   stop(): void {
     if (!this.isRunning) {
@@ -78,7 +78,7 @@ export class HealthMonitor {
   }
 
   /**
-   * 调度下一次检查
+   * Schedule next check
    */
   private scheduleCheck(): void {
     if (!this.isRunning) {
@@ -92,14 +92,14 @@ export class HealthMonitor {
   }
 
   /**
-   * 执行健康检查
+   * Perform health check
    */
   private async performCheck(): Promise<void> {
     const checkPromises = Array.from(this.providers.values()).map(async (provider) => {
       try {
         await this.checkProvider(provider);
       } catch (error) {
-        // 记录错误但不影响其他 provider 的检查
+        // Log error but do not affect other provider checks
         console.error(`Health check failed for ${provider.config.name}:`, error);
       }
     });
@@ -108,50 +108,50 @@ export class HealthMonitor {
   }
 
   /**
-   * 检查单个 provider
+   * Check single provider provider
    */
   private async checkProvider(provider: ProviderWrapper): Promise<void> {
     const startTime = Date.now();
 
     try {
-      // 使用 status() 方法进行健康检查
-      // 避免使用空字符串搜索（会被 short-circuit 返回空数组）
+      // Use status() method for health check
+      // Avoid empty string search which returns empty array）
       const timeoutPromise = new Promise<never>((_, reject) => {
         setTimeout(() => reject(new Error("Health check timeout")), this.config.timeoutMs);
       });
 
-      // 调用 status() 检查 provider 是否响应
+      // Call status to check if provider responds
       await Promise.race([provider.manager.status(), timeoutPromise]);
 
-      // 健康检查成功
+      // Health checkSuccess
       const responseTime = Date.now() - startTime;
       provider.stats.health = this.calculateHealth(provider.stats, responseTime);
       provider.recordSuccess();
     } catch {
-      // 健康检查失败
+      // Health checkFailure
       provider.stats.health = "unhealthy";
       provider.recordFailure();
     }
   }
 
   /**
-   * 计算健康状态
+   * Calculate health status
    */
   private calculateHealth(stats: ProviderWrapper["stats"], _responseTime: number): HealthStatus {
-    // 如果熔断器打开，标记为 unhealthy
+    // If open, mark as unhealthy
     if (stats.circuitBreakerState === "OPEN") {
       return "unhealthy";
     }
 
-    // 计算失败率
+    // Calculate failure rate
     const totalRequests = stats.successfulRequests + stats.failedRequests;
     if (totalRequests === 0) {
-      return "healthy"; // 没有请求，假设健康
+      return "healthy"; // No requests, assume healthy
     }
 
     const failureRate = stats.failedRequests / totalRequests;
 
-    // 根据失败率判断
+    // Judge based on failure rate
     if (failureRate >= this.config.degradationThreshold) {
       return "unhealthy";
     } else if (failureRate > 0) {
@@ -162,7 +162,7 @@ export class HealthMonitor {
   }
 
   /**
-   * 获取所有 provider 的健康状态
+   * Get health status of all providers
    */
   getHealthStatus(): Map<string, HealthStatus> {
     const status = new Map<string, HealthStatus>();
@@ -175,14 +175,14 @@ export class HealthMonitor {
   }
 
   /**
-   * 获取健康的 provider 列表
+   * Get list of healthy providers
    */
   getHealthyProviders(): ProviderWrapper[] {
     return Array.from(this.providers.values()).filter((p) => p.stats.health !== "unhealthy");
   }
 
   /**
-   * 获取配置
+   * Get configuration
    */
   getConfig(): HealthMonitorConfig {
     return { ...this.config };

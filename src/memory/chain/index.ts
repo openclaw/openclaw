@@ -1,5 +1,5 @@
 /**
- * Chain Memory Backend - 导出
+ * Chain Memory Backend - Export
  *
  * @module chain
  * @author Tutu

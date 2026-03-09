@@ -1,5 +1,5 @@
 /**
- * Chain Memory Backend - 类型定义
+ * Chain Memory Backend - Type definitions
  *
  * @module types
  * @author Tutu
@@ -9,33 +9,33 @@
 import type { MemorySearchManager, MemorySearchResult } from "../../types";
 
 /**
- * Provider 优先级
+ * Provider Priority
  */
 export type ProviderPriority = "primary" | "secondary" | "fallback";
 
 /**
- * 写入模式
+ * Write mode
  */
 export type WriteMode = "sync" | "async";
 
 /**
- * 熔断器状态
+ * Circuit BreakerStatus
  */
 export type CircuitBreakerState = "CLOSED" | "OPEN" | "HALF-OPEN";
 
 /**
- * Provider 健康状态
+ * Provider Health status
  */
 export type HealthStatus = "healthy" | "degraded" | "unhealthy";
 
 /**
- * Provider 配置
+ * Provider configuration
  */
 export interface ProviderConfig {
   name: string;
   priority: ProviderPriority;
 
-  // backend 或 plugin 二选一
+  // Either backend or plugin (mutually exclusive)
   backend?: string;
   plugin?: string;
 
@@ -64,7 +64,7 @@ export interface ProviderConfig {
 }
 
 /**
- * 全局配置
+ * Global configuration
  */
 export interface GlobalConfig {
   defaultTimeout: number;
@@ -74,7 +74,7 @@ export interface GlobalConfig {
 }
 
 /**
- * Chain 配置
+ * Chain Configuration
  */
 export interface ChainConfig {
   providers: ProviderConfig[];
@@ -82,44 +82,44 @@ export interface ChainConfig {
 }
 
 /**
- * Provider 统计信息
+ * Provider Statistics
  */
 export interface ProviderStats {
   name: string;
   priority: ProviderPriority;
   health: HealthStatus;
 
-  // 熔断器状态
+  // Circuit BreakerStatus
   circuitBreakerState: CircuitBreakerState;
   failureCount: number;
 
-  // 性能统计
+  // Performance statistics
   totalRequests: number;
   successfulRequests: number;
   failedRequests: number;
   avgResponseTime: number;
 
-  // 上次请求时间
+  // Last request time
   lastRequestTime?: number;
   lastFailureTime?: number;
 }
 
 /**
- * Provider 包装器
+ * Provider Wrapper
  */
 export interface ProviderWrapper {
   config: ProviderConfig;
   manager: MemorySearchManager;
   stats: ProviderStats;
 
-  // 熔断器
+  // Circuit Breaker
   circuitBreaker: {
     state: CircuitBreakerState;
     failures: number;
     lastFailureTime: number;
   };
 
-  // 方法
+  // Method
   search(query: string, options?: unknown): Promise<MemorySearchResult[]>;
   isAvailable(): boolean;
   recordSuccess(): void;
@@ -127,7 +127,7 @@ export interface ProviderWrapper {
 }
 
 /**
- * 异步写入任务
+ * Async write task
  */
 export interface AsyncWriteTask {
   id: string;
@@ -140,7 +140,7 @@ export interface AsyncWriteTask {
 }
 
 /**
- * 死信队列项
+ * Dead letter queue item
  */
 export interface DeadLetterItem extends AsyncWriteTask {
   error: string;
@@ -148,28 +148,28 @@ export interface DeadLetterItem extends AsyncWriteTask {
 }
 
 /**
- * Chain Manager 状态
+ * Chain manager status
  */
 export interface ChainManagerStatus {
   backend: string;
   providers: ProviderStats[];
 
-  // 异步队列状态
+  // Async queue status
   asyncQueue: {
     pending: number;
     processing: number;
     deadLetter: number;
   };
 
-  // 全局配置
+  // Global configuration
   global: GlobalConfig;
 }
 
 /**
- * Chain Manager 选项
+ * Chain Manager Options
  */
 export interface ChainManagerOptions {
   config: ChainConfig;
   getBackendManager: (backend: string, config?: unknown) => MemorySearchManager;
-  getPluginManager?: (plugin: string, config?: unknown) => MemorySearchManager; // 新增：支持 plugin
+  getPluginManager?: (plugin: string, config?: unknown) => MemorySearchManager; // Newly added：Support plugin
 }
