@@ -171,6 +171,54 @@ function normalizeSecretInputUnion(
   );
 }
 
+/** Normalize unions of primitives + a single object to the object variant. */
+function normalizePrimitiveObjectUnion(
+  schema: JsonSchema,
+  path: Array<string | number>,
+  remaining: JsonSchema[],
+  nullable: boolean,
+): ConfigSchemaAnalysis | null {
+  if (remaining.length < 2) {
+    return null;
+  }
+
+  const primitiveTypes = new Set(["string", "number", "integer", "boolean"]);
+  const objects: JsonSchema[] = [];
+  const primitives: JsonSchema[] = [];
+
+  for (const entry of remaining) {
+    const t = schemaType(entry);
+    if (t && primitiveTypes.has(t)) {
+      primitives.push(entry);
+    } else if (t === "object" || entry.properties) {
+      objects.push(entry);
+    } else {
+      return null;
+    }
+  }
+
+  if (objects.length !== 1 || primitives.length === 0) {
+    return null;
+  }
+
+  const objectSchema = objects[0];
+  const res = normalizeSchemaNode(objectSchema, path);
+
+  if (!res.schema || res.unsupportedPaths.length > 0) {
+    return null;
+  }
+
+  return {
+    schema: {
+      ...res.schema,
+      title: schema.title ?? res.schema.title,
+      description: schema.description ?? res.schema.description,
+      nullable: nullable || res.schema.nullable,
+    },
+    unsupportedPaths: [],
+  };
+}
+
 function normalizeUnion(
   schema: JsonSchema,
   path: Array<string | number>,
@@ -219,6 +267,13 @@ function normalizeUnion(
   const secretInput = normalizeSecretInputUnion(schema, path, remaining, nullable);
   if (secretInput) {
     return secretInput;
+  }
+
+  // Unions of primitives + a single object: normalize to the object variant.
+  // Covers AgentModelSchema (string | {primary?, fallbacks?}), docker ulimits, etc.
+  const objectUnion = normalizePrimitiveObjectUnion(schema, path, remaining, nullable);
+  if (objectUnion) {
+    return objectUnion;
   }
 
   if (literals.length > 0 && remaining.length === 0) {

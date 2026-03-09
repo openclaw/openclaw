@@ -386,7 +386,122 @@ describe("config form renderer", () => {
       type: "object",
       properties: {
         mixed: {
-          anyOf: [{ type: "string" }, { type: "object", properties: {} }],
+          anyOf: [
+            { type: "string" },
+            { type: "object", properties: { a: { type: "string" } } },
+            { type: "object", properties: { b: { type: "string" } } },
+          ],
+        },
+      },
+    };
+    const analysis = analyzeConfigSchema(schema);
+    expect(analysis.unsupportedPaths).toContain("mixed");
+  });
+
+  it("normalizes AgentModelSchema-style union (string | object) to object", () => {
+    const schema = {
+      type: "object",
+      properties: {
+        model: {
+          anyOf: [
+            { type: "string" },
+            {
+              type: "object",
+              properties: {
+                primary: { type: "string" },
+                fallbacks: { type: "array", items: { type: "string" } },
+              },
+            },
+          ],
+        },
+      },
+    };
+    const analysis = analyzeConfigSchema(schema);
+    expect(analysis.unsupportedPaths).not.toContain("model");
+    expect(analysis.schema?.properties?.model?.properties?.primary).toBeDefined();
+    expect(analysis.schema?.properties?.model?.properties?.fallbacks).toBeDefined();
+  });
+
+  it("renders AgentModelSchema-style union as primary + fallbacks fields", () => {
+    const onPatch = vi.fn();
+    const container = document.createElement("div");
+    const schema = {
+      type: "object",
+      properties: {
+        model: {
+          anyOf: [
+            { type: "string" },
+            {
+              type: "object",
+              properties: {
+                primary: { type: "string" },
+                fallbacks: { type: "array", items: { type: "string" } },
+              },
+            },
+          ],
+        },
+      },
+    };
+    const analysis = analyzeConfigSchema(schema);
+    render(
+      renderConfigForm({
+        schema: analysis.schema,
+        uiHints: {},
+        unsupportedPaths: analysis.unsupportedPaths,
+        value: { model: { primary: "gpt-4", fallbacks: ["gpt-3.5"] } },
+        onPatch,
+      }),
+      container,
+    );
+
+    const primaryInput: HTMLInputElement | null = container.querySelector('input[value="gpt-4"]');
+    expect(primaryInput).not.toBeNull();
+    if (primaryInput) {
+      primaryInput.value = "gpt-4o";
+      primaryInput.dispatchEvent(new Event("input", { bubbles: true }));
+      expect(onPatch).toHaveBeenCalledWith(["model", "primary"], "gpt-4o");
+    }
+  });
+
+  it("normalizes string | number | object union to object", () => {
+    const schema = {
+      type: "object",
+      properties: {
+        ulimit: {
+          anyOf: [
+            { type: "string" },
+            { type: "number" },
+            { type: "object", properties: { soft: { type: "number" }, hard: { type: "number" } } },
+          ],
+        },
+      },
+    };
+    const analysis = analyzeConfigSchema(schema);
+    expect(analysis.unsupportedPaths).not.toContain("ulimit");
+    expect(analysis.schema?.properties?.ulimit?.properties?.soft).toBeDefined();
+    expect(analysis.schema?.properties?.ulimit?.properties?.hard).toBeDefined();
+  });
+
+  it("flags union when object variant has unsupported sub-node", () => {
+    const schema = {
+      type: "object",
+      properties: {
+        mixed: {
+          anyOf: [
+            { type: "string" },
+            {
+              type: "object",
+              properties: {
+                nested: {
+                  anyOf: [
+                    { type: "string" },
+                    { type: "object", properties: { a: { type: "string" } } },
+                    { type: "object", properties: { b: { type: "string" } } },
+                  ],
+                },
+              },
+            },
+          ],
         },
       },
     };
