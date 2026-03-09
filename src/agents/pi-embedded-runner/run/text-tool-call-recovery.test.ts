@@ -242,6 +242,23 @@ exec({"command":"ls"})
     });
   });
 
+  it("does not recover tool-call examples inside multi-backtick inline code spans", async () => {
+    const text = `Use \`\`exec({"command":"pwd"})\`\` to inspect.`;
+    const finalMessage = {
+      role: "assistant",
+      content: [{ type: "text", text }],
+    };
+    const baseFn = vi.fn(() => createFakeStream({ events: [], resultMessage: finalMessage }));
+
+    const stream = await invokeRecoveredStream(baseFn, new Set(["exec"]));
+    const result = await stream.result();
+
+    expect(result).toEqual({
+      role: "assistant",
+      content: [{ type: "text", text }],
+    });
+  });
+
   it("does not recover tool-call examples inside tilde code fences", async () => {
     const text = `~~~ts
 exec({"command":"pwd"})

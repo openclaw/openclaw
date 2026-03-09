@@ -213,14 +213,49 @@ function findMarkdownCodeRanges(text: string): TextRange[] {
     }
   }
 
-  const inlineCodeRe = /`[^`\r\n]*`/g;
-  for (const match of text.matchAll(inlineCodeRe)) {
-    const start = match.index ?? 0;
-    const end = start + match[0].length;
-    const overlapsExisting = ranges.some((range) => start < range.end && range.start < end);
-    if (!overlapsExisting) {
-      ranges.push({ start, end });
+  // Support inline spans delimited by one or more backticks (e.g. `code`,
+  // ``code with `backticks` inside``) so snippet examples are not recovered.
+  for (let index = 0; index < text.length; ) {
+    if (text[index] !== "`") {
+      index += 1;
+      continue;
     }
+
+    const start = index;
+    let markerLength = 1;
+    while (text[start + markerLength] === "`") {
+      markerLength += 1;
+    }
+
+    let closeIndex = -1;
+    let searchIndex = start + markerLength;
+    while (searchIndex < text.length) {
+      const nextTick = text.indexOf("`", searchIndex);
+      if (nextTick === -1) {
+        break;
+      }
+      let closeMarkerLength = 1;
+      while (text[nextTick + closeMarkerLength] === "`") {
+        closeMarkerLength += 1;
+      }
+      if (closeMarkerLength === markerLength) {
+        closeIndex = nextTick;
+        break;
+      }
+      searchIndex = nextTick + closeMarkerLength;
+    }
+
+    if (closeIndex !== -1) {
+      const end = closeIndex + markerLength;
+      const overlapsExisting = ranges.some((range) => start < range.end && range.start < end);
+      if (!overlapsExisting) {
+        ranges.push({ start, end });
+      }
+      index = end;
+      continue;
+    }
+
+    index = start + markerLength;
   }
 
   return ranges.toSorted((a, b) => a.start - b.start || a.end - b.end);
