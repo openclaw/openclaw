@@ -364,3 +364,72 @@ Related:
 - [/gateway/pairing](/gateway/pairing)
 - [/gateway/authentication](/gateway/authentication)
 - [/gateway/background-process](/gateway/background-process)
+
+## Timezone not set in LaunchAgent plist
+
+**Symptom**: Agent replies with wrong day of week (e.g., "today is Sunday" when it's Monday) or date is off by one day.
+
+**Root Cause**: LaunchAgent process does not have TZ environment variable set, so Node parses time in UTC.
+
+**Solution**:
+Add `TZ=Asia/Shanghai` (or your local timezone) to the `EnvironmentVariables` section in your Gateway plist file:
+
+```xml
+<key>EnvironmentVariables</key>
+<dict>
+  <key>TZ</key>
+  <string>Asia/Shanghai</string>
+</dict>
+```
+
+Then reload the LaunchAgent:
+```bash
+launchctl unload ~/Library/LaunchAgents/ai.openclaw.gateway.plist
+launchctl load ~/Library/LaunchAgents/ai.openclaw.gateway.plist
+openclaw gateway restart
+```
+
+**Tested On**: OpenClaw v2026.2.26, macOS 14.6
+
+---
+
+## Don't declare built-in plugins in plugins.entries
+
+**Symptom**: After upgrading OpenClaw, Gateway fails to start with error `plugin not found: feishu`.
+
+**Root Cause**: The `feishu` plugin is built-in and should not be declared in `plugins.entries`.
+
+**Solution**:
+Remove `feishu` and other built-in plugins from your `plugins.entries` configuration.
+
+> **⚠️ v2026.2.26+**: This is now handled automatically by Gateway. Do not manually remove built-in plugins anymore. See [#16](https://github.com/openclaw/openclaw/issues/16) for details.
+
+**Tested On**: OpenClaw v2026.2.26, macOS 14.6
+
+---
+
+## agents.defaults.model.primary must be explicitly set
+
+**Symptom**: Runtime errors like "All models failed: … anthropic/claude: No API key".
+
+**Root Cause**: If `primary` is not specified, the framework defaults to using the built-in `anthropic` model, which requires an Anthropic API key.
+
+**Solution**:
+Explicitly set `agents.defaults.model.primary` in your config (e.g., `"minimax/MiniMax-M2.5"`), and only include models with configured API keys in `fallbacks`:
+
+```json5
+{
+  agents: {
+    defaults: {
+      model: {
+        primary: "minimax/MiniMax-M2.5",
+        fallbacks: [
+          { provider: "openai", model: "gpt-4o" }
+        ]
+      }
+    }
+  }
+}
+```
+
+**Tested On**: OpenClaw v2026.2.26, macOS 14.6
