@@ -1,0 +1,9 @@
+{
+  "id": "inboxapi",
+  "channels": ["inboxapi"],
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

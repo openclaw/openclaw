@@ -68,6 +68,10 @@
       "types": "./dist/plugin-sdk/imessage.d.ts",
       "default": "./dist/plugin-sdk/imessage.js"
     },
+    "./plugin-sdk/inboxapi": {
+      "types": "./dist/plugin-sdk/inboxapi.d.ts",
+      "default": "./dist/plugin-sdk/inboxapi.js"
+    },
     "./plugin-sdk/whatsapp": {
       "types": "./dist/plugin-sdk/whatsapp.d.ts",
       "default": "./dist/plugin-sdk/whatsapp.js"

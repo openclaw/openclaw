@@ -1,0 +1,28 @@
+{
+  "name": "@openclaw/inboxapi",
+  "version": "2026.3.9",
+  "description": "InboxAPI email channel plugin for OpenClaw",
+  "type": "module",
+  "dependencies": {
+    "zod": "^4.3.6"
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ],
+    "channel": {
+      "id": "inboxapi",
+      "label": "InboxAPI Email",
+      "selectionLabel": "InboxAPI (Email)",
+      "docsPath": "/channels/inboxapi",
+      "docsLabel": "inboxapi",
+      "blurb": "Send and receive email through InboxAPI.",
+      "order": 95
+    },
+    "install": {
+      "npmSpec": "@openclaw/inboxapi",
+      "localPath": "extensions/inboxapi",
+      "defaultChoice": "npm"
+    }
+  }
+}

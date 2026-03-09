@@ -343,6 +343,12 @@ importers:
 
   extensions/imessage: {}
 
+  extensions/inboxapi:
+    dependencies:
+      zod:
+        specifier: ^4.3.6
+        version: 4.3.6
+
   extensions/irc:
     dependencies:
       zod:
