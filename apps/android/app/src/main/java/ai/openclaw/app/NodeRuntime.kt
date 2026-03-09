@@ -637,9 +637,7 @@ class NodeRuntime(context: Context) {
     if (old != trimmed) {
       Log.d("NodeRuntime", "Language override changed from '$old' to '$trimmed', triggering gateway reconnect")
       prefs.setLanguageOverride(trimmed)
-      if (operatorConnected) {
-        refreshGatewayConnection()
-      }
+      refreshGatewayConnection()
     }
   }
 
