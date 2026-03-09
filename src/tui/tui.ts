@@ -8,7 +8,7 @@ import {
   Text,
   TUI,
 } from "@mariozechner/pi-tui";
-import { resolveDefaultAgentId } from "../agents/agent-scope.js";
+import { resolveAgentIdByWorkspacePath, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { trustStatusLine } from "../auto-reply/reply/agent-runner-utils.js";
 import { loadConfig } from "../config/config.js";
 import type { TrustWindow } from "../infra/exec-approvals.js";
@@ -210,6 +210,28 @@ export function resolveTuiSessionKey(params: {
   return `agent:${params.currentAgentId}:${trimmed.toLowerCase()}`;
 }
 
+export function resolveInitialTuiAgentId(params: {
+  cfg: OpenClawConfig;
+  fallbackAgentId: string;
+  initialSessionInput?: string;
+  cwd?: string;
+}) {
+  const parsed = parseAgentSessionKey((params.initialSessionInput ?? "").trim());
+  if (parsed?.agentId) {
+    return normalizeAgentId(parsed.agentId);
+  }
+
+  const inferredFromWorkspace = resolveAgentIdByWorkspacePath(
+    params.cfg,
+    params.cwd ?? process.cwd(),
+  );
+  if (inferredFromWorkspace) {
+    return inferredFromWorkspace;
+  }
+
+  return normalizeAgentId(params.fallbackAgentId);
+}
+
 export function resolveGatewayDisconnectState(reason?: string): {
   connectionStatus: string;
   activityStatus: string;
@@ -305,7 +327,12 @@ export async function runTui(opts: TuiOptions) {
   let sessionScope: SessionScope = (config.session?.scope ?? "per-sender") as SessionScope;
   let sessionMainKey = normalizeMainKey(config.session?.mainKey);
   let agentDefaultId = resolveDefaultAgentId(config);
-  let currentAgentId = agentDefaultId;
+  let currentAgentId = resolveInitialTuiAgentId({
+    cfg: config,
+    fallbackAgentId: agentDefaultId,
+    initialSessionInput,
+    cwd: process.cwd(),
+  });
   let agents: AgentSummary[] = [];
   const agentNames = new Map<string, string>();
   let currentSessionKey = "";

@@ -171,13 +171,6 @@ class DeviceHandler(
             ),
           )
           put(
-            "backgroundLocation",
-            permissionStateJson(
-              granted = hasPermission(Manifest.permission.ACCESS_BACKGROUND_LOCATION),
-              promptableWhenDenied = true,
-            ),
-          )
-          put(
             "sms",
             permissionStateJson(
               granted = hasPermission(Manifest.permission.SEND_SMS) && canSendSms,
@@ -223,14 +216,6 @@ class DeviceHandler(
             "motion",
             permissionStateJson(
               granted = motionGranted,
-              promptableWhenDenied = true,
-            ),
-          )
-          // Screen capture on Android is interactive per-capture consent, not a sticky app permission.
-          put(
-            "screenCapture",
-            permissionStateJson(
-              granted = false,
               promptableWhenDenied = true,
             ),
           )
