@@ -48,7 +48,7 @@ describe("GatewayBrowserClient reconnect auth", () => {
     loadOrCreateDeviceIdentityMock.mockResolvedValue({
       deviceId: "dev-1",
       publicKey: "pub",
-      privateKey: "priv",
+      privateKey: "test-private-key", // pragma: allowlist secret
     });
     signDevicePayloadMock.mockResolvedValue("sig");
   });
