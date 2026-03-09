@@ -50,6 +50,7 @@ node openclaw.mjs pairing approve telegram 2F2HJ4BD
    pm2 logs moltbot --time
 4. 停止服务:
    pm2 stop moltbot
+   pm2 restart moltbot
 
 ---
 
@@ -128,3 +129,8 @@ pm2 restart moltbot
 
 
 保证网络不掉线 caffeinate -dimsu pm2 resurrect
+
+tmux kill-session -t moltbot
+pm2 delete moltbot
+# 然后再运行你刚才的那行命令：
+tmux new -s moltbot 'pm2 start "pnpm start" --name moltbot --exp-backoff-restart-delay 5000 --time && pm2 monit'
