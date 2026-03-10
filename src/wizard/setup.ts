@@ -557,6 +557,32 @@ export async function runSetupWizard(
       quickstartDefaults: flow === "quickstart",
       secretInputMode: opts.secretInputMode,
     });
+
+    // Ensure web_search and web_fetch are in the tool allowlist so the agent
+    // can use them.  When tools.allow is set, only listed tools are permitted;
+    // without this, search setup would configure the provider but the tool
+    // would still be blocked by the policy pipeline.
+    if (nextConfig.tools?.web?.search?.provider) {
+      const toolsAllow = nextConfig.tools?.allow;
+      const hasExplicitAllow = Array.isArray(toolsAllow);
+      const baseList: string[] = hasExplicitAllow
+        ? [...toolsAllow, ...(nextConfig.tools?.alsoAllow ?? [])]
+        : [...(nextConfig.tools?.alsoAllow ?? [])];
+      for (const tool of ["web_search", "web_fetch"]) {
+        if (!baseList.includes(tool)) {
+          baseList.push(tool);
+        }
+      }
+      nextConfig = {
+        ...nextConfig,
+        tools: {
+          ...nextConfig.tools,
+          ...(hasExplicitAllow
+            ? { allow: baseList, alsoAllow: undefined }
+            : { alsoAllow: baseList }),
+        },
+      };
+    }
   }
 
   if (opts.skipSkills) {
