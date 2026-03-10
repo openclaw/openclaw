@@ -49,7 +49,7 @@ export type ArchivedPreview = {
   deleteIfUnused?: boolean;
 };
 
-export type LanePreviewDisposition = "transient" | "retained" | "finalized";
+export type LanePreviewLifecycle = "transient" | "complete";
 
 export type LaneDeliveryResult =
   | "preview-finalized"
@@ -61,7 +61,8 @@ export type LaneDeliveryResult =
 type CreateLaneTextDelivererParams = {
   lanes: Record<LaneName, DraftLaneState>;
   archivedAnswerPreviews: ArchivedPreview[];
-  previewDispositionByLane: Record<LaneName, LanePreviewDisposition>;
+  activePreviewLifecycleByLane: Record<LaneName, LanePreviewLifecycle>;
+  retainPreviewOnCleanupByLane: Record<LaneName, boolean>;
   draftMaxChars: number;
   applyTextToPayload: (payload: ReplyPayload, text: string) => ReplyPayload;
   sendPayload: (payload: ReplyPayload) => Promise<boolean>;
@@ -162,6 +163,10 @@ function resolvePreviewTarget(params: ResolvePreviewTargetParams): PreviewTarget
 
 export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams) {
   const getLanePreviewText = (lane: DraftLaneState) => lane.lastPartialText;
+  const markActivePreviewComplete = (laneName: LaneName) => {
+    params.activePreviewLifecycleByLane[laneName] = "complete";
+    params.retainPreviewOnCleanupByLane[laneName] = true;
+  };
   const isDraftPreviewLane = (lane: DraftLaneState) => lane.stream?.previewMode?.() === "draft";
   const canMaterializeDraftFinal = (
     lane: DraftLaneState,
@@ -401,7 +406,7 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams) {
         return "preview-finalized";
       }
       if (finalized === "retained") {
-        params.previewDispositionByLane.answer = "retained";
+        params.retainPreviewOnCleanupByLane.answer = true;
         return "preview-retained";
       }
     }
@@ -448,7 +453,7 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams) {
           return archivedResult;
         }
       }
-      if (canEditViaPreview && params.previewDispositionByLane[laneName] === "transient") {
+      if (canEditViaPreview && params.activePreviewLifecycleByLane[laneName] === "transient") {
         await params.flushDraftLane(lane);
         if (laneName === "answer") {
           const archivedResultAfterFlush = await consumeArchivedAnswerPreviewForFinal({
@@ -469,7 +474,7 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams) {
             text,
           });
           if (materialized) {
-            params.previewDispositionByLane[laneName] = "finalized";
+            markActivePreviewComplete(laneName);
             return "preview-finalized";
           }
         }
@@ -483,11 +488,11 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams) {
           context: "final",
         });
         if (finalized === "edited") {
-          params.previewDispositionByLane[laneName] = "finalized";
+          markActivePreviewComplete(laneName);
           return "preview-finalized";
         }
         if (finalized === "retained") {
-          params.previewDispositionByLane[laneName] = "retained";
+          markActivePreviewComplete(laneName);
           return "preview-retained";
         }
       } else if (!hasMedia && !payload.isError && text.length > params.draftMaxChars) {

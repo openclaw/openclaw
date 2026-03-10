@@ -42,7 +42,8 @@ function createHarness(params?: {
   const deletePreviewMessage = vi.fn().mockResolvedValue(undefined);
   const log = vi.fn();
   const markDelivered = vi.fn();
-  const previewDispositionByLane = { answer: "transient", reasoning: "transient" } as const;
+  const activePreviewLifecycleByLane = { answer: "transient", reasoning: "transient" } as const;
+  const retainPreviewOnCleanupByLane = { answer: false, reasoning: false } as const;
   const archivedAnswerPreviews: Array<{
     messageId: number;
     textSnapshot: string;
@@ -52,7 +53,8 @@ function createHarness(params?: {
   const deliverLaneText = createLaneTextDeliverer({
     lanes,
     archivedAnswerPreviews,
-    previewDispositionByLane: { ...previewDispositionByLane },
+    activePreviewLifecycleByLane: { ...activePreviewLifecycleByLane },
+    retainPreviewOnCleanupByLane: { ...retainPreviewOnCleanupByLane },
     draftMaxChars: params?.draftMaxChars ?? 4_096,
     applyTextToPayload: (payload: ReplyPayload, text: string) => ({ ...payload, text }),
     sendPayload,
