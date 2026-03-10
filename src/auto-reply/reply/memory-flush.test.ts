@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
-import { DEFAULT_MEMORY_FLUSH_PROMPT, resolveMemoryFlushPromptForRun } from "./memory-flush.js";
+import {
+  DEFAULT_MEMORY_FLUSH_PROMPT,
+  resolveMemoryFlushPromptForRun,
+  resolveMemoryFlushRelativePathForRun,
+} from "./memory-flush.js";
 
 describe("resolveMemoryFlushPromptForRun", () => {
   const cfg = {
@@ -34,6 +38,15 @@ describe("resolveMemoryFlushPromptForRun", () => {
 
     expect(prompt).toContain("Current time: already present");
     expect((prompt.match(/Current time:/g) ?? []).length).toBe(1);
+  });
+
+  it("resolves the canonical relative memory path using user timezone", () => {
+    const relativePath = resolveMemoryFlushRelativePathForRun({
+      cfg,
+      nowMs: Date.UTC(2026, 1, 16, 15, 0, 0),
+    });
+
+    expect(relativePath).toBe("memory/2026-02-16.md");
   });
 });
 
