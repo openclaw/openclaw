@@ -59,6 +59,12 @@ export async function startGatewaySidecars(params: {
   logChannels: { info: (msg: string) => void; error: (msg: string) => void };
   logBrowser: { error: (msg: string) => void };
 }) {
+  // Record the process boot timestamp before any channels start.  Active turns
+  // written by THIS process (startedAt >= processStartedAt) are live — not
+  // stale leftovers from the previous process.  The recovery loop below uses
+  // this to avoid clearing fresh turns that raced ahead of the recovery sweep.
+  const processStartedAt = Date.now();
+
   try {
     const stateDir = resolveStateDir(process.env);
     const sessionDirs = await resolveAgentSessionDirs(stateDir);
@@ -218,6 +224,16 @@ export async function startGatewaySidecars(params: {
         `active-turn recovery: found ${staleTurns.length} stale turn(s) from previous process`,
       );
       for (const turn of staleTurns) {
+        // Skip turns started by THIS process — they raced ahead of the
+        // recovery loop (channel startup created a new turn before we got
+        // here).  Only turns from the PREVIOUS process are truly stale.
+        if (turn.startedAt >= processStartedAt) {
+          params.log.warn(
+            `active-turn recovery: skipping live turn ${turn.sessionId} (startedAt=${turn.startedAt} >= processStartedAt=${processStartedAt})`,
+          );
+          continue;
+        }
+
         // Consume first to prevent infinite retry on crash.
         await clearActiveTurn(stateDir, turn.sessionId);
 

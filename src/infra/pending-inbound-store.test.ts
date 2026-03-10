@@ -404,4 +404,103 @@ describe("pending-inbound-store", () => {
     const result = await readStaleActiveTurns(stateDir);
     expect(result).toHaveLength(10);
   });
+
+  // --- processStartedAt guard (server-startup recovery filter) ---
+  //
+  // server-startup.ts records processStartedAt = Date.now() before channels
+  // start, then filters readStaleActiveTurns() to skip entries where
+  // startedAt >= processStartedAt (those are live turns from this process,
+  // not stale leftovers from a previous process).  These tests validate
+  // that filtering logic at the data level.
+
+  it("processStartedAt guard: turns before boot are stale, turns at/after boot are live", async () => {
+    const processStartedAt = 1700000005000;
+
+    // Stale turn from previous process (startedAt < processStartedAt)
+    await writeActiveTurn(stateDir, {
+      sessionId: "sess-stale-1",
+      sessionKey: "telegram:111",
+      channel: "telegram",
+      startedAt: 1700000000000, // well before boot
+    });
+
+    // Another stale turn, just barely before boot
+    await writeActiveTurn(stateDir, {
+      sessionId: "sess-stale-2",
+      sessionKey: "telegram:222",
+      channel: "telegram",
+      startedAt: 1700000004999, // 1ms before boot
+    });
+
+    // Live turn from THIS process (startedAt === processStartedAt)
+    await writeActiveTurn(stateDir, {
+      sessionId: "sess-live-1",
+      sessionKey: "telegram:333",
+      channel: "telegram",
+      startedAt: 1700000005000, // exactly at boot
+    });
+
+    // Live turn from THIS process (startedAt > processStartedAt)
+    await writeActiveTurn(stateDir, {
+      sessionId: "sess-live-2",
+      sessionKey: "telegram:444",
+      channel: "telegram",
+      startedAt: 1700000006000, // after boot
+    });
+
+    const allTurns = await readStaleActiveTurns(stateDir);
+    expect(allTurns).toHaveLength(4);
+
+    // Apply the same filter that server-startup.ts uses
+    const staleTurns = allTurns.filter((t) => t.startedAt < processStartedAt);
+    const liveTurns = allTurns.filter((t) => t.startedAt >= processStartedAt);
+
+    expect(staleTurns).toHaveLength(2);
+    expect(staleTurns.map((t) => t.sessionId).toSorted()).toEqual(["sess-stale-1", "sess-stale-2"]);
+
+    expect(liveTurns).toHaveLength(2);
+    expect(liveTurns.map((t) => t.sessionId).toSorted()).toEqual(["sess-live-1", "sess-live-2"]);
+  });
+
+  it("processStartedAt guard: all turns before boot are stale (no false positives)", async () => {
+    const processStartedAt = Date.now();
+
+    // Write turns with timestamps in the past
+    for (let i = 0; i < 5; i++) {
+      await writeActiveTurn(stateDir, {
+        sessionId: `sess-old-${i}`,
+        sessionKey: `telegram:${i}`,
+        channel: "telegram",
+        startedAt: processStartedAt - 60_000 + i * 1000, // 60s to 56s ago
+      });
+    }
+
+    const allTurns = await readStaleActiveTurns(stateDir);
+    const staleTurns = allTurns.filter((t) => t.startedAt < processStartedAt);
+
+    expect(staleTurns).toHaveLength(5);
+    // None should be skipped — all are from "previous process"
+    expect(allTurns.filter((t) => t.startedAt >= processStartedAt)).toHaveLength(0);
+  });
+
+  it("processStartedAt guard: all turns after boot are live (no false negatives)", async () => {
+    const processStartedAt = Date.now() - 1000; // boot 1s ago
+
+    // Write turns with timestamps after boot (simulating new turns from this process)
+    for (let i = 0; i < 3; i++) {
+      await writeActiveTurn(stateDir, {
+        sessionId: `sess-new-${i}`,
+        sessionKey: `telegram:${i}`,
+        channel: "telegram",
+        startedAt: processStartedAt + 100 + i * 100, // 100ms to 300ms after boot
+      });
+    }
+
+    const allTurns = await readStaleActiveTurns(stateDir);
+    const liveTurns = allTurns.filter((t) => t.startedAt >= processStartedAt);
+
+    expect(liveTurns).toHaveLength(3);
+    // None should be recovered — all are from "this process"
+    expect(allTurns.filter((t) => t.startedAt < processStartedAt)).toHaveLength(0);
+  });
 });
