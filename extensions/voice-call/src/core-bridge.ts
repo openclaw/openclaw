@@ -42,6 +42,7 @@ type CoreAgentDeps = {
     lane?: string;
     extraSystemPrompt?: string;
     agentDir?: string;
+    agentId?: string;
   }) => Promise<{
     payloads?: Array<{ text?: string; isError?: boolean }>;
     meta?: { aborted?: boolean };
