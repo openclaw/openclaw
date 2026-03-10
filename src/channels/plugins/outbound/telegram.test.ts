@@ -139,4 +139,65 @@ describe("telegramOutbound", () => {
     expect(secondCallOpts?.buttons).toBeUndefined();
     expect(result).toEqual({ channel: "telegram", messageId: "tg-2", chatId: "123" });
   });
+
+  it("forwards audioAsVoice as asVoice to send for voice bubble delivery", async () => {
+    const sendTelegram = vi.fn().mockResolvedValue({ messageId: "tg-voice-1", chatId: "123" });
+    const sendPayload = telegramOutbound.sendPayload;
+    expect(sendPayload).toBeDefined();
+
+    const payload: ReplyPayload = {
+      text: "voice caption",
+      mediaUrl: "https://example.com/voice.opus",
+      audioAsVoice: true,
+    };
+
+    await sendPayload!({
+      cfg: {},
+      to: "123",
+      text: "",
+      payload,
+      accountId: "default",
+      deps: { sendTelegram },
+    });
+
+    expect(sendTelegram).toHaveBeenCalledTimes(1);
+    expect(sendTelegram).toHaveBeenCalledWith(
+      "123",
+      "voice caption",
+      expect.objectContaining({
+        asVoice: true,
+        mediaUrl: "https://example.com/voice.opus",
+      }),
+    );
+  });
+
+  it("does not set asVoice when audioAsVoice is absent", async () => {
+    const sendTelegram = vi.fn().mockResolvedValue({ messageId: "tg-audio-1", chatId: "123" });
+    const sendPayload = telegramOutbound.sendPayload;
+    expect(sendPayload).toBeDefined();
+
+    const payload: ReplyPayload = {
+      text: "audio caption",
+      mediaUrl: "https://example.com/audio.mp3",
+    };
+
+    await sendPayload!({
+      cfg: {},
+      to: "123",
+      text: "",
+      payload,
+      accountId: "default",
+      deps: { sendTelegram },
+    });
+
+    expect(sendTelegram).toHaveBeenCalledTimes(1);
+    expect(sendTelegram).toHaveBeenCalledWith(
+      "123",
+      "audio caption",
+      expect.objectContaining({
+        asVoice: false,
+        mediaUrl: "https://example.com/audio.mp3",
+      }),
+    );
+  });
 });
