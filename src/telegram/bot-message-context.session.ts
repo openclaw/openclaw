@@ -174,9 +174,7 @@ export async function buildTelegramInboundContextPayload(params: {
     botUsername: primaryCtx.me?.username?.toLowerCase(),
   });
   const historyEntries =
-    isGroup && historyKey && historyLimit > 0
-      ? (groupHistories.get(historyKey) ?? [])
-      : [];
+    isGroup && historyKey && historyLimit > 0 ? (groupHistories.get(historyKey) ?? []) : [];
   const inboundHistory =
     historyEntries.length > 0
       ? historyEntries.map((entry) => ({
@@ -250,10 +248,7 @@ export async function buildTelegramInboundContextPayload(params: {
     MediaUrl: contextMedia.length > 0 ? contextMedia[0]?.path : undefined,
     MediaPaths: contextMedia.length > 0 ? contextMedia.map((m) => m.path) : undefined,
     MediaUrls: contextMedia.length > 0 ? contextMedia.map((m) => m.path) : undefined,
-    MediaTypes:
-      contextMedia.length > 0
-        ? (contextMedia.map((m) => m.contentType).filter(Boolean) as string[])
-        : undefined,
+    MediaTypes: contextMedia.length > 0 ? contextMedia.map((m) => m.contentType) : undefined,
     Sticker: allMedia[0]?.stickerMetadata,
     StickerMediaIncluded: allMedia[0]?.stickerMetadata ? !stickerCacheHit : undefined,
     ...(locationData ? toLocationContext(locationData) : undefined),

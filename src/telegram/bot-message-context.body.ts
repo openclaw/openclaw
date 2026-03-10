@@ -182,10 +182,7 @@ export async function resolveTelegramInboundBody(params: {
       const { transcribeFirstAudio } = await import("../media-understanding/audio-preflight.js");
       const tempCtx: MsgContext = {
         MediaPaths: allMedia.length > 0 ? allMedia.map((m) => m.path) : undefined,
-        MediaTypes:
-          allMedia.length > 0
-            ? (allMedia.map((m) => m.contentType).filter(Boolean) as string[])
-            : undefined,
+        MediaTypes: allMedia.length > 0 ? allMedia.map((m) => m.contentType) : undefined,
       };
       preflightTranscript = await transcribeFirstAudio({
         ctx: tempCtx,
@@ -265,9 +262,7 @@ export async function resolveTelegramInboundBody(params: {
             timestamp: msg.date ? msg.date * 1000 : undefined,
             messageId: typeof msg.message_id === "number" ? String(msg.message_id) : undefined,
             mediaPaths: allMedia.length > 0 ? allMedia.map((m) => m.path) : undefined,
-            mediaTypes: allMedia.length > 0
-              ? (allMedia.map((m) => m.contentType).filter(Boolean) as string[])
-              : undefined,
+            mediaTypes: allMedia.length > 0 ? allMedia.map((m) => m.contentType) : undefined,
           }
         : null,
     });
