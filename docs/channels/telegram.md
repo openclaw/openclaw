@@ -155,6 +155,7 @@ curl "https://api.telegram.org/bot<bot_token>/getUpdates"
 
     `groupAllowFrom` is used for group sender filtering. If not set, Telegram falls back to `allowFrom`.
     `groupAllowFrom` entries should be numeric Telegram user IDs (`telegram:` / `tg:` prefixes are normalized).
+    Do not put Telegram group or supergroup chat IDs in `groupAllowFrom`. Negative chat IDs belong under `channels.telegram.groups`.
     Non-numeric entries are ignored for sender authorization.
     Security boundary (`2026.2.25+`): group sender auth does **not** inherit DM pairing-store approvals.
     Pairing stays DM-only. For groups, set `groupAllowFrom` or per-group/per-topic `allowFrom`.
@@ -176,6 +177,31 @@ curl "https://api.telegram.org/bot<bot_token>/getUpdates"
   },
 }
 ```
+
+    Example: allow only specific users inside one specific group:
+
+```json5
+{
+  channels: {
+    telegram: {
+      groups: {
+        "-1001234567890": {
+          requireMention: true,
+          allowFrom: ["8734062810", "745123456"],
+        },
+      },
+    },
+  },
+}
+```
+
+    <Warning>
+      Common mistake: `groupAllowFrom` is not a Telegram group allowlist.
+
+      - Put negative Telegram group or supergroup chat IDs like `-1001234567890` under `channels.telegram.groups`.
+      - Put Telegram user IDs like `8734062810` under `groupAllowFrom` when you want to limit which people inside an allowed group can trigger the bot.
+      - Use `groupAllowFrom: ["*"]` only when you want any member of an allowed group to be able to talk to the bot.
+    </Warning>
 
   </Tab>
 
