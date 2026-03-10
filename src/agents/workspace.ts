@@ -534,6 +534,14 @@ export async function loadWorkspaceBootstrapFiles(dir: string): Promise<Workspac
 
   entries.push(...(await resolveMemoryBootstrapEntries(resolvedDir)));
 
+  // Check onboarding state once so we can suppress missing BOOTSTRAP.md noise.
+  let onboardingCompleted = false;
+  try {
+    onboardingCompleted = await isWorkspaceOnboardingCompleted(dir);
+  } catch {
+    // If state cannot be read, default to showing BOOTSTRAP.md as before.
+  }
+
   const result: WorkspaceBootstrapFile[] = [];
   for (const entry of entries) {
     const loaded = await readWorkspaceFileWithGuards({
@@ -547,6 +555,10 @@ export async function loadWorkspaceBootstrapFiles(dir: string): Promise<Workspac
         content: loaded.content,
         missing: false,
       });
+    } else if (entry.name === DEFAULT_BOOTSTRAP_FILENAME && onboardingCompleted) {
+      // BOOTSTRAP.md is a one-time file deleted after onboarding; don't report
+      // it as missing once onboarding is complete.
+      continue;
     } else {
       result.push({ name: entry.name, path: entry.filePath, missing: true });
     }

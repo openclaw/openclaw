@@ -221,6 +221,28 @@ describe("loadWorkspaceBootstrapFiles", () => {
       await fs.rm(rootDir, { recursive: true, force: true });
     }
   });
+
+  it("omits missing BOOTSTRAP.md when onboarding is complete", async () => {
+    const tempDir = await makeTempWorkspace("openclaw-workspace-");
+    await writeWorkspaceFile({ dir: tempDir, name: DEFAULT_AGENTS_FILENAME, content: "agents" });
+    await writeWorkspaceFile({ dir: tempDir, name: DEFAULT_IDENTITY_FILENAME, content: "custom" });
+    await writeWorkspaceFile({ dir: tempDir, name: DEFAULT_USER_FILENAME, content: "custom" });
+    await ensureAgentWorkspace({ dir: tempDir, ensureBootstrapFiles: true });
+
+    const files = await loadWorkspaceBootstrapFiles(tempDir);
+    const bootstrap = files.find((file) => file.name === DEFAULT_BOOTSTRAP_FILENAME);
+    expect(bootstrap).toBeUndefined();
+  });
+
+  it("includes BOOTSTRAP.md when onboarding has not completed", async () => {
+    const tempDir = await makeTempWorkspace("openclaw-workspace-");
+    await ensureAgentWorkspace({ dir: tempDir, ensureBootstrapFiles: true });
+
+    const files = await loadWorkspaceBootstrapFiles(tempDir);
+    const bootstrap = files.find((file) => file.name === DEFAULT_BOOTSTRAP_FILENAME);
+    expect(bootstrap).toBeDefined();
+    expect(bootstrap?.missing).toBe(false);
+  });
 });
 
 describe("filterBootstrapFilesForSession", () => {
