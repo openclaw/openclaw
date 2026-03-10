@@ -853,6 +853,7 @@ function isStreamingProviderServerError(raw: string): boolean {
   if (value.includes('"type":"server_error"') || value.includes('"code":"server_error"')) {
     return true;
   }
+  // Some providers surface the type as flattened text instead of a structured payload.
   return /\bserver_error\b/.test(value);
 }
 
