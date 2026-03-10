@@ -168,6 +168,18 @@ export function isSafeToRetrySendError(err: unknown): boolean {
     if (code && PRE_CONNECT_ERROR_CODES.has(code)) {
       return true;
     }
+    const message = formatErrorMessage(candidate).trim();
+    // Telegram 429 rate-limit: the server explicitly rejected the request before
+    // delivering it; retry_after signals it is safe to retry after the delay.
+    if (/^429\b/.test(message)) {
+      return true;
+    }
+    // grammY envelope error: "Network request for '…' failed after N attempts"
+    // All internal grammY retries failed at the network layer — the message was
+    // never delivered, so retrying from our side is safe.
+    if (GRAMMY_NETWORK_REQUEST_FAILED_AFTER_RE.test(message.toLowerCase())) {
+      return true;
+    }
   }
   return false;
 }
