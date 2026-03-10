@@ -40,11 +40,19 @@ function withInProcessQueue(filePath: string, fn: () => Promise<void>): Promise<
   inProcessOpQueue.set(filePath, next);
   // Clean up the map entry once the chain settles to avoid unbounded growth
   // for paths that are written once and never again.
-  void next.finally(() => {
-    if (inProcessOpQueue.get(filePath) === next) {
-      inProcessOpQueue.delete(filePath);
-    }
-  });
+  // Note: next.finally() returns a new promise that mirrors next's rejection.
+  // Without a .catch(), Node 22 would emit an unhandled-rejection event (which
+  // can terminate the gateway) if `next` rejects, e.g. due to a lock timeout
+  // or an atomic-write error.  The rejection is already surfaced to the caller
+  // via the `next` promise that this function returns, so suppressing it on
+  // the cleanup wrapper is correct and safe.
+  next
+    .finally(() => {
+      if (inProcessOpQueue.get(filePath) === next) {
+        inProcessOpQueue.delete(filePath);
+      }
+    })
+    .catch(() => {});
   return next;
 }
 

@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import fsp from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -502,5 +503,83 @@ describe("pending-inbound-store", () => {
     expect(liveTurns).toHaveLength(3);
     // None should be recovered — all are from "this process"
     expect(allTurns.filter((t) => t.startedAt < processStartedAt)).toHaveLength(0);
+  });
+
+  // --- File permission tests (Aisle Low #3) ---
+
+  it("pending-inbound.json is written with mode 0o600", async () => {
+    await writePendingInbound(stateDir, {
+      channel: "telegram",
+      id: "perm-test-1",
+      payload: { text: "secret" },
+      capturedAt: Date.now(),
+    });
+
+    const filePath = path.join(stateDir, "pending-inbound.json");
+    const stat = await fsp.stat(filePath);
+    // Mask to the low 9 permission bits (strip file type bits)
+    const mode = stat.mode & 0o777;
+    expect(mode).toBe(0o600);
+  });
+
+  it("state dir is created with mode 0o700", async () => {
+    // Use a sub-directory that does not yet exist
+    const subDir = path.join(stateDir, "sub-state-dir");
+
+    await writePendingInbound(subDir, {
+      channel: "telegram",
+      id: "perm-test-2",
+      payload: { text: "secret" },
+      capturedAt: Date.now(),
+    });
+
+    const stat = await fsp.stat(subDir);
+    const mode = stat.mode & 0o777;
+    expect(mode).toBe(0o700);
+  });
+
+  // --- Unhandled rejection guard (P1 inline comment #2912274100) ---
+  //
+  // withInProcessQueue attaches a .finally() cleanup to the internal promise
+  // chain and must suppress the resulting mirror-rejection with .catch(() => {})
+  // to prevent Node.js from emitting an unhandled-rejection event when the
+  // queued operation fails.  This test verifies that a failing write:
+  //   a) rejects the returned promise (caller sees the error), AND
+  //   b) does not leave a dangling unhandled-rejection on the cleanup promise.
+
+  it("failed write rejects the returned promise but does not leak an unhandled rejection", async () => {
+    // Simulate a write failure by making the state dir a file (not a directory),
+    // which causes mkdir/writeFile inside writeJsonAtomic to throw ENOTDIR/EEXIST.
+    const fakeStateDir = path.join(stateDir, "not-a-dir.txt");
+    await fsp.writeFile(fakeStateDir, "I am a file, not a directory", "utf8");
+
+    const unhandledRejections: unknown[] = [];
+    const onUnhandled = (reason: unknown) => {
+      unhandledRejections.push(reason);
+    };
+    process.on("unhandledRejection", onUnhandled);
+
+    let caughtError: unknown;
+    try {
+      await writePendingInbound(fakeStateDir, {
+        channel: "telegram",
+        id: "rej-test-1",
+        payload: {},
+        capturedAt: Date.now(),
+      });
+    } catch (err) {
+      caughtError = err;
+    } finally {
+      process.off("unhandledRejection", onUnhandled);
+    }
+
+    // Caller must see the error
+    expect(caughtError).toBeDefined();
+
+    // Flush the microtask queue so any dangling rejections would fire
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    // No unhandled rejections should have escaped
+    expect(unhandledRejections).toHaveLength(0);
   });
 });

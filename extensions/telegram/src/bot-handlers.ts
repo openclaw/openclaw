@@ -1679,6 +1679,24 @@ export const registerTelegramHandlers = ({
         }
       }
 
+      // For DMs that carry only text (no media), enforceTelegramDmAccess did
+      // not run above (it is scoped to media messages).  Apply an equivalent
+      // inline auth gate here so that unauthorized plain-text DM senders are
+      // filtered before we reach the drain guard — they must not be persisted
+      // to the pending-inbound store.  This mirrors the check that
+      // buildTelegramMessageContext performs in the normal (non-drain) path.
+      if (!event.isGroup && !hasInboundMedia(event.msg) && !hasReplyTargetMedia(event.msg)) {
+        if (dmPolicy === "disabled") {
+          return;
+        }
+        if (
+          dmPolicy !== "open" &&
+          !isAllowlistAuthorized(effectiveDmAllow, event.senderId, event.senderUsername)
+        ) {
+          return;
+        }
+      }
+
       // Drain guard: only persist messages that passed the auth checks above.
       // Moved after authorization context, group policy, and DM access checks
       // so that unauthorized messages are never written to the pending store.
