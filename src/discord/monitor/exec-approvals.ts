@@ -23,6 +23,7 @@ import type {
   ExecApprovalRequest,
   ExecApprovalResolved,
 } from "../../infra/exec-approvals.js";
+import { loadGatewayTlsRuntime } from "../../infra/tls/gateway.js";
 import { logDebug, logError } from "../../logger.js";
 import { normalizeAccountId, resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import type { RuntimeEnv } from "../../runtime.js";
@@ -424,11 +425,18 @@ export class DiscordExecApprovalHandler {
       urlOverride: gatewayUrlOverrideSource ? gatewayUrl : undefined,
       urlOverrideSource: gatewayUrlOverrideSource,
     });
+    const localTlsRuntime =
+      this.opts.cfg.gateway?.tls?.enabled === true &&
+      urlSource === "local loopback" &&
+      gatewayUrl.startsWith("wss://")
+        ? await loadGatewayTlsRuntime(this.opts.cfg.gateway?.tls)
+        : undefined;
 
     this.gatewayClient = new GatewayClient({
       url: gatewayUrl,
       token: auth.token,
       password: auth.password,
+      tlsFingerprint: localTlsRuntime?.enabled ? localTlsRuntime.fingerprintSha256 : undefined,
       clientName: GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT,
       clientDisplayName: "Discord Exec Approvals",
       mode: GATEWAY_CLIENT_MODES.BACKEND,
