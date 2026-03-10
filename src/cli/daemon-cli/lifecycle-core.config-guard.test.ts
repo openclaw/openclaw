@@ -246,6 +246,33 @@ describe("runServiceStart config pre-flight (#35862)", () => {
     expect(payload.hints).toEqual(expect.arrayContaining(["openclaw gateway install"]));
   });
 
+  it("treats restart throw as started when service becomes loaded", async () => {
+    readConfigFileSnapshotMock.mockResolvedValue({
+      exists: true,
+      valid: true,
+      config: {},
+      issues: [],
+    });
+    service.label = "LaunchAgent";
+    service.isLoaded.mockResolvedValueOnce(false).mockResolvedValueOnce(true);
+    service.restart.mockRejectedValue(new Error("launchctl kickstart failed"));
+
+    await runServiceStart({
+      serviceNoun: "Gateway",
+      service,
+      renderStartHints: () => ["openclaw gateway install"],
+      opts: { json: true },
+    });
+
+    const jsonLine = runtimeLogs.find((line) => line.trim().startsWith("{"));
+    const payload = JSON.parse(jsonLine ?? "{}") as {
+      result?: string;
+      service?: { loaded?: boolean };
+    };
+    expect(payload.result).toBe("started");
+    expect(payload.service?.loaded).toBe(true);
+  });
+
   it("does not attempt recovery restart for non-launch-agent services", async () => {
     readConfigFileSnapshotMock.mockResolvedValue({
       exists: true,

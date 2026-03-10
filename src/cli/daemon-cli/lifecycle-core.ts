@@ -235,6 +235,23 @@ export async function runServiceStart(params: {
     try {
       await params.service.restart({ env: process.env, stdout });
     } catch {
+      // restart can partially succeed (e.g., bootstrap succeeded but kickstart failed).
+      // Re-check loaded state before falling back to not-loaded guidance.
+      let loadedAfterError = false;
+      try {
+        loadedAfterError = await params.service.isLoaded({ env: process.env });
+      } catch {
+        loadedAfterError = false;
+      }
+      if (loadedAfterError) {
+        emit({
+          ok: true,
+          result: "started",
+          service: buildDaemonServiceSnapshot(params.service, true),
+        });
+        return;
+      }
+
       await handleServiceNotLoaded({
         serviceNoun: params.serviceNoun,
         service: params.service,
