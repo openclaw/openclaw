@@ -53,15 +53,18 @@ export function createSiliconFlowThinkingWrapper(baseStreamFn: StreamFn | undefi
     const originalOnPayload = options?.onPayload;
     return underlying(model, context, {
       ...options,
-      onPayload: (payload, payloadModel) => {
+      onPayload: ((payload: unknown, payloadModel?: unknown) => {
         if (payload && typeof payload === "object") {
           const payloadObj = payload as Record<string, unknown>;
           if (payloadObj.thinking === "off") {
             payloadObj.thinking = null;
           }
         }
-        return originalOnPayload?.(payload, payloadModel);
-      },
+        return (originalOnPayload as ((p: unknown, m?: unknown) => void) | undefined)?.(
+          payload,
+          payloadModel ?? model,
+        );
+      }) as (payload: unknown) => void,
     });
   };
 }
@@ -89,7 +92,7 @@ export function createMoonshotThinkingWrapper(
     const originalOnPayload = options?.onPayload;
     return underlying(model, context, {
       ...options,
-      onPayload: (payload, payloadModel) => {
+      onPayload: ((payload: unknown, payloadModel?: unknown) => {
         if (payload && typeof payload === "object") {
           const payloadObj = payload as Record<string, unknown>;
           let effectiveThinkingType = normalizeMoonshotThinkingType(payloadObj.thinking);
@@ -106,8 +109,11 @@ export function createMoonshotThinkingWrapper(
             payloadObj.tool_choice = "auto";
           }
         }
-        return originalOnPayload?.(payload, payloadModel);
-      },
+        return (originalOnPayload as ((p: unknown, m?: unknown) => void) | undefined)?.(
+          payload,
+          payloadModel ?? model,
+        );
+      }) as (payload: unknown) => void,
     });
   };
 }

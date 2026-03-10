@@ -149,7 +149,7 @@ export function createAnthropicPayloadLogger(params: {
       };
       return streamFn(model, context, {
         ...options,
-        onPayload: nextOnPayload,
+        onPayload: nextOnPayload as (payload: unknown) => void,
       });
     };
     return wrapped;

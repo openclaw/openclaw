@@ -24,5 +24,5 @@
     }
   },
   "include": ["src/**/*", "ui/**/*", "extensions/**/*"],
-  "exclude": ["node_modules", "dist"]
+  "exclude": ["node_modules", "dist", "extensions/diffs", "extensions/tlon"]
 }

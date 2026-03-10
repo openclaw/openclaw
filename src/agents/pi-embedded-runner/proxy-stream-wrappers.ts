@@ -73,7 +73,7 @@ export function createOpenRouterSystemCacheWrapper(baseStreamFn: StreamFn | unde
     const originalOnPayload = options?.onPayload;
     return underlying(model, context, {
       ...options,
-      onPayload: (payload, payloadModel) => {
+      onPayload: ((payload: unknown, payloadModel?: unknown) => {
         const messages = (payload as Record<string, unknown>)?.messages;
         if (Array.isArray(messages)) {
           for (const msg of messages as Array<{ role?: string; content?: unknown }>) {
@@ -92,8 +92,11 @@ export function createOpenRouterSystemCacheWrapper(baseStreamFn: StreamFn | unde
             }
           }
         }
-        return originalOnPayload?.(payload, payloadModel);
-      },
+        return (originalOnPayload as ((p: unknown, m?: unknown) => void) | undefined)?.(
+          payload,
+          payloadModel ?? model,
+        );
+      }) as (payload: unknown) => void,
     });
   };
 }
@@ -111,10 +114,13 @@ export function createOpenRouterWrapper(
         ...OPENROUTER_APP_HEADERS,
         ...options?.headers,
       },
-      onPayload: (payload, payloadModel) => {
+      onPayload: ((payload: unknown, payloadModel?: unknown) => {
         normalizeProxyReasoningPayload(payload, thinkingLevel);
-        return onPayload?.(payload, payloadModel);
-      },
+        return (onPayload as ((p: unknown, m?: unknown) => void) | undefined)?.(
+          payload,
+          payloadModel ?? model,
+        );
+      }) as (payload: unknown) => void,
     });
   };
 }
@@ -136,10 +142,13 @@ export function createKilocodeWrapper(
         ...options?.headers,
         ...resolveKilocodeAppHeaders(),
       },
-      onPayload: (payload, payloadModel) => {
+      onPayload: ((payload: unknown, payloadModel?: unknown) => {
         normalizeProxyReasoningPayload(payload, thinkingLevel);
-        return onPayload?.(payload, payloadModel);
-      },
+        return (onPayload as ((p: unknown, m?: unknown) => void) | undefined)?.(
+          payload,
+          payloadModel ?? model,
+        );
+      }) as (payload: unknown) => void,
     });
   };
 }

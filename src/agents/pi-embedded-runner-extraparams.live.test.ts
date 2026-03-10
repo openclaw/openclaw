@@ -129,12 +129,12 @@ describeGeminiLive("pi embedded extra params (gemini live)", () => {
         apiKey: params.apiKey,
         reasoning: "high",
         maxTokens: 64,
-        onPayload: (payload, streamModel) => {
+        onPayload: ((payload: unknown, streamModel?: unknown) => {
           params.onPayload?.(
             payload as Record<string, unknown>,
             streamModel as Model<"google-generative-ai">,
           );
-        },
+        }) as (payload: unknown) => void,
       },
     );
 
