@@ -74,6 +74,14 @@ describe("sanitizeUserFacingText", () => {
     );
   });
 
+  it("sanitizes non-_error raw API payloads when errorContext is true", () => {
+    const raw =
+      '{"error":{"code":503,"message":"The model is overloaded. Please try later","status":"UNAVAILABLE"}}';
+    expect(sanitizeUserFacingText(raw, { errorContext: true })).toBe(
+      "LLM error: The model is overloaded. Please try later",
+    );
+  });
+
   it("sanitizes raw API error payloads even without explicit errorContext", () => {
     const raw =
       '{"type":"error","error":{"type":"server_error","code":"server_error","message":"An error occurred while processing your request."},"sequence_number":2}';

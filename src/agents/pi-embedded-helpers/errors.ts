@@ -782,7 +782,7 @@ export function sanitizeUserFacingText(text: string, opts?: { errorContext?: boo
       return BILLING_ERROR_USER_MESSAGE;
     }
 
-    if (isLikelyHttpErrorText(trimmed)) {
+    if (isLikelyHttpErrorText(trimmed) || isRawApiErrorPayload(trimmed)) {
       return formatRawAssistantErrorForUi(trimmed);
     }
 
