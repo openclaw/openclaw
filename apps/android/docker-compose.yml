@@ -1,0 +1,80 @@
+# Whisper.cpp + Fish Speech TTS for OpenClaw Android
+# Run on ub22 with GPU support: docker compose up -d
+#
+# Setup steps:
+# 1. Replace XXX.XUANYUAN.RUN with your actual 轩辕专属域名
+# 2. Download models: ./download-models.sh
+# 3. Deploy: docker compose up -d
+
+name: openclaw-speech
+
+services:
+  # Whisper.cpp ASR server - converts speech to text
+  whisper-asr:
+    image: XXX.xuanyuan.run/ghcr.io/ggerganov/whisper.cpp:server
+    platform: linux/amd64
+    restart: unless-stopped
+    ports:
+      - "10801:8080"
+    volumes:
+      - ./whisper-models:/models
+      - /home/an/whisper.cpp/models:/source-models:ro
+    environment:
+      - WHISPER_MODEL=/models/ggml-large-v3-turbo-q5_0.bin
+      - WHISPER_LANGUAGE=auto
+    command: >
+      --model /models/ggml-large-v3-turbo-q5_0.bin
+      --host 0.0.0.0
+      --port 8080
+      --language auto
+      --vad
+      --vad-model /models/silero_vad.onnx
+      --vad-threshold 0.5
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+  # Fish Speech TTS server - converts text to speech
+  fish-speech:
+    image: XXX.xuanyuan.run/docker.io/pytorch/pytorch:2.5.0-cuda12.4-cudnn9-runtime
+    restart: unless-stopped
+    ports:
+      - "10802:8080"
+    volumes:
+      - /home/an/fish-speech:/app
+      - ./fish-speech-checkpoints:/app/checkpoints
+    environment:
+      - COMPILE=0
+      - PYTHONPATH=/app
+    working_dir: /app
+    command: >
+      sh -c "pip install -e . &&
+      python -m tools.api_server
+      --listen 0.0.0.0
+      --port 8080
+      --llama-checkpoint-path checkpoints/openaudio-s1-mini
+      --decoder-checkpoint-path checkpoints/openaudio-s1-mini/codec.pth
+      --decoder-config-name modded_dac_vq"
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 120s

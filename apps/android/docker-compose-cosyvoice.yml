@@ -1,0 +1,48 @@
+# CosyVoice TTS for OpenClaw Android
+# Run on ub22 with GPU support: docker compose -f docker-compose-cosyvoice.yml up -d
+#
+# Fix for webrtcsockets issue: Install dependencies in stages
+
+name: cosyvoice
+
+services:
+  cosyvoice:
+    image: pytorch/pytorch:2.5.0-cuda12.4-cudnn9-runtime
+    restart: unless-stopped
+    ports:
+      - "10803:50000"
+    volumes:
+      - /home/an/CosyVoice:/opt/CosyVoice
+      - cosyvoice-models:/root/.cache/modelscope
+    environment:
+      - PYTHONPATH=/opt/CosyVoice:/opt/CosyVoice/third_party/Matcha-TTS
+      - PIP_INDEX_URL=https://mirrors.aliyun.com/pypi/simple/
+    working_dir: /opt/CosyVoice
+    command: >
+      bash -c '
+      # Step 1: Install basic dependencies
+      pip install fastapi uvicorn run:10
+      && pip install conformer omegaconf hydra-core rich soundfile librosa inflect gdown weiot
+      && pip install diffusers transformers torch torchaudio
+      && pip install HyperPyYAML matplotlib networkx numpy protobuf pyarrow pydantic pyworld tensorboard
+      && pip install x-transformers wetext wget
+      && pip install onnx onnxruntime-gpu==1.18.0 --extra-index-url https://aiinfra.pkgs.visualstudio.com/PublicPackages/_packaging/onnxruntime-cuda-12/pypi/simple/
+      || echo "onnxruntime-gpu install failed, trying alternative..."
+      && pip install onnxruntime-gpu==1.18.0 --extra-index-url https://pypi.tuna.tsinghua.edu.cn/simple/ || true
+      '
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:50000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 120s
+
+volumes:
+  cosyvoice-models:

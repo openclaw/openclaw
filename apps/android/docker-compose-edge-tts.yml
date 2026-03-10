@@ -1,0 +1,18 @@
+# Edge TTS service for OpenClaw Android
+# Simple, fast TTS using Microsoft Edge's neural voices
+
+name: openclaw-edge-tts
+
+services:
+  edge-tts:
+    build: ./edge-tts
+    image: edge-tts:latest
+    restart: unless-stopped
+    ports:
+      - "10802:10802"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:10802/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 10s

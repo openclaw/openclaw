@@ -19,9 +19,9 @@ function isValidCredential(value: unknown): boolean {
   if (typeof value === "string") {
     return value.trim().length > 0;
   }
-  // Handle SecretInput objects (for env/secret refs)
+  // Handle SecretInput objects (for env/secret refs) // pragma: allowlist secret
   if (value && typeof value === "object" && "secretRef" in value) {
-    return true; // SecretInput is considered valid
+    return true; // SecretInput is considered valid // pragma: allowlist secret
   }
   return false;
 }
