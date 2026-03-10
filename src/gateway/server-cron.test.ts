@@ -267,6 +267,85 @@ describe("buildGatewayCronService", () => {
     }
   });
 
+  it("continues scheduled backups when backup parent mkdir races with another run", async () => {
+    const tmpDir = path.join(os.tmpdir(), `server-cron-backup-race-${Date.now()}`);
+    const homeDir = path.join(tmpDir, "home");
+    await fs.mkdir(homeDir, { recursive: true });
+    vi.stubEnv("HOME", homeDir);
+    vi.stubEnv("OPENCLAW_HOME", homeDir);
+    const cfg = {
+      session: {
+        mainKey: "main",
+      },
+      cron: {
+        store: path.join(tmpDir, "cron.json"),
+      },
+    } as OpenClawConfig;
+    loadConfigMock.mockReturnValue(cfg);
+
+    const racedDir = path.join(homeDir, "Backups", "daily");
+    const originalMkdir = fs.mkdir.bind(fs);
+    let injectedRace = false;
+    const mkdirSpy = vi
+      .spyOn(fs, "mkdir")
+      .mockImplementation(async (...args: Parameters<typeof fs.mkdir>) => {
+        const [target, options] = args;
+        const resolvedTarget = path.resolve(String(target));
+        if (!injectedRace && resolvedTarget === racedDir && options === undefined) {
+          injectedRace = true;
+          await originalMkdir(racedDir, { recursive: true });
+          const err = new Error(
+            `EEXIST: file already exists, mkdir '${racedDir}'`,
+          ) as NodeJS.ErrnoException;
+          err.code = "EEXIST";
+          throw err;
+        }
+        return originalMkdir(target, options);
+      });
+
+    const state = buildGatewayCronService({
+      cfg,
+      deps,
+      broadcast: () => {},
+    });
+    try {
+      const job = await state.cron.add({
+        name: "scheduled-backup-mkdir-race",
+        enabled: true,
+        schedule: { kind: "at", at: new Date(1).toISOString() },
+        sessionTarget: "main",
+        wakeMode: "now",
+        payload: {
+          kind: "backupCreate",
+          output: `daily${path.sep}archive.tar.gz`,
+          includeWorkspace: false,
+          verify: true,
+        },
+      });
+
+      await state.cron.run(job.id, "force");
+
+      expect(injectedRace).toBe(true);
+      expect(backupCreateCommandMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          log: expect.any(Function),
+          error: expect.any(Function),
+          exit: expect.any(Function),
+        }),
+        expect.objectContaining({
+          output: path.join(homeDir, "Backups", "daily", "archive.tar.gz"),
+          includeWorkspace: false,
+          verify: true,
+          signal: expect.any(AbortSignal),
+        }),
+      );
+      expect(enqueueSystemEventMock).not.toHaveBeenCalled();
+    } finally {
+      mkdirSpy.mockRestore();
+      state.cron.stop();
+    }
+  });
+
   it("rejects scheduled backup outputs outside the backups directory", async () => {
     const tmpDir = path.join(os.tmpdir(), `server-cron-backup-output-${Date.now()}`);
     const homeDir = path.join(tmpDir, "home");

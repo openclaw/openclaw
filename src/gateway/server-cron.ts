@@ -84,7 +84,15 @@ async function ensureCronBackupParentSafe(
       if (code !== "ENOENT") {
         throw err;
       }
-      await fs.mkdir(next);
+      try {
+        await fs.mkdir(next);
+      } catch (mkdirErr) {
+        const mkdirCode = (mkdirErr as NodeJS.ErrnoException | undefined)?.code;
+        // Another concurrent backup run may create the same segment first.
+        if (mkdirCode !== "EEXIST") {
+          throw mkdirErr;
+        }
+      }
       stat = await fs.lstat(next);
     }
     if (stat.isSymbolicLink()) {
