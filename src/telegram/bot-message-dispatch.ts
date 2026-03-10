@@ -190,19 +190,21 @@ export const dispatchTelegramMessage = async ({
   const draftReplyToMessageId =
     replyToMode !== "off" && typeof msg.message_id === "number" ? msg.message_id : undefined;
   const draftMinInitialChars = DRAFT_MIN_INITIAL_CHARS;
+  // Keep DM preview lanes on real message transport. Native draft previews still
+  // require a draft->message materialize hop, and that overlap keeps reintroducing
+  // a visible duplicate flash at finalize time.
+  const useMessagePreviewTransportForDm = threadSpec?.scope === "dm" && canStreamAnswerDraft;
   const mediaLocalRoots = getAgentScopedMediaLocalRoots(cfg, route.agentId);
   const archivedAnswerPreviews: ArchivedPreview[] = [];
   const archivedReasoningPreviewIds: number[] = [];
   const createDraftLane = (laneName: LaneName, enabled: boolean): DraftLaneState => {
-    const useMessagePreviewTransportForDmReasoning =
-      laneName === "reasoning" && threadSpec?.scope === "dm" && canStreamAnswerDraft;
     const stream = enabled
       ? createTelegramDraftStream({
           api: bot.api,
           chatId,
           maxChars: draftMaxChars,
           thread: threadSpec,
-          previewTransport: useMessagePreviewTransportForDmReasoning ? "message" : "auto",
+          previewTransport: useMessagePreviewTransportForDm ? "message" : "auto",
           replyToMessageId: draftReplyToMessageId,
           minInitialChars: draftMinInitialChars,
           renderText: renderDraftPreview,
@@ -431,6 +433,9 @@ export const dispatchTelegramMessage = async ({
   const deliveryBaseOptions = {
     chatId: String(chatId),
     accountId: route.accountId,
+    sessionKeyForInternalHooks: ctxPayload.SessionKey,
+    mirrorIsGroup: isGroup,
+    mirrorGroupId: isGroup ? String(chatId) : undefined,
     token: opts.token,
     runtime,
     bot,

@@ -1,6 +1,6 @@
 {
   "name": "openclaw",
-  "version": "2026.3.8",
+  "version": "2026.3.9",
   "description": "Multi-channel AI gateway with extensible messaging integrations",
   "keywords": [],
   "homepage": "https://github.com/openclaw/openclaw#readme",
@@ -224,10 +224,11 @@
     "android:test": "cd apps/android && ./gradlew :app:testDebugUnitTest",
     "android:test:integration": "OPENCLAW_LIVE_TEST=1 OPENCLAW_LIVE_ANDROID_NODE=1 vitest run --config vitest.live.config.ts src/gateway/android-node.capabilities.live.test.ts",
     "build": "pnpm canvas:a2ui:bundle && node scripts/tsdown-build.mjs && node scripts/copy-plugin-sdk-root-alias.mjs && pnpm build:plugin-sdk:dts && node --import tsx scripts/write-plugin-sdk-entry-dts.ts && node --import tsx scripts/canvas-a2ui-copy.ts && node --import tsx scripts/copy-hook-metadata.ts && node --import tsx scripts/copy-export-html-templates.ts && node --import tsx scripts/write-build-info.ts && node --import tsx scripts/write-cli-startup-metadata.ts && node --import tsx scripts/write-cli-compat.ts",
+    "build:docker": "node scripts/tsdown-build.mjs && node scripts/copy-plugin-sdk-root-alias.mjs && pnpm build:plugin-sdk:dts && node --import tsx scripts/write-plugin-sdk-entry-dts.ts && node --import tsx scripts/canvas-a2ui-copy.ts && node --import tsx scripts/copy-hook-metadata.ts && node --import tsx scripts/copy-export-html-templates.ts && node --import tsx scripts/write-build-info.ts && node --import tsx scripts/write-cli-startup-metadata.ts && node --import tsx scripts/write-cli-compat.ts",
     "build:plugin-sdk:dts": "tsc -p tsconfig.plugin-sdk.dts.json",
     "build:strict-smoke": "pnpm canvas:a2ui:bundle && node scripts/tsdown-build.mjs && node scripts/copy-plugin-sdk-root-alias.mjs && pnpm build:plugin-sdk:dts",
     "canvas:a2ui:bundle": "bash scripts/bundle-a2ui.sh",
-    "check": "pnpm format:check && pnpm tsgo && pnpm lint && pnpm lint:tmp:no-random-messaging && pnpm lint:tmp:channel-agnostic-boundaries && pnpm lint:tmp:no-raw-channel-fetch && pnpm lint:agent:ingress-owner && pnpm lint:plugins:no-register-http-handler && pnpm lint:plugins:no-monolithic-plugin-sdk-entry-imports && pnpm lint:webhook:no-low-level-body-read && pnpm lint:auth:no-pairing-store-group && pnpm lint:auth:pairing-account-scope && pnpm check:host-env-policy:swift",
+    "check": "pnpm check:host-env-policy:swift && pnpm format:check && pnpm tsgo && pnpm lint && pnpm lint:tmp:no-random-messaging && pnpm lint:tmp:channel-agnostic-boundaries && pnpm lint:tmp:no-raw-channel-fetch && pnpm lint:agent:ingress-owner && pnpm lint:plugins:no-register-http-handler && pnpm lint:plugins:no-monolithic-plugin-sdk-entry-imports && pnpm lint:webhook:no-low-level-body-read && pnpm lint:auth:no-pairing-store-group && pnpm lint:auth:pairing-account-scope",
     "check:docs": "pnpm format:docs:check && pnpm lint:docs && pnpm docs:check-links",
     "check:host-env-policy:swift": "node scripts/generate-host-env-security-policy-swift.mjs --check",
     "check:loc": "node --import tsx scripts/check-ts-max-loc.ts --max 500",
@@ -340,12 +341,13 @@
     "@grammyjs/runner": "^2.0.3",
     "@grammyjs/transformer-throttler": "^1.2.1",
     "@homebridge/ciao": "^1.3.5",
+    "@larksuiteoapi/node-sdk": "^1.59.0",
     "@line/bot-sdk": "^10.6.0",
     "@lydell/node-pty": "1.2.0-beta.3",
-    "@mariozechner/pi-agent-core": "0.55.3",
-    "@mariozechner/pi-ai": "0.55.3",
-    "@mariozechner/pi-coding-agent": "0.55.3",
-    "@mariozechner/pi-tui": "0.55.3",
+    "@mariozechner/pi-agent-core": "0.57.1",
+    "@mariozechner/pi-ai": "0.57.1",
+    "@mariozechner/pi-coding-agent": "0.57.1",
+    "@mariozechner/pi-tui": "0.57.1",
     "@mozilla/readability": "^0.6.0",
     "@sinclair/typebox": "0.34.48",
     "@slack/bolt": "^4.6.0",
@@ -378,8 +380,7 @@
     "qrcode-terminal": "^0.12.0",
     "sharp": "^0.34.5",
     "sqlite-vec": "0.1.7-alpha.2",
-    "strip-ansi": "^7.2.0",
-    "tar": "7.5.10",
+    "tar": "7.5.11",
     "tslog": "^4.10.2",
     "undici": "^7.22.0",
     "ws": "^8.19.0",
@@ -395,7 +396,7 @@
     "@types/node": "^25.3.5",
     "@types/qrcode-terminal": "^0.12.2",
     "@types/ws": "^8.18.1",
-    "@typescript/native-preview": "7.0.0-dev.20260307.1",
+    "@typescript/native-preview": "7.0.0-dev.20260308.1",
     "@vitest/coverage-v8": "^4.0.18",
     "jscpd": "4.0.8",
     "lit": "^3.3.2",
@@ -436,6 +437,7 @@
       "@lydell/node-pty",
       "@matrix-org/matrix-sdk-crypto-nodejs",
       "@napi-rs/canvas",
+      "@tloncorp/api",
       "@whiskeysockets/baileys",
       "authenticate-pam",
       "esbuild",
@@ -443,6 +445,13 @@
       "node-llama-cpp",
       "protobufjs",
       "sharp"
-    ]
+    ],
+    "packageExtensions": {
+      "@mariozechner/pi-coding-agent": {
+        "dependencies": {
+          "strip-ansi": "^7.2.0"
+        }
+      }
+    }
   }
 }
