@@ -416,6 +416,44 @@ describe("sendMediaFeishu msg_type routing", () => {
     const createCall = fileCreateMock.mock.calls[0][0];
     expect(createCall.data.file_name).toBe("报告—详情（2026）.md");
   });
+
+  it("strips control characters from filenames to prevent header injection", async () => {
+    await sendMediaFeishu({
+      cfg: {} as any,
+      to: "user:ou_target",
+      mediaBuffer: Buffer.from("doc"),
+      fileName: "bad\r\nname.pdf",
+    });
+
+    const createCall = fileCreateMock.mock.calls[0][0];
+    expect(createCall.data.file_name).toBe("badname.pdf");
+    expect(createCall.data.file_name).not.toContain("\r");
+    expect(createCall.data.file_name).not.toContain("\n");
+  });
+
+  it("strips control characters while preserving Chinese filename", async () => {
+    await sendMediaFeishu({
+      cfg: {} as any,
+      to: "user:ou_target",
+      mediaBuffer: Buffer.from("doc"),
+      fileName: "测试\x00文档.pdf",
+    });
+
+    const createCall = fileCreateMock.mock.calls[0][0];
+    expect(createCall.data.file_name).toBe("测试文档.pdf");
+  });
+
+  it("falls back to 'file' when filename is only control characters", async () => {
+    await sendMediaFeishu({
+      cfg: {} as any,
+      to: "user:ou_target",
+      mediaBuffer: Buffer.from("doc"),
+      fileName: "\x00\x01\x7F",
+    });
+
+    const createCall = fileCreateMock.mock.calls[0][0];
+    expect(createCall.data.file_name).toBe("file");
+  });
 });
 
 describe("sanitizeFileNameForUpload", () => {
