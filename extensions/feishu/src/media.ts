@@ -219,21 +219,17 @@ export async function uploadImageFeishu(params: {
 }
 
 /**
- * Encode a filename for safe use in Feishu multipart/form-data uploads.
- * Non-ASCII characters (Chinese, em-dash, full-width brackets, etc.) cause
- * the upload to silently fail when passed raw through the SDK's form-data
- * serialization.  RFC 5987 percent-encoding keeps headers 7-bit clean while
- * Feishu's server decodes and preserves the original display name.
+ * Pass through filename for Feishu uploads.
+ * Feishu API expects UTF-8 encoded filenames directly, not URL-encoded.
+ * Previous URL encoding caused Chinese filenames to display as %XX sequences.
+ *
+ * Note: If form-data library issues occur with non-ASCII characters,
+ * the fix should be applied at the SDK/form-data layer, not here.
+ *
+ * See: https://github.com/openclaw/openclaw/issues/40770
  */
 export function sanitizeFileNameForUpload(fileName: string): string {
-  const ASCII_ONLY = /^[\x20-\x7E]+$/;
-  if (ASCII_ONLY.test(fileName)) {
-    return fileName;
-  }
-  return encodeURIComponent(fileName)
-    .replace(/'/g, "%27")
-    .replace(/\(/g, "%28")
-    .replace(/\)/g, "%29");
+  return fileName;
 }
 
 /**
