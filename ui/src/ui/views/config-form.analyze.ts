@@ -345,9 +345,13 @@ function normalizeUnion(
   }
 
   // Multi-object discriminated union: fallback to first variant that normalizes successfully.
-  if (remaining.length > 1) {
+  // Only consider object variants, not primitives mixed with objects.
+  const objectCandidates = remaining.filter(
+    (entry) => schemaType(entry) === "object" || !!entry.properties,
+  );
+  if (objectCandidates.length > 1) {
     let best: ConfigSchemaAnalysis | null = null;
-    for (const entry of remaining) {
+    for (const entry of objectCandidates) {
       const res = normalizeSchemaNode(entry, path);
       if (res.schema && res.unsupportedPaths.length === 0) {
         return {
