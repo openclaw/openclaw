@@ -122,16 +122,17 @@ function validateGatewayUrlOverrideForAgentTools(params: {
   if (remoteKey && parsed.key === remoteKey) {
     return { url: parsed.origin, target: "remote" };
   }
-  // Loopback URL on a non-local port → must be an SSH tunnel endpoint → classify as remote.
-  // The `localAllowed` set only covers the configured gateway port. Any loopback on a different
-  // port cannot be the local gateway itself, so it must be a forwarded tunnel to a remote server.
-  // This handles cases where gateway.mode=local (or unset) but the user is SSH-forwarding
-  // via a non-default port: ssh -N -L <forwarded-port>:remote-host:<remote-port>.
-  // Classifying as "remote" suppresses deliveryContext so the remote gateway uses its own
-  // extractDeliveryInfo rather than receiving the caller's local chat route in the sentinel.
+  // Loopback URL on a non-configured port — could be either:
+  //   (a) An SSH tunnel endpoint (ssh -N -L <port>:remote-host:<remote-port>) → "remote"
+  //   (b) A local gateway running on a custom/non-default port → "local"
+  // We can only distinguish (a) from (b) when a non-loopback remote URL is configured:
+  // that proves gateway.mode=remote with an external host, so a loopback URL on any port
+  // must be a forwarded tunnel. Without that evidence, treat the loopback as local so that
+  // deliveryContext is not suppressed and heartbeat wake-up routing stays correct.
   const urlForTunnelCheck = new URL(params.urlOverride.trim()); // already validated above
   if (isLoopbackHostname(urlForTunnelCheck.hostname)) {
-    return { url: parsed.origin, target: "remote" };
+    const target = isNonLoopbackRemoteUrlConfigured(cfg) ? "remote" : "local";
+    return { url: parsed.origin, target };
   }
   throw new Error(
     [
@@ -208,19 +209,13 @@ export function resolveGatewayTarget(opts?: GatewayCallOptions): GatewayOverride
           const host = parsed.hostname.toLowerCase().replace(/^\[|\]$/g, "");
           const isLoopback = host === "127.0.0.1" || host === "localhost" || host === "::1";
           if (isLoopback) {
-            // Classify as "remote" when:
-            // (a) gateway.mode=remote with a non-loopback remote URL — the loopback is
-            //     an SSH tunnel endpoint (ssh -N -L <local_port>:remote-host:<remote_port>), OR
-            // (b) the loopback port differs from the configured local gateway port — a
-            //     non-local-port loopback cannot be the local gateway, so it must be a tunnel,
-            //     regardless of whether gateway.mode=remote is configured.
-            const localPort = resolveGatewayPort(cfg);
-            const envPort = parsed.port
-              ? Number(parsed.port)
-              : parsed.protocol === "wss:"
-                ? 443
-                : 80;
-            if (envPort !== localPort || isNonLoopbackRemoteUrlConfigured(cfg)) {
+            // Classify as "remote" only when a non-loopback remote URL is configured,
+            // which proves the loopback is an SSH tunnel endpoint
+            // (ssh -N -L <local_port>:remote-host:<remote_port>). Without that evidence
+            // a loopback URL on any port — including a non-default port — could be a
+            // local gateway on a custom port, so we preserve "local" classification to
+            // keep deliveryContext intact and avoid heartbeat-stale routing regressions.
+            if (isNonLoopbackRemoteUrlConfigured(cfg)) {
               return "remote";
             }
             return "local";
