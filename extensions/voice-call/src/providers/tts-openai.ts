@@ -66,11 +66,6 @@ export const OPENAI_TTS_VOICES = [
 
 export type OpenAITTSVoice = (typeof OPENAI_TTS_VOICES)[number];
 
-function trimToUndefined(value: string | undefined): string | undefined {
-  const trimmed = value?.trim();
-  return trimmed ? trimmed : undefined;
-}
-
 /**
  * OpenAI TTS Provider for generating speech audio.
  */
@@ -82,14 +77,13 @@ export class OpenAITTSProvider {
   private instructions?: string;
 
   constructor(config: OpenAITTSConfig = {}) {
-    this.apiKey =
-      trimToUndefined(config.apiKey) ?? trimToUndefined(process.env.OPENAI_API_KEY) ?? "";
+    this.apiKey = config.apiKey || process.env.OPENAI_API_KEY || "";
     // Default to gpt-4o-mini-tts for intelligent realtime applications
-    this.model = trimToUndefined(config.model) ?? "gpt-4o-mini-tts";
+    this.model = config.model || "gpt-4o-mini-tts";
     // Default to coral - good balance of quality and natural tone
-    this.voice = (trimToUndefined(config.voice) as OpenAITTSVoice | undefined) ?? "coral";
+    this.voice = (config.voice as OpenAITTSVoice) || "coral";
     this.speed = config.speed ?? 1.0;
-    this.instructions = trimToUndefined(config.instructions);
+    this.instructions = config.instructions;
 
     if (!this.apiKey) {
       throw new Error("OpenAI API key required (set OPENAI_API_KEY or pass apiKey)");
@@ -111,7 +105,7 @@ export class OpenAITTSProvider {
     };
 
     // Add instructions if using gpt-4o-mini-tts model
-    const effectiveInstructions = trimToUndefined(instructions) ?? this.instructions;
+    const effectiveInstructions = instructions || this.instructions;
     if (effectiveInstructions && this.model.includes("gpt-4o-mini-tts")) {
       body.instructions = effectiveInstructions;
     }
