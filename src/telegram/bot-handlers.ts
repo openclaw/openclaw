@@ -1607,9 +1607,21 @@ export const registerTelegramHandlers = ({
           }),
           senderId: event.senderId,
         });
+        // Apply thread-scoped session key for DM topics — mirrors resolveTelegramSessionState.
+        // dmThreadId is already resolved from eventAuthContext above.
+        const drainBaseSessionKey = drainRoute.sessionKey;
+        const drainThreadKeys =
+          dmThreadId != null
+            ? resolveThreadSessionKeys({
+                baseSessionKey: drainBaseSessionKey,
+                threadId: `${event.chatId}:${dmThreadId}`,
+              })
+            : null;
+        const drainSessionKey = drainThreadKeys?.sessionKey ?? drainBaseSessionKey;
         await writePendingInbound(stateDir, {
           channel: "telegram",
-          id: String(event.msg.message_id ?? Date.now()),
+          // Include chatId in the id to prevent collisions across chats with the same message_id.
+          id: `${event.chatId}:${event.msg.message_id ?? Date.now()}`,
           payload: {
             chatId: event.chatId,
             messageId: event.msg.message_id,
@@ -1620,7 +1632,7 @@ export const registerTelegramHandlers = ({
             date: event.msg.date,
           },
           capturedAt: Date.now(),
-          sessionKey: drainRoute.sessionKey,
+          sessionKey: drainSessionKey,
         });
         return; // provider already got 200, no retry needed
       }
