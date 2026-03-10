@@ -53,6 +53,9 @@ Docs: https://docs.openclaw.ai
 - Telegram/network env-proxy: apply configured transport policy to proxied HTTPS dispatchers as well as direct `NO_PROXY` bypasses, so resolver-scoped IPv4 fallback and network settings work consistently for env-proxied Telegram traffic. (#40740) Thanks @sircrumpet.
 - Agents/memory flush: forward `memoryFlushWritePath` through `runEmbeddedPiAgent` so memory-triggered flush turns keep the append-only write guard without aborting before tool setup. Follows up on #38574. (#41761) Thanks @frankekn.
 - CI/CodeQL Swift toolchain: select Xcode 26.1 before installing Swift build tools so the CodeQL Swift job uses Swift tools 6.2 on `macos-latest`. (#41787) thanks @BunsDev.
+- Sandbox/subagents: pass the real configured workspace through `sessions_spawn` inheritance when a parent agent runs in a copied-workspace sandbox, so child `/agent` mounts point at the configured workspace instead of the parent sandbox copy. (#40757) Thanks @dsantoreis.
+- Mattermost/plugin send actions: normalize direct `replyTo` fallback handling so threaded plugin sends trim blank IDs and reuse the correct reply target again. (#41176) Thanks @hnykda.
+- MS Teams/allowlist resolution: use the General channel conversation ID as the resolved team key (with Graph GUID fallback) so Bot Framework runtime `channelData.team.id` matching works for team and team/channel allowlist entries. (#41838) Thanks @BradGroux.
 
 ## 2026.3.8
 
@@ -477,6 +480,7 @@ Docs: https://docs.openclaw.ai
 - Agents/failover 402 recovery: keep temporary spend-limit `402` payloads retryable, preserve explicit insufficient-credit billing detection even in long provider payloads, and allow throttled billing-cooldown probes so single-provider setups can recover instead of staying locked out. (#38533) Thanks @xialonglee.
 - Browser/config schema: accept `browser.profiles.*.driver: "openclaw"` while preserving legacy `"clawd"` compatibility in validated config. (#39374; based on #35621) Thanks @gambletan and @ingyukoh.
 - Memory flush/bootstrap file protection: restrict memory-flush runs to append-only `read`/`write` tools and route host-side memory appends through root-enforced safe file handles so flush turns cannot overwrite bootstrap files via `exec` or unsafe raw rewrites. (#38574) Thanks @frankekn.
+- Mattermost/DM media uploads: resolve bare 26-character Mattermost IDs user-first for direct messages so media sends no longer fail with `403 Forbidden` when targets are configured as unprefixed user IDs. (#29925) Thanks @teconomix.
 
 ## 2026.3.2
 
