@@ -138,7 +138,15 @@ export async function fetchWithSsrFGuard(params: GuardedFetchOptions): Promise<G
         lookupFn: params.lookupFn,
         policy: params.policy,
       });
-      if (params.pinDns !== false) {
+      const httpsProxy =
+        parsedUrl.protocol === "https:" &&
+        (process.env.HTTPS_PROXY || process.env.https_proxy || process.env.ALL_PROXY);
+      if (httpsProxy && params.pinDns !== false) {
+        // When an HTTPS proxy is configured, route through it instead of pinning DNS.
+        // Hostname allowlist checks above still apply; only DNS pinning is skipped.
+        const { ProxyAgent } = await import("undici");
+        dispatcher = new ProxyAgent(httpsProxy);
+      } else if (params.pinDns !== false) {
         dispatcher = createPinnedDispatcher(pinned);
       }
 
