@@ -7,7 +7,6 @@ import { CONFIG_PATH } from "../config/paths.js";
 import { isBlockedObjectKey } from "../config/prototype-keys.js";
 import { redactConfigObject } from "../config/redact-snapshot.js";
 import { danger, info, success } from "../globals.js";
-import { emitGatewayRestart } from "../infra/restart.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { defaultRuntime } from "../runtime.js";
 import { formatDocsLink } from "../terminal/links.js";
@@ -359,10 +358,20 @@ export async function runConfigRestore(opts: { runtime?: RuntimeEnv } = {}) {
       return;
     }
 
-    // Copy backup to main config
+    // Validate backup file before overwriting
+    const backupContent = await fs.readFile(backupPath, "utf-8");
+    try {
+      JSON.parse(backupContent);
+    } catch {
+      runtime.error(danger(`Backup file is corrupted or invalid. Restore aborted.`));
+      runtime.exit(1);
+      return;
+    }
+
+    // Copy backup to main config after validation
     await fs.copyFile(backupPath, configPath);
 
-    // Validate restored config
+    // Verify restored config
     const snapshot = await readConfigFileSnapshot();
     if (!snapshot.valid) {
       const issues = normalizeConfigIssues(snapshot.issues);
@@ -377,14 +386,8 @@ export async function runConfigRestore(opts: { runtime?: RuntimeEnv } = {}) {
     }
 
     runtime.log(success(`Config restored from backup: ${shortBackupPath}`));
-
-    // Auto-restart gateway
-    const restarted = emitGatewayRestart();
-    if (restarted) {
-      runtime.log(info("Gateway is restarting..."));
-    } else {
-      runtime.log(info("Restart the gateway manually to apply the restored configuration."));
-    }
+    runtime.log("");
+    runtime.log(info(`Please run ${formatCliCommand("openclaw doctor --fix")} to verify, then restart the gateway.`));
   } catch (err) {
     runtime.error(danger(`Config restore failed: ${String(err)}`));
     runtime.exit(1);
