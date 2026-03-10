@@ -449,6 +449,35 @@ describe("loadOpenClawPlugins", () => {
     resetGlobalHookRunner();
   });
 
+  it("reuses the existing global hook runner when serving the same cached registry", () => {
+    process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = "/nonexistent/bundled/plugins";
+    const plugin = writePlugin({
+      id: "cache-hook-runner-stable",
+      filename: "cache-hook-runner-stable.cjs",
+      body: `module.exports = { id: "cache-hook-runner-stable", register() {} };`,
+    });
+
+    const options = {
+      workspaceDir: plugin.dir,
+      config: {
+        plugins: {
+          load: { paths: [plugin.file] },
+          allow: ["cache-hook-runner-stable"],
+        },
+      },
+    };
+
+    const first = loadOpenClawPlugins(options);
+    const firstRunner = getGlobalHookRunner();
+    expect(firstRunner).not.toBeNull();
+
+    const second = loadOpenClawPlugins(options);
+    expect(second).toBe(first);
+    expect(getGlobalHookRunner()).toBe(firstRunner);
+
+    resetGlobalHookRunner();
+  });
+
   it("loads plugins when source and root differ only by realpath alias", () => {
     useNoBundledPlugins();
     const plugin = writePlugin({

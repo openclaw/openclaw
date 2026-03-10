@@ -17,7 +17,11 @@ import {
   type NormalizedPluginsConfig,
 } from "./config-state.js";
 import { discoverOpenClawPlugins } from "./discovery.js";
-import { initializeGlobalHookRunner } from "./hook-runner-global.js";
+import {
+  getGlobalHookRunner,
+  getGlobalPluginRegistry,
+  initializeGlobalHookRunner,
+} from "./hook-runner-global.js";
 import { loadPluginManifestRegistry } from "./manifest-registry.js";
 import { isPathInside, safeStatSync } from "./path-safety.js";
 import { createPluginRegistry, type PluginRecord, type PluginRegistry } from "./registry.js";
@@ -441,6 +445,9 @@ function warnAboutUntrackedLoadedPlugins(params: {
 
 function activatePluginRegistry(registry: PluginRegistry, cacheKey: string): void {
   setActivePluginRegistry(registry, cacheKey);
+  if (getGlobalPluginRegistry() === registry && getGlobalHookRunner()) {
+    return;
+  }
   initializeGlobalHookRunner(registry);
 }
 
