@@ -408,6 +408,111 @@ describe("AcpxRuntime", () => {
     }
   });
 
+  it("injects --agent flag for all operations when agentCommand is configured", async () => {
+    const { runtime, logPath } = await createMockRuntimeFixture({
+      agentCommand: "npx --yes kilocode@latest",
+    });
+
+    const handle = await runtime.ensureSession({
+      sessionKey: "agent:kilocode:acp:custom",
+      agent: "kilocode",
+      mode: "persistent",
+    });
+    await runtime.setMode({ handle, mode: "plan" });
+    await runtime.getStatus({ handle });
+    await runtime.setConfigOption({ handle, key: "model", value: "gpt-4" });
+    await runtime.cancel({ handle, reason: "test" });
+    await runtime.close({ handle, reason: "done" });
+
+    const logs = await readMockRuntimeLogEntries(logPath);
+    const kinds = ["ensure", "set-mode", "status", "set", "cancel", "close"];
+    for (const kind of kinds) {
+      const entry = logs.find((e) => e.kind === kind);
+      expect(entry, `expected log entry for ${kind}`).toBeDefined();
+      const args = (entry?.args as string[]) ?? [];
+      const agentFlagIndex = args.indexOf("--agent");
+      expect(agentFlagIndex, `--agent flag missing for ${kind}`).toBeGreaterThanOrEqual(0);
+      expect(args[agentFlagIndex + 1]).toBe("npx --yes kilocode@latest");
+    }
+  });
+
+  it("injects --agent flag in prompt args when agentCommand is configured", async () => {
+    const { runtime, logPath } = await createMockRuntimeFixture({
+      agentCommand: "npx --yes kilocode@latest",
+    });
+
+    const handle = await runtime.ensureSession({
+      sessionKey: "agent:kilocode:acp:prompt",
+      agent: "kilocode",
+      mode: "persistent",
+    });
+    const events: unknown[] = [];
+    for await (const event of runtime.runTurn({
+      handle,
+      text: "hello",
+    })) {
+      events.push(event);
+    }
+
+    const logs = await readMockRuntimeLogEntries(logPath);
+    const prompt = logs.find((e) => e.kind === "prompt");
+    expect(prompt).toBeDefined();
+    const promptArgs = (prompt?.args as string[]) ?? [];
+    const agentFlagIndex = promptArgs.indexOf("--agent");
+    expect(agentFlagIndex).toBeGreaterThanOrEqual(0);
+    expect(promptArgs[agentFlagIndex + 1]).toBe("npx --yes kilocode@latest");
+  });
+
+  it("does not inject --agent flag when agentCommand is not configured", async () => {
+    const { runtime, logPath } = await createMockRuntimeFixture();
+
+    const handle = await runtime.ensureSession({
+      sessionKey: "agent:codex:acp:no-agent-cmd",
+      agent: "codex",
+      mode: "persistent",
+    });
+    await runtime.setMode({ handle, mode: "plan" });
+
+    const logs = await readMockRuntimeLogEntries(logPath);
+    for (const kind of ["ensure", "set-mode"]) {
+      const entry = logs.find((e) => e.kind === kind);
+      expect(entry).toBeDefined();
+      const args = (entry?.args as string[]) ?? [];
+      expect(args.indexOf("--agent")).toBe(-1);
+    }
+  });
+
+  it("wraps agentCommand with MCP proxy when both agentCommand and mcpServers are configured", async () => {
+    const { runtime, logPath } = await createMockRuntimeFixture({
+      agentCommand: "npx --yes kilocode@latest",
+      mcpServers: {
+        canva: {
+          command: "npx",
+          args: ["-y", "mcp-remote@latest", "https://mcp.canva.com/mcp"],
+        },
+      },
+    });
+
+    const handle = await runtime.ensureSession({
+      sessionKey: "agent:kilocode:acp:mcp-proxy",
+      agent: "kilocode",
+      mode: "persistent",
+    });
+
+    const logs = await readMockRuntimeLogEntries(logPath);
+    const ensureArgs = (logs.find((e) => e.kind === "ensure")?.args as string[]) ?? [];
+    const agentFlagIndex = ensureArgs.indexOf("--agent");
+    expect(agentFlagIndex).toBeGreaterThanOrEqual(0);
+    const rawAgentCommand = ensureArgs[agentFlagIndex + 1];
+    expect(rawAgentCommand).toContain("mcp-proxy.mjs");
+    const payloadMatch = rawAgentCommand.match(/--payload\s+([A-Za-z0-9_-]+)/);
+    expect(payloadMatch?.[1]).toBeDefined();
+    const payload = JSON.parse(
+      Buffer.from(String(payloadMatch?.[1]), "base64url").toString("utf8"),
+    ) as { targetCommand: string };
+    expect(payload.targetCommand).toBe("npx --yes kilocode@latest");
+  });
+
   it("skips prompt execution when runTurn starts with an already-aborted signal", async () => {
     const { runtime, logPath } = await createMockRuntimeFixture();
     const handle = await runtime.ensureSession({
