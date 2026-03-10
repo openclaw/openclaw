@@ -9,7 +9,10 @@ import { promptAccountId as promptAccountIdSdk } from "../../../plugin-sdk/onboa
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../../../routing/session-key.js";
 import type { WizardPrompter } from "../../../wizard/prompts.js";
 import type { PromptAccountId, PromptAccountIdParams } from "../onboarding-types.js";
-import { moveSingleAccountChannelSectionToDefaultAccount } from "../setup-helpers.js";
+import {
+  moveSingleAccountChannelSectionToDefaultAccount,
+  patchScopedAccountConfig,
+} from "../setup-helpers.js";
 
 export const promptAccountId: PromptAccountId = async (params: PromptAccountIdParams) => {
   return await promptAccountIdSdk(params);
@@ -364,50 +367,14 @@ function patchConfigForScopedAccount(params: {
           cfg,
           channelKey: channel,
         });
-  const channelConfig =
-    (seededCfg.channels?.[channel] as Record<string, unknown> | undefined) ?? {};
-
-  if (accountId === DEFAULT_ACCOUNT_ID) {
-    return {
-      ...seededCfg,
-      channels: {
-        ...seededCfg.channels,
-        [channel]: {
-          ...channelConfig,
-          ...(ensureEnabled ? { enabled: true } : {}),
-          ...patch,
-        },
-      },
-    };
-  }
-
-  const accounts =
-    (channelConfig.accounts as Record<string, Record<string, unknown>> | undefined) ?? {};
-  const existingAccount = accounts[accountId] ?? {};
-
-  return {
-    ...seededCfg,
-    channels: {
-      ...seededCfg.channels,
-      [channel]: {
-        ...channelConfig,
-        ...(ensureEnabled ? { enabled: true } : {}),
-        accounts: {
-          ...accounts,
-          [accountId]: {
-            ...existingAccount,
-            ...(ensureEnabled
-              ? {
-                  enabled:
-                    typeof existingAccount.enabled === "boolean" ? existingAccount.enabled : true,
-                }
-              : {}),
-            ...patch,
-          },
-        },
-      },
-    },
-  };
+  return patchScopedAccountConfig({
+    cfg: seededCfg,
+    channelKey: channel,
+    accountId,
+    patch,
+    ensureChannelEnabled: ensureEnabled,
+    ensureAccountEnabled: ensureEnabled,
+  });
 }
 
 export function patchChannelConfigForAccount(params: {
