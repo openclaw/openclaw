@@ -214,6 +214,57 @@ describe("mattermostPlugin", () => {
       ]);
       expect(result?.details).toEqual({});
     });
+
+    it("maps replyTo to replyToId for send actions", async () => {
+      const cfg = createMattermostTestConfig();
+
+      await mattermostPlugin.actions?.handleAction?.({
+        channel: "mattermost",
+        action: "send",
+        params: {
+          to: "channel:CHAN1",
+          message: "hello",
+          replyTo: "post-root",
+        },
+        cfg,
+        accountId: "default",
+      } as any);
+
+      expect(sendMessageMattermostMock).toHaveBeenCalledWith(
+        "channel:CHAN1",
+        "hello",
+        expect.objectContaining({
+          accountId: "default",
+          replyToId: "post-root",
+        }),
+      );
+    });
+
+    it("falls back to trimmed replyTo when replyToId is blank", async () => {
+      const cfg = createMattermostTestConfig();
+
+      await mattermostPlugin.actions?.handleAction?.({
+        channel: "mattermost",
+        action: "send",
+        params: {
+          to: "channel:CHAN1",
+          message: "hello",
+          replyToId: "   ",
+          replyTo: " post-root ",
+        },
+        cfg,
+        accountId: "default",
+      } as any);
+
+      expect(sendMessageMattermostMock).toHaveBeenCalledWith(
+        "channel:CHAN1",
+        "hello",
+        expect.objectContaining({
+          accountId: "default",
+          replyToId: "post-root",
+        }),
+      );
+    });
   });
 
   describe("outbound", () => {
