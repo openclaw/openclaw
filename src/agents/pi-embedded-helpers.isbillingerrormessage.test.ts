@@ -32,7 +32,7 @@ const OPENROUTER_CREDITS_MESSAGE = "Payment Required: insufficient credits";
 // Issue-backed Anthropic/OpenAI-compatible insufficient_quota payload under HTTP 400:
 // https://github.com/openclaw/openclaw/issues/23440
 const INSUFFICIENT_QUOTA_PAYLOAD =
-  '{"type":"error","error":{"type":"insufficient_quota","message":"Your account has insufficient quota balance to run this request."}}';
+  '{"type":"error","error":{"type":"insufficient_quota","message":"Your account has insufficient quota balance to run this request."}}'; // pragma: allowlist secret
 // Together AI error code examples: https://docs.together.ai/docs/error-codes
 const TOGETHER_PAYMENT_REQUIRED_MESSAGE =
   "402 Payment Required: The account associated with this API key has reached its maximum allowed monthly spending limit.";
@@ -42,7 +42,7 @@ const TOGETHER_ENGINE_OVERLOADED_MESSAGE =
 const GROQ_TOO_MANY_REQUESTS_MESSAGE =
   "429 Too Many Requests: Too many requests were sent in a given timeframe.";
 const GROQ_SERVICE_UNAVAILABLE_MESSAGE =
-  "503 Service Unavailable: The server is temporarily unable to handle the request due to overloading or maintenance.";
+  "503 Service Unavailable: The server is temporarily unable to handle the request due to overloading or maintenance."; // pragma: allowlist secret
 
 describe("isAuthPermanentErrorMessage", () => {
   it("matches permanent auth failure patterns", () => {
