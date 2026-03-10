@@ -17,10 +17,25 @@ type InlineDirectiveParseOptions = {
 const AUDIO_TAG_RE = /\[\[\s*audio_as_voice\s*\]\]/gi;
 const REPLY_TAG_RE = /\[\[\s*(?:reply_to_current|reply_to\s*:\s*([^\]\n]+))\s*\]\]/gi;
 
+// Matches fenced code blocks (``` ... ```) to preserve their content during normalization.
+const CODE_FENCE_RE = /(```[\s\S]*?```)/g;
+
+/**
+ * Collapses whitespace artifacts left behind after directive tag removal,
+ * but only outside fenced code blocks so indentation inside code is preserved.
+ */
 function normalizeDirectiveWhitespace(text: string): string {
-  return text
-    .replace(/[ \t]+/g, " ")
-    .replace(/[ \t]*\n[ \t]*/g, "\n")
+  // Split on fenced code blocks; odd-indexed segments are the code blocks themselves.
+  const segments = text.split(CODE_FENCE_RE);
+  return segments
+    .map((segment, i) => {
+      if (i % 2 === 1) {
+        // Code block — preserve indentation/whitespace exactly.
+        return segment;
+      }
+      return segment.replace(/[ \t]+/g, " ").replace(/[ \t]*\n[ \t]*/g, "\n");
+    })
+    .join("")
     .trim();
 }
 
@@ -97,8 +112,10 @@ export function parseInlineDirectives(
     };
   }
   if (!text.includes("[[")) {
+    // No directive tags present — return the text unchanged to preserve all whitespace
+    // (including code block indentation) without incurring unnecessary normalization.
     return {
-      text: normalizeDirectiveWhitespace(text),
+      text,
       audioAsVoice: false,
       replyToCurrent: false,
       hasAudioTag: false,
