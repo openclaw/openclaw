@@ -287,6 +287,8 @@ export type ChannelMessagingAdapter = {
   normalizeTarget?: (raw: string) => string | undefined;
   targetResolver?: {
     looksLikeId?: (raw: string, normalized?: string) => boolean;
+    /** Default target kind for bare names without `@`/`#`/`user:`/`channel:` prefixes. */
+    defaultTargetKind?: "user" | "group";
     hint?: string;
   };
   formatTargetDisplay?: (params: {
