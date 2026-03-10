@@ -267,7 +267,7 @@ function shouldRetryWithIpv4Fallback(err: unknown): boolean {
 export function resolveTelegramFetch(
   proxyFetch?: typeof fetch,
   options?: { network?: TelegramNetworkConfig },
-): typeof fetch | undefined {
+): typeof fetch {
   const autoSelectDecision = resolveTelegramAutoSelectFamilyDecision({
     network: options?.network,
   });
