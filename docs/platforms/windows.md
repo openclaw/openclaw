@@ -152,7 +152,7 @@ Open PowerShell (Admin):
 
 ```powershell
 wsl --install
-# Or pick a distro explicitly:
+### Or pick a distro explicitly:
 wsl --list --online
 wsl --install -d Ubuntu-24.04
 ```
