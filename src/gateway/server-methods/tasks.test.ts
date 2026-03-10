@@ -462,6 +462,42 @@ describe("deliverTaskNotification", () => {
     expect(updated.tasks).toHaveLength(0);
   });
 
+  it("serialises concurrent notify calls for DIFFERENT tasks — both writes preserved", async () => {
+    const registryPath = writeRegistry(tmpDir, [
+      makeTask({ id: "t1", watchers: [{ sessionKey: "s1", addedAt: Date.now() }] }),
+      makeTask({ id: "t2", watchers: [{ sessionKey: "s2", addedAt: Date.now() }] }),
+    ]);
+    const sendToSession = vi.fn().mockResolvedValue(undefined);
+
+    // Two concurrent notifies on different tasks — same registry file
+    await Promise.all([
+      deliverTaskNotification({
+        taskId: "t1",
+        event: "done",
+        message: "t1 done",
+        registryPath,
+        sendToSession,
+      }),
+      deliverTaskNotification({
+        taskId: "t2",
+        event: "done",
+        message: "t2 done",
+        registryPath,
+        sendToSession,
+      }),
+    ]);
+
+    const updated = JSON.parse(fs.readFileSync(registryPath, "utf8")) as TaskRegistry;
+    const t1 = updated.tasks.find((t) => t.id === "t1")!;
+    const t2 = updated.tasks.find((t) => t.id === "t2")!;
+    // Both tasks must have their event + idempotency key — no overwrite
+    expect(t1.events.map((e) => e.event)).toContain("done");
+    expect(t2.events.map((e) => e.event)).toContain("done");
+    expect(t1.notifiedEvents["done"]).toBe(true);
+    expect(t2.notifiedEvents["done"]).toBe(true);
+    expect(sendToSession).toHaveBeenCalledTimes(2);
+  });
+
   it("serialises concurrent notify calls for same task with different keys — both events persisted", async () => {
     const registryPath = writeRegistry(tmpDir, [
       makeTask({ id: "t1", watchers: [{ sessionKey: "s1", addedAt: Date.now() }] }),

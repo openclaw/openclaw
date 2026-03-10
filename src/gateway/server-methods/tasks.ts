@@ -13,20 +13,25 @@ const MAX_TASK_EVENTS = 50;
 /**
  * Per-task serialisation queue.
  *
- * Key: taskId
- * Value: tail of the promise chain for that task
+ * Key: registryPath (absolute path to task-registry.json)
+ * Value: tail of the promise chain for that registry file
  *
- * All tasks.notify calls for the same taskId are chained so that each
- * read-modify-write is strictly sequential — preventing lost updates when
- * two different events (different idempotency keys) are notified concurrently.
+ * The registry is a SINGLE FILE containing all tasks.  Locking per-task is
+ * insufficient because two concurrent notify calls for *different* tasks
+ * both do read-modify-write on the same file and the later save overwrites
+ * the earlier one, losing an event log entry or idempotency mark.
+ *
+ * Serialising on the registry path ensures at most one task's write is in
+ * flight at any time, making the read-modify-write atomic from the
+ * perspective of the Node.js event loop.
  *
  * Per-key idempotency is enforced inside _deliverTaskNotification after the
- * per-task lock is acquired.
+ * registry lock is acquired.
  *
  * Since the gateway runs in a single Node.js process this Map is sufficient;
  * no cross-process locking is needed.
  */
-const taskNotifyQueue = new Map<string, Promise<unknown>>();
+const registryWriteQueue = new Map<string, Promise<unknown>>();
 
 export type TaskWatcher = {
   sessionKey: string;
@@ -216,10 +221,10 @@ async function _deliverTaskNotification(opts: {
 /**
  * Deliver a notification to all watchers of a task.
  *
- * Serialised per taskId: all concurrent notify calls for the same task are
- * queued so each read-modify-write completes before the next begins. This
- * prevents lost event log entries or idempotency marks when two different
- * events arrive simultaneously for the same task.
+ * Serialised per registry file: all concurrent notify calls queue on the same
+ * registry path so each read-modify-write completes before the next begins.
+ * This prevents lost updates whether two calls target the same task (different
+ * idempotency keys) or different tasks entirely — both write to the same file.
  *
  * Per-key idempotency is enforced inside _deliverTaskNotification; duplicate
  * calls with the same (taskId, idempotencyKey) return skipped without sending.
@@ -227,21 +232,22 @@ async function _deliverTaskNotification(opts: {
 export function deliverTaskNotification(
   opts: Parameters<typeof _deliverTaskNotification>[0],
 ): Promise<ReturnType<typeof _deliverTaskNotification>> {
-  const taskId = opts.taskId;
+  // Default registry path must match the inner function's default
+  const registryKey = opts.registryPath ?? getRegistryPath();
 
-  // Chain onto the existing tail for this task (or start fresh)
-  const tail = (taskNotifyQueue.get(taskId) ?? Promise.resolve()).then(() =>
+  // Chain onto the existing tail for this registry file (or start fresh)
+  const tail = (registryWriteQueue.get(registryKey) ?? Promise.resolve()).then(() =>
     _deliverTaskNotification(opts),
   );
 
   // Store the silenced tail so the chain survives errors from inner calls.
   const silentTail = tail.catch(() => undefined);
-  taskNotifyQueue.set(taskId, silentTail);
+  registryWriteQueue.set(registryKey, silentTail);
 
-  // Prune map entry when this tail is still the head (no newer call queued).
+  // Prune map entry when no newer call has queued behind this one.
   void silentTail.then(() => {
-    if (taskNotifyQueue.get(taskId) === silentTail) {
-      taskNotifyQueue.delete(taskId);
+    if (registryWriteQueue.get(registryKey) === silentTail) {
+      registryWriteQueue.delete(registryKey);
     }
   });
 
