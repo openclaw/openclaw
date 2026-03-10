@@ -170,6 +170,40 @@ describe("resolveTelegramFetch", () => {
         autoSelectFamilyAttemptTimeout: 300,
       }),
     );
+    expect(dispatcher?.options?.proxyTls).toEqual(
+      expect.objectContaining({
+        autoSelectFamily: false,
+        autoSelectFamilyAttemptTimeout: 300,
+      }),
+    );
+  });
+
+  it("pins env-proxy transport policy onto proxyTls for proxied HTTPS requests", async () => {
+    vi.stubEnv("HTTPS_PROXY", "http://127.0.0.1:7890");
+    undiciFetch.mockResolvedValue({ ok: true } as Response);
+
+    const resolved = resolveTelegramFetchOrThrow(undefined, {
+      network: {
+        autoSelectFamily: true,
+        dnsResultOrder: "ipv4first",
+      },
+    });
+
+    await resolved("https://api.telegram.org/botx/getMe");
+
+    const dispatcher = getDispatcherFromUndiciCall(1);
+    expect(dispatcher?.options?.connect).toEqual(
+      expect.objectContaining({
+        autoSelectFamily: true,
+        autoSelectFamilyAttemptTimeout: 300,
+      }),
+    );
+    expect(dispatcher?.options?.proxyTls).toEqual(
+      expect.objectContaining({
+        autoSelectFamily: true,
+        autoSelectFamilyAttemptTimeout: 300,
+      }),
+    );
   });
 
   it("keeps resolver-scoped transport policy for OpenClaw proxy fetches", async () => {

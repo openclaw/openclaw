@@ -220,6 +220,9 @@ function createTelegramDispatcher(params: {
     const proxyOptions = connect
       ? ({
           connect,
+          // undici's EnvHttpProxyAgent passes `connect` only to the no-proxy Agent.
+          // Real proxied HTTPS traffic reads transport settings from ProxyAgent.proxyTls.
+          proxyTls: connect,
         } satisfies ConstructorParameters<typeof EnvHttpProxyAgent>[0])
       : undefined;
     try {
