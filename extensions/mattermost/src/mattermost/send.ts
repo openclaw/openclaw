@@ -224,13 +224,16 @@ async function resolveTargetChannelId(params: ResolveTargetChannelIdParams): Pro
 
   const channel = await createMattermostDirectChannelWithRetry(client, [botUser.id, userId], {
     ...params.dmRetryOptions,
-    onRetry: params.logger
-      ? (attempt, delayMs, error) => {
-          params.logger?.warn?.(
-            `DM channel creation retry ${attempt} after ${delayMs}ms: ${error.message}`,
-          );
-        }
-      : undefined,
+    onRetry: (attempt, delayMs, error) => {
+      // Call user's onRetry if provided
+      params.dmRetryOptions?.onRetry?.(attempt, delayMs, error);
+      // Log if verbose mode is enabled
+      if (params.logger) {
+        params.logger.warn?.(
+          `DM channel creation retry ${attempt} after ${delayMs}ms: ${error.message}`,
+        );
+      }
+    },
   });
   dmChannelCache.set(dmKey, channel.id);
   return channel.id;

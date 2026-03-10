@@ -20,6 +20,18 @@ const DmChannelRetrySchema = z
     timeoutMs: z.number().int().min(5000).max(120000).optional(),
   })
   .strict()
+  .refine(
+    (data) => {
+      if (data.initialDelayMs !== undefined && data.maxDelayMs !== undefined) {
+        return data.initialDelayMs <= data.maxDelayMs;
+      }
+      return true;
+    },
+    {
+      message: "initialDelayMs must be less than or equal to maxDelayMs",
+      path: ["initialDelayMs"],
+    },
+  )
   .optional();
 
 const MattermostSlashCommandsSchema = z

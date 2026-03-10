@@ -278,4 +278,70 @@ describe("createMattermostDirectChannelWithRetry", () => {
       expect(delay).toBeLessThanOrEqual(2500);
     });
   });
+
+  it("does not retry on 4xx errors even if message contains retryable keywords", async () => {
+    // This tests the fix for false positives where a 400 error with "timeout" in the message
+    // would incorrectly be retried
+    mockFetch.mockResolvedValueOnce({
+      ok: false,
+      status: 400,
+      headers: new Headers({ "content-type": "application/json" }),
+      json: async () => ({ message: "Request timeout: connection timed out" }),
+      text: async () => "Request timeout: connection timed out",
+    } as Response);
+
+    const client = createMockClient();
+
+    await expect(
+      createMattermostDirectChannelWithRetry(client, ["user-1", "user-2"], {
+        maxRetries: 3,
+        initialDelayMs: 10,
+      }),
+    ).rejects.toThrow("400");
+
+    // Should not retry - only called once
+    expect(mockFetch).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not retry on 403 Forbidden even with 'abort' in message", async () => {
+    mockFetch.mockResolvedValueOnce({
+      ok: false,
+      status: 403,
+      headers: new Headers({ "content-type": "application/json" }),
+      json: async () => ({ message: "Request aborted: forbidden" }),
+      text: async () => "Request aborted: forbidden",
+    } as Response);
+
+    const client = createMockClient();
+
+    await expect(
+      createMattermostDirectChannelWithRetry(client, ["user-1", "user-2"], {
+        maxRetries: 3,
+        initialDelayMs: 10,
+      }),
+    ).rejects.toThrow("403");
+
+    expect(mockFetch).toHaveBeenCalledTimes(1);
+  });
+
+  it("passes AbortSignal to fetch for timeout support", async () => {
+    let capturedSignal: AbortSignal | undefined;
+    mockFetch.mockImplementationOnce((url, init) => {
+      capturedSignal = init?.signal;
+      return Promise.resolve({
+        ok: true,
+        status: 201,
+        headers: new Headers({ "content-type": "application/json" }),
+        json: async () => ({ id: "dm-channel-signal" }),
+      } as Response);
+    });
+
+    const client = createMockClient();
+    await createMattermostDirectChannelWithRetry(client, ["user-1", "user-2"], {
+      timeoutMs: 5000,
+    });
+
+    expect(capturedSignal).toBeDefined();
+    expect(capturedSignal).toBeInstanceOf(AbortSignal);
+  });
 });
