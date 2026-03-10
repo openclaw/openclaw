@@ -1,18 +1,54 @@
 import { resolveAgentDir, resolveDefaultAgentId } from "../../agents/agent-scope.js";
-import {
-  ensureAuthProfileStore,
-  updateAuthProfileStoreWithLock,
-} from "../../agents/auth-profiles.js";
+import { ensureAuthProfileStore } from "../../agents/auth-profiles.js";
+import type { AuthProfileStore } from "../../agents/auth-profiles/types.js";
+import { updateAuthProfileStoreWithLock } from "../../agents/auth-profiles/store.js";
+import type { MediaToolsConfig, MediaUnderstandingModelConfig } from "../../config/types.tools.js";
 import type { RuntimeEnv } from "../../runtime.js";
 import { shortenHomePath } from "../../utils.js";
 import { loadModelsConfig } from "./load-config.js";
 import { resolveKnownAgentId } from "./shared.js";
 
 /**
+ * Collect all auth profile ids referenced in tools.media config
+ * (top-level models array + per-media-type image/audio/video models).
+ * These are consumed by resolveProviderExecutionAuth and must not be pruned.
+ */
+function collectMediaProfileIds(cfg: Awaited<ReturnType<typeof loadModelsConfig>>): Set<string> {
+  const ids = new Set<string>();
+
+  function addFromModels(models: MediaUnderstandingModelConfig[] | undefined): void {
+    for (const m of models ?? []) {
+      if (m.profile) ids.add(m.profile);
+      if (m.preferredProfile) ids.add(m.preferredProfile);
+    }
+  }
+
+  const media = cfg.tools?.media;
+  if (!media) return ids;
+
+  addFromModels(media.models);
+  addFromModels(media.image?.models);
+  addFromModels(media.audio?.models);
+  addFromModels(media.video?.models);
+
+  // Also cover per-agent tool overrides
+  for (const agent of cfg.agents?.list ?? []) {
+    const agentMedia = (agent as { tools?: { media?: MediaToolsConfig } }).tools?.media;
+    if (!agentMedia) continue;
+    addFromModels(agentMedia.models);
+    addFromModels(agentMedia.image?.models);
+    addFromModels(agentMedia.audio?.models);
+    addFromModels(agentMedia.video?.models);
+  }
+
+  return ids;
+}
+
+/**
  * Remove stale profiles from auth-profiles.json that are no longer present in
- * openclaw.json auth.profiles or auth.order. Prevents ghost profiles (e.g.
- * anthropic:manual, anthropic:user-me.com) from accumulating and silently
- * corrupting auth order.
+ * openclaw.json auth.profiles, auth.order, or tools.media model entries.
+ * Prevents ghost profiles (e.g. anthropic:manual, anthropic:user-me.com) from
+ * accumulating and silently corrupting auth order.
  *
  * Fixes: https://github.com/openclaw/openclaw/issues/41634
  */
@@ -26,9 +62,9 @@ export async function modelsAuthCleanCommand(
   const agentDir = resolveAgentDir(cfg, agentId);
   const authStorePath = shortenHomePath(`${agentDir}/auth-profiles.json`);
 
-  // Collect profile ids that are explicitly configured: union of auth.profiles keys
-  // and any ids referenced in auth.order (which may exist only in the store, not in
-  // auth.profiles, and are still valid active profiles).
+  // Collect profile ids that are explicitly configured: union of auth.profiles keys,
+  // ids referenced in auth.order, and ids pinned in tools.media model entries.
+  // All three sets represent actively-used credentials that must not be pruned.
   const configuredProfiles = new Set<string>(
     Object.keys(cfg.auth?.profiles ?? {})
       .map((id) => id.trim())
@@ -40,6 +76,9 @@ export async function modelsAuthCleanCommand(
         if (typeof id === "string" && id.trim()) configuredProfiles.add(id.trim());
       }
     }
+  }
+  for (const id of collectMediaProfileIds(cfg)) {
+    configuredProfiles.add(id);
   }
 
   const store = ensureAuthProfileStore(agentDir, { allowKeychainPrompt: false });
@@ -129,7 +168,7 @@ export async function modelsAuthCleanCommand(
 
   const updated = await updateAuthProfileStoreWithLock({
     agentDir,
-    updater: (freshStore) => {
+    updater: (freshStore: AuthProfileStore) => {
       let mutated = false;
 
       // Remove stale profiles
