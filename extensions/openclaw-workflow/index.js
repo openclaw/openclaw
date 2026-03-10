@@ -62,16 +62,19 @@ export default function (api) {
   const config = api.pluginConfig ?? {};
 
   // Resolve directories with sane defaults
+  /** Expand leading ~/ or ~ safely */
+  const expandTilde = (p) => p.startsWith('~/') ? join(homedir(), p.slice(2)) : p === '~' ? homedir() : p;
+
   const workflowsDir = config.workflowsDir
-    ? resolve(config.workflowsDir.replace('~', homedir()))
+    ? resolve(expandTilde(config.workflowsDir))
     : join(homedir(), '.openclaw', 'workflows');
 
   const runsDir = config.runsDir
-    ? resolve(config.runsDir.replace('~', homedir()))
+    ? resolve(expandTilde(config.runsDir))
     : join(homedir(), '.openclaw', 'workflow-runs');
 
   const baseDir = config.baseDir
-    ? resolve(config.baseDir.replace('~', homedir()))
+    ? resolve(expandTilde(config.baseDir))
     : process.cwd();
 
   const concurrencyDefault = typeof config.concurrency === 'number' ? config.concurrency : 3;
@@ -170,7 +173,7 @@ export default function (api) {
 
         // 4. Resume mode: load last run state and pass to resumeWorkflow
         if (resume) {
-          const lastRun = await findLatestRun(name, runsDir);
+          const lastRun = await findLatestRun(workflow.name, runsDir);
           if (!lastRun) {
             return errorResult(
               `No previous run found for workflow "${name}" to resume from. ` +
@@ -247,7 +250,13 @@ export default function (api) {
         if (run_id) {
           state = await readRunState(run_id, runsDir);
         } else if (name) {
-          state = await findLatestRun(name, runsDir);
+          // name may be a file stem — load the workflow to get its display name
+          let displayName = name;
+          try {
+            const wf = await loadWorkflow(name, workflowsDir);
+            displayName = wf.name;
+          } catch { /* fall back to raw name */ }
+          state = await findLatestRun(displayName, runsDir);
           if (!state) {
             return errorResult(`No runs found for workflow "${name}"`);
           }

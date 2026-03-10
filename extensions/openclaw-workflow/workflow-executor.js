@@ -199,15 +199,14 @@ export async function executeWorkflow(workflow, runId, api, config, stepRunner, 
     // Increment attempts before launch
     const attempts = (state.steps[step.id]?.attempts || 0) + 1;
 
-    // Mark as running immediately (synchronously update our local state snapshot)
-    // We save this in the background — don't await here to avoid blocking the scheduler
-    updateStepState(state, step.id, {
-      status: 'running',
-      started_at: new Date().toISOString(),
-      attempts,
-    }, runsDir).then(newState => { state = newState; });
-
     const promise = (async () => {
+      // Mark as running inside the promise so inFlight is set before this runs
+      state = await updateStepState(state, step.id, {
+        status: 'running',
+        started_at: new Date().toISOString(),
+        attempts,
+      }, runsDir);
+
       let result;
       try {
         result = await stepRunner(step, runId, api, {
@@ -346,15 +345,15 @@ export async function executeWorkflow(workflow, runId, api, config, stepRunner, 
     if (allTerminal) break;
 
     // Launch ready steps up to concurrency limit
-    const currentlyRunning = [...Object.entries(state.steps)]
-      .filter(([, s]) => s.status === 'running').length;
+    // Count actively running steps (exclude those sleeping through retry delay)
+    const currentlyRunning = inFlight.size;
 
     const slotsAvailable = concurrency - currentlyRunning;
 
     if (slotsAvailable > 0) {
       // Find all pending steps that could be launched
       for (const step of steps) {
-        if (inFlight.size - currentlyRunning >= slotsAvailable) break;
+        if (inFlight.size >= concurrency) break;
         if (state.steps[step.id]?.status !== 'pending') continue;
         if (inFlight.has(step.id)) continue; // Already tracked
 

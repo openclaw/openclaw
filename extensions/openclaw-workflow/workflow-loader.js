@@ -76,10 +76,16 @@ import yaml from 'js-yaml';
  * console.log(wf.steps.length); // 3
  */
 export async function loadWorkflow(name, workflowsDir) {
+  // Sanitize name to prevent path traversal
+  const safeName = basename(name);
+  if (!safeName || safeName !== name || safeName.includes('..')) {
+    throw new Error(`Invalid workflow name: "${name}". Must be a plain file stem with no path separators.`);
+  }
+
   const candidates = [
-    join(workflowsDir, `${name}.yml`),
-    join(workflowsDir, `${name}.yaml`),
-    join(workflowsDir, `${name}.json`),
+    join(workflowsDir, `${safeName}.yml`),
+    join(workflowsDir, `${safeName}.yaml`),
+    join(workflowsDir, `${safeName}.json`),
   ];
 
   let raw = null;
