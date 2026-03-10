@@ -1958,7 +1958,7 @@ describe("dispatchTelegramMessage draft streaming", () => {
     expect(finalTextSentViaDeliverReplies).toBe(true);
   });
 
-  it("keeps preview when Telegram reports the final edit target missing", async () => {
+  it("falls back when Telegram reports the current final edit target missing", async () => {
     const draftStream = createDraftStream(999);
     createTelegramDraftStream.mockReturnValue(draftStream);
     dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
@@ -1980,6 +1980,6 @@ describe("dispatchTelegramMessage draft streaming", () => {
         (r: { text?: string }) => r.text === "Final answer",
       ),
     );
-    expect(finalTextSentViaDeliverReplies).toBe(false);
+    expect(finalTextSentViaDeliverReplies).toBe(true);
   });
 });

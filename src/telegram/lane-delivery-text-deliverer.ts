@@ -25,8 +25,9 @@ function isMessageNotModifiedError(err: unknown): boolean {
 }
 
 /**
- * Returns true when Telegram reports the target message no longer exists.
- * In this case the preview is gone and a fallback send is safe (no duplicate).
+ * Returns true when Telegram rejects an edit because the target message can no
+ * longer be resolved or edited. The caller still needs preview context to
+ * decide whether to retain a different visible preview or fall back to send.
  */
 function isMissingPreviewMessageError(err: unknown): boolean {
   return MESSAGE_NOT_FOUND_RE.test(extractErrorText(err));
@@ -207,6 +208,7 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams) {
     updateLaneSnapshot: boolean;
     lane: DraftLaneState;
     finalTextAlreadyLanded: boolean;
+    retainAlternatePreviewOnMissingTarget: boolean;
   }): Promise<PreviewEditResult> => {
     try {
       await params.editPreview({
@@ -244,11 +246,17 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams) {
           return "fallback";
         }
         if (isMissingPreviewMessageError(err)) {
+          if (args.retainAlternatePreviewOnMissingTarget) {
+            params.log(
+              `telegram: ${args.laneName} preview final edit target missing; keeping alternate preview without fallback (${String(err)})`,
+            );
+            params.markDelivered();
+            return "retained";
+          }
           params.log(
-            `telegram: ${args.laneName} preview final edit target missing; keeping existing preview without fallback (${String(err)})`,
+            `telegram: ${args.laneName} preview final edit target missing with no alternate preview; falling back to standard send (${String(err)})`,
           );
-          params.markDelivered();
-          return "retained";
+          return "fallback";
         }
         if (isRecoverableTelegramNetworkError(err, { allowMessageMatch: true })) {
           params.log(
@@ -281,7 +289,11 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams) {
     previewMessageId: previewMessageIdOverride,
     previewTextSnapshot,
   }: TryUpdatePreviewParams): Promise<PreviewEditResult> => {
-    const editPreview = (messageId: number, finalTextAlreadyLanded: boolean) =>
+    const editPreview = (
+      messageId: number,
+      finalTextAlreadyLanded: boolean,
+      retainAlternatePreviewOnMissingTarget: boolean,
+    ) =>
       tryEditPreviewMessage({
         laneName,
         messageId,
@@ -291,11 +303,13 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams) {
         updateLaneSnapshot,
         lane,
         finalTextAlreadyLanded,
+        retainAlternatePreviewOnMissingTarget,
       });
     const finalizePreview = (
       previewMessageId: number,
       finalTextAlreadyLanded: boolean,
       hadPreviewMessage: boolean,
+      retainAlternatePreviewOnMissingTarget = false,
     ): PreviewEditResult | Promise<PreviewEditResult> => {
       const currentPreviewText = previewTextSnapshot ?? getLanePreviewText(lane);
       const shouldSkipRegressive = shouldSkipRegressivePreviewUpdate({
@@ -308,7 +322,11 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams) {
         params.markDelivered();
         return "edited";
       }
-      return editPreview(previewMessageId, finalTextAlreadyLanded);
+      return editPreview(
+        previewMessageId,
+        finalTextAlreadyLanded,
+        retainAlternatePreviewOnMissingTarget,
+      );
     };
     if (!lane.stream) {
       return "fallback";
@@ -346,10 +364,13 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams) {
     if (typeof previewTargetAfterStop.previewMessageId !== "number") {
       return "fallback";
     }
+    const activePreviewMessageId = lane.stream?.messageId();
     return finalizePreview(
       previewTargetAfterStop.previewMessageId,
       false,
       previewTargetAfterStop.hadPreviewMessage,
+      typeof activePreviewMessageId === "number" &&
+        activePreviewMessageId !== previewTargetAfterStop.previewMessageId,
     );
   };
 

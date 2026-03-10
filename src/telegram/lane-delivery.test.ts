@@ -193,7 +193,7 @@ describe("createLaneTextDeliverer", () => {
     );
   });
 
-  it("keeps preview when Telegram reports the final edit target missing", async () => {
+  it("falls back when Telegram reports the current final edit target missing", async () => {
     const harness = createHarness({ answerMessageId: 999 });
     harness.editPreview.mockRejectedValue(new Error("400: Bad Request: message to edit not found"));
 
@@ -204,11 +204,13 @@ describe("createLaneTextDeliverer", () => {
       infoKind: "final",
     });
 
-    expect(result).toBe("preview-retained");
+    expect(result).toBe("sent");
     expect(harness.editPreview).toHaveBeenCalledTimes(1);
-    expect(harness.sendPayload).not.toHaveBeenCalled();
+    expect(harness.sendPayload).toHaveBeenCalledWith(
+      expect.objectContaining({ text: "Hello final" }),
+    );
     expect(harness.log).toHaveBeenCalledWith(
-      expect.stringContaining("edit target missing; keeping existing preview without fallback"),
+      expect.stringContaining("edit target missing with no alternate preview; falling back"),
     );
   });
 
@@ -445,8 +447,32 @@ describe("createLaneTextDeliverer", () => {
     expect(harness.sendPayload).toHaveBeenCalledTimes(1);
   });
 
-  it("keeps archived preview when its final edit target is missing", async () => {
+  it("falls back when an archived preview edit target is missing and no alternate preview exists", async () => {
     const harness = createHarness();
+    harness.archivedAnswerPreviews.push({
+      messageId: 5555,
+      textSnapshot: "Partial streaming...",
+      deleteIfUnused: true,
+    });
+    harness.editPreview.mockRejectedValue(new Error("400: Bad Request: message to edit not found"));
+
+    const result = await harness.deliverLaneText({
+      laneName: "answer",
+      text: "Complete final answer",
+      payload: { text: "Complete final answer" },
+      infoKind: "final",
+    });
+
+    expect(harness.editPreview).toHaveBeenCalledTimes(1);
+    expect(harness.sendPayload).toHaveBeenCalledWith(
+      expect.objectContaining({ text: "Complete final answer" }),
+    );
+    expect(result).toBe("sent");
+    expect(harness.deletePreviewMessage).toHaveBeenCalledWith(5555);
+  });
+
+  it("keeps the active preview when an archived final edit target is missing", async () => {
+    const harness = createHarness({ answerMessageId: 999 });
     harness.archivedAnswerPreviews.push({
       messageId: 5555,
       textSnapshot: "Partial streaming...",
@@ -464,6 +490,9 @@ describe("createLaneTextDeliverer", () => {
     expect(harness.editPreview).toHaveBeenCalledTimes(1);
     expect(harness.sendPayload).not.toHaveBeenCalled();
     expect(result).toBe("preview-retained");
+    expect(harness.log).toHaveBeenCalledWith(
+      expect.stringContaining("edit target missing; keeping alternate preview without fallback"),
+    );
   });
 
   it("deletes consumed boundary previews after fallback final send", async () => {
