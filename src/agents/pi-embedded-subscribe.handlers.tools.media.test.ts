@@ -119,6 +119,31 @@ describe("handleToolExecutionEnd media emission", () => {
     });
   });
 
+  it("propagates audioAsVoice when tool output includes [[audio_as_voice]]", async () => {
+    const onToolResult = vi.fn();
+    const ctx = createMockContext({ shouldEmitToolOutput: false, onToolResult });
+
+    await handleToolExecutionEnd(ctx, {
+      type: "tool_execution_end",
+      toolName: "tts",
+      toolCallId: "tc-1",
+      isError: false,
+      result: {
+        content: [
+          {
+            type: "text",
+            text: "[[audio_as_voice]]\nMEDIA:/tmp/tts-output.opus",
+          },
+        ],
+      },
+    });
+
+    expect(onToolResult).toHaveBeenCalledWith({
+      mediaUrls: ["/tmp/tts-output.opus"],
+      audioAsVoice: true,
+    });
+  });
+
   it("does NOT emit local media for untrusted tools", async () => {
     const onToolResult = vi.fn();
     const ctx = createMockContext({ shouldEmitToolOutput: false, onToolResult });
