@@ -128,6 +128,25 @@ describe("gateway-cli coverage", () => {
     expect(runtimeLogs.join("\n")).toContain('"ok": true');
   });
 
+  it("registers usage-sessions and requests sessions + cost", async () => {
+    resetRuntimeCapture();
+    callGateway.mockClear();
+
+    await runGatewayCommand(["gateway", "usage-sessions", "--days", "7", "--json"]);
+
+    expect(callGateway).toHaveBeenCalledTimes(2);
+    expect(callGateway.mock.calls[0]?.[0]).toMatchObject({
+      method: "sessions.usage",
+      params: expect.objectContaining({
+        limit: 200,
+        includeContextWeight: false,
+      }),
+    });
+    expect(callGateway.mock.calls[1]?.[0]).toMatchObject({
+      method: "usage.cost",
+    });
+  });
+
   it("registers gateway probe and routes to gatewayStatusCommand", async () => {
     resetRuntimeCapture();
     gatewayStatusCommand.mockClear();
