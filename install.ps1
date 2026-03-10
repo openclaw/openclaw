@@ -270,13 +270,12 @@ function Install-OpenClaw {
     }
     Require-Git
 
-    # Use @openxd/openclaw package (China customized version)
+    # Use @openxd/openclaw package for beta, @openxd/openclaw for stable
     $packageName = "@openxd/openclaw"
-    Write-Host "[*] Installing OpenClaw China Edition ($packageName@$Tag)..." -ForegroundColor Yellow
-
-    # Configure npm to use Alibaba Cloud mirror for faster downloads in China
-    $prevRegistry = $env:NPM_CONFIG_REGISTRY
-    $env:NPM_CONFIG_REGISTRY = "https://registry.npmmirror.com"
+    if ($Tag -eq "beta" -or $Tag -match "^beta\.") {
+        $packageName = "@openxd/openclaw"
+    }
+    Write-Host "[*] Installing OpenClaw ($packageName@$Tag)..." -ForegroundColor Yellow
     $prevLogLevel = $env:NPM_CONFIG_LOGLEVEL
     $prevUpdateNotifier = $env:NPM_CONFIG_UPDATE_NOTIFIER
     $prevFund = $env:NPM_CONFIG_FUND
@@ -308,7 +307,6 @@ function Install-OpenClaw {
         $env:NPM_CONFIG_FUND = $prevFund
         $env:NPM_CONFIG_AUDIT = $prevAudit
         $env:NPM_CONFIG_SCRIPT_SHELL = $prevScriptShell
-        $env:NPM_CONFIG_REGISTRY = $prevRegistry
     }
     Write-Host "[OK] OpenClaw installed" -ForegroundColor Green
 }
@@ -593,13 +591,9 @@ function Main {
             Write-Host "openclaw onboard" -ForegroundColor Cyan -NoNewline
             Write-Host " later."
         } else {
-            Write-Host "Creating default configuration..." -ForegroundColor Cyan
+            Write-Host "Starting setup..." -ForegroundColor Cyan
             Write-Host ""
-            Invoke-OpenClawCommand onboard --non-interactive --accept-risk --auth-choice skip --skip-health --json
-            if ($LASTEXITCODE -eq 0) {
-                Write-Host ""
-                Write-Host "[ONBOARD_SUCCESS] Configuration created at: $env:USERPROFILE\.openclaw\openclaw.json" -ForegroundColor Green
-            }
+            Invoke-OpenClawCommand onboard
         }
     }
 }
