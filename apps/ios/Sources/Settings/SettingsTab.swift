@@ -17,7 +17,7 @@ struct SettingsTab: View {
     @Environment(VoiceWakeManager.self) private var voiceWake: VoiceWakeManager
     @Environment(GatewayConnectionController.self) private var gatewayController: GatewayConnectionController
     @Environment(\.dismiss) private var dismiss
-    @AppStorage("node.displayName") private var displayName: String = "iOS Node"
+    @AppStorage("node.displayName") private var displayName: String = NSLocalizedString("settings.device.default_name", comment: "iOS Node")
     @AppStorage("node.instanceId") private var instanceId: String = UUID().uuidString
     @AppStorage("voiceWake.enabled") private var voiceWakeEnabled: Bool = false
     @AppStorage("talk.enabled") private var talkEnabled: Bool = false
@@ -64,11 +64,7 @@ struct SettingsTab: View {
                 Section {
                     DisclosureGroup(isExpanded: self.$gatewayExpanded) {
                         if !self.isGatewayConnected {
-                            Text(
-                                "1. Open Telegram and message your bot: /pair\n"
-                                    + "2. Copy the setup code it returns\n"
-                                    + "3. Paste here and tap Connect\n"
-                                    + "4. Back in Telegram, run /pair approve")
+                            Text(NSLocalizedString("settings.gateway.setup.instructions", comment: "Gateway setup instructions"))
                                 .font(.footnote)
                                 .foregroundStyle(.secondary)
 
@@ -78,7 +74,7 @@ struct SettingsTab: View {
                                     .foregroundStyle(.orange)
                             }
 
-                            TextField("Paste setup code", text: self.$setupCode)
+                            TextField(NSLocalizedString("settings.gateway.setup.code.placeholder", comment: "Setup code placeholder"), text: self.$setupCode)
                                 .textInputAutocapitalization(.never)
                                 .autocorrectionDisabled()
 
@@ -89,10 +85,10 @@ struct SettingsTab: View {
                                     HStack(spacing: 8) {
                                         ProgressView()
                                             .progressViewStyle(.circular)
-                                        Text("Connecting…")
+                                        Text(NSLocalizedString("settings.gateway.connecting", comment: "Connecting status"))
                                     }
                                 } else {
-                                    Text("Connect with setup code")
+                                    Text(NSLocalizedString("settings.gateway.connect.button", comment: "Connect with setup code button"))
                                 }
                             }
                             .disabled(self.connectingGatewayID != nil
@@ -106,8 +102,8 @@ struct SettingsTab: View {
                         }
 
                         if self.isGatewayConnected {
-                            Picker("Bot", selection: self.$selectedAgentPickerId) {
-                                Text("Default").tag("")
+                            Picker(NSLocalizedString("settings.gateway.bot.picker", comment: "Bot picker"), selection: self.$selectedAgentPickerId) {
+                                Text(NSLocalizedString("settings.gateway.bot.default", comment: "Default bot")).tag("")
                                 let defaultId = (self.appModel.gatewayDefaultAgentId ?? "")
                                     .trimmingCharacters(in: .whitespacesAndNewlines)
                                 ForEach(self.appModel.gatewayAgents.filter { $0.id != defaultId }, id: \.id) { agent in
@@ -115,49 +111,49 @@ struct SettingsTab: View {
                                     Text(name.isEmpty ? agent.id : name).tag(agent.id)
                                 }
                             }
-                            Text("Controls which bot Chat and Talk speak to.")
+                            Text(NSLocalizedString("settings.gateway.bot.description", comment: "Bot description"))
                                 .font(.footnote)
                                 .foregroundStyle(.secondary)
                         }
 
                         if self.appModel.gatewayServerName == nil {
-                            LabeledContent("Discovery", value: self.gatewayController.discoveryStatusText)
+                            LabeledContent(NSLocalizedString("settings.gateway.discovery", comment: "Discovery"), value: self.gatewayController.discoveryStatusText)
                         }
-                        LabeledContent("Status", value: self.appModel.gatewayStatusText)
-                        Toggle("Auto-connect on launch", isOn: self.$gatewayAutoConnect)
+                        LabeledContent(NSLocalizedString("settings.gateway.status", comment: "Status"), value: self.appModel.gatewayStatusText)
+                        Toggle(NSLocalizedString("settings.gateway.auto_connect", comment: "Auto-connect on launch"), isOn: self.$gatewayAutoConnect)
 
                         if let serverName = self.appModel.gatewayServerName {
-                            LabeledContent("Server", value: serverName)
+                            LabeledContent(NSLocalizedString("settings.gateway.server", comment: "Server"), value: serverName)
                             if let addr = self.appModel.gatewayRemoteAddress {
                                 let parts = Self.parseHostPort(from: addr)
                                 let urlString = Self.httpURLString(host: parts?.host, port: parts?.port, fallback: addr)
-                                LabeledContent("Address") {
+                                LabeledContent(NSLocalizedString("settings.gateway.address", comment: "Address")) {
                                     Text(urlString)
                                 }
                                 .contextMenu {
                                     Button {
                                         UIPasteboard.general.string = urlString
                                     } label: {
-                                        Label("Copy URL", systemImage: "doc.on.doc")
+                                        Label(NSLocalizedString("common.copy_url", comment: "Copy URL"), systemImage: "doc.on.doc")
                                     }
 
                                     if let parts {
                                         Button {
                                             UIPasteboard.general.string = parts.host
                                         } label: {
-                                            Label("Copy Host", systemImage: "doc.on.doc")
+                                            Label(NSLocalizedString("common.copy_host", comment: "Copy Host"), systemImage: "doc.on.doc")
                                         }
 
                                         Button {
                                             UIPasteboard.general.string = "\(parts.port)"
                                         } label: {
-                                            Label("Copy Port", systemImage: "doc.on.doc")
+                                            Label(NSLocalizedString("common.copy_port", comment: "Copy Port"), systemImage: "doc.on.doc")
                                         }
                                     }
                                 }
                             }
 
-                            Button("Disconnect", role: .destructive) {
+                            Button(NSLocalizedString("settings.gateway.disconnect", comment: "Disconnect button"), role: .destructive) {
                                 self.appModel.disconnectGateway()
                             }
                         } else {
@@ -165,16 +161,16 @@ struct SettingsTab: View {
                         }
 
                         DisclosureGroup("Advanced") {
-                            Toggle("Use Manual Gateway", isOn: self.$manualGatewayEnabled)
+                            Toggle(NSLocalizedString("settings.gateway.manual.title", comment: "Use Manual Gateway"), isOn: self.$manualGatewayEnabled)
 
-                            TextField("Host", text: self.$manualGatewayHost)
+                            TextField(NSLocalizedString("settings.gateway.manual.host", comment: "Host"), text: self.$manualGatewayHost)
                                 .textInputAutocapitalization(.never)
                                 .autocorrectionDisabled()
 
-                            TextField("Port (optional)", text: self.manualPortBinding)
+                            TextField(NSLocalizedString("settings.gateway.manual.port", comment: "Port"), text: self.manualPortBinding)
                                 .keyboardType(.numberPad)
 
-                            Toggle("Use TLS", isOn: self.$manualGatewayTLS)
+                            Toggle(NSLocalizedString("settings.gateway.manual.tls", comment: "Use TLS"), isOn: self.$manualGatewayTLS)
 
                             Button {
                                 Task { await self.connectManual() }
@@ -183,45 +179,43 @@ struct SettingsTab: View {
                                     HStack(spacing: 8) {
                                         ProgressView()
                                             .progressViewStyle(.circular)
-                                        Text("Connecting…")
+                                        Text(NSLocalizedString("settings.gateway.connecting", comment: "Connecting status"))
                                     }
                                 } else {
-                                    Text("Connect (Manual)")
+                                    Text(NSLocalizedString("settings.gateway.connect.manual", comment: "Manual connect button"))
                                 }
                             }
                             .disabled(self.connectingGatewayID != nil || self.manualGatewayHost
                                 .trimmingCharacters(in: .whitespacesAndNewlines)
                                 .isEmpty || !self.manualPortIsValid)
 
-                            Text(
-                                "Use this when mDNS/Bonjour discovery is blocked. "
-                                    + "Leave port empty for 443 on tailnet DNS (TLS) or 18789 otherwise.")
+                            Text(NSLocalizedString("settings.gateway.manual.description", comment: "Manual gateway description"))
                                 .font(.footnote)
                                 .foregroundStyle(.secondary)
 
-                            Toggle("Discovery Debug Logs", isOn: self.$discoveryDebugLogsEnabled)
+                            Toggle(NSLocalizedString("settings.gateway.debug.logs", comment: "Discovery Debug Logs"), isOn: self.$discoveryDebugLogsEnabled)
                                 .onChange(of: self.discoveryDebugLogsEnabled) { _, newValue in
                                     self.gatewayController.setDiscoveryDebugLoggingEnabled(newValue)
                                 }
 
-                            NavigationLink("Discovery Logs") {
+                            NavigationLink(NSLocalizedString("settings.gateway.discovery_logs", comment: "Discovery Logs")) {
                                 GatewayDiscoveryDebugLogView()
                             }
 
-                            Toggle("Debug Canvas Status", isOn: self.$canvasDebugStatusEnabled)
+                            Toggle(NSLocalizedString("settings.gateway.debug.canvas", comment: "Debug Canvas Status"), isOn: self.$canvasDebugStatusEnabled)
 
-                            TextField("Gateway Auth Token", text: self.$gatewayToken)
+                            TextField(NSLocalizedString("settings.gateway.auth.token", comment: "Gateway Auth Token"), text: self.$gatewayToken)
                                 .textInputAutocapitalization(.never)
                                 .autocorrectionDisabled()
 
-                            SecureField("Gateway Password", text: self.$gatewayPassword)
+                            SecureField(NSLocalizedString("settings.gateway.auth.password", comment: "Gateway Password"), text: self.$gatewayPassword)
 
-                            Button("Reset Onboarding", role: .destructive) {
+                            Button(NSLocalizedString("settings.gateway.reset.onboarding", comment: "Reset Onboarding"), role: .destructive) {
                                 self.showResetOnboardingAlert = true
                             }
 
                             VStack(alignment: .leading, spacing: 6) {
-                                Text("Debug")
+                                Text(NSLocalizedString("settings.gateway.debug.title", comment: "Debug"))
                                     .font(.footnote.weight(.semibold))
                                     .foregroundStyle(.secondary)
                                 Text(self.gatewayDebugText())
@@ -240,7 +234,7 @@ struct SettingsTab: View {
                             Circle()
                                 .fill(self.isGatewayConnected ? Color.green : Color.secondary.opacity(0.35))
                                 .frame(width: 10, height: 10)
-                            Text("Gateway")
+                            Text(NSLocalizedString("settings.gateway.title", comment: "Gateway"))
                             Spacer()
                             Text(self.gatewaySummaryText)
                                 .font(.footnote)
@@ -249,127 +243,124 @@ struct SettingsTab: View {
                     }
                 }
 
-                Section("Device") {
-                    DisclosureGroup("Features") {
+                Section(NSLocalizedString("settings.device.title", comment: "Device")) {
+                    DisclosureGroup(NSLocalizedString("settings.device.features.title", comment: "Features")) {
                         self.featureToggle(
-                            "Voice Wake",
+                            NSLocalizedString("settings.device.voice_wake", comment: "Voice Wake"),
                             isOn: self.$voiceWakeEnabled,
-                            help: "Enables wake-word activation to start a hands-free session.") { newValue in
+                            help: NSLocalizedString("settings.device.voice_wake.description", comment: "Voice wake description")) { newValue in
                                 self.appModel.setVoiceWakeEnabled(newValue)
                             }
                         self.featureToggle(
-                            "Talk Mode",
+                            NSLocalizedString("settings.device.talk_mode", comment: "Talk Mode"),
                             isOn: self.$talkEnabled,
-                            help: "Enables voice conversation mode with your connected OpenClaw agent.") { newValue in
+                            help: NSLocalizedString("settings.device.talk_mode.description", comment: "Talk mode description")) { newValue in
                                 self.appModel.setTalkEnabled(newValue)
                             }
                         self.featureToggle(
-                            "Background Listening",
+                            NSLocalizedString("settings.device.background_listening", comment: "Background Listening"),
                             isOn: self.$talkBackgroundEnabled,
-                            help: "Keeps listening while the app is backgrounded. Uses more battery.")
+                            help: NSLocalizedString("settings.device.background_listening.description", comment: "Background listening description"))
 
                         NavigationLink {
                             VoiceWakeWordsSettingsView()
                         } label: {
-                            LabeledContent(
-                                "Wake Words",
-                                value: VoiceWakePreferences.displayString(for: self.voiceWake.triggerWords))
+                                LabeledContent(
+                                    NSLocalizedString("settings.device.wake_words", comment: "Wake Words"),
+                                    value: VoiceWakePreferences.displayString(for: self.voiceWake.triggerWords))
                         }
 
                         self.featureToggle(
-                            "Allow Camera",
+                            NSLocalizedString("settings.device.allow_camera", comment: "Allow Camera"),
                             isOn: self.$cameraEnabled,
-                            help: "Allows the gateway to request photos or short video clips "
-                                + "while OpenClaw is foregrounded."
+                            help: NSLocalizedString("settings.device.allow_camera.description", comment: "Allow camera description")
                         )
 
                         HStack(spacing: 8) {
-                            Text("Location Access")
+                            Text(NSLocalizedString("settings.device.location_access", comment: "Location Access"))
                             Spacer()
                             Button {
                                 self.activeFeatureHelp = FeatureHelp(
-                                    title: "Location Access",
-                                    message: "Controls location permissions for OpenClaw. "
-                                        + "Off disables location tools, While Using enables "
-                                        + "foreground location, and Always enables "
-                                        + "background location."
+                                    title: NSLocalizedString("alert.location_access.title", comment: "Location Access"),
+                                    message: NSLocalizedString("settings.device.location_access.description", comment: "Location access description")
                                 )
                             } label: {
                                 Image(systemName: "info.circle")
                                     .foregroundStyle(.secondary)
                             }
                             .buttonStyle(.plain)
-                            .accessibilityLabel("Location Access info")
+                            .accessibilityLabel(NSLocalizedString("alert.location_access.title", comment: "Location Access") + " info")
                         }
-                        Picker("Location Access", selection: self.$locationEnabledModeRaw) {
-                            Text("Off").tag(OpenClawLocationMode.off.rawValue)
-                            Text("While Using").tag(OpenClawLocationMode.whileUsing.rawValue)
-                            Text("Always").tag(OpenClawLocationMode.always.rawValue)
+                            Picker(NSLocalizedString("settings.device.location_access", comment: "Location Access"), selection: self.$locationEnabledModeRaw) {
+                                Text(NSLocalizedString("settings.device.location.off", comment: "Off")).tag(OpenClawLocationMode.off.rawValue)
+                                Text(NSLocalizedString("settings.device.location.while_using", comment: "While Using")).tag(OpenClawLocationMode.whileUsing.rawValue)
+                                Text(NSLocalizedString("settings.device.location.always", comment: "Always")).tag(OpenClawLocationMode.always.rawValue)
                         }
                         .labelsHidden()
                         .pickerStyle(.segmented)
 
                         self.featureToggle(
-                            "Prevent Sleep",
+                            NSLocalizedString("settings.device.prevent_sleep", comment: "Prevent Sleep"),
                             isOn: self.$preventSleep,
-                            help: "Keeps the screen awake while OpenClaw is open.")
+                            help: NSLocalizedString("settings.device.prevent_sleep.description", comment: "Prevent sleep description")
+                        )
 
-                        DisclosureGroup("Advanced") {
+                        DisclosureGroup(NSLocalizedString("settings.device.advanced.title", comment: "Advanced")) {
                             VStack(alignment: .leading, spacing: 8) {
-                                Text("Talk Voice (Gateway)")
+                                Text(NSLocalizedString("settings.device.talk_voice.gateway", comment: "Talk Voice Gateway"))
                                     .font(.footnote.weight(.semibold))
                                     .foregroundStyle(.secondary)
-                                LabeledContent("Provider", value: "ElevenLabs")
+                                LabeledContent(NSLocalizedString("settings.device.provider", comment: "Provider"), value: "ElevenLabs")
                                 LabeledContent(
-                                    "API Key",
+                                    NSLocalizedString("settings.device.api_key", comment: "API Key"),
                                     value: self.appModel.talkMode.gatewayTalkConfigLoaded
                                         ? (
                                             self.appModel.talkMode.gatewayTalkApiKeyConfigured
-                                                ? "Configured"
-                                                : "Not configured"
+                                                ? NSLocalizedString("settings.device.configured", comment: "Configured")
+                                                : NSLocalizedString("settings.device.not_configured", comment: "Not configured")
                                         )
-                                        : "Not loaded")
+                                        : NSLocalizedString("settings.device.not_loaded", comment: "Not loaded"))
                                 LabeledContent(
-                                    "Default Model",
+                                    NSLocalizedString("settings.device.default_model", comment: "Default Model"),
                                     value: self.appModel.talkMode.gatewayTalkDefaultModelId ?? "eleven_v3 (fallback)")
                                 LabeledContent(
-                                    "Default Voice",
+                                    NSLocalizedString("settings.device.default_voice", comment: "Default Voice"),
                                     value: self.appModel.talkMode.gatewayTalkDefaultVoiceId ?? "auto (first available)")
-                                Text("Configured on gateway via talk.apiKey, talk.modelId, and talk.voiceId.")
+                                Text(NSLocalizedString("settings.device.talk_voice.description", comment: "Talk voice description"))
                                     .font(.footnote)
                                     .foregroundStyle(.secondary)
                             }
                             self.featureToggle(
-                                "Show Talk Button",
+                                NSLocalizedString("settings.device.show_talk_button", comment: "Show Talk Button"),
                                 isOn: self.$talkButtonEnabled,
-                                help: "Shows the floating Talk button in the main interface.")
-                            TextField("Default Share Instruction", text: self.$defaultShareInstruction, axis: .vertical)
+                                help: NSLocalizedString("settings.device.show_talk_button.description", comment: "Show talk button description")
+                            )
+                            TextField(NSLocalizedString("settings.device.default_share_instruction", comment: "Default Share Instruction"), text: self.$defaultShareInstruction, axis: .vertical)
                                 .lineLimit(2 ... 6)
                                 .textInputAutocapitalization(.sentences)
                             HStack(spacing: 8) {
-                                Text("Default Share Instruction")
+                                Text(NSLocalizedString("settings.device.default_share_instruction", comment: "Default Share Instruction"))
                                     .font(.footnote)
                                     .foregroundStyle(.secondary)
                                 Spacer()
                                 Button {
                                     self.activeFeatureHelp = FeatureHelp(
-                                        title: "Default Share Instruction",
-                                        message: "Appends this instruction when sharing content "
-                                            + "into OpenClaw from iOS."
+                                        title: NSLocalizedString("alert.default_share_instruction.title", comment: "Default Share Instruction"),
+                                        message: NSLocalizedString("alert.default_share_instruction.message", comment: "Default share instruction message")
                                     )
                                 } label: {
                                     Image(systemName: "info.circle")
                                         .foregroundStyle(.secondary)
                                 }
                                 .buttonStyle(.plain)
-                                .accessibilityLabel("Default Share Instruction info")
+                                .accessibilityLabel(NSLocalizedString("alert.default_share_instruction.title", comment: "Default Share Instruction") + " info")
                             }
 
                             VStack(alignment: .leading, spacing: 8) {
                                 Button {
                                     Task { await self.appModel.runSharePipelineSelfTest() }
                                 } label: {
-                                    Label("Run Share Self-Test", systemImage: "checkmark.seal")
+                                    Label(NSLocalizedString("settings.device.run_share_self_test", comment: "Run Share Self-Test"), systemImage: "checkmark.seal")
                                 }
                                 Text(self.appModel.lastShareEventText)
                                     .font(.footnote)
@@ -378,20 +369,20 @@ struct SettingsTab: View {
                         }
                     }
 
-                    DisclosureGroup("Device Info") {
-                        TextField("Name", text: self.$displayName)
+                    DisclosureGroup(NSLocalizedString("settings.device.device_info.title", comment: "Device Info")) {
+                        TextField(NSLocalizedString("settings.device.name", comment: "Name"), text: self.$displayName)
                         Text(self.instanceId)
                             .font(.footnote)
                             .foregroundStyle(.secondary)
                             .lineLimit(1)
                             .truncationMode(.middle)
-                        LabeledContent("Device", value: DeviceInfoHelper.deviceFamily())
-                        LabeledContent("Platform", value: DeviceInfoHelper.platformStringForDisplay())
-                        LabeledContent("OpenClaw", value: DeviceInfoHelper.openClawVersionString())
+                        LabeledContent(NSLocalizedString("settings.device.device", comment: "Device"), value: DeviceInfoHelper.deviceFamily())
+                        LabeledContent(NSLocalizedString("settings.device.platform", comment: "Platform"), value: DeviceInfoHelper.platformStringForDisplay())
+                        LabeledContent(NSLocalizedString("settings.device.openclaw", comment: "OpenClaw"), value: DeviceInfoHelper.openClawVersionString())
                     }
                 }
             }
-            .navigationTitle("Settings")
+            .navigationTitle(NSLocalizedString("settings.title", comment: "Settings title"))
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
                     Button {
@@ -399,25 +390,24 @@ struct SettingsTab: View {
                     } label: {
                         Image(systemName: "xmark")
                     }
-                    .accessibilityLabel("Close")
+                    .accessibilityLabel(NSLocalizedString("common.close", comment: "Close"))
                 }
             }
-            .alert("Reset Onboarding?", isPresented: self.$showResetOnboardingAlert) {
-                Button("Reset", role: .destructive) {
+            .alert(NSLocalizedString("alert.reset_onboarding.title", comment: "Reset Onboarding?"), isPresented: self.$showResetOnboardingAlert) {
+                Button(NSLocalizedString("common.reset", comment: "Reset"), role: .destructive) {
                     self.resetOnboarding()
                 }
-                Button("Cancel", role: .cancel) {}
+                Button(NSLocalizedString("common.cancel", comment: "Cancel"), role: .cancel) {}
             } message: {
                 Text(
-                    "This will disconnect, clear saved gateway connection + credentials, "
-                        + "and reopen the onboarding wizard."
+                    NSLocalizedString("alert.reset_onboarding.message", comment: "Reset onboarding message")
                 )
             }
             .alert(item: self.$activeFeatureHelp) { help in
                 Alert(
                     title: Text(help.title),
                     message: Text(help.message),
-                    dismissButton: .default(Text("OK")))
+                    dismissButton: .default(Text(NSLocalizedString("common.ok", comment: "OK"))))
             }
             .onAppear {
                 self.lastLocationModeRaw = self.locationEnabledModeRaw
@@ -512,9 +502,9 @@ struct SettingsTab: View {
     private func gatewayList(showing: GatewayListMode) -> some View {
         if self.gatewayController.gateways.isEmpty {
             VStack(alignment: .leading, spacing: 12) {
-                Text("No gateways found yet.")
+                Text(NSLocalizedString("settings.gateway.no.gateways", comment: "No gateways found"))
                     .foregroundStyle(.secondary)
-                Text("If your gateway is on another network, connect it and ensure DNS is working.")
+                Text(NSLocalizedString("settings.gateway.no.gateways.description", comment: "No gateways description"))
                     .font(.footnote)
                     .foregroundStyle(.secondary)
 
@@ -544,7 +534,7 @@ struct SettingsTab: View {
             }
 
             if rows.isEmpty, showing == .availableOnly {
-                Text("No other gateways found.")
+                Text(NSLocalizedString("settings.gateway.no.other.gateways", comment: "No other gateways"))
                     .foregroundStyle(.secondary)
             } else {
                 ForEach(rows) { gateway in
@@ -568,7 +558,7 @@ struct SettingsTab: View {
                                 ProgressView()
                                     .progressViewStyle(.circular)
                             } else {
-                                Text("Connect")
+                            Text(NSLocalizedString("common.connect", comment: "Connect"))
                             }
                         }
                         .disabled(self.connectingGatewayID != nil)
@@ -594,7 +584,7 @@ struct SettingsTab: View {
             return server
         }
         let trimmed = self.appModel.gatewayStatusText.trimmingCharacters(in: .whitespacesAndNewlines)
-        return trimmed.isEmpty ? "Not connected" : trimmed
+        return trimmed.isEmpty ? NSLocalizedString("settings.gateway.status.not_connected", comment: "Not connected") : trimmed
     }
 
     private func featureToggle(
@@ -657,16 +647,14 @@ struct SettingsTab: View {
     private func lastKnownButtonLabel(host: String, port: Int) -> some View {
         if self.connectingGatewayID == "last-known" {
             HStack(spacing: 8) {
-                ProgressView()
-                    .progressViewStyle(.circular)
-                Text("Connecting…")
+                                Text(NSLocalizedString("settings.gateway.connecting", comment: "Connecting status"))
             }
             .frame(maxWidth: .infinity)
         } else {
             HStack(spacing: 8) {
                 Image(systemName: "bolt.horizontal.circle.fill")
                 VStack(alignment: .leading, spacing: 2) {
-                    Text("Connect last known")
+                        Text(NSLocalizedString("settings.gateway.connect.last_known", comment: "Connect last known"))
                     Text("\(host):\(port)")
                         .font(.footnote)
                         .foregroundStyle(.secondary)
@@ -728,7 +716,7 @@ struct SettingsTab: View {
         }
         let ok = await self.preflightGateway(host: host, port: port, useTLS: self.manualGatewayTLS)
         guard ok else { return }
-        self.setupStatusText = "Setup code applied. Connecting…"
+        self.setupStatusText = NSLocalizedString("settings.gateway.setup.applied_connecting", comment: "Setup code applied. Connecting…")
         await self.connectManual()
     }
 
@@ -908,7 +896,7 @@ struct SettingsTab: View {
             return "Connection timed out. Make sure Tailscale is connected, then try again."
         }
         if lower.contains("unauthorized role") {
-            return "Connected, but some controls are restricted for nodes. This is expected."
+            return NSLocalizedString("settings.gateway.status.connected", comment: "Connected, but some controls are restricted for nodes. This is expected.")
         }
         return nil
     }

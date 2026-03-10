@@ -108,6 +108,10 @@ targets:
             CFBundleURLSchemes:
               - openclaw
         CFBundleShortVersionString: "2026.3.9"
+        CFBundleLocalizations:
+          - en
+          - ja
+          - zh-Hans
         CFBundleVersion: "20260308"
         UILaunchScreen: {}
         UIApplicationSceneManifest:

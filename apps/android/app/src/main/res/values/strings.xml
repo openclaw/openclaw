@@ -1,3 +1,100 @@
+<?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">OpenClaw Node</string>
+    
+    <!-- Settings Tab -->
+    <string name="settings_title">Settings</string>
+    <string name="settings_gateway_title">Gateway</string>
+    <string name="settings_gateway_status_connected">Connected</string>
+    <string name="settings_gateway_status_not_connected">Not connected</string>
+    <string name="settings_gateway_setup_instructions">1. Open Telegram and message your bot: /pair\n2. Copy the setup code it returns\n3. Paste here and tap Connect\n4. Back in Telegram, run /pair approve</string>
+    <string name="settings_gateway_setup_code_placeholder">Paste setup code</string>
+    <string name="settings_gateway_connect_button">Connect with setup code</string>
+    <string name="settings_gateway_connecting">Connecting…</string>
+    <string name="settings_gateway_connect_manual">Connect (Manual)</string>
+    <string name="settings_gateway_bot_picker">Bot</string>
+    <string name="settings_gateway_bot_default">Default</string>
+    <string name="settings_gateway_bot_description">Controls which bot Chat and Talk speak to.</string>
+    <string name="settings_gateway_discovery">Discovery</string>
+    <string name="settings_gateway_status">Status</string>
+    <string name="settings_gateway_auto_connect">Auto-connect on launch</string>
+    <string name="settings_gateway_server">Server</string>
+    <string name="settings_gateway_address">Address</string>
+    <string name="settings_gateway_disconnect">Disconnect</string>
+    <string name="settings_gateway_advanced_title">Advanced</string>
+    <string name="settings_gateway_manual_title">Use Manual Gateway</string>
+    <string name="settings_gateway_manual_host">Host</string>
+    <string name="settings_gateway_manual_port">Port (optional)</string>
+    <string name="settings_gateway_manual_tls">Use TLS</string>
+    <string name="settings_gateway_manual_description">Use this when mDNS/Bonjour discovery is blocked. Leave port empty for 443 on tailnet DNS (TLS) or 18789 otherwise.</string>
+    <string name="settings_gateway_debug_logs">Discovery Debug Logs</string>
+    <string name="settings_gateway_discovery_logs">Discovery Logs</string>
+    <string name="settings_gateway_debug_canvas">Debug Canvas Status</string>
+    <string name="settings_gateway_auth_token">Gateway Auth Token</string>
+    <string name="settings_gateway_auth_password">Gateway Password</string>
+    <string name="settings_gateway_reset_onboarding">Reset Onboarding</string>
+    <string name="settings_gateway_debug_title">Debug</string>
+    <string name="settings_gateway_no_gateways">No gateways found yet.</string>
+    <string name="settings_gateway_no_gateways_description">If your gateway is on another network, connect it and ensure DNS is working.</string>
+    <string name="settings_gateway_connect_last_known">Connect last known</string>
+    <string name="settings_gateway_setup_applied_connecting">Setup code applied. Connecting…</string>
+    <string name="settings_gateway_no_other_gateways">No other gateways found.</string>
+    
+    <!-- Device Section -->
+    <string name="settings_device_title">Device</string>
+    <string name="settings_device_features_title">Features</string>
+    <string name="settings_device_voice_wake">Voice Wake</string>
+    <string name="settings_device_voice_wake_description">Enables wake-word activation to start a hands-free session.</string>
+    <string name="settings_device_talk_mode">Talk Mode</string>
+    <string name="settings_device_talk_mode_description">Enables voice conversation mode with your connected OpenClaw agent.</string>
+    <string name="settings_device_background_listening">Background Listening</string>
+    <string name="settings_device_background_listening_description">Keeps listening while the app is backgrounded. Uses more battery.</string>
+    <string name="settings_device_wake_words">Wake Words</string>
+    <string name="settings_device_allow_camera">Allow Camera</string>
+    <string name="settings_device_allow_camera_description">Allows the gateway to request photos or short video clips while OpenClaw is foregrounded.</string>
+    <string name="settings_device_location_access">Location Access</string>
+    <string name="settings_device_location_access_description">Controls location permissions for OpenClaw. Off disables location tools, While Using enables foreground location, and Always enables background location.</string>
+    <string name="settings_device_location_off">Off</string>
+    <string name="settings_device_location_while_using">While Using</string>
+    <string name="settings_device_location_always">Always</string>
+    <string name="settings_device_prevent_sleep">Prevent Sleep</string>
+    <string name="settings_device_prevent_sleep_description">Keeps the screen awake while OpenClaw is open.</string>
+    <string name="settings_device_advanced_title">Advanced</string>
+    <string name="settings_device_talk_voice_gateway">Talk Voice (Gateway)</string>
+    <string name="settings_device_provider">Provider</string>
+    <string name="settings_device_api_key">API Key</string>
+    <string name="settings_device_configured">Configured</string>
+    <string name="settings_device_not_configured">Not configured</string>
+    <string name="settings_device_not_loaded">Not loaded</string>
+    <string name="settings_device_default_model">Default Model</string>
+    <string name="settings_device_default_voice">Default Voice</string>
+    <string name="settings_device_talk_voice_description">Configured on gateway via talk.apiKey, talk.modelId, and talk.voiceId.</string>
+    <string name="settings_device_show_talk_button">Show Talk Button</string>
+    <string name="settings_device_show_talk_button_description">Shows the floating Talk button in the main interface.</string>
+    <string name="settings_device_default_share_instruction">Default Share Instruction</string>
+    <string name="settings_device_default_share_instruction_description">Appends this instruction when sharing content into OpenClaw from Android.</string>
+    <string name="settings_device_run_share_self_test">Run Share Self-Test</string>
+    <string name="settings_device_device_info_title">Device Info</string>
+    <string name="settings_device_name">Name</string>
+    <string name="settings_device_device">Device</string>
+    <string name="settings_device_platform">Platform</string>
+    <string name="settings_device_openclaw">OpenClaw</string>
+    <string name="settings_device_default_name">Android Node</string>
+    
+    <!-- Common -->
+    <string name="common_close">Close</string>
+    <string name="common_ok">OK</string>
+    <string name="common_cancel">Cancel</string>
+    <string name="common_reset">Reset</string>
+    <string name="common_copy_url">Copy URL</string>
+    <string name="common_copy_host">Copy Host</string>
+    <string name="common_copy_port">Copy Port</string>
+    <string name="common_connect">Connect</string>
+    
+    <!-- Alerts -->
+    <string name="alert_reset_onboarding_title">Reset Onboarding?</string>
+    <string name="alert_reset_onboarding_message">This will disconnect, clear saved gateway connection + credentials, and reopen the onboarding wizard.</string>
+    <string name="alert_location_access_title">Location Access</string>
+    <string name="alert_default_share_instruction_title">Default Share Instruction</string>
+    <string name="alert_default_share_instruction_message">Appends this instruction when sharing content into OpenClaw from Android.</string>
 </resources>
