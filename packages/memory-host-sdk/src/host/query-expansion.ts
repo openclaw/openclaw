@@ -698,12 +698,18 @@ function tokenize(text: string, opts?: { ftsTokenizer?: "unicode61" | "trigram" 
       }
     } else if (/[\u4e00-\u9fff]/.test(segment)) {
       // Check if segment contains CJK characters (Chinese)
-      // For Chinese, extract character n-grams (unigrams and bigrams)
       const chars = Array.from(segment).filter((c) => /[\u4e00-\u9fff]/.test(c));
-      // Add individual characters
-      tokens.push(...chars);
-      // Add bigrams for better phrase matching (skip when using trigram tokenizer)
-      if (!useTrigram) {
+      if (useTrigram) {
+        // In trigram mode, push the whole contiguous CJK block (mirroring the
+        // Japanese kanji path). SQLite's trigram FTS requires at least 3 characters
+        // per query term — individual characters silently return no results.
+        const block = chars.join("");
+        if (block.length > 0) {
+          tokens.push(block);
+        }
+      } else {
+        // Default mode: unigrams + bigrams for phrase matching
+        tokens.push(...chars);
         for (let i = 0; i < chars.length - 1; i++) {
           tokens.push(chars[i] + chars[i + 1]);
         }
@@ -772,13 +778,16 @@ export function extractKeywords(
  * @param query - User's original query
  * @returns Object with original query and extracted keywords
  */
-export function expandQueryForFts(query: string): {
+export function expandQueryForFts(
+  query: string,
+  opts?: { ftsTokenizer?: "unicode61" | "trigram" },
+): {
   original: string;
   keywords: string[];
   expanded: string;
 } {
   const original = query.trim();
-  const keywords = extractKeywords(original);
+  const keywords = extractKeywords(original, opts);
 
   // Build expanded query: original terms OR extracted keywords
   // This ensures both exact matches and keyword matches are found
@@ -800,6 +809,7 @@ export type LlmQueryExpander = (query: string) => Promise<string[]>;
 export async function expandQueryWithLlm(
   query: string,
   llmExpander?: LlmQueryExpander,
+  opts?: { ftsTokenizer?: "unicode61" | "trigram" },
 ): Promise<string[]> {
   // If LLM expander is provided, try it first
   if (llmExpander) {
@@ -814,5 +824,5 @@ export async function expandQueryWithLlm(
   }
 
   // Fall back to local keyword extraction
-  return extractKeywords(query);
+  return extractKeywords(query, opts);
 }
