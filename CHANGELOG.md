@@ -6,6 +6,8 @@ Docs: https://docs.openclaw.ai
 
 ### Changes
 
+- Channels/GoHighLevel: add GoHighLevel CRM channel extension with webhook-based inbound messages, outbound reply delivery via GHL Conversations API, escalation tagging for human handoff, Workflow payload normalization, multi-account support, DM policy controls, and onboarding wizard.
+
 ### Breaking
 
 ### Fixes

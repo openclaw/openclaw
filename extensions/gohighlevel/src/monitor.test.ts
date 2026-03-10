@@ -47,7 +47,11 @@ vi.mock("./api.js", () => ({
 }));
 
 // Import after mocks
-import { handleGoHighLevelWebhookRequest, registerGoHighLevelWebhookTarget } from "./monitor.js";
+import {
+  handleGoHighLevelWebhookRequest,
+  registerGoHighLevelWebhookTarget,
+  resolveGoHighLevelWebhookPath,
+} from "./monitor.js";
 
 function createMockReq(options: {
   method?: string;
@@ -271,5 +275,101 @@ describe("handleGoHighLevelWebhookRequest", () => {
     expect(handled).toBe(true);
     expect(res._status).toBe(200);
     expect(res._body).toBe("{}");
+  });
+
+  it("accepts already-normalized inbound payload without workflow fields", async () => {
+    // Direct API webhooks use the standard InboundMessage shape.
+    const payload = {
+      type: "InboundMessage",
+      direction: "inbound",
+      contactId: "c2",
+      conversationId: "conv2",
+      body: "direct webhook",
+      messageType: "SMS",
+    };
+    const body = JSON.stringify(payload);
+    const signature = createHmac("sha256", "test-secret").update(body).digest("hex");
+    const req = createMockReq({
+      body,
+      headers: { "x-ghl-signature": signature },
+    });
+    const res = createMockRes();
+    const handled = await handleGoHighLevelWebhookRequest(req, res);
+    expect(handled).toBe(true);
+    expect(res._status).toBe(200);
+  });
+
+  it("accepts Workflow payload with customData.body but no message.body", async () => {
+    // Some Workflow configurations only populate customData, not message.
+    const payload = {
+      contact_id: "c3",
+      phone: "+15551234567",
+      customData: { event_type: "customer.replied", body: "from customData" },
+    };
+    const body = JSON.stringify(payload);
+    const signature = createHmac("sha256", "test-secret").update(body).digest("hex");
+    const req = createMockReq({
+      body,
+      headers: { "x-ghl-signature": signature },
+    });
+    const res = createMockRes();
+    const handled = await handleGoHighLevelWebhookRequest(req, res);
+    expect(handled).toBe(true);
+    expect(res._status).toBe(200);
+  });
+
+  it("accepts webhook without signature when no secret is configured", async () => {
+    // Register a target with no webhook secret
+    const { getGoHighLevelRuntime } = vi.mocked(await import("./runtime.js"));
+    const noSecretAccount = {
+      ...account,
+      accountId: "no-secret",
+      config: { dmPolicy: "open" as const },
+    };
+    const unsub = registerGoHighLevelWebhookTarget({
+      account: noSecretAccount as never,
+      config: {} as never,
+      runtime: { log: vi.fn(), error: vi.fn() },
+      core: getGoHighLevelRuntime() as never,
+      path: "/ghl-no-secret",
+    });
+
+    const body = JSON.stringify({
+      direction: "inbound",
+      contactId: "c4",
+      conversationId: "conv4",
+      body: "no sig needed",
+    });
+    const req = createMockReq({ url: "/ghl-no-secret", body });
+    const res = createMockRes();
+    const handled = await handleGoHighLevelWebhookRequest(req, res);
+    expect(handled).toBe(true);
+    expect(res._status).toBe(200);
+    unsub();
+  });
+});
+
+describe("resolveGoHighLevelWebhookPath", () => {
+  it("returns default /gohighlevel when no path configured", () => {
+    const path = resolveGoHighLevelWebhookPath({
+      account: { config: {} } as never,
+    });
+    expect(path).toBe("/gohighlevel");
+  });
+
+  it("returns configured webhookPath", () => {
+    const path = resolveGoHighLevelWebhookPath({
+      account: { config: { webhookPath: "/my-ghl" } } as never,
+    });
+    expect(path).toBe("/my-ghl");
+  });
+
+  it("extracts path from webhookUrl", () => {
+    const path = resolveGoHighLevelWebhookPath({
+      account: {
+        config: { webhookUrl: "https://example.com/ghl-hook" },
+      } as never,
+    });
+    expect(path).toBe("/ghl-hook");
   });
 });

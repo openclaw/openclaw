@@ -1,6 +1,6 @@
 {
   "name": "@openclaw/gohighlevel",
-  "version": "2026.2.27",
+  "version": "2026.3.9",
   "private": true,
   "description": "OpenClaw GoHighLevel channel plugin",
   "type": "module",
