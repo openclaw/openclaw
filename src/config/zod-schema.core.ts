@@ -200,7 +200,7 @@ export const ModelCompatSchema = z
     requiresMistralToolIds: z.boolean().optional(),
     requiresOpenAiAnthropicToolPayload: z.boolean().optional(),
   })
-  .strict()
+  .passthrough()
   .optional();
 
 export const ModelDefinitionSchema = z
