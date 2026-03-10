@@ -1,5 +1,6 @@
 import { describe, expect, test } from "vitest";
 import {
+  parseInlineDirectives,
   stripInlineDirectiveTagsForDisplay,
   stripInlineDirectiveTagsFromMessageForDisplay,
 } from "./directive-tags.js";
@@ -55,5 +56,28 @@ describe("stripInlineDirectiveTagsFromMessageForDisplay", () => {
     };
     const result = stripInlineDirectiveTagsFromMessageForDisplay(input);
     expect(result).toEqual(input);
+  });
+});
+
+describe("parseInlineDirectives preserves code block indentation", () => {
+  test("preserves indentation inside fenced code blocks", () => {
+    const input =
+      '[[reply_to_current]] Here is code:\n```json\n{\n  "a": {\n    "b": 1\n  }\n}\n```';
+    const result = parseInlineDirectives(input, { stripReplyTags: true });
+    expect(result.text).toContain('  "a"');
+    expect(result.text).toContain('    "b"');
+    expect(result.replyToCurrent).toBe(true);
+  });
+
+  test("preserves indentation with tilde fences", () => {
+    const input = "~~~python\ndef foo():\n    return 42\n~~~";
+    const result = parseInlineDirectives(input);
+    expect(result.text).toContain("    return 42");
+  });
+
+  test("normalizes whitespace outside code blocks", () => {
+    const input = "  hello   world  \n  text  ";
+    const result = parseInlineDirectives(input);
+    expect(result.text).toBe("hello world\ntext");
   });
 });
