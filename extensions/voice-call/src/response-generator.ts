@@ -59,7 +59,7 @@ export async function generateVoiceResponse(
   // Build voice-specific session key based on phone number
   const normalizedPhone = from.replace(/\D/g, "");
   const sessionKey = `voice:${normalizedPhone}`;
-  const agentId = "main";
+  const agentId = voiceConfig.responseAgentId || "main";
 
   // Resolve paths
   const storePath = deps.resolveStorePath(cfg.session?.store, { agentId });

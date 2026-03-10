@@ -342,6 +342,9 @@ export const VoiceCallConfigSchema = z
     /** Model for generating voice responses (e.g., "anthropic/claude-sonnet-4", "openai/gpt-4o") */
     responseModel: z.string().default("openai/gpt-4o-mini"),
 
+    /** Agent ID for voice response generation (defaults to "main") */
+    responseAgentId: z.string().optional(),
+
     /** System prompt for voice responses */
     responseSystemPrompt: z.string().optional(),
 
