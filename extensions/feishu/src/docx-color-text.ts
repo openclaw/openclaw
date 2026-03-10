@@ -109,16 +109,116 @@ export function parseColorMarkup(content: string): Segment[] {
   return segments;
 }
 
+// Block type → property name mapping for text/heading blocks
+const BLOCK_TYPE_KEY: Record<number, string> = {
+  2: "text",
+  3: "heading1",
+  4: "heading2",
+  5: "heading3",
+  6: "heading4",
+  7: "heading5",
+  8: "heading6",
+  9: "heading7",
+  10: "heading8",
+  11: "heading9",
+};
+
 /**
- * Update a text block with colored segments.
+ * Extract plain text from a block's elements array.
+ * Handles text blocks (type 2) and heading blocks (types 3-11).
+ */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any -- SDK block shape is loosely typed
+function extractBlockText(block: any): string {
+  const blockType: number | undefined = block?.block_type;
+  if (blockType == null) return "";
+  const key = BLOCK_TYPE_KEY[blockType];
+  if (!key) return "";
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- SDK elements array
+  const elements: any[] | undefined = block[key]?.elements;
+  if (!elements) return "";
+  return elements.map((el) => el?.text_run?.content ?? "").join("");
+}
+
+/**
+ * Fetch existing block content from Feishu API.
+ */
+async function fetchBlockText(
+  client: Lark.Client,
+  docToken: string,
+  blockId: string,
+): Promise<string> {
+  const res = await client.docx.documentBlock.get({
+    path: { document_id: docToken, block_id: blockId },
+  });
+  if (res.code !== 0) {
+    throw new Error(`Failed to fetch block: ${res.msg}`);
+  }
+  return extractBlockText(res.data?.block);
+}
+
+/**
+ * Update a text or heading block with colored segments.
+ *
+ * When `content` is omitted, the existing block text is read from the API.
+ * `textColor` / `bgColor` apply a uniform color to the entire block text
+ * (only used when `content` is omitted).
  */
 export async function updateColorText(
   client: Lark.Client,
   docToken: string,
   blockId: string,
-  content: string,
+  content?: string,
+  textColor?: number,
+  bgColor?: number,
 ) {
-  const segments = parseColorMarkup(content);
+  let markup: string;
+
+  if (content != null && content !== "") {
+    // Caller provided explicit content with color markup
+    markup = content;
+  } else {
+    // No content provided — read existing block text
+    const existingText = await fetchBlockText(client, docToken, blockId);
+    if (!existingText) {
+      throw new Error("Block has no text content to color");
+    }
+
+    if (textColor || bgColor) {
+      // Apply uniform color to existing text (no markup parsing needed)
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any -- SDK type
+      const elements: any[] = [
+        {
+          text_run: {
+            content: existingText,
+            text_element_style: {
+              ...(textColor && { text_color: textColor }),
+              ...(bgColor && { background_color: bgColor }),
+            },
+          },
+        },
+      ];
+
+      const res = await client.docx.documentBlock.patch({
+        path: { document_id: docToken, block_id: blockId },
+        data: { update_text_elements: { elements } },
+      });
+
+      if (res.code !== 0) {
+        throw new Error(res.msg);
+      }
+
+      return {
+        success: true,
+        segments: 1,
+        block: res.data?.block,
+      };
+    }
+
+    // No color params either — preserve existing text as-is
+    markup = existingText;
+  }
+
+  const segments = parseColorMarkup(markup);
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any -- SDK type
   const elements: any[] = segments.map((seg) => ({

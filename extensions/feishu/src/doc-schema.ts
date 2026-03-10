@@ -171,11 +171,29 @@ export const FeishuDocSchema = Type.Union([
   Type.Object({
     action: Type.Literal("color_text"),
     doc_token: Type.String({ description: "Document token" }),
-    block_id: Type.String({ description: "Text block ID to update" }),
-    content: Type.String({
-      description:
-        'Text with color markup. Tags: [red], [green], [blue], [orange], [yellow], [purple], [grey], [bold], [bg:yellow]. Example: "Revenue [green]+15%[/green] YoY"',
-    }),
+    block_id: Type.String({ description: "Text or heading block ID to update" }),
+    content: Type.Optional(
+      Type.String({
+        description:
+          'Text with color markup. Tags: [red], [green], [blue], [orange], [yellow], [purple], [grey], [bold], [bg:yellow]. Example: "Revenue [green]+15%[/green] YoY". If omitted, the existing block text is preserved.',
+      }),
+    ),
+    text_color: Type.Optional(
+      Type.Integer({
+        description:
+          "Apply a uniform text color to the entire block (1=red, 2=orange, 3=yellow, 4=green, 5=blue, 6=purple, 7=grey). Only used when content is omitted.",
+        minimum: 1,
+        maximum: 7,
+      }),
+    ),
+    background_color: Type.Optional(
+      Type.Integer({
+        description:
+          "Apply a uniform background color to the entire block (1=red, 2=orange, 3=yellow, 4=green, 5=blue, 6=purple, 7=grey). Only used when content is omitted.",
+        minimum: 1,
+        maximum: 7,
+      }),
+    ),
   }),
 ]);
 

@@ -1377,7 +1377,16 @@ export function registerFeishuDocTools(api: OpenClawPluginApi) {
                     ),
                   );
                 case "color_text":
-                  return json(await updateColorText(client, p.doc_token, p.block_id, p.content));
+                  return json(
+                    await updateColorText(
+                      client,
+                      p.doc_token,
+                      p.block_id,
+                      p.content,
+                      p.text_color,
+                      p.background_color,
+                    ),
+                  );
                 case "insert_table_row":
                   return json(await insertTableRow(client, p.doc_token, p.block_id, p.row_index));
                 case "insert_table_column":
