@@ -758,7 +758,21 @@ function wrapWriteToolWithAppendMode(
       // consistently with the non-append path (which already goes through
       // wrapToolParamNormalization).
       const normalized = normalizeToolParams(params);
-      const shouldAppend = normalized?.append === true;
+      const rawAppend = normalized?.append;
+      // Reject non-boolean truthy values (e.g. "true", 1) with a clear error
+      // so the model learns to pass a proper boolean instead of silently
+      // falling through to the overwrite path.
+      if (rawAppend !== undefined && rawAppend !== null && typeof rawAppend !== "boolean") {
+        return {
+          content: [
+            {
+              type: "text",
+              text: `Error: append must be a boolean (true/false), got ${typeof rawAppend}: ${JSON.stringify(rawAppend)}`,
+            },
+          ],
+        };
+      }
+      const shouldAppend = rawAppend === true;
 
       if (!shouldAppend) {
         // Normal write — delegate to the original tool.
