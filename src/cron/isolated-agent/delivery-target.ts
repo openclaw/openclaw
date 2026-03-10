@@ -5,7 +5,10 @@ import {
   resolveAgentMainSessionKey,
   resolveStorePath,
 } from "../../config/sessions.js";
-import { resolveMessageChannelSelection } from "../../infra/outbound/channel-selection.js";
+import {
+  listConfiguredMessageChannels,
+  resolveMessageChannelSelection,
+} from "../../infra/outbound/channel-selection.js";
 import type { OutboundChannel } from "../../infra/outbound/targets.js";
 import {
   resolveOutboundTarget,
@@ -83,6 +86,15 @@ export async function resolveDeliveryTarget(
         channelResolutionError = new Error(
           `${detail} Set delivery.channel explicitly or use a main session with a previous channel.`,
         );
+        // Even though auto-delivery will fail, provide a fallback messageChannel
+        // so that explicit message tool calls within the agent still work.
+        // Without this, agents running in isolated cron sessions inherit
+        // messageChannel=undefined and every message tool call fails with
+        // "Unknown Channel" or similar downstream errors.
+        const configured = await listConfiguredMessageChannels(cfg).catch(() => []);
+        if (configured.length > 0) {
+          fallbackChannel = configured[0];
+        }
       }
     }
   }
