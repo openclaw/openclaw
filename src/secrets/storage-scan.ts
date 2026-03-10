@@ -72,7 +72,26 @@ export function listAgentModelsJsonPaths(
   return [...paths];
 }
 
+export type ReadJsonObjectOptions = {
+  maxBytes?: number;
+  requireRegularFile?: boolean;
+};
+
 export function readJsonObjectIfExists(filePath: string): {
+  value: Record<string, unknown> | null;
+  error?: string;
+};
+export function readJsonObjectIfExists(
+  filePath: string,
+  options: ReadJsonObjectOptions,
+): {
+  value: Record<string, unknown> | null;
+  error?: string;
+};
+export function readJsonObjectIfExists(
+  filePath: string,
+  options: ReadJsonObjectOptions = {},
+): {
   value: Record<string, unknown> | null;
   error?: string;
 } {
@@ -80,6 +99,24 @@ export function readJsonObjectIfExists(filePath: string): {
     return { value: null };
   }
   try {
+    const stats = fs.statSync(filePath);
+    if (options.requireRegularFile && !stats.isFile()) {
+      return {
+        value: null,
+        error: `Refusing to read non-regular file: ${filePath}`,
+      };
+    }
+    if (
+      typeof options.maxBytes === "number" &&
+      Number.isFinite(options.maxBytes) &&
+      options.maxBytes >= 0 &&
+      stats.size > options.maxBytes
+    ) {
+      return {
+        value: null,
+        error: `Refusing to read oversized JSON (${stats.size} bytes): ${filePath}`,
+      };
+    }
     const raw = fs.readFileSync(filePath, "utf8");
     const parsed = JSON.parse(raw) as unknown;
     if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
