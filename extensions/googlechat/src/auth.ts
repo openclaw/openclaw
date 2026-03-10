@@ -102,18 +102,19 @@ function loadServiceAccountCredentials(account: ResolvedGoogleChatAccount): {
 export async function getGoogleChatAccessToken(
   account: ResolvedGoogleChatAccount,
 ): Promise<string> {
-  const cacheKey = account.accountId;
+  const sa = loadServiceAccountCredentials(account);
+  if (!sa) {
+    throw new Error("No service account credentials available for Google Chat");
+  }
+
+  const credentialFingerprint = crypto.createHash("md5").update(sa.private_key).digest("hex");
+  const cacheKey = `${account.accountId}:${credentialFingerprint}`;
   const cached = accessTokenCache.get(cacheKey);
   const now = Math.floor(Date.now() / 1000);
 
   // Return cached token if still valid (with 5 min buffer)
   if (cached && cached.expiresAt > now + 300) {
     return cached.token;
-  }
-
-  const sa = loadServiceAccountCredentials(account);
-  if (!sa) {
-    throw new Error("No service account credentials available for Google Chat");
   }
 
   // Create signed JWT assertion
@@ -218,8 +219,6 @@ async function manualVerifyGoogleJwt(
   };
   reason?: string;
 }> {
-  const crypto = await import("node:crypto");
-
   const parts = idToken.split(".");
   if (parts.length !== 3) {
     return { ok: false, reason: "invalid JWT format" };
@@ -241,6 +240,11 @@ async function manualVerifyGoogleJwt(
     payload = JSON.parse(Buffer.from(payloadB64, "base64url").toString());
   } catch {
     return { ok: false, reason: "failed to decode JWT" };
+  }
+
+  // Check algorithm
+  if (header.alg !== "RS256") {
+    return { ok: false, reason: `unsupported algorithm: ${header.alg}` };
   }
 
   // Check expiration
@@ -268,7 +272,7 @@ async function manualVerifyGoogleJwt(
     return { ok: false, reason: `no matching key found for kid=${header.kid}` };
   }
 
-  const publicKey = crypto.createPublicKey({ key: key as crypto.JsonWebKey, format: "jwk" });
+  const publicKey = crypto.createPublicKey({ key: key as any, format: "jwk" });
   const signedData = `${headerB64}.${payloadB64}`;
   const signature = Buffer.from(signatureB64, "base64url");
 

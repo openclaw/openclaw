@@ -184,7 +184,6 @@ async function processMessageWithPipeline(params: {
       );
       return;
     }
-    recentlyProcessedMessages.set(msgId, Date.now());
   }
 
   const spaceType = (space.type ?? "").toUpperCase();
@@ -376,6 +375,11 @@ async function processMessageWithPipeline(params: {
       onModelSelected,
     },
   });
+
+  // Mark as processed only after successful dispatch
+  if (msgId) {
+    recentlyProcessedMessages.set(msgId, Date.now());
+  }
 }
 
 async function downloadAttachment(
