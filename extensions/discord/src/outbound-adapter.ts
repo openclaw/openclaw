@@ -31,6 +31,13 @@ export const DISCORD_TEXT_CHUNK_LIMIT = 2000;
 // ---------------------------------------------------------------------------
 
 const AC_CARD_RE = /<!--adaptive-card-->([\s\S]*?)<!--\/adaptive-card-->/;
+const AC_MARKERS_RE =
+  /<!--adaptive-card-->[\s\S]*?<!--\/adaptive-card-->|<!--adaptive-card-data-->[\s\S]*?<!--\/adaptive-card-data-->/g;
+
+/** Strip all adaptive card markers, returning only the fallback text. */
+function stripCardMarkers(text: string): string {
+  return text.replace(AC_MARKERS_RE, "").trim();
+}
 
 interface AcParsed {
   card: { type: "AdaptiveCard"; body: unknown[]; actions?: unknown[] };
@@ -135,7 +142,9 @@ function buildActionRow(actions: unknown[]): unknown | null {
     const label = acStr(action.title);
     if (!label) continue;
     if (action.type === "Action.OpenUrl") {
-      buttons.push({ type: 2, style: 5, label, url: acStr(action.url) });
+      const url = acStr(action.url);
+      if (!url) continue; // skip: Discord rejects link buttons with an empty URL
+      buttons.push({ type: 2, style: 5, label, url });
     } else if (action.type === "Action.Submit") {
       const customId = typeof action.id === "string" ? action.id : `ac_submit_${buttons.length}`;
       buttons.push({ type: 2, style: 1, label, custom_id: customId });
@@ -307,22 +316,26 @@ export const discordOutbound: ChannelOutboundAdapter = {
       const parsed = parseAdaptiveCardMarkers(text);
       if (parsed) {
         const rendered = renderDiscordCard(parsed);
-        const send =
-          resolveOutboundSendDep<typeof sendMessageDiscord>(deps, "discord") ?? sendMessageDiscord;
-        const target = resolveDiscordOutboundTarget({ to, threadId });
-        return await send(target, rendered.fallback, {
-          verbose: false,
-          replyTo: replyToId ?? undefined,
-          accountId: accountId ?? undefined,
-          silent: silent ?? undefined,
-          cfg,
-          embeds: rendered.embeds as NonNullable<
-            Parameters<typeof sendMessageDiscord>[2]
-          >["embeds"],
-          components: rendered.components as NonNullable<
-            Parameters<typeof sendMessageDiscord>[2]
-          >["components"],
-        });
+        if (rendered.embeds.length > 0) {
+          const send =
+            resolveOutboundSendDep<typeof sendMessageDiscord>(deps, "discord") ?? sendMessageDiscord;
+          const target = resolveDiscordOutboundTarget({ to, threadId });
+          return await send(target, rendered.fallback, {
+            verbose: false,
+            replyTo: replyToId ?? undefined,
+            accountId: accountId ?? undefined,
+            silent: silent ?? undefined,
+            cfg,
+            embeds: rendered.embeds as NonNullable<
+              Parameters<typeof sendMessageDiscord>[2]
+            >["embeds"],
+            components: rendered.components as NonNullable<
+              Parameters<typeof sendMessageDiscord>[2]
+            >["components"],
+          });
+        }
+        // Card markers present but rendering failed; strip markers to avoid leaking raw JSON
+        text = parsed.fallbackText || stripCardMarkers(text);
       }
 
       if (!silent) {

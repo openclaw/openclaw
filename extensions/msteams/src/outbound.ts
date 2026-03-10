@@ -11,6 +11,8 @@ import { sendAdaptiveCardMSTeams, sendMessageMSTeams, sendPollMSTeams } from "./
  * a cross-workspace import (extensions cannot import from src/ directly).
  */
 const AC_CARD_RE = /<!--adaptive-card-->([\s\S]*?)<!--\/adaptive-card-->/;
+const AC_MARKERS_RE =
+  /<!--adaptive-card-->[\s\S]*?<!--\/adaptive-card-->|<!--adaptive-card-data-->[\s\S]*?<!--\/adaptive-card-data-->/g;
 
 function extractAdaptiveCard(text: string): Record<string, unknown> | null {
   const m = AC_CARD_RE.exec(text);
@@ -28,6 +30,11 @@ function extractAdaptiveCard(text: string): Record<string, unknown> | null {
   return null;
 }
 
+/** Strip all adaptive card markers, returning only the fallback text. */
+function stripCardMarkers(text: string): string {
+  return text.replace(AC_MARKERS_RE, "").trim();
+}
+
 export const msteamsOutbound: ChannelOutboundAdapter = {
   deliveryMode: "direct",
   chunker: (text, limit) => getMSTeamsRuntime().channel.text.chunkMarkdownText(text, limit),
@@ -38,9 +45,14 @@ export const msteamsOutbound: ChannelOutboundAdapter = {
     channel: "msteams",
     sendText: async ({ cfg, to, text, deps }) => {
       // Native adaptive card pass-through: Teams supports AC directly
-      const card = extractAdaptiveCard(text);
+      const hasMarkers = AC_CARD_RE.test(text);
+      const card = hasMarkers ? extractAdaptiveCard(text) : null;
       if (card) {
         return await sendAdaptiveCardMSTeams({ cfg, to, card });
+      }
+      // Strip markers to avoid leaking raw JSON if card extraction failed
+      if (hasMarkers) {
+        text = stripCardMarkers(text);
       }
 
       type SendFn = (

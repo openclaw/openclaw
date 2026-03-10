@@ -28,6 +28,13 @@ const SLACK_MAX_BLOCKS = 50;
 // ---------------------------------------------------------------------------
 
 const AC_CARD_RE = /<!--adaptive-card-->([\s\S]*?)<!--\/adaptive-card-->/;
+const AC_MARKERS_RE =
+  /<!--adaptive-card-->[\s\S]*?<!--\/adaptive-card-->|<!--adaptive-card-data-->[\s\S]*?<!--\/adaptive-card-data-->/g;
+
+/** Strip all adaptive card markers, returning only the fallback text. */
+function stripCardMarkers(text: string): string {
+  return text.replace(AC_MARKERS_RE, "").trim();
+}
 
 interface AcParsed {
   card: { type: "AdaptiveCard"; body: unknown[]; actions?: unknown[] };
@@ -66,13 +73,16 @@ function renderAcTextBlock(el: AcElement): unknown {
   return { type: "section", text: { type: "mrkdwn", text: formatted } };
 }
 
-function renderAcFactSet(el: AcElement): unknown | null {
+function renderAcFactSet(el: AcElement): unknown[] {
   const facts = el.facts as Array<{ title?: string; value?: string }> | undefined;
-  if (!facts?.length) return null;
-  return {
-    type: "section",
-    fields: facts.map((f) => ({ type: "mrkdwn", text: `*${f.title ?? ""}*\n${f.value ?? ""}` })),
-  };
+  if (!facts?.length) return [];
+  const fields = facts.map((f) => ({ type: "mrkdwn", text: `*${f.title ?? ""}*\n${f.value ?? ""}` }));
+  // Slack limits section blocks to 10 fields; split into chunks if needed
+  const blocks: unknown[] = [];
+  for (let i = 0; i < fields.length; i += 10) {
+    blocks.push({ type: "section", fields: fields.slice(i, i + 10) });
+  }
+  return blocks;
 }
 
 function renderAcImage(el: AcElement): unknown | null {
@@ -86,10 +96,8 @@ function renderAcElement(el: AcElement): unknown[] {
   switch (el.type) {
     case "TextBlock":
       return [renderAcTextBlock(el)];
-    case "FactSet": {
-      const block = renderAcFactSet(el);
-      return block ? [block] : [];
-    }
+    case "FactSet":
+      return renderAcFactSet(el);
     case "Image": {
       const block = renderAcImage(el);
       return block ? [block] : [];
@@ -122,7 +130,9 @@ function renderAcActions(actions: unknown[]): unknown[] {
     const label = acStr(action.title);
     if (!label) continue;
     if (action.type === "Action.OpenUrl") {
-      buttons.push({ type: "button", text: { type: "plain_text", text: label }, url: acStr(action.url) });
+      const url = acStr(action.url);
+      if (!url) continue; // skip: Slack rejects link buttons with an empty URL
+      buttons.push({ type: "button", text: { type: "plain_text", text: label }, url });
     } else if (action.type === "Action.Submit") {
       const actionId = typeof action.id === "string" ? action.id : `ac_submit_${buttons.length}`;
       buttons.push({
@@ -353,6 +363,9 @@ export const slackOutbound: ChannelOutboundAdapter = {
             ...(slackIdentity ? { identity: slackIdentity } : {}),
           });
         }
+        // Card markers present but no blocks rendered (unsupported elements).
+        // Use fallback text to avoid leaking raw markers to the user.
+        text = acParsed.fallbackText || stripCardMarkers(text);
       }
 
       return await sendSlackOutboundMessage({

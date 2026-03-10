@@ -136,11 +136,15 @@ function buildActionRow(actions: unknown[]): unknown {
     }
     if (action.type === "Action.OpenUrl") {
       // Style 5 = Link
+      const url = str(action.url);
+      if (!url) {
+        continue; // skip: Discord rejects link buttons with an empty URL
+      }
       buttons.push({
         type: 2,
         style: 5,
         label,
-        url: str(action.url),
+        url,
       });
     } else if (action.type === "Action.Submit") {
       // Style 1 = Primary

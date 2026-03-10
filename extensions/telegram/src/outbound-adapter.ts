@@ -25,6 +25,13 @@ export const TELEGRAM_TEXT_CHUNK_LIMIT = 4000;
 // ---------------------------------------------------------------------------
 
 const AC_CARD_RE = /<!--adaptive-card-->([\s\S]*?)<!--\/adaptive-card-->/;
+const AC_MARKERS_RE =
+  /<!--adaptive-card-->[\s\S]*?<!--\/adaptive-card-->|<!--adaptive-card-data-->[\s\S]*?<!--\/adaptive-card-data-->/g;
+
+/** Strip all adaptive card markers, returning only the fallback text. */
+function stripCardMarkers(text: string): string {
+  return text.replace(AC_MARKERS_RE, "").trim();
+}
 
 interface AcParsed {
   card: { type: "AdaptiveCard"; body: unknown[]; actions?: unknown[] };
@@ -110,10 +117,19 @@ function renderTgActions(actions: unknown[]): InlineButton[][] {
     const label = acStr(action.title);
     if (!label) continue;
     if (action.type === "Action.OpenUrl") {
-      buttons.push({ text: label, url: acStr(action.url) });
+      const url = acStr(action.url);
+      if (!url) continue; // skip: Telegram rejects inline buttons with an empty URL
+      buttons.push({ text: label, url });
     } else if (action.type === "Action.Submit") {
-      const data = action.data != null ? JSON.stringify(action.data) : label;
-      buttons.push({ text: label, callback_data: data.slice(0, 64) });
+      // Encode action data as callback_data (Telegram limit: 64 bytes)
+      const raw = action.data != null ? JSON.stringify(action.data) : label;
+      // Truncate by UTF-8 byte length, not character count
+      const encoder = new TextEncoder();
+      let truncated = raw;
+      while (encoder.encode(truncated).byteLength > 64) {
+        truncated = truncated.slice(0, -1);
+      }
+      buttons.push({ text: label, callback_data: truncated });
     }
   }
   return buttons.length > 0 ? buttons.map((b) => [b]) : [];
@@ -237,13 +253,17 @@ export const telegramOutbound: ChannelOutboundAdapter = {
       const acParsed = parseAdaptiveCardMarkers(text);
       if (acParsed) {
         const rendered = renderTelegramCard(acParsed);
-        const buttons: TelegramInlineButtons | undefined = rendered.replyMarkup
-          ? (rendered.replyMarkup.inline_keyboard as unknown as TelegramInlineButtons)
-          : undefined;
-        return await send(to, rendered.text, {
-          ...baseOpts,
-          buttons,
-        });
+        if (rendered.text) {
+          const buttons: TelegramInlineButtons | undefined = rendered.replyMarkup
+            ? (rendered.replyMarkup.inline_keyboard as unknown as TelegramInlineButtons)
+            : undefined;
+          return await send(to, rendered.text, {
+            ...baseOpts,
+            buttons,
+          });
+        }
+        // Card markers present but rendering failed; strip markers to avoid leaking raw JSON
+        text = acParsed.fallbackText || stripCardMarkers(text);
       }
 
       return await send(to, text, {
