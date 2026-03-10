@@ -9,7 +9,20 @@ Input
   - If ambiguous: ask.
 
 Do (review-only)
-Goal: produce a thorough review and a clear recommendation (READY for /landpr vs NEEDS WORK). Do NOT merge, do NOT push, do NOT make changes in the repo as part of this command.
+Goal: produce a thorough review and a clear recommendation (READY FOR /landpr vs NEEDS WORK vs INVALID CLAIM). Do NOT merge, do NOT push, do NOT make changes in the repo as part of this command.
+
+0. Truthfulness + reality gate (required for bug-fix claims)
+
+   - Do not trust the issue text or PR summary by default; verify in code and evidence.
+   - If the PR claims to fix a bug linked to an issue, confirm the bug exists now (repro steps, logs, failing test, or clear code-path proof).
+   - Prove root cause with exact location (`path/file.ts:line` + explanation of why behavior is wrong).
+   - Verify fix targets the same code path as the root cause.
+   - Require a regression test when feasible (fails before fix, passes after fix). If not feasible, require explicit justification + manual verification evidence.
+   - Hallucination/BS red flags (treat as BLOCKER until disproven):
+     - claimed behavior not present in repo,
+     - issue/PR says "fixes #..." but changed files do not touch implicated path,
+     - only docs/comments changed for a runtime bug claim,
+     - vague AI-generated rationale without concrete evidence.
 
 1. Identify PR meta + context
 
@@ -56,6 +69,7 @@ Goal: produce a thorough review and a clear recommendation (READY for /landpr vs
    - Any deprecations, docs, types, or lint rules we should adjust?
 
 8. Key questions to answer explicitly
+   - Is the core claim substantiated by evidence, or is it likely invalid/hallucinated?
    - Can we fix everything ourselves in a follow-up, or does the contributor need to update this PR?
    - Any blocking concerns (must-fix before merge)?
    - Is this PR ready to land, or does it need work?
@@ -65,18 +79,32 @@ Goal: produce a thorough review and a clear recommendation (READY for /landpr vs
 
 A) TL;DR recommendation
 
-- One of: READY FOR /landpr | NEEDS WORK | NEEDS DISCUSSION
+- One of: READY FOR /landpr | NEEDS WORK | INVALID CLAIM (issue/bug not substantiated) | NEEDS DISCUSSION
 - 1–3 sentence rationale.
 
-B) What changed
+B) Claim verification matrix (required)
+
+- Fill this table:
+
+  | Field | Evidence |
+  |---|---|
+  | Claimed problem | ... |
+  | Evidence observed (repro/log/test/code) | ... |
+  | Root cause location (`path:line`) | ... |
+  | Why this fix addresses that root cause | ... |
+  | Regression coverage (test name or manual proof) | ... |
+
+- If any row is missing/weak, default to `NEEDS WORK` or `INVALID CLAIM`.
+
+C) What changed
 
 - Brief bullet summary of the diff/behavioral changes.
 
-C) What's good
+D) What's good
 
 - Bullets: correctness, simplicity, tests, docs, ergonomics, etc.
 
-D) Concerns / questions (actionable)
+E) Concerns / questions (actionable)
 
 - Numbered list.
 - Mark each item as:
@@ -84,17 +112,19 @@ D) Concerns / questions (actionable)
   - IMPORTANT (should fix before merge)
   - NIT (optional)
 - For each: point to the file/area and propose a concrete fix or alternative.
+- If evidence for the core bug claim is missing, add a `BLOCKER` explicitly.
 
-E) Tests
+F) Tests
 
 - What exists.
 - What's missing (specific scenarios).
+- State clearly whether there is a regression test for the claimed bug.
 
-F) Follow-ups (optional)
+G) Follow-ups (optional)
 
 - Non-blocking refactors/tickets to open later.
 
-G) Suggested PR comment (optional)
+H) Suggested PR comment (optional)
 
 - Offer: "Want me to draft a PR comment to the author?"
 - If yes, provide a ready-to-paste comment summarizing the above, with clear asks.
