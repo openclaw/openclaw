@@ -163,6 +163,30 @@ export class ExecApprovalManager {
   }
 
   /**
+   * Resolve a full ID or unambiguous prefix to the full pending approval ID.
+   * Returns `{ id }` on unique match, `{ ambiguous: matchingIds[] }` when
+   * multiple pending IDs share the prefix, or `null` when nothing matches.
+   */
+  resolveId(idOrPrefix: string): { id: string } | { ambiguous: string[] } | null {
+    if (this.pending.has(idOrPrefix)) {
+      return { id: idOrPrefix };
+    }
+    const matches: string[] = [];
+    for (const key of this.pending.keys()) {
+      if (key.startsWith(idOrPrefix)) {
+        matches.push(key);
+      }
+    }
+    if (matches.length === 1) {
+      return { id: matches[0] };
+    }
+    if (matches.length > 1) {
+      return { ambiguous: matches };
+    }
+    return null;
+  }
+
+  /**
    * Wait for decision on an already-registered approval.
    * Returns the decision promise if the ID is pending, null otherwise.
    */

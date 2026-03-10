@@ -275,21 +275,36 @@ export function createExecApprovalHandlers(
         respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "invalid decision"));
         return;
       }
-      const snapshot = manager.getSnapshot(p.id);
+      const resolved = manager.resolveId(p.id);
+      if (!resolved) {
+        respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "unknown approval id"));
+        return;
+      }
+      if ("ambiguous" in resolved) {
+        const short = resolved.ambiguous.map((id) => id.slice(0, 8)).join(", ");
+        respond(
+          false,
+          undefined,
+          errorShape(ErrorCodes.INVALID_REQUEST, `ambiguous approval id prefix, matches: ${short}`),
+        );
+        return;
+      }
+      const fullId = resolved.id;
+      const snapshot = manager.getSnapshot(fullId);
       const resolvedBy = client?.connect?.client?.displayName ?? client?.connect?.client?.id;
-      const ok = manager.resolve(p.id, decision, resolvedBy ?? null);
+      const ok = manager.resolve(fullId, decision, resolvedBy ?? null);
       if (!ok) {
         respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "unknown approval id"));
         return;
       }
       context.broadcast(
         "exec.approval.resolved",
-        { id: p.id, decision, resolvedBy, ts: Date.now(), request: snapshot?.request },
+        { id: fullId, decision, resolvedBy, ts: Date.now(), request: snapshot?.request },
         { dropIfSlow: true },
       );
       void opts?.forwarder
         ?.handleResolved({
-          id: p.id,
+          id: fullId,
           decision,
           resolvedBy,
           ts: Date.now(),

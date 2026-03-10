@@ -19,11 +19,14 @@ const DECISION_ALIASES: Record<string, "allow-once" | "allow-always" | "deny"> =
   block: "deny",
 };
 
+/** Matches the `ID: <uuid>` line in a forwarded approval request message. */
+const APPROVAL_ID_RE = /^ID:\s*([0-9a-f-]+)/im;
+
 type ParsedApproveCommand =
-  | { ok: true; id: string; decision: "allow-once" | "allow-always" | "deny" }
+  | { ok: true; id: string | null; decision: "allow-once" | "allow-always" | "deny" }
   | { ok: false; error: string };
 
-function parseApproveCommand(raw: string): ParsedApproveCommand | null {
+export function parseApproveCommand(raw: string): ParsedApproveCommand | null {
   const trimmed = raw.trim();
   if (!trimmed.toLowerCase().startsWith(COMMAND)) {
     return null;
@@ -33,7 +36,12 @@ function parseApproveCommand(raw: string): ParsedApproveCommand | null {
     return { ok: false, error: "Usage: /approve <id> allow-once|allow-always|deny" };
   }
   const tokens = rest.split(/\s+/).filter(Boolean);
-  if (tokens.length < 2) {
+
+  if (tokens.length === 1) {
+    const decision = DECISION_ALIASES[tokens[0].toLowerCase()];
+    if (decision) {
+      return { ok: true, decision, id: null };
+    }
     return { ok: false, error: "Usage: /approve <id> allow-once|allow-always|deny" };
   }
 
@@ -55,6 +63,18 @@ function parseApproveCommand(raw: string): ParsedApproveCommand | null {
     };
   }
   return { ok: false, error: "Usage: /approve <id> allow-once|allow-always|deny" };
+}
+
+/**
+ * Extract an approval ID from the body of a replied-to approval request message.
+ * Returns the ID string or null if not found.
+ */
+export function extractApprovalIdFromReplyBody(body: string | undefined | null): string | null {
+  if (!body) {
+    return null;
+  }
+  const match = APPROVAL_ID_RE.exec(body);
+  return match?.[1] ?? null;
 }
 
 function buildResolvedByLabel(params: Parameters<CommandHandler>[0]): string {
@@ -83,6 +103,20 @@ export const handleApproveCommand: CommandHandler = async (params, allowTextComm
     return { shouldContinue: false, reply: { text: parsed.error } };
   }
 
+  let approvalId = parsed.id;
+  if (!approvalId) {
+    const extracted = extractApprovalIdFromReplyBody(params.ctx.ReplyToBody);
+    if (!extracted) {
+      return {
+        shouldContinue: false,
+        reply: {
+          text: "❌ Could not extract approval ID from replied message. Please provide the ID explicitly: /approve <id> allow-once|allow-always|deny",
+        },
+      };
+    }
+    approvalId = extracted;
+  }
+
   const missingScope = requireGatewayClientScopeForInternalChannel(params, {
     label: "/approve",
     allowedScopes: ["operator.approvals", "operator.admin"],
@@ -96,7 +130,7 @@ export const handleApproveCommand: CommandHandler = async (params, allowTextComm
   try {
     await callGateway({
       method: "exec.approval.resolve",
-      params: { id: parsed.id, decision: parsed.decision },
+      params: { id: approvalId, decision: parsed.decision },
       clientName: GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT,
       clientDisplayName: `Chat approval (${resolvedBy})`,
       mode: GATEWAY_CLIENT_MODES.BACKEND,
@@ -112,6 +146,6 @@ export const handleApproveCommand: CommandHandler = async (params, allowTextComm
 
   return {
     shouldContinue: false,
-    reply: { text: `✅ Exec approval ${parsed.decision} submitted for ${parsed.id}.` },
+    reply: { text: `✅ Exec approval ${parsed.decision} submitted for ${approvalId}.` },
   };
 };
