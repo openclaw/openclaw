@@ -16,7 +16,6 @@ import type { DiscordExecApprovalConfig } from "../../config/types.discord.js";
 import { buildGatewayConnectionDetails } from "../../gateway/call.js";
 import { GatewayClient } from "../../gateway/client.js";
 import { resolveGatewayConnectionAuth } from "../../gateway/connection-auth.js";
-import { loadGatewayTlsRuntime } from "../../infra/tls/gateway.js";
 import type { EventFrame } from "../../gateway/protocol/index.js";
 import { getExecApprovalApproverDmNoticeText } from "../../infra/exec-approval-reply.js";
 import type {
@@ -24,6 +23,7 @@ import type {
   ExecApprovalRequest,
   ExecApprovalResolved,
 } from "../../infra/exec-approvals.js";
+import { loadGatewayTlsRuntime } from "../../infra/tls/gateway.js";
 import { logDebug, logError } from "../../logger.js";
 import { normalizeAccountId, resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import type { RuntimeEnv } from "../../runtime.js";
