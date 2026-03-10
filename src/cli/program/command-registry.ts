@@ -215,6 +215,29 @@ const coreEntries: CoreCliEntry[] = [
       mod.registerBrowserCli(program);
     },
   },
+  {
+    commands: [
+      {
+        name: "restart",
+        description: "Restart the Gateway service",
+        hasSubcommands: false,
+      },
+      {
+        name: "start",
+        description: "Start the Gateway service",
+        hasSubcommands: false,
+      },
+      {
+        name: "stop",
+        description: "Stop the Gateway service",
+        hasSubcommands: false,
+      },
+    ],
+    register: async ({ program }) => {
+      const mod = await import("./register.lifecycle-aliases.js");
+      mod.registerLifecycleAliasCommands(program);
+    },
+  },
 ];
 
 function collectCoreCliCommandNames(predicate?: (command: CoreCliCommandDescriptor) => boolean) {
