@@ -1389,6 +1389,19 @@ export async function runReplyAgent(params: {
       cliSessionBinding,
     });
 
+    // Mark systemSent=true only after a successful LLM response.
+    // This prevents corruption when the first LLM call fails (e.g.
+    // insufficient API credits): without this guard, systemSent=true
+    // would be persisted before the system prompt was actually delivered,
+    // causing all subsequent sessions to skip re-sending it (#41462).
+    if (activeIsNewSession && sessionKey && storePath) {
+      await updateSessionStoreEntry({
+        storePath,
+        sessionKey,
+        update: async () => ({ systemSent: true }),
+      });
+    }
+
     // Drain any late tool/block deliveries before deciding there's "nothing to send".
     // Otherwise, a late typing trigger (e.g. from a tool callback) can outlive the run and
     // keep the typing indicator stuck.
