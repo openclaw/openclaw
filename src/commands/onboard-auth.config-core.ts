@@ -193,9 +193,6 @@ export function applyCommonstackProviderConfig(cfg: OpenClawConfig): OpenClawCon
     ...existingProviderRest,
     baseUrl: "https://api.commonstack.ai/v1",
     api: "openai-completions",
-    headers: {
-      "User-Agent": "https://openclaw.ai",
-    },
     ...(normalizedApiKey ? { apiKey: normalizedApiKey } : {}),
     models: existingModels,
   };
