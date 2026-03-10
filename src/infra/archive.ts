@@ -575,6 +575,10 @@ export async function extractArchive(params: {
               stripComponents: params.stripComponents,
               limits,
             });
+            // A canonical cwd is not enough here: tar can still follow
+            // pre-existing child symlinks in the live destination tree.
+            // Extract into a private staging dir first, then merge through
+            // the same safe-open boundary checks used by direct file writes.
             await tar.x({
               file: params.archivePath,
               cwd: stagingDir,
