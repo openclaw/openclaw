@@ -1,6 +1,9 @@
 import { normalizeChatType } from "../../channels/chat-type.js";
 import { resolveConversationLabel } from "../../channels/conversation-label.js";
-import { injectTimestamp } from "../../gateway/server-methods/agent-timestamp.js";
+import {
+  injectTimestamp,
+  type TimestampInjectionOptions,
+} from "../../gateway/server-methods/agent-timestamp.js";
 import type { FinalizedMsgContext, MsgContext } from "../templating.js";
 import { normalizeInboundTextNewlines, sanitizeInboundSystemTags } from "./inbound-text.js";
 
@@ -9,6 +12,7 @@ export type FinalizeInboundContextOptions = {
   forceBodyForCommands?: boolean;
   forceChatType?: boolean;
   forceConversationLabel?: boolean;
+  timestampOpts?: TimestampInjectionOptions;
 };
 
 const DEFAULT_MEDIA_TYPE = "application/octet-stream";
@@ -77,7 +81,7 @@ export function finalizeInboundContext<T extends Record<string, unknown>>(
   // Gateway agent/chat.send handlers inject their own timestamps before reaching here;
   // channel messages arrive without one. See: https://github.com/openclaw/openclaw/issues/25334
   if (normalized.BodyForAgent) {
-    normalized.BodyForAgent = injectTimestamp(normalized.BodyForAgent);
+    normalized.BodyForAgent = injectTimestamp(normalized.BodyForAgent, opts.timestampOpts);
   }
 
   const bodyForCommandsSource = opts.forceBodyForCommands

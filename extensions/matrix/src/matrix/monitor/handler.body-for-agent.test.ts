@@ -145,7 +145,7 @@ describe("createMatrixRoomMessageHandler BodyForAgent sender label", () => {
       expect.objectContaining({
         ctx: expect.objectContaining({
           ChatType: "thread",
-          BodyForAgent: "Bu (bu): show me my commits",
+          BodyForAgent: expect.stringContaining("Bu (bu): show me my commits"),
         }),
       }),
     );
