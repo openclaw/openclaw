@@ -20,6 +20,10 @@ let globalRegistry: PluginRegistry | null = null;
  * Called once when plugins are loaded during gateway startup.
  */
 export function initializeGlobalHookRunner(registry: PluginRegistry): void {
+  if (globalRegistry === registry && globalHookRunner) {
+    return;
+  }
+
   globalRegistry = registry;
   globalHookRunner = createHookRunner(registry, {
     logger: {
