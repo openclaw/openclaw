@@ -71,13 +71,14 @@ import { createFeishuReplyDispatcher } from "./reply-dispatcher.js";
 describe("createFeishuReplyDispatcher streaming behavior", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    const FEISHU_APP_SECRET = "app_secret";
     streamingInstances.length = 0;
     sendMediaFeishuMock.mockResolvedValue(undefined);
 
     resolveFeishuAccountMock.mockReturnValue({
       accountId: "main",
       appId: "app_id",
-      appSecret: "app_secret", // pragma: allowlist secret
+      appSecret: FEISHU_APP_SECRET,
       domain: "feishu",
       config: {
         renderMode: "auto",
