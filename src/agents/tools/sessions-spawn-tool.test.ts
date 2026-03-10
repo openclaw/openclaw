@@ -79,6 +79,25 @@ describe("sessions_spawn tool", () => {
     expect(hoisted.spawnAcpDirectMock).not.toHaveBeenCalled();
   });
 
+  it("passes inherited workspaceDir from tool context, not from tool args", async () => {
+    const tool = createSessionsSpawnTool({
+      agentSessionKey: "agent:main:main",
+      workspaceDir: "/parent/workspace",
+    });
+
+    await tool.execute("call-ws", {
+      task: "inspect AGENTS",
+      workspaceDir: "/tmp/attempted-override",
+    });
+
+    expect(hoisted.spawnSubagentDirectMock).toHaveBeenCalledWith(
+      expect.any(Object),
+      expect.objectContaining({
+        workspaceDir: "/parent/workspace",
+      }),
+    );
+  });
+
   it("routes to ACP runtime when runtime=acp", async () => {
     const tool = createSessionsSpawnTool({
       agentSessionKey: "agent:main:main",
@@ -142,6 +161,43 @@ describe("sessions_spawn tool", () => {
         sandboxed: true,
       }),
     );
+  });
+
+  it("passes resumeSessionId through to ACP spawns", async () => {
+    const tool = createSessionsSpawnTool({
+      agentSessionKey: "agent:main:main",
+    });
+
+    await tool.execute("call-2c", {
+      runtime: "acp",
+      task: "resume prior work",
+      agentId: "codex",
+      resumeSessionId: "7f4a78e0-f6be-43fe-855c-c1c4fd229bc4",
+    });
+
+    expect(hoisted.spawnAcpDirectMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        task: "resume prior work",
+        agentId: "codex",
+        resumeSessionId: "7f4a78e0-f6be-43fe-855c-c1c4fd229bc4",
+      }),
+      expect.any(Object),
+    );
+  });
+
+  it("rejects resumeSessionId without runtime=acp", async () => {
+    const tool = createSessionsSpawnTool({
+      agentSessionKey: "agent:main:main",
+    });
+
+    const result = await tool.execute("call-guard", {
+      task: "resume prior work",
+      resumeSessionId: "7f4a78e0-f6be-43fe-855c-c1c4fd229bc4",
+    });
+
+    expect(JSON.stringify(result)).toContain("resumeSessionId is only supported for runtime=acp");
+    expect(hoisted.spawnSubagentDirectMock).not.toHaveBeenCalled();
+    expect(hoisted.spawnAcpDirectMock).not.toHaveBeenCalled();
   });
 
   it("rejects attachments for ACP runtime", async () => {

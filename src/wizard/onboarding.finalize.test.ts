@@ -99,6 +99,13 @@ function createRuntime(): RuntimeEnv {
   };
 }
 
+function expectFirstOnboardingInstallPlanCallOmitsToken() {
+  const [firstArg] =
+    (buildGatewayInstallPlan.mock.calls.at(0) as [Record<string, unknown>] | undefined) ?? [];
+  expect(firstArg).toBeDefined();
+  expect(firstArg && "token" in firstArg).toBe(false);
+}
+
 describe("finalizeOnboardingWizard", () => {
   beforeEach(() => {
     runTui.mockClear();
@@ -233,11 +240,8 @@ describe("finalizeOnboardingWizard", () => {
     });
 
     expect(resolveGatewayInstallToken).toHaveBeenCalledTimes(1);
-    expect(buildGatewayInstallPlan).toHaveBeenCalledWith(
-      expect.objectContaining({
-        token: undefined,
-      }),
-    );
+    expect(buildGatewayInstallPlan).toHaveBeenCalledTimes(1);
+    expectFirstOnboardingInstallPlanCallOmitsToken();
     expect(gatewayServiceInstall).toHaveBeenCalledTimes(1);
   });
 });

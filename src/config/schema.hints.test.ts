@@ -135,6 +135,7 @@ describe("mapSensitivePaths", () => {
     expect(hints["channels.discord.accounts.*.token"]?.sensitive).toBe(true);
     expect(hints["channels.googlechat.serviceAccount"]?.sensitive).toBe(true);
     expect(hints["gateway.auth.token"]?.sensitive).toBe(true);
+    expect(hints["models.providers.*.headers.*"]?.sensitive).toBe(true);
     expect(hints["skills.entries.*.apiKey"]?.sensitive).toBe(true);
   });
 });
