@@ -1,5 +1,6 @@
 import type { OAuthCredentials } from "@mariozechner/pi-ai";
 import { loginOpenAICodex } from "@mariozechner/pi-ai/oauth";
+import { EnvHttpProxyAgent, getGlobalDispatcher, setGlobalDispatcher } from "undici";
 import type { RuntimeEnv } from "../runtime.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
 import { createVpsAwareOAuthHandlers } from "./oauth-flow.js";
@@ -7,6 +8,36 @@ import {
   formatOpenAIOAuthTlsPreflightFix,
   runOpenAIOAuthTlsPreflight,
 } from "./oauth-tls-preflight.js";
+
+const PROXY_ENV_KEYS = [
+  "HTTPS_PROXY",
+  "https_proxy",
+  "HTTP_PROXY",
+  "http_proxy",
+  "ALL_PROXY",
+  "all_proxy",
+];
+
+function hasConfiguredProxyEnv(env: NodeJS.ProcessEnv = process.env): boolean {
+  return PROXY_ENV_KEYS.some((key) => {
+    const value = env[key];
+    return typeof value === "string" && value.trim().length > 0;
+  });
+}
+
+async function withTemporaryProxyDispatcher<T>(work: () => Promise<T>): Promise<T> {
+  if (!hasConfiguredProxyEnv()) {
+    return work();
+  }
+
+  const previous = getGlobalDispatcher();
+  setGlobalDispatcher(new EnvHttpProxyAgent());
+  try {
+    return await work();
+  } finally {
+    setGlobalDispatcher(previous);
+  }
+}
 
 export async function loginOpenAICodexOAuth(params: {
   prompter: WizardPrompter;
@@ -50,11 +81,13 @@ export async function loginOpenAICodexOAuth(params: {
       localBrowserMessage: localBrowserMessage ?? "Complete sign-in in browser…",
     });
 
-    const creds = await loginOpenAICodex({
-      onAuth: baseOnAuth,
-      onPrompt,
-      onProgress: (msg: string) => spin.update(msg),
-    });
+    const creds = await withTemporaryProxyDispatcher(() =>
+      loginOpenAICodex({
+        onAuth: baseOnAuth,
+        onPrompt,
+        onProgress: (msg: string) => spin.update(msg),
+      }),
+    );
     spin.stop("OpenAI OAuth complete");
     return creds ?? null;
   } catch (err) {
