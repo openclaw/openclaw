@@ -14,6 +14,7 @@ describe("buildSandboxBrowserResolvedConfig", () => {
 
     expect(config.ssrfPolicy).toBeDefined();
     expect(config.ssrfPolicy?.dangerouslyAllowPrivateNetwork).toBe(true);
+    expect(config.ssrfPolicy?.hostnameAllowlist).toEqual(["localhost", "127.0.0.1", "::1"]);
   });
 
   it("ssrfPolicy passes isPrivateNetworkAllowedByPolicy when namespace sharing enabled", () => {

@@ -97,12 +97,17 @@ export function buildSandboxBrowserResolvedConfig(params: {
     },
     // Only relax the SSRF guard when the browser joins the sandbox container's
     // network namespace — in that mode localhost refers to the sandbox's loopback
-    // and the browser needs to reach private-IP services running inside it.
-    // Without namespace sharing, the SSRF guard protects against cloud metadata
-    // endpoints (169.254.169.254, metadata.google.internal) reachable via the
-    // Docker bridge network.
+    // and the browser needs to reach dev servers running inside it.
+    // hostnameAllowlist restricts access to loopback only, blocking cloud metadata
+    // endpoints (169.254.169.254, metadata.google.internal) that may be reachable
+    // via the Docker bridge network on environments without IMDSv2 enforcement.
     ...(params.shareNetworkNamespace
-      ? { ssrfPolicy: { dangerouslyAllowPrivateNetwork: true } }
+      ? {
+          ssrfPolicy: {
+            dangerouslyAllowPrivateNetwork: true,
+            hostnameAllowlist: ["localhost", "127.0.0.1", "::1"],
+          },
+        }
       : {}),
   };
 }
