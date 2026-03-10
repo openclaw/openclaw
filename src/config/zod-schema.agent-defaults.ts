@@ -190,6 +190,22 @@ export const AgentDefaultsSchema = z
       .strict()
       .optional(),
     sandbox: AgentSandboxSchema,
+    kvCache: z
+      .object({
+        enabled: z.boolean().optional(),
+        baseUrl: z.string().optional(),
+        maxSlots: z.number().int().positive().optional(),
+        preloadEnabled: z.boolean().optional(),
+        preloadMaxTokens: z.number().int().positive().optional(),
+        preloadMinScore: z.number().min(0).max(1).optional(),
+        evictionEnabled: z.boolean().optional(),
+        evictionIdleMs: z.number().int().positive().optional(),
+        persistenceEnabled: z.boolean().optional(),
+        persistencePath: z.string().optional(),
+      })
+      .strict()
+      .optional()
+      .describe("KV cache configuration for llama.cpp context preloading from memory."),
   })
   .strict()
   .optional();

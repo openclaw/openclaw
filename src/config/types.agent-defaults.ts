@@ -117,6 +117,29 @@ export type CliBackendConfig = {
   };
 };
 
+export type KvCacheConfig = {
+  /** Enable KV cache manager (default: true). */
+  enabled?: boolean;
+  /** Llama server base URL (default: http://127.0.0.1:18790). */
+  baseUrl?: string;
+  /** Maximum slots to manage (default: 4). */
+  maxSlots?: number;
+  /** Enable memory-driven context preloading (default: true). */
+  preloadEnabled?: boolean;
+  /** Maximum tokens to preload (default: 8192). */
+  preloadMaxTokens?: number;
+  /** Minimum memory search score for preloading (default: 0.5). */
+  preloadMinScore?: number;
+  /** Enable idle slot eviction (default: true). */
+  evictionEnabled?: boolean;
+  /** Idle time before eviction in ms (default: 300000 = 5 minutes). */
+  evictionIdleMs?: number;
+  /** Enable slot persistence (default: true). */
+  persistenceEnabled?: boolean;
+  /** Path for slot persistence (default: ~/.openclaw/kv-cache). */
+  persistencePath?: string;
+};
+
 export type AgentDefaultsConfig = {
   /** Primary model and fallbacks (provider/model). Accepts string or {primary,fallbacks}. */
   model?: AgentModelConfig;
@@ -183,6 +206,8 @@ export type AgentDefaultsConfig = {
   };
   /** Vector memory search configuration (per-agent overrides supported). */
   memorySearch?: MemorySearchConfig;
+  /** KV cache configuration for llama.cpp context preloading from memory. */
+  kvCache?: KvCacheConfig;
   /** Default thinking level when no /think directive is present. */
   thinkingDefault?: "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "adaptive";
   /** Default verbose level when no /verbose directive is present. */
