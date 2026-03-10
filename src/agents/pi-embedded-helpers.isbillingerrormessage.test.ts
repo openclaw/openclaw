@@ -714,4 +714,10 @@ describe("classifyFailoverReason", () => {
       ),
     ).toBe("timeout");
   });
+  it("classifies Codex server_error payloads as timeout so model fallback can continue", () => {
+    const raw =
+      'Codex error: {"type":"error","error":{"type":"server_error","code":"server_error","message":"An error occurred while processing your request. You can retry your request, or contact us through our help center at help.openai.com if the error persists. Please include the request ID fd761aef-b6db-4d0a-8071-bd6a13ce25c4 in your message.","param":null},"sequence_number":2}';
+    expect(classifyFailoverReason(raw)).toBe("timeout");
+    expect(isFailoverErrorMessage(raw)).toBe(true);
+  });
 });

@@ -179,10 +179,10 @@ export function isCompactionFailureError(errorMessage?: string): boolean {
 }
 
 const ERROR_PAYLOAD_PREFIX_RE =
-  /^(?:error|api\s*error|apierror|openai\s*error|anthropic\s*error|gateway\s*error)[:\s-]+/i;
+  /^(?:error|api\s*error|apierror|openai\s*error|anthropic\s*error|codex\s*error|gateway\s*error)[:\s-]+/i;
 const FINAL_TAG_RE = /<\s*\/?\s*final\s*>/gi;
 const ERROR_PREFIX_RE =
-  /^(?:error|api\s*error|openai\s*error|anthropic\s*error|gateway\s*error|request failed|failed|exception)[:\s-]+/i;
+  /^(?:error|api\s*error|openai\s*error|anthropic\s*error|codex\s*error|gateway\s*error|request failed|failed|exception)[:\s-]+/i;
 const CONTEXT_OVERFLOW_ERROR_HEAD_RE =
   /^(?:context overflow:|request_too_large\b|request size exceeds\b|request exceeds the maximum size\b|context length exceeded\b|maximum context length\b|prompt is too long\b|exceeds model context window\b)/i;
 const HTTP_STATUS_PREFIX_RE = /^(?:http\s*)?(\d{3})\s+(.+)$/i;
@@ -513,6 +513,18 @@ function parseApiErrorPayload(raw: string): ErrorPayload | null {
   return null;
 }
 
+function isJsonApiServerError(raw: string): boolean {
+  const info = parseApiErrorInfo(raw);
+  if (!info) {
+    return false;
+  }
+  const type = info.type?.trim().toLowerCase();
+  if (type === "server_error") {
+    return true;
+  }
+  return type === "api_error" && /internal server error/i.test(info.message ?? "");
+}
+
 export function getApiErrorPayloadFingerprint(raw?: string): string | null {
   if (!raw) {
     return null;
@@ -800,10 +812,7 @@ function isJsonApiInternalServerError(raw: string): boolean {
   if (!raw) {
     return false;
   }
-  const value = raw.toLowerCase();
-  // Anthropic often wraps transient 500s in JSON payloads like:
-  // {"type":"error","error":{"type":"api_error","message":"Internal server error"}}
-  return value.includes('"type":"api_error"') && value.includes("internal server error");
+  return isJsonApiServerError(raw);
 }
 
 export function parseImageDimensionError(raw: string): {

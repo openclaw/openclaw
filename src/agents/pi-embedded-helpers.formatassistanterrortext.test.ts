@@ -74,6 +74,15 @@ describe("formatAssistantErrorText", () => {
     );
     expect(formatAssistantErrorText(msg)).toBe("LLM error server_error: Something exploded");
   });
+  it("unwraps Codex-prefixed server errors into user-facing text", () => {
+    const msg = makeAssistantError(
+      'Codex error: {"type":"error","error":{"type":"server_error","code":"server_error","message":"An error occurred while processing your request. Please include the request ID fd761aef-b6db-4d0a-8071-bd6a13ce25c4 in your message.","param":null},"sequence_number":2}',
+    );
+    const result = formatAssistantErrorText(msg);
+    expect(result).toContain("LLM error server_error");
+    expect(result).toContain("fd761aef-b6db-4d0a-8071-bd6a13ce25c4");
+    expect(result).not.toContain('{"type":"error"');
+  });
   it("returns a friendly billing message for credit balance errors", () => {
     const msg = makeAssistantError("Your credit balance is too low to access the Anthropic API.");
     const result = formatAssistantErrorText(msg);
