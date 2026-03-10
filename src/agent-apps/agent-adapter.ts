@@ -48,6 +48,27 @@ function buildToolResult(details: unknown): AgentToolResult<unknown> {
   };
 }
 
+function normalizeToolError(
+  error: unknown,
+  fallback: { code: string; message: string },
+): { code: string; message: string; details?: unknown } {
+  if (typeof error === "object" && error !== null) {
+    const maybeCode =
+      "code" in error && typeof (error as { code?: unknown }).code === "string"
+        ? (error as { code: string }).code
+        : fallback.code;
+    const maybeMessage =
+      "message" in error && typeof (error as { message?: unknown }).message === "string"
+        ? (error as { message: string }).message
+        : fallback.message;
+    const maybeDetails = "details" in error ? (error as { details?: unknown }).details : undefined;
+    return maybeDetails === undefined
+      ? { code: maybeCode, message: maybeMessage }
+      : { code: maybeCode, message: maybeMessage, details: maybeDetails };
+  }
+  return fallback;
+}
+
 export class OpenClawAgentAdapter implements AotuiAgentAdapter {
   private readonly sessionKey: string;
   private readonly ownerId: string;
@@ -152,8 +173,10 @@ export class OpenClawAgentAdapter implements AotuiAgentAdapter {
 
     const desktopRecord = this.getDesktopRecord();
     // The AOTUI runtime lock API is synchronous; execute() remains the async boundary.
-    this.options.kernel.acquireLock(desktopRecord.desktopId, this.ownerId);
+    let lockAcquired = false;
     try {
+      this.options.kernel.acquireLock(desktopRecord.desktopId, this.ownerId);
+      lockAcquired = true;
       const result = await this.options.kernel.execute(
         desktopRecord.desktopId,
         operation,
@@ -176,8 +199,19 @@ export class OpenClawAgentAdapter implements AotuiAgentAdapter {
           message: "AOTUI operation failed",
         },
       };
+    } catch (error) {
+      return {
+        toolCallId,
+        toolName,
+        error: normalizeToolError(error, {
+          code: "E_OPERATION_FAILED",
+          message: "AOTUI operation failed",
+        }),
+      };
     } finally {
-      this.options.kernel.releaseLock(desktopRecord.desktopId, this.ownerId);
+      if (lockAcquired) {
+        this.options.kernel.releaseLock(desktopRecord.desktopId, this.ownerId);
+      }
     }
   }
 

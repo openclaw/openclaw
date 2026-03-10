@@ -33,6 +33,8 @@ function toDesktopId(sessionKey: string): DesktopID {
   return normalizeSessionKey(sessionKey) as DesktopID;
 }
 
+const ENSURE_DESKTOP_RETRY_LIMIT = 3;
+
 export class InMemorySessionDesktopManager implements SessionDesktopManager {
   private readonly records = new Map<string, DesktopRecord>();
   private readonly pendingCreates = new Map<string, Promise<DesktopRecord>>();
@@ -46,6 +48,13 @@ export class InMemorySessionDesktopManager implements SessionDesktopManager {
   }
 
   async ensureDesktop(input: DesktopBindingInput): Promise<DesktopRecord> {
+    return await this.ensureDesktopWithRetry(input, ENSURE_DESKTOP_RETRY_LIMIT);
+  }
+
+  private async ensureDesktopWithRetry(
+    input: DesktopBindingInput,
+    retriesRemaining: number,
+  ): Promise<DesktopRecord> {
     const sessionKey = normalizeSessionKey(input.sessionKey);
     const existing = this.records.get(sessionKey);
     if (existing) {
@@ -57,13 +66,19 @@ export class InMemorySessionDesktopManager implements SessionDesktopManager {
       try {
         await pending;
       } catch {
-        return await this.ensureDesktop(input);
+        if (retriesRemaining <= 0) {
+          throw new Error(`Failed to initialize desktop for ${sessionKey} after retries`);
+        }
+        return await this.ensureDesktopWithRetry(input, retriesRemaining - 1);
       }
       const current = this.records.get(sessionKey);
       if (current) {
         return await this.rebindExistingDesktop(current, input);
       }
-      return await this.ensureDesktop(input);
+      if (retriesRemaining <= 0) {
+        throw new Error(`Failed to initialize desktop for ${sessionKey} after retries`);
+      }
+      return await this.ensureDesktopWithRetry(input, retriesRemaining - 1);
     }
 
     const createPromise = this.createAndInitializeDesktopRecord(sessionKey, input);

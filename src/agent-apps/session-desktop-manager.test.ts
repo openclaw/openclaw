@@ -250,4 +250,32 @@ describe("InMemorySessionDesktopManager", () => {
     expect(second.sessionId).toBe("session_2");
     expect(manager.getDesktop("agent:main:discord:channel:dev")?.desktopId).toBe("dt_retried");
   });
+
+  it("fails with bounded retries when shared pending create keeps failing", async () => {
+    let createCalls = 0;
+    kernel.createDesktop.mockImplementation(async () => {
+      createCalls += 1;
+      return `dt_failed_${createCalls}`;
+    });
+    const manager = new InMemorySessionDesktopManager(kernel as never, {
+      afterCreate: async () => {
+        throw new Error("install failed");
+      },
+    });
+
+    const firstPromise = manager.ensureDesktop({
+      sessionKey: "agent:main:discord:channel:dev",
+      sessionId: "session_1",
+      agentId: "main",
+    });
+    const secondPromise = manager.ensureDesktop({
+      sessionKey: "agent:main:discord:channel:dev",
+      sessionId: "session_2",
+      agentId: "main",
+    });
+
+    await expect(firstPromise).rejects.toThrow("install failed");
+    await expect(secondPromise).rejects.toThrow();
+    expect(kernel.createDesktop).toHaveBeenCalledTimes(2);
+  });
 });

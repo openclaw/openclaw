@@ -202,14 +202,14 @@ describe("AOTUI runtime registry", () => {
     expect(runtime.getAotuiGatewayRuntime()).toBeNull();
   });
 
-  it("keeps the runtime handle when stop fails", async () => {
+  it("clears the runtime handle when stop fails after service teardown", async () => {
     const runtime = await import("./runtime.js");
     await runtime.startAotuiGatewayRuntime();
     mocks.service.stop.mockRejectedValueOnce(new Error("stop failed"));
 
     await expect(runtime.stopAotuiGatewayRuntime("shutdown")).rejects.toThrow("stop failed");
 
-    expect(runtime.getAotuiGatewayRuntime()).toBe(mocks.service);
+    expect(runtime.getAotuiGatewayRuntime()).toBeNull();
   });
 
   it("reinitializes the session desktop after compaction when a desktop exists", async () => {

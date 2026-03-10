@@ -57,9 +57,12 @@ export async function stopAotuiGatewayRuntime(reason?: string): Promise<void> {
   }
 
   const active = gatewayKernelService;
-  await active.stop(reason);
-  if (gatewayKernelService === active) {
-    gatewayKernelService = null;
+  try {
+    await active.stop(reason);
+  } finally {
+    if (gatewayKernelService === active) {
+      gatewayKernelService = null;
+    }
   }
 }
 

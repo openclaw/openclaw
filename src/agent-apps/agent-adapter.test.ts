@@ -281,6 +281,69 @@ describe("OpenClawAgentAdapter", () => {
     expect(kernel.acquireSnapshot).toHaveBeenCalledTimes(1);
   });
 
+  it("returns a structured lock error when Kernel.acquireLock detects contention", async () => {
+    const snapshot = createSnapshot("snap_lock_error");
+    const projector: AotuiSnapshotProjector = {
+      projectMessages: vi.fn(() => []),
+      projectToolBindings: vi.fn(() => [
+        {
+          toolName: "open_file",
+          description: "Open file",
+          parameters: {
+            type: "object",
+            properties: { path: { type: "string" } },
+            required: ["path"],
+          },
+          operation: {
+            context: {
+              appId: "app_1" as never,
+              snapshotId: "latest" as never,
+            },
+            name: "open_file" as never,
+            args: {},
+          },
+        },
+      ]),
+    };
+
+    kernel.acquireSnapshot.mockResolvedValue(snapshot);
+    kernel.acquireLock.mockImplementation(() => {
+      throw Object.assign(
+        new Error("Desktop 'agent:main:discord:channel:dev' is locked by 'run_1'"),
+        {
+          code: "DESKTOP_LOCKED",
+        },
+      );
+    });
+
+    const adapter = new OpenClawAgentAdapter({
+      sessionKey: desktopRecord.sessionKey,
+      sessionId: desktopRecord.sessionId,
+      agentId: desktopRecord.agentId,
+      ownerId: "run_2",
+      kernel: kernel as never,
+      desktopManager: desktopManager as never,
+      agent,
+      baseTools: [baseTool],
+      projector,
+    });
+
+    await adapter.install();
+
+    const result = await adapter.routeToolCall("open_file", { path: "README.md" }, "tool_lock_1");
+
+    expect(result).toEqual({
+      toolCallId: "tool_lock_1",
+      toolName: "open_file",
+      error: {
+        code: "DESKTOP_LOCKED",
+        message: "Desktop 'agent:main:discord:channel:dev' is locked by 'run_1'",
+      },
+    });
+    expect(kernel.execute).not.toHaveBeenCalled();
+    expect(kernel.releaseLock).not.toHaveBeenCalled();
+  });
+
   it("refreshes tools and replaces stale injected view messages with the latest snapshot state", async () => {
     const snapshots = [createSnapshot("snap_install"), createSnapshot("snap_refresh")];
     kernel.acquireSnapshot.mockImplementation(async () => snapshots.shift());
