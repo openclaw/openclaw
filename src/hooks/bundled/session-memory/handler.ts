@@ -350,7 +350,9 @@ const saveSessionToMemory: HookHandler = async (event) => {
       if (
         event.context.blockSessionSave !== true &&
         typeof postContent === "string" &&
-        postContent !== writtenEntry
+        // Two distinct intents: write if no inline write happened (writtenEntry
+        // is null because blockPreSet was true) OR if the content changed.
+        (writtenEntry === null || postContent !== writtenEntry)
       ) {
         // Ensure memoryDir exists — the inline write may have been
         // skipped (e.g. blockSessionSave was true initially) so mkdir

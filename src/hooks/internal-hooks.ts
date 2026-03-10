@@ -323,11 +323,13 @@ export async function triggerInternalHook(event: InternalHookEvent): Promise<voi
  * share the same drain semantics as production.
  *
  * @param actions - The postHookActions array to drain (mutated: cleared after snapshot).
- * @param onError - Optional per-action error handler. Defaults to swallowing errors silently.
+ * @param onError - Per-action error handler. Required to force callers to be explicit
+ *   about error handling — pass a logger in production, a rethrower in tests, or
+ *   `() => {}` only when intentionally swallowing errors.
  */
 export async function drainPostHookActions(
   actions: Array<() => Promise<void> | void>,
-  onError?: (err: unknown) => void,
+  onError: (err: unknown) => void,
 ): Promise<void> {
   const pending = [...actions];
   actions.length = 0;
@@ -335,7 +337,7 @@ export async function drainPostHookActions(
     try {
       await action();
     } catch (err) {
-      onError?.(err);
+      onError(err);
     }
   }
 }
