@@ -78,6 +78,7 @@ Docs: https://docs.openclaw.ai
 - ACP/sessions_spawn: implicitly stream `mode="run"` ACP spawns to parent only for eligible subagent orchestrator sessions (heartbeat `target: "last"` with a usable session-local route), restoring parent progress relays without thread binding. (#42404) Thanks @davidguttman.
 - Sessions/reset model recompute: clear stale runtime model, context-token, and system-prompt metadata before session resets recompute the replacement session, so resets pick up current defaults and explicit overrides instead of reusing old runtime model state. (#41173) thanks @PonyX-lab.
 - Browser/Browserbase 429 handling: surface stable no-retry rate-limit guidance without buffering discarded HTTP 429 response bodies from remote browser services. (#40491) thanks @mvanhorn.
+- Gateway/auth: allow one trusted device-token retry on shared-token mismatch with recovery hints to prevent reconnect churn during token drift. (#42507) Thanks @joshavant.
 
 ## 2026.3.8
 
