@@ -908,6 +908,75 @@ export function isImageSizeError(errorMessage?: string): boolean {
   return Boolean(parseImageSizeError(errorMessage));
 }
 
+// ---------------------------------------------------------------------------
+// SSE parse error detection
+// ---------------------------------------------------------------------------
+// 反向代理（Azure/CloudFlare/nginx）截断 SSE `data:` 行时，SDK 侧会触发
+// SyntaxError / JSON parse failure。该函数区分此类瞬态错误与其他 JSON 解析错误。
+
+/** 已知与 SSE 上下文无关的误报模式——排除后避免误判。 */
+const SSE_FALSE_POSITIVE_RE =
+  /context.?(?:overflow|window|length)|rate.?limit|billing|insufficient.?(?:credit|balance|quota)|too many requests|quota exceeded|upstream/i;
+
+/** Anthropic / OpenAI SDK 抛出的特有 SSE 解析错误消息。 */
+const SSE_SDK_PATTERN_RE =
+  /could not (?:parse|process) sse|sse (?:parse|parsing) error|unexpected sse|malformed sse|invalid sse/i;
+
+/** 栈追踪中表明正在执行流式解析的关键帧。 */
+const SSE_STACK_STREAMING_RE =
+  /\bstreaming\b|fromsse|from_sse|\/sse[/.]|_sse[/.]|\bstream\.|openai\/streaming|anthropic\/streaming/i;
+
+export function isLikelySSEParseError(
+  errorMessage: string,
+  opts?: { stack?: string; streamingContext?: boolean },
+): boolean {
+  if (!errorMessage) {
+    return false;
+  }
+
+  const lower = errorMessage.toLowerCase();
+
+  // 排除误报：context overflow / rate limit / billing / upstream 等
+  if (SSE_FALSE_POSITIVE_RE.test(errorMessage)) {
+    return false;
+  }
+
+  // 1) Anthropic / OpenAI SDK 特有 SSE 解析错误
+  if (SSE_SDK_PATTERN_RE.test(errorMessage)) {
+    return true;
+  }
+
+  // 判断是否处于流式上下文：显式标记 or 栈追踪中包含流式关键帧
+  const inStreamingContext =
+    opts?.streamingContext === true ||
+    (opts?.stack ? SSE_STACK_STREAMING_RE.test(opts.stack) : false);
+
+  // 2) SyntaxError + JSON 相关 + 流式上下文
+  const isSyntaxError = lower.includes("syntaxerror") || lower.includes("syntax error");
+  const isJsonContext =
+    lower.includes("json") ||
+    lower.includes("unexpected token") ||
+    lower.includes("unexpected end of") ||
+    lower.includes("unterminated string");
+
+  if (isSyntaxError && isJsonContext && inStreamingContext) {
+    return true;
+  }
+
+  // 3) 通用 JSON parse failure + 流式上下文
+  const isJsonParseFailure =
+    lower.includes("json parse") ||
+    lower.includes("json.parse") ||
+    lower.includes("failed to parse") ||
+    (lower.includes("parse error") && isJsonContext);
+
+  if (isJsonParseFailure && inStreamingContext) {
+    return true;
+  }
+
+  return false;
+}
+
 export function isCloudCodeAssistFormatError(raw: string): boolean {
   return !isImageDimensionErrorMessage(raw) && matchesFormatErrorPattern(raw);
 }
