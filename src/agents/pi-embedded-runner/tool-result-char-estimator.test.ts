@@ -57,31 +57,21 @@ describe("estimateContextChars", () => {
 
   it("skips null entries without crashing", () => {
     const cache = createMessageCharEstimateCache();
-    const messages = [
-      makeUser("valid"),
-      null as unknown as AgentMessage,
-      makeUser("also valid"),
-    ];
+    const messages = [makeUser("valid"), null as unknown as AgentMessage, makeUser("also valid")];
     const total = estimateContextChars(messages, cache);
     expect(total).toBeGreaterThan(0);
   });
 
   it("skips undefined entries without crashing", () => {
     const cache = createMessageCharEstimateCache();
-    const messages = [
-      undefined as unknown as AgentMessage,
-      makeUser("valid"),
-    ];
+    const messages = [undefined as unknown as AgentMessage, makeUser("valid")];
     const total = estimateContextChars(messages, cache);
     expect(total).toBeGreaterThan(0);
   });
 
   it("handles an entirely null/undefined array", () => {
     const cache = createMessageCharEstimateCache();
-    const messages = [
-      null as unknown as AgentMessage,
-      undefined as unknown as AgentMessage,
-    ];
+    const messages = [null as unknown as AgentMessage, undefined as unknown as AgentMessage];
     expect(estimateContextChars(messages, cache)).toBe(0);
   });
 
