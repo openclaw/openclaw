@@ -10,7 +10,7 @@ import {
   triggerInternalHook,
   createInternalHookEvent,
 } from "./internal-hooks.js";
-import { loadInternalHooks } from "./loader.js";
+import { loadInternalHooks, loadInternalHooksForStartup } from "./loader.js";
 
 describe("loader", () => {
   let fixtureRoot = "";
@@ -50,6 +50,74 @@ describe("loader", () => {
         internal: handlers ? { enabled: true, handlers } : { enabled: true },
       },
     };
+  }
+
+  function createMultiAgentHooksConfig(params: {
+    mainWorkspace: string;
+    opsWorkspace: string;
+    extraDirs?: string[];
+    handlers?: Array<{ event: string; module: string; export?: string }>;
+  }): OpenClawConfig {
+    return {
+      hooks: {
+        internal: {
+          enabled: true,
+          ...(params.extraDirs && params.extraDirs.length > 0
+            ? { load: { extraDirs: params.extraDirs } }
+            : {}),
+          ...(params.handlers ? { handlers: params.handlers } : {}),
+        },
+      },
+      agents: {
+        list: [
+          { id: "main", default: true, workspace: params.mainWorkspace },
+          { id: "ops", workspace: params.opsWorkspace },
+        ],
+      },
+    };
+  }
+
+  async function writeHandlerModuleInDir(
+    dir: string,
+    fileName: string,
+    code = "export default async function() {}",
+  ): Promise<string> {
+    await fs.mkdir(dir, { recursive: true });
+    const handlerPath = path.join(dir, fileName);
+    await fs.writeFile(handlerPath, code, "utf-8");
+    return handlerPath;
+  }
+
+  async function writeHook(params: {
+    hooksRoot: string;
+    hookName: string;
+    events: string[];
+    message: string;
+    dirName?: string;
+    handlerCode?: string;
+  }): Promise<string> {
+    const hookDir = path.join(params.hooksRoot, params.dirName ?? params.hookName);
+    await fs.mkdir(hookDir, { recursive: true });
+    await fs.writeFile(
+      path.join(hookDir, "HOOK.md"),
+      [
+        "---",
+        `name: ${params.hookName}`,
+        `description: ${params.hookName} test hook`,
+        `metadata: ${JSON.stringify({ openclaw: { events: params.events } })}`,
+        "---",
+        "",
+        `# ${params.hookName}`,
+      ].join("\n"),
+      "utf-8",
+    );
+    await fs.writeFile(
+      path.join(hookDir, "handler.js"),
+      params.handlerCode ??
+        `export default async function(event) { event.messages.push(${JSON.stringify(params.message)}); }\n`,
+      "utf-8",
+    );
+    return hookDir;
   }
 
   afterEach(async () => {
@@ -335,6 +403,183 @@ describe("loader", () => {
       }
 
       await expectNoCommandHookRegistration(createLegacyHandlerConfig());
+    });
+  });
+
+  describe("loadInternalHooksForStartup", () => {
+    it("loads workspace hooks for all configured workspaces and scopes them by session", async () => {
+      const mainWorkspace = path.join(tmpDir, "workspace-main");
+      const opsWorkspace = path.join(tmpDir, "workspace-ops");
+      await writeHook({
+        hooksRoot: path.join(mainWorkspace, "hooks"),
+        hookName: "main-local",
+        events: ["command:new"],
+        message: "main-local",
+      });
+      await writeHook({
+        hooksRoot: path.join(opsWorkspace, "hooks"),
+        hookName: "ops-local",
+        events: ["command:new"],
+        message: "ops-local",
+      });
+
+      const cfg = createMultiAgentHooksConfig({ mainWorkspace, opsWorkspace });
+      const count = await loadInternalHooksForStartup(
+        cfg,
+        mainWorkspace,
+        [mainWorkspace, opsWorkspace],
+        {
+          managedHooksDir: path.join(tmpDir, "managed-empty"),
+          bundledHooksDir: path.join(tmpDir, "bundled-empty"),
+        },
+      );
+
+      expect(count).toBe(2);
+
+      const mainEvent = createInternalHookEvent("command", "new", "agent:main:chat");
+      await triggerInternalHook(mainEvent);
+      expect(mainEvent.messages).toEqual(["main-local"]);
+
+      const opsEvent = createInternalHookEvent("command", "new", "agent:ops:chat");
+      await triggerInternalHook(opsEvent);
+      expect(opsEvent.messages).toEqual(["ops-local"]);
+    });
+
+    it("loads shared hooks only once across multiple workspaces", async () => {
+      const mainWorkspace = path.join(tmpDir, "workspace-main");
+      const opsWorkspace = path.join(tmpDir, "workspace-ops");
+      const extraHooksDir = path.join(tmpDir, "extra-hooks");
+      const managedHooksDir = path.join(tmpDir, "managed-hooks");
+      const bundledHooksDir = path.join(tmpDir, "bundled-hooks");
+      await writeHook({
+        hooksRoot: extraHooksDir,
+        hookName: "extra-shared",
+        events: ["command:new"],
+        message: "extra",
+      });
+      await writeHook({
+        hooksRoot: managedHooksDir,
+        hookName: "managed-shared",
+        events: ["command:new"],
+        message: "managed",
+      });
+      await writeHook({
+        hooksRoot: bundledHooksDir,
+        hookName: "bundled-shared",
+        events: ["command:new"],
+        message: "bundled",
+      });
+      await writeHandlerModuleInDir(
+        mainWorkspace,
+        "legacy-handler.js",
+        "export default async function(event) { event.messages.push('legacy'); }\n",
+      );
+
+      const cfg = createMultiAgentHooksConfig({
+        mainWorkspace,
+        opsWorkspace,
+        extraDirs: [extraHooksDir],
+        handlers: [{ event: "command:new", module: "legacy-handler.js" }],
+      });
+      const count = await loadInternalHooksForStartup(
+        cfg,
+        mainWorkspace,
+        [mainWorkspace, opsWorkspace],
+        { managedHooksDir, bundledHooksDir },
+      );
+
+      expect(count).toBe(4);
+
+      const event = createInternalHookEvent("command", "new", "agent:ops:chat");
+      await triggerInternalHook(event);
+      expect(event.messages).toEqual(["extra", "bundled", "managed", "legacy"]);
+    });
+
+    it("suppresses shared hooks when a matching workspace-local hook exists", async () => {
+      const mainWorkspace = path.join(tmpDir, "workspace-main");
+      const opsWorkspace = path.join(tmpDir, "workspace-ops");
+      const managedHooksDir = path.join(tmpDir, "managed-hooks");
+      await writeHook({
+        hooksRoot: managedHooksDir,
+        hookName: "override-me",
+        events: ["command:new"],
+        message: "shared",
+      });
+      await writeHook({
+        hooksRoot: path.join(mainWorkspace, "hooks"),
+        hookName: "override-me",
+        events: ["command:new"],
+        message: "main-local",
+      });
+
+      const cfg = createMultiAgentHooksConfig({ mainWorkspace, opsWorkspace });
+      const count = await loadInternalHooksForStartup(
+        cfg,
+        mainWorkspace,
+        [mainWorkspace, opsWorkspace],
+        {
+          managedHooksDir,
+          bundledHooksDir: path.join(tmpDir, "bundled-empty"),
+        },
+      );
+
+      expect(count).toBe(2);
+
+      const mainEvent = createInternalHookEvent("command", "new", "agent:main:chat");
+      await triggerInternalHook(mainEvent);
+      expect(mainEvent.messages).toEqual(["main-local"]);
+
+      const opsEvent = createInternalHookEvent("command", "new", "agent:ops:chat");
+      await triggerInternalHook(opsEvent);
+      expect(opsEvent.messages).toEqual(["shared"]);
+    });
+
+    it("runs shared startup hooks once and workspace startup hooks once per workspace", async () => {
+      const mainWorkspace = path.join(tmpDir, "workspace-main");
+      const opsWorkspace = path.join(tmpDir, "workspace-ops");
+      const managedHooksDir = path.join(tmpDir, "managed-hooks");
+      await writeHook({
+        hooksRoot: managedHooksDir,
+        hookName: "shared-startup",
+        events: ["gateway:startup"],
+        message: "shared-startup",
+      });
+      await writeHook({
+        hooksRoot: path.join(mainWorkspace, "hooks"),
+        hookName: "main-startup",
+        events: ["gateway:startup"],
+        message: "main-startup",
+        handlerCode:
+          "export default async function(event) { event.messages.push(String(event.context.workspaceDir)); }\n",
+      });
+      await writeHook({
+        hooksRoot: path.join(opsWorkspace, "hooks"),
+        hookName: "ops-startup",
+        events: ["gateway:startup"],
+        message: "ops-startup",
+        handlerCode:
+          "export default async function(event) { event.messages.push(String(event.context.workspaceDir)); }\n",
+      });
+
+      const cfg = createMultiAgentHooksConfig({ mainWorkspace, opsWorkspace });
+      const count = await loadInternalHooksForStartup(
+        cfg,
+        mainWorkspace,
+        [mainWorkspace, opsWorkspace],
+        {
+          managedHooksDir,
+          bundledHooksDir: path.join(tmpDir, "bundled-empty"),
+        },
+      );
+
+      expect(count).toBe(3);
+
+      const event = createInternalHookEvent("gateway", "startup", "gateway:startup", {
+        cfg,
+        workspaceDir: mainWorkspace,
+      });
+      await triggerInternalHook(event);
+      expect(event.messages).toEqual(["shared-startup", mainWorkspace, opsWorkspace]);
     });
   });
 });

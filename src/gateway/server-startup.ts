@@ -9,6 +9,7 @@ import {
 } from "../agents/model-selection.js";
 import { resolveAgentSessionDirs } from "../agents/session-dirs.js";
 import { cleanStaleLockFiles } from "../agents/session-write-lock.js";
+import { listAgentWorkspaceDirs } from "../agents/workspace-dirs.js";
 import type { CliDeps } from "../cli/deps.js";
 import type { loadConfig } from "../config/config.js";
 import { resolveStateDir } from "../config/paths.js";
@@ -18,7 +19,7 @@ import {
   createInternalHookEvent,
   triggerInternalHook,
 } from "../hooks/internal-hooks.js";
-import { loadInternalHooks } from "../hooks/loader.js";
+import { loadInternalHooksForStartup } from "../hooks/loader.js";
 import { isTruthyEnvValue } from "../infra/env.js";
 import type { loadOpenClawPlugins } from "../plugins/loader.js";
 import { type PluginServicesHandle, startPluginServices } from "../plugins/services.js";
@@ -112,7 +113,11 @@ export async function startGatewaySidecars(params: {
   try {
     // Clear any previously registered hooks to ensure fresh loading
     clearInternalHooks();
-    const loadedCount = await loadInternalHooks(params.cfg, params.defaultWorkspaceDir);
+    const loadedCount = await loadInternalHooksForStartup(
+      params.cfg,
+      params.defaultWorkspaceDir,
+      listAgentWorkspaceDirs(params.cfg),
+    );
     if (loadedCount > 0) {
       params.logHooks.info(
         `loaded ${loadedCount} internal hook handler${loadedCount > 1 ? "s" : ""}`,
