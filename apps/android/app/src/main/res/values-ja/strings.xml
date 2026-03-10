@@ -1,4 +1,100 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">OpenClaw ノード</string>
+    
+    <!-- Settings Tab -->
+    <string name="settings_title">設定</string>
+    <string name="settings_gateway_title">ゲートウェイ</string>
+    <string name="settings_gateway_status_connected">接続済み</string>
+    <string name="settings_gateway_status_not_connected">未接続</string>
+    <string name="settings_gateway_setup_instructions">1. Telegramを開き、ボットにメッセージを送信：/pair\n2. 返されたセットアップコードをコピー\n3. ここに貼り付けて接続をタップ\n4. Telegramに戻り、/pair approveを実行</string>
+    <string name="settings_gateway_setup_code_placeholder">セットアップコードを貼り付け</string>
+    <string name="settings_gateway_connect_button">セットアップコードで接続</string>
+    <string name="settings_gateway_connecting">接続中…</string>
+    <string name="settings_gateway_connect_manual">接続（手動）</string>
+    <string name="settings_gateway_bot_picker">ボット</string>
+    <string name="settings_gateway_bot_default">デフォルト</string>
+    <string name="settings_gateway_bot_description">チャットとトークがどのボットと通信するかを制御します。</string>
+    <string name="settings_gateway_discovery">検出</string>
+    <string name="settings_gateway_status">ステータス</string>
+    <string name="settings_gateway_auto_connect">起動時に自動接続</string>
+    <string name="settings_gateway_server">サーバー</string>
+    <string name="settings_gateway_address">アドレス</string>
+    <string name="settings_gateway_disconnect">接続解除</string>
+    <string name="settings_gateway_advanced_title">詳細</string>
+    <string name="settings_gateway_manual_title">手動ゲートウェイを使用</string>
+    <string name="settings_gateway_manual_host">ホスト</string>
+    <string name="settings_gateway_manual_port">ポート（オプション）</string>
+    <string name="settings_gateway_manual_tls">TLSを使用</string>
+    <string name="settings_gateway_manual_description">mDNS/Bonjour検出がブロックされている場合に使用します。tailnet DNS（TLS）ではポートを空のままにして443を使用し、それ以外は18789を使用します。</string>
+    <string name="settings_gateway_debug_logs">検出デバッグログ</string>
+    <string name="settings_gateway_discovery_logs">検出ログ</string>
+    <string name="settings_gateway_debug_canvas">キャンバスデバッグステータス</string>
+    <string name="settings_gateway_auth_token">ゲートウェイ認証トークン</string>
+    <string name="settings_gateway_auth_password">ゲートウェイパスワード</string>
+    <string name="settings_gateway_reset_onboarding">オンボーディングをリセット</string>
+    <string name="settings_gateway_debug_title">デバッグ</string>
+    <string name="settings_gateway_no_gateways">まだゲートウェイが見つかりません。</string>
+    <string name="settings_gateway_no_gateways_description">ゲートウェイが他のネットワークにある場合は、接続してDNSが機能していることを確認してください。</string>
+    <string name="settings_gateway_connect_last_known">最後の既知に接続</string>
+    <string name="settings_gateway_setup_applied_connecting">セットアップコードが適用されました。接続中…</string>
+    <string name="settings_gateway_no_other_gateways">他のゲートウェイが見つかりません。</string>
+    
+    <!-- Device Section -->
+    <string name="settings_device_title">デバイス</string>
+    <string name="settings_device_features_title">機能</string>
+    <string name="settings_device_voice_wake">音声ウェイク</string>
+    <string name="settings_device_voice_wake_description">ウェイクワードアクティベーションを有効にして、ハンズフリーセッションを開始します。</string>
+    <string name="settings_device_talk_mode">トークモード</string>
+    <string name="settings_device_talk_mode_description">接続されたOpenClawエージェントとの音声会話モードを有効にします。</string>
+    <string name="settings_device_background_listening">バックグラウンドリスニング</string>
+    <string name="settings_device_background_listening_description">アプリがバックグラウンドでもリスニングを続けます。バッテリーをより消費します。</string>
+    <string name="settings_device_wake_words">ウェイクワード</string>
+    <string name="settings_device_allow_camera">カメラを許可</string>
+    <string name="settings_device_allow_camera_description">OpenClawがフォアグラウンドの時、ゲートウェイが写真や短い動画クリップを要求することを許可します。</string>
+    <string name="settings_device_location_access">位置情報アクセス</string>
+    <string name="settings_device_location_access_description">OpenClawの位置情報権限を制御します。オフは位置情報ツールを無効にし、使用中はフォアグラウンド位置情報を有効にし、常にバックグラウンド位置情報を有効にします。</string>
+    <string name="settings_device_location_off">オフ</string>
+    <string name="settings_device_location_while_using">使用中のみ</string>
+    <string name="settings_device_location_always">常に</string>
+    <string name="settings_device_prevent_sleep">スリープを防止</string>
+    <string name="settings_device_prevent_sleep_description">OpenClawが開いている間、画面を起動したままにします。</string>
+    <string name="settings_device_advanced_title">詳細</string>
+    <string name="settings_device_talk_voice_gateway">トーク音声（ゲートウェイ）</string>
+    <string name="settings_device_provider">プロバイダー</string>
+    <string name="settings_device_api_key">APIキー</string>
+    <string name="settings_device_configured">設定済み</string>
+    <string name="settings_device_not_configured">未設定</string>
+    <string name="settings_device_not_loaded">未読み込み</string>
+    <string name="settings_device_default_model">デフォルトモデル</string>
+    <string name="settings_device_default_voice">デフォルト音声</string>
+    <string name="settings_device_talk_voice_description">ゲートウェイ上のtalk.apiKey、talk.modelId、talk.voiceIdで設定されます。</string>
+    <string name="settings_device_show_talk_button">トークボタンを表示</string>
+    <string name="settings_device_show_talk_button_description">メインインターフェースにフローティングトークボタンを表示します。</string>
+    <string name="settings_device_default_share_instruction">デフォルト共有指示</string>
+    <string name="settings_device_default_share_instruction_description">AndroidからOpenClawにコンテンツを共有する際にこの指示を追加します。</string>
+    <string name="settings_device_run_share_self_test">共有自己テストを実行</string>
+    <string name="settings_device_device_info_title">デバイス情報</string>
+    <string name="settings_device_name">名前</string>
+    <string name="settings_device_device">デバイス</string>
+    <string name="settings_device_platform">プラットフォーム</string>
+    <string name="settings_device_openclaw">OpenClaw</string>
+    <string name="settings_device_default_name">Android ノード</string>
+    
+    <!-- Common -->
+    <string name="common_close">閉じる</string>
+    <string name="common_ok">OK</string>
+    <string name="common_cancel">キャンセル</string>
+    <string name="common_reset">リセット</string>
+    <string name="common_copy_url">URLをコピー</string>
+    <string name="common_copy_host">ホストをコピー</string>
+    <string name="common_copy_port">ポートをコピー</string>
+    <string name="common_connect">接続</string>
+    
+    <!-- Alerts -->
+    <string name="alert_reset_onboarding_title">オンボーディングをリセットしますか？</string>
+    <string name="alert_reset_onboarding_message">これにより接続が切断され、保存されたゲートウェイ接続と認証情報がクリアされ、オンボーディングウィザードが再度開きます。</string>
+    <string name="alert_location_access_title">位置情報アクセス</string>
+    <string name="alert_default_share_instruction_title">デフォルト共有指示</string>
+    <string name="alert_default_share_instruction_message">AndroidからOpenClawにコンテンツを共有する際にこの指示を追加します。</string>
 </resources>

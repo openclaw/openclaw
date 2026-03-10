@@ -1,0 +1,102 @@
+/* 
+  Localizable.strings (Chinese Traditional)
+  OpenClaw
+
+  Created for internationalization support.
+*/
+
+// MARK: - Settings Tab
+"settings.title" = "設定";
+"settings.gateway.title" = "閘道";
+"settings.gateway.status.connected" = "已連接";
+"settings.gateway.status.not_connected" = "未連接";
+"settings.gateway.setup.instructions" = "1. 開啟Telegram並向您的機器人發送訊息：/pair\n2. 複製返回的設定代碼\n3. 貼到這裡並點擊連接\n4. 回到Telegram，執行/pair approve";
+"settings.gateway.setup.code.placeholder" = "貼上設定代碼";
+"settings.gateway.connect.button" = "使用設定代碼連接";
+"settings.gateway.connecting" = "連接中…";
+"settings.gateway.connect.manual" = "連接（手動）";
+"settings.gateway.bot.picker" = "機器人";
+"settings.gateway.bot.default" = "預設";
+"settings.gateway.bot.description" = "控制聊天和對話模式與哪個機器人通訊。";
+"settings.gateway.discovery" = "發現";
+"settings.gateway.status" = "狀態";
+"settings.gateway.auto_connect" = "啟動時自動連接";
+"settings.gateway.server" = "伺服器";
+"settings.gateway.address" = "地址";
+"settings.gateway.disconnect" = "斷開連接";
+"settings.gateway.advanced.title" = "進階";
+"settings.gateway.manual.title" = "使用手動閘道";
+"settings.gateway.manual.host" = "主機";
+"settings.gateway.manual.port" = "埠（可選）";
+"settings.gateway.manual.tls" = "使用TLS";
+"settings.gateway.manual.description" = "當mDNS/Bonjour發現被阻止時使用。在tailnet DNS（TLS）上留空埠使用443，否則使用18789。";
+"settings.gateway.debug.logs" = "發現除錯日誌";
+"settings.gateway.discovery_logs" = "發現日誌";
+"settings.gateway.debug.canvas" = "除錯畫布狀態";
+"settings.gateway.auth.token" = "閘道認證令牌";
+"settings.gateway.auth.password" = "閘道密碼";
+"settings.gateway.reset.onboarding" = "重設定入門";
+"settings.gateway.debug.title" = "除錯";
+"settings.gateway.no.gateways" = "尚未找到閘道。";
+"settings.gateway.no.gateways.description" = "如果您的閘道在其他網路上，請連接它並確保DNS正常工作。";
+"settings.gateway.connect.last_known" = "連接上次已知";
+"settings.gateway.setup.applied_connecting" = "設定代碼已應用。連接中…";
+"settings.gateway.no.other.gateways" = "沒有找到其他閘道。";
+
+// MARK: - Device Section
+"settings.device.title" = "裝置";
+"settings.device.features.title" = "功能";
+"settings.device.voice_wake" = "語音喚醒";
+"settings.device.voice_wake.description" = "啟用喚醒詞激活以開始免提會話。";
+"settings.device.talk_mode" = "對話模式";
+"settings.device.talk_mode.description" = "啟用與您連接的OpenClaw代理的語音對話模式。";
+"settings.device.background_listening" = "背景監聽";
+"settings.device.background_listening.description" = "在應用程式背景時繼續監聽。會消耗更多電池。";
+"settings.device.wake_words" = "喚醒詞";
+"settings.device.allow_camera" = "允許相機";
+"settings.device.allow_camera.description" = "允許閘道在OpenClaw前景運行時請求照片或短視頻片段。";
+"settings.device.location_access" = "位置存取";
+"settings.device.location_access.description" = "控制OpenClaw的位置權限。關閉禁用位置工具，使用時啟用前景位置，始終啟用背景位置。";
+"settings.device.location.off" = "關閉";
+"settings.device.location.while_using" = "使用時";
+"settings.device.location.always" = "始終";
+"settings.device.prevent_sleep" = "防止睡眠";
+"settings.device.prevent_sleep.description" = "在OpenClaw打開時保持螢幕喚醒。";
+"settings.device.advanced.title" = "進階";
+"settings.device.talk_voice.gateway" = "對話語音（閘道）";
+"settings.device.provider" = "提供商";
+"settings.device.api_key" = "API密鑰";
+"settings.device.configured" = "已設定";
+"settings.device.not_configured" = "未設定";
+"settings.device.not_loaded" = "未載入";
+"settings.device.default_model" = "預設模型";
+"settings.device.default_voice" = "預設語音";
+"settings.device.talk_voice.description" = "透過閘道上的talk.apiKey、talk.modelId和talk.voiceId進行設定。";
+"settings.device.show_talk_button" = "顯示對話按鈕";
+"settings.device.show_talk_button.description" = "在主介面顯示浮動對話按鈕。";
+"settings.device.default_share_instruction" = "預設分享指令";
+"settings.device.default_share_instruction.description" = "從iOS分享內容到OpenClaw時附加此指令。";
+"settings.device.run_share_self_test" = "執行分享自檢";
+"settings.device.device_info.title" = "裝置資訊";
+"settings.device.name" = "名稱";
+"settings.device.device" = "裝置";
+"settings.device.platform" = "平台";
+"settings.device.openclaw" = "OpenClaw";
+"settings.device.default_name" = "iOS 節點";
+
+// MARK: - Common
+"common.close" = "關閉";
+"common.ok" = "確定";
+"common.cancel" = "取消";
+"common.reset" = "重設";
+"common.copy_url" = "複製URL";
+"common.copy_host" = "複製主機";
+"common.copy_port" = "複製埠";
+"common.connect" = "連接";
+
+// MARK: - Alerts
+"alert.reset_onboarding.title" = "重設定入門？";
+"alert.reset_onboarding.message" = "這將斷開連接，清除儲存的閘道連接+憑證，並重新開啟入門嚮導。";
+"alert.location_access.title" = "位置存取";
+"alert.default_share_instruction.title" = "預設分享指令";
+"alert.default_share_instruction.message" = "從iOS分享內容到OpenClaw時附加此指令。";
