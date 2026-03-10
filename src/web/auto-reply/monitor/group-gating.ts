@@ -22,6 +22,7 @@ export type GroupHistoryEntry = {
 
 type ApplyGroupGatingParams = {
   cfg: ReturnType<typeof loadConfig>;
+  accountId?: string;
   msg: WebInboundMsg;
   conversationId: string;
   groupHistoryKey: string;
@@ -87,7 +88,7 @@ export function applyGroupGating(params: ApplyGroupGatingParams) {
     return { shouldProcess: false };
   }
 
-  if (resolveNeverReply({ cfg: params.cfg, channel: "whatsapp" })) {
+  if (resolveNeverReply({ cfg: params.cfg, channel: "whatsapp", accountId: params.accountId })) {
     return skipGroupMessageAndStoreHistory(
       params,
       `Group message stored (neverReply) in ${params.conversationId}`,

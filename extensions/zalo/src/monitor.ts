@@ -8,8 +8,10 @@ import {
   createTypingCallbacks,
   createScopedPairingAccess,
   createReplyPrefixOptions,
+  DEFAULT_GROUP_HISTORY_LIMIT,
   issuePairingChallenge,
   logTypingFailure,
+  recordPendingHistoryEntryIfEnabled,
   resolveDirectDmAuthorizationOutcome,
   resolveSenderCommandAuthorizationWithRuntime,
   resolveOutboundMediaUrls,
@@ -20,6 +22,7 @@ import {
   resolveWebhookPath,
   waitForAbortSignal,
   warnMissingProviderGroupPolicyFallbackOnce,
+  type HistoryEntry,
 } from "openclaw/plugin-sdk/zalo";
 import type { ResolvedZaloAccount } from "./accounts.js";
 import {
@@ -76,6 +79,7 @@ const WEBHOOK_CLEANUP_TIMEOUT_MS = 5_000;
 const ZALO_TYPING_TIMEOUT_MS = 5_000;
 
 type ZaloCoreRuntime = ReturnType<typeof getZaloRuntime>;
+const groupHistories = new Map<string, HistoryEntry[]>();
 
 function formatZaloError(error: unknown): string {
   if (error instanceof Error) {
@@ -421,6 +425,21 @@ async function processMessageWithPipeline(params: {
     resolveNeverReply({ cfg: config, channel: "zalo", accountId: account.accountId })
   ) {
     logVerbose(core, runtime, "zalo: group message stored for context (neverReply: true)");
+    const historyLimit = config.messages?.groupChat?.historyLimit ?? DEFAULT_GROUP_HISTORY_LIMIT;
+    const historyBody = text?.trim() || (mediaPath ? "<media:image>" : "");
+    recordPendingHistoryEntryIfEnabled({
+      historyMap: groupHistories,
+      historyKey: chatId,
+      limit: historyLimit,
+      entry: historyBody
+        ? {
+            sender: senderName || senderId,
+            body: historyBody,
+            timestamp: date ? date * 1000 : undefined,
+            messageId: message_id ?? undefined,
+          }
+        : null,
+    });
     return;
   }
 

@@ -1,9 +1,11 @@
 import {
   GROUP_POLICY_BLOCKED_LABEL,
+  DEFAULT_GROUP_HISTORY_LIMIT,
   createScopedPairingAccess,
   evaluateGroupRouteAccessForPolicy,
   issuePairingChallenge,
   isDangerousNameMatchingEnabled,
+  recordPendingHistoryEntryIfEnabled,
   resolveAllowlistProviderRuntimeGroupPolicy,
   resolveDefaultGroupPolicy,
   resolveDmGroupAccessWithLists,
@@ -11,6 +13,7 @@ import {
   resolveNeverReply,
   resolveSenderScopedGroupPolicy,
   warnMissingProviderGroupPolicyFallbackOnce,
+  type HistoryEntry,
 } from "openclaw/plugin-sdk/googlechat";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/googlechat";
 import type { ResolvedGoogleChatAccount } from "./accounts.js";
@@ -110,6 +113,7 @@ function extractMentionInfo(annotations: GoogleChatAnnotation[], botUser?: strin
 }
 
 const warnedDeprecatedUsersEmailAllowFrom = new Set<string>();
+const spaceHistories = new Map<string, HistoryEntry[]>();
 
 function warnDeprecatedUsersEmailEntries(logVerbose: (message: string) => void, entries: string[]) {
   const deprecated = entries.map((v) => String(v).trim()).filter((v) => /^users\/.+@.+/i.test(v));
@@ -233,6 +237,20 @@ export async function applyGoogleChatInboundAccessPolicy(params: {
     resolveNeverReply({ cfg: config, channel: "googlechat", accountId: account.accountId })
   ) {
     logVerbose("googlechat: group message stored for context (neverReply: true)");
+    const historyLimit = config.messages?.groupChat?.historyLimit ?? DEFAULT_GROUP_HISTORY_LIMIT;
+    recordPendingHistoryEntryIfEnabled({
+      historyMap: spaceHistories,
+      historyKey: spaceId,
+      limit: historyLimit,
+      entry: rawBody
+        ? {
+            sender: senderName || senderId,
+            body: rawBody,
+            timestamp: Date.now(),
+            messageId: message.name ?? undefined,
+          }
+        : null,
+    });
     return { ok: false };
   }
 

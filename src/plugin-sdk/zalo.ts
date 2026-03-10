@@ -2,6 +2,11 @@
 // Keep this list additive and scoped to symbols used under extensions/zalo.
 
 export { jsonResult, readStringParam } from "../agents/tools/common.js";
+export type { HistoryEntry } from "../auto-reply/reply/history.js";
+export {
+  DEFAULT_GROUP_HISTORY_LIMIT,
+  recordPendingHistoryEntryIfEnabled,
+} from "../auto-reply/reply/history.js";
 export type { ReplyPayload } from "../auto-reply/types.js";
 export type { ChannelDock } from "../channels/dock.js";
 export {

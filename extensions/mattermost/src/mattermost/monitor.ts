@@ -1370,6 +1370,20 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
       resolveNeverReply({ cfg, channel: "mattermost", accountId: account.accountId })
     ) {
       logVerboseMessage("mattermost: group message stored for context (neverReply: true)");
+      const trimmed = rawText.trim();
+      recordPendingHistoryEntryIfEnabled({
+        historyMap: channelHistories,
+        historyKey: channelId,
+        limit: historyLimit,
+        entry: trimmed
+          ? {
+              sender: senderName,
+              body: trimmed,
+              timestamp: typeof post.create_at === "number" ? post.create_at : undefined,
+              messageId: post.id ?? undefined,
+            }
+          : null,
+      });
       return;
     }
 

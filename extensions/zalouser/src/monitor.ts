@@ -389,6 +389,23 @@ async function processMessage(
     resolveNeverReply({ cfg: config, channel: "zalouser", accountId: account.accountId })
   ) {
     logVerbose(core, runtime, "zalouser: group message stored for context (neverReply: true)");
+    recordPendingHistoryEntryIfEnabled({
+      historyMap: historyState.groupHistories,
+      historyKey: chatId,
+      limit: historyState.historyLimit,
+      entry: rawBody
+        ? {
+            sender: senderName || senderId,
+            body: rawBody,
+            timestamp: message.timestampMs,
+            messageId: resolveZalouserMessageSid({
+              msgId: message.msgId,
+              cliMsgId: message.cliMsgId,
+              fallback: `${message.timestampMs}`,
+            }),
+          }
+        : null,
+    });
     return;
   }
 

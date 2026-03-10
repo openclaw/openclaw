@@ -1,6 +1,7 @@
 import type { LocationMessageEventContent, MatrixClient } from "@vector-im/matrix-bot-sdk";
 import {
   DEFAULT_ACCOUNT_ID,
+  DEFAULT_GROUP_HISTORY_LIMIT,
   createScopedPairingAccess,
   createReplyPrefixOptions,
   createTypingCallbacks,
@@ -9,9 +10,11 @@ import {
   formatAllowlistMatchMeta,
   logInboundDrop,
   logTypingFailure,
+  recordPendingHistoryEntryIfEnabled,
   resolveInboundSessionEnvelopeContext,
   resolveControlCommandGate,
   resolveNeverReply,
+  type HistoryEntry,
   type PluginRuntime,
   type RuntimeEnv,
   type RuntimeLogger,
@@ -44,6 +47,8 @@ import { resolveMatrixRoomConfig } from "./rooms.js";
 import { resolveMatrixThreadRootId, resolveMatrixThreadTarget } from "./threads.js";
 import type { MatrixRawEvent, RoomMessageEventContent } from "./types.js";
 import { EventType, RelationType } from "./types.js";
+
+const roomHistories = new Map<string, HistoryEntry[]>();
 
 export type MatrixMonitorHandlerParams = {
   client: MatrixClient;
@@ -369,6 +374,26 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
 
       if (isRoom && resolveNeverReply({ cfg, channel: "matrix", accountId })) {
         logVerboseMessage("matrix: group message stored for context (neverReply: true)");
+        const messagesGroupChat = (cfg as Record<string, unknown>).messages as
+          | { groupChat?: { historyLimit?: number } }
+          | undefined;
+        const historyLimit =
+          messagesGroupChat?.groupChat?.historyLimit ?? DEFAULT_GROUP_HISTORY_LIMIT;
+        const historyBody =
+          locationPayload?.text ?? (typeof content.body === "string" ? content.body.trim() : "");
+        recordPendingHistoryEntryIfEnabled({
+          historyMap: roomHistories,
+          historyKey: roomId,
+          limit: historyLimit,
+          entry: historyBody
+            ? {
+                sender: senderName || senderId,
+                body: historyBody,
+                timestamp: eventTs ?? undefined,
+                messageId: event.event_id ?? undefined,
+              }
+            : null,
+        });
         return;
       }
 

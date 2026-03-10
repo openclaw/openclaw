@@ -567,7 +567,10 @@ export async function preflightDiscordMessage(
         } satisfies HistoryEntry)
       : undefined;
 
-  if (isGuildMessage && resolveNeverReply({ cfg: freshCfg, channel: "discord" })) {
+  if (
+    isGuildMessage &&
+    resolveNeverReply({ cfg: freshCfg, channel: "discord", accountId: resolvedAccountId })
+  ) {
     logDebug("[discord-preflight] drop: neverReply");
     recordPendingHistoryEntryIfEnabled({
       historyMap: params.guildHistories,

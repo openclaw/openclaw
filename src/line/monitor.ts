@@ -3,6 +3,7 @@ import { chunkMarkdownText } from "../auto-reply/chunk.js";
 import { dispatchReplyWithBufferedBlockDispatcher } from "../auto-reply/reply/provider-dispatcher.js";
 import { createReplyPrefixOptions } from "../channels/reply-prefix.js";
 import type { OpenClawConfig } from "../config/config.js";
+import { resolveNeverReply } from "../config/group-policy.js";
 import { danger, logVerbose } from "../globals.js";
 import { waitForAbortSignal } from "../infra/abort-signal.js";
 import { normalizePluginHttpPath } from "../plugins/http-path.js";
@@ -172,6 +173,14 @@ export async function monitorLineProvider(
           lastInboundAt: Date.now(),
         },
       });
+
+      if (
+        ctx.isGroup &&
+        resolveNeverReply({ cfg: config, channel: "line", accountId: resolvedAccountId })
+      ) {
+        logVerbose("line: drop group message (neverReply)");
+        return;
+      }
 
       const shouldShowLoading = Boolean(ctx.userId && !ctx.isGroup);
 

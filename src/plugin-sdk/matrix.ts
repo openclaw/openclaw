@@ -8,6 +8,11 @@ export {
   readReactionParams,
   readStringParam,
 } from "../agents/tools/common.js";
+export type { HistoryEntry } from "../auto-reply/reply/history.js";
+export {
+  DEFAULT_GROUP_HISTORY_LIMIT,
+  recordPendingHistoryEntryIfEnabled,
+} from "../auto-reply/reply/history.js";
 export type { ReplyPayload } from "../auto-reply/types.js";
 export { resolveAllowlistMatchByCandidates } from "../channels/allowlist-match.js";
 export { mergeAllowlist, summarizeMapping } from "../channels/allowlists/resolve-utils.js";

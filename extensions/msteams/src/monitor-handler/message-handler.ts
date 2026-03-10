@@ -282,7 +282,10 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
       }
     }
 
-    if (!isDirectMessage && resolveNeverReply({ cfg, channel: "msteams" })) {
+    if (
+      !isDirectMessage &&
+      resolveNeverReply({ cfg, channel: "msteams", accountId: DEFAULT_ACCOUNT_ID })
+    ) {
       log.debug?.("dropping group message (neverReply)");
       recordPendingHistoryEntryIfEnabled({
         historyMap: conversationHistories,
