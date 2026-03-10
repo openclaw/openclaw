@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { loadConfig } from "../../../config/config.js";
+import { getContactManager } from "../../../contacts/contact-manager.js";
 import { createSubsystemLogger } from "../../../logging/subsystem.js";
 import type {
   PluginHookMessageReceivedEvent,
@@ -8,7 +9,6 @@ import type {
   PluginHookMessageTranscribedEvent,
   PluginHookMessageContext,
 } from "../../../plugins/types.js";
-import { getContactManager } from "../../../contacts/contact-manager.js";
 import { normalizeBrazilianMobile } from "../../../utils.js";
 import { resolveHookConfig } from "../../config.js";
 

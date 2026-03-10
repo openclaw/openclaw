@@ -1,8 +1,8 @@
-﻿import { readFileSync, existsSync } from "node:fs";
+import { readFileSync, existsSync } from "node:fs";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import type { OpenClawPluginApi } from "openclaw/plugin-sdk";
+import type { OpenClawPluginApi } from "openclaw/plugin-sdk/core";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -24,10 +24,9 @@ function normalizeBrPhone(digits: string): string {
 function loadContactsMapFromWorkspace(): Map<string, string> {
   const byPhone = new Map<string, string>();
   // Try known workspace paths
-  const workspaceDirs = [
-    "C:/Users/lucas/clawd-v2",
-    process.env.OPENCLAW_WORKSPACE || "",
-  ].filter(Boolean);
+  const workspaceDirs = ["C:/Users/lucas/clawd-v2", process.env.OPENCLAW_WORKSPACE || ""].filter(
+    Boolean,
+  );
 
   for (const ws of workspaceDirs) {
     // 1. Try contacts-briefing.json v2 (flat format: phone → {name, slug, ...})
@@ -46,7 +45,9 @@ function loadContactsMapFromWorkspace(): Map<string, string> {
         }
         if (byPhone.size > 0) return byPhone;
       }
-    } catch { /* ignore */ }
+    } catch {
+      /* ignore */
+    }
 
     // 2. Fallback: contacts-map.json
     const mapPath = join(ws, "memory", "system", "contacts-map.json");
@@ -63,7 +64,9 @@ function loadContactsMapFromWorkspace(): Map<string, string> {
         }
         if (byPhone.size > 0) return byPhone;
       }
-    } catch { /* ignore */ }
+    } catch {
+      /* ignore */
+    }
   }
   return byPhone;
 }
@@ -378,7 +381,9 @@ export default function register(api: OpenClawPluginApi) {
       is_read: false,
       replied: false,
     };
-    log(`INSERT inbound from=${event.from} chat=${row.chat_id} mid=${row.message_id} sender_name=${row.sender_name ?? "(null)"} canonical=${canonicalName ?? "(none)"} pushName=${event.metadata?.pushName ?? "(null)"}`);
+    log(
+      `INSERT inbound from=${event.from} chat=${row.chat_id} mid=${row.message_id} sender_name=${row.sender_name ?? "(null)"} canonical=${canonicalName ?? "(none)"} pushName=${event.metadata?.pushName ?? "(null)"}`,
+    );
     await supabaseInsert(config, row).catch((err: unknown) => {
       logError("Failed to insert received message:", err);
     });

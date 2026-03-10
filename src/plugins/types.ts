@@ -186,6 +186,12 @@ export type PluginCommandHandler = (
 export type OpenClawPluginCommandDefinition = {
   /** Command name without leading slash (e.g., "tts") */
   name: string;
+  /**
+   * Optional native-command aliases for slash/menu surfaces.
+   * `default` applies to all native providers unless a provider-specific
+   * override exists (for example `{ default: "talkvoice", discord: "voice2" }`).
+   */
+  nativeNames?: Partial<Record<string, string>> & { default?: string };
   /** Description shown in /help and command menus */
   description: string;
   /** Whether this command accepts arguments */
@@ -367,9 +373,7 @@ const pluginHookNameMap = {
   gateway_stop: true,
 } as const satisfies Record<PluginHookName, true>;
 
-export const PLUGIN_HOOK_NAMES = Object.freeze(
-  Object.keys(pluginHookNameMap) as PluginHookName[],
-) as readonly PluginHookName[];
+export const PLUGIN_HOOK_NAMES = Object.freeze(Object.keys(pluginHookNameMap) as PluginHookName[]);
 
 const pluginHookNameSet = new Set<PluginHookName>(PLUGIN_HOOK_NAMES);
 

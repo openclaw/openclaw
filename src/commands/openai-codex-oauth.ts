@@ -1,5 +1,5 @@
 import type { OAuthCredentials } from "@mariozechner/pi-ai";
-import { loginOpenAICodex } from "@mariozechner/pi-ai";
+import { loginOpenAICodex } from "@mariozechner/pi-ai/oauth";
 import type { RuntimeEnv } from "../runtime.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
 import { createVpsAwareOAuthHandlers } from "./oauth-flow.js";
@@ -53,7 +53,7 @@ export async function loginOpenAICodexOAuth(params: {
     const creds = await loginOpenAICodex({
       onAuth: baseOnAuth,
       onPrompt,
-      onProgress: (msg) => spin.update(msg),
+      onProgress: (msg: string) => spin.update(msg),
     });
     spin.stop("OpenAI OAuth complete");
     return creds ?? null;

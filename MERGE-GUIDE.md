@@ -1,7 +1,7 @@
 # MERGE-GUIDE.md — Guia de Merge Upstream para Iris 🌈
 
-> **Repo:** `iris-2.0` (branch `iris/production`)  
-> **Upstream:** `origin/main` (openclaw/openclaw.git)  
+> **Repo:** `iris-2.0` (branch local de trabalho sobre `main`)
+> **Upstream:** `upstream/main` (openclaw/openclaw.git)
 > **Última atualização:** 26/02/2026
 
 ---
@@ -78,8 +78,8 @@ A Iris roda em cima do OpenClaw upstream com duas camadas de customização:
 
 ## 📅 Histórico de Merges
 
-| Data       | Upstream HEAD | Commits incorporados             | Conflitos manuais | Responsável |
-| ---------- | ------------- | -------------------------------- | ----------------- | ----------- |
+| Data       | Upstream HEAD | Commits incorporados            | Conflitos manuais | Responsável |
+| ---------- | ------------- | ------------------------------- | ----------------- | ----------- |
 | 06/03/2026 | `d6d21b3ab`   | 171 commits (desde `49acb07f9`) | 3 arquivos        | Iris 🌈     |
 | 26/02/2026 | `85b075d0c`   | 192 commits (desde `a898acbd5`) | 0 — auto-merge    | Iris 🌈     |
 
@@ -112,23 +112,23 @@ A Iris roda em cima do OpenClaw upstream com duas camadas de customização:
 
 ```bash
 cd C:\Users\lucas\iris-2.0
-git fetch origin main
+git fetch upstream
 ```
 
 ### 2. Ver o que mudou no upstream
 
 ```bash
 # Commits novos no upstream
-git log iris/production..origin/main --oneline
+git log main..upstream/main --oneline
 
 # Verificar se algum arquivo nosso foi tocado
-git diff iris/production...origin/main --stat -- src/cli/banner.ts src/cli/tagline.ts src/agents/pi-embedded-runner/ src/auto-reply/reply/ src/config/types.agent-defaults.ts src/config/zod-schema.agent-defaults.ts src/infra/outbound/deliver.ts src/plugins/hooks.ts src/plugins/types.ts src/utils.ts src/web/auto-reply/monitor/process-message.ts ui/
+git diff main...upstream/main --stat -- src/cli/banner.ts src/cli/tagline.ts src/agents/pi-embedded-runner/ src/auto-reply/reply/ src/config/types.agent-defaults.ts src/config/zod-schema.agent-defaults.ts src/infra/outbound/deliver.ts src/plugins/hooks.ts src/plugins/types.ts src/utils.ts src/web/auto-reply/monitor/process-message.ts ui/
 ```
 
 ### 3. Merge
 
 ```bash
-git merge origin/main --no-edit
+git merge upstream/main --no-edit
 ```
 
 ### 4. Resolver conflitos (se houver)
@@ -193,7 +193,7 @@ Via Task Scheduler: Stop + Start "OpenClaw Gateway"
 
 ## 💡 Dicas
 
-1. **Nunca commitar em `origin/main`** — sempre em `iris/production`
+1. **Nunca commitar direto em `main`** — faça o merge em branch dedicada e só volte depois dos gates
 2. **`origin` neste repo = openclaw/openclaw.git** (upstream direto)
 3. **Plugins em `extensions/` nunca conflitam** — pasta ignorada pelo upstream
 4. **Config em `~/.openclaw/openclaw.json` não está no repo** — sem risco

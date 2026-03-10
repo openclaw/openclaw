@@ -1,4 +1,4 @@
-﻿import fs from "node:fs";
+import fs from "node:fs";
 import path from "node:path";
 import { loadConfig } from "../../../config/config.js";
 import { resolveSessionTranscriptsDirForAgent } from "../../../config/sessions/paths.js";
@@ -170,7 +170,9 @@ export function runPatternMatching(
     // Strip WhatsApp message IDs that look like phone numbers (hex+decimal mix e.g. 3EB01411705151666EF660)
     body = body.replace(/\b[0-9A-F]{20,}\b/gi, "");
 
-    log.debug(`[strip] body after all strips (${body.length} chars): ${body.slice(0, 300).replace(/\n/g, "\\n")}`);
+    log.debug(
+      `[strip] body after all strips (${body.length} chars): ${body.slice(0, 300).replace(/\n/g, "\\n")}`,
+    );
   }
 
   const alerts: string[] = [];
@@ -319,10 +321,6 @@ function enrichSenderMetadataFromPrompt(
   const convMatch = prompt.match(/"chat_type"\s*:\s*"(group|direct)"/);
   const chatType = convMatch ? (convMatch[1] as "group" | "direct") : undefined;
 
-  // Determine ownership from "Inbound Context" metadata
-  const senderIdMatch = prompt.match(/"sender_id"\s*:\s*"(\+\d+)"/);
-  const chatIdMatch = prompt.match(/"chat_id"\s*:\s*"(\+\d+)"/);
-
   if (!senderE164 && !senderName) {
     log.debug("enrichSenderMetadata: no sender info found in prompt");
     return event;
@@ -379,7 +377,9 @@ export async function patternDetectorHandler(
     const inboundAlerts = runPatternMatching(prompt, patterns, "inbound");
     if (inboundAlerts.length > 0) {
       // Debug: log what the prompt looks like after stripping (first 500 chars)
-      log.debug(`[inbound] ${inboundAlerts.length} alerts from prompt (${prompt.length} chars). First 200 of prompt: ${prompt.slice(0, 200).replace(/\n/g, "\\n")}`);
+      log.debug(
+        `[inbound] ${inboundAlerts.length} alerts from prompt (${prompt.length} chars). First 200 of prompt: ${prompt.slice(0, 200).replace(/\n/g, "\\n")}`,
+      );
     }
     allAlerts.push(...inboundAlerts);
   }

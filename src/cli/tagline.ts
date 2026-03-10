@@ -240,7 +240,10 @@ export interface TaglineOptions {
   env?: NodeJS.ProcessEnv;
   random?: () => number;
   now?: () => Date;
+  mode?: TaglineMode;
 }
+
+export type TaglineMode = "random" | "default" | "off";
 
 export function activeTaglines(options: TaglineOptions = {}): string[] {
   if (TAGLINES.length === 0) {
@@ -252,6 +255,13 @@ export function activeTaglines(options: TaglineOptions = {}): string[] {
 }
 
 export function pickTagline(options: TaglineOptions = {}): string {
+  if (options.mode === "off") {
+    return "";
+  }
+  if (options.mode === "default") {
+    return DEFAULT_TAGLINE;
+  }
+
   const env = options.env ?? process.env;
   const override = env?.OPENCLAW_TAGLINE_INDEX;
   if (override !== undefined) {

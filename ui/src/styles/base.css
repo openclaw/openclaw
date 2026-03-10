@@ -33,16 +33,16 @@
   --border-strong: #3f3f46;
   --border-hover: #52525b;
   --input: #27272a;
-  --ring: #7C3AED;
+  --ring: #7c3aed;
 
   /* Accent - Iris purple */
-  --accent: #7C3AED;
-  --accent-hover: #8B5CF6;
-  --accent-muted: #7C3AED;
+  --accent: #7c3aed;
+  --accent-hover: #8b5cf6;
+  --accent-muted: #7c3aed;
   --accent-subtle: rgba(124, 58, 237, 0.15);
   --accent-foreground: #fafafa;
   --accent-glow: rgba(124, 58, 237, 0.25);
-  --primary: #7C3AED;
+  --primary: #7c3aed;
   --primary-foreground: #ffffff;
 
   /* Secondary - Teal accent for variety */
@@ -143,13 +143,13 @@
   --border-hover: #a1a1aa;
   --input: #e4e4e7;
 
-  --accent: #6D28D9;
-  --accent-hover: #7C3AED;
-  --accent-muted: #6D28D9;
+  --accent: #6d28d9;
+  --accent-hover: #7c3aed;
+  --accent-muted: #6d28d9;
   --accent-subtle: rgba(109, 40, 217, 0.12);
   --accent-foreground: #ffffff;
   --accent-glow: rgba(109, 40, 217, 0.15);
-  --primary: #6D28D9;
+  --primary: #6d28d9;
   --primary-foreground: #ffffff;
 
   --secondary: #f4f4f5;

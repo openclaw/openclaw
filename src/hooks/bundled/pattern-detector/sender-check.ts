@@ -1,4 +1,4 @@
-﻿/**
+/**
  * sender-check.ts — Sender Check + Context Briefing
  *
  * Detects when the message sender is NOT the owner and injects

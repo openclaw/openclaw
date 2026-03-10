@@ -1,5 +1,5 @@
-﻿import type { IncomingMessage, ServerResponse } from "node:http";
-import type { OpenClawPluginApi } from "openclaw/plugin-sdk";
+import type { IncomingMessage, ServerResponse } from "node:http";
+import type { OpenClawPluginApi } from "openclaw/plugin-sdk/core";
 import { validateConfig } from "./src/config.js";
 import { generateHeartbeat } from "./src/heartbeat.js";
 import { handleApiRoutes } from "./src/routes-api.js";
