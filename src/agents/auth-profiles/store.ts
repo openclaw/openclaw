@@ -123,6 +123,14 @@ function writeCachedAuthProfileStore(
 
 export async function updateAuthProfileStoreWithLock(params: {
   agentDir?: string;
+  /**
+   * When true, load only the agent-local store inside the lock instead of the
+   * merged (main + agent-local) view returned by ensureAuthProfileStore.
+   * Use for non-default agents when the write target is the agent-local file
+   * only, to prevent main-store profiles from being written into that file
+   * (credential scope bleed).
+   */
+  agentLocalOnly?: boolean;
   updater: (store: AuthProfileStore) => boolean;
 }): Promise<AuthProfileStore | null> {
   const authPath = resolveAuthStorePath(params.agentDir);
@@ -133,7 +141,9 @@ export async function updateAuthProfileStoreWithLock(params: {
       // Locked writers must reload from disk, not from any runtime snapshot.
       // Otherwise a live gateway can overwrite fresher CLI/config-auth writes
       // with stale in-memory auth state during usage/cooldown updates.
-      const store = loadAuthProfileStoreForAgent(params.agentDir);
+      const store = params.agentLocalOnly
+        ? loadAgentLocalAuthProfileStore(params.agentDir)
+        : loadAuthProfileStoreForAgent(params.agentDir);
       const shouldSave = params.updater(store);
       if (shouldSave) {
         saveAuthProfileStore(store, params.agentDir);
