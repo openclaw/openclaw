@@ -58,6 +58,12 @@ function pathLikeToString(pathname: unknown): string {
   return "";
 }
 
+function expectInferredUserBusEnv(opts: unknown) {
+  const env = (opts as { env?: NodeJS.ProcessEnv } | undefined)?.env;
+  expect(env?.XDG_RUNTIME_DIR).toMatch(/^\/run\/user\/\d+$/);
+  expect(env?.DBUS_SESSION_BUS_ADDRESS).toBe(`unix:path=${env?.XDG_RUNTIME_DIR}/bus`);
+}
+
 const assertRestartSuccess = async (env: NodeJS.ProcessEnv) => {
   const { write, stdout } = createWritableStreamMock();
   await restartSystemdService({ stdout, env });
@@ -98,7 +104,7 @@ describe("systemd availability", () => {
     await expect(isSystemdUserServiceAvailable()).resolves.toBe(true);
   });
 
-  it("falls back to machine user scope when --user bus is unavailable", async () => {
+  it("retries --user with an inferred bus env when the shell env is missing", async () => {
     execFileMock
       .mockImplementationOnce((_cmd, args, _opts, cb) => {
         expect(args).toEqual(["--user", "status"]);
@@ -107,6 +113,37 @@ describe("systemd availability", () => {
             "Failed to connect to user scope bus via local transport: $DBUS_SESSION_BUS_ADDRESS and $XDG_RUNTIME_DIR not defined",
         });
         cb(err, "", "");
+      })
+      .mockImplementationOnce((_cmd, args, opts, cb) => {
+        expect(args).toEqual(["--user", "status"]);
+        expectInferredUserBusEnv(opts);
+        cb(null, "", "");
+      });
+
+    await expect(isSystemdUserServiceAvailable({ USER: "debian" })).resolves.toBe(true);
+  });
+
+  it("falls back to machine user scope after inferred bus env retry fails", async () => {
+    execFileMock
+      .mockImplementationOnce((_cmd, args, _opts, cb) => {
+        expect(args).toEqual(["--user", "status"]);
+        cb(
+          createExecFileError("Failed to connect to user scope bus via local transport", {
+            stderr:
+              "Failed to connect to user scope bus via local transport: $DBUS_SESSION_BUS_ADDRESS and $XDG_RUNTIME_DIR not defined",
+          }),
+          "",
+          "",
+        );
+      })
+      .mockImplementationOnce((_cmd, args, opts, cb) => {
+        expect(args).toEqual(["--user", "status"]);
+        expectInferredUserBusEnv(opts);
+        cb(
+          createExecFileError("still unavailable", { stderr: "Failed to connect to bus" }),
+          "",
+          "",
+        );
       })
       .mockImplementationOnce((_cmd, args, _opts, cb) => {
         expect(args).toEqual(["--machine", "debian@", "--user", "status"]);
@@ -199,14 +236,24 @@ describe("isSystemdServiceEnabled", () => {
     vi.spyOn(os, "userInfo").mockImplementationOnce(() => {
       throw new Error("no user info");
     });
-    execFileMock.mockImplementationOnce((_cmd, args, _opts, cb) => {
-      expect(args).toEqual(["--user", "is-enabled", "openclaw-gateway.service"]);
-      cb(
-        createExecFileError("Failed to connect to bus", { stderr: "Failed to connect to bus" }),
-        "",
-        "",
-      );
-    });
+    execFileMock
+      .mockImplementationOnce((_cmd, args, _opts, cb) => {
+        expect(args).toEqual(["--user", "is-enabled", "openclaw-gateway.service"]);
+        cb(
+          createExecFileError("Failed to connect to bus", { stderr: "Failed to connect to bus" }),
+          "",
+          "Failed to connect to bus",
+        );
+      })
+      .mockImplementationOnce((_cmd, args, opts, cb) => {
+        expect(args).toEqual(["--user", "is-enabled", "openclaw-gateway.service"]);
+        expectInferredUserBusEnv(opts);
+        cb(
+          createExecFileError("Failed to connect to bus", { stderr: "Failed to connect to bus" }),
+          "",
+          "Failed to connect to bus",
+        );
+      });
 
     await expect(
       isSystemdServiceEnabled({
@@ -224,7 +271,16 @@ describe("isSystemdServiceEnabled", () => {
         cb(
           createExecFileError("Failed to connect to bus", { stderr: "Failed to connect to bus" }),
           "",
+          "Failed to connect to bus",
+        );
+      })
+      .mockImplementationOnce((_cmd, args, opts, cb) => {
+        expect(args).toEqual(["--user", "is-enabled", "openclaw-gateway.service"]);
+        expectInferredUserBusEnv(opts);
+        cb(
+          createExecFileError("Failed to connect to bus", { stderr: "Failed to connect to bus" }),
           "",
+          "Failed to connect to bus",
         );
       })
       .mockImplementationOnce((_cmd, args, _opts, cb) => {
@@ -241,7 +297,7 @@ describe("isSystemdServiceEnabled", () => {
               "Failed to connect to user scope bus via local transport: $DBUS_SESSION_BUS_ADDRESS and $XDG_RUNTIME_DIR not defined",
           }),
           "",
-          "",
+          "Failed to connect to user scope bus via local transport: $DBUS_SESSION_BUS_ADDRESS and $XDG_RUNTIME_DIR not defined",
         );
       });
 
@@ -279,10 +335,9 @@ describe("isSystemdServiceEnabled", () => {
         err.code = 1;
         cb(err, "", "Failed to connect to bus");
       })
-      .mockImplementationOnce((_cmd, args, _opts, cb) => {
-        expect(args[0]).toBe("--machine");
-        expect(String(args[1])).toMatch(/^[^@]+@$/);
-        expect(args.slice(2)).toEqual(["--user", "is-enabled", "openclaw-gateway.service"]);
+      .mockImplementationOnce((_cmd, args, opts, cb) => {
+        expect(args).toEqual(["--user", "is-enabled", "openclaw-gateway.service"]);
+        expectInferredUserBusEnv(opts);
         const err = new Error("permission denied") as Error & { code?: number };
         err.code = 1;
         cb(err, "", "permission denied");
@@ -705,13 +760,24 @@ describe("systemd service control", () => {
     vi.spyOn(os, "userInfo").mockImplementationOnce(() => {
       throw new Error("no user info");
     });
-    execFileMock.mockImplementationOnce((_cmd, _args, _opts, cb) => {
-      cb(
-        createExecFileError("Failed to connect to bus", { stderr: "Failed to connect to bus" }),
-        "",
-        "",
-      );
-    });
+    execFileMock
+      .mockImplementationOnce((_cmd, args, _opts, cb) => {
+        expect(args).toEqual(["--user", "status"]);
+        cb(
+          createExecFileError("Failed to connect to bus", { stderr: "Failed to connect to bus" }),
+          "",
+          "Failed to connect to bus",
+        );
+      })
+      .mockImplementationOnce((_cmd, args, opts, cb) => {
+        expect(args).toEqual(["--user", "status"]);
+        expectInferredUserBusEnv(opts);
+        cb(
+          createExecFileError("Failed to connect to bus", { stderr: "Failed to connect to bus" }),
+          "",
+          "Failed to connect to bus",
+        );
+      });
 
     await expect(
       stopSystemdService({
@@ -747,7 +813,7 @@ describe("systemd service control", () => {
     await assertRestartSuccess({ SUDO_USER: "root", USER: "root" });
   });
 
-  it("falls back to machine user scope for restart when user bus env is missing", async () => {
+  it("retries restart in direct user scope with an inferred bus env when shell env is missing", async () => {
     execFileMock
       .mockImplementationOnce((_cmd, args, _opts, cb) => {
         expect(args).toEqual(["--user", "status"]);
@@ -757,16 +823,72 @@ describe("systemd service control", () => {
         });
         cb(err, "", "");
       })
+      .mockImplementationOnce((_cmd, args, opts, cb) => {
+        expect(args).toEqual(["--user", "status"]);
+        expectInferredUserBusEnv(opts);
+        cb(null, "", "");
+      })
+      .mockImplementationOnce((_cmd, args, _opts, cb) => {
+        expect(args).toEqual(["--user", "restart", "openclaw-gateway.service"]);
+        const err = createExecFileError("Failed to connect to user scope bus", {
+          stderr:
+            "Failed to connect to user scope bus via local transport: $DBUS_SESSION_BUS_ADDRESS and $XDG_RUNTIME_DIR not defined",
+        });
+        cb(err, "", "");
+      })
+      .mockImplementationOnce((_cmd, args, opts, cb) => {
+        expect(args).toEqual(["--user", "restart", "openclaw-gateway.service"]);
+        expectInferredUserBusEnv(opts);
+        cb(null, "", "");
+      });
+    await assertRestartSuccess({ USER: "debian" });
+  });
+
+  it("falls back to machine user scope for restart after inferred bus env retry fails", async () => {
+    execFileMock
+      .mockImplementationOnce((_cmd, args, _opts, cb) => {
+        expect(args).toEqual(["--user", "status"]);
+        cb(
+          createExecFileError("Failed to connect to user scope bus", {
+            stderr:
+              "Failed to connect to user scope bus via local transport: $DBUS_SESSION_BUS_ADDRESS and $XDG_RUNTIME_DIR not defined",
+          }),
+          "",
+          "",
+        );
+      })
+      .mockImplementationOnce((_cmd, args, opts, cb) => {
+        expect(args).toEqual(["--user", "status"]);
+        expectInferredUserBusEnv(opts);
+        cb(
+          createExecFileError("still unavailable", { stderr: "Failed to connect to bus" }),
+          "",
+          "Failed to connect to bus",
+        );
+      })
       .mockImplementationOnce((_cmd, args, _opts, cb) => {
         expect(args).toEqual(["--machine", "debian@", "--user", "status"]);
         cb(null, "", "");
       })
       .mockImplementationOnce((_cmd, args, _opts, cb) => {
         expect(args).toEqual(["--user", "restart", "openclaw-gateway.service"]);
-        const err = createExecFileError("Failed to connect to user scope bus", {
-          stderr: "Failed to connect to user scope bus",
-        });
-        cb(err, "", "");
+        cb(
+          createExecFileError("Failed to connect to user scope bus", {
+            stderr:
+              "Failed to connect to user scope bus via local transport: $DBUS_SESSION_BUS_ADDRESS and $XDG_RUNTIME_DIR not defined",
+          }),
+          "",
+          "",
+        );
+      })
+      .mockImplementationOnce((_cmd, args, opts, cb) => {
+        expect(args).toEqual(["--user", "restart", "openclaw-gateway.service"]);
+        expectInferredUserBusEnv(opts);
+        cb(
+          createExecFileError("still unavailable", { stderr: "Failed to connect to bus" }),
+          "",
+          "Failed to connect to bus",
+        );
       })
       .mockImplementationOnce((_cmd, args, _opts, cb) => {
         assertMachineRestartArgs(args);

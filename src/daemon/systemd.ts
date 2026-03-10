@@ -253,8 +253,9 @@ export function parseSystemdShow(output: string): SystemdServiceInfo {
 
 async function execSystemctl(
   args: string[],
+  env?: GatewayServiceEnv,
 ): Promise<{ stdout: string; stderr: string; code: number }> {
-  return await execFileUtf8("systemctl", args);
+  return await execFileUtf8("systemctl", args, env ? { env: { ...process.env, ...env } } : {});
 }
 
 function readSystemctlDetail(result: { stdout: string; stderr: string }): string {
@@ -384,6 +385,35 @@ function shouldFallbackToMachineUserScope(detail: string): boolean {
   );
 }
 
+function resolveInferredUserBusEnv(env: GatewayServiceEnv): GatewayServiceEnv | null {
+  const runtimeDir = env.XDG_RUNTIME_DIR?.trim();
+  const busAddress = env.DBUS_SESSION_BUS_ADDRESS?.trim();
+  if (runtimeDir && busAddress) {
+    return null;
+  }
+  const uid = typeof process.getuid === "function" ? process.getuid() : null;
+  if (typeof uid !== "number" || !Number.isInteger(uid) || uid < 0) {
+    return null;
+  }
+  const nextRuntimeDir = runtimeDir || `/run/user/${uid}`;
+  const nextBusAddress = busAddress || `unix:path=${path.posix.join(nextRuntimeDir, "bus")}`;
+  return {
+    ...env,
+    XDG_RUNTIME_DIR: nextRuntimeDir,
+    DBUS_SESSION_BUS_ADDRESS: nextBusAddress,
+  };
+}
+
+function shouldRetryDirectUserScopeWithInferredBus(
+  detail: string,
+  env: GatewayServiceEnv,
+): GatewayServiceEnv | null {
+  if (!shouldFallbackToMachineUserScope(detail)) {
+    return null;
+  }
+  return resolveInferredUserBusEnv(env);
+}
+
 async function execSystemctlUser(
   env: GatewayServiceEnv,
   args: string[],
@@ -395,25 +425,37 @@ async function execSystemctlUser(
   if (sudoUser && sudoUser !== "root" && machineUser) {
     const machineScopeArgs = resolveSystemctlMachineUserScopeArgs(machineUser);
     if (machineScopeArgs.length > 0) {
-      return await execSystemctl([...machineScopeArgs, ...args]);
+      return await execSystemctl([...machineScopeArgs, ...args], env);
     }
   }
 
-  const directResult = await execSystemctl([...resolveSystemctlDirectUserScopeArgs(), ...args]);
+  const directArgs = [...resolveSystemctlDirectUserScopeArgs(), ...args];
+  const directResult = await execSystemctl(directArgs, env);
   if (directResult.code === 0) {
     return directResult;
   }
 
   const detail = `${directResult.stderr} ${directResult.stdout}`.trim();
-  if (!machineUser || !shouldFallbackToMachineUserScope(detail)) {
-    return directResult;
+  const inferredUserBusEnv = shouldRetryDirectUserScopeWithInferredBus(detail, env);
+  if (inferredUserBusEnv) {
+    const inferredUserBusResult = await execSystemctl(directArgs, inferredUserBusEnv);
+    if (inferredUserBusResult.code === 0) {
+      return inferredUserBusResult;
+    }
+    const inferredDetail = `${inferredUserBusResult.stderr} ${inferredUserBusResult.stdout}`.trim();
+    if (!machineUser || !shouldFallbackToMachineUserScope(inferredDetail)) {
+      return inferredUserBusResult;
+    }
   }
 
   const machineScopeArgs = resolveSystemctlMachineUserScopeArgs(machineUser);
   if (machineScopeArgs.length === 0) {
     return directResult;
   }
-  return await execSystemctl([...machineScopeArgs, ...args]);
+  if (!machineUser || !shouldFallbackToMachineUserScope(detail)) {
+    return directResult;
+  }
+  return await execSystemctl([...machineScopeArgs, ...args], env);
 }
 
 export async function isSystemdUserServiceAvailable(
