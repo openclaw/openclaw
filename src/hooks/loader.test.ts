@@ -56,9 +56,11 @@ describe("loader", () => {
   function createMultiAgentHooksConfig(params: {
     mainWorkspace: string;
     opsWorkspace: string;
+    defaultAgentId?: "main" | "ops";
     extraDirs?: string[];
     handlers?: Array<{ event: string; module: string; export?: string }>;
   }): OpenClawConfig {
+    const defaultAgentId = params.defaultAgentId ?? "main";
     return {
       hooks: {
         internal: {
@@ -71,8 +73,8 @@ describe("loader", () => {
       },
       agents: {
         list: [
-          { id: "main", default: true, workspace: params.mainWorkspace },
-          { id: "ops", workspace: params.opsWorkspace },
+          { id: "main", default: defaultAgentId === "main", workspace: params.mainWorkspace },
+          { id: "ops", default: defaultAgentId === "ops", workspace: params.opsWorkspace },
         ],
       },
     };
@@ -628,6 +630,44 @@ describe("loader", () => {
       const opsEvent = createInternalHookEvent("command", "new", "agent:ops:chat");
       await triggerInternalHook(opsEvent);
       expect(opsEvent.messages).toEqual(["shared"]);
+    });
+
+    it("uses the configured default agent workspace for legacy session keys without agent context", async () => {
+      const mainWorkspace = path.join(tmpDir, "workspace-main");
+      const opsWorkspace = path.join(tmpDir, "workspace-ops");
+      await writeHook({
+        hooksRoot: path.join(mainWorkspace, "hooks"),
+        hookName: "main-local",
+        events: ["command:new"],
+        message: "main-local",
+      });
+      await writeHook({
+        hooksRoot: path.join(opsWorkspace, "hooks"),
+        hookName: "ops-local",
+        events: ["command:new"],
+        message: "ops-local",
+      });
+
+      const cfg = createMultiAgentHooksConfig({
+        mainWorkspace,
+        opsWorkspace,
+        defaultAgentId: "ops",
+      });
+      const count = await loadInternalHooksForStartup(
+        cfg,
+        opsWorkspace,
+        [mainWorkspace, opsWorkspace],
+        {
+          managedHooksDir: path.join(tmpDir, "managed-empty"),
+          bundledHooksDir: path.join(tmpDir, "bundled-empty"),
+        },
+      );
+
+      expect(count).toBe(2);
+
+      const event = createInternalHookEvent("command", "new", "legacy-chat");
+      await triggerInternalHook(event);
+      expect(event.messages).toEqual(["ops-local"]);
     });
 
     it("runs shared startup hooks once and workspace startup hooks once per workspace", async () => {

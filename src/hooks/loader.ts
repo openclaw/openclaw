@@ -7,11 +7,10 @@
 
 import fs from "node:fs";
 import path from "node:path";
-import { resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
+import { resolveAgentWorkspaceDir, resolveSessionAgentId } from "../agents/agent-scope.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { openBoundaryFile } from "../infra/boundary-file-read.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import { resolveAgentIdFromSessionKey } from "../routing/session-key.js";
 import { CONFIG_DIR, resolveUserPath } from "../utils.js";
 import { resolveBundledHooksDir } from "./bundled-dir.js";
 import { resolveHookConfig } from "./config.js";
@@ -444,7 +443,13 @@ function resolveEventWorkspaceDir(
   }
 
   return safeRealpathOrResolve(
-    resolveAgentWorkspaceDir(cfg, resolveAgentIdFromSessionKey(sessionKey)),
+    resolveAgentWorkspaceDir(
+      cfg,
+      resolveSessionAgentId({
+        sessionKey,
+        config: cfg,
+      }),
+    ),
   );
 }
 
