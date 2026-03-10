@@ -71,10 +71,10 @@ describe("AOTUI runtime registry", () => {
   });
 
   it("publishes the singleton before awaiting start so concurrent callers reuse it", async () => {
-    let resolveStart: (() => void) | undefined;
+    let resolveStart: ((value: undefined) => void) | undefined;
     mocks.service.start.mockImplementationOnce(
       () =>
-        new Promise<void>((resolve) => {
+        new Promise<undefined>((resolve) => {
           resolveStart = resolve;
         }),
     );
@@ -86,7 +86,7 @@ describe("AOTUI runtime registry", () => {
     expect(mocks.createOpenClawKernelService).toHaveBeenCalledTimes(1);
     expect(runtime.getAotuiGatewayRuntime()).toBe(mocks.service);
 
-    resolveStart?.();
+    resolveStart?.(undefined);
     const [first, second] = await Promise.all([firstPromise, secondPromise]);
     expect(first).toBe(second);
   });
