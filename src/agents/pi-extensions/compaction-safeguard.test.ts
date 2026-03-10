@@ -1546,7 +1546,12 @@ describe("compaction-safeguard double-compaction guard", () => {
       apiKey: "sk-test", // pragma: allowlist secret
     });
     const compaction = expectCompactionResult(result);
-    expect(compaction.summary).toBeTruthy();
+    // After fix for #41981: returns a compaction result (not cancel) to write
+    // a boundary entry and break the re-trigger loop.
+    // buildStructuredFallbackSummary(undefined) produces a minimal structured summary
+    expect(compaction.summary).toContain("## Decisions");
+    expect(compaction.summary).toContain("No prior history.");
+    expect(compaction.summary).toContain("## Open TODOs");
     expect(compaction.firstKeptEntryId).toBe("entry-1");
     expect(compaction.tokensBefore).toBe(1500);
     expect(getApiKeyMock).not.toHaveBeenCalled();
