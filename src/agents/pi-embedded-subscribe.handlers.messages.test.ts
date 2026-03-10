@@ -2,13 +2,13 @@ import { describe, expect, it } from "vitest";
 import { resolveSilentReplyFallbackText } from "./pi-embedded-subscribe.handlers.messages.js";
 
 describe("resolveSilentReplyFallbackText", () => {
-  it("replaces NO_REPLY with latest messaging tool text when available", () => {
+  it("preserves NO_REPLY even when messaging tool texts are present", () => {
     expect(
       resolveSilentReplyFallbackText({
         text: "NO_REPLY",
         messagingToolSentTexts: ["first", "final delivered text"],
       }),
-    ).toBe("final delivered text");
+    ).toBe("NO_REPLY");
   });
 
   it("keeps original text when response is not NO_REPLY", () => {

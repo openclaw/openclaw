@@ -1,6 +1,5 @@
 import type { AgentEvent, AgentMessage } from "@mariozechner/pi-agent-core";
 import { parseReplyDirectives } from "../auto-reply/reply/reply-directives.js";
-import { SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
 import { createInlineCodeState } from "../markdown/code-spans.js";
 import {
@@ -45,15 +44,11 @@ export function resolveSilentReplyFallbackText(params: {
   text: string;
   messagingToolSentTexts: string[];
 }): string {
-  const trimmed = params.text.trim();
-  if (trimmed !== SILENT_REPLY_TOKEN) {
-    return params.text;
-  }
-  const fallback = params.messagingToolSentTexts.at(-1)?.trim();
-  if (!fallback) {
-    return params.text;
-  }
-  return fallback;
+  // Do not replace NO_REPLY with messaging tool text: doing so causes the
+  // already-delivered text to flow back through the delivery pipeline and get
+  // sent again as a duplicate. Keep NO_REPLY so downstream suppression logic
+  // can handle it correctly. (See: #38826, #36811)
+  return params.text;
 }
 
 export function handleMessageStart(
