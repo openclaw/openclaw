@@ -80,6 +80,7 @@ type TelegramMessageLike = {
 };
 
 type TelegramReactionOpts = {
+  cfg?: ReturnType<typeof loadConfig>;
   token?: string;
   accountId?: string;
   api?: TelegramApiOverride;
@@ -867,6 +868,7 @@ export async function reactMessageTelegram(
 }
 
 type TelegramDeleteOpts = {
+  cfg?: ReturnType<typeof loadConfig>;
   token?: string;
   accountId?: string;
   verbose?: boolean;
@@ -1081,6 +1083,7 @@ function inferFilename(kind: MediaKind) {
 }
 
 type TelegramStickerOpts = {
+  cfg?: ReturnType<typeof loadConfig>;
   token?: string;
   accountId?: string;
   verbose?: boolean;
@@ -1273,9 +1276,10 @@ export async function sendPollTelegram(
 // ---------------------------------------------------------------------------
 
 type TelegramCreateForumTopicOpts = {
+  cfg?: ReturnType<typeof loadConfig>;
   token?: string;
   accountId?: string;
-  api?: Bot["api"];
+  api?: TelegramApiOverride;
   verbose?: boolean;
   retry?: RetryConfig;
   /** Icon color for the topic (must be one of 0x6FB9F0, 0xFFD67E, 0xCB86DB, 0x8EEE98, 0xFF93B2, 0xFB6F5F). */
@@ -1311,16 +1315,9 @@ export async function createForumTopicTelegram(
     throw new Error("Forum topic name must be 128 characters or fewer");
   }
 
-  const cfg = loadConfig();
-  const account = resolveTelegramAccount({
-    cfg,
-    accountId: opts.accountId,
-  });
-  const token = resolveToken(opts.token, account);
+  const { cfg, account, api } = resolveTelegramApiContext(opts);
   // Accept topic-qualified targets (e.g. telegram:group:<id>:topic:<thread>)
   // but createForumTopic must always target the base supergroup chat id.
-  const client = resolveTelegramClientOptions(account);
-  const api = opts.api ?? new Bot(token, client ? { client } : undefined).api;
   const target = parseTelegramTarget(chatId);
   const normalizedChatId = await resolveAndPersistChatId({
     cfg,
