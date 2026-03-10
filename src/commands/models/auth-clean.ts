@@ -1,3 +1,4 @@
+import path from "node:path";
 import { resolveAgentDir, resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import { ensureAuthProfileStore } from "../../agents/auth-profiles.js";
 import {
@@ -6,6 +7,7 @@ import {
 } from "../../agents/auth-profiles/store.js";
 import type { AuthProfileStore } from "../../agents/auth-profiles/types.js";
 import type { MediaToolsConfig, MediaUnderstandingModelConfig } from "../../config/types.tools.js";
+import { DEFAULT_AGENT_ID } from "../../routing/session-key.js";
 import type { RuntimeEnv } from "../../runtime.js";
 import { shortenHomePath } from "../../utils.js";
 import { loadModelsConfig } from "./load-config.js";
@@ -84,11 +86,15 @@ export async function modelsAuthCleanCommand(
   const agentDir = resolveAgentDir(cfg, agentId);
   const authStorePath = shortenHomePath(`${agentDir}/auth-profiles.json`);
 
-  // For non-default agents, ensureAuthProfileStore returns a merged (main + agent-local)
-  // view. toRemove must be derived from the agent-local-only profile set because the
-  // write via updateAuthProfileStoreWithLock targets only the agent-local file. Profiles
-  // that exist exclusively in the main store must never appear in toRemove.
-  const isDefaultAgent = agentId === defaultAgentId;
+  // Determine whether agentDir resolves to the main agent directory.
+  // We compare resolved paths rather than checking (agentId === defaultAgentId) because
+  // a config may designate a non-main agent as the configured default.  In that case
+  // agentId === defaultAgentId would be true even though the write target is not the
+  // main agent file — incorrectly disabling agentLocalOnly and causing main-store
+  // profiles to be persisted into the agent-local auth-profiles.json (scope bleed).
+  // Comparing resolved paths against the main agent directory handles this correctly.
+  const mainAgentDir = resolveAgentDir(cfg, DEFAULT_AGENT_ID);
+  const isMainAgentDir = path.resolve(agentDir) === path.resolve(mainAgentDir);
 
   // Collect profile ids that are explicitly configured: union of auth.profiles keys,
   // ids referenced in auth.order, and ids pinned in tools.media model entries.
@@ -112,7 +118,7 @@ export async function modelsAuthCleanCommand(
   }
 
   const storeLoadOpts = { allowKeychainPrompt: false, readOnly: opts.dryRun === true };
-  const store = isDefaultAgent
+  const store = isMainAgentDir
     ? ensureAuthProfileStore(agentDir, storeLoadOpts)
     : loadAgentLocalAuthProfileStore(agentDir, storeLoadOpts);
 
@@ -231,12 +237,12 @@ export async function modelsAuthCleanCommand(
 
   const updated = await updateAuthProfileStoreWithLock({
     agentDir,
-    // For non-default agents the write target is the agent-local file only.
+    // For non-main agent directories the write target is the agent-local file only.
     // Setting agentLocalOnly ensures the store loaded inside the lock is the
     // agent-local view (not the merged main+agent view returned by
     // ensureAuthProfileStore), which prevents main-store profiles from being
     // written into the agent-local file (credential scope bleed).
-    agentLocalOnly: !isDefaultAgent,
+    agentLocalOnly: !isMainAgentDir,
     updater: (freshStore: AuthProfileStore) => {
       let mutated = false;
 
