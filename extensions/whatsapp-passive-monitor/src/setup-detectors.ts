@@ -1,7 +1,7 @@
 import { createDetectorRegistry } from "./detector-registry.ts";
 import { meetingDetector } from "./detectors/meeting.ts";
 import type { AgentRepository } from "./repository/agent-repository.ts";
-import type { EscalationRepository } from "./repository/escalation-repository.ts";
+import type { DetectionRepository } from "./repository/detection-repository.ts";
 import type { MessageRepository } from "./repository/message-repository.ts";
 import type { OllamaRepository } from "./repository/ollama-repository.ts";
 import type { Logger } from "./types.ts";
@@ -12,7 +12,7 @@ export const setupDetectors = (deps: {
   messageRepo: MessageRepository;
   ollama: OllamaRepository;
   agentRepo: AgentRepository;
-  escalationRepo: EscalationRepository;
+  detectionRepo: DetectionRepository;
   logger: Logger;
 }) => {
   const registry = createDetectorRegistry(deps.logger);

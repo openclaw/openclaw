@@ -34,5 +34,5 @@ export type MeetingClassification = {
   reason: string;
 };
 
-// Consensus escalation action
-export type EscalationAction = "add_calendar_event" | "confirm_with_customer" | "none";
+// Consensus detection action
+export type DetectionAction = "add_calendar_event" | "confirm_with_customer" | "none";
