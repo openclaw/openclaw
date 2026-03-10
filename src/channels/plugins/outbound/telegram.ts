@@ -117,8 +117,15 @@ export const telegramOutbound: ChannelOutboundAdapter = {
     };
 
     if (mediaUrls.length === 0) {
+      // Let sendMessageTelegram handle markdown-to-HTML conversion and chunking
+      // internally. Passing textMode: undefined (omitting "html") triggers the
+      // default markdown path which correctly chunks, converts, and places
+      // buttons on the last chunk. Manually chunking here then sending with
+      // textMode "html" caused double HTML-encoding (markdownToTelegramHtmlChunks
+      // produced HTML, then sendTelegramText's renderHtmlText re-encoded it).
+      const { textMode: _discard, ...optsWithoutTextMode } = payloadOpts;
       const result = await send(to, text, {
-        ...payloadOpts,
+        ...optsWithoutTextMode,
         buttons: telegramData?.buttons,
       });
       return { channel: "telegram", ...result };
