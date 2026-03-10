@@ -809,3 +809,262 @@ describe("binding evaluation cache scalability", () => {
     }
   });
 });
+
+describe("crossChannelMemory", () => {
+  test("direct chat sessionKey uses unified channel when crossChannelMemory is enabled", () => {
+    const cfg: OpenClawConfig = {
+      agents: {
+        list: [
+          {
+            id: "main",
+            crossChannelMemory: true,
+          },
+        ],
+      },
+      bindings: [
+        {
+          agentId: "main",
+          match: { channel: "webchat" },
+        },
+        {
+          agentId: "main",
+          match: { channel: "dingtalk" },
+        },
+      ],
+    };
+
+    // Webchat direct chat
+    const webchatRoute = resolveAgentRoute({
+      cfg,
+      channel: "webchat",
+      accountId: null,
+      peer: { kind: "direct", id: "user123" },
+    });
+
+    // DingTalk direct chat
+    const dingtalkRoute = resolveAgentRoute({
+      cfg,
+      channel: "dingtalk",
+      accountId: null,
+      peer: { kind: "direct", id: "user123" },
+    });
+
+    // Both should use unified "shared" channel identifier
+    expect(webchatRoute.sessionKey).toBe("agent:main:shared:direct:user123");
+    expect(dingtalkRoute.sessionKey).toBe("agent:main:shared:direct:user123");
+    expect(webchatRoute.sessionKey).toBe(dingtalkRoute.sessionKey);
+  });
+
+  test("direct chat sessionKey remains channel-specific when crossChannelMemory is disabled", () => {
+    const cfg: OpenClawConfig = {
+      agents: {
+        list: [
+          {
+            id: "main",
+            crossChannelMemory: false,
+          },
+        ],
+      },
+      bindings: [
+        {
+          agentId: "main",
+          match: { channel: "webchat" },
+        },
+        {
+          agentId: "main",
+          match: { channel: "dingtalk" },
+        },
+      ],
+    };
+
+    const webchatRoute = resolveAgentRoute({
+      cfg,
+      channel: "webchat",
+      accountId: null,
+      peer: { kind: "direct", id: "user123" },
+    });
+
+    const dingtalkRoute = resolveAgentRoute({
+      cfg,
+      channel: "dingtalk",
+      accountId: null,
+      peer: { kind: "direct", id: "user123" },
+    });
+
+    // Should use channel-specific sessionKeys
+    expect(webchatRoute.sessionKey).toBe("agent:main:webchat:direct:user123");
+    expect(dingtalkRoute.sessionKey).toBe("agent:main:dingtalk:direct:user123");
+    expect(webchatRoute.sessionKey).not.toBe(dingtalkRoute.sessionKey);
+  });
+
+  test("group/channel chats remain isolated even when crossChannelMemory is enabled", () => {
+    const cfg: OpenClawConfig = {
+      agents: {
+        list: [
+          {
+            id: "main",
+            crossChannelMemory: true,
+          },
+        ],
+      },
+      bindings: [
+        {
+          agentId: "main",
+          match: { channel: "discord" },
+        },
+        {
+          agentId: "main",
+          match: { channel: "slack" },
+        },
+      ],
+    };
+
+    // Discord group chat
+    const discordRoute = resolveAgentRoute({
+      cfg,
+      channel: "discord",
+      accountId: null,
+      peer: { kind: "channel", id: "channel123" },
+      guildId: "guild123",
+    });
+
+    // Slack channel chat
+    const slackRoute = resolveAgentRoute({
+      cfg,
+      channel: "slack",
+      accountId: null,
+      peer: { kind: "channel", id: "channel456" },
+      teamId: "team123",
+    });
+
+    // Group chats should remain channel-specific
+    expect(discordRoute.sessionKey).toContain("discord");
+    expect(slackRoute.sessionKey).toContain("slack");
+    expect(discordRoute.sessionKey).not.toBe(slackRoute.sessionKey);
+  });
+
+  test("crossChannelMemory defaults to false when not specified", () => {
+    const cfg: OpenClawConfig = {
+      agents: {
+        list: [
+          {
+            id: "main",
+            // crossChannelMemory not specified
+          },
+        ],
+      },
+      bindings: [
+        {
+          agentId: "main",
+          match: { channel: "webchat" },
+        },
+        {
+          agentId: "main",
+          match: { channel: "dingtalk" },
+        },
+      ],
+    };
+
+    const webchatRoute = resolveAgentRoute({
+      cfg,
+      channel: "webchat",
+      accountId: null,
+      peer: { kind: "direct", id: "user123" },
+    });
+
+    const dingtalkRoute = resolveAgentRoute({
+      cfg,
+      channel: "dingtalk",
+      accountId: null,
+      peer: { kind: "direct", id: "user123" },
+    });
+
+    // Should default to channel-specific sessionKeys
+    expect(webchatRoute.sessionKey).toBe("agent:main:webchat:direct:user123");
+    expect(dingtalkRoute.sessionKey).toBe("agent:main:dingtalk:direct:user123");
+  });
+
+  test("crossChannelMemory with dmScope per-peer", () => {
+    const cfg: OpenClawConfig = {
+      session: { dmScope: "per-peer" },
+      agents: {
+        list: [
+          {
+            id: "main",
+            crossChannelMemory: true,
+          },
+        ],
+      },
+      bindings: [
+        {
+          agentId: "main",
+          match: { channel: "webchat" },
+        },
+        {
+          agentId: "main",
+          match: { channel: "telegram" },
+        },
+      ],
+    };
+
+    const webchatRoute = resolveAgentRoute({
+      cfg,
+      channel: "webchat",
+      accountId: null,
+      peer: { kind: "direct", id: "user123" },
+    });
+
+    const telegramRoute = resolveAgentRoute({
+      cfg,
+      channel: "telegram",
+      accountId: null,
+      peer: { kind: "direct", id: "user123" },
+    });
+
+    // Both should use unified channel with per-peer scope
+    expect(webchatRoute.sessionKey).toBe("agent:main:shared:direct:user123");
+    expect(telegramRoute.sessionKey).toBe("agent:main:shared:direct:user123");
+  });
+
+  test("crossChannelMemory with different accountIds", () => {
+    const cfg: OpenClawConfig = {
+      agents: {
+        list: [
+          {
+            id: "main",
+            crossChannelMemory: true,
+          },
+        ],
+      },
+      bindings: [
+        {
+          agentId: "main",
+          match: { channel: "webchat", accountId: "acct1" },
+        },
+        {
+          agentId: "main",
+          match: { channel: "dingtalk", accountId: "acct2" },
+        },
+      ],
+    };
+
+    const webchatRoute = resolveAgentRoute({
+      cfg,
+      channel: "webchat",
+      accountId: "acct1",
+      peer: { kind: "direct", id: "user123" },
+    });
+
+    const dingtalkRoute = resolveAgentRoute({
+      cfg,
+      channel: "dingtalk",
+      accountId: "acct2",
+      peer: { kind: "direct", id: "user123" },
+    });
+
+    // Different accountIds should result in different sessionKeys
+    expect(webchatRoute.sessionKey).toBe("agent:main:shared:acct1:direct:user123");
+    expect(dingtalkRoute.sessionKey).toBe("agent:main:shared:acct2:direct:user123");
+    expect(webchatRoute.sessionKey).not.toBe(dingtalkRoute.sessionKey);
+  });
+});
