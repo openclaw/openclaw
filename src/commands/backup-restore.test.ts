@@ -94,6 +94,7 @@ describe("backupRestoreCommand", () => {
 
       const restored = await backupRestoreCommand(runtime, {
         archive: created.archivePath,
+        force: true,
       });
 
       expect(await fs.readFile(path.join(targetHome, ".openclaw", "state.txt"), "utf8")).toBe(
@@ -111,6 +112,77 @@ describe("backupRestoreCommand", () => {
       expect(restoredSnapshot.config?.agents?.defaults?.workspace).toBe(
         path.join(targetHome, "workspace-external"),
       );
+      expect(restored.updatedConfigWorkspacePaths).toBe(1);
+    } finally {
+      await fs.rm(archiveDir, { recursive: true, force: true });
+    }
+  });
+
+  it("preserves configured workspace aliases when the backup source is the same real directory", async () => {
+    const sourceStateDir = path.join(sourceHome.home, ".openclaw");
+    const sourceConfigPath = path.join(sourceHome.home, "custom-config.json");
+    const realWorkspace = path.join(sourceHome.home, "workspace-real");
+    const sourceWorkspaceAlias = path.join(sourceHome.home, "workspace-link");
+    const archiveDir = await fs.mkdtemp(
+      path.join(os.tmpdir(), "openclaw-backup-restore-workspace-alias-"),
+    );
+
+    try {
+      setActiveHome(sourceHome.home, sourceConfigPath);
+      await fs.mkdir(realWorkspace, { recursive: true });
+      await fs.symlink(realWorkspace, sourceWorkspaceAlias);
+      await fs.writeFile(
+        sourceConfigPath,
+        JSON.stringify({
+          agents: {
+            defaults: {
+              workspace: sourceWorkspaceAlias,
+            },
+          },
+        }),
+        "utf8",
+      );
+      await fs.writeFile(path.join(sourceStateDir, "openclaw.json"), JSON.stringify({}), "utf8");
+      await fs.writeFile(path.join(sourceStateDir, "state.txt"), "state\n", "utf8");
+      await fs.writeFile(path.join(realWorkspace, "SOUL.md"), "# soul\n", "utf8");
+
+      const runtime = {
+        log: vi.fn(),
+        error: vi.fn(),
+        exit: vi.fn(),
+      };
+      const created = await backupCreateCommand(runtime, {
+        output: archiveDir,
+      });
+
+      const targetHome = await createExtraHome("openclaw-backup-restore-workspace-alias-home-");
+      const targetConfigPath = path.join(targetHome, "custom-config.json");
+      const targetRealWorkspace = path.join(targetHome, "workspace-real");
+      const targetWorkspaceAlias = path.join(targetHome, "workspace-link");
+      await fs.mkdir(targetRealWorkspace, { recursive: true });
+      await fs.symlink(targetRealWorkspace, targetWorkspaceAlias);
+      await fs.writeFile(
+        targetConfigPath,
+        JSON.stringify({
+          agents: {
+            defaults: {
+              workspace: targetWorkspaceAlias,
+            },
+          },
+        }),
+        "utf8",
+      );
+      setActiveHome(targetHome, targetConfigPath);
+
+      const restored = await backupRestoreCommand(runtime, {
+        archive: created.archivePath,
+        force: true,
+      });
+
+      expect(await fs.readFile(path.join(targetRealWorkspace, "SOUL.md"), "utf8")).toBe("# soul\n");
+      const restoredSnapshot = await readConfigFileSnapshot();
+      expect(restoredSnapshot.valid).toBe(true);
+      expect(restoredSnapshot.config?.agents?.defaults?.workspace).toBe(targetWorkspaceAlias);
       expect(restored.updatedConfigWorkspacePaths).toBe(1);
     } finally {
       await fs.rm(archiveDir, { recursive: true, force: true });

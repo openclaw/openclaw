@@ -40,6 +40,11 @@ type BackupRestoreItem = {
   targetType: RestoreTargetType;
 };
 
+type WorkspaceRestoreTarget = {
+  targetPath: string;
+  rewritePath: string;
+};
+
 type StagedBackupRestoreItem = BackupRestoreItem & {
   stagedPath: string;
 };
@@ -330,9 +335,9 @@ async function resolveWorkspaceRestoreTargets(params: {
   manifestWorkspaceDirs: string[] | undefined;
   backupStateDir: string | undefined;
   currentStateDir: string;
-}): Promise<Map<string, string>> {
+}): Promise<Map<string, WorkspaceRestoreTarget>> {
   if (params.workspaceAssets.length === 0) {
-    return new Map();
+    return new Map<string, WorkspaceRestoreTarget>();
   }
 
   const orderedAssets = normalizeWorkspaceAssetOrder(
@@ -346,22 +351,41 @@ async function resolveWorkspaceRestoreTargets(params: {
       ? collectWorkspaceDirs(currentSnapshot.config)
       : [];
 
+  const canonicalCurrentWorkspaces = await Promise.all(
+    currentWorkspaceDirs.map(async (workspaceDir) => ({
+      key: await canonicalizePath(path.resolve(workspaceDir)),
+      rewritePath: path.resolve(workspaceDir),
+      targetPath: (await fs.lstat(path.resolve(workspaceDir)).catch(() => null))?.isSymbolicLink()
+        ? await canonicalizePath(path.resolve(workspaceDir))
+        : path.resolve(workspaceDir),
+    })),
+  );
   const currentWorkspaceByPath = new Map(
-    currentWorkspaceDirs.map((workspaceDir) => [
-      path.resolve(workspaceDir),
-      path.resolve(workspaceDir),
+    canonicalCurrentWorkspaces.map((workspace) => [
+      workspace.key,
+      {
+        targetPath: workspace.targetPath,
+        rewritePath: workspace.rewritePath,
+      },
     ]),
   );
-  const exactCurrentWorkspaceTargets = orderedAssets.map((asset) =>
-    currentWorkspaceByPath.get(path.resolve(asset.sourcePath)),
+  const exactCurrentWorkspaceTargets = await Promise.all(
+    orderedAssets.map(async (asset) =>
+      currentWorkspaceByPath.get(await canonicalizePath(path.resolve(asset.sourcePath))),
+    ),
   );
   if (
-    exactCurrentWorkspaceTargets.every((targetPath): targetPath is string => Boolean(targetPath))
+    exactCurrentWorkspaceTargets.every((targetPath): targetPath is WorkspaceRestoreTarget =>
+      Boolean(targetPath),
+    )
   ) {
     return new Map(
       orderedAssets.map((asset, index) => [
         path.resolve(asset.sourcePath),
-        path.resolve(exactCurrentWorkspaceTargets[index] ?? resolveDefaultAgentWorkspaceDir()),
+        exactCurrentWorkspaceTargets[index] ?? {
+          targetPath: path.resolve(resolveDefaultAgentWorkspaceDir()),
+          rewritePath: path.resolve(resolveDefaultAgentWorkspaceDir()),
+        },
       ]),
     );
   }
@@ -372,14 +396,28 @@ async function resolveWorkspaceRestoreTargets(params: {
     params.currentStateDir,
   );
   if (remappedFromBackupBase) {
-    return remappedFromBackupBase;
+    const remappedToConfiguredTargets = new Map<string, WorkspaceRestoreTarget>();
+    for (const [sourcePath, targetPath] of remappedFromBackupBase) {
+      const currentTarget = currentWorkspaceByPath.get(await canonicalizePath(targetPath));
+      remappedToConfiguredTargets.set(
+        sourcePath,
+        currentTarget ?? {
+          targetPath,
+          rewritePath: targetPath,
+        },
+      );
+    }
+    return remappedToConfiguredTargets;
   }
 
   if (orderedAssets.length === 1) {
     return new Map([
       [
         path.resolve(orderedAssets[0]?.sourcePath ?? ""),
-        path.resolve(resolveDefaultAgentWorkspaceDir()),
+        {
+          targetPath: path.resolve(resolveDefaultAgentWorkspaceDir()),
+          rewritePath: path.resolve(resolveDefaultAgentWorkspaceDir()),
+        },
       ],
     ]);
   }
@@ -406,14 +444,14 @@ async function buildRestoreItems(params: {
   const currentOauthDir = path.resolve(resolveOAuthDir());
 
   const workspaceAssets = manifest.assets.filter((asset) => asset.kind === "workspace");
-  const workspaceTargets = params.includeWorkspace
+  const workspaceTargets: Map<string, WorkspaceRestoreTarget> = params.includeWorkspace
     ? await resolveWorkspaceRestoreTargets({
         workspaceAssets,
         manifestWorkspaceDirs: manifest.paths?.workspaceDirs,
         backupStateDir: manifest.paths?.stateDir,
         currentStateDir,
       })
-    : new Map<string, string>();
+    : new Map<string, WorkspaceRestoreTarget>();
   const restorableAssets = [
     ...manifest.assets,
     ...buildCoveredAssetManifestEntries({
@@ -427,6 +465,15 @@ async function buildRestoreItems(params: {
   const items: BackupRestoreItem[] = [];
   const skipped: BackupRestoreSkipped[] = [];
   const workspaceRewrites = new Map<string, string>();
+  const workspaceSourceAliases = new Map<string, string[]>();
+  await Promise.all(
+    (manifest.paths?.workspaceDirs ?? []).map(async (workspaceDir) => {
+      const canonicalWorkspaceDir = await canonicalizePath(path.resolve(workspaceDir));
+      const aliases = workspaceSourceAliases.get(canonicalWorkspaceDir) ?? [];
+      aliases.push(...buildPathAliases(workspaceDir));
+      workspaceSourceAliases.set(canonicalWorkspaceDir, aliases);
+    }),
+  );
 
   for (const asset of restorableAssets) {
     if (!isKnownBackupKind(asset.kind)) {
@@ -450,15 +497,21 @@ async function buildRestoreItems(params: {
           ? currentConfigPath
           : asset.kind === "credentials"
             ? currentOauthDir
-            : workspaceTargets.get(path.resolve(asset.sourcePath));
+            : workspaceTargets.get(path.resolve(asset.sourcePath))?.targetPath;
 
     if (!targetPath) {
       throw new Error(`Missing restore target for workspace asset: ${asset.sourcePath}`);
     }
 
     if (asset.kind === "workspace") {
+      const workspaceTarget = workspaceTargets.get(path.resolve(asset.sourcePath));
+      const rewritePath = workspaceTarget?.rewritePath ?? path.resolve(targetPath);
       for (const alias of buildPathAliases(asset.sourcePath)) {
-        workspaceRewrites.set(alias, path.resolve(targetPath));
+        workspaceRewrites.set(alias, rewritePath);
+      }
+      for (const alias of workspaceSourceAliases.get(await canonicalizePath(asset.sourcePath)) ??
+        []) {
+        workspaceRewrites.set(alias, rewritePath);
       }
     }
 
