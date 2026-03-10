@@ -442,6 +442,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "agents.defaults.pdfMaxBytesMb": "PDF Max Size (MB)",
   "agents.defaults.pdfMaxPages": "PDF Max Pages",
   "agents.defaults.imageMaxDimensionPx": "Image Max Dimension (px)",
+  "agents.defaults.imageCompression": "Image Compression",
   "agents.defaults.humanDelay.mode": "Human Delay Mode",
   "agents.defaults.humanDelay.minMs": "Human Delay Min (ms)",
   "agents.defaults.humanDelay.maxMs": "Human Delay Max (ms)",

@@ -988,6 +988,13 @@ export const FIELD_HELP: Record<string, string> = {
     "Maximum number of PDF pages to process for the PDF tool (default: 20).",
   "agents.defaults.imageMaxDimensionPx":
     "Max image side length in pixels when sanitizing transcript/tool-result image payloads (default: 1200).",
+  "agents.defaults.imageCompression": `Controls image quality when analyzing images with the image tool.
+Accepts a preset ("none", "low", "medium", "high") or detailed settings:
+- none: No compression, send original image (may hit API limits)
+- low: max 800px side, quality 50 (smallest payload, lowest quality)
+- medium: max 1200px side, quality 70 (balanced, default)
+- high: max 2000px side, quality 95 (best quality, larger payload)
+Or use detailed config: { maxWidth: 2000, maxHeight: 2000, quality: 95 }`,
   "agents.defaults.cliBackends": "Optional CLI backends for text-only fallback (claude-cli, etc.).",
   "agents.defaults.compaction":
     "Compaction tuning for when context nears token limits, including history share, reserve headroom, and pre-compaction memory flush behavior. Use this when long-running sessions need stable continuity under tight context windows.",
