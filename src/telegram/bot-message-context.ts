@@ -9,15 +9,6 @@ import {
 import { loadConfig } from "../config/config.js";
 import type { TelegramDirectConfig, TelegramGroupConfig } from "../config/types.js";
 import { logVerbose } from "../globals.js";
-import { readSessionUpdatedAt, resolveStorePath } from "../config/sessions.js";
-import { appendUserMessageToSessionTranscript } from "../config/sessions/transcript.js";
-import type {
-  DmPolicy,
-  TelegramDirectConfig,
-  TelegramGroupConfig,
-  TelegramTopicConfig,
-} from "../config/types.js";
-import { logVerbose, shouldLogVerbose } from "../globals.js";
 import { recordChannelActivity } from "../infra/channel-activity.js";
 import { buildAgentSessionKey, deriveLastRoutePolicy } from "../routing/resolve-route.js";
 import { DEFAULT_ACCOUNT_ID, resolveThreadSessionKeys } from "../routing/session-key.js";
@@ -157,22 +148,6 @@ export const buildTelegramMessageContext = async ({
     );
     return null;
   }
-  
-
-  // Compute requireMention early for preflight transcription gating
-  const activationOverride = resolveGroupActivation({
-    chatId,
-    messageThreadId: resolvedThreadId,
-    sessionKey: sessionKey,
-    agentId: route.agentId,
-  });
-  const baseRequireMention = resolveGroupRequireMention(chatId);
-  const requireMention = firstDefined(
-    activationOverride,
-    topicConfig?.requireMention,
-    (groupConfig as TelegramGroupConfig | undefined)?.requireMention,
-    baseRequireMention,
-  );
 
   const requireTopic = (groupConfig as TelegramDirectConfig | undefined)?.requireTopic;
   const topicRequiredButMissing = !isGroup && requireTopic === true && dmThreadId == null;
@@ -328,32 +303,6 @@ export const buildTelegramMessageContext = async ({
   if (!(await ensureConfiguredBindingReady())) {
     return null;
   }
-  // Reply-chain detection: replying to a bot message acts like an implicit mention.
-  // Exclude forum-topic service messages (auto-generated "Topic created" etc. messages
-  // by the bot) so that every message inside a bot-created topic does not incorrectly
-  // bypass requireMention (#32256).
-  // We detect service messages by the presence of Telegram's forum_topic_* fields
-  // rather than by the absence of text/caption, because legitimate bot media messages
-  // (stickers, voice notes, captionless photos) also lack text/caption.
-  const botId = primaryCtx.me?.id;
-  const replyFromId = msg.reply_to_message?.from?.id;
-  const replyToBotMessage = botId != null && replyFromId === botId;
-  const isReplyToServiceMessage =
-    replyToBotMessage && isTelegramForumServiceMessage(msg.reply_to_message);
-  const implicitMention = replyToBotMessage && !isReplyToServiceMessage;
-  const canDetectMention = Boolean(botUsername) || mentionRegexes.length > 0;
-  const mentionGate = resolveMentionGatingWithBypass({
-    isGroup,
-    requireMention: Boolean(requireMention),
-    canDetectMention,
-    wasMentioned,
-    implicitMention: isGroup && Boolean(requireMention) && implicitMention,
-    hasAnyMention,
-    allowTextCommands: true,
-    hasControlCommand: hasControlCommandInMessage,
-    commandAuthorized,
-  });
-  const effectiveWasMentioned = mentionGate.effectiveWasMentioned;
 
   // ACK reactions
   const ackReaction = resolveAckReaction(cfg, route.agentId, {
@@ -494,176 +443,6 @@ export const buildTelegramMessageContext = async ({
     commandAuthorized: bodyResult.commandAuthorized,
   });
 
-  });
-  const commandBody = normalizeCommandBody(rawBody, { botUsername });
-  const inboundHistory =
-    isGroup && historyKey && historyLimit > 0
-      ? (groupHistories.get(historyKey) ?? []).map((entry) => ({
-          sender: entry.sender,
-          body: entry.body,
-          timestamp: entry.timestamp,
-        }))
-      : undefined;
-  const currentMediaForContext = stickerCacheHit ? [] : allMedia;
-  const contextMedia = [...currentMediaForContext, ...replyMedia];
-  const ctxPayload = finalizeInboundContext({
-    Body: combinedBody,
-    // Agent prompt should be the raw user text only; metadata/context is provided via system prompt.
-    BodyForAgent: bodyText,
-    InboundHistory: inboundHistory,
-    RawBody: rawBody,
-    CommandBody: commandBody,
-    From: isGroup ? buildTelegramGroupFrom(chatId, resolvedThreadId) : `telegram:${chatId}`,
-    To: `telegram:${chatId}`,
-    SessionKey: sessionKey,
-    AccountId: route.accountId,
-    ChatType: isGroup ? "group" : "direct",
-    ConversationLabel: conversationLabel,
-    GroupSubject: isGroup ? (msg.chat.title ?? undefined) : undefined,
-    GroupSystemPrompt: isGroup || (!isGroup && groupConfig) ? groupSystemPrompt : undefined,
-    SenderName: senderName,
-    SenderId: senderId || undefined,
-    SenderUsername: senderUsername || undefined,
-    Provider: "telegram",
-    Surface: "telegram",
-    MessageSid: options?.messageIdOverride ?? String(msg.message_id),
-    ReplyToId: replyTarget?.id,
-    ReplyToBody: replyTarget?.body,
-    ReplyToSender: replyTarget?.sender,
-    ReplyToIsQuote: replyTarget?.kind === "quote" ? true : undefined,
-    // Forward context from reply target (issue #9619: forward + comment bundling)
-    ReplyToForwardedFrom: replyTarget?.forwardedFrom?.from,
-    ReplyToForwardedFromType: replyTarget?.forwardedFrom?.fromType,
-    ReplyToForwardedFromId: replyTarget?.forwardedFrom?.fromId,
-    ReplyToForwardedFromUsername: replyTarget?.forwardedFrom?.fromUsername,
-    ReplyToForwardedFromTitle: replyTarget?.forwardedFrom?.fromTitle,
-    ReplyToForwardedDate: replyTarget?.forwardedFrom?.date
-      ? replyTarget.forwardedFrom.date * 1000
-      : undefined,
-    ForwardedFrom: forwardOrigin?.from,
-    ForwardedFromType: forwardOrigin?.fromType,
-    ForwardedFromId: forwardOrigin?.fromId,
-    ForwardedFromUsername: forwardOrigin?.fromUsername,
-    ForwardedFromTitle: forwardOrigin?.fromTitle,
-    ForwardedFromSignature: forwardOrigin?.fromSignature,
-    ForwardedFromChatType: forwardOrigin?.fromChatType,
-    ForwardedFromMessageId: forwardOrigin?.fromMessageId,
-    ForwardedDate: forwardOrigin?.date ? forwardOrigin.date * 1000 : undefined,
-    Timestamp: msg.date ? msg.date * 1000 : undefined,
-    WasMentioned: isGroup ? effectiveWasMentioned : undefined,
-    // Filter out cached stickers from current-message media; reply media is still valid context.
-    MediaPath: contextMedia.length > 0 ? contextMedia[0]?.path : undefined,
-    MediaType: contextMedia.length > 0 ? contextMedia[0]?.contentType : undefined,
-    MediaUrl: contextMedia.length > 0 ? contextMedia[0]?.path : undefined,
-    MediaPaths: contextMedia.length > 0 ? contextMedia.map((m) => m.path) : undefined,
-    MediaUrls: contextMedia.length > 0 ? contextMedia.map((m) => m.path) : undefined,
-    MediaTypes:
-      contextMedia.length > 0
-        ? (contextMedia.map((m) => m.contentType).filter(Boolean) as string[])
-        : undefined,
-    Sticker: allMedia[0]?.stickerMetadata,
-    StickerMediaIncluded: allMedia[0]?.stickerMetadata ? !stickerCacheHit : undefined,
-    ...(locationData ? toLocationContext(locationData) : undefined),
-    CommandAuthorized: commandAuthorized,
-    // For groups: use resolved forum topic id; for DMs: use raw messageThreadId
-    MessageThreadId: threadSpec.id,
-    IsForum: isForum,
-    // Originating channel for reply routing.
-    OriginatingChannel: "telegram" as const,
-    OriginatingTo: `telegram:${chatId}`,
-  });
-
-  const pinnedMainDmOwner = !isGroup
-    ? resolvePinnedMainDmOwnerFromAllowlist({
-        dmScope: cfg.session?.dmScope,
-        allowFrom: dmAllowFrom,
-        normalizeEntry: (entry) => normalizeAllowFrom([entry]).entries[0],
-      })
-    : null;
-
-  await recordInboundSession({
-    storePath,
-    sessionKey: ctxPayload.SessionKey ?? sessionKey,
-    ctx: ctxPayload,
-    updateLastRoute: undefined,
-    onRecordError: (err) => {
-      logVerbose(`telegram: failed updating session meta: ${String(err)}`);
-    },
-  });
-
-  if (replyTarget && shouldLogVerbose()) {
-    const preview = replyTarget.body.replace(/\s+/g, " ").slice(0, 120);
-    logVerbose(
-      `telegram reply-context: replyToId=${replyTarget.id} replyToSender=${replyTarget.sender} replyToBody="${preview}"`,
-    );
-  }
-
-  if (forwardOrigin && shouldLogVerbose()) {
-    logVerbose(
-      `telegram forward-context: forwardedFrom="${forwardOrigin.from}" type=${forwardOrigin.fromType}`,
-    );
-  }
-
-  if (shouldLogVerbose()) {
-    const preview = body.slice(0, 200).replace(/\n/g, "\\n");
-    const mediaInfo = allMedia.length > 1 ? ` mediaCount=${allMedia.length}` : "";
-    const topicInfo = resolvedThreadId != null ? ` topic=${resolvedThreadId}` : "";
-    logVerbose(
-      `telegram inbound: chatId=${chatId} from=${ctxPayload.From} len=${body.length}${mediaInfo}${topicInfo} preview="${preview}"`,
-    );
-  }
-  if (!baseAccess.allowed) {
-    // Write user message to session transcript
-    await appendUserMessageToSessionTranscript({
-      storePath,
-      sessionKey: ctxPayload.SessionKey ?? sessionKey,
-      text: body,
-    }).catch((err) => {
-      logVerbose(`telegram: failed to write user message to transcript: ${String(err)}`);
-    });
-    if (baseAccess.reason === "group-disabled") {
-      logVerbose(`Blocked telegram group ${chatId} (group disabled)`);
-      return null;
-    }
-    if (baseAccess.reason === "topic-disabled") {
-      logVerbose(
-        `Blocked telegram topic ${chatId} (${resolvedThreadId ?? "unknown"}) (topic disabled)`,
-      );
-      return null;
-    }
-    logVerbose(
-      isGroup
-        ? `Blocked telegram group sender ${senderId || "unknown"} (group allowFrom override)`
-        : `Blocked telegram DM sender ${senderId || "unknown"} (DM allowFrom override)`,
-    );
-    return null;
-  }
-  if (isGroup && requireMention && canDetectMention) {
-    await appendUserMessageToSessionTranscript({
-      storePath,
-      sessionKey: ctxPayload.SessionKey ?? sessionKey,
-      text: body,
-    }).catch((err) => {
-      logVerbose(`telegram: failed to write user message to transcript: ${String(err)}`);
-    });
-    if (mentionGate.shouldSkip) {
-      logger.info({ chatId, reason: "no-mention" }, "skipping group message");
-      recordPendingHistoryEntryIfEnabled({
-        historyMap: groupHistories,
-        historyKey: historyKey ?? "",
-        limit: historyLimit,
-        entry: historyKey
-          ? {
-              sender: buildSenderLabel(msg, senderId || chatId),
-              body: rawBody,
-              timestamp: msg.date ? msg.date * 1000 : undefined,
-              messageId: typeof msg.message_id === "number" ? String(msg.message_id) : undefined,
-            }
-          : null,
-      });
-      return null;
-    }
-  }
   return {
     ctxPayload,
     primaryCtx,
