@@ -1,5 +1,6 @@
 import type { OpenClawConfig } from "../config/config.js";
 import { resolvePluginTools } from "../plugins/tools.js";
+import { getActiveRuntimeWebToolsMetadata } from "../secrets/runtime.js";
 import type { GatewayMessageChannel } from "../utils/message-channel.js";
 import { resolveSessionAgentId } from "./agent-scope.js";
 import type { SandboxFsBridge } from "./sandbox/fs-bridge.js";
@@ -72,6 +73,7 @@ export function createOpenClawTools(
   } & SpawnedToolContext,
 ): AnyAgentTool[] {
   const workspaceDir = resolveWorkspaceRoot(options?.workspaceDir);
+  const runtimeWebTools = getActiveRuntimeWebToolsMetadata();
   const imageTool = options?.agentDir?.trim()
     ? createImageTool({
         config: options?.config,
@@ -100,10 +102,12 @@ export function createOpenClawTools(
   const webSearchTool = createWebSearchTool({
     config: options?.config,
     sandboxed: options?.sandboxed,
+    runtimeWebSearch: runtimeWebTools?.search,
   });
   const webFetchTool = createWebFetchTool({
     config: options?.config,
     sandboxed: options?.sandboxed,
+    runtimeFirecrawl: runtimeWebTools?.fetch.firecrawl,
   });
   const messageTool = options?.disableMessageTool
     ? null

@@ -292,67 +292,6 @@ function collectMessagesTtsAssignments(params: {
   });
 }
 
-function collectToolsWebSearchAssignments(params: {
-  config: OpenClawConfig;
-  defaults: SecretDefaults | undefined;
-  context: ResolverContext;
-}): void {
-  const tools = params.config.tools as Record<string, unknown> | undefined;
-  if (!isRecord(tools) || !isRecord(tools.web) || !isRecord(tools.web.search)) {
-    return;
-  }
-  const search = tools.web.search;
-  const searchEnabled = search.enabled !== false;
-  const rawProvider =
-    typeof search.provider === "string" ? search.provider.trim().toLowerCase() : "";
-  const selectedProvider =
-    rawProvider === "brave" ||
-    rawProvider === "gemini" ||
-    rawProvider === "grok" ||
-    rawProvider === "kimi" ||
-    rawProvider === "perplexity"
-      ? rawProvider
-      : undefined;
-  const paths = [
-    "apiKey",
-    "gemini.apiKey",
-    "grok.apiKey",
-    "kimi.apiKey",
-    "perplexity.apiKey",
-  ] as const;
-  for (const path of paths) {
-    const [scope, field] = path.includes(".") ? path.split(".", 2) : [undefined, path];
-    const target = scope ? search[scope] : search;
-    if (!isRecord(target)) {
-      continue;
-    }
-    const active = scope
-      ? searchEnabled && (selectedProvider === undefined || selectedProvider === scope)
-      : searchEnabled && (selectedProvider === undefined || selectedProvider === "brave");
-    const inactiveReason = !searchEnabled
-      ? "tools.web.search is disabled."
-      : scope
-        ? selectedProvider === undefined
-          ? undefined
-          : `tools.web.search.provider is "${selectedProvider}".`
-        : selectedProvider === undefined
-          ? undefined
-          : `tools.web.search.provider is "${selectedProvider}".`;
-    collectSecretInputAssignment({
-      value: target[field],
-      path: `tools.web.search.${path}`,
-      expected: "string",
-      defaults: params.defaults,
-      context: params.context,
-      active,
-      inactiveReason,
-      apply: (value) => {
-        target[field] = value;
-      },
-    });
-  }
-}
-
 function collectCronAssignments(params: {
   config: OpenClawConfig;
   defaults: SecretDefaults | undefined;
@@ -401,6 +340,5 @@ export function collectCoreConfigAssignments(params: {
   collectTalkAssignments(params);
   collectGatewayAssignments(params);
   collectMessagesTtsAssignments(params);
-  collectToolsWebSearchAssignments(params);
   collectCronAssignments(params);
 }

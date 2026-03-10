@@ -25,6 +25,7 @@ import {
   createResolverContext,
   type SecretResolverWarning,
 } from "./runtime-shared.js";
+import { resolveRuntimeWebTools, type RuntimeWebToolsMetadata } from "./runtime-web-tools.js";
 
 export type { SecretResolverWarning } from "./runtime-shared.js";
 
@@ -33,6 +34,7 @@ export type PreparedSecretsRuntimeSnapshot = {
   config: OpenClawConfig;
   authStores: Array<{ agentDir: string; store: AuthProfileStore }>;
   warnings: SecretResolverWarning[];
+  webTools: RuntimeWebToolsMetadata;
 };
 
 type SecretsRuntimeRefreshContext = {
@@ -57,6 +59,7 @@ function cloneSnapshot(snapshot: PreparedSecretsRuntimeSnapshot): PreparedSecret
       store: structuredClone(entry.store),
     })),
     warnings: snapshot.warnings.map((warning) => ({ ...warning })),
+    webTools: structuredClone(snapshot.webTools),
   };
 }
 
@@ -148,6 +151,11 @@ export async function prepareSecretsRuntimeSnapshot(params: {
     config: resolvedConfig,
     authStores,
     warnings: context.warnings,
+    webTools: await resolveRuntimeWebTools({
+      sourceConfig,
+      resolvedConfig,
+      context,
+    }),
   };
   preparedSnapshotRefreshContext.set(snapshot, {
     env: { ...(params.env ?? process.env) } as Record<string, string | undefined>,
@@ -185,7 +193,6 @@ export function activateSecretsRuntimeSnapshot(snapshot: PreparedSecretsRuntimeS
       activateSecretsRuntimeSnapshot(refreshed);
       return true;
     },
-    clearOnRefreshFailure: clearActiveSecretsRuntimeState,
   });
 }
 
@@ -198,6 +205,13 @@ export function getActiveSecretsRuntimeSnapshot(): PreparedSecretsRuntimeSnapsho
     preparedSnapshotRefreshContext.set(snapshot, cloneRefreshContext(activeRefreshContext));
   }
   return snapshot;
+}
+
+export function getActiveRuntimeWebToolsMetadata(): RuntimeWebToolsMetadata | null {
+  if (!activeSnapshot) {
+    return null;
+  }
+  return structuredClone(activeSnapshot.webTools);
 }
 
 export function resolveCommandSecretsFromActiveRuntimeSnapshot(params: {
