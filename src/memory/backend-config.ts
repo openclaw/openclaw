@@ -27,7 +27,6 @@ export type ResolvedChainConfig = {
   providers: ResolvedChainProvider[];
   global?: {
     defaultTimeout: number;
-    enableAsyncWrite: boolean;
     enableFallback: boolean;
     healthCheckInterval: number;
   };
@@ -39,7 +38,6 @@ export type ResolvedChainProvider = {
   backend?: string;
   plugin?: string;
   enabled: boolean;
-  writeMode: "sync" | "async";
   timeout: {
     add: number;
     search: number;
@@ -414,7 +412,6 @@ function resolveChainConfig(chainConfig: MemoryChainConfig): ResolvedChainConfig
     backend: provider.backend,
     plugin: provider.plugin,
     enabled: provider.enabled ?? true,
-    writeMode: provider.writeMode ?? "sync",
     timeout: {
       add: provider.timeout?.add ?? 5000,
       search: provider.timeout?.search ?? 5000,
@@ -435,7 +432,6 @@ function resolveChainConfig(chainConfig: MemoryChainConfig): ResolvedChainConfig
     providers: resolvedProviders,
     global: {
       defaultTimeout: chainConfig.global?.defaultTimeout ?? 5000,
-      enableAsyncWrite: chainConfig.global?.enableAsyncWrite ?? true,
       enableFallback: chainConfig.global?.enableFallback ?? true,
       healthCheckInterval: chainConfig.global?.healthCheckInterval ?? 30000,
     },

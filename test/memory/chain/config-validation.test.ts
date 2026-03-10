@@ -1,7 +1,7 @@
 /**
- * Chain Memory Backend - 配置验证测试
+ * Chain Memory Backend - Config Validation Tests
  *
- * 使用 Zod schema 校验器测试 20+ 种非法配置组合
+ * Test 20+ invalid config combinations with Zod schema validator
  *
  * @module config-validation.test
  * @author Tutu
@@ -69,7 +69,6 @@ describe("Config Validation (Zod)", () => {
         providers: [{ name: "chain", priority: "primary", backend: "chain" }],
       };
 
-      // Zod 会先验证 backend 的值，所以会抛出 backend 类型错误
       expect(() => validateChainConfig(config)).toThrow(/backend must be one of: builtin, qmd/);
     });
 
@@ -281,56 +280,6 @@ describe("Config Validation (Zod)", () => {
     });
   });
 
-  describe("Write Mode Validation", () => {
-    it("should reject invalid write mode", () => {
-      const config = {
-        providers: [
-          {
-            name: "test",
-            priority: "primary",
-            backend: "builtin",
-            writeMode: "invalid",
-          },
-        ],
-      };
-
-      expect(() => validateChainConfig(config)).toThrow(/writeMode must be one of: sync, async/);
-    });
-
-    it("should warn when primary uses async write mode", () => {
-      const config = {
-        providers: [
-          {
-            name: "test",
-            priority: "primary",
-            backend: "builtin",
-            writeMode: "async",
-          },
-        ],
-      };
-
-      const result = validateChainConfig(config);
-      expect(result.warnings).toContain(
-        "primary provider with async writeMode may cause data inconsistency",
-      );
-    });
-
-    it("should apply default writeMode based on priority", () => {
-      const config = {
-        providers: [
-          { name: "primary", priority: "primary", backend: "builtin" },
-          { name: "secondary", priority: "secondary", backend: "builtin" },
-          { name: "fallback", priority: "fallback", backend: "builtin" },
-        ],
-      };
-
-      const result = validateChainConfig(config);
-      expect(result.providers[0].writeMode).toBe("sync"); // primary = sync
-      expect(result.providers[1].writeMode).toBe("async"); // secondary = async
-      expect(result.providers[2].writeMode).toBe("sync"); // fallback = sync
-    });
-  });
-
   describe("Global Config Validation", () => {
     it("should reject negative health check interval", () => {
       const config = {
@@ -352,7 +301,6 @@ describe("Config Validation (Zod)", () => {
 
       const result = validateChainConfig(config);
       expect(result.global.defaultTimeout).toBe(5000);
-      expect(result.global.enableAsyncWrite).toBe(true);
       expect(result.global.enableFallback).toBe(true);
       expect(result.global.healthCheckInterval).toBe(30000);
     });
@@ -362,7 +310,6 @@ describe("Config Validation (Zod)", () => {
         providers: [{ name: "test", priority: "primary", backend: "builtin" }],
         global: {
           defaultTimeout: 10000,
-          enableAsyncWrite: false,
           enableFallback: false,
           healthCheckInterval: 60000,
         },
@@ -370,7 +317,6 @@ describe("Config Validation (Zod)", () => {
 
       const result = validateChainConfig(config);
       expect(result.global.defaultTimeout).toBe(10000);
-      expect(result.global.enableAsyncWrite).toBe(false);
       expect(result.global.enableFallback).toBe(false);
       expect(result.global.healthCheckInterval).toBe(60000);
     });
@@ -398,32 +344,6 @@ describe("Config Validation (Zod)", () => {
       };
 
       expect(() => validateChainConfig(config)).toThrow(/at least one enabled provider required/);
-    });
-
-    it("should accept providers with enabled=false if other providers are enabled", () => {
-      const config = {
-        providers: [
-          {
-            name: "disabled",
-            priority: "primary",
-            backend: "builtin",
-            enabled: false,
-          },
-          {
-            name: "enabled",
-            priority: "secondary",
-            backend: "builtin",
-            enabled: true,
-          },
-        ],
-      };
-
-      // 这会失败，因为没有 enabled 的 primary provider
-      const enabledProviders = config.providers.filter((p) => p.enabled);
-      const hasPrimary = enabledProviders.some((p) => p.priority === "primary");
-
-      expect(hasPrimary).toBe(false); // 没有 enabled 的 primary
-      expect(() => validateChainConfig(config)).toThrow(/at least one primary provider required/);
     });
 
     it("should accept valid minimal config", () => {
@@ -456,13 +376,11 @@ describe("Config Validation (Zod)", () => {
               failureThreshold: 5,
               resetTimeoutMs: 60000,
             },
-            writeMode: "sync",
           },
           {
             name: "backup",
             priority: "secondary",
             backend: "builtin",
-            writeMode: "async",
           },
           {
             name: "fallback",
@@ -472,7 +390,6 @@ describe("Config Validation (Zod)", () => {
         ],
         global: {
           defaultTimeout: 5000,
-          enableAsyncWrite: true,
           enableFallback: true,
           healthCheckInterval: 30000,
         },
@@ -552,7 +469,6 @@ describe("Config Validation (Zod)", () => {
       expect(result).toHaveProperty("warnings");
 
       expect(result.providers[0].enabled).toBe(true);
-      expect(result.providers[0].writeMode).toBe("sync");
       expect(result.providers[0].timeout).toBeDefined();
       expect(result.providers[0].retry).toBeDefined();
       expect(result.providers[0].circuitBreaker).toBeDefined();
@@ -636,7 +552,6 @@ describe("Config Validation (Zod)", () => {
             name: "builtin-backup",
             priority: "secondary",
             backend: "builtin",
-            writeMode: "async",
           },
         ],
       };

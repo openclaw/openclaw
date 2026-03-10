@@ -16,14 +16,12 @@ import type {
   MemoryEmbeddingProbeResult,
   MemoryProviderStatus,
 } from "../types.js";
-import { AsyncWriteQueue } from "./async-queue.js";
 import { HealthMonitor } from "./health-monitor.js";
 import type {
   ChainConfig,
   ProviderWrapper,
   ChainManagerStatus,
   ChainManagerOptions,
-  AsyncWriteTask,
 } from "./types.js";
 import { ProviderWrapper as ProviderWrapperClass } from "./wrapper.js";
 
@@ -41,7 +39,6 @@ export class ChainMemoryManager implements MemorySearchManager {
   private primary?: ProviderWrapperClass;
   private secondary: ProviderWrapperClass[] = [];
   private fallback?: ProviderWrapperClass;
-  private asyncQueue: AsyncWriteQueue;
   private healthMonitor: HealthMonitor;
 
   /**
@@ -49,31 +46,6 @@ export class ChainMemoryManager implements MemorySearchManager {
    */
   private constructor(config: ChainConfig) {
     this.config = config;
-
-    // Initialize async queue
-    this.asyncQueue = new AsyncWriteQueue({
-      maxConcurrent: 10,
-      retryDelayMs: 1000,
-      maxRetries: 3,
-    });
-
-    // Set queue processor
-    // Note: Async write is a placeholder for future implementation
-    // MemorySearchManager interface doesn't have add/update/delete methods yet
-    this.asyncQueue.setProcessor(async (task: AsyncWriteTask) => {
-      const provider = this.providers.get(task.providerName);
-      if (!provider) {
-        throw new Error(`Provider ${task.providerName} not found`);
-      }
-
-      // Placeholder: log warning but don't fail
-      // This feature will be implemented when MemorySearchManager interface
-      // is extended with write methods
-      log.warn(
-        `Async write operation '${task.operation}' for provider '${task.providerName}' ` +
-          `is not yet implemented. Task ID: ${task.id}`,
-      );
-    });
 
     // Initialize health monitor
     this.healthMonitor = new HealthMonitor({
@@ -271,7 +243,6 @@ export class ChainMemoryManager implements MemorySearchManager {
    */
   status(): MemoryProviderStatus {
     const providerStats = Array.from(this.providers.values()).map((p) => p.getStats());
-    const queueStatus = this.asyncQueue.getStatus();
 
     return {
       backend: "chain",
@@ -282,7 +253,6 @@ export class ChainMemoryManager implements MemorySearchManager {
         : undefined,
       custom: {
         providers: providerStats,
-        queue: queueStatus,
         health: this.healthMonitor.getHealthStatus(),
       },
     };
@@ -315,12 +285,10 @@ export class ChainMemoryManager implements MemorySearchManager {
    */
   getStatus(): ChainManagerStatus {
     const providerStats = Array.from(this.providers.values()).map((p) => p.getStats());
-    const queueStatus = this.asyncQueue.getStatus();
 
     return {
       backend: "chain",
       providers: providerStats,
-      asyncQueue: queueStatus,
       global: this.config.global,
     };
   }
@@ -331,12 +299,6 @@ export class ChainMemoryManager implements MemorySearchManager {
   async close(): Promise<void> {
     // Stop health monitor
     this.healthMonitor.stop();
-
-    // Wait for async queue to complete
-    await this.asyncQueue.drain();
-
-    // Clear queue
-    this.asyncQueue.clear();
 
     // Close all child providers
     for (const [name, provider] of this.providers) {
@@ -377,19 +339,5 @@ export class ChainMemoryManager implements MemorySearchManager {
 
     provider.resetCircuitBreaker();
     return true;
-  }
-
-  /**
-   * Get dead letter queue
-   */
-  getDeadLetterQueue() {
-    return this.asyncQueue.getDeadLetterQueue();
-  }
-
-  /**
-   * Retry item in dead letter queue
-   */
-  retryDeadLetter(taskId: string): boolean {
-    return this.asyncQueue.retryDeadLetter(taskId);
   }
 }
