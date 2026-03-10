@@ -172,4 +172,45 @@ describe("InMemorySessionDesktopManager", () => {
     expect(manager.getDesktop("agent:main:discord:channel:one")).toBeDefined();
     expect(manager.getDesktop("agent:main:discord:channel:two")).toBeUndefined();
   });
+
+  it("resets a desktop that is still being created instead of rebinding the first create result", async () => {
+    let resolveAfterCreate: (() => void) | undefined;
+    let afterCreateCalls = 0;
+    kernel.createDesktop.mockResolvedValueOnce("dt_initial").mockResolvedValueOnce("dt_reset");
+    const manager = new InMemorySessionDesktopManager(kernel as never, {
+      afterCreate: async () => {
+        afterCreateCalls += 1;
+        if (afterCreateCalls > 1) {
+          return;
+        }
+        await new Promise<void>((resolve) => {
+          resolveAfterCreate = resolve;
+        });
+      },
+    });
+
+    const createPromise = manager.ensureDesktop({
+      sessionKey: "agent:main:discord:channel:dev",
+      sessionId: "session_1",
+      agentId: "main",
+    });
+    const resetPromise = manager.resetDesktop("agent:main:discord:channel:dev", {
+      sessionId: "session_2",
+      reason: "reset",
+    });
+
+    await vi.waitFor(() => {
+      expect(resolveAfterCreate).toBeTypeOf("function");
+    });
+    resolveAfterCreate?.();
+
+    const created = await createPromise;
+    const reset = await resetPromise;
+
+    expect(created.desktopId).toBe("dt_initial");
+    expect(kernel.destroyDesktop).toHaveBeenCalledWith("dt_initial");
+    expect(reset.desktopId).toBe("dt_reset");
+    expect(reset.sessionId).toBe("session_2");
+    expect(manager.getDesktop("agent:main:discord:channel:dev")?.desktopId).toBe("dt_reset");
+  });
 });

@@ -277,6 +277,8 @@ describe("OpenClawAgentAdapter", () => {
     expect(kernel.acquireLock).not.toHaveBeenCalled();
     expect(kernel.execute).not.toHaveBeenCalled();
     expect(kernel.releaseLock).not.toHaveBeenCalled();
+    expect(agent.setTools).toHaveBeenCalledTimes(1);
+    expect(kernel.acquireSnapshot).toHaveBeenCalledTimes(1);
   });
 
   it("refreshes tools and replaces stale injected view messages with the latest snapshot state", async () => {

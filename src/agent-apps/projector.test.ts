@@ -189,6 +189,34 @@ describe("OpenClawSnapshotProjector", () => {
       required: ["app_id"],
     });
   });
+
+  it("deduplicates bindings with the same tool name across index map sources", () => {
+    const projector = new OpenClawSnapshotProjector(createKernel() as never);
+    const snapshot = {
+      ...createSnapshot(),
+      indexMap: {
+        open_file: {
+          appId: "app_0",
+          operation: {
+            id: "open_file",
+            displayName: "Open File",
+            params: [{ name: "path", type: "string", required: true }],
+          },
+        },
+        "tool:open_file": {
+          appId: "app_1",
+          toolName: "open_file",
+          description: "Duplicate open file",
+          params: [{ name: "uri", type: "string", required: true }],
+          viewType: "Workspace",
+        },
+      },
+    } satisfies CachedSnapshot;
+
+    const bindings = projector.projectToolBindings(snapshot, createRecord());
+
+    expect(bindings.filter((binding) => binding.toolName === "open_file")).toHaveLength(1);
+  });
 });
 
 describe("AOTUI injected message replacement", () => {

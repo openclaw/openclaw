@@ -4,6 +4,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { withTempHome as withTempHomeBase } from "../../test/helpers/temp-home.js";
 import * as acpManagerModule from "../acp/control-plane/manager.js";
 import { AcpRuntimeError } from "../acp/runtime/errors.js";
+import * as aotuiRuntimeModule from "../agent-apps/runtime.js";
 import * as embeddedModule from "../agents/pi-embedded.js";
 import type { OpenClawConfig } from "../config/config.js";
 import * as configModule from "../config/config.js";
@@ -15,6 +16,7 @@ import { agentCommand } from "./agent.js";
 const loadConfigSpy = vi.spyOn(configModule, "loadConfig");
 const runEmbeddedPiAgentSpy = vi.spyOn(embeddedModule, "runEmbeddedPiAgent");
 const getAcpSessionManagerSpy = vi.spyOn(acpManagerModule, "getAcpSessionManager");
+const syncAotuiDesktopForRunSpy = vi.spyOn(aotuiRuntimeModule, "syncAotuiDesktopForRun");
 
 const runtime: RuntimeEnv = {
   log: vi.fn(),
@@ -229,6 +231,21 @@ describe("agentCommand ACP runtime routing", () => {
         .mocked(runtime.log)
         .mock.calls.some(([first]) => typeof first === "string" && first.includes("ACP_OK"));
       expect(hasAckLog).toBe(true);
+    });
+  });
+
+  it("does not sync the AOTUI desktop for ACP-backed runs", async () => {
+    await withAcpSessionEnv(async () => {
+      const runTurn = createRunTurnFromTextDeltas(["ACP_", "OK"]);
+
+      mockAcpManager({
+        runTurn: (params: unknown) => runTurn(params),
+      });
+
+      await agentCommand({ message: "ping", sessionKey: "agent:codex:acp:test" }, runtime);
+
+      expect(syncAotuiDesktopForRunSpy).not.toHaveBeenCalled();
+      expect(runEmbeddedPiAgentSpy).not.toHaveBeenCalled();
     });
   });
 

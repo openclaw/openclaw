@@ -575,12 +575,17 @@ export class OpenClawSnapshotProjector implements AotuiSnapshotProjector {
   }
 
   projectToolBindings(snapshot: CachedSnapshot, _meta: DesktopRecord): AotuiToolBinding[] {
-    const bindings: AotuiToolBinding[] = [];
+    const bindingsByName = new Map<string, AotuiToolBinding>();
     const indexMap = snapshot.indexMap as IndexMap | undefined;
+    const addBinding = (binding: AotuiToolBinding) => {
+      if (!bindingsByName.has(binding.toolName)) {
+        bindingsByName.set(binding.toolName, binding);
+      }
+    };
 
     for (const [key, value] of Object.entries(indexMap ?? {})) {
       if (isOperationEntry(value)) {
-        bindings.push({
+        addBinding({
           toolName: value.operation.id,
           description: value.operation.displayName || value.operation.id,
           parameters: convertParamsToSchema(value.operation.params),
@@ -596,7 +601,7 @@ export class OpenClawSnapshotProjector implements AotuiSnapshotProjector {
         const toolName = key.slice("tool:".length);
         const appId = value.appId || "system";
         const operationName = value.toolName || toolName;
-        bindings.push({
+        addBinding({
           toolName,
           description: value.description || toolName,
           parameters: convertParamsToSchema(value.params),
@@ -620,11 +625,7 @@ export class OpenClawSnapshotProjector implements AotuiSnapshotProjector {
       }
 
       const toolName = toDesktopToolName(fn.name);
-      if (bindings.some((binding) => binding.toolName === toolName)) {
-        continue;
-      }
-
-      bindings.push({
+      addBinding({
         toolName,
         description: fn.description || toolName,
         parameters: fn.parameters || {
@@ -640,6 +641,6 @@ export class OpenClawSnapshotProjector implements AotuiSnapshotProjector {
       });
     }
 
-    return bindings;
+    return [...bindingsByName.values()];
   }
 }

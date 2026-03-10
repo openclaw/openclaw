@@ -194,13 +194,6 @@ export class OpenClawAgentAdapter implements AotuiAgentAdapter {
   }
 
   private async resolveBinding(toolName: string): Promise<AotuiToolBinding | undefined> {
-    const cached = this.bindingCache.get(toolName);
-    if (cached) {
-      return cached;
-    }
-
-    const projection = await this.buildTurnProjection();
-    this.applyProjection(projection);
     return this.bindingCache.get(toolName);
   }
 

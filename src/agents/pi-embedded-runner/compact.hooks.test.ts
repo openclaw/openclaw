@@ -496,4 +496,33 @@ describe("compactEmbeddedPiSessionDirect hooks", () => {
       reason: "context_compaction",
     });
   });
+
+  it("does not reinitialize the AOTUI desktop when queued context-engine compaction is a no-op", async () => {
+    resolveContextEngineMock.mockResolvedValueOnce({
+      compact: vi.fn(async () => ({
+        ok: true,
+        compacted: false,
+        reason: "already compacted",
+        result: {
+          summary: "",
+          firstKeptEntryId: "",
+          tokensBefore: 120,
+          tokensAfter: 120,
+          details: { ok: true },
+        },
+      })),
+      dispose: vi.fn(async () => {}),
+    });
+
+    const result = await compactEmbeddedPiSession({
+      sessionId: "session-1",
+      sessionKey: "agent:main:session-1",
+      sessionFile: "/tmp/session.jsonl",
+      workspaceDir: "/tmp/workspace",
+    });
+
+    expect(result.ok).toBe(true);
+    expect(result.compacted).toBe(false);
+    expect(reinitializeAotuiDesktopForCompactionMock).not.toHaveBeenCalled();
+  });
 });

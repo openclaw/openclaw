@@ -54,8 +54,12 @@ export class InMemorySessionDesktopManager implements SessionDesktopManager {
 
     const pending = this.pendingCreates.get(sessionKey);
     if (pending) {
-      const record = await pending;
-      return await this.rebindExistingDesktop(record, input);
+      await pending;
+      const current = this.records.get(sessionKey);
+      if (current) {
+        return await this.rebindExistingDesktop(current, input);
+      }
+      return await this.ensureDesktop(input);
     }
 
     const createPromise = this.createAndInitializeDesktopRecord(sessionKey, input);
@@ -130,6 +134,7 @@ export class InMemorySessionDesktopManager implements SessionDesktopManager {
 
   async destroyDesktop(sessionKey: string, _reason?: string): Promise<void> {
     const normalized = normalizeSessionKey(sessionKey);
+    await this.waitForPendingCreate(normalized);
     const record = this.records.get(normalized);
     if (!record) {
       return;
@@ -141,7 +146,7 @@ export class InMemorySessionDesktopManager implements SessionDesktopManager {
   }
 
   async destroyAll(reason?: string): Promise<void> {
-    const sessionKeys = [...this.records.keys()];
+    const sessionKeys = [...new Set([...this.records.keys(), ...this.pendingCreates.keys()])];
     const errors: unknown[] = [];
     for (const sessionKey of sessionKeys) {
       try {
@@ -175,6 +180,18 @@ export class InMemorySessionDesktopManager implements SessionDesktopManager {
     }
     existing.status = "active";
     return existing;
+  }
+
+  private async waitForPendingCreate(sessionKey: string): Promise<void> {
+    const pending = this.pendingCreates.get(sessionKey);
+    if (!pending) {
+      return;
+    }
+    try {
+      await pending;
+    } catch {
+      // Failed creates are rolled back by createAndInitializeDesktopRecord.
+    }
   }
 
   private async createAndInitializeDesktopRecord(

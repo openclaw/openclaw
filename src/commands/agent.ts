@@ -641,17 +641,6 @@ async function prepareAgentCommandExecution(
   });
   const workspaceDir = workspace.dir;
   const runId = opts.runId?.trim() || sessionId;
-  try {
-    await syncAotuiDesktopForRun({
-      sessionKey,
-      sessionId,
-      agentId: sessionAgentId,
-      workspaceDir,
-      isNewSession,
-    });
-  } catch (err) {
-    log.warn(`AOTUI desktop sync failed for ${sessionKey ?? sessionId}: ${String(err)}`);
-  }
   const acpManager = getAcpSessionManager();
   const acpResolution = sessionKey
     ? acpManager.resolveSession({
@@ -872,6 +861,18 @@ async function agentCommandInternal(
         result,
         payloads,
       });
+    }
+
+    try {
+      await syncAotuiDesktopForRun({
+        sessionKey,
+        sessionId,
+        agentId: sessionAgentId,
+        workspaceDir,
+        isNewSession,
+      });
+    } catch (err) {
+      log.warn(`AOTUI desktop sync failed for ${sessionKey ?? sessionId}: ${String(err)}`);
     }
 
     let resolvedThinkLevel = thinkOnce ?? thinkOverride ?? persistedThinking;

@@ -11,7 +11,7 @@ import { runEmbeddedPiAgent } from "../agents/pi-embedded.js";
 import * as commandSecretGatewayModule from "../cli/command-secret-gateway.js";
 import type { OpenClawConfig } from "../config/config.js";
 import * as configModule from "../config/config.js";
-import * as sessionsModule from "../config/sessions.js";
+import * as sessionPathsModule from "../config/sessions/paths.js";
 import { emitAgentEvent, onAgentEvent } from "../infra/agent-events.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import type { RuntimeEnv } from "../runtime.js";
@@ -463,9 +463,14 @@ describe("agentCommand", () => {
     await withTempHome(async (home) => {
       const customStoreDir = path.join(home, "custom-state");
       const store = path.join(customStoreDir, "sessions.json");
-      writeSessionStoreSeed(store, {});
+      writeSessionStoreSeed(store, {
+        "agent:main:custom": {
+          sessionId: "session-custom-123",
+          updatedAt: Date.now(),
+        },
+      });
       mockConfig(home, store);
-      const resolveSessionFilePathSpy = vi.spyOn(sessionsModule, "resolveSessionFilePath");
+      const resolveSessionFilePathSpy = vi.spyOn(sessionPathsModule, "resolveSessionFilePath");
 
       await agentCommand({ message: "resume me", sessionId: "session-custom-123" }, runtime);
 
