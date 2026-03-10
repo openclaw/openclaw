@@ -1476,7 +1476,6 @@ async function runKimiSearch(params: {
           tool_calls: toolCalls,
         });
 
-        const toolContent = buildKimiToolResultContent(data);
         let pushedToolResult = false;
         for (const toolCall of toolCalls) {
           const toolCallId = toolCall.id?.trim();
@@ -1484,10 +1483,16 @@ async function runKimiSearch(params: {
             continue;
           }
           pushedToolResult = true;
+          // Moonshot's $web_search is a builtin tool — the search is executed
+          // server-side and results are referenced by the returned arguments.
+          // Per the Moonshot API docs the correct flow is to echo the tool-call
+          // arguments back as the tool-result content so the model can
+          // incorporate the (internally resolved) search results.
           messages.push({
             role: "tool",
             tool_call_id: toolCallId,
-            content: toolContent,
+            name: toolCall.function?.name,
+            content: toolCall.function?.arguments || "{}",
           });
         }
 
