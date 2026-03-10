@@ -138,6 +138,15 @@ export function buildInlineProviderModels(
   });
 }
 
+function shouldUpgradeExactRegistryRowWithForwardCompat(
+  provider: string,
+  modelId: string,
+): boolean {
+  return (
+    normalizeProviderId(provider) === "openai-codex" && modelId.trim().toLowerCase() === "gpt-5.4"
+  );
+}
+
 export function resolveModelWithRegistry(params: {
   provider: string;
   modelId: string;
@@ -151,7 +160,8 @@ export function resolveModelWithRegistry(params: {
 
   if (model) {
     const effectiveModel =
-      forwardCompat === undefined
+      forwardCompat === undefined ||
+      !shouldUpgradeExactRegistryRowWithForwardCompat(provider, modelId)
         ? model
         : ({
             ...model,

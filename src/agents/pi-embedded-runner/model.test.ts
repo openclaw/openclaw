@@ -519,6 +519,36 @@ describe("resolveModel", () => {
     });
   });
 
+  it("does not downgrade exact openai-codex gpt-5.3-codex registry metadata", () => {
+    vi.mocked(discoverModels).mockReturnValue({
+      find: vi.fn((provider: string, modelId: string) => {
+        if (provider !== "openai-codex") {
+          return null;
+        }
+        if (modelId === "gpt-5.3-codex") {
+          return {
+            ...OPENAI_CODEX_TEMPLATE_MODEL,
+            id: "gpt-5.3-codex",
+            name: "GPT-5.3 Codex",
+            contextWindow: 272000,
+          };
+        }
+        return null;
+      }),
+    } as unknown as ReturnType<typeof discoverModels>);
+
+    const result = resolveModel("openai-codex", "gpt-5.3-codex", "/tmp/agent");
+
+    expect(result.error).toBeUndefined();
+    expect(result.model).toMatchObject({
+      provider: "openai-codex",
+      id: "gpt-5.3-codex",
+      name: "GPT-5.3 Codex",
+      contextWindow: 272000,
+      maxTokens: 128000,
+    });
+  });
+
   it("applies provider overrides to openai gpt-5.4 forward-compat models", () => {
     mockDiscoveredModel({
       provider: "openai",
