@@ -840,7 +840,7 @@ export function isLikelySSEParseError(
   const isJsonContext =
     lower.includes("json") ||
     lower.includes("unexpected token") ||
-    lower.includes("unexpected end of") ||
+    lower.includes("unexpected end of json") ||
     lower.includes("unterminated string");
 
   if (isSyntaxError && isJsonContext && inStreamingContext) {

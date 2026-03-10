@@ -151,6 +151,7 @@ const BASE_RUN_RETRY_ITERATIONS = 24;
 const RUN_RETRY_ITERATIONS_PER_PROFILE = 8;
 const MIN_RUN_RETRY_ITERATIONS = 32;
 const MAX_RUN_RETRY_ITERATIONS = 160;
+const MAX_SSE_PARSE_RETRIES = 3;
 
 function resolveMaxRunRetryIterations(profileCandidateCount: number): number {
   const scaled =
@@ -829,7 +830,6 @@ export async function runEmbeddedPiAgent(
       let autoCompactionCount = 0;
       let runLoopIterations = 0;
       let overloadFailoverAttempts = 0;
-      const MAX_SSE_PARSE_RETRIES = 3;
       let sseParseRetries = 0;
       const maybeMarkAuthProfileFailure = async (failure: {
         profileId?: string;
@@ -1051,6 +1051,12 @@ export async function runEmbeddedPiAgent(
             lastAssistant?.stopReason === "error"
               ? lastAssistant.errorMessage?.trim() || formattedAssistantErrorText
               : undefined;
+
+          // Reset SSE retry budget on successful turns so scattered transient
+          // errors across a long session don't permanently exhaust the budget.
+          if (!promptError && !assistantErrorText) {
+            sseParseRetries = 0;
+          }
 
           const contextOverflowError = !aborted
             ? (() => {
