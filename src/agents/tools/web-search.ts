@@ -19,7 +19,6 @@ import {
   readResponseText,
   resolveCacheTtlMs,
   resolveTimeoutSeconds,
-  withTimeout,
   writeCache,
 } from "./web-shared.js";
 
@@ -181,7 +180,8 @@ function createWebSearchSchema(params: {
     ),
     freshness: Type.Optional(
       Type.String({
-        description: "Filter by time: 'day' (24h), 'week', 'month', or 'year'.",
+        description:
+          "Filter results by discovery time (Brave and Exa). Values: 'pd' (past 24h), 'pw' (past week), 'pm' (past month), 'py' (past year), or date range 'YYYY-MM-DDtoYYYY-MM-DD'.",
       }),
     ),
     date_after: Type.Optional(
@@ -1217,8 +1217,8 @@ function normalizeFreshness(
     return provider === "perplexity" ? lower : RECENCY_TO_FRESHNESS[lower];
   }
 
-  // Brave date range support
-  if (provider === "brave") {
+  // Brave and Exa date range support
+  if (provider === "brave" || provider === "exa") {
     const match = trimmed.match(BRAVE_FRESHNESS_RANGE);
     if (match) {
       const [, start, end] = match;
@@ -1710,38 +1710,44 @@ async function runExaSearch(params: {
     }
   }
 
-  const res = await fetch(EXA_SEARCH_ENDPOINT, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "x-api-key": params.apiKey,
+  return withTrustedWebSearchEndpoint(
+    {
+      url: EXA_SEARCH_ENDPOINT,
+      timeoutSeconds: params.timeoutSeconds,
+      init: {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "x-api-key": params.apiKey,
+        },
+        body: JSON.stringify(body),
+      },
     },
-    body: JSON.stringify(body),
-    signal: withTimeout(undefined, params.timeoutSeconds * 1000),
-  });
+    async (res) => {
+      if (!res.ok) {
+        const detailResult = await readResponseText(res, { maxBytes: 64_000 });
+        const detail = detailResult.text || res.statusText;
+        throw new Error(`Exa Search API error (${res.status}): ${detail}`);
+      }
 
-  if (!res.ok) {
-    const detailResult = await readResponseText(res, { maxBytes: 64_000 });
-    const detail = detailResult.text || res.statusText;
-    throw new Error(`Exa Search API error (${res.status}): ${detail}`);
-  }
+      const data = (await res.json()) as ExaSearchResponse;
+      const rawResults = Array.isArray(data.results) ? data.results : [];
+      const mapped: Record<string, unknown>[] = rawResults.map((entry) => {
+        const url = entry.url ?? "";
+        const title = entry.title ?? "";
+        const snippet = entry.highlights?.[0] ?? entry.text ?? "";
+        return {
+          title: title ? wrapWebContent(title, "web_search") : "",
+          url,
+          description: snippet ? wrapWebContent(snippet, "web_search") : "",
+          published: entry.publishedDate || undefined,
+          siteName: resolveSiteName(url) || undefined,
+        };
+      });
 
-  const data = (await res.json()) as ExaSearchResponse;
-  const rawResults = Array.isArray(data.results) ? data.results : [];
-  const mapped: Record<string, unknown>[] = rawResults.map((entry) => {
-    const url = entry.url ?? "";
-    const title = entry.title ?? "";
-    const snippet = entry.highlights?.[0] ?? entry.text ?? "";
-    return {
-      title: title ? wrapWebContent(title, "web_search") : "",
-      url,
-      description: snippet ? wrapWebContent(snippet, "web_search") : "",
-      published: entry.publishedDate || undefined,
-      siteName: resolveSiteName(url) || undefined,
-    };
-  });
-
-  return { results: mapped, tookMs: Date.now() - params.start };
+      return { results: mapped, tookMs: Date.now() - params.start };
+    },
+  );
 }
 
 async function runWebSearch(params: {
