@@ -5,6 +5,7 @@ export const de: TranslationMap = {
     version: "Version",
     health: "Status",
     ok: "OK",
+    loading: "Wird geladen…",
     offline: "Offline",
     connect: "Verbinden",
     refresh: "Aktualisieren",
@@ -107,6 +108,48 @@ export const de: TranslationMap = {
     insecure: {
       hint: "Diese Seite ist HTTP, daher blockiert der Browser die Geräteidentifikation. Verwenden Sie HTTPS (Tailscale Serve) oder öffnen Sie {url} auf dem Gateway-Host.",
       stayHttp: "Wenn Sie bei HTTP bleiben müssen, setzen Sie {config} (nur Token).",
+    },
+  },
+  agentsPage: {
+    sidebar: {
+      configuredCount: "{count} konfiguriert.",
+      noAgents: "Keine Agenten gefunden.",
+    },
+    empty: {
+      title: "Wählen Sie einen Agenten",
+      subtitle:
+        "Wählen Sie einen Agenten, um seinen Arbeitsbereich und seine Tools zu inspizieren.",
+    },
+    tabs: {
+      overview: "Übersicht",
+      files: "Dateien",
+      tools: "Tools",
+      skills: "Fähigkeiten",
+      channels: "Kanäle",
+      cron: "Cron-Aufgaben",
+    },
+    overview: {
+      title: "Übersicht",
+      subtitle: "Arbeitsbereichspfade und Identitätsmetadaten.",
+      workspace: "Arbeitsbereich",
+      primaryModel: "Primäres Modell",
+      identityName: "Identitätsname",
+      default: "Standard",
+      identityEmoji: "Identitäts-Emoji",
+      skillsFilter: "Skill-Filter",
+      skillsFilterAll: "alle Skills",
+      skillsFilterSelected: "{count} ausgewählt",
+      identityUnavailable: "Nicht verfügbar",
+    },
+    models: {
+      title: "Modellauswahl",
+      primary: "Primäres Modell",
+      primaryDefault: "Primäres Modell (Standard)",
+      inheritDefault: "Standard übernehmen",
+      inheritDefaultWithValue: "Standard übernehmen ({value})",
+      fallbacks: "Fallbacks (kommagetrennt)",
+      fallbacksPlaceholder: "provider/model, provider/model",
+      reloadConfig: "Konfiguration neu laden",
     },
   },
   chat: {
