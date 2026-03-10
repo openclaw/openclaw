@@ -170,14 +170,18 @@ describe("ssrf pinning", () => {
   });
 
   it("rejects DNS responses where all addresses are blocked (pure-private response)", async () => {
+    // Use a public-looking hostname so Phase 1 passes and the mock lookup is actually
+    // called. All returned addresses are private, exercising filterAndAssertAllowedResolvedAddressesOrThrow
+    // (Phase 2) rather than the pre-DNS hostname block.
     const lookup = vi.fn(async () => [
       { address: "10.0.0.1", family: 4 },
       { address: "::1", family: 6 },
     ]) as unknown as LookupFn;
 
     await expect(
-      resolvePinnedHostnameWithPolicy("evil.internal", { lookupFn: lookup }),
+      resolvePinnedHostnameWithPolicy("example.com", { lookupFn: lookup }),
     ).rejects.toThrow(SsrFBlockedError);
+    expect(lookup).toHaveBeenCalledTimes(1);
   });
 
   it("strips blocked IPv6 addresses from the pinned pool when valid IPv4 is present", async () => {
