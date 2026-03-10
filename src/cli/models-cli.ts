@@ -6,6 +6,7 @@ import {
   modelsAliasesRemoveCommand,
   modelsAuthAddCommand,
   modelsAuthLoginCommand,
+  modelsAuthOllamaCookieCommand,
   modelsAuthOrderClearCommand,
   modelsAuthOrderGetCommand,
   modelsAuthOrderSetCommand,
@@ -375,6 +376,16 @@ export function registerModelsCli(program: Command) {
           },
           defaultRuntime,
         );
+      });
+    });
+
+  auth
+    .command("ollama-cookie")
+    .description("Set up Ollama usage cookie for fetching usage limits from ollama.com/settings")
+    .option("--clear", "Clear the saved cookie", false)
+    .action(async (opts) => {
+      await runModelsCommand(async () => {
+        await modelsAuthOllamaCookieCommand({ clear: Boolean(opts.clear) }, defaultRuntime);
       });
     });
 
