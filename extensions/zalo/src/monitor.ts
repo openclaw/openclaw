@@ -428,9 +428,10 @@ async function processMessageWithPipeline(params: {
     logVerbose(core, runtime, "zalo: group message stored for context (neverReply: true)");
     const historyLimit = config.messages?.groupChat?.historyLimit ?? DEFAULT_GROUP_HISTORY_LIMIT;
     const historyBody = text?.trim() || (mediaPath ? "<media:image>" : "");
+    const historyKey = `${account.accountId}:${chatId}`;
     recordPendingHistoryEntryIfEnabled({
       historyMap: groupHistories,
-      historyKey: chatId,
+      historyKey,
       limit: historyLimit,
       entry: historyBody
         ? {
@@ -534,10 +535,11 @@ async function processMessageWithPipeline(params: {
   });
 
   const historyLimit = config.messages?.groupChat?.historyLimit ?? DEFAULT_GROUP_HISTORY_LIMIT;
+  const combinedHistoryKey = `${account.accountId}:${chatId}`;
   const combinedBody = isGroup
     ? buildPendingHistoryContextFromMap({
         historyMap: groupHistories,
-        historyKey: chatId,
+        historyKey: combinedHistoryKey,
         limit: historyLimit,
         currentMessage: body,
         formatEntry: (entry) =>

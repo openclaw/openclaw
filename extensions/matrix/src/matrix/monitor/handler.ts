@@ -382,9 +382,10 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
           messagesGroupChat?.groupChat?.historyLimit ?? DEFAULT_GROUP_HISTORY_LIMIT;
         const historyBody =
           locationPayload?.text ?? (typeof content.body === "string" ? content.body.trim() : "");
+        const historyKey = `${accountId}:${roomId}`;
         recordPendingHistoryEntryIfEnabled({
           historyMap: roomHistories,
-          historyKey: roomId,
+          historyKey,
           limit: historyLimit,
           entry: historyBody
             ? {
@@ -618,10 +619,11 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
             | { groupChat?: { historyLimit?: number } }
             | undefined
         )?.groupChat?.historyLimit ?? DEFAULT_GROUP_HISTORY_LIMIT;
+      const combinedHistoryKey = `${accountId}:${roomId}`;
       const combinedBody = isRoom
         ? buildPendingHistoryContextFromMap({
             historyMap: roomHistories,
-            historyKey: roomId,
+            historyKey: combinedHistoryKey,
             limit: historyLimit,
             currentMessage: body,
             formatEntry: (entry) =>

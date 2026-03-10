@@ -195,6 +195,7 @@ async function processMessageWithPipeline(params: {
     senderName,
     senderEmail,
     rawBody,
+    eventTime: event.eventTime,
     statusSink,
     logVerbose: (message) => logVerbose(core, runtime, message),
   });
@@ -237,10 +238,11 @@ async function processMessageWithPipeline(params: {
   });
 
   const historyLimit = config.messages?.groupChat?.historyLimit ?? DEFAULT_GROUP_HISTORY_LIMIT;
+  const historyKey = `${account.accountId}:${spaceId}`;
   const combinedBody = isGroup
     ? buildPendingHistoryContextFromMap({
         historyMap: spaceHistories,
-        historyKey: spaceId,
+        historyKey,
         limit: historyLimit,
         currentMessage: body,
         formatEntry: (entry) =>

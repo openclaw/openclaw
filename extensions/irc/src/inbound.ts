@@ -1,12 +1,15 @@
 import {
   GROUP_POLICY_BLOCKED_LABEL,
+  buildPendingHistoryContextFromMap,
   createScopedPairingAccess,
+  DEFAULT_GROUP_HISTORY_LIMIT,
   dispatchInboundReplyWithBase,
   formatTextWithAttachmentLinks,
   issuePairingChallenge,
   logInboundDrop,
   isDangerousNameMatchingEnabled,
   readStoreAllowFromForDmPolicy,
+  recordPendingHistoryEntryIfEnabled,
   resolveControlCommandGate,
   resolveNeverReply,
   resolveOutboundMediaUrls,
@@ -14,6 +17,7 @@ import {
   resolveDefaultGroupPolicy,
   resolveEffectiveAllowFromLists,
   warnMissingProviderGroupPolicyFallbackOnce,
+  type HistoryEntry,
   type OutboundReplyPayload,
   type OpenClawConfig,
   type RuntimeEnv,
@@ -32,6 +36,7 @@ import { sendMessageIrc } from "./send.js";
 import type { CoreConfig, IrcInboundMessage } from "./types.js";
 
 const CHANNEL_ID = "irc" as const;
+const channelHistories = new Map<string, HistoryEntry[]>();
 
 const escapeIrcRegexLiteral = (value: string) => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
@@ -154,7 +159,23 @@ export async function handleIrcInbound(params: {
         accountId: account.accountId,
       })
     ) {
-      runtime.log?.("irc: drop channel message (neverReply)");
+      runtime.log?.("irc: group message stored for context (neverReply: true)");
+      const historyKey = `${account.accountId}:${message.target}`;
+      const historyLimit =
+        (config as OpenClawConfig).messages?.groupChat?.historyLimit ?? DEFAULT_GROUP_HISTORY_LIMIT;
+      recordPendingHistoryEntryIfEnabled({
+        historyMap: channelHistories,
+        historyKey,
+        limit: historyLimit,
+        entry: rawBody
+          ? {
+              sender: senderDisplay,
+              body: rawBody,
+              timestamp: message.timestamp,
+              messageId: message.messageId ?? undefined,
+            }
+          : null,
+      });
       return;
     }
   }
@@ -316,8 +337,27 @@ export async function handleIrcInbound(params: {
 
   const groupSystemPrompt = groupMatch.groupConfig?.systemPrompt?.trim() || undefined;
 
+  const historyLimit =
+    (config as OpenClawConfig).messages?.groupChat?.historyLimit ?? DEFAULT_GROUP_HISTORY_LIMIT;
+  const historyKey = `${account.accountId}:${message.target}`;
+  const combinedBody = message.isGroup
+    ? buildPendingHistoryContextFromMap({
+        historyMap: channelHistories,
+        historyKey,
+        limit: historyLimit,
+        currentMessage: body,
+        formatEntry: (entry) =>
+          core.channel.reply.formatAgentEnvelope({
+            channel: "IRC",
+            from: fromLabel,
+            timestamp: entry.timestamp,
+            body: entry.body,
+          }),
+      })
+    : body;
+
   const ctxPayload = core.channel.reply.finalizeInboundContext({
-    Body: body,
+    Body: combinedBody,
     RawBody: rawBody,
     CommandBody: rawBody,
     From: message.isGroup ? `irc:channel:${message.target}` : `irc:${senderDisplay}`,

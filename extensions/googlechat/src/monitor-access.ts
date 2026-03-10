@@ -144,6 +144,7 @@ export async function applyGoogleChatInboundAccessPolicy(params: {
   senderName: string;
   senderEmail?: string;
   rawBody: string;
+  eventTime?: string;
   statusSink?: (patch: { lastInboundAt?: number; lastOutboundAt?: number }) => void;
   logVerbose: (message: string) => void;
 }): Promise<
@@ -238,15 +239,16 @@ export async function applyGoogleChatInboundAccessPolicy(params: {
   ) {
     logVerbose("googlechat: group message stored for context (neverReply: true)");
     const historyLimit = config.messages?.groupChat?.historyLimit ?? DEFAULT_GROUP_HISTORY_LIMIT;
+    const historyKey = `${account.accountId}:${spaceId}`;
     recordPendingHistoryEntryIfEnabled({
       historyMap: spaceHistories,
-      historyKey: spaceId,
+      historyKey,
       limit: historyLimit,
       entry: rawBody
         ? {
             sender: senderName || senderId,
             body: rawBody,
-            timestamp: Date.now(),
+            timestamp: params.eventTime ? Date.parse(params.eventTime) : undefined,
             messageId: message.name ?? undefined,
           }
         : null,
