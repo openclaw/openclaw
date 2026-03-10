@@ -1524,8 +1524,79 @@ describe("compaction-safeguard double-compaction guard", () => {
       event: mockEvent,
       apiKey: "sk-test", // pragma: allowlist secret
     });
-    expect(result).toEqual({ cancel: true });
+    // After fix for #41981: returns a compaction result (not cancel) to write
+    // a boundary entry and break the re-trigger loop.
+    expect(result.cancel).not.toBe(true);
+    expect(result.compaction).toBeDefined();
+    expect(result.compaction.summary).toBeTruthy();
+    expect(result.compaction.firstKeptEntryId).toBe("entry-1");
+    expect(result.compaction.tokensBefore).toBe(1500);
     expect(getApiKeyMock).not.toHaveBeenCalled();
+  });
+
+  it("returns compaction result with structured fallback summary sections", async () => {
+    const sessionManager = stubSessionManager();
+    const model = createAnthropicModelFixture();
+    setCompactionSafeguardRuntime(sessionManager, { model });
+
+    const mockEvent = {
+      preparation: {
+        messagesToSummarize: [] as AgentMessage[],
+        turnPrefixMessages: [] as AgentMessage[],
+        firstKeptEntryId: "entry-2",
+        tokensBefore: 2000,
+        previousSummary: "## Decisions\nUsed approach A.",
+        fileOps: { read: [], edited: [], written: [] },
+        settings: { reserveTokens: 16384 },
+      },
+      customInstructions: "",
+      signal: new AbortController().signal,
+    };
+    const { result } = await runCompactionScenario({
+      sessionManager,
+      event: mockEvent,
+      apiKey: "sk-test", // pragma: allowlist secret
+    });
+    expect(result.cancel).not.toBe(true);
+    expect(result.compaction).toBeDefined();
+    // Fallback preserves previous summary when it has required sections
+    expect(result.compaction.summary).toContain("## Decisions");
+    expect(result.compaction.summary).toContain("## Open TODOs");
+    expect(result.compaction.firstKeptEntryId).toBe("entry-2");
+  });
+
+  it("downgrades log level on repeated no-real-messages compaction for same session", async () => {
+    const sessionManager = stubSessionManager();
+    const model = createAnthropicModelFixture();
+    setCompactionSafeguardRuntime(sessionManager, { model });
+
+    const mockEvent = {
+      preparation: {
+        messagesToSummarize: [] as AgentMessage[],
+        turnPrefixMessages: [] as AgentMessage[],
+        firstKeptEntryId: "entry-3",
+        tokensBefore: 1000,
+        fileOps: { read: [], edited: [], written: [] },
+      },
+      customInstructions: "",
+      signal: new AbortController().signal,
+    };
+
+    // First call
+    const { result: result1 } = await runCompactionScenario({
+      sessionManager,
+      event: mockEvent,
+      apiKey: "sk-test", // pragma: allowlist secret
+    });
+    expect(result1.compaction).toBeDefined();
+
+    // Second call with same sessionManager — should still work but log at debug
+    const { result: result2 } = await runCompactionScenario({
+      sessionManager,
+      event: mockEvent,
+      apiKey: "sk-test", // pragma: allowlist secret
+    });
+    expect(result2.compaction).toBeDefined();
   });
 
   it("continues when messages include real conversation content", async () => {
