@@ -34,8 +34,12 @@ function quoteCommandPart(value: string): string {
   if (/^[A-Za-z0-9_./:@%+=,-]+$/.test(value)) {
     return value;
   }
-  return `"${value.replace(/["\\\\]/g, "\\\\$&")}"`;
+  return `"${value.replace(/["\\]/g, "\\$&")}"`;
 }
+
+export const __testing = {
+  quoteCommandPart,
+};
 
 function toCommandLine(parts: string[]): string {
   return parts.map(quoteCommandPart).join(" ");

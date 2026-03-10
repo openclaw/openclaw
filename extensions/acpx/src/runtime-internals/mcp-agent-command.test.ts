@@ -8,7 +8,7 @@ vi.mock("./process.js", () => ({
   spawnAndCollect: spawnAndCollectMock,
 }));
 
-import { resolveAcpxAgentCommand } from "./mcp-agent-command.js";
+import { __testing, resolveAcpxAgentCommand } from "./mcp-agent-command.js";
 
 describe("resolveAcpxAgentCommand", () => {
   it("threads stripProviderAuthEnvVars through the config show probe", async () => {
@@ -42,5 +42,18 @@ describe("resolveAcpxAgentCommand", () => {
       },
       undefined,
     );
+  });
+});
+
+describe("buildMcpProxyAgentCommand", () => {
+  it("escapes Windows-style proxy paths without double-escaping backslashes", () => {
+    const quoted = __testing.quoteCommandPart(
+      "C:\\repo\\extensions\\acpx\\src\\runtime-internals\\mcp-proxy.mjs",
+    );
+
+    expect(quoted).toBe(
+      '"C:\\\\repo\\\\extensions\\\\acpx\\\\src\\\\runtime-internals\\\\mcp-proxy.mjs"',
+    );
+    expect(quoted).not.toContain("\\\\\\");
   });
 });
