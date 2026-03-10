@@ -1,10 +1,81 @@
-﻿import { readFileSync } from "node:fs";
+﻿import { readFileSync, existsSync } from "node:fs";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
+
+// ── Contacts-map cache for canonical sender_name resolution ──
+const CONTACTS_MAP_TTL_MS = 5 * 60 * 1000; // 5 min cache
+let contactsMapCache: { byPhone: Map<string, string>; loadedAt: number } | null = null;
+
+function normalizeBrPhone(digits: string): string {
+  // Strip non-digits, normalize 13-digit BR mobile to 12 (remove 9th digit)
+  const d = digits.replace(/\D/g, "");
+  if (d.length === 13 && d.startsWith("55")) {
+    const ddd = d.slice(2, 4);
+    const rest = d.slice(5); // skip the extra '9'
+    return `55${ddd}${rest}`;
+  }
+  return d;
+}
+
+function loadContactsMapFromWorkspace(): Map<string, string> {
+  const byPhone = new Map<string, string>();
+  // Try known workspace paths
+  const workspaceDirs = [
+    "C:/Users/lucas/clawd-v2",
+    process.env.OPENCLAW_WORKSPACE || "",
+  ].filter(Boolean);
+
+  for (const ws of workspaceDirs) {
+    // 1. Try contacts-briefing.json v2 (flat format: phone → {name, slug, ...})
+    const briefingPath = join(ws, "memory", "system", "contacts-briefing.json");
+    try {
+      if (existsSync(briefingPath)) {
+        const raw = readFileSync(briefingPath, "utf-8");
+        const parsed = JSON.parse(raw) as Record<string, unknown>;
+        for (const [key, val] of Object.entries(parsed)) {
+          if (!key.startsWith("+")) continue;
+          const entry = val as Record<string, unknown>;
+          if (typeof entry?.name === "string") {
+            const digits = normalizeBrPhone(key);
+            if (digits) byPhone.set(digits, entry.name);
+          }
+        }
+        if (byPhone.size > 0) return byPhone;
+      }
+    } catch { /* ignore */ }
+
+    // 2. Fallback: contacts-map.json
+    const mapPath = join(ws, "memory", "system", "contacts-map.json");
+    try {
+      if (existsSync(mapPath)) {
+        const raw = readFileSync(mapPath, "utf-8");
+        const parsed = JSON.parse(raw) as Record<string, unknown>;
+        for (const [key, val] of Object.entries(parsed)) {
+          const entry = val as Record<string, unknown>;
+          if (typeof entry?.name === "string") {
+            const digits = normalizeBrPhone(key);
+            if (digits) byPhone.set(digits, entry.name);
+          }
+        }
+        if (byPhone.size > 0) return byPhone;
+      }
+    } catch { /* ignore */ }
+  }
+  return byPhone;
+}
+
+function getCanonicalSenderName(phoneOrJid: string): string | null {
+  const now = Date.now();
+  if (!contactsMapCache || now - contactsMapCache.loadedAt > CONTACTS_MAP_TTL_MS) {
+    contactsMapCache = { byPhone: loadContactsMapFromWorkspace(), loadedAt: now };
+  }
+  const digits = normalizeBrPhone(phoneOrJid.split("@")[0] ?? "");
+  return contactsMapCache.byPhone.get(digits) ?? null;
+}
 
 type PluginConfig = {
   supabaseUrl: string;
@@ -283,12 +354,15 @@ export default function register(api: OpenClawPluginApi) {
 
   // -- Hook: inbound messages --
   api.on("message_received", async (event, ctx) => {
+    // Resolve canonical name: contacts-map first, then WhatsApp pushName fallback
+    const canonicalName = getCanonicalSenderName(event.from);
+    const whatsappName =
+      (event.metadata?.pushName as string | undefined) ??
+      (event.metadata?.senderName as string | undefined) ??
+      null;
     const row = {
       sender: event.from,
-      sender_name:
-        (event.metadata?.pushName as string | undefined) ??
-        (event.metadata?.senderName as string | undefined) ??
-        null,
+      sender_name: canonicalName ?? whatsappName,
       chat_id: ctx.conversationId ?? ctx.channelId,
       direction: "inbound",
       body: event.content,
@@ -304,7 +378,7 @@ export default function register(api: OpenClawPluginApi) {
       is_read: false,
       replied: false,
     };
-    log(`INSERT inbound from=${event.from} chat=${row.chat_id} mid=${row.message_id} sender_name=${row.sender_name ?? "(null)"} pushName=${event.metadata?.pushName ?? "(null)"} senderName=${event.metadata?.senderName ?? "(null)"}`);
+    log(`INSERT inbound from=${event.from} chat=${row.chat_id} mid=${row.message_id} sender_name=${row.sender_name ?? "(null)"} canonical=${canonicalName ?? "(none)"} pushName=${event.metadata?.pushName ?? "(null)"}`);
     await supabaseInsert(config, row).catch((err: unknown) => {
       logError("Failed to insert received message:", err);
     });

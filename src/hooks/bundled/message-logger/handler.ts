@@ -1,7 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
 import { loadConfig } from "../../../config/config.js";
-import { getContactManager } from "../../../contacts/contact-manager.js";
 import { createSubsystemLogger } from "../../../logging/subsystem.js";
 import type {
   PluginHookMessageReceivedEvent,
@@ -9,6 +8,7 @@ import type {
   PluginHookMessageTranscribedEvent,
   PluginHookMessageContext,
 } from "../../../plugins/types.js";
+import { getContactManager } from "../../../contacts/contact-manager.js";
 import { normalizeBrazilianMobile } from "../../../utils.js";
 import { resolveHookConfig } from "../../config.js";
 
@@ -46,69 +46,118 @@ export function getWorkspaceDir(cfg: Record<string, unknown>): string {
 
 const CONTACTS_MAP_TTL_MS = 5 * 60 * 1000;
 
+type ContactMapEntry = { name: string; slug: string };
+
 let contactsMapCache: {
-  byPhone: Map<string, string>;
+  byPhone: Map<string, ContactMapEntry>;
   loadedAt: number;
   workspaceDir: string;
 } | null = null;
 
-function loadContactsMap(workspaceDir: string): Map<string, string> {
-  const byPhone = new Map<string, string>();
+function loadContactsMap(workspaceDir: string): Map<string, ContactMapEntry> {
+  const byPhone = new Map<string, ContactMapEntry>();
 
-  // 1. Try contacts-briefing.json first (new format)
-  const briefingPath = path.join(workspaceDir, "memory", "contacts-briefing.json");
+  // 1. Try contacts-map.json (canonical source with pre-computed slugs)
+  //    Format: { "556992747532": { "name": "Paola...", "slug": "paola-assami-financeiro" } }
+  //    or legacy: { "+556992747532": "Paola..." }
+  const mapPath = path.join(workspaceDir, "memory", "system", "contacts-map.json");
   try {
-    const raw = fs.readFileSync(briefingPath, "utf-8");
-    const parsed = JSON.parse(raw) as {
-      contacts?: Record<string, Array<{ name?: string; whatsapp?: string }>>;
-    };
-    if (parsed.contacts && typeof parsed.contacts === "object") {
-      for (const category of Object.values(parsed.contacts)) {
-        if (!Array.isArray(category)) {
-          continue;
-        }
-        for (const entry of category) {
-          if (typeof entry !== "object" || entry === null) {
-            continue;
-          }
-          if (typeof entry.name !== "string" || typeof entry.whatsapp !== "string") {
-            continue;
-          }
-          const digits = normalizeBrazilianMobile(entry.whatsapp.replace(/\D/g, ""));
-          if (digits) {
-            byPhone.set(digits, entry.name);
+    const raw = fs.readFileSync(mapPath, "utf-8");
+    const parsed = JSON.parse(raw) as Record<string, unknown>;
+    for (const [key, value] of Object.entries(parsed)) {
+      if (key.includes("@")) {
+        // Group entries — store by JID prefix (e.g. "120363424771379436")
+        if (typeof value === "object" && value !== null && "slug" in value) {
+          const entry = value as { name?: string; slug?: string };
+          if (typeof entry.name === "string" && typeof entry.slug === "string") {
+            const jidPrefix = key.split("@")[0] ?? key;
+            byPhone.set(jidPrefix, { name: entry.name, slug: entry.slug });
           }
         }
+        continue;
+      }
+      const digits = normalizeBrazilianMobile(key.replace(/\D/g, ""));
+      if (!digits) {
+        continue;
+      }
+      if (typeof value === "object" && value !== null && "slug" in value) {
+        const entry = value as { name?: string; slug?: string };
+        if (typeof entry.name === "string" && typeof entry.slug === "string") {
+          byPhone.set(digits, { name: entry.name, slug: entry.slug });
+        }
+      } else if (typeof value === "string" && value) {
+        // Legacy format: phone → name string
+        byPhone.set(digits, { name: value, slug: slugifyContact(value) });
       }
     }
     if (byPhone.size > 0) {
       return byPhone;
     }
   } catch {
-    log.debug(`contacts-briefing.json not found or invalid at ${briefingPath}`);
+    log.debug(`contacts-map.json not found or invalid at ${mapPath}`);
   }
 
-  // 2. Fallback to contacts-map.json (legacy format)
-  const mapPath = path.join(workspaceDir, "memory", "contacts-map.json");
+  // 2. Fallback: contacts-briefing.json v2 flat format
+  //    Format: { "+556992747532": { "name": "Paola...", "slug": "paola-assami-financeiro", ... } }
+  const briefingPath = path.join(workspaceDir, "memory", "system", "contacts-briefing.json");
   try {
-    const raw = fs.readFileSync(mapPath, "utf-8");
-    const parsed = JSON.parse(raw) as Record<string, string>;
-    for (const [key, name] of Object.entries(parsed)) {
-      if (typeof name !== "string" || !name) {
-        continue;
+    const raw = fs.readFileSync(briefingPath, "utf-8");
+    const parsed = JSON.parse(raw) as Record<string, unknown>;
+
+    // Detect v2 flat format: top-level keys are phone numbers (start with "+")
+    const isV2 = Object.keys(parsed).some((k) => k.startsWith("+") && !k.startsWith("_"));
+
+    if (isV2) {
+      for (const [key, value] of Object.entries(parsed)) {
+        if (key.startsWith("_")) {
+          continue; // skip metadata keys like _generated, _version
+        }
+        if (typeof value !== "object" || value === null) {
+          continue;
+        }
+        const entry = value as { name?: string; slug?: string };
+        if (typeof entry.name !== "string") {
+          continue;
+        }
+        const digits = normalizeBrazilianMobile(key.replace(/\D/g, ""));
+        if (digits) {
+          const slug = typeof entry.slug === "string" ? entry.slug : slugifyContact(entry.name);
+          byPhone.set(digits, { name: entry.name, slug });
+        }
       }
-      const digits = normalizeBrazilianMobile(key.replace(/\D/g, ""));
-      if (digits) {
-        byPhone.set(digits, name);
+    } else {
+      // Legacy category-based format: { contacts: { category: [{ name, whatsapp }] } }
+      const legacy = parsed as {
+        contacts?: Record<string, Array<{ name?: string; whatsapp?: string }>>;
+      };
+      if (legacy.contacts && typeof legacy.contacts === "object") {
+        for (const category of Object.values(legacy.contacts)) {
+          if (!Array.isArray(category)) {
+            continue;
+          }
+          for (const item of category) {
+            if (typeof item !== "object" || item === null) {
+              continue;
+            }
+            if (typeof item.name !== "string" || typeof item.whatsapp !== "string") {
+              continue;
+            }
+            const digits = normalizeBrazilianMobile(item.whatsapp.replace(/\D/g, ""));
+            if (digits) {
+              byPhone.set(digits, { name: item.name, slug: slugifyContact(item.name) });
+            }
+          }
+        }
       }
     }
   } catch {
-    log.debug(`contacts-map.json not found or invalid at ${mapPath}`);
+    log.debug(`contacts-briefing.json not found or invalid at ${briefingPath}`);
   }
+
   return byPhone;
 }
 
-export function getContactsMap(cfg: Record<string, unknown>): Map<string, string> {
+export function getContactsMap(cfg: Record<string, unknown>): Map<string, ContactMapEntry> {
   const workspaceDir = getWorkspaceDir(cfg);
   if (!workspaceDir) {
     return new Map();
@@ -155,22 +204,20 @@ function resolveContactInfo(
   identifier: string,
   metadata?: Record<string, unknown>,
   cfg?: Record<string, unknown>,
-): { name: string; phone: string } {
+): { name: string; slug: string; phone: string } {
   // Extract phone from JID (e.g., "5569996021005@s.whatsapp.net" -> "5569996021005")
   const rawPhone = (metadata?.senderE164 as string) ?? identifier.split("@")[0] ?? "";
   // Normalize Brazilian mobile numbers (strip 9th digit: 13 -> 12 digits)
   const phoneDigits = rawPhone.replace(/\D/g, "");
   const phone = phoneDigits ? normalizeBrazilianMobile(phoneDigits) : rawPhone;
 
-  // 1. Try contacts-map.json / contacts-briefing.json first (controlled by us)
-  //    This is the canonical source of truth — never changes based on what
-  //    the sender set as their WhatsApp display name.
+  // 1. Try contacts-map.json FIRST (canonical source with stable slugs)
   if (cfg) {
     const contactsMap = getContactsMap(cfg);
     const digits = normalizeBrazilianMobile(phone.replace(/\D/g, ""));
-    const mapName = contactsMap.get(digits);
-    if (mapName) {
-      return { name: mapName, phone };
+    const mapEntry = contactsMap.get(digits);
+    if (mapEntry) {
+      return { name: mapEntry.name, slug: mapEntry.slug, phone };
     }
   }
 
@@ -178,16 +225,20 @@ function resolveContactInfo(
   try {
     const contact = getContactManager().findByPhone(phone);
     if (contact?.name) {
-      return { name: contact.name, phone };
+      return { name: contact.name, slug: slugifyContact(contact.name), phone };
     }
   } catch {
     // Contact manager may not be initialized
   }
 
-  // 3. Fallback: E.164 phone number (never use senderName from WhatsApp
-  //    metadata for folder names — it's user-controlled and causes
-  //    duplicate/fragmented folders when people change their profile name)
-  return { name: phone, phone };
+  // 3. Try senderName from metadata (WhatsApp display name — unstable, used only as last resort)
+  const senderName = metadata?.senderName as string | undefined;
+  if (senderName) {
+    return { name: senderName, slug: slugifyContact(senderName), phone };
+  }
+
+  // 4. Fallback: sanitized phone
+  return { name: phone, slug: slugifyContact(phone), phone };
 }
 
 function formatTimestamp(date: Date): string {
@@ -205,7 +256,7 @@ function buildFilePath(outputDir: string, contactSlug: string, date: Date): stri
   return path.join(outputDir, contactSlug, `${dateStr}.md`);
 }
 
-// --- Utility functions ---
+// --- NEW: Utility functions ---
 
 function guessExtension(mimeType?: string): string {
   if (!mimeType) {
@@ -255,7 +306,7 @@ function formatTimestampCompact(date: Date): string {
   return `${h}${m}${s}`;
 }
 
-// --- Media copy ---
+// --- NEW: Media copy ---
 
 async function copyMediaToHistory(
   sourcePaths: string[],
@@ -303,7 +354,7 @@ async function copyMediaToHistory(
   return results;
 }
 
-// --- Group vs contact resolution ---
+// --- NEW: Group vs contact resolution ---
 
 function resolveGroupOrContactInfo(
   identifier: string,
@@ -321,25 +372,36 @@ function resolveGroupOrContactInfo(
 
   if (chatType === "group" && groupSubject) {
     const { name: senderName } = resolveContactInfo(identifier, metadata, cfg);
+    // For groups, check contacts-map for group JID slug
+    let groupSlug = slugifyContact(groupSubject);
+    if (cfg) {
+      const contactsMap = getContactsMap(cfg);
+      const groupJid = identifier.split("@")[0] ?? "";
+      // Group entries in contacts-map use the full JID as key (e.g. "120363...@g.us")
+      const groupEntry = contactsMap.get(groupJid);
+      if (groupEntry) {
+        groupSlug = groupEntry.slug;
+      }
+    }
     return {
       folderName: groupSubject,
-      folderSlug: slugifyContact(groupSubject),
+      folderSlug: groupSlug,
       phone: identifier.split("@")[0] ?? "",
       senderLabel: senderName,
       isGroup: true,
     };
   }
 
-  const { name, phone } = resolveContactInfo(identifier, metadata, cfg);
+  const { name, slug, phone } = resolveContactInfo(identifier, metadata, cfg);
   return {
     folderName: name,
-    folderSlug: slugifyContact(name),
+    folderSlug: slug,
     phone,
     isGroup: false,
   };
 }
 
-// --- Write queue per contact (race condition mitigation) ---
+// --- NEW: Write queue per contact (race condition mitigation) ---
 
 const writeQueues = new Map<string, Promise<void>>();
 
@@ -357,7 +419,7 @@ async function serializedAppend(contactSlug: string, fn: () => Promise<void>): P
   }
 }
 
-// --- LogEntry type and async appendToLog ---
+// --- NEW: LogEntry type and async appendToLog ---
 
 type LogEntry = {
   direction: "\u2190" | "\u2192";
@@ -557,12 +619,12 @@ export async function messageLoggerSentHandler(
       headerName = groupId;
       headerPhone = "";
     } else {
-      const { name, phone } = resolveContactInfo(
+      const { name, slug, phone } = resolveContactInfo(
         event.to,
         metadata,
         cfg as unknown as Record<string, unknown>,
       );
-      folderSlug = slugifyContact(name);
+      folderSlug = slug;
       headerName = name;
       headerPhone = phone;
     }

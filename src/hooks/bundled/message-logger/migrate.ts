@@ -54,13 +54,13 @@ export async function migrateNumberedFolders(opts?: {
       continue;
     }
 
-    const name = contactsMap.get(entry);
-    if (!name) {
+    const mapEntry = contactsMap.get(entry);
+    if (!mapEntry) {
       log.debug(`No contact found for folder ${entry}, skipping`);
       continue;
     }
 
-    const targetSlug = slugifyContact(name);
+    const targetSlug = mapEntry.slug || slugifyContact(mapEntry.name);
     const targetPath = path.join(outputDir, targetSlug);
 
     if (fullPath === targetPath) {
