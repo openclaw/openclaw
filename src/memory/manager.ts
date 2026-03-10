@@ -446,7 +446,7 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
     this.syncing = this.runSyncWithReadonlyRecovery(params).finally(() => {
       this.syncing = null;
     });
-    return this.syncing ?? Promise.resolve();
+    return this.syncing;
   }
 
   private isReadonlyDbError(err: unknown): boolean {
