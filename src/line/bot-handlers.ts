@@ -496,7 +496,8 @@ async function handleMessageEvent(event: MessageEvent, context: LineHandlerConte
   // neverReply: store group messages as pending history context without replying.
   if (isGroup && resolveNeverReply({ cfg, channel: "line", accountId: account.accountId })) {
     logVerbose("line: group message stored for context (neverReply: true)");
-    const historyKey = groupId ?? roomId;
+    const rawKey = groupId ?? roomId;
+    const historyKey = rawKey ? `${account.accountId}:${rawKey}` : undefined;
     const rawText = message.type === "text" ? message.text : "";
     const senderId =
       event.source.type === "group" || event.source.type === "room"
@@ -551,7 +552,8 @@ async function handleMessageEvent(event: MessageEvent, context: LineHandlerConte
     if (mentionGate.shouldSkip) {
       logVerbose(`line: skipping group message (requireMention, not mentioned)`);
       // Store as pending history so the agent has context when later mentioned.
-      const historyKey = groupId ?? roomId;
+      const rawHistKey = groupId ?? roomId;
+      const historyKey = rawHistKey ? `${account.accountId}:${rawHistKey}` : undefined;
       const senderId =
         event.source.type === "group" || event.source.type === "room"
           ? (event.source.userId ?? "unknown")
@@ -613,7 +615,8 @@ async function handleMessageEvent(event: MessageEvent, context: LineHandlerConte
   // Clear pending history after a handled group turn so stale skipped messages
   // don't replay on subsequent mentions ("since last reply" semantics).
   if (isGroup && context.groupHistories) {
-    const historyKey = groupId ?? roomId;
+    const clearRawKey = groupId ?? roomId;
+    const historyKey = clearRawKey ? `${account.accountId}:${clearRawKey}` : undefined;
     if (historyKey && context.groupHistories.has(historyKey)) {
       clearHistoryEntriesIfEnabled({
         historyMap: context.groupHistories,

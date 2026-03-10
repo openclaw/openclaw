@@ -406,7 +406,7 @@ export async function buildLineMessageContext(params: BuildLineMessageContextPar
   // Build pending history for group chats: unmentioned messages accumulated in
   // groupHistories are passed as InboundHistory so the agent has context about
   // the conversation that preceded the mention.
-  const historyKey = isGroup ? peerId : undefined;
+  const historyKey = isGroup ? `${account.accountId}:${peerId}` : undefined;
   const inboundHistory =
     historyKey && groupHistories && (historyLimit ?? 0) > 0
       ? (groupHistories.get(historyKey) ?? []).map((entry) => ({
