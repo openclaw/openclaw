@@ -4,6 +4,7 @@ import {
   hasConfiguredSecretInput,
   mapAllowFromEntries,
   mergeAllowFromEntries,
+  patchScopedAccountConfig,
   promptSingleChannelSecretInput,
   resolveAccountIdForConfigure,
   DEFAULT_ACCOUNT_ID,
@@ -39,38 +40,12 @@ function setNextcloudTalkAccountConfig(
   accountId: string,
   updates: Record<string, unknown>,
 ): CoreConfig {
-  if (accountId === DEFAULT_ACCOUNT_ID) {
-    return {
-      ...cfg,
-      channels: {
-        ...cfg.channels,
-        "nextcloud-talk": {
-          ...cfg.channels?.["nextcloud-talk"],
-          enabled: true,
-          ...updates,
-        },
-      },
-    };
-  }
-
-  return {
-    ...cfg,
-    channels: {
-      ...cfg.channels,
-      "nextcloud-talk": {
-        ...cfg.channels?.["nextcloud-talk"],
-        enabled: true,
-        accounts: {
-          ...cfg.channels?.["nextcloud-talk"]?.accounts,
-          [accountId]: {
-            ...cfg.channels?.["nextcloud-talk"]?.accounts?.[accountId],
-            enabled: cfg.channels?.["nextcloud-talk"]?.accounts?.[accountId]?.enabled ?? true,
-            ...updates,
-          },
-        },
-      },
-    },
-  };
+  return patchScopedAccountConfig({
+    cfg,
+    channelKey: channel,
+    accountId,
+    patch: updates,
+  }) as CoreConfig;
 }
 
 async function noteNextcloudTalkSecretHelp(prompter: WizardPrompter): Promise<void> {
