@@ -176,7 +176,10 @@ function isLoopbackClientIp(clientIp: string): boolean {
 }
 
 function hasProxyForwardingHints(req: IncomingMessage): boolean {
-  const headers = req.headers ?? {};
+  const headers = req.headers;
+  if (!headers) {
+    return false;
+  }
   return Boolean(
     headers["x-forwarded-for"] ||
     headers["x-real-ip"] ||
