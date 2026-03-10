@@ -130,9 +130,11 @@ async function sendDiscordChunkWithFallback(params: {
   text: string;
   token: string;
   accountId?: string;
+  maxLinesPerMessage?: number;
   rest?: RequestClient;
   replyTo?: string;
   binding?: DiscordThreadBindingLookupRecord;
+  chunkMode?: ChunkMode;
   username?: string;
   avatarUrl?: string;
   /** Pre-resolved channel ID to bypass redundant resolution per chunk. */
@@ -169,7 +171,18 @@ async function sendDiscordChunkWithFallback(params: {
   if (params.channelId && params.request && params.rest) {
     const { channelId, request, rest } = params;
     await sendWithRetry(
-      () => sendDiscordText(rest, channelId, text, params.replyTo, request),
+      () =>
+        sendDiscordText(
+          rest,
+          channelId,
+          text,
+          params.replyTo,
+          request,
+          params.maxLinesPerMessage,
+          undefined,
+          undefined,
+          params.chunkMode,
+        ),
       params.retryConfig,
     );
     return;
@@ -294,8 +307,10 @@ export async function deliverDiscordReply(params: {
           token: params.token,
           rest: params.rest,
           accountId: params.accountId,
+          maxLinesPerMessage: params.maxLinesPerMessage,
           replyTo,
           binding,
+          chunkMode: params.chunkMode,
           username: persona.username,
           avatarUrl: persona.avatarUrl,
           channelId,
@@ -329,8 +344,10 @@ export async function deliverDiscordReply(params: {
         token: params.token,
         rest: params.rest,
         accountId: params.accountId,
+        maxLinesPerMessage: params.maxLinesPerMessage,
         replyTo: resolveReplyTo(),
         binding,
+        chunkMode: params.chunkMode,
         username: persona.username,
         avatarUrl: persona.avatarUrl,
         channelId,
