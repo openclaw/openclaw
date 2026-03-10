@@ -12,6 +12,13 @@ function isAssistantMessageEntry(entry: SessionTranscriptEntry): entry is Sessio
   return entry.type === "message" && entry.message?.role === "assistant";
 }
 
+function normalizeTranscriptSize(size: number | bigint): number {
+  if (typeof size === "number") {
+    return size;
+  }
+  return size > BigInt(Number.MAX_SAFE_INTEGER) ? Number.MAX_SAFE_INTEGER : Number(size);
+}
+
 async function statRegularSessionTranscript(
   sessionFile: string,
 ): Promise<Awaited<ReturnType<typeof fsPromises.lstat>>> {
@@ -33,7 +40,7 @@ export async function shouldInjectBootstrapContext(sessionFile: string): Promise
     return true;
   }
 
-  const byteLimit = Math.min(stat.size, MAX_TRANSCRIPT_SCAN_BYTES);
+  const byteLimit = Math.min(normalizeTranscriptSize(stat.size), MAX_TRANSCRIPT_SCAN_BYTES);
   let stream: fs.ReadStream | null = null;
   let rl: readline.Interface | null = null;
 
