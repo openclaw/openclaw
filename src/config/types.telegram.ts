@@ -38,6 +38,20 @@ export type TelegramNetworkConfig = {
 
 export type TelegramInlineButtonsScope = "off" | "dm" | "group" | "all" | "allowlist";
 export type TelegramStreamingMode = "off" | "partial" | "block" | "progress";
+export type TelegramExecApprovalTarget = "dm" | "channel" | "both";
+
+export type TelegramExecApprovalConfig = {
+  /** Enable Telegram exec approvals for this account. Default: false. */
+  enabled?: boolean;
+  /** Telegram user IDs allowed to approve exec requests. Required if enabled. */
+  approvers?: Array<string | number>;
+  /** Only forward approvals for these agent IDs. Omit = all agents. */
+  agentFilter?: string[];
+  /** Only forward approvals matching these session key patterns (substring or regex). */
+  sessionFilter?: string[];
+  /** Where to send approval prompts. Default: "dm". */
+  target?: TelegramExecApprovalTarget;
+};
 
 export type TelegramCapabilitiesConfig =
   | string[]
@@ -58,6 +72,8 @@ export type TelegramAccountConfig = {
   name?: string;
   /** Optional provider capability tags used for agent/runtime guidance. */
   capabilities?: TelegramCapabilitiesConfig;
+  /** Telegram-native exec approval delivery + approver authorization. */
+  execApprovals?: TelegramExecApprovalConfig;
   /** Markdown formatting overrides (tables). */
   markdown?: MarkdownConfig;
   /** Override native command registration for Telegram (bool or "auto"). */
