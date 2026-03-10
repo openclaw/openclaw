@@ -135,6 +135,7 @@ Docs: https://docs.openclaw.ai
 - Security/system.run: bind approved `bun` and `deno run` script operands to on-disk file snapshots so post-approval script rewrites are denied before execution.
 - Skills/download installs: pin the validated per-skill tools root before writing downloaded archives, so rebinding the lexical tools path cannot redirect download writes outside the intended tools directory. Thanks @tdjackey.
 - Control UI/Debug: replace the Manual RPC free-text method field with a sorted dropdown sourced from gateway-advertised methods, and stack the form vertically for narrower layouts. (#14967) thanks @rixau.
+- Auth/profile resolution: log debug details when auto-discovered auth profiles fail during provider API-key resolution, so `--debug` output surfaces the real refresh/keychain/credential-store failure instead of only the generic missing-key message. (#41271) thanks @he-yufeng.
 
 ## 2026.3.7
 
