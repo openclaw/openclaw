@@ -553,11 +553,15 @@ async function saveSessionStoreUnlocked(
 
   if (pluginAdapterConfig && storePath === pluginAdapterConfig.storePath) {
     const adapter = pluginAdapterConfig.adapter;
+    const adapterKeys = new Set(adapter.list());
+    const storeKeys = new Set(Object.keys(store));
+
+    const deletes = [...adapterKeys].filter((k) => !storeKeys.has(k)).map((k) => adapter.delete(k));
     const saves = Object.entries(store).map(([key, entry]) => adapter.save(key, entry));
-    const results = await Promise.allSettled(saves);
+    const results = await Promise.allSettled([...saves, ...deletes]);
     const failed = results.filter((r) => r.status === "rejected");
     if (failed.length > 0) {
-      log.warn(`plugin adapter sync: ${failed.length}/${results.length} save(s) failed`);
+      log.warn(`plugin adapter sync: ${failed.length}/${results.length} operation(s) failed`);
     }
   }
 }

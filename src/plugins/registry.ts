@@ -173,6 +173,7 @@ const constrainLegacyPromptInjectionHook = (
 };
 
 export function createEmptyPluginRegistry(): PluginRegistry {
+  pluginSessionStoreAdapter = null;
   return {
     plugins: [],
     tools: [],
@@ -190,6 +191,7 @@ export function createEmptyPluginRegistry(): PluginRegistry {
 }
 
 export function createPluginRegistry(registryParams: PluginRegistryParams) {
+  pluginSessionStoreAdapter = null;
   const registry = createEmptyPluginRegistry();
   const coreGatewayMethods = new Set(Object.keys(registryParams.coreGatewayHandlers ?? {}));
 
