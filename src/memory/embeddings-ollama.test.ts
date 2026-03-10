@@ -189,7 +189,9 @@ describe("embeddings-ollama", () => {
       fetchWithSsrFGuard({
         url: "http://localhost:11434/api/embeddings",
         fetchImpl,
-        lookupFn: lookupFn as NonNullable<Parameters<typeof fetchWithSsrFGuard>[0]["lookupFn"]>,
+        lookupFn: lookupFn as unknown as NonNullable<
+          Parameters<typeof fetchWithSsrFGuard>[0]["lookupFn"]
+        >,
         policy: client.ssrfPolicy,
       }),
     ).rejects.toThrow(/allowlist/i);
