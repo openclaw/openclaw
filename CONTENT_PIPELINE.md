@@ -94,7 +94,7 @@ See: `.claude/commands/`
 - repurpose-linkedin.md → /repurpose-linkedin
 
 Also available as OpenClaw skills (Telegram):
-See: `skills/content-scan/`, `skills/build-source-pack/`, `skills/draft-medium/`, `skills/repurpose-linkedin/`
+See: `skills/content-scan/`, `skills/build-source-pack/`, `skills/draft-medium/`, `skills/repurpose-linkedin/`, `skills/collect-feedback/`
 
 ---
 
@@ -119,6 +119,8 @@ repurpose article for linkedin
 3. `/build-source-pack` — research pack
 4. `/draft-medium` — full article
 5. `/repurpose-linkedin` — LinkedIn posts
+6. Publish on Medium and LinkedIn (edit as needed)
+7. `/collect-feedback [Medium URL]` — compare draft vs published, update writing style
 
 ---
 

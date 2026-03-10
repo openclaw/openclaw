@@ -55,3 +55,9 @@ Voice rules from: `memory/brand/writing_style.md`
 ```
 
 Save to: `outputs/content/linkedin-posts.md`
+
+## After Output
+
+Remind the author:
+
+> After posting on LinkedIn, run `collect feedback` and paste the final post you used so your writing style updates from the edits you made.

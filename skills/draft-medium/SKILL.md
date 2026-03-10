@@ -58,3 +58,7 @@ Always read `memory/brand/writing_style.md` before writing.
 ## After Output
 
 Print title + hook. Confirm save paths.
+
+Remind the author:
+
+> After publishing on Medium, run `collect feedback [your Medium URL]` to update your writing style from the edits you made.
