@@ -541,7 +541,9 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
             channel: message.channel,
             ts: streamMsgTs,
           });
-          logVerbose(`slack-stream: deleted orphaned stream message ${streamMsgTs} after stop failure`);
+          logVerbose(
+            `slack-stream: deleted orphaned stream message ${streamMsgTs} after stop failure`,
+          );
           orphanDeleted = true;
         } catch (deleteErr) {
           logVerbose(
@@ -554,10 +556,7 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
       // Bind to a local const so TypeScript narrows away null before spread.
       const fallbackPayload = lastStreamPayload;
       if (orphanDeleted && fallbackPayload && streamedText) {
-        await deliverNormally(
-          { ...fallbackPayload, text: streamedText },
-          finalStream.threadTs,
-        );
+        await deliverNormally({ ...fallbackPayload, text: streamedText }, finalStream.threadTs);
       }
     }
   }
