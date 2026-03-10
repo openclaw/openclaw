@@ -665,11 +665,26 @@ export class AcpxRuntime implements AcpRuntime {
     agent: string;
     cwd: string;
   }): Promise<string | null> {
+    const hasMcpServers = Object.keys(this.config.mcpServers).length > 0;
     // Config-driven agent command overrides the default acpx subcommand.
+    // When MCP servers are also configured, wrap it with the MCP proxy.
     if (this.config.agentCommand) {
-      return this.config.agentCommand;
+      if (!hasMcpServers) {
+        return this.config.agentCommand;
+      }
+      const cacheKey = `${params.cwd}::agentCommand`;
+      const cached = this.mcpProxyAgentCommandCache.get(cacheKey);
+      if (cached) {
+        return cached;
+      }
+      const resolved = buildMcpProxyAgentCommand({
+        targetCommand: this.config.agentCommand,
+        mcpServers: toAcpMcpServers(this.config.mcpServers),
+      });
+      this.mcpProxyAgentCommandCache.set(cacheKey, resolved);
+      return resolved;
     }
-    if (Object.keys(this.config.mcpServers).length === 0) {
+    if (!hasMcpServers) {
       return null;
     }
     const cacheKey = `${params.cwd}::${params.agent}`;
