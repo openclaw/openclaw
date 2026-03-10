@@ -1,3 +1,5 @@
+import { parseAdaptiveCardMarkers } from "../../../cards/parse.js";
+import { discordStrategy } from "../../../cards/strategies/discord.js";
 import type { OpenClawConfig } from "../../../config/config.js";
 import {
   getThreadBindingManager,
@@ -87,6 +89,30 @@ export const discordOutbound: ChannelOutboundAdapter = {
   sendPayload: async (ctx) =>
     await sendTextMediaPayload({ channel: "discord", ctx, adapter: discordOutbound }),
   sendText: async ({ cfg, to, text, accountId, deps, replyToId, threadId, identity, silent }) => {
+    // Adaptive card rendering: convert card markers to Discord embeds + components
+    const parsed = parseAdaptiveCardMarkers(text);
+    if (parsed) {
+      const rendered = discordStrategy.render(parsed);
+      if (rendered.type === "discord") {
+        const send = deps?.sendDiscord ?? sendMessageDiscord;
+        const target = resolveDiscordOutboundTarget({ to, threadId });
+        const result = await send(target, rendered.fallback, {
+          verbose: false,
+          replyTo: replyToId ?? undefined,
+          accountId: accountId ?? undefined,
+          silent: silent ?? undefined,
+          cfg,
+          embeds: rendered.embeds as NonNullable<
+            Parameters<typeof sendMessageDiscord>[2]
+          >["embeds"],
+          components: rendered.components as NonNullable<
+            Parameters<typeof sendMessageDiscord>[2]
+          >["components"],
+        });
+        return { channel: "discord", ...result };
+      }
+    }
+
     if (!silent) {
       const webhookResult = await maybeSendDiscordWebhookText({
         cfg,

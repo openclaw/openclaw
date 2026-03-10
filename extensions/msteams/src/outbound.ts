@@ -1,7 +1,30 @@
 import type { ChannelOutboundAdapter } from "openclaw/plugin-sdk/msteams";
 import { createMSTeamsPollStoreFs } from "./polls.js";
 import { getMSTeamsRuntime } from "./runtime.js";
-import { sendMessageMSTeams, sendPollMSTeams } from "./send.js";
+import { sendAdaptiveCardMSTeams, sendMessageMSTeams, sendPollMSTeams } from "./send.js";
+
+/**
+ * Extract an Adaptive Card from marker comments embedded in reply text.
+ * Mirrors the regex in src/cards/parse.ts but kept inline to avoid
+ * a cross-workspace import (extensions cannot import from src/ directly).
+ */
+const AC_CARD_RE = /<!--adaptive-card-->([\s\S]*?)<!--\/adaptive-card-->/;
+
+function extractAdaptiveCard(text: string): Record<string, unknown> | null {
+  const m = AC_CARD_RE.exec(text);
+  if (!m) {
+    return null;
+  }
+  try {
+    const parsed = JSON.parse(m[1].trim());
+    if (parsed?.type === "AdaptiveCard") {
+      return parsed as Record<string, unknown>;
+    }
+  } catch {
+    // malformed JSON
+  }
+  return null;
+}
 
 export const msteamsOutbound: ChannelOutboundAdapter = {
   deliveryMode: "direct",
@@ -10,6 +33,13 @@ export const msteamsOutbound: ChannelOutboundAdapter = {
   textChunkLimit: 4000,
   pollMaxOptions: 12,
   sendText: async ({ cfg, to, text, deps }) => {
+    // Native adaptive card pass-through: Teams supports AC directly
+    const card = extractAdaptiveCard(text);
+    if (card) {
+      const result = await sendAdaptiveCardMSTeams({ cfg, to, card });
+      return { channel: "msteams", ...result };
+    }
+
     const send = deps?.sendMSTeams ?? ((to, text) => sendMessageMSTeams({ cfg, to, text }));
     const result = await send(to, text);
     return { channel: "msteams", ...result };

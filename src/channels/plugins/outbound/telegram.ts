@@ -1,3 +1,5 @@
+import { parseAdaptiveCardMarkers } from "../../../cards/parse.js";
+import { telegramStrategy } from "../../../cards/strategies/telegram.js";
 import type { OutboundSendDeps } from "../../../infra/outbound/deliver.js";
 import type { TelegramInlineButtons } from "../../../telegram/button-types.js";
 import { markdownToTelegramHtmlChunks } from "../../../telegram/format.js";
@@ -52,6 +54,23 @@ export const telegramOutbound: ChannelOutboundAdapter = {
       replyToId,
       threadId,
     });
+
+    // Adaptive card rendering: convert card markers to Telegram HTML + inline keyboard
+    const parsed = parseAdaptiveCardMarkers(text);
+    if (parsed) {
+      const rendered = telegramStrategy.render(parsed);
+      if (rendered.type === "telegram") {
+        const buttons: TelegramInlineButtons | undefined = rendered.replyMarkup
+          ? (rendered.replyMarkup.inline_keyboard as unknown as TelegramInlineButtons)
+          : undefined;
+        const result = await send(to, rendered.text, {
+          ...baseOpts,
+          buttons,
+        });
+        return { channel: "telegram", ...result };
+      }
+    }
+
     const result = await send(to, text, {
       ...baseOpts,
     });
