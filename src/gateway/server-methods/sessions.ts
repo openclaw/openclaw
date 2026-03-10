@@ -17,7 +17,11 @@ import {
 } from "../../config/sessions.js";
 import { unbindThreadBindingsBySessionKey } from "../../discord/monitor/thread-bindings.js";
 import { logVerbose } from "../../globals.js";
-import { createInternalHookEvent, triggerInternalHook } from "../../hooks/internal-hooks.js";
+import {
+  createInternalHookEvent,
+  triggerInternalHook,
+  type SessionPatchHookEvent,
+} from "../../hooks/internal-hooks.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import {
   isSubagentSessionKey,
@@ -461,6 +465,21 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       respond(false, undefined, applied.error);
       return;
     }
+
+    const hookEvent: SessionPatchHookEvent = {
+      type: "session",
+      action: "patch",
+      sessionKey: target.canonicalKey ?? key,
+      context: {
+        sessionEntry: applied.entry,
+        patch: p,
+        cfg,
+      },
+      timestamp: new Date(),
+      messages: [],
+    };
+    void triggerInternalHook(hookEvent);
+
     const parsed = parseAgentSessionKey(target.canonicalKey ?? key);
     const agentId = normalizeAgentId(parsed?.agentId ?? resolveDefaultAgentId(cfg));
     const resolved = resolveSessionModelRef(cfg, applied.entry, agentId);
