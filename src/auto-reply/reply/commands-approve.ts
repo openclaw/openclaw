@@ -81,17 +81,14 @@ export const handleApproveCommand: CommandHandler = async (params, allowTextComm
   if (!parsed) {
     return null;
   }
-  if (!params.command.isAuthorizedSender) {
-    logVerbose(
-      `Ignoring /approve from unauthorized sender: ${params.command.senderId || "<unknown>"}`,
-    );
-    return { shouldContinue: false };
-  }
 
   if (!parsed.ok) {
     return { shouldContinue: false, reply: { text: parsed.error } };
   }
 
+  // For Telegram, check approver status first - this takes precedence over generic authorization.
+  // Telegram exec approval callbacks use inline buttons that may be clicked by users who are
+  // configured as approvers but not necessarily in the channel's general allowFrom list.
   if (params.command.channel === "telegram") {
     if (
       !isTelegramExecApprovalClientEnabled({ cfg: params.cfg, accountId: params.ctx.AccountId })
@@ -113,6 +110,13 @@ export const handleApproveCommand: CommandHandler = async (params, allowTextComm
         reply: { text: "❌ You are not authorized to approve exec requests on Telegram." },
       };
     }
+    // Telegram approver check passed - skip generic isAuthorizedSender check
+  } else if (!params.command.isAuthorizedSender) {
+    // For non-Telegram channels, enforce generic authorization
+    logVerbose(
+      `Ignoring /approve from unauthorized sender: ${params.command.senderId || "<unknown>"}`,
+    );
+    return { shouldContinue: false };
   }
 
   const missingScope = requireGatewayClientScopeForInternalChannel(params, {
