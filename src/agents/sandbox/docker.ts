@@ -1,5 +1,9 @@
 import { spawn } from "node:child_process";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+import {
+  materializeWindowsSpawnProgram,
+  resolveWindowsSpawnProgram,
+} from "../../plugin-sdk/windows-spawn.js";
 import { sanitizeEnvVars } from "./sanitize-env-vars.js";
 
 type ExecDockerRawOptions = {
@@ -26,13 +30,49 @@ function createAbortError(): Error {
   return err;
 }
 
+type DockerSpawnRuntime = {
+  platform: NodeJS.Platform;
+  env: NodeJS.ProcessEnv;
+  execPath: string;
+};
+
+const DEFAULT_DOCKER_SPAWN_RUNTIME: DockerSpawnRuntime = {
+  platform: process.platform,
+  env: process.env,
+  execPath: process.execPath,
+};
+
+export function resolveDockerSpawnInvocation(
+  args: string[],
+  runtime: DockerSpawnRuntime = DEFAULT_DOCKER_SPAWN_RUNTIME,
+): { command: string; args: string[]; shell?: boolean; windowsHide?: boolean } {
+  const program = resolveWindowsSpawnProgram({
+    command: "docker",
+    platform: runtime.platform,
+    env: runtime.env,
+    execPath: runtime.execPath,
+    packageName: "docker",
+    allowShellFallback: true,
+  });
+  const resolved = materializeWindowsSpawnProgram(program, args);
+  return {
+    command: resolved.command,
+    args: resolved.argv,
+    shell: resolved.shell,
+    windowsHide: resolved.windowsHide,
+  };
+}
+
 export function execDockerRaw(
   args: string[],
   opts?: ExecDockerRawOptions,
 ): Promise<ExecDockerRawResult> {
   return new Promise<ExecDockerRawResult>((resolve, reject) => {
-    const child = spawn("docker", args, {
+    const spawnInvocation = resolveDockerSpawnInvocation(args);
+    const child = spawn(spawnInvocation.command, spawnInvocation.args, {
       stdio: ["pipe", "pipe", "pipe"],
+      shell: spawnInvocation.shell,
+      windowsHide: spawnInvocation.windowsHide,
     });
     const stdoutChunks: Buffer[] = [];
     const stderrChunks: Buffer[] = [];
@@ -64,6 +104,21 @@ export function execDockerRaw(
     child.on("error", (error) => {
       if (signal) {
         signal.removeEventListener("abort", handleAbort);
+      }
+      if (
+        error &&
+        typeof error === "object" &&
+        "code" in error &&
+        (error as NodeJS.ErrnoException).code === "ENOENT"
+      ) {
+        const friendly = Object.assign(
+          new Error(
+            'Sandbox mode requires Docker, but the "docker" command was not found in PATH. Install Docker (and ensure "docker" is available), or set `agents.defaults.sandbox.mode=off` to disable sandboxing.',
+          ),
+          { code: "INVALID_CONFIG", cause: error },
+        );
+        reject(friendly);
+        return;
       }
       reject(error);
     });
@@ -107,13 +162,15 @@ export function execDockerRaw(
 }
 
 import { formatCliCommand } from "../../cli/command-format.js";
+import { markOpenClawExecEnv } from "../../infra/openclaw-exec-env.js";
 import { defaultRuntime } from "../../runtime.js";
 import { computeSandboxConfigHash } from "./config-hash.js";
-import { DEFAULT_SANDBOX_IMAGE, SANDBOX_AGENT_WORKSPACE_MOUNT } from "./constants.js";
+import { DEFAULT_SANDBOX_IMAGE } from "./constants.js";
 import { readRegistry, updateRegistry } from "./registry.js";
 import { resolveSandboxAgentId, resolveSandboxScopeKey, slugifySessionKey } from "./shared.js";
 import type { SandboxConfig, SandboxDockerConfig, SandboxWorkspaceAccess } from "./types.js";
 import { validateSandboxSecurity } from "./validate-sandbox-security.js";
+import { appendWorkspaceMountArgs } from "./workspace-mounts.js";
 
 const log = createSubsystemLogger("docker");
 
@@ -309,7 +366,7 @@ export function buildSandboxCreateArgs(params: {
   if (params.cfg.user) {
     args.push("--user", params.cfg.user);
   }
-  const envSanitization = sanitizeEnvVars(params.cfg.env ?? {});
+  const envSanitization = sanitizeEnvVars(markOpenClawExecEnv(params.cfg.env ?? {}));
   if (envSanitization.blocked.length > 0) {
     log.warn(`Blocked sensitive environment variables: ${envSanitization.blocked.join(", ")}`);
   }
@@ -397,16 +454,13 @@ async function createSandboxContainer(params: {
     bindSourceRoots: [workspaceDir, params.agentWorkspaceDir],
   });
   args.push("--workdir", cfg.workdir);
-  const mainMountSuffix =
-    params.workspaceAccess === "ro" && workspaceDir === params.agentWorkspaceDir ? ":ro" : "";
-  args.push("-v", `${workspaceDir}:${cfg.workdir}${mainMountSuffix}`);
-  if (params.workspaceAccess !== "none" && workspaceDir !== params.agentWorkspaceDir) {
-    const agentMountSuffix = params.workspaceAccess === "ro" ? ":ro" : "";
-    args.push(
-      "-v",
-      `${params.agentWorkspaceDir}:${SANDBOX_AGENT_WORKSPACE_MOUNT}${agentMountSuffix}`,
-    );
-  }
+  appendWorkspaceMountArgs({
+    args,
+    workspaceDir,
+    agentWorkspaceDir: params.agentWorkspaceDir,
+    workdir: cfg.workdir,
+    workspaceAccess: params.workspaceAccess,
+  });
   appendCustomBinds(args, cfg);
   args.push(cfg.image, "sleep", "infinity");
 
@@ -414,7 +468,7 @@ async function createSandboxContainer(params: {
   await execDocker(["start", name]);
 
   if (cfg.setupCommand?.trim()) {
-    await execDocker(["exec", "-i", name, "sh", "-lc", cfg.setupCommand]);
+    await execDocker(["exec", "-i", name, "/bin/sh", "-lc", cfg.setupCommand]);
   }
 }
 

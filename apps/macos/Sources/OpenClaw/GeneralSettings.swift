@@ -149,6 +149,7 @@ struct GeneralSettings: View {
             } else {
                 self.remoteDirectRow
             }
+            self.remoteTokenRow
 
             GatewayDiscoveryInlineList(
                 discovery: self.gatewayDiscovery,
@@ -260,17 +261,7 @@ struct GeneralSettings: View {
                 TextField("user@host[:22]", text: self.$state.remoteTarget)
                     .textFieldStyle(.roundedBorder)
                     .frame(maxWidth: .infinity)
-                Button {
-                    Task { await self.testRemote() }
-                } label: {
-                    if self.remoteStatus == .checking {
-                        ProgressView().controlSize(.small)
-                    } else {
-                        Text("Test remote")
-                    }
-                }
-                .buttonStyle(.borderedProminent)
-                .disabled(self.remoteStatus == .checking || !canTest)
+                self.remoteTestButton(disabled: !canTest)
             }
             if let validationMessage {
                 Text(validationMessage)
@@ -290,18 +281,8 @@ struct GeneralSettings: View {
                 TextField("wss://gateway.example.ts.net", text: self.$state.remoteUrl)
                     .textFieldStyle(.roundedBorder)
                     .frame(maxWidth: .infinity)
-                Button {
-                    Task { await self.testRemote() }
-                } label: {
-                    if self.remoteStatus == .checking {
-                        ProgressView().controlSize(.small)
-                    } else {
-                        Text("Test remote")
-                    }
-                }
-                .buttonStyle(.borderedProminent)
-                .disabled(self.remoteStatus == .checking || self.state.remoteUrl
-                    .trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                self.remoteTestButton(
+                    disabled: self.state.remoteUrl.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             }
             Text(
                 "Direct mode requires wss:// for remote hosts. ws:// is only allowed for localhost/127.0.0.1.")
@@ -309,6 +290,44 @@ struct GeneralSettings: View {
                 .foregroundStyle(.secondary)
                 .padding(.leading, self.remoteLabelWidth + 10)
         }
+    }
+
+    private var remoteTokenRow: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(alignment: .center, spacing: 10) {
+                Text("Gateway token")
+                    .font(.callout.weight(.semibold))
+                    .frame(width: self.remoteLabelWidth, alignment: .leading)
+                SecureField("remote gateway auth token (gateway.remote.token)", text: self.$state.remoteToken)
+                    .textFieldStyle(.roundedBorder)
+                    .frame(maxWidth: .infinity)
+            }
+            Text("Used when the remote gateway requires token auth.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .padding(.leading, self.remoteLabelWidth + 10)
+            if self.state.remoteTokenUnsupported {
+                Text(
+                    "The current gateway.remote.token value is not plain text. OpenClaw for macOS cannot use it directly; enter a plaintext token here to replace it.")
+                    .font(.caption)
+                    .foregroundStyle(.orange)
+                    .padding(.leading, self.remoteLabelWidth + 10)
+            }
+        }
+    }
+
+    private func remoteTestButton(disabled: Bool) -> some View {
+        Button {
+            Task { await self.testRemote() }
+        } label: {
+            if self.remoteStatus == .checking {
+                ProgressView().controlSize(.small)
+            } else {
+                Text("Test remote")
+            }
+        }
+        .buttonStyle(.borderedProminent)
+        .disabled(self.remoteStatus == .checking || disabled)
     }
 
     private var controlStatusLine: String {
@@ -672,19 +691,7 @@ extension GeneralSettings {
 
     private func applyDiscoveredGateway(_ gateway: GatewayDiscoveryModel.DiscoveredGateway) {
         MacNodeModeCoordinator.shared.setPreferredGatewayStableID(gateway.stableID)
-
-        if self.state.remoteTransport == .direct {
-            self.state.remoteUrl = GatewayDiscoveryHelpers.directUrl(for: gateway) ?? ""
-        } else {
-            self.state.remoteTarget = GatewayDiscoveryHelpers.sshTarget(for: gateway) ?? ""
-        }
-        if let endpoint = GatewayDiscoveryHelpers.serviceEndpoint(for: gateway) {
-            OpenClawConfigFile.setRemoteGatewayUrl(
-                host: endpoint.host,
-                port: endpoint.port)
-        } else {
-            OpenClawConfigFile.clearRemoteGatewayUrl()
-        }
+        GatewayDiscoverySelectionSupport.applyRemoteSelection(gateway: gateway, state: self.state)
     }
 }
 
@@ -710,6 +717,7 @@ extension GeneralSettings {
         state.remoteTransport = .ssh
         state.remoteTarget = "user@host:2222"
         state.remoteUrl = "wss://gateway.example.ts.net"
+        state.remoteToken = "example-token"
         state.remoteIdentity = "/tmp/id_ed25519"
         state.remoteProjectRoot = "/tmp/openclaw"
         state.remoteCliPath = "/tmp/openclaw"

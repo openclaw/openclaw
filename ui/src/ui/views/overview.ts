@@ -1,6 +1,6 @@
 import { html } from "lit";
 import { ConnectErrorDetailCodes } from "../../../../src/gateway/protocol/connect-error-details.js";
-import { t, i18n, type Locale } from "../../i18n/index.ts";
+import { t, i18n, SUPPORTED_LOCALES, type Locale } from "../../i18n/index.ts";
 import { buildExternalLinkRel, EXTERNAL_LINK_TARGET } from "../external-link.ts";
 import { formatRelativeTimestamp, formatDurationHuman } from "../format.ts";
 import type { GatewayHelloOk } from "../gateway.ts";
@@ -205,7 +205,11 @@ export function renderOverview(props: OverviewProps) {
               .value=${props.settings.gatewayUrl}
               @input=${(e: Event) => {
                 const v = (e.target as HTMLInputElement).value;
-                props.onSettingsChange({ ...props.settings, gatewayUrl: v });
+                props.onSettingsChange({
+                  ...props.settings,
+                  gatewayUrl: v,
+                  token: v.trim() === props.settings.gatewayUrl.trim() ? props.settings.token : "",
+                });
               }}
               placeholder="ws://100.x.y.z:18789"
             />
@@ -259,10 +263,10 @@ export function renderOverview(props: OverviewProps) {
                 props.onSettingsChange({ ...props.settings, locale: v });
               }}
             >
-              <option value="en">${t("languages.en")}</option>
-              <option value="zh-CN">${t("languages.zhCN")}</option>
-              <option value="zh-TW">${t("languages.zhTW")}</option>
-              <option value="pt-BR">${t("languages.ptBR")}</option>
+              ${SUPPORTED_LOCALES.map((loc) => {
+                const key = loc.replace(/-([a-zA-Z])/g, (_, c) => c.toUpperCase());
+                return html`<option value=${loc}>${t(`languages.${key}`)}</option>`;
+              })}
             </select>
           </label>
         </div>

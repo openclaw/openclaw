@@ -188,6 +188,7 @@ export const ModelCompatSchema = z
     supportsDeveloperRole: z.boolean().optional(),
     supportsReasoningEffort: z.boolean().optional(),
     supportsUsageInStreaming: z.boolean().optional(),
+    supportsTools: z.boolean().optional(),
     supportsStrictMode: z.boolean().optional(),
     maxTokensField: z
       .union([z.literal("max_completion_tokens"), z.literal("max_tokens")])
@@ -197,6 +198,7 @@ export const ModelCompatSchema = z
     requiresAssistantAfterToolResult: z.boolean().optional(),
     requiresThinkingAsText: z.boolean().optional(),
     requiresMistralToolIds: z.boolean().optional(),
+    requiresOpenAiAnthropicToolPayload: z.boolean().optional(),
   })
   .strict()
   .optional();
@@ -232,7 +234,8 @@ export const ModelProviderSchema = z
       .union([z.literal("api-key"), z.literal("aws-sdk"), z.literal("oauth"), z.literal("token")])
       .optional(),
     api: ModelApiSchema.optional(),
-    headers: z.record(z.string(), z.string()).optional(),
+    injectNumCtxForOpenAICompat: z.boolean().optional(),
+    headers: z.record(z.string(), SecretInputSchema.register(sensitive)).optional(),
     authHeader: z.boolean().optional(),
     models: z.array(ModelDefinitionSchema),
   })
@@ -377,7 +380,7 @@ export const TtsConfigSchema = z
       .optional(),
     elevenlabs: z
       .object({
-        apiKey: z.string().optional().register(sensitive),
+        apiKey: SecretInputSchema.optional().register(sensitive),
         baseUrl: z.string().optional(),
         voiceId: z.string().optional(),
         modelId: z.string().optional(),
@@ -399,7 +402,8 @@ export const TtsConfigSchema = z
       .optional(),
     openai: z
       .object({
-        apiKey: z.string().optional().register(sensitive),
+        apiKey: SecretInputSchema.optional().register(sensitive),
+        baseUrl: z.string().optional(),
         model: z.string().optional(),
         voice: z.string().optional(),
       })
@@ -679,6 +683,8 @@ export const ToolsMediaUnderstandingSchema = z
     ...MediaUnderstandingRuntimeFields,
     attachments: MediaUnderstandingAttachmentsSchema,
     models: z.array(MediaUnderstandingModelSchema).optional(),
+    echoTranscript: z.boolean().optional(),
+    echoFormat: z.string().optional(),
   })
   .strict()
   .optional();

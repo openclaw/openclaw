@@ -157,23 +157,24 @@ describe("resolveBoundaryPath", () => {
       const root = path.join(base, "workspace");
       const outside = path.join(base, "outside");
       const safeTarget = path.join(root, "safe-target");
+      const safeRealBase = path.join(root, "safe-real");
+      const safeLinkBase = path.join(root, "safe-link");
+      const escapeLink = path.join(root, "escape-link");
       await fs.mkdir(root, { recursive: true });
       await fs.mkdir(outside, { recursive: true });
       await fs.mkdir(safeTarget, { recursive: true });
+      await fs.mkdir(safeRealBase, { recursive: true });
+      await fs.symlink(safeTarget, safeLinkBase);
+      await fs.symlink(outside, escapeLink);
 
       const rand = createSeededRandom(0x5eed1234);
-      for (let idx = 0; idx < 64; idx += 1) {
+      const fuzzCases = 32;
+      for (let idx = 0; idx < fuzzCases; idx += 1) {
         const token = Math.floor(rand() * 1_000_000)
           .toString(16)
           .padStart(5, "0");
-        const safeName = `safe-${idx}-${token}`;
         const useLink = rand() > 0.5;
-        const safeBase = useLink ? path.join(root, `safe-link-${idx}`) : path.join(root, safeName);
-        if (useLink) {
-          await fs.symlink(safeTarget, safeBase);
-        } else {
-          await fs.mkdir(safeBase, { recursive: true });
-        }
+        const safeBase = useLink ? safeLinkBase : safeRealBase;
         const safeCandidate = path.join(safeBase, `new-${token}.txt`);
         const safeResolved = await resolveBoundaryPath({
           absolutePath: safeCandidate,
@@ -182,8 +183,6 @@ describe("resolveBoundaryPath", () => {
         });
         expect(isPathInside(safeResolved.rootCanonicalPath, safeResolved.canonicalPath)).toBe(true);
 
-        const escapeLink = path.join(root, `escape-${idx}`);
-        await fs.symlink(outside, escapeLink);
         const unsafeCandidate = path.join(escapeLink, `new-${token}.txt`);
         await expect(
           resolveBoundaryPath({

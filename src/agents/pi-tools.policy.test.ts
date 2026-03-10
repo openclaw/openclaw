@@ -1,22 +1,12 @@
-import type { AgentTool, AgentToolResult } from "@mariozechner/pi-agent-core";
-import { Type } from "@sinclair/typebox";
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import {
   filterToolsByPolicy,
   isToolAllowedByPolicyName,
+  resolveEffectiveToolPolicy,
   resolveSubagentToolPolicy,
 } from "./pi-tools.policy.js";
-
-function createStubTool(name: string): AgentTool {
-  return {
-    name,
-    label: name,
-    description: "",
-    parameters: Type.Object({}),
-    execute: async () => ({}) as AgentToolResult<unknown>,
-  };
-}
+import { createStubTool } from "./test-helpers/pi-tool-stubs.js";
 
 describe("pi-tools.policy", () => {
   it("treats * in allow as allow-all", () => {
@@ -185,5 +175,61 @@ describe("resolveSubagentToolPolicy depth awareness", () => {
     const policy = resolveSubagentToolPolicy(leafCfg);
     // Default depth=1, maxSpawnDepth=1 → leaf
     expect(isToolAllowedByPolicyName("sessions_spawn", policy)).toBe(false);
+  });
+});
+
+describe("resolveEffectiveToolPolicy", () => {
+  it("implicitly re-exposes exec and process when tools.exec is configured", () => {
+    const cfg = {
+      tools: {
+        profile: "messaging",
+        exec: { host: "sandbox" },
+      },
+    } as OpenClawConfig;
+    const result = resolveEffectiveToolPolicy({ config: cfg });
+    expect(result.profileAlsoAllow).toEqual(["exec", "process"]);
+  });
+
+  it("implicitly re-exposes read, write, and edit when tools.fs is configured", () => {
+    const cfg = {
+      tools: {
+        profile: "messaging",
+        fs: { workspaceOnly: false },
+      },
+    } as OpenClawConfig;
+    const result = resolveEffectiveToolPolicy({ config: cfg });
+    expect(result.profileAlsoAllow).toEqual(["read", "write", "edit"]);
+  });
+
+  it("merges explicit alsoAllow with implicit tool-section exposure", () => {
+    const cfg = {
+      tools: {
+        profile: "messaging",
+        alsoAllow: ["web_search"],
+        exec: { host: "sandbox" },
+      },
+    } as OpenClawConfig;
+    const result = resolveEffectiveToolPolicy({ config: cfg });
+    expect(result.profileAlsoAllow).toEqual(["web_search", "exec", "process"]);
+  });
+
+  it("uses agent tool sections when resolving implicit exposure", () => {
+    const cfg = {
+      tools: {
+        profile: "messaging",
+      },
+      agents: {
+        list: [
+          {
+            id: "coder",
+            tools: {
+              fs: { workspaceOnly: true },
+            },
+          },
+        ],
+      },
+    } as OpenClawConfig;
+    const result = resolveEffectiveToolPolicy({ config: cfg, agentId: "coder" });
+    expect(result.profileAlsoAllow).toEqual(["read", "write", "edit"]);
   });
 });

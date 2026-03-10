@@ -19,6 +19,7 @@ This page describes the current CLI behavior. If commands change, update this do
 - [`completion`](/cli/completion)
 - [`doctor`](/cli/doctor)
 - [`dashboard`](/cli/dashboard)
+- [`backup`](/cli/backup)
 - [`reset`](/cli/reset)
 - [`uninstall`](/cli/uninstall)
 - [`update`](/cli/update)
@@ -103,6 +104,9 @@ openclaw [--dev] [--profile <name>] <command>
   completion
   doctor
   dashboard
+  backup
+    create
+    verify
   security
     audit
   secrets
@@ -359,6 +363,7 @@ Options:
 - `--gateway-bind <loopback|lan|tailnet|auto|custom>`
 - `--gateway-auth <token|password>`
 - `--gateway-token <token>`
+- `--gateway-token-ref-env <name>` (non-interactive; store `gateway.auth.token` as an env SecretRef; requires that env var to be set; cannot be combined with `--gateway-token`)
 - `--gateway-password <password>`
 - `--remote-url <url>`
 - `--remote-token <token>`
@@ -380,7 +385,7 @@ Interactive configuration wizard (models, channels, skills, gateway).
 
 ### `config`
 
-Non-interactive config helpers (get/set/unset). Running `openclaw config` with no
+Non-interactive config helpers (get/set/unset/file/validate). Running `openclaw config` with no
 subcommand launches the wizard.
 
 Subcommands:
@@ -388,6 +393,9 @@ Subcommands:
 - `config get <path>`: print a config value (dot/bracket path).
 - `config set <path> <value>`: set a value (JSON5 or raw string).
 - `config unset <path>`: remove a value.
+- `config file`: print the active config file path.
+- `config validate`: validate the current config against the schema without starting the gateway.
+- `config validate --json`: emit machine-readable JSON output.
 
 ### `doctor`
 
@@ -741,6 +749,7 @@ Options:
 - `--token <token>`
 - `--auth <token|password>`
 - `--password <password>`
+- `--password-file <path>`
 - `--tailscale <off|serve|funnel>`
 - `--tailscale-reset-on-exit`
 - `--allow-unconfigured`
@@ -773,6 +782,7 @@ Notes:
 - `gateway status` supports `--no-probe`, `--deep`, and `--json` for scripting.
 - `gateway status` also surfaces legacy or extra gateway services when it can detect them (`--deep` adds system-level scans). Profile-named OpenClaw services are treated as first-class and aren't flagged as "extra".
 - `gateway status` prints which config path the CLI uses vs which config the service likely uses (service env), plus the resolved probe target URL.
+- On Linux systemd installs, status token-drift checks include both `Environment=` and `EnvironmentFile=` unit sources.
 - `gateway install|uninstall|start|stop|restart` support `--json` for scripting (default output stays human-friendly).
 - `gateway install` defaults to Node runtime; bun is **not recommended** (WhatsApp/Telegram bugs).
 - `gateway install` options: `--port`, `--runtime`, `--token`, `--force`, `--json`.
@@ -825,13 +835,17 @@ Tip: when calling `config.set`/`config.apply`/`config.patch` directly, pass `bas
 
 See [/concepts/models](/concepts/models) for fallback behavior and scanning strategy.
 
-Preferred Anthropic auth (setup-token):
+Anthropic setup-token (supported):
 
 ```bash
 claude setup-token
 openclaw models auth setup-token --provider anthropic
 openclaw models status
 ```
+
+Policy note: this is technical compatibility. Anthropic has blocked some
+subscription usage outside Claude Code in the past; verify current Anthropic
+terms before relying on setup-token in production.
 
 ### `models` (root)
 
@@ -1001,6 +1015,11 @@ Subcommands:
 - `node uninstall`
 - `node stop`
 - `node restart`
+
+Auth notes:
+
+- `node` resolves gateway auth from env/config (no `--token`/`--password` flags): `OPENCLAW_GATEWAY_TOKEN` / `OPENCLAW_GATEWAY_PASSWORD`, then `gateway.auth.*`, with remote-mode support via `gateway.remote.*`.
+- Legacy `CLAWDBOT_GATEWAY_*` env vars are intentionally ignored for node-host auth resolution.
 
 ## Nodes
 
