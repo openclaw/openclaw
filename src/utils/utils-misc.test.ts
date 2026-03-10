@@ -74,8 +74,16 @@ describe("isReasoningTagProvider", () => {
       value: "google-generative-ai",
       expected: true,
     },
-    { name: "returns false for minimax (uses native reasoning_content)", value: "minimax", expected: false },
-    { name: "returns false for minimax-cn (uses native reasoning_content)", value: "minimax-cn", expected: false },
+    {
+      name: "returns false for minimax (uses native reasoning_content)",
+      value: "minimax",
+      expected: false,
+    },
+    {
+      name: "returns false for minimax-cn (uses native reasoning_content)",
+      value: "minimax-cn",
+      expected: false,
+    },
     { name: "returns false for null", value: null, expected: false },
     { name: "returns false for undefined", value: undefined, expected: false },
     { name: "returns false for empty", value: "", expected: false },
