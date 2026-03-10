@@ -2048,7 +2048,12 @@ describe("createTelegramBot", () => {
       expect(sendMessageSpy).toHaveBeenCalledWith(
         1234,
         "⚠️ Failed to download media. Please try again.",
-        { reply_to_message_id: 411 },
+        {
+          reply_parameters: {
+            message_id: 411,
+            allow_sending_without_reply: true,
+          },
+        },
       );
       expect(replySpy).not.toHaveBeenCalled();
     } finally {
@@ -2145,7 +2150,7 @@ describe("createTelegramBot", () => {
       fetchSpy.mockRestore();
     }
   });
-  it("drops the media group when a non-recoverable media error occurs", async () => {
+  it("skips failed media items in a media group but still processes the group", async () => {
     onSpy.mockReset();
     replySpy.mockReset();
 
@@ -2222,7 +2227,9 @@ describe("createTelegramBot", () => {
       expect(flushTimer).toBeTypeOf("function");
       await flushTimer?.();
 
-      expect(replySpy).not.toHaveBeenCalled();
+      // The group should still be processed with the successfully resolved media;
+      // the failed item (no file_path) is skipped instead of dropping the whole group.
+      expect(replySpy).toHaveBeenCalledTimes(1);
     } finally {
       setTimeoutSpy.mockRestore();
       fetchSpy.mockRestore();
