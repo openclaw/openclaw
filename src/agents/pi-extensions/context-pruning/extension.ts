@@ -1,6 +1,6 @@
 import type { ContextEvent, ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
 import { createHookRunner } from "../../../plugins/hooks.js";
-import { getGlobalPluginRegistry } from "../../../plugins/registry.js";
+import { getGlobalPluginRegistry } from "../../../plugins/hook-runner-global.js";
 import { pruneContextMessages } from "./pruner.js";
 import { getContextPruningRuntime } from "./runtime.js";
 
