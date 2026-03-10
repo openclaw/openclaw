@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
+import { INVALID_EXEC_SECRET_REF_IDS } from "../test-utils/secret-ref-test-vectors.js";
 import { resolveSecretRefString, resolveSecretRefValue } from "./resolve.js";
 
 async function writeSecureFile(filePath: string, content: string, mode = 0o600): Promise<void> {
@@ -233,7 +234,7 @@ describe("secret ref resolver", () => {
   });
 
   itPosix("ignores EPIPE when exec provider exits before consuming stdin", async () => {
-    const oversizedId = `openai/${"x".repeat(120_000)}`;
+    const oversizedId = `openai/${"x".repeat(120)}`;
     await expect(
       resolveSecretRefString(
         { source: "exec", provider: "execmain", id: oversizedId },
@@ -431,5 +432,18 @@ describe("secret ref resolver", () => {
         },
       ),
     ).rejects.toThrow('has source "env" but ref requests "exec"');
+  });
+
+  it("rejects invalid exec ids before provider resolution", async () => {
+    for (const id of INVALID_EXEC_SECRET_REF_IDS) {
+      await expect(
+        resolveSecretRefValue(
+          { source: "exec", provider: "vault", id },
+          {
+            config: {},
+          },
+        ),
+      ).rejects.toThrow(/Exec secret reference id must match|Secret reference id is empty/);
+    }
   });
 });
