@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import type { VoiceCallConfig } from "./config.js";
+import type { VoiceCallConfig, CallMode } from "./config.js";
 import type { CallManagerContext } from "./manager/context.js";
 import { processEvent as processManagerEvent } from "./manager/events.js";
 import { getCallByProviderCallId as getCallByProviderCallIdFromMaps } from "./manager/lookup.js";
@@ -281,8 +281,8 @@ export class CallManager {
       return;
     }
 
-    const mode = (call.metadata?.mode as string) ?? "conversation";
-    if (this.config.streaming?.enabled && mode !== "notify") {
+    const mode = (call.metadata?.mode as CallMode) ?? "conversation";
+    if (this.provider.name === "twilio" && this.config.streaming?.enabled && mode !== "notify") {
       return;
     }
 
