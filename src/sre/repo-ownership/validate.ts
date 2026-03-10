@@ -81,6 +81,34 @@ export function validateRepoOwnershipMap(
     if (repo.ownedGlobs.length === 0) {
       issues.push(`repoOwnership ${repo.repoId} must declare at least one owned glob`);
     }
+    if (repo.impactedApps && repo.impactedApps.length === 0) {
+      issues.push(`repoOwnership ${repo.repoId} impactedApps cannot be an empty array`);
+    }
+    if (repo.deployments && repo.deployments.length === 0) {
+      issues.push(`repoOwnership ${repo.repoId} deployments cannot be an empty array`);
+    }
+    if (repo.charts && repo.charts.length === 0) {
+      issues.push(`repoOwnership ${repo.repoId} charts cannot be an empty array`);
+    }
+    if (repo.branchBase !== undefined && !repo.branchBase.trim()) {
+      issues.push(`repoOwnership ${repo.repoId} branchBase must be non-empty when present`);
+    }
+    if (repo.canaryStrategy !== undefined && !repo.canaryStrategy.trim()) {
+      issues.push(`repoOwnership ${repo.repoId} canaryStrategy must be non-empty when present`);
+    }
+    if (repo.reviewers && repo.reviewers.some((reviewer) => !reviewer.trim())) {
+      issues.push(`repoOwnership ${repo.repoId} reviewers must be non-empty strings`);
+    }
+    if (
+      repo.validationProfiles &&
+      Object.entries(repo.validationProfiles).some(
+        ([profile, commands]) => !profile.trim() || commands.length === 0,
+      )
+    ) {
+      issues.push(
+        `repoOwnership ${repo.repoId} validationProfiles must have non-empty keys and commands`,
+      );
+    }
 
     for (const rawGlob of repo.ownedGlobs) {
       const glob = normalizeOwnedGlob(rawGlob);

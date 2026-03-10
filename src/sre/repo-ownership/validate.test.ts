@@ -17,6 +17,12 @@ describe("validateRepoOwnershipMap", () => {
             ciChecks: ["pnpm build"],
             validationCommands: ["pnpm test -- src/sre"],
             rollbackHints: ["revert runtime patch"],
+            impactedApps: ["openclaw-sre"],
+            branchBase: "main",
+            validationProfiles: {
+              "runtime-only": ["pnpm build"],
+            },
+            reviewers: ["runtime-team"],
           },
           {
             repoId: "morpho-infra-helm",
@@ -88,5 +94,53 @@ describe("validateRepoOwnershipMap", () => {
   it("normalizes slash variants for testing helpers", () => {
     expect(__test__.normalizeOwnedGlob(".\\src\\**")).toBe("./src/**".replace(/^\.\//, ""));
     expect(__test__.globsOverlap("charts/**", "charts/openclaw-sre/**")).toBe(true);
+  });
+
+  it("rejects empty validation profile command sets", () => {
+    expect(() =>
+      validateRepoOwnershipMap({
+        version: "sre.repo-ownership-map.v1",
+        generatedAt: "2026-03-06T12:00:00.000Z",
+        repos: [
+          {
+            repoId: "openclaw-sre",
+            localPath: "/tmp/openclaw-sre",
+            ownedGlobs: ["src/**"],
+            sourceOfTruthDomains: ["runtime"],
+            dependentRepos: [],
+            ciChecks: [],
+            validationCommands: [],
+            rollbackHints: [],
+            validationProfiles: {
+              empty: [],
+            },
+          },
+        ],
+      }),
+    ).toThrow(/validationProfiles/);
+  });
+
+  it("rejects empty deployments, charts, and blank canary strategy", () => {
+    expect(() =>
+      validateRepoOwnershipMap({
+        version: "sre.repo-ownership-map.v1",
+        generatedAt: "2026-03-06T12:00:00.000Z",
+        repos: [
+          {
+            repoId: "openclaw-sre",
+            localPath: "/tmp/openclaw-sre",
+            ownedGlobs: ["src/**"],
+            sourceOfTruthDomains: ["runtime"],
+            dependentRepos: [],
+            ciChecks: [],
+            validationCommands: [],
+            rollbackHints: [],
+            deployments: [],
+            charts: [],
+            canaryStrategy: "   ",
+          },
+        ],
+      }),
+    ).toThrow(/deployments|charts|canaryStrategy/);
   });
 });

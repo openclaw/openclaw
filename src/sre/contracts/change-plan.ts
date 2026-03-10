@@ -11,6 +11,13 @@ export type RepoOwnershipEntry = {
   ciChecks: string[];
   validationCommands: string[];
   rollbackHints: string[];
+  impactedApps?: string[];
+  deployments?: string[];
+  charts?: string[];
+  branchBase?: string;
+  validationProfiles?: Record<string, string[]>;
+  reviewers?: string[];
+  canaryStrategy?: string;
 };
 
 export type RepoOwnershipRule = RepoOwnershipEntry;
@@ -26,12 +33,22 @@ export type ChangePlanStep = {
   summary: string;
   ownedGlobs: string[];
   validationCommands: string[];
+  repoSlug?: string;
+  localPath?: string;
+  baseSha?: string;
+  changeType?: string;
+  validationProfile?: string;
+  impactedApps?: string[];
   rationale?: string;
   files?: string[];
   rollback?: string;
   pr?: {
     title?: string;
+    commit?: string;
     base?: string;
+    body?: string;
+    branch?: string;
+    draft?: boolean;
     labels?: string[];
   };
   dependsOn?: string[];

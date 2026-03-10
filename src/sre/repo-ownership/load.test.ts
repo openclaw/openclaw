@@ -47,6 +47,15 @@ describe("loadRepoOwnershipMap", () => {
               ciChecks: ["pnpm build"],
               validationCommands: ["pnpm test -- src/sre"],
               rollbackHints: ["revert runtime patch"],
+              impactedApps: ["openclaw-sre"],
+              deployments: ["openclaw-sre"],
+              charts: ["charts/openclaw-sre"],
+              branchBase: "main",
+              validationProfiles: {
+                "runtime-only": ["pnpm build", "pnpm test -- src/sre"],
+              },
+              reviewers: ["runtime-team"],
+              canaryStrategy: "draft-pr-only",
             },
             {
               repoId: "morpho-infra-helm",
@@ -70,5 +79,10 @@ describe("loadRepoOwnershipMap", () => {
 
     expect(loaded.repos.map((repo) => repo.repoId)).toEqual(["openclaw-sre", "morpho-infra-helm"]);
     expect(loaded.repos[0]?.resolvedLocalPath).toBe(path.join(root, "openclaw-sre"));
+    expect(loaded.repos[0]?.branchBase).toBe("main");
+    expect(loaded.repos[0]?.validationProfiles?.["runtime-only"]).toEqual([
+      "pnpm build",
+      "pnpm test -- src/sre",
+    ]);
   });
 });

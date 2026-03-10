@@ -21,6 +21,23 @@ function clampSnippet(text: string, maxChars: number): string {
   return `${trimmed.slice(0, Math.max(0, maxChars - 3)).trimEnd()}...`;
 }
 
+function labelForSource(source: string): string {
+  switch (source) {
+    case "memory":
+      return "Prior work";
+    case "incident-dossier":
+      return "Incident dossiers";
+    case "relationship-index":
+      return "Related graph evidence";
+    case "relationship-knowledge":
+      return "Shell relationship knowledge";
+    case "repo-ownership":
+      return "Repo ownership";
+    default:
+      return source;
+  }
+}
+
 export function buildContextBrokerPrependContext(
   params: ContextBrokerInjectionParams,
 ): string | undefined {
@@ -29,11 +46,21 @@ export function buildContextBrokerPrependContext(
   }
 
   const maxChars = params.maxChars ?? 2400;
-  const lines = ["Context broker:", `intent=${params.intents.join(", ")}`, "Top local evidence:"];
-
+  const grouped = new Map<string, ContextBrokerEvidence[]>();
   for (const evidence of params.evidence) {
-    lines.push(`- [${evidence.source}] ${evidence.title}`);
-    lines.push(`  ${clampSnippet(evidence.snippet, 280)}`);
+    const list = grouped.get(evidence.source) ?? [];
+    list.push(evidence);
+    grouped.set(evidence.source, list);
+  }
+
+  const lines = ["Context broker packet:", `intent=${params.intents.join(", ")}`];
+
+  for (const [source, evidenceList] of grouped) {
+    lines.push(`${labelForSource(source)}:`);
+    for (const evidence of evidenceList) {
+      lines.push(`- ${evidence.title}`);
+      lines.push(`  ${clampSnippet(evidence.snippet, 240)}`);
+    }
   }
 
   const rendered = lines.join("\n").trim();

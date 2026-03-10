@@ -19,6 +19,15 @@ function isStringArray(value: unknown): value is string[] {
   return Array.isArray(value) && value.every((entry) => typeof entry === "string");
 }
 
+function isValidationProfiles(value: unknown): value is Record<string, string[]> {
+  return (
+    Boolean(value) &&
+    typeof value === "object" &&
+    !Array.isArray(value) &&
+    Object.values(value as Record<string, unknown>).every(isStringArray)
+  );
+}
+
 function assertRepoOwnershipMapShape(value: unknown): asserts value is RepoOwnershipMap {
   if (!value || typeof value !== "object") {
     throw new Error("repoOwnership map must be an object");
@@ -60,6 +69,32 @@ function assertRepoOwnershipMapShape(value: unknown): asserts value is RepoOwner
       !isStringArray(typedRepo.rollbackHints)
     ) {
       throw new Error(`repoOwnership ${typedRepo.repoId} has invalid list fields`);
+    }
+    if (typedRepo.impactedApps !== undefined && !isStringArray(typedRepo.impactedApps)) {
+      throw new Error(`repoOwnership ${typedRepo.repoId} impactedApps must be a string[]`);
+    }
+    if (typedRepo.deployments !== undefined && !isStringArray(typedRepo.deployments)) {
+      throw new Error(`repoOwnership ${typedRepo.repoId} deployments must be a string[]`);
+    }
+    if (typedRepo.charts !== undefined && !isStringArray(typedRepo.charts)) {
+      throw new Error(`repoOwnership ${typedRepo.repoId} charts must be a string[]`);
+    }
+    if (typedRepo.branchBase !== undefined && typeof typedRepo.branchBase !== "string") {
+      throw new Error(`repoOwnership ${typedRepo.repoId} branchBase must be a string`);
+    }
+    if (typedRepo.reviewers !== undefined && !isStringArray(typedRepo.reviewers)) {
+      throw new Error(`repoOwnership ${typedRepo.repoId} reviewers must be a string[]`);
+    }
+    if (typedRepo.canaryStrategy !== undefined && typeof typedRepo.canaryStrategy !== "string") {
+      throw new Error(`repoOwnership ${typedRepo.repoId} canaryStrategy must be a string`);
+    }
+    if (
+      typedRepo.validationProfiles !== undefined &&
+      !isValidationProfiles(typedRepo.validationProfiles)
+    ) {
+      throw new Error(
+        `repoOwnership ${typedRepo.repoId} validationProfiles must be a record<string,string[]>`,
+      );
     }
   }
 }
