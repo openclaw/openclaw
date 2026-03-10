@@ -66,6 +66,8 @@ export type TelegramDraftStream = {
   materialize?: () => Promise<number | undefined>;
   /** Reset internal state so the next update creates a new message instead of editing. */
   forceNewMessage: () => void;
+  /** True when a preview sendMessage was attempted but the response was lost. */
+  sendMayHaveLanded?: () => boolean;
 };
 
 type TelegramDraftPreview = {
@@ -126,6 +128,7 @@ export function createTelegramDraftStream(params: {
   }
 
   const streamState = { stopped: false, final: false };
+  let messageSendAttempted = false;
   let streamMessageId: number | undefined;
   let streamDraftId = usesDraftTransport ? allocateTelegramDraftId() : undefined;
   let previewTransport: "message" | "draft" = usesDraftTransport ? "draft" : "message";
@@ -192,6 +195,7 @@ export function createTelegramDraftStream(params: {
       }
       return true;
     }
+    messageSendAttempted = true;
     const { sent } = await sendRenderedMessageWithThreadFallback({
       renderedText,
       renderedParseMode,
@@ -345,6 +349,7 @@ export function createTelegramDraftStream(params: {
     // Re-open the stream lifecycle for the next assistant segment.
     streamState.final = false;
     generation += 1;
+    messageSendAttempted = false;
     streamMessageId = undefined;
     if (previewTransport === "draft") {
       streamDraftId = allocateTelegramDraftId();
@@ -421,5 +426,6 @@ export function createTelegramDraftStream(params: {
     stop,
     materialize,
     forceNewMessage,
+    sendMayHaveLanded: () => messageSendAttempted && typeof streamMessageId !== "number",
   };
 }
